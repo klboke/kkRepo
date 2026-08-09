@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
@@ -13,6 +15,7 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -77,11 +80,33 @@ class AptRepositorySettingsTest {
     when(repositories.findById(runtime.id())).thenReturn(Optional.of(record(runtime, Map.of(
         "apt", Map.of("validUntilDays", 7, "flat", true,
             "enforceDistribution", "true", "metadataMode", "passthrough")))));
+    settings = new AptRepositorySettings(repositories);
     actual = settings.get(runtime);
     assertEquals(7, actual.validUntilDays());
     assertTrue(actual.flat());
     assertTrue(actual.enforceDistribution());
     assertFalse(actual.resign());
+  }
+
+  @Test
+  void cachesParsedSettingsAndReloadsAfterRepositoryInvalidation() {
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    RepositoryRuntime runtime = runtime(RepositoryType.HOSTED);
+    when(repositories.findById(runtime.id())).thenReturn(Optional.of(record(runtime, Map.of(
+        "apt", Map.of("distribution", "stable")))));
+    RepositoryRuntimeRegistry registry = new RepositoryRuntimeRegistry(repositories, 60);
+    AptRepositorySettings settings = new AptRepositorySettings(registry, 60);
+
+    assertEquals("stable", settings.get(runtime).distribution());
+    assertEquals("stable", settings.get(runtime).distribution());
+    verify(repositories, times(1)).findById(runtime.id());
+
+    when(repositories.findById(runtime.id())).thenReturn(Optional.of(record(runtime, Map.of(
+        "apt", Map.of("distribution", "testing")))));
+    registry.invalidate(runtime.name());
+
+    assertEquals("testing", settings.get(runtime).distribution());
+    verify(repositories, times(2)).findById(runtime.id());
   }
 
   @Test

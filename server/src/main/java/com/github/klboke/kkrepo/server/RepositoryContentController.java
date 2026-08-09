@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.protocol.cargo.CargoPath;
@@ -303,7 +304,7 @@ public class RepositoryContentController {
 
   @RequestMapping(value = "/**", method = RequestMethod.HEAD)
   public ResponseEntity<Void> head(@PathVariable("name") String name, HttpServletRequest request) {
-    RepositoryRuntime runtime = resolveRuntime(name);
+    RepositoryRuntime runtime = resolveRuntime(name, request);
     if (runtime.format() == RepositoryFormat.NPM) {
       NpmPath path = npmParser.parse(extractRepositoryPath(name, request));
       return toHeadResponse(dispatchNpmGet(runtime, path, request, true), request);
@@ -417,7 +418,7 @@ public class RepositoryContentController {
       HttpServletRequest request,
       @RequestHeader(value = HttpHeaders.CONTENT_TYPE, required = false) String contentType)
       throws IOException, ServletException {
-    RepositoryRuntime runtime = resolveRuntime(name);
+    RepositoryRuntime runtime = resolveRuntime(name, request);
     String userId = requestUserId(request);
     if (runtime.format() == RepositoryFormat.NPM) {
       String rawPath = extractRepositoryPath(name, request);
@@ -584,7 +585,7 @@ public class RepositoryContentController {
 
   @DeleteMapping("/**")
   public ResponseEntity<?> delete(@PathVariable("name") String name, HttpServletRequest request) throws IOException {
-    RepositoryRuntime runtime = resolveRuntime(name);
+    RepositoryRuntime runtime = resolveRuntime(name, request);
     if (runtime.format() == RepositoryFormat.NPM) {
       String rawPath = extractRepositoryPath(name, request);
       if (NpmTokenService.isLogoutPath(rawPath)) {
@@ -664,7 +665,7 @@ public class RepositoryContentController {
 
   @PostMapping("/**")
   public ResponseEntity<?> post(@PathVariable("name") String name, HttpServletRequest request) {
-    RepositoryRuntime runtime = resolveRuntime(name);
+    RepositoryRuntime runtime = resolveRuntime(name, request);
     if (runtime.format() == RepositoryFormat.PYPI) {
       if (!runtime.isHosted()) {
         throw new PypiExceptions.MethodNotAllowed(
@@ -855,7 +856,7 @@ public class RepositoryContentController {
       @PathVariable("name") String name,
       @RequestPart("chart") MultipartFile chart,
       HttpServletRequest request) throws IOException {
-    RepositoryRuntime runtime = resolveRuntime(name);
+    RepositoryRuntime runtime = resolveRuntime(name, request);
     if (runtime.format() != RepositoryFormat.HELM) {
       throw new MavenExceptions.MethodNotAllowed("POST is not supported for " + runtime.format() + " repositories");
     }
@@ -865,7 +866,7 @@ public class RepositoryContentController {
 
   private ResponseEntity<StreamingResponseBody> serveBody(
       String name, HttpServletRequest request, boolean headOnly) {
-    RepositoryRuntime runtime = resolveRuntime(name);
+    RepositoryRuntime runtime = resolveRuntime(name, request);
     if (runtime.format() == RepositoryFormat.NPM) {
       NpmPath path = npmParser.parse(extractRepositoryPath(name, request));
       MavenResponse resp = dispatchNpmGet(runtime, path, request, headOnly);
@@ -1190,7 +1191,7 @@ public class RepositoryContentController {
   }
 
   private RuntimeAndPath resolve(String name, HttpServletRequest request) {
-    return resolve(resolveRuntime(name), name, request);
+    return resolve(resolveRuntime(name, request), name, request);
   }
 
   private RuntimeAndPath resolve(RepositoryRuntime runtime, String name, HttpServletRequest request) {
@@ -1205,6 +1206,17 @@ public class RepositoryContentController {
   private RepositoryRuntime resolveRuntime(String name) {
     return registry.resolve(name)
         .orElseThrow(() -> new MavenExceptions.MavenNotFoundException("Repository not found: " + name));
+  }
+
+  private RepositoryRuntime resolveRuntime(String name, HttpServletRequest request) {
+    Object record = request == null
+        ? null : request.getAttribute(RepositorySecurityFilter.REPOSITORY_RECORD_ATTRIBUTE);
+    if (record instanceof RepositoryRecord repository && name.equals(repository.name())) {
+      return registry.resolve(repository)
+          .orElseThrow(() -> new MavenExceptions.MavenNotFoundException(
+              "Repository not found: " + name));
+    }
+    return resolveRuntime(name);
   }
 
   private SwiftService swift() {

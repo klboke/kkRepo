@@ -2,6 +2,8 @@ package com.github.klboke.kkrepo.server.maven;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.klboke.kkrepo.cache.SharedCache;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
@@ -16,6 +18,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -31,7 +34,10 @@ import org.springframework.transaction.annotation.Transactional;
  * each of which would otherwise trigger one {@code SELECT repository} and (for groups) one
  * {@code SELECT repository_member} + N member resolutions. To absorb that fan-out without
  * sacrificing the "no in-memory state that diverges between replicas" rule, we cache resolved
- * runtimes for a short TTL (default 30s). Writers ({@link
+ * runtimes and repository records in typed node-local caches for a short TTL (default 30s).
+ * The typed hot tier avoids serializing and deserializing the same immutable runtime on every
+ * request; the existing {@link SharedCache} entry remains a recoverable second-level cache during
+ * rolling upgrades. Writers ({@link
  * com.github.klboke.kkrepo.server.repositories.RepositoryService}) clear the local entry on demand
  * so changes from this replica propagate immediately, and publish a {@code repository} catalog
  * broadcast so sibling replicas flush their cached runtimes within the broadcast poll interval. The
@@ -50,7 +56,11 @@ public class RepositoryRuntimeRegistry {
   private final SharedCache cache;
   private final ObjectMapper objectMapper;
   private final CatalogCacheBroadcaster broadcaster;
+  private final Cache<String, Optional<RepositoryRuntime>> localRuntimes;
+  private final Cache<String, Optional<RepositoryRecord>> localRecordsByName;
+  private final Cache<Long, RepositoryRecord> localRecordsById;
   private final AtomicBoolean subscribed = new AtomicBoolean();
+  private final AtomicLong configurationVersion = new AtomicLong();
 
   @Autowired
   public RepositoryRuntimeRegistry(
@@ -74,6 +84,19 @@ public class RepositoryRuntimeRegistry {
     this.objectMapper = objectMapper;
     this.broadcaster = broadcaster;
     this.ttl = Duration.ofSeconds(Math.max(0, ttlSeconds));
+    Duration localTtl = this.ttl.isZero() ? Duration.ofSeconds(1) : this.ttl;
+    this.localRuntimes = Caffeine.newBuilder()
+        .expireAfterWrite(localTtl)
+        .maximumSize(100_000)
+        .build();
+    this.localRecordsByName = Caffeine.newBuilder()
+        .expireAfterWrite(localTtl)
+        .maximumSize(100_000)
+        .build();
+    this.localRecordsById = Caffeine.newBuilder()
+        .expireAfterWrite(localTtl)
+        .maximumSize(100_000)
+        .build();
   }
 
   public RepositoryRuntimeRegistry(RepositoryDao repositoryDao, long ttlSeconds) {
@@ -82,14 +105,32 @@ public class RepositoryRuntimeRegistry {
     this.objectMapper = new ObjectMapper();
     this.broadcaster = null;
     this.ttl = Duration.ofSeconds(Math.max(0, ttlSeconds));
+    Duration localTtl = this.ttl.isZero() ? Duration.ofSeconds(1) : this.ttl;
+    this.localRuntimes = Caffeine.newBuilder()
+        .expireAfterWrite(localTtl)
+        .maximumSize(100_000)
+        .build();
+    this.localRecordsByName = Caffeine.newBuilder()
+        .expireAfterWrite(localTtl)
+        .maximumSize(100_000)
+        .build();
+    this.localRecordsById = Caffeine.newBuilder()
+        .expireAfterWrite(localTtl)
+        .maximumSize(100_000)
+        .build();
   }
 
   public Optional<RepositoryRuntime> resolve(String name) {
     if (ttl.isZero() || cache == null) {
       return resolveFresh(name);
     }
+    Optional<RepositoryRuntime> local = localRuntimes.getIfPresent(name);
+    if (local != null) {
+      return local;
+    }
     Optional<Optional<RepositoryRuntime>> cached = readCached(name);
     if (cached.isPresent()) {
+      localRuntimes.put(name, cached.get());
       return cached.get();
     }
     // Multiple concurrent misses on the same name are acceptable; the cache only holds a
@@ -103,13 +144,76 @@ public class RepositoryRuntimeRegistry {
 
   @Transactional(readOnly = true)
   protected Optional<RepositoryRuntime> resolveFresh(String name) {
-    return repositoryDao.findByName(name).map(record -> toRuntime(record, new HashSet<>()));
+    return repositoryDao.findByName(name).map(record -> {
+      RepositoryRuntime runtime = toRuntime(record, new HashSet<>());
+      if (!ttl.isZero() && !containsProxySecret(runtime)) {
+        cacheRecord(record);
+      }
+      return runtime;
+    });
+  }
+
+  /**
+   * Resolve a record already loaded by the request security filter. This avoids a second
+   * repository SELECT in the controller while preserving the same runtime snapshot and
+   * invalidation rules used by name-based resolution.
+   */
+  public Optional<RepositoryRuntime> resolve(RepositoryRecord record) {
+    if (record == null) return Optional.empty();
+    if (!ttl.isZero()) {
+      RepositoryRecord cachedRecord = localRecordsById.getIfPresent(record.id());
+      Optional<RepositoryRuntime> cachedRuntime = localRuntimes.getIfPresent(record.name());
+      if (record.equals(cachedRecord) && cachedRuntime != null) {
+        return cachedRuntime;
+      }
+    }
+    RepositoryRuntime runtime = toRuntime(record, new HashSet<>());
+    if (!ttl.isZero() && !containsProxySecret(runtime)) {
+      cacheRecord(record);
+      writeCached(record.name(), Optional.of(runtime));
+    }
+    return Optional.of(runtime);
+  }
+
+  /** Name-keyed record lookup used by request filters before protocol dispatch. */
+  public Optional<RepositoryRecord> findRecordByName(String name) {
+    if (!ttl.isZero()) {
+      Optional<RepositoryRecord> cached = localRecordsByName.getIfPresent(name);
+      if (cached != null) return cached;
+    }
+    Optional<RepositoryRecord> loaded = repositoryDao.findByName(name);
+    if (!ttl.isZero()) {
+      if (loaded.isEmpty()) {
+        localRecordsByName.put(name, Optional.empty());
+      } else if (!containsProxySecret(loaded.get())) {
+        cacheRecord(loaded.get());
+      }
+    }
+    return loaded;
+  }
+
+  /** ID-keyed durable record lookup used by format-specific configuration caches. */
+  public Optional<RepositoryRecord> findRecordById(long id) {
+    if (!ttl.isZero()) {
+      RepositoryRecord cached = localRecordsById.getIfPresent(id);
+      if (cached != null) return Optional.of(cached);
+    }
+    Optional<RepositoryRecord> loaded = repositoryDao.findById(id);
+    if (!ttl.isZero()) {
+      loaded.filter(record -> !containsProxySecret(record)).ifPresent(this::cacheRecord);
+    }
+    return loaded;
+  }
+
+  /** Changes whenever this replica flushes repository configuration. */
+  public long configurationVersion() {
+    return configurationVersion.get();
   }
 
   /** ID-keyed lookup used by background workers (e.g. metadata rebuild) that hold a repo id. */
   @Transactional(readOnly = true)
   public Optional<RepositoryRuntime> resolveById(long id) {
-    return repositoryDao.findById(id).map(record -> toRuntime(record, new HashSet<>()));
+    return findRecordById(id).flatMap(this::resolve);
   }
 
   /**
@@ -121,7 +225,7 @@ public class RepositoryRuntimeRegistry {
    */
   @EventListener(ApplicationReadyEvent.class)
   public void subscribeToCatalogBroadcast() {
-    if (broadcaster == null || cache == null || !subscribed.compareAndSet(false, true)) {
+    if (broadcaster == null || !subscribed.compareAndSet(false, true)) {
       return;
     }
     broadcaster.subscribe(REPOSITORY_CATALOG_NAME, this::invalidateAll);
@@ -129,6 +233,16 @@ public class RepositoryRuntimeRegistry {
 
   /** Drop a single cached entry — called by {@code RepositoryService} on create/update/delete. */
   public void invalidate(String name) {
+    configurationVersion.incrementAndGet();
+    if (name != null) {
+      localRuntimes.invalidate(name);
+      Optional<RepositoryRecord> cached = localRecordsByName.getIfPresent(name);
+      localRecordsByName.invalidate(name);
+      if (cached != null) {
+        cached.map(RepositoryRecord::id).ifPresent(localRecordsById::invalidate);
+      }
+      localRecordsById.asMap().entrySet().removeIf(entry -> name.equals(entry.getValue().name()));
+    }
     if (cache != null && name != null) cache.evict(CACHE_NAMESPACE, name);
   }
 
@@ -137,6 +251,10 @@ public class RepositoryRuntimeRegistry {
    * changes, and as a safety net in tests.
    */
   public void invalidateAll() {
+    configurationVersion.incrementAndGet();
+    localRuntimes.invalidateAll();
+    localRecordsByName.invalidateAll();
+    localRecordsById.invalidateAll();
     if (cache != null) cache.evictByPrefix(CACHE_NAMESPACE, "");
   }
 
@@ -158,6 +276,8 @@ public class RepositoryRuntimeRegistry {
   }
 
   private void writeCached(String name, Optional<RepositoryRuntime> runtime) {
+    localRuntimes.put(name, runtime);
+    if (cache == null) return;
     if (runtime.isEmpty()) {
       cache.putString(CACHE_NAMESPACE, name, MISSING, ttl);
       return;
@@ -167,6 +287,24 @@ public class RepositoryRuntimeRegistry {
     } catch (JsonProcessingException e) {
       throw new IllegalStateException("Failed caching repository runtime " + name, e);
     }
+  }
+
+  private void cacheRecord(RepositoryRecord record) {
+    localRecordsByName.put(record.name(), Optional.of(record));
+    localRecordsById.put(record.id(), record);
+  }
+
+  private static boolean containsProxySecret(RepositoryRecord record) {
+    Map<String, Object> attrs = record.attributes() == null ? Map.of() : record.attributes();
+    Object proxyRaw = attrs.get("proxy");
+    if (!(proxyRaw instanceof Map<?, ?> proxy)) return false;
+    return nonBlank(proxy.get("remotePassword"))
+        || nonBlank(proxy.get("remoteBearerToken"))
+        || nonBlank(proxy.get("outboundProxyPassword"));
+  }
+
+  private static boolean nonBlank(Object value) {
+    return value != null && !value.toString().isBlank();
   }
 
   private RepositoryRuntime toRuntime(RepositoryRecord record, Set<Long> resolving) {

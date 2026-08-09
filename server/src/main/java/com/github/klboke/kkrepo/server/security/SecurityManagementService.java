@@ -55,9 +55,11 @@ import java.util.Optional;
 import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 public class SecurityManagementService implements AccessDecisionService {
@@ -81,6 +83,7 @@ public class SecurityManagementService implements AccessDecisionService {
   private final ApiKeyAuthCache apiKeyAuthCache;
   private final BasicAuthCache basicAuthCache;
   private final SecurityCatalogCache securityCatalogCache;
+  private final TransactionTemplate readTransactions;
 
   public SecurityManagementService(SecurityDao securityDao) {
     this(securityDao, null, null, null);
@@ -105,18 +108,31 @@ public class SecurityManagementService implements AccessDecisionService {
     this(securityDao, authorizationCache, apiKeyAuthCache, null, securityCatalogCache);
   }
 
-  @Autowired
   public SecurityManagementService(
       SecurityDao securityDao,
       SecurityAuthorizationCache authorizationCache,
       ApiKeyAuthCache apiKeyAuthCache,
       BasicAuthCache basicAuthCache,
       SecurityCatalogCache securityCatalogCache) {
+    this(securityDao, authorizationCache, apiKeyAuthCache, basicAuthCache,
+        securityCatalogCache, null);
+  }
+
+  @Autowired
+  public SecurityManagementService(
+      SecurityDao securityDao,
+      SecurityAuthorizationCache authorizationCache,
+      ApiKeyAuthCache apiKeyAuthCache,
+      BasicAuthCache basicAuthCache,
+      SecurityCatalogCache securityCatalogCache,
+      PlatformTransactionManager transactionManager) {
     this.securityDao = securityDao;
     this.authorizationCache = authorizationCache;
     this.apiKeyAuthCache = apiKeyAuthCache;
     this.basicAuthCache = basicAuthCache;
     this.securityCatalogCache = securityCatalogCache;
+    this.readTransactions = transactionManager == null
+        ? null : readOnlyTransactionTemplate(transactionManager);
   }
 
   @Transactional(readOnly = true)
@@ -886,7 +902,6 @@ public class SecurityManagementService implements AccessDecisionService {
   }
 
   @Override
-  @Transactional(readOnly = true)
   public AccessDecision decide(PermissionSubject subject, RepositoryPermission permission) {
     if (subject == null || permission == null) {
       return AccessDecision.deny("missing subject or permission");
@@ -894,7 +909,6 @@ public class SecurityManagementService implements AccessDecisionService {
     return decide(subject, repositoryPermissionString(permission), permission);
   }
 
-  @Transactional(readOnly = true)
   public AccessDecision decide(PermissionSubject subject, String requestedPermission) {
     if (subject == null || requestedPermission == null || requestedPermission.isBlank()) {
       return AccessDecision.deny("missing subject or permission");
@@ -982,9 +996,22 @@ public class SecurityManagementService implements AccessDecisionService {
           catalog.repositoryTargets()).normalized();
     }
     if (authorizationCache == null) {
+      return loadAuthorizationSnapshot(subject);
+    }
+    return authorizationCache.getOrLoad(subject, () -> loadAuthorizationSnapshot(subject));
+  }
+
+  private AuthorizationSnapshot loadAuthorizationSnapshot(PermissionSubject subject) {
+    if (readTransactions == null
+        || TransactionSynchronizationManager.isActualTransactionActive()) {
       return buildAuthorizationSnapshot(subject);
     }
-    return authorizationCache.getOrLoad(subject, () -> buildAuthorizationSnapshot(subject));
+    AuthorizationSnapshot loaded = readTransactions.execute(
+        ignored -> buildAuthorizationSnapshot(subject));
+    if (loaded == null) {
+      throw new IllegalStateException("Authorization snapshot transaction returned no result");
+    }
+    return loaded;
   }
 
   private AuthorizationSnapshot buildAuthorizationSnapshot(PermissionSubject subject) {
@@ -997,6 +1024,13 @@ public class SecurityManagementService implements AccessDecisionService {
         roleIds,
         securityDao.listPrivilegesForRoles(List.copyOf(roleIds)),
         repositoryTargets);
+  }
+
+  private static TransactionTemplate readOnlyTransactionTemplate(
+      PlatformTransactionManager transactionManager) {
+    TransactionTemplate transactions = new TransactionTemplate(transactionManager);
+    transactions.setReadOnly(true);
+    return transactions;
   }
 
   private UserView toUserView(SecurityUserRecord record) {

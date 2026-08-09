@@ -62,6 +62,7 @@ class AptServiceMigrationTest {
 
     AptService service = new AptService(
         registry,
+        new AptPublishedSnapshotCache(registry),
         repositorySettings,
         new AptDebPackageInspector(),
         new AptComponentFactory(),

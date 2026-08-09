@@ -50,6 +50,8 @@ public class AssetMetadataCache {
   private final ObjectMapper objectMapper;
   private final VersionWatermark watermark;
   private final Cache<Long, Long> observedVersions;
+  private final Cache<String, CachedAssetMetadata> localSnapshots;
+  private final Cache<String, Boolean> localMissing;
   private final boolean enabled;
   private final Duration positiveTtl;
   private final Duration missingTtl;
@@ -69,6 +71,14 @@ public class AssetMetadataCache {
     this.enabled = enabled;
     this.positiveTtl = ttlSeconds <= 0 ? Duration.ZERO : Duration.ofSeconds(ttlSeconds);
     this.missingTtl = missingTtlSeconds <= 0 ? Duration.ZERO : Duration.ofSeconds(missingTtlSeconds);
+    this.localSnapshots = Caffeine.newBuilder()
+        .expireAfterWrite(Duration.ofSeconds(Math.max(1, ttlSeconds)))
+        .maximumSize(100_000)
+        .build();
+    this.localMissing = Caffeine.newBuilder()
+        .expireAfterWrite(Duration.ofSeconds(Math.max(1, missingTtlSeconds)))
+        .maximumSize(100_000)
+        .build();
   }
 
   public AssetMetadataCache(
@@ -106,10 +116,18 @@ public class AssetMetadataCache {
       return loader.get().map(loaded -> CachedAssetMetadata.of(loaded.asset(), loaded.blob()));
     }
     String key = key(repositoryId, storagePath);
+    if (!positiveTtl.isZero()) {
+      CachedAssetMetadata local = localSnapshots.getIfPresent(key);
+      if (local != null) return Optional.of(local);
+    }
+    if (!missingTtl.isZero() && localMissing.getIfPresent(key) != null) {
+      return Optional.empty();
+    }
     try {
       Optional<String> raw = sharedCache.getString(NAMESPACE, key);
       if (raw.isPresent()) {
         if (MISSING_MARKER.equals(raw.get())) {
+          if (!missingTtl.isZero()) localMissing.put(key, Boolean.TRUE);
           return Optional.empty();
         }
         // ttl-seconds<=0 disables positive caching — ignore stale entries left by a prior
@@ -117,6 +135,7 @@ public class AssetMetadataCache {
         if (!positiveTtl.isZero()) {
           Optional<CachedAssetMetadata> cached = readSnapshot(key, raw.get());
           if (cached.isPresent()) {
+            localSnapshots.put(key, cached.get());
             return cached;
           }
         }
@@ -158,7 +177,10 @@ public class AssetMetadataCache {
     }
     String key = key(repositoryId, storagePath);
     try {
-      Optional<CachedAssetMetadata> existing = sharedCache.getJson(NAMESPACE, key, CachedAssetMetadata.class);
+      CachedAssetMetadata local = localSnapshots.getIfPresent(key);
+      Optional<CachedAssetMetadata> existing = local == null
+          ? sharedCache.getJson(NAMESPACE, key, CachedAssetMetadata.class)
+          : Optional.of(local);
       existing.ifPresent(snapshot -> writeSnapshot(key, attributes == null
           ? snapshot.withLastUpdatedAt(verifiedAt)
           : snapshot.withLastUpdatedAtAndAttributes(verifiedAt, attributes)));
@@ -178,8 +200,11 @@ public class AssetMetadataCache {
   }
 
   private void evictLocal(long repositoryId, String storagePath) {
+    String key = key(repositoryId, storagePath);
+    localSnapshots.invalidate(key);
+    localMissing.invalidate(key);
     try {
-      sharedCache.evict(NAMESPACE, key(repositoryId, storagePath));
+      sharedCache.evict(NAMESPACE, key);
     } catch (RuntimeException e) {
       log.warn("Failed evicting asset metadata cache for repo {} path {}",
           repositoryId, storagePath, e);
@@ -247,8 +272,11 @@ public class AssetMetadataCache {
   }
 
   private void evictRepositoryLocal(long repositoryId) {
+    String prefix = repositoryId + ":";
+    localSnapshots.asMap().keySet().removeIf(key -> key.startsWith(prefix));
+    localMissing.asMap().keySet().removeIf(key -> key.startsWith(prefix));
     try {
-      sharedCache.evictByPrefix(NAMESPACE, repositoryId + ":");
+      sharedCache.evictByPrefix(NAMESPACE, prefix);
     } catch (RuntimeException e) {
       log.warn("Failed bulk-evicting asset metadata cache for repo {}", repositoryId, e);
     }
@@ -307,6 +335,8 @@ public class AssetMetadataCache {
     if (positiveTtl.isZero()) {
       return;
     }
+    localMissing.invalidate(key);
+    localSnapshots.put(key, snapshot);
     try {
       sharedCache.putJson(NAMESPACE, key, snapshot, positiveTtl);
     } catch (RuntimeException e) {
@@ -318,6 +348,8 @@ public class AssetMetadataCache {
     if (missingTtl.isZero()) {
       return;
     }
+    localSnapshots.invalidate(key);
+    localMissing.put(key, Boolean.TRUE);
     try {
       sharedCache.putString(NAMESPACE, key, MISSING_MARKER, missingTtl);
     } catch (RuntimeException e) {

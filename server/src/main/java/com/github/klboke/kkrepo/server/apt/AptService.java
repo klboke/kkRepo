@@ -31,6 +31,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class AptService {
   private final AptRegistryDao registry;
+  private final AptPublishedSnapshotCache publishedSnapshots;
   private final AptRepositorySettings repositorySettings;
   private final AptDebPackageInspector inspector;
   private final AptComponentFactory components;
@@ -44,6 +45,7 @@ public class AptService {
 
   AptService(
       AptRegistryDao registry,
+      AptPublishedSnapshotCache publishedSnapshots,
       AptRepositorySettings repositorySettings,
       AptDebPackageInspector inspector,
       AptComponentFactory components,
@@ -54,6 +56,7 @@ public class AptService {
       RawProxyService proxy,
       AptProxyProjectionService proxyProjection) {
     this.registry = registry;
+    this.publishedSnapshots = publishedSnapshots;
     this.repositorySettings = repositorySettings;
     this.inspector = inspector;
     this.components = components;
@@ -356,17 +359,22 @@ public class AptService {
     }
     enforceDistribution(settings, path);
     String distribution = path.distribution() == null ? settings.distribution() : path.distribution();
-    AptRegistryDao.SuiteState state = registry.ensureSuite(
-        runtime.id(), distribution, Instant.now());
-    if (registry.findPublishedSnapshot(runtime.id(), distribution).isEmpty()
-        && state.desiredRevision() == state.publishedRevision()) {
-      registry.markSuiteDirty(runtime.id(), distribution, Instant.now());
-      state = registry.findSuite(runtime.id(), distribution).orElseThrow();
-    }
-    if (state.desiredRevision() != state.publishedRevision()) {
+    Optional<AptRegistryDao.Snapshot> published =
+        publishedSnapshots.find(runtime.id(), distribution);
+    if (published.isEmpty()) {
+      // Repository creation already establishes the suite. Only the no-snapshot slow path may
+      // create or dirty it; steady metadata reads serve an immutable, fully signed snapshot and
+      // never acquire a MySQL row lock or open a read-only transaction. Concurrent publication
+      // keeps the previous coherent snapshot readable until the new fenced revision is visible.
+      AptRegistryDao.SuiteState state = registry.findSuite(runtime.id(), distribution)
+          .orElseGet(() -> registry.ensureSuite(runtime.id(), distribution, Instant.now()));
+      if (state.desiredRevision() == state.publishedRevision()) {
+        registry.markSuiteDirty(runtime.id(), distribution, Instant.now());
+      }
       publishPending(runtime, settings, distribution);
+      published = publishedSnapshots.find(runtime.id(), distribution);
     }
-    AptRegistryDao.Snapshot snapshot = registry.findPublishedSnapshot(runtime.id(), distribution)
+    AptRegistryDao.Snapshot snapshot = published
         .orElseThrow(() -> new MavenExceptions.MavenNotFoundException(path.normalized()));
     String hidden = snapshot.manifest().get(path.normalized());
     if (hidden == null && path.kind() == AptPath.Kind.BY_HASH) {
@@ -439,11 +447,11 @@ public class AptService {
       proxyProjection.refreshForResign(runtime, settings, distribution);
       publishPending(runtime, settings, distribution);
     }
-    AptRegistryDao.Snapshot snapshot = registry.findPublishedSnapshot(runtime.id(), distribution)
+    AptRegistryDao.Snapshot snapshot = publishedSnapshots.find(runtime.id(), distribution)
         .orElseGet(() -> {
           proxyProjection.refreshForResign(runtime, settings, distribution);
           publishPending(runtime, settings, distribution);
-          return registry.findPublishedSnapshot(runtime.id(), distribution)
+          return publishedSnapshots.find(runtime.id(), distribution)
               .orElseThrow(() -> new MavenExceptions.MavenNotFoundException(
                   "APT re-signing has no verified cached snapshot yet: " + distribution));
         });
@@ -460,25 +468,28 @@ public class AptService {
       AptRegistryDao.SuiteState before = registry.findSuite(runtime.id(), distribution)
           .orElseGet(() -> registry.ensureSuite(runtime.id(), distribution, Instant.now()));
       if (before.desiredRevision() == before.publishedRevision()
-          && registry.findPublishedSnapshot(runtime.id(), distribution).isPresent()) return;
+          && publishedSnapshots.find(runtime.id(), distribution).isPresent()) return;
       try (AptLeaseManager.Lease lease = leases.acquire(
           "apt:publish:" + runtime.id() + ":" + distribution)) {
         lease.assertHeld();
         AptRegistryDao.SuiteState state = registry.findSuite(runtime.id(), distribution).orElseThrow();
         if (state.desiredRevision() == state.publishedRevision()
-            && registry.findPublishedSnapshot(runtime.id(), distribution).isPresent()) return;
+            && publishedSnapshots.find(runtime.id(), distribution).isPresent()) return;
         try {
           AptSigningService.SigningMaterial key = signing.active(runtime);
           AptMetadataBuilder.BuiltSnapshot built = metadataBuilder.build(
               runtime, settings, state, key);
           lease.assertHeld();
-          boolean published = registry.publishSnapshot(
-              new AptRegistryDao.Snapshot(
+          AptRegistryDao.Snapshot snapshot = new AptRegistryDao.Snapshot(
                   runtime.id(), distribution, state.desiredRevision(),
                   built.signingKeyRevision(), built.manifest(), built.releaseSha256(),
-                  built.createdAt()),
-              lease.owner(), lease.fencingToken());
-          if (published) return;
+                  built.createdAt());
+          boolean published = registry.publishSnapshot(
+              snapshot, lease.owner(), lease.fencingToken());
+          if (published) {
+            publishedSnapshots.published(snapshot);
+            return;
+          }
         } catch (RuntimeException error) {
           registry.recordBuildFailure(
               runtime.id(), distribution, state.desiredRevision(), error.getMessage(), Instant.now());

@@ -3,6 +3,8 @@ package com.github.klboke.kkrepo.server.security;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
@@ -41,6 +43,7 @@ import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.session.FindByIndexNameSessionRepository;
+import org.springframework.transaction.PlatformTransactionManager;
 
 class SecurityAuthenticationServiceTest {
 
@@ -78,6 +81,27 @@ class SecurityAuthenticationServiceTest {
     assertEquals("GenericToken.secret", service.replayableTerraformUrlToken(
         request(Map.of("X-Nexus-Plus-Token", "GenericToken.secret")), apiKey).orElseThrow());
     assertTrue(service.replayableTerraformUrlToken(request(Map.of()), local).isEmpty());
+  }
+
+  @Test
+  void credentialFreeRequestDoesNotOpenAuthenticationTransaction() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    PlatformTransactionManager transactions = mock(PlatformTransactionManager.class);
+    SecurityAuthenticationService service = new SecurityAuthenticationService(
+        dao,
+        new ObjectMapper(),
+        "X-Nexus-Plus-Token",
+        "nx-anonymous",
+        null,
+        OutboundRequestPolicy.allowPrivateForTests(),
+        transportFactory,
+        null,
+        null,
+        null,
+        transactions);
+
+    assertTrue(service.authenticate(request(Map.of())).isEmpty());
+    verifyNoInteractions(transactions);
   }
 
   @Test

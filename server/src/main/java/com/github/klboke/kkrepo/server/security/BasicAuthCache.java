@@ -1,5 +1,9 @@
 package com.github.klboke.kkrepo.server.security;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.klboke.kkrepo.cache.SharedCache;
 import com.github.klboke.kkrepo.core.security.EncryptionSecrets;
 import java.nio.charset.StandardCharsets;
@@ -12,6 +16,7 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -46,19 +51,42 @@ public class BasicAuthCache {
   private static final String MISSING_MARKER = "__missing__";
 
   private final SharedCache sharedCache;
+  private final ObjectMapper objectMapper;
+  private final Cache<String, AuthenticatedSubject> localSubjects;
+  private final Cache<String, Boolean> localMissing;
   private final boolean enabled;
   private final Duration positiveTtl;
   private final Duration negativeTtl;
 
+  @Autowired
   public BasicAuthCache(
       SharedCache sharedCache,
+      ObjectMapper objectMapper,
       @Value("${kkrepo.cache.basic-auth.enabled:true}") boolean enabled,
       @Value("${kkrepo.cache.basic-auth.ttl-seconds:60}") long ttlSeconds,
       @Value("${kkrepo.cache.basic-auth.missing-ttl-seconds:5}") long missingTtlSeconds) {
     this.sharedCache = sharedCache;
+    this.objectMapper = objectMapper;
     this.enabled = enabled;
     this.positiveTtl = ttlSeconds <= 0 ? Duration.ZERO : Duration.ofSeconds(ttlSeconds);
     this.negativeTtl = missingTtlSeconds <= 0 ? Duration.ZERO : Duration.ofSeconds(missingTtlSeconds);
+    this.localSubjects = Caffeine.newBuilder()
+        .expireAfterWrite(Duration.ofSeconds(Math.max(1, ttlSeconds)))
+        .maximumSize(100_000)
+        .build();
+    this.localMissing = Caffeine.newBuilder()
+        .expireAfterWrite(Duration.ofSeconds(Math.max(1, missingTtlSeconds)))
+        .maximumSize(100_000)
+        .build();
+  }
+
+  /** Backward-compatible constructor used by focused tests. */
+  public BasicAuthCache(
+      SharedCache sharedCache,
+      boolean enabled,
+      long ttlSeconds,
+      long missingTtlSeconds) {
+    this(sharedCache, new ObjectMapper(), enabled, ttlSeconds, missingTtlSeconds);
   }
 
   /**
@@ -79,16 +107,29 @@ public class BasicAuthCache {
       log.warn("Failed deriving basic-auth cache key, falling back to PBKDF2", e);
       return loader.get();
     }
+    if (!positiveTtl.isZero()) {
+      AuthenticatedSubject local = localSubjects.getIfPresent(key);
+      if (local != null) return Optional.of(local);
+    }
+    if (!negativeTtl.isZero() && localMissing.getIfPresent(key) != null) {
+      return Optional.empty();
+    }
     try {
       Optional<String> raw = sharedCache.getString(NAMESPACE, key);
       if (raw.isPresent()) {
         if (MISSING_MARKER.equals(raw.get())) {
+          if (!negativeTtl.isZero()) localMissing.put(key, Boolean.TRUE);
           return Optional.empty();
         }
-        Optional<AuthenticatedSubject> cached =
-            sharedCache.getJson(NAMESPACE, key, AuthenticatedSubject.class);
-        if (cached.isPresent()) {
-          return cached;
+        if (!positiveTtl.isZero()) {
+          try {
+            AuthenticatedSubject cached =
+                objectMapper.readValue(raw.get(), AuthenticatedSubject.class);
+            localSubjects.put(key, cached);
+            return Optional.of(cached);
+          } catch (JsonProcessingException malformed) {
+            sharedCache.evict(NAMESPACE, key);
+          }
         }
       }
     } catch (RuntimeException e) {
@@ -97,6 +138,13 @@ public class BasicAuthCache {
     }
 
     Optional<AuthenticatedSubject> loaded = loader.get();
+    if (loaded.isEmpty()) {
+      localSubjects.invalidate(key);
+      if (!negativeTtl.isZero()) localMissing.put(key, Boolean.TRUE);
+    } else if (!positiveTtl.isZero()) {
+      localMissing.invalidate(key);
+      localSubjects.put(key, loaded.get());
+    }
     try {
       if (loaded.isEmpty()) {
         if (!negativeTtl.isZero()) {
@@ -113,6 +161,8 @@ public class BasicAuthCache {
 
   /** Evict every cached entry. Use when admins rotate roles or disable users in bulk. */
   public void evictAll() {
+    localSubjects.invalidateAll();
+    localMissing.invalidateAll();
     if (!enabled || sharedCache == null) {
       return;
     }

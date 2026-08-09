@@ -65,6 +65,44 @@ class RepositoryRuntimeRegistryTest {
   }
 
   @Test
+  void filterRecordIsReusedByRuntimeResolutionWithoutSecondRepositorySelect() {
+    FakeRepositoryDao dao = new FakeRepositoryDao();
+    RepositoryRecord record = repo(1, "hosted", RepositoryType.HOSTED);
+    dao.add(record, List.of());
+    ObjectMapper mapper = new ObjectMapper()
+        .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+    RepositoryRuntimeRegistry registry = new RepositoryRuntimeRegistry(
+        dao, new InMemorySharedCache(mapper, 1000, null), mapper,
+        (CatalogCacheBroadcaster) null, 300);
+
+    RepositoryRecord filtered = registry.findRecordByName("hosted").orElseThrow();
+    assertEquals("hosted", registry.resolve(filtered).orElseThrow().name());
+    assertEquals("hosted", registry.resolve("hosted").orElseThrow().name());
+
+    assertEquals(1, dao.findByNameCalls);
+  }
+
+  @Test
+  void repositoryRecordCacheIsFlushedWithCatalogBroadcast() {
+    FakeRepositoryDao dao = new FakeRepositoryDao();
+    dao.add(repo(1, "hosted", RepositoryType.HOSTED), List.of());
+    InMemoryBroadcaster broadcaster = new InMemoryBroadcaster();
+    ObjectMapper mapper = new ObjectMapper()
+        .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+    RepositoryRuntimeRegistry registry = new RepositoryRuntimeRegistry(
+        dao, new InMemorySharedCache(mapper, 1000, null), mapper, broadcaster, 300);
+    registry.subscribeToCatalogBroadcast();
+
+    registry.findRecordByName("hosted").orElseThrow();
+    registry.findRecordByName("hosted").orElseThrow();
+    assertEquals(1, dao.findByNameCalls);
+
+    broadcaster.publishRefresh("repository");
+    registry.findRecordByName("hosted").orElseThrow();
+    assertEquals(2, dao.findByNameCalls);
+  }
+
+  @Test
   void resolveReadsCargoRequireAuthenticationHintForProxyRepositories() {
     FakeRepositoryDao dao = new FakeRepositoryDao();
     dao.add(cargoRepo(4, "cargo-private", true), List.of());

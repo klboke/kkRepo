@@ -18,6 +18,7 @@ import com.github.klboke.kkrepo.protocol.pub.PubPath;
 import com.github.klboke.kkrepo.protocol.pub.PubPathParser;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPath;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPathParser;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmTokenService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -29,6 +30,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
 import org.springframework.session.web.http.SessionRepositoryFilter;
@@ -61,12 +63,31 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   private static final TerraformPathParser TERRAFORM_PATH_PARSER = new TerraformPathParser();
   private final SecurityAuthenticationService authenticationService;
   private final AccessDecisionService accessDecisionService;
-  private final RepositoryDao repositoryDao;
+  private final RepositoryRuntimeRegistry repositoryRegistry;
   private final AssetDao assetDao;
   private final TerraformRegistryDao terraformRegistryDao;
   private final ForwardedHeaderPolicy forwardedHeaderPolicy;
   private final NexusLegacyUiCompatibility legacyUi;
 
+  @Autowired
+  public RepositorySecurityFilter(
+      SecurityAuthenticationService authenticationService,
+      AccessDecisionService accessDecisionService,
+      RepositoryRuntimeRegistry repositoryRegistry,
+      AssetDao assetDao,
+      TerraformRegistryDao terraformRegistryDao,
+      ForwardedHeaderPolicy forwardedHeaderPolicy,
+      NexusLegacyUiCompatibility legacyUi) {
+    this.authenticationService = authenticationService;
+    this.accessDecisionService = accessDecisionService;
+    this.repositoryRegistry = repositoryRegistry;
+    this.assetDao = assetDao;
+    this.terraformRegistryDao = terraformRegistryDao;
+    this.forwardedHeaderPolicy = forwardedHeaderPolicy;
+    this.legacyUi = legacyUi;
+  }
+
+  /** Backward-compatible constructor used by focused filter unit tests. */
   public RepositorySecurityFilter(
       SecurityAuthenticationService authenticationService,
       AccessDecisionService accessDecisionService,
@@ -75,13 +96,9 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       TerraformRegistryDao terraformRegistryDao,
       ForwardedHeaderPolicy forwardedHeaderPolicy,
       NexusLegacyUiCompatibility legacyUi) {
-    this.authenticationService = authenticationService;
-    this.accessDecisionService = accessDecisionService;
-    this.repositoryDao = repositoryDao;
-    this.assetDao = assetDao;
-    this.terraformRegistryDao = terraformRegistryDao;
-    this.forwardedHeaderPolicy = forwardedHeaderPolicy;
-    this.legacyUi = legacyUi;
+    this(authenticationService, accessDecisionService,
+        new RepositoryRuntimeRegistry(repositoryDao, 0), assetDao, terraformRegistryDao,
+        forwardedHeaderPolicy, legacyUi);
   }
 
   @Override
@@ -96,7 +113,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     }
 
     RepositoryRequest target = securedRequest.get();
-    Optional<RepositoryRecord> repository = repositoryDao.findByName(target.repository());
+    Optional<RepositoryRecord> repository = repositoryRegistry.findRecordByName(target.repository());
     if (repository.isEmpty()) {
       filterChain.doFilter(request, response);
       return;

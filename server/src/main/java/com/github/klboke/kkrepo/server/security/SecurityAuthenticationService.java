@@ -34,6 +34,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Supplier;
 import javax.naming.AuthenticationException;
 import javax.naming.Context;
 import javax.naming.NamingEnumeration;
@@ -47,7 +48,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 public class SecurityAuthenticationService {
@@ -74,6 +78,32 @@ public class SecurityAuthenticationService {
   private final ApiKeyAuthCache apiKeyAuthCache;
   private final BasicAuthCache basicAuthCache;
   private final SecurityCatalogCache securityCatalogCache;
+  private final TransactionTemplate authenticationTransactions;
+
+  public SecurityAuthenticationService(
+      SecurityDao securityDao,
+      ObjectMapper objectMapper,
+      @Value("${kkrepo.security.token-header:X-Nexus-Plus-Token}") String tokenHeader,
+      @Value("${kkrepo.security.default-authenticated-role-id:nx-anonymous}") String defaultAuthenticatedRoleId,
+      SharedCache sharedCache,
+      OutboundRequestPolicy outboundPolicy,
+      ProxiedHttpClientFactory transportFactory,
+      ApiKeyAuthCache apiKeyAuthCache,
+      BasicAuthCache basicAuthCache,
+      SecurityCatalogCache securityCatalogCache) {
+    this(
+        securityDao,
+        objectMapper,
+        tokenHeader,
+        defaultAuthenticatedRoleId,
+        sharedCache,
+        outboundPolicy,
+        transportFactory,
+        apiKeyAuthCache,
+        basicAuthCache,
+        securityCatalogCache,
+        null);
+  }
 
   @Autowired
   public SecurityAuthenticationService(
@@ -86,7 +116,8 @@ public class SecurityAuthenticationService {
       ProxiedHttpClientFactory transportFactory,
       ApiKeyAuthCache apiKeyAuthCache,
       BasicAuthCache basicAuthCache,
-      SecurityCatalogCache securityCatalogCache) {
+      SecurityCatalogCache securityCatalogCache,
+      PlatformTransactionManager transactionManager) {
     this.securityDao = securityDao;
     this.objectMapper = objectMapper;
     this.tokenHeader = tokenHeader;
@@ -98,6 +129,8 @@ public class SecurityAuthenticationService {
     this.apiKeyAuthCache = apiKeyAuthCache;
     this.basicAuthCache = basicAuthCache;
     this.securityCatalogCache = securityCatalogCache;
+    this.authenticationTransactions = transactionManager == null
+        ? null : new TransactionTemplate(transactionManager);
   }
 
   public SecurityAuthenticationService(
@@ -128,10 +161,20 @@ public class SecurityAuthenticationService {
     this.apiKeyAuthCache = null;
     this.basicAuthCache = null;
     this.securityCatalogCache = securityCatalogCache;
+    this.authenticationTransactions = null;
   }
 
-  @Transactional
   public Optional<AuthenticatedSubject> authenticate(HttpServletRequest request) {
+    // Anonymous repository reads do not carry credentials or a session. Avoid opening a JDBC
+    // transaction before that inexpensive fact is known; credential-bearing requests retain the
+    // previous transaction boundary through the programmatic transaction below.
+    if (!hasPresentedCredentials(request) && request.getSession(false) == null) {
+      return Optional.empty();
+    }
+    return inAuthenticationTransaction(() -> authenticatePresented(request));
+  }
+
+  private Optional<AuthenticatedSubject> authenticatePresented(HttpServletRequest request) {
     Optional<AuthenticatedSubject> apiKey = authenticateApiKey(request);
     if (apiKey.isPresent()) {
       return apiKey;
@@ -149,6 +192,14 @@ public class SecurityAuthenticationService {
     }
     return basicCredentials(request).flatMap(credentials ->
         authenticateBasic(credentials.username(), credentials.password()));
+  }
+
+  private <T> T inAuthenticationTransaction(Supplier<T> callback) {
+    if (authenticationTransactions == null
+        || TransactionSynchronizationManager.isActualTransactionActive()) {
+      return callback.get();
+    }
+    return authenticationTransactions.execute(ignored -> callback.get());
   }
 
   @Transactional

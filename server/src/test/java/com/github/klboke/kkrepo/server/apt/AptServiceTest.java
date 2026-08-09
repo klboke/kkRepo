@@ -175,6 +175,7 @@ class AptServiceTest {
     String release = "dists/stable/Release";
     AptRegistryDao.Snapshot snapshot = snapshot(runtime, "stable", 1,
         Map.of(release, ".apt/release"));
+    when(fixture.registry.findSuite(runtime.id(), "stable")).thenReturn(Optional.of(state));
     when(fixture.registry.ensureSuite(eq(runtime.id()), eq("stable"), any())).thenReturn(state);
     when(fixture.registry.findPublishedSnapshot(runtime.id(), "stable"))
         .thenReturn(Optional.of(snapshot));
@@ -182,6 +183,8 @@ class AptServiceTest {
     assertEquals("public, max-age=0, must-revalidate",
         metadata.headers().get("Cache-Control"));
     verify(fixture.assets).serve(runtime, ".apt/release", false);
+    verify(fixture.registry, never()).ensureSuite(eq(runtime.id()), eq("stable"), any());
+    verify(fixture.registry, never()).findSuite(runtime.id(), "stable");
 
     String byHash = "dists/stable/main/binary-amd64/by-hash/SHA256/" + "a".repeat(64);
     when(fixture.registry.findPublishedSnapshot(runtime.id(), "stable"))
@@ -386,7 +389,8 @@ class AptServiceTest {
           anyString())).thenReturn(Optional.empty());
       when(registry.findPackageByPath(anyLong(), anyString())).thenReturn(Optional.empty());
       service = new AptService(
-          registry, repositorySettings, new AptDebPackageInspector(), new AptComponentFactory(),
+          registry, new AptPublishedSnapshotCache(registry), repositorySettings,
+          new AptDebPackageInspector(), new AptComponentFactory(),
           assets, metadataBuilder, signing, leases, proxy, proxyProjection);
     }
 

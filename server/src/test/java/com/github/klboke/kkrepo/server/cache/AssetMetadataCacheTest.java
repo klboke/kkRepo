@@ -60,7 +60,7 @@ class AssetMetadataCacheTest {
   }
 
   @Test
-  void positiveHitUsesOneSharedCacheRead() {
+  void positiveHitUsesTypedLocalTierWithoutSharedCacheReadOrJsonDecode() {
     CountingSharedCache countingCache = new CountingSharedCache();
     AssetMetadataCache cache = new AssetMetadataCache(countingCache, true, 120, 5);
     cache.find(7L, "com/foo/bar.jar",
@@ -71,7 +71,7 @@ class AssetMetadataCacheTest {
         () -> { throw new AssertionError("should not load"); });
 
     assertTrue(cached.isPresent());
-    assertEquals(1, countingCache.stringGets.get(), "positive hit should read the cache once");
+    assertEquals(0, countingCache.stringGets.get(), "typed hot hit should avoid shared cache IO");
     assertEquals(0, countingCache.jsonGets.get(), "positive hit should not perform a second JSON cache read");
   }
 

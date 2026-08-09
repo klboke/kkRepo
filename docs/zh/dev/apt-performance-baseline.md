@@ -36,6 +36,31 @@
 - 两端生成的 `InRelease` 大小和签名字节本就不同，因此这里只比较各自合法响应的请求成本；package GET 和 Range 使用相同制品字节做直接对比。
 - 结果仅代表单机、预热、读取型基线。不能据此推断公网延迟、并发写入、metadata rebuild、proxy 回源或对象存储环境下的相对表现。
 
+## 优化后复测（2026-08-09）
+
+针对首轮基线暴露的小对象固定开销，本轮完成了四组热路径优化：
+
+- 已发布 APT snapshot 使用节点本地类型化缓存，并以 MySQL version watermark 和 TTL 保证多副本失效；稳定 metadata 读取不再查询或锁定 suite。
+- repository record、runtime 和 APT settings 在过滤器与 controller 间复用，并在仓库配置广播后失效，移除重复 SELECT 和 JSON 解析。
+- asset metadata 与 Basic Auth 在共享缓存前增加可重建的节点本地类型化热缓存，减少热命中的共享缓存读取和反序列化。
+- 无凭据匿名请求与已预热的权限目录判定不再开启请求级事务；需要读取数据库的鉴权回退路径仍保留显式事务边界。
+
+复测沿用相同容器、制品、请求数、并发、预热和三轮交替顺序。下表记录第二次独立确认运行的三轮中位数：
+
+| 场景 | Nexus req/s | kkRepo req/s | kkRepo / Nexus | Nexus p50 | kkRepo p50 | Nexus p95 | kkRepo p95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `InRelease` | 2087.93 | 2740.20 | 1.312x | 6.512 ms | 3.910 ms | 18.992 ms | 12.611 ms |
+| `Packages.gz` | 1705.69 | 2552.21 | 1.496x | 7.705 ms | 4.502 ms | 16.901 ms | 14.008 ms |
+| 4 MiB package GET | 336.13 | 405.03 | 1.205x | 17.028 ms | 14.959 ms | 41.621 ms | 30.514 ms |
+| package Range 64 KiB | 1557.66 | 1814.40 | 1.165x | 7.513 ms | 6.024 ms | 19.835 ms | 19.743 ms |
+| package HEAD | 2301.23 | 2755.66 | 1.197x | 5.443 ms | 4.165 ms | 14.921 ms | 11.650 ms |
+
+完整 package GET 的中位吞吐为 Nexus `1345.17 MiB/s`、kkRepo `1620.92 MiB/s`。另一轮独立运行中，五个场景的吞吐比分别为 `1.453x`、`1.197x`、`1.085x`、`1.348x` 和 `1.034x`，方向与确认运行一致。
+
+预热后另以 1000 次、并发 16 的 `InRelease` 请求检查 MySQL statement digest：请求期间没有 APT suite、snapshot 或 repository 业务查询，也没有请求级事务；观测到的 14 次事务全部来自同期后台轮询任务。说明本轮提升来自固定数据库与序列化开销的实质移除，而不是绕过协议校验或响应体传输。
+
+复测后五个客户端可见读取场景的吞吐均高于同机 Nexus；首轮最明显的 metadata 和 HEAD 差距已经消除。结果仍是单机方向性数据，生产环境需继续覆盖 TLS、远端 OSS/S3、数据库高可用和多副本负载均衡。
+
 ## 复现
 
 先向两端 hosted 仓库上传同一个 package，再执行：

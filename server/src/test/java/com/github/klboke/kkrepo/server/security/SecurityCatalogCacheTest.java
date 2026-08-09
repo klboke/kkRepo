@@ -3,6 +3,8 @@ package com.github.klboke.kkrepo.server.security;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
@@ -22,6 +24,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.springframework.transaction.PlatformTransactionManager;
 
 class SecurityCatalogCacheTest {
 
@@ -39,6 +42,22 @@ class SecurityCatalogCacheTest {
     assertTrue(service.decide(subject("alice"), "nexus:users:read").allowed());
     assertTrue(service.listEffectivePermissions(subject("alice")).contains("nexus:users:read"));
     assertEquals(0, dao.listPrivilegesForRolesCalls);
+  }
+
+  @Test
+  void permissionChecksDoNotOpenTransactionsWhenCatalogIsWarm() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.user(1L, "Local", "alice", List.of("nx-reader"));
+    dao.role("nx-reader");
+    dao.grant("nx-reader", privilege(
+        "nx-users-read", "wildcard", Map.of("pattern", "nexus:users:read")));
+    SecurityCatalogCache catalogCache = new SecurityCatalogCache(dao, true);
+    PlatformTransactionManager transactions = mock(PlatformTransactionManager.class);
+    SecurityManagementService service = new SecurityManagementService(
+        dao, null, null, null, catalogCache, transactions);
+
+    assertTrue(service.decide(subject("alice"), "nexus:users:read").allowed());
+    verifyNoInteractions(transactions);
   }
 
   @Test
