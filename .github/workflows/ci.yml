@@ -142,15 +142,20 @@ jobs:
             --set securityScanning.serviceCredential.existingSecret=kkrepo-scanner
           scripts/ci/check-helm-scanner-isolation.sh
 
-  dev-jar-deploy-contract:
-    name: dev-jar-deploy-contract
+  dev-runtime-deploy-contract:
+    name: dev-runtime-deploy-contract
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Verify dev jar deployment scripts
+      - name: Verify dev JVM and Native deployment scripts
         run: |
           bash -n scripts/deploy/kkrepo-jar-deploy.sh
+          bash -n scripts/deploy/kkrepo-runtime-deploy.sh
+          bash -n scripts/deploy/kkrepo-dual-runtime-deploy.sh
           bash -n scripts/ci/test-dev-jar-deploy.sh
+          bash -n scripts/ci/test-dev-dual-runtime-deploy.sh
+          bash -n scripts/ci/check-dev-dual-runtime-deploy.sh
+          bash -n .github/deploy/dev/bootstrap-dual-runtime.sh
           bash -n scripts/build-dist.sh
           bash -n scripts/build-docker-image.sh
           bash -n scripts/ci/package-e2e-candidate-image.sh
@@ -165,10 +170,14 @@ jobs:
           bash -n server/src/dist/bin/status.sh
           bash -n server/src/dist/bin/stop.sh
           scripts/ci/test-dev-jar-deploy.sh
+          scripts/ci/test-dev-dual-runtime-deploy.sh
+          scripts/ci/check-dev-dual-runtime-deploy.sh
           scripts/ci/test-e2e-image-artifact.sh
           scripts/ci/test-quickstart-runtime.sh
           scripts/ci/test-swift-e2e-wrappers.sh
           scripts/ci/test-dist-launcher.sh
           test -f .github/deploy/dev/systemd/kkrepo.service
+          test -f .github/deploy/dev/systemd/kkrepo-native.service
+          test -f .github/deploy/dev/README.md
           POSTGRES_DB=kkrepo POSTGRES_USER=kkrepo POSTGRES_PASSWORD=kkrepo \
             docker compose -f .github/deploy/dev/docker-compose.yml config --quiet

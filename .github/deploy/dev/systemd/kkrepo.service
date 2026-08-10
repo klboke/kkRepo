@@ -1,5 +1,5 @@
 [Unit]
-Description=kkRepo dev executable jar
+Description=kkRepo dev JVM runtime
 Wants=network-online.target
 After=network-online.target docker.service
 
@@ -9,9 +9,12 @@ RemainAfterExit=yes
 User=kkrepo
 Group=kkrepo
 Environment=KKREPO_DEPLOY_ROOT=/opt/kkrepo/runtime
-ExecStartPre=/usr/bin/test -x /opt/kkrepo/bin/kkrepo-jar-deploy.sh
-ExecStart=/opt/kkrepo/bin/kkrepo-jar-deploy.sh start
-ExecStop=/opt/kkrepo/bin/kkrepo-jar-deploy.sh stop
+Environment=KKREPO_RUNTIME=jvm
+Environment=KKREPO_HEALTH_URL=http://127.0.0.1:8081/actuator/health/readiness
+Environment="KKREPO_INSTANCE_APPLICATION_ARGS=--management.metrics.tags.runtime=jvm"
+ExecStartPre=/usr/bin/test -x /opt/kkrepo/bin/kkrepo-runtime-deploy.sh
+ExecStart=/opt/kkrepo/bin/kkrepo-runtime-deploy.sh start
+ExecStop=/opt/kkrepo/bin/kkrepo-runtime-deploy.sh stop
 TimeoutStartSec=180
 TimeoutStopSec=60
 Restart=on-failure

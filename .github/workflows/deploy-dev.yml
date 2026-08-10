@@ -19,10 +19,10 @@ concurrency:
 
 jobs:
   deploy-dev:
-    name: deploy-dev-jar
+    name: deploy-dev-jvm-native
     if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     environment: dev
     steps:
       - name: Confirm the main commit came from a merged pull request
@@ -32,7 +32,7 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           deploy=false
-          for attempt in 1 2 3 4 5; do
+          for _attempt in 1 2 3 4 5; do
             deploy="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/pulls" \
               --jq 'any(.[]; .merged_at != null and .base.ref == "main")')"
             if [[ "$deploy" == "true" ]]; then
@@ -57,11 +57,22 @@ jobs:
           java-version: "25"
           cache: maven
 
-      - name: Build executable jar
+      - name: Build Native executable
         if: steps.source.outputs.deploy == 'true'
-        id: build
+        id: build-native
         run: |
-          mvn -B -ntp -pl server -am -DskipTests package spring-boot:repackage
+          scripts/build-dist.sh --native
+          native_file="$RUNNER_TEMP/kkrepo-native"
+          install -m 0755 server/target/kkrepo "$native_file"
+          file "$native_file" | grep -Eq 'ELF 64-bit.*x86-64'
+          echo "native_file=$native_file" >> "$GITHUB_OUTPUT"
+          echo "native_sha256=$(sha256sum "$native_file" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Build executable JVM jar
+        if: steps.source.outputs.deploy == 'true'
+        id: build-jvm
+        run: |
+          mvn -B -ntp -pl server -am -DskipTests clean package spring-boot:repackage
           project_version="$(mvn -q -N -DforceStdout help:evaluate -Dexpression=project.version)"
           jar_file="server/target/kkrepo-server-${project_version}.jar"
           manifest="$(unzip -p "$jar_file" META-INF/MANIFEST.MF)"
@@ -70,6 +81,7 @@ jobs:
           [[ "$manifest" == *"Start-Class: com.github.klboke.kkrepo.server.KkRepoApplication"* ]]
           [[ "$jar_listing" == BOOT-INF/* || "$jar_listing" == *$'\n'BOOT-INF/* ]]
           echo "jar_file=$jar_file" >> "$GITHUB_OUTPUT"
+          echo "jar_sha256=$(sha256sum "$jar_file" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
       - name: Configure dev SSH
         if: steps.source.outputs.deploy == 'true'
@@ -82,14 +94,17 @@ jobs:
           printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 0600 "$HOME/.ssh/dev" "$HOME/.ssh/known_hosts"
 
-      - name: Upload executable jar and deployment script
+      - name: Upload both runtimes and deployment configuration
         if: steps.source.outputs.deploy == 'true'
         env:
           SSH_HOST: ${{ secrets.DEV_SSH_HOST }}
           SSH_PORT: ${{ secrets.DEV_SSH_PORT }}
           SSH_USER: ${{ secrets.DEV_SSH_USER }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          JAR_FILE: ${{ steps.build.outputs.jar_file }}
+          JAR_FILE: ${{ steps.build-jvm.outputs.jar_file }}
+          JAR_SHA256: ${{ steps.build-jvm.outputs.jar_sha256 }}
+          NATIVE_FILE: ${{ steps.build-native.outputs.native_file }}
+          NATIVE_SHA256: ${{ steps.build-native.outputs.native_sha256 }}
         run: |
           remote_dir="/opt/kkrepo/staging/${HEAD_SHA}"
           ssh -q -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes \
@@ -100,10 +115,44 @@ jobs:
             "$JAR_FILE" "$SSH_USER@$SSH_HOST:$remote_dir/kkrepo.jar"
           scp -q -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes \
             -i "$HOME/.ssh/dev" -P "$SSH_PORT" \
+            "$NATIVE_FILE" "$SSH_USER@$SSH_HOST:$remote_dir/kkrepo-native"
+          scp -q -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes \
+            -i "$HOME/.ssh/dev" -P "$SSH_PORT" \
+            scripts/deploy/kkrepo-runtime-deploy.sh \
+            scripts/deploy/kkrepo-dual-runtime-deploy.sh \
             scripts/deploy/kkrepo-jar-deploy.sh \
-            "$SSH_USER@$SSH_HOST:$remote_dir/kkrepo-jar-deploy.sh"
+            .github/deploy/dev/bootstrap-dual-runtime.sh \
+            .github/deploy/dev/nginx/kkrepo.conf \
+            .github/deploy/dev/systemd/kkrepo.service \
+            .github/deploy/dev/systemd/kkrepo-native.service \
+            "$SSH_USER@$SSH_HOST:$remote_dir/"
 
-      - name: Deploy and verify dev
+          ssh -q -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes \
+            -i "$HOME/.ssh/dev" -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "REMOTE_DIR='$remote_dir' JAR_SHA256='$JAR_SHA256' NATIVE_SHA256='$NATIVE_SHA256' bash -s" <<'REMOTE'
+          set -euo pipefail
+          [[ "$(uname -m)" == "x86_64" ]]
+          [[ "$(sha256sum "$REMOTE_DIR/kkrepo.jar" | awk '{print $1}')" == "$JAR_SHA256" ]]
+          [[ "$(sha256sum "$REMOTE_DIR/kkrepo-native" | awk '{print $1}')" == "$NATIVE_SHA256" ]]
+
+          install -m 0755 "$REMOTE_DIR/kkrepo-runtime-deploy.sh" \
+            /opt/kkrepo/bin/kkrepo-runtime-deploy.sh
+          install -m 0755 "$REMOTE_DIR/kkrepo-dual-runtime-deploy.sh" \
+            /opt/kkrepo/bin/kkrepo-dual-runtime-deploy.sh
+          install -m 0755 "$REMOTE_DIR/kkrepo-jar-deploy.sh" \
+            /opt/kkrepo/bin/kkrepo-jar-deploy.sh
+
+          deploy_config=/opt/kkrepo/runtime/deploy-config
+          install -d -m 0750 "$deploy_config/nginx" "$deploy_config/systemd"
+          install -m 0755 "$REMOTE_DIR/bootstrap-dual-runtime.sh" \
+            "$deploy_config/bootstrap-dual-runtime.sh"
+          install -m 0644 "$REMOTE_DIR/kkrepo.conf" "$deploy_config/nginx/kkrepo.conf"
+          install -m 0644 "$REMOTE_DIR/kkrepo.service" "$deploy_config/systemd/kkrepo.service"
+          install -m 0644 "$REMOTE_DIR/kkrepo-native.service" \
+            "$deploy_config/systemd/kkrepo-native.service"
+          REMOTE
+
+      - name: Deploy and verify the same SHA on both runtimes
         if: steps.source.outputs.deploy == 'true'
         env:
           SSH_HOST: ${{ secrets.DEV_SSH_HOST }}
@@ -114,9 +163,15 @@ jobs:
           remote_dir="/opt/kkrepo/staging/${HEAD_SHA}"
           ssh -q -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes \
             -i "$HOME/.ssh/dev" -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
-            "install -m 0755 '$remote_dir/kkrepo-jar-deploy.sh' /opt/kkrepo/bin/kkrepo-jar-deploy.sh && \
-             KKREPO_DEPLOY_ROOT=/opt/kkrepo/runtime /opt/kkrepo/bin/kkrepo-jar-deploy.sh \
-               deploy '$remote_dir/kkrepo.jar' '$HEAD_SHA'"
+            "/opt/kkrepo/bin/kkrepo-dual-runtime-deploy.sh \
+               '$remote_dir/kkrepo.jar' '$remote_dir/kkrepo-native' '$HEAD_SHA'"
+
+          if ! ssh -q -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=yes \
+            -i "$HOME/.ssh/dev" -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "systemctl is-enabled --quiet kkrepo-native.service && \
+             test -f /opt/kkrepo/runtime/deploy-config/dual-runtime-active"; then
+            echo "::notice::Run /opt/kkrepo/runtime/deploy-config/bootstrap-dual-runtime.sh once as root to install the Native unit and activate Nginx 50/50 routing."
+          fi
 
       - name: Remove remote staging files
         if: always() && steps.source.outputs.deploy == 'true'
