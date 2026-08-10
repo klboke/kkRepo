@@ -154,6 +154,7 @@ jobs:
           bash -n scripts/deploy/kkrepo-dual-runtime-deploy.sh
           bash -n scripts/ci/test-dev-jar-deploy.sh
           bash -n scripts/ci/test-dev-dual-runtime-deploy.sh
+          bash -n scripts/ci/test-dev-nginx-bind-mount.sh
           bash -n scripts/ci/check-dev-dual-runtime-deploy.sh
           bash -n .github/deploy/dev/bootstrap-dual-runtime.sh
           bash -n scripts/build-dist.sh
@@ -171,6 +172,7 @@ jobs:
           bash -n server/src/dist/bin/stop.sh
           scripts/ci/test-dev-jar-deploy.sh
           scripts/ci/test-dev-dual-runtime-deploy.sh
+          scripts/ci/test-dev-nginx-bind-mount.sh
           scripts/ci/check-dev-dual-runtime-deploy.sh
           scripts/ci/test-e2e-image-artifact.sh
           scripts/ci/test-quickstart-runtime.sh
