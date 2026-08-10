@@ -221,7 +221,7 @@ jobs:
 
       - name: Set up Conda client
         if: env.LIVE_COMPAT_SUITE == 'client-e2e'
-        uses: conda-incubator/setup-miniconda@v3
+        uses: conda-incubator/setup-miniconda@v4
         with:
           miniforge-version: "26.3.2-3"
           activate-environment: conda-client-e2e
