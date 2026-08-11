@@ -543,6 +543,33 @@ curl -u alice:"$KKREPO_PASSWORD" \
 签名密钥生命周期、异步发布状态、Proxy 模式、snapshot 保留、清理、迁移与恢复说明见
 [APT / Debian 仓库使用指南](apt-debian-guide.md)。
 
+## Conan 2
+
+读取使用 group，发布使用 hosted 仓库：
+
+```bash
+conan remote add kkrepo \
+  https://nexus.example.com/repository/conan-group
+conan remote add kkrepo-hosted \
+  https://nexus.example.com/repository/conan-hosted
+conan remote login kkrepo alice -p "$KKREPO_PASSWORD"
+conan remote login kkrepo-hosted alice -p "$KKREPO_PASSWORD"
+```
+
+创建并上传 recipe，再通过 group 解析：
+
+```bash
+conan create . \
+  --name=demo --version=1.0.0 --user=team --channel=stable
+conan upload 'demo/1.0.0@team/stable' \
+  --remote=kkrepo-hosted --confirm
+conan list 'demo/1.0.0@team/stable#*:*#*' --remote=kkrepo
+conan install --requires='demo/1.0.0@team/stable' --remote=kkrepo
+```
+
+Revision 提交语义、Browse 路径、清理、安全扫描、proxy/group、迁移和排障说明见
+[Conan 仓库使用指南](conan-guide.md)。
+
 ## NuGet
 
 添加 source：

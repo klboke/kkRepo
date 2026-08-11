@@ -31,6 +31,8 @@ public record NexusSourceProfile(
   private static final int ANSIBLE_MIGRATION_MAX_MINOR = 94;
   private static final int CONDA_MIGRATION_MIN_MINOR = 92;
   private static final int CONDA_MIGRATION_MAX_MINOR = 94;
+  private static final int CONAN_MIGRATION_MIN_MINOR = 94;
+  private static final int CONAN_MIGRATION_MAX_MINOR = 94;
   private static final int APT_MIGRATION_MIN_MINOR = 92;
   private static final int APT_MIGRATION_MAX_MINOR = 94;
 
@@ -218,13 +220,15 @@ public record NexusSourceProfile(
               || ansibleContentModelSupported(probedNexusVersion, contentModel))
           && (!"conda".equals(format)
               || condaContentModelSupported(probedNexusVersion, contentModel))
+          && (!"conan".equals(format)
+              || conanContentModelSupported(probedNexusVersion, contentModel))
           && (!"apt".equals(format)
               || aptContentModelSupported(probedNexusVersion, contentModel));
       boolean content = config
           && ((metadataEngine == MetadataEngine.ORIENTDB
                   && !"cargo".equals(format) && !"pub".equals(format)
                   && !"swift".equals(format) && !"ansiblegalaxy".equals(format)
-                  && !"conda".equals(format))
+                  && !"conda".equals(format) && !"conan".equals(format))
               || ((metadataEngine == MetadataEngine.DATASTORE_H2
                   || metadataEngine == MetadataEngine.DATASTORE_POSTGRESQL)
                   && datastoreContent));
@@ -294,6 +298,14 @@ public record NexusSourceProfile(
           && !condaFormatShapeSupported(contentModel.formatShape())) {
         return "conda-content-shape-incomplete";
       }
+      if ("conan".equals(format)
+          && !knownConanMigrationVersion(probedNexusVersion)) {
+        return "conan-source-version-unverified";
+      }
+      if ("conan".equals(format)
+          && !conanFormatShapeSupported(contentModel.formatShape())) {
+        return "conan-content-shape-incomplete";
+      }
       if ("apt".equals(format)
           && !knownAptMigrationVersion(probedNexusVersion)) {
         return "apt-source-version-unverified";
@@ -362,6 +374,13 @@ public record NexusSourceProfile(
         && aptFormatShapeSupported(contentModel.formatShape());
   }
 
+  private static boolean conanContentModelSupported(
+      String probedNexusVersion,
+      ContentModelFingerprint contentModel) {
+    return knownConanMigrationVersion(probedNexusVersion)
+        && conanFormatShapeSupported(contentModel.formatShape());
+  }
+
   private static boolean knownSwiftMigrationVersion(String version) {
     return knownMigrationVersion(version, SWIFT_MIGRATION_MIN_MINOR, SWIFT_MIGRATION_MAX_MINOR);
   }
@@ -376,6 +395,10 @@ public record NexusSourceProfile(
 
   private static boolean knownAptMigrationVersion(String version) {
     return knownMigrationVersion(version, APT_MIGRATION_MIN_MINOR, APT_MIGRATION_MAX_MINOR);
+  }
+
+  private static boolean knownConanMigrationVersion(String version) {
+    return knownMigrationVersion(version, CONAN_MIGRATION_MIN_MINOR, CONAN_MIGRATION_MAX_MINOR);
   }
 
   private static boolean knownMigrationVersion(String version, int minimumMinor, int maximumMinor) {
@@ -427,6 +450,13 @@ public record NexusSourceProfile(
         && bool(shape.get("packageAssetPath"), false)
         && bool(shape.get("aptAssetAttributes"), false)
         && bool(shape.get("sha256Checksum"), false);
+  }
+
+  private static boolean conanFormatShapeSupported(Map<String, Object> shape) {
+    return shape != null
+        && bool(shape.get("revisionAssetPath"), false)
+        && bool(shape.get("manifestObserved"), false)
+        && bool(shape.get("sha1Checksum"), false);
   }
 
   private static Map<String, Object> attributesFingerprint(RepositoryDocument document) {

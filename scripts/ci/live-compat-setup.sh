@@ -191,6 +191,48 @@ configure_nexus_anonymous_access() {
   return 1
 }
 
+configure_nexus_conan_realm() {
+  local current_file updated_file response_file status
+  current_file="$(mktemp)"
+  updated_file="$(mktemp)"
+  response_file="$(mktemp)"
+  curl -m 20 -fsS -u "$NEXUS_AUTH" \
+    "$NEXUS_URL/service/rest/v1/security/realms/active" >"$current_file"
+  python3 - "$current_file" "$updated_file" <<'PY'
+import json
+import pathlib
+import sys
+
+source, target = map(pathlib.Path, sys.argv[1:3])
+realms = json.loads(source.read_text(encoding="utf-8"))
+if "ConanToken" not in realms:
+    realms.append("ConanToken")
+target.write_text(json.dumps(realms, separators=(",", ":")), encoding="utf-8")
+PY
+  status="$(curl -m 20 -sS \
+    -u "$NEXUS_AUTH" \
+    -X PUT \
+    -H "Content-Type: application/json" \
+    --data-binary "@$updated_file" \
+    -o "$response_file" \
+    -w "%{http_code}" \
+    "$NEXUS_URL/service/rest/v1/security/realms/active" || true)"
+  if [[ "$status" =~ ^2[0-9][0-9]$ ]]; then
+    echo "[compat] Nexus ConanToken realm is active"
+    rm -f "$current_file" "$updated_file" "$response_file"
+    return 0
+  fi
+  if [[ "$status" == "400" || "$status" == "404" ]]; then
+    echo "[compat] Nexus ConanToken realm is unavailable on this source; skipping"
+    rm -f "$current_file" "$updated_file" "$response_file"
+    return 0
+  fi
+  echo "[compat] Nexus ConanToken realm update failed with HTTP $status" >&2
+  cat "$response_file" >&2 || true
+  rm -f "$current_file" "$updated_file" "$response_file"
+  return 1
+}
+
 nexus_repo_exists() {
   local name="$1"
   local repositories
@@ -365,6 +407,12 @@ ensure_nexus_repositories() {
     "online":true,
     "storage":{"blobStoreName":"default","strictContentTypeValidation":true},
     "group":{"memberNames":["conda-hosted","conda-proxy"]}
+  }'
+
+  nexus_try_create_repo "conan-compat-hosted" "$NEXUS_URL/service/rest/v1/repositories/conan/hosted" '{
+    "name":"conan-compat-hosted",
+    "online":true,
+    "storage":{"blobStoreName":"default","strictContentTypeValidation":true,"writePolicy":"ALLOW"}
   }'
 
   nexus_try_create_repo "swift-hosted" "$NEXUS_URL/service/rest/v1/repositories/swift/hosted" '{
@@ -864,6 +912,42 @@ ensure_kkrepo_repositories() {
     "group":{"memberNames":["conda-hosted","conda-proxy"]}
   }'
 
+  kkrepo_create_repo "conan-hosted" '{
+    "name":"conan-hosted",
+    "recipe":"conan-hosted",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "hosted":{"writePolicy":"ALLOW"}
+  }'
+
+  kkrepo_create_repo "conan-proxy" '{
+    "name":"conan-proxy",
+    "recipe":"conan-proxy",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "proxy":{"remoteUrl":"https://center2.conan.io/","contentMaxAgeMinutes":1440,"metadataMaxAgeMinutes":60,"negativeCacheEnabled":true,"negativeCacheTtlMinutes":5,"autoBlock":true}
+  }'
+
+  kkrepo_create_repo "conan-group" '{
+    "name":"conan-group",
+    "recipe":"conan-group",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "group":{"memberNames":["conan-hosted","conan-proxy"]}
+  }'
+
+  kkrepo_create_repo "conan-compat-hosted" '{
+    "name":"conan-compat-hosted",
+    "recipe":"conan-hosted",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "hosted":{"writePolicy":"ALLOW"}
+  }'
+
   kkrepo_create_repo "swift-hosted" '{
     "name":"swift-hosted",
     "recipe":"swift-hosted",
@@ -1151,6 +1235,7 @@ wait_for_http "kkrepo management health" "$KKREPO_MANAGEMENT_URL/actuator/health
 initialize_nexus_admin
 accept_nexus_eula_if_required
 configure_nexus_anonymous_access
+configure_nexus_conan_realm
 ensure_nexus_repositories
 initialize_kkrepo_admin
 ensure_kkrepo_blob_store

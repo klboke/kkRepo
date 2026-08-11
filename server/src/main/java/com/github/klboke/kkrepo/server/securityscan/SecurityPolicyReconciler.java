@@ -253,7 +253,13 @@ public class SecurityPolicyReconciler {
         ? ScanStage.MATCH_ONLY
         : reusableRun ? ScanStage.POLICY_ONLY : ScanStage.CATALOG_AND_MATCH;
     String requestUuid = requestUuid(context, profile, target, stage);
-    String subjectKey = "sha256:" + content.blob().sha256();
+    var identity = classifier.subjectIdentity(content.asset(), content.blob());
+    if (identity == null) {
+      identity = SecurityScanCandidateClassifier.blobIdentity(
+          content.asset(), content.blob());
+    }
+    if (!identity.complete()) return;
+    String subjectKey = identity.key();
     scans.createTask(new TaskDraft(
         target.sourceRepositoryId(),
         target.assetId(),

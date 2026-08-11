@@ -62,6 +62,14 @@ public interface RepositoryDataMigrationDao {
   void markAssetMigrated(long assetId, long repositoryJobId,
       Long targetComponentId, Long targetAssetId, Long targetAssetBlobId);
 
+  /** Repairs staged Conan migration rows to their final manifest-committed asset identities. */
+  int retargetMigratedAsset(
+      long repositoryJobId,
+      String sourcePath,
+      Long targetComponentId,
+      long targetAssetId,
+      long targetAssetBlobId);
+
   void markAssetFailed(long assetId, long repositoryJobId, int maxAttempts, String error);
 
   int retryFailedAssets(long migrationJobId);

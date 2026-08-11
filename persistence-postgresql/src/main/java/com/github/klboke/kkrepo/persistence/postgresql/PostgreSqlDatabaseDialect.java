@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.persistence.postgresql;
 
 import com.github.klboke.kkrepo.persistence.jdbc.spi.ComponentPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.CondaPersistenceDialect;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.ConanPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.CoordinationPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseType;
@@ -25,6 +26,7 @@ public final class PostgreSqlDatabaseDialect implements DatabaseDialect {
   private final ComponentPersistenceDialect components =
       new PostgreSqlComponentPersistenceDialect(json);
   private final CondaPersistenceDialect conda = new PostgreSqlCondaPersistenceDialect();
+  private final ConanPersistenceDialect conan = new PostgreSqlConanPersistenceDialect();
   private final CoordinationPersistenceDialect coordination =
       new PostgreSqlCoordinationPersistenceDialect();
   private final SearchPersistenceDialect search = new PostgreSqlSearchPersistenceDialect();
@@ -56,6 +58,11 @@ public final class PostgreSqlDatabaseDialect implements DatabaseDialect {
   @Override
   public CondaPersistenceDialect conda() {
     return conda;
+  }
+
+  @Override
+  public ConanPersistenceDialect conan() {
+    return conan;
   }
 
   @Override
@@ -181,6 +188,21 @@ public final class PostgreSqlDatabaseDialect implements DatabaseDialect {
       }
       return "COALESCE(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - MIN("
           + timestampColumn + "))), 0)";
+    }
+  }
+
+  private static final class PostgreSqlConanPersistenceDialect
+      implements ConanPersistenceDialect {
+    private static final String RECIPE_NAME_RANGE_SQL = """
+        SELECT * FROM conan_recipe
+        WHERE repository_id = ? AND name_key >= ? AND name_key < ? AND id > ?
+        ORDER BY id
+        LIMIT ?
+        """;
+
+    @Override
+    public String recipeNameRangeSql() {
+      return RECIPE_NAME_RANGE_SQL;
     }
   }
 

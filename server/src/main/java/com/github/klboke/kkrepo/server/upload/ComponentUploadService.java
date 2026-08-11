@@ -3,6 +3,9 @@ package com.github.klboke.kkrepo.server.upload;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
+import com.github.klboke.kkrepo.protocol.conan.ConanManifest;
+import com.github.klboke.kkrepo.protocol.conan.ConanPathParser;
+import com.github.klboke.kkrepo.protocol.conan.ConanReference;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.server.apt.AptService;
@@ -10,6 +13,7 @@ import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyService;
 import com.github.klboke.kkrepo.server.cargo.CargoHostedService;
 import com.github.klboke.kkrepo.server.composer.ComposerHostedService;
 import com.github.klboke.kkrepo.server.conda.CondaService;
+import com.github.klboke.kkrepo.server.conan.ConanService;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenHostedService;
@@ -29,6 +33,8 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -109,6 +115,20 @@ public class ComponentUploadService {
               field("subdir", "STRING", "Conda subdir, for example linux-64 or noarch", false,
                   "Component coordinates")),
           List.of(field("asset", "FILE", "Conda .conda or .tar.bz2 package", false, null))),
+      new UploadDefinition(
+          "conan",
+          true,
+          List.of(
+              field("name", "STRING", "Recipe name", false, "Component coordinates"),
+              field("version", "STRING", "Recipe version", false, "Component coordinates"),
+              field("user", "STRING", "Recipe user", true, "Component coordinates"),
+              field("channel", "STRING", "Recipe channel", true, "Component coordinates"),
+              field("rrev", "STRING", "Recipe revision", false, "Revision coordinates"),
+              field("package-id", "STRING", "Binary package ID", true, "Revision coordinates"),
+              field("prev", "STRING", "Binary package revision", true, "Revision coordinates")),
+          List.of(
+              field("filename", "STRING", "Revision-relative file path", true, null),
+              field("asset", "FILE", "Revision file", false, null))),
       singleAsset("apt"),
       rawLikeUpload("nuget"),
       rawLikeUpload("rubygems"),
@@ -130,6 +150,7 @@ public class ComponentUploadService {
   private final SwiftService swiftService;
   private AnsibleGalaxyService ansibleGalaxyService;
   private CondaService condaService;
+  private ConanService conanService;
   private AptService aptService;
   private final MavenPathParser mavenPathParser = new MavenPathParser();
   private final TerraformPathParser terraformPathParser = new TerraformPathParser();
@@ -221,6 +242,11 @@ public class ComponentUploadService {
   }
 
   @Autowired(required = false)
+  void setConanService(ConanService conanService) {
+    this.conanService = conanService;
+  }
+
+  @Autowired(required = false)
   void setAptService(AptService aptService) {
     this.aptService = aptService;
   }
@@ -269,6 +295,7 @@ public class ComponentUploadService {
       case SWIFT -> uploadSwift(runtime, upload, createdBy, createdByIp);
       case ANSIBLEGALAXY -> uploadAnsible(runtime, upload, createdBy, createdByIp);
       case CONDA -> uploadConda(runtime, upload, createdBy, createdByIp);
+      case CONAN -> uploadConan(runtime, upload, createdBy, createdByIp);
       case APT -> uploadApt(runtime, upload, createdBy, createdByIp);
       case DOCKER -> throw new UploadValidationException("Docker hosted upload must use the Docker Registry V2 API");
       case NUGET -> uploadRaw(runtime, upload, createdBy, createdByIp);
@@ -303,6 +330,98 @@ public class ComponentUploadService {
           runtime, path, body, asset.file().getContentType(), createdBy, createdByIp);
     }
     return List.of(path);
+  }
+
+  private List<String> uploadConan(
+      RepositoryRuntime runtime,
+      NormalizedUpload upload,
+      String createdBy,
+      String createdByIp) throws IOException {
+    if (conanService == null) {
+      throw new UploadValidationException("Conan upload service is unavailable");
+    }
+    String packageId = blankToNull(upload.fields().get("package-id"));
+    String packageRevision = blankToNull(upload.fields().get("prev"));
+    if ((packageId == null) != (packageRevision == null)) {
+      throw new UploadValidationException(
+          "Conan package-id and prev must either both be provided or both be omitted");
+    }
+    ConanReference reference;
+    try {
+      reference = new ConanReference(
+          requireField(upload.fields(), "name"),
+          requireField(upload.fields(), "version"),
+          blankToNull(upload.fields().get("user")),
+          blankToNull(upload.fields().get("channel")),
+          requireField(upload.fields(), "rrev"),
+          packageId,
+          packageRevision);
+    } catch (IllegalArgumentException invalid) {
+      throw new UploadValidationException(invalid.getMessage());
+    }
+    List<ConanUploadAsset> files = new ArrayList<>();
+    for (AssetUpload asset : upload.assets()) {
+      String filename = blankToNull(asset.fields().get("filename"));
+      if (filename == null) filename = originalFilename(asset.file());
+      if (!ConanPathParser.validFilePath(filename)) {
+        throw new UploadValidationException("Invalid Conan revision file path: " + filename);
+      }
+      files.add(new ConanUploadAsset(filename, asset));
+    }
+    long manifests = files.stream()
+        .filter(file -> ConanManifest.FILE_NAME.equals(file.path()))
+        .count();
+    if (manifests != 1) {
+      throw new UploadValidationException(
+          "Conan upload requires exactly one conanmanifest.txt commit file");
+    }
+    files.sort(Comparator.comparing(file -> ConanManifest.FILE_NAME.equals(file.path())));
+    List<String> published = new ArrayList<>(files.size());
+    for (ConanUploadAsset file : files) {
+      String route = conanFileRoute(reference, file.path());
+      String sha1;
+      try (InputStream digestInput = file.asset().file().getInputStream()) {
+        sha1 = sha1(digestInput);
+      }
+      try (InputStream input = file.asset().file().getInputStream()) {
+        conanService.putInternal(
+            runtime,
+            route,
+            input,
+            file.asset().file().getSize(),
+            file.asset().file().getContentType(),
+            sha1,
+            createdBy,
+            createdByIp);
+      }
+      published.add(file.path());
+    }
+    return List.copyOf(published);
+  }
+
+  private static String conanFileRoute(ConanReference reference, String path) {
+    String route = "v2/conans/" + reference.name() + "/" + reference.version() + "/"
+        + reference.routeUser() + "/" + reference.routeChannel() + "/revisions/"
+        + reference.recipeRevision();
+    if (reference.packageId() != null) {
+      route += "/packages/" + reference.packageId() + "/revisions/"
+          + reference.packageRevision();
+    }
+    return route + "/files/" + path;
+  }
+
+  private static String sha1(InputStream input) throws IOException {
+    MessageDigest digest;
+    try {
+      digest = MessageDigest.getInstance("SHA-1");
+    } catch (NoSuchAlgorithmException impossible) {
+      throw new IllegalStateException("SHA-1 is unavailable", impossible);
+    }
+    byte[] buffer = new byte[64 * 1024];
+    for (int read; (read = input.read(buffer)) >= 0;) {
+      if (read > 0) digest.update(buffer, 0, read);
+    }
+    return java.util.HexFormat.of().formatHex(digest.digest());
   }
 
   private List<String> uploadApt(
@@ -686,6 +805,7 @@ public class ComponentUploadService {
       case SWIFT -> "swift";
       case ANSIBLEGALAXY -> "ansiblegalaxy";
       case CONDA -> "conda";
+      case CONAN -> "conan";
       case APT -> "apt";
       case RAW -> "raw";
     };
@@ -933,6 +1053,8 @@ public class ComponentUploadService {
   private record NormalizedUpload(Map<String, String> fields, List<AssetUpload> assets) {}
 
   private record AssetUpload(String key, MultipartFile file, Map<String, String> fields) {}
+
+  private record ConanUploadAsset(String path, AssetUpload asset) {}
 
   private record MavenUploadItem(String path, String contentType, MultipartFile file, byte[] body) {}
 }

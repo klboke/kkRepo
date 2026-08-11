@@ -78,6 +78,7 @@ public class SecurityScanCandidateService {
       scans.markCandidateEnqueued(candidate.assetId(), candidate.contentGeneration());
       return;
     }
+    requeueConanPackageArchive(content);
     Map<Long, RepositoryScanConfig> configsByProfile = new LinkedHashMap<>();
     for (RepositoryScanConfig config :
         repositoryScope.effectiveConfigsForSource(repository.id())) {
@@ -109,8 +110,21 @@ public class SecurityScanCandidateService {
     }
 
     var classification = classifier.classify(content.asset(), content.blob(), profile);
+    var identity = classifier.subjectIdentity(content.asset(), content.blob());
+    if (identity == null) {
+      identity = SecurityScanCandidateClassifier.blobIdentity(
+          content.asset(), content.blob());
+    }
     if (classification.disposition() == CandidateDisposition.SCANNABLE) {
-      String subjectKey = "sha256:" + content.blob().sha256();
+      String subjectKey = identity.key();
+      if (!identity.complete()) {
+        PolicyDecision pending = config.pendingAction() == PolicyAction.BLOCK
+            ? PolicyDecision.BLOCK_PENDING : PolicyDecision.ALLOW;
+        materialize(
+            candidate, config, ScanState.PENDING, ScanCompleteness.UNKNOWN,
+            pending, "CONANINFO_IDENTITY_PENDING", subjectKey);
+        return;
+      }
       Instant now = Instant.now();
       scans.createTask(new TaskDraft(
           content.asset().repositoryId(),
@@ -139,12 +153,23 @@ public class SecurityScanCandidateService {
           ? PolicyDecision.BLOCK_SCAN_FAILED : PolicyDecision.ALLOW;
       materialize(
           candidate, config, ScanState.FAILED, ScanCompleteness.UNKNOWN,
-          failed, classification.reasonCode(), "sha256:" + content.blob().sha256());
+          failed, classification.reasonCode(), identity.key());
     } else if (classification.disposition() == CandidateDisposition.NOT_APPLICABLE) {
       materialize(
           candidate, config, ScanState.NOT_APPLICABLE, ScanCompleteness.COMPLETE,
-          PolicyDecision.ALLOW, classification.reasonCode(), "sha256:" + content.blob().sha256());
+          PolicyDecision.ALLOW, classification.reasonCode(), identity.key());
     }
+  }
+
+  private void requeueConanPackageArchive(AssetDao.AssetWithBlob content) {
+    if (content.asset().format()
+        != com.github.klboke.kkrepo.core.RepositoryFormat.CONAN) return;
+    var context = classifier.conanPackageScanContext(content.asset().id()).orElse(null);
+    if (context == null || context.archive().file().assetId() == null
+        || context.archive().file().assetId().equals(content.asset().id())) return;
+    long archiveAssetId = context.archive().file().assetId();
+    scans.markRepositoryAssetsForBackfill(
+        content.asset().repositoryId(), Math.max(0, archiveAssetId - 1), 1);
   }
 
   private static String requestUuid(ScanCandidate candidate, ScanProfile profile) {

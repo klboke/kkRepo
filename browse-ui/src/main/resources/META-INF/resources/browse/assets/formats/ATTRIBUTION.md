@@ -23,5 +23,8 @@ an official Ansible or Red Hat trademark asset.
 The Conda compatibility mark is an original geometric mark drawn for kkRepo. It is not an
 official Conda or Anaconda trademark asset.
 
+The Conan compatibility mark is an original geometric mark drawn for kkRepo. It is not an
+official Conan trademark asset.
+
 The APT / Debian compatibility mark is an original package mark drawn for kkRepo. It is not an
 official Debian trademark asset.

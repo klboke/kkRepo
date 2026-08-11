@@ -23,6 +23,9 @@ CONDA_PROXY_REPOSITORY="${CONDA_E2E_PROXY_REPOSITORY:-conda-proxy}"
 CONDA_GROUP_REPOSITORY="${CONDA_E2E_GROUP_REPOSITORY:-conda-group}"
 APT_HOSTED_REPOSITORY="${APT_E2E_HOSTED_REPOSITORY:-apt-hosted}"
 APT_CLIENT_IMAGES="${APT_E2E_IMAGES:-debian12=debian:12-slim,ubuntu24=ubuntu:24.04,current=debian:testing-slim}"
+CONAN_BIN="${CONAN_E2E_BIN:-conan}"
+CONAN_HOSTED_REPOSITORY="${CONAN_E2E_HOSTED_REPOSITORY:-conan-hosted}"
+CONAN_GROUP_REPOSITORY="${CONAN_E2E_GROUP_REPOSITORY:-conan-group}"
 KKREPO_AUTH_URL=""
 REDACTION_VALUES=("$KKREPO_PASSWORD" "$KKREPO_AUTH")
 CLEANUP_FIXTURE_FORMAT=""
@@ -1252,6 +1255,106 @@ EOF
 dnf -y --setopt=metadata_expire=0 makecache --repo kkrepo-client-e2e
 dnf -y download --repo kkrepo-client-e2e --destdir /work 6tunnel"
   ls "$dir"/6tunnel-*.rpm >/dev/null
+}
+
+test_conan() {
+  if ! command -v "$CONAN_BIN" >/dev/null 2>&1; then
+    log "Conan client E2E skipped: set CONAN_E2E_BIN or install Conan 2"
+    return 0
+  fi
+  local major
+  major="$("$CONAN_BIN" --version | sed -E 's/.* ([0-9]+)\..*/\1/')"
+  if [[ "$major" != "2" ]]; then
+    log "Conan client E2E requires Conan 2; found $("$CONAN_BIN" --version)"
+    return 2
+  fi
+
+  local dir="$WORK_DIR/conan"
+  local publish_home="$dir/publish-home"
+  local consume_home="$dir/consume-home"
+  local name="kkrepo_conan_e2e_${STAMP}"
+  local reference="$name/1.0.0@kkrepo/stable"
+  local list_json="$ARTIFACT_DIR/conan-group-list.json"
+  local removed_json="$ARTIFACT_DIR/conan-hosted-after-remove.json"
+  mkdir -p "$dir/include" "$publish_home" "$consume_home"
+  cat >"$dir/conanfile.py" <<'PY'
+from conan import ConanFile
+from conan.tools.files import copy
+import os
+
+
+class KkRepoConanE2E(ConanFile):
+    settings = "os", "arch", "compiler", "build_type"
+    exports_sources = "include/*"
+
+    def package(self):
+        copy(self, "*.h", src=os.path.join(self.source_folder, "include"),
+             dst=os.path.join(self.package_folder, "include"))
+
+    def package_info(self):
+        self.cpp_info.includedirs = ["include"]
+PY
+  printf '#define KKREPO_CONAN_E2E "%s"\n' "$STAMP" >"$dir/include/kkrepo_conan_e2e.h"
+
+  run_logged conan-version "$CONAN_BIN" --version
+  run_logged conan-publish-profile env CONAN_HOME="$publish_home" \
+    "$CONAN_BIN" profile detect --force
+  run_logged conan-hosted-remote env CONAN_HOME="$publish_home" \
+    "$CONAN_BIN" remote add kkrepo-hosted \
+    "$KKREPO_URL/repository/$CONAN_HOSTED_REPOSITORY" --force
+  run_logged conan-hosted-login env CONAN_HOME="$publish_home" \
+    "$CONAN_BIN" remote login kkrepo-hosted "$KKREPO_USER" -p "$KKREPO_PASSWORD"
+  run_logged_in conan-create "$dir" env CONAN_HOME="$publish_home" \
+    "$CONAN_BIN" create . --name="$name" --version=1.0.0 \
+    --user=kkrepo --channel=stable
+  run_logged conan-upload env CONAN_HOME="$publish_home" \
+    "$CONAN_BIN" upload "$reference:*" --remote=kkrepo-hosted --confirm
+
+  run_logged conan-consume-profile env CONAN_HOME="$consume_home" \
+    "$CONAN_BIN" profile detect --force
+  run_logged conan-group-remote env CONAN_HOME="$consume_home" \
+    "$CONAN_BIN" remote add kkrepo-group \
+    "$KKREPO_URL/repository/$CONAN_GROUP_REPOSITORY" --force
+  run_logged conan-group-login env CONAN_HOME="$consume_home" \
+    "$CONAN_BIN" remote login kkrepo-group "$KKREPO_USER" -p "$KKREPO_PASSWORD"
+  run_logged_output conan-group-list "$list_json" env CONAN_HOME="$consume_home" \
+    "$CONAN_BIN" list "$reference#*:*#*" --remote=kkrepo-group --format=json
+  python3 - "$list_json" "$reference" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+if sys.argv[2] not in json.dumps(payload, sort_keys=True):
+    raise SystemExit(f"Conan group list did not contain {sys.argv[2]}: {payload}")
+PY
+  run_logged conan-download env CONAN_HOME="$consume_home" \
+    "$CONAN_BIN" download "$reference:*" --remote=kkrepo-group
+  run_logged conan-install env CONAN_HOME="$consume_home" \
+    "$CONAN_BIN" install --requires="$reference" --remote=kkrepo-group --build=never
+
+  run_logged conan-remove-package-revisions env CONAN_HOME="$publish_home" \
+    "$CONAN_BIN" remove "$reference:*" --remote=kkrepo-hosted --confirm
+  run_logged_output conan-hosted-after-remove "$removed_json" env CONAN_HOME="$publish_home" \
+    "$CONAN_BIN" list "$reference#*:*#*" --remote=kkrepo-hosted --format=json
+  python3 - "$removed_json" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+def contains_packages(value):
+    if isinstance(value, dict):
+        if value.get("packages"):
+            return True
+        return any(contains_packages(child) for child in value.values())
+    if isinstance(value, list):
+        return any(contains_packages(child) for child in value)
+    return False
+
+if contains_packages(payload):
+    raise SystemExit(f"Conan package revisions remain after remove: {payload}")
+PY
 }
 
 test_conda() {
@@ -3021,7 +3124,7 @@ run_selected_tests() {
   local test
 
   if [[ -z "$selection" || "$selection" == "all" ]]; then
-    tests=(raw maven npm pypi go helm cargo pub composer nuget rubygems yum apt conda terraform swift ansible docker-oci)
+    tests=(raw maven npm pypi go helm cargo pub composer nuget rubygems yum apt conda conan terraform swift ansible docker-oci)
   else
     IFS=',' read -r -a tests <<<"$selection"
   fi
@@ -3090,6 +3193,12 @@ run_selected_tests() {
       conda)
         test_conda
         register_cleanup_fixture conda "$CONDA_HOSTED_REPOSITORY" "*kkrepo_conda_e2e_$STAMP*" conda
+        ;;
+      conan)
+        test_conan
+        if command -v "$CONAN_BIN" >/dev/null 2>&1; then
+          register_cleanup_fixture conan "$CONAN_HOSTED_REPOSITORY" "*kkrepo_conan_e2e_$STAMP*" conan
+        fi
         ;;
       terraform)
         test_terraform

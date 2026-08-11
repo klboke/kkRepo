@@ -42,6 +42,8 @@ public class ScannerEngineService {
   private final ScannerInput scannerInput;
   private final ArchiveGuard archiveGuard;
   private final CondaPackageCataloger condaPackages;
+  private final ConanMultipartInput conanMultipart;
+  private final ConanPackageCataloger conanPackages;
   private final OciRegistryStager ociRegistryStager;
   private final ScannerDocumentMapper documents;
   private final ScannerDatabaseCoordinator database;
@@ -54,6 +56,8 @@ public class ScannerEngineService {
       ScannerInput scannerInput,
       ArchiveGuard archiveGuard,
       CondaPackageCataloger condaPackages,
+      ConanMultipartInput conanMultipart,
+      ConanPackageCataloger conanPackages,
       OciRegistryStager ociRegistryStager,
       ScannerDocumentMapper documents,
       ScannerDatabaseCoordinator database) {
@@ -62,6 +66,8 @@ public class ScannerEngineService {
     this.scannerInput = scannerInput;
     this.archiveGuard = archiveGuard;
     this.condaPackages = condaPackages;
+    this.conanMultipart = conanMultipart;
+    this.conanPackages = conanPackages;
     this.ociRegistryStager = ociRegistryStager;
     this.documents = documents;
     this.database = database;
@@ -73,13 +79,14 @@ public class ScannerEngineService {
         "syft-grype-v1",
         Long.toString(properties.getMaxInputBytes()),
         Long.toString(properties.getMaxOutputBytes()),
-        "catalog", "match", "oci-scan", "cancel", "conda-meta-v1"));
+        "catalog", "match", "oci-scan", "cancel", "conda-meta-v1",
+        "conan-package-multipart-v1"));
     return new Capabilities(
         ScannerContract.API_VERSION,
         "syft-grype-v1",
         "1",
-        List.of("CATALOG", "MATCH", "OCI_SCAN", "CANCEL"),
-        List.of("ARCHIVE", "PACKAGE", "MANIFEST", "RAW_FILE", "OCI_IMAGE"),
+        List.of("CATALOG", "CONAN_CATALOG", "MATCH", "OCI_SCAN", "CANCEL"),
+        List.of("ARCHIVE", "PACKAGE", "CONAN_PACKAGE", "MANIFEST", "RAW_FILE", "OCI_IMAGE"),
         properties.getMaxInputBytes(),
         properties.getMaxOutputBytes(),
         digest);
@@ -195,6 +202,72 @@ public class ScannerEngineService {
     } catch (IOException e) {
       throw new ScannerRequestException(
           "CATALOG_IO", "Unable to read scanner output", 503, true, e);
+    } finally {
+      TempDirectories.deleteRecursively(workspace);
+    }
+  }
+
+  public CatalogResponse catalogConan(
+      InputStream multipart,
+      String contentType,
+      String expectedPackageSha256,
+      long expectedPackageSize,
+      String expectedConanInfoSha256,
+      long expectedConanInfoSize,
+      ResourceLimits limits) {
+    ResourceLimits effectiveLimits = effective(limits);
+    ScanDeadline deadline = new ScanDeadline(effectiveLimits.timeoutSeconds());
+    Path workspace = workspace("conan-catalog-");
+    try {
+      Path archive = workspace.resolve("conan-package.archive");
+      Path conanInfo = workspace.resolve("conaninfo.sidecar");
+      ConanMultipartInput.Parts parts = conanMultipart.parse(
+          multipart,
+          contentType,
+          archive,
+          conanInfo,
+          expectedPackageSha256,
+          expectedPackageSize,
+          expectedConanInfoSha256,
+          expectedConanInfoSize,
+          effectiveLimits,
+          deadline);
+      ArchiveGuard.Inspection inspection =
+          archiveGuard.inspectConan(archive, effectiveLimits, workspace, deadline);
+      ConanPackageCataloger.Prepared prepared =
+          conanPackages.prepare(archive, conanInfo, effectiveLimits, workspace, deadline);
+      Readiness ready = requireReady(deadline);
+      Path sbom = workspace.resolve("sbom.cdx.json");
+      processes.run(
+          List.of(
+              properties.getSyftExecutable(),
+              "scan",
+              "dir:" + prepared.scanRoot(),
+              "--output",
+              "cyclonedx-json"),
+          workspace,
+          sbom,
+          deadline.remaining(),
+          Map.of("SYFT_LOG_QUIET", "true"));
+      byte[] cyclonedx = BoundedProcessRunner.readBounded(sbom, properties.getMaxOutputBytes());
+      Map<String, Object> summary = new LinkedHashMap<>();
+      summary.put("inputSchema", "conan-package-multipart-v1");
+      summary.put("inputBytes", parts.packageArchive().size());
+      summary.put("conanInfoBytes", prepared.conanInfoBytes());
+      summary.put("archiveEntries", inspection.entries());
+      summary.put("expandedBytes", inspection.expandedBytes());
+      summary.put("nestedArchives", inspection.nestedArchives());
+      CatalogResponse response = documents.catalog(
+          cyclonedx,
+          parts.packageArchive().sha256(),
+          string(ready.details().get("catalogEngineVersion"), ready.engineVersion()),
+          capabilities().capabilityDigest(),
+          summary);
+      deadline.check();
+      return response;
+    } catch (IOException failure) {
+      throw new ScannerRequestException(
+          "CONAN_CATALOG_IO", "Unable to read Conan scanner output", 503, true, failure);
     } finally {
       TempDirectories.deleteRecursively(workspace);
     }

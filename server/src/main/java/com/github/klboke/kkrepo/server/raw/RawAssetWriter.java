@@ -109,6 +109,23 @@ class RawAssetWriter {
         extraBlobAttributes, createdBy, createdByIp, ComponentBinding.none(), keepResponseFile);
   }
 
+  /** Stores a protocol-owned asset without a component or any Browse node. */
+  Stored writeHidden(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      String path,
+      InputStream body,
+      String contentTypeHint,
+      Map<String, ?> extraBlobAttributes,
+      String createdBy,
+      String createdByIp,
+      boolean keepResponseFile) {
+    return write(runtime, storage, blobStoreId, path, body, contentTypeHint,
+        extraBlobAttributes, createdBy, createdByIp, ComponentBinding.none(), keepResponseFile,
+        null);
+  }
+
   Stored writeWithComponent(
       RepositoryRuntime runtime,
       BlobStorage storage,

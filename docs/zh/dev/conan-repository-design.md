@@ -4,7 +4,15 @@
 
 ## 当前支持状态与落地结论
 
-截至 2026-08-11，kkrepo 尚未注册 `RepositoryFormat.CONAN` 或 Conan recipe；本文是实现前的协议、数据和验收基线，不能把路线图中的“规划中”描述为已经可用。
+截至 2026-08-11，本文设计已经落地：kkrepo 已注册 `RepositoryFormat.CONAN` 和 hosted/proxy/group recipe，并完成协议、双数据库持久化、真实客户端、Nexus 黑盒、Cleanup、安全扫描、迁移、Browse/UI 和性能验收。路线图因此在实现 PR 中标记为完成。
+
+落地后的关键边界如下：
+
+- `protocol-conan` 固化 Conan 2 route/reference、version、manifest、conaninfo、storage path 与 Nexus Browse path 投影；Conan 1 仍不在支持范围内。
+- Hosted 以 manifest-last 作为 RREV/PREV 原子提交点；proxy/group 使用数据库 lease、repository revision 和 source binding 保证多副本与同 revision 文件一致性。
+- MySQL/PostgreSQL 使用同号 V45 migration 与同一 DAO contract；exact/prefix/list/claim/expiry/Browse 查询均有显式高效索引和 query-plan 回归。
+- Browse 展示路径在 hosted、proxy 和 migration 的最终写入事务中直接持久化；正常读取不从 storage path 反推，也不靠发布后 backfill 补映射。
+- 真实 Conan 2.31.2 已完成 login、upload、list、download/install、proxy/group install；双数据库同机 Nexus 3.94 性能基线全部通过发布门禁，结果见 [性能基线](conan-performance-baseline.md)。
 
 落地结论如下：
 
@@ -426,7 +434,7 @@ Conan 实现不以“功能正确”替代性能验收。实现 PR 必须新增 
 - Candidate 使用同机同资源的 kkrepo PostgreSQL 部署做主对比，因为 Nexus Conan 2 revisions 对 PostgreSQL 有明确要求；kkrepo MySQL 另跑相同正确性与查询计划，不把不同数据库结果混成一个比例。
 - 两端使用相同 recipe/package bytes、相同权限、相同 Blob store 类型、相同 TLS/反向代理层。Proxy 使用本地可控 upstream，排除公网抖动。
 - 每个 HTTP 场景先预热至少 32 次，再在并发 16 下请求至少 250 次，执行 3 轮并交替 Nexus/kkrepo 顺序；报告三轮中位数的 req/s、p50、p95、错误率和传输 MiB/s。
-- 每次测量前验证 status、JSON 语义、file-list、manifest、archive SHA-256 和实际 `conan install` 结果，禁止把错误页、empty result 或不同 payload 计入性能。
+- 每次测量前验证 status、JSON 语义、file-list、manifest、archive 逻辑 tar tree/member checksum 和实际 `conan install` 结果，禁止把错误页、empty result 或不同 payload 计入性能。独立上传导致的 gzip/tar container metadata 差异不应误判为内容差异。
 
 ### 必测场景
 
@@ -434,7 +442,7 @@ Conan 实现不以“功能正确”替代性能验收。实现 PR 必须新增 
 2. recipe search：精确命中、前缀/通配命中和达到服务端上限的大结果。
 3. 一个 hot RREV 下 10,000 个 package ID 的 package search/list。
 4. Browse root、深层 RREV、10,000-package 热点目录和 package `files` 目录；逐层校验 Nexus 对齐的 path/node type，并报告每次展开的 SQL 数、rows examined、req/s 与 p95。
-5. 4 MiB 与 256 MiB `conan_package.t*` 的 GET、HEAD、64 KiB Range；HEAD/Range 是否支持先由 Nexus fixture 固定。
+5. 4 MiB 与 256 MiB `conan_package.t*` 的 GET、64 KiB Range，以及已由 Nexus 3.94 fixture 固定的 HEAD 404 行为。
 6. Hosted 上传一组 recipe + 8 个 binary package，包含 manifest commit、Browse 同事务投影、幂等重传和 16 并发不同坐标。
 7. Warm group install；成员含重复 reference 时验证 source binding 不以错误缓存换吞吐。
 8. Controlled upstream 的 proxy cold fill、warm hit、revalidate、404 negative cache 和 upstream 5xx stale。
@@ -468,7 +476,7 @@ Conan 实现不以“功能正确”替代性能验收。实现 PR 必须新增 
 - search、package search、RREV/PREV list/latest、file list 的 JSON、排序、大小写、limit 和空/缺失语义。
 - 使用真实 Conan 2 客户端上传带 user/channel 与缺省 user/channel 的 recipe/package，再逐层记录 Repository Browse API 的 `id`、`text`、node type、排序、component/asset linkage，以及 Search Assets 的 `/conans/...` storage path；fixture 至少覆盖 recipe file、`packages/{packageId}/revisions/{prev}/files`、metadata 和 `_` 占位。
 - gzip/xz/zstd recipe/package 上传、`X-Checksum-Sha1`、`X-Checksum-Deploy`、manifest-last、重传、force、write policy 和 incomplete upload。
-- GET/HEAD/Range、ETag、Last-Modified、Content-Length、Content-Type、conditional request、404/409/5xx body。
+- GET/Range、HEAD 404、ETag、Last-Modified、Content-Length、Content-Type、conditional request、404/409/5xx body。
 - exact recipe/RREV/package/PREV delete 后 latest 重算、file 可见性、group/cache 失效。
 - proxy auth、redirect、mutable TTL/validator、negative cache、stale、checksum drift 和上游代际不匹配。
 - group duplicate reference/revision、成员顺序、成员故障、nested group 与 source consistency。
@@ -543,7 +551,7 @@ Conan 实现不以“功能正确”替代性能验收。实现 PR 必须新增 
 - MySQL/PostgreSQL contract、真实客户端、Nexus 黑盒、Migration E2E、cleanup/scanning race 和恶意输入测试全部通过。
 - 大数据集关键查询命中高效索引，无 unbounded scan/materialization；同机 Nexus 性能对比达到本文发布门禁并提交可复现原始结果。
 - Nexus migration 对 Conan 1、未知 shape、不完整 revision、损坏 Blob 和不可恢复 secret 失败关闭，不生成虚假 `FULL` 结果。
-- 路线图只有在上述验收闭环完成后才能给 Conan 加 `✅`；本设计 PR 只调整优先级并保持“规划中”。
+- 上述实现与验收闭环已经完成，路线图在实现 PR 中给 Conan 加 `✅`；后续新增客户端版本、Nexus 版本和更大生产数据集继续作为回归/容量验证扩展，不再阻塞格式可用性。
 
 ## 参考资料
 

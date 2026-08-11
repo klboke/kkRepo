@@ -33,6 +33,13 @@ class NexusSourceProfileTest {
       "sha256Checksum", true,
       "inspectedAssetCount", 2,
       "packageAssetCount", 1);
+  private static final Map<String, Object> VERIFIED_CONAN_SHAPE = Map.of(
+      "revisionAssetPath", true,
+      "manifestObserved", true,
+      "sha1Checksum", true,
+      "inspectedAssetCount", 4,
+      "revisionAssetCount", 4,
+      "packageRevisionAssetCount", 2);
   private static final Map<String, Object> VERIFIED_APT_SHAPE = Map.of(
       "packageAssetPath", true,
       "aptAssetAttributes", true,
@@ -148,6 +155,34 @@ class NexusSourceProfileTest {
   }
 
   @Test
+  void enablesConanContentOnlyForNexus394AndVerifiedShape() {
+    NexusSourceProfile profile = conanProfile("3.94.0-01", VERIFIED_CONAN_SHAPE);
+
+    assertTrue(profile.formatCapabilities().get("conan").contentMigration());
+    assertEquals(SupportStatus.FULL, conanHostedStatus(profile));
+  }
+
+  @Test
+  void unknownVersionOrDriftedShapeKeepsConanMigrationManual() {
+    for (String version : List.of("unknown", "3.93.1-01", "3.95.0-01", "4.0.0")) {
+      NexusSourceProfile profile = conanProfile(version, VERIFIED_CONAN_SHAPE);
+      assertFalse(profile.formatCapabilities().get("conan").contentMigration(), version);
+      assertEquals("conan-source-version-unverified",
+          profile.formatCapabilities().get("conan").evidence(), version);
+      assertEquals(SupportStatus.NEEDS_MANUAL_ACTION, conanHostedStatus(profile), version);
+    }
+    for (String missing : List.of("revisionAssetPath", "manifestObserved", "sha1Checksum")) {
+      Map<String, Object> drifted = new LinkedHashMap<>(VERIFIED_CONAN_SHAPE);
+      drifted.remove(missing);
+      NexusSourceProfile profile = conanProfile("3.94.0-01", drifted);
+      assertFalse(profile.formatCapabilities().get("conan").contentMigration(), missing);
+      assertEquals("conan-content-shape-incomplete",
+          profile.formatCapabilities().get("conan").evidence(), missing);
+      assertEquals(SupportStatus.NEEDS_MANUAL_ACTION, conanHostedStatus(profile), missing);
+    }
+  }
+
+  @Test
   void enablesAptHostedContentOnlyForKnownVersionsAndVerifiedShape() {
     for (String version : List.of("3.92.0-01", "3.93.1-01", "3.94.0-01")) {
       NexusSourceProfile profile = aptProfile(version, VERIFIED_APT_SHAPE);
@@ -215,6 +250,58 @@ class NexusSourceProfileTest {
         .findFirst()
         .orElseThrow()
         .status();
+  }
+
+  private static SupportStatus conanHostedStatus(NexusSourceProfile profile) {
+    return new MigrationPlanBuilder().build(
+            profile, new MigrationScope(List.of("conan-hosted"), false, false))
+        .items().stream()
+        .filter(item -> "conan-hosted".equals(item.name()))
+        .findFirst()
+        .orElseThrow()
+        .status();
+  }
+
+  private static NexusSourceProfile conanProfile(
+      String probedVersion,
+      Map<String, Object> formatShape) {
+    SourceProbe probe = new SourceProbe(
+        probedVersion,
+        true,
+        true,
+        true,
+        "text/plain",
+        "ok",
+        "DATASTORE_POSTGRESQL",
+        "PostgreSQL",
+        "jdbc:postgresql://nexus/nexus",
+        Map.of("datastoreContentModels", Map.of("conan", Map.of(
+            "prefix", "CONAN",
+            "tablesPresent", true,
+            "requiredColumnsPresent", true,
+            "tables", Map.of(
+                "contentRepository", "CONAN_CONTENT_REPOSITORY",
+                "asset", "CONAN_ASSET",
+                "assetBlob", "CONAN_ASSET_BLOB",
+                "component", "CONAN_COMPONENT"),
+            "columns", Map.of(),
+            "formatShape", formatShape))),
+        List.of());
+    RepositoryDocument repository = new RepositoryDocument(
+        Map.of(
+            "name", "conan-hosted",
+            "format", "conan",
+            "type", "hosted",
+            "online", true),
+        Map.of("storage", Map.of("blobStoreName", "default")));
+    return NexusSourceProfile.fromInventory(
+        new NexusInventory(
+            List.of(Map.of("name", "default", "type", "File")),
+            List.of(repository),
+            NexusSecurityExport.empty(),
+            List.of(),
+            probe),
+        null);
   }
 
   private static NexusSourceProfile aptProfile(

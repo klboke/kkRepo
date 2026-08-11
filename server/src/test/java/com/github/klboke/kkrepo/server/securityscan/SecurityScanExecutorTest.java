@@ -19,6 +19,7 @@ import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
@@ -123,6 +124,29 @@ class SecurityScanExecutorTest {
     ArgumentCaptor<Sbom> published = ArgumentCaptor.forClass(Sbom.class);
     verify(fixture.scans).publishSbom(published.capture(), anyList());
     assertEquals(SubjectKind.CONDA_PACKAGE, published.getValue().subjectKind());
+  }
+
+  @Test
+  void catalogsConanPackageWithItsExactConanInfoSidecar() throws Exception {
+    Fixture fixture = new Fixture(ScanStage.CATALOG_AND_MATCH, SubjectKind.CONAN_PACKAGE);
+    when(fixture.adapter.catalogConan(any(), any(), any())).thenAnswer(invocation -> {
+      ScannerContract.InputStreamSource archive = invocation.getArgument(1);
+      ScannerContract.InputStreamSource conanInfo = invocation.getArgument(2);
+      assertEquals("artifact", new String(archive.open().readAllBytes()));
+      assertEquals("info", new String(conanInfo.open().readAllBytes()));
+      return catalogResponse();
+    });
+    when(fixture.adapter.match(any(), any())).thenReturn(matchResponse());
+
+    fixture.executor.execute(fixture.task);
+
+    verify(fixture.adapter).catalogConan(any(), any(), any());
+    verify(fixture.adapter, never()).catalog(any(), any());
+    verify(fixture.metrics).recordInputBytes("CONAN", 12);
+    ArgumentCaptor<Sbom> published = ArgumentCaptor.forClass(Sbom.class);
+    verify(fixture.scans).publishSbom(published.capture(), anyList());
+    assertEquals(SubjectKind.CONAN_PACKAGE, published.getValue().subjectKind());
+    assertTrue(published.getValue().subjectIdentity().contains(":conaninfo-sha256:"));
   }
 
   @Test
@@ -582,12 +606,19 @@ class SecurityScanExecutorTest {
 
     Fixture(ScanStage stage, SubjectKind kind, int timeoutSeconds) {
       boolean conda = kind == SubjectKind.CONDA_PACKAGE;
-      RepositoryFormat format = conda ? RepositoryFormat.CONDA : RepositoryFormat.MAVEN2;
-      String path = conda ? "noarch/demo-1.0-py_0.conda" : "acme/demo.jar";
+      boolean conan = kind == SubjectKind.CONAN_PACKAGE;
+      RepositoryFormat format = conan
+          ? RepositoryFormat.CONAN : conda ? RepositoryFormat.CONDA : RepositoryFormat.MAVEN2;
+      String path = conan
+          ? "conans/demo/1.0/acme/stable/revisions/rrev/packages/package/revisions/prev/"
+              + "files/conan_package.tgz"
+          : conda ? "noarch/demo-1.0-py_0.conda" : "acme/demo.jar";
       asset = new AssetRecord(
           10L, 1L, null, 11L, format, path,
-          PersistenceHashes.pathHash(path), conda ? "demo-1.0-py_0.conda" : "demo.jar",
-          kind == SubjectKind.OCI_MANIFEST ? "manifest" : conda ? "package" : "artifact",
+          PersistenceHashes.pathHash(path), conan
+              ? "conan_package.tgz" : conda ? "demo-1.0-py_0.conda" : "demo.jar",
+          kind == SubjectKind.OCI_MANIFEST
+              ? "manifest" : conda || conan ? "package" : "artifact",
           "application/octet-stream", 8L, null, NOW, Map.of());
       blob = new AssetBlobRecord(
           11L, 2L, "blob://test/object", PersistenceHashes.blobRefHash("blob://test/object"),
@@ -610,7 +641,10 @@ class SecurityScanExecutorTest {
       when(task.attempts()).thenReturn(1);
       when(task.repositoryId()).thenReturn(1L);
       when(task.assetId()).thenReturn(10L);
-      when(task.subjectKey()).thenReturn("sha256:" + SHA256);
+      String subjectKey = conan
+          ? "conan-package:sha256:" + SHA256 + ":conaninfo-sha256:" + "b".repeat(64)
+          : "sha256:" + SHA256;
+      when(task.subjectKey()).thenReturn(subjectKey);
       when(task.contentGeneration()).thenReturn(2L);
       when(task.profileId()).thenReturn(1L);
       when(task.requestedScannerSnapshotId()).thenReturn(null);
@@ -619,12 +653,42 @@ class SecurityScanExecutorTest {
       when(task.startedAt()).thenReturn(NOW);
       when(assets.findAssetWithBlobById(10L))
           .thenReturn(Optional.of(new AssetDao.AssetWithBlob(asset, blob)));
+      if (conan) {
+        AssetRecord conanInfoAsset = new AssetRecord(
+            12L, 1L, null, 13L, RepositoryFormat.CONAN,
+            path.replace("conan_package.tgz", "conaninfo.txt"),
+            PersistenceHashes.pathHash(path.replace("conan_package.tgz", "conaninfo.txt")),
+            "conaninfo.txt", "metadata", "text/plain", 4L, null, NOW, Map.of());
+        AssetBlobRecord conanInfoBlob = new AssetBlobRecord(
+            13L, 2L, "blob://test/conaninfo", PersistenceHashes.blobRefHash(
+                "blob://test/conaninfo"),
+            "conaninfo", PersistenceHashes.objectKeyHash("conaninfo"), "3".repeat(40),
+            "b".repeat(64), "4".repeat(32), 4L, "text/plain", "test", "127.0.0.1",
+            NOW, NOW, Map.of());
+        when(assets.findAssetWithBlobById(12L)).thenReturn(Optional.of(
+            new AssetDao.AssetWithBlob(conanInfoAsset, conanInfoBlob)));
+        ConanRegistryDao.RevisionFile archiveFile = new ConanRegistryDao.RevisionFile(
+            1L, ConanRegistryDao.OWNER_PACKAGE, 20L, "conan_package.tgz", 10L,
+            "2".repeat(32), "1".repeat(40), SHA256, 8L, "application/octet-stream",
+            1L, NOW, NOW);
+        ConanRegistryDao.RevisionFile conanInfoFile = new ConanRegistryDao.RevisionFile(
+            2L, ConanRegistryDao.OWNER_PACKAGE, 20L, "conaninfo.txt", 12L,
+            "4".repeat(32), "3".repeat(40), "b".repeat(64), 4L, "text/plain",
+            1L, NOW, NOW);
+        var coordinate = new ConanRegistryDao.RecipeCoordinate(
+            1L, "demo", "1.0", "acme", "stable");
+        var context = new ConanRegistryDao.PackageScanContext(
+            new ConanRegistryDao.AssetFile(
+                archiveFile, coordinate, "rrev", "package", "prev"),
+            conanInfoFile);
+        when(classifier.conanPackageScanContext(10L)).thenReturn(Optional.of(context));
+      }
       when(candidate.contentGeneration()).thenReturn(2L);
       when(candidate.assetBlobId()).thenReturn(11L);
       when(scans.findCandidate(10L)).thenReturn(Optional.of(candidate));
       when(repositories.findById(1L)).thenReturn(Optional.of(new RepositoryRecord(
           1L, "repo", format, RepositoryType.HOSTED,
-          conda ? "conda-hosted" : "maven2-hosted",
+          conan ? "conan-hosted" : conda ? "conda-hosted" : "maven2-hosted",
           true, 2L, null, null, null, null, null, true, Map.of())));
       when(scans.findProfile(1L)).thenReturn(Optional.of(profile));
       when(scope.effectiveConfig(1L, 1L)).thenReturn(Optional.of(config));
@@ -636,12 +700,22 @@ class SecurityScanExecutorTest {
                   ? TargetClassification.OCI_IMAGE
                   : conda ? TargetClassification.PACKAGE : TargetClassification.ARCHIVE,
               "SCANNABLE"));
+      when(classifier.subjectIdentity(asset, blob)).thenReturn(
+          new SecurityScanCandidateClassifier.SubjectIdentity(
+              subjectKey,
+              conan ? Map.of("packageId", "package", "conanInfoSha256", "b".repeat(64))
+                  : Map.of("path", path),
+              true));
       when(snapshots.readySnapshot()).thenReturn(snapshot);
       when(snapshots.snapshotFor(any(), any())).thenReturn(snapshot);
       BlobStorage storage = mock(BlobStorage.class);
       when(storages.forBlobStoreId(2L)).thenReturn(storage);
-      when(storage.get(any())).thenReturn(Optional.of(
-          new ByteArrayInputStream("artifact".getBytes())));
+      when(storage.get(any())).thenAnswer(invocation -> {
+        var reference = (com.github.klboke.kkrepo.core.BlobReference) invocation.getArgument(0);
+        byte[] bytes = reference.objectKey().equals("conaninfo")
+            ? "info".getBytes() : "artifact".getBytes();
+        return Optional.of(new ByteArrayInputStream(bytes));
+      });
       try {
         when(documents.open(30L)).thenReturn(new ByteArrayInputStream("{}".getBytes()));
       } catch (IOException e) {

@@ -116,6 +116,22 @@ public class RawHostedService {
     return MavenResponse.created();
   }
 
+  /** Stores protocol staging/cache state without making it visible in Browse or Search. */
+  public MavenResponse putInternalHidden(
+      RepositoryRuntime runtime,
+      String rawPath,
+      InputStream body,
+      String contentType,
+      Map<String, ?> blobAttributes,
+      String createdBy,
+      String createdByIp) {
+    String path = normalizeAssetPath(rawPath);
+    writer.writeHidden(
+        runtime, blobStorage(runtime), requireBlobStore(runtime), path, body, contentType,
+        blobAttributes == null ? Map.of() : blobAttributes, createdBy, createdByIp, false);
+    return MavenResponse.created();
+  }
+
   public MavenResponse putInternalWithComponent(
       RepositoryRuntime runtime,
       String rawPath,

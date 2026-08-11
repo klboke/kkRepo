@@ -36,6 +36,7 @@ import com.github.klboke.kkrepo.security.scan.ScannerContract;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Adapter;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.CatalogRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.CatalogResponse;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.ConanCatalogRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.OciScanRequest;
@@ -138,9 +139,11 @@ public class SecurityScanExecutor {
     }
     var candidate = scans.findCandidate(task.assetId()).orElseThrow(() ->
         new ScannerAdapterException("CANDIDATE_NOT_FOUND", "Scan candidate no longer exists", false));
+    var subjectIdentity = classifier.subjectIdentity(asset, blob);
     if (candidate.contentGeneration() != task.contentGeneration()
         || !Objects.equals(candidate.assetBlobId(), blob.id())
-        || !("sha256:" + blob.sha256()).equals(task.subjectKey())) {
+        || !subjectIdentity.complete()
+        || !subjectIdentity.key().equals(task.subjectKey())) {
       throw new SupersededSecurityScanTaskException(task.id());
     }
     RepositoryRecord repository = repositories.findById(task.repositoryId())
@@ -185,7 +188,7 @@ public class SecurityScanExecutor {
         asset.contentType(),
         classification.targetClassification(),
         profile.requiredPlatforms(),
-        Map.of("path", asset.path()));
+        subjectIdentity.attributes());
     ResourceLimits limits = limits(profile);
 
     if (classification.subjectKind()
@@ -305,8 +308,28 @@ public class SecurityScanExecutor {
     CatalogResponse response;
     Timer.Sample catalogTimer = metrics.start();
     try {
-      metrics.recordInputBytes(asset.format().name(), blob.size());
-      response = adapter.catalog(request, () -> openOriginal(blob));
+      if (subject.kind()
+          == com.github.klboke.kkrepo.security.scan.ScanEnums.SubjectKind.CONAN_PACKAGE) {
+        var context = classifier.conanPackageScanContext(asset.id())
+            .orElseThrow(() -> new SupersededSecurityScanTaskException(task.id()));
+        Long conanInfoAssetId = context.conanInfo().assetId();
+        var conanInfo = conanInfoAssetId == null ? null
+            : assets.findAssetWithBlobById(conanInfoAssetId).orElse(null);
+        if (conanInfo == null || conanInfo.blob() == null
+            || !Objects.equals(context.conanInfo().sha256(), conanInfo.blob().sha256())
+            || context.conanInfo().size() != conanInfo.blob().size()) {
+          throw new SupersededSecurityScanTaskException(task.id());
+        }
+        metrics.recordInputBytes(asset.format().name(), blob.size() + conanInfo.blob().size());
+        response = adapter.catalogConan(
+            new ConanCatalogRequest(
+                request, conanInfo.blob().sha256(), conanInfo.blob().size()),
+            () -> openOriginal(blob),
+            () -> openOriginal(conanInfo.blob()));
+      } else {
+        metrics.recordInputBytes(asset.format().name(), blob.size());
+        response = adapter.catalog(request, () -> openOriginal(blob));
+      }
       metrics.recordStage(asset.format().name(), "catalog", "success", catalogTimer);
     } catch (IOException e) {
       metrics.recordStage(asset.format().name(), "catalog", "failure", catalogTimer);
@@ -317,6 +340,7 @@ public class SecurityScanExecutor {
       throw e;
     }
     validateCatalogResponse(subject, response);
+    validateConanCatalogResponse(subject, response);
     return persistSbom(task.id(), task.leaseToken(), subject, profile, response);
   }
 
@@ -673,6 +697,16 @@ public class SecurityScanExecutor {
       throw new ScannerAdapterException(
           "SCANNER_SBOM_UNSUPPORTED", "Scanner did not return CycloneDX", false);
     }
+  }
+
+  private static void validateConanCatalogResponse(
+      ScanSubject subject, CatalogResponse response) {
+    if (subject.kind()
+        != com.github.klboke.kkrepo.security.scan.ScanEnums.SubjectKind.CONAN_PACKAGE) {
+      return;
+    }
+    // Empty Conan packages are valid. Their immutable package identity is retained by the
+    // composite archive + conaninfo subject key even when Syft finds no language components.
   }
 
   private void validateMatchResponse(MatchResponse response) {

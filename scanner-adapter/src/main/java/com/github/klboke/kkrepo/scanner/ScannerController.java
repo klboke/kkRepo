@@ -81,6 +81,32 @@ public class ScannerController {
                 resourceLimits)));
   }
 
+  @PostMapping("/v1/catalog/conan")
+  public CatalogResponse catalogConan(
+      HttpServletRequest request,
+      @RequestHeader("X-KKRepo-API-Version") String apiVersion,
+      @RequestHeader("X-KKRepo-Run-ID") String runId,
+      @RequestHeader("X-KKRepo-Expected-SHA256") String expectedSha256,
+      @RequestHeader("X-KKRepo-Expected-Size") long expectedSize,
+      @RequestHeader("X-KKRepo-Conaninfo-SHA256") String conanInfoSha256,
+      @RequestHeader("X-KKRepo-Conaninfo-Size") long conanInfoSize)
+      throws IOException {
+    requireApiVersion(apiVersion);
+    ResourceLimits resourceLimits = limits(request);
+    return executions.execute(
+        runId,
+        () -> capacity.execute(
+            resourceLimits,
+            () -> engine.catalogConan(
+                request.getInputStream(),
+                request.getContentType(),
+                expectedSha256,
+                expectedSize,
+                conanInfoSha256,
+                conanInfoSize,
+                resourceLimits)));
+  }
+
   @PostMapping("/v1/match")
   public MatchResponse match(
       HttpServletRequest request,

@@ -13,6 +13,7 @@ import com.github.klboke.kkrepo.security.scan.ScannerContract.Capabilities;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.CatalogRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.CatalogResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.CancellationResponse;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.ConanCatalogRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.InputStreamSource;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchResponse;
@@ -30,10 +31,12 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -241,6 +244,50 @@ public class HttpSecurityScannerAdapter implements Adapter {
                   Integer.toString(budget.scannerTimeoutSeconds()));
       ScannerArtifactType artifactType = artifactType(request.subject());
       builder.header("X-KKRepo-Artifact-Type", artifactType.wireValue());
+      return send(builder.build(), CatalogResponse.class);
+    });
+  }
+
+  @Override
+  public CatalogResponse catalogConan(
+      ConanCatalogRequest composite,
+      InputStreamSource packageArchive,
+      InputStreamSource conanInfo) throws IOException {
+    CatalogRequest request = composite.catalog();
+    return executeWithFailover(
+        request.runId(), request.limits().timeoutSeconds(), (baseUri, budget) -> {
+      String boundary = "kkrepo-conan-" + UUID.randomUUID();
+      HttpRequest.BodyPublisher body = conanMultipart(
+          boundary, packageArchive, conanInfo);
+      ScannerArtifactType artifactType = artifactType(request.subject());
+      HttpRequest.Builder builder = HttpRequest.newBuilder(resolve(baseUri, "/v1/catalog/conan"))
+          .timeout(budget.transportTimeout())
+          .header("Accept", "application/json")
+          .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+          .header("X-KKRepo-API-Version", request.apiVersion())
+          .header("X-KKRepo-Run-ID", request.runId())
+          .header("Idempotency-Key", request.idempotencyKey())
+          .header("X-KKRepo-Target", request.subject().classification().name())
+          .header("X-KKRepo-Expected-SHA256", request.subject().sha256())
+          .header("X-KKRepo-Expected-Size", Long.toString(request.subject().size()))
+          .header("X-KKRepo-Conaninfo-SHA256", composite.conanInfoSha256())
+          .header("X-KKRepo-Conaninfo-Size", Long.toString(composite.conanInfoSize()))
+          .header("X-KKRepo-Profile-Digest", request.profileConfigurationDigest())
+          .header("X-KKRepo-Artifact-Type", artifactType.wireValue())
+          .header("X-KKRepo-Max-Archive-Entries",
+              Integer.toString(request.limits().maxArchiveEntries()))
+          .header("X-KKRepo-Max-Uncompressed-Bytes",
+              Long.toString(request.limits().maxUncompressedBytes()))
+          .header("X-KKRepo-Max-Single-File-Bytes",
+              Long.toString(request.limits().maxSingleFileBytes()))
+          .header("X-KKRepo-Max-Nested-Depth",
+              Integer.toString(request.limits().maxNestedDepth()))
+          .header("X-KKRepo-Max-Input-Bytes",
+              Long.toString(request.limits().maxInputBytes()))
+          .header("X-KKRepo-Timeout-Seconds",
+              Integer.toString(budget.scannerTimeoutSeconds()))
+          .POST(body);
+      withServiceCredential(builder);
       return send(builder.build(), CatalogResponse.class);
     });
   }
@@ -500,6 +547,38 @@ public class HttpSecurityScannerAdapter implements Adapter {
         }));
     withServiceCredential(builder);
     return builder;
+  }
+
+  private static HttpRequest.BodyPublisher conanMultipart(
+      String boundary,
+      InputStreamSource packageArchive,
+      InputStreamSource conanInfo) {
+    byte[] first = ("--" + boundary + "\r\n"
+        + "Content-Disposition: form-data; name=\"package\"; filename=\"conan-package\"\r\n"
+        + "Content-Type: application/octet-stream\r\n\r\n")
+        .getBytes(StandardCharsets.US_ASCII);
+    byte[] second = ("\r\n--" + boundary + "\r\n"
+        + "Content-Disposition: form-data; name=\"conaninfo\"; filename=\"conaninfo.txt\"\r\n"
+        + "Content-Type: text/plain; charset=utf-8\r\n\r\n")
+        .getBytes(StandardCharsets.US_ASCII);
+    byte[] end = ("\r\n--" + boundary + "--\r\n")
+        .getBytes(StandardCharsets.US_ASCII);
+    return HttpRequest.BodyPublishers.concat(
+        HttpRequest.BodyPublishers.ofByteArray(first),
+        streamPublisher(packageArchive),
+        HttpRequest.BodyPublishers.ofByteArray(second),
+        streamPublisher(conanInfo),
+        HttpRequest.BodyPublishers.ofByteArray(end));
+  }
+
+  private static HttpRequest.BodyPublisher streamPublisher(InputStreamSource source) {
+    return HttpRequest.BodyPublishers.ofInputStream(() -> {
+      try {
+        return source.open();
+      } catch (IOException e) {
+        throw new java.io.UncheckedIOException(e);
+      }
+    });
   }
 
   static Duration requestTimeout(int scannerTimeoutSeconds) {

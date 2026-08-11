@@ -9,6 +9,8 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
@@ -23,6 +25,8 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerTagRecor
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPath;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPathParser;
+import com.github.klboke.kkrepo.protocol.conan.ConanPaths;
+import com.github.klboke.kkrepo.protocol.conan.ConanReference;
 import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
 import com.github.klboke.kkrepo.protocol.conda.CondaPath;
 import com.github.klboke.kkrepo.protocol.npm.NpmMetadata;
@@ -72,6 +76,8 @@ public class BrowseAssetDetailService {
   private AnsibleGalaxyRegistryDao ansibleDao;
   private CondaRegistryDao condaDao;
   private AptRegistryDao aptDao;
+  private BrowseNodeDao browseNodeDao;
+  private ConanRegistryDao conanDao;
   private final BlobStorageRegistry blobStorageRegistry;
   private final ObjectMapper objectMapper;
 
@@ -106,6 +112,16 @@ public class BrowseAssetDetailService {
   @Autowired(required = false)
   void setAptRegistryDao(AptRegistryDao aptDao) {
     this.aptDao = aptDao;
+  }
+
+  @Autowired(required = false)
+  void setBrowseNodeDao(BrowseNodeDao browseNodeDao) {
+    this.browseNodeDao = browseNodeDao;
+  }
+
+  @Autowired(required = false)
+  void setConanRegistryDao(ConanRegistryDao conanDao) {
+    this.conanDao = conanDao;
   }
 
   public BrowseAssetDetailService(
@@ -212,10 +228,19 @@ public class BrowseAssetDetailService {
     String displayName = storagePath.equals(publicPath)
         ? asset.name()
         : publicPath.substring(publicPath.lastIndexOf('/') + 1);
-    String downloadPath = visibleRepository.format() == RepositoryFormat.TERRAFORM
-            && !storagePath.equals(publicPath)
-        ? publicPath
-        : storagePath;
+    String downloadPath;
+    if (source.format() == RepositoryFormat.CONAN && conanDao != null) {
+      downloadPath = conanDao.findFileByAssetId(asset.id())
+          .filter(file -> file.coordinate().repositoryId() == source.id())
+          .map(BrowseAssetDetailService::conanFileRoute)
+          .orElseThrow(() -> new ResponseStatusException(
+              HttpStatus.CONFLICT, "Conan Browse asset is missing its typed identity"));
+    } else {
+      downloadPath = visibleRepository.format() == RepositoryFormat.TERRAFORM
+              && !storagePath.equals(publicPath)
+          ? publicPath
+          : storagePath;
+    }
 
     return new BrowseAssetDetail(
         visibleRepository.name(),
@@ -861,6 +886,9 @@ public class BrowseAssetDetailService {
       RepositoryRecord visibleRepository,
       String normalized,
       String sourceRepositoryName) {
+    if (visibleRepository.format() == RepositoryFormat.CONAN) {
+      return conanStoragePath(visibleRepository, normalized, sourceRepositoryName);
+    }
     if (visibleRepository.format() == RepositoryFormat.TERRAFORM && terraformDao != null) {
       Optional<TerraformBrowseAssetPathResolver.ResolvedStoragePath> terraform =
           TerraformBrowseAssetPathResolver.resolve(
@@ -911,6 +939,42 @@ public class BrowseAssetDetailService {
       }
     }
     return new ResolvedStoragePath(normalized, sourceRepositoryName);
+  }
+
+  private ResolvedStoragePath conanStoragePath(
+      RepositoryRecord visibleRepository,
+      String browsePath,
+      String sourceRepositoryName) {
+    if (browseNodeDao == null) {
+      throw new ResponseStatusException(
+          HttpStatus.CONFLICT, "Conan Browse projection is unavailable");
+    }
+    List<RepositoryRecord> sources = visibleRepository.type() == RepositoryType.GROUP
+        ? repositoryDao.listMembers(visibleRepository.id())
+        : List.of(visibleRepository);
+    if (sourceRepositoryName != null && !sourceRepositoryName.isBlank()) {
+      sources = sources.stream()
+          .filter(source -> source.name().equals(sourceRepositoryName))
+          .toList();
+    }
+    for (RepositoryRecord source : sources) {
+      Optional<BrowseNodeDao.BrowseChild> node = browseNodeDao.findNode(source.id(), browsePath);
+      if (node.isEmpty() || node.orElseThrow().assetId() == null) continue;
+      Optional<AssetRecord> asset = assetDao.findAssetById(node.orElseThrow().assetId())
+          .filter(value -> value.repositoryId() == source.id());
+      if (asset.isPresent()) {
+        return new ResolvedStoragePath(asset.orElseThrow().path(), source.name());
+      }
+    }
+    throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Conan Browse asset not found");
+  }
+
+  private static String conanFileRoute(ConanRegistryDao.AssetFile file) {
+    ConanRegistryDao.RecipeCoordinate coordinate = file.coordinate();
+    ConanReference reference = new ConanReference(
+        coordinate.name(), coordinate.version(), coordinate.user(), coordinate.channel(),
+        file.recipeRevision(), file.packageId(), file.packageRevision());
+    return ConanPaths.fileRoute(reference, file.file().path());
   }
 
   private static String normalize(String path) {

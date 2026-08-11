@@ -1,9 +1,14 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanProfile;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
@@ -13,6 +18,7 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.SubjectKind;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -47,6 +53,10 @@ class SecurityScanCandidateClassifierTest {
         Arguments.of(RepositoryFormat.ANSIBLEGALAXY, "artifacts/acme-demo-1.0.0.tar.gz", "collection-artifact"),
         Arguments.of(RepositoryFormat.CONDA, "noarch/demo-1.0-py_0.conda", "package"),
         Arguments.of(RepositoryFormat.CONDA, "linux-64/demo-1.0-py_0.tar.bz2", "package"),
+        Arguments.of(
+            RepositoryFormat.CONAN,
+            "conans/demo/1.0/acme/stable/revisions/rrev/packages/package/revisions/prev/files/conan_package.tzst",
+            "conan"),
         Arguments.of(RepositoryFormat.APT, "pool/d/demo/demo_1.0_amd64.deb", "package"),
         Arguments.of(RepositoryFormat.NUGET, "flat/demo/1.0.0/demo.1.0.0.nupkg", "package"),
         Arguments.of(RepositoryFormat.RUBYGEMS, "gems/demo-1.0.0.gem", "gem"),
@@ -80,6 +90,49 @@ class SecurityScanCandidateClassifierTest {
     assertEquals(SubjectKind.CONDA_PACKAGE, classification.subjectKind());
   }
 
+  @Test
+  void bindsConanPackageScanningToArchiveAndConanInfo() {
+    SecurityScanCandidateClassifier conanClassifier = new SecurityScanCandidateClassifier();
+    ConanRegistryDao registry = mock(ConanRegistryDao.class);
+    conanClassifier.setConanRegistryDao(registry);
+    AssetRecord archiveAsset = asset(
+        RepositoryFormat.CONAN,
+        "conans/demo/1.0/acme/stable/revisions/rrev/packages/package/revisions/prev/files/conan_package.tgz",
+        "conan");
+    ConanRegistryDao.RevisionFile archive = revisionFile(
+        archiveAsset.id(), "conan_package.tgz", "a".repeat(64));
+    ConanRegistryDao.RevisionFile info = revisionFile(
+        2L, "conaninfo.txt", "b".repeat(64));
+    ConanRegistryDao.AssetFile identity = new ConanRegistryDao.AssetFile(
+        archive,
+        new ConanRegistryDao.RecipeCoordinate(1L, "demo", "1.0", "acme", "stable"),
+        "rrev", "package", "prev");
+    when(registry.findPackageScanContext(archiveAsset.id())).thenReturn(Optional.of(
+        new ConanRegistryDao.PackageScanContext(identity, info)));
+
+    var classification = conanClassifier.classify(archiveAsset, blob(42), profile(1024));
+    var subject = conanClassifier.subjectIdentity(archiveAsset, blob(42));
+
+    assertEquals(SubjectKind.CONAN_PACKAGE, classification.subjectKind());
+    assertTrue(subject.complete());
+    assertEquals(
+        "conan-package:sha256:" + "a".repeat(64) + ":conaninfo-sha256:" + "b".repeat(64),
+        subject.key());
+    assertEquals("package", subject.attributes().get("packageId"));
+
+    when(registry.findPackageScanContext(archiveAsset.id())).thenReturn(Optional.empty());
+    assertFalse(conanClassifier.subjectIdentity(archiveAsset, blob(42)).complete());
+
+    AssetRecord recipeArchive = asset(
+        RepositoryFormat.CONAN,
+        "conans/demo/1.0/acme/stable/revisions/rrev/files/conan_export.tgz",
+        "recipe");
+    assertEquals(
+        "sha256:" + "a".repeat(64),
+        conanClassifier.subjectIdentity(recipeArchive, blob(42)).key());
+    assertTrue(conanClassifier.subjectIdentity(recipeArchive, blob(42)).complete());
+  }
+
   @ParameterizedTest
   @MethodSource("metadata")
   void skipsProtocolMetadata(RepositoryFormat format, String path, String kind) {
@@ -100,6 +153,14 @@ class SecurityScanCandidateClassifierTest {
         Arguments.of(RepositoryFormat.TERRAFORM, "providers/demo/1.0.0_SHA256SUMS", "checksum"),
         Arguments.of(RepositoryFormat.CONDA, "noarch/repodata.json", "repodata"),
         Arguments.of(RepositoryFormat.CONDA, "channeldata.json", "channeldata"),
+        Arguments.of(
+            RepositoryFormat.CONAN,
+            "conans/demo/1.0/acme/stable/revisions/rrev/files/conan_export.tgz",
+            "recipe"),
+        Arguments.of(
+            RepositoryFormat.CONAN,
+            "conans/demo/1.0/acme/stable/revisions/rrev/files/conanmanifest.txt",
+            "manifest"),
         Arguments.of(RepositoryFormat.APT, ".apt/snapshots/stable/1/Packages.deb", "metadata"),
         Arguments.of(RepositoryFormat.NUGET, "registration/demo/index.json", "metadata"),
         Arguments.of(RepositoryFormat.YUM, "repodata/primary.xml.gz", "metadata"));
@@ -127,6 +188,14 @@ class SecurityScanCandidateClassifierTest {
         "object", PersistenceHashes.objectKeyHash("object"), "1".repeat(40), "a".repeat(64),
         "2".repeat(32), size, "application/octet-stream", "test", "127.0.0.1",
         Instant.EPOCH, Instant.EPOCH, Map.of());
+  }
+
+  private static ConanRegistryDao.RevisionFile revisionFile(
+      Long assetId, String path, String sha256) {
+    return new ConanRegistryDao.RevisionFile(
+        assetId, ConanRegistryDao.OWNER_PACKAGE, 10L, path, assetId,
+        "2".repeat(32), "1".repeat(40), sha256, 42L,
+        "application/octet-stream", 1L, Instant.EPOCH, Instant.EPOCH);
   }
 
   private static ScanProfile profile(long maxBytes) {

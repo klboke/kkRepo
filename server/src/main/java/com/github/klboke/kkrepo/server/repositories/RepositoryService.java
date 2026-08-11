@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
@@ -82,6 +83,7 @@ public class RepositoryService {
   private final SwiftRegistryDao swiftRegistry;
   private AnsibleGalaxyRegistryDao ansibleRegistry;
   private CondaRegistryDao condaRegistry;
+  private ConanRegistryDao conanRegistry;
   private AptRegistryDao aptRegistry;
   private CleanupPolicyDao cleanupPolicies;
   private final String urlPrefix;
@@ -140,6 +142,11 @@ public class RepositoryService {
   @Autowired(required = false)
   void setCondaRegistry(CondaRegistryDao condaRegistry) {
     this.condaRegistry = condaRegistry;
+  }
+
+  @Autowired(required = false)
+  void setConanRegistry(ConanRegistryDao conanRegistry) {
+    this.conanRegistry = conanRegistry;
   }
 
   @Autowired(required = false)
@@ -299,6 +306,9 @@ public class RepositoryService {
       if (recipe.format() == RepositoryFormat.CONDA && condaRegistry != null) {
         condaRegistry.nextRepositoryRevision(id);
       }
+      if (recipe.format() == RepositoryFormat.CONAN && conanRegistry != null) {
+        conanRegistry.nextRepositoryRevision(id);
+      }
     }
 
     invalidateRuntimeCache(id, name);
@@ -411,6 +421,7 @@ public class RepositoryService {
       invalidateSwiftGroupBindings(existing.format(), existing.id());
       invalidateAnsibleGroupBindings(existing.format(), existing.id());
       invalidateCondaGroupBindings(existing.format(), existing.id());
+      invalidateConanGroupBindings(existing.format(), existing.id());
     } else if (recipe.type() != RepositoryType.GROUP) {
       invalidateNpmMemberAfterCommit(existing.format(), existing.id());
       invalidatePypiMemberAfterCommit(existing.format(), existing.id());
@@ -419,6 +430,7 @@ public class RepositoryService {
       invalidateSwiftContainingGroupBindings(existing.format(), existing.id(), new HashSet<>());
       invalidateAnsibleContainingGroupBindings(existing.format(), existing.id(), new HashSet<>());
       invalidateCondaMemberAndContainingGroups(existing.format(), existing.id(), new HashSet<>());
+      invalidateConanMemberAndContainingGroups(existing.format(), existing.id(), new HashSet<>());
     }
 
     invalidateRuntimeCache(existing.id(), name);
@@ -456,6 +468,9 @@ public class RepositoryService {
     if (condaRegistry != null && existing.format() == RepositoryFormat.CONDA) {
       condaRegistry.deleteRepositoryState(existing.id());
     }
+    if (conanRegistry != null && existing.format() == RepositoryFormat.CONAN) {
+      conanRegistry.deleteRepositoryState(existing.id());
+    }
     if (aptRegistry != null && existing.format() == RepositoryFormat.APT) {
       aptRegistry.deleteRepositoryState(existing.id());
     }
@@ -488,6 +503,7 @@ public class RepositoryService {
     invalidateSwiftGroupBindings(existing.format(), existing.id());
     invalidateAnsibleGroupBindings(existing.format(), existing.id());
     invalidateCondaGroupBindings(existing.format(), existing.id());
+    invalidateConanGroupBindings(existing.format(), existing.id());
     runtimeRegistry.invalidate(name);
     invalidateRepositoryCacheTokensAfterCommit(existing.id());
     refreshRepositoryCatalogAfterCommit();
@@ -665,6 +681,40 @@ public class RepositoryService {
       condaRegistry.nextRepositoryRevision(group.id());
       condaRegistry.deleteGroupSourceBindings(group.id());
       invalidateCondaContainingGroupBindings(format, group.id(), visited);
+    }
+  }
+
+  private void invalidateConanGroupBindings(
+      RepositoryFormat format, long groupRepositoryId) {
+    if (format != RepositoryFormat.CONAN || conanRegistry == null) {
+      return;
+    }
+    conanRegistry.nextRepositoryRevision(groupRepositoryId);
+    conanRegistry.deleteGroupBindings(groupRepositoryId);
+    invalidateConanContainingGroupBindings(format, groupRepositoryId, new HashSet<>());
+  }
+
+  private void invalidateConanMemberAndContainingGroups(
+      RepositoryFormat format, long repositoryId, Set<Long> visited) {
+    if (format != RepositoryFormat.CONAN || conanRegistry == null) {
+      return;
+    }
+    conanRegistry.nextRepositoryRevision(repositoryId);
+    invalidateConanContainingGroupBindings(format, repositoryId, visited);
+  }
+
+  private void invalidateConanContainingGroupBindings(
+      RepositoryFormat format, long repositoryId, Set<Long> visited) {
+    if (format != RepositoryFormat.CONAN || conanRegistry == null) {
+      return;
+    }
+    for (RepositoryRecord group : repositoryDao.listGroupsContaining(repositoryId)) {
+      if (group.id() == null || !visited.add(group.id())) {
+        continue;
+      }
+      conanRegistry.nextRepositoryRevision(group.id());
+      conanRegistry.deleteGroupBindings(group.id());
+      invalidateConanContainingGroupBindings(format, group.id(), visited);
     }
   }
 
@@ -1078,6 +1128,7 @@ public class RepositoryService {
       case TERRAFORM -> "https://registry.terraform.io/";
       case SWIFT -> "https://github.com/";
       case ANSIBLEGALAXY -> "https://galaxy.ansible.com/";
+      case CONAN -> "https://center2.conan.io/";
       default -> null;
     };
   }

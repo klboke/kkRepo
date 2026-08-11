@@ -88,6 +88,24 @@ public class ArchiveGuard {
   }
 
   /**
+   * Applies the ordinary budgets to a Conan package while accepting links that remain inside the
+   * package root. The subsequent Conan staging step does not materialize links.
+   */
+  public Inspection inspectConan(
+      Path input, ResourceLimits limits, Path workspace, ScanDeadline deadline) {
+    try {
+      deadline.check();
+      Budget budget = new Budget(limits, Files.size(input), deadline);
+      inspectPath(input, "", 0, budget, workspace, false, true);
+      deadline.check();
+      return new Inspection(budget.entries, budget.expandedBytes, budget.nestedArchives, null);
+    } catch (IOException e) {
+      throw new ScannerRequestException(
+          "ARCHIVE_INVALID", "Conan package is malformed or unsupported", 422, false, e);
+    }
+  }
+
+  /**
    * Inspects all OCI layers against one request-wide archive/decompression budget.
    *
    * <p>Layer links and whiteout special entries are valid image filesystem metadata and are not

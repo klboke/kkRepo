@@ -77,6 +77,7 @@ final class NexusMigrationAdapters {
           || ("ansiblegalaxy".equals(normalizedFormat)
               && ("hosted".equals(normalizedType) || "proxy".equals(normalizedType)))
           || ("conda".equals(normalizedFormat) && "hosted".equals(normalizedType))
+          || ("conan".equals(normalizedFormat) && !"group".equals(normalizedType))
           || ("apt".equals(normalizedFormat) && "hosted".equals(normalizedType));
     }
 
@@ -144,7 +145,7 @@ final class NexusMigrationAdapters {
       String normalized = lower(format);
       return !"cargo".equals(normalized) && !"pub".equals(normalized)
           && !"swift".equals(normalized) && !"ansiblegalaxy".equals(normalized)
-          && !"conda".equals(normalized);
+          && !"conda".equals(normalized) && !"conan".equals(normalized);
     }
 
     @Override
@@ -169,7 +170,8 @@ final class NexusMigrationAdapters {
       return hasDatastoreContentModel(profile, format)
           && (!"swift".equals(lower(format)) || "hosted".equals(lower(type)))
           && (!"ansiblegalaxy".equals(lower(format)) || !"group".equals(lower(type)))
-          && (!"conda".equals(lower(format)) || "hosted".equals(lower(type)));
+          && (!"conda".equals(lower(format)) || "hosted".equals(lower(type)))
+          && (!"conan".equals(lower(format)) || !"group".equals(lower(type)));
     }
 
     @Override
@@ -194,7 +196,8 @@ final class NexusMigrationAdapters {
       return hasDatastoreContentModel(profile, format)
           && (!"swift".equals(lower(format)) || "hosted".equals(lower(type)))
           && (!"ansiblegalaxy".equals(lower(format)) || !"group".equals(lower(type)))
-          && (!"conda".equals(lower(format)) || "hosted".equals(lower(type)));
+          && (!"conda".equals(lower(format)) || "hosted".equals(lower(type)))
+          && (!"conan".equals(lower(format)) || !"group".equals(lower(type)));
     }
 
     @Override

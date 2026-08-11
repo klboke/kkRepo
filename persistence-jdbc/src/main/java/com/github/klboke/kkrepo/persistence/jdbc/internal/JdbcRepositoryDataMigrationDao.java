@@ -412,6 +412,23 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
         """, ASSET_MIGRATED, targetComponentId, targetAssetId, targetAssetBlobId, assetId);
   }
 
+  @Override
+  public int retargetMigratedAsset(
+      long repositoryJobId,
+      String sourcePath,
+      Long targetComponentId,
+      long targetAssetId,
+      long targetAssetBlobId) {
+    return jdbcTemplate.update("""
+        UPDATE repository_data_migration_asset
+        SET target_component_id = ?, target_asset_id = ?, target_asset_blob_id = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE repository_job_id = ? AND source_path_hash = ? AND source_path = ?
+        """, targetComponentId, targetAssetId, targetAssetBlobId, repositoryJobId,
+        com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes.pathHash(sourcePath),
+        sourcePath);
+  }
+
   public void markAssetFailed(long assetId, long repositoryJobId, int maxAttempts, String error) {
     jdbcTemplate.update("""
         UPDATE repository_data_migration_asset

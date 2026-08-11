@@ -13,6 +13,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.CacheVersionDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DatabaseConnectionSettings;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
@@ -70,6 +71,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
         new JdbcComponentDao(jdbc, json, dialect),
         new JdbcCleanupPolicyDao(jdbc, json, dialect),
         new JdbcCondaRegistryDao(jdbc, json, dialect),
+        new JdbcConanRegistryDao(jdbc, json, dialect),
         new JdbcDockerAuthTokenDao(jdbc, json),
         new JdbcDockerRegistryDao(jdbc, json),
         new JdbcDockerUploadDao(jdbc, json),
@@ -104,6 +106,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
       ComponentDao components,
       CleanupPolicyDao cleanupPolicies,
       CondaRegistryDao condaRegistry,
+      ConanRegistryDao conanRegistry,
       DockerAuthTokenDao dockerAuthTokens,
       DockerRegistryDao dockerRegistry,
       DockerUploadDao dockerUploads,

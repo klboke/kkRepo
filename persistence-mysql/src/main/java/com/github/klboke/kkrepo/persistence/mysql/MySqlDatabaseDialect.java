@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.persistence.mysql;
 
 import com.github.klboke.kkrepo.persistence.jdbc.spi.ComponentPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.CondaPersistenceDialect;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.ConanPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.CoordinationPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseType;
@@ -26,6 +27,7 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
   private final MySqlJsonPersistenceDialect json = new MySqlJsonPersistenceDialect();
   private final ComponentPersistenceDialect components = new MySqlComponentPersistenceDialect(json);
   private final CondaPersistenceDialect conda = new MySqlCondaPersistenceDialect();
+  private final ConanPersistenceDialect conan = new MySqlConanPersistenceDialect();
   private final CoordinationPersistenceDialect coordination = new MySqlCoordinationPersistenceDialect();
   private final SearchPersistenceDialect search = new MySqlSearchPersistenceDialect();
   private final SecurityPersistenceDialect security = new MySqlSecurityPersistenceDialect(json);
@@ -50,6 +52,11 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
   @Override
   public CondaPersistenceDialect conda() {
     return conda;
+  }
+
+  @Override
+  public ConanPersistenceDialect conan() {
+    return conan;
   }
 
   @Override
@@ -245,6 +252,24 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
         throw new IllegalArgumentException("Unsafe timestamp column: " + timestampColumn);
       }
       return "COALESCE(TIMESTAMPDIFF(SECOND, MIN(" + timestampColumn + "), NOW(3)), 0)";
+    }
+  }
+
+  private static final class MySqlConanPersistenceDialect
+      implements ConanPersistenceDialect {
+    private static final String RECIPE_NAME_RANGE_SQL = """
+        SELECT * FROM conan_recipe
+        WHERE repository_id = ?
+          AND name_key >= CAST(? AS CHAR CHARACTER SET ascii) COLLATE ascii_bin
+          AND name_key < CAST(? AS CHAR CHARACTER SET ascii) COLLATE ascii_bin
+          AND id > ?
+        ORDER BY id
+        LIMIT ?
+        """;
+
+    @Override
+    public String recipeNameRangeSql() {
+      return RECIPE_NAME_RANGE_SQL;
     }
   }
 

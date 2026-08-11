@@ -302,6 +302,7 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
       case SWIFT -> swiftOperation(path, normalizedMethod);
       case ANSIBLEGALAXY -> ansibleOperation(path, normalizedMethod);
       case CONDA -> condaOperation(path, normalizedMethod);
+      case CONAN -> conanOperation(path, normalizedMethod);
       case APT -> aptOperation(path, normalizedMethod);
       case RAW -> rawOperation(normalizedMethod);
     };
@@ -339,6 +340,24 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
       };
     }
     return "conda_repository";
+  }
+
+  private static String conanOperation(String path, String method) {
+    if (path.equals("v1/ping")) return "conan_ping";
+    if (path.startsWith("v2/users/authenticate")) return "conan_authenticate";
+    if (path.startsWith("v2/users/check_credentials")) return "conan_check_credentials";
+    if (path.endsWith("/search")) return "conan_search";
+    if (path.endsWith("/revisions") || path.contains("/revisions/latest")) {
+      return "conan_revision_metadata";
+    }
+    if (path.contains("/files/")) {
+      return switch (method) {
+        case "PUT" -> "conan_file_upload";
+        case "DELETE" -> "conan_revision_delete";
+        default -> "conan_file_download";
+      };
+    }
+    return "conan_repository";
   }
 
   private static String ansibleOperation(String path, String method) {

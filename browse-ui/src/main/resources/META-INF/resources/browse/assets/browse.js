@@ -47,6 +47,7 @@ const SEARCH_ROUTE_FORMAT = {
   swift: "swift",
   ansiblegalaxy: "ansiblegalaxy",
   conda: "conda",
+  conan: "conan",
   apt: "apt",
   pypi: "pypi",
   rubygems: "rubygems",
@@ -65,6 +66,7 @@ const FORMAT_ROUTE_SEGMENT = {
   swift: "swift",
   ansiblegalaxy: "ansiblegalaxy",
   conda: "conda",
+  conan: "conan",
   apt: "apt",
   pypi: "pypi",
   rubygems: "rubygems",
@@ -165,6 +167,10 @@ function componentBrowsePath(component) {
   }
   if (format === "conda") {
     return [group, name, version].filter(Boolean).join("/");
+  }
+  if (format === "conan") {
+    const user = group.split("/", 1)[0] || "_";
+    return [user, name, version].filter(Boolean).join("/");
   }
   if (format === "apt") {
     return [group, name, version].filter(Boolean).join("/");
@@ -650,6 +656,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   swift: "swift",
   ansiblegalaxy: "ansiblegalaxy",
   conda: "conda",
+  conan: "conan",
   apt: "apt",
   go: "go",
   helm: "helm",
@@ -2646,6 +2653,67 @@ function condaUsageDetail(entry, detail = null) {
   return { crumbText: entry.path, summaryRows, snippets };
 }
 
+function conanUsageDetail(entry) {
+  const parts = pathSegments(entry.path);
+  const user = parts[0] || "_";
+  const name = parts[1] || "";
+  const version = parts[2] || "";
+  const revisionSegment = parts[3] || "";
+  const revisionSeparator = revisionSegment.lastIndexOf("#");
+  const channel = revisionSeparator >= 0
+    ? revisionSegment.slice(0, revisionSeparator)
+    : revisionSegment;
+  const rrev = revisionSeparator >= 0
+    ? revisionSegment.slice(revisionSeparator + 1)
+    : "";
+  const packagesIndex = parts.indexOf("packages", 4);
+  const packageId = packagesIndex >= 0 ? parts[packagesIndex + 1] || "" : "";
+  const packageRevisionsIndex = packagesIndex >= 0
+    ? parts.indexOf("revisions", packagesIndex + 2)
+    : -1;
+  const prev = packageRevisionsIndex >= 0 ? parts[packageRevisionsIndex + 1] || "" : "";
+  const recipe = name && version
+    ? `${name}/${version}${user !== "_" ? `@${user}${channel !== "_" ? `/${channel}` : ""}` : ""}`
+    : "<name>/<version>";
+  const recipeRevision = `${recipe}${rrev ? `#${rrev}` : ""}`;
+  const packageReference = packageId
+    ? `${recipeRevision}:${packageId}${prev ? `#${prev}` : ""}`
+    : recipeRevision;
+  const repositoryUrl = repositoryBaseUrl().replace(/\/+$/, "");
+  const remoteName = String(state.repo || "kkrepo").replace(/[^A-Za-z0-9_-]/g, "-");
+  const summaryRows = [
+    ["Repository", state.repo],
+    ["Format", "conan"],
+    ["Recipe", recipe],
+    ["RREV", rrev || "-"],
+    ["Package ID", packageId || "-"],
+    ["PREV", prev || "-"],
+    ["Remote URL", repositoryUrl],
+  ];
+  const snippets = [
+    usageSnippet(
+      "Configure remote",
+      `conan remote add ${remoteName} '${repositoryUrl}' --force`,
+    ),
+    usageSnippet(
+      "Login",
+      `conan remote login ${remoteName} '<username>' -p '<password-or-token>'`,
+      "Use a scoped CI/API credential and do not place credentials in the repository URL",
+    ),
+    usageSnippet("List", `conan list '${packageReference}${packageId ? "" : ":*"}' -r=${remoteName}`),
+    usageSnippet("Download", `conan download '${packageReference}${packageId ? "" : ":*"}' -r=${remoteName}`),
+    usageSnippet("Install", `conan install --requires='${recipe}' -r=${remoteName}`),
+  ];
+  if (currentRepository()?.type === "hosted" && name && version) {
+    snippets.push(usageSnippet(
+      "Publish",
+      `conan upload '${recipe}:*' -r=${remoteName} --confirm`,
+      "The server commits each recipe or package revision only when its manifest arrives",
+    ));
+  }
+  return { crumbText: entry.path, summaryRows, snippets };
+}
+
 function aptUsageDetail(entry, detail = null) {
   const metadata = detail?.apt || {};
   const repo = currentRepository();
@@ -2711,6 +2779,7 @@ async function usageDetailForEntry(entry, detail = null) {
   if (repo.format === "swift") return swiftUsageDetail(entry);
   if (repo.format === "ansiblegalaxy") return ansibleGalaxyUsageDetail(entry);
   if (repo.format === "conda") return condaUsageDetail(entry, detail);
+  if (repo.format === "conan") return conanUsageDetail(entry);
   if (repo.format === "apt") return aptUsageDetail(entry, detail);
   if (repo.format === "docker") return dockerUsageDetail(entry);
   return null;
@@ -2880,6 +2949,62 @@ function renderUploadFields() {
       updateUploadPath();
     });
     bindRemoveAssetButtons();
+    return;
+  }
+  if (repo.format === "conan") {
+    uploadAssetCount = Math.max(uploadAssetCount, 3);
+    fields.innerHTML = `
+      <label>
+        <span>Recipe name</span>
+        <input id="upload-conan-name" type="text" placeholder="demo" required>
+      </label>
+      <label>
+        <span>Recipe version</span>
+        <input id="upload-conan-version" type="text" placeholder="1.0.0" required>
+      </label>
+      <label>
+        <span>User (optional)</span>
+        <input id="upload-conan-user" type="text" placeholder="acme">
+      </label>
+      <label>
+        <span>Channel (optional)</span>
+        <input id="upload-conan-channel" type="text" placeholder="stable">
+      </label>
+      <label>
+        <span>Recipe revision (RREV)</span>
+        <input id="upload-conan-rrev" type="text" placeholder="revision hash" required>
+      </label>
+      <label>
+        <span>Package ID (binary only)</span>
+        <input id="upload-conan-package-id" type="text" placeholder="package ID">
+      </label>
+      <label>
+        <span>Package revision (PREV)</span>
+        <input id="upload-conan-prev" type="text" placeholder="package revision">
+      </label>
+      <div class="muted-row full-width">Upload one complete recipe or binary revision. Include exactly one <code>conanmanifest.txt</code>; binary revisions also require <code>conaninfo.txt</code> and one <code>conan_package.tgz</code>, <code>.txz</code>, or <code>.tzst</code>. Publish a recipe before its binaries.</div>
+      <div class="upload-assets" id="upload-conan-assets">
+        ${conanAssetRows()}
+      </div>
+      <button class="secondary-button upload-add-asset" id="upload-conan-add-asset" type="button">Add revision file</button>
+      <label class="upload-path">
+        <span>Nexus-compatible Browse path</span>
+        <textarea id="upload-path" readonly></textarea>
+      </label>
+    `;
+    document.getElementById("upload-conan-add-asset").addEventListener("click", () => {
+      uploadAssetCount += 1;
+      document.getElementById("upload-conan-assets").innerHTML = conanAssetRows();
+      bindConanAssetRows();
+      updateUploadPath();
+    });
+    ["upload-conan-name", "upload-conan-version", "upload-conan-user",
+      "upload-conan-channel", "upload-conan-rrev", "upload-conan-package-id",
+      "upload-conan-prev"].forEach((id) => {
+      document.getElementById(id).addEventListener("input", updateUploadPath);
+    });
+    bindConanAssetRows();
+    updateUploadPath();
     return;
   }
   if (repo.format === "terraform") {
@@ -3070,6 +3195,44 @@ function mavenAssetRows() {
   }).join("");
 }
 
+function conanAssetRows() {
+  return Array.from({ length: uploadAssetCount }, (_, index) => {
+    const number = index + 1;
+    const suggested = number === 1
+      ? "conanfile.py"
+      : number === 2 ? "conanmanifest.txt" : "";
+    return `
+      <div class="upload-asset-row conan-upload-asset-row" data-asset-index="${number}">
+        <label>
+          <span>Relative path</span>
+          <input class="upload-conan-filename" type="text" value="${suggested}" placeholder="conan_package.tgz">
+        </label>
+        <label class="upload-file">
+          <span>File</span>
+          <input class="upload-conan-file" type="file" required>
+        </label>
+        <button class="secondary-button upload-remove-asset upload-conan-remove-asset" type="button" ${uploadAssetCount === 1 ? "disabled" : ""}>Remove</button>
+      </div>
+    `;
+  }).join("");
+}
+
+function bindConanAssetRows() {
+  document.querySelectorAll(".upload-conan-filename, .upload-conan-file").forEach((input) => {
+    input.addEventListener("input", updateUploadPath);
+    input.addEventListener("change", updateUploadPath);
+  });
+  document.querySelectorAll(".upload-conan-remove-asset").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (uploadAssetCount <= 1) return;
+      uploadAssetCount -= 1;
+      document.getElementById("upload-conan-assets").innerHTML = conanAssetRows();
+      bindConanAssetRows();
+      updateUploadPath();
+    });
+  });
+}
+
 function bindRemoveAssetButtons() {
   document.querySelectorAll(".upload-remove-asset").forEach((button) => {
     button.addEventListener("click", () => {
@@ -3090,6 +3253,25 @@ function uploadFieldValue(id) {
 function computedUploadPaths() {
   const repo = selectedUploadRepository();
   if (!repo) return [];
+  if (repo.format === "conan") {
+    const name = uploadFieldValue("upload-conan-name");
+    const version = uploadFieldValue("upload-conan-version");
+    const user = uploadFieldValue("upload-conan-user") || "_";
+    const channel = uploadFieldValue("upload-conan-channel") || "_";
+    const rrev = uploadFieldValue("upload-conan-rrev");
+    const packageId = uploadFieldValue("upload-conan-package-id");
+    const prev = uploadFieldValue("upload-conan-prev");
+    if (!name || !version || !rrev) return [];
+    let root = `${user}/${name}/${version}/${channel}#${rrev}`;
+    if (packageId && prev) root += `/packages/${packageId}/revisions/${prev}/files`;
+    return Array.from(document.querySelectorAll(".conan-upload-asset-row"))
+      .map((row) => {
+        const file = row.querySelector(".upload-conan-file")?.files?.[0];
+        const path = row.querySelector(".upload-conan-filename")?.value?.trim() || file?.name;
+        return path ? `${root}/${path}` : "";
+      })
+      .filter(Boolean);
+  }
   if (repo.format === "terraform") {
     const kind = uploadFieldValue("upload-terraform-kind");
     const namespace = uploadFieldValue("upload-terraform-namespace");
@@ -3230,6 +3412,49 @@ function buildUploadForm(repo, form) {
       form.append(assetKey, file, file.name);
       form.append(`${assetKey}.extension`, extension.replace(/^\.+/, ""));
       if (classifier) form.append(`${assetKey}.classifier`, classifier);
+    });
+    return;
+  }
+  if (repo.format === "conan") {
+    const name = uploadFieldValue("upload-conan-name");
+    const version = uploadFieldValue("upload-conan-version");
+    const user = uploadFieldValue("upload-conan-user");
+    const channel = uploadFieldValue("upload-conan-channel");
+    const rrev = uploadFieldValue("upload-conan-rrev");
+    const packageId = uploadFieldValue("upload-conan-package-id");
+    const prev = uploadFieldValue("upload-conan-prev");
+    if (!name || !version || !rrev) {
+      throw new Error("Recipe name, Recipe version, and RREV are required.");
+    }
+    if (Boolean(packageId) !== Boolean(prev)) {
+      throw new Error("Package ID and PREV must either both be provided or both be empty.");
+    }
+    if (channel && !user) throw new Error("A Conan channel requires a user.");
+    const rows = Array.from(document.querySelectorAll(".conan-upload-asset-row"));
+    const files = rows.map((row) => ({
+      file: row.querySelector(".upload-conan-file")?.files?.[0],
+      path: row.querySelector(".upload-conan-filename")?.value?.trim(),
+    }));
+    if (!files.length || files.some((entry) => !entry.file)) {
+      throw new Error("Every Conan revision row requires a file.");
+    }
+    files.forEach((entry) => {
+      if (!entry.path) entry.path = entry.file.name;
+    });
+    if (files.filter((entry) => entry.path === "conanmanifest.txt").length !== 1) {
+      throw new Error("A Conan revision requires exactly one conanmanifest.txt.");
+    }
+    form.append("conan.name", name);
+    form.append("conan.version", version);
+    if (user) form.append("conan.user", user);
+    if (channel) form.append("conan.channel", channel);
+    form.append("conan.rrev", rrev);
+    if (packageId) form.append("conan.package-id", packageId);
+    if (prev) form.append("conan.prev", prev);
+    files.forEach((entry, index) => {
+      const key = `conan.asset${index + 1}`;
+      form.append(key, entry.file, entry.file.name);
+      form.append(`${key}.filename`, entry.path);
     });
     return;
   }

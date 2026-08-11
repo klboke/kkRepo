@@ -211,6 +211,24 @@ public class JdbcBrowseNodeDao implements com.github.klboke.kkrepo.persistence.j
     return jdbcTemplate.query(sql, childRowMapper, parentId);
   }
 
+  @Override
+  public Optional<BrowseChild> findNode(long repositoryId, String path) {
+    if (path == null || path.isBlank()) return Optional.empty();
+    String sql = "SELECT bn.id AS id, bn.path AS path, bn.display_name AS display_name, "
+        + "bn.depth AS depth, bn.asset_id AS asset_id, bn.component_id AS component_id, "
+        + "a.size AS asset_size, a.content_type AS asset_content_type, "
+        + "ab.sha1 AS asset_sha1, a.last_updated_at AS asset_last_updated_at, "
+        + "EXISTS (SELECT 1 FROM browse_node child WHERE child.parent_id = bn.id) AS has_children, "
+        + "bn.has_asset_subtree AS has_asset_subtree "
+        + "FROM browse_node bn "
+        + "LEFT JOIN asset a ON a.id = bn.asset_id "
+        + "LEFT JOIN asset_blob ab ON ab.id = a.asset_blob_id "
+        + "WHERE bn.repository_id = ? AND bn.path_hash = ?";
+    return jdbcTemplate.query(sql, childRowMapper, repositoryId, HashColumns.pathHash(path)).stream()
+        .filter(node -> path.equals(node.path()))
+        .findFirst();
+  }
+
   private Optional<NodeRef> findNodeByAssetId(long assetId) {
     List<NodeRef> rows = jdbcTemplate.query(
         "SELECT parent_id FROM browse_node WHERE asset_id = ?",

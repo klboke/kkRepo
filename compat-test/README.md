@@ -22,8 +22,8 @@ NEXUS_COMPAT_PASSWORD=Admin1234
 Current Maven compatibility checks and repository-format compatibility checks can compare against
 this same long-running Nexus reference unless a test explicitly documents why it needs an isolated
 throwaway Nexus instance. Cargo/Rust requires Nexus 3.77.x+, Terraform requires Nexus 3.90.0+ for
-hosted/proxy/group coverage, Pub, Conda, and APT require Nexus 3.92.0+, and the Swift reference matrix targets
-Nexus 3.94.x so versioned-manifest fallback and `v`/`V` tag normalization include the latest fixes; the
+hosted/proxy/group coverage, Pub, Conda, and APT require Nexus 3.92.0+, and the Conan 2 and Swift reference matrices target
+Nexus 3.94.x so their latest repository implementations are available; the Swift lane also verifies versioned-manifest fallback and `v`/`V` tag normalization. The
 datastore-era PostgreSQL compose file below defaults to Nexus 3.92.0 for the general newer-format
 checks, while the Swift workflow explicitly overrides that image with Nexus 3.94.x.
 
@@ -59,7 +59,7 @@ docker compose -f docker-compose.compat.yml down -v
 
 For datastore-era compatibility work, use the Nexus PostgreSQL compose file instead of the default
 Nexus 3.29.2 OrientDB reference. It pins Nexus to 3.92.0 with PostgreSQL datastore enabled, which
-covers Cargo/Rust, Dart/Pub, Terraform, Conda, APT/Debian, and the other newer-format live checks:
+covers Cargo/Rust, Dart/Pub, Terraform, Conda, APT/Debian, and the other newer-format live checks. Override the Nexus image with 3.94.x for Conan 2 and Swift:
 
 ```bash
 scripts/build-docker-image.sh kkrepo:compat
@@ -80,7 +80,7 @@ Available suites:
 - `smoke`: diagnostic console API checks plus Maven proxy GET/HEAD/checksum read compatibility.
 - `write-smoke`: Maven hosted release/snapshot write compatibility with `COMPAT_WRITE_ENABLED=true`.
 - `nexus`: the disposable Nexus reference matrix. It enables write checks and compares kkrepo with
-  Nexus across Maven, npm, PyPI, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift, Ansible Galaxy, Conda, APT/Debian, Raw, selected NuGet/RubyGems/Yum behavior,
+  Nexus across Maven, npm, PyPI, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift, Ansible Galaxy, Conda, APT/Debian, Conan 2, Raw, selected NuGet/RubyGems/Yum behavior,
   Go proxy endpoints, Helm hosted round trips, component upload specs, and selected security/admin
   contracts. Composer is required when enabled; a missing Nexus Composer endpoint fails instead of skipping.
   The self-contained Conda fixtures run in this module, while the live Conda comparison is enabled
@@ -88,7 +88,7 @@ Available suites:
 - `extended`: diagnostic smoke coverage plus currently separated PyPI, Helm, Pub, NuGet, RubyGems, and Yum checks.
 - `client-e2e`: starts from the disposable kkrepo service and uses real package clients to publish
   and then download/resolve through hosted and group/proxy repositories. It covers Maven, npm,
-  PyPI, Helm, Cargo/Rust, Dart/Pub, Flutter Pub, Composer/PHP, Terraform 0.13/current, Ansible Galaxy 2.9/current, Conda, APT/Debian, NuGet, RubyGems, Yum, and Docker/OCI. Go is
+  PyPI, Helm, Cargo/Rust, Dart/Pub, Flutter Pub, Composer/PHP, Terraform 0.13/current, Ansible Galaxy 2.9/current, Conda, APT/Debian, Conan 2, NuGet, RubyGems, Yum, and Docker/OCI. Go is
   resolve-only through the Go proxy because hosted Go publishing is not a supported repository mode.
   SwiftPM is included when `swift` or `SWIFT_E2E_BINS` is available; it publishes to Swift hosted,
   resolves and builds through group, checks immutable conflict and checksum replay, and exercises
@@ -102,6 +102,8 @@ Available suites:
   APT runs in Debian 12, Ubuntu 24.04, and Debian testing containers; it validates scoped keys,
   `auth.conf`, hosted install/upgrade/delete, key rotation, dual-replica reads, passthrough/offline
   proxy cache, and local re-signing.
+  Conan runs an installed Conan 2 client through create, upload, list, download, install, remote
+  package-revision removal, and the shared whole-revision cleanup gate.
   The Composer flow additionally validates a hosted-to-proxy transitive dependency, rejected Basic
   credentials, and lock replay from the server cache after clearing the client cache and detaching
   the Packagist upstream.
@@ -113,6 +115,9 @@ Available suites:
   fixtures and covers publish/task, metadata, artifact HTTP, group priority, and public Galaxy proxying.
 - `apt`: the opt-in Nexus 3.94.x APT matrix. It compares isolated hosted upload, canonical pool
   paths, signed metadata, checksums, validators, Range, Browse, and Search.
+- `conan`: the opt-in Nexus 3.94.x Conan 2 hosted matrix. It compares manifest-gated RREV/PREV
+  publication, search/revision/file responses, package archives, Range/HEAD behavior, and the
+  Nexus-aligned Browse tree persisted by the candidate write path.
 
 In GitHub Actions, add the `run-live-compat` label to a PR to run the unified Nexus compatibility
 matrix against the Nexus 3.92.0 PostgreSQL reference. The live compatibility workflow
@@ -134,7 +139,7 @@ docker compose -f docker-compose.compat.yml down -v
 ```
 
 The runner must have `mvn`, `npm`, `python3` with `build` and `twine`, `go`, `helm`, `cargo`,
-`dart`, `composer`, `php`, Terraform 0.13 and a current stable Terraform binary, `ansible-galaxy`, `conda`, `dotnet`, `ruby`/`gem`, and Docker available. `flutter` is used for the Flutter Pub check
+`dart`, `composer`, `php`, Terraform 0.13 and a current stable Terraform binary, `ansible-galaxy`, `conda`, Conan 2, `dotnet`, `ruby`/`gem`, and Docker available. `flutter` is used for the Flutter Pub check
 when installed; GitHub Actions installs it for the `client-e2e` workflow. ORAS is optional; when
 present the Docker/OCI part also pushes and pulls a generic OCI artifact. Client logs, downloaded
 metadata, and selected inspect outputs are written under `artifacts/client-e2e/`. Terraform URLs can
@@ -225,6 +230,45 @@ to require byte-identical metadata and an install through that replica. Migratio
 real signed Nexus fixture, proves the H2/PostgreSQL source shape, restores only the `.deb`, confirms
 that the target remains offline without a key, explicitly imports the test key, rebuilds metadata,
 and runs a real `apt` install on MySQL/PostgreSQL targets.
+
+### Conan 2 compatibility and client matrix
+
+`ConanRepositoryBlackBoxCompatibilityTest` publishes the same deterministic recipe and package
+revision to Nexus 3.94.x and kkrepo, then compares the client-visible v2 protocol and verifies the
+candidate Browse projection. Both sides use one hosted repository name by default:
+
+```bash
+CONAN_COMPAT_ENABLED=true \
+CONAN_NEXUS_COMPAT_BASE_URL=http://127.0.0.1:39400 \
+CONAN_KKREPO_COMPAT_BASE_URL=http://127.0.0.1:18090 \
+CONAN_NEXUS_COMPAT_USERNAME=admin \
+CONAN_NEXUS_COMPAT_PASSWORD=Admin1234 \
+CONAN_KKREPO_COMPAT_USERNAME=admin \
+CONAN_KKREPO_COMPAT_PASSWORD=12345678 \
+CONAN_COMPAT_REPOSITORY=conan-compat-hosted \
+mvn -pl compat-test -am \
+  -Dtest=ConanRepositoryBlackBoxCompatibilityTest \
+  -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+When the two servers use different repository names, set
+`CONAN_NEXUS_COMPAT_REPOSITORY` and `CONAN_KKREPO_COMPAT_REPOSITORY` instead. A
+pre-issued Bearer token can also be supplied with `CONAN_NEXUS_COMPAT_TOKEN` or
+`CONAN_KKREPO_COMPAT_TOKEN`; this is useful when the candidate Browse endpoint is
+anonymous but Conan package writes still require authentication.
+
+Run the real Conan 2 client flow with:
+
+```bash
+CLIENT_E2E_TESTS=conan \
+CONAN_E2E_BIN=/path/to/conan \
+scripts/ci/run-client-e2e.sh
+```
+
+The client flow uses `conan-hosted` for publication and `conan-group` for reads by default. It
+validates create/upload/list/download/install/remove and leaves the recipe revision for the shared
+cleanup-policy Try Run/Execute gate. Override repository names with
+`CONAN_E2E_HOSTED_REPOSITORY` and `CONAN_E2E_GROUP_REPOSITORY`.
 
 ### Swift Registry compatibility and client matrix
 

@@ -491,6 +491,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   swift: "swift",
   ansiblegalaxy: "ansiblegalaxy",
   conda: "conda",
+  conan: "conan",
   apt: "apt",
   raw: "raw",
 });
@@ -512,6 +513,7 @@ const FORMAT_DISPLAY_NAMES = Object.freeze({
   swift: "Swift",
   ansiblegalaxy: "Ansible Galaxy",
   conda: "Conda",
+  conan: "Conan 2",
   apt: "APT / Debian",
   raw: "Raw",
 });
@@ -2103,6 +2105,9 @@ function refreshRepositoryRecipeControls() {
   document.getElementById("repository-docker-fields").hidden = format !== "docker";
   document.getElementById("repository-cargo-fields").hidden =
     format !== "cargo";
+  document.getElementById("repository-conan-fields").hidden = format !== "conan";
+  document.getElementById("repository-conan-operations").hidden =
+    format !== "conan" || repositoryFormMode !== "edit";
   document.getElementById("repository-apt-fields").hidden = format !== "apt";
   document.getElementById("repository-swift-proxy-note").hidden =
     !(format === "swift" && type === "PROXY");
@@ -2145,6 +2150,7 @@ function refreshRepositoryRemoteDefaults(recipe) {
     swift: "https://github.com/",
     ansiblegalaxy: "https://galaxy.ansible.com/",
     conda: "https://repo.anaconda.com/pkgs/main/",
+    conan: "https://center2.conan.io/",
     apt: "https://deb.debian.org/debian/"
   };
   if (recipe.format === "swift") {
@@ -2177,6 +2183,29 @@ function refreshAptControls() {
   document.getElementById("repository-apt-operations").hidden =
     !apt || repositoryFormMode !== "edit";
   updateRequiredMarkers(repositoryRequiredFields);
+}
+
+async function loadConanStatus(name = editingRepositoryName) {
+  if (!name) return;
+  const output = document.getElementById("repository-conan-status");
+  output.textContent = "Loading Conan status…";
+  try {
+    const response = await fetch(
+      `/internal/repositories/${encodeURIComponent(name)}/conan/status`);
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    const status = await response.json();
+    output.textContent = [
+      `${status.recipes ?? 0} recipes`,
+      `${status.recipeRevisions ?? 0} recipe revisions`,
+      `${status.packages ?? 0} packages`,
+      `${status.packageRevisions ?? 0} package revisions`,
+      `${status.committedFiles ?? 0} committed files`,
+      `${status.openUploadSessions ?? 0} open upload sessions`,
+      `${status.cachedProxyFiles ?? 0} cached proxy files`,
+    ].join(" · ");
+  } catch (error) {
+    output.textContent = error.message || "Conan status unavailable.";
+  }
 }
 
 async function loadAptStatus(name = editingRepositoryName) {
@@ -2522,6 +2551,7 @@ function showEditRepositoryForm(name) {
     document.getElementById("repository-apt-label").value = repo.apt.label || "kkRepo";
   }
   refreshRepositoryRecipeControls();
+  if (repo.format === "conan") loadConanStatus(repo.name);
   if (repo.format === "apt") loadAptStatus(repo.name);
   clearRequiredFieldErrors(repositoryRequiredFields);
   openFormModal("repository-form", "repository-online");
@@ -7036,6 +7066,7 @@ bindRepositoryRecipeCombobox();
 document.getElementById("repository-recipe").addEventListener("change", refreshRepositoryRecipeControls);
 document.getElementById("repository-docker-connector-enabled").addEventListener("change", refreshDockerConnectorControls);
 document.getElementById("repository-apt-flat").addEventListener("change", refreshAptControls);
+document.getElementById("repository-conan-refresh-status").addEventListener("click", () => loadConanStatus());
 document.getElementById("repository-apt-enforce-distribution").addEventListener("change", refreshAptControls);
 document.getElementById("repository-apt-metadata-mode").addEventListener("change", refreshAptControls);
 document.getElementById("repository-apt-refresh-status").addEventListener("click", () => loadAptStatus());

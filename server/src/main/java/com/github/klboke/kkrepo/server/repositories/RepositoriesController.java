@@ -7,6 +7,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryRecipe;
 import com.github.klboke.kkrepo.core.RepositoryRecipes;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
 import com.github.klboke.kkrepo.server.apt.AptService;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
@@ -41,6 +42,7 @@ public class RepositoriesController {
   private final SecurityAuthenticationService authenticationService;
   private final SecurityManagementService securityService;
   private AptService aptService;
+  private ConanRegistryDao conanRegistry;
   private RepositoryRuntimeRegistry runtimeRegistry;
 
   public RepositoriesController(
@@ -57,6 +59,11 @@ public class RepositoriesController {
       AptService aptService, RepositoryRuntimeRegistry runtimeRegistry) {
     this.aptService = aptService;
     this.runtimeRegistry = runtimeRegistry;
+  }
+
+  @Autowired(required = false)
+  void setConanManagement(ConanRegistryDao conanRegistry) {
+    this.conanRegistry = conanRegistry;
   }
 
   @GetMapping
@@ -161,6 +168,22 @@ public class RepositoriesController {
     RepositoryView existing = requireAptRepository(name);
     requireRepositoryAdmin(subject, existing.format(), existing.name(), "read");
     return apt().status(aptRuntime(name));
+  }
+
+  @GetMapping("/{name}/conan/status")
+  public ConanRegistryDao.RepositoryStatus conanStatus(
+      @PathVariable("name") String name, HttpServletRequest request) {
+    AuthenticatedSubject subject = requireAuthenticated(request);
+    RepositoryView existing = service.get(name);
+    if (existing.format() != RepositoryFormat.CONAN) {
+      throw new RepositoryValidationException("Repository is not a Conan repository");
+    }
+    requireRepositoryAdmin(subject, existing.format(), existing.name(), "read");
+    if (conanRegistry == null) {
+      throw new ResponseStatusException(
+          HttpStatus.SERVICE_UNAVAILABLE, "Conan repository service is unavailable");
+    }
+    return conanRegistry.status(existing.id());
   }
 
   @PostMapping("/{name}/apt/rebuild")

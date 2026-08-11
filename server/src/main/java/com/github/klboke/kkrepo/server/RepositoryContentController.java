@@ -31,6 +31,7 @@ import com.github.klboke.kkrepo.server.composer.ComposerGroupService;
 import com.github.klboke.kkrepo.server.composer.ComposerHostedService;
 import com.github.klboke.kkrepo.server.composer.ComposerProxyService;
 import com.github.klboke.kkrepo.server.conda.CondaService;
+import com.github.klboke.kkrepo.server.conan.ConanService;
 import com.github.klboke.kkrepo.server.apt.AptService;
 import com.github.klboke.kkrepo.server.goartifact.GoGroupService;
 import com.github.klboke.kkrepo.server.goartifact.GoProxyService;
@@ -147,6 +148,7 @@ public class RepositoryContentController {
   private AnsibleGalaxyService ansible;
   private AnsibleGalaxyMultipartReader ansibleMultipart;
   private CondaService conda;
+  private ConanService conan;
   private AptService apt;
   private final NugetService nuget;
   private final RubygemsService rubygems;
@@ -183,6 +185,11 @@ public class RepositoryContentController {
   @Autowired(required = false)
   void setCondaService(CondaService conda) {
     this.conda = conda;
+  }
+
+  @Autowired(required = false)
+  void setConanService(ConanService conan) {
+    this.conan = conan;
   }
 
   @Autowired(required = false)
@@ -368,6 +375,12 @@ public class RepositoryContentController {
       String raw = extractRepositoryPath(name, request, true);
       return toHeadResponse(conda().get(runtime, raw, true), request);
     }
+    if (runtime.format() == RepositoryFormat.CONAN) {
+      String raw = extractRepositoryPath(name, request, true);
+      return toHeadResponse(conan().get(
+          runtime, raw, request.getQueryString(), true, requestAuthenticatedSubject(request)),
+          request);
+    }
     if (runtime.format() == RepositoryFormat.APT) {
       String raw = extractRepositoryPath(name, request, true);
       return toHeadResponse(apt().get(runtime, raw, true), request);
@@ -493,6 +506,23 @@ public class RepositoryContentController {
       try (InputStream body = request.getInputStream()) {
         response = conda().put(
             runtime, raw, body, contentType, userId, request.getRemoteAddr());
+      }
+      return ResponseEntity.status(response.status()).build();
+    }
+    if (runtime.format() == RepositoryFormat.CONAN) {
+      String raw = extractRepositoryPath(name, request, true);
+      MavenResponse response;
+      try (InputStream body = request.getInputStream()) {
+        response = conan().put(
+            runtime,
+            raw,
+            body,
+            request.getContentLengthLong(),
+            contentType,
+            request.getHeader("X-Checksum-Sha1"),
+            request.getHeader("X-Checksum-Deploy") != null,
+            requestAuthenticatedSubject(request),
+            request.getRemoteAddr());
       }
       return ResponseEntity.status(response.status()).build();
     }
@@ -628,6 +658,11 @@ public class RepositoryContentController {
     if (runtime.format() == RepositoryFormat.CONDA) {
       String raw = extractRepositoryPath(name, request, true);
       MavenResponse response = conda().delete(runtime, raw);
+      return ResponseEntity.status(response.status()).build();
+    }
+    if (runtime.format() == RepositoryFormat.CONAN) {
+      String raw = extractRepositoryPath(name, request, true);
+      MavenResponse response = conan().delete(runtime, raw);
       return ResponseEntity.status(response.status()).build();
     }
     if (runtime.format() == RepositoryFormat.APT) {
@@ -936,6 +971,20 @@ public class RepositoryContentController {
       MavenResponse response = conda().get(runtime, raw, headOnly);
       boolean packageResponse = !headOnly
           && (raw.endsWith(".conda") || raw.endsWith(".tar.bz2"));
+      return toStreamingResponse(response, request, packageResponse);
+    }
+    if (runtime.format() == RepositoryFormat.CONAN) {
+      String raw = extractRepositoryPath(name, request, true);
+      MavenResponse response = conan().get(
+          runtime,
+          raw,
+          request.getQueryString(),
+          headOnly,
+          requestAuthenticatedSubject(request));
+      boolean packageResponse = !headOnly
+          && (raw.endsWith("/conan_package.tgz")
+              || raw.endsWith("/conan_package.txz")
+              || raw.endsWith("/conan_package.tzst"));
       return toStreamingResponse(response, request, packageResponse);
     }
     if (runtime.format() == RepositoryFormat.APT) {
@@ -1247,6 +1296,13 @@ public class RepositoryContentController {
     return conda;
   }
 
+  private ConanService conan() {
+    if (conan == null) {
+      throw new IllegalStateException("Conan repository service is unavailable");
+    }
+    return conan;
+  }
+
   private AptService apt() {
     if (apt == null) {
       throw new IllegalStateException("APT repository service is unavailable");
@@ -1302,6 +1358,11 @@ public class RepositoryContentController {
       return authenticated.userId();
     }
     return "anonymous";
+  }
+
+  private AuthenticatedSubject requestAuthenticatedSubject(HttpServletRequest request) {
+    Object subject = request.getAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE);
+    return subject instanceof AuthenticatedSubject authenticated ? authenticated : null;
   }
 
   private Long requestApiKeyId(HttpServletRequest request) {

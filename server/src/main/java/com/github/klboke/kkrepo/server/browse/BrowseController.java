@@ -7,9 +7,12 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
+import com.github.klboke.kkrepo.protocol.conan.ConanPaths;
+import com.github.klboke.kkrepo.protocol.conan.ConanReference;
 import com.github.klboke.kkrepo.server.conda.CondaBrowsePaths;
 import com.github.klboke.kkrepo.server.repositories.RepositoryNotFoundException;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
@@ -49,6 +52,7 @@ public class BrowseController {
   private final SecurityAuthenticationService authenticationService;
   private final SecurityManagementService securityService;
   private AssetDao assetDao;
+  private ConanRegistryDao conanDao;
 
   @Autowired
   public BrowseController(
@@ -73,6 +77,11 @@ public class BrowseController {
   @Autowired(required = false)
   void setAssetDao(AssetDao assetDao) {
     this.assetDao = assetDao;
+  }
+
+  @Autowired(required = false)
+  void setConanRegistryDao(ConanRegistryDao conanDao) {
+    this.conanDao = conanDao;
   }
 
   public BrowseController(
@@ -266,6 +275,13 @@ public class BrowseController {
     if (format == RepositoryFormat.CONDA) {
       return CondaBrowsePaths.toStoragePath(publicPath);
     }
+    if (format == RepositoryFormat.CONAN && conanDao != null && row.assetId() != null) {
+      return conanDao.findFileByAssetId(row.assetId())
+          .filter(file -> file.coordinate().repositoryId() == sourceRepository.id())
+          .map(BrowseController::conanFileRoute)
+          .orElseThrow(() -> new ResponseStatusException(
+              HttpStatus.CONFLICT, "Conan Browse asset is missing its typed identity"));
+    }
     if (format == RepositoryFormat.APT && assetDao != null && row.assetId() != null) {
       return assetDao.findAssetById(row.assetId())
           .filter(asset -> asset.repositoryId() == sourceRepository.id())
@@ -273,6 +289,14 @@ public class BrowseController {
           .orElse(row.path());
     }
     return row.path();
+  }
+
+  private static String conanFileRoute(ConanRegistryDao.AssetFile file) {
+    ConanRegistryDao.RecipeCoordinate coordinate = file.coordinate();
+    ConanReference reference = new ConanReference(
+        coordinate.name(), coordinate.version(), coordinate.user(), coordinate.channel(),
+        file.recipeRevision(), file.packageId(), file.packageRevision());
+    return ConanPaths.fileRoute(reference, file.file().path());
   }
 
   private static void mergeEntry(LinkedHashMap<String, BrowseEntry> merged, BrowseEntry entry) {

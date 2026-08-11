@@ -545,6 +545,33 @@ curl -u alice:"$KKREPO_PASSWORD" \
 For signing-key lifecycle, asynchronous publication status, proxy modes, snapshot retention,
 cleanup, migration, and recovery, see the [APT / Debian Repository Guide](apt-debian-guide.md).
 
+## Conan 2
+
+Configure the group for reads and the hosted repository for publication:
+
+```bash
+conan remote add kkrepo \
+  https://nexus.example.com/repository/conan-group
+conan remote add kkrepo-hosted \
+  https://nexus.example.com/repository/conan-hosted
+conan remote login kkrepo alice -p "$KKREPO_PASSWORD"
+conan remote login kkrepo-hosted alice -p "$KKREPO_PASSWORD"
+```
+
+Create and upload a recipe, then resolve it through the group:
+
+```bash
+conan create . \
+  --name=demo --version=1.0.0 --user=team --channel=stable
+conan upload 'demo/1.0.0@team/stable' \
+  --remote=kkrepo-hosted --confirm
+conan list 'demo/1.0.0@team/stable#*:*#*' --remote=kkrepo
+conan install --requires='demo/1.0.0@team/stable' --remote=kkrepo
+```
+
+For revision commit semantics, Browse paths, cleanup, scanning, proxy/group behavior,
+migration, and troubleshooting, see the [Conan Repository Guide](conan-guide.md).
+
 ## NuGet
 
 Add a source:

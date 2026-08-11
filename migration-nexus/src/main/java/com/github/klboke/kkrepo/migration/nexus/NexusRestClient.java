@@ -409,6 +409,7 @@ public class NexusRestClient {
           swift: 'SWIFT',
           ansiblegalaxy: 'ANSIBLEGALAXY',
           conda: 'CONDA',
+          conan: 'CONAN',
           apt: 'APT'
         ]
         return prefixes[format]
@@ -821,6 +822,7 @@ public class NexusRestClient {
           swift: 'SWIFT',
           ansiblegalaxy: 'ANSIBLEGALAXY',
           conda: 'CONDA',
+          conan: 'CONAN',
           apt: 'APT'
         ]
         def upperTables = []
@@ -1100,6 +1102,83 @@ public class NexusRestClient {
           }
           return shape
         }
+        def inspectConanShape = { tableNames ->
+          def shape = [
+            revisionAssetPath: false,
+            manifestObserved: false,
+            sha1Checksum: false,
+            inspectedAssetCount: 0,
+            revisionAssetCount: 0,
+            packageRevisionAssetCount: 0
+          ]
+          def fingerprintText = { value ->
+            if (value == null) {
+              return ''
+            }
+            if (value instanceof byte[]) {
+              return new String(value, 'UTF-8').toLowerCase()
+            }
+            if (value.getClass().name == 'org.postgresql.util.PGobject'
+                && value.respondsTo('getValue')) {
+              return String.valueOf(value.getValue()).toLowerCase()
+            }
+            return String.valueOf(value).toLowerCase()
+          }
+          def sql = '''
+              select
+                a.path as asset_path,
+                b.checksums as blob_checksums
+              from ''' + tableNames.asset + ''' a
+              left join ''' + tableNames.assetBlob + ''' b on a.asset_blob_id = b.asset_blob_id
+              order by a.path
+              limit 2048'''
+          try {
+            def statement = connection.prepareStatement(sql)
+            try {
+              def rows = statement.executeQuery()
+              try {
+                while (rows.next()) {
+                  shape.inspectedAssetCount++
+                  def path = fingerprintText(rows.getObject('asset_path')).replaceFirst('^/+', '')
+                  def parts = path.split('/')
+                  def recipeFile = parts.length >= 9
+                      && parts[0] == 'conans' && parts[5] == 'revisions'
+                      && parts[7] == 'files'
+                  def packageFile = parts.length >= 13
+                      && parts[0] == 'conans' && parts[5] == 'revisions'
+                      && parts[7] == 'packages' && parts[9] == 'revisions'
+                      && parts[11] == 'files'
+                  if (!recipeFile && !packageFile) {
+                    continue
+                  }
+                  shape.revisionAssetCount++
+                  if (packageFile) {
+                    shape.packageRevisionAssetCount++
+                  }
+                  shape.revisionAssetPath = true
+                  if (parts[parts.length - 1] == 'conanmanifest.txt') {
+                    shape.manifestObserved = true
+                  }
+                  def checksums = fingerprintText(rows.getObject('blob_checksums'))
+                  if ((checksums.contains('"sha1"') || checksums.contains('"sha-1"'))
+                      && (checksums =~ /[0-9a-f]{40}/).find()) {
+                    shape.sha1Checksum = true
+                  }
+                }
+              } finally {
+                rows.close()
+              }
+            } finally {
+              statement.close()
+            }
+          } catch (e) {
+            shape.revisionAssetPath = false
+            shape.manifestObserved = false
+            shape.sha1Checksum = false
+            out.warnings << 'Conan datastore content shape probe failed: ' + errorText(e)
+          }
+          return shape
+        }
         def inspectAptShape = { tableNames ->
           def shape = [
             packageAssetPath: false,
@@ -1231,6 +1310,9 @@ public class NexusRestClient {
           }
           if (format == 'conda' && requiredColumnsPresent) {
             contentModel.formatShape = inspectCondaShape(tableNames)
+          }
+          if (format == 'conan' && requiredColumnsPresent) {
+            contentModel.formatShape = inspectConanShape(tableNames)
           }
           if (format == 'apt' && requiredColumnsPresent) {
             contentModel.formatShape = inspectAptShape(tableNames)

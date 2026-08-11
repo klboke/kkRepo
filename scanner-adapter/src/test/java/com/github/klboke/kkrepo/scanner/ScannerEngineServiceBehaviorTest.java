@@ -371,6 +371,8 @@ class ScannerEngineServiceBehaviorTest {
     final ScannerInput scannerInput = mock(ScannerInput.class);
     final ArchiveGuard archiveGuard = mock(ArchiveGuard.class);
     final CondaPackageCataloger condaPackages = mock(CondaPackageCataloger.class);
+    final ConanMultipartInput conanMultipart = mock(ConanMultipartInput.class);
+    final ConanPackageCataloger conanPackages = mock(ConanPackageCataloger.class);
     final OciRegistryStager ociRegistryStager = mock(OciRegistryStager.class);
     final ScannerDocumentMapper documents = mock(ScannerDocumentMapper.class);
     final ScannerEngineService engine;
@@ -438,6 +440,8 @@ class ScannerEngineServiceBehaviorTest {
           scannerInput,
           archiveGuard,
           condaPackages,
+          conanMultipart,
+          conanPackages,
           ociRegistryStager,
           documents,
           database);

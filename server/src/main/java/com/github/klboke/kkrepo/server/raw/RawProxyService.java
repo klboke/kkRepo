@@ -184,6 +184,14 @@ public class RawProxyService {
         HttpRemoteFetcher.TimeoutProfile.METADATA, ComponentBinding.none(), headOnly);
   }
 
+  /** Caches protocol discovery state without creating a component or Browse node. */
+  public MavenResponse getMetadataFromUrlHidden(
+      RepositoryRuntime runtime, String path, String remoteUrl, boolean headOnly) {
+    return getAssetFromUrl(
+        runtime, path, remoteUrl, runtime.metadataMaxAgeMinutesOrDefault(),
+        HttpRemoteFetcher.TimeoutProfile.METADATA, ComponentBinding.hidden(), "", headOnly);
+  }
+
   public MavenResponse getMetadataFromUrlWithComponent(
       RepositoryRuntime runtime,
       String path,
@@ -367,6 +375,9 @@ public class RawProxyService {
       case NONE -> writer.writeUnindexed(
           runtime, blobStorage(runtime), requireBlobStore(runtime), path, result.body(),
           result.contentType(), extras, "proxy", runtime.proxyRemoteUrl(), true);
+      case HIDDEN -> writer.writeHidden(
+          runtime, blobStorage(runtime), requireBlobStore(runtime), path, result.body(),
+          result.contentType(), extras, "proxy", runtime.proxyRemoteUrl(), true);
       case EXPLICIT -> writer.writeWithComponentAtBrowsePath(
           runtime, blobStorage(runtime), requireBlobStore(runtime), path, result.body(),
           result.contentType(), extras, "proxy", runtime.proxyRemoteUrl(),
@@ -440,6 +451,7 @@ public class RawProxyService {
   private enum ComponentMode {
     PER_ASSET,
     NONE,
+    HIDDEN,
     EXPLICIT
   }
 
@@ -450,6 +462,10 @@ public class RawProxyService {
 
     private static ComponentBinding none() {
       return new ComponentBinding(ComponentMode.NONE, null);
+    }
+
+    private static ComponentBinding hidden() {
+      return new ComponentBinding(ComponentMode.HIDDEN, null);
     }
 
     private static ComponentBinding explicit(ComponentRecord component) {

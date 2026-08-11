@@ -99,6 +99,25 @@ public final class ScannerContract {
       String profileConfigurationDigest,
       ResourceLimits limits) {}
 
+  /**
+   * Bounded composite input required by Syft's Conan cataloger.
+   *
+   * <p>The package archive remains the primary immutable subject. The independently checksummed
+   * {@code conaninfo.txt} sidecar supplies Conan's binary model without putting arbitrary metadata
+   * into HTTP headers or the scanner command line.
+   */
+  public record ConanCatalogRequest(
+      CatalogRequest catalog,
+      String conanInfoSha256,
+      long conanInfoSize) {
+    public ConanCatalogRequest {
+      java.util.Objects.requireNonNull(catalog, "catalog");
+      if (conanInfoSize < 0) {
+        throw new IllegalArgumentException("Conan info size must not be negative");
+      }
+    }
+  }
+
   public record CatalogResponse(
       String adapterName,
       String adapterVersion,
@@ -301,6 +320,11 @@ public final class ScannerContract {
     Readiness readiness();
 
     CatalogResponse catalog(CatalogRequest request, InputStreamSource input) throws IOException;
+
+    CatalogResponse catalogConan(
+        ConanCatalogRequest request,
+        InputStreamSource packageArchive,
+        InputStreamSource conanInfo) throws IOException;
 
     MatchResponse match(MatchRequest request, InputStreamSource sbom) throws IOException;
 

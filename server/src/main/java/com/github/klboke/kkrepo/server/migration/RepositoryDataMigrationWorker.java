@@ -271,6 +271,13 @@ class RepositoryDataMigrationWorker {
     if (migrationJobId == null) {
       return DEFAULT_CONCURRENCY;
     }
+    if (migrationDao.listRepositories(migrationJobId).stream()
+        .anyMatch(repository -> repository.format() == RepositoryFormat.CONAN)) {
+      // Conan manifests are the publication barrier. Source paths are discovered in lexical
+      // order, so one worker preserves files-before-manifest while durable upload sessions make
+      // restart/resume safe.
+      return 1;
+    }
     return migrationJobDao.findById(migrationJobId)
         .map(job -> intOption(job.options().get("concurrency"), DEFAULT_CONCURRENCY, 1, MAX_CONCURRENCY))
         .orElse(DEFAULT_CONCURRENCY);
@@ -312,7 +319,8 @@ class RepositoryDataMigrationWorker {
     }
     if ((format == RepositoryFormat.PUB || format == RepositoryFormat.TERRAFORM
         || format == RepositoryFormat.SWIFT || format == RepositoryFormat.ANSIBLEGALAXY
-        || format == RepositoryFormat.CONDA || format == RepositoryFormat.APT)
+        || format == RepositoryFormat.CONDA || format == RepositoryFormat.APT
+        || format == RepositoryFormat.CONAN)
         && !RepositoryDataMigrationPaths.shouldDiscoverAsset(format, path)) {
       return false;
     }

@@ -93,6 +93,11 @@
   --format-logo: url("/browse/assets/formats/conda.svg");
 }
 
+.format-logo-conan {
+  --format-color: #6699cb;
+  --format-logo: url("/browse/assets/formats/conan.svg");
+}
+
 .format-logo-apt {
   --format-color: #d70a53;
   --format-logo: url("/browse/assets/formats/apt.svg");

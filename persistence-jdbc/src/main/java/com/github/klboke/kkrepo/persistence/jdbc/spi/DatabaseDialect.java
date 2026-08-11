@@ -23,6 +23,8 @@ public interface DatabaseDialect {
 
   CondaPersistenceDialect conda();
 
+  ConanPersistenceDialect conan();
+
   /** Forward-only cursor fetch size suitable for this JDBC backend. */
   default int streamingFetchSize() {
     return conda().streamingFetchSize();

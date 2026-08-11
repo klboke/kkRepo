@@ -17,6 +17,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.OptionalLong;
 import java.util.UUID;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -37,6 +38,7 @@ public class SecurityScannerSnapshotRematchService {
   private final AssetDao assets;
   private final MaintenanceCursorDao cursors;
   private final SecurityScanningProperties properties;
+  private SecurityScanCandidateClassifier classifier;
 
   public SecurityScannerSnapshotRematchService(
       SecurityScanDao scans,
@@ -47,6 +49,11 @@ public class SecurityScannerSnapshotRematchService {
     this.assets = assets;
     this.cursors = cursors;
     this.properties = properties;
+  }
+
+  @Autowired(required = false)
+  void setCandidateClassifier(SecurityScanCandidateClassifier classifier) {
+    this.classifier = classifier;
   }
 
   @Transactional
@@ -108,6 +115,11 @@ public class SecurityScannerSnapshotRematchService {
       return false;
     }
     Instant now = Instant.now();
+    var identity = classifier == null
+        ? new SecurityScanCandidateClassifier.SubjectIdentity(
+            "sha256:" + content.blob().sha256(), java.util.Map.of(), true)
+        : classifier.subjectIdentity(content.asset(), content.blob());
+    if (!identity.complete()) return false;
     scans.markAssetStateStale(
         state.assetId(), state.profileId(), state.latestScanRunId(), now);
     String requestUuid = snapshotRequestUuid(state, profile, snapshot);
@@ -115,7 +127,7 @@ public class SecurityScannerSnapshotRematchService {
         content.asset().repositoryId(),
         state.assetId(),
         subjectKind(content.asset().format(), content.asset().kind()),
-        "sha256:" + content.blob().sha256(),
+        identity.key(),
         state.contentGeneration(),
         profile.id(),
         profile.revision(),
@@ -154,6 +166,9 @@ public class SecurityScannerSnapshotRematchService {
   }
 
   private static SubjectKind subjectKind(RepositoryFormat format, String kind) {
+    if (format == RepositoryFormat.CONAN) {
+      return SubjectKind.CONAN_PACKAGE;
+    }
     if (format == RepositoryFormat.CONDA) {
       return SubjectKind.CONDA_PACKAGE;
     }

@@ -35,6 +35,7 @@ import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.apt.AptRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.conda.CondaRepositoryDataMigrationWriter;
+import com.github.klboke.kkrepo.server.conan.ConanRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.docker.DockerManifestParser;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.pub.PubRepositoryDataMigrationWriter;
@@ -82,6 +83,7 @@ class RepositoryDataMigrationWriter {
   private final AnsibleGalaxyRepositoryDataMigrationWriter ansibleMigrationWriter;
   private CondaRepositoryDataMigrationWriter condaMigrationWriter;
   private AptRepositoryDataMigrationWriter aptMigrationWriter;
+  private ConanRepositoryDataMigrationWriter conanMigrationWriter;
   private final TransientTransactionRetry transactionRetry;
   private final MavenPathParser mavenPathParser = new MavenPathParser();
 
@@ -209,6 +211,11 @@ class RepositoryDataMigrationWriter {
     this.aptMigrationWriter = aptMigrationWriter;
   }
 
+  @Autowired(required = false)
+  void setConanMigrationWriter(ConanRepositoryDataMigrationWriter conanMigrationWriter) {
+    this.conanMigrationWriter = conanMigrationWriter;
+  }
+
   WriteResult write(long targetRepositoryId, RepositoryDataMigrationAssetRecord source, InputStream body,
       String responseContentType, boolean validateSize) {
     RepositoryRecord repository = repositoryDao.findById(targetRepositoryId)
@@ -270,6 +277,16 @@ class RepositoryDataMigrationWriter {
       }
       AptRepositoryDataMigrationWriter.MigratedAsset migrated = aptMigrationWriter.write(
           repository, source, body, validateSize);
+      return new WriteResult(
+          migrated.componentId(), migrated.assetId(), migrated.assetBlobId(),
+          migrated.assetBlobObjectKey());
+    }
+    if (repository.format() == RepositoryFormat.CONAN) {
+      if (conanMigrationWriter == null) {
+        throw new IllegalStateException("Conan migration writer is not configured");
+      }
+      ConanRepositoryDataMigrationWriter.MigratedAsset migrated = conanMigrationWriter.write(
+          repository, source, body, responseContentType, validateSize);
       return new WriteResult(
           migrated.componentId(), migrated.assetId(), migrated.assetBlobId(),
           migrated.assetBlobObjectKey());
@@ -913,6 +930,10 @@ class RepositoryDataMigrationWriter {
       case CONDA -> source.sourcePath().endsWith(".conda")
               || source.sourcePath().endsWith(".tar.bz2")
           ? "conda-package" : "conda-metadata";
+      case CONAN -> source.sourcePath().endsWith("conan_package.tgz")
+              || source.sourcePath().endsWith("conan_package.txz")
+              || source.sourcePath().endsWith("conan_package.tzst")
+          ? "conan-package" : "conan-revision-file";
       case APT -> source.sourcePath().endsWith(".deb") ? "apt-package" : "apt-metadata";
       case RAW -> "asset";
     };

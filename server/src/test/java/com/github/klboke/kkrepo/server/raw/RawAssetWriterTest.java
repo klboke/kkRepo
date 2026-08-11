@@ -221,6 +221,22 @@ class RawAssetWriterTest {
   }
 
   @Test
+  void writesHiddenProtocolStateWithoutCreatingAComponentOrBrowseNode() {
+    Fixture fixture = fixture();
+    stubUploadedBlob(fixture);
+    when(fixture.assetDao.findAssetByPath(1L, PATH)).thenReturn(Optional.empty());
+    when(fixture.assetDao.tryInsertAsset(any())).thenReturn(OptionalLong.of(11L));
+
+    RawAssetWriter.Stored stored = fixture.writer.writeHidden(
+        runtime(), fixture.storage, 1L, PATH,
+        new ByteArrayInputStream("body".getBytes(StandardCharsets.UTF_8)),
+        "text/plain", Map.of(), "conan", null, false);
+
+    assertEquals(null, stored.asset().componentId());
+    verifyNoInteractions(fixture.componentDao, fixture.browseNodeDao);
+  }
+
+  @Test
   void writesAssetAgainstAnExplicitLogicalComponent() {
     Fixture fixture = fixture();
     stubUploadedBlob(fixture);

@@ -21,6 +21,7 @@ public enum RepositoryFormat {
   SWIFT,
   ANSIBLEGALAXY,
   CONDA,
+  CONAN,
   APT,
   RAW;
 

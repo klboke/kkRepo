@@ -48,6 +48,7 @@ import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import org.springframework.http.HttpStatus;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -68,6 +69,7 @@ public class SecurityScanManagementService {
   private final SecurityScanDocumentPersistence documentPersistence;
   private final SecurityScanningProperties properties;
   private final SecurityScanRepositoryScope repositoryScope;
+  private SecurityScanCandidateClassifier classifier;
 
   public SecurityScanManagementService(
       SecurityScanDao scans,
@@ -86,6 +88,11 @@ public class SecurityScanManagementService {
     this.documentPersistence = documentPersistence;
     this.properties = properties;
     this.repositoryScope = repositoryScope;
+  }
+
+  @Autowired(required = false)
+  void setCandidateClassifier(SecurityScanCandidateClassifier classifier) {
+    this.classifier = classifier;
   }
 
   public Overview overview(AuthenticatedSubject actor) {
@@ -627,12 +634,19 @@ public class SecurityScanManagementService {
       return scans.findCandidate(assetId)
           .orElseThrow(() -> conflict("Unable to materialize scan candidate"));
     });
+    var identity = classifier == null
+        ? new SecurityScanCandidateClassifier.SubjectIdentity(
+            "sha256:" + content.blob().sha256(), Map.of(), true)
+        : classifier.subjectIdentity(content.asset(), content.blob());
+    if (!identity.complete()) {
+      throw conflict("Conan package scan identity is waiting for conaninfo.txt");
+    }
     String requestUuid = UUID.randomUUID().toString();
     return scans.createTask(new TaskDraft(
         content.asset().repositoryId(),
         assetId,
         subjectKind(content.asset()),
-        "sha256:" + content.blob().sha256(),
+        identity.key(),
         candidate.contentGeneration(),
         profile.id(),
         profile.revision(),
@@ -1229,6 +1243,9 @@ public class SecurityScanManagementService {
   }
 
   private static SubjectKind subjectKind(AssetRecord asset) {
+    if (asset.format() == com.github.klboke.kkrepo.core.RepositoryFormat.CONAN) {
+      return SubjectKind.CONAN_PACKAGE;
+    }
     if (asset.format() == com.github.klboke.kkrepo.core.RepositoryFormat.CONDA) {
       return SubjectKind.CONDA_PACKAGE;
     }

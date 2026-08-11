@@ -19,6 +19,7 @@ import com.github.klboke.kkrepo.protocol.pub.PubPathParser;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPath;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPathParser;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
+import com.github.klboke.kkrepo.server.conan.ConanAuthService;
 import com.github.klboke.kkrepo.server.npm.NpmTokenService;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -68,6 +69,12 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   private final TerraformRegistryDao terraformRegistryDao;
   private final ForwardedHeaderPolicy forwardedHeaderPolicy;
   private final NexusLegacyUiCompatibility legacyUi;
+  private ConanAuthService conanAuth;
+
+  @Autowired(required = false)
+  void setConanAuthService(ConanAuthService conanAuth) {
+    this.conanAuth = conanAuth;
+  }
 
   @Autowired
   public RepositorySecurityFilter(
@@ -161,7 +168,11 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       return;
     }
     Optional<AuthenticatedSubject> authenticated = terraformUrlToken == null
-        ? switch (repository.get().format()) {
+        ? repository.get().format() == RepositoryFormat.CONAN
+            && conanAuth != null
+            && conanAuth.hasConanBearer(request)
+            ? conanAuth.authenticate(request, repository.get().id())
+            : switch (repository.get().format()) {
       case CARGO -> authenticationService.authenticateCargo(request);
       case PUB -> authenticationService.authenticatePub(request);
       case RUBYGEMS -> authenticationService.authenticateRubygems(request);
@@ -176,6 +187,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       authenticated = !explicitCredential
               && target.readOnly(repository.get().format())
               && !isSwiftLogin(repository.get(), target)
+              && !isConanCredentialRoute(repository.get(), target)
           ? authenticationService.authenticateAnonymous()
           : Optional.empty();
       authenticatedAnonymously = authenticated.isPresent();
@@ -391,6 +403,9 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     if (format == RepositoryFormat.CONDA && "PUT".equalsIgnoreCase(method)) {
       return List.of(PermissionAction.ADD, PermissionAction.EDIT);
     }
+    if (format == RepositoryFormat.CONAN && "PUT".equalsIgnoreCase(method)) {
+      return List.of(PermissionAction.ADD, PermissionAction.EDIT);
+    }
     if (format == RepositoryFormat.APT && "PUT".equalsIgnoreCase(method)) {
       return List.of(PermissionAction.ADD, PermissionAction.EDIT);
     }
@@ -497,6 +512,10 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       response.setHeader(
           HttpHeaders.WWW_AUTHENTICATE,
           "Bearer realm=\"ansiblegalaxy\", Basic realm=\"kkrepo\"");
+    } else if (repository.format() == RepositoryFormat.CONAN) {
+      response.setHeader(
+          HttpHeaders.WWW_AUTHENTICATE,
+          "Bearer realm=\"Conan API\", Basic realm=\"kkrepo\"");
     } else {
       response.setHeader(HttpHeaders.WWW_AUTHENTICATE, "Basic realm=\"kkrepo\"");
     }
@@ -525,6 +544,13 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     return repository.format() == RepositoryFormat.SWIFT
         && "POST".equalsIgnoreCase(target.method())
         && "login".equals(target.path());
+  }
+
+  private static boolean isConanCredentialRoute(
+      RepositoryRecord repository, RepositoryRequest target) {
+    return repository.format() == RepositoryFormat.CONAN
+        && ("v2/users/authenticate".equals(target.path())
+            || "v2/users/check_credentials".equals(target.path()));
   }
 
   private static void swiftProblem(

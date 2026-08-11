@@ -6,11 +6,13 @@ import com.github.klboke.kkrepo.server.apt.AptService;
 import com.github.klboke.kkrepo.server.browse.BrowseContentDeleteController;
 import com.github.klboke.kkrepo.server.browse.RepositoryContentDeletionService;
 import com.github.klboke.kkrepo.server.browse.RepositoryContentDeletionService.CleanupDeleteSubject;
+import com.github.klboke.kkrepo.server.conan.ConanService;
 import com.github.klboke.kkrepo.server.docker.DockerManifestStore;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmHostedService;
 import java.util.List;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /** Dispatches cleanup subjects through the same application-level protocol deletion adapters. */
@@ -22,6 +24,7 @@ public class CleanupRepositoryContentDeletionService
   private final DockerManifestStore dockerManifests;
   private final NpmHostedService npmHosted;
   private final AptService aptService;
+  private ConanService conanService;
 
   public CleanupRepositoryContentDeletionService(
       BrowseContentDeleteController browseDeletion,
@@ -34,6 +37,11 @@ public class CleanupRepositoryContentDeletionService
     this.dockerManifests = dockerManifests;
     this.npmHosted = npmHosted;
     this.aptService = aptService;
+  }
+
+  @Autowired(required = false)
+  void setConanService(ConanService conanService) {
+    this.conanService = conanService;
   }
 
   @Override
@@ -50,6 +58,11 @@ public class CleanupRepositoryContentDeletionService
         && runtime.type() == RepositoryType.HOSTED
         && "COMPONENT".equals(subjectKind)) {
       return npmHosted.deleteTarballForCleanup(runtime, path, actorId);
+    }
+    if (runtime.format() == RepositoryFormat.CONAN
+        && conanService != null
+        && "COMPONENT".equals(subjectKind)) {
+      return conanService.deleteComponentForCleanup(runtime, subjectId, actorId);
     }
     if (runtime.format() != RepositoryFormat.DOCKER) {
       return browseDeletion.deleteForCleanup(
@@ -86,6 +99,14 @@ public class CleanupRepositoryContentDeletionService
           runtime,
           subjects.stream().map(CleanupDeleteSubject::subjectId).toList(),
           "cleanup policy delete by " + actorId);
+    }
+    if (runtime.format() == RepositoryFormat.CONAN
+        && conanService != null
+        && subjects.stream().allMatch(subject -> "COMPONENT".equals(subject.subjectKind()))) {
+      return subjects.stream()
+          .map(subject -> conanService.deleteComponentForCleanup(
+              runtime, subject.subjectId(), actorId))
+          .toList();
     }
     return RepositoryContentDeletionService.super.deleteBatchForCleanup(
         repository, subjects, actorId);

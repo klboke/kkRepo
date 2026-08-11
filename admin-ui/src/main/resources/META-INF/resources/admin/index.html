@@ -6,7 +6,7 @@
     <title>kkrepo administration</title>
     <link rel="icon" type="image/svg+xml" href="/admin/assets/favicon.svg?v=20260609-kl-logo-1">
     <link rel="stylesheet" href="/browse/assets/tokens.css?v=20260724-visual-upgrade-1">
-    <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20260808-apt-1">
+    <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20260811-conan-1">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20260728-security-advisory-link-1">
     <link rel="stylesheet" href="./assets/admin.css?v=20260805-cleanup-policy-31">
   </head>
@@ -305,6 +305,21 @@
                 <input id="repository-cargo-require-authentication" type="checkbox">
                 <span>Authentication requirements</span>
               </label>
+            </fieldset>
+            <fieldset class="form-grid" id="repository-conan-fields" hidden>
+              <legend>Conan 2 status</legend>
+              <p class="form-note full-width">
+                Conan 2 revisions are committed when <code>conanmanifest.txt</code> arrives.
+                Recipe/package identities, latest pointers, Browse nodes, and the change outbox
+                are published in one database transaction. Enable the Conan bearer token realm
+                for authenticated Conan CLI login.
+              </p>
+              <div class="full-width" id="repository-conan-operations" hidden>
+                <div class="muted-row" id="repository-conan-status">Conan status not loaded.</div>
+                <div class="form-actions">
+                  <button class="create-button secondary" id="repository-conan-refresh-status" type="button">Refresh status</button>
+                </div>
+              </div>
             </fieldset>
             <fieldset class="form-grid" id="repository-apt-fields" hidden>
               <legend>APT / Debian settings</legend>

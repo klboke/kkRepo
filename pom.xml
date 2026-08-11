@@ -27,6 +27,7 @@
     <module>protocol-swift</module>
     <module>protocol-ansible</module>
     <module>protocol-conda</module>
+    <module>protocol-conan</module>
     <module>protocol-apt</module>
     <module>protocol-go</module>
     <module>protocol-helm</module>
@@ -227,6 +228,11 @@
       <dependency>
         <groupId>com.github.klboke</groupId>
         <artifactId>kkrepo-protocol-conda</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.github.klboke</groupId>
+        <artifactId>kkrepo-protocol-conan</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
