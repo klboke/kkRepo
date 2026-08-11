@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -62,6 +63,23 @@ class InMemorySharedCacheTest {
     assertFalse(cache.getString("ns", "repo/two").isPresent());
     assertEquals("3", cache.getString("ns", "other").orElseThrow());
     assertEquals("4", cache.getString("other", "repo/one").orElseThrow());
+  }
+
+  @Test
+  void evictByPrefixRecordsTheNumberOfDeletedKeys() {
+    SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
+    InMemorySharedCache meteredCache =
+        new InMemorySharedCache(new ObjectMapper(), 100, meterRegistry, clock);
+    meteredCache.putString("ns", "repo/one", "1", Duration.ZERO);
+    meteredCache.putString("ns", "repo/two", "2", Duration.ZERO);
+    meteredCache.putString("ns", "other", "3", Duration.ZERO);
+
+    meteredCache.evictByPrefix("ns", "repo/");
+
+    assertEquals(2.0, meterRegistry.get("kkrepo_cache_scan_deleted_keys_total")
+        .tag("namespace", "ns")
+        .counter()
+        .count());
   }
 
   @Test
