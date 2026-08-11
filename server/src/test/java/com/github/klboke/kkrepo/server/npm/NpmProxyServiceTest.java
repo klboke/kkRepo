@@ -13,6 +13,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.support.dao.ProxyStateDaoAdapter;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayDeque;
@@ -20,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class NpmProxyServiceTest {
@@ -41,6 +43,21 @@ class NpmProxyServiceTest {
     assertEquals(HttpRemoteFetcher.TimeoutProfile.SEARCH, fetcher.request.timeoutProfile());
     assertEquals(1, proxyState.successCount);
     assertEquals(0, proxyState.failureCount);
+  }
+
+  @Test
+  void httpRegistryRequestUsesSharedSameHostRedirectPolicyWithoutAllowlist() {
+    SequencedFetcher fetcher = new SequencedFetcher(result("""
+        {"objects":[],"total":0,"time":"0ms"}
+        """));
+    NpmProxyService service = service(fetcher, new RecordingProxyStateDao());
+
+    service.search(runtime("http://mirrors.tencent.com/npm/"), "vueuse", 20);
+
+    assertEquals("http", URI.create(fetcher.request.url()).getScheme());
+    assertEquals("mirrors.tencent.com", fetcher.request.trustedHost());
+    assertEquals(Set.of(), fetcher.request.allowedUnsignedRedirectHosts());
+    assertEquals("NPM", fetcher.request.format());
   }
 
   @Test
@@ -73,6 +90,10 @@ class NpmProxyServiceTest {
   }
 
   private static RepositoryRuntime runtime() {
+    return runtime(REMOTE);
+  }
+
+  private static RepositoryRuntime runtime(String remoteUrl) {
     return new RepositoryRuntime(
         10,
         "npm-proxy",
@@ -85,7 +106,7 @@ class NpmProxyServiceTest {
         "MIXED",
         "PERMISSIVE",
         true,
-        REMOTE,
+        remoteUrl,
         1440,
         1440,
         true, null, List.of());

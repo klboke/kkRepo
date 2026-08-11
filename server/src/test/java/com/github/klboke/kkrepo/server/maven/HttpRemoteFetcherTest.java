@@ -37,6 +37,9 @@ import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
 import com.github.klboke.kkrepo.server.security.SecurityValidationException;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class HttpRemoteFetcherTest {
 
@@ -205,6 +208,22 @@ class HttpRemoteFetcherTest {
     assertNotNull(sameOrigin.authorizationHeader());
   }
 
+  @ParameterizedTest(name = "configured HTTP remote {0} trusts upgraded request {1}")
+  @CsvSource({
+      "http://repo.example.com/maven2, https://repo.example.com/maven2/app.jar",
+      "http://repo.example.com:80/maven2, https://repo.example.com:443/maven2/app.jar",
+      "http://repo.example.com:8080/maven2, https://repo.example.com:8080/maven2/app.jar"
+  })
+  void remoteAuthorizationRecognizesSafeSameHostHttpToHttpsUpgrade(
+      String remoteUrl, String requestUrl) {
+    HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request
+        .get(requestUrl)
+        .withRepository(runtime(remoteUrl, "robot", "secret", null));
+
+    assertEquals("repo.example.com", request.trustedHost());
+    assertNotNull(request.authorizationHeader());
+  }
+
   @Test
   void redirectAuthorizationRequiresSameOrigin() {
     HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request
@@ -224,7 +243,7 @@ class HttpRemoteFetcherTest {
   }
 
   @Test
-  void redirectAuthorizationAllowsSameHostHttpToHttpsUpgrade() {
+  void credentiallessRepositoryRequestAllowsSameHostHttpToHttpsUpgrade() {
     HttpRemoteFetcher.Request credentialless = HttpRemoteFetcher.Request
         .get("http://repo.example.com/maven2/com/example/app.jar")
         .withRepository(runtime("http://repo.example.com/maven2", null, null, null));
@@ -234,32 +253,65 @@ class HttpRemoteFetcherTest {
     assertNull(credentialless.authorizationHeader());
     assertNull(credentialless.authorizationHeaderForRedirect(defaultCurrent, defaultUpgrade));
     assertEquals("repo.example.com", credentialless.trustedHostForRedirect(defaultCurrent, defaultUpgrade));
-
-    HttpRemoteFetcher.Request defaultPorts = HttpRemoteFetcher.Request
-        .get("http://repo.example.com/maven2/com/example/app.jar")
-        .withRepository(runtime("http://repo.example.com/maven2", "robot", "secret", null));
-
-    assertEquals(
-        defaultPorts.authorizationHeader(),
-        defaultPorts.authorizationHeaderForRedirect(defaultCurrent, defaultUpgrade));
-    assertEquals("repo.example.com", defaultPorts.trustedHostForRedirect(defaultCurrent, defaultUpgrade));
-
-    HttpRemoteFetcher.Request sameExplicitPort = HttpRemoteFetcher.Request
-        .get("http://repo.example.com:8080/maven2/com/example/app.jar")
-        .withRepository(runtime("http://repo.example.com:8080/maven2", "robot", "secret", null));
-    URI explicitCurrent = URI.create("http://repo.example.com:8080/maven2/com/example/app.jar");
-    assertEquals(
-        sameExplicitPort.authorizationHeader(),
-        sameExplicitPort.authorizationHeaderForRedirect(
-            explicitCurrent, URI.create("https://repo.example.com:8080/maven2/redirect.jar")));
-    assertThrows(
-        SecurityValidationException.class,
-        () -> sameExplicitPort.authorizationHeaderForRedirect(
-            explicitCurrent, URI.create("https://repo.example.com/maven2/redirect.jar")));
   }
 
-  @Test
-  void fetchFollowsSameHostHttpToHttpsUpgradeAndPreservesAuthorization() throws Exception {
+  @ParameterizedTest(name = "safe upgrade {0} -> {1}")
+  @CsvSource({
+      "http://repo.example.com/artifact.jar, https://repo.example.com/artifact.jar",
+      "http://repo.example.com:80/artifact.jar, https://repo.example.com:443/artifact.jar",
+      "http://repo.example.com:80/artifact.jar, https://repo.example.com/artifact.jar",
+      "http://repo.example.com/artifact.jar, https://repo.example.com:443/artifact.jar",
+      "http://repo.example.com:8080/artifact.jar, https://repo.example.com:8080/artifact.jar",
+      "http://repo.example.com:443/artifact.jar, https://repo.example.com/artifact.jar",
+      "http://repo.example.com/artifact.jar, https://repo.example.com:80/artifact.jar",
+      "http://REPO.example.com/artifact.jar, https://repo.EXAMPLE.com/artifact.jar"
+  })
+  void redirectAuthorizationAllowsSafeSameHostHttpToHttpsUpgrade(
+      String currentUrl, String redirectedUrl) {
+    HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request
+        .get(currentUrl)
+        .withRepository(runtime(currentUrl, "robot", "secret", null));
+    URI current = URI.create(currentUrl);
+    URI redirected = URI.create(redirectedUrl);
+
+    assertNotNull(request.authorizationHeader());
+    assertEquals(
+        request.authorizationHeader(),
+        request.authorizationHeaderForRedirect(current, redirected));
+    assertEquals("repo.example.com", request.trustedHostForRedirect(current, redirected));
+  }
+
+  @ParameterizedTest(name = "unsafe redirect {0} -> {1}")
+  @CsvSource({
+      "https://repo.example.com/artifact.jar, http://repo.example.com/artifact.jar",
+      "http://repo.example.com/artifact.jar, https://cdn.example.com/artifact.jar",
+      "http://repo.example.com:8080/artifact.jar, https://repo.example.com/artifact.jar",
+      "http://repo.example.com/artifact.jar, https://repo.example.com:8443/artifact.jar",
+      "http://repo.example.com:8080/artifact.jar, https://repo.example.com:8443/artifact.jar",
+      "https://repo.example.com/artifact.jar, https://repo.example.com:8443/artifact.jar",
+      "http://repo.example.com/artifact.jar, ftp://repo.example.com/artifact.jar"
+  })
+  void redirectAuthorizationRejectsDowngradesCrossHostAndPortChanges(
+      String currentUrl, String redirectedUrl) {
+    HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request
+        .get(currentUrl)
+        .withRepository(runtime(currentUrl, "robot", "secret", null));
+    URI current = URI.create(currentUrl);
+    URI redirected = URI.create(redirectedUrl);
+
+    assertNotNull(request.authorizationHeader());
+    assertThrows(
+        SecurityValidationException.class,
+        () -> request.authorizationHeaderForRedirect(current, redirected));
+    assertThrows(
+        SecurityValidationException.class,
+        () -> request.trustedHostForRedirect(current, redirected));
+  }
+
+  @ParameterizedTest(name = "HTTP {0} follows same-host HTTPS upgrade")
+  @ValueSource(ints = {301, 302, 303, 307, 308})
+  void fetchFollowsSameHostHttpToHttpsUpgradeAndPreservesAuthorization(int redirectStatus)
+      throws Exception {
     ProxiedHttpClientFactory transport = mock(ProxiedHttpClientFactory.class);
     List<URI> targets = new ArrayList<>();
     List<String> authorizations = new ArrayList<>();
@@ -276,7 +328,7 @@ class HttpRemoteFetcherTest {
           authorizations.add(headers.get("Authorization"));
           if ("http".equalsIgnoreCase(target.uri().getScheme())) {
             return response(
-                302,
+                redirectStatus,
                 Map.of("Location", "https://localhost/artifact.jar"),
                 "");
           }
@@ -297,6 +349,57 @@ class HttpRemoteFetcherTest {
     assertEquals(List.of("http", "https"),
         targets.stream().map(URI::getScheme).toList());
     assertEquals(List.of(request.authorizationHeader(), request.authorizationHeader()), authorizations);
+  }
+
+  @Test
+  void fetchPreservesAuthorizationAcrossUpgradeAndSubsequentSameOriginRedirect() throws Exception {
+    ProxiedHttpClientFactory transport = mock(ProxiedHttpClientFactory.class);
+    List<URI> targets = new ArrayList<>();
+    List<String> authorizations = new ArrayList<>();
+    when(transport.execute(
+        anyString(),
+        nullable(OutboundProxyConfig.class),
+        eq("GET"),
+        any(OutboundRequestPolicy.ResolvedHttpTarget.class),
+        anyMap(),
+        anyLong())).thenAnswer(invocation -> {
+          OutboundRequestPolicy.ResolvedHttpTarget target = invocation.getArgument(3);
+          Map<String, String> headers = invocation.getArgument(4);
+          URI uri = target.uri();
+          targets.add(uri);
+          authorizations.add(headers.get("Authorization"));
+          if ("http".equalsIgnoreCase(uri.getScheme())) {
+            return response(301, Map.of("Location", "https://localhost/secure/artifact.jar"), "");
+          }
+          if ("/secure/artifact.jar".equals(uri.getPath())) {
+            return response(307, Map.of("Location", "/cdn/artifact.jar"), "");
+          }
+          return response(200, Map.of(), "redirected");
+        });
+    HttpRemoteFetcher fetcher = new HttpRemoteFetcher(
+        OutboundRequestPolicy.allowPrivateForTests(), null, transport,
+        "HTTP_1_1", 30, 60, 300, 3, 1);
+    HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request
+        .get("http://localhost/artifact.jar")
+        .withRepository(runtime("http://localhost", "robot", "secret", null));
+
+    try (HttpRemoteFetcher.Result result = fetcher.fetch(request)) {
+      assertEquals(200, result.status());
+      assertEquals("redirected", new String(result.body().readAllBytes(), StandardCharsets.UTF_8));
+    }
+
+    assertEquals(
+        List.of(
+            URI.create("http://localhost/artifact.jar"),
+            URI.create("https://localhost/secure/artifact.jar"),
+            URI.create("https://localhost/cdn/artifact.jar")),
+        targets);
+    assertEquals(
+        List.of(
+            request.authorizationHeader(),
+            request.authorizationHeader(),
+            request.authorizationHeader()),
+        authorizations);
   }
 
   @Test
