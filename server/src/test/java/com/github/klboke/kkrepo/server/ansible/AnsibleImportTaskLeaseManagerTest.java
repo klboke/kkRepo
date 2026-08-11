@@ -16,9 +16,13 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.LockSupport;
 import org.junit.jupiter.api.Test;
 
 class AnsibleImportTaskLeaseManagerTest {
+  private static final Duration ASYNC_ASSERTION_TIMEOUT = Duration.ofSeconds(5);
+  private static final Duration ASYNC_ASSERTION_POLL_INTERVAL = Duration.ofMillis(1);
+
   @Test
   void renewsTheFencedTaskLeaseUntilClosed() throws Exception {
     AnsibleGalaxyRegistryDao registry = mock(AnsibleGalaxyRegistryDao.class);
@@ -42,20 +46,15 @@ class AnsibleImportTaskLeaseManagerTest {
   }
 
   @Test
-  void rejectsCompletionAfterTheFencingLeaseIsLost() throws Exception {
+  void rejectsCompletionAfterTheFencingLeaseIsLost() {
     AnsibleGalaxyRegistryDao registry = mock(AnsibleGalaxyRegistryDao.class);
-    CountDownLatch attempted = new CountDownLatch(1);
     when(registry.renewTaskLease(eq("task"), eq("owner"), eq(7L), any()))
-        .thenAnswer(invocation -> {
-          attempted.countDown();
-          return false;
-        });
+        .thenReturn(false);
     AnsibleImportTaskLeaseManager manager = new AnsibleImportTaskLeaseManager(registry);
 
     try (AnsibleImportTaskLeaseManager.Lease lease = manager.monitor(
-        task(Instant.now().plusSeconds(1)), Duration.ofMillis(90))) {
-      assertTrue(attempted.await(1, TimeUnit.SECONDS));
-      assertThrows(AnsibleGalaxyExceptions.ServiceUnavailable.class, lease::assertHeld);
+        task(Instant.now().plus(Duration.ofMinutes(1))), Duration.ofMillis(90))) {
+      assertEventuallyLeaseLost(lease);
     }
   }
 
@@ -90,6 +89,20 @@ class AnsibleImportTaskLeaseManagerTest {
 
     assertThrows(IllegalArgumentException.class,
         () -> manager.monitor(unclaimed, Duration.ofMinutes(5)));
+  }
+
+  private static void assertEventuallyLeaseLost(AnsibleImportTaskLeaseManager.Lease lease) {
+    long deadline = System.nanoTime() + ASYNC_ASSERTION_TIMEOUT.toNanos();
+    do {
+      try {
+        lease.assertHeld();
+      } catch (AnsibleGalaxyExceptions.ServiceUnavailable expected) {
+        return;
+      }
+      LockSupport.parkNanos(ASYNC_ASSERTION_POLL_INTERVAL.toNanos());
+    } while (System.nanoTime() < deadline);
+
+    assertThrows(AnsibleGalaxyExceptions.ServiceUnavailable.class, lease::assertHeld);
   }
 
   private static AnsibleGalaxyRegistryDao.ImportTask task(Instant expiresAt) {
