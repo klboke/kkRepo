@@ -225,6 +225,16 @@ class HttpRemoteFetcherTest {
   }
 
   @Test
+  void relativeRemoteRequestDoesNotReceiveRepositoryTrustOrCredentials() {
+    HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request
+        .get("/maven2/com/example/app.jar")
+        .withRepository(runtime("https://repo.example.com/maven2", "robot", "secret", null));
+
+    assertNull(request.trustedHost());
+    assertNull(request.authorizationHeader());
+  }
+
+  @Test
   void redirectAuthorizationRequiresSameOrigin() {
     HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request
         .get("https://repo.example.com/maven2/com/example/app.jar")
