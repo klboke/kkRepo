@@ -528,15 +528,28 @@ public class HttpRemoteFetcher {
     }
 
     private static boolean sameOrigin(URI a, URI b) {
-      return a != null
-          && b != null
-          && a.getScheme() != null
-          && b.getScheme() != null
-          && a.getHost() != null
-          && b.getHost() != null
-          && a.getScheme().equalsIgnoreCase(b.getScheme())
-          && a.getHost().equalsIgnoreCase(b.getHost())
-          && effectivePort(a) == effectivePort(b);
+      if (a == null || b == null
+          || a.getScheme() == null || b.getScheme() == null
+          || a.getHost() == null || b.getHost() == null) {
+        return false;
+      }
+      if (!a.getHost().equalsIgnoreCase(b.getHost())) {
+        return false;
+      }
+      if (a.getScheme().equalsIgnoreCase(b.getScheme())) {
+        return effectivePort(a) == effectivePort(b);
+      }
+      return isHttpToHttpsUpgrade(a, b);
+    }
+
+    private static boolean isHttpToHttpsUpgrade(URI from, URI to) {
+      if (!"http".equalsIgnoreCase(from.getScheme())
+          || !"https".equalsIgnoreCase(to.getScheme())) {
+        return false;
+      }
+      int fromPort = effectivePort(from);
+      int toPort = effectivePort(to);
+      return (fromPort == 80 && toPort == 443) || fromPort == toPort;
     }
 
     private static int effectivePort(URI uri) {

@@ -5,6 +5,14 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.io.ByteArrayInputStream;
 import java.io.EOFException;
@@ -16,6 +24,7 @@ import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
@@ -23,6 +32,8 @@ import java.util.Queue;
 import java.util.Set;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
+import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
 import com.github.klboke.kkrepo.server.security.SecurityValidationException;
 import org.junit.jupiter.api.Test;
@@ -213,6 +224,82 @@ class HttpRemoteFetcherTest {
   }
 
   @Test
+  void redirectAuthorizationAllowsSameHostHttpToHttpsUpgrade() {
+    HttpRemoteFetcher.Request credentialless = HttpRemoteFetcher.Request
+        .get("http://repo.example.com/maven2/com/example/app.jar")
+        .withRepository(runtime("http://repo.example.com/maven2", null, null, null));
+    URI defaultCurrent = URI.create("http://repo.example.com/maven2/com/example/app.jar");
+    URI defaultUpgrade = URI.create("https://repo.example.com/maven2/redirect.jar");
+
+    assertNull(credentialless.authorizationHeader());
+    assertNull(credentialless.authorizationHeaderForRedirect(defaultCurrent, defaultUpgrade));
+    assertEquals("repo.example.com", credentialless.trustedHostForRedirect(defaultCurrent, defaultUpgrade));
+
+    HttpRemoteFetcher.Request defaultPorts = HttpRemoteFetcher.Request
+        .get("http://repo.example.com/maven2/com/example/app.jar")
+        .withRepository(runtime("http://repo.example.com/maven2", "robot", "secret", null));
+
+    assertEquals(
+        defaultPorts.authorizationHeader(),
+        defaultPorts.authorizationHeaderForRedirect(defaultCurrent, defaultUpgrade));
+    assertEquals("repo.example.com", defaultPorts.trustedHostForRedirect(defaultCurrent, defaultUpgrade));
+
+    HttpRemoteFetcher.Request sameExplicitPort = HttpRemoteFetcher.Request
+        .get("http://repo.example.com:8080/maven2/com/example/app.jar")
+        .withRepository(runtime("http://repo.example.com:8080/maven2", "robot", "secret", null));
+    URI explicitCurrent = URI.create("http://repo.example.com:8080/maven2/com/example/app.jar");
+    assertEquals(
+        sameExplicitPort.authorizationHeader(),
+        sameExplicitPort.authorizationHeaderForRedirect(
+            explicitCurrent, URI.create("https://repo.example.com:8080/maven2/redirect.jar")));
+    assertThrows(
+        SecurityValidationException.class,
+        () -> sameExplicitPort.authorizationHeaderForRedirect(
+            explicitCurrent, URI.create("https://repo.example.com/maven2/redirect.jar")));
+  }
+
+  @Test
+  void fetchFollowsSameHostHttpToHttpsUpgradeAndPreservesAuthorization() throws Exception {
+    ProxiedHttpClientFactory transport = mock(ProxiedHttpClientFactory.class);
+    List<URI> targets = new ArrayList<>();
+    List<String> authorizations = new ArrayList<>();
+    when(transport.execute(
+        anyString(),
+        nullable(OutboundProxyConfig.class),
+        eq("GET"),
+        any(OutboundRequestPolicy.ResolvedHttpTarget.class),
+        anyMap(),
+        anyLong())).thenAnswer(invocation -> {
+          OutboundRequestPolicy.ResolvedHttpTarget target = invocation.getArgument(3);
+          Map<String, String> headers = invocation.getArgument(4);
+          targets.add(target.uri());
+          authorizations.add(headers.get("Authorization"));
+          if ("http".equalsIgnoreCase(target.uri().getScheme())) {
+            return response(
+                302,
+                Map.of("Location", "https://localhost/artifact.jar"),
+                "");
+          }
+          return response(200, Map.of(), "upgraded");
+        });
+    HttpRemoteFetcher fetcher = new HttpRemoteFetcher(
+        OutboundRequestPolicy.allowPrivateForTests(), null, transport,
+        "HTTP_1_1", 30, 60, 300, 2, 1);
+    HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request
+        .get("http://localhost/artifact.jar")
+        .withRepository(runtime("http://localhost", "robot", "secret", null));
+
+    try (HttpRemoteFetcher.Result result = fetcher.fetch(request)) {
+      assertEquals(200, result.status());
+      assertEquals("upgraded", new String(result.body().readAllBytes(), StandardCharsets.UTF_8));
+    }
+
+    assertEquals(List.of("http", "https"),
+        targets.stream().map(URI::getScheme).toList());
+    assertEquals(List.of(request.authorizationHeader(), request.authorizationHeader()), authorizations);
+  }
+
+  @Test
   void requestWithRepositoryAddsBasicRemoteAuthorizationWhenConfigured() {
     RepositoryRuntime runtime = runtime("robot", "secret", null);
 
@@ -391,7 +478,31 @@ class HttpRemoteFetcherTest {
         new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)));
   }
 
+  private static ProxiedHttpClientFactory.ProxiedResponse response(
+      int status, Map<String, String> headers, String body) throws IOException {
+    ProxiedHttpClientFactory.ProxiedResponse response =
+        mock(ProxiedHttpClientFactory.ProxiedResponse.class);
+    when(response.status()).thenReturn(status);
+    when(response.headers()).thenReturn(headers);
+    when(response.header(anyString())).thenAnswer(invocation -> {
+      String name = invocation.getArgument(0);
+      return headers.entrySet().stream()
+          .filter(entry -> entry.getKey().equalsIgnoreCase(name))
+          .map(Map.Entry::getValue)
+          .findFirst()
+          .orElse(null);
+    });
+    when(response.body()).thenAnswer(ignored ->
+        new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)));
+    return response;
+  }
+
   private static RepositoryRuntime runtime(String username, String password, String bearerToken) {
+    return runtime("https://repo.example.com/maven2", username, password, bearerToken);
+  }
+
+  private static RepositoryRuntime runtime(
+      String remoteUrl, String username, String password, String bearerToken) {
     return new RepositoryRuntime(
         1,
         "maven-proxy",
@@ -404,7 +515,7 @@ class HttpRemoteFetcherTest {
         "RELEASE",
         "STRICT",
         true,
-        "https://repo.example.com/maven2",
+        remoteUrl,
         1440,
         1440,
         null,
