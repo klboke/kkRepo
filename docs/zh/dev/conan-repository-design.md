@@ -42,6 +42,7 @@ Nexus 兼容结论：
 - Nexus hosted 可以承载 Conan 1 或 Conan 2，而 proxy 创建时显式选择版本且之后不能修改。迁移 hosted 数据时必须通过 source version 和 content shape 判断代际，不能只看 `format=conan`。
 - Nexus UI/Search 会从 `conaninfo.txt` 投影 settings 字段。kkrepo 需要保存有界、可检索投影，但不能把任意 `conaninfo.txt` 内容变成无界 JSON 查询。
 - Nexus 文档展示了 hosted/proxy/group 的客户端使用方式，但没有固定全部 v2 status、header、错误正文、latest 冲突、group 重复坐标和 checksum deploy 行为；这些都属于 compat-test 的参考实例事实。
+- 2026-08-11 使用官方 Nexus 3.94.0 image 与 Conan 2.31.2 客户端实测了 hosted 上传、Search asset path 和 Repository Browse API。Browse 的展示路径与协议/storage path 不同，具体形状在本文 Browse 章节固定；实现前仍需把同一探针纳入 M0，防止参考版本升级后静默漂移。
 
 ## 功能范围
 
@@ -177,12 +178,12 @@ Conan upload 没有独立 commit endpoint，因此必须利用官方客户端的
 4. session 由 `repository + RREV/PREV coordinate + actor` 标识；coordinate lease 和 fencing token 防止两个副本把不同文件集合提交到同一 revision。
 5. 普通文件 PUT 只更新 staging。`conanmanifest.txt` PUT 到达后，解析有界 manifest，要求其声明的全部文件已经存在，逐项核对 SHA-1、路径、重复项和允许的文件集合。
 6. Package commit 额外要求 parent RREV 已提交，并解析 `conaninfo.txt`；验证 package ID、常用 settings 投影、archive 表示和 manifest 的一致性。
-7. 在一个短事务内锁定 lease、复查 write policy/目标 revision/Blob binding，创建或复用 component，提交 RREV/PREV/file projection 与最终 asset，更新 latest、repository revision，并由通用 Asset DAO 同事务追加 `artifact_change_event`。
+7. 在一个短事务内锁定 lease、复查 write policy/目标 revision/Blob binding，创建或复用 component，提交 RREV/PREV/file projection、最终 asset 和 Nexus 对齐的 `browse_node` 路径，更新 latest、repository revision，并由通用 Asset DAO 同事务追加 `artifact_change_event`。任一 Browse path 计算、唯一约束或写入失败都回滚整个发布，revision 不能先可见再等待补映射。
 8. 提交后解除 staging Blob 引用。失败、超时或节点退出由所有副本可运行的有界 cleanup 按 `expires_at` + fencing 领取；只有最后一个引用消失后 Blob 才进入全局 GC。
 
 Revision 的 file-list、latest、search、Browse 和下载都只读取 `COMMITTED` 投影；staging 永远不可见。Manifest commit 失败时，客户端可以安全重传缺失文件，不产生“列表可见但 archive 404”的半成品。
 
-Metadata 文件不改变 RREV/PREV。它们在 parent revision 已提交后通过独立短事务更新，保留审计与 Blob 引用，并推进 repository revision 使 group/cache 失效；metadata 不触发 latest 更新，也不作为 Cleanup 独立 subject。
+Metadata 文件不改变 RREV/PREV。它们在 parent revision 已提交后通过独立短事务更新，同时写入对应 `browse_node` asset leaf、保留审计与 Blob 引用，并推进 repository revision 使 group/cache 失效；metadata 不触发 latest 更新，也不作为 Cleanup 独立 subject。Browse 写入失败时 metadata 事务同样整体回滚。
 
 ## Archive 与内容安全
 
@@ -240,6 +241,7 @@ Group 的 search/list 聚合与文件读取必须共享 source decision：
 | `conan_coordinate_lease` | `PRIMARY KEY(repository_id,coordinate_hash)`；`idx_conan_lease_expiry(expires_at)` | publish/proxy fill fencing |
 | `conan_group_binding` | `UNIQUE(group_repository_id,binding_kind,coordinate_hash)`；`idx_conan_group_member(member_repository_id,member_revision,id)`；`idx_conan_group_expiry(expires_at,id)` | group resolve、member 失效 |
 | `conan_auth_token` | `PRIMARY KEY(token_hash)`；`idx_conan_token_expiry(expires_at,id)`；`idx_conan_token_subject(subject_source,subject_user_id,id)` | bearer auth、bounded cleanup/revoke |
+| 共享 `browse_node` | `UNIQUE(repository_id,path_hash)`；`UNIQUE(asset_id)`；`idx_browse_node_parent(parent_id)`；`idx_browse_node_root(repository_id,depth,path_hash)` | root/child Browse、asset/component 定位 |
 
 `coordinate_hash`、`rrev_hash`、`prev_hash` 和 `path_hash` 只用于控制索引宽度。发生 hash 命中后必须比较原始 canonical 字段，不能把理论碰撞当作同一对象。
 
@@ -249,6 +251,7 @@ Group 的 search/list 聚合与文件读取必须共享 source decision：
 - exact coordinate 必须从 repository + hash/normalized key 进入唯一索引；禁止从 asset path 做 `%...%` 扫描恢复 identity。
 - package settings 查询先锁定 exact RREV，再使用以 `recipe_revision_id` 为首列的索引；自定义 settings 只能在有界候选页内解析，不能对全表 JSON 做无索引 predicate。
 - 批量 file、asset、usage 和 scan state 查询按 ID 分批，避免 N+1 和超大 `IN`；默认 batch 上限 500，可配置但有硬上限。
+- Browse 必须从 `repository_id + depth` 或 `parent_id` 索引进入，exact path 先以 `repository_id + path_hash` 定位并复核原始 path；禁止按 path 前缀扫描 `asset`/Conan 表，也禁止在请求线程临时遍历 RREV/PREV 拼树。
 - claim/takeover 使用数据库时间、短事务、`FOR UPDATE SKIP LOCKED` 与 fencing token。旧 owner 的 commit/heartbeat 必须因 token 不匹配失败。
 - migration 上线前对 MySQL/PostgreSQL 保存关键 SQL 的 `EXPLAIN ANALYZE`；选择性查询不得出现全表扫描，扫描行数必须与 page/batch/result 上限同阶。
 
@@ -326,20 +329,44 @@ inputSchema        = conan-package-v1
 
 ## Browse、Search、Components API 与运维
 
-Browse 逻辑层级：
+### Nexus 对齐的 Browse 展示路径
+
+Nexus 3.94.0 在真实 Conan 2.31.2 hosted 上传后的 Repository Browse API 中使用以下展示层级：
 
 ```text
-user/channel
-  -> name
-    -> version
-      -> RREV
-        -> recipe files
-        -> package ID
-          -> PREV
-            -> package files
+{user 或 _}/{name}/{version}/{channel 或 _}#{rrev}
+  ├── {recipeFile}
+  └── packages/{packageId}/revisions/{prev}/files/{packageFile}
 ```
 
-缺省 user/channel 在 UI 显示为清晰的“default”，不能暴露内部 `_/_` 造成误解。Search 至少支持 format、name、version、user、channel、RREV、package ID、PREV、os、arch、compiler、compiler version、build type、checksum 和 source repository。
+例如 `browseprobe/1.2.3@acme/stable` 的 recipe 文件展示为：
+
+```text
+acme/browseprobe/1.2.3/stable#{rrev}/conanfile.py
+acme/browseprobe/1.2.3/stable#{rrev}/packages/{packageId}/revisions/{prev}/files/conan_package.tgz
+```
+
+缺省 user/channel 按 Nexus 保留 `_` 占位，因此 `defaultprobe/0.4` 展示为 `_/defaultprobe/0.4/_#{rrev}/...`。UI 可以在详情中解释 `_` 表示缺省值，但 path segment、面包屑、复制路径和 Browse API `id` 不替换成自创的 `default`。`#` 在数据库 canonical path 中保留原字符，在 URL/query 中正常 percent-encode。
+
+这与 Nexus Search Assets 返回的 storage path 是两个明确投影；后者保持协议形状：
+
+```text
+/conans/{name}/{version}/{user 或 _}/{channel 或 _}/revisions/{rrev}/files/{recipeFile}
+/conans/{name}/{version}/{user 或 _}/{channel 或 _}/revisions/{rrev}/packages/{packageId}/revisions/{prev}/files/{packageFile}
+```
+
+metadata 的子路径、排序、component/asset node type 与 group 重复坐标继续由 M0 fixture 固定；除已记录的产品或安全差异外，kkrepo 的展示 segment 和层级以 Nexus 当前结果为准。
+
+### 写入时投影，不做事后猜测
+
+- `ConanBrowsePathProjector` 是 `protocol-conan` 内的纯函数，只接受已经通过 parser 校验的 canonical reference、RREV/PREV、owner kind 和 relative file path；不能从原始 request path、asset path 字符串切割或 Search JSON 反推坐标。
+- Hosted 的 manifest commit 先为 `{user}/{name}/{version}/{channel}#{rrev}` 写 component node，再为 recipe/package 文件写 asset leaf。component、asset、Conan file row、`browse_node`、latest 和 outbox 必须处于同一个数据库事务；Browse 写入失败时保持 staging，不能发布半成品。
+- Proxy 只在 immutable revision file 校验并提交本地 asset 时同步写同一投影；Nexus migration 也必须通过同一个 typed importer/projector 写入。不得先导入 asset，再依赖定时任务、启动 backfill 或首次打开 Browse 时补路径。
+- Group 不复制 member 的 `browse_node`；Browse 合并 member 已提交节点并携带实际 source repository，仍受 source binding 约束。
+- `browse_node` 可以按 typed Conan rows 做灾难恢复重建，但这只是显式 repair 能力，不是正常发布的完成步骤；repair 禁止通过 `%...%` asset path 扫描或启发式映射弥补写入遗漏。
+- contract test 必须注入 component node/asset leaf 写入失败，证明事务回滚后 RREV/PREV、latest、Search 和 Browse 都不可见；重试走同一幂等写入路径。
+
+Search 至少支持 format、name、version、user、channel、RREV、package ID、PREV、os、arch、compiler、compiler version、build type、checksum 和 source repository。
 
 管理上传与 Components API 不接受一个无法证明 identity 的任意 tarball。推荐两种入口：
 
@@ -383,7 +410,7 @@ Definition migration：
 Content migration：
 
 - 只迁移已经 committed、manifest 完整且 checksum 可验证的 RREV/PREV；Nexus browse/search 派生数据和 auth bearer 不迁移。
-- 每个 revision 先在事务外读取/校验 Blob 和 manifest，再通过同一 hosted importer 幂等提交；checkpoint 使用 source repository + stable source identity。
+- 每个 revision 先在事务外读取/校验 Blob 和 manifest，再通过同一 hosted importer、`ConanBrowsePathProjector` 和原子发布事务幂等提交；checkpoint 使用 source repository + stable source identity。迁移不能把 source asset path 直接当作 Browse path，也不能把 Browse 投影留给导入后的 backfill。
 - latest 指针由 source 可证明的 published order 重建；缺少顺序证据时报告差异并要求显式策略，不能按 RREV/PREV 字符串猜。
 - Hosted content 在 source version/shape gate 通过后支持 full migration。Proxy cache 只有管理员显式选择且 shape 可证明时迁移；group binding、negative cache、token、lease 和本地热缓存全部重建。
 - Dry-run 报告 recipe、RREV、package ID、PREV、file、bytes、invalid/incomplete/conflict 计数和预估 Blob 复用；resume、重跑与跨副本 worker 接管保持幂等。
@@ -406,13 +433,14 @@ Conan 实现不以“功能正确”替代性能验收。实现 PR 必须新增 
 1. `v1/ping`、latest、RREV/PREV list 和小 file-list 热读。
 2. recipe search：精确命中、前缀/通配命中和达到服务端上限的大结果。
 3. 一个 hot RREV 下 10,000 个 package ID 的 package search/list。
-4. 4 MiB 与 256 MiB `conan_package.t*` 的 GET、HEAD、64 KiB Range；HEAD/Range 是否支持先由 Nexus fixture 固定。
-5. Hosted 上传一组 recipe + 8 个 binary package，包含 manifest commit、幂等重传和 16 并发不同坐标。
-6. Warm group install；成员含重复 reference 时验证 source binding 不以错误缓存换吞吐。
-7. Controlled upstream 的 proxy cold fill、warm hit、revalidate、404 negative cache 和 upstream 5xx stale。
-8. 真实 `conan install` dependency graph：25 个 direct/transitive package，冷客户端 cache 与热服务端 cache 各一轮。
-9. 安全扫描 capability disabled 与 enabled/Audit 两组 hosted upload；同步 outbox 开销单独报告，scanner 异步耗时不混入上传延迟。
-10. Cleanup Try Run/Execute 与 16 并发 install 同时运行，报告 foreground p95、cleanup subjects/s、锁等待和 stale/skip。
+4. Browse root、深层 RREV、10,000-package 热点目录和 package `files` 目录；逐层校验 Nexus 对齐的 path/node type，并报告每次展开的 SQL 数、rows examined、req/s 与 p95。
+5. 4 MiB 与 256 MiB `conan_package.t*` 的 GET、HEAD、64 KiB Range；HEAD/Range 是否支持先由 Nexus fixture 固定。
+6. Hosted 上传一组 recipe + 8 个 binary package，包含 manifest commit、Browse 同事务投影、幂等重传和 16 并发不同坐标。
+7. Warm group install；成员含重复 reference 时验证 source binding 不以错误缓存换吞吐。
+8. Controlled upstream 的 proxy cold fill、warm hit、revalidate、404 negative cache 和 upstream 5xx stale。
+9. 真实 `conan install` dependency graph：25 个 direct/transitive package，冷客户端 cache 与热服务端 cache 各一轮。
+10. 安全扫描 capability disabled 与 enabled/Audit 两组 hosted upload；同步 outbox 开销单独报告，scanner 异步耗时不混入上传延迟。
+11. Cleanup Try Run/Execute 与 16 并发 install 同时运行，报告 foreground p95、cleanup subjects/s、锁等待和 stale/skip。
 
 ### 发布门禁
 
@@ -420,6 +448,7 @@ Conan 实现不以“功能正确”替代性能验收。实现 PR 必须新增 
 - 热 metadata/search/list 与真实 install 的 kkRepo 吞吐不得低于同机 Nexus 的 `0.80x`，p95 不得高于 Nexus 的 `1.25x`。
 - 大 package GET/Range 吞吐不得低于 Nexus 的 `0.90x`，p95 不得高于 `1.15x`；若 Blob store 本身成为瓶颈，仍需给出两端同存储的证据。
 - Hosted manifest commit 的 p95 不得高于 Nexus 的 `1.25x`；开启通用扫描 outbox 后、scanner 异步且无 backpressure 时，上传 p95 相对 kkRepo disabled 基线增长不得超过 10%。
+- Browse root/child 展开使用普通热 metadata 门禁；每次请求必须命中 `idx_browse_node_root`、`uk_browse_node_path` 或 `idx_browse_node_parent`，SQL 数保持常数级，不能随祖先深度、repository 总 asset 数或同级未返回节点数增长。
 - Proxy cold fill 总 p95 不得高于 Nexus 的 `1.25x`；warm hit 使用普通热读门禁。Enforce 首次阻断是产品语义，单独测量，不与 Nexus Audit 路径直接比较。
 - 10,000 package ID 和大 search 结果必须保持有界堆；压测期间不得出现 OOM、unbounded queue、一次性全表 materialization 或请求结束后的后台全仓库投影。
 - 大仓库数据集至少包含 10,000 recipe version、每个 2 个 RREV、8 个 package ID、2 个 PREV 和 4 个 file，以及一个 10,000 package ID 的热点 recipe。关键 SQL 在 MySQL/PostgreSQL 都命中本文声明的索引。
@@ -437,6 +466,7 @@ Conan 实现不以“功能正确”替代性能验收。实现 PR 必须新增 
 - Conan 2 hosted/proxy/group repository REST schema、默认值、版本不可变字段和 group member 规则。
 - ping capabilities、auth/check credential challenge、anonymous、错误 Basic/Bearer、permission denied 与 content selector。
 - search、package search、RREV/PREV list/latest、file list 的 JSON、排序、大小写、limit 和空/缺失语义。
+- 使用真实 Conan 2 客户端上传带 user/channel 与缺省 user/channel 的 recipe/package，再逐层记录 Repository Browse API 的 `id`、`text`、node type、排序、component/asset linkage，以及 Search Assets 的 `/conans/...` storage path；fixture 至少覆盖 recipe file、`packages/{packageId}/revisions/{prev}/files`、metadata 和 `_` 占位。
 - gzip/xz/zstd recipe/package 上传、`X-Checksum-Sha1`、`X-Checksum-Deploy`、manifest-last、重传、force、write policy 和 incomplete upload。
 - GET/HEAD/Range、ETag、Last-Modified、Content-Length、Content-Type、conditional request、404/409/5xx body。
 - exact recipe/RREV/package/PREV delete 后 latest 重算、file 可见性、group/cache 失效。
@@ -449,7 +479,7 @@ Conan 实现不以“功能正确”替代性能验收。实现 PR 必须新增 
 
 - Reference/parser/version/manifest/conaninfo 的 golden、round-trip、property-based 和官方 Python implementation differential test。
 - 恶意 path、duplicate file、manifest mismatch、错误 SHA-1、truncated/伪装 archive、tar bomb、link escape、超限 metadata 和 slow input。
-- MySQL/PostgreSQL contract 覆盖 unique/FK、latest CAS、manifest commit、idempotent retry、package parent、keyset、claim/skip locked、lease/fence、token expiry 和 group invalidation。
+- MySQL/PostgreSQL contract 覆盖 unique/FK、latest CAS、manifest commit、Browse 同事务投影及失败回滚、idempotent retry、package parent、keyset、claim/skip locked、lease/fence、token expiry 和 group invalidation。
 - 双副本上传同一/不同 revision、proxy cold fill、group refresh、staging cleanup、worker crash/takeover 和 repository delete protection。
 - Cleanup comparator/family/subject、Try Run、usage、protection、content token stale、完整 version 删除和 proxy refill。
 - 扫描 classifier、复合 archive + conaninfo fingerprint、adapter contract、catalog result、Audit/Enforce、group member policy、cleanup race 和 scanner crash/retry。
@@ -504,7 +534,7 @@ Conan 实现不以“功能正确”替代性能验收。实现 PR 必须新增 
 
 - `conan-hosted`、`conan-proxy`、`conan-group` 可创建、编辑、停用和删除；不把 Conan 1 内容导入 Conan 2。
 - 真实 Conan 2 客户端可以 login、upload、list/search、download、install 和 remove；lockfile 固定的 RREV 可重放。
-- Manifest 提交前 revision 完全不可见；提交后 file list、archive checksum、latest、Browse/Search 和 component/asset 一致。
+- Manifest 提交前 revision 完全不可见；提交后 file list、archive checksum、latest、Browse/Search 和 component/asset 一致。Browse 路径符合 Nexus fixture，并在 hosted/proxy/migration 写入事务中完成，不依赖发布后的 backfill、首次读取或 asset path 猜测。
 - 同 identity 重传幂等，冲突内容、损坏 manifest、错误 checksum、恶意 archive 和资源超限输入失败关闭。
 - Proxy 的 mutable/immutable cache、validator、negative/stale、auth、redirect 和 auto-block 工作；Group 的全部文件来自同一 source binding。
 - Cleanup 以完整 recipe version 为 subject，使用 Conan version comparator；删除后不残留 list 指向 404，proxy 可安全回源，group binding 正确失效。
@@ -526,6 +556,7 @@ Conan 实现不以“功能正确”替代性能验收。实现 PR 必须新增 
 - [Conan 2 Client REST Routes, tag 2.31.2](https://github.com/conan-io/conan/blob/2.31.2/conan/internal/rest/rest_routes.py)
 - [Conan 2 REST Client Upload/Download Behavior, tag 2.31.2](https://github.com/conan-io/conan/blob/2.31.2/conan/internal/rest/rest_client_v2.py)
 - [Sonatype Nexus Repository: Conan Repositories](https://help.sonatype.com/en/conan-repositories.html)
+- [Sonatype Nexus Repository: Browsing Repositories](https://help.sonatype.com/en/browsing-repositories.html)
 - [Syft Package Catalogers](https://oss.anchore.com/docs/guides/sbom/catalogers/)
 - [kkRepo Cleanup Policy 开发设计说明](cleanup-policy-design.md)
 - [kkRepo 制品安全扫描开发设计说明](security-scanning-design.md)
