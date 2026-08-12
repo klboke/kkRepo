@@ -1,0 +1,2 @@
+# Conan client fixture headers are packaged test data, not C/C++ project sources.
+compat-test/src/test/resources/conan/fixture/include/*.h -linguist-detectable
