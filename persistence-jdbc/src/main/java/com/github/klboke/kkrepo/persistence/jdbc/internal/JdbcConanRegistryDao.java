@@ -1099,9 +1099,11 @@ public class JdbcConanRegistryDao implements ConanRegistryDao {
     Optional<Package> existing = findPackage(recipeRevisionId, commit.packageId());
     if (existing.isPresent()) {
       Package value = existing.orElseThrow();
-      if (value.settings().isEmpty() && value.options().isEmpty() && value.requires().isEmpty()
-          && (!commit.settings().isEmpty() || !commit.options().isEmpty()
-              || !commit.requires().isEmpty())) {
+      boolean storedProjectionEmpty = conanInfoProjectionEmpty(
+          value.settings(), value.options(), value.requires());
+      boolean observedProjectionEmpty = conanInfoProjectionEmpty(
+          commit.settings(), commit.options(), commit.requires());
+      if (storedProjectionEmpty && !observedProjectionEmpty) {
         jdbc.update("""
             UPDATE conan_package
             SET settings_json = ?, options_json = ?, requires_json = ?,
@@ -1117,6 +1119,13 @@ public class JdbcConanRegistryDao implements ConanRegistryDao {
             commit.settings().get("compiler"), commit.settings().get("compiler.version"),
             commit.settings().get("build_type"), value.id());
         return findPackage(recipeRevisionId, commit.packageId()).orElseThrow();
+      }
+      if (!storedProjectionEmpty && observedProjectionEmpty
+          && SOURCE_PROXY.equals(commit.sourceKind())
+          && STATUS_DISCOVERED.equals(commit.status())) {
+        // Proxy files are fetched independently. Only conaninfo.txt carries this projection, so
+        // a later archive/manifest observation must not erase or conflict with known conaninfo.
+        return value;
       }
       if (!value.settings().equals(commit.settings())
           || !value.options().equals(commit.options())
@@ -1140,6 +1149,13 @@ public class JdbcConanRegistryDao implements ConanRegistryDao {
         commit.settings().get("compiler"), commit.settings().get("compiler.version"),
         commit.settings().get("build_type"));
     return findPackage(recipeRevisionId, commit.packageId()).orElseThrow();
+  }
+
+  private static boolean conanInfoProjectionEmpty(
+      Map<String, String> settings,
+      Map<String, String> options,
+      Map<String, String> requires) {
+    return settings.isEmpty() && options.isEmpty() && requires.isEmpty();
   }
 
   private void insertPackageRevision(

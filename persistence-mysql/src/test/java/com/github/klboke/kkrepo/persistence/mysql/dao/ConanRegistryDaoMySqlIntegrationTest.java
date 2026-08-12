@@ -156,6 +156,10 @@ class ConanRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
     assertTrue(inTransaction(() -> dao.recordDiscoveredRevision(enrichedPackage)).idempotent());
     assertEquals("Linux", dao.findPackage(
         proxy.recipeRevisionId(), "proxy-package").orElseThrow().settings().get("os"));
+    assertTrue(inTransaction(() -> dao.recordDiscoveredRevision(discoveredPackage)).idempotent(),
+        "an archive observed after conaninfo must preserve the known projection");
+    assertEquals(Map.of("os", "Linux"), dao.findPackage(
+        proxy.recipeRevisionId(), "proxy-package").orElseThrow().settings());
     assertThrows(IllegalStateException.class, () -> inTransaction(() ->
         dao.recordDiscoveredRevision(revisionCommit(
             proxyCoordinate, ConanRegistryDao.OWNER_PACKAGE, RREV_TWO,

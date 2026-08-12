@@ -25,6 +25,8 @@ APT_HOSTED_REPOSITORY="${APT_E2E_HOSTED_REPOSITORY:-apt-hosted}"
 APT_CLIENT_IMAGES="${APT_E2E_IMAGES:-debian12=debian:12-slim,ubuntu24=ubuntu:24.04,current=debian:testing-slim}"
 CONAN_BIN="${CONAN_E2E_BIN:-conan}"
 CONAN_HOSTED_REPOSITORY="${CONAN_E2E_HOSTED_REPOSITORY:-conan-hosted}"
+CONAN_PROXY_REPOSITORY="${CONAN_E2E_PROXY_REPOSITORY:-conan-proxy}"
+CONAN_PROXY_REFERENCE="${CONAN_E2E_PROXY_REFERENCE:-zlib/1.3.1}"
 CONAN_GROUP_REPOSITORY="${CONAN_E2E_GROUP_REPOSITORY:-conan-group}"
 KKREPO_AUTH_URL=""
 REDACTION_VALUES=("$KKREPO_PASSWORD" "$KKREPO_AUTH")
@@ -1312,10 +1314,13 @@ test_conan() {
   local dir="$WORK_DIR/conan"
   local publish_home="$dir/publish-home"
   local consume_home="$dir/consume-home"
+  local proxy_home="$dir/proxy-home"
   local name="kkrepo_conan_e2e_${STAMP}"
   local reference="$name/1.0.0@kkrepo/stable"
   local list_json="$ARTIFACT_DIR/conan-group-list.json"
+  local proxy_list_json="$ARTIFACT_DIR/conan-proxy-list.json"
   local removed_json="$ARTIFACT_DIR/conan-hosted-after-remove.json"
+  local proxy_exact_reference proxy_info_path
   mkdir -p "$dir/include" "$publish_home" "$consume_home"
   cat >"$dir/conanfile.py" <<'PY'
 from conan import ConanFile
@@ -1372,6 +1377,64 @@ PY
     "$CONAN_BIN" download "$reference:*" --remote=kkrepo-group
   run_logged conan-install env CONAN_HOME="$consume_home" \
     "$CONAN_BIN" install --requires="$reference" --remote=kkrepo-group --build=never
+
+  run_logged conan-proxy-remote env CONAN_HOME="$proxy_home" \
+    "$CONAN_BIN" remote add kkrepo-proxy \
+    "$KKREPO_URL/repository/$CONAN_PROXY_REPOSITORY" --force
+  run_logged conan-proxy-login env CONAN_HOME="$proxy_home" \
+    "$CONAN_BIN" remote login kkrepo-proxy "$KKREPO_USER" -p "$KKREPO_PASSWORD"
+  run_logged_output conan-proxy-list "$proxy_list_json" env CONAN_HOME="$proxy_home" \
+    "$CONAN_BIN" list "$CONAN_PROXY_REFERENCE#*:*#*" \
+    --remote=kkrepo-proxy --format=json
+  IFS=$'\t' read -r proxy_exact_reference proxy_info_path < <(
+    python3 - "$proxy_list_json" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+remote = payload.get("kkrepo-proxy") or {}
+if not remote:
+    raise SystemExit(f"Conan proxy returned no recipes: {payload}")
+recipe, recipe_value = next(iter(remote.items()))
+revisions = recipe_value.get("revisions") or {}
+if not revisions:
+    raise SystemExit(f"Conan proxy returned no recipe revisions: {payload}")
+rrev, revision_value = max(
+    revisions.items(), key=lambda item: item[1].get("timestamp") or 0)
+packages = revision_value.get("packages") or {}
+if not packages:
+    raise SystemExit(f"Conan proxy returned no packages: {payload}")
+preferred = [
+    item for item in packages.items()
+    if item[1].get("info", {}).get("settings", {}).get("os") == "Linux"
+    and item[1].get("info", {}).get("settings", {}).get("arch") == "x86_64"
+]
+package_id, package_value = (preferred or list(packages.items()))[0]
+package_revisions = package_value.get("revisions") or {}
+if not package_revisions:
+    raise SystemExit(f"Conan proxy returned no package revisions: {payload}")
+prev, _ = max(
+    package_revisions.items(), key=lambda item: item[1].get("timestamp") or 0)
+base, separator, owner = recipe.partition("@")
+name, version = base.split("/", 1)
+user, channel = owner.split("/", 1) if separator else ("_", "_")
+print(
+    f"{recipe}#{rrev}:{package_id}#{prev}\t"
+    f"{name}/{version}/{user}/{channel}/revisions/{rrev}/packages/"
+    f"{package_id}/revisions/{prev}"
+)
+PY
+  )
+  [[ -n "$proxy_exact_reference" && -n "$proxy_info_path" ]] || {
+    log "Conan proxy selection did not produce an exact package revision"
+    return 1
+  }
+  run_logged_output conan-proxy-info "$ARTIFACT_DIR/conan-proxy-conaninfo.txt" \
+    curl -m 60 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    "$KKREPO_URL/repository/$CONAN_PROXY_REPOSITORY/v2/conans/$proxy_info_path/files/conaninfo.txt"
+  run_logged conan-proxy-download env CONAN_HOME="$proxy_home" \
+    "$CONAN_BIN" download "$proxy_exact_reference" --remote=kkrepo-proxy
 
   run_logged conan-remove-package-revisions env CONAN_HOME="$publish_home" \
     "$CONAN_BIN" remove "$reference:*" --remote=kkrepo-hosted --confirm
