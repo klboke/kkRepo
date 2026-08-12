@@ -373,6 +373,25 @@ class SecurityManagementFilterTest {
   }
 
   @Test
+  void uiContextBypassesManagementFilterSoItCanRepresentAnonymousState() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
+    RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("should not be checked"));
+    SecurityManagementFilter filter = filter(authentication, security, false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/internal/security/context"),
+        response.proxy(),
+        chain);
+
+    assertEquals(0, authentication.calls);
+    assertEquals(0, security.decisions);
+    assertEquals(1, chain.calls);
+    assertEquals(0, response.status);
+  }
+
+  @Test
   void uiSettingsReadBypassesManagementFilterForEarlyLocalization() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("should not be checked"));

@@ -15,6 +15,7 @@ let userMenuCloseTimer = null;
 let repositoriesCache = [];
 let uploadRepositoriesCache = [];
 let uploadRepositoriesLoaded = false;
+let uploadRepositoriesPromise = null;
 let componentsCache = [];
 let searchRequestSeq = 0;
 let uploadSpecsCache = new Map();
@@ -285,13 +286,12 @@ function hydrateAuthSnapshot() {
   return snapshot.session;
 }
 
-async function fetchSession() {
-  const res = await fetch("/internal/security/session", {
+async function fetchUiContext() {
+  const res = await fetch("/internal/security/context", {
     headers: { Accept: "application/json" },
     cache: "no-store",
   });
-  if (res.status === 401 || res.status === 403) return null;
-  if (!res.ok) throw new Error(`Failed to load session: ${res.status}`);
+  if (!res.ok) throw new Error(`Failed to load UI context: ${res.status}`);
   return res.json();
 }
 
@@ -408,6 +408,17 @@ async function fetchPermissions() {
   if (!res.ok) throw new Error(`Failed to load permissions: ${res.status}`);
   const payload = await res.json();
   return payload.map((permission) => permission.id || permission).filter(Boolean);
+}
+
+function applyUiContext(context) {
+  adminBootstrapStatus = context?.bootstrap || null;
+  currentSession = context?.session || null;
+  currentPermissions = Array.isArray(context?.permissions)
+    ? context.permissions.filter(Boolean)
+    : [];
+  renderAdminBootstrap();
+  writeAuthSnapshot();
+  updateTopbarAuth();
 }
 
 function permissionPartMatches(grantedPart, requestedPart) {
@@ -855,6 +866,7 @@ function showUpload(syncHash = true) {
   if (syncHash) pushBrowseRoute(viewHash("upload"));
   switchView("upload");
   renderUpload();
+  ensureUploadableRepositories();
 }
 
 function showMyToken(syncHash = true) {
@@ -3282,64 +3294,86 @@ function applyHashRoute() {
 }
 
 async function bootstrap() {
-  try {
-    adminBootstrapStatus = await fetchAdminBootstrapStatus();
-  } catch (e) {
-    adminBootstrapStatus = null;
-  }
-  renderAdminBootstrap();
+  hydrateAuthSnapshot();
+  const initialRoute = parseBrowseHash();
+  if (initialRoute?.view === "welcome") showWelcome(false);
 
-  const hydratedSession = hydrateAuthSnapshot();
-  try {
-    currentSession = await fetchSession();
-  } catch (e) {
-    currentSession = null;
-  }
+  const contextPromise = fetchUiContext()
+    .then((context) => {
+      applyUiContext(context);
+      return true;
+    })
+    .catch(() => false);
+  const repositoriesPromise = Promise.all([
+      fetchRepositories(),
+      fetchUploadSpecs(),
+    ])
+    .then(([repositories, uploadSpecs]) => {
+      repositoriesCache = repositories;
+      uploadSpecsCache = uploadSpecs;
+      return true;
+    })
+    .catch((error) => {
+      repositoriesCache = [];
+      uploadSpecsCache = new Map();
+      document.getElementById("repository-table").innerHTML =
+        `<tr><td colspan="6" class="muted-row">Failed to load repositories: ${error.message}</td></tr>`;
+      return false;
+    });
+
+  await Promise.all([contextPromise, repositoriesPromise]);
+  if (!applyHashRoute()) renderRepoList();
+  openPendingLoginIfRequested();
+}
+
+function ensureUploadableRepositories(force = false) {
   if (!currentSession) {
-    currentPermissions = [];
-    writeAuthSnapshot();
-  } else if (sessionIdentity(hydratedSession) !== sessionIdentity(currentSession)) {
-    currentPermissions = [];
+    uploadRepositoriesCache = [];
+    uploadRepositoriesLoaded = true;
+    updateTopbarAuth();
+    renderUpload();
+    return Promise.resolve();
   }
-  updateTopbarAuth();
-  try {
-    currentPermissions = currentSession ? await fetchPermissions() : [];
-  } catch (e) {
-    currentPermissions = [];
-  }
-  writeAuthSnapshot();
-  updateTopbarAuth();
+  if (!force && uploadRepositoriesLoaded) return Promise.resolve();
+  if (uploadRepositoriesPromise) return uploadRepositoriesPromise;
+  uploadRepositoriesLoaded = false;
+  renderUpload();
+  uploadRepositoriesPromise = fetchUploadableRepositories()
+    .then((repositories) => {
+      uploadRepositoriesCache = repositories;
+    })
+    .catch(() => {
+      uploadRepositoriesCache = [];
+    })
+    .finally(() => {
+      uploadRepositoriesLoaded = true;
+      uploadRepositoriesPromise = null;
+      updateTopbarAuth();
+      renderUpload();
+    });
+  return uploadRepositoriesPromise;
+}
 
+async function handleLoginSuccess(event) {
+  const target = safeLocalReturnTo(event.detail?.returnTo) || currentReturnTo();
   try {
-    [repositoriesCache, uploadSpecsCache] = await Promise.all([
+    const [context, repositories, uploadSpecs] = await Promise.all([
+      fetchUiContext(),
       fetchRepositories(),
       fetchUploadSpecs(),
     ]);
-  } catch (e) {
-    repositoriesCache = [];
-    uploadSpecsCache = new Map();
-    uploadRepositoriesLoaded = true;
+    applyUiContext(context);
+    repositoriesCache = repositories;
+    uploadSpecsCache = uploadSpecs;
+    uploadRepositoriesLoaded = false;
     uploadRepositoriesCache = [];
-    updateTopbarAuth();
-    renderUpload();
-    document.getElementById("repository-table").innerHTML =
-      `<tr><td colspan="6" class="muted-row">Failed to load repositories: ${e.message}</td></tr>`;
-    openPendingLoginIfRequested();
+    if (!applyHashRoute()) renderRepoList();
+  } catch (error) {
+    window.location.href = target;
     return;
   }
-  try {
-    uploadRepositoriesCache = await fetchUploadableRepositories();
-  } catch (e) {
-    uploadRepositoriesCache = [];
-  } finally {
-    uploadRepositoriesLoaded = true;
-  }
-  updateTopbarAuth();
-  renderUpload();
-  if (!applyHashRoute()) {
-    renderRepoList();
-  }
-  openPendingLoginIfRequested();
+  const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  if (target !== current) window.location.href = target;
 }
 
 document.querySelectorAll(".side-item").forEach((item) => {
@@ -3406,5 +3440,6 @@ document.addEventListener("keydown", (event) => {
 });
 window.addEventListener("hashchange", applyHashRoute);
 window.addEventListener("popstate", applyHashRoute);
+window.addEventListener("kkrepo:login-success", handleLoginSuccess);
 
 bootstrap();

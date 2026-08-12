@@ -50,7 +50,8 @@ public class CsrfProtectionFilter extends OncePerRequestFilter {
 
     String method = request.getMethod() == null ? "" : request.getMethod().toUpperCase();
     boolean safe = SAFE_METHODS.contains(method);
-    String token = csrfToken(request, safe && csrfTokenBootstrapPath(request));
+    boolean tokenBootstrap = safe && csrfTokenBootstrapPath(request);
+    String token = safe && !tokenBootstrap ? null : csrfToken(request, tokenBootstrap);
     if (token != null) {
       exposeToken(response, request, token);
     }
@@ -73,6 +74,7 @@ public class CsrfProtectionFilter extends OncePerRequestFilter {
   private boolean csrfTokenBootstrapPath(HttpServletRequest request) {
     String uri = stripContextPath(request);
     return uri.equals("/internal/security/session")
+        || uri.equals("/internal/security/context")
         || legacyUi.csrfTokenBootstrapPath(uri);
   }
 

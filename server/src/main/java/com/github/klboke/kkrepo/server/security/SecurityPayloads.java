@@ -23,6 +23,12 @@ public final class SecurityPayloads {
       boolean anonymousAccessEnabled) {
   }
 
+  public record UiContext(
+      AdminBootstrapStatus bootstrap,
+      SessionView session,
+      List<String> permissions) {
+  }
+
   public record UserCommand(
       String source,
       String userId,

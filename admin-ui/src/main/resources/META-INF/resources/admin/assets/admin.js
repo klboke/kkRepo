@@ -233,6 +233,7 @@ const securityTransfers = {
 let toastTimer;
 const BROWSE_WELCOME = "/browse/#browse/welcome";
 const AUTH_SNAPSHOT_KEY = "nexusPlus.authSnapshot";
+const AUTH_SNAPSHOT_MAX_AGE_MS = 10 * 60 * 1000;
 const SIDE_GROUP_STATE_KEY = "kkrepo.admin.sideGroups";
 
 function applyOriginAwarePlaceholders() {
@@ -732,6 +733,22 @@ function updateSessionControls(session) {
       savedAt: Date.now(),
     }));
   } else {
+    sessionStorage.removeItem(AUTH_SNAPSHOT_KEY);
+  }
+}
+
+function hydrateSessionControls() {
+  try {
+    const raw = sessionStorage.getItem(AUTH_SNAPSHOT_KEY);
+    if (!raw) return;
+    const snapshot = JSON.parse(raw);
+    if (!snapshot?.session?.userId
+        || Date.now() - Number(snapshot.savedAt || 0) > AUTH_SNAPSHOT_MAX_AGE_MS) {
+      sessionStorage.removeItem(AUTH_SNAPSHOT_KEY);
+      return;
+    }
+    updateSessionControls(snapshot.session);
+  } catch {
     sessionStorage.removeItem(AUTH_SNAPSHOT_KEY);
   }
 }
@@ -7215,6 +7232,7 @@ document.getElementById("repository-data-migration-packages-button").addEventLis
 document.getElementById("repository-data-migration-retry-failed-button").addEventListener("click", retryRepositoryDataFailedPackages);
 document.getElementById("repository-data-migration-refresh-button").addEventListener("click", loadRepositoryDataMigrationJobs);
 
+hydrateSessionControls();
 loadCurrentSession({ quiet: true }).then((session) => {
   if (!session) return;
   loadRepositoryRecipes().then(() => {

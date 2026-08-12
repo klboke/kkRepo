@@ -188,7 +188,7 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
 
   private Optional<String> internalSecurityPermission(String method, String uri) {
     String path = uri.substring("/internal/security/".length());
-    if (path.equals("bootstrap") || path.equals("bootstrap/admin")) {
+    if (path.equals("bootstrap") || path.equals("bootstrap/admin") || path.equals("context")) {
       return Optional.empty();
     }
     if (path.equals("session") || path.equals("basic/login") || path.equals("permissions")) {

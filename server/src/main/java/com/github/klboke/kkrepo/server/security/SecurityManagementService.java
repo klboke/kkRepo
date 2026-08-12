@@ -655,6 +655,17 @@ public class SecurityManagementService implements AccessDecisionService {
 
   @Transactional(readOnly = true)
   public AnonymousSettingsView anonymousSettings() {
+    SecurityCatalog catalog = currentSecurityCatalog().orElse(null);
+    if (catalog != null) {
+      SecurityAnonymousConfigRecord config = catalog.anonymousConfig();
+      return config == null
+          ? new AnonymousSettingsView(
+              false,
+              DEFAULT_SOURCE,
+              DEFAULT_ANONYMOUS_USER_ID,
+              DEFAULT_ANONYMOUS_REALM_NAME)
+          : toAnonymousSettingsView(config);
+    }
     return securityDao.findAnonymousConfig()
         .map(this::toAnonymousSettingsView)
         .orElseGet(() -> new AnonymousSettingsView(
@@ -1019,9 +1030,23 @@ public class SecurityManagementService implements AccessDecisionService {
   }
 
   private boolean hasAdministrativeUser() {
+    SecurityCatalog catalog = currentSecurityCatalog().orElse(null);
+    if (catalog != null) {
+      return catalog.users().stream()
+          .filter(user -> "ACTIVE".equalsIgnoreCase(defaultString(user.status(), "ACTIVE")))
+          .anyMatch(user -> hasAdministrativePermission(new PermissionSubject(
+              user.source(),
+              user.userId(),
+              Set.copyOf(catalog.userRoleIds(user.source(), user.userId())),
+              null)));
+    }
     return listUsers(null, null).stream()
         .filter(user -> "ACTIVE".equalsIgnoreCase(defaultString(user.status(), "ACTIVE")))
         .anyMatch(this::hasAdministrativePermission);
+  }
+
+  private boolean hasAdministrativePermission(PermissionSubject subject) {
+    return decide(subject, "nexus:*").allowed();
   }
 
   private boolean hasAdministrativePermission(UserView user) {
@@ -1030,7 +1055,7 @@ public class SecurityManagementService implements AccessDecisionService {
         user.userId(),
         Set.copyOf(user.roles()),
         null);
-    return decide(subject, "nexus:*").allowed();
+    return hasAdministrativePermission(subject);
   }
 
   private RoleView toRoleView(SecurityRoleRecord record) {
