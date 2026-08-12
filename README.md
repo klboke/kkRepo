@@ -196,6 +196,14 @@ Repository format roadmap:
 9. ✅ APT / Debian - Hosted/proxy repositories, signed metadata, UI/API upload, Browse/Search, multi-replica publication, real APT client and Nexus black-box checks, shape-gated migration, and a reproducible Nexus performance baseline are implemented ([usage guide](docs/en/apt-debian-guide.md), [Chinese design notes](docs/zh/dev/apt-debian-repository-design.md), [performance baseline](docs/en/dev/apt-performance-baseline.md))
 10. ✅ Conan 2 - Hosted/proxy/group, Conan bearer authentication, manifest-gated revision publication, write-time Nexus Browse projection, UI/API upload, Cleanup, composite package scanning, shape-gated migration, real Conan client E2E, and dual-database Nexus performance baselines are implemented ([usage guide](docs/en/conan-guide.md), [Chinese design notes](docs/zh/dev/conan-repository-design.md), [performance baseline](docs/en/dev/conan-performance-baseline.md))
 11. ohpm / HarmonyOS - Planned with hosted, proxy, group, import, and admin capabilities ([Chinese design notes](docs/zh/dev/ohpm-repository-design.md))
+12. Go hosted repositories - Planned to complete Nexus-compatible Go coverage with internal module publication; proxy and group repositories are already supported.
+13. Helm group repositories - Planned to complete Nexus-compatible ordered aggregation across hosted, proxy, and group members.
+14. Alpine / APK - Planned with hosted, proxy, and group repositories, including APK indexes and repository signing.
+15. R / CRAN - Planned with proxy, hosted, and group repositories; hosted and group scope will follow Nexus `.gz` package support.
+16. Git Large File Storage (LFS) - Planned with Nexus-compatible hosted storage for large Git-managed assets.
+17. Hugging Face Models - Planned with Nexus-compatible proxy repositories for model metadata and large model assets.
+18. Eclipse p2 - Planned with Nexus-compatible proxy repositories for Eclipse and Equinox update sites.
+19. CocoaPods - Planned with Nexus-compatible proxy repositories for CocoaPods dependencies.
 
 Token types exposed in the user and admin UI include protocol-specific tokens (`NpmToken`, `CargoToken`, `PubToken`, `NuGetApiKey`, `RubyGemsApiKey`) plus `GenericToken` for Terraform service URLs, Ansible Galaxy clients, CI, scripts, and custom HTTP clients that can send the configured API-key header or bearer token.
 
