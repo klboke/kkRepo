@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.admin.ui;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -16,6 +17,14 @@ class AdminSessionHydrationContractTest {
 
     assertTrue(javascript.contains("function hydrateSessionControls()"));
     assertTrue(javascript.contains("hydrateSessionControls();\nloadCurrentSession({ quiet: true })"));
+  }
+
+  @Test
+  void passwordLoginRefreshesTheCurrentPageWithoutAFullReload() throws IOException {
+    String login = resource("/META-INF/resources/login/assets/login-modal.js");
+
+    assertTrue(login.contains("new CustomEvent(\"kkrepo:login-success\""));
+    assertFalse(login.contains("window.location.reload()"));
   }
 
   private String resource(String path) throws IOException {
