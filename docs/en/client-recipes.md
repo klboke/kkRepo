@@ -165,7 +165,7 @@ Go hosted upload is not supported. Use Go proxy/group repositories for read-thro
 Add a proxy or hosted chart repository:
 
 ```bash
-helm repo add acme https://nexus.example.com/repository/helm-group/
+helm repo add acme https://nexus.example.com/repository/helm-proxy/
 helm repo update
 helm search repo acme
 ```
@@ -447,7 +447,7 @@ ansible-galaxy collection install acme.tools:1.0.0 \
   --token "$KKREPO_ANSIBLE_TOKEN"
 ```
 
-Ansible 2.9 may name the token option `--api-key`. Collection versions are immutable, and dependency, checksum, signature, metadata, and artifact reads through a group remain bound to the same priority member. See the [Ansible Galaxy Repository Guide](ansible-galaxy-guide.md) for `requirements.yml`, Nexus-compatible credentials/PUT upload, proxy, migration, storage limits, and troubleshooting.
+Ansible 2.9 may name the token option `--api-key`. Collection versions are immutable, and dependency, checksum, signature, metadata, and artifact reads through a group remain bound to the same priority member. See the [Ansible Galaxy Repository Guide](repository-guides/ansible-galaxy.md) for `requirements.yml`, Nexus-compatible credentials/PUT upload, proxy, migration, storage limits, and troubleshooting.
 
 ## Conda
 
@@ -543,7 +543,7 @@ curl -u alice:"$KKREPO_PASSWORD" \
 ```
 
 For signing-key lifecycle, asynchronous publication status, proxy modes, snapshot retention,
-cleanup, migration, and recovery, see the [APT / Debian Repository Guide](apt-debian-guide.md).
+cleanup, migration, and recovery, see the [APT / Debian Repository Guide](repository-guides/apt-debian.md).
 
 ## Conan 2
 
@@ -570,7 +570,7 @@ conan install --requires='demo/1.0.0@team/stable' --remote=kkrepo
 ```
 
 For revision commit semantics, Browse paths, cleanup, scanning, proxy/group behavior,
-migration, and troubleshooting, see the [Conan Repository Guide](conan-guide.md).
+migration, and troubleshooting, see the [Conan Repository Guide](repository-guides/conan-2.md).
 
 ## NuGet
 

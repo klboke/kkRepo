@@ -3,7 +3,7 @@
 本文记录 kkrepo APT / Debian 仓库格式的开发设计。目标不是把 `.deb` 和 `dists/` 目录当作 Raw 文件树保存，而是在 Debian 官方仓库格式、APT 客户端安全模型和 Sonatype Nexus Repository APT 行为之间取兼容交集，并按 kkrepo 的关系数据库 + OSS/S3 + 多副本约束落地可托管、可代理、可迁移、可检索和可观测的 APT 仓库。
 
 面向仓库管理员和客户端使用者的配置、发布、密钥轮换、状态检查、保留清理与恢复流程见
-[APT / Debian 仓库使用指南](../apt-debian-guide.md)。
+[APT / Debian 仓库使用指南](../repository-guides/apt-debian.md)。
 
 ## 当前支持状态与落地结论
 

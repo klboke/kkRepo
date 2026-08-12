@@ -165,7 +165,7 @@ Go 不支持 hosted 上传；当前以 Go proxy/group 读取代理行为为主�
 添加 proxy 或 hosted chart 仓库：
 
 ```bash
-helm repo add acme https://nexus.example.com/repository/helm-group/
+helm repo add acme https://nexus.example.com/repository/helm-proxy/
 helm repo update
 helm search repo acme
 ```
@@ -446,7 +446,7 @@ ansible-galaxy collection install acme.tools:1.0.0 \
   --token "$KKREPO_ANSIBLE_TOKEN"
 ```
 
-Ansible 2.9 可能把 token 选项命名为 `--api-key`。Collection version 不可变；group 会保证 dependency、checksum、signature、metadata 和 artifact 读取绑定到同一优先成员。`requirements.yml`、Nexus 兼容凭据/PUT 上传、proxy、迁移、存储上限和排障见 [Ansible Galaxy 仓库使用指南](ansible-galaxy-guide.md)。
+Ansible 2.9 可能把 token 选项命名为 `--api-key`。Collection version 不可变；group 会保证 dependency、checksum、signature、metadata 和 artifact 读取绑定到同一优先成员。`requirements.yml`、Nexus 兼容凭据/PUT 上传、proxy、迁移、存储上限和排障见 [Ansible Galaxy 仓库使用指南](repository-guides/ansible-galaxy.md)。
 
 ## Conda
 
@@ -541,7 +541,7 @@ curl -u alice:"$KKREPO_PASSWORD" \
 ```
 
 签名密钥生命周期、异步发布状态、Proxy 模式、snapshot 保留、清理、迁移与恢复说明见
-[APT / Debian 仓库使用指南](apt-debian-guide.md)。
+[APT / Debian 仓库使用指南](repository-guides/apt-debian.md)。
 
 ## Conan 2
 
@@ -568,7 +568,7 @@ conan install --requires='demo/1.0.0@team/stable' --remote=kkrepo
 ```
 
 Revision 提交语义、Browse 路径、清理、安全扫描、proxy/group、迁移和排障说明见
-[Conan 仓库使用指南](conan-guide.md)。
+[Conan 仓库使用指南](repository-guides/conan-2.md)。
 
 ## NuGet
 

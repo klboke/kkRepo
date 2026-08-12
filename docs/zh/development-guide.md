@@ -192,7 +192,7 @@ Swift 的生产加固证据拆分为独立 lane：定时 S3-compatible resilienc
 - [Conan 2 仓库开发设计说明](dev/conan-repository-design.md)
 - [Cleanup Policy 开发设计说明](dev/cleanup-policy-design.md)
 - [Cleanup Policy 使用指南](cleanup-policy-guide.md)
-- [Ansible Galaxy 仓库使用指南](ansible-galaxy-guide.md)
+- [Ansible Galaxy 仓库使用指南](repository-guides/ansible-galaxy.md)
 - [Nexus 兼容迁移重构开发计划](dev/nexus-migration-compatibility-refactor-plan.md)
 
 ## 配置中心

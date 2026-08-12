@@ -163,7 +163,7 @@ Configure Terraform CLI `host.services` to point `modules.v1` and `providers.v1`
 
 Yes. `ansiblegalaxy-hosted`, `ansiblegalaxy-proxy`, and `ansiblegalaxy-group` implement Galaxy v3 collection discovery, immutable publication/import tasks, version/dependency metadata, artifact download, public Galaxy proxying, group source binding, Browse/Search/Usage, and Ansible 2.9/current client flows. `GenericToken`, HTTP Basic, and route-scoped Nexus-compatible Base64 credentials are supported. Galaxy v1 roles and `ansible-galaxy role install` are not.
 
-Nexus 3.93.x-3.94.x native Ansible repository definitions and shape-gated hosted/proxy collection data can be migrated. Collection tarballs, complete `MANIFEST.json`/`FILES.json`, oversized upstream JSON, and signature payloads stay in blob storage; MySQL/PostgreSQL stores bounded metadata projections, hashes, references, tasks, leases, and bindings. See the [Ansible Galaxy Repository Guide](ansible-galaxy-guide.md).
+Nexus 3.93.x-3.94.x native Ansible repository definitions and shape-gated hosted/proxy collection data can be migrated. Collection tarballs, complete `MANIFEST.json`/`FILES.json`, oversized upstream JSON, and signature payloads stay in blob storage; MySQL/PostgreSQL stores bounded metadata projections, hashes, references, tasks, leases, and bindings. See the [Ansible Galaxy Repository Guide](repository-guides/ansible-galaxy.md).
 
 ## Is Conda supported?
 
@@ -175,7 +175,7 @@ Nexus 3.92.x-3.94.x Conda repository definitions and shape-gated hosted packages
 
 Yes. `apt-hosted` and `apt-proxy` provide signed Packages/Release/InRelease metadata, by-hash reads, Nexus-compatible `.deb` upload, passthrough or local re-sign proxy modes, Browse/Search/Usage, and real Debian/Ubuntu `apt update`, download, install, and upgrade flows. APT group is not exposed because Nexus does not define that recipe.
 
-Nexus 3.92.x-3.94.x hosted package data can be migrated only after preflight proves the APT datastore shape. Generated metadata is rebuilt on the target. Private signing keys are not copied implicitly, so migrated repositories remain offline until an administrator explicitly imports the intended key. See the [APT / Debian Repository Guide](apt-debian-guide.md), [Client Recipes](client-recipes.md#apt--debian), the [APT Design Notes](../zh/dev/apt-debian-repository-design.md), and the [Nexus performance baseline](dev/apt-performance-baseline.md).
+Nexus 3.92.x-3.94.x hosted package data can be migrated only after preflight proves the APT datastore shape. Generated metadata is rebuilt on the target. Private signing keys are not copied implicitly, so migrated repositories remain offline until an administrator explicitly imports the intended key. See the [APT / Debian Repository Guide](repository-guides/apt-debian.md), [Client Recipes](client-recipes.md#apt--debian), the [APT Design Notes](../zh/dev/apt-debian-repository-design.md), and the [Nexus performance baseline](dev/apt-performance-baseline.md).
 
 ## Is kkrepo production-ready?
 

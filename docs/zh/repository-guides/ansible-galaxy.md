@@ -170,4 +170,4 @@ Proxy cache migration 需要在 **Optional proxy repositories** 中显式选择�
 - [Ansible：Collection metadata](https://docs.ansible.com/projects/ansible/latest/dev_guide/collections_galaxy_meta.html)
 - [Galaxy NG：API v3](https://docs.ansible.com/projects/galaxy-ng/en/latest/community/api_v3.html)
 - [Sonatype：Configure Ansible with Nexus](https://help.sonatype.com/en/configure-ansible-with-nexus.html)
-- [Ansible Galaxy 开发设计与兼容说明](dev/ansible-galaxy-repository-design.md)
+- [Ansible Galaxy 开发设计与兼容说明](../dev/ansible-galaxy-repository-design.md)

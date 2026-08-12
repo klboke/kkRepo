@@ -170,4 +170,4 @@ Proxy cache migration is opt-in through **Optional proxy repositories** and requ
 - [Ansible: Collection metadata](https://docs.ansible.com/projects/ansible/latest/dev_guide/collections_galaxy_meta.html)
 - [Galaxy NG: API v3](https://docs.ansible.com/projects/galaxy-ng/en/latest/community/api_v3.html)
 - [Sonatype: Configure Ansible with Nexus](https://help.sonatype.com/en/configure-ansible-with-nexus.html)
-- [Ansible Galaxy design and compatibility notes](../zh/dev/ansible-galaxy-repository-design.md)
+- [Ansible Galaxy design and compatibility notes](../../zh/dev/ansible-galaxy-repository-design.md)

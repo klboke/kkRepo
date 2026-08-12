@@ -10,7 +10,7 @@ https://nexus.example.com/repository/<repo>/
 Use hosted for private `.deb` publication and proxy for an upstream Debian/Ubuntu archive. APT
 group, hosted source packages, flat hosted repositories, generated Contents/Translation indexes,
 PDiff, and `.udeb` indexes are outside the current support boundary. The Chinese version is
-available in the [APT / Debian 仓库使用指南](../zh/apt-debian-guide.md).
+available in the [APT / Debian 仓库使用指南](../../zh/repository-guides/apt-debian.md).
 
 ## Create And Configure A Repository
 
@@ -209,17 +209,17 @@ Cleanup Policy treats one APT component as one
 `(distribution, component, package, version)` across its architecture assets. **Keep newest
 versions** uses Debian version ordering. Hosted deletion tombstones all architecture assets selected
 for that component and publishes each affected distribution once, so signed metadata, Browse, and
-Search move together. See the [Cleanup Policy Guide](cleanup-policy-guide.md).
+Search move together. See the [Cleanup Policy Guide](../cleanup-policy-guide.md).
 
 When Artifact Scanning is enabled globally and on the repository, canonical `.deb` content is
 scanned after it is stored. Generated `dists/`, `.apt/` snapshot, checksum, and signature assets are
-not independent scan candidates. See the [Artifact Scanning Guide](artifact-scanning-guide.md).
+not independent scan candidates. See the [Artifact Scanning Guide](../artifact-scanning-guide.md).
 
 Nexus migration supports shape-gated APT repository definitions and hosted package content from
 verified Nexus 3.92.x-3.94.x datastore profiles. Generated source `dists/` metadata is rebuilt on
 the target. Private signing material is never copied implicitly: the migrated hosted repository
 stays offline until an administrator explicitly imports the intended key and rebuilds metadata.
-See the [Nexus Migration Guide](nexus-migration-guide.md).
+See the [Nexus Migration Guide](../nexus-migration-guide.md).
 
 ## Backup And Restore
 
@@ -232,7 +232,7 @@ After restore, verify `/gpg.key`, `dists/<distribution>/InRelease`, a compressed
 and a representative package checksum, then run `apt-get update` and install from a disposable
 client. Compare desired and published revisions and use the supported rebuild operation if the
 catalog is stale; do not repair APT tables manually. See the
-[Backup And Restore Guide](backup-restore.md).
+[Backup And Restore Guide](../backup-restore.md).
 
 ## Troubleshooting
 
@@ -248,10 +248,10 @@ catalog is stale; do not repair APT tables manually. See the
 
 ## References
 
-- [Client Recipes](client-recipes.md#apt--debian)
-- [Compatibility Matrix](compatibility-matrix.md)
-- [APT performance baseline](dev/apt-performance-baseline.md)
-- [APT design and compatibility notes](../zh/dev/apt-debian-repository-design.md)
+- [Client Recipes](../client-recipes.md#apt--debian)
+- [Compatibility Matrix](../compatibility-matrix.md)
+- [APT performance baseline](../dev/apt-performance-baseline.md)
+- [APT design and compatibility notes](../../zh/dev/apt-debian-repository-design.md)
 - [Debian Repository Format](https://wiki.debian.org/DebianRepository/Format)
 - [Debian `apt-secure(8)`](https://manpages.debian.org/bookworm/apt/apt-secure.8.en.html)
 - [Debian `sources.list(5)`](https://manpages.debian.org/bookworm/apt/sources.list.5.en.html)

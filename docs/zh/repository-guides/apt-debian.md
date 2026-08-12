@@ -9,7 +9,7 @@ https://nexus.example.com/repository/<repo>/
 
 Hosted 用于发布私有 `.deb`，Proxy 用于代理 Debian/Ubuntu 上游 archive。当前边界不包含 APT
 group、hosted source package、flat hosted、生成式 Contents/Translation index、PDiff 和 `.udeb`
-index。英文版见 [APT / Debian Repository Guide](../en/apt-debian-guide.md)。
+index。英文版见 [APT / Debian Repository Guide](../../en/repository-guides/apt-debian.md)。
 
 ## 创建和配置仓库
 
@@ -196,16 +196,16 @@ rebuild，但不会把完整签名 index 生成变成 O(1)。
 Cleanup Policy 把 `(distribution, component, package, version)` 及其全部 architecture asset
 视为一个 APT component。**保留最新版本**使用 Debian version 排序。Hosted 删除会 tombstone
 该 component 的全部 architecture asset，并且每个受影响 distribution 只发布一次，使签名
-metadata、Browse 和 Search 一起推进。详见 [Cleanup Policy 使用指南](cleanup-policy-guide.md)。
+metadata、Browse 和 Search 一起推进。详见 [Cleanup Policy 使用指南](../cleanup-policy-guide.md)。
 
 全局和仓库都启用 Artifact Scanning 时，canonical `.deb` 内容会在持久化后进入扫描。生成的
 `dists/`、`.apt/` snapshot、checksum 和 signature asset 不作为独立扫描候选。详见
-[Artifact Scanning 使用指南](artifact-scanning-guide.md)。
+[Artifact Scanning 使用指南](../artifact-scanning-guide.md)。
 
 Nexus migration 支持已验证 Nexus 3.92.x-3.94.x datastore profile 下 shape-gated APT repository
 definition 和 hosted package content。源端生成的 `dists/` metadata 会在目标端重建。Private
 signing material 不会隐式复制：迁移后的 hosted 仓库保持 offline，直到管理员显式导入预期 key 并
-重建 metadata。详见 [Nexus 迁移说明](nexus-migration-guide.md)。
+重建 metadata。详见 [Nexus 迁移说明](../nexus-migration-guide.md)。
 
 ## 备份与恢复
 
@@ -216,7 +216,7 @@ desired/published revision、immutable snapshot manifest 与 lease；blob store 
 恢复后检查 `/gpg.key`、`dists/<distribution>/InRelease`、一个压缩 Packages index 和代表性
 package checksum，再从一次性客户端执行 `apt-get update` 与安装。对比 desired/published
 revision；目录过期时使用受支持的 rebuild 操作，不要手改 APT 表。详见
-[备份恢复指南](backup-restore.md)。
+[备份恢复指南](../backup-restore.md)。
 
 ## 排障
 
@@ -232,10 +232,10 @@ revision；目录过期时使用受支持的 rebuild 操作，不要手改 APT �
 
 ## 参考
 
-- [客户端配置示例](client-recipes.md#apt--debian)
-- [兼容性矩阵](compatibility-matrix.md)
-- [APT 性能基线](dev/apt-performance-baseline.md)
-- [APT 开发设计与兼容性说明](dev/apt-debian-repository-design.md)
+- [客户端配置示例](../client-recipes.md#apt--debian)
+- [兼容性矩阵](../compatibility-matrix.md)
+- [APT 性能基线](../dev/apt-performance-baseline.md)
+- [APT 开发设计与兼容性说明](../dev/apt-debian-repository-design.md)
 - [Debian Repository Format](https://wiki.debian.org/DebianRepository/Format)
 - [Debian `apt-secure(8)`](https://manpages.debian.org/bookworm/apt/apt-secure.8.en.html)
 - [Debian `sources.list(5)`](https://manpages.debian.org/bookworm/apt/sources.list.5.en.html)

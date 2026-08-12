@@ -192,7 +192,7 @@ Detailed design and implementation plans for repository formats and migration wo
 - [Conan 2 Repository Design Notes](../zh/dev/conan-repository-design.md) (Chinese)
 - [Cleanup Policy Design Notes](../zh/dev/cleanup-policy-design.md) (Chinese)
 - [Cleanup Policy Guide](cleanup-policy-guide.md)
-- [Ansible Galaxy Repository Guide](ansible-galaxy-guide.md)
+- [Ansible Galaxy Repository Guide](repository-guides/ansible-galaxy.md)
 - [Nexus Compatibility Migration Refactor Plan](dev/nexus-migration-compatibility-refactor-plan.md)
 
 ## Configuration Center

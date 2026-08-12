@@ -119,5 +119,5 @@ Hosted content 通过正常 manifest-gated writer 导入；proxy cache 仍需管
 - [Conan 2 upload](https://docs.conan.io/2/reference/commands/upload.html)
 - [Conan 2 list](https://docs.conan.io/2/reference/commands/list.html)
 - [Conan 2 revisions](https://docs.conan.io/2/tutorial/versioning/revisions.html)
-- [Conan 实现设计](dev/conan-repository-design.md)
-- [Conan 性能基线](dev/conan-performance-baseline.md)
+- [Conan 实现设计](../dev/conan-repository-design.md)
+- [Conan 性能基线](../dev/conan-performance-baseline.md)

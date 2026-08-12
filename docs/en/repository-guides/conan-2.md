@@ -151,5 +151,5 @@ as a later backfill.
 - [Conan 2 upload](https://docs.conan.io/2/reference/commands/upload.html)
 - [Conan 2 list](https://docs.conan.io/2/reference/commands/list.html)
 - [Conan 2 revisions](https://docs.conan.io/2/tutorial/versioning/revisions.html)
-- [Conan implementation design](../zh/dev/conan-repository-design.md)
-- [Conan performance baseline](dev/conan-performance-baseline.md)
+- [Conan implementation design](../../zh/dev/conan-repository-design.md)
+- [Conan performance baseline](../dev/conan-performance-baseline.md)
