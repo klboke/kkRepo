@@ -215,6 +215,11 @@
       }
       const result = await response.json();
       const target = safeReturnTo(result.returnTo);
+      const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      if (target !== current) {
+        window.location.href = target;
+        return;
+      }
       close();
       window.dispatchEvent(new CustomEvent("kkrepo:login-success", {
         detail: { returnTo: target },

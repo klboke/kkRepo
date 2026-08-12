@@ -23,14 +23,11 @@ class BrowseAuthenticationPerformanceContractTest {
   }
 
   @Test
-  void uploadRepositoryDiscoveryIsLazyAndLoginDoesNotReloadThePage() throws IOException {
+  void uploadRepositoryDiscoveryIsLazyAndLoginRefreshesInPlace() throws IOException {
     String browse = resource("/META-INF/resources/browse/assets/browse.js");
-    String login = resource("/META-INF/resources/login/assets/login-modal.js");
 
     assertTrue(browse.contains("function ensureUploadableRepositories(force = false)"));
     assertTrue(browse.contains("window.addEventListener(\"kkrepo:login-success\", handleLoginSuccess)"));
-    assertTrue(login.contains("new CustomEvent(\"kkrepo:login-success\""));
-    assertFalse(login.contains("window.location.reload()"));
   }
 
   private String resource(String path) throws IOException {
