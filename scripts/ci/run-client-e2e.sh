@@ -175,6 +175,46 @@ raise SystemExit(completed.returncode)
 PY
 }
 
+test_jdbc_browser_session() {
+  local directory="$WORK_DIR/jdbc-browser-session"
+  local cookie_jar="$directory/cookies.txt"
+  local login_body="$directory/login.body"
+  local session_body="$directory/session.body"
+  local login_status session_status attempt
+  mkdir -p "$directory"
+
+  login_status="$(curl -m 20 -sS -u "$KKREPO_AUTH" \
+    -c "$cookie_jar" -o "$login_body" -w '%{http_code}' \
+    "$KKREPO_URL/internal/security/basic/login?returnTo=%2Fbrowse%2F")"
+  if [[ "$login_status" != "302" ]]; then
+    log "JDBC browser-session login returned HTTP $login_status"
+    return 1
+  fi
+
+  # Read twice so a Native runtime must deserialize the SessionSubject written by
+  # the login request from the shared JDBC session store on subsequent requests.
+  for attempt in 1 2; do
+    session_status="$(curl -m 20 -sS -b "$cookie_jar" \
+      -o "$session_body" -w '%{http_code}' \
+      "$KKREPO_URL/internal/security/session")"
+    if [[ "$session_status" != "200" ]]; then
+      log "JDBC browser-session reload $attempt returned HTTP $session_status"
+      return 1
+    fi
+    python3 - "$session_body" "$KKREPO_USER" <<'PY'
+import json
+import pathlib
+import sys
+
+session = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+if session.get("userId") != sys.argv[2]:
+    raise SystemExit(
+        f"JDBC browser session user mismatch: {session.get('userId')!r}")
+PY
+  done
+  log "JDBC browser session survived two reloads"
+}
+
 wait_for_ansible_import_task() {
   local label="$1"
   local publish_log="$2"
@@ -3239,6 +3279,7 @@ KKREPO_AUTH_URL="$(basic_auth_url)"
 add_redaction_value "$KKREPO_AUTH_URL"
 wait_for_http "kkrepo management health" "$KKREPO_MANAGEMENT_URL/actuator/health"
 
+test_jdbc_browser_session
 run_selected_tests
 
 log "real client E2E matrix completed"
