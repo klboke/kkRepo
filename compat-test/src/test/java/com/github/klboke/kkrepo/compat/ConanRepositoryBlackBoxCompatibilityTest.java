@@ -96,8 +96,7 @@ class ConanRepositoryBlackBoxCompatibilityTest {
     assertEquals(0, ping.body().length);
     assertEquals("revisions", ping.header("x-conan-server-capabilities"));
 
-    JsonNode search = json(get(endpoint, "v2/conans/search?q=" + encode(reference.recipe())));
-    assertTrue(values(search.path("results")).contains(reference.recipe()));
+    awaitRecipeSearch(endpoint, reference);
     assertEquals(reference.rrev(), json(get(endpoint, reference.recipeRoot() + "/latest"))
         .path("revision").asText());
     assertTrue(revisions(json(get(endpoint, reference.recipeRoot() + "/revisions")))
@@ -159,6 +158,20 @@ class ConanRepositoryBlackBoxCompatibilityTest {
     }
     throw new AssertionError("Conan Browse path did not appear: " + path + " response="
         + (last == null ? "<none>" : last.status() + " " + last.text()));
+  }
+
+  private static void awaitRecipeSearch(Endpoint endpoint, Reference reference) throws Exception {
+    Exchange last = null;
+    for (int attempt = 0; attempt < 60; attempt++) {
+      last = get(endpoint, "v2/conans/search?q=" + encode(reference.recipe()));
+      if (last.status() == 200
+          && values(JSON.readTree(last.body()).path("results")).contains(reference.recipe())) {
+        return;
+      }
+      Thread.sleep(250L);
+    }
+    throw new AssertionError("Conan recipe did not appear in search: " + reference.recipe()
+        + " response=" + (last == null ? "<none>" : last.status() + " " + last.text()));
   }
 
   private static String authenticate(Endpoint endpoint, String basic) throws Exception {

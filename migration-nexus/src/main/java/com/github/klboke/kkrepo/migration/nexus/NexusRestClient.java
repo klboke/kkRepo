@@ -1141,13 +1141,13 @@ public class NexusRestClient {
                   shape.inspectedAssetCount++
                   def path = fingerprintText(rows.getObject('asset_path')).replaceFirst('^/+', '')
                   def parts = path.split('/')
-                  def recipeFile = parts.length >= 9
+                  def recipeFile = (parts.length >= 9
                       && parts[0] == 'conans' && parts[5] == 'revisions'
-                      && parts[7] == 'files'
-                  def packageFile = parts.length >= 13
+                      && parts[7] == 'files')
+                  def packageFile = (parts.length >= 13
                       && parts[0] == 'conans' && parts[5] == 'revisions'
                       && parts[7] == 'packages' && parts[9] == 'revisions'
-                      && parts[11] == 'files'
+                      && parts[11] == 'files')
                   if (!recipeFile && !packageFile) {
                     continue
                   }

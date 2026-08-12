@@ -242,6 +242,20 @@ class NexusRestClientTest {
   }
 
   @Test
+  void sourceProfileScriptUsesGroovy24CompatibleConanBooleanContinuations() throws Exception {
+    var field = NexusRestClient.class.getDeclaredField("SOURCE_PROFILE_PROBE_SCRIPT");
+    field.setAccessible(true);
+    String script = (String) field.get(null);
+
+    assertTrue(script.contains("def recipeFile = (parts.length >= 9\n"));
+    assertTrue(script.contains("&& parts[7] == 'files')"));
+    assertTrue(script.contains("def packageFile = (parts.length >= 13\n"));
+    assertTrue(script.contains("&& parts[11] == 'files')"));
+    assertFalse(script.contains("def recipeFile = parts.length >= 9\n"));
+    assertFalse(script.contains("def packageFile = parts.length >= 13\n"));
+  }
+
+  @Test
   void repositoryDataScriptPagesAssetsByBucketAndNameCursor() throws Exception {
     var field = NexusRestClient.class.getDeclaredField("LOCAL_REPOSITORY_DATA_EXPORT_SCRIPT");
     field.setAccessible(true);
