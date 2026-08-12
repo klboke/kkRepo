@@ -179,7 +179,7 @@ jobs:
       COMPOSE_FILE: docker-compose.compat-postgres.yml
       COMPOSE_PROJECT_NAME: kkrepo-compat
       LIVE_COMPAT_SUITE: ${{ (inputs.runtime == 'native' && 'client-e2e') || inputs.suite || 'client-e2e' }}
-      NEXUS_COMPAT_IMAGE: ${{ ((inputs.runtime == 'native') || inputs.suite == 'client-e2e' || inputs.suite == 'swift' || inputs.suite == 'ansible' || inputs.suite == 'apt' || inputs.suite == 'full' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && 'sonatype/nexus3:3.94.0' || 'sonatype/nexus3:3.92.0' }}
+      NEXUS_COMPAT_IMAGE: ${{ ((inputs.runtime == 'native') || inputs.suite == 'client-e2e' || inputs.suite == 'nexus' || inputs.suite == 'swift' || inputs.suite == 'ansible' || inputs.suite == 'apt' || inputs.suite == 'full' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && 'sonatype/nexus3:3.94.0' || 'sonatype/nexus3:3.92.0' }}
       PUB_COMPAT_ENABLED: "true"
       COMPAT_ASSET_RAW_REPOSITORY: asset-api-raw-hosted
       COMPOSER_COMPAT_ENABLED: "true"
@@ -374,9 +374,9 @@ jobs:
           verify_tag MaestriHub/shared-modules v0.3.8 d8f866b8e79bdbd364239512903cef3a70bf2e7e
           verify_tag MaestriHub/shared-modules V0.3.7 ac363c90c494ac34ae9532dc9c3acc316f167f83
 
-      - name: Install Python client build tools
+      - name: Install Python-backed client tools
         if: env.LIVE_COMPAT_SUITE == 'client-e2e'
-        run: python -m pip install --upgrade build twine
+        run: python -m pip install --upgrade build twine 'conan==2.31.2'
 
       - name: Set up Ansible Galaxy 2.9 and current clients
         if: env.LIVE_COMPAT_SUITE == 'client-e2e'

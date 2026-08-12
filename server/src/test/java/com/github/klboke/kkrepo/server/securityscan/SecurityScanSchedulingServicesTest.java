@@ -19,6 +19,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao.AssetWithBlob;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MaintenanceCursorDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
@@ -166,6 +167,84 @@ class SecurityScanSchedulingServicesTest {
         drafts.getAllValues().getLast().requestUuid());
     assertNull(drafts.getAllValues().getFirst().requestedScannerSnapshotId());
     assertNull(drafts.getAllValues().getLast().requestedScannerSnapshotId());
+  }
+
+  @Test
+  void keepsConanPackagePendingUntilItsConanInfoIdentityIsComplete() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    AssetDao assets = mock(AssetDao.class);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    SecurityScanCandidateClassifier classifier = mock(SecurityScanCandidateClassifier.class);
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.getWorker().setCandidateBatchSize(1);
+    SecurityScanRepositoryScope scope = mock(SecurityScanRepositoryScope.class);
+    SecurityScanCandidateService service = new SecurityScanCandidateService(
+        scans, assets, repositories, classifier, properties, scope);
+    ScanCandidate candidate = new ScanCandidate(
+        11L, 21L, 2L, 0L, Instant.now(), Instant.now());
+    AssetWithBlob content = content(11L, 7L, 21L);
+    when(content.asset().format()).thenReturn(RepositoryFormat.CONAN);
+    ScanProfile profile = profile(3L, true);
+    RepositoryRecord repository = repository(7L, RepositoryType.HOSTED);
+    when(scans.claimCandidates(1)).thenReturn(List.of(candidate));
+    when(assets.findAssetWithBlobById(11L)).thenReturn(Optional.of(content));
+    when(repositories.findById(7L)).thenReturn(Optional.of(repository));
+    when(scope.effectiveConfigsForSource(7L)).thenReturn(List.of(config(7L, 3L)));
+    when(scans.findProfile(3L)).thenReturn(Optional.of(profile));
+    when(classifier.classify(content.asset(), content.blob(), profile))
+        .thenReturn(classification(CandidateDisposition.SCANNABLE));
+    when(classifier.subjectIdentity(content.asset(), content.blob()))
+        .thenReturn(new SecurityScanCandidateClassifier.SubjectIdentity(
+            "conan-package:pending", Map.of(), false));
+
+    assertEquals(1, service.processBatch());
+
+    verify(scans, never()).createTask(any());
+    ArgumentCaptor<AssetSecurityState> state = ArgumentCaptor.forClass(AssetSecurityState.class);
+    verify(scans).upsertAssetStateIfCurrent(state.capture());
+    assertEquals("CONANINFO_IDENTITY_PENDING", state.getValue().policyReasonCode());
+    assertEquals(com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyDecision.BLOCK_PENDING,
+        state.getValue().policyDecision());
+  }
+
+  @Test
+  void requeuesTheConanPackageArchiveWhenItsSidecarChanges() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    AssetDao assets = mock(AssetDao.class);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    SecurityScanCandidateClassifier classifier = mock(SecurityScanCandidateClassifier.class);
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.getWorker().setCandidateBatchSize(1);
+    SecurityScanRepositoryScope scope = mock(SecurityScanRepositoryScope.class);
+    SecurityScanCandidateService service = new SecurityScanCandidateService(
+        scans, assets, repositories, classifier, properties, scope);
+    ScanCandidate candidate = new ScanCandidate(
+        12L, 22L, 1L, 0L, Instant.now(), Instant.now());
+    AssetWithBlob content = content(12L, 7L, 22L);
+    when(content.asset().format()).thenReturn(RepositoryFormat.CONAN);
+    RepositoryRecord repository = repository(7L, RepositoryType.HOSTED);
+    when(scans.claimCandidates(1)).thenReturn(List.of(candidate));
+    when(assets.findAssetWithBlobById(12L)).thenReturn(Optional.of(content));
+    when(repositories.findById(7L)).thenReturn(Optional.of(repository));
+    when(scope.effectiveConfigsForSource(7L)).thenReturn(List.of());
+    ConanRegistryDao.RevisionFile archive = new ConanRegistryDao.RevisionFile(
+        1L, ConanRegistryDao.OWNER_PACKAGE, 20L, "conan_package.tgz", 10L,
+        "a".repeat(32), "b".repeat(40), "c".repeat(64), 42L,
+        "application/gzip", 7L, Instant.EPOCH, Instant.EPOCH);
+    ConanRegistryDao.RevisionFile info = new ConanRegistryDao.RevisionFile(
+        2L, ConanRegistryDao.OWNER_PACKAGE, 20L, "conaninfo.txt", 12L,
+        "d".repeat(32), "e".repeat(40), "f".repeat(64), 42L,
+        "text/plain", 7L, Instant.EPOCH, Instant.EPOCH);
+    ConanRegistryDao.AssetFile assetFile = new ConanRegistryDao.AssetFile(
+        archive, new ConanRegistryDao.RecipeCoordinate(7L, "demo", "1.0", null, null),
+        "rrev", "pkg", "prev");
+    when(classifier.conanPackageScanContext(12L)).thenReturn(Optional.of(
+        new ConanRegistryDao.PackageScanContext(assetFile, info)));
+
+    assertEquals(1, service.processBatch());
+
+    verify(scans).markRepositoryAssetsForBackfill(7L, 9L, 1);
+    verify(scans).markCandidateEnqueued(12L, 1L);
   }
 
   @Test

@@ -3,6 +3,8 @@ package com.github.klboke.kkrepo.server.browse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.auth.AccessDecision;
@@ -11,6 +13,7 @@ import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
@@ -148,6 +151,40 @@ class BrowseControllerSecurityTest {
 
     assertEquals("kk", listing.path());
     assertEquals(List.of("re"), listing.entries().stream().map(BrowseController.BrowseEntry::name).toList());
+  }
+
+  @Test
+  void conanBrowseDownloadsUseTheTypedClientRouteWrittenWithTheAsset() {
+    RepositoryRecord repository = repo(
+        1L, "conan-hosted", RepositoryFormat.CONAN, RepositoryType.HOSTED);
+    StubRepositoryDao repositories = new StubRepositoryDao(Map.of(repository.name(), repository));
+    StubBrowseNodeDao browseNodes = new StubBrowseNodeDao();
+    browseNodes.children.put(key(repository.id(), ""), List.of(child(
+        "_/demo/1.0/_#rrev/conanfile.py", "conanfile.py", true)));
+    RecordingSecurityService security = new RecordingSecurityService(permission -> AccessDecision.allow());
+    BrowseController controller = controller(
+        repositories, browseNodes, subject("alice"), null, security);
+    ConanRegistryDao conan = mock(ConanRegistryDao.class);
+    controller.setConanRegistryDao(conan);
+    ConanRegistryDao.RevisionFile file = new ConanRegistryDao.RevisionFile(
+        10L, ConanRegistryDao.OWNER_RECIPE, 20L, "conanfile.py", 1L,
+        "a".repeat(32), "b".repeat(40), "c".repeat(64), 42L,
+        "text/x-python", 1L, Instant.EPOCH, Instant.EPOCH);
+    when(conan.findFileByAssetId(1L)).thenReturn(Optional.of(new ConanRegistryDao.AssetFile(
+        file, new ConanRegistryDao.RecipeCoordinate(1L, "demo", "1.0", null, null),
+        "rrev", null, null)));
+
+    BrowseController.BrowseListing listing = controller.list(
+        "conan-hosted", "", request("GET", "/internal/browse/conan-hosted"));
+
+    assertEquals(
+        "/repository/conan-hosted/v2/conans/demo/1.0/_/_/revisions/rrev/files/conanfile.py",
+        listing.entries().getFirst().downloadUrl());
+
+    when(conan.findFileByAssetId(1L)).thenReturn(Optional.empty());
+    ResponseStatusException failure = assertThrows(ResponseStatusException.class, () ->
+        controller.list("conan-hosted", "", request("GET", "/internal/browse/conan-hosted")));
+    assertEquals(HttpStatus.CONFLICT, failure.getStatusCode());
   }
 
   @Test

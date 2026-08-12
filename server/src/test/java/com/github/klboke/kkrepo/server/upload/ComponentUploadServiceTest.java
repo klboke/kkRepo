@@ -5,12 +5,14 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.inOrder;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
@@ -21,6 +23,7 @@ import com.github.klboke.kkrepo.server.apt.AptService;
 import com.github.klboke.kkrepo.server.cargo.CargoHostedService;
 import com.github.klboke.kkrepo.server.composer.ComposerHostedService;
 import com.github.klboke.kkrepo.server.conda.CondaService;
+import com.github.klboke.kkrepo.server.conan.ConanService;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
 import com.github.klboke.kkrepo.server.maven.MavenHostedService;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
@@ -39,6 +42,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.web.multipart.MultipartFile;
@@ -152,6 +156,125 @@ class ComponentUploadServiceTest {
             Map.of("conda.subdir", new String[] {"noarch"}), unnamed,
             "alice", "127.0.0.1")).getMessage());
     verify(conda, never()).put(any(), any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void conanDefinitionAndManifestLastPublicationPreserveRevisionRoutes() throws Exception {
+    ConanService conan = mock(ConanService.class);
+    ComponentUploadService service = service(conan);
+    UploadDefinition definition = service.definition("conan");
+    assertTrue(definition.multipleUpload());
+    assertEquals(
+        List.of("name", "version", "user", "channel", "rrev", "package-id", "prev"),
+        definition.componentFields().stream().map(UploadFieldDefinition::name).toList());
+    assertEquals(List.of("filename", "asset"),
+        definition.assetFields().stream().map(UploadFieldDefinition::name).toList());
+
+    LinkedMultiValueMap<String, MultipartFile> uploads = new LinkedMultiValueMap<>();
+    uploads.add("conan.asset1", new MockMultipartFile(
+        "conan.asset1", "conanmanifest.txt", "text/plain", "manifest".getBytes()));
+    uploads.add("conan.asset2", new MockMultipartFile(
+        "conan.asset2", "conanfile.py", "text/x-python", "recipe".getBytes()));
+    ComponentUploadService.UploadResult result = service.upload(
+        "conan-hosted",
+        Map.of(
+            "conan.name", new String[] {"demo"},
+            "conan.version", new String[] {"1.0"},
+            "conan.user", new String[] {"acme"},
+            "conan.channel", new String[] {"stable"},
+            "conan.rrev", new String[] {"rrev"},
+            "conan.asset1.filename", new String[] {"conanmanifest.txt"},
+            "conan.asset2.filename", new String[] {"conanfile.py"}),
+        uploads,
+        "alice",
+        "127.0.0.1");
+
+    assertEquals(List.of("conanfile.py", "conanmanifest.txt"), result.paths());
+    InOrder order = inOrder(conan);
+    order.verify(conan).putInternal(
+        any(), eq("v2/conans/demo/1.0/acme/stable/revisions/rrev/files/conanfile.py"),
+        any(), eq(6L), eq("text/x-python"), eq(sha1("recipe")),
+        eq("alice"), eq("127.0.0.1"));
+    order.verify(conan).putInternal(
+        any(), eq("v2/conans/demo/1.0/acme/stable/revisions/rrev/files/conanmanifest.txt"),
+        any(), eq(8L), eq("text/plain"), eq(sha1("manifest")),
+        eq("alice"), eq("127.0.0.1"));
+  }
+
+  @Test
+  void conanPackageUploadBuildsTheBinaryRevisionRoute() throws Exception {
+    ConanService conan = mock(ConanService.class);
+    ComponentUploadService service = service(conan);
+    LinkedMultiValueMap<String, MultipartFile> uploads = new LinkedMultiValueMap<>();
+    uploads.add("conan.asset1", new MockMultipartFile(
+        "conan.asset1", "conan_package.tgz", "application/gzip", new byte[] {1}));
+    uploads.add("conan.asset2", new MockMultipartFile(
+        "conan.asset2", "conanmanifest.txt", "text/plain", new byte[] {2}));
+
+    service.upload(
+        "conan-hosted",
+        Map.of(
+            "conan.name", new String[] {"demo"},
+            "conan.version", new String[] {"1.0"},
+            "conan.rrev", new String[] {"rrev"},
+            "conan.package-id", new String[] {"pkg"},
+            "conan.prev", new String[] {"prev"}),
+        uploads,
+        "alice",
+        "ip");
+
+    verify(conan).putInternal(
+        any(),
+        eq("v2/conans/demo/1.0/_/_/revisions/rrev/packages/pkg/revisions/prev/files/"
+            + "conan_package.tgz"),
+        any(), eq(1L), eq("application/gzip"), any(), eq("alice"), eq("ip"));
+  }
+
+  @Test
+  void conanComponentUploadValidatesServiceCoordinatesPathsAndCommitFile() {
+    RepositoryRuntime runtime = runtime("conan-hosted", RepositoryFormat.CONAN);
+    ComponentUploadService unavailable = service(
+        runtime, mock(CargoHostedService.class), mock(PubHostedService.class));
+    Map<String, String[]> coordinates = Map.of(
+        "conan.name", new String[] {"demo"},
+        "conan.version", new String[] {"1.0"},
+        "conan.rrev", new String[] {"rrev"});
+    assertEquals("Conan upload service is unavailable", assertThrows(
+        UploadValidationException.class,
+        () -> unavailable.upload(
+            runtime.name(), coordinates, files("conan.asset", "conanmanifest.txt"),
+            "alice", "ip")).getMessage());
+
+    ConanService conan = mock(ConanService.class);
+    ComponentUploadService service = service(conan);
+    assertTrue(assertThrows(
+        UploadValidationException.class,
+        () -> service.upload(
+            runtime.name(),
+            Map.of(
+                "conan.name", new String[] {"demo"},
+                "conan.version", new String[] {"1.0"},
+                "conan.rrev", new String[] {"rrev"},
+                "conan.package-id", new String[] {"pkg"}),
+            files("conan.asset", "conanmanifest.txt"), "alice", "ip"))
+        .getMessage().contains("package-id and prev"));
+    assertTrue(assertThrows(
+        UploadValidationException.class,
+        () -> service.upload(
+            runtime.name(), coordinates,
+            files("conan.asset", "not-the-manifest.txt"), "alice", "ip"))
+        .getMessage().contains("exactly one conanmanifest.txt"));
+    Map<String, String[]> invalidPathFields = new java.util.LinkedHashMap<>(coordinates);
+    invalidPathFields.put("conan.asset.filename", new String[] {"../escape"});
+    assertTrue(assertThrows(
+        UploadValidationException.class,
+        () -> service.upload(
+            runtime.name(),
+            invalidPathFields,
+            files("conan.asset", "conanmanifest.txt"), "alice", "ip"))
+        .getMessage().contains("Invalid Conan revision file path"));
+    verify(conan, never()).putInternal(
+        any(), any(), any(), anyLong(), any(), any(), any(), any());
   }
 
   @Test
@@ -555,6 +678,14 @@ class ComponentUploadServiceTest {
     return service;
   }
 
+  private static ComponentUploadService service(ConanService conanService) {
+    RepositoryRuntime runtime = runtime("conan-hosted", RepositoryFormat.CONAN);
+    ComponentUploadService service = service(
+        runtime, mock(CargoHostedService.class), mock(PubHostedService.class));
+    service.setConanService(conanService);
+    return service;
+  }
+
   private static ComponentUploadService service(AptService aptService) {
     RepositoryRuntime runtime = runtime("apt-hosted", RepositoryFormat.APT);
     ComponentUploadService service = service(
@@ -609,5 +740,15 @@ class ComponentUploadServiceTest {
         null,
         null,
         List.of());
+  }
+
+  private static String sha1(String value) {
+    try {
+      return java.util.HexFormat.of().formatHex(
+          java.security.MessageDigest.getInstance("SHA-1")
+              .digest(value.getBytes(StandardCharsets.UTF_8)));
+    } catch (java.security.NoSuchAlgorithmException impossible) {
+      throw new AssertionError(impossible);
+    }
   }
 }

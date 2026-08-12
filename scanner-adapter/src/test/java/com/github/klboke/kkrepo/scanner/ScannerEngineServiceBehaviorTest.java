@@ -128,6 +128,48 @@ class ScannerEngineServiceBehaviorTest {
   }
 
   @Test
+  void catalogsConanMultipartThroughThePreparedPackageRoot() throws Exception {
+    Fixture fixture = new Fixture(temporaryDirectory.resolve("conan"));
+    Path archive = temporaryDirectory.resolve("conan-package.tgz");
+    Path conanInfo = temporaryDirectory.resolve("conaninfo.txt");
+    ScannerInput.Verified packagePart = new ScannerInput.Verified(archive, SHA256, 64);
+    ScannerInput.Verified infoPart = new ScannerInput.Verified(
+        conanInfo, "b".repeat(64), 17);
+    when(fixture.conanMultipart.parse(
+        any(), anyString(), any(), any(), eq(SHA256), eq(64L), eq("b".repeat(64)),
+        eq(17L), any(), any()))
+        .thenReturn(new ConanMultipartInput.Parts(packagePart, infoPart));
+    when(fixture.archiveGuard.inspectConan(any(), any(), any(), any()))
+        .thenReturn(new ArchiveGuard.Inspection(5, 128, 1));
+    Path scanRoot = temporaryDirectory.resolve("conan-root");
+    when(fixture.conanPackages.prepare(any(), any(), any(), any(), any()))
+        .thenReturn(new ConanPackageCataloger.Prepared(scanRoot, 17));
+
+    CatalogResponse response = fixture.engine.catalogConan(
+        new ByteArrayInputStream(new byte[0]),
+        "multipart/form-data; boundary=abcdefghijklmnop",
+        SHA256,
+        64,
+        "b".repeat(64),
+        17,
+        limits());
+
+    assertEquals(ScanCompleteness.COMPLETE, response.completeness());
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<String>> command = ArgumentCaptor.forClass(List.class);
+    verify(fixture.processes).run(command.capture(), any(), any(), any(), any());
+    assertTrue(command.getValue().contains("dir:" + scanRoot));
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<Map<String, Object>> summary = ArgumentCaptor.forClass(Map.class);
+    verify(fixture.documents).catalog(
+        any(), eq(SHA256), eq("1.2"), anyString(), summary.capture());
+    assertEquals("conan-package-multipart-v1", summary.getValue().get("inputSchema"));
+    assertEquals(64L, summary.getValue().get("inputBytes"));
+    assertEquals(17L, summary.getValue().get("conanInfoBytes"));
+    assertEquals(5, summary.getValue().get("archiveEntries"));
+  }
+
+  @Test
   void failsClosedWhenSyftDoesNotRecognizeCondaMetadata() throws Exception {
     Fixture fixture = new Fixture(temporaryDirectory);
     when(fixture.scannerInput.copy(any(), any(), eq(SHA256), eq(8L), any(), any()))

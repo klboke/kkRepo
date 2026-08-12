@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class ConanManifestAndInfoTest {
@@ -28,6 +30,48 @@ class ConanManifestAndInfoTest {
     assertThrows(IllegalArgumentException.class, () -> ConanManifest.parse(("1\n"
         + "../escape: 0123456789abcdef0123456789abcdef\n")
         .getBytes(StandardCharsets.UTF_8)));
+  }
+
+  @Test
+  void enforcesManifestConstructorAndWireBounds() {
+    String checksum = "0123456789ABCDEF0123456789ABCDEF";
+    ConanManifest normalized = new ConanManifest(1, Map.of("nested/file", checksum));
+    assertEquals(checksum.toLowerCase(), normalized.md5ByPath().get("nested/file"));
+    assertThrows(UnsupportedOperationException.class,
+        () -> normalized.md5ByPath().put("other", checksum));
+
+    assertThrows(IllegalArgumentException.class, () -> new ConanManifest(-1, Map.of()));
+    assertThrows(IllegalArgumentException.class, () -> new ConanManifest(1, null));
+    assertThrows(IllegalArgumentException.class,
+        () -> new ConanManifest(1, Map.of(ConanManifest.FILE_NAME, checksum)));
+    assertThrows(IllegalArgumentException.class,
+        () -> new ConanManifest(1, Map.of("file", "not-an-md5")));
+
+    Map<String, String> tooMany = new LinkedHashMap<>();
+    for (int index = 0; index <= ConanManifest.MAX_ENTRIES; index++) {
+      tooMany.put("file-" + index, checksum);
+    }
+    assertThrows(IllegalArgumentException.class, () -> new ConanManifest(1, tooMany));
+
+    for (byte[] invalid : new byte[][] {
+        null,
+        new byte[0],
+        new byte[ConanManifest.MAX_BYTES + 1],
+        "1".getBytes(StandardCharsets.UTF_8),
+        "bad\n".getBytes(StandardCharsets.UTF_8),
+        "1\r\n".getBytes(StandardCharsets.UTF_8),
+        new byte[] {'1', '\n', 0},
+        "1\nmissing separator\n".getBytes(StandardCharsets.UTF_8)
+    }) {
+      assertThrows(IllegalArgumentException.class, () -> ConanManifest.parse(invalid));
+    }
+
+    StringBuilder entries = new StringBuilder("1\n");
+    for (int index = 0; index <= ConanManifest.MAX_ENTRIES; index++) {
+      entries.append("file-").append(index).append(": ").append(checksum).append('\n');
+    }
+    assertThrows(IllegalArgumentException.class,
+        () -> ConanManifest.parse(entries.toString().getBytes(StandardCharsets.UTF_8)));
   }
 
   @Test
@@ -68,5 +112,41 @@ class ConanManifestAndInfoTest {
     assertThrows(IllegalArgumentException.class, () -> ConanInfo.parse(new byte[] {
         '[', 'x', ']', '\n', 0
     }));
+  }
+
+  @Test
+  void enforcesConanInfoBoundsAndKeepsProjectionImmutable() {
+    ConanInfo value = new ConanInfo(null, null, null, "raw");
+    assertEquals(Map.of(), value.settings());
+    assertThrows(UnsupportedOperationException.class,
+        () -> value.settings().put("os", "Linux"));
+    assertThrows(IllegalArgumentException.class,
+        () -> new ConanInfo(Map.of(), Map.of(), Map.of(), null));
+    assertThrows(IllegalArgumentException.class,
+        () -> new ConanInfo(Map.of(), Map.of(), Map.of(), "x".repeat(ConanInfo.MAX_BYTES + 1)));
+
+    assertThrows(IllegalArgumentException.class, () -> ConanInfo.parse(null));
+    assertThrows(IllegalArgumentException.class,
+        () -> ConanInfo.parse(new byte[ConanInfo.MAX_BYTES + 1]));
+    assertThrows(IllegalArgumentException.class,
+        () -> ConanInfo.parse("[settings]\r\nos=Linux".getBytes(StandardCharsets.UTF_8)));
+
+    for (String invalid : new String[] {
+        "[settings]\n=Linux\n",
+        "[settings]\n" + "k".repeat(257) + "=value\n",
+        "[settings]\nkey=" + "v".repeat(4097) + "\n",
+        "[settings]\nkey=value\nkey=duplicate\n",
+        "[settings]\nkey=bad\u007fvalue\n"
+    }) {
+      assertThrows(IllegalArgumentException.class,
+          () -> ConanInfo.parse(invalid.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    StringBuilder entries = new StringBuilder("[settings]\n");
+    for (int index = 0; index <= 1024; index++) {
+      entries.append('k').append(index).append("=v\n");
+    }
+    assertThrows(IllegalArgumentException.class,
+        () -> ConanInfo.parse(entries.toString().getBytes(StandardCharsets.UTF_8)));
   }
 }

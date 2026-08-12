@@ -7,9 +7,13 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Proxy;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class PersistenceApiContractsTest {
@@ -100,6 +104,31 @@ class PersistenceApiContractsTest {
     assertEquals(0, missing.deleted());
     assertNull(missing.assetId());
     assertNull(missing.assetBlobId());
+  }
+
+  @Test
+  void conanRepositoryRevisionBatchIsDistinctNullSafeAndUsesPointLookups() {
+    ArrayList<Long> lookups = new ArrayList<>();
+    ConanRegistryDao conan = (ConanRegistryDao) Proxy.newProxyInstance(
+        ConanRegistryDao.class.getClassLoader(),
+        new Class<?>[] {ConanRegistryDao.class},
+        (proxy, method, arguments) -> {
+          if (method.isDefault()) {
+            return InvocationHandler.invokeDefault(proxy, method, arguments);
+          }
+          if (method.getName().equals("currentRepositoryRevision")) {
+            long repositoryId = (long) arguments[0];
+            lookups.add(repositoryId);
+            return repositoryId * 11;
+          }
+          throw new UnsupportedOperationException(method.getName());
+        });
+
+    assertEquals(Map.of(), conan.currentRepositoryRevisions(null));
+    assertEquals(
+        Map.of(1L, 11L, 2L, 22L),
+        conan.currentRepositoryRevisions(List.of(1L, 2L, 1L)));
+    assertEquals(List.of(1L, 2L), lookups);
   }
 
   private static BrowseNodeDao.BrowseChild browseChild(Long assetId, boolean hasChildren) {

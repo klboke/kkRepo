@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.server.apt.AptService;
 import com.github.klboke.kkrepo.server.browse.BrowseContentDeleteController;
 import com.github.klboke.kkrepo.server.browse.RepositoryContentDeletionService.CleanupDeleteSubject;
+import com.github.klboke.kkrepo.server.conan.ConanService;
 import com.github.klboke.kkrepo.server.docker.DockerManifestStore;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
@@ -170,5 +171,39 @@ class CleanupRepositoryContentDeletionServiceTest {
 
     verify(apt).deleteComponentsForCleanup(
         runtime, List.of(9L, 10L), "cleanup policy delete by cleanup");
+  }
+
+  @Test
+  void conanComponentDeletionUsesRevisionAwareProtocolDeletionForSingleAndBatchRequests() {
+    RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
+    RepositoryRuntime runtime = mock(RepositoryRuntime.class);
+    ConanService conan = mock(ConanService.class);
+    when(runtime.format()).thenReturn(RepositoryFormat.CONAN);
+    when(runtimes.resolve("conan-hosted")).thenReturn(Optional.of(runtime));
+    when(conan.deleteComponentForCleanup(runtime, 9L, "cleanup")).thenReturn(2);
+    when(conan.deleteComponentForCleanup(runtime, 10L, "cleanup")).thenReturn(3);
+    CleanupRepositoryContentDeletionService service =
+        new CleanupRepositoryContentDeletionService(
+            mock(BrowseContentDeleteController.class),
+            runtimes,
+            mock(DockerManifestStore.class),
+            mock(NpmHostedService.class),
+            mock(AptService.class));
+    service.setConanService(conan);
+
+    assertEquals(2, service.deleteForCleanup(
+        "conan-hosted", "COMPONENT", 9L, "ignored", "cleanup"));
+    assertEquals(
+        List.of(2, 3),
+        service.deleteBatchForCleanup(
+            "conan-hosted",
+            List.of(
+                new CleanupDeleteSubject("COMPONENT", 9L, "first"),
+                new CleanupDeleteSubject("COMPONENT", 10L, "second")),
+            "cleanup"));
+
+    verify(conan, org.mockito.Mockito.times(2))
+        .deleteComponentForCleanup(runtime, 9L, "cleanup");
+    verify(conan).deleteComponentForCleanup(runtime, 10L, "cleanup");
   }
 }

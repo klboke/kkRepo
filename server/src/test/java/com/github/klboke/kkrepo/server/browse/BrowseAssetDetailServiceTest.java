@@ -17,6 +17,8 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
@@ -53,6 +55,127 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
 class BrowseAssetDetailServiceTest {
+
+  @Test
+  void conanDetailResolvesTheWriteTimeBrowseProjectionAndTypedClientRoute() {
+    RepositoryRecord repository = repository(
+        70L, "conan-hosted", RepositoryFormat.CONAN, RepositoryType.HOSTED);
+    String browsePath = "acme/demo/1.0/stable#rrev/conanfile.py";
+    String storagePath =
+        "conans/demo/1.0/acme/stable/revisions/rrev/files/conanfile.py";
+    AssetRecord asset = new AssetRecord(
+        71L, repository.id(), 72L, 73L, RepositoryFormat.CONAN, storagePath,
+        PersistenceHashes.pathHash(storagePath), "conanfile.py", "conan-recipe",
+        "text/x-python", 128L, null, Instant.EPOCH, Map.of());
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(repository.id(), storagePath), asset), Map.of(73L, blob(73L, 128L)));
+    BrowseNodeDao browse = mock(BrowseNodeDao.class);
+    when(browse.findNode(repository.id(), browsePath)).thenReturn(Optional.of(
+        new BrowseNodeDao.BrowseChild(
+            1L, browsePath, "conanfile.py", 6, asset.id(), asset.componentId(),
+            asset.size(), asset.contentType(), "a".repeat(40), Instant.EPOCH, false, true)));
+    ConanRegistryDao conan = mock(ConanRegistryDao.class);
+    ConanRegistryDao.RevisionFile file = new ConanRegistryDao.RevisionFile(
+        1L, ConanRegistryDao.OWNER_RECIPE, 2L, "conanfile.py", asset.id(),
+        "b".repeat(32), "a".repeat(40), "c".repeat(64), 128L, "text/x-python",
+        null, Instant.EPOCH, Instant.EPOCH);
+    when(conan.findFileByAssetId(asset.id())).thenReturn(Optional.of(
+        new ConanRegistryDao.AssetFile(
+            file,
+            new ConanRegistryDao.RecipeCoordinate(
+                repository.id(), "demo", "1.0", "acme", "stable"),
+            "rrev", null, null)));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(), assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+    service.setBrowseNodeDao(browse);
+    service.setConanRegistryDao(conan);
+
+    BrowseAssetDetailService.BrowseAssetDetail detail =
+        service.detail(repository, browsePath, null);
+
+    assertEquals(browsePath, detail.path());
+    assertEquals("conanfile.py", detail.name());
+    assertEquals(
+        "/repository/conan-hosted/v2/conans/demo/1.0/acme/stable/revisions/rrev/files/"
+            + "conanfile.py",
+        detail.downloadUrl());
+    assertEquals(List.of(key(repository.id(), storagePath)), assets.pathLookups);
+  }
+
+  @Test
+  void conanGroupDetailUsesTheSelectedSourceProjectionWithoutPathRemapping() {
+    RepositoryRecord group = repository(
+        75L, "conan-group", RepositoryFormat.CONAN, RepositoryType.GROUP);
+    RepositoryRecord hosted = repository(
+        76L, "conan-hosted", RepositoryFormat.CONAN, RepositoryType.HOSTED);
+    String browsePath = "acme/demo/1.0/stable#rrev/conanfile.py";
+    String storagePath =
+        "conans/demo/1.0/acme/stable/revisions/rrev/files/conanfile.py";
+    AssetRecord asset = new AssetRecord(
+        77L, hosted.id(), 78L, 79L, RepositoryFormat.CONAN, storagePath,
+        PersistenceHashes.pathHash(storagePath), "conanfile.py", "conan-recipe",
+        "text/x-python", 128L, null, Instant.EPOCH, Map.of());
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(hosted.id(), storagePath), asset), Map.of(79L, blob(79L, 128L)));
+    RepositoryDao repositories = new StubRepositoryDao() {
+      @Override
+      public List<RepositoryRecord> listMembers(long repositoryId) {
+        return repositoryId == group.id() ? List.of(hosted) : List.of();
+      }
+    };
+    BrowseNodeDao browse = mock(BrowseNodeDao.class);
+    when(browse.findNode(hosted.id(), browsePath)).thenReturn(Optional.of(
+        new BrowseNodeDao.BrowseChild(
+            1L, browsePath, "conanfile.py", 6, asset.id(), asset.componentId(),
+            asset.size(), asset.contentType(), "a".repeat(40), Instant.EPOCH, false, true)));
+    ConanRegistryDao conan = mock(ConanRegistryDao.class);
+    ConanRegistryDao.RevisionFile file = new ConanRegistryDao.RevisionFile(
+        1L, ConanRegistryDao.OWNER_RECIPE, 2L, "conanfile.py", asset.id(),
+        "b".repeat(32), "a".repeat(40), "c".repeat(64), 128L, "text/x-python",
+        null, Instant.EPOCH, Instant.EPOCH);
+    when(conan.findFileByAssetId(asset.id())).thenReturn(Optional.of(
+        new ConanRegistryDao.AssetFile(
+            file, new ConanRegistryDao.RecipeCoordinate(
+                hosted.id(), "demo", "1.0", "acme", "stable"),
+            "rrev", null, null)));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        repositories, assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+    service.setBrowseNodeDao(browse);
+    service.setConanRegistryDao(conan);
+
+    BrowseAssetDetailService.BrowseAssetDetail detail =
+        service.detail(group, browsePath, hosted.name());
+
+    assertEquals(group.name(), detail.repository());
+    assertEquals(hosted.name(), detail.sourceRepository());
+    assertEquals(browsePath, detail.path());
+    assertEquals(List.of(key(hosted.id(), storagePath)), assets.pathLookups);
+  }
+
+  @Test
+  void conanDetailFailsClosedWithoutProjectionOrTypedIdentity() {
+    RepositoryRecord repository = repository(
+        74L, "conan-hosted", RepositoryFormat.CONAN, RepositoryType.HOSTED);
+    StubAssetDao assets = new StubAssetDao(Map.of(), Map.of());
+    BrowseAssetDetailService unavailable = new BrowseAssetDetailService(
+        new StubRepositoryDao(), assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+    ResponseStatusException projectionMissing = assertThrows(
+        ResponseStatusException.class,
+        () -> unavailable.detail(repository, "browse/file", null));
+    assertEquals(HttpStatus.CONFLICT, projectionMissing.getStatusCode());
+
+    BrowseNodeDao browse = mock(BrowseNodeDao.class);
+    BrowseAssetDetailService missing = new BrowseAssetDetailService(
+        new StubRepositoryDao(), assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+    missing.setBrowseNodeDao(browse);
+    assertEquals(HttpStatus.NOT_FOUND, assertThrows(
+        ResponseStatusException.class,
+        () -> missing.detail(repository, "browse/file", null)).getStatusCode());
+  }
 
   @Test
   void aptDetailMapsProjectedPathAndExposesRegistryIdentity() {

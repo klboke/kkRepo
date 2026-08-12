@@ -229,6 +229,46 @@ class RepositoryRequestMetricsFilterTest {
   }
 
   @Test
+  void recordsLowCardinalityConanOperations() throws Exception {
+    String[][] requests = {
+        {"GET", "/repository/conan-group/v1/ping", "conan_ping"},
+        {"GET", "/repository/conan-group/v2/users/authenticate", "conan_authenticate"},
+        {"GET", "/repository/conan-group/v2/users/check_credentials", "conan_check_credentials"},
+        {"GET", "/repository/conan-group/v2/conans/search", "conan_search"},
+        {"GET", "/repository/conan-group/v2/conans/demo/1.0/_/_/revisions",
+            "conan_revision_metadata"},
+        {"GET", "/repository/conan-group/v2/conans/demo/1.0/_/_/revisions/rrev/files/a",
+            "conan_file_download"},
+        {"PUT", "/repository/conan-hosted/v2/conans/demo/1.0/_/_/revisions/rrev/files/a",
+            "conan_file_upload"},
+        {"DELETE", "/repository/conan-hosted/v2/conans/demo/1.0/_/_/revisions/rrev/files/a",
+            "conan_revision_delete"},
+        {"GET", "/repository/conan-group/v2/conans/demo/1.0/_/_/latest",
+            "conan_repository"},
+    };
+
+    for (String[] item : requests) {
+      SimpleMeterRegistry registry = new SimpleMeterRegistry();
+      RepositoryRequestMetricsFilter filter = new RepositoryRequestMetricsFilter(
+          new KkRepoMetrics(registry), true, "");
+      MockHttpServletRequest request = new MockHttpServletRequest(item[0], item[1]);
+      MockHttpServletResponse response = new MockHttpServletResponse();
+      RepositoryType type = item[1].contains("conan-hosted")
+          ? RepositoryType.HOSTED : RepositoryType.GROUP;
+      FilterChain chain = (req, resp) -> req.setAttribute(
+          RepositorySecurityFilter.REPOSITORY_RECORD_ATTRIBUTE,
+          repository(type == RepositoryType.HOSTED ? "conan-hosted" : "conan-group",
+              RepositoryFormat.CONAN, type));
+
+      filter.doFilter(request, response, chain);
+
+      assertNotNull(registry.find("kkrepo_repository_requests_total")
+          .tags("operation", item[2], "status", "200")
+          .counter(), item[2]);
+    }
+  }
+
+  @Test
   void recordsSecurityFailuresWhenFilterChainStopsEarly() throws Exception {
     SimpleMeterRegistry registry = new SimpleMeterRegistry();
     RepositoryRequestMetricsFilter filter = new RepositoryRequestMetricsFilter(new KkRepoMetrics(registry), true, "");

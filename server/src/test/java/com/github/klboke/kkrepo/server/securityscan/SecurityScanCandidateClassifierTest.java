@@ -93,12 +93,15 @@ class SecurityScanCandidateClassifierTest {
   @Test
   void bindsConanPackageScanningToArchiveAndConanInfo() {
     SecurityScanCandidateClassifier conanClassifier = new SecurityScanCandidateClassifier();
-    ConanRegistryDao registry = mock(ConanRegistryDao.class);
-    conanClassifier.setConanRegistryDao(registry);
     AssetRecord archiveAsset = asset(
         RepositoryFormat.CONAN,
         "conans/demo/1.0/acme/stable/revisions/rrev/packages/package/revisions/prev/files/conan_package.tgz",
         "conan");
+    assertFalse(conanClassifier.subjectIdentity(archiveAsset, blob(42)).complete());
+    assertTrue(conanClassifier.conanPackageScanContext(archiveAsset.id()).isEmpty());
+
+    ConanRegistryDao registry = mock(ConanRegistryDao.class);
+    conanClassifier.setConanRegistryDao(registry);
     ConanRegistryDao.RevisionFile archive = revisionFile(
         archiveAsset.id(), "conan_package.tgz", "a".repeat(64));
     ConanRegistryDao.RevisionFile info = revisionFile(

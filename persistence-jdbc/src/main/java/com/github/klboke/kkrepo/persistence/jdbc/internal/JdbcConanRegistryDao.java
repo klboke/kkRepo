@@ -1517,7 +1517,14 @@ public class JdbcConanRegistryDao implements ConanRegistryDao {
   }
 
   private static String prefixUpperBound(String prefix) {
-    return prefix + '\uffff';
+    char[] value = prefix.toCharArray();
+    for (int index = value.length - 1; index >= 0; index--) {
+      if (value[index] < 0x7f) {
+        value[index]++;
+        return new String(value, 0, index + 1);
+      }
+    }
+    return prefix + '\u007f';
   }
 
   private static boolean packageArchive(String path) {

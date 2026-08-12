@@ -73,6 +73,16 @@ class ScannerControllerTest {
         catalogLimits.capture());
     assertEquals(200, catalogLimits.getValue().maxArchiveEntries());
 
+    when(request.getContentType()).thenReturn("multipart/form-data; boundary=conan-boundary");
+    when(engine.catalogConan(
+        any(), eq("multipart/form-data; boundary=conan-boundary"), eq("c".repeat(64)),
+        eq(7L), eq("d".repeat(64)), eq(8L), any())).thenReturn(catalog);
+    assertEquals(catalog, controller.catalogConan(
+        request, "v1", "run-conan", "c".repeat(64), 7L, "d".repeat(64), 8L));
+    verify(engine).catalogConan(
+        any(), eq("multipart/form-data; boundary=conan-boundary"), eq("c".repeat(64)),
+        eq(7L), eq("d".repeat(64)), eq(8L), any());
+
     MatchResponse match = match();
     when(engine.match(any(), eq("b".repeat(64)), any())).thenReturn(match);
     assertEquals(

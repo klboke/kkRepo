@@ -327,6 +327,27 @@ class ArchiveGuardTest {
   }
 
   @Test
+  void conanInspectionUsesTheArchiveBudgetAndMapsFilesystemFailures() throws IOException {
+    Path archive = temporary.resolve("conan_package.tgz");
+    try (GZIPOutputStream gzip = new GZIPOutputStream(Files.newOutputStream(archive));
+        TarArchiveOutputStream output = new TarArchiveOutputStream(gzip)) {
+      writeTarEntry(output, "bin/demo", "payload".getBytes());
+    }
+
+    ArchiveGuard.Inspection inspection =
+        guard.inspectConan(archive, limits(10, 1024), temporary, deadline());
+    assertThat(inspection.entries()).isEqualTo(1);
+    assertThat(inspection.expandedBytes()).isEqualTo(7);
+    assertThat(inspection.condaIndex()).isNull();
+
+    assertThatThrownBy(() -> guard.inspectConan(
+            temporary.resolve("missing.tgz"), limits(10, 1024), temporary, deadline()))
+        .isInstanceOf(ScannerRequestException.class)
+        .extracting(failure -> ((ScannerRequestException) failure).code())
+        .isEqualTo("ARCHIVE_INVALID");
+  }
+
+  @Test
   void stopsArchiveTraversalWhenTheSharedDeadlineExpires() throws IOException {
     Path archive = zip("deadline.zip", "entry.txt", "content".getBytes());
     AtomicLong clock = new AtomicLong();

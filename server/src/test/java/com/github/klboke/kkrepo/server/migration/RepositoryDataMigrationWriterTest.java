@@ -39,12 +39,14 @@ import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.server.docker.DockerManifestParser;
 import com.github.klboke.kkrepo.server.conda.CondaRepositoryDataMigrationWriter;
+import com.github.klboke.kkrepo.server.conan.ConanRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.support.dao.AssetDaoAdapter;
 import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -407,6 +409,68 @@ class RepositoryDataMigrationWriterTest {
         org.mockito.ArgumentMatchers.eq(true));
   }
 
+  @Test
+  void delegatesConanMigrationAndFailsClosedWhenProtocolWriterIsUnavailable() {
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    BlobStorageRegistry storages = mock(BlobStorageRegistry.class);
+    BlobStorage storage = mock(BlobStorage.class);
+    RepositoryRecord repository = conanRepository();
+    RepositoryDataMigrationAssetRecord source = conanSource(
+        "conans/demo/1.0/_/_/revisions/rrev/files/conan_export.tgz", SAMPLE.length);
+    when(repositories.findById(repository.id())).thenReturn(Optional.of(repository));
+    when(storages.forBlobStoreId(repository.blobStoreId())).thenReturn(storage);
+    RepositoryDataMigrationWriter writer = new RepositoryDataMigrationWriter(
+        repositories,
+        mock(ComponentDao.class),
+        new RecordingAssetDao(),
+        mock(BrowseNodeDao.class),
+        storages,
+        mock(RepositoryIndexRebuildDao.class),
+        mock(DockerRegistryDao.class),
+        new DockerManifestParser(new ObjectMapper()),
+        null,
+        new TransientTransactionRetry(new RecordingTransactionManager(), 1, 0));
+
+    assertThrows(IllegalStateException.class, () -> writer.write(
+        repository.id(), source, new ByteArrayInputStream(SAMPLE),
+        "application/gzip", true));
+
+    ConanRepositoryDataMigrationWriter conan = mock(ConanRepositoryDataMigrationWriter.class);
+    when(conan.write(
+        org.mockito.ArgumentMatchers.eq(repository),
+        org.mockito.ArgumentMatchers.eq(source),
+        any(InputStream.class),
+        org.mockito.ArgumentMatchers.eq("application/gzip"),
+        org.mockito.ArgumentMatchers.eq(true)))
+        .thenReturn(new ConanRepositoryDataMigrationWriter.MigratedAsset(
+            101L, 102L, 103L, "obj", "a".repeat(40), SAMPLE.length, true));
+    writer.setConanMigrationWriter(conan);
+
+    RepositoryDataMigrationWriter.WriteResult result = writer.write(
+        repository.id(), source, new ByteArrayInputStream(SAMPLE), "application/gzip", true);
+
+    assertEquals(101L, result.componentId());
+    assertEquals(102L, result.assetId());
+    assertEquals(103L, result.assetBlobId());
+    assertEquals("obj", result.assetBlobObjectKey());
+  }
+
+  @Test
+  void classifiesConanPackageArchivesWithoutTreatingRecipeArchivesAsBinaryPackages()
+      throws Exception {
+    Method assetKind = RepositoryDataMigrationWriter.class.getDeclaredMethod(
+        "assetKind", RepositoryFormat.class, RepositoryDataMigrationAssetRecord.class);
+    assetKind.setAccessible(true);
+
+    for (String archive : List.of(
+        "conan_package.tgz", "conan_package.txz", "conan_package.tzst")) {
+      assertEquals("conan-package", assetKind.invoke(
+          null, RepositoryFormat.CONAN, conanSource(archive, SAMPLE.length)));
+    }
+    assertEquals("conan-revision-file", assetKind.invoke(
+        null, RepositoryFormat.CONAN, conanSource("conan_export.tgz", SAMPLE.length)));
+  }
+
   private static void assertChecksum(
       RepositoryDataMigrationWriter.GeneratedMavenChecksum checksum,
       String expectedPath,
@@ -520,10 +584,26 @@ class RepositoryDataMigrationWriterTest {
         null, null, null, null, Map.of("sha256", "a".repeat(64)), Instant.EPOCH);
   }
 
+  private static RepositoryDataMigrationAssetRecord conanSource(String path, int size) {
+    return new RepositoryDataMigrationAssetRecord(
+        1L, 2L, "source", "component", path, PersistenceHashes.pathHash(path),
+        RepositoryFormat.CONAN, null, "demo", "1.0", "conan-revision-file",
+        "application/gzip", (long) size, null,
+        Instant.EPOCH, Instant.EPOCH, Instant.EPOCH, Instant.EPOCH,
+        "nexus", "127.0.0.1", "PENDING", 0, null, null,
+        null, null, null, null, Map.of("sha1", "a".repeat(40)), Instant.EPOCH);
+  }
+
   private static RepositoryRecord condaRepository() {
     return new RepositoryRecord(
         12L, "conda-hosted", RepositoryFormat.CONDA, RepositoryType.HOSTED,
         "conda-hosted", true, 1L, null, null, null, null, "ALLOW_ONCE", true, Map.of());
+  }
+
+  private static RepositoryRecord conanRepository() {
+    return new RepositoryRecord(
+        13L, "conan-hosted", RepositoryFormat.CONAN, RepositoryType.HOSTED,
+        "conan-hosted", true, 1L, null, null, null, null, "ALLOW_ONCE", true, Map.of());
   }
 
   private static RepositoryDataMigrationAssetRecord dockerSource(

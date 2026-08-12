@@ -18,6 +18,7 @@ import com.github.klboke.kkrepo.security.scan.ScannerContract.Capabilities;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.CatalogRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.CatalogResponse;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.CancellationResponse;
+import com.github.klboke.kkrepo.security.scan.ScannerContract.ConanCatalogRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.Component;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchRequest;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.MatchResponse;
@@ -33,6 +34,7 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.URI;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -820,6 +822,8 @@ class HttpSecurityScannerAdapterTest {
             true, "READY", "grype", "1", "db", Instant.EPOCH, Instant.EPOCH, Map.of()),
         "/v1/catalog",
         catalog(),
+        "/v1/catalog/conan",
+        catalog(),
         "/v1/match",
         match(),
         "/v1/oci/scan",
@@ -843,6 +847,14 @@ class HttpSecurityScannerAdapterTest {
     CatalogResponse catalog = adapter.catalog(
         new CatalogRequest("v1", "run", "catalog-key", subject, "config", limits),
         () -> new ByteArrayInputStream("artifact".getBytes()));
+    CatalogResponse conanCatalog = adapter.catalogConan(
+        new ConanCatalogRequest(
+            new CatalogRequest(
+                "v1", "run", "conan-key", subject("conan_package.tgz"), "config", limits),
+            "c".repeat(64),
+            10),
+        () -> new ByteArrayInputStream("package-bytes".getBytes()),
+        () -> new ByteArrayInputStream("info-bytes".getBytes()));
     MatchResponse match = adapter.match(
         new MatchRequest("v1", "run", "match-key", "b".repeat(64), "config", limits),
         () -> new ByteArrayInputStream("{}".getBytes()));
@@ -851,12 +863,20 @@ class HttpSecurityScannerAdapterTest {
         "sha256:" + "a".repeat(64), List.of("linux/amd64"), "token", "config", limits);
 
     assertEquals("CycloneDX", catalog.specName());
+    assertEquals("CycloneDX", conanCatalog.specName());
     assertEquals("db", match.vulnerabilityDatabaseRevision());
     assertEquals(List.of("linux/amd64"), adapter.scanOci(ociRequest).scannedPlatforms());
     assertTrue(adapter.cancel("run").cancelled());
     assertEquals("JAR", captures.get("/v1/catalog").artifactType());
     assertEquals("secret", captures.get("/v1/catalog").credential());
     assertEquals("artifact", new String(captures.get("/v1/catalog").body()));
+    String conanBody = new String(
+        captures.get("/v1/catalog/conan").body(), StandardCharsets.US_ASCII);
+    assertTrue(conanBody.contains("name=\"package\""));
+    assertTrue(conanBody.contains("package-bytes"));
+    assertTrue(conanBody.contains("name=\"conaninfo\""));
+    assertTrue(conanBody.contains("info-bytes"));
+    assertEquals("TGZ", captures.get("/v1/catalog/conan").artifactType());
     assertEquals("{}", new String(captures.get("/v1/match").body()));
     assertTrue(captures.get("/v1/oci/scan").body().length > 0);
   }

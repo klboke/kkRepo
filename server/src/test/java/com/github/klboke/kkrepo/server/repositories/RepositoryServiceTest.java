@@ -14,6 +14,7 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
@@ -1408,6 +1409,76 @@ class RepositoryServiceTest {
   }
 
   @Test
+  void createsAndReplacesConanGroupsWithDurableRevisionInvalidation() {
+    StubRepositoryDao repositories = new StubRepositoryDao(
+        conanHostedRepository(71L, "conan-hosted"),
+        conanHostedRepository(72L, "conan-second"));
+    ConanRegistryDao conan = mock(ConanRegistryDao.class);
+    RepositoryService service = service(repositories);
+    service.setConanRegistry(conan);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "conan-root", "conan-group", true, "default", true,
+        null, null, null, null, null,
+        new GroupSettings(List.of("conan-second", "conan-hosted"))));
+
+    assertEquals(List.of("conan-second", "conan-hosted"), created.group().memberNames());
+    verify(conan).nextRepositoryRevision(100L);
+
+    RepositoryView updated = service.replaceMembers(
+        "conan-root", List.of("conan-hosted", "conan-second"));
+    assertEquals(List.of("conan-hosted", "conan-second"), updated.group().memberNames());
+    verify(conan, org.mockito.Mockito.times(2)).nextRepositoryRevision(100L);
+    verify(conan).deleteGroupBindings(100L);
+  }
+
+  @Test
+  void updatingConanMemberInvalidatesEveryContainingGroupTransitively() {
+    StubRepositoryDao repositories = new StubRepositoryDao(
+        conanHostedRepository(71L, "conan-hosted"),
+        conanGroupRepository(72L, "conan-nested"),
+        conanGroupRepository(73L, "conan-root"));
+    repositories.replaceMembers(72L, List.of(71L, 73L));
+    repositories.replaceMembers(73L, List.of(72L));
+    ConanRegistryDao conan = mock(ConanRegistryDao.class);
+    RepositoryService service = service(repositories);
+    service.setConanRegistry(conan);
+
+    service.update("conan-hosted",
+        new UpdateCommand(false, null, null, null, null, null, null, null, null));
+
+    verify(conan).nextRepositoryRevision(71L);
+    verify(conan).nextRepositoryRevision(72L);
+    verify(conan).deleteGroupBindings(72L);
+    verify(conan).nextRepositoryRevision(73L);
+    verify(conan).deleteGroupBindings(73L);
+  }
+
+  @Test
+  void deletingConanRepositoryDeletesProtocolState() {
+    StubRepositoryDao repositories = new StubRepositoryDao(
+        conanHostedRepository(71L, "conan-hosted"));
+    ConanRegistryDao conan = mock(ConanRegistryDao.class);
+    RepositoryService service = service(repositories);
+    service.setConanRegistry(conan);
+
+    service.delete("conan-hosted");
+
+    verify(conan).deleteRepositoryState(71L);
+    assertTrue(repositories.findByName("conan-hosted").isEmpty());
+  }
+
+  @Test
+  void createConanProxyDefaultsTheOfficialConanCenterRemote() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryView created = service(repositories).create(new CreateCommand(
+        "conan-proxy", "conan-proxy", true, "default", true,
+        null, null, null, null, null, null));
+
+    assertEquals("https://center2.conan.io/", created.proxy().remoteUrl());
+  }
+
+  @Test
   void deleteRejectsRepositoryReferencedByCleanupPolicyOrActiveRun() {
     StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
     CleanupPolicyDao cleanupPolicies = mock(CleanupPolicyDao.class);
@@ -1900,6 +1971,25 @@ class RepositoryServiceTest {
     return new RepositoryRecord(
         id, name, RepositoryFormat.CONDA, RepositoryType.GROUP,
         "conda-group", true, 1L, null, null, null, null,
+        null, true, attributes);
+  }
+
+  private static RepositoryRecord conanHostedRepository(long id, String name) {
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", "conan-hosted");
+    return new RepositoryRecord(
+        id, name, RepositoryFormat.CONAN, RepositoryType.HOSTED,
+        "conan-hosted", true, 1L, null, null, null, null,
+        "ALLOW_ONCE", true, attributes);
+  }
+
+  private static RepositoryRecord conanGroupRepository(long id, String name) {
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", "conan-group");
+    attributes.put("group", Map.of());
+    return new RepositoryRecord(
+        id, name, RepositoryFormat.CONAN, RepositoryType.GROUP,
+        "conan-group", true, 1L, null, null, null, null,
         null, true, attributes);
   }
 

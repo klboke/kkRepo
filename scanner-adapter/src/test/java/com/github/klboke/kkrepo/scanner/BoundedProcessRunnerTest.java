@@ -192,11 +192,15 @@ class BoundedProcessRunnerTest {
         failure.set(error);
       }
     });
-    for (int attempt = 0; attempt < 100 && !Files.exists(pidFile); attempt++) {
+    String processIdText = "";
+    for (int attempt = 0; attempt < 500 && processIdText.isBlank(); attempt++) {
       Thread.sleep(10);
+      if (Files.exists(pidFile)) {
+        processIdText = Files.readString(pidFile).trim();
+      }
     }
-    assertTrue(Files.exists(pidFile));
-    List<Long> processIds = java.util.Arrays.stream(Files.readString(pidFile).split(" "))
+    assertFalse(processIdText.isBlank());
+    List<Long> processIds = java.util.Arrays.stream(processIdText.split("\\s+"))
         .map(Long::parseLong)
         .toList();
 
