@@ -167,25 +167,35 @@ class ComponentSearchControllerSecurityTest {
   }
 
   @Test
-  void searchParsesNugetPubRubygemsYumTerraformAndSwiftFormats() {
+  void searchParsesEveryRepositoryFormatIncludingConan() {
     StubComponentDao components = new StubComponentDao();
     RecordingSecurityService security = new RecordingSecurityService(permission -> AccessDecision.allow());
     ComponentSearchController controller = controller(components, subject("alice"), null, security);
 
-    controller.search(null, "nuget", null, request("GET", "/internal/search/components"));
-    controller.search(null, "pub", null, request("GET", "/internal/search/components"));
-    controller.search(null, "rubygems", null, request("GET", "/internal/search/components"));
-    controller.search(null, "yum", null, request("GET", "/internal/search/components"));
-    controller.search(null, "terraform", null, request("GET", "/internal/search/components"));
-    controller.search(null, "swift", null, request("GET", "/internal/search/components"));
+    List<String> expectedCalls = new ArrayList<>();
+    for (RepositoryFormat format : RepositoryFormat.values()) {
+      controller.search(null, format.id(), null, request("GET", "/internal/search/components"));
+      expectedCalls.add("|" + format.id() + "|300");
+    }
     controller.search(null, "ansible", null, request("GET", "/internal/search/components"));
-    controller.search(null, "ansiblegalaxy", null, request("GET", "/internal/search/components"));
+    expectedCalls.add("|ansiblegalaxy|300");
 
-    assertEquals(
-        List.of(
-            "|nuget|300", "|pub|300", "|rubygems|300", "|yum|300", "|terraform|300", "|swift|300",
-            "|ansiblegalaxy|300", "|ansiblegalaxy|300"),
-        components.calls);
+    assertEquals(expectedCalls, components.calls);
+  }
+
+  @Test
+  void searchRejectsUnknownFormatsInsteadOfFallingBackToAllFormats() {
+    StubComponentDao components = new StubComponentDao();
+    RecordingSecurityService security = new RecordingSecurityService(permission -> AccessDecision.allow());
+    ComponentSearchController controller = controller(components, subject("alice"), null, security);
+
+    ResponseStatusException thrown = assertThrows(ResponseStatusException.class, () ->
+        controller.search(null, "not-a-format", null,
+            request("GET", "/internal/search/components")));
+
+    assertEquals(HttpStatus.BAD_REQUEST, thrown.getStatusCode());
+    assertEquals("Unsupported repository format: not-a-format", thrown.getReason());
+    assertEquals(List.of(), components.calls);
   }
 
   @Test

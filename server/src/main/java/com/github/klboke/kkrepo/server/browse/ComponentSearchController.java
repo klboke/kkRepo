@@ -281,29 +281,22 @@ public class ComponentSearchController {
   }
 
   private static RepositoryFormat parseFormat(String value) {
-    if (value == null || value.isBlank() || "custom".equalsIgnoreCase(value)) {
+    if (value == null || value.isBlank()) {
       return null;
     }
-    return switch (value.trim().toLowerCase(Locale.ROOT)) {
-      case "maven2" -> RepositoryFormat.MAVEN2;
-      case "npm" -> RepositoryFormat.NPM;
-      case "cargo" -> RepositoryFormat.CARGO;
-      case "nuget" -> RepositoryFormat.NUGET;
-      case "pypi" -> RepositoryFormat.PYPI;
-      case "rubygems" -> RepositoryFormat.RUBYGEMS;
-      case "yum" -> RepositoryFormat.YUM;
-      case "helm" -> RepositoryFormat.HELM;
-      case "go" -> RepositoryFormat.GO;
-      case "pub" -> RepositoryFormat.PUB;
-      case "composer" -> RepositoryFormat.COMPOSER;
-      case "terraform" -> RepositoryFormat.TERRAFORM;
-      case "swift" -> RepositoryFormat.SWIFT;
-      case "ansiblegalaxy", "ansible" -> RepositoryFormat.ANSIBLEGALAXY;
-      case "conda" -> RepositoryFormat.CONDA;
-      case "apt" -> RepositoryFormat.APT;
-      case "raw" -> RepositoryFormat.RAW;
-      default -> null;
-    };
+    String normalized = value.trim().toLowerCase(Locale.ROOT);
+    if ("custom".equals(normalized)) {
+      return null;
+    }
+    if ("ansible".equals(normalized)) {
+      return RepositoryFormat.ANSIBLEGALAXY;
+    }
+    try {
+      return RepositoryFormat.fromJson(normalized);
+    } catch (IllegalArgumentException exception) {
+      throw new ResponseStatusException(
+          HttpStatus.BAD_REQUEST, "Unsupported repository format: " + normalized, exception);
+    }
   }
 
   private static String formatLabel(RepositoryFormat format) {
