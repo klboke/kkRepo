@@ -26,6 +26,20 @@ class CsrfProtectionFilterTest {
   }
 
   @Test
+  void uiContextIssuesToken() throws Exception {
+    CsrfProtectionFilter filter = filter(false);
+    MockHttpServletRequest request = new MockHttpServletRequest("GET", "/internal/security/context");
+    MockHttpServletResponse response = new MockHttpServletResponse();
+    CountingChain chain = new CountingChain();
+
+    filter.doFilter(request, response, chain);
+
+    assertEquals(1, chain.calls);
+    assertNotNull(response.getHeader(CsrfProtectionFilter.CSRF_HEADER));
+    assertNotNull(response.getHeader("Set-Cookie"));
+  }
+
+  @Test
   void safeRepositoryListDoesNotCreateSessionOrToken() throws Exception {
     CsrfProtectionFilter filter = filter(false);
     MockHttpServletRequest request = new MockHttpServletRequest("GET", "/internal/repositories");
