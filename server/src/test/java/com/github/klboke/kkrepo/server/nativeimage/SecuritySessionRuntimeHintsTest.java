@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -20,19 +22,23 @@ class SecuritySessionRuntimeHintsTest {
     RuntimeHints hints = new RuntimeHints();
     new SecuritySessionRuntimeHints().registerHints(hints, getClass().getClassLoader());
 
-    assertTrue(RuntimeHintsPredicates.reflection()
-        .onJavaSerialization(SecuritySessionRuntimeHints.SESSION_SUBJECT, true)
-        .test(hints));
+    SecuritySessionRuntimeHints.JAVA_SERIALIZATION_TYPES.forEach(type -> assertTrue(
+        RuntimeHintsPredicates.reflection()
+            .onJavaSerialization(type, true)
+            .test(hints),
+        () -> "Missing Java serialization hints for " + type.getName()));
 
     new FileNativeConfigurationWriter(output).write(hints);
     JsonNode metadata = new ObjectMapper().readTree(Files.readString(
         output.resolve("META-INF/native-image/reachability-metadata.json")));
-    JsonNode sessionSubject = StreamSupport.stream(metadata.path("reflection").spliterator(), false)
-        .filter(entry -> SecuritySessionRuntimeHints.SESSION_SUBJECT.getName()
-            .equals(entry.path("type").asText()))
-        .findFirst()
-        .orElseThrow();
+    Set<String> serializableTypes = StreamSupport.stream(
+            metadata.path("reflection").spliterator(), false)
+        .filter(entry -> entry.path("serializable").asBoolean())
+        .map(entry -> entry.path("type").asText())
+        .collect(Collectors.toSet());
 
-    assertTrue(sessionSubject.path("serializable").asBoolean());
+    SecuritySessionRuntimeHints.JAVA_SERIALIZATION_TYPES.forEach(type -> assertTrue(
+        serializableTypes.contains(type.getName()),
+        () -> "Generated metadata is missing serializable type " + type.getName()));
   }
 }
