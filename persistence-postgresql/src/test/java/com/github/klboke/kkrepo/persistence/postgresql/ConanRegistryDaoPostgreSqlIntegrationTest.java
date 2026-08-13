@@ -101,6 +101,27 @@ class ConanRegistryDaoPostgreSqlIntegrationTest extends PostgreSqlIntegrationTes
   }
 
   @Test
+  void proxySparseFileDiscoveryPreservesKnownConanInfoProjection() {
+    long repositoryId = insertRepository("conan-proxy-projection", "proxy");
+    ConanRegistryDao dao = stores().conanRegistry();
+    ConanRegistryDao.RecipeCoordinate coordinate = coordinate(repositoryId, "proxy-kit");
+    ConanRegistryDao.RevisionCommit enriched = proxyPackageDiscovery(
+        coordinate, Map.of("os", "Linux", "arch", "x86_64"));
+
+    ConanRegistryDao.CommittedRevision discovered = inTransaction(
+        () -> dao.recordDiscoveredRevision(enriched));
+    assertFalse(discovered.idempotent());
+    assertTrue(inTransaction(() -> dao.recordDiscoveredRevision(
+        proxyPackageDiscovery(coordinate, Map.of()))).idempotent(),
+        "an archive observed after conaninfo must preserve the known projection");
+    assertEquals(enriched.settings(), dao.findPackage(
+        discovered.recipeRevisionId(), PACKAGE_ID).orElseThrow().settings());
+    assertThrows(IllegalStateException.class, () -> inTransaction(() ->
+        dao.recordDiscoveredRevision(proxyPackageDiscovery(
+            coordinate, Map.of("os", "Windows", "arch", "x86_64")))));
+  }
+
+  @Test
   void accessShapesHaveDeclaredIndexesAndUseThemWhenSequentialScansAreDisabled() {
     assertEquals(
         "CREATE UNIQUE INDEX uk_conan_recipe_coordinate ON public.conan_recipe "
@@ -218,6 +239,15 @@ class ConanRegistryDaoPostgreSqlIntegrationTest extends PostgreSqlIntegrationTes
             file("conan_package.tzst", archiveId, "3"),
             file("conaninfo.txt", infoId, "4"),
             file("conanmanifest.txt", manifestId, "5")));
+  }
+
+  private static ConanRegistryDao.RevisionCommit proxyPackageDiscovery(
+      ConanRegistryDao.RecipeCoordinate coordinate,
+      Map<String, String> settings) {
+    return new ConanRegistryDao.RevisionCommit(
+        coordinate, null, ConanRegistryDao.OWNER_PACKAGE, RREV, PACKAGE_ID, PREV,
+        settings, Map.of(), Map.of(), null, ConanRegistryDao.SOURCE_PROXY,
+        ConanRegistryDao.STATUS_DISCOVERED, NOW, List.of());
   }
 
   private static ConanRegistryDao.FileCommit file(String path, long assetId, String seed) {
