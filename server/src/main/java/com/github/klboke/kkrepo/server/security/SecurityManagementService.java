@@ -1065,31 +1065,38 @@ public class SecurityManagementService implements AccessDecisionService {
 
   private boolean hasAdministrativeUser() {
     SecurityCatalog catalog = currentSecurityCatalog().orElse(null);
-    if (catalog != null) {
-      return catalog.users().stream()
+    if (catalog != null
+        && catalog.users().stream()
           .filter(user -> "ACTIVE".equalsIgnoreCase(defaultString(user.status(), "ACTIVE")))
           .anyMatch(user -> hasAdministrativePermission(new PermissionSubject(
               user.source(),
               user.userId(),
               Set.copyOf(catalog.userRoleIds(user.source(), user.userId())),
-              null)));
+              null)))) {
+      return true;
     }
-    return listUsers(null, null).stream()
+    // A negative catalog result may be stale when another replica just initialized the admin.
+    return securityDao.listUsers().stream()
         .filter(user -> "ACTIVE".equalsIgnoreCase(defaultString(user.status(), "ACTIVE")))
-        .anyMatch(this::hasAdministrativePermission);
+        .anyMatch(this::hasAdministrativePermissionInDatabase);
   }
 
   private boolean hasAdministrativePermission(PermissionSubject subject) {
     return decide(subject, "nexus:*").allowed();
   }
 
-  private boolean hasAdministrativePermission(UserView user) {
+  private boolean hasAdministrativePermissionInDatabase(SecurityUserRecord user) {
     PermissionSubject subject = new PermissionSubject(
         user.source(),
-        user.userId(),
-        Set.copyOf(user.roles()),
+        null,
+        Set.copyOf(securityDao.listUserRoleIds(user.id())),
         null);
-    return hasAdministrativePermission(subject);
+    AuthorizationSnapshot snapshot = buildAuthorizationSnapshot(subject);
+    return permissionAllowed(
+        snapshot.privileges(),
+        "nexus:*",
+        null,
+        snapshot.repositoryTargets());
   }
 
   private RoleView toRoleView(SecurityRoleRecord record) {

@@ -80,6 +80,21 @@ class SecurityCatalogCacheTest {
   }
 
   @Test
+  void adminBootstrapStatusChecksDatabaseAfterStaleNegativeCatalogResult() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.role("nx-admin");
+    dao.grant("nx-admin", privilege("nx-all", "wildcard", Map.of("pattern", "nexus:*")));
+    SecurityCatalogCache catalogCache = new SecurityCatalogCache(dao, true);
+    SecurityManagementService service = new SecurityManagementService(dao, null, null, catalogCache);
+
+    assertTrue(service.adminBootstrapStatus().required());
+
+    dao.user(1L, "Local", "admin", List.of("nx-admin"));
+
+    assertFalse(service.adminBootstrapStatus().required());
+  }
+
+  @Test
   void mutationBroadcastRefreshesSiblingCatalogImmediately() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.user(1L, "Local", "alice", List.of("nx-reader"));
@@ -296,7 +311,11 @@ class SecurityCatalogCacheTest {
     @Override
     public List<SecurityPrivilegeRecord> listPrivilegesForRoles(List<String> roleIds) {
       listPrivilegesForRolesCalls++;
-      return List.of();
+      return roleIds.stream()
+          .flatMap(roleId -> rolePrivileges.getOrDefault(roleId, List.of()).stream())
+          .distinct()
+          .map(privileges::get)
+          .toList();
     }
 
     @Override
