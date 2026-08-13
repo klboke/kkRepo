@@ -101,6 +101,32 @@ class PypiRepositoryBlackBoxCompatibilityTest {
         "group simple directory should expose project index children");
   }
 
+  @Test
+  void missingHostedPackageMatchesNexusWhenConfigured() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeTrue(config.configured(),
+        "Set NEXUS_COMPAT_BASE_URL and KKREPO_COMPAT_BASE_URL to run PyPI black-box compatibility");
+
+    if (config.setupEnabled()) {
+      ensureNexusRepositories(config);
+      ensureKkRepoRepositories(config);
+    }
+
+    String nonce = Long.toUnsignedString(System.nanoTime());
+    String missingPath = "packages/kkrepo-compat-missing-" + nonce
+        + "/0.0.0/kkrepo_compat_missing_" + nonce + "-0.0.0-py3-none-any.whl";
+
+    Exchange referenceGet = get(config.nexusHosted(), missingPath);
+    Exchange candidateGet = get(config.nexusPlusHosted(), missingPath);
+    assertSameStatus("missing hosted package GET", referenceGet, candidateGet);
+    assertEquals(404, candidateGet.status(), "missing hosted package GET status");
+
+    Exchange referenceHead = head(config.nexusHosted(), missingPath);
+    Exchange candidateHead = head(config.nexusPlusHosted(), missingPath);
+    assertSameStatus("missing hosted package HEAD", referenceHead, candidateHead);
+    assertEquals(404, candidateHead.status(), "missing hosted package HEAD status");
+  }
+
   private static Exchange upload(Endpoint endpoint, WheelFixture fixture) throws Exception {
     String boundary = "kkrepo-pypi-compat-" + System.nanoTime();
     ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -228,6 +254,10 @@ class PypiRepositoryBlackBoxCompatibilityTest {
 
   private static Exchange get(Endpoint endpoint, String path) throws Exception {
     return send(endpoint.request(path).GET());
+  }
+
+  private static Exchange head(Endpoint endpoint, String path) throws Exception {
+    return send(endpoint.request(path).method("HEAD", HttpRequest.BodyPublishers.noBody()));
   }
 
   private static Exchange getEventually(Endpoint endpoint, String path, String expectedLink) throws Exception {

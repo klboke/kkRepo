@@ -1,11 +1,15 @@
 package com.github.klboke.kkrepo.server.pypi;
 
+import com.github.klboke.kkrepo.server.RepositoryContentController;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-@RestControllerAdvice(assignableTypes = PypiRepositoryController.class)
+@RestControllerAdvice(assignableTypes = {
+    PypiRepositoryController.class,
+    RepositoryContentController.class
+})
 public class PypiErrorAdvice {
   @ExceptionHandler(PypiExceptions.PypiNotFoundException.class)
   public ResponseEntity<Void> notFound(PypiExceptions.PypiNotFoundException e) {
