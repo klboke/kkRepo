@@ -40,7 +40,7 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
   | KKREPO_RUNTIME=native KKREPO_DATABASE_TYPE=postgresql bash
 ```
 
-`KKREPO_RUNTIME=jvm` selects `ghcr.io/klboke/kkrepo:0.7.0`, while `KKREPO_RUNTIME=native` selects `ghcr.io/klboke/kkrepo:0.7.0-native`. Both are published for Linux `amd64` and `arm64`. An explicit `KKREPO_IMAGE_TAG` overrides the runtime's default tag.
+`KKREPO_RUNTIME=jvm` selects `ghcr.io/klboke/kkrepo:0.8.0`, while `KKREPO_RUNTIME=native` selects `ghcr.io/klboke/kkrepo:0.8.0-native`. Both are published for Linux `amd64` and `arm64`. An explicit `KKREPO_IMAGE_TAG` overrides the runtime's default tag.
 
 The script prints each step and:
 
@@ -61,7 +61,7 @@ bash quickstart.sh
 
 By default, it starts:
 
-- The JVM runtime from `ghcr.io/klboke/kkrepo:0.7.0`
+- The JVM runtime from `ghcr.io/klboke/kkrepo:0.8.0`
 - MySQL 8.0
 - Persistent MySQL and File blob storage volumes for local trials
 
@@ -153,7 +153,7 @@ Note: a normal `server` module jar does not contain a Spring Boot executable ent
 Pull the latest public release image:
 
 ```bash
-docker pull ghcr.io/klboke/kkrepo:0.7.0
+docker pull ghcr.io/klboke/kkrepo:0.8.0
 ```
 
 You can also use `latest` to follow the latest public release:
@@ -165,7 +165,7 @@ docker pull ghcr.io/klboke/kkrepo:latest
 The Native image is published separately:
 
 ```bash
-docker pull ghcr.io/klboke/kkrepo:0.7.0-native
+docker pull ghcr.io/klboke/kkrepo:0.8.0-native
 docker pull ghcr.io/klboke/kkrepo:native-latest
 ```
 
