@@ -671,6 +671,17 @@ public class SecurityManagementService implements AccessDecisionService {
 
   @Transactional(readOnly = true)
   public AnonymousSettingsView anonymousSettings() {
+    SecurityCatalog catalog = currentSecurityCatalog().orElse(null);
+    if (catalog != null) {
+      SecurityAnonymousConfigRecord config = catalog.anonymousConfig();
+      return config == null
+          ? new AnonymousSettingsView(
+              false,
+              DEFAULT_SOURCE,
+              DEFAULT_ANONYMOUS_USER_ID,
+              DEFAULT_ANONYMOUS_REALM_NAME)
+          : toAnonymousSettingsView(config);
+    }
     return securityDao.findAnonymousConfig()
         .map(this::toAnonymousSettingsView)
         .orElseGet(() -> new AnonymousSettingsView(
@@ -1053,18 +1064,39 @@ public class SecurityManagementService implements AccessDecisionService {
   }
 
   private boolean hasAdministrativeUser() {
-    return listUsers(null, null).stream()
+    SecurityCatalog catalog = currentSecurityCatalog().orElse(null);
+    if (catalog != null
+        && catalog.users().stream()
+          .filter(user -> "ACTIVE".equalsIgnoreCase(defaultString(user.status(), "ACTIVE")))
+          .anyMatch(user -> hasAdministrativePermission(new PermissionSubject(
+              user.source(),
+              user.userId(),
+              Set.copyOf(catalog.userRoleIds(user.source(), user.userId())),
+              null)))) {
+      return true;
+    }
+    // A negative catalog result may be stale when another replica just initialized the admin.
+    return securityDao.listUsers().stream()
         .filter(user -> "ACTIVE".equalsIgnoreCase(defaultString(user.status(), "ACTIVE")))
-        .anyMatch(this::hasAdministrativePermission);
+        .anyMatch(this::hasAdministrativePermissionInDatabase);
   }
 
-  private boolean hasAdministrativePermission(UserView user) {
+  private boolean hasAdministrativePermission(PermissionSubject subject) {
+    return decide(subject, "nexus:*").allowed();
+  }
+
+  private boolean hasAdministrativePermissionInDatabase(SecurityUserRecord user) {
     PermissionSubject subject = new PermissionSubject(
         user.source(),
-        user.userId(),
-        Set.copyOf(user.roles()),
+        null,
+        Set.copyOf(securityDao.listUserRoleIds(user.id())),
         null);
-    return decide(subject, "nexus:*").allowed();
+    AuthorizationSnapshot snapshot = buildAuthorizationSnapshot(subject);
+    return permissionAllowed(
+        snapshot.privileges(),
+        "nexus:*",
+        null,
+        snapshot.repositoryTargets());
   }
 
   private RoleView toRoleView(SecurityRoleRecord record) {

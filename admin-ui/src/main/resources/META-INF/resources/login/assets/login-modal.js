@@ -215,11 +215,15 @@
       }
       const result = await response.json();
       const target = safeReturnTo(result.returnTo);
-      if (target === `${window.location.pathname}${window.location.search}${window.location.hash}`) {
-        window.location.reload();
+      const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      if (target !== current) {
+        window.location.href = target;
         return;
       }
-      window.location.href = target;
+      close();
+      window.dispatchEvent(new CustomEvent("kkrepo:login-success", {
+        detail: { returnTo: target },
+      }));
     } catch (error) {
       showError(`Sign in failed: ${error.message}`);
     } finally {
