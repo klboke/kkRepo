@@ -4,6 +4,41 @@ All notable public changes to kkrepo are documented in this file.
 
 This project follows a pragmatic early-stage release process. Until a stable `1.0.0` release is announced, minor versions may include behavior changes, but releases should call out migration impact, compatibility changes, and operational notes.
 
+## 0.8.0 - 2026-08-13
+
+### Added
+
+- Nexus-compatible Conda hosted, proxy, and group repositories with root and nested channels, `.tar.bz2` and `.conda` packages, compressed/current repodata, channeldata, ordered group resolution, migration, cleanup, scanning, and real Conda client coverage. (#186)
+- APT/Debian hosted and proxy repositories with validated `.deb` publication, canonical pool paths, signed and by-hash metadata, key rotation, durable asynchronous publication, proxy passthrough or re-signing, cleanup, migration, and Debian/Ubuntu client coverage. APT groups remain unsupported because signed metadata cannot be merged safely. (#188)
+- Complete Conan 2 hosted, proxy, and group support with Bearer authentication, recipe/package revisions, atomic publication, resumable uploads, Nexus-aligned Browse paths, migration, cleanup, security scanning, and real Conan client coverage. (#198)
+- Dedicated English and Chinese repository guides for all 19 implemented formats, organized under one discoverable documentation hierarchy. (#201)
+
+### Changed
+
+- The development deployment can run the exact merged revision as equal-weight JVM and Native replicas, with coordinated health checks and rollback, so runtime-specific and multi-replica regressions surface under normal traffic. (#192)
+- UI session restoration, authentication context loading, and repository permission loading are parallelized and cached safely, reducing first-page and login-state rendering from about ten seconds to below one second on repository-heavy installations. (#205)
+- Quickstart defaults, Dockerfile packaging, deployment documentation, and the Helm application version now use `0.8.0`; the optional scanner profile uses the matching `kkrepo-scanner:0.8.0` image.
+- AWS SDK, GraalVM Native Build Tools, the Conda setup action, and other workflow dependencies were refreshed. (#189, #190, #191)
+
+### Fixed
+
+- Shared proxy fetching now permits the safe same-host HTTP-to-HTTPS upgrade used by upstream mirrors while preserving redirect allowlists for cross-host, downgrade, and arbitrary-port transitions. (#195)
+- Development bootstrap preserves the Nginx bind-mounted configuration when enabling dual-runtime routing. (#193)
+- Native replicas now include the complete Spring Session serialization metadata needed for browser login and repeated JDBC-backed session reloads. (#203)
+- Conan Browse search is format-scoped, and sparse proxy observations no longer erase an existing package projection after `conaninfo.txt` has populated it. (#202, #204)
+
+### Compatibility And Validation
+
+- Conda, APT, and Conan include MySQL/PostgreSQL persistence contracts, multi-replica coordination, Nexus comparisons, migration coverage, protocol-aware cleanup/scanning, and real-client E2E validation. (#186, #188, #198)
+- The release includes targeted Native client validation for JDBC browser-session recovery and client E2E coverage for Conan proxy package downloads. (#203, #204)
+- CI no longer treats Conan test fixtures as C++ production sources during CodeQL language detection. (#200)
+
+### Upgrade Notes
+
+- Existing `0.7.0` MySQL and PostgreSQL deployments can upgrade in place through Flyway V41-V45. Back up the relational database and blob store together, allow the migrations to complete before serving traffic, and do not run mixed application versions after the new schema is applied.
+- V41 adds Conda registry, metadata, revision, lease, and migration state; V42-V44 add APT package, suite, signing, proxy, publication, retention, and supporting indexes; V45 adds Conan recipe/package revision, upload, source-binding, lease, and migration state.
+- The new repository formats are not created automatically. Configure signing keys before exposing an APT hosted repository, and validate proxy credentials, cleanup policies, and scanner scope before production activation.
+
 ## 0.7.0 - 2026-08-06
 
 ### Added
