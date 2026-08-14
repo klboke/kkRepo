@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -105,7 +106,7 @@ class DockerProxyServiceTest {
         any(byte[].class),
         eq(DockerConstants.MEDIA_TYPE_SCHEMA2_MANIFEST),
         eq("proxy"),
-        eq(runtime.proxyRemoteUrl()),
+        isNull(),
         eq(false)))
         .thenReturn(remoteStored);
 
@@ -141,7 +142,7 @@ class DockerProxyServiceTest {
         any(byte[].class),
         eq(DockerConstants.MEDIA_TYPE_SCHEMA2_MANIFEST),
         eq("proxy"),
-        eq(runtime.proxyRemoteUrl()),
+        isNull(),
         eq(false)))
         .thenReturn(remoteStored);
 
@@ -184,7 +185,7 @@ class DockerProxyServiceTest {
         eq(body),
         eq(DockerConstants.MEDIA_TYPE_SCHEMA2_MANIFEST),
         eq("proxy"),
-        eq(runtime.proxyRemoteUrl()),
+        isNull(),
         eq(false)))
         .thenReturn(stored);
     DockerProtocolException blocked =
@@ -203,7 +204,7 @@ class DockerProxyServiceTest {
         body,
         DockerConstants.MEDIA_TYPE_SCHEMA2_MANIFEST,
         "proxy",
-        runtime.proxyRemoteUrl(),
+        null,
         false);
     verify(manifestStore).beforeRead(stored);
   }
@@ -302,7 +303,7 @@ class DockerProxyServiceTest {
         eq((long) body.length),
         eq("application/vnd.oci.image.layer.v1.tar"),
         eq("proxy"),
-        eq(runtime.proxyRemoteUrl())))
+        isNull()))
         .thenReturn(storedBlob(runtime, digest, body.length, "application/vnd.oci.image.layer.v1.tar"));
 
     DockerResponse response = service.getBlob(runtime, "alpine", digest, true);

@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -90,7 +91,7 @@ class NpmProxyRuntimeTest {
             """.getBytes(StandardCharsets.UTF_8))));
     when(fixture.writer.writePackageRoot(
         eq(runtime), eq(fixture.storage), eq(7L), eq(PACKAGE), any(),
-        eq("proxy"), eq(runtime.proxyRemoteUrl()), eq(Map.of("remoteEtag", "root"))))
+        eq("proxy"), isNull(), eq(Map.of("remoteEtag", "root"))))
         .thenReturn(stored("demo", "package-root", "application/json"));
 
     MavenResponse response = fixture.service.getPackage(
@@ -123,7 +124,7 @@ class NpmProxyRuntimeTest {
             """.getBytes(StandardCharsets.UTF_8))));
     when(fixture.writer.writePackageRoot(
         eq(runtime), eq(fixture.storage), eq(7L), eq(PACKAGE), any(),
-        eq("proxy"), eq(runtime.proxyRemoteUrl()), any(),
+        eq("proxy"), isNull(), any(),
         any(NpmMinimumReleaseAge.ReleaseIndex.class)))
         .thenAnswer(invocation -> stored(
             "demo", "package-root", "application/json", invocation.getArgument(7)));
@@ -392,7 +393,7 @@ class NpmProxyRuntimeTest {
         new ByteArrayInputStream("tarball".getBytes(StandardCharsets.UTF_8))));
     when(fixture.writer.writeTarball(
         eq(runtime), eq(fixture.storage), eq(7L), eq(PACKAGE), eq("1.0.0"), eq(TARBALL),
-        any(), eq("application/octet-stream"), eq("proxy"), eq(runtime.proxyRemoteUrl()),
+        any(), eq("application/octet-stream"), eq("proxy"), isNull(),
         eq(Map.of("remoteEtag", "tar")), eq(false)))
         .thenReturn(stored(TARBALL_PATH, "tarball", "application/octet-stream"));
 

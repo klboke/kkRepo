@@ -18,6 +18,7 @@ import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
+import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -205,7 +206,7 @@ class PubAssetWriter {
       boolean keepResponseFile) {
     return writeAsset(runtime, storage, blobStoreId, path, new ByteArrayInputStream(body),
         PubContentTypes.JSON, "metadata", null, assetAttributes, null, remoteAttributes,
-        "proxy", runtime.proxyRemoteUrl(), keepResponseFile, true);
+        "proxy", ProxyRequestAudit.currentClientIp(), keepResponseFile, true);
   }
 
   private Stored persistArchive(

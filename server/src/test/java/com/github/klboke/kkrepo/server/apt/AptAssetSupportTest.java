@@ -64,7 +64,7 @@ class AptAssetSupportTest {
         any(), any(), any(), any(), any(), any(), any());
     support.storeGeneratedFile(runtime, ".apt/Packages", file, "text/plain", attributes);
     verify(hosted).putInternalUnindexedFile(
-        runtime, ".apt/Packages", file, "text/plain", attributes, "apt-metadata", runtime.name());
+        runtime, ".apt/Packages", file, "text/plain", attributes, "apt-metadata", null);
     MavenResponse response = MavenResponse.noBody(204);
     when(hosted.getInternal(runtime, asset.path(), true)).thenReturn(response);
     assertSame(response, support.serve(runtime, asset.path(), true));

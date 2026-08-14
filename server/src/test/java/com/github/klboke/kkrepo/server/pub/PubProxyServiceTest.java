@@ -164,7 +164,7 @@ class PubProxyServiceTest {
         any(),
         any(),
         eq("proxy"),
-        eq(runtime.proxyRemoteUrl()),
+        isNull(),
         eq(true),
         eq(false)))
         .thenReturn(stored);

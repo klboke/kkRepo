@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
@@ -125,7 +126,7 @@ public class DockerProxyService {
           body,
           result.contentType(),
           "proxy",
-          runtime.proxyRemoteUrl(),
+          ProxyRequestAudit.currentClientIp(),
           false);
       recordCache(runtime, "manifest", "remote_store");
       ensureAccepted(stored.manifest().mediaType(), acceptHeaders);
@@ -195,7 +196,7 @@ public class DockerProxyService {
             remoteBlob.size(),
             result.contentType(),
             "proxy",
-            runtime.proxyRemoteUrl());
+            ProxyRequestAudit.currentClientIp());
       }
       recordCache(runtime, "blob", "remote_store");
       DockerResponse response = headOnly

@@ -16,6 +16,7 @@ import com.github.klboke.kkrepo.server.blob.BlobTransactionCleanup;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
+import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import java.io.IOException;
 import java.io.InputStream;
@@ -229,7 +230,7 @@ public class GoAssetWriter {
           digests.size(),
           path.contentType(),
           "proxy",
-          runtime.proxyRemoteUrl(),
+          ProxyRequestAudit.currentClientIp(),
           now,
           now,
           blobAttrs);

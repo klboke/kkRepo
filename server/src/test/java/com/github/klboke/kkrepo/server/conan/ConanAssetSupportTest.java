@@ -88,13 +88,13 @@ class ConanAssetSupportTest {
 
     ConanAssetSupport.Staged staged = support.stageProxy(
         runtime, "conan_package.tgz", new ByteArrayInputStream(new byte[0]),
-        "application/octet-stream", "https://upstream.example/");
+        "application/octet-stream", "conan-proxy", "203.0.113.209");
 
     assertEquals(stagedAsset, staged.asset());
     verify(hosted).putInternalHidden(
         eq(runtime), any(), any(), eq("application/octet-stream"),
         eq(Map.of("conanProxyStaging", true, "conanFile", "conan_package.tgz")),
-        eq("conan-proxy"), eq("https://upstream.example/"));
+        eq("conan-proxy"), eq("203.0.113.209"));
   }
 
   @Test
@@ -119,7 +119,7 @@ class ConanAssetSupportTest {
         IllegalStateException.class,
         () -> support.stageProxy(
             runtime, "conan_package.tgz", InputStream.nullInputStream(),
-            "application/gzip", "https://upstream.example"));
+            "application/gzip", "conan-proxy", "203.0.113.209"));
     verify(hosted, times(2)).deleteInternal(eq(runtime), anyString());
   }
 

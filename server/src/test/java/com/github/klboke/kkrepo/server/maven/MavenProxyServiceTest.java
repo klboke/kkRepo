@@ -41,11 +41,20 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 class MavenProxyServiceTest {
   private static final String REMOTE = "http://127.0.0.1:8080/repository/maven-public";
   private static final MavenPathParser PARSER = new MavenPathParser();
+
+  @AfterEach
+  void resetRequestContext() {
+    RequestContextHolder.resetRequestAttributes();
+  }
 
   @Test
   void headMissUsesRemoteHeadAndReturnsNotFound() {
@@ -173,6 +182,67 @@ class MavenProxyServiceTest {
     assertEquals(1, proxyState.successCount);
     assertNotNull(fetcher.request);
     assertNull(fetcher.request.timeout());
+  }
+
+  @Test
+  void initialAndRefreshedCacheWritesAuditClientIpInsteadOfLongRemoteUrl() throws Exception {
+    String remote = "https://repo.example.test/" + "nested-path/".repeat(12);
+    assertTrue(remote.length() > 64);
+    MavenPath requestedPath = path("com/acme/demo/1.0.0/demo-1.0.0.jar");
+    byte[] upstream = "artifact-bytes".getBytes(StandardCharsets.UTF_8);
+    CapturingFetcher fetcher = new CapturingFetcher(new HttpRemoteFetcher.Result(
+        200, Map.of("Content-Type", "application/java-archive"),
+        new java.io.ByteArrayInputStream(upstream)));
+    TempFileWriter writer = new TempFileWriter();
+    MavenProxyService service = new MavenProxyService(
+        new EmptyAssetDao(),
+        new FixedBlobStorageRegistry(new CountingBlobStorage()),
+        writer,
+        new RecordingProxyStateDao(),
+        fetcher,
+        null,
+        new AssetMetadataCache(new InMemorySharedCache(), false, 0, 0));
+    MockHttpServletRequest request = new MockHttpServletRequest();
+    request.setRemoteAddr("203.0.113.209");
+    RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+
+    RepositoryRuntime runtime = runtime(remote);
+    MavenResponse response = service.get(runtime, requestedPath, false);
+
+    try (InputStream body = response.body()) {
+      assertArrayEquals(upstream, body.readAllBytes());
+    }
+    assertEquals("203.0.113.209", writer.createdByIp);
+
+    Instant old = Instant.parse("2020-01-01T00:00:00Z");
+    AssetBlobRecord cachedBlob = new AssetBlobRecord(
+        99L, 1L, "s3://bucket/old", new byte[32], "old", new byte[32],
+        "sha1", "sha256", "md5", 3L, "application/java-archive",
+        "proxy", "192.0.2.1", old, old, Map.of());
+    AssetRecord cachedAsset = new AssetRecord(
+        88L, runtime.id(), null, cachedBlob.id(), RepositoryFormat.MAVEN2,
+        requestedPath.path(), new byte[32], requestedPath.fileName(), "artifact",
+        "application/java-archive", 3L, null, old, Map.of());
+    byte[] refreshed = "refreshed-artifact".getBytes(StandardCharsets.UTF_8);
+    CapturingFetcher refreshFetcher = new CapturingFetcher(new HttpRemoteFetcher.Result(
+        200, Map.of("Content-Type", "application/java-archive"),
+        new java.io.ByteArrayInputStream(refreshed)));
+    TempFileWriter refreshWriter = new TempFileWriter();
+    MavenProxyService refreshService = new MavenProxyService(
+        new CachedAssetDao(cachedAsset, cachedBlob),
+        new FixedBlobStorageRegistry(new CountingBlobStorage()),
+        refreshWriter,
+        new RecordingProxyStateDao(),
+        refreshFetcher,
+        null,
+        new AssetMetadataCache(new InMemorySharedCache(), false, 0, 0));
+
+    MavenResponse refreshedResponse = refreshService.get(runtime, requestedPath, false);
+
+    try (InputStream body = refreshedResponse.body()) {
+      assertArrayEquals(refreshed, body.readAllBytes());
+    }
+    assertEquals("203.0.113.209", refreshWriter.createdByIp);
   }
 
   @Test
@@ -340,6 +410,10 @@ class MavenProxyServiceTest {
   }
 
   private static RepositoryRuntime runtime() {
+    return runtime(REMOTE);
+  }
+
+  private static RepositoryRuntime runtime(String remote) {
     return new RepositoryRuntime(
         10,
         "maven-public",
@@ -352,7 +426,7 @@ class MavenProxyServiceTest {
         "MIXED",
         "PERMISSIVE",
         true,
-        REMOTE,
+        remote,
         1440,
         1440,
         true, null, List.of());
@@ -525,6 +599,7 @@ class MavenProxyServiceTest {
 
   private static class TempFileWriter extends MavenAssetWriter {
     boolean keepResponseFile;
+    String createdByIp;
 
     TempFileWriter() {
       super(null, null, null, new AssetMetadataCache(new InMemorySharedCache(), false, 0, 0), null);
@@ -544,6 +619,7 @@ class MavenProxyServiceTest {
         boolean writeChecksumSiblings,
         boolean keepResponseFile) {
       this.keepResponseFile = keepResponseFile;
+      this.createdByIp = createdByIp;
       try {
         Path tmp = Files.createTempFile("kkrepo-test-", ".bin");
         long size = Files.copy(body, tmp, java.nio.file.StandardCopyOption.REPLACE_EXISTING);

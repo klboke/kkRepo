@@ -14,6 +14,7 @@ import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
+import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.URI;
@@ -170,7 +171,7 @@ public class PypiProxyService {
                   projectName == null ? Map.of() : Map.of("name", projectName)),
               remoteAttrs(result),
               "proxy",
-              runtime.proxyRemoteUrl(),
+              ProxyRequestAudit.currentClientIp(),
               !headOnly);
           proxyStateDao.recordSuccess(runtime.id(), now);
           return responseFromStored(stored, headOnly);
@@ -244,7 +245,7 @@ public class PypiProxyService {
               cacheAttributes(runtime, cacheType, now, attrs),
               remoteAttrs(result),
               "proxy",
-              runtime.proxyRemoteUrl(),
+              ProxyRequestAudit.currentClientIp(),
               !headOnly);
           proxyStateDao.recordSuccess(runtime.id(), now);
           return responseFromStored(stored, headOnly);

@@ -19,6 +19,7 @@ import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
+import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -170,7 +171,7 @@ public class PubProxyService {
               Map.of("cacheSource", "proxy", "sourceRepository", runtime.name()),
               archiveRemoteAttrs(result, expectedSha256),
               "proxy",
-              runtime.proxyRemoteUrl(),
+              ProxyRequestAudit.currentClientIp(),
               true,
               !headOnly);
           proxyStateDao.recordSuccess(runtime.id(), now);

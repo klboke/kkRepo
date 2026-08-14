@@ -11,6 +11,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
@@ -188,7 +189,7 @@ class ConanServiceTest {
     ConanAssetSupport.Staged staged = fixture.staged(90L, "proxy-metadata", SHA1);
     when(fixture.assets.stageProxy(
         eq(hosted), eq("metadata/sign"), any(), eq("application/octet-stream"),
-        eq("hosted-metadata"))).thenReturn(staged);
+        eq("alice"), eq("ip"))).thenReturn(staged);
     when(fixture.assets.promote(
         eq(hosted), any(), eq("metadata/sign"), eq(staged), anyString(),
         eq("alice"), eq("ip"), any()))
@@ -354,10 +355,10 @@ class ConanServiceTest {
     ConanAssetSupport.Staged staged = fixture.staged(80L, "proxy-file", SHA1);
     when(fixture.assets.stageProxy(
         eq(proxy), eq("conanfile.py"), any(), eq("application/octet-stream"),
-        eq(proxy.proxyRemoteUrl()))).thenReturn(staged);
+        eq("conan-proxy"), isNull())).thenReturn(staged);
     when(fixture.assets.promote(
         eq(proxy), any(), eq("conanfile.py"), eq(staged), anyString(),
-        eq("conan-proxy"), eq(proxy.proxyRemoteUrl()), any()))
+        eq("conan-proxy"), isNull(), any()))
         .thenReturn(asset(180L, 500L, "final", 901L));
 
     assertEquals("stored", text(fixture.service.get(
@@ -732,14 +733,15 @@ class ConanServiceTest {
             200, Map.of("Content-Type", "text/plain"), new ByteArrayInputStream(info)));
     ConanAssetSupport.Staged staged = fixture.staged(81L, "proxy-info", SHA1);
     when(fixture.assets.stageProxy(
-        eq(proxy), eq("conaninfo.txt"), any(), eq("text/plain"), eq(proxy.proxyRemoteUrl())))
+        eq(proxy), eq("conaninfo.txt"), any(), eq("text/plain"),
+        eq("conan-proxy"), isNull()))
         .thenReturn(staged);
     when(fixture.assets.readStaged(
         proxy, staged.path(), com.github.klboke.kkrepo.protocol.conan.ConanInfo.MAX_BYTES))
         .thenReturn(info);
     when(fixture.assets.promote(
         eq(proxy), any(), eq("conaninfo.txt"), eq(staged), anyString(),
-        eq("conan-proxy"), eq(proxy.proxyRemoteUrl()), any()))
+        eq("conan-proxy"), isNull(), any()))
         .thenReturn(asset(181L, 500L, "conaninfo.txt", 901L));
 
     assertEquals("stored", text(fixture.service.get(

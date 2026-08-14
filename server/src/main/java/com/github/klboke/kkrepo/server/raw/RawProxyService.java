@@ -13,6 +13,7 @@ import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.HashMap;
@@ -368,19 +369,20 @@ public class RawProxyService {
     Map<String, String> extras = new HashMap<>();
     if (result.etag() != null) extras.put("remoteEtag", result.etag());
     if (result.lastModified() != null) extras.put("remoteLastModified", result.lastModified().toString());
+    String clientIp = ProxyRequestAudit.currentClientIp();
     return switch (componentBinding.mode()) {
       case PER_ASSET -> writer.write(
           runtime, blobStorage(runtime), requireBlobStore(runtime), path, result.body(),
-          result.contentType(), extras, "proxy", runtime.proxyRemoteUrl(), true);
+          result.contentType(), extras, "proxy", clientIp, true);
       case NONE -> writer.writeUnindexed(
           runtime, blobStorage(runtime), requireBlobStore(runtime), path, result.body(),
-          result.contentType(), extras, "proxy", runtime.proxyRemoteUrl(), true);
+          result.contentType(), extras, "proxy", clientIp, true);
       case HIDDEN -> writer.writeHidden(
           runtime, blobStorage(runtime), requireBlobStore(runtime), path, result.body(),
-          result.contentType(), extras, "proxy", runtime.proxyRemoteUrl(), true);
+          result.contentType(), extras, "proxy", clientIp, true);
       case EXPLICIT -> writer.writeWithComponentAtBrowsePath(
           runtime, blobStorage(runtime), requireBlobStore(runtime), path, result.body(),
-          result.contentType(), extras, "proxy", runtime.proxyRemoteUrl(),
+          result.contentType(), extras, "proxy", clientIp,
           componentBinding.component(), browsePath, true);
     };
   }

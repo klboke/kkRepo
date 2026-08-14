@@ -18,6 +18,7 @@ import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
+import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -95,7 +96,7 @@ class CargoAssetWriter {
       Map<String, String> remoteAttributes,
       String expectedSha256) {
     return writeCrate(runtime, storage, blobStoreId, metadata, indexEntry, path, body, contentType,
-        remoteAttributes, "proxy", runtime.proxyRemoteUrl(), true, true, expectedSha256);
+        remoteAttributes, "proxy", ProxyRequestAudit.currentClientIp(), true, true, expectedSha256);
   }
 
   Stored writeMetadata(
@@ -110,7 +111,8 @@ class CargoAssetWriter {
       Map<String, String> remoteAttributes,
       boolean keepResponseFile) {
     return write(runtime, storage, blobStoreId, path, new ByteArrayInputStream(body), contentType,
-        kind, null, attributes, remoteAttributes, "proxy", runtime.proxyRemoteUrl(), keepResponseFile, true, null);
+        kind, null, attributes, remoteAttributes, "proxy", ProxyRequestAudit.currentClientIp(),
+        keepResponseFile, true, null);
   }
 
   private Stored writeCrate(

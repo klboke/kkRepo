@@ -19,6 +19,7 @@ import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import java.io.ByteArrayInputStream;
 import java.io.FilterInputStream;
@@ -494,7 +495,7 @@ public class ConanService {
       String ip) {
     ConanAssetSupport.Staged staged = assets.stageProxy(
         runtime, path, new MaxBytesInputStream(body, MAX_UPLOAD_BYTES), mediaType(contentType),
-        "hosted-metadata");
+        actor, ip);
     try {
       verifySha1(checksumSha1, staged.blob().sha1());
       try (ConanLeaseManager.Lease lease = leases.acquire(runtime.id(), ownerCoordinate(reference))) {
@@ -735,7 +736,7 @@ public class ConanService {
         }
         staged = assets.stageProxy(
             runtime, path.filePath(), result.body(), mediaType(result.contentType()),
-            runtime.proxyRemoteUrl());
+            "conan-proxy", ProxyRequestAudit.currentClientIp());
         String upstreamSha1 = result.header("X-Checksum-Sha1");
         if (upstreamSha1 != null && !upstreamSha1.isBlank()) {
           verifySha1(upstreamSha1, staged.blob().sha1());
@@ -755,7 +756,8 @@ public class ConanService {
           ComponentRecord component = components.component(runtime, path.reference(), Instant.now());
           AssetRecord finalAsset = assets.promote(
               runtime, path.reference(), path.filePath(), staged,
-              mediaType(staged.blob().contentType()), "conan-proxy", runtime.proxyRemoteUrl(),
+              mediaType(staged.blob().contentType()), "conan-proxy",
+              ProxyRequestAudit.currentClientIp(),
               component);
           ConanRegistryDao.CommittedRevision discovered = registry.recordDiscoveredRevision(
               new ConanRegistryDao.RevisionCommit(

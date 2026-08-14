@@ -6,9 +6,10 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -154,7 +155,7 @@ class RawProxyServiceTest {
   }
 
   @Test
-  void coldPinnedAssetsSupportUnindexedAndExplicitBrowseBindings() throws Exception {
+  void coldPinnedAssetsSupportEveryComponentBinding() throws Exception {
     Fixture fixture = fixture();
     RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 60);
     BlobStorage storage = mock(BlobStorage.class);
@@ -173,14 +174,24 @@ class RawProxyServiceTest {
     when(fixture.writer.writeUnindexed(
         eq(runtime), eq(storage), eq(1L), eq(asset.path()), any(),
         eq("application/octet-stream"), any(), eq("proxy"),
-        eq(runtime.proxyRemoteUrl()), eq(true)))
+        isNull(), eq(true)))
+        .thenReturn(stored);
+    when(fixture.writer.write(
+        eq(runtime), eq(storage), eq(1L), eq(asset.path()), any(),
+        eq("application/octet-stream"), any(), eq("proxy"),
+        isNull(), eq(true)))
+        .thenReturn(stored);
+    when(fixture.writer.writeHidden(
+        eq(runtime), eq(storage), eq(1L), eq(asset.path()), any(),
+        eq("application/octet-stream"), any(), eq("proxy"),
+        isNull(), eq(true)))
         .thenReturn(stored);
     ComponentRecord component = new ComponentRecord(
         null, runtime.id(), RepositoryFormat.CONDA, "main/noarch", "demo", "1.0", "package",
         new byte[32], Map.of(), Instant.EPOCH);
     when(fixture.writer.writeWithComponentAtBrowsePath(
         eq(runtime), eq(storage), eq(1L), eq("main/noarch/demo-1.0-0.conda"), any(),
-        eq("application/octet-stream"), any(), eq("proxy"), eq(runtime.proxyRemoteUrl()),
+        eq("application/octet-stream"), any(), eq("proxy"), isNull(),
         eq(component), eq("main/noarch/demo/1.0/demo-1.0-0.conda"), eq(true)))
         .thenReturn(new RawAssetWriter.Stored(
             new AssetRecord(
@@ -201,6 +212,10 @@ class RawProxyServiceTest {
 
     assertSame(expected, fixture.service.getPinnedAssetFromUrlUnindexed(
         runtime, asset.path(), "https://upstream.example.test/demo.conda", true));
+    assertSame(expected, fixture.service.getPinnedAssetFromUrl(
+        runtime, asset.path(), "https://upstream.example.test/demo.conda", true));
+    assertSame(expected, fixture.service.getMetadataFromUrlHidden(
+        runtime, asset.path(), "https://upstream.example.test/demo.conda", true));
     assertSame(expected, fixture.service.getPinnedAssetFromUrlWithComponentAtBrowsePath(
         runtime, "main/noarch/demo-1.0-0.conda",
         "https://upstream.example.test/demo-1.0-0.conda", component,
@@ -209,10 +224,18 @@ class RawProxyServiceTest {
     verify(fixture.writer).writeUnindexed(
         eq(runtime), eq(storage), eq(1L), eq(asset.path()), any(),
         eq("application/octet-stream"), any(), eq("proxy"),
-        eq(runtime.proxyRemoteUrl()), eq(true));
+        isNull(), eq(true));
+    verify(fixture.writer).write(
+        eq(runtime), eq(storage), eq(1L), eq(asset.path()), any(),
+        eq("application/octet-stream"), any(), eq("proxy"),
+        isNull(), eq(true));
+    verify(fixture.writer).writeHidden(
+        eq(runtime), eq(storage), eq(1L), eq(asset.path()), any(),
+        eq("application/octet-stream"), any(), eq("proxy"),
+        isNull(), eq(true));
     verify(fixture.writer).writeWithComponentAtBrowsePath(
         eq(runtime), eq(storage), eq(1L), eq("main/noarch/demo-1.0-0.conda"), any(),
-        eq("application/octet-stream"), any(), eq("proxy"), eq(runtime.proxyRemoteUrl()),
+        eq("application/octet-stream"), any(), eq("proxy"), isNull(),
         eq(component), eq("main/noarch/demo/1.0/demo-1.0-0.conda"), eq(true));
   }
 
