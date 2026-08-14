@@ -7,9 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -155,7 +155,7 @@ class RawProxyServiceTest {
   }
 
   @Test
-  void coldPinnedAssetsSupportUnindexedAndExplicitBrowseBindings() throws Exception {
+  void coldPinnedAssetsSupportEveryComponentBinding() throws Exception {
     Fixture fixture = fixture();
     RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 60);
     BlobStorage storage = mock(BlobStorage.class);
@@ -172,6 +172,16 @@ class RawProxyServiceTest {
     MavenResponse expected = MavenResponse.noBody(200);
     when(fixture.reader.serve(asset, true, asset.path(), "ATTACHMENT")).thenReturn(expected);
     when(fixture.writer.writeUnindexed(
+        eq(runtime), eq(storage), eq(1L), eq(asset.path()), any(),
+        eq("application/octet-stream"), any(), eq("proxy"),
+        isNull(), eq(true)))
+        .thenReturn(stored);
+    when(fixture.writer.write(
+        eq(runtime), eq(storage), eq(1L), eq(asset.path()), any(),
+        eq("application/octet-stream"), any(), eq("proxy"),
+        isNull(), eq(true)))
+        .thenReturn(stored);
+    when(fixture.writer.writeHidden(
         eq(runtime), eq(storage), eq(1L), eq(asset.path()), any(),
         eq("application/octet-stream"), any(), eq("proxy"),
         isNull(), eq(true)))
@@ -202,12 +212,24 @@ class RawProxyServiceTest {
 
     assertSame(expected, fixture.service.getPinnedAssetFromUrlUnindexed(
         runtime, asset.path(), "https://upstream.example.test/demo.conda", true));
+    assertSame(expected, fixture.service.getPinnedAssetFromUrl(
+        runtime, asset.path(), "https://upstream.example.test/demo.conda", true));
+    assertSame(expected, fixture.service.getMetadataFromUrlHidden(
+        runtime, asset.path(), "https://upstream.example.test/demo.conda", true));
     assertSame(expected, fixture.service.getPinnedAssetFromUrlWithComponentAtBrowsePath(
         runtime, "main/noarch/demo-1.0-0.conda",
         "https://upstream.example.test/demo-1.0-0.conda", component,
         "main/noarch/demo/1.0/demo-1.0-0.conda", true));
 
     verify(fixture.writer).writeUnindexed(
+        eq(runtime), eq(storage), eq(1L), eq(asset.path()), any(),
+        eq("application/octet-stream"), any(), eq("proxy"),
+        isNull(), eq(true));
+    verify(fixture.writer).write(
+        eq(runtime), eq(storage), eq(1L), eq(asset.path()), any(),
+        eq("application/octet-stream"), any(), eq("proxy"),
+        isNull(), eq(true));
+    verify(fixture.writer).writeHidden(
         eq(runtime), eq(storage), eq(1L), eq(asset.path()), any(),
         eq("application/octet-stream"), any(), eq("proxy"),
         isNull(), eq(true));
