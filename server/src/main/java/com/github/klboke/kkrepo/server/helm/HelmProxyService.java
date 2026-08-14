@@ -15,6 +15,7 @@ import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
+import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.HashMap;
@@ -179,7 +180,7 @@ public class HelmProxyService {
         attrs,
         remoteAttrs(result),
         "proxy",
-        runtime.proxyRemoteUrl(),
+        ProxyRequestAudit.currentClientIp(),
         keepResponseFile);
   }
 
@@ -227,7 +228,7 @@ public class HelmProxyService {
               attrs,
               remoteAttrs(result),
               "proxy",
-              runtime.proxyRemoteUrl(),
+              ProxyRequestAudit.currentClientIp(),
               !headOnly);
           proxyStateDao.recordSuccess(runtime.id(), now);
           return responseFromStored(stored, headOnly);

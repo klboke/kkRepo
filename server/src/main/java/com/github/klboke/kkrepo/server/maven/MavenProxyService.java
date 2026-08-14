@@ -14,6 +14,7 @@ import com.github.klboke.kkrepo.server.cache.NexusCacheType;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheInfo;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
+import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.IOException;
 import java.time.Instant;
@@ -234,7 +235,7 @@ public class MavenProxyService {
     if (result.lastModified() != null) extras.put("remoteLastModified", result.lastModified().toString());
     MavenAssetWriter.Stored stored = writer.writePrimary(
         runtime, storage, blobStoreId, path, result.body(),
-        contentType, "proxy", runtime.proxyRemoteUrl(),
+        contentType, "proxy", ProxyRequestAudit.currentClientIp(),
         extras, false, !headOnly);
     try {
       proxyStateDao.recordSuccess(runtime.id(), now);

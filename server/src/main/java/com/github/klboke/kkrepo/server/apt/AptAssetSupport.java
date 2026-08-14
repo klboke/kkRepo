@@ -74,7 +74,7 @@ final class AptAssetSupport {
         contentType,
         attributes,
         "apt-metadata",
-        runtime.name());
+        null);
   }
 
   void storeGeneratedFile(
@@ -90,7 +90,7 @@ final class AptAssetSupport {
         contentType,
         attributes,
         "apt-metadata",
-        runtime.name());
+        null);
   }
 
   MavenResponse serve(RepositoryRuntime runtime, String path, boolean headOnly) {

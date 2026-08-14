@@ -62,7 +62,8 @@ final class ConanAssetSupport {
       String path,
       InputStream body,
       String contentType,
-      String upstream) {
+      String actor,
+      String ip) {
     String filename = path.substring(path.lastIndexOf('/') + 1);
     String stagingPath = ".conan/proxy-staging/" + UUID.randomUUID() + "/" + filename;
     hosted.putInternalHidden(
@@ -71,8 +72,8 @@ final class ConanAssetSupport {
         body,
         contentType,
         Map.of("conanProxyStaging", true, "conanFile", path),
-        "conan-proxy",
-        upstream);
+        actor,
+        ip);
     AssetRecord asset = assets.findAssetByPath(runtime.id(), stagingPath)
         .orElseThrow(() -> new IllegalStateException("Conan proxy staging asset was not persisted"));
     AssetBlobRecord blob = asset.assetBlobId() == null

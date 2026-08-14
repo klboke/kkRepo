@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -104,7 +105,7 @@ class HelmProxyServiceTest {
     when(fixture.writer.writeBytes(
         eq(runtime), eq(fixture.storage), eq(7L), eq("index.yaml"), any(byte[].class),
         eq("text/x-yaml"), eq(HelmAssetKind.INDEX), eq(null), any(), any(),
-        eq("proxy"), eq(runtime.proxyRemoteUrl()), eq(false)))
+        eq("proxy"), isNull(), eq(false)))
         .thenReturn(stored);
 
     MavenResponse response = fixture.service.get(runtime, "index.yaml", true);
@@ -144,7 +145,7 @@ class HelmProxyServiceTest {
     when(fixture.writer.write(
         eq(runtime), eq(fixture.storage), eq(7L), eq("demo-1.0.0.tgz"), any(),
         eq("application/gzip"), eq(HelmAssetKind.PACKAGE), eq(null), any(), any(),
-        eq("proxy"), eq(runtime.proxyRemoteUrl()), eq(false)))
+        eq("proxy"), isNull(), eq(false)))
         .thenReturn(stored);
 
     assertEquals(200, fixture.service.get(runtime, "demo-1.0.0.tgz", true).status());

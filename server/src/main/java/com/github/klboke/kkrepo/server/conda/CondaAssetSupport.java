@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
 import java.nio.file.Path;
 import java.util.Map;
@@ -127,7 +128,7 @@ class CondaAssetSupport {
       String contentType,
       Map<String, ?> attributes) {
     hosted.putInternalUnindexedFile(
-        runtime, path, file, contentType, attributes, "conda-metadata", runtime.name());
+        runtime, path, file, contentType, attributes, "conda-metadata", null);
   }
 
   Optional<AssetRecord> find(RepositoryRuntime runtime, String path) {
@@ -160,7 +161,7 @@ class CondaAssetSupport {
         blob,
         asset.contentType(),
         "conda-proxy-index",
-        runtime.proxyRemoteUrl(),
+        ProxyRequestAudit.currentClientIp(),
         component,
         browsePath);
   }

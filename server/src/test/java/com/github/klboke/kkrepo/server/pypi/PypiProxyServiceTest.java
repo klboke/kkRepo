@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -82,7 +83,7 @@ class PypiProxyServiceTest {
     }).when(fixture.writer).write(
         eq(runtime), eq(fixture.storage), eq(7L), eq("simple/demo/"), any(),
         eq("text/html"), eq("index"), eq(null), any(), any(),
-        eq("proxy"), eq(runtime.proxyRemoteUrl()), eq(false));
+        eq("proxy"), isNull(), eq(false));
 
     PypiResponse response = fixture.service.getIndex(runtime, "Demo", true);
 
@@ -121,7 +122,7 @@ class PypiProxyServiceTest {
     when(fixture.writer.write(
         eq(runtime), eq(fixture.storage), eq(7L), eq(packagePath), any(),
         eq("application/zip"), eq("package"), any(), any(), any(),
-        eq("proxy"), eq(runtime.proxyRemoteUrl()), eq(false)))
+        eq("proxy"), isNull(), eq(false)))
         .thenReturn(stored(packagePath, "application/zip"));
 
     assertEquals(200, fixture.service.getPackage(runtime, packagePath, true).status());
@@ -132,7 +133,7 @@ class PypiProxyServiceTest {
         eq("application/zip"), eq("package"),
         eq(new PypiAssetWriter.PackageCoordinate("demo", "demo", "1.0.0", null)),
         any(), eq(Map.of("remoteEtag", "wheel")),
-        eq("proxy"), eq(runtime.proxyRemoteUrl()), eq(false));
+        eq("proxy"), isNull(), eq(false));
   }
 
   @Test

@@ -4942,6 +4942,8 @@ public abstract class PersistenceApiContract {
 
   @Test
   void repositoryMigrationAssetsCanBeClaimedFailedRetriedAndCompleted() throws Exception {
+    String legacyRemoteUrl = "https://legacy-proxy.example.test/" + "nested-path/".repeat(12);
+    assertTrue(legacyRemoteUrl.length() > 64);
     long repositoryId = createRepository("migration-target", RepositoryFormat.MAVEN2);
     long migrationJobId = stores().migrationJobs().create(
         "3.70.1", "/nexus-data", Map.of(
@@ -4958,7 +4960,7 @@ public abstract class PersistenceApiContract {
           "application/java-archive", 1024L, "default@abc-" + index,
           Instant.parse("2026-07-13T08:00:00Z"), null,
           Instant.parse("2026-07-13T08:00:00Z"), Instant.parse("2026-07-13T08:00:00Z"),
-          "admin", "127.0.0.1", "pending", 0, null, null, null, null, null, null,
+          "admin", legacyRemoteUrl, "pending", 0, null, null, null, null, null, null,
           Map.of("sourceRepositoryType", "hosted"), null));
     }
     stores().repositoryDataMigrations().upsertDiscoveredAssets(
@@ -4995,6 +4997,8 @@ public abstract class PersistenceApiContract {
         .stream().flatMap(List::stream).toList();
     assertEquals(8, claimed.size());
     assertEquals(8, concurrentlyClaimedIds.size());
+    assertTrue(claimed.stream().allMatch(
+        claim -> legacyRemoteUrl.equals(claim.asset().sourceCreatedByIp())));
 
     var firstClaim = claimed.getFirst();
     stores().repositoryDataMigrations().markAssetFailed(
@@ -5016,6 +5020,25 @@ public abstract class PersistenceApiContract {
     assertEquals(8, progress.migratedAssets());
     assertEquals(0, progress.failedAssets());
     assertFalse(progress.active());
+  }
+
+  @Test
+  void legacyProxyAuditValuesRoundTrip() {
+    long blobStoreId = stores().blobStores().insert(blobStore("proxy-audit-contract"));
+    String legacyRemoteUrl = "https://legacy-proxy.example.test/" + "nested-path/".repeat(12);
+    assertTrue(legacyRemoteUrl.length() > 64);
+    AssetBlobRecord fixture = blob(
+        blobStoreId, "proxy-audit/artifact.bin", "proxy-audit-blob");
+
+    long blobId = stores().assets().insertBlob(new AssetBlobRecord(
+        fixture.id(), fixture.blobStoreId(), fixture.blobRef(), fixture.blobRefHash(),
+        fixture.objectKey(), fixture.objectKeyHash(), fixture.sha1(), fixture.sha256(), fixture.md5(),
+        fixture.size(), fixture.contentType(), "proxy", legacyRemoteUrl,
+        fixture.blobCreatedAt(), fixture.blobUpdatedAt(), fixture.attributes()));
+
+    assertEquals(
+        legacyRemoteUrl,
+        stores().assets().findBlobById(blobId).orElseThrow().createdByIp());
   }
 
   @Test

@@ -23,6 +23,7 @@ import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
+import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.URLEncoder;
@@ -841,9 +842,9 @@ public class NpmProxyService {
     }
     NpmAssetWriter.Stored stored = releaseIndex == null
         ? writer.writePackageRoot(runtime, storage, blobStoreId, packageId,
-            packageBytes, "proxy", runtime.proxyRemoteUrl(), extras)
+            packageBytes, "proxy", ProxyRequestAudit.currentClientIp(), extras)
         : writer.writePackageRoot(runtime, storage, blobStoreId, packageId,
-            packageBytes, "proxy", runtime.proxyRemoteUrl(), extras, releaseIndex);
+            packageBytes, "proxy", ProxyRequestAudit.currentClientIp(), extras, releaseIndex);
     updateCacheInfo(runtime, stored.asset(), NexusCacheType.METADATA, now);
     proxyStateDao.recordSuccess(runtime.id(), now);
     CachedAssetMetadata metadata = CachedAssetMetadata.of(stored.asset(), stored.blob());
@@ -950,7 +951,7 @@ public class NpmProxyService {
     BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);
     NpmAssetWriter.Stored stored = writer.writeTarball(runtime, storage, blobStoreId, packageId,
         inferVersion(packageId, tarballName), tarballName, result.body(),
-        contentType, "proxy", runtime.proxyRemoteUrl(), remoteAttributes(result), keepResponseFile);
+        contentType, "proxy", ProxyRequestAudit.currentClientIp(), remoteAttributes(result), keepResponseFile);
     updateCacheInfo(runtime, stored.asset(), NexusCacheType.CONTENT, now);
     proxyStateDao.recordSuccess(runtime.id(), now);
     return stored;

@@ -85,7 +85,7 @@ class CondaAssetSupportTest {
     support.storeGenerated(runtime, "repodata.json", file, "application/json", attributes);
     verify(hosted).putInternalUnindexedFile(
         runtime, "repodata.json", file, "application/json", attributes,
-        "conda-metadata", runtime.name());
+        "conda-metadata", null);
     assertEquals(Optional.of(asset), support.find(runtime, "main/linux-64/package.conda"));
     support.delete(runtime, "main/linux-64/package.conda");
     verify(hosted).deleteInternal(runtime, "main/linux-64/package.conda");
@@ -192,7 +192,7 @@ class CondaAssetSupportTest {
     verify(browseNodes).deleteByAssetId(10L);
     verify(hosted).linkInternalBlobWithComponentAtBrowsePath(
         runtime, asset.path(), blob, asset.contentType(), "conda-proxy-index",
-        runtime.proxyRemoteUrl(), component, "browse");
+        null, component, "browse");
   }
 
   private static RepositoryRuntime runtime() {
