@@ -228,6 +228,29 @@ class BlobStoresControllerTest {
     assertTrue(responseBody.contains("default"));
   }
 
+  @Test
+  void fallsBackToStatusTextWhenResponseStatusReasonIsMissingOrBlank() {
+    BlobStoresController controller = new BlobStoresController(
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null);
+
+    var missingReason = controller.handleResponseStatus(
+        new ResponseStatusException(HttpStatus.BAD_REQUEST));
+    var blankReason = controller.handleResponseStatus(
+        new ResponseStatusException(HttpStatus.BAD_REQUEST, " "));
+
+    assertEquals(HttpStatus.BAD_REQUEST, missingReason.getStatusCode());
+    assertEquals(Map.of("message", "400 BAD_REQUEST"), missingReason.getBody());
+    assertEquals(HttpStatus.BAD_REQUEST, blankReason.getStatusCode());
+    assertEquals(Map.of("message", "400 BAD_REQUEST"), blankReason.getBody());
+  }
+
   private static BlobStoresController.BlobStoreRequest fileRequest(String name, String path) {
     return new BlobStoresController.BlobStoreRequest(
         name,
