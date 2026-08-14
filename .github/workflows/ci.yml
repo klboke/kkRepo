@@ -164,6 +164,7 @@ jobs:
           bash -n scripts/ci/prepare-swift-e2e-tls.sh
           bash -n scripts/ci/setup-swift-e2e-wrappers.sh
           bash -n scripts/ci/test-e2e-image-artifact.sh
+          bash -n scripts/ci/test-quickstart-data-permissions.sh
           bash -n scripts/ci/test-quickstart-runtime.sh
           bash -n scripts/ci/test-swift-e2e-wrappers.sh
           bash -n scripts/ci/test-dist-launcher.sh
@@ -175,6 +176,7 @@ jobs:
           scripts/ci/test-dev-nginx-bind-mount.sh
           scripts/ci/check-dev-dual-runtime-deploy.sh
           scripts/ci/test-e2e-image-artifact.sh
+          scripts/ci/test-quickstart-data-permissions.sh
           scripts/ci/test-quickstart-runtime.sh
           scripts/ci/test-swift-e2e-wrappers.sh
           scripts/ci/test-dist-launcher.sh
