@@ -23,9 +23,22 @@ services:
   app-data-perms:
     image: alpine:3.20
     user: root
+    environment:
+      KKREPO_RUNTIME: ${KKREPO_RUNTIME:-jvm}
     volumes:
       - kkrepo-data:/data
-    command: ["sh", "-c", "mkdir -p /data/blobs && chown -R 999:999 /data"]
+    command:
+      - sh
+      - -ec
+      - |
+        # Published JVM and Native images run as 999:999 and 1002:1001 respectively.
+        case "$${KKREPO_RUNTIME}" in
+          jvm) owner="999:999" ;;
+          native) owner="1002:1001" ;;
+          *) echo "Unsupported KKREPO_RUNTIME for data permissions: $${KKREPO_RUNTIME}" >&2; exit 1 ;;
+        esac
+        mkdir -p /data/blobs
+        chown -R "$${owner}" /data
     network_mode: none
 
   kkrepo:

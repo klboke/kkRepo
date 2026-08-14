@@ -1,7 +1,6 @@
 package com.github.klboke.kkrepo.storage.file;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collection;
@@ -24,7 +23,11 @@ public class FileBlobStorePathValidator {
         throw new IllegalArgumentException("File blob store path is not writable: " + root);
       }
     } catch (IOException e) {
-      throw new UncheckedIOException(e);
+      String detail = e.getMessage();
+      String suffix = detail == null || detail.isBlank() ? "" : " (" + detail + ")";
+      throw new IllegalArgumentException(
+          "File blob store path cannot be created or written: " + root + suffix,
+          e);
     }
   }
 

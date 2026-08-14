@@ -15,7 +15,6 @@ import com.github.klboke.kkrepo.storage.s3.admin.S3BlobStoreAdmin;
 import com.github.klboke.kkrepo.storage.s3.admin.S3BucketSummary;
 import com.github.klboke.kkrepo.storage.s3.admin.S3ProbeResult;
 import com.github.klboke.kkrepo.storage.s3.config.S3StorageProperties;
-import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -23,6 +22,8 @@ import java.util.Locale;
 import java.util.Map;
 import org.springframework.core.env.Environment;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -126,6 +127,15 @@ public class BlobStoresController {
     return toProbeResult(s3BlobStoreAdmin.probeReadWrite(toS3Config(record)));
   }
 
+  @ExceptionHandler(ResponseStatusException.class)
+  public ResponseEntity<Map<String, String>> handleResponseStatus(ResponseStatusException error) {
+    String message = error.getReason();
+    if (message == null || message.isBlank()) {
+      message = error.getStatusCode().toString();
+    }
+    return ResponseEntity.status(error.getStatusCode()).body(Map.of("message", message));
+  }
+
   private BlobStoreRecord toCreateRecord(String name, BlobStoreRequest request) {
     if (isFileRequest(request, null)) {
       return new BlobStoreRecord(
@@ -221,8 +231,6 @@ public class BlobStoresController {
           .toList();
       filePathValidator.validate(config, existing);
     } catch (IllegalArgumentException e) {
-      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage(), e);
-    } catch (UncheckedIOException e) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage(), e);
     }
   }

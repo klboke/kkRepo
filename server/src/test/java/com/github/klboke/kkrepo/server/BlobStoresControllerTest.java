@@ -3,6 +3,8 @@ package com.github.klboke.kkrepo.server;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
@@ -22,7 +24,9 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.mock.env.MockEnvironment;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.server.ResponseStatusException;
 
 class BlobStoresControllerTest {
@@ -190,6 +194,61 @@ class BlobStoresControllerTest {
     BlobStoresController.BlobStoreView created = controller.create(fileRequest("disk", "hosted"));
 
     assertEquals("file", created.type());
+  }
+
+  @Test
+  void rendersBlobStoreValidationReasonForTheAdminUi() throws Exception {
+    Path blockingFile = tempDir.resolve("blocking-file");
+    Files.writeString(blockingFile, "not a directory");
+    FileStorageProperties fileProperties = new FileStorageProperties();
+    fileProperties.setBaseDir(blockingFile.toString());
+    FileBlobStorageFactory fileFactory = new FileBlobStorageFactory(fileProperties);
+    FileBlobStorePathValidator pathValidator = new FileBlobStorePathValidator();
+    BlobStoresController controller = new BlobStoresController(
+        new InMemoryBlobStoreDao(),
+        null,
+        null,
+        fileFactory,
+        pathValidator,
+        new S3StorageProperties(),
+        null,
+        new MockEnvironment());
+
+    var result = MockMvcBuilders.standaloneSetup(controller).build()
+        .perform(post("/internal/blob-stores")
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("""
+                {"name":"disk","type":"file","engine":"file","path":"default"}
+                """))
+        .andExpect(status().isBadRequest())
+        .andReturn();
+
+    String responseBody = result.getResponse().getContentAsString();
+    assertTrue(responseBody.contains("\"message\":\"File blob store path cannot be created or written:"));
+    assertTrue(responseBody.contains("default"));
+  }
+
+  @Test
+  void fallsBackToStatusTextWhenResponseStatusReasonIsMissingOrBlank() {
+    BlobStoresController controller = new BlobStoresController(
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null);
+
+    var missingReason = controller.handleResponseStatus(
+        new ResponseStatusException(HttpStatus.BAD_REQUEST));
+    var blankReason = controller.handleResponseStatus(
+        new ResponseStatusException(HttpStatus.BAD_REQUEST, " "));
+
+    assertEquals(HttpStatus.BAD_REQUEST, missingReason.getStatusCode());
+    assertEquals(Map.of("message", "400 BAD_REQUEST"), missingReason.getBody());
+    assertEquals(HttpStatus.BAD_REQUEST, blankReason.getStatusCode());
+    assertEquals(Map.of("message", "400 BAD_REQUEST"), blankReason.getBody());
   }
 
   private static BlobStoresController.BlobStoreRequest fileRequest(String name, String path) {
