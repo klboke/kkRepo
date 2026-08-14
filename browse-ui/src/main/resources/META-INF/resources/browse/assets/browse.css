@@ -2244,6 +2244,10 @@ code,
   box-shadow: var(--shadow-soft);
 }
 
+#browse-drill .browse-split {
+  margin-top: 18px;
+}
+
 .tree-left {
   border-right: 1px solid var(--line);
 }
