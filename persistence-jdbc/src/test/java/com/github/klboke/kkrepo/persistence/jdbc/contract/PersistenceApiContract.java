@@ -4346,6 +4346,9 @@ public abstract class PersistenceApiContract {
     long mavenRepository = createRepository("maven-search", RepositoryFormat.MAVEN2);
     long otherMavenRepository = createRepository("maven-other", RepositoryFormat.MAVEN2);
     long npmRepository = createRepository("npm-search", RepositoryFormat.NPM);
+    long alpineRepository = createRepository("alpine-search", RepositoryFormat.ALPINE);
+    String migratedAlpinePackage =
+        "kkrepo-alpine-migration-app-datastore_h2_31894582966_1";
 
     stores().components().upsertReturningId(component(
         mavenRepository, RepositoryFormat.MAVEN2, "com.acme.platform", "observability-library",
@@ -4359,6 +4362,10 @@ public abstract class PersistenceApiContract {
     stores().components().upsertReturningId(component(
         npmRepository, RepositoryFormat.NPM, "@acme", "observability-library",
         "4.0.0", Map.of("keywords", "telemetry tracing"), Instant.parse("2026-07-13T11:00:00Z")));
+    stores().components().upsertReturningId(component(
+        alpineRepository, RepositoryFormat.ALPINE, "v3.23/main/x86_64", migratedAlpinePackage,
+        "1.2.3-r0", Map.of("assetPath", "v3.23/main/x86_64/" + migratedAlpinePackage + ".apk"),
+        Instant.parse("2026-07-13T12:00:00Z")));
 
     var andSearch = stores().components().search("acme library", RepositoryFormat.MAVEN2, 20);
     assertEquals(List.of("2.0.0"), andSearch.stream().map(row -> row.version()).toList());
@@ -4373,6 +4380,9 @@ public abstract class PersistenceApiContract {
         stores().components().search("telemetry tracing", RepositoryFormat.MAVEN2, 20)
             .stream().map(row -> row.version()).toList());
     assertFalse(stores().components().search("telemetry", RepositoryFormat.NPM, 20).isEmpty());
+    assertEquals(migratedAlpinePackage,
+        stores().components().search(migratedAlpinePackage, RepositoryFormat.ALPINE, 20)
+            .getFirst().name());
   }
 
   @Test

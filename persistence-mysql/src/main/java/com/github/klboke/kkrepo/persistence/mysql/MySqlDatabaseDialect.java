@@ -441,7 +441,10 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
       StringBuilder token = new StringBuilder();
       for (int index = 0; index < keyword.length(); index++) {
         char value = keyword.charAt(index);
-        if (Character.isLetterOrDigit(value)) {
+        // MySQL's built-in FULLTEXT parser keeps underscores inside a word. Preserve them in the
+        // boolean query as well; splitting them would require short fragments that InnoDB does not
+        // index by default and would make exact package names such as "name_h2_1" unsearchable.
+        if (Character.isLetterOrDigit(value) || value == '_') {
           token.append(Character.toLowerCase(value));
         } else {
           addTerm(terms, token);
