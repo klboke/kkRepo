@@ -38,8 +38,11 @@ class AlpineRegistryDaoDefaultsTest {
           if (method.isDefault()) {
             return InvocationHandler.invokeDefault(proxy, method, arguments);
           }
-          if (method.getName().equals("listPackages") && method.getParameterCount() == 4) {
-            return List.of(row);
+          if (method.getName().equals("listPackagePage") && method.getParameterCount() == 7) {
+            return ((Long) arguments[5]) == 0 ? List.of(row) : List.of();
+          }
+          if (method.getName().equals("listPackagePage") && method.getParameterCount() == 5) {
+            return ((Long) arguments[3]) == 0 ? List.of(row) : List.of();
           }
           if (method.getName().equals("observeProxyDistribution")
               && method.getParameterCount() == 6) {
@@ -52,9 +55,11 @@ class AlpineRegistryDaoDefaultsTest {
 
     dao.visitPackages(1L, "v3.20/main/x86_64", "main", "x86_64", visited::add);
     dao.visitPackages(1L, "v3.20/main/x86_64", "main", "x86_64", null);
+    dao.visitPackages(1L, "v3.20/main/x86_64", visited::add);
+    dao.visitPackages(1L, "v3.20/main/x86_64", null);
     dao.observeProxyDistribution(1L, "v3.20/main/x86_64", "release", Instant.EPOCH);
 
-    assertEquals(List.of(row), visited);
+    assertEquals(List.of(row, row), visited);
     assertArrayEquals(
         new Object[] {1L, "v3.20/main/x86_64", "release", Map.of(), false, Instant.EPOCH},
         observed.get());

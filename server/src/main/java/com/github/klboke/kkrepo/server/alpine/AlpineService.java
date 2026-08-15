@@ -33,12 +33,14 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Consumer;
 import org.springframework.stereotype.Service;
 
 /** APK v2 hosted, proxy, and group behavior with fenced signed snapshots. */
 @Service
 public class AlpineService {
   private static final int MAX_GROUP_DEPTH = 8;
+  private static final int GROUP_BINDING_BATCH_SIZE = 512;
   private static final Comparator<AlpineRegistryDao.PackageRecord> GROUP_ORDER =
       Comparator.comparing(AlpineRegistryDao.PackageRecord::packageName)
           .thenComparing(AlpineRegistryDao.PackageRecord::version, AlpineVersions.COMPARATOR)
@@ -249,7 +251,8 @@ public class AlpineService {
               now,
               now,
               now));
-      registry.replacePackageRelations(stored.id(), relations(stored.id(), info));
+      registry.replacePackageRelations(
+          stored.repositoryId(), stored.id(), relations(stored.id(), info));
       lease.assertHeld();
       return published(stored);
     }
@@ -523,22 +526,34 @@ public class AlpineService {
           AlpineRepositorySettings.Settings settings = repositorySettings.get(runtime);
           if (runtime.isGroup()) {
             GroupProjection group = resolveGroup(runtime, namespace);
-            AlpineIndexBuilder.BuiltSnapshot built = indexBuilder.build(
-                runtime, settings, state, key, visitor -> group.packages().forEach(
-                    resolved -> visitor.accept(resolved.record())));
-            LinkedHashMap<String, String> manifest = new LinkedHashMap<>(built.manifest());
-            manifest.put("@members", group.memberFingerprint());
-            AlpineRegistryDao.Snapshot snapshot = new AlpineRegistryDao.Snapshot(
-                runtime.id(), namespace, state.desiredRevision(), built.signingKeyRevision(),
-                Map.copyOf(manifest), built.indexSha256(), built.createdAt());
-            List<AlpineRegistryDao.GroupBinding> bindings = group.packages().stream()
-                .map(resolved -> binding(runtime, namespace, snapshot.revision(), resolved))
-                .toList();
-            lease.assertHeld();
-            if (registry.publishGroupSnapshot(
-                snapshot, bindings, lease.owner(), lease.fencingToken())) {
-              publishedSnapshots.published(snapshot);
-              return true;
+            long revision = state.desiredRevision();
+            long bindingToken = lease.fencingToken();
+            registry.beginGroupSnapshot(runtime.id(), namespace, revision, bindingToken);
+            boolean groupPublished = false;
+            try {
+              AlpineIndexBuilder.BuiltSnapshot built = indexBuilder.build(
+                  runtime,
+                  settings,
+                  state,
+                  key,
+                  visitor -> visitGroupPackages(
+                      runtime, namespace, revision, bindingToken, group, lease, visitor));
+              LinkedHashMap<String, String> manifest = new LinkedHashMap<>(built.manifest());
+              manifest.put("@members", group.memberFingerprint());
+              AlpineRegistryDao.Snapshot snapshot = new AlpineRegistryDao.Snapshot(
+                  runtime.id(), namespace, revision, built.signingKeyRevision(),
+                  Map.copyOf(manifest), built.indexSha256(), built.createdAt());
+              lease.assertHeld();
+              if (registry.publishGroupSnapshot(snapshot, lease.owner(), bindingToken)) {
+                groupPublished = true;
+                publishedSnapshots.published(snapshot);
+                return true;
+              }
+            } finally {
+              if (!groupPublished) {
+                registry.discardGroupSnapshot(
+                    runtime.id(), namespace, revision, bindingToken);
+              }
             }
           } else {
             AlpineIndexBuilder.BuiltSnapshot built = indexBuilder.build(
@@ -567,17 +582,11 @@ public class AlpineService {
   }
 
   private GroupProjection resolveGroup(RepositoryRuntime group, String namespace) {
-    ArrayList<ResolvedPackage> all = new ArrayList<>();
+    ArrayList<ResolvedMember> members = new ArrayList<>();
     LinkedHashSet<Long> visiting = new LinkedHashSet<>();
     LinkedHashMap<Long, Long> revisions = new LinkedHashMap<>();
-    collectMembers(group, namespace, visiting, revisions, all, 0);
-    LinkedHashMap<String, ResolvedPackage> selected = new LinkedHashMap<>();
-    for (ResolvedPackage candidate : all) {
-      selected.putIfAbsent(groupCoordinate(candidate.record()), candidate);
-    }
-    ArrayList<ResolvedPackage> packages = new ArrayList<>(selected.values());
-    packages.sort(Comparator.comparing(ResolvedPackage::record, GROUP_ORDER));
-    return new GroupProjection(List.copyOf(packages), fingerprint(revisions));
+    collectMembers(group, namespace, visiting, revisions, members, 0);
+    return new GroupProjection(List.copyOf(members), fingerprint(revisions));
   }
 
   private void collectMembers(
@@ -585,7 +594,7 @@ public class AlpineService {
       String namespace,
       Set<Long> visiting,
       Map<Long, Long> revisions,
-      List<ResolvedPackage> packages,
+      List<ResolvedMember> members,
       int depth) {
     if (depth > MAX_GROUP_DEPTH || !visiting.add(group.id())) {
       throw new IllegalStateException("Alpine group membership contains a cycle or exceeds depth");
@@ -594,7 +603,7 @@ public class AlpineService {
       for (RepositoryRuntime member : group.members()) {
         if (member.format() != RepositoryFormat.ALPINE || !member.online()) continue;
         if (member.isGroup()) {
-          collectMembers(member, namespace, visiting, revisions, packages, depth + 1);
+          collectMembers(member, namespace, visiting, revisions, members, depth + 1);
           continue;
         }
         AlpineRepositorySettings.Settings memberSettings = repositorySettings.get(member);
@@ -604,13 +613,72 @@ public class AlpineService {
         }
         AlpineRegistryDao.Snapshot snapshot = ensureSnapshot(member, memberSettings, namespace);
         revisions.put(member.id(), snapshot.revision());
-        for (AlpineRegistryDao.PackageRecord row : registry.listPackages(member.id(), namespace)) {
-          packages.add(new ResolvedPackage(row, member.id(), snapshot.revision(), row.path()));
-        }
+        members.add(new ResolvedMember(member.id(), snapshot.revision()));
       }
     } finally {
       visiting.remove(group.id());
     }
+  }
+
+  private void visitGroupPackages(
+      RepositoryRuntime group,
+      String namespace,
+      long snapshotRevision,
+      long bindingToken,
+      GroupProjection projection,
+      AlpineLeaseManager.Lease lease,
+      Consumer<AlpineRegistryDao.PackageRecord> visitor) {
+    ArrayList<MemberPackageCursor> cursors = new ArrayList<>();
+    projection.members().forEach(member -> cursors.add(new MemberPackageCursor(member, namespace)));
+    ArrayList<AlpineRegistryDao.GroupBinding> bindings = new ArrayList<>(
+        GROUP_BINDING_BATCH_SIZE);
+    while (true) {
+      String packageName = null;
+      for (MemberPackageCursor cursor : cursors) {
+        AlpineRegistryDao.PackageRecord candidate = cursor.peek();
+        if (candidate != null
+            && (packageName == null || candidate.packageName().compareTo(packageName) < 0)) {
+          packageName = candidate.packageName();
+        }
+      }
+      if (packageName == null) break;
+
+      LinkedHashMap<String, ResolvedPackage> selected = new LinkedHashMap<>();
+      for (MemberPackageCursor cursor : cursors) {
+        AlpineRegistryDao.PackageRecord candidate;
+        while ((candidate = cursor.peek()) != null
+            && candidate.packageName().equals(packageName)) {
+          AlpineRegistryDao.PackageRecord row = cursor.take();
+          ResolvedPackage resolved = new ResolvedPackage(
+              row,
+              cursor.member().repositoryId(),
+              cursor.member().snapshotRevision(),
+              row.path());
+          selected.putIfAbsent(groupCoordinate(row), resolved);
+        }
+      }
+
+      ArrayList<ResolvedPackage> family = new ArrayList<>(selected.values());
+      family.sort(Comparator.comparing(ResolvedPackage::record, GROUP_ORDER));
+      for (ResolvedPackage resolved : family) {
+        visitor.accept(resolved.record());
+        bindings.add(binding(group, namespace, snapshotRevision, resolved));
+        if (bindings.size() == GROUP_BINDING_BATCH_SIZE) {
+          flushGroupBindings(lease, bindingToken, bindings);
+        }
+      }
+    }
+    flushGroupBindings(lease, bindingToken, bindings);
+  }
+
+  private void flushGroupBindings(
+      AlpineLeaseManager.Lease lease,
+      long bindingToken,
+      List<AlpineRegistryDao.GroupBinding> bindings) {
+    if (bindings.isEmpty()) return;
+    lease.assertHeld();
+    registry.appendGroupBindings(bindingToken, List.copyOf(bindings));
+    bindings.clear();
   }
 
   String memberFingerprint(RepositoryRuntime group, String namespace) {
@@ -869,6 +937,55 @@ public class AlpineService {
       Instant observedAt) {
   }
 
+  private final class MemberPackageCursor {
+    private final ResolvedMember member;
+    private final String namespace;
+    private List<AlpineRegistryDao.PackageRecord> page = List.of();
+    private int offset;
+    private String afterName = "";
+    private long afterId;
+    private boolean finalPage;
+
+    private MemberPackageCursor(ResolvedMember member, String namespace) {
+      this.member = member;
+      this.namespace = namespace;
+    }
+
+    private ResolvedMember member() {
+      return member;
+    }
+
+    private AlpineRegistryDao.PackageRecord peek() {
+      if (offset < page.size()) return page.get(offset);
+      if (finalPage) return null;
+      page = registry.listPackagePage(
+          member.repositoryId(),
+          namespace,
+          afterName,
+          afterId,
+          AlpineRegistryDao.PACKAGE_PAGE_SIZE);
+      offset = 0;
+      if (page.isEmpty()) {
+        finalPage = true;
+        return null;
+      }
+      AlpineRegistryDao.PackageRecord cursor = page.getLast();
+      afterName = cursor.packageName();
+      afterId = cursor.id();
+      finalPage = page.size() < AlpineRegistryDao.PACKAGE_PAGE_SIZE;
+      return page.getFirst();
+    }
+
+    private AlpineRegistryDao.PackageRecord take() {
+      AlpineRegistryDao.PackageRecord value = peek();
+      if (value == null) throw new IllegalStateException("Alpine group package cursor is exhausted");
+      offset++;
+      return value;
+    }
+  }
+
+  private record ResolvedMember(long repositoryId, long snapshotRevision) { }
+
   private record ResolvedPackage(
       AlpineRegistryDao.PackageRecord record,
       long sourceRepositoryId,
@@ -877,7 +994,7 @@ public class AlpineService {
   }
 
   private record GroupProjection(
-      List<ResolvedPackage> packages,
+      List<ResolvedMember> members,
       String memberFingerprint) {
   }
 }

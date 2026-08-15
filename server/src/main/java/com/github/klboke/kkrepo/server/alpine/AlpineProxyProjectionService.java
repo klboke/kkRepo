@@ -111,16 +111,33 @@ final class AlpineProxyProjectionService {
           expected(runtime, indexPath, record),
           path);
       AlpineRegistryDao.PackageRecord saved = saveIfChanged(verified);
-      registry.replacePackageRelations(saved.id(), relations(saved.id(), record));
+      registry.replacePackageRelations(
+          saved.repositoryId(), saved.id(), relations(saved.id(), record));
       current.add(coordinate(saved));
     }
-    for (AlpineRegistryDao.PackageRecord stale : registry.listPackages(runtime.id(), namespace)) {
-      if (!AlpineRegistryDao.SOURCE_PROXY.equals(stale.sourceKind())
-          || current.contains(coordinate(stale))) continue;
-      registry.deletePackage(
-          stale.repositoryId(), stale.distribution(), stale.component(), stale.packageName(),
-          stale.version(), stale.architecture(), "upstream-index-replaced", Instant.now());
-      assets.retirePackageProjection(stale.assetId());
+    removeStalePackages(runtime, namespace, current);
+  }
+
+  private void removeStalePackages(
+      RepositoryRuntime runtime, String namespace, Set<String> current) {
+    String afterName = "";
+    long afterId = 0;
+    while (true) {
+      List<AlpineRegistryDao.PackageRecord> page = registry.listPackagePage(
+          runtime.id(), namespace, afterName, afterId, AlpineRegistryDao.PACKAGE_PAGE_SIZE);
+      if (page.isEmpty()) return;
+      AlpineRegistryDao.PackageRecord cursor = page.getLast();
+      for (AlpineRegistryDao.PackageRecord stale : page) {
+        if (!AlpineRegistryDao.SOURCE_PROXY.equals(stale.sourceKind())
+            || current.contains(coordinate(stale))) continue;
+        registry.deletePackage(
+            stale.repositoryId(), stale.distribution(), stale.component(), stale.packageName(),
+            stale.version(), stale.architecture(), "upstream-index-replaced", Instant.now());
+        assets.retirePackageProjection(stale.assetId());
+      }
+      if (page.size() < AlpineRegistryDao.PACKAGE_PAGE_SIZE) return;
+      afterName = cursor.packageName();
+      afterId = cursor.id();
     }
   }
 
@@ -195,7 +212,8 @@ final class AlpineProxyProjectionService {
     AlpineRegistryDao.PackageRecord verified = bindVerifiedPackage(
         runtime, expected, path.normalized());
     AlpineRegistryDao.PackageRecord saved = saveIfChanged(verified);
-    registry.replacePackageRelations(saved.id(), relations(saved.id(), record(saved)));
+    registry.replacePackageRelations(
+        saved.repositoryId(), saved.id(), relations(saved.id(), record(saved)));
     return saved;
   }
 

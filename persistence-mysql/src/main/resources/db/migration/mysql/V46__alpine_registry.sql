@@ -10,8 +10,7 @@ CREATE TABLE alpine_package_record (
   package_architecture VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
   filename VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
   asset_path VARCHAR(1024) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
-  asset_path_hash BINARY(32)
-    GENERATED ALWAYS AS (UNHEX(SHA2(asset_path, 256))) STORED,
+  asset_path_hash BINARY(32) NOT NULL,
   control_fields JSON NOT NULL,
   package_identity VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   data_sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -25,6 +24,7 @@ CREATE TABLE alpine_package_record (
   created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (id),
+  CONSTRAINT uk_alpine_package_repository_id UNIQUE (repository_id, id),
   CONSTRAINT uk_alpine_package_coordinate UNIQUE (repository_id, coordinate_hash),
   CONSTRAINT uk_alpine_package_path UNIQUE (repository_id, asset_path_hash),
   CONSTRAINT uk_alpine_package_asset UNIQUE (repository_id, asset_id),
@@ -37,7 +37,8 @@ CREATE TABLE alpine_package_record (
   CONSTRAINT chk_alpine_package_source CHECK (source_kind IN ('HOSTED', 'PROXY')),
   INDEX idx_alpine_package_index
     (repository_id, distribution_name, component_name, architecture, package_name, id),
-  INDEX idx_alpine_package_path (repository_id, asset_path(255))
+  INDEX idx_alpine_package_namespace
+    (repository_id, distribution_name, package_name, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE alpine_package_tombstone (
@@ -69,6 +70,8 @@ CREATE TABLE alpine_suite_state (
   last_published_at DATETIME(3) NULL,
   last_error VARCHAR(2048) NULL,
   last_error_at DATETIME(3) NULL,
+  publish_pending BOOLEAN
+    GENERATED ALWAYS AS (desired_revision > published_revision) STORED,
   updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (repository_id, distribution_name),
   CONSTRAINT fk_alpine_suite_repository
@@ -83,6 +86,7 @@ CREATE TABLE alpine_snapshot (
   signing_key_revision INT NOT NULL,
   manifest_json JSON NOT NULL,
   index_sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  group_binding_token BIGINT NULL,
   created_at DATETIME(3) NOT NULL,
   published_at DATETIME(3) NULL,
   PRIMARY KEY (repository_id, distribution_name, revision),
@@ -139,6 +143,7 @@ CREATE TABLE alpine_publish_lease (
 
 CREATE TABLE alpine_package_relation (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  repository_id BIGINT UNSIGNED NOT NULL,
   package_id BIGINT UNSIGNED NOT NULL,
   relation_kind VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   token_value VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
@@ -147,8 +152,25 @@ CREATE TABLE alpine_package_relation (
   PRIMARY KEY (id),
   CONSTRAINT uk_alpine_relation UNIQUE (package_id, relation_kind, token_hash),
   CONSTRAINT fk_alpine_relation_package
-    FOREIGN KEY (package_id) REFERENCES alpine_package_record(id) ON DELETE CASCADE,
-  INDEX idx_alpine_relation_lookup (relation_kind, token_hash, package_id)
+    FOREIGN KEY (repository_id, package_id)
+    REFERENCES alpine_package_record(repository_id, id) ON DELETE CASCADE,
+  INDEX idx_alpine_relation_package (repository_id, package_id),
+  INDEX idx_alpine_relation_lookup
+    (repository_id, relation_kind, token_hash, package_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE alpine_group_snapshot_stage (
+  group_repository_id BIGINT UNSIGNED NOT NULL,
+  distribution_name VARCHAR(384) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  snapshot_revision BIGINT NOT NULL,
+  binding_token BIGINT NOT NULL,
+  created_at DATETIME(3) NOT NULL,
+  PRIMARY KEY (
+    group_repository_id, distribution_name, snapshot_revision, binding_token),
+  CONSTRAINT fk_alpine_group_stage_repository
+    FOREIGN KEY (group_repository_id) REFERENCES repository(id) ON DELETE CASCADE,
+  INDEX idx_alpine_group_stage_cleanup
+    (created_at, group_repository_id, distribution_name, snapshot_revision, binding_token)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE alpine_group_binding (
@@ -156,6 +178,7 @@ CREATE TABLE alpine_group_binding (
   group_repository_id BIGINT UNSIGNED NOT NULL,
   distribution_name VARCHAR(384) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
   snapshot_revision BIGINT NOT NULL,
+  binding_token BIGINT NOT NULL,
   path_value VARCHAR(1024) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
   path_hash BINARY(32) NOT NULL,
   member_repository_id BIGINT UNSIGNED NOT NULL,
@@ -167,22 +190,29 @@ CREATE TABLE alpine_group_binding (
   created_at DATETIME(3) NOT NULL,
   PRIMARY KEY (id),
   CONSTRAINT uk_alpine_group_binding
-    UNIQUE (group_repository_id, distribution_name, snapshot_revision, path_hash),
-  CONSTRAINT fk_alpine_group_repository
-    FOREIGN KEY (group_repository_id) REFERENCES repository(id) ON DELETE CASCADE,
+    UNIQUE (
+      group_repository_id, distribution_name, snapshot_revision, binding_token, path_hash),
+  CONSTRAINT fk_alpine_group_binding_stage
+    FOREIGN KEY (
+      group_repository_id, distribution_name, snapshot_revision, binding_token)
+    REFERENCES alpine_group_snapshot_stage(
+      group_repository_id, distribution_name, snapshot_revision, binding_token)
+    ON DELETE CASCADE,
   CONSTRAINT fk_alpine_group_member
     FOREIGN KEY (member_repository_id) REFERENCES repository(id) ON DELETE CASCADE,
   INDEX idx_alpine_group_member
     (member_repository_id, member_snapshot_revision, id),
   INDEX idx_alpine_group_page
-    (group_repository_id, distribution_name, snapshot_revision, id)
+    (group_repository_id, distribution_name, snapshot_revision, binding_token, id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE INDEX idx_alpine_tombstone_cleanup
   ON alpine_package_tombstone(deleted_at, repository_id, revision);
 CREATE INDEX idx_alpine_suite_worker
-  ON alpine_suite_state(desired_at, last_error_at, repository_id);
+  ON alpine_suite_state(
+    publish_pending, desired_at, repository_id, distribution_name);
 CREATE INDEX idx_alpine_suite_force_publish
-  ON alpine_suite_state(pending_since, repository_id);
+  ON alpine_suite_state(
+    publish_pending, pending_since, repository_id, distribution_name);
 CREATE INDEX idx_alpine_snapshot_cleanup
-  ON alpine_snapshot(published_at, created_at, repository_id, distribution_name);
+  ON alpine_snapshot(created_at, repository_id, distribution_name, revision);

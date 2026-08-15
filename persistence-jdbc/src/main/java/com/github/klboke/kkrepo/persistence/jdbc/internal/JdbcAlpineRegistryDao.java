@@ -11,14 +11,15 @@ import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcUpserts;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.CoordinationPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseType;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.function.Consumer;
 import org.springframework.jdbc.core.ArgumentPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -29,11 +30,15 @@ import org.springframework.transaction.annotation.Transactional;
 @Repository
 public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
   private static final String REVISION_PREFIX = "alpine:repository:";
-  private static final int PACKAGE_PAGE_SIZE = 2048;
 
   private final JdbcTemplate jdbc;
   private final JsonColumns json;
   private final CoordinationPersistenceDialect coordination;
+  private final boolean postgreSql;
+  private final String pendingSuiteTable;
+  private final String pendingRepositoryJoin;
+  private final String groupBindingPathTable;
+  private final String groupBindingPageTable;
   private final RowMapper<PackageRecord> packageMapper = this::mapPackage;
 
   public JdbcAlpineRegistryDao(
@@ -41,6 +46,15 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
     this.jdbc = jdbc;
     this.json = json;
     this.coordination = databaseDialect.coordination();
+    this.postgreSql = databaseDialect.type() == DatabaseType.POSTGRESQL;
+    this.pendingSuiteTable = databaseDialect.tableReferenceWithPreferredIndex(
+        "alpine_suite_state", "idx_alpine_suite_worker");
+    this.pendingRepositoryJoin = databaseDialect.type() == DatabaseType.MYSQL
+        ? "STRAIGHT_JOIN" : "JOIN";
+    this.groupBindingPathTable = databaseDialect.tableReferenceWithPreferredIndex(
+        "alpine_group_binding", "uk_alpine_group_binding");
+    this.groupBindingPageTable = databaseDialect.tableReferenceWithPreferredIndex(
+        "alpine_group_binding", "idx_alpine_group_page");
   }
 
   @Override
@@ -59,6 +73,7 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
             UPDATE alpine_package_record
             SET distribution_name = ?, component_name = ?, architecture = ?, package_name = ?,
                 package_version = ?, package_architecture = ?, filename = ?, asset_path = ?,
+                asset_path_hash = ?,
                 control_fields = ?, package_identity = ?, data_sha256 = ?, sha256 = ?, size_bytes = ?, asset_id = ?,
                 component_id = ?, source_kind = ?, revision = ?, indexed_at = ?, updated_at = ?
             WHERE repository_id = ? AND coordinate_hash = ?
@@ -66,7 +81,8 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
         new Object[] {
           stored.distribution(), stored.component(), stored.architecture(), stored.packageName(),
           stored.version(), stored.packageArchitecture(), stored.filename(), stored.path(),
-          json.parameter(stored.controlFields()), stored.identity(), stored.dataSha256(), stored.sha256(),
+          PersistenceHashes.sha256(stored.path()), json.parameter(stored.controlFields()),
+          stored.identity(), stored.dataSha256(), stored.sha256(),
           stored.size(), stored.assetId(), stored.componentId(), stored.sourceKind(), revision,
           nullableTimestamp(stored.indexedAt()), nullableTimestamp(now), stored.repositoryId(),
           coordinateHash
@@ -74,15 +90,17 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
         """
             INSERT INTO alpine_package_record
               (repository_id, coordinate_hash, distribution_name, component_name, architecture,
-               package_name, package_version, package_architecture, filename, asset_path, control_fields,
+               package_name, package_version, package_architecture, filename, asset_path,
+               asset_path_hash, control_fields,
                package_identity, data_sha256, sha256, size_bytes, asset_id, component_id, source_kind, revision,
                indexed_at, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
         new Object[] {
           stored.repositoryId(), coordinateHash, stored.distribution(), stored.component(),
           stored.architecture(), stored.packageName(), stored.version(), stored.packageArchitecture(),
-          stored.filename(), stored.path(), json.parameter(stored.controlFields()), stored.identity(),
+          stored.filename(), stored.path(), PersistenceHashes.sha256(stored.path()),
+          json.parameter(stored.controlFields()), stored.identity(),
           stored.dataSha256(), stored.sha256(), stored.size(), stored.assetId(), stored.componentId(),
           stored.sourceKind(), revision, nullableTimestamp(stored.indexedAt()),
           nullableTimestamp(stored.createdAt()), nullableTimestamp(now)
@@ -113,70 +131,74 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
   @Override
   public Optional<PackageRecord> findPackageByPath(long repositoryId, String path) {
     return jdbc.query(
-        "SELECT * FROM alpine_package_record WHERE repository_id = ? AND asset_path = ?",
-        packageMapper, repositoryId, path).stream().findFirst();
-  }
-
-  @Override
-  public List<PackageRecord> listPackages(
-      long repositoryId, String distribution, String component, String architecture) {
-    return jdbc.query(
         """
         SELECT * FROM alpine_package_record
-        WHERE repository_id = ? AND distribution_name = ? AND component_name = ?
-          AND architecture = ?
-        ORDER BY package_name, package_version, architecture, filename
+        WHERE repository_id = ? AND asset_path_hash = ? AND asset_path = ?
         """,
-        packageMapper, repositoryId, distribution, component, architecture);
+        packageMapper, repositoryId, PersistenceHashes.sha256(path), path).stream().findFirst();
   }
 
   @Override
-  @Transactional(readOnly = true)
-  public void visitPackages(
+  public List<PackageRecord> listPackagePage(
       long repositoryId,
       String distribution,
       String component,
       String architecture,
-      Consumer<PackageRecord> visitor) {
-    if (visitor == null) return;
-    String afterName = "";
-    long afterId = 0;
-    while (true) {
-      List<PackageRecord> page = jdbc.query(
-          """
-          SELECT * FROM alpine_package_record
-          WHERE repository_id = ? AND distribution_name = ? AND component_name = ?
-            AND architecture = ?
-            AND (package_name > ? OR (package_name = ? AND id > ?))
-          ORDER BY package_name, id
-          LIMIT ?
-          """,
-          packageMapper,
-          repositoryId,
-          distribution,
-          component,
-          architecture,
-          afterName,
-          afterName,
-          afterId,
-          PACKAGE_PAGE_SIZE);
-      page.forEach(visitor);
-      if (page.size() < PACKAGE_PAGE_SIZE) return;
-      PackageRecord cursor = page.getLast();
-      afterName = cursor.packageName();
-      afterId = cursor.id();
-    }
+      String afterPackageName,
+      long afterId,
+      int limit) {
+    int boundedLimit = Math.max(1, Math.min(limit, PACKAGE_PAGE_SIZE));
+    String cursorName = afterPackageName == null ? "" : afterPackageName;
+    String cursorPredicate = postgreSql
+        ? "(package_name, id) > (?, ?)"
+        : "(package_name > ? OR (package_name = ? AND id > ?))";
+    String sql = """
+        SELECT * FROM alpine_package_record
+        WHERE repository_id = ? AND distribution_name = ? AND component_name = ?
+          AND architecture = ?
+          AND %s
+        ORDER BY package_name, id
+        LIMIT ?
+        """.formatted(cursorPredicate);
+    Object[] arguments = postgreSql
+        ? new Object[] {
+          repositoryId, distribution, component, architecture, cursorName,
+          Math.max(0, afterId), boundedLimit
+        }
+        : new Object[] {
+          repositoryId, distribution, component, architecture, cursorName, cursorName,
+          Math.max(0, afterId), boundedLimit
+        };
+    return jdbc.query(sql, packageMapper, arguments);
   }
 
   @Override
-  public List<PackageRecord> listPackages(long repositoryId, String distribution) {
-    return jdbc.query(
-        """
+  public List<PackageRecord> listPackagePage(
+      long repositoryId,
+      String distribution,
+      String afterPackageName,
+      long afterId,
+      int limit) {
+    int boundedLimit = Math.max(1, Math.min(limit, PACKAGE_PAGE_SIZE));
+    String cursorName = afterPackageName == null ? "" : afterPackageName;
+    String cursorPredicate = postgreSql
+        ? "(package_name, id) > (?, ?)"
+        : "(package_name > ? OR (package_name = ? AND id > ?))";
+    String sql = """
         SELECT * FROM alpine_package_record
         WHERE repository_id = ? AND distribution_name = ?
-        ORDER BY component_name, architecture, package_name, package_version, filename
-        """,
-        packageMapper, repositoryId, distribution);
+          AND %s
+        ORDER BY package_name, id
+        LIMIT ?
+        """.formatted(cursorPredicate);
+    Object[] arguments = postgreSql
+        ? new Object[] {
+          repositoryId, distribution, cursorName, Math.max(0, afterId), boundedLimit
+        }
+        : new Object[] {
+          repositoryId, distribution, cursorName, cursorName, Math.max(0, afterId), boundedLimit
+        };
+    return jdbc.query(sql, packageMapper, arguments);
   }
 
   @Override
@@ -352,18 +374,42 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
     Instant ready = readyBefore == null ? Instant.now() : readyBefore;
     Instant forced = forceBefore == null ? ready : forceBefore;
     Instant retry = retryBefore == null ? ready : retryBefore;
-    return jdbc.query(
-        """
-        SELECT suite.* FROM alpine_suite_state suite
-        JOIN repository r ON r.id = suite.repository_id
-        WHERE suite.desired_revision > suite.published_revision
-          AND (suite.desired_at <= ? OR COALESCE(suite.pending_since, suite.desired_at) <= ?)
-          AND (suite.last_error_at IS NULL OR suite.last_error_at <= ?)
+    if (postgreSql) {
+      return jdbc.query(
+          """
+          SELECT suite.* FROM alpine_suite_state suite
+          WHERE suite.publish_pending = TRUE
+            AND (suite.desired_at <= ?
+              OR COALESCE(suite.pending_since, suite.desired_at) <= ?)
+            AND (suite.last_error_at IS NULL OR suite.last_error_at <= ?)
+            AND (SELECT r.online AND r.format = 'alpine'
+                    AND r.type IN ('hosted', 'proxy', 'group')
+                 FROM repository r WHERE r.id = suite.repository_id)
+          ORDER BY suite.desired_at, suite.repository_id, suite.distribution_name
+          LIMIT ?
+          """,
+          this::mapSuite,
+          nullableTimestamp(ready),
+          nullableTimestamp(forced),
+          nullableTimestamp(retry),
+          boundedLimit);
+    }
+    String sql = """
+        SELECT alpine_suite_state.* FROM %s
+        %s repository r ON r.id = alpine_suite_state.repository_id
+        WHERE alpine_suite_state.publish_pending = TRUE
+          AND (alpine_suite_state.desired_at <= ?
+            OR COALESCE(alpine_suite_state.pending_since, alpine_suite_state.desired_at) <= ?)
+          AND (alpine_suite_state.last_error_at IS NULL
+            OR alpine_suite_state.last_error_at <= ?)
           AND r.online = true AND r.format = 'alpine'
           AND r.type IN ('hosted', 'proxy', 'group')
-        ORDER BY suite.desired_at, suite.repository_id, suite.distribution_name
+        ORDER BY alpine_suite_state.desired_at, alpine_suite_state.repository_id,
+          alpine_suite_state.distribution_name
         LIMIT ?
-        """,
+        """.formatted(pendingSuiteTable, pendingRepositoryJoin);
+    return jdbc.query(
+        sql,
         this::mapSuite,
         nullableTimestamp(ready),
         nullableTimestamp(forced),
@@ -374,6 +420,11 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
   @Override
   @Transactional
   public boolean publishSnapshot(Snapshot snapshot, String leaseOwner, long fencingToken) {
+    return publishSnapshot(snapshot, leaseOwner, fencingToken, null);
+  }
+
+  private boolean publishSnapshot(
+      Snapshot snapshot, String leaseOwner, long fencingToken, Long groupBindingToken) {
     if (snapshot == null || snapshot.manifest() == null || snapshot.manifest().isEmpty()) {
       throw new IllegalArgumentException("Alpine snapshot manifest is required");
     }
@@ -386,13 +437,13 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
     String insertSnapshot = """
         INSERT INTO alpine_snapshot
           (repository_id, distribution_name, revision, signing_key_revision, manifest_json,
-           index_sha256, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+           index_sha256, group_binding_token, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """;
     Object[] snapshotArguments = {
       snapshot.repositoryId(), snapshot.distribution(), snapshot.revision(),
       snapshot.signingKeyRevision(), json.parameter(manifest), snapshot.indexSha256(),
-      nullableTimestamp(createdAt)
+      groupBindingToken, nullableTimestamp(createdAt)
     };
     if (!JdbcInserts.tryUpdate(
         jdbc, insertSnapshot, new ArgumentPreparedStatementSetter(snapshotArguments))) {
@@ -480,35 +531,62 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
     int retained = Math.max(3, Math.min(minSnapshots, 100));
     int boundedLimit = Math.max(1, Math.min(limit, 256));
     Instant cutoff = createdBefore == null ? Instant.now() : createdBefore;
+    if (postgreSql) {
+      return jdbc.query(
+          """
+          SELECT candidate.* FROM alpine_snapshot candidate
+          WHERE candidate.published_at IS NOT NULL AND candidate.created_at < ?
+            AND candidate.revision <> (
+              SELECT suite.published_revision FROM alpine_suite_state suite
+              WHERE suite.repository_id = candidate.repository_id
+                AND suite.distribution_name = candidate.distribution_name)
+            AND EXISTS (
+              SELECT 1 FROM alpine_snapshot newer
+              WHERE newer.repository_id = candidate.repository_id
+                AND newer.distribution_name = candidate.distribution_name
+                AND newer.published_at IS NOT NULL
+                AND newer.revision > candidate.revision
+              ORDER BY newer.revision DESC
+              LIMIT 1 OFFSET ?)
+          ORDER BY candidate.created_at, candidate.repository_id,
+            candidate.distribution_name, candidate.revision
+          LIMIT ?
+          """,
+          this::mapSnapshot,
+          nullableTimestamp(cutoff),
+          retained - 1,
+          boundedLimit);
+    }
     return jdbc.query(
         """
-        SELECT candidate.* FROM (
-          SELECT s.*,
-            ROW_NUMBER() OVER (
-              PARTITION BY s.repository_id, s.distribution_name
-              ORDER BY s.revision DESC) AS retention_rank
-          FROM alpine_snapshot s
-          WHERE s.published_at IS NOT NULL
-        ) candidate
+        SELECT candidate.* FROM alpine_snapshot candidate
         JOIN alpine_suite_state suite
           ON suite.repository_id = candidate.repository_id
           AND suite.distribution_name = candidate.distribution_name
-        WHERE candidate.retention_rank > ? AND candidate.created_at < ?
+        WHERE candidate.published_at IS NOT NULL AND candidate.created_at < ?
           AND candidate.revision <> suite.published_revision
+          AND EXISTS (
+            SELECT 1 FROM alpine_snapshot newer
+            WHERE newer.repository_id = candidate.repository_id
+              AND newer.distribution_name = candidate.distribution_name
+              AND newer.published_at IS NOT NULL
+              AND newer.revision > candidate.revision
+            ORDER BY newer.revision DESC
+            LIMIT 1 OFFSET ?)
         ORDER BY candidate.created_at, candidate.repository_id,
           candidate.distribution_name, candidate.revision
         LIMIT ?
         """,
         this::mapSnapshot,
-        retained,
         nullableTimestamp(cutoff),
+        retained - 1,
         boundedLimit);
   }
 
   @Override
   @Transactional
   public boolean deleteSnapshot(long repositoryId, String distribution, long revision) {
-    return jdbc.update(
+    int deleted = jdbc.update(
         """
         DELETE FROM alpine_snapshot
         WHERE repository_id = ? AND distribution_name = ? AND revision = ?
@@ -521,7 +599,18 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
         distribution,
         revision,
         repositoryId,
-        distribution) == 1;
+        distribution);
+    if (deleted == 1) {
+      jdbc.update(
+          """
+          DELETE FROM alpine_group_snapshot_stage
+          WHERE group_repository_id = ? AND distribution_name = ? AND snapshot_revision = ?
+          """,
+          repositoryId,
+          distribution,
+          revision);
+    }
+    return deleted == 1;
   }
 
   @Override
@@ -636,9 +725,10 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
 
   @Override
   @Transactional
-  public void replacePackageRelations(long packageId, List<PackageRelation> relations) {
+  public void replacePackageRelations(
+      long repositoryId, long packageId, List<PackageRelation> relations) {
     jdbc.update("DELETE FROM alpine_package_relation WHERE package_id = ?", packageId);
-    if (relations == null) return;
+    if (relations == null || relations.isEmpty()) return;
     for (PackageRelation relation : relations) {
       if (relation == null || relation.packageId() != packageId) {
         throw new IllegalArgumentException("Alpine relation package identity does not match");
@@ -646,18 +736,23 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
       requireSegment("relation kind", relation.relationKind());
       requireSegment("relation token", relation.token());
       requireSegment("relation expression", relation.expression());
-      jdbc.update(
-          """
-          INSERT INTO alpine_package_relation
-            (package_id, relation_kind, token_value, token_hash, expression_value)
-          VALUES (?, ?, ?, ?, ?)
-          """,
-          packageId,
-          relation.relationKind(),
-          relation.token(),
-          PersistenceHashes.sha256(relation.token()),
-          relation.expression());
     }
+    jdbc.batchUpdate(
+        """
+        INSERT INTO alpine_package_relation
+          (repository_id, package_id, relation_kind, token_value, token_hash, expression_value)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        relations,
+        Math.min(256, relations.size()),
+        (statement, relation) -> {
+          statement.setLong(1, repositoryId);
+          statement.setLong(2, packageId);
+          statement.setString(3, relation.relationKind());
+          statement.setString(4, relation.token());
+          statement.setBytes(5, PersistenceHashes.sha256(relation.token()));
+          statement.setString(6, relation.expression());
+        });
   }
 
   @Override
@@ -669,11 +764,13 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
         """
         SELECT p.* FROM alpine_package_relation relation
         JOIN alpine_package_record p ON p.id = relation.package_id
-        WHERE p.repository_id = ? AND relation.relation_kind = ?
+        WHERE relation.repository_id = ? AND p.repository_id = ?
+          AND relation.relation_kind = ?
           AND relation.token_hash = ? AND relation.token_value = ? AND p.id > ?
         ORDER BY p.id LIMIT ?
         """,
         packageMapper,
+        repositoryId,
         repositoryId,
         relationKind,
         PersistenceHashes.sha256(token),
@@ -684,68 +781,158 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
 
   @Override
   @Transactional
-  public boolean publishGroupSnapshot(
-      Snapshot snapshot,
-      List<GroupBinding> bindings,
-      String leaseOwner,
-      long fencingToken) {
-    if (snapshot == null) throw new IllegalArgumentException("Alpine group snapshot is required");
+  public void beginGroupSnapshot(
+      long groupRepositoryId, String namespace, long snapshotRevision, long fencingToken) {
+    if (!leaseHeld(
+        publishLeaseKey(groupRepositoryId, namespace), fencingToken, Instant.now())) {
+      throw new IllegalStateException("Alpine group publication lease is no longer held");
+    }
+    discardGroupSnapshot(groupRepositoryId, namespace, snapshotRevision, fencingToken);
     jdbc.update(
         """
-        DELETE FROM alpine_group_binding
-        WHERE group_repository_id = ? AND distribution_name = ? AND snapshot_revision = ?
+        INSERT INTO alpine_group_snapshot_stage
+          (group_repository_id, distribution_name, snapshot_revision, binding_token, created_at)
+        VALUES (?, ?, ?, ?, ?)
         """,
-        snapshot.repositoryId(), snapshot.distribution(), snapshot.revision());
-    if (bindings != null) {
-      for (GroupBinding binding : bindings) {
-        requireGroupBinding(snapshot, binding);
-        jdbc.update(
-            """
-            INSERT INTO alpine_group_binding
-              (group_repository_id, distribution_name, snapshot_revision, path_value, path_hash,
-               member_repository_id, member_snapshot_revision, member_path, package_identity,
-               sha256, size_bytes, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            binding.groupRepositoryId(),
-            binding.namespace(),
-            binding.snapshotRevision(),
-            binding.path(),
-            PersistenceHashes.sha256(binding.path()),
-            binding.memberRepositoryId(),
-            binding.memberSnapshotRevision(),
-            binding.memberPath(),
-            binding.identity(),
-            binding.sha256(),
-            binding.size(),
-            nullableTimestamp(binding.createdAt() == null ? Instant.now() : binding.createdAt()));
+        groupRepositoryId,
+        namespace,
+        snapshotRevision,
+        fencingToken,
+        nullableTimestamp(Instant.now()));
+  }
+
+  @Override
+  @Transactional
+  public void appendGroupBindings(long fencingToken, List<GroupBinding> bindings) {
+    if (bindings == null || bindings.isEmpty()) return;
+    GroupBinding first = bindings.getFirst();
+    for (GroupBinding binding : bindings) {
+      requireGroupBinding(binding);
+      if (binding.groupRepositoryId() != first.groupRepositoryId()
+          || binding.snapshotRevision() != first.snapshotRevision()
+          || !binding.namespace().equals(first.namespace())) {
+        throw new IllegalArgumentException(
+            "Alpine group binding batch must belong to one staged snapshot");
       }
     }
-    boolean published = publishSnapshot(snapshot, leaseOwner, fencingToken);
-    if (!published) {
-      jdbc.update(
-          """
-          DELETE FROM alpine_group_binding
-          WHERE group_repository_id = ? AND distribution_name = ? AND snapshot_revision = ?
-          """,
-          snapshot.repositoryId(), snapshot.distribution(), snapshot.revision());
+    if (!leaseHeld(
+        publishLeaseKey(first.groupRepositoryId(), first.namespace()),
+        fencingToken,
+        Instant.now())) {
+      throw new IllegalStateException("Alpine group publication lease is no longer held");
     }
-    return published;
+    jdbc.batchUpdate(
+        """
+        INSERT INTO alpine_group_binding
+          (group_repository_id, distribution_name, snapshot_revision, binding_token,
+           path_value, path_hash, member_repository_id, member_snapshot_revision, member_path,
+           package_identity, sha256, size_bytes, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        bindings,
+        Math.min(512, bindings.size()),
+        (statement, binding) -> {
+          statement.setLong(1, binding.groupRepositoryId());
+          statement.setString(2, binding.namespace());
+          statement.setLong(3, binding.snapshotRevision());
+          statement.setLong(4, fencingToken);
+          statement.setString(5, binding.path());
+          statement.setBytes(6, PersistenceHashes.sha256(binding.path()));
+          statement.setLong(7, binding.memberRepositoryId());
+          statement.setLong(8, binding.memberSnapshotRevision());
+          statement.setString(9, binding.memberPath());
+          statement.setString(10, binding.identity());
+          statement.setString(11, binding.sha256());
+          statement.setLong(12, binding.size());
+          statement.setTimestamp(
+              13,
+              nullableTimestamp(binding.createdAt() == null ? Instant.now() : binding.createdAt()));
+        });
+  }
+
+  @Override
+  @Transactional
+  public void discardGroupSnapshot(
+      long groupRepositoryId, String namespace, long snapshotRevision, long fencingToken) {
+    jdbc.update(
+        """
+        DELETE FROM alpine_group_snapshot_stage
+        WHERE group_repository_id = ? AND distribution_name = ? AND snapshot_revision = ?
+          AND binding_token = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM alpine_snapshot
+            WHERE repository_id = alpine_group_snapshot_stage.group_repository_id
+              AND distribution_name = alpine_group_snapshot_stage.distribution_name
+              AND revision = alpine_group_snapshot_stage.snapshot_revision
+              AND group_binding_token = alpine_group_snapshot_stage.binding_token)
+        """,
+        groupRepositoryId, namespace, snapshotRevision, fencingToken);
+  }
+
+  @Override
+  @Transactional
+  public boolean publishGroupSnapshot(
+      Snapshot snapshot, String leaseOwner, long fencingToken) {
+    if (snapshot == null) throw new IllegalArgumentException("Alpine group snapshot is required");
+    if (!lockGroupSnapshotStage(snapshot, fencingToken)) return false;
+    boolean published = publishSnapshot(snapshot, leaseOwner, fencingToken, fencingToken);
+    boolean tokenPublished = published && groupSnapshotUsesToken(snapshot, fencingToken);
+    if (!tokenPublished) {
+      discardGroupSnapshot(
+          snapshot.repositoryId(), snapshot.distribution(), snapshot.revision(), fencingToken);
+    }
+    return tokenPublished;
+  }
+
+  private boolean lockGroupSnapshotStage(Snapshot snapshot, long fencingToken) {
+    return !jdbc.queryForList(
+        """
+        SELECT binding_token FROM alpine_group_snapshot_stage
+        WHERE group_repository_id = ? AND distribution_name = ? AND snapshot_revision = ?
+          AND binding_token = ?
+        FOR UPDATE
+        """,
+        Long.class,
+        snapshot.repositoryId(),
+        snapshot.distribution(),
+        snapshot.revision(),
+        fencingToken).isEmpty();
+  }
+
+  private boolean groupSnapshotUsesToken(Snapshot snapshot, long fencingToken) {
+    Integer count = jdbc.queryForObject(
+        """
+        SELECT COUNT(*) FROM alpine_snapshot
+        WHERE repository_id = ? AND distribution_name = ? AND revision = ?
+          AND group_binding_token = ? AND published_at IS NOT NULL
+        """,
+        Integer.class,
+        snapshot.repositoryId(),
+        snapshot.distribution(),
+        snapshot.revision(),
+        fencingToken);
+    return count != null && count == 1;
   }
 
   @Override
   public Optional<GroupBinding> findGroupBinding(
       long groupRepositoryId, String namespace, long snapshotRevision, String path) {
-    return jdbc.query(
-        """
-        SELECT * FROM alpine_group_binding
-        WHERE group_repository_id = ? AND distribution_name = ? AND snapshot_revision = ?
+    Optional<Long> bindingToken = publishedGroupBindingToken(
+        groupRepositoryId, namespace, snapshotRevision);
+    if (bindingToken.isEmpty()) return Optional.empty();
+    String sql = """
+        SELECT * FROM %s
+        WHERE group_repository_id = ? AND distribution_name = ?
+          AND snapshot_revision = ? AND binding_token = ?
           AND path_hash = ? AND path_value = ?
-        """,
+        """.formatted(groupBindingPathTable);
+    return jdbc.query(
+        sql,
         this::mapGroupBinding,
         groupRepositoryId,
         namespace,
         snapshotRevision,
+        bindingToken.get(),
         PersistenceHashes.sha256(path),
         path).stream().findFirst();
   }
@@ -758,18 +945,100 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
       Long afterId,
       int limit) {
     int boundedLimit = Math.max(1, Math.min(limit, 2048));
+    Optional<Long> bindingToken = publishedGroupBindingToken(
+        groupRepositoryId, namespace, snapshotRevision);
+    if (bindingToken.isEmpty()) return List.of();
+    String sql = """
+        SELECT * FROM %s
+        WHERE group_repository_id = ? AND distribution_name = ?
+          AND snapshot_revision = ? AND binding_token = ? AND id > ?
+        ORDER BY id LIMIT ?
+        """.formatted(groupBindingPageTable);
     return jdbc.query(
-        """
-        SELECT * FROM alpine_group_binding
-        WHERE group_repository_id = ? AND distribution_name = ? AND snapshot_revision = ?
-          AND id > ? ORDER BY id LIMIT ?
-        """,
+        sql,
         this::mapGroupBinding,
         groupRepositoryId,
         namespace,
         snapshotRevision,
+        bindingToken.get(),
         afterId == null ? 0 : Math.max(0, afterId),
         boundedLimit);
+  }
+
+  private Optional<Long> publishedGroupBindingToken(
+      long groupRepositoryId, String namespace, long snapshotRevision) {
+    return jdbc.query(
+        """
+        SELECT group_binding_token FROM alpine_snapshot
+        WHERE repository_id = ? AND distribution_name = ? AND revision = ?
+          AND group_binding_token IS NOT NULL AND published_at IS NOT NULL
+        """,
+        (rs, row) -> rs.getLong("group_binding_token"),
+        groupRepositoryId,
+        namespace,
+        snapshotRevision).stream().findFirst();
+  }
+
+  @Override
+  @Transactional
+  public int deleteOrphanGroupBindings(Instant createdBefore, int limit) {
+    Instant cutoff = createdBefore == null ? Instant.now() : createdBefore;
+    int boundedLimit = Math.max(1, Math.min(limit, 256));
+    List<GroupSnapshotStage> stages = jdbc.query(
+        """
+        SELECT stage.* FROM alpine_group_snapshot_stage stage
+        WHERE stage.created_at < ?
+          AND NOT EXISTS (
+            SELECT 1 FROM alpine_snapshot snapshot
+            WHERE snapshot.repository_id = stage.group_repository_id
+              AND snapshot.distribution_name = stage.distribution_name
+              AND snapshot.revision = stage.snapshot_revision
+              AND snapshot.group_binding_token = stage.binding_token)
+        ORDER BY stage.created_at, stage.group_repository_id,
+          stage.distribution_name, stage.snapshot_revision, stage.binding_token
+        LIMIT ?
+        FOR UPDATE SKIP LOCKED
+        """,
+        (rs, row) -> new GroupSnapshotStage(
+            rs.getLong("group_repository_id"),
+            rs.getString("distribution_name"),
+            rs.getLong("snapshot_revision"),
+            rs.getLong("binding_token")),
+        nullableTimestamp(cutoff),
+        boundedLimit);
+    if (stages.isEmpty()) return 0;
+    int[][] counts = jdbc.batchUpdate(
+        """
+        DELETE FROM alpine_group_snapshot_stage
+        WHERE group_repository_id = ? AND distribution_name = ? AND snapshot_revision = ?
+          AND binding_token = ? AND created_at < ?
+          AND NOT EXISTS (
+            SELECT 1 FROM alpine_snapshot snapshot
+            WHERE snapshot.repository_id = alpine_group_snapshot_stage.group_repository_id
+              AND snapshot.distribution_name = alpine_group_snapshot_stage.distribution_name
+              AND snapshot.revision = alpine_group_snapshot_stage.snapshot_revision
+              AND snapshot.group_binding_token = alpine_group_snapshot_stage.binding_token)
+        """,
+        stages,
+        Math.min(256, stages.size()),
+        (statement, stage) -> {
+          statement.setLong(1, stage.groupRepositoryId());
+          statement.setString(2, stage.distribution());
+          statement.setLong(3, stage.snapshotRevision());
+          statement.setLong(4, stage.bindingToken());
+          statement.setTimestamp(5, nullableTimestamp(cutoff));
+        });
+    int deleted = 0;
+    for (int[] batch : counts) {
+      for (int count : batch) {
+        if (count > 0) {
+          deleted += count;
+        } else if (count == Statement.SUCCESS_NO_INFO) {
+          deleted++;
+        }
+      }
+    }
+    return deleted;
   }
 
   @Override
@@ -833,11 +1102,14 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
   @Transactional
   public void deleteRepositoryState(long repositoryId) {
     jdbc.update(
-        "DELETE FROM alpine_group_binding WHERE group_repository_id = ? OR member_repository_id = ?",
-        repositoryId, repositoryId);
+        "DELETE FROM alpine_group_binding WHERE group_repository_id = ?", repositoryId);
+    jdbc.update(
+        "DELETE FROM alpine_group_binding WHERE member_repository_id = ?", repositoryId);
     jdbc.update("DELETE FROM alpine_package_tombstone WHERE repository_id = ?", repositoryId);
     jdbc.update("DELETE FROM alpine_package_record WHERE repository_id = ?", repositoryId);
     jdbc.update("DELETE FROM alpine_snapshot WHERE repository_id = ?", repositoryId);
+    jdbc.update(
+        "DELETE FROM alpine_group_snapshot_stage WHERE group_repository_id = ?", repositoryId);
     jdbc.update("DELETE FROM alpine_suite_state WHERE repository_id = ?", repositoryId);
     jdbc.update("DELETE FROM alpine_signing_key WHERE repository_id = ?", repositoryId);
     jdbc.update("DELETE FROM alpine_proxy_distribution WHERE repository_id = ?", repositoryId);
@@ -888,6 +1160,15 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
         SELECT COUNT(*) FROM alpine_publish_lease
         WHERE lease_key = ? AND owner = ? AND fencing_token = ? AND expires_at >= ?
         """, Integer.class, leaseKey, owner, token, nullableTimestamp(now));
+    return count != null && count == 1;
+  }
+
+  private boolean leaseHeld(String leaseKey, long token, Instant now) {
+    Integer count = jdbc.queryForObject(
+        """
+        SELECT COUNT(*) FROM alpine_publish_lease
+        WHERE lease_key = ? AND fencing_token = ? AND expires_at >= ?
+        """, Integer.class, leaseKey, token, nullableTimestamp(now));
     return count != null && count == 1;
   }
 
@@ -982,11 +1263,17 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
         nullableInstant(rs, "created_at"));
   }
 
-  private static void requireGroupBinding(Snapshot snapshot, GroupBinding binding) {
+  private record GroupSnapshotStage(
+      long groupRepositoryId,
+      String distribution,
+      long snapshotRevision,
+      long bindingToken) { }
+
+  private static void requireGroupBinding(GroupBinding binding) {
     if (binding == null
-        || binding.groupRepositoryId() != snapshot.repositoryId()
-        || binding.snapshotRevision() != snapshot.revision()
-        || !binding.namespace().equals(snapshot.distribution())
+        || binding.groupRepositoryId() <= 0
+        || binding.snapshotRevision() <= 0
+        || binding.namespace() == null
         || binding.memberRepositoryId() <= 0
         || binding.size() < 0) {
       throw new IllegalArgumentException("Invalid Alpine group source binding");

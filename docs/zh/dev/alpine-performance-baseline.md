@@ -1,6 +1,6 @@
 # Alpine / APK 与 Nexus 本地性能基线
 
-本文记录 Alpine APK v2 功能落地时 kkRepo 与 Sonatype Nexus Repository 的同机定向基线。它用于比较协议热路径，不等同于生产容量结论；TLS、反向代理、远端 OSS/S3、数据库高可用、读写混合负载以及 1k/10k/100k package namespace 仍需按目标环境单独测试。
+本文记录 Alpine APK v2 功能落地时 kkRepo 与 Sonatype Nexus Repository 的同机定向基线。它用于比较协议热路径，不等同于生产容量结论；TLS、反向代理、远端 OSS/S3、数据库高可用、读写混合负载以及大 namespace 的端到端发布仍需按目标环境单独测试。
 
 英文版见 [Local Alpine / APK Performance Baseline Against Nexus](../../en/dev/alpine-performance-baseline.md)。
 
@@ -100,13 +100,62 @@ HTTP 响应时间（RT）从客户端准备写出请求前开始计时，到完�
 
 完整机器可读结果已提交到 [`docs/perf-data/alpine-nexus-2026-08-15.json`](../../perf-data/alpine-nexus-2026-08-15.json)，其中包含正确性 preflight、36 组逐轮 HTTP 测量、全部客户端样本和空的 gate failure 列表。文件 SHA-256 为 `6ab6530dda96b5a8e5e489f241b1ef9715baa44b6df426fe246f98867717a550`。
 
+## 10 万行数据库增长验证
+
+HTTP 基线完成后，对数据库访问路径做了独立验证。MySQL 8.0.46 和 PostgreSQL 12.22
+加载相同的逻辑数据：10 万 package（路径带刻意构造的长公共前缀）、10 万 relation
+（其中 100 条命中）、1 万 suite state（其中 100 条待发布）、100,001 条已发布 snapshot、
+10 万条存活 group binding，以及 2 条 group snapshot stage；测量前均执行统计信息更新。
+
+下表是连续 7 次预热 `EXPLAIN ANALYZE` 的数据库 executor time，p50/p95 按 7 个样本的
+nearest-rank 取值。结果不包含 JDBC 映射、网络传输、索引序列化、签名、blob 访问和应用层工作。
+
+| 查询形态 | 基数 | MySQL p50 / p95 | PostgreSQL p50 / p95 | 有界访问路径 |
+| --- | --- | ---: | ---: | --- |
+| asset path 精确查询 | 10 万取 1 | 0.000114 / 0.000121 ms | 0.058 / 0.185 ms | repository + SHA-256 path key，再做完整路径碰撞校验 |
+| namespace 尾部分页 | 10 万第 90,000 行后取 2,048 | 5.260 / 5.800 ms | 1.979 / 2.774 ms | repository/distribution/package/id 索引 |
+| 待发布 worker | 1 万中 100 条待发布，limit 256 | 0.403 / 0.441 ms | 0.317 / 0.805 ms | pending partial/generated-column 索引，再按 repository PK 点查 |
+| snapshot 清理候选 | 100,001 中取 32，保留最新 3 版 | 0.851 / 0.944 ms | 0.681 / 1.272 ms | created-at 清理索引和有界 newer snapshot PK 探测 |
+| relation 查询 | 10 万中命中 100 | 0.992 / 1.190 ms | 1.438 / 3.334 ms | repository/kind/token-hash/package 索引 |
+| 已发布 group token | 单条 snapshot | 0.000110 / 0.000119 ms | 0.065 / 0.267 ms | snapshot 主键 |
+| group binding 尾部分页 | 10 万第 90,000 行后取 2,048 | 3.850 / 5.600 ms | 0.880 / 0.947 ms | group/distribution/revision/token/id 索引 |
+| group 发布 stage 锁 | 单条 staged snapshot | 0.0668 / 0.0944 ms | 0.059 / 0.136 ms | stage 主键加 `FOR UPDATE` |
+| orphan group stage 扫描 | 2 条 stage、10 万存活 binding | 0.0482 / 0.0562 ms | 0.086 / 0.187 ms | stage 清理索引加 `SKIP LOCKED`；binding 通过外键级联删除 |
+
+MySQL 将两条主键/唯一键点查显示为 `Rows fetched before execution`；其亚微秒值属于优化器/
+executor 内部计时，不代表应用层 RT。分页、worker、清理和 relation 行才是更有意义的容量信号。
+
+第一次自然执行计划检查暴露了数据库特有的优化器退化，因此最终 DAO 不会强行让两种数据库
+使用完全相同的 SQL 写法：
+
+| 已修复执行计划 | 修复前 | 最终 p50 | 变化 |
+| --- | ---: | ---: | ---: |
+| PostgreSQL namespace：布尔 keyset filter 改为 row-value range | 67.443 ms | 1.979 ms | 快 34.1 倍 |
+| PostgreSQL pending worker：repository-first join 改为 pending-first 相关 PK 点查 | 22.878 ms | 0.317 ms | 快 72.2 倍 |
+| PostgreSQL snapshot cleanup：宽范围 join 改为 cleanup-index-first 相关探测 | 862.993 ms | 0.681 ms | 快 1,267 倍 |
+| MySQL pending worker：低选择性扫描改为 generated pending 索引 | 145.0 ms | 0.403 ms | 快 360 倍 |
+| MySQL snapshot cleanup：全局候选枚举改为有界清理扫描 | 1,824.0 ms | 0.851 ms | 快 2,143 倍 |
+| MySQL group binding：snapshot join 改为 token 点查加索引分页 | 20.2 ms | 3.850 ms | 快 5.2 倍 |
+
+PostgreSQL 的 row-value keyset 谓词是刻意按方言生成的；同一写法在 MySQL 上会扫描约
+92,000 行、耗时 348 ms，而 MySQL 等价的布尔范围谓词尾部分页 p50 为 5.260 ms。
+Orphan 清理只扫描轻量 stage 表，不遍历 10 万条存活 binding；只有选中的 stage 被删除时，
+binding 才通过外键级联删除。发布会锁定自己的 stage row，清理跳过已锁 stage，从而避免
+清理与发布并发时出现 snapshot 已发布但 binding 被移除的窗口。
+
+全部逐次样本、基数、索引说明和修复前观测值见
+[`docs/perf-data/alpine-database-100k-2026-08-15.json`](../../perf-data/alpine-database-100k-2026-08-15.json)，
+SHA-256 为 `abbe1f1ade8088a0fc881bdb20de875b8bce6dd078447b0d2c1d4b151934582b`。
+这些结果证明 10 万行下数据库热查询仍然有界；完整 index 发布仍不可避免地执行 O(n) package
+解析和序列化，CPU、heap、blob I/O 与总 wall time 需要单独设定容量目标。
+
 ## 结论与边界
 
 - immutable snapshot 与 asset cache 使预热后的 index 读取不访问 Alpine 业务表；MySQL 仍是跨副本失效所需的持久真相和 version watermark。
 - MySQL/PostgreSQL 集成门禁会写入 2,048 条干扰 package/relation 数据，并断言 exact coordinate、有界 namespace keyset 与 relation lookup 的优化器实际选中索引。Namespace 发布沿 `(repository_id, distribution_name, component_name, architecture, package_name, id)` 以 2,048 行 keyset 分页读取，不使用无界排序或 `OFFSET`。
 - kkRepo 六条 HTTP 路径的吞吐均达到门禁，完整 package 与 Range 也通过更严格的 package latency 门禁。
 - 刻意在上传后立即执行的首轮出现了明显本机抖动，来源包括仓库后台任务和 JVM 路径预热。本文记录的确认轮等待 index 可见和任务稳定，但它仍只是方向性的本机结果，不是 SLA。
-- 本轮单 package 基准验证固定读取开销和 4 MiB payload；在给出生产容量上限前，仍需分别测量 1k/10k/100k package 下的发布耗时、heap 上界、index 大小和 solver 行为。
+- 10 万行数据库基准验证了有界查询计划；在给出生产容量上限前，仍需端到端测量完整发布耗时、heap 上界、生成 index 大小、blob I/O 和 solver 行为。
 
 ## 复现
 

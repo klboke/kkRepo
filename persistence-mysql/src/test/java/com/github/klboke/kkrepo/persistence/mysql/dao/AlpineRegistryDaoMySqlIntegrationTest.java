@@ -31,8 +31,9 @@ class AlpineRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
     assertEquals(1, stored.revision());
     assertEquals(stored, dao.findPackage(
         hostedId, namespace, "main", "demo", "1.0-r0", "x86_64").orElseThrow());
-    assertEquals(List.of(stored), dao.listPackages(hostedId, namespace, "main", "x86_64"));
-    assertEquals(List.of(stored), dao.listPackages(hostedId, namespace));
+    assertEquals(List.of(stored), dao.listPackagePage(
+        hostedId, namespace, "main", "x86_64", "", 0, 10));
+    assertEquals(List.of(stored), dao.listPackagePage(hostedId, namespace, "", 0, 10));
     assertEquals(List.of(namespace), dao.listDistributions(hostedId));
     assertEquals(List.of("main"), dao.listComponents(hostedId, namespace));
     assertEquals(List.of("x86_64"), dao.listArchitectures(hostedId, namespace, "main"));
@@ -41,11 +42,12 @@ class AlpineRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
     assertEquals(List.of(stored), visited);
     assertEquals(1L, dao.findSuite(hostedId, namespace).orElseThrow().desiredRevision());
     assertEquals(1, dao.listSuites(hostedId).size());
-    assertEquals(1, dao.listPendingSuites(
-        now.plusSeconds(1), now.plusSeconds(1), now.plusSeconds(1), 10).size());
+    assertTrue(dao.listPendingSuites(
+            now.plusSeconds(1), now.plusSeconds(1), now.plusSeconds(1), 10).stream()
+        .anyMatch(suite -> suite.repositoryId() == hostedId));
     dao.recordBuildFailure(hostedId, namespace, 1L, "fixture failure", now);
     assertEquals("fixture failure", dao.findSuite(hostedId, namespace).orElseThrow().lastError());
-    dao.replacePackageRelations(stored.id(), List.of(
+    dao.replacePackageRelations(hostedId, stored.id(), List.of(
         new AlpineRegistryDao.PackageRelation(stored.id(), "DEPEND", "musl", "musl>=1.2")));
     assertEquals(List.of(stored), dao.findPackagesByRelation(
         hostedId, "DEPEND", "musl", null, 10));
@@ -93,13 +95,74 @@ class AlpineRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
     AlpineRegistryDao.GroupBinding binding = new AlpineRegistryDao.GroupBinding(
         null, groupId, namespace, groupRevision, stored.path(), hostedId,
         snapshot.revision(), stored.path(), stored.identity(), stored.sha256(), stored.size(), now);
+    assertFalse(dao.publishGroupSnapshot(
+        groupSnapshot, "group-owner", groupLease.fencingToken()));
+    dao.beginGroupSnapshot(groupId, namespace, groupRevision, groupLease.fencingToken());
+    dao.appendGroupBindings(groupLease.fencingToken(), List.of(binding));
     assertTrue(dao.publishGroupSnapshot(
-        groupSnapshot, List.of(binding), "group-owner", groupLease.fencingToken()));
+        groupSnapshot, "group-owner", groupLease.fencingToken()));
     assertEquals(hostedId, dao.findGroupBinding(
         groupId, namespace, groupRevision, stored.path()).orElseThrow().memberRepositoryId());
     assertEquals(1, dao.listGroupBindings(groupId, namespace, groupRevision, null, 10).size());
     assertTrue(dao.listGroupBindings(groupId, namespace, groupRevision, Long.MAX_VALUE, 10)
         .isEmpty());
+    String groupLeaseKey = "alpine:publish:" + groupId + ":" + namespace;
+    dao.releaseLease(groupLeaseKey, "group-owner", groupLease.fencingToken());
+    Instant reacquireAt = Instant.now().plusSeconds(1);
+    AlpineRegistryDao.Lease nextGroupLease = dao.tryAcquireLease(
+        groupLeaseKey, "group-owner-2", reacquireAt, reacquireAt.plusSeconds(120)).orElseThrow();
+    AlpineRegistryDao.GroupBinding duplicateRevision = new AlpineRegistryDao.GroupBinding(
+        null, groupId, namespace, groupRevision, stored.path(), hostedId,
+        snapshot.revision(), stored.path(), stored.identity(), stored.sha256(), stored.size(), now);
+    dao.beginGroupSnapshot(
+        groupId, namespace, groupRevision, nextGroupLease.fencingToken());
+    dao.appendGroupBindings(nextGroupLease.fencingToken(), List.of(duplicateRevision));
+    assertFalse(dao.publishGroupSnapshot(
+        groupSnapshot, "group-owner-2", nextGroupLease.fencingToken()));
+    assertEquals(0, jdbc().queryForObject(
+        """
+        SELECT COUNT(*) FROM alpine_group_binding
+        WHERE group_repository_id = ? AND distribution_name = ? AND snapshot_revision = ?
+          AND binding_token = ?
+        """,
+        Integer.class,
+        groupId,
+        namespace,
+        groupRevision,
+        nextGroupLease.fencingToken()));
+    assertEquals(groupLease.fencingToken(), jdbc().queryForObject(
+        """
+        SELECT group_binding_token FROM alpine_snapshot
+        WHERE repository_id = ? AND distribution_name = ? AND revision = ?
+        """,
+        Long.class,
+        groupId,
+        namespace,
+        groupRevision));
+    assertThrows(IllegalStateException.class, () -> dao.beginGroupSnapshot(
+        groupId, namespace, groupRevision + 1, groupLease.fencingToken()));
+    dao.beginGroupSnapshot(
+        groupId, namespace, groupRevision + 1, nextGroupLease.fencingToken());
+    AlpineRegistryDao.GroupBinding staged = new AlpineRegistryDao.GroupBinding(
+        null, groupId, namespace, groupRevision + 1, stored.path(), hostedId,
+        snapshot.revision(), stored.path(), stored.identity(), stored.sha256(), stored.size(), now);
+    assertThrows(IllegalStateException.class, () -> dao.appendGroupBindings(
+        groupLease.fencingToken(), List.of(staged)));
+    dao.appendGroupBindings(nextGroupLease.fencingToken(), List.of(staged));
+    dao.discardGroupSnapshot(
+        groupId, namespace, groupRevision + 1, groupLease.fencingToken());
+    assertEquals(1, jdbc().queryForObject(
+        """
+        SELECT COUNT(*) FROM alpine_group_binding
+        WHERE group_repository_id = ? AND distribution_name = ? AND snapshot_revision = ?
+          AND binding_token = ?
+        """,
+        Integer.class,
+        groupId,
+        namespace,
+        groupRevision + 1,
+        nextGroupLease.fencingToken()));
+    assertEquals(1, dao.deleteOrphanGroupBindings(Instant.now().plusSeconds(1), 10));
 
     dao.observeProxyDistribution(
         hostedId,
@@ -145,6 +208,71 @@ class AlpineRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
   }
 
   @Test
+  void snapshotRetentionUsesBoundedCandidatesAndDeletesPublishedGroupBindings() {
+    long memberId = insertRepository("alpine-retention-member", "alpine");
+    long groupId = insertRepository("alpine-retention-group", "alpine");
+    jdbc().update("UPDATE repository SET type = 'group', recipe_name = 'alpine-group' WHERE id = ?",
+        groupId);
+    AlpineRegistryDao dao = stores().alpineRegistry();
+    Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
+    Instant createdAt = now.minusSeconds(30);
+    String namespace = "v3.23/main/x86_64";
+    AlpineRegistryDao.PackageRecord member = inTransaction(
+        () -> dao.savePackage(record(memberId, namespace, "1.0-r0", now)));
+    String leaseKey = "alpine:publish:" + groupId + ":" + namespace;
+    AlpineRegistryDao.Lease lease = dao.tryAcquireLease(
+        leaseKey, "retention-owner", now, now.plusSeconds(300)).orElseThrow();
+    ArrayList<Long> revisions = new ArrayList<>();
+    for (int index = 0; index < 5; index++) {
+      long revision = dao.markSuiteDirty(groupId, namespace, now.plusMillis(index));
+      revisions.add(revision);
+      AlpineRegistryDao.Snapshot snapshot = new AlpineRegistryDao.Snapshot(
+          groupId,
+          namespace,
+          revision,
+          1,
+          Map.of(
+              namespace + "/APKINDEX.tar.gz",
+              ".alpine/snapshots/retention/" + revision + "/APKINDEX.tar.gz"),
+          "%064x".formatted(index + 1),
+          createdAt.plusSeconds(index));
+      dao.beginGroupSnapshot(groupId, namespace, revision, lease.fencingToken());
+      dao.appendGroupBindings(lease.fencingToken(), List.of(new AlpineRegistryDao.GroupBinding(
+          null,
+          groupId,
+          namespace,
+          revision,
+          member.path(),
+          memberId,
+          member.revision(),
+          member.path(),
+          member.identity(),
+          member.sha256(),
+          member.size(),
+          createdAt.plusSeconds(index))));
+      assertTrue(dao.publishGroupSnapshot(snapshot, "retention-owner", lease.fencingToken()));
+    }
+
+    List<Long> candidates = dao.listSnapshotCleanupCandidates(now, 3, 256).stream()
+        .filter(candidate -> candidate.repositoryId() == groupId)
+        .map(AlpineRegistryDao.Snapshot::revision)
+        .toList();
+    assertEquals(revisions.subList(0, 2), candidates);
+    assertEquals(1, dao.listGroupBindings(
+        groupId, namespace, revisions.getFirst(), null, 10).size());
+    assertTrue(dao.deleteSnapshot(groupId, namespace, revisions.getFirst()));
+    assertEquals(0, jdbc().queryForObject(
+        """
+        SELECT COUNT(*) FROM alpine_group_binding
+        WHERE group_repository_id = ? AND distribution_name = ? AND snapshot_revision = ?
+        """,
+        Integer.class,
+        groupId,
+        namespace,
+        revisions.getFirst()));
+  }
+
+  @Test
   void accessShapesHaveRepositoryLeadingIndexesAndIndexedPlans() {
     assertEquals(List.of("repository_id", "coordinate_hash"),
         indexColumns("alpine_package_record", "uk_alpine_package_coordinate"));
@@ -153,11 +281,21 @@ class AlpineRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
     assertEquals(List.of(
         "repository_id", "distribution_name", "component_name", "architecture", "package_name", "id"),
         indexColumns("alpine_package_record", "idx_alpine_package_index"));
-    assertEquals(List.of("relation_kind", "token_hash", "package_id"),
+    assertEquals(List.of("repository_id", "relation_kind", "token_hash", "package_id"),
         indexColumns("alpine_package_relation", "idx_alpine_relation_lookup"));
     assertEquals(List.of(
-        "group_repository_id", "distribution_name", "snapshot_revision", "id"),
+        "group_repository_id", "distribution_name", "snapshot_revision", "binding_token", "id"),
         indexColumns("alpine_group_binding", "idx_alpine_group_page"));
+    assertEquals(List.of(
+        "created_at", "group_repository_id", "distribution_name", "snapshot_revision",
+        "binding_token"),
+        indexColumns("alpine_group_snapshot_stage", "idx_alpine_group_stage_cleanup"));
+    assertEquals(List.of(
+        "publish_pending", "desired_at", "repository_id", "distribution_name"),
+        indexColumns("alpine_suite_state", "idx_alpine_suite_worker"));
+    assertEquals(List.of(
+        "created_at", "repository_id", "distribution_name", "revision"),
+        indexColumns("alpine_snapshot", "idx_alpine_snapshot_cleanup"));
 
     long repositoryId = insertRepository("alpine-plan", "alpine");
     inTransaction(() -> {
@@ -166,7 +304,7 @@ class AlpineRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
           INSERT INTO alpine_package_record
             (repository_id, coordinate_hash, distribution_name, component_name, architecture,
              package_name, package_version, package_architecture, filename, asset_path,
-             control_fields, package_identity, data_sha256, sha256, size_bytes, source_kind,
+             asset_path_hash, control_fields, package_identity, data_sha256, sha256, size_bytes, source_kind,
              revision, indexed_at, created_at, updated_at)
           WITH RECURSIVE sequence_value(n) AS (
             SELECT 1
@@ -177,6 +315,7 @@ class AlpineRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
                  'v3.23/main/x86_64', 'main', 'x86_64', CONCAT('plan-', n), '1.0-r0',
                  'x86_64', CONCAT('plan-', n, '-1.0-r0.apk'),
                  CONCAT('v3.23/main/x86_64/plan-', n, '-1.0-r0.apk'),
+                 UNHEX(SHA2(CONCAT('v3.23/main/x86_64/plan-', n, '-1.0-r0.apk'), 256)),
                  JSON_OBJECT('P', CONCAT('plan-', n), 'V', '1.0-r0'),
                  CONCAT('Q1', LPAD(n, 27, 'A'), '='), REPEAT('a', 64), REPEAT('b', 64),
                  12, 'HOSTED', n, CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3), CURRENT_TIMESTAMP(3)
@@ -185,8 +324,9 @@ class AlpineRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
     });
     jdbc().update("""
         INSERT INTO alpine_package_relation
-          (package_id, relation_kind, token_value, token_hash, expression_value)
-        SELECT id, 'PROVIDE', 'cmd:fixture', UNHEX(SHA2('cmd:fixture', 256)), 'cmd:fixture'
+          (repository_id, package_id, relation_kind, token_value, token_hash, expression_value)
+        SELECT repository_id, id, 'PROVIDE', 'cmd:fixture',
+               UNHEX(SHA2('cmd:fixture', 256)), 'cmd:fixture'
         FROM alpine_package_record WHERE repository_id = ?
         """, repositoryId);
     jdbc().execute("ANALYZE TABLE alpine_package_record, alpine_package_relation");
@@ -211,11 +351,12 @@ class AlpineRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
         EXPLAIN FORMAT=JSON
         SELECT package_row.* FROM alpine_package_relation relation_row
         JOIN alpine_package_record package_row ON package_row.id = relation_row.package_id
-        WHERE package_row.repository_id = ? AND relation_row.relation_kind = 'PROVIDE'
+        WHERE relation_row.repository_id = ? AND package_row.repository_id = ?
+          AND relation_row.relation_kind = 'PROVIDE'
           AND relation_row.token_hash = UNHEX(SHA2('cmd:fixture', 256))
           AND relation_row.token_value = 'cmd:fixture' AND package_row.id > 0
         ORDER BY package_row.id LIMIT 20
-        """, String.class, repositoryId);
+        """, String.class, repositoryId, repositoryId);
     assertTrue(relationPlan.contains("idx_alpine_relation_lookup"), relationPlan);
   }
 

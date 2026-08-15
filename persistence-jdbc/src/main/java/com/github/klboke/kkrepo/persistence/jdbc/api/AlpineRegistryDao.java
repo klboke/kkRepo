@@ -10,6 +10,7 @@ import java.util.function.Consumer;
 public interface AlpineRegistryDao {
   String SOURCE_HOSTED = "HOSTED";
   String SOURCE_PROXY = "PROXY";
+  int PACKAGE_PAGE_SIZE = 2_048;
 
   static String namespace(String distribution, String channel, String repositoryArchitecture) {
     requireNamespaceSegment(distribution);
@@ -36,8 +37,14 @@ public interface AlpineRegistryDao {
 
   Optional<PackageRecord> findPackageByPath(long repositoryId, String path);
 
-  List<PackageRecord> listPackages(
-      long repositoryId, String distribution, String component, String architecture);
+  List<PackageRecord> listPackagePage(
+      long repositoryId,
+      String distribution,
+      String component,
+      String architecture,
+      String afterPackageName,
+      long afterId,
+      int limit);
 
   /**
    * Visits one architecture index with a database cursor. Implementations must keep ordering
@@ -49,12 +56,48 @@ public interface AlpineRegistryDao {
       String component,
       String architecture,
       Consumer<PackageRecord> visitor) {
-    if (visitor != null) {
-      listPackages(repositoryId, distribution, component, architecture).forEach(visitor);
+    if (visitor == null) return;
+    String afterName = "";
+    long afterId = 0;
+    while (true) {
+      List<PackageRecord> page = listPackagePage(
+          repositoryId,
+          distribution,
+          component,
+          architecture,
+          afterName,
+          afterId,
+          PACKAGE_PAGE_SIZE);
+      page.forEach(visitor);
+      if (page.size() < PACKAGE_PAGE_SIZE) return;
+      PackageRecord cursor = page.getLast();
+      afterName = cursor.packageName();
+      afterId = cursor.id();
     }
   }
 
-  List<PackageRecord> listPackages(long repositoryId, String distribution);
+  List<PackageRecord> listPackagePage(
+      long repositoryId,
+      String distribution,
+      String afterPackageName,
+      long afterId,
+      int limit);
+
+  default void visitPackages(
+      long repositoryId, String distribution, Consumer<PackageRecord> visitor) {
+    if (visitor == null) return;
+    String afterName = "";
+    long afterId = 0;
+    while (true) {
+      List<PackageRecord> page = listPackagePage(
+          repositoryId, distribution, afterName, afterId, PACKAGE_PAGE_SIZE);
+      page.forEach(visitor);
+      if (page.size() < PACKAGE_PAGE_SIZE) return;
+      PackageRecord cursor = page.getLast();
+      afterName = cursor.packageName();
+      afterId = cursor.id();
+    }
+  }
 
   List<String> listDistributions(long repositoryId);
 
@@ -125,22 +168,29 @@ public interface AlpineRegistryDao {
 
   void insertSigningKey(SigningKey key);
 
-  void replacePackageRelations(long packageId, List<PackageRelation> relations);
+  void replacePackageRelations(
+      long repositoryId, long packageId, List<PackageRelation> relations);
 
   List<PackageRecord> findPackagesByRelation(
       long repositoryId, String relationKind, String token, Long afterId, int limit);
 
-  boolean publishGroupSnapshot(
-      Snapshot snapshot,
-      List<GroupBinding> bindings,
-      String leaseOwner,
-      long fencingToken);
+  void beginGroupSnapshot(
+      long groupRepositoryId, String namespace, long snapshotRevision, long fencingToken);
+
+  void appendGroupBindings(long fencingToken, List<GroupBinding> bindings);
+
+  void discardGroupSnapshot(
+      long groupRepositoryId, String namespace, long snapshotRevision, long fencingToken);
+
+  boolean publishGroupSnapshot(Snapshot snapshot, String leaseOwner, long fencingToken);
 
   Optional<GroupBinding> findGroupBinding(
       long groupRepositoryId, String namespace, long snapshotRevision, String path);
 
   List<GroupBinding> listGroupBindings(
       long groupRepositoryId, String namespace, long snapshotRevision, Long afterId, int limit);
+
+  int deleteOrphanGroupBindings(Instant createdBefore, int limit);
 
   default void observeProxyDistribution(
       long repositoryId, String distribution, String releaseIdentity, Instant observedAt) {

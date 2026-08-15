@@ -113,7 +113,7 @@ class AlpineProxyProjectionServiceTest {
     verify(assets).bindProxyPackage(
         eq(runtime), eq(PACKAGE_PATH), any(),
         eq("v3.20/main/x86_64/demo/1.0-r0/demo-1.0-r0.apk"), any());
-    verify(registry).replacePackageRelations(anyLong(), any());
+    verify(registry).replacePackageRelations(anyLong(), anyLong(), any());
   }
 
   @Test
@@ -131,7 +131,9 @@ class AlpineProxyProjectionServiceTest {
         "Q1AAAAAAAAAAAAAAAAAAAAAAAAAAA=", "a".repeat(64), "b".repeat(64), 10L,
         77L, 88L, AlpineRegistryDao.SOURCE_PROXY, 1L, Instant.EPOCH, Instant.EPOCH,
         Instant.EPOCH);
-    when(registry.listPackages(runtime.id(), NAMESPACE)).thenReturn(List.of(stale));
+    when(registry.listPackagePage(
+        runtime.id(), NAMESPACE, "", 0L, AlpineRegistryDao.PACKAGE_PAGE_SIZE))
+        .thenReturn(List.of(stale));
     when(registry.deletePackage(
         eq(runtime.id()), eq(NAMESPACE), eq("main"), eq("old"), eq("1-r0"),
         eq("x86_64"), eq("upstream-index-replaced"), any(Instant.class)))

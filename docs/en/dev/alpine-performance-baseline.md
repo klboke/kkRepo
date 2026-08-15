@@ -3,7 +3,7 @@
 This document records a targeted same-host baseline between kkRepo and Sonatype Nexus Repository
 for the Alpine APK v2 implementation. It is a protocol hot-path comparison, not a production
 capacity result. TLS, reverse proxies, remote OSS/S3, database high availability, mixed reads and
-writes, and large 1k/10k/100k-package namespaces still need workload-specific testing.
+writes, and end-to-end publication at large namespace sizes still need workload-specific testing.
 
 The [Chinese version](../../zh/dev/alpine-performance-baseline.md) contains the same measurements.
 
@@ -130,6 +130,60 @@ measurements, all client samples, and the empty gate-failure list, is checked in
 [`docs/perf-data/alpine-nexus-2026-08-15.json`](../../perf-data/alpine-nexus-2026-08-15.json).
 Its SHA-256 is `6ab6530dda96b5a8e5e489f241b1ef9715baa44b6df426fe246f98867717a550`.
 
+## 100k-row database growth verification
+
+The database access paths were tested separately after the HTTP baseline. Identical logical data
+was loaded into MySQL 8.0.46 and PostgreSQL 12.22: 100,000 packages with deliberately long common
+path prefixes, 100,000 relations with 100 matching rows, 10,000 suite states with 100 pending,
+100,001 published snapshots, 100,000 live group bindings, and two group snapshot stages. The
+tables were analyzed before measurement.
+
+Each row below is database executor time from seven consecutive warmed `EXPLAIN ANALYZE` runs.
+The p50 and p95 use nearest-rank selection over those seven samples. JDBC mapping, network transfer,
+index serialization, signing, blob access, and application work are outside this measurement.
+
+| Query shape | Cardinality | MySQL p50 / p95 | PostgreSQL p50 / p95 | Bounded access path |
+| --- | --- | ---: | ---: | --- |
+| exact asset path | 1 of 100,000 | 0.000114 / 0.000121 ms | 0.058 / 0.185 ms | repository + SHA-256 path key, followed by full-path collision check |
+| namespace late keyset page | 2,048 rows after row 90,000 | 5.260 / 5.800 ms | 1.979 / 2.774 ms | repository/distribution/package/id index |
+| pending publication worker | 100 pending of 10,000, limit 256 | 0.403 / 0.441 ms | 0.317 / 0.805 ms | pending partial/generated-column index, then repository PK probes |
+| snapshot cleanup candidates | 32 of 100,001, retain 3 | 0.851 / 0.944 ms | 0.681 / 1.272 ms | created-at cleanup index plus bounded PK probes for newer snapshots |
+| relation lookup | 100 matches of 100,000 | 0.992 / 1.190 ms | 1.438 / 3.334 ms | repository/kind/token-hash/package index |
+| published group token | one snapshot | 0.000110 / 0.000119 ms | 0.065 / 0.267 ms | snapshot primary key |
+| group binding late page | 2,048 rows after row 90,000 | 3.850 / 5.600 ms | 0.880 / 0.947 ms | group/distribution/revision/token/id index |
+| group publication stage lock | one staged snapshot | 0.0668 / 0.0944 ms | 0.059 / 0.136 ms | stage primary key with `FOR UPDATE` |
+| orphan group stage scan | 2 stages with 100,000 live bindings | 0.0482 / 0.0562 ms | 0.086 / 0.187 ms | stage cleanup index with `SKIP LOCKED`; binding deletion is an FK cascade |
+
+MySQL reports the two primary/unique-key point lookups as `Rows fetched before execution`; their
+sub-microsecond values are optimizer/executor instrumentation, not an application-level latency
+claim. The page, worker, cleanup, and relation rows are the useful capacity signals.
+
+The first natural-plan pass exposed backend-specific optimizer regressions, so the final DAO does
+not force one SQL spelling onto both databases:
+
+| Remediated plan | Before | Final p50 | Change |
+| --- | ---: | ---: | ---: |
+| PostgreSQL namespace page: boolean keyset filter to row-value range | 67.443 ms | 1.979 ms | 34.1x faster |
+| PostgreSQL pending worker: repository-first join to pending-first correlated PK probes | 22.878 ms | 0.317 ms | 72.2x faster |
+| PostgreSQL snapshot cleanup: broad join to cleanup-index-first correlated probes | 862.993 ms | 0.681 ms | 1,267x faster |
+| MySQL pending worker: unselective scan to generated pending index | 145.0 ms | 0.403 ms | 360x faster |
+| MySQL snapshot cleanup: global candidate enumeration to bounded cleanup scan | 1,824.0 ms | 0.851 ms | 2,143x faster |
+| MySQL group binding: snapshot join to token point lookup plus indexed page | 20.2 ms | 3.850 ms | 5.2x faster |
+
+PostgreSQL's row-value keyset predicate is intentionally dialect-specific. The same expression on
+MySQL scanned about 92,000 rows and took 348 ms, while MySQL's equivalent boolean range predicate
+returned the late page at a 5.260 ms p50. Orphan cleanup scans the lightweight stage table rather
+than all live bindings, so the 100,000 binding rows do not participate until a selected stage is
+deleted by foreign-key cascade. Publication locks its stage row and cleanup skips locked stages,
+preventing a cleanup/publication race from exposing a snapshot whose bindings were removed.
+
+All individual samples, cardinalities, index descriptions, and pre-remediation observations are in
+[`docs/perf-data/alpine-database-100k-2026-08-15.json`](../../perf-data/alpine-database-100k-2026-08-15.json).
+Its SHA-256 is `abbe1f1ade8088a0fc881bdb20de875b8bce6dd078447b0d2c1d4b151934582b`.
+These results show that the database hot queries remain bounded at 100k rows; a complete index
+publication still necessarily performs O(n) package parsing/serialization and needs a separate
+capacity target for CPU, heap, blob I/O, and total wall time.
+
 ## Findings and limits
 
 - The immutable snapshot and asset caches keep warmed index reads off Alpine business tables;
@@ -144,9 +198,9 @@ Its SHA-256 is `6ab6530dda96b5a8e5e489f241b1ef9715baa44b6df426fe246f98867717a550
 - A deliberately immediate first run showed large local variance while repository tasks and JVM
   paths were still warming. The recorded confirmation waits for index availability and task
   quiescence, but it remains a directional local result rather than an SLA.
-- This one-package run validates fixed read-path overhead and a 4 MiB payload. Publication time,
-  heap bounds, index size, and solver behavior at 1k/10k/100k packages must be measured separately
-  before setting production capacity limits.
+- The 100k-row database run validates bounded query plans, but full publication time, heap bounds,
+  generated index size, blob I/O, and solver behavior still need end-to-end measurement before
+  setting production capacity limits.
 
 ## Reproduce
 

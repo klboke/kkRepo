@@ -36,6 +36,7 @@ class AlpineSnapshotCleanupWorkerTest {
     worker(false).cleanup();
     verify(registry, never()).listSnapshotCleanupCandidates(any(), anyInt(), anyInt());
     verify(registry, never()).listPackageCleanupCandidates(any(), anyInt());
+    verify(registry, never()).deleteOrphanGroupBindings(any(), anyInt());
   }
 
   @Test
@@ -59,6 +60,7 @@ class AlpineSnapshotCleanupWorkerTest {
     verify(assets).delete(any(), eq(".alpine/2/index"));
     verify(assets).delete(any(), eq(".alpine/2/desc"));
     verify(registry).deleteSnapshot(1L, "v3.20/main/x86_64", 2L);
+    verify(registry).deleteOrphanGroupBindings(any(), eq(32));
     verify(lease).close();
   }
 

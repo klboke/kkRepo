@@ -30,6 +30,7 @@ import com.github.klboke.kkrepo.server.raw.RawProxyService;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -97,7 +98,7 @@ class AlpineServiceTest {
     verify(registry).savePackage(saved.capture());
     assertEquals("HOSTED", saved.getValue().sourceKind());
     assertEquals("demo", saved.getValue().controlFields().get("P"));
-    verify(registry).replacePackageRelations(eq(50L), any());
+    verify(registry).replacePackageRelations(eq(hosted.id()), eq(50L), any());
 
     when(registry.findPackage(
         hosted.id(), NAMESPACE, "main", "demo", "1.0-r0", "x86_64"))
@@ -350,21 +351,29 @@ class AlpineServiceTest {
       long repositoryId = invocation.getArgument(0);
       return repositoryId == member.id() ? Optional.of(memberSnapshot) : Optional.empty();
     });
-    when(registry.listPackages(member.id(), NAMESPACE)).thenReturn(List.of(packageRecord(
+    when(registry.listPackagePage(
+        member.id(), NAMESPACE, "", 0L, AlpineRegistryDao.PACKAGE_PAGE_SIZE))
+        .thenReturn(List.of(packageRecord(
         50L, member.id(), PACKAGE_PATH, "a".repeat(64), 10L, 20L,
         AlpineRegistryDao.SOURCE_HOSTED)));
     AlpineIndexBuilder.BuiltSnapshot built = new AlpineIndexBuilder.BuiltSnapshot(
         Map.of(NAMESPACE + "/APKINDEX.tar.gz", ".alpine/group"), "b".repeat(64), 100L,
         1, Instant.EPOCH);
     when(indexBuilder.build(eq(group), eq(settings), eq(dirty), eq(material()),
-        any(AlpineIndexBuilder.PackageSource.class))).thenReturn(built);
-    when(registry.publishGroupSnapshot(any(), any(), any(), anyLong())).thenReturn(true);
+        any(AlpineIndexBuilder.PackageSource.class))).thenAnswer(invocation -> {
+          AlpineIndexBuilder.PackageSource source = invocation.getArgument(4);
+          source.visit(ignored -> { });
+          return built;
+        });
+    when(registry.publishGroupSnapshot(any(), any(), anyLong())).thenReturn(true);
     when(lease.owner()).thenReturn("owner");
     when(lease.fencingToken()).thenReturn(8L);
 
     assertTrue(service.publishPendingIfAvailable(group, NAMESPACE));
     ArgumentCaptor<List<AlpineRegistryDao.GroupBinding>> bindings = ArgumentCaptor.forClass(List.class);
-    verify(registry).publishGroupSnapshot(any(), bindings.capture(), eq("owner"), eq(8L));
+    verify(registry).beginGroupSnapshot(group.id(), NAMESPACE, 2L, 8L);
+    verify(registry).appendGroupBindings(eq(8L), bindings.capture());
+    verify(registry).publishGroupSnapshot(any(), eq("owner"), eq(8L));
     assertEquals(1, bindings.getValue().size());
     assertEquals(member.id(), bindings.getValue().getFirst().memberRepositoryId());
 
@@ -380,6 +389,72 @@ class AlpineServiceTest {
     MavenResponse response = service.get(group, PACKAGE_PATH, false);
     assertEquals(member.name(), response.headers().get("X-kkRepo-Source-Repository"));
     verify(assets).serve(member, PACKAGE_PATH, false);
+  }
+
+  @Test
+  void groupStreamsMembersInPackageOrderAndKeepsFirstMemberPrecedence() {
+    RepositoryRuntime first = runtime(2L, RepositoryType.HOSTED, "ALLOW", List.of());
+    RepositoryRuntime second = runtime(4L, RepositoryType.HOSTED, "ALLOW", List.of());
+    RepositoryRuntime group = runtime(
+        3L, RepositoryType.GROUP, "ALLOW", List.of(first, second));
+    AlpineRegistryDao.SuiteState dirty = suite(group.id(), NAMESPACE, 2L, 1L);
+    when(registry.findSuite(group.id(), NAMESPACE)).thenReturn(Optional.of(dirty));
+    when(published.find(anyLong(), eq(NAMESPACE))).thenAnswer(invocation -> {
+      long repositoryId = invocation.getArgument(0);
+      if (repositoryId == first.id()) {
+        return Optional.of(snapshot(first.id(), 11L, Map.of(
+            NAMESPACE + "/APKINDEX.tar.gz", ".alpine/first")));
+      }
+      if (repositoryId == second.id()) {
+        return Optional.of(snapshot(second.id(), 12L, Map.of(
+            NAMESPACE + "/APKINDEX.tar.gz", ".alpine/second")));
+      }
+      return Optional.empty();
+    });
+    AlpineRegistryDao.PackageRecord firstAlpha = packageRecord(
+        11L, first.id(), "alpha", "1.0-r0", AlpineRegistryDao.SOURCE_HOSTED);
+    AlpineRegistryDao.PackageRecord firstDemo = packageRecord(
+        12L, first.id(), "demo", "1.0-r0", AlpineRegistryDao.SOURCE_HOSTED);
+    AlpineRegistryDao.PackageRecord secondBeta = packageRecord(
+        21L, second.id(), "beta", "1.0-r0", AlpineRegistryDao.SOURCE_HOSTED);
+    AlpineRegistryDao.PackageRecord secondDuplicate = packageRecord(
+        22L, second.id(), "demo", "1.0-r0", AlpineRegistryDao.SOURCE_HOSTED);
+    AlpineRegistryDao.PackageRecord secondDemo = packageRecord(
+        23L, second.id(), "demo", "2.0-r0", AlpineRegistryDao.SOURCE_HOSTED);
+    when(registry.listPackagePage(
+        first.id(), NAMESPACE, "", 0L, AlpineRegistryDao.PACKAGE_PAGE_SIZE))
+        .thenReturn(List.of(firstAlpha, firstDemo));
+    when(registry.listPackagePage(
+        second.id(), NAMESPACE, "", 0L, AlpineRegistryDao.PACKAGE_PAGE_SIZE))
+        .thenReturn(List.of(secondBeta, secondDuplicate, secondDemo));
+    AlpineIndexBuilder.BuiltSnapshot built = new AlpineIndexBuilder.BuiltSnapshot(
+        Map.of(NAMESPACE + "/APKINDEX.tar.gz", ".alpine/group"), "b".repeat(64), 100L,
+        1, Instant.EPOCH);
+    ArrayList<AlpineRegistryDao.PackageRecord> emitted = new ArrayList<>();
+    when(indexBuilder.build(eq(group), eq(settings), eq(dirty), eq(material()),
+        any(AlpineIndexBuilder.PackageSource.class))).thenAnswer(invocation -> {
+          AlpineIndexBuilder.PackageSource source = invocation.getArgument(4);
+          source.visit(emitted::add);
+          return built;
+        });
+    when(registry.publishGroupSnapshot(any(), any(), anyLong())).thenReturn(true);
+    when(lease.owner()).thenReturn("owner");
+    when(lease.fencingToken()).thenReturn(8L);
+
+    assertTrue(service.publishPendingIfAvailable(group, NAMESPACE));
+
+    assertEquals(
+        List.of("alpha:1.0-r0", "beta:1.0-r0", "demo:1.0-r0", "demo:2.0-r0"),
+        emitted.stream().map(row -> row.packageName() + ":" + row.version()).toList());
+    assertEquals(first.id(), emitted.get(2).repositoryId());
+    ArgumentCaptor<List<AlpineRegistryDao.GroupBinding>> bindings = ArgumentCaptor.forClass(
+        List.class);
+    verify(registry).appendGroupBindings(eq(8L), bindings.capture());
+    assertEquals(
+        List.of(first.id(), second.id(), first.id(), second.id()),
+        bindings.getValue().stream()
+            .map(AlpineRegistryDao.GroupBinding::memberRepositoryId)
+            .toList());
   }
 
   @Test
@@ -643,6 +718,17 @@ class AlpineServiceTest {
         Map.of("P", "demo", "V", "1.0-r0", "A", "x86_64", "I", "7"),
         "Q1AAAAAAAAAAAAAAAAAAAAAAAAAAA=", "c".repeat(64), sha256, 100L,
         assetId, componentId, source, 1L, Instant.EPOCH, Instant.EPOCH, Instant.EPOCH);
+  }
+
+  private static AlpineRegistryDao.PackageRecord packageRecord(
+      Long id, long repositoryId, String name, String version, String source) {
+    String path = NAMESPACE + "/" + name + "-" + version + ".apk";
+    return new AlpineRegistryDao.PackageRecord(
+        id, repositoryId, NAMESPACE, "main", "x86_64", name, version, "x86_64",
+        name + "-" + version + ".apk", path,
+        Map.of("P", name, "V", version, "A", "x86_64", "I", "7"),
+        "Q1" + "A".repeat(27) + "=", "c".repeat(64), "%064x".formatted(id), 100L,
+        id + 100, id + 200, source, 1L, Instant.EPOCH, Instant.EPOCH, Instant.EPOCH);
   }
 
   private static AlpineRegistryDao.PackageRecord withId(

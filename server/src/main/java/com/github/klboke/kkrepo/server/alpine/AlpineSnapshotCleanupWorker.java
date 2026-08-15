@@ -65,6 +65,7 @@ final class AlpineSnapshotCleanupWorker {
       cleanupOne(candidate, cutoff);
     }
     cleanupPackages(cutoff);
+    registry.deleteOrphanGroupBindings(cutoff, batchSize);
   }
 
   private void cleanupOne(AlpineRegistryDao.Snapshot candidate, Instant cutoff) {
