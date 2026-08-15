@@ -195,10 +195,10 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 8. ✅ Conda - 已实现 hosted、proxy、group、`.tar.bz2`/`.conda` 发布、JSON/BZ2/ZSTD channel 元数据、UI/API 上传、Browse/Search、多副本协同、真实 Conda 客户端 E2E、Nexus 黑盒 fixture，以及 shape-gated Nexus 3.92.x-3.94.x hosted 数据迁移 E2E（[设计说明](docs/zh/dev/conda-repository-design.md)）
 9. ✅ APT / Debian - 已实现 hosted/proxy、签名元数据、UI/API 上传、Browse/Search、多副本发布、真实 APT 客户端与 Nexus 黑盒验证、shape-gated 迁移和可复现的 Nexus 性能基线（[使用指南](docs/zh/repository-guides/apt-debian.md)、[设计说明](docs/zh/dev/apt-debian-repository-design.md)、[性能基线](docs/zh/dev/apt-performance-baseline.md)）
 10. ✅ Conan 2 - 已实现 hosted/proxy/group、Conan bearer 认证、manifest-gated revision 发布、写入时 Nexus Browse 投影、UI/API 上传、Cleanup、复合 package 扫描、shape-gated 迁移、真实 Conan 客户端 E2E 和双数据库 Nexus 性能基线（[使用指南](docs/zh/repository-guides/conan-2.md)、[设计说明](docs/zh/dev/conan-repository-design.md)、[性能基线](docs/zh/dev/conan-performance-baseline.md)）
-11. ohpm / HarmonyOS - 规划中，覆盖 hosted、proxy、group、导入和管理端能力（[设计说明](docs/zh/dev/ohpm-repository-design.md)）
-12. Go hosted 仓库 - 规划补齐 Nexus 兼容的内部 module 发布能力；proxy 和 group 仓库已支持。
-13. Helm group 仓库 - 规划补齐 Nexus 兼容的 hosted、proxy 与 group member 有序聚合能力。
-14. Alpine / APK - 规划 hosted、proxy 和 group 仓库，覆盖 APK 索引与仓库签名。
+11. Alpine / APK - 规划 hosted、proxy 和 group 仓库，覆盖 APK v2 索引、仓库签名、Cleanup、安全扫描和 shape-gated Nexus 迁移（[设计说明](docs/zh/dev/alpine-apk-repository-design.md)）
+12. ohpm / HarmonyOS - 规划中，覆盖 hosted、proxy、group、导入和管理端能力（[设计说明](docs/zh/dev/ohpm-repository-design.md)）
+13. Go hosted 仓库 - 规划补齐 Nexus 兼容的内部 module 发布能力；proxy 和 group 仓库已支持。
+14. Helm group 仓库 - 规划补齐 Nexus 兼容的 hosted、proxy 与 group member 有序聚合能力。
 15. R / CRAN - 规划 proxy、hosted 和 group 仓库；hosted 与 group 范围将对齐 Nexus 的 `.gz` package 支持。
 16. Git Large File Storage (LFS) - 规划 Nexus 兼容的 hosted 仓库，用于 Git 大文件制品存储。
 17. Hugging Face Models - 规划 Nexus 兼容的 proxy 仓库，覆盖模型 metadata 与大模型文件。
