@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AlpineRegistryDao;
 import com.github.klboke.kkrepo.persistence.mysql.support.MySqlIntegrationTestSupport;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -31,6 +32,19 @@ class AlpineRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
     assertEquals(stored, dao.findPackage(
         hostedId, namespace, "main", "demo", "1.0-r0", "x86_64").orElseThrow());
     assertEquals(List.of(stored), dao.listPackages(hostedId, namespace, "main", "x86_64"));
+    assertEquals(List.of(stored), dao.listPackages(hostedId, namespace));
+    assertEquals(List.of(namespace), dao.listDistributions(hostedId));
+    assertEquals(List.of("main"), dao.listComponents(hostedId, namespace));
+    assertEquals(List.of("x86_64"), dao.listArchitectures(hostedId, namespace, "main"));
+    ArrayList<AlpineRegistryDao.PackageRecord> visited = new ArrayList<>();
+    dao.visitPackages(hostedId, namespace, "main", "x86_64", visited::add);
+    assertEquals(List.of(stored), visited);
+    assertEquals(1L, dao.findSuite(hostedId, namespace).orElseThrow().desiredRevision());
+    assertEquals(1, dao.listSuites(hostedId).size());
+    assertEquals(1, dao.listPendingSuites(
+        now.plusSeconds(1), now.plusSeconds(1), now.plusSeconds(1), 10).size());
+    dao.recordBuildFailure(hostedId, namespace, 1L, "fixture failure", now);
+    assertEquals("fixture failure", dao.findSuite(hostedId, namespace).orElseThrow().lastError());
     dao.replacePackageRelations(stored.id(), List.of(
         new AlpineRegistryDao.PackageRelation(stored.id(), "DEPEND", "musl", "musl>=1.2")));
     assertEquals(List.of(stored), dao.findPackagesByRelation(
@@ -48,10 +62,23 @@ class AlpineRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
     assertFalse(dao.publishSnapshot(snapshot, "owner-1", lease.fencingToken() + 1));
     assertTrue(dao.publishSnapshot(snapshot, "owner-1", lease.fencingToken()));
     assertEquals(snapshot, dao.findPublishedSnapshot(hostedId, namespace).orElseThrow());
+    assertEquals(snapshot, dao.findSnapshot(hostedId, namespace, snapshot.revision()).orElseThrow());
+    assertEquals(List.of(snapshot), dao.listSnapshots(hostedId, namespace, 10));
+    assertTrue(dao.listSnapshotCleanupCandidates(now.plusSeconds(1), 3, 10).isEmpty());
+    assertFalse(dao.deleteSnapshot(hostedId, namespace, snapshot.revision()));
+    assertTrue(dao.renewLease(
+        leaseKey, "owner-1", lease.fencingToken(), now, now.plusSeconds(120)));
+    assertFalse(dao.renewLease(
+        leaseKey, "wrong", lease.fencingToken(), now, now.plusSeconds(120)));
+    dao.releaseLease(leaseKey, "owner-1", lease.fencingToken());
+    AlpineRegistryDao.Lease reacquired = dao.tryAcquireLease(
+        leaseKey, "owner-2", now.plusSeconds(1), now.plusSeconds(120)).orElseThrow();
+    assertTrue(reacquired.fencingToken() > lease.fencingToken());
 
     dao.insertSigningKey(key(hostedId, 1, now));
     dao.insertSigningKey(key(hostedId, 2, now.plusSeconds(1)));
     assertEquals(2, dao.findActiveSigningKey(hostedId).orElseThrow().revision());
+    assertEquals(1, dao.findSigningKey(hostedId, 1).orElseThrow().revision());
     assertEquals(2, dao.listSigningKeys(hostedId, 10).size());
 
     dao.ensureSuite(groupId, namespace, now);
@@ -70,6 +97,23 @@ class AlpineRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
         groupSnapshot, List.of(binding), "group-owner", groupLease.fencingToken()));
     assertEquals(hostedId, dao.findGroupBinding(
         groupId, namespace, groupRevision, stored.path()).orElseThrow().memberRepositoryId());
+    assertEquals(1, dao.listGroupBindings(groupId, namespace, groupRevision, null, 10).size());
+    assertTrue(dao.listGroupBindings(groupId, namespace, groupRevision, Long.MAX_VALUE, 10)
+        .isEmpty());
+
+    dao.observeProxyDistribution(
+        hostedId,
+        namespace,
+        "release-1",
+        Map.of(stored.path(), new AlpineRegistryDao.ProxyIndex(stored.sha256(), stored.size())),
+        true,
+        now);
+    AlpineRegistryDao.ProxyDistribution observed =
+        dao.findProxyDistribution(hostedId, namespace).orElseThrow();
+    assertTrue(observed.signatureVerified());
+    assertEquals(stored.sha256(), observed.indices().get(stored.path()).sha256());
+    dao.observeProxyDistribution(hostedId, "edge/main/x86_64", "release-2", now);
+    assertEquals(2, dao.listProxyDistributions(hostedId).size());
 
     assertThrows(DataIntegrityViolationException.class, () -> jdbc().update(
         "UPDATE alpine_signing_key SET active = true WHERE repository_id = ? AND revision = 1",
@@ -82,6 +126,22 @@ class AlpineRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
         .orElseThrow();
     assertEquals(stored.id(), deleted.id());
     assertTrue(dao.findPackageByPath(hostedId, stored.path()).isEmpty());
+
+    long tombstoneRepository = insertRepository("alpine-tombstone-db", "alpine");
+    AlpineRegistryDao.PackageRecord tombstonePackage = inTransaction(
+        () -> dao.savePackage(record(tombstoneRepository, namespace, "3.0-r0", now)));
+    inTransaction(() -> dao.deletePackage(
+        tombstoneRepository, namespace, "main", "demo", "3.0-r0", "x86_64", "cleanup", now));
+    AlpineRegistryDao.PackageTombstone tombstone = dao.listPackageCleanupCandidates(
+        now.plusSeconds(1), 10).stream()
+        .filter(candidate -> candidate.repositoryId() == tombstoneRepository)
+        .findFirst().orElseThrow();
+    assertFalse(dao.deletePackageTombstone(null));
+    assertTrue(dao.deletePackageTombstone(tombstone));
+    assertTrue(dao.listPackageCleanupCandidates(now.plusSeconds(1), 10).stream()
+        .noneMatch(candidate -> candidate.repositoryId() == tombstoneRepository));
+    dao.deleteRepositoryState(tombstoneRepository);
+    assertTrue(dao.listSuites(tombstoneRepository).isEmpty());
   }
 
   @Test

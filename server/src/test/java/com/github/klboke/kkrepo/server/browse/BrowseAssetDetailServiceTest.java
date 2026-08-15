@@ -17,6 +17,7 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AlpineRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
@@ -55,6 +56,128 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
 class BrowseAssetDetailServiceTest {
+
+  @Test
+  void alpineDetailMapsProjectedPathAndExposesRegistryIdentity() {
+    RepositoryRecord repository = repository(
+        65L, "alpine-hosted", RepositoryFormat.ALPINE, RepositoryType.HOSTED);
+    String publicPath = "v3.23/main/x86_64/demo/1-r0/demo-1-r0.apk";
+    String storagePath = "v3.23/main/x86_64/demo-1-r0.apk";
+    AssetRecord archive = new AssetRecord(
+        66L, repository.id(), 67L, 68L, RepositoryFormat.ALPINE,
+        storagePath, PersistenceHashes.pathHash(storagePath), archiveName(storagePath),
+        "alpine-apk-v2", "application/vnd.alpine.apk", 512L,
+        null, Instant.EPOCH, Map.of());
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(repository.id(), storagePath), archive), Map.of(68L, blob(68L, 512L)));
+    AlpineRegistryDao alpine = mock(AlpineRegistryDao.class);
+    AlpineRegistryDao.PackageRecord record = alpinePackage(
+        repository.id(), archive.id(), archive.componentId(), storagePath);
+    when(alpine.findPackage(
+        repository.id(), "v3.23/main/x86_64", "main", "demo", "1-r0", "x86_64"))
+        .thenReturn(Optional.of(record));
+    when(alpine.findPackageByPath(repository.id(), storagePath)).thenReturn(Optional.of(record));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(), assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+    service.setAlpineRegistryDao(alpine);
+
+    BrowseAssetDetailService.BrowseAssetDetail detail =
+        service.detail(repository, publicPath, null);
+
+    assertEquals(publicPath, detail.path());
+    assertEquals(storagePath, assets.pathLookups.getFirst().split("\\|", 2)[1]);
+    assertEquals("v3.23/main/x86_64", detail.alpine().get("namespace"));
+    assertEquals("v3.23", detail.alpine().get("distribution"));
+    assertEquals("main", detail.alpine().get("channel"));
+    assertEquals("x86_64", detail.alpine().get("repository_architecture"));
+    assertEquals("noarch", detail.alpine().get("package_architecture"));
+    assertEquals("demo", detail.alpine().get("package"));
+    assertEquals("1-r0", detail.alpine().get("version"));
+    assertEquals("identity", detail.alpine().get("identity"));
+    assertEquals("demo package", detail.alpine().get("description"));
+    assertEquals("https://example.invalid/demo", detail.alpine().get("url"));
+    assertEquals("MIT", detail.alpine().get("license"));
+    assertEquals("demo", detail.alpine().get("origin"));
+    assertEquals("admin@example.invalid", detail.alpine().get("maintainer"));
+    assertEquals("musl", detail.alpine().get("depends"));
+    assertEquals("cmd:demo", detail.alpine().get("provides"));
+    assertEquals("busybox", detail.alpine().get("install_if"));
+    assertEquals(AlpineRegistryDao.SOURCE_HOSTED, detail.alpine().get("source_kind"));
+    assertEquals(repository.name(), detail.alpine().get("source_repository"));
+  }
+
+  @Test
+  void alpineDetailFallsBackWithoutRegistryAndFailsClosedForMissingOrConflictingState() {
+    RepositoryRecord repository = repository(
+        69L, "alpine-hosted", RepositoryFormat.ALPINE, RepositoryType.HOSTED);
+    String path = "v3.23/main/x86_64/demo-1-r0.apk";
+    AssetRecord archive = new AssetRecord(
+        70L, repository.id(), null, 71L, RepositoryFormat.ALPINE,
+        path, PersistenceHashes.pathHash(path), archiveName(path),
+        "alpine-apk-v2", "application/vnd.alpine.apk", 10L,
+        null, Instant.EPOCH, Map.of());
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(repository.id(), path), archive), Map.of(71L, blob(71L, 10L)));
+    BrowseAssetDetailService unavailable = new BrowseAssetDetailService(
+        new StubRepositoryDao(), assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+    assertTrue(unavailable.detail(repository, path, null).alpine().isEmpty());
+
+    AlpineRegistryDao alpine = mock(AlpineRegistryDao.class);
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(), assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+    service.setAlpineRegistryDao(alpine);
+    ResponseStatusException missing = assertThrows(
+        ResponseStatusException.class, () -> service.detail(repository, path, null));
+    assertEquals(HttpStatus.NOT_FOUND, missing.getStatusCode());
+
+    when(alpine.findPackageByPath(repository.id(), path)).thenReturn(Optional.of(
+        alpinePackage(repository.id(), 999L, null, path)));
+    ResponseStatusException conflict = assertThrows(
+        ResponseStatusException.class, () -> service.detail(repository, path, null));
+    assertEquals(HttpStatus.CONFLICT, conflict.getStatusCode());
+  }
+
+  @Test
+  void alpineBrowseProjectionKeepsOriginalPathWhenCoordinateIsInvalidOrFilenameDiffers() {
+    RepositoryRecord repository = repository(
+        72L, "alpine-hosted", RepositoryFormat.ALPINE, RepositoryType.HOSTED);
+    String invalid = "v3.23//x86_64/demo/1-r0/demo-1-r0.apk";
+    String mismatch = "v3.23/main/x86_64/demo/1-r0/wrong.apk";
+    AssetRecord invalidAsset = new AssetRecord(
+        73L, repository.id(), null, 74L, RepositoryFormat.ALPINE,
+        invalid, PersistenceHashes.pathHash(invalid), archiveName(invalid),
+        "alpine-apk-v2", "application/vnd.alpine.apk", 10L,
+        null, Instant.EPOCH, Map.of());
+    AssetRecord mismatchAsset = new AssetRecord(
+        75L, repository.id(), null, 76L, RepositoryFormat.ALPINE,
+        mismatch, PersistenceHashes.pathHash(mismatch), archiveName(mismatch),
+        "alpine-apk-v2", "application/vnd.alpine.apk", 10L,
+        null, Instant.EPOCH, Map.of());
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(
+            key(repository.id(), invalid), invalidAsset,
+            key(repository.id(), mismatch), mismatchAsset),
+        Map.of(74L, blob(74L, 10L), 76L, blob(76L, 10L)));
+    AlpineRegistryDao alpine = mock(AlpineRegistryDao.class);
+    when(alpine.findPackage(
+        repository.id(), "v3.23/main/x86_64", "main", "demo", "1-r0", "x86_64"))
+        .thenReturn(Optional.of(alpinePackage(
+            repository.id(), 999L, null, "v3.23/main/x86_64/demo-1-r0.apk")));
+    when(alpine.findPackageByPath(repository.id(), invalid)).thenReturn(Optional.of(
+        alpinePackage(repository.id(), invalidAsset.id(), null, invalid)));
+    when(alpine.findPackageByPath(repository.id(), mismatch)).thenReturn(Optional.of(
+        alpinePackage(repository.id(), mismatchAsset.id(), null, mismatch)));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(), assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+    service.setAlpineRegistryDao(alpine);
+
+    assertEquals(invalid, service.detail(repository, invalid, null).path());
+    assertEquals(mismatch, service.detail(repository, mismatch, null).path());
+  }
 
   @Test
   void conanDetailResolvesTheWriteTimeBrowseProjectionAndTypedClientRoute() {
@@ -1544,6 +1667,25 @@ class BrowseAssetDetailServiceTest {
             "Depends", "libc6"),
         "a".repeat(32), "b".repeat(40), "c".repeat(64), 512L,
         assetId, componentId, AptRegistryDao.SOURCE_HOSTED, 7L,
+        Instant.EPOCH, Instant.EPOCH, Instant.EPOCH);
+  }
+
+  private static AlpineRegistryDao.PackageRecord alpinePackage(
+      long repositoryId, Long assetId, Long componentId, String path) {
+    return new AlpineRegistryDao.PackageRecord(
+        1L, repositoryId, "v3.23/main/x86_64", "main", "x86_64", "demo", "1-r0",
+        "noarch", archiveName(path), path,
+        Map.of(
+            "T", "demo package",
+            "U", "https://example.invalid/demo",
+            "L", "MIT",
+            "o", "demo",
+            "m", "admin@example.invalid",
+            "D", "musl",
+            "p", "cmd:demo",
+            "i", "busybox"),
+        "identity", "a".repeat(64), "b".repeat(64), 512L,
+        assetId, componentId, AlpineRegistryDao.SOURCE_HOSTED, 7L,
         Instant.EPOCH, Instant.EPOCH, Instant.EPOCH);
   }
 

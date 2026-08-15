@@ -20,6 +20,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
 import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyService;
 import com.github.klboke.kkrepo.server.apt.AptService;
+import com.github.klboke.kkrepo.server.alpine.AlpineService;
 import com.github.klboke.kkrepo.server.cargo.CargoHostedService;
 import com.github.klboke.kkrepo.server.composer.ComposerHostedService;
 import com.github.klboke.kkrepo.server.conda.CondaService;
@@ -48,6 +49,64 @@ import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.web.multipart.MultipartFile;
 
 class ComponentUploadServiceTest {
+
+  @Test
+  void alpineDefinitionAndDelegationPreserveRepositoryNamespace() throws Exception {
+    AlpineService alpine = mock(AlpineService.class);
+    ComponentUploadService service = service(alpine);
+    String path = "v3.23/main/x86_64/demo-1-r0.apk";
+    when(alpine.publish(
+        any(RepositoryRuntime.class), eq("v3.23"), eq("main"), eq("x86_64"),
+        eq("demo-1-r0.apk"), any(InputStream.class), eq("alice"), eq("127.0.0.1")))
+        .thenReturn(new AlpineService.PublishedPackage(
+            path, "demo", "1-r0", "x86_64", "identity", "a".repeat(64), 5));
+
+    UploadDefinition definition = service.definition("alpine");
+    assertFalse(definition.multipleUpload());
+    assertEquals(List.of("distribution", "channel", "repositoryArchitecture"),
+        definition.componentFields().stream().map(UploadFieldDefinition::name).toList());
+    assertEquals(List.of("asset"),
+        definition.assetFields().stream().map(UploadFieldDefinition::name).toList());
+
+    ComponentUploadService.UploadResult result = service.upload(
+        "alpine-hosted",
+        Map.of(
+            "alpine.distribution", new String[] {" v3.23 "},
+            "alpine.channel", new String[] {" main "},
+            "alpine.repositoryArchitecture", new String[] {" x86_64 "}),
+        files("alpine.asset", "demo-1-r0.apk"),
+        "alice", "127.0.0.1");
+
+    assertEquals(List.of(path), result.paths());
+    verify(alpine).publish(
+        any(RepositoryRuntime.class), eq("v3.23"), eq("main"), eq("x86_64"),
+        eq("demo-1-r0.apk"), any(InputStream.class), eq("alice"), eq("127.0.0.1"));
+  }
+
+  @Test
+  void alpineComponentUploadValidatesServiceFilenameAndCoordinates() {
+    RepositoryRuntime runtime = runtime("alpine-hosted", RepositoryFormat.ALPINE);
+    ComponentUploadService unavailable = service(
+        runtime, mock(CargoHostedService.class), mock(PubHostedService.class));
+    Map<String, String[]> fields = Map.of(
+        "alpine.distribution", new String[] {"v3.23"},
+        "alpine.channel", new String[] {"main"},
+        "alpine.repositoryArchitecture", new String[] {"x86_64"});
+    assertEquals("Alpine upload service is unavailable", assertThrows(
+        UploadValidationException.class,
+        () -> unavailable.upload(runtime.name(), fields,
+            files("alpine.asset", "demo.apk"), "alice", "ip")).getMessage());
+
+    ComponentUploadService service = service(mock(AlpineService.class));
+    assertEquals("Alpine upload requires an .apk package", assertThrows(
+        UploadValidationException.class,
+        () -> service.upload(runtime.name(), fields,
+            files("alpine.asset", "demo.tar.gz"), "alice", "ip")).getMessage());
+    assertTrue(assertThrows(UploadValidationException.class,
+        () -> service.upload(runtime.name(), Map.of(),
+            files("alpine.asset", "demo.apk"), "alice", "ip"))
+        .getMessage().contains("distribution"));
+  }
 
   @Test
   void aptComponentUploadUsesNexusCompatibleSingleAssetFieldAndSharedImporter() throws Exception {
@@ -691,6 +750,14 @@ class ComponentUploadServiceTest {
     ComponentUploadService service = service(
         runtime, mock(CargoHostedService.class), mock(PubHostedService.class));
     service.setAptService(aptService);
+    return service;
+  }
+
+  private static ComponentUploadService service(AlpineService alpineService) {
+    RepositoryRuntime runtime = runtime("alpine-hosted", RepositoryFormat.ALPINE);
+    ComponentUploadService service = service(
+        runtime, mock(CargoHostedService.class), mock(PubHostedService.class));
+    service.setAlpineService(alpineService);
     return service;
   }
 

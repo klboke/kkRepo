@@ -15,10 +15,9 @@ import tarfile
 
 
 PACKAGE_RE = re.compile(r"[a-z0-9][a-z0-9+_.-]{0,127}\Z")
-VERSION_RE = re.compile(
-    r"[0-9]+(?:[._-]?[0-9a-z]+)*(?:_(?:alpha|beta|pre|rc|cvs|svn|git|hg|p)[0-9]*)?"
-    r"(?:~[0-9a-fA-F]+)?(?:-r[0-9]+)?\Z"
-)
+# This fixture only needs a bounded lexical guard; apk-tools remains the semantic oracle for
+# ordering. A flat character class keeps validation linear even for adversarial CLI input.
+VERSION_RE = re.compile(r"[0-9][0-9A-Za-z._+~-]{0,127}\Z")
 ARCH_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}\Z")
 GZIP_MAGIC = b"\x1f\x8b"
 

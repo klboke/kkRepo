@@ -21,6 +21,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.time.Instant;
 import java.util.List;
@@ -111,6 +112,108 @@ class AlpineRepositoryDataMigrationWriterTest {
     assertFalse(AlpineRepositoryDataMigrationWriter.isMigratableAlpinePath(null));
     assertFalse(AlpineRepositoryDataMigrationWriter.isMigratableAlpinePath(
         "v3.23/main/x86_64/demo.apk/extra"));
+  }
+
+  @Test
+  void rejectsUnavailableTargetsAndEverySourceIdentityMismatch() throws Exception {
+    AlpineTestPackage.Fixture fixture = AlpineTestPackage.apk("demo", "1.0-r0", "x86_64");
+    String path = "v3.23/main/x86_64/demo-1.0-r0.apk";
+    String sha256 = AlpineTestPackage.sha256(fixture.bytes());
+
+    InputStream wrongTypeBody = mock(InputStream.class);
+    assertThrows(IllegalArgumentException.class, () -> writer.write(
+        repository(RepositoryFormat.ALPINE, RepositoryType.PROXY),
+        source(path, null, null, null, Map.of()), wrongTypeBody, false));
+    verify(wrongTypeBody).close();
+
+    when(runtimes.resolveById(1L)).thenReturn(Optional.empty());
+    assertThrows(IllegalArgumentException.class, () -> writer.write(
+        repository(RepositoryFormat.ALPINE, RepositoryType.HOSTED),
+        source(path, null, null, null, Map.of()),
+        new ByteArrayInputStream(fixture.bytes()), false));
+    when(runtimes.resolveById(1L)).thenReturn(Optional.of(runtime));
+
+    assertThrows(IllegalStateException.class, () -> writer.write(
+        repository(RepositoryFormat.ALPINE, RepositoryType.HOSTED),
+        source(path, "demo", "1.0-r0", (long) fixture.bytes().length + 1,
+            Map.of("sha256", sha256)), new ByteArrayInputStream(fixture.bytes()), true));
+    assertThrows(IllegalStateException.class, () -> writer.write(
+        repository(RepositoryFormat.ALPINE, RepositoryType.HOSTED),
+        source(path, "demo", "1.0-r0", null, Map.of("sha256", "0".repeat(64))),
+        new ByteArrayInputStream(fixture.bytes()), false));
+    assertThrows(IllegalStateException.class, () -> writer.write(
+        repository(RepositoryFormat.ALPINE, RepositoryType.HOSTED),
+        source(path, "demo", "2.0-r0", null, Map.of("sha256", sha256)),
+        new ByteArrayInputStream(fixture.bytes()), false));
+  }
+
+  @Test
+  void rejectsMissingProjectionAssetBlobAndChecksumBindings() throws Exception {
+    AlpineTestPackage.Fixture fixture = AlpineTestPackage.apk("demo", "1.0-r0", "x86_64");
+    String path = "v3.23/main/x86_64/demo-1.0-r0.apk";
+    String sha256 = AlpineTestPackage.sha256(fixture.bytes());
+    when(service.restoreHostedPackageForMigration(
+        eq(runtime), any(), any(), any(), any()))
+        .thenReturn(new AlpineService.PublishedPackage(
+            path, "demo", "1.0-r0", "x86_64", "Q1" + "A".repeat(27) + "=",
+            sha256, fixture.bytes().length));
+    RepositoryDataMigrationAssetRecord source = source(
+        path, "demo", "1.0-r0", null, Map.of("checksum.sha256", sha256));
+
+    when(registry.findPackageByPath(1L, path)).thenReturn(Optional.empty());
+    assertThrows(IllegalStateException.class, () -> writer.write(
+        repository(RepositoryFormat.ALPINE, RepositoryType.HOSTED), source,
+        new ByteArrayInputStream(fixture.bytes()), false));
+
+    when(registry.findPackageByPath(1L, path)).thenReturn(Optional.of(
+        record(path, sha256, fixture.bytes().length, null, 20L)));
+    assertThrows(IllegalStateException.class, () -> writer.write(
+        repository(RepositoryFormat.ALPINE, RepositoryType.HOSTED), source,
+        new ByteArrayInputStream(fixture.bytes()), false));
+
+    when(registry.findPackageByPath(1L, path)).thenReturn(Optional.of(
+        record(path, sha256, fixture.bytes().length, 10L, 20L)));
+    when(assets.findAssetById(10L)).thenReturn(Optional.empty());
+    assertThrows(IllegalStateException.class, () -> writer.write(
+        repository(RepositoryFormat.ALPINE, RepositoryType.HOSTED), source,
+        new ByteArrayInputStream(fixture.bytes()), false));
+
+    when(assets.findAssetById(10L)).thenReturn(Optional.of(asset(10L, null)));
+    assertThrows(IllegalStateException.class, () -> writer.write(
+        repository(RepositoryFormat.ALPINE, RepositoryType.HOSTED), source,
+        new ByteArrayInputStream(fixture.bytes()), false));
+
+    when(assets.findAssetById(10L)).thenReturn(Optional.of(asset(10L, 30L)));
+    when(assets.findBlobById(30L)).thenReturn(Optional.of(blob(30L, "0".repeat(64))));
+    assertThrows(IllegalStateException.class, () -> writer.write(
+        repository(RepositoryFormat.ALPINE, RepositoryType.HOSTED), source,
+        new ByteArrayInputStream(fixture.bytes()), false));
+  }
+
+  @Test
+  void wrapsMigrationBodyCloseFailureAfterSuccessfulRestore() throws Exception {
+    AlpineTestPackage.Fixture fixture = AlpineTestPackage.apk("demo", "1.0-r0", "x86_64");
+    String path = "v3.23/main/x86_64/demo-1.0-r0.apk";
+    String sha256 = AlpineTestPackage.sha256(fixture.bytes());
+    when(service.restoreHostedPackageForMigration(
+        eq(runtime), any(), any(), any(), any()))
+        .thenReturn(new AlpineService.PublishedPackage(
+            path, "demo", "1.0-r0", "x86_64", "Q1" + "A".repeat(27) + "=",
+            sha256, fixture.bytes().length));
+    when(registry.findPackageByPath(1L, path)).thenReturn(Optional.of(
+        record(path, sha256, fixture.bytes().length, 10L, 20L)));
+    when(assets.findAssetById(10L)).thenReturn(Optional.of(asset(10L, 30L)));
+    when(assets.findBlobById(30L)).thenReturn(Optional.of(blob(30L, sha256)));
+    InputStream body = new ByteArrayInputStream(fixture.bytes()) {
+      @Override
+      public void close() throws IOException {
+        throw new IOException("fixture close failure");
+      }
+    };
+
+    assertThrows(IllegalStateException.class, () -> writer.write(
+        repository(RepositoryFormat.ALPINE, RepositoryType.HOSTED),
+        source(path, "demo", "1.0-r0", null, Map.of("sha256", sha256)), body, false));
   }
 
   private static RepositoryRuntime runtime() {
