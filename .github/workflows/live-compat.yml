@@ -53,7 +53,6 @@ on:
           - swift
           - ansible
           - apt
-          - alpine
           - full
   schedule:
     - cron: "0 19 * * *"
@@ -180,7 +179,7 @@ jobs:
       COMPOSE_FILE: docker-compose.compat-postgres.yml
       COMPOSE_PROJECT_NAME: kkrepo-compat
       LIVE_COMPAT_SUITE: ${{ (inputs.runtime == 'native' && 'client-e2e') || inputs.suite || 'client-e2e' }}
-      NEXUS_COMPAT_IMAGE: ${{ ((inputs.runtime == 'native') || inputs.suite == 'client-e2e' || inputs.suite == 'nexus' || inputs.suite == 'swift' || inputs.suite == 'ansible' || inputs.suite == 'apt' || inputs.suite == 'alpine' || inputs.suite == 'full' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && 'sonatype/nexus3:3.94.0' || 'sonatype/nexus3:3.92.0' }}
+      NEXUS_COMPAT_IMAGE: ${{ ((inputs.runtime == 'native') || inputs.suite == 'client-e2e' || inputs.suite == 'nexus' || inputs.suite == 'swift' || inputs.suite == 'ansible' || inputs.suite == 'apt' || inputs.suite == 'full' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && 'sonatype/nexus3:3.94.0' || 'sonatype/nexus3:3.92.0' }}
       PUB_COMPAT_ENABLED: "true"
       COMPAT_ASSET_RAW_REPOSITORY: asset-api-raw-hosted
       COMPOSER_COMPAT_ENABLED: "true"

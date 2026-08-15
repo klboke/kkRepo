@@ -76,8 +76,8 @@ Alpine/APK 兼容性面向 Nexus 3.94.x。`AlpineRepositoryBlackBoxCompatibility
 签名 hosted 仓库，对比 raw APK v2 上传、签名 `APKINDEX.tar.gz`、官方 compressed control
 member `Q1` identity、package bytes、validator、Range、Browse 和 Search。真实客户端矩阵使用
 apk-tools 2.x/3.x，覆盖带认证 hosted/group 的 update、search、policy、fetch、add、upgrade、删除、
-proxy passthrough 与双副本 metadata 精确字节。执行 `scripts/ci/run-live-compat.sh alpine`；精确环境
-变量见 [compat-test README](../../compat-test/README.md)。
+proxy passthrough 与双副本 metadata 精确字节。Alpine 覆盖直接并入现有 Nexus compatibility 与
+真实客户端矩阵；精确环境变量见 [compat-test README](../../compat-test/README.md)。
 
 验证证据保持在对应层级：compatibility black box 覆盖 active/revoked/expired `GenericToken`，server/persistence test 覆盖 moving tag 不可变性、1,200 tag 分页上界、cleanup 和 429/5xx 传播。定时 Swift resilience lane 使用双副本和通过 AWS S3-compatible adapter 访问的 MinIO，验证多 MiB package、共享 429/5xx 水位与 stale fallback、lease takeover、restart 和破坏式关系数据库/object 备份恢复。阿里云 OSS Native 引擎有 adapter contract 覆盖，但不声称已运行真实 endpoint E2E。
 

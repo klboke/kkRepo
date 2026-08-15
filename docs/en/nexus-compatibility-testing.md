@@ -77,8 +77,9 @@ creates isolated signed hosted repositories and compares raw APK v2 upload, sign
 `APKINDEX.tar.gz`, official compressed-control-member `Q1` identity, package bytes, validators,
 Range, Browse, and Search. The real-client matrix runs apk-tools 2.x and 3.x through authenticated
 hosted/group update, search, policy, fetch, add, upgrade, delete, proxy passthrough, and
-byte-identical dual-replica metadata. Enable it with `scripts/ci/run-live-compat.sh alpine`; exact
-variables are documented in [compat-test README](../../compat-test/README.md).
+byte-identical dual-replica metadata. Alpine coverage is part of the existing Nexus compatibility
+and real-client matrices; exact variables are documented in
+[compat-test README](../../compat-test/README.md).
 
 Evidence stays at the appropriate layer: the compatibility black box covers active/revoked/expired `GenericToken` behavior, while server/persistence tests cover moving-tag immutability, 1,200-tag pagination bounds, cleanup, and 429/5xx propagation. The scheduled Swift resilience lane uses two replicas and MinIO through the AWS S3-compatible adapter to exercise a multi-megabyte package, shared 429/5xx waterlines with stale fallback, lease takeover, restart, and destructive relational-database/object backup-restore. Alibaba OSS Native has adapter-contract coverage but no live endpoint E2E claim.
 

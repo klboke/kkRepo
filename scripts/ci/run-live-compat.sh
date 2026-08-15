@@ -82,10 +82,6 @@ case "$SUITE" in
     export APT_COMPAT_ENABLED=true
     run_tests "AptRepositoryBlackBoxCompatibilityTest"
     ;;
-  alpine|apk)
-    export ALPINE_COMPAT_ENABLED=true
-    run_tests "AlpineRepositoryBlackBoxCompatibilityTest"
-    ;;
   conan)
     export CONAN_COMPAT_ENABLED=true
     run_tests "ConanRepositoryBlackBoxCompatibilityTest"
@@ -107,7 +103,7 @@ case "$SUITE" in
     ;;
   *)
     echo "Unknown live compatibility suite: $SUITE" >&2
-    echo "Available suites: smoke, write-smoke, extended, nexus, client-e2e, swift, ansible, apt, alpine, conan, full" >&2
+    echo "Available suites: smoke, write-smoke, extended, nexus, client-e2e, swift, ansible, apt, conan, full" >&2
     exit 2
     ;;
 esac
