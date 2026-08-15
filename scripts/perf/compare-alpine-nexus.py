@@ -304,6 +304,10 @@ def run_client_pair(
     return {
         "Nexus": nexus,
         "kkRepo": candidate,
+        "samples_ms": {
+            name: [round(value, 3) for value in values]
+            for name, values in samples.items()
+        },
         "p95_ratio": round(candidate["p95_ms"] / nexus["p95_ms"], 3),
     }
 
@@ -319,6 +323,35 @@ def markdown(report: dict[str, Any]) -> str:
             f"{item['throughput_ratio']:.3f}x | {item['nexus_p95_ms']:.3f} ms | "
             f"{item['kkrepo_p95_ms']:.3f} ms | {item['p95_ratio']:.3f}x |"
         )
+    lines.extend([
+        "",
+        "| Scenario | Target | req/s | MiB/s | p50 RT | p95 RT | p99 RT | max RT |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ])
+    for item in report["results"]:
+        measurement = item["measurement"]
+        lines.append(
+            f"| {item['scenario']} | {item['target']} | "
+            f"{measurement['requests_per_second']:.2f} | "
+            f"{measurement['mebibytes_per_second']:.2f} | "
+            f"{measurement['p50_ms']:.3f} ms | {measurement['p95_ms']:.3f} ms | "
+            f"{measurement['p99_ms']:.3f} ms | {measurement['maximum_ms']:.3f} ms |"
+        )
+    if report["apk_client"]:
+        client = report["apk_client"]
+        lines.extend([
+            "",
+            "| apk client | p50 RT | p95 RT | Samples |",
+            "| --- | ---: | ---: | --- |",
+        ])
+        for target in ("Nexus", "kkRepo"):
+            samples = ", ".join(
+                f"{value:.3f} ms" for value in client["samples_ms"][target]
+            )
+            lines.append(
+                f"| {target} | {client[target]['p50_ms']:.3f} ms | "
+                f"{client[target]['p95_ms']:.3f} ms | {samples} |"
+            )
     return "\n".join(lines) + "\n"
 
 
