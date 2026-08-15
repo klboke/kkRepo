@@ -53,6 +53,7 @@ on:
           - swift
           - ansible
           - apt
+          - alpine
           - full
   schedule:
     - cron: "0 19 * * *"
@@ -179,13 +180,14 @@ jobs:
       COMPOSE_FILE: docker-compose.compat-postgres.yml
       COMPOSE_PROJECT_NAME: kkrepo-compat
       LIVE_COMPAT_SUITE: ${{ (inputs.runtime == 'native' && 'client-e2e') || inputs.suite || 'client-e2e' }}
-      NEXUS_COMPAT_IMAGE: ${{ ((inputs.runtime == 'native') || inputs.suite == 'client-e2e' || inputs.suite == 'nexus' || inputs.suite == 'swift' || inputs.suite == 'ansible' || inputs.suite == 'apt' || inputs.suite == 'full' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && 'sonatype/nexus3:3.94.0' || 'sonatype/nexus3:3.92.0' }}
+      NEXUS_COMPAT_IMAGE: ${{ ((inputs.runtime == 'native') || inputs.suite == 'client-e2e' || inputs.suite == 'nexus' || inputs.suite == 'swift' || inputs.suite == 'ansible' || inputs.suite == 'apt' || inputs.suite == 'alpine' || inputs.suite == 'full' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && 'sonatype/nexus3:3.94.0' || 'sonatype/nexus3:3.92.0' }}
       PUB_COMPAT_ENABLED: "true"
       COMPAT_ASSET_RAW_REPOSITORY: asset-api-raw-hosted
       COMPOSER_COMPAT_ENABLED: "true"
       SWIFT_KKREPO_SECONDARY_BASE_URL: http://127.0.0.1:18094
       ANSIBLE_KKREPO_SECONDARY_BASE_URL: http://127.0.0.1:18094
       APT_KKREPO_SECONDARY_BASE_URL: http://127.0.0.1:18094
+      ALPINE_KKREPO_SECONDARY_BASE_URL: http://127.0.0.1:18094
       SWIFT_COMPAT_PROXY_VERSION: "1.6.3"
       SWIFT_COMPAT_REQUIRE_PROXY_TAG_CASES: "true"
       SWIFT_COMPAT_PROXY_TAG_CASES: MaestriHub/shared-modules/v0.3.8/0.3.8,MaestriHub/shared-modules/V0.3.7/0.3.7
@@ -838,6 +840,7 @@ jobs:
       SWIFT_COMPAT_ENABLED: "true"
       SWIFT_COMPAT_PROXY_ENABLED: "true"
       APT_COMPAT_ENABLED: "true"
+      ALPINE_COMPAT_ENABLED: "true"
       SWIFT_KKREPO_SECONDARY_BASE_URL: http://127.0.0.1:18094
       SWIFT_COMPAT_PROXY_VERSION: "1.6.3"
       SWIFT_COMPAT_REQUIRE_PROXY_TAG_CASES: "true"

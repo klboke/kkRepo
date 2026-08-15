@@ -8,6 +8,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AlpineRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
@@ -76,6 +77,7 @@ public class BrowseAssetDetailService {
   private AnsibleGalaxyRegistryDao ansibleDao;
   private CondaRegistryDao condaDao;
   private AptRegistryDao aptDao;
+  private AlpineRegistryDao alpineDao;
   private BrowseNodeDao browseNodeDao;
   private ConanRegistryDao conanDao;
   private final BlobStorageRegistry blobStorageRegistry;
@@ -112,6 +114,11 @@ public class BrowseAssetDetailService {
   @Autowired(required = false)
   void setAptRegistryDao(AptRegistryDao aptDao) {
     this.aptDao = aptDao;
+  }
+
+  @Autowired(required = false)
+  void setAlpineRegistryDao(AlpineRegistryDao alpineDao) {
+    this.alpineDao = alpineDao;
   }
 
   @Autowired(required = false)
@@ -219,6 +226,9 @@ public class BrowseAssetDetailService {
     Map<String, Object> apt = source.format() == RepositoryFormat.APT
         ? aptAttributes(source, asset)
         : Map.of();
+    Map<String, Object> alpine = source.format() == RepositoryFormat.ALPINE
+        ? alpineAttributes(source, asset)
+        : Map.of();
     Map<String, Object> swift = source.format() == RepositoryFormat.SWIFT
         ? swiftAttributes(source, asset)
         : Map.of();
@@ -261,6 +271,7 @@ public class BrowseAssetDetailService {
         composer,
         conda,
         apt,
+        alpine,
         swift,
         ansible,
         provenance);
@@ -341,6 +352,52 @@ public class BrowseAssetDetailService {
       }
     }
     return Collections.unmodifiableMap(apt);
+  }
+
+  private Map<String, Object> alpineAttributes(
+      RepositoryRecord source, AssetRecord asset) {
+    if (alpineDao == null) return Map.of();
+    AlpineRegistryDao.PackageRecord record = alpineDao.findPackageByPath(source.id(), asset.path())
+        .orElseThrow(() -> new ResponseStatusException(
+            HttpStatus.NOT_FOUND, "Alpine package identity not found"));
+    if (record.assetId() != null && !record.assetId().equals(asset.id())) {
+      throw new ResponseStatusException(
+          HttpStatus.CONFLICT, "Alpine package asset does not match registry state");
+    }
+    LinkedHashMap<String, Object> alpine = new LinkedHashMap<>();
+    put(alpine, "namespace", record.distribution());
+    put(alpine, "distribution", alpineDistribution(record.distribution()));
+    put(alpine, "channel", record.component());
+    put(alpine, "repository_architecture", record.architecture());
+    put(alpine, "package_architecture", record.packageArchitecture());
+    put(alpine, "package", record.packageName());
+    put(alpine, "version", record.version());
+    put(alpine, "filename", record.filename());
+    put(alpine, "identity", record.identity());
+    put(alpine, "data_sha256", record.dataSha256());
+    put(alpine, "sha256", record.sha256());
+    put(alpine, "size", record.size());
+    put(alpine, "source_kind", record.sourceKind());
+    put(alpine, "source_repository", source.name());
+    put(alpine, "revision", record.revision());
+    put(alpine, "indexed_at", record.indexedAt());
+    Map<String, String> names = Map.of(
+        "T", "description",
+        "U", "url",
+        "L", "license",
+        "o", "origin",
+        "m", "maintainer",
+        "D", "depends",
+        "p", "provides",
+        "i", "install_if");
+    names.forEach((field, name) -> put(alpine, name, record.controlFields().get(field)));
+    return Collections.unmodifiableMap(alpine);
+  }
+
+  private static String alpineDistribution(String namespace) {
+    if (namespace == null) return null;
+    int slash = namespace.indexOf('/');
+    return slash < 0 ? namespace : namespace.substring(0, slash);
   }
 
   private Map<String, Object> ansibleAttributes(
@@ -501,6 +558,7 @@ public class BrowseAssetDetailService {
           Map.of(),
           Map.of(),
           Map.of(),
+          Map.of(),
           swiftReleaseAttributes(source, row),
           Map.of(),
           Map.of("dynamic", true, "hashes_not_verified", false)));
@@ -594,6 +652,7 @@ public class BrowseAssetDetailService {
           null,
           Map.copyOf(checksum),
           Map.of("generated", true, "format", "swift-manifest-browse"),
+          Map.of(),
           Map.of(),
           Map.of(),
           Map.of(),
@@ -745,6 +804,7 @@ public class BrowseAssetDetailService {
         Map.of(),
         Map.of(),
         Map.of(),
+        Map.of(),
         provenance);
   }
 
@@ -769,6 +829,7 @@ public class BrowseAssetDetailService {
         null,
         Map.of(),
         content,
+        Map.of(),
         Map.of(),
         Map.of(),
         Map.of(),
@@ -935,6 +996,22 @@ public class BrowseAssetDetailService {
         if (projected.isPresent() && segments[5].equals(projected.orElseThrow().filename())) {
           return new ResolvedStoragePath(
               projected.orElseThrow().path(), sourceRepositoryName);
+        }
+      }
+    }
+    if (visibleRepository.format() == RepositoryFormat.ALPINE && alpineDao != null) {
+      String[] segments = normalized.split("/", -1);
+      if (segments.length == 6) {
+        String namespace;
+        try {
+          namespace = AlpineRegistryDao.namespace(segments[0], segments[1], segments[2]);
+        } catch (IllegalArgumentException invalid) {
+          return new ResolvedStoragePath(normalized, sourceRepositoryName);
+        }
+        Optional<AlpineRegistryDao.PackageRecord> projected = alpineDao.findPackage(
+            visibleRepository.id(), namespace, segments[1], segments[3], segments[4], segments[2]);
+        if (projected.isPresent() && segments[5].equals(projected.orElseThrow().filename())) {
+          return new ResolvedStoragePath(projected.orElseThrow().path(), sourceRepositoryName);
         }
       }
     }
@@ -1514,6 +1591,7 @@ public class BrowseAssetDetailService {
       Map<String, Object> composer,
       Map<String, Object> conda,
       Map<String, Object> apt,
+      Map<String, Object> alpine,
       Map<String, Object> swift,
       Map<String, Object> ansible,
       Map<String, Object> provenance) {}

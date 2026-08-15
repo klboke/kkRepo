@@ -64,6 +64,9 @@ public final class RepositoryRecipes {
       new RepositoryRecipe("conan-group", RepositoryFormat.CONAN, RepositoryType.GROUP),
       new RepositoryRecipe("apt-hosted", RepositoryFormat.APT, RepositoryType.HOSTED),
       new RepositoryRecipe("apt-proxy", RepositoryFormat.APT, RepositoryType.PROXY),
+      new RepositoryRecipe("alpine-hosted", RepositoryFormat.ALPINE, RepositoryType.HOSTED),
+      new RepositoryRecipe("alpine-proxy", RepositoryFormat.ALPINE, RepositoryType.PROXY),
+      new RepositoryRecipe("alpine-group", RepositoryFormat.ALPINE, RepositoryType.GROUP),
       new RepositoryRecipe("raw-hosted", RepositoryFormat.RAW, RepositoryType.HOSTED),
       new RepositoryRecipe("raw-proxy", RepositoryFormat.RAW, RepositoryType.PROXY),
       new RepositoryRecipe("raw-group", RepositoryFormat.RAW, RepositoryType.GROUP));

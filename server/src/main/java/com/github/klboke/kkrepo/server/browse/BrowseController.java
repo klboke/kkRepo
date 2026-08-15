@@ -282,7 +282,8 @@ public class BrowseController {
           .orElseThrow(() -> new ResponseStatusException(
               HttpStatus.CONFLICT, "Conan Browse asset is missing its typed identity"));
     }
-    if (format == RepositoryFormat.APT && assetDao != null && row.assetId() != null) {
+    if ((format == RepositoryFormat.APT || format == RepositoryFormat.ALPINE)
+        && assetDao != null && row.assetId() != null) {
       return assetDao.findAssetById(row.assetId())
           .filter(asset -> asset.repositoryId() == sourceRepository.id())
           .map(asset -> asset.path())

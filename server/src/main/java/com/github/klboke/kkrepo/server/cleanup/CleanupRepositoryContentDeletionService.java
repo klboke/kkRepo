@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.cleanup;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.server.apt.AptService;
+import com.github.klboke.kkrepo.server.alpine.AlpineService;
 import com.github.klboke.kkrepo.server.browse.BrowseContentDeleteController;
 import com.github.klboke.kkrepo.server.browse.RepositoryContentDeletionService;
 import com.github.klboke.kkrepo.server.browse.RepositoryContentDeletionService.CleanupDeleteSubject;
@@ -25,6 +26,7 @@ public class CleanupRepositoryContentDeletionService
   private final NpmHostedService npmHosted;
   private final AptService aptService;
   private ConanService conanService;
+  private AlpineService alpineService;
 
   public CleanupRepositoryContentDeletionService(
       BrowseContentDeleteController browseDeletion,
@@ -42,6 +44,11 @@ public class CleanupRepositoryContentDeletionService
   @Autowired(required = false)
   void setConanService(ConanService conanService) {
     this.conanService = conanService;
+  }
+
+  @Autowired(required = false)
+  void setAlpineService(AlpineService alpineService) {
+    this.alpineService = alpineService;
   }
 
   @Override
@@ -96,6 +103,15 @@ public class CleanupRepositoryContentDeletionService
         && runtime.type() == RepositoryType.HOSTED
         && subjects.stream().allMatch(subject -> "COMPONENT".equals(subject.subjectKind()))) {
       return aptService.deleteComponentsForCleanup(
+          runtime,
+          subjects.stream().map(CleanupDeleteSubject::subjectId).toList(),
+          "cleanup policy delete by " + actorId);
+    }
+    if (runtime.format() == RepositoryFormat.ALPINE
+        && alpineService != null
+        && runtime.type() == RepositoryType.HOSTED
+        && subjects.stream().allMatch(subject -> "COMPONENT".equals(subject.subjectKind()))) {
+      return alpineService.deleteComponentsForCleanup(
           runtime,
           subjects.stream().map(CleanupDeleteSubject::subjectId).toList(),
           "cleanup policy delete by " + actorId);

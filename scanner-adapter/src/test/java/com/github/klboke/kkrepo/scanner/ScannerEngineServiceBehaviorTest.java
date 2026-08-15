@@ -128,6 +128,45 @@ class ScannerEngineServiceBehaviorTest {
   }
 
   @Test
+  void catalogsApkThroughBoundedPayloadAndIdentitySidecars() throws Exception {
+    Fixture fixture = new Fixture(temporaryDirectory.resolve("alpine"));
+    when(fixture.scannerInput.copy(any(), any(), eq(SHA256), eq(8L), any(), any()))
+        .thenAnswer(invocation -> {
+          Path path = invocation.getArgument(1);
+          Files.write(path, "artifact".getBytes());
+          return new ScannerInput.Verified(path, SHA256, 8);
+        });
+    Path scanRoot = temporaryDirectory.resolve("prepared-alpine");
+    when(fixture.alpinePackages.prepare(any(), any(), any(), any()))
+        .thenReturn(new AlpinePackageCataloger.Prepared(
+            scanRoot, "demo", "1.0-r0", "x86_64",
+            "Q1" + "A".repeat(27) + "=", "b".repeat(64), 3, 128));
+    when(fixture.documents.catalog(any(), anyString(), anyString(), anyString(), any()))
+        .thenReturn(alpineCatalog());
+
+    CatalogResponse response = fixture.engine.catalog(
+        new ByteArrayInputStream("artifact".getBytes()),
+        SHA256,
+        8,
+        ScannerArtifactType.APK,
+        limits());
+
+    assertEquals(1, response.componentCount());
+    verify(fixture.archiveGuard, never()).inspect(any(), any(), any(), any());
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<String>> command = ArgumentCaptor.forClass(List.class);
+    verify(fixture.processes).run(command.capture(), any(), any(), any(), any());
+    assertTrue(command.getValue().contains("dir:" + scanRoot));
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<Map<String, Object>> summary = ArgumentCaptor.forClass(Map.class);
+    verify(fixture.documents).catalog(
+        any(), eq(SHA256), eq("1.2"), anyString(), summary.capture());
+    assertEquals("alpine-apk-v2", summary.getValue().get("inputSchema"));
+    assertEquals("demo", summary.getValue().get("alpineName"));
+    assertEquals(3, summary.getValue().get("archiveEntries"));
+  }
+
+  @Test
   void catalogsConanMultipartThroughThePreparedPackageRoot() throws Exception {
     Fixture fixture = new Fixture(temporaryDirectory.resolve("conan"));
     Path archive = temporaryDirectory.resolve("conan-package.tgz");
@@ -401,6 +440,24 @@ class ScannerEngineServiceBehaviorTest {
         "{\"bomFormat\":\"CycloneDX\"}".getBytes(), List.of(component), Map.of());
   }
 
+  private static CatalogResponse alpineCatalog() {
+    Component component = new Component(
+        "apk-ref",
+        null,
+        "library",
+        null,
+        "demo",
+        "1.0-r0",
+        "UNKNOWN",
+        List.of("lib/apk/db/installed"),
+        List.of(),
+        Map.of("syft:package:type", "apk"));
+    return new CatalogResponse(
+        "adapter", "1", "syft", "1.2", "cap", SHA256,
+        ScanCompleteness.COMPLETE, "CycloneDX", "1.5", 1, 0,
+        "{\"bomFormat\":\"CycloneDX\"}".getBytes(), List.of(component), Map.of());
+  }
+
   private static MatchResponse match() {
     return new MatchResponse(
         "adapter", "1", "grype", "2.3", "db-1", NOW, "cap",
@@ -413,6 +470,7 @@ class ScannerEngineServiceBehaviorTest {
     final ScannerInput scannerInput = mock(ScannerInput.class);
     final ArchiveGuard archiveGuard = mock(ArchiveGuard.class);
     final CondaPackageCataloger condaPackages = mock(CondaPackageCataloger.class);
+    final AlpinePackageCataloger alpinePackages = mock(AlpinePackageCataloger.class);
     final ConanMultipartInput conanMultipart = mock(ConanMultipartInput.class);
     final ConanPackageCataloger conanPackages = mock(ConanPackageCataloger.class);
     final OciRegistryStager ociRegistryStager = mock(OciRegistryStager.class);
@@ -482,6 +540,7 @@ class ScannerEngineServiceBehaviorTest {
           scannerInput,
           archiveGuard,
           condaPackages,
+          alpinePackages,
           conanMultipart,
           conanPackages,
           ociRegistryStager,

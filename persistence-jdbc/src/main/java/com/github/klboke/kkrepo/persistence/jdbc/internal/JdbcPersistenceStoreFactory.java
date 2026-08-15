@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.persistence.jdbc.internal;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AlpineRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ArtifactChangeDao;
@@ -59,6 +60,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
   public static PersistenceStores createStores(JdbcTemplate jdbc, DatabaseDialect dialect) {
     JsonColumns json = new JsonColumns(new ObjectMapper(), dialect);
     return new DefaultPersistenceStores(
+        new JdbcAlpineRegistryDao(jdbc, json, dialect),
         new JdbcAptRegistryDao(jdbc, json, dialect),
         new JdbcAnsibleGalaxyRegistryDao(jdbc, json, dialect),
         new JdbcArtifactChangeDao(jdbc),
@@ -94,6 +96,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
   }
 
   private record DefaultPersistenceStores(
+      AlpineRegistryDao alpineRegistry,
       AptRegistryDao aptRegistry,
       AnsibleGalaxyRegistryDao ansibleGalaxyRegistry,
       ArtifactChangeDao artifactChanges,

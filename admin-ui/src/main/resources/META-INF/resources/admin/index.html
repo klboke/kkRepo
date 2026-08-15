@@ -387,6 +387,77 @@
                 </div>
               </div>
             </fieldset>
+            <fieldset class="form-grid" id="repository-alpine-fields" hidden>
+              <legend>Alpine / APK v2 settings</legend>
+              <label>
+                <span>Distributions <span class="required-mark">*</span></span>
+                <input id="repository-alpine-distributions" type="text" value="v3.23" placeholder="v3.23, edge">
+              </label>
+              <label>
+                <span>Channels <span class="required-mark">*</span></span>
+                <input id="repository-alpine-channels" type="text" value="main" placeholder="main, community">
+              </label>
+              <label>
+                <span>Architectures <span class="required-mark">*</span></span>
+                <input id="repository-alpine-architectures" type="text" value="x86_64, aarch64" placeholder="x86_64, aarch64">
+              </label>
+              <label>
+                <span>Metadata mode</span>
+                <select id="repository-alpine-metadata-mode">
+                  <option value="PASSTHROUGH">Passthrough upstream signature</option>
+                  <option value="RESIGN">Verify and sign locally</option>
+                </select>
+              </label>
+              <label>
+                <span>Public key filename</span>
+                <input id="repository-alpine-key-filename" type="text" value="kkrepo-alpine.rsa.pub" maxlength="192">
+              </label>
+              <label>
+                <span>Signature type</span>
+                <select id="repository-alpine-signature-type">
+                  <option value="RSA">RSA / SHA-1 compatibility</option>
+                  <option value="RSA256">RSA / SHA-256</option>
+                  <option value="RSA512">RSA / SHA-512</option>
+                </select>
+              </label>
+              <label class="full-width">
+                <span>Description</span>
+                <input id="repository-alpine-description" type="text" value="kkRepo Alpine repository" maxlength="255">
+              </label>
+              <label class="checkbox-field" id="repository-alpine-verify-field">
+                <input id="repository-alpine-verify-upstream" type="checkbox">
+                <span>Verify upstream index signature before projection</span>
+              </label>
+              <label class="checkbox-field" id="repository-alpine-stale-field">
+                <input id="repository-alpine-stale-if-error" type="checkbox" checked>
+                <span>Serve last verified index when upstream fails</span>
+              </label>
+              <label class="full-width" id="repository-alpine-upstream-key-field">
+                <span>Upstream trust entry</span>
+                <textarea id="repository-alpine-upstream-public-key" rows="5" autocomplete="off" placeholder="filename=upstream.rsa.pub&#10;-----BEGIN PUBLIC KEY-----"></textarea>
+              </label>
+              <p class="form-note full-width">
+                This generation serves APK v2 <code>APKINDEX.tar.gz</code>. Hosted and group
+                repositories publish fenced, atomic signed snapshots. Proxy passthrough preserves
+                upstream bytes; re-signing requires the upstream public key above.
+              </p>
+              <div class="full-width" id="repository-alpine-operations" hidden>
+                <div class="muted-row" id="repository-alpine-status">Alpine status not loaded.</div>
+                <div class="form-actions">
+                  <button class="create-button secondary" id="repository-alpine-refresh-status" type="button">Refresh status</button>
+                  <button class="create-button secondary" id="repository-alpine-rebuild" type="button">Rebuild index</button>
+                  <button class="create-button secondary" id="repository-alpine-download-key" type="button">Download public key</button>
+                </div>
+                <label class="full-width">
+                  <span>PKCS#8 RSA private key</span>
+                  <textarea id="repository-alpine-private-key" rows="5" autocomplete="off" placeholder="-----BEGIN PRIVATE KEY-----"></textarea>
+                </label>
+                <div class="form-actions">
+                  <button class="create-button secondary" id="repository-alpine-rotate-key" type="button">Import / rotate signing key</button>
+                  <button class="create-button secondary" id="repository-alpine-generate-key" type="button">Generate / rotate signing key</button>
+                </div>
+              </div>
+            </fieldset>
             <fieldset class="form-grid" id="repository-group-fields" hidden>
               <legend>Group members</legend>
               <div class="full-width member-transfer" id="member-transfer">

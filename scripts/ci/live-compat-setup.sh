@@ -858,6 +858,76 @@ ensure_kkrepo_repositories() {
     }
   }'
 
+  kkrepo_create_repo "alpine-hosted" '{
+    "name":"alpine-hosted",
+    "recipe":"alpine-hosted",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "hosted":{"writePolicy":"ALLOW"},
+    "alpine":{
+      "distributions":["v3.23"],
+      "channels":["main"],
+      "architectures":["x86_64","aarch64"],
+      "metadataMode":"RESIGN",
+      "verifyUpstreamSignatures":true,
+      "staleIfError":true,
+      "keyFilename":"kkrepo-alpine.rsa.pub",
+      "signatureType":"RSA",
+      "description":"kkRepo Alpine client E2E",
+      "upstreamPublicKeys":[]
+    }
+  }'
+
+  kkrepo_create_repo "alpine-proxy" '{
+    "name":"alpine-proxy",
+    "recipe":"alpine-proxy",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "proxy":{
+      "remoteUrl":"https://dl-cdn.alpinelinux.org/alpine/",
+      "contentMaxAgeMinutes":1440,
+      "metadataMaxAgeMinutes":60,
+      "negativeCacheEnabled":true,
+      "negativeCacheTtlMinutes":5,
+      "autoBlock":true
+    },
+    "alpine":{
+      "distributions":["v3.23"],
+      "channels":["main"],
+      "architectures":["x86_64","aarch64"],
+      "metadataMode":"PASSTHROUGH",
+      "verifyUpstreamSignatures":false,
+      "staleIfError":true,
+      "keyFilename":"kkrepo-alpine-proxy.rsa.pub",
+      "signatureType":"RSA",
+      "description":"Alpine CDN proxy",
+      "upstreamPublicKeys":[]
+    }
+  }'
+
+  kkrepo_create_repo "alpine-group" '{
+    "name":"alpine-group",
+    "recipe":"alpine-group",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "group":{"memberNames":["alpine-hosted"]},
+    "alpine":{
+      "distributions":["v3.23"],
+      "channels":["main"],
+      "architectures":["x86_64","aarch64"],
+      "metadataMode":"RESIGN",
+      "verifyUpstreamSignatures":true,
+      "staleIfError":true,
+      "keyFilename":"kkrepo-alpine-group.rsa.pub",
+      "signatureType":"RSA",
+      "description":"kkRepo Alpine group",
+      "upstreamPublicKeys":[]
+    }
+  }'
+
   kkrepo_create_repo "terraform-hosted" '{
     "name":"terraform-hosted",
     "recipe":"terraform-hosted",

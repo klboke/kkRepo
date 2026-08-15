@@ -12,6 +12,7 @@ import static org.mockito.Mockito.verify;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AlpineRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
@@ -27,6 +28,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CargoSettings;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.AlpineSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.AptSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CreateCommand;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.DockerSettings;
@@ -46,6 +48,34 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 class RepositoryServiceTest {
+
+  @Test
+  void alpineResignProxyCanStayOfflineUntilUpstreamTrustIsConfigured() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+    AlpineSettings staged = new AlpineSettings(
+        List.of("v3.23"), List.of("main"), List.of("x86_64"),
+        "RESIGN", true, true, "alpine-proxy.rsa.pub", "RSA", "Migrated", List.of());
+
+    RepositoryView created = service.create(new CreateCommand(
+        "alpine-proxy", "alpine-proxy", false, "default", true,
+        null, new ProxySettings("https://dl-cdn.alpinelinux.org/alpine/", 60, 30, true),
+        null, null, null, null, null, staged));
+
+    assertEquals(false, created.online());
+    assertEquals("RESIGN", created.alpine().metadataMode());
+    assertEquals(List.of(), created.alpine().upstreamPublicKeys());
+    assertThrows(RepositoryValidationException.class, () -> service.update(
+        "alpine-proxy",
+        new UpdateCommand(true, null, null, null, null, null, null, null, null, null, null)));
+
+    RepositoryView activated = service.update("alpine-proxy", new UpdateCommand(
+        true, null, null, null, null, null, null, null, null, null,
+        new AlpineSettings(null, null, null, null, null, null, null, null, null,
+            List.of("-----BEGIN PUBLIC KEY-----\nfixture\n-----END PUBLIC KEY-----"))));
+    assertEquals(true, activated.online());
+    assertEquals(1, activated.alpine().upstreamPublicKeys().size());
+  }
 
   @Test
   void aptHostedDefaultsRoundTripAndInitializeDurableSuite() {

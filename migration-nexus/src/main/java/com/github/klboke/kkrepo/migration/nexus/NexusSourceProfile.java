@@ -35,6 +35,8 @@ public record NexusSourceProfile(
   private static final int CONAN_MIGRATION_MAX_MINOR = 94;
   private static final int APT_MIGRATION_MIN_MINOR = 92;
   private static final int APT_MIGRATION_MAX_MINOR = 94;
+  private static final int ALPINE_MIGRATION_MIN_MINOR = 94;
+  private static final int ALPINE_MIGRATION_MAX_MINOR = 94;
 
   public NexusSourceProfile {
     scriptApi = scriptApi == null ? ScriptApiProfile.unknown() : scriptApi;
@@ -223,12 +225,15 @@ public record NexusSourceProfile(
           && (!"conan".equals(format)
               || conanContentModelSupported(probedNexusVersion, contentModel))
           && (!"apt".equals(format)
-              || aptContentModelSupported(probedNexusVersion, contentModel));
+              || aptContentModelSupported(probedNexusVersion, contentModel))
+          && (!"alpine".equals(format)
+              || alpineContentModelSupported(probedNexusVersion, contentModel));
       boolean content = config
           && ((metadataEngine == MetadataEngine.ORIENTDB
                   && !"cargo".equals(format) && !"pub".equals(format)
                   && !"swift".equals(format) && !"ansiblegalaxy".equals(format)
-                  && !"conda".equals(format) && !"conan".equals(format))
+                  && !"conda".equals(format) && !"conan".equals(format)
+                  && !"alpine".equals(format))
               || ((metadataEngine == MetadataEngine.DATASTORE_H2
                   || metadataEngine == MetadataEngine.DATASTORE_POSTGRESQL)
                   && datastoreContent));
@@ -314,6 +319,14 @@ public record NexusSourceProfile(
           && !aptFormatShapeSupported(contentModel.formatShape())) {
         return "apt-content-shape-incomplete";
       }
+      if ("alpine".equals(format)
+          && !knownAlpineMigrationVersion(probedNexusVersion)) {
+        return "alpine-source-version-unverified";
+      }
+      if ("alpine".equals(format)
+          && !alpineFormatShapeSupported(contentModel.formatShape())) {
+        return "alpine-content-shape-incomplete";
+      }
       return "datastore-content-schema-incomplete";
     }
     return "configuration-only";
@@ -381,6 +394,13 @@ public record NexusSourceProfile(
         && conanFormatShapeSupported(contentModel.formatShape());
   }
 
+  private static boolean alpineContentModelSupported(
+      String probedNexusVersion,
+      ContentModelFingerprint contentModel) {
+    return knownAlpineMigrationVersion(probedNexusVersion)
+        && alpineFormatShapeSupported(contentModel.formatShape());
+  }
+
   private static boolean knownSwiftMigrationVersion(String version) {
     return knownMigrationVersion(version, SWIFT_MIGRATION_MIN_MINOR, SWIFT_MIGRATION_MAX_MINOR);
   }
@@ -399,6 +419,11 @@ public record NexusSourceProfile(
 
   private static boolean knownConanMigrationVersion(String version) {
     return knownMigrationVersion(version, CONAN_MIGRATION_MIN_MINOR, CONAN_MIGRATION_MAX_MINOR);
+  }
+
+  private static boolean knownAlpineMigrationVersion(String version) {
+    return knownMigrationVersion(
+        version, ALPINE_MIGRATION_MIN_MINOR, ALPINE_MIGRATION_MAX_MINOR);
   }
 
   private static boolean knownMigrationVersion(String version, int minimumMinor, int maximumMinor) {
@@ -457,6 +482,14 @@ public record NexusSourceProfile(
         && bool(shape.get("revisionAssetPath"), false)
         && bool(shape.get("manifestObserved"), false)
         && bool(shape.get("sha1Checksum"), false);
+  }
+
+  private static boolean alpineFormatShapeSupported(Map<String, Object> shape) {
+    return shape != null
+        && bool(shape.get("packageAssetPath"), false)
+        && bool(shape.get("alpineAssetAttributes"), false)
+        && bool(shape.get("componentIdentity"), false)
+        && bool(shape.get("sha256Checksum"), false);
   }
 
   private static Map<String, Object> attributesFingerprint(RepositoryDocument document) {

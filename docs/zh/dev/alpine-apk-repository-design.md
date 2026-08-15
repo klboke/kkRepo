@@ -4,7 +4,9 @@
 
 ## 当前支持状态与落地结论
 
-截至 2026-08-14，Alpine / APK 仍处于设计阶段：当前代码尚未注册 `RepositoryFormat.ALPINE`、`alpine-hosted`、`alpine-proxy`、`alpine-group` 或 `protocol-alpine`，路线图也不能标记为完成。
+截至 2026-08-15，本文定义的 APK v2 第一阶段能力已经落地：代码已注册 `RepositoryFormat.ALPINE`、`alpine-hosted`、`alpine-proxy`、`alpine-group` 和独立 `protocol-alpine`，并接入双数据库持久化、签名不可变 snapshot、Admin/Browse/Search、UI/Components API 上传、Cleanup/扫描、Nexus definition/content migration、真实客户端与多副本协调。路线图同步调整为“已实现”；使用方法见 [Alpine / APK 仓库使用指南](../repository-guides/alpine-apk.md)，性能门禁与复现方法见 [Alpine / APK 性能基线](alpine-performance-baseline.md)。
+
+落地验证还固定了 Nexus 3.94 的一个 checksum 差异：它可能为 unsigned upload 生成 data member 的 Q1，导致其自身 apk-tools v2 fetch 完整性校验失败。kkRepo 以官方 apk-tools 行为为协议真相，以原始压缩 control member 计算 `C:Q1`。Index `A:` 必须写 URL namespace 的 repository architecture，因为 `apk` 用它拼接 package 下载路径；原始 `.PKGINFO` architecture 另行持久化并在 Browse/搜索中展示。
 
 落地结论如下：
 
@@ -150,7 +152,7 @@ Path 约束：
 1. 先保存原始 bytes 到受限 spool，同时计算 SHA-256、size 和 gzip member boundaries；不在请求线程把 package 读入 heap。
 2. 识别 signature/control/data 三段。每段都校验 gzip EOF、tar header、entry count、声明 size、重复 entry 和尾随垃圾。
 3. Control 段只接受一个 `.PKGINFO`，并有界读取 name、version、arch、description、url、license、origin、maintainer、build time、installed size、depends、provides、install-if、provider priority、commit 和 datahash。
-4. 按 apk-tools v2 算法从 multipart 中规定的 control identity bytes 计算 `C` checksum；同时保存 whole-blob SHA-256。二者用途不同，不能互相替代。
+4. 按 apk-tools v2 算法从 raw compressed control gzip member 计算 `C` 的 `Q1`/SHA-1 identity，并独立校验 `.PKGINFO` 中 raw compressed data gzip member 的 SHA-256 `datahash`；同时保存 whole-blob SHA-256。三者用途不同，不能互相替代。
 5. 校验 name/version grammar、APK version、filename、route namespace、datahash、signature entry 形状和 package total size；未知字段原样保留在有界 canonical metadata，不自动变成 SQL column 或 metric label。
 6. Data 段只做安全结构检查和扫描输入准备；拒绝 absolute/dot path、重复 entry、device/FIFO、越界 symlink/hardlink、稀疏文件放大、超限 xattr/PAX、压缩炸弹和截断流。
 7. 识别到 ADB/APK v3 时返回明确 unsupported generation，不把它送入 v2 parser。

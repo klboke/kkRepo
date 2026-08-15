@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.cleanup;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyVersions;
 import com.github.klboke.kkrepo.protocol.apt.DebianVersions;
+import com.github.klboke.kkrepo.protocol.alpine.AlpineVersions;
 import com.github.klboke.kkrepo.protocol.cargo.CargoVersions;
 import com.github.klboke.kkrepo.protocol.conda.CondaVersions;
 import com.github.klboke.kkrepo.protocol.conan.ConanVersions;
@@ -33,6 +34,7 @@ public class CleanupPolicyCapabilities {
     comparators.put(RepositoryFormat.CONDA, CondaVersions.COMPARATOR);
     comparators.put(RepositoryFormat.CONAN, ConanVersions.comparator());
     comparators.put(RepositoryFormat.APT, DebianVersions::compare);
+    comparators.put(RepositoryFormat.ALPINE, AlpineVersions.COMPARATOR);
     this.versionComparators = Map.copyOf(comparators);
   }
 

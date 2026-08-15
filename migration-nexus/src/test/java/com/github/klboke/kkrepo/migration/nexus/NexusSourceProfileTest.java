@@ -46,6 +46,13 @@ class NexusSourceProfileTest {
       "sha256Checksum", true,
       "inspectedAssetCount", 2,
       "packageAssetCount", 1);
+  private static final Map<String, Object> VERIFIED_ALPINE_SHAPE = Map.of(
+      "packageAssetPath", true,
+      "alpineAssetAttributes", true,
+      "componentIdentity", true,
+      "sha256Checksum", true,
+      "inspectedAssetCount", 2,
+      "packageAssetCount", 1);
 
   @Test
   void enablesSwiftHostedContentOnlyForKnownNexusVersionsAndVerifiedShape() {
@@ -212,6 +219,35 @@ class NexusSourceProfileTest {
     }
   }
 
+  @Test
+  void enablesAlpineContentOnlyForExactNexus394Shape() {
+    NexusSourceProfile profile = alpineProfile("3.94.0-01", VERIFIED_ALPINE_SHAPE);
+
+    assertTrue(profile.formatCapabilities().get("alpine").contentMigration());
+    assertEquals(SupportStatus.FULL, alpineHostedStatus(profile));
+  }
+
+  @Test
+  void unknownVersionOrDriftedShapeKeepsAlpineMigrationManual() {
+    for (String version : List.of("unknown", "3.93.1-01", "3.95.0-01", "4.0.0")) {
+      NexusSourceProfile profile = alpineProfile(version, VERIFIED_ALPINE_SHAPE);
+      assertFalse(profile.formatCapabilities().get("alpine").contentMigration(), version);
+      assertEquals("alpine-source-version-unverified",
+          profile.formatCapabilities().get("alpine").evidence(), version);
+      assertEquals(SupportStatus.NEEDS_MANUAL_ACTION, alpineHostedStatus(profile), version);
+    }
+    for (String missing : List.of(
+        "packageAssetPath", "alpineAssetAttributes", "componentIdentity", "sha256Checksum")) {
+      Map<String, Object> drifted = new LinkedHashMap<>(VERIFIED_ALPINE_SHAPE);
+      drifted.remove(missing);
+      NexusSourceProfile profile = alpineProfile("3.94.0-01", drifted);
+      assertFalse(profile.formatCapabilities().get("alpine").contentMigration(), missing);
+      assertEquals("alpine-content-shape-incomplete",
+          profile.formatCapabilities().get("alpine").evidence(), missing);
+      assertEquals(SupportStatus.NEEDS_MANUAL_ACTION, alpineHostedStatus(profile), missing);
+    }
+  }
+
   private static SupportStatus hostedStatus(NexusSourceProfile profile) {
     return new MigrationPlanBuilder().build(
             profile, new MigrationScope(List.of("swift-hosted"), false, false))
@@ -260,6 +296,58 @@ class NexusSourceProfileTest {
         .findFirst()
         .orElseThrow()
         .status();
+  }
+
+  private static SupportStatus alpineHostedStatus(NexusSourceProfile profile) {
+    return new MigrationPlanBuilder().build(
+            profile, new MigrationScope(List.of("alpine-hosted"), false, false))
+        .items().stream()
+        .filter(item -> "alpine-hosted".equals(item.name()))
+        .findFirst()
+        .orElseThrow()
+        .status();
+  }
+
+  private static NexusSourceProfile alpineProfile(
+      String probedVersion,
+      Map<String, Object> formatShape) {
+    SourceProbe probe = new SourceProbe(
+        probedVersion,
+        true,
+        true,
+        true,
+        "text/plain",
+        "ok",
+        "DATASTORE_POSTGRESQL",
+        "PostgreSQL",
+        "jdbc:postgresql://nexus/nexus",
+        Map.of("datastoreContentModels", Map.of("alpine", Map.of(
+            "prefix", "ALPINE",
+            "tablesPresent", true,
+            "requiredColumnsPresent", true,
+            "tables", Map.of(
+                "contentRepository", "ALPINE_CONTENT_REPOSITORY",
+                "asset", "ALPINE_ASSET",
+                "assetBlob", "ALPINE_ASSET_BLOB",
+                "component", "ALPINE_COMPONENT"),
+            "columns", Map.of(),
+            "formatShape", formatShape))),
+        List.of());
+    RepositoryDocument repository = new RepositoryDocument(
+        Map.of(
+            "name", "alpine-hosted",
+            "format", "alpine",
+            "type", "hosted",
+            "online", true),
+        Map.of("storage", Map.of("blobStoreName", "default")));
+    return NexusSourceProfile.fromInventory(
+        new NexusInventory(
+            List.of(Map.of("name", "default", "type", "File")),
+            List.of(repository),
+            NexusSecurityExport.empty(),
+            List.of(),
+            probe),
+        null);
   }
 
   private static NexusSourceProfile conanProfile(

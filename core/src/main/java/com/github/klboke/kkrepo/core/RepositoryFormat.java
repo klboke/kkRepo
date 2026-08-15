@@ -23,6 +23,7 @@ public enum RepositoryFormat {
   CONDA,
   CONAN,
   APT,
+  ALPINE,
   RAW;
 
   @JsonCreator

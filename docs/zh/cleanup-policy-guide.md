@@ -16,7 +16,7 @@
   metadata、index 和 cache。
 - 当前全部格式都支持 Try Run、手动执行和定时执行。只有已经验证协议版本比较器的 Maven、
   Cargo/Rust、Dart/Pub、Terraform、Swift Package Registry、Ansible Galaxy、Conda 和
-  APT/Debian 支持
+  APT/Debian、Alpine/APK 支持
   **保留最新版本**规则。
 - 实际执行不可逆。kkRepo 当前没有 Cleanup 专属恢复窗口，因此生产环境启用删除前应准备并验证
   数据库与 blob store 备份。
@@ -28,6 +28,13 @@ architecture asset。**保留最新版本**在每个 package family 内使用 De
 删除会 tombstone component 选中的全部 architecture，并且每个受影响 distribution 只同步发布
 一次。新完整 snapshot 生效前继续读取上一套签名 snapshot；保留的 by-hash 历史决定已删 package
 blob 何时可以进入 GC 候选。APT proxy 清理只移除本地缓存内容。
+
+Alpine 的一个清理 subject 是一个可安装的
+`(distribution, channel, repository architecture, package, version)` build。**保留最新版本**
+在每个 package family 内使用 apk-tools 排序，包括 suffix 与 `-rN` revision。Hosted 删除会写
+tombstone 并发布新的完整签名 `APKINDEX.tar.gz`；保留的不可变 snapshot 继续 pin 在途客户端所需
+的 package blob。Proxy 清理只移除本地缓存 package bytes，并保留后续重新回源所需的已验证上游
+inventory。
 
 ## 规则组合语义
 

@@ -42,6 +42,7 @@ public class ScannerEngineService {
   private final ScannerInput scannerInput;
   private final ArchiveGuard archiveGuard;
   private final CondaPackageCataloger condaPackages;
+  private final AlpinePackageCataloger alpinePackages;
   private final ConanMultipartInput conanMultipart;
   private final ConanPackageCataloger conanPackages;
   private final OciRegistryStager ociRegistryStager;
@@ -56,6 +57,7 @@ public class ScannerEngineService {
       ScannerInput scannerInput,
       ArchiveGuard archiveGuard,
       CondaPackageCataloger condaPackages,
+      AlpinePackageCataloger alpinePackages,
       ConanMultipartInput conanMultipart,
       ConanPackageCataloger conanPackages,
       OciRegistryStager ociRegistryStager,
@@ -66,6 +68,7 @@ public class ScannerEngineService {
     this.scannerInput = scannerInput;
     this.archiveGuard = archiveGuard;
     this.condaPackages = condaPackages;
+    this.alpinePackages = alpinePackages;
     this.conanMultipart = conanMultipart;
     this.conanPackages = conanPackages;
     this.ociRegistryStager = ociRegistryStager;
@@ -79,7 +82,7 @@ public class ScannerEngineService {
         "syft-grype-v1",
         Long.toString(properties.getMaxInputBytes()),
         Long.toString(properties.getMaxOutputBytes()),
-        "catalog", "match", "oci-scan", "cancel", "conda-meta-v1",
+        "catalog", "match", "oci-scan", "cancel", "conda-meta-v1", "alpine-apk-v2",
         "conan-package-multipart-v1"));
     return new Capabilities(
         ScannerContract.API_VERSION,
@@ -152,9 +155,16 @@ public class ScannerEngineService {
           scannerInput.copy(
               input, artifact, expectedSha256, expectedSize, effectiveLimits, deadline);
       boolean conda = safeType == ScannerArtifactType.CONDA;
-      ArchiveGuard.Inspection inspection = conda
-          ? archiveGuard.inspectConda(artifact, effectiveLimits, workspace, deadline)
-          : archiveGuard.inspect(artifact, effectiveLimits, workspace, deadline);
+      boolean alpine = safeType == ScannerArtifactType.APK;
+      AlpinePackageCataloger.Prepared alpinePackage = alpine
+          ? alpinePackages.prepare(artifact, effectiveLimits, workspace, deadline)
+          : null;
+      ArchiveGuard.Inspection inspection = alpine
+          ? new ArchiveGuard.Inspection(
+              alpinePackage.entries(), alpinePackage.expandedBytes(), 0)
+          : conda
+              ? archiveGuard.inspectConda(artifact, effectiveLimits, workspace, deadline)
+              : archiveGuard.inspect(artifact, effectiveLimits, workspace, deadline);
       CondaPackageCataloger.Prepared condaPackage = conda
           ? condaPackages.prepare(
               artifact, safeType, effectiveLimits, workspace, deadline, inspection.condaIndex())
@@ -167,7 +177,9 @@ public class ScannerEngineService {
           List.of(
               properties.getSyftExecutable(),
               "scan",
-              conda ? "dir:" + condaPackage.scanRoot() : artifact.toString(),
+              conda
+                  ? "dir:" + condaPackage.scanRoot()
+                  : alpine ? "dir:" + alpinePackage.scanRoot() : artifact.toString(),
               "--output",
               "cyclonedx-json"),
           workspace,
@@ -188,6 +200,14 @@ public class ScannerEngineService {
         summary.put("condaBuild", condaPackage.build());
         summary.put("condaSubdir", condaPackage.subdir());
       }
+      if (alpinePackage != null) {
+        summary.put("inputSchema", "alpine-apk-v2");
+        summary.put("alpineName", alpinePackage.name());
+        summary.put("alpineVersion", alpinePackage.version());
+        summary.put("alpineArchitecture", alpinePackage.architecture());
+        summary.put("alpineIdentity", alpinePackage.identity());
+        summary.put("alpineDataSha256", alpinePackage.dataSha256());
+      }
       CatalogResponse response = documents.catalog(
           cyclonedx,
           verified.sha256(),
@@ -196,6 +216,9 @@ public class ScannerEngineService {
           summary);
       if (condaPackage != null) {
         requireCondaComponent(response, condaPackage);
+      }
+      if (alpinePackage != null) {
+        requireAlpineComponent(response, alpinePackage);
       }
       deadline.check();
       return response;
@@ -284,6 +307,22 @@ public class ScannerEngineService {
       throw new ScannerRequestException(
           "CONDA_CATALOG_EMPTY",
           "Syft did not identify the expected Conda package metadata",
+          422,
+          false);
+    }
+  }
+
+  private static void requireAlpineComponent(
+      CatalogResponse response, AlpinePackageCataloger.Prepared expected) {
+    boolean found = response.components().stream().anyMatch(component ->
+        expected.name().equals(component.name())
+            && expected.version().equals(component.version())
+            && "apk".equalsIgnoreCase(String.valueOf(
+                component.properties().get("syft:package:type"))));
+    if (!found) {
+      throw new ScannerRequestException(
+          "ALPINE_CATALOG_EMPTY",
+          "Syft did not identify the expected Alpine package metadata",
           422,
           false);
     }

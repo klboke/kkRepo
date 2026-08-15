@@ -5,6 +5,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AlpineRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
@@ -29,6 +30,7 @@ import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
 import com.github.klboke.kkrepo.server.cache.NexusCacheType;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.apt.AptService;
+import com.github.klboke.kkrepo.server.alpine.AlpineService;
 import com.github.klboke.kkrepo.server.conda.CondaBrowsePaths;
 import com.github.klboke.kkrepo.server.conda.CondaService;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
@@ -86,6 +88,8 @@ public class BrowseContentDeleteController {
   private RepositoryRuntimeRegistry runtimeRegistry;
   private AptRegistryDao aptRegistry;
   private AptService aptService;
+  private AlpineRegistryDao alpineRegistry;
+  private AlpineService alpineService;
   private CondaService condaService;
 
   public BrowseContentDeleteController(
@@ -138,6 +142,16 @@ public class BrowseContentDeleteController {
     this.runtimeRegistry = runtimeRegistry;
     this.aptRegistry = aptRegistry;
     this.aptService = aptService;
+  }
+
+  @Autowired(required = false)
+  void setAlpineDeleteSupport(
+      RepositoryRuntimeRegistry runtimeRegistry,
+      AlpineRegistryDao alpineRegistry,
+      AlpineService alpineService) {
+    this.runtimeRegistry = runtimeRegistry;
+    this.alpineRegistry = alpineRegistry;
+    this.alpineService = alpineService;
   }
 
   @DeleteMapping("/{repository}")
@@ -218,6 +232,20 @@ public class BrowseContentDeleteController {
         }
         return deleteAuthorized(repository, publicPath, repository, actorId).deletedAssets();
       }
+      if (target.format() == RepositoryFormat.ALPINE) {
+        Object assetPath = component.attributes() == null
+            ? null : component.attributes().get("assetPath");
+        String publicPath = assetPath == null ? path : assetPath.toString();
+        if (publicPath == null || publicPath.isBlank()) {
+          List<AssetRecord> componentAssets = assetDao.listAssetsByComponent(component.id());
+          if (componentAssets.isEmpty()) {
+            throw new ResponseStatusException(
+                HttpStatus.NOT_FOUND, "Cleanup component has no assets: " + subjectId);
+          }
+          publicPath = componentAssets.getFirst().path();
+        }
+        return deleteAuthorized(repository, publicPath, repository, actorId).deletedAssets();
+      }
       if (target.format() == RepositoryFormat.TERRAFORM
           && "terraform-provider".equals(component.kind())) {
         terraformRegistryDao.deleteProviderVersion(
@@ -240,7 +268,8 @@ public class BrowseContentDeleteController {
           .orElseThrow(() -> new ResponseStatusException(
               HttpStatus.NOT_FOUND, "Cleanup asset was not found: " + subjectId));
       if (target.format() == RepositoryFormat.CONDA
-          || target.format() == RepositoryFormat.APT) {
+          || target.format() == RepositoryFormat.APT
+          || target.format() == RepositoryFormat.ALPINE) {
         return deleteAuthorized(repository, asset.path(), repository, actorId).deletedAssets();
       }
       return deleteResolvedAssets(
@@ -281,6 +310,9 @@ public class BrowseContentDeleteController {
     if (requested.format() == RepositoryFormat.APT) {
       storagePath = aptStoragePath(requested, publicPath);
     }
+    if (requested.format() == RepositoryFormat.ALPINE) {
+      storagePath = alpineStoragePath(requested, publicPath);
+    }
     String resolvedSourceRepository = sourceRepository;
     if (requested.format() == RepositoryFormat.TERRAFORM) {
       Optional<TerraformBrowseAssetPathResolver.ResolvedStoragePath> resolved =
@@ -307,6 +339,10 @@ public class BrowseContentDeleteController {
     if (target.format() == RepositoryFormat.APT
         && target.type() == RepositoryType.HOSTED) {
       return deleteAptPackage(requested, target, publicPath, storagePath, actorId);
+    }
+    if (target.format() == RepositoryFormat.ALPINE
+        && target.type() == RepositoryType.HOSTED) {
+      return deleteAlpinePackage(requested, target, publicPath, storagePath, actorId);
     }
     List<AssetRecord> assets = matchingAssets(target, storagePath);
     if (assets.isEmpty()) {
@@ -451,6 +487,54 @@ public class BrowseContentDeleteController {
             repository.id(), segments[0], segments[1], segments[2], segments[3], segments[4])
         .filter(record -> segments[5].equals(record.filename()))
         .map(AptRegistryDao.PackageRecord::path)
+        .orElse(publicPath);
+  }
+
+  private BrowseDeleteResult deleteAlpinePackage(
+      RepositoryRecord requested,
+      RepositoryRecord target,
+      String publicPath,
+      String storagePath,
+      String actorId) {
+    if (runtimeRegistry == null || alpineService == null) {
+      throw new ResponseStatusException(
+          HttpStatus.SERVICE_UNAVAILABLE, "Alpine delete service is unavailable");
+    }
+    RepositoryRuntime runtime = runtimeRegistry.resolveById(target.id())
+        .filter(candidate -> candidate.format() == RepositoryFormat.ALPINE
+            && candidate.type() == RepositoryType.HOSTED)
+        .orElseThrow(() -> new ResponseStatusException(
+            HttpStatus.CONFLICT, "Alpine repository runtime is unavailable"));
+    MavenResponse response = alpineService.delete(
+        runtime, storagePath, "administrative delete by " + actorId, false);
+    if (response.status() == 404) {
+      throw new ResponseStatusException(
+          HttpStatus.NOT_FOUND, "Alpine package state was not found");
+    }
+    if (response.status() != 204) {
+      throw new ResponseStatusException(
+          HttpStatus.CONFLICT, "Alpine package could not be deleted");
+    }
+    return new BrowseDeleteResult(requested.name(), target.name(), publicPath, 1);
+  }
+
+  private String alpineStoragePath(RepositoryRecord repository, String publicPath) {
+    if (alpineRegistry == null) return publicPath;
+    Optional<AlpineRegistryDao.PackageRecord> direct =
+        alpineRegistry.findPackageByPath(repository.id(), publicPath);
+    if (direct.isPresent()) return direct.orElseThrow().path();
+    String[] segments = publicPath.split("/", -1);
+    if (segments.length != 6) return publicPath;
+    String namespace;
+    try {
+      namespace = AlpineRegistryDao.namespace(segments[0], segments[1], segments[2]);
+    } catch (IllegalArgumentException invalid) {
+      return publicPath;
+    }
+    return alpineRegistry.findPackage(
+            repository.id(), namespace, segments[1], segments[3], segments[4], segments[2])
+        .filter(record -> segments[5].equals(record.filename()))
+        .map(AlpineRegistryDao.PackageRecord::path)
         .orElse(publicPath);
   }
 

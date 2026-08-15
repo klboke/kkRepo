@@ -33,6 +33,7 @@ import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.blob.BlobTransactionCleanup;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyRepositoryDataMigrationWriter;
+import com.github.klboke.kkrepo.server.alpine.AlpineRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.apt.AptRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.conda.CondaRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.conan.ConanRepositoryDataMigrationWriter;
@@ -83,6 +84,7 @@ class RepositoryDataMigrationWriter {
   private final AnsibleGalaxyRepositoryDataMigrationWriter ansibleMigrationWriter;
   private CondaRepositoryDataMigrationWriter condaMigrationWriter;
   private AptRepositoryDataMigrationWriter aptMigrationWriter;
+  private AlpineRepositoryDataMigrationWriter alpineMigrationWriter;
   private ConanRepositoryDataMigrationWriter conanMigrationWriter;
   private final TransientTransactionRetry transactionRetry;
   private final MavenPathParser mavenPathParser = new MavenPathParser();
@@ -212,6 +214,11 @@ class RepositoryDataMigrationWriter {
   }
 
   @Autowired(required = false)
+  void setAlpineMigrationWriter(AlpineRepositoryDataMigrationWriter alpineMigrationWriter) {
+    this.alpineMigrationWriter = alpineMigrationWriter;
+  }
+
+  @Autowired(required = false)
   void setConanMigrationWriter(ConanRepositoryDataMigrationWriter conanMigrationWriter) {
     this.conanMigrationWriter = conanMigrationWriter;
   }
@@ -276,6 +283,16 @@ class RepositoryDataMigrationWriter {
         throw new IllegalStateException("APT migration writer is not configured");
       }
       AptRepositoryDataMigrationWriter.MigratedAsset migrated = aptMigrationWriter.write(
+          repository, source, body, validateSize);
+      return new WriteResult(
+          migrated.componentId(), migrated.assetId(), migrated.assetBlobId(),
+          migrated.assetBlobObjectKey());
+    }
+    if (repository.format() == RepositoryFormat.ALPINE) {
+      if (alpineMigrationWriter == null) {
+        throw new IllegalStateException("Alpine migration writer is not configured");
+      }
+      AlpineRepositoryDataMigrationWriter.MigratedAsset migrated = alpineMigrationWriter.write(
           repository, source, body, validateSize);
       return new WriteResult(
           migrated.componentId(), migrated.assetId(), migrated.assetBlobId(),
@@ -935,6 +952,8 @@ class RepositoryDataMigrationWriter {
               || source.sourcePath().endsWith("conan_package.tzst")
           ? "conan-package" : "conan-revision-file";
       case APT -> source.sourcePath().endsWith(".deb") ? "apt-package" : "apt-metadata";
+      case ALPINE -> source.sourcePath().endsWith(".apk")
+          ? "alpine-package" : "alpine-metadata";
       case RAW -> "asset";
     };
   }

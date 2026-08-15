@@ -809,6 +809,75 @@ class NexusApiMigrationServiceTest {
   }
 
   @Test
+  void requiresExplicitAlpineRsaKeyImportAndKeepsLocalSignersOffline() {
+    FakeBlobStoreDao blobStores = new FakeBlobStoreDao();
+    FakeRepositoryDao repositories = new FakeRepositoryDao();
+    FakeMigrationJobDao migrationJobs = new FakeMigrationJobDao();
+    NexusApiMigrationService service = new NexusApiMigrationService(
+        new ObjectMapper(),
+        blobStores.asDao(),
+        repositories.asDao(),
+        null,
+        migrationJobs,
+        noopSecurityWriter());
+    String privateKey = "-----BEGIN PRIVATE KEY-----\nfixture\n-----END PRIVATE KEY-----";
+    NexusInventory inventory = new NexusInventory(
+        List.of(Map.of("name", "default")),
+        List.of(
+            repository("alpine-hosted", "alpine", "hosted", Map.of(
+                "storage", storage("default"),
+                "alpine", Map.of(
+                    "distributions", List.of("v3.23"),
+                    "channels", List.of("main"),
+                    "architectures", List.of("x86_64")),
+                "alpineSigning", Map.of(
+                    "keypair", privateKey, "keyFilename", "source.rsa.pub"))),
+            repository("alpine-resign", "alpine", "proxy", Map.of(
+                "storage", storage("default"),
+                "alpineSigning", Map.of("keypair", privateKey),
+                "proxy", Map.of("remoteUrl", "https://apk.example.invalid/alpine/"))),
+            repository("alpine-passthrough", "alpine", "proxy", Map.of(
+                "storage", storage("default"),
+                "proxy", Map.of("remoteUrl", "https://apk.example.invalid/alpine/"))),
+            repository("alpine-group", "alpine", "group", Map.of(
+                "storage", storage("default"),
+                "alpineSigning", Map.of("keypair", privateKey),
+                "group", Map.of("memberNames", List.of("alpine-hosted"))))),
+        NexusSecurityExport.empty(),
+        List.of());
+
+    NexusMigrationPreflight preflight = service.preflight(
+        inventory,
+        request("https://old-nexus.example").targetBlobStore());
+    NexusApiMigrationService.NexusMigrationResult result = service.migrate(
+        inventory,
+        request("https://old-nexus.example"));
+
+    for (String name : List.of("alpine-hosted", "alpine-resign", "alpine-group")) {
+      assertEquals(SupportStatus.NEEDS_MANUAL_ACTION, status(preflight, name));
+      assertTrue(preflight.migrationPlan().manualActions().contains("repository:" + name));
+      assertFalse(repositories.required(name).online());
+    }
+    assertTrue(repositories.required("alpine-passthrough").online());
+    assertEquals("finished_with_manual_actions", result.status());
+    assertTrue(result.validation().manualActions().contains("repository/Alpine signing keys"));
+    assertEquals("RESIGN", ((Map<?, ?>) repositories.required("alpine-hosted")
+        .attributes().get("alpine")).get("metadataMode"));
+    assertEquals("RESIGN", ((Map<?, ?>) repositories.required("alpine-resign")
+        .attributes().get("alpine")).get("metadataMode"));
+    assertEquals("PASSTHROUGH", ((Map<?, ?>) repositories.required("alpine-passthrough")
+        .attributes().get("alpine")).get("metadataMode"));
+    Map<?, ?> migrated = (Map<?, ?>) repositories.required("alpine-hosted")
+        .attributes().get("alpine");
+    assertEquals(List.of("v3.23"), migrated.get("distributions"));
+    assertEquals("source.rsa.pub", migrated.get("keyFilename"));
+    assertEquals(true, migrated.get("verifyUpstreamSignatures"));
+    Map<?, ?> source = (Map<?, ?>) repositories.required("alpine-hosted")
+        .attributes().get("sourceRepository");
+    assertEquals("<redacted>", ((Map<?, ?>) source.get("alpineSigning")).get("keypair"));
+  }
+
+  @Test
   void rollsBackRepositoryAndGroupDefinitionWritesButKeepsFailedJobSummary() {
     FakeBlobStoreDao blobStores = new FakeBlobStoreDao();
     FakeRepositoryDao repositories = new FakeRepositoryDao();

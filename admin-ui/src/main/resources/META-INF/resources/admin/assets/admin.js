@@ -404,6 +404,21 @@ const repositoryRequiredFields = [
     id: "repository-apt-architectures",
     label: "APT architectures",
     required: () => currentRecipe()?.format === "apt"
+  },
+  {
+    id: "repository-alpine-distributions",
+    label: "Alpine distributions",
+    required: () => currentRecipe()?.format === "alpine"
+  },
+  {
+    id: "repository-alpine-channels",
+    label: "Alpine channels",
+    required: () => currentRecipe()?.format === "alpine"
+  },
+  {
+    id: "repository-alpine-architectures",
+    label: "Alpine architectures",
+    required: () => currentRecipe()?.format === "alpine"
   }
 ];
 const securityUserRequiredFields = [
@@ -494,6 +509,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   conda: "conda",
   conan: "conan",
   apt: "apt",
+  alpine: "alpine",
   raw: "raw",
 });
 
@@ -516,6 +532,7 @@ const FORMAT_DISPLAY_NAMES = Object.freeze({
   conda: "Conda",
   conan: "Conan 2",
   apt: "APT / Debian",
+  alpine: "Alpine / APK",
   raw: "Raw",
 });
 
@@ -2126,6 +2143,7 @@ function refreshRepositoryRecipeControls() {
   document.getElementById("repository-conan-operations").hidden =
     format !== "conan" || repositoryFormMode !== "edit";
   document.getElementById("repository-apt-fields").hidden = format !== "apt";
+  document.getElementById("repository-alpine-fields").hidden = format !== "alpine";
   document.getElementById("repository-swift-proxy-note").hidden =
     !(format === "swift" && type === "PROXY");
   const minimumReleaseAgeVisible = format === "npm" && type === "PROXY";
@@ -2135,6 +2153,7 @@ function refreshRepositoryRecipeControls() {
     !minimumReleaseAgeVisible;
   refreshDockerConnectorControls();
   refreshAptControls();
+  refreshAlpineControls();
   document.getElementById("repository-blobstore").closest("label").hidden = false;
   refreshRepositoryBlobStoreLock();
   document.querySelectorAll("#repository-hosted-fields .maven-only").forEach((el) => {
@@ -2168,7 +2187,8 @@ function refreshRepositoryRemoteDefaults(recipe) {
     ansiblegalaxy: "https://galaxy.ansible.com/",
     conda: "https://repo.anaconda.com/pkgs/main/",
     conan: "https://center2.conan.io/",
-    apt: "https://deb.debian.org/debian/"
+    apt: "https://deb.debian.org/debian/",
+    alpine: "https://dl-cdn.alpinelinux.org/alpine/"
   };
   if (recipe.format === "swift") {
     remote.value = defaults.swift;
@@ -2199,6 +2219,26 @@ function refreshAptControls() {
   document.getElementById("repository-apt-label").disabled = !hosted && mode.value !== "RESIGN";
   document.getElementById("repository-apt-operations").hidden =
     !apt || repositoryFormMode !== "edit";
+  updateRequiredMarkers(repositoryRequiredFields);
+}
+
+function refreshAlpineControls() {
+  const recipe = currentRecipe();
+  const alpine = recipe?.format === "alpine";
+  const proxy = alpine && recipe?.type === "PROXY";
+  const locallySigned = alpine && !proxy;
+  const mode = document.getElementById("repository-alpine-metadata-mode");
+  if (locallySigned) mode.value = "RESIGN";
+  mode.disabled = locallySigned;
+  const resignProxy = proxy && mode.value === "RESIGN";
+  document.getElementById("repository-alpine-verify-field").hidden = !proxy;
+  document.getElementById("repository-alpine-stale-field").hidden = !proxy;
+  document.getElementById("repository-alpine-upstream-key-field").hidden = !resignProxy;
+  if (locallySigned || resignProxy) {
+    document.getElementById("repository-alpine-verify-upstream").checked = true;
+  }
+  document.getElementById("repository-alpine-operations").hidden =
+    !alpine || repositoryFormMode !== "edit";
   updateRequiredMarkers(repositoryRequiredFields);
 }
 
@@ -2319,6 +2359,113 @@ async function generateAptSigningKey() {
   }
 }
 
+async function loadAlpineStatus(name = editingRepositoryName) {
+  if (!name) return;
+  const output = document.getElementById("repository-alpine-status");
+  output.textContent = "Loading Alpine status…";
+  try {
+    const response = await fetch(
+      `/internal/repositories/${encodeURIComponent(name)}/alpine/status`);
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    const status = await response.json();
+    const key = status.activeKey
+      ? `${status.activeKey.filename} · ${status.activeKey.fingerprint} · revision ${status.activeKey.revision}`
+      : "no active signing key";
+    const namespaces = Array.isArray(status.namespaces) && status.namespaces.length
+      ? status.namespaces.map((item) => {
+        const failure = item.lastError ? `, last error: ${item.lastError}` : "";
+        return `${item.namespace}: ${item.publishedRevision}/${item.desiredRevision}${failure}`;
+      }).join("; ")
+      : "no signed index snapshot published";
+    const proxies = Array.isArray(status.proxyNamespaces) && status.proxyNamespaces.length
+      ? status.proxyNamespaces.map((item) =>
+        `${item.namespace}: ${item.signatureVerified ? "verified" : "unverified"}`).join("; ")
+      : "";
+    output.textContent = `Key: ${key}. Namespaces: ${namespaces}.${proxies ? ` Upstream: ${proxies}.` : ""}`;
+  } catch (error) {
+    output.textContent = `Unable to load Alpine status: ${error.message}`;
+  }
+}
+
+function firstAlpineNamespace() {
+  const first = (id, fallback) => document.getElementById(id).value
+    .split(",").map((value) => value.trim()).filter(Boolean)[0] || fallback;
+  return [
+    first("repository-alpine-distributions", "v3.23"),
+    first("repository-alpine-channels", "main"),
+    first("repository-alpine-architectures", "x86_64")
+  ].join("/");
+}
+
+async function rebuildAlpineMetadata() {
+  if (!editingRepositoryName) return;
+  const namespace = firstAlpineNamespace();
+  showToast(`Rebuilding Alpine index ${namespace}…`);
+  try {
+    const response = await fetch(
+      `/internal/repositories/${encodeURIComponent(editingRepositoryName)}/alpine/rebuild`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ namespace })
+      });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    showToast("Alpine index rebuilt.", "success");
+    await loadAlpineStatus();
+  } catch (error) {
+    showToast(error.message || "Alpine index rebuild failed.", "error");
+  }
+}
+
+async function rotateAlpineSigningKey(generate = false) {
+  if (!editingRepositoryName) return;
+  const privateKey = document.getElementById("repository-alpine-private-key").value.trim();
+  if (!generate && !privateKey) {
+    showToast("Paste a PKCS#8 RSA private key first.", "error");
+    return;
+  }
+  if (generate && !window.confirm(
+      "Generate a new Alpine signing key and republish every known index?")) return;
+  showToast(generate ? "Generating Alpine signing key…" : "Importing Alpine signing key…");
+  try {
+    const response = await fetch(
+      `/internal/repositories/${encodeURIComponent(editingRepositoryName)}/alpine/signing-key`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          generate,
+          privateKey: generate ? null : privateKey,
+          keyFilename: document.getElementById("repository-alpine-key-filename").value.trim(),
+          signatureType: document.getElementById("repository-alpine-signature-type").value
+        })
+      });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    document.getElementById("repository-alpine-private-key").value = "";
+    showToast("Alpine signing key rotated and indexes republished.", "success");
+    await loadAlpineStatus();
+  } catch (error) {
+    showToast(error.message || "Alpine signing key rotation failed.", "error");
+  }
+}
+
+async function downloadAlpinePublicKey() {
+  if (!editingRepositoryName) return;
+  try {
+    const response = await fetch(
+      `/internal/repositories/${encodeURIComponent(editingRepositoryName)}/alpine/public-key`);
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = document.getElementById("repository-alpine-key-filename").value.trim()
+      || `${editingRepositoryName}.rsa.pub`;
+    link.click();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    showToast(error.message || "Alpine public key download failed.", "error");
+  }
+}
+
 function repositoryFormPayload() {
   const recipe = currentRecipe();
   const type = recipe ? recipe.type : null;
@@ -2401,6 +2548,25 @@ function repositoryFormPayload() {
       label: document.getElementById("repository-apt-label").value.trim()
     };
   }
+  if (recipe?.format === "alpine") {
+    const list = (id) => document.getElementById(id).value
+      .split(",").map((value) => value.trim()).filter(Boolean);
+    const upstreamKey = document.getElementById(
+      "repository-alpine-upstream-public-key").value.trim();
+    payload.alpine = {
+      distributions: list("repository-alpine-distributions"),
+      channels: list("repository-alpine-channels"),
+      architectures: list("repository-alpine-architectures"),
+      metadataMode: document.getElementById("repository-alpine-metadata-mode").value,
+      verifyUpstreamSignatures:
+        document.getElementById("repository-alpine-verify-upstream").checked,
+      staleIfError: document.getElementById("repository-alpine-stale-if-error").checked,
+      keyFilename: document.getElementById("repository-alpine-key-filename").value.trim(),
+      signatureType: document.getElementById("repository-alpine-signature-type").value,
+      description: document.getElementById("repository-alpine-description").value.trim(),
+      upstreamPublicKeys: upstreamKey ? [upstreamKey] : []
+    };
+  }
   return payload;
 }
 
@@ -2446,6 +2612,18 @@ function setRepositoryFormDefaults() {
   document.getElementById("repository-apt-private-key").value = "";
   document.getElementById("repository-apt-key-passphrase").value = "";
   document.getElementById("repository-apt-status").textContent = "APT status not loaded.";
+  document.getElementById("repository-alpine-distributions").value = "v3.23";
+  document.getElementById("repository-alpine-channels").value = "main";
+  document.getElementById("repository-alpine-architectures").value = "x86_64, aarch64";
+  document.getElementById("repository-alpine-metadata-mode").value = "PASSTHROUGH";
+  document.getElementById("repository-alpine-verify-upstream").checked = false;
+  document.getElementById("repository-alpine-stale-if-error").checked = true;
+  document.getElementById("repository-alpine-key-filename").value = "kkrepo-alpine.rsa.pub";
+  document.getElementById("repository-alpine-signature-type").value = "RSA";
+  document.getElementById("repository-alpine-description").value = "kkRepo Alpine repository";
+  document.getElementById("repository-alpine-upstream-public-key").value = "";
+  document.getElementById("repository-alpine-private-key").value = "";
+  document.getElementById("repository-alpine-status").textContent = "Alpine status not loaded.";
   memberTransfer.selected = [];
   memberTransfer.highlight.available.clear();
   memberTransfer.highlight.selected.clear();
@@ -2567,9 +2745,34 @@ function showEditRepositoryForm(name) {
     document.getElementById("repository-apt-origin").value = repo.apt.origin || "kkRepo";
     document.getElementById("repository-apt-label").value = repo.apt.label || "kkRepo";
   }
+  if (repo.alpine) {
+    document.getElementById("repository-alpine-distributions").value =
+      Array.isArray(repo.alpine.distributions) ? repo.alpine.distributions.join(", ") : "v3.23";
+    document.getElementById("repository-alpine-channels").value =
+      Array.isArray(repo.alpine.channels) ? repo.alpine.channels.join(", ") : "main";
+    document.getElementById("repository-alpine-architectures").value =
+      Array.isArray(repo.alpine.architectures)
+        ? repo.alpine.architectures.join(", ") : "x86_64, aarch64";
+    document.getElementById("repository-alpine-metadata-mode").value =
+      repo.alpine.metadataMode || (repo.type === "PROXY" ? "PASSTHROUGH" : "RESIGN");
+    document.getElementById("repository-alpine-verify-upstream").checked =
+      Boolean(repo.alpine.verifyUpstreamSignatures);
+    document.getElementById("repository-alpine-stale-if-error").checked =
+      repo.alpine.staleIfError !== false;
+    document.getElementById("repository-alpine-key-filename").value =
+      repo.alpine.keyFilename || `${repo.name}.rsa.pub`;
+    document.getElementById("repository-alpine-signature-type").value =
+      repo.alpine.signatureType || "RSA";
+    document.getElementById("repository-alpine-description").value =
+      repo.alpine.description || "kkRepo Alpine repository";
+    document.getElementById("repository-alpine-upstream-public-key").value =
+      Array.isArray(repo.alpine.upstreamPublicKeys)
+        ? (repo.alpine.upstreamPublicKeys[0] || "") : "";
+  }
   refreshRepositoryRecipeControls();
   if (repo.format === "conan") loadConanStatus(repo.name);
   if (repo.format === "apt") loadAptStatus(repo.name);
+  if (repo.format === "alpine") loadAlpineStatus(repo.name);
   clearRequiredFieldErrors(repositoryRequiredFields);
   openFormModal("repository-form", "repository-online");
 }
@@ -7090,6 +7293,12 @@ document.getElementById("repository-apt-refresh-status").addEventListener("click
 document.getElementById("repository-apt-rebuild").addEventListener("click", rebuildAptMetadata);
 document.getElementById("repository-apt-rotate-key").addEventListener("click", rotateAptSigningKey);
 document.getElementById("repository-apt-generate-key").addEventListener("click", generateAptSigningKey);
+document.getElementById("repository-alpine-metadata-mode").addEventListener("change", refreshAlpineControls);
+document.getElementById("repository-alpine-refresh-status").addEventListener("click", () => loadAlpineStatus());
+document.getElementById("repository-alpine-rebuild").addEventListener("click", rebuildAlpineMetadata);
+document.getElementById("repository-alpine-rotate-key").addEventListener("click", () => rotateAlpineSigningKey(false));
+document.getElementById("repository-alpine-generate-key").addEventListener("click", () => rotateAlpineSigningKey(true));
+document.getElementById("repository-alpine-download-key").addEventListener("click", downloadAlpinePublicKey);
 bindRequiredFieldErrors(repositoryRequiredFields);
 bindMemberTransferEvents();
 bindSecurityTransfers();

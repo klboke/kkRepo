@@ -1,0 +1,188 @@
+CREATE TABLE alpine_package_record (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  repository_id BIGINT UNSIGNED NOT NULL,
+  coordinate_hash BINARY(32) NOT NULL,
+  distribution_name VARCHAR(384) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  component_name VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  architecture VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  package_name VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  package_version VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  package_architecture VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  filename VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  asset_path VARCHAR(1024) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  asset_path_hash BINARY(32)
+    GENERATED ALWAYS AS (UNHEX(SHA2(asset_path, 256))) STORED,
+  control_fields JSON NOT NULL,
+  package_identity VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  data_sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  size_bytes BIGINT UNSIGNED NOT NULL,
+  asset_id BIGINT UNSIGNED NULL,
+  component_id BIGINT UNSIGNED NULL,
+  source_kind VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  revision BIGINT NOT NULL,
+  indexed_at DATETIME(3) NOT NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (id),
+  CONSTRAINT uk_alpine_package_coordinate UNIQUE (repository_id, coordinate_hash),
+  CONSTRAINT uk_alpine_package_path UNIQUE (repository_id, asset_path_hash),
+  CONSTRAINT uk_alpine_package_asset UNIQUE (repository_id, asset_id),
+  CONSTRAINT fk_alpine_package_repository
+    FOREIGN KEY (repository_id) REFERENCES repository(id) ON DELETE CASCADE,
+  CONSTRAINT fk_alpine_package_asset
+    FOREIGN KEY (asset_id) REFERENCES asset(id) ON DELETE CASCADE,
+  CONSTRAINT fk_alpine_package_component
+    FOREIGN KEY (component_id) REFERENCES component(id) ON DELETE SET NULL,
+  CONSTRAINT chk_alpine_package_source CHECK (source_kind IN ('HOSTED', 'PROXY')),
+  INDEX idx_alpine_package_index
+    (repository_id, distribution_name, component_name, architecture, package_name, id),
+  INDEX idx_alpine_package_path (repository_id, asset_path(255))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE alpine_package_tombstone (
+  repository_id BIGINT UNSIGNED NOT NULL,
+  coordinate_hash BINARY(32) NOT NULL,
+  distribution_name VARCHAR(384) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  component_name VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  architecture VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  package_name VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  package_version VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  asset_path VARCHAR(1024) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  reason VARCHAR(255) NULL,
+  revision BIGINT NOT NULL,
+  deleted_at DATETIME(3) NOT NULL,
+  PRIMARY KEY (repository_id, coordinate_hash),
+  CONSTRAINT fk_alpine_tombstone_repository
+    FOREIGN KEY (repository_id) REFERENCES repository(id) ON DELETE CASCADE,
+  INDEX idx_alpine_tombstone_revision (repository_id, revision)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE alpine_suite_state (
+  repository_id BIGINT UNSIGNED NOT NULL,
+  distribution_name VARCHAR(384) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  desired_revision BIGINT NOT NULL DEFAULT 0,
+  desired_at DATETIME(3) NOT NULL,
+  pending_since DATETIME(3) NULL,
+  published_revision BIGINT NOT NULL DEFAULT 0,
+  signing_key_revision INT NOT NULL DEFAULT 0,
+  last_published_at DATETIME(3) NULL,
+  last_error VARCHAR(2048) NULL,
+  last_error_at DATETIME(3) NULL,
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (repository_id, distribution_name),
+  CONSTRAINT fk_alpine_suite_repository
+    FOREIGN KEY (repository_id) REFERENCES repository(id) ON DELETE CASCADE,
+  INDEX idx_alpine_suite_pending (repository_id, desired_revision, published_revision)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE alpine_snapshot (
+  repository_id BIGINT UNSIGNED NOT NULL,
+  distribution_name VARCHAR(384) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  revision BIGINT NOT NULL,
+  signing_key_revision INT NOT NULL,
+  manifest_json JSON NOT NULL,
+  index_sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  created_at DATETIME(3) NOT NULL,
+  published_at DATETIME(3) NULL,
+  PRIMARY KEY (repository_id, distribution_name, revision),
+  CONSTRAINT fk_alpine_snapshot_suite
+    FOREIGN KEY (repository_id, distribution_name)
+    REFERENCES alpine_suite_state(repository_id, distribution_name) ON DELETE CASCADE,
+  INDEX idx_alpine_snapshot_created (repository_id, distribution_name, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE alpine_signing_key (
+  repository_id BIGINT UNSIGNED NOT NULL,
+  revision INT NOT NULL,
+  key_filename VARCHAR(192) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  fingerprint VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  encrypted_private_key MEDIUMTEXT NOT NULL,
+  public_key MEDIUMTEXT NOT NULL,
+  signature_type VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  active BOOLEAN NOT NULL DEFAULT FALSE,
+  active_slot TINYINT
+    GENERATED ALWAYS AS (CASE WHEN active THEN 1 ELSE NULL END) STORED,
+  created_at DATETIME(3) NOT NULL,
+  PRIMARY KEY (repository_id, revision),
+  CONSTRAINT uk_alpine_signing_active UNIQUE (repository_id, active_slot),
+  CONSTRAINT fk_alpine_signing_repository
+    FOREIGN KEY (repository_id) REFERENCES repository(id) ON DELETE CASCADE,
+  INDEX idx_alpine_signing_active (repository_id, active, revision),
+  CONSTRAINT chk_alpine_signature_type
+    CHECK (signature_type IN ('RSA', 'RSA256', 'RSA512'))
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE alpine_proxy_distribution (
+  repository_id BIGINT UNSIGNED NOT NULL,
+  distribution_name VARCHAR(384) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  release_identity VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NULL,
+  release_manifest_json JSON NOT NULL,
+  signature_verified BOOLEAN NOT NULL DEFAULT FALSE,
+  observed_at DATETIME(3) NOT NULL,
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (repository_id, distribution_name),
+  CONSTRAINT fk_alpine_proxy_distribution_repository
+    FOREIGN KEY (repository_id) REFERENCES repository(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE alpine_publish_lease (
+  lease_key VARCHAR(512) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  owner VARCHAR(128) NOT NULL,
+  fencing_token BIGINT NOT NULL,
+  attempt_count BIGINT NOT NULL DEFAULT 1,
+  expires_at DATETIME(3) NOT NULL,
+  updated_at DATETIME(3) NOT NULL,
+  PRIMARY KEY (lease_key),
+  INDEX idx_alpine_lease_expiry (expires_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE alpine_package_relation (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  package_id BIGINT UNSIGNED NOT NULL,
+  relation_kind VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  token_value VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  token_hash BINARY(32) NOT NULL,
+  expression_value VARCHAR(1024) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  PRIMARY KEY (id),
+  CONSTRAINT uk_alpine_relation UNIQUE (package_id, relation_kind, token_hash),
+  CONSTRAINT fk_alpine_relation_package
+    FOREIGN KEY (package_id) REFERENCES alpine_package_record(id) ON DELETE CASCADE,
+  INDEX idx_alpine_relation_lookup (relation_kind, token_hash, package_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE alpine_group_binding (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  group_repository_id BIGINT UNSIGNED NOT NULL,
+  distribution_name VARCHAR(384) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  snapshot_revision BIGINT NOT NULL,
+  path_value VARCHAR(1024) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  path_hash BINARY(32) NOT NULL,
+  member_repository_id BIGINT UNSIGNED NOT NULL,
+  member_snapshot_revision BIGINT NOT NULL,
+  member_path VARCHAR(1024) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+  package_identity VARCHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  sha256 CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  size_bytes BIGINT UNSIGNED NOT NULL,
+  created_at DATETIME(3) NOT NULL,
+  PRIMARY KEY (id),
+  CONSTRAINT uk_alpine_group_binding
+    UNIQUE (group_repository_id, distribution_name, snapshot_revision, path_hash),
+  CONSTRAINT fk_alpine_group_repository
+    FOREIGN KEY (group_repository_id) REFERENCES repository(id) ON DELETE CASCADE,
+  CONSTRAINT fk_alpine_group_member
+    FOREIGN KEY (member_repository_id) REFERENCES repository(id) ON DELETE CASCADE,
+  INDEX idx_alpine_group_member
+    (member_repository_id, member_snapshot_revision, id),
+  INDEX idx_alpine_group_page
+    (group_repository_id, distribution_name, snapshot_revision, id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE INDEX idx_alpine_tombstone_cleanup
+  ON alpine_package_tombstone(deleted_at, repository_id, revision);
+CREATE INDEX idx_alpine_suite_worker
+  ON alpine_suite_state(desired_at, last_error_at, repository_id);
+CREATE INDEX idx_alpine_suite_force_publish
+  ON alpine_suite_state(pending_since, repository_id);
+CREATE INDEX idx_alpine_snapshot_cleanup
+  ON alpine_snapshot(published_at, created_at, repository_id, distribution_name);

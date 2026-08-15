@@ -20,7 +20,7 @@ The Chinese version is available in the
 - Try Run, manual execution, and scheduled execution are available for all current formats. The
   **Keep newest versions** rule is available only where kkRepo has a validated protocol version
   comparator: Maven, Cargo/Rust, Dart/Pub, Terraform, Swift Package Registry, Ansible Galaxy,
-  Conda, and APT/Debian.
+  Conda, APT/Debian, and Alpine/APK.
 - Actual execution is irreversible. kkRepo does not currently provide a cleanup-specific restore
   window, so keep a tested database and blob-store backup before enabling deletion in production.
 
@@ -33,6 +33,14 @@ synchronously publishes each affected distribution once. The previous signed sna
 readable until the new complete snapshot is active, and retained by-hash history controls when
 deleted package blobs can become eligible for garbage collection. APT proxy cleanup only removes
 local cached content.
+
+For Alpine, one cleanup subject is one installable
+`(distribution, channel, repository architecture, package, version)` build. **Keep newest
+versions** uses apk-tools ordering within each package family, including suffixes and `-rN`
+revisions. Hosted deletion writes a tombstone and publishes a new complete signed
+`APKINDEX.tar.gz`; retained immutable snapshots continue to pin package blobs needed by in-flight
+clients. Proxy cleanup removes only locally cached package bytes and preserves the validated
+upstream inventory needed for a later refetch.
 
 ## How Rules Combine
 
