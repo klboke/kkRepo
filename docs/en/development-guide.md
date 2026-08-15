@@ -190,6 +190,7 @@ Detailed design and implementation plans for repository formats and migration wo
 - [Conda Repository Design Notes](../zh/dev/conda-repository-design.md) (Chinese)
 - [APT / Debian Repository Design Notes](../zh/dev/apt-debian-repository-design.md) and [Nexus Performance Baseline](../zh/dev/apt-performance-baseline.md) (Chinese)
 - [Conan 2 Repository Design Notes](../zh/dev/conan-repository-design.md) (Chinese)
+- [Alpine / APK Repository Design Notes](../zh/dev/alpine-apk-repository-design.md) (Chinese)
 - [Cleanup Policy Design Notes](../zh/dev/cleanup-policy-design.md) (Chinese)
 - [Cleanup Policy Guide](cleanup-policy-guide.md)
 - [Ansible Galaxy Repository Guide](repository-guides/ansible-galaxy.md)
