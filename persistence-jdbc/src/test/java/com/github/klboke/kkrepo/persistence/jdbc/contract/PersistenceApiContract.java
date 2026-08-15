@@ -101,6 +101,7 @@ public abstract class PersistenceApiContract {
         "ansible_proxy_version_state",
         "ansible_registry_lease",
         "alpine_group_binding",
+        "alpine_group_snapshot_stage",
         "alpine_package_record",
         "alpine_package_relation",
         "alpine_package_tombstone",

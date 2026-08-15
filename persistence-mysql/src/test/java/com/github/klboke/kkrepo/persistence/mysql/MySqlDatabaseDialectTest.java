@@ -72,6 +72,21 @@ class MySqlDatabaseDialectTest {
   }
 
   @Test
+  void keepsAlpineOptimizerSqlInsideMySqlBackend() {
+    var cursor = dialect.alpine().packageNameIdCursor("busybox", 41L);
+
+    assertEquals(
+        "(package_name > ? OR (package_name = ? AND id > ?))",
+        cursor.predicate());
+    assertEquals(List.of("busybox", "busybox", 41L), cursor.arguments());
+    assertTrue(dialect.alpine().pendingSuitesSql()
+        .contains("FORCE INDEX (idx_alpine_suite_worker)"));
+    assertTrue(dialect.alpine().pendingSuitesSql().contains("STRAIGHT_JOIN repository"));
+    assertTrue(dialect.alpine().snapshotCleanupCandidatesSql()
+        .contains("JOIN alpine_suite_state suite"));
+  }
+
+  @Test
   void componentAndCacheOperationsKeepAtomicLastInsertIdSqlOnOneConnection() {
     RecordingJdbcTemplate jdbc = new RecordingJdbcTemplate();
 

@@ -21,6 +21,8 @@ public interface DatabaseDialect {
 
   ComponentPersistenceDialect components();
 
+  AlpinePersistenceDialect alpine();
+
   CondaPersistenceDialect conda();
 
   ConanPersistenceDialect conan();

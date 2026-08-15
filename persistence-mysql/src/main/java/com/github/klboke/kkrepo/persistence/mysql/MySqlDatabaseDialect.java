@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.persistence.mysql;
 
+import com.github.klboke.kkrepo.persistence.jdbc.spi.AlpinePersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.ComponentPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.CondaPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.ConanPersistenceDialect;
@@ -25,6 +26,7 @@ import org.springframework.jdbc.core.JdbcOperations;
 /** MySQL 8 implementation of the shared persistence dialect contracts. */
 public final class MySqlDatabaseDialect implements DatabaseDialect {
   private final MySqlJsonPersistenceDialect json = new MySqlJsonPersistenceDialect();
+  private final AlpinePersistenceDialect alpine = new MySqlAlpinePersistenceDialect();
   private final ComponentPersistenceDialect components = new MySqlComponentPersistenceDialect(json);
   private final CondaPersistenceDialect conda = new MySqlCondaPersistenceDialect();
   private final ConanPersistenceDialect conan = new MySqlConanPersistenceDialect();
@@ -47,6 +49,11 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
   @Override
   public ComponentPersistenceDialect components() {
     return components;
+  }
+
+  @Override
+  public AlpinePersistenceDialect alpine() {
+    return alpine;
   }
 
   @Override
@@ -82,6 +89,58 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
   @Override
   public MigrationPersistenceDialect migrations() {
     return migrations;
+  }
+
+  private static final class MySqlAlpinePersistenceDialect
+      implements AlpinePersistenceDialect {
+    @Override
+    public KeysetCursor packageNameIdCursor(String packageName, long packageId) {
+      return new KeysetCursor(
+          "(package_name > ? OR (package_name = ? AND id > ?))",
+          List.of(packageName, packageName, packageId));
+    }
+
+    @Override
+    public String pendingSuitesSql() {
+      return """
+          SELECT alpine_suite_state.*
+          FROM alpine_suite_state FORCE INDEX (idx_alpine_suite_worker)
+          STRAIGHT_JOIN repository r ON r.id = alpine_suite_state.repository_id
+          WHERE alpine_suite_state.publish_pending = TRUE
+            AND (alpine_suite_state.desired_at <= ?
+              OR COALESCE(alpine_suite_state.pending_since, alpine_suite_state.desired_at) <= ?)
+            AND (alpine_suite_state.last_error_at IS NULL
+              OR alpine_suite_state.last_error_at <= ?)
+            AND r.online = true AND r.format = 'alpine'
+            AND r.type IN ('hosted', 'proxy', 'group')
+          ORDER BY alpine_suite_state.desired_at, alpine_suite_state.repository_id,
+            alpine_suite_state.distribution_name
+          LIMIT ?
+          """;
+    }
+
+    @Override
+    public String snapshotCleanupCandidatesSql() {
+      return """
+          SELECT candidate.* FROM alpine_snapshot candidate
+          JOIN alpine_suite_state suite
+            ON suite.repository_id = candidate.repository_id
+            AND suite.distribution_name = candidate.distribution_name
+          WHERE candidate.published_at IS NOT NULL AND candidate.created_at < ?
+            AND candidate.revision <> suite.published_revision
+            AND EXISTS (
+              SELECT 1 FROM alpine_snapshot newer
+              WHERE newer.repository_id = candidate.repository_id
+                AND newer.distribution_name = candidate.distribution_name
+                AND newer.published_at IS NOT NULL
+                AND newer.revision > candidate.revision
+              ORDER BY newer.revision DESC
+              LIMIT 1 OFFSET ?)
+          ORDER BY candidate.created_at, candidate.repository_id,
+            candidate.distribution_name, candidate.revision
+          LIMIT ?
+          """;
+    }
   }
 
   private static final class MySqlComponentPersistenceDialect

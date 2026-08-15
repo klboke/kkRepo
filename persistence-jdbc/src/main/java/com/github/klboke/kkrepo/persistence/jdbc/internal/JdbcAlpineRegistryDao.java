@@ -9,13 +9,14 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcInserts;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcUpserts;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.AlpinePersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.CoordinationPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
-import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseType;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -33,10 +34,8 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
 
   private final JdbcTemplate jdbc;
   private final JsonColumns json;
+  private final AlpinePersistenceDialect alpine;
   private final CoordinationPersistenceDialect coordination;
-  private final boolean postgreSql;
-  private final String pendingSuiteTable;
-  private final String pendingRepositoryJoin;
   private final String groupBindingPathTable;
   private final String groupBindingPageTable;
   private final RowMapper<PackageRecord> packageMapper = this::mapPackage;
@@ -45,12 +44,8 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
       JdbcTemplate jdbc, JsonColumns json, DatabaseDialect databaseDialect) {
     this.jdbc = jdbc;
     this.json = json;
+    this.alpine = databaseDialect.alpine();
     this.coordination = databaseDialect.coordination();
-    this.postgreSql = databaseDialect.type() == DatabaseType.POSTGRESQL;
-    this.pendingSuiteTable = databaseDialect.tableReferenceWithPreferredIndex(
-        "alpine_suite_state", "idx_alpine_suite_worker");
-    this.pendingRepositoryJoin = databaseDialect.type() == DatabaseType.MYSQL
-        ? "STRAIGHT_JOIN" : "JOIN";
     this.groupBindingPathTable = databaseDialect.tableReferenceWithPreferredIndex(
         "alpine_group_binding", "uk_alpine_group_binding");
     this.groupBindingPageTable = databaseDialect.tableReferenceWithPreferredIndex(
@@ -149,9 +144,8 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
       int limit) {
     int boundedLimit = Math.max(1, Math.min(limit, PACKAGE_PAGE_SIZE));
     String cursorName = afterPackageName == null ? "" : afterPackageName;
-    String cursorPredicate = postgreSql
-        ? "(package_name, id) > (?, ?)"
-        : "(package_name > ? OR (package_name = ? AND id > ?))";
+    AlpinePersistenceDialect.KeysetCursor cursor = alpine.packageNameIdCursor(
+        cursorName, Math.max(0, afterId));
     String sql = """
         SELECT * FROM alpine_package_record
         WHERE repository_id = ? AND distribution_name = ? AND component_name = ?
@@ -159,17 +153,15 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
           AND %s
         ORDER BY package_name, id
         LIMIT ?
-        """.formatted(cursorPredicate);
-    Object[] arguments = postgreSql
-        ? new Object[] {
-          repositoryId, distribution, component, architecture, cursorName,
-          Math.max(0, afterId), boundedLimit
-        }
-        : new Object[] {
-          repositoryId, distribution, component, architecture, cursorName, cursorName,
-          Math.max(0, afterId), boundedLimit
-        };
-    return jdbc.query(sql, packageMapper, arguments);
+        """.formatted(cursor.predicate());
+    List<Object> arguments = new ArrayList<>();
+    arguments.add(repositoryId);
+    arguments.add(distribution);
+    arguments.add(component);
+    arguments.add(architecture);
+    arguments.addAll(cursor.arguments());
+    arguments.add(boundedLimit);
+    return jdbc.query(sql, packageMapper, arguments.toArray());
   }
 
   @Override
@@ -181,24 +173,21 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
       int limit) {
     int boundedLimit = Math.max(1, Math.min(limit, PACKAGE_PAGE_SIZE));
     String cursorName = afterPackageName == null ? "" : afterPackageName;
-    String cursorPredicate = postgreSql
-        ? "(package_name, id) > (?, ?)"
-        : "(package_name > ? OR (package_name = ? AND id > ?))";
+    AlpinePersistenceDialect.KeysetCursor cursor = alpine.packageNameIdCursor(
+        cursorName, Math.max(0, afterId));
     String sql = """
         SELECT * FROM alpine_package_record
         WHERE repository_id = ? AND distribution_name = ?
           AND %s
         ORDER BY package_name, id
         LIMIT ?
-        """.formatted(cursorPredicate);
-    Object[] arguments = postgreSql
-        ? new Object[] {
-          repositoryId, distribution, cursorName, Math.max(0, afterId), boundedLimit
-        }
-        : new Object[] {
-          repositoryId, distribution, cursorName, cursorName, Math.max(0, afterId), boundedLimit
-        };
-    return jdbc.query(sql, packageMapper, arguments);
+        """.formatted(cursor.predicate());
+    List<Object> arguments = new ArrayList<>();
+    arguments.add(repositoryId);
+    arguments.add(distribution);
+    arguments.addAll(cursor.arguments());
+    arguments.add(boundedLimit);
+    return jdbc.query(sql, packageMapper, arguments.toArray());
   }
 
   @Override
@@ -374,42 +363,8 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
     Instant ready = readyBefore == null ? Instant.now() : readyBefore;
     Instant forced = forceBefore == null ? ready : forceBefore;
     Instant retry = retryBefore == null ? ready : retryBefore;
-    if (postgreSql) {
-      return jdbc.query(
-          """
-          SELECT suite.* FROM alpine_suite_state suite
-          WHERE suite.publish_pending = TRUE
-            AND (suite.desired_at <= ?
-              OR COALESCE(suite.pending_since, suite.desired_at) <= ?)
-            AND (suite.last_error_at IS NULL OR suite.last_error_at <= ?)
-            AND (SELECT r.online AND r.format = 'alpine'
-                    AND r.type IN ('hosted', 'proxy', 'group')
-                 FROM repository r WHERE r.id = suite.repository_id)
-          ORDER BY suite.desired_at, suite.repository_id, suite.distribution_name
-          LIMIT ?
-          """,
-          this::mapSuite,
-          nullableTimestamp(ready),
-          nullableTimestamp(forced),
-          nullableTimestamp(retry),
-          boundedLimit);
-    }
-    String sql = """
-        SELECT alpine_suite_state.* FROM %s
-        %s repository r ON r.id = alpine_suite_state.repository_id
-        WHERE alpine_suite_state.publish_pending = TRUE
-          AND (alpine_suite_state.desired_at <= ?
-            OR COALESCE(alpine_suite_state.pending_since, alpine_suite_state.desired_at) <= ?)
-          AND (alpine_suite_state.last_error_at IS NULL
-            OR alpine_suite_state.last_error_at <= ?)
-          AND r.online = true AND r.format = 'alpine'
-          AND r.type IN ('hosted', 'proxy', 'group')
-        ORDER BY alpine_suite_state.desired_at, alpine_suite_state.repository_id,
-          alpine_suite_state.distribution_name
-        LIMIT ?
-        """.formatted(pendingSuiteTable, pendingRepositoryJoin);
     return jdbc.query(
-        sql,
+        alpine.pendingSuitesSql(),
         this::mapSuite,
         nullableTimestamp(ready),
         nullableTimestamp(forced),
@@ -531,52 +486,8 @@ public class JdbcAlpineRegistryDao implements AlpineRegistryDao {
     int retained = Math.max(3, Math.min(minSnapshots, 100));
     int boundedLimit = Math.max(1, Math.min(limit, 256));
     Instant cutoff = createdBefore == null ? Instant.now() : createdBefore;
-    if (postgreSql) {
-      return jdbc.query(
-          """
-          SELECT candidate.* FROM alpine_snapshot candidate
-          WHERE candidate.published_at IS NOT NULL AND candidate.created_at < ?
-            AND candidate.revision <> (
-              SELECT suite.published_revision FROM alpine_suite_state suite
-              WHERE suite.repository_id = candidate.repository_id
-                AND suite.distribution_name = candidate.distribution_name)
-            AND EXISTS (
-              SELECT 1 FROM alpine_snapshot newer
-              WHERE newer.repository_id = candidate.repository_id
-                AND newer.distribution_name = candidate.distribution_name
-                AND newer.published_at IS NOT NULL
-                AND newer.revision > candidate.revision
-              ORDER BY newer.revision DESC
-              LIMIT 1 OFFSET ?)
-          ORDER BY candidate.created_at, candidate.repository_id,
-            candidate.distribution_name, candidate.revision
-          LIMIT ?
-          """,
-          this::mapSnapshot,
-          nullableTimestamp(cutoff),
-          retained - 1,
-          boundedLimit);
-    }
     return jdbc.query(
-        """
-        SELECT candidate.* FROM alpine_snapshot candidate
-        JOIN alpine_suite_state suite
-          ON suite.repository_id = candidate.repository_id
-          AND suite.distribution_name = candidate.distribution_name
-        WHERE candidate.published_at IS NOT NULL AND candidate.created_at < ?
-          AND candidate.revision <> suite.published_revision
-          AND EXISTS (
-            SELECT 1 FROM alpine_snapshot newer
-            WHERE newer.repository_id = candidate.repository_id
-              AND newer.distribution_name = candidate.distribution_name
-              AND newer.published_at IS NOT NULL
-              AND newer.revision > candidate.revision
-            ORDER BY newer.revision DESC
-            LIMIT 1 OFFSET ?)
-        ORDER BY candidate.created_at, candidate.repository_id,
-          candidate.distribution_name, candidate.revision
-        LIMIT ?
-        """,
+        alpine.snapshotCleanupCandidatesSql(),
         this::mapSnapshot,
         nullableTimestamp(cutoff),
         retained - 1,

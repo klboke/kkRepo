@@ -84,6 +84,17 @@ class PostgreSqlDatabaseDialectTest {
   }
 
   @Test
+  void keepsAlpineOptimizerSqlInsidePostgreSqlBackend() {
+    var cursor = dialect.alpine().packageNameIdCursor("busybox", 41L);
+
+    assertEquals("(package_name, id) > (?, ?)", cursor.predicate());
+    assertEquals(List.of("busybox", 41L), cursor.arguments());
+    assertTrue(dialect.alpine().pendingSuitesSql().contains("SELECT r.online"));
+    assertTrue(dialect.alpine().snapshotCleanupCandidatesSql()
+        .contains("candidate.revision <> ("));
+  }
+
+  @Test
   void componentAndCacheOperationsUseAtomicReturningStatements() {
     RecordingJdbcTemplate jdbc = new RecordingJdbcTemplate();
 
