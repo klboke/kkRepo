@@ -35,9 +35,13 @@ class AlpineGroupFingerprintTest {
         List.of(second, offline));
     RepositoryRuntime group = runtime(21L, RepositoryFormat.ALPINE, RepositoryType.GROUP, true,
         List.of(first, unrelated, nested));
+    AlpineRepositorySettings repositorySettings = mock(AlpineRepositorySettings.class);
+    when(repositorySettings.get(second)).thenReturn(new AlpineRepositorySettings.Settings(
+        List.of(), List.of(), List.of(), true, true, true,
+        "fixture.rsa.pub", "RSA", "fixture", List.of()));
 
     AlpineService service = new AlpineService(
-        registry, null, null, null, null, null, null, null, null, null, null, null);
+        registry, null, repositorySettings, null, null, null, null, null, null, null, null, null);
     LinkedHashMap<Long, Long> publishedRevisions = new LinkedHashMap<>();
     publishedRevisions.put(11L, 7L);
     publishedRevisions.put(12L, 9L);
