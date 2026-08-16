@@ -2,12 +2,15 @@ package com.github.klboke.kkrepo.server;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -31,13 +34,71 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockPart;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 class RepositoryContentControllerAlpineTest {
+
+  @ParameterizedTest
+  @EnumSource(RepositoryType.class)
+  void trailingSlashRootGetAndHeadServeNexusStyleRepositoryHtml(RepositoryType type)
+      throws Exception {
+    RepositoryRuntime runtime = runtime(type);
+    AlpineService alpine = mock(AlpineService.class);
+    RepositoryContentController controller = controller(runtimes(runtime), alpine);
+
+    ResponseEntity<StreamingResponseBody> get = controller.get(
+        "alpine", request("GET", "/repository/alpine/"));
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    get.getBody().writeTo(output);
+    String html = output.toString(StandardCharsets.UTF_8);
+
+    assertEquals(200, get.getStatusCode().value());
+    assertEquals(MediaType.TEXT_HTML, get.getHeaders().getContentType());
+    assertTrue(html.contains("<span class=\"description\">alpine</span>"));
+    assertTrue(html.contains("This alpine " + type.name().toLowerCase()
+        + " repository is not directly browseable at this URL."));
+    assertTrue(html.contains("href=\"/browse/\""));
+    assertTrue(html.contains("/service/rest/repository/browse/alpine/"));
+
+    ResponseEntity<Void> head = controller.head(
+        "alpine", request("HEAD", "/repository/alpine/"));
+    assertEquals(200, head.getStatusCode().value());
+    assertEquals(MediaType.TEXT_HTML, head.getHeaders().getContentType());
+    assertTrue(head.getHeaders().getContentLength() > 0);
+    assertNull(head.getBody());
+    verifyNoInteractions(alpine);
+  }
+
+  @ParameterizedTest
+  @EnumSource(RepositoryType.class)
+  void bareRootGetAndHeadReturnNexusStyleBadRequest(RepositoryType type) throws Exception {
+    RepositoryRuntime runtime = runtime(type);
+    AlpineService alpine = mock(AlpineService.class);
+    RepositoryContentController controller = controller(runtimes(runtime), alpine);
+
+    ResponseEntity<StreamingResponseBody> get = controller.get(
+        "alpine", request("GET", "/repository/alpine"));
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    get.getBody().writeTo(output);
+    assertEquals(400, get.getStatusCode().value());
+    assertEquals(MediaType.TEXT_HTML, get.getHeaders().getContentType());
+    assertTrue(output.toString(StandardCharsets.UTF_8).contains(
+        "Repository path must have another '/' after initial '/'"));
+
+    ResponseEntity<Void> head = controller.head(
+        "alpine", request("HEAD", "/repository/alpine"));
+    assertEquals(400, head.getStatusCode().value());
+    assertEquals(MediaType.TEXT_HTML, head.getHeaders().getContentType());
+    assertNull(head.getBody());
+    verifyNoInteractions(alpine);
+  }
 
   @Test
   void routesAlpineGetHeadPutAndDelete() throws Exception {

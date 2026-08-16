@@ -393,8 +393,7 @@ public class RepositoryContentController {
       return toHeadResponse(apt().get(runtime, raw, true), request);
     }
     if (runtime.format() == RepositoryFormat.ALPINE) {
-      String raw = extractRepositoryPath(name, request, true);
-      return toHeadResponse(alpine().get(runtime, raw, true), request);
+      return toHeadResponse(dispatchAlpineGet(runtime, name, request, true), request);
     }
     if (runtime.format() == RepositoryFormat.PYPI) {
       String raw = extractRepositoryPath(name, request, true);
@@ -1056,7 +1055,7 @@ public class RepositoryContentController {
     }
     if (runtime.format() == RepositoryFormat.ALPINE) {
       String raw = extractRepositoryPath(name, request, true);
-      MavenResponse response = alpine().get(runtime, raw, headOnly);
+      MavenResponse response = dispatchAlpineGet(runtime, name, request, headOnly);
       return toStreamingResponse(response, request, !headOnly && raw.endsWith(".apk"));
     }
     if (runtime.format() == RepositoryFormat.PYPI) {
@@ -1217,6 +1216,21 @@ public class RepositoryContentController {
     }
     String raw = withQuery(extractRepositoryPath(name, request, true), request);
     return rubygems.get(runtime, raw, headOnly);
+  }
+
+  private MavenResponse dispatchAlpineGet(
+      RepositoryRuntime runtime,
+      String name,
+      HttpServletRequest request,
+      boolean headOnly) {
+    DirectoryRequest directory = detectDirectory(name, request);
+    if (directory != null && directory.path().isEmpty()) {
+      return directory.needsRedirect()
+          ? badRepositoryPath(headOnly)
+          : repositoryInfo(runtime, request, "alpine", headOnly);
+    }
+    String raw = extractRepositoryPath(name, request, true);
+    return alpine().get(runtime, raw, headOnly);
   }
 
   private MavenResponse dispatchRawGet(RepositoryRuntime runtime, String rawPath, boolean headOnly) {

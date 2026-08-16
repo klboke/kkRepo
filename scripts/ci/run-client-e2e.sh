@@ -3381,6 +3381,29 @@ alpine_test_secondary_replica() {
   cmp "$directory/primary-APKINDEX.tar.gz" "$directory/secondary-APKINDEX.tar.gz"
 }
 
+alpine_test_repository_roots() {
+  local directory="$1"
+  local kind repository body headers
+  for kind in hosted proxy group; do
+    case "$kind" in
+      hosted) repository="$ALPINE_HOSTED_REPOSITORY" ;;
+      proxy) repository="$ALPINE_PROXY_REPOSITORY" ;;
+      group) repository="$ALPINE_GROUP_REPOSITORY" ;;
+    esac
+    body="$directory/root-$kind.html"
+    headers="$directory/root-$kind.headers"
+    run_logged_output "alpine-$kind-root" "$body" \
+      curl -m 30 --fail-with-body -sS -D "$headers" -u "$KKREPO_AUTH" \
+      "$KKREPO_URL/repository/$repository/"
+    run_logged "alpine-$kind-root-content-type" \
+      grep -Eiq '^content-type: *text/html' "$headers"
+    run_logged "alpine-$kind-root-description" \
+      grep -Fq "This alpine $kind repository is not directly browseable at this URL." "$body"
+    run_logged "alpine-$kind-root-html-index" grep -Fq \
+      "/service/rest/repository/browse/$repository/" "$body"
+  done
+}
+
 test_alpine() {
   need docker
   if [[ "${ALPINE_E2E_VERSION_ORDER_CHECK:-true}" == "true" ]]; then
@@ -3390,6 +3413,7 @@ test_alpine() {
   local key_filename="kkrepo-alpine-group.rsa.pub"
   local key_file="$directory/$key_filename"
   mkdir -p "$directory"
+  alpine_test_repository_roots "$directory"
   run_logged_output alpine-group-public-key "$key_file" \
     curl -m 30 --fail-with-body -sS -u "$KKREPO_AUTH" \
     "$KKREPO_URL/internal/repositories/$ALPINE_GROUP_REPOSITORY/alpine/public-key"

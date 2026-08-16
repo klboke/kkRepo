@@ -75,6 +75,8 @@ class AlpineRepositoryBlackBoxCompatibilityTest {
       createNexusHosted(config, repository, key);
       createCandidateHosted(config, repository, key);
 
+      assertRepositoryRootMatchesNexus(config, repository);
+
       Exchange nexusUpload = put(config.nexus(repository), path, fixture.bytes());
       Exchange candidateUpload = put(config.candidate(repository), path, fixture.bytes());
       assertEquals(200, nexusUpload.status(), () -> "Nexus upload: " + nexusUpload.text());
@@ -152,6 +154,24 @@ class AlpineRepositoryBlackBoxCompatibilityTest {
     Exchange conditional = send(endpoint.request(path)
         .header("If-None-Match", get.header("etag")).GET());
     assertEquals(304, conditional.status());
+  }
+
+  private static void assertRepositoryRootMatchesNexus(Config config, String repository)
+      throws Exception {
+    Exchange reference = get(config.nexus(repository), "");
+    Exchange candidate = get(config.candidate(repository), "");
+    assertEquals(200, reference.status(), () -> "Nexus root: " + reference.text());
+    assertEquals(reference.status(), candidate.status(),
+        () -> "kkRepo root: " + candidate.text());
+    assertEquals("text/html", mediaType(reference.header("content-type")));
+    assertEquals(mediaType(reference.header("content-type")),
+        mediaType(candidate.header("content-type")));
+    assertTrue(reference.text().contains(
+        "This alpine hosted repository is not directly browseable"));
+    assertTrue(candidate.text().contains(
+        "This alpine hosted repository is not directly browseable"));
+    assertTrue(candidate.text().contains(repository));
+    assertTrue(candidate.text().contains("HTML index"));
   }
 
   private static void assertBrowseAndSearch(
