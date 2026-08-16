@@ -176,6 +176,70 @@ class AlpineProxyProjectionServiceTest {
   }
 
   @Test
+  void groupMemberPreparationReusesFreshProjectionRevision() {
+    Instant now = Instant.parse("2026-08-15T00:00:00Z");
+    AlpineRegistryDao.ProxyDistribution fresh = new AlpineRegistryDao.ProxyDistribution(
+        runtime.id(), NAMESPACE, "release", Map.of(), false, now, now);
+    when(registry.findProxyDistribution(runtime.id(), NAMESPACE))
+        .thenReturn(Optional.of(fresh));
+    when(registry.findSuite(runtime.id(), NAMESPACE)).thenReturn(Optional.of(
+        new AlpineRegistryDao.SuiteState(
+            runtime.id(), NAMESPACE, 17L, now, 0L, 0, null, null, null, now)));
+
+    long revision = service.prepareGroupMember(
+        runtime, settings(false, false, List.of()), NAMESPACE, now.plusSeconds(30));
+
+    assertEquals(17L, revision);
+    verify(proxy, never()).getMetadataFromUrlUnindexed(
+        any(), anyString(), anyString(), anyBoolean());
+  }
+
+  @Test
+  void groupPackageDownloadFetchesAndVerifiesSnapshotBinding() throws Exception {
+    // Official per-architecture indexes rewrite internal noarch packages to the index arch.
+    AlpineTestPackage.Fixture apk = AlpineTestPackage.apk("demo", "1.0-r0", "noarch");
+    AlpineRegistryDao.PackageRecord expected = expected(apk, null, null);
+    when(registry.findPackageByPath(runtime.id(), PACKAGE_PATH))
+        .thenReturn(Optional.of(expected));
+    when(registry.findPackage(
+        runtime.id(), NAMESPACE, "main", "demo", "1.0-r0", "x86_64"))
+        .thenReturn(Optional.of(expected));
+    when(assets.serve(runtime, PACKAGE_PATH, false))
+        .thenReturn(response(apk.bytes()), response(apk.bytes()));
+
+    MavenResponse response = service.getVerifiedGroupPackage(
+        runtime, PACKAGE_PATH, expected.identity(), expected.size(), false);
+
+    assertEquals(apk.bytes().length, response.contentLength());
+    verify(proxy).getPinnedAssetFromUrlUnindexed(
+        eq(runtime), eq(PACKAGE_PATH), anyString(), eq(true));
+    verify(assets).bindProxyPackage(
+        eq(runtime), eq(PACKAGE_PATH), any(), eq(PACKAGE_PATH), any());
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> service.getVerifiedGroupPackage(
+            runtime, PACKAGE_PATH, "Q1different", expected.size(), false));
+  }
+
+  @Test
+  void passthroughObservationSkipsOversizedIndexesBeforePersistingPartialProjection()
+      throws Exception {
+    StringBuilder records = new StringBuilder();
+    for (int index = 0; index <= 2_000; index++) {
+      records.append(indexRecord("package-" + index, "1-r0", "10"));
+    }
+    when(assets.serve(runtime, INDEX_PATH, false))
+        .thenReturn(response(indexArchive(records.toString())));
+
+    service.observePassthrough(
+        runtime, settings(false, false, List.of()),
+        new com.github.klboke.kkrepo.protocol.alpine.AlpinePathParser().parse(INDEX_PATH));
+
+    verify(registry, never()).savePackage(any());
+    verify(registry, never()).observeProxyDistribution(
+        anyLong(), anyString(), anyString(), any(), anyBoolean(), any(Instant.class));
+  }
+
+  @Test
   void failsClosedForUnsignedResignAndMismatchedPackageButPassthroughObservationIsBestEffort()
       throws Exception {
     AlpineTestPackage.Fixture apk = AlpineTestPackage.apk("demo", "1.0-r0", "x86_64");

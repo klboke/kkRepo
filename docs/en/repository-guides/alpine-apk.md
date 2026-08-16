@@ -25,7 +25,11 @@ Hosted and group repositories always publish locally signed v2 indexes. Each
 `distribution/channel/repository-architecture` is an independent immutable snapshot namespace,
 for example `v3.23/main/x86_64`. A proxy in `PASSTHROUGH` mode preserves upstream index and package
 bytes. A `RESIGN` proxy must verify the upstream signature using configured public keys before it
-projects cached package records and publishes its own snapshot.
+projects cached package records and publishes its own snapshot. For Nexus-compatible grouping, a
+`PASSTHROUGH` proxy may also be a group member. The group applies that proxy's configured signature
+policy, signs the aggregate with the group key, and verifies every lazily fetched package against
+the exact index identity and size captured in the group snapshot. Disabling upstream signature
+verification is therefore an explicit transport-trust choice, not package-checksum bypass.
 
 ## Trust The Repository Key
 

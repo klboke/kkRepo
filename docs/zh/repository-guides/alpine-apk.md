@@ -18,7 +18,7 @@ Hosted 用于发布私有 `.apk` 和签名 `APKINDEX.tar.gz` 快照；proxy 可�
 | 上游缓存 | `alpine-proxy` | remote、TTL/negative cache/auto-block、`PASSTHROUGH` 或已验签 `RESIGN`、stale policy、上游公钥 |
 | 统一读取 | `alpine-group` | 有序 Alpine member、namespace allowlist、仓库作用域 RSA signing key |
 
-Hosted 与 group 始终发布本地签名的 v2 index。每个 `distribution/channel/repository-architecture` 都是独立不可变快照 namespace，例如 `v3.23/main/x86_64`。`PASSTHROUGH` proxy 保持上游 index/package 字节；`RESIGN` proxy 必须先使用配置的上游公钥验签，才能把校验后的 package record 投影到本地快照。
+Hosted 与 group 始终发布本地签名的 v2 index。每个 `distribution/channel/repository-architecture` 都是独立不可变快照 namespace，例如 `v3.23/main/x86_64`。`PASSTHROUGH` proxy 保持上游 index/package 字节；`RESIGN` proxy 必须先使用配置的上游公钥验签，才能把校验后的 package record 投影到本地快照。为兼容 Nexus，`PASSTHROUGH` proxy 也可以作为 group member：group 遵循该 proxy 配置的上游验签策略，以 group key 签名聚合索引，并在首次下载时按 group snapshot 中绑定的精确 index identity 与 size 校验 package。关闭上游验签是管理员显式选择 transport trust，不会跳过 package checksum 校验。
 
 ## 信任仓库公钥
 

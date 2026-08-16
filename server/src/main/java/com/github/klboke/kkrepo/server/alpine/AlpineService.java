@@ -451,6 +451,17 @@ public class AlpineService {
       AlpineRepositorySettings.Settings settings,
       AlpinePath path,
       boolean headOnly) {
+    if (path.kind() == AlpinePath.Kind.PACKAGE) {
+      AlpineRegistryDao.Snapshot current =
+          publishedSnapshots.find(runtime.id(), path.namespace()).orElse(null);
+      if (current != null) {
+        Optional<AlpineRegistryDao.GroupBinding> existing = registry.findGroupBinding(
+            runtime.id(), path.namespace(), current.revision(), path.normalized());
+        if (existing.isPresent()) {
+          return serveGroupPackage(existing.orElseThrow(), path, headOnly);
+        }
+      }
+    }
     AlpineRegistryDao.Snapshot snapshot = ensureGroupSnapshot(runtime, settings, path.namespace());
     if (path.kind() == AlpinePath.Kind.INDEX) {
       String hidden = snapshot.manifest().get(path.normalized());
@@ -461,15 +472,34 @@ public class AlpineService {
     AlpineRegistryDao.GroupBinding binding = registry.findGroupBinding(
         runtime.id(), path.namespace(), snapshot.revision(), path.normalized()).orElseThrow(
             () -> new MavenExceptions.MavenNotFoundException(path.normalized()));
+    return serveGroupPackage(binding, path, headOnly);
+  }
+
+  private MavenResponse serveGroupPackage(
+      AlpineRegistryDao.GroupBinding binding,
+      AlpinePath path,
+      boolean headOnly) {
     RepositoryRuntime source = runtimes.resolveById(binding.memberRepositoryId()).orElseThrow(
         () -> new MavenExceptions.MavenNotFoundException(path.normalized()));
-    MavenResponse response = source.isHosted()
-        ? assets.serve(source, binding.memberPath(), headOnly)
-        : proxy.getPinnedAssetFromUrlUnindexed(
-            source,
-            binding.memberPath(),
-            RemoteUrlBuilder.repositoryPathString(source.proxyRemoteUrl(), binding.memberPath()),
-            headOnly);
+    MavenResponse response;
+    if (source.isHosted()) {
+      response = assets.serve(source, binding.memberPath(), headOnly);
+    } else {
+      AlpineRepositorySettings.Settings sourceSettings = repositorySettings.get(source);
+      response = sourceSettings.resign()
+          ? proxy.getPinnedAssetFromUrlUnindexed(
+              source,
+              binding.memberPath(),
+              RemoteUrlBuilder.repositoryPathString(
+                  source.proxyRemoteUrl(), binding.memberPath()),
+              headOnly)
+          : proxyProjection.getVerifiedGroupPackage(
+              source,
+              binding.memberPath(),
+              binding.identity(),
+              binding.size(),
+              headOnly);
+    }
     return response.withHeader("Cache-Control", "public, max-age=31536000, immutable")
         .withHeader("X-kkRepo-Source-Repository", source.name());
   }
@@ -607,13 +637,15 @@ public class AlpineService {
           continue;
         }
         AlpineRepositorySettings.Settings memberSettings = repositorySettings.get(member);
+        long revision;
         if (member.isProxy() && !memberSettings.resign()) {
-          throw new IllegalStateException(
-              "Alpine passthrough proxy cannot be a trusted group member: " + member.name());
+          revision = proxyProjection.prepareGroupMember(
+              member, memberSettings, namespace, Instant.now());
+        } else {
+          revision = ensureSnapshot(member, memberSettings, namespace).revision();
         }
-        AlpineRegistryDao.Snapshot snapshot = ensureSnapshot(member, memberSettings, namespace);
-        revisions.put(member.id(), snapshot.revision());
-        members.add(new ResolvedMember(member.id(), snapshot.revision()));
+        revisions.put(member.id(), revision);
+        members.add(new ResolvedMember(member.id(), revision));
       }
     } finally {
       visiting.remove(group.id());
@@ -702,8 +734,15 @@ public class AlpineService {
         if (member.isGroup()) {
           collectMemberRevisions(member, namespace, visiting, revisions, depth + 1);
         } else {
-          AlpineRegistryDao.SuiteState state = registry.findSuite(member.id(), namespace).orElse(null);
-          revisions.put(member.id(), state == null ? 0 : state.publishedRevision());
+          AlpineRepositorySettings.Settings memberSettings = repositorySettings.get(member);
+          if (member.isProxy() && !memberSettings.resign()) {
+            revisions.put(member.id(), proxyProjection.prepareGroupMember(
+                member, memberSettings, namespace, Instant.now()));
+          } else {
+            AlpineRegistryDao.SuiteState state =
+                registry.findSuite(member.id(), namespace).orElse(null);
+            revisions.put(member.id(), state == null ? 0 : state.publishedRevision());
+          }
         }
       }
     } finally {

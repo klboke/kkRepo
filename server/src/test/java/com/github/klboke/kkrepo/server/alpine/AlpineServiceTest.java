@@ -461,15 +461,40 @@ class AlpineServiceTest {
   }
 
   @Test
-  void groupRejectsPassthroughProxyMembersAndMembershipCycles() {
+  void groupPublishesPassthroughProxyMembersAndStillRejectsMembershipCycles() {
     RepositoryRuntime proxyMember = runtime(2L, RepositoryType.PROXY, "ALLOW", List.of());
     RepositoryRuntime group = runtime(3L, RepositoryType.GROUP, "ALLOW", List.of(proxyMember));
-    when(repositorySettings.get(proxyMember)).thenReturn(settings(false, true));
+    AlpineRepositorySettings.Settings passthrough = new AlpineRepositorySettings.Settings(
+        List.of(), List.of(), List.of(), false, false, true,
+        "key.rsa.pub", "RSA", "test", List.of());
+    when(repositorySettings.get(proxyMember)).thenReturn(passthrough);
     when(registry.findSuite(group.id(), NAMESPACE))
         .thenReturn(Optional.of(suite(group.id(), NAMESPACE, 2L, 1L)));
     when(published.find(group.id(), NAMESPACE)).thenReturn(Optional.empty());
-    assertThrows(IllegalStateException.class,
-        () -> service.publishPendingIfAvailable(group, NAMESPACE));
+    when(projection.prepareGroupMember(
+        eq(proxyMember), eq(passthrough), eq(NAMESPACE), any(Instant.class))).thenReturn(4L);
+    when(registry.listPackagePage(
+        proxyMember.id(), NAMESPACE, "", 0L, AlpineRegistryDao.PACKAGE_PAGE_SIZE))
+        .thenReturn(List.of(packageRecord(
+            50L, proxyMember.id(), PACKAGE_PATH, "0".repeat(64), null, null,
+            AlpineRegistryDao.SOURCE_PROXY)));
+    AlpineIndexBuilder.BuiltSnapshot built = new AlpineIndexBuilder.BuiltSnapshot(
+        Map.of(NAMESPACE + "/APKINDEX.tar.gz", ".alpine/group"), "b".repeat(64), 100L,
+        1, Instant.EPOCH);
+    when(indexBuilder.build(eq(group), eq(settings), any(), eq(material()),
+        any(AlpineIndexBuilder.PackageSource.class))).thenAnswer(invocation -> {
+          AlpineIndexBuilder.PackageSource source = invocation.getArgument(4);
+          source.visit(ignored -> { });
+          return built;
+        });
+    when(registry.publishGroupSnapshot(any(), any(), anyLong())).thenReturn(true);
+    when(lease.owner()).thenReturn("owner");
+    when(lease.fencingToken()).thenReturn(8L);
+
+    assertTrue(service.publishPendingIfAvailable(group, NAMESPACE));
+    verify(projection).prepareGroupMember(
+        eq(proxyMember), eq(passthrough), eq(NAMESPACE), any(Instant.class));
+    verify(registry).appendGroupBindings(eq(8L), any());
 
     RepositoryRuntime cyclic = mock(RepositoryRuntime.class);
     when(cyclic.id()).thenReturn(9L);
@@ -478,6 +503,38 @@ class AlpineServiceTest {
     when(cyclic.isGroup()).thenReturn(true);
     when(cyclic.members()).thenReturn(List.of(cyclic));
     assertThrows(IllegalStateException.class, () -> service.memberFingerprint(cyclic, NAMESPACE));
+  }
+
+  @Test
+  void groupUsesSnapshotBoundVerificationForPassthroughProxyDownloads() {
+    RepositoryRuntime proxyMember = runtime(2L, RepositoryType.PROXY, "ALLOW", List.of());
+    RepositoryRuntime group = runtime(3L, RepositoryType.GROUP, "ALLOW", List.of(proxyMember));
+    AlpineRepositorySettings.Settings passthrough = new AlpineRepositorySettings.Settings(
+        List.of(), List.of(), List.of(), false, false, true,
+        "key.rsa.pub", "RSA", "test", List.of());
+    when(repositorySettings.get(proxyMember)).thenReturn(passthrough);
+    when(projection.prepareGroupMember(
+        eq(proxyMember), eq(passthrough), eq(NAMESPACE), any(Instant.class))).thenReturn(4L);
+    AlpineRegistryDao.Snapshot groupSnapshot = snapshot(group.id(), 2L, Map.of(
+        "@members", AlpineService.fingerprint(Map.of(proxyMember.id(), 4L)),
+        NAMESPACE + "/APKINDEX.tar.gz", ".alpine/group"));
+    when(published.find(group.id(), NAMESPACE)).thenReturn(Optional.of(groupSnapshot));
+    AlpineRegistryDao.GroupBinding binding = new AlpineRegistryDao.GroupBinding(
+        null, group.id(), NAMESPACE, 2L, PACKAGE_PATH, proxyMember.id(), 4L, PACKAGE_PATH,
+        "Q1AAAAAAAAAAAAAAAAAAAAAAAAAAA=", "0".repeat(64), 100L, Instant.EPOCH);
+    when(registry.findGroupBinding(group.id(), NAMESPACE, 2L, PACKAGE_PATH))
+        .thenReturn(Optional.of(binding));
+    when(runtimes.resolveById(proxyMember.id())).thenReturn(Optional.of(proxyMember));
+    when(projection.getVerifiedGroupPackage(
+        proxyMember, PACKAGE_PATH, binding.identity(), binding.size(), false))
+        .thenReturn(MavenResponse.noBody(200));
+
+    MavenResponse response = service.get(group, PACKAGE_PATH, false);
+
+    assertEquals(200, response.status());
+    assertEquals(proxyMember.name(), response.headers().get("X-kkRepo-Source-Repository"));
+    verify(projection).getVerifiedGroupPackage(
+        proxyMember, PACKAGE_PATH, binding.identity(), binding.size(), false);
   }
 
   @Test

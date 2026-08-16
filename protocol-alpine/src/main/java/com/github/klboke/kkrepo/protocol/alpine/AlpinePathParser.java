@@ -11,9 +11,11 @@ import java.util.regex.Pattern;
 /** Strict one-pass path parser for Alpine v2 repository routes. */
 public final class AlpinePathParser {
   private static final Pattern SEGMENT = Pattern.compile("[a-z0-9][a-z0-9+._-]{0,127}");
+  private static final Pattern PACKAGE_NAME =
+      Pattern.compile("[A-Za-z0-9][A-Za-z0-9+._-]{0,127}");
   private static final Pattern ARCHITECTURE = Pattern.compile("[a-z0-9][a-z0-9_-]{0,63}");
   private static final Pattern PACKAGE =
-      Pattern.compile("[a-z0-9][a-z0-9+._-]{0,127}-[^/\\\\]{1,255}\\.apk");
+      Pattern.compile("[A-Za-z0-9][A-Za-z0-9+._-]{0,127}-[^/\\\\]{1,255}\\.apk");
 
   public AlpinePath parse(String rawPath) {
     String raw = rawPath == null ? "" : rawPath;
@@ -64,7 +66,8 @@ public final class AlpinePathParser {
   }
 
   public static String packageFilename(String name, String version) {
-    if (name == null || !SEGMENT.matcher(name).matches() || !AlpineVersions.isValid(version)) {
+    if (name == null || !PACKAGE_NAME.matcher(name).matches()
+        || !AlpineVersions.isValid(version)) {
       throw new IllegalArgumentException("Invalid Alpine package identity");
     }
     return name + "-" + version + ".apk";

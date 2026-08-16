@@ -32,6 +32,7 @@ import org.springframework.stereotype.Service;
 @Service
 final class AlpineProxyProjectionService {
   private static final Logger log = LoggerFactory.getLogger(AlpineProxyProjectionService.class);
+  private static final int MAX_PASSTHROUGH_OBSERVATION_PACKAGES = 2_000;
   private static final int MAX_RESIGN_PACKAGES = 50_000;
   private static final long MAX_RESIGN_PACKAGE_BYTES = 50L * 1024 * 1024 * 1024;
   private static final String UNKNOWN_SHA256 = "0".repeat(64);
@@ -63,7 +64,8 @@ final class AlpineProxyProjectionService {
       AlpinePath requested) {
     try {
       if (requested.kind() == AlpinePath.Kind.INDEX) {
-        projectIndex(runtime, settings, requested, false);
+        projectIndex(
+            runtime, settings, requested, false, MAX_PASSTHROUGH_OBSERVATION_PACKAGES);
       } else if (requested.kind() == AlpinePath.Kind.PACKAGE) {
         verifyAndBindKnownPackage(runtime, settings, requested);
       }
@@ -79,14 +81,11 @@ final class AlpineProxyProjectionService {
       AlpineRepositorySettings.Settings settings,
       String namespace) {
     AlpinePath indexPath = paths.parse(namespace + "/APKINDEX.tar.gz");
-    AlpineIndexArchive.Parsed parsed = projectIndex(runtime, settings, indexPath, true);
+    AlpineIndexArchive.Parsed parsed = projectIndex(
+        runtime, settings, indexPath, true, MAX_RESIGN_PACKAGES);
     if (!parsed.signatureVerified()) {
       throw new MavenExceptions.BadUpstreamException(
           "Alpine re-sign mode requires a verified upstream index");
-    }
-    if (parsed.records().size() > MAX_RESIGN_PACKAGES) {
-      throw new MavenExceptions.BadUpstreamException(
-          "Alpine re-sign projection exceeds package limit: " + parsed.records().size());
     }
     long total = 0;
     for (AlpineIndexRecord record : parsed.records()) {
@@ -157,11 +156,97 @@ final class AlpineProxyProjectionService {
     return true;
   }
 
+  /**
+   * Makes a passthrough proxy's durable index projection available to a locally signed group.
+   * Package bytes remain lazy and are verified against the bound index identity on first group
+   * download.
+   */
+  long prepareGroupMember(
+      RepositoryRuntime runtime,
+      AlpineRepositorySettings.Settings settings,
+      String namespace,
+      Instant now) {
+    Instant observedAt = now == null ? Instant.now() : now;
+    Optional<AlpineRegistryDao.ProxyDistribution> current =
+        registry.findProxyDistribution(runtime.id(), namespace);
+    boolean trustedCurrent = current.isPresent()
+        && (!settings.verifyUpstreamSignatures()
+            || current.orElseThrow().signatureVerified());
+    long minutes = Math.max(0, runtime.metadataMaxAgeMinutesOrDefault());
+    if (trustedCurrent
+        && current.orElseThrow().observedAt().plus(Duration.ofMinutes(minutes))
+            .isAfter(observedAt)) {
+      return projectedRevision(runtime, namespace, observedAt);
+    }
+
+    try {
+      AlpinePath indexPath = paths.parse(namespace + "/APKINDEX.tar.gz");
+      AlpineIndexArchive.Parsed parsed = projectIndex(
+          runtime,
+          settings,
+          indexPath,
+          settings.verifyUpstreamSignatures(),
+          MAX_RESIGN_PACKAGES);
+      LinkedHashSet<String> projected = new LinkedHashSet<>();
+      for (AlpineIndexRecord record : parsed.records()) {
+        projected.add(coordinate(expected(runtime, indexPath, record)));
+      }
+      removeStalePackages(runtime, namespace, projected);
+      return projectedRevision(runtime, namespace, observedAt);
+    } catch (RuntimeException failure) {
+      if (settings.staleIfError() && trustedCurrent) {
+        return projectedRevision(runtime, namespace, observedAt);
+      }
+      throw failure;
+    }
+  }
+
+  MavenResponse getVerifiedGroupPackage(
+      RepositoryRuntime runtime,
+      String path,
+      String identity,
+      long size,
+      boolean headOnly) {
+    AlpineRegistryDao.PackageRecord expected = registry.findPackageByPath(runtime.id(), path)
+        .orElseThrow(() -> new MavenExceptions.MavenNotFoundException(path));
+    requireGroupBinding(expected, identity, size, path);
+    if (expected.assetId() == null) {
+      fetchPackage(runtime, path);
+      expected = bindVerifiedPackage(runtime, expected, path);
+      expected = saveIfChanged(expected);
+      registry.replacePackageRelations(
+          expected.repositoryId(), expected.id(), relations(expected.id(), record(expected)));
+      requireGroupBinding(expected, identity, size, path);
+    }
+    return assets.serve(runtime, path, headOnly);
+  }
+
+  private long projectedRevision(
+      RepositoryRuntime runtime, String namespace, Instant now) {
+    return registry.findSuite(runtime.id(), namespace)
+        .orElseGet(() -> registry.ensureSuite(runtime.id(), namespace, now))
+        .desiredRevision();
+  }
+
+  private static void requireGroupBinding(
+      AlpineRegistryDao.PackageRecord record,
+      String identity,
+      long size,
+      String path) {
+    if (!record.path().equals(path)
+        || !record.identity().equals(identity)
+        || record.size() != size) {
+      throw new MavenExceptions.BadUpstreamException(
+          "Alpine proxy package no longer matches its group snapshot binding: " + path);
+    }
+  }
+
   private AlpineIndexArchive.Parsed projectIndex(
       RepositoryRuntime runtime,
       AlpineRepositorySettings.Settings settings,
       AlpinePath path,
-      boolean verificationRequired) {
+      boolean verificationRequired,
+      int packageLimit) {
     if (path.kind() != AlpinePath.Kind.INDEX) {
       throw new MavenExceptions.BadUpstreamException("Expected an Alpine APKINDEX path");
     }
@@ -176,6 +261,10 @@ final class AlpineProxyProjectionService {
         cached.body(),
         settings.upstreamPublicKeys(),
         verificationRequired || settings.verifyUpstreamSignatures());
+    if (parsed.records().size() > packageLimit) {
+      throw new MavenExceptions.BadUpstreamException(
+          "Alpine index projection exceeds package limit: " + parsed.records().size());
+    }
     LinkedHashMap<String, AlpineRegistryDao.ProxyIndex> manifest = new LinkedHashMap<>();
     for (AlpineIndexRecord record : parsed.records()) {
       AlpineRegistryDao.PackageRecord expected = expected(runtime, path, record);
@@ -205,7 +294,8 @@ final class AlpineProxyProjectionService {
           runtime,
           settings,
           paths.parse(path.namespace() + "/APKINDEX.tar.gz"),
-          false);
+          false,
+          MAX_RESIGN_PACKAGES);
       expected = registry.findPackageByPath(runtime.id(), path.normalized()).orElse(null);
     }
     if (expected == null) return null;
@@ -228,7 +318,7 @@ final class AlpineProxyProjectionService {
       AlpinePackageInfo info = inspected.info();
       if (!expected.packageName().equals(info.name())
           || !expected.version().equals(info.version())
-          || !expected.packageArchitecture().equals(info.architecture())
+          || !compatibleArchitecture(expected.packageArchitecture(), info.architecture())
           || !expected.identity().equals(inspected.identity())
           || expected.size() != inspected.size()) {
         throw new MavenExceptions.BadUpstreamException(
@@ -271,6 +361,12 @@ final class AlpineProxyProjectionService {
       throw new MavenExceptions.BadUpstreamException(
           "Invalid upstream Alpine package: " + packagePath, invalid);
     }
+  }
+
+  /** Alpine's official per-architecture indexes may rewrite an APK's internal noarch value. */
+  private static boolean compatibleArchitecture(
+      String indexArchitecture, String packageArchitecture) {
+    return indexArchitecture.equals(packageArchitecture) || "noarch".equals(packageArchitecture);
   }
 
   private void fetchPackage(RepositoryRuntime runtime, String path) {

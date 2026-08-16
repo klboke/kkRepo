@@ -18,6 +18,13 @@ class AlpinePathParserTest {
     assertEquals(AlpinePath.Kind.PACKAGE, apk.kind());
     assertEquals("curl-8.14.1-r2.apk", apk.filename());
 
+    AlpinePath mixedCase = parser.parse(
+        "v3.23/main/x86_64/freeswitch-sounds-ru-RU-elena-32000-1.0-r0.apk");
+    assertEquals(AlpinePath.Kind.PACKAGE, mixedCase.kind());
+    assertEquals("freeswitch-sounds-ru-RU-elena-32000-1.0-r0.apk",
+        AlpinePathParser.packageFilename(
+            "freeswitch-sounds-ru-RU-elena-32000", "1.0-r0"));
+
     assertEquals(AlpinePath.Kind.V3_INDEX,
         parser.parse("edge/main/x86_64/Packages.adb").kind());
   }
