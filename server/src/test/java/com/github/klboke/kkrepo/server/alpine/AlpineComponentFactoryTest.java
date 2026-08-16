@@ -47,8 +47,8 @@ class AlpineComponentFactoryTest {
     assertEquals("MIT", component.attributes().get("license"));
     assertNotNull(component.coordinateHash());
     assertEquals(
-        "v3.20/main/x86_64/demo/1.2-r3/demo-1.2-r3.apk",
-        factory.browsePath("v3.20", "main", "x86_64", info, "demo-1.2-r3.apk"));
+        "v3.20/main/x86_64/demo-1.2-r3.apk",
+        factory.browsePath("v3.20", "main", "x86_64", "demo-1.2-r3.apk"));
 
     AlpinePackageInfo minimal = AlpinePackageInfo.parse("""
         pkgname = tiny

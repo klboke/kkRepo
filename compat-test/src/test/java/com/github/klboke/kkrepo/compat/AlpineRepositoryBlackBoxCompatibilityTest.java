@@ -175,11 +175,22 @@ class AlpineRepositoryBlackBoxCompatibilityTest {
     }
     assertTrue(found, "Alpine package must be discoverable through component search");
 
-    String browsePath = "v3.23/main/x86_64/" + fixture.name() + "/" + fixture.version();
+    String browsePath = "v3.23/main/x86_64";
     Exchange browse = send(config.candidateAdmin().request(
         "/internal/browse/" + repository + "?path=" + encode(browsePath)).GET());
     assertEquals(200, browse.status());
-    assertTrue(browse.text().contains(fixture.filename()));
+    JsonNode entries = JSON.readTree(browse.body()).path("entries");
+    boolean directLeaf = false;
+    for (JsonNode entry : entries) {
+      assertFalse(fixture.name().equals(entry.path("name").asText()),
+          "Alpine Browse must not add package-name and version directories");
+      if (fixture.filename().equals(entry.path("name").asText())) {
+        assertEquals(browsePath + "/" + fixture.filename(), entry.path("path").asText());
+        assertTrue(entry.path("leaf").asBoolean());
+        directLeaf = true;
+      }
+    }
+    assertTrue(directLeaf, "Alpine package must be a direct Browse leaf in its APK namespace");
   }
 
   private static void createNexusHosted(

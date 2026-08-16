@@ -253,7 +253,6 @@ final class AlpineProxyProjectionService {
               distribution(expected.distribution()),
               expected.component(),
               expected.architecture(),
-              info,
               filename),
           packageAttributes(expected, inspected));
       Instant now = Instant.now();

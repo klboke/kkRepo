@@ -57,10 +57,8 @@ final class AlpineComponentFactory {
       String distribution,
       String channel,
       String repositoryArchitecture,
-      AlpinePackageInfo info,
       String filename) {
-    return distribution + "/" + channel + "/" + repositoryArchitecture + "/"
-        + info.name() + "/" + info.version() + "/" + filename;
+    return distribution + "/" + channel + "/" + repositoryArchitecture + "/" + filename;
   }
 
   private static void put(Map<String, Object> target, String key, Object value) {

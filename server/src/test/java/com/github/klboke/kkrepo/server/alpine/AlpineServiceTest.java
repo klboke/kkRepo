@@ -99,6 +99,9 @@ class AlpineServiceTest {
     assertEquals("HOSTED", saved.getValue().sourceKind());
     assertEquals("demo", saved.getValue().controlFields().get("P"));
     verify(registry).replacePackageRelations(eq(hosted.id()), eq(50L), any());
+    verify(assets).storePackage(
+        eq(hosted), eq(PACKAGE_PATH), eq(PACKAGE_PATH), any(), any(), eq("alice"),
+        eq("127.0.0.1"), any());
 
     when(registry.findPackage(
         hosted.id(), NAMESPACE, "main", "demo", "1.0-r0", "x86_64"))

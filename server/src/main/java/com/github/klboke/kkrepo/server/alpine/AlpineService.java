@@ -218,7 +218,7 @@ public class AlpineService {
           runtime,
           path.normalized(),
           components.browsePath(
-              path.distribution(), path.channel(), path.repositoryArchitecture(), info,
+              path.distribution(), path.channel(), path.repositoryArchitecture(),
               inspected.filename()),
           inspected.file(),
           Map.copyOf(attributes),

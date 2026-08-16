@@ -112,7 +112,7 @@ class AlpineProxyProjectionServiceTest {
 
     verify(assets).bindProxyPackage(
         eq(runtime), eq(PACKAGE_PATH), any(),
-        eq("v3.20/main/x86_64/demo/1.0-r0/demo-1.0-r0.apk"), any());
+        eq(PACKAGE_PATH), any());
     verify(registry).replacePackageRelations(anyLong(), anyLong(), any());
   }
 
