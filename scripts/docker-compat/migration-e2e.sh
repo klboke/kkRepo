@@ -1336,6 +1336,36 @@ alpine_fixture_row_counts() {
         WHERE r.name = $group_name)"
 }
 
+wait_for_alpine_publication_idle() {
+  local repository_name pending
+  repository_name="$(sql_literal "$ALPINE_KKREPO_REPOSITORY")"
+  for ((i = 1; i <= WAIT_TIMEOUT_SECONDS; i++)); do
+    pending="$(target_db_query "
+      SELECT COUNT(*)
+      FROM alpine_suite_state state_row
+      JOIN repository r ON r.id = state_row.repository_id
+      WHERE r.name = $repository_name
+        AND (
+          state_row.desired_revision <> state_row.published_revision
+          OR state_row.published_revision = 0
+          OR NOT EXISTS (
+            SELECT 1
+            FROM alpine_snapshot snapshot_row
+            WHERE snapshot_row.repository_id = state_row.repository_id
+              AND snapshot_row.distribution_name = state_row.distribution_name
+              AND snapshot_row.revision = state_row.published_revision
+              AND snapshot_row.published_at IS NOT NULL))")"
+    pending="$(printf '%s' "$pending" | tr -d '[:space:]')"
+    if [[ "$pending" == "0" ]]; then
+      log "Alpine hosted suite publication is idle"
+      return 0
+    fi
+    sleep 1
+  done
+  log "timed out waiting for Alpine hosted suite publication; pending=$pending"
+  exit 1
+}
+
 assert_alpine_fixture_counts() {
   local counts="$1"
   python3 - "$counts" <<'PY'
@@ -5021,10 +5051,12 @@ fi
 
 if alpine_migration_enabled; then
   verify_migrated_alpine_fixture "$job_id" "$KKREPO_URL" "primary" true
+  wait_for_alpine_publication_idle
   alpine_counts_before="$(alpine_fixture_row_counts)"
   alpine_counts_summary="$(assert_alpine_fixture_counts "$alpine_counts_before")"
   log "Alpine migration row counts: $alpine_counts_summary"
   run_alpine_idempotency_migration
+  wait_for_alpine_publication_idle
   alpine_counts_after="$(alpine_fixture_row_counts)"
   alpine_counts_summary="$(assert_alpine_fixture_counts "$alpine_counts_after")"
   log "Alpine idempotency row counts: $alpine_counts_summary"
