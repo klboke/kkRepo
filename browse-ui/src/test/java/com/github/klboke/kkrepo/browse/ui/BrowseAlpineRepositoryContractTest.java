@@ -15,6 +15,7 @@ class BrowseAlpineRepositoryContractTest {
     String index = resource("/META-INF/resources/browse/index.html");
     String javascript = resource("/META-INF/resources/browse/assets/browse.js");
     String stylesheet = resource("/META-INF/resources/browse/assets/format-icons.css");
+    String browseStylesheet = resource("/META-INF/resources/browse/assets/browse.css");
 
     assertTrue(index.contains("data-search-format=\"alpine\""));
     assertTrue(index.contains("data-format=\"alpine\""));
@@ -24,10 +25,15 @@ class BrowseAlpineRepositoryContractTest {
     assertTrue(javascript.contains("apk fetch --repository"));
     assertTrue(javascript.contains("renderAttributeGroup(\"Alpine\", detail.alpine)"));
     assertTrue(javascript.contains("form.append(\"alpine.asset\""));
+    assertTrue(javascript.contains(
+        "format === \"alpine\" && normalized.endsWith(\".apk\")"));
     assertTrue(stylesheet.contains(".format-logo-alpine"));
     assertTrue(stylesheet.contains("/browse/assets/formats/alpine.svg"));
+    assertTrue(browseStylesheet.contains(".tree-icon.icon-file-apk"));
     assertNotNull(getClass().getResource(
         "/META-INF/resources/browse/assets/formats/alpine.svg"));
+    assertNotNull(getClass().getResource(
+        "/META-INF/resources/browse/assets/icons/file-apk.svg"));
   }
 
   private String resource(String path) throws IOException {

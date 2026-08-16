@@ -67,6 +67,7 @@
 .icon-files { --lucide-icon: url("./icons/files.svg"); }
 .icon-file-archive { --lucide-icon: url("./icons/file-archive.svg"); }
 .icon-file-java-archive { --lucide-icon: url("./icons/file-java-archive.svg"); }
+.icon-file-apk { --lucide-icon: url("./icons/file-apk.svg"); }
 .icon-file-box { --lucide-icon: url("./icons/file-box.svg"); }
 .icon-file-json { --lucide-icon: url("./icons/file-json.svg"); }
 .icon-file-text { --lucide-icon: url("./icons/file-text.svg"); }

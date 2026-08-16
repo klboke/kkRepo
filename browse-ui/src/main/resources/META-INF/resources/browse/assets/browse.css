@@ -2508,6 +2508,11 @@ body {
   color: #a85f32;
 }
 
+.tree-icon.icon-file-apk,
+.crumb-icon.icon-file-apk {
+  color: #0d597f;
+}
+
 .tree-icon.icon-file-box,
 .crumb-icon.icon-file-box {
   color: #4f6f86;

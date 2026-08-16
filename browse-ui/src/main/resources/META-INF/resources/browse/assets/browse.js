@@ -736,6 +736,7 @@ const FILE_ICON_RULES = Object.freeze([
 function fileIconName(name, repositoryFormat = "") {
   const normalized = String(name || "").toLowerCase();
   const format = String(repositoryFormat || "").toLowerCase();
+  if (format === "alpine" && normalized.endsWith(".apk")) return "file-apk";
   if (format === "cargo" && normalized && !normalized.includes(".")) return "file-json";
   if (format === "go" && normalized === "list") return "file-text";
   if (format === "go" && normalized === "@latest") return "file-json";
