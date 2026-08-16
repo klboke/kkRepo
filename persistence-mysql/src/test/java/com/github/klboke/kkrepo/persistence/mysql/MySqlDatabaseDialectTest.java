@@ -45,6 +45,10 @@ class MySqlDatabaseDialectTest {
     assertEquals(
         "+com* +example* +artifact* +1* +0*",
         dialect.search().prepareComponentQuery("\"".repeat(4096) + "Com.Example artifact-1.0"));
+    assertEquals(
+        "+kkrepo* +alpine* +migration* +app* +datastore_h2_31894582966_1*",
+        dialect.search().prepareComponentQuery(
+            "kkrepo-alpine-migration-app-datastore_h2_31894582966_1"));
     assertThrows(IllegalArgumentException.class,
         () -> dialect.json().extractText("attributes_json; DROP TABLE asset", "key"));
     assertThrows(IllegalArgumentException.class,
@@ -69,6 +73,21 @@ class MySqlDatabaseDialectTest {
     assertTrue(dialect.conda().insertChannelStateIfAbsentSql().contains("INSERT IGNORE"));
     assertTrue(dialect.conda().insertCoordinateLeaseIfAbsentSql().contains("INSERT IGNORE"));
     assertEquals(Integer.MIN_VALUE, dialect.conda().streamingFetchSize());
+  }
+
+  @Test
+  void keepsAlpineOptimizerSqlInsideMySqlBackend() {
+    var cursor = dialect.alpine().packageNameIdCursor("busybox", 41L);
+
+    assertEquals(
+        "(package_name > ? OR (package_name = ? AND id > ?))",
+        cursor.predicate());
+    assertEquals(List.of("busybox", "busybox", 41L), cursor.arguments());
+    assertTrue(dialect.alpine().pendingSuitesSql()
+        .contains("FORCE INDEX (idx_alpine_suite_worker)"));
+    assertTrue(dialect.alpine().pendingSuitesSql().contains("STRAIGHT_JOIN repository"));
+    assertTrue(dialect.alpine().snapshotCleanupCandidatesSql()
+        .contains("JOIN alpine_suite_state suite"));
   }
 
   @Test

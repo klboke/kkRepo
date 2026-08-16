@@ -29,6 +29,7 @@
     <module>protocol-conda</module>
     <module>protocol-conan</module>
     <module>protocol-apt</module>
+    <module>protocol-alpine</module>
     <module>protocol-go</module>
     <module>protocol-helm</module>
     <module>protocol-docker</module>
@@ -238,6 +239,11 @@
       <dependency>
         <groupId>com.github.klboke</groupId>
         <artifactId>kkrepo-protocol-apt</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.github.klboke</groupId>
+        <artifactId>kkrepo-protocol-alpine</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>

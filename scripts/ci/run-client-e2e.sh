@@ -23,6 +23,10 @@ CONDA_PROXY_REPOSITORY="${CONDA_E2E_PROXY_REPOSITORY:-conda-proxy}"
 CONDA_GROUP_REPOSITORY="${CONDA_E2E_GROUP_REPOSITORY:-conda-group}"
 APT_HOSTED_REPOSITORY="${APT_E2E_HOSTED_REPOSITORY:-apt-hosted}"
 APT_CLIENT_IMAGES="${APT_E2E_IMAGES:-debian12=debian:12-slim,ubuntu24=ubuntu:24.04,current=debian:testing-slim}"
+ALPINE_HOSTED_REPOSITORY="${ALPINE_E2E_HOSTED_REPOSITORY:-alpine-hosted}"
+ALPINE_PROXY_REPOSITORY="${ALPINE_E2E_PROXY_REPOSITORY:-alpine-proxy}"
+ALPINE_GROUP_REPOSITORY="${ALPINE_E2E_GROUP_REPOSITORY:-alpine-group}"
+ALPINE_CLIENT_IMAGES="${ALPINE_E2E_IMAGES:-legacy=alpine:3.20,current=alpine:3.23}"
 CONAN_BIN="${CONAN_E2E_BIN:-conan}"
 CONAN_HOSTED_REPOSITORY="${CONAN_E2E_HOSTED_REPOSITORY:-conan-hosted}"
 CONAN_PROXY_REPOSITORY="${CONAN_E2E_PROXY_REPOSITORY:-conan-proxy}"
@@ -36,6 +40,7 @@ CLEANUP_FIXTURE_PATTERN=""
 CLEANUP_FIXTURE_LABEL=""
 SWIFT_CLEANUP_FIXTURE_AVAILABLE=false
 APT_E2E_CONTAINERS=()
+ALPINE_E2E_CONTAINERS=()
 
 if [[ ! "$SWIFT_LOGIN_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   printf '[client-e2e] SWIFT_E2E_LOGIN_TIMEOUT_SECONDS must be a positive integer\n' >&2
@@ -68,7 +73,22 @@ cleanup_apt_e2e_containers() {
   done
 }
 
-trap cleanup_apt_e2e_containers EXIT
+cleanup_alpine_e2e_containers() {
+  local container
+  if (( ${#ALPINE_E2E_CONTAINERS[@]} == 0 )); then
+    return
+  fi
+  for container in "${ALPINE_E2E_CONTAINERS[@]}"; do
+    docker rm -f "$container" >/dev/null 2>&1 || true
+  done
+}
+
+cleanup_client_e2e_containers() {
+  cleanup_apt_e2e_containers
+  cleanup_alpine_e2e_containers
+}
+
+trap cleanup_client_e2e_containers EXIT
 
 need() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -3179,6 +3199,284 @@ test_apt() {
     "$final_message" "$final_sha"
 }
 
+alpine_client_base_url() {
+  python3 - "$1" "$KKREPO_USER" "$KKREPO_PASSWORD" <<'PY'
+import sys
+from urllib.parse import quote, urlsplit, urlunsplit
+
+parts = urlsplit(sys.argv[1])
+host = parts.hostname or ""
+if host in {"127.0.0.1", "localhost", "::1"}:
+    host = "host.docker.internal"
+port = f":{parts.port}" if parts.port else ""
+auth = quote(sys.argv[2], safe="") + ":" + quote(sys.argv[3], safe="") + "@"
+print(urlunsplit((parts.scheme, auth + host + port, parts.path.rstrip("/"), "", "")))
+PY
+}
+
+alpine_create_fixture() {
+  local output="$1"
+  local package="$2"
+  local version="$3"
+  local architecture="$4"
+  local message="$5"
+  run_logged_output "alpine-fixture-$package-$version" \
+    "$ARTIFACT_DIR/alpine-$package-$version.json" \
+    python3 "$PROJECT_ROOT/scripts/ci/create-alpine-e2e-fixture.py" \
+      --output "$output" --package "$package" --version "$version" \
+      --architecture "$architecture" --message "$message"
+}
+
+alpine_upload_fixture() {
+  local label="$1"
+  local file="$2"
+  local repository_architecture="$3"
+  run_logged "alpine-$label-upload" curl -m 60 --fail-with-body -sS \
+    -u "$KKREPO_AUTH" -X PUT -H 'Content-Type: application/vnd.alpine.apk' \
+    --data-binary "@$file" \
+    "$KKREPO_URL/repository/$ALPINE_HOSTED_REPOSITORY/v3.23/main/$repository_architecture/$(basename "$file")"
+}
+
+alpine_wait_for_version() {
+  local repository="$1"
+  local package="$2"
+  local version="$3"
+  local architecture="$4"
+  local present="${5:-true}"
+  local timeout_seconds="${ALPINE_E2E_PUBLICATION_TIMEOUT_SECONDS:-60}"
+  local deadline=$((SECONDS + timeout_seconds))
+  local archive="$WORK_DIR/alpine/index-$repository-$architecture.tar.gz"
+  while (( SECONDS < deadline )); do
+    if curl -m 10 --fail-with-body -sS -u "$KKREPO_AUTH" \
+        "$KKREPO_URL/repository/$repository/v3.23/main/$architecture/APKINDEX.tar.gz" \
+        -o "$archive" 2>/dev/null; then
+      if python3 - "$archive" "$package" "$version" "$present" <<'PY'
+import gzip
+import io
+import pathlib
+import sys
+import tarfile
+
+archive, package, version, expected = sys.argv[1:]
+raw = gzip.decompress(pathlib.Path(archive).read_bytes())
+with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as tar:
+    member = tar.extractfile("APKINDEX")
+    if member is None:
+        raise SystemExit(1)
+    text = member.read().decode("utf-8")
+found = any(
+    f"P:{package}" in stanza.splitlines() and f"V:{version}" in stanza.splitlines()
+    for stanza in text.split("\n\n")
+)
+raise SystemExit(0 if found == (expected == "true") else 1)
+PY
+      then
+        return 0
+      fi
+    fi
+    sleep 0.2
+  done
+  log "Alpine metadata publication did not reach expected state for $package=$version"
+  return 1
+}
+
+alpine_write_client_config() {
+  local directory="$1"
+  local base_url="$2"
+  local repository="$3"
+  local key_file="$4"
+  local key_filename="$5"
+  local client_url
+  client_url="$(alpine_client_base_url "$base_url")"
+  add_redaction_value "$client_url"
+  mkdir -p "$directory"
+  printf '%s/repository/%s/v3.23/main\n' "$client_url" "$repository" \
+    >"$directory/repositories"
+  cp "$key_file" "$directory/$key_filename"
+  chmod 0644 "$directory/repositories" "$directory/$key_filename"
+}
+
+alpine_start_client() {
+  local container="$1"
+  local image="$2"
+  local config="$3"
+  local key_filename="$4"
+  run_logged "alpine-$container-start" docker run --detach --name "$container" \
+    --add-host host.docker.internal:host-gateway \
+    --volume "$config/repositories:/etc/apk/repositories:ro" \
+    --volume "$config/$key_filename:/etc/apk/keys/$key_filename:ro" \
+    "$image" sleep infinity
+  ALPINE_E2E_CONTAINERS+=("$container")
+}
+
+alpine_install_version() {
+  local container="$1"
+  local package="$2"
+  local version="$3"
+  local message="$4"
+  local sha256="$5"
+  run_logged "alpine-$container-install-$version" docker exec \
+    -e APK_PACKAGE="$package" -e APK_VERSION="$version" \
+    -e APK_MESSAGE="$message" -e APK_SHA256="$sha256" \
+    "$container" sh -euxc '
+      rm -rf /var/cache/apk/* /tmp/*.apk
+      apk update
+      apk search -x "$APK_PACKAGE" | grep -Fx "$APK_PACKAGE-$APK_VERSION"
+      apk policy "$APK_PACKAGE" | grep -F "$APK_VERSION"
+      cd /tmp
+      apk fetch "$APK_PACKAGE"
+      archive="$(find /tmp -maxdepth 1 -type f -name "${APK_PACKAGE}-${APK_VERSION}.apk" -print -quit)"
+      test -n "$archive"
+      test "$(sha256sum "$archive" | cut -d " " -f 1)" = "$APK_SHA256"
+      apk add "$APK_PACKAGE=$APK_VERSION"
+      test "$(apk version "$APK_PACKAGE" | awk "NR == 2 {print \$1}")" = "$APK_PACKAGE-$APK_VERSION"
+      test "$(cat "/usr/share/kkrepo-alpine-e2e/$APK_PACKAGE.txt")" = "$APK_MESSAGE"
+    '
+}
+
+alpine_upgrade_version() {
+  local container="$1"
+  local package="$2"
+  local version="$3"
+  local message="$4"
+  run_logged "alpine-$container-upgrade-$version" docker exec \
+    -e APK_PACKAGE="$package" -e APK_VERSION="$version" -e APK_MESSAGE="$message" \
+    "$container" sh -euxc '
+      rm -rf /var/cache/apk/*
+      apk update
+      apk add --upgrade "$APK_PACKAGE=$APK_VERSION"
+      apk info -e "$APK_PACKAGE=$APK_VERSION"
+      test "$(cat "/usr/share/kkrepo-alpine-e2e/$APK_PACKAGE.txt")" = "$APK_MESSAGE"
+    '
+}
+
+alpine_test_proxy_passthrough() {
+  local directory="$1"
+  if [[ "${ALPINE_E2E_PROXY_ENABLED:-true}" != "true" ]]; then
+    log "Alpine CDN proxy check skipped by ALPINE_E2E_PROXY_ENABLED=false"
+    return 0
+  fi
+  run_logged_output alpine-proxy-upstream-index "$directory/upstream-APKINDEX.tar.gz" \
+    curl -m 120 --retry 3 --fail-with-body -sS \
+    "https://dl-cdn.alpinelinux.org/alpine/v3.23/main/x86_64/APKINDEX.tar.gz"
+  run_logged_output alpine-proxy-index "$directory/proxy-APKINDEX.tar.gz" \
+    curl -m 120 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    "$KKREPO_URL/repository/$ALPINE_PROXY_REPOSITORY/v3.23/main/x86_64/APKINDEX.tar.gz"
+  cmp "$directory/upstream-APKINDEX.tar.gz" "$directory/proxy-APKINDEX.tar.gz"
+}
+
+alpine_test_secondary_replica() {
+  local directory="$1"
+  local secondary_url="${ALPINE_KKREPO_SECONDARY_BASE_URL:-}"
+  if [[ -z "$secondary_url" ]]; then
+    log "Alpine secondary-replica check skipped: ALPINE_KKREPO_SECONDARY_BASE_URL is unset"
+    return 0
+  fi
+  run_logged_output alpine-primary-index "$directory/primary-APKINDEX.tar.gz" \
+    curl -m 20 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    "$KKREPO_URL/repository/$ALPINE_GROUP_REPOSITORY/v3.23/main/x86_64/APKINDEX.tar.gz"
+  run_logged_output alpine-secondary-index "$directory/secondary-APKINDEX.tar.gz" \
+    curl -m 20 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    "$secondary_url/repository/$ALPINE_GROUP_REPOSITORY/v3.23/main/x86_64/APKINDEX.tar.gz"
+  cmp "$directory/primary-APKINDEX.tar.gz" "$directory/secondary-APKINDEX.tar.gz"
+}
+
+alpine_test_repository_roots() {
+  local directory="$1"
+  local kind repository body headers
+  for kind in hosted proxy group; do
+    case "$kind" in
+      hosted) repository="$ALPINE_HOSTED_REPOSITORY" ;;
+      proxy) repository="$ALPINE_PROXY_REPOSITORY" ;;
+      group) repository="$ALPINE_GROUP_REPOSITORY" ;;
+    esac
+    body="$directory/root-$kind.html"
+    headers="$directory/root-$kind.headers"
+    run_logged_output "alpine-$kind-root" "$body" \
+      curl -m 30 --fail-with-body -sS -D "$headers" -u "$KKREPO_AUTH" \
+      "$KKREPO_URL/repository/$repository/"
+    run_logged "alpine-$kind-root-content-type" \
+      grep -Eiq '^content-type: *text/html' "$headers"
+    run_logged "alpine-$kind-root-description" \
+      grep -Fq "This alpine $kind repository is not directly browseable at this URL." "$body"
+    run_logged "alpine-$kind-root-html-index" grep -Fq \
+      "/service/rest/repository/browse/$repository/" "$body"
+  done
+}
+
+test_alpine() {
+  need docker
+  if [[ "${ALPINE_E2E_VERSION_ORDER_CHECK:-true}" == "true" ]]; then
+    run_logged alpine-version-order "$PROJECT_ROOT/scripts/ci/check-alpine-version-order.sh"
+  fi
+  local directory="$WORK_DIR/alpine"
+  local key_filename="kkrepo-alpine-group.rsa.pub"
+  local key_file="$directory/$key_filename"
+  mkdir -p "$directory"
+  alpine_test_repository_roots "$directory"
+  run_logged_output alpine-group-public-key "$key_file" \
+    curl -m 30 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    "$KKREPO_URL/internal/repositories/$ALPINE_GROUP_REPOSITORY/alpine/public-key"
+
+  local entry label image label_slug package container config v1_file v2_file
+  local v1_message v2_message v1_sha v2_sha final_image="" final_package=""
+  IFS=',' read -r -a entries <<<"$ALPINE_CLIENT_IMAGES"
+  for entry in "${entries[@]}"; do
+    label="${entry%%=*}"
+    image="${entry#*=}"
+    if [[ "$entry" != *=* || -z "$label" || -z "$image" ]]; then
+      log "invalid ALPINE_E2E_IMAGES entry: $entry"
+      return 2
+    fi
+    label_slug="$(printf '%s' "$label" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-')"
+    label_slug="${label_slug#-}"
+    label_slug="${label_slug%-}"
+    package="kkrepo-alpine-$label_slug-$STAMP"
+    container="kkrepo-alpine-$label_slug-$STAMP"
+    config="$directory/config-$label_slug"
+    v1_file="$directory/$package-1.0.0-r0.apk"
+    v2_file="$directory/$package-1.1.0-r0.apk"
+    v1_message="kkRepo Alpine $label version 1.0.0-r0"
+    v2_message="kkRepo Alpine $label version 1.1.0-r0"
+    run_logged "alpine-$label_slug-pull" docker pull "$image"
+    alpine_create_fixture "$v1_file" "$package" 1.0.0-r0 noarch "$v1_message"
+    alpine_upload_fixture "$label_slug-v1" "$v1_file" x86_64
+    alpine_wait_for_version "$ALPINE_GROUP_REPOSITORY" "$package" 1.0.0-r0 x86_64
+    v1_sha="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$v1_file")"
+    alpine_write_client_config "$config" "$KKREPO_URL" "$ALPINE_GROUP_REPOSITORY" \
+      "$key_file" "$key_filename"
+    alpine_start_client "$container" "$image" "$config" "$key_filename"
+    alpine_install_version "$container" "$package" 1.0.0-r0 "$v1_message" "$v1_sha"
+
+    alpine_create_fixture "$v2_file" "$package" 1.1.0-r0 noarch "$v2_message"
+    alpine_upload_fixture "$label_slug-v2" "$v2_file" x86_64
+    alpine_wait_for_version "$ALPINE_GROUP_REPOSITORY" "$package" 1.1.0-r0 x86_64
+    v2_sha="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$v2_file")"
+    alpine_upgrade_version "$container" "$package" 1.1.0-r0 "$v2_message"
+    run_logged "alpine-$label_slug-v2-bytes" docker exec \
+      -e APK_PACKAGE="$package" -e APK_VERSION=1.1.0-r0 -e APK_SHA256="$v2_sha" \
+      "$container" sh -euxc '
+        cd /tmp
+        rm -f "${APK_PACKAGE}"-*.apk
+        apk fetch "$APK_PACKAGE"
+        archive="$(find /tmp -maxdepth 1 -type f -name "${APK_PACKAGE}-${APK_VERSION}.apk" -print -quit)"
+        test "$(sha256sum "$archive" | cut -d " " -f 1)" = "$APK_SHA256"
+      '
+    run_logged "alpine-$label_slug-delete-v1" curl -m 30 --fail-with-body -sS \
+      -u "$KKREPO_AUTH" -X DELETE \
+      "$KKREPO_URL/repository/$ALPINE_HOSTED_REPOSITORY/v3.23/main/x86_64/$(basename "$v1_file")"
+    alpine_wait_for_version "$ALPINE_GROUP_REPOSITORY" "$package" 1.0.0-r0 x86_64 false
+    docker rm -f "$container" >/dev/null
+    final_image="$image"
+    final_package="$package"
+  done
+
+  [[ -n "$final_image" && -n "$final_package" ]] \
+    || { log "Alpine client image matrix is empty"; return 2; }
+  alpine_test_proxy_passthrough "$directory"
+  alpine_test_secondary_replica "$directory"
+}
+
 test_ansible() {
   local matrix="${ANSIBLE_GALAXY_BINS:-}"
   if [[ -z "$matrix" ]] && command -v ansible-galaxy >/dev/null 2>&1; then
@@ -3227,7 +3525,7 @@ run_selected_tests() {
   local test
 
   if [[ -z "$selection" || "$selection" == "all" ]]; then
-    tests=(raw maven npm pypi go helm cargo pub composer nuget rubygems yum apt conda conan terraform swift ansible docker-oci)
+    tests=(raw maven npm pypi go helm cargo pub composer nuget rubygems yum apt alpine conda conan terraform swift ansible docker-oci)
   else
     IFS=',' read -r -a tests <<<"$selection"
   fi
@@ -3292,6 +3590,11 @@ run_selected_tests() {
       apt|debian)
         test_apt
         register_cleanup_fixture apt "$APT_HOSTED_REPOSITORY" "*kkrepo-apt-*-$STAMP*" apt
+        ;;
+      alpine|apk)
+        test_alpine
+        register_cleanup_fixture alpine "$ALPINE_HOSTED_REPOSITORY" \
+          "*kkrepo-alpine-*-$STAMP*" alpine
         ;;
       conda)
         test_conda

@@ -4,7 +4,7 @@
 
 更详细的验证流程见 [Nexus 兼容性测试说明](nexus-compatibility-testing.md)。
 
-下表中的验证类主要是黑盒协议检查。`client-e2e` suite 会额外覆盖 Maven、npm、PyPI、Go resolve、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform 0.13/当前稳定版、SwiftPM/Xcode、Ansible Galaxy 2.9/当前版、Conda、APT/Debian、Conan 2、NuGet、RubyGems、Yum、Docker/OCI 的真实包管理器客户端行为；运行环境要求和 `artifacts/client-e2e/` 诊断信息见 [compat-test README](../../compat-test/README.md)。
+下表中的验证类主要是黑盒协议检查。`client-e2e` suite 会额外覆盖 Maven、npm、PyPI、Go resolve、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform 0.13/当前稳定版、SwiftPM/Xcode、Ansible Galaxy 2.9/当前版、Conda、APT/Debian、Conan 2、Alpine/APK、NuGet、RubyGems、Yum、Docker/OCI 的真实包管理器客户端行为；运行环境要求和 `artifacts/client-e2e/` 诊断信息见 [compat-test README](../../compat-test/README.md)。
 
 ## 兼容原则
 
@@ -40,6 +40,7 @@
 | Conda | hosted / proxy / group | 根/嵌套 channel、`.tar.bz2`/`.conda` package 读取、Nexus raw PUT 与 UI/API 上传、JSON/BZ2/ZSTD repodata、current repodata、channeldata、条件读取、上游 proxy 和有序 group 解析 | 支持 channel/subdir/name/version/package 层级、package metadata、Browse/Search 和 Usage | Repository definition 与 hosted package 仅对已验证的 Nexus 3.92.x-3.94.x datastore shape 为 `FULL`；生成 metadata 在目标端重建 | `CondaRepositoryBlackBoxCompatibilityTest`、Conda protocol/server/persistence contract、真实 Conda client E2E、双副本检查、cleanup/scanning 测试和 migration E2E |
 | APT / Debian | hosted / proxy | 仓库根 POST 与 Components API/UI `.deb` 上传、签名 Packages/Release/InRelease、by-hash、GET/HEAD/Range/validator、passthrough/re-sign proxy，以及 `apt update/download/install/upgrade` | 支持 distribution/component/package/version/architecture 层级、package metadata、Browse/Search 和 Usage | Definition 与 hosted `.deb` 仅对已验证的 Nexus 3.92.x-3.94.x datastore shape 开放；生成 metadata 在目标端重建，私钥需在目标端显式导入 | `AptRepositoryBlackBoxCompatibilityTest`、APT protocol/server/persistence contract、Debian/Ubuntu/当前 APT 真实客户端 E2E、双副本、cleanup/scanning 和 migration E2E |
 | Conan 2 | hosted / proxy / group | Bearer 登录、`conan upload/list/download/install/remove`、以 manifest 为提交边界的 RREV/PREV 发布、文件 GET/Range、与 Nexus 一致的 HEAD 404、上游 proxy 和有序 group source binding | 支持 recipe version/RREV/package ID/PREV metadata、与 Nexus 对齐且在写入时固化的 Browse 投影、Search 和 Usage | Nexus 3.94 definition 与 hosted revision 按 shape gate；proxy cache 需显式选择；Conan 1、混合/未知 shape 和不完整 revision 均 fail closed | `ConanRepositoryBlackBoxCompatibilityTest`、Conan protocol/server/双数据库 contract、真实 Conan 2.31.2 E2E、cleanup/scanning 测试、migration contract 和 Nexus 性能门槛 |
+| Alpine / APK | hosted / proxy / group | 规范 APK v2 PUT 与 UI/Components API 上传、签名 `APKINDEX.tar.gz`、GET/HEAD/Range/validator、passthrough 或验签后 re-sign proxy、有序 group source binding，以及 `apk update/search/policy/fetch/add/upgrade` | 支持 distribution/channel/repository-architecture/package/version 层级、checksum/signature/source metadata、Browse/Search 和 Usage | 支持 Nexus 3.94 definition 与 shape 可证明的 hosted `.apk`；生成 index 在目标端重建，signing key 或 proxy secret 不可用时 fail closed 并报告 manual action | `AlpineRepositoryBlackBoxCompatibilityTest`、Alpine protocol/server/双数据库 contract、apk-tools 2.14/3.0 真实客户端 E2E 与版本差分、cleanup/scanning 测试、migration contract 和 Nexus 性能门槛 |
 | NuGet | hosted / proxy / group | package push、包下载、v3 service index、registration、flat container、search/autocomplete、管理台上传 | 支持 v3 service index/search | 默认迁移 hosted；proxy 可选 | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
 | RubyGems | hosted / proxy / group | gem push/yank、gem 下载、compact 和 legacy index assets、管理台上传 | 支持 | 默认迁移 hosted；proxy 可选 | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
 | Yum | hosted / proxy / group | RPM PUT/upload、包下载、`repodata` metadata | 支持 `repodata` | 默认迁移 hosted；proxy 可选 | `NugetRubygemsYumRepositoryBlackBoxCompatibilityTest` |
@@ -120,6 +121,7 @@ kkrepo 把迁移作为产品能力，而不是一次性脚本：
 - Conda repository definition 会保留 hosted/proxy/group 配置、TTL 和有序成员。Hosted `.tar.bz2`/`.conda` package 仅对已验证的 Nexus 3.92.x-3.94.x datastore shape 为 `FULL`。迁移时校验 package identity、size 和 checksum，过滤源端生成的 repodata/channeldata，并从目标关系投影重建。未知 profile、shape 漂移或无法证明 package identity 时 fail closed。Migration E2E 覆盖 Nexus H2/PostgreSQL 源、两种目标数据库、真实 Conda 安装、跨副本读取、checksum、restart/resume 和精确行数幂等。
 - APT repository definition 会保留 hosted/proxy 配置、TTL、distribution policy 和 passthrough/re-sign 模式。Hosted `.deb` 仅在 Nexus 3.92.x-3.94.x datastore shape 能证明 canonical package path、APT attributes 和 SHA-256 时恢复；源端生成的 `dists/` metadata 会被过滤并从目标投影重建。私钥绝不静默复制，管理员显式导入前目标仓库保持 offline。Migration E2E 覆盖 H2/PostgreSQL 源、MySQL/PostgreSQL 目标、真实 `apt` 安装、checksum/行数、key fail-closed 与跨副本读取。
 - Conan repository definition 会保留 hosted/proxy/group 配置、TTL 和有序成员。Hosted Conan 2 recipe/package revision 仅在 Nexus 3.94 datastore shape 能证明 canonical coordinate、完整 manifest 与 checksum 时恢复；不完整 revision、Conan 1 layout、混合 shape 和未知 profile 均 fail closed。Proxy cache 迁移需显式选择。协议感知的 writer 会重建关系投影，并在提交时持久化 Nexus 对齐的 Browse 展示路径，不需要迁移后补映射。
+- Alpine repository definition 会保留 hosted/proxy/group 配置、TTL、namespace allowlist、metadata mode、stale policy 和 member order。Hosted `.apk` 只在精确验证的 Nexus 3.94 datastore shape 能证明规范 path、typed attribute、size、identity 与 SHA-256 时恢复；生成 index 会被过滤并重建。Private signing key 与 masked proxy secret 不会被伪造，相关 target 保持 offline 并报告 `NEEDS_MANUAL_ACTION`，直到管理员显式修复。
 - 迁移步骤按 preflight/dry-run、resume、checksum 校验和报告能力设计。
 - 不支持或被阻塞的条目应进入报告，而不是静默跳过。
 
@@ -140,6 +142,7 @@ kkrepo 把迁移作为产品能力，而不是一次性脚本：
 - Conda 支持 classic repodata、BZ2/ZSTD 与 current-repodata alias。`current_repodata.json*` 当前返回完整兼容 snapshot，不是 conda-index 裁剪后的子集；暂不暴露 CEP 16 sharded repodata 和 JLAP。Conda 没有原生 publish 命令，hosted 发布使用 Nexus 兼容 PUT 或 UI/API 上传。
 - APT 通过 hosted/proxy 支持二进制 `.deb` 仓库，不暴露 Nexus 不支持的 APT group。Hosted source package、flat hosted、PDiff、生成式 Contents/Translation 和 `.udeb` index 不在当前支持边界；proxy passthrough 可原样提供这些上游路径，本地 re-sign metadata 只声明已校验并缓存的二进制 package。配置和运维语义见 [APT / Debian 仓库使用指南](repository-guides/apt-debian.md)。
 - Conan 当前支持 Conan 2 hosted/proxy/group 工作流和 Nexus 可见的 v2 API。Conan 1 endpoint/revision、发布 archive 之外的 recipe export source、任意 remote federation 和部分 revision 发布不在支持面。有效 manifest 是提交边界；cleanup 按完整 recipe/package revision 删除，扫描会把 package archive 与对应的 `conaninfo.txt` 一起编目。详见 [Conan 仓库使用指南](repository-guides/conan-2.md)。
+- Alpine 当前支持 APK v2 hosted/proxy/group 工作流。`Packages.adb`、APK v3 package container、DSA signing key、unsigned hosted/group index 和 private-key 下载不在支持面。Nexus 3.94 的 unsigned-upload Q1/architecture 投影差异在与 apk-tools 完整性校验冲突时不会复制。详见 [Alpine / APK 仓库使用指南](repository-guides/alpine-apk.md)。
 - Go 不支持 hosted 上传；Go module proxy 行为以读取代理为主。
 - 不承诺覆盖每一个 Nexus UI endpoint。只有在支持用户工作流或迁移兼容需要时，才补对应 endpoint。
 - 当协议允许非确定性时，测试中可能规范化排序、时间戳、生成 ID 和 hostname。

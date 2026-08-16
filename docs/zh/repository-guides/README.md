@@ -25,6 +25,7 @@
 | Conda | hosted / proxy / group | [Conda 使用示例](../client-recipes.md#conda) | [Conda 仓库使用指南](conda.md) |
 | APT / Debian | hosted / proxy | [APT / Debian 使用示例](../client-recipes.md#apt--debian) | [APT / Debian 仓库使用指南](apt-debian.md) |
 | Conan 2 | hosted / proxy / group | [Conan 2 使用示例](../client-recipes.md#conan-2) | [Conan 2 仓库使用指南](conan-2.md) |
+| Alpine / APK | hosted / proxy / group | [Alpine / APK 使用示例](../client-recipes.md#alpine--apk) | [Alpine / APK 仓库使用指南](alpine-apk.md) |
 | NuGet | hosted / proxy / group | [NuGet 使用示例](../client-recipes.md#nuget) | [NuGet 仓库使用指南](nuget.md) |
 | RubyGems | hosted / proxy / group | [RubyGems 使用示例](../client-recipes.md#rubygems) | [RubyGems 仓库使用指南](rubygems.md) |
 | Yum | hosted / proxy / group | [Yum 使用示例](../client-recipes.md#yum) | [Yum 仓库使用指南](yum.md) |

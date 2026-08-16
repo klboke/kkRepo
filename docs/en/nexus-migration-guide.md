@@ -2,7 +2,7 @@
 
 This document describes prerequisites, execution order, incremental migration, and domain cutover when migrating from Nexus Repository to kkrepo.
 
-kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client protocol behavior, and permission/authentication model. After migration, only point the original Nexus domain to kkrepo. Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift Package Registry, Ansible Galaxy, Conda, APT/Debian, NuGet, RubyGems, Yum, and other migrated non-Docker client configurations do not need to change. Docker / OCI uses Registry HTTP API V2 `/v2/...` routes; preserve repository names and connector/path-based routing when cutting Docker clients over.
+kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client protocol behavior, and permission/authentication model. After migration, only point the original Nexus domain to kkrepo. Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift Package Registry, Ansible Galaxy, Conda, APT/Debian, Alpine/APK, NuGet, RubyGems, Yum, and other migrated non-Docker client configurations do not need to change. Docker / OCI uses Registry HTTP API V2 `/v2/...` routes; preserve repository names and connector/path-based routing when cutting Docker clients over.
 
 ## Repository Data Scope And Format Boundaries
 
@@ -16,6 +16,7 @@ kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client pr
 - **Ansible Galaxy:** Metadata migration recognizes `ansiblegalaxy-hosted`, `ansiblegalaxy-proxy`, and `ansiblegalaxy-group`, preserving remote settings, TTLs, online state, write policy, ordered members, and the `/repository/<repo>/` Galaxy v3 base. Hosted collections and explicitly selected proxy cache data are restored only for native Nexus 3.93.x-3.94.x sources whose datastore fingerprint proves the expected collection identity and integrity shape. Unknown versions, incomplete fingerprints, missing checksums/manifests, and shape drift produce `NEEDS_MANUAL_ACTION`. Complete collection archives and their `MANIFEST.json`/`FILES.json` stay in blob storage; the relational database stores only bounded metadata projections, hashes, references, tasks, and bindings.
 - **Conda:** Metadata migration recognizes `conda-hosted`, `conda-proxy`, and `conda-group`, preserving remote settings, TTLs, online state, write policy, and ordered members. Hosted `.tar.bz2` and `.conda` packages are restored only for Nexus 3.92.x-3.94.x sources whose datastore fingerprint proves the expected Conda package shape. Generated repodata/channeldata is filtered from source assets and rebuilt at the target. Unknown profiles, shape drift, unsupported assets, or package identities that cannot be proven produce `NEEDS_MANUAL_ACTION`; proxy package cache is not replayed as hosted content.
 - **APT / Debian:** Metadata migration recognizes `apt-hosted` and `apt-proxy`, preserving distribution policy, passthrough/re-sign mode, remote settings, TTLs, online state, and write policy. Hosted `.deb` packages are restored only for Nexus 3.92.x-3.94.x sources whose datastore fingerprint proves canonical package paths, APT attributes, and SHA-256. Source-generated `dists/` metadata is filtered and rebuilt. A private signing key is never copied implicitly: affected targets are created offline and reported as `NEEDS_MANUAL_ACTION` until an administrator explicitly imports the intended key. Unknown profiles or shape drift fail closed; proxy cache data is not selected by default.
+- **Alpine / APK:** Metadata migration recognizes native Nexus 3.94 `alpine-hosted`, `alpine-proxy`, and `alpine-group` definitions, preserving remote/TTL/negative-cache settings, online/write policy, and ordered members. Hosted APK v2 packages are restored only when the exact datastore fingerprint proves a canonical four-segment package path, Alpine attributes, component identity, and SHA-256. Source-generated `APKINDEX.tar.gz` is filtered and rebuilt. Private signing keys are never copied implicitly: locally signed hosted/proxy/group targets remain offline and report `NEEDS_MANUAL_ACTION` until an administrator explicitly imports the intended PKCS#8 RSA key. Unknown versions/shapes and APK v3 data fail closed; proxy cache is not selected by default.
 - **Proxy credentials:** A recoverable source secret is encrypted in the target. If a Swift or Ansible proxy secret is masked or missing, migration creates the target proxy offline, writes no placeholder credential, and requires an administrator to supply the credential explicitly.
 
 ## Migration Flow Overview
@@ -107,6 +108,17 @@ Each enabled lane creates native Conda hosted/proxy/group definitions in Nexus, 
 
 APT reuses the same representative Nexus 3.92 PostgreSQL and Nexus 3.94 H2/PostgreSQL source lanes, with MySQL and PostgreSQL targets. Each enabled lane creates a native signed hosted repository and installable `.deb`, proves the live datastore fingerprint, verifies preflight keeps the target offline without transferring key material, restores the package with checksum validation, explicitly imports the temporary test key, rebuilds Release/InRelease/Packages, and runs a real `apt` install. Protocol row counts and cross-replica reads are checked where available; generated source metadata is not copied.
 
+### Alpine Migration E2E Boundaries
+
+Alpine runs in the Nexus 3.94 H2/PostgreSQL representative lanes and covers both MySQL and
+PostgreSQL targets. Each enabled lane creates native signed hosted/proxy/group definitions,
+publishes an installable APK v2 dependency graph, validates the source index signature and package
+bytes, and proves the exact datastore shape before content migration is accepted. The target stays
+offline with zero signing-key rows until the temporary source key is explicitly imported; it then
+rebuilds `APKINDEX.tar.gz` and runs real apk-tools `update/add/info`. The lane also verifies exact
+package checksums, protocol row counts, generated-index filtering, job resume/idempotency, and
+cross-replica reads where a second target replica is available.
+
 ### Incremental Migration
 
 For the second and later migrations, set `Metadata since` for incremental migration. `Metadata since` filters by source Nexus asset/blob update time and scans only assets added or updated after that time.
@@ -133,7 +145,7 @@ Migration is designed to be interruptible and resumable. Completed data remains 
 
 After full migration and the final incremental migration are complete, check browse/search, package downloads, checksums, and common client pull behavior for key repositories.
 
-After confirming there are no issues, point the original Nexus domain to kkrepo through DNS or a reverse proxy. Because kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client protocols, and permission/authentication model, clients do not need to modify Maven settings, npm registry, PyPI index-url, Go GOPROXY, Helm repo, Cargo sparse registry URL, Pub hosted URL, Composer repository URL, Terraform `host.services` URL, Swift registry base, Ansible Galaxy server URL, Conda channel URL, APT source URL, or similar configuration for migrated repository formats. APT clients must already trust the same signing identity that the administrator explicitly imports on the target.
+After confirming there are no issues, point the original Nexus domain to kkrepo through DNS or a reverse proxy. Because kkrepo is compatible with Nexus's `/repository/<repo>/...` URL layout, client protocols, and permission/authentication model, clients do not need to modify Maven settings, npm registry, PyPI index-url, Go GOPROXY, Helm repo, Cargo sparse registry URL, Pub hosted URL, Composer repository URL, Terraform `host.services` URL, Swift registry base, Ansible Galaxy server URL, Conda channel URL, APT source URL, Alpine repository URL, or similar configuration for migrated repository formats. APT and Alpine clients must already trust the same signing identities that the administrator explicitly imports on the target.
 
 After cutover, keep the source Nexus for an observation period, and disable source script capability after confirming no further compensation migration is needed.
 

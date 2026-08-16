@@ -570,6 +570,41 @@ conan install --requires='demo/1.0.0@team/stable' --remote=kkrepo
 Revision 提交语义、Browse 路径、清理、安全扫描、proxy/group、迁移和排障说明见
 [Conan 仓库使用指南](repository-guides/conan-2.md)。
 
+## Alpine / APK
+
+使用 group 配置的精确文件名安装仓库作用域公钥：
+
+```bash
+curl -u alice:"$KKREPO_PASSWORD" \
+  -o kkrepo-alpine-group.rsa.pub \
+  https://nexus.example.com/internal/repositories/alpine-group/alpine/public-key
+sudo install -m 0644 kkrepo-alpine-group.rsa.pub \
+  /etc/apk/keys/kkrepo-alpine-group.rsa.pub
+```
+
+配置 group，然后使用标准客户端更新、查看、下载和安装：
+
+```bash
+echo 'https://nexus.example.com/repository/alpine-group/v3.23/main' \
+  | sudo tee /etc/apk/repositories
+apk update
+apk policy acme-agent
+apk fetch acme-agent=1.2.3-r0
+apk add acme-agent=1.2.3-r0
+apk info -e acme-agent=1.2.3-r0
+```
+
+向 hosted namespace 发布不可变 APK v2 package：
+
+```bash
+curl -u alice:"$KKREPO_PASSWORD" \
+  -H 'Content-Type: application/vnd.alpine.apk' \
+  --upload-file acme-agent-1.2.3-r0.apk \
+  https://nexus.example.com/repository/alpine-hosted/v3.23/main/x86_64/acme-agent-1.2.3-r0.apk
+```
+
+认证 URL 应保存在受保护的客户端配置中。Hosted/group index 由本地 key 签名，passthrough proxy 保持上游签名。详见 [Alpine / APK 仓库使用指南](repository-guides/alpine-apk.md)。
+
 ## NuGet
 
 添加 source：

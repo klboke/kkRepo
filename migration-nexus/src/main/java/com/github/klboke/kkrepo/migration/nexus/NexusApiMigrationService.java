@@ -298,6 +298,11 @@ public class NexusApiMigrationService {
               + " requires manual signing-key import (" + risk
               + "); the migrated repository will be offline.");
         }
+        if (containsAlpineSigningRisk(risk)) {
+          warnings.add("Alpine repository " + repository
+              + " requires manual signing-key import (" + risk
+              + "); the migrated repository will be offline.");
+        }
       }
     });
     return new NexusMigrationPreflight(
@@ -545,6 +550,9 @@ public class NexusApiMigrationService {
     if (recipe.format() == RepositoryFormat.APT) {
       attributes.put("apt", aptAttributes(document, recipe));
     }
+    if (recipe.format() == RepositoryFormat.ALPINE) {
+      attributes.put("alpine", alpineAttributes(document, recipe));
+    }
     boolean online = bool(value(document, "online"), true);
     if (repositoryManualActionRisk(document) != null) {
       online = false;
@@ -705,6 +713,7 @@ public class NexusApiMigrationService {
     }
     checks.add(validateProxyCredentials(inventory));
     checks.add(validateAptSigningKeys(inventory));
+    checks.add(validateAlpineSigningKeys(inventory));
     checks.add(validateApiKeyExport(inventory));
     checks.add(validatePlanHashes(preflight));
     return new NexusMigrationValidation(checks.stream()
@@ -923,6 +932,33 @@ public class NexusApiMigrationService {
             .toList());
   }
 
+  private ValidationCheck validateAlpineSigningKeys(NexusInventory inventory) {
+    Map<String, String> risks = repositoryManualActionRisks(inventory).entrySet().stream()
+        .filter(entry -> containsAlpineSigningRisk(entry.getValue()))
+        .collect(java.util.stream.Collectors.toMap(
+            Map.Entry::getKey,
+            Map.Entry::getValue,
+            (left, right) -> left,
+            LinkedHashMap::new));
+    if (risks.isEmpty()) {
+      return new ValidationCheck(
+          "repository",
+          "Alpine signing keys",
+          ValidationStatus.PASS.name(),
+          "No migrated Alpine repository requires a local signing key.",
+          List.of());
+    }
+    return new ValidationCheck(
+        "repository",
+        "Alpine signing keys",
+        ValidationStatus.MANUAL.name(),
+        "Alpine private signing keys require explicit administrator import; affected target "
+            + "repositories remain offline until their existing RSA key is configured.",
+        risks.entrySet().stream()
+            .map(entry -> entry.getKey() + ": " + entry.getValue())
+            .toList());
+  }
+
   private ValidationCheck validatePlanHashes(NexusMigrationPreflight preflight) {
     NexusMigrationPlan plan = preflight.migrationPlan();
     String profileHash = plan == null ? null : plan.profileHash();
@@ -1124,6 +1160,50 @@ public class NexusApiMigrationService {
     return aptSigning(document) instanceof Map<?, ?> values && !values.isEmpty();
   }
 
+  private static Map<String, Object> alpineAttributes(
+      RepositoryDocument document, RepositoryRecipe recipe) {
+    Object raw = value(document, "alpine");
+    if (!(raw instanceof Map<?, ?>)) {
+      raw = nested(value(document, "attributes"), "alpine");
+    }
+    Object signing = alpineSigning(document);
+    boolean localSigning = recipe.type() != RepositoryType.PROXY
+        || alpineSigningConfigured(document);
+    LinkedHashMap<String, Object> attributes = new LinkedHashMap<>();
+    putStringListIfPresent(attributes, "distributions", nested(raw, "distributions"));
+    putStringListIfPresent(attributes, "channels", nested(raw, "channels"));
+    putStringListIfPresent(attributes, "architectures", nested(raw, "architectures"));
+    attributes.put("metadataMode", localSigning ? "RESIGN" : "PASSTHROUGH");
+    attributes.put("verifyUpstreamSignatures",
+        recipe.type() != RepositoryType.PROXY || localSigning);
+    attributes.put("staleIfError", bool(nested(raw, "staleIfError"), true));
+    String keyFilename = firstNonBlank(
+        string(nested(signing, "keyFilename")),
+        string(nested(signing, "keyName")),
+        repositoryName(document) + ".rsa.pub");
+    attributes.put("keyFilename", keyFilename);
+    attributes.put("signatureType", "RSA");
+    attributes.put("description", firstNonBlank(
+        string(nested(raw, "description")), "Migrated from Nexus Alpine repository"));
+    attributes.put("upstreamPublicKeys", List.of());
+    return Map.copyOf(attributes);
+  }
+
+  private static Object alpineSigning(RepositoryDocument document) {
+    Object signing = value(document, "alpineSigning");
+    if (!(signing instanceof Map<?, ?>)) {
+      signing = nested(value(document, "attributes"), "alpineSigning");
+    }
+    if (!(signing instanceof Map<?, ?>)) {
+      signing = nested(value(document, "alpine"), "signing");
+    }
+    return signing;
+  }
+
+  private static boolean alpineSigningConfigured(RepositoryDocument document) {
+    return alpineSigning(document) instanceof Map<?, ?> values && !values.isEmpty();
+  }
+
   private static NexusMigrationPlan withRepositoryManualActions(
       NexusMigrationPlan plan,
       NexusInventory inventory) {
@@ -1157,6 +1237,12 @@ public class NexusApiMigrationService {
               warnings.add("Target APT repository will be migrated offline so it cannot silently create "
                   + "a replacement signing identity (" + risk + ").");
             }
+            if (containsAlpineSigningRisk(risk)) {
+              reasons.add("Alpine signing keys are not imported without explicit administrator approval; "
+                  + "import the existing PKCS#8 RSA private key before enabling the migrated repository.");
+              warnings.add("Target Alpine repository will be migrated offline so it cannot silently create "
+                  + "a replacement signing identity (" + risk + ").");
+            }
           }
           return new NexusMigrationPlanItem(
               item.area(),
@@ -1185,6 +1271,10 @@ public class NexusApiMigrationService {
     if (risks.values().stream().anyMatch(NexusApiMigrationService::containsAptSigningRisk)) {
       warnings.add("APT repositories that require a local signing identity are migrated offline until "
           + "an administrator explicitly imports the existing private key.");
+    }
+    if (risks.values().stream().anyMatch(NexusApiMigrationService::containsAlpineSigningRisk)) {
+      warnings.add("Alpine repositories that require a local signing identity are migrated offline until "
+          + "an administrator explicitly imports the existing PKCS#8 RSA private key.");
     }
     LinkedHashSet<String> manualActions = new LinkedHashSet<>(plan.manualActions());
     risks.keySet().forEach(repository -> manualActions.add("repository:" + repository));
@@ -1218,13 +1308,19 @@ public class NexusApiMigrationService {
             Comparator.nullsLast(String::compareTo)))
         .forEach(document -> addRisk(
             risks, repositoryName(document), aptSigningRisk(document)));
+    inventory.repositories().stream()
+        .sorted(Comparator.comparing(
+            NexusApiMigrationService::repositoryName,
+            Comparator.nullsLast(String::compareTo)))
+        .forEach(document -> addRisk(
+            risks, repositoryName(document), alpineSigningRisk(document)));
     return java.util.Collections.unmodifiableMap(risks);
   }
 
   private static String repositoryManualActionRisk(RepositoryDocument document) {
     String risk = repositoryTypeEnum(document) == RepositoryType.PROXY
         ? proxyCredentialRisk(document) : null;
-    return combineRisk(risk, aptSigningRisk(document));
+    return combineRisk(combineRisk(risk, aptSigningRisk(document)), alpineSigningRisk(document));
   }
 
   private static String aptSigningRisk(RepositoryDocument document) {
@@ -1254,12 +1350,49 @@ public class NexusApiMigrationService {
     return "apt_signing_key_import_required";
   }
 
+  private static String alpineSigningRisk(RepositoryDocument document) {
+    if (!"alpine".equalsIgnoreCase(repositoryFormat(document))) {
+      return null;
+    }
+    RepositoryType type = repositoryTypeEnum(document);
+    if (type == RepositoryType.PROXY && !alpineSigningConfigured(document)) {
+      return null;
+    }
+    if (type != RepositoryType.HOSTED
+        && type != RepositoryType.GROUP
+        && type != RepositoryType.PROXY) {
+      return null;
+    }
+    Object signing = alpineSigning(document);
+    String keypair = firstNonBlank(
+        string(nested(signing, "keypair")),
+        string(nested(signing, "privateKey")));
+    if (keypair == null || keypair.isBlank()) {
+      return "missing_alpine_signing_key";
+    }
+    if (maskedSecret(keypair)) {
+      return "masked_alpine_signing_key";
+    }
+    if (!keypair.contains("BEGIN PRIVATE KEY")) {
+      return "invalid_alpine_signing_key";
+    }
+    String passphrase = string(nested(signing, "passphrase"));
+    if (maskedSecret(passphrase)) {
+      return "masked_alpine_signing_passphrase";
+    }
+    return "alpine_signing_key_import_required";
+  }
+
   private static boolean containsProxyCredentialRisk(String risk) {
     return risk != null && risk.contains("proxy_credential");
   }
 
   private static boolean containsAptSigningRisk(String risk) {
     return risk != null && risk.contains("apt_signing");
+  }
+
+  private static boolean containsAlpineSigningRisk(String risk) {
+    return risk != null && risk.contains("alpine_signing");
   }
 
   private static void addRisk(Map<String, String> risks, String repository, String risk) {
@@ -1400,6 +1533,17 @@ public class NexusApiMigrationService {
       }
     }
     return List.copyOf(values);
+  }
+
+  private static void putStringListIfPresent(
+      Map<String, Object> target, String key, Object raw) {
+    if (!(raw instanceof Iterable<?> iterable)) return;
+    ArrayList<String> values = new ArrayList<>();
+    for (Object item : iterable) {
+      String value = string(item);
+      if (value != null && !values.contains(value)) values.add(value);
+    }
+    if (!values.isEmpty()) target.put(key, List.copyOf(values));
   }
 
   private static String mavenSetting(RepositoryDocument document, String key) {

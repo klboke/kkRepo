@@ -320,6 +320,7 @@ class RepositoryDataMigrationWorker {
     if ((format == RepositoryFormat.PUB || format == RepositoryFormat.TERRAFORM
         || format == RepositoryFormat.SWIFT || format == RepositoryFormat.ANSIBLEGALAXY
         || format == RepositoryFormat.CONDA || format == RepositoryFormat.APT
+        || format == RepositoryFormat.ALPINE
         || format == RepositoryFormat.CONAN)
         && !RepositoryDataMigrationPaths.shouldDiscoverAsset(format, path)) {
       return false;

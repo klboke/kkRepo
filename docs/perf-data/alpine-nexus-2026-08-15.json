@@ -1,0 +1,967 @@
+{
+  "generated_at": "2026-08-15T09:57:22.915413+00:00",
+  "host": {
+    "platform": "macOS-14.7.8-x86_64-i386-64bit",
+    "processor": "i386",
+    "python": "3.10.11"
+  },
+  "configuration": {
+    "requests": 250,
+    "concurrency": 16,
+    "warmups": 32,
+    "rounds": 3,
+    "nexus_base_url": "http://127.0.0.1:48090/repository/alpine-perf-details-1786787798",
+    "kkrepo_base_url": "http://127.0.0.1:59090/repository/alpine-perf-details-1786787798",
+    "package_path": "v3.23/main/x86_64/kkrepo-alpine-benchmark-1.0.0-r0.apk"
+  },
+  "preflights": {
+    "signed index GET": {
+      "Nexus": {
+        "records": [
+          [
+            "kkrepo-alpine-benchmark",
+            "1.0.0-r0",
+            "4196328",
+            "4194304"
+          ]
+        ],
+        "signature_types": [
+          "RSA"
+        ]
+      },
+      "kkRepo": {
+        "records": [
+          [
+            "kkrepo-alpine-benchmark",
+            "1.0.0-r0",
+            "4196328",
+            "4194304"
+          ]
+        ],
+        "signature_types": [
+          "RSA"
+        ]
+      }
+    },
+    "signed index HEAD": {
+      "Nexus": 200,
+      "kkRepo": 200
+    },
+    "signed index 304": {
+      "Nexus": 304,
+      "kkRepo": 304
+    },
+    "package GET": {
+      "Nexus": {
+        "size": 4196328,
+        "sha256": "ae4c61a2d34fa1e99962b38e138cd0ef5477097d0344833ffd9a077ad7e69da3"
+      },
+      "kkRepo": {
+        "size": 4196328,
+        "sha256": "ae4c61a2d34fa1e99962b38e138cd0ef5477097d0344833ffd9a077ad7e69da3"
+      }
+    },
+    "package Range 64KiB": {
+      "Nexus": {
+        "size": 65536,
+        "sha256": "dcf33f38e3caaac064baa49a8d1b32ab225b86548fdae52a98dac5a37762d7b5"
+      },
+      "kkRepo": {
+        "size": 65536,
+        "sha256": "dcf33f38e3caaac064baa49a8d1b32ab225b86548fdae52a98dac5a37762d7b5"
+      }
+    },
+    "package HEAD": {
+      "Nexus": 200,
+      "kkRepo": 200
+    }
+  },
+  "results": [
+    {
+      "scenario": "signed index GET",
+      "target": "Nexus",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 164750,
+        "wall_seconds": 0.142,
+        "requests_per_second": 1760.65,
+        "mebibytes_per_second": 1.11,
+        "p50_ms": 6.033,
+        "p95_ms": 19.3,
+        "p99_ms": 24.695,
+        "maximum_ms": 26.315
+      }
+    },
+    {
+      "scenario": "signed index GET",
+      "target": "kkRepo",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 172750,
+        "wall_seconds": 0.155,
+        "requests_per_second": 1609.49,
+        "mebibytes_per_second": 1.06,
+        "p50_ms": 6.807,
+        "p95_ms": 15.291,
+        "p99_ms": 18.566,
+        "maximum_ms": 24.399
+      }
+    },
+    {
+      "scenario": "signed index HEAD",
+      "target": "Nexus",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 0,
+        "wall_seconds": 0.198,
+        "requests_per_second": 1263.57,
+        "mebibytes_per_second": 0.0,
+        "p50_ms": 9.648,
+        "p95_ms": 24.054,
+        "p99_ms": 29.264,
+        "maximum_ms": 39.092
+      }
+    },
+    {
+      "scenario": "signed index HEAD",
+      "target": "kkRepo",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 0,
+        "wall_seconds": 0.16,
+        "requests_per_second": 1566.47,
+        "mebibytes_per_second": 0.0,
+        "p50_ms": 7.324,
+        "p95_ms": 24.249,
+        "p99_ms": 32.539,
+        "maximum_ms": 36.176
+      }
+    },
+    {
+      "scenario": "signed index 304",
+      "target": "Nexus",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 0,
+        "wall_seconds": 0.194,
+        "requests_per_second": 1286.85,
+        "mebibytes_per_second": 0.0,
+        "p50_ms": 9.683,
+        "p95_ms": 22.951,
+        "p99_ms": 33.204,
+        "maximum_ms": 34.021
+      }
+    },
+    {
+      "scenario": "signed index 304",
+      "target": "kkRepo",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 0,
+        "wall_seconds": 0.133,
+        "requests_per_second": 1880.19,
+        "mebibytes_per_second": 0.0,
+        "p50_ms": 6.314,
+        "p95_ms": 18.27,
+        "p99_ms": 24.343,
+        "maximum_ms": 32.273
+      }
+    },
+    {
+      "scenario": "package GET",
+      "target": "Nexus",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 1049082000,
+        "wall_seconds": 0.675,
+        "requests_per_second": 370.48,
+        "mebibytes_per_second": 1482.64,
+        "p50_ms": 29.671,
+        "p95_ms": 62.154,
+        "p99_ms": 84.836,
+        "maximum_ms": 218.357
+      }
+    },
+    {
+      "scenario": "package GET",
+      "target": "kkRepo",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 1049082000,
+        "wall_seconds": 0.512,
+        "requests_per_second": 487.99,
+        "mebibytes_per_second": 1952.88,
+        "p50_ms": 28.22,
+        "p95_ms": 46.165,
+        "p99_ms": 58.677,
+        "maximum_ms": 74.54
+      }
+    },
+    {
+      "scenario": "package Range 64KiB",
+      "target": "Nexus",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 16384000,
+        "wall_seconds": 0.184,
+        "requests_per_second": 1361.38,
+        "mebibytes_per_second": 85.09,
+        "p50_ms": 9.613,
+        "p95_ms": 22.96,
+        "p99_ms": 24.316,
+        "maximum_ms": 25.477
+      }
+    },
+    {
+      "scenario": "package Range 64KiB",
+      "target": "kkRepo",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 16384000,
+        "wall_seconds": 0.138,
+        "requests_per_second": 1810.76,
+        "mebibytes_per_second": 113.17,
+        "p50_ms": 6.937,
+        "p95_ms": 16.959,
+        "p99_ms": 24.845,
+        "maximum_ms": 29.775
+      }
+    },
+    {
+      "scenario": "package HEAD",
+      "target": "Nexus",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 0,
+        "wall_seconds": 0.126,
+        "requests_per_second": 1980.28,
+        "mebibytes_per_second": 0.0,
+        "p50_ms": 6.547,
+        "p95_ms": 13.088,
+        "p99_ms": 21.86,
+        "maximum_ms": 23.863
+      }
+    },
+    {
+      "scenario": "package HEAD",
+      "target": "kkRepo",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 0,
+        "wall_seconds": 0.095,
+        "requests_per_second": 2622.83,
+        "mebibytes_per_second": 0.0,
+        "p50_ms": 4.461,
+        "p95_ms": 11.508,
+        "p99_ms": 16.428,
+        "maximum_ms": 17.622
+      }
+    }
+  ],
+  "raw_results": [
+    {
+      "round": 1,
+      "scenario": "signed index GET",
+      "target": "Nexus",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 164750,
+        "wall_seconds": 0.142145,
+        "requests_per_second": 1758.77,
+        "mebibytes_per_second": 1.11,
+        "p50_ms": 6.9,
+        "p95_ms": 15.074,
+        "p99_ms": 24.695,
+        "maximum_ms": 26.315
+      }
+    },
+    {
+      "round": 1,
+      "scenario": "signed index GET",
+      "target": "kkRepo",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 172750,
+        "wall_seconds": 0.134363,
+        "requests_per_second": 1860.63,
+        "mebibytes_per_second": 1.23,
+        "p50_ms": 6.665,
+        "p95_ms": 13.86,
+        "p99_ms": 18.566,
+        "maximum_ms": 20.216
+      }
+    },
+    {
+      "round": 2,
+      "scenario": "signed index GET",
+      "target": "kkRepo",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 172750,
+        "wall_seconds": 0.155328,
+        "requests_per_second": 1609.49,
+        "mebibytes_per_second": 1.06,
+        "p50_ms": 6.807,
+        "p95_ms": 23.202,
+        "p99_ms": 43.001,
+        "maximum_ms": 44.755
+      }
+    },
+    {
+      "round": 2,
+      "scenario": "signed index GET",
+      "target": "Nexus",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 164750,
+        "wall_seconds": 0.131429,
+        "requests_per_second": 1902.16,
+        "mebibytes_per_second": 1.2,
+        "p50_ms": 5.805,
+        "p95_ms": 19.3,
+        "p99_ms": 31.674,
+        "maximum_ms": 33.134
+      }
+    },
+    {
+      "round": 3,
+      "scenario": "signed index GET",
+      "target": "Nexus",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 164750,
+        "wall_seconds": 0.141993,
+        "requests_per_second": 1760.65,
+        "mebibytes_per_second": 1.11,
+        "p50_ms": 6.033,
+        "p95_ms": 22.967,
+        "p99_ms": 24.488,
+        "maximum_ms": 24.644
+      }
+    },
+    {
+      "round": 3,
+      "scenario": "signed index GET",
+      "target": "kkRepo",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 172750,
+        "wall_seconds": 0.156299,
+        "requests_per_second": 1599.5,
+        "mebibytes_per_second": 1.05,
+        "p50_ms": 7.332,
+        "p95_ms": 15.291,
+        "p99_ms": 17.175,
+        "maximum_ms": 24.399
+      }
+    },
+    {
+      "round": 1,
+      "scenario": "signed index HEAD",
+      "target": "kkRepo",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 0,
+        "wall_seconds": 0.159594,
+        "requests_per_second": 1566.47,
+        "mebibytes_per_second": 0.0,
+        "p50_ms": 7.324,
+        "p95_ms": 30.141,
+        "p99_ms": 38.179,
+        "maximum_ms": 51.923
+      }
+    },
+    {
+      "round": 1,
+      "scenario": "signed index HEAD",
+      "target": "Nexus",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 0,
+        "wall_seconds": 0.201736,
+        "requests_per_second": 1239.25,
+        "mebibytes_per_second": 0.0,
+        "p50_ms": 9.678,
+        "p95_ms": 24.391,
+        "p99_ms": 38.102,
+        "maximum_ms": 50.197
+      }
+    },
+    {
+      "round": 2,
+      "scenario": "signed index HEAD",
+      "target": "Nexus",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 0,
+        "wall_seconds": 0.197853,
+        "requests_per_second": 1263.57,
+        "mebibytes_per_second": 0.0,
+        "p50_ms": 9.648,
+        "p95_ms": 23.548,
+        "p99_ms": 29.264,
+        "maximum_ms": 37.793
+      }
+    },
+    {
+      "round": 2,
+      "scenario": "signed index HEAD",
+      "target": "kkRepo",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 0,
+        "wall_seconds": 0.127538,
+        "requests_per_second": 1960.21,
+        "mebibytes_per_second": 0.0,
+        "p50_ms": 5.683,
+        "p95_ms": 19.549,
+        "p99_ms": 28.286,
+        "maximum_ms": 30.477
+      }
+    },
+    {
+      "round": 3,
+      "scenario": "signed index HEAD",
+      "target": "kkRepo",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 0,
+        "wall_seconds": 0.166883,
+        "requests_per_second": 1498.05,
+        "mebibytes_per_second": 0.0,
+        "p50_ms": 7.431,
+        "p95_ms": 24.249,
+        "p99_ms": 32.539,
+        "maximum_ms": 36.176
+      }
+    },
+    {
+      "round": 3,
+      "scenario": "signed index HEAD",
+      "target": "Nexus",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 0,
+        "wall_seconds": 0.19569,
+        "requests_per_second": 1277.53,
+        "mebibytes_per_second": 0.0,
+        "p50_ms": 9.46,
+        "p95_ms": 24.054,
+        "p99_ms": 29.212,
+        "maximum_ms": 39.092
+      }
+    },
+    {
+      "round": 1,
+      "scenario": "signed index 304",
+      "target": "Nexus",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 0,
+        "wall_seconds": 0.188098,
+        "requests_per_second": 1329.09,
+        "mebibytes_per_second": 0.0,
+        "p50_ms": 9.617,
+        "p95_ms": 23.49,
+        "p99_ms": 33.204,
+        "maximum_ms": 34.021
+      }
+    },
+    {
+      "round": 1,
+      "scenario": "signed index 304",
+      "target": "kkRepo",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 0,
+        "wall_seconds": 0.103361,
+        "requests_per_second": 2418.7,
+        "mebibytes_per_second": 0.0,
+        "p50_ms": 5.131,
+        "p95_ms": 11.089,
+        "p99_ms": 12.954,
+        "maximum_ms": 13.475
+      }
+    },
+    {
+      "round": 2,
+      "scenario": "signed index 304",
+      "target": "kkRepo",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 0,
+        "wall_seconds": 0.142745,
+        "requests_per_second": 1751.37,
+        "mebibytes_per_second": 0.0,
+        "p50_ms": 6.314,
+        "p95_ms": 18.27,
+        "p99_ms": 24.343,
+        "maximum_ms": 34.435
+      }
+    },
+    {
+      "round": 2,
+      "scenario": "signed index 304",
+      "target": "Nexus",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 0,
+        "wall_seconds": 0.194273,
+        "requests_per_second": 1286.85,
+        "mebibytes_per_second": 0.0,
+        "p50_ms": 9.824,
+        "p95_ms": 20.749,
+        "p99_ms": 41.666,
+        "maximum_ms": 45.499
+      }
+    },
+    {
+      "round": 3,
+      "scenario": "signed index 304",
+      "target": "Nexus",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 0,
+        "wall_seconds": 0.195156,
+        "requests_per_second": 1281.03,
+        "mebibytes_per_second": 0.0,
+        "p50_ms": 9.683,
+        "p95_ms": 22.951,
+        "p99_ms": 26.289,
+        "maximum_ms": 30.674
+      }
+    },
+    {
+      "round": 3,
+      "scenario": "signed index 304",
+      "target": "kkRepo",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 0,
+        "wall_seconds": 0.132965,
+        "requests_per_second": 1880.19,
+        "mebibytes_per_second": 0.0,
+        "p50_ms": 6.353,
+        "p95_ms": 20.581,
+        "p99_ms": 30.946,
+        "maximum_ms": 32.273
+      }
+    },
+    {
+      "round": 1,
+      "scenario": "package GET",
+      "target": "kkRepo",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 1049082000,
+        "wall_seconds": 0.514703,
+        "requests_per_second": 485.72,
+        "mebibytes_per_second": 1943.8,
+        "p50_ms": 28.22,
+        "p95_ms": 46.165,
+        "p99_ms": 51.425,
+        "maximum_ms": 74.54
+      }
+    },
+    {
+      "round": 1,
+      "scenario": "package GET",
+      "target": "Nexus",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 1049082000,
+        "wall_seconds": 0.62307,
+        "requests_per_second": 401.24,
+        "mebibytes_per_second": 1605.73,
+        "p50_ms": 32.821,
+        "p95_ms": 62.154,
+        "p99_ms": 84.836,
+        "maximum_ms": 86.612
+      }
+    },
+    {
+      "round": 2,
+      "scenario": "package GET",
+      "target": "Nexus",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 1049082000,
+        "wall_seconds": 0.674799,
+        "requests_per_second": 370.48,
+        "mebibytes_per_second": 1482.64,
+        "p50_ms": 29.671,
+        "p95_ms": 51.378,
+        "p99_ms": 77.458,
+        "maximum_ms": 218.357
+      }
+    },
+    {
+      "round": 2,
+      "scenario": "package GET",
+      "target": "kkRepo",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 1049082000,
+        "wall_seconds": 0.503786,
+        "requests_per_second": 496.24,
+        "mebibytes_per_second": 1985.93,
+        "p50_ms": 26.468,
+        "p95_ms": 52.505,
+        "p99_ms": 58.677,
+        "maximum_ms": 60.34
+      }
+    },
+    {
+      "round": 3,
+      "scenario": "package GET",
+      "target": "kkRepo",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 1049082000,
+        "wall_seconds": 0.512311,
+        "requests_per_second": 487.99,
+        "mebibytes_per_second": 1952.88,
+        "p50_ms": 28.831,
+        "p95_ms": 45.213,
+        "p99_ms": 59.775,
+        "maximum_ms": 100.809
+      }
+    },
+    {
+      "round": 3,
+      "scenario": "package GET",
+      "target": "Nexus",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 1049082000,
+        "wall_seconds": 0.74911,
+        "requests_per_second": 333.73,
+        "mebibytes_per_second": 1335.56,
+        "p50_ms": 29.389,
+        "p95_ms": 75.649,
+        "p99_ms": 236.996,
+        "maximum_ms": 263.338
+      }
+    },
+    {
+      "round": 1,
+      "scenario": "package Range 64KiB",
+      "target": "Nexus",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 16384000,
+        "wall_seconds": 0.180928,
+        "requests_per_second": 1381.76,
+        "mebibytes_per_second": 86.36,
+        "p50_ms": 9.613,
+        "p95_ms": 22.96,
+        "p99_ms": 24.316,
+        "maximum_ms": 25.477
+      }
+    },
+    {
+      "round": 1,
+      "scenario": "package Range 64KiB",
+      "target": "kkRepo",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 16384000,
+        "wall_seconds": 0.137492,
+        "requests_per_second": 1818.28,
+        "mebibytes_per_second": 113.64,
+        "p50_ms": 7.351,
+        "p95_ms": 14.738,
+        "p99_ms": 17.555,
+        "maximum_ms": 19.782
+      }
+    },
+    {
+      "round": 2,
+      "scenario": "package Range 64KiB",
+      "target": "kkRepo",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 16384000,
+        "wall_seconds": 0.138064,
+        "requests_per_second": 1810.76,
+        "mebibytes_per_second": 113.17,
+        "p50_ms": 6.937,
+        "p95_ms": 21.775,
+        "p99_ms": 24.845,
+        "maximum_ms": 29.775
+      }
+    },
+    {
+      "round": 2,
+      "scenario": "package Range 64KiB",
+      "target": "Nexus",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 16384000,
+        "wall_seconds": 0.183638,
+        "requests_per_second": 1361.38,
+        "mebibytes_per_second": 85.09,
+        "p50_ms": 9.577,
+        "p95_ms": 20.891,
+        "p99_ms": 22.65,
+        "maximum_ms": 23.246
+      }
+    },
+    {
+      "round": 3,
+      "scenario": "package Range 64KiB",
+      "target": "Nexus",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 16384000,
+        "wall_seconds": 0.197222,
+        "requests_per_second": 1267.61,
+        "mebibytes_per_second": 79.23,
+        "p50_ms": 10.569,
+        "p95_ms": 23.712,
+        "p99_ms": 28.927,
+        "maximum_ms": 30.413
+      }
+    },
+    {
+      "round": 3,
+      "scenario": "package Range 64KiB",
+      "target": "kkRepo",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 16384000,
+        "wall_seconds": 0.139691,
+        "requests_per_second": 1789.66,
+        "mebibytes_per_second": 111.85,
+        "p50_ms": 6.852,
+        "p95_ms": 16.959,
+        "p99_ms": 27.862,
+        "maximum_ms": 31.658
+      }
+    },
+    {
+      "round": 1,
+      "scenario": "package HEAD",
+      "target": "kkRepo",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 0,
+        "wall_seconds": 0.095317,
+        "requests_per_second": 2622.83,
+        "mebibytes_per_second": 0.0,
+        "p50_ms": 4.461,
+        "p95_ms": 11.508,
+        "p99_ms": 18.099,
+        "maximum_ms": 19.535
+      }
+    },
+    {
+      "round": 1,
+      "scenario": "package HEAD",
+      "target": "Nexus",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 0,
+        "wall_seconds": 0.103112,
+        "requests_per_second": 2424.55,
+        "mebibytes_per_second": 0.0,
+        "p50_ms": 5.489,
+        "p95_ms": 13.088,
+        "p99_ms": 15.547,
+        "maximum_ms": 15.988
+      }
+    },
+    {
+      "round": 2,
+      "scenario": "package HEAD",
+      "target": "Nexus",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 0,
+        "wall_seconds": 0.126245,
+        "requests_per_second": 1980.28,
+        "mebibytes_per_second": 0.0,
+        "p50_ms": 6.547,
+        "p95_ms": 12.582,
+        "p99_ms": 21.86,
+        "maximum_ms": 23.863
+      }
+    },
+    {
+      "round": 2,
+      "scenario": "package HEAD",
+      "target": "kkRepo",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 0,
+        "wall_seconds": 0.090528,
+        "requests_per_second": 2761.58,
+        "mebibytes_per_second": 0.0,
+        "p50_ms": 4.45,
+        "p95_ms": 10.049,
+        "p99_ms": 16.428,
+        "maximum_ms": 17.622
+      }
+    },
+    {
+      "round": 3,
+      "scenario": "package HEAD",
+      "target": "kkRepo",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 0,
+        "wall_seconds": 0.10539,
+        "requests_per_second": 2372.15,
+        "mebibytes_per_second": 0.0,
+        "p50_ms": 5.245,
+        "p95_ms": 11.736,
+        "p99_ms": 13.344,
+        "maximum_ms": 15.159
+      }
+    },
+    {
+      "round": 3,
+      "scenario": "package HEAD",
+      "target": "Nexus",
+      "measurement": {
+        "requests": 250,
+        "concurrency": 16,
+        "response_bytes": 0,
+        "wall_seconds": 0.162531,
+        "requests_per_second": 1538.17,
+        "mebibytes_per_second": 0.0,
+        "p50_ms": 7.624,
+        "p95_ms": 20.253,
+        "p99_ms": 33.648,
+        "maximum_ms": 34.613
+      }
+    }
+  ],
+  "comparisons": [
+    {
+      "scenario": "signed index GET",
+      "nexus_rps": 1760.65,
+      "kkrepo_rps": 1609.49,
+      "throughput_ratio": 0.914,
+      "nexus_p95_ms": 19.3,
+      "kkrepo_p95_ms": 15.291,
+      "p95_ratio": 0.792
+    },
+    {
+      "scenario": "signed index HEAD",
+      "nexus_rps": 1263.57,
+      "kkrepo_rps": 1566.47,
+      "throughput_ratio": 1.24,
+      "nexus_p95_ms": 24.054,
+      "kkrepo_p95_ms": 24.249,
+      "p95_ratio": 1.008
+    },
+    {
+      "scenario": "signed index 304",
+      "nexus_rps": 1286.85,
+      "kkrepo_rps": 1880.19,
+      "throughput_ratio": 1.461,
+      "nexus_p95_ms": 22.951,
+      "kkrepo_p95_ms": 18.27,
+      "p95_ratio": 0.796
+    },
+    {
+      "scenario": "package GET",
+      "nexus_rps": 370.48,
+      "kkrepo_rps": 487.99,
+      "throughput_ratio": 1.317,
+      "nexus_p95_ms": 62.154,
+      "kkrepo_p95_ms": 46.165,
+      "p95_ratio": 0.743
+    },
+    {
+      "scenario": "package Range 64KiB",
+      "nexus_rps": 1361.38,
+      "kkrepo_rps": 1810.76,
+      "throughput_ratio": 1.33,
+      "nexus_p95_ms": 22.96,
+      "kkrepo_p95_ms": 16.959,
+      "p95_ratio": 0.739
+    },
+    {
+      "scenario": "package HEAD",
+      "nexus_rps": 1980.28,
+      "kkrepo_rps": 2622.83,
+      "throughput_ratio": 1.324,
+      "nexus_p95_ms": 13.088,
+      "kkrepo_p95_ms": 11.508,
+      "p95_ratio": 0.879
+    }
+  ],
+  "apk_client": {
+    "Nexus": {
+      "p50_ms": 1290.416,
+      "p95_ms": 1428.791
+    },
+    "kkRepo": {
+      "p50_ms": 1037.012,
+      "p95_ms": 1099.141
+    },
+    "samples_ms": {
+      "Nexus": [
+        1215.133,
+        1428.791,
+        1290.416
+      ],
+      "kkRepo": [
+        1037.012,
+        1099.141,
+        923.475
+      ]
+    },
+    "p95_ratio": 0.769
+  },
+  "gate_failures": []
+}

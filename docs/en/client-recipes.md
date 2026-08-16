@@ -572,6 +572,43 @@ conan install --requires='demo/1.0.0@team/stable' --remote=kkrepo
 For revision commit semantics, Browse paths, cleanup, scanning, proxy/group behavior,
 migration, and troubleshooting, see the [Conan Repository Guide](repository-guides/conan-2.md).
 
+## Alpine / APK
+
+Install the repository-scoped public key with the exact filename configured on the group:
+
+```bash
+curl -u alice:"$KKREPO_PASSWORD" \
+  -o kkrepo-alpine-group.rsa.pub \
+  https://nexus.example.com/internal/repositories/alpine-group/alpine/public-key
+sudo install -m 0644 kkrepo-alpine-group.rsa.pub \
+  /etc/apk/keys/kkrepo-alpine-group.rsa.pub
+```
+
+Configure a group repository, then update, inspect, fetch, and install with the standard client:
+
+```bash
+echo 'https://nexus.example.com/repository/alpine-group/v3.23/main' \
+  | sudo tee /etc/apk/repositories
+apk update
+apk policy acme-agent
+apk fetch acme-agent=1.2.3-r0
+apk add acme-agent=1.2.3-r0
+apk info -e acme-agent=1.2.3-r0
+```
+
+Publish an immutable APK v2 package to a hosted namespace:
+
+```bash
+curl -u alice:"$KKREPO_PASSWORD" \
+  -H 'Content-Type: application/vnd.alpine.apk' \
+  --upload-file acme-agent-1.2.3-r0.apk \
+  https://nexus.example.com/repository/alpine-hosted/v3.23/main/x86_64/acme-agent-1.2.3-r0.apk
+```
+
+Use protected client configuration for authenticated repository URLs. Hosted/group indexes are
+locally signed; passthrough proxies retain the upstream signature. See the
+[Alpine / APK Repository Guide](repository-guides/alpine-apk.md).
+
 ## NuGet
 
 Add a source:

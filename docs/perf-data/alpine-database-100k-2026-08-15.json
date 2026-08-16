@@ -1,0 +1,232 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-08-15T11:18:05Z",
+  "purpose": "Alpine database query growth and index-plan verification",
+  "environment": {
+    "host": "Intel Core i9-9880H, 64 GiB RAM, macOS 14.7.8 x86_64",
+    "container_runtime": "Docker 29.4.0 (OrbStack)",
+    "databases": {
+      "mysql": "8.0.46",
+      "postgresql": "12.22"
+    }
+  },
+  "dataset": {
+    "packages": 100000,
+    "package_relations": 100000,
+    "suite_states": 10000,
+    "pending_suites": 100,
+    "snapshots": 100001,
+    "group_bindings": 100000,
+    "group_snapshot_stages": 2,
+    "notes": [
+      "Package asset paths share a deliberately long common prefix.",
+      "One hundred relation rows match the requested token; 99900 are decoys.",
+      "One group stage is published and one is orphaned while 100000 live bindings remain."
+    ]
+  },
+  "method": {
+    "tool": "EXPLAIN ANALYZE",
+    "runs_per_query": 7,
+    "cache_state": "consecutive warmed executions after load and ANALYZE",
+    "percentile_rule": "nearest-rank over the seven execution-time samples",
+    "unit": "ms",
+    "scope": "database executor time; excludes JDBC mapping, network transfer, and application work"
+  },
+  "results": {
+    "mysql": [
+      {
+        "query": "exact_asset_path",
+        "cardinality": "1 of 100000",
+        "samples_ms": [0.000108, 0.000113, 0.000116, 0.000120, 0.000114, 0.000121, 0.000112],
+        "p50_ms": 0.000114,
+        "p95_ms": 0.000121,
+        "index": "unique(repository_id, asset_path_hash) plus full-path collision check"
+      },
+      {
+        "query": "namespace_keyset_late_page",
+        "cardinality": "2048-row page after row 90000 of 100000",
+        "samples_ms": [5.80, 5.11, 5.33, 5.74, 5.18, 5.26, 5.20],
+        "p50_ms": 5.26,
+        "p95_ms": 5.80,
+        "index": "(repository_id, distribution_name, package_name, id) with MySQL OR keyset predicate"
+      },
+      {
+        "query": "pending_suite_worker",
+        "cardinality": "100 pending of 10000 suites, limit 256",
+        "samples_ms": [0.313, 0.441, 0.403, 0.427, 0.381, 0.368, 0.407],
+        "p50_ms": 0.403,
+        "p95_ms": 0.441,
+        "index": "generated publish_pending worker index plus ordered repository point lookups"
+      },
+      {
+        "query": "snapshot_cleanup_candidates",
+        "cardinality": "limit 32 from 100001 snapshots, retain newest 3",
+        "samples_ms": [0.851, 0.866, 0.782, 0.944, 0.863, 0.783, 0.850],
+        "p50_ms": 0.851,
+        "p95_ms": 0.944,
+        "index": "created_at cleanup index plus bounded newer-snapshot primary-key probe"
+      },
+      {
+        "query": "relation_lookup",
+        "cardinality": "100 matches of 100000 relations, limit 256",
+        "samples_ms": [1.040, 1.040, 0.992, 1.190, 0.946, 0.877, 0.829],
+        "p50_ms": 0.992,
+        "p95_ms": 1.190,
+        "index": "(repository_id, relation_kind, token_hash, package_id)"
+      },
+      {
+        "query": "published_group_token",
+        "cardinality": "1 snapshot point lookup",
+        "samples_ms": [0.000089, 0.000091, 0.000109, 0.000110, 0.000111, 0.000115, 0.000119],
+        "p50_ms": 0.000110,
+        "p95_ms": 0.000119,
+        "index": "snapshot primary key"
+      },
+      {
+        "query": "group_binding_late_page",
+        "cardinality": "2048-row page after row 90000 of 100000",
+        "samples_ms": [3.85, 3.73, 3.63, 4.08, 3.64, 4.37, 5.60],
+        "p50_ms": 3.85,
+        "p95_ms": 5.60,
+        "index": "(group_repository_id, distribution_name, snapshot_revision, binding_token, id)"
+      },
+      {
+        "query": "group_stage_publication_lock",
+        "cardinality": "1 staged snapshot",
+        "samples_ms": [0.0944, 0.0728, 0.0552, 0.0748, 0.0560, 0.0617, 0.0668],
+        "p50_ms": 0.0668,
+        "p95_ms": 0.0944,
+        "index": "group stage primary key with FOR UPDATE"
+      },
+      {
+        "query": "orphan_group_stage_scan",
+        "cardinality": "2 stage rows with 100000 live bindings",
+        "samples_ms": [0.0477, 0.0482, 0.0562, 0.0455, 0.0480, 0.0504, 0.0528],
+        "p50_ms": 0.0482,
+        "p95_ms": 0.0562,
+        "index": "stage cleanup index with SKIP LOCKED; binding rows are removed only by foreign-key cascade"
+      }
+    ],
+    "postgresql": [
+      {
+        "query": "exact_asset_path",
+        "cardinality": "1 of 100000",
+        "samples_ms": [0.185, 0.062, 0.058, 0.055, 0.085, 0.049, 0.051],
+        "p50_ms": 0.058,
+        "p95_ms": 0.185,
+        "index": "unique(repository_id, asset_path_hash) plus full-path collision check"
+      },
+      {
+        "query": "namespace_keyset_late_page",
+        "cardinality": "2048-row page after row 90000 of 100000",
+        "samples_ms": [2.448, 1.301, 2.774, 1.477, 1.979, 1.455, 2.048],
+        "p50_ms": 1.979,
+        "p95_ms": 2.774,
+        "index": "(repository_id, distribution_name, package_name, id) with PostgreSQL row-value keyset predicate"
+      },
+      {
+        "query": "pending_suite_worker",
+        "cardinality": "100 pending of 10000 suites, limit 256",
+        "samples_ms": [0.805, 0.295, 0.340, 0.293, 0.294, 0.333, 0.317],
+        "p50_ms": 0.317,
+        "p95_ms": 0.805,
+        "index": "partial publish_pending index plus correlated repository primary-key probes"
+      },
+      {
+        "query": "snapshot_cleanup_candidates",
+        "cardinality": "limit 32 from 100001 snapshots, retain newest 3",
+        "samples_ms": [1.272, 0.666, 0.597, 0.462, 0.681, 0.914, 0.752],
+        "p50_ms": 0.681,
+        "p95_ms": 1.272,
+        "index": "partial created_at cleanup index plus correlated suite and newer-snapshot probes"
+      },
+      {
+        "query": "relation_lookup",
+        "cardinality": "100 matches of 100000 relations, limit 256",
+        "samples_ms": [1.356, 1.282, 1.403, 3.334, 1.438, 1.623, 1.511],
+        "p50_ms": 1.438,
+        "p95_ms": 3.334,
+        "index": "(repository_id, relation_kind, token_hash, package_id)"
+      },
+      {
+        "query": "published_group_token",
+        "cardinality": "1 snapshot point lookup",
+        "samples_ms": [0.148, 0.267, 0.140, 0.063, 0.065, 0.062, 0.065],
+        "p50_ms": 0.065,
+        "p95_ms": 0.267,
+        "index": "snapshot primary key"
+      },
+      {
+        "query": "group_binding_late_page",
+        "cardinality": "2048-row page after row 90000 of 100000",
+        "samples_ms": [0.880, 0.947, 0.730, 0.776, 0.852, 0.944, 0.939],
+        "p50_ms": 0.880,
+        "p95_ms": 0.947,
+        "index": "(group_repository_id, distribution_name, snapshot_revision, binding_token, id)"
+      },
+      {
+        "query": "group_stage_publication_lock",
+        "cardinality": "1 staged snapshot",
+        "samples_ms": [0.059, 0.058, 0.059, 0.068, 0.067, 0.054, 0.136],
+        "p50_ms": 0.059,
+        "p95_ms": 0.136,
+        "index": "group stage primary key with FOR UPDATE"
+      },
+      {
+        "query": "orphan_group_stage_scan",
+        "cardinality": "2 stage rows with 100000 live bindings",
+        "samples_ms": [0.086, 0.079, 0.077, 0.075, 0.088, 0.095, 0.187],
+        "p50_ms": 0.086,
+        "p95_ms": 0.187,
+        "index": "stage cleanup index with SKIP LOCKED; binding rows are removed only by foreign-key cascade"
+      }
+    ]
+  },
+  "observed_pre_remediation_ms": [
+    {
+      "database": "mysql",
+      "query": "exact path without path hash",
+      "execution_ms": 273.0
+    },
+    {
+      "database": "mysql",
+      "query": "unbounded 100000-row namespace fetch",
+      "execution_ms": 3080.0
+    },
+    {
+      "database": "mysql",
+      "query": "100 pending suites among 10000 without worker-leading plan",
+      "execution_ms": 145.0
+    },
+    {
+      "database": "mysql",
+      "query": "snapshot cleanup candidate scan across 100001 snapshots",
+      "execution_ms": 1824.0
+    },
+    {
+      "database": "mysql",
+      "query": "group binding joined late page",
+      "execution_ms": 20.2
+    },
+    {
+      "database": "postgresql",
+      "query": "namespace OR keyset predicate filtered 90000 rows",
+      "execution_ms": 67.443
+    },
+    {
+      "database": "postgresql",
+      "query": "pending-suite join started from 10000 repositories",
+      "execution_ms": 22.878
+    },
+    {
+      "database": "postgresql",
+      "query": "snapshot cleanup join enumerated about 97000 candidates",
+      "execution_ms": 862.993
+    },
+    {
+      "database": "mysql",
+      "query": "PostgreSQL-style row-value keyset alternative scanned about 92000 rows",
+      "execution_ms": 348.0
+    }
+  ]
+}

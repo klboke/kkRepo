@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.protocol.conan.ConanReference;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.server.apt.AptService;
+import com.github.klboke.kkrepo.server.alpine.AlpineService;
 import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyService;
 import com.github.klboke.kkrepo.server.cargo.CargoHostedService;
 import com.github.klboke.kkrepo.server.composer.ComposerHostedService;
@@ -130,6 +131,17 @@ public class ComponentUploadService {
               field("filename", "STRING", "Revision-relative file path", true, null),
               field("asset", "FILE", "Revision file", false, null))),
       singleAsset("apt"),
+      new UploadDefinition(
+          "alpine",
+          false,
+          List.of(
+              field("distribution", "STRING", "Distribution, for example v3.23 or edge", false,
+                  "Repository namespace"),
+              field("channel", "STRING", "Channel, for example main or community", false,
+                  "Repository namespace"),
+              field("repositoryArchitecture", "STRING", "Repository architecture", false,
+                  "Repository namespace")),
+          List.of(field("asset", "FILE", "Alpine .apk package", false, null))),
       rawLikeUpload("nuget"),
       rawLikeUpload("rubygems"),
       rawLikeUpload("yum"),
@@ -152,6 +164,7 @@ public class ComponentUploadService {
   private CondaService condaService;
   private ConanService conanService;
   private AptService aptService;
+  private AlpineService alpineService;
   private final MavenPathParser mavenPathParser = new MavenPathParser();
   private final TerraformPathParser terraformPathParser = new TerraformPathParser();
 
@@ -251,6 +264,11 @@ public class ComponentUploadService {
     this.aptService = aptService;
   }
 
+  @Autowired(required = false)
+  void setAlpineService(AlpineService alpineService) {
+    this.alpineService = alpineService;
+  }
+
   public UploadDefinition definition(String format) {
     String normalized = normalizeFormat(format);
     return DEFINITIONS.stream()
@@ -297,6 +315,7 @@ public class ComponentUploadService {
       case CONDA -> uploadConda(runtime, upload, createdBy, createdByIp);
       case CONAN -> uploadConan(runtime, upload, createdBy, createdByIp);
       case APT -> uploadApt(runtime, upload, createdBy, createdByIp);
+      case ALPINE -> uploadAlpine(runtime, upload, createdBy, createdByIp);
       case DOCKER -> throw new UploadValidationException("Docker hosted upload must use the Docker Registry V2 API");
       case NUGET -> uploadRaw(runtime, upload, createdBy, createdByIp);
       case RUBYGEMS -> uploadRaw(runtime, upload, createdBy, createdByIp);
@@ -440,6 +459,35 @@ public class ComponentUploadService {
     try (InputStream body = asset.file().getInputStream()) {
       return List.of(aptService.publish(
           runtime, filename, body, null, null, createdBy, createdByIp).path());
+    }
+  }
+
+  private List<String> uploadAlpine(
+      RepositoryRuntime runtime,
+      NormalizedUpload upload,
+      String createdBy,
+      String createdByIp) throws IOException {
+    if (alpineService == null) {
+      throw new UploadValidationException("Alpine upload service is unavailable");
+    }
+    AssetUpload asset = singleAsset(upload, "Alpine");
+    String filename = originalFilename(asset.file());
+    if (!filename.toLowerCase(Locale.ROOT).endsWith(".apk")) {
+      throw new UploadValidationException("Alpine upload requires an .apk package");
+    }
+    String distribution = requireField(upload.fields(), "distribution");
+    String channel = requireField(upload.fields(), "channel");
+    String architecture = requireField(upload.fields(), "repositoryArchitecture");
+    try (InputStream body = asset.file().getInputStream()) {
+      return List.of(alpineService.publish(
+          runtime,
+          distribution,
+          channel,
+          architecture,
+          filename,
+          body,
+          createdBy,
+          createdByIp).path());
     }
   }
 
@@ -807,6 +855,7 @@ public class ComponentUploadService {
       case CONDA -> "conda";
       case CONAN -> "conan";
       case APT -> "apt";
+      case ALPINE -> "alpine";
       case RAW -> "raw";
     };
   }

@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.persistence.postgresql;
 
+import com.github.klboke.kkrepo.persistence.jdbc.spi.AlpinePersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.ComponentPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.CondaPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.ConanPersistenceDialect;
@@ -23,6 +24,7 @@ import org.springframework.jdbc.core.JdbcOperations;
 /** PostgreSQL 12+ implementation of the shared persistence dialect contracts. */
 public final class PostgreSqlDatabaseDialect implements DatabaseDialect {
   private final PostgreSqlJsonPersistenceDialect json = new PostgreSqlJsonPersistenceDialect();
+  private final AlpinePersistenceDialect alpine = new PostgreSqlAlpinePersistenceDialect();
   private final ComponentPersistenceDialect components =
       new PostgreSqlComponentPersistenceDialect(json);
   private final CondaPersistenceDialect conda = new PostgreSqlCondaPersistenceDialect();
@@ -53,6 +55,11 @@ public final class PostgreSqlDatabaseDialect implements DatabaseDialect {
   @Override
   public ComponentPersistenceDialect components() {
     return components;
+  }
+
+  @Override
+  public AlpinePersistenceDialect alpine() {
+    return alpine;
   }
 
   @Override
@@ -88,6 +95,55 @@ public final class PostgreSqlDatabaseDialect implements DatabaseDialect {
   @Override
   public MigrationPersistenceDialect migrations() {
     return migrations;
+  }
+
+  private static final class PostgreSqlAlpinePersistenceDialect
+      implements AlpinePersistenceDialect {
+    @Override
+    public KeysetCursor packageNameIdCursor(String packageName, long packageId) {
+      return new KeysetCursor(
+          "(package_name, id) > (?, ?)",
+          List.of(packageName, packageId));
+    }
+
+    @Override
+    public String pendingSuitesSql() {
+      return """
+          SELECT suite.* FROM alpine_suite_state suite
+          WHERE suite.publish_pending = TRUE
+            AND (suite.desired_at <= ?
+              OR COALESCE(suite.pending_since, suite.desired_at) <= ?)
+            AND (suite.last_error_at IS NULL OR suite.last_error_at <= ?)
+            AND (SELECT r.online AND r.format = 'alpine'
+                    AND r.type IN ('hosted', 'proxy', 'group')
+                 FROM repository r WHERE r.id = suite.repository_id)
+          ORDER BY suite.desired_at, suite.repository_id, suite.distribution_name
+          LIMIT ?
+          """;
+    }
+
+    @Override
+    public String snapshotCleanupCandidatesSql() {
+      return """
+          SELECT candidate.* FROM alpine_snapshot candidate
+          WHERE candidate.published_at IS NOT NULL AND candidate.created_at < ?
+            AND candidate.revision <> (
+              SELECT suite.published_revision FROM alpine_suite_state suite
+              WHERE suite.repository_id = candidate.repository_id
+                AND suite.distribution_name = candidate.distribution_name)
+            AND EXISTS (
+              SELECT 1 FROM alpine_snapshot newer
+              WHERE newer.repository_id = candidate.repository_id
+                AND newer.distribution_name = candidate.distribution_name
+                AND newer.published_at IS NOT NULL
+                AND newer.revision > candidate.revision
+              ORDER BY newer.revision DESC
+              LIMIT 1 OFFSET ?)
+          ORDER BY candidate.created_at, candidate.repository_id,
+            candidate.distribution_name, candidate.revision
+          LIMIT ?
+          """;
+    }
   }
 
   private static final class PostgreSqlComponentPersistenceDialect

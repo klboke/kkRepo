@@ -304,8 +304,21 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
       case CONDA -> condaOperation(path, normalizedMethod);
       case CONAN -> conanOperation(path, normalizedMethod);
       case APT -> aptOperation(path, normalizedMethod);
+      case ALPINE -> alpineOperation(path, normalizedMethod);
       case RAW -> rawOperation(normalizedMethod);
     };
+  }
+
+  private static String alpineOperation(String path, String method) {
+    if (path.endsWith("/APKINDEX.tar.gz")) return "alpine_package_index";
+    if (path.endsWith(".apk")) {
+      return switch (method) {
+        case "PUT", "POST" -> "alpine_package_upload";
+        case "DELETE" -> "alpine_package_delete";
+        default -> "alpine_package_download";
+      };
+    }
+    return "alpine_repository";
   }
 
   private static String aptOperation(String path, String method) {

@@ -4,7 +4,9 @@
 
 ## 当前支持状态与落地结论
 
-截至 2026-08-14，Alpine / APK 仍处于设计阶段：当前代码尚未注册 `RepositoryFormat.ALPINE`、`alpine-hosted`、`alpine-proxy`、`alpine-group` 或 `protocol-alpine`，路线图也不能标记为完成。
+截至 2026-08-15，本文定义的 APK v2 第一阶段能力已经落地：代码已注册 `RepositoryFormat.ALPINE`、`alpine-hosted`、`alpine-proxy`、`alpine-group` 和独立 `protocol-alpine`，并接入双数据库持久化、签名不可变 snapshot、Admin/Browse/Search、UI/Components API 上传、Cleanup/扫描、Nexus definition/content migration、真实客户端与多副本协调。路线图同步调整为“已实现”；使用方法见 [Alpine / APK 仓库使用指南](../repository-guides/alpine-apk.md)，性能门禁与复现方法见 [Alpine / APK 性能基线](alpine-performance-baseline.md)。
+
+落地验证还固定了 Nexus 3.94 的一个 checksum 差异：它可能为 unsigned upload 生成 data member 的 Q1，导致其自身 apk-tools v2 fetch 完整性校验失败。kkRepo 以官方 apk-tools 行为为协议真相，以原始压缩 control member 计算 `C:Q1`。Index `A:` 必须写 URL namespace 的 repository architecture，因为 `apk` 用它拼接 package 下载路径；原始 `.PKGINFO` architecture 另行持久化并在 Browse/搜索中展示。
 
 落地结论如下：
 
@@ -150,7 +152,7 @@ Path 约束：
 1. 先保存原始 bytes 到受限 spool，同时计算 SHA-256、size 和 gzip member boundaries；不在请求线程把 package 读入 heap。
 2. 识别 signature/control/data 三段。每段都校验 gzip EOF、tar header、entry count、声明 size、重复 entry 和尾随垃圾。
 3. Control 段只接受一个 `.PKGINFO`，并有界读取 name、version、arch、description、url、license、origin、maintainer、build time、installed size、depends、provides、install-if、provider priority、commit 和 datahash。
-4. 按 apk-tools v2 算法从 multipart 中规定的 control identity bytes 计算 `C` checksum；同时保存 whole-blob SHA-256。二者用途不同，不能互相替代。
+4. 按 apk-tools v2 算法从 raw compressed control gzip member 计算 `C` 的 `Q1`/SHA-1 identity，并独立校验 `.PKGINFO` 中 raw compressed data gzip member 的 SHA-256 `datahash`；同时保存 whole-blob SHA-256。三者用途不同，不能互相替代。
 5. 校验 name/version grammar、APK version、filename、route namespace、datahash、signature entry 形状和 package total size；未知字段原样保留在有界 canonical metadata，不自动变成 SQL column 或 metric label。
 6. Data 段只做安全结构检查和扫描输入准备；拒绝 absolute/dot path、重复 entry、device/FIFO、越界 symlink/hardlink、稀疏文件放大、超限 xattr/PAX、压缩炸弹和截断流。
 7. 识别到 ADB/APK v3 时返回明确 unsupported generation，不把它送入 v2 parser。
@@ -197,7 +199,7 @@ Passthrough 保留上游信任链：
 
 1. 对 index/package path 执行 outbound URL、DNS/IP、redirect、TLS 和 credential scope 校验。
 2. `APKINDEX.tar.gz` 使用 metadata TTL + ETag/Last-Modified；`.apk` 使用 content TTL。所有 bytes 原样进入共享 Blob，不重写 signed index。
-3. 配置 upstream public key 时，server 验证 signature、index tar 和 package `C`/size 后写可信 projection；未配置 key 时可以透明缓存，但 UI/DB 标记为 `UNVERIFIED_PASSTHROUGH`，不能把结果升级为本地信任。
+3. 配置 upstream public key 时，server 验证 signature、index tar 和 package `C`/size 后写可信 projection；未配置 key 时可以透明缓存，但 UI/DB 标记为 `UNVERIFIED_PASSTHROUGH`。该 projection 不能用于 proxy 自身的 re-sign mode；唯一兼容例外是管理员把此 proxy 显式加入 group，此时 group 以 transport trust 接受 index、用 group key 签名聚合结果，并在 package 首次下载时强制校验 snapshot binding 中的 `C`/size。
 4. 首次 package fetch 必须与当前 observed upstream snapshot binding；checksum mismatch、truncated body 或 signature drift 不替换旧 verified cache。
 5. 404/410 进入短 negative cache；401/403、429、5xx、timeout、invalid signature 和 checksum mismatch 不进入 not-found cache。
 6. 上游不可用时可以提供仍在 policy 有效期内的 verified cached index/package；不修改 signed bytes 的时间或内容来延长有效期。
@@ -218,7 +220,7 @@ Re-signing 建立 kkrepo 自己的 trust root：
 
 Group 不能对 member index 做文件级 first-hit；它必须生成新的 signed aggregate：
 
-1. 对目标 distribution/channel/repositoryArch 读取每个 member 的 published/verified snapshot 和 member repository revision。
+1. 对目标 distribution/channel/repositoryArch 读取每个 member 的 published snapshot 或 proxy projection 和 member repository revision。`PASSTHROUGH` proxy 按其配置决定是否强制 upstream signature；关闭验签时明确记录 transport-trust 状态。
 2. 流式 merge canonical package records。Identity 相同且 `C` 相同可去重；identity 相同但 `C` 不同按 member order 选择，并记录 conflict metric/audit。
 3. 为每个最终 filename/coordinate 写 snapshot-scoped `alpine_group_binding`，包含 member、member snapshot revision、asset path、`C`、SHA-256 和 size。
 4. 使用 group active key生成新的 `APKINDEX.tar.gz`；只有 bindings、index hidden asset和 group snapshot一起 CAS 发布后才可见。

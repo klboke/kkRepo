@@ -50,6 +50,7 @@ const SEARCH_ROUTE_FORMAT = {
   conda: "conda",
   conan: "conan",
   apt: "apt",
+  alpine: "alpine",
   pypi: "pypi",
   rubygems: "rubygems",
   yum: "yum",
@@ -69,6 +70,7 @@ const FORMAT_ROUTE_SEGMENT = {
   conda: "conda",
   conan: "conan",
   apt: "apt",
+  alpine: "alpine",
   pypi: "pypi",
   rubygems: "rubygems",
   yum: "yum",
@@ -174,6 +176,9 @@ function componentBrowsePath(component) {
     return [user, name, version].filter(Boolean).join("/");
   }
   if (format === "apt") {
+    return [group, name, version].filter(Boolean).join("/");
+  }
+  if (format === "alpine") {
     return [group, name, version].filter(Boolean).join("/");
   }
   return "";
@@ -669,6 +674,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   conda: "conda",
   conan: "conan",
   apt: "apt",
+  alpine: "alpine",
   go: "go",
   helm: "helm",
   docker: "docker",
@@ -730,6 +736,7 @@ const FILE_ICON_RULES = Object.freeze([
 function fileIconName(name, repositoryFormat = "") {
   const normalized = String(name || "").toLowerCase();
   const format = String(repositoryFormat || "").toLowerCase();
+  if (format === "alpine" && normalized.endsWith(".apk")) return "file-apk";
   if (format === "cargo" && normalized && !normalized.includes(".")) return "file-json";
   if (format === "go" && normalized === "list") return "file-text";
   if (format === "go" && normalized === "@latest") return "file-json";
@@ -1608,6 +1615,7 @@ function renderAttributesSection(detail, opts = {}) {
     renderAttributeGroup("Pub", detail.pub),
     renderAttributeGroup("Composer", detail.composer),
     renderAttributeGroup("Conda", detail.conda),
+    renderAttributeGroup("Alpine", detail.alpine),
     renderAttributeGroup("Swift", detail.swift),
     renderAttributeGroup("Ansible Galaxy", detail.ansible),
     renderAttributeGroup("Provenance", detail.provenance),
@@ -2776,6 +2784,61 @@ function aptUsageDetail(entry, detail = null) {
   return { crumbText: entry.path, summaryRows, snippets };
 }
 
+function alpineUsageDetail(entry, detail = null) {
+  const metadata = detail?.alpine || {};
+  const repo = currentRepository();
+  const settings = repo?.alpine || {};
+  const distribution = metadata.distribution || settings.distributions?.[0] || "v3.23";
+  const channel = metadata.channel || settings.channels?.[0] || "main";
+  const repositoryArchitecture = metadata.repository_architecture
+    || settings.architectures?.[0] || "x86_64";
+  const packageName = metadata.package || "<package>";
+  const version = metadata.version || "";
+  const repositoryUrl = `${repositoryBaseUrl().replace(/\/+$/, "")}/${distribution}/${channel}`;
+  const keyFilename = settings.keyFilename || `${state.repo}.rsa.pub`;
+  const summaryRows = [
+    ["Repository", state.repo],
+    ["Format", "alpine"],
+    ["Distribution", distribution],
+    ["Channel", channel],
+    ["Repository architecture", repositoryArchitecture],
+    ["Package", packageName],
+    ["Version", version || "-"],
+    ["Package architecture", metadata.package_architecture || "-"],
+  ];
+  if (metadata.identity) summaryRows.push(["APK identity", metadata.identity]);
+  if (metadata.sha256) summaryRows.push(["SHA-256", metadata.sha256]);
+  const snippets = [
+    usageSnippet(
+      "Trust key",
+      `sudo cp '/path/to/${keyFilename}' '/etc/apk/keys/${keyFilename}'`,
+      "An administrator can export the scoped public key from the repository settings",
+    ),
+    usageSnippet(
+      "repositories",
+      `echo '${repositoryUrl}' | sudo tee -a /etc/apk/repositories`,
+      "For private repositories, use an apk-compatible Basic/token credential source; do not commit credentials in URLs",
+    ),
+    usageSnippet("Update", "sudo apk update"),
+    usageSnippet(
+      "Install",
+      `sudo apk add '${packageName}${version ? `=${version}` : ""}'`,
+    ),
+    usageSnippet(
+      "Fetch",
+      `apk fetch --repository '${repositoryUrl}' '${packageName}${version ? `=${version}` : ""}'`,
+    ),
+  ];
+  if (repo?.type === "hosted") {
+    snippets.push(usageSnippet(
+      "Publish",
+      `curl --fail --user '<username>:<token>' -F 'alpine.distribution=${distribution}' -F 'alpine.channel=${channel}' -F 'alpine.repositoryArchitecture=${repositoryArchitecture}' -F 'alpine.asset=@package.apk' '${window.location.origin}/service/rest/v1/components?repository=${encodeURIComponent(state.repo)}'`,
+      "The server validates APK v2 members, .PKGINFO, filename, architecture, datahash, and package identity",
+    ));
+  }
+  return { crumbText: entry.path, summaryRows, snippets };
+}
+
 async function usageDetailForEntry(entry, detail = null) {
   const repo = currentRepository();
   if (!repo) return null;
@@ -2793,6 +2856,7 @@ async function usageDetailForEntry(entry, detail = null) {
   if (repo.format === "conda") return condaUsageDetail(entry, detail);
   if (repo.format === "conan") return conanUsageDetail(entry);
   if (repo.format === "apt") return aptUsageDetail(entry, detail);
+  if (repo.format === "alpine") return alpineUsageDetail(entry, detail);
   if (repo.format === "docker") return dockerUsageDetail(entry);
   return null;
 }
@@ -3143,6 +3207,33 @@ function renderUploadFields() {
       <label class="upload-path">
         <span>Package path</span>
         <input id="upload-path" type="text" value="Canonical pool path is determined from package control metadata" readonly>
+      </label>
+    `;
+    return;
+  }
+  if (repo.format === "alpine") {
+    const settings = repo.alpine || {};
+    fields.innerHTML = `
+      <label>
+        <span>Distribution</span>
+        <input id="upload-alpine-distribution" type="text" value="${escapeHtml(settings.distributions?.[0] || "v3.23")}" required>
+      </label>
+      <label>
+        <span>Channel</span>
+        <input id="upload-alpine-channel" type="text" value="${escapeHtml(settings.channels?.[0] || "main")}" required>
+      </label>
+      <label>
+        <span>Repository architecture</span>
+        <input id="upload-alpine-architecture" type="text" value="${escapeHtml(settings.architectures?.[0] || "x86_64")}" required>
+      </label>
+      <label class="upload-file">
+        <span>APK v2 package</span>
+        <input id="upload-file" type="file" accept=".apk,application/vnd.alpine.apk" required>
+      </label>
+      <div class="muted-row full-width">The server safely inspects concatenated gzip/tar members and validates <code>.PKGINFO</code>, datahash, filename, architecture, checksums, and resource limits before publishing a signed index snapshot.</div>
+      <label class="upload-path">
+        <span>Package path</span>
+        <input id="upload-path" type="text" value="Package filename is read from the selected APK" readonly>
       </label>
     `;
     return;
@@ -3555,6 +3646,21 @@ function buildUploadForm(repo, form) {
       throw new Error("A .deb package is required.");
     }
     form.append("apt.asset", file, file.name);
+    return;
+  }
+  if (repo.format === "alpine") {
+    const file = document.getElementById("upload-file")?.files?.[0];
+    const distribution = uploadFieldValue("upload-alpine-distribution");
+    const channel = uploadFieldValue("upload-alpine-channel");
+    const architecture = uploadFieldValue("upload-alpine-architecture");
+    if (!distribution || !channel || !architecture
+        || !file || !file.name.toLowerCase().endsWith(".apk")) {
+      throw new Error("Distribution, channel, architecture, and an .apk package are required.");
+    }
+    form.append("alpine.distribution", distribution);
+    form.append("alpine.channel", channel);
+    form.append("alpine.repositoryArchitecture", architecture);
+    form.append("alpine.asset", file, file.name);
     return;
   }
   const file = document.getElementById("upload-file")?.files?.[0];

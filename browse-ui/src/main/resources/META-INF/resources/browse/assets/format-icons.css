@@ -103,6 +103,11 @@
   --format-logo: url("/browse/assets/formats/apt.svg");
 }
 
+.format-logo-alpine {
+  --format-color: #0d597f;
+  --format-logo: url("/browse/assets/formats/alpine.svg");
+}
+
 .format-logo-raw {
   --format-color: #52625e;
   --format-logo: url("/browse/assets/formats/raw.svg");

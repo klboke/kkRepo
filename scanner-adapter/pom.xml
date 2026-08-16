@@ -19,6 +19,10 @@
       <artifactId>kkrepo-security-scan</artifactId>
     </dependency>
     <dependency>
+      <groupId>com.github.klboke</groupId>
+      <artifactId>kkrepo-protocol-alpine</artifactId>
+    </dependency>
+    <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-web</artifactId>
     </dependency>

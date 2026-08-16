@@ -15,7 +15,7 @@ class BrowseLucideIconsContractTest {
   private static final List<String> REQUIRED_ICONS = List.of(
       "home", "search", "library", "upload", "key-round", "list-filter",
       "boxes", "cloud-download", "package", "folder", "archive", "file-code",
-      "files", "file", "file-archive", "file-java-archive", "file-box", "file-json", "file-text",
+      "files", "file", "file-archive", "file-java-archive", "file-apk", "file-box", "file-json", "file-text",
       "file-key", "file-check", "binary", "arrow-up-down", "copy", "check", "download", "x",
       "octagon-alert", "triangle-alert", "circle-alert", "circle-help", "external-link");
   private static final List<String> LEGACY_GLYPHS = List.of(

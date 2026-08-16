@@ -6,6 +6,7 @@ import com.github.klboke.kkrepo.core.RepositoryRecipes;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AlpineRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
@@ -27,6 +28,7 @@ import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CargoSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.AptSettings;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.AlpineSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CreateCommand;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.DockerSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.GroupSettings;
@@ -38,6 +40,8 @@ import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
 import com.github.klboke.kkrepo.server.security.SecurityAuthorizationCache;
 import com.github.klboke.kkrepo.server.security.SecurityCatalogCache;
 import com.github.klboke.kkrepo.server.security.SecurityValidationException;
+import com.github.klboke.kkrepo.protocol.alpine.AlpinePathParser;
+import com.github.klboke.kkrepo.protocol.alpine.AlpineSignature;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
@@ -85,6 +89,7 @@ public class RepositoryService {
   private CondaRegistryDao condaRegistry;
   private ConanRegistryDao conanRegistry;
   private AptRegistryDao aptRegistry;
+  private AlpineRegistryDao alpineRegistry;
   private CleanupPolicyDao cleanupPolicies;
   private final String urlPrefix;
   private final int serverPort;
@@ -152,6 +157,11 @@ public class RepositoryService {
   @Autowired(required = false)
   void setAptRegistry(AptRegistryDao aptRegistry) {
     this.aptRegistry = aptRegistry;
+  }
+
+  @Autowired(required = false)
+  void setAlpineRegistry(AlpineRegistryDao alpineRegistry) {
+    this.alpineRegistry = alpineRegistry;
   }
 
   @Autowired(required = false)
@@ -268,6 +278,12 @@ public class RepositoryService {
       apt = normalizeApt(command.apt(), recipe.type());
       attributes.put("apt", aptAttributes(apt));
     }
+    AlpineSettings alpine = null;
+    if (recipe.format() == RepositoryFormat.ALPINE) {
+      alpine = normalizeAlpine(command.alpine(), recipe.type(), name);
+      validateAlpineOperationalSettings(alpine, recipe.type(), online);
+      attributes.put("alpine", alpineAttributes(alpine));
+    }
 
     String versionPolicy = null;
     String layoutPolicy = null;
@@ -299,6 +315,7 @@ public class RepositoryService {
         && apt != null && apt.distribution() != null && !apt.distribution().isBlank()) {
       aptRegistry.ensureSuite(id, apt.distribution(), java.time.Instant.now());
     }
+    ensureConfiguredAlpineNamespaces(id, alpine);
 
     if (recipe.type() == RepositoryType.GROUP) {
       List<Long> memberIds = resolveMemberIds(name, recipe.format(), command.group());
@@ -308,6 +325,9 @@ public class RepositoryService {
       }
       if (recipe.format() == RepositoryFormat.CONAN && conanRegistry != null) {
         conanRegistry.nextRepositoryRevision(id);
+      }
+      if (recipe.format() == RepositoryFormat.ALPINE && alpineRegistry != null) {
+        markAlpineSuitesDirty(id);
       }
     }
 
@@ -365,6 +385,13 @@ public class RepositoryService {
       AptSettings merged = mergeApt(current, command.apt(), existing.type());
       attributes.put("apt", aptAttributes(merged));
     }
+    if (recipe.format() == RepositoryFormat.ALPINE) {
+      AlpineSettings current = readAlpineAttributes(existing);
+      AlpineSettings merged = mergeAlpine(
+          current, command.alpine(), existing.type(), existing.name());
+      validateAlpineOperationalSettings(merged, existing.type(), online);
+      attributes.put("alpine", alpineAttributes(merged));
+    }
 
     String versionPolicy = existing.versionPolicy();
     String layoutPolicy = existing.layoutPolicy();
@@ -409,6 +436,11 @@ public class RepositoryService {
         }
       }
     }
+    if (recipe.format() == RepositoryFormat.ALPINE && alpineRegistry != null) {
+      AlpineSettings settings = readAlpineAttributes(toUpdate);
+      ensureConfiguredAlpineNamespaces(existing.id(), settings);
+      markAlpineSuitesDirty(existing.id());
+    }
     evictStaleOutboundProxyClient(existing.name(), existing.attributes(), attributes);
 
     if (recipe.type() == RepositoryType.GROUP && command.group() != null) {
@@ -422,6 +454,7 @@ public class RepositoryService {
       invalidateAnsibleGroupBindings(existing.format(), existing.id());
       invalidateCondaGroupBindings(existing.format(), existing.id());
       invalidateConanGroupBindings(existing.format(), existing.id());
+      invalidateAlpineGroupSnapshots(existing.format(), existing.id());
     } else if (recipe.type() != RepositoryType.GROUP) {
       invalidateNpmMemberAfterCommit(existing.format(), existing.id());
       invalidatePypiMemberAfterCommit(existing.format(), existing.id());
@@ -431,6 +464,8 @@ public class RepositoryService {
       invalidateAnsibleContainingGroupBindings(existing.format(), existing.id(), new HashSet<>());
       invalidateCondaMemberAndContainingGroups(existing.format(), existing.id(), new HashSet<>());
       invalidateConanMemberAndContainingGroups(existing.format(), existing.id(), new HashSet<>());
+      invalidateAlpineMemberAndContainingGroups(
+          existing.format(), existing.id(), new HashSet<>());
     }
 
     invalidateRuntimeCache(existing.id(), name);
@@ -474,6 +509,9 @@ public class RepositoryService {
     if (aptRegistry != null && existing.format() == RepositoryFormat.APT) {
       aptRegistry.deleteRepositoryState(existing.id());
     }
+    if (alpineRegistry != null && existing.format() == RepositoryFormat.ALPINE) {
+      alpineRegistry.deleteRepositoryState(existing.id());
+    }
     int removed = repositoryDao.deleteById(existing.id());
     if (removed == 0) {
       throw new RepositoryNotFoundException(name);
@@ -504,6 +542,7 @@ public class RepositoryService {
     invalidateAnsibleGroupBindings(existing.format(), existing.id());
     invalidateCondaGroupBindings(existing.format(), existing.id());
     invalidateConanGroupBindings(existing.format(), existing.id());
+    invalidateAlpineGroupSnapshots(existing.format(), existing.id());
     runtimeRegistry.invalidate(name);
     invalidateRepositoryCacheTokensAfterCommit(existing.id());
     refreshRepositoryCatalogAfterCommit();
@@ -715,6 +754,53 @@ public class RepositoryService {
       conanRegistry.nextRepositoryRevision(group.id());
       conanRegistry.deleteGroupBindings(group.id());
       invalidateConanContainingGroupBindings(format, group.id(), visited);
+    }
+  }
+
+  private void ensureConfiguredAlpineNamespaces(long repositoryId, AlpineSettings settings) {
+    if (alpineRegistry == null || settings == null) return;
+    java.time.Instant now = java.time.Instant.now();
+    for (String distribution : settings.distributions()) {
+      for (String channel : settings.channels()) {
+        for (String architecture : settings.architectures()) {
+          alpineRegistry.ensureSuite(
+              repositoryId,
+              AlpineRegistryDao.namespace(distribution, channel, architecture),
+              now);
+        }
+      }
+    }
+  }
+
+  private void markAlpineSuitesDirty(long repositoryId) {
+    if (alpineRegistry == null) return;
+    java.time.Instant now = java.time.Instant.now();
+    for (AlpineRegistryDao.SuiteState state : alpineRegistry.listSuites(repositoryId)) {
+      alpineRegistry.markSuiteDirty(repositoryId, state.distribution(), now);
+    }
+  }
+
+  private void invalidateAlpineGroupSnapshots(
+      RepositoryFormat format, long groupRepositoryId) {
+    if (format != RepositoryFormat.ALPINE || alpineRegistry == null) return;
+    markAlpineSuitesDirty(groupRepositoryId);
+    invalidateAlpineContainingGroups(format, groupRepositoryId, new HashSet<>());
+  }
+
+  private void invalidateAlpineMemberAndContainingGroups(
+      RepositoryFormat format, long repositoryId, Set<Long> visited) {
+    if (format != RepositoryFormat.ALPINE || alpineRegistry == null) return;
+    markAlpineSuitesDirty(repositoryId);
+    invalidateAlpineContainingGroups(format, repositoryId, visited);
+  }
+
+  private void invalidateAlpineContainingGroups(
+      RepositoryFormat format, long repositoryId, Set<Long> visited) {
+    if (format != RepositoryFormat.ALPINE || alpineRegistry == null) return;
+    for (RepositoryRecord group : repositoryDao.listGroupsContaining(repositoryId)) {
+      if (group.id() == null || !visited.add(group.id())) continue;
+      markAlpineSuitesDirty(group.id());
+      invalidateAlpineContainingGroups(format, group.id(), visited);
     }
   }
 
@@ -969,6 +1055,8 @@ public class RepositoryService {
         ? readCargoAttributes(record)
         : null;
     AptSettings apt = record.format() == RepositoryFormat.APT ? readAptAttributes(record) : null;
+    AlpineSettings alpine = record.format() == RepositoryFormat.ALPINE
+        ? readAlpineAttributes(record) : null;
     GroupSettings group = null;
     switch (record.type()) {
       case HOSTED -> hosted = new HostedSettings(
@@ -981,7 +1069,7 @@ public class RepositoryService {
         record.id(), record.name(), record.recipeName(),
         record.format(), record.type(), record.online(),
         blobStoreName, record.strictContentTypeValidation(), url,
-        hosted, proxy, raw, docker, cargo, group, apt);
+        hosted, proxy, raw, docker, cargo, group, apt, alpine);
   }
 
   private Map<Long, String> blobStoreNameIndex() {
@@ -1516,6 +1604,212 @@ public class RepositoryService {
       throw new RepositoryValidationException("Invalid apt." + field);
     }
     return normalized;
+  }
+
+  private static AlpineSettings normalizeAlpine(
+      AlpineSettings input, RepositoryType type, String repositoryName) {
+    boolean locallySigned = type != RepositoryType.PROXY;
+    AlpineSettings source = input == null
+        ? new AlpineSettings(
+            List.of("v3.23"),
+            List.of("main"),
+            List.of("x86_64", "aarch64"),
+            locallySigned ? "RESIGN" : "PASSTHROUGH",
+            type != RepositoryType.PROXY,
+            true,
+            safeAlpineRepositoryName(repositoryName) + ".rsa.pub",
+            "RSA",
+            "kkRepo Alpine repository",
+            List.of())
+        : input;
+    List<String> distributions = normalizeAlpineSegments(
+        "distributions", source.distributions(), List.of("v3.23"),
+        AlpinePathParser::isDistribution);
+    List<String> channels = normalizeAlpineSegments(
+        "channels", source.channels(), List.of("main"), AlpinePathParser::isChannel);
+    List<String> architectures = normalizeAlpineSegments(
+        "architectures", source.architectures(), List.of("x86_64", "aarch64"),
+        AlpinePathParser::isArchitecture);
+    String metadataMode = source.metadataMode() == null || source.metadataMode().isBlank()
+        ? (locallySigned ? "RESIGN" : "PASSTHROUGH")
+        : source.metadataMode().trim().toUpperCase(java.util.Locale.ROOT);
+    if (!Set.of("PASSTHROUGH", "RESIGN").contains(metadataMode)) {
+      throw new RepositoryValidationException(
+          "alpine.metadataMode must be PASSTHROUGH or RESIGN");
+    }
+    if (locallySigned && !"RESIGN".equals(metadataMode)) {
+      throw new RepositoryValidationException(
+          "Alpine hosted and group repositories must publish locally signed indexes");
+    }
+    boolean verify = source.verifyUpstreamSignatures() == null
+        ? type != RepositoryType.PROXY : source.verifyUpstreamSignatures();
+    if (type != RepositoryType.PROXY && !verify) {
+      throw new RepositoryValidationException(
+          "alpine.verifyUpstreamSignatures only applies to proxy repositories");
+    }
+    boolean staleIfError = source.staleIfError() == null || source.staleIfError();
+    String keyFilename = source.keyFilename() == null || source.keyFilename().isBlank()
+        ? safeAlpineRepositoryName(repositoryName) + ".rsa.pub"
+        : source.keyFilename().trim();
+    try {
+      keyFilename = AlpineSignature.requireKeyFilename(keyFilename);
+    } catch (IllegalArgumentException invalid) {
+      throw new RepositoryValidationException(
+          "Invalid alpine.keyFilename: " + invalid.getMessage());
+    }
+    String signatureType = source.signatureType() == null || source.signatureType().isBlank()
+        ? "RSA" : source.signatureType().trim().toUpperCase(java.util.Locale.ROOT);
+    try {
+      if (AlpineSignature.Type.fromLabel(signatureType) == AlpineSignature.Type.DSA) {
+        throw new IllegalArgumentException("Alpine repository signing requires an RSA key type");
+      }
+    } catch (IllegalArgumentException invalid) {
+      throw new RepositoryValidationException(
+          "Invalid alpine.signatureType: " + signatureType);
+    }
+    String description = boundedAlpineText(
+        "description", source.description(), "kkRepo Alpine repository", 255);
+    ArrayList<String> upstreamKeys = new ArrayList<>();
+    if (source.upstreamPublicKeys() != null) {
+      int total = 0;
+      for (String candidate : source.upstreamPublicKeys()) {
+        if (candidate == null || candidate.isBlank()) continue;
+        String key = candidate.trim();
+        total += key.length();
+        if (key.length() > 65_536 || total > 1_048_576) {
+          throw new RepositoryValidationException(
+              "alpine.upstreamPublicKeys exceeds the configured bound");
+        }
+        upstreamKeys.add(key);
+      }
+    }
+    if (type != RepositoryType.PROXY && !upstreamKeys.isEmpty()) {
+      throw new RepositoryValidationException(
+          "alpine.upstreamPublicKeys only applies to proxy repositories");
+    }
+    return new AlpineSettings(
+        distributions,
+        channels,
+        architectures,
+        metadataMode,
+        verify,
+        staleIfError,
+        keyFilename,
+        signatureType,
+        description,
+        List.copyOf(new LinkedHashSet<>(upstreamKeys)));
+  }
+
+  private static void validateAlpineOperationalSettings(
+      AlpineSettings settings, RepositoryType type, boolean online) {
+    if (online && type == RepositoryType.PROXY && "RESIGN".equals(settings.metadataMode())
+        && (!settings.verifyUpstreamSignatures() || settings.upstreamPublicKeys().isEmpty())) {
+      throw new RepositoryValidationException(
+          "Alpine re-sign proxy requires signature verification and upstream public keys");
+    }
+  }
+
+  private static AlpineSettings mergeAlpine(
+      AlpineSettings base,
+      AlpineSettings incoming,
+      RepositoryType type,
+      String repositoryName) {
+    if (incoming == null) return normalizeAlpine(base, type, repositoryName);
+    AlpineSettings current = normalizeAlpine(base, type, repositoryName);
+    return normalizeAlpine(new AlpineSettings(
+        incoming.distributions() == null ? current.distributions() : incoming.distributions(),
+        incoming.channels() == null ? current.channels() : incoming.channels(),
+        incoming.architectures() == null ? current.architectures() : incoming.architectures(),
+        incoming.metadataMode() == null ? current.metadataMode() : incoming.metadataMode(),
+        incoming.verifyUpstreamSignatures() == null
+            ? current.verifyUpstreamSignatures() : incoming.verifyUpstreamSignatures(),
+        incoming.staleIfError() == null ? current.staleIfError() : incoming.staleIfError(),
+        incoming.keyFilename() == null ? current.keyFilename() : incoming.keyFilename(),
+        incoming.signatureType() == null ? current.signatureType() : incoming.signatureType(),
+        incoming.description() == null ? current.description() : incoming.description(),
+        incoming.upstreamPublicKeys() == null
+            ? current.upstreamPublicKeys() : incoming.upstreamPublicKeys()), type, repositoryName);
+  }
+
+  private static Map<String, Object> alpineAttributes(AlpineSettings settings) {
+    LinkedHashMap<String, Object> map = new LinkedHashMap<>();
+    map.put("distributions", settings.distributions());
+    map.put("channels", settings.channels());
+    map.put("architectures", settings.architectures());
+    map.put("metadataMode", settings.metadataMode());
+    map.put("verifyUpstreamSignatures", settings.verifyUpstreamSignatures());
+    map.put("staleIfError", settings.staleIfError());
+    map.put("keyFilename", settings.keyFilename());
+    map.put("signatureType", settings.signatureType());
+    map.put("description", settings.description());
+    map.put("upstreamPublicKeys", settings.upstreamPublicKeys());
+    return Map.copyOf(map);
+  }
+
+  private static AlpineSettings readAlpineAttributes(RepositoryRecord record) {
+    Map<String, Object> attributes = record.attributes() == null ? Map.of() : record.attributes();
+    Object raw = attributes.get("alpine");
+    if (!(raw instanceof Map<?, ?> map)) {
+      return normalizeAlpine(null, record.type(), record.name());
+    }
+    return normalizeAlpine(new AlpineSettings(
+        stringList(map.get("distributions")),
+        stringList(map.get("channels")),
+        stringList(map.get("architectures")),
+        stringOrNull(map.get("metadataMode")),
+        boolValue(map.get("verifyUpstreamSignatures")),
+        boolValue(map.get("staleIfError")),
+        stringOrNull(map.get("keyFilename")),
+        stringOrNull(map.get("signatureType")),
+        stringOrNull(map.get("description")),
+        stringList(map.get("upstreamPublicKeys"))), record.type(), record.name());
+  }
+
+  private static List<String> normalizeAlpineSegments(
+      String field,
+      List<String> source,
+      List<String> defaults,
+      java.util.function.Predicate<String> validator) {
+    List<String> values = source == null || source.isEmpty() ? defaults : source;
+    LinkedHashSet<String> normalized = new LinkedHashSet<>();
+    for (String candidate : values) {
+      String value = candidate == null
+          ? "" : candidate.trim().toLowerCase(java.util.Locale.ROOT);
+      if (!validator.test(value)) {
+        throw new RepositoryValidationException("Invalid alpine." + field + ": " + candidate);
+      }
+      normalized.add(value);
+    }
+    if (normalized.size() > 64) {
+      throw new RepositoryValidationException("alpine." + field + " supports at most 64 values");
+    }
+    return List.copyOf(normalized);
+  }
+
+  private static String boundedAlpineText(
+      String field, String value, String fallback, int maxLength) {
+    String normalized = value == null || value.isBlank() ? fallback : value.trim();
+    if (normalized.length() > maxLength || normalized.indexOf('\0') >= 0
+        || normalized.indexOf('\r') >= 0 || normalized.indexOf('\n') >= 0) {
+      throw new RepositoryValidationException("Invalid alpine." + field);
+    }
+    return normalized;
+  }
+
+  private static String safeAlpineRepositoryName(String value) {
+    String normalized = value == null ? "kkrepo-alpine"
+        : value.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9._-]", "-");
+    if (normalized.isBlank()) normalized = "kkrepo-alpine";
+    return normalized.length() > 160 ? normalized.substring(0, 160) : normalized;
+  }
+
+  private static List<String> stringList(Object raw) {
+    if (!(raw instanceof Iterable<?> values)) return null;
+    ArrayList<String> result = new ArrayList<>();
+    for (Object value : values) {
+      if (value != null) result.add(value.toString());
+    }
+    return List.copyOf(result);
   }
 
   private static RawSettings readRawAttributes(RepositoryRecord record) {

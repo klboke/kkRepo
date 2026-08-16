@@ -33,6 +33,7 @@ import com.github.klboke.kkrepo.server.composer.ComposerProxyService;
 import com.github.klboke.kkrepo.server.conda.CondaService;
 import com.github.klboke.kkrepo.server.conan.ConanService;
 import com.github.klboke.kkrepo.server.apt.AptService;
+import com.github.klboke.kkrepo.server.alpine.AlpineService;
 import com.github.klboke.kkrepo.server.goartifact.GoGroupService;
 import com.github.klboke.kkrepo.server.goartifact.GoProxyService;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
@@ -150,6 +151,7 @@ public class RepositoryContentController {
   private CondaService conda;
   private ConanService conan;
   private AptService apt;
+  private AlpineService alpine;
   private final NugetService nuget;
   private final RubygemsService rubygems;
   private final YumService yum;
@@ -195,6 +197,11 @@ public class RepositoryContentController {
   @Autowired(required = false)
   void setAptService(AptService apt) {
     this.apt = apt;
+  }
+
+  @Autowired(required = false)
+  void setAlpineService(AlpineService alpine) {
+    this.alpine = alpine;
   }
 
   @Autowired
@@ -385,6 +392,9 @@ public class RepositoryContentController {
       String raw = extractRepositoryPath(name, request, true);
       return toHeadResponse(apt().get(runtime, raw, true), request);
     }
+    if (runtime.format() == RepositoryFormat.ALPINE) {
+      return toHeadResponse(dispatchAlpineGet(runtime, name, request, true), request);
+    }
     if (runtime.format() == RepositoryFormat.PYPI) {
       String raw = extractRepositoryPath(name, request, true);
       PypiResponse resp = isDirectoryPath(raw)
@@ -536,6 +546,16 @@ public class RepositoryContentController {
           .header(HttpHeaders.LOCATION, response.headers().get(HttpHeaders.LOCATION))
           .build();
     }
+    if (runtime.format() == RepositoryFormat.ALPINE) {
+      String raw = extractRepositoryPath(name, request, true);
+      MavenResponse response;
+      try (InputStream body = request.getInputStream()) {
+        response = alpine().put(runtime, raw, body, contentType, userId, request.getRemoteAddr());
+      }
+      return ResponseEntity.status(response.status())
+          .header(HttpHeaders.LOCATION, response.headers().get(HttpHeaders.LOCATION))
+          .build();
+    }
     if (runtime.format() == RepositoryFormat.SWIFT) {
       String rawPath = extractRepositoryPath(name, request, true);
       String accept = request.getHeader(HttpHeaders.ACCEPT);
@@ -670,6 +690,12 @@ public class RepositoryContentController {
       MavenResponse response = apt().delete(runtime, raw, "repository-content-delete", true);
       return ResponseEntity.status(response.status()).build();
     }
+    if (runtime.format() == RepositoryFormat.ALPINE) {
+      String raw = extractRepositoryPath(name, request, true);
+      MavenResponse response = alpine().delete(
+          runtime, raw, "repository-content-delete", true);
+      return ResponseEntity.status(response.status()).build();
+    }
     if (runtime.format() == RepositoryFormat.NUGET) {
       String raw = extractRepositoryPath(name, request, true);
       MavenResponse resp = nuget.deletePackage(runtime, raw);
@@ -773,6 +799,41 @@ public class RepositoryContentController {
         }
       } catch (IOException e) {
         throw new MavenExceptions.BadRequestException("Unable to read APT multipart upload", e);
+      }
+    }
+    if (runtime.format() == RepositoryFormat.ALPINE) {
+      if (!runtime.isHosted()) {
+        throw new MavenExceptions.MethodNotAllowed(
+            "Alpine upload is only valid on hosted repositories");
+      }
+      String raw = extractRepositoryPath(name, request, true);
+      if (!raw.isBlank()) {
+        throw new MavenExceptions.MethodNotAllowed(
+            "Alpine multipart upload is only valid at repository root");
+      }
+      if (!isMultipart(request.getContentType())) {
+        throw new MavenExceptions.BadRequestException(
+            "Alpine upload requires multipart/form-data");
+      }
+      try {
+        Part part = alpinePackagePart(request);
+        Map<String, String> fields = multipartFields(request);
+        try (InputStream body = part.getInputStream()) {
+          AlpineService.PublishedPackage published = alpine().publish(
+              runtime,
+              firstNonBlank(fields.get("alpine.distribution"), fields.get("distribution")),
+              firstNonBlank(fields.get("alpine.channel"), fields.get("channel")),
+              firstNonBlank(
+                  fields.get("alpine.repositoryArchitecture"), fields.get("architecture")),
+              part.getSubmittedFileName(),
+              body,
+              requestUserId(request),
+              request.getRemoteAddr());
+          return alpineUploadResponse(published);
+        }
+      } catch (IOException error) {
+        throw new MavenExceptions.BadRequestException(
+            "Unable to read Alpine multipart upload", error);
       }
     }
     if (runtime.format() == RepositoryFormat.ANSIBLEGALAXY) {
@@ -992,6 +1053,11 @@ public class RepositoryContentController {
       MavenResponse response = apt().get(runtime, raw, headOnly);
       return toStreamingResponse(response, request, !headOnly && raw.endsWith(".deb"));
     }
+    if (runtime.format() == RepositoryFormat.ALPINE) {
+      String raw = extractRepositoryPath(name, request, true);
+      MavenResponse response = dispatchAlpineGet(runtime, name, request, headOnly);
+      return toStreamingResponse(response, request, !headOnly && raw.endsWith(".apk"));
+    }
     if (runtime.format() == RepositoryFormat.PYPI) {
       String raw = extractRepositoryPath(name, request, true);
       boolean directory = isDirectoryPath(raw);
@@ -1152,6 +1218,21 @@ public class RepositoryContentController {
     return rubygems.get(runtime, raw, headOnly);
   }
 
+  private MavenResponse dispatchAlpineGet(
+      RepositoryRuntime runtime,
+      String name,
+      HttpServletRequest request,
+      boolean headOnly) {
+    DirectoryRequest directory = detectDirectory(name, request);
+    if (directory != null && directory.path().isEmpty()) {
+      return directory.needsRedirect()
+          ? badRepositoryPath(headOnly)
+          : repositoryInfo(runtime, request, "alpine", headOnly);
+    }
+    String raw = extractRepositoryPath(name, request, true);
+    return alpine().get(runtime, raw, headOnly);
+  }
+
   private MavenResponse dispatchRawGet(RepositoryRuntime runtime, String rawPath, boolean headOnly) {
     return switch (runtime.type()) {
       case HOSTED -> rawHosted.get(runtime, rawPath, headOnly);
@@ -1308,6 +1389,13 @@ public class RepositoryContentController {
       throw new IllegalStateException("APT repository service is unavailable");
     }
     return apt;
+  }
+
+  private AlpineService alpine() {
+    if (alpine == null) {
+      throw new IllegalStateException("Alpine repository service is unavailable");
+    }
+    return alpine;
   }
 
   private MavenResponse dispatchNpmGet(
@@ -1695,6 +1783,26 @@ public class RepositoryContentController {
     }
   }
 
+  private static Part alpinePackagePart(HttpServletRequest request) {
+    try {
+      Part firstFile = null;
+      for (Part part : request.getParts()) {
+        if (part == null || part.getSize() <= 0) continue;
+        boolean namedPackage = "alpine.asset".equals(part.getName())
+            || "asset".equals(part.getName()) || "file".equals(part.getName());
+        boolean hasFilename = part.getSubmittedFileName() != null
+            && !part.getSubmittedFileName().isBlank();
+        if (namedPackage && hasFilename) return part;
+        if (firstFile == null && hasFilename) firstFile = part;
+      }
+      if (firstFile != null) return firstFile;
+      throw new MavenExceptions.BadRequestException(
+          "Alpine multipart upload requires an .apk file part");
+    } catch (IOException | ServletException error) {
+      throw new MavenExceptions.BadRequestException("Invalid Alpine multipart upload", error);
+    }
+  }
+
   private static Map<String, String> flattenParameters(Map<String, String[]> values) {
     Map<String, String> result = new java.util.LinkedHashMap<>();
     values.forEach((key, list) -> {
@@ -1780,6 +1888,20 @@ public class RepositoryContentController {
             "name", published.packageName(),
             "version", published.version(),
             "architecture", published.architecture(),
+            "sha256", published.sha256(),
+            "size", published.size()));
+  }
+
+  private static ResponseEntity<?> alpineUploadResponse(
+      AlpineService.PublishedPackage published) {
+    return ResponseEntity.status(201)
+        .header(HttpHeaders.LOCATION, published.path())
+        .body(Map.of(
+            "path", published.path(),
+            "name", published.packageName(),
+            "version", published.version(),
+            "architecture", published.architecture(),
+            "identity", published.identity(),
             "sha256", published.sha256(),
             "size", published.size()));
   }

@@ -10,6 +10,7 @@ public final class BrowseAssetVisibility {
   private static final String ANSIBLE_INTERNAL_PREFIX = ".ansible";
   private static final String CONDA_INTERNAL_PREFIX = ".conda";
   private static final String APT_INTERNAL_PREFIX = ".apt";
+  private static final String ALPINE_INTERNAL_PREFIX = ".alpine";
 
   private BrowseAssetVisibility() {
   }
@@ -24,6 +25,7 @@ public final class BrowseAssetVisibility {
         || (format == RepositoryFormat.SWIFT && under(path, SWIFT_INTERNAL_PREFIX))
         || (format == RepositoryFormat.CONDA && under(path, CONDA_INTERNAL_PREFIX))
         || (format == RepositoryFormat.APT && under(path, APT_INTERNAL_PREFIX))
+        || (format == RepositoryFormat.ALPINE && under(path, ALPINE_INTERNAL_PREFIX))
         || (format == RepositoryFormat.ANSIBLEGALAXY
             && (under(path, ANSIBLE_INTERNAL_PREFIX) || ansibleArtifactInternal(path)));
   }

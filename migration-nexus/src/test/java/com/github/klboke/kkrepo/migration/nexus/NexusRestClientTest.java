@@ -214,6 +214,12 @@ class NexusRestClientTest {
     assertTrue(script.contains("parts.length >= 4"));
     assertTrue(script.contains("aptAssetAttributes: false"));
     assertTrue(script.contains("APT datastore content shape probe failed:"));
+    assertTrue(script.contains("alpine: 'ALPINE'"));
+    assertTrue(script.contains("def inspectAlpineShape = { tableNames ->"));
+    assertTrue(script.contains("alpineAssetAttributes: false"));
+    assertTrue(script.contains("componentIdentity: false"));
+    assertTrue(script.contains("parts.length != 4"));
+    assertTrue(script.contains("Alpine datastore content shape probe failed:"));
     assertFalse(script.contains("+ ' '\n                      + fingerprintText"));
     assertFalse(script.contains("javax.sql.DataSource.class"));
     assertFalse(script.contains("catch (Throwable"));

@@ -9,11 +9,11 @@
 
 [English](README.md) | **中文**
 
-kkRepo 是一款社区驱动、完全开源的自托管制品仓库，旨在解决 Sonatype Nexus 社区版的各类限制与痛点，为社区提供开放、可靠且可持续演进的制品管理方案。目前已支持 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、APT/Debian、Conan 2、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等制品格式。
+kkRepo 是一款社区驱动、完全开源的自托管制品仓库，旨在解决 Sonatype Nexus 社区版的各类限制与痛点，为社区提供开放、可靠且可持续演进的制品管理方案。目前已支持 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、APT/Debian、Conan 2、Alpine/APK、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等制品格式。
 
 ## 功能特性
 
-- 支持 19+ 种主流仓库格式，覆盖 hosted、proxy 和 group 仓库管理。
+- 支持 20+ 种主流仓库格式，覆盖 hosted、proxy 和 group 仓库管理。
 - 支持 AOT 编译运行，约 1 秒启动就绪，内存占用低于 200 MB。
 - Proxy 仓库支持按仓库配置出站 HTTP 或 SOCKS5 网络代理，并支持可选的代理认证和 HTTPS 上游隧道。
 - 支持制品安全扫描，包括 CycloneDX SBOM 生成、已知漏洞匹配、策略与豁免管理，以及可选的下载阻断。
@@ -94,6 +94,7 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 | Conda | hosted / proxy / group | 支持 Nexus 兼容 raw PUT，以及 `.tar.bz2`/`.conda` 的 UI/API 上传 | 支持 channel/subdir 元数据、JSON/BZ2/ZSTD repodata、channeldata、Browse/Search 和 Usage | 支持仓库定义与 shape-gated Nexus 3.92.x-3.94.x hosted package 数据迁移；生成元数据在目标端重建 |
 | APT / Debian | hosted / proxy | 支持 Nexus 兼容仓库根 POST、Components API/UI `.deb` 上传，以及真实 `apt update`、下载、安装和升级（[使用指南](docs/zh/repository-guides/apt-debian.md)） | 支持签名 Packages/Release 元数据、by-hash、Browse/Search 和 Usage | 支持仓库定义与 shape-gated Nexus 3.92.x-3.94.x hosted package；签名私钥需显式导入后才启用迁移仓库 |
 | Conan 2 | hosted / proxy / group | 支持 `conan upload`、Conan bearer 登录和 UI/API revision file 上传（[使用指南](docs/zh/repository-guides/conan-2.md)） | 支持 RREV/PREV 元数据、写入时固定的 Nexus 对齐 Browse 路径、Search 和 Usage | 支持 Nexus 3.94 仓库定义，以及 shape-gated hosted/显式选择 proxy cache revision；Conan 1 和未知 shape 失败关闭 |
+| Alpine / APK | hosted / proxy / group | 支持规范 APK v2 PUT 与 UI/Components API 上传，以及真实 `apk update`、search、policy、fetch、install 和 upgrade（[使用指南](docs/zh/repository-guides/alpine-apk.md)） | 支持签名 `APKINDEX.tar.gz`、passthrough/验签后 re-sign proxy、有序 group source binding、Browse/Search 和 Usage | 支持 Nexus 3.94 definition 与 shape-gated hosted package；生成 index 在目标端重建，signing key 或 proxy secret 不可用时 fail closed |
 | Docker / OCI | hosted / proxy / group | 支持 Registry V2 login、hosted push/pull、proxy pull、group pull、OCI referrers、cleanup 和 connector port 访问 | 支持 manifest/tag/blob metadata | Docker hosted 仓库数据迁移走 Nexus Repository Data 流程 |
 | NuGet | hosted / proxy / group | 支持 package push 和管理台上传 | 支持 v3 service index / search | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 | RubyGems | hosted / proxy / group | 支持 gem push/yank 和管理台上传 | 支持 | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
@@ -117,7 +118,7 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 | 维度 | Sonatype Nexus Repository OSS / Community Edition | kkRepo                                                                                                        |
 | --- | --- |-------------------------------------------------------------------------------------------------------------------|
 | 产品定位 | 通用制品仓库管理平台，功能完整，覆盖大量官方格式和管理能力 | 提供面向迁移的客户端行为、权限模型和 `/repository/<repo>/...` URL 布局兼容，同时采用共享关系数据库、OSS/S3-first、适合多副本部署的架构 |
-| 支持格式 | 官方支持格式更多，具体能力随版本和发行形态变化 | 聚焦常用制品格式，当前支持 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、APT/Debian、Conan 2、Docker/OCI、NuGet、RubyGems、Yum 和 Raw；每个格式以独立 protocol 模块实现，便于按优先级扩展和验证                       |
+| 支持格式 | 官方支持格式更多，具体能力随版本和发行形态变化 | 聚焦常用制品格式，当前支持 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、APT/Debian、Conan 2、Alpine/APK、Docker/OCI、NuGet、RubyGems、Yum 和 Raw；每个格式以独立 protocol 模块实现，便于按优先级扩展和验证                       |
 | 使用限制 | Community Edition 面向个人和小团队，官方限制为最多 40,000 components、100,000 requests/day；超过阈值后会暂停新增 component，直到用量回到限制以下 | 不内置 Community Edition 这类版本授权用量限制；容量边界由所选关系数据库、OSS/S3、运行副本数和部署规格决定，适合按实际业务规模扩容 |
 | 高可用部署 | 开源版适合单实例或基础 Kubernetes 部署；官方 HA deployment 属于 Pro 能力 | 从设计上默认支持多副本：session、认证 ticket、catalog 水位、锁、迁移进度和短生命周期协同状态都落 MySQL 或 PostgreSQL，进程内缓存只作为可重建热缓存 |
 | 稳定性和升级 | 版本边界复杂：3.70.x 是最后支持 OrientDB 的版本；3.71.0 起新安装默认 H2，但 H2 仍是内嵌数据库；Community Edition 到 3.77.0+ 才支持免费使用外部 PostgreSQL；3.88.0 起搜索才完全改为 SQL、替代 Elasticsearch。旧版 OrientDB/Elasticsearch/本地数据目录组合升级窗口重，文件损坏后恢复高度依赖备份、修复任务和人工介入 | 运行时支持 MySQL/PostgreSQL，不依赖 OrientDB 和内嵌 Elasticsearch；核心状态在共享关系数据库，blob 在 OSS/S3/File blob store，缓存和索引均可重建，更适合滚动升级、故障切换和数据恢复 |
@@ -142,7 +143,7 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 
 ![前台仓库列表](docs/img/img_7.png)
 
-按格式搜索组件，支持 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、APT/Debian、Conan 2、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等仓库类型的制品检索。
+按格式搜索组件，支持 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、APT/Debian、Conan 2、Alpine/APK、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等仓库类型的制品检索。
 
 ![前台制品搜索](docs/img/img.png)
 
@@ -195,7 +196,7 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 8. ✅ Conda - 已实现 hosted、proxy、group、`.tar.bz2`/`.conda` 发布、JSON/BZ2/ZSTD channel 元数据、UI/API 上传、Browse/Search、多副本协同、真实 Conda 客户端 E2E、Nexus 黑盒 fixture，以及 shape-gated Nexus 3.92.x-3.94.x hosted 数据迁移 E2E（[设计说明](docs/zh/dev/conda-repository-design.md)）
 9. ✅ APT / Debian - 已实现 hosted/proxy、签名元数据、UI/API 上传、Browse/Search、多副本发布、真实 APT 客户端与 Nexus 黑盒验证、shape-gated 迁移和可复现的 Nexus 性能基线（[使用指南](docs/zh/repository-guides/apt-debian.md)、[设计说明](docs/zh/dev/apt-debian-repository-design.md)、[性能基线](docs/zh/dev/apt-performance-baseline.md)）
 10. ✅ Conan 2 - 已实现 hosted/proxy/group、Conan bearer 认证、manifest-gated revision 发布、写入时 Nexus Browse 投影、UI/API 上传、Cleanup、复合 package 扫描、shape-gated 迁移、真实 Conan 客户端 E2E 和双数据库 Nexus 性能基线（[使用指南](docs/zh/repository-guides/conan-2.md)、[设计说明](docs/zh/dev/conan-repository-design.md)、[性能基线](docs/zh/dev/conan-performance-baseline.md)）
-11. Alpine / APK - 规划 hosted、proxy 和 group 仓库，覆盖 APK v2 索引、仓库签名、Cleanup、安全扫描和 shape-gated Nexus 迁移（[设计说明](docs/zh/dev/alpine-apk-repository-design.md)）
+11. ✅ Alpine / APK - 已实现 hosted/proxy/group、APK v2 package 校验、签名不可变 index、passthrough/验签后 re-sign proxy、有序 group source binding、UI/API 上传、Browse/Search、Cleanup、安全扫描、shape-gated Nexus 3.94 迁移、apk-tools 2.14/3.0 客户端 E2E 和可复现 Nexus 性能门槛（[使用指南](docs/zh/repository-guides/alpine-apk.md)、[设计说明](docs/zh/dev/alpine-apk-repository-design.md)、[性能基线](docs/zh/dev/alpine-performance-baseline.md)）
 12. ohpm / HarmonyOS - 规划中，覆盖 hosted、proxy、group、导入和管理端能力（[设计说明](docs/zh/dev/ohpm-repository-design.md)）
 13. Go hosted 仓库 - 规划补齐 Nexus 兼容的内部 module 发布能力；proxy 和 group 仓库已支持。
 14. Helm group 仓库 - 规划补齐 Nexus 兼容的 hosted、proxy 与 group member 有序聚合能力。

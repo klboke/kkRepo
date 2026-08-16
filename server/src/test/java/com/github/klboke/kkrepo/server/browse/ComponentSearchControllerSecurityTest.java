@@ -14,6 +14,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AlpineRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
@@ -400,6 +401,46 @@ class ComponentSearchControllerSecurityTest {
             "demo", "maven2", 10, "stable", null, null, null, null,
             request("GET", "/internal/search/components")));
     assertEquals(HttpStatus.BAD_REQUEST, wrongFormat.getStatusCode());
+  }
+
+  @Test
+  void alpineSearchIncludesPackageCoordinatesChecksumsAndSourceDetails() {
+    StubComponentDao components = new StubComponentDao();
+    String packagePath = "v3.23/main/x86_64/demo-1.0.0-r0.apk";
+    components.rows = List.of(row(
+        95L, "alpine-hosted", RepositoryFormat.ALPINE, "v3.23/main/x86_64", "demo",
+        "1.0.0-r0", "alpine-apk-v2", packagePath));
+    AlpineRegistryDao alpine = mock(AlpineRegistryDao.class);
+    Instant now = Instant.parse("2026-08-15T08:00:00Z");
+    when(alpine.findPackageByPath(95L, packagePath)).thenReturn(Optional.of(
+        new AlpineRegistryDao.PackageRecord(
+            96L, 95L, "v3.23", "main", "x86_64", "demo", "1.0.0-r0", "noarch",
+            "demo-1.0.0-r0.apk", packagePath,
+            Map.of("T", "Demo package", "D", "musl"),
+            "Q1AAAAAAAAAAAAAAAAAAAAAAAAAAA=", "a".repeat(64), "b".repeat(64), 123L,
+            97L, 95L, AlpineRegistryDao.SOURCE_HOSTED, 1L, now, now, now)));
+    RecordingSecurityService security =
+        new RecordingSecurityService(permission -> AccessDecision.allow());
+    ComponentSearchController controller = controller(
+        components, subject("alice"), null, security);
+    controller.setAlpineRegistry(alpine);
+
+    ComponentSearchController.ComponentSearchItem item = controller.search(
+        "demo", "alpine", 10, request("GET", "/internal/search/components"))
+        .items().getFirst();
+    Map<String, Object> details = item.details();
+
+    assertEquals(packagePath, item.browsePath());
+    assertEquals("v3.23", details.get("namespace"));
+    assertEquals("main", details.get("channel"));
+    assertEquals("x86_64", details.get("repositoryArchitecture"));
+    assertEquals("noarch", details.get("packageArchitecture"));
+    assertEquals("Q1AAAAAAAAAAAAAAAAAAAAAAAAAAA=", details.get("identity"));
+    assertEquals("a".repeat(64), details.get("dataSha256"));
+    assertEquals("b".repeat(64), details.get("sha256"));
+    assertEquals("Demo package", details.get("description"));
+    assertEquals("musl", details.get("depends"));
+    assertEquals(AlpineRegistryDao.SOURCE_HOSTED, details.get("sourceKind"));
   }
 
   @Test
