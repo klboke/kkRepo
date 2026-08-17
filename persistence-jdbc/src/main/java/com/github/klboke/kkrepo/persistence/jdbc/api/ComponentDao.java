@@ -66,6 +66,25 @@ public interface ComponentDao {
       String keyword,
       int limit);
 
+  /**
+   * Returns a stable search page scoped to repositories the caller has already authorized.
+   *
+   * <p>The cursor follows {@code last_updated_at DESC, id DESC}. The default keeps lightweight
+   * adapters source-compatible for the first page; production implementations must override this
+   * method when callers need to continue after a cursor.
+   */
+  default List<ComponentSearchRow> searchPageByRepositoryIds(
+      List<Long> repositoryIds,
+      RepositoryFormat format,
+      String keyword,
+      ComponentSearchCursor after,
+      int limit) {
+    if (after != null) {
+      throw new UnsupportedOperationException("component search cursor is not supported");
+    }
+    return searchByRepositoryIds(repositoryIds, format, keyword, limit);
+  }
+
   List<ComponentRecord> searchComponentsByRepositoryIds(
       List<Long> repositoryIds,
       RepositoryFormat format,
@@ -93,6 +112,12 @@ public interface ComponentDao {
       String kind,
       java.time.Instant lastUpdatedAt,
       String storagePath) {
+  }
+
+  record ComponentSearchCursor(java.time.Instant lastUpdatedAt, long id) {
+    public static ComponentSearchCursor after(ComponentSearchRow row) {
+      return new ComponentSearchCursor(row.lastUpdatedAt(), row.id());
+    }
   }
 
   record CleanupFamilyCursor(String namespace, String name, String kind) {

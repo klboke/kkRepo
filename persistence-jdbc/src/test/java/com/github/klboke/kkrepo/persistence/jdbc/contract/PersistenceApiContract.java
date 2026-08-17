@@ -15,6 +15,7 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ArtifactChangeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.ComponentSearchCursor;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.ScannerResourceKind;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao.ScannerTokenResource;
@@ -4360,6 +4361,9 @@ public abstract class PersistenceApiContract {
         otherMavenRepository, RepositoryFormat.MAVEN2, "org.example", "observability-library",
         "3.0.0", Map.of("keywords", "telemetry tracing"), Instant.parse("2026-07-13T08:00:00Z")));
     stores().components().upsertReturningId(component(
+        otherMavenRepository, RepositoryFormat.MAVEN2, "org.example", "unknown-update",
+        "0.0.0", Map.of("keywords", "unknown timestamp"), null));
+    stores().components().upsertReturningId(component(
         npmRepository, RepositoryFormat.NPM, "@acme", "observability-library",
         "4.0.0", Map.of("keywords", "telemetry tracing"), Instant.parse("2026-07-13T11:00:00Z")));
     stores().components().upsertReturningId(component(
@@ -4378,6 +4382,45 @@ public abstract class PersistenceApiContract {
         .stream().map(row -> row.version()).toList());
     assertEquals(List.of("2.0.0", "3.0.0"),
         stores().components().search("telemetry tracing", RepositoryFormat.MAVEN2, 20)
+            .stream().map(row -> row.version()).toList());
+    var firstScopedPage = stores().components().searchPageByRepositoryIds(
+        List.of(mavenRepository, otherMavenRepository),
+        RepositoryFormat.MAVEN2,
+        "telemetry tracing",
+        null,
+        1);
+    var secondScopedPage = stores().components().searchPageByRepositoryIds(
+        List.of(mavenRepository, otherMavenRepository),
+        RepositoryFormat.MAVEN2,
+        "telemetry tracing",
+        ComponentSearchCursor.after(firstScopedPage.getFirst()),
+        1);
+    assertEquals(List.of("2.0.0"),
+        firstScopedPage.stream().map(row -> row.version()).toList());
+    assertEquals(List.of("3.0.0"),
+        secondScopedPage.stream().map(row -> row.version()).toList());
+    var newestMavenRows = stores().components().searchPageByRepositoryIds(
+        List.of(mavenRepository, otherMavenRepository), RepositoryFormat.MAVEN2, null, null, 3);
+    assertEquals(List.of("2.0.0", "1.0.0", "3.0.0"),
+        newestMavenRows.stream().map(row -> row.version()).toList());
+    var nullTimestampPage = stores().components().searchPageByRepositoryIds(
+        List.of(mavenRepository, otherMavenRepository),
+        RepositoryFormat.MAVEN2,
+        null,
+        ComponentSearchCursor.after(newestMavenRows.getLast()),
+        3);
+    assertEquals(List.of("0.0.0"),
+        nullTimestampPage.stream().map(row -> row.version()).toList());
+    assertNull(nullTimestampPage.getFirst().lastUpdatedAt());
+    assertTrue(stores().components().searchPageByRepositoryIds(
+        List.of(mavenRepository, otherMavenRepository),
+        RepositoryFormat.MAVEN2,
+        null,
+        ComponentSearchCursor.after(nullTimestampPage.getFirst()),
+        3).isEmpty());
+    assertEquals(List.of("4.0.0", "2.0.0"),
+        stores().components().searchPageByRepositoryIds(
+                List.of(mavenRepository, npmRepository), null, "telemetry tracing", null, 2)
             .stream().map(row -> row.version()).toList());
     assertFalse(stores().components().search("telemetry", RepositoryFormat.NPM, 20).isEmpty());
     assertEquals(migratedAlpinePackage,

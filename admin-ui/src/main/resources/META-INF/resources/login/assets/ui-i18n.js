@@ -26,6 +26,8 @@
     "Browse navigation": "浏览导航",
     "Browse": "浏览",
     "Admin": "管理",
+    "Search components": "搜索组件",
+    "All formats": "全部格式",
     "Repository": "仓库",
     "Repositories": "仓库",
     "Manage repositories": "管理仓库",

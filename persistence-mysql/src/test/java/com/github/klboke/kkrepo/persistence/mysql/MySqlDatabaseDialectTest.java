@@ -49,10 +49,24 @@ class MySqlDatabaseDialectTest {
         "+kkrepo* +alpine* +migration* +app* +datastore_h2_31894582966_1*",
         dialect.search().prepareComponentQuery(
             "kkrepo-alpine-migration-app-datastore_h2_31894582966_1"));
+    assertEquals(
+        "c.last_updated_at DESC, c.id DESC",
+        dialect.search().componentSearchOrderBy("c"));
+    assertTrue(dialect.search().supportsAdaptiveComponentSearch());
+    assertEquals(
+        "/*+ JOIN_ORDER(search_order, cs, c, r) "
+            + "INDEX(search_order idx_component_format_last_updated) */",
+        dialect.search().orderedComponentSearchHint(true, false, true));
+    assertEquals(
+        "/*+ JOIN_ORDER(search_order, c, r) "
+            + "INDEX(search_order idx_component_repo_last_updated) */",
+        dialect.search().orderedComponentSearchHint(false, true, false));
     assertThrows(IllegalArgumentException.class,
         () -> dialect.json().extractText("attributes_json; DROP TABLE asset", "key"));
     assertThrows(IllegalArgumentException.class,
         () -> dialect.search().componentSearchPredicate("s JOIN component"));
+    assertThrows(IllegalArgumentException.class,
+        () -> dialect.search().componentSearchOrderBy("c; DROP TABLE component"));
   }
 
   @Test

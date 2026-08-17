@@ -11,16 +11,21 @@ import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.ComponentSearchCursor;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AlpineRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
-import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCatalogCache;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
+import com.github.klboke.kkrepo.server.security.SecurityManagementService.RepositoryAccessMode;
 import com.github.klboke.kkrepo.server.support.dao.ComponentDaoAdapter;
 import com.github.klboke.kkrepo.server.support.dao.SecurityDaoAdapter;
 import jakarta.servlet.DispatcherType;
@@ -28,6 +33,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.lang.reflect.Proxy;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -107,10 +113,10 @@ class ComponentSearchControllerSecurityTest {
         request("GET", "/internal/search/components"));
 
     assertEquals(2, response.count());
-    assertEquals(List.of("p2/psr/log.json", "psr/log"), response.items().stream()
+    assertEquals(List.of("psr/log", "p2/psr/log.json"), response.items().stream()
         .map(ComponentSearchController.ComponentSearchItem::name)
         .toList());
-    assertEquals(List.of("p2/psr/log.json", "psr/log/3.0.2/psr-log-3.0.2.zip"), response.items().stream()
+    assertEquals(List.of("psr/log/3.0.2/psr-log-3.0.2.zip", "p2/psr/log.json"), response.items().stream()
         .map(ComponentSearchController.ComponentSearchItem::browsePath)
         .toList());
   }
@@ -239,14 +245,18 @@ class ComponentSearchControllerSecurityTest {
             1L, version.id(), null, "b".repeat(64), null, "HOSTED", now)));
     RecordingSecurityService security =
         new RecordingSecurityService(permission -> AccessDecision.allow());
-    ComponentSearchController controller = new ComponentSearchController(
-        components, new StubAuthenticationService(subject("alice"), null), security);
+    ComponentSearchController controller = controller(
+        components, subject("alice"), null, security);
     controller.setAnsibleGalaxyRegistry(ansible);
 
     ComponentSearchController.ComponentSearchResponse response = controller.search(
         "tools", "ansiblegalaxy", 10, request("GET", "/internal/search/components"));
 
-    Map<String, Object> details = response.items().getFirst().details();
+    Map<String, ComponentSearchController.ComponentSearchItem> byName = response.items().stream()
+        .collect(java.util.stream.Collectors.toMap(
+            ComponentSearchController.ComponentSearchItem::name,
+            item -> item));
+    Map<String, Object> details = byName.get("tools").details();
     assertEquals("a".repeat(64), details.get("artifactSha256"));
     assertEquals(1024L, details.get("artifactSize"));
     assertEquals(Map.of("acme.base", ">=1.0.0"), details.get("dependencies"));
@@ -254,8 +264,8 @@ class ComponentSearchControllerSecurityTest {
     assertEquals(1, details.get("signatureCount"));
     assertEquals("HOSTED", details.get("sourceKind"));
     assertEquals("ansible-hosted", details.get("sourceRepository"));
-    assertFalse(response.items().get(1).details().containsKey("requiresAnsible"));
-    assertEquals(Map.of(), response.items().get(2).details());
+    assertFalse(byName.get("minimal").details().containsKey("requiresAnsible"));
+    assertEquals(Map.of(), byName.get("missing").details());
   }
 
   @Test
@@ -284,11 +294,8 @@ class ComponentSearchControllerSecurityTest {
             2L, "Package@swift-5.9.swift", "5.9", 103L, "c".repeat(64))));
     RecordingSecurityService security =
         new RecordingSecurityService(permission -> AccessDecision.allow());
-    ComponentSearchController controller = new ComponentSearchController(
-        components,
-        new StubAuthenticationService(subject("alice"), null),
-        security,
-        swift);
+    ComponentSearchController controller = controller(
+        components, subject("alice"), null, security, swift);
 
     ComponentSearchController.ComponentSearchItem item = controller.search(
         "demo", "swift", 10, request("GET", "/internal/search/components"))
@@ -329,7 +336,11 @@ class ComponentSearchControllerSecurityTest {
         "demo", "conda", 10, request("GET", "/internal/search/components"));
 
     assertEquals("demo|conda|10", components.calls.getFirst());
-    Map<String, Object> details = response.items().getFirst().details();
+    Map<String, Object> details = response.items().stream()
+        .filter(item -> "demo".equals(item.name()))
+        .findFirst()
+        .orElseThrow()
+        .details();
     assertEquals("main", details.get("channel"));
     assertEquals("noarch", details.get("subdir"));
     assertEquals("0", details.get("build"));
@@ -341,8 +352,10 @@ class ComponentSearchControllerSecurityTest {
     assertEquals(CondaRegistryDao.SOURCE_HOSTED, details.get("sourceKind"));
     assertEquals("conda-hosted", details.get("sourceRepository"));
     assertEquals(List.of("python >=3.12"), details.get("depends"));
-    assertEquals(Map.of(), response.items().get(1).details());
-    assertEquals(Map.of(), response.items().get(2).details());
+    assertEquals(List.of(Map.of(), Map.of()), response.items().stream()
+        .filter(item -> !"demo".equals(item.name()))
+        .map(ComponentSearchController.ComponentSearchItem::details)
+        .toList());
 
     ComponentSearchController withoutRegistry = controller(
         components, subject("alice"), null, security);
@@ -462,10 +475,60 @@ class ComponentSearchControllerSecurityTest {
       AuthenticatedSubject authenticated,
       AuthenticatedSubject anonymous,
       RecordingSecurityService security) {
+    return controller(components, authenticated, anonymous, security, null);
+  }
+
+  private static ComponentSearchController controller(
+      StubComponentDao components,
+      AuthenticatedSubject authenticated,
+      AuthenticatedSubject anonymous,
+      RecordingSecurityService security,
+      SwiftRegistryDao swiftRegistry) {
+    RepositoryCatalogCache catalogCache = mock(RepositoryCatalogCache.class);
+    when(catalogCache.snapshot()).thenAnswer(ignored -> catalog(components.rows));
     return new ComponentSearchController(
         components,
+        mock(AssetDao.class),
         new StubAuthenticationService(authenticated, anonymous),
-        security);
+        security,
+        swiftRegistry,
+        catalogCache);
+  }
+
+  private static RepositoryCatalogCache.RepositoryCatalog catalog(
+      List<ComponentDao.ComponentSearchRow> rows) {
+    List<RepositoryRecord> repositories = new ArrayList<>();
+    if (rows.isEmpty()) {
+      for (RepositoryFormat format : RepositoryFormat.values()) {
+        repositories.add(repository(-(format.ordinal() + 1L), format.id() + "-hosted", format));
+      }
+    } else {
+      rows.forEach(row -> repositories.add(
+          repository(row.repositoryId(), row.repositoryName(), row.format())));
+    }
+    return new RepositoryCatalogCache.RepositoryCatalog(
+        Instant.EPOCH, List.copyOf(repositories), Map.of(), Map.of());
+  }
+
+  private static RepositoryRecord repository(
+      long id,
+      String name,
+      RepositoryFormat format) {
+    return new RepositoryRecord(
+        id,
+        name,
+        format,
+        RepositoryType.HOSTED,
+        format.id() + "-hosted",
+        true,
+        1L,
+        null,
+        null,
+        null,
+        null,
+        null,
+        true,
+        Map.of());
   }
 
   private static ComponentDao.ComponentSearchRow row(
@@ -567,9 +630,18 @@ class ComponentSearchControllerSecurityTest {
     }
 
     @Override
-    public List<ComponentSearchRow> search(String keyword, RepositoryFormat format, int limit) {
+    public List<ComponentSearchRow> searchPageByRepositoryIds(
+        List<Long> repositoryIds,
+        RepositoryFormat format,
+        String keyword,
+        ComponentSearchCursor after,
+        int limit) {
       calls.add((keyword == null ? "" : keyword) + "|" + format + "|" + limit);
-      return rows;
+      return rows.stream()
+          .filter(row -> repositoryIds.contains(row.repositoryId()))
+          .filter(row -> format == null || row.format() == format)
+          .limit(limit)
+          .toList();
     }
   }
 
@@ -614,6 +686,23 @@ class ComponentSearchControllerSecurityTest {
       String requestedPermission = repositoryPermissionString(permission);
       permissions.add(requestedPermission);
       return decisions.apply(requestedPermission);
+    }
+
+    @Override
+    public Map<RepositoryPermission, RepositoryAccessMode> repositoryAccessModes(
+        PermissionSubject subject,
+        Collection<RepositoryPermission> requestedPermissions) {
+      Map<RepositoryPermission, RepositoryAccessMode> modes = new LinkedHashMap<>();
+      requestedPermissions.forEach(permission -> {
+        String requestedPermission = repositoryPermissionString(permission);
+        permissions.add(requestedPermission);
+        modes.put(
+            permission,
+            decisions.apply(requestedPermission).allowed()
+                ? RepositoryAccessMode.FULL
+                : RepositoryAccessMode.DENIED);
+      });
+      return modes;
     }
 
     private static String repositoryPermissionString(RepositoryPermission permission) {

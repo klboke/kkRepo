@@ -454,6 +454,40 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
       return String.join(" ", terms);
     }
 
+    @Override
+    public String componentSearchOrderBy(String componentAlias) {
+      requireAlias(componentAlias);
+      // MySQL sorts NULL below non-NULL values, so a descending scan naturally places NULL last.
+      return componentAlias + ".last_updated_at DESC, " + componentAlias + ".id DESC";
+    }
+
+    @Override
+    public boolean supportsAdaptiveComponentSearch() {
+      return true;
+    }
+
+    @Override
+    public String orderedComponentSearchHint(
+        boolean formatScoped, boolean singleRepository, boolean fullText) {
+      String index = singleRepository
+          ? formatScoped
+              ? "idx_component_repo_format_updated"
+              : "idx_component_repo_last_updated"
+          : formatScoped
+              ? "idx_component_format_last_updated"
+              : "idx_component_last_updated";
+      String joinOrder = fullText
+          ? "JOIN_ORDER(search_order, cs, c, r)"
+          : "JOIN_ORDER(search_order, c, r)";
+      return "/*+ " + joinOrder + " INDEX(search_order " + index + ") */";
+    }
+
+    private static void requireAlias(String alias) {
+      if (alias == null || !ALIAS.matcher(alias).matches()) {
+        throw new IllegalArgumentException("Unsafe component search alias: " + alias);
+      }
+    }
+
     private static void addTerm(List<String> terms, StringBuilder token) {
       if (!token.isEmpty()) {
         terms.add("+" + token + "*");

@@ -920,6 +920,50 @@ public class SecurityManagementService implements AccessDecisionService {
     return decide(subject, repositoryPermissionString(permission), permission);
   }
 
+  /**
+   * Classifies repository browse grants without evaluating a content selector against a fake or
+   * empty path. Callers use this to push full-repository grants into SQL while reserving
+   * selector-only repositories for path-aware authorization.
+   */
+  public Map<RepositoryPermission, RepositoryAccessMode> repositoryAccessModes(
+      PermissionSubject subject,
+      Collection<RepositoryPermission> permissions) {
+    if (subject == null || permissions == null || permissions.isEmpty()) {
+      return Map.of();
+    }
+    AuthorizationSnapshot snapshot = authorizationSnapshot(subject);
+    Map<RepositoryPermission, RepositoryAccessMode> result = new LinkedHashMap<>();
+    permissions.stream()
+        .filter(java.util.Objects::nonNull)
+        .distinct()
+        .forEach(permission -> result.put(permission, repositoryAccessMode(snapshot, permission)));
+    return Map.copyOf(result);
+  }
+
+  /** Evaluates a bounded batch of real repository paths against one authorization snapshot. */
+  public Map<RepositoryPermission, AccessDecision> decideAll(
+      PermissionSubject subject,
+      Collection<RepositoryPermission> permissions) {
+    if (subject == null || permissions == null || permissions.isEmpty()) {
+      return Map.of();
+    }
+    AuthorizationSnapshot snapshot = authorizationSnapshot(subject);
+    Map<RepositoryPermission, AccessDecision> result = new LinkedHashMap<>();
+    permissions.stream()
+        .filter(java.util.Objects::nonNull)
+        .distinct()
+        .forEach(permission -> {
+          String requested = repositoryPermissionString(permission);
+          boolean allowed = !snapshot.roleIds().isEmpty()
+              && permissionAllowed(
+                  snapshot.privileges(), requested, permission, snapshot.repositoryTargets());
+          result.put(permission, allowed
+              ? AccessDecision.allow()
+              : AccessDecision.deny("missing permission " + requested));
+        });
+    return Map.copyOf(result);
+  }
+
   public AccessDecision decide(PermissionSubject subject, String requestedPermission) {
     if (subject == null || requestedPermission == null || requestedPermission.isBlank()) {
       return AccessDecision.deny("missing subject or permission");
@@ -995,6 +1039,24 @@ public class SecurityManagementService implements AccessDecisionService {
       }
     }
     return false;
+  }
+
+  private RepositoryAccessMode repositoryAccessMode(
+      AuthorizationSnapshot snapshot,
+      RepositoryPermission permission) {
+    if (snapshot.roleIds().isEmpty()) {
+      return RepositoryAccessMode.DENIED;
+    }
+    String requestedPermission = repositoryPermissionString(permission);
+    boolean selectorApplies = false;
+    for (SecurityPrivilegeRecord privilege : snapshot.privileges()) {
+      if (wildcardMatches(toPermission(privilege), requestedPermission)) {
+        return RepositoryAccessMode.FULL;
+      }
+      selectorApplies |= repositoryContentSelectorApplies(
+          privilege, permission, snapshot.repositoryTargets());
+    }
+    return selectorApplies ? RepositoryAccessMode.CONTENT_SELECTOR : RepositoryAccessMode.DENIED;
   }
 
   private AuthorizationSnapshot authorizationSnapshot(PermissionSubject subject) {
@@ -1372,6 +1434,26 @@ public class SecurityManagementService implements AccessDecisionService {
       SecurityPrivilegeRecord privilege,
       RepositoryPermission requested,
       Map<String, SecurityRepositoryTargetRecord> repositoryTargets) {
+    if (!repositoryContentSelectorApplies(privilege, requested, repositoryTargets)) {
+      return false;
+    }
+    Map<String, Object> properties = privilege.properties();
+    SecurityRepositoryTargetRecord contentSelector = repositoryTargets.get(
+        contentSelectorName(properties));
+    String requestedFormat = requested.format() == null
+        ? "*"
+        : ContentSelectorExpressionEvaluator.nexusFormat(requested.format().name());
+    return ContentSelectorExpressionEvaluator.matches(
+        contentSelector.contentExpression(),
+        requested.repository(),
+        requestedFormat,
+        defaultString(requested.pathPattern(), ""));
+  }
+
+  private boolean repositoryContentSelectorApplies(
+      SecurityPrivilegeRecord privilege,
+      RepositoryPermission requested,
+      Map<String, SecurityRepositoryTargetRecord> repositoryTargets) {
     if (!"repository-content-selector".equals(privilege.type())) {
       return false;
     }
@@ -1401,11 +1483,13 @@ public class SecurityManagementService implements AccessDecisionService {
     if (!partMatches(actions(properties), action.nexusAction())) {
       return false;
     }
-    return ContentSelectorExpressionEvaluator.matches(
-        contentSelector.contentExpression(),
-        requested.repository(),
-        requestedFormat,
-        defaultString(requested.pathPattern(), ""));
+    return true;
+  }
+
+  public enum RepositoryAccessMode {
+    DENIED,
+    CONTENT_SELECTOR,
+    FULL
   }
 
   private void invalidateAuthorizationCacheAfterCommit() {
