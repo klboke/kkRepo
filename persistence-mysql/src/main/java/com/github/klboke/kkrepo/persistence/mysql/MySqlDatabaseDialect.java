@@ -299,6 +299,7 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
   }
 
   private static final class MySqlSearchPersistenceDialect implements SearchPersistenceDialect {
+    private static final int DEFAULT_INNODB_FT_MIN_TOKEN_SIZE = 3;
     private static final Pattern ALIAS = Pattern.compile("[A-Za-z0-9_]+");
 
     @Override
@@ -342,7 +343,11 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
     private static void addTerm(
         List<String> terms, StringBuilder token, boolean required) {
       if (!token.isEmpty()) {
-        terms.add((required ? "+" : "") + token + "*");
+        // Requiring a term omitted by InnoDB's default FULLTEXT parser makes the whole boolean
+        // query unmatchable. Keep short terms optional while retaining AND semantics for indexed
+        // terms.
+        boolean indexedByDefault = token.length() >= DEFAULT_INNODB_FT_MIN_TOKEN_SIZE;
+        terms.add((required && indexedByDefault ? "+" : "") + token + "*");
         token.setLength(0);
       }
     }

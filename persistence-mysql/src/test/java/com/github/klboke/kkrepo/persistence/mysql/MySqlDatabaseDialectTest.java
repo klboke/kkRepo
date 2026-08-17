@@ -47,7 +47,7 @@ class MySqlDatabaseDialectTest {
         "MATCH(s.namespace, s.name, s.version, s.keywords) AGAINST (? IN BOOLEAN MODE)",
         dialect.search().componentSearchPredicate("s"));
     assertEquals(
-        "+com* +example* +artifact* +1* +0*",
+        "+com* +example* +artifact* 1* 0*",
         dialect.search().prepareComponentQuery("\"".repeat(4096) + "Com.Example artifact-1.0"));
     assertEquals(
         "com* example* artifact* 1* 0*",
@@ -56,6 +56,13 @@ class MySqlDatabaseDialectTest {
         () -> dialect.json().extractText("attributes_json; DROP TABLE asset", "key"));
     assertThrows(IllegalArgumentException.class,
         () -> dialect.search().componentSearchPredicate("s JOIN component"));
+  }
+
+  @Test
+  void keepsTermsBelowTheDefaultInnoDbFullTextMinimumOptional() {
+    assertEquals(
+        "qh* +agent* +spec* +agentscope*",
+        dialect.search().prepareComponentQuery("qh-agent-spec-agentscope"));
   }
 
   @Test
