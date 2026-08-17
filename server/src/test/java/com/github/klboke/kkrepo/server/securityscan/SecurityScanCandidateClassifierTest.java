@@ -58,6 +58,15 @@ class SecurityScanCandidateClassifierTest {
             "conans/demo/1.0/acme/stable/revisions/rrev/packages/package/revisions/prev/files/conan_package.tzst",
             "conan"),
         Arguments.of(RepositoryFormat.APT, "pool/d/demo/demo_1.0_amd64.deb", "package"),
+        Arguments.of(
+            RepositoryFormat.HUGGINGFACE,
+            "openai/model/resolve/" + "a".repeat(40) + "/model.safetensors",
+            "huggingface"),
+        Arguments.of(
+            RepositoryFormat.HUGGINGFACE,
+            "openai/model/resolve/" + "a".repeat(40)
+                + "/model.safetensors.index.json",
+            "huggingface"),
         Arguments.of(RepositoryFormat.NUGET, "flat/demo/1.0.0/demo.1.0.0.nupkg", "package"),
         Arguments.of(RepositoryFormat.RUBYGEMS, "gems/demo-1.0.0.gem", "gem"),
         Arguments.of(RepositoryFormat.YUM, "packages/demo-1.0.0.x86_64.rpm", "package"),
@@ -176,6 +185,22 @@ class SecurityScanCandidateClassifierTest {
         classifier.classify(
             asset(RepositoryFormat.MAVEN2, "demo.jar", "artifact"), blob(2048), profile(1024))
             .disposition());
+  }
+
+  @Test
+  void givesModelFilesAnIsolatedNonExecutingScanIdentity() {
+    AssetRecord model = asset(
+        RepositoryFormat.HUGGINGFACE,
+        "openai/model/resolve/" + "a".repeat(40) + "/model.gguf",
+        "huggingface");
+    var classification = classifier.classify(model, blob(42), profile(1024));
+    var subject = classifier.subjectIdentity(model, blob(42));
+
+    assertEquals(SubjectKind.HF_MODEL_FILE, classification.subjectKind());
+    assertEquals(
+        com.github.klboke.kkrepo.security.scan.ScanEnums.TargetClassification.MODEL,
+        classification.targetClassification());
+    assertEquals("hf-model-file:sha256:" + "a".repeat(64), subject.key());
   }
 
   private static AssetRecord asset(RepositoryFormat format, String path, String kind) {

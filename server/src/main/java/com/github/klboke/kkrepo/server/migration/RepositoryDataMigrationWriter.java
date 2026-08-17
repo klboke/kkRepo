@@ -7,6 +7,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.HuggingFaceRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
@@ -29,6 +30,9 @@ import com.github.klboke.kkrepo.protocol.maven.path.ChecksumPayload;
 import com.github.klboke.kkrepo.protocol.maven.path.HashType;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
+import com.github.klboke.kkrepo.protocol.huggingface.HuggingFaceFileKind;
+import com.github.klboke.kkrepo.protocol.huggingface.HuggingFacePath;
+import com.github.klboke.kkrepo.protocol.huggingface.HuggingFacePathParser;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.blob.BlobTransactionCleanup;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
@@ -86,6 +90,7 @@ class RepositoryDataMigrationWriter {
   private AptRepositoryDataMigrationWriter aptMigrationWriter;
   private AlpineRepositoryDataMigrationWriter alpineMigrationWriter;
   private ConanRepositoryDataMigrationWriter conanMigrationWriter;
+  private HuggingFaceRegistryDao huggingFaceRegistry;
   private final TransientTransactionRetry transactionRetry;
   private final MavenPathParser mavenPathParser = new MavenPathParser();
 
@@ -223,6 +228,11 @@ class RepositoryDataMigrationWriter {
     this.conanMigrationWriter = conanMigrationWriter;
   }
 
+  @Autowired(required = false)
+  void setHuggingFaceRegistry(HuggingFaceRegistryDao huggingFaceRegistry) {
+    this.huggingFaceRegistry = huggingFaceRegistry;
+  }
+
   WriteResult write(long targetRepositoryId, RepositoryDataMigrationAssetRecord source, InputStream body,
       String responseContentType, boolean validateSize) {
     RepositoryRecord repository = repositoryDao.findById(targetRepositoryId)
@@ -308,10 +318,15 @@ class RepositoryDataMigrationWriter {
           migrated.componentId(), migrated.assetId(), migrated.assetBlobId(),
           migrated.assetBlobObjectKey());
     }
+    HuggingFaceMigrationIdentity huggingFaceIdentity = repository.format()
+            == RepositoryFormat.HUGGINGFACE
+        ? requireHuggingFaceMigrationIdentity(source)
+        : null;
     DigestedUpload upload = uploadWithDigests(repository, storage, source, body, validateSize);
     Map<MavenPath, ChecksumUpload> checksumUploads = new LinkedHashMap<>();
     Map<MavenPath, WriteResult> checksumResults = new LinkedHashMap<>();
     try {
+      validateHuggingFaceMigration(source, upload, huggingFaceIdentity);
       checksumUploads.putAll(generatedMavenChecksumUploads(repository, storage, source, upload.digests()));
       String contentType = firstNonBlank(source.contentType(), responseContentType);
       WriteResult result = transactionRetry.execute(
@@ -319,6 +334,8 @@ class RepositoryDataMigrationWriter {
           () -> {
             WriteResult persisted = persist(repository, source, upload, contentType, null);
             indexMigratedDockerAsset(repository, source, upload, contentType, persisted);
+            projectMigratedHuggingFace(
+                repository, source, upload, contentType, persisted, huggingFaceIdentity);
             for (Map.Entry<MavenPath, ChecksumUpload> entry : checksumUploads.entrySet()) {
               ChecksumUpload checksum = entry.getValue();
               WriteResult persistedChecksum = persist(
@@ -372,6 +389,116 @@ class RepositoryDataMigrationWriter {
       uploads.values().forEach(checksum -> deleteTemp(checksum.upload()));
       throw e;
     }
+  }
+
+  private static HuggingFaceMigrationIdentity requireHuggingFaceMigrationIdentity(
+      RepositoryDataMigrationAssetRecord source) {
+    String rawPath = source == null || source.sourcePath() == null
+        ? "" : source.sourcePath().trim();
+    while (rawPath.startsWith("/")) rawPath = rawPath.substring(1);
+    HuggingFacePath parsed = new HuggingFacePathParser().parse(rawPath);
+    if (parsed.kind() != HuggingFacePath.Kind.RESOLVE
+        || !HuggingFacePathParser.isCommit(parsed.revision())) {
+      throw new IllegalStateException(
+          "Hugging Face migration requires a commit-pinned resolve asset: " + rawPath);
+    }
+    String commit = parsed.revision().toLowerCase(java.util.Locale.ROOT);
+    String canonicalPath = parsed.repoId() + "/resolve/" + commit + "/" + parsed.filePath();
+    if (!canonicalPath.equals(rawPath)) {
+      throw new IllegalStateException(
+          "Hugging Face migration path is not canonical: " + rawPath);
+    }
+    if (source.version() == null || !commit.equalsIgnoreCase(source.version())) {
+      throw new IllegalStateException(
+          "Hugging Face migration component version must be the full commit: " + rawPath);
+    }
+    int slash = parsed.repoId().indexOf('/');
+    String expectedNamespace = slash < 0 ? null : parsed.repoId().substring(0, slash);
+    String expectedName = slash < 0 ? parsed.repoId() : parsed.repoId().substring(slash + 1);
+    if (!java.util.Objects.equals(blankToNull(source.namespace()), expectedNamespace)
+        || !expectedName.equals(source.name())) {
+      throw new IllegalStateException(
+          "Hugging Face migration component identity disagrees with resolve path: " + rawPath);
+    }
+    return new HuggingFaceMigrationIdentity(
+        parsed.repoId(), commit, parsed.filePath(),
+        parsed.repoId() + "/" + commit + "/" + parsed.filePath());
+  }
+
+  private static void validateHuggingFaceMigration(
+      RepositoryDataMigrationAssetRecord source,
+      DigestedUpload upload,
+      HuggingFaceMigrationIdentity identity) {
+    if (identity == null) return;
+    String expectedSha256 = sourceSha256(source.metadata());
+    if (expectedSha256 == null) {
+      throw new IllegalStateException(
+          "Hugging Face migration requires a source SHA-256: " + source.sourcePath());
+    }
+    if (!expectedSha256.equalsIgnoreCase(upload.digests().sha256())) {
+      throw new IllegalStateException(
+          "Hugging Face migration checksum mismatch: " + source.sourcePath());
+    }
+  }
+
+  private void projectMigratedHuggingFace(
+      RepositoryRecord repository,
+      RepositoryDataMigrationAssetRecord source,
+      DigestedUpload upload,
+      String contentType,
+      WriteResult persisted,
+      HuggingFaceMigrationIdentity identity) {
+    if (identity == null) return;
+    if (huggingFaceRegistry == null || persisted.componentId() == null) {
+      throw new IllegalStateException("Hugging Face migration registry is not configured");
+    }
+    Instant observedAt = source.sourceLastUpdatedAt() == null
+        ? Instant.now() : source.sourceLastUpdatedAt();
+    HuggingFaceRegistryDao.ModelRevision revision = huggingFaceRegistry.upsertRevision(
+        new HuggingFaceRegistryDao.ModelRevision(
+            null, repository.id(), identity.repoId(), identity.commit(),
+            persisted.componentId(), null, null, null, false, false, null, null, null,
+            observedAt, Instant.now()));
+    huggingFaceRegistry.upsertFileMetadata(new HuggingFaceRegistryDao.ModelFile(
+        null, revision.id(), repository.id(), identity.repoId(), identity.commit(),
+        identity.filePath(), persisted.assetId(), persisted.componentId(), null, null, null,
+        upload.digests().size(), upload.digests().sha256(), contentType,
+        HuggingFaceFileKind.classify(identity.filePath()).name(),
+        HuggingFaceRegistryDao.FILE_READY, 0L, null, null, Instant.now()));
+  }
+
+  private static String sourceSha256(Object value) {
+    Object found = findMetadataKey(value, "sha256");
+    if (found == null) found = findMetadataKey(value, "sha-256");
+    String text = found == null ? null : found.toString().trim();
+    return text != null && text.matches("(?i)[0-9a-f]{64}") ? text : null;
+  }
+
+  private static Object findMetadataKey(Object value, String wanted) {
+    if (value instanceof Map<?, ?> map) {
+      String normalizedWanted = normalizedMetadataKey(wanted);
+      for (Map.Entry<?, ?> entry : map.entrySet()) {
+        if (entry.getKey() != null
+            && normalizedMetadataKey(entry.getKey()).equals(normalizedWanted)) {
+          return entry.getValue();
+        }
+      }
+      for (Object child : map.values()) {
+        Object found = findMetadataKey(child, wanted);
+        if (found != null) return found;
+      }
+    } else if (value instanceof Iterable<?> iterable) {
+      for (Object child : iterable) {
+        Object found = findMetadataKey(child, wanted);
+        if (found != null) return found;
+      }
+    }
+    return null;
+  }
+
+  private static String normalizedMetadataKey(Object value) {
+    return String.valueOf(value).replaceAll("[^A-Za-z0-9]", "")
+        .toLowerCase(java.util.Locale.ROOT);
   }
 
   private static RepositoryDataMigrationAssetRecord generatedChecksumSource(
@@ -526,7 +653,11 @@ class RepositoryDataMigrationWriter {
     if (previousBlobId != null && previousBlobId != blobId) {
       assetDao.markBlobDeletedIfUnreferenced(previousBlobId, "asset replaced by repository data migration");
     }
-    browseNodeDao.upsertPathAncestors(repository.id(), source.sourcePath(), persistedAsset.id(), componentId);
+    String browsePath = repository.format() == RepositoryFormat.HUGGINGFACE
+        ? requireHuggingFaceMigrationIdentity(source).browsePath()
+        : source.sourcePath();
+    browseNodeDao.upsertPathAncestors(
+        repository.id(), browsePath, persistedAsset.id(), componentId);
     enqueueDerivedIndex(repository, source);
     return new WriteResult(componentId, persistedAsset.id(), persistedBlob.id(), persistedBlob.objectKey());
   }
@@ -671,6 +802,15 @@ class RepositoryDataMigrationWriter {
     if (source.name() == null || source.name().isBlank()) {
       return null;
     }
+    byte[] coordinateHash;
+    if (repository.format() == RepositoryFormat.HUGGINGFACE) {
+      HuggingFaceMigrationIdentity identity = requireHuggingFaceMigrationIdentity(source);
+      coordinateHash = PersistenceHashes.sha256(
+          "huggingface", identity.repoId(), identity.commit());
+    } else {
+      coordinateHash = PersistenceHashes.componentCoordinateHash(
+          blankToNull(source.namespace()), source.name(), blankToNull(source.version()));
+    }
     ComponentRecord component = new ComponentRecord(
         null,
         repository.id(),
@@ -679,7 +819,7 @@ class RepositoryDataMigrationWriter {
         source.name(),
         blankToNull(source.version()),
         componentKind(repository.format(), source),
-        PersistenceHashes.componentCoordinateHash(blankToNull(source.namespace()), source.name(), blankToNull(source.version())),
+        coordinateHash,
         componentAttributes(source),
         lastUpdatedAt);
     return componentDao.upsertReturningId(component);
@@ -873,6 +1013,17 @@ class RepositoryDataMigrationWriter {
       attributes.put("cargo", cargoMetadata.assetAttributes());
       attributes.put("cratePath", source.sourcePath());
     }
+    if (source.format() == RepositoryFormat.HUGGINGFACE) {
+      HuggingFaceMigrationIdentity identity = requireHuggingFaceMigrationIdentity(source);
+      attributes.put("huggingfaceRole", "model-file");
+      attributes.put("repoId", identity.repoId());
+      attributes.put("commit", identity.commit());
+      attributes.put("filePath", identity.filePath());
+      attributes.put("fileKind", HuggingFaceFileKind.classify(identity.filePath()).name());
+      attributes.put("expectedSize", digests.size());
+      attributes.put("private", false);
+      attributes.put("gated", false);
+    }
     return Map.copyOf(attributes);
   }
 
@@ -906,6 +1057,14 @@ class RepositoryDataMigrationWriter {
     putIfPresent(attributes, "sourceComponentId", source.sourceComponentId());
     if (source.metadata() != null && source.metadata().get("componentAttributes") != null) {
       attributes.put("sourceComponentAttributes", source.metadata().get("componentAttributes"));
+    }
+    if (source.format() == RepositoryFormat.HUGGINGFACE) {
+      HuggingFaceMigrationIdentity identity = requireHuggingFaceMigrationIdentity(source);
+      attributes.put("repoId", identity.repoId());
+      attributes.put("commit", identity.commit());
+      attributes.put("private", false);
+      attributes.put("gated", false);
+      attributes.put("browsePath", identity.repoId() + "/" + identity.commit());
     }
     return Map.copyOf(attributes);
   }
@@ -954,6 +1113,7 @@ class RepositoryDataMigrationWriter {
       case APT -> source.sourcePath().endsWith(".deb") ? "apt-package" : "apt-metadata";
       case ALPINE -> source.sourcePath().endsWith(".apk")
           ? "alpine-package" : "alpine-metadata";
+      case HUGGINGFACE -> "huggingface-model-file";
       case RAW -> "asset";
     };
   }
@@ -964,6 +1124,9 @@ class RepositoryDataMigrationWriter {
     }
     if (format == RepositoryFormat.SWIFT) {
       return "swift-package-release";
+    }
+    if (format == RepositoryFormat.HUGGINGFACE) {
+      return "model-revision";
     }
     return "package";
   }
@@ -1212,6 +1375,10 @@ class RepositoryDataMigrationWriter {
       Digests digests,
       Path tempFile,
       boolean uploaded) {
+  }
+
+  private record HuggingFaceMigrationIdentity(
+      String repoId, String commit, String filePath, String browsePath) {
   }
 
   record DockerManifestMigrationTarget(String imageName, String reference) {

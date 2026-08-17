@@ -331,6 +331,7 @@ class HttpRemoteFetcherTest {
         eq("GET"),
         any(OutboundRequestPolicy.ResolvedHttpTarget.class),
         anyMap(),
+        nullable(byte[].class),
         anyLong())).thenAnswer(invocation -> {
           OutboundRequestPolicy.ResolvedHttpTarget target = invocation.getArgument(3);
           Map<String, String> headers = invocation.getArgument(4);
@@ -372,6 +373,7 @@ class HttpRemoteFetcherTest {
         eq("GET"),
         any(OutboundRequestPolicy.ResolvedHttpTarget.class),
         anyMap(),
+        nullable(byte[].class),
         anyLong())).thenAnswer(invocation -> {
           OutboundRequestPolicy.ResolvedHttpTarget target = invocation.getArgument(3);
           Map<String, String> headers = invocation.getArgument(4);

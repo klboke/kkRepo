@@ -316,6 +316,8 @@ public class ComponentUploadService {
       case CONAN -> uploadConan(runtime, upload, createdBy, createdByIp);
       case APT -> uploadApt(runtime, upload, createdBy, createdByIp);
       case ALPINE -> uploadAlpine(runtime, upload, createdBy, createdByIp);
+      case HUGGINGFACE -> throw new UploadValidationException(
+          "Hugging Face Models repositories are proxy-only");
       case DOCKER -> throw new UploadValidationException("Docker hosted upload must use the Docker Registry V2 API");
       case NUGET -> uploadRaw(runtime, upload, createdBy, createdByIp);
       case RUBYGEMS -> uploadRaw(runtime, upload, createdBy, createdByIp);
@@ -856,6 +858,7 @@ public class ComponentUploadService {
       case CONAN -> "conan";
       case APT -> "apt";
       case ALPINE -> "alpine";
+      case HUGGINGFACE -> "huggingface";
       case RAW -> "raw";
     };
   }

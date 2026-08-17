@@ -37,6 +37,8 @@ public record NexusSourceProfile(
   private static final int APT_MIGRATION_MAX_MINOR = 94;
   private static final int ALPINE_MIGRATION_MIN_MINOR = 94;
   private static final int ALPINE_MIGRATION_MAX_MINOR = 94;
+  private static final int HUGGINGFACE_MIGRATION_MIN_MINOR = 94;
+  private static final int HUGGINGFACE_MIGRATION_MAX_MINOR = 94;
 
   public NexusSourceProfile {
     scriptApi = scriptApi == null ? ScriptApiProfile.unknown() : scriptApi;
@@ -227,13 +229,15 @@ public record NexusSourceProfile(
           && (!"apt".equals(format)
               || aptContentModelSupported(probedNexusVersion, contentModel))
           && (!"alpine".equals(format)
-              || alpineContentModelSupported(probedNexusVersion, contentModel));
+              || alpineContentModelSupported(probedNexusVersion, contentModel))
+          && (!"huggingface".equals(format)
+              || huggingFaceContentModelSupported(probedNexusVersion, contentModel));
       boolean content = config
           && ((metadataEngine == MetadataEngine.ORIENTDB
                   && !"cargo".equals(format) && !"pub".equals(format)
                   && !"swift".equals(format) && !"ansiblegalaxy".equals(format)
                   && !"conda".equals(format) && !"conan".equals(format)
-                  && !"alpine".equals(format))
+                  && !"alpine".equals(format) && !"huggingface".equals(format))
               || ((metadataEngine == MetadataEngine.DATASTORE_H2
                   || metadataEngine == MetadataEngine.DATASTORE_POSTGRESQL)
                   && datastoreContent));
@@ -327,6 +331,14 @@ public record NexusSourceProfile(
           && !alpineFormatShapeSupported(contentModel.formatShape())) {
         return "alpine-content-shape-incomplete";
       }
+      if ("huggingface".equals(format)
+          && !knownHuggingFaceMigrationVersion(probedNexusVersion)) {
+        return "huggingface-source-version-unverified";
+      }
+      if ("huggingface".equals(format)
+          && !huggingFaceFormatShapeSupported(contentModel.formatShape())) {
+        return "huggingface-content-shape-incomplete";
+      }
       return "datastore-content-schema-incomplete";
     }
     return "configuration-only";
@@ -401,6 +413,13 @@ public record NexusSourceProfile(
         && alpineFormatShapeSupported(contentModel.formatShape());
   }
 
+  private static boolean huggingFaceContentModelSupported(
+      String probedNexusVersion,
+      ContentModelFingerprint contentModel) {
+    return knownHuggingFaceMigrationVersion(probedNexusVersion)
+        && huggingFaceFormatShapeSupported(contentModel.formatShape());
+  }
+
   private static boolean knownSwiftMigrationVersion(String version) {
     return knownMigrationVersion(version, SWIFT_MIGRATION_MIN_MINOR, SWIFT_MIGRATION_MAX_MINOR);
   }
@@ -424,6 +443,11 @@ public record NexusSourceProfile(
   private static boolean knownAlpineMigrationVersion(String version) {
     return knownMigrationVersion(
         version, ALPINE_MIGRATION_MIN_MINOR, ALPINE_MIGRATION_MAX_MINOR);
+  }
+
+  private static boolean knownHuggingFaceMigrationVersion(String version) {
+    return knownMigrationVersion(
+        version, HUGGINGFACE_MIGRATION_MIN_MINOR, HUGGINGFACE_MIGRATION_MAX_MINOR);
   }
 
   private static boolean knownMigrationVersion(String version, int minimumMinor, int maximumMinor) {
@@ -489,6 +513,13 @@ public record NexusSourceProfile(
         && bool(shape.get("packageAssetPath"), false)
         && bool(shape.get("alpineAssetAttributes"), false)
         && bool(shape.get("componentIdentity"), false)
+        && bool(shape.get("sha256Checksum"), false);
+  }
+
+  private static boolean huggingFaceFormatShapeSupported(Map<String, Object> shape) {
+    return shape != null
+        && bool(shape.get("resolveAssetPath"), false)
+        && bool(shape.get("componentCommit"), false)
         && bool(shape.get("sha256Checksum"), false);
   }
 

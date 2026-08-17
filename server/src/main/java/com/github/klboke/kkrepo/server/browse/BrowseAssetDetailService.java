@@ -235,6 +235,9 @@ public class BrowseAssetDetailService {
     Map<String, Object> ansible = source.format() == RepositoryFormat.ANSIBLEGALAXY
         ? ansibleAttributes(source, asset, ansibleVersion)
         : Map.of();
+    Map<String, Object> huggingFace = source.format() == RepositoryFormat.HUGGINGFACE
+        ? huggingFaceAttributes(asset)
+        : Map.of();
     String displayName = storagePath.equals(publicPath)
         ? asset.name()
         : publicPath.substring(publicPath.lastIndexOf('/') + 1);
@@ -272,6 +275,7 @@ public class BrowseAssetDetailService {
         conda,
         apt,
         alpine,
+        huggingFace,
         swift,
         ansible,
         provenance);
@@ -559,6 +563,7 @@ public class BrowseAssetDetailService {
           Map.of(),
           Map.of(),
           Map.of(),
+          Map.of(),
           swiftReleaseAttributes(source, row),
           Map.of(),
           Map.of("dynamic", true, "hashes_not_verified", false)));
@@ -652,6 +657,7 @@ public class BrowseAssetDetailService {
           null,
           Map.copyOf(checksum),
           Map.of("generated", true, "format", "swift-manifest-browse"),
+          Map.of(),
           Map.of(),
           Map.of(),
           Map.of(),
@@ -805,6 +811,7 @@ public class BrowseAssetDetailService {
         Map.of(),
         Map.of(),
         Map.of(),
+        Map.of(),
         provenance);
   }
 
@@ -838,7 +845,22 @@ public class BrowseAssetDetailService {
         Map.of(),
         Map.of(),
         Map.of(),
+        Map.of(),
         provenance);
+  }
+
+  private static Map<String, Object> huggingFaceAttributes(AssetRecord asset) {
+    Map<String, Object> attributes = asset.attributes() == null ? Map.of() : asset.attributes();
+    if (!"model-file".equals(attributes.get("huggingfaceRole"))) return Map.of();
+    LinkedHashMap<String, Object> values = new LinkedHashMap<>();
+    for (String key : List.of(
+        "repoId", "commit", "requestedRef", "filePath", "fileKind", "gitOid",
+        "lfsSha256", "expectedSize", "library", "pipeline",
+        "license", "private", "gated")) {
+      put(values, key, attributes.get(key));
+    }
+    values.put("cacheState", "READY");
+    return Collections.unmodifiableMap(values);
   }
 
   private static Map<String, Object> composerAttributes(AssetRecord asset) {
@@ -1592,6 +1614,7 @@ public class BrowseAssetDetailService {
       Map<String, Object> conda,
       Map<String, Object> apt,
       Map<String, Object> alpine,
+      Map<String, Object> huggingface,
       Map<String, Object> swift,
       Map<String, Object> ansible,
       Map<String, Object> provenance) {}

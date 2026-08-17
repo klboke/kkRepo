@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
 class BrowseWelcomeFormatsContractTest {
   private static final List<String> FORMATS = List.of(
       "maven2", "npm", "pypi", "cargo", "pub", "composer", "terraform", "swift",
-      "ansiblegalaxy", "conda", "conan", "apt", "alpine", "go",
+      "ansiblegalaxy", "conda", "conan", "apt", "alpine", "huggingface", "go",
       "helm", "docker", "nuget", "rubygems", "yum", "raw");
 
   @Test
@@ -22,7 +22,7 @@ class BrowseWelcomeFormatsContractTest {
     String stylesheet = resource("/META-INF/resources/browse/assets/browse.css");
 
     assertTrue(index.contains("id=\"supported-formats-title\""));
-    assertTrue(index.contains("class=\"format-showcase-count\">20 formats"));
+    assertTrue(index.contains("class=\"format-showcase-count\">21 formats"));
     assertTrue(stylesheet.contains(".format-grid {"));
     assertTrue(stylesheet.contains("gap: 0;"));
     assertTrue(stylesheet.contains("overflow: hidden;"));

@@ -48,6 +48,7 @@ public class ScannerEngineService {
   private final OciRegistryStager ociRegistryStager;
   private final ScannerDocumentMapper documents;
   private final ScannerDatabaseCoordinator database;
+  private final HuggingFaceModelInspector modelInspector = new HuggingFaceModelInspector();
 
   private volatile CachedReadiness cachedReadiness;
 
@@ -83,13 +84,15 @@ public class ScannerEngineService {
         Long.toString(properties.getMaxInputBytes()),
         Long.toString(properties.getMaxOutputBytes()),
         "catalog", "match", "oci-scan", "cancel", "conda-meta-v1", "alpine-apk-v2",
-        "conan-package-multipart-v1"));
+        "conan-package-multipart-v1", "huggingface-model-file-v1"));
     return new Capabilities(
         ScannerContract.API_VERSION,
         "syft-grype-v1",
         "1",
-        List.of("CATALOG", "CONAN_CATALOG", "MATCH", "OCI_SCAN", "CANCEL"),
-        List.of("ARCHIVE", "PACKAGE", "CONAN_PACKAGE", "MANIFEST", "RAW_FILE", "OCI_IMAGE"),
+        List.of("CATALOG", "CONAN_CATALOG", "MODEL_STATIC", "MATCH", "OCI_SCAN", "CANCEL"),
+        List.of(
+            "ARCHIVE", "PACKAGE", "CONAN_PACKAGE", "MANIFEST", "RAW_FILE", "MODEL",
+            "OCI_IMAGE"),
         properties.getMaxInputBytes(),
         properties.getMaxOutputBytes(),
         digest);
@@ -154,6 +157,8 @@ public class ScannerEngineService {
       ScannerInput.Verified verified =
           scannerInput.copy(
               input, artifact, expectedSha256, expectedSize, effectiveLimits, deadline);
+      Map<String, Object> modelInspection = modelInspector.inspect(
+          artifact, safeType, effectiveLimits, deadline);
       boolean conda = safeType == ScannerArtifactType.CONDA;
       boolean alpine = safeType == ScannerArtifactType.APK;
       AlpinePackageCataloger.Prepared alpinePackage = alpine
@@ -208,6 +213,7 @@ public class ScannerEngineService {
         summary.put("alpineIdentity", alpinePackage.identity());
         summary.put("alpineDataSha256", alpinePackage.dataSha256());
       }
+      summary.putAll(modelInspection);
       CatalogResponse response = documents.catalog(
           cyclonedx,
           verified.sha256(),

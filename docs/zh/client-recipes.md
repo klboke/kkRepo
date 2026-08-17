@@ -605,6 +605,24 @@ curl -u alice:"$KKREPO_PASSWORD" \
 
 认证 URL 应保存在受保护的客户端配置中。Hosted/group index 由本地 key 签名，passthrough proxy 保持上游签名。详见 [Alpine / APK 仓库使用指南](repository-guides/alpine-apk.md)。
 
+## Hugging Face Models
+
+创建 Models-only `huggingface-proxy`，再把 Hub 客户端指向仓库根路径：
+
+```bash
+export HF_ENDPOINT='https://nexus.example.com/repository/huggingface-models'
+export HF_HUB_DOWNLOAD_TIMEOUT=120
+export HF_HUB_ETAG_TIMEOUT=1800
+
+hf download sshleifer/tiny-gpt2 config.json
+hf download sshleifer/tiny-gpt2 --include '*.json' '*.safetensors'
+```
+
+本地认证使用只有 read 权限的 kkRepo `GenericToken`，并通过 `HF_TOKEN` 提供给客户端；只有
+上游 model 为 private/gated 时，才在仓库上单独配置 remote bearer token。
+`huggingface_hub`、Transformers 与 Diffusers 都会继承同一个 `HF_ENDPOINT`。详见
+[Hugging Face Models 仓库使用指南](repository-guides/hugging-face-models.md)。
+
 ## NuGet
 
 添加 source：

@@ -174,18 +174,28 @@ public class HttpRemoteFetcher {
     if (req.authorizationHeader() != null && !req.authorizationHeader().isBlank()) {
       headers.put("Authorization", req.authorizationHeader());
     }
+    if (req.requestBody() != null) {
+      headers.put(
+          "Content-Type",
+          req.requestContentType() == null || req.requestContentType().isBlank()
+              ? "application/octet-stream"
+              : req.requestContentType());
+    }
     Duration timeout = requestTimeout(req);
     ProxiedHttpClientFactory.ProxiedResponse response = null;
     try {
       response = proxyFactory.execute(
           req.repository(),
           req.outboundProxy(),
-          req.headOnly() ? "HEAD" : "GET",
+          req.method(),
           target,
           headers,
+          req.requestBody(),
           timeout.toMillis());
       String location = redirectLocation(response);
       if (location != null) {
+        int redirectStatus = response.status();
+        Map<String, String> redirectHeaders = response.headers();
         response.close();
         if (redirects >= MAX_REDIRECTS) {
           throw new IOException("Too many redirects fetching " + req.url());
@@ -193,6 +203,7 @@ public class HttpRemoteFetcher {
         URI redirected = uri.resolve(location);
         String redirectAuthorization = req.authorizationHeaderForRedirect(uri, redirected);
         String redirectTrustedHost = req.trustedHostForRedirect(uri, redirected);
+        boolean preserveBody = redirectStatus == 307 || redirectStatus == 308;
         Request redirectedRequest = new Request(
             redirected.toString(),
             req.etag(),
@@ -206,11 +217,14 @@ public class HttpRemoteFetcher {
             redirectAuthorization,
             req.allowedUnsignedRedirectHosts(),
             req.outboundProxy(),
-            req.accept());
-        return fetchInternal(
+            req.accept(),
+            preserveBody ? req.requestBody() : null,
+            preserveBody ? req.requestContentType() : null);
+        Result redirectedResult = fetchInternal(
             redirectedRequest,
             redirects + 1,
             redirectedRequest.resolvedTarget(outboundPolicy, "remote redirect"));
+        return redirectedResult.withInheritedHeaders(redirectHeaders);
       }
       return new Result(response.status(), response.headers(), releaseOnClose(response));
     } catch (IOException | RuntimeException e) {
@@ -325,7 +339,29 @@ public class HttpRemoteFetcher {
       String authorizationHeader,
       Set<String> allowedUnsignedRedirectHosts,
       OutboundProxyConfig outboundProxy,
-      String accept) {
+      String accept,
+      byte[] requestBody,
+      String requestContentType) {
+    /** Compatibility constructor retained for callers that specify a custom Accept header. */
+    public Request(
+        String url,
+        String etag,
+        Instant lastModified,
+        Duration timeout,
+        TimeoutProfile timeoutProfile,
+        boolean headOnly,
+        String repository,
+        String format,
+        String trustedHost,
+        String authorizationHeader,
+        Set<String> allowedUnsignedRedirectHosts,
+        OutboundProxyConfig outboundProxy,
+        String accept) {
+      this(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format,
+          trustedHost, authorizationHeader, allowedUnsignedRedirectHosts, outboundProxy, accept,
+          null, null);
+    }
+
     /** Compatibility constructor for callers that do not need a custom Accept header. */
     public Request(
         String url,
@@ -341,11 +377,13 @@ public class HttpRemoteFetcher {
         Set<String> allowedUnsignedRedirectHosts,
         OutboundProxyConfig outboundProxy) {
       this(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format,
-          trustedHost, authorizationHeader, allowedUnsignedRedirectHosts, outboundProxy, null);
+          trustedHost, authorizationHeader, allowedUnsignedRedirectHosts, outboundProxy, null,
+          null, null);
     }
 
     public Request(String url, String etag, Instant lastModified, Duration timeout, boolean headOnly) {
-      this(url, etag, lastModified, timeout, TimeoutProfile.DEFAULT, headOnly, null, null, null, null, Set.of(), null);
+      this(url, etag, lastModified, timeout, TimeoutProfile.DEFAULT, headOnly, null, null, null,
+          null, Set.of(), null, null, null, null);
     }
 
     public Request(
@@ -357,7 +395,8 @@ public class HttpRemoteFetcher {
         boolean headOnly,
         String repository,
         String format) {
-      this(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format, null, null, Set.of(), null);
+      this(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format, null,
+          null, Set.of(), null, null, null, null);
     }
 
     public Request(
@@ -370,7 +409,8 @@ public class HttpRemoteFetcher {
         String repository,
         String format,
         String trustedHost) {
-      this(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format, trustedHost, null, Set.of(), null);
+      this(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format,
+          trustedHost, null, Set.of(), null, null, null, null);
     }
 
     public Request {
@@ -383,6 +423,7 @@ public class HttpRemoteFetcher {
               .map(Request::normalizeHost)
               .filter(host -> !host.isBlank())
               .collect(java.util.stream.Collectors.toUnmodifiableSet());
+      requestBody = requestBody == null ? null : requestBody.clone();
     }
 
     public static Request get(String url) {
@@ -391,17 +432,28 @@ public class HttpRemoteFetcher {
 
     public Request withConditional(String etag, Instant lastModified) {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
-          repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts, outboundProxy, accept);
+          repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts,
+          outboundProxy, accept, requestBody, requestContentType);
     }
 
     public Request withTimeoutProfile(TimeoutProfile timeoutProfile) {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
-          repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts, outboundProxy, accept);
+          repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts,
+          outboundProxy, accept, requestBody, requestContentType);
     }
 
     public Request withAccept(String accept) {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
-          repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts, outboundProxy, accept);
+          repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts,
+          outboundProxy, accept, requestBody, requestContentType);
+    }
+
+    /** Creates a read-only POST request, used by Hub paths-info. */
+    public Request withBody(String contentType, byte[] body) {
+      if (body == null) throw new IllegalArgumentException("Request body is required");
+      return new Request(url, etag, lastModified, timeout, timeoutProfile, false,
+          repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts,
+          outboundProxy, accept, body, contentType);
     }
 
     public Request withRepository(RepositoryRuntime runtime) {
@@ -423,7 +475,9 @@ public class HttpRemoteFetcher {
           includeAuthorization && trusted != null ? remoteAuthorizationHeader(runtime) : null,
           Set.of(),
           runtime == null ? null : runtime.outboundProxy(),
-          accept);
+          accept,
+          requestBody,
+          requestContentType);
     }
 
     public Request withRepositoryAllowingUnsignedRedirects(
@@ -450,11 +504,13 @@ public class HttpRemoteFetcher {
           includeAuthorization && trusted != null ? remoteAuthorizationHeader(runtime) : null,
           allowedUnsignedRedirectHosts,
           runtime == null ? null : runtime.outboundProxy(),
-          accept);
+          accept,
+          requestBody,
+          requestContentType);
     }
 
     public String method() {
-      return headOnly ? "HEAD" : "GET";
+      return requestBody != null ? "POST" : headOnly ? "HEAD" : "GET";
     }
 
     OutboundRequestPolicy.ResolvedHttpTarget resolvedTarget(
@@ -628,6 +684,22 @@ public class HttpRemoteFetcher {
       } catch (NumberFormatException ignored) {
         return 0;
       }
+    }
+
+    private Result withInheritedHeaders(Map<String, String> inherited) {
+      if (inherited == null || inherited.isEmpty()) return this;
+      Map<String, String> merged = new LinkedHashMap<>(headers);
+      for (Map.Entry<String, String> entry : inherited.entrySet()) {
+        String name = entry.getKey();
+        if (name != null && (name.equalsIgnoreCase("X-Repo-Commit")
+            || name.equalsIgnoreCase("X-Linked-Etag")
+            || name.equalsIgnoreCase("X-Linked-Size")
+            || name.equalsIgnoreCase("X-Xet-Hash"))) {
+          boolean present = merged.keySet().stream().anyMatch(key -> key.equalsIgnoreCase(name));
+          if (!present) merged.put(name, entry.getValue());
+        }
+      }
+      return new Result(status, Map.copyOf(merged), body);
     }
 
     @Override

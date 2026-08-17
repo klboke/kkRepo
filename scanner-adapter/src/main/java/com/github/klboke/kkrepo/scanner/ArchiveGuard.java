@@ -40,6 +40,11 @@ public class ArchiveGuard {
   private static final Pattern WINDOWS_ABSOLUTE = Pattern.compile("^[A-Za-z]:[/\\\\].*");
   private static final Set<String> NESTED_SUFFIXES =
       Arrays.stream(ScannerArtifactType.values())
+          .filter(type -> switch (type) {
+            case MODEL_INDEX, SAFETENSORS, PICKLE, PKL, PYTORCH, PYTORCH_WEIGHTS,
+                CHECKPOINT, PYTORCH_BIN, ONNX, KERAS, TENSORFLOW, FLAX_MSGPACK, GGUF -> false;
+            default -> true;
+          })
           .map(ScannerArtifactType::suffix)
           .filter(suffix -> !suffix.isEmpty())
           .collect(Collectors.toUnmodifiableSet());

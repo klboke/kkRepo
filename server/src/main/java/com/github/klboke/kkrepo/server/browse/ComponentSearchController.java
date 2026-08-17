@@ -421,7 +421,38 @@ public class ComponentSearchController {
     if (row.format() == RepositoryFormat.ALPINE) {
       return alpineDetails(row);
     }
+    if (row.format() == RepositoryFormat.HUGGINGFACE) {
+      return huggingFaceDetails(row);
+    }
     return swiftDetails(row);
+  }
+
+  private Map<String, Object> huggingFaceDetails(ComponentSearchRow row) {
+    LinkedHashMap<String, Object> details = new LinkedHashMap<>();
+    componentDao.findById(row.id()).ifPresent(component -> {
+      Map<String, Object> attributes = component.attributes() == null
+          ? Map.of() : component.attributes();
+      for (String key : List.of(
+          "repoId", "commit", "requestedRef", "library", "pipeline", "license",
+          "private", "gated")) {
+        Object value = attributes.get(key);
+        if (value != null) details.put(key, value);
+      }
+    });
+    if (row.storagePath() != null) {
+      assetDao.findAssetByPath(row.repositoryId(), row.storagePath()).ifPresent(asset -> {
+        Map<String, Object> attributes = asset.attributes() == null
+            ? Map.of() : asset.attributes();
+        for (String key : List.of(
+            "filePath", "fileKind", "gitOid", "lfsSha256", "expectedSize")) {
+          Object value = attributes.get(key);
+          if (value != null) details.put(key, value);
+        }
+        details.put("cacheState", "READY");
+        details.put("sourceRepository", row.repositoryName());
+      });
+    }
+    return Map.copyOf(details);
   }
 
   private Map<String, Object> aptDetails(ComponentSearchRow row) {

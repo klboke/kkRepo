@@ -52,6 +52,7 @@ const SEARCH_ROUTE_FORMAT = {
   conan: "conan",
   apt: "apt",
   alpine: "alpine",
+  huggingface: "huggingface",
   pypi: "pypi",
   rubygems: "rubygems",
   yum: "yum",
@@ -73,6 +74,7 @@ const FORMAT_ROUTE_SEGMENT = {
   conan: "conan",
   apt: "apt",
   alpine: "alpine",
+  huggingface: "huggingface",
   pypi: "pypi",
   rubygems: "rubygems",
   yum: "yum",
@@ -94,6 +96,7 @@ const SEARCH_FORMAT_LABEL = {
   conan: "Conan 2",
   apt: "APT / Debian",
   alpine: "Alpine / APK",
+  huggingface: "Hugging Face Models",
   pypi: "PyPI",
   rubygems: "RubyGems",
   yum: "Yum",
@@ -719,6 +722,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   conan: "conan",
   apt: "apt",
   alpine: "alpine",
+  huggingface: "huggingface",
   go: "go",
   helm: "helm",
   docker: "docker",
@@ -1661,6 +1665,7 @@ function renderAttributesSection(detail, opts = {}) {
     renderAttributeGroup("Composer", detail.composer),
     renderAttributeGroup("Conda", detail.conda),
     renderAttributeGroup("Alpine", detail.alpine),
+    renderAttributeGroup("Hugging Face", detail.huggingface),
     renderAttributeGroup("Swift", detail.swift),
     renderAttributeGroup("Ansible Galaxy", detail.ansible),
     renderAttributeGroup("Provenance", detail.provenance),
@@ -2884,6 +2889,43 @@ function alpineUsageDetail(entry, detail = null) {
   return { crumbText: entry.path, summaryRows, snippets };
 }
 
+function huggingFaceUsageDetail(entry, detail = null) {
+  const metadata = detail?.huggingface || {};
+  const parts = pathSegments(entry.path);
+  const commitIndex = parts.findIndex((part) => /^[0-9a-f]{40,64}$/i.test(part));
+  const repoId = metadata.repoId || (commitIndex > 0 ? parts.slice(0, commitIndex).join("/") : "<namespace>/<model>");
+  const commit = metadata.commit || (commitIndex >= 0 ? parts[commitIndex] : "<commit>");
+  const filePath = metadata.filePath || (commitIndex >= 0 ? parts.slice(commitIndex + 1).join("/") : entry.name || "<file>");
+  const endpoint = repositoryBaseUrl().replace(/\/+$/, "");
+  const summaryRows = [
+    ["Repository", state.repo],
+    ["Format", "huggingface"],
+    ["Model", repoId],
+    ["Commit", commit],
+    ["File", filePath],
+    ["File kind", metadata.fileKind || "-"],
+    ["Cache state", metadata.cacheState || "READY"],
+  ];
+  if (metadata.lfsSha256) summaryRows.push(["LFS SHA-256", metadata.lfsSha256]);
+  if (metadata.gitOid) summaryRows.push(["Git OID", metadata.gitOid]);
+  const snippets = [
+    usageSnippet(
+      "Environment",
+      `export HF_ENDPOINT='${endpoint}'`,
+      "All Hub API and file traffic stays behind the repository permission boundary",
+    ),
+    usageSnippet(
+      "Python file download",
+      `python -c \"from huggingface_hub import hf_hub_download; print(hf_hub_download('${repoId}', '${filePath}', revision='${commit}'))\"`,
+    ),
+    usageSnippet(
+      "Snapshot download",
+      `hf download '${repoId}' --revision '${commit}'`,
+    ),
+  ];
+  return { crumbText: entry.path, summaryRows, snippets };
+}
+
 async function usageDetailForEntry(entry, detail = null) {
   const repo = currentRepository();
   if (!repo) return null;
@@ -2902,6 +2944,7 @@ async function usageDetailForEntry(entry, detail = null) {
   if (repo.format === "conan") return conanUsageDetail(entry);
   if (repo.format === "apt") return aptUsageDetail(entry, detail);
   if (repo.format === "alpine") return alpineUsageDetail(entry, detail);
+  if (repo.format === "huggingface") return huggingFaceUsageDetail(entry, detail);
   if (repo.format === "docker") return dockerUsageDetail(entry);
   return null;
 }

@@ -14,6 +14,7 @@ public final class ScanEnums {
     ASSET_BLOB,
     CONAN_PACKAGE,
     CONDA_PACKAGE,
+    HF_MODEL_FILE,
     OCI_MANIFEST
   }
 
@@ -22,6 +23,7 @@ public final class ScanEnums {
     PACKAGE,
     MANIFEST,
     RAW_FILE,
+    MODEL,
     OCI_IMAGE
   }
 

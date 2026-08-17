@@ -1,0 +1,106 @@
+{
+  "generated_at": "2026-08-17T14:43:00Z",
+  "host": {
+    "cpu": "Intel Core i9-9880H",
+    "memory_bytes": 68719476736,
+    "operating_system": "macOS 14.7.8 x86_64",
+    "container_runtime": "Docker 29.4.0 (OrbStack)"
+  },
+  "fixture": {
+    "repo_id": "kkrepo/hf-benchmark",
+    "commit": "0123456789abcdef0123456789abcdef01234567",
+    "filename": "model.safetensors",
+    "size": 4194304,
+    "sha256": "74a18e3f48369ee8c8e7cd03bd8b786591b0c19e2ee4df6ec97e74bef0c849d8",
+    "upstream_behavior": "resolve 302 followed by a same-fixture CDN full-body response"
+  },
+  "file_storage_cold_fill": {
+    "method": {
+      "samples_per_target": 5,
+      "order": [
+        "nexus,kkrepo",
+        "kkrepo,nexus",
+        "nexus,kkrepo",
+        "kkrepo,nexus",
+        "nexus,kkrepo"
+      ],
+      "repository_state": "a newly created repository and empty repository-local cache for every sample",
+      "request": "GET /kkrepo/hf-benchmark/resolve/0123456789abcdef0123456789abcdef01234567/model.safetensors"
+    },
+    "targets": {
+      "nexus": {
+        "version": "3.94.0-12",
+        "storage": "File",
+        "jvm": "-Xms512m -Xmx1536m",
+        "samples": [
+          {"milliseconds": 213.796, "ttfb_milliseconds": 207.789},
+          {"milliseconds": 263.092, "ttfb_milliseconds": 256.276},
+          {"milliseconds": 246.070, "ttfb_milliseconds": 237.312},
+          {"milliseconds": 147.740, "ttfb_milliseconds": 143.557},
+          {"milliseconds": 202.282, "ttfb_milliseconds": 199.842}
+        ],
+        "median": {
+          "milliseconds": 213.796,
+          "ttfb_milliseconds": 207.789,
+          "mebibytes_per_second": 18.709
+        }
+      },
+      "kkrepo": {
+        "version": "0.8.0-development",
+        "image_id": "sha256:74e3ca5e645c0bed9c60241b82e77f8268924b441a17a55413d9215581a59b29",
+        "database": "PostgreSQL 17.10",
+        "storage": "File",
+        "jvm": "OpenJDK 25.0.3, -Xms512m -Xmx1536m",
+        "samples": [
+          {"milliseconds": 211.981, "ttfb_milliseconds": 204.140},
+          {"milliseconds": 201.316, "ttfb_milliseconds": 194.863},
+          {"milliseconds": 294.344, "ttfb_milliseconds": 285.762},
+          {"milliseconds": 308.377, "ttfb_milliseconds": 304.106},
+          {"milliseconds": 163.596, "ttfb_milliseconds": 161.344}
+        ],
+        "median": {
+          "milliseconds": 211.981,
+          "ttfb_milliseconds": 204.140,
+          "mebibytes_per_second": 18.870
+        }
+      }
+    },
+    "kkrepo_over_nexus_throughput_ratio": 1.009,
+    "successful_responses": 10,
+    "checksum_failures": 0,
+    "upstream_full_body_fetches_per_repository": 1
+  },
+  "s3_compatible_single_replica": {
+    "candidate": "the same kkRepo image with PostgreSQL 17.10 and MinIO RELEASE.2025-04-22T22-12-26Z",
+    "cold_fill": {
+      "milliseconds": 313.645,
+      "ttfb_milliseconds": 302.145,
+      "mebibytes_per_second": 13.370,
+      "status": 200,
+      "bytes": 4194304
+    },
+    "warm_get": {
+      "milliseconds": 29.051,
+      "status": 200,
+      "bytes": 4194304
+    },
+    "resolve_requests": 1,
+    "cdn_full_body_requests": 1,
+    "checksum_failures": 0
+  },
+  "s3_compatible_two_replica_cold_miss": {
+    "replicas": 2,
+    "shared_database": "PostgreSQL 17.10",
+    "shared_blob_store": "MinIO RELEASE.2025-04-22T22-12-26Z",
+    "concurrent_requests": 2,
+    "responses": [
+      {"replica": 1, "status": 200, "milliseconds": 1094.333, "ttfb_milliseconds": 1036.292},
+      {"replica": 2, "status": 200, "milliseconds": 546.571, "ttfb_milliseconds": 535.266}
+    ],
+    "sha256_matches": 2,
+    "resolve_requests": 1,
+    "cdn_full_body_requests": 1,
+    "published_file_state": "READY",
+    "published_fencing_token": 1
+  }
+}

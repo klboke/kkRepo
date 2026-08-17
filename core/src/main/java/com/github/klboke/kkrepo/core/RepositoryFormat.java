@@ -24,6 +24,7 @@ public enum RepositoryFormat {
   CONAN,
   APT,
   ALPINE,
+  HUGGINGFACE,
   RAW;
 
   @JsonCreator

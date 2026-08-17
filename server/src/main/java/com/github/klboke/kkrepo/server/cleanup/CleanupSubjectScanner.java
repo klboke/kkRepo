@@ -12,6 +12,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupPro
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupScanCursor;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupUsage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.HuggingFaceRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
@@ -43,6 +44,7 @@ public class CleanupSubjectScanner {
   private final CleanupPolicyDao cleanupDao;
   private final CleanupRuntimeProperties runtimeProperties;
   private final CleanupUsageTrackingService usageTracking;
+  private HuggingFaceRegistryDao huggingFaceRegistry;
 
   @Autowired
   public CleanupSubjectScanner(
@@ -67,6 +69,11 @@ public class CleanupSubjectScanner {
       AssetDao assetDao,
       CleanupPolicyCapabilities capabilities) {
     this(componentDao, assetDao, null, capabilities, null, null, null);
+  }
+
+  @Autowired
+  void setHuggingFaceRegistry(HuggingFaceRegistryDao huggingFaceRegistry) {
+    this.huggingFaceRegistry = huggingFaceRegistry;
   }
 
   public ScanResult scan(
@@ -381,6 +388,11 @@ public class CleanupSubjectScanner {
     List<Subject> subjects = new ArrayList<>(components.size());
     for (ComponentRecord component : components) {
       List<AssetRecord> assets = expanded.getOrDefault(component.id(), List.of());
+      if (repository.format() == RepositoryFormat.HUGGINGFACE
+          && huggingFaceRegistry != null
+          && huggingFaceRegistry.isRevisionProtected(repository.id(), component.id())) {
+        continue;
+      }
       if (isCleanupComponent(repository, component, assets)) {
         subjects.add(componentSubject(repository.format(), component, assets, usage));
       }

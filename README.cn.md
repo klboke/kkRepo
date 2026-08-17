@@ -95,6 +95,7 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 | APT / Debian | hosted / proxy | 支持 Nexus 兼容仓库根 POST、Components API/UI `.deb` 上传，以及真实 `apt update`、下载、安装和升级（[使用指南](docs/zh/repository-guides/apt-debian.md)） | 支持签名 Packages/Release 元数据、by-hash、Browse/Search 和 Usage | 支持仓库定义与 shape-gated Nexus 3.92.x-3.94.x hosted package；签名私钥需显式导入后才启用迁移仓库 |
 | Conan 2 | hosted / proxy / group | 支持 `conan upload`、Conan bearer 登录和 UI/API revision file 上传（[使用指南](docs/zh/repository-guides/conan-2.md)） | 支持 RREV/PREV 元数据、写入时固定的 Nexus 对齐 Browse 路径、Search 和 Usage | 支持 Nexus 3.94 仓库定义，以及 shape-gated hosted/显式选择 proxy cache revision；Conan 1 和未知 shape 失败关闭 |
 | Alpine / APK | hosted / proxy / group | 支持规范 APK v2 PUT 与 UI/Components API 上传，以及真实 `apk update`、search、policy、fetch、install 和 upgrade（[使用指南](docs/zh/repository-guides/alpine-apk.md)） | 支持签名 `APKINDEX.tar.gz`、passthrough/验签后 re-sign proxy、有序 group source binding、Browse/Search 和 Usage | 支持 Nexus 3.94 definition 与 shape-gated hosted package；生成 index 在目标端重建，signing key 或 proxy secret 不可用时 fail closed |
+| Hugging Face Models | proxy | 支持通过 `HF_ENDPOINT` 使用 `hf download`、`hf_hub_download`、`snapshot_download`、Transformers 与 Diffusers（[使用指南](docs/zh/repository-guides/hugging-face-models.md)） | 支持 commit-pinned 模型 metadata/file、服务端 LFS/Xet bridge、Browse/Search、Cleanup 和扫描 | 识别 Nexus 3.77+ definition；显式选择的 Nexus 3.94 proxy cache 按 shape gate，未知身份失败关闭 |
 | Docker / OCI | hosted / proxy / group | 支持 Registry V2 login、hosted push/pull、proxy pull、group pull、OCI referrers、cleanup 和 connector port 访问 | 支持 manifest/tag/blob metadata | Docker hosted 仓库数据迁移走 Nexus Repository Data 流程 |
 | NuGet | hosted / proxy / group | 支持 package push 和管理台上传 | 支持 v3 service index / search | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 | RubyGems | hosted / proxy / group | 支持 gem push/yank 和管理台上传 | 支持 | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
@@ -143,7 +144,7 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 
 ![前台仓库列表](docs/img/img_7.png)
 
-按格式搜索组件，支持 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、APT/Debian、Conan 2、Alpine/APK、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等仓库类型的制品检索。
+按格式搜索组件，支持 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、APT/Debian、Conan 2、Alpine/APK、Hugging Face Models、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等仓库类型的制品检索。
 
 ![前台制品搜索](docs/img/img.png)
 
@@ -197,7 +198,7 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 9. ✅ APT / Debian - 已实现 hosted/proxy、签名元数据、UI/API 上传、Browse/Search、多副本发布、真实 APT 客户端与 Nexus 黑盒验证、shape-gated 迁移和可复现的 Nexus 性能基线（[使用指南](docs/zh/repository-guides/apt-debian.md)、[设计说明](docs/zh/dev/apt-debian-repository-design.md)、[性能基线](docs/zh/dev/apt-performance-baseline.md)）
 10. ✅ Conan 2 - 已实现 hosted/proxy/group、Conan bearer 认证、manifest-gated revision 发布、写入时 Nexus Browse 投影、UI/API 上传、Cleanup、复合 package 扫描、shape-gated 迁移、真实 Conan 客户端 E2E 和双数据库 Nexus 性能基线（[使用指南](docs/zh/repository-guides/conan-2.md)、[设计说明](docs/zh/dev/conan-repository-design.md)、[性能基线](docs/zh/dev/conan-performance-baseline.md)）
 11. ✅ Alpine / APK - 已实现 hosted/proxy/group、APK v2 package 校验、签名不可变 index、passthrough/验签后 re-sign proxy、有序 group source binding、UI/API 上传、Browse/Search、Cleanup、安全扫描、shape-gated Nexus 3.94 迁移、apk-tools 2.14/3.0 客户端 E2E 和可复现 Nexus 性能门槛（[使用指南](docs/zh/repository-guides/alpine-apk.md)、[设计说明](docs/zh/dev/alpine-apk-repository-design.md)、[性能基线](docs/zh/dev/alpine-performance-baseline.md)）
-12. Hugging Face Models - 规划 Nexus 兼容的 proxy 仓库，覆盖 commit-pinned 模型 metadata 与大模型文件（[设计说明](docs/zh/dev/hugging-face-models-repository-design.md)）。
+12. ✅ Hugging Face Models - 已实现 Models-only proxy、commit-pinned metadata/file、服务端 LFS/Xet bridge、真实 Hub/Transformers/Diffusers 客户端、多副本 S3 协同、扫描、Cleanup 与 shape-gated Nexus 迁移（[使用指南](docs/zh/repository-guides/hugging-face-models.md)、[设计说明](docs/zh/dev/hugging-face-models-repository-design.md)、[性能基线](docs/zh/dev/hugging-face-models-performance-baseline.md)）。
 13. ohpm / HarmonyOS - 规划中，覆盖 hosted、proxy、group、导入和管理端能力（[设计说明](docs/zh/dev/ohpm-repository-design.md)）
 14. Go hosted 仓库 - 规划补齐 Nexus 兼容的内部 module 发布能力；proxy 和 group 仓库已支持。
 15. Helm group 仓库 - 规划补齐 Nexus 兼容的 hosted、proxy 与 group member 有序聚合能力。

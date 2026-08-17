@@ -87,6 +87,12 @@ public final class MavenResponse {
     return this;
   }
 
+  public MavenResponse withEtag(String etag) {
+    return new MavenResponse(
+        status, body, bodySupplier, contentLength, contentType, etag, lastModified, headers,
+        internalAttributes);
+  }
+
   /** Attaches service-internal context that controllers never expose as HTTP headers. */
   public MavenResponse withInternalAttribute(String name, Object value) {
     if (value == null) {

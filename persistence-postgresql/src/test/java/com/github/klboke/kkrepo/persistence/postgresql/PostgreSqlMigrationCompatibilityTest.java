@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 
 /** Proves the PostgreSQL baseline validates and remains idempotent on repeated startup. */
 class PostgreSqlMigrationCompatibilityTest extends PostgreSqlIntegrationTestSupport {
-  private static final int LATEST_MIGRATION = 47;
+  private static final int LATEST_MIGRATION = 48;
 
   @Test
   void baselineValidatesAndSecondMigrateHasNoPendingWork() {
