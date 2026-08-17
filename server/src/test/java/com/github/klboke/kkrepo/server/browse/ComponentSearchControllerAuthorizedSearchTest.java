@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.browse;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -178,6 +179,80 @@ class ComponentSearchControllerAuthorizedSearchTest {
 
     assertEquals("public-group", item.repository());
     assertEquals(List.of(20L, 10L), components.calls.getFirst().repositoryIds());
+  }
+
+  @Test
+  void searchReturnsEmptyWithoutQueryingWhenNoRepositoryIsAuthorized() {
+    StubComponentDao components = new StubComponentDao(List.of(
+        row(1L, 10L, "private", "hidden", 1)));
+    StubAssetDao assets = new StubAssetDao(Map.of());
+    RecordingSecurityService security = new RecordingSecurityService(Map.of(), permission -> false);
+    ComponentSearchController controller = controller(
+        components, assets, security, catalog(List.of(hosted(10L, "private")), Map.of()));
+
+    ComponentSearchController.ComponentSearchResponse response = controller.search(
+        null, "maven2", 10, request());
+
+    assertEquals(0, response.count());
+    assertEquals(List.of(), components.calls);
+    assertEquals(List.of(), assets.calls);
+  }
+
+  @Test
+  void selectorSearchStopsCleanlyWhenTheFirstPageIsEmpty() {
+    StubComponentDao components = new StubComponentDao(List.of());
+    StubAssetDao assets = new StubAssetDao(Map.of());
+    RecordingSecurityService security = new RecordingSecurityService(
+        Map.of("releases", RepositoryAccessMode.CONTENT_SELECTOR), permission -> false);
+    ComponentSearchController controller = controller(
+        components, assets, security, catalog(List.of(hosted(10L, "releases")), Map.of()));
+
+    ComponentSearchController.ComponentSearchResponse response = controller.search(
+        null, "maven2", 10, request());
+
+    assertEquals(0, response.count());
+    assertFalse(response.truncated());
+    assertEquals(1, components.calls.size());
+    assertEquals(List.of(), assets.calls);
+  }
+
+  @Test
+  void nestedGroupsIgnoreMissingMembersAndCycles() {
+    StubComponentDao components = new StubComponentDao(List.of(
+        row(1L, 10L, "member", "visible", 1)));
+    StubAssetDao assets = new StubAssetDao(Map.of());
+    RecordingSecurityService security = new RecordingSecurityService(
+        Map.of(
+            "member", RepositoryAccessMode.DENIED,
+            "outer", RepositoryAccessMode.FULL,
+            "nested", RepositoryAccessMode.DENIED),
+        permission -> false);
+    ComponentSearchController controller = controller(
+        components,
+        assets,
+        security,
+        catalog(
+            List.of(
+                hosted(10L, "member"),
+                group(20L, "outer"),
+                group(30L, "nested")),
+            Map.of(
+                20L, List.of("missing", "nested"),
+                30L, List.of("outer", "member"))));
+
+    ComponentSearchController.ComponentSearchItem item = controller.search(
+        null, "maven2", 10, request()).items().getFirst();
+
+    assertEquals("outer", item.repository());
+    assertEquals(Set.of(10L, 20L, 30L), Set.copyOf(components.calls.getFirst().repositoryIds()));
+  }
+
+  @Test
+  void legacyResponseConstructorDefaultsTruncationToFalse() {
+    ComponentSearchController.ComponentSearchResponse response =
+        new ComponentSearchController.ComponentSearchResponse(10, 0, List.of());
+
+    assertFalse(response.truncated());
   }
 
   private static ComponentSearchController controller(

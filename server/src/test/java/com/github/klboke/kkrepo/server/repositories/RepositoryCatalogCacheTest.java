@@ -41,6 +41,21 @@ class RepositoryCatalogCacheTest {
   }
 
   @Test
+  void snapshotLoadsTheCatalogWhenTheNodeLocalCacheIsDisabled() {
+    StubRepositoryDao repositories = new StubRepositoryDao();
+    repositories.add(hosted(1L, "npm-hosted"));
+    RepositoryCatalogCache cache =
+        new RepositoryCatalogCache(repositories, new StubBlobStoreDao(), false);
+
+    RepositoryCatalogCache.RepositoryCatalog catalog = cache.snapshot();
+
+    assertEquals(List.of("npm-hosted"), catalog.records().stream()
+        .map(RepositoryRecord::name)
+        .toList());
+    assertEquals(1, repositories.listAllCalls);
+  }
+
+  @Test
   void mutationBroadcastRefreshesSiblingCatalogImmediately() {
     StubRepositoryDao repositories = new StubRepositoryDao();
     repositories.add(group(2L, "npm-group"));

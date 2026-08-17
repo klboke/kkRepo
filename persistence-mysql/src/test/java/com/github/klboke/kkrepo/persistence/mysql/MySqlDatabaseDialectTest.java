@@ -58,6 +58,10 @@ class MySqlDatabaseDialectTest {
             + "INDEX(search_order idx_component_format_last_updated) */",
         dialect.search().orderedComponentSearchHint(true, false, true));
     assertEquals(
+        "/*+ JOIN_ORDER(search_order, cs, c, r) "
+            + "INDEX(search_order idx_component_repo_format_updated) */",
+        dialect.search().orderedComponentSearchHint(true, true, true));
+    assertEquals(
         "/*+ JOIN_ORDER(search_order, c, r) "
             + "INDEX(search_order idx_component_repo_last_updated) */",
         dialect.search().orderedComponentSearchHint(false, true, false));
