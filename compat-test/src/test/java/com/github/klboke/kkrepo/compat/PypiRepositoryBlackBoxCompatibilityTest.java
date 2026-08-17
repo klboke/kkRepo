@@ -14,6 +14,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -102,6 +103,25 @@ class PypiRepositoryBlackBoxCompatibilityTest {
   }
 
   @Test
+  void hostedUploadWithManyTwineMetadataPartsMatchesNexusWhenConfigured() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeTrue(config.configured(),
+        "Set NEXUS_COMPAT_BASE_URL and KKREPO_COMPAT_BASE_URL to run PyPI black-box compatibility");
+
+    if (config.setupEnabled()) {
+      ensureNexusRepositories(config);
+      ensureKkRepoRepositories(config);
+    }
+
+    WheelFixture fixture = WheelFixture.createWithDependencies(64);
+    Exchange referenceUpload = upload(config.nexusHosted(), fixture);
+    Exchange candidateUpload = upload(config.nexusPlusHosted(), fixture);
+    assertSameStatus("hosted upload with many metadata parts", referenceUpload, candidateUpload);
+    assert2xx("nexus hosted upload with many metadata parts", referenceUpload);
+    assert2xx("kkrepo hosted upload with many metadata parts", candidateUpload);
+  }
+
+  @Test
   void missingHostedPackageMatchesNexusWhenConfigured() throws Exception {
     CompatConfig config = CompatConfig.load();
     assumeTrue(config.configured(),
@@ -137,6 +157,9 @@ class PypiRepositoryBlackBoxCompatibilityTest {
     formField(out, boundary, "version", fixture.version());
     formField(out, boundary, "summary", "kkrepo PyPI compatibility fixture");
     formField(out, boundary, "requires_python", ">=3.8");
+    for (String requirement : fixture.requiresDist()) {
+      formField(out, boundary, "requires_dist", requirement);
+    }
     formField(out, boundary, "md5_digest", hex(MessageDigest.getInstance("MD5").digest(fixture.bytes())));
     fileField(out, boundary, "content", fixture.filename(), "application/octet-stream", fixture.bytes());
     out.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
@@ -434,24 +457,41 @@ class PypiRepositoryBlackBoxCompatibilityTest {
     }
   }
 
-  private record WheelFixture(String name, String normalizedName, String version, String filename, byte[] bytes) {
+  private record WheelFixture(
+      String name,
+      String normalizedName,
+      String version,
+      String filename,
+      byte[] bytes,
+      List<String> requiresDist) {
     static WheelFixture create() throws Exception {
+      return createWithDependencies(0);
+    }
+
+    static WheelFixture createWithDependencies(int count) throws Exception {
       String name = "kkrepo-compat-pypi-" + System.currentTimeMillis();
       String normalized = normalizeName(name);
       String version = "0.1." + System.currentTimeMillis();
       String distribution = normalized.replace('-', '_');
       String filename = distribution + "-" + version + "-py3-none-any.whl";
       String distInfo = distribution + "-" + version + ".dist-info/";
+      List<String> requiresDist = new ArrayList<>();
+      StringBuilder metadata = new StringBuilder("""
+          Metadata-Version: 2.1
+          Name: %s
+          Version: %s
+          Summary: kkrepo PyPI compatibility fixture
+          Requires-Python: >=3.8
+          """.formatted(name, version));
+      for (int i = 0; i < count; i++) {
+        String requirement = "kkrepo-compat-dependency-" + i + ">=1";
+        requiresDist.add(requirement);
+        metadata.append("Requires-Dist: ").append(requirement).append('\n');
+      }
+      metadata.append('\n');
       ByteArrayOutputStream out = new ByteArrayOutputStream();
       try (ZipOutputStream zip = new ZipOutputStream(out, StandardCharsets.UTF_8)) {
-        zip(zip, distInfo + "METADATA", """
-            Metadata-Version: 2.1
-            Name: %s
-            Version: %s
-            Summary: kkrepo PyPI compatibility fixture
-            Requires-Python: >=3.8
-
-            """.formatted(name, version));
+        zip(zip, distInfo + "METADATA", metadata.toString());
         zip(zip, distInfo + "WHEEL", """
             Wheel-Version: 1.0
             Generator: kkrepo-compat-test
@@ -461,7 +501,7 @@ class PypiRepositoryBlackBoxCompatibilityTest {
             """);
         zip(zip, distInfo + "RECORD", "");
       }
-      return new WheelFixture(name, normalized, version, filename, out.toByteArray());
+      return new WheelFixture(name, normalized, version, filename, out.toByteArray(), List.copyOf(requiresDist));
     }
 
     String packagePath() {
