@@ -197,12 +197,12 @@ Repository format roadmap:
 9. ✅ APT / Debian - Hosted/proxy repositories, signed metadata, UI/API upload, Browse/Search, multi-replica publication, real APT client and Nexus black-box checks, shape-gated migration, and a reproducible Nexus performance baseline are implemented ([usage guide](docs/en/repository-guides/apt-debian.md), [Chinese design notes](docs/zh/dev/apt-debian-repository-design.md), [performance baseline](docs/en/dev/apt-performance-baseline.md))
 10. ✅ Conan 2 - Hosted/proxy/group, Conan bearer authentication, manifest-gated revision publication, write-time Nexus Browse projection, UI/API upload, Cleanup, composite package scanning, shape-gated migration, real Conan client E2E, and dual-database Nexus performance baselines are implemented ([usage guide](docs/en/repository-guides/conan-2.md), [Chinese design notes](docs/zh/dev/conan-repository-design.md), [performance baseline](docs/en/dev/conan-performance-baseline.md))
 11. ✅ Alpine / APK - Hosted/proxy/group, APK v2 package validation, signed immutable indexes, passthrough/verified re-sign proxying, ordered group source binding, UI/API upload, Browse/Search, Cleanup, scanning, shape-gated Nexus 3.94 migration, apk-tools 2.14/3.0 client E2E, and reproducible Nexus performance gates are implemented ([usage guide](docs/en/repository-guides/alpine-apk.md), [Chinese design notes](docs/zh/dev/alpine-apk-repository-design.md), [performance baseline](docs/en/dev/alpine-performance-baseline.md))
-12. ohpm / HarmonyOS - Planned with hosted, proxy, group, import, and admin capabilities ([Chinese design notes](docs/zh/dev/ohpm-repository-design.md))
-13. Go hosted repositories - Planned to complete Nexus-compatible Go coverage with internal module publication; proxy and group repositories are already supported.
-14. Helm group repositories - Planned to complete Nexus-compatible ordered aggregation across hosted, proxy, and group members.
-15. R / CRAN - Planned with proxy, hosted, and group repositories; hosted and group scope will follow Nexus `.gz` package support.
-16. Git Large File Storage (LFS) - Planned with Nexus-compatible hosted storage for large Git-managed assets.
-17. Hugging Face Models - Planned with Nexus-compatible proxy repositories for model metadata and large model assets.
+12. Hugging Face Models - Planned with Nexus-compatible proxy repositories for commit-pinned model metadata and large model assets ([Chinese design notes](docs/zh/dev/hugging-face-models-repository-design.md)).
+13. ohpm / HarmonyOS - Planned with hosted, proxy, group, import, and admin capabilities ([Chinese design notes](docs/zh/dev/ohpm-repository-design.md))
+14. Go hosted repositories - Planned to complete Nexus-compatible Go coverage with internal module publication; proxy and group repositories are already supported.
+15. Helm group repositories - Planned to complete Nexus-compatible ordered aggregation across hosted, proxy, and group members.
+16. R / CRAN - Planned with proxy, hosted, and group repositories; hosted and group scope will follow Nexus `.gz` package support.
+17. Git Large File Storage (LFS) - Planned with Nexus-compatible hosted storage for large Git-managed assets.
 18. Eclipse p2 - Planned with Nexus-compatible proxy repositories for Eclipse and Equinox update sites.
 19. CocoaPods - Planned with Nexus-compatible proxy repositories for CocoaPods dependencies.
 
