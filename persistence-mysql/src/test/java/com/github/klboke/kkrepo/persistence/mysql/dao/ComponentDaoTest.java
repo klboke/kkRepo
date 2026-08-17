@@ -13,6 +13,7 @@ import java.lang.reflect.Proxy;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -153,6 +154,52 @@ class ComponentDaoTest {
     assertTrue(jdbcTemplate.sql.contains("END AS storage_path"));
     assertTrue(jdbcTemplate.sql.contains("c.format = ?"));
     assertTrue(jdbcTemplate.sql.contains("MATCH(cs.namespace, cs.name, cs.version, cs.keywords)"));
+    assertTrue(jdbcTemplate.probeSql.contains("WHERE cs.repository_id IN"));
+  }
+
+  @Test
+  void newestRepositoryScopedSearchUsesTheOrderedAuthorizationIndex() {
+    RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
+    ComponentDao dao = new JdbcComponentDao(
+        jdbcTemplate,
+        new JsonColumns(new ObjectMapper(), DIALECT),
+        DIALECT);
+
+    dao.searchPageByRepositoryIds(
+        List.of(1L, 2L), RepositoryFormat.NPM, null, null, 20);
+
+    assertTrue(jdbcTemplate.sql.contains(
+        "/*+ JOIN_ORDER(search_order, c, r) "
+            + "INDEX(search_order idx_component_format_last_updated) */"));
+    assertTrue(jdbcTemplate.sql.contains(
+        "ORDER BY search_order.last_updated_at DESC, search_order.id DESC"));
+    assertTrue(jdbcTemplate.sql.contains(
+        "JOIN component c ON c.id = search_order.id"));
+    Assertions.assertFalse(jdbcTemplate.sql.contains("CASE WHEN c.last_updated_at IS NULL"));
+  }
+
+  @Test
+  void broadFulltextSearchSwitchesToTheTimeOrderedPlan() {
+    RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate(5_001);
+    ComponentDao dao = new JdbcComponentDao(
+        jdbcTemplate,
+        new JsonColumns(new ObjectMapper(), DIALECT),
+        DIALECT);
+
+    dao.searchPageByRepositoryIds(
+        List.of(1L, 2L), RepositoryFormat.NPM, "common", null, 20);
+    dao.searchPageByRepositoryIds(
+        List.of(1L, 2L), RepositoryFormat.NPM, "common", null, 20);
+
+    assertTrue(jdbcTemplate.probeSql.contains("FROM component_search cs"));
+    assertTrue(jdbcTemplate.probeSql.contains("LIMIT ?"));
+    Assertions.assertEquals(1, jdbcTemplate.probeCalls);
+    assertTrue(jdbcTemplate.sql.contains(
+        "/*+ JOIN_ORDER(search_order, cs, c, r) "
+            + "INDEX(search_order idx_component_format_last_updated) */"));
+    assertTrue(jdbcTemplate.sql.indexOf("FROM component search_order")
+        < jdbcTemplate.sql.indexOf("JOIN component_search cs"));
+    assertTrue(jdbcTemplate.sql.contains("AND cs.repository_id IN"));
   }
 
   @Test
@@ -206,12 +253,34 @@ class ComponentDaoTest {
   }
 
   private static final class RecordingJdbcTemplate extends JdbcTemplate {
+    private final int probeRows;
     private String sql;
+    private String probeSql;
+    private int probeCalls;
+
+    private RecordingJdbcTemplate() {
+      this(0);
+    }
+
+    private RecordingJdbcTemplate(int probeRows) {
+      this.probeRows = probeRows;
+    }
 
     @Override
     public <T> List<T> query(String sql, RowMapper<T> rowMapper, Object... args) {
       this.sql = sql;
       return List.of();
+    }
+
+    @Override
+    public <T> List<T> queryForList(String sql, Class<T> elementType, Object... args) {
+      this.probeSql = sql;
+      this.probeCalls++;
+      List<T> rows = new ArrayList<>(probeRows);
+      for (int index = 0; index < probeRows; index++) {
+        rows.add(elementType.cast(1L));
+      }
+      return rows;
     }
   }
 

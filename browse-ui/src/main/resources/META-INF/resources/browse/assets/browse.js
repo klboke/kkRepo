@@ -37,6 +37,7 @@ const AUTH_SNAPSHOT_KEY = "nexusPlus.authSnapshot";
 const AUTH_SNAPSHOT_MAX_AGE_MS = 10 * 60 * 1000;
 let pendingLoginReturnTo = readPendingLoginReturnTo();
 const SEARCH_ROUTE_FORMAT = {
+  custom: "custom",
   cargo: "cargo",
   go: "go",
   helm: "helm",
@@ -57,6 +58,7 @@ const SEARCH_ROUTE_FORMAT = {
   npm: "npm",
 };
 const FORMAT_ROUTE_SEGMENT = {
+  custom: "custom",
   cargo: "cargo",
   go: "go",
   helm: "helm",
@@ -74,6 +76,27 @@ const FORMAT_ROUTE_SEGMENT = {
   pypi: "pypi",
   rubygems: "rubygems",
   yum: "yum",
+  npm: "npm",
+};
+const SEARCH_FORMAT_LABEL = {
+  custom: "All formats",
+  cargo: "Cargo",
+  go: "Go",
+  helm: "Helm",
+  maven2: "Maven",
+  nuget: "NuGet",
+  pub: "Pub",
+  composer: "Composer",
+  terraform: "Terraform",
+  swift: "Swift",
+  ansiblegalaxy: "Ansible Galaxy",
+  conda: "Conda",
+  conan: "Conan 2",
+  apt: "APT / Debian",
+  alpine: "Alpine / APK",
+  pypi: "PyPI",
+  rubygems: "RubyGems",
+  yum: "Yum",
   npm: "npm",
 };
 
@@ -120,9 +143,15 @@ function normalizeSearchFormat(format) {
   return SEARCH_ROUTE_FORMAT[format] || DEFAULT_SEARCH_FORMAT;
 }
 
-function searchHash(format) {
+function searchFormatLabel(format) {
+  return SEARCH_FORMAT_LABEL[normalizeSearchFormat(format)];
+}
+
+function searchHash(format, keyword = "") {
   const normalized = normalizeSearchFormat(format);
-  return `#${APP_HASH_PREFIX}/search/${FORMAT_ROUTE_SEGMENT[normalized]}`;
+  const base = `#${APP_HASH_PREFIX}/search/${FORMAT_ROUTE_SEGMENT[normalized]}`;
+  const q = String(keyword || "").trim();
+  return q ? `${base}?${new URLSearchParams({ q }).toString()}` : base;
 }
 
 function repositoryBrowseHash(repoName, path = "") {
@@ -191,10 +220,19 @@ function parseBrowseHash() {
   if (hash === `${APP_HASH_PREFIX}/welcome`) return { view: "welcome" };
   if (hash === `${APP_HASH_PREFIX}/upload`) return { view: "upload" };
   if (hash === `${APP_HASH_PREFIX}/my-token`) return { view: "my-token" };
-  if (hash === `${APP_HASH_PREFIX}/search`) return { view: "search", searchFormat: DEFAULT_SEARCH_FORMAT };
+  if (hash === `${APP_HASH_PREFIX}/search`) {
+    return { view: "search", searchFormat: DEFAULT_SEARCH_FORMAT, keyword: "" };
+  }
   if (hash.startsWith(`${APP_HASH_PREFIX}/search/`)) {
-    const rawFormat = hash.slice(`${APP_HASH_PREFIX}/search/`.length);
-    return { view: "search", searchFormat: normalizeSearchFormat(rawFormat) };
+    const routeValue = hash.slice(`${APP_HASH_PREFIX}/search/`.length);
+    const separator = routeValue.indexOf("?");
+    const rawFormat = separator === -1 ? routeValue : routeValue.slice(0, separator);
+    const query = separator === -1 ? "" : routeValue.slice(separator + 1);
+    return {
+      view: "search",
+      searchFormat: normalizeSearchFormat(rawFormat),
+      keyword: new URLSearchParams(query).get("q") || "",
+    };
   }
   const prefix = `${BROWSE_HASH}:`;
   if (!hash.startsWith(prefix)) return null;
@@ -637,12 +675,18 @@ async function fetchChildren(repo, path) {
   return data.entries;
 }
 
-async function fetchSearchComponents(format, keyword) {
+function componentSearchParams(format, keyword) {
   const params = new URLSearchParams();
   const q = (keyword || "").trim();
   if (q) params.set("q", q);
-  params.set("format", normalizeSearchFormat(format));
+  const normalizedFormat = normalizeSearchFormat(format);
+  if (normalizedFormat !== "custom") params.set("format", normalizedFormat);
   params.set("limit", String(COMPONENT_SEARCH_LIMIT));
+  return params;
+}
+
+async function fetchSearchComponents(format, keyword) {
+  const params = componentSearchParams(format, keyword);
   const res = await fetch(`/internal/search/components?${params.toString()}`, {
     headers: { Accept: "application/json" },
     cache: "no-store",
@@ -1145,7 +1189,8 @@ function activateSearch(format = DEFAULT_SEARCH_FORMAT, syncHash = true) {
   return normalized;
 }
 
-function showSearch(format = DEFAULT_SEARCH_FORMAT, syncHash = true) {
+function showSearch(format = DEFAULT_SEARCH_FORMAT, syncHash = true, keyword = null) {
+  if (keyword !== null) document.getElementById("component-keyword").value = keyword;
   renderSearch(activateSearch(format, syncHash));
 }
 
@@ -3682,6 +3727,10 @@ async function uploadError(response) {
 async function renderSearch(format = DEFAULT_SEARCH_FORMAT) {
   const seq = ++searchRequestSeq;
   const keyword = document.getElementById("component-keyword").value.trim().toLowerCase();
+  const target = `/browse/${searchHash(format, keyword)}`;
+  const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  if (current !== target) window.history.replaceState(null, "", target);
+  window.kkrepoGlobalComponentSearch?.setKeyword(document, keyword);
   document.getElementById("component-table").innerHTML =
     '<tr><td colspan="7" class="muted-row">Searching...</td></tr>';
   let payload;
@@ -3767,6 +3816,8 @@ function clearSearchFormatSelection() {
 
 function selectSearchFormat(format) {
   activeSearchFormat = normalizeSearchFormat(format);
+  document.getElementById("component-search-format").textContent =
+    searchFormatLabel(activeSearchFormat);
   document.querySelectorAll(".side-subitem").forEach((entry) => {
     entry.classList.toggle("is-active", entry.dataset.searchFormat === activeSearchFormat);
   });
@@ -3791,8 +3842,7 @@ function applyHashRoute() {
     return true;
   }
   if (route.view === "search") {
-    showSearch(route.searchFormat, false);
-    window.history.replaceState(null, "", `/browse/${searchHash(route.searchFormat)}`);
+    showSearch(route.searchFormat, false, route.keyword);
     return true;
   }
   switchView("browse");
@@ -3918,7 +3968,10 @@ document.getElementById("upload-repository").addEventListener("change", () => {
 });
 document.getElementById("upload-fields").addEventListener("input", updateUploadPath);
 document.getElementById("upload-fields").addEventListener("change", updateUploadPath);
-document.getElementById("component-search-button").addEventListener("click", () => renderSearch(activeSearchFormat));
+document.getElementById("component-search-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  renderSearch(activeSearchFormat);
+});
 document.getElementById("upload-form").addEventListener("submit", uploadSelectedAsset);
 document.getElementById("my-token-form").addEventListener("submit", createCurrentApiKey);
 document.getElementById("my-token-display-name").addEventListener("input", (event) => {

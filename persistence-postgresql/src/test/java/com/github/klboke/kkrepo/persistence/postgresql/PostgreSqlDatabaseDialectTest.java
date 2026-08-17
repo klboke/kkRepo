@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.persistence.postgresql;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -50,6 +51,11 @@ class PostgreSqlDatabaseDialectTest {
         dialect.search().prepareComponentQuery("Com.Example artifact-1.0"));
     assertEquals("", dialect.search().prepareComponentQuery("  --  "));
     assertEquals(
+        "c.last_updated_at DESC NULLS LAST, c.id DESC",
+        dialect.search().componentSearchOrderBy("c"));
+    assertFalse(dialect.search().supportsAdaptiveComponentSearch());
+    assertEquals("", dialect.search().orderedComponentSearchHint(true, false, true));
+    assertEquals(
         "COALESCE(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - MIN(enqueued_at))), 0)",
         dialect.coordination().oldestBacklogAgeSecondsExpression("enqueued_at"));
 
@@ -61,6 +67,8 @@ class PostgreSqlDatabaseDialectTest {
         () -> dialect.json().extractText("attributes_json"));
     assertThrows(IllegalArgumentException.class,
         () -> dialect.search().componentSearchPredicate("s JOIN component"));
+    assertThrows(IllegalArgumentException.class,
+        () -> dialect.search().componentSearchOrderBy("c; DROP TABLE component"));
     assertThrows(IllegalArgumentException.class,
         () -> dialect.coordination().oldestBacklogAgeSecondsExpression("created_at) FROM asset"));
   }

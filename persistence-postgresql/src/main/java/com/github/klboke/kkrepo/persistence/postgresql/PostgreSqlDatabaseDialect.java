@@ -389,6 +389,15 @@ public final class PostgreSqlDatabaseDialect implements DatabaseDialect {
       return String.join(" & ", terms);
     }
 
+    @Override
+    public String componentSearchOrderBy(String componentAlias) {
+      if (componentAlias == null || !ALIAS.matcher(componentAlias).matches()) {
+        throw new IllegalArgumentException("Unsafe component search alias: " + componentAlias);
+      }
+      return componentAlias + ".last_updated_at DESC NULLS LAST, "
+          + componentAlias + ".id DESC";
+    }
+
     private static void addTerm(List<String> terms, StringBuilder token) {
       if (!token.isEmpty()) {
         terms.add(token + ":*");

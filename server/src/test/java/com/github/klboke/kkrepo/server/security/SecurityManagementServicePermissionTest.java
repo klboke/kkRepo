@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.security;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -209,6 +210,65 @@ class SecurityManagementServicePermissionTest {
         .allowed());
     assertFalse(service.decide(subject("alice"), repositoryPermission("releases", "com/acme/app/1.0/app-1.0.jar", PermissionAction.READ))
         .allowed());
+  }
+
+  @Test
+  void repositoryAccessModesKeepContentSelectorsPathAware() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.assign("Local", "alice", "nx-search-reader");
+    dao.target(new SecurityRepositoryTargetRecord(
+        1L,
+        "non-private",
+        "Non-private paths",
+        "maven2",
+        "path =~ \"(?!.*private.*).*\"",
+        Map.of(),
+        Map.of("source", "nexus-content-selector")));
+    dao.grant("nx-search-reader", privilege(
+        "nx-repository-content-selector-public-browse",
+        "repository-content-selector",
+        Map.of(
+            "contentSelector", "non-private",
+            "format", "maven2",
+            "repository", "releases",
+            "actions", "browse")));
+    dao.grant("nx-search-reader", privilege(
+        "nx-repository-view-maven2-public-browse",
+        "repository-view",
+        Map.of(
+            "format", "maven2",
+            "repository", "public",
+            "actions", "browse")));
+    SecurityManagementService service = new SecurityManagementService(dao);
+    RepositoryPermission releases = repositoryPermission(
+        "releases", "", PermissionAction.BROWSE);
+    RepositoryPermission publicRepository = repositoryPermission(
+        "public", "", PermissionAction.BROWSE);
+    RepositoryPermission denied = repositoryPermission(
+        "internal", "", PermissionAction.BROWSE);
+
+    Map<RepositoryPermission, SecurityManagementService.RepositoryAccessMode> modes =
+        service.repositoryAccessModes(
+            subject("alice"), List.of(releases, publicRepository, denied));
+
+    assertEquals(
+        SecurityManagementService.RepositoryAccessMode.CONTENT_SELECTOR,
+        modes.get(releases));
+    assertEquals(
+        SecurityManagementService.RepositoryAccessMode.FULL,
+        modes.get(publicRepository));
+    assertEquals(
+        SecurityManagementService.RepositoryAccessMode.DENIED,
+        modes.get(denied));
+
+    RepositoryPermission allowedPath = repositoryPermission(
+        "releases", "com/acme/public/app.jar", PermissionAction.BROWSE);
+    RepositoryPermission privatePath = repositoryPermission(
+        "releases", "com/acme/private/app.jar", PermissionAction.BROWSE);
+    Map<RepositoryPermission, com.github.klboke.kkrepo.auth.AccessDecision> decisions =
+        service.decideAll(subject("alice"), List.of(allowedPath, privatePath));
+    assertTrue(decisions.get(allowedPath).allowed());
+    assertFalse(decisions.get(privatePath).allowed());
   }
 
   @Test

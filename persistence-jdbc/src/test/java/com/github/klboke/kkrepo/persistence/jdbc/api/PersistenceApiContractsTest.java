@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import com.github.klboke.kkrepo.core.RepositoryFormat;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Proxy;
 import java.time.Instant;
@@ -129,6 +131,51 @@ class PersistenceApiContractsTest {
         Map.of(1L, 11L, 2L, 22L),
         conan.currentRepositoryRevisions(List.of(1L, 2L, 1L)));
     assertEquals(List.of(1L, 2L), lookups);
+  }
+
+  @Test
+  void componentSearchDefaultDelegatesTheFirstPageAndRejectsACursor() {
+    ComponentDao.ComponentSearchRow row = new ComponentDao.ComponentSearchRow(
+        7L,
+        11L,
+        "releases",
+        RepositoryFormat.MAVEN2,
+        "com.acme",
+        "library",
+        "1.0.0",
+        "component",
+        Instant.EPOCH,
+        null);
+    ComponentDao components = (ComponentDao) Proxy.newProxyInstance(
+        ComponentDao.class.getClassLoader(),
+        new Class<?>[] {ComponentDao.class},
+        (proxy, method, arguments) -> {
+          if (method.isDefault()) {
+            return InvocationHandler.invokeDefault(proxy, method, arguments);
+          }
+          if (method.getName().equals("searchByRepositoryIds")
+              && method.getParameterCount() == 4) {
+            assertEquals(List.of(11L), arguments[0]);
+            assertEquals(RepositoryFormat.MAVEN2, arguments[1]);
+            assertEquals("library", arguments[2]);
+            assertEquals(25, arguments[3]);
+            return List.of(row);
+          }
+          throw new UnsupportedOperationException(method.getName());
+        });
+
+    assertEquals(
+        List.of(row),
+        components.searchPageByRepositoryIds(
+            List.of(11L), RepositoryFormat.MAVEN2, "library", null, 25));
+    assertThrows(
+        UnsupportedOperationException.class,
+        () -> components.searchPageByRepositoryIds(
+            List.of(11L),
+            RepositoryFormat.MAVEN2,
+            "library",
+            ComponentDao.ComponentSearchCursor.after(row),
+            25));
   }
 
   private static BrowseNodeDao.BrowseChild browseChild(Long assetId, boolean hasChildren) {

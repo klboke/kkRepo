@@ -4,26 +4,37 @@ import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.ComponentSearchCursor;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.ComponentSearchRow;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AlpineRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.conda.CondaPath;
 import com.github.klboke.kkrepo.server.conda.CondaBrowsePaths;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCatalogCache;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
+import com.github.klboke.kkrepo.server.security.SecurityManagementService.RepositoryAccessMode;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.Instant;
-import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.LinkedHashMap;
+import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -36,11 +47,15 @@ import org.springframework.web.server.ResponseStatusException;
 @RequestMapping("/internal/search/components")
 public class ComponentSearchController {
   private static final int DEFAULT_LIMIT = 300;
+  private static final int SELECTOR_PAGE_SIZE = 200;
+  private static final int MAX_SELECTOR_CANDIDATES = 1_000;
 
   private final ComponentDao componentDao;
+  private final AssetDao assetDao;
   private final SecurityAuthenticationService authenticationService;
   private final SecurityManagementService securityService;
   private final SwiftRegistryDao swiftRegistry;
+  private final RepositoryCatalogCache repositoryCatalogCache;
   private AnsibleGalaxyRegistryDao ansibleRegistry;
   private AptRegistryDao aptRegistry;
   private AlpineRegistryDao alpineRegistry;
@@ -49,13 +64,17 @@ public class ComponentSearchController {
   @Autowired
   public ComponentSearchController(
       ComponentDao componentDao,
+      AssetDao assetDao,
       SecurityAuthenticationService authenticationService,
       SecurityManagementService securityService,
-      SwiftRegistryDao swiftRegistry) {
+      SwiftRegistryDao swiftRegistry,
+      RepositoryCatalogCache repositoryCatalogCache) {
     this.componentDao = componentDao;
+    this.assetDao = assetDao;
     this.authenticationService = authenticationService;
     this.securityService = securityService;
     this.swiftRegistry = swiftRegistry;
+    this.repositoryCatalogCache = repositoryCatalogCache;
   }
 
   @Autowired(required = false)
@@ -76,13 +95,6 @@ public class ComponentSearchController {
   @Autowired(required = false)
   void setCondaRegistry(CondaRegistryDao condaRegistry) {
     this.condaRegistry = condaRegistry;
-  }
-
-  public ComponentSearchController(
-      ComponentDao componentDao,
-      SecurityAuthenticationService authenticationService,
-      SecurityManagementService securityService) {
-    this(componentDao, authenticationService, securityService, null);
   }
 
   @GetMapping
@@ -130,17 +142,257 @@ public class ComponentSearchController {
       throw new ResponseStatusException(
           HttpStatus.BAD_REQUEST, "APT coordinate filters require format=apt");
     }
-    Map<RepositoryBrowseKey, Boolean> browseDecisions = new HashMap<>();
-    int queryLimit = normalizedFilters.present() ? DEFAULT_LIMIT : effectiveLimit;
-    List<ComponentSearchItem> items = componentDao.search(keyword, repositoryFormat, queryLimit).stream()
-        .filter(row -> !BrowseAssetVisibility.hidden(row.format(), row.name())
-            && !BrowseAssetVisibility.hidden(row.format(), row.storagePath()))
-        .filter(row -> repositoryBrowseAllowed(subject, row, browseDecisions))
+    return searchAuthorized(
+        subject, keyword, repositoryFormat, effectiveLimit, normalizedFilters);
+  }
+
+  private ComponentSearchResponse searchAuthorized(
+      AuthenticatedSubject subject,
+      String keyword,
+      RepositoryFormat repositoryFormat,
+      int effectiveLimit,
+      AptSearchFilters filters) {
+    RepositoryCatalogCache.RepositoryCatalog catalog = repositoryCatalogCache.snapshot();
+    List<RepositoryRecord> searchableRepositories = catalog.records().stream()
+        .filter(record -> record.id() != null && record.name() != null && record.format() != null)
+        .filter(record -> repositoryFormat == null || record.format() == repositoryFormat)
+        .toList();
+    List<RepositoryPermission> requestedScopes = searchableRepositories.stream()
+        .map(record -> new RepositoryPermission(
+            record.name(), record.format(), "", PermissionAction.BROWSE))
+        .distinct()
+        .toList();
+    Map<RepositoryPermission, RepositoryAccessMode> accessModes =
+        securityService.repositoryAccessModes(subject.permissionSubject(), requestedScopes);
+    SearchAccessScope scope = buildSearchAccessScope(
+        searchableRepositories, catalog, accessModes);
+    if (scope.empty()) {
+      return new ComponentSearchResponse(effectiveLimit, 0, List.of());
+    }
+
+    int candidateLimit = filters.present() ? DEFAULT_LIMIT : effectiveLimit;
+    List<ComponentSearchRow> visible = new ArrayList<>();
+    boolean truncated = false;
+    if (!scope.fullRepositoryIds().isEmpty()) {
+      componentDao.searchPageByRepositoryIds(
+              scope.fullRepositoryIds(), repositoryFormat, keyword, null, candidateLimit).stream()
+          .filter(ComponentSearchController::searchVisible)
+          .map(row -> withBrowseContext(
+              row, scope.fullContext(row.repositoryId()), row.storagePath()))
+          .filter(java.util.Objects::nonNull)
+          .forEach(visible::add);
+    }
+    if (!scope.selectorRepositoryIds().isEmpty()) {
+      SelectorSearchResult selectorResult = searchSelectorRows(
+          subject, scope, keyword, repositoryFormat, candidateLimit, filters.present());
+      visible.addAll(selectorResult.rows());
+      truncated = selectorResult.truncated();
+    }
+
+    Comparator<ComponentSearchRow> newestFirst = Comparator
+        .comparing(
+            ComponentSearchRow::lastUpdatedAt,
+            Comparator.nullsLast(Comparator.reverseOrder()))
+        .thenComparing(ComponentSearchRow::id, Comparator.reverseOrder());
+    List<ComponentSearchItem> items = visible.stream()
+        .sorted(newestFirst)
         .map(this::toItem)
-        .filter(normalizedFilters::matches)
+        .filter(filters::matches)
         .limit(effectiveLimit)
         .toList();
-    return new ComponentSearchResponse(effectiveLimit, items.size(), items);
+    return new ComponentSearchResponse(effectiveLimit, items.size(), items, truncated);
+  }
+
+  private SelectorSearchResult searchSelectorRows(
+      AuthenticatedSubject subject,
+      SearchAccessScope scope,
+      String keyword,
+      RepositoryFormat repositoryFormat,
+      int candidateLimit,
+      boolean scanForCoordinateFilters) {
+    List<ComponentSearchRow> visible = new ArrayList<>();
+    ComponentSearchCursor cursor = null;
+    int scanned = 0;
+    boolean reachedEnd = false;
+    while (scanned < MAX_SELECTOR_CANDIDATES
+        && (scanForCoordinateFilters || visible.size() < candidateLimit)) {
+      int pageLimit = Math.min(SELECTOR_PAGE_SIZE, MAX_SELECTOR_CANDIDATES - scanned);
+      List<ComponentSearchRow> page = componentDao.searchPageByRepositoryIds(
+          scope.selectorRepositoryIds(), repositoryFormat, keyword, cursor, pageLimit);
+      if (page.isEmpty()) {
+        reachedEnd = true;
+        break;
+      }
+      scanned += page.size();
+      List<ComponentSearchRow> searchablePage = page.stream()
+          .filter(ComponentSearchController::searchVisible)
+          .toList();
+      visible.addAll(authorizeSelectorPage(subject, scope, searchablePage));
+      cursor = ComponentSearchCursor.after(page.getLast());
+      if (page.size() < pageLimit) {
+        reachedEnd = true;
+        break;
+      }
+    }
+    boolean truncated = !reachedEnd
+        && scanned >= MAX_SELECTOR_CANDIDATES
+        && (scanForCoordinateFilters || visible.size() < candidateLimit);
+    return new SelectorSearchResult(List.copyOf(visible), truncated);
+  }
+
+  private List<ComponentSearchRow> authorizeSelectorPage(
+      AuthenticatedSubject subject,
+      SearchAccessScope scope,
+      List<ComponentSearchRow> rows) {
+    if (rows.isEmpty()) {
+      return List.of();
+    }
+    Map<Long, List<AssetRecord>> assetsByComponent = new LinkedHashMap<>();
+    assetDao.listAssetsByComponents(rows.stream().map(ComponentSearchRow::id).toList())
+        .forEach(asset -> {
+          if (asset.componentId() != null && asset.path() != null
+              && !BrowseAssetVisibility.hidden(asset.format(), asset.path())) {
+            assetsByComponent.computeIfAbsent(asset.componentId(), ignored -> new ArrayList<>())
+                .add(asset);
+          }
+        });
+
+    List<RepositoryPermission> pathPermissions = new ArrayList<>();
+    for (ComponentSearchRow row : rows) {
+      for (BrowseContext context : scope.selectorContexts(row.repositoryId())) {
+        for (AssetRecord asset : assetsByComponent.getOrDefault(row.id(), List.of())) {
+          if (asset.repositoryId() == row.repositoryId()) {
+            pathPermissions.add(pathPermission(context, row.format(), asset.path()));
+          }
+        }
+      }
+    }
+    Map<RepositoryPermission, AccessDecision> decisions = securityService.decideAll(
+        subject.permissionSubject(), pathPermissions);
+
+    List<ComponentSearchRow> allowed = new ArrayList<>();
+    for (ComponentSearchRow row : rows) {
+      ComponentSearchRow authorized = null;
+      for (BrowseContext context : scope.selectorContexts(row.repositoryId())) {
+        for (AssetRecord asset : assetsByComponent.getOrDefault(row.id(), List.of())) {
+          if (asset.repositoryId() != row.repositoryId()) {
+            continue;
+          }
+          AccessDecision decision = decisions.get(
+              pathPermission(context, row.format(), asset.path()));
+          if (decision != null && decision.allowed()) {
+            authorized = withBrowseContext(row, context, asset.path());
+            break;
+          }
+        }
+        if (authorized != null) {
+          break;
+        }
+      }
+      if (authorized != null) {
+        allowed.add(authorized);
+      }
+    }
+    return allowed;
+  }
+
+  private SearchAccessScope buildSearchAccessScope(
+      List<RepositoryRecord> records,
+      RepositoryCatalogCache.RepositoryCatalog catalog,
+      Map<RepositoryPermission, RepositoryAccessMode> accessModes) {
+    SearchAccessScope scope = new SearchAccessScope();
+    Map<String, RepositoryRecord> recordsByName = new LinkedHashMap<>();
+    records.forEach(record -> recordsByName.put(record.name(), record));
+
+    for (RepositoryRecord record : records) {
+      RepositoryAccessMode mode = accessModes.getOrDefault(
+          repositoryPermission(record), RepositoryAccessMode.DENIED);
+      scope.add(record.id(), new BrowseContext(record.name()), mode);
+    }
+    for (RepositoryRecord group : records) {
+      if (group.type() != RepositoryType.GROUP) {
+        continue;
+      }
+      RepositoryAccessMode mode = accessModes.getOrDefault(
+          repositoryPermission(group), RepositoryAccessMode.DENIED);
+      if (mode == RepositoryAccessMode.DENIED) {
+        continue;
+      }
+      for (Long memberId : groupMemberRepositoryIds(group, catalog, recordsByName)) {
+        scope.add(memberId, new BrowseContext(group.name()), mode);
+      }
+    }
+    return scope;
+  }
+
+  private static Set<Long> groupMemberRepositoryIds(
+      RepositoryRecord group,
+      RepositoryCatalogCache.RepositoryCatalog catalog,
+      Map<String, RepositoryRecord> recordsByName) {
+    Set<Long> members = new LinkedHashSet<>();
+    collectGroupMembers(group, group.format(), catalog, recordsByName, new HashSet<>(), members);
+    return members;
+  }
+
+  private static void collectGroupMembers(
+      RepositoryRecord group,
+      RepositoryFormat groupFormat,
+      RepositoryCatalogCache.RepositoryCatalog catalog,
+      Map<String, RepositoryRecord> recordsByName,
+      Set<Long> visitedGroups,
+      Set<Long> members) {
+    if (group.id() == null || !visitedGroups.add(group.id())) {
+      return;
+    }
+    for (String memberName : catalog.membersOf(group.id())) {
+      RepositoryRecord member = recordsByName.get(memberName);
+      if (member == null || member.id() == null || member.format() != groupFormat) {
+        continue;
+      }
+      members.add(member.id());
+      if (member.type() == RepositoryType.GROUP) {
+        collectGroupMembers(
+            member, groupFormat, catalog, recordsByName, visitedGroups, members);
+      }
+    }
+  }
+
+  private static RepositoryPermission repositoryPermission(RepositoryRecord record) {
+    return new RepositoryPermission(
+        record.name(), record.format(), "", PermissionAction.BROWSE);
+  }
+
+  private static RepositoryPermission pathPermission(
+      BrowseContext context,
+      RepositoryFormat format,
+      String path) {
+    return new RepositoryPermission(
+        context.repositoryName(), format, path, PermissionAction.BROWSE);
+  }
+
+  private static boolean searchVisible(ComponentSearchRow row) {
+    return !BrowseAssetVisibility.hidden(row.format(), row.name())
+        && !BrowseAssetVisibility.hidden(row.format(), row.storagePath());
+  }
+
+  private static ComponentSearchRow withBrowseContext(
+      ComponentSearchRow row,
+      BrowseContext context,
+      String browsePath) {
+    if (context == null) {
+      return null;
+    }
+    return new ComponentSearchRow(
+        row.id(),
+        row.repositoryId(),
+        context.repositoryName(),
+        row.format(),
+        row.namespace(),
+        row.name(),
+        row.version(),
+        row.kind(),
+        row.lastUpdatedAt(),
+        browsePath);
   }
 
   private ComponentSearchItem toItem(ComponentSearchRow row) {
@@ -373,17 +625,46 @@ public class ComponentSearchController {
     }
   }
 
-  private boolean repositoryBrowseAllowed(
-      AuthenticatedSubject subject,
-      ComponentSearchRow row,
-      Map<RepositoryBrowseKey, Boolean> browseDecisions) {
-    RepositoryBrowseKey key = new RepositoryBrowseKey(row.repositoryName(), row.format());
-    return browseDecisions.computeIfAbsent(key, ignored -> securityService.decide(
-        subject.permissionSubject(),
-        new RepositoryPermission(row.repositoryName(), row.format(), "", PermissionAction.BROWSE)).allowed());
+  private static final class SearchAccessScope {
+    private final Map<Long, List<BrowseContext>> full = new LinkedHashMap<>();
+    private final Map<Long, List<BrowseContext>> selectors = new LinkedHashMap<>();
+
+    void add(long repositoryId, BrowseContext context, RepositoryAccessMode mode) {
+      if (mode == RepositoryAccessMode.FULL) {
+        full.computeIfAbsent(repositoryId, ignored -> new ArrayList<>()).add(context);
+        selectors.remove(repositoryId);
+      } else if (mode == RepositoryAccessMode.CONTENT_SELECTOR
+          && !full.containsKey(repositoryId)) {
+        selectors.computeIfAbsent(repositoryId, ignored -> new ArrayList<>()).add(context);
+      }
+    }
+
+    boolean empty() {
+      return full.isEmpty() && selectors.isEmpty();
+    }
+
+    List<Long> fullRepositoryIds() {
+      return List.copyOf(full.keySet());
+    }
+
+    List<Long> selectorRepositoryIds() {
+      return List.copyOf(selectors.keySet());
+    }
+
+    BrowseContext fullContext(long repositoryId) {
+      List<BrowseContext> contexts = full.get(repositoryId);
+      return contexts == null || contexts.isEmpty() ? null : contexts.getFirst();
+    }
+
+    List<BrowseContext> selectorContexts(long repositoryId) {
+      return selectors.getOrDefault(repositoryId, List.of());
+    }
   }
 
-  private record RepositoryBrowseKey(String repositoryName, RepositoryFormat format) {
+  private record BrowseContext(String repositoryName) {
+  }
+
+  private record SelectorSearchResult(List<ComponentSearchRow> rows, boolean truncated) {
   }
 
   private record AptSearchFilters(
@@ -443,7 +724,14 @@ public class ComponentSearchController {
     }
   }
 
-  public record ComponentSearchResponse(int limit, int count, List<ComponentSearchItem> items) {
+  public record ComponentSearchResponse(
+      int limit,
+      int count,
+      List<ComponentSearchItem> items,
+      boolean truncated) {
+    public ComponentSearchResponse(int limit, int count, List<ComponentSearchItem> items) {
+      this(limit, count, items, false);
+    }
   }
 
   public record ComponentSearchItem(

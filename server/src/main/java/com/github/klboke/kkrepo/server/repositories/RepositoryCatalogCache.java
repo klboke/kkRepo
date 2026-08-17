@@ -88,6 +88,15 @@ public class RepositoryCatalogCache {
     return Optional.ofNullable(refreshBlocking());
   }
 
+  /**
+   * Returns a complete repository snapshot even when the node-local catalog cache is disabled.
+   * The fallback remains a bounded set of database queries and is used by authorization-sensitive
+   * request paths that must never fall back to an unscoped query.
+   */
+  public RepositoryCatalog snapshot() {
+    return current().orElseGet(this::loadCatalog);
+  }
+
   @EventListener(ApplicationReadyEvent.class)
   public void warmUp() {
     if (!enabled) {
