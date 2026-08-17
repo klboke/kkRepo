@@ -20,6 +20,8 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AlpineRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCatalogCache;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
@@ -470,6 +472,53 @@ class ComponentSearchControllerSecurityTest {
     assertEquals(List.of(), components.calls);
   }
 
+  @Test
+  void huggingFaceSearchReturnsRevisionAndCachedFileDetails() {
+    StubComponentDao components = new StubComponentDao();
+    String commit = "0123456789abcdef0123456789abcdef01234567";
+    String storagePath = "org/model/resolve/" + commit + "/model.safetensors";
+    components.rows = List.of(row(
+        42L, "hf-proxy", RepositoryFormat.HUGGINGFACE, "org", "model", commit,
+        "model-revision", storagePath));
+    components.records = Map.of(42L, new ComponentRecord(
+        42L, 42L, RepositoryFormat.HUGGINGFACE, "org", "model", commit,
+        "model-revision", new byte[32],
+        Map.of(
+            "repoId", "org/model", "commit", commit, "requestedRef", "main",
+            "library", "transformers", "pipeline", "text-generation", "license", "apache-2.0",
+            "private", false, "gated", true),
+        Instant.EPOCH));
+    AssetDao assets = mock(AssetDao.class);
+    when(assets.findAssetByPath(42L, storagePath)).thenReturn(Optional.of(new AssetRecord(
+        77L, 42L, 42L, 88L, RepositoryFormat.HUGGINGFACE, storagePath, null,
+        "model.safetensors", "SAFETENSORS", "application/octet-stream", 1024L,
+        null, Instant.EPOCH,
+        Map.of(
+            "filePath", "model.safetensors", "fileKind", "SAFETENSORS",
+            "gitOid", "b".repeat(40), "lfsSha256", "c".repeat(64),
+            "expectedSize", 1024L))));
+    RecordingSecurityService security =
+        new RecordingSecurityService(permission -> AccessDecision.allow());
+    RepositoryCatalogCache catalogCache = mock(RepositoryCatalogCache.class);
+    when(catalogCache.snapshot()).thenReturn(catalog(components.rows));
+    ComponentSearchController controller = new ComponentSearchController(
+        components, assets,
+        new StubAuthenticationService(subject("alice"), null),
+        security, null, catalogCache);
+
+    ComponentSearchController.ComponentSearchItem item = controller.search(
+        null, "huggingface", null,
+        request("GET", "/internal/search/components")).items().getFirst();
+
+    assertEquals("org/model", item.details().get("repoId"));
+    assertEquals(commit, item.details().get("commit"));
+    assertEquals("main", item.details().get("requestedRef"));
+    assertEquals("SAFETENSORS", item.details().get("fileKind"));
+    assertEquals("c".repeat(64), item.details().get("lfsSha256"));
+    assertEquals("READY", item.details().get("cacheState"));
+    assertEquals("hf-proxy", item.details().get("sourceRepository"));
+  }
+
   private static ComponentSearchController controller(
       StubComponentDao components,
       AuthenticatedSubject authenticated,
@@ -623,7 +672,13 @@ class ComponentSearchControllerSecurityTest {
 
   private static class StubComponentDao extends ComponentDaoAdapter {
     private List<ComponentSearchRow> rows = List.of();
+    private Map<Long, ComponentRecord> records = Map.of();
     private final List<String> calls = new ArrayList<>();
+
+    @Override
+    public Optional<ComponentRecord> findById(long componentId) {
+      return Optional.ofNullable(records.get(componentId));
+    }
 
     private StubComponentDao() {
       super(null, null);

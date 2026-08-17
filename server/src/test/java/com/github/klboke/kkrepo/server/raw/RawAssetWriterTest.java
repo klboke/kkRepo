@@ -31,7 +31,9 @@ import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.time.Instant;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -350,6 +352,67 @@ class RawAssetWriterTest {
   }
 
   @Test
+  void publishesVerifiedImmutableContentAgainstAnExistingComponent() throws Exception {
+    Fixture fixture = fixture();
+    stubUploadedBlob(fixture);
+    when(fixture.assetDao.findAssetByPath(1L, PATH)).thenReturn(Optional.empty());
+    when(fixture.assetDao.tryInsertAsset(any())).thenReturn(OptionalLong.of(11L));
+    byte[] body = "body".getBytes(StandardCharsets.UTF_8);
+    ComponentRecord component = persistedComponent(77L);
+
+    RawAssetWriter.Stored stored = fixture.writer.writeVerifiedWithComponentAtBrowsePathIfAbsent(
+        runtime(), fixture.storage, 1L, PATH, new ByteArrayInputStream(body),
+        "text/plain", Map.of("upstream", "huggingface"), Map.of("fileKind", "OTHER"),
+        "proxy", null, component, "logical/model/body",
+        (long) body.length, sha256(body), gitOid(body));
+
+    assertTrue(stored.created());
+    assertEquals(77L, stored.asset().componentId());
+    assertEquals("OTHER", stored.asset().attributes().get("fileKind"));
+    assertEquals("huggingface", stored.blob().attributes().get("upstream"));
+    assertNotNull(stored.responseFile());
+    assertEquals("body", new String(stored.openBody().readAllBytes(), StandardCharsets.UTF_8));
+    verifyNoInteractions(fixture.componentDao);
+    verify(fixture.browseNodeDao).upsertPathAncestors(
+        1L, "logical/model/body", 11L, 77L);
+  }
+
+  @Test
+  void immutablePublishReturnsConcurrentWinnerAndRefreshesItsAttributes() throws Exception {
+    Fixture fixture = fixture();
+    stubUploadedBlob(fixture);
+    AssetRecord winner = asset(12L, 44L);
+    AssetBlobRecord winnerBlob = blob(44L, "winner");
+    when(fixture.assetDao.findAssetByPath(1L, PATH)).thenReturn(Optional.of(winner));
+    when(fixture.assetDao.findBlobById(44L)).thenReturn(Optional.of(winnerBlob));
+    byte[] body = "body".getBytes(StandardCharsets.UTF_8);
+
+    RawAssetWriter.Stored stored = fixture.writer.writeVerifiedWithComponentAtBrowsePathIfAbsent(
+        runtime(), fixture.storage, 1L, PATH, new ByteArrayInputStream(body),
+        "text/plain", Map.of(), Map.of("fileKind", "OTHER"), "proxy", null,
+        persistedComponent(77L), "logical/model/body", (long) body.length, sha256(body), null);
+
+    assertFalse(stored.created());
+    assertEquals(12L, stored.asset().id());
+    assertEquals("OTHER", stored.asset().attributes().get("fileKind"));
+    verify(fixture.assetDao).updateAssetAttributes(
+        12L, Map.of("path", PATH, "fileKind", "OTHER"));
+  }
+
+  @Test
+  void immutablePublishRejectsSizeHashGitOidAndComponentMismatches() throws Exception {
+    byte[] body = "body".getBytes(StandardCharsets.UTF_8);
+    assertVerifiedFailure(body, 5L, sha256(body), null, persistedComponent(77L));
+    assertVerifiedFailure(body, 4L, "a".repeat(64), null, persistedComponent(77L));
+    assertVerifiedFailure(body, 4L, sha256(body), "a".repeat(40), persistedComponent(77L));
+    assertVerifiedFailure(body, 4L, sha256(body), "abc", persistedComponent(77L));
+    assertVerifiedFailure(body, 4L, sha256(body), null,
+        new ComponentRecord(
+            77L, 2L, RepositoryFormat.RAW, "docs", "logical", "1.0.0", "logical",
+            new byte[32], Map.of(), Instant.now()));
+  }
+
+  @Test
   void deleteMissingAssetIsNoOp() {
     Fixture fixture = fixture();
 
@@ -421,6 +484,41 @@ class RawAssetWriterTest {
             "bucket", invocation.getArgument(1), invocation.getArgument(3), 4L));
     when(fixture.assetDao.insertBlobOrFindExisting(any()))
         .thenAnswer(invocation -> ((AssetBlobRecord) invocation.getArgument(0)).withId(2L));
+  }
+
+  private static void assertVerifiedFailure(
+      byte[] body,
+      Long expectedSize,
+      String expectedSha256,
+      String expectedGitOid,
+      ComponentRecord component) {
+    Fixture fixture = fixture();
+    stubUploadedBlob(fixture);
+    when(fixture.assetDao.findAssetByPath(1L, PATH)).thenReturn(Optional.empty());
+    when(fixture.assetDao.tryInsertAsset(any())).thenReturn(OptionalLong.of(11L));
+
+    assertThrows(IllegalArgumentException.class, () ->
+        fixture.writer.writeVerifiedWithComponentAtBrowsePathIfAbsent(
+            runtime(), fixture.storage, 1L, PATH, new ByteArrayInputStream(body),
+            "text/plain", Map.of(), Map.of(), "proxy", null, component, PATH,
+            expectedSize, expectedSha256, expectedGitOid));
+  }
+
+  private static ComponentRecord persistedComponent(long id) {
+    return new ComponentRecord(
+        id, 1L, RepositoryFormat.RAW, "docs", "logical", "1.0.0", "logical",
+        new byte[32], Map.of(), Instant.now());
+  }
+
+  private static String sha256(byte[] value) throws Exception {
+    return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value));
+  }
+
+  private static String gitOid(byte[] value) throws Exception {
+    MessageDigest digest = MessageDigest.getInstance("SHA-1");
+    digest.update(("blob " + value.length + "\0").getBytes(StandardCharsets.UTF_8));
+    digest.update(value);
+    return HexFormat.of().formatHex(digest.digest());
   }
 
   private static RepositoryRuntime runtime() {

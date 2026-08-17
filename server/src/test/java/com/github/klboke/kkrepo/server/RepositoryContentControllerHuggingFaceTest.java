@@ -2,22 +2,28 @@ package com.github.klboke.kkrepo.server;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.server.huggingface.HuggingFaceService;
+import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
+import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -64,6 +70,103 @@ class RepositoryContentControllerHuggingFaceTest {
     assertArrayEquals(responseBody, (byte[]) response.getBody());
   }
 
+  @Test
+  void headDelegatesToHuggingFaceServiceWithoutMaterializingTheBody() {
+    RepositoryRuntime runtime = proxy();
+    RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
+    HuggingFaceService huggingFace = mock(HuggingFaceService.class);
+    when(runtimes.resolve("hf")).thenReturn(Optional.of(runtime));
+    when(huggingFace.get(
+            eq(runtime),
+            eq("org/model/resolve/main/config.json"),
+            eq("download=true"),
+            eq("https://repo.example/repository/hf"),
+            eq(true)))
+        .thenReturn(MavenResponse.ok(
+            new ByteArrayInputStream(new byte[0]), 123L,
+            MediaType.APPLICATION_OCTET_STREAM_VALUE, "config-etag", null));
+    RepositoryContentController controller = controller(runtimes, huggingFace);
+    MockHttpServletRequest request = request(
+        "HEAD", "/repository/hf/org/model/resolve/main/config.json");
+    request.setQueryString("download=true");
+
+    ResponseEntity<Void> response = controller.head("hf", request);
+
+    assertEquals(200, response.getStatusCode().value());
+    assertEquals(123L, response.getHeaders().getContentLength());
+    assertNull(response.getBody());
+  }
+
+  @Test
+  void getDelegatesMetadataAndFileRoutesToHuggingFaceService() {
+    RepositoryRuntime runtime = proxy();
+    RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
+    HuggingFaceService huggingFace = mock(HuggingFaceService.class);
+    when(runtimes.resolve("hf")).thenReturn(Optional.of(runtime));
+    byte[] metadata = "{\"id\":\"org/model\"}".getBytes(StandardCharsets.UTF_8);
+    when(huggingFace.get(
+            eq(runtime), eq("api/models/org/model"), eq(null),
+            eq("https://repo.example/repository/hf"), eq(false)))
+        .thenReturn(MavenResponse.ok(
+            new ByteArrayInputStream(metadata), metadata.length,
+            MediaType.APPLICATION_JSON_VALUE, "model-etag", null));
+    byte[] artifact = "weights".getBytes(StandardCharsets.UTF_8);
+    when(huggingFace.get(
+            eq(runtime), eq("org/model/resolve/main/model.safetensors"), eq(null),
+            eq("https://repo.example/repository/hf"), eq(false)))
+        .thenReturn(MavenResponse.ok(
+            new ByteArrayInputStream(artifact), artifact.length,
+            MediaType.APPLICATION_OCTET_STREAM_VALUE, "file-etag", null));
+    RepositoryContentController controller = controller(runtimes, huggingFace);
+
+    ResponseEntity<?> metadataResponse = controller.get(
+        "hf", request("GET", "/repository/hf/api/models/org/model"));
+    ResponseEntity<?> fileResponse = controller.get(
+        "hf", request("GET", "/repository/hf/org/model/resolve/main/model.safetensors"));
+
+    assertEquals(200, metadataResponse.getStatusCode().value());
+    assertEquals(MediaType.APPLICATION_JSON, metadataResponse.getHeaders().getContentType());
+    assertEquals(200, fileResponse.getStatusCode().value());
+    assertEquals(MediaType.APPLICATION_OCTET_STREAM, fileResponse.getHeaders().getContentType());
+    verify(huggingFace).get(
+        runtime, "api/models/org/model", null, "https://repo.example/repository/hf", false);
+    verify(huggingFace).get(
+        runtime, "org/model/resolve/main/model.safetensors", null,
+        "https://repo.example/repository/hf", false);
+  }
+
+  @Test
+  void rejectsUnreadablePathsInfoBody() {
+    RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
+    when(runtimes.resolve("hf")).thenReturn(Optional.of(proxy()));
+    RepositoryContentController controller = controller(runtimes, mock(HuggingFaceService.class));
+    HttpServletRequest request = mock(HttpServletRequest.class);
+    when(request.getRequestURI())
+        .thenReturn("/repository/hf/api/models/org/model/paths-info/main");
+    when(request.getContextPath()).thenReturn("");
+    try {
+      when(request.getInputStream()).thenThrow(new IOException("disconnected"));
+    } catch (IOException impossible) {
+      throw new AssertionError(impossible);
+    }
+
+    assertThrows(
+        MavenExceptions.BadRequestException.class,
+        () -> controller.post("hf", request));
+  }
+
+  @Test
+  void failsClosedWhenHuggingFaceServiceIsUnavailable() {
+    RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
+    when(runtimes.resolve("hf")).thenReturn(Optional.of(proxy()));
+    RepositoryContentController controller = controller(runtimes, null);
+
+    assertThrows(
+        IllegalStateException.class,
+        () -> controller.head(
+            "hf", request("HEAD", "/repository/hf/org/model/resolve/main/config.json")));
+  }
+
   private static RepositoryRuntime proxy() {
     return new RepositoryRuntime(
         1L,
@@ -83,6 +186,14 @@ class RepositoryContentControllerHuggingFaceTest {
         true,
         null,
         List.of());
+  }
+
+  private static MockHttpServletRequest request(String method, String path) {
+    MockHttpServletRequest request = new MockHttpServletRequest(method, path);
+    request.setScheme("https");
+    request.setServerName("repo.example");
+    request.setServerPort(443);
+    return request;
   }
 
   private static RepositoryContentController controller(

@@ -693,6 +693,54 @@ class BrowseAssetDetailServiceTest {
   }
 
   @Test
+  void huggingFaceModelFileDetailExposesImmutableModelIdentity() {
+    RepositoryRecord repository = repository(
+        80L, "huggingface-proxy", RepositoryFormat.HUGGINGFACE, RepositoryType.PROXY);
+    String commit = "a".repeat(40);
+    String path = "org/model/resolve/" + commit + "/model.safetensors";
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("huggingfaceRole", "model-file");
+    attributes.put("repoId", "org/model");
+    attributes.put("commit", commit);
+    attributes.put("requestedRef", "main");
+    attributes.put("filePath", "model.safetensors");
+    attributes.put("fileKind", "SAFETENSORS");
+    attributes.put("lfsSha256", "b".repeat(64));
+    attributes.put("expectedSize", 1024L);
+    attributes.put("library", "transformers");
+    attributes.put("pipeline", "text-classification");
+    attributes.put("license", "apache-2.0");
+    attributes.put("private", false);
+    attributes.put("gated", false);
+    AssetRecord model = new AssetRecord(
+        81L, repository.id(), 82L, 83L, RepositoryFormat.HUGGINGFACE,
+        path, PersistenceHashes.pathHash(path), "model.safetensors",
+        "huggingface-model-file", "application/octet-stream", 1024L,
+        null, Instant.EPOCH, attributes);
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(repository.id(), path), model), Map.of(83L, blob(83L, 1024L)));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(), assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+
+    BrowseAssetDetailService.BrowseAssetDetail detail = service.detail(repository, path, null);
+
+    assertEquals("org/model", detail.huggingface().get("repoId"));
+    assertEquals(commit, detail.huggingface().get("commit"));
+    assertEquals("main", detail.huggingface().get("requestedRef"));
+    assertEquals("model.safetensors", detail.huggingface().get("filePath"));
+    assertEquals("SAFETENSORS", detail.huggingface().get("fileKind"));
+    assertEquals("b".repeat(64), detail.huggingface().get("lfsSha256"));
+    assertEquals(1024L, detail.huggingface().get("expectedSize"));
+    assertEquals("transformers", detail.huggingface().get("library"));
+    assertEquals("text-classification", detail.huggingface().get("pipeline"));
+    assertEquals("apache-2.0", detail.huggingface().get("license"));
+    assertEquals(false, detail.huggingface().get("private"));
+    assertEquals(false, detail.huggingface().get("gated"));
+    assertEquals("READY", detail.huggingface().get("cacheState"));
+  }
+
+  @Test
   void composerHostedDetailUsesAssetUploaderWhenBlobWasReused() {
     RepositoryRecord repository = repository(
         1L, "composer-hosted", RepositoryFormat.COMPOSER, RepositoryType.HOSTED);
