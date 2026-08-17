@@ -176,7 +176,7 @@ class ComponentDaoTest {
     String keyword = "\"".repeat(4096) + "Com.Example artifact-1.0";
 
     Assertions.assertEquals(
-        "+com* +example* +artifact* +1* +0*",
+        "+com* +example* +artifact* 1* 0*",
         DIALECT.search().prepareComponentQuery(keyword));
   }
 
