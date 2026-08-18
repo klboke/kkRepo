@@ -56,6 +56,7 @@ let securityOidc = null;
 const SECURITY_PROVIDER_SECRET_MASK = "********";
 let securityProviderJsonSyncing = false;
 const securityProviderAttributes = { ldap: {}, oidc: {} };
+let securityLdapName = "LDAP";
 let securityAnonymous = null;
 let securityApiKeys = [];
 let securityScanState = {
@@ -952,7 +953,7 @@ function securityLdapFormValue({ attributes = securityProviderAttributes.ldap, m
     enabled: document.getElementById("security-ldap-enabled").checked,
     priority: numberInputValue("security-ldap-priority") ?? 10,
     source: "LDAP",
-    name: textInputValue("security-ldap-name") || "LDAP",
+    name: securityLdapName,
     url: textInputValue("security-ldap-url"),
     protocol: textInputValue("security-ldap-protocol") || "ldap",
     host: textInputValue("security-ldap-host"),
@@ -1015,9 +1016,9 @@ function securityOidcFormValue({ attributes = securityProviderAttributes.oidc, m
 }
 
 function applySecurityLdapJsonValue(value) {
+  securityLdapName = securityProviderJsonScalar(value.name, "LDAP");
   setCheckboxValue("security-ldap-enabled", securityProviderJsonBoolean(value.enabled));
   setInputValue("security-ldap-priority", securityProviderJsonNumber(value.priority, 10));
-  setInputValue("security-ldap-name", securityProviderJsonScalar(value.name, "LDAP"));
   setInputValue("security-ldap-url", securityProviderJsonScalar(value.url));
   setSelectValue("security-ldap-protocol", securityProviderJsonScalar(value.protocol), "ldap");
   setInputValue("security-ldap-host", securityProviderJsonScalar(value.host));
@@ -3830,7 +3831,7 @@ function renderSecurityLdap() {
   clearRequiredFieldErrors(ldapRequiredFields);
   setCheckboxValue("security-ldap-enabled", settings.enabled);
   setInputValue("security-ldap-priority", Number(settings.priority ?? 10));
-  setInputValue("security-ldap-name", settings.name, "LDAP");
+  securityLdapName = settings.name || "LDAP";
   setSelectValue("security-ldap-protocol", settings.protocol, "ldap");
   setInputValue("security-ldap-host", settings.host);
   setInputValue("security-ldap-port", settings.port);
