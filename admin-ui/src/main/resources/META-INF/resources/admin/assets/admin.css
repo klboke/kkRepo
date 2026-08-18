@@ -3192,17 +3192,33 @@ code {
   }
 }
 
+#security-ldap-view > .page-heading,
+#security-oidc-view > .page-heading {
+  width: min(1000px, calc(100% - 48px));
+  margin: 0 auto;
+}
+
+.security-provider-form {
+  width: min(1000px, calc(100% - 48px));
+  margin: 16px auto 24px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
 .security-provider-form-grid {
   grid-template-columns: 1fr;
-  gap: 14px;
+  gap: 12px;
 }
 
 .form-grid .security-provider-section {
   margin: 0;
   border-color: var(--line);
   border-radius: 9px;
-  background: #fbfcfb;
-  padding: 7px 15px 15px;
+  background: var(--panel);
+  box-shadow: var(--shadow-soft);
+  padding: 8px 17px 17px;
 }
 
 .form-grid .security-provider-section legend {
@@ -3221,12 +3237,13 @@ code {
 
 .security-provider-section-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px 14px;
 }
 
 .security-provider-overview-grid {
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 220px));
+  justify-content: start;
 }
 
 .security-provider-section-grid > label,
@@ -3254,6 +3271,12 @@ code {
 
 .security-provider-span-2 {
   grid-column: span 2;
+}
+
+.security-provider-section-grid > .full-width,
+.security-provider-section-grid > .security-provider-span-2 {
+  width: 100%;
+  max-width: 760px;
 }
 
 .security-provider-source {
@@ -3300,7 +3323,8 @@ code {
   grid-column: 1 / -1;
   border: 1px solid var(--line);
   border-radius: 9px;
-  background: #fbfcfb;
+  background: var(--panel);
+  box-shadow: var(--shadow-soft);
 }
 
 .security-provider-advanced summary {
@@ -3349,13 +3373,17 @@ code {
   margin-top: 16px;
 }
 
-@media (max-width: 1100px) {
-  .security-provider-section-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
 @media (max-width: 720px) {
+  .security-provider-form {
+    width: calc(100% - 24px);
+    margin: 12px auto 18px;
+  }
+
+  #security-ldap-view > .page-heading,
+  #security-oidc-view > .page-heading {
+    width: calc(100% - 24px);
+  }
+
   .security-provider-section-grid,
   .security-provider-overview-grid {
     grid-template-columns: 1fr;
@@ -3363,6 +3391,11 @@ code {
 
   .security-provider-span-2 {
     grid-column: auto;
+  }
+
+  .security-provider-section-grid > .full-width,
+  .security-provider-section-grid > .security-provider-span-2 {
+    max-width: none;
   }
 
   .form-grid .security-provider-toggle-field {

@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="/browse/assets/tokens.css?v=20260724-visual-upgrade-1">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20260811-conan-1">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20260728-security-advisory-link-1">
-    <link rel="stylesheet" href="./assets/admin.css?v=20260818-security-provider-layout-1">
+    <link rel="stylesheet" href="./assets/admin.css?v=20260818-security-provider-layout-2">
     <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=20260817-global-search-3">
   </head>
   <body>
@@ -1073,8 +1073,8 @@
                     <label><span>Protocol</span><select id="security-ldap-protocol"><option value="ldap">ldap</option><option value="ldaps">ldaps</option></select></label>
                     <label><span>Host <span class="required-mark">*</span></span><input id="security-ldap-host" type="text"></label>
                     <label><span>Port</span><input id="security-ldap-port" type="number" min="1"></label>
-                    <label class="security-provider-span-2"><span>Search base</span><input id="security-ldap-search-base" type="text" placeholder="dc=example,dc=com"></label>
                     <label class="checkbox-field security-provider-toggle-field"><input id="security-ldap-trust-store" type="checkbox"><span>Use trust store</span></label>
+                    <label class="full-width"><span>Search base</span><input id="security-ldap-search-base" type="text" placeholder="dc=example,dc=com"></label>
                   </div>
                 </fieldset>
 
@@ -1084,14 +1084,14 @@
                     <label><span>Auth scheme</span><input id="security-ldap-auth-scheme" type="text" value="simple"></label>
                     <label><span>Auth realm</span><input id="security-ldap-auth-realm" type="text"></label>
                     <label><span>Auth username</span><input id="security-ldap-auth-username" type="text"></label>
-                    <label class="full-width"><span>Auth password</span><input id="security-ldap-auth-password" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing"></label>
+                    <label><span>Auth password</span><input id="security-ldap-auth-password" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing"></label>
                   </div>
                 </fieldset>
 
                 <fieldset class="security-provider-section">
                   <legend>User mapping</legend>
                   <div class="security-provider-section-grid">
-                    <label class="security-provider-span-2"><span>User base DN</span><input id="security-ldap-user-base-dn" type="text"></label>
+                    <label><span>User base DN</span><input id="security-ldap-user-base-dn" type="text"></label>
                     <label class="checkbox-field security-provider-toggle-field"><input id="security-ldap-user-subtree" type="checkbox" checked><span>User subtree</span></label>
                     <label><span>User ID attribute</span><input id="security-ldap-user-id-attribute" type="text" value="uid"></label>
                     <label><span>Real name attribute</span><input id="security-ldap-user-real-name-attribute" type="text" value="cn"></label>
@@ -1108,8 +1108,8 @@
                   <div class="security-provider-section-grid">
                     <label class="checkbox-field security-provider-toggle-field"><input id="security-ldap-groups-as-roles" type="checkbox" checked><span>Groups as roles</span></label>
                     <label><span>Group type</span><select id="security-ldap-group-type"><option value="static">static</option><option value="dynamic">dynamic</option></select></label>
+                    <label><span>Group base DN</span><input id="security-ldap-group-base-dn" type="text"></label>
                     <label class="checkbox-field security-provider-toggle-field"><input id="security-ldap-group-subtree" type="checkbox" checked><span>Group subtree</span></label>
-                    <label class="security-provider-span-2"><span>Group base DN</span><input id="security-ldap-group-base-dn" type="text"></label>
                     <label><span>Group ID attribute</span><input id="security-ldap-group-id-attribute" type="text" value="cn"></label>
                     <label><span>Group member attribute</span><input id="security-ldap-group-member-attribute" type="text" value="member"></label>
                     <label><span>Group member format</span><input id="security-ldap-group-member-format" type="text" value="${dn}"></label>
@@ -1161,9 +1161,9 @@
                 <legend>Provider settings</legend>
                 <p class="security-provider-section-copy">Configure the issuer and keys used to validate identity tokens.</p>
                 <div class="security-provider-section-grid">
-                  <label class="full-width"><span>Issuer <span class="required-mark">*</span></span><input id="security-oidc-issuer" type="url" placeholder="https://issuer.example.com"></label>
-                  <label class="security-provider-span-2"><span>JWKS URI <span class="required-mark">*</span></span><input id="security-oidc-jwks-uri" type="url" placeholder="https://issuer.example.com/.well-known/jwks.json"></label>
+                  <label><span>Issuer <span class="required-mark">*</span></span><input id="security-oidc-issuer" type="url" placeholder="https://issuer.example.com"></label>
                   <label><span>Audience</span><input id="security-oidc-audience" type="text"></label>
+                  <label class="full-width"><span>JWKS URI <span class="required-mark">*</span></span><input id="security-oidc-jwks-uri" type="url" placeholder="https://issuer.example.com/.well-known/jwks.json"></label>
                   <label class="full-width"><span>Scopes</span><input id="security-oidc-scopes" type="text" value="openid profile email"></label>
                 </div>
               </fieldset>
@@ -1172,7 +1172,7 @@
                 <legend>Client configuration</legend>
                 <div class="security-provider-section-grid">
                   <label><span>Client ID <span class="required-mark">*</span></span><input id="security-oidc-client-id" type="text"></label>
-                  <label class="security-provider-span-2"><span>Client secret <span class="required-mark">*</span></span><input id="security-oidc-client-secret" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing"></label>
+                  <label><span>Client secret <span class="required-mark">*</span></span><input id="security-oidc-client-secret" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing"></label>
                   <label class="full-width"><span>Redirect URI <span class="required-mark">*</span></span><input id="security-oidc-redirect-uri" type="url" placeholder="/internal/security/oidc/callback"></label>
                 </div>
               </fieldset>
