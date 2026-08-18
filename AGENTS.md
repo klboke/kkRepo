@@ -20,6 +20,8 @@
 
 任何功能在设计和实现时都必须考虑分布式多副本部署。涉及状态、缓存、锁、后台任务、session、上传/删除、索引重建、metadata、negative cache 或权限判定的逻辑，默认不能依赖单个 JVM 进程内状态作为唯一真相；应使用 MySQL、OSS/S3、共享 TTL cache、分布式锁、marker 队列或其它可协调机制。允许使用进程内缓存作为节点本地热缓存，但必须满足：丢失后可自动恢复、不影响正确性、有明确 TTL 或失效条件，并在代码或文档中说明多副本语义。
 
+所有业务模块的进程内缓存必须通过 `cache` 模块提供的统一抽象创建：强类型、可重建的节点本地热缓存使用 `LocalCacheFactory`，跨业务复用的字符串/JSON TTL、negative cache 和 per-pod 计数使用 `SharedCache`。业务模块禁止直接依赖或配置 Caffeine 等具体缓存库，也禁止用裸 `Map` 自行实现长期缓存。新增缓存策略时必须在 `cache` 模块实现，并同步补充 Native runtime hints 与对应测试；已有直接 Caffeine 使用仅允许保留在 `CacheAbstractionBoundaryTest` 的迁移清单中，后续迁移时必须删除对应例外，禁止新增例外。
+
 实现任何类型仓库功能前，必须先检查该仓库的官方协议，保持和官方仓库协议对齐 ，不要自行发明协议行为。
 
 ## 兼容性工作流

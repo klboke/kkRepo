@@ -191,9 +191,11 @@ Detailed design and implementation plans for repository formats and migration wo
 - [APT / Debian Repository Design Notes](../zh/dev/apt-debian-repository-design.md) and [Nexus Performance Baseline](../zh/dev/apt-performance-baseline.md) (Chinese)
 - [Conan 2 Repository Design Notes](../zh/dev/conan-repository-design.md) (Chinese)
 - [Alpine / APK Repository Design Notes](../zh/dev/alpine-apk-repository-design.md) (Chinese)
+- [Hugging Face Models Repository Design Notes](../zh/dev/hugging-face-models-repository-design.md) (Chinese) and [Nexus Performance Baseline](dev/hugging-face-models-performance-baseline.md)
 - [Cleanup Policy Design Notes](../zh/dev/cleanup-policy-design.md) (Chinese)
 - [Cleanup Policy Guide](cleanup-policy-guide.md)
 - [Ansible Galaxy Repository Guide](repository-guides/ansible-galaxy.md)
+- [Hugging Face Models Repository Guide](repository-guides/hugging-face-models.md)
 - [Nexus Compatibility Migration Refactor Plan](dev/nexus-migration-compatibility-refactor-plan.md)
 
 ## Configuration Center

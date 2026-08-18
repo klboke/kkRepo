@@ -22,8 +22,8 @@ NEXUS_COMPAT_PASSWORD=Admin1234
 Current Maven compatibility checks and repository-format compatibility checks can compare against
 this same long-running Nexus reference unless a test explicitly documents why it needs an isolated
 throwaway Nexus instance. Cargo/Rust requires Nexus 3.77.x+, Terraform requires Nexus 3.90.0+ for
-hosted/proxy/group coverage, Pub, Conda, and APT require Nexus 3.92.0+, and the Conan 2, Swift, and
-Alpine/APK reference matrices target Nexus 3.94.x so their latest repository implementations are
+hosted/proxy/group coverage, Pub, Conda, and APT require Nexus 3.92.0+, and the Conan 2, Swift,
+Alpine/APK, and Hugging Face Models reference matrices target Nexus 3.94.x so their latest repository implementations are
 available; the Swift lane also verifies versioned-manifest fallback and `v`/`V` tag normalization. The
 datastore-era PostgreSQL compose file below defaults to Nexus 3.92.0 for the general newer-format
 checks, while the Swift workflow explicitly overrides that image with Nexus 3.94.x.
@@ -316,6 +316,36 @@ Nexus 3.94 hosted/proxy/group definitions and a dependency graph, proves the exa
 shape, restores only original `.apk` packages to MySQL/PostgreSQL targets, leaves repositories
 offline until the source test key is explicitly imported, rebuilds signed metadata, and verifies a
 real install plus row-count and cross-replica invariants.
+
+### Hugging Face Models compatibility and client matrix
+
+`HuggingFaceRepositoryBlackBoxCompatibilityTest` compares two pre-created Models proxy
+repositories that point to the same deterministic Hub/LFS/Xet-bridge fixture. It validates model
+metadata, conditional GET, paths-info, commit-pinned full bytes, HEAD, Range, linked identity, and
+the absence of client-visible Xet/external redirects. Nexus 3.94's 400 response on the current
+paths-info flow is recorded explicitly while kkRepo is required to support the official client
+route:
+
+```bash
+python3 scripts/perf/huggingface-hub-fixture.py --port 48770
+
+HUGGINGFACE_COMPAT_ENABLED=true \
+HUGGINGFACE_NEXUS_PROXY_URL=http://127.0.0.1:39400/repository/huggingface-compat \
+HUGGINGFACE_KKREPO_PROXY_URL=http://127.0.0.1:18090/repository/huggingface-compat \
+NEXUS_COMPAT_USERNAME=admin \
+NEXUS_COMPAT_PASSWORD=Admin1234 \
+KKREPO_COMPAT_USERNAME=admin \
+KKREPO_COMPAT_PASSWORD=12345678 \
+mvn -pl compat-test -am \
+  -Dtest=HuggingFaceRepositoryBlackBoxCompatibilityTest \
+  -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+Create the two `huggingface-proxy` repositories first and set their remote URL to
+`http://host.docker.internal:48770` when the services run in Docker. The performance fixture and
+the exact `huggingface_hub` 0.34.6/1.27.0, `hf` CLI, Transformers, Diffusers, File/S3, and
+dual-replica evidence are documented in the
+[Hugging Face performance baseline](../docs/en/dev/hugging-face-models-performance-baseline.md).
 
 ### Swift Registry compatibility and client matrix
 

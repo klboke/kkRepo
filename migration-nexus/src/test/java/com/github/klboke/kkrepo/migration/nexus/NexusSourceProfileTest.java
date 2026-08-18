@@ -53,6 +53,12 @@ class NexusSourceProfileTest {
       "sha256Checksum", true,
       "inspectedAssetCount", 2,
       "packageAssetCount", 1);
+  private static final Map<String, Object> VERIFIED_HUGGINGFACE_SHAPE = Map.of(
+      "resolveAssetPath", true,
+      "componentCommit", true,
+      "sha256Checksum", true,
+      "inspectedAssetCount", 3,
+      "resolveAssetCount", 2);
 
   @Test
   void enablesSwiftHostedContentOnlyForKnownNexusVersionsAndVerifiedShape() {
@@ -248,6 +254,34 @@ class NexusSourceProfileTest {
     }
   }
 
+  @Test
+  void enablesHuggingFaceProxyContentOnlyForExactNexus394Shape() {
+    NexusSourceProfile profile = huggingFaceProfile("3.94.0-01", VERIFIED_HUGGINGFACE_SHAPE);
+
+    assertTrue(profile.formatCapabilities().get("huggingface").contentMigration());
+    assertEquals(SupportStatus.FULL, huggingFaceProxyStatus(profile));
+  }
+
+  @Test
+  void unknownVersionOrDriftedShapeKeepsHuggingFaceMigrationManual() {
+    for (String version : List.of("unknown", "3.93.1-01", "3.95.0-01", "4.0.0")) {
+      NexusSourceProfile profile = huggingFaceProfile(version, VERIFIED_HUGGINGFACE_SHAPE);
+      assertFalse(profile.formatCapabilities().get("huggingface").contentMigration(), version);
+      assertEquals("huggingface-source-version-unverified",
+          profile.formatCapabilities().get("huggingface").evidence(), version);
+      assertEquals(SupportStatus.NEEDS_MANUAL_ACTION, huggingFaceProxyStatus(profile), version);
+    }
+    for (String missing : List.of("resolveAssetPath", "componentCommit", "sha256Checksum")) {
+      Map<String, Object> drifted = new LinkedHashMap<>(VERIFIED_HUGGINGFACE_SHAPE);
+      drifted.remove(missing);
+      NexusSourceProfile profile = huggingFaceProfile("3.94.0-01", drifted);
+      assertFalse(profile.formatCapabilities().get("huggingface").contentMigration(), missing);
+      assertEquals("huggingface-content-shape-incomplete",
+          profile.formatCapabilities().get("huggingface").evidence(), missing);
+      assertEquals(SupportStatus.NEEDS_MANUAL_ACTION, huggingFaceProxyStatus(profile), missing);
+    }
+  }
+
   private static SupportStatus hostedStatus(NexusSourceProfile profile) {
     return new MigrationPlanBuilder().build(
             profile, new MigrationScope(List.of("swift-hosted"), false, false))
@@ -306,6 +340,60 @@ class NexusSourceProfileTest {
         .findFirst()
         .orElseThrow()
         .status();
+  }
+
+  private static SupportStatus huggingFaceProxyStatus(NexusSourceProfile profile) {
+    return new MigrationPlanBuilder().build(
+            profile, new MigrationScope(List.of("huggingface-proxy"), false, true))
+        .items().stream()
+        .filter(item -> "huggingface-proxy".equals(item.name()))
+        .findFirst()
+        .orElseThrow()
+        .status();
+  }
+
+  private static NexusSourceProfile huggingFaceProfile(
+      String probedVersion,
+      Map<String, Object> formatShape) {
+    SourceProbe probe = new SourceProbe(
+        probedVersion,
+        true,
+        true,
+        true,
+        "text/plain",
+        "ok",
+        "DATASTORE_POSTGRESQL",
+        "PostgreSQL",
+        "jdbc:postgresql://nexus/nexus",
+        Map.of("datastoreContentModels", Map.of("huggingface", Map.of(
+            "prefix", "HUGGINGFACE",
+            "tablesPresent", true,
+            "requiredColumnsPresent", true,
+            "tables", Map.of(
+                "contentRepository", "HUGGINGFACE_CONTENT_REPOSITORY",
+                "asset", "HUGGINGFACE_ASSET",
+                "assetBlob", "HUGGINGFACE_ASSET_BLOB",
+                "component", "HUGGINGFACE_COMPONENT"),
+            "columns", Map.of(),
+            "formatShape", formatShape))),
+        List.of());
+    RepositoryDocument repository = new RepositoryDocument(
+        Map.of(
+            "name", "huggingface-proxy",
+            "format", "huggingface",
+            "type", "proxy",
+            "online", true),
+        Map.of(
+            "storage", Map.of("blobStoreName", "default"),
+            "proxy", Map.of("remoteUrl", "https://huggingface.co")));
+    return NexusSourceProfile.fromInventory(
+        new NexusInventory(
+            List.of(Map.of("name", "default", "type", "File")),
+            List.of(repository),
+            NexusSecurityExport.empty(),
+            List.of(),
+            probe),
+        null);
   }
 
   private static NexusSourceProfile alpineProfile(

@@ -161,6 +161,59 @@ class RawAssetWriter {
         keepResponseFile, browsePath);
   }
 
+  /**
+   * Publishes immutable protocol content only after its expected full-file identity has passed.
+   * A losing replica never replaces the winner's canonical asset binding.
+   */
+  Stored writeVerifiedWithComponentAtBrowsePathIfAbsent(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      String path,
+      InputStream body,
+      String contentTypeHint,
+      Map<String, ?> extraBlobAttributes,
+      Map<String, ?> assetAttributes,
+      String createdBy,
+      String createdByIp,
+      ComponentRecord component,
+      String browsePath,
+      Long expectedSize,
+      String expectedSha256,
+      String expectedGitOid) {
+    DigestedUpload upload = uploadWithDigests(
+        runtime, storage, blobStoreId, path, body, extraBlobAttributes);
+    try {
+      if (expectedSize != null && expectedSize.longValue() != upload.digests().size()) {
+        throw new IllegalArgumentException(
+            "Protocol content size mismatch for " + path + ": expected " + expectedSize
+                + ", got " + upload.digests().size());
+      }
+      if (expectedSha256 != null && !expectedSha256.isBlank()
+          && !expectedSha256.equalsIgnoreCase(upload.digests().sha256())) {
+        throw new IllegalArgumentException("Protocol content SHA-256 mismatch for " + path);
+      }
+      if (expectedGitOid != null && !expectedGitOid.isBlank()
+          && !expectedGitOid.equalsIgnoreCase(gitBlobOid(
+              upload.tempFile(), upload.digests().size(), expectedGitOid.length()))) {
+        throw new IllegalArgumentException("Protocol Git blob OID mismatch for " + path);
+      }
+      Stored stored = executePersist(
+          "Persist immutable protocol asset " + runtime.name() + "/" + path,
+          () -> persist(
+              runtime, storage, blobStoreId, path, upload, contentTypeHint,
+              extraBlobAttributes, createdBy, createdByIp,
+              ComponentBinding.existing(component), assetAttributes, upload.tempFile(), browsePath,
+              false));
+      cleanupUnusedUploadedBlob(storage, blobStoreId, upload, stored.blob());
+      return stored;
+    } catch (RuntimeException error) {
+      cleanupUploadedBlob(storage, blobStoreId, upload);
+      TempBlobFiles.deleteQuietly(upload.tempFile());
+      throw error;
+    }
+  }
+
   Stored writeFile(
       RepositoryRuntime runtime,
       BlobStorage storage,
@@ -276,8 +329,8 @@ class RawAssetWriter {
         "Link existing raw blob " + runtime.name() + "/" + path,
         () -> persist(
             runtime, storage, blobStoreId, path, upload, contentTypeHint, Map.of(),
-            createdBy, createdByIp, ComponentBinding.explicit(component), null, browsePath,
-            replaceExisting));
+            createdBy, createdByIp, ComponentBinding.explicit(component), Map.of(), null,
+            browsePath, replaceExisting));
   }
 
   private Stored writeFileAtBrowsePath(
@@ -301,7 +354,7 @@ class RawAssetWriter {
           () -> persist(runtime, storage, blobStoreId, path, upload, contentTypeHint,
               extraBlobAttributes, createdBy, createdByIp,
               component == null ? ComponentBinding.none() : ComponentBinding.explicit(component),
-              null, browsePath, replaceExisting));
+              Map.of(), null, browsePath, replaceExisting));
       cleanupUnusedUploadedBlob(storage, blobStoreId, upload, stored.blob());
       return stored;
     } catch (RuntimeException e) {
@@ -346,7 +399,7 @@ class RawAssetWriter {
           "Persist raw asset " + runtime.name() + "/" + path,
           () -> persist(runtime, storage, blobStoreId, path, upload, contentTypeHint,
               extraBlobAttributes, createdBy, createdByIp, componentBinding,
-              keepResponseFile ? upload.tempFile() : null, browsePath, true));
+              Map.of(), keepResponseFile ? upload.tempFile() : null, browsePath, true));
       cleanupUnusedUploadedBlob(storage, blobStoreId, upload, stored.blob());
       if (!keepResponseFile) {
         TempBlobFiles.deleteQuietly(upload.tempFile());
@@ -415,6 +468,7 @@ class RawAssetWriter {
       String createdBy,
       String createdByIp,
       ComponentBinding componentBinding,
+      Map<String, ?> extraAssetAttributes,
       Path responseFile,
       String browsePath,
       boolean replaceExisting) {
@@ -425,10 +479,27 @@ class RawAssetWriter {
     BlobReference ref = upload.reference();
     Digests digests = upload.digests();
     String blobRef = BlobReferenceCodec.format(ref);
+    LinkedHashMap<String, Object> mergedAssetAttributes = new LinkedHashMap<>();
+    mergedAssetAttributes.put("path", path);
+    if (extraAssetAttributes != null) {
+      extraAssetAttributes.forEach((key, value) -> {
+        if (key != null && value != null) mergedAssetAttributes.put(key, value);
+      });
+    }
+    Map<String, Object> assetAttrs = Map.copyOf(mergedAssetAttributes);
 
     Optional<AssetRecord> existing = assetDao.findAssetByPath(runtime.id(), path);
     if (!replaceExisting && existing.isPresent()) {
-      return existingAsset(existing.get(), upload.digests(), responseFile);
+      AssetRecord prior = existing.orElseThrow();
+      if (!assetAttrs.equals(prior.attributes())) {
+        assetDao.updateAssetAttributes(prior.id(), assetAttrs);
+        prior = new AssetRecord(
+            prior.id(), prior.repositoryId(), prior.componentId(), prior.assetBlobId(),
+            prior.format(), prior.path(), prior.pathHash(), prior.name(), prior.kind(),
+            prior.contentType(), prior.size(), prior.lastDownloadedAt(), prior.lastUpdatedAt(),
+            assetAttrs);
+      }
+      return existingAsset(prior, upload.digests(), responseFile);
     }
     Long previousComponentId = existing.map(AssetRecord::componentId).orElse(null);
     Long previousBlobId = existing.map(AssetRecord::assetBlobId).orElse(null);
@@ -480,7 +551,6 @@ class RawAssetWriter {
     }
 
     Long componentId = componentId(runtime, path, now, componentBinding);
-    Map<String, Object> assetAttrs = Map.of("path", path);
     AssetRecord persistedAsset;
     boolean created;
     if (existing.isPresent()) {
@@ -603,13 +673,23 @@ class RawAssetWriter {
         }
         yield componentDao.upsertReturningId(component);
       }
+      case EXISTING -> {
+        ComponentRecord component = binding.component();
+        if (component.id() == null || component.repositoryId() != runtime.id()
+            || component.format() != runtime.format()) {
+          throw new IllegalArgumentException(
+              "Existing component must be persisted in the raw asset repository and format");
+        }
+        yield component.id();
+      }
     };
   }
 
   private enum ComponentMode {
     PER_ASSET,
     NONE,
-    EXPLICIT
+    EXPLICIT,
+    EXISTING
   }
 
   private record ComponentBinding(ComponentMode mode, ComponentRecord component) {
@@ -626,6 +706,13 @@ class RawAssetWriter {
         throw new IllegalArgumentException("Explicit component is required");
       }
       return new ComponentBinding(ComponentMode.EXPLICIT, component);
+    }
+
+    private static ComponentBinding existing(ComponentRecord component) {
+      if (component == null || component.id() == null) {
+        throw new IllegalArgumentException("Persisted component is required");
+      }
+      return new ComponentBinding(ComponentMode.EXISTING, component);
     }
   }
 
@@ -645,7 +732,7 @@ class RawAssetWriter {
       Map<String, ?> extraBlobAttributes) {
     Path tmp = null;
     try {
-      tmp = Files.createTempFile("kkrepo-raw-", ".tmp");
+      tmp = TempBlobFiles.createTempFile(storage, "kkrepo-raw-", ".tmp");
       MessageDigest md5 = digest("MD5");
       MessageDigest sha1 = digest("SHA-1");
       MessageDigest sha256 = digest("SHA-256");
@@ -797,6 +884,24 @@ class RawAssetWriter {
       return MessageDigest.getInstance(algorithm);
     } catch (NoSuchAlgorithmException e) {
       throw new IllegalStateException("Missing digest algorithm: " + algorithm, e);
+    }
+  }
+
+  private static String gitBlobOid(Path file, long size, int expectedLength) {
+    if (file == null || (expectedLength != 40 && expectedLength != 64)) {
+      throw new IllegalArgumentException("Unsupported protocol Git blob OID");
+    }
+    MessageDigest digest = digest(expectedLength == 40 ? "SHA-1" : "SHA-256");
+    digest.update(("blob " + size + "\0").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    try (InputStream input = Files.newInputStream(file)) {
+      byte[] buffer = new byte[64 * 1024];
+      int read;
+      while ((read = input.read(buffer)) >= 0) {
+        if (read > 0) digest.update(buffer, 0, read);
+      }
+      return hex(digest.digest());
+    } catch (IOException error) {
+      throw new IllegalStateException("Unable to verify protocol Git blob identity", error);
     }
   }
 

@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import org.springframework.web.util.HtmlUtils;
 import org.springframework.stereotype.Service;
@@ -160,6 +161,12 @@ public class MavenHtmlListingService {
       List<RepositoryRecord> sources,
       LinkedHashMap<String, BrowseNodeDao.BrowseChild> merged) {
     List<ListingEntry> entries = new ArrayList<>();
+    Map<Long, AssetRecord> huggingFaceAssets = repo.format() == RepositoryFormat.HUGGINGFACE
+        ? assetDao.findAssetsByIds(merged.values().stream()
+            .map(BrowseNodeDao.BrowseChild::assetId)
+            .filter(assetId -> assetId != null)
+            .toList())
+        : Map.of();
     BrowseNodeDao.BrowseChild npmDash = null;
     if (repo.format() == RepositoryFormat.NPM && !path.storagePath().isEmpty()) {
       for (BrowseNodeDao.BrowseChild child : merged.values()) {
@@ -175,6 +182,10 @@ public class MavenHtmlListingService {
         entries.addAll(flattenNpmTarballs(repo.name(), sources, child.path()));
       } else if (repo.format() == RepositoryFormat.PYPI && path.stripPypiPackages()) {
         entries.add(ListingEntry.fromPypiChild(repo.name(), child));
+      } else if (repo.format() == RepositoryFormat.HUGGINGFACE) {
+        entries.add(ListingEntry.fromHuggingFaceChild(
+            repo.name(), child,
+            child.assetId() == null ? null : huggingFaceAssets.get(child.assetId())));
       } else {
         entries.add(ListingEntry.fromChild(repo.name(), child));
       }
@@ -317,6 +328,19 @@ public class MavenHtmlListingService {
           ? "/repository/" + repoName + "/" + child.path()
           : child.displayName() + "/";
       return new ListingEntry(child.displayName(), href, leaf, child.assetSize(), child.assetLastUpdatedAt());
+    }
+
+    static ListingEntry fromHuggingFaceChild(
+        String repoName,
+        BrowseNodeDao.BrowseChild child,
+        AssetRecord asset) {
+      boolean leaf = child.leaf();
+      String downloadPath = leaf && asset != null ? asset.path() : child.path();
+      String href = leaf
+          ? "/repository/" + repoName + "/" + downloadPath
+          : child.displayName() + "/";
+      return new ListingEntry(
+          child.displayName(), href, leaf, child.assetSize(), child.assetLastUpdatedAt());
     }
 
     static ListingEntry directory(String name) {

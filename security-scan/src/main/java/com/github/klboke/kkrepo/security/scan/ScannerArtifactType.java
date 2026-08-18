@@ -34,7 +34,20 @@ public enum ScannerArtifactType {
   RPM(".rpm", "artifact.rpm"),
   DEB(".deb", "artifact.deb"),
   APK(".apk", "artifact.apk"),
-  IPA(".ipa", "artifact.ipa");
+  IPA(".ipa", "artifact.ipa"),
+  MODEL_INDEX(".safetensors.index.json", "model.safetensors.index.json"),
+  SAFETENSORS(".safetensors", "model.safetensors"),
+  PICKLE(".pickle", "model.pickle"),
+  PKL(".pkl", "model.pkl"),
+  PYTORCH(".pt", "model.pt"),
+  PYTORCH_WEIGHTS(".pth", "model.pth"),
+  CHECKPOINT(".ckpt", "model.ckpt"),
+  PYTORCH_BIN(".bin", "pytorch_model.bin"),
+  ONNX(".onnx", "model.onnx"),
+  KERAS(".keras", "model.keras"),
+  TENSORFLOW(".pb", "model.pb"),
+  FLAX_MSGPACK(".msgpack", "flax_model.msgpack"),
+  GGUF(".gguf", "model.gguf");
 
   private final String suffix;
   private final String safeFilename;
@@ -63,6 +76,7 @@ public enum ScannerArtifactType {
     String normalized = path.trim().replace('\\', '/').toLowerCase(Locale.ROOT);
     int separator = normalized.lastIndexOf('/');
     String filename = normalized.substring(separator + 1);
+    if (filename.endsWith(".bin.index.json")) return MODEL_INDEX;
     for (ScannerArtifactType type : values()) {
       if (type != UNKNOWN && filename.endsWith(type.suffix)) {
         return type;
@@ -102,6 +116,19 @@ public enum ScannerArtifactType {
       case "DEB" -> DEB;
       case "APK" -> APK;
       case "IPA" -> IPA;
+      case "MODEL_INDEX" -> MODEL_INDEX;
+      case "SAFETENSORS" -> SAFETENSORS;
+      case "PICKLE" -> PICKLE;
+      case "PKL" -> PKL;
+      case "PYTORCH" -> PYTORCH;
+      case "PYTORCH_WEIGHTS" -> PYTORCH_WEIGHTS;
+      case "CHECKPOINT" -> CHECKPOINT;
+      case "PYTORCH_BIN" -> PYTORCH_BIN;
+      case "ONNX" -> ONNX;
+      case "KERAS" -> KERAS;
+      case "TENSORFLOW" -> TENSORFLOW;
+      case "FLAX_MSGPACK" -> FLAX_MSGPACK;
+      case "GGUF" -> GGUF;
       default -> throw new IllegalArgumentException("Unsupported scanner artifact type");
     };
   }

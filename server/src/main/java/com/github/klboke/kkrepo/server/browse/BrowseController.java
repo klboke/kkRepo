@@ -289,6 +289,15 @@ public class BrowseController {
           .map(asset -> asset.path())
           .orElse(row.path());
     }
+    if (format == RepositoryFormat.HUGGINGFACE
+        && assetDao != null && row.assetId() != null) {
+      return assetDao.findAssetById(row.assetId())
+          .filter(asset -> asset.repositoryId() == sourceRepository.id())
+          .map(asset -> asset.path())
+          .orElseThrow(() -> new ResponseStatusException(
+              HttpStatus.CONFLICT,
+              "Hugging Face Browse asset is missing its canonical download path"));
+    }
     return row.path();
   }
 

@@ -305,8 +305,26 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
       case CONAN -> conanOperation(path, normalizedMethod);
       case APT -> aptOperation(path, normalizedMethod);
       case ALPINE -> alpineOperation(path, normalizedMethod);
+      case HUGGINGFACE -> huggingFaceOperation(path, normalizedMethod);
       case RAW -> rawOperation(normalizedMethod);
     };
+  }
+
+  private static String huggingFaceOperation(String path, String method) {
+    if (path.startsWith("api/models/") && path.contains("/paths-info/")) {
+      return "huggingface_paths_info";
+    }
+    if (path.startsWith("api/models/") && path.contains("/tree/")) {
+      return "huggingface_tree";
+    }
+    if (path.startsWith("api/models/") && path.endsWith("/refs")) {
+      return "huggingface_refs";
+    }
+    if (path.startsWith("api/models/")) return "huggingface_model_info";
+    if (path.contains("/resolve/")) {
+      return "HEAD".equals(method) ? "huggingface_file_head" : "huggingface_file_download";
+    }
+    return "huggingface_repository";
   }
 
   private static String alpineOperation(String path, String method) {

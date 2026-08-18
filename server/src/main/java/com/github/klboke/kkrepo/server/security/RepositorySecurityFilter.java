@@ -418,6 +418,10 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     if (format == RepositoryFormat.ALPINE && "PUT".equalsIgnoreCase(method)) {
       return List.of(PermissionAction.ADD, PermissionAction.EDIT);
     }
+    if (format == RepositoryFormat.HUGGINGFACE && "POST".equalsIgnoreCase(method)
+        && path != null && path.startsWith("api/models/") && path.contains("/paths-info/")) {
+      return List.of(PermissionAction.READ);
+    }
     if (format == RepositoryFormat.SWIFT && "POST".equalsIgnoreCase(method)
         && "login".equals(path)) {
       return List.of(PermissionAction.READ);

@@ -3,15 +3,16 @@ package com.github.klboke.kkrepo.server.nativeimage;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Expiry;
 import com.github.benmanes.caffeine.cache.RemovalCause;
+import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ConcurrentMap;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 import org.springframework.aot.hint.MemberCategory;
@@ -23,34 +24,45 @@ class CaffeineRuntimeHintsTest {
 
   @Test
   void registersImplementationsSelectedByKkRepoCacheConfigurations() throws Exception {
-    List<Cache<Object, Object>> caches =
+    List<ConcurrentMap<Object, Object>> cacheMaps =
         List.of(
             Caffeine.newBuilder()
                 .maximumSize(100_000)
-                .build(),
+                .build()
+                .asMap(),
             Caffeine.newBuilder()
                 .maximumSize(10)
                 .expireAfter(
                     Expiry.creating((Object key, Object value) -> Duration.ofMinutes(1)))
-                .build(),
+                .build()
+                .asMap(),
             Caffeine.newBuilder()
                 .maximumWeight(10)
                 .weigher((Object key, Object value) -> 1)
                 .expireAfterAccess(Duration.ofMinutes(1))
-                .build(),
+                .build()
+                .asMap(),
             Caffeine.newBuilder()
                 .maximumSize(10)
                 .expireAfterWrite(Duration.ofMinutes(1))
-                .build(),
+                .build()
+                .asMap(),
             Caffeine.newBuilder()
                 .expireAfterAccess(Duration.ofMinutes(1))
                 .removalListener((Object key, Object value, RemovalCause cause) -> {})
-                .build());
+                .build()
+                .asMap(),
+            LocalCacheFactory.standard()
+                .<Object, Object>builder("native-hints-maximum-size-expire-after-access")
+                .maximumSize(100_000)
+                .expireAfterAccess(Duration.ofMinutes(1))
+                .build()
+                .asMap());
     Set<String> selectedTypes =
-        caches.stream().map(cache -> cache.asMap().getClass().getName()).collect(Collectors.toSet());
+        cacheMaps.stream().map(map -> map.getClass().getName()).collect(Collectors.toSet());
     Set<String> selectedNodeTypes = new HashSet<>();
-    for (Cache<Object, Object> cache : caches) {
-      selectedNodeTypes.add(nodeFactoryType(cache));
+    for (ConcurrentMap<Object, Object> map : cacheMaps) {
+      selectedNodeTypes.add(nodeFactoryType(map));
     }
 
     assertEquals(Set.copyOf(CaffeineRuntimeHints.BOUNDED_CACHE_TYPES), selectedTypes);
@@ -76,13 +88,13 @@ class CaffeineRuntimeHintsTest {
     }
   }
 
-  private static String nodeFactoryType(Cache<?, ?> cache) throws Exception {
-    Class<?> type = cache.asMap().getClass();
+  private static String nodeFactoryType(ConcurrentMap<?, ?> map) throws Exception {
+    Class<?> type = map.getClass();
     while (type != null) {
       try {
         Field field = type.getDeclaredField("nodeFactory");
         field.setAccessible(true);
-        return field.get(cache.asMap()).getClass().getName();
+        return field.get(map).getClass().getName();
       } catch (NoSuchFieldException ignored) {
         type = type.getSuperclass();
       }

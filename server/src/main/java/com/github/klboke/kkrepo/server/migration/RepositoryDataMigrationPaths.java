@@ -2,6 +2,8 @@ package com.github.klboke.kkrepo.server.migration;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
+import com.github.klboke.kkrepo.protocol.huggingface.HuggingFacePath;
+import com.github.klboke.kkrepo.protocol.huggingface.HuggingFacePathParser;
 import com.github.klboke.kkrepo.server.pub.PubRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.alpine.AlpineRepositoryDataMigrationWriter;
@@ -53,6 +55,11 @@ final class RepositoryDataMigrationPaths {
     }
     if (format == RepositoryFormat.CONAN) {
       return ConanRepositoryDataMigrationWriter.isMigratableConanPath(path);
+    }
+    if (format == RepositoryFormat.HUGGINGFACE) {
+      HuggingFacePath parsed = new HuggingFacePathParser().parse(path);
+      return parsed.kind() == HuggingFacePath.Kind.RESOLVE
+          && HuggingFacePathParser.isCommit(parsed.revision());
     }
     return true;
   }

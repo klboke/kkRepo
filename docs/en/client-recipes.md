@@ -609,6 +609,24 @@ Use protected client configuration for authenticated repository URLs. Hosted/gro
 locally signed; passthrough proxies retain the upstream signature. See the
 [Alpine / APK Repository Guide](repository-guides/alpine-apk.md).
 
+## Hugging Face Models
+
+Create a Models-only `huggingface-proxy`, then point the Hub client at its repository root:
+
+```bash
+export HF_ENDPOINT='https://nexus.example.com/repository/huggingface-models'
+export HF_HUB_DOWNLOAD_TIMEOUT=120
+export HF_HUB_ETAG_TIMEOUT=1800
+
+hf download sshleifer/tiny-gpt2 config.json
+hf download sshleifer/tiny-gpt2 --include '*.json' '*.safetensors'
+```
+
+For local authentication, expose a read-scoped kkRepo `GenericToken` as `HF_TOKEN`. Configure a
+separate remote bearer token on the repository only when the upstream model is private or gated.
+`huggingface_hub`, Transformers, and Diffusers inherit the same `HF_ENDPOINT`. See the
+[Hugging Face Models Repository Guide](repository-guides/hugging-face-models.md).
+
 ## NuGet
 
 Add a source:

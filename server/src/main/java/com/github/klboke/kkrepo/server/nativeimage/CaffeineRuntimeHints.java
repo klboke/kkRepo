@@ -20,6 +20,7 @@ public final class CaffeineRuntimeHints implements RuntimeHintsRegistrar {
   static final List<String> NODE_TYPES =
       List.of(
           CACHE_PACKAGE + "PSMS",
+          CACHE_PACKAGE + "PSAMS",
           CACHE_PACKAGE + "PSWMS",
           CACHE_PACKAGE + "PSAMW",
           CACHE_PACKAGE + "PSA");

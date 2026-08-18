@@ -74,6 +74,7 @@
 .icon-file-key { --lucide-icon: url("./icons/file-key.svg"); }
 .icon-file-check { --lucide-icon: url("./icons/file-check.svg"); }
 .icon-binary { --lucide-icon: url("./icons/binary.svg"); }
+.icon-layers { --lucide-icon: url("./icons/layers.svg"); }
 .icon-minus { --lucide-icon: url("./icons/minus.svg"); }
 .icon-circle-slash { --lucide-icon: url("./icons/circle-slash-2.svg"); }
 .icon-list-filter { --lucide-icon: url("./icons/list-filter.svg"); }

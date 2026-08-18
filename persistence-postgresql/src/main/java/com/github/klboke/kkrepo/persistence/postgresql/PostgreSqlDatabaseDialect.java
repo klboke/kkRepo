@@ -8,6 +8,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.spi.CoordinationPersistenceDial
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseType;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.JsonPersistenceDialect;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.HuggingFacePersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.MigrationPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.SearchPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.SecurityPersistenceDialect;
@@ -29,6 +30,8 @@ public final class PostgreSqlDatabaseDialect implements DatabaseDialect {
       new PostgreSqlComponentPersistenceDialect(json);
   private final CondaPersistenceDialect conda = new PostgreSqlCondaPersistenceDialect();
   private final ConanPersistenceDialect conan = new PostgreSqlConanPersistenceDialect();
+  private final HuggingFacePersistenceDialect huggingFace =
+      new PostgreSqlHuggingFacePersistenceDialect();
   private final CoordinationPersistenceDialect coordination =
       new PostgreSqlCoordinationPersistenceDialect();
   private final SearchPersistenceDialect search = new PostgreSqlSearchPersistenceDialect();
@@ -70,6 +73,11 @@ public final class PostgreSqlDatabaseDialect implements DatabaseDialect {
   @Override
   public ConanPersistenceDialect conan() {
     return conan;
+  }
+
+  @Override
+  public HuggingFacePersistenceDialect huggingFace() {
+    return huggingFace;
   }
 
   @Override
@@ -291,6 +299,20 @@ public final class PostgreSqlDatabaseDialect implements DatabaseDialect {
     @Override
     public int streamingFetchSize() {
       return 512;
+    }
+  }
+
+  private static final class PostgreSqlHuggingFacePersistenceDialect
+      implements HuggingFacePersistenceDialect {
+    @Override
+    public String insertFetchLeaseIfAbsentSql() {
+      return """
+          INSERT INTO proxy_fetch_lease
+            (repository_id, fetch_key, fetch_key_hash, owner, fencing_token, attempt_count,
+             expires_at, updated_at)
+          VALUES (?, ?, ?, ?, 1, 1, ?, ?)
+          ON CONFLICT (repository_id, fetch_key_hash) DO NOTHING
+          """;
     }
   }
 

@@ -21,6 +21,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupSca
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupUsage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.HuggingFaceRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
@@ -145,6 +146,40 @@ class CleanupSubjectScannerExtendedTest {
 
     assertEquals(2, result.scannedSubjects());
     assertEquals(2, result.candidates().size());
+  }
+
+  @Test
+  void huggingFaceCleanupRetainsLiveRefsAndInFlightRevisionFills() {
+    RepositoryRecord repository = repository(
+        RepositoryFormat.HUGGINGFACE, RepositoryType.PROXY);
+    ComponentRecord protectedRevision = component(
+        61, RepositoryFormat.HUGGINGFACE, "openai", "demo", "a".repeat(40));
+    ComponentRecord staleRevision = component(
+        62, RepositoryFormat.HUGGINGFACE, "openai", "demo", "b".repeat(40));
+    AssetRecord protectedAsset = asset(
+        161, 61L, RepositoryFormat.HUGGINGFACE,
+        "models/openai/demo/resolve/" + "a".repeat(40) + "/model.safetensors",
+        "model-file", 10L, OLD);
+    AssetRecord staleAsset = asset(
+        162, 62L, RepositoryFormat.HUGGINGFACE,
+        "models/openai/demo/resolve/" + "b".repeat(40) + "/model.safetensors",
+        "model-file", 10L, OLD);
+    HuggingFaceRegistryDao registry = mock(HuggingFaceRegistryDao.class);
+    scanner.setHuggingFaceRegistry(registry);
+    when(registry.isRevisionProtected(1, 61)).thenReturn(true);
+    when(registry.isRevisionProtected(1, 62)).thenReturn(false);
+    when(components.listCleanupPage(1, null, 11))
+        .thenReturn(List.of(protectedRevision, staleRevision));
+    when(assets.listAssetsByComponents(List.of(61L, 62L)))
+        .thenReturn(List.of(protectedAsset, staleAsset));
+    when(assets.listUnboundAssetWithBlobPage(1, 0, 10)).thenReturn(List.of());
+
+    var result = scanner.scan(
+        repository, Map.of("publishedOlderThanDays", 30), 10, CUTOFF);
+
+    assertEquals(1, result.scannedSubjects());
+    assertEquals(1, result.candidates().size());
+    assertEquals(62, result.candidates().getFirst().subject().identityId());
   }
 
   @Test

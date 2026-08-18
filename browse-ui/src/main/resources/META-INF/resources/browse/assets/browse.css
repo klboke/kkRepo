@@ -2543,6 +2543,11 @@ body {
   color: #5e6965;
 }
 
+.tree-icon.icon-layers,
+.crumb-icon.icon-layers {
+  color: #4f6f86;
+}
+
 .tree-icon.icon-files,
 .tree-icon.icon-file,
 .crumb-icon.icon-files,

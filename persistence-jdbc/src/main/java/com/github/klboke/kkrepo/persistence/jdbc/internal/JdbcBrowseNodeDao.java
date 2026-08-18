@@ -5,7 +5,7 @@ import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRow
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao.BrowseChild;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.HashColumns;
-import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcUpserts;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcInserts;
 import java.nio.ByteBuffer;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -13,6 +13,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
@@ -77,31 +78,44 @@ public class JdbcBrowseNodeDao implements com.github.klboke.kkrepo.persistence.j
       Long componentForRow = leaf ? componentId : null;
       ExistingNode existing = existingByHash.get(ByteBuffer.wrap(level.pathHash));
       if (existing == null) {
-        Object[] updateArguments = {
-            parentId, assetForRow != null, componentForRow, assetForRow != null, assetForRow,
-            containsAsset,
-            repositoryId, level.pathHash
-        };
-        JdbcUpserts.updateThenInsert(
-            jdbcTemplate,
-            """
-            UPDATE browse_node
-            SET parent_id = COALESCE(parent_id, ?),
-                component_id = CASE WHEN ? THEN ? ELSE component_id END,
-                asset_id = CASE WHEN ? THEN ? ELSE asset_id END,
-                has_asset_subtree = CASE WHEN ? THEN true ELSE has_asset_subtree END
-            WHERE repository_id = ? AND path_hash = ?
-            """,
-            updateArguments,
-            """
+        Long expectedParentId = parentId;
+        OptionalLong inserted = JdbcInserts.tryInsert(jdbcTemplate, """
             INSERT INTO browse_node
               (repository_id, parent_id, component_id, asset_id, path, path_hash,
                display_name, depth, has_asset_subtree)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            new Object[]{repositoryId, parentId, componentForRow, assetForRow, level.path,
-                level.pathHash, level.displayName, level.depth, containsAsset});
-        parentId = findIdByPathHash(repositoryId, level.pathHash);
+            """, ps -> {
+          ps.setLong(1, repositoryId);
+          if (expectedParentId == null) ps.setNull(2, java.sql.Types.BIGINT);
+          else ps.setLong(2, expectedParentId);
+          if (componentForRow == null) ps.setNull(3, java.sql.Types.BIGINT);
+          else ps.setLong(3, componentForRow);
+          if (assetForRow == null) ps.setNull(4, java.sql.Types.BIGINT);
+          else ps.setLong(4, assetForRow);
+          ps.setString(5, level.path);
+          ps.setBytes(6, level.pathHash);
+          ps.setString(7, level.displayName);
+          ps.setInt(8, level.depth);
+          ps.setBoolean(9, containsAsset);
+        });
+        if (inserted.isPresent()) {
+          parentId = inserted.getAsLong();
+        } else {
+          // Another replica inserted this segment after the batch read. Reconcile the mutable
+          // linkage, then continue from the winner's generated id.
+          jdbcTemplate.update(
+              """
+              UPDATE browse_node
+              SET parent_id = COALESCE(parent_id, ?),
+                  component_id = CASE WHEN ? THEN ? ELSE component_id END,
+                  asset_id = CASE WHEN ? THEN ? ELSE asset_id END,
+                  has_asset_subtree = CASE WHEN ? THEN true ELSE has_asset_subtree END
+              WHERE repository_id = ? AND path_hash = ?
+              """,
+              expectedParentId, assetForRow != null, componentForRow,
+              assetForRow != null, assetForRow, containsAsset, repositoryId, level.pathHash);
+          parentId = findIdByPathHash(repositoryId, level.pathHash);
+        }
       } else {
         if (leaf && (assetForRow != null || componentForRow != null)) {
           jdbcTemplate.update(

@@ -8,6 +8,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.CandidateDisposition;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.SubjectKind;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.TargetClassification;
+import com.github.klboke.kkrepo.protocol.huggingface.HuggingFaceFileKind;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -36,6 +37,11 @@ public class SecurityScanCandidateClassifier {
     if (asset.format() != RepositoryFormat.CONAN
         || !isConanPackageArchive(asset.path().toLowerCase(Locale.ROOT),
             asset.kind() == null ? "" : asset.kind().toLowerCase(Locale.ROOT))) {
+      if (asset.format() == RepositoryFormat.HUGGINGFACE) {
+        attributes.putAll(asset.attributes() == null ? Map.of() : asset.attributes());
+        return new SubjectIdentity(
+            "hf-model-file:sha256:" + blob.sha256(), Map.copyOf(attributes), true);
+      }
       return new SubjectIdentity("sha256:" + blob.sha256(), Map.copyOf(attributes), true);
     }
     if (conanDao == null) {
@@ -142,6 +148,8 @@ public class SecurityScanCandidateClassifier {
           && !path.startsWith(".apt/") && !path.contains("/.apt/");
       case ALPINE -> hasAnySuffix(path, ".apk")
           && !path.startsWith(".alpine/") && !path.contains("/.alpine/");
+      case HUGGINGFACE -> HuggingFaceFileKind.classify(path).modelBinary()
+          || HuggingFaceFileKind.classify(path) == HuggingFaceFileKind.SHARD_INDEX;
       case NUGET -> hasAnySuffix(path, ".nupkg") && !hasAnySuffix(path, ".snupkg");
       case RUBYGEMS -> hasAnySuffix(path, ".gem") && !containsAny(kind, "index", "spec");
       case YUM -> hasAnySuffix(path, ".rpm") && !path.contains("/repodata/");
@@ -153,10 +161,13 @@ public class SecurityScanCandidateClassifier {
     }
     TargetClassification target = format == RepositoryFormat.RAW
         ? TargetClassification.ARCHIVE
-        : TargetClassification.PACKAGE;
+        : format == RepositoryFormat.HUGGINGFACE
+            ? TargetClassification.MODEL
+            : TargetClassification.PACKAGE;
     SubjectKind subjectKind = switch (format) {
       case CONAN -> SubjectKind.CONAN_PACKAGE;
       case CONDA -> SubjectKind.CONDA_PACKAGE;
+      case HUGGINGFACE -> SubjectKind.HF_MODEL_FILE;
       default -> SubjectKind.ASSET_BLOB;
     };
     return scannable(subjectKind, target);

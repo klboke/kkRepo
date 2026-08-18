@@ -79,7 +79,8 @@ final class NexusMigrationAdapters {
           || ("conda".equals(normalizedFormat) && "hosted".equals(normalizedType))
           || ("conan".equals(normalizedFormat) && !"group".equals(normalizedType))
           || ("apt".equals(normalizedFormat) && "hosted".equals(normalizedType))
-          || ("alpine".equals(normalizedFormat) && "hosted".equals(normalizedType));
+          || ("alpine".equals(normalizedFormat) && "hosted".equals(normalizedType))
+          || ("huggingface".equals(normalizedFormat) && "proxy".equals(normalizedType));
     }
 
     @Override
@@ -147,7 +148,7 @@ final class NexusMigrationAdapters {
       return !"cargo".equals(normalized) && !"pub".equals(normalized)
           && !"swift".equals(normalized) && !"ansiblegalaxy".equals(normalized)
           && !"conda".equals(normalized) && !"conan".equals(normalized)
-          && !"alpine".equals(normalized);
+          && !"alpine".equals(normalized) && !"huggingface".equals(normalized);
     }
 
     @Override

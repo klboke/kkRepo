@@ -109,6 +109,23 @@ class RepositoryDataMigrationPathsTest {
   }
 
   @Test
+  void huggingFaceDiscoveryKeepsOnlyCommitPinnedResolveAssets() {
+    String commit = "0123456789abcdef0123456789abcdef01234567";
+
+    assertTrue(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.HUGGINGFACE, "openai/gpt-oss/resolve/" + commit + "/config.json"));
+    assertTrue(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.HUGGINGFACE, "legacy-model/resolve/" + commit + "/weights/model.bin"));
+
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.HUGGINGFACE, "openai/gpt-oss/resolve/main/config.json"));
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.HUGGINGFACE, "api/models/openai/gpt-oss"));
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.HUGGINGFACE, "openai/gpt-oss/resolve/" + commit + "/../secret"));
+  }
+
+  @Test
   void checksumGenerationRunsForMavenNonChecksumContent() {
     assertTrue(RepositoryDataMigrationPaths.shouldGenerateMavenChecksumSiblings(
         MAVEN_PATH_PARSER.parsePath("com/acme/app/1.0/app-1.0.jar")));

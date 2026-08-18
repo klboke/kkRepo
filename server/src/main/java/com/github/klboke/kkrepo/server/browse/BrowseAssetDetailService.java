@@ -235,6 +235,9 @@ public class BrowseAssetDetailService {
     Map<String, Object> ansible = source.format() == RepositoryFormat.ANSIBLEGALAXY
         ? ansibleAttributes(source, asset, ansibleVersion)
         : Map.of();
+    Map<String, Object> huggingFace = source.format() == RepositoryFormat.HUGGINGFACE
+        ? huggingFaceAttributes(asset)
+        : Map.of();
     String displayName = storagePath.equals(publicPath)
         ? asset.name()
         : publicPath.substring(publicPath.lastIndexOf('/') + 1);
@@ -272,6 +275,7 @@ public class BrowseAssetDetailService {
         conda,
         apt,
         alpine,
+        huggingFace,
         swift,
         ansible,
         provenance);
@@ -559,6 +563,7 @@ public class BrowseAssetDetailService {
           Map.of(),
           Map.of(),
           Map.of(),
+          Map.of(),
           swiftReleaseAttributes(source, row),
           Map.of(),
           Map.of("dynamic", true, "hashes_not_verified", false)));
@@ -652,6 +657,7 @@ public class BrowseAssetDetailService {
           null,
           Map.copyOf(checksum),
           Map.of("generated", true, "format", "swift-manifest-browse"),
+          Map.of(),
           Map.of(),
           Map.of(),
           Map.of(),
@@ -805,6 +811,7 @@ public class BrowseAssetDetailService {
         Map.of(),
         Map.of(),
         Map.of(),
+        Map.of(),
         provenance);
   }
 
@@ -838,7 +845,22 @@ public class BrowseAssetDetailService {
         Map.of(),
         Map.of(),
         Map.of(),
+        Map.of(),
         provenance);
+  }
+
+  private static Map<String, Object> huggingFaceAttributes(AssetRecord asset) {
+    Map<String, Object> attributes = asset.attributes() == null ? Map.of() : asset.attributes();
+    if (!"model-file".equals(attributes.get("huggingfaceRole"))) return Map.of();
+    LinkedHashMap<String, Object> values = new LinkedHashMap<>();
+    for (String key : List.of(
+        "repoId", "commit", "requestedRef", "filePath", "fileKind", "gitOid",
+        "lfsSha256", "expectedSize", "library", "pipeline",
+        "license", "private", "gated")) {
+      put(values, key, attributes.get(key));
+    }
+    values.put("cacheState", "READY");
+    return Collections.unmodifiableMap(values);
   }
 
   private static Map<String, Object> composerAttributes(AssetRecord asset) {
@@ -948,7 +970,12 @@ public class BrowseAssetDetailService {
       String normalized,
       String sourceRepositoryName) {
     if (visibleRepository.format() == RepositoryFormat.CONAN) {
-      return conanStoragePath(visibleRepository, normalized, sourceRepositoryName);
+      return projectedStoragePath(
+          visibleRepository, normalized, sourceRepositoryName, "Conan");
+    }
+    if (visibleRepository.format() == RepositoryFormat.HUGGINGFACE) {
+      return projectedStoragePath(
+          visibleRepository, normalized, sourceRepositoryName, "Hugging Face");
     }
     if (visibleRepository.format() == RepositoryFormat.TERRAFORM && terraformDao != null) {
       Optional<TerraformBrowseAssetPathResolver.ResolvedStoragePath> terraform =
@@ -1018,13 +1045,14 @@ public class BrowseAssetDetailService {
     return new ResolvedStoragePath(normalized, sourceRepositoryName);
   }
 
-  private ResolvedStoragePath conanStoragePath(
+  private ResolvedStoragePath projectedStoragePath(
       RepositoryRecord visibleRepository,
       String browsePath,
-      String sourceRepositoryName) {
+      String sourceRepositoryName,
+      String formatLabel) {
     if (browseNodeDao == null) {
       throw new ResponseStatusException(
-          HttpStatus.CONFLICT, "Conan Browse projection is unavailable");
+          HttpStatus.CONFLICT, formatLabel + " Browse projection is unavailable");
     }
     List<RepositoryRecord> sources = visibleRepository.type() == RepositoryType.GROUP
         ? repositoryDao.listMembers(visibleRepository.id())
@@ -1043,7 +1071,8 @@ public class BrowseAssetDetailService {
         return new ResolvedStoragePath(asset.orElseThrow().path(), source.name());
       }
     }
-    throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Conan Browse asset not found");
+    throw new ResponseStatusException(
+        HttpStatus.NOT_FOUND, formatLabel + " Browse asset not found");
   }
 
   private static String conanFileRoute(ConanRegistryDao.AssetFile file) {
@@ -1592,6 +1621,7 @@ public class BrowseAssetDetailService {
       Map<String, Object> conda,
       Map<String, Object> apt,
       Map<String, Object> alpine,
+      Map<String, Object> huggingface,
       Map<String, Object> swift,
       Map<String, Object> ansible,
       Map<String, Object> provenance) {}

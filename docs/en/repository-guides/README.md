@@ -28,6 +28,7 @@ the recipe combinations and protocol boundaries supported by each format.
 | APT / Debian | hosted / proxy | [APT / Debian recipe](../client-recipes.md#apt--debian) | [APT / Debian Repository Guide](apt-debian.md) |
 | Conan 2 | hosted / proxy / group | [Conan 2 recipe](../client-recipes.md#conan-2) | [Conan 2 Repository Guide](conan-2.md) |
 | Alpine / APK | hosted / proxy / group | [Alpine / APK recipe](../client-recipes.md#alpine--apk) | [Alpine / APK Repository Guide](alpine-apk.md) |
+| Hugging Face Models | proxy | [Hugging Face Models recipe](../client-recipes.md#hugging-face-models) | [Hugging Face Models Repository Guide](hugging-face-models.md) |
 | NuGet | hosted / proxy / group | [NuGet recipe](../client-recipes.md#nuget) | [NuGet Repository Guide](nuget.md) |
 | RubyGems | hosted / proxy / group | [RubyGems recipe](../client-recipes.md#rubygems) | [RubyGems Repository Guide](rubygems.md) |
 | Yum | hosted / proxy / group | [Yum recipe](../client-recipes.md#yum) | [Yum Repository Guide](yum.md) |

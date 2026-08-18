@@ -46,6 +46,9 @@ class RepositoryRecipesTest {
     assertRecipe(recipes, "apt-hosted", RepositoryFormat.APT, RepositoryType.HOSTED);
     assertRecipe(recipes, "apt-proxy", RepositoryFormat.APT, RepositoryType.PROXY);
     assertTrue(!recipes.containsKey("apt-group"));
+    assertRecipe(recipes, "huggingface-proxy", RepositoryFormat.HUGGINGFACE, RepositoryType.PROXY);
+    assertTrue(!recipes.containsKey("huggingface-hosted"));
+    assertTrue(!recipes.containsKey("huggingface-group"));
   }
 
   private static void assertRecipe(

@@ -144,6 +144,55 @@ class HttpRemoteFetcherProxyTest {
   }
 
   @Test
+  void pathsInfoPostPreservesBodyOn307AndOnlyInheritsIdentityHeaders() throws Exception {
+    AtomicInteger calls = new AtomicInteger();
+    byte[] body = "{\"paths\":[\"config.json\"]}".getBytes(StandardCharsets.UTF_8);
+    try (FakeHttpProxyServer proxy = FakeHttpProxyServer.start(request -> {
+          if (calls.incrementAndGet() == 1) {
+            return FakeHttpProxyServer.FakeResponse.status(307, Map.of(
+                "Location", "/moved/paths-info",
+                "X-Repo-Commit", "0123456789abcdef0123456789abcdef01234567",
+                "X-Xet-Hash", "internal-only",
+                "Set-Cookie", "must-not-be-inherited"));
+          }
+          return FakeHttpProxyServer.FakeResponse.bytes(
+              200, Map.of("Content-Type", "application/json"), "[]".getBytes(StandardCharsets.UTF_8));
+        });
+        ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      HttpRemoteFetcher fetcher = proxiedFetcher(factory);
+      HttpRemoteFetcher.Request request = new HttpRemoteFetcher.Request(
+          "http://localhost/api/models/org/model/paths-info/main",
+          null, null, null,
+          HttpRemoteFetcher.TimeoutProfile.METADATA,
+          false,
+          "huggingface-proxy",
+          "HUGGINGFACE",
+          "localhost",
+          "Bearer upstream-secret",
+          Set.of(),
+          proxyConfig(proxy.port(), null, null))
+          .withAccept("application/json")
+          .withBody("application/json", body);
+
+      try (HttpRemoteFetcher.Result result = fetcher.fetch(request)) {
+        assertEquals(200, result.status());
+        assertEquals(
+            "0123456789abcdef0123456789abcdef01234567",
+            result.header("X-Repo-Commit"));
+        assertEquals("internal-only", result.header("X-Xet-Hash"));
+        assertNull(result.header("Set-Cookie"));
+      }
+
+      assertEquals(2, proxy.requests().size());
+      assertEquals("POST", proxy.requests().get(0).method());
+      assertEquals("POST", proxy.requests().get(1).method());
+      assertEquals("application/json", proxy.requests().get(0).header("Content-Type"));
+      assertEquals(Integer.toString(body.length), proxy.requests().get(0).header("Content-Length"));
+      assertEquals("Bearer upstream-secret", proxy.requests().get(1).header("Authorization"));
+    }
+  }
+
+  @Test
   void proxiedHeadFetchUsesHeadMethod() throws Exception {
     try (FakeHttpProxyServer proxy = FakeHttpProxyServer.start(request ->
             FakeHttpProxyServer.FakeResponse.status(200, Map.of("ETag", "\"head-etag\"")));

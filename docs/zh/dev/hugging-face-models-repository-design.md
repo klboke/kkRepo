@@ -4,7 +4,15 @@
 
 ## 当前状态与落地结论
 
-截至 2026-08-17，kkrepo 尚未实现 Hugging Face Models 仓库：`RepositoryFormat` 中没有 `HUGGINGFACE`，`RepositoryRecipes` 中没有 `huggingface-proxy`，根 Maven reactor 中也没有 `protocol-huggingface`。本文是实现前的协议、数据和验收基线；只有本文的真实客户端、Nexus 黑盒、多副本、迁移、安全和性能门禁全部通过后，路线图才能标记为已完成。
+截至 2026-08-17，kkrepo 已完成首期 Hugging Face Models proxy 落地：`RepositoryFormat.HUGGINGFACE`、`huggingface-proxy`、独立 `protocol-huggingface`、双数据库 V48 schema、服务端协议 adapter、Admin/Browse/Search、Cleanup、安全扫描、Nexus 迁移与兼容/性能 fixture 均已接入。路线图中的完成状态仅指本文明确限定的 **Models proxy**；hosted、group、Datasets、Spaces、推理和写入能力仍属于后续独立范围。
+
+实现证据：
+
+- `huggingface_hub` 0.34.6 与 1.27.0 的 `hf_hub_download`、`snapshot_download`，以及 `hf` CLI 单文件/过滤 snapshot 均通过；kkrepo 补齐了 Nexus 3.94 在当前客户端 tree/paths-info 流程上的 `400` 缺口。
+- 公网模型验证覆盖 Transformers `AutoConfig`/`AutoTokenizer`/`AutoModel.from_pretrained` 与 Diffusers `DiffusionPipeline.from_pretrained`；安装 Xet 且未禁用时，客户端仍不请求本地 Xet token/CAS，也不绕过 kkRepo。
+- PostgreSQL + MinIO 双副本同时 cold miss 同一模型文件时，两端返回相同完整 SHA-256，fixture 仅收到一次 resolve 与一次完整 body，持久化 `READY` 状态由 fencing token 发布。
+- Nexus 3.94 同机 4 MiB 基线中，5 组全新仓库的冷填充中位吞吐比为 `1.009x`；并发 16、每轮 500 请求、5 轮的全部 warm metadata/file 门禁通过。原始结果与复现方法见[性能基线](hugging-face-models-performance-baseline.md)。
+- 运维与客户端配置见[Hugging Face Models 仓库使用指南](../repository-guides/hugging-face-models.md)，公开兼容边界见[兼容性矩阵](../compatibility-matrix.md)。
 
 落地结论如下：
 
@@ -538,7 +546,7 @@ Dry-run报告repository、model revisions、files、bytes、public/gated/private
 - Browse/Search/component与Nexus fixture对齐，当前client tree兼容缺口被补齐；alias投影不复制Blob或扫描任务。
 - Cleanup按完整commit安全删除；SafeTensors/pickle等扫描不执行模型或代码，upstream security字段不冒充本地PASSED。
 - Nexus migration对unknown shape、invalid commit、corrupt Blob和missing secret失败关闭，dry-run/resume/checksum/报告完整。
-- MySQL/PostgreSQL关键查询命中高效索引；S3大文件、百万row、并发cold miss和同机Nexus性能门禁全部通过后，路线图才增加`✅`。
+- MySQL/PostgreSQL关键身份、ref、file、lease/fencing 与 keyset 查询由双库 contract 和声明索引约束；S3 双副本并发 cold miss 与同机 Nexus 4 MiB 协议性能门禁已通过。256 MiB/5 GiB、百万 row、跨可用区对象存储和后台混合负载属于部署容量验收，必须在目标生产规格上运行，不能把本机结果当作 SLA。
 
 ## 参考资料
 

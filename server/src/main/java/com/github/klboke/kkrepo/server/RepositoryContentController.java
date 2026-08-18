@@ -38,6 +38,7 @@ import com.github.klboke.kkrepo.server.goartifact.GoGroupService;
 import com.github.klboke.kkrepo.server.goartifact.GoProxyService;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
 import com.github.klboke.kkrepo.server.helm.HelmProxyService;
+import com.github.klboke.kkrepo.server.huggingface.HuggingFaceService;
 import com.github.klboke.kkrepo.server.http.ConditionalResponses;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenGroupService;
@@ -152,6 +153,7 @@ public class RepositoryContentController {
   private ConanService conan;
   private AptService apt;
   private AlpineService alpine;
+  private HuggingFaceService huggingFace;
   private final NugetService nuget;
   private final RubygemsService rubygems;
   private final YumService yum;
@@ -202,6 +204,11 @@ public class RepositoryContentController {
   @Autowired(required = false)
   void setAlpineService(AlpineService alpine) {
     this.alpine = alpine;
+  }
+
+  @Autowired(required = false)
+  void setHuggingFaceService(HuggingFaceService huggingFace) {
+    this.huggingFace = huggingFace;
   }
 
   @Autowired
@@ -394,6 +401,9 @@ public class RepositoryContentController {
     }
     if (runtime.format() == RepositoryFormat.ALPINE) {
       return toHeadResponse(dispatchAlpineGet(runtime, name, request, true), request);
+    }
+    if (runtime.format() == RepositoryFormat.HUGGINGFACE) {
+      return toHeadResponse(dispatchHuggingFaceGet(runtime, name, request, true), request);
     }
     if (runtime.format() == RepositoryFormat.PYPI) {
       String raw = extractRepositoryPath(name, request, true);
@@ -727,6 +737,23 @@ public class RepositoryContentController {
   @PostMapping("/**")
   public ResponseEntity<?> post(@PathVariable("name") String name, HttpServletRequest request) {
     RepositoryRuntime runtime = resolveRuntime(name, request);
+    if (runtime.format() == RepositoryFormat.HUGGINGFACE) {
+      String raw = extractRepositoryPath(name, request, true);
+      try (InputStream body = request.getInputStream()) {
+        byte[] bytes = body.readNBytes(1024 * 1024 + 1);
+        MavenResponse response = huggingFace().post(
+            runtime, raw, request.getQueryString(), repositoryBaseUrl(request, runtime.name()),
+            bytes, false);
+        // This catch-all POST handler returns ResponseEntity<?>. Spring would otherwise treat a
+        // StreamingResponseBody lambda as a regular object and serialize it as "{}", while
+        // retaining the cached metadata Content-Length. paths-info responses are bounded, so
+        // materialize them just like the Swift publish response below.
+        return toByteArrayResponse(response);
+      } catch (IOException error) {
+        throw new MavenExceptions.BadRequestException(
+            "Unable to read Hugging Face paths-info body", error);
+      }
+    }
     if (runtime.format() == RepositoryFormat.PYPI) {
       if (!runtime.isHosted()) {
         throw new PypiExceptions.MethodNotAllowed(
@@ -1058,6 +1085,13 @@ public class RepositoryContentController {
       MavenResponse response = dispatchAlpineGet(runtime, name, request, headOnly);
       return toStreamingResponse(response, request, !headOnly && raw.endsWith(".apk"));
     }
+    if (runtime.format() == RepositoryFormat.HUGGINGFACE) {
+      String raw = extractRepositoryPath(name, request, true);
+      MavenResponse response = dispatchHuggingFaceGet(runtime, name, request, headOnly);
+      boolean fileResponse = !headOnly && !raw.startsWith("api/models/")
+          && raw.contains("/resolve/");
+      return toStreamingResponse(response, request, fileResponse);
+    }
     if (runtime.format() == RepositoryFormat.PYPI) {
       String raw = extractRepositoryPath(name, request, true);
       boolean directory = isDirectoryPath(raw);
@@ -1233,6 +1267,26 @@ public class RepositoryContentController {
     return alpine().get(runtime, raw, headOnly);
   }
 
+  private MavenResponse dispatchHuggingFaceGet(
+      RepositoryRuntime runtime,
+      String name,
+      HttpServletRequest request,
+      boolean headOnly) {
+    DirectoryRequest directory = detectDirectory(name, request);
+    if (directory != null && directory.path().isEmpty()) {
+      return directory.needsRedirect()
+          ? badRepositoryPath(headOnly)
+          : repositoryInfo(runtime, request, "huggingface", headOnly);
+    }
+    String raw = extractRepositoryPath(name, request, true);
+    return huggingFace().get(
+        runtime,
+        raw,
+        request.getQueryString(),
+        repositoryBaseUrl(request, runtime.name()),
+        headOnly);
+  }
+
   private MavenResponse dispatchRawGet(RepositoryRuntime runtime, String rawPath, boolean headOnly) {
     return switch (runtime.type()) {
       case HOSTED -> rawHosted.get(runtime, rawPath, headOnly);
@@ -1398,6 +1452,13 @@ public class RepositoryContentController {
     return alpine;
   }
 
+  private HuggingFaceService huggingFace() {
+    if (huggingFace == null) {
+      throw new IllegalStateException("Hugging Face repository service is unavailable");
+    }
+    return huggingFace;
+  }
+
   private MavenResponse dispatchNpmGet(
       RepositoryRuntime runtime,
       NpmPath path,
@@ -1515,7 +1576,7 @@ public class RepositoryContentController {
           <div class="content-body">
             <div class="content-section">
               <p>This %s %s repository is not directly browseable at this URL.</p>
-              <p>Please use the <a href="%s/browse/">browse</a>
+              <p>Please use the <a href="%s/browse/#browse/browse:%s">browse</a>
               or <a href="%s/service/rest/repository/browse/%s/">HTML index</a>
               views to inspect the contents of this repository.</p>
             </div>
@@ -1528,6 +1589,7 @@ public class RepositoryContentController {
         escapeHtml(formatLabel),
         escapeHtml(type),
         escapeHtml(request.getContextPath().isBlank() ? "" : request.getContextPath()),
+        escapeHtml(runtime.name()),
         escapeHtml(serverBaseUrl(request)),
         escapeHtml(runtime.name()));
     byte[] bytes = body.getBytes(StandardCharsets.UTF_8);

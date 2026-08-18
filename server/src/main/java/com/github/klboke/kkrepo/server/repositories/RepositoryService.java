@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.HuggingFaceRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
@@ -90,6 +91,7 @@ public class RepositoryService {
   private ConanRegistryDao conanRegistry;
   private AptRegistryDao aptRegistry;
   private AlpineRegistryDao alpineRegistry;
+  private HuggingFaceRegistryDao huggingFaceRegistry;
   private CleanupPolicyDao cleanupPolicies;
   private final String urlPrefix;
   private final int serverPort;
@@ -162,6 +164,11 @@ public class RepositoryService {
   @Autowired(required = false)
   void setAlpineRegistry(AlpineRegistryDao alpineRegistry) {
     this.alpineRegistry = alpineRegistry;
+  }
+
+  @Autowired(required = false)
+  void setHuggingFaceRegistry(HuggingFaceRegistryDao huggingFaceRegistry) {
+    this.huggingFaceRegistry = huggingFaceRegistry;
   }
 
   @Autowired(required = false)
@@ -511,6 +518,9 @@ public class RepositoryService {
     }
     if (alpineRegistry != null && existing.format() == RepositoryFormat.ALPINE) {
       alpineRegistry.deleteRepositoryState(existing.id());
+    }
+    if (huggingFaceRegistry != null && existing.format() == RepositoryFormat.HUGGINGFACE) {
+      huggingFaceRegistry.deleteRepositoryState(existing.id());
     }
     int removed = repositoryDao.deleteById(existing.id());
     if (removed == 0) {

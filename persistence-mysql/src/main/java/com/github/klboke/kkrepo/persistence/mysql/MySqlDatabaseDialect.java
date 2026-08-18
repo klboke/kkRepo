@@ -8,6 +8,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.spi.CoordinationPersistenceDial
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseType;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.JsonPersistenceDialect;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.HuggingFacePersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.MigrationPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.SearchPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.SecurityPersistenceDialect;
@@ -30,6 +31,8 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
   private final ComponentPersistenceDialect components = new MySqlComponentPersistenceDialect(json);
   private final CondaPersistenceDialect conda = new MySqlCondaPersistenceDialect();
   private final ConanPersistenceDialect conan = new MySqlConanPersistenceDialect();
+  private final HuggingFacePersistenceDialect huggingFace =
+      new MySqlHuggingFacePersistenceDialect();
   private final CoordinationPersistenceDialect coordination = new MySqlCoordinationPersistenceDialect();
   private final SearchPersistenceDialect search = new MySqlSearchPersistenceDialect();
   private final SecurityPersistenceDialect security = new MySqlSecurityPersistenceDialect(json);
@@ -64,6 +67,11 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
   @Override
   public ConanPersistenceDialect conan() {
     return conan;
+  }
+
+  @Override
+  public HuggingFacePersistenceDialect huggingFace() {
+    return huggingFace;
   }
 
   @Override
@@ -359,6 +367,19 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
     @Override
     public int streamingFetchSize() {
       return Integer.MIN_VALUE;
+    }
+  }
+
+  private static final class MySqlHuggingFacePersistenceDialect
+      implements HuggingFacePersistenceDialect {
+    @Override
+    public String insertFetchLeaseIfAbsentSql() {
+      return """
+          INSERT IGNORE INTO proxy_fetch_lease
+            (repository_id, fetch_key, fetch_key_hash, owner, fencing_token, attempt_count,
+             expires_at, updated_at)
+          VALUES (?, ?, ?, ?, 1, 1, ?, ?)
+          """;
     }
   }
 

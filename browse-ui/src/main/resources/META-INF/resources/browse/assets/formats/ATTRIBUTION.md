@@ -31,3 +31,6 @@ official Debian trademark asset.
 
 The Alpine / APK mountain-and-package compatibility mark is an original mark drawn for kkRepo. It
 is not an official Alpine Linux trademark asset.
+
+The Hugging Face Models smile-and-embrace compatibility mark is an original mark drawn for kkRepo.
+It is not an official Hugging Face trademark asset.

@@ -36,6 +36,8 @@ public interface PersistenceStores extends AutoCloseable {
 
   DockerUploadDao dockerUploads();
 
+  HuggingFaceRegistryDao huggingFaceRegistry();
+
   MaintenanceCursorDao maintenanceCursors();
 
   MetadataRebuildDao metadataRebuild();

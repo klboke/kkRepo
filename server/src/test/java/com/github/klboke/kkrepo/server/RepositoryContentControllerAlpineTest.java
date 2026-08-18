@@ -64,7 +64,7 @@ class RepositoryContentControllerAlpineTest {
     assertTrue(html.contains("<span class=\"description\">alpine</span>"));
     assertTrue(html.contains("This alpine " + type.name().toLowerCase()
         + " repository is not directly browseable at this URL."));
-    assertTrue(html.contains("href=\"/browse/\""));
+    assertTrue(html.contains("href=\"/browse/#browse/browse:alpine\""));
     assertTrue(html.contains("/service/rest/repository/browse/alpine/"));
 
     ResponseEntity<Void> head = controller.head(

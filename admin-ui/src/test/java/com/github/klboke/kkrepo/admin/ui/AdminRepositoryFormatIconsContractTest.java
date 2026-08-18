@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 class AdminRepositoryFormatIconsContractTest {
   private static final List<String> FORMATS = List.of(
       "maven2", "npm", "pypi", "cargo", "pub", "composer", "terraform", "swift",
-      "ansiblegalaxy", "conda", "conan", "apt", "alpine", "go",
+      "ansiblegalaxy", "conda", "conan", "apt", "alpine", "huggingface", "go",
       "helm", "docker", "nuget", "rubygems", "yum", "raw");
 
   @Test
