@@ -408,6 +408,52 @@ class DockerRemoteRegistryClientTest {
   }
 
   @Test
+  void redirectWithoutAHostIsDenied() throws Exception {
+    try (TestRegistry registry = TestRegistry.start()) {
+      registry.server.createContext("/v2/library/nginx/blobs/sha256:abc", exchange -> {
+        exchange.getResponseHeaders().add("Location", "mailto:artifact");
+        exchange.sendResponseHeaders(307, -1);
+        exchange.close();
+      });
+
+      SecurityValidationException error = assertThrows(
+          SecurityValidationException.class,
+          () -> client().get(
+              runtime(registry.baseUrl, "robot", "secret"),
+              "library/nginx/blobs/sha256:abc",
+              "application/octet-stream"));
+
+      assertEquals("remote redirect URL host is not allowed: ", error.getMessage());
+    }
+  }
+
+  @Test
+  void allowlistedRedirectHostWithTrailingDotIsNormalized() throws Exception {
+    try (TestRegistry registry = TestRegistry.start(); TestRegistry storage = TestRegistry.start()) {
+      String storageUrl = storage.baseUrl.replace("127.0.0.1", "localhost.");
+      registry.server.createContext("/v2/library/nginx/blobs/sha256:abc", exchange -> {
+        exchange.getResponseHeaders().add("Location", storageUrl + "/layers/abc");
+        exchange.sendResponseHeaders(307, -1);
+        exchange.close();
+      });
+      storage.server.createContext("/layers/abc", exchange -> {
+        byte[] body = "layer".getBytes(StandardCharsets.UTF_8);
+        exchange.sendResponseHeaders(200, body.length);
+        exchange.getResponseBody().write(body);
+        exchange.close();
+      });
+
+      try (HttpRemoteFetcher.Result result = client().get(
+          runtimeAllowingRedirectHost(registry.baseUrl, "robot", "secret", "localhost"),
+          "library/nginx/blobs/sha256:abc",
+          "application/octet-stream")) {
+        assertEquals(200, result.status());
+        assertEquals("layer", new String(result.body().readAllBytes(), StandardCharsets.UTF_8));
+      }
+    }
+  }
+
+  @Test
   void crossOriginRedirectStripsRegistryCredentials() throws Exception {
     try (TestRegistry registry = TestRegistry.start(); TestRegistry storage = TestRegistry.start()) {
       List<String> registryAuthorizations = new ArrayList<>();

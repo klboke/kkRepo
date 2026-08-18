@@ -765,6 +765,53 @@ class RepositoryServiceTest {
   }
 
   @Test
+  void proxyRedirectHostsRejectBlankNullAndExcessEntries() {
+    RepositoryService service = service(new StubRepositoryDao(repository(1L)));
+    List<String> nullHost = new ArrayList<>();
+    nullHost.add(null);
+
+    for (List<String> invalidHosts : List.of(List.of(" "), nullHost)) {
+      RepositoryValidationException error = assertThrows(
+          RepositoryValidationException.class,
+          () -> service.create(new CreateCommand(
+              "gradle-plugins",
+              "maven2-proxy",
+              true,
+              "default",
+              true,
+              null,
+              proxyWithRedirectHosts("http://127.0.0.1/m2/", invalidHosts),
+              null,
+              null,
+              null,
+              null)));
+      assertEquals(
+          "proxy.allowedRedirectHosts entries must be exact host names without a scheme, port, path, or wildcard",
+          error.getMessage());
+    }
+
+    List<String> tooManyHosts = new ArrayList<>();
+    for (int i = 0; i < 65; i++) {
+      tooManyHosts.add("cdn-" + i + ".example.org");
+    }
+    RepositoryValidationException error = assertThrows(
+        RepositoryValidationException.class,
+        () -> service.create(new CreateCommand(
+            "gradle-plugins",
+            "maven2-proxy",
+            true,
+            "default",
+            true,
+            null,
+            proxyWithRedirectHosts("http://127.0.0.1/m2/", tooManyHosts),
+            null,
+            null,
+            null,
+            null)));
+    assertEquals("proxy.allowedRedirectHosts supports at most 64 hosts", error.getMessage());
+  }
+
+  @Test
   void minimumReleaseAgeRejectsNegativeAndNonNpmValues() {
     RepositoryService service = service(new StubRepositoryDao(repository(1L)));
 
