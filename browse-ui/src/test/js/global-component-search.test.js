@@ -18,29 +18,42 @@ function loadBrowseSearchHelpers() {
   const constantsEnd = source.indexOf("function installCsrfFetch", constantsStart);
   const routeStart = source.indexOf("function normalizeSearchFormat");
   const routeEnd = source.indexOf("function repositoryBrowseHash", routeStart);
+  const browseTargetStart = routeEnd;
+  const browseTargetEnd = source.indexOf("function parseBrowseHash", browseTargetStart);
   const parseStart = source.indexOf("function parseBrowseHash");
   const parseEnd = source.indexOf("function pushBrowseRoute", parseStart);
   const paramsStart = source.indexOf("function componentSearchParams");
   const paramsEnd = source.indexOf("async function fetchSearchComponents", paramsStart);
+  const openResultStart = source.indexOf("function openSearchResult");
+  const openResultEnd = source.indexOf("function renderRepoList", openResultStart);
   for (const boundary of [constantsStart, constantsEnd, routeStart, routeEnd,
-    parseStart, parseEnd, paramsStart, paramsEnd]) {
+    browseTargetStart, browseTargetEnd,
+    parseStart, parseEnd, paramsStart, paramsEnd, openResultStart, openResultEnd]) {
     assert.notEqual(boundary, -1, "browse search helper boundary should exist");
   }
+  const openedSearchResults = [];
   const context = vm.createContext({
     URLSearchParams,
     readPendingLoginReturnTo: () => null,
+    showRepositoryTree: (...args) => openedSearchResults.push(args),
     window: { location: { hash: "" } },
   });
   vm.runInContext(`
     ${source.slice(constantsStart, constantsEnd)}
     ${source.slice(routeStart, routeEnd)}
+    ${source.slice(browseTargetStart, browseTargetEnd)}
     ${source.slice(parseStart, parseEnd)}
     ${source.slice(paramsStart, paramsEnd)}
+    ${source.slice(openResultStart, openResultEnd)}
     globalThis.searchHash = searchHash;
     globalThis.searchFormatLabel = searchFormatLabel;
+    globalThis.repositoryBrowseHash = repositoryBrowseHash;
+    globalThis.componentBrowsePath = componentBrowsePath;
     globalThis.parseBrowseHash = parseBrowseHash;
     globalThis.componentSearchParams = componentSearchParams;
+    globalThis.openSearchResult = openSearchResult;
   `, context);
+  context.openedSearchResults = openedSearchResults;
   return context;
 }
 
@@ -123,4 +136,30 @@ test("uses the selected repository format in the search page title", () => {
   assert.equal(helpers.searchFormatLabel("maven2"), "Maven");
   assert.equal(helpers.searchFormatLabel("ansiblegalaxy"), "Ansible Galaxy");
   assert.equal(helpers.searchFormatLabel("alpine"), "Alpine / APK");
+});
+
+test("opens a Hugging Face search result at its immutable revision path", () => {
+  const helpers = loadBrowseSearchHelpers();
+  const commit = "f2efe525625e508121ef8e13b7c37e6324073378";
+  const component = {
+    repository: "huggingface-models",
+    format: "huggingface",
+    group: "hf-internal-testing",
+    name: "tiny-random-bart",
+    version: commit,
+  };
+
+  helpers.openSearchResult(component);
+  const [repository, syncHash, browsePath] = helpers.openedSearchResults[0];
+
+  assert.equal(repository, "huggingface-models");
+  assert.equal(syncHash, true);
+  assert.equal(
+    browsePath,
+    `hf-internal-testing/tiny-random-bart/${commit}`,
+  );
+  assert.equal(
+    helpers.repositoryBrowseHash("huggingface-models", browsePath),
+    `#browse/browse:huggingface-models?path=hf-internal-testing%2Ftiny-random-bart%2F${commit}`,
+  );
 });

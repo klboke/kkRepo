@@ -213,6 +213,9 @@ function componentBrowsePath(component) {
   if (format === "alpine") {
     return [group, name, version].filter(Boolean).join("/");
   }
+  if (format === "huggingface") {
+    return [group, name, version].filter(Boolean).join("/");
+  }
   return "";
 }
 

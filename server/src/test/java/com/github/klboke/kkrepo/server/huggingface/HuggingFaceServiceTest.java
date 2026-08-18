@@ -247,6 +247,46 @@ class HuggingFaceServiceTest {
   }
 
   @Test
+  void cachedJsonFilesOpenInlineWithTheirOriginalFilenameAndMediaType() throws Exception {
+    Fixture fixture = fixture();
+    ModelFile ready = new ModelFile(
+        70L, 60L, 42L, "org/model", COMMIT, "config.json",
+        77L, 55L, "b".repeat(40), null, null, 12L, "c".repeat(64),
+        "text/plain; charset=utf-8", "CONFIG", HuggingFaceRegistryDao.FILE_READY,
+        4L, null, null, Instant.now());
+    when(fixture.registry.findRevision(fixture.runtime.id(), "org/model", COMMIT))
+        .thenReturn(Optional.of(revision(55L)));
+    when(fixture.registry.findFile(fixture.runtime.id(), "org/model", COMMIT, "config.json"))
+        .thenReturn(Optional.of(ready));
+    when(fixture.cache.find(fixture.runtime, canonical("config.json")))
+        .thenReturn(Optional.of(mock(CachedAssetMetadata.class)));
+    when(fixture.cache.serve(
+        fixture.runtime, canonical("config.json"), false, "attachment"))
+        .thenReturn(MavenResponse.ok(
+            new ByteArrayInputStream("{}".getBytes(StandardCharsets.UTF_8)), 2L,
+            "text/plain; charset=utf-8", "etag", null));
+    when(fixture.cache.serve(
+        fixture.runtime, canonical("config.json"), true, "attachment"))
+        .thenReturn(MavenResponse.noBody(
+            200, 2L, "text/plain; charset=utf-8", "etag", null));
+
+    MavenResponse get = fixture.service.get(
+        fixture.runtime, canonical("config.json"), "",
+        "https://repo.example/repository/hf", false);
+    MavenResponse head = fixture.service.get(
+        fixture.runtime, canonical("config.json"), "",
+        "https://repo.example/repository/hf", true);
+
+    assertEquals("application/json", get.contentType());
+    assertEquals("application/json", head.contentType());
+    assertTrue(get.headers().get("Content-Disposition").startsWith("inline;"));
+    assertTrue(get.headers().get("Content-Disposition").contains("config.json"));
+    assertEquals(get.headers().get("Content-Disposition"),
+        head.headers().get("Content-Disposition"));
+    verify(fixture.fetcher, never()).fetch(any());
+  }
+
+  @Test
   void warmRegularGitFileExposesGitOidAsLinkedEtag() throws Exception {
     Fixture fixture = fixture();
     String gitOid = "22ffb3454131a71d4144340befb799c66ad0c670";

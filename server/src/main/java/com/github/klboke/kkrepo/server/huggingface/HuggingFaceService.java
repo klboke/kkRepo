@@ -41,6 +41,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -339,11 +340,13 @@ public class HuggingFaceService {
             "Hugging Face model file exceeds the configured size limit");
       }
       Instant metadataUpdatedAt = Instant.now();
+      String resolvedContentType = contentTypeFor(
+          requested.filePath(), result.contentType(), file.contentType());
       ModelFile enriched = new ModelFile(
           file.id(), revision.id(), runtime.id(), requested.repoId(), binding.commit(),
           requested.filePath(), file.assetId(), revision.componentId(), identity.gitOid(),
           identity.linkedSha256(), identity.xetHash(), identity.expectedSize(),
-          file.internalSha256(), firstNonBlank(result.contentType(), file.contentType()),
+          file.internalSha256(), resolvedContentType,
           file.fileKind(), HuggingFaceRegistryDao.FILE_FETCHING, lease.fencingToken(),
           null, null, metadataUpdatedAt);
       if (!registry.updateFetchingFileMetadata(
@@ -374,7 +377,7 @@ public class HuggingFaceService {
           ? maxFileBytes : Math.min(maxFileBytes, identity.expectedSize());
       RawProtocolCache.StoredAsset stored = cache.storeVerifiedImmutable(
           runtime, canonicalPath, new LimitedInputStream(result.body(), readLimit),
-          firstNonBlank(result.contentType(), enriched.contentType()), attributes, component,
+          enriched.contentType(), attributes, component,
           components.fileBrowsePath(requested.repoId(), binding.commit(), requested.filePath()),
           identity.expectedSize(), identity.linkedSha256(),
           identity.linkedSha256() == null ? identity.gitOid() : null);
@@ -606,7 +609,10 @@ public class HuggingFaceService {
 
   private MavenResponse decorateFileResponse(
       MavenResponse response, ModelFile file, String commit) {
+    response = response.withContentType(
+        contentTypeFor(file.path(), response.contentType(), file.contentType()));
     response.withHeader(HttpHeaders.ACCEPT_RANGES, "bytes")
+        .withHeader(HttpHeaders.CONTENT_DISPOSITION, inlineFileDisposition(file.path()))
         .withHeader(HuggingFaceHeaders.REPO_COMMIT, commit);
     String linkedEtag = firstNonBlank(file.lfsSha256(), file.gitOid());
     if (linkedEtag != null) {
@@ -856,12 +862,28 @@ public class HuggingFaceService {
     return value == null || value.isBlank() ? MediaType.APPLICATION_JSON_VALUE : value;
   }
 
-  private static String contentTypeFor(String path) {
+  private static String contentTypeFor(String path, String... candidates) {
     String lower = path == null ? "" : path.toLowerCase(Locale.ROOT);
     if (lower.endsWith(".json")) return MediaType.APPLICATION_JSON_VALUE;
     if (lower.endsWith(".md")) return "text/markdown";
     if (lower.endsWith(".txt")) return MediaType.TEXT_PLAIN_VALUE;
+    if (candidates != null) {
+      for (String candidate : candidates) {
+        if (candidate != null && !candidate.isBlank()) return candidate;
+      }
+    }
     return MediaType.APPLICATION_OCTET_STREAM_VALUE;
+  }
+
+  private static String inlineFileDisposition(String path) {
+    String value = path == null ? "" : path;
+    int slash = value.lastIndexOf('/');
+    String filename = slash < 0 ? value : value.substring(slash + 1);
+    if (filename.isBlank()) filename = "download";
+    return ContentDisposition.inline()
+        .filename(filename, StandardCharsets.UTF_8)
+        .build()
+        .toString();
   }
 
   private static String clean(String value) {

@@ -133,6 +133,14 @@ class HuggingFaceRepositoryBlackBoxCompatibilityTest {
     assertEquals(nexusDownload.status(), candidateDownload.status(), "download status");
     assertArrayEquals(nexusDownload.body(), candidateDownload.body(), "download body");
     assertEquals(fixture.sha256(), sha256(candidateDownload.body()), "candidate SHA-256");
+    assertEquals(mediaType(nexusDownload.header("content-type")),
+        mediaType(candidateDownload.header("content-type")), "download content type");
+    assertTrue(nexusDownload.header("content-disposition").startsWith("inline;"),
+        "Nexus inline disposition");
+    assertTrue(candidateDownload.header("content-disposition").startsWith("inline;"),
+        "candidate inline disposition");
+    assertTrue(candidateDownload.header("content-disposition").contains(fileName(fixture.filePath())),
+        "candidate original filename");
     assertEquals(fixture.commit(), candidateDownload.header("x-repo-commit"));
     assertEquals(Long.toString(candidateDownload.body().length),
         candidateDownload.header("x-linked-size"));
@@ -145,14 +153,21 @@ class HuggingFaceRepositoryBlackBoxCompatibilityTest {
     assertEquals(nexusHead.status(), candidateHead.status(), "HEAD status");
     assertEquals(nexusDownload.body().length,
         Long.parseLong(candidateHead.header("content-length")), "HEAD length");
+    assertEquals(mediaType(nexusHead.header("content-type")),
+        mediaType(candidateHead.header("content-type")), "HEAD content type");
+    assertTrue(candidateHead.header("content-disposition").startsWith("inline;"),
+        "HEAD inline disposition");
 
-    Exchange nexusRange = get(fixture.nexus(), resolvePath, Map.of("Range", "bytes=1-65536"));
+    int rangeEnd = Math.min(65_536, candidateDownload.body().length - 1);
+    assertTrue(rangeEnd >= 1, "fixture must contain at least two bytes");
+    String rangeValue = "bytes=1-" + rangeEnd;
+    Exchange nexusRange = get(fixture.nexus(), resolvePath, Map.of("Range", rangeValue));
     Exchange candidateRange = get(
-        fixture.candidate(), resolvePath, Map.of("Range", "bytes=1-65536"));
+        fixture.candidate(), resolvePath, Map.of("Range", rangeValue));
     assertEquals(206, nexusRange.status(), "Nexus Range status");
     assertEquals(nexusRange.status(), candidateRange.status(), "Range status");
     assertArrayEquals(nexusRange.body(), candidateRange.body(), "Range body");
-    assertEquals("bytes 1-65536/" + candidateDownload.body().length,
+    assertEquals("bytes 1-" + rangeEnd + "/" + candidateDownload.body().length,
         candidateRange.header("content-range"));
   }
 
@@ -195,6 +210,17 @@ class HuggingFaceRepositoryBlackBoxCompatibilityTest {
 
   private static String sha256(byte[] bytes) throws Exception {
     return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+  }
+
+  private static String mediaType(String value) {
+    if (value == null) return "";
+    int separator = value.indexOf(';');
+    return (separator < 0 ? value : value.substring(0, separator)).trim().toLowerCase();
+  }
+
+  private static String fileName(String path) {
+    int slash = path.lastIndexOf('/');
+    return slash < 0 ? path : path.substring(slash + 1);
   }
 
   private static String setting(String name, String fallback) {
