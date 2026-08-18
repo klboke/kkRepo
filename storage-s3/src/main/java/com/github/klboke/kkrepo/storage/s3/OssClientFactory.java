@@ -5,8 +5,8 @@ import com.aliyun.sdk.service.oss2.credentials.StaticCredentialsProvider;
 import com.aliyun.sdk.service.oss2.transport.HttpClientOptions;
 import com.aliyun.sdk.service.oss2.transport.apache5client.Apache5HttpClient;
 import com.aliyun.sdk.service.oss2.transport.apache5client.Apache5HttpClientBuilder;
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.klboke.kkrepo.cache.LocalCache;
+import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import jakarta.annotation.PreDestroy;
 import java.time.Duration;
 import org.springframework.stereotype.Component;
@@ -21,7 +21,9 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public class OssClientFactory {
-  private final Cache<Long, CachedClient> cache = Caffeine.newBuilder().build();
+  private final LocalCache<Long, CachedClient> cache = LocalCacheFactory.standard()
+      .<Long, CachedClient>builder("oss-clients")
+      .build();
 
   public OSSClient client(S3BlobStoreConfig config) {
     String signature = config.signature();

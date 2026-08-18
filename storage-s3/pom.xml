@@ -17,16 +17,16 @@
       <artifactId>kkrepo-core</artifactId>
     </dependency>
     <dependency>
+      <groupId>com.github.klboke</groupId>
+      <artifactId>kkrepo-cache</artifactId>
+    </dependency>
+    <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-autoconfigure</artifactId>
     </dependency>
     <dependency>
       <groupId>jakarta.annotation</groupId>
       <artifactId>jakarta.annotation-api</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>com.github.ben-manes.caffeine</groupId>
-      <artifactId>caffeine</artifactId>
     </dependency>
     <dependency>
       <groupId>software.amazon.awssdk</groupId>

@@ -1,11 +1,11 @@
 package com.github.klboke.kkrepo.server.cache;
 
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.klboke.kkrepo.cache.LocalCache;
+import com.github.klboke.kkrepo.cache.LocalCacheFactory;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.LinkedHashSet;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -22,14 +22,15 @@ public class NexusLikeCacheController {
       NexusLikeCacheController.class.getName() + ".PENDING_INVALIDATIONS";
 
   private final VersionWatermark watermark;
-  private final Cache<String, String> localTokens;
+  private final LocalCache<String, String> localTokens;
 
   public NexusLikeCacheController(
       VersionWatermark watermark,
       @Value("${kkrepo.cache.repository-token.local-ttl-seconds:2}") long localTokenTtlSeconds) {
     this.watermark = watermark;
-    this.localTokens = Caffeine.newBuilder()
-        .expireAfterWrite(Math.max(1, localTokenTtlSeconds), TimeUnit.SECONDS)
+    this.localTokens = LocalCacheFactory.standard()
+        .<String, String>builder("nexus-like-repository-tokens")
+        .expireAfterWrite(Duration.ofSeconds(Math.max(1, localTokenTtlSeconds)))
         .maximumSize(100_000)
         .build();
   }

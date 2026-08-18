@@ -1,11 +1,11 @@
-package com.github.klboke.kkrepo.server.nativeimage;
+package com.github.klboke.kkrepo.cache;
 
 import java.util.List;
 import org.springframework.aot.hint.MemberCategory;
 import org.springframework.aot.hint.RuntimeHints;
 import org.springframework.aot.hint.RuntimeHintsRegistrar;
 
-/** Reflection metadata for Caffeine's configuration-specific cache implementations. */
+/** Reflection metadata for the cache module's configuration-specific Caffeine implementations. */
 public final class CaffeineRuntimeHints implements RuntimeHintsRegistrar {
   static final String CACHE_PACKAGE = "com.github.benmanes.caffeine.cache.";
 
@@ -27,8 +27,7 @@ public final class CaffeineRuntimeHints implements RuntimeHintsRegistrar {
 
   @Override
   public void registerHints(RuntimeHints hints, ClassLoader classLoader) {
-    BOUNDED_CACHE_TYPES.forEach(
-        type -> registerDynamicType(hints, classLoader, type));
+    BOUNDED_CACHE_TYPES.forEach(type -> registerDynamicType(hints, classLoader, type));
     NODE_TYPES.forEach(type -> registerDynamicType(hints, classLoader, type));
   }
 

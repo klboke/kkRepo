@@ -2,8 +2,8 @@ package com.github.klboke.kkrepo.server.security;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.klboke.kkrepo.cache.LocalCache;
+import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import com.github.klboke.kkrepo.cache.SharedCache;
 import com.github.klboke.kkrepo.core.security.EncryptionSecrets;
 import java.nio.charset.StandardCharsets;
@@ -52,8 +52,8 @@ public class BasicAuthCache {
 
   private final SharedCache sharedCache;
   private final ObjectMapper objectMapper;
-  private final Cache<String, AuthenticatedSubject> localSubjects;
-  private final Cache<String, Boolean> localMissing;
+  private final LocalCache<String, AuthenticatedSubject> localSubjects;
+  private final LocalCache<String, Boolean> localMissing;
   private final boolean enabled;
   private final Duration positiveTtl;
   private final Duration negativeTtl;
@@ -70,11 +70,13 @@ public class BasicAuthCache {
     this.enabled = enabled;
     this.positiveTtl = ttlSeconds <= 0 ? Duration.ZERO : Duration.ofSeconds(ttlSeconds);
     this.negativeTtl = missingTtlSeconds <= 0 ? Duration.ZERO : Duration.ofSeconds(missingTtlSeconds);
-    this.localSubjects = Caffeine.newBuilder()
+    this.localSubjects = LocalCacheFactory.standard()
+        .<String, AuthenticatedSubject>builder("basic-auth-subjects")
         .expireAfterWrite(Duration.ofSeconds(Math.max(1, ttlSeconds)))
         .maximumSize(100_000)
         .build();
-    this.localMissing = Caffeine.newBuilder()
+    this.localMissing = LocalCacheFactory.standard()
+        .<String, Boolean>builder("basic-auth-missing")
         .expireAfterWrite(Duration.ofSeconds(Math.max(1, missingTtlSeconds)))
         .maximumSize(100_000)
         .build();

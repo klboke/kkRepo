@@ -1,7 +1,7 @@
 package com.github.klboke.kkrepo.storage.s3;
 
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.klboke.kkrepo.cache.LocalCache;
+import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import jakarta.annotation.PreDestroy;
 import java.net.URI;
 import java.time.Duration;
@@ -15,7 +15,9 @@ import software.amazon.awssdk.services.s3.S3Configuration;
 
 @Component
 public class S3ClientFactory {
-  private final Cache<Long, CachedClient> cache = Caffeine.newBuilder().build();
+  private final LocalCache<Long, CachedClient> cache = LocalCacheFactory.standard()
+      .<Long, CachedClient>builder("s3-clients")
+      .build();
 
   public S3Client client(S3BlobStoreConfig config) {
     String signature = config.signature();
