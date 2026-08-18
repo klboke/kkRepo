@@ -3277,12 +3277,12 @@ code {
 }
 
 .security-provider-json-editor:focus {
-  border-color: var(--accent);
-  outline: 3px solid var(--focus);
-  outline-offset: 1px;
+  border-color: var(--brand-bright);
+  box-shadow: 0 0 0 3px rgba(47, 191, 164, 0.24);
+  outline: 0;
 }
 
-.security-provider-json-editor.is-invalid {
+.security-provider-json-editor.is-invalid:not(:focus) {
   border-color: #c8463a;
   background: #fffafa;
 }
