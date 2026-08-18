@@ -1,9 +1,9 @@
 package com.github.klboke.kkrepo.server.huggingface;
 
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.klboke.kkrepo.cache.LocalCache;
+import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.HuggingFaceRegistryDao;
@@ -71,11 +71,13 @@ public class HuggingFaceService {
   // Commit-addressed files are immutable. This node-local snapshot is only a rebuildable hot
   // cache: the asset watermark is still checked by RawProtocolCache and the database remains the
   // authority for misses, fetch ownership, failures, cleanup, and every mutable ref binding.
-  private final Cache<FileKey, ModelFile> readyFiles = Caffeine.newBuilder()
+  private final LocalCache<FileKey, ModelFile> readyFiles = LocalCacheFactory.standard()
+      .<FileKey, ModelFile>builder("huggingface-ready-files")
       .maximumSize(100_000)
       .expireAfterAccess(Duration.ofSeconds(60))
       .build();
-  private final Cache<Long, ComponentRecord> revisionComponents = Caffeine.newBuilder()
+  private final LocalCache<Long, ComponentRecord> revisionComponents = LocalCacheFactory.standard()
+      .<Long, ComponentRecord>builder("huggingface-revision-components")
       .maximumSize(100_000)
       .expireAfterAccess(Duration.ofSeconds(60))
       .build();
