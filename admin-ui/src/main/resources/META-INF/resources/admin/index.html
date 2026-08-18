@@ -1184,6 +1184,8 @@
                 <div class="security-provider-section-grid">
                   <label><span>Client ID <span class="required-mark">*</span></span><input id="security-oidc-client-id" type="text"></label>
                   <label><span>Client secret <span class="required-mark">*</span></span><input id="security-oidc-client-secret" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing"></label>
+                  <label><span>Authorization endpoint</span><input id="security-oidc-authorization-endpoint" type="url" placeholder="https://issuer.example.com/oauth2/authorize"></label>
+                  <label><span>Token endpoint</span><input id="security-oidc-token-endpoint" type="url" placeholder="https://issuer.example.com/oauth2/token"></label>
                   <label><span>Redirect URI <span class="required-mark">*</span></span><input id="security-oidc-redirect-uri" type="url" placeholder="/internal/security/oidc/callback"></label>
                 </div>
               </fieldset>
@@ -1203,8 +1205,6 @@
               <details class="security-provider-advanced">
                 <summary><span>Advanced settings</span><span class="lucide-icon icon-chevron-down" aria-hidden="true"></span></summary>
                 <div class="security-provider-advanced-body security-provider-section-grid">
-                  <label><span>Authorization endpoint</span><input id="security-oidc-authorization-endpoint" type="url" placeholder="https://issuer.example.com/oauth2/authorize"></label>
-                  <label><span>Token endpoint</span><input id="security-oidc-token-endpoint" type="url" placeholder="https://issuer.example.com/oauth2/token"></label>
                   <label><span>Clock skew seconds</span><input id="security-oidc-clock-skew" type="number" min="0" value="60"></label>
                   <label><span>JWKS cache seconds</span><input id="security-oidc-jwks-cache" type="number" min="0" value="300"></label>
                 </div>
