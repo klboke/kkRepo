@@ -34,6 +34,33 @@ class HuggingFaceRepositoryBlackBoxCompatibilityTest {
   private static final ObjectMapper JSON = new ObjectMapper();
 
   @Test
+  void repositoryRootMatchesReferenceLandingPageSemantics() throws Exception {
+    assumeTrue(enabled(),
+        "Set HUGGINGFACE_COMPAT_ENABLED=true and both proxy URLs to run Hugging Face compatibility");
+    Fixture fixture = Fixture.fromEnvironment();
+
+    Exchange nexusRoot = get(fixture.nexus(), "");
+    Exchange candidateRoot = get(fixture.candidate(), "");
+    assertEquals(200, nexusRoot.status(), "Nexus repository root status");
+    assertEquals(nexusRoot.status(), candidateRoot.status(), "repository root status");
+    assertTrue(nexusRoot.header("content-type").startsWith("text/html"),
+        "Nexus repository root content type");
+    assertTrue(candidateRoot.header("content-type").startsWith("text/html"),
+        "candidate repository root content type");
+    String message = "This huggingface proxy repository is not directly browseable at this URL.";
+    assertTrue(nexusRoot.text().contains(message), "Nexus repository root message");
+    assertTrue(candidateRoot.text().contains(message), "candidate repository root message");
+    assertTrue(candidateRoot.text().contains("/service/rest/repository/browse/"),
+        "candidate HTML index link");
+
+    Exchange nexusHead = head(fixture.nexus(), "");
+    Exchange candidateHead = head(fixture.candidate(), "");
+    assertEquals(200, nexusHead.status(), "Nexus repository root HEAD status");
+    assertEquals(nexusHead.status(), candidateHead.status(), "repository root HEAD status");
+    assertEquals(0, candidateHead.body().length, "repository root HEAD body");
+  }
+
+  @Test
   void modelMetadataPathsInfoAndImmutableDownloadsMatchReference() throws Exception {
     assumeTrue(enabled(),
         "Set HUGGINGFACE_COMPAT_ENABLED=true and both proxy URLs to run Hugging Face compatibility");

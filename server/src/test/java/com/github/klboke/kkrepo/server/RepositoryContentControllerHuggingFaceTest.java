@@ -4,9 +4,11 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -19,6 +21,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -28,8 +31,62 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 class RepositoryContentControllerHuggingFaceTest {
+
+  @Test
+  void trailingSlashRootGetAndHeadServeNexusStyleRepositoryHtml() throws Exception {
+    RepositoryRuntime runtime = proxy();
+    HuggingFaceService huggingFace = mock(HuggingFaceService.class);
+    RepositoryContentController controller = controller(runtimes(runtime), huggingFace);
+
+    ResponseEntity<StreamingResponseBody> get = controller.get(
+        "hf", request("GET", "/repository/hf/"));
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    get.getBody().writeTo(output);
+    String html = output.toString(StandardCharsets.UTF_8);
+
+    assertEquals(200, get.getStatusCode().value());
+    assertEquals(MediaType.TEXT_HTML, get.getHeaders().getContentType());
+    assertTrue(html.contains("<span class=\"description\">hf</span>"));
+    assertTrue(html.contains(
+        "This huggingface proxy repository is not directly browseable at this URL."));
+    assertTrue(html.contains("href=\"/browse/\""));
+    assertTrue(html.contains("/service/rest/repository/browse/hf/"));
+
+    ResponseEntity<Void> head = controller.head(
+        "hf", request("HEAD", "/repository/hf/"));
+    assertEquals(200, head.getStatusCode().value());
+    assertEquals(MediaType.TEXT_HTML, head.getHeaders().getContentType());
+    assertTrue(head.getHeaders().getContentLength() > 0);
+    assertNull(head.getBody());
+    verifyNoInteractions(huggingFace);
+  }
+
+  @Test
+  void bareRootGetAndHeadReturnNexusStyleBadRequest() throws Exception {
+    RepositoryRuntime runtime = proxy();
+    HuggingFaceService huggingFace = mock(HuggingFaceService.class);
+    RepositoryContentController controller = controller(runtimes(runtime), huggingFace);
+
+    ResponseEntity<StreamingResponseBody> get = controller.get(
+        "hf", request("GET", "/repository/hf"));
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    get.getBody().writeTo(output);
+
+    assertEquals(400, get.getStatusCode().value());
+    assertEquals(MediaType.TEXT_HTML, get.getHeaders().getContentType());
+    assertTrue(output.toString(StandardCharsets.UTF_8).contains(
+        "Repository path must have another '/' after initial '/'"));
+
+    ResponseEntity<Void> head = controller.head(
+        "hf", request("HEAD", "/repository/hf"));
+    assertEquals(400, head.getStatusCode().value());
+    assertEquals(MediaType.TEXT_HTML, head.getHeaders().getContentType());
+    assertNull(head.getBody());
+    verifyNoInteractions(huggingFace);
+  }
 
   @Test
   void pathsInfoPostMaterializesBoundedResponseBody() {
@@ -186,6 +243,12 @@ class RepositoryContentControllerHuggingFaceTest {
         true,
         null,
         List.of());
+  }
+
+  private static RepositoryRuntimeRegistry runtimes(RepositoryRuntime runtime) {
+    RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
+    when(runtimes.resolve(runtime.name())).thenReturn(Optional.of(runtime));
+    return runtimes;
   }
 
   private static MockHttpServletRequest request(String method, String path) {

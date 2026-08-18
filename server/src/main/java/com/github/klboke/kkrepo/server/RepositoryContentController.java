@@ -403,10 +403,7 @@ public class RepositoryContentController {
       return toHeadResponse(dispatchAlpineGet(runtime, name, request, true), request);
     }
     if (runtime.format() == RepositoryFormat.HUGGINGFACE) {
-      String raw = extractRepositoryPath(name, request, true);
-      return toHeadResponse(huggingFace().get(
-          runtime, raw, request.getQueryString(), repositoryBaseUrl(request, runtime.name()), true),
-          request);
+      return toHeadResponse(dispatchHuggingFaceGet(runtime, name, request, true), request);
     }
     if (runtime.format() == RepositoryFormat.PYPI) {
       String raw = extractRepositoryPath(name, request, true);
@@ -1090,9 +1087,7 @@ public class RepositoryContentController {
     }
     if (runtime.format() == RepositoryFormat.HUGGINGFACE) {
       String raw = extractRepositoryPath(name, request, true);
-      MavenResponse response = huggingFace().get(
-          runtime, raw, request.getQueryString(), repositoryBaseUrl(request, runtime.name()),
-          headOnly);
+      MavenResponse response = dispatchHuggingFaceGet(runtime, name, request, headOnly);
       boolean fileResponse = !headOnly && !raw.startsWith("api/models/")
           && raw.contains("/resolve/");
       return toStreamingResponse(response, request, fileResponse);
@@ -1270,6 +1265,26 @@ public class RepositoryContentController {
     }
     String raw = extractRepositoryPath(name, request, true);
     return alpine().get(runtime, raw, headOnly);
+  }
+
+  private MavenResponse dispatchHuggingFaceGet(
+      RepositoryRuntime runtime,
+      String name,
+      HttpServletRequest request,
+      boolean headOnly) {
+    DirectoryRequest directory = detectDirectory(name, request);
+    if (directory != null && directory.path().isEmpty()) {
+      return directory.needsRedirect()
+          ? badRepositoryPath(headOnly)
+          : repositoryInfo(runtime, request, "huggingface", headOnly);
+    }
+    String raw = extractRepositoryPath(name, request, true);
+    return huggingFace().get(
+        runtime,
+        raw,
+        request.getQueryString(),
+        repositoryBaseUrl(request, runtime.name()),
+        headOnly);
   }
 
   private MavenResponse dispatchRawGet(RepositoryRuntime runtime, String rawPath, boolean headOnly) {
