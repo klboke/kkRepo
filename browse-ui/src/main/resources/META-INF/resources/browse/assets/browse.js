@@ -767,6 +767,14 @@ const FILE_ICON_RULES = Object.freeze([
     suffixes: Object.freeze([".mod", ".sum", ".list", ".yaml", ".yml"]),
   }),
   Object.freeze({
+    icon: "layers",
+    suffixes: Object.freeze([".safetensors"]),
+  }),
+  Object.freeze({
+    icon: "binary",
+    suffixes: Object.freeze([".bin"]),
+  }),
+  Object.freeze({
     icon: "file-box",
     suffixes: Object.freeze([".whl", ".egg", ".nupkg", ".snupkg", ".crate", ".gem", ".rpm"]),
   }),
