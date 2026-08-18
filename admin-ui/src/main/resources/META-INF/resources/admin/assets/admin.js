@@ -56,7 +56,6 @@ let securityOidc = null;
 const SECURITY_PROVIDER_SECRET_MASK = "********";
 let securityProviderJsonSyncing = false;
 const securityProviderAttributes = { ldap: {}, oidc: {} };
-let securityLdapName = "LDAP";
 let securityAnonymous = null;
 let securityApiKeys = [];
 let securityScanState = {
@@ -917,10 +916,11 @@ function parseJsonObject(id) {
   }
 }
 
-function editableSecurityProviderAttributes(attributes) {
+function editableSecurityProviderAttributes(attributes, excludedKeys = []) {
   const editable = { ...(attributes || {}) };
   delete editable.source;
   delete editable.nexusRealm;
+  excludedKeys.forEach((key) => delete editable[key]);
   return editable;
 }
 
@@ -953,7 +953,6 @@ function securityLdapFormValue({ attributes = securityProviderAttributes.ldap, m
     enabled: document.getElementById("security-ldap-enabled").checked,
     priority: numberInputValue("security-ldap-priority") ?? 10,
     source: "LDAP",
-    name: securityLdapName,
     url: textInputValue("security-ldap-url"),
     protocol: textInputValue("security-ldap-protocol") || "ldap",
     host: textInputValue("security-ldap-host"),
@@ -1016,7 +1015,6 @@ function securityOidcFormValue({ attributes = securityProviderAttributes.oidc, m
 }
 
 function applySecurityLdapJsonValue(value) {
-  securityLdapName = securityProviderJsonScalar(value.name, "LDAP");
   setCheckboxValue("security-ldap-enabled", securityProviderJsonBoolean(value.enabled));
   setInputValue("security-ldap-priority", securityProviderJsonNumber(value.priority, 10));
   setInputValue("security-ldap-url", securityProviderJsonScalar(value.url));
@@ -1050,7 +1048,7 @@ function applySecurityLdapJsonValue(value) {
   setInputValue("security-ldap-group-member-format", securityProviderJsonScalar(value.groupMemberFormat, "${dn}"));
   setInputValue("security-ldap-group-object-class", securityProviderJsonScalar(value.groupObjectClass, "groupOfNames"));
   const attributes = value.attributes && !Array.isArray(value.attributes) && typeof value.attributes === "object"
-    ? editableSecurityProviderAttributes(value.attributes)
+    ? editableSecurityProviderAttributes(value.attributes, ["name"])
     : {};
   securityProviderAttributes.ldap = attributes;
   clearRequiredFieldErrors(ldapRequiredFields);
@@ -3802,7 +3800,6 @@ async function loadSecurityLdap() {
       enabled: false,
       priority: 10,
       source: "LDAP",
-      name: "LDAP",
       protocol: "ldap",
       authScheme: "simple",
       connectionTimeout: 30,
@@ -3831,7 +3828,6 @@ function renderSecurityLdap() {
   clearRequiredFieldErrors(ldapRequiredFields);
   setCheckboxValue("security-ldap-enabled", settings.enabled);
   setInputValue("security-ldap-priority", Number(settings.priority ?? 10));
-  securityLdapName = settings.name || "LDAP";
   setSelectValue("security-ldap-protocol", settings.protocol, "ldap");
   setInputValue("security-ldap-host", settings.host);
   setInputValue("security-ldap-port", settings.port);
@@ -3862,7 +3858,7 @@ function renderSecurityLdap() {
   setInputValue("security-ldap-group-member-attribute", settings.groupMemberAttribute, "member");
   setInputValue("security-ldap-group-member-format", settings.groupMemberFormat, "${dn}");
   setInputValue("security-ldap-group-object-class", settings.groupObjectClass, "groupOfNames");
-  securityProviderAttributes.ldap = editableSecurityProviderAttributes(settings.attributes);
+  securityProviderAttributes.ldap = editableSecurityProviderAttributes(settings.attributes, ["name"]);
   refreshSecurityLdapRequiredMarkers();
   syncSecurityProviderJsonFromForm("ldap", { force: true });
 }
