@@ -3263,16 +3263,6 @@ code {
   padding: 0 0 11px;
 }
 
-.security-provider-span-2 {
-  grid-column: span 2;
-}
-
-.security-provider-section-grid > .full-width,
-.security-provider-section-grid > .security-provider-span-2 {
-  width: 100%;
-  max-width: 76%;
-}
-
 .security-provider-source {
   display: grid;
   min-width: 0;
@@ -3371,11 +3361,6 @@ code {
   .security-provider-form {
     width: calc(100% - 48px);
   }
-
-  .security-provider-section-grid > .full-width,
-  .security-provider-section-grid > .security-provider-span-2 {
-    max-width: 82%;
-  }
 }
 
 @media (max-width: 720px) {
@@ -3387,15 +3372,6 @@ code {
   .security-provider-section-grid,
   .security-provider-overview-grid {
     grid-template-columns: 1fr;
-  }
-
-  .security-provider-span-2 {
-    grid-column: auto;
-  }
-
-  .security-provider-section-grid > .full-width,
-  .security-provider-section-grid > .security-provider-span-2 {
-    max-width: none;
   }
 
   .form-grid .security-provider-toggle-field {

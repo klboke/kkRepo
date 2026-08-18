@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="/browse/assets/tokens.css?v=20260724-visual-upgrade-1">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20260811-conan-1">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20260728-security-advisory-link-1">
-    <link rel="stylesheet" href="./assets/admin.css?v=20260818-security-provider-layout-4">
+    <link rel="stylesheet" href="./assets/admin.css?v=20260818-security-provider-layout-5">
     <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=20260817-global-search-3">
   </head>
   <body>
@@ -1069,12 +1069,12 @@
                   <legend>Server connection</legend>
                   <p class="security-provider-section-copy">Use a complete URL, or configure the protocol, host, port, and search base separately.</p>
                   <div class="security-provider-section-grid">
-                    <label class="full-width"><span>URL <span class="required-mark">*</span></span><input id="security-ldap-url" type="url" placeholder="ldap://ldap.example.com:389/dc=example,dc=com"></label>
+                    <label><span>URL <span class="required-mark">*</span></span><input id="security-ldap-url" type="url" placeholder="ldap://ldap.example.com:389/dc=example,dc=com"></label>
                     <label><span>Protocol</span><select id="security-ldap-protocol"><option value="ldap">ldap</option><option value="ldaps">ldaps</option></select></label>
                     <label><span>Host <span class="required-mark">*</span></span><input id="security-ldap-host" type="text"></label>
                     <label><span>Port</span><input id="security-ldap-port" type="number" min="1"></label>
                     <label class="checkbox-field security-provider-toggle-field"><input id="security-ldap-trust-store" type="checkbox"><span>Use trust store</span></label>
-                    <label class="full-width"><span>Search base</span><input id="security-ldap-search-base" type="text" placeholder="dc=example,dc=com"></label>
+                    <label><span>Search base</span><input id="security-ldap-search-base" type="text" placeholder="dc=example,dc=com"></label>
                   </div>
                 </fieldset>
 
@@ -1099,7 +1099,7 @@
                     <label><span>User object class</span><input id="security-ldap-user-object-class" type="text" value="inetOrgPerson"></label>
                     <label><span>MemberOf attribute</span><input id="security-ldap-user-member-of-attribute" type="text" value="memberOf"></label>
                     <label><span>Password attribute</span><input id="security-ldap-user-password-attribute" type="text" value="userPassword"></label>
-                    <label class="full-width"><span>User filter</span><input id="security-ldap-user-filter" type="text"></label>
+                    <label><span>User filter</span><input id="security-ldap-user-filter" type="text"></label>
                   </div>
                 </fieldset>
 
@@ -1123,7 +1123,7 @@
                     <label><span>Connection timeout</span><input id="security-ldap-connection-timeout" type="number" min="0" value="30"></label>
                     <label><span>Retry delay</span><input id="security-ldap-retry-delay" type="number" min="0"></label>
                     <label><span>Max incidents</span><input id="security-ldap-max-incidents" type="number" min="0"></label>
-                    <label class="full-width"><span>Additional attributes (JSON)</span><textarea id="security-ldap-attributes" rows="5" spellcheck="false">{}</textarea></label>
+                    <label><span>Additional attributes (JSON)</span><textarea id="security-ldap-attributes" rows="5" spellcheck="false">{}</textarea></label>
                   </div>
                 </details>
               </div>
@@ -1163,8 +1163,8 @@
                 <div class="security-provider-section-grid">
                   <label><span>Issuer <span class="required-mark">*</span></span><input id="security-oidc-issuer" type="url" placeholder="https://issuer.example.com"></label>
                   <label><span>Audience</span><input id="security-oidc-audience" type="text"></label>
-                  <label class="full-width"><span>JWKS URI <span class="required-mark">*</span></span><input id="security-oidc-jwks-uri" type="url" placeholder="https://issuer.example.com/.well-known/jwks.json"></label>
-                  <label class="full-width"><span>Scopes</span><input id="security-oidc-scopes" type="text" value="openid profile email"></label>
+                  <label><span>JWKS URI <span class="required-mark">*</span></span><input id="security-oidc-jwks-uri" type="url" placeholder="https://issuer.example.com/.well-known/jwks.json"></label>
+                  <label><span>Scopes</span><input id="security-oidc-scopes" type="text" value="openid profile email"></label>
                 </div>
               </fieldset>
 
@@ -1173,7 +1173,7 @@
                 <div class="security-provider-section-grid">
                   <label><span>Client ID <span class="required-mark">*</span></span><input id="security-oidc-client-id" type="text"></label>
                   <label><span>Client secret <span class="required-mark">*</span></span><input id="security-oidc-client-secret" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing"></label>
-                  <label class="full-width"><span>Redirect URI <span class="required-mark">*</span></span><input id="security-oidc-redirect-uri" type="url" placeholder="/internal/security/oidc/callback"></label>
+                  <label><span>Redirect URI <span class="required-mark">*</span></span><input id="security-oidc-redirect-uri" type="url" placeholder="/internal/security/oidc/callback"></label>
                 </div>
               </fieldset>
 
@@ -1192,11 +1192,11 @@
               <details class="security-provider-advanced">
                 <summary><span>Advanced settings</span><span class="lucide-icon icon-chevron-down" aria-hidden="true"></span></summary>
                 <div class="security-provider-advanced-body security-provider-section-grid">
-                  <label class="full-width"><span>Authorization endpoint</span><input id="security-oidc-authorization-endpoint" type="url" placeholder="https://issuer.example.com/oauth2/authorize"></label>
-                  <label class="full-width"><span>Token endpoint</span><input id="security-oidc-token-endpoint" type="url" placeholder="https://issuer.example.com/oauth2/token"></label>
+                  <label><span>Authorization endpoint</span><input id="security-oidc-authorization-endpoint" type="url" placeholder="https://issuer.example.com/oauth2/authorize"></label>
+                  <label><span>Token endpoint</span><input id="security-oidc-token-endpoint" type="url" placeholder="https://issuer.example.com/oauth2/token"></label>
                   <label><span>Clock skew seconds</span><input id="security-oidc-clock-skew" type="number" min="0" value="60"></label>
                   <label><span>JWKS cache seconds</span><input id="security-oidc-jwks-cache" type="number" min="0" value="300"></label>
-                  <label class="full-width"><span>Additional attributes (JSON)</span><textarea id="security-oidc-attributes" rows="5" spellcheck="false">{}</textarea></label>
+                  <label><span>Additional attributes (JSON)</span><textarea id="security-oidc-attributes" rows="5" spellcheck="false">{}</textarea></label>
                 </div>
               </details>
             </div>
