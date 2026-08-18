@@ -45,6 +45,7 @@
 .icon-waypoints { --lucide-icon: url("./icons/waypoints.svg"); }
 .icon-network { --lucide-icon: url("./icons/network.svg"); }
 .icon-log-in { --lucide-icon: url("./icons/log-in.svg"); }
+.icon-user-round { --lucide-icon: url("./icons/user-round.svg"); }
 .icon-user-round-x { --lucide-icon: url("./icons/user-round-x.svg"); }
 .icon-scroll-text { --lucide-icon: url("./icons/scroll-text.svg"); }
 .icon-sliders-horizontal { --lucide-icon: url("./icons/sliders-horizontal.svg"); }

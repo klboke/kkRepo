@@ -59,20 +59,26 @@
           <button class="login-dialog-tab" id="login-tab-password" type="button" role="tab" aria-controls="login-panel-password" aria-selected="false">Local / LDAP</button>
         </div>
         <div class="login-dialog-oidc-panel" id="login-panel-oidc" role="tabpanel" aria-labelledby="login-tab-oidc" hidden>
-          <button class="login-dialog-primary login-dialog-oidc-button" type="button">Sign in with SSO</button>
+          <button class="login-dialog-primary login-dialog-oidc-button" type="button"><span class="login-dialog-button-icon lucide-icon icon-shield-check" aria-hidden="true"></span><span>Sign in with SSO</span></button>
         </div>
         <form class="login-dialog-form" id="login-panel-password" role="tabpanel" aria-labelledby="login-tab-password" novalidate>
           <label>
             <span>Username</span>
-            <input class="login-dialog-username" name="username" type="text" autocomplete="username" required>
+            <span class="login-dialog-input-wrap">
+              <span class="login-dialog-field-icon lucide-icon icon-user-round" aria-hidden="true"></span>
+              <input class="login-dialog-username" name="username" type="text" autocomplete="username" required>
+            </span>
           </label>
           <label>
             <span>Password</span>
-            <input class="login-dialog-password" name="password" type="password" autocomplete="current-password" required>
+            <span class="login-dialog-input-wrap">
+              <span class="login-dialog-field-icon lucide-icon icon-lock" aria-hidden="true"></span>
+              <input class="login-dialog-password" name="password" type="password" autocomplete="current-password" required>
+            </span>
           </label>
           <div class="login-dialog-error" role="alert" hidden></div>
           <div class="login-dialog-actions">
-            <button class="login-dialog-primary login-dialog-submit" type="submit">Sign in</button>
+            <button class="login-dialog-primary login-dialog-submit" type="submit"><span class="login-dialog-button-icon lucide-icon icon-log-in" aria-hidden="true"></span><span>Sign in</span></button>
           </div>
         </form>
       </section>

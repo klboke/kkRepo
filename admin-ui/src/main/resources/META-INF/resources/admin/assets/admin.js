@@ -766,12 +766,23 @@ function updateSessionControls(session) {
   currentSession = session || null;
   const signedIn = Boolean(currentSession?.userId);
   const userMenu = document.getElementById("user-menu");
-  const currentUserPill = document.getElementById("current-user-pill");
+  const userMenuTrigger = document.getElementById("user-menu-trigger");
+  const currentUser = document.getElementById("current-user");
+  const userMenuName = document.getElementById("user-menu-name");
+  const userMenuSource = document.getElementById("user-menu-source");
   userMenu.hidden = !signedIn;
   if (!signedIn) closeUserMenu();
   if (signedIn) {
-    const source = currentSession.source ? `${displaySource(currentSession.source)}/` : "";
-    currentUserPill.textContent = `${source}${currentSession.userId}`;
+    const userId = String(currentSession.userId);
+    const source = displaySource(currentSession.source).trim();
+    const sourceLabel = accountSourceLabel(source);
+    const qualifiedUser = source ? `${source}/${userId}` : userId;
+
+    currentUser.textContent = userId;
+    userMenuName.textContent = userId;
+    userMenuSource.textContent = sourceLabel;
+    userMenuTrigger.title = `Account menu for ${qualifiedUser}`;
+    userMenuTrigger.setAttribute("aria-label", `Account menu for ${qualifiedUser}`);
     sessionStorage.setItem(AUTH_SNAPSHOT_KEY, JSON.stringify({
       session: currentSession,
       permissions: ["nexus:*"],
@@ -882,6 +893,12 @@ function isLocalSource(source) {
 
 function displaySource(source) {
   return source == null ? "" : String(source);
+}
+
+function accountSourceLabel(source) {
+  const value = displaySource(source).trim();
+  if (!value) return "Authenticated account";
+  return `${value.charAt(0).toUpperCase()}${value.slice(1)} account`;
 }
 
 function commaList(value) {
@@ -7389,6 +7406,10 @@ document.getElementById("user-menu").addEventListener("mouseleave", scheduleClos
 document.getElementById("user-menu-trigger").addEventListener("click", (event) => {
   event.stopPropagation();
   toggleUserMenu();
+});
+document.getElementById("my-token-menu-item").addEventListener("click", () => {
+  closeUserMenu();
+  window.location.href = "/browse/#browse/my-token";
 });
 document.getElementById("signout-button").addEventListener("click", () => {
   closeUserMenu();
