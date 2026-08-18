@@ -3192,15 +3192,9 @@ code {
   }
 }
 
-#security-ldap-view > .page-heading,
-#security-oidc-view > .page-heading {
-  width: min(1000px, calc(100% - 48px));
-  margin: 0 auto;
-}
-
 .security-provider-form {
   width: min(1000px, calc(100% - 48px));
-  margin: 16px auto 24px;
+  margin: 16px 24px 24px;
   border: 0;
   background: transparent;
   box-shadow: none;
@@ -3376,12 +3370,7 @@ code {
 @media (max-width: 720px) {
   .security-provider-form {
     width: calc(100% - 24px);
-    margin: 12px auto 18px;
-  }
-
-  #security-ldap-view > .page-heading,
-  #security-oidc-view > .page-heading {
-    width: calc(100% - 24px);
+    margin: 12px 12px 18px;
   }
 
   .security-provider-section-grid,
