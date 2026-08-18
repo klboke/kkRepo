@@ -2740,7 +2740,7 @@ function repositoryFormPayload() {
     const metadata = document.getElementById("repository-metadata-max-age").value;
     const minimumReleaseAge = document.getElementById("repository-minimum-release-age").value;
     const allowedRedirectHosts = document.getElementById("repository-allowed-redirect-hosts").value
-      .split(/[\n,]/).map((value) => value.trim()).filter(Boolean);
+      .split(",").map((value) => value.trim()).filter(Boolean);
     payload.proxy = {
       remoteUrl: document.getElementById("repository-remote-url").value.trim(),
       allowedRedirectHosts,
@@ -2947,7 +2947,7 @@ function showEditRepositoryForm(name) {
   if (repo.proxy) {
     document.getElementById("repository-remote-url").value = repo.proxy.remoteUrl || "";
     document.getElementById("repository-allowed-redirect-hosts").value =
-      Array.isArray(repo.proxy.allowedRedirectHosts) ? repo.proxy.allowedRedirectHosts.join("\n") : "";
+      Array.isArray(repo.proxy.allowedRedirectHosts) ? repo.proxy.allowedRedirectHosts.join(", ") : "";
     document.getElementById("repository-remote-username").value = repo.proxy.remoteUsername || "";
     document.getElementById("repository-remote-password").value = "";
     document.getElementById("repository-remote-password").placeholder =
