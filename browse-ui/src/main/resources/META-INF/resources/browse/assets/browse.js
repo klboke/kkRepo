@@ -311,6 +311,12 @@ function displaySource(source) {
   return source == null ? "" : String(source);
 }
 
+function accountSourceLabel(source) {
+  const value = displaySource(source).trim();
+  if (!value) return "Authenticated account";
+  return `${value.charAt(0).toUpperCase()}${value.slice(1)} account`;
+}
+
 function readAuthSnapshot() {
   try {
     const raw = sessionStorage.getItem(AUTH_SNAPSHOT_KEY);
@@ -539,7 +545,10 @@ function updateTopbarAuth() {
   const adminLink = document.getElementById("admin-workspace-link");
   const loginButton = document.getElementById("login-button");
   const userMenu = document.getElementById("user-menu");
+  const userMenuTrigger = document.getElementById("user-menu-trigger");
   const currentUser = document.getElementById("current-user");
+  const userMenuName = document.getElementById("user-menu-name");
+  const userMenuSource = document.getElementById("user-menu-source");
   const uploadNav = document.getElementById("upload-nav");
 
   const signedIn = Boolean(currentSession && currentSession.userId);
@@ -550,8 +559,16 @@ function updateTopbarAuth() {
   userMenu.hidden = !signedIn;
   if (!signedIn) closeUserMenu();
   if (signedIn) {
-    const source = currentSession.source ? `${displaySource(currentSession.source)}/` : "";
-    currentUser.textContent = `${source}${currentSession.userId}`;
+    const userId = String(currentSession.userId);
+    const source = displaySource(currentSession.source).trim();
+    const sourceLabel = accountSourceLabel(source);
+    const qualifiedUser = source ? `${source}/${userId}` : userId;
+
+    currentUser.textContent = userId;
+    userMenuName.textContent = userId;
+    userMenuSource.textContent = sourceLabel;
+    userMenuTrigger.title = `Account menu for ${qualifiedUser}`;
+    userMenuTrigger.setAttribute("aria-label", `Account menu for ${qualifiedUser}`);
   }
 
   const uploadVisible = canUseUpload();

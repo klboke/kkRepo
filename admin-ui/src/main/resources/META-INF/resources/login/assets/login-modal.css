@@ -119,6 +119,28 @@
   font-weight: 700;
 }
 
+.login-dialog-input-wrap {
+  position: relative;
+  display: block;
+}
+
+.login-dialog-field-icon {
+  position: absolute;
+  top: 50%;
+  left: 12px;
+  z-index: 1;
+  width: 18px;
+  height: 18px;
+  color: var(--ink-3);
+  pointer-events: none;
+  transform: translateY(-50%);
+  transition: color 0.14s ease;
+}
+
+.login-dialog-input-wrap:focus-within .login-dialog-field-icon {
+  color: var(--brand);
+}
+
 .login-dialog-form input {
   width: 100%;
   height: 38px;
@@ -126,7 +148,7 @@
   border-radius: var(--r-sm);
   outline: 0;
   color: var(--ink-1);
-  padding: 0 10px;
+  padding: 0 42px 0 40px;
 }
 
 .login-dialog-form input:focus {
@@ -150,11 +172,20 @@
 
 .login-dialog-primary,
 .login-dialog-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   height: 40px;
+  gap: 8px;
   border-radius: var(--r-sm);
   cursor: pointer;
   font-weight: 700;
   transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease, box-shadow 0.14s ease, transform 0.1s ease;
+}
+
+.login-dialog-button-icon {
+  width: 18px;
+  height: 18px;
 }
 
 .login-dialog-primary {

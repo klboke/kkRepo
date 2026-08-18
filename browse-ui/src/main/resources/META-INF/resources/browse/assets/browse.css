@@ -132,8 +132,7 @@ select {
   color: #ffffff;
 }
 
-.top-icon,
-.signout {
+.top-icon {
   display: grid;
   align-items: center;
   justify-items: center;
@@ -162,82 +161,55 @@ select {
   flex: 1;
 }
 
-.user-pill {
-  min-width: 120px;
-  padding: 0 12px;
-  font-weight: 700;
-}
-
-.user-menu {
-  position: relative;
-  align-self: stretch;
-}
-
-.user-menu-trigger {
+.account-login {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  height: 56px;
-  border: 0;
-  background: transparent;
-  color: #ffffff;
+  width: 126px;
+  height: 40px;
+  min-width: 126px;
+  max-width: 126px;
+  gap: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--topbar-ink);
   cursor: pointer;
+  margin-right: 10px;
   padding: 0 12px;
+  text-align: left;
+  transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
 }
 
-.user-menu-trigger:hover,
-.user-menu-trigger[aria-expanded="true"] {
-  background: rgba(255, 255, 255, 0.08);
+.account-login:hover {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: var(--topbar-hover);
 }
 
-.user-menu-caret {
-  color: rgba(255, 255, 255, 0.72);
-  font-size: 11px;
+.account-login:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px rgba(47, 191, 164, 0.28);
 }
 
-.user-menu-popover {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 8px;
-  z-index: 30;
-  display: none;
-  min-width: 152px;
-  border: 1px solid #cfd8d4;
-  border-radius: 8px;
-  background: #ffffff;
-  box-shadow: var(--shadow-pop);
-  padding: 6px;
+.account-login-icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  color: var(--brand-bright);
 }
 
-.user-menu:hover .user-menu-popover,
-.user-menu-popover.is-open {
-  display: block;
-}
-
-.user-menu-item {
-  display: flex;
-  align-items: center;
-  width: 100%;
-  height: 34px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: #22312e;
-  cursor: pointer;
+.account-entry-title {
+  overflow: hidden;
   font-size: 13px;
   font-weight: var(--fw-semibold);
-  padding: 0 10px;
-  text-align: left;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.user-menu-item:hover {
-  background: #edf3ef;
-}
-
-.signout {
-  min-width: 94px;
-  font-size: 13px;
-  font-weight: 700;
+@media (prefers-reduced-motion: reduce) {
+  .account-login {
+    transition: none;
+  }
 }
 
 .nx-sidebar {
@@ -1704,8 +1676,7 @@ textarea:focus-visible {
   color: var(--topbar-ink);
 }
 
-.top-icon,
-.signout {
+.top-icon {
   height: 56px;
   min-width: 54px;
   color: var(--topbar-muted);
@@ -1717,8 +1688,7 @@ textarea:focus-visible {
   font-size: 21px;
 }
 
-.top-icon:hover,
-.signout:hover {
+.top-icon:hover {
   background: var(--topbar-hover);
   color: var(--topbar-ink);
 }
@@ -1754,16 +1724,6 @@ textarea:focus-visible {
   line-height: 1;
 }
 
-.user-pill,
-.signout {
-  font-size: 13px;
-  font-weight: var(--fw-semibold);
-}
-
-.user-pill {
-  color: var(--topbar-ink);
-}
-
 .user-menu-trigger {
   color: var(--topbar-ink);
 }
@@ -1775,10 +1735,6 @@ textarea:focus-visible {
 
 .user-menu-caret {
   color: var(--topbar-muted);
-}
-
-.signout {
-  min-width: 88px;
 }
 
 .nx-sidebar {
@@ -2684,5 +2640,12 @@ body {
 
   #browse-view .nx-table-frame {
     margin-top: 12px;
+  }
+}
+
+@media (max-width: 430px) {
+  .account-login {
+    margin-right: 8px;
+    padding: 0 10px;
   }
 }
