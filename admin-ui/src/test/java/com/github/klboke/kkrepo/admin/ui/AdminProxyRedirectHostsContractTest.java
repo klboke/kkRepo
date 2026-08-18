@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.admin.ui;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -20,6 +21,8 @@ class AdminProxyRedirectHostsContractTest {
     assertTrue(index.contains("class=\"field-help\""));
     assertTrue(index.contains("class=\"lucide-icon icon-info\""));
     assertTrue(index.contains("data-tooltip=\"Optional."));
+    assertTrue(index.contains("placeholder=\"artifacts.example.com\""));
+    assertFalse(index.contains("plugins-artifacts.gradle.org"));
     assertTrue(index.contains("Cross-host redirects"));
     assertTrue(index.contains("denied by default"));
     assertTrue(index.contains("Source repository credentials are never forwarded"));
