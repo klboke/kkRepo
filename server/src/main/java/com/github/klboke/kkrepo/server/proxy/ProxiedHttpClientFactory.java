@@ -1,8 +1,7 @@
 package com.github.klboke.kkrepo.server.proxy;
 
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
-import com.github.benmanes.caffeine.cache.RemovalCause;
+import com.github.klboke.kkrepo.cache.LocalCache;
+import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy.ResolvedHttpTarget;
 import jakarta.annotation.PreDestroy;
 import java.io.IOException;
@@ -62,7 +61,7 @@ import org.springframework.stereotype.Component;
  * cached client drops its credentials with it.
  *
  * <p>Each distinct (owning repository, {@link OutboundProxyConfig#cacheKey()}) pair gets its own
- * pooled {@link CloseableHttpClient} in a Caffeine cache. Keying by owner means two repositories
+ * pooled {@link CloseableHttpClient} in a node-local cache. Keying by owner means two repositories
  * that happen to share identical proxy settings never share one client, so an update or delete of
  * one repository can never close a pool the other repository is still streaming from. Entries
  * expire after a period without use
@@ -93,7 +92,7 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
     }
   };
 
-  private final Cache<String, CloseableHttpClient> cache;
+  private final LocalCache<String, CloseableHttpClient> cache;
   private final CloseableHttpClient directClient;
   private final Duration idleTtl;
   private final Duration connectTimeout;
@@ -103,10 +102,10 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
       @Value("${kkrepo.outbound-proxy.connect-timeout-ms:10000}") long connectTimeoutMillis) {
     this.idleTtl = Duration.ofMillis(Math.max(1L, idleTtlMillis));
     this.connectTimeout = Duration.ofMillis(Math.max(1L, connectTimeoutMillis));
-    this.cache = Caffeine.newBuilder()
+    this.cache = LocalCacheFactory.standard()
+        .<String, CloseableHttpClient>builder("outbound-proxy-clients")
         .expireAfterAccess(this.idleTtl)
-        .removalListener((String key, CloseableHttpClient client, RemovalCause cause) ->
-            closeQuietly(client))
+        .removalListener((key, client, cause) -> closeQuietly(client))
         .build();
     this.directClient = buildDirect();
   }
@@ -144,7 +143,7 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
 
   /**
    * Closes every cached client and its connection pool. Invoked on application shutdown so pooled
-   * connections do not outlive the process; the Caffeine removal listener also closes any client
+   * connections do not outlive the process; the cache removal listener also closes any client
    * evicted by the idle TTL.
    */
   @PreDestroy

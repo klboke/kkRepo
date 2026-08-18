@@ -1,7 +1,7 @@
 package com.github.klboke.kkrepo.server.alpine;
 
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.klboke.kkrepo.cache.LocalCache;
+import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
@@ -32,7 +32,7 @@ import org.springframework.stereotype.Component;
 @Component
 final class AlpineRepositorySettings {
   private final RepositoryRuntimeRegistry repositories;
-  private final Cache<RepositoryKey, CachedSettings> cache;
+  private final LocalCache<RepositoryKey, CachedSettings> cache;
   private final boolean cacheEnabled;
 
   @Autowired
@@ -41,7 +41,8 @@ final class AlpineRepositorySettings {
       @Value("${kkrepo.alpine.settings-cache-ttl-seconds:30}") long ttlSeconds) {
     this.repositories = repositories;
     this.cacheEnabled = ttlSeconds > 0;
-    this.cache = Caffeine.newBuilder()
+    this.cache = LocalCacheFactory.standard()
+        .<RepositoryKey, CachedSettings>builder("alpine-repository-settings")
         .expireAfterWrite(Duration.ofSeconds(Math.max(1, ttlSeconds)))
         .maximumSize(100_000)
         .build();

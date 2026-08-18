@@ -1,7 +1,7 @@
 package com.github.klboke.kkrepo.server.npm;
 
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.klboke.kkrepo.cache.LocalCache;
+import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import com.github.klboke.kkrepo.protocol.npm.NpmMinimumReleaseAge;
 import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import java.time.Duration;
@@ -16,13 +16,14 @@ import org.springframework.stereotype.Service;
  *
  * <p>The raw packument in shared blob storage remains the source of truth. Keys include the durable
  * blob identity and the configured policy, so losing this cache only costs a rebuild and stale
- * entries cannot be selected after another replica stores a new packument revision. Caffeine's
- * atomic {@code get(key, mappingFunction)} also gives each replica per-key single-flight loading.
+ * entries cannot be selected after another replica stores a new packument revision. The local
+ * cache's atomic {@code get(key, mappingFunction)} also gives each replica per-key single-flight
+ * loading.
  */
 @Service
 public class NpmReleaseAgeCache {
-  private final Cache<AnalysisKey, NpmMinimumReleaseAge.Analysis> analyses;
-  private final Cache<ResponseKey, byte[]> responses;
+  private final LocalCache<AnalysisKey, NpmMinimumReleaseAge.Analysis> analyses;
+  private final LocalCache<ResponseKey, byte[]> responses;
 
   public NpmReleaseAgeCache(
       @Value("${kkrepo.cache.npm-release-age.maximum-version-entries:100000}")
@@ -32,15 +33,18 @@ public class NpmReleaseAgeCache {
       @Value("${kkrepo.cache.npm-release-age.expire-after-access-minutes:30}")
       long expireAfterAccessMinutes) {
     Duration expiry = Duration.ofMinutes(Math.max(1, expireAfterAccessMinutes));
-    this.analyses = Caffeine.newBuilder()
-        .maximumWeight(Math.max(1, maximumVersionEntries))
-        .weigher((AnalysisKey ignored, NpmMinimumReleaseAge.Analysis analysis) ->
-            analysis.cacheWeight())
+    this.analyses = LocalCacheFactory.standard()
+        .<AnalysisKey, NpmMinimumReleaseAge.Analysis>builder("npm-release-age-analyses")
+        .maximumWeight(
+            Math.max(1, maximumVersionEntries),
+            (ignored, analysis) -> analysis.cacheWeight())
         .expireAfterAccess(expiry)
         .build();
-    this.responses = Caffeine.newBuilder()
-        .maximumWeight(Math.max(1, responseMaximumBytes))
-        .weigher((ResponseKey ignored, byte[] bytes) -> Math.max(1, bytes.length))
+    this.responses = LocalCacheFactory.standard()
+        .<ResponseKey, byte[]>builder("npm-release-age-responses")
+        .maximumWeight(
+            Math.max(1, responseMaximumBytes),
+            (ignored, bytes) -> Math.max(1, bytes.length))
         .expireAfterAccess(expiry)
         .build();
   }

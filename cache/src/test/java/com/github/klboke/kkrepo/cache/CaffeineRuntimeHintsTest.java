@@ -1,4 +1,4 @@
-package com.github.klboke.kkrepo.server.nativeimage;
+package com.github.klboke.kkrepo.cache;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Expiry;
 import com.github.benmanes.caffeine.cache.RemovalCause;
-import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.HashSet;

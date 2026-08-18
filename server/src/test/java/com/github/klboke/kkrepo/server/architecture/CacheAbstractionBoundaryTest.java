@@ -12,29 +12,8 @@ import org.junit.jupiter.api.Test;
 
 class CacheAbstractionBoundaryTest {
   private static final String CAFFEINE_PACKAGE = "com.github.benmanes.caffeine";
-
-  /**
-   * Audited migration debt. New entries are forbidden; follow-up cache migration work must remove
-   * entries as each class moves to LocalCacheFactory.
-   */
-  private static final Set<String> LEGACY_DIRECT_CAFFEINE_FILES = Set.of(
-      "server/src/main/java/com/github/klboke/kkrepo/server/alpine/AlpinePublishedSnapshotCache.java",
-      "server/src/main/java/com/github/klboke/kkrepo/server/alpine/AlpineRepositorySettings.java",
-      "server/src/main/java/com/github/klboke/kkrepo/server/apt/AptPublishedSnapshotCache.java",
-      "server/src/main/java/com/github/klboke/kkrepo/server/apt/AptRepositorySettings.java",
-      "server/src/main/java/com/github/klboke/kkrepo/server/cache/AssetMetadataCache.java",
-      "server/src/main/java/com/github/klboke/kkrepo/server/cache/JdbcVersionWatermark.java",
-      "server/src/main/java/com/github/klboke/kkrepo/server/cache/NexusLikeCacheController.java",
-      "server/src/main/java/com/github/klboke/kkrepo/server/conan/ConanRemoteClient.java",
-      "server/src/main/java/com/github/klboke/kkrepo/server/maven/BlobStorageRegistry.java",
-      "server/src/main/java/com/github/klboke/kkrepo/server/maven/RepositoryRuntimeRegistry.java",
-      "server/src/main/java/com/github/klboke/kkrepo/server/nativeimage/CaffeineRuntimeHints.java",
-      "server/src/main/java/com/github/klboke/kkrepo/server/npm/NpmReleaseAgeCache.java",
-      "server/src/main/java/com/github/klboke/kkrepo/server/proxy/ProxiedHttpClientFactory.java",
-      "server/src/main/java/com/github/klboke/kkrepo/server/security/BasicAuthCache.java",
-      "server/src/main/java/com/github/klboke/kkrepo/server/security/SecurityAuthorizationCache.java",
-      "storage-s3/src/main/java/com/github/klboke/kkrepo/storage/s3/OssClientFactory.java",
-      "storage-s3/src/main/java/com/github/klboke/kkrepo/storage/s3/S3ClientFactory.java");
+  private static final String CAFFEINE_GROUP_ID =
+      "<groupId>com.github.ben-manes.caffeine</groupId>";
 
   @Test
   void productionCodeDoesNotAddDirectCacheBackendDependencies() throws IOException {
@@ -59,9 +38,29 @@ class CacheAbstractionBoundaryTest {
       }
     }
 
-    assertEquals(LEGACY_DIRECT_CAFFEINE_FILES, directBackendUsers,
-        "Business caches must use cache-module abstractions. Remove migrated legacy entries; "
-            + "do not add new direct Caffeine users.");
+    assertEquals(Set.of(), directBackendUsers,
+        "Production caches outside the cache module must use cache-module abstractions; "
+            + "direct Caffeine dependencies are forbidden.");
+  }
+
+  @Test
+  void businessModulesDoNotDeclareDirectCacheBackendDependencies() throws IOException {
+    Path root = repositoryRoot();
+    Set<String> directBackendDependencies = new LinkedHashSet<>();
+    try (Stream<Path> modules = Files.list(root)) {
+      for (Path module : modules.filter(Files::isDirectory).toList()) {
+        if (module.getFileName().toString().equals("cache")) {
+          continue;
+        }
+        Path pom = module.resolve("pom.xml");
+        if (Files.isRegularFile(pom) && Files.readString(pom).contains(CAFFEINE_GROUP_ID)) {
+          directBackendDependencies.add(root.relativize(pom).toString());
+        }
+      }
+    }
+
+    assertEquals(Set.of(), directBackendDependencies,
+        "Business modules must depend on the cache module rather than a cache backend directly.");
   }
 
   private static Path repositoryRoot() {

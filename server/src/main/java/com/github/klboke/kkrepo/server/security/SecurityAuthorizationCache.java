@@ -1,9 +1,9 @@
 package com.github.klboke.kkrepo.server.security;
 
 import com.fasterxml.jackson.core.type.TypeReference;
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
+import com.github.klboke.kkrepo.cache.LocalCache;
+import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import com.github.klboke.kkrepo.cache.SharedCache;
 import com.github.klboke.kkrepo.server.cache.VersionWatermark;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityPrivilegeRecord;
@@ -16,7 +16,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.slf4j.Logger;
@@ -40,7 +39,7 @@ public class SecurityAuthorizationCache {
   private final VersionWatermark watermark;
   private final boolean enabled;
   private final Duration snapshotTtl;
-  private final Cache<String, String> versionCache;
+  private final LocalCache<String, String> versionCache;
 
   @Autowired
   public SecurityAuthorizationCache(
@@ -53,8 +52,9 @@ public class SecurityAuthorizationCache {
     this.watermark = watermark;
     this.enabled = enabled;
     this.snapshotTtl = ttlMinutes <= 0 ? Duration.ZERO : Duration.ofMinutes(ttlMinutes);
-    this.versionCache = Caffeine.newBuilder()
-        .expireAfterWrite(Math.max(1, versionLocalTtlSeconds), TimeUnit.SECONDS)
+    this.versionCache = LocalCacheFactory.standard()
+        .<String, String>builder("security-authorization-version")
+        .expireAfterWrite(Duration.ofSeconds(Math.max(1, versionLocalTtlSeconds)))
         .maximumSize(1)
         .build();
   }

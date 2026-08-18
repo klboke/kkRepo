@@ -1,7 +1,7 @@
 package com.github.klboke.kkrepo.server.alpine;
 
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.klboke.kkrepo.cache.LocalCache;
+import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AlpineRegistryDao;
 import com.github.klboke.kkrepo.server.cache.VersionWatermark;
 import java.time.Duration;
@@ -28,8 +28,8 @@ final class AlpinePublishedSnapshotCache {
 
   private final AlpineRegistryDao registry;
   private final VersionWatermark watermark;
-  private final Cache<SuiteKey, AlpineRegistryDao.Snapshot> snapshots;
-  private final Cache<SuiteKey, Long> observedVersions;
+  private final LocalCache<SuiteKey, AlpineRegistryDao.Snapshot> snapshots;
+  private final LocalCache<SuiteKey, Long> observedVersions;
   private final boolean enabled;
 
   @Autowired
@@ -42,11 +42,13 @@ final class AlpinePublishedSnapshotCache {
     this.watermark = watermark;
     this.enabled = enabled && ttlSeconds > 0;
     Duration ttl = Duration.ofSeconds(Math.max(1, ttlSeconds));
-    this.snapshots = Caffeine.newBuilder()
+    this.snapshots = LocalCacheFactory.standard()
+        .<SuiteKey, AlpineRegistryDao.Snapshot>builder("alpine-published-snapshots")
         .expireAfterWrite(ttl)
         .maximumSize(100_000)
         .build();
-    this.observedVersions = Caffeine.newBuilder()
+    this.observedVersions = LocalCacheFactory.standard()
+        .<SuiteKey, Long>builder("alpine-published-snapshot-versions")
         .maximumSize(100_000)
         .build();
   }

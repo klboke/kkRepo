@@ -1,24 +1,25 @@
 package com.github.klboke.kkrepo.server.cache;
 
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.klboke.kkrepo.cache.LocalCache;
+import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CacheVersionDao;
+import java.time.Duration;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 @Service
 public class JdbcVersionWatermark implements VersionWatermark {
   private final CacheVersionDao dao;
-  private final Cache<String, Long> localVersions;
+  private final LocalCache<String, Long> localVersions;
 
   public JdbcVersionWatermark(
       CacheVersionDao dao,
       @Value("${kkrepo.cache.version.local-ttl-seconds:2}") long localTtlSeconds) {
     this.dao = dao;
-    this.localVersions = Caffeine.newBuilder()
-        .expireAfterWrite(Math.max(1, localTtlSeconds), TimeUnit.SECONDS)
+    this.localVersions = LocalCacheFactory.standard()
+        .<String, Long>builder("jdbc-version-watermarks")
+        .expireAfterWrite(Duration.ofSeconds(Math.max(1, localTtlSeconds)))
         .maximumSize(100_000)
         .build();
   }

@@ -1,8 +1,7 @@
 package com.github.klboke.kkrepo.server.maven;
 
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
-import com.github.benmanes.caffeine.cache.RemovalCause;
+import com.github.klboke.kkrepo.cache.LocalCache;
+import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
@@ -49,8 +48,9 @@ public class BlobStorageRegistry {
   private final FileBlobStorageFactory fileFactory;
   private final S3StorageProperties fallback;
   private final KkRepoMetrics metrics;
-  private final Cache<String, BlobStorage> cache = Caffeine.newBuilder()
-      .removalListener((String key, BlobStorage storage, RemovalCause cause) -> closeQuietly(storage))
+  private final LocalCache<String, BlobStorage> cache = LocalCacheFactory.standard()
+      .<String, BlobStorage>builder("blob-storages")
+      .removalListener((key, storage, cause) -> closeQuietly(storage))
       .build();
   private final boolean catalogCacheEnabled;
   private final CatalogCacheBroadcaster broadcaster;

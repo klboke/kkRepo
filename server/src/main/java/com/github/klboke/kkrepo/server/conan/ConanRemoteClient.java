@@ -1,7 +1,7 @@
 package com.github.klboke.kkrepo.server.conan;
 
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.klboke.kkrepo.cache.LocalCache;
+import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
@@ -22,7 +22,8 @@ final class ConanRemoteClient {
   private static final int MAX_TOKEN_BYTES = 4096;
   private final RawProxyService proxy;
   private final HttpRemoteFetcher fetcher;
-  private final Cache<String, String> exchangedTokens = Caffeine.newBuilder()
+  private final LocalCache<String, String> exchangedTokens = LocalCacheFactory.standard()
+      .<String, String>builder("conan-exchanged-tokens")
       .expireAfterWrite(Duration.ofMinutes(50))
       .maximumSize(10_000)
       .build();

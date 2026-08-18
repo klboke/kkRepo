@@ -2,8 +2,8 @@ package com.github.klboke.kkrepo.server.maven;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.klboke.kkrepo.cache.LocalCache;
+import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import com.github.klboke.kkrepo.cache.SharedCache;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
@@ -56,9 +56,9 @@ public class RepositoryRuntimeRegistry {
   private final SharedCache cache;
   private final ObjectMapper objectMapper;
   private final CatalogCacheBroadcaster broadcaster;
-  private final Cache<String, Optional<RepositoryRuntime>> localRuntimes;
-  private final Cache<String, Optional<RepositoryRecord>> localRecordsByName;
-  private final Cache<Long, RepositoryRecord> localRecordsById;
+  private final LocalCache<String, Optional<RepositoryRuntime>> localRuntimes;
+  private final LocalCache<String, Optional<RepositoryRecord>> localRecordsByName;
+  private final LocalCache<Long, RepositoryRecord> localRecordsById;
   private final AtomicBoolean subscribed = new AtomicBoolean();
   private final AtomicLong configurationVersion = new AtomicLong();
 
@@ -85,15 +85,18 @@ public class RepositoryRuntimeRegistry {
     this.broadcaster = broadcaster;
     this.ttl = Duration.ofSeconds(Math.max(0, ttlSeconds));
     Duration localTtl = this.ttl.isZero() ? Duration.ofSeconds(1) : this.ttl;
-    this.localRuntimes = Caffeine.newBuilder()
+    this.localRuntimes = LocalCacheFactory.standard()
+        .<String, Optional<RepositoryRuntime>>builder("repository-runtimes")
         .expireAfterWrite(localTtl)
         .maximumSize(100_000)
         .build();
-    this.localRecordsByName = Caffeine.newBuilder()
+    this.localRecordsByName = LocalCacheFactory.standard()
+        .<String, Optional<RepositoryRecord>>builder("repository-records-by-name")
         .expireAfterWrite(localTtl)
         .maximumSize(100_000)
         .build();
-    this.localRecordsById = Caffeine.newBuilder()
+    this.localRecordsById = LocalCacheFactory.standard()
+        .<Long, RepositoryRecord>builder("repository-records-by-id")
         .expireAfterWrite(localTtl)
         .maximumSize(100_000)
         .build();
@@ -106,15 +109,18 @@ public class RepositoryRuntimeRegistry {
     this.broadcaster = null;
     this.ttl = Duration.ofSeconds(Math.max(0, ttlSeconds));
     Duration localTtl = this.ttl.isZero() ? Duration.ofSeconds(1) : this.ttl;
-    this.localRuntimes = Caffeine.newBuilder()
+    this.localRuntimes = LocalCacheFactory.standard()
+        .<String, Optional<RepositoryRuntime>>builder("repository-runtimes")
         .expireAfterWrite(localTtl)
         .maximumSize(100_000)
         .build();
-    this.localRecordsByName = Caffeine.newBuilder()
+    this.localRecordsByName = LocalCacheFactory.standard()
+        .<String, Optional<RepositoryRecord>>builder("repository-records-by-name")
         .expireAfterWrite(localTtl)
         .maximumSize(100_000)
         .build();
-    this.localRecordsById = Caffeine.newBuilder()
+    this.localRecordsById = LocalCacheFactory.standard()
+        .<Long, RepositoryRecord>builder("repository-records-by-id")
         .expireAfterWrite(localTtl)
         .maximumSize(100_000)
         .build();

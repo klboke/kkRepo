@@ -4,8 +4,8 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.klboke.kkrepo.cache.LocalCache;
+import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import com.github.klboke.kkrepo.cache.SharedCache;
 import java.time.Duration;
 import java.time.Instant;
@@ -14,8 +14,12 @@ import java.util.concurrent.atomic.AtomicLong;
 
 public class InMemorySharedCache implements SharedCache {
   private final ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
-  private final Cache<String, Entry> values = Caffeine.newBuilder().build();
-  private final Cache<String, AtomicLong> counters = Caffeine.newBuilder().build();
+  private final LocalCache<String, Entry> values = LocalCacheFactory.standard()
+      .<String, Entry>builder("test-shared-cache-values")
+      .build();
+  private final LocalCache<String, AtomicLong> counters = LocalCacheFactory.standard()
+      .<String, AtomicLong>builder("test-shared-cache-counters")
+      .build();
 
   @Override
   public Optional<String> getString(String namespace, String key) {

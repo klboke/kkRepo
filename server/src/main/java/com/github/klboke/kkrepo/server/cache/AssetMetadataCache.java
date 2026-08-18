@@ -3,8 +3,8 @@ package com.github.klboke.kkrepo.server.cache;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.klboke.kkrepo.cache.LocalCache;
+import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import com.github.klboke.kkrepo.cache.SharedCache;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
@@ -49,9 +49,9 @@ public class AssetMetadataCache {
   private final SharedCache sharedCache;
   private final ObjectMapper objectMapper;
   private final VersionWatermark watermark;
-  private final Cache<Long, Long> observedVersions;
-  private final Cache<String, CachedAssetMetadata> localSnapshots;
-  private final Cache<String, Boolean> localMissing;
+  private final LocalCache<Long, Long> observedVersions;
+  private final LocalCache<String, CachedAssetMetadata> localSnapshots;
+  private final LocalCache<String, Boolean> localMissing;
   private final boolean enabled;
   private final Duration positiveTtl;
   private final Duration missingTtl;
@@ -67,15 +67,20 @@ public class AssetMetadataCache {
     this.sharedCache = sharedCache;
     this.objectMapper = objectMapper;
     this.watermark = watermark;
-    this.observedVersions = Caffeine.newBuilder().maximumSize(100_000).build();
+    this.observedVersions = LocalCacheFactory.standard()
+        .<Long, Long>builder("asset-metadata-versions")
+        .maximumSize(100_000)
+        .build();
     this.enabled = enabled;
     this.positiveTtl = ttlSeconds <= 0 ? Duration.ZERO : Duration.ofSeconds(ttlSeconds);
     this.missingTtl = missingTtlSeconds <= 0 ? Duration.ZERO : Duration.ofSeconds(missingTtlSeconds);
-    this.localSnapshots = Caffeine.newBuilder()
+    this.localSnapshots = LocalCacheFactory.standard()
+        .<String, CachedAssetMetadata>builder("asset-metadata-snapshots")
         .expireAfterWrite(Duration.ofSeconds(Math.max(1, ttlSeconds)))
         .maximumSize(100_000)
         .build();
-    this.localMissing = Caffeine.newBuilder()
+    this.localMissing = LocalCacheFactory.standard()
+        .<String, Boolean>builder("asset-metadata-missing")
         .expireAfterWrite(Duration.ofSeconds(Math.max(1, missingTtlSeconds)))
         .maximumSize(100_000)
         .build();
