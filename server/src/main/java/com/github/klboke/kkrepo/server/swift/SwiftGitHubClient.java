@@ -633,7 +633,8 @@ final class SwiftGitHubClient {
         runtime.format().name(),
         "api.github.com",
         authorization(runtime),
-        allowCodeloadRedirect ? Set.of("codeload.github.com") : Set.of(),
+        runtime.allowedRedirectHostsWith(
+            allowCodeloadRedirect ? Set.of("codeload.github.com") : Set.of()),
         runtime.outboundProxy());
   }
 
@@ -652,7 +653,8 @@ final class SwiftGitHubClient {
         runtime.format().name(),
         "github.com",
         null,
-        allowCodeloadRedirect ? Set.of("codeload.github.com") : Set.of(),
+        runtime.allowedRedirectHostsWith(
+            allowCodeloadRedirect ? Set.of("codeload.github.com") : Set.of()),
         runtime.outboundProxy());
   }
 

@@ -4,7 +4,9 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -38,7 +40,60 @@ public record RepositoryRuntime(
     Boolean cargoRequireAuthentication,
     List<RepositoryRuntime> members,
     OutboundProxyConfig outboundProxy,
-    Integer minimumReleaseAgeMinutes) {
+    Integer minimumReleaseAgeMinutes,
+    Set<String> allowedRedirectHosts) {
+
+  public RepositoryRuntime {
+    if (allowedRedirectHosts == null || allowedRedirectHosts.isEmpty()) {
+      allowedRedirectHosts = Set.of();
+    } else {
+      LinkedHashSet<String> normalized = new LinkedHashSet<>();
+      for (String host : allowedRedirectHosts) {
+        String value = normalizeRedirectHost(host);
+        // Operator configuration is exact-host only. The wildcard is reserved for explicit,
+        // protocol-owned integrity-pinned download flows and must never be activated from stored
+        // repository attributes, even if those attributes bypass RepositoryService validation.
+        if (!value.isBlank() && !"*".equals(value)) normalized.add(value);
+      }
+      allowedRedirectHosts = Set.copyOf(normalized);
+    }
+  }
+
+  /** Compatibility constructor for runtime snapshots created before redirect-host allowlisting. */
+  public RepositoryRuntime(
+      long id,
+      String name,
+      RepositoryFormat format,
+      RepositoryType type,
+      String recipeName,
+      boolean online,
+      Long blobStoreId,
+      String writePolicy,
+      String versionPolicy,
+      String layoutPolicy,
+      boolean strictContentTypeValidation,
+      String proxyRemoteUrl,
+      Integer contentMaxAgeMinutes,
+      Integer metadataMaxAgeMinutes,
+      Boolean autoBlock,
+      String proxyRemoteUsername,
+      String proxyRemotePassword,
+      String proxyRemoteBearerToken,
+      String rawContentDisposition,
+      Boolean dockerConnectorEnabled,
+      Integer dockerConnectorPort,
+      String dockerConnectorPublicUrl,
+      Boolean cargoRequireAuthentication,
+      List<RepositoryRuntime> members,
+      OutboundProxyConfig outboundProxy,
+      Integer minimumReleaseAgeMinutes) {
+    this(id, name, format, type, recipeName, online, blobStoreId, writePolicy,
+        versionPolicy, layoutPolicy, strictContentTypeValidation, proxyRemoteUrl,
+        contentMaxAgeMinutes, metadataMaxAgeMinutes, autoBlock, proxyRemoteUsername,
+        proxyRemotePassword, proxyRemoteBearerToken, rawContentDisposition,
+        dockerConnectorEnabled, dockerConnectorPort, dockerConnectorPublicUrl,
+        cargoRequireAuthentication, members, outboundProxy, minimumReleaseAgeMinutes, Set.of());
+  }
 
   /** Compatibility constructor for runtime snapshots created before npm release-age protection. */
   public RepositoryRuntime(
@@ -390,6 +445,29 @@ public record RepositoryRuntime(
     return format == RepositoryFormat.NPM
         && isProxy()
         && minimumReleaseAgeMinutesOrDefault() > 0;
+  }
+
+  /** Combines operator-configured hosts with protocol-owned redirect destinations. */
+  public Set<String> allowedRedirectHostsWith(Set<String> protocolRedirectHosts) {
+    if (protocolRedirectHosts == null || protocolRedirectHosts.isEmpty()) {
+      return allowedRedirectHosts;
+    }
+    LinkedHashSet<String> merged = new LinkedHashSet<>(allowedRedirectHosts);
+    for (String host : protocolRedirectHosts) {
+      String value = normalizeRedirectHost(host);
+      if (!value.isBlank()) merged.add(value);
+    }
+    return Set.copyOf(merged);
+  }
+
+  public boolean allowsRedirectHost(String host) {
+    return allowedRedirectHosts.contains(normalizeRedirectHost(host));
+  }
+
+  private static String normalizeRedirectHost(String host) {
+    String value = host == null ? "" : host.trim().toLowerCase(Locale.ROOT);
+    while (value.endsWith(".")) value = value.substring(0, value.length() - 1);
+    return value;
   }
 
   public String rawContentDispositionOrDefault() {

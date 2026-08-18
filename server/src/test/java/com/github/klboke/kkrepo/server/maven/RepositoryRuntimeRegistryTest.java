@@ -187,6 +187,25 @@ class RepositoryRuntimeRegistryTest {
   }
 
   @Test
+  void resolveReadsConfiguredProxyRedirectHosts() {
+    FakeRepositoryDao dao = new FakeRepositoryDao();
+    dao.add(mavenProxyRepo(11, "gradle-plugins", Map.of(
+        "remoteUrl", "https://plugins.gradle.org/m2/",
+        "allowedRedirectHosts", List.of(
+            "plugins-artifacts.gradle.org",
+            "CDN.EXAMPLE.ORG.",
+            "*"))), List.of());
+
+    RepositoryRuntime runtime = new RepositoryRuntimeRegistry(dao, 0)
+        .resolve("gradle-plugins")
+        .orElseThrow();
+
+    assertEquals(
+        java.util.Set.of("plugins-artifacts.gradle.org", "cdn.example.org"),
+        runtime.allowedRedirectHosts());
+  }
+
+  @Test
   void runtimeWithProxyBearerTokenIsNotWrittenToSharedCache() {
     FakeRepositoryDao dao = new FakeRepositoryDao();
     dao.add(cargoProxyRepo(6, "cargo-private-proxy", "upstream-token"), List.of());

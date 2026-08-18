@@ -43,6 +43,7 @@ import com.github.klboke.kkrepo.server.security.SecurityCatalogCache;
 import com.github.klboke.kkrepo.server.security.SecurityValidationException;
 import com.github.klboke.kkrepo.protocol.alpine.AlpinePathParser;
 import com.github.klboke.kkrepo.protocol.alpine.AlpineSignature;
+import java.net.IDN;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
@@ -50,6 +51,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -68,6 +70,9 @@ public class RepositoryService {
   private static final Set<String> MAVEN_VERSION_POLICIES = Set.of("RELEASE", "SNAPSHOT", "MIXED");
   private static final Set<String> MAVEN_LAYOUT_POLICIES = Set.of("STRICT", "PERMISSIVE");
   private static final Set<String> RAW_CONTENT_DISPOSITIONS = Set.of("INLINE", "ATTACHMENT");
+  private static final int MAX_PROXY_REDIRECT_HOSTS = 64;
+  private static final Pattern REDIRECT_HOST_LABEL_PATTERN =
+      Pattern.compile("^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$");
 
   private final RepositoryDao repositoryDao;
   private final BlobStoreDao blobStoreDao;
@@ -1180,6 +1185,8 @@ public class RepositoryService {
     if (format == RepositoryFormat.ANSIBLEGALAXY) {
       settings = withRemoteUrl(settings, normalizeAnsibleGalaxyRemoteUrl(settings.remoteUrl()));
     }
+    settings = withAllowedRedirectHosts(
+        settings, normalizeAllowedRedirectHosts(settings.allowedRedirectHosts()));
     validateProxy(settings, format);
     return normalizeOutboundProxyType(settings);
   }
@@ -1216,7 +1223,8 @@ public class RepositoryService {
         settings.outboundProxyUsername(),
         settings.outboundProxyPassword(),
         settings.outboundProxyPasswordConfigured(),
-        settings.minimumReleaseAgeMinutes());
+        settings.minimumReleaseAgeMinutes(),
+        settings.allowedRedirectHosts());
   }
 
   private static String defaultRemoteUrl(RepositoryFormat format) {
@@ -1253,7 +1261,30 @@ public class RepositoryService {
         settings.outboundProxyUsername(),
         settings.outboundProxyPassword(),
         settings.outboundProxyPasswordConfigured(),
-        settings.minimumReleaseAgeMinutes());
+        settings.minimumReleaseAgeMinutes(),
+        settings.allowedRedirectHosts());
+  }
+
+  private static ProxySettings withAllowedRedirectHosts(
+      ProxySettings settings, List<String> allowedRedirectHosts) {
+    return new ProxySettings(
+        settings.remoteUrl(),
+        settings.contentMaxAgeMinutes(),
+        settings.metadataMaxAgeMinutes(),
+        settings.autoBlock(),
+        settings.remoteUsername(),
+        settings.remotePassword(),
+        settings.remotePasswordConfigured(),
+        settings.remoteBearerToken(),
+        settings.remoteBearerTokenConfigured(),
+        settings.outboundProxyType(),
+        settings.outboundProxyHost(),
+        settings.outboundProxyPort(),
+        settings.outboundProxyUsername(),
+        settings.outboundProxyPassword(),
+        settings.outboundProxyPasswordConfigured(),
+        settings.minimumReleaseAgeMinutes(),
+        allowedRedirectHosts);
   }
 
   private void validateProxy(ProxySettings settings, RepositoryFormat format) {
@@ -1284,6 +1315,44 @@ public class RepositoryService {
     if (format == RepositoryFormat.SWIFT) {
       normalizeSwiftRemoteUrl(settings.remoteUrl());
     }
+  }
+
+  private static List<String> normalizeAllowedRedirectHosts(List<String> hosts) {
+    if (hosts == null || hosts.isEmpty()) return List.of();
+    LinkedHashSet<String> normalized = new LinkedHashSet<>();
+    for (String host : hosts) {
+      if (host == null || host.isBlank()) {
+        throw invalidRedirectHost();
+      }
+      String candidate = host.trim();
+      while (candidate.endsWith(".")) {
+        candidate = candidate.substring(0, candidate.length() - 1);
+      }
+      final String ascii;
+      try {
+        ascii = IDN.toASCII(candidate, IDN.USE_STD3_ASCII_RULES)
+            .toLowerCase(Locale.ROOT);
+      } catch (IllegalArgumentException e) {
+        throw invalidRedirectHost();
+      }
+      if (ascii.isBlank() || ascii.length() > 253) throw invalidRedirectHost();
+      for (String label : ascii.split("\\.", -1)) {
+        if (!REDIRECT_HOST_LABEL_PATTERN.matcher(label).matches()) {
+          throw invalidRedirectHost();
+        }
+      }
+      normalized.add(ascii);
+      if (normalized.size() > MAX_PROXY_REDIRECT_HOSTS) {
+        throw new RepositoryValidationException(
+            "proxy.allowedRedirectHosts supports at most " + MAX_PROXY_REDIRECT_HOSTS + " hosts");
+      }
+    }
+    return List.copyOf(normalized);
+  }
+
+  private static RepositoryValidationException invalidRedirectHost() {
+    return new RepositoryValidationException(
+        "proxy.allowedRedirectHosts entries must be exact host names without a scheme, port, path, or wildcard");
   }
 
   private OutboundProxyConfig validateOutboundProxy(ProxySettings settings) {
@@ -1401,7 +1470,10 @@ public class RepositoryService {
         null,
         incoming.minimumReleaseAgeMinutes() == null
             ? base.minimumReleaseAgeMinutes()
-            : incoming.minimumReleaseAgeMinutes());
+            : incoming.minimumReleaseAgeMinutes(),
+        incoming.allowedRedirectHosts() == null
+            ? base.allowedRedirectHosts()
+            : incoming.allowedRedirectHosts());
   }
 
   private static String mergedOutboundProxyPassword(ProxySettings base, ProxySettings incoming) {
@@ -1441,6 +1513,9 @@ public class RepositoryService {
     if (proxy.metadataMaxAgeMinutes() != null) map.put("metadataMaxAgeMinutes", proxy.metadataMaxAgeMinutes());
     if (proxy.minimumReleaseAgeMinutes() != null) {
       map.put("minimumReleaseAgeMinutes", proxy.minimumReleaseAgeMinutes());
+    }
+    if (proxy.allowedRedirectHosts() != null && !proxy.allowedRedirectHosts().isEmpty()) {
+      map.put("allowedRedirectHosts", List.copyOf(proxy.allowedRedirectHosts()));
     }
     if (proxy.autoBlock() != null) map.put("autoBlock", proxy.autoBlock());
     if (proxy.remoteUsername() != null && !proxy.remoteUsername().isBlank()) {
@@ -1865,7 +1940,8 @@ public class RepositoryService {
         blankToNull(stringOrNull(proxyMap.get("outboundProxyUsername"))),
         blankToNull(stringOrNull(proxyMap.get("outboundProxyPassword"))),
         null,
-        intValue(proxyMap.get("minimumReleaseAgeMinutes")));
+        intValue(proxyMap.get("minimumReleaseAgeMinutes")),
+        stringList(proxyMap.get("allowedRedirectHosts")));
   }
 
   private static ProxySettings readProxyAttributesOrDefaults(RepositoryRecord record) {
@@ -1890,7 +1966,8 @@ public class RepositoryService {
         effective.outboundProxyUsername(),
         null,
         outboundPassword != null && !outboundPassword.isBlank(),
-        effective.minimumReleaseAgeMinutes() == null ? 0 : effective.minimumReleaseAgeMinutes());
+        effective.minimumReleaseAgeMinutes() == null ? 0 : effective.minimumReleaseAgeMinutes(),
+        effective.allowedRedirectHosts() == null ? List.of() : effective.allowedRedirectHosts());
   }
 
   private static String stringOrNull(Object value) {
