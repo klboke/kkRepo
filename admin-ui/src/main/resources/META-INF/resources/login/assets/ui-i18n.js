@@ -186,7 +186,6 @@
     "User mapping": "用户映射",
     "Group mapping": "组映射",
     "Advanced settings": "高级设置",
-    "Additional attributes (JSON)": "附加属性（JSON）",
     "Protocol": "协议",
     "Host": "主机",
     "Port": "端口",

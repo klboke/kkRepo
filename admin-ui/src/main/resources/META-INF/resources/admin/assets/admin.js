@@ -55,6 +55,7 @@ let securityLdap = null;
 let securityOidc = null;
 const SECURITY_PROVIDER_SECRET_MASK = "********";
 let securityProviderJsonSyncing = false;
+const securityProviderAttributes = { ldap: {}, oidc: {} };
 let securityAnonymous = null;
 let securityApiKeys = [];
 let securityScanState = {
@@ -922,18 +923,6 @@ function editableSecurityProviderAttributes(attributes) {
   return editable;
 }
 
-function securityProviderAttributesValue(id) {
-  const text = document.getElementById(id).value.trim();
-  if (!text) return {};
-  try {
-    const parsed = JSON.parse(text);
-    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") return {};
-    return editableSecurityProviderAttributes(parsed);
-  } catch (_) {
-    return {};
-  }
-}
-
 function securityProviderJsonScalar(value, fallback = "") {
   return typeof value === "string" || typeof value === "number" ? value : fallback;
 }
@@ -957,7 +946,7 @@ function setSecurityProviderSecretFromJson(id, value) {
   setInputValue(id, securityProviderJsonScalar(value));
 }
 
-function securityLdapFormValue({ attributes = securityProviderAttributesValue("security-ldap-attributes"), maskSecrets = true } = {}) {
+function securityLdapFormValue({ attributes = securityProviderAttributes.ldap, maskSecrets = true } = {}) {
   const authPassword = textInputValue("security-ldap-auth-password");
   return {
     enabled: document.getElementById("security-ldap-enabled").checked,
@@ -998,7 +987,7 @@ function securityLdapFormValue({ attributes = securityProviderAttributesValue("s
   };
 }
 
-function securityOidcFormValue({ attributes = securityProviderAttributesValue("security-oidc-attributes"), maskSecrets = true } = {}) {
+function securityOidcFormValue({ attributes = securityProviderAttributes.oidc, maskSecrets = true } = {}) {
   const clientSecret = textInputValue("security-oidc-client-secret");
   return {
     enabled: document.getElementById("security-oidc-enabled").checked,
@@ -1062,7 +1051,7 @@ function applySecurityLdapJsonValue(value) {
   const attributes = value.attributes && !Array.isArray(value.attributes) && typeof value.attributes === "object"
     ? editableSecurityProviderAttributes(value.attributes)
     : {};
-  setInputValue("security-ldap-attributes", JSON.stringify(attributes, null, 2));
+  securityProviderAttributes.ldap = attributes;
   clearRequiredFieldErrors(ldapRequiredFields);
   refreshSecurityLdapRequiredMarkers();
 }
@@ -1090,7 +1079,7 @@ function applySecurityOidcJsonValue(value) {
   const attributes = value.attributes && !Array.isArray(value.attributes) && typeof value.attributes === "object"
     ? editableSecurityProviderAttributes(value.attributes)
     : {};
-  setInputValue("security-oidc-attributes", JSON.stringify(attributes, null, 2));
+  securityProviderAttributes.oidc = attributes;
   clearRequiredFieldErrors(oidcRequiredFields);
   refreshSecurityOidcRequiredMarkers();
 }
@@ -3872,10 +3861,7 @@ function renderSecurityLdap() {
   setInputValue("security-ldap-group-member-attribute", settings.groupMemberAttribute, "member");
   setInputValue("security-ldap-group-member-format", settings.groupMemberFormat, "${dn}");
   setInputValue("security-ldap-group-object-class", settings.groupObjectClass, "groupOfNames");
-  document.getElementById("security-ldap-attributes").value = JSON.stringify(
-    editableSecurityProviderAttributes(settings.attributes),
-    null,
-    2);
+  securityProviderAttributes.ldap = editableSecurityProviderAttributes(settings.attributes);
   refreshSecurityLdapRequiredMarkers();
   syncSecurityProviderJsonFromForm("ldap", { force: true });
 }
@@ -3918,13 +3904,7 @@ async function saveSecurityLdap() {
   if (!validateSecurityLdapRequiredFields()) {
     return;
   }
-  let attributes;
-  try {
-    attributes = parseJsonObject("security-ldap-attributes");
-  } catch (_) {
-    return;
-  }
-  const payload = securityLdapFormValue({ attributes, maskSecrets: false });
+  const payload = securityLdapFormValue({ maskSecrets: false });
   try {
     const response = await fetch("/internal/security/ldap", {
       method: "PUT",
@@ -3986,10 +3966,7 @@ function renderSecurityOidc() {
   document.getElementById("security-oidc-roles-claim").value = settings.rolesClaim || "roles";
   document.getElementById("security-oidc-clock-skew").value = Number(settings.clockSkewSeconds ?? 60);
   document.getElementById("security-oidc-jwks-cache").value = Number(settings.jwksCacheSeconds ?? 300);
-  document.getElementById("security-oidc-attributes").value = JSON.stringify(
-    editableSecurityProviderAttributes(settings.attributes),
-    null,
-    2);
+  securityProviderAttributes.oidc = editableSecurityProviderAttributes(settings.attributes);
   refreshSecurityOidcRequiredMarkers();
   syncSecurityProviderJsonFromForm("oidc", { force: true });
 }
@@ -4036,13 +4013,7 @@ async function saveSecurityOidc() {
   if (!validateSecurityOidcRequiredFields()) {
     return;
   }
-  let attributes;
-  try {
-    attributes = parseJsonObject("security-oidc-attributes");
-  } catch (_) {
-    return;
-  }
-  const payload = securityOidcFormValue({ attributes, maskSecrets: false });
+  const payload = securityOidcFormValue({ maskSecrets: false });
   payload.issuerUri = payload.issuer;
   try {
     const response = await fetch("/internal/security/oidc", {
