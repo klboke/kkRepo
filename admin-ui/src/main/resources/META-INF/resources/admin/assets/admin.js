@@ -907,9 +907,17 @@ function parseJsonObject(id) {
   } catch (error) {
     input.classList.add("is-invalid");
     input.setAttribute("aria-invalid", "true");
+    input.closest("details")?.setAttribute("open", "");
     showToast(`Invalid JSON: ${error.message}`, "error");
     throw error;
   }
+}
+
+function editableSecurityProviderAttributes(attributes) {
+  const editable = { ...(attributes || {}) };
+  delete editable.source;
+  delete editable.nexusRealm;
+  return editable;
 }
 
 function markInputValidity(input, invalid) {
@@ -3598,7 +3606,6 @@ function renderSecurityLdap() {
   clearRequiredFieldErrors(ldapRequiredFields);
   setCheckboxValue("security-ldap-enabled", settings.enabled);
   setInputValue("security-ldap-priority", Number(settings.priority ?? 10));
-  setInputValue("security-ldap-source", settings.source, "LDAP");
   setInputValue("security-ldap-name", settings.name, "LDAP");
   setSelectValue("security-ldap-protocol", settings.protocol, "ldap");
   setInputValue("security-ldap-host", settings.host);
@@ -3630,7 +3637,10 @@ function renderSecurityLdap() {
   setInputValue("security-ldap-group-member-attribute", settings.groupMemberAttribute, "member");
   setInputValue("security-ldap-group-member-format", settings.groupMemberFormat, "${dn}");
   setInputValue("security-ldap-group-object-class", settings.groupObjectClass, "groupOfNames");
-  document.getElementById("security-ldap-attributes").value = JSON.stringify(settings.attributes || {}, null, 2);
+  document.getElementById("security-ldap-attributes").value = JSON.stringify(
+    editableSecurityProviderAttributes(settings.attributes),
+    null,
+    2);
   refreshSecurityLdapRequiredMarkers();
 }
 
@@ -3683,7 +3693,7 @@ async function saveSecurityLdap() {
   const payload = {
     enabled: document.getElementById("security-ldap-enabled").checked,
     priority: numberInputValue("security-ldap-priority") ?? 10,
-    source: textInputValue("security-ldap-source") || "LDAP",
+    source: "LDAP",
     name: textInputValue("security-ldap-name") || "LDAP",
     url,
     protocol: textInputValue("security-ldap-protocol") || "ldap",
@@ -3761,7 +3771,6 @@ function renderSecurityOidc() {
   });
   document.getElementById("security-oidc-enabled").checked = Boolean(settings.enabled);
   document.getElementById("security-oidc-priority").value = Number(settings.priority ?? 20);
-  document.getElementById("security-oidc-source").value = settings.source || "OIDC";
   document.getElementById("security-oidc-issuer").value = settings.issuerUri || settings.issuer || "";
   document.getElementById("security-oidc-jwks-uri").value = settings.jwksUri || "";
   document.getElementById("security-oidc-audience").value = settings.audience || "";
@@ -3779,7 +3788,10 @@ function renderSecurityOidc() {
   document.getElementById("security-oidc-roles-claim").value = settings.rolesClaim || "roles";
   document.getElementById("security-oidc-clock-skew").value = Number(settings.clockSkewSeconds ?? 60);
   document.getElementById("security-oidc-jwks-cache").value = Number(settings.jwksCacheSeconds ?? 300);
-  document.getElementById("security-oidc-attributes").value = JSON.stringify(settings.attributes || {}, null, 2);
+  document.getElementById("security-oidc-attributes").value = JSON.stringify(
+    editableSecurityProviderAttributes(settings.attributes),
+    null,
+    2);
   refreshSecurityOidcRequiredMarkers();
 }
 
@@ -3835,7 +3847,7 @@ async function saveSecurityOidc() {
   const payload = {
     enabled: document.getElementById("security-oidc-enabled").checked,
     priority: Number(document.getElementById("security-oidc-priority").value || 20),
-    source: document.getElementById("security-oidc-source").value.trim() || "OIDC",
+    source: "OIDC",
     issuer: document.getElementById("security-oidc-issuer").value.trim() || null,
     issuerUri: document.getElementById("security-oidc-issuer").value.trim() || null,
     jwksUri: jwksUri || null,

@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="/browse/assets/tokens.css?v=20260724-visual-upgrade-1">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20260811-conan-1">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20260728-security-advisory-link-1">
-    <link rel="stylesheet" href="./assets/admin.css?v=20260805-cleanup-policy-31">
+    <link rel="stylesheet" href="./assets/admin.css?v=20260818-security-provider-layout-1">
     <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=20260817-global-search-3">
   </head>
   <body>
@@ -1046,48 +1046,88 @@
               <h1>LDAP</h1>
               <span class="heading-copy">Manage LDAP connection, user mapping, and group roles</span>
             </div>
-            <form class="blobstore-form" id="security-ldap-form" novalidate>
-              <div class="form-grid">
-                <label class="checkbox-field">
-                  <input id="security-ldap-enabled" type="checkbox">
-                  <span>Enabled</span>
-                </label>
-                <label><span>Priority</span><input id="security-ldap-priority" type="number" value="10"></label>
-                <label><span>Source</span><input id="security-ldap-source" type="text" value="LDAP"></label>
-                <label><span>Name</span><input id="security-ldap-name" type="text" value="LDAP"></label>
-                <label><span>Protocol</span><select id="security-ldap-protocol"><option value="ldap">ldap</option><option value="ldaps">ldaps</option></select></label>
-                <label><span>Host <span class="required-mark">*</span></span><input id="security-ldap-host" type="text"></label>
-                <label><span>Port</span><input id="security-ldap-port" type="number" min="1"></label>
-                <label class="checkbox-field"><input id="security-ldap-trust-store" type="checkbox"><span>Use trust store</span></label>
-                <label class="full-width"><span>URL <span class="required-mark">*</span></span><input id="security-ldap-url" type="url" placeholder="ldap://ldap.example.com:389/dc=example,dc=com"></label>
-                <label class="full-width"><span>Search base</span><input id="security-ldap-search-base" type="text" placeholder="dc=example,dc=com"></label>
-                <label><span>Auth scheme</span><input id="security-ldap-auth-scheme" type="text" value="simple"></label>
-                <label><span>Auth realm</span><input id="security-ldap-auth-realm" type="text"></label>
-                <label><span>Auth username</span><input id="security-ldap-auth-username" type="text"></label>
-                <label><span>Auth password</span><input id="security-ldap-auth-password" type="password" autocomplete="new-password"></label>
-                <label><span>Connection timeout</span><input id="security-ldap-connection-timeout" type="number" min="0" value="30"></label>
-                <label><span>Retry delay</span><input id="security-ldap-retry-delay" type="number" min="0"></label>
-                <label><span>Max incidents</span><input id="security-ldap-max-incidents" type="number" min="0"></label>
-                <label><span>User base DN</span><input id="security-ldap-user-base-dn" type="text"></label>
-                <label class="checkbox-field"><input id="security-ldap-user-subtree" type="checkbox" checked><span>User subtree</span></label>
-                <label><span>User object class</span><input id="security-ldap-user-object-class" type="text" value="inetOrgPerson"></label>
-                <label><span>User filter</span><input id="security-ldap-user-filter" type="text"></label>
-                <label><span>User ID attribute</span><input id="security-ldap-user-id-attribute" type="text" value="uid"></label>
-                <label><span>Real name attribute</span><input id="security-ldap-user-real-name-attribute" type="text" value="cn"></label>
-                <label><span>MemberOf attribute</span><input id="security-ldap-user-member-of-attribute" type="text" value="memberOf"></label>
-                <label><span>Email attribute</span><input id="security-ldap-user-email-attribute" type="text" value="mail"></label>
-                <label><span>Password attribute</span><input id="security-ldap-user-password-attribute" type="text" value="userPassword"></label>
-                <label class="checkbox-field"><input id="security-ldap-groups-as-roles" type="checkbox" checked><span>Groups as roles</span></label>
-                <label><span>Group type</span><select id="security-ldap-group-type"><option value="static">static</option><option value="dynamic">dynamic</option></select></label>
-                <label><span>Group base DN</span><input id="security-ldap-group-base-dn" type="text"></label>
-                <label class="checkbox-field"><input id="security-ldap-group-subtree" type="checkbox" checked><span>Group subtree</span></label>
-                <label><span>Group ID attribute</span><input id="security-ldap-group-id-attribute" type="text" value="cn"></label>
-                <label><span>Group member attribute</span><input id="security-ldap-group-member-attribute" type="text" value="member"></label>
-                <label><span>Group member format</span><input id="security-ldap-group-member-format" type="text" value="${dn}"></label>
-                <label><span>Group object class</span><input id="security-ldap-group-object-class" type="text" value="groupOfNames"></label>
-                <label class="full-width"><span>Attributes JSON</span><textarea id="security-ldap-attributes" rows="5" spellcheck="false">{}</textarea></label>
+            <form class="blobstore-form security-provider-form" id="security-ldap-form" novalidate>
+              <div class="form-grid security-provider-form-grid">
+                <fieldset class="security-provider-section">
+                  <legend>Realm settings</legend>
+                  <p class="security-provider-section-copy">Enable the realm and control its place in the authentication order.</p>
+                  <div class="security-provider-section-grid security-provider-overview-grid">
+                    <label class="checkbox-field security-provider-toggle-field">
+                      <input id="security-ldap-enabled" type="checkbox">
+                      <span>Enabled</span>
+                    </label>
+                    <label><span>Priority</span><input id="security-ldap-priority" type="number" value="10"></label>
+                    <label><span>Name</span><input id="security-ldap-name" type="text" value="LDAP"></label>
+                    <div class="security-provider-source" aria-label="Source LDAP, system managed">
+                      <span>Source</span>
+                      <div class="security-provider-source-value"><strong>LDAP</strong><small>System managed</small></div>
+                    </div>
+                  </div>
+                </fieldset>
+
+                <fieldset class="security-provider-section">
+                  <legend>Server connection</legend>
+                  <p class="security-provider-section-copy">Use a complete URL, or configure the protocol, host, port, and search base separately.</p>
+                  <div class="security-provider-section-grid">
+                    <label class="full-width"><span>URL <span class="required-mark">*</span></span><input id="security-ldap-url" type="url" placeholder="ldap://ldap.example.com:389/dc=example,dc=com"></label>
+                    <label><span>Protocol</span><select id="security-ldap-protocol"><option value="ldap">ldap</option><option value="ldaps">ldaps</option></select></label>
+                    <label><span>Host <span class="required-mark">*</span></span><input id="security-ldap-host" type="text"></label>
+                    <label><span>Port</span><input id="security-ldap-port" type="number" min="1"></label>
+                    <label class="security-provider-span-2"><span>Search base</span><input id="security-ldap-search-base" type="text" placeholder="dc=example,dc=com"></label>
+                    <label class="checkbox-field security-provider-toggle-field"><input id="security-ldap-trust-store" type="checkbox"><span>Use trust store</span></label>
+                  </div>
+                </fieldset>
+
+                <fieldset class="security-provider-section">
+                  <legend>Bind account</legend>
+                  <div class="security-provider-section-grid">
+                    <label><span>Auth scheme</span><input id="security-ldap-auth-scheme" type="text" value="simple"></label>
+                    <label><span>Auth realm</span><input id="security-ldap-auth-realm" type="text"></label>
+                    <label><span>Auth username</span><input id="security-ldap-auth-username" type="text"></label>
+                    <label class="full-width"><span>Auth password</span><input id="security-ldap-auth-password" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing"></label>
+                  </div>
+                </fieldset>
+
+                <fieldset class="security-provider-section">
+                  <legend>User mapping</legend>
+                  <div class="security-provider-section-grid">
+                    <label class="security-provider-span-2"><span>User base DN</span><input id="security-ldap-user-base-dn" type="text"></label>
+                    <label class="checkbox-field security-provider-toggle-field"><input id="security-ldap-user-subtree" type="checkbox" checked><span>User subtree</span></label>
+                    <label><span>User ID attribute</span><input id="security-ldap-user-id-attribute" type="text" value="uid"></label>
+                    <label><span>Real name attribute</span><input id="security-ldap-user-real-name-attribute" type="text" value="cn"></label>
+                    <label><span>Email attribute</span><input id="security-ldap-user-email-attribute" type="text" value="mail"></label>
+                    <label><span>User object class</span><input id="security-ldap-user-object-class" type="text" value="inetOrgPerson"></label>
+                    <label><span>MemberOf attribute</span><input id="security-ldap-user-member-of-attribute" type="text" value="memberOf"></label>
+                    <label><span>Password attribute</span><input id="security-ldap-user-password-attribute" type="text" value="userPassword"></label>
+                    <label class="full-width"><span>User filter</span><input id="security-ldap-user-filter" type="text"></label>
+                  </div>
+                </fieldset>
+
+                <fieldset class="security-provider-section">
+                  <legend>Group mapping</legend>
+                  <div class="security-provider-section-grid">
+                    <label class="checkbox-field security-provider-toggle-field"><input id="security-ldap-groups-as-roles" type="checkbox" checked><span>Groups as roles</span></label>
+                    <label><span>Group type</span><select id="security-ldap-group-type"><option value="static">static</option><option value="dynamic">dynamic</option></select></label>
+                    <label class="checkbox-field security-provider-toggle-field"><input id="security-ldap-group-subtree" type="checkbox" checked><span>Group subtree</span></label>
+                    <label class="security-provider-span-2"><span>Group base DN</span><input id="security-ldap-group-base-dn" type="text"></label>
+                    <label><span>Group ID attribute</span><input id="security-ldap-group-id-attribute" type="text" value="cn"></label>
+                    <label><span>Group member attribute</span><input id="security-ldap-group-member-attribute" type="text" value="member"></label>
+                    <label><span>Group member format</span><input id="security-ldap-group-member-format" type="text" value="${dn}"></label>
+                    <label><span>Group object class</span><input id="security-ldap-group-object-class" type="text" value="groupOfNames"></label>
+                  </div>
+                </fieldset>
+
+                <details class="security-provider-advanced">
+                  <summary><span>Advanced settings</span><span class="lucide-icon icon-chevron-down" aria-hidden="true"></span></summary>
+                  <div class="security-provider-advanced-body security-provider-section-grid">
+                    <label><span>Connection timeout</span><input id="security-ldap-connection-timeout" type="number" min="0" value="30"></label>
+                    <label><span>Retry delay</span><input id="security-ldap-retry-delay" type="number" min="0"></label>
+                    <label><span>Max incidents</span><input id="security-ldap-max-incidents" type="number" min="0"></label>
+                    <label class="full-width"><span>Additional attributes (JSON)</span><textarea id="security-ldap-attributes" rows="5" spellcheck="false">{}</textarea></label>
+                  </div>
+                </details>
               </div>
-              <div class="form-actions">
+              <div class="form-actions security-provider-form-actions">
                 <button class="create-button" id="save-security-ldap-button" type="button">Save LDAP settings</button>
               </div>
             </form>
@@ -1099,34 +1139,68 @@
             <h1>OIDC</h1>
             <span class="heading-copy">Manage OIDC issuer, token validation, and claim mapping</span>
           </div>
-          <form class="blobstore-form" id="security-oidc-form" novalidate>
-            <div class="form-grid">
-              <label class="checkbox-field">
-                <input id="security-oidc-enabled" type="checkbox">
-                <span>Enabled</span>
-              </label>
-              <label><span>Priority</span><input id="security-oidc-priority" type="number" value="20"></label>
-              <label><span>Source</span><input id="security-oidc-source" type="text" value="OIDC"></label>
-              <label><span>Issuer <span class="required-mark">*</span></span><input id="security-oidc-issuer" type="url" placeholder="https://issuer.example.com"></label>
-              <label class="full-width"><span>JWKS URI <span class="required-mark">*</span></span><input id="security-oidc-jwks-uri" type="url" placeholder="https://issuer.example.com/.well-known/jwks.json"></label>
-              <label><span>Audience</span><input id="security-oidc-audience" type="text"></label>
-              <label><span>Client ID <span class="required-mark">*</span></span><input id="security-oidc-client-id" type="text"></label>
-              <label><span>Client secret <span class="required-mark">*</span></span><input id="security-oidc-client-secret" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing"></label>
-              <label><span>Scopes</span><input id="security-oidc-scopes" type="text" value="openid profile email"></label>
-              <label class="full-width"><span>Authorization endpoint</span><input id="security-oidc-authorization-endpoint" type="url" placeholder="https://issuer.example.com/oauth2/authorize"></label>
-              <label class="full-width"><span>Token endpoint</span><input id="security-oidc-token-endpoint" type="url" placeholder="https://issuer.example.com/oauth2/token"></label>
-              <label class="full-width"><span>Redirect URI <span class="required-mark">*</span></span><input id="security-oidc-redirect-uri" type="url" placeholder="/internal/security/oidc/callback"></label>
-              <label><span>User ID claim</span><input id="security-oidc-user-id-claim" type="text" value="preferred_username"></label>
-              <label><span>First name claim</span><input id="security-oidc-first-name-claim" type="text" value="given_name"></label>
-              <label><span>Last name claim</span><input id="security-oidc-last-name-claim" type="text" value="family_name"></label>
-              <label><span>Email claim</span><input id="security-oidc-email-claim" type="text" value="email"></label>
-              <label><span>Groups claim</span><input id="security-oidc-groups-claim" type="text" value="groups"></label>
-              <label><span>Roles claim</span><input id="security-oidc-roles-claim" type="text" value="roles"></label>
-              <label><span>Clock skew seconds</span><input id="security-oidc-clock-skew" type="number" min="0" value="60"></label>
-              <label><span>JWKS cache seconds</span><input id="security-oidc-jwks-cache" type="number" min="0" value="300"></label>
-              <label class="full-width"><span>Attributes JSON</span><textarea id="security-oidc-attributes" rows="5" spellcheck="false">{}</textarea></label>
+          <form class="blobstore-form security-provider-form" id="security-oidc-form" novalidate>
+            <div class="form-grid security-provider-form-grid">
+              <fieldset class="security-provider-section">
+                <legend>Realm settings</legend>
+                <p class="security-provider-section-copy">Enable the realm and control its place in the authentication order.</p>
+                <div class="security-provider-section-grid security-provider-overview-grid">
+                  <label class="checkbox-field security-provider-toggle-field">
+                    <input id="security-oidc-enabled" type="checkbox">
+                    <span>Enabled</span>
+                  </label>
+                  <label><span>Priority</span><input id="security-oidc-priority" type="number" value="20"></label>
+                  <div class="security-provider-source" aria-label="Source OIDC, system managed">
+                    <span>Source</span>
+                    <div class="security-provider-source-value"><strong>OIDC</strong><small>System managed</small></div>
+                  </div>
+                </div>
+              </fieldset>
+
+              <fieldset class="security-provider-section">
+                <legend>Provider settings</legend>
+                <p class="security-provider-section-copy">Configure the issuer and keys used to validate identity tokens.</p>
+                <div class="security-provider-section-grid">
+                  <label class="full-width"><span>Issuer <span class="required-mark">*</span></span><input id="security-oidc-issuer" type="url" placeholder="https://issuer.example.com"></label>
+                  <label class="security-provider-span-2"><span>JWKS URI <span class="required-mark">*</span></span><input id="security-oidc-jwks-uri" type="url" placeholder="https://issuer.example.com/.well-known/jwks.json"></label>
+                  <label><span>Audience</span><input id="security-oidc-audience" type="text"></label>
+                  <label class="full-width"><span>Scopes</span><input id="security-oidc-scopes" type="text" value="openid profile email"></label>
+                </div>
+              </fieldset>
+
+              <fieldset class="security-provider-section">
+                <legend>Client configuration</legend>
+                <div class="security-provider-section-grid">
+                  <label><span>Client ID <span class="required-mark">*</span></span><input id="security-oidc-client-id" type="text"></label>
+                  <label class="security-provider-span-2"><span>Client secret <span class="required-mark">*</span></span><input id="security-oidc-client-secret" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing"></label>
+                  <label class="full-width"><span>Redirect URI <span class="required-mark">*</span></span><input id="security-oidc-redirect-uri" type="url" placeholder="/internal/security/oidc/callback"></label>
+                </div>
+              </fieldset>
+
+              <fieldset class="security-provider-section">
+                <legend>Claim mapping</legend>
+                <div class="security-provider-section-grid">
+                  <label><span>User ID claim</span><input id="security-oidc-user-id-claim" type="text" value="preferred_username"></label>
+                  <label><span>First name claim</span><input id="security-oidc-first-name-claim" type="text" value="given_name"></label>
+                  <label><span>Last name claim</span><input id="security-oidc-last-name-claim" type="text" value="family_name"></label>
+                  <label><span>Email claim</span><input id="security-oidc-email-claim" type="text" value="email"></label>
+                  <label><span>Groups claim</span><input id="security-oidc-groups-claim" type="text" value="groups"></label>
+                  <label><span>Roles claim</span><input id="security-oidc-roles-claim" type="text" value="roles"></label>
+                </div>
+              </fieldset>
+
+              <details class="security-provider-advanced">
+                <summary><span>Advanced settings</span><span class="lucide-icon icon-chevron-down" aria-hidden="true"></span></summary>
+                <div class="security-provider-advanced-body security-provider-section-grid">
+                  <label class="full-width"><span>Authorization endpoint</span><input id="security-oidc-authorization-endpoint" type="url" placeholder="https://issuer.example.com/oauth2/authorize"></label>
+                  <label class="full-width"><span>Token endpoint</span><input id="security-oidc-token-endpoint" type="url" placeholder="https://issuer.example.com/oauth2/token"></label>
+                  <label><span>Clock skew seconds</span><input id="security-oidc-clock-skew" type="number" min="0" value="60"></label>
+                  <label><span>JWKS cache seconds</span><input id="security-oidc-jwks-cache" type="number" min="0" value="300"></label>
+                  <label class="full-width"><span>Additional attributes (JSON)</span><textarea id="security-oidc-attributes" rows="5" spellcheck="false">{}</textarea></label>
+                </div>
+              </details>
             </div>
-            <div class="form-actions">
+            <div class="form-actions security-provider-form-actions">
               <button class="create-button" id="save-security-oidc-button" type="button">Save OIDC settings</button>
             </div>
           </form>
@@ -1679,9 +1753,9 @@
       </main>
     </div>
 
-    <script src="/login/assets/ui-i18n.js?v=20260817-global-search-1"></script>
+    <script src="/login/assets/ui-i18n.js?v=20260818-security-provider-layout-1"></script>
     <script src="./assets/admin-filter.js?v=20260706-wildcard-filter-1"></script>
     <script src="/browse/assets/global-component-search.js?v=20260817-global-search-2"></script>
-    <script src="./assets/admin.js?v=20260812-session-hydration-1"></script>
+    <script src="./assets/admin.js?v=20260818-security-provider-layout-1"></script>
   </body>
 </html>
