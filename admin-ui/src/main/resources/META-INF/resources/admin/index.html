@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="/browse/assets/tokens.css?v=20260724-visual-upgrade-1">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20260811-conan-1">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20260728-security-advisory-link-1">
-    <link rel="stylesheet" href="./assets/admin.css?v=20260818-security-provider-layout-7">
+    <link rel="stylesheet" href="./assets/admin.css?v=20260818-security-provider-layout-8">
     <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=20260817-global-search-3">
   </head>
   <body>
@@ -1134,12 +1134,11 @@
               <div class="security-provider-json-heading">
                 <div>
                   <h2 id="security-ldap-json-title">Configuration JSON</h2>
-                  <p>Form changes appear here automatically. Valid JSON changes update the form immediately.</p>
+                  <p id="security-ldap-json-description">Form and valid JSON changes sync automatically. Existing secrets are masked.</p>
                 </div>
                 <span class="security-provider-json-status" id="security-ldap-json-status" data-state="synced" role="status" aria-live="polite">Synced</span>
               </div>
-              <textarea class="security-provider-json-editor" id="security-ldap-json-editor" aria-label="LDAP configuration JSON" aria-describedby="security-ldap-json-note" spellcheck="false">{}</textarea>
-              <p class="security-provider-json-note" id="security-ldap-json-note">Source is system managed. Existing secrets are shown as ********.</p>
+              <textarea class="security-provider-json-editor" id="security-ldap-json-editor" aria-label="LDAP configuration JSON" aria-describedby="security-ldap-json-description" spellcheck="false">{}</textarea>
             </aside>
             </div>
           </section>
@@ -1219,12 +1218,11 @@
             <div class="security-provider-json-heading">
               <div>
                 <h2 id="security-oidc-json-title">Configuration JSON</h2>
-                <p>Form changes appear here automatically. Valid JSON changes update the form immediately.</p>
+                <p id="security-oidc-json-description">Form and valid JSON changes sync automatically. Existing secrets are masked.</p>
               </div>
               <span class="security-provider-json-status" id="security-oidc-json-status" data-state="synced" role="status" aria-live="polite">Synced</span>
             </div>
-            <textarea class="security-provider-json-editor" id="security-oidc-json-editor" aria-label="OIDC configuration JSON" aria-describedby="security-oidc-json-note" spellcheck="false">{}</textarea>
-            <p class="security-provider-json-note" id="security-oidc-json-note">Source is system managed. Existing secrets are shown as ********.</p>
+            <textarea class="security-provider-json-editor" id="security-oidc-json-editor" aria-label="OIDC configuration JSON" aria-describedby="security-oidc-json-description" spellcheck="false">{}</textarea>
           </aside>
           </div>
         </section>
@@ -1776,7 +1774,7 @@
       </main>
     </div>
 
-    <script src="/login/assets/ui-i18n.js?v=20260818-security-provider-layout-3"></script>
+    <script src="/login/assets/ui-i18n.js?v=20260818-security-provider-layout-4"></script>
     <script src="./assets/admin-filter.js?v=20260706-wildcard-filter-1"></script>
     <script src="/browse/assets/global-component-search.js?v=20260817-global-search-2"></script>
     <script src="./assets/admin.js?v=20260818-security-provider-layout-5"></script>
