@@ -53,6 +53,8 @@ let securityPrivileges = [];
 let securityRealms = [];
 let securityLdap = null;
 let securityOidc = null;
+const SECURITY_PROVIDER_SECRET_MASK = "********";
+let securityProviderJsonSyncing = false;
 let securityAnonymous = null;
 let securityApiKeys = [];
 let securityScanState = {
@@ -918,6 +920,239 @@ function editableSecurityProviderAttributes(attributes) {
   delete editable.source;
   delete editable.nexusRealm;
   return editable;
+}
+
+function securityProviderAttributesValue(id) {
+  const text = document.getElementById(id).value.trim();
+  if (!text) return {};
+  try {
+    const parsed = JSON.parse(text);
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") return {};
+    return editableSecurityProviderAttributes(parsed);
+  } catch (_) {
+    return {};
+  }
+}
+
+function securityProviderJsonScalar(value, fallback = "") {
+  return typeof value === "string" || typeof value === "number" ? value : fallback;
+}
+
+function securityProviderJsonNumber(value, fallback = "") {
+  if (value == null || value === "") return fallback;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function securityProviderJsonBoolean(value, fallback = false) {
+  if (value == null) return fallback;
+  if (typeof value === "boolean") return value;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return fallback;
+}
+
+function setSecurityProviderSecretFromJson(id, value) {
+  if (value === SECURITY_PROVIDER_SECRET_MASK) return;
+  setInputValue(id, securityProviderJsonScalar(value));
+}
+
+function securityLdapFormValue({ attributes = securityProviderAttributesValue("security-ldap-attributes"), maskSecrets = true } = {}) {
+  const authPassword = textInputValue("security-ldap-auth-password");
+  return {
+    enabled: document.getElementById("security-ldap-enabled").checked,
+    priority: numberInputValue("security-ldap-priority") ?? 10,
+    source: "LDAP",
+    name: textInputValue("security-ldap-name") || "LDAP",
+    url: textInputValue("security-ldap-url"),
+    protocol: textInputValue("security-ldap-protocol") || "ldap",
+    host: textInputValue("security-ldap-host"),
+    port: numberInputValue("security-ldap-port"),
+    useTrustStore: document.getElementById("security-ldap-trust-store").checked,
+    searchBase: textInputValue("security-ldap-search-base"),
+    authScheme: textInputValue("security-ldap-auth-scheme"),
+    authRealm: textInputValue("security-ldap-auth-realm"),
+    authUsername: textInputValue("security-ldap-auth-username"),
+    authPassword: maskSecrets && authPassword ? SECURITY_PROVIDER_SECRET_MASK : authPassword,
+    connectionTimeout: numberInputValue("security-ldap-connection-timeout"),
+    connectionRetryDelay: numberInputValue("security-ldap-retry-delay"),
+    maxIncidentsCount: numberInputValue("security-ldap-max-incidents"),
+    userBaseDn: textInputValue("security-ldap-user-base-dn"),
+    userSubtree: document.getElementById("security-ldap-user-subtree").checked,
+    userObjectClass: textInputValue("security-ldap-user-object-class"),
+    userLdapFilter: textInputValue("security-ldap-user-filter"),
+    userIdAttribute: textInputValue("security-ldap-user-id-attribute"),
+    userRealNameAttribute: textInputValue("security-ldap-user-real-name-attribute"),
+    userMemberOfAttribute: textInputValue("security-ldap-user-member-of-attribute"),
+    userEmailAddressAttribute: textInputValue("security-ldap-user-email-attribute"),
+    userPasswordAttribute: textInputValue("security-ldap-user-password-attribute"),
+    ldapGroupsAsRoles: document.getElementById("security-ldap-groups-as-roles").checked,
+    groupType: textInputValue("security-ldap-group-type"),
+    groupBaseDn: textInputValue("security-ldap-group-base-dn"),
+    groupSubtree: document.getElementById("security-ldap-group-subtree").checked,
+    groupIdAttribute: textInputValue("security-ldap-group-id-attribute"),
+    groupMemberAttribute: textInputValue("security-ldap-group-member-attribute"),
+    groupMemberFormat: textInputValue("security-ldap-group-member-format"),
+    groupObjectClass: textInputValue("security-ldap-group-object-class"),
+    attributes
+  };
+}
+
+function securityOidcFormValue({ attributes = securityProviderAttributesValue("security-oidc-attributes"), maskSecrets = true } = {}) {
+  const clientSecret = textInputValue("security-oidc-client-secret");
+  return {
+    enabled: document.getElementById("security-oidc-enabled").checked,
+    priority: numberInputValue("security-oidc-priority") ?? 20,
+    source: "OIDC",
+    issuer: textInputValue("security-oidc-issuer"),
+    jwksUri: textInputValue("security-oidc-jwks-uri"),
+    audience: textInputValue("security-oidc-audience"),
+    clientId: textInputValue("security-oidc-client-id"),
+    clientSecret: maskSecrets && clientSecret ? SECURITY_PROVIDER_SECRET_MASK : clientSecret,
+    authorizationEndpoint: textInputValue("security-oidc-authorization-endpoint"),
+    tokenEndpoint: textInputValue("security-oidc-token-endpoint"),
+    redirectUri: textInputValue("security-oidc-redirect-uri"),
+    scopes: textInputValue("security-oidc-scopes"),
+    userIdClaim: textInputValue("security-oidc-user-id-claim"),
+    firstNameClaim: textInputValue("security-oidc-first-name-claim"),
+    lastNameClaim: textInputValue("security-oidc-last-name-claim"),
+    emailClaim: textInputValue("security-oidc-email-claim"),
+    groupsClaim: textInputValue("security-oidc-groups-claim"),
+    rolesClaim: textInputValue("security-oidc-roles-claim"),
+    clockSkewSeconds: numberInputValue("security-oidc-clock-skew") ?? 60,
+    jwksCacheSeconds: numberInputValue("security-oidc-jwks-cache") ?? 300,
+    attributes
+  };
+}
+
+function applySecurityLdapJsonValue(value) {
+  setCheckboxValue("security-ldap-enabled", securityProviderJsonBoolean(value.enabled));
+  setInputValue("security-ldap-priority", securityProviderJsonNumber(value.priority, 10));
+  setInputValue("security-ldap-name", securityProviderJsonScalar(value.name, "LDAP"));
+  setInputValue("security-ldap-url", securityProviderJsonScalar(value.url));
+  setSelectValue("security-ldap-protocol", securityProviderJsonScalar(value.protocol), "ldap");
+  setInputValue("security-ldap-host", securityProviderJsonScalar(value.host));
+  setInputValue("security-ldap-port", securityProviderJsonNumber(value.port));
+  setCheckboxValue("security-ldap-trust-store", securityProviderJsonBoolean(value.useTrustStore));
+  setInputValue("security-ldap-search-base", securityProviderJsonScalar(value.searchBase));
+  setInputValue("security-ldap-auth-scheme", securityProviderJsonScalar(value.authScheme, "simple"));
+  setInputValue("security-ldap-auth-realm", securityProviderJsonScalar(value.authRealm));
+  setInputValue("security-ldap-auth-username", securityProviderJsonScalar(value.authUsername));
+  setSecurityProviderSecretFromJson("security-ldap-auth-password", value.authPassword);
+  setInputValue("security-ldap-connection-timeout", securityProviderJsonNumber(value.connectionTimeout, 30));
+  setInputValue("security-ldap-retry-delay", securityProviderJsonNumber(value.connectionRetryDelay));
+  setInputValue("security-ldap-max-incidents", securityProviderJsonNumber(value.maxIncidentsCount));
+  setInputValue("security-ldap-user-base-dn", securityProviderJsonScalar(value.userBaseDn));
+  setCheckboxValue("security-ldap-user-subtree", securityProviderJsonBoolean(value.userSubtree, true));
+  setInputValue("security-ldap-user-object-class", securityProviderJsonScalar(value.userObjectClass, "inetOrgPerson"));
+  setInputValue("security-ldap-user-filter", securityProviderJsonScalar(value.userLdapFilter));
+  setInputValue("security-ldap-user-id-attribute", securityProviderJsonScalar(value.userIdAttribute, "uid"));
+  setInputValue("security-ldap-user-real-name-attribute", securityProviderJsonScalar(value.userRealNameAttribute, "cn"));
+  setInputValue("security-ldap-user-member-of-attribute", securityProviderJsonScalar(value.userMemberOfAttribute, "memberOf"));
+  setInputValue("security-ldap-user-email-attribute", securityProviderJsonScalar(value.userEmailAddressAttribute, "mail"));
+  setInputValue("security-ldap-user-password-attribute", securityProviderJsonScalar(value.userPasswordAttribute, "userPassword"));
+  setCheckboxValue("security-ldap-groups-as-roles", securityProviderJsonBoolean(value.ldapGroupsAsRoles, true));
+  setSelectValue("security-ldap-group-type", securityProviderJsonScalar(value.groupType), "static");
+  setInputValue("security-ldap-group-base-dn", securityProviderJsonScalar(value.groupBaseDn));
+  setCheckboxValue("security-ldap-group-subtree", securityProviderJsonBoolean(value.groupSubtree, true));
+  setInputValue("security-ldap-group-id-attribute", securityProviderJsonScalar(value.groupIdAttribute, "cn"));
+  setInputValue("security-ldap-group-member-attribute", securityProviderJsonScalar(value.groupMemberAttribute, "member"));
+  setInputValue("security-ldap-group-member-format", securityProviderJsonScalar(value.groupMemberFormat, "${dn}"));
+  setInputValue("security-ldap-group-object-class", securityProviderJsonScalar(value.groupObjectClass, "groupOfNames"));
+  const attributes = value.attributes && !Array.isArray(value.attributes) && typeof value.attributes === "object"
+    ? editableSecurityProviderAttributes(value.attributes)
+    : {};
+  setInputValue("security-ldap-attributes", JSON.stringify(attributes, null, 2));
+  clearRequiredFieldErrors(ldapRequiredFields);
+  refreshSecurityLdapRequiredMarkers();
+}
+
+function applySecurityOidcJsonValue(value) {
+  setCheckboxValue("security-oidc-enabled", securityProviderJsonBoolean(value.enabled));
+  setInputValue("security-oidc-priority", securityProviderJsonNumber(value.priority, 20));
+  setInputValue("security-oidc-issuer", securityProviderJsonScalar(value.issuer ?? value.issuerUri));
+  setInputValue("security-oidc-jwks-uri", securityProviderJsonScalar(value.jwksUri));
+  setInputValue("security-oidc-audience", securityProviderJsonScalar(value.audience));
+  setInputValue("security-oidc-client-id", securityProviderJsonScalar(value.clientId));
+  setSecurityProviderSecretFromJson("security-oidc-client-secret", value.clientSecret);
+  setInputValue("security-oidc-authorization-endpoint", securityProviderJsonScalar(value.authorizationEndpoint));
+  setInputValue("security-oidc-token-endpoint", securityProviderJsonScalar(value.tokenEndpoint));
+  setInputValue("security-oidc-redirect-uri", securityProviderJsonScalar(value.redirectUri));
+  setInputValue("security-oidc-scopes", securityProviderJsonScalar(value.scopes, "openid profile email"));
+  setInputValue("security-oidc-user-id-claim", securityProviderJsonScalar(value.userIdClaim, "preferred_username"));
+  setInputValue("security-oidc-first-name-claim", securityProviderJsonScalar(value.firstNameClaim, "given_name"));
+  setInputValue("security-oidc-last-name-claim", securityProviderJsonScalar(value.lastNameClaim, "family_name"));
+  setInputValue("security-oidc-email-claim", securityProviderJsonScalar(value.emailClaim, "email"));
+  setInputValue("security-oidc-groups-claim", securityProviderJsonScalar(value.groupsClaim, "groups"));
+  setInputValue("security-oidc-roles-claim", securityProviderJsonScalar(value.rolesClaim, "roles"));
+  setInputValue("security-oidc-clock-skew", securityProviderJsonNumber(value.clockSkewSeconds, 60));
+  setInputValue("security-oidc-jwks-cache", securityProviderJsonNumber(value.jwksCacheSeconds, 300));
+  const attributes = value.attributes && !Array.isArray(value.attributes) && typeof value.attributes === "object"
+    ? editableSecurityProviderAttributes(value.attributes)
+    : {};
+  setInputValue("security-oidc-attributes", JSON.stringify(attributes, null, 2));
+  clearRequiredFieldErrors(oidcRequiredFields);
+  refreshSecurityOidcRequiredMarkers();
+}
+
+function setSecurityProviderJsonStatus(provider, state, text) {
+  const status = document.getElementById(`security-${provider}-json-status`);
+  status.dataset.state = state;
+  status.textContent = text;
+}
+
+function syncSecurityProviderJsonFromForm(provider, { force = false } = {}) {
+  if (securityProviderJsonSyncing) return;
+  const editor = document.getElementById(`security-${provider}-json-editor`);
+  if (!force && document.activeElement === editor) return;
+  const value = provider === "ldap" ? securityLdapFormValue() : securityOidcFormValue();
+  editor.value = JSON.stringify(value, null, 2);
+  editor.classList.remove("is-invalid");
+  editor.setAttribute("aria-invalid", "false");
+  editor.removeAttribute("title");
+  setSecurityProviderJsonStatus(provider, "synced", "Synced");
+}
+
+function applySecurityProviderJsonEditor(provider) {
+  const editor = document.getElementById(`security-${provider}-json-editor`);
+  try {
+    const value = JSON.parse(editor.value);
+    if (!value || Array.isArray(value) || typeof value !== "object") {
+      throw new Error("JSON must be an object");
+    }
+    securityProviderJsonSyncing = true;
+    if (provider === "ldap") {
+      applySecurityLdapJsonValue(value);
+    } else {
+      applySecurityOidcJsonValue(value);
+    }
+    editor.classList.remove("is-invalid");
+    editor.setAttribute("aria-invalid", "false");
+    editor.removeAttribute("title");
+    setSecurityProviderJsonStatus(provider, "synced", "Synced");
+    return true;
+  } catch (error) {
+    editor.classList.add("is-invalid");
+    editor.setAttribute("aria-invalid", "true");
+    editor.title = error.message;
+    setSecurityProviderJsonStatus(provider, "error", "Waiting for valid JSON");
+    return false;
+  } finally {
+    securityProviderJsonSyncing = false;
+  }
+}
+
+function bindSecurityProviderJson(provider) {
+  const form = document.getElementById(`security-${provider}-form`);
+  const editor = document.getElementById(`security-${provider}-json-editor`);
+  form.addEventListener("input", () => syncSecurityProviderJsonFromForm(provider));
+  form.addEventListener("change", () => syncSecurityProviderJsonFromForm(provider));
+  editor.addEventListener("input", () => applySecurityProviderJsonEditor(provider));
+  editor.addEventListener("blur", () => {
+    if (applySecurityProviderJsonEditor(provider)) {
+      syncSecurityProviderJsonFromForm(provider, { force: true });
+    }
+  });
 }
 
 function markInputValidity(input, invalid) {
@@ -3642,6 +3877,7 @@ function renderSecurityLdap() {
     null,
     2);
   refreshSecurityLdapRequiredMarkers();
+  syncSecurityProviderJsonFromForm("ldap", { force: true });
 }
 
 function refreshSecurityLdapRequiredMarkers() {
@@ -3688,45 +3924,7 @@ async function saveSecurityLdap() {
   } catch (_) {
     return;
   }
-  const url = textInputValue("security-ldap-url");
-  const host = textInputValue("security-ldap-host");
-  const payload = {
-    enabled: document.getElementById("security-ldap-enabled").checked,
-    priority: numberInputValue("security-ldap-priority") ?? 10,
-    source: "LDAP",
-    name: textInputValue("security-ldap-name") || "LDAP",
-    url,
-    protocol: textInputValue("security-ldap-protocol") || "ldap",
-    host,
-    port: numberInputValue("security-ldap-port"),
-    useTrustStore: document.getElementById("security-ldap-trust-store").checked,
-    searchBase: textInputValue("security-ldap-search-base"),
-    authScheme: textInputValue("security-ldap-auth-scheme"),
-    authRealm: textInputValue("security-ldap-auth-realm"),
-    authUsername: textInputValue("security-ldap-auth-username"),
-    authPassword: textInputValue("security-ldap-auth-password"),
-    connectionTimeout: numberInputValue("security-ldap-connection-timeout"),
-    connectionRetryDelay: numberInputValue("security-ldap-retry-delay"),
-    maxIncidentsCount: numberInputValue("security-ldap-max-incidents"),
-    userBaseDn: textInputValue("security-ldap-user-base-dn"),
-    userSubtree: document.getElementById("security-ldap-user-subtree").checked,
-    userObjectClass: textInputValue("security-ldap-user-object-class"),
-    userLdapFilter: textInputValue("security-ldap-user-filter"),
-    userIdAttribute: textInputValue("security-ldap-user-id-attribute"),
-    userRealNameAttribute: textInputValue("security-ldap-user-real-name-attribute"),
-    userMemberOfAttribute: textInputValue("security-ldap-user-member-of-attribute"),
-    userEmailAddressAttribute: textInputValue("security-ldap-user-email-attribute"),
-    userPasswordAttribute: textInputValue("security-ldap-user-password-attribute"),
-    ldapGroupsAsRoles: document.getElementById("security-ldap-groups-as-roles").checked,
-    groupType: textInputValue("security-ldap-group-type"),
-    groupBaseDn: textInputValue("security-ldap-group-base-dn"),
-    groupSubtree: document.getElementById("security-ldap-group-subtree").checked,
-    groupIdAttribute: textInputValue("security-ldap-group-id-attribute"),
-    groupMemberAttribute: textInputValue("security-ldap-group-member-attribute"),
-    groupMemberFormat: textInputValue("security-ldap-group-member-format"),
-    groupObjectClass: textInputValue("security-ldap-group-object-class"),
-    attributes
-  };
+  const payload = securityLdapFormValue({ attributes, maskSecrets: false });
   try {
     const response = await fetch("/internal/security/ldap", {
       method: "PUT",
@@ -3793,6 +3991,7 @@ function renderSecurityOidc() {
     null,
     2);
   refreshSecurityOidcRequiredMarkers();
+  syncSecurityProviderJsonFromForm("oidc", { force: true });
 }
 
 function refreshSecurityOidcRequiredMarkers() {
@@ -3843,31 +4042,8 @@ async function saveSecurityOidc() {
   } catch (_) {
     return;
   }
-  const jwksUri = document.getElementById("security-oidc-jwks-uri").value.trim();
-  const payload = {
-    enabled: document.getElementById("security-oidc-enabled").checked,
-    priority: Number(document.getElementById("security-oidc-priority").value || 20),
-    source: "OIDC",
-    issuer: document.getElementById("security-oidc-issuer").value.trim() || null,
-    issuerUri: document.getElementById("security-oidc-issuer").value.trim() || null,
-    jwksUri: jwksUri || null,
-    audience: document.getElementById("security-oidc-audience").value.trim() || null,
-    clientId: document.getElementById("security-oidc-client-id").value.trim() || null,
-    clientSecret: document.getElementById("security-oidc-client-secret").value.trim() || null,
-    authorizationEndpoint: document.getElementById("security-oidc-authorization-endpoint").value.trim() || null,
-    tokenEndpoint: document.getElementById("security-oidc-token-endpoint").value.trim() || null,
-    redirectUri: document.getElementById("security-oidc-redirect-uri").value.trim() || null,
-    scopes: document.getElementById("security-oidc-scopes").value.trim() || null,
-    userIdClaim: document.getElementById("security-oidc-user-id-claim").value.trim() || null,
-    firstNameClaim: document.getElementById("security-oidc-first-name-claim").value.trim() || null,
-    lastNameClaim: document.getElementById("security-oidc-last-name-claim").value.trim() || null,
-    emailClaim: document.getElementById("security-oidc-email-claim").value.trim() || null,
-    groupsClaim: document.getElementById("security-oidc-groups-claim").value.trim() || null,
-    rolesClaim: document.getElementById("security-oidc-roles-claim").value.trim() || null,
-    clockSkewSeconds: Number(document.getElementById("security-oidc-clock-skew").value || 60),
-    jwksCacheSeconds: Number(document.getElementById("security-oidc-jwks-cache").value || 300),
-    attributes
-  };
+  const payload = securityOidcFormValue({ attributes, maskSecrets: false });
+  payload.issuerUri = payload.issuer;
   try {
     const response = await fetch("/internal/security/oidc", {
       method: "PUT",
@@ -7590,6 +7766,7 @@ ldapRequiredFields.forEach((field) => {
   input.addEventListener("input", clearSecurityLdapRequiredErrors);
   input.addEventListener("change", clearSecurityLdapRequiredErrors);
 });
+bindSecurityProviderJson("ldap");
 document.getElementById("save-security-oidc-button").addEventListener("click", saveSecurityOidc);
 document.getElementById("security-oidc-form").addEventListener("submit", (event) => {
   event.preventDefault();
@@ -7601,6 +7778,7 @@ oidcRequiredFields.forEach((field) => {
     markInputValidity(event.target, false);
   });
 });
+bindSecurityProviderJson("oidc");
 document.getElementById("save-security-anonymous-button").addEventListener("click", saveSecurityAnonymous);
 document.getElementById("security-anonymous-form").addEventListener("submit", (event) => {
   event.preventDefault();
