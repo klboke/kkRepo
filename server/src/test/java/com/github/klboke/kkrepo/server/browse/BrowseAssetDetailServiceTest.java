@@ -698,6 +698,7 @@ class BrowseAssetDetailServiceTest {
         80L, "huggingface-proxy", RepositoryFormat.HUGGINGFACE, RepositoryType.PROXY);
     String commit = "a".repeat(40);
     String path = "org/model/resolve/" + commit + "/model.safetensors";
+    String browsePath = "org/model/" + commit + "/model.safetensors";
     Map<String, Object> attributes = new LinkedHashMap<>();
     attributes.put("huggingfaceRole", "model-file");
     attributes.put("repoId", "org/model");
@@ -722,9 +723,18 @@ class BrowseAssetDetailServiceTest {
     BrowseAssetDetailService service = new BrowseAssetDetailService(
         new StubRepositoryDao(), assets,
         new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+    BrowseNodeDao browse = mock(BrowseNodeDao.class);
+    when(browse.findNode(repository.id(), browsePath)).thenReturn(Optional.of(
+        new BrowseNodeDao.BrowseChild(
+            1L, browsePath, "model.safetensors", 3, model.id(), model.componentId(),
+            model.size(), model.contentType(), "c".repeat(40), Instant.EPOCH, false, true)));
+    service.setBrowseNodeDao(browse);
 
-    BrowseAssetDetailService.BrowseAssetDetail detail = service.detail(repository, path, null);
+    BrowseAssetDetailService.BrowseAssetDetail detail =
+        service.detail(repository, browsePath, null);
 
+    assertEquals(browsePath, detail.path());
+    assertEquals("/repository/huggingface-proxy/" + path, detail.downloadUrl());
     assertEquals("org/model", detail.huggingface().get("repoId"));
     assertEquals(commit, detail.huggingface().get("commit"));
     assertEquals("main", detail.huggingface().get("requestedRef"));

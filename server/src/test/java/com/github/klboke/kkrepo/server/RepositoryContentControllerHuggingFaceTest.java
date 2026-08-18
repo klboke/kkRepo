@@ -52,7 +52,7 @@ class RepositoryContentControllerHuggingFaceTest {
     assertTrue(html.contains("<span class=\"description\">hf</span>"));
     assertTrue(html.contains(
         "This huggingface proxy repository is not directly browseable at this URL."));
-    assertTrue(html.contains("href=\"/browse/\""));
+    assertTrue(html.contains("href=\"/browse/#browse/browse:hf\""));
     assertTrue(html.contains("/service/rest/repository/browse/hf/"));
 
     ResponseEntity<Void> head = controller.head(

@@ -171,6 +171,8 @@ class AlpineRepositoryBlackBoxCompatibilityTest {
     assertTrue(candidate.text().contains(
         "This alpine hosted repository is not directly browseable"));
     assertTrue(candidate.text().contains(repository));
+    assertTrue(candidate.text().contains(
+        "/browse/#browse/browse:" + repository));
     assertTrue(candidate.text().contains("HTML index"));
   }
 

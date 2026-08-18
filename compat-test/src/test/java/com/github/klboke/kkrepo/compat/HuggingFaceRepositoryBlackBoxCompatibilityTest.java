@@ -50,6 +50,9 @@ class HuggingFaceRepositoryBlackBoxCompatibilityTest {
     String message = "This huggingface proxy repository is not directly browseable at this URL.";
     assertTrue(nexusRoot.text().contains(message), "Nexus repository root message");
     assertTrue(candidateRoot.text().contains(message), "candidate repository root message");
+    assertTrue(candidateRoot.text().contains(
+        "/browse/#browse/browse:" + fixture.candidate().repositoryName()),
+        "candidate repository-specific Browse link");
     assertTrue(candidateRoot.text().contains("/service/rest/repository/browse/"),
         "candidate HTML index link");
 
@@ -58,6 +61,24 @@ class HuggingFaceRepositoryBlackBoxCompatibilityTest {
     assertEquals(200, nexusHead.status(), "Nexus repository root HEAD status");
     assertEquals(nexusHead.status(), candidateHead.status(), "repository root HEAD status");
     assertEquals(0, candidateHead.body().length, "repository root HEAD body");
+  }
+
+  @Test
+  void htmlBrowseLinksUseResolvableImmutableRoutes() throws Exception {
+    assumeTrue(enabled(),
+        "Set HUGGINGFACE_COMPAT_ENABLED=true and both proxy URLs to run Hugging Face compatibility");
+    Fixture fixture = Fixture.fromEnvironment();
+    String browsePath = fixture.modelId() + "/" + fixture.commit() + "/";
+    String expectedRoute = fixture.modelId() + "/resolve/" + fixture.commit()
+        + "/" + fixture.filePath();
+
+    Exchange nexusBrowse = send(fixture.nexus().browseRequest(browsePath).GET().build());
+    Exchange candidateBrowse = send(fixture.candidate().browseRequest(browsePath).GET().build());
+
+    assertEquals(200, nexusBrowse.status(), "Nexus HTML browse status");
+    assertEquals(nexusBrowse.status(), candidateBrowse.status(), "HTML browse status");
+    assertTrue(nexusBrowse.text().contains(expectedRoute), "Nexus immutable download link");
+    assertTrue(candidateBrowse.text().contains(expectedRoute), "candidate immutable download link");
   }
 
   @Test
@@ -219,9 +240,31 @@ class HuggingFaceRepositoryBlackBoxCompatibilityTest {
 
   private record Endpoint(String baseUrl, String username, String password) {
     private HttpRequest.Builder request(String path) {
+      return authenticatedRequest(baseUrl + "/" + path);
+    }
+
+    private HttpRequest.Builder browseRequest(String path) {
+      int marker = baseUrl.indexOf("/repository/");
+      if (marker < 0) {
+        throw new IllegalArgumentException("Repository endpoint is missing /repository/: " + baseUrl);
+      }
+      String browseUrl = baseUrl.substring(0, marker)
+          + "/service/rest/repository/browse/" + repositoryName() + "/" + path;
+      return authenticatedRequest(browseUrl);
+    }
+
+    private String repositoryName() {
+      int marker = baseUrl.indexOf("/repository/");
+      if (marker < 0) {
+        throw new IllegalArgumentException("Repository endpoint is missing /repository/: " + baseUrl);
+      }
+      return baseUrl.substring(marker + "/repository/".length()).replaceAll("/+$", "");
+    }
+
+    private HttpRequest.Builder authenticatedRequest(String url) {
       String credentials = Base64.getEncoder().encodeToString(
           (username + ":" + password).getBytes(StandardCharsets.UTF_8));
-      return HttpRequest.newBuilder(URI.create(baseUrl + "/" + path))
+      return HttpRequest.newBuilder(URI.create(url))
           .timeout(Duration.ofSeconds(90))
           .header("Authorization", "Basic " + credentials);
     }

@@ -2,6 +2,8 @@ package com.github.klboke.kkrepo.server.maven;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
@@ -9,11 +11,13 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.support.dao.AssetDaoAdapter;
 import com.github.klboke.kkrepo.server.support.dao.BrowseNodeDaoAdapter;
 import com.github.klboke.kkrepo.server.support.dao.ComponentDaoAdapter;
 import com.github.klboke.kkrepo.server.support.dao.RepositoryDaoAdapter;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -65,6 +69,39 @@ class MavenHtmlListingServiceTest {
     assertFalse(html.contains(".terraform"));
     assertTrue(html.contains("v1/"));
     assertTrue(service.renderBrowse("terraform-proxy", ".terraform/routes").isEmpty());
+  }
+
+  @Test
+  void huggingFaceBrowseHtmlLinksToTheCanonicalResolveRoute() {
+    String commit = "a".repeat(40);
+    String parent = "org/model/" + commit;
+    String browsePath = parent + "/model.safetensors";
+    String storagePath = "org/model/resolve/" + commit + "/model.safetensors";
+    BrowseNodeDao browseNodes = mock(BrowseNodeDao.class);
+    when(browseNodes.listChildren(10L, parent)).thenReturn(List.of(
+        new BrowseNodeDao.BrowseChild(
+            1L, browsePath, "model.safetensors", 3, 11L, 12L, 1024L,
+            "application/octet-stream", "b".repeat(40), Instant.EPOCH, false, true)));
+    AssetDao assets = mock(AssetDao.class);
+    when(assets.findAssetsByIds(List.of(11L))).thenReturn(Map.of(
+        11L,
+        new AssetRecord(
+            11L, 10L, 12L, 13L, RepositoryFormat.HUGGINGFACE,
+            storagePath, null, "model.safetensors", "huggingface-model-file",
+            "application/octet-stream", 1024L, null, Instant.EPOCH, Map.of())));
+    MavenHtmlListingService service = new MavenHtmlListingService(
+        new FakeRepositoryDao(
+            RepositoryFormat.HUGGINGFACE, RepositoryType.PROXY, "huggingface-proxy"),
+        browseNodes,
+        assets,
+        new ComponentDaoAdapter(null, null));
+
+    String html = service.renderBrowse("hf-proxy", parent).orElseThrow();
+
+    assertTrue(html.contains(
+        "href=\"/repository/hf-proxy/" + storagePath + "\""));
+    assertFalse(html.contains(
+        "href=\"/repository/hf-proxy/" + browsePath + "\""));
   }
 
   private static class FakeRepositoryDao extends RepositoryDaoAdapter {

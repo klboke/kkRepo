@@ -970,7 +970,12 @@ public class BrowseAssetDetailService {
       String normalized,
       String sourceRepositoryName) {
     if (visibleRepository.format() == RepositoryFormat.CONAN) {
-      return conanStoragePath(visibleRepository, normalized, sourceRepositoryName);
+      return projectedStoragePath(
+          visibleRepository, normalized, sourceRepositoryName, "Conan");
+    }
+    if (visibleRepository.format() == RepositoryFormat.HUGGINGFACE) {
+      return projectedStoragePath(
+          visibleRepository, normalized, sourceRepositoryName, "Hugging Face");
     }
     if (visibleRepository.format() == RepositoryFormat.TERRAFORM && terraformDao != null) {
       Optional<TerraformBrowseAssetPathResolver.ResolvedStoragePath> terraform =
@@ -1040,13 +1045,14 @@ public class BrowseAssetDetailService {
     return new ResolvedStoragePath(normalized, sourceRepositoryName);
   }
 
-  private ResolvedStoragePath conanStoragePath(
+  private ResolvedStoragePath projectedStoragePath(
       RepositoryRecord visibleRepository,
       String browsePath,
-      String sourceRepositoryName) {
+      String sourceRepositoryName,
+      String formatLabel) {
     if (browseNodeDao == null) {
       throw new ResponseStatusException(
-          HttpStatus.CONFLICT, "Conan Browse projection is unavailable");
+          HttpStatus.CONFLICT, formatLabel + " Browse projection is unavailable");
     }
     List<RepositoryRecord> sources = visibleRepository.type() == RepositoryType.GROUP
         ? repositoryDao.listMembers(visibleRepository.id())
@@ -1065,7 +1071,8 @@ public class BrowseAssetDetailService {
         return new ResolvedStoragePath(asset.orElseThrow().path(), source.name());
       }
     }
-    throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Conan Browse asset not found");
+    throw new ResponseStatusException(
+        HttpStatus.NOT_FOUND, formatLabel + " Browse asset not found");
   }
 
   private static String conanFileRoute(ConanRegistryDao.AssetFile file) {

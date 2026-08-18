@@ -1576,7 +1576,7 @@ public class RepositoryContentController {
           <div class="content-body">
             <div class="content-section">
               <p>This %s %s repository is not directly browseable at this URL.</p>
-              <p>Please use the <a href="%s/browse/">browse</a>
+              <p>Please use the <a href="%s/browse/#browse/browse:%s">browse</a>
               or <a href="%s/service/rest/repository/browse/%s/">HTML index</a>
               views to inspect the contents of this repository.</p>
             </div>
@@ -1589,6 +1589,7 @@ public class RepositoryContentController {
         escapeHtml(formatLabel),
         escapeHtml(type),
         escapeHtml(request.getContextPath().isBlank() ? "" : request.getContextPath()),
+        escapeHtml(runtime.name()),
         escapeHtml(serverBaseUrl(request)),
         escapeHtml(runtime.name()));
     byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
