@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.docker;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -21,6 +22,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
+import com.github.klboke.kkrepo.server.security.SecurityValidationException;
 import com.github.klboke.kkrepo.server.support.FakeHttpProxyServer;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
 import com.sun.net.httpserver.HttpServer;
@@ -36,6 +38,7 @@ import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -378,6 +381,33 @@ class DockerRemoteRegistryClientTest {
   }
 
   @Test
+  void crossOriginRedirectIsDeniedUnlessItsHostIsConfigured() throws Exception {
+    try (TestRegistry registry = TestRegistry.start(); TestRegistry storage = TestRegistry.start()) {
+      AtomicInteger storageCalls = new AtomicInteger();
+      registry.server.createContext("/v2/library/nginx/blobs/sha256:abc", exchange -> {
+        exchange.getResponseHeaders().add("Location", storage.baseUrl + "/layers/abc");
+        exchange.sendResponseHeaders(307, -1);
+        exchange.close();
+      });
+      storage.server.createContext("/layers/abc", exchange -> {
+        storageCalls.incrementAndGet();
+        exchange.sendResponseHeaders(200, -1);
+        exchange.close();
+      });
+
+      SecurityValidationException error = assertThrows(
+          SecurityValidationException.class,
+          () -> client().get(
+              runtime(registry.baseUrl, "robot", "secret"),
+              "library/nginx/blobs/sha256:abc",
+              "application/octet-stream"));
+
+      assertEquals("remote redirect URL host is not allowed: 127.0.0.1", error.getMessage());
+      assertEquals(0, storageCalls.get());
+    }
+  }
+
+  @Test
   void crossOriginRedirectStripsRegistryCredentials() throws Exception {
     try (TestRegistry registry = TestRegistry.start(); TestRegistry storage = TestRegistry.start()) {
       List<String> registryAuthorizations = new ArrayList<>();
@@ -399,7 +429,7 @@ class DockerRemoteRegistryClientTest {
       DockerRemoteRegistryClient client = client();
 
       try (HttpRemoteFetcher.Result result = client.get(
-          runtime(registry.baseUrl, "robot", "secret"),
+          runtimeAllowingRedirectHost(registry.baseUrl, "robot", "secret", "127.0.0.1"),
           "library/nginx/blobs/sha256:abc",
           "application/octet-stream")) {
         assertEquals(200, result.status());
@@ -438,7 +468,7 @@ class DockerRemoteRegistryClientTest {
       DockerRemoteRegistryClient client = client();
 
       try (HttpRemoteFetcher.Result result = client.get(
-          runtime(registry.baseUrl, "robot", "secret"),
+          runtimeAllowingRedirectHost(registry.baseUrl, "robot", "secret", "127.0.0.1"),
           "library/nginx/blobs/sha256:abc",
           "application/octet-stream")) {
         assertEquals(401, result.status());
@@ -486,7 +516,7 @@ class DockerRemoteRegistryClientTest {
       DockerRemoteRegistryClient client = client();
 
       try (HttpRemoteFetcher.Result result = client.get(
-          runtime(registry.baseUrl, "robot", "secret"),
+          runtimeAllowingRedirectHost(registry.baseUrl, "robot", "secret", "127.0.0.1"),
           "library/nginx/blobs/sha256:abc",
           "application/octet-stream")) {
         assertEquals(200, result.status());
@@ -607,7 +637,8 @@ class DockerRemoteRegistryClientTest {
           300,
           null,
           directFactory);
-      RepositoryRuntime runtime = runtime(registry.baseUrl, "robot", "secret");
+      RepositoryRuntime runtime = runtimeAllowingRedirectHost(
+          registry.baseUrl, "robot", "secret", "127.0.0.1");
 
       try (HttpRemoteFetcher.Result result = client.get(
           runtime,
@@ -712,7 +743,7 @@ class DockerRemoteRegistryClientTest {
 
       try (HttpRemoteFetcher.Result result = client.get(
           proxiedRuntime("http://localhost", "robot", "secret",
-              outboundProxy(proxy.port())),
+              outboundProxy(proxy.port()), Set.of("127.0.0.1")),
           "library/nginx/blobs/sha256:abc",
           "application/octet-stream")) {
         assertEquals(200, result.status());
@@ -844,6 +875,15 @@ class DockerRemoteRegistryClientTest {
 
   private static RepositoryRuntime proxiedRuntime(
       String remoteUrl, String username, String password, OutboundProxyConfig outboundProxy) {
+    return proxiedRuntime(remoteUrl, username, password, outboundProxy, Set.of());
+  }
+
+  private static RepositoryRuntime proxiedRuntime(
+      String remoteUrl,
+      String username,
+      String password,
+      OutboundProxyConfig outboundProxy,
+      Set<String> allowedRedirectHosts) {
     return new RepositoryRuntime(
         10L,
         "docker-proxy",
@@ -869,7 +909,9 @@ class DockerRemoteRegistryClientTest {
         null,
         null,
         List.of(),
-        outboundProxy);
+        outboundProxy,
+        null,
+        allowedRedirectHosts);
   }
 
   private DockerRemoteRegistryClient client() {
@@ -901,6 +943,38 @@ class DockerRemoteRegistryClientTest {
         null,
         null,
         List.of());
+  }
+
+  private static RepositoryRuntime runtimeAllowingRedirectHost(
+      String remoteUrl, String username, String password, String allowedRedirectHost) {
+    return new RepositoryRuntime(
+        10L,
+        "docker-proxy",
+        RepositoryFormat.DOCKER,
+        RepositoryType.PROXY,
+        "docker-proxy",
+        true,
+        1L,
+        null,
+        null,
+        null,
+        true,
+        remoteUrl,
+        1440,
+        1440,
+        true,
+        username,
+        password,
+        null,
+        null,
+        false,
+        null,
+        null,
+        null,
+        List.of(),
+        null,
+        null,
+        Set.of(allowedRedirectHost));
   }
 
   private static String basic(String username, String password) {

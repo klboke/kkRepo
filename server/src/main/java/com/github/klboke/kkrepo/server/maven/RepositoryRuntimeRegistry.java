@@ -13,6 +13,7 @@ import com.github.klboke.kkrepo.server.catalog.CatalogCacheBroadcaster;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -327,6 +328,7 @@ public class RepositoryRuntimeRegistry {
     String proxyRemoteUsername = null;
     String proxyRemotePassword = null;
     String proxyRemoteBearerToken = null;
+    Set<String> allowedRedirectHosts = Set.of();
     com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig outboundProxy = null;
     if (proxyRaw instanceof Map<?, ?> proxyMap) {
       contentMaxAge = asInt(proxyMap.get("contentMaxAgeMinutes"));
@@ -345,6 +347,7 @@ public class RepositoryRuntimeRegistry {
       if (bearerToken != null && !bearerToken.toString().isBlank()) {
         proxyRemoteBearerToken = bearerToken.toString();
       }
+      allowedRedirectHosts = asStringSet(proxyMap.get("allowedRedirectHosts"));
       outboundProxy = readOutboundProxy(proxyMap);
     }
     String rawContentDisposition = null;
@@ -414,7 +417,8 @@ public class RepositoryRuntimeRegistry {
         cargoRequireAuthentication,
         members,
         outboundProxy,
-        minimumReleaseAge);
+        minimumReleaseAge,
+        allowedRedirectHosts);
   }
 
   private static com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig readOutboundProxy(Map<?, ?> proxyMap) {
@@ -435,6 +439,15 @@ public class RepositoryRuntimeRegistry {
     if (value == null) return null;
     if (value instanceof Boolean b) return b;
     return Boolean.parseBoolean(value.toString());
+  }
+
+  private static Set<String> asStringSet(Object value) {
+    if (!(value instanceof Iterable<?> values)) return Set.of();
+    LinkedHashSet<String> result = new LinkedHashSet<>();
+    for (Object item : values) {
+      if (item != null && !item.toString().isBlank()) result.add(item.toString());
+    }
+    return Set.copyOf(result);
   }
 
   private static boolean containsProxySecret(RepositoryRuntime runtime) {

@@ -2739,8 +2739,11 @@ function repositoryFormPayload() {
     const content = document.getElementById("repository-content-max-age").value;
     const metadata = document.getElementById("repository-metadata-max-age").value;
     const minimumReleaseAge = document.getElementById("repository-minimum-release-age").value;
+    const allowedRedirectHosts = document.getElementById("repository-allowed-redirect-hosts").value
+      .split(/[\n,]/).map((value) => value.trim()).filter(Boolean);
     payload.proxy = {
       remoteUrl: document.getElementById("repository-remote-url").value.trim(),
+      allowedRedirectHosts,
       contentMaxAgeMinutes: content === "" ? null : Number(content),
       metadataMaxAgeMinutes: metadata === "" ? null : Number(metadata),
       minimumReleaseAgeMinutes: recipe.format === "npm"
@@ -2829,6 +2832,7 @@ function setRepositoryFormDefaults() {
   document.getElementById("repository-version-policy").value = "RELEASE";
   document.getElementById("repository-layout-policy").value = "STRICT";
   document.getElementById("repository-remote-url").value = "";
+  document.getElementById("repository-allowed-redirect-hosts").value = "";
   document.getElementById("repository-remote-username").value = "";
   document.getElementById("repository-remote-password").value = "";
   document.getElementById("repository-remote-password").placeholder = "";
@@ -2942,6 +2946,8 @@ function showEditRepositoryForm(name) {
   }
   if (repo.proxy) {
     document.getElementById("repository-remote-url").value = repo.proxy.remoteUrl || "";
+    document.getElementById("repository-allowed-redirect-hosts").value =
+      Array.isArray(repo.proxy.allowedRedirectHosts) ? repo.proxy.allowedRedirectHosts.join("\n") : "";
     document.getElementById("repository-remote-username").value = repo.proxy.remoteUsername || "";
     document.getElementById("repository-remote-password").value = "";
     document.getElementById("repository-remote-password").placeholder =

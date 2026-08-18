@@ -456,12 +456,18 @@ class HttpRemoteFetcherTest {
 
   @Test
   void repositoryRequestsCanDropAuthorizationForAllowedUnsignedCrossOriginRedirects() {
-    RepositoryRuntime runtime = runtime("robot", "secret", null);
+    RepositoryRuntime runtime = runtime(
+        "https://repo.example.com/maven2",
+        "robot",
+        "secret",
+        null,
+        Set.of("configured-cdn.example.net"));
     HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request
         .get("https://repo.example.com/maven2/com/example/app.jar")
         .withRepositoryAllowingUnsignedRedirects(runtime, true, Set.of("storage.example.net"));
     URI current = URI.create("https://repo.example.com/maven2/com/example/app.jar");
     URI storage = URI.create("https://storage.example.net/app.jar");
+    URI configuredCdn = URI.create("https://configured-cdn.example.net/app.jar");
 
     assertEquals("repo.example.com", request.trustedHost());
     assertNotNull(request.authorizationHeader());
@@ -470,6 +476,31 @@ class HttpRemoteFetcherTest {
         request.authorizationHeaderForRedirect(current, URI.create("https://repo.example.com/maven2/redirect.jar")));
     assertNull(request.authorizationHeaderForRedirect(current, storage));
     assertEquals("storage.example.net", request.trustedHostForRedirect(current, storage));
+    assertNull(request.authorizationHeaderForRedirect(current, configuredCdn));
+    assertEquals(
+        "configured-cdn.example.net",
+        request.trustedHostForRedirect(current, configuredCdn));
+  }
+
+  @Test
+  void repositoryRequestsUseConfiguredRedirectHostsAndDropAuthorization() {
+    RepositoryRuntime runtime = runtime(
+        "https://plugins.gradle.org/m2/",
+        "robot",
+        "secret",
+        null,
+        Set.of("PLUGINS-ARTIFACTS.GRADLE.ORG."));
+    HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request
+        .get("https://plugins.gradle.org/m2/com/example/app.pom")
+        .withRepository(runtime);
+    URI current = URI.create("https://plugins.gradle.org/m2/com/example/app.pom");
+    URI redirected = URI.create("https://plugins-artifacts.gradle.org./com/example/app.pom");
+
+    assertNotNull(request.authorizationHeader());
+    assertNull(request.authorizationHeaderForRedirect(current, redirected));
+    assertEquals(
+        "plugins-artifacts.gradle.org",
+        request.trustedHostForRedirect(current, redirected));
   }
 
   @Test
@@ -618,6 +649,15 @@ class HttpRemoteFetcherTest {
 
   private static RepositoryRuntime runtime(
       String remoteUrl, String username, String password, String bearerToken) {
+    return runtime(remoteUrl, username, password, bearerToken, Set.of());
+  }
+
+  private static RepositoryRuntime runtime(
+      String remoteUrl,
+      String username,
+      String password,
+      String bearerToken,
+      Set<String> allowedRedirectHosts) {
     return new RepositoryRuntime(
         1,
         "maven-proxy",
@@ -643,7 +683,9 @@ class HttpRemoteFetcherTest {
         null,
         null,
         List.of(),
-        null);
+        null,
+        null,
+        allowedRedirectHosts);
   }
 
   private static class SequencedFetcher extends HttpRemoteFetcher {

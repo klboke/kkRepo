@@ -32,6 +32,8 @@ import org.junit.jupiter.api.Test;
  * {@link CompatConfig} settings.
  */
 class MavenRepositoryBlackBoxCompatibilityTest {
+  private static final String GRADLE_PLUGIN_PORTAL_ARTIFACT =
+      "com/bmuschko/gradle-docker-plugin/3.6.1/gradle-docker-plugin-3.6.1.pom";
   private static final DateTimeFormatter DOTTED =
       DateTimeFormatter.ofPattern("yyyyMMdd.HHmmss").withZone(ZoneOffset.UTC);
   private static final DateTimeFormatter DOTLESS =
@@ -66,6 +68,32 @@ class MavenRepositoryBlackBoxCompatibilityTest {
     assertSameExchange("proxy GET", referenceGet, candidateGet, true);
     assertSameExchange("proxy HEAD", referenceHead, candidateHead, false);
     assertSameExchange("proxy checksum", referenceSha1, candidateSha1, true);
+  }
+
+  @Test
+  void gradlePluginPortalCrossHostRedirectMatchesNexusWhenConfigured() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeTrue(config.configured(),
+        "Set NEXUS_COMPAT_BASE_URL and KKREPO_COMPAT_BASE_URL to run black-box compatibility");
+    assumeTrue(Boolean.parseBoolean(setting(
+        "compat.gradlePluginPortalRedirect.enabled",
+        "COMPAT_GRADLE_PLUGIN_PORTAL_REDIRECT_ENABLED").orElse("false")),
+        "Set COMPAT_GRADLE_PLUGIN_PORTAL_REDIRECT_ENABLED=true after configuring the candidate "
+            + "proxy with allowedRedirectHosts=[plugins-artifacts.gradle.org]");
+
+    Endpoint nexus = config.nexus().withRepository(setting(
+        "compat.nexus.gradlePluginPortalRepository",
+        "NEXUS_COMPAT_GRADLE_PLUGIN_PORTAL_REPOSITORY").orElse("gradle-plugins"));
+    Endpoint candidate = config.nexusPlus().withRepository(setting(
+        "compat.nexusPlus.gradlePluginPortalRepository",
+        "KKREPO_COMPAT_GRADLE_PLUGIN_PORTAL_REPOSITORY").orElse("gradle-plugins"));
+
+    Exchange reference = get(nexus, GRADLE_PLUGIN_PORTAL_ARTIFACT);
+    Exchange actual = get(candidate, GRADLE_PLUGIN_PORTAL_ARTIFACT);
+
+    assertSameExchange("Gradle Plugin Portal redirected artifact", reference, actual, true);
+    assertEquals(200, actual.status(),
+        "the redirected Gradle Plugin Portal artifact must be cached and served");
   }
 
   @Test

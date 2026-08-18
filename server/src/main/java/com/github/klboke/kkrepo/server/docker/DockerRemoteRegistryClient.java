@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.metrics.KkRepoMetrics;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
+import com.github.klboke.kkrepo.server.security.SecurityValidationException;
 import io.micrometer.core.instrument.Timer;
 import java.io.IOException;
 import java.net.URI;
@@ -167,6 +168,7 @@ public class DockerRemoteRegistryClient {
           throw new IOException("Too many redirects fetching Docker remote " + url);
         }
         URI redirected = uri.resolve(location);
+        requireAllowedRedirect(runtime, uri, redirected);
         boolean forwardCredentials = sendCredentials && sameOrigin(uri, redirected);
         recordRemote(runtime, "GET", url, status, null, sample);
         recorded = true;
@@ -311,6 +313,24 @@ public class DockerRemoteRegistryClient {
       return effectivePort(from) == effectivePort(to);
     }
     return isHttpToHttpsUpgrade(from, to);
+  }
+
+  private static void requireAllowedRedirect(
+      RepositoryRuntime runtime, URI current, URI redirected) {
+    if (sameOrigin(current, redirected)) {
+      return;
+    }
+    String host = redirected == null || redirected.getHost() == null
+        ? ""
+        : redirected.getHost().trim().toLowerCase(java.util.Locale.ROOT);
+    while (host.endsWith(".")) {
+      host = host.substring(0, host.length() - 1);
+    }
+    if (runtime != null && runtime.allowsRedirectHost(host)) {
+      return;
+    }
+    throw new SecurityValidationException(
+        "remote redirect URL host is not allowed: " + host);
   }
 
   private static boolean isHttpToHttpsUpgrade(URI from, URI to) {

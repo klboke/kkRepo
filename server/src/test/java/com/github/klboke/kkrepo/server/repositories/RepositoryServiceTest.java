@@ -46,6 +46,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class RepositoryServiceTest {
@@ -666,6 +667,101 @@ class RepositoryServiceTest {
         new ProxySettings("https://registry.npmjs.org/", 1440, 1440, true),
         null, null, null, null));
     assertEquals(0, defaulted.proxy().minimumReleaseAgeMinutes());
+  }
+
+  @Test
+  void proxyRedirectHostsRoundTripNormalizePreserveAndClear() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "gradle-plugins",
+        "maven2-proxy",
+        true,
+        "default",
+        true,
+        null,
+        proxyWithRedirectHosts(
+            "http://127.0.0.1/m2/",
+            List.of(
+                " Plugins-Artifacts.Gradle.org. ",
+                "cdn.example.org",
+                "plugins-artifacts.gradle.org")),
+        null,
+        null,
+        null,
+        null));
+
+    assertEquals(
+        List.of("plugins-artifacts.gradle.org", "cdn.example.org"),
+        created.proxy().allowedRedirectHosts());
+    Map<?, ?> storedProxy = (Map<?, ?>) repositories.repository.attributes().get("proxy");
+    assertEquals(created.proxy().allowedRedirectHosts(), storedProxy.get("allowedRedirectHosts"));
+    assertEquals(
+        Set.of("plugins-artifacts.gradle.org", "cdn.example.org"),
+        new RepositoryRuntimeRegistry(repositories, 0)
+            .resolve("gradle-plugins")
+            .orElseThrow()
+            .allowedRedirectHosts());
+
+    RepositoryView preserved = service.update(
+        "gradle-plugins",
+        new UpdateCommand(
+            true,
+            null,
+            null,
+            null,
+            new ProxySettings(null, null, null, null),
+            null,
+            null,
+            null,
+            null));
+    assertEquals(created.proxy().allowedRedirectHosts(), preserved.proxy().allowedRedirectHosts());
+
+    RepositoryView cleared = service.update(
+        "gradle-plugins",
+        new UpdateCommand(
+            true,
+            null,
+            null,
+            null,
+            proxyWithRedirectHosts(null, List.of()),
+            null,
+            null,
+            null,
+            null));
+    assertEquals(List.of(), cleared.proxy().allowedRedirectHosts());
+    Map<?, ?> clearedProxy = (Map<?, ?>) repositories.updated.attributes().get("proxy");
+    assertEquals(false, clearedProxy.containsKey("allowedRedirectHosts"));
+  }
+
+  @Test
+  void proxyRedirectHostsRejectUrlsPortsPathsAndWildcards() {
+    RepositoryService service = service(new StubRepositoryDao(repository(1L)));
+
+    for (String invalid : List.of(
+        "https://plugins-artifacts.gradle.org",
+        "plugins-artifacts.gradle.org:443",
+        "plugins-artifacts.gradle.org/files",
+        "*.gradle.org")) {
+      RepositoryValidationException error = assertThrows(
+          RepositoryValidationException.class,
+          () -> service.create(new CreateCommand(
+              "gradle-plugins",
+              "maven2-proxy",
+              true,
+              "default",
+              true,
+              null,
+              proxyWithRedirectHosts("http://127.0.0.1/m2/", List.of(invalid)),
+              null,
+              null,
+              null,
+              null)));
+      assertEquals(
+          "proxy.allowedRedirectHosts entries must be exact host names without a scheme, port, path, or wildcard",
+          error.getMessage());
+    }
   }
 
   @Test
@@ -1882,6 +1978,28 @@ class RepositoryServiceTest {
 
   private static RepositoryRecord mavenProxyWithOutboundProxy(String outboundPassword) {
     return mavenProxyWithOutboundProxy(1L, "maven-proxy", outboundPassword);
+  }
+
+  private static ProxySettings proxyWithRedirectHosts(
+      String remoteUrl, List<String> allowedRedirectHosts) {
+    return new ProxySettings(
+        remoteUrl,
+        1440,
+        1440,
+        true,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        allowedRedirectHosts);
   }
 
   private static RepositoryRecord mavenProxyWithOutboundProxy(

@@ -229,6 +229,16 @@
                 <span>Remote URL <span class="required-mark">*</span></span>
                 <input id="repository-remote-url" type="url" placeholder="https://repo.maven.apache.org/maven2/">
               </label>
+              <label class="full-width">
+                <span>Allowed redirect hosts</span>
+                <textarea id="repository-allowed-redirect-hosts" rows="3" spellcheck="false"
+                  placeholder="plugins-artifacts.gradle.org"></textarea>
+              </label>
+              <p class="form-note full-width">
+                Optional exact host names, separated by commas or new lines. Cross-host redirects
+                are denied by default, never receive the source repository credentials, and still
+                pass outbound DNS and SSRF validation. Schemes, ports, paths, and wildcards are not allowed.
+              </p>
               <label>
                 <span>Remote username</span>
                 <input id="repository-remote-username" type="text" autocomplete="off">

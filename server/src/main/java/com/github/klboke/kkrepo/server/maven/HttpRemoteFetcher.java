@@ -473,7 +473,7 @@ public class HttpRemoteFetcher {
           runtime == null || runtime.format() == null ? null : runtime.format().name(),
           trusted,
           includeAuthorization && trusted != null ? remoteAuthorizationHeader(runtime) : null,
-          Set.of(),
+          runtime == null ? Set.of() : runtime.allowedRedirectHosts(),
           runtime == null ? null : runtime.outboundProxy(),
           accept,
           requestBody,
@@ -502,7 +502,9 @@ public class HttpRemoteFetcher {
           runtime == null || runtime.format() == null ? null : runtime.format().name(),
           trusted,
           includeAuthorization && trusted != null ? remoteAuthorizationHeader(runtime) : null,
-          allowedUnsignedRedirectHosts,
+          runtime == null
+              ? allowedUnsignedRedirectHosts
+              : runtime.allowedRedirectHostsWith(allowedUnsignedRedirectHosts),
           runtime == null ? null : runtime.outboundProxy(),
           accept,
           requestBody,
@@ -579,6 +581,9 @@ public class HttpRemoteFetcher {
       String value = host == null ? "" : host.trim().toLowerCase(Locale.ROOT);
       if (value.startsWith("[") && value.endsWith("]")) {
         value = value.substring(1, value.length() - 1);
+      }
+      while (value.endsWith(".")) {
+        value = value.substring(0, value.length() - 1);
       }
       return value;
     }

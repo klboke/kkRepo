@@ -8,10 +8,17 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.core.BlobObjectMetadata;
 import com.github.klboke.kkrepo.core.BlobReference;
@@ -25,6 +32,9 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
+import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
+import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
 import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
 import com.github.klboke.kkrepo.server.support.dao.AssetDaoAdapter;
@@ -32,15 +42,18 @@ import com.github.klboke.kkrepo.server.support.dao.ProxyStateDaoAdapter;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
+import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -182,6 +195,75 @@ class MavenProxyServiceTest {
     assertEquals(1, proxyState.successCount);
     assertNotNull(fetcher.request);
     assertNull(fetcher.request.timeout());
+  }
+
+  @Test
+  void gradlePluginPortalRedirectCanBeAllowlistedAndCachedUnderTheRequestedMavenPath()
+      throws Exception {
+    String requestedPath =
+        "com/bmuschko/gradle-docker-plugin/3.6.1/gradle-docker-plugin-3.6.1.pom";
+    URI pluginPortal = URI.create("https://plugins.gradle.org/m2/" + requestedPath);
+    URI artifactHost = URI.create(
+        "https://plugins-artifacts.gradle.org/com.bmuschko/gradle-docker-plugin/3.6.1/"
+            + "5fe2ae0bf2f5be95c6d0e4ee5f36dce5fe935a5712dcb309ffd862b42a90c301/"
+            + "gradle-docker-plugin-3.6.1.pom");
+    byte[] pom = "<project><modelVersion>4.0.0</modelVersion></project>"
+        .getBytes(StandardCharsets.UTF_8);
+    ProxiedHttpClientFactory transport = mock(ProxiedHttpClientFactory.class);
+    List<URI> targets = new ArrayList<>();
+    List<String> authorizations = new ArrayList<>();
+    when(transport.execute(
+        anyString(),
+        any(OutboundProxyConfig.class),
+        eq("GET"),
+        any(OutboundRequestPolicy.ResolvedHttpTarget.class),
+        anyMap(),
+        nullable(byte[].class),
+        anyLong())).thenAnswer(invocation -> {
+          OutboundRequestPolicy.ResolvedHttpTarget target = invocation.getArgument(3);
+          Map<String, String> headers = invocation.getArgument(4);
+          targets.add(target.uri());
+          authorizations.add(headers.get("Authorization"));
+          if (target.uri().equals(pluginPortal)) {
+            return proxiedResponse(303, Map.of("Location", artifactHost.toString()), new byte[0]);
+          }
+          return proxiedResponse(200, Map.of("Content-Type", "application/xml"), pom);
+        });
+    HttpRemoteFetcher fetcher = new HttpRemoteFetcher(
+        new OutboundRequestPolicy(false, ""),
+        null,
+        transport,
+        "HTTP_1_1",
+        30,
+        60,
+        300,
+        5,
+        1);
+    CountingBlobStorage storage = new CountingBlobStorage();
+    TempFileWriter writer = new TempFileWriter();
+    RecordingProxyStateDao proxyState = new RecordingProxyStateDao();
+    MavenProxyService service = new MavenProxyService(
+        new EmptyAssetDao(),
+        new FixedBlobStorageRegistry(storage),
+        writer,
+        proxyState,
+        fetcher,
+        null,
+        new AssetMetadataCache(new InMemorySharedCache(), false, 0, 0));
+
+    MavenResponse response = service.get(gradlePluginPortalRuntime(), path(requestedPath), false);
+
+    assertEquals(200, response.status());
+    try (InputStream body = response.body()) {
+      assertArrayEquals(pom, body.readAllBytes());
+    }
+    assertEquals(List.of(pluginPortal, artifactHost), targets);
+    assertNotNull(authorizations.get(0));
+    assertNull(authorizations.get(1), "repository credentials must not cross redirect origins");
+    assertTrue(writer.keepResponseFile);
+    assertEquals(requestedPath, writer.writtenPath.path());
+    assertEquals(0, storage.getCalls);
+    assertEquals(1, proxyState.successCount);
   }
 
   @Test
@@ -432,8 +514,58 @@ class MavenProxyServiceTest {
         true, null, List.of());
   }
 
+  private static RepositoryRuntime gradlePluginPortalRuntime() {
+    return new RepositoryRuntime(
+        10,
+        "gradle-plugins",
+        RepositoryFormat.MAVEN2,
+        RepositoryType.PROXY,
+        "maven2-proxy",
+        true,
+        1L,
+        null,
+        "MIXED",
+        "PERMISSIVE",
+        true,
+        "https://plugins.gradle.org/m2/",
+        1440,
+        1440,
+        true,
+        "robot",
+        "secret",
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        List.of(),
+        new OutboundProxyConfig(
+            OutboundProxyConfig.Type.HTTP, "proxy.example", 8080, null, null),
+        null,
+        Set.of("plugins-artifacts.gradle.org"));
+  }
+
   private static MavenPath path(String rawPath) {
     return PARSER.parsePath(rawPath);
+  }
+
+  private static ProxiedHttpClientFactory.ProxiedResponse proxiedResponse(
+      int status, Map<String, String> headers, byte[] body) throws IOException {
+    ProxiedHttpClientFactory.ProxiedResponse response =
+        mock(ProxiedHttpClientFactory.ProxiedResponse.class);
+    when(response.status()).thenReturn(status);
+    when(response.headers()).thenReturn(headers);
+    when(response.header(anyString())).thenAnswer(invocation -> {
+      String name = invocation.getArgument(0);
+      return headers.entrySet().stream()
+          .filter(entry -> entry.getKey().equalsIgnoreCase(name))
+          .map(Map.Entry::getValue)
+          .findFirst()
+          .orElse(null);
+    });
+    when(response.body()).thenAnswer(ignored -> new java.io.ByteArrayInputStream(body));
+    return response;
   }
 
   private static class EmptyAssetDao extends AssetDaoAdapter {
@@ -600,6 +732,7 @@ class MavenProxyServiceTest {
   private static class TempFileWriter extends MavenAssetWriter {
     boolean keepResponseFile;
     String createdByIp;
+    MavenPath writtenPath;
 
     TempFileWriter() {
       super(null, null, null, new AssetMetadataCache(new InMemorySharedCache(), false, 0, 0), null);
@@ -620,6 +753,7 @@ class MavenProxyServiceTest {
         boolean keepResponseFile) {
       this.keepResponseFile = keepResponseFile;
       this.createdByIp = createdByIp;
+      this.writtenPath = path;
       try {
         Path tmp = Files.createTempFile("kkrepo-test-", ".bin");
         long size = Files.copy(body, tmp, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
