@@ -14,6 +14,7 @@ import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPath;
 import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
 import com.github.klboke.kkrepo.protocol.conda.CondaPath;
 import com.github.klboke.kkrepo.protocol.conda.CondaPathParser;
+import com.github.klboke.kkrepo.protocol.composer.ComposerPathParser;
 import com.github.klboke.kkrepo.protocol.pub.PubPath;
 import com.github.klboke.kkrepo.protocol.pub.PubPathParser;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPath;
@@ -21,6 +22,8 @@ import com.github.klboke.kkrepo.protocol.terraform.TerraformPathParser;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.conan.ConanAuthService;
 import com.github.klboke.kkrepo.server.npm.NpmTokenService;
+import com.github.klboke.kkrepo.server.pypi.PypiExceptions;
+import com.github.klboke.kkrepo.server.pypi.PypiRequestPath;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -61,6 +64,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       new AnsibleGalaxyPathParser();
   private static final PubPathParser PUB_PATH_PARSER = new PubPathParser();
   private static final CondaPathParser CONDA_PATH_PARSER = new CondaPathParser();
+  private static final ComposerPathParser COMPOSER_PATH_PARSER = new ComposerPathParser();
   private static final TerraformPathParser TERRAFORM_PATH_PARSER = new TerraformPathParser();
   private final SecurityAuthenticationService authenticationService;
   private final AccessDecisionService accessDecisionService;
@@ -127,6 +131,16 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     }
     request.setAttribute(REPOSITORY_RECORD_ATTRIBUTE, repository.get());
     request.setAttribute(ENTRY_REPOSITORY_ID_ATTRIBUTE, repository.get().id());
+    try {
+      String canonicalPath = canonicalRepositoryPath(repository.get().format(), target.path());
+      if (canonicalPath != null) {
+        target = target.withPath(canonicalPath);
+        request.setAttribute(NORMALIZED_REPOSITORY_PATH_ATTRIBUTE, canonicalPath);
+      }
+    } catch (PypiExceptions.BadRequestException e) {
+      response.sendError(HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+      return;
+    }
     String terraformUrlToken = null;
     TerraformPath terraformPath = null;
     if (repository.get().format() == RepositoryFormat.TERRAFORM
@@ -226,6 +240,14 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       }
     }
     filterChain.doFilter(request, response);
+  }
+
+  private static String canonicalRepositoryPath(RepositoryFormat format, String path) {
+    return switch (format) {
+      case PYPI -> PypiRequestPath.decode(path);
+      case COMPOSER -> COMPOSER_PATH_PARSER.canonicalize(path);
+      default -> null;
+    };
   }
 
   private static boolean isTerraformDownloadMetadata(TerraformPath path) {

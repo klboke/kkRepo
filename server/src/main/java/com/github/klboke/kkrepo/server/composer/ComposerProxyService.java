@@ -137,7 +137,7 @@ public class ComposerProxyService {
   }
 
   private MavenResponse dist(RepositoryRuntime runtime, ComposerPath path, boolean headOnly) {
-    String publicPath = normalizePath(path.rawPath());
+    String publicPath = path.distPath();
     // A Nexus proxy-cache migration copies the public Composer dist path and blob, but Nexus
     // does not have kkrepo's private _composer/routes records. Serve an already cached dist
     // directly so migrated proxy content stays usable without contacting either upstream.

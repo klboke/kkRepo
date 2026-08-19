@@ -115,7 +115,7 @@ public class ComposerGroupService {
   }
 
   private MavenResponse dist(RepositoryRuntime group, ComposerPath path, boolean headOnly) {
-    String requestedPath = normalizePath(path.rawPath());
+    String requestedPath = path.distPath();
     for (RepositoryRuntime member : group.members()) {
       Optional<ComposerHostedService.PackageDocument> stable = memberDocument(member, path.packageName(), false);
       Optional<ComposerHostedService.PackageDocument> dev = memberDocument(member, path.packageName(), true);

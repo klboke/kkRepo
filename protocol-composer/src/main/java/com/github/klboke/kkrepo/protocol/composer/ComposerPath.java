@@ -8,6 +8,13 @@ public record ComposerPath(
     String version,
     String fileName) {
 
+  public String distPath() {
+    if (kind != Kind.DIST) {
+      throw new IllegalStateException("Composer path is not a dist path: " + kind);
+    }
+    return packageName + "/" + version + "/" + fileName;
+  }
+
   public enum Kind {
     ROOT,
     PACKAGES,

@@ -70,7 +70,7 @@ public class ComposerHostedService {
           .orElseThrow(() -> new MavenExceptions.MavenNotFoundException(path.rawPath()));
       case PROVIDERS -> providers(runtime, path.packageName(), headOnly);
       case PACKAGE_LIST -> packageList(runtime, filter, headOnly);
-      case DIST -> assets.serve(runtime, normalizePath(path.rawPath()), headOnly);
+      case DIST -> assets.serve(runtime, path.distPath(), headOnly);
       case UNKNOWN -> throw new MavenExceptions.MavenNotFoundException(path.rawPath());
     };
   }
@@ -272,13 +272,6 @@ public class ComposerHostedService {
     if (lower.endsWith(".tar.bz2")) return ".tar.bz2";
     int dot = lower.lastIndexOf('.');
     return dot < 0 ? ".tmp" : lower.substring(dot);
-  }
-
-  private static String normalizePath(String path) {
-    String value = path == null ? "" : path.trim();
-    while (value.startsWith("/")) value = value.substring(1);
-    while (value.endsWith("/")) value = value.substring(0, value.length() - 1);
-    return value;
   }
 
   private static String distType(String fileName) {

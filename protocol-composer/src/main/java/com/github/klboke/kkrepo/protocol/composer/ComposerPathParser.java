@@ -6,7 +6,20 @@ import java.nio.charset.StandardCharsets;
 public final class ComposerPathParser {
   public ComposerPath parse(String rawPath) {
     String raw = rawPath == null ? "" : rawPath;
-    String path = normalize(percentDecode(raw));
+    return parseCanonical(raw, canonicalize(raw));
+  }
+
+  /** Parses a path that has already been percent-decoded and normalized exactly once. */
+  public ComposerPath parseCanonical(String canonicalPath) {
+    String path = canonicalPath == null ? "" : canonicalPath;
+    return parseCanonical(path, path);
+  }
+
+  public String canonicalize(String rawPath) {
+    return normalize(percentDecode(rawPath == null ? "" : rawPath));
+  }
+
+  private static ComposerPath parseCanonical(String raw, String path) {
     if (path.isEmpty()) return path(ComposerPath.Kind.ROOT, raw);
     if (path.equals("packages.json")) return path(ComposerPath.Kind.PACKAGES, raw);
     if (path.equals("packages/list.json")) return path(ComposerPath.Kind.PACKAGE_LIST, raw);

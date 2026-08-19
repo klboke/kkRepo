@@ -101,6 +101,36 @@ class PypiRepositoryBlackBoxCompatibilityTest {
         "group simple directory should expose project index children");
   }
 
+  @Test
+  void localVersionDownloadAcceptsLiteralAndPercentEncodedPlusWhenConfigured() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeTrue(config.configured(),
+        "Set NEXUS_COMPAT_BASE_URL and KKREPO_COMPAT_BASE_URL to run PyPI black-box compatibility");
+
+    if (config.setupEnabled()) {
+      ensureNexusRepositories(config);
+      ensureKkRepoRepositories(config);
+    }
+
+    WheelFixture fixture = WheelFixture.createLocalVersion();
+    assert2xx("nexus local-version upload", upload(config.nexusHosted(), fixture));
+    assert2xx("kkrepo local-version upload", upload(config.nexusPlusHosted(), fixture));
+
+    assertPackageMatches("hosted local-version literal plus",
+        get(config.nexusHosted(), fixture.packagePath()),
+        get(config.nexusPlusHosted(), fixture.packagePath()),
+        fixture.bytes());
+    String encodedPath = fixture.packagePath().replace("+", "%2B");
+    assertPackageMatches("hosted local-version encoded plus",
+        get(config.nexusHosted(), encodedPath),
+        get(config.nexusPlusHosted(), encodedPath),
+        fixture.bytes());
+    assertPackageMatches("group local-version encoded plus",
+        get(config.nexusGroup(), encodedPath),
+        get(config.nexusPlusGroup(), encodedPath),
+        fixture.bytes());
+  }
+
   private static Exchange upload(Endpoint endpoint, WheelFixture fixture) throws Exception {
     String boundary = "kkrepo-pypi-compat-" + System.nanoTime();
     ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -406,9 +436,16 @@ class PypiRepositoryBlackBoxCompatibilityTest {
 
   private record WheelFixture(String name, String normalizedName, String version, String filename, byte[] bytes) {
     static WheelFixture create() throws Exception {
+      return create("0.1." + System.currentTimeMillis());
+    }
+
+    static WheelFixture createLocalVersion() throws Exception {
+      return create("0.0.0+" + Long.toUnsignedString(System.nanoTime()));
+    }
+
+    private static WheelFixture create(String version) throws Exception {
       String name = "kkrepo-compat-pypi-" + System.currentTimeMillis();
       String normalized = normalizeName(name);
-      String version = "0.1." + System.currentTimeMillis();
       String distribution = normalized.replace('-', '_');
       String filename = distribution + "-" + version + "-py3-none-any.whl";
       String distInfo = distribution + "-" + version + ".dist-info/";

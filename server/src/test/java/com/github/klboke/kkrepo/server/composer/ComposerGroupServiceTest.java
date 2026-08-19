@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.composer;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -9,6 +10,8 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.protocol.composer.ComposerPathParser;
+import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.time.Instant;
 import java.util.List;
@@ -17,6 +20,44 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 class ComposerGroupServiceTest {
+  @Test
+  void routesPercentEncodedDistPathToTheMatchingMemberAsset() {
+    ComposerHostedService hosted = mock(ComposerHostedService.class);
+    ComposerProxyService proxy = mock(ComposerProxyService.class);
+    ComposerGroupService group = new ComposerGroupService(new ObjectMapper(), hosted, proxy);
+    RepositoryRuntime member = ComposerHostedServiceTest.runtime(
+        "private", RepositoryType.HOSTED, List.of());
+    RepositoryRuntime runtime = ComposerHostedServiceTest.runtime(
+        "all", RepositoryType.GROUP, List.of(member));
+    String path = "company/example/1.2.3/company-example-1.2.3+build.zip";
+    var document = new ComposerHostedService.PackageDocument(
+        Map.of("packages", Map.of("company/example", List.of(Map.of(
+            "dist", Map.of("url", memberBase(member) + "/" + path))))),
+        Instant.EPOCH,
+        member.name());
+    when(hosted.packageDocument(member, "company/example", false, memberBase(member)))
+        .thenReturn(Optional.of(document));
+    when(hosted.packageDocument(member, "company/example", true, memberBase(member)))
+        .thenReturn(Optional.empty());
+    MavenResponse expected = MavenResponse.noBody(200, 0, "application/zip", null, null);
+    when(hosted.get(
+        member,
+        new ComposerPathParser().parse(path),
+        memberBase(member),
+        null,
+        false)).thenReturn(expected);
+
+    MavenResponse actual = group.get(
+        runtime,
+        new ComposerPathParser().parse(
+            "company/example/1.2.3/company-example-1.2.3%2Bbuild.zip"),
+        "https://repo.test/repository/all",
+        null,
+        false);
+
+    assertSame(expected, actual);
+  }
+
   @Test
   @SuppressWarnings("unchecked")
   void rewritesMemberDistToSameNexusCompatiblePathOnGroup() {
