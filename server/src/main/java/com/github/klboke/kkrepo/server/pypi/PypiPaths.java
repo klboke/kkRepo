@@ -1,7 +1,5 @@
 package com.github.klboke.kkrepo.server.pypi;
 
-import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.Map;
 
@@ -58,7 +56,7 @@ final class PypiPaths {
     String normalized = safe(path);
     int slash = normalized.lastIndexOf('/');
     String name = slash < 0 ? normalized : normalized.substring(slash + 1);
-    return URLDecoder.decode(name, StandardCharsets.UTF_8);
+    return PypiRequestPath.decodeSegment(name);
   }
 
   static String versionFromFilename(String filename) {

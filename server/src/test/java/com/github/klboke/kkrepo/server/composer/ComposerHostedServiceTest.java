@@ -71,6 +71,31 @@ class ComposerHostedServiceTest {
   }
 
   @Test
+  void servesPercentEncodedDistFilenameFromDecodedAssetPath() {
+    ComponentDao components = mock(ComponentDao.class);
+    ComposerAssetSupport assets = mock(ComposerAssetSupport.class);
+    when(assets.serve(any(), anyString(), eq(false)))
+        .thenReturn(MavenResponse.noBody(200, 0, "application/zip", null, null));
+    ComposerHostedService service = new ComposerHostedService(
+        JSON, components, assets,
+        mock(ComposerArchiveInspector.class), mock(ComposerComponentWriter.class));
+    RepositoryRuntime runtime = runtime("hosted", RepositoryType.HOSTED, List.of());
+
+    service.get(
+        runtime,
+        new ComposerPathParser().parse(
+            "company/example/1.0.0/company-example-1.0.0%2Bbuild.zip"),
+        "https://repo.test/repository/composer-hosted",
+        null,
+        false);
+
+    verify(assets).serve(
+        eq(runtime),
+        eq("company/example/1.0.0/company-example-1.0.0+build.zip"),
+        eq(false));
+  }
+
+  @Test
   void bindFailureDeletesOnlyTheUploadStagingPath() throws Exception {
     ComponentDao components = mock(ComponentDao.class);
     ComposerAssetSupport assets = mock(ComposerAssetSupport.class);

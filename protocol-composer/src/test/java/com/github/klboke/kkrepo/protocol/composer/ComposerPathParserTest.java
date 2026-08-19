@@ -25,6 +25,13 @@ class ComposerPathParserTest {
     assertEquals("company/example", nexusDist.packageName());
     assertEquals("1.0.0", nexusDist.version());
     assertEquals("company-example-1.0.0.zip", nexusDist.fileName());
+
+    ComposerPath encodedPlus = parser.parse(
+        "company/example/1.0.0/company-example-1.0.0%2Bbuild.zip");
+    assertEquals(ComposerPath.Kind.DIST, encodedPlus.kind());
+    assertEquals(
+        "company/example/1.0.0/company-example-1.0.0+build.zip",
+        encodedPlus.distPath());
   }
 
   @Test

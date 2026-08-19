@@ -62,6 +62,7 @@ import com.github.klboke.kkrepo.server.pypi.PypiGroupService;
 import com.github.klboke.kkrepo.server.pypi.PypiHostedService;
 import com.github.klboke.kkrepo.server.pypi.PypiPartialFetchSupport;
 import com.github.klboke.kkrepo.server.pypi.PypiProxyService;
+import com.github.klboke.kkrepo.server.pypi.PypiRequestPath;
 import com.github.klboke.kkrepo.server.pypi.PypiResponse;
 import com.github.klboke.kkrepo.server.pub.PubExceptions;
 import com.github.klboke.kkrepo.server.pub.PubGroupService;
@@ -406,7 +407,7 @@ public class RepositoryContentController {
       return toHeadResponse(dispatchHuggingFaceGet(runtime, name, request, true), request);
     }
     if (runtime.format() == RepositoryFormat.PYPI) {
-      String raw = extractRepositoryPath(name, request, true);
+      String raw = PypiRequestPath.decode(extractRepositoryPath(name, request, true));
       PypiResponse resp = isDirectoryPath(raw)
           ? pypiDirectoryListing(runtime.name(), raw, true)
           : dispatchPypiPackage(runtime, raw, true);
@@ -1093,7 +1094,7 @@ public class RepositoryContentController {
       return toStreamingResponse(response, request, fileResponse);
     }
     if (runtime.format() == RepositoryFormat.PYPI) {
-      String raw = extractRepositoryPath(name, request, true);
+      String raw = PypiRequestPath.decode(extractRepositoryPath(name, request, true));
       boolean directory = isDirectoryPath(raw);
       PypiResponse resp = directory
           ? pypiDirectoryListing(runtime.name(), raw, headOnly)

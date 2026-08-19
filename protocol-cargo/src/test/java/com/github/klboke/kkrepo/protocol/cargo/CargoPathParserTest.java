@@ -44,6 +44,10 @@ class CargoPathParserTest {
     assertEquals(CargoPath.Kind.DOWNLOAD, fileDownload.kind());
     assertEquals("cargo", fileDownload.crateName());
     assertEquals("1.2.3", fileDownload.version());
+
+    CargoPath encodedBuild = parser.parse("crates/cargo/1.2.3%2Bbuild/download");
+    assertEquals(CargoPath.Kind.DOWNLOAD, encodedBuild.kind());
+    assertEquals("1.2.3+build", encodedBuild.version());
   }
 
   @Test
