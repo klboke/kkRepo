@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.protocol.composer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
 
@@ -32,6 +33,12 @@ class ComposerPathParserTest {
     assertEquals(
         "company/example/1.0.0/company-example-1.0.0+build.zip",
         encodedPlus.distPath());
+
+    ComposerPath encodedPercent = parser.parse(
+        "company/example/1.0.0/company-example-1.0.0%252Bbuild.zip");
+    assertEquals(
+        "company/example/1.0.0/company-example-1.0.0%2Bbuild.zip",
+        encodedPercent.distPath());
   }
 
   @Test
@@ -41,6 +48,7 @@ class ComposerPathParserTest {
     assertEquals(ComposerPath.Kind.UNKNOWN, parser.parse("dists/abcdef12/archive.zip").kind());
     assertEquals(ComposerPath.Kind.UNKNOWN,
         parser.parse("company/example/../company-example-1.0.0.zip").kind());
+    assertThrows(IllegalStateException.class, () -> parser.parse("packages.json").distPath());
   }
 
   @Test

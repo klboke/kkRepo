@@ -55,8 +55,7 @@ final class PypiPaths {
   static String fileName(String path) {
     String normalized = safe(path);
     int slash = normalized.lastIndexOf('/');
-    String name = slash < 0 ? normalized : normalized.substring(slash + 1);
-    return PypiRequestPath.decodeSegment(name);
+    return slash < 0 ? normalized : normalized.substring(slash + 1);
   }
 
   static String versionFromFilename(String filename) {

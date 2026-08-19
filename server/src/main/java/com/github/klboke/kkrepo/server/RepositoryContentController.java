@@ -357,7 +357,7 @@ public class RepositoryContentController {
       return toHeadResponse(resp, request);
     }
     if (runtime.format() == RepositoryFormat.COMPOSER) {
-      ComposerPath path = composerParser.parse(extractRepositoryPath(name, request, true));
+      ComposerPath path = composerRequestPath(name, request);
       MavenResponse resp = dispatchComposerGet(runtime, path, request, true);
       return toHeadResponse(resp, request);
     }
@@ -407,7 +407,7 @@ public class RepositoryContentController {
       return toHeadResponse(dispatchHuggingFaceGet(runtime, name, request, true), request);
     }
     if (runtime.format() == RepositoryFormat.PYPI) {
-      String raw = PypiRequestPath.decode(extractRepositoryPath(name, request, true));
+      String raw = pypiRequestPath(name, request);
       PypiResponse resp = isDirectoryPath(raw)
           ? pypiDirectoryListing(runtime.name(), raw, true)
           : dispatchPypiPackage(runtime, raw, true);
@@ -1022,7 +1022,7 @@ public class RepositoryContentController {
       return toStreamingResponse(resp, request, false);
     }
     if (runtime.format() == RepositoryFormat.COMPOSER) {
-      ComposerPath path = composerParser.parse(extractRepositoryPath(name, request, true));
+      ComposerPath path = composerRequestPath(name, request);
       MavenResponse resp = dispatchComposerGet(runtime, path, request, headOnly);
       return toStreamingResponse(resp, request, false);
     }
@@ -1094,7 +1094,7 @@ public class RepositoryContentController {
       return toStreamingResponse(response, request, fileResponse);
     }
     if (runtime.format() == RepositoryFormat.PYPI) {
-      String raw = PypiRequestPath.decode(extractRepositoryPath(name, request, true));
+      String raw = pypiRequestPath(name, request);
       boolean directory = isDirectoryPath(raw);
       PypiResponse resp = directory
           ? pypiDirectoryListing(runtime.name(), raw, headOnly)
@@ -1692,6 +1692,23 @@ public class RepositoryContentController {
       throw new NpmExceptions.NpmNotFoundException("Bad npm URL: " + uri);
     }
     return uri.substring(idx + prefix.length());
+  }
+
+  private ComposerPath composerRequestPath(String name, HttpServletRequest request) {
+    String path = extractRepositoryPath(name, request, true);
+    return hasNormalizedRepositoryPath(request)
+        ? composerParser.parseCanonical(path)
+        : composerParser.parse(path);
+  }
+
+  private String pypiRequestPath(String name, HttpServletRequest request) {
+    String path = extractRepositoryPath(name, request, true);
+    return hasNormalizedRepositoryPath(request) ? path : PypiRequestPath.decode(path);
+  }
+
+  private static boolean hasNormalizedRepositoryPath(HttpServletRequest request) {
+    return request.getAttribute(RepositorySecurityFilter.NORMALIZED_REPOSITORY_PATH_ATTRIBUTE)
+        instanceof String;
   }
 
   private static String withQuery(String path, HttpServletRequest request) {

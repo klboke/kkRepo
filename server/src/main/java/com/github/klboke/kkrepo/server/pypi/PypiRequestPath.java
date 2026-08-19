@@ -24,11 +24,19 @@ public final class PypiRequestPath {
     } catch (IllegalArgumentException e) {
       throw new PypiExceptions.BadRequestException("Invalid percent-encoding in PyPI path");
     }
-    if (decoded.equals(".") || decoded.equals("..")
-        || decoded.indexOf('/') >= 0 || decoded.indexOf('\\') >= 0
-        || decoded.chars().anyMatch(ch -> ch < 0x20 || ch == 0x7f)) {
+    if (isUnsafeSegment(decoded)) {
       throw new PypiExceptions.BadRequestException("Invalid PyPI path segment");
     }
     return decoded;
+  }
+
+  private static boolean isUnsafeSegment(String value) {
+    if (".".equals(value) || "..".equals(value)) {
+      return true;
+    }
+    if (value.indexOf('/') >= 0 || value.indexOf('\\') >= 0) {
+      return true;
+    }
+    return value.chars().anyMatch(ch -> ch < 0x20 || ch == 0x7f);
   }
 }
