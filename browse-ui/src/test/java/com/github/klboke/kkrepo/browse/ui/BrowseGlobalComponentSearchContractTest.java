@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.browse.ui;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -19,6 +20,8 @@ class BrowseGlobalComponentSearchContractTest {
         resource("/META-INF/resources/browse/assets/global-component-search.js");
     String sharedStylesheet =
         resource("/META-INF/resources/browse/assets/global-component-search.css");
+    String accountMenuStylesheet =
+        resource("/META-INF/resources/browse/assets/account-menu.css");
 
     assertTrue(index.contains("data-global-component-search action=\"/browse/\""));
     assertTrue(index.indexOf("class=\"top-spacer\"")
@@ -29,7 +32,8 @@ class BrowseGlobalComponentSearchContractTest {
     assertTrue(index.contains("<span>All formats</span>"));
     assertTrue(index.contains("<form class=\"search-form\" id=\"component-search-form\">"));
     assertTrue(index.contains("<span id=\"component-search-format\">Maven</span>"));
-    assertTrue(index.contains("/browse/assets/global-component-search.css"));
+    assertTrue(index.contains(
+        "/browse/assets/global-component-search.css?v=20260819-topbar-control-height-1"));
     assertTrue(index.contains("/browse/assets/global-component-search.js"));
 
     assertTrue(javascript.contains("custom: \"custom\""));
@@ -42,6 +46,13 @@ class BrowseGlobalComponentSearchContractTest {
     assertTrue(sharedJavascript.contains("/browse/#browse/search/custom"));
     assertTrue(sharedJavascript.contains("locationRef.assign(destination)"));
     assertTrue(sharedStylesheet.contains(".global-component-search input:focus-visible"));
+    assertFalse(sharedStylesheet.contains("height: 34px;"));
+    assertEquals(2L, sharedStylesheet.lines()
+        .filter(line -> line.trim().equals("height: 40px;"))
+        .count());
+    assertEquals(1L, accountMenuStylesheet.lines()
+        .filter(line -> line.trim().equals("height: 40px;"))
+        .count());
     assertTrue(sharedStylesheet.contains("margin: 0 12px 0 24px"));
     assertTrue(sharedStylesheet.contains("@media (max-width: 760px)"));
   }

@@ -21,7 +21,8 @@ class AdminGlobalComponentSearchContractTest {
         < index.indexOf("<form class=\"global-component-search\""));
     assertTrue(index.contains("placeholder=\"Search components\""));
     assertFalse(index.contains("<button type=\"submit\">Search</button>"));
-    assertTrue(index.contains("/browse/assets/global-component-search.css"));
+    assertTrue(index.contains(
+        "/browse/assets/global-component-search.css?v=20260819-topbar-control-height-1"));
     assertTrue(index.contains("/browse/assets/global-component-search.js"));
     assertTrue(translations.contains("\"Search components\": \"搜索组件\""));
     assertTrue(translations.contains("\"All formats\": \"全部格式\""));
