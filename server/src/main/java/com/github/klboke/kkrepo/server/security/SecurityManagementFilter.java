@@ -106,6 +106,9 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
           ? Optional.empty()
           : Optional.of("nexus:settings:update");
     }
+    if (uri.equals("/internal/version-update") && "GET".equals(method)) {
+      return Optional.empty();
+    }
     if (uri.startsWith("/internal/security/")) {
       return internalSecurityPermission(method, uri);
     }

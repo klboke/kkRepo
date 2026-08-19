@@ -647,6 +647,44 @@ class SecurityManagementFilterTest {
   }
 
   @Test
+  void versionUpdateReadBypassesManagementPermissions() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
+    RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("should not be checked"));
+    SecurityManagementFilter filter = filter(authentication, security, false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/internal/version-update"),
+        response.proxy(),
+        chain);
+
+    assertEquals(0, authentication.calls);
+    assertEquals(0, security.decisions);
+    assertEquals(1, chain.calls);
+    assertEquals(0, response.status);
+  }
+
+  @Test
+  void versionUpdateWritesRemainFailClosed() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
+    RecordingSecurityService security = new RecordingSecurityService(AccessDecision.allow());
+    SecurityManagementFilter filter = filter(authentication, security, false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("POST", "/internal/version-update"),
+        response.proxy(),
+        chain);
+
+    assertEquals(1, authentication.calls);
+    assertEquals(0, security.decisions);
+    assertEquals(0, chain.calls);
+    assertEquals(HttpServletResponse.SC_UNAUTHORIZED, response.status);
+  }
+
+  @Test
   void unknownInternalPathsAreFailClosedToAuthenticatedSubjects() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.allow());

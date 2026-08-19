@@ -711,6 +711,8 @@
     if (match) return `默认语言：${translateBody(match[1])}。当前语言：${translateBody(match[2])}。`;
     match = body.match(/^Current language: (.+)$/);
     if (match) return `当前语言：${translateBody(match[1])}`;
+    match = body.match(/^New version (v[^ ]+) available\. View release\.$/);
+    if (match) return `有新版本 ${match[1]} 可更新，查看发布页面。`;
     return body;
   }
 

@@ -309,6 +309,69 @@ select {
   white-space: nowrap;
 }
 
+.product-update-link {
+  position: relative;
+  z-index: 90;
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  margin-left: 3px;
+  border-radius: var(--r-xs);
+  color: var(--brand-bright);
+  font-size: 15px;
+  line-height: 1;
+  text-decoration: none;
+  vertical-align: -5px;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.product-update-link:hover {
+  background: var(--topbar-hover);
+  color: var(--topbar-ink);
+}
+
+.product-update-link:focus-visible {
+  outline: 2px solid #ffffff;
+  outline-offset: 1px;
+}
+
+.product-update-icon {
+  width: 15px;
+  height: 15px;
+}
+
+.product-update-tooltip {
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 50%;
+  width: max-content;
+  max-width: 260px;
+  padding: 7px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: var(--fw-medium);
+  line-height: 1.35;
+  opacity: 0;
+  pointer-events: none;
+  text-align: left;
+  transform: translate(-50%, -2px);
+  transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
+  visibility: hidden;
+  white-space: nowrap;
+}
+
+.product-update-link:hover .product-update-tooltip,
+.product-update-link:focus-visible .product-update-tooltip {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  visibility: visible;
+}
+
 .product-copy {
   min-width: 0;
 }
