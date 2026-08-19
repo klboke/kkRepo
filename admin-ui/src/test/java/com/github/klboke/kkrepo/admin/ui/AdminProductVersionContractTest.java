@@ -15,8 +15,8 @@ class AdminProductVersionContractTest {
   private static final String RELEASES_URL = PROJECT_URL + "/releases";
   private static final String EXTERNAL_LINK_ATTRIBUTES = "target=\"_blank\" rel=\"noopener noreferrer\"";
   private static final Pattern VERSION_BADGE = Pattern.compile(
-      "<a class=\"product-version\" href=\"" + Pattern.quote(RELEASES_URL)
-          + "\" " + EXTERNAL_LINK_ATTRIBUTES + ">v[^<@]+</a>");
+      "<a class=\"product-version\" data-current-version=\"([^\"@]+)\" href=\""
+          + Pattern.quote(RELEASES_URL) + "\" " + EXTERNAL_LINK_ATTRIBUTES + ">v\\1</a>");
 
   @Test
   void headerLinksBrandAndFilteredVersion() throws IOException {
@@ -29,6 +29,12 @@ class AdminProductVersionContractTest {
         + EXTERNAL_LINK_ATTRIBUTES + ">kkRepo</a>"));
     assertTrue(index.contains("class=\"product-link\" href=\"" + PROJECT_URL + "\" "
         + EXTERNAL_LINK_ATTRIBUTES + ">Repository Manager</a>"));
+    assertTrue(index.contains("class=\"product-update-link\" data-product-update hidden "
+        + EXTERNAL_LINK_ATTRIBUTES));
+    assertTrue(index.contains("class=\"lucide-icon icon-cloud-download product-update-icon\""));
+    assertTrue(index.contains("data-product-update-tooltip role=\"tooltip\""));
+    assertTrue(index.contains("/login/assets/product-update.js?v=20260819-version-update-1"));
+    assertFalse(index.contains("/releases/tag/v0.9.0"));
     assertFalse(index.contains("@project.version@"));
     assertTrue(index.contains("value=\"${dn}\""));
   }
