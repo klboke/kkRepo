@@ -315,7 +315,7 @@
     "Save UI settings": "保存界面设置",
     "This preference is stored in MySQL and applies to the administration, browse, and sign-in UI on every replica.": "此设置存储在 MySQL 中，对所有副本的管理、浏览和登录界面均生效。",
     "Welcome": "欢迎",
-    "Nexus-compatible repository access for internal packages": "面向内部包的 Nexus 兼容仓库访问",
+    "Enterprise-grade artifact repository for internal packages": "面向内部包的企业级制品仓库",
     "Initial administrator setup": "初始管理员设置",
     "Administrator": "管理员",
     "Confirm password": "确认密码",
