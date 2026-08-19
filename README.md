@@ -26,10 +26,6 @@ kkRepo is a community-driven, fully open-source, self-hosted artifact repository
 - OSS/S3/File storage support for artifact blobs.
 - Multi-replica high-availability deployment support.
 
-<p align="center">
-  <img src="docs/assets/kkrepo-project-map.svg" alt="kkRepo architecture: supported repository formats, protocol entrypoints, service replicas, storage, UI, and Nexus migration" width="100%">
-</p>
-
 ## Trademark Notice
 
 Sonatype, Nexus, and Nexus Repository are trademarks of Sonatype, Inc. kkRepo is an independent open source project and is not affiliated with, endorsed by, sponsored by, or connected to Sonatype, Inc. References to Sonatype Nexus Repository are used only to describe compatibility, migration, or interoperability.
