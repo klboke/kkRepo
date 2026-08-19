@@ -26,10 +26,6 @@ kkRepo 是一款社区驱动、完全开源的自托管制品仓库，旨在解�
 - 支持 OSS/S3/File 存储制品 blob。
 - 支持多副本高可用部署。
 
-<p align="center">
-  <img src="docs/assets/kkrepo-project-map.svg" alt="kkRepo 架构图：支持的仓库格式、协议入口、服务副本、存储、UI，以及 Nexus 迁移" width="100%">
-</p>
-
 ## 商标声明
 
 Sonatype、Nexus 和 Nexus Repository 是 Sonatype, Inc. 的商标。kkRepo 是独立开源项目，不隶属于 Sonatype, Inc.，也未获得其认可、赞助或背书。文档中对 Sonatype Nexus Repository 的引用仅用于准确说明兼容性、迁移或互操作性。
