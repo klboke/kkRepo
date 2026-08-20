@@ -4,6 +4,41 @@ All notable public changes to kkrepo are documented in this file.
 
 This project follows a pragmatic early-stage release process. Until a stable `1.0.0` release is announced, minor versions may include behavior changes, but releases should call out migration impact, compatibility changes, and operational notes.
 
+## 0.9.0 - 2026-08-20
+
+### Added
+
+- Nexus-compatible Alpine APK hosted, proxy, and group repositories with canonical APK v2 publication, signed immutable indexes, ordered group resolution, proxy passthrough or verified re-signing, migration, cleanup, security scanning, and real `apk` client coverage. (#215)
+- Hugging Face Models proxy repositories with model, revision, tree, refs, paths-info, and commit-pinned file routes; server-side Git LFS/Xet bridging; bounded shared-database coordination; migration, cleanup, scanning, and real `huggingface_hub`, `hf`, Transformers, and Diffusers coverage. (#224)
+- Permission-aware global component search across Browse and Admin, with repository and content-selector authorization, stable keyset pagination, and adaptive MySQL query planning for large installations. (#222)
+- Product-version update notifications backed by the latest public GitHub Release, with bounded caching and non-blocking UI integration. (#233)
+- Per-repository proxy redirect host allowlists for explicitly trusted upstream domains while retaining the global SSRF and redirect safety policy. (#230)
+
+### Changed
+
+- Node-local TTL caches now use the shared cache module and factory abstraction, preserving rebuildable multi-replica semantics while removing direct server/storage coupling to Caffeine. (#226)
+- Browse repository details, OIDC/LDAP settings, account and sign-in surfaces, topbar controls, and welcome-page product copy were refined for denser operation and clearer navigation. The obsolete README architecture diagram was removed. (#212, #227, #229, #231, #234, #235, #237)
+- Quickstart initializes its data volume with the UID/GID of the selected JVM or Native runtime, and its defaults, Dockerfile packaging, deployment documentation, Helm application version, and optional scanner profile now use `0.9.0`. (#213)
+- zstd-jni, GraalVM Native Build Tools, and the AWS SDK were refreshed. (#216, #217, #218)
+
+### Fixed
+
+- Proxy cache writes now record the triggering client IP, or no IP for background work, instead of placing an upstream URL in the bounded audit column; this prevents valid long proxy URLs from breaking MySQL writes without changing package-client behavior. (#211)
+- MySQL component search no longer makes coordinates unmatchable when they include terms shorter than InnoDB's default full-text token size. (#223)
+- Repository content paths preserve percent-encoded plus signs instead of decoding them as spaces. (#232)
+
+### Compatibility And Validation
+
+- Alpine and Hugging Face include MySQL/PostgreSQL persistence contracts, multi-replica leases and recovery, Nexus-shape-gated migration, protocol-aware cleanup/scanning, real-client E2E coverage, and measured large-data or Nexus performance gates. (#215, #224)
+- Global search authorization is enforced before lookup and remains exact for content selectors; its database paths include million-row MySQL validation and online/concurrent index migrations for both supported databases. (#222)
+- Quickstart ownership checks cover JVM and Native runtimes with both MySQL and PostgreSQL, while the audit, redirect, path-decoding, cache, and UI changes retain existing repository client protocols. (#211, #213, #226, #230, #232)
+
+### Upgrade Notes
+
+- Existing `0.8.0` MySQL and PostgreSQL deployments can upgrade in place through Flyway V46-V48. Back up the relational database and blob store together, allow migrations to complete before serving traffic, and do not run mixed application versions after the new schema is applied.
+- V46 adds Alpine package, index, signing, lease, and migration state; V47 replaces component-search ordering indexes using online/concurrent database operations; V48 adds Hugging Face model, revision, file, cache, lease, and migration state. Apply V47 during a lower-I/O window on installations with large component tables.
+- New repository formats are not created automatically. Import or configure Alpine signing trust before publication, and validate Hugging Face credentials, redirect allowlists, cleanup policies, and scanner scope before production activation.
+
 ## 0.8.0 - 2026-08-13
 
 ### Added
