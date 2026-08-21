@@ -1626,7 +1626,7 @@ verify_r_repository_definitions() {
   curl -m 30 -fsS -u "$(auth)" \
     "$target_url/internal/repositories/$R_GROUP_KKREPO_REPOSITORY" >"$group"
   target_db_query \
-    "SELECT attributes FROM repository WHERE name = $(sql_literal "$R_PROXY_KKREPO_REPOSITORY")" \
+    "SELECT attributes_json FROM repository WHERE name = $(sql_literal "$R_PROXY_KKREPO_REPOSITORY")" \
     >"$proxy_attributes"
   python3 - \
     "$hosted" "$proxy" "$group" "$proxy_attributes" \
