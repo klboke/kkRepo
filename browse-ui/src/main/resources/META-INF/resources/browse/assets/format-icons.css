@@ -108,6 +108,11 @@
   --format-logo: url("/browse/assets/formats/alpine.svg");
 }
 
+.format-logo-r {
+  --format-color: #276dc3;
+  --format-logo: url("/browse/assets/formats/r.svg");
+}
+
 .format-logo-huggingface {
   --format-color: #f1b800;
   --format-logo: url("/browse/assets/formats/huggingface.svg");

@@ -116,6 +116,25 @@ class MySqlDatabaseDialectTest {
   }
 
   @Test
+  void keepsROptimizerSqlInsideMySqlBackend() {
+    var cursor = dialect.r().packageNameIdCursor("demo", 41L);
+
+    assertEquals(
+        "(package_name > ? OR (package_name = ? AND id > ?))",
+        cursor.predicate());
+    assertEquals(List.of("demo", "demo", 41L), cursor.arguments());
+    assertTrue(dialect.r().pendingSuitesSql()
+        .contains("FORCE INDEX (idx_r_suite_worker)"));
+    assertTrue(dialect.r().pendingSuitesSql().contains("STRAIGHT_JOIN repository"));
+    assertTrue(dialect.r().snapshotCleanupCandidatesSql()
+        .contains("JOIN r_suite_state suite"));
+    assertTrue(dialect.r().snapshotCleanupCandidatesSql()
+        .contains("FORCE INDEX (idx_r_snapshot_retention)"));
+    assertTrue(dialect.r().snapshotCleanupCandidatesSql()
+        .contains("newer.publish_complete = TRUE"));
+  }
+
+  @Test
   void componentAndCacheOperationsKeepAtomicLastInsertIdSqlOnOneConnection() {
     RecordingJdbcTemplate jdbc = new RecordingJdbcTemplate();
 

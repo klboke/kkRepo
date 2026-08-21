@@ -609,6 +609,38 @@ Use protected client configuration for authenticated repository URLs. Hosted/gro
 locally signed; passthrough proxies retain the upstream signature. See the
 [Alpine / APK Repository Guide](repository-guides/alpine-apk.md).
 
+## R / CRAN
+
+Use an R group as the normal source repository in `.Rprofile`:
+
+```r
+local({
+  repos <- getOption("repos")
+  repos["KKRepo"] <- "https://nexus.example.com/repository/r-group"
+  options(repos = repos)
+})
+```
+
+Publish a source package to hosted:
+
+```bash
+R CMD build acmepkg
+curl -u alice:"$KKREPO_PASSWORD" \
+  -H 'Content-Type: application/x-gzip' \
+  --upload-file acmepkg_1.2.3.tar.gz \
+  https://nexus.example.com/repository/r-hosted/src/contrib/acmepkg_1.2.3.tar.gz
+```
+
+Resolve and install through the group:
+
+```r
+available.packages(repos = getOption("repos")["KKRepo"], type = "source")
+install.packages("acmepkg", repos = getOption("repos")["KKRepo"], type = "source")
+```
+
+Hosted/group are source-only; address the proxy directly for upstream `.zip`, `.tgz`, or
+`PACKAGES.rds`. See the [R / CRAN Repository Guide](repository-guides/r-cran.md).
+
 ## Hugging Face Models
 
 Create a Models-only `huggingface-proxy`, then point the Hub client at its repository root:

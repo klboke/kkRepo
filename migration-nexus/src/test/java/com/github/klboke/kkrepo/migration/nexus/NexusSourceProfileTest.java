@@ -53,6 +53,13 @@ class NexusSourceProfileTest {
       "sha256Checksum", true,
       "inspectedAssetCount", 2,
       "packageAssetCount", 1);
+  private static final Map<String, Object> VERIFIED_R_SHAPE = Map.of(
+      "sourcePackageAssetPath", true,
+      "rAssetAttributes", true,
+      "componentIdentity", true,
+      "sourceChecksum", true,
+      "inspectedAssetCount", 2,
+      "sourcePackageAssetCount", 1);
   private static final Map<String, Object> VERIFIED_HUGGINGFACE_SHAPE = Map.of(
       "resolveAssetPath", true,
       "componentCommit", true,
@@ -255,6 +262,35 @@ class NexusSourceProfileTest {
   }
 
   @Test
+  void enablesRContentOnlyForExactNexus394Shape() {
+    NexusSourceProfile profile = rProfile("3.94.0-01", VERIFIED_R_SHAPE);
+
+    assertTrue(profile.formatCapabilities().get("r").contentMigration());
+    assertEquals(SupportStatus.FULL, rHostedStatus(profile));
+  }
+
+  @Test
+  void unknownVersionOrDriftedShapeKeepsRMigrationManual() {
+    for (String version : List.of("unknown", "3.93.1-01", "3.95.0-01", "4.0.0")) {
+      NexusSourceProfile profile = rProfile(version, VERIFIED_R_SHAPE);
+      assertFalse(profile.formatCapabilities().get("r").contentMigration(), version);
+      assertEquals("r-source-version-unverified",
+          profile.formatCapabilities().get("r").evidence(), version);
+      assertEquals(SupportStatus.NEEDS_MANUAL_ACTION, rHostedStatus(profile), version);
+    }
+    for (String missing : List.of(
+        "sourcePackageAssetPath", "rAssetAttributes", "componentIdentity", "sourceChecksum")) {
+      Map<String, Object> drifted = new LinkedHashMap<>(VERIFIED_R_SHAPE);
+      drifted.remove(missing);
+      NexusSourceProfile profile = rProfile("3.94.0-01", drifted);
+      assertFalse(profile.formatCapabilities().get("r").contentMigration(), missing);
+      assertEquals("r-content-shape-incomplete",
+          profile.formatCapabilities().get("r").evidence(), missing);
+      assertEquals(SupportStatus.NEEDS_MANUAL_ACTION, rHostedStatus(profile), missing);
+    }
+  }
+
+  @Test
   void enablesHuggingFaceProxyContentOnlyForExactNexus394Shape() {
     NexusSourceProfile profile = huggingFaceProfile("3.94.0-01", VERIFIED_HUGGINGFACE_SHAPE);
 
@@ -337,6 +373,16 @@ class NexusSourceProfileTest {
             profile, new MigrationScope(List.of("alpine-hosted"), false, false))
         .items().stream()
         .filter(item -> "alpine-hosted".equals(item.name()))
+        .findFirst()
+        .orElseThrow()
+        .status();
+  }
+
+  private static SupportStatus rHostedStatus(NexusSourceProfile profile) {
+    return new MigrationPlanBuilder().build(
+            profile, new MigrationScope(List.of("r-hosted"), false, false))
+        .items().stream()
+        .filter(item -> "r-hosted".equals(item.name()))
         .findFirst()
         .orElseThrow()
         .status();
@@ -425,6 +471,48 @@ class NexusSourceProfileTest {
         Map.of(
             "name", "alpine-hosted",
             "format", "alpine",
+            "type", "hosted",
+            "online", true),
+        Map.of("storage", Map.of("blobStoreName", "default")));
+    return NexusSourceProfile.fromInventory(
+        new NexusInventory(
+            List.of(Map.of("name", "default", "type", "File")),
+            List.of(repository),
+            NexusSecurityExport.empty(),
+            List.of(),
+            probe),
+        null);
+  }
+
+  private static NexusSourceProfile rProfile(
+      String probedVersion,
+      Map<String, Object> formatShape) {
+    SourceProbe probe = new SourceProbe(
+        probedVersion,
+        true,
+        true,
+        true,
+        "text/plain",
+        "ok",
+        "DATASTORE_POSTGRESQL",
+        "PostgreSQL",
+        "jdbc:postgresql://nexus/nexus",
+        Map.of("datastoreContentModels", Map.of("r", Map.of(
+            "prefix", "R",
+            "tablesPresent", true,
+            "requiredColumnsPresent", true,
+            "tables", Map.of(
+                "contentRepository", "R_CONTENT_REPOSITORY",
+                "asset", "R_ASSET",
+                "assetBlob", "R_ASSET_BLOB",
+                "component", "R_COMPONENT"),
+            "columns", Map.of(),
+            "formatShape", formatShape))),
+        List.of());
+    RepositoryDocument repository = new RepositoryDocument(
+        Map.of(
+            "name", "r-hosted",
+            "format", "r",
             "type", "hosted",
             "online", true),
         Map.of("storage", Map.of("blobStoreName", "default")));

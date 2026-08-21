@@ -305,9 +305,25 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
       case CONAN -> conanOperation(path, normalizedMethod);
       case APT -> aptOperation(path, normalizedMethod);
       case ALPINE -> alpineOperation(path, normalizedMethod);
+      case R -> rOperation(path, normalizedMethod);
       case HUGGINGFACE -> huggingFaceOperation(path, normalizedMethod);
       case RAW -> rawOperation(normalizedMethod);
     };
+  }
+
+  private static String rOperation(String path, String method) {
+    if (path.endsWith("/PACKAGES.gz") || path.equals("src/contrib/PACKAGES.gz")) {
+      return "r_packages_index";
+    }
+    if (path.endsWith(".tar.gz")) {
+      return switch (method) {
+        case "PUT", "POST" -> "r_package_publish";
+        case "DELETE" -> "r_package_delete";
+        case "HEAD" -> "r_package_head";
+        default -> "r_package_download";
+      };
+    }
+    return "r_content";
   }
 
   private static String huggingFaceOperation(String path, String method) {

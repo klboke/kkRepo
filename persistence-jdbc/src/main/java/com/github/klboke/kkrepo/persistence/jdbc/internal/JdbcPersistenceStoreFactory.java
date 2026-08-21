@@ -28,6 +28,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.NpmReleaseIndexDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceStoreFactory;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceStores;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PubUploadSessionDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDataMigrationDao;
@@ -85,6 +86,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
         new JdbcMigrationJobDao(jdbc, json),
         new JdbcNpmReleaseIndexDao(jdbc),
         new JdbcProxyStateDao(jdbc, 30),
+        new JdbcRRegistryDao(jdbc, json, dialect),
         new JdbcPubUploadSessionDao(jdbc, json),
         new JdbcRepositoryDao(jdbc, json),
         new JdbcRepositoryDataMigrationDao(jdbc, json, dialect),
@@ -122,6 +124,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
       MigrationJobDao migrationJobs,
       NpmReleaseIndexDao npmReleaseIndexes,
       ProxyStateDao proxyStates,
+      RRegistryDao rRegistry,
       PubUploadSessionDao pubUploadSessions,
       RepositoryDao repositories,
       RepositoryDataMigrationDao repositoryDataMigrations,

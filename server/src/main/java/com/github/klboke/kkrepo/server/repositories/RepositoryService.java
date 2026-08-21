@@ -13,6 +13,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.HuggingFaceRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
@@ -96,6 +97,7 @@ public class RepositoryService {
   private ConanRegistryDao conanRegistry;
   private AptRegistryDao aptRegistry;
   private AlpineRegistryDao alpineRegistry;
+  private RRegistryDao rRegistry;
   private HuggingFaceRegistryDao huggingFaceRegistry;
   private CleanupPolicyDao cleanupPolicies;
   private final String urlPrefix;
@@ -169,6 +171,11 @@ public class RepositoryService {
   @Autowired(required = false)
   void setAlpineRegistry(AlpineRegistryDao alpineRegistry) {
     this.alpineRegistry = alpineRegistry;
+  }
+
+  @Autowired(required = false)
+  void setRRegistry(RRegistryDao rRegistry) {
+    this.rRegistry = rRegistry;
   }
 
   @Autowired(required = false)
@@ -328,6 +335,9 @@ public class RepositoryService {
       aptRegistry.ensureSuite(id, apt.distribution(), java.time.Instant.now());
     }
     ensureConfiguredAlpineNamespaces(id, alpine);
+    if (recipe.format() == RepositoryFormat.R && rRegistry != null) {
+      rRegistry.ensureSuite(id, "src/contrib", java.time.Instant.now());
+    }
 
     if (recipe.type() == RepositoryType.GROUP) {
       List<Long> memberIds = resolveMemberIds(name, recipe.format(), command.group());
@@ -340,6 +350,9 @@ public class RepositoryService {
       }
       if (recipe.format() == RepositoryFormat.ALPINE && alpineRegistry != null) {
         markAlpineSuitesDirty(id);
+      }
+      if (recipe.format() == RepositoryFormat.R && rRegistry != null) {
+        markRSuiteDirty(id);
       }
     }
 
@@ -453,6 +466,10 @@ public class RepositoryService {
       ensureConfiguredAlpineNamespaces(existing.id(), settings);
       markAlpineSuitesDirty(existing.id());
     }
+    if (recipe.format() == RepositoryFormat.R && rRegistry != null) {
+      rRegistry.ensureSuite(existing.id(), "src/contrib", java.time.Instant.now());
+      markRSuiteDirty(existing.id());
+    }
     evictStaleOutboundProxyClient(existing.name(), existing.attributes(), attributes);
 
     if (recipe.type() == RepositoryType.GROUP && command.group() != null) {
@@ -467,6 +484,7 @@ public class RepositoryService {
       invalidateCondaGroupBindings(existing.format(), existing.id());
       invalidateConanGroupBindings(existing.format(), existing.id());
       invalidateAlpineGroupSnapshots(existing.format(), existing.id());
+      invalidateRGroupSnapshots(existing.format(), existing.id());
     } else if (recipe.type() != RepositoryType.GROUP) {
       invalidateNpmMemberAfterCommit(existing.format(), existing.id());
       invalidatePypiMemberAfterCommit(existing.format(), existing.id());
@@ -478,6 +496,7 @@ public class RepositoryService {
       invalidateConanMemberAndContainingGroups(existing.format(), existing.id(), new HashSet<>());
       invalidateAlpineMemberAndContainingGroups(
           existing.format(), existing.id(), new HashSet<>());
+      invalidateRMemberAndContainingGroups(existing.format(), existing.id(), new HashSet<>());
     }
 
     invalidateRuntimeCache(existing.id(), name);
@@ -524,6 +543,9 @@ public class RepositoryService {
     if (alpineRegistry != null && existing.format() == RepositoryFormat.ALPINE) {
       alpineRegistry.deleteRepositoryState(existing.id());
     }
+    if (rRegistry != null && existing.format() == RepositoryFormat.R) {
+      rRegistry.deleteRepositoryState(existing.id());
+    }
     if (huggingFaceRegistry != null && existing.format() == RepositoryFormat.HUGGINGFACE) {
       huggingFaceRegistry.deleteRepositoryState(existing.id());
     }
@@ -558,6 +580,7 @@ public class RepositoryService {
     invalidateCondaGroupBindings(existing.format(), existing.id());
     invalidateConanGroupBindings(existing.format(), existing.id());
     invalidateAlpineGroupSnapshots(existing.format(), existing.id());
+    invalidateRGroupSnapshots(existing.format(), existing.id());
     runtimeRegistry.invalidate(name);
     invalidateRepositoryCacheTokensAfterCommit(existing.id());
     refreshRepositoryCatalogAfterCommit();
@@ -816,6 +839,37 @@ public class RepositoryService {
       if (group.id() == null || !visited.add(group.id())) continue;
       markAlpineSuitesDirty(group.id());
       invalidateAlpineContainingGroups(format, group.id(), visited);
+    }
+  }
+
+  private void markRSuiteDirty(long repositoryId) {
+    if (rRegistry == null) return;
+    java.time.Instant now = java.time.Instant.now();
+    rRegistry.ensureSuite(repositoryId, "src/contrib", now);
+    rRegistry.markSuiteDirty(repositoryId, "src/contrib", now);
+  }
+
+  private void invalidateRGroupSnapshots(
+      RepositoryFormat format, long groupRepositoryId) {
+    if (format != RepositoryFormat.R || rRegistry == null) return;
+    markRSuiteDirty(groupRepositoryId);
+    invalidateRContainingGroups(format, groupRepositoryId, new HashSet<>());
+  }
+
+  private void invalidateRMemberAndContainingGroups(
+      RepositoryFormat format, long repositoryId, Set<Long> visited) {
+    if (format != RepositoryFormat.R || rRegistry == null) return;
+    markRSuiteDirty(repositoryId);
+    invalidateRContainingGroups(format, repositoryId, visited);
+  }
+
+  private void invalidateRContainingGroups(
+      RepositoryFormat format, long repositoryId, Set<Long> visited) {
+    if (format != RepositoryFormat.R || rRegistry == null) return;
+    for (RepositoryRecord group : repositoryDao.listGroupsContaining(repositoryId)) {
+      if (group.id() == null || !visited.add(group.id())) continue;
+      markRSuiteDirty(group.id());
+      invalidateRContainingGroups(format, group.id(), visited);
     }
   }
 

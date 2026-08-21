@@ -44,6 +44,7 @@ import com.github.klboke.kkrepo.server.conan.ConanRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.docker.DockerManifestParser;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.pub.PubRepositoryDataMigrationWriter;
+import com.github.klboke.kkrepo.server.r.RRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.swift.SwiftRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.terraform.TerraformRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
@@ -89,6 +90,7 @@ class RepositoryDataMigrationWriter {
   private CondaRepositoryDataMigrationWriter condaMigrationWriter;
   private AptRepositoryDataMigrationWriter aptMigrationWriter;
   private AlpineRepositoryDataMigrationWriter alpineMigrationWriter;
+  private RRepositoryDataMigrationWriter rMigrationWriter;
   private ConanRepositoryDataMigrationWriter conanMigrationWriter;
   private HuggingFaceRegistryDao huggingFaceRegistry;
   private final TransientTransactionRetry transactionRetry;
@@ -224,6 +226,11 @@ class RepositoryDataMigrationWriter {
   }
 
   @Autowired(required = false)
+  void setRMigrationWriter(RRepositoryDataMigrationWriter rMigrationWriter) {
+    this.rMigrationWriter = rMigrationWriter;
+  }
+
+  @Autowired(required = false)
   void setConanMigrationWriter(ConanRepositoryDataMigrationWriter conanMigrationWriter) {
     this.conanMigrationWriter = conanMigrationWriter;
   }
@@ -303,6 +310,16 @@ class RepositoryDataMigrationWriter {
         throw new IllegalStateException("Alpine migration writer is not configured");
       }
       AlpineRepositoryDataMigrationWriter.MigratedAsset migrated = alpineMigrationWriter.write(
+          repository, source, body, validateSize);
+      return new WriteResult(
+          migrated.componentId(), migrated.assetId(), migrated.assetBlobId(),
+          migrated.assetBlobObjectKey());
+    }
+    if (repository.format() == RepositoryFormat.R) {
+      if (rMigrationWriter == null) {
+        throw new IllegalStateException("R migration writer is not configured");
+      }
+      RRepositoryDataMigrationWriter.MigratedAsset migrated = rMigrationWriter.write(
           repository, source, body, validateSize);
       return new WriteResult(
           migrated.componentId(), migrated.assetId(), migrated.assetBlobId(),
@@ -1113,6 +1130,9 @@ class RepositoryDataMigrationWriter {
       case APT -> source.sourcePath().endsWith(".deb") ? "apt-package" : "apt-metadata";
       case ALPINE -> source.sourcePath().endsWith(".apk")
           ? "alpine-package" : "alpine-metadata";
+      case R -> source.sourcePath().endsWith(".tar.gz")
+          && source.sourcePath().startsWith("src/contrib/")
+          ? "r-source-package" : "r-metadata";
       case HUGGINGFACE -> "huggingface-model-file";
       case RAW -> "asset";
     };

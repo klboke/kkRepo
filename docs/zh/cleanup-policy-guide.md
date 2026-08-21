@@ -16,7 +16,7 @@
   metadata、index 和 cache。
 - 当前全部格式都支持 Try Run、手动执行和定时执行。只有已经验证协议版本比较器的 Maven、
   Cargo/Rust、Dart/Pub、Terraform、Swift Package Registry、Ansible Galaxy、Conda 和
-  APT/Debian、Alpine/APK 支持
+  APT/Debian、Alpine/APK、R/CRAN 支持
   **保留最新版本**规则。
 - 实际执行不可逆。kkRepo 当前没有 Cleanup 专属恢复窗口，因此生产环境启用删除前应准备并验证
   数据库与 blob store 备份。
@@ -35,6 +35,11 @@ Alpine 的一个清理 subject 是一个可安装的
 tombstone 并发布新的完整签名 `APKINDEX.tar.gz`；保留的不可变 snapshot 继续 pin 在途客户端所需
 的 package blob。Proxy 清理只移除本地缓存 package bytes，并保留后续重新回源所需的已验证上游
 inventory。
+
+R 的一个清理 subject 是一个 source package version。**保留最新版本**在每个 package family 内
+使用 R numeric-version comparator，包括官方的 `0.9 < 0.75` 语义。Hosted 删除会先发布不再声明
+该 package 的完整 `PACKAGES.gz`，再退出 package 投影；生成 metadata 与 group 不作为独立清理
+subject。
 
 ## 规则组合语义
 

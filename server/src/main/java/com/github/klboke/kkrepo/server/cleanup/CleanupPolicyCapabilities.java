@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.protocol.conda.CondaVersions;
 import com.github.klboke.kkrepo.protocol.conan.ConanVersions;
 import com.github.klboke.kkrepo.protocol.maven.metadata.MavenVersionComparator;
 import com.github.klboke.kkrepo.protocol.pub.PubVersions;
+import com.github.klboke.kkrepo.protocol.r.RVersions;
 import com.github.klboke.kkrepo.protocol.swift.SwiftVersions;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformVersions;
 import java.util.Comparator;
@@ -35,6 +36,7 @@ public class CleanupPolicyCapabilities {
     comparators.put(RepositoryFormat.CONAN, ConanVersions.comparator());
     comparators.put(RepositoryFormat.APT, DebianVersions::compare);
     comparators.put(RepositoryFormat.ALPINE, AlpineVersions.COMPARATOR);
+    comparators.put(RepositoryFormat.R, RVersions.COMPARATOR);
     this.versionComparators = Map.copyOf(comparators);
   }
 

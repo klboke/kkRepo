@@ -25,6 +25,7 @@ import com.github.klboke.kkrepo.server.npm.NpmHostedService;
 import com.github.klboke.kkrepo.server.pypi.PypiHostedService;
 import com.github.klboke.kkrepo.server.pub.PubHostedService;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
+import com.github.klboke.kkrepo.server.r.RService;
 import com.github.klboke.kkrepo.server.swift.SwiftService;
 import com.github.klboke.kkrepo.server.swift.SwiftPublishLimits;
 import com.github.klboke.kkrepo.server.terraform.TerraformService;
@@ -142,6 +143,7 @@ public class ComponentUploadService {
               field("repositoryArchitecture", "STRING", "Repository architecture", false,
                   "Repository namespace")),
           List.of(field("asset", "FILE", "Alpine .apk package", false, null))),
+      singleAsset("r"),
       rawLikeUpload("nuget"),
       rawLikeUpload("rubygems"),
       rawLikeUpload("yum"),
@@ -165,6 +167,7 @@ public class ComponentUploadService {
   private ConanService conanService;
   private AptService aptService;
   private AlpineService alpineService;
+  private RService rService;
   private final MavenPathParser mavenPathParser = new MavenPathParser();
   private final TerraformPathParser terraformPathParser = new TerraformPathParser();
 
@@ -269,6 +272,11 @@ public class ComponentUploadService {
     this.alpineService = alpineService;
   }
 
+  @Autowired(required = false)
+  void setRService(RService rService) {
+    this.rService = rService;
+  }
+
   public UploadDefinition definition(String format) {
     String normalized = normalizeFormat(format);
     return DEFINITIONS.stream()
@@ -316,6 +324,7 @@ public class ComponentUploadService {
       case CONAN -> uploadConan(runtime, upload, createdBy, createdByIp);
       case APT -> uploadApt(runtime, upload, createdBy, createdByIp);
       case ALPINE -> uploadAlpine(runtime, upload, createdBy, createdByIp);
+      case R -> uploadR(runtime, upload, createdBy, createdByIp);
       case HUGGINGFACE -> throw new UploadValidationException(
           "Hugging Face Models repositories are proxy-only");
       case DOCKER -> throw new UploadValidationException("Docker hosted upload must use the Docker Registry V2 API");
@@ -490,6 +499,25 @@ public class ComponentUploadService {
           body,
           createdBy,
           createdByIp).path());
+    }
+  }
+
+  private List<String> uploadR(
+      RepositoryRuntime runtime,
+      NormalizedUpload upload,
+      String createdBy,
+      String createdByIp) throws IOException {
+    if (rService == null) {
+      throw new UploadValidationException("R upload service is unavailable");
+    }
+    AssetUpload asset = singleAsset(upload, "R");
+    String filename = originalFilename(asset.file());
+    if (!filename.toLowerCase(Locale.ROOT).endsWith(".tar.gz")) {
+      throw new UploadValidationException("R upload requires a source .tar.gz package");
+    }
+    try (InputStream body = asset.file().getInputStream()) {
+      return List.of(rService.publish(
+          runtime, filename, body, createdBy, createdByIp).path());
     }
   }
 
@@ -858,6 +886,7 @@ public class ComponentUploadService {
       case CONAN -> "conan";
       case APT -> "apt";
       case ALPINE -> "alpine";
+      case R -> "r";
       case HUGGINGFACE -> "huggingface";
       case RAW -> "raw";
     };

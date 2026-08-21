@@ -8,9 +8,12 @@
 
 ## 当前状态与落地结论
 
-截至 2026-08-21，kkrepo 尚未注册 `RepositoryFormat.R`、`r-hosted`、`r-proxy` 或
-`r-group`；本文是实现前的约束与验收基线。路线图把 R / CRAN 调整为完成项之后的首个待实现
-仓库格式，但在本文全部门禁通过前保持“规划中”，不得提前标记为完成。
+截至 2026-08-21，本文定义的第一阶段能力已经落地：代码已注册 `RepositoryFormat.R`、
+`r-hosted`、`r-proxy`、`r-group` 与独立 `protocol-r`，并接入双数据库 V49 schema、不可变
+`PACKAGES.gz` snapshot、proxy projection、group source binding、Admin/Browse/Search、
+Cleanup、安全扫描、Nexus 3.94 shape-gated 迁移和真实 R 客户端 E2E。路线图同步标记为已实现；
+使用方法见 [R / CRAN 仓库使用指南](../repository-guides/r-cran.md)，性能门禁与复现方法见
+[R / CRAN 性能基线](r-cran-performance-baseline.md)。
 
 落地结论如下：
 
@@ -601,19 +604,13 @@ Windows/macOS lane 首期验证 proxy 直连 binary `.zip` / `.tgz` 与 `PACKAGE
   `NEEDS_MANUAL_ACTION` 报告。
 - Dry-run 不写 Blob/metadata；中断后 resume 不重复上传；重复执行得到同一 logical result。
 
-## 实施顺序
+## 实施记录
 
-1. M0 / PR1：Nexus 3.94 fixture、真实 R request capture、`protocol-r` path/name/version/DCF codec 和
-   format/recipe skeleton。
-2. PR2：双数据库 schema/DAO、source inspector、hosted PUT/GET、component/Browse projection 与 durable
-   `PACKAGES.gz` snapshot。
-3. PR3：proxy passthrough/projection、group merge/source binding、Admin/UI/API 与真实 R client E2E。
-4. PR4：Cleanup comparator/delete adapter、安全扫描 classifier/policy、双副本 race 与 Native hints。
-5. PR5：Nexus definition/content migration、性能脚本/双语基线、million-row query-plan gate、文档与完整
-   CI/E2E closure。
-
-每个阶段都必须保持其它格式协议、Cleanup、扫描与 asset 写入路径回归通过。只有 PR5 的协议、真实
-客户端、迁移、性能、双数据库和多副本门禁全部通过，路线图才给 R / CRAN 增加 `✅`。
+本次落地按原 M0 到 PR5 的边界一次性闭环：Nexus fixture 与 `protocol-r` codec；双数据库
+schema/DAO、source inspector 与 durable snapshot；proxy/group、UI/API 与真实客户端；Cleanup、
+扫描与多副本 fencing；以及迁移、性能脚本、查询计划门禁和双语文档。后续扩展仍必须保持其它格式
+协议、Cleanup、扫描与通用 asset 写入路径回归通过，且不能放宽本文“后续扩展”和“明确不实现”的
+边界。
 
 ## 验收标准
 

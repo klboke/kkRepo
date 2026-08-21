@@ -15,6 +15,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
@@ -78,6 +79,7 @@ public class BrowseAssetDetailService {
   private CondaRegistryDao condaDao;
   private AptRegistryDao aptDao;
   private AlpineRegistryDao alpineDao;
+  private RRegistryDao rDao;
   private BrowseNodeDao browseNodeDao;
   private ConanRegistryDao conanDao;
   private final BlobStorageRegistry blobStorageRegistry;
@@ -119,6 +121,11 @@ public class BrowseAssetDetailService {
   @Autowired(required = false)
   void setAlpineRegistryDao(AlpineRegistryDao alpineDao) {
     this.alpineDao = alpineDao;
+  }
+
+  @Autowired(required = false)
+  void setRRegistryDao(RRegistryDao rDao) {
+    this.rDao = rDao;
   }
 
   @Autowired(required = false)
@@ -229,6 +236,9 @@ public class BrowseAssetDetailService {
     Map<String, Object> alpine = source.format() == RepositoryFormat.ALPINE
         ? alpineAttributes(source, asset)
         : Map.of();
+    Map<String, Object> r = source.format() == RepositoryFormat.R
+        ? rAttributes(source, asset)
+        : Map.of();
     Map<String, Object> swift = source.format() == RepositoryFormat.SWIFT
         ? swiftAttributes(source, asset)
         : Map.of();
@@ -275,6 +285,7 @@ public class BrowseAssetDetailService {
         conda,
         apt,
         alpine,
+        r,
         huggingFace,
         swift,
         ansible,
@@ -396,6 +407,37 @@ public class BrowseAssetDetailService {
         "i", "install_if");
     names.forEach((field, name) -> put(alpine, name, record.controlFields().get(field)));
     return Collections.unmodifiableMap(alpine);
+  }
+
+  private Map<String, Object> rAttributes(
+      RepositoryRecord source, AssetRecord asset) {
+    if (rDao == null) return Map.of();
+    RRegistryDao.PackageRecord record = rDao.findPackageByPath(source.id(), asset.path())
+        .orElseThrow(() -> new ResponseStatusException(
+            HttpStatus.NOT_FOUND, "R package identity not found"));
+    if (record.assetId() != null && !record.assetId().equals(asset.id())) {
+      throw new ResponseStatusException(
+          HttpStatus.CONFLICT, "R package asset does not match registry state");
+    }
+    LinkedHashMap<String, Object> r = new LinkedHashMap<>();
+    put(r, "namespace", record.distribution());
+    put(r, "package", record.packageName());
+    put(r, "version", record.version());
+    put(r, "filename", record.filename());
+    put(r, "md5", record.identity());
+    put(r, "sha256", record.sha256());
+    put(r, "size", record.size());
+    put(r, "source_kind", record.sourceKind());
+    put(r, "source_repository", source.name());
+    put(r, "revision", record.revision());
+    put(r, "indexed_at", record.indexedAt());
+    for (String field : List.of(
+        "License", "Depends", "Imports", "LinkingTo", "Suggests", "Enhances",
+        "NeedsCompilation")) {
+      Object value = record.controlFields().get(field);
+      if (value != null) put(r, field.toLowerCase(Locale.ROOT), value);
+    }
+    return Collections.unmodifiableMap(r);
   }
 
   private static String alpineDistribution(String namespace) {
@@ -564,6 +606,7 @@ public class BrowseAssetDetailService {
           Map.of(),
           Map.of(),
           Map.of(),
+          Map.of(),
           swiftReleaseAttributes(source, row),
           Map.of(),
           Map.of("dynamic", true, "hashes_not_verified", false)));
@@ -657,6 +700,7 @@ public class BrowseAssetDetailService {
           null,
           Map.copyOf(checksum),
           Map.of("generated", true, "format", "swift-manifest-browse"),
+          Map.of(),
           Map.of(),
           Map.of(),
           Map.of(),
@@ -812,6 +856,7 @@ public class BrowseAssetDetailService {
         Map.of(),
         Map.of(),
         Map.of(),
+        Map.of(),
         provenance);
   }
 
@@ -836,6 +881,7 @@ public class BrowseAssetDetailService {
         null,
         Map.of(),
         content,
+        Map.of(),
         Map.of(),
         Map.of(),
         Map.of(),
@@ -1621,6 +1667,7 @@ public class BrowseAssetDetailService {
       Map<String, Object> conda,
       Map<String, Object> apt,
       Map<String, Object> alpine,
+      Map<String, Object> r,
       Map<String, Object> huggingface,
       Map<String, Object> swift,
       Map<String, Object> ansible,

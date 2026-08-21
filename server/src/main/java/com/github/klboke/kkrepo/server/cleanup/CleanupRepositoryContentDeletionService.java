@@ -12,6 +12,7 @@ import com.github.klboke.kkrepo.server.docker.DockerManifestStore;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmHostedService;
+import com.github.klboke.kkrepo.server.r.RService;
 import java.util.List;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -27,6 +28,7 @@ public class CleanupRepositoryContentDeletionService
   private final AptService aptService;
   private ConanService conanService;
   private AlpineService alpineService;
+  private RService rService;
 
   public CleanupRepositoryContentDeletionService(
       BrowseContentDeleteController browseDeletion,
@@ -49,6 +51,11 @@ public class CleanupRepositoryContentDeletionService
   @Autowired(required = false)
   void setAlpineService(AlpineService alpineService) {
     this.alpineService = alpineService;
+  }
+
+  @Autowired(required = false)
+  void setRService(RService rService) {
+    this.rService = rService;
   }
 
   @Override
@@ -112,6 +119,15 @@ public class CleanupRepositoryContentDeletionService
         && runtime.type() == RepositoryType.HOSTED
         && subjects.stream().allMatch(subject -> "COMPONENT".equals(subject.subjectKind()))) {
       return alpineService.deleteComponentsForCleanup(
+          runtime,
+          subjects.stream().map(CleanupDeleteSubject::subjectId).toList(),
+          "cleanup policy delete by " + actorId);
+    }
+    if (runtime.format() == RepositoryFormat.R
+        && rService != null
+        && runtime.type() == RepositoryType.HOSTED
+        && subjects.stream().allMatch(subject -> "COMPONENT".equals(subject.subjectKind()))) {
+      return rService.deleteComponentsForCleanup(
           runtime,
           subjects.stream().map(CleanupDeleteSubject::subjectId).toList(),
           "cleanup policy delete by " + actorId);

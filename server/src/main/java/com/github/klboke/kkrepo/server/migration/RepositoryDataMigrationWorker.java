@@ -321,6 +321,7 @@ class RepositoryDataMigrationWorker {
         || format == RepositoryFormat.SWIFT || format == RepositoryFormat.ANSIBLEGALAXY
         || format == RepositoryFormat.CONDA || format == RepositoryFormat.APT
         || format == RepositoryFormat.ALPINE
+        || format == RepositoryFormat.R
         || format == RepositoryFormat.HUGGINGFACE
         || format == RepositoryFormat.CONAN)
         && !RepositoryDataMigrationPaths.shouldDiscoverAsset(format, path)) {

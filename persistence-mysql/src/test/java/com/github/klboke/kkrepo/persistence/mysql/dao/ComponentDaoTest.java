@@ -142,6 +142,21 @@ class ComponentDaoTest {
   }
 
   @Test
+  void rSearchReturnsPackageAssetPathForProtocolDetails() {
+    RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
+    ComponentDao dao = new JdbcComponentDao(
+        jdbcTemplate,
+        new JsonColumns(new ObjectMapper(), DIALECT),
+        DIALECT);
+
+    dao.search(null, RepositoryFormat.R, 20);
+
+    assertTrue(jdbcTemplate.sql.contains(
+        "JSON_EXTRACT(c.attributes_json, '$.assetPath')"));
+    assertTrue(jdbcTemplate.sql.contains("WHEN c.format = 'r'"));
+  }
+
+  @Test
   void repositoryScopedSearchIncludesStoragePathProjection() {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
     ComponentDao dao = new JdbcComponentDao(

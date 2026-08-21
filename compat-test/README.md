@@ -23,7 +23,7 @@ Current Maven compatibility checks and repository-format compatibility checks ca
 this same long-running Nexus reference unless a test explicitly documents why it needs an isolated
 throwaway Nexus instance. Cargo/Rust requires Nexus 3.77.x+, Terraform requires Nexus 3.90.0+ for
 hosted/proxy/group coverage, Pub, Conda, and APT require Nexus 3.92.0+, and the Conan 2, Swift,
-Alpine/APK, and Hugging Face Models reference matrices target Nexus 3.94.x so their latest repository implementations are
+Alpine/APK, R/CRAN, and Hugging Face Models reference matrices target Nexus 3.94.x so their latest repository implementations are
 available; the Swift lane also verifies versioned-manifest fallback and `v`/`V` tag normalization. The
 datastore-era PostgreSQL compose file below defaults to Nexus 3.92.0 for the general newer-format
 checks, while the Swift workflow explicitly overrides that image with Nexus 3.94.x.
@@ -61,7 +61,7 @@ docker compose -f docker-compose.compat.yml down -v
 For datastore-era compatibility work, use the Nexus PostgreSQL compose file instead of the default
 Nexus 3.29.2 OrientDB reference. It pins Nexus to 3.92.0 with PostgreSQL datastore enabled, which
 covers Cargo/Rust, Dart/Pub, Terraform, Conda, APT/Debian, and the other newer-format live checks.
-Override the Nexus image with 3.94.x for Conan 2, Swift, and Alpine/APK:
+Override the Nexus image with 3.94.x for Conan 2, Swift, Alpine/APK, and R/CRAN:
 
 ```bash
 scripts/build-docker-image.sh kkrepo:compat
@@ -83,7 +83,7 @@ Available suites:
 - `write-smoke`: Maven hosted release/snapshot write compatibility with `COMPAT_WRITE_ENABLED=true`.
 - `nexus`: the disposable Nexus reference matrix. It enables write checks and compares kkrepo with
   Nexus across Maven, npm, PyPI, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift, Ansible Galaxy,
-  Conda, APT/Debian, Conan 2, Alpine/APK, Raw, selected NuGet/RubyGems/Yum behavior,
+  Conda, APT/Debian, Conan 2, Alpine/APK, R/CRAN, Raw, selected NuGet/RubyGems/Yum behavior,
   Go proxy endpoints, Helm hosted round trips, component upload specs, and selected security/admin
   contracts. Composer is required when enabled; a missing Nexus Composer endpoint fails instead of skipping.
   The self-contained Conda fixtures run in this module, while the live Conda comparison is enabled
@@ -92,7 +92,7 @@ Available suites:
 - `client-e2e`: starts from the disposable kkrepo service and uses real package clients to publish
   and then download/resolve through hosted and group/proxy repositories. It covers Maven, npm,
   PyPI, Helm, Cargo/Rust, Dart/Pub, Flutter Pub, Composer/PHP, Terraform 0.13/current, Ansible Galaxy
-  2.9/current, Conda, APT/Debian, Conan 2, Alpine/APK, NuGet, RubyGems, Yum, and Docker/OCI. Go is
+  2.9/current, Conda, APT/Debian, Conan 2, Alpine/APK, R 4.5/4.6, NuGet, RubyGems, Yum, and Docker/OCI. Go is
   resolve-only through the Go proxy because hosted Go publishing is not a supported repository mode.
   SwiftPM is included when `swift` or `SWIFT_E2E_BINS` is available; it publishes to Swift hosted,
   resolves and builds through group, checks immutable conflict and checksum replay, and exercises
@@ -111,6 +111,9 @@ Available suites:
   Alpine runs apk-tools 2.x and 3.x clients through signed `update`, `search`, `policy`, `fetch`,
   `add`, and `upgrade`, then verifies deletion, proxy passthrough, and byte-identical metadata from
   a second replica.
+  R runs R 4.5.3 and 4.6.1 through hosted/group `available.packages()`, dependency installation and
+  update, proxy `PACKAGES.gz`/`PACKAGES.rds`, version-order differential checks, cleanup, and an
+  optional second replica.
   The Composer flow additionally validates a hosted-to-proxy transitive dependency, rejected Basic
   credentials, and lock replay from the server cache after clearing the client cache and detaching
   the Packagist upstream.
@@ -128,6 +131,8 @@ Available suites:
 - `alpine`: the opt-in Nexus 3.94.x Alpine hosted matrix. It compares raw APK v2 upload, signed
   `APKINDEX.tar.gz`, official `Q1` package identity, package GET/HEAD/Range/validators, Browse, and
   Search.
+- `r`: the opt-in Nexus 3.94.x R hosted matrix. It compares canonical source package upload,
+  normalized `PACKAGES.gz`, package GET/HEAD/Range/validators, Browse, and Search.
 
 In GitHub Actions, add the `run-live-compat` label to a PR to run the unified Nexus compatibility
 matrix against the Nexus 3.92.0 PostgreSQL reference. The live compatibility workflow
@@ -316,6 +321,38 @@ Nexus 3.94 hosted/proxy/group definitions and a dependency graph, proves the exa
 shape, restores only original `.apk` packages to MySQL/PostgreSQL targets, leaves repositories
 offline until the source test key is explicitly imported, rebuilds signed metadata, and verifies a
 real install plus row-count and cross-replica invariants.
+
+### R / CRAN compatibility and client matrix
+
+`RRepositoryBlackBoxCompatibilityTest` creates isolated hosted repositories on Nexus 3.94.x and
+kkRepo, uploads the same deterministic source package, compares normalized `PACKAGES.gz` records,
+and validates package GET/HEAD/Range/validators, Browse, and Search:
+
+```bash
+R_COMPAT_ENABLED=true \
+R_NEXUS_COMPAT_BASE_URL=http://127.0.0.1:39400 \
+R_KKREPO_COMPAT_BASE_URL=http://127.0.0.1:18090 \
+R_NEXUS_COMPAT_USERNAME=admin \
+R_NEXUS_COMPAT_PASSWORD=Admin1234 \
+R_KKREPO_COMPAT_USERNAME=admin \
+R_KKREPO_COMPAT_PASSWORD=12345678 \
+mvn -pl compat-test -am \
+  -Dtest=RRepositoryBlackBoxCompatibilityTest \
+  -Dsurefire.failIfNoSpecifiedTests=false test
+```
+
+Run the real R matrix with:
+
+```bash
+CLIENT_E2E_TESTS=r \
+R_E2E_IMAGES='4.5.3=r-base:4.5.3,4.6.1=r-base:4.6.1' \
+scripts/ci/run-client-e2e.sh
+```
+
+Set `R_KKREPO_SECONDARY_BASE_URL` to a second replica to require byte-identical group metadata.
+The flow validates hosted dependency installation/update, proxy compressed and RDS metadata,
+group source binding, package-byte identity, cleanup registration, and the official version-order
+differential corpus. See the [R / CRAN performance baseline](../docs/en/dev/r-cran-performance-baseline.md).
 
 ### Hugging Face Models compatibility and client matrix
 

@@ -111,6 +111,9 @@ public class MigrationPlanBuilder {
       } else if ("alpine".equals(format) && "hosted".equals(type)) {
         reasons.add("Nexus Alpine hosted package shape was not proven by the exact 3.94 datastore fingerprint; content migration requires manual action.");
         warnings.add("Alpine package blobs are not imported until canonical paths, component identity, attributes, and SHA-256 are verified.");
+      } else if ("r".equals(format) && "hosted".equals(type)) {
+        reasons.add("Nexus R hosted source-package shape was not proven by the exact 3.94 datastore fingerprint; content migration requires manual action.");
+        warnings.add("R package blobs are not imported until canonical src/contrib paths, component identity, attributes, and a Nexus source checksum are verified.");
       } else {
         reasons.add("Datastore content schema fingerprint is incomplete for this format; repository content migration stays configuration-only.");
         warnings.add("Datastore content exporter is not enabled until required tables and columns are present for this format.");

@@ -50,6 +50,8 @@ public interface PersistenceStores extends AutoCloseable {
 
   ProxyStateDao proxyStates();
 
+  RRegistryDao rRegistry();
+
   PubUploadSessionDao pubUploadSessions();
 
   RepositoryDao repositories();
