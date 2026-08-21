@@ -483,6 +483,91 @@ class BrowseContentDeleteControllerTest {
   }
 
   @Test
+  void deletesMavenSnapshotMetadataAndEnqueuesGaGavRebuilds() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord repository =
+        repository(1L, "maven", RepositoryFormat.MAVEN2, RepositoryType.HOSTED);
+    String path = "com/acme/app/1.0-SNAPSHOT/maven-metadata.xml";
+    AssetRecord metadata =
+        asset(11L, null, 31L, RepositoryFormat.MAVEN2, path, "metadata", Map.of());
+    AssetRecord sha1 = asset(
+        12L, null, 32L, RepositoryFormat.MAVEN2, path + ".sha1", "checksum", Map.of());
+    when(fixture.repositoryDao.findByName("maven")).thenReturn(Optional.of(repository));
+    when(fixture.assetDao.findAssetByPath(1L, path)).thenReturn(Optional.of(metadata));
+    when(fixture.assetDao.findAssetByPath(1L, path + ".sha1")).thenReturn(Optional.of(sha1));
+    when(fixture.assetDao.listAssetsByPrefix(1L, path + "/")).thenReturn(List.of());
+    when(fixture.componentDao.listByGa(1L, "com.acme.app", "1.0-SNAPSHOT"))
+        .thenReturn(List.of());
+
+    BrowseContentDeleteController.BrowseDeleteResult result = fixture.controller.delete(
+        "maven", "/" + path, null, new MockHttpServletRequest());
+
+    assertEquals(2, result.deletedAssets());
+    verify(fixture.assetDao).deleteAssetById(11L);
+    verify(fixture.assetDao).deleteAssetById(12L);
+    verify(fixture.metadataRebuildDao).enqueue(1L, "ga:com.acme/app");
+    verify(fixture.metadataRebuildDao).enqueue(1L, "gav:com.acme/app/1.0-SNAPSHOT");
+    verify(fixture.metadataRebuildDao, never())
+        .enqueue(1L, "ga:com.acme.app/1.0-SNAPSHOT");
+  }
+
+  @Test
+  void keepsArtifactLevelMavenMetadataWhenArtifactIdEndsWithSnapshot() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord repository =
+        repository(1L, "maven", RepositoryFormat.MAVEN2, RepositoryType.HOSTED);
+    String path = "com/acme/app-SNAPSHOT/maven-metadata.xml";
+    AssetRecord metadata =
+        asset(11L, null, 31L, RepositoryFormat.MAVEN2, path, "metadata", Map.of());
+    ComponentRecord component = new ComponentRecord(
+        21L, repository.id(), RepositoryFormat.MAVEN2, "com.acme", "app-SNAPSHOT", "1.0",
+        "maven", new byte[] {1}, Map.of(), Instant.EPOCH);
+    when(fixture.repositoryDao.findByName("maven")).thenReturn(Optional.of(repository));
+    when(fixture.assetDao.findAssetByPath(1L, path)).thenReturn(Optional.of(metadata));
+    when(fixture.assetDao.listAssetsByPrefix(1L, path + "/")).thenReturn(List.of());
+    when(fixture.componentDao.listByGa(1L, "com.acme", "app-SNAPSHOT"))
+        .thenReturn(List.of(component));
+
+    BrowseContentDeleteController.BrowseDeleteResult result = fixture.controller.delete(
+        "maven", "/" + path, null, new MockHttpServletRequest());
+
+    assertEquals(1, result.deletedAssets());
+    verify(fixture.metadataRebuildDao).enqueue(1L, "ga:com.acme/app-SNAPSHOT");
+    verify(fixture.metadataRebuildDao, never()).enqueue(eq(1L), startsWith("gav:"));
+  }
+
+  @Test
+  void keepsArtifactLevelMavenMetadataAtDifferentGroupDepths() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord repository =
+        repository(1L, "maven", RepositoryFormat.MAVEN2, RepositoryType.HOSTED);
+    String nestedGroupPath = "com/acme/app/maven-metadata.xml";
+    String singleGroupPath = "com/app/maven-metadata.xml";
+    AssetRecord nestedGroupMetadata = asset(
+        11L, null, 31L, RepositoryFormat.MAVEN2, nestedGroupPath, "metadata", Map.of());
+    AssetRecord singleGroupMetadata = asset(
+        12L, null, 32L, RepositoryFormat.MAVEN2, singleGroupPath, "metadata", Map.of());
+    when(fixture.repositoryDao.findByName("maven")).thenReturn(Optional.of(repository));
+    when(fixture.assetDao.findAssetByPath(1L, nestedGroupPath))
+        .thenReturn(Optional.of(nestedGroupMetadata));
+    when(fixture.assetDao.findAssetByPath(1L, singleGroupPath))
+        .thenReturn(Optional.of(singleGroupMetadata));
+    when(fixture.assetDao.listAssetsByPrefix(1L, nestedGroupPath + "/"))
+        .thenReturn(List.of());
+    when(fixture.assetDao.listAssetsByPrefix(1L, singleGroupPath + "/"))
+        .thenReturn(List.of());
+
+    assertEquals(1, fixture.controller.delete(
+        "maven", "/" + nestedGroupPath, null, new MockHttpServletRequest()).deletedAssets());
+    assertEquals(1, fixture.controller.delete(
+        "maven", "/" + singleGroupPath, null, new MockHttpServletRequest()).deletedAssets());
+
+    verify(fixture.metadataRebuildDao).enqueue(1L, "ga:com.acme/app");
+    verify(fixture.metadataRebuildDao).enqueue(1L, "ga:com/app");
+    verify(fixture.metadataRebuildDao, never()).enqueue(eq(1L), startsWith("gav:"));
+  }
+
+  @Test
   void deletesReleaseMavenAssetAndEnqueuesGaRebuild() {
     Fixture fixture = fixture(true, AccessDecision.allow());
     RepositoryRecord repository =
