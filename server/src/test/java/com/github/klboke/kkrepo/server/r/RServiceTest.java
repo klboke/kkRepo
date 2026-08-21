@@ -220,16 +220,25 @@ class RServiceTest {
   }
 
   @Test
-  void groupIndexRefreshesProxyProjectionBeforeComparingMemberFingerprint() {
+  void groupIndexPublishesRefreshedProxyProjectionBeforeComparingMemberFingerprint() {
     RepositoryRuntime proxyRuntime = runtime(2L, RepositoryType.PROXY, "ALLOW", List.of());
     RepositoryRuntime group = runtime(3L, RepositoryType.GROUP, "ALLOW", List.of(proxyRuntime));
     String memberFingerprint = RService.fingerprint(new LinkedHashMap<>(Map.of(2L, 4L)));
+    RRegistryDao.SuiteState dirtyProxy = suite(proxyRuntime.id(), 4L, 3L);
     when(proxy.prepareGroupMember(eq(proxyRuntime), any(Instant.class))).thenReturn(4L);
     when(registry.findSuite(proxyRuntime.id(), "src/contrib"))
-        .thenReturn(Optional.of(suite(proxyRuntime.id(), 4L, 4L)));
-    when(published.find(proxyRuntime.id(), "src/contrib")).thenReturn(Optional.of(snapshot(
-        proxyRuntime.id(), 4L,
-        Map.of("src/contrib/PACKAGES.gz", ".r/proxy/index"))));
+        .thenReturn(Optional.of(dirtyProxy));
+    when(published.find(proxyRuntime.id(), "src/contrib")).thenReturn(
+        Optional.of(snapshot(proxyRuntime.id(), 3L,
+            Map.of("src/contrib/PACKAGES.gz", ".r/proxy/3/index"))),
+        Optional.of(snapshot(proxyRuntime.id(), 4L,
+            Map.of("src/contrib/PACKAGES.gz", ".r/proxy/4/index"))));
+    when(indexBuilder.build(proxyRuntime, dirtyProxy)).thenReturn(new RIndexBuilder.BuiltSnapshot(
+        Map.of("src/contrib/PACKAGES.gz", ".r/proxy/4/index"),
+        "d".repeat(64), 100L, 1, Instant.EPOCH));
+    when(registry.publishSnapshot(any(), any(), anyLong())).thenReturn(true);
+    when(lease.owner()).thenReturn("owner");
+    when(lease.fencingToken()).thenReturn(7L);
     when(published.find(group.id(), "src/contrib")).thenReturn(Optional.of(snapshot(
         group.id(), 9L,
         Map.of("src/contrib/PACKAGES.gz", ".r/group/index", "@members", memberFingerprint))));
@@ -238,6 +247,7 @@ class RServiceTest {
 
     assertEquals(200, response.status());
     verify(proxy).prepareGroupMember(eq(proxyRuntime), any(Instant.class));
+    verify(registry).publishSnapshot(any(), eq("owner"), eq(7L));
     verify(assets).serve(group, ".r/group/index", false);
     verify(registry, never()).markSuiteDirty(
         eq(group.id()), eq("src/contrib"), any(Instant.class));

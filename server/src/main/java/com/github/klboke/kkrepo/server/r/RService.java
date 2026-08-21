@@ -339,8 +339,15 @@ public class RService {
 
   private RRegistryDao.Snapshot ensureSnapshot(
       RepositoryRuntime runtime, String namespace) {
+    return ensureSnapshot(runtime, namespace, 0);
+  }
+
+  private RRegistryDao.Snapshot ensureSnapshot(
+      RepositoryRuntime runtime, String namespace, long minimumRevision) {
     Optional<RRegistryDao.Snapshot> published = publishedSnapshots.find(runtime.id(), namespace);
-    if (published.isPresent()) return published.orElseThrow();
+    if (published.isPresent() && published.orElseThrow().revision() >= minimumRevision) {
+      return published.orElseThrow();
+    }
     RRegistryDao.SuiteState state = registry.findSuite(runtime.id(), namespace)
         .orElseGet(() -> registry.ensureSuite(runtime.id(), namespace, Instant.now()));
     if (state.desiredRevision() == state.publishedRevision()) {
@@ -459,8 +466,10 @@ public class RService {
           collectMembers(member, namespace, visiting, revisions, members, depth + 1);
           continue;
         }
-        if (member.isProxy()) proxyProjection.prepareGroupMember(member, Instant.now());
-        long revision = ensureSnapshot(member, namespace).revision();
+        long minimumRevision = member.isProxy()
+            ? proxyProjection.prepareGroupMember(member, Instant.now())
+            : 0;
+        long revision = ensureSnapshot(member, namespace, minimumRevision).revision();
         revisions.put(member.id(), revision);
         members.add(new ResolvedMember(member.id(), revision));
       }
