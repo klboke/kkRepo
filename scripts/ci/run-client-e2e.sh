@@ -23,6 +23,7 @@ CONDA_PROXY_REPOSITORY="${CONDA_E2E_PROXY_REPOSITORY:-conda-proxy}"
 CONDA_GROUP_REPOSITORY="${CONDA_E2E_GROUP_REPOSITORY:-conda-group}"
 APT_HOSTED_REPOSITORY="${APT_E2E_HOSTED_REPOSITORY:-apt-hosted}"
 APT_CLIENT_IMAGES="${APT_E2E_IMAGES:-debian12=debian:12-slim,ubuntu24=ubuntu:24.04,current=debian:testing-slim}"
+APT_PROXY_GATEWAY_PORT="${APT_E2E_PROXY_GATEWAY_PORT:-18982}"
 ALPINE_HOSTED_REPOSITORY="${ALPINE_E2E_HOSTED_REPOSITORY:-alpine-hosted}"
 ALPINE_PROXY_REPOSITORY="${ALPINE_E2E_PROXY_REPOSITORY:-alpine-proxy}"
 ALPINE_GROUP_REPOSITORY="${ALPINE_E2E_GROUP_REPOSITORY:-alpine-group}"
@@ -44,6 +45,8 @@ CLEANUP_FIXTURE_PATTERN=""
 CLEANUP_FIXTURE_LABEL=""
 SWIFT_CLEANUP_FIXTURE_AVAILABLE=false
 APT_E2E_CONTAINERS=()
+APT_PROXY_GATEWAY_CONTAINER=""
+APT_PROXY_GATEWAY_REMOTE_URL=""
 ALPINE_E2E_CONTAINERS=()
 R_E2E_CONTAINERS=()
 R_E2E_ORIGINAL_PROXY_REMOTE=""
@@ -3073,6 +3076,49 @@ PY
     "$KKREPO_URL/internal/repositories"
 }
 
+apt_wait_for_proxy_gateway() {
+  run_logged apt-proxy-gateway-ready curl -m 10 --fail-with-body -sS \
+    --retry 20 --retry-all-errors --retry-delay 1 \
+    "http://127.0.0.1:$APT_PROXY_GATEWAY_PORT/repository/$APT_HOSTED_REPOSITORY/dists/stable/InRelease"
+}
+
+apt_start_proxy_gateway() {
+  local directory="$1"
+  local config="$directory/proxy-gateway-nginx.conf"
+  local upstream_base
+  upstream_base="$(apt_client_base_url "$KKREPO_URL")"
+  APT_PROXY_GATEWAY_CONTAINER="kkrepo-apt-proxy-gateway-$STAMP"
+  APT_PROXY_GATEWAY_REMOTE_URL="http://host.docker.internal:$APT_PROXY_GATEWAY_PORT/repository/$APT_HOSTED_REPOSITORY/"
+  cat >"$config" <<EOF
+events {}
+http {
+  server {
+    listen 8080;
+    location / {
+      proxy_pass $upstream_base;
+    }
+  }
+}
+EOF
+  run_logged apt-proxy-gateway-start docker run --detach \
+    --name "$APT_PROXY_GATEWAY_CONTAINER" \
+    --add-host host.docker.internal:host-gateway \
+    --publish "$APT_PROXY_GATEWAY_PORT:8080" \
+    --volume "$config:/etc/nginx/nginx.conf:ro" \
+    nginx:1.29-alpine
+  APT_E2E_CONTAINERS+=("$APT_PROXY_GATEWAY_CONTAINER")
+  apt_wait_for_proxy_gateway
+}
+
+apt_stop_proxy_gateway() {
+  run_logged apt-proxy-gateway-stop docker stop "$APT_PROXY_GATEWAY_CONTAINER"
+}
+
+apt_restart_proxy_gateway() {
+  run_logged apt-proxy-gateway-restart docker start "$APT_PROXY_GATEWAY_CONTAINER"
+  apt_wait_for_proxy_gateway
+}
+
 apt_test_proxy_modes() {
   local directory="$1"
   local image="$2"
@@ -3081,7 +3127,8 @@ apt_test_proxy_modes() {
   local expected_message="$5"
   local expected_sha="$6"
   local upstream_url proxy_name resign_name proxy_config resign_config container
-  upstream_url="$(apt_client_base_url "$KKREPO_URL")/repository/$APT_HOSTED_REPOSITORY/"
+  apt_start_proxy_gateway "$directory"
+  upstream_url="$APT_PROXY_GATEWAY_REMOTE_URL"
   proxy_name="apt-proxy-$STAMP"
   resign_name="apt-resign-$STAMP"
 
@@ -3105,12 +3152,13 @@ apt_test_proxy_modes() {
   apt_install_version "$container" "$package" "$version" "$expected_message" "$expected_sha"
   apt_stop_client "$container"
 
-  set_repository_proxy_remote "$proxy_name" "http://host.docker.internal:9/unavailable/"
+  apt_stop_proxy_gateway
   container="kkrepo-apt-proxy-offline-${STAMP}"
   apt_start_client "$container" "$image" "$proxy_config"
   apt_prepare_client "$container"
   apt_install_version "$container" "$package" "$version" "$expected_message" "$expected_sha"
   apt_stop_client "$container"
+  apt_restart_proxy_gateway
 
   apt_create_proxy_repository "$resign_name" RESIGN "$upstream_url"
   run_logged_output apt-resign-inrelease "$directory/resign-InRelease" \
