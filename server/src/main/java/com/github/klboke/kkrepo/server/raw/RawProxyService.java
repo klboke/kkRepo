@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.raw;
 
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
@@ -17,6 +18,7 @@ import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -25,6 +27,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class RawProxyService {
   private static final long[] BACKOFF_SECONDS = {30, 60, 120, 300, 600, 1800};
+  static final String REMOTE_SOURCE_FINGERPRINT = "remoteSourceFingerprint";
 
   private final AssetDao assetDao;
   private final BlobStorageRegistry blobStorageRegistry;
@@ -84,7 +87,10 @@ public class RawProxyService {
   }
 
   public MavenResponse getAsset(RepositoryRuntime runtime, String path, String remotePath, boolean headOnly) {
-    Optional<CachedAssetMetadata> cached = lookupCached(runtime, path);
+    String remoteUrl = buildRemoteUrl(runtime.proxyRemoteUrl(), remotePath);
+    String sourceFingerprint = remoteSourceFingerprint(runtime, remoteUrl);
+    Optional<CachedAssetMetadata> cached = sourceCompatible(
+        lookupCached(runtime, path), sourceFingerprint);
     Instant now = Instant.now();
     if (cached.isPresent() && isFresh(cached.get(), runtime.contentMaxAgeMinutesOrDefault(), now)) {
       return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
@@ -98,7 +104,8 @@ public class RawProxyService {
       }
       throw new MavenExceptions.BadUpstreamException("Upstream temporarily blocked: " + runtime.proxyRemoteUrl());
     }
-    return fetchAndCache(runtime, path, remotePath, cached, headOnly, now);
+    return fetchAndCache(
+        runtime, path, remoteUrl, sourceFingerprint, cached, headOnly, now);
   }
 
   public MavenResponse getAssetFromUrl(RepositoryRuntime runtime, String path, String remoteUrl, boolean headOnly) {
@@ -219,7 +226,9 @@ public class RawProxyService {
       ComponentBinding componentBinding,
       String browsePath,
       boolean headOnly) {
-    Optional<CachedAssetMetadata> cached = lookupCached(runtime, path);
+    String sourceFingerprint = remoteSourceFingerprint(runtime, remoteUrl);
+    Optional<CachedAssetMetadata> cached = sourceCompatible(
+        lookupCached(runtime, path), sourceFingerprint);
     Instant now = Instant.now();
     if (cached.isPresent() && isFresh(cached.get(), maxAgeMinutes, now)) {
       return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
@@ -234,8 +243,8 @@ public class RawProxyService {
       throw new MavenExceptions.BadUpstreamException("Upstream temporarily blocked: " + remoteUrl);
     }
     return fetchAndCacheUrl(
-        runtime, path, remoteUrl, cached, headOnly, now, timeoutProfile, componentBinding,
-        browsePath);
+        runtime, path, remoteUrl, sourceFingerprint, cached, headOnly, now, timeoutProfile,
+        componentBinding, browsePath);
   }
 
   private Optional<CachedAssetMetadata> lookupCached(RepositoryRuntime runtime, String path) {
@@ -247,7 +256,8 @@ public class RawProxyService {
   private MavenResponse fetchAndCache(
       RepositoryRuntime runtime,
       String path,
-      String remotePath,
+      String remoteUrl,
+      String sourceFingerprint,
       Optional<CachedAssetMetadata> cached,
       boolean headOnly,
       Instant now) {
@@ -259,17 +269,19 @@ public class RawProxyService {
       lastModified = instantAttr(attrs, "remoteLastModified");
     }
     HttpRemoteFetcher.Request req = new HttpRemoteFetcher.Request(
-        buildRemoteUrl(runtime.proxyRemoteUrl(), remotePath), etag, lastModified, null, false)
+        remoteUrl, etag, lastModified, null, false)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
         .withRepository(runtime);
     return fetchAndCache(
-        runtime, path, cached, headOnly, now, req, ComponentBinding.perAsset(), path);
+        runtime, path, sourceFingerprint, cached, headOnly, now, req,
+        ComponentBinding.perAsset(), path);
   }
 
   private MavenResponse fetchAndCacheUrl(
       RepositoryRuntime runtime,
       String path,
       String remoteUrl,
+      String sourceFingerprint,
       Optional<CachedAssetMetadata> cached,
       boolean headOnly,
       Instant now,
@@ -286,7 +298,8 @@ public class RawProxyService {
     HttpRemoteFetcher.Request req = cachePopulationRequest(
         runtime, remoteUrl, etag, lastModified).withTimeoutProfile(timeoutProfile);
     return fetchAndCache(
-        runtime, path, cached, headOnly, now, req, componentBinding, browsePath);
+        runtime, path, sourceFingerprint, cached, headOnly, now, req, componentBinding,
+        browsePath);
   }
 
   static HttpRemoteFetcher.Request cachePopulationRequest(
@@ -306,6 +319,7 @@ public class RawProxyService {
   private MavenResponse fetchAndCache(
       RepositoryRuntime runtime,
       String path,
+      String sourceFingerprint,
       Optional<CachedAssetMetadata> cached,
       boolean headOnly,
       Instant now,
@@ -325,7 +339,7 @@ public class RawProxyService {
         if (status >= 200 && status < 300) {
           negativeCache.invalidate(runtime, path);
           RawAssetWriter.Stored stored = persist(
-              runtime, path, result, componentBinding, browsePath);
+              runtime, path, result, sourceFingerprint, componentBinding, browsePath);
           try {
             proxyStateDao.recordSuccess(runtime.id(), now);
             if (headOnly) {
@@ -364,9 +378,11 @@ public class RawProxyService {
       RepositoryRuntime runtime,
       String path,
       HttpRemoteFetcher.Result result,
+      String sourceFingerprint,
       ComponentBinding componentBinding,
       String browsePath) {
     Map<String, String> extras = new HashMap<>();
+    extras.put(REMOTE_SOURCE_FINGERPRINT, sourceFingerprint);
     if (result.etag() != null) extras.put("remoteEtag", result.etag());
     if (result.lastModified() != null) extras.put("remoteLastModified", result.lastModified().toString());
     String clientIp = ProxyRequestAudit.currentClientIp();
@@ -410,6 +426,31 @@ public class RawProxyService {
     if (snapshot.lastUpdatedAt() == null) return false;
     if (ttlMinutes < 0) return true;
     return snapshot.lastUpdatedAt().plusSeconds(ttlMinutes * 60L).isAfter(now);
+  }
+
+  /**
+   * Rejects a cache entry written for another configured upstream. Entries created before source
+   * fingerprints were introduced remain usable and acquire a fingerprint on their next 200
+   * refresh, avoiding a fleet-wide cold-cache event during upgrades.
+   */
+  private static Optional<CachedAssetMetadata> sourceCompatible(
+      Optional<CachedAssetMetadata> cached,
+      String expectedFingerprint) {
+    if (cached.isEmpty() || cached.get().blob() == null) {
+      return cached;
+    }
+    String actual = stringAttr(
+        cached.get().blob().attributes(), REMOTE_SOURCE_FINGERPRINT);
+    return actual == null || actual.equals(expectedFingerprint) ? cached : Optional.empty();
+  }
+
+  static String remoteSourceFingerprint(RepositoryRuntime runtime, String remoteUrl) {
+    String configuredSource = runtime == null ? null : runtime.proxyRemoteUrl();
+    String source = configuredSource == null || configuredSource.isBlank()
+        ? remoteUrl
+        : configuredSource;
+    return HexFormat.of().formatHex(
+        PersistenceHashes.sha256("raw-proxy-source-v1", source));
   }
 
   private void ensureProxy(RepositoryRuntime runtime) {

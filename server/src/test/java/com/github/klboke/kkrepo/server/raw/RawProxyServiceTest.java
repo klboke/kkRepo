@@ -155,6 +155,66 @@ class RawProxyServiceTest {
   }
 
   @Test
+  void refetchesFreshAssetAfterConfiguredProxySourceChanges() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 60);
+    String path = "src/contrib/PACKAGES.gz";
+    String remoteUrl = "https://upstream.example.test/" + path;
+    CachedAssetMetadata cached = snapshot(
+        Instant.now().plusSeconds(60),
+        Map.of(
+            RawProxyService.REMOTE_SOURCE_FINGERPRINT, "different-upstream",
+            "remoteEtag", "old-etag",
+            "remoteLastModified", "2026-07-12T00:00:00Z"));
+    when(fixture.cache.find(eq(runtime.id()), eq(path), any()))
+        .thenReturn(Optional.of(cached));
+
+    BlobStorage storage = mock(BlobStorage.class);
+    when(fixture.registry.forBlobStoreId(1L)).thenReturn(storage);
+    AssetRecord storedAsset = new AssetRecord(
+        11L, runtime.id(), null, 12L, RepositoryFormat.R, path, null,
+        "PACKAGES.gz", "package-index", "application/gzip", 4L, null,
+        Instant.EPOCH, Map.of());
+    AssetBlobRecord storedBlob = new AssetBlobRecord(
+        12L, 1L, "blob://r/PACKAGES.gz", null, "PACKAGES.gz", null,
+        "sha1", "sha256", "md5", 4L, "application/gzip", "proxy", null,
+        Instant.EPOCH, Instant.EPOCH, Map.of());
+    RawAssetWriter.Stored stored = new RawAssetWriter.Stored(
+        storedAsset, storedBlob, null, true, null);
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.reader.serve(storedAsset, true, path, "ATTACHMENT"))
+        .thenReturn(expected);
+    when(fixture.writer.writeUnindexed(
+        eq(runtime), eq(storage), eq(1L), eq(path), any(), eq("application/gzip"),
+        any(), eq("proxy"), isNull(), eq(true)))
+        .thenAnswer(invocation -> {
+          @SuppressWarnings("unchecked")
+          Map<String, String> extras = invocation.getArgument(6);
+          assertEquals(
+              RawProxyService.remoteSourceFingerprint(runtime, remoteUrl),
+              extras.get(RawProxyService.REMOTE_SOURCE_FINGERPRINT));
+          return stored;
+        });
+    doAnswer(invocation -> {
+      HttpRemoteFetcher.Request request = invocation.getArgument(0);
+      assertEquals(remoteUrl, request.url());
+      assertEquals(null, request.etag());
+      assertEquals(null, request.lastModified());
+      HttpRemoteFetcher.ResultHandler<?> handler = invocation.getArgument(2);
+      return handler.handle(new HttpRemoteFetcher.Result(
+          200,
+          Map.of("Content-Type", "application/gzip", "Content-Length", "4"),
+          new ByteArrayInputStream(new byte[] {1, 2, 3, 4})));
+    }).when(fixture.fetcher).fetchWithBodyRetry(any(), eq(path), any());
+
+    assertSame(expected, fixture.service.getMetadataFromUrlUnindexed(
+        runtime, path, remoteUrl, true));
+
+    verify(fixture.reader, never()).serveSnapshot(
+        cached, true, path, "ATTACHMENT");
+  }
+
+  @Test
   void coldPinnedAssetsSupportEveryComponentBinding() throws Exception {
     Fixture fixture = fixture();
     RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 60);
@@ -308,13 +368,19 @@ class RawProxyServiceTest {
   }
 
   private static CachedAssetMetadata snapshot(Instant updatedAt) {
+    return snapshot(updatedAt, Map.of());
+  }
+
+  private static CachedAssetMetadata snapshot(
+      Instant updatedAt,
+      Map<String, Object> blobAttributes) {
     AssetRecord asset = new AssetRecord(
         1L, 10L, null, 2L, RepositoryFormat.RAW, "file.txt", null,
         "file.txt", "raw", "text/plain", 4L, null, updatedAt, Map.of());
     AssetBlobRecord blob = new AssetBlobRecord(
         2L, 1L, "blob://bucket/file.txt", null, "file.txt", null,
         "sha1", "sha256", "md5", 4, "text/plain", "proxy", "upstream",
-        Instant.EPOCH, updatedAt, Map.of());
+        Instant.EPOCH, updatedAt, blobAttributes);
     return CachedAssetMetadata.of(asset, blob);
   }
 
