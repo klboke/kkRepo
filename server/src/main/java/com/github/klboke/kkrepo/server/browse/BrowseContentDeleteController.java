@@ -804,7 +804,7 @@ public class BrowseContentDeleteController {
     if (target.type() != RepositoryType.HOSTED || target.format() != RepositoryFormat.MAVEN2) {
       return;
     }
-    MavenCoordinates coordinates = mavenCoordinates(storagePath);
+    MavenCoordinates coordinates = mavenCoordinates(target.id(), storagePath);
     if (coordinates == null) {
       return;
     }
@@ -855,7 +855,7 @@ public class BrowseContentDeleteController {
 
   private static final MavenPathParser MAVEN_PATH_PARSER = new MavenPathParser();
 
-  private MavenCoordinates mavenCoordinates(String path) {
+  private MavenCoordinates mavenCoordinates(long repositoryId, String path) {
     String normalized = isMavenHash(path)
         ? path.substring(0, path.lastIndexOf('.'))
         : path;
@@ -864,10 +864,10 @@ public class BrowseContentDeleteController {
       return new MavenCoordinates(
           coordinates.groupId(), coordinates.artifactId(), coordinates.baseVersion());
     }
-    return mavenDirectoryOrMetadataCoordinates(normalized);
+    return mavenDirectoryOrMetadataCoordinates(repositoryId, normalized);
   }
 
-  private MavenCoordinates mavenDirectoryOrMetadataCoordinates(String path) {
+  private MavenCoordinates mavenDirectoryOrMetadataCoordinates(long repositoryId, String path) {
     String[] segments = path.split("/");
     if (segments.length < 3) {
       return null;
@@ -879,7 +879,22 @@ public class BrowseContentDeleteController {
       if (groupSegments.isEmpty()) {
         return null;
       }
-      return new MavenCoordinates(String.join(".", groupSegments), artifactId, "");
+      MavenCoordinates gaCoordinates =
+          new MavenCoordinates(String.join(".", groupSegments), artifactId, "");
+      // A V-level metadata path can also look like A-level metadata when the artifactId itself
+      // ends with SNAPSHOT. Preserve an existing GA; otherwise follow Maven's snapshot directory
+      // layout and treat the parent segment as the base version.
+      if (segments.length >= 4
+          && artifactId.endsWith("SNAPSHOT")
+          && componentDao.listByGa(
+                  repositoryId, gaCoordinates.groupId(), gaCoordinates.artifactId())
+              .isEmpty()) {
+        String version = artifactId;
+        artifactId = segments[segments.length - 3];
+        groupSegments = List.of(segments).subList(0, segments.length - 3);
+        return new MavenCoordinates(String.join(".", groupSegments), artifactId, version);
+      }
+      return gaCoordinates;
     }
     String version = segments[segments.length - 1];
     String artifactId = segments[segments.length - 2];
