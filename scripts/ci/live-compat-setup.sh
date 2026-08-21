@@ -208,6 +208,50 @@ ensure_r_migration_upstream() {
   echo "[compat] controlled R migration upstream is ready: $R_MIGRATION_UPSTREAM_URL"
 }
 
+configure_nexus_r_migration_ssrf_allowlist() {
+  if [[ "$R_MIGRATION_ENABLED" != "true" ]]; then
+    return 0
+  fi
+  local current_file updated_file response_file status
+  current_file="$(mktemp)"
+  updated_file="$(mktemp)"
+  response_file="$(mktemp)"
+  curl -m 20 -fsS -u "$NEXUS_AUTH" \
+    "$NEXUS_URL/service/rest/v1/security/ssrf-protection" >"$current_file"
+  python3 - "$current_file" "$updated_file" "$R_MIGRATION_UPSTREAM_CONTAINER" <<'PY'
+import json
+import pathlib
+import sys
+
+source, target = map(pathlib.Path, sys.argv[1:3])
+domain = sys.argv[3]
+configuration = json.loads(source.read_text(encoding="utf-8"))
+allowed_domains = list(configuration.get("allowedDomains") or [])
+if domain not in allowed_domains:
+    allowed_domains.append(domain)
+configuration["allowedDomains"] = allowed_domains
+configuration["allowedIPs"] = list(configuration.get("allowedIPs") or [])
+target.write_text(json.dumps(configuration, separators=(",", ":")), encoding="utf-8")
+PY
+  status="$(curl -m 20 -sS \
+    -u "$NEXUS_AUTH" \
+    -X PUT \
+    -H "Content-Type: application/json" \
+    --data-binary "@$updated_file" \
+    -o "$response_file" \
+    -w "%{http_code}" \
+    "$NEXUS_URL/service/rest/v1/security/ssrf-protection" || true)"
+  if [[ "$status" =~ ^2[0-9][0-9]$ ]]; then
+    echo "[compat] Nexus SSRF allowlist includes controlled R migration upstream"
+    rm -f "$current_file" "$updated_file" "$response_file"
+    return 0
+  fi
+  echo "[compat] Nexus SSRF allowlist update failed with HTTP $status" >&2
+  cat "$response_file" >&2 || true
+  rm -f "$current_file" "$updated_file" "$response_file"
+  return 1
+}
+
 configure_nexus_conan_realm() {
   local current_file updated_file response_file status
   current_file="$(mktemp)"
@@ -1383,6 +1427,7 @@ accept_nexus_eula_if_required
 configure_nexus_anonymous_access
 configure_nexus_conan_realm
 ensure_r_migration_upstream
+configure_nexus_r_migration_ssrf_allowlist
 ensure_nexus_repositories
 initialize_kkrepo_admin
 ensure_kkrepo_blob_store
