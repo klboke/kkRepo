@@ -351,9 +351,10 @@ public class RepositoryService {
       if (recipe.format() == RepositoryFormat.ALPINE && alpineRegistry != null) {
         markAlpineSuitesDirty(id);
       }
-      if (recipe.format() == RepositoryFormat.R && rRegistry != null) {
-        markRSuiteDirty(id);
-      }
+      // Keep the initial R group snapshot lazy. An eager dirty mark would make every replica
+      // project a potentially large public CRAN proxy as soon as the group is created, before a
+      // client has requested metadata. The first PACKAGES.gz read establishes the durable
+      // snapshot; existing member and configuration change paths still invalidate it.
     }
 
     invalidateRuntimeCache(id, name);

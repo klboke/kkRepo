@@ -75,7 +75,7 @@ class RepositoryServiceTest {
   }
 
   @Test
-  void rGroupCreationAndMemberReplacementDirtyDurableSnapshot() {
+  void rGroupCreationIsLazyAndMemberReplacementDirtiesDurableSnapshot() {
     StubRepositoryDao repositories = new StubRepositoryDao(
         rHostedRepository(71L, "cran-first"),
         rHostedRepository(72L, "cran-second"));
@@ -90,16 +90,20 @@ class RepositoryServiceTest {
 
     assertEquals(List.of("cran-first", "cran-second"), created.group().memberNames());
     assertEquals(List.of(71L, 72L), repositories.membersByGroupId.get(100L));
-    verify(registry, org.mockito.Mockito.atLeastOnce()).markSuiteDirty(
+    verify(registry).ensureSuite(
         org.mockito.ArgumentMatchers.eq(100L),
         org.mockito.ArgumentMatchers.eq("src/contrib"),
+        org.mockito.ArgumentMatchers.any());
+    verify(registry, org.mockito.Mockito.never()).markSuiteDirty(
+        org.mockito.ArgumentMatchers.anyLong(),
+        org.mockito.ArgumentMatchers.anyString(),
         org.mockito.ArgumentMatchers.any());
 
     RepositoryView updated = service.replaceMembers(
         "cran-root", List.of("cran-second", "cran-first"));
     assertEquals(List.of("cran-second", "cran-first"), updated.group().memberNames());
     assertEquals(List.of(72L, 71L), repositories.membersByGroupId.get(100L));
-    verify(registry, org.mockito.Mockito.atLeast(2)).markSuiteDirty(
+    verify(registry).markSuiteDirty(
         org.mockito.ArgumentMatchers.eq(100L),
         org.mockito.ArgumentMatchers.eq("src/contrib"),
         org.mockito.ArgumentMatchers.any());
