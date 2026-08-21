@@ -22,6 +22,8 @@ import com.github.klboke.kkrepo.protocol.conda.CondaPath;
 import com.github.klboke.kkrepo.protocol.nuget.NugetPath;
 import com.github.klboke.kkrepo.protocol.nuget.NugetPathParser;
 import com.github.klboke.kkrepo.protocol.nuget.NugetPaths;
+import com.github.klboke.kkrepo.protocol.maven.path.Coordinates;
+import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.protocol.swift.SwiftPath;
 import com.github.klboke.kkrepo.protocol.swift.SwiftPathParser;
 import com.github.klboke.kkrepo.protocol.swift.SwiftToolsVersions;
@@ -851,11 +853,22 @@ public class BrowseContentDeleteController {
     return null;
   }
 
+  private static final MavenPathParser MAVEN_PATH_PARSER = new MavenPathParser();
+
   private MavenCoordinates mavenCoordinates(String path) {
     String normalized = isMavenHash(path)
         ? path.substring(0, path.lastIndexOf('.'))
         : path;
-    String[] segments = normalized.split("/");
+    Coordinates coordinates = MAVEN_PATH_PARSER.parsePath(normalized).coordinates();
+    if (coordinates != null) {
+      return new MavenCoordinates(
+          coordinates.groupId(), coordinates.artifactId(), coordinates.baseVersion());
+    }
+    return mavenDirectoryOrMetadataCoordinates(normalized);
+  }
+
+  private MavenCoordinates mavenDirectoryOrMetadataCoordinates(String path) {
+    String[] segments = path.split("/");
     if (segments.length < 3) {
       return null;
     }
@@ -868,28 +881,13 @@ public class BrowseContentDeleteController {
       }
       return new MavenCoordinates(String.join(".", groupSegments), artifactId, "");
     }
-
-    boolean assetPath = looksLikeMavenAssetPath(segments);
-    String version = assetPath ? segments[segments.length - 2] : segments[segments.length - 1];
-    String artifactId = assetPath ? segments[segments.length - 3] : segments[segments.length - 2];
-    List<String> groupSegments = assetPath
-        ? List.of(segments).subList(0, segments.length - 3)
-        : List.of(segments).subList(0, segments.length - 2);
+    String version = segments[segments.length - 1];
+    String artifactId = segments[segments.length - 2];
+    List<String> groupSegments = List.of(segments).subList(0, segments.length - 2);
     if (groupSegments.isEmpty()) {
       return null;
     }
     return new MavenCoordinates(String.join(".", groupSegments), artifactId, version);
-  }
-
-  private boolean looksLikeMavenAssetPath(String[] segments) {
-    if (segments.length < 4) {
-      return false;
-    }
-    String filename = segments[segments.length - 1];
-    String version = segments[segments.length - 2];
-    String artifactId = segments[segments.length - 3];
-    return filename.startsWith(artifactId + "-" + version + ".")
-        || filename.startsWith(artifactId + "-" + version + "-");
   }
 
   private static String toStoragePath(RepositoryFormat format, String publicPath) {
