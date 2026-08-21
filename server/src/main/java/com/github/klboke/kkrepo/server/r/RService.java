@@ -313,13 +313,18 @@ public class RService {
   private MavenResponse getGroup(
       RepositoryRuntime runtime, RPath path, boolean headOnly) {
     if (!path.gzip()) throw new MavenExceptions.MavenNotFoundException(path.normalized());
-    RRegistryDao.Snapshot snapshot = ensureGroupSnapshot(runtime, SOURCE_NAMESPACE);
     if (path.kind() == RPath.Kind.PACKAGES_GZIP) {
+      RRegistryDao.Snapshot snapshot = ensureGroupSnapshot(runtime, SOURCE_NAMESPACE);
       String hidden = snapshot.manifest().get(path.normalized());
       if (hidden == null) throw new MavenExceptions.MavenNotFoundException(path.normalized());
       return assets.serve(runtime, hidden, headOnly)
           .withHeader("Cache-Control", "public, max-age=0, must-revalidate");
     }
+    // Package bytes are pinned by the group binding created with the published index. Do not
+    // contact an upstream proxy again here: the next PACKAGES.gz request refreshes the projection,
+    // while this immutable download continues to resolve against one coherent snapshot.
+    RRegistryDao.Snapshot snapshot = publishedSnapshots.find(runtime.id(), SOURCE_NAMESPACE)
+        .orElseGet(() -> ensureGroupSnapshot(runtime, SOURCE_NAMESPACE));
     RRegistryDao.GroupBinding binding = registry.findGroupBinding(
         runtime.id(), SOURCE_NAMESPACE, snapshot.revision(), path.normalized()).orElseThrow(
             () -> new MavenExceptions.MavenNotFoundException(path.normalized()));
@@ -348,7 +353,10 @@ public class RService {
 
   private RRegistryDao.Snapshot ensureGroupSnapshot(
       RepositoryRuntime runtime, String namespace) {
-    String fingerprint = memberFingerprint(runtime, namespace);
+    // Refresh proxy projections before comparing revisions. A repository configuration change or
+    // an upstream PACKAGES.gz update can leave the last published proxy revision unchanged until
+    // it is observed; comparing that stale revision first would incorrectly reuse the group index.
+    String fingerprint = resolveGroup(runtime, namespace).memberFingerprint();
     RRegistryDao.Snapshot current = publishedSnapshots.find(runtime.id(), namespace).orElse(null);
     if (current == null || !fingerprint.equals(current.manifest().get("@members"))) {
       registry.ensureSuite(runtime.id(), namespace, Instant.now());
