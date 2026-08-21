@@ -888,8 +888,17 @@ public class BrowseContentDeleteController {
     String filename = segments[segments.length - 1];
     String version = segments[segments.length - 2];
     String artifactId = segments[segments.length - 3];
-    return filename.startsWith(artifactId + "-" + version + ".")
-        || filename.startsWith(artifactId + "-" + version + "-");
+    if (filename.startsWith(artifactId + "-" + version + ".")
+        || filename.startsWith(artifactId + "-" + version + "-")) {
+      return true;
+    }
+    // Maven timestamped snapshots use the base version without the -SNAPSHOT suffix in the
+    // file name: {artifactId}-{version}-{timestamp}-{buildNumber}.{ext}
+    if (version.endsWith("-SNAPSHOT")) {
+      String baseVersion = version.substring(0, version.length() - "-SNAPSHOT".length());
+      return filename.startsWith(artifactId + "-" + baseVersion + "-");
+    }
+    return false;
   }
 
   private static String toStoragePath(RepositoryFormat format, String publicPath) {

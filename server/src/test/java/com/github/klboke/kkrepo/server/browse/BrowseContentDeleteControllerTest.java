@@ -458,6 +458,30 @@ class BrowseContentDeleteControllerTest {
   }
 
   @Test
+  void deletesTimestampedMavenSnapshotAssetAndEnqueuesMetadataRebuilds() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord repository =
+        repository(1L, "maven", RepositoryFormat.MAVEN2, RepositoryType.HOSTED);
+    String path = "com/acme/app/1.0-SNAPSHOT/app-1.0-20260623.055437-2.jar";
+    AssetRecord jar = asset(11L, 21L, 31L, RepositoryFormat.MAVEN2, path, "artifact", Map.of());
+    AssetRecord sha1 = asset(
+        12L, null, 32L, RepositoryFormat.MAVEN2, path + ".sha1", "checksum", Map.of());
+    when(fixture.repositoryDao.findByName("maven")).thenReturn(Optional.of(repository));
+    when(fixture.assetDao.findAssetByPath(1L, path)).thenReturn(Optional.of(jar));
+    when(fixture.assetDao.findAssetByPath(1L, path + ".sha1")).thenReturn(Optional.of(sha1));
+    when(fixture.assetDao.listAssetsByPrefix(1L, path + "/")).thenReturn(List.of());
+
+    BrowseContentDeleteController.BrowseDeleteResult result = fixture.controller.delete(
+        "maven", "/" + path, null, new MockHttpServletRequest());
+
+    assertEquals(2, result.deletedAssets());
+    verify(fixture.assetDao).deleteAssetById(11L);
+    verify(fixture.assetDao).deleteAssetById(12L);
+    verify(fixture.metadataRebuildDao).enqueue(1L, "ga:com.acme/app");
+    verify(fixture.metadataRebuildDao).enqueue(1L, "gav:com.acme/app/1.0-SNAPSHOT");
+  }
+
+  @Test
   void validatesExplicitGroupSourceMembership() {
     Fixture fixture = fixture(true, AccessDecision.allow());
     RepositoryRecord group =
