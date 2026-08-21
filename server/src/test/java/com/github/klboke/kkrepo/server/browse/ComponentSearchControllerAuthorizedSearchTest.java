@@ -14,6 +14,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.ComponentSearchCursor;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.ComponentSearchRow;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCatalogCache;
@@ -248,6 +249,44 @@ class ComponentSearchControllerAuthorizedSearchTest {
   }
 
   @Test
+  void rSearchDetailsUseTheDurablePackageProjection() {
+    String path = "src/contrib/demo_1.2.3.tar.gz";
+    StubComponentDao components = new StubComponentDao(List.of(rRow(path)));
+    StubAssetDao assets = new StubAssetDao(Map.of());
+    RecordingSecurityService security = new RecordingSecurityService(
+        Map.of("cran", RepositoryAccessMode.FULL), permission -> false);
+    ComponentSearchController controller = controller(
+        components, assets, security, catalog(List.of(rHosted(10L, "cran")), Map.of()));
+
+    assertTrue(controller.search(null, "r", 10, request())
+        .items().getFirst().details().isEmpty());
+
+    RRegistryDao r = mock(RRegistryDao.class);
+    controller.setRRegistry(r);
+    assertTrue(controller.search(null, "r", 10, request())
+        .items().getFirst().details().isEmpty());
+    when(r.findPackageByPath(10L, path)).thenReturn(Optional.of(rPackage(path)));
+
+    Map<String, Object> details = controller.search(null, "r", 10, request())
+        .items().getFirst().details();
+
+    assertEquals("src/contrib", details.get("namespace"));
+    assertEquals("demo_1.2.3.tar.gz", details.get("filename"));
+    assertEquals("a".repeat(32), details.get("md5"));
+    assertEquals("b".repeat(64), details.get("sha256"));
+    assertEquals(512L, details.get("size"));
+    assertEquals(RRegistryDao.SOURCE_HOSTED, details.get("sourceKind"));
+    assertEquals("cran", details.get("sourceRepository"));
+    assertEquals("MIT", details.get("License"));
+    assertEquals("R (>= 4.3)", details.get("Depends"));
+    assertEquals("methods", details.get("Imports"));
+    assertEquals("Rcpp", details.get("LinkingTo"));
+    assertEquals("testthat", details.get("Suggests"));
+    assertEquals("parallel", details.get("Enhances"));
+    assertEquals("yes", details.get("NeedsCompilation"));
+  }
+
+  @Test
   void legacyResponseConstructorDefaultsTruncationToFalse() {
     ComponentSearchController.ComponentSearchResponse response =
         new ComponentSearchController.ComponentSearchResponse(10, 0, List.of());
@@ -280,6 +319,12 @@ class ComponentSearchControllerAuthorizedSearchTest {
 
   private static RepositoryRecord hosted(long id, String name) {
     return repository(id, name, RepositoryType.HOSTED);
+  }
+
+  private static RepositoryRecord rHosted(long id, String name) {
+    return new RepositoryRecord(
+        id, name, RepositoryFormat.R, RepositoryType.HOSTED, "r-hosted", true, 1L,
+        null, null, null, null, "ALLOW_ONCE", true, Map.of());
   }
 
   private static RepositoryRecord group(long id, String name) {
@@ -321,6 +366,26 @@ class ComponentSearchControllerAuthorizedSearchTest {
         "component",
         Instant.ofEpochSecond(timestampSeconds),
         null);
+  }
+
+  private static ComponentSearchRow rRow(String path) {
+    return new ComponentSearchRow(
+        1L, 10L, "cran", RepositoryFormat.R, "source", "demo", "1.2.3",
+        "r-source-package", Instant.EPOCH, path);
+  }
+
+  private static RRegistryDao.PackageRecord rPackage(String path) {
+    return new RRegistryDao.PackageRecord(
+        1L, 10L, "src/contrib", "source", "source", "demo", "1.2.3",
+        "r1|0000000001.0000000002.0000000003".getBytes(java.nio.charset.StandardCharsets.US_ASCII),
+        "source", "demo_1.2.3.tar.gz", path,
+        Map.of(
+            "Package", "demo", "Version", "1.2.3", "License", "MIT",
+            "Depends", "R (>= 4.3)", "Imports", "methods", "LinkingTo", "Rcpp",
+            "Suggests", "testthat", "Enhances", "parallel", "NeedsCompilation", "yes"),
+        "a".repeat(32), "b".repeat(64), "b".repeat(64), 512L,
+        2L, 1L, RRegistryDao.SOURCE_HOSTED, 7L,
+        Instant.EPOCH, Instant.EPOCH, Instant.EPOCH);
   }
 
   private static AssetRecord asset(long componentId, long repositoryId, String path) {

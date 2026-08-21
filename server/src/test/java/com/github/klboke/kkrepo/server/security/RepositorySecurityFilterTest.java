@@ -1530,6 +1530,13 @@ class RepositorySecurityFilterTest {
     assertCondaPutAction(path, Set.of(path), PermissionAction.EDIT);
   }
 
+  @Test
+  void rPutRequiresAddForANewPathAndEditForAnExistingPath() throws Exception {
+    String path = "src/contrib/demo_1.0.tar.gz";
+    assertRPutAction(path, Set.of(), PermissionAction.ADD);
+    assertRPutAction(path, Set.of(path), PermissionAction.EDIT);
+  }
+
   private static void assertCondaPutAction(
       String path, Set<String> existingPaths, PermissionAction expected) throws Exception {
     StubAuthenticationService authentication =
@@ -1548,6 +1555,31 @@ class RepositorySecurityFilterTest {
 
     filter.doFilter(
         request("PUT", "/repository/conda-hosted/" + path),
+        new MockHttpServletResponse(),
+        chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(expected, decisions.permission.action());
+  }
+
+  private static void assertRPutAction(
+      String path, Set<String> existingPaths, PermissionAction expected) throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "r-hosted", RepositoryFormat.R, RepositoryType.HOSTED)),
+        new FakeAssetDao(existingPaths),
+        terraformRegistry(Set.of()),
+        new ForwardedHeaderPolicy(""),
+        new NexusLegacyUiCompatibility(false));
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("PUT", "/repository/r-hosted/" + path),
         new MockHttpServletResponse(),
         chain);
 

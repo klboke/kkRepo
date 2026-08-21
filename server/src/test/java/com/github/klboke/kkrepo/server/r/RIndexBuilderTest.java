@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.r;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -15,6 +16,8 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.RRegistryDao;
 import com.github.klboke.kkrepo.protocol.r.RPackageIndex;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.time.Instant;
@@ -42,11 +45,14 @@ class RIndexBuilderTest {
     }).when(assets).storeGeneratedFile(eq(runtime()), any(), any(), any());
     RRegistryDao.PackageRecord alpha = row("alpha", "3.0", 3L);
     RRegistryDao.PackageRecord selectedByRVersion = row("demo", "0.75", 1L);
+    RRegistryDao.PackageRecord lexicalTie = row(
+        "demo", "0.75", 4L, "src/contrib/z-demo_0.75.tar.gz");
     RRegistryDao.PackageRecord lexicallyLarger = row("demo", "0.9", 2L);
 
     RIndexBuilder.BuiltSnapshot built = builder.build(
         runtime(), state,
-        visitor -> List.of(alpha, selectedByRVersion, lexicallyLarger).forEach(visitor));
+        visitor -> List.of(alpha, lexicalTie, selectedByRVersion, lexicallyLarger)
+            .forEach(visitor));
     byte[] firstBytes = first.get();
     AtomicReference<byte[]> second = new AtomicReference<>();
     doAnswer(invocation -> {
@@ -55,7 +61,8 @@ class RIndexBuilderTest {
     }).when(assets).storeGeneratedFile(eq(runtime()), eq(path.get()), any(), any());
     builder.build(
         runtime(), state,
-        visitor -> List.of(alpha, selectedByRVersion, lexicallyLarger).forEach(visitor));
+        visitor -> List.of(alpha, lexicalTie, selectedByRVersion, lexicallyLarger)
+            .forEach(visitor));
 
     assertTrue(path.get().startsWith(".r/snapshots/"));
     assertTrue(path.get().endsWith("/9/PACKAGES.gz"));
@@ -87,12 +94,33 @@ class RIndexBuilderTest {
         eq(7L), eq("src/contrib"), eq("source"), eq("source"), any());
   }
 
+  @Test
+  void convertsStreamingWriteFailuresIntoSnapshotBuildFailures() {
+    RIndexBuilder builder = new RIndexBuilder(
+        mock(RRegistryDao.class), mock(RAssetSupport.class));
+    RRegistryDao.SuiteState state = new RRegistryDao.SuiteState(
+        7L, "src/contrib", 1L, Instant.EPOCH, 0L, 0, null, null, null, Instant.EPOCH);
+
+    IllegalStateException failure = assertThrows(IllegalStateException.class,
+        () -> builder.build(runtime(), state, visitor -> {
+          throw new UncheckedIOException(new IOException("fixture failure"));
+        }));
+
+    assertTrue(failure.getMessage().contains("Failed to build R PACKAGES.gz snapshot"));
+  }
+
   private static RRegistryDao.PackageRecord row(String name, String version, long id) {
     String filename = name + "_" + version + ".tar.gz";
+    return row(name, version, id, "src/contrib/" + filename);
+  }
+
+  private static RRegistryDao.PackageRecord row(
+      String name, String version, long id, String path) {
+    String filename = path.substring(path.lastIndexOf('/') + 1);
     return new RRegistryDao.PackageRecord(
         id, 7L, "src/contrib", "source", "source", name, version,
         ("r1|" + version).getBytes(StandardCharsets.US_ASCII), "source", filename,
-        "src/contrib/" + filename,
+        path,
         Map.of("Package", name, "Version", version, "License", "MIT"),
         "%032x".formatted(id), "a".repeat(64), "b".repeat(64), 12L,
         id, id, RRegistryDao.SOURCE_HOSTED, id, Instant.EPOCH, Instant.EPOCH, Instant.EPOCH);

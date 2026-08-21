@@ -125,6 +125,29 @@ class BrowseContentDeleteControllerTest {
         repository.name(), "COMPONENT", component.id(), null, "cleanup-run:4"));
     assertEquals(1, fixture.controller.deleteForCleanup(
         repository.name(), "COMPONENT", component.id(), null, "cleanup-run:5"));
+
+    ComponentRecord fallback = new ComponentRecord(
+        22L, repository.id(), RepositoryFormat.R, "src/contrib", "other", "2.0",
+        "r-source-package", new byte[] {2}, Map.of(), Instant.EPOCH);
+    AssetRecord fallbackAsset = asset(
+        23L, fallback.id(), 24L, RepositoryFormat.R,
+        "src/contrib/other_2.0.tar.gz", "r-source-package", Map.of());
+    when(fixture.componentDao.findById(fallback.id())).thenReturn(Optional.of(fallback));
+    when(fixture.assetDao.listAssetsByComponent(fallback.id())).thenReturn(List.of(fallbackAsset));
+    when(fixture.rRegistry.findPackageByPath(repository.id(), fallbackAsset.path()))
+        .thenReturn(Optional.of(rPackage(repository.id(), fallbackAsset.path())));
+    when(fixture.rService.delete(eq(runtime), eq(fallbackAsset.path()), any(), eq(false)))
+        .thenReturn(MavenResponse.noBody(204));
+    assertEquals(1, fixture.controller.deleteForCleanup(
+        repository.name(), "COMPONENT", fallback.id(), " ", "cleanup-run:6"));
+
+    ComponentRecord empty = new ComponentRecord(
+        25L, repository.id(), RepositoryFormat.R, "src/contrib", "empty", "1.0",
+        "r-source-package", new byte[] {3}, null, Instant.EPOCH);
+    when(fixture.componentDao.findById(empty.id())).thenReturn(Optional.of(empty));
+    when(fixture.assetDao.listAssetsByComponent(empty.id())).thenReturn(List.of());
+    assertStatus(HttpStatus.NOT_FOUND, () -> fixture.controller.deleteForCleanup(
+        repository.name(), "COMPONENT", empty.id(), null, "cleanup-run:7"));
   }
 
   @Test

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -21,6 +22,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.security.MessageDigest;
 import java.time.Instant;
@@ -111,6 +113,7 @@ class RRepositoryDataMigrationWriterTest {
   @Test
   void failsClosedForWrongTargetMissingChecksumAndIdentityDrift() throws Exception {
     InputStream body = mock(InputStream.class);
+    doThrow(new IOException("close failed")).when(body).close();
     assertThrows(IllegalArgumentException.class, () -> writer.write(
         repository(RepositoryFormat.RAW, RepositoryType.HOSTED),
         source(PATH, null, null, null, Map.of()), body, false));
@@ -134,6 +137,79 @@ class RRepositoryDataMigrationWriterTest {
         source(PATH, "demo", "1.0.0", (long) bytes.length + 1,
             Map.of("sha256", sha256(bytes))),
         new ByteArrayInputStream(bytes), true));
+  }
+
+  @Test
+  void rejectsUnavailableRuntimeMissingBindingsAndInvalidBlobProjection() throws Exception {
+    byte[] bytes = RTestPackage.source("demo", "1.0.0");
+    String sha256 = sha256(bytes);
+    RepositoryDataMigrationAssetRecord source = source(
+        PATH, "demo", "1.0.0", (long) bytes.length, Map.of("sha256", sha256));
+
+    when(runtimes.resolveById(1L)).thenReturn(Optional.empty());
+    assertThrows(IllegalArgumentException.class, () -> writer.write(
+        repository(RepositoryFormat.R, RepositoryType.HOSTED), source,
+        new ByteArrayInputStream(bytes), true));
+
+    when(runtimes.resolveById(1L)).thenReturn(Optional.of(runtime));
+    when(service.restoreHostedPackageForMigration(
+        eq(runtime), any(), any(), any(), any()))
+        .thenReturn(new RService.PublishedPackage(
+            PATH, "demo", "1.0.0", "a".repeat(32), sha256, bytes.length));
+    when(registry.findPackageByPath(1L, PATH)).thenReturn(Optional.of(
+        record(sha256, bytes.length, null, null)));
+    assertThrows(IllegalStateException.class, () -> writer.write(
+        repository(RepositoryFormat.R, RepositoryType.HOSTED), source,
+        new ByteArrayInputStream(bytes), true));
+
+    when(registry.findPackageByPath(1L, PATH)).thenReturn(Optional.of(
+        record(sha256, bytes.length, 10L, 20L)));
+    when(assets.findAssetById(10L)).thenReturn(Optional.of(asset(10L, null)));
+    assertThrows(IllegalStateException.class, () -> writer.write(
+        repository(RepositoryFormat.R, RepositoryType.HOSTED), source,
+        new ByteArrayInputStream(bytes), true));
+  }
+
+  @Test
+  void findsIterableChecksumsAndSurfacesBodyCloseFailures() throws Exception {
+    byte[] bytes = RTestPackage.source("demo", "1.0.0");
+    String sha256 = sha256(bytes);
+    when(service.restoreHostedPackageForMigration(
+        eq(runtime), any(), any(), any(), any()))
+        .thenReturn(new RService.PublishedPackage(
+            PATH, "demo", "1.0.0", "a".repeat(32), sha256, bytes.length));
+    when(registry.findPackageByPath(1L, PATH)).thenReturn(Optional.of(
+        record(sha256, bytes.length, 10L, 20L)));
+    when(assets.findAssetById(10L)).thenReturn(Optional.of(asset(10L, 30L)));
+    when(assets.findBlobById(30L)).thenReturn(Optional.of(blob(30L, sha256)));
+    InputStream body = new ByteArrayInputStream(bytes) {
+      @Override
+      public void close() throws IOException {
+        super.close();
+        throw new IOException("close failed");
+      }
+    };
+
+    IllegalStateException failure = assertThrows(IllegalStateException.class, () -> writer.write(
+        repository(RepositoryFormat.R, RepositoryType.HOSTED),
+        source(PATH, "demo", "1.0.0", (long) bytes.length,
+            Map.of("nested", List.of(Map.of("SHA-256", sha256)))),
+        body,
+        true));
+
+    assertTrue(failure.getMessage().contains("Failed reading R migration package"));
+  }
+
+  @Test
+  void rejectsSourceChecksumMismatch() throws Exception {
+    byte[] bytes = RTestPackage.source("demo", "1.0.0");
+
+    assertThrows(IllegalStateException.class, () -> writer.write(
+        repository(RepositoryFormat.R, RepositoryType.HOSTED),
+        source(PATH, "demo", "1.0.0", (long) bytes.length,
+            Map.of("sha256", "0".repeat(64))),
+        new ByteArrayInputStream(bytes),
+        true));
   }
 
   private static RepositoryRuntime runtime() {

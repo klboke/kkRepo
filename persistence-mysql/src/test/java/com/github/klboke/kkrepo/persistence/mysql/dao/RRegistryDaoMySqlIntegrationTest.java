@@ -135,6 +135,170 @@ class RRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
   }
 
   @Test
+  void maintenanceQueriesValidationAndRepositoryCleanupCoverEveryDurableState() {
+    long hostedId = insertRepository("r-maintenance", "r");
+    long groupId = insertRepository("r-maintenance-group", "r");
+    jdbc().update(
+        "UPDATE repository SET type = 'group', recipe_name = 'r-group' WHERE id = ?",
+        groupId);
+    RRegistryDao dao = stores().rRegistry();
+    Instant now = Instant.now().truncatedTo(ChronoUnit.MILLIS);
+
+    assertThrows(IllegalArgumentException.class, () -> dao.savePackage(null));
+    assertThrows(IllegalArgumentException.class,
+        () -> dao.ensureSuite(hostedId, " ", now));
+    assertThrows(IllegalArgumentException.class,
+        () -> dao.tryAcquireLease("", "owner", now, now.plusSeconds(1)));
+    assertThrows(IllegalArgumentException.class,
+        () -> dao.tryAcquireLease("lease", "owner", now, now));
+
+    RRegistryDao.PackageRecord stored = inTransaction(
+        () -> dao.savePackage(record(hostedId, "1.0.0", null, now)));
+    RRegistryDao.PackageRecord updatedInput = new RRegistryDao.PackageRecord(
+        stored.id(), stored.repositoryId(), stored.distribution(), stored.component(),
+        stored.architecture(), stored.packageName(), stored.version(), stored.versionOrderKey(),
+        stored.packageArchitecture(), stored.filename(), stored.path(),
+        Map.of("Package", "demo", "Version", "1.0.0", "Title", "updated"),
+        stored.identity(), "c".repeat(64), "c".repeat(64), 13L, null, null,
+        stored.sourceKind(), stored.revision(), now, stored.createdAt(), now.plusMillis(1));
+    RRegistryDao.PackageRecord updated = inTransaction(() -> dao.savePackage(updatedInput));
+    assertEquals(stored.id(), updated.id());
+    assertEquals("updated", updated.controlFields().get("Title"));
+    assertEquals(List.of("source"), dao.listComponents(hostedId, NAMESPACE));
+    assertEquals(List.of("source"), dao.listArchitectures(hostedId, NAMESPACE, "source"));
+    assertEquals(List.of(updated.id()), dao.listPackagePage(
+        hostedId, NAMESPACE, null, -1, 0).stream()
+        .map(RRegistryDao.PackageRecord::id).toList());
+    ArrayList<RRegistryDao.PackageRecord> visited = new ArrayList<>();
+    dao.visitPackages(hostedId, NAMESPACE, visited::add);
+    assertEquals(List.of(updated.id()),
+        visited.stream().map(RRegistryDao.PackageRecord::id).toList());
+    assertEquals(1, dao.listSuites(hostedId).size());
+
+    assertThrows(IllegalArgumentException.class, () -> dao.materializeProxyPackage(
+        updated, updated.identity(), updated.revision()));
+    RRegistryDao.PackageRecord invalidSource = new RRegistryDao.PackageRecord(
+        null, hostedId, NAMESPACE, "source", "source", "invalid", "1.0.0",
+        "r1|invalid".getBytes(StandardCharsets.US_ASCII), "source",
+        "invalid_1.0.0.tar.gz", NAMESPACE + "/invalid_1.0.0.tar.gz", Map.of(),
+        "a".repeat(32), "b".repeat(64), "b".repeat(64), 1L, null, null,
+        "INVALID", 0L, now, now, now);
+    assertThrows(IllegalArgumentException.class, () -> dao.savePackage(invalidSource));
+
+    String leaseKey = "r:publish:" + hostedId + ":" + NAMESPACE;
+    RRegistryDao.Lease lease = dao.tryAcquireLease(
+        leaseKey, "maintenance-owner", now, now.plusSeconds(3600)).orElseThrow();
+    assertTrue(dao.tryAcquireLease(
+        leaseKey, "maintenance-owner", now.plusMillis(1), now.plusSeconds(3600))
+        .orElseThrow().fencingToken() > lease.fencingToken());
+    lease = dao.tryAcquireLease(
+        leaseKey, "maintenance-owner", now.plusMillis(2), now.plusSeconds(3600)).orElseThrow();
+    assertFalse(dao.renewLease(
+        leaseKey, "other", lease.fencingToken(), now, now.plusSeconds(3600)));
+
+    ArrayList<RRegistryDao.Snapshot> published = new ArrayList<>();
+    for (int index = 0; index < 5; index++) {
+      long revision = index == 0
+          ? dao.findSuite(hostedId, NAMESPACE).orElseThrow().desiredRevision()
+          : dao.markSuiteDirty(hostedId, NAMESPACE, now.plusMillis(10L + index));
+      RRegistryDao.Snapshot snapshot = snapshot(
+          hostedId, revision, ".r/maintenance/" + revision, now.minusSeconds(100 - index));
+      assertTrue(dao.publishSnapshot(snapshot, lease.owner(), lease.fencingToken()));
+      published.add(snapshot);
+    }
+    RRegistryDao.Snapshot current = published.getLast();
+    assertEquals(current, dao.findSnapshot(hostedId, NAMESPACE, current.revision()).orElseThrow());
+    assertEquals(5, dao.listSnapshots(hostedId, NAMESPACE, 500).size());
+    assertFalse(dao.listSnapshotCleanupCandidates(now.plusSeconds(1), 3, 100).isEmpty());
+    assertFalse(dao.deleteSnapshot(hostedId, NAMESPACE, current.revision()));
+    for (RRegistryDao.Snapshot candidate : published.subList(0, published.size() - 1)) {
+      assertTrue(dao.deleteSnapshot(hostedId, NAMESPACE, candidate.revision()));
+    }
+
+    long currentRevision = dao.findSuite(hostedId, NAMESPACE).orElseThrow().desiredRevision();
+    dao.recordBuildFailure(hostedId, NAMESPACE, currentRevision, "x".repeat(4096), null);
+    assertEquals(2048, dao.findSuite(hostedId, NAMESPACE).orElseThrow().lastError().length());
+    dao.recordBuildFailure(hostedId, NAMESPACE, currentRevision, null, now);
+    assertEquals(null, dao.findSuite(hostedId, NAMESPACE).orElseThrow().lastError());
+
+    assertTrue(inTransaction(() -> dao.deletePackage(
+        hostedId, NAMESPACE, "source", "demo", "1.0.0", "source", "cleanup", null))
+        .isPresent());
+    long deletionRevision = dao.findSuite(hostedId, NAMESPACE).orElseThrow().desiredRevision();
+    assertTrue(dao.publishSnapshot(
+        snapshot(hostedId, deletionRevision, ".r/maintenance/deleted", now),
+        lease.owner(), lease.fencingToken()));
+    assertTrue(dao.deleteSnapshot(hostedId, NAMESPACE, current.revision()));
+    List<RRegistryDao.PackageTombstone> tombstones = dao.listPackageCleanupCandidates(
+        now.plusSeconds(60), 500);
+    assertEquals(1, tombstones.size());
+    assertFalse(dao.deletePackageTombstone(null));
+    assertTrue(dao.deletePackageTombstone(tombstones.getFirst()));
+    assertFalse(dao.deletePackageTombstone(tombstones.getFirst()));
+    assertTrue(dao.deletePackage(
+        hostedId, NAMESPACE, "source", "missing", "1", "source", "missing", now).isEmpty());
+
+    dao.replacePackageRelations(hostedId, 999L, null);
+    dao.replacePackageRelations(hostedId, 999L, List.of());
+    assertThrows(IllegalArgumentException.class, () -> dao.replacePackageRelations(
+        hostedId, 999L, List.of(new RRegistryDao.PackageRelation(
+            998L, "IMPORTS", "dependency", "dependency"))));
+
+    dao.ensureSuite(groupId, NAMESPACE, now);
+    long groupRevision = dao.markSuiteDirty(groupId, NAMESPACE, now);
+    String groupLeaseKey = "r:publish:" + groupId + ":" + NAMESPACE;
+    RRegistryDao.Lease groupLease = dao.tryAcquireLease(
+        groupLeaseKey, "group-owner", now, now.plusSeconds(3600)).orElseThrow();
+    assertThrows(IllegalStateException.class,
+        () -> dao.beginGroupSnapshot(groupId, NAMESPACE, groupRevision,
+            groupLease.fencingToken() + 1));
+    dao.appendGroupBindings(groupLease.fencingToken(), null);
+    dao.appendGroupBindings(groupLease.fencingToken(), List.of());
+    dao.beginGroupSnapshot(groupId, NAMESPACE, groupRevision, groupLease.fencingToken());
+    RRegistryDao.GroupBinding binding = new RRegistryDao.GroupBinding(
+        null, groupId, NAMESPACE, groupRevision, "src/contrib/demo_1.0.0.tar.gz",
+        hostedId, deletionRevision, "src/contrib/demo_1.0.0.tar.gz", "a".repeat(32),
+        "b".repeat(64), 12L, null);
+    assertThrows(IllegalStateException.class,
+        () -> dao.appendGroupBindings(groupLease.fencingToken() + 1, List.of(binding)));
+    RRegistryDao.GroupBinding mismatched = new RRegistryDao.GroupBinding(
+        null, groupId, "other", groupRevision, binding.path(), hostedId, deletionRevision,
+        binding.memberPath(), binding.identity(), binding.sha256(), binding.size(), now);
+    assertThrows(IllegalArgumentException.class,
+        () -> dao.appendGroupBindings(groupLease.fencingToken(), List.of(binding, mismatched)));
+    dao.appendGroupBindings(groupLease.fencingToken(), List.of(binding));
+    assertTrue(dao.listGroupBindings(groupId, NAMESPACE, groupRevision, null, 1).isEmpty());
+    RRegistryDao.Snapshot groupSnapshot = snapshot(
+        groupId, groupRevision, ".r/group/maintenance", now);
+    assertTrue(dao.publishGroupSnapshot(
+        groupSnapshot, groupLease.owner(), groupLease.fencingToken()));
+    assertEquals(1, dao.listGroupBindings(
+        groupId, NAMESPACE, groupRevision, -1L, 5000).size());
+    assertThrows(IllegalArgumentException.class,
+        () -> dao.publishGroupSnapshot(null, groupLease.owner(), groupLease.fencingToken()));
+
+    long orphanRevision = dao.markSuiteDirty(groupId, NAMESPACE, now.plusSeconds(1));
+    dao.beginGroupSnapshot(groupId, NAMESPACE, orphanRevision, groupLease.fencingToken());
+    jdbc().update(
+        "UPDATE r_group_snapshot_stage SET created_at = ? WHERE group_repository_id = ? "
+            + "AND snapshot_revision = ?",
+        java.sql.Timestamp.from(now.minusSeconds(60)), groupId, orphanRevision);
+    assertEquals(1, dao.deleteOrphanGroupBindings(now, 0));
+    assertEquals(0, dao.deleteOrphanGroupBindings(now, 1));
+
+    dao.observeProxyDistribution(hostedId, NAMESPACE, "empty-release", now);
+    assertEquals(1, dao.listProxyDistributions(hostedId).size());
+    assertFalse(dao.findProxyDistribution(hostedId, NAMESPACE)
+        .orElseThrow().projectionVerified());
+
+    dao.deleteRepositoryState(groupId);
+    dao.deleteRepositoryState(hostedId);
+    assertTrue(dao.listSuites(groupId).isEmpty());
+    assertTrue(dao.listSuites(hostedId).isEmpty());
+    assertTrue(dao.listProxyDistributions(hostedId).isEmpty());
+  }
+
+  @Test
   void accessShapesHaveRepositoryLeadingIndexesAndIndexedPlans() {
     assertEquals(List.of("repository_id", "coordinate_hash"),
         indexColumns("r_package_record", "uk_r_package_coordinate"));
@@ -259,5 +423,13 @@ class RRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
         row.filename(), row.path(), row.controlFields(), row.identity(), "c".repeat(64),
         "c".repeat(64), 42, null, null, row.sourceKind(), row.revision(), now,
         row.createdAt(), now);
+  }
+
+  private static RRegistryDao.Snapshot snapshot(
+      long repositoryId, long revision, String hiddenPath, Instant createdAt) {
+    return new RRegistryDao.Snapshot(
+        repositoryId, NAMESPACE, revision, 1,
+        Map.of(NAMESPACE + "/PACKAGES.gz", hiddenPath),
+        String.format("%064x", revision), createdAt);
   }
 }

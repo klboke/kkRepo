@@ -108,4 +108,56 @@ class RSourcePackageInspectorTest {
     assertThrows(MavenExceptions.BadRequestException.class, () -> inspector.inspect(
         failing, "demo_1.0.0.tar.gz"));
   }
+
+  @Test
+  void rejectsTopLevelIdentityMissingDescriptionAndUnsafePathShapes() throws Exception {
+    String description = "Package: demo\nVersion: 1.0.0\nTitle: Demo\nDescription: Demo\n"
+        + "License: MIT\nAuthor: A\nMaintainer: M\n";
+    byte[] wrongTopLevel = RTestPackage.archive(List.of(
+        RTestPackage.Item.directory("other/"),
+        RTestPackage.Item.file("other/DESCRIPTION", description)));
+    assertThrows(MavenExceptions.BadRequestException.class, () -> inspector.inspect(
+        new ByteArrayInputStream(wrongTopLevel), "demo_1.0.0.tar.gz"));
+
+    byte[] missingDescription = RTestPackage.archive(List.of(
+        RTestPackage.Item.directory("demo/"),
+        RTestPackage.Item.file("demo/R/example.R", "example <- 1\n")));
+    assertThrows(MavenExceptions.BadRequestException.class, () -> inspector.inspect(
+        new ByteArrayInputStream(missingDescription), "demo_1.0.0.tar.gz"));
+
+    byte[] shallowFile = RTestPackage.archive(List.of(RTestPackage.Item.file("demo", "x")));
+    assertThrows(MavenExceptions.BadRequestException.class, () -> inspector.inspect(
+        new ByteArrayInputStream(shallowFile), "demo_1.0.0.tar.gz"));
+
+    byte[] invalidTopLevel = RTestPackage.archive(List.of(
+        RTestPackage.Item.file("1demo/DESCRIPTION", description)));
+    assertThrows(MavenExceptions.BadRequestException.class, () -> inspector.inspect(
+        new ByteArrayInputStream(invalidTopLevel), "demo_1.0.0.tar.gz"));
+
+    byte[] backslash = RTestPackage.archive(List.of(
+        RTestPackage.Item.file("demo\\DESCRIPTION", description)));
+    assertThrows(MavenExceptions.BadRequestException.class, () -> inspector.inspect(
+        new ByteArrayInputStream(backslash), "demo_1.0.0.tar.gz"));
+  }
+
+  @Test
+  void boundsDescriptionAndRejectsInterruptedCapacityWaits() throws Exception {
+    byte[] oversizedDescription = new byte[1024 * 1024 + 1];
+    java.util.Arrays.fill(oversizedDescription, (byte) 'a');
+    byte[] archive = RTestPackage.archive(List.of(
+        RTestPackage.Item.directory("demo/"),
+        RTestPackage.Item.file("demo/DESCRIPTION", oversizedDescription)));
+    assertThrows(MavenExceptions.BadRequestException.class, () -> inspector.inspect(
+        new ByteArrayInputStream(archive), "demo_1.0.0.tar.gz"));
+
+    Thread.currentThread().interrupt();
+    try {
+      assertThrows(MavenExceptions.WritePolicyDenied.class, () -> inspector.inspect(
+          new ByteArrayInputStream(RTestPackage.source("demo", "1.0.0")),
+          "demo_1.0.0.tar.gz"));
+      assertTrue(Thread.currentThread().isInterrupted());
+    } finally {
+      Thread.interrupted();
+    }
+  }
 }

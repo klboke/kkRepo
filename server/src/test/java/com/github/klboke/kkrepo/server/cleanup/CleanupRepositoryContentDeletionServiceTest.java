@@ -16,6 +16,7 @@ import com.github.klboke.kkrepo.server.docker.DockerManifestStore;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmHostedService;
+import com.github.klboke.kkrepo.server.r.RService;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -170,6 +171,39 @@ class CleanupRepositoryContentDeletionServiceTest {
             "cleanup"));
 
     verify(apt).deleteComponentsForCleanup(
+        runtime, List.of(9L, 10L), "cleanup policy delete by cleanup");
+  }
+
+  @Test
+  void hostedRBatchDeletesComponentsAndPublishesOnce() {
+    RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
+    RepositoryRuntime runtime = mock(RepositoryRuntime.class);
+    RService rService = mock(RService.class);
+    when(runtime.format()).thenReturn(RepositoryFormat.R);
+    when(runtime.type()).thenReturn(RepositoryType.HOSTED);
+    when(runtimes.resolve("r-hosted")).thenReturn(Optional.of(runtime));
+    when(rService.deleteComponentsForCleanup(
+        runtime, List.of(9L, 10L), "cleanup policy delete by cleanup"))
+        .thenReturn(List.of(1, 1));
+    CleanupRepositoryContentDeletionService service =
+        new CleanupRepositoryContentDeletionService(
+            mock(BrowseContentDeleteController.class),
+            runtimes,
+            mock(DockerManifestStore.class),
+            mock(NpmHostedService.class),
+            mock(AptService.class));
+    service.setRService(rService);
+
+    assertEquals(
+        List.of(1, 1),
+        service.deleteBatchForCleanup(
+            "r-hosted",
+            List.of(
+                new CleanupDeleteSubject("COMPONENT", 9L, "demo_1.0.tar.gz"),
+                new CleanupDeleteSubject("COMPONENT", 10L, "demo_2.0.tar.gz")),
+            "cleanup"));
+
+    verify(rService).deleteComponentsForCleanup(
         runtime, List.of(9L, 10L), "cleanup policy delete by cleanup");
   }
 
