@@ -104,6 +104,37 @@ class MavenHtmlListingServiceTest {
         "href=\"/repository/hf-proxy/" + browsePath + "\""));
   }
 
+  @Test
+  void rBrowseHtmlKeepsTheNexusProjectionAndLinksToTheCanonicalPackageRoute() {
+    String parent = "src/contrib/demo/1.2.3";
+    String browsePath = parent + "/demo_1.2.3.tar.gz";
+    String storagePath = "src/contrib/demo_1.2.3.tar.gz";
+    BrowseNodeDao browseNodes = mock(BrowseNodeDao.class);
+    when(browseNodes.listChildren(10L, parent)).thenReturn(List.of(
+        new BrowseNodeDao.BrowseChild(
+            1L, browsePath, "demo_1.2.3.tar.gz", 4, 11L, 12L, 1024L,
+            "application/x-gzip", "b".repeat(40), Instant.EPOCH, false, true)));
+    AssetDao assets = mock(AssetDao.class);
+    when(assets.findAssetsByIds(List.of(11L))).thenReturn(Map.of(
+        11L,
+        new AssetRecord(
+            11L, 10L, 12L, 13L, RepositoryFormat.R,
+            storagePath, null, "demo_1.2.3.tar.gz", "r-source-package",
+            "application/x-gzip", 1024L, null, Instant.EPOCH, Map.of())));
+    MavenHtmlListingService service = new MavenHtmlListingService(
+        new FakeRepositoryDao(RepositoryFormat.R, RepositoryType.HOSTED, "r-hosted"),
+        browseNodes,
+        assets,
+        new ComponentDaoAdapter(null, null));
+
+    String html = service.renderBrowse("r-hosted", parent).orElseThrow();
+
+    assertTrue(html.contains(
+        "href=\"/repository/r-hosted/" + storagePath + "\""));
+    assertFalse(html.contains(
+        "href=\"/repository/r-hosted/" + browsePath + "\""));
+  }
+
   private static class FakeRepositoryDao extends RepositoryDaoAdapter {
     private final RepositoryFormat format;
     private final RepositoryType type;

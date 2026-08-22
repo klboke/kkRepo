@@ -33,6 +33,7 @@ import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
 import com.github.klboke.kkrepo.protocol.conda.CondaPath;
 import com.github.klboke.kkrepo.protocol.npm.NpmMetadata;
 import com.github.klboke.kkrepo.protocol.npm.NpmPackageId;
+import com.github.klboke.kkrepo.protocol.r.RPathParser;
 import com.github.klboke.kkrepo.protocol.swift.SwiftPath;
 import com.github.klboke.kkrepo.protocol.swift.SwiftPathParser;
 import com.github.klboke.kkrepo.protocol.swift.SwiftToolsVersions;
@@ -1023,6 +1024,11 @@ public class BrowseAssetDetailService {
       return projectedStoragePath(
           visibleRepository, normalized, sourceRepositoryName, "Hugging Face");
     }
+    if (visibleRepository.format() == RepositoryFormat.R
+        && isRBrowseProjection(normalized)) {
+      return projectedStoragePath(
+          visibleRepository, normalized, sourceRepositoryName, "R");
+    }
     if (visibleRepository.format() == RepositoryFormat.TERRAFORM && terraformDao != null) {
       Optional<TerraformBrowseAssetPathResolver.ResolvedStoragePath> terraform =
           TerraformBrowseAssetPathResolver.resolve(
@@ -1089,6 +1095,27 @@ public class BrowseAssetDetailService {
       }
     }
     return new ResolvedStoragePath(normalized, sourceRepositoryName);
+  }
+
+  private static boolean isRBrowseProjection(String path) {
+    String[] segments = path.split("/", -1);
+    int coordinateOffset;
+    if (segments.length == 5
+        && "src".equals(segments[0])
+        && "contrib".equals(segments[1])) {
+      coordinateOffset = 2;
+    } else if (segments.length == 3) {
+      // Accept the pre-alignment projection long enough for existing nodes to remain operable.
+      coordinateOffset = 0;
+    } else {
+      return false;
+    }
+    try {
+      return segments[coordinateOffset + 2].equals(RPathParser.sourceFilename(
+          segments[coordinateOffset], segments[coordinateOffset + 1]));
+    } catch (IllegalArgumentException ignored) {
+      return false;
+    }
   }
 
   private ResolvedStoragePath projectedStoragePath(

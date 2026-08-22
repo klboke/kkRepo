@@ -103,6 +103,52 @@ class BrowseAssetDetailServiceTest {
   }
 
   @Test
+  void rGroupDetailResolvesNexusBrowseProjectionToCanonicalPackagePath() {
+    RepositoryRecord group = repository(
+        84L, "cran-group", RepositoryFormat.R, RepositoryType.GROUP);
+    RepositoryRecord hosted = repository(
+        85L, "cran-hosted", RepositoryFormat.R, RepositoryType.HOSTED);
+    String browsePath = "src/contrib/demo/1.2.3/demo_1.2.3.tar.gz";
+    String storagePath = "src/contrib/demo_1.2.3.tar.gz";
+    AssetRecord archive = new AssetRecord(
+        86L, hosted.id(), 87L, 88L, RepositoryFormat.R,
+        storagePath, PersistenceHashes.pathHash(storagePath), archiveName(storagePath),
+        "r-source-package", "application/x-gzip", 512L,
+        null, Instant.EPOCH, Map.of());
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(hosted.id(), storagePath), archive), Map.of(88L, blob(88L, 512L)));
+    RepositoryDao repositories = new StubRepositoryDao() {
+      @Override
+      public List<RepositoryRecord> listMembers(long repositoryId) {
+        return repositoryId == group.id() ? List.of(hosted) : List.of();
+      }
+    };
+    BrowseNodeDao browse = mock(BrowseNodeDao.class);
+    when(browse.findNode(hosted.id(), browsePath)).thenReturn(Optional.of(
+        new BrowseNodeDao.BrowseChild(
+            1L, browsePath, archive.name(), 4, archive.id(), archive.componentId(),
+            archive.size(), archive.contentType(), "a".repeat(40), Instant.EPOCH, false, true)));
+    RRegistryDao r = mock(RRegistryDao.class);
+    when(r.findPackageByPath(hosted.id(), storagePath)).thenReturn(Optional.of(
+        rPackage(hosted.id(), archive.id(), archive.componentId(), storagePath)));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        repositories, assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+    service.setBrowseNodeDao(browse);
+    service.setRRegistryDao(r);
+
+    BrowseAssetDetailService.BrowseAssetDetail detail =
+        service.detail(group, browsePath, hosted.name());
+
+    assertEquals(group.name(), detail.repository());
+    assertEquals(hosted.name(), detail.sourceRepository());
+    assertEquals(browsePath, detail.path());
+    assertEquals("/repository/cran-group/" + storagePath, detail.downloadUrl());
+    assertEquals("demo", detail.r().get("package"));
+    assertEquals(List.of(key(hosted.id(), storagePath)), assets.pathLookups);
+  }
+
+  @Test
   void rDetailFailsClosedForMissingOrConflictingRegistryState() {
     RepositoryRecord repository = repository(
         84L, "cran-hosted", RepositoryFormat.R, RepositoryType.HOSTED);

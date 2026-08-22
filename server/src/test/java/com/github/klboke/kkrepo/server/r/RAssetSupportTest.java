@@ -47,11 +47,12 @@ class RAssetSupportTest {
     when(assets.findAssetByPath(runtime.id(), PACKAGE_PATH)).thenReturn(Optional.of(asset));
 
     assertSame(asset, support.storePackage(
-        runtime, PACKAGE_PATH, "demo/1.0.0/demo_1.0.0.tar.gz", file,
+        runtime, PACKAGE_PATH, "src/contrib/demo/1.0.0/demo_1.0.0.tar.gz", file,
         Map.of("sha256", "a"), "alice", "127.0.0.1", component));
     verify(hosted).putInternalWithComponentFileAtBrowsePath(
         runtime, PACKAGE_PATH, file, RMediaTypes.SOURCE_PACKAGE, Map.of("sha256", "a"),
-        "alice", "127.0.0.1", component, "demo/1.0.0/demo_1.0.0.tar.gz");
+        "alice", "127.0.0.1", component,
+        "src/contrib/demo/1.0.0/demo_1.0.0.tar.gz");
 
     support.storeGenerated(runtime, ".r/index", new byte[] {1}, Map.of("revision", 1));
     verify(hosted).putInternalUnindexed(
@@ -111,7 +112,7 @@ class RAssetSupportTest {
     when(assets.findAssetById(10L)).thenReturn(Optional.of(rebound));
 
     assertSame(rebound, support.bindProxyPackage(
-        runtime, PACKAGE_PATH, component, "demo/1.0.0/demo.tar.gz",
+        runtime, PACKAGE_PATH, component, "src/contrib/demo/1.0.0/demo.tar.gz",
         Map.of("new", "value")));
     verify(assets).updateAssetComponentBinding(10L, 44L);
     verify(assets).updateAssetAttributes(10L, Map.of("existing", true, "new", "value"));
@@ -119,7 +120,7 @@ class RAssetSupportTest {
         eq(44L), any(Instant.class));
     verify(browse).deleteByAssetId(10L);
     verify(browse).upsertPathAncestors(
-        runtime.id(), "demo/1.0.0/demo.tar.gz", 10L, 44L);
+        runtime.id(), "src/contrib/demo/1.0.0/demo.tar.gz", 10L, 44L);
 
     when(assets.findAssetById(10L)).thenReturn(Optional.empty());
     assertSame(original, support.bindProxyPackage(

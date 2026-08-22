@@ -52,7 +52,7 @@ final class RComponentFactory {
   }
 
   String browsePath(String packageName, String version, String filename) {
-    return packageName + "/" + version + "/" + filename;
+    return RService.SOURCE_NAMESPACE + "/" + packageName + "/" + version + "/" + filename;
   }
 
   private static void copy(

@@ -162,17 +162,41 @@ class RRepositoryBlackBoxCompatibilityTest {
     }
     assertTrue(found, "R package must be discoverable through component search");
 
+    String browseParent = "src/contrib/" + fixture.name() + "/" + fixture.version();
+    String canonicalDownload = "/repository/" + repository + "/src/contrib/" + fixture.filename();
+    String htmlBrowsePath =
+        "/service/rest/repository/browse/" + repository + "/" + browseParent + "/";
+    Exchange nexusHtml = waitForBrowse(config.nexusAdmin(), htmlBrowsePath);
+    Exchange candidateHtml = waitForBrowse(config.candidateAdmin(), htmlBrowsePath);
+    assertEquals(200, nexusHtml.status());
+    assertEquals(nexusHtml.status(), candidateHtml.status());
+    assertTrue(nexusHtml.text().contains(canonicalDownload));
+    assertTrue(candidateHtml.text().contains(canonicalDownload));
+
     Exchange browse = send(config.candidateAdmin().request(
         "/internal/browse/" + repository + "?path=" + encode(
-            fixture.name() + "/" + fixture.version())).GET());
+            browseParent)).GET());
     assertEquals(200, browse.status());
     boolean leaf = false;
     for (JsonNode entry : JSON.readTree(browse.body()).path("entries")) {
       if (fixture.filename().equals(entry.path("name").asText())) {
+        assertEquals(browseParent + "/" + fixture.filename(), entry.path("path").asText());
+        assertEquals(canonicalDownload, entry.path("downloadUrl").asText());
         leaf = entry.path("leaf").asBoolean();
       }
     }
-    assertTrue(leaf, "R package must be a Browse leaf under package/version");
+    assertTrue(leaf, "R package must be a Browse leaf under src/contrib/package/version");
+  }
+
+  private static Exchange waitForBrowse(AdminEndpoint endpoint, String path) throws Exception {
+    Exchange last = null;
+    for (int attempt = 0; attempt < 120; attempt++) {
+      last = send(endpoint.request(path).GET());
+      if (last.status() == 200) return last;
+      Thread.sleep(250L);
+    }
+    throw new AssertionError("R Browse projection did not become readable: "
+        + (last == null ? "<none>" : last.status() + " " + last.text()));
   }
 
   private static void createNexusHosted(Config config, String repository) throws Exception {

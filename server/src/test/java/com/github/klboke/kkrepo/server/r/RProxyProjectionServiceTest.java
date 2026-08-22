@@ -257,6 +257,13 @@ class RProxyProjectionServiceTest {
     assertEquals(200, realService().get(
         runtime, new RPathParser().parse(path), false).status());
 
+    verify(assets).bindProxyPackage(
+        org.mockito.ArgumentMatchers.eq(runtime),
+        org.mockito.ArgumentMatchers.eq(path),
+        any(),
+        org.mockito.ArgumentMatchers.eq(
+            "src/contrib/direct/1.2.0/direct_1.2.0.tar.gz"),
+        any());
     verify(registry, never()).materializeProxyPackage(any(), anyString(), anyLong());
     verify(registry, never()).replacePackageRelations(anyLong(), anyLong(), any());
   }

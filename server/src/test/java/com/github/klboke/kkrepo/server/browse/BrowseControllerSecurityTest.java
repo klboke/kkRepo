@@ -190,6 +190,41 @@ class BrowseControllerSecurityTest {
   }
 
   @Test
+  void rGroupBrowseUsesTheNexusProjectionAndCanonicalPackageDownloadRoute() {
+    RepositoryRecord group = repo(
+        1L, "r-group", RepositoryFormat.R, RepositoryType.GROUP);
+    RepositoryRecord hosted = repo(
+        2L, "r-hosted", RepositoryFormat.R, RepositoryType.HOSTED);
+    String parent = "src/contrib/demo/1.2.3";
+    String browsePath = parent + "/demo_1.2.3.tar.gz";
+    String storagePath = "src/contrib/demo_1.2.3.tar.gz";
+    StubRepositoryDao repositories = new StubRepositoryDao(Map.of(group.name(), group));
+    repositories.members.put(group.id(), List.of(hosted));
+    StubBrowseNodeDao browseNodes = new StubBrowseNodeDao();
+    browseNodes.children.put(key(hosted.id(), parent), List.of(child(
+        browsePath, "demo_1.2.3.tar.gz", true)));
+    RecordingSecurityService security =
+        new RecordingSecurityService(permission -> AccessDecision.allow());
+    BrowseController controller = controller(
+        repositories, browseNodes, subject("alice"), null, security);
+    AssetDao assets = mock(AssetDao.class);
+    when(assets.findAssetById(1L)).thenReturn(Optional.of(new AssetRecord(
+        1L, hosted.id(), 2L, 3L, RepositoryFormat.R,
+        storagePath, null, "demo_1.2.3.tar.gz", "r-source-package",
+        "application/x-gzip", 100L, null, Instant.EPOCH, Map.of())));
+    controller.setAssetDao(assets);
+
+    BrowseController.BrowseListing listing = controller.list(
+        group.name(), parent,
+        request("GET", "/internal/browse/" + group.name()));
+
+    assertEquals(browsePath, listing.entries().getFirst().path());
+    assertEquals(
+        "/repository/r-group/" + storagePath,
+        listing.entries().getFirst().downloadUrl());
+  }
+
+  @Test
   void conanBrowseDownloadsUseTheTypedClientRouteWrittenWithTheAsset() {
     RepositoryRecord repository = repo(
         1L, "conan-hosted", RepositoryFormat.CONAN, RepositoryType.HOSTED);

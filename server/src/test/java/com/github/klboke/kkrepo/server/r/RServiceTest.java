@@ -97,7 +97,7 @@ class RServiceTest {
     assertEquals("demo", saved.getValue().controlFields().get("Package"));
     verify(registry).replacePackageRelations(eq(hosted.id()), eq(50L), any());
     verify(assets).storePackage(
-        eq(hosted), eq(PATH), eq("demo/1.0.0/demo_1.0.0.tar.gz"), any(), any(),
+        eq(hosted), eq(PATH), eq("src/contrib/demo/1.0.0/demo_1.0.0.tar.gz"), any(), any(),
         eq("alice"), eq("127.0.0.1"), any());
 
     RRegistryDao.PackageRecord existing = withId(saved.getValue(), 50L, 1L);
