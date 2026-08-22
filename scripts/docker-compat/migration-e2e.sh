@@ -1771,11 +1771,12 @@ verify_migrated_r_fixture() {
   local target_url="${2:-$KKREPO_URL}"
   local label="${3:-primary}"
   local run_clients="${4:-false}"
-  local workdir job hosted_index group_index archive expected
+  local workdir job hosted_index group_index browse archive expected
   workdir="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-r-migrated.XXXXXX")"
   job="$workdir/job.json"
   hosted_index="$workdir/hosted-PACKAGES.gz"
   group_index="$workdir/group-PACKAGES.gz"
+  browse="$workdir/browse.json"
   curl -m 30 -fsS -u "$(auth)" \
     "$target_url/internal/migration/nexus/repository-data/jobs/$job_id" >"$job"
   python3 - "$job" "$R_NEXUS_REPOSITORY" <<'PY'
@@ -1827,10 +1828,34 @@ PY
     | python3 -c 'import json,sys; p=json.load(sys.stdin); assert any(i.get("name") == sys.argv[1] and i.get("version") == sys.argv[2] for i in p.get("items", []))' \
       "$R_APP_PACKAGE" "$R_APP_VERSION"
   curl -m 30 -fsS -u "$(auth)" --get \
-    --data-urlencode "path=$R_APP_PACKAGE/$R_APP_VERSION" \
-    "$target_url/internal/browse/$R_KKREPO_REPOSITORY" \
-    | python3 -c 'import json,sys; p=json.load(sys.stdin); assert any(i.get("name") == sys.argv[1] and i.get("leaf") is True for i in p.get("entries", []))' \
-      "$(basename "$R_APP_ARCHIVE")"
+    --data-urlencode "path=src/contrib/$R_APP_PACKAGE/$R_APP_VERSION" \
+    "$target_url/internal/browse/$R_KKREPO_REPOSITORY" >"$browse"
+  python3 - \
+    "$browse" \
+    "$(basename "$R_APP_ARCHIVE")" \
+    "src/contrib/$R_APP_PACKAGE/$R_APP_VERSION/$(basename "$R_APP_ARCHIVE")" \
+    "/repository/$R_KKREPO_REPOSITORY/src/contrib/$(basename "$R_APP_ARCHIVE")" <<'PY'
+import json
+import pathlib
+import sys
+
+path, filename, expected_path, expected_download_url = sys.argv[1:5]
+payload = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+matches = [entry for entry in payload.get("entries", [])
+           if entry.get("name") == filename and entry.get("leaf") is True]
+if len(matches) != 1:
+    raise SystemExit(f"migrated R Browse leaf is missing: {filename}; payload={payload}")
+entry = matches[0]
+if entry.get("path") != expected_path:
+    raise SystemExit(
+        f"migrated R Browse projection changed: {entry.get('path')!r} != {expected_path!r}"
+    )
+if entry.get("downloadUrl") != expected_download_url:
+    raise SystemExit(
+        "migrated R Browse download URL changed: "
+        f"{entry.get('downloadUrl')!r} != {expected_download_url!r}"
+    )
+PY
   if [[ "$run_clients" == "true" ]]; then
     run_r_migration_client_acceptance \
       "$target_url" "$R_GROUP_KKREPO_REPOSITORY" "$label group"
