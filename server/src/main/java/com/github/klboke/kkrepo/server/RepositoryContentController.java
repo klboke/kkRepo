@@ -71,6 +71,7 @@ import com.github.klboke.kkrepo.server.pub.PubProxyService;
 import com.github.klboke.kkrepo.server.raw.RawGroupService;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
 import com.github.klboke.kkrepo.server.raw.RawProxyService;
+import com.github.klboke.kkrepo.server.r.RService;
 import com.github.klboke.kkrepo.server.rubygems.RubygemsService;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
@@ -154,6 +155,7 @@ public class RepositoryContentController {
   private ConanService conan;
   private AptService apt;
   private AlpineService alpine;
+  private RService r;
   private HuggingFaceService huggingFace;
   private final NugetService nuget;
   private final RubygemsService rubygems;
@@ -205,6 +207,11 @@ public class RepositoryContentController {
   @Autowired(required = false)
   void setAlpineService(AlpineService alpine) {
     this.alpine = alpine;
+  }
+
+  @Autowired(required = false)
+  void setRService(RService r) {
+    this.r = r;
   }
 
   @Autowired(required = false)
@@ -403,6 +410,9 @@ public class RepositoryContentController {
     if (runtime.format() == RepositoryFormat.ALPINE) {
       return toHeadResponse(dispatchAlpineGet(runtime, name, request, true), request);
     }
+    if (runtime.format() == RepositoryFormat.R) {
+      return toHeadResponse(dispatchRGet(runtime, name, request, true), request);
+    }
     if (runtime.format() == RepositoryFormat.HUGGINGFACE) {
       return toHeadResponse(dispatchHuggingFaceGet(runtime, name, request, true), request);
     }
@@ -567,6 +577,16 @@ public class RepositoryContentController {
           .header(HttpHeaders.LOCATION, response.headers().get(HttpHeaders.LOCATION))
           .build();
     }
+    if (runtime.format() == RepositoryFormat.R) {
+      String raw = extractRepositoryPath(name, request, true);
+      MavenResponse response;
+      try (InputStream body = request.getInputStream()) {
+        response = r().put(runtime, raw, body, contentType, userId, request.getRemoteAddr());
+      }
+      return ResponseEntity.status(response.status())
+          .header(HttpHeaders.LOCATION, response.headers().get(HttpHeaders.LOCATION))
+          .build();
+    }
     if (runtime.format() == RepositoryFormat.SWIFT) {
       String rawPath = extractRepositoryPath(name, request, true);
       String accept = request.getHeader(HttpHeaders.ACCEPT);
@@ -705,6 +725,11 @@ public class RepositoryContentController {
       String raw = extractRepositoryPath(name, request, true);
       MavenResponse response = alpine().delete(
           runtime, raw, "repository-content-delete", true);
+      return ResponseEntity.status(response.status()).build();
+    }
+    if (runtime.format() == RepositoryFormat.R) {
+      String raw = extractRepositoryPath(name, request, true);
+      MavenResponse response = r().delete(runtime, raw, "repository-content-delete", true);
       return ResponseEntity.status(response.status()).build();
     }
     if (runtime.format() == RepositoryFormat.NUGET) {
@@ -1086,6 +1111,11 @@ public class RepositoryContentController {
       MavenResponse response = dispatchAlpineGet(runtime, name, request, headOnly);
       return toStreamingResponse(response, request, !headOnly && raw.endsWith(".apk"));
     }
+    if (runtime.format() == RepositoryFormat.R) {
+      String raw = extractRepositoryPath(name, request, true);
+      MavenResponse response = dispatchRGet(runtime, name, request, headOnly);
+      return toStreamingResponse(response, request, !headOnly && raw.endsWith(".tar.gz"));
+    }
     if (runtime.format() == RepositoryFormat.HUGGINGFACE) {
       String raw = extractRepositoryPath(name, request, true);
       MavenResponse response = dispatchHuggingFaceGet(runtime, name, request, headOnly);
@@ -1266,6 +1296,20 @@ public class RepositoryContentController {
     }
     String raw = extractRepositoryPath(name, request, true);
     return alpine().get(runtime, raw, headOnly);
+  }
+
+  private MavenResponse dispatchRGet(
+      RepositoryRuntime runtime,
+      String name,
+      HttpServletRequest request,
+      boolean headOnly) {
+    DirectoryRequest directory = detectDirectory(name, request);
+    if (directory != null && directory.path().isEmpty()) {
+      return directory.needsRedirect()
+          ? badRepositoryPath(headOnly)
+          : repositoryInfo(runtime, request, "r", headOnly);
+    }
+    return r().get(runtime, extractRepositoryPath(name, request, true), headOnly);
   }
 
   private MavenResponse dispatchHuggingFaceGet(
@@ -1451,6 +1495,13 @@ public class RepositoryContentController {
       throw new IllegalStateException("Alpine repository service is unavailable");
     }
     return alpine;
+  }
+
+  private RService r() {
+    if (r == null) {
+      throw new IllegalStateException("R repository service is unavailable");
+    }
+    return r;
   }
 
   private HuggingFaceService huggingFace() {

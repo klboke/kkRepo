@@ -161,7 +161,8 @@ public class MavenHtmlListingService {
       List<RepositoryRecord> sources,
       LinkedHashMap<String, BrowseNodeDao.BrowseChild> merged) {
     List<ListingEntry> entries = new ArrayList<>();
-    Map<Long, AssetRecord> huggingFaceAssets = repo.format() == RepositoryFormat.HUGGINGFACE
+    Map<Long, AssetRecord> canonicalDownloadAssets =
+        repo.format() == RepositoryFormat.HUGGINGFACE || repo.format() == RepositoryFormat.R
         ? assetDao.findAssetsByIds(merged.values().stream()
             .map(BrowseNodeDao.BrowseChild::assetId)
             .filter(assetId -> assetId != null)
@@ -182,10 +183,11 @@ public class MavenHtmlListingService {
         entries.addAll(flattenNpmTarballs(repo.name(), sources, child.path()));
       } else if (repo.format() == RepositoryFormat.PYPI && path.stripPypiPackages()) {
         entries.add(ListingEntry.fromPypiChild(repo.name(), child));
-      } else if (repo.format() == RepositoryFormat.HUGGINGFACE) {
-        entries.add(ListingEntry.fromHuggingFaceChild(
+      } else if (repo.format() == RepositoryFormat.HUGGINGFACE
+          || repo.format() == RepositoryFormat.R) {
+        entries.add(ListingEntry.fromCanonicalAssetChild(
             repo.name(), child,
-            child.assetId() == null ? null : huggingFaceAssets.get(child.assetId())));
+            child.assetId() == null ? null : canonicalDownloadAssets.get(child.assetId())));
       } else {
         entries.add(ListingEntry.fromChild(repo.name(), child));
       }
@@ -330,7 +332,7 @@ public class MavenHtmlListingService {
       return new ListingEntry(child.displayName(), href, leaf, child.assetSize(), child.assetLastUpdatedAt());
     }
 
-    static ListingEntry fromHuggingFaceChild(
+    static ListingEntry fromCanonicalAssetChild(
         String repoName,
         BrowseNodeDao.BrowseChild child,
         AssetRecord asset) {

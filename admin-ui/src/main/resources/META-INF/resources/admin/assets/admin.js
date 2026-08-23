@@ -513,6 +513,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   conan: "conan",
   apt: "apt",
   alpine: "alpine",
+  r: "r",
   huggingface: "huggingface",
   raw: "raw",
 });
@@ -537,6 +538,7 @@ const FORMAT_DISPLAY_NAMES = Object.freeze({
   conan: "Conan 2",
   apt: "APT / Debian",
   alpine: "Alpine / APK",
+  r: "R / CRAN",
   huggingface: "Hugging Face Models",
   raw: "Raw",
 });
@@ -2439,6 +2441,7 @@ function refreshRepositoryRemoteDefaults(recipe) {
     conan: "https://center2.conan.io/",
     apt: "https://deb.debian.org/debian/",
     alpine: "https://dl-cdn.alpinelinux.org/alpine/",
+    r: "https://cloud.r-project.org/",
     huggingface: "https://huggingface.co/"
   };
   if (recipe.format === "swift") {

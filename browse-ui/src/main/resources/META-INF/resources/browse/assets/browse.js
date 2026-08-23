@@ -52,6 +52,7 @@ const SEARCH_ROUTE_FORMAT = {
   conan: "conan",
   apt: "apt",
   alpine: "alpine",
+  r: "r",
   huggingface: "huggingface",
   pypi: "pypi",
   rubygems: "rubygems",
@@ -74,6 +75,7 @@ const FORMAT_ROUTE_SEGMENT = {
   conan: "conan",
   apt: "apt",
   alpine: "alpine",
+  r: "r",
   huggingface: "huggingface",
   pypi: "pypi",
   rubygems: "rubygems",
@@ -96,6 +98,7 @@ const SEARCH_FORMAT_LABEL = {
   conan: "Conan 2",
   apt: "APT / Debian",
   alpine: "Alpine / APK",
+  r: "R / CRAN",
   huggingface: "Hugging Face Models",
   pypi: "PyPI",
   rubygems: "RubyGems",
@@ -742,6 +745,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   conan: "conan",
   apt: "apt",
   alpine: "alpine",
+  r: "r",
   huggingface: "huggingface",
   go: "go",
   helm: "helm",
@@ -813,6 +817,7 @@ function fileIconName(name, repositoryFormat = "") {
   const normalized = String(name || "").toLowerCase();
   const format = String(repositoryFormat || "").toLowerCase();
   if (format === "alpine" && normalized.endsWith(".apk")) return "file-apk";
+  if (format === "r" && normalized.endsWith(".tar.gz")) return "file-archive";
   if (format === "cargo" && normalized && !normalized.includes(".")) return "file-json";
   if (format === "go" && normalized === "list") return "file-text";
   if (format === "go" && normalized === "@latest") return "file-json";
@@ -1693,6 +1698,7 @@ function renderAttributesSection(detail, opts = {}) {
     renderAttributeGroup("Composer", detail.composer),
     renderAttributeGroup("Conda", detail.conda),
     renderAttributeGroup("Alpine", detail.alpine),
+    renderAttributeGroup("R / CRAN", detail.r),
     renderAttributeGroup("Hugging Face", detail.huggingface),
     renderAttributeGroup("Swift", detail.swift),
     renderAttributeGroup("Ansible Galaxy", detail.ansible),
@@ -2917,6 +2923,47 @@ function alpineUsageDetail(entry, detail = null) {
   return { crumbText: entry.path, summaryRows, snippets };
 }
 
+function rUsageDetail(entry, detail = null) {
+  const metadata = detail?.r || {};
+  const repo = currentRepository();
+  const repositoryUrl = repositoryBaseUrl().replace(/\/+$/, "");
+  const packageName = metadata.package || entry.name || "<package>";
+  const version = metadata.version || entry.version || "";
+  const summaryRows = [
+    ["Repository", state.repo],
+    ["Format", "r"],
+    ["Namespace", "src/contrib"],
+    ["Package", packageName],
+    ["Version", version || "-"],
+  ];
+  if (metadata.license) summaryRows.push(["License", metadata.license]);
+  if (metadata.md5) summaryRows.push(["MD5", metadata.md5]);
+  if (metadata.sha256) summaryRows.push(["SHA-256", metadata.sha256]);
+  const snippets = [
+    usageSnippet(
+      ".Rprofile",
+      `options(repos = c(KKRepo = '${repositoryUrl}'))`,
+      "Use a credential helper or netrc for private repositories; do not commit tokens in URLs",
+    ),
+    usageSnippet(
+      "Available packages",
+      `available.packages(repos = '${repositoryUrl}', type = 'source')`,
+    ),
+    usageSnippet(
+      "Install",
+      `install.packages('${packageName}', repos = '${repositoryUrl}', type = 'source')`,
+    ),
+  ];
+  if (String(repo?.type || "").toLowerCase() === "hosted") {
+    snippets.push(usageSnippet(
+      "Publish",
+      `curl --fail --user '<username>:<token>' -F 'r.asset=@${packageName}_${version || "1.0.0"}.tar.gz' '${window.location.origin}/service/rest/v1/components?repository=${encodeURIComponent(state.repo)}'`,
+      "The server validates DESCRIPTION and archive limits without executing package code",
+    ));
+  }
+  return { crumbText: entry.path, summaryRows, snippets };
+}
+
 function huggingFaceUsageDetail(entry, detail = null) {
   const metadata = detail?.huggingface || {};
   const parts = pathSegments(entry.path);
@@ -2972,6 +3019,7 @@ async function usageDetailForEntry(entry, detail = null) {
   if (repo.format === "conan") return conanUsageDetail(entry);
   if (repo.format === "apt") return aptUsageDetail(entry, detail);
   if (repo.format === "alpine") return alpineUsageDetail(entry, detail);
+  if (repo.format === "r") return rUsageDetail(entry, detail);
   if (repo.format === "huggingface") return huggingFaceUsageDetail(entry, detail);
   if (repo.format === "docker") return dockerUsageDetail(entry);
   return null;
@@ -3350,6 +3398,20 @@ function renderUploadFields() {
       <label class="upload-path">
         <span>Package path</span>
         <input id="upload-path" type="text" value="Package filename is read from the selected APK" readonly>
+      </label>
+    `;
+    return;
+  }
+  if (repo.format === "r") {
+    fields.innerHTML = `
+      <label class="upload-file">
+        <span>R source package</span>
+        <input id="upload-file" type="file" accept=".tar.gz,application/gzip,application/x-gzip" required>
+      </label>
+      <div class="muted-row full-width">Upload the canonical <code>Package_Version.tar.gz</code> produced by <code>R CMD build</code>. The server validates the archive and <code>DESCRIPTION</code> without executing package code, then atomically publishes <code>PACKAGES.gz</code>.</div>
+      <label class="upload-path">
+        <span>Package path</span>
+        <input id="upload-path" type="text" value="src/contrib/Package_Version.tar.gz" readonly>
       </label>
     `;
     return;
@@ -3777,6 +3839,14 @@ function buildUploadForm(repo, form) {
     form.append("alpine.channel", channel);
     form.append("alpine.repositoryArchitecture", architecture);
     form.append("alpine.asset", file, file.name);
+    return;
+  }
+  if (repo.format === "r") {
+    const file = document.getElementById("upload-file")?.files?.[0];
+    if (!file || !file.name.toLowerCase().endsWith(".tar.gz")) {
+      throw new Error("A canonical R source .tar.gz package is required.");
+    }
+    form.append("r.asset", file, file.name);
     return;
   }
   const file = document.getElementById("upload-file")?.files?.[0];

@@ -12,6 +12,7 @@ import com.github.klboke.kkrepo.server.apt.AptService;
 import com.github.klboke.kkrepo.server.alpine.AlpineService;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
+import com.github.klboke.kkrepo.server.r.RService;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
@@ -45,6 +46,7 @@ public class RepositoriesController {
   private final SecurityManagementService securityService;
   private AptService aptService;
   private AlpineService alpineService;
+  private RService rService;
   private ConanRegistryDao conanRegistry;
   private RepositoryRuntimeRegistry runtimeRegistry;
 
@@ -68,6 +70,12 @@ public class RepositoriesController {
   void setAlpineManagement(
       AlpineService alpineService, RepositoryRuntimeRegistry runtimeRegistry) {
     this.alpineService = alpineService;
+    this.runtimeRegistry = runtimeRegistry;
+  }
+
+  @Autowired(required = false)
+  void setRManagement(RService rService, RepositoryRuntimeRegistry runtimeRegistry) {
+    this.rService = rService;
     this.runtimeRegistry = runtimeRegistry;
   }
 
@@ -305,6 +313,25 @@ public class RepositoriesController {
     }
   }
 
+  @GetMapping("/{name}/r/status")
+  public RService.Status rStatus(
+      @PathVariable("name") String name, HttpServletRequest request) {
+    AuthenticatedSubject subject = requireAuthenticated(request);
+    RepositoryView existing = requireRRepository(name);
+    requireRepositoryAdmin(subject, existing.format(), existing.name(), "read");
+    return r().status(repositoryRuntime(name));
+  }
+
+  @PostMapping("/{name}/r/rebuild")
+  public ResponseEntity<Void> rebuildR(
+      @PathVariable("name") String name, HttpServletRequest request) {
+    AuthenticatedSubject subject = requireAuthenticated(request);
+    RepositoryView existing = requireRRepository(name);
+    requireRepositoryAdmin(subject, existing.format(), existing.name(), "edit");
+    r().rebuild(repositoryRuntime(name));
+    return ResponseEntity.noContent().build();
+  }
+
   @ExceptionHandler(RepositoryNotFoundException.class)
   public ResponseEntity<Map<String, String>> handleNotFound(RepositoryNotFoundException e) {
     return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("message", e.getMessage()));
@@ -347,6 +374,14 @@ public class RepositoriesController {
     return view;
   }
 
+  private RepositoryView requireRRepository(String name) {
+    RepositoryView view = service.get(name);
+    if (view.format() != RepositoryFormat.R) {
+      throw new RepositoryValidationException("Repository is not an R repository");
+    }
+    return view;
+  }
+
   private AptService apt() {
     if (aptService == null) {
       throw new ResponseStatusException(
@@ -361,6 +396,23 @@ public class RepositoriesController {
           HttpStatus.SERVICE_UNAVAILABLE, "Alpine repository service is unavailable");
     }
     return alpineService;
+  }
+
+  private RService r() {
+    if (rService == null) {
+      throw new ResponseStatusException(
+          HttpStatus.SERVICE_UNAVAILABLE, "R repository service is unavailable");
+    }
+    return rService;
+  }
+
+  private RepositoryRuntime repositoryRuntime(String name) {
+    if (runtimeRegistry == null) {
+      throw new ResponseStatusException(
+          HttpStatus.SERVICE_UNAVAILABLE, "Repository runtime registry is unavailable");
+    }
+    return runtimeRegistry.resolve(name)
+        .orElseThrow(() -> new RepositoryNotFoundException("Repository not found: " + name));
   }
 
   private RepositoryRuntime aptRuntime(String name) {

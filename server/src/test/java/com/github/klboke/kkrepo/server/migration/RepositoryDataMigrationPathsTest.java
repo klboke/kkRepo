@@ -126,6 +126,16 @@ class RepositoryDataMigrationPathsTest {
   }
 
   @Test
+  void rDiscoveryKeepsOnlyCanonicalSourcePackages() {
+    assertTrue(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.R, "src/contrib/demo_1.2-3.tar.gz"));
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.R, "src/contrib/PACKAGES.gz"));
+    assertFalse(RepositoryDataMigrationPaths.shouldDiscoverAsset(
+        RepositoryFormat.R, "bin/windows/contrib/4.6/demo_1.2-3.zip"));
+  }
+
+  @Test
   void checksumGenerationRunsForMavenNonChecksumContent() {
     assertTrue(RepositoryDataMigrationPaths.shouldGenerateMavenChecksumSiblings(
         MAVEN_PATH_PARSER.parsePath("com/acme/app/1.0/app-1.0.jar")));

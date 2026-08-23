@@ -103,6 +103,20 @@ class PostgreSqlDatabaseDialectTest {
   }
 
   @Test
+  void keepsROptimizerSqlInsidePostgreSqlBackend() {
+    var cursor = dialect.r().packageNameIdCursor("demo", 41L);
+
+    assertEquals("(package_name, id) > (?, ?)", cursor.predicate());
+    assertEquals(List.of("demo", 41L), cursor.arguments());
+    assertTrue(dialect.r().pendingSuitesSql()
+        .contains("JOIN repository repository_row"));
+    assertTrue(dialect.r().snapshotCleanupCandidatesSql()
+        .contains("candidate.revision <> ("));
+    assertTrue(dialect.r().snapshotCleanupCandidatesSql()
+        .contains("candidate.revision < ("));
+  }
+
+  @Test
   void componentAndCacheOperationsUseAtomicReturningStatements() {
     RecordingJdbcTemplate jdbc = new RecordingJdbcTemplate();
 

@@ -25,6 +25,35 @@ import org.springframework.mock.web.MockHttpServletResponse;
 class RepositoryRequestMetricsFilterTest {
 
   @Test
+  void recordsLowCardinalityRRepositoryOperations() throws Exception {
+    String[][] requests = {
+        {"GET", "/repository/cran/src/contrib/PACKAGES.gz", "r_packages_index"},
+        {"PUT", "/repository/cran/src/contrib/demo_1.0.0.tar.gz", "r_package_publish"},
+        {"DELETE", "/repository/cran/src/contrib/demo_1.0.0.tar.gz", "r_package_delete"},
+        {"HEAD", "/repository/cran/src/contrib/demo_1.0.0.tar.gz", "r_package_head"},
+        {"GET", "/repository/cran/src/contrib/demo_1.0.0.tar.gz", "r_package_download"},
+        {"GET", "/repository/cran/src/contrib/PACKAGES.rds", "r_content"},
+    };
+
+    for (String[] item : requests) {
+      SimpleMeterRegistry registry = new SimpleMeterRegistry();
+      RepositoryRequestMetricsFilter filter = new RepositoryRequestMetricsFilter(
+          new KkRepoMetrics(registry), true, "");
+      MockHttpServletRequest request = new MockHttpServletRequest(item[0], item[1]);
+      MockHttpServletResponse response = new MockHttpServletResponse();
+      FilterChain chain = (req, resp) -> req.setAttribute(
+          RepositorySecurityFilter.REPOSITORY_RECORD_ATTRIBUTE,
+          repository("cran", RepositoryFormat.R, RepositoryType.HOSTED));
+
+      filter.doFilter(request, response, chain);
+
+      assertNotNull(registry.find("kkrepo_repository_requests_total")
+          .tags("operation", item[2], "status", "200")
+          .counter(), item[2]);
+    }
+  }
+
+  @Test
   void recordsLowCardinalityAptOperations() throws Exception {
     SimpleMeterRegistry registry = new SimpleMeterRegistry();
     RepositoryRequestMetricsFilter filter = new RepositoryRequestMetricsFilter(

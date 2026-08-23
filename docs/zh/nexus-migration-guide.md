@@ -2,7 +2,7 @@
 
 本文说明从 Nexus Repository 迁移到 kkrepo 的准备条件、执行顺序、增量迁移和域名切换方式。
 
-kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议行为和权限认证模型。迁移完成后，只需要把原 Nexus 域名指向 kkrepo，Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、APT/Debian、Alpine/APK、NuGet、RubyGems、Yum 等已被迁移流程覆盖的非 Docker 客户端配置不需要修改。Docker / OCI 使用 Registry HTTP API V2 的 `/v2/...` 路由；切换 Docker 客户端时需要保持仓库名和 connector/path-based routing 入口一致。
+kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议行为和权限认证模型。迁移完成后，只需要把原 Nexus 域名指向 kkrepo，Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、APT/Debian、Alpine/APK、R/CRAN、NuGet、RubyGems、Yum 等已被迁移流程覆盖的非 Docker 客户端配置不需要修改。Docker / OCI 使用 Registry HTTP API V2 的 `/v2/...` 路由；切换 Docker 客户端时需要保持仓库名和 connector/path-based routing 入口一致。
 
 ## 仓库数据范围与格式边界
 
@@ -17,6 +17,7 @@ kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议行
 - **Conda：** 元数据迁移识别 `conda-hosted`、`conda-proxy` 和 `conda-group`，保留 remote、TTL、online、write policy 与有序成员。Hosted `.tar.bz2`/`.conda` package 只对 Nexus 3.92.x-3.94.x 且 datastore fingerprint 能证明预期 Conda package shape 的源恢复。源端生成的 repodata/channeldata 会被过滤并在目标端重建。未知 profile、shape 漂移、不支持的 asset 或无法证明 package identity 时生成 `NEEDS_MANUAL_ACTION`；不会把 proxy package cache 当作 hosted content 重放。
 - **APT / Debian：** 元数据迁移识别 `apt-hosted` 和 `apt-proxy`，保留 distribution policy、passthrough/re-sign 模式、remote、TTL、online 和 write policy。Hosted `.deb` 仅对 Nexus 3.92.x-3.94.x 且 datastore fingerprint 能证明 canonical package path、APT attributes 与 SHA-256 的源恢复；源端生成的 `dists/` metadata 会过滤并重建。Private signing key 绝不静默复制，受影响目标会保持 offline 并报告 `NEEDS_MANUAL_ACTION`，直到管理员显式导入预期 key。未知 profile/shape 漂移 fail closed；proxy cache 默认不选择。
 - **Alpine / APK：** 元数据迁移识别 Nexus 3.94 原生 `alpine-hosted`、`alpine-proxy` 和 `alpine-group` definition，保留 remote/TTL/negative cache、online/write policy 和有序 member。Hosted APK v2 仅在精确 datastore fingerprint 能证明四段 canonical package path、Alpine attributes、component identity 与 SHA-256 时恢复；源端生成的 `APKINDEX.tar.gz` 会过滤并重建。Private signing key 绝不静默复制，本地签名的 hosted/proxy/group 目标保持 offline 并报告 `NEEDS_MANUAL_ACTION`，直到管理员显式导入预期 PKCS#8 RSA key。未知版本/shape 与 APK v3 数据 fail closed；proxy cache 默认不选择。
+- **R / CRAN：** 元数据迁移识别 Nexus 3.94 原生 `r-hosted`、`r-proxy` 和 `r-group` definition，保留 remote/TTL、online/write policy 与有序 member。Hosted source package 仅在精确 datastore fingerprint 能证明规范 `src/contrib` path、typed package/version identity、size 与 checksum 时恢复；源端生成的 `PACKAGES.gz`、proxy projection、group binding 和 lease 在目标端重建。未知版本/shape 与不可验证内容 fail closed；proxy cache 默认不选择。
 - **Proxy credential：** 可恢复的源端 secret 会加密写入目标。如果 Swift 或 Ansible proxy secret 被遮蔽或缺失，迁移会把目标 proxy 创建为 offline，不写入占位 credential，需管理员显式补齐。
 
 ## 迁移流程概览

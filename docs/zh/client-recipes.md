@@ -605,6 +605,38 @@ curl -u alice:"$KKREPO_PASSWORD" \
 
 认证 URL 应保存在受保护的客户端配置中。Hosted/group index 由本地 key 签名，passthrough proxy 保持上游签名。详见 [Alpine / APK 仓库使用指南](repository-guides/alpine-apk.md)。
 
+## R / CRAN
+
+在 `.Rprofile` 中把 R group 配成常用 source repository：
+
+```r
+local({
+  repos <- getOption("repos")
+  repos["KKRepo"] <- "https://nexus.example.com/repository/r-group"
+  options(repos = repos)
+})
+```
+
+向 hosted 发布 source package：
+
+```bash
+R CMD build acmepkg
+curl -u alice:"$KKREPO_PASSWORD" \
+  -H 'Content-Type: application/x-gzip' \
+  --upload-file acmepkg_1.2.3.tar.gz \
+  https://nexus.example.com/repository/r-hosted/src/contrib/acmepkg_1.2.3.tar.gz
+```
+
+通过 group 查询并安装：
+
+```r
+available.packages(repos = getOption("repos")["KKRepo"], type = "source")
+install.packages("acmepkg", repos = getOption("repos")["KKRepo"], type = "source")
+```
+
+Hosted/group 仅支持 source；上游 `.zip`、`.tgz` 或 `PACKAGES.rds` 需要直连 proxy。详见
+[R / CRAN 仓库使用指南](repository-guides/r-cran.md)。
+
 ## Hugging Face Models
 
 创建 Models-only `huggingface-proxy`，再把 Hub 客户端指向仓库根路径：

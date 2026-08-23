@@ -10,6 +10,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseType;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.JsonPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.HuggingFacePersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.MigrationPersistenceDialect;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.RPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.SearchPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.SecurityPersistenceDialect;
 import java.nio.charset.StandardCharsets;
@@ -28,6 +29,7 @@ import org.springframework.jdbc.core.JdbcOperations;
 public final class MySqlDatabaseDialect implements DatabaseDialect {
   private final MySqlJsonPersistenceDialect json = new MySqlJsonPersistenceDialect();
   private final AlpinePersistenceDialect alpine = new MySqlAlpinePersistenceDialect();
+  private final RPersistenceDialect r = new MySqlRPersistenceDialect();
   private final ComponentPersistenceDialect components = new MySqlComponentPersistenceDialect(json);
   private final CondaPersistenceDialect conda = new MySqlCondaPersistenceDialect();
   private final ConanPersistenceDialect conan = new MySqlConanPersistenceDialect();
@@ -57,6 +59,11 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
   @Override
   public AlpinePersistenceDialect alpine() {
     return alpine;
+  }
+
+  @Override
+  public RPersistenceDialect r() {
+    return r;
   }
 
   @Override
@@ -143,6 +150,57 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
                 AND newer.published_at IS NOT NULL
                 AND newer.revision > candidate.revision
               ORDER BY newer.revision DESC
+              LIMIT 1 OFFSET ?)
+          ORDER BY candidate.created_at, candidate.repository_id,
+            candidate.distribution_name, candidate.revision
+          LIMIT ?
+          """;
+    }
+  }
+
+  private static final class MySqlRPersistenceDialect implements RPersistenceDialect {
+    @Override
+    public KeysetCursor packageNameIdCursor(String packageName, long packageId) {
+      return new KeysetCursor(
+          "(package_name > ? OR (package_name = ? AND id > ?))",
+          List.of(packageName, packageName, packageId));
+    }
+
+    @Override
+    public String pendingSuitesSql() {
+      return """
+          SELECT r_suite_state.*
+          FROM r_suite_state FORCE INDEX (idx_r_suite_worker)
+          STRAIGHT_JOIN repository repository_row ON repository_row.id = r_suite_state.repository_id
+          WHERE r_suite_state.publish_pending = TRUE
+            AND (r_suite_state.desired_at <= ?
+              OR COALESCE(r_suite_state.pending_since, r_suite_state.desired_at) <= ?)
+            AND (r_suite_state.last_error_at IS NULL OR r_suite_state.last_error_at <= ?)
+            AND repository_row.online = true AND repository_row.format = 'r'
+            AND repository_row.type IN ('hosted', 'proxy', 'group')
+          ORDER BY r_suite_state.desired_at, r_suite_state.repository_id,
+            r_suite_state.distribution_name
+          LIMIT ?
+          """;
+    }
+
+    @Override
+    public String snapshotCleanupCandidatesSql() {
+      return """
+          SELECT candidate.* FROM r_snapshot candidate
+          JOIN r_suite_state suite
+            ON suite.repository_id = candidate.repository_id
+            AND suite.distribution_name = candidate.distribution_name
+          WHERE candidate.published_at IS NOT NULL AND candidate.created_at < ?
+            AND candidate.revision <> suite.published_revision
+            AND candidate.revision < (
+              SELECT newer.revision FROM r_snapshot newer
+                FORCE INDEX (idx_r_snapshot_retention)
+              WHERE newer.repository_id = candidate.repository_id
+                AND newer.distribution_name = candidate.distribution_name
+                AND newer.publish_complete = TRUE
+              ORDER BY newer.repository_id, newer.distribution_name,
+                newer.publish_complete, newer.revision DESC
               LIMIT 1 OFFSET ?)
           ORDER BY candidate.created_at, candidate.repository_id,
             candidate.distribution_name, candidate.revision

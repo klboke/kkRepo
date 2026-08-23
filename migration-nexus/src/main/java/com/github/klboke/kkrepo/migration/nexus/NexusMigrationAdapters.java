@@ -80,6 +80,7 @@ final class NexusMigrationAdapters {
           || ("conan".equals(normalizedFormat) && !"group".equals(normalizedType))
           || ("apt".equals(normalizedFormat) && "hosted".equals(normalizedType))
           || ("alpine".equals(normalizedFormat) && "hosted".equals(normalizedType))
+          || ("r".equals(normalizedFormat) && "hosted".equals(normalizedType))
           || ("huggingface".equals(normalizedFormat) && "proxy".equals(normalizedType));
     }
 
@@ -148,7 +149,8 @@ final class NexusMigrationAdapters {
       return !"cargo".equals(normalized) && !"pub".equals(normalized)
           && !"swift".equals(normalized) && !"ansiblegalaxy".equals(normalized)
           && !"conda".equals(normalized) && !"conan".equals(normalized)
-          && !"alpine".equals(normalized) && !"huggingface".equals(normalized);
+          && !"alpine".equals(normalized) && !"r".equals(normalized)
+          && !"huggingface".equals(normalized);
     }
 
     @Override
@@ -175,7 +177,8 @@ final class NexusMigrationAdapters {
           && (!"ansiblegalaxy".equals(lower(format)) || !"group".equals(lower(type)))
           && (!"conda".equals(lower(format)) || "hosted".equals(lower(type)))
           && (!"conan".equals(lower(format)) || !"group".equals(lower(type)))
-          && (!"alpine".equals(lower(format)) || "hosted".equals(lower(type)));
+          && (!"alpine".equals(lower(format)) || "hosted".equals(lower(type)))
+          && (!"r".equals(lower(format)) || "hosted".equals(lower(type)));
     }
 
     @Override
@@ -202,7 +205,8 @@ final class NexusMigrationAdapters {
           && (!"ansiblegalaxy".equals(lower(format)) || !"group".equals(lower(type)))
           && (!"conda".equals(lower(format)) || "hosted".equals(lower(type)))
           && (!"conan".equals(lower(format)) || !"group".equals(lower(type)))
-          && (!"alpine".equals(lower(format)) || "hosted".equals(lower(type)));
+          && (!"alpine".equals(lower(format)) || "hosted".equals(lower(type)))
+          && (!"r".equals(lower(format)) || "hosted".equals(lower(type)));
     }
 
     @Override

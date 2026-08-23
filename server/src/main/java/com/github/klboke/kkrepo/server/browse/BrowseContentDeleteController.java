@@ -12,6 +12,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MetadataRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
@@ -40,6 +41,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmGroupPackumentCache;
 import com.github.klboke.kkrepo.server.pypi.PypiGroupSimpleIndexCache;
+import com.github.klboke.kkrepo.server.r.RService;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
@@ -92,6 +94,8 @@ public class BrowseContentDeleteController {
   private AptService aptService;
   private AlpineRegistryDao alpineRegistry;
   private AlpineService alpineService;
+  private RRegistryDao rRegistry;
+  private RService rService;
   private CondaService condaService;
 
   public BrowseContentDeleteController(
@@ -154,6 +158,16 @@ public class BrowseContentDeleteController {
     this.runtimeRegistry = runtimeRegistry;
     this.alpineRegistry = alpineRegistry;
     this.alpineService = alpineService;
+  }
+
+  @Autowired(required = false)
+  void setRDeleteSupport(
+      RepositoryRuntimeRegistry runtimeRegistry,
+      RRegistryDao rRegistry,
+      RService rService) {
+    this.runtimeRegistry = runtimeRegistry;
+    this.rRegistry = rRegistry;
+    this.rService = rService;
   }
 
   @DeleteMapping("/{repository}")
@@ -248,6 +262,20 @@ public class BrowseContentDeleteController {
         }
         return deleteAuthorized(repository, publicPath, repository, actorId).deletedAssets();
       }
+      if (target.format() == RepositoryFormat.R) {
+        Object assetPath = component.attributes() == null
+            ? null : component.attributes().get("assetPath");
+        String publicPath = assetPath == null ? path : assetPath.toString();
+        if (publicPath == null || publicPath.isBlank()) {
+          List<AssetRecord> componentAssets = assetDao.listAssetsByComponent(component.id());
+          if (componentAssets.isEmpty()) {
+            throw new ResponseStatusException(
+                HttpStatus.NOT_FOUND, "Cleanup component has no assets: " + subjectId);
+          }
+          publicPath = componentAssets.getFirst().path();
+        }
+        return deleteAuthorized(repository, publicPath, repository, actorId).deletedAssets();
+      }
       if (target.format() == RepositoryFormat.TERRAFORM
           && "terraform-provider".equals(component.kind())) {
         terraformRegistryDao.deleteProviderVersion(
@@ -271,7 +299,8 @@ public class BrowseContentDeleteController {
               HttpStatus.NOT_FOUND, "Cleanup asset was not found: " + subjectId));
       if (target.format() == RepositoryFormat.CONDA
           || target.format() == RepositoryFormat.APT
-          || target.format() == RepositoryFormat.ALPINE) {
+          || target.format() == RepositoryFormat.ALPINE
+          || target.format() == RepositoryFormat.R) {
         return deleteAuthorized(repository, asset.path(), repository, actorId).deletedAssets();
       }
       return deleteResolvedAssets(
@@ -315,6 +344,9 @@ public class BrowseContentDeleteController {
     if (requested.format() == RepositoryFormat.ALPINE) {
       storagePath = alpineStoragePath(requested, publicPath);
     }
+    if (requested.format() == RepositoryFormat.R) {
+      storagePath = rStoragePath(requested, publicPath);
+    }
     String resolvedSourceRepository = sourceRepository;
     if (requested.format() == RepositoryFormat.TERRAFORM) {
       Optional<TerraformBrowseAssetPathResolver.ResolvedStoragePath> resolved =
@@ -345,6 +377,10 @@ public class BrowseContentDeleteController {
     if (target.format() == RepositoryFormat.ALPINE
         && target.type() == RepositoryType.HOSTED) {
       return deleteAlpinePackage(requested, target, publicPath, storagePath, actorId);
+    }
+    if (target.format() == RepositoryFormat.R
+        && target.type() == RepositoryType.HOSTED) {
+      return deleteRPackage(requested, target, publicPath, storagePath, actorId);
     }
     List<AssetRecord> assets = matchingAssets(target, storagePath);
     if (assets.isEmpty()) {
@@ -537,6 +573,46 @@ public class BrowseContentDeleteController {
             repository.id(), namespace, segments[1], segments[3], segments[4], segments[2])
         .filter(record -> segments[5].equals(record.filename()))
         .map(AlpineRegistryDao.PackageRecord::path)
+        .orElse(publicPath);
+  }
+
+  private BrowseDeleteResult deleteRPackage(
+      RepositoryRecord requested,
+      RepositoryRecord target,
+      String publicPath,
+      String storagePath,
+      String actorId) {
+    if (runtimeRegistry == null || rService == null) {
+      throw new ResponseStatusException(
+          HttpStatus.SERVICE_UNAVAILABLE, "R delete service is unavailable");
+    }
+    RepositoryRuntime runtime = runtimeRegistry.resolveById(target.id())
+        .filter(candidate -> candidate.format() == RepositoryFormat.R
+            && candidate.type() == RepositoryType.HOSTED)
+        .orElseThrow(() -> new ResponseStatusException(
+            HttpStatus.CONFLICT, "R repository runtime is unavailable"));
+    MavenResponse response = rService.delete(
+        runtime, storagePath, "administrative delete by " + actorId, false);
+    if (response.status() == 404) {
+      throw new ResponseStatusException(HttpStatus.NOT_FOUND, "R package state was not found");
+    }
+    if (response.status() != 204) {
+      throw new ResponseStatusException(HttpStatus.CONFLICT, "R package could not be deleted");
+    }
+    return new BrowseDeleteResult(requested.name(), target.name(), publicPath, 1);
+  }
+
+  private String rStoragePath(RepositoryRecord repository, String publicPath) {
+    if (rRegistry == null) return publicPath;
+    Optional<RRegistryDao.PackageRecord> direct =
+        rRegistry.findPackageByPath(repository.id(), publicPath);
+    if (direct.isPresent()) return direct.orElseThrow().path();
+    String[] segments = publicPath.split("/", -1);
+    if (segments.length != 3) return publicPath;
+    return rRegistry.findPackage(
+            repository.id(), "src/contrib", "source", segments[0], segments[1], "source")
+        .filter(record -> segments[2].equals(record.filename()))
+        .map(RRegistryDao.PackageRecord::path)
         .orElse(publicPath);
   }
 

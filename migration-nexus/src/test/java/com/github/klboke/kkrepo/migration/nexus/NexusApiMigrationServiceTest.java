@@ -619,6 +619,53 @@ class NexusApiMigrationServiceTest {
   }
 
   @Test
+  void migratesRDefinitionsWithProxyCachePolicyAndOrderedMembers() {
+    FakeBlobStoreDao blobStores = new FakeBlobStoreDao();
+    FakeRepositoryDao repositories = new FakeRepositoryDao();
+    NexusApiMigrationService service = service(blobStores, repositories);
+    NexusInventory inventory = new NexusInventory(
+        List.of(Map.of("name", "default")),
+        List.of(
+            repository("r-hosted", "r", "hosted", Map.of(
+                "storage", Map.of(
+                    "blobStoreName", "default",
+                    "strictContentTypeValidation", true,
+                    "writePolicy", "allow"))),
+            repository("r-proxy", "r", "proxy", Map.of(
+                "storage", storage("default"),
+                "proxy", Map.of(
+                    "remoteUrl", "https://cran.example.test/",
+                    "contentMaxAge", 37,
+                    "metadataMaxAge", 19),
+                "negativeCache", Map.of("enabled", true, "timeToLive", 11),
+                "httpClient", Map.of("autoBlock", false))),
+            repository("r-group", "r", "group", Map.of(
+                "storage", storage("default"),
+                "group", Map.of("memberNames", List.of("r-hosted", "r-proxy"))))),
+        NexusSecurityExport.empty(),
+        List.of());
+
+    ConfigMigrationCounts counts = service.migrateConfig(
+        inventory, request("https://old-nexus.example"));
+
+    assertEquals(3, counts.repositories());
+    RepositoryRecord hosted = repositories.required("r-hosted");
+    RepositoryRecord proxy = repositories.required("r-proxy");
+    assertEquals(RepositoryFormat.R, hosted.format());
+    assertEquals("r-hosted", hosted.recipeName());
+    assertEquals("ALLOW", hosted.writePolicy());
+    assertEquals("https://cran.example.test/", proxy.proxyRemoteUrl());
+    Map<?, ?> proxyAttributes = (Map<?, ?>) proxy.attributes().get("proxy");
+    assertEquals(37, proxyAttributes.get("contentMaxAgeMinutes"));
+    assertEquals(19, proxyAttributes.get("metadataMaxAgeMinutes"));
+    assertEquals(false, proxyAttributes.get("autoBlock"));
+    assertEquals(
+        Map.of("enabled", true, "timeToLive", 11),
+        proxyAttributes.get("negativeCache"));
+    assertEquals(List.of("r-hosted", "r-proxy"), repositories.memberNames("r-group"));
+  }
+
+  @Test
   void migratesSwiftProxyAuthenticationAndTtlsWithoutKeepingNestedSecrets() {
     FakeRepositoryDao repositories = new FakeRepositoryDao();
     NexusApiMigrationService service = service(new FakeBlobStoreDao(), repositories);

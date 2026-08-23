@@ -94,12 +94,15 @@ public class JdbcComponentDao implements com.github.klboke.kkrepo.persistence.jd
                       THEN NULLIF(%s, 'null')
                     WHEN c.format = 'alpine'
                       THEN NULLIF(%s, 'null')
+                    WHEN c.format = 'r'
+                      THEN NULLIF(%s, 'null')
                     ELSE NULL
                END AS storage_path
         """.formatted(
         jsonColumns.extractText("c.attributes_json", "distPath"),
         jsonColumns.extractText("c.attributes_json", "browsePath"),
         jsonColumns.extractText("c.attributes_json", "browsePath"),
+        jsonColumns.extractText("c.attributes_json", "assetPath"),
         jsonColumns.extractText("c.attributes_json", "assetPath"),
         jsonColumns.extractText("c.attributes_json", "assetPath"));
     this.searchSelect = searchProjection + """

@@ -58,6 +58,7 @@ class SecurityScanCandidateClassifierTest {
             "conans/demo/1.0/acme/stable/revisions/rrev/packages/package/revisions/prev/files/conan_package.tzst",
             "conan"),
         Arguments.of(RepositoryFormat.APT, "pool/d/demo/demo_1.0_amd64.deb", "package"),
+        Arguments.of(RepositoryFormat.R, "src/contrib/demo_1.0.0.tar.gz", "r"),
         Arguments.of(
             RepositoryFormat.HUGGINGFACE,
             "openai/model/resolve/" + "a".repeat(40) + "/model.safetensors",
@@ -174,6 +175,8 @@ class SecurityScanCandidateClassifierTest {
             "conans/demo/1.0/acme/stable/revisions/rrev/files/conanmanifest.txt",
             "manifest"),
         Arguments.of(RepositoryFormat.APT, ".apt/snapshots/stable/1/Packages.deb", "metadata"),
+        Arguments.of(RepositoryFormat.R, "src/contrib/PACKAGES.gz", "r"),
+        Arguments.of(RepositoryFormat.R, "src/contrib/Archive/demo/demo_1.0.0.tar.gz", "r"),
         Arguments.of(RepositoryFormat.NUGET, "registration/demo/index.json", "metadata"),
         Arguments.of(RepositoryFormat.YUM, "repodata/primary.xml.gz", "metadata"));
   }
@@ -203,11 +206,40 @@ class SecurityScanCandidateClassifierTest {
     assertEquals("hf-model-file:sha256:" + "a".repeat(64), subject.key());
   }
 
+  @Test
+  void exposesRDescriptionIdentityAndPartialCoverageWithoutScanningStaticTarballs() {
+    AssetRecord source = asset(
+        RepositoryFormat.R, "src/contrib/demo_1.0.0.tar.gz", "r");
+    var subject = classifier.subjectIdentity(source, blob(42));
+
+    assertEquals("demo", subject.attributes().get("package"));
+    assertEquals("1.0.0", subject.attributes().get("version"));
+    assertEquals("PARTIAL", subject.attributes().get("vulnerabilityCoverage"));
+
+    AssetRecord unprojected = new AssetRecord(
+        source.id(), source.repositoryId(), source.componentId(), source.assetBlobId(),
+        source.format(), source.path(), source.pathHash(), source.name(), source.kind(),
+        source.contentType(), source.size(), source.lastDownloadedAt(), source.lastUpdatedAt(),
+        Map.of());
+    assertEquals(
+        CandidateDisposition.NOT_APPLICABLE,
+        classifier.classify(unprojected, blob(42), profile(1024)).disposition());
+  }
+
   private static AssetRecord asset(RepositoryFormat format, String path, String kind) {
+    Map<String, Object> attributes = format == RepositoryFormat.R
+        && path.equals("src/contrib/demo_1.0.0.tar.gz")
+        ? Map.of(
+            "rInputSchema", "r-source-package-v1",
+            "rPackage", "demo",
+            "rVersion", "1.0.0",
+            "rNamespace", "src/contrib",
+            "rSource", "hosted")
+        : Map.of();
     return new AssetRecord(
         1L, 1L, null, 1L, format, path, PersistenceHashes.pathHash(path),
         path.substring(path.lastIndexOf('/') + 1), kind, "application/octet-stream",
-        42L, null, Instant.EPOCH, Map.of());
+        42L, null, Instant.EPOCH, attributes);
   }
 
   private static AssetBlobRecord blob(long size) {

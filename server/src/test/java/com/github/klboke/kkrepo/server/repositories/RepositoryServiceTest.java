@@ -20,6 +20,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
@@ -50,6 +51,92 @@ import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class RepositoryServiceTest {
+
+  @Test
+  void rHostedLifecycleInitializesNamespaceAndDeletesProtocolState() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RRegistryDao registry = mock(RRegistryDao.class);
+    RepositoryService service = service(repositories);
+    service.setRRegistry(registry);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "cran-hosted", "r-hosted", true, "default", true,
+        new HostedSettings("ALLOW", null, null), null, null, null, null, null));
+
+    assertEquals(RepositoryFormat.R, created.format());
+    verify(registry).ensureSuite(
+        org.mockito.ArgumentMatchers.eq(100L),
+        org.mockito.ArgumentMatchers.eq("src/contrib"),
+        org.mockito.ArgumentMatchers.any());
+
+    service.delete("cran-hosted");
+    verify(registry).deleteRepositoryState(100L);
+    assertTrue(repositories.findByName("cran-hosted").isEmpty());
+  }
+
+  @Test
+  void rGroupCreationIsLazyAndMemberReplacementDirtiesDurableSnapshot() {
+    StubRepositoryDao repositories = new StubRepositoryDao(
+        rHostedRepository(71L, "cran-first"),
+        rHostedRepository(72L, "cran-second"));
+    RRegistryDao registry = mock(RRegistryDao.class);
+    RepositoryService service = service(repositories);
+    service.setRRegistry(registry);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "cran-root", "r-group", true, "default", true,
+        null, null, null, null, null,
+        new GroupSettings(List.of("cran-first", "cran-second"))));
+
+    assertEquals(List.of("cran-first", "cran-second"), created.group().memberNames());
+    assertEquals(List.of(71L, 72L), repositories.membersByGroupId.get(100L));
+    verify(registry).ensureSuite(
+        org.mockito.ArgumentMatchers.eq(100L),
+        org.mockito.ArgumentMatchers.eq("src/contrib"),
+        org.mockito.ArgumentMatchers.any());
+    verify(registry, org.mockito.Mockito.never()).markSuiteDirty(
+        org.mockito.ArgumentMatchers.anyLong(),
+        org.mockito.ArgumentMatchers.anyString(),
+        org.mockito.ArgumentMatchers.any());
+
+    RepositoryView updated = service.replaceMembers(
+        "cran-root", List.of("cran-second", "cran-first"));
+    assertEquals(List.of("cran-second", "cran-first"), updated.group().memberNames());
+    assertEquals(List.of(72L, 71L), repositories.membersByGroupId.get(100L));
+    verify(registry).markSuiteDirty(
+        org.mockito.ArgumentMatchers.eq(100L),
+        org.mockito.ArgumentMatchers.eq("src/contrib"),
+        org.mockito.ArgumentMatchers.any());
+  }
+
+  @Test
+  void updatingRMemberInvalidatesEveryContainingGroupTransitively() {
+    StubRepositoryDao repositories = new StubRepositoryDao(
+        rHostedRepository(81L, "cran-hosted"),
+        rGroupRepository(82L, "cran-nested"),
+        rGroupRepository(83L, "cran-root"));
+    repositories.replaceMembers(82L, List.of(81L));
+    repositories.replaceMembers(83L, List.of(82L));
+    RRegistryDao registry = mock(RRegistryDao.class);
+    RepositoryService service = service(repositories);
+    service.setRRegistry(registry);
+
+    service.update("cran-hosted",
+        new UpdateCommand(false, null, null, null, null, null, null, null, null));
+
+    verify(registry, org.mockito.Mockito.atLeastOnce()).markSuiteDirty(
+        org.mockito.ArgumentMatchers.eq(81L),
+        org.mockito.ArgumentMatchers.eq("src/contrib"),
+        org.mockito.ArgumentMatchers.any());
+    verify(registry).markSuiteDirty(
+        org.mockito.ArgumentMatchers.eq(82L),
+        org.mockito.ArgumentMatchers.eq("src/contrib"),
+        org.mockito.ArgumentMatchers.any());
+    verify(registry).markSuiteDirty(
+        org.mockito.ArgumentMatchers.eq(83L),
+        org.mockito.ArgumentMatchers.eq("src/contrib"),
+        org.mockito.ArgumentMatchers.any());
+  }
 
   @Test
   void alpineHostedDefaultsRoundTripAndInitializeEveryNamespace() {
@@ -2430,6 +2517,25 @@ class RepositoryServiceTest {
     return new RepositoryRecord(
         id, name, RepositoryFormat.CONAN, RepositoryType.GROUP,
         "conan-group", true, 1L, null, null, null, null,
+        null, true, attributes);
+  }
+
+  private static RepositoryRecord rHostedRepository(long id, String name) {
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", "r-hosted");
+    return new RepositoryRecord(
+        id, name, RepositoryFormat.R, RepositoryType.HOSTED,
+        "r-hosted", true, 1L, null, null, null, null,
+        "ALLOW", true, attributes);
+  }
+
+  private static RepositoryRecord rGroupRepository(long id, String name) {
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put("recipe", "r-group");
+    attributes.put("group", Map.of());
+    return new RepositoryRecord(
+        id, name, RepositoryFormat.R, RepositoryType.GROUP,
+        "r-group", true, 1L, null, null, null, null,
         null, true, attributes);
   }
 

@@ -23,6 +23,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
@@ -56,6 +57,125 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
 class BrowseAssetDetailServiceTest {
+
+  @Test
+  void rDetailExposesDurablePackageIdentityAndControlFields() {
+    RepositoryRecord repository = repository(
+        80L, "cran-hosted", RepositoryFormat.R, RepositoryType.HOSTED);
+    String path = "src/contrib/demo_1.2.3.tar.gz";
+    AssetRecord archive = new AssetRecord(
+        81L, repository.id(), 82L, 83L, RepositoryFormat.R,
+        path, PersistenceHashes.pathHash(path), archiveName(path),
+        "r-source-package", "application/x-gzip", 512L,
+        null, Instant.EPOCH, Map.of());
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(repository.id(), path), archive), Map.of(83L, blob(83L, 512L)));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(), assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+    assertTrue(service.detail(repository, path, null).r().isEmpty());
+
+    RRegistryDao r = mock(RRegistryDao.class);
+    when(r.findPackageByPath(repository.id(), path)).thenReturn(Optional.of(
+        rPackage(repository.id(), archive.id(), archive.componentId(), path)));
+    service.setRRegistryDao(r);
+
+    Map<String, Object> detail = service.detail(repository, path, null).r();
+
+    assertEquals("src/contrib", detail.get("namespace"));
+    assertEquals("demo", detail.get("package"));
+    assertEquals("1.2.3", detail.get("version"));
+    assertEquals("demo_1.2.3.tar.gz", detail.get("filename"));
+    assertEquals("a".repeat(32), detail.get("md5"));
+    assertEquals("b".repeat(64), detail.get("sha256"));
+    assertEquals(512L, detail.get("size"));
+    assertEquals(RRegistryDao.SOURCE_HOSTED, detail.get("source_kind"));
+    assertEquals(repository.name(), detail.get("source_repository"));
+    assertEquals(7L, detail.get("revision"));
+    assertEquals(Instant.EPOCH, detail.get("indexed_at"));
+    assertEquals("MIT", detail.get("license"));
+    assertEquals("R (>= 4.3)", detail.get("depends"));
+    assertEquals("methods", detail.get("imports"));
+    assertEquals("Rcpp", detail.get("linkingto"));
+    assertEquals("testthat", detail.get("suggests"));
+    assertEquals("parallel", detail.get("enhances"));
+    assertEquals("yes", detail.get("needscompilation"));
+  }
+
+  @Test
+  void rGroupDetailResolvesNexusBrowseProjectionToCanonicalPackagePath() {
+    RepositoryRecord group = repository(
+        84L, "cran-group", RepositoryFormat.R, RepositoryType.GROUP);
+    RepositoryRecord hosted = repository(
+        85L, "cran-hosted", RepositoryFormat.R, RepositoryType.HOSTED);
+    String browsePath = "src/contrib/demo/1.2.3/demo_1.2.3.tar.gz";
+    String storagePath = "src/contrib/demo_1.2.3.tar.gz";
+    AssetRecord archive = new AssetRecord(
+        86L, hosted.id(), 87L, 88L, RepositoryFormat.R,
+        storagePath, PersistenceHashes.pathHash(storagePath), archiveName(storagePath),
+        "r-source-package", "application/x-gzip", 512L,
+        null, Instant.EPOCH, Map.of());
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(hosted.id(), storagePath), archive), Map.of(88L, blob(88L, 512L)));
+    RepositoryDao repositories = new StubRepositoryDao() {
+      @Override
+      public List<RepositoryRecord> listMembers(long repositoryId) {
+        return repositoryId == group.id() ? List.of(hosted) : List.of();
+      }
+    };
+    BrowseNodeDao browse = mock(BrowseNodeDao.class);
+    when(browse.findNode(hosted.id(), browsePath)).thenReturn(Optional.of(
+        new BrowseNodeDao.BrowseChild(
+            1L, browsePath, archive.name(), 4, archive.id(), archive.componentId(),
+            archive.size(), archive.contentType(), "a".repeat(40), Instant.EPOCH, false, true)));
+    RRegistryDao r = mock(RRegistryDao.class);
+    when(r.findPackageByPath(hosted.id(), storagePath)).thenReturn(Optional.of(
+        rPackage(hosted.id(), archive.id(), archive.componentId(), storagePath)));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        repositories, assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+    service.setBrowseNodeDao(browse);
+    service.setRRegistryDao(r);
+
+    BrowseAssetDetailService.BrowseAssetDetail detail =
+        service.detail(group, browsePath, hosted.name());
+
+    assertEquals(group.name(), detail.repository());
+    assertEquals(hosted.name(), detail.sourceRepository());
+    assertEquals(browsePath, detail.path());
+    assertEquals("/repository/cran-group/" + storagePath, detail.downloadUrl());
+    assertEquals("demo", detail.r().get("package"));
+    assertEquals(List.of(key(hosted.id(), storagePath)), assets.pathLookups);
+  }
+
+  @Test
+  void rDetailFailsClosedForMissingOrConflictingRegistryState() {
+    RepositoryRecord repository = repository(
+        84L, "cran-hosted", RepositoryFormat.R, RepositoryType.HOSTED);
+    String path = "src/contrib/demo_1.2.3.tar.gz";
+    AssetRecord archive = new AssetRecord(
+        85L, repository.id(), 86L, 87L, RepositoryFormat.R,
+        path, PersistenceHashes.pathHash(path), archiveName(path),
+        "r-source-package", "application/x-gzip", 512L,
+        null, Instant.EPOCH, Map.of());
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(repository.id(), path), archive), Map.of(87L, blob(87L, 512L)));
+    RRegistryDao r = mock(RRegistryDao.class);
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        new StubRepositoryDao(), assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])), new ObjectMapper());
+    service.setRRegistryDao(r);
+
+    ResponseStatusException missing = assertThrows(
+        ResponseStatusException.class, () -> service.detail(repository, path, null));
+    assertEquals(HttpStatus.NOT_FOUND, missing.getStatusCode());
+
+    when(r.findPackageByPath(repository.id(), path)).thenReturn(Optional.of(
+        rPackage(repository.id(), 999L, archive.componentId(), path)));
+    ResponseStatusException conflict = assertThrows(
+        ResponseStatusException.class, () -> service.detail(repository, path, null));
+    assertEquals(HttpStatus.CONFLICT, conflict.getStatusCode());
+  }
 
   @Test
   void alpineDetailMapsProjectedPathAndExposesRegistryIdentity() {
@@ -1744,6 +1864,27 @@ class BrowseAssetDetailServiceTest {
             "i", "busybox"),
         "identity", "a".repeat(64), "b".repeat(64), 512L,
         assetId, componentId, AlpineRegistryDao.SOURCE_HOSTED, 7L,
+        Instant.EPOCH, Instant.EPOCH, Instant.EPOCH);
+  }
+
+  private static RRegistryDao.PackageRecord rPackage(
+      long repositoryId, Long assetId, Long componentId, String path) {
+    return new RRegistryDao.PackageRecord(
+        1L, repositoryId, "src/contrib", "source", "source", "demo", "1.2.3",
+        "r1|0000000001.0000000002.0000000003".getBytes(java.nio.charset.StandardCharsets.US_ASCII),
+        "source", archiveName(path), path,
+        Map.of(
+            "Package", "demo",
+            "Version", "1.2.3",
+            "License", "MIT",
+            "Depends", "R (>= 4.3)",
+            "Imports", "methods",
+            "LinkingTo", "Rcpp",
+            "Suggests", "testthat",
+            "Enhances", "parallel",
+            "NeedsCompilation", "yes"),
+        "a".repeat(32), "b".repeat(64), "b".repeat(64), 512L,
+        assetId, componentId, RRegistryDao.SOURCE_HOSTED, 7L,
         Instant.EPOCH, Instant.EPOCH, Instant.EPOCH);
   }
 

@@ -25,6 +25,9 @@ APT_NEXUS_REPOSITORY="${APT_MIGRATION_NEXUS_REPOSITORY:-apt-hosted}"
 ALPINE_NEXUS_REPOSITORY="${ALPINE_MIGRATION_NEXUS_REPOSITORY:-alpine-migration-hosted}"
 ALPINE_PROXY_NEXUS_REPOSITORY="${ALPINE_PROXY_MIGRATION_NEXUS_REPOSITORY:-alpine-migration-proxy}"
 ALPINE_GROUP_NEXUS_REPOSITORY="${ALPINE_GROUP_MIGRATION_NEXUS_REPOSITORY:-alpine-migration-group}"
+R_NEXUS_REPOSITORY="${R_MIGRATION_NEXUS_REPOSITORY:-r-migration-hosted}"
+R_PROXY_NEXUS_REPOSITORY="${R_PROXY_MIGRATION_NEXUS_REPOSITORY:-r-migration-proxy}"
+R_GROUP_NEXUS_REPOSITORY="${R_GROUP_MIGRATION_NEXUS_REPOSITORY:-r-migration-group}"
 NEXUS_USER="${NEXUS_COMPAT_USERNAME:-admin}"
 NEXUS_PASSWORD="${NEXUS_COMPAT_PASSWORD:-Admin1234}"
 
@@ -51,6 +54,9 @@ APT_KKREPO_REPOSITORY="${APT_MIGRATION_KKREPO_REPOSITORY:-apt-hosted}"
 ALPINE_KKREPO_REPOSITORY="${ALPINE_MIGRATION_KKREPO_REPOSITORY:-alpine-migration-hosted}"
 ALPINE_PROXY_KKREPO_REPOSITORY="${ALPINE_PROXY_MIGRATION_KKREPO_REPOSITORY:-alpine-migration-proxy}"
 ALPINE_GROUP_KKREPO_REPOSITORY="${ALPINE_GROUP_MIGRATION_KKREPO_REPOSITORY:-alpine-migration-group}"
+R_KKREPO_REPOSITORY="${R_MIGRATION_KKREPO_REPOSITORY:-r-migration-hosted}"
+R_PROXY_KKREPO_REPOSITORY="${R_PROXY_MIGRATION_KKREPO_REPOSITORY:-r-migration-proxy}"
+R_GROUP_KKREPO_REPOSITORY="${R_GROUP_MIGRATION_KKREPO_REPOSITORY:-r-migration-group}"
 KKREPO_SECONDARY_URL="${KKREPO_MIGRATION_SECONDARY_URL:-}"
 KKREPO_TARGET_DATABASE="${KKREPO_MIGRATION_TARGET_DATABASE:-mysql}"
 KKREPO_TARGET_DATABASE_SERVICE="${KKREPO_MIGRATION_TARGET_DATABASE_SERVICE:-mysql}"
@@ -151,6 +157,22 @@ ALPINE_BASE_SHA256=""
 ALPINE_APP_SHA256=""
 ALPINE_BASE_MESSAGE="kkRepo Alpine migration dependency $TAG_SAFE_LC"
 ALPINE_APP_MESSAGE="kkRepo Alpine migration application $TAG_SAFE_LC"
+R_MIGRATION_ENABLED="${R_MIGRATION_ENABLED:-false}"
+R_MIGRATION_UPSTREAM_CONTAINER="${R_MIGRATION_UPSTREAM_CONTAINER:-${COMPOSE_PROJECT_NAME:-kkrepo-compat}-r-upstream}"
+R_MIGRATION_UPSTREAM_URL="${R_MIGRATION_UPSTREAM_URL:-http://${R_MIGRATION_UPSTREAM_CONTAINER}:8080/}"
+R_TAG_ALNUM="$(printf '%s' "$TAG_SAFE" | tr -cd 'A-Za-z0-9' | cut -c1-24)"
+R_BASE_PACKAGE="${R_MIGRATION_BASE_PACKAGE:-kkrepoRmigrationbase${R_TAG_ALNUM}}"
+R_APP_PACKAGE="${R_MIGRATION_APP_PACKAGE:-kkrepoRmigrationapp${R_TAG_ALNUM}}"
+R_BASE_VERSION="${R_MIGRATION_BASE_VERSION:-1.0.0}"
+R_APP_OLD_VERSION="${R_MIGRATION_APP_OLD_VERSION:-1.0.0}"
+R_APP_VERSION="${R_MIGRATION_APP_VERSION:-1.1.0}"
+R_CLIENT_IMAGES="${R_MIGRATION_CLIENT_IMAGES:-4.5.3=r-base:4.5.3,4.6.1=r-base:4.6.1}"
+R_FIXTURE_WORKDIR=""
+R_BASE_ARCHIVE=""
+R_APP_OLD_ARCHIVE=""
+R_APP_ARCHIVE=""
+R_APP_SHA256=""
+R_APP_MESSAGE="kkRepo R migration application $TAG_SAFE_LC"
 TERRAFORM_PROXY_PROVIDER_NAMESPACE="${TERRAFORM_PROXY_PROVIDER_NAMESPACE:-hashicorp}"
 TERRAFORM_PROXY_PROVIDER_NAME="${TERRAFORM_PROXY_PROVIDER_NAME:-null}"
 TERRAFORM_PROXY_PROVIDER_VERSION="${TERRAFORM_PROXY_PROVIDER_VERSION:-3.2.4}"
@@ -318,6 +340,12 @@ cleanup() {
   fi
   if [[ -n "$ALPINE_FIXTURE_WORKDIR" ]]; then
     rm -rf "$ALPINE_FIXTURE_WORKDIR"
+  fi
+  if [[ -n "$R_FIXTURE_WORKDIR" ]]; then
+    rm -rf "$R_FIXTURE_WORKDIR"
+  fi
+  if [[ "$R_MIGRATION_ENABLED" == "true" ]]; then
+    docker rm -f "$R_MIGRATION_UPSTREAM_CONTAINER" >/dev/null 2>&1 || true
   fi
 }
 
@@ -488,6 +516,10 @@ apt_migration_enabled() {
 
 alpine_migration_enabled() {
   [[ "$ALPINE_MIGRATION_ENABLED" == "true" ]]
+}
+
+r_migration_enabled() {
+  [[ "$R_MIGRATION_ENABLED" == "true" ]]
 }
 
 source_apt_available() {
@@ -1420,6 +1452,500 @@ run_alpine_idempotency_migration() {
     >/dev/null
   wait_for_migration_idle "$job_id"
   log "Alpine idempotency migration completed: job=$job_id"
+}
+
+source_r_available() {
+  local endpoint
+  for endpoint in \
+      "hosted/$R_NEXUS_REPOSITORY" \
+      "proxy/$R_PROXY_NEXUS_REPOSITORY" \
+      "group/$R_GROUP_NEXUS_REPOSITORY"; do
+    curl -m 20 -fsS \
+      -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+      "$NEXUS_URL/service/rest/v1/repositories/r/$endpoint" >/dev/null 2>&1 \
+      || return 1
+  done
+}
+
+prepare_r_fixture() {
+  R_FIXTURE_WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-r-migration.XXXXXX")"
+  R_BASE_ARCHIVE="$R_FIXTURE_WORKDIR/${R_BASE_PACKAGE}_${R_BASE_VERSION}.tar.gz"
+  R_APP_OLD_ARCHIVE="$R_FIXTURE_WORKDIR/${R_APP_PACKAGE}_${R_APP_OLD_VERSION}.tar.gz"
+  R_APP_ARCHIVE="$R_FIXTURE_WORKDIR/${R_APP_PACKAGE}_${R_APP_VERSION}.tar.gz"
+  python3 "$PROJECT_ROOT/scripts/ci/create-r-e2e-fixture.py" \
+    --output "$R_BASE_ARCHIVE" \
+    --package "$R_BASE_PACKAGE" \
+    --version "$R_BASE_VERSION" \
+    --message "kkRepo R migration dependency $TAG_SAFE_LC" >/dev/null
+  python3 "$PROJECT_ROOT/scripts/ci/create-r-e2e-fixture.py" \
+    --output "$R_APP_OLD_ARCHIVE" \
+    --package "$R_APP_PACKAGE" \
+    --version "$R_APP_OLD_VERSION" \
+    --imports "$R_BASE_PACKAGE" \
+    --message "kkRepo R migration old application $TAG_SAFE_LC" >/dev/null
+  python3 "$PROJECT_ROOT/scripts/ci/create-r-e2e-fixture.py" \
+    --output "$R_APP_ARCHIVE" \
+    --package "$R_APP_PACKAGE" \
+    --version "$R_APP_VERSION" \
+    --imports "$R_BASE_PACKAGE" \
+    --message "$R_APP_MESSAGE" >/dev/null
+  R_APP_SHA256="$(file_sha256 "$R_APP_ARCHIVE")"
+}
+
+publish_r_fixture_to_source_nexus() {
+  local archive status
+  for archive in "$R_BASE_ARCHIVE" "$R_APP_OLD_ARCHIVE" "$R_APP_ARCHIVE"; do
+    status="$(curl -m 90 -sS -o /dev/null -w '%{http_code}' \
+      -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+      -X PUT -H 'Content-Type: application/gzip' --data-binary "@$archive" \
+      "$NEXUS_URL/repository/$R_NEXUS_REPOSITORY/src/contrib/$(basename "$archive")")"
+    expect_status "$status" "200" "publish source Nexus R package $(basename "$archive")"
+  done
+  log "published Nexus R dependency and two application versions"
+}
+
+assert_r_packages_index() {
+  local index="$1"
+  local require_md5="$2"
+  python3 - \
+    "$index" "$R_BASE_PACKAGE" "$R_BASE_VERSION" "$R_BASE_ARCHIVE" \
+    "$R_APP_PACKAGE" "$R_APP_VERSION" "$R_APP_ARCHIVE" "$require_md5" <<'PY'
+import gzip
+import hashlib
+import pathlib
+import sys
+
+(
+    index_path,
+    base_name,
+    base_version,
+    base_archive,
+    app_name,
+    app_version,
+    app_archive,
+    require_md5,
+) = sys.argv[1:9]
+
+def records(payload):
+    parsed = []
+    current = {}
+    last = None
+    for raw in payload.decode("utf-8").splitlines():
+        if not raw.strip():
+            if current:
+                parsed.append(current)
+                current = {}
+                last = None
+            continue
+        if raw[:1].isspace() and last is not None:
+            current[last] += "\n" + raw[1:]
+            continue
+        if ":" not in raw:
+            raise SystemExit(f"invalid R DCF line: {raw!r}")
+        last, value = raw.split(":", 1)
+        current[last] = value.lstrip()
+    if current:
+        parsed.append(current)
+    return parsed
+
+with gzip.open(index_path, "rb") as source:
+    rows = records(source.read())
+base = [row for row in rows if row.get("Package") == base_name]
+app = [row for row in rows if row.get("Package") == app_name]
+if len(base) != 1 or base[0].get("Version") != base_version:
+    raise SystemExit(f"R base record is invalid: {base!r}")
+if len(app) != 1 or app[0].get("Version") != app_version:
+    raise SystemExit(f"R application latest record is invalid: {app!r}")
+imports = app[0].get("Imports", "")
+if base_name not in imports:
+    raise SystemExit(f"R application dependency was lost: {imports!r}")
+if require_md5 == "true":
+    for row, archive in ((base[0], base_archive), (app[0], app_archive)):
+        expected = hashlib.md5(pathlib.Path(archive).read_bytes()).hexdigest()
+        if row.get("MD5sum", "").lower() != expected:
+            raise SystemExit(
+                f"R MD5sum changed for {row.get('Package')}: {row.get('MD5sum')} != {expected}"
+            )
+PY
+}
+
+wait_for_r_index() {
+  local target_url="$1"
+  local repository="$2"
+  local username="$3"
+  local password="$4"
+  local output="$5"
+  local require_md5="$6"
+  for ((i = 1; i <= WAIT_TIMEOUT_SECONDS; i++)); do
+    if curl -m 30 -fsS -u "$username:$password" \
+        "$target_url/repository/$repository/src/contrib/PACKAGES.gz" \
+        -o "$output" 2>/dev/null \
+        && assert_r_packages_index "$output" "$require_md5" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  log "timed out waiting for R PACKAGES.gz through $target_url/$repository"
+  exit 1
+}
+
+verify_source_r_fixture() {
+  local index="$R_FIXTURE_WORKDIR/source-PACKAGES.gz"
+  local archive downloaded expected
+  wait_for_r_index \
+    "$NEXUS_URL" "$R_NEXUS_REPOSITORY" "$NEXUS_USER" "$NEXUS_PASSWORD" \
+    "$index" false
+  for archive in "$R_BASE_ARCHIVE" "$R_APP_OLD_ARCHIVE" "$R_APP_ARCHIVE"; do
+    downloaded="$R_FIXTURE_WORKDIR/source-$(basename "$archive")"
+    curl -m 90 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+      "$NEXUS_URL/repository/$R_NEXUS_REPOSITORY/src/contrib/$(basename "$archive")" \
+      -o "$downloaded"
+    expected="$(file_sha256 "$archive")"
+    if [[ "$(file_sha256 "$downloaded")" != "$expected" ]]; then
+      log "source Nexus R package checksum changed: $(basename "$archive")"
+      exit 1
+    fi
+  done
+  rm -f "$index" "$R_FIXTURE_WORKDIR"/source-*.tar.gz
+  log "source Nexus R index, dependency graph, versions, and package bytes verified"
+}
+
+verify_r_repository_definitions() {
+  local target_url="$1"
+  local label="$2"
+  local workdir hosted proxy group proxy_attributes
+  workdir="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-r-definitions.XXXXXX")"
+  hosted="$workdir/hosted.json"
+  proxy="$workdir/proxy.json"
+  group="$workdir/group.json"
+  proxy_attributes="$workdir/proxy-attributes.json"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/internal/repositories/$R_KKREPO_REPOSITORY" >"$hosted"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/internal/repositories/$R_PROXY_KKREPO_REPOSITORY" >"$proxy"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/internal/repositories/$R_GROUP_KKREPO_REPOSITORY" >"$group"
+  target_db_query \
+    "SELECT attributes_json FROM repository WHERE name = $(sql_literal "$R_PROXY_KKREPO_REPOSITORY")" \
+    >"$proxy_attributes"
+  python3 - \
+    "$hosted" "$proxy" "$group" "$proxy_attributes" \
+    "$R_KKREPO_REPOSITORY" "$R_PROXY_KKREPO_REPOSITORY" \
+    "$R_GROUP_KKREPO_REPOSITORY" "$R_MIGRATION_UPSTREAM_URL" <<'PY'
+import json
+import pathlib
+import sys
+
+(
+    hosted_path,
+    proxy_path,
+    group_path,
+    attributes_path,
+    hosted_name,
+    proxy_name,
+    group_name,
+    remote_url,
+) = sys.argv[1:9]
+hosted = json.loads(pathlib.Path(hosted_path).read_text(encoding="utf-8"))
+proxy = json.loads(pathlib.Path(proxy_path).read_text(encoding="utf-8"))
+group = json.loads(pathlib.Path(group_path).read_text(encoding="utf-8"))
+attributes = json.loads(pathlib.Path(attributes_path).read_text(encoding="utf-8").strip())
+if hosted.get("recipe") != "r-hosted" or hosted.get("type") != "HOSTED":
+    raise SystemExit(f"migrated R hosted definition is invalid: {hosted}")
+if (hosted.get("hosted") or {}).get("writePolicy") != "ALLOW":
+    raise SystemExit(f"migrated R hosted write policy changed: {hosted}")
+if proxy.get("recipe") != "r-proxy" or proxy.get("type") != "PROXY":
+    raise SystemExit(f"migrated R proxy definition is invalid: {proxy}")
+settings = proxy.get("proxy") or {}
+if settings.get("remoteUrl", "").rstrip("/") != remote_url.rstrip("/"):
+    raise SystemExit(f"migrated R proxy remote changed: {settings}")
+if settings.get("contentMaxAgeMinutes") != 37 or settings.get("metadataMaxAgeMinutes") != 19:
+    raise SystemExit(f"migrated R proxy TTLs changed: {settings}")
+if settings.get("autoBlock") is not False:
+    raise SystemExit(f"migrated R proxy autoBlock changed: {settings}")
+negative = ((attributes.get("proxy") or {}).get("negativeCache") or {})
+if negative.get("enabled") is not True or negative.get("timeToLive") != 11:
+    raise SystemExit(f"migrated R negative-cache settings changed: {attributes}")
+if group.get("recipe") != "r-group" or group.get("type") != "GROUP":
+    raise SystemExit(f"migrated R group definition is invalid: {group}")
+members = (group.get("group") or {}).get("memberNames") or []
+if members != [hosted_name, proxy_name]:
+    raise SystemExit(f"migrated R group member order changed for {group_name}: {members!r}")
+PY
+  rm -rf "$workdir"
+  log "R hosted/proxy/group definitions verified through $label"
+}
+
+wait_for_r_publication_idle() {
+  local repository_name pending
+  repository_name="$(sql_literal "$R_KKREPO_REPOSITORY")"
+  for ((i = 1; i <= WAIT_TIMEOUT_SECONDS; i++)); do
+    pending="$(target_db_query "
+      SELECT COUNT(*)
+      FROM r_suite_state state_row
+      JOIN repository r ON r.id = state_row.repository_id
+      WHERE r.name = $repository_name
+        AND (
+          state_row.desired_revision <> state_row.published_revision
+          OR state_row.published_revision = 0
+          OR NOT EXISTS (
+            SELECT 1 FROM r_snapshot snapshot_row
+            WHERE snapshot_row.repository_id = state_row.repository_id
+              AND snapshot_row.distribution_name = state_row.distribution_name
+              AND snapshot_row.revision = state_row.published_revision
+              AND snapshot_row.published_at IS NOT NULL))")"
+    pending="$(printf '%s' "$pending" | tr -d '[:space:]')"
+    if [[ "$pending" == "0" ]]; then
+      return 0
+    fi
+    sleep 1
+  done
+  log "timed out waiting for R hosted publication; pending=$pending"
+  exit 1
+}
+
+r_client_repository_url() {
+  python3 - "$1" "$2" "$KKREPO_USER" "$KKREPO_PASSWORD" <<'PY'
+import sys
+from urllib.parse import quote, urlsplit, urlunsplit
+
+base, repository, username, password = sys.argv[1:5]
+parts = urlsplit(base)
+host = parts.hostname or ""
+if host in {"127.0.0.1", "localhost", "::1"}:
+    host = "host.docker.internal"
+port = f":{parts.port}" if parts.port else ""
+authority = f"{quote(username, safe='')}:{quote(password, safe='')}@{host}{port}"
+path = f"{parts.path.rstrip('/')}/repository/{repository}"
+print(urlunsplit((parts.scheme, authority, path, "", "")))
+PY
+}
+
+run_r_migration_client_acceptance() {
+  local target_url="$1"
+  local repository="$2"
+  local label="$3"
+  local repository_url pair version image
+  repository_url="$(r_client_repository_url "$target_url" "$repository")"
+  IFS=',' read -r -a r_images <<<"$R_CLIENT_IMAGES"
+  for pair in "${r_images[@]}"; do
+    version="${pair%%=*}"
+    image="${pair#*=}"
+    if [[ -z "$version" || -z "$image" || "$version" == "$image" ]]; then
+      log "invalid R migration client image entry: $pair"
+      exit 1
+    fi
+    log "running R $version migration install through $label"
+    docker run --rm --pull=missing \
+      --add-host host.docker.internal:host-gateway \
+      -e R_REPOSITORY_URL="$repository_url" \
+      -e R_BASE_PACKAGE="$R_BASE_PACKAGE" \
+      -e R_BASE_VERSION="$R_BASE_VERSION" \
+      -e R_APP_PACKAGE="$R_APP_PACKAGE" \
+      -e R_APP_VERSION="$R_APP_VERSION" \
+      -e R_APP_MESSAGE="$R_APP_MESSAGE" \
+      "$image" Rscript --vanilla -e '
+        repository <- Sys.getenv("R_REPOSITORY_URL")
+        base <- Sys.getenv("R_BASE_PACKAGE")
+        app <- Sys.getenv("R_APP_PACKAGE")
+        available <- available.packages(repos = repository, type = "source", filters = list())
+        stopifnot(base %in% rownames(available), app %in% rownames(available))
+        stopifnot(available[base, "Version"] == Sys.getenv("R_BASE_VERSION"))
+        stopifnot(available[app, "Version"] == Sys.getenv("R_APP_VERSION"))
+        library_path <- "/tmp/kkrepo-r-migration-library"
+        dir.create(library_path, recursive = TRUE, showWarnings = FALSE)
+        .libPaths(c(library_path, .libPaths()))
+        install.packages(app, repos = repository, lib = library_path,
+                         dependencies = TRUE, type = "source", quiet = FALSE)
+        stopifnot(as.character(packageVersion(app, lib.loc = library_path)) ==
+                  Sys.getenv("R_APP_VERSION"))
+        loadNamespace(app, lib.loc = library_path)
+        stopifnot(identical(getExportedValue(app, "kkrepo_marker")(),
+                            Sys.getenv("R_APP_MESSAGE")))
+      '
+  done
+}
+
+verify_migrated_r_fixture() {
+  local job_id="$1"
+  local target_url="${2:-$KKREPO_URL}"
+  local label="${3:-primary}"
+  local run_clients="${4:-false}"
+  local workdir job hosted_index group_index browse archive expected
+  workdir="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-r-migrated.XXXXXX")"
+  job="$workdir/job.json"
+  hosted_index="$workdir/hosted-PACKAGES.gz"
+  group_index="$workdir/group-PACKAGES.gz"
+  browse="$workdir/browse.json"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/internal/migration/nexus/repository-data/jobs/$job_id" >"$job"
+  python3 - "$job" "$R_NEXUS_REPOSITORY" <<'PY'
+import json
+import pathlib
+import sys
+
+payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+repository = sys.argv[2]
+rows = (payload.get("repositoryJobs") or payload.get("repositoryStatuses")
+        or payload.get("repositoryDetails") or [])
+matches = [row for row in rows
+           if (row.get("sourceRepositoryName") or row.get("repositoryName")
+               or row.get("name")) == repository]
+if not matches:
+    raise SystemExit(f"R migration repository status not found: {repository}")
+row = matches[0]
+if int(row.get("migratedAssets") or 0) < 3 or int(row.get("failedAssets") or 0) != 0:
+    raise SystemExit(f"R migration package result is invalid: {row}")
+PY
+  wait_for_r_publication_idle
+  wait_for_r_index \
+    "$target_url" "$R_KKREPO_REPOSITORY" "$KKREPO_USER" "$KKREPO_PASSWORD" \
+    "$hosted_index" true
+  wait_for_r_index \
+    "$target_url" "$R_GROUP_KKREPO_REPOSITORY" "$KKREPO_USER" "$KKREPO_PASSWORD" \
+    "$group_index" true
+  for archive in "$R_BASE_ARCHIVE" "$R_APP_OLD_ARCHIVE" "$R_APP_ARCHIVE"; do
+    expected="$(file_sha256 "$archive")"
+    curl -m 90 -fsS -u "$(auth)" \
+      "$target_url/repository/$R_KKREPO_REPOSITORY/src/contrib/$(basename "$archive")" \
+      -o "$workdir/$(basename "$archive")"
+    if [[ "$(file_sha256 "$workdir/$(basename "$archive")")" != "$expected" ]]; then
+      log "migrated R package checksum changed through $label: $(basename "$archive")"
+      rm -rf "$workdir"
+      exit 1
+    fi
+  done
+  curl -m 90 -fsS -u "$(auth)" \
+    "$target_url/repository/$R_GROUP_KKREPO_REPOSITORY/src/contrib/$(basename "$R_APP_ARCHIVE")" \
+    -o "$workdir/group-$(basename "$R_APP_ARCHIVE")"
+  if [[ "$(file_sha256 "$workdir/group-$(basename "$R_APP_ARCHIVE")")" != "$R_APP_SHA256" ]]; then
+    log "migrated R group binding returned different application bytes through $label"
+    rm -rf "$workdir"
+    exit 1
+  fi
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/internal/search/components?format=r&q=$R_APP_PACKAGE" \
+    | python3 -c 'import json,sys; p=json.load(sys.stdin); assert any(i.get("name") == sys.argv[1] and i.get("version") == sys.argv[2] for i in p.get("items", []))' \
+      "$R_APP_PACKAGE" "$R_APP_VERSION"
+  curl -m 30 -fsS -u "$(auth)" --get \
+    --data-urlencode "path=src/contrib/$R_APP_PACKAGE/$R_APP_VERSION" \
+    "$target_url/internal/browse/$R_KKREPO_REPOSITORY" >"$browse"
+  python3 - \
+    "$browse" \
+    "$(basename "$R_APP_ARCHIVE")" \
+    "src/contrib/$R_APP_PACKAGE/$R_APP_VERSION/$(basename "$R_APP_ARCHIVE")" \
+    "/repository/$R_KKREPO_REPOSITORY/src/contrib/$(basename "$R_APP_ARCHIVE")" <<'PY'
+import json
+import pathlib
+import sys
+
+path, filename, expected_path, expected_download_url = sys.argv[1:5]
+payload = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+matches = [entry for entry in payload.get("entries", [])
+           if entry.get("name") == filename and entry.get("leaf") is True]
+if len(matches) != 1:
+    raise SystemExit(f"migrated R Browse leaf is missing: {filename}; payload={payload}")
+entry = matches[0]
+if entry.get("path") != expected_path:
+    raise SystemExit(
+        f"migrated R Browse projection changed: {entry.get('path')!r} != {expected_path!r}"
+    )
+if entry.get("downloadUrl") != expected_download_url:
+    raise SystemExit(
+        "migrated R Browse download URL changed: "
+        f"{entry.get('downloadUrl')!r} != {expected_download_url!r}"
+    )
+PY
+  if [[ "$run_clients" == "true" ]]; then
+    run_r_migration_client_acceptance \
+      "$target_url" "$R_GROUP_KKREPO_REPOSITORY" "$label group"
+  fi
+  rm -rf "$workdir"
+  log "migrated R packages, index, Browse/Search, group binding, and client result verified through $label"
+}
+
+r_fixture_row_counts() {
+  local repository_name group_name base_name app_name
+  repository_name="$(sql_literal "$R_KKREPO_REPOSITORY")"
+  group_name="$(sql_literal "$R_GROUP_KKREPO_REPOSITORY")"
+  base_name="$(sql_literal "$R_BASE_PACKAGE")"
+  app_name="$(sql_literal "$R_APP_PACKAGE")"
+  target_db_query "
+    SELECT
+      (SELECT COUNT(*) FROM r_package_record p JOIN repository r ON r.id = p.repository_id
+        WHERE r.name = $repository_name AND p.package_name IN ($base_name, $app_name)),
+      (SELECT COUNT(*) FROM component c JOIN repository r ON r.id = c.repository_id
+        WHERE r.name = $repository_name AND c.format = 'r'
+          AND c.name IN ($base_name, $app_name)),
+      (SELECT COUNT(*) FROM asset a JOIN component c ON c.id = a.component_id
+        JOIN repository r ON r.id = c.repository_id
+        WHERE r.name = $repository_name AND c.format = 'r'
+          AND c.name IN ($base_name, $app_name)),
+      (SELECT COUNT(DISTINCT ab.id) FROM asset_blob ab JOIN asset a ON a.asset_blob_id = ab.id
+        JOIN component c ON c.id = a.component_id JOIN repository r ON r.id = c.repository_id
+        WHERE r.name = $repository_name AND c.format = 'r'
+          AND c.name IN ($base_name, $app_name)),
+      (SELECT COUNT(*) FROM r_package_relation relation_row
+        JOIN r_package_record p ON p.id = relation_row.package_id
+        JOIN repository r ON r.id = p.repository_id
+        WHERE r.name = $repository_name AND p.package_name = $app_name
+          AND relation_row.relation_kind = 'IMPORTS'),
+      (SELECT COUNT(*) FROM r_suite_state s JOIN repository r ON r.id = s.repository_id
+        WHERE r.name = $repository_name),
+      (SELECT COUNT(*) FROM r_snapshot s JOIN repository r ON r.id = s.repository_id
+        WHERE r.name = $repository_name AND s.published_at IS NOT NULL),
+      (SELECT COUNT(*) FROM r_group_binding binding_row
+        JOIN repository r ON r.id = binding_row.group_repository_id
+        WHERE r.name = $group_name)"
+}
+
+assert_r_fixture_counts() {
+  local counts="$1"
+  python3 - "$counts" <<'PY'
+import sys
+
+raw = sys.argv[1]
+values = [int(value) for value in raw.split()]
+names = ["packages", "components", "assets", "blobs", "imports", "suites", "snapshots", "bindings"]
+if len(values) != len(names):
+    raise SystemExit(f"unexpected R row-count snapshot: {raw!r}")
+expected = [3, 3, 3, 3, 2, 1]
+wrong = [name for name, value, wanted in zip(names[:6], values[:6], expected) if value != wanted]
+if values[6] < 1:
+    wrong.append("snapshots")
+if values[7] < 2:
+    wrong.append("bindings")
+if wrong:
+    raise SystemExit(f"R migration row counts are invalid for {wrong}: {raw!r}")
+print(" ".join(f"{name}={value}" for name, value in zip(names, values)))
+PY
+}
+
+run_r_idempotency_migration() {
+  local payload start_body job_id
+  payload="{
+    \"sourceBaseUrl\":\"$(json_escape "$NEXUS_URL")\",
+    \"sourceUsername\":\"$(json_escape "$NEXUS_USER")\",
+    \"sourcePassword\":\"$(json_escape "$NEXUS_PASSWORD")\",
+    \"repositories\":[\"$(json_escape "$R_NEXUS_REPOSITORY")\"],
+    \"pageSize\":$PAGE_SIZE,
+    \"concurrency\":$CONCURRENCY,
+    \"checksumValidation\":true
+  }"
+  start_body="$(curl -m 60 -fsS \
+    -u "$(auth)" -H 'Content-Type: application/json' --data "$payload" \
+    "$KKREPO_URL/internal/migration/nexus/repository-data/start")"
+  job_id="$(printf '%s' "$start_body" | json_field jobId)"
+  if [[ -z "$job_id" ]]; then
+    log "could not parse R idempotency migration job id from: $start_body"
+    exit 1
+  fi
+  wait_for_discovery_ready "$job_id"
+  curl -m 30 -fsS -u "$(auth)" -X POST \
+    "$KKREPO_URL/internal/migration/nexus/repository-data/jobs/$job_id/packages/start" \
+    >/dev/null
+  wait_for_migration_idle "$job_id"
+  log "R idempotency migration completed: job=$job_id"
 }
 
 source_conda_available() {
@@ -4282,7 +4808,11 @@ run_config_metadata_migration() {
     "$ALPINE_MIGRATION_ENABLED" \
     "$ALPINE_NEXUS_REPOSITORY" \
     "$ALPINE_PROXY_NEXUS_REPOSITORY" \
-    "$ALPINE_GROUP_NEXUS_REPOSITORY" <<'PY'
+    "$ALPINE_GROUP_NEXUS_REPOSITORY" \
+    "$R_MIGRATION_ENABLED" \
+    "$R_NEXUS_REPOSITORY" \
+    "$R_PROXY_NEXUS_REPOSITORY" \
+    "$R_GROUP_NEXUS_REPOSITORY" <<'PY'
 import json
 import sys
 
@@ -4306,7 +4836,11 @@ import sys
     alpine_repository,
     alpine_proxy_repository,
     alpine_group_repository,
-) = sys.argv[1:20]
+    r_enabled,
+    r_repository,
+    r_proxy_repository,
+    r_group_repository,
+) = sys.argv[1:24]
 with open(path, "r", encoding="utf-8") as source:
     payload = json.load(source)
 plan = payload.get("migrationPlan") or {}
@@ -4519,6 +5053,27 @@ if alpine_enabled == "true":
         for warning in (payload.get("warnings") or [])
     ):
         raise SystemExit("Alpine preflight omitted the explicit signing-key warning")
+if r_enabled == "true":
+    capability = ((profile.get("formatCapabilities") or {}).get("r") or {})
+    if capability.get("contentMigration") is not True:
+        raise SystemExit(f"R datastore content model was not proven: {capability}")
+    repositories = {
+        r_repository: ("FULL", "script-datastore"),
+        r_proxy_repository: ("CONFIG_ONLY", "repository-config-rest"),
+        r_group_repository: ("CONFIG_ONLY", "repository-config-rest"),
+    }
+    for name, expected in repositories.items():
+        matches = [
+            item for item in items
+            if item.get("area") == "repository" and item.get("name") == name
+        ]
+        if not matches:
+            raise SystemExit(f"R repository plan item not found: {name}")
+        actual = (matches[0].get("status"), matches[0].get("readMode"))
+        if actual != expected:
+            raise SystemExit(
+                f"R repository plan is not fail-closed for {name}: {actual!r} != {expected!r}"
+            )
 print(
     "preflight adapter="
     + str(adapter)
@@ -4808,6 +5363,17 @@ if alpine_migration_enabled; then
   fi
   verify_source_alpine_fixture
 fi
+if r_migration_enabled; then
+  need python3
+  need cmp
+  prepare_r_fixture
+  if ! source_r_available; then
+    log "required R hosted/proxy/group repositories are not available on the Nexus 3.94 source"
+    exit 1
+  fi
+  publish_r_fixture_to_source_nexus
+  verify_source_r_fixture
+fi
 run_config_metadata_migration
 if composer_migration_enabled; then
   verify_composer_requires_explicit_proxy_selection
@@ -4838,6 +5404,9 @@ if alpine_migration_enabled; then
     log "Alpine private signing material was migrated without explicit approval"
     exit 1
   fi
+fi
+if r_migration_enabled; then
+  verify_r_repository_definitions "$KKREPO_URL" "primary"
 fi
 
 kkrepo_ref="${KKREPO_DOCKER_REGISTRY}/${IMAGE}:${TAG}"
@@ -4886,6 +5455,9 @@ if apt_migration_enabled; then
 fi
 if alpine_migration_enabled; then
   migration_repositories_json="$migration_repositories_json,\"$(json_escape "$ALPINE_NEXUS_REPOSITORY")\""
+fi
+if r_migration_enabled; then
+  migration_repositories_json="$migration_repositories_json,\"$(json_escape "$R_NEXUS_REPOSITORY")\""
 fi
 if terraform_migration_enabled; then
   migration_repositories_json="$migration_repositories_json,\"$(json_escape "$TERRAFORM_NEXUS_REPOSITORY")\""
@@ -5083,4 +5655,36 @@ if alpine_migration_enabled; then
   fi
 fi
 
-log "Docker/Cargo/Pub/Composer/Terraform/Swift/Ansible/Conda/APT/Alpine migration E2E completed: job=$job_id source=${NEXUS_URL%/}/repository/${NEXUS_REPOSITORY}/v2/${IMAGE}:${TAG} target=$kkrepo_ref"
+if r_migration_enabled; then
+  verify_migrated_r_fixture "$job_id" "$KKREPO_URL" "primary" true
+  wait_for_r_publication_idle
+  r_counts_before="$(r_fixture_row_counts)"
+  log "R migration row counts: $(assert_r_fixture_counts "$r_counts_before")"
+  run_r_idempotency_migration
+  wait_for_r_publication_idle
+  r_counts_after="$(r_fixture_row_counts)"
+  log "R idempotency row counts: $(assert_r_fixture_counts "$r_counts_after")"
+  if [[ "$r_counts_before" != "$r_counts_after" ]]; then
+    log "R idempotency row counts changed: before=$r_counts_before after=$r_counts_after"
+    exit 1
+  fi
+  if [[ -n "$KKREPO_SECONDARY_URL" ]]; then
+    verify_r_repository_definitions "$KKREPO_SECONDARY_URL" "secondary"
+    verify_migrated_r_fixture "$job_id" "$KKREPO_SECONDARY_URL" "secondary" false
+    primary_r_index="$R_FIXTURE_WORKDIR/primary-PACKAGES.gz"
+    secondary_r_index="$R_FIXTURE_WORKDIR/secondary-PACKAGES.gz"
+    wait_for_r_index \
+      "$KKREPO_URL" "$R_GROUP_KKREPO_REPOSITORY" "$KKREPO_USER" "$KKREPO_PASSWORD" \
+      "$primary_r_index" true
+    wait_for_r_index \
+      "$KKREPO_SECONDARY_URL" "$R_GROUP_KKREPO_REPOSITORY" \
+      "$KKREPO_USER" "$KKREPO_PASSWORD" "$secondary_r_index" true
+    cmp "$primary_r_index" "$secondary_r_index"
+    log "R group PACKAGES.gz is byte-identical across migration replicas"
+  else
+    log "R_MIGRATION_ENABLED requires KKREPO_MIGRATION_SECONDARY_URL"
+    exit 1
+  fi
+fi
+
+log "Docker/Cargo/Pub/Composer/Terraform/Swift/Ansible/Conda/APT/Alpine/R migration E2E completed: job=$job_id source=${NEXUS_URL%/}/repository/${NEXUS_REPOSITORY}/v2/${IMAGE}:${TAG} target=$kkrepo_ref"

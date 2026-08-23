@@ -26,6 +26,9 @@ KKREPO_BLOB_PATH="${KKREPO_COMPAT_BLOB_PATH:-/tmp/kkrepo-blobs/default}"
 KKREPO_DOCKER_CONNECTOR_PORT="${KKREPO_DOCKER_CONNECTOR_PORT:-18180}"
 NEXUS_DOCKER_HTTP_PORT="${NEXUS_DOCKER_HTTP_PORT:-$KKREPO_DOCKER_CONNECTOR_PORT}"
 COMPOSER_NEXUS_REQUIRED="${COMPOSER_NEXUS_REQUIRED:-false}"
+R_MIGRATION_ENABLED="${R_MIGRATION_ENABLED:-false}"
+R_MIGRATION_UPSTREAM_CONTAINER="${R_MIGRATION_UPSTREAM_CONTAINER:-${COMPOSE_PROJECT_NAME}-r-upstream}"
+R_MIGRATION_UPSTREAM_URL="${R_MIGRATION_UPSTREAM_URL:-http://${R_MIGRATION_UPSTREAM_CONTAINER}:8080/}"
 
 START_TIMEOUT_SECONDS="${LIVE_COMPAT_START_TIMEOUT_SECONDS:-240}"
 
@@ -188,6 +191,64 @@ configure_nexus_anonymous_access() {
   echo "[compat] Nexus anonymous configuration failed with HTTP $http_status" >&2
   cat "$body_file" >&2 || true
   rm -f "$body_file"
+  return 1
+}
+
+ensure_r_migration_upstream() {
+  if [[ "$R_MIGRATION_ENABLED" != "true" ]]; then
+    return 0
+  fi
+  docker rm -f "$R_MIGRATION_UPSTREAM_CONTAINER" >/dev/null 2>&1 || true
+  docker run -d \
+    --name "$R_MIGRATION_UPSTREAM_CONTAINER" \
+    --network "${COMPOSE_PROJECT_NAME}_default" \
+    busybox:1.37 sh -c \
+    'mkdir -p /www/src/contrib && printf "" | gzip -n > /www/src/contrib/PACKAGES.gz && exec httpd -f -p 8080 -h /www' \
+    >/dev/null
+  echo "[compat] controlled R migration upstream is ready: $R_MIGRATION_UPSTREAM_URL"
+}
+
+configure_nexus_r_migration_ssrf_allowlist() {
+  if [[ "$R_MIGRATION_ENABLED" != "true" ]]; then
+    return 0
+  fi
+  local current_file updated_file response_file status
+  current_file="$(mktemp)"
+  updated_file="$(mktemp)"
+  response_file="$(mktemp)"
+  curl -m 20 -fsS -u "$NEXUS_AUTH" \
+    "$NEXUS_URL/service/rest/v1/security/ssrf-protection" >"$current_file"
+  python3 - "$current_file" "$updated_file" "$R_MIGRATION_UPSTREAM_CONTAINER" <<'PY'
+import json
+import pathlib
+import sys
+
+source, target = map(pathlib.Path, sys.argv[1:3])
+domain = sys.argv[3]
+configuration = json.loads(source.read_text(encoding="utf-8"))
+allowed_domains = list(configuration.get("allowedDomains") or [])
+if domain not in allowed_domains:
+    allowed_domains.append(domain)
+configuration["allowedDomains"] = allowed_domains
+configuration["allowedIPs"] = list(configuration.get("allowedIPs") or [])
+target.write_text(json.dumps(configuration, separators=(",", ":")), encoding="utf-8")
+PY
+  status="$(curl -m 20 -sS \
+    -u "$NEXUS_AUTH" \
+    -X PUT \
+    -H "Content-Type: application/json" \
+    --data-binary "@$updated_file" \
+    -o "$response_file" \
+    -w "%{http_code}" \
+    "$NEXUS_URL/service/rest/v1/security/ssrf-protection" || true)"
+  if [[ "$status" =~ ^2[0-9][0-9]$ ]]; then
+    echo "[compat] Nexus SSRF allowlist includes controlled R migration upstream"
+    rm -f "$current_file" "$updated_file" "$response_file"
+    return 0
+  fi
+  echo "[compat] Nexus SSRF allowlist update failed with HTTP $status" >&2
+  cat "$response_file" >&2 || true
+  rm -f "$current_file" "$updated_file" "$response_file"
   return 1
 }
 
@@ -408,6 +469,31 @@ ensure_nexus_repositories() {
     "storage":{"blobStoreName":"default","strictContentTypeValidation":true},
     "group":{"memberNames":["conda-hosted","conda-proxy"]}
   }'
+
+  if [[ "$R_MIGRATION_ENABLED" == "true" ]]; then
+    nexus_create_repo "r-migration-hosted" "$NEXUS_URL/service/rest/v1/repositories/r/hosted" '{
+      "name":"r-migration-hosted",
+      "online":true,
+      "storage":{"blobStoreName":"default","strictContentTypeValidation":true,"writePolicy":"ALLOW"},
+      "component":{"proprietaryComponents":false}
+    }'
+
+    nexus_create_repo "r-migration-proxy" "$NEXUS_URL/service/rest/v1/repositories/r/proxy" "{
+      \"name\":\"r-migration-proxy\",
+      \"online\":true,
+      \"storage\":{\"blobStoreName\":\"default\",\"strictContentTypeValidation\":true},
+      \"proxy\":{\"remoteUrl\":\"$R_MIGRATION_UPSTREAM_URL\",\"contentMaxAge\":37,\"metadataMaxAge\":19},
+      \"negativeCache\":{\"enabled\":true,\"timeToLive\":11},
+      \"httpClient\":{\"blocked\":false,\"autoBlock\":false}
+    }"
+
+    nexus_create_repo "r-migration-group" "$NEXUS_URL/service/rest/v1/repositories/r/group" '{
+      "name":"r-migration-group",
+      "online":true,
+      "storage":{"blobStoreName":"default","strictContentTypeValidation":true},
+      "group":{"memberNames":["r-migration-hosted","r-migration-proxy"]}
+    }'
+  fi
 
   nexus_try_create_repo "conan-compat-hosted" "$NEXUS_URL/service/rest/v1/repositories/conan/hosted" '{
     "name":"conan-compat-hosted",
@@ -928,6 +1014,40 @@ ensure_kkrepo_repositories() {
     }
   }'
 
+  kkrepo_create_repo "r-hosted" '{
+    "name":"r-hosted",
+    "recipe":"r-hosted",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "hosted":{"writePolicy":"ALLOW"}
+  }'
+
+  kkrepo_create_repo "r-proxy" '{
+    "name":"r-proxy",
+    "recipe":"r-proxy",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "proxy":{
+      "remoteUrl":"https://cloud.r-project.org/",
+      "contentMaxAgeMinutes":1440,
+      "metadataMaxAgeMinutes":60,
+      "negativeCacheEnabled":true,
+      "negativeCacheTtlMinutes":5,
+      "autoBlock":true
+    }
+  }'
+
+  kkrepo_create_repo "r-group" '{
+    "name":"r-group",
+    "recipe":"r-group",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "group":{"memberNames":["r-hosted","r-proxy"]}
+  }'
+
   kkrepo_create_repo "terraform-hosted" '{
     "name":"terraform-hosted",
     "recipe":"terraform-hosted",
@@ -1306,6 +1426,8 @@ initialize_nexus_admin
 accept_nexus_eula_if_required
 configure_nexus_anonymous_access
 configure_nexus_conan_realm
+ensure_r_migration_upstream
+configure_nexus_r_migration_ssrf_allowlist
 ensure_nexus_repositories
 initialize_kkrepo_admin
 ensure_kkrepo_blob_store

@@ -220,6 +220,13 @@ class NexusRestClientTest {
     assertTrue(script.contains("componentIdentity: false"));
     assertTrue(script.contains("parts.length != 4"));
     assertTrue(script.contains("Alpine datastore content shape probe failed:"));
+    assertTrue(script.contains("r: 'R'"));
+    assertTrue(script.contains("def inspectRShape = { tableNames ->"));
+    assertTrue(script.contains("sourcePackageAssetPath: false"));
+    assertTrue(script.contains("rAssetAttributes: false"));
+    assertTrue(script.contains("sourceChecksum: false"));
+    assertTrue(script.contains("checksums.contains('\"sha1\"')"));
+    assertTrue(script.contains("R datastore content shape probe failed:"));
     assertTrue(script.contains("huggingface: 'HUGGINGFACE'"));
     assertTrue(script.contains("def inspectHuggingFaceShape = { tableNames ->"));
     assertTrue(script.contains("resolveAssetPath: false"));

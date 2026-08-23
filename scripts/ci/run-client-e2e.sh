@@ -23,10 +23,15 @@ CONDA_PROXY_REPOSITORY="${CONDA_E2E_PROXY_REPOSITORY:-conda-proxy}"
 CONDA_GROUP_REPOSITORY="${CONDA_E2E_GROUP_REPOSITORY:-conda-group}"
 APT_HOSTED_REPOSITORY="${APT_E2E_HOSTED_REPOSITORY:-apt-hosted}"
 APT_CLIENT_IMAGES="${APT_E2E_IMAGES:-debian12=debian:12-slim,ubuntu24=ubuntu:24.04,current=debian:testing-slim}"
+APT_PROXY_GATEWAY_PORT="${APT_E2E_PROXY_GATEWAY_PORT:-18982}"
 ALPINE_HOSTED_REPOSITORY="${ALPINE_E2E_HOSTED_REPOSITORY:-alpine-hosted}"
 ALPINE_PROXY_REPOSITORY="${ALPINE_E2E_PROXY_REPOSITORY:-alpine-proxy}"
 ALPINE_GROUP_REPOSITORY="${ALPINE_E2E_GROUP_REPOSITORY:-alpine-group}"
 ALPINE_CLIENT_IMAGES="${ALPINE_E2E_IMAGES:-legacy=alpine:3.20,current=alpine:3.23}"
+R_HOSTED_REPOSITORY="${R_E2E_HOSTED_REPOSITORY:-r-hosted}"
+R_PROXY_REPOSITORY="${R_E2E_PROXY_REPOSITORY:-r-proxy}"
+R_GROUP_REPOSITORY="${R_E2E_GROUP_REPOSITORY:-r-group}"
+R_CLIENT_IMAGES="${R_E2E_IMAGES:-4.5.3=r-base:4.5.3,4.6.1=r-base:4.6.1}"
 CONAN_BIN="${CONAN_E2E_BIN:-conan}"
 CONAN_HOSTED_REPOSITORY="${CONAN_E2E_HOSTED_REPOSITORY:-conan-hosted}"
 CONAN_PROXY_REPOSITORY="${CONAN_E2E_PROXY_REPOSITORY:-conan-proxy}"
@@ -40,7 +45,13 @@ CLEANUP_FIXTURE_PATTERN=""
 CLEANUP_FIXTURE_LABEL=""
 SWIFT_CLEANUP_FIXTURE_AVAILABLE=false
 APT_E2E_CONTAINERS=()
+APT_PROXY_GATEWAY_CONTAINER=""
+APT_PROXY_GATEWAY_REMOTE_URL=""
 ALPINE_E2E_CONTAINERS=()
+R_E2E_CONTAINERS=()
+R_E2E_ORIGINAL_PROXY_REMOTE=""
+R_E2E_PROXY_PACKAGE=""
+R_E2E_PROXY_MESSAGE=""
 
 if [[ ! "$SWIFT_LOGIN_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   printf '[client-e2e] SWIFT_E2E_LOGIN_TIMEOUT_SECONDS must be a positive integer\n' >&2
@@ -83,9 +94,25 @@ cleanup_alpine_e2e_containers() {
   done
 }
 
+cleanup_r_e2e_containers() {
+  local container
+  if [[ -n "$R_E2E_ORIGINAL_PROXY_REMOTE" ]]; then
+    set_repository_proxy_remote "$R_PROXY_REPOSITORY" \
+      "$R_E2E_ORIGINAL_PROXY_REMOTE" >/dev/null 2>&1 || true
+    R_E2E_ORIGINAL_PROXY_REMOTE=""
+  fi
+  if (( ${#R_E2E_CONTAINERS[@]} == 0 )); then
+    return
+  fi
+  for container in "${R_E2E_CONTAINERS[@]}"; do
+    docker rm -f "$container" >/dev/null 2>&1 || true
+  done
+}
+
 cleanup_client_e2e_containers() {
   cleanup_apt_e2e_containers
   cleanup_alpine_e2e_containers
+  cleanup_r_e2e_containers
 }
 
 trap cleanup_client_e2e_containers EXIT
@@ -3049,6 +3076,49 @@ PY
     "$KKREPO_URL/internal/repositories"
 }
 
+apt_wait_for_proxy_gateway() {
+  run_logged apt-proxy-gateway-ready curl -m 10 --fail-with-body -sS \
+    --retry 20 --retry-all-errors --retry-delay 1 \
+    "http://127.0.0.1:$APT_PROXY_GATEWAY_PORT/repository/$APT_HOSTED_REPOSITORY/dists/stable/InRelease"
+}
+
+apt_start_proxy_gateway() {
+  local directory="$1"
+  local config="$directory/proxy-gateway-nginx.conf"
+  local upstream_base
+  upstream_base="$(apt_client_base_url "$KKREPO_URL")"
+  APT_PROXY_GATEWAY_CONTAINER="kkrepo-apt-proxy-gateway-$STAMP"
+  APT_PROXY_GATEWAY_REMOTE_URL="http://host.docker.internal:$APT_PROXY_GATEWAY_PORT/repository/$APT_HOSTED_REPOSITORY/"
+  cat >"$config" <<EOF
+events {}
+http {
+  server {
+    listen 8080;
+    location / {
+      proxy_pass $upstream_base;
+    }
+  }
+}
+EOF
+  run_logged apt-proxy-gateway-start docker run --detach \
+    --name "$APT_PROXY_GATEWAY_CONTAINER" \
+    --add-host host.docker.internal:host-gateway \
+    --publish "$APT_PROXY_GATEWAY_PORT:8080" \
+    --volume "$config:/etc/nginx/nginx.conf:ro" \
+    nginx:1.29-alpine
+  APT_E2E_CONTAINERS+=("$APT_PROXY_GATEWAY_CONTAINER")
+  apt_wait_for_proxy_gateway
+}
+
+apt_stop_proxy_gateway() {
+  run_logged apt-proxy-gateway-stop docker stop "$APT_PROXY_GATEWAY_CONTAINER"
+}
+
+apt_restart_proxy_gateway() {
+  run_logged apt-proxy-gateway-restart docker start "$APT_PROXY_GATEWAY_CONTAINER"
+  apt_wait_for_proxy_gateway
+}
+
 apt_test_proxy_modes() {
   local directory="$1"
   local image="$2"
@@ -3057,7 +3127,8 @@ apt_test_proxy_modes() {
   local expected_message="$5"
   local expected_sha="$6"
   local upstream_url proxy_name resign_name proxy_config resign_config container
-  upstream_url="$(apt_client_base_url "$KKREPO_URL")/repository/$APT_HOSTED_REPOSITORY/"
+  apt_start_proxy_gateway "$directory"
+  upstream_url="$APT_PROXY_GATEWAY_REMOTE_URL"
   proxy_name="apt-proxy-$STAMP"
   resign_name="apt-resign-$STAMP"
 
@@ -3081,12 +3152,13 @@ apt_test_proxy_modes() {
   apt_install_version "$container" "$package" "$version" "$expected_message" "$expected_sha"
   apt_stop_client "$container"
 
-  set_repository_proxy_remote "$proxy_name" "http://host.docker.internal:9/unavailable/"
+  apt_stop_proxy_gateway
   container="kkrepo-apt-proxy-offline-${STAMP}"
   apt_start_client "$container" "$image" "$proxy_config"
   apt_prepare_client "$container"
   apt_install_version "$container" "$package" "$version" "$expected_message" "$expected_sha"
   apt_stop_client "$container"
+  apt_restart_proxy_gateway
 
   apt_create_proxy_repository "$resign_name" RESIGN "$upstream_url"
   run_logged_output apt-resign-inrelease "$directory/resign-InRelease" \
@@ -3477,6 +3549,326 @@ test_alpine() {
   alpine_test_secondary_replica "$directory"
 }
 
+r_client_base_url() {
+  python3 - "$1" "$KKREPO_USER" "$KKREPO_PASSWORD" <<'PY'
+import sys
+from urllib.parse import quote, urlsplit, urlunsplit
+
+parts = urlsplit(sys.argv[1])
+host = parts.hostname or ""
+if host in {"127.0.0.1", "localhost", "::1"}:
+    host = "host.docker.internal"
+port = f":{parts.port}" if parts.port else ""
+auth = quote(sys.argv[2], safe="") + ":" + quote(sys.argv[3], safe="") + "@"
+print(urlunsplit((parts.scheme, auth + host + port, parts.path.rstrip("/"), "", "")))
+PY
+}
+
+r_create_fixture() {
+  local output="$1"
+  local package="$2"
+  local version="$3"
+  local message="$4"
+  local dependency="${5:-}"
+  local -a command=(
+    python3 "$PROJECT_ROOT/scripts/ci/create-r-e2e-fixture.py"
+    --output "$output" --package "$package" --version "$version" --message "$message"
+  )
+  if [[ -n "$dependency" ]]; then
+    command+=(--imports "$dependency")
+  fi
+  run_logged_output "r-fixture-$package-$version" \
+    "$ARTIFACT_DIR/r-$package-$version.json" "${command[@]}"
+}
+
+r_prepare_controlled_upstream() {
+  local directory="$1"
+  local root="$directory/upstream"
+  local metadata container port binding
+  R_E2E_PROXY_PACKAGE="kkrepoRproxy${STAMP}"
+  R_E2E_PROXY_MESSAGE="R controlled proxy E2E"
+  mkdir -p "$root/src/contrib"
+  metadata="$ARTIFACT_DIR/r-$R_E2E_PROXY_PACKAGE-2.0.0.json"
+  r_create_fixture \
+    "$root/src/contrib/${R_E2E_PROXY_PACKAGE}_2.0.0.tar.gz" \
+    "$R_E2E_PROXY_PACKAGE" 2.0.0 "$R_E2E_PROXY_MESSAGE"
+  run_logged r-controlled-upstream-index python3 - \
+    "$metadata" "$root/src/contrib/PACKAGES.gz" "$root/src/contrib/PACKAGES.rds" <<'PY'
+import gzip
+import json
+import pathlib
+import sys
+
+metadata = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+record = (
+    f"Package: {metadata['package']}\n"
+    f"Version: {metadata['version']}\n"
+    "License: MIT\n"
+    "NeedsCompilation: no\n"
+    f"MD5sum: {metadata['md5']}\n\n"
+).encode()
+with pathlib.Path(sys.argv[2]).open("wb") as raw:
+    with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as output:
+        output.write(record)
+pathlib.Path(sys.argv[3]).write_bytes(b"kkRepo controlled PACKAGES.rds fixture\n")
+PY
+  container="kkrepo-r-upstream-$STAMP"
+  R_E2E_CONTAINERS+=("$container")
+  docker rm -f "$container" >/dev/null 2>&1 || true
+  run_logged r-controlled-upstream-start docker run --detach --name "$container" \
+    --publish 8080 --volume "$root:/srv:ro" busybox:1.37 \
+    httpd -f -p 8080 -h /srv
+  binding="$(docker port "$container" 8080/tcp | head -n 1)"
+  port="${binding##*:}"
+  if [[ ! "$port" =~ ^[1-9][0-9]*$ ]]; then
+    log "unable to resolve controlled R upstream port: $binding"
+    return 1
+  fi
+  wait_for_http "controlled R upstream" \
+    "http://127.0.0.1:$port/src/contrib/PACKAGES.gz"
+  if [[ -z "$R_E2E_ORIGINAL_PROXY_REMOTE" ]]; then
+    R_E2E_ORIGINAL_PROXY_REMOTE="$(repository_proxy_remote "$R_PROXY_REPOSITORY")"
+  fi
+  set_repository_proxy_remote "$R_PROXY_REPOSITORY" \
+    "http://host.docker.internal:$port/"
+}
+
+r_upload_fixture() {
+  local label="$1"
+  local file="$2"
+  run_logged "r-$label-upload" curl -m 120 --fail-with-body -sS \
+    -u "$KKREPO_AUTH" -X PUT -H 'Content-Type: application/gzip' \
+    --data-binary "@$file" \
+    "$KKREPO_URL/repository/$R_HOSTED_REPOSITORY/src/contrib/$(basename "$file")"
+}
+
+r_wait_for_version() {
+  local repository="$1"
+  local package="$2"
+  local version="$3"
+  local expected="${4:-true}"
+  local timeout_seconds="${R_E2E_PUBLICATION_TIMEOUT_SECONDS:-120}"
+  local deadline=$((SECONDS + timeout_seconds))
+  local index="$WORK_DIR/r/index-$repository.gz"
+  while (( SECONDS < deadline )); do
+    if curl -m 30 --fail-with-body -sS -u "$KKREPO_AUTH" \
+        "$KKREPO_URL/repository/$repository/src/contrib/PACKAGES.gz" -o "$index" \
+        && python3 - "$index" "$package" "$version" "$expected" <<'PY'
+import gzip
+import pathlib
+import sys
+
+text = gzip.decompress(pathlib.Path(sys.argv[1]).read_bytes()).decode("utf-8")
+found = False
+for record in text.strip().split("\n\n") if text.strip() else []:
+    fields = {}
+    current = None
+    for line in record.splitlines():
+        if line.startswith((" ", "\t")) and current:
+            fields[current] += "\n" + line[1:]
+        elif ":" in line:
+            current, value = line.split(":", 1)
+            fields[current] = value.lstrip()
+    found |= fields.get("Package") == sys.argv[2] and fields.get("Version") == sys.argv[3]
+expected = sys.argv[4].lower() == "true"
+raise SystemExit(0 if found == expected else 1)
+PY
+    then
+      return 0
+    fi
+    sleep 1
+  done
+  log "timed out waiting for R package $package $version in $repository (expected=$expected)"
+  return 1
+}
+
+r_start_client() {
+  local container="$1"
+  local image="$2"
+  run_logged "r-$container-start" docker run --detach --name "$container" \
+    --add-host host.docker.internal:host-gateway "$image" sleep infinity
+  R_E2E_CONTAINERS+=("$container")
+}
+
+r_install_and_assert() {
+  local container="$1"
+  local repository_url="$2"
+  local dependency="$3"
+  local package="$4"
+  local version="$5"
+  local message="$6"
+  run_logged "r-$container-install-$version" docker exec \
+    -e KKREPO_R_REPOSITORY="$repository_url" \
+    -e KKREPO_R_DEPENDENCY="$dependency" \
+    -e KKREPO_R_PACKAGE="$package" \
+    -e KKREPO_R_VERSION="$version" \
+    -e KKREPO_R_MESSAGE="$message" \
+    "$container" Rscript -e '
+      repository <- Sys.getenv("KKREPO_R_REPOSITORY")
+      dependency <- Sys.getenv("KKREPO_R_DEPENDENCY")
+      package <- Sys.getenv("KKREPO_R_PACKAGE")
+      library <- "/tmp/kkrepo-r-library"
+      dir.create(library, recursive = TRUE, showWarnings = FALSE)
+      .libPaths(c(library, .libPaths()))
+      available <- available.packages(repos = c(KKRepo = repository), type = "source")
+      stopifnot(dependency %in% rownames(available), package %in% rownames(available))
+      install.packages(package, lib = library, repos = c(KKRepo = repository),
+        dependencies = TRUE, type = "source", quiet = FALSE)
+      stopifnot(as.character(packageVersion(package, lib.loc = library)) ==
+        Sys.getenv("KKREPO_R_VERSION"))
+      namespace <- loadNamespace(package, lib.loc = library)
+      stopifnot(identical(getExportedValue(namespace, "kkrepo_marker")(),
+        Sys.getenv("KKREPO_R_MESSAGE")))
+    '
+}
+
+r_update_and_assert() {
+  local container="$1"
+  local repository_url="$2"
+  local package="$3"
+  local version="$4"
+  local message="$5"
+  run_logged "r-$container-update-$version" docker exec \
+    -e KKREPO_R_REPOSITORY="$repository_url" \
+    -e KKREPO_R_PACKAGE="$package" \
+    -e KKREPO_R_VERSION="$version" \
+    -e KKREPO_R_MESSAGE="$message" \
+    "$container" Rscript -e '
+      repository <- Sys.getenv("KKREPO_R_REPOSITORY")
+      package <- Sys.getenv("KKREPO_R_PACKAGE")
+      library <- "/tmp/kkrepo-r-library"
+      .libPaths(c(library, .libPaths()))
+      update.packages(lib.loc = library, repos = c(KKRepo = repository),
+        ask = FALSE, checkBuilt = FALSE, type = "source")
+      stopifnot(as.character(packageVersion(package, lib.loc = library)) ==
+        Sys.getenv("KKREPO_R_VERSION"))
+      unloadNamespace(package)
+      namespace <- loadNamespace(package, lib.loc = library)
+      stopifnot(identical(getExportedValue(namespace, "kkrepo_marker")(),
+        Sys.getenv("KKREPO_R_MESSAGE")))
+    '
+}
+
+r_install_proxy_and_assert() {
+  local container="$1"
+  local repository_url="$2"
+  run_logged "r-$container-install-proxy" docker exec \
+    -e KKREPO_R_REPOSITORY="$repository_url" \
+    -e KKREPO_R_PACKAGE="$R_E2E_PROXY_PACKAGE" \
+    -e KKREPO_R_MESSAGE="$R_E2E_PROXY_MESSAGE" \
+    "$container" Rscript -e '
+      repository <- Sys.getenv("KKREPO_R_REPOSITORY")
+      package <- Sys.getenv("KKREPO_R_PACKAGE")
+      library <- "/tmp/kkrepo-r-library"
+      .libPaths(c(library, .libPaths()))
+      available <- available.packages(repos = c(KKRepo = repository), type = "source")
+      stopifnot(package %in% rownames(available), available[package, "Version"] == "2.0.0")
+      install.packages(package, lib = library, repos = c(KKRepo = repository),
+        dependencies = FALSE, type = "source", quiet = FALSE)
+      namespace <- loadNamespace(package, lib.loc = library)
+      stopifnot(identical(getExportedValue(namespace, "kkrepo_marker")(),
+        Sys.getenv("KKREPO_R_MESSAGE")))
+    '
+}
+
+r_test_proxy_and_group_boundary() {
+  if [[ "${R_E2E_PROXY_ENABLED:-true}" != "true" ]]; then
+    log "R CRAN proxy check skipped by R_E2E_PROXY_ENABLED=false"
+    return
+  fi
+  run_logged_output r-proxy-packages-gzip "$ARTIFACT_DIR/r-proxy-PACKAGES.gz" \
+    curl -m 120 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    "$KKREPO_URL/repository/$R_PROXY_REPOSITORY/src/contrib/PACKAGES.gz"
+  run_logged r-proxy-packages-parse python3 - "$ARTIFACT_DIR/r-proxy-PACKAGES.gz" <<'PY'
+import gzip
+import pathlib
+import sys
+text = gzip.decompress(pathlib.Path(sys.argv[1]).read_bytes()).decode("utf-8")
+if "Package:" not in text or "Version:" not in text:
+    raise SystemExit("proxy PACKAGES.gz is not CRAN DCF metadata")
+PY
+  run_logged_output r-proxy-packages-rds "$ARTIFACT_DIR/r-proxy-PACKAGES.rds" \
+    curl -m 120 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    "$KKREPO_URL/repository/$R_PROXY_REPOSITORY/src/contrib/PACKAGES.rds"
+  run_logged r-group-rejects-rds bash -euc \
+    'status="$(curl -m 30 -sS -o /dev/null -w "%{http_code}" -u "$1" "$2")"; test "$status" = 404' \
+    _ "$KKREPO_AUTH" \
+    "$KKREPO_URL/repository/$R_GROUP_REPOSITORY/src/contrib/PACKAGES.rds"
+}
+
+r_test_secondary_replica() {
+  local secondary_url="${R_KKREPO_SECONDARY_BASE_URL:-}"
+  if [[ -z "$secondary_url" ]]; then
+    log "R secondary-replica check skipped: R_KKREPO_SECONDARY_BASE_URL is unset"
+    return
+  fi
+  run_logged_output r-primary-index "$WORK_DIR/r/primary-PACKAGES.gz" \
+    curl -m 60 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    "$KKREPO_URL/repository/$R_GROUP_REPOSITORY/src/contrib/PACKAGES.gz"
+  run_logged_output r-secondary-index "$WORK_DIR/r/secondary-PACKAGES.gz" \
+    curl -m 60 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    "$secondary_url/repository/$R_GROUP_REPOSITORY/src/contrib/PACKAGES.gz"
+  run_logged r-secondary-byte-stable cmp \
+    "$WORK_DIR/r/primary-PACKAGES.gz" "$WORK_DIR/r/secondary-PACKAGES.gz"
+}
+
+test_r() {
+  local directory="$WORK_DIR/r"
+  mkdir -p "$directory"
+  if [[ "${R_E2E_VERSION_ORDER_CHECK:-true}" == "true" ]]; then
+    run_logged r-version-order "$PROJECT_ROOT/scripts/ci/check-r-version-order.sh"
+  fi
+  r_prepare_controlled_upstream "$directory"
+  local client_url
+  client_url="$(r_client_base_url "$KKREPO_URL/repository/$R_GROUP_REPOSITORY")"
+  local entry label image label_slug label_slug_lower dependency package container
+  local dependency_file app_v1_file app_v2_file message_v1 message_v2
+  local final_container="" final_package=""
+  IFS=',' read -r -a entries <<<"$R_CLIENT_IMAGES"
+  for entry in "${entries[@]}"; do
+    label="${entry%%=*}"
+    image="${entry#*=}"
+    if [[ "$entry" != *=* || -z "$label" || -z "$image" ]]; then
+      log "invalid R_E2E_IMAGES entry: $entry"
+      return 2
+    fi
+    label_slug="$(printf '%s' "$label" | tr -cd 'A-Za-z0-9')"
+    label_slug_lower="$(printf '%s' "$label_slug" | tr '[:upper:]' '[:lower:]')"
+    dependency="kkrepoRdep${label_slug}${STAMP}"
+    package="kkrepoRapp${label_slug}${STAMP}"
+    container="kkrepo-r-${label_slug_lower}-$STAMP"
+    dependency_file="$directory/${dependency}_1.0.0.tar.gz"
+    app_v1_file="$directory/${package}_1.0.0.tar.gz"
+    app_v2_file="$directory/${package}_1.1.0.tar.gz"
+    message_v1="R client E2E $label v1"
+    message_v2="R client E2E $label v2"
+
+    run_logged "r-$label_slug-pull" docker pull "$image"
+    r_create_fixture "$dependency_file" "$dependency" 1.0.0 "$message_v1"
+    r_create_fixture "$app_v1_file" "$package" 1.0.0 "$message_v1" "$dependency"
+    r_upload_fixture "$label_slug-dependency" "$dependency_file"
+    r_upload_fixture "$label_slug-v1" "$app_v1_file"
+    r_wait_for_version "$R_GROUP_REPOSITORY" "$package" 1.0.0
+    r_start_client "$container" "$image"
+    r_install_and_assert "$container" "$client_url" "$dependency" "$package" 1.0.0 "$message_v1"
+
+    r_create_fixture "$app_v2_file" "$package" 1.1.0 "$message_v2" "$dependency"
+    r_upload_fixture "$label_slug-v2" "$app_v2_file"
+    r_wait_for_version "$R_GROUP_REPOSITORY" "$package" 1.1.0
+    r_update_and_assert "$container" "$client_url" "$package" 1.1.0 "$message_v2"
+    final_container="$container"
+    final_package="$package"
+  done
+  [[ -n "$final_container" && -n "$final_package" ]] \
+    || { log "R client image matrix is empty"; return 2; }
+  r_wait_for_version "$R_GROUP_REPOSITORY" "$R_E2E_PROXY_PACKAGE" 2.0.0
+  r_install_proxy_and_assert "$final_container" "$client_url"
+  r_test_proxy_and_group_boundary
+  r_test_secondary_replica
+  set_repository_proxy_remote "$R_PROXY_REPOSITORY" "$R_E2E_ORIGINAL_PROXY_REMOTE"
+  R_E2E_ORIGINAL_PROXY_REMOTE=""
+}
+
 test_ansible() {
   local matrix="${ANSIBLE_GALAXY_BINS:-}"
   if [[ -z "$matrix" ]] && command -v ansible-galaxy >/dev/null 2>&1; then
@@ -3525,7 +3917,7 @@ run_selected_tests() {
   local test
 
   if [[ -z "$selection" || "$selection" == "all" ]]; then
-    tests=(raw maven npm pypi go helm cargo pub composer nuget rubygems yum apt alpine conda conan terraform swift ansible docker-oci)
+    tests=(raw maven npm pypi go helm cargo pub composer nuget rubygems yum apt alpine r conda conan terraform swift ansible docker-oci)
   else
     IFS=',' read -r -a tests <<<"$selection"
   fi
@@ -3595,6 +3987,10 @@ run_selected_tests() {
         test_alpine
         register_cleanup_fixture alpine "$ALPINE_HOSTED_REPOSITORY" \
           "*kkrepo-alpine-*-$STAMP*" alpine
+        ;;
+      r|cran)
+        test_r
+        register_cleanup_fixture r "$R_HOSTED_REPOSITORY" "*kkrepoR*${STAMP}*" r
         ;;
       conda)
         test_conda

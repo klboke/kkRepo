@@ -20,7 +20,7 @@ compat-test/
 - hosted 写入、删除和重复上传行为
 - proxy、group、browse/search 等客户端可见行为
 
-当前模块中包含 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、APT/Debian、Alpine/APK、Docker/OCI、NuGet、RubyGems、Yum、Raw、组件上传、安全管理接口等方向的兼容性测试类。
+当前模块中包含 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、APT/Debian、Alpine/APK、R/CRAN、Docker/OCI、NuGet、RubyGems、Yum、Raw、组件上传、安全管理接口等方向的兼容性测试类。
 
 常规测试命令：
 
@@ -79,6 +79,12 @@ apk-tools 2.x/3.x，覆盖带认证 hosted/group 的 update、search、policy、
 proxy passthrough 与双副本 metadata 精确字节。Alpine 覆盖直接并入现有 Nexus compatibility 与
 真实客户端矩阵；精确环境变量见 [compat-test README](../../compat-test/README.md)。
 
+R/CRAN 兼容性面向 Nexus 3.94.x。`RRepositoryBlackBoxCompatibilityTest` 会创建隔离 hosted
+仓库、上传相同的确定性 source package、规范化比较 `PACKAGES.gz` DCF record，并检查 package
+GET/HEAD/Range/validator、Browse 与 Search。真实客户端矩阵使用 R 4.5.3 和 4.6.1 验证
+hosted/group `available.packages()`、依赖安装、更新、proxy `PACKAGES.gz`/`PACKAGES.rds`、版本
+顺序差分和可选第二副本读取。
+
 验证证据保持在对应层级：compatibility black box 覆盖 active/revoked/expired `GenericToken`，server/persistence test 覆盖 moving tag 不可变性、1,200 tag 分页上界、cleanup 和 429/5xx 传播。定时 Swift resilience lane 使用双副本和通过 AWS S3-compatible adapter 访问的 MinIO，验证多 MiB package、共享 429/5xx 水位与 stale fallback、lease takeover、restart 和破坏式关系数据库/object 备份恢复。阿里云 OSS Native 引擎有 adapter contract 覆盖，但不声称已运行真实 endpoint E2E。
 
 当 Pull Request 需要覆盖全部 E2E 维度时，添加 `run-full-e2e` 标签。`Full E2E` 编排器会针对实际被测 commit 仅构建一份 JVM 候选镜像和一份 Native 候选镜像，在每个消费任务中校验共享镜像产物的 checksum 与 identity，预热固定版本的 Swift 客户端镜像缓存，然后并行展开到保持不变的 JVM/Native MySQL/PostgreSQL 客户端矩阵、Nexus 兼容性、迁移矩阵、OCI conformance，以及 Swift 平台/S3 lane。原有的 `run-client-e2e`、`run-native-client-e2e`、`run-live-compat`、`run-migration-e2e` 和 `run-docker-oci-conformance` 标签继续用于定向重跑。存在 `run-full-e2e` 标签时，普通 PR 更新只运行统一编排器；显式新增某个定向标签仍只触发对应工作流，不会重启整套矩阵。
@@ -91,7 +97,7 @@ proxy passthrough 与双副本 metadata 精确字节。Alpine 覆盖直接并入
 scripts/ci/run-live-compat.sh client-e2e
 ```
 
-它会覆盖 Maven、npm、PyPI、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform 0.13/当前稳定版、SwiftPM/Xcode、Ansible Galaxy 2.9/当前版、Conda、APT/Debian、Alpine/APK、NuGet、RubyGems、Yum、Docker/OCI 的发布/上传和下载/解析流程。Composer 覆盖 hosted archive、group、Packagist proxy、传递依赖、Basic 认证和服务端 cache lock replay；Terraform 覆盖 hosted module/provider 上传、registry.terraform.io proxy、group 解析、URL token 认证、checksum 和 signature；Swift 5.7 覆盖 registry/proxy resolve/build，5.10/6.x 额外覆盖 hosted publish、Basic/GenericToken login、group resolve/build、GitHub SCM replacement、checksum replay 和跨副本读取；Ansible 会构建有依赖关系的 collection、通过 hosted 发布、拒绝重复版本、通过 group 安装/下载、验证 GenericToken/Basic/anonymous、访问 public Galaxy proxy，并可从第二副本读取；Conda 会上传生成的可安装 package，通过 group 解析、通过 proxy 解析受控上游 package，校验 JSON/BZ2/ZSTD repodata 和下载字节，并执行共享 cleanup gate；APT 使用三个客户端镜像验证签名认证安装、升级、删除、key rotation、proxy 模式和跨副本读取；Alpine 使用 apk-tools 2.x/3.x 验证签名 metadata、精确 package bytes、hosted/proxy/group、删除与双副本读取。macOS/Windows 分别提供 Xcode 和 proxy-only 专用 lane；Go 通过 Go module proxy 做 resolve-only 验证，因为 Go hosted 发布不是当前仓库模式。Docker image push/pull 会固定覆盖；如果运行环境里有 `oras`，还会额外 push/pull 一个通用 OCI artifact。
+它会覆盖 Maven、npm、PyPI、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform 0.13/当前稳定版、SwiftPM/Xcode、Ansible Galaxy 2.9/当前版、Conda、APT/Debian、Alpine/APK、R 4.5/4.6、NuGet、RubyGems、Yum、Docker/OCI 的发布/上传和下载/解析流程。Composer 覆盖 hosted archive、group、Packagist proxy、传递依赖、Basic 认证和服务端 cache lock replay；Terraform 覆盖 hosted module/provider 上传、registry.terraform.io proxy、group 解析、URL token 认证、checksum 和 signature；Swift 5.7 覆盖 registry/proxy resolve/build，5.10/6.x 额外覆盖 hosted publish、Basic/GenericToken login、group resolve/build、GitHub SCM replacement、checksum replay 和跨副本读取；Ansible 会构建有依赖关系的 collection、通过 hosted 发布、拒绝重复版本、通过 group 安装/下载、验证 GenericToken/Basic/anonymous、访问 public Galaxy proxy，并可从第二副本读取；Conda 会上传生成的可安装 package，通过 group 解析、通过 proxy 解析受控上游 package，校验 JSON/BZ2/ZSTD repodata 和下载字节，并执行共享 cleanup gate；APT 使用三个客户端镜像验证签名认证安装、升级、删除、key rotation、proxy 模式和跨副本读取；Alpine 使用 apk-tools 2.x/3.x 验证签名 metadata、精确 package bytes、hosted/proxy/group、删除与双副本读取；R 验证 hosted/group metadata、依赖安装/更新、proxy metadata passthrough、package bytes、官方版本顺序与可选第二副本读取。macOS/Windows 分别提供 Xcode 和 proxy-only 专用 lane；Go 通过 Go module proxy 做 resolve-only 验证，因为 Go hosted 发布不是当前仓库模式。Docker image push/pull 会固定覆盖；如果运行环境里有 `oras`，还会额外 push/pull 一个通用 OCI artifact。
 
 当变更影响真实客户端会直接走到的仓库协议行为时，应运行这个 suite，例如认证 header 或 API key、发布/上传路径、生成的 metadata、包索引形态、checksum/download 行为、Docker connector port、group/proxy 解析等。在 GitHub Actions 中，可以手动选择 `Live Compatibility` workflow 的 `client-e2e` suite，或给 PR 加 `run-client-e2e` label。Spring AOT、runtime hint 或 Native 打包变更应添加 `run-native-client-e2e`；独立 Native workflow 会复用 Linux 客户端 suite，分别覆盖 MySQL 和 PostgreSQL，同时不替代默认 JVM lane。
 

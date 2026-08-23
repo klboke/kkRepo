@@ -1,0 +1,192 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-08-21T09:52:00Z",
+  "purpose": "R CRAN million-row query growth and index-plan verification",
+  "environment": {
+    "host": "Intel Core i9-9880H, 64 GiB RAM, macOS 14.7.8 x86_64",
+    "container_runtime": "Docker 29.4.0 (OrbStack)",
+    "databases": {
+      "mysql": "8.0.46",
+      "postgresql": "16.15"
+    }
+  },
+  "dataset": {
+    "packages": 1000000,
+    "package_relations": 100000,
+    "suite_states": 10002,
+    "pending_suites": 101,
+    "snapshots": 100002,
+    "group_bindings": 100000,
+    "package_tombstones": 100000,
+    "publish_leases": 100000,
+    "notes": [
+      "The two extra suite/snapshot rows are the live r-hosted and r-group repository state.",
+      "The one extra pending suite and observed expired leases are live publication state outside the synthetic fixture.",
+      "Package and path hashes are fixed-width sequential synthetic values; selectivity and index shape match production SHA-256 columns."
+    ]
+  },
+  "method": {
+    "tool": "EXPLAIN ANALYZE",
+    "cache_state": "warmed execution after fixture load and ANALYZE or VACUUM ANALYZE",
+    "scope": "database executor time; excludes JDBC mapping, network transfer, index serialization, and blob access",
+    "mysql_script": "scripts/perf/r-database-mysql.sql",
+    "postgresql_script": "scripts/perf/r-database-postgresql.sql"
+  },
+  "results": {
+    "mysql": [
+      {
+        "query": "exact_coordinate",
+        "actual_total_ms": 0.00013,
+        "actual_rows": 1,
+        "index": "uk_r_package_coordinate",
+        "access": "unique point lookup"
+      },
+      {
+        "query": "exact_asset_path",
+        "actual_total_ms": 0.000126,
+        "actual_rows": 1,
+        "index": "uk_r_package_path",
+        "access": "unique hash lookup plus full-path collision check"
+      },
+      {
+        "query": "package_keyset_late_page",
+        "actual_total_ms": 13.3,
+        "actual_rows": 2048,
+        "examined_rows": 2048,
+        "index": "idx_r_package_namespace_page",
+        "access": "two bounded index ranges for the MySQL keyset predicate"
+      },
+      {
+        "query": "latest_package_version",
+        "actual_total_ms": 0.193,
+        "actual_rows": 1,
+        "index": "idx_r_package_name",
+        "access": "reverse index lookup over 100 package versions"
+      },
+      {
+        "query": "relation_lookup",
+        "actual_total_ms": 17.0,
+        "actual_rows": 100,
+        "index": "idx_r_relation_lookup plus package primary key",
+        "access": "100 relation matches and 100 package point probes"
+      },
+      {
+        "query": "pending_publication_worker",
+        "actual_total_ms": 0.645,
+        "actual_rows": 101,
+        "index": "idx_r_suite_worker plus repository primary key",
+        "access": "bounded pending range and 101 repository point probes"
+      },
+      {
+        "query": "snapshot_cleanup_candidates",
+        "actual_total_ms": 8.29,
+        "actual_rows": 256,
+        "index": "idx_r_snapshot_cleanup plus idx_r_snapshot_retention plus suite primary key",
+        "access": "256 cleanup rows; exactly 3 retention rows and 1 suite row probed per candidate"
+      },
+      {
+        "query": "exact_group_binding",
+        "actual_total_ms": 0.000118,
+        "actual_rows": 1,
+        "index": "uk_r_group_binding",
+        "access": "unique point lookup plus full-path collision check"
+      },
+      {
+        "query": "group_binding_keyset_late_page",
+        "actual_total_ms": 5.22,
+        "actual_rows": 2048,
+        "examined_rows": 2048,
+        "index": "idx_r_group_page",
+        "access": "bounded composite-key range"
+      },
+      {
+        "query": "expired_lease_page",
+        "actual_total_ms": 0.326,
+        "actual_rows": 103,
+        "index": "idx_r_lease_expiry",
+        "access": "bounded expiry range"
+      }
+    ],
+    "postgresql": [
+      {
+        "query": "exact_coordinate",
+        "execution_ms": 0.178,
+        "actual_rows": 1,
+        "index": "uk_r_package_coordinate",
+        "access": "index point lookup"
+      },
+      {
+        "query": "exact_asset_path",
+        "execution_ms": 0.206,
+        "actual_rows": 1,
+        "index": "uk_r_package_path",
+        "access": "index hash lookup plus full-path collision check"
+      },
+      {
+        "query": "package_keyset_late_page",
+        "execution_ms": 7.928,
+        "actual_rows": 2048,
+        "examined_rows": 2048,
+        "index": "idx_r_package_namespace_page",
+        "access": "row-value keyset index range"
+      },
+      {
+        "query": "latest_package_version",
+        "execution_ms": 0.185,
+        "actual_rows": 1,
+        "index": "idx_r_package_name",
+        "access": "ordered index lookup over 100 package versions"
+      },
+      {
+        "query": "relation_lookup",
+        "execution_ms": 4.062,
+        "actual_rows": 100,
+        "index": "idx_r_relation_lookup plus uk_r_package_repository_id",
+        "access": "100 relation matches and 100 package point probes"
+      },
+      {
+        "query": "pending_publication_worker",
+        "execution_ms": 0.289,
+        "actual_rows": 101,
+        "index": "idx_r_suite_force_publish plus pk_repository",
+        "access": "bounded pending bitmap range and two memoized repository point probes"
+      },
+      {
+        "query": "snapshot_cleanup_candidates",
+        "execution_ms": 5.191,
+        "actual_rows": 256,
+        "index": "idx_r_snapshot_cleanup plus idx_r_snapshot_retention plus r_suite_state_pkey",
+        "access": "256 cleanup rows; exactly 3 retention rows and 1 suite row probed per candidate"
+      },
+      {
+        "query": "exact_group_binding",
+        "execution_ms": 0.065,
+        "actual_rows": 1,
+        "index": "uk_r_group_binding",
+        "access": "index point lookup plus full-path collision check"
+      },
+      {
+        "query": "group_binding_keyset_late_page",
+        "execution_ms": 1.218,
+        "actual_rows": 2048,
+        "examined_rows": 2048,
+        "index": "r_group_binding_pkey",
+        "access": "bounded primary-key range with zero rows removed by the snapshot filter"
+      },
+      {
+        "query": "expired_lease_page",
+        "execution_ms": 0.059,
+        "actual_rows": 103,
+        "index": "idx_r_lease_expiry",
+        "access": "bounded expiry range"
+      }
+    ]
+  },
+  "remediation": {
+    "finding": "The first MySQL snapshot-retention shape could scan progressively older revisions because EXISTS discarded the requested ordering.",
+    "before": "The first 256-row batch examined an average of 132 newer rows per candidate and took 28.7 ms; later batches could grow with candidate revision.",
+    "change": "Store an indexed publish-complete discriminator and compare candidates with the Nth-newest indexed revision waterline.",
+    "after": "Both engines examine exactly three retention rows per candidate; MySQL took 8.29 ms and PostgreSQL took 5.191 ms for 256 candidates."
+  },
+  "gate_failures": []
+}

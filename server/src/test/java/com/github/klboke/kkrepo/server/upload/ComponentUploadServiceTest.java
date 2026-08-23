@@ -33,6 +33,7 @@ import com.github.klboke.kkrepo.server.npm.NpmHostedService;
 import com.github.klboke.kkrepo.server.pypi.PypiHostedService;
 import com.github.klboke.kkrepo.server.pub.PubHostedService;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
+import com.github.klboke.kkrepo.server.r.RService;
 import com.github.klboke.kkrepo.server.swift.SwiftService;
 import com.github.klboke.kkrepo.server.swift.SwiftPublishLimits;
 import com.github.klboke.kkrepo.server.terraform.TerraformService;
@@ -106,6 +107,50 @@ class ComponentUploadServiceTest {
         () -> service.upload(runtime.name(), Map.of(),
             files("alpine.asset", "demo.apk"), "alice", "ip"))
         .getMessage().contains("distribution"));
+  }
+
+  @Test
+  void rDefinitionAndDelegationUseTheCanonicalSourcePackagePath() throws Exception {
+    RService r = mock(RService.class);
+    ComponentUploadService service = service(r);
+    when(r.publish(
+        any(RepositoryRuntime.class), eq("demo_1.0.0.tar.gz"), any(InputStream.class),
+        eq("alice"), eq("127.0.0.1")))
+        .thenReturn(new RService.PublishedPackage(
+            "src/contrib/demo_1.0.0.tar.gz", "demo", "1.0.0",
+            "a".repeat(32), "b".repeat(64), 5L));
+
+    UploadDefinition definition = service.definition("r");
+    assertFalse(definition.multipleUpload());
+    assertTrue(definition.componentFields().isEmpty());
+    assertEquals(List.of("asset"),
+        definition.assetFields().stream().map(UploadFieldDefinition::name).toList());
+
+    ComponentUploadService.UploadResult result = service.upload(
+        "r-hosted", Map.of(), files("r.asset", "demo_1.0.0.tar.gz"),
+        "alice", "127.0.0.1");
+
+    assertEquals(List.of("src/contrib/demo_1.0.0.tar.gz"), result.paths());
+    verify(r).publish(
+        any(RepositoryRuntime.class), eq("demo_1.0.0.tar.gz"), any(InputStream.class),
+        eq("alice"), eq("127.0.0.1"));
+  }
+
+  @Test
+  void rComponentUploadRequiresTheServiceAndSourceTarball() {
+    RepositoryRuntime runtime = runtime("r-hosted", RepositoryFormat.R);
+    ComponentUploadService unavailable = service(
+        runtime, mock(CargoHostedService.class), mock(PubHostedService.class));
+    assertEquals("R upload service is unavailable", assertThrows(
+        UploadValidationException.class,
+        () -> unavailable.upload(runtime.name(), Map.of(),
+            files("r.asset", "demo_1.0.0.tar.gz"), "alice", "ip")).getMessage());
+
+    ComponentUploadService service = service(mock(RService.class));
+    assertEquals("R upload requires a source .tar.gz package", assertThrows(
+        UploadValidationException.class,
+        () -> service.upload(runtime.name(), Map.of(),
+            files("r.asset", "demo.zip"), "alice", "ip")).getMessage());
   }
 
   @Test
@@ -758,6 +803,14 @@ class ComponentUploadServiceTest {
     ComponentUploadService service = service(
         runtime, mock(CargoHostedService.class), mock(PubHostedService.class));
     service.setAlpineService(alpineService);
+    return service;
+  }
+
+  private static ComponentUploadService service(RService rService) {
+    RepositoryRuntime runtime = runtime("r-hosted", RepositoryFormat.R);
+    ComponentUploadService service = service(
+        runtime, mock(CargoHostedService.class), mock(PubHostedService.class));
+    service.setRService(rService);
     return service;
   }
 

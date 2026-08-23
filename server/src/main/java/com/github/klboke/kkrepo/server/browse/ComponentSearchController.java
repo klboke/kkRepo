@@ -14,6 +14,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AlpineRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.conda.CondaPath;
@@ -59,6 +60,7 @@ public class ComponentSearchController {
   private AnsibleGalaxyRegistryDao ansibleRegistry;
   private AptRegistryDao aptRegistry;
   private AlpineRegistryDao alpineRegistry;
+  private RRegistryDao rRegistry;
   private CondaRegistryDao condaRegistry;
 
   @Autowired
@@ -90,6 +92,11 @@ public class ComponentSearchController {
   @Autowired(required = false)
   void setAlpineRegistry(AlpineRegistryDao alpineRegistry) {
     this.alpineRegistry = alpineRegistry;
+  }
+
+  @Autowired(required = false)
+  void setRRegistry(RRegistryDao rRegistry) {
+    this.rRegistry = rRegistry;
   }
 
   @Autowired(required = false)
@@ -421,6 +428,9 @@ public class ComponentSearchController {
     if (row.format() == RepositoryFormat.ALPINE) {
       return alpineDetails(row);
     }
+    if (row.format() == RepositoryFormat.R) {
+      return rDetails(row);
+    }
     if (row.format() == RepositoryFormat.HUGGINGFACE) {
       return huggingFaceDetails(row);
     }
@@ -508,6 +518,29 @@ public class ComponentSearchController {
               "i", "installIf").entrySet()) {
             Object value = record.controlFields().get(field.getKey());
             if (value != null) details.put(field.getValue(), value);
+          }
+          return Map.copyOf(details);
+        })
+        .orElseGet(Map::of);
+  }
+
+  private Map<String, Object> rDetails(ComponentSearchRow row) {
+    if (rRegistry == null || row.storagePath() == null) return Map.of();
+    return rRegistry.findPackageByPath(row.repositoryId(), row.storagePath())
+        .map(record -> {
+          LinkedHashMap<String, Object> details = new LinkedHashMap<>();
+          details.put("namespace", record.distribution());
+          details.put("filename", record.filename());
+          details.put("md5", record.identity());
+          details.put("sha256", record.sha256());
+          details.put("size", record.size());
+          details.put("sourceKind", record.sourceKind());
+          details.put("sourceRepository", row.repositoryName());
+          for (String field : List.of(
+              "License", "Depends", "Imports", "LinkingTo", "Suggests", "Enhances",
+              "NeedsCompilation")) {
+            Object value = record.controlFields().get(field);
+            if (value != null) details.put(field, value);
           }
           return Map.copyOf(details);
         })

@@ -166,6 +166,7 @@ jobs:
             swift-migration-enabled: true
             conda-migration-enabled: true
             alpine-migration-enabled: true
+            r-migration-enabled: true
             secondary-port: 18102
             secondary-management-port: 18103
             wait-timeout-seconds: 420
@@ -209,6 +210,7 @@ jobs:
             conda-migration-enabled: true
             apt-migration-enabled: true
             alpine-migration-enabled: true
+            r-migration-enabled: true
             secondary-port: 18110
             secondary-management-port: 18111
             wait-timeout-seconds: 420
@@ -241,6 +243,7 @@ jobs:
       CONDA_MIGRATION_ENABLED: ${{ matrix.conda-migration-enabled || false }}
       APT_MIGRATION_ENABLED: ${{ matrix.apt-migration-enabled || false }}
       ALPINE_MIGRATION_ENABLED: ${{ matrix.alpine-migration-enabled || false }}
+      R_MIGRATION_ENABLED: ${{ matrix.r-migration-enabled || false }}
       APT_MIGRATION_FIXTURE_DIR: ${{ github.workspace }}/target/apt-migration-fixture
       KKREPO_MIGRATION_TARGET_DATABASE: ${{ matrix.target-database || 'mysql' }}
       KKREPO_MIGRATION_TARGET_DATABASE_SERVICE: ${{ matrix.target-database-service || 'mysql' }}

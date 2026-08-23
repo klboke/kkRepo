@@ -23,6 +23,8 @@ public interface DatabaseDialect {
 
   AlpinePersistenceDialect alpine();
 
+  RPersistenceDialect r();
+
   CondaPersistenceDialect conda();
 
   ConanPersistenceDialect conan();

@@ -412,6 +412,7 @@ public class NexusRestClient {
           conan: 'CONAN',
           apt: 'APT',
           alpine: 'ALPINE',
+          r: 'R',
           huggingface: 'HUGGINGFACE'
         ]
         return prefixes[format]
@@ -827,6 +828,7 @@ public class NexusRestClient {
           conan: 'CONAN',
           apt: 'APT',
           alpine: 'ALPINE',
+          r: 'R',
           huggingface: 'HUGGINGFACE'
         ]
         def upperTables = []
@@ -1351,6 +1353,94 @@ public class NexusRestClient {
           }
           return shape
         }
+        def inspectRShape = { tableNames ->
+          def shape = [
+            sourcePackageAssetPath: false,
+            rAssetAttributes: false,
+            componentIdentity: false,
+            sourceChecksum: false,
+            inspectedAssetCount: 0,
+            sourcePackageAssetCount: 0
+          ]
+          def fingerprintText = { value ->
+            if (value == null) {
+              return ''
+            }
+            if (value instanceof byte[]) {
+              return new String(value, 'UTF-8').toLowerCase()
+            }
+            if (value.getClass().name == 'org.postgresql.util.PGobject'
+                && value.respondsTo('getValue')) {
+              return String.valueOf(value.getValue()).toLowerCase()
+            }
+            return String.valueOf(value).toLowerCase()
+          }
+          def sql = '''
+              select
+                a.path as asset_path,
+                a.attributes as asset_attributes,
+                b.checksums as blob_checksums,
+                c.namespace as component_namespace,
+                c.name as component_name,
+                c.version as component_version,
+                c.attributes as component_attributes
+              from ''' + tableNames.asset + ''' a
+              left join ''' + tableNames.assetBlob + ''' b on a.asset_blob_id = b.asset_blob_id
+              left join ''' + tableNames.component + ''' c on a.component_id = c.component_id
+              order by a.path
+              limit 1024'''
+          try {
+            def statement = connection.prepareStatement(sql)
+            try {
+              def rows = statement.executeQuery()
+              try {
+                while (rows.next()) {
+                  shape.inspectedAssetCount++
+                  def path = fingerprintText(rows.getObject('asset_path')).replaceFirst('^/+', '')
+                  def parts = path.split('/')
+                  if (parts.length != 3 || parts[0] != 'src' || parts[1] != 'contrib'
+                      || !parts[2].endsWith('.tar.gz') || !parts[2].contains('_')) {
+                    continue
+                  }
+                  shape.sourcePackageAssetCount++
+                  if (parts[2].length() <= 255) {
+                    shape.sourcePackageAssetPath = true
+                  }
+                  def attributes = fingerprintText(rows.getObject('asset_attributes')) + ' ' +
+                      fingerprintText(rows.getObject('component_attributes'))
+                  if (attributes.contains('"r"') || attributes.contains('"cran"')
+                      || attributes.contains('r-package')) {
+                    shape.rAssetAttributes = true
+                  }
+                  def namespace = fingerprintText(rows.getObject('component_namespace'))
+                  def name = fingerprintText(rows.getObject('component_name'))
+                  def version = fingerprintText(rows.getObject('component_version'))
+                  if (!namespace.isEmpty() && !name.isEmpty() && !version.isEmpty()) {
+                    shape.componentIdentity = true
+                  }
+                  def checksums = fingerprintText(rows.getObject('blob_checksums'))
+                  if (((checksums.contains('"sha1"') || checksums.contains('"sha-1"'))
+                          && (checksums =~ /[0-9a-f]{40}/).find())
+                      || ((checksums.contains('"sha256"') || checksums.contains('"sha-256"'))
+                          && (checksums =~ /[0-9a-f]{64}/).find())) {
+                    shape.sourceChecksum = true
+                  }
+                }
+              } finally {
+                rows.close()
+              }
+            } finally {
+              statement.close()
+            }
+          } catch (e) {
+            shape.sourcePackageAssetPath = false
+            shape.rAssetAttributes = false
+            shape.componentIdentity = false
+            shape.sourceChecksum = false
+            out.warnings << 'R datastore content shape probe failed: ' + errorText(e)
+          }
+          return shape
+        }
         def inspectHuggingFaceShape = { tableNames ->
           def shape = [
             resolveAssetPath: false,
@@ -1499,6 +1589,9 @@ public class NexusRestClient {
           }
           if (format == 'alpine' && requiredColumnsPresent) {
             contentModel.formatShape = inspectAlpineShape(tableNames)
+          }
+          if (format == 'r' && requiredColumnsPresent) {
+            contentModel.formatShape = inspectRShape(tableNames)
           }
           if (format == 'huggingface' && requiredColumnsPresent) {
             contentModel.formatShape = inspectHuggingFaceShape(tableNames)

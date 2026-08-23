@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -42,6 +43,7 @@ import com.github.klboke.kkrepo.server.docker.DockerManifestParser;
 import com.github.klboke.kkrepo.server.conda.CondaRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.conan.ConanRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
+import com.github.klboke.kkrepo.server.r.RRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.support.dao.AssetDaoAdapter;
 import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import java.io.ByteArrayInputStream;
@@ -73,6 +75,47 @@ import org.springframework.transaction.support.SimpleTransactionStatus;
 class RepositoryDataMigrationWriterTest {
   private static final byte[] SAMPLE = "kkrepo migration checksum\n".getBytes(StandardCharsets.UTF_8);
   private static final MavenPathParser MAVEN_PATH_PARSER = new MavenPathParser();
+
+  @Test
+  void delegatesRSourcePackagesToTheProtocolMigrationWriter() {
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    when(repositories.findById(15L)).thenReturn(Optional.of(rRepository()));
+    RepositoryDataMigrationWriter writer = migrationWriter(
+        repositories, mock(ComponentDao.class), mock(AssetDao.class), mock(BrowseNodeDao.class));
+    RepositoryDataMigrationAssetRecord source = rSource(
+        "src/contrib/demo_1.0.0.tar.gz", 7);
+
+    assertEquals("R migration writer is not configured", assertThrows(
+        IllegalStateException.class,
+        () -> writer.write(15L, source, new ByteArrayInputStream(SAMPLE),
+            "application/x-gzip", true)).getMessage());
+
+    RRepositoryDataMigrationWriter r = mock(RRepositoryDataMigrationWriter.class);
+    when(r.write(any(), any(), any(), anyBoolean())).thenReturn(
+        new RRepositoryDataMigrationWriter.MigratedAsset(21L, 22L, 23L, "object"));
+    writer.setRMigrationWriter(r);
+
+    RepositoryDataMigrationWriter.WriteResult result = writer.write(
+        15L, source, new ByteArrayInputStream(SAMPLE), "application/x-gzip", true);
+
+    assertEquals(21L, result.componentId());
+    assertEquals(22L, result.assetId());
+    assertEquals(23L, result.assetBlobId());
+    assertEquals("object", result.assetBlobObjectKey());
+    verify(r).write(any(), any(), any(), anyBoolean());
+  }
+
+  @Test
+  void classifiesRMigrationAssetsByCanonicalSourcePath() throws Exception {
+    Method assetKind = RepositoryDataMigrationWriter.class.getDeclaredMethod(
+        "assetKind", RepositoryFormat.class, RepositoryDataMigrationAssetRecord.class);
+    assetKind.setAccessible(true);
+
+    assertEquals("r-source-package", assetKind.invoke(
+        null, RepositoryFormat.R, rSource("src/contrib/demo_1.0.0.tar.gz", 7)));
+    assertEquals("r-metadata", assetKind.invoke(
+        null, RepositoryFormat.R, rSource("src/contrib/PACKAGES.gz", 7)));
+  }
 
   @Test
   void generatedMavenChecksumPayloadsMatchNexusUploadHandlerSemantics() {
@@ -663,6 +706,12 @@ class RepositoryDataMigrationWriterTest {
         Map.of());
   }
 
+  private static RepositoryRecord rRepository() {
+    return new RepositoryRecord(
+        15L, "r-hosted", RepositoryFormat.R, RepositoryType.HOSTED,
+        "r-hosted", true, 1L, null, null, null, null, "ALLOW_ONCE", true, Map.of());
+  }
+
   private static RepositoryDataMigrationWriter migrationWriter(
       RepositoryDao repositories,
       ComponentDao components,
@@ -779,6 +828,16 @@ class RepositoryDataMigrationWriterTest {
         Instant.EPOCH, Instant.EPOCH, Instant.EPOCH, Instant.EPOCH,
         "nexus", "127.0.0.1", "PENDING", 0, null, null,
         null, null, null, null, Map.of("sha256", "a".repeat(64)), Instant.EPOCH);
+  }
+
+  private static RepositoryDataMigrationAssetRecord rSource(String path, int size) {
+    return new RepositoryDataMigrationAssetRecord(
+        1L, 2L, "source", "component", path, PersistenceHashes.pathHash(path),
+        RepositoryFormat.R, "src/contrib", "demo", "1.0.0", "r-source-package",
+        "application/x-gzip", (long) size, null,
+        Instant.EPOCH, Instant.EPOCH, Instant.EPOCH, Instant.EPOCH,
+        "nexus", "127.0.0.1", "PENDING", 0, null, null,
+        null, null, null, null, Map.of(), Instant.EPOCH);
   }
 
   private static RepositoryDataMigrationAssetRecord conanSource(String path, int size) {
