@@ -77,7 +77,7 @@ Docker Registry V1 API 和 `docker search` 不属于当前支持面。现代 Doc
 
 ## URL 与路由设计
 
-新增 `DockerRegistryController`，不要挂到现有 `RepositoryContentController` 的 `/repository/{name}` 下。
+新增 `DockerRegistryController`，不要挂到现有 `RepositoryProtocolController` 的 `/repository/{name}` 下。
 
 ## Docker 流量端口设计
 

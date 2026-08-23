@@ -7,7 +7,8 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPath;
-import com.github.klboke.kkrepo.server.RepositoryContentController;
+import com.github.klboke.kkrepo.server.RepositoryProtocolController;
+import com.github.klboke.kkrepo.server.RepositoryProtocolControllerTestSupport;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
@@ -24,7 +25,7 @@ class ComposerRepositoryControllerPathTest {
   @Test
   void getUsesFilterCanonicalPathWithoutDecodingItAgain() {
     RecordingHostedService hosted = new RecordingHostedService();
-    RepositoryContentController controller = controller(hosted);
+    RepositoryProtocolController controller = controller(hosted);
     MockHttpServletRequest request = request(
         "/repository/composer/company/example/1.0.0/"
             + "company-example-1.0.0%252Bbuild.zip");
@@ -42,7 +43,7 @@ class ComposerRepositoryControllerPathTest {
   @Test
   void headCanonicalizesDirectRequestOnceWhenFilterIsAbsent() {
     RecordingHostedService hosted = new RecordingHostedService();
-    RepositoryContentController controller = controller(hosted);
+    RepositoryProtocolController controller = controller(hosted);
 
     controller.head("composer", request(
         "/repository/composer/company/example/1.0.0/"
@@ -53,8 +54,8 @@ class ComposerRepositoryControllerPathTest {
         hosted.requestedPath.distPath());
   }
 
-  private static RepositoryContentController controller(ComposerHostedService hosted) {
-    return new RepositoryContentController(
+  private static RepositoryProtocolController controller(ComposerHostedService hosted) {
+    return RepositoryProtocolControllerTestSupport.controller(
         new RepositoryRuntimeRegistry(new SingleRepositoryDao(), 0),
         null, null, null,
         null, null,

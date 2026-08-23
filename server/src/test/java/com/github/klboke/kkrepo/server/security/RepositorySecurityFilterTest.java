@@ -17,7 +17,8 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
-import com.github.klboke.kkrepo.server.RepositoryContentController;
+import com.github.klboke.kkrepo.server.RepositoryProtocolController;
+import com.github.klboke.kkrepo.server.RepositoryProtocolControllerTestSupport;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.pypi.PypiHostedService;
@@ -600,7 +601,7 @@ class RepositorySecurityFilterTest {
         repositoryDao,
         false);
     RecordingPypiHostedService hosted = new RecordingPypiHostedService();
-    RepositoryContentController controller = pypiController(repositoryDao, hosted);
+    RepositoryProtocolController controller = pypiController(repositoryDao, hosted);
     HttpServletRequest request = request(
         "GET",
         "/repository/pypi-private/packages/pr%69vate/0.0.0%2Bbuild/"
@@ -1447,10 +1448,10 @@ class RepositorySecurityFilterTest {
         new NexusLegacyUiCompatibility(legacyUiEnabled));
   }
 
-  private static RepositoryContentController pypiController(
+  private static RepositoryProtocolController pypiController(
       RepositoryDao repositoryDao,
       PypiHostedService hosted) {
-    return new RepositoryContentController(
+    return RepositoryProtocolControllerTestSupport.controller(
         new RepositoryRuntimeRegistry(repositoryDao, 0),
         null, null, null,
         null, null,

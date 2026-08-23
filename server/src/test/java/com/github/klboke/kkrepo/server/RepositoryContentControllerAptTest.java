@@ -68,7 +68,7 @@ class RepositoryContentControllerAptTest {
             HttpHeaders.LOCATION, "pool/d/demo/demo_1_amd64.deb"));
     when(apt.delete(runtime, "pool/d/demo/demo_1_amd64.deb",
         "repository-content-delete", true)).thenReturn(MavenResponse.noBody(204));
-    RepositoryContentController controller = controller(runtimes, apt, null);
+    RepositoryProtocolController controller = controller(runtimes, apt, null);
 
     MockHttpServletRequest get = request(
         "GET", "/repository/apt/pool/d/demo/demo_1_amd64.deb");
@@ -102,7 +102,7 @@ class RepositoryContentControllerAptTest {
     AptService apt = mock(AptService.class);
     when(apt.publish(eq(runtime), eq(null), any(), eq(null), eq(null),
         eq("anonymous"), eq("192.0.2.20"))).thenReturn(published());
-    RepositoryContentController controller = controller(runtimes(runtime), apt, null);
+    RepositoryProtocolController controller = controller(runtimes(runtime), apt, null);
     MockHttpServletRequest request = request("POST", "/repository/apt/");
     request.setRemoteAddr("192.0.2.20");
     request.setContentType("multipart/form-data");
@@ -122,7 +122,7 @@ class RepositoryContentControllerAptTest {
     AptService apt = mock(AptService.class);
     when(apt.publish(eq(runtime), anyString(), any(), any(), any(),
         eq("anonymous"), eq("127.0.0.1"))).thenReturn(published());
-    RepositoryContentController controller = controller(runtimes(runtime), apt, null);
+    RepositoryProtocolController controller = controller(runtimes(runtime), apt, null);
 
     MockHttpServletRequest named = multipartRequest();
     named.addPart(new MockPart("empty", new byte[0]));
@@ -146,7 +146,7 @@ class RepositoryContentControllerAptTest {
   @Test
   void rejectsInvalidAptPostRequestsAndUnavailableService() throws Exception {
     AptService apt = mock(AptService.class);
-    RepositoryContentController hosted = controller(
+    RepositoryProtocolController hosted = controller(
         runtimes(aptRuntime(RepositoryType.HOSTED)), apt, null);
     MockHttpServletRequest path = request("POST", "/repository/apt/not-root");
     path.setContentType("multipart/form-data; boundary=x");
@@ -159,12 +159,12 @@ class RepositoryContentControllerAptTest {
     MockHttpServletRequest missing = multipartRequest();
     assertThrows(MavenExceptions.BadRequestException.class, () -> hosted.post("apt", missing));
 
-    RepositoryContentController proxy = controller(
+    RepositoryProtocolController proxy = controller(
         runtimes(aptRuntime(RepositoryType.PROXY)), apt, null);
     assertThrows(MavenExceptions.MethodNotAllowed.class,
         () -> proxy.post("apt", multipartRequest()));
 
-    RepositoryContentController unavailable = controller(
+    RepositoryProtocolController unavailable = controller(
         runtimes(aptRuntime(RepositoryType.HOSTED)), null, null);
     assertThrows(IllegalStateException.class, () -> unavailable.head(
         "apt", request("HEAD", "/repository/apt/dists/stable/Release")));
@@ -175,7 +175,7 @@ class RepositoryContentControllerAptTest {
   void mapsMultipartPartAndBodyFailuresToBadRequest() throws Exception {
     RepositoryRuntime runtime = aptRuntime(RepositoryType.HOSTED);
     AptService apt = mock(AptService.class);
-    RepositoryContentController controller = controller(runtimes(runtime), apt, null);
+    RepositoryProtocolController controller = controller(runtimes(runtime), apt, null);
     MockHttpServletRequest invalidParts = new MockHttpServletRequest(
         "POST", "/repository/apt/") {
       @Override
@@ -222,7 +222,7 @@ class RepositoryContentControllerAptTest {
           assertTrue(signature.isEmpty());
           return PypiResponse.noBody(200);
         });
-    RepositoryContentController controller = controller(runtimes(runtime), null, pypi);
+    RepositoryProtocolController controller = controller(runtimes(runtime), null, pypi);
     MockHttpServletRequest request = new MockHttpServletRequest("POST", "/repository/pypi/");
     request.setRemoteAddr("192.0.2.30");
     request.setContentType("multipart/form-data; boundary=x");
@@ -241,7 +241,7 @@ class RepositoryContentControllerAptTest {
   @Test
   void validatesPypiRootMultipartBeforeUpload() throws Exception {
     PypiHostedService pypi = mock(PypiHostedService.class);
-    RepositoryContentController hosted = controller(
+    RepositoryProtocolController hosted = controller(
         runtimes(pypiRuntime(RepositoryType.HOSTED)), null, pypi);
     MockHttpServletRequest path = new MockHttpServletRequest(
         "POST", "/repository/pypi/project");
@@ -259,7 +259,7 @@ class RepositoryContentControllerAptTest {
     missing.setContentType("multipart/form-data; boundary=x");
     assertThrows(PypiExceptions.BadRequestException.class, () -> hosted.post("pypi", missing));
 
-    RepositoryContentController proxy = controller(
+    RepositoryProtocolController proxy = controller(
         runtimes(pypiRuntime(RepositoryType.PROXY)), null, pypi);
     assertThrows(PypiExceptions.MethodNotAllowed.class,
         () -> proxy.post("pypi", missing));
@@ -316,9 +316,10 @@ class RepositoryContentControllerAptTest {
         60, 30, true, null, List.of());
   }
 
-  private static RepositoryContentController controller(
+  private static RepositoryProtocolController controller(
       RepositoryRuntimeRegistry runtimes, AptService apt, PypiHostedService pypi) {
-    RepositoryContentController controller = new RepositoryContentController(
+    RepositoryProtocolControllerTestSupport controller =
+        RepositoryProtocolControllerTestSupport.controller(
         runtimes,
         null, null, null,
         null, null,

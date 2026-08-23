@@ -49,9 +49,10 @@ The second shape is used on repository-level Docker connector ports, where the l
 
 The server flow is:
 
-1. `RepositoryContentController` resolves `<repo>` from shared relational repository metadata.
-2. Security filters authenticate the subject and check repository permissions.
-3. The server dispatches to the protocol implementation based on repository format and type.
+1. Security filters authenticate the subject, normalize the repository path, and check permissions.
+2. `RepositoryProtocolController` forwards the authenticated request to the protocol dispatcher.
+3. The dispatcher resolves `<repo>` from shared relational metadata and selects a
+   `RepositoryProtocolHandler` route by format, type, HTTP method, and normalized path.
 4. Hosted repositories read/write assets and metadata through relational transactions and blob storage.
 5. Proxy repositories fetch upstream content, persist cacheable assets, and use negative cache where safe.
 6. Group repositories resolve members in configured order and cache rebuildable member-hit decisions.
@@ -96,9 +97,19 @@ Admin UI and Browse UI are served by the Spring Boot service as static assets:
 | `browse-ui` | Static repository browser resources |
 | `compat-test` | Black-box and protocol compatibility tests |
 
-Protocol logic should live in services and protocol modules, not in controllers.
+Protocol logic should live in services and protocol modules, not in controllers. Exact and prefix
+routes take precedence over catch-all routes; equal-priority conflicting registrations fail closed.
+The built-in catch-all handler preserves existing behavior while runtime services are moved
+incrementally into their protocol modules or dedicated `protocol-*-runtime` modules. ArchUnit tests
+keep controllers on the routing SPI and prevent protocol modules from referencing `server`.
 
 ## Data Ownership
+
+Large JDBC facades keep their stable API contract but delegate independent responsibilities to
+focused package-private collaborators. Security-scan repository scoping, operational summaries,
+and retention/blob-reference cleanup are separate from the command facade; new independent
+security-scan persistence responsibilities should follow that boundary instead of growing the
+facade again.
 
 The selected relational database stores:
 

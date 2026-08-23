@@ -36,7 +36,7 @@ class RepositoryContentControllerConditionalTest {
   @Test
   void mavenRangeWithMatchingIfNoneMatchReturnsNotModifiedBeforeOpeningBody() {
     CountingHostedService hosted = new CountingHostedService();
-    RepositoryContentController controller = controller(hosted);
+    RepositoryProtocolController controller = controller(hosted);
     MockHttpServletRequest request = new MockHttpServletRequest(
         "GET", "/repository/maven/com/acme/app/1.0/app-1.0.jar");
     request.addHeader(HttpHeaders.RANGE, "bytes=1-3");
@@ -52,7 +52,7 @@ class RepositoryContentControllerConditionalTest {
   @Test
   void mavenRangeStillReturnsPartialBodyAfterConditionalMiss() throws Exception {
     CountingHostedService hosted = new CountingHostedService();
-    RepositoryContentController controller = controller(hosted);
+    RepositoryProtocolController controller = controller(hosted);
     MockHttpServletRequest request = new MockHttpServletRequest(
         "GET", "/repository/maven/com/acme/app/1.0/app-1.0.jar");
     request.addHeader(HttpHeaders.RANGE, "bytes=1-3");
@@ -70,7 +70,7 @@ class RepositoryContentControllerConditionalTest {
   @Test
   void cargoConfigWithMatchingIfNoneMatchReturnsNotModified() {
     CountingCargoHostedService cargoHosted = new CountingCargoHostedService();
-    RepositoryContentController controller = cargoController(cargoHosted);
+    RepositoryProtocolController controller = cargoController(cargoHosted);
     MockHttpServletRequest request = new MockHttpServletRequest(
         "GET", "/repository/cargo/config.json");
     request.addHeader(HttpHeaders.IF_NONE_MATCH, "\"cargo-config\"");
@@ -85,7 +85,7 @@ class RepositoryContentControllerConditionalTest {
   @Test
   void cargoHeadWithMatchingIfModifiedSinceReturnsNotModified() {
     CountingCargoHostedService cargoHosted = new CountingCargoHostedService();
-    RepositoryContentController controller = cargoController(cargoHosted);
+    RepositoryProtocolController controller = cargoController(cargoHosted);
     MockHttpServletRequest request = new MockHttpServletRequest(
         "HEAD", "/repository/cargo/config.json");
     request.addHeader(HttpHeaders.IF_MODIFIED_SINCE, "Mon, 08 Jun 2026 00:00:00 GMT");
@@ -99,7 +99,7 @@ class RepositoryContentControllerConditionalTest {
   @Test
   void cargoPublishReturnsJsonBytesInsteadOfSerializingStreamingResponseBody() throws Exception {
     CountingCargoHostedService cargoHosted = new CountingCargoHostedService();
-    RepositoryContentController controller = cargoController(cargoHosted);
+    RepositoryProtocolController controller = cargoController(cargoHosted);
     MockHttpServletRequest request = new MockHttpServletRequest(
         "PUT", "/repository/cargo/api/v1/crates/new");
     request.setContent("publish-body".getBytes(StandardCharsets.UTF_8));
@@ -114,23 +114,23 @@ class RepositoryContentControllerConditionalTest {
     assertEquals(body.length, response.getHeaders().getContentLength());
   }
 
-  private static RepositoryContentController controller(MavenHostedService hosted) {
+  private static RepositoryProtocolController controller(MavenHostedService hosted) {
     FakeRepositoryDao repositories = new FakeRepositoryDao();
     repositories.repository(repository("maven", RepositoryFormat.MAVEN2, RepositoryType.HOSTED));
     return controller(repositories, hosted, null);
   }
 
-  private static RepositoryContentController cargoController(CargoHostedService cargoHosted) {
+  private static RepositoryProtocolController cargoController(CargoHostedService cargoHosted) {
     FakeRepositoryDao repositories = new FakeRepositoryDao();
     repositories.repository(repository("cargo", RepositoryFormat.CARGO, RepositoryType.HOSTED));
     return controller(repositories, null, cargoHosted);
   }
 
-  private static RepositoryContentController controller(
+  private static RepositoryProtocolController controller(
       FakeRepositoryDao repositories,
       MavenHostedService hosted,
       CargoHostedService cargoHosted) {
-    return new RepositoryContentController(
+    return RepositoryProtocolControllerTestSupport.controller(
         new RepositoryRuntimeRegistry(repositories, 0),
         hosted, null, null,
         null, null,

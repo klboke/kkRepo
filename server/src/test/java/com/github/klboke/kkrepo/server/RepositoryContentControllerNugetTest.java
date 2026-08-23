@@ -33,7 +33,7 @@ class RepositoryContentControllerNugetTest {
     repositories.repository(repository("nuget-hosted", RepositoryFormat.NUGET, RepositoryType.HOSTED));
     ObjectMapper objectMapper = new ObjectMapper();
     NugetService nuget = new NugetService(null, null, null, objectMapper);
-    RepositoryContentController controller = controller(repositories, nuget);
+    RepositoryProtocolController controller = controller(repositories, nuget);
     MockHttpServletRequest request = new MockHttpServletRequest(
         "GET", "/repository/nuget-hosted/");
     request.setScheme("http");
@@ -56,7 +56,7 @@ class RepositoryContentControllerNugetTest {
     FakeRepositoryDao repositories = new FakeRepositoryDao();
     repositories.repository(repository("nuget-hosted", RepositoryFormat.NUGET, RepositoryType.HOSTED));
     CapturingNugetService nuget = new CapturingNugetService();
-    RepositoryContentController controller = controller(repositories, nuget);
+    RepositoryProtocolController controller = controller(repositories, nuget);
     MockHttpServletRequest request = new MockHttpServletRequest(
         "PUT", "/repository/nuget-hosted/");
     request.setContentType("multipart/form-data; boundary=test");
@@ -75,7 +75,7 @@ class RepositoryContentControllerNugetTest {
     FakeRepositoryDao repositories = new FakeRepositoryDao();
     repositories.repository(repository("nuget-hosted", RepositoryFormat.NUGET, RepositoryType.HOSTED));
     CapturingNugetService nuget = new CapturingNugetService();
-    RepositoryContentController controller = controller(repositories, nuget);
+    RepositoryProtocolController controller = controller(repositories, nuget);
     MockHttpServletRequest request = new MockHttpServletRequest(
         "PUT", "/repository/nuget-hosted/api/v2/package/");
     request.setContentType("application/octet-stream");
@@ -93,7 +93,7 @@ class RepositoryContentControllerNugetTest {
     FakeRepositoryDao repositories = new FakeRepositoryDao();
     repositories.repository(repository("nuget-hosted", RepositoryFormat.NUGET, RepositoryType.HOSTED));
     CapturingNugetService nuget = new CapturingNugetService();
-    RepositoryContentController controller = controller(repositories, nuget);
+    RepositoryProtocolController controller = controller(repositories, nuget);
     MockHttpServletRequest request = new MockHttpServletRequest(
         "PUT", "/repository/nuget-hosted/api/v2/package/");
     request.setContentType("multipart/form-data; boundary=test");
@@ -107,8 +107,8 @@ class RepositoryContentControllerNugetTest {
     assertEquals("fake nupkg", nuget.body);
   }
 
-  private static RepositoryContentController controller(FakeRepositoryDao repositories, NugetService nuget) {
-    return new RepositoryContentController(
+  private static RepositoryProtocolController controller(FakeRepositoryDao repositories, NugetService nuget) {
+    return RepositoryProtocolControllerTestSupport.controller(
         new com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry(repositories, 0),
         null, null, null,
         null, null,

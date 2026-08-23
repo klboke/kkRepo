@@ -56,7 +56,7 @@ class RepositoryContentControllerTerraformTest {
             any(),
             eq("127.0.0.1")))
         .thenReturn(MavenResponse.created());
-    RepositoryContentController controller = controller(runtimes, terraform);
+    RepositoryProtocolController controller = controller(runtimes, terraform);
     MockHttpServletRequest request = new MockHttpServletRequest(
         "PUT", "/repository/terraform/v1/providers/acme/cloud/1.2.3/download/linux/amd64");
     request.setContent(new byte[] {1});
@@ -80,9 +80,9 @@ class RepositoryContentControllerTerraformTest {
         eq("127.0.0.1"));
   }
 
-  private static RepositoryContentController controller(
+  private static RepositoryProtocolController controller(
       RepositoryRuntimeRegistry runtimes, TerraformService terraform) {
-    return new RepositoryContentController(
+    return RepositoryProtocolControllerTestSupport.controller(
         runtimes,
         null, null, null,
         null, null,

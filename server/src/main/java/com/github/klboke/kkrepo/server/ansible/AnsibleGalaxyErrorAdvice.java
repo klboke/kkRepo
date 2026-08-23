@@ -1,6 +1,6 @@
 package com.github.klboke.kkrepo.server.ansible;
 
-import com.github.klboke.kkrepo.server.RepositoryContentController;
+import com.github.klboke.kkrepo.server.RepositoryProtocolController;
 import java.util.List;
 import java.util.Map;
 import org.springframework.http.MediaType;
@@ -9,7 +9,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 /** Prevents Spring HTML errors from leaking into Galaxy v3 client responses. */
-@RestControllerAdvice(assignableTypes = RepositoryContentController.class)
+@RestControllerAdvice(assignableTypes = RepositoryProtocolController.class)
 public class AnsibleGalaxyErrorAdvice {
   @ExceptionHandler(AnsibleGalaxyExceptions.GalaxyException.class)
   public ResponseEntity<Map<String, Object>> handle(

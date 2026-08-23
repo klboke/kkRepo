@@ -1,6 +1,6 @@
 package com.github.klboke.kkrepo.server.swift;
 
-import com.github.klboke.kkrepo.server.RepositoryContentController;
+import com.github.klboke.kkrepo.server.RepositoryProtocolController;
 import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 /** Keeps Spring's HTML/default error document out of Swift Package Registry responses. */
-@RestControllerAdvice(assignableTypes = RepositoryContentController.class)
+@RestControllerAdvice(assignableTypes = RepositoryProtocolController.class)
 public class SwiftErrorAdvice {
   @ExceptionHandler(SwiftExceptions.SwiftException.class)
   public ResponseEntity<Map<String, Object>> handle(

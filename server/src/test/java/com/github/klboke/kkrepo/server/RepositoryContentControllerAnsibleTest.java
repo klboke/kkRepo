@@ -55,7 +55,7 @@ class RepositoryContentControllerAnsibleTest {
         .thenReturn(MavenResponse.ok(
             new ByteArrayInputStream(archive), archive.length,
             "application/octet-stream", SHA256, Instant.EPOCH));
-    RepositoryContentController controller = controller(
+    RepositoryProtocolController controller = controller(
         runtimes, ansible, new AnsibleGalaxyMultipartReader(1024, 1024));
 
     MockHttpServletRequest head = request(
@@ -85,7 +85,7 @@ class RepositoryContentControllerAnsibleTest {
     String path = "api/v3/plugin/ansible/content/published/collections/artifacts/" + FILENAME;
     when(ansible.putArtifact(eq(runtime), eq(path), any(), eq("anonymous"), eq("192.0.2.10")))
         .thenReturn(MavenResponse.created());
-    RepositoryContentController controller = controller(
+    RepositoryProtocolController controller = controller(
         runtimes, ansible, new AnsibleGalaxyMultipartReader(1024, 1024));
     MockHttpServletRequest put = request("PUT", "/repository/ansible/" + path);
     put.setRemoteAddr("192.0.2.10");
@@ -116,7 +116,7 @@ class RepositoryContentControllerAnsibleTest {
         .thenReturn(MavenResponse.ok(
             new ByteArrayInputStream(responseBody), responseBody.length,
             "application/json", null, null).withStatus(202));
-    RepositoryContentController controller = controller(
+    RepositoryProtocolController controller = controller(
         runtimes, ansible, new AnsibleGalaxyMultipartReader(1024, 1024));
     MockHttpServletRequest request = request(
         "POST", "/repository/ansible/api/v3/artifacts/collections/");
@@ -145,7 +145,7 @@ class RepositoryContentControllerAnsibleTest {
         RepositoryRuntime runtime = nonHosted(type);
         AnsibleGalaxyService ansible = mock(AnsibleGalaxyService.class);
         AnsibleGalaxyMultipartReader reader = mock(AnsibleGalaxyMultipartReader.class);
-        RepositoryContentController controller = controller(runtimes(runtime), ansible, reader);
+        RepositoryProtocolController controller = controller(runtimes(runtime), ansible, reader);
         MockHttpServletRequest request = request(
             "POST", "/repository/ansible/api/v3/artifacts/collections/");
         request.setContentType(contentType);
@@ -168,7 +168,7 @@ class RepositoryContentControllerAnsibleTest {
     AnsibleGalaxyMultipartReader reader = mock(AnsibleGalaxyMultipartReader.class);
     doThrow(new AnsibleGalaxyExceptions.MethodNotAllowed("unsupported"))
         .when(ansible).validatePublishRequest(runtime, "api/v3/collections/acme/tools/", null);
-    RepositoryContentController controller = controller(runtimes(runtime), ansible, reader);
+    RepositoryProtocolController controller = controller(runtimes(runtime), ansible, reader);
     MockHttpServletRequest request = request(
         "POST", "/repository/ansible/api/v3/collections/acme/tools/");
     request.setContentType("multipart/form-data; boundary=x");
@@ -186,7 +186,7 @@ class RepositoryContentControllerAnsibleTest {
     RepositoryRuntime runtime = hosted();
     RepositoryRuntimeRegistry runtimes = runtimes(runtime);
     AnsibleGalaxyService ansible = mock(AnsibleGalaxyService.class);
-    RepositoryContentController controller = controller(runtimes, ansible, null);
+    RepositoryProtocolController controller = controller(runtimes, ansible, null);
     MockHttpServletRequest plain = request(
         "POST", "/repository/ansible/api/v3/artifacts/collections/");
     plain.setContentType("application/gzip");
@@ -200,7 +200,7 @@ class RepositoryContentControllerAnsibleTest {
     multipart.setContentType("multipart/form-data; boundary=x");
     assertThrows(IllegalStateException.class, () -> controller.post("ansible", multipart));
 
-    RepositoryContentController unavailable = controller(runtimes, null, null);
+    RepositoryProtocolController unavailable = controller(runtimes, null, null);
     assertThrows(IllegalStateException.class, () -> unavailable.head(
         "ansible", request("HEAD", "/repository/ansible/api/")));
   }
@@ -213,7 +213,7 @@ class RepositoryContentControllerAnsibleTest {
     AnsibleGalaxyMultipartReader.Upload upload = mock(AnsibleGalaxyMultipartReader.Upload.class);
     when(reader.read(any())).thenReturn(upload);
     when(upload.openStream()).thenThrow(new IOException("spool closed"));
-    RepositoryContentController controller = controller(runtimes(runtime), ansible, reader);
+    RepositoryProtocolController controller = controller(runtimes(runtime), ansible, reader);
     MockHttpServletRequest request = request(
         "POST", "/repository/ansible/api/v3/artifacts/collections/");
     request.setContentType("multipart/form-data; boundary=x");
@@ -223,11 +223,12 @@ class RepositoryContentControllerAnsibleTest {
     assertTrue(failure.getMessage().contains("Unable to read"));
   }
 
-  private static RepositoryContentController controller(
+  private static RepositoryProtocolController controller(
       RepositoryRuntimeRegistry runtimes,
       AnsibleGalaxyService ansible,
       AnsibleGalaxyMultipartReader multipart) {
-    RepositoryContentController controller = new RepositoryContentController(
+    RepositoryProtocolControllerTestSupport controller =
+        RepositoryProtocolControllerTestSupport.controller(
         runtimes,
         null, null, null,
         null, null,

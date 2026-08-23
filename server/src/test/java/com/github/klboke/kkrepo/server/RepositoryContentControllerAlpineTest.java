@@ -51,7 +51,7 @@ class RepositoryContentControllerAlpineTest {
       throws Exception {
     RepositoryRuntime runtime = runtime(type);
     AlpineService alpine = mock(AlpineService.class);
-    RepositoryContentController controller = controller(runtimes(runtime), alpine);
+    RepositoryProtocolController controller = controller(runtimes(runtime), alpine);
 
     ResponseEntity<StreamingResponseBody> get = controller.get(
         "alpine", request("GET", "/repository/alpine/"));
@@ -81,7 +81,7 @@ class RepositoryContentControllerAlpineTest {
   void bareRootGetAndHeadReturnNexusStyleBadRequest(RepositoryType type) throws Exception {
     RepositoryRuntime runtime = runtime(type);
     AlpineService alpine = mock(AlpineService.class);
-    RepositoryContentController controller = controller(runtimes(runtime), alpine);
+    RepositoryProtocolController controller = controller(runtimes(runtime), alpine);
 
     ResponseEntity<StreamingResponseBody> get = controller.get(
         "alpine", request("GET", "/repository/alpine"));
@@ -116,7 +116,7 @@ class RepositoryContentControllerAlpineTest {
             HttpHeaders.LOCATION, "v3.23/main/x86_64/demo-1-r0.apk"));
     when(alpine.delete(runtime, "v3.23/main/x86_64/demo-1-r0.apk",
         "repository-content-delete", true)).thenReturn(MavenResponse.noBody(204));
-    RepositoryContentController controller = controller(runtimes(runtime), alpine);
+    RepositoryProtocolController controller = controller(runtimes(runtime), alpine);
 
     MockHttpServletRequest get = request(
         "GET", "/repository/alpine/v3.23/main/x86_64/demo-1-r0.apk");
@@ -151,7 +151,7 @@ class RepositoryContentControllerAlpineTest {
     AlpineService alpine = mock(AlpineService.class);
     when(alpine.publish(eq(runtime), any(), any(), any(), any(), any(),
         eq("anonymous"), eq("127.0.0.1"))).thenReturn(published());
-    RepositoryContentController controller = controller(runtimes(runtime), alpine);
+    RepositoryProtocolController controller = controller(runtimes(runtime), alpine);
 
     MockHttpServletRequest named = multipartRequest();
     named.addPart(new MockPart("empty", new byte[0]));
@@ -187,7 +187,7 @@ class RepositoryContentControllerAlpineTest {
   @Test
   void rejectsInvalidPostRequestsAndUnavailableService() throws Exception {
     AlpineService alpine = mock(AlpineService.class);
-    RepositoryContentController hosted = controller(
+    RepositoryProtocolController hosted = controller(
         runtimes(runtime(RepositoryType.HOSTED)), alpine);
     MockHttpServletRequest path = request("POST", "/repository/alpine/not-root");
     path.setContentType("multipart/form-data; boundary=x");
@@ -201,12 +201,12 @@ class RepositoryContentControllerAlpineTest {
     assertThrows(MavenExceptions.BadRequestException.class,
         () -> hosted.post("alpine", multipartRequest()));
 
-    RepositoryContentController proxy = controller(
+    RepositoryProtocolController proxy = controller(
         runtimes(runtime(RepositoryType.PROXY)), alpine);
     assertThrows(MavenExceptions.MethodNotAllowed.class,
         () -> proxy.post("alpine", multipartRequest()));
 
-    RepositoryContentController unavailable = controller(
+    RepositoryProtocolController unavailable = controller(
         runtimes(runtime(RepositoryType.HOSTED)), null);
     assertThrows(IllegalStateException.class, () -> unavailable.head(
         "alpine", request("HEAD", "/repository/alpine/v3.23/main/x86_64/APKINDEX.tar.gz")));
@@ -216,7 +216,7 @@ class RepositoryContentControllerAlpineTest {
   @Test
   void mapsMultipartPartAndBodyFailuresToBadRequest() throws Exception {
     AlpineService alpine = mock(AlpineService.class);
-    RepositoryContentController controller = controller(
+    RepositoryProtocolController controller = controller(
         runtimes(runtime(RepositoryType.HOSTED)), alpine);
     MockHttpServletRequest invalidParts = new MockHttpServletRequest(
         "POST", "/repository/alpine/") {
@@ -273,9 +273,10 @@ class RepositoryContentControllerAlpineTest {
         60, 30, true, null, List.of());
   }
 
-  private static RepositoryContentController controller(
+  private static RepositoryProtocolController controller(
       RepositoryRuntimeRegistry runtimes, AlpineService alpine) {
-    RepositoryContentController controller = new RepositoryContentController(
+    RepositoryProtocolControllerTestSupport controller =
+        RepositoryProtocolControllerTestSupport.controller(
         runtimes,
         null, null, null,
         null, null,

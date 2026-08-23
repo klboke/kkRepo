@@ -62,7 +62,7 @@ class RepositoryContentControllerSwiftTest {
             SwiftMediaTypes.ARCHIVE,
             "archive-etag",
             Instant.EPOCH));
-    RepositoryContentController controller = controller(runtimes, swift);
+    RepositoryProtocolController controller = controller(runtimes, swift);
     MockHttpServletRequest request = request(
         "GET", "/repository/swift/Acme/Demo/1.2.3.zip");
     request.setQueryString("download=1");
@@ -104,7 +104,7 @@ class RepositoryContentControllerSwiftTest {
             SwiftMediaTypes.JSON,
             "metadata-etag",
             Instant.EPOCH));
-    RepositoryContentController controller = controller(runtimes, swift);
+    RepositoryProtocolController controller = controller(runtimes, swift);
     MockHttpServletRequest request = request(
         "GET", "/repository/swift/Acme/Demo/1.2.3+linux.zip");
     request.addHeader(HttpHeaders.ACCEPT, SwiftMediaTypes.VENDOR_JSON);
@@ -140,7 +140,7 @@ class RepositoryContentControllerSwiftTest {
             eq(permissionSubject)))
         .thenReturn(MavenResponse.noBody(
             200, 42, SwiftMediaTypes.MANIFEST, "manifest-etag", Instant.EPOCH));
-    RepositoryContentController controller = controller(runtimes, swift);
+    RepositoryProtocolController controller = controller(runtimes, swift);
     MockHttpServletRequest request = request(
         "HEAD", "/repository/swift/Acme/Demo/1.2.3/Package.swift");
     request.setQueryString("swift-version=5.9");
@@ -182,7 +182,7 @@ class RepositoryContentControllerSwiftTest {
             .withStatus(201)
             .withHeader("Content-Version", "1")
             .withHeader("Location", "https://repo.example/repository/swift/Acme/Demo/1.2.3"));
-    RepositoryContentController controller = controller(runtimes, swift);
+    RepositoryProtocolController controller = controller(runtimes, swift);
     MockHttpServletRequest request = request(
         "PUT", "/repository/swift/Acme/Demo/1.2.3");
     request.setQueryString("source=swiftpm");
@@ -220,7 +220,7 @@ class RepositoryContentControllerSwiftTest {
     RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
     SwiftService swift = mock(SwiftService.class);
     when(runtimes.resolve("swift")).thenReturn(Optional.of(hosted()));
-    RepositoryContentController controller = controller(runtimes, swift);
+    RepositoryProtocolController controller = controller(runtimes, swift);
     MockHttpServletRequest request = request(
         "PUT", "/repository/swift/Acme/Demo/1.2.3");
 
@@ -239,7 +239,7 @@ class RepositoryContentControllerSwiftTest {
     when(swift.validatePublishRequest(
         eq(runtime), eq("Acme/Demo/1.2.3"), eq(null), eq(null)))
         .thenThrow(new SwiftExceptions.MethodNotAllowed("read-only"));
-    RepositoryContentController controller = controller(runtimes, swift);
+    RepositoryProtocolController controller = controller(runtimes, swift);
     MockHttpServletRequest request = new MockHttpServletRequest(
         "PUT", "/repository/swift/Acme/Demo/1.2.3") {
       @Override
@@ -264,7 +264,7 @@ class RepositoryContentControllerSwiftTest {
     when(swift.validatePublishRequest(
         eq(runtime), eq("Acme/Demo/1.2.3"), eq(null), eq(null)))
         .thenThrow(new SwiftExceptions.Conflict("Swift release already exists"));
-    RepositoryContentController controller = controller(runtimes, swift);
+    RepositoryProtocolController controller = controller(runtimes, swift);
     MockHttpServletRequest request = new MockHttpServletRequest(
         "PUT", "/repository/swift/Acme/Demo/1.2.3") {
       @Override
@@ -287,7 +287,7 @@ class RepositoryContentControllerSwiftTest {
     SwiftService swift = mock(SwiftService.class);
     when(runtimes.resolve("swift")).thenReturn(Optional.of(runtime));
     when(swift.login(runtime)).thenReturn(MavenResponse.noBody(200));
-    RepositoryContentController controller = controller(runtimes, swift);
+    RepositoryProtocolController controller = controller(runtimes, swift);
 
     ResponseEntity<?> response = controller.post(
         "swift", request("POST", "/repository/swift/login"));
@@ -328,9 +328,10 @@ class RepositoryContentControllerSwiftTest {
         List.of());
   }
 
-  private static RepositoryContentController controller(
+  private static RepositoryProtocolController controller(
       RepositoryRuntimeRegistry runtimes, SwiftService swift) {
-    RepositoryContentController controller = new RepositoryContentController(
+    RepositoryProtocolControllerTestSupport controller =
+        RepositoryProtocolControllerTestSupport.controller(
         runtimes,
         null, null, null,
         null, null,

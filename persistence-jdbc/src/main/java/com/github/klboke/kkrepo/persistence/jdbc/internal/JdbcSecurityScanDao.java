@@ -14,7 +14,6 @@ import com.github.klboke.kkrepo.persistence.jdbc.internal.support.EnumColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcInserts;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
-import com.github.klboke.kkrepo.persistence.jdbc.spi.JsonPersistenceDialect;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.BackfillStatus;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.EnforcementMode;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.OciPlatformPolicy;
@@ -84,7 +83,9 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
 
   private final JdbcTemplate jdbc;
   private final BlobReferenceDao blobReferences;
-  private final JsonPersistenceDialect jsonDialect;
+  private final JdbcSecurityScanRepositoryScope repositoryScope;
+  private final JdbcSecurityScanRetentionDao retention;
+  private final JdbcSecurityScanSummaryDao summaries;
   // Row mappers are constructed before the constructor body and dereference this field only when
   // a query executes, after construction has completed.
   private JsonColumns json;
@@ -496,7 +497,9 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     this.jdbc = jdbc;
     this.json = json;
     this.blobReferences = new JdbcBlobReferenceDao(jdbc);
-    this.jsonDialect = databaseDialect.json();
+    this.repositoryScope = new JdbcSecurityScanRepositoryScope(json, databaseDialect.json());
+    this.retention = new JdbcSecurityScanRetentionDao(jdbc, blobReferences);
+    this.summaries = new JdbcSecurityScanSummaryDao(jdbc, repositoryScope);
   }
 
   @Override
@@ -552,10 +555,10 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
 
   @Override
   public List<RepositoryScanConfig> findRepositoryConfigs(List<Long> repositoryIds) {
-    List<Long> ids = distinctLongs(repositoryIds);
+    List<Long> ids = repositoryScope.distinctLongs(repositoryIds);
     if (ids.isEmpty()) return List.of();
     return jdbc.query(
-        repositoryScopeCte() + """
+        repositoryScope.repositoryScopeCte() + """
         SELECT config.*
         FROM repository_security_scan_config config
         JOIN visible_repository visible
@@ -563,7 +566,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         ORDER BY config.repository_id
         """,
         configMapper,
-        repositoryScopeParameter(ids));
+        repositoryScope.parameter(ids));
   }
 
   @Override
@@ -663,7 +666,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Override
   public List<DownloadPolicySnapshot> findDownloadPolicySnapshots(
       List<Long> assetIds, Long entryRepositoryId) {
-    List<Long> ids = distinctLongs(assetIds).stream().filter(id -> id > 0).toList();
+    List<Long> ids = repositoryScope.distinctLongs(assetIds).stream().filter(id -> id > 0).toList();
     if (ids.isEmpty()) {
       return List.of();
     }
@@ -1276,7 +1279,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       String query,
       long afterId,
       int maxItems) {
-    List<Long> ids = distinctLongs(repositoryIds);
+    List<Long> ids = repositoryScope.distinctLongs(repositoryIds);
     if (ids.isEmpty()) return List.of();
     return listTasks(null, ids, status, query, afterId, maxItems);
   }
@@ -1291,8 +1294,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     List<Object> args = new ArrayList<>();
     StringBuilder sql = new StringBuilder();
     if (repositoryIds != null) {
-      sql.append(taskRepositoryScopeCte());
-      args.add(repositoryScopeParameter(repositoryIds));
+      sql.append(repositoryScope.taskRepositoryScopeCte());
+      args.add(repositoryScope.parameter(repositoryIds));
     }
     sql.append("""
         SELECT t.*
@@ -2190,7 +2193,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Override
   public List<ScanRun> listRunsByRepositories(
       List<Long> repositoryIds, String query, long afterId, int maxItems) {
-    List<Long> ids = distinctLongs(repositoryIds);
+    List<Long> ids = repositoryScope.distinctLongs(repositoryIds);
     if (ids.isEmpty()) return List.of();
     return listRuns(null, ids, query, afterId, maxItems);
   }
@@ -2204,8 +2207,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     StringBuilder sql = new StringBuilder();
     List<Object> args = new ArrayList<>();
     if (repositoryIds != null) {
-      sql.append(repositoryScopeCte());
-      args.add(repositoryScopeParameter(repositoryIds));
+      sql.append(repositoryScope.repositoryScopeCte());
+      args.add(repositoryScope.parameter(repositoryIds));
     }
     sql.append("""
         SELECT sr.*
@@ -2456,7 +2459,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       String query,
       long afterId,
       int maxItems) {
-    List<Long> ids = distinctLongs(repositoryIds);
+    List<Long> ids = repositoryScope.distinctLongs(repositoryIds);
     if (ids.isEmpty()) return List.of();
     return listFindings(null, ids, scanRunId, severity, query, afterId, maxItems);
   }
@@ -2472,8 +2475,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     StringBuilder sql = new StringBuilder();
     List<Object> args = new ArrayList<>();
     if (repositoryIds != null) {
-      sql.append(repositoryScopeCte());
-      args.add(repositoryScopeParameter(repositoryIds));
+      sql.append(repositoryScope.repositoryScopeCte());
+      args.add(repositoryScope.parameter(repositoryIds));
     }
     sql.append("""
         SELECT f.*
@@ -3430,8 +3433,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       List<String> packageSelectors,
       long afterId,
       int maxItems) {
-    List<Long> findings = distinctLongs(findingIds);
-    List<Long> runs = distinctLongs(scanRunIds);
+    List<Long> findings = repositoryScope.distinctLongs(findingIds);
+    List<Long> runs = repositoryScope.distinctLongs(scanRunIds);
     if (findings.isEmpty() || runs.isEmpty()) return List.of();
     List<String> advisories = distinctStrings(advisorySelectors, true);
     List<String> packages = distinctStrings(packageSelectors, false);
@@ -3641,287 +3644,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Transactional
   public RetentionResult cleanupRetainedData(
       Instant terminalTaskCutoff, Instant resultCutoff, int maxItems) {
-    int limit = safeLimit(maxItems);
-    int tasks = deleteTerminalTasks(terminalTaskCutoff, limit);
-    int backfills = deleteTerminalBackfills(terminalTaskCutoff, limit);
-    int subjects = deleteHistoricalRunSubjects(resultCutoff, limit);
-    int runs = deleteUnreferencedRuns(resultCutoff, limit);
-    int sboms = deleteUnreferencedSboms(resultCutoff, limit);
-    int snapshots = deleteUnreferencedSnapshots(resultCutoff, limit);
-    return new RetentionResult(tasks, backfills, subjects, runs, sboms, snapshots);
-  }
-
-  private int deleteTerminalTasks(Instant cutoff, int limit) {
-    List<Long> ids = jdbc.queryForList("""
-        SELECT id
-        FROM security_scan_task
-        WHERE status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
-          AND finished_at < ?
-        ORDER BY finished_at, id
-        LIMIT ?
-        FOR UPDATE SKIP LOCKED
-        """, Long.class, nullableTimestamp(cutoff), limit);
-    int deleted = 0;
-    for (Long id : ids) {
-      deleted += jdbc.update("""
-          DELETE FROM security_scan_task
-          WHERE id = ?
-            AND status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
-            AND finished_at < ?
-          """, id, nullableTimestamp(cutoff));
-    }
-    return deleted;
-  }
-
-  private int deleteTerminalBackfills(Instant cutoff, int limit) {
-    List<Long> ids = jdbc.queryForList("""
-        SELECT id
-        FROM security_scan_backfill_job
-        WHERE status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
-          AND completed_at < ?
-        ORDER BY completed_at, id
-        LIMIT ?
-        FOR UPDATE SKIP LOCKED
-        """, Long.class, nullableTimestamp(cutoff), limit);
-    int deleted = 0;
-    for (Long id : ids) {
-      deleted += jdbc.update("""
-          DELETE FROM security_scan_backfill_job
-          WHERE id = ?
-            AND status IN ('SUCCEEDED', 'FAILED', 'CANCELLED')
-            AND completed_at < ?
-          """, id, nullableTimestamp(cutoff));
-    }
-    return deleted;
-  }
-
-  private int deleteHistoricalRunSubjects(Instant cutoff, int limit) {
-    List<Map<String, Object>> rows = jdbc.queryForList("""
-        SELECT subject.scan_run_id, subject.repository_id, subject.asset_id,
-               subject.profile_id, subject.content_generation
-        FROM security_scan_run_subject subject
-        JOIN security_scan_run run ON run.id = subject.scan_run_id
-        WHERE subject.associated_at < ?
-          AND run.last_accessed_at < ?
-          AND NOT EXISTS (
-            SELECT 1
-            FROM asset_security_state asset_state
-            WHERE asset_state.latest_scan_run_id = subject.scan_run_id
-              AND asset_state.asset_id = subject.asset_id
-              AND asset_state.profile_id = subject.profile_id
-          )
-          AND NOT EXISTS (
-            SELECT 1
-            FROM asset_security_policy_state policy_state
-            WHERE policy_state.latest_scan_run_id = subject.scan_run_id
-              AND policy_state.asset_id = subject.asset_id
-              AND policy_state.profile_id = subject.profile_id
-              AND policy_state.repository_id = subject.repository_id
-          )
-          AND NOT EXISTS (
-            SELECT 1
-            FROM security_scan_waiver waiver
-            JOIN security_scan_finding finding ON finding.id = waiver.finding_id
-            WHERE finding.scan_run_id = subject.scan_run_id
-          )
-        ORDER BY subject.associated_at, subject.scan_run_id
-        LIMIT ?
-        FOR UPDATE SKIP LOCKED
-        """, nullableTimestamp(cutoff), nullableTimestamp(cutoff), limit);
-    int deleted = 0;
-    for (Map<String, Object> row : rows) {
-      deleted += jdbc.update("""
-          DELETE FROM security_scan_run_subject
-          WHERE scan_run_id = ? AND repository_id = ? AND asset_id = ?
-            AND profile_id = ? AND content_generation = ?
-          """,
-          number(row, "scan_run_id"),
-          number(row, "repository_id"),
-          number(row, "asset_id"),
-          number(row, "profile_id"),
-          number(row, "content_generation"));
-    }
-    return deleted;
-  }
-
-  private int deleteUnreferencedRuns(Instant cutoff, int limit) {
-    List<Map<String, Object>> rows = jdbc.queryForList("""
-        SELECT run.id, run.raw_report_blob_id
-        FROM security_scan_run run
-        WHERE run.completed_at < ?
-          AND run.last_accessed_at < ?
-          AND NOT EXISTS (
-            SELECT 1 FROM security_scan_run_subject subject
-            WHERE subject.scan_run_id = run.id
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM asset_security_state asset_state
-            WHERE asset_state.latest_scan_run_id = run.id
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM asset_security_policy_state policy_state
-            WHERE policy_state.latest_scan_run_id = run.id
-          )
-          AND NOT EXISTS (
-            SELECT 1
-            FROM security_scan_waiver waiver
-            JOIN security_scan_finding finding ON finding.id = waiver.finding_id
-            WHERE finding.scan_run_id = run.id
-          )
-        ORDER BY run.last_accessed_at, run.id
-        LIMIT ?
-        FOR UPDATE SKIP LOCKED
-        """, nullableTimestamp(cutoff), nullableTimestamp(cutoff), limit);
-    int deleted = 0;
-    for (Map<String, Object> row : rows) {
-      long runId = number(row, "id");
-      long blobId = number(row, "raw_report_blob_id");
-      blobReferences.release(SCAN_REPORT_BLOB_OWNER, runId, blobId);
-      deleted += jdbc.update("DELETE FROM security_scan_run WHERE id = ?", runId);
-    }
-    return deleted;
-  }
-
-  private int deleteUnreferencedSboms(Instant cutoff, int limit) {
-    List<Map<String, Object>> rows = jdbc.queryForList("""
-        SELECT sbom.id, sbom.document_blob_id
-        FROM security_sbom sbom
-        WHERE sbom.created_at < ?
-          AND sbom.last_accessed_at < ?
-          AND NOT EXISTS (
-            SELECT 1 FROM security_scan_run run WHERE run.sbom_id = sbom.id
-          )
-        ORDER BY sbom.last_accessed_at, sbom.id
-        LIMIT ?
-        FOR UPDATE SKIP LOCKED
-        """, nullableTimestamp(cutoff), nullableTimestamp(cutoff), limit);
-    int deleted = 0;
-    for (Map<String, Object> row : rows) {
-      long sbomId = number(row, "id");
-      long blobId = number(row, "document_blob_id");
-      blobReferences.release(SBOM_BLOB_OWNER, sbomId, blobId);
-      deleted += jdbc.update("DELETE FROM security_sbom WHERE id = ?", sbomId);
-    }
-    return deleted;
-  }
-
-  private int deleteUnreferencedSnapshots(Instant cutoff, int limit) {
-    List<Long> ids = jdbc.queryForList("""
-        SELECT snapshot.id
-        FROM security_scanner_snapshot snapshot
-        WHERE snapshot.observed_at < ?
-          AND NOT EXISTS (
-            SELECT 1 FROM security_scan_run run
-            WHERE run.scanner_snapshot_id = snapshot.id
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM security_scan_task task
-            WHERE task.requested_scanner_snapshot_id = snapshot.id
-          )
-        ORDER BY snapshot.observed_at, snapshot.id
-        LIMIT ?
-        FOR UPDATE SKIP LOCKED
-        """, Long.class, nullableTimestamp(cutoff), limit);
-    int deleted = 0;
-    for (Long id : ids) {
-      deleted += jdbc.update(
-          "DELETE FROM security_scanner_snapshot WHERE id = ?", id);
-    }
-    return deleted;
-  }
-
-  private static long number(Map<String, Object> row, String column) {
-    return ((Number) row.get(column)).longValue();
-  }
-
-  private static List<Long> distinctLongs(List<Long> values) {
-    return values == null
-        ? List.of()
-        : values.stream()
-            .filter(java.util.Objects::nonNull)
-            .distinct()
-            .toList();
-  }
-
-  /**
-   * Materializes an authorization-filtered repository scope from one JSON bind value. This avoids
-   * both one query per repository and database parameter-limit failures for large installations.
-   */
-  private String repositoryScopeCte() {
-    return """
-        WITH visible_repository AS (
-        %s
-        )
-        """.formatted(jsonDialect.selectLongsFromArray("repository_id"));
-  }
-
-  private String recursiveRepositoryScopeCte() {
-    return """
-        WITH RECURSIVE visible_repository AS (
-        %s
-        )
-        """.formatted(jsonDialect.selectLongsFromArray("repository_id"));
-  }
-
-  /**
-   * Expands visible group policy contexts to their concrete source repositories while retaining
-   * direct repository visibility as an unrestricted task scope.
-   */
-  private String taskRepositoryScopeCte() {
-    return recursiveRepositoryScopeCte() + """
-        ,
-        task_policy_source(
-          context_repository_id,
-          source_repository_id,
-          profile_id,
-          scan_hosted_content,
-          scan_proxy_content
-        ) AS (
-          SELECT
-            config.repository_id,
-            config.repository_id,
-            config.profile_id,
-            config.scan_hosted_content,
-            config.scan_proxy_content
-          FROM repository_security_scan_config config
-          JOIN visible_repository visible
-            ON visible.repository_id = config.repository_id
-          WHERE config.enabled = TRUE
-          UNION
-          SELECT
-            context.context_repository_id,
-            member.member_repository_id,
-            context.profile_id,
-            context.scan_hosted_content,
-            context.scan_proxy_content
-          FROM task_policy_source context
-          JOIN repository_member member
-            ON member.repository_id = context.source_repository_id
-        ),
-        task_repository_scope(
-          source_repository_id,
-          profile_id,
-          scan_hosted_content,
-          scan_proxy_content,
-          directly_visible
-        ) AS (
-          SELECT repository_id, NULL, FALSE, FALSE, TRUE
-          FROM visible_repository
-          UNION
-          SELECT
-            source_repository_id,
-            profile_id,
-            scan_hosted_content,
-            scan_proxy_content,
-            FALSE
-          FROM task_policy_source
-          WHERE context_repository_id <> source_repository_id
-        )
-        """;
-  }
-
-  private Object repositoryScopeParameter(List<Long> repositoryIds) {
-    return json.serializedParameter(json.writeValue(distinctLongs(repositoryIds)));
+    return retention.cleanupRetainedData(terminalTaskCutoff, resultCutoff, maxItems);
   }
 
   private static List<String> distinctStrings(List<String> values, boolean lowercase) {
@@ -3944,346 +3667,27 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
 
   @Override
   public ScanSummary summary() {
-    return summary(jdbc.queryForList("SELECT id FROM repository", Long.class));
+    return summaries.summary();
   }
 
   @Override
   public ScanSummary summary(long repositoryId) {
-    return summary(List.of(repositoryId));
+    return summaries.summary(repositoryId);
   }
 
   @Override
   public ScanSummary summary(List<Long> repositoryIds) {
-    List<Long> ids = repositoryIds == null
-        ? List.of()
-        : repositoryIds.stream()
-            .filter(java.util.Objects::nonNull)
-            .distinct()
-            .toList();
-    if (ids.isEmpty()) {
-      return new ScanSummary(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-    }
-    Object repositoryScope = repositoryScopeParameter(ids);
-    long candidates = count(taskRepositoryScopeCte() + """
-        SELECT COUNT(*)
-        FROM security_scan_candidate candidate
-        JOIN asset asset ON asset.id = candidate.asset_id
-        WHERE candidate.pending = TRUE
-          AND EXISTS (
-            SELECT 1
-            FROM task_repository_scope scope
-            JOIN repository source_repository
-              ON source_repository.id = scope.source_repository_id
-            WHERE scope.source_repository_id = asset.repository_id
-              AND (
-                scope.directly_visible = TRUE
-                OR (
-                  (
-                    source_repository.type = 'hosted'
-                    AND scope.scan_hosted_content = TRUE
-                  )
-                  OR (
-                    source_repository.type = 'proxy'
-                    AND scope.scan_proxy_content = TRUE
-                  )
-                )
-              )
-          )
-        """, repositoryScope);
-    Map<String, Object> tasks = jdbc.queryForMap(taskRepositoryScopeCte() + """
-        SELECT
-          COALESCE(SUM(CASE
-            WHEN task.status IN ('PENDING', 'RETRY_WAIT') THEN 1 ELSE 0 END), 0)
-            AS pending_tasks,
-          COALESCE(SUM(CASE
-            WHEN task.status = 'RUNNING' THEN 1 ELSE 0 END), 0)
-            AS running_tasks,
-          COALESCE(SUM(CASE
-            WHEN task.status = 'FAILED' THEN 1 ELSE 0 END), 0)
-            AS failed_tasks
-        FROM security_scan_task task
-        WHERE task.status IN ('PENDING', 'RETRY_WAIT', 'RUNNING', 'FAILED')
-          AND EXISTS (
-            SELECT 1
-            FROM task_repository_scope scope
-            JOIN repository source_repository
-              ON source_repository.id = scope.source_repository_id
-            WHERE scope.source_repository_id = task.repository_id
-              AND (
-                scope.directly_visible = TRUE
-                OR (
-                  scope.profile_id = task.profile_id
-                  AND (
-                    (
-                      source_repository.type = 'hosted'
-                      AND scope.scan_hosted_content = TRUE
-                    )
-                    OR (
-                      source_repository.type = 'proxy'
-                      AND scope.scan_proxy_content = TRUE
-                    )
-                  )
-                )
-              )
-          )
-        """, repositoryScope);
-    Instant summaryAt = Instant.now();
-    Map<String, Object> states = jdbc.queryForMap(
-        recursiveRepositoryScopeCte() + """
-        ,
-        policy_context_source(context_repository_id, source_repository_id) AS (
-          SELECT config.repository_id, config.repository_id
-          FROM repository_security_scan_config config
-          JOIN visible_repository visible
-            ON visible.repository_id = config.repository_id
-          WHERE config.enabled = TRUE
-          UNION
-          SELECT context.context_repository_id, member.member_repository_id
-          FROM policy_context_source context
-          JOIN repository_member member
-            ON member.repository_id = context.source_repository_id
-        ),
-        policy_subject(context_repository_id, source_repository_id, asset_id) AS (
-          SELECT context.context_repository_id, state.repository_id, state.asset_id
-          FROM policy_context_source context
-          JOIN asset_security_state state
-            ON state.repository_id = context.source_repository_id
-          UNION
-          SELECT context.context_repository_id, asset.repository_id, candidate.asset_id
-          FROM policy_context_source context
-          JOIN asset asset
-            ON asset.repository_id = context.source_repository_id
-          JOIN security_scan_candidate candidate
-            ON candidate.asset_id = asset.id
-        ),
-        policy_snapshot AS (
-          SELECT
-            subject.asset_id,
-            state.asset_id AS state_asset_id,
-            candidate.asset_id AS candidate_asset_id,
-            candidate.content_generation AS candidate_content_generation,
-            state.content_generation AS state_content_generation,
-            state.scan_state,
-            profile.id AS profile_id,
-            profile.enabled AS profile_enabled,
-            config.pending_action,
-            config.failure_action,
-            policy_state.policy_decision,
-            CASE
-              WHEN policy_state.asset_id IS NOT NULL
-               AND candidate.asset_id IS NOT NULL
-               AND state.asset_id IS NOT NULL
-               AND state.scan_state IN ('PARTIAL', 'COMPLETE')
-               AND state.content_generation = candidate.content_generation
-               AND policy_state.content_generation = candidate.content_generation
-               AND (
-                 policy_state.latest_scan_run_id = state.latest_scan_run_id
-                 OR (
-                   policy_state.latest_scan_run_id IS NULL
-                   AND state.latest_scan_run_id IS NULL
-                 )
-               )
-               AND policy_state.config_revision = config.config_revision
-               AND policy_state.waiver_revision
-                   >= waiver_revision.global_invalidation_revision
-               AND (
-                 (
-                   config.policy_id IS NULL
-                   AND policy_state.policy_id IS NULL
-                   AND policy_state.policy_revision IS NULL
-                 )
-                 OR (
-                   config.policy_id IS NOT NULL
-                   AND current_policy.id IS NOT NULL
-                   AND policy_state.policy_id = current_policy.id
-                   AND policy_state.policy_revision = current_policy.revision
-                 )
-               )
-               AND (
-                 policy_state.stale_at IS NULL
-                 OR policy_state.stale_at > ?
-               )
-               AND (
-                 policy_state.next_waiver_expiry IS NULL
-                 OR policy_state.next_waiver_expiry > ?
-               )
-              THEN TRUE
-              ELSE FALSE
-            END AS policy_authoritative
-          FROM policy_subject subject
-          JOIN repository_security_scan_config config
-            ON config.repository_id = subject.context_repository_id
-           AND config.enabled = TRUE
-          JOIN repository source_repository
-            ON source_repository.id = subject.source_repository_id
-          JOIN security_scan_waiver_revision waiver_revision
-            ON waiver_revision.singleton_id = 1
-          LEFT JOIN security_scan_candidate candidate
-            ON candidate.asset_id = subject.asset_id
-          LEFT JOIN asset_security_state state
-            ON state.asset_id = subject.asset_id
-           AND state.profile_id = config.profile_id
-          LEFT JOIN security_scan_profile profile
-            ON profile.id = config.profile_id
-          LEFT JOIN security_scan_policy current_policy
-            ON current_policy.id = config.policy_id
-          LEFT JOIN asset_security_policy_state policy_state
-            ON policy_state.asset_id = subject.asset_id
-           AND policy_state.profile_id = config.profile_id
-           AND policy_state.repository_id = config.repository_id
-          WHERE (
-            (source_repository.type = 'hosted' AND config.scan_hosted_content = TRUE)
-            OR (source_repository.type = 'proxy' AND config.scan_proxy_content = TRUE)
-          )
-        )
-        SELECT
-          COUNT(DISTINCT CASE
-            WHEN scan_state = 'COMPLETE'
-             AND state_content_generation = candidate_content_generation
-              THEN asset_id END)
-            AS complete_assets,
-          COUNT(DISTINCT CASE
-            WHEN scan_state = 'PARTIAL'
-             AND state_content_generation = candidate_content_generation
-              THEN asset_id END)
-            AS partial_assets,
-          COUNT(DISTINCT CASE
-            WHEN scan_state = 'STALE'
-             AND state_content_generation = candidate_content_generation
-              THEN asset_id END)
-            AS stale_assets,
-          COUNT(DISTINCT CASE
-            WHEN profile_id IS NULL OR profile_enabled = FALSE
-              THEN CASE WHEN failure_action = 'BLOCK' THEN asset_id END
-            WHEN state_asset_id IS NULL
-              OR candidate_asset_id IS NULL
-              OR state_content_generation <> candidate_content_generation
-              THEN CASE WHEN pending_action = 'BLOCK' THEN asset_id END
-            WHEN scan_state = 'NOT_APPLICABLE' THEN NULL
-            WHEN scan_state IN ('PENDING', 'RUNNING', 'STALE')
-              THEN CASE WHEN pending_action = 'BLOCK' THEN asset_id END
-            WHEN scan_state IN ('FAILED', 'CANCELLED')
-              THEN CASE WHEN failure_action = 'BLOCK' THEN asset_id END
-            WHEN scan_state IN ('PARTIAL', 'COMPLETE')
-              AND policy_authoritative = TRUE
-              AND policy_decision <> 'ALLOW'
-              THEN asset_id
-            WHEN scan_state IN ('PARTIAL', 'COMPLETE')
-              AND policy_authoritative = FALSE
-              THEN CASE WHEN pending_action = 'BLOCK' THEN asset_id END
-            ELSE NULL
-          END)
-            AS blocked_assets
-        FROM policy_snapshot
-        """,
-        repositoryScope,
-        nullableTimestamp(summaryAt),
-        nullableTimestamp(summaryAt));
-    Map<String, Object> findings = jdbc.queryForMap(repositoryScopeCte() + """
-        , current_run AS (
-          SELECT DISTINCT state.latest_scan_run_id AS scan_run_id
-          FROM asset_security_state state
-          JOIN security_scan_candidate candidate
-            ON candidate.asset_id = state.asset_id
-           AND candidate.content_generation = state.content_generation
-          JOIN security_scan_run_subject subject
-            ON subject.scan_run_id = state.latest_scan_run_id
-           AND subject.asset_id = state.asset_id
-           AND subject.profile_id = state.profile_id
-           AND subject.content_generation = state.content_generation
-          JOIN visible_repository visible
-            ON visible.repository_id = subject.repository_id
-          WHERE state.latest_scan_run_id IS NOT NULL
-        )
-        SELECT
-          COALESCE(SUM(CASE WHEN finding.severity = 'CRITICAL' THEN 1 ELSE 0 END), 0)
-            AS critical_findings,
-          COALESCE(SUM(CASE WHEN finding.severity = 'HIGH' THEN 1 ELSE 0 END), 0)
-            AS high_findings
-        FROM current_run
-        JOIN security_scan_finding finding
-          ON finding.scan_run_id = current_run.scan_run_id
-        WHERE finding.severity IN ('CRITICAL', 'HIGH')
-        """, repositoryScope);
-    return new ScanSummary(
-        candidates,
-        number(tasks, "pending_tasks"),
-        number(tasks, "running_tasks"),
-        number(tasks, "failed_tasks"),
-        number(states, "complete_assets"),
-        number(states, "partial_assets"),
-        number(states, "stale_assets"),
-        number(states, "blocked_assets"),
-        number(findings, "critical_findings"),
-        number(findings, "high_findings"));
+    return summaries.summary(repositoryIds);
   }
 
   @Override
   public ScanMetricSummary metricSummary(int maxCount) {
-    int limit = Math.max(1, Math.min(1_000_000, maxCount));
-    return new ScanMetricSummary(
-        boundedCount("""
-            SELECT id FROM security_scan_task
-            WHERE status IN ('PENDING', 'RETRY_WAIT')
-            """, limit),
-        boundedCount("""
-            SELECT id FROM security_scan_task
-            WHERE status = 'RUNNING'
-            """, limit),
-        boundedCount("""
-            SELECT id FROM security_scan_task
-            WHERE status = 'FAILED'
-            """, limit),
-        boundedCount("""
-            SELECT state.asset_id
-            FROM asset_security_state state
-            JOIN security_scan_candidate candidate
-              ON candidate.asset_id = state.asset_id
-             AND candidate.content_generation = state.content_generation
-            WHERE state.scan_state = 'PARTIAL'
-            """, limit),
-        boundedCount("""
-            SELECT finding.id
-            FROM (
-              SELECT DISTINCT state.latest_scan_run_id AS scan_run_id
-              FROM asset_security_state state
-              JOIN security_scan_candidate candidate
-                ON candidate.asset_id = state.asset_id
-               AND candidate.content_generation = state.content_generation
-              WHERE state.latest_scan_run_id IS NOT NULL
-            ) current_run
-            JOIN security_scan_finding finding
-              ON finding.scan_run_id = current_run.scan_run_id
-             AND finding.severity IN ('CRITICAL', 'HIGH')
-            """, limit));
+    return summaries.metricSummary(maxCount);
   }
 
   @Override
   public Optional<Instant> oldestPendingTaskCreatedAt() {
-    List<Instant> values = jdbc.query("""
-        SELECT created_at AS oldest_created_at
-        FROM security_scan_task
-        WHERE status IN ('PENDING','RETRY_WAIT')
-        ORDER BY created_at, id
-        LIMIT 1
-        """, (rs, rowNum) -> nullableInstant(rs, "oldest_created_at"));
-    return values.isEmpty() ? Optional.empty() : Optional.ofNullable(values.getFirst());
-  }
-
-  private long count(String sql) {
-    Long value = jdbc.queryForObject(sql, Long.class);
-    return value == null ? 0 : value;
-  }
-
-  private long count(String sql, Object... args) {
-    Long value = jdbc.queryForObject(sql, Long.class, args);
-    return value == null ? 0 : value;
-  }
-
-  private long boundedCount(String selectionSql, int limit) {
-    return count(
-        "SELECT COUNT(*) FROM (" + selectionSql + " LIMIT ?) bounded_count",
-        limit);
+    return summaries.oldestPendingTaskCreatedAt();
   }
 
   private List<String> list(String value) {

@@ -1,9 +1,9 @@
-package com.github.klboke.kkrepo.server;
+package com.github.klboke.kkrepo.server.routing.builtin;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
-import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.protocol.cargo.CargoPath;
@@ -48,7 +48,6 @@ import com.github.klboke.kkrepo.server.maven.MavenPartialFetchSupport;
 import com.github.klboke.kkrepo.server.maven.MavenProxyService;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
-import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmExceptions;
 import com.github.klboke.kkrepo.server.npm.NpmGroupService;
 import com.github.klboke.kkrepo.server.npm.NpmHostedService;
@@ -72,6 +71,9 @@ import com.github.klboke.kkrepo.server.raw.RawGroupService;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
 import com.github.klboke.kkrepo.server.raw.RawProxyService;
 import com.github.klboke.kkrepo.server.r.RService;
+import com.github.klboke.kkrepo.server.routing.RepositoryProtocolHandler;
+import com.github.klboke.kkrepo.server.routing.RepositoryProtocolRequest;
+import com.github.klboke.kkrepo.server.routing.RepositoryProtocolRoute;
 import com.github.klboke.kkrepo.server.rubygems.RubygemsService;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
@@ -91,37 +93,43 @@ import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.nio.charset.StandardCharsets;
 import java.util.Collection;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestHeader;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestMethod;
-import org.springframework.web.bind.annotation.RequestPart;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.stereotype.Component;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 /**
- * Unified content entry point for Nexus-compatible repository URLs. URL shape
- * {@code /repository/{name}/{path:.*}} mirrors Nexus and dispatches by repository format to the
- * protocol-specific hosted/proxy/group service.
+ * Compatibility catch-all for protocol paths not yet owned by a focused route handler.
+ *
+ * <p>The dispatcher supplies one immutable repository runtime snapshot. New routes should be
+ * implemented as focused handlers so this class can shrink as protocol runtimes move to their
+ * owning modules.
  */
-@RestController
-@RequestMapping("/repository/{name}")
-public class RepositoryContentController {
-  private final RepositoryRuntimeRegistry registry;
+@Component
+public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandler {
+  private static final List<RepositoryProtocolRoute> ROUTES =
+      Arrays.stream(RepositoryFormat.values())
+          .flatMap(format -> Arrays.stream(RepositoryType.values())
+              .flatMap(type -> List.of(
+                      HttpMethod.GET,
+                      HttpMethod.HEAD,
+                      HttpMethod.PUT,
+                      HttpMethod.DELETE,
+                      HttpMethod.POST)
+                  .stream()
+                  .map(method -> RepositoryProtocolRoute.anyPath(
+                      format, type, method, 1_000))))
+          .toList();
   private final MavenHostedService hosted;
   private final MavenProxyService proxy;
   private final MavenGroupService group;
@@ -175,52 +183,52 @@ public class RepositoryContentController {
   private final PypiPartialFetchSupport pypiPartialFetch = new PypiPartialFetchSupport();
 
   @Autowired(required = false)
-  void setSwiftService(SwiftService swift) {
+  public void setSwiftService(SwiftService swift) {
     this.swift = swift;
   }
 
   @Autowired(required = false)
-  void setAnsibleGalaxyService(AnsibleGalaxyService ansible) {
+  public void setAnsibleGalaxyService(AnsibleGalaxyService ansible) {
     this.ansible = ansible;
   }
 
   @Autowired(required = false)
-  void setAnsibleGalaxyMultipartReader(AnsibleGalaxyMultipartReader ansibleMultipart) {
+  public void setAnsibleGalaxyMultipartReader(AnsibleGalaxyMultipartReader ansibleMultipart) {
     this.ansibleMultipart = ansibleMultipart;
   }
 
   @Autowired(required = false)
-  void setCondaService(CondaService conda) {
+  public void setCondaService(CondaService conda) {
     this.conda = conda;
   }
 
   @Autowired(required = false)
-  void setConanService(ConanService conan) {
+  public void setConanService(ConanService conan) {
     this.conan = conan;
   }
 
   @Autowired(required = false)
-  void setAptService(AptService apt) {
+  public void setAptService(AptService apt) {
     this.apt = apt;
   }
 
   @Autowired(required = false)
-  void setAlpineService(AlpineService alpine) {
+  public void setAlpineService(AlpineService alpine) {
     this.alpine = alpine;
   }
 
   @Autowired(required = false)
-  void setRService(RService r) {
+  public void setRService(RService r) {
     this.r = r;
   }
 
   @Autowired(required = false)
-  void setHuggingFaceService(HuggingFaceService huggingFace) {
+  public void setHuggingFaceService(HuggingFaceService huggingFace) {
     this.huggingFace = huggingFace;
   }
 
   @Autowired
-  public RepositoryContentController(RepositoryRuntimeRegistry registry,
+  public BuiltinRepositoryProtocolHandler(
       MavenHostedService hosted, MavenProxyService proxy, MavenGroupService group,
       GoProxyService goProxy, GoGroupService goGroup,
       HelmHostedService helmHosted, HelmProxyService helmProxy,
@@ -239,7 +247,6 @@ public class RepositoryContentController {
       ObjectMapper objectMapper,
       ForwardedHeaderPolicy forwardedHeaderPolicy,
       TerraformService terraform) {
-    this.registry = registry;
     this.hosted = hosted;
     this.proxy = proxy;
     this.group = group;
@@ -277,7 +284,7 @@ public class RepositoryContentController {
   }
 
   /** Backward-compatible full constructor retained for focused unit tests. */
-  public RepositoryContentController(RepositoryRuntimeRegistry registry,
+  public BuiltinRepositoryProtocolHandler(
       MavenHostedService hosted, MavenProxyService proxy, MavenGroupService group,
       GoProxyService goProxy, GoGroupService goGroup,
       HelmHostedService helmHosted, HelmProxyService helmProxy,
@@ -292,7 +299,7 @@ public class RepositoryContentController {
       NugetService nuget, RubygemsService rubygems, YumService yum,
       RawHostedService rawHosted, RawProxyService rawProxy, RawGroupService rawGroup,
       ObjectMapper objectMapper, ForwardedHeaderPolicy forwardedHeaderPolicy) {
-    this(registry, hosted, proxy, group, goProxy, goGroup, helmHosted, helmProxy, htmlListing,
+    this(hosted, proxy, group, goProxy, goGroup, helmHosted, helmProxy, htmlListing,
         npmHosted, npmProxy, npmGroup, npmSearch, npmToken, pypiHosted, pypiProxy, pypiGroup,
         cargoHosted, cargoProxy, cargoGroup, pubHosted, pubProxy, pubGroup,
         composerHosted, composerProxy, composerGroup, nuget, rubygems, yum,
@@ -300,7 +307,7 @@ public class RepositoryContentController {
   }
 
   /** Backward-compatible constructor used by focused controller unit tests. */
-  public RepositoryContentController(RepositoryRuntimeRegistry registry,
+  public BuiltinRepositoryProtocolHandler(
       MavenHostedService hosted, MavenProxyService proxy, MavenGroupService group,
       GoProxyService goProxy, GoGroupService goGroup,
       HelmHostedService helmHosted, HelmProxyService helmProxy,
@@ -316,7 +323,7 @@ public class RepositoryContentController {
       RawHostedService rawHosted, RawProxyService rawProxy, RawGroupService rawGroup,
       ObjectMapper objectMapper,
       ForwardedHeaderPolicy forwardedHeaderPolicy) {
-    this(registry, hosted, proxy, group, goProxy, goGroup, helmHosted, helmProxy, htmlListing,
+    this(hosted, proxy, group, goProxy, goGroup, helmHosted, helmProxy, htmlListing,
         npmHosted, npmProxy, npmGroup, npmSearch, npmToken,
         pypiHosted, pypiProxy, pypiGroup,
         cargoHosted, cargoProxy, cargoGroup,
@@ -325,15 +332,35 @@ public class RepositoryContentController {
         nuget, rubygems, yum, rawHosted, rawProxy, rawGroup, objectMapper, forwardedHeaderPolicy, null);
   }
 
-  @GetMapping("/**")
-  public ResponseEntity<StreamingResponseBody> get(
-      @PathVariable("name") String name, HttpServletRequest request) {
-    return serveBody(name, request, false);
+  @Override
+  public Collection<RepositoryProtocolRoute> routes() {
+    return ROUTES;
   }
 
-  @RequestMapping(value = "/**", method = RequestMethod.HEAD)
-  public ResponseEntity<Void> head(@PathVariable("name") String name, HttpServletRequest request) {
-    RepositoryRuntime runtime = resolveRuntime(name, request);
+  @Override
+  public ResponseEntity<?> handle(RepositoryProtocolRequest request)
+      throws IOException, ServletException {
+    return switch (request.method().name()) {
+      case "GET" -> get(request.runtime(), request.repositoryName(), request.servletRequest());
+      case "HEAD" -> head(request.runtime(), request.repositoryName(), request.servletRequest());
+      case "PUT" -> put(
+          request.runtime(), request.repositoryName(), request.servletRequest(), request.contentType());
+      case "DELETE" -> delete(
+          request.runtime(), request.repositoryName(), request.servletRequest());
+      case "POST" -> post(
+          request.runtime(), request.repositoryName(), request.servletRequest());
+      default -> throw new MavenExceptions.MethodNotAllowed(
+          "Unsupported repository HTTP method: " + request.method());
+    };
+  }
+
+  private ResponseEntity<StreamingResponseBody> get(
+      RepositoryRuntime runtime, String name, HttpServletRequest request) {
+    return serveBody(runtime, name, request, false);
+  }
+
+  private ResponseEntity<Void> head(
+      RepositoryRuntime runtime, String name, HttpServletRequest request) {
     if (runtime.format() == RepositoryFormat.NPM) {
       NpmPath path = npmParser.parse(extractRepositoryPath(name, request));
       return toHeadResponse(dispatchNpmGet(runtime, path, request, true), request);
@@ -456,13 +483,12 @@ public class RepositoryContentController {
     return toHeadResponse(resp, request);
   }
 
-  @PutMapping("/**")
-  public ResponseEntity<?> put(
-      @PathVariable("name") String name,
+  private ResponseEntity<?> put(
+      RepositoryRuntime runtime,
+      String name,
       HttpServletRequest request,
-      @RequestHeader(value = HttpHeaders.CONTENT_TYPE, required = false) String contentType)
+      String contentType)
       throws IOException, ServletException {
-    RepositoryRuntime runtime = resolveRuntime(name, request);
     String userId = requestUserId(request);
     if (runtime.format() == RepositoryFormat.NPM) {
       String rawPath = extractRepositoryPath(name, request);
@@ -664,9 +690,8 @@ public class RepositoryContentController {
     return ResponseEntity.status(resp.status()).build();
   }
 
-  @DeleteMapping("/**")
-  public ResponseEntity<?> delete(@PathVariable("name") String name, HttpServletRequest request) throws IOException {
-    RepositoryRuntime runtime = resolveRuntime(name, request);
+  private ResponseEntity<?> delete(
+      RepositoryRuntime runtime, String name, HttpServletRequest request) throws IOException {
     if (runtime.format() == RepositoryFormat.NPM) {
       String rawPath = extractRepositoryPath(name, request);
       if (NpmTokenService.isLogoutPath(rawPath)) {
@@ -760,9 +785,8 @@ public class RepositoryContentController {
     return ResponseEntity.status(resp.status()).build();
   }
 
-  @PostMapping("/**")
-  public ResponseEntity<?> post(@PathVariable("name") String name, HttpServletRequest request) {
-    RepositoryRuntime runtime = resolveRuntime(name, request);
+  private ResponseEntity<?> post(
+      RepositoryRuntime runtime, String name, HttpServletRequest request) {
     if (runtime.format() == RepositoryFormat.HUGGINGFACE) {
       String raw = extractRepositoryPath(name, request, true);
       try (InputStream body = request.getInputStream()) {
@@ -1000,22 +1024,8 @@ public class RepositoryContentController {
             "totalDependencies", 0));
   }
 
-  @PostMapping(value = "/api/charts", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-  public ResponseEntity<?> pushHelmChart(
-      @PathVariable("name") String name,
-      @RequestPart("chart") MultipartFile chart,
-      HttpServletRequest request) throws IOException {
-    RepositoryRuntime runtime = resolveRuntime(name, request);
-    if (runtime.format() != RepositoryFormat.HELM) {
-      throw new MavenExceptions.MethodNotAllowed("POST is not supported for " + runtime.format() + " repositories");
-    }
-    MavenResponse resp = helmHosted.push(runtime, chart, "anonymous", request.getRemoteAddr());
-    return ResponseEntity.status(resp.status()).build();
-  }
-
   private ResponseEntity<StreamingResponseBody> serveBody(
-      String name, HttpServletRequest request, boolean headOnly) {
-    RepositoryRuntime runtime = resolveRuntime(name, request);
+      RepositoryRuntime runtime, String name, HttpServletRequest request, boolean headOnly) {
     if (runtime.format() == RepositoryFormat.NPM) {
       NpmPath path = npmParser.parse(extractRepositoryPath(name, request));
       MavenResponse resp = dispatchNpmGet(runtime, path, request, headOnly);
@@ -1419,10 +1429,6 @@ public class RepositoryContentController {
     return converted.withStatus(response.status());
   }
 
-  private RuntimeAndPath resolve(String name, HttpServletRequest request) {
-    return resolve(resolveRuntime(name, request), name, request);
-  }
-
   private RuntimeAndPath resolve(RepositoryRuntime runtime, String name, HttpServletRequest request) {
     if (runtime.format() != RepositoryFormat.MAVEN2) {
       throw new MavenExceptions.MavenNotFoundException("Repository is not Maven format: " + name);
@@ -1430,22 +1436,6 @@ public class RepositoryContentController {
     String raw = extractMavenPath(name, request);
     MavenPath path = parser.parsePath(raw);
     return new RuntimeAndPath(runtime, path);
-  }
-
-  private RepositoryRuntime resolveRuntime(String name) {
-    return registry.resolve(name)
-        .orElseThrow(() -> new MavenExceptions.MavenNotFoundException("Repository not found: " + name));
-  }
-
-  private RepositoryRuntime resolveRuntime(String name, HttpServletRequest request) {
-    Object record = request == null
-        ? null : request.getAttribute(RepositorySecurityFilter.REPOSITORY_RECORD_ATTRIBUTE);
-    if (record instanceof RepositoryRecord repository && name.equals(repository.name())) {
-      return registry.resolve(repository)
-          .orElseThrow(() -> new MavenExceptions.MavenNotFoundException(
-              "Repository not found: " + name));
-    }
-    return resolveRuntime(name);
   }
 
   private SwiftService swift() {

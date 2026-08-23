@@ -39,7 +39,7 @@ class RepositoryContentControllerHuggingFaceTest {
   void trailingSlashRootGetAndHeadServeNexusStyleRepositoryHtml() throws Exception {
     RepositoryRuntime runtime = proxy();
     HuggingFaceService huggingFace = mock(HuggingFaceService.class);
-    RepositoryContentController controller = controller(runtimes(runtime), huggingFace);
+    RepositoryProtocolController controller = controller(runtimes(runtime), huggingFace);
 
     ResponseEntity<StreamingResponseBody> get = controller.get(
         "hf", request("GET", "/repository/hf/"));
@@ -68,7 +68,7 @@ class RepositoryContentControllerHuggingFaceTest {
   void bareRootGetAndHeadReturnNexusStyleBadRequest() throws Exception {
     RepositoryRuntime runtime = proxy();
     HuggingFaceService huggingFace = mock(HuggingFaceService.class);
-    RepositoryContentController controller = controller(runtimes(runtime), huggingFace);
+    RepositoryProtocolController controller = controller(runtimes(runtime), huggingFace);
 
     ResponseEntity<StreamingResponseBody> get = controller.get(
         "hf", request("GET", "/repository/hf"));
@@ -108,7 +108,7 @@ class RepositoryContentControllerHuggingFaceTest {
         .thenReturn(MavenResponse.ok(
             new ByteArrayInputStream(responseBody), responseBody.length,
             MediaType.APPLICATION_JSON_VALUE, "paths-etag", null));
-    RepositoryContentController controller = controller(runtimes, huggingFace);
+    RepositoryProtocolController controller = controller(runtimes, huggingFace);
     MockHttpServletRequest request = new MockHttpServletRequest(
         "POST",
         "/repository/hf/api/models/org/model/paths-info/"
@@ -142,7 +142,7 @@ class RepositoryContentControllerHuggingFaceTest {
         .thenReturn(MavenResponse.ok(
             new ByteArrayInputStream(new byte[0]), 123L,
             MediaType.APPLICATION_OCTET_STREAM_VALUE, "config-etag", null));
-    RepositoryContentController controller = controller(runtimes, huggingFace);
+    RepositoryProtocolController controller = controller(runtimes, huggingFace);
     MockHttpServletRequest request = request(
         "HEAD", "/repository/hf/org/model/resolve/main/config.json");
     request.setQueryString("download=true");
@@ -174,7 +174,7 @@ class RepositoryContentControllerHuggingFaceTest {
         .thenReturn(MavenResponse.ok(
             new ByteArrayInputStream(artifact), artifact.length,
             MediaType.APPLICATION_OCTET_STREAM_VALUE, "file-etag", null));
-    RepositoryContentController controller = controller(runtimes, huggingFace);
+    RepositoryProtocolController controller = controller(runtimes, huggingFace);
 
     ResponseEntity<?> metadataResponse = controller.get(
         "hf", request("GET", "/repository/hf/api/models/org/model"));
@@ -196,7 +196,7 @@ class RepositoryContentControllerHuggingFaceTest {
   void rejectsUnreadablePathsInfoBody() {
     RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
     when(runtimes.resolve("hf")).thenReturn(Optional.of(proxy()));
-    RepositoryContentController controller = controller(runtimes, mock(HuggingFaceService.class));
+    RepositoryProtocolController controller = controller(runtimes, mock(HuggingFaceService.class));
     HttpServletRequest request = mock(HttpServletRequest.class);
     when(request.getRequestURI())
         .thenReturn("/repository/hf/api/models/org/model/paths-info/main");
@@ -216,7 +216,7 @@ class RepositoryContentControllerHuggingFaceTest {
   void failsClosedWhenHuggingFaceServiceIsUnavailable() {
     RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
     when(runtimes.resolve("hf")).thenReturn(Optional.of(proxy()));
-    RepositoryContentController controller = controller(runtimes, null);
+    RepositoryProtocolController controller = controller(runtimes, null);
 
     assertThrows(
         IllegalStateException.class,
@@ -259,9 +259,10 @@ class RepositoryContentControllerHuggingFaceTest {
     return request;
   }
 
-  private static RepositoryContentController controller(
+  private static RepositoryProtocolController controller(
       RepositoryRuntimeRegistry runtimes, HuggingFaceService huggingFace) {
-    RepositoryContentController controller = new RepositoryContentController(
+    RepositoryProtocolControllerTestSupport controller =
+        RepositoryProtocolControllerTestSupport.controller(
         runtimes,
         null, null, null,
         null, null,
