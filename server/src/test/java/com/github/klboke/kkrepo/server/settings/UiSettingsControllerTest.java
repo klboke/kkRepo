@@ -54,6 +54,18 @@ class UiSettingsControllerTest {
   }
 
   @Test
+  void preservesLanguageWhenOnlyThemeIsUpdated() {
+    RecordingUiSettingsDao dao =
+        new RecordingUiSettingsDao(new UiSettingsRecord("browser", "default", null));
+    UiSettingsController controller = new UiSettingsController(dao);
+
+    controller.update(new UiSettingsController.UiSettingsCommand(null, "default"));
+
+    assertEquals("browser", dao.savedDefaultLanguage);
+    assertEquals("default", dao.savedDefaultTheme);
+  }
+
+  @Test
   void mapsUnsupportedLanguageToBadRequest() {
     RecordingUiSettingsDao dao =
         new RecordingUiSettingsDao(new UiSettingsRecord("browser", "default", null));
