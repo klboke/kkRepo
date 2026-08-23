@@ -20,6 +20,8 @@ public class UiSettingsController {
       UiSettingsDao.LANGUAGE_BROWSER,
       UiSettingsDao.LANGUAGE_ZH_CN,
       UiSettingsDao.LANGUAGE_EN);
+  private static final List<String> SUPPORTED_DEFAULT_THEMES = List.of(
+      UiSettingsDao.THEME_DEFAULT);
 
   private final UiSettingsDao uiSettingsDao;
 
@@ -35,25 +37,43 @@ public class UiSettingsController {
   @PutMapping
   public UiSettingsView update(@RequestBody UiSettingsCommand command) {
     try {
-      return toView(uiSettingsDao.saveDefaultLanguage(command == null ? null : command.defaultLanguage()));
+      UiSettingsRecord current = uiSettingsDao.read();
+      String defaultLanguage = command == null || command.defaultLanguage() == null
+          ? current.defaultLanguage()
+          : command.defaultLanguage();
+      String defaultTheme = command == null || command.defaultTheme() == null
+          ? current.defaultTheme()
+          : command.defaultTheme();
+      String normalizedTheme = UiSettingsDao.normalizeDefaultTheme(defaultTheme);
+      if (!SUPPORTED_DEFAULT_THEMES.contains(normalizedTheme)) {
+        throw new IllegalArgumentException("Unsupported UI default theme: " + defaultTheme);
+      }
+      return toView(uiSettingsDao.save(defaultLanguage, normalizedTheme));
     } catch (IllegalArgumentException e) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage(), e);
     }
   }
 
   private static UiSettingsView toView(UiSettingsRecord record) {
+    String defaultTheme = SUPPORTED_DEFAULT_THEMES.contains(record.defaultTheme())
+        ? record.defaultTheme()
+        : UiSettingsDao.DEFAULT_THEME;
     return new UiSettingsView(
         record.defaultLanguage(),
         SUPPORTED_DEFAULT_LANGUAGES,
+        defaultTheme,
+        SUPPORTED_DEFAULT_THEMES,
         record.updatedAt());
   }
 
-  public record UiSettingsCommand(String defaultLanguage) {
+  public record UiSettingsCommand(String defaultLanguage, String defaultTheme) {
   }
 
   public record UiSettingsView(
       String defaultLanguage,
       List<String> supportedDefaultLanguages,
+      String defaultTheme,
+      List<String> supportedDefaultThemes,
       Instant updatedAt) {
   }
 }

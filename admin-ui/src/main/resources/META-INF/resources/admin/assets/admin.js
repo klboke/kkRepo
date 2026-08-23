@@ -460,7 +460,8 @@ const securityAnonymousRequiredFields = [
   { id: "security-anonymous-realm-name", label: "Realm name" }
 ];
 const uiSettingsRequiredFields = [
-  { id: "ui-default-language", label: "Default language" }
+  { id: "ui-default-language", label: "Default language" },
+  { id: "ui-default-theme", label: "Default theme" }
 ];
 const nexusMigrationRequiredFields = [
   { id: "migration-source-url", label: "Source URL" },
@@ -3418,11 +3419,33 @@ function uiLanguageLabel(language) {
   return "Follow browser";
 }
 
+function uiThemeLabel(theme) {
+  if (theme === "default") return "Default";
+  return String(theme || "")
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 function syncUiSettingsForm() {
   const settings = window.kkrepoI18n?.settings?.();
-  const select = document.getElementById("ui-default-language");
-  if (select && settings) {
-    select.value = settings.defaultLanguage || "en";
+  const languageSelect = document.getElementById("ui-default-language");
+  const themeSelect = document.getElementById("ui-default-theme");
+  if (languageSelect && settings) {
+    languageSelect.value = settings.defaultLanguage || "en";
+  }
+  if (themeSelect && settings) {
+    const themes = settings.supportedDefaultThemes?.length
+      ? settings.supportedDefaultThemes
+      : ["default"];
+    themeSelect.replaceChildren(...themes.map((theme) => {
+      const option = document.createElement("option");
+      option.value = theme;
+      option.textContent = uiThemeLabel(theme);
+      return option;
+    }));
+    themeSelect.value = settings.defaultTheme || "default";
   }
   clearRequiredFieldErrors(uiSettingsRequiredFields);
   updateUiSettingsStatus();
@@ -3433,7 +3456,8 @@ function updateUiSettingsStatus() {
   if (!status || !window.kkrepoI18n) return;
   const defaultLanguage = window.kkrepoI18n.defaultLanguage();
   const currentLanguage = window.kkrepoI18n.currentLanguage();
-  status.textContent = `Default language: ${uiLanguageLabel(defaultLanguage)}. Active language: ${uiLanguageLabel(currentLanguage)}.`;
+  const defaultTheme = window.kkrepoI18n.defaultTheme();
+  status.textContent = `Default language: ${uiLanguageLabel(defaultLanguage)}. Active language: ${uiLanguageLabel(currentLanguage)}. Default theme: ${uiThemeLabel(defaultTheme)}.`;
 }
 
 async function loadUiSettings() {
@@ -3444,14 +3468,15 @@ async function loadUiSettings() {
 
 async function saveUiSettings() {
   const button = document.getElementById("save-ui-settings-button");
-  const select = document.getElementById("ui-default-language");
-  if (!button || !select || !window.kkrepoI18n) return;
+  const languageSelect = document.getElementById("ui-default-language");
+  const themeSelect = document.getElementById("ui-default-theme");
+  if (!button || !languageSelect || !themeSelect || !window.kkrepoI18n) return;
   if (!validateRequiredFields(uiSettingsRequiredFields)) return;
   button.disabled = true;
   try {
-    await window.kkrepoI18n.saveDefaultLanguage(select.value);
+    await window.kkrepoI18n.saveSettings(languageSelect.value, themeSelect.value);
     syncUiSettingsForm();
-    showToast("UI language settings saved.", "ok");
+    showToast("UI settings saved.", "ok");
   } catch (error) {
     showToast(`Save failed: ${error.message}`, "error");
   } finally {

@@ -1,4 +1,4 @@
-/* Theme tokens live in the shared tokens.css (linked before this file). */
+/* Theme tokens come from the selected shared CSS template linked before this file. */
 
 * {
   box-sizing: border-box;
@@ -1630,7 +1630,7 @@ h1 {
 
 .download-row { margin-top: 4px; }
 
-/* --- kkRepo visual system: consumes shared tokens.css --- */
+/* --- kkRepo visual system: consumes the selected shared CSS theme --- */
 
 body {
   background: var(--canvas);

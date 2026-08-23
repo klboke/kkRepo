@@ -2,6 +2,8 @@
   const STORAGE_KEY = "kkrepo.uiSettings";
   const SUPPORTED_DEFAULT_LANGUAGES = new Set(["browser", "zh-CN", "en"]);
   const DEFAULT_LANGUAGE = "en";
+  const DEFAULT_THEME = "default";
+  const THEME_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
   const ATTRIBUTE_NAMES = ["aria-label", "placeholder", "title"];
   const SKIP_TEXT_TAGS = new Set(["SCRIPT", "STYLE", "TEXTAREA", "CODE", "PRE", "KBD", "SAMP"]);
   const textOriginals = new WeakMap();
@@ -307,13 +309,15 @@
     "Refresh jobs": "刷新任务",
     "System": "系统",
     "UI Settings": "界面设置",
-    "Configure the default UI language shared by all replicas": "配置所有副本共享的默认界面语言",
+    "Configure the default UI language and theme shared by all replicas": "配置所有副本共享的默认界面语言和主题",
     "Default language": "默认语言",
+    "Default theme": "默认主题",
+    "Default": "默认",
     "Follow browser": "跟随浏览器",
     "Chinese": "中文",
     "English": "英文",
     "Save UI settings": "保存界面设置",
-    "This preference is stored in MySQL and applies to the administration, browse, and sign-in UI on every replica.": "此设置存储在 MySQL 中，对所有副本的管理、浏览和登录界面均生效。",
+    "These preferences are stored in the database and apply to the administration, browse, and sign-in UI on every replica. The current kkRepo design is provided as the default CSS theme template.": "这些设置存储在数据库中，对所有副本的管理、浏览和登录界面均生效。当前 kkRepo 设计作为默认 CSS 主题模板提供。",
     "Welcome": "欢迎",
     "Enterprise-grade artifact management for modern software delivery": "面向现代软件交付的企业级制品管理",
     "Initial administrator setup": "初始管理员设置",
@@ -429,7 +433,7 @@
     "Docker connector refresh failed.": "Docker 连接器刷新失败。",
     "Docker operations request failed.": "Docker 操作请求失败。",
     "Docker operations request failed": "Docker 操作请求失败",
-    "UI language settings saved.": "界面语言设置已保存。",
+    "UI settings saved.": "界面设置已保存。",
     "Session check failed": "Session 检查失败",
     "Save failed": "保存失败",
     "Create failed": "创建失败",
@@ -569,11 +573,15 @@
 
   function normalizeSettings(value) {
     const defaultLanguage = normalizeDefaultLanguage(value?.defaultLanguage);
+    const supportedDefaultThemes = normalizeSupportedDefaultThemes(value?.supportedDefaultThemes);
+    const defaultTheme = normalizeDefaultTheme(value?.defaultTheme, supportedDefaultThemes);
     return {
       defaultLanguage,
       supportedDefaultLanguages: Array.isArray(value?.supportedDefaultLanguages)
         ? value.supportedDefaultLanguages
         : ["browser", "zh-CN", "en"],
+      defaultTheme,
+      supportedDefaultThemes,
       updatedAt: value?.updatedAt || null
     };
   }
@@ -583,6 +591,22 @@
     if (value === "en" || value === "en-US") return "en";
     if (value === "browser") return "browser";
     return SUPPORTED_DEFAULT_LANGUAGES.has(value) ? value : DEFAULT_LANGUAGE;
+  }
+
+  function normalizeSupportedDefaultThemes(value) {
+    const themes = Array.isArray(value)
+      ? value.map((theme) => String(theme || "").trim().toLowerCase())
+        .filter((theme) => THEME_ID_PATTERN.test(theme))
+      : [];
+    if (!themes.includes(DEFAULT_THEME)) themes.unshift(DEFAULT_THEME);
+    return [...new Set(themes)];
+  }
+
+  function normalizeDefaultTheme(value, supportedThemes) {
+    const normalized = String(value || "").trim().toLowerCase();
+    return THEME_ID_PATTERN.test(normalized) && supportedThemes.includes(normalized)
+      ? normalized
+      : DEFAULT_THEME;
   }
 
   function resolveLanguage(defaultLanguage) {
@@ -597,6 +621,7 @@
   function updateSettings(nextSettings, options = {}) {
     settings = normalizeSettings(nextSettings);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+    window.kkrepoTheme?.applySettings(settings);
     const nextLanguage = resolveLanguage(settings.defaultLanguage);
     const changed = nextLanguage !== currentLanguage || options.force;
     currentLanguage = nextLanguage;
@@ -619,21 +644,33 @@
     }
   }
 
-  async function saveDefaultLanguage(defaultLanguage) {
-    const normalized = normalizeDefaultLanguage(defaultLanguage);
+  async function saveSettings(defaultLanguage, defaultTheme) {
+    const normalizedLanguage = normalizeDefaultLanguage(defaultLanguage);
+    const normalizedTheme = normalizeDefaultTheme(defaultTheme, settings.supportedDefaultThemes);
     const response = await fetch("/internal/ui-settings", {
       method: "PUT",
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json"
       },
-      body: JSON.stringify({ defaultLanguage: normalized }),
+      body: JSON.stringify({
+        defaultLanguage: normalizedLanguage,
+        defaultTheme: normalizedTheme
+      }),
       cache: "no-store"
     });
     if (!response.ok) {
       throw new Error(await responseMessage(response, `HTTP ${response.status}`));
     }
     return updateSettings(await response.json(), { force: true });
+  }
+
+  function saveDefaultLanguage(defaultLanguage) {
+    return saveSettings(defaultLanguage, settings.defaultTheme);
+  }
+
+  function saveDefaultTheme(defaultTheme) {
+    return saveSettings(settings.defaultLanguage, defaultTheme);
   }
 
   async function responseMessage(response, fallback) {
@@ -649,6 +686,10 @@
 
   function setDefaultLanguage(defaultLanguage) {
     return updateSettings({ ...settings, defaultLanguage }, { force: true });
+  }
+
+  function setDefaultTheme(defaultTheme) {
+    return updateSettings({ ...settings, defaultTheme }, { force: true });
   }
 
   function translate(value) {
@@ -707,6 +748,8 @@
     if (match) return `API Key 已创建：${match[1]}`;
     match = body.match(/^Docker cache cleared for (.+)$/);
     if (match) return `已清理 ${match[1]} 的 Docker 缓存`;
+    match = body.match(/^Default language: (.+)\. Active language: (.+)\. Default theme: (.+)\.$/);
+    if (match) return `默认语言：${translateBody(match[1])}。当前语言：${translateBody(match[2])}。默认主题：${translateBody(match[3])}。`;
     match = body.match(/^Default language: (.+)\. Active language: (.+)\.$/);
     if (match) return `默认语言：${translateBody(match[1])}。当前语言：${translateBody(match[2])}。`;
     match = body.match(/^Current language: (.+)$/);
@@ -851,6 +894,7 @@
     window.dispatchEvent(new CustomEvent("kkrepo:i18n-change", {
       detail: {
         defaultLanguage: settings.defaultLanguage,
+        defaultTheme: settings.defaultTheme,
         currentLanguage,
         settings
       }
@@ -875,10 +919,14 @@
     apply,
     currentLanguage: () => currentLanguage,
     defaultLanguage: () => settings.defaultLanguage,
+    defaultTheme: () => settings.defaultTheme,
     loadSettings,
     ready: () => readyPromise,
     saveDefaultLanguage,
+    saveDefaultTheme,
+    saveSettings,
     setDefaultLanguage,
+    setDefaultTheme,
     settings: () => settings,
     text: translate
   };

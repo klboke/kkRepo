@@ -20,7 +20,7 @@ public class UiSettingsDaoAdapter implements UiSettingsDao {
   }
 
   @Override
-  public UiSettingsRecord saveDefaultLanguage(String arg0) {
+  public UiSettingsRecord save(String defaultLanguage, String defaultTheme) {
     throw new UnsupportedOperationException();
   }
 }
