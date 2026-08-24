@@ -56,7 +56,7 @@
     <spring.boot.version>4.1.0</spring.boot.version>
     <native-build-tools-plugin.version>1.1.9</native-build-tools-plugin.version>
     <apollo.client.version>2.5.0</apollo.client.version>
-    <guava.version>33.6.0-jre</guava.version>
+    <guava.version>33.7.1-jre</guava.version>
     <guice.version>7.0.0</guice.version>
     <re2j.version>1.8</re2j.version>
     <maven.artifact.version>3.9.16</maven.artifact.version>
