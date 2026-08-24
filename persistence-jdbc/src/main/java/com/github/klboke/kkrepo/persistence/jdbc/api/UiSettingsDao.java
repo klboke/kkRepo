@@ -11,6 +11,7 @@ public interface UiSettingsDao {
   String THEME_INDIGO = "indigo";
   String THEME_OCEAN = "ocean";
   String THEME_SUNSET = "sunset";
+  String THEME_JFROG = "jfrog";
   String DEFAULT_THEME = THEME_DEFAULT;
 
   static String normalizeDefaultLanguage(String defaultLanguage) {

@@ -31,6 +31,8 @@ class AdminUiThemeContractTest {
     assertTrue(index.contains("value=\"default\" selected>Default</option>"));
     assertTrue(javascript.contains("saveSettings(languageSelect.value, themeSelect.value)"));
     assertTrue(javascript.contains("settings.supportedDefaultThemes"));
+    assertTrue(javascript.contains("if (theme === \"jfrog\") return \"JFrog\""));
+    assertTrue(index.contains("./assets/admin.js?v=20260824-ui-themes-4"));
     assertFalse(index.contains("id=\"ui-settings-status\""));
     assertFalse(javascript.contains("Default language: ${"));
   }

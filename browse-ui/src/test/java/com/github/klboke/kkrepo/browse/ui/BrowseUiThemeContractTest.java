@@ -87,6 +87,22 @@ class BrowseUiThemeContractTest {
     assertEquals(customPropertyNames(defaultTheme), customPropertyNames(sunsetTheme));
   }
 
+  @Test
+  void jfrogThemeImplementsTheCompleteSharedTokenContract() throws IOException {
+    String defaultTheme = resource("/META-INF/resources/browse/assets/themes/default.css");
+    String jfrogTheme = resource("/META-INF/resources/browse/assets/themes/jfrog.css");
+
+    assertTrue(jfrogTheme.contains("color-scheme: light"));
+    assertTrue(jfrogTheme.contains("--brand: #16883b"));
+    assertTrue(jfrogTheme.contains("--brand-bright: #40be46"));
+    assertTrue(jfrogTheme.contains("--accent: #184ea0"));
+    assertTrue(jfrogTheme.contains("--canvas: #f4f7f9"));
+    assertTrue(jfrogTheme.contains("--topbar: #061121"));
+    assertTrue(jfrogTheme.contains(
+        "--account-avatar-background: linear-gradient(145deg, #184ea0, #0c1d37)"));
+    assertEquals(customPropertyNames(defaultTheme), customPropertyNames(jfrogTheme));
+  }
+
   private Set<String> customPropertyNames(String css) {
     Set<String> names = new HashSet<>();
     Matcher matcher = Pattern.compile("(--[a-z0-9-]+)\\s*:").matcher(css);

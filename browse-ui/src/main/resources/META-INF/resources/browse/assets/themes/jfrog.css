@@ -1,0 +1,124 @@
+/*
+ * kkRepo JFrog-inspired theme.
+ *
+ * A technical light theme built from a dark navy foundation, restrained blue
+ * structure and purposeful green signals. It follows the complete semantic
+ * token contract in default.css without copying JFrog logos or other assets.
+ */
+:root {
+  color-scheme: light;
+
+  /* ===== Brand ===== */
+  --brand: #16883b;
+  --brand-strong: #116b2d;
+  --brand-tint: #eaf9ec;
+  --brand-tint-strong: #d3f1d7;
+  --brand-bright: #40be46;
+
+  /* ===== Signature accent ===== */
+  --accent: #184ea0;
+  --accent-soft: #eef9ff;
+
+  /* ===== Neutral ramp ===== */
+  --ink-1: #061121;
+  --ink-2: #1c2b3d;
+  --ink-3: #53677c;
+  --ink-4: #8da0b2;
+  --line: #d8e1e8;
+  --line-strong: #becbd5;
+  --surface: #ffffff;
+  --surface-muted: #f7f9fb;
+  --surface-sunken: #edf1f4;
+  --canvas: #f4f7f9;
+
+  /* ===== Semantic status ===== */
+  --success: #147d2a;
+  --success-bg: #eaf9ec;
+  --success-line: #a9dfb0;
+  --warning: #8a5a12;
+  --warning-bg: #fff8e6;
+  --warning-line: #efd89a;
+  --danger: #b42318;
+  --danger-bg: #fff1f0;
+  --danger-line: #fecdca;
+  --info: #184ea0;
+  --info-bg: #eef9ff;
+  --info-line: #bfd6e2;
+
+  /* ===== Dark topbar ===== */
+  --topbar: #061121;
+  --topbar-line: #0c1d37;
+  --topbar-ink: #eef9ff;
+  --topbar-muted: #a5c0d4;
+  --topbar-hover: rgba(255, 255, 255, 0.09);
+  --topbar-active: var(--brand-bright);
+  --topbar-selection: linear-gradient(180deg, #16883b, #116b2d);
+
+  /* ===== Signed-in account identity ===== */
+  --account-focus-ring-color: rgba(64, 190, 70, 0.34);
+  --account-avatar-background: linear-gradient(145deg, #184ea0, #0c1d37);
+  --account-avatar-border: rgba(255, 255, 255, 0.2);
+  --account-avatar-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  --account-avatar-ink: #ffffff;
+  --account-avatar-presence: #40be46;
+
+  /* ===== Radius scale ===== */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-pill: 999px;
+
+  /* ===== Elevation ===== */
+  --shadow-sm: 0 1px 2px rgba(6, 17, 33, 0.08);
+  --shadow-soft: 0 10px 28px rgba(12, 29, 55, 0.1);
+  --shadow-pop: 0 20px 48px rgba(6, 17, 33, 0.22);
+  --shadow-modal: 0 30px 84px rgba(6, 17, 33, 0.32);
+  --shadow-nav: 0 7px 18px rgba(22, 136, 59, 0.22);
+  --shadow-press: inset 0 1px 2px rgba(6, 17, 33, 0.2);
+
+  /* ===== Focus ===== */
+  --focus: rgba(64, 190, 70, 0.28);
+  --focus-ring: 0 0 0 3px var(--focus);
+
+  /* ===== Spacing scale ===== */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+
+  /* ===== Typography ===== */
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-base: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 18px;
+  --fs-2xl: 22px;
+  --fs-3xl: 26px;
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+  --lh-tight: 1.25;
+  --lh-base: 1.5;
+
+  /* ===== Table ===== */
+  --row-hover: var(--brand-tint);
+  --table-head-ink: var(--ink-3);
+
+  /* ===== Legacy aliases ===== */
+  --active: var(--brand);
+  --active-ink: #ffffff;
+  --sidebar: var(--surface);
+  --sidebar-head: var(--surface);
+  --text: var(--ink-2);
+  --muted: var(--ink-3);
+  --row: var(--surface);
+  --row-alt: var(--surface-muted);
+  --header: var(--surface-sunken);
+  --panel: var(--surface);
+}

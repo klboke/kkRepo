@@ -24,7 +24,7 @@ class UiSettingsControllerTest {
     assertEquals(Instant.EPOCH, view.updatedAt());
     assertEquals(java.util.List.of("browser", "zh-CN", "en"), view.supportedDefaultLanguages());
     assertEquals(
-        java.util.List.of("default", "indigo", "ocean", "sunset"),
+        java.util.List.of("default", "indigo", "ocean", "sunset", "jfrog"),
         view.supportedDefaultThemes());
   }
 
@@ -68,12 +68,12 @@ class UiSettingsControllerTest {
   }
 
   @Test
-  void acceptsNewBundledThemes() {
+  void acceptsAdditionalBundledThemes() {
     RecordingUiSettingsDao dao =
         new RecordingUiSettingsDao(new UiSettingsRecord("browser", "default", null));
     UiSettingsController controller = new UiSettingsController(dao);
 
-    for (String theme : java.util.List.of("ocean", "sunset")) {
+    for (String theme : java.util.List.of("ocean", "sunset", "jfrog")) {
       UiSettingsController.UiSettingsView view =
           controller.update(new UiSettingsController.UiSettingsCommand(null, theme));
 

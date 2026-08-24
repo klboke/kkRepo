@@ -3415,6 +3415,7 @@ async function fetchJson(path, fallback, errorLabel) {
 
 function uiThemeLabel(theme) {
   if (theme === "default") return "Default";
+  if (theme === "jfrog") return "JFrog";
   return String(theme || "")
     .split("-")
     .filter(Boolean)

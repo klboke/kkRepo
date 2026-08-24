@@ -24,7 +24,8 @@ public class UiSettingsController {
       UiSettingsDao.THEME_DEFAULT,
       UiSettingsDao.THEME_INDIGO,
       UiSettingsDao.THEME_OCEAN,
-      UiSettingsDao.THEME_SUNSET);
+      UiSettingsDao.THEME_SUNSET,
+      UiSettingsDao.THEME_JFROG);
 
   private final UiSettingsDao uiSettingsDao;
 
