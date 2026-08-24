@@ -89,6 +89,14 @@ class PersistenceApiContractsTest {
   }
 
   @Test
+  void normalizesUiThemeIdentifiersAtThePublicBoundary() {
+    assertAll(
+        () -> assertEquals("default", UiSettingsDao.normalizeDefaultTheme(null)),
+        () -> assertEquals("default", UiSettingsDao.normalizeDefaultTheme("  ")),
+        () -> assertEquals("midnight-blue", UiSettingsDao.normalizeDefaultTheme(" Midnight-Blue ")));
+  }
+
+  @Test
   void browseChildIsALeafOnlyWhenItOwnsAnAssetAndHasNoChildren() {
     BrowseNodeDao.BrowseChild leaf = browseChild(10L, false);
     BrowseNodeDao.BrowseChild directoryWithAsset = browseChild(10L, true);

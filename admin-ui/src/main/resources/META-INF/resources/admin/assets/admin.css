@@ -1,4 +1,4 @@
-/* Theme tokens live in the shared tokens.css (linked before this file). */
+/* Theme tokens come from the selected shared CSS template linked before this file. */
 
 * {
   box-sizing: border-box;
@@ -1504,7 +1504,7 @@ code {
   }
 }
 
-/* --- kkRepo visual system: consumes shared tokens.css --- */
+/* --- kkRepo visual system: consumes the selected shared CSS theme --- */
 
 body {
   background: var(--canvas);
@@ -1609,7 +1609,7 @@ textarea:focus-visible {
 }
 
 .workspace-tab.is-active {
-  background: linear-gradient(180deg, rgba(20, 117, 107, 0.98), rgba(17, 96, 88, 0.98));
+  background: var(--topbar-selection);
   color: var(--topbar-ink);
 }
 

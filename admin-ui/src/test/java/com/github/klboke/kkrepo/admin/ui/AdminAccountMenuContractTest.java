@@ -15,7 +15,7 @@ class AdminAccountMenuContractTest {
   void administrationUsesTheSharedBrowseAccountMenu() throws IOException {
     String index = resource("/META-INF/resources/admin/index.html");
 
-    assertTrue(index.contains("/browse/assets/account-menu.css"));
+    assertTrue(index.contains("/browse/assets/account-menu.css?v=20260824-ui-themes-3"));
     assertTrue(index.contains("user-avatar-icon lucide-icon icon-user-round"));
     assertTrue(index.contains("class=\"user-name\" id=\"current-user\""));
     assertFalse(index.contains("current-user-source"));
