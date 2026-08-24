@@ -27,6 +27,7 @@ import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.Test;
 
 class PypiRepositoryBlackBoxCompatibilityTest {
+  private static final int TWINE_REPEATED_METADATA_FIELDS = 50;
   private static final Pattern LINK = Pattern.compile(
       "<a\\b([^>]*)>(.*?)</a>", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
   private static final Pattern HREF = Pattern.compile(
@@ -131,7 +132,34 @@ class PypiRepositoryBlackBoxCompatibilityTest {
         fixture.bytes());
   }
 
+  @Test
+  void hostedUploadAcceptsTwineMetadataBeyondTomcatDefaultWhenConfigured() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeTrue(config.configured(),
+        "Set NEXUS_COMPAT_BASE_URL and KKREPO_COMPAT_BASE_URL to run PyPI black-box compatibility");
+
+    if (config.setupEnabled()) {
+      ensureNexusRepositories(config);
+      ensureKkRepoRepositories(config);
+    }
+
+    WheelFixture fixture = WheelFixture.create();
+    Exchange reference = upload(config.nexusHosted(), fixture, TWINE_REPEATED_METADATA_FIELDS);
+    Exchange candidate = upload(config.nexusPlusHosted(), fixture, TWINE_REPEATED_METADATA_FIELDS);
+
+    assertSameStatus("hosted Twine upload with more than 50 multipart parts", reference, candidate);
+    assert2xx("Nexus hosted Twine upload with more than 50 multipart parts", reference);
+    assert2xx("kkrepo hosted Twine upload with more than 50 multipart parts", candidate);
+  }
+
   private static Exchange upload(Endpoint endpoint, WheelFixture fixture) throws Exception {
+    return upload(endpoint, fixture, 0);
+  }
+
+  private static Exchange upload(
+      Endpoint endpoint,
+      WheelFixture fixture,
+      int repeatedMetadataFields) throws Exception {
     String boundary = "kkrepo-pypi-compat-" + System.nanoTime();
     ByteArrayOutputStream out = new ByteArrayOutputStream();
     formField(out, boundary, ":action", "file_upload");
@@ -142,6 +170,9 @@ class PypiRepositoryBlackBoxCompatibilityTest {
     formField(out, boundary, "summary", "kkrepo PyPI compatibility fixture");
     formField(out, boundary, "requires_python", ">=3.8");
     formField(out, boundary, "md5_digest", hex(MessageDigest.getInstance("MD5").digest(fixture.bytes())));
+    for (int i = 0; i < repeatedMetadataFields; i++) {
+      formField(out, boundary, "requires_dist", "kkrepo-compat-dependency-" + i + ">=1");
+    }
     fileField(out, boundary, "content", fixture.filename(), "application/octet-stream", fixture.bytes());
     out.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
 

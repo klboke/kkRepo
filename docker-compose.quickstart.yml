@@ -56,6 +56,7 @@ services:
       KKREPO_CREDENTIAL_SECRET: ${KKREPO_CREDENTIAL_SECRET:-quickstart-credential-secret-change-me-0123456789}
       KKREPO_API_KEY_PAYLOAD_SECRET: ${KKREPO_API_KEY_PAYLOAD_SECRET:-quickstart-api-key-payload-secret-change-me-0123456789}
       KKREPO_FILE_BASE_DIR: ${KKREPO_FILE_BASE_DIR:-/var/lib/kkrepo/blobs}
+      SERVER_TOMCAT_MAX_PART_COUNT: ${KKREPO_TOMCAT_MAX_PART_COUNT:-200}
       # Deployment capability only: starts kkRepo scan coordination and policy integration.
       # The scanner container also requires --profile security-scanning, and repository
       # administrators still activate scanning per repository in the Admin UI.

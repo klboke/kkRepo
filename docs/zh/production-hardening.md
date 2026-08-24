@@ -171,10 +171,13 @@ KKREPO_TOMCAT_CONNECTION_TIMEOUT=30s
 ```bash
 KKREPO_MULTIPART_MAX_FILE_SIZE=1024MB
 KKREPO_MULTIPART_MAX_REQUEST_SIZE=1024MB
+KKREPO_TOMCAT_MAX_PART_COUNT=200
 KKREPO_UPLOAD_MAX_REQUEST_BYTES=1073741824
 ```
 
 确保代理限制、应用限制和对象存储 multipart 参数一致。
+PyPI 客户端（例如 Twine）会把重复的包元数据编码为独立的 multipart part。如果包含有异常多的元数据，
+可以调高 `KKREPO_TOMCAT_MAX_PART_COUNT`；但应保持有界，因为每个被接受的 part 都会占用请求处理内存。
 
 Ansible collection 上传还会应用 archive compressed/expanded size、entry size/count、compression ratio、inspection time 和 multipart overhead 限制。至少应检查 `KKREPO_ANSIBLE_ARCHIVE_MAX_COMPRESSED_BYTES`、`KKREPO_ANSIBLE_ARCHIVE_MAX_EXPANDED_BYTES`、`KKREPO_ANSIBLE_ARCHIVE_MAX_ENTRIES` 和 `KKREPO_ANSIBLE_MULTIPART_MAX_OVERHEAD_BYTES`。提高 HTTP body limit 不会绕过 archive 安全校验。完整 `MANIFEST.json`/`FILES.json` 与超大上游 JSON 应放在 blob storage，不能通过扩大关系数据库 JSON 列来容纳。
 
