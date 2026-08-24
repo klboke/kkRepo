@@ -51,6 +51,9 @@ class BrowseUiThemeContractTest {
     assertTrue(indigoTheme.contains("--accent: #c2410c"));
     assertTrue(indigoTheme.contains("--canvas: #f6f8fc"));
     assertTrue(indigoTheme.contains("--topbar: #111827"));
+    assertTrue(indigoTheme.contains(
+        "--account-avatar-background: linear-gradient(145deg, #6366f1, #3730a3)"));
+    assertTrue(indigoTheme.contains("--account-avatar-presence: #34d399"));
     assertEquals(customPropertyNames(defaultTheme), customPropertyNames(indigoTheme));
   }
 

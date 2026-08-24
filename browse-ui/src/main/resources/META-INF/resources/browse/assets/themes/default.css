@@ -59,6 +59,14 @@
   --topbar-active: var(--brand-bright);
   --topbar-selection: linear-gradient(180deg, rgba(20, 117, 107, 0.98), rgba(17, 96, 88, 0.98));
 
+  /* ===== Signed-in account identity ===== */
+  --account-focus-ring-color: rgba(47, 191, 164, 0.28);
+  --account-avatar-background: linear-gradient(145deg, #22aa95, #0a665b);
+  --account-avatar-border: rgba(255, 255, 255, 0.16);
+  --account-avatar-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  --account-avatar-ink: #ffffff;
+  --account-avatar-presence: #51d29d;
+
   /* ===== Radius scale ===== */
   --r-xs: 4px;
   --r-sm: 6px;

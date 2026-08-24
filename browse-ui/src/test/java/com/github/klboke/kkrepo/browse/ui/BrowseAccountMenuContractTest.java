@@ -45,12 +45,25 @@ class BrowseAccountMenuContractTest {
     String index = resource("/META-INF/resources/browse/index.html");
     String stylesheet = resource("/META-INF/resources/browse/assets/account-menu.css");
 
-    assertTrue(index.contains("/browse/assets/account-menu.css"));
+    assertTrue(index.contains("/browse/assets/account-menu.css?v=20260824-ui-themes-3"));
     assertTrue(stylesheet.contains("width: 126px;\n  height: 40px;\n  min-width: 126px;\n  max-width: 126px;"));
     assertTrue(stylesheet.contains(".user-menu-trigger:focus-visible"));
     assertTrue(stylesheet.contains("@media (prefers-reduced-motion: reduce)"));
     assertTrue(stylesheet.contains("@media (max-width: 430px)"));
     assertTrue(stylesheet.contains("width: min(220px, calc(100vw - 16px))"));
+  }
+
+  @Test
+  void signedInAvatarConsumesSharedThemeTokens() throws IOException {
+    String stylesheet = resource("/META-INF/resources/browse/assets/account-menu.css");
+
+    assertTrue(stylesheet.contains("box-shadow: 0 0 0 3px var(--account-focus-ring-color)"));
+    assertTrue(stylesheet.contains("border: 1px solid var(--account-avatar-border)"));
+    assertTrue(stylesheet.contains("background: var(--account-avatar-background)"));
+    assertTrue(stylesheet.contains("box-shadow: var(--account-avatar-highlight)"));
+    assertTrue(stylesheet.contains("color: var(--account-avatar-ink)"));
+    assertTrue(stylesheet.contains("background: var(--account-avatar-presence)"));
+    assertFalse(stylesheet.contains("linear-gradient(145deg, #22aa95, #0a665b)"));
   }
 
   private String resource(String path) throws IOException {
