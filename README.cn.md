@@ -216,6 +216,18 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 
 加入 [kkRepo Telegram 群](https://t.me/+UbIsTKXTzxBhYjFl) 获取社区支持和使用交流。Issue 分类、支持范围和安全问题报告边界见 [SUPPORT.md](SUPPORT.md)。
 
+## 赞助者
+
+感谢所有支持 kkRepo 持续开发和维护的赞助者。你可以通过 [GitHub Sponsors](https://github.com/sponsors/klboke) 支持本项目。
+
+### 企业赞助者
+
+当前企业赞助者的 Logo 和链接将在此展示。
+
+### 项目支持者
+
+当前项目支持者的名称或 Logo 及可选链接将在此展示。
+
 ## 安全
 
 如果发现安全问题，请按 [SECURITY.md](SECURITY.md) 说明优先通过 GitHub Security Advisory 报告，避免在公开 issue 中直接披露可利用细节。普通 bug、兼容性问题和功能建议可以直接提交 issue。
