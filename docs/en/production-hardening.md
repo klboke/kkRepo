@@ -171,10 +171,14 @@ Defaults allow large uploads, but reverse proxies often need separate tuning:
 ```bash
 KKREPO_MULTIPART_MAX_FILE_SIZE=1024MB
 KKREPO_MULTIPART_MAX_REQUEST_SIZE=1024MB
+KKREPO_TOMCAT_MAX_PART_COUNT=200
 KKREPO_UPLOAD_MAX_REQUEST_BYTES=1073741824
 ```
 
 Make sure proxy limits, application limits, and object-storage multipart settings are aligned.
+PyPI clients such as Twine encode repeated package metadata as separate multipart parts. Increase
+`KKREPO_TOMCAT_MAX_PART_COUNT` for packages with unusually large metadata sets, but keep the value
+bounded because each accepted part consumes request-processing memory.
 
 Ansible collection uploads also apply archive-specific compressed/expanded size, entry size/count, compression-ratio, inspection-time, and multipart-overhead limits. At minimum review `KKREPO_ANSIBLE_ARCHIVE_MAX_COMPRESSED_BYTES`, `KKREPO_ANSIBLE_ARCHIVE_MAX_EXPANDED_BYTES`, `KKREPO_ANSIBLE_ARCHIVE_MAX_ENTRIES`, and `KKREPO_ANSIBLE_MULTIPART_MAX_OVERHEAD_BYTES`. Raising an HTTP body limit does not bypass archive safety checks. Complete `MANIFEST.json`/`FILES.json` and oversized upstream JSON belong in blob storage; do not enlarge relational JSON columns to accommodate them.
 
