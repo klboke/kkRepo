@@ -216,6 +216,18 @@ Local development and testing are documented in the [Development Guide](docs/en/
 
 Join the [kkRepo Telegram group](https://t.me/+UbIsTKXTzxBhYjFl) for community support and usage discussion. See [SUPPORT.md](SUPPORT.md) for issue routing, support scope, and security-reporting boundaries.
 
+## Sponsors
+
+Thank you to everyone supporting the ongoing development and maintenance of kkRepo. You can support the project through [GitHub Sponsors](https://github.com/sponsors/klboke).
+
+### Organization Sponsors
+
+Active organization sponsors will be featured here with their logo and link.
+
+### Project Backers
+
+Active project backers will be recognized here with their name or logo and optional link.
+
 ## Security
 
 If you find a security issue, follow [SECURITY.md](SECURITY.md) and report it through GitHub Security Advisory first. Avoid disclosing exploitable details in public issues. Regular bugs, compatibility issues, and feature requests can be submitted as public issues.
