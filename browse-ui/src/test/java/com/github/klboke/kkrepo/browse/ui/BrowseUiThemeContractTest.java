@@ -57,6 +57,36 @@ class BrowseUiThemeContractTest {
     assertEquals(customPropertyNames(defaultTheme), customPropertyNames(indigoTheme));
   }
 
+  @Test
+  void oceanThemeImplementsTheCompleteSharedTokenContract() throws IOException {
+    String defaultTheme = resource("/META-INF/resources/browse/assets/themes/default.css");
+    String oceanTheme = resource("/META-INF/resources/browse/assets/themes/ocean.css");
+
+    assertTrue(oceanTheme.contains("color-scheme: light"));
+    assertTrue(oceanTheme.contains("--brand: #0369a1"));
+    assertTrue(oceanTheme.contains("--accent: #0f766e"));
+    assertTrue(oceanTheme.contains("--canvas: #f3f8fb"));
+    assertTrue(oceanTheme.contains("--topbar: #082f49"));
+    assertTrue(oceanTheme.contains(
+        "--account-avatar-background: linear-gradient(145deg, #0ea5e9, #0369a1)"));
+    assertEquals(customPropertyNames(defaultTheme), customPropertyNames(oceanTheme));
+  }
+
+  @Test
+  void sunsetThemeImplementsTheCompleteSharedTokenContract() throws IOException {
+    String defaultTheme = resource("/META-INF/resources/browse/assets/themes/default.css");
+    String sunsetTheme = resource("/META-INF/resources/browse/assets/themes/sunset.css");
+
+    assertTrue(sunsetTheme.contains("color-scheme: light"));
+    assertTrue(sunsetTheme.contains("--brand: #be123c"));
+    assertTrue(sunsetTheme.contains("--accent: #c4320a"));
+    assertTrue(sunsetTheme.contains("--canvas: #fdf8f6"));
+    assertTrue(sunsetTheme.contains("--topbar: #2a151b"));
+    assertTrue(sunsetTheme.contains(
+        "--account-avatar-background: linear-gradient(145deg, #fb7185, #be123c)"));
+    assertEquals(customPropertyNames(defaultTheme), customPropertyNames(sunsetTheme));
+  }
+
   private Set<String> customPropertyNames(String css) {
     Set<String> names = new HashSet<>();
     Matcher matcher = Pattern.compile("(--[a-z0-9-]+)\\s*:").matcher(css);

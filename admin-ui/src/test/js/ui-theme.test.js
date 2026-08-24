@@ -45,17 +45,21 @@ test("boots with the current kkRepo CSS as the default theme", () => {
   );
 });
 
-test("loads a registered theme template from cached UI settings", () => {
-  const view = fixture({
-    defaultTheme: "indigo",
-    supportedDefaultThemes: ["default", "indigo"],
-  });
+test("loads every registered bundled theme template from cached UI settings", () => {
+  const themes = ["indigo", "ocean", "sunset"];
 
-  assert.equal(view.binding.currentTheme(), "indigo");
-  assert.equal(
-    view.stylesheetAttributes.get("href"),
-    "/browse/assets/themes/indigo.css?v=20260824-ui-themes-3",
-  );
+  for (const theme of themes) {
+    const view = fixture({
+      defaultTheme: theme,
+      supportedDefaultThemes: ["default", ...themes],
+    });
+
+    assert.equal(view.binding.currentTheme(), theme);
+    assert.equal(
+      view.stylesheetAttributes.get("href"),
+      `/browse/assets/themes/${theme}.css?v=20260824-ui-themes-3`,
+    );
+  }
 });
 
 test("rejects unregistered and path-like theme identifiers", () => {
