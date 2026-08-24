@@ -42,7 +42,7 @@ class RepositoryContentControllerRTest {
       throws Exception {
     RepositoryRuntime runtime = runtime(type);
     RService r = mock(RService.class);
-    RepositoryContentController controller = controller(runtimes(runtime), r);
+    RepositoryProtocolController controller = controller(runtimes(runtime), r);
 
     ResponseEntity<StreamingResponseBody> get = controller.get(
         "cran", request("GET", "/repository/cran/"));
@@ -87,7 +87,7 @@ class RepositoryContentControllerRTest {
             MavenResponse.noBody(200).withHeader(HttpHeaders.LOCATION, path));
     when(r.delete(runtime, path, "repository-content-delete", true))
         .thenReturn(MavenResponse.noBody(204));
-    RepositoryContentController controller = controller(runtimes(runtime), r);
+    RepositoryProtocolController controller = controller(runtimes(runtime), r);
 
     ResponseEntity<StreamingResponseBody> get = controller.get(
         "cran", request("GET", "/repository/cran/" + path));
@@ -113,7 +113,7 @@ class RepositoryContentControllerRTest {
 
   @Test
   void reportsUnavailableRServiceAtContentBoundary() {
-    RepositoryContentController controller = controller(
+    RepositoryProtocolController controller = controller(
         runtimes(runtime(RepositoryType.HOSTED)), null);
     assertThrows(IllegalStateException.class, () -> controller.get(
         "cran", request("GET", "/repository/cran/src/contrib/PACKAGES.gz")));
@@ -139,9 +139,10 @@ class RepositoryContentControllerRTest {
         60, 30, true, null, List.of());
   }
 
-  private static RepositoryContentController controller(
+  private static RepositoryProtocolController controller(
       RepositoryRuntimeRegistry runtimes, RService r) {
-    RepositoryContentController controller = new RepositoryContentController(
+    RepositoryProtocolControllerTestSupport controller =
+        RepositoryProtocolControllerTestSupport.controller(
         runtimes,
         null, null, null,
         null, null,

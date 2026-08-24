@@ -146,9 +146,9 @@ class RepositoryContentControllerRubygemsTest {
     return out.toString(StandardCharsets.UTF_8);
   }
 
-  private static RepositoryContentController controller(
+  private static RepositoryProtocolController controller(
       FakeRepositoryDao repositories, RubygemsService rubygems) {
-    return new RepositoryContentController(
+    return RepositoryProtocolControllerTestSupport.controller(
         new RepositoryRuntimeRegistry(repositories, 0),
         null, null, null,
         null, null,
@@ -186,7 +186,7 @@ class RepositoryContentControllerRubygemsTest {
 
   private record TestContext(
       String repositoryName,
-      RepositoryContentController controller,
+      RepositoryProtocolController controller,
       CapturingRubygemsService rubygems) {}
 
   private static final class FakeRepositoryDao extends RepositoryDaoAdapter {

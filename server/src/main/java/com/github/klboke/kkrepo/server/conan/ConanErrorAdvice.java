@@ -1,6 +1,6 @@
 package com.github.klboke.kkrepo.server.conan;
 
-import com.github.klboke.kkrepo.server.RepositoryContentController;
+import com.github.klboke.kkrepo.server.RepositoryProtocolController;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -8,7 +8,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 /** Prevents HTML framework error pages from reaching the Conan CLI. */
-@RestControllerAdvice(assignableTypes = RepositoryContentController.class)
+@RestControllerAdvice(assignableTypes = RepositoryProtocolController.class)
 public class ConanErrorAdvice {
   @ExceptionHandler(ConanExceptions.ConanException.class)
   public ResponseEntity<String> handle(ConanExceptions.ConanException failure) {

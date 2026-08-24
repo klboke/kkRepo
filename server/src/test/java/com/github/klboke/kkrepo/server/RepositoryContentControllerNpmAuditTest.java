@@ -22,7 +22,7 @@ class RepositoryContentControllerNpmAuditTest {
   void npmAdvisoriesBulkReturnsEmptyCompatibilityResponse() {
     FakeRepositoryDao repositories = new FakeRepositoryDao();
     repositories.repository(repository("npm-example", RepositoryFormat.NPM, RepositoryType.GROUP));
-    RepositoryContentController controller = controller(repositories);
+    RepositoryProtocolController controller = controller(repositories);
     MockHttpServletRequest request = new MockHttpServletRequest(
         "POST", "/repository/npm-example/-/npm/v1/security/advisories/bulk");
 
@@ -37,7 +37,7 @@ class RepositoryContentControllerNpmAuditTest {
   void npmAuditQuickReturnsEmptyAuditReport() {
     FakeRepositoryDao repositories = new FakeRepositoryDao();
     repositories.repository(repository("npm-example", RepositoryFormat.NPM, RepositoryType.GROUP));
-    RepositoryContentController controller = controller(repositories);
+    RepositoryProtocolController controller = controller(repositories);
     MockHttpServletRequest request = new MockHttpServletRequest(
         "POST", "/repository/npm-example/-/npm/v1/security/audits/quick");
 
@@ -51,8 +51,8 @@ class RepositoryContentControllerNpmAuditTest {
     assertEquals(0, ((Map<String, Object>) body.get("metadata")).get("totalDependencies"));
   }
 
-  private static RepositoryContentController controller(FakeRepositoryDao repositories) {
-    return new RepositoryContentController(
+  private static RepositoryProtocolController controller(FakeRepositoryDao repositories) {
+    return RepositoryProtocolControllerTestSupport.controller(
         new RepositoryRuntimeRegistry(repositories, 0),
         null, null, null,
         null, null,

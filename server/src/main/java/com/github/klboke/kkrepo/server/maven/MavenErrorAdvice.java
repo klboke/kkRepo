@@ -1,6 +1,6 @@
 package com.github.klboke.kkrepo.server.maven;
 
-import com.github.klboke.kkrepo.server.RepositoryContentController;
+import com.github.klboke.kkrepo.server.RepositoryProtocolController;
 import com.github.klboke.kkrepo.server.cargo.CargoExceptions;
 import com.github.klboke.kkrepo.server.cargo.CargoResponses;
 import com.github.klboke.kkrepo.server.composer.ComposerExceptions;
@@ -16,7 +16,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-@RestControllerAdvice(assignableTypes = RepositoryContentController.class)
+@RestControllerAdvice(assignableTypes = RepositoryProtocolController.class)
 public class MavenErrorAdvice {
 
   @ExceptionHandler(MavenExceptions.MavenNotFoundException.class)

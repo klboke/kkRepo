@@ -228,7 +228,7 @@ swift package-registry login \
 
 ## Hosted 发布流程
 
-`RepositoryContentController` 只读取 HTTP method/path/header 和认证上下文，再委托 `SwiftHostedService`。Multipart、ZIP、manifest、metadata 和签名解析位于 `protocol-swift` / hosted service，不进入 controller。
+`RepositoryProtocolController` 只读取 HTTP method/path/header 和认证上下文，再委托 `SwiftHostedService`。Multipart、ZIP、manifest、metadata 和签名解析位于 `protocol-swift` / hosted service，不进入 controller。
 
 同步 publish 流程：
 

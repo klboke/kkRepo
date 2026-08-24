@@ -39,7 +39,8 @@ class RepositoryContentControllerPubRoutingTest {
     repositories.repository(repository("pub-group", RepositoryFormat.PUB, RepositoryType.GROUP));
     RepositoryRuntimeRegistry registry = new RepositoryRuntimeRegistry(repositories, 0);
     CapturingPubGroupService pubGroup = new CapturingPubGroupService();
-    RepositoryContentController contentController = new RepositoryContentController(
+    RepositoryProtocolController contentController =
+        RepositoryProtocolControllerTestSupport.controller(
         registry,
         null, null, null,
         null, null,

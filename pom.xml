@@ -67,6 +67,7 @@
     <commons.lang3.version>3.20.0</commons.lang3.version>
     <bouncycastle.version>1.85</bouncycastle.version>
     <jacoco.version>0.8.15</jacoco.version>
+    <archunit.version>1.5.0</archunit.version>
     <flatten.maven.plugin.version>1.8.0</flatten.maven.plugin.version>
     <maven.compiler.release>${java.version}</maven.compiler.release>
     <kkrepo.dist.version>${project.version}</kkrepo.dist.version>
@@ -98,6 +99,11 @@
         <groupId>org.apache.maven</groupId>
         <artifactId>maven-artifact</artifactId>
         <version>${maven.artifact.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.tngtech.archunit</groupId>
+        <artifactId>archunit-junit5</artifactId>
+        <version>${archunit.version}</version>
       </dependency>
       <dependency>
         <groupId>org.springframework.boot</groupId>

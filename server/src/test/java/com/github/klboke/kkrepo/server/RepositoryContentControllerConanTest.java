@@ -48,7 +48,7 @@ class RepositoryContentControllerConanTest {
         eq("a".repeat(40)), eq(false), eq(subject), eq("192.0.2.1")))
         .thenReturn(MavenResponse.noBody(200));
     when(conan.delete(eq(runtime), any())).thenReturn(MavenResponse.noBody(200));
-    RepositoryContentController controller = controller(runtimes, conan);
+    RepositoryProtocolController controller = controller(runtimes, conan);
 
     MockHttpServletRequest get = request(
         "GET", "/repository/conan-hosted/v2/conans/search");
@@ -86,7 +86,7 @@ class RepositoryContentControllerConanTest {
   void failsExplicitlyWhenOptionalConanServiceWasNotWired() {
     RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
     when(runtimes.resolve("conan-hosted")).thenReturn(Optional.of(runtime()));
-    RepositoryContentController controller = controller(runtimes, null);
+    RepositoryProtocolController controller = controller(runtimes, null);
 
     assertThrows(IllegalStateException.class, () -> controller.get(
         "conan-hosted", request("GET", "/repository/conan-hosted/v1/ping")));
@@ -107,9 +107,10 @@ class RepositoryContentControllerConanTest {
         null, null, null, List.of());
   }
 
-  private static RepositoryContentController controller(
+  private static RepositoryProtocolController controller(
       RepositoryRuntimeRegistry runtimes, ConanService conan) {
-    RepositoryContentController controller = new RepositoryContentController(
+    RepositoryProtocolControllerTestSupport controller =
+        RepositoryProtocolControllerTestSupport.controller(
         runtimes,
         null, null, null,
         null, null,

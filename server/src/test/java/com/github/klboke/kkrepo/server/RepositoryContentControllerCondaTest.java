@@ -50,7 +50,7 @@ class RepositoryContentControllerCondaTest {
         .thenReturn(MavenResponse.created());
     when(conda.delete(runtime, "main/linux-64/demo-1.0-0.conda"))
         .thenReturn(MavenResponse.noBody(204));
-    RepositoryContentController controller = controller(runtimes, conda);
+    RepositoryProtocolController controller = controller(runtimes, conda);
 
     MockHttpServletRequest get = new MockHttpServletRequest(
         "GET", "/repository/conda/main/linux-64/repodata.json");
@@ -91,7 +91,7 @@ class RepositoryContentControllerCondaTest {
     when(runtimes.resolve("conda")).thenReturn(Optional.of(runtime));
     when(conda.get(runtime, "main/linux-64/repodata.json", false)).thenReturn(
         MavenResponse.ok(body, 42, "application/json", "metadata-etag", Instant.EPOCH));
-    RepositoryContentController controller = controller(runtimes, conda);
+    RepositoryProtocolController controller = controller(runtimes, conda);
     MockHttpServletRequest request = new MockHttpServletRequest(
         "GET", "/repository/conda/main/linux-64/repodata.json");
     request.addHeader(HttpHeaders.IF_NONE_MATCH, "\"metadata-etag\"");
@@ -108,9 +108,10 @@ class RepositoryContentControllerCondaTest {
         true, 1L, "ALLOW_ONCE", null, null, true, null, null, null, null, null, List.of());
   }
 
-  private static RepositoryContentController controller(
+  private static RepositoryProtocolController controller(
       RepositoryRuntimeRegistry runtimes, CondaService conda) {
-    RepositoryContentController controller = new RepositoryContentController(
+    RepositoryProtocolControllerTestSupport controller =
+        RepositoryProtocolControllerTestSupport.controller(
         runtimes,
         null, null, null,
         null, null,

@@ -77,7 +77,7 @@ Key conclusions:
 
 ## URL And Routing Design
 
-Add `DockerRegistryController`. Do not attach it under the existing `RepositoryContentController` `/repository/{name}` route.
+Add `DockerRegistryController`. Do not attach it under the existing `RepositoryProtocolController` `/repository/{name}` route.
 
 ## Docker Traffic Port Design
 

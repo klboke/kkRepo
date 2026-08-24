@@ -8,7 +8,8 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
-import com.github.klboke.kkrepo.server.RepositoryContentController;
+import com.github.klboke.kkrepo.server.RepositoryProtocolController;
+import com.github.klboke.kkrepo.server.RepositoryProtocolControllerTestSupport;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
@@ -31,7 +32,7 @@ class PypiRepositoryControllerRangeTest {
   @Test
   void packageDownloadHonorsSingleRangeRequest() throws Exception {
     RangeHostedService hosted = new RangeHostedService();
-    RepositoryContentController controller = controller(hosted);
+    RepositoryProtocolController controller = controller(hosted);
     MockHttpServletRequest request = request(
         "/repository/pypi/packages/demo/1.0.0/demo-1.0.0.whl");
     request.addHeader(HttpHeaders.RANGE, "bytes=2-4");
@@ -49,7 +50,7 @@ class PypiRepositoryControllerRangeTest {
   @Test
   void packageDownloadDecodesPercentEncodedPlusWithoutChangingLiteralPlus() {
     RangeHostedService hosted = new RangeHostedService();
-    RepositoryContentController controller = controller(hosted);
+    RepositoryProtocolController controller = controller(hosted);
 
     controller.get("pypi", request(
         "/repository/pypi/packages/demo/0.0.0%2Bbuild/demo-0.0.0%2Bbuild.whl"));
@@ -67,7 +68,7 @@ class PypiRepositoryControllerRangeTest {
   @Test
   void packageHeadDecodesPercentEncodedPlusOnce() {
     RangeHostedService hosted = new RangeHostedService();
-    RepositoryContentController controller = controller(hosted);
+    RepositoryProtocolController controller = controller(hosted);
 
     controller.head("pypi", request(
         "/repository/pypi/packages/demo/0.0.0%2Bbuild/demo-0.0.0%2Bbuild.whl"));
@@ -80,7 +81,7 @@ class PypiRepositoryControllerRangeTest {
   @Test
   void proxyReceivesFilterCanonicalPathWithoutDecodingItAgain() {
     RangeProxyService proxy = new RangeProxyService();
-    RepositoryContentController controller = controller(proxy);
+    RepositoryProtocolController controller = controller(proxy);
     MockHttpServletRequest request = request(
         "/repository/pypi/packages/demo/0.0.0%252Bbuild/demo-0.0.0%252Bbuild.whl");
     String canonicalPath =
@@ -96,26 +97,26 @@ class PypiRepositoryControllerRangeTest {
 
   @Test
   void packageDownloadRejectsEncodedPathSeparators() {
-    RepositoryContentController controller = controller(new RangeHostedService());
+    RepositoryProtocolController controller = controller(new RangeHostedService());
 
     assertThrows(PypiExceptions.BadRequestException.class, () -> controller.get(
         "pypi",
         request("/repository/pypi/packages/demo/1.0.0/demo%2Fevil.whl")));
   }
 
-  private static RepositoryContentController controller(PypiHostedService hosted) {
+  private static RepositoryProtocolController controller(PypiHostedService hosted) {
     return controller(RepositoryType.HOSTED, hosted, null);
   }
 
-  private static RepositoryContentController controller(PypiProxyService proxy) {
+  private static RepositoryProtocolController controller(PypiProxyService proxy) {
     return controller(RepositoryType.PROXY, null, proxy);
   }
 
-  private static RepositoryContentController controller(
+  private static RepositoryProtocolController controller(
       RepositoryType type,
       PypiHostedService hosted,
       PypiProxyService proxy) {
-    return new RepositoryContentController(
+    return RepositoryProtocolControllerTestSupport.controller(
         new RepositoryRuntimeRegistry(new SingleRepositoryDao(type), 0),
         null, null, null,
         null, null,
