@@ -23,7 +23,7 @@ class UiSettingsControllerTest {
     assertEquals("default", view.defaultTheme());
     assertEquals(Instant.EPOCH, view.updatedAt());
     assertEquals(java.util.List.of("browser", "zh-CN", "en"), view.supportedDefaultLanguages());
-    assertEquals(java.util.List.of("default"), view.supportedDefaultThemes());
+    assertEquals(java.util.List.of("default", "indigo"), view.supportedDefaultThemes());
   }
 
   @Test
@@ -59,10 +59,10 @@ class UiSettingsControllerTest {
         new RecordingUiSettingsDao(new UiSettingsRecord("browser", "default", null));
     UiSettingsController controller = new UiSettingsController(dao);
 
-    controller.update(new UiSettingsController.UiSettingsCommand(null, "default"));
+    controller.update(new UiSettingsController.UiSettingsCommand(null, "indigo"));
 
     assertEquals("browser", dao.savedDefaultLanguage);
-    assertEquals("default", dao.savedDefaultTheme);
+    assertEquals("indigo", dao.savedDefaultTheme);
   }
 
   @Test

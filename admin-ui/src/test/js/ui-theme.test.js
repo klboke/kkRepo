@@ -41,20 +41,20 @@ test("boots with the current kkRepo CSS as the default theme", () => {
   assert.equal(view.rootAttributes.get("data-theme"), "default");
   assert.equal(
     view.stylesheetAttributes.get("href"),
-    "/browse/assets/themes/default.css?v=20260824-ui-themes-1",
+    "/browse/assets/themes/default.css?v=20260824-ui-themes-2",
   );
 });
 
 test("loads a registered theme template from cached UI settings", () => {
   const view = fixture({
-    defaultTheme: "midnight",
-    supportedDefaultThemes: ["default", "midnight"],
+    defaultTheme: "indigo",
+    supportedDefaultThemes: ["default", "indigo"],
   });
 
-  assert.equal(view.binding.currentTheme(), "midnight");
+  assert.equal(view.binding.currentTheme(), "indigo");
   assert.equal(
     view.stylesheetAttributes.get("href"),
-    "/browse/assets/themes/midnight.css?v=20260824-ui-themes-1",
+    "/browse/assets/themes/indigo.css?v=20260824-ui-themes-2",
   );
 });
 
@@ -78,6 +78,6 @@ test("falls back to the default template when a selected stylesheet is missing",
   assert.equal(view.binding.currentTheme(), "default");
   assert.equal(
     view.stylesheetAttributes.get("href"),
-    "/browse/assets/themes/default.css?v=20260824-ui-themes-1",
+    "/browse/assets/themes/default.css?v=20260824-ui-themes-2",
   );
 });

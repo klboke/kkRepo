@@ -8,6 +8,7 @@ public interface UiSettingsDao {
   String LANGUAGE_EN = "en";
   String DEFAULT_LANGUAGE = LANGUAGE_EN;
   String THEME_DEFAULT = "default";
+  String THEME_INDIGO = "indigo";
   String DEFAULT_THEME = THEME_DEFAULT;
 
   static String normalizeDefaultLanguage(String defaultLanguage) {

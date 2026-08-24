@@ -21,7 +21,8 @@ public class UiSettingsController {
       UiSettingsDao.LANGUAGE_ZH_CN,
       UiSettingsDao.LANGUAGE_EN);
   private static final List<String> SUPPORTED_DEFAULT_THEMES = List.of(
-      UiSettingsDao.THEME_DEFAULT);
+      UiSettingsDao.THEME_DEFAULT,
+      UiSettingsDao.THEME_INDIGO);
 
   private final UiSettingsDao uiSettingsDao;
 

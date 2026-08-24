@@ -1735,7 +1735,7 @@ textarea:focus-visible {
 }
 
 .workspace-tab.is-active {
-  background: linear-gradient(180deg, rgba(20, 117, 107, 0.98), rgba(17, 96, 88, 0.98));
+  background: var(--topbar-selection);
   color: var(--topbar-ink);
 }
 

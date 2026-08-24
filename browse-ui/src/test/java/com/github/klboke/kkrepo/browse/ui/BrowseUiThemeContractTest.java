@@ -1,12 +1,17 @@
 package com.github.klboke.kkrepo.browse.ui;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.HashSet;
 import java.util.Objects;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 
 class BrowseUiThemeContractTest {
@@ -34,6 +39,28 @@ class BrowseUiThemeContractTest {
       assertTrue(theme.contains(token), token);
     }
     assertTrue(legacyAlias.contains("./themes/default.css"));
+  }
+
+  @Test
+  void indigoThemeImplementsTheCompleteSharedTokenContract() throws IOException {
+    String defaultTheme = resource("/META-INF/resources/browse/assets/themes/default.css");
+    String indigoTheme = resource("/META-INF/resources/browse/assets/themes/indigo.css");
+
+    assertTrue(indigoTheme.contains("color-scheme: light"));
+    assertTrue(indigoTheme.contains("--brand: #4f46e5"));
+    assertTrue(indigoTheme.contains("--accent: #c2410c"));
+    assertTrue(indigoTheme.contains("--canvas: #f6f8fc"));
+    assertTrue(indigoTheme.contains("--topbar: #111827"));
+    assertEquals(customPropertyNames(defaultTheme), customPropertyNames(indigoTheme));
+  }
+
+  private Set<String> customPropertyNames(String css) {
+    Set<String> names = new HashSet<>();
+    Matcher matcher = Pattern.compile("(--[a-z0-9-]+)\\s*:").matcher(css);
+    while (matcher.find()) {
+      names.add(matcher.group(1));
+    }
+    return names;
   }
 
   private String resource(String path) throws IOException {
