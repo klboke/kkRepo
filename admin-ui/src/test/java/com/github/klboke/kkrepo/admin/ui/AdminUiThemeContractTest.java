@@ -31,6 +31,8 @@ class AdminUiThemeContractTest {
     assertTrue(index.contains("value=\"default\" selected>Default</option>"));
     assertTrue(javascript.contains("saveSettings(languageSelect.value, themeSelect.value)"));
     assertTrue(javascript.contains("settings.supportedDefaultThemes"));
+    assertFalse(index.contains("id=\"ui-settings-status\""));
+    assertFalse(javascript.contains("Default language: ${"));
   }
 
   private String resource(String path) throws IOException {

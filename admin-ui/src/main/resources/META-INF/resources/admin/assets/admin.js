@@ -3413,12 +3413,6 @@ async function fetchJson(path, fallback, errorLabel) {
   }
 }
 
-function uiLanguageLabel(language) {
-  if (language === "zh-CN") return "Chinese";
-  if (language === "en") return "English";
-  return "Follow browser";
-}
-
 function uiThemeLabel(theme) {
   if (theme === "default") return "Default";
   return String(theme || "")
@@ -3448,16 +3442,6 @@ function syncUiSettingsForm() {
     themeSelect.value = settings.defaultTheme || "default";
   }
   clearRequiredFieldErrors(uiSettingsRequiredFields);
-  updateUiSettingsStatus();
-}
-
-function updateUiSettingsStatus() {
-  const status = document.getElementById("ui-settings-status");
-  if (!status || !window.kkrepoI18n) return;
-  const defaultLanguage = window.kkrepoI18n.defaultLanguage();
-  const currentLanguage = window.kkrepoI18n.currentLanguage();
-  const defaultTheme = window.kkrepoI18n.defaultTheme();
-  status.textContent = `Default language: ${uiLanguageLabel(defaultLanguage)}. Active language: ${uiLanguageLabel(currentLanguage)}. Default theme: ${uiThemeLabel(defaultTheme)}.`;
 }
 
 async function loadUiSettings() {

@@ -748,10 +748,6 @@
     if (match) return `API Key 已创建：${match[1]}`;
     match = body.match(/^Docker cache cleared for (.+)$/);
     if (match) return `已清理 ${match[1]} 的 Docker 缓存`;
-    match = body.match(/^Default language: (.+)\. Active language: (.+)\. Default theme: (.+)\.$/);
-    if (match) return `默认语言：${translateBody(match[1])}。当前语言：${translateBody(match[2])}。默认主题：${translateBody(match[3])}。`;
-    match = body.match(/^Default language: (.+)\. Active language: (.+)\.$/);
-    if (match) return `默认语言：${translateBody(match[1])}。当前语言：${translateBody(match[2])}。`;
     match = body.match(/^Current language: (.+)$/);
     if (match) return `当前语言：${translateBody(match[1])}`;
     match = body.match(/^New version (v[^ ]+) available\. View release\.$/);
