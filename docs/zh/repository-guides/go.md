@@ -95,7 +95,9 @@ Release `.zip` 是 Artifact Scanning candidate，生成的 `.mod` 与 `.info` me
 
 当 source content model 已被证明时，Nexus Go hosted definition 和数据进入标准 preflight、
 可恢复 metadata/blob、checksum 与报告流程；proxy cache 仍需管理员显式选择。Group member
-顺序会被保留，迁移遗留 component kind 与原生 hosted list/Cleanup 保持兼容。
+顺序会被保留，迁移遗留 component kind 与原生 hosted list/Cleanup 保持兼容。迁移矩阵会在
+Nexus 3.94 的 H2 与 PostgreSQL source shape 上覆盖两种目标数据库，校验原始 module ZIP
+checksum，并通过两个应用副本上的真实 Go client 解析迁移后的 module。
 
 Proxy cache 与 negative-cache TTL 控制上游刷新，Go 客户端本地 module cache 是另一层缓存。
 排障时使用 `go env GOPROXY GONOPROXY GONOSUMDB GOPRIVATE` 检查实际配置。认证、授权、

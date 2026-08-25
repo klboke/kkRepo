@@ -103,7 +103,9 @@ ZIP blob before its object-store body is opened, including reads through a group
 Nexus Go hosted definitions and data participate in the normal preflight, resumable metadata/blob,
 checksum, and report workflow when the source content model is proven. Proxy cache migration remains
 explicit opt-in. Group member order is preserved, and migrated legacy component kinds remain
-compatible with native hosted lists and Cleanup.
+compatible with native hosted lists and Cleanup. The migration matrix exercises the Nexus 3.94 H2
+and PostgreSQL source shapes against both target databases, verifies the original module ZIP
+checksum, and resolves the migrated module with a real Go client through both application replicas.
 
 Proxy cache and negative-cache TTLs control upstream refresh; the Go client's local module cache is
 a separate layer. Use `go env GOPROXY GONOPROXY GONOSUMDB GOPRIVATE` when troubleshooting. An

@@ -6,6 +6,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 NEXUS_URL="${NEXUS_COMPAT_BASE_URL:-http://localhost:28090}"
 NEXUS_REPOSITORY="${DOCKER_MIGRATION_NEXUS_REPOSITORY:-docker-hosted}"
+GO_NEXUS_REPOSITORY="${GO_MIGRATION_NEXUS_REPOSITORY:-go-hosted}"
 CARGO_NEXUS_REPOSITORY="${CARGO_MIGRATION_NEXUS_REPOSITORY:-cargo-hosted}"
 PUB_NEXUS_REPOSITORY="${PUB_MIGRATION_NEXUS_REPOSITORY:-pub-hosted}"
 COMPOSER_NEXUS_REPOSITORY="${COMPOSER_MIGRATION_NEXUS_REPOSITORY:-composer-proxy}"
@@ -35,6 +36,7 @@ KKREPO_URL="${KKREPO_COMPAT_BASE_URL:-http://127.0.0.1:18090}"
 KKREPO_HEALTH_URL="${KKREPO_MANAGEMENT_URL:-http://127.0.0.1:18091}/actuator/health"
 KKREPO_DOCKER_REGISTRY="${DOCKER_MIGRATION_KKREPO_REGISTRY:-127.0.0.1:18183}"
 KKREPO_REPOSITORY="${DOCKER_MIGRATION_KKREPO_REPOSITORY:-docker-hosted}"
+GO_KKREPO_REPOSITORY="${GO_MIGRATION_KKREPO_REPOSITORY:-go-hosted}"
 CARGO_KKREPO_REPOSITORY="${CARGO_MIGRATION_KKREPO_REPOSITORY:-cargo-hosted}"
 PUB_KKREPO_REPOSITORY="${PUB_MIGRATION_KKREPO_REPOSITORY:-pub-hosted}"
 COMPOSER_KKREPO_REPOSITORY="${COMPOSER_MIGRATION_KKREPO_REPOSITORY:-composer-proxy}"
@@ -75,6 +77,13 @@ IMAGE="${DOCKER_MIGRATION_IMAGE:-kkrepo-migration/e2e}"
 TAG="${DOCKER_MIGRATION_TAG:-$(date +%Y%m%d%H%M%S)}"
 TAG_SAFE="${TAG//[^A-Za-z0-9_]/_}"
 TAG_SAFE_LC="$(printf '%s' "$TAG_SAFE" | tr '[:upper:]' '[:lower:]')"
+GO_MIGRATION_ENABLED="${GO_MIGRATION_ENABLED:-false}"
+GO_MODULE="${GO_MIGRATION_MODULE:-example.com/kkrepo/migration-${TAG_SAFE_LC}}"
+GO_VERSION="${GO_MIGRATION_VERSION:-v1.2.3}"
+GO_FIXTURE_WORKDIR=""
+GO_FIXTURE_ARCHIVE=""
+GO_FIXTURE_SHA256=""
+GO_FIXTURE_MARKER="kkRepo Go Nexus migration E2E $TAG_SAFE_LC"
 CARGO_CRATE="${CARGO_MIGRATION_CRATE:-kkrepo_migration_e2e_${TAG_SAFE}}"
 CARGO_VERSION="${CARGO_MIGRATION_VERSION:-0.1.0}"
 PUB_PACKAGE="${PUB_MIGRATION_PACKAGE:-kkrepo_migration_e2e_${TAG_SAFE_LC}}"
@@ -312,6 +321,9 @@ header_value() {
 }
 
 cleanup() {
+  if [[ -n "$GO_FIXTURE_WORKDIR" ]]; then
+    rm -rf "$GO_FIXTURE_WORKDIR"
+  fi
   if [[ -n "$SWIFT_FIXTURE_WORKDIR" ]]; then
     rm -rf "$SWIFT_FIXTURE_WORKDIR"
   fi
@@ -437,6 +449,16 @@ cargo_migration_enabled() {
     || "$EXPECTED_ADAPTER" == "DatastorePostgresqlNexusAdapter"
     || "${NEXUS_COMPAT_IMAGE:-}" == *3.92*
     || "${NEXUS_COMPAT_IMAGE:-}" == *3.77* ]]
+}
+
+go_migration_enabled() {
+  [[ "$GO_MIGRATION_ENABLED" == "true" ]]
+}
+
+source_go_available() {
+  curl -m 20 -fsS \
+    -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$NEXUS_URL/service/rest/v1/repositories/go/hosted/$GO_NEXUS_REPOSITORY" >/dev/null 2>&1
 }
 
 cargo_index_path() {
@@ -2964,6 +2986,217 @@ PY
   log "Composer proxy fixture warmed: $COMPOSER_PACKAGE $COMPOSER_VERSION path=$COMPOSER_DIST_PATH"
 }
 
+prepare_go_fixture() {
+  local archive_root
+  GO_FIXTURE_WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-go-migration.XXXXXX")"
+  archive_root="$GO_FIXTURE_WORKDIR/archive/$GO_MODULE@$GO_VERSION"
+  GO_FIXTURE_ARCHIVE="$GO_FIXTURE_WORKDIR/$GO_VERSION.zip"
+  mkdir -p "$archive_root"
+  cat >"$archive_root/go.mod" <<EOF
+module $GO_MODULE
+
+go 1.22
+EOF
+  cat >"$archive_root/migration.go" <<EOF
+package migrationfixture
+
+const Marker = "$GO_FIXTURE_MARKER"
+EOF
+  (
+    cd "$GO_FIXTURE_WORKDIR/archive"
+    zip -q -r "$GO_FIXTURE_ARCHIVE" "$GO_MODULE@$GO_VERSION"
+  )
+  GO_FIXTURE_SHA256="$(file_sha256 "$GO_FIXTURE_ARCHIVE")"
+}
+
+publish_go_fixture_to_source_nexus() {
+  local response status
+  response="$GO_FIXTURE_WORKDIR/publish-response.txt"
+  status="$(curl -m 60 -sS -o "$response" -w '%{http_code}' \
+    -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    -H "Content-Type: application/zip" \
+    --upload-file "$GO_FIXTURE_ARCHIVE" \
+    "$NEXUS_URL/repository/$GO_NEXUS_REPOSITORY/$GO_VERSION.zip")"
+  if [[ ! "$status" =~ ^2[0-9][0-9]$ ]]; then
+    log "publish Go fixture returned HTTP $status"
+    cat "$response" >&2 || true
+    exit 1
+  fi
+  wait_for_http \
+    "source Nexus Go module" \
+    "$NEXUS_URL/repository/$GO_NEXUS_REPOSITORY/$GO_MODULE/@v/$GO_VERSION.zip" \
+    "$NEXUS_USER:$NEXUS_PASSWORD"
+}
+
+verify_source_go_fixture() {
+  local workdir list_file info_file latest_file mod_file archive_file downloaded_sha
+  workdir="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-go-source.XXXXXX")"
+  list_file="$workdir/list"
+  info_file="$workdir/version.info"
+  latest_file="$workdir/latest.info"
+  mod_file="$workdir/version.mod"
+  archive_file="$workdir/version.zip"
+  curl -m 30 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$NEXUS_URL/repository/$GO_NEXUS_REPOSITORY/$GO_MODULE/@v/list" >"$list_file"
+  curl -m 30 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$NEXUS_URL/repository/$GO_NEXUS_REPOSITORY/$GO_MODULE/@v/$GO_VERSION.info" >"$info_file"
+  curl -m 30 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$NEXUS_URL/repository/$GO_NEXUS_REPOSITORY/$GO_MODULE/@latest" >"$latest_file"
+  curl -m 30 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$NEXUS_URL/repository/$GO_NEXUS_REPOSITORY/$GO_MODULE/@v/$GO_VERSION.mod" >"$mod_file"
+  curl -m 60 -fsS -u "$NEXUS_USER:$NEXUS_PASSWORD" \
+    "$NEXUS_URL/repository/$GO_NEXUS_REPOSITORY/$GO_MODULE/@v/$GO_VERSION.zip" >"$archive_file"
+  python3 - \
+    "$list_file" "$info_file" "$latest_file" "$mod_file" "$GO_MODULE" "$GO_VERSION" <<'PY'
+import json
+import pathlib
+import sys
+
+list_path, info_path, latest_path, mod_path, module, version = sys.argv[1:7]
+versions = pathlib.Path(list_path).read_text(encoding="utf-8").split()
+if version not in versions:
+    raise SystemExit(f"source Nexus Go list omitted {version}: {versions}")
+for label, path in [("info", info_path), ("latest", latest_path)]:
+    payload = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    if payload.get("Version") != version or not payload.get("Time"):
+        raise SystemExit(f"source Nexus Go {label} metadata is invalid: {payload}")
+mod = pathlib.Path(mod_path).read_text(encoding="utf-8")
+if f"module {module}" not in mod:
+    raise SystemExit(f"source Nexus Go mod omitted module identity: {mod!r}")
+PY
+  downloaded_sha="$(file_sha256 "$archive_file")"
+  if [[ "$downloaded_sha" != "$GO_FIXTURE_SHA256" ]]; then
+    log "source Nexus Go archive checksum changed: $downloaded_sha != $GO_FIXTURE_SHA256"
+    rm -rf "$workdir"
+    exit 1
+  fi
+  rm -rf "$workdir"
+  log "source Nexus Go fixture verified: $GO_MODULE $GO_VERSION sha256=$GO_FIXTURE_SHA256"
+}
+
+verify_go_repository_definition() {
+  local target_url="$1"
+  local label="$2"
+  local repository_file
+  repository_file="$(mktemp)"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/internal/repositories/$GO_KKREPO_REPOSITORY" >"$repository_file"
+  python3 - "$repository_file" <<'PY'
+import json
+import pathlib
+import sys
+
+repository = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+if repository.get("recipe") != "go-hosted" or repository.get("type") != "HOSTED":
+    raise SystemExit(f"migrated Go hosted definition is invalid: {repository}")
+if (repository.get("hosted") or {}).get("writePolicy") != "ALLOW":
+    raise SystemExit(f"migrated Go hosted write policy changed: {repository}")
+PY
+  rm -f "$repository_file"
+  log "Go hosted definition verified through $label"
+}
+
+verify_migrated_go_fixture() {
+  local job_id="$1"
+  local target_url="${2:-$KKREPO_URL}"
+  local label="${3:-primary}"
+  local workdir job_file list_file info_file latest_file mod_file archive_file downloaded_sha
+  local gomodcache gocache client_dir
+  workdir="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-go-migrated.XXXXXX")"
+  job_file="$workdir/job.json"
+  list_file="$workdir/list"
+  info_file="$workdir/version.info"
+  latest_file="$workdir/latest.info"
+  mod_file="$workdir/version.mod"
+  archive_file="$workdir/version.zip"
+  gomodcache="$workdir/gomodcache"
+  gocache="$workdir/gocache"
+  client_dir="$workdir/client"
+  mkdir -p "$client_dir"
+
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/internal/migration/nexus/repository-data/jobs/$job_id" >"$job_file"
+  python3 - "$job_file" "$GO_NEXUS_REPOSITORY" <<'PY'
+import json
+import pathlib
+import sys
+
+path, repository = sys.argv[1:3]
+payload = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+rows = payload.get("repositoryJobs") or payload.get("repositoryStatuses") or payload.get("repositoryDetails") or []
+matches = [
+    row for row in rows
+    if (row.get("sourceRepositoryName") or row.get("repositoryName") or row.get("name")) == repository
+]
+if not matches:
+    raise SystemExit(f"Go migration repository status not found: {repository}")
+row = matches[0]
+if int(row.get("migratedAssets") or 0) < 1:
+    raise SystemExit(f"Go migration did not restore module assets: {row}")
+if int(row.get("failedAssets") or 0) != 0:
+    raise SystemExit(f"Go migration has failed assets: {row}")
+PY
+
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/repository/$GO_KKREPO_REPOSITORY/$GO_MODULE/@v/list" >"$list_file"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/repository/$GO_KKREPO_REPOSITORY/$GO_MODULE/@v/$GO_VERSION.info" >"$info_file"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/repository/$GO_KKREPO_REPOSITORY/$GO_MODULE/@latest" >"$latest_file"
+  curl -m 30 -fsS -u "$(auth)" \
+    "$target_url/repository/$GO_KKREPO_REPOSITORY/$GO_MODULE/@v/$GO_VERSION.mod" >"$mod_file"
+  curl -m 60 -fsS -u "$(auth)" \
+    "$target_url/repository/$GO_KKREPO_REPOSITORY/$GO_MODULE/@v/$GO_VERSION.zip" >"$archive_file"
+  python3 - \
+    "$list_file" "$info_file" "$latest_file" "$mod_file" "$GO_MODULE" "$GO_VERSION" <<'PY'
+import json
+import pathlib
+import sys
+
+list_path, info_path, latest_path, mod_path, module, version = sys.argv[1:7]
+versions = pathlib.Path(list_path).read_text(encoding="utf-8").split()
+if version not in versions:
+    raise SystemExit(f"migrated Go list omitted {version}: {versions}")
+for label, path in [("info", info_path), ("latest", latest_path)]:
+    payload = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
+    if payload.get("Version") != version or not payload.get("Time"):
+        raise SystemExit(f"migrated Go {label} metadata is invalid: {payload}")
+mod = pathlib.Path(mod_path).read_text(encoding="utf-8")
+if f"module {module}" not in mod:
+    raise SystemExit(f"migrated Go mod omitted module identity: {mod!r}")
+PY
+  downloaded_sha="$(file_sha256 "$archive_file")"
+  if [[ "$downloaded_sha" != "$GO_FIXTURE_SHA256" ]]; then
+    log "migrated Go archive checksum changed through $label: $downloaded_sha != $GO_FIXTURE_SHA256"
+    rm -rf "$workdir"
+    exit 1
+  fi
+
+  cat >"$client_dir/go.mod" <<'EOF'
+module kkrepo-migration-e2e.local/client
+
+go 1.22
+EOF
+  (
+    cd "$client_dir"
+    env \
+      GOPROXY="$target_url/repository/$GO_KKREPO_REPOSITORY/" \
+      GONOPROXY=none \
+      GONOSUMDB="$GO_MODULE" \
+      GOSUMDB=off \
+      GOMODCACHE="$gomodcache" \
+      GOCACHE="$gocache" \
+      go mod download -json "$GO_MODULE@$GO_VERSION" >"$workdir/go-download.json"
+  )
+  test -f "$gomodcache/cache/download/$GO_MODULE/@v/$GO_VERSION.info"
+  test -f "$gomodcache/cache/download/$GO_MODULE/@v/$GO_VERSION.mod"
+  test -f "$gomodcache/cache/download/$GO_MODULE/@v/$GO_VERSION.zip"
+  grep -F "$GO_FIXTURE_MARKER" \
+    "$gomodcache/$GO_MODULE@$GO_VERSION/migration.go" >/dev/null
+  rm -rf "$workdir"
+  log "migrated Go fixture and real client verified through $label: $GO_MODULE $GO_VERSION"
+}
+
 publish_cargo_fixture_to_source_nexus() {
   local crate="$1"
   local version="$2"
@@ -4794,6 +5027,8 @@ run_config_metadata_migration() {
     "$expected_adapter" \
     "$NEXUS_REPOSITORY" \
     "$EXPECTED_CONNECTOR_PORT" \
+    "$GO_MIGRATION_ENABLED" \
+    "$GO_NEXUS_REPOSITORY" \
     "$SWIFT_MIGRATION_ENABLED" \
     "$SWIFT_NEXUS_REPOSITORY" \
     "$SWIFT_PROXY_NEXUS_REPOSITORY" \
@@ -4821,6 +5056,8 @@ import sys
     expected_adapter,
     repository,
     expected_connector_port,
+    go_enabled,
+    go_repository,
     swift_enabled,
     swift_repository,
     swift_proxy_repository,
@@ -4840,7 +5077,7 @@ import sys
     r_repository,
     r_proxy_repository,
     r_group_repository,
-) = sys.argv[1:24]
+) = sys.argv[1:26]
 with open(path, "r", encoding="utf-8") as source:
     payload = json.load(source)
 plan = payload.get("migrationPlan") or {}
@@ -4894,6 +5131,18 @@ if expected_adapter in {"DatastoreH2NexusAdapter", "DatastorePostgresqlNexusAdap
         raise SystemExit(f"cargo-hosted plan status is {cargo[0].get('status')!r}, expected FULL")
     if cargo[0].get("readMode") != "script-datastore":
         raise SystemExit(f"cargo-hosted readMode is {cargo[0].get('readMode')!r}")
+if go_enabled == "true":
+    capability = ((profile.get("formatCapabilities") or {}).get("go") or {})
+    if capability.get("contentMigration") is not True:
+        raise SystemExit(f"Go datastore content model was not proven: {capability}")
+    go = [
+        item for item in items
+        if item.get("area") == "repository" and item.get("name") == go_repository
+    ]
+    if not go:
+        raise SystemExit(f"Go hosted plan item not found: {go_repository}")
+    if go[0].get("status") != "FULL" or go[0].get("readMode") != "script-datastore":
+        raise SystemExit(f"Go hosted migration is not fail-closed FULL: {go[0]}")
 if swift_enabled == "true":
     capability = ((profile.get("formatCapabilities") or {}).get("swift") or {})
     if capability.get("contentMigration") is not True:
@@ -5276,6 +5525,18 @@ wait_for_http "kkrepo repositories endpoint" "$KKREPO_URL/internal/repositories?
 
 ensure_kkrepo_blob_store
 ensure_kkrepo_docker_repository
+if go_migration_enabled; then
+  need python3
+  need zip
+  need go
+  if ! source_go_available; then
+    log "required Go hosted repository $GO_NEXUS_REPOSITORY is not available on the Nexus 3.94 source"
+    exit 1
+  fi
+  prepare_go_fixture
+  publish_go_fixture_to_source_nexus
+  verify_source_go_fixture
+fi
 if terraform_migration_enabled; then
   if ! source_terraform_available; then
     log "required Terraform repository $TERRAFORM_NEXUS_REPOSITORY is not available on the Nexus 3.92 source"
@@ -5375,6 +5636,9 @@ if r_migration_enabled; then
   verify_source_r_fixture
 fi
 run_config_metadata_migration
+if go_migration_enabled; then
+  verify_go_repository_definition "$KKREPO_URL" "primary"
+fi
 if composer_migration_enabled; then
   verify_composer_requires_explicit_proxy_selection
 fi
@@ -5419,6 +5683,9 @@ pub_sha256_value=""
 migration_repositories_json="\"$(json_escape "$NEXUS_REPOSITORY")\""
 backup_proxy_repositories_json=""
 backup_proxy_repository_values=""
+if go_migration_enabled; then
+  migration_repositories_json="$migration_repositories_json,\"$(json_escape "$GO_NEXUS_REPOSITORY")\""
+fi
 if cargo_migration_enabled; then
   if ! source_cargo_available; then
     log "expected Cargo repository $CARGO_NEXUS_REPOSITORY is not available on datastore source"
@@ -5538,6 +5805,19 @@ fi
 
 if [[ -n "$pub_sha256_value" ]]; then
   verify_migrated_pub_fixture "$PUB_PACKAGE" "$PUB_VERSION" "$pub_sha256_value"
+fi
+
+if go_migration_enabled; then
+  verify_migrated_go_fixture "$job_id" "$KKREPO_URL" "primary"
+  if [[ -n "$KKREPO_SECONDARY_URL" ]]; then
+    wait_for_http "kkrepo Go migration read replica" \
+      "$KKREPO_SECONDARY_URL/internal/repositories?purpose=admin" "$(auth)"
+    verify_go_repository_definition "$KKREPO_SECONDARY_URL" "secondary"
+    verify_migrated_go_fixture "$job_id" "$KKREPO_SECONDARY_URL" "secondary"
+  else
+    log "GO_MIGRATION_ENABLED requires KKREPO_MIGRATION_SECONDARY_URL"
+    exit 1
+  fi
 fi
 
 if terraform_migration_enabled; then
@@ -5687,4 +5967,4 @@ if r_migration_enabled; then
   fi
 fi
 
-log "Docker/Cargo/Pub/Composer/Terraform/Swift/Ansible/Conda/APT/Alpine/R migration E2E completed: job=$job_id source=${NEXUS_URL%/}/repository/${NEXUS_REPOSITORY}/v2/${IMAGE}:${TAG} target=$kkrepo_ref"
+log "Docker/Go/Cargo/Pub/Composer/Terraform/Swift/Ansible/Conda/APT/Alpine/R migration E2E completed: job=$job_id source=${NEXUS_URL%/}/repository/${NEXUS_REPOSITORY}/v2/${IMAGE}:${TAG} target=$kkrepo_ref"

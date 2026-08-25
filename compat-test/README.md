@@ -875,3 +875,9 @@ The migration script uses the local Nexus REST endpoint `http://localhost:28090/
 pushes a fixture image to `docker-hosted`, starts repository-data metadata and
 package migration for only that Docker repository, then pulls the image from the
 kkrepo Docker connector `127.0.0.1:18183`.
+
+When `GO_MIGRATION_ENABLED=true`, the same script also creates and publishes a native Go module in
+the Nexus 3.94 `go-hosted` repository, requires a `FULL` datastore-backed migration plan, migrates
+its assets, checks the module ZIP digest, and runs `go mod download` against both kkrepo replicas.
+The migration workflow enables this fixture only for its Nexus 3.94 H2/PostgreSQL lanes because Go
+hosted repositories were introduced in Nexus 3.93.

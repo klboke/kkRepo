@@ -26,6 +26,8 @@ KKREPO_BLOB_PATH="${KKREPO_COMPAT_BLOB_PATH:-/tmp/kkrepo-blobs/default}"
 KKREPO_DOCKER_CONNECTOR_PORT="${KKREPO_DOCKER_CONNECTOR_PORT:-18180}"
 NEXUS_DOCKER_HTTP_PORT="${NEXUS_DOCKER_HTTP_PORT:-$KKREPO_DOCKER_CONNECTOR_PORT}"
 COMPOSER_NEXUS_REQUIRED="${COMPOSER_NEXUS_REQUIRED:-false}"
+GO_MIGRATION_ENABLED="${GO_MIGRATION_ENABLED:-false}"
+GO_MIGRATION_NEXUS_REPOSITORY="${GO_MIGRATION_NEXUS_REPOSITORY:-go-hosted}"
 R_MIGRATION_ENABLED="${R_MIGRATION_ENABLED:-false}"
 R_MIGRATION_UPSTREAM_CONTAINER="${R_MIGRATION_UPSTREAM_CONTAINER:-${COMPOSE_PROJECT_NAME}-r-upstream}"
 R_MIGRATION_UPSTREAM_URL="${R_MIGRATION_UPSTREAM_URL:-http://${R_MIGRATION_UPSTREAM_CONTAINER}:8080/}"
@@ -419,6 +421,16 @@ ensure_nexus_repositories() {
     \"storage\":{\"blobStoreName\":\"default\",\"strictContentTypeValidation\":true,\"writePolicy\":\"ALLOW\"},
     \"docker\":{\"v1Enabled\":false,\"forceBasicAuth\":true,\"httpPort\":$NEXUS_DOCKER_HTTP_PORT}
   }"
+
+  if [[ "$GO_MIGRATION_ENABLED" == "true" ]]; then
+    nexus_create_repo \
+      "$GO_MIGRATION_NEXUS_REPOSITORY" \
+      "$NEXUS_URL/service/rest/v1/repositories/go/hosted" "{
+        \"name\":\"$GO_MIGRATION_NEXUS_REPOSITORY\",
+        \"online\":true,
+        \"storage\":{\"blobStoreName\":\"default\",\"strictContentTypeValidation\":true,\"writePolicy\":\"ALLOW\"}
+      }"
+  fi
 
   nexus_try_create_repo "cargo-hosted" "$NEXUS_URL/service/rest/v1/repositories/cargo/hosted" '{
     "name":"cargo-hosted",

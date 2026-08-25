@@ -163,6 +163,7 @@ jobs:
             management-port: 18101
             docker-port: 18191
             composer-migration-enabled: false
+            go-migration-enabled: true
             swift-migration-enabled: true
             conda-migration-enabled: true
             alpine-migration-enabled: true
@@ -182,6 +183,7 @@ jobs:
             management-port: 18105
             docker-port: 18193
             composer-migration-enabled: false
+            go-migration-enabled: true
             swift-migration-enabled: true
             conda-migration-enabled: true
             apt-migration-enabled: true
@@ -205,6 +207,7 @@ jobs:
             management-port: 18109
             docker-port: 18195
             composer-migration-enabled: false
+            go-migration-enabled: true
             swift-migration-enabled: true
             ansible-migration-enabled: true
             conda-migration-enabled: true
@@ -238,6 +241,7 @@ jobs:
       MIGRATION_E2E_EXPECTED_ADAPTER: ${{ matrix.expected-adapter }}
       COMPOSER_MIGRATION_ENABLED: ${{ matrix.composer-migration-enabled }}
       COMPOSER_NEXUS_REQUIRED: ${{ matrix.composer-migration-enabled }}
+      GO_MIGRATION_ENABLED: ${{ matrix.go-migration-enabled || false }}
       SWIFT_MIGRATION_ENABLED: ${{ matrix.swift-migration-enabled }}
       ANSIBLE_MIGRATION_ENABLED: ${{ matrix.ansible-migration-enabled || false }}
       CONDA_MIGRATION_ENABLED: ${{ matrix.conda-migration-enabled || false }}
@@ -264,6 +268,12 @@ jobs:
           distribution: temurin
           java-version: "25"
           cache: maven
+
+      - name: Set up Go migration client
+        if: matrix.go-migration-enabled
+        uses: actions/setup-go@v7
+        with:
+          go-version: "1.25.x"
 
       - name: Set up Conda migration client
         if: matrix.conda-migration-enabled
