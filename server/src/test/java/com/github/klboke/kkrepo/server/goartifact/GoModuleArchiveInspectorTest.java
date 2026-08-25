@@ -153,6 +153,100 @@ class GoModuleArchiveInspectorTest {
     Path collision = zip(fileDirectoryCollision);
     assertThrows(IllegalArgumentException.class,
         () -> new GoModuleArchiveInspector().inspect(collision, "v1.0.0"));
+
+    Path dotSegment = zip(Map.of(
+        "example.com/acme/demo@v1.0.0/./demo.go", new byte[] {1}));
+    assertThrows(IllegalArgumentException.class,
+        () -> new GoModuleArchiveInspector().inspect(dotSegment, "v1.0.0"));
+
+    Path trailingDot = zip(Map.of(
+        "example.com/acme/demo@v1.0.0/demo.", new byte[] {1}));
+    assertThrows(IllegalArgumentException.class,
+        () -> new GoModuleArchiveInspector().inspect(trailingDot, "v1.0.0"));
+
+    Path unicodeLetter = zip(Map.of(
+        "example.com/acme/demo@v1.0.0/café.go", new byte[] {1}));
+    assertEquals("example.com/acme/demo",
+        new GoModuleArchiveInspector().inspect(unicodeLetter, "v1.0.0").module());
+  }
+
+  @Test
+  void rejectsUnreadableEmptyOversizedAndEntrylessArchives() throws Exception {
+    assertThrows(IllegalArgumentException.class,
+        () -> new GoModuleArchiveInspector().inspect(temp.resolve("missing.zip"), "v1.0.0"));
+
+    Path emptyFile = Files.createTempFile(temp, "empty-", ".zip");
+    assertThrows(IllegalArgumentException.class,
+        () -> new GoModuleArchiveInspector().inspect(emptyFile, "v1.0.0"));
+
+    Path archive = zip(Map.of(
+        "example.com/acme/demo@v1.0.0/demo.go", new byte[] {1}));
+    assertThrows(IllegalArgumentException.class,
+        () -> new GoModuleArchiveInspector(1, 1024, 1024, 10).inspect(archive, "v1.0.0"));
+    assertThrows(IllegalArgumentException.class,
+        () -> new GoModuleArchiveInspector().inspect(archive, "not-semver"));
+
+    Path entryless = zip(Map.of());
+    assertThrows(IllegalArgumentException.class,
+        () -> new GoModuleArchiveInspector().inspect(entryless, "v1.0.0"));
+  }
+
+  @Test
+  void rejectsEntryCountRootAndCoordinateViolations() throws Exception {
+    Map<String, byte[]> twoEntries = new LinkedHashMap<>();
+    twoEntries.put("example.com/acme/demo@v1.0.0/a.go", new byte[] {1});
+    twoEntries.put("example.com/acme/demo@v1.0.0/b.go", new byte[] {2});
+    Path tooMany = zip(twoEntries);
+    assertThrows(IllegalArgumentException.class,
+        () -> new GoModuleArchiveInspector(1024 * 1024, 1024, 1024, 1)
+            .inspect(tooMany, "v1.0.0"));
+
+    Path rootAsFile = zip(Map.of(
+        "example.com/acme/demo@v1.0.0", new byte[] {1}));
+    assertThrows(IllegalArgumentException.class,
+        () -> new GoModuleArchiveInspector().inspect(rootAsFile, "v1.0.0"));
+
+    Path multipleRoots = zip(Map.of(
+        "example.com/acme/one@v1.0.0/a.go", new byte[] {1},
+        "example.com/acme/two@v1.0.0/b.go", new byte[] {2}));
+    assertThrows(IllegalArgumentException.class,
+        () -> new GoModuleArchiveInspector().inspect(multipleRoots, "v1.0.0"));
+
+    Path missingVersion = zip(Map.of(
+        "example.com/acme/demo@/", new byte[0]));
+    assertThrows(IllegalArgumentException.class,
+        () -> new GoModuleArchiveInspector().inspect(missingVersion, "v1.0.0"));
+
+    Path absolute = zip(Map.of(
+        "/example.com/acme/demo@v1.0.0/a.go", new byte[] {1}));
+    assertThrows(IllegalArgumentException.class,
+        () -> new GoModuleArchiveInspector().inspect(absolute, "v1.0.0"));
+  }
+
+  @Test
+  void rejectsMalformedOrMismatchedGoModAndOversizedLicense() throws Exception {
+    Path invalidUtf8 = zip(Map.of(
+        "example.com/acme/demo@v1.0.0/go.mod", new byte[] {(byte) 0xc3, 0x28}));
+    assertThrows(IllegalArgumentException.class,
+        () -> new GoModuleArchiveInspector().inspect(invalidUtf8, "v1.0.0"));
+
+    Path missingDirective = zip(Map.of(
+        "example.com/acme/demo@v1.0.0/go.mod",
+        "go 1.25\n".getBytes(StandardCharsets.UTF_8)));
+    assertThrows(IllegalArgumentException.class,
+        () -> new GoModuleArchiveInspector().inspect(missingDirective, "v1.0.0"));
+
+    Path mismatchedDirective = zip(Map.of(
+        "example.com/acme/demo@v1.0.0/go.mod",
+        "module example.com/acme/other\n".getBytes(StandardCharsets.UTF_8)));
+    assertThrows(IllegalArgumentException.class,
+        () -> new GoModuleArchiveInspector().inspect(mismatchedDirective, "v1.0.0"));
+
+    Path license = zip(Map.of(
+        "example.com/acme/demo@v1.0.0/LICENSE", new byte[] {1, 2, 3}));
+    assertThrows(IllegalArgumentException.class,
+        () -> new GoModuleArchiveInspector(1024 * 1024, 1024, 2, 10)
+            .inspect(license, "v1.0.0"));
   }
 
   private Path zip(Map<String, byte[]> entries) throws IOException {

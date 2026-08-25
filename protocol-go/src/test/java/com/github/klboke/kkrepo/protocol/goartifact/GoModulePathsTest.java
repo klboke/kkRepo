@@ -42,4 +42,21 @@ class GoModulePathsTest {
     assertThrows(IllegalArgumentException.class, () -> GoModulePaths.unescape("example.com/Acme"));
     assertThrows(IllegalArgumentException.class, () -> GoModulePaths.unescape("example.com/!A"));
   }
+
+  @Test
+  void rejectsAdditionalEscapingAndPathMajorEdgeCases() {
+    assertThrows(IllegalArgumentException.class, () -> GoModulePaths.require("example.com/dem%c"));
+    assertThrows(IllegalArgumentException.class, () -> GoModulePaths.require("example.com/con"));
+    assertThrows(IllegalArgumentException.class, () -> GoModulePaths.require("gopkg.in/yaml.v01"));
+    assertThrows(IllegalArgumentException.class, () -> GoModulePaths.unescape(null));
+    assertThrows(IllegalArgumentException.class, () -> GoModulePaths.unescape("example.com/demo!"));
+    assertThrows(IllegalArgumentException.class, () -> GoModulePaths.unescape("example.com/!1demo"));
+
+    assertThrows(IllegalArgumentException.class,
+        () -> GoModulePaths.requireVersionSuffix("example.com/acme/demo/v2", "v1.0.0"));
+    assertThrows(IllegalArgumentException.class,
+        () -> GoModulePaths.requireVersionSuffix(
+            "example.com/acme/demo/v999999999999999999999999999999", "v2.0.0"));
+    GoModulePaths.requireVersionSuffix("gopkg.in/yaml.v2-unstable", "v2.0.0");
+  }
 }

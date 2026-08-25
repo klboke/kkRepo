@@ -50,4 +50,19 @@ class GoVersionsTest {
     assertThrows(IllegalArgumentException.class, () -> GoVersions.requireCanonical("v01.2.3"));
     assertThrows(IllegalArgumentException.class, () -> GoVersions.requireCanonical("v1.2"));
   }
+
+  @Test
+  void validatesEscapedVersionsAndOverflowBoundaries() {
+    assertTrue(GoVersions.isCanonical("v1.2.3"));
+    assertFalse(GoVersions.isCanonical("1.2.3"));
+    assertThrows(IllegalArgumentException.class, () -> GoVersions.unescape(null));
+    assertThrows(IllegalArgumentException.class, () -> GoVersions.unescape("v1.2.3-!"));
+    assertThrows(IllegalArgumentException.class, () -> GoVersions.unescape("v1.2.3-!1"));
+    assertThrows(IllegalArgumentException.class, () -> GoVersions.unescape("v1.2.3-RC1"));
+    assertThrows(IllegalArgumentException.class, () -> GoVersions.major("v2147483648.0.0"));
+    assertTrue(GoVersions.pseudoTimestamp("v0.0.0-20251301120000-abcdef1").isEmpty());
+    assertEquals(0, GoVersions.compare("v1.2.3-rc.1", "v1.2.3-rc.1"));
+    assertTrue(GoVersions.listVersions(null).isEmpty());
+    assertTrue(GoVersions.latest(null).isEmpty());
+  }
 }

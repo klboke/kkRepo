@@ -264,6 +264,87 @@ class GoAssetWriterTest {
     verify(assetDao, times(2)).tryInsertAsset(any());
   }
 
+  @Test
+  void rejectsMismatchedHostedReleaseCoordinatesBeforeUploading() {
+    Fixture fixture = fixture();
+    GoPath module = GoPath.versioned("example.com/acme/demo", "v1.2.3", GoAssetKind.MODULE);
+    GoPath wrongInfo = GoPath.versioned("example.com/acme/demo", "v1.2.4", GoAssetKind.INFO);
+    GoPath archive = GoPath.versioned("example.com/acme/demo", "v1.2.3", GoAssetKind.PACKAGE);
+
+    assertThrows(IllegalArgumentException.class, () -> fixture.writer.writeHostedRelease(
+        hostedRuntime(), fixture.storage, 7L,
+        module, new byte[] {1}, wrongInfo, new byte[] {2}, archive,
+        Path.of("unused.zip"), "alice", "127.0.0.1", false));
+
+    verify(fixture.storage, never()).putFile(anyString(), anyString(), any(), anyString());
+  }
+
+  @Test
+  void cleansHostedUploadsAndKeepsReusableArchiveWhenWritePolicyRejectsRelease() throws Exception {
+    AssetDao assetDao = mock(AssetDao.class);
+    ComponentDao componentDao = mock(ComponentDao.class);
+    BrowseNodeDao browseNodeDao = mock(BrowseNodeDao.class);
+    AssetMetadataCache cache = mock(AssetMetadataCache.class);
+    BlobStorage storage = mock(BlobStorage.class);
+    GoAssetWriter writer = new GoAssetWriter(assetDao, componentDao, browseNodeDao, cache, null);
+    AssetBlobRecord reusableArchive = blob(5L, "reused-archive");
+    when(assetDao.findReusableBlobBySha256(eq(7L), anyString(), anyLong()))
+        .thenAnswer(invocation -> ((Long) invocation.getArgument(2)) == 7L
+            ? Optional.of(reusableArchive)
+            : Optional.empty());
+    when(storage.putFile(eq("go-hosted"), anyString(), any(Path.class), anyString()))
+        .thenAnswer(invocation -> new BlobReference(
+            "bucket", invocation.getArgument(1), invocation.getArgument(3),
+            Files.size(invocation.getArgument(2))));
+    when(assetDao.findAssetByPath(eq(10L), anyString())).thenReturn(Optional.of(asset(11L, 99L)));
+    Path archiveFile = Files.createTempFile("go-hosted-rejected-", ".zip");
+    Files.writeString(archiveFile, "archive", StandardCharsets.UTF_8);
+    GoPath module = GoPath.versioned("example.com/acme/demo", "v1.2.3", GoAssetKind.MODULE);
+    GoPath info = GoPath.versioned("example.com/acme/demo", "v1.2.3", GoAssetKind.INFO);
+    GoPath archive = GoPath.versioned("example.com/acme/demo", "v1.2.3", GoAssetKind.PACKAGE);
+
+    try {
+      assertThrows(com.github.klboke.kkrepo.server.maven.MavenExceptions.WritePolicyDenied.class,
+          () -> writer.writeHostedRelease(
+              hostedRuntime(), storage, 7L,
+              module, new byte[] {1}, info, new byte[] {2}, archive, archiveFile,
+              "alice", "127.0.0.1", false));
+    } finally {
+      Files.deleteIfExists(archiveFile);
+    }
+
+    verify(storage, times(2)).putFile(eq("go-hosted"), anyString(), any(Path.class), anyString());
+    verify(storage, times(2)).delete(any());
+  }
+
+  @Test
+  void removesBufferedTempWhenProxyBodyFailsBeforeUpload() {
+    Fixture fixture = fixture();
+
+    assertThrows(NullPointerException.class, () -> fixture.writer.write(
+        runtime(), fixture.storage, 7L, GoPath.parse(PATH), null, Map.of()));
+
+    verify(fixture.storage, never()).putFile(anyString(), anyString(), any(), anyString());
+  }
+
+  @Test
+  void cleansMetadataUploadsWhenHostedArchiveCannotBeRead() {
+    Fixture fixture = fixture();
+    when(fixture.storage.putFile(eq("go-hosted"), anyString(), any(Path.class), anyString()))
+        .thenAnswer(invocation -> new BlobReference(
+            "bucket", invocation.getArgument(1), invocation.getArgument(3), 1L));
+    GoPath module = GoPath.versioned("example.com/acme/demo", "v1.2.3", GoAssetKind.MODULE);
+    GoPath info = GoPath.versioned("example.com/acme/demo", "v1.2.3", GoAssetKind.INFO);
+    GoPath archive = GoPath.versioned("example.com/acme/demo", "v1.2.3", GoAssetKind.PACKAGE);
+
+    assertThrows(IllegalStateException.class, () -> fixture.writer.writeHostedRelease(
+        hostedRuntime(), fixture.storage, 7L,
+        module, new byte[] {1}, info, new byte[] {2}, archive,
+        Path.of("missing-go-module-archive.zip"), "alice", "127.0.0.1", false));
+
+    verify(fixture.storage, times(2)).delete(any());
+  }
+
   private static void stubUploadedBlob(Fixture fixture) {
     when(fixture.assetDao.findReusableBlobBySha256(eq(7L), anyString(), anyLong()))
         .thenReturn(Optional.empty());

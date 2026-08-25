@@ -7,6 +7,7 @@ import com.github.klboke.kkrepo.server.apt.AptService;
 import com.github.klboke.kkrepo.server.conda.CondaService;
 import com.github.klboke.kkrepo.server.conan.ConanService;
 import com.github.klboke.kkrepo.server.huggingface.HuggingFaceService;
+import com.github.klboke.kkrepo.server.goartifact.GoHostedService;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.r.RService;
 import com.github.klboke.kkrepo.server.routing.RepositoryProtocolDispatcher;
@@ -96,5 +97,9 @@ public final class RepositoryProtocolControllerTestSupport extends RepositoryPro
 
   void setRService(RService service) {
     handler.setRService(service);
+  }
+
+  void setGoHostedService(GoHostedService service) {
+    handler.setGoHostedService(service);
   }
 }

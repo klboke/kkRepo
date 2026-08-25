@@ -3,7 +3,6 @@ package com.github.klboke.kkrepo.server.goartifact;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
-import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.protocol.goartifact.GoVersions;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
@@ -191,12 +190,7 @@ public class GoGroupService {
   }
 
   private static boolean eligible(RepositoryRuntime member) {
-    if (!member.online() || member.format() != RepositoryFormat.GO) return false;
-    if (member.type() == RepositoryType.GROUP) {
-      throw new MavenExceptions.MethodNotAllowed(
-          "Nested Go group repositories are not supported: " + member.name());
-    }
-    return true;
+    return member.online() && member.format() == RepositoryFormat.GO;
   }
 
   private static GoPath parse(String rawPath) {

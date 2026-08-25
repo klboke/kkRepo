@@ -15,6 +15,8 @@ import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
@@ -125,6 +127,104 @@ class GoGroupServiceTest {
             runtime(1L, "group", RepositoryType.GROUP, List.of(nested)), path, false));
   }
 
+  @Test
+  void reportsEmptyInvalidAndExhaustedGroupRequestsAsNotFound() {
+    GoHostedService hosted = mock(GoHostedService.class);
+    GoProxyService proxy = mock(GoProxyService.class);
+    GoGroupService service = service(hosted, proxy);
+    RepositoryRuntime empty = runtime(1L, "group", RepositoryType.GROUP, List.of());
+
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(empty, "example.com/demo/@v/v1.0.0.mod", false));
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(empty, "not-a-go-module/@v/list", false));
+
+    RepositoryRuntime miss = runtime(2L, "hosted", RepositoryType.HOSTED, List.of());
+    String path = "example.com/demo/@v/v1.0.0.zip";
+    when(hosted.get(miss, path, false))
+        .thenThrow(new MavenExceptions.MavenNotFoundException(path));
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(
+            runtime(1L, "group", RepositoryType.GROUP, List.of(miss)), path, false));
+
+    RepositoryRuntime offline = offlineRuntime(3L, "offline");
+    RepositoryRuntime group = runtime(1L, "group", RepositoryType.GROUP, List.of(offline));
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(group, "example.com/demo/@v/list", false));
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(group, "example.com/demo/@latest", false));
+  }
+
+  @Test
+  void listPreservesMissingInvalidUpstreamAndIoFailures() {
+    String path = "example.com/demo/@v/list";
+
+    GoHostedService hosted = mock(GoHostedService.class);
+    GoProxyService proxy = mock(GoProxyService.class);
+    RepositoryRuntime miss = runtime(2L, "hosted", RepositoryType.HOSTED, List.of());
+    RepositoryRuntime failed = runtime(3L, "proxy", RepositoryType.PROXY, List.of());
+    when(hosted.get(miss, path, false))
+        .thenThrow(new MavenExceptions.MavenNotFoundException(path));
+    when(proxy.get(failed, path, false))
+        .thenThrow(new MavenExceptions.BadUpstreamException("offline"));
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> service(hosted, proxy).get(
+            runtime(1L, "group", RepositoryType.GROUP, List.of(miss, failed)), path, false));
+
+    GoHostedService invalidHosted = mock(GoHostedService.class);
+    RepositoryRuntime invalid = runtime(4L, "invalid", RepositoryType.HOSTED, List.of());
+    when(invalidHosted.get(invalid, path, false)).thenReturn(text("v1.0.0\nnot-a-version\n"));
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> service(invalidHosted, mock(GoProxyService.class)).get(
+            runtime(1L, "group", RepositoryType.GROUP, List.of(invalid)), path, false));
+
+    GoHostedService unreadableHosted = mock(GoHostedService.class);
+    RepositoryRuntime unreadable = runtime(5L, "unreadable", RepositoryType.HOSTED, List.of());
+    when(unreadableHosted.get(unreadable, path, false)).thenReturn(unreadable());
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> service(unreadableHosted, mock(GoProxyService.class)).get(
+            runtime(1L, "group", RepositoryType.GROUP, List.of(unreadable)), path, false));
+  }
+
+  @Test
+  void latestSkipsMemberMissesAndRejectsMalformedMetadata() {
+    String path = "example.com/demo/@latest";
+    GoHostedService hosted = mock(GoHostedService.class);
+    GoProxyService proxy = mock(GoProxyService.class);
+    RepositoryRuntime miss = runtime(2L, "hosted", RepositoryType.HOSTED, List.of());
+    RepositoryRuntime failed = runtime(3L, "proxy", RepositoryType.PROXY, List.of());
+    when(hosted.get(miss, path, false))
+        .thenThrow(new MavenExceptions.MavenNotFoundException(path));
+    when(proxy.get(failed, path, false))
+        .thenThrow(new MavenExceptions.BadUpstreamException("offline"));
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> service(hosted, proxy).get(
+            runtime(1L, "group", RepositoryType.GROUP, List.of(miss, failed)), path, false));
+
+    GoHostedService malformedHosted = mock(GoHostedService.class);
+    RepositoryRuntime malformed = runtime(4L, "malformed", RepositoryType.HOSTED, List.of());
+    when(malformedHosted.get(malformed, path, false))
+        .thenReturn(json("{\"Time\":\"not-an-instant\"}"));
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> service(malformedHosted, mock(GoProxyService.class)).get(
+            runtime(1L, "group", RepositoryType.GROUP, List.of(malformed)), path, false));
+  }
+
+  @Test
+  void rendersHeadResponsesForGeneratedMetadata() {
+    GoHostedService hosted = mock(GoHostedService.class);
+    RepositoryRuntime member = runtime(2L, "hosted", RepositoryType.HOSTED, List.of());
+    String listPath = "example.com/demo/@v/list";
+    String latestPath = "example.com/demo/@latest";
+    when(hosted.get(member, listPath, false)).thenReturn(text("v1.0.0\n"));
+    when(hosted.get(member, latestPath, false)).thenReturn(json(
+        "{\"Version\":\"v1.0.0\",\"Time\":\"2026-08-25T00:00:00Z\"}"));
+    RepositoryRuntime group = runtime(1L, "group", RepositoryType.GROUP, List.of(member));
+
+    assertNull(service(hosted, mock(GoProxyService.class)).get(group, listPath, true).body());
+    assertNull(service(hosted, mock(GoProxyService.class)).get(group, latestPath, true).body());
+  }
+
   private static GoGroupService service(GoHostedService hosted, GoProxyService proxy) {
     return new GoGroupService(hosted, proxy, new ObjectMapper().findAndRegisterModules());
   }
@@ -139,6 +239,23 @@ class GoGroupServiceTest {
     byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
     return MavenResponse.ok(
         new ByteArrayInputStream(bytes), bytes.length, "application/json", null, Instant.EPOCH);
+  }
+
+  private static MavenResponse unreadable() {
+    InputStream body = new InputStream() {
+      @Override
+      public int read() throws IOException {
+        throw new IOException("broken stream");
+      }
+    };
+    return MavenResponse.ok(body, 1L, "text/plain", null, Instant.EPOCH);
+  }
+
+  private static RepositoryRuntime offlineRuntime(long id, String name) {
+    return new RepositoryRuntime(
+        id, name, RepositoryFormat.GO, RepositoryType.HOSTED, name, false, 7L,
+        "ALLOW_ONCE", null, null, true, null,
+        60, 60, true, null, List.of());
   }
 
   private static RepositoryRuntime runtime(

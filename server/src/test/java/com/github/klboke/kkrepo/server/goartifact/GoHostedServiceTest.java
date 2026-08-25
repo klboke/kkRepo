@@ -27,12 +27,15 @@ import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -142,6 +145,86 @@ class GoHostedServiceTest {
     assertEquals("archive", new String(response.body().readAllBytes(), StandardCharsets.UTF_8));
   }
 
+  @Test
+  void mapsInvalidArchivesAndInputFailuresToProtocolErrors() {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime("ALLOW");
+
+    assertThrows(MavenExceptions.LayoutPolicyViolation.class, () -> fixture.service.publish(
+        runtime, "not-semver.zip", new ByteArrayInputStream(new byte[] {1}), "alice", "ip"));
+    assertThrows(MavenExceptions.LayoutPolicyViolation.class, () -> fixture.service.publish(
+        runtime, VERSION + ".zip", null, "alice", "ip"));
+    assertThrows(MavenExceptions.LayoutPolicyViolation.class, () -> fixture.service.publish(
+        runtime, VERSION + ".zip", new ByteArrayInputStream(new byte[0]), "alice", "ip"));
+    assertThrows(MavenExceptions.BadRequestException.class, () -> fixture.service.publish(
+        runtime, VERSION + ".zip", brokenInput(), "alice", "ip"));
+
+    when(fixture.inspector.inspect(any(Path.class), eq(VERSION)))
+        .thenThrow(new IllegalArgumentException("archive coordinate mismatch"));
+    assertThrows(MavenExceptions.LayoutPolicyViolation.class, () -> fixture.service.publish(
+        runtime, VERSION + ".zip", new ByteArrayInputStream(new byte[] {1}), "alice", "ip"));
+    verifyNoInteractions(fixture.writer);
+  }
+
+  @Test
+  void rejectsEmptyListsInvalidPathsAndNonHostedRepositories() {
+    Fixture fixture = fixture();
+    when(fixture.componentDao.listByName(10L, MODULE)).thenReturn(List.of());
+
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> fixture.service.get(runtime("ALLOW_ONCE"), MODULE + "/@v/list", false));
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> fixture.service.get(runtime("ALLOW_ONCE"), "not-a-module/@v/list", false));
+    assertThrows(MavenExceptions.MethodNotAllowed.class,
+        () -> fixture.service.get(runtime("ALLOW_ONCE", RepositoryType.PROXY, 7L), ZIP_PATH, false));
+  }
+
+  @Test
+  void loadsMetadataOnCacheMissAndServesHeadWithoutDownloadPolicy() {
+    Fixture fixture = fixture();
+    AssetRecord asset = snapshot(ZIP_PATH, "application/zip").toAssetRecord();
+    AssetBlobRecord blob = snapshot(ZIP_PATH, "application/zip").toBlobRecord();
+    when(fixture.assetDao.findAssetByPath(10L, ZIP_PATH)).thenReturn(Optional.of(asset));
+    when(fixture.assetDao.findBlobById(2L)).thenReturn(Optional.of(blob));
+    when(fixture.cache.find(eq(10L), eq(ZIP_PATH), any())).thenAnswer(invocation -> {
+      @SuppressWarnings("unchecked")
+      Supplier<Optional<AssetMetadataCache.Loaded>> loader = invocation.getArgument(2);
+      AssetMetadataCache.Loaded loaded = loader.get().orElseThrow();
+      return Optional.of(CachedAssetMetadata.of(loaded.asset(), loaded.blob()));
+    });
+    when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
+    GoHostedService service = new GoHostedService(
+        fixture.assetDao,
+        fixture.componentDao,
+        fixture.registry,
+        fixture.writer,
+        fixture.inspector,
+        fixture.cache,
+        new ObjectMapper().findAndRegisterModules());
+
+    MavenResponse response = service.get(runtime("ALLOW_ONCE"), ZIP_PATH, true);
+
+    assertNull(response.body());
+    assertEquals(7L, response.contentLength());
+    assertEquals("sha256", response.etag());
+    verifyNoInteractions(fixture.downloadPolicy);
+  }
+
+  @Test
+  void requiresHostedRepositoriesToHaveBlobStorage() {
+    Fixture fixture = fixture();
+    when(fixture.inspector.inspect(any(Path.class), eq(VERSION)))
+        .thenReturn(new GoModuleArchiveInspector.Inspected(
+            MODULE, MODULE, VERSION, ("module " + MODULE + "\n").getBytes(StandardCharsets.UTF_8)));
+
+    assertThrows(IllegalStateException.class, () -> fixture.service.publish(
+        runtime("ALLOW", RepositoryType.HOSTED, null),
+        VERSION + ".zip",
+        new ByteArrayInputStream(new byte[] {1}),
+        "alice",
+        "ip"));
+  }
+
   private static Fixture fixture() {
     AssetDao assetDao = mock(AssetDao.class);
     ComponentDao componentDao = mock(ComponentDao.class);
@@ -165,9 +248,23 @@ class GoHostedServiceTest {
   }
 
   private static RepositoryRuntime runtime(String writePolicy) {
+    return runtime(writePolicy, RepositoryType.HOSTED, 7L);
+  }
+
+  private static RepositoryRuntime runtime(
+      String writePolicy, RepositoryType type, Long blobStoreId) {
     return new RepositoryRuntime(
-        10L, "go-hosted", RepositoryFormat.GO, RepositoryType.HOSTED, "go-hosted", true, 7L,
+        10L, "go-hosted", RepositoryFormat.GO, type, "go-hosted", true, blobStoreId,
         writePolicy, null, null, true, null, 60, 60, true, null, List.of());
+  }
+
+  private static InputStream brokenInput() {
+    return new InputStream() {
+      @Override
+      public int read() throws IOException {
+        throw new IOException("broken upload");
+      }
+    };
   }
 
   private static ComponentRecord component(long id, String version, String kind, Instant updatedAt) {
