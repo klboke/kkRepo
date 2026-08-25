@@ -205,7 +205,8 @@ class ComponentUploadBlackBoxCompatibilityTest {
   }
 
   private static Map<String, SpecShape> supportedSpecs(byte[] body) throws Exception {
-    Set<String> supported = Set.of("maven2", "npm", "pypi", "helm");
+    Set<String> supported = Set.of(
+        "maven2", "npm", "pypi", "helm", "raw", "yum", "nuget", "rubygems");
     Map<String, SpecShape> result = new LinkedHashMap<>();
     for (Map<String, Object> spec : MAPPER.readValue(body, LIST_MAP)) {
       String format = String.valueOf(spec.get("format"));

@@ -337,6 +337,10 @@
     "Version": "版本",
     "Upload": "上传",
     "Upload content to the repository": "上传内容到仓库",
+    "Directory": "目录",
+    "Filename": "文件名",
+    "Add asset": "添加文件",
+    "Remove": "移除",
     "My Token": "我的 Token",
     "API keys for package clients": "包客户端使用的 API Key",
     "NpmToken": "NpmToken",
@@ -516,7 +520,7 @@
     "DISABLED": "DISABLED",
     "SUCCESS": "SUCCESS",
     "FAILURE": "FAILURE",
-    "File": "File",
+    "File": "文件",
     "AWS S3 SDK": "AWS S3 SDK",
     "OSS Native SDK": "OSS Native SDK"
   };
