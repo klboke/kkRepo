@@ -1901,13 +1901,17 @@ swift_registry_login() {
   local directory="$3"
   local home="$4"
   local registry="$5"
+  local step="swift-$label-registry-login"
+  local status=0
   prepare_swift_netrc "$home"
-  run_logged_in "swift-$label-registry-login" "$directory" \
+  run_logged_in "$step" "$directory" \
     run_with_timeout "$SWIFT_LOGIN_TIMEOUT_SECONDS" env \
     HOME="$home" XDG_CONFIG_HOME="$home/.config" \
     "$swift_bin" package-registry login "$registry/login" \
     --netrc --netrc-file "$home/.netrc" \
-    --username "$KKREPO_USER" --password "$KKREPO_PASSWORD" --no-confirm
+    --username "$KKREPO_USER" --password "$KKREPO_PASSWORD" --no-confirm \
+    || status=$?
+  accept_swift_registry_login_exit "$step" "$status" "$home/.netrc"
 }
 
 assert_swift_invalid_login() {
@@ -1945,15 +1949,41 @@ swift_registry_token_login() {
   local directory="$3"
   local home="$4"
   local registry="$5"
+  local step="swift-$label-registry-token-login"
+  local status=0
   local token
   token="$(create_api_key GenericToken "Swift client E2E $label $STAMP")"
   add_redaction_value "$token"
   prepare_swift_netrc "$home"
-  run_logged_in "swift-$label-registry-token-login" "$directory" \
+  run_logged_in "$step" "$directory" \
     run_with_timeout "$SWIFT_LOGIN_TIMEOUT_SECONDS" env \
     HOME="$home" XDG_CONFIG_HOME="$home/.config" \
     "$swift_bin" package-registry login "$registry/login" \
-    --netrc --netrc-file "$home/.netrc" --token "$token" --no-confirm
+    --netrc --netrc-file "$home/.netrc" --token "$token" --no-confirm \
+    || status=$?
+  accept_swift_registry_login_exit "$step" "$status" "$home/.netrc"
+}
+
+accept_swift_registry_login_exit() {
+  local step="$1"
+  local status="$2"
+  local netrc_file="$3"
+  local log_file="$ARTIFACT_DIR/$step.log"
+  if [[ "$status" -eq 0 ]]; then
+    return 0
+  fi
+  # Swift 6 can sporadically SIGSEGV during process teardown after it has already
+  # persisted the credentials and registry configuration. Only accept that exact
+  # exit and all three success markers; later authenticated operations still prove
+  # that the saved credentials work against the repository.
+  if [[ "$status" -eq 139 && "$step" == swift-6.x-* && -s "$netrc_file" ]] \
+      && grep -Fq 'Login successful.' "$log_file" \
+      && grep -Fq 'Credentials have been saved to netrc file.' "$log_file" \
+      && grep -Fq 'Registry configuration updated.' "$log_file"; then
+    log "$step completed before the Swift client crashed during process teardown"
+    return 0
+  fi
+  return "$status"
 }
 
 swift_supports_registry_login() {
