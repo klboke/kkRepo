@@ -815,27 +815,67 @@ EOF
 
 test_go() {
   need go
+  need zip
   local dir="$WORK_DIR/go"
-  mkdir -p "$dir"
-  cat >"$dir/go.mod" <<'EOF'
+  local module="kkrepo-client-e2e.local/module-$STAMP"
+  local version="v1.0.0"
+  local hosted_root="$dir/hosted/$module@$version"
+  mkdir -p "$hosted_root"
+  cat >"$hosted_root/go.mod" <<EOF
+module $module
+
+go 1.22
+EOF
+  cat >"$hosted_root/module.go" <<'EOF'
+package module
+
+const Value = "kkrepo client e2e"
+EOF
+  (
+    cd "$dir/hosted"
+    zip -qr "$dir/$version.zip" "$module@$version"
+  )
+  run_logged go-hosted-upload curl -m 30 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    --upload-file "$dir/$version.zip" \
+    "$KKREPO_URL/repository/go-hosted/$version.zip"
+
+  mkdir -p "$dir/private"
+  cat >"$dir/private/go.mod" <<'EOF'
+module kkrepo-client-e2e.local/probe
+
+go 1.22
+EOF
+  run_logged go-hosted-download env \
+    GOPROXY="$KKREPO_URL/repository/go-group/" \
+    GONOSUMDB="$module" \
+    GOSUMDB=off \
+    GOMODCACHE="$dir/private/gomodcache" \
+    GOCACHE="$dir/private/gocache" \
+    go mod download -json "$module@$version"
+  test -f "$dir/private/gomodcache/cache/download/$module/@v/$version.info"
+  test -f "$dir/private/gomodcache/cache/download/$module/@v/$version.mod"
+  test -f "$dir/private/gomodcache/cache/download/$module/@v/$version.zip"
+
+  mkdir -p "$dir/public"
+  cat >"$dir/public/go.mod" <<'EOF'
 module kkrepo-client-e2e.local/probe
 
 go 1.22
 
 require rsc.io/quote v1.5.2
 EOF
-  # Go refuses userinfo credentials on explicit HTTP module proxy URLs; the
-  # disposable kkrepo fixture keeps anonymous read enabled for this resolve-only flow.
+  # Go refuses userinfo credentials on explicit HTTP module proxy URLs; the disposable fixture
+  # keeps anonymous read enabled while the group proves hosted-first then proxy fallback.
   run_logged go-download env \
-    GOPROXY="$KKREPO_URL/repository/go-proxy/" \
+    GOPROXY="$KKREPO_URL/repository/go-group/" \
     GONOSUMDB=rsc.io/quote \
     GOSUMDB=off \
-    GOMODCACHE="$dir/gomodcache" \
-    GOCACHE="$dir/gocache" \
+    GOMODCACHE="$dir/public/gomodcache" \
+    GOCACHE="$dir/public/gocache" \
     go mod download -json rsc.io/quote@v1.5.2
-  test -f "$dir/gomodcache/cache/download/rsc.io/quote/@v/v1.5.2.info"
-  test -f "$dir/gomodcache/cache/download/rsc.io/quote/@v/v1.5.2.mod"
-  test -f "$dir/gomodcache/cache/download/rsc.io/quote/@v/v1.5.2.zip"
+  test -f "$dir/public/gomodcache/cache/download/rsc.io/quote/@v/v1.5.2.info"
+  test -f "$dir/public/gomodcache/cache/download/rsc.io/quote/@v/v1.5.2.mod"
+  test -f "$dir/public/gomodcache/cache/download/rsc.io/quote/@v/v1.5.2.zip"
 }
 
 test_helm() {
@@ -3947,7 +3987,7 @@ run_selected_tests() {
         ;;
       go)
         test_go
-        register_cleanup_fixture go go-proxy "*rsc.io/quote*" go
+        register_cleanup_fixture go go-hosted "*module-$STAMP*" go
         ;;
       helm)
         test_helm

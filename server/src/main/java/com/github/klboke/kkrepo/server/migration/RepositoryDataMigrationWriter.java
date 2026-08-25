@@ -1148,6 +1148,9 @@ class RepositoryDataMigrationWriter {
     if (format == RepositoryFormat.HUGGINGFACE) {
       return "model-revision";
     }
+    if (format == RepositoryFormat.GO) {
+      return "go-module";
+    }
     return "package";
   }
 

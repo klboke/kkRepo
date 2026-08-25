@@ -742,6 +742,15 @@ ensure_kkrepo_repositories() {
     "group":{"memberNames":["pypi-hosted","pypi-proxy"]}
   }'
 
+  kkrepo_create_repo "go-hosted" '{
+    "name":"go-hosted",
+    "recipe":"go-hosted",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "hosted":{"writePolicy":"ALLOW"}
+  }'
+
   kkrepo_create_repo "go-proxy" '{
     "name":"go-proxy",
     "recipe":"go-proxy",
@@ -757,7 +766,7 @@ ensure_kkrepo_repositories() {
     "online":true,
     "blobStoreName":"default",
     "strictContentTypeValidation":true,
-    "group":{"memberNames":["go-proxy"]}
+    "group":{"memberNames":["go-hosted","go-proxy"]}
   }'
 
   kkrepo_create_repo "helm-hosted" '{

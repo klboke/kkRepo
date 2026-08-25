@@ -13,7 +13,7 @@ class GoRepositoryProtocolTest {
 
     assertEquals(RepositoryFormat.GO, protocol.format());
     assertEquals(
-        new ProtocolCapability(false, false, true, true, true),
+        new ProtocolCapability(true, true, true, true, true),
         protocol.capability());
   }
 }

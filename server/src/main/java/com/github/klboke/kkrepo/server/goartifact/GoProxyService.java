@@ -190,7 +190,8 @@ public class GoProxyService {
       String etag = stringAttr(stored.blob().attributes(), "remoteEtag");
       Instant lastModified = instantAttr(stored.blob().attributes(), "remoteLastModified");
       if (lastModified == null) lastModified = stored.asset().lastUpdatedAt();
-      return MavenResponse.ok(stored.openBody(), stored.blob().size(), path.contentType(), etag, lastModified);
+      return MavenResponse.ok(
+          stored.openBody(), stored.blob().size(), path.proxyContentType(), etag, lastModified);
     } catch (RuntimeException e) {
       stored.discardBody();
       throw e;
@@ -219,7 +220,7 @@ public class GoProxyService {
     String etag = stringAttr(blob.attributes(), "remoteEtag");
     Instant lastModified = instantAttr(blob.attributes(), "remoteLastModified");
     if (lastModified == null) lastModified = assetLastUpdatedAt;
-    String contentType = path.contentType();
+    String contentType = path.proxyContentType();
     if (headOnly) {
       return MavenResponse.noBody(200, blob.size(), contentType, etag, lastModified);
     }

@@ -75,7 +75,7 @@ Admin UI 和 Browse UI 由 Spring Boot 服务提供静态资源：
 | `protocol-maven` | Maven 路径、metadata、layout、policy 辅助逻辑 |
 | `protocol-npm` | npm 路径和 metadata 辅助逻辑 |
 | `protocol-pypi` | PyPI 协议辅助逻辑 |
-| `protocol-go` | Go module proxy 辅助逻辑 |
+| `protocol-go` | Go module path/version 校验，以及 hosted、proxy、group 协议辅助逻辑 |
 | `protocol-helm` | Helm chart 和 index 辅助逻辑 |
 | `protocol-cargo` | Cargo sparse registry 路径、index、publish body、checksum 和错误模型辅助逻辑 |
 | `protocol-pub` | Dart Pub package name、hosted URL、路径、archive、version metadata 和错误模型辅助逻辑 |

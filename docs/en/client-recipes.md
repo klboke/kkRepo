@@ -138,7 +138,7 @@ twine upload -r kkrepo dist/*
 
 ## Go
 
-Configure a Go module proxy repository or group repository:
+Configure a Go module group as the client read endpoint:
 
 ```bash
 go env -w GOPROXY=https://nexus.example.com/repository/go-group/,direct
@@ -158,7 +158,19 @@ go list -m github.com/pkg/errors@latest
 go mod download github.com/pkg/errors
 ```
 
-Go hosted upload is not supported. Use Go proxy/group repositories for read-through module proxy behavior.
+Publish a canonical module ZIP to a hosted repository. The archive must contain one
+`<module>@<version>/` root and the upload filename must be `<version>.zip`:
+
+```bash
+curl --fail-with-body \
+  -u "$KKREPO_USER:$KKREPO_PASSWORD" \
+  --upload-file v1.2.3.zip \
+  https://nexus.example.com/repository/go-hosted/v1.2.3.zip
+```
+
+Put `go-hosted` before `go-proxy` in `go-group` so private modules resolve before public fallback.
+See the [Go Repository Guide](repository-guides/go.md) for archive validation, write policy,
+Cleanup, and Artifact Scanning behavior.
 
 ## Helm
 

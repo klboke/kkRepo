@@ -35,6 +35,7 @@ import com.github.klboke.kkrepo.server.conan.ConanService;
 import com.github.klboke.kkrepo.server.apt.AptService;
 import com.github.klboke.kkrepo.server.alpine.AlpineService;
 import com.github.klboke.kkrepo.server.goartifact.GoGroupService;
+import com.github.klboke.kkrepo.server.goartifact.GoHostedService;
 import com.github.klboke.kkrepo.server.goartifact.GoProxyService;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
 import com.github.klboke.kkrepo.server.helm.HelmProxyService;
@@ -135,6 +136,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
   private final MavenGroupService group;
   private final GoProxyService goProxy;
   private final GoGroupService goGroup;
+  private GoHostedService goHosted;
   private final HelmHostedService helmHosted;
   private final HelmProxyService helmProxy;
   private final MavenHtmlListingService htmlListing;
@@ -185,6 +187,11 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
   @Autowired(required = false)
   public void setSwiftService(SwiftService swift) {
     this.swift = swift;
+  }
+
+  @Autowired(required = false)
+  public void setGoHostedService(GoHostedService goHosted) {
+    this.goHosted = goHosted;
   }
 
   @Autowired(required = false)
@@ -509,6 +516,15 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
         };
       }
       return toStreamingResponse(resp);
+    }
+    if (runtime.format() == RepositoryFormat.GO) {
+      String raw = extractRepositoryPath(name, request, true);
+      MavenResponse response;
+      try (InputStream body = request.getInputStream()) {
+        goHosted().publish(runtime, raw, body, userId, request.getRemoteAddr());
+        response = MavenResponse.created();
+      }
+      return ResponseEntity.status(response.status()).build();
     }
     if (runtime.format() == RepositoryFormat.HELM) {
       String raw = extractRepositoryPath(name, request);
@@ -1271,11 +1287,17 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
 
   private MavenResponse dispatchGoGet(RepositoryRuntime runtime, String rawPath, boolean headOnly) {
     return switch (runtime.type()) {
+      case HOSTED -> goHosted().get(runtime, rawPath, headOnly);
       case PROXY -> goProxy.get(runtime, rawPath, headOnly);
       case GROUP -> goGroup.get(runtime, rawPath, headOnly);
-      case HOSTED -> throw new MavenExceptions.MavenNotFoundException(
-          "Go hosted repositories are not supported: " + runtime.name());
     };
+  }
+
+  private GoHostedService goHosted() {
+    if (goHosted == null) {
+      throw new IllegalStateException("Go hosted service is not available");
+    }
+    return goHosted;
   }
 
   private MavenResponse dispatchRubygemsGet(

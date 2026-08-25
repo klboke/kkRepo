@@ -1,45 +1,219 @@
 package com.github.klboke.kkrepo.server.goartifact;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.protocol.goartifact.GoVersions;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.time.DateTimeException;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 import org.springframework.stereotype.Service;
 
 @Service
 public class GoGroupService {
-  private final GoProxyService proxy;
+  private static final int MAX_AGGREGATED_METADATA_BYTES = 32 * 1024 * 1024;
 
-  public GoGroupService(GoProxyService proxy) {
+  private final GoHostedService hosted;
+  private final GoProxyService proxy;
+  private final ObjectMapper objectMapper;
+
+  public GoGroupService(
+      GoHostedService hosted,
+      GoProxyService proxy,
+      ObjectMapper objectMapper) {
+    this.hosted = hosted;
     this.proxy = proxy;
+    this.objectMapper = objectMapper;
   }
 
   public MavenResponse get(RepositoryRuntime group, String rawPath, boolean headOnly) {
-    if (!group.isGroup()) {
-      throw new IllegalStateException("GoGroupService.get called on non-group " + group.name());
-    }
+    ensureGroup(group);
+    GoPath path = parse(rawPath);
     if (group.members().isEmpty()) {
-      throw new MavenExceptions.MavenNotFoundException(rawPath);
+      throw new MavenExceptions.MavenNotFoundException(path.path());
     }
-    for (RepositoryRuntime member : group.members()) {
-      try {
-        return dispatch(member, rawPath, headOnly);
-      } catch (MavenExceptions.MavenNotFoundException ignored) {
-        // Nexus group repositories continue to the next member on misses.
-      } catch (MavenExceptions.BadUpstreamException ignored) {
-        // Nexus' generic group handler only returns successful member responses.
-      } catch (MavenExceptions.MethodNotAllowed ignored) {
-        // Skip incompatible members; repository creation already validates format/type.
-      }
-    }
-    throw new MavenExceptions.MavenNotFoundException(rawPath);
+    return switch (path.kind()) {
+      case LIST -> list(group, path, headOnly);
+      case LATEST -> latest(group, path, headOnly);
+      case PACKAGE, INFO, MODULE -> first(group, path, headOnly);
+    };
   }
 
-  private MavenResponse dispatch(RepositoryRuntime member, String rawPath, boolean headOnly) {
+  private MavenResponse list(RepositoryRuntime group, GoPath path, boolean headOnly) {
+    Set<String> versions = new LinkedHashSet<>();
+    MavenExceptions.BadUpstreamException lastUpstream = null;
+    boolean successfulMember = false;
+    int metadataBytes = 0;
+    for (RepositoryRuntime member : group.members()) {
+      if (!eligible(member)) continue;
+      try {
+        MavenResponse response = memberGet(member, path.path(), false);
+        byte[] body = readBounded(response, MAX_AGGREGATED_METADATA_BYTES - metadataBytes);
+        metadataBytes += body.length;
+        Set<String> memberVersions = new LinkedHashSet<>();
+        for (String line : new String(body, StandardCharsets.UTF_8).split("\\R")) {
+          if (line.isBlank()) continue;
+          String version = line.trim();
+          if (!GoVersions.isCanonical(version)) {
+            throw new MavenExceptions.BadUpstreamException(
+                "Go group member returned an invalid version: " + version);
+          }
+          memberVersions.add(version);
+        }
+        versions.addAll(memberVersions);
+        successfulMember = true;
+      } catch (MavenExceptions.MavenNotFoundException ignored) {
+        // Continue in configured member order.
+      } catch (MavenExceptions.BadUpstreamException error) {
+        lastUpstream = error;
+      } catch (IOException error) {
+        lastUpstream = new MavenExceptions.BadUpstreamException(
+            "Failed reading Go group member version list", error);
+      }
+    }
+    if (!successfulMember) {
+      if (lastUpstream != null) throw lastUpstream;
+      throw new MavenExceptions.MavenNotFoundException(path.path());
+    }
+    List<String> listed = GoVersions.listVersions(versions);
+    String body = String.join("\n", listed);
+    // Nexus group lists are generated metadata and expose neither ETag nor Last-Modified.
+    return GoResponses.text(body, null, headOnly);
+  }
+
+  private MavenResponse latest(RepositoryRuntime group, GoPath path, boolean headOnly) {
+    List<LatestCandidate> candidates = new ArrayList<>();
+    MavenExceptions.BadUpstreamException lastUpstream = null;
+    int metadataBytes = 0;
+    for (RepositoryRuntime member : group.members()) {
+      if (!eligible(member)) continue;
+      MavenResponse response;
+      try {
+        response = memberGet(member, path.path(), false);
+      } catch (MavenExceptions.MavenNotFoundException ignored) {
+        // Continue in configured member order.
+        continue;
+      } catch (MavenExceptions.BadUpstreamException error) {
+        lastUpstream = error;
+        continue;
+      }
+      try {
+        byte[] body = readBounded(response, MAX_AGGREGATED_METADATA_BYTES - metadataBytes);
+        metadataBytes += body.length;
+        JsonNode info = objectMapper.readTree(body);
+        String version = requiredText(info, "Version");
+        Instant time = Instant.parse(requiredText(info, "Time"));
+        candidates.add(new LatestCandidate(
+            new GoVersions.Candidate(version, time), response.lastModified()));
+      } catch (MavenExceptions.BadUpstreamException error) {
+        lastUpstream = error;
+      } catch (IOException | IllegalArgumentException | DateTimeException error) {
+        lastUpstream = new MavenExceptions.BadUpstreamException(
+            "Go group member returned invalid @latest metadata", error);
+      }
+    }
+    GoVersions.Candidate selected = GoVersions.latest(
+        candidates.stream().map(LatestCandidate::candidate).toList()).orElse(null);
+    if (selected == null) {
+      if (lastUpstream != null) throw lastUpstream;
+      throw new MavenExceptions.MavenNotFoundException(path.path());
+    }
+    Instant selectedLastModified = candidates.stream()
+        .filter(candidate -> candidate.candidate().equals(selected))
+        .filter(candidate -> candidate.lastModified() != null)
+        .map(LatestCandidate::lastModified)
+        .findFirst()
+        .orElse(null);
+    return GoResponses.info(
+        objectMapper, selected.version(), selected.time(), selectedLastModified, headOnly);
+  }
+
+  private MavenResponse first(RepositoryRuntime group, GoPath path, boolean headOnly) {
+    MavenExceptions.BadUpstreamException lastUpstream = null;
+    for (RepositoryRuntime member : group.members()) {
+      if (!eligible(member)) continue;
+      try {
+        return memberGet(member, path.path(), headOnly);
+      } catch (MavenExceptions.MavenNotFoundException ignored) {
+        // Continue in configured member order.
+      } catch (MavenExceptions.BadUpstreamException error) {
+        lastUpstream = error;
+      }
+    }
+    if (lastUpstream != null) throw lastUpstream;
+    throw new MavenExceptions.MavenNotFoundException(path.path());
+  }
+
+  private MavenResponse memberGet(
+      RepositoryRuntime member,
+      String rawPath,
+      boolean headOnly) {
     return switch (member.type()) {
+      case HOSTED -> hosted.get(member, rawPath, headOnly);
       case PROXY -> proxy.get(member, rawPath, headOnly);
-      case GROUP -> get(member, rawPath, headOnly);
-      case HOSTED -> throw new MavenExceptions.MethodNotAllowed(
-          "Go hosted repositories are not supported: " + member.name());
+      case GROUP -> throw new MavenExceptions.MethodNotAllowed(
+          "Nested Go group repositories are not supported: " + member.name());
     };
+  }
+
+  private static byte[] readBounded(MavenResponse response, int remaining) throws IOException {
+    if (remaining < 0) {
+      throw new MavenExceptions.BadUpstreamException(
+          "Go group metadata exceeds the aggregation limit");
+    }
+    try (InputStream body = response.body()) {
+      if (body == null) return new byte[0];
+      byte[] bytes = body.readNBytes(remaining + 1);
+      if (bytes.length > remaining) {
+        throw new MavenExceptions.BadUpstreamException(
+            "Go group metadata exceeds the aggregation limit");
+      }
+      return bytes;
+    }
+  }
+
+  private static String requiredText(JsonNode node, String field) {
+    JsonNode value = node == null ? null : node.get(field);
+    if (value == null || !value.isTextual() || value.textValue().isBlank()) {
+      throw new IllegalArgumentException("Missing Go version info field: " + field);
+    }
+    return value.textValue();
+  }
+
+  private static boolean eligible(RepositoryRuntime member) {
+    if (!member.online() || member.format() != RepositoryFormat.GO) return false;
+    if (member.type() == RepositoryType.GROUP) {
+      throw new MavenExceptions.MethodNotAllowed(
+          "Nested Go group repositories are not supported: " + member.name());
+    }
+    return true;
+  }
+
+  private static GoPath parse(String rawPath) {
+    try {
+      return GoPath.parse(rawPath);
+    } catch (IllegalArgumentException error) {
+      throw new MavenExceptions.MavenNotFoundException(error.getMessage());
+    }
+  }
+
+  private static void ensureGroup(RepositoryRuntime runtime) {
+    if (runtime.format() != RepositoryFormat.GO || !runtime.isGroup()) {
+      throw new MavenExceptions.MethodNotAllowed(
+          "Operation is only valid on Go group repositories");
+    }
+  }
+
+  private record LatestCandidate(GoVersions.Candidate candidate, Instant lastModified) {
   }
 }

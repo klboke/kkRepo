@@ -25,6 +25,7 @@ import com.github.klboke.kkrepo.server.cargo.CargoHostedService;
 import com.github.klboke.kkrepo.server.composer.ComposerHostedService;
 import com.github.klboke.kkrepo.server.conda.CondaService;
 import com.github.klboke.kkrepo.server.conan.ConanService;
+import com.github.klboke.kkrepo.server.goartifact.GoHostedService;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
 import com.github.klboke.kkrepo.server.maven.MavenHostedService;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
@@ -40,6 +41,7 @@ import com.github.klboke.kkrepo.server.terraform.TerraformService;
 import com.github.klboke.kkrepo.server.yum.YumService;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -571,6 +573,32 @@ class ComponentUploadServiceTest {
   }
 
   @Test
+  void goComponentUploadDelegatesVersionZipToHostedPublication() throws Exception {
+    GoHostedService goHosted = mock(GoHostedService.class);
+    when(goHosted.publish(
+        any(RepositoryRuntime.class), eq("v1.2.3.zip"), any(InputStream.class),
+        eq("alice"), eq("127.0.0.1")))
+        .thenReturn(new GoHostedService.Published(
+            "example.com/acme/demo",
+            "v1.2.3",
+            "example.com/acme/demo/@v/v1.2.3.zip",
+            Instant.parse("2026-08-25T00:00:00Z")));
+    ComponentUploadService service = service(goHosted);
+
+    ComponentUploadService.UploadResult result = service.upload(
+        "go-hosted",
+        Map.of(),
+        files("go.asset", "C:\\fakepath\\v1.2.3.zip"),
+        "alice",
+        "127.0.0.1");
+
+    assertEquals(List.of("example.com/acme/demo/@v/v1.2.3.zip"), result.paths());
+    verify(goHosted).publish(
+        any(RepositoryRuntime.class), eq("v1.2.3.zip"), any(InputStream.class),
+        eq("alice"), eq("127.0.0.1"));
+  }
+
+  @Test
   void cargoComponentUploadDelegatesToHostedCrateUpload() throws Exception {
     CargoHostedService cargoHosted = mock(CargoHostedService.class);
     when(cargoHosted.uploadCrate(any(RepositoryRuntime.class), any(InputStream.class), eq("alice"), eq("127.0.0.1")))
@@ -703,6 +731,25 @@ class ComponentUploadServiceTest {
 
   private static ComponentUploadService service(CargoHostedService cargoHosted) {
     return service(runtime("cargo-hosted", RepositoryFormat.CARGO), cargoHosted, mock(PubHostedService.class));
+  }
+
+  private static ComponentUploadService service(GoHostedService goHosted) {
+    RepositoryRuntime runtime = runtime("go-hosted", RepositoryFormat.GO);
+    RepositoryRuntimeRegistry registry = mock(RepositoryRuntimeRegistry.class);
+    when(registry.resolve(runtime.name())).thenReturn(Optional.of(runtime));
+    ComponentUploadService service = new ComponentUploadService(
+        registry,
+        mock(AssetDao.class),
+        mock(MavenHostedService.class),
+        mock(NpmHostedService.class),
+        mock(PypiHostedService.class),
+        mock(HelmHostedService.class),
+        mock(CargoHostedService.class),
+        mock(PubHostedService.class),
+        mock(RawHostedService.class),
+        mock(YumService.class));
+    service.setGoHostedService(goHosted);
+    return service;
   }
 
   private static ComponentUploadService service(PubHostedService pubHosted) {

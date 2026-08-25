@@ -421,6 +421,9 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     if (format == RepositoryFormat.CARGO && isCargoPublishRoute(method, path)) {
       return List.of(PermissionAction.ADD);
     }
+    if (format == RepositoryFormat.GO && "PUT".equalsIgnoreCase(method)) {
+      return List.of(PermissionAction.ADD, PermissionAction.EDIT);
+    }
     if (format == RepositoryFormat.PUB && isPubPublishRoute(method, path)) {
       return List.of(PermissionAction.ADD);
     }

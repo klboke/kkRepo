@@ -139,10 +139,14 @@ class NexusApiMigrationServiceTest {
     assertEquals("default", preflight.blobStorePlans().get(0).sourceName());
     assertEquals("s3", preflight.blobStorePlans().get(0).targetType());
     assertEquals("migrated", preflight.blobStorePlans().get(0).targetPrefix());
-    assertEquals(3, preflight.repositoriesToMigrate().size());
+    assertEquals(4, preflight.repositoriesToMigrate().size());
     assertEquals("maven2-hosted", preflight.repositoriesToMigrate().get(0).recipe());
-    assertEquals(1, preflight.unsupported().size());
-    assertEquals("go-hosted", preflight.unsupported().get(0).name());
+    assertEquals("go-hosted", preflight.repositoriesToMigrate().stream()
+        .filter(repository -> "go-hosted".equals(repository.name()))
+        .findFirst()
+        .orElseThrow()
+        .recipe());
+    assertEquals(0, preflight.unsupported().size());
     assertEquals(List.of("maven-releases", "maven-central"), preflight.groupRepositories().get(0).members());
     assertEquals("https://repo1.maven.org/maven2/", preflight.proxyRemoteRisks().get(0).remoteUrl());
     assertEquals(1, preflight.security().users());
@@ -162,6 +166,13 @@ class NexusApiMigrationServiceTest {
         SupportStatus.FULL,
         preflight.migrationPlan().items().stream()
             .filter(item -> "maven-releases".equals(item.name()))
+            .findFirst()
+            .orElseThrow()
+            .status());
+    assertEquals(
+        SupportStatus.FULL,
+        preflight.migrationPlan().items().stream()
+            .filter(item -> "go-hosted".equals(item.name()))
             .findFirst()
             .orElseThrow()
             .status());
@@ -1017,7 +1028,7 @@ class NexusApiMigrationServiceTest {
   }
 
   @Test
-  void unsupportedHostedRepositoryDoesNotCreateFallbackProxy() {
+  void migratesGoHostedRepositoryAndKeepsItInGroup() {
     FakeBlobStoreDao blobStores = new FakeBlobStoreDao();
     FakeRepositoryDao repositories = new FakeRepositoryDao();
     NexusApiMigrationService service = service(blobStores, repositories);
@@ -1032,13 +1043,13 @@ class NexusApiMigrationServiceTest {
         NexusSecurityExport.empty(),
         List.of()), request("https://old-nexus.example"));
 
-    assertEquals(1, counts.unsupportedRepositories());
-    assertEquals(1, counts.repositories());
+    assertEquals(0, counts.unsupportedRepositories());
+    assertEquals(2, counts.repositories());
     assertEquals(1, counts.groupRepositories());
-    assertTrue(repositories.findByName("go-hosted").isEmpty());
+    assertTrue(repositories.findByName("go-hosted").isPresent());
     assertTrue(repositories.findByName("go-public").isPresent());
     assertFalse(repositories.findByName("go-hosted-source-proxy").isPresent());
-    assertEquals(List.of(), repositories.memberNames("go-public"));
+    assertEquals(List.of("go-hosted"), repositories.memberNames("go-public"));
   }
 
   @Test
