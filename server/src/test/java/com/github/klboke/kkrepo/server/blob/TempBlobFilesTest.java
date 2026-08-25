@@ -79,6 +79,38 @@ class TempBlobFilesTest {
   }
 
   @Test
+  void copyResponseUsesMinimumBufferForKnownSmallResponse() throws Exception {
+    byte[] payload = "v1.0.0\nv1.1.0\n".getBytes(StandardCharsets.UTF_8);
+    BufferSizeRecordingInputStream body = new BufferSizeRecordingInputStream(payload);
+    ByteArrayOutputStream out = new ByteArrayOutputStream();
+
+    TempBlobFiles.copyResponse(body, out, null, payload.length);
+
+    assertEquals(8 * 1024, body.largestRequestedRead);
+    assertArrayEquals(payload, out.toByteArray());
+  }
+
+  @Test
+  void copyResponseUsesMinimumBufferForKnownEmptyResponse() throws Exception {
+    BufferSizeRecordingInputStream body = new BufferSizeRecordingInputStream(new byte[0]);
+
+    TempBlobFiles.copyResponse(body, new ByteArrayOutputStream(), null, 0);
+
+    assertEquals(8 * 1024, body.largestRequestedRead);
+  }
+
+  @Test
+  void copyResponseKeepsConfiguredBufferForLargeResponse() throws Exception {
+    TempBlobFiles.configureResponseBufferSize(8 * 1024);
+    byte[] payload = new byte[9 * 1024];
+    BufferSizeRecordingInputStream body = new BufferSizeRecordingInputStream(payload);
+
+    TempBlobFiles.copyResponse(body, new ByteArrayOutputStream(), null, payload.length);
+
+    assertEquals(8 * 1024, body.largestRequestedRead);
+  }
+
+  @Test
   void copyResponseIgnoresClientAbortDuringBufferedWrite() {
     InputStream body = new ByteArrayInputStream("payload".getBytes(StandardCharsets.UTF_8));
 
@@ -364,6 +396,20 @@ class TempBlobFilesTest {
     @Override
     public void close() {
       closed = true;
+    }
+  }
+
+  private static final class BufferSizeRecordingInputStream extends ByteArrayInputStream {
+    private int largestRequestedRead;
+
+    private BufferSizeRecordingInputStream(byte[] payload) {
+      super(payload);
+    }
+
+    @Override
+    public synchronized int read(byte[] buffer, int offset, int length) {
+      largestRequestedRead = Math.max(largestRequestedRead, length);
+      return super.read(buffer, offset, length);
     }
   }
 

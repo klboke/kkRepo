@@ -13,7 +13,9 @@ The [Chinese version](../../zh/dev/go-hosted-performance-baseline.md) contains t
 - Host: MacBookPro16,1, 8 cores, 64 GiB RAM, macOS 14.7.8 x86_64.
 - Container runtime: Docker 29.4.0 (OrbStack); neither repository container had a separate CPU or
   memory limit.
-- Reference: Sonatype Nexus Repository 3.94.0 using its local datastore and Docker volume.
+- Original reference: Sonatype Nexus Repository 3.94.0 using its local datastore and Docker
+  volume. The final root-cause validation used Nexus Repository 3.94.0-12 with PostgreSQL 16 and
+  the same Docker volume-backed blob store.
 - Candidate: the kkRepo 0.9.0 development build from this branch, MySQL 8.0, and the file blob
   adapter on a Docker volume.
 - Both targets used one hosted repository and a group containing only that hosted member. Cleanup
@@ -57,10 +59,11 @@ Ratios above `1.0x` mean kkRepo completed more requests per second. Latencies ar
 | group zip (1 MiB payload) | 360.52 | 533.50 | 1.480x | 18.829 | 12.753 | 70.481 | 63.180 |
 | hosted publish | 28.11 | 32.72 | 1.164x | 181.239 | 226.761 | 352.670 | 309.939 |
 
-## Post-optimization list recheck
+## Query-path optimization recheck
 
-The list paths were rechecked on the same 12-version repositories after changing hosted lookup to
-project only version strings and letting groups consume hosted members' structured lists directly.
+The list paths were first rechecked on the same 12-version repositories after changing hosted
+lookup to project only version strings and letting groups consume hosted members' structured lists
+directly. This run still used the original local-datastore Nexus reference.
 The steady-state rows are medians of three 250-request rounds at concurrency 16. The adaptive
 warmup completed 4,000 kkRepo and 6,000 Nexus requests for hosted list, and 8,000 kkRepo and 10,750
 Nexus requests for group list; every target exceeded 5 seconds.
@@ -73,16 +76,54 @@ Nexus requests for group list; every target exceeded 5 seconds.
 | steady-state | group list | 1985.86 | 1553.17 | 0.782x | 6.055 | 7.346 | 17.874 | 25.659 |
 
 The methodology is intentionally stronger than the original 32-request warmup, so the two tables
-must not be treated as a strict before/after speedup calculation. The recheck shows the group-list
-gap is substantially smaller under sustained load. Hosted list still spends most of its request
-path on the external MySQL lookup and remains a candidate for a separately designed,
-multi-replica-safe version watermark/cache.
+must not be treated as a strict before/after speedup calculation. It proved that the query and group
+aggregation changes helped, but it did not explain the remaining hosted-list gap.
 
-The byte-serving paths (`info`, `mod`, and ZIP) and complete concurrent publication were at or above
-Nexus throughput in this run. kkRepo's non-materialized hosted/group list aggregation and group
-latest lookup were slower; their results remain visible here instead of being normalized away. This
-baseline is intended to make future metadata caching or materialization work measurable without
-changing protocol semantics.
+## Root-cause repair and external PostgreSQL recheck
+
+Database tracing showed that both products still execute one indexed component lookup for every
+hosted-list request. The measured MySQL and PostgreSQL statements were sub-millisecond and did not
+explain the throughput difference. JFR identified the actual hot spot after the query returned:
+kkRepo streamed an 85-byte generated list through the generic response copier, which allocated the
+configured 1 MiB transfer buffer for every request. During an 8,000-request capture,
+`TempBlobFiles.copyResponse` accounted for 72.48% of allocation pressure and the eight async task
+threads allocated about 7.8 GiB in total. With an 8 KiB small-response buffer, those task-thread
+allocations fell to about 84 MiB and the copier's allocation share fell to 1.64%.
+
+The fix now chooses `min(configured transfer size, max(8 KiB, Content-Length))` when the response
+length is known. Generated metadata therefore uses 8 KiB, while large artifacts and responses with
+unknown length retain the configured 1 MiB streaming buffer. This path is node-local scratch memory
+only and does not change multi-replica correctness, cache invalidation, or protocol semantics.
+
+The final A/B used the same kkRepo MySQL database, blob volume, repositories, and Nexus 3.94.0-12
+instance backed by external PostgreSQL 16. Only `/app/kkrepo.jar` changed between runs. Each run
+used 250 pre-warm requests, adaptive warmup of at least 2,000 requests and 5 seconds per target,
+then three 250-request rounds at concurrency 16. All version, info, mod, and ZIP correctness checks
+passed.
+
+| Scenario | kkRepo before req/s | kkRepo after req/s | Change | Nexus ratio before | Nexus ratio after | kkRepo p95 before | kkRepo p95 after |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| hosted list | 293.38 | 535.34 | +82.5% | 0.627x | 0.929x | 194.017 | 49.251 |
+| group list | 1084.88 | 1323.03 | +22.0% | 1.163x | 1.251x | 28.994 | 18.613 |
+
+The complete post-fix steady-state result is below. Ratios use the Nexus measurement from the same
+alternating run; values above `1.0x` mean kkRepo completed more requests per second.
+
+| Scenario | Nexus req/s | kkRepo req/s | Throughput ratio | Nexus p50 | kkRepo p50 | Nexus p95 | kkRepo p95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| hosted list | 576.07 | 535.34 | 0.929x | 20.595 | 23.182 | 56.620 | 49.251 |
+| hosted info | 611.57 | 944.43 | 1.544x | 18.049 | 12.384 | 57.066 | 30.796 |
+| hosted mod | 733.88 | 989.21 | 1.348x | 14.739 | 13.364 | 55.527 | 27.824 |
+| hosted zip (1 MiB payload) | 369.14 | 716.90 | 1.942x | 22.438 | 17.090 | 56.098 | 43.243 |
+| hosted latest | 476.43 | 643.54 | 1.351x | 18.183 | 14.669 | 104.275 | 60.539 |
+| group list | 1057.76 | 1323.03 | 1.251x | 10.490 | 9.413 | 24.397 | 18.613 |
+| group latest | 835.83 | 1026.38 | 1.228x | 13.286 | 11.362 | 37.779 | 30.102 |
+| group zip (1 MiB payload) | 365.79 | 822.25 | 2.248x | 21.852 | 16.033 | 51.856 | 29.534 |
+
+The repaired hosted list is within 7.1% of Nexus throughput and has a lower p95 latency in this run;
+group list and every other steady-state scenario exceed Nexus throughput. The result also rules out
+an external-database mismatch as the root cause: the material gap was response-buffer allocation,
+not the indexed version query.
 
 The benchmark also caught a real concurrent publication defect before this result was recorded. A
 MySQL browse-node deadlock could roll back the current transaction while an ignored lock exception

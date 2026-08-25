@@ -1243,7 +1243,9 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
     if (TempBlobFiles.tryUseTomcatSendfile(request, responseBody)) {
       return ResponseEntity.status(resp.status()).headers(headers).body(null);
     }
-    StreamingResponseBody body = output -> TempBlobFiles.copyResponse(responseBody, output, request);
+    long contentLength = resp.contentLength();
+    StreamingResponseBody body = output ->
+        TempBlobFiles.copyResponse(responseBody, output, request, contentLength);
     return ResponseEntity.status(resp.status()).headers(headers).body(body);
   }
 

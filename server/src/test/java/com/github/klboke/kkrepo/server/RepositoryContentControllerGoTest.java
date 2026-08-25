@@ -32,6 +32,7 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 
 class RepositoryContentControllerGoTest {
   private static final String MODULE_PATH = "example.com/acme/demo/@v/v1.2.3.mod";
+  private static final String LIST_PATH = "example.com/acme/demo/@v/list";
 
   @Test
   void routesHostedGetHeadAndRootVersionUpload() throws Exception {
@@ -79,6 +80,26 @@ class RepositoryContentControllerGoTest {
         () -> controller.put("go-hosted", put, "application/zip"));
   }
 
+  @Test
+  void usesSmallTransferBufferForGeneratedVersionList() throws Exception {
+    RepositoryRuntime runtime = runtime();
+    GoHostedService hosted = mock(GoHostedService.class);
+    byte[] versions = "v1.0.0\nv1.2.3\n".getBytes(StandardCharsets.UTF_8);
+    BufferSizeRecordingInputStream body = new BufferSizeRecordingInputStream(versions);
+    when(hosted.get(runtime, LIST_PATH, false)).thenReturn(MavenResponse.ok(
+        body, versions.length, "text/plain", null, Instant.EPOCH));
+    RepositoryProtocolController controller = controller(runtimes(runtime), hosted);
+
+    ResponseEntity<StreamingResponseBody> response = controller.get(
+        "go-hosted", request("GET", "/repository/go-hosted/" + LIST_PATH));
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    response.getBody().writeTo(output);
+
+    assertArrayEquals(versions, output.toByteArray());
+    assertEquals(versions.length, response.getHeaders().getContentLength());
+    assertEquals(8 * 1024, body.largestRequestedRead);
+  }
+
   private static MockHttpServletRequest request(String method, String path) {
     return new MockHttpServletRequest(method, path);
   }
@@ -119,5 +140,19 @@ class RepositoryContentControllerGoTest {
             null);
     if (hosted != null) controller.setGoHostedService(hosted);
     return controller;
+  }
+
+  private static final class BufferSizeRecordingInputStream extends ByteArrayInputStream {
+    private int largestRequestedRead;
+
+    private BufferSizeRecordingInputStream(byte[] payload) {
+      super(payload);
+    }
+
+    @Override
+    public synchronized int read(byte[] buffer, int offset, int length) {
+      largestRequestedRead = Math.max(largestRequestedRead, length);
+      return super.read(buffer, offset, length);
+    }
   }
 }

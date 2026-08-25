@@ -11,7 +11,8 @@
 - 时间：2026-08-25。
 - 主机：MacBookPro16,1、8 核、64 GiB 内存、macOS 14.7.8 x86_64。
 - 容器运行时：Docker 29.4.0（OrbStack）；两个仓库容器均未设置独立 CPU 或内存限制。
-- Reference：Sonatype Nexus Repository 3.94.0，使用本机 datastore 与 Docker volume。
+- 原始 Reference：Sonatype Nexus Repository 3.94.0，使用本机 datastore 与 Docker volume；最终
+  根因验证改为 Nexus Repository 3.94.0-12 + PostgreSQL 16，blob 同样使用 Docker volume。
 - Candidate：当前分支的 kkRepo 0.9.0 开发构建，MySQL 8.0 与 Docker volume 上的 file blob
   adapter。
 - 两端各使用一个 hosted 仓库和一个仅包含该 hosted 成员的 group。仓库未绑定 Cleanup policy，
@@ -50,10 +51,11 @@ pre-warm 样本发生在正确性预检之后，除非外部先重启两端服�
 | group zip（1 MiB payload） | 360.52 | 533.50 | 1.480x | 18.829 | 12.753 | 70.481 | 63.180 |
 | hosted publish | 28.11 | 32.72 | 1.164x | 181.239 | 226.761 | 352.670 | 309.939 |
 
-## 优化后的 list 复测
+## 查询路径优化后的 list 复测
 
 hosted 查询改为只投影 version 字符串，group 改为直接消费 hosted 成员的结构化列表后，在同一组
-12-version 仓库上重新测试 list 路径。稳态结果为并发 16、每轮 250 请求、共 3 轮的中位数。
+12-version 仓库上重新测试 list 路径；这次仍使用原始的 Nexus 本机 datastore。稳态结果为并发
+16、每轮 250 请求、共 3 轮的中位数。
 自适应预热阶段，hosted list 分别完成 kkRepo 4,000 次与 Nexus 6,000 次请求；group list 分别
 完成 kkRepo 8,000 次与 Nexus 10,750 次请求；每端预热时间均超过 5 秒。
 
@@ -64,13 +66,50 @@ hosted 查询改为只投影 version 字符串，group 改为直接消费 hosted
 | pre-warm | group list | 1887.86 | 1672.62 | 0.886x | 5.757 | 6.731 | 24.462 | 27.202 |
 | steady-state | group list | 1985.86 | 1553.17 | 0.782x | 6.055 | 7.346 | 17.874 | 25.659 |
 
-新方法的预热强度高于原来的 32 请求，因此两张表不能直接作为严格的优化前后加速比。复测说明
-持续负载下 group list 与 Nexus 的差距已明显缩小；hosted list 的主要开销仍在外部 MySQL 查询，
-后续可单独设计具备多副本一致性语义的 version watermark/cache。
+新方法的预热强度高于原来的 32 请求，因此两张表不能直接作为严格的优化前后加速比。它证明了
+查询投影与 group 聚合优化有效，但仍不能解释 hosted list 的剩余差距。
 
-本次测试中，实际字节读取路径（`info`、`mod`、ZIP）和完整并发发布的吞吐达到或超过 Nexus。
-kkRepo 当前未物化的 hosted/group list 聚合与 group latest 查询较慢；本文保留这些结果，不做
-归一化掩盖，以便后续 metadata cache 或物化优化在不改变协议语义的前提下得到可量化对比。
+## 根因修复与外置 PostgreSQL 复测
+
+数据库 trace 表明，两端每次 hosted list 请求都会执行一次带索引的 component 查询；实测 MySQL
+与 PostgreSQL 语句均为亚毫秒级，并不足以解释吞吐差异。JFR 最终定位到查询之后的通用响应复制
+链路：kkRepo 对 85 字节的生成型 list 也会按全局配置申请 1 MiB 传输缓冲区。在 8,000 请求的
+采样中，`TempBlobFiles.copyResponse` 占 72.48% allocation pressure，8 个异步 task 线程合计
+分配约 7.8 GiB；改用 8 KiB 小响应缓冲区后，task 线程合计降至约 84 MiB，复制方法占比降至
+1.64%。
+
+修复后，已知响应长度使用
+`min(配置传输大小, max(8 KiB, Content-Length))`；生成型 metadata 使用 8 KiB，大制品与未知
+长度响应仍保留配置的 1 MiB 流式缓冲区。该内存只作为节点本地临时空间，不改变多副本正确性、
+cache 失效或协议语义。
+
+最终 A/B 复用同一个 kkRepo MySQL、blob volume、仓库数据，以及外置 PostgreSQL 16 的 Nexus
+3.94.0-12，仅替换 `/app/kkrepo.jar`。每轮先采集 250 个 pre-warm 请求；随后每端、每场景至少
+预热 2,000 请求且持续 5 秒，再以并发 16 执行 3 轮、每轮 250 请求。version、info、mod 与 ZIP
+正确性校验全部通过。
+
+| 场景 | kkRepo 修复前 req/s | kkRepo 修复后 req/s | 变化 | 修复前 Nexus 比值 | 修复后 Nexus 比值 | 修复前 kkRepo p95 | 修复后 kkRepo p95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| hosted list | 293.38 | 535.34 | +82.5% | 0.627x | 0.929x | 194.017 | 49.251 |
+| group list | 1084.88 | 1323.03 | +22.0% | 1.163x | 1.251x | 28.994 | 18.613 |
+
+下面是修复后的完整稳态结果。比值使用同一次交替测试中的 Nexus 数据；高于 `1.0x` 表示 kkRepo
+每秒完成更多请求。
+
+| 场景 | Nexus req/s | kkRepo req/s | 吞吐比 | Nexus p50 | kkRepo p50 | Nexus p95 | kkRepo p95 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| hosted list | 576.07 | 535.34 | 0.929x | 20.595 | 23.182 | 56.620 | 49.251 |
+| hosted info | 611.57 | 944.43 | 1.544x | 18.049 | 12.384 | 57.066 | 30.796 |
+| hosted mod | 733.88 | 989.21 | 1.348x | 14.739 | 13.364 | 55.527 | 27.824 |
+| hosted zip（1 MiB payload） | 369.14 | 716.90 | 1.942x | 22.438 | 17.090 | 56.098 | 43.243 |
+| hosted latest | 476.43 | 643.54 | 1.351x | 18.183 | 14.669 | 104.275 | 60.539 |
+| group list | 1057.76 | 1323.03 | 1.251x | 10.490 | 9.413 | 24.397 | 18.613 |
+| group latest | 835.83 | 1026.38 | 1.228x | 13.286 | 11.362 | 37.779 | 30.102 |
+| group zip（1 MiB payload） | 365.79 | 822.25 | 2.248x | 21.852 | 16.033 | 51.856 | 29.534 |
+
+本次 hosted list 吞吐与 Nexus 相差 7.1%，但 p95 更低；group list 与其余全部稳态场景均超过
+Nexus。结果也排除了“外置数据库不同”这一解释：真正造成主要差距的是响应缓冲区分配，而不是
+带索引的版本查询。
 
 正式数据生成前，基准还发现了一个真实并发发布缺陷：MySQL browse-node 死锁会回滚当前事务，
 但被忽略的锁异常让后续 release asset 继续执行。最终实现会把该瞬时异常交给事务重试，完整重放
