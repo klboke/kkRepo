@@ -759,6 +759,18 @@ h1 {
   grid-column: 1 / 3;
 }
 
+.upload-spec-asset-row {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+}
+
+.upload-spec-asset-row .upload-file {
+  grid-column: auto;
+}
+
+.upload-spec-asset-row .upload-file:only-child {
+  grid-column: 1 / -1;
+}
+
 .secondary-button {
   height: 32px;
   border: 1px solid #c5c5c5;
@@ -2365,6 +2377,15 @@ code,
 }
 
 @media (max-width: 520px) {
+  .upload-spec-asset-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .upload-spec-asset-row .upload-file,
+  .upload-spec-asset-row .upload-file:only-child {
+    grid-column: 1;
+  }
+
   .format-showcase-heading {
     align-items: start;
     flex-direction: column;

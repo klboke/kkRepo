@@ -41,6 +41,7 @@ import com.github.klboke.kkrepo.server.yum.YumService;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -178,6 +179,117 @@ class ComponentUploadServiceTest {
     verify(apt).publish(
         any(RepositoryRuntime.class), eq("demo_1.0_amd64.deb"), any(InputStream.class),
         isNull(), isNull(), eq("alice"), eq("127.0.0.1"));
+  }
+
+  @Test
+  void nexusCompatiblePathUploadDefinitionsOnlyExposeDirectoryWhereSupported() {
+    ComponentUploadService service = service(mock(CargoHostedService.class));
+
+    UploadDefinition raw = service.definition("raw");
+    assertTrue(raw.multipleUpload());
+    assertEquals(List.of("directory"),
+        raw.componentFields().stream().map(UploadFieldDefinition::name).toList());
+    assertFalse(raw.componentFields().getFirst().optional());
+    assertEquals(List.of("filename", "asset"),
+        raw.assetFields().stream().map(UploadFieldDefinition::name).toList());
+
+    UploadDefinition yum = service.definition("yum");
+    assertFalse(yum.multipleUpload());
+    assertEquals(List.of("directory"),
+        yum.componentFields().stream().map(UploadFieldDefinition::name).toList());
+    assertTrue(yum.componentFields().getFirst().optional());
+    assertTrue(service.definition("nuget").componentFields().isEmpty());
+    assertTrue(service.definition("rubygems").componentFields().isEmpty());
+  }
+
+  @Test
+  void rawComponentUploadHonorsDirectoryFilenamesAndMultipleAssets() throws Exception {
+    RepositoryRuntime runtime = runtime("raw-hosted", RepositoryFormat.RAW);
+    RepositoryRuntimeRegistry registry = mock(RepositoryRuntimeRegistry.class);
+    when(registry.resolve(runtime.name())).thenReturn(Optional.of(runtime));
+    AssetDao assets = mock(AssetDao.class);
+    RawHostedService rawHosted = mock(RawHostedService.class);
+    ComponentUploadService service = new ComponentUploadService(
+        registry,
+        assets,
+        mock(MavenHostedService.class),
+        mock(NpmHostedService.class),
+        mock(PypiHostedService.class),
+        mock(HelmHostedService.class),
+        mock(CargoHostedService.class),
+        mock(PubHostedService.class),
+        rawHosted,
+        mock(YumService.class));
+    LinkedMultiValueMap<String, MultipartFile> uploads = new LinkedMultiValueMap<>();
+    uploads.add("raw.asset1", new MockMultipartFile(
+        "raw.asset1", "local-one.zip", "application/zip", new byte[] {1}));
+    uploads.add("raw.asset2", new MockMultipartFile(
+        "raw.asset2", "local-two.zip", "application/zip", new byte[] {2}));
+
+    ComponentUploadService.UploadResult result = service.upload(
+        runtime.name(),
+        Map.of(
+            "raw.directory", new String[] {" /team/releases/ "},
+            "raw.asset1.filename", new String[] {"one.zip"}),
+        uploads,
+        "alice",
+        "127.0.0.1");
+
+    assertEquals(
+        List.of("team/releases/one.zip", "team/releases/local-two.zip"), result.paths());
+    InOrder order = inOrder(rawHosted);
+    order.verify(rawHosted).put(
+        any(), eq("team/releases/one.zip"), any(InputStream.class), eq("application/zip"),
+        eq("alice"), eq("127.0.0.1"));
+    order.verify(rawHosted).put(
+        any(), eq("team/releases/local-two.zip"), any(InputStream.class), eq("application/zip"),
+        eq("alice"), eq("127.0.0.1"));
+  }
+
+  @Test
+  void nugetAndRubyGemsComponentUploadsAcceptOneAssetAndRejectMultipleAssets() throws Exception {
+    for (RepositoryFormat format : List.of(RepositoryFormat.NUGET, RepositoryFormat.RUBYGEMS)) {
+      String formatName = format.name().toLowerCase(Locale.ROOT);
+      RepositoryRuntime runtime = runtime(formatName + "-hosted", format);
+      RepositoryRuntimeRegistry registry = mock(RepositoryRuntimeRegistry.class);
+      when(registry.resolve(runtime.name())).thenReturn(Optional.of(runtime));
+      RawHostedService rawHosted = mock(RawHostedService.class);
+      ComponentUploadService service = new ComponentUploadService(
+          registry,
+          mock(AssetDao.class),
+          mock(MavenHostedService.class),
+          mock(NpmHostedService.class),
+          mock(PypiHostedService.class),
+          mock(HelmHostedService.class),
+          mock(CargoHostedService.class),
+          mock(PubHostedService.class),
+          rawHosted,
+          mock(YumService.class));
+
+      ComponentUploadService.UploadResult result = service.upload(
+          runtime.name(), Map.of(), files(formatName + ".asset", "one.zip"),
+          "alice", "127.0.0.1");
+
+      assertEquals(List.of("one.zip"), result.paths());
+      verify(rawHosted).put(
+          any(), eq("one.zip"), any(InputStream.class), eq("application/x-tar"),
+          eq("alice"), eq("127.0.0.1"));
+
+      LinkedMultiValueMap<String, MultipartFile> uploads = files(
+          formatName + ".asset", "one.zip");
+      uploads.add(formatName + ".asset2", new MockMultipartFile(
+          formatName + ".asset2",
+          "two.zip",
+          "application/zip",
+          new byte[] {2}));
+
+      UploadValidationException error = assertThrows(
+          UploadValidationException.class,
+          () -> service.upload(runtime.name(), Map.of(), uploads, "alice", "127.0.0.1"));
+
+      String label = format == RepositoryFormat.NUGET ? "NuGet" : "RubyGems";
+      assertEquals(label + " upload requires exactly one asset", error.getMessage());
+    }
   }
 
   @Test

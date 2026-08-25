@@ -3138,6 +3138,10 @@ function selectedUploadRepository() {
   return uploadRepositoriesCache.find((repo) => repo.name === name) || null;
 }
 
+function selectedUploadSpec(repo = selectedUploadRepository()) {
+  return repo ? uploadSpecsCache.get(repo.format) || null : null;
+}
+
 function renderUploadFields() {
   const repo = selectedUploadRepository();
   const fields = document.getElementById("upload-fields");
@@ -3430,16 +3434,134 @@ function renderUploadFields() {
     `;
     return;
   }
-  fields.innerHTML = `
-    <label class="upload-file">
-      <span>File</span>
-      <input id="upload-file" type="file" required>
-    </label>
-    <label class="upload-path">
-      <span>Asset</span>
-      <input id="upload-path" type="text" readonly>
+  renderUploadSpecFields(repo);
+}
+
+function uploadSpecFieldLabel(name) {
+  const labels = {
+    asset: "File",
+    directory: "Directory",
+    filename: "Filename",
+  };
+  return labels[name] || name
+    .replaceAll("-", " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function uploadSpecComponentField(field) {
+  const label = uploadSpecFieldLabel(field.name);
+  const id = `upload-spec-component-${field.name}`;
+  if (field.type === "BOOLEAN") {
+    return `
+      <label class="upload-check">
+        <input id="${escapeHtml(id)}" data-upload-component-field="${escapeHtml(field.name)}" type="checkbox">
+        <span>${escapeHtml(label)}</span>
+      </label>
+    `;
+  }
+  const value = field.name === "directory" ? "/" : "";
+  return `
+    <label class="${field.name === "directory" ? "full-width" : ""}">
+      <span>${escapeHtml(label)}</span>
+      <input id="${escapeHtml(id)}" data-upload-component-field="${escapeHtml(field.name)}"
+        type="text" value="${escapeHtml(value)}"
+        placeholder="${escapeHtml(field.description || "")}" ${field.optional ? "" : "required"}>
     </label>
   `;
+}
+
+function uploadSpecAssetRow(spec, index) {
+  const fields = [...(spec.assetFields || [])]
+    .sort((left, right) => (left.type === "FILE" ? -1 : right.type === "FILE" ? 1 : 0))
+    .map((field) => {
+      const label = uploadSpecFieldLabel(field.name);
+      if (field.type === "FILE") {
+        return `
+          <label class="upload-file">
+            <span>${escapeHtml(label)}</span>
+            <input class="upload-spec-file" data-upload-asset-field="${escapeHtml(field.name)}"
+              type="file" ${field.optional ? "" : "required"}>
+          </label>
+        `;
+      }
+      return `
+        <label>
+          <span>${escapeHtml(label)}</span>
+          <input class="upload-spec-asset-field" data-upload-asset-field="${escapeHtml(field.name)}"
+            data-upload-autofill="${field.name === "filename" ? "true" : "false"}"
+            type="text" placeholder="${escapeHtml(field.description || "")}" ${field.optional ? "" : "required"}>
+        </label>
+      `;
+    }).join("");
+  return `
+    <div class="upload-asset-row upload-spec-asset-row" data-asset-index="${index}">
+      ${fields}
+      ${spec.multipleUpload
+        ? `<button class="secondary-button upload-spec-remove-asset" type="button">Remove</button>`
+        : ""}
+    </div>
+  `;
+}
+
+function renderUploadSpecFields(repo) {
+  const fields = document.getElementById("upload-fields");
+  const spec = selectedUploadSpec(repo);
+  if (!spec) {
+    fields.innerHTML = '<div class="muted-row upload-empty">No upload definition is available.</div>';
+    return;
+  }
+  fields.innerHTML = `
+    ${(spec.componentFields || []).map(uploadSpecComponentField).join("")}
+    <div class="upload-assets" id="upload-spec-assets">
+      ${Array.from({ length: uploadAssetCount }, (_, index) => uploadSpecAssetRow(spec, index + 1)).join("")}
+    </div>
+    ${spec.multipleUpload
+      ? '<button class="secondary-button upload-add-asset" id="upload-spec-add-asset" type="button">Add asset</button>'
+      : ""}
+    <label class="upload-path">
+      <span>Path</span>
+      <textarea id="upload-path" readonly></textarea>
+    </label>
+  `;
+  document.querySelectorAll(".upload-spec-asset-row").forEach(bindUploadSpecAssetRow);
+  syncUploadSpecRemoveButtons();
+  document.getElementById("upload-spec-add-asset")?.addEventListener("click", () => {
+    uploadAssetCount += 1;
+    const assets = document.getElementById("upload-spec-assets");
+    assets.insertAdjacentHTML("beforeend", uploadSpecAssetRow(spec, uploadAssetCount));
+    bindUploadSpecAssetRow(assets.lastElementChild);
+    syncUploadSpecRemoveButtons();
+    updateUploadPath();
+  });
+}
+
+function bindUploadSpecAssetRow(row) {
+  const file = row.querySelector(".upload-spec-file");
+  const filename = row.querySelector('[data-upload-asset-field="filename"]');
+  file?.addEventListener("change", () => {
+    if (filename && (filename.dataset.uploadAutofill === "true" || !filename.value.trim())) {
+      filename.value = file.files?.[0]?.name || "";
+      filename.dataset.uploadAutofill = "true";
+    }
+    updateUploadPath();
+  });
+  filename?.addEventListener("input", () => {
+    filename.dataset.uploadAutofill = "false";
+  });
+  row.querySelector(".upload-spec-remove-asset")?.addEventListener("click", () => {
+    if (document.querySelectorAll(".upload-spec-asset-row").length <= 1) return;
+    row.remove();
+    uploadAssetCount = document.querySelectorAll(".upload-spec-asset-row").length;
+    syncUploadSpecRemoveButtons();
+    updateUploadPath();
+  });
+}
+
+function syncUploadSpecRemoveButtons() {
+  const disabled = document.querySelectorAll(".upload-spec-asset-row").length <= 1;
+  document.querySelectorAll(".upload-spec-remove-asset").forEach((button) => {
+    button.disabled = disabled;
+  });
 }
 
 function updateTerraformUploadKind() {
@@ -3534,6 +3656,16 @@ function uploadFieldValue(id) {
 function computedUploadPaths() {
   const repo = selectedUploadRepository();
   if (!repo) return [];
+  const specRows = Array.from(document.querySelectorAll(".upload-spec-asset-row"));
+  if (specRows.length) {
+    const directory = document.querySelector('[data-upload-component-field="directory"]')?.value || "/";
+    const prefix = directory.trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, "");
+    return specRows.map((row) => {
+      const filename = row.querySelector('[data-upload-asset-field="filename"]')?.value?.trim()
+        || row.querySelector(".upload-spec-file")?.files?.[0]?.name;
+      return filename ? `/${[prefix, filename.replace(/^\/+/, "")].filter(Boolean).join("/")}` : "";
+    }).filter(Boolean);
+  }
   if (repo.format === "conan") {
     const name = uploadFieldValue("upload-conan-name");
     const version = uploadFieldValue("upload-conan-version");
@@ -3849,9 +3981,36 @@ function buildUploadForm(repo, form) {
     form.append("r.asset", file, file.name);
     return;
   }
-  const file = document.getElementById("upload-file")?.files?.[0];
-  if (!file) throw new Error("File is required.");
-  form.append(`${repo.format}.asset`, file, file.name);
+  const spec = selectedUploadSpec(repo);
+  const rows = Array.from(document.querySelectorAll(".upload-spec-asset-row"));
+  if (!spec || !rows.length) throw new Error("Upload definition is unavailable.");
+  (spec.componentFields || []).forEach((field) => {
+    const node = document.querySelector(`[data-upload-component-field="${CSS.escape(field.name)}"]`);
+    const value = field.type === "BOOLEAN" ? (node?.checked ? "true" : "") : node?.value?.trim();
+    if (!field.optional && !value) throw new Error(`${uploadSpecFieldLabel(field.name)} is required.`);
+    if (value) form.append(`${repo.format}.${field.name}`, value);
+  });
+  if (!spec.multipleUpload && rows.length !== 1) {
+    throw new Error("This repository format accepts exactly one asset.");
+  }
+  rows.forEach((row, index) => {
+    const fileField = (spec.assetFields || []).find((field) => field.type === "FILE");
+    const fileInput = fileField
+      ? row.querySelector(`[data-upload-asset-field="${CSS.escape(fileField.name)}"]`)
+      : null;
+    const file = fileInput?.files?.[0];
+    if (!fileField || !file) throw new Error("File is required.");
+    const assetKey = spec.multipleUpload && fileField.name === "asset"
+      ? `${repo.format}.asset${index + 1}`
+      : `${repo.format}.${fileField.name}`;
+    form.append(assetKey, file, file.name);
+    (spec.assetFields || []).filter((field) => field.type !== "FILE").forEach((field) => {
+      const node = row.querySelector(`[data-upload-asset-field="${CSS.escape(field.name)}"]`);
+      const value = field.type === "BOOLEAN" ? (node?.checked ? "true" : "") : node?.value?.trim();
+      if (!field.optional && !value) throw new Error(`${uploadSpecFieldLabel(field.name)} is required.`);
+      if (value) form.append(`${assetKey}.${field.name}`, value);
+    });
+  });
 }
 
 async function uploadError(response) {

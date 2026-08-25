@@ -144,9 +144,9 @@ public class ComponentUploadService {
                   "Repository namespace")),
           List.of(field("asset", "FILE", "Alpine .apk package", false, null))),
       singleAsset("r"),
-      rawLikeUpload("nuget"),
-      rawLikeUpload("rubygems"),
-      rawLikeUpload("yum"),
+      singleAsset("nuget"),
+      singleAsset("rubygems"),
+      yumUpload(),
       rawUpload());
 
   private final RepositoryRuntimeRegistry registry;
@@ -328,8 +328,8 @@ public class ComponentUploadService {
       case HUGGINGFACE -> throw new UploadValidationException(
           "Hugging Face Models repositories are proxy-only");
       case DOCKER -> throw new UploadValidationException("Docker hosted upload must use the Docker Registry V2 API");
-      case NUGET -> uploadRaw(runtime, upload, createdBy, createdByIp);
-      case RUBYGEMS -> uploadRaw(runtime, upload, createdBy, createdByIp);
+      case NUGET -> uploadSingleRaw(runtime, upload, "NuGet", createdBy, createdByIp);
+      case RUBYGEMS -> uploadSingleRaw(runtime, upload, "RubyGems", createdBy, createdByIp);
       case YUM -> uploadYum(runtime, upload, createdBy, createdByIp);
       case RAW -> uploadRaw(runtime, upload, createdBy, createdByIp);
     };
@@ -751,17 +751,33 @@ public class ComponentUploadService {
       NormalizedUpload upload,
       String createdBy,
       String createdByIp) throws IOException {
-    AssetUpload asset = singleAsset(upload, "Raw");
-    String filename = blankToNull(asset.fields().get("filename"));
-    if (filename == null) {
-      filename = originalFilename(asset.file());
+    List<RawUploadItem> items = new ArrayList<>(upload.assets().size());
+    for (AssetUpload asset : upload.assets()) {
+      String filename = blankToNull(asset.fields().get("filename"));
+      if (filename == null) {
+        filename = originalFilename(asset.file());
+      }
+      items.add(new RawUploadItem(
+          rawPath(upload.fields().get("directory"), filename), asset.file()));
     }
-    String path = rawPath(upload.fields().get("directory"), filename);
-    ensureNoExistingAssets(runtime, List.of(path));
-    try (var input = asset.file().getInputStream()) {
-      rawHosted.put(runtime, path, input, asset.file().getContentType(), createdBy, createdByIp);
+    ensureNoExistingAssets(runtime, items.stream().map(RawUploadItem::path).toList());
+    for (RawUploadItem item : items) {
+      try (var input = item.file().getInputStream()) {
+        rawHosted.put(
+            runtime, item.path(), input, item.file().getContentType(), createdBy, createdByIp);
+      }
     }
-    return List.of(path);
+    return items.stream().map(RawUploadItem::path).toList();
+  }
+
+  private List<String> uploadSingleRaw(
+      RepositoryRuntime runtime,
+      NormalizedUpload upload,
+      String label,
+      String createdBy,
+      String createdByIp) throws IOException {
+    singleAsset(upload, label);
+    return uploadRaw(runtime, upload, createdBy, createdByIp);
   }
 
   private List<String> uploadYum(
@@ -851,9 +867,9 @@ public class ComponentUploadService {
             field("asset", "FILE", "Asset", false, null)));
   }
 
-  private static UploadDefinition rawLikeUpload(String format) {
-    return new UploadDefinition(format, true,
-        List.of(field("directory", "STRING", "Destination for uploaded files", false,
+  private static UploadDefinition yumUpload() {
+    return new UploadDefinition("yum", false,
+        List.of(field("directory", "STRING", "Destination for uploaded files", true,
             "Component attributes")),
         List.of(
             field("filename", "STRING", "Filename", false, null),
@@ -1138,4 +1154,6 @@ public class ComponentUploadService {
   private record ConanUploadAsset(String path, AssetUpload asset) {}
 
   private record MavenUploadItem(String path, String contentType, MultipartFile file, byte[] body) {}
+
+  private record RawUploadItem(String path, MultipartFile file) {}
 }
