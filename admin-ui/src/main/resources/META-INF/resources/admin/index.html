@@ -231,15 +231,16 @@
                 <input id="repository-remote-url" type="url" placeholder="https://repo.maven.apache.org/maven2/">
               </label>
               <label id="repository-pypi-index-path-field" hidden>
-                <span>Remote Index Path</span>
+                <span class="field-label">Remote Index Path
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="PyPI proxy only. Use /simple for standard package indexes. Leave this empty when the upstream serves project indexes directly from its root, such as the PyTorch package indexes. Client URLs remain under /simple."
+                    data-tooltip="PyPI proxy only. Use /simple for standard package indexes. Leave this empty when the upstream serves project indexes directly from its root, such as the PyTorch package indexes. Client URLs remain under /simple.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
                 <input id="repository-pypi-index-path" type="text" value="/simple"
                   spellcheck="false" autocomplete="off" placeholder="/simple">
               </label>
-              <p class="form-note full-width" id="repository-pypi-index-path-note" hidden>
-                PyPI proxy only. Use /simple for standard indexes. Leave this empty when the
-                upstream serves project indexes directly from its root, such as PyTorch package
-                indexes. Client URLs remain under /simple.
-              </p>
               <label>
                 <span class="field-label">Allowed redirect host
                   <span class="field-help" tabindex="0" role="note"

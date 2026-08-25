@@ -2402,8 +2402,6 @@ function refreshRepositoryRecipeControls() {
   const pypiIndexPathVisible = format === "pypi" && type === "PROXY";
   document.getElementById("repository-pypi-index-path-field").hidden =
     !pypiIndexPathVisible;
-  document.getElementById("repository-pypi-index-path-note").hidden =
-    !pypiIndexPathVisible;
   const minimumReleaseAgeVisible = format === "npm" && type === "PROXY";
   document.getElementById("repository-minimum-release-age-field").hidden =
     !minimumReleaseAgeVisible;
