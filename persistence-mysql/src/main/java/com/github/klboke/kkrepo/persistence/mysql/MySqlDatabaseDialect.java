@@ -21,6 +21,7 @@ import java.sql.SQLException;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Pattern;
 import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcOperations;
@@ -500,6 +501,10 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
 
   private static final class MySqlSearchPersistenceDialect implements SearchPersistenceDialect {
     private static final int DEFAULT_INNODB_FT_MIN_TOKEN_SIZE = 3;
+    private static final Set<String> DEFAULT_INNODB_FT_STOPWORDS = Set.of(
+        "a", "about", "an", "are", "as", "at", "be", "by", "com", "de", "en", "for",
+        "from", "how", "i", "in", "is", "it", "la", "of", "on", "or", "that", "the",
+        "this", "to", "was", "what", "when", "where", "who", "will", "with", "und", "www");
     private static final Pattern ALIAS = Pattern.compile("[A-Za-z0-9_]+");
 
     @Override
@@ -570,11 +575,13 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
 
     private static void addTerm(List<String> terms, StringBuilder token) {
       if (!token.isEmpty()) {
+        String term = token.toString();
         // Requiring a term omitted by InnoDB's default FULLTEXT parser makes the whole boolean
-        // query unmatchable. Keep short terms optional while retaining AND semantics for indexed
-        // terms.
-        boolean indexedByDefault = token.length() >= DEFAULT_INNODB_FT_MIN_TOKEN_SIZE;
-        terms.add((indexedByDefault ? "+" : "") + token + "*");
+        // query unmatchable. Keep short terms and stopwords optional while retaining AND semantics
+        // for terms indexed by the default configuration.
+        boolean indexedByDefault = term.length() >= DEFAULT_INNODB_FT_MIN_TOKEN_SIZE
+            && !DEFAULT_INNODB_FT_STOPWORDS.contains(term);
+        terms.add((indexedByDefault ? "+" : "") + term + "*");
         token.setLength(0);
       }
     }
