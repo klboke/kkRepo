@@ -3184,6 +3184,7 @@ EOF
       GONOPROXY=none \
       GONOSUMDB="$GO_MODULE" \
       GOSUMDB=off \
+      GOFLAGS=-modcacherw \
       GOMODCACHE="$gomodcache" \
       GOCACHE="$gocache" \
       go mod download -json "$GO_MODULE@$GO_VERSION" >"$workdir/go-download.json"
