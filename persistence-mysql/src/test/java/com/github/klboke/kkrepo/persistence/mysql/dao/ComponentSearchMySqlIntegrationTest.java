@@ -40,4 +40,30 @@ class ComponentSearchMySqlIntegrationTest extends MySqlIntegrationTestSupport {
             .map(ComponentSearchRow::name)
             .toList());
   }
+
+  @Test
+  void searchFindsMavenNamespaceWhoseLeadingSegmentIsAStopword() {
+    long repositoryId = insertRepository("maven-analytics", "maven2");
+    ComponentDao components = new JdbcComponentDao(jdbc(), jsonColumns(), dialect());
+    String namespace = "com.qunhe.android.analytics";
+    String name = "SensorsAnalyticsSDK";
+    String version = "1.10.16";
+    components.insert(new ComponentRecord(
+        null,
+        repositoryId,
+        RepositoryFormat.MAVEN2,
+        namespace,
+        name,
+        version,
+        "release",
+        HashColumns.componentCoordinateHash(namespace, name, version),
+        Map.of(),
+        Instant.parse("2026-08-25T00:00:00Z")));
+
+    assertEquals(
+        List.of(name),
+        components.search(namespace, RepositoryFormat.MAVEN2, 20).stream()
+            .map(ComponentSearchRow::name)
+            .toList());
+  }
 }
