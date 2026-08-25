@@ -45,6 +45,8 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
@@ -52,6 +54,7 @@ import org.springframework.stereotype.Service;
 /** Galaxy v3 hosted, proxy, and group behavior behind the unified repository controller. */
 @Service
 public class AnsibleGalaxyService {
+  private static final Logger log = LoggerFactory.getLogger(AnsibleGalaxyService.class);
   private static final String VERSIONS_SENTINEL = "@versions";
   private static final String DISCOVERY_NAMESPACE = "@upstream";
   private static final String DISCOVERY_NAME = "@discovery";
@@ -64,6 +67,9 @@ public class AnsibleGalaxyService {
   private static final Duration LEASE_DURATION = Duration.ofMinutes(10);
   private static final Duration TASK_LEASE_DURATION = Duration.ofMinutes(5);
   private static final Duration LEASE_WAIT = Duration.ofSeconds(5);
+  private static final int MAX_TRANSIENT_UPSTREAM_ATTEMPTS = 3;
+  private static final Duration BASE_TRANSIENT_UPSTREAM_DELAY = Duration.ofSeconds(1);
+  private static final Set<Integer> TRANSIENT_UPSTREAM_STATUSES = Set.of(502, 503, 504);
 
   private final ObjectMapper objectMapper;
   private final AnsibleGalaxyRegistryDao registry;
@@ -75,6 +81,7 @@ public class AnsibleGalaxyService {
   private final AnsibleRegistryLeaseManager registryLeases;
   private final AnsibleSingleFlight singleFlight;
   private final AnsibleVersionListCache versionListCache;
+  private final RetrySleeper upstreamRetrySleeper;
   private final AnsibleGalaxyPathParser pathParser = new AnsibleGalaxyPathParser();
   private final String nodeOwner = "ansible-" + UUID.randomUUID();
 
@@ -90,6 +97,24 @@ public class AnsibleGalaxyService {
       AnsibleRegistryLeaseManager registryLeases,
       AnsibleSingleFlight singleFlight,
       AnsibleVersionListCache versionListCache) {
+    this(
+        objectMapper, registry, assets, inspector, remoteFetcher, runtimes, taskLeases,
+        registryLeases, singleFlight, versionListCache,
+        delay -> Thread.sleep(delay.toMillis()));
+  }
+
+  AnsibleGalaxyService(
+      ObjectMapper objectMapper,
+      AnsibleGalaxyRegistryDao registry,
+      AnsibleGalaxyAssetSupport assets,
+      AnsibleCollectionArchiveInspector inspector,
+      HttpRemoteFetcher remoteFetcher,
+      RepositoryRuntimeRegistry runtimes,
+      AnsibleImportTaskLeaseManager taskLeases,
+      AnsibleRegistryLeaseManager registryLeases,
+      AnsibleSingleFlight singleFlight,
+      AnsibleVersionListCache versionListCache,
+      RetrySleeper upstreamRetrySleeper) {
     this.objectMapper = objectMapper;
     this.registry = registry;
     this.assets = assets;
@@ -100,6 +125,7 @@ public class AnsibleGalaxyService {
     this.registryLeases = registryLeases;
     this.singleFlight = singleFlight;
     this.versionListCache = versionListCache;
+    this.upstreamRetrySleeper = Objects.requireNonNull(upstreamRetrySleeper);
   }
 
   public AnsibleGalaxyService(
@@ -113,6 +139,21 @@ public class AnsibleGalaxyService {
     this(
         objectMapper, registry, assets, inspector, remoteFetcher, runtimes, taskLeases,
         new AnsibleRegistryLeaseManager(registry), new AnsibleSingleFlight(), null);
+  }
+
+  AnsibleGalaxyService(
+      ObjectMapper objectMapper,
+      AnsibleGalaxyRegistryDao registry,
+      AnsibleGalaxyAssetSupport assets,
+      AnsibleCollectionArchiveInspector inspector,
+      HttpRemoteFetcher remoteFetcher,
+      RepositoryRuntimeRegistry runtimes,
+      AnsibleImportTaskLeaseManager taskLeases,
+      RetrySleeper upstreamRetrySleeper) {
+    this(
+        objectMapper, registry, assets, inspector, remoteFetcher, runtimes, taskLeases,
+        new AnsibleRegistryLeaseManager(registry), new AnsibleSingleFlight(), null,
+        upstreamRetrySleeper);
   }
 
   public MavenResponse get(
@@ -695,7 +736,8 @@ public class AnsibleGalaxyService {
           // hop; OutboundRequestPolicy still validates and DNS-pins each redirect, while the
           // metadata SHA-256 below provides the final integrity boundary.
           .withRepositoryAllowingUnsignedRedirects(runtime, true, Set.of("*"));
-      try (HttpRemoteFetcher.Result result = remoteFetcher.fetch(request)) {
+      try (HttpRemoteFetcher.Result result = fetchUpstreamWithRetry(
+          request, state.artifactFilename())) {
         if (result.status() < 200 || result.status() >= 300 || result.body() == null) {
           throw new AnsibleGalaxyExceptions.BadUpstream(
               "Upstream artifact request returned HTTP " + result.status());
@@ -793,7 +835,7 @@ public class AnsibleGalaxyService {
         request = request.withConditional(
             existing.get().metadataEtag(), parseInstant(existing.get().metadataLastModified()));
       }
-      try (HttpRemoteFetcher.Result result = remoteFetcher.fetch(request)) {
+      try (HttpRemoteFetcher.Result result = fetchUpstreamWithRetry(request, relativePath)) {
         int status = result.status();
         Instant checkedAt = Instant.now();
         Instant cacheUntil = checkedAt.plus(metadataTtl(runtime));
@@ -975,7 +1017,7 @@ public class AnsibleGalaxyService {
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.METADATA)
         .withAccept("application/json")
         .withRepository(runtime, true);
-    try (HttpRemoteFetcher.Result result = remoteFetcher.fetch(request)) {
+    try (HttpRemoteFetcher.Result result = fetchUpstreamWithRetry(request, url)) {
       if (result.status() == 404 || result.status() == 410) {
         throw new AnsibleGalaxyExceptions.NotFound("Upstream collection was not found");
       }
@@ -987,6 +1029,36 @@ public class AnsibleGalaxyService {
     } catch (IOException error) {
       throw new AnsibleGalaxyExceptions.BadUpstream(
           "Failed fetching upstream Galaxy version list", error);
+    }
+  }
+
+  private HttpRemoteFetcher.Result fetchUpstreamWithRetry(
+      HttpRemoteFetcher.Request request, String resource) throws IOException {
+    for (int attempt = 1; ; attempt++) {
+      HttpRemoteFetcher.Result result = remoteFetcher.fetch(request);
+      if (!TRANSIENT_UPSTREAM_STATUSES.contains(result.status())
+          || attempt >= MAX_TRANSIENT_UPSTREAM_ATTEMPTS) {
+        return result;
+      }
+      int status = result.status();
+      result.close();
+      Duration delay = BASE_TRANSIENT_UPSTREAM_DELAY.multipliedBy(1L << (attempt - 1));
+      log.warn(
+          "Transient Galaxy upstream response for repository={} resource={} status={} "
+              + "attempt={}/{}; retrying in {} ms",
+          request.repository(), resource, status, attempt, MAX_TRANSIENT_UPSTREAM_ATTEMPTS,
+          delay.toMillis());
+      sleepBeforeUpstreamRetry(resource, delay);
+    }
+  }
+
+  private void sleepBeforeUpstreamRetry(String resource, Duration delay) {
+    try {
+      upstreamRetrySleeper.sleep(delay);
+    } catch (InterruptedException error) {
+      Thread.currentThread().interrupt();
+      throw new AnsibleGalaxyExceptions.BadUpstream(
+          "Interrupted while retrying upstream Galaxy resource " + resource, error);
     }
   }
 
@@ -2312,6 +2384,11 @@ public class AnsibleGalaxyService {
     } catch (NoSuchAlgorithmException e) {
       throw new IllegalStateException(e);
     }
+  }
+
+  @FunctionalInterface
+  interface RetrySleeper {
+    void sleep(Duration delay) throws InterruptedException;
   }
 
   private record UpstreamArtifact(

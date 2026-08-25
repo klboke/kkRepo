@@ -65,7 +65,7 @@ class AnsibleGalaxyServiceProxyStateTest {
     fetcher = mock(HttpRemoteFetcher.class);
     service = new AnsibleGalaxyService(
         mapper, registry, assets, inspector, fetcher, mock(RepositoryRuntimeRegistry.class),
-        new AnsibleImportTaskLeaseManager(registry));
+        new AnsibleImportTaskLeaseManager(registry), delay -> {});
     proxy = runtime(20L, RepositoryType.PROXY, "https://galaxy.example/root/", List.of());
   }
 
@@ -318,7 +318,59 @@ class AnsibleGalaxyServiceProxyStateTest {
     when(fetcher2.fetch(any())).thenReturn(result(503, Map.of(), null));
     assertThrows(AnsibleGalaxyExceptions.BadUpstream.class, () -> service2.fetchProxyDocument(
         proxy, "acme", "tools", "1.2.3", "api/v3/detail"));
+    verify(fetcher2, times(3)).fetch(any());
     verify(registry2).releaseLease("bad-status", "owner", 7L);
+  }
+
+  @Test
+  void retriesTransientMetadataResponsesBeforePersistingTheProjection() throws Exception {
+    when(registry.findProxyState(proxy.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.empty());
+    when(registry.tryAcquireLease(anyString(), anyString(), any()))
+        .thenReturn(Optional.of(lease("transient-status")));
+    java.io.InputStream transientBody = mock(java.io.InputStream.class);
+    Map<String, Object> identity = detail(SHA_A);
+    Map<String, Object> projectedIdentity = new LinkedHashMap<>(identity);
+    projectedIdentity.remove("files");
+    when(fetcher.fetch(any())).thenReturn(
+        new HttpRemoteFetcher.Result(502, Map.of(), transientBody),
+        jsonResult(200, identity));
+
+    assertEquals(projectedIdentity, service.fetchProxyDocument(
+        proxy, "acme", "tools", "1.2.3", "api/v3/detail"));
+
+    verify(fetcher, times(2)).fetch(any());
+    verify(transientBody).close();
+    verify(registry).upsertProxyState(any());
+    verify(registry).releaseLease("transient-status", "owner", 7L);
+  }
+
+  @Test
+  void preservesTheInterruptSignalWhenATransientRetryWaitIsInterrupted() throws Exception {
+    AnsibleGalaxyService interruptedService = new AnsibleGalaxyService(
+        mapper, registry, assets, inspector, fetcher, mock(RepositoryRuntimeRegistry.class),
+        new AnsibleImportTaskLeaseManager(registry), delay -> {
+          throw new InterruptedException("test interruption");
+        });
+    when(registry.findProxyState(proxy.id(), "acme", "tools", "1.2.3"))
+        .thenReturn(Optional.empty());
+    when(registry.tryAcquireLease(anyString(), anyString(), any()))
+        .thenReturn(Optional.of(lease("interrupted-retry")));
+    when(fetcher.fetch(any())).thenReturn(result(502, Map.of(), null));
+
+    try {
+      AnsibleGalaxyExceptions.BadUpstream failure = assertThrows(
+          AnsibleGalaxyExceptions.BadUpstream.class,
+          () -> interruptedService.fetchProxyDocument(
+              proxy, "acme", "tools", "1.2.3", "api/v3/detail"));
+      assertTrue(failure.getMessage().contains("Interrupted while retrying"));
+      assertTrue(Thread.currentThread().isInterrupted());
+    } finally {
+      Thread.interrupted();
+    }
+
+    verify(fetcher).fetch(any());
+    verify(registry).releaseLease("interrupted-retry", "owner", 7L);
   }
 
   @Test
@@ -534,7 +586,7 @@ class AnsibleGalaxyServiceProxyStateTest {
       AnsibleCollectionArchiveInspector archiveInspector) {
     return new AnsibleGalaxyService(
         mapper, dao, assetSupport, archiveInspector, remote, mock(RepositoryRuntimeRegistry.class),
-        new AnsibleImportTaskLeaseManager(dao));
+        new AnsibleImportTaskLeaseManager(dao), delay -> {});
   }
 
   private Map<String, Object> detail(String sha) {
