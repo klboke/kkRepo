@@ -103,6 +103,35 @@ class PypiRepositoryBlackBoxCompatibilityTest {
   }
 
   @Test
+  void proxyWithEmptyRemoteIndexPathMatchesNexusWhenConfigured() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeTrue(config.configured(),
+        "Set NEXUS_COMPAT_BASE_URL and KKREPO_COMPAT_BASE_URL to run PyPI black-box compatibility");
+
+    if (config.setupEnabled()) {
+      ensureNexusRepositories(config);
+      ensureKkRepoRepositories(config);
+    }
+
+    // Nexus 3.94 can expose an empty remote index path directly below the repository root.
+    Exchange reference = getProjectIndexEventually(
+        config.nexusRootIndexProxy(), "simple/torch/", "torch/");
+    Exchange candidate = getProjectIndexEventually(
+        config.nexusPlusRootIndexProxy(), "simple/torch/");
+    assert2xx("proxy empty remote index path reference", reference);
+    assert2xx("proxy empty remote index path candidate", candidate);
+
+    Map<String, String> referencePackages = packageLinks(reference.body());
+    Map<String, String> candidatePackages = packageLinks(candidate.body());
+    assertFalse(referencePackages.isEmpty(),
+        "Nexus root index proxy should expose at least one torch distribution");
+    assertFalse(candidatePackages.isEmpty(),
+        "kkRepo root index proxy should expose at least one torch distribution");
+    assertTrue(referencePackages.entrySet().stream().anyMatch(candidatePackages.entrySet()::contains),
+        "Nexus and kkRepo root index proxies should expose at least one common torch distribution");
+  }
+
+  @Test
   void localVersionDownloadAcceptsLiteralAndPercentEncodedPlusWhenConfigured() throws Exception {
     CompatConfig config = CompatConfig.load();
     assumeTrue(config.configured(),
@@ -251,6 +280,14 @@ class PypiRepositoryBlackBoxCompatibilityTest {
     return links;
   }
 
+  private static Map<String, String> packageLinks(byte[] htmlBytes) {
+    Map<String, String> packages = new LinkedHashMap<>();
+    linkMap(htmlBytes).forEach((name, path) -> {
+      if (path.startsWith("packages/")) packages.put(name, path);
+    });
+    return packages;
+  }
+
   private static String localPath(String href) {
     String result = href == null ? "" : href;
     int hash = result.indexOf('#');
@@ -304,6 +341,22 @@ class PypiRepositoryBlackBoxCompatibilityTest {
     return last;
   }
 
+  private static Exchange getProjectIndexEventually(Endpoint endpoint, String... paths) throws Exception {
+    long deadline = System.nanoTime() + INDEX_REBUILD_TIMEOUT.toNanos();
+    Exchange last = null;
+    do {
+      for (String path : paths) {
+        last = get(endpoint, path);
+        if (last.status() >= 200 && last.status() < 300
+            && !packageLinks(last.body()).isEmpty()) {
+          return last;
+        }
+      }
+      Thread.sleep(250);
+    } while (System.nanoTime() < deadline);
+    return last;
+  }
+
   private static Exchange send(HttpRequest.Builder builder) throws Exception {
     HttpResponse<byte[]> response = HTTP.send(
         builder.header("User-Agent", "kkrepo-compat-test/1").build(),
@@ -338,8 +391,17 @@ class PypiRepositoryBlackBoxCompatibilityTest {
           "/service/rest/v1/repositories/pypi/proxy")
           .header("Content-Type", "application/json")
           .POST(HttpRequest.BodyPublishers.ofString("""
-              {"name":"%s","online":true,"storage":{"blobStoreName":"default","strictContentTypeValidation":true},"proxy":{"remoteUrl":"https://pypi.org/","contentMaxAge":1440,"metadataMaxAge":1440},"negativeCache":{"enabled":true,"timeToLive":1440},"httpClient":{"blocked":false,"autoBlock":true}}
+              {"name":"%s","online":true,"storage":{"blobStoreName":"default","strictContentTypeValidation":true},"proxy":{"remoteUrl":"https://pypi.org/","contentMaxAge":1440,"metadataMaxAge":1440},"negativeCache":{"enabled":true,"timeToLive":1440},"httpClient":{"blocked":false,"autoBlock":true},"pypi":{"indexPath":"/simple"}}
               """.formatted(config.proxyRepository())))));
+    }
+    repositories = send(config.nexusAdmin("/service/rest/v1/repositories").GET()).bodyAsString();
+    if (!repositories.contains("\"name\" : \"" + config.rootIndexProxyRepository() + "\"")) {
+      assert2xx("create Nexus PyPI root-index proxy", send(config.nexusAdmin(
+          "/service/rest/v1/repositories/pypi/proxy")
+          .header("Content-Type", "application/json")
+          .POST(HttpRequest.BodyPublishers.ofString("""
+              {"name":"%s","online":true,"storage":{"blobStoreName":"default","strictContentTypeValidation":true},"proxy":{"remoteUrl":"https://download.pytorch.org/whl/cpu/","contentMaxAge":1440,"metadataMaxAge":1440},"negativeCache":{"enabled":true,"timeToLive":1440},"httpClient":{"blocked":false,"autoBlock":true},"pypi":{"indexPath":""}}
+              """.formatted(config.rootIndexProxyRepository())))));
     }
     repositories = send(config.nexusAdmin("/service/rest/v1/repositories").GET()).bodyAsString();
     if (!repositories.contains("\"name\" : \"" + config.groupRepository() + "\"")) {
@@ -429,8 +491,16 @@ class PypiRepositoryBlackBoxCompatibilityTest {
       assert2xx("create kkrepo PyPI proxy", send(config.nexusPlusInternal("/internal/repositories")
           .header("Content-Type", "application/json")
           .POST(HttpRequest.BodyPublishers.ofString("""
-              {"name":"%s","recipe":"pypi-proxy","online":true,"blobStoreName":"default","strictContentTypeValidation":true,"proxy":{"remoteUrl":"https://pypi.org/","contentMaxAgeMinutes":1440,"metadataMaxAgeMinutes":1440,"autoBlock":true}}
+              {"name":"%s","recipe":"pypi-proxy","online":true,"blobStoreName":"default","strictContentTypeValidation":true,"proxy":{"remoteUrl":"https://pypi.org/","contentMaxAgeMinutes":1440,"metadataMaxAgeMinutes":1440,"autoBlock":true},"pypi":{"indexPath":"/simple"}}
               """.formatted(config.proxyRepository())))));
+    }
+    repositories = send(config.nexusPlusInternal("/internal/repositories").GET()).bodyAsString();
+    if (!repositories.contains("\"name\":\"" + config.rootIndexProxyRepository() + "\"")) {
+      assert2xx("create kkrepo PyPI root-index proxy", send(config.nexusPlusInternal("/internal/repositories")
+          .header("Content-Type", "application/json")
+          .POST(HttpRequest.BodyPublishers.ofString("""
+              {"name":"%s","recipe":"pypi-proxy","online":true,"blobStoreName":"default","strictContentTypeValidation":true,"proxy":{"remoteUrl":"https://download.pytorch.org/whl/cpu/","contentMaxAgeMinutes":1440,"metadataMaxAgeMinutes":1440,"autoBlock":true},"pypi":{"indexPath":""}}
+              """.formatted(config.rootIndexProxyRepository())))));
     }
     String groupPayload = """
         {"name":"%s","recipe":"pypi-group","online":true,"blobStoreName":"default","strictContentTypeValidation":true,"group":{"memberNames":["%s","%s"]}}
@@ -554,6 +624,9 @@ class PypiRepositoryBlackBoxCompatibilityTest {
     Endpoint nexusPlusHosted() { return nexusPlus.withRepository(hostedRepository); }
     Endpoint nexusPlusProxy() { return nexusPlus.withRepository(proxyRepository); }
     Endpoint nexusPlusGroup() { return nexusPlus.withRepository(groupRepository); }
+    String rootIndexProxyRepository() { return proxyRepository + "-root-index"; }
+    Endpoint nexusRootIndexProxy() { return nexus.withRepository(rootIndexProxyRepository()); }
+    Endpoint nexusPlusRootIndexProxy() { return nexusPlus.withRepository(rootIndexProxyRepository()); }
 
     HttpRequest.Builder nexusAdmin(String path) {
       return nexus.raw(path);

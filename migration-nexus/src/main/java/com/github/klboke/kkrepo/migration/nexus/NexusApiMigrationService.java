@@ -541,6 +541,9 @@ public class NexusApiMigrationService {
     if (recipe.type() == RepositoryType.PROXY) {
       attributes.put("proxy", proxyAttributes(document, recipe));
     }
+    if (recipe.format() == RepositoryFormat.PYPI && recipe.type() == RepositoryType.PROXY) {
+      attributes.put("pypi", pypiAttributes(document));
+    }
     if (recipe.format().name().equals("RAW")) {
       attributes.put("raw", Map.of("contentDisposition", "ATTACHMENT"));
     }
@@ -1114,6 +1117,17 @@ public class NexusApiMigrationService {
     // The source snapshot already keeps a recursively redacted copy. Do not persist the raw
     // nested httpClient here; runtime credentials live only in the DAO-encrypted fields above.
     return Map.copyOf(attributes);
+  }
+
+  private static Map<String, Object> pypiAttributes(RepositoryDocument document) {
+    Object raw = value(document, "pypi");
+    if (!(raw instanceof Map<?, ?>)) {
+      raw = nested(value(document, "attributes"), "pypi");
+    }
+    Object configured = nested(raw, "indexPath");
+    // Do not use string(...): an explicit empty value selects the upstream root index.
+    String indexPath = configured == null ? "/simple" : String.valueOf(configured).trim();
+    return Map.of("indexPath", indexPath);
   }
 
   private static Map<String, Object> aptAttributes(
