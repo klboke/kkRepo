@@ -37,6 +37,7 @@ import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.DockerSet
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.HostedSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.GroupSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.ProxySettings;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.PypiSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.UpdateCommand;
 import com.github.klboke.kkrepo.server.support.InMemoryVersionWatermark;
 import com.github.klboke.kkrepo.server.support.dao.BlobStoreDaoAdapter;
@@ -51,6 +52,36 @@ import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class RepositoryServiceTest {
+
+  @Test
+  void pypiProxyRemoteIndexPathDefaultsPreservesEmptyAndRoundTripsUpdates() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView defaulted = service.create(new CreateCommand(
+        "pypi-default", "pypi-proxy", true, "default", true, null,
+        new ProxySettings("https://pypi.org/", 60, 30, true),
+        null, null, null, null, null, null, null));
+    assertEquals("/simple", defaulted.pypi().indexPath());
+
+    RepositoryView rootIndex = service.create(new CreateCommand(
+        "pypi-root", "pypi-proxy", true, "default", true, null,
+        new ProxySettings("https://download.pytorch.org/whl/cpu/", 60, 30, true),
+        null, null, null, null, null, null, new PypiSettings("")));
+    assertEquals("", rootIndex.pypi().indexPath());
+    assertEquals("", ((Map<?, ?>) repositories.findByName("pypi-root").orElseThrow().attributes()
+        .get("pypi")).get("indexPath"));
+
+    RepositoryView updated = service.update("pypi-root", new UpdateCommand(
+        true, null, null, null, null, null, null, null, null, null, null,
+        new PypiSettings(" custom/simple/ ")));
+    assertEquals("/custom/simple", updated.pypi().indexPath());
+
+    assertThrows(RepositoryValidationException.class, () -> service.update(
+        "pypi-root", new UpdateCommand(
+            true, null, null, null, null, null, null, null, null, null, null,
+            new PypiSettings("/../private"))));
+  }
 
   @Test
   void rHostedLifecycleInitializesNamespaceAndDeletesProtocolState() {

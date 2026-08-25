@@ -2399,6 +2399,11 @@ function refreshRepositoryRecipeControls() {
   document.getElementById("repository-alpine-fields").hidden = format !== "alpine";
   document.getElementById("repository-swift-proxy-note").hidden =
     !(format === "swift" && type === "PROXY");
+  const pypiIndexPathVisible = format === "pypi" && type === "PROXY";
+  document.getElementById("repository-pypi-index-path-field").hidden =
+    !pypiIndexPathVisible;
+  document.getElementById("repository-pypi-index-path-note").hidden =
+    !pypiIndexPathVisible;
   const minimumReleaseAgeVisible = format === "npm" && type === "PROXY";
   document.getElementById("repository-minimum-release-age-field").hidden =
     !minimumReleaseAgeVisible;
@@ -2770,6 +2775,11 @@ function repositoryFormPayload() {
       outboundProxyPasswordConfigured:
         document.getElementById("repository-outbound-proxy-password-clear").checked ? false : null
     };
+    if (recipe.format === "pypi") {
+      payload.pypi = {
+        indexPath: document.getElementById("repository-pypi-index-path").value.trim()
+      };
+    }
   } else if (type === "GROUP") {
     payload.group = {
       memberNames: [...memberTransfer.selected]
@@ -2836,6 +2846,7 @@ function setRepositoryFormDefaults() {
   document.getElementById("repository-version-policy").value = "RELEASE";
   document.getElementById("repository-layout-policy").value = "STRICT";
   document.getElementById("repository-remote-url").value = "";
+  document.getElementById("repository-pypi-index-path").value = "/simple";
   document.getElementById("repository-allowed-redirect-hosts").value = "";
   document.getElementById("repository-remote-username").value = "";
   document.getElementById("repository-remote-password").value = "";
@@ -2979,6 +2990,8 @@ function showEditRepositoryForm(name) {
       repo.proxy.minimumReleaseAgeMinutes ?? "0";
     document.getElementById("repository-auto-block").checked = repo.proxy.autoBlock !== false;
   }
+  document.getElementById("repository-pypi-index-path").value =
+    repo.pypi?.indexPath ?? "/simple";
   if (repo.type === "GROUP" && repo.group && Array.isArray(repo.group.memberNames)) {
     memberTransfer.selected = [...repo.group.memberNames];
   }

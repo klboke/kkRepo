@@ -161,7 +161,7 @@ class PypiRepositoryControllerRangeTest {
     private String requestedPath;
 
     private RangeProxyService() {
-      super(null, null, null, null, null, null, null, null, null);
+      super(null, null, null, null, null, null, null, null, null, null);
     }
 
     @Override

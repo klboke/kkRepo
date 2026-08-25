@@ -40,6 +40,7 @@ public class PypiProxyService {
   private final ProxyNegativeCache negativeCache;
   private final AssetMetadataCache assetMetadataCache;
   private final NexusLikeCacheController cacheController;
+  private final PypiRepositorySettings repositorySettings;
 
   public PypiProxyService(
       AssetDao assetDao,
@@ -50,7 +51,8 @@ public class PypiProxyService {
       HttpRemoteFetcher fetcher,
       ProxyNegativeCache negativeCache,
       AssetMetadataCache assetMetadataCache,
-      NexusLikeCacheController cacheController) {
+      NexusLikeCacheController cacheController,
+      PypiRepositorySettings repositorySettings) {
     this.assetDao = assetDao;
     this.blobStorageRegistry = blobStorageRegistry;
     this.writer = writer;
@@ -60,6 +62,7 @@ public class PypiProxyService {
     this.negativeCache = negativeCache;
     this.assetMetadataCache = assetMetadataCache;
     this.cacheController = cacheController;
+    this.repositorySettings = repositorySettings;
   }
 
   public PypiResponse getRootIndex(RepositoryRuntime runtime, boolean headOnly) {
@@ -126,7 +129,7 @@ public class PypiProxyService {
       throw new PypiExceptions.BadUpstreamException("Upstream temporarily blocked: " + runtime.proxyRemoteUrl());
     }
 
-    String url = buildRemoteUrl(runtime.proxyRemoteUrl(), path);
+    String url = upstreamIndexUrl(runtime, projectName);
     String etag = null;
     Instant lastModified = null;
     if (cached.isPresent() && cached.get().blob() != null) {
@@ -301,7 +304,9 @@ public class PypiProxyService {
     if (projectName == null || projectName.isBlank()) {
       throw new PypiExceptions.PypiNotFoundException(filename);
     }
-    List<PypiLink> links = fetchRemoteProjectLinks(runtime, projectName);
+    String upstreamIndexPath = upstreamIndexPath(
+        repositorySettings.get(runtime).indexPath(), projectName);
+    List<PypiLink> links = fetchRemoteProjectLinks(runtime, projectName, upstreamIndexPath);
     String rootFilename = filename.endsWith(".asc")
         ? filename.substring(0, filename.length() - 4)
         : filename;
@@ -312,14 +317,15 @@ public class PypiProxyService {
     String href = match.href();
     int hashIdx = href.indexOf('#');
     if (hashIdx >= 0) href = href.substring(0, hashIdx);
-    URI base = RemoteUrlBuilder.repositoryPath(runtime.proxyRemoteUrl(), PypiPaths.indexPath(projectName));
+    URI base = RemoteUrlBuilder.repositoryPath(runtime.proxyRemoteUrl(), upstreamIndexPath);
     return base.resolve(href).toString();
   }
 
-  private List<PypiLink> fetchRemoteProjectLinks(RepositoryRuntime runtime, String projectName) {
+  private List<PypiLink> fetchRemoteProjectLinks(
+      RepositoryRuntime runtime, String projectName, String upstreamIndexPath) {
     String path = PypiPaths.indexPath(projectName);
     HttpRemoteFetcher.Request req = HttpRemoteFetcher.Request.get(
-        buildRemoteUrl(runtime.proxyRemoteUrl(), path))
+        buildRemoteUrl(runtime.proxyRemoteUrl(), upstreamIndexPath))
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.METADATA)
         .withRepository(runtime);
     try {
@@ -437,6 +443,16 @@ public class PypiProxyService {
 
   private static String buildRemoteUrl(String base, String path) {
     return RemoteUrlBuilder.repositoryPathString(base, path);
+  }
+
+  private String upstreamIndexUrl(RepositoryRuntime runtime, String projectName) {
+    return buildRemoteUrl(runtime.proxyRemoteUrl(), upstreamIndexPath(
+        repositorySettings.get(runtime).indexPath(), projectName));
+  }
+
+  private static String upstreamIndexPath(String configured, String projectName) {
+    String normalizedProject = projectName == null ? null : PypiPaths.normalizeName(projectName);
+    return PypiRemoteIndexPath.upstreamPath(configured, normalizedProject);
   }
 
   private static String stringAttr(Map<String, Object> attrs, String key) {

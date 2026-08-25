@@ -67,6 +67,32 @@ import org.springframework.transaction.support.SimpleTransactionStatus;
 class NexusApiMigrationServiceTest {
 
   @Test
+  void migratesPypiRemoteIndexPathIncludingAnExplicitEmptyValue() {
+    FakeRepositoryDao repositories = new FakeRepositoryDao();
+    NexusApiMigrationService service = service(new FakeBlobStoreDao(), repositories);
+    NexusInventory inventory = new NexusInventory(
+        List.of(Map.of("name", "default")),
+        List.of(
+            repository("pytorch", "pypi", "proxy", Map.of(
+                "storage", storage("default"),
+                "proxy", Map.of("remoteUrl", "https://download.pytorch.org/whl/cpu/"),
+                "pypi", Map.of("indexPath", ""))),
+            repository("pypi-default", "pypi", "proxy", Map.of(
+                "storage", storage("default"),
+                "proxy", Map.of("remoteUrl", "https://pypi.org/")))),
+        NexusSecurityExport.empty(),
+        List.of());
+
+    service.migrateConfig(inventory, request("https://old-nexus.example"));
+
+    Map<?, ?> rootIndex = (Map<?, ?>) repositories.required("pytorch").attributes().get("pypi");
+    Map<?, ?> defaultIndex = (Map<?, ?>) repositories.required("pypi-default")
+        .attributes().get("pypi");
+    assertEquals("", rootIndex.get("indexPath"));
+    assertEquals("/simple", defaultIndex.get("indexPath"));
+  }
+
+  @Test
   void nativeRuntimeDoesNotInstallBouncyCastleProvider() {
     Provider previousProvider = Security.getProvider(BouncyCastleProvider.PROVIDER_NAME);
     Security.removeProvider(BouncyCastleProvider.PROVIDER_NAME);

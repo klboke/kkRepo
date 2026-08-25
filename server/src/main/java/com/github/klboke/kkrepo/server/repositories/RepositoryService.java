@@ -24,6 +24,7 @@ import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmGroupPackumentCache;
 import com.github.klboke.kkrepo.server.pypi.PypiGroupSimpleIndexCache;
+import com.github.klboke.kkrepo.server.pypi.PypiRemoteIndexPath;
 import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
@@ -36,6 +37,7 @@ import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.DockerSet
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.GroupSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.HostedSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.ProxySettings;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.PypiSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.RawSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.UpdateCommand;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
@@ -303,6 +305,11 @@ public class RepositoryService {
       validateAlpineOperationalSettings(alpine, recipe.type(), online);
       attributes.put("alpine", alpineAttributes(alpine));
     }
+    PypiSettings pypi = null;
+    if (recipe.format() == RepositoryFormat.PYPI && recipe.type() == RepositoryType.PROXY) {
+      pypi = normalizePypi(command.pypi());
+      attributes.put("pypi", pypiAttributes(pypi));
+    }
 
     String versionPolicy = null;
     String layoutPolicy = null;
@@ -417,6 +424,10 @@ public class RepositoryService {
           current, command.alpine(), existing.type(), existing.name());
       validateAlpineOperationalSettings(merged, existing.type(), online);
       attributes.put("alpine", alpineAttributes(merged));
+    }
+    if (recipe.format() == RepositoryFormat.PYPI && existing.type() == RepositoryType.PROXY) {
+      PypiSettings merged = mergePypi(readPypiAttributes(existing), command.pypi());
+      attributes.put("pypi", pypiAttributes(merged));
     }
 
     String versionPolicy = existing.versionPolicy();
@@ -1127,6 +1138,8 @@ public class RepositoryService {
     AptSettings apt = record.format() == RepositoryFormat.APT ? readAptAttributes(record) : null;
     AlpineSettings alpine = record.format() == RepositoryFormat.ALPINE
         ? readAlpineAttributes(record) : null;
+    PypiSettings pypi = record.format() == RepositoryFormat.PYPI
+        && record.type() == RepositoryType.PROXY ? readPypiAttributes(record) : null;
     GroupSettings group = null;
     switch (record.type()) {
       case HOSTED -> hosted = new HostedSettings(
@@ -1139,7 +1152,7 @@ public class RepositoryService {
         record.id(), record.name(), record.recipeName(),
         record.format(), record.type(), record.online(),
         blobStoreName, record.strictContentTypeValidation(), url,
-        hosted, proxy, raw, docker, cargo, group, apt, alpine);
+        hosted, proxy, raw, docker, cargo, group, apt, alpine, pypi);
   }
 
   private Map<Long, String> blobStoreNameIndex() {
@@ -1604,6 +1617,33 @@ public class RepositoryService {
     RawSettings effective = raw == null ? new RawSettings("ATTACHMENT") : raw;
     String disposition = normalizeRawContentDisposition(effective.contentDisposition());
     return Map.of("contentDisposition", disposition);
+  }
+
+  private static PypiSettings normalizePypi(PypiSettings settings) {
+    String configured = settings == null ? null : settings.indexPath();
+    try {
+      return new PypiSettings(PypiRemoteIndexPath.normalize(configured));
+    } catch (IllegalArgumentException e) {
+      throw new RepositoryValidationException(e.getMessage());
+    }
+  }
+
+  private static PypiSettings mergePypi(PypiSettings current, PypiSettings incoming) {
+    if (incoming == null || incoming.indexPath() == null) return normalizePypi(current);
+    return normalizePypi(incoming);
+  }
+
+  private static Map<String, Object> pypiAttributes(PypiSettings settings) {
+    PypiSettings normalized = normalizePypi(settings);
+    return Map.of("indexPath", normalized.indexPath());
+  }
+
+  private static PypiSettings readPypiAttributes(RepositoryRecord record) {
+    Map<String, Object> attributes = record.attributes() == null ? Map.of() : record.attributes();
+    Object raw = attributes.get("pypi");
+    if (!(raw instanceof Map<?, ?> map)) return normalizePypi(null);
+    Object indexPath = map.get("indexPath");
+    return normalizePypi(new PypiSettings(indexPath == null ? null : indexPath.toString()));
   }
 
   private static AptSettings normalizeApt(AptSettings input, RepositoryType type) {

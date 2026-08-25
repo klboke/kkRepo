@@ -95,6 +95,74 @@ class PypiProxyServiceTest {
   }
 
   @Test
+  void emptyRemoteIndexPathFetchesProjectFromUpstreamRoot() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(1, 7L);
+    when(fixture.settings.get(runtime))
+        .thenReturn(new PypiRepositorySettings.Settings(""));
+    when(fixture.cache.find(eq(10L), eq("simple/torch/"), any()))
+        .thenReturn(Optional.empty());
+    AtomicReference<String> upstreamUrl = new AtomicReference<>();
+    doAnswer(invocation -> {
+      HttpRemoteFetcher.Request request = invocation.getArgument(0);
+      upstreamUrl.set(request.url());
+      @SuppressWarnings("unchecked")
+      HttpRemoteFetcher.ResultHandler<PypiResponse> handler = invocation.getArgument(2);
+      return handler.handle(new HttpRemoteFetcher.Result(
+          404, Map.of(), new ByteArrayInputStream(new byte[0])));
+    }).when(fixture.fetcher).fetchWithBodyRetry(any(), anyString(), any());
+
+    assertThrows(PypiExceptions.PypiNotFoundException.class,
+        () -> fixture.service.getIndex(runtime, "torch", false));
+
+    assertEquals("https://pypi.example.test/torch/", upstreamUrl.get());
+    verify(fixture.negativeCache).rememberNotFound(runtime, "simple/torch/");
+  }
+
+  @Test
+  void emptyRemoteIndexPathResolvesCrossHostPackageLinks() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(1, 7L);
+    String packagePath = "packages/torch/2.7.0/torch-2.7.0.whl";
+    when(fixture.settings.get(runtime))
+        .thenReturn(new PypiRepositorySettings.Settings(""));
+    when(fixture.cache.find(eq(10L), eq(packagePath), any())).thenReturn(Optional.empty());
+    when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
+    AtomicReference<String> projectIndexUrl = new AtomicReference<>();
+    AtomicReference<String> packageUrl = new AtomicReference<>();
+    doAnswer(invocation -> {
+      HttpRemoteFetcher.Request request = invocation.getArgument(0);
+      String path = invocation.getArgument(1);
+      @SuppressWarnings("unchecked")
+      HttpRemoteFetcher.ResultHandler<PypiResponse> handler = invocation.getArgument(2);
+      if (path.startsWith("simple/")) {
+        projectIndexUrl.set(request.url());
+        return handler.handle(new HttpRemoteFetcher.Result(
+            200, Map.of(),
+            new ByteArrayInputStream("""
+                <a href="https://download-r2.pytorch.org/whl/cpu/torch-2.7.0.whl#sha256=abc">
+                  torch-2.7.0.whl
+                </a>
+                """.getBytes(StandardCharsets.UTF_8))));
+      }
+      packageUrl.set(request.url());
+      return handler.handle(new HttpRemoteFetcher.Result(
+          200, Map.of("Content-Type", "application/zip"),
+          new ByteArrayInputStream("wheel".getBytes(StandardCharsets.UTF_8))));
+    }).when(fixture.fetcher).fetchWithBodyRetry(any(), anyString(), any());
+    when(fixture.writer.write(
+        eq(runtime), eq(fixture.storage), eq(7L), eq(packagePath), any(),
+        eq("application/zip"), eq("package"), any(), any(), any(),
+        eq("proxy"), isNull(), eq(false)))
+        .thenReturn(stored(packagePath, "application/zip"));
+
+    assertEquals(200, fixture.service.getPackage(runtime, packagePath, true).status());
+    assertEquals("https://pypi.example.test/torch/", projectIndexUrl.get());
+    assertEquals(
+        "https://download-r2.pytorch.org/whl/cpu/torch-2.7.0.whl", packageUrl.get());
+  }
+
+  @Test
   void resolvesPackageUrlFromRemoteIndexAndCachesPackage() throws Exception {
     Fixture fixture = fixture();
     RepositoryRuntime runtime = runtime(1, 7L);
@@ -212,11 +280,14 @@ class PypiProxyServiceTest {
     HttpRemoteFetcher fetcher = mock(HttpRemoteFetcher.class);
     ProxyNegativeCache negativeCache = mock(ProxyNegativeCache.class);
     AssetMetadataCache cache = mock(AssetMetadataCache.class);
+    PypiRepositorySettings settings = mock(PypiRepositorySettings.class);
     BlobStorage storage = mock(BlobStorage.class);
+    when(settings.get(any())).thenReturn(new PypiRepositorySettings.Settings("/simple"));
     return new Fixture(
-        assetDao, registry, writer, reader, proxyStateDao, fetcher, negativeCache, cache,
+        assetDao, registry, writer, reader, proxyStateDao, fetcher, negativeCache, cache, settings,
         storage, new PypiProxyService(
-            assetDao, registry, writer, reader, proxyStateDao, fetcher, negativeCache, cache, null));
+            assetDao, registry, writer, reader, proxyStateDao, fetcher, negativeCache, cache, null,
+            settings));
   }
 
   private static RepositoryRuntime runtime(int maxAgeMinutes, Long blobStoreId) {
@@ -262,6 +333,7 @@ class PypiProxyServiceTest {
       HttpRemoteFetcher fetcher,
       ProxyNegativeCache negativeCache,
       AssetMetadataCache cache,
+      PypiRepositorySettings settings,
       BlobStorage storage,
       PypiProxyService service) {
   }

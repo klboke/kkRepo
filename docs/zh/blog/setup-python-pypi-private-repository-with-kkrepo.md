@@ -39,13 +39,16 @@ pypi-proxy     proxy，用于代理 PyPI 官方仓库
 pypi-group     group，用于 pip 安装依赖的统一入口
 ```
 
-创建 `pypi-proxy` proxy 仓库时，上游地址可以填写 PyPI 官方 simple index 地址：
+创建 `pypi-proxy` proxy 仓库时，Remote URL 填写 PyPI 官方地址，并保留默认的
+Remote Index Path `/simple`：
 
 ```text
-https://pypi.org/simple/
+https://pypi.org/
 ```
 
-如果公司已有内网 PyPI 镜像，也可以把 proxy 的上游地址替换成内部镜像地址。
+如果公司已有内网 PyPI 镜像，也可以把 proxy 的上游地址替换成内部镜像地址。如果上游直接
+从根路径提供项目 index（例如 PyTorch package index），将 Remote Index Path 留空即可；
+客户端仍然使用 kkRepo 的 `/simple` 地址。
 
 创建 `pypi-group` group 仓库时，把下面几个成员仓库加入 group：
 

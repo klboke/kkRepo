@@ -23,7 +23,8 @@ public final class RepositoryCommands {
       CargoSettings cargo,
       GroupSettings group,
       AptSettings apt,
-      AlpineSettings alpine) {
+      AlpineSettings alpine,
+      PypiSettings pypi) {
     public CreateCommand(
         String name,
         String recipe,
@@ -37,7 +38,7 @@ public final class RepositoryCommands {
         CargoSettings cargo,
         GroupSettings group) {
       this(name, recipe, online, blobStoreName, strictContentTypeValidation, hosted, proxy,
-          raw, docker, cargo, group, null, null);
+          raw, docker, cargo, group, null, null, null);
     }
 
     public CreateCommand(
@@ -54,7 +55,26 @@ public final class RepositoryCommands {
         GroupSettings group,
         AptSettings apt) {
       this(name, recipe, online, blobStoreName, strictContentTypeValidation, hosted, proxy,
-          raw, docker, cargo, group, apt, null);
+          raw, docker, cargo, group, apt, null, null);
+    }
+
+    /** Compatibility constructor for callers that predate PyPI proxy index-path settings. */
+    public CreateCommand(
+        String name,
+        String recipe,
+        Boolean online,
+        String blobStoreName,
+        Boolean strictContentTypeValidation,
+        HostedSettings hosted,
+        ProxySettings proxy,
+        RawSettings raw,
+        DockerSettings docker,
+        CargoSettings cargo,
+        GroupSettings group,
+        AptSettings apt,
+        AlpineSettings alpine) {
+      this(name, recipe, online, blobStoreName, strictContentTypeValidation, hosted, proxy,
+          raw, docker, cargo, group, apt, alpine, null);
     }
   }
 
@@ -69,7 +89,8 @@ public final class RepositoryCommands {
       CargoSettings cargo,
       GroupSettings group,
       AptSettings apt,
-      AlpineSettings alpine) {
+      AlpineSettings alpine,
+      PypiSettings pypi) {
     public UpdateCommand(
         Boolean online,
         String blobStoreName,
@@ -81,7 +102,7 @@ public final class RepositoryCommands {
         CargoSettings cargo,
         GroupSettings group) {
       this(online, blobStoreName, strictContentTypeValidation, hosted, proxy, raw, docker,
-          cargo, group, null, null);
+          cargo, group, null, null, null);
     }
 
     public UpdateCommand(
@@ -96,7 +117,24 @@ public final class RepositoryCommands {
         GroupSettings group,
         AptSettings apt) {
       this(online, blobStoreName, strictContentTypeValidation, hosted, proxy, raw, docker,
-          cargo, group, apt, null);
+          cargo, group, apt, null, null);
+    }
+
+    /** Compatibility constructor for callers that predate PyPI proxy index-path settings. */
+    public UpdateCommand(
+        Boolean online,
+        String blobStoreName,
+        Boolean strictContentTypeValidation,
+        HostedSettings hosted,
+        ProxySettings proxy,
+        RawSettings raw,
+        DockerSettings docker,
+        CargoSettings cargo,
+        GroupSettings group,
+        AptSettings apt,
+        AlpineSettings alpine) {
+      this(online, blobStoreName, strictContentTypeValidation, hosted, proxy, raw, docker,
+          cargo, group, apt, alpine, null);
     }
   }
 
@@ -263,6 +301,10 @@ public final class RepositoryCommands {
       String signatureType,
       String description,
       List<String> upstreamPublicKeys) {
+  }
+
+  /** Nexus-compatible PyPI proxy settings. Empty indexPath means the upstream root index. */
+  public record PypiSettings(String indexPath) {
   }
 
   public record GroupSettings(

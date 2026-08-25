@@ -9,10 +9,23 @@ index for private and public packages.
 | Purpose | Recipe | Recommended configuration |
 | --- | --- | --- |
 | Private distributions | `pypi-hosted` | Blob store, online state, write policy, strict validation |
-| PyPI cache | `pypi-proxy` | Remote URL `https://pypi.org/` and cache TTLs |
+| PyPI cache | `pypi-proxy` | Remote URL `https://pypi.org/`, Remote Index Path `/simple`, and cache TTLs |
 | Unified installs | `pypi-group` | Hosted before proxy |
 
 The examples use `pypi-hosted`, `pypi-proxy`, and `pypi-group` as repository names.
+
+### Proxy indexes without `/simple`
+
+The client-facing URL always remains `/repository/<name>/simple`. `Remote Index Path` controls only
+the path kkRepo appends while fetching the upstream index:
+
+- Keep the default `/simple` for PyPI and conventional PEP 503 indexes.
+- Leave it empty when the remote URL itself is the index root. For example, use Remote URL
+  `https://download.pytorch.org/whl/cpu/` and an empty Remote Index Path for the PyTorch CPU index.
+- A custom path such as `/api/simple` is also supported and is resolved below the Remote URL.
+
+This setting matches the Nexus PyPI proxy `pypi.indexPath` behavior. Existing repositories that do
+not have the setting continue to use `/simple` after an upgrade.
 
 ## Configure pip
 
@@ -61,8 +74,8 @@ the file is shared or managed with source-controlled configuration.
 ## Repository Behavior
 
 - Hosted upload validates distribution metadata and records package, version, filename, and hashes.
-- Proxy repositories fetch the upstream simple index and distribution files, preserving package-name
-  normalization and rewriting download links to kkRepo.
+- Proxy repositories fetch the configured upstream index and distribution files, preserving
+  package-name normalization and rewriting download links to kkRepo.
 - Groups merge simple-index entries in member order and serve cached or hosted files from the bound
   source.
 - Browse and Search operate on parsed package metadata rather than scraping generated HTML.
