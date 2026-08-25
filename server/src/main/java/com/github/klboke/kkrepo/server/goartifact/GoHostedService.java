@@ -134,15 +134,22 @@ public class GoHostedService {
   }
 
   MavenResponse list(RepositoryRuntime runtime, GoPath path, boolean headOnly) {
-    List<ComponentRecord> components = components(runtime, path.module());
-    if (components.isEmpty()) {
-      throw new MavenExceptions.MavenNotFoundException(path.path());
-    }
-    List<String> versions = GoVersions.listVersions(
-        components.stream().map(ComponentRecord::version).toList());
-    String body = String.join("\n", versions);
+    String body = String.join("\n", listVersions(runtime, path));
     // Nexus derives hosted lists from component rows and exposes no validators for them.
     return GoResponses.text(body, null, headOnly);
+  }
+
+  List<String> listVersions(RepositoryRuntime runtime, GoPath path) {
+    ensureHosted(runtime);
+    List<String> candidates = componentDao
+        .listVersionsByName(runtime.id(), RepositoryFormat.GO, path.module()).stream()
+        .filter(GoVersions::isCanonical)
+        .toList();
+    if (candidates.isEmpty()) {
+      throw new MavenExceptions.MavenNotFoundException(path.path());
+    }
+    // A module containing only pseudo-versions is still a successful, empty Go version list.
+    return GoVersions.listVersions(candidates);
   }
 
   MavenResponse latest(RepositoryRuntime runtime, GoPath path, boolean headOnly) {

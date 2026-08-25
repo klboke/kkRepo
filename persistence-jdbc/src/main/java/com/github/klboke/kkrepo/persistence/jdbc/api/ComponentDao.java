@@ -4,6 +4,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 
 public interface ComponentDao {
@@ -53,6 +54,22 @@ public interface ComponentDao {
   List<String> listDistinctNamesByRepositoryId(long repositoryId);
 
   List<ComponentRecord> listByName(long repositoryId, String name);
+
+  /**
+   * Returns the unordered version projection for one format-specific component name.
+   *
+   * <p>Protocol callers must apply their own version validation and ordering. The default keeps
+   * lightweight adapters source-compatible; production implementations should avoid loading the
+   * full component row for this lookup.
+   */
+  default List<String> listVersionsByName(
+      long repositoryId, RepositoryFormat format, String name) {
+    return listByName(repositoryId, name).stream()
+        .filter(component -> component.format() == format)
+        .map(ComponentRecord::version)
+        .filter(Objects::nonNull)
+        .toList();
+  }
 
   List<ComponentRecord> listByGa(long repositoryId, String groupId, String artifactId);
 

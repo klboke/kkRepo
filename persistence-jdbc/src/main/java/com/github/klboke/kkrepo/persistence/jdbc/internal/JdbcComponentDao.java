@@ -230,6 +230,16 @@ public class JdbcComponentDao implements com.github.klboke.kkrepo.persistence.jd
         """, rowMapper, repositoryId, name);
   }
 
+  @Override
+  public List<String> listVersionsByName(
+      long repositoryId, RepositoryFormat format, String name) {
+    return jdbcTemplate.queryForList("""
+        SELECT version
+        FROM component
+        WHERE repository_id = ? AND name = ? AND format = ? AND version IS NOT NULL
+        """, String.class, repositoryId, name, EnumColumns.write(format));
+  }
+
   public List<ComponentRecord> listByGa(long repositoryId, String groupId, String artifactId) {
     return jdbcTemplate.query("""
         SELECT * FROM component

@@ -66,6 +66,25 @@ class ComponentDaoTest {
   }
 
   @Test
+  void versionLookupProjectsOnlyTheRequestedFormatWithoutDatabaseSorting() {
+    RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
+    ComponentDao dao = new JdbcComponentDao(
+        jdbcTemplate,
+        new JsonColumns(new ObjectMapper(), DIALECT),
+        DIALECT);
+
+    dao.listVersionsByName(41L, RepositoryFormat.GO, "example.com/acme/demo");
+
+    assertTrue(jdbcTemplate.probeSql.contains("SELECT version"));
+    Assertions.assertFalse(jdbcTemplate.probeSql.contains("SELECT *"));
+    assertTrue(jdbcTemplate.probeSql.contains("format = ?"));
+    assertTrue(jdbcTemplate.probeSql.contains("version IS NOT NULL"));
+    Assertions.assertFalse(jdbcTemplate.probeSql.contains("ORDER BY"));
+    Assertions.assertArrayEquals(
+        new Object[] {41L, "example.com/acme/demo", "go"}, jdbcTemplate.probeArgs);
+  }
+
+  @Test
   void searchExcludesComposerInternalRoutesBeforeApplyingLimit() {
     RecordingJdbcTemplate jdbcTemplate = new RecordingJdbcTemplate();
     ComponentDao dao = new JdbcComponentDao(
@@ -271,6 +290,7 @@ class ComponentDaoTest {
     private final int probeRows;
     private String sql;
     private String probeSql;
+    private Object[] probeArgs;
     private int probeCalls;
 
     private RecordingJdbcTemplate() {
@@ -290,6 +310,7 @@ class ComponentDaoTest {
     @Override
     public <T> List<T> queryForList(String sql, Class<T> elementType, Object... args) {
       this.probeSql = sql;
+      this.probeArgs = args;
       this.probeCalls++;
       List<T> rows = new ArrayList<>(probeRows);
       for (int index = 0; index < probeRows; index++) {

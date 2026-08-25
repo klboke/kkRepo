@@ -48,9 +48,10 @@ class GoGroupServiceTest {
     RepositoryRuntime hostedMember = runtime(2L, "hosted", RepositoryType.HOSTED, List.of());
     RepositoryRuntime proxyMember = runtime(3L, "proxy", RepositoryType.PROXY, List.of());
     String path = "example.com/demo/@v/list";
-    when(hosted.get(hostedMember, path, false)).thenReturn(text(
-        "v1.10.0\nv1.0.0\nv0.0.0-20250824120000-abcdef1\n"));
-    when(proxy.get(proxyMember, path, false)).thenReturn(text("v1.2.0\nv1.10.0\n"));
+    when(hosted.listVersions(hostedMember, GoPath.parse(path)))
+        .thenReturn(List.of("v1.0.0", "v1.10.0"));
+    when(proxy.get(proxyMember, path, false)).thenReturn(text(
+        "v1.2.0\nv1.10.0\nv0.0.0-20250824120000-abcdef1\n"));
 
     MavenResponse response = service(hosted, proxy).get(
         runtime(1L, "group", RepositoryType.GROUP, List.of(hostedMember, proxyMember)),
@@ -61,6 +62,19 @@ class GoGroupServiceTest {
         new String(response.body().readAllBytes(), StandardCharsets.UTF_8));
     assertEquals("text/plain", response.contentType());
     assertNull(response.lastModified());
+  }
+
+  @Test
+  void preservesSuccessfulEmptyHostedVersionLists() throws Exception {
+    GoHostedService hosted = mock(GoHostedService.class);
+    RepositoryRuntime member = runtime(2L, "hosted", RepositoryType.HOSTED, List.of());
+    String path = "example.com/demo/@v/list";
+    when(hosted.listVersions(member, GoPath.parse(path))).thenReturn(List.of());
+
+    MavenResponse response = service(hosted, mock(GoProxyService.class)).get(
+        runtime(1L, "group", RepositoryType.GROUP, List.of(member)), path, false);
+
+    assertEquals("", new String(response.body().readAllBytes(), StandardCharsets.UTF_8));
   }
 
   @Test
@@ -158,12 +172,13 @@ class GoGroupServiceTest {
   @Test
   void listPreservesMissingInvalidUpstreamAndIoFailures() {
     String path = "example.com/demo/@v/list";
+    GoPath parsed = GoPath.parse(path);
 
     GoHostedService hosted = mock(GoHostedService.class);
     GoProxyService proxy = mock(GoProxyService.class);
     RepositoryRuntime miss = runtime(2L, "hosted", RepositoryType.HOSTED, List.of());
     RepositoryRuntime failed = runtime(3L, "proxy", RepositoryType.PROXY, List.of());
-    when(hosted.get(miss, path, false))
+    when(hosted.listVersions(miss, parsed))
         .thenThrow(new MavenExceptions.MavenNotFoundException(path));
     when(proxy.get(failed, path, false))
         .thenThrow(new MavenExceptions.BadUpstreamException("offline"));
@@ -171,19 +186,24 @@ class GoGroupServiceTest {
         () -> service(hosted, proxy).get(
             runtime(1L, "group", RepositoryType.GROUP, List.of(miss, failed)), path, false));
 
-    GoHostedService invalidHosted = mock(GoHostedService.class);
-    RepositoryRuntime invalid = runtime(4L, "invalid", RepositoryType.HOSTED, List.of());
-    when(invalidHosted.get(invalid, path, false)).thenReturn(text("v1.0.0\nnot-a-version\n"));
+    GoProxyService invalidProxy = mock(GoProxyService.class);
+    RepositoryRuntime invalid = runtime(4L, "invalid", RepositoryType.PROXY, List.of());
+    when(invalidProxy.get(invalid, path, false)).thenReturn(text("v1.0.0\nnot-a-version\n"));
     assertThrows(MavenExceptions.BadUpstreamException.class,
-        () -> service(invalidHosted, mock(GoProxyService.class)).get(
+        () -> service(mock(GoHostedService.class), invalidProxy).get(
             runtime(1L, "group", RepositoryType.GROUP, List.of(invalid)), path, false));
 
-    GoHostedService unreadableHosted = mock(GoHostedService.class);
-    RepositoryRuntime unreadable = runtime(5L, "unreadable", RepositoryType.HOSTED, List.of());
-    when(unreadableHosted.get(unreadable, path, false)).thenReturn(unreadable());
+    GoProxyService unreadableProxy = mock(GoProxyService.class);
+    RepositoryRuntime unreadable = runtime(5L, "unreadable", RepositoryType.PROXY, List.of());
+    when(unreadableProxy.get(unreadable, path, false)).thenReturn(unreadable());
     assertThrows(MavenExceptions.BadUpstreamException.class,
-        () -> service(unreadableHosted, mock(GoProxyService.class)).get(
+        () -> service(mock(GoHostedService.class), unreadableProxy).get(
             runtime(1L, "group", RepositoryType.GROUP, List.of(unreadable)), path, false));
+
+    RepositoryRuntime nested = runtime(6L, "nested", RepositoryType.GROUP, List.of());
+    assertThrows(MavenExceptions.MethodNotAllowed.class,
+        () -> service(mock(GoHostedService.class), mock(GoProxyService.class)).get(
+            runtime(1L, "group", RepositoryType.GROUP, List.of(nested)), path, false));
   }
 
   @Test
@@ -216,7 +236,7 @@ class GoGroupServiceTest {
     RepositoryRuntime member = runtime(2L, "hosted", RepositoryType.HOSTED, List.of());
     String listPath = "example.com/demo/@v/list";
     String latestPath = "example.com/demo/@latest";
-    when(hosted.get(member, listPath, false)).thenReturn(text("v1.0.0\n"));
+    when(hosted.listVersions(member, GoPath.parse(listPath))).thenReturn(List.of("v1.0.0"));
     when(hosted.get(member, latestPath, false)).thenReturn(json(
         "{\"Version\":\"v1.0.0\",\"Time\":\"2026-08-25T00:00:00Z\"}"));
     RepositoryRuntime group = runtime(1L, "group", RepositoryType.GROUP, List.of(member));

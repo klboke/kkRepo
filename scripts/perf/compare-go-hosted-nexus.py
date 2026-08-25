@@ -3,8 +3,9 @@
 
 The runner creates identical deterministic module fixtures in both hosted
 repositories, verifies client-visible responses before timing, alternates the
-target order between rounds, and reports medians.  It also publishes unique
-modules to measure the complete hosted validation/persistence path.
+target order, records a pre-warm sample, warms both targets to request-count
+and duration thresholds, and reports steady-state medians.  It also publishes
+unique modules to measure the complete hosted validation/persistence path.
 
 This is a same-host directional benchmark, not a production SLA.
 """
@@ -63,6 +64,12 @@ class Measurement:
     p99_ms: float
     maximum_ms: float
     mean_ms: float
+
+
+@dataclass(frozen=True)
+class Warmup:
+    requests: int
+    wall_seconds: float
 
 
 class RequestFailure(RuntimeError):
@@ -251,6 +258,35 @@ def measure_get(
     return measurement(timings, transferred, time.perf_counter() - started, workers)
 
 
+def warmup_get(
+    target: Target,
+    scenario: Scenario,
+    minimum_requests: int,
+    minimum_seconds: float,
+    concurrency: int,
+    timeout: float,
+) -> Warmup:
+    """Warm a read path until both configured thresholds have been reached."""
+    batch_requests = min(
+        250,
+        max(concurrency, minimum_requests if minimum_requests > 0 else 250),
+    )
+    started = time.perf_counter()
+    completed = 0
+    while completed < minimum_requests or time.perf_counter() - started < minimum_seconds:
+        remaining = minimum_requests - completed
+        requests = min(batch_requests, remaining) if remaining > 0 else batch_requests
+        measure_get(
+            target,
+            scenario,
+            requests,
+            min(concurrency, requests),
+            timeout,
+        )
+        completed += requests
+    return Warmup(completed, round(time.perf_counter() - started, 6))
+
+
 def zip_entry(name: str, data: bytes, compression: int) -> tuple[zipfile.ZipInfo, bytes]:
     info = zipfile.ZipInfo(name, date_time=(2020, 1, 1, 0, 0, 0))
     info.compress_type = compression
@@ -386,18 +422,24 @@ def ratio(candidate: float, reference: float) -> float:
     return round(candidate / reference, 3) if reference else float("inf")
 
 
-def markdown(report: dict[str, Any]) -> str:
-    lines = [
-        "# Go hosted Nexus / kkRepo performance comparison",
-        "",
-        f"Generated: `{report['generated_at']}`",
-        "",
-        f"Each row is the median of `{report['configuration']['rounds']}` independent rounds.",
-        "",
+def comparison_summary(nexus: Measurement, candidate: Measurement) -> dict[str, Any]:
+    return {
+        "Nexus": asdict(nexus),
+        "kkRepo": asdict(candidate),
+        "throughput_ratio": ratio(
+            candidate.requests_per_second, nexus.requests_per_second
+        ),
+        "p50_latency_ratio": ratio(candidate.p50_ms, nexus.p50_ms),
+        "p95_latency_ratio": ratio(candidate.p95_ms, nexus.p95_ms),
+    }
+
+
+def append_summary_table(lines: list[str], summaries: dict[str, Any]) -> None:
+    lines.extend([
         "| Scenario | Nexus req/s | kkRepo req/s | ratio | Nexus p50 ms | kkRepo p50 ms | Nexus p95 ms | kkRepo p95 ms |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
-    ]
-    for name, result in report["summaries"].items():
+    ])
+    for name, result in summaries.items():
         nexus = result["Nexus"]
         candidate = result["kkRepo"]
         lines.append(
@@ -406,6 +448,36 @@ def markdown(report: dict[str, Any]) -> str:
             f"{nexus['p50_ms']:.3f} | {candidate['p50_ms']:.3f} | "
             f"{nexus['p95_ms']:.3f} | {candidate['p95_ms']:.3f} |"
         )
+
+
+def markdown(report: dict[str, Any]) -> str:
+    publication_note = (
+        " Publication rows are not pre-warmed."
+        if "hosted publish" in report["summaries"]
+        else ""
+    )
+    lines = [
+        "# Go hosted Nexus / kkRepo performance comparison",
+        "",
+        f"Generated: `{report['generated_at']}`",
+        "",
+        "## Steady-state results",
+        "",
+        f"Read rows are the median of `{report['configuration']['rounds']}` independent rounds "
+        f"after both targets reached the configured warmup thresholds.{publication_note}",
+        "",
+    ]
+    append_summary_table(lines, report["summaries"])
+    if report["prewarm_summaries"]:
+        lines.extend([
+            "",
+            "## Pre-warm samples",
+            "",
+            "These samples run after correctness preflight but before sustained warmup. They are "
+            "not process-cold measurements unless both services were restarted externally.",
+            "",
+        ])
+        append_summary_table(lines, report["prewarm_summaries"])
     lines.extend([
         "",
         "> Ratios above 1.0 mean kkRepo has higher throughput. Results are directional local "
@@ -429,12 +501,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--payload-bytes", type=int, default=1024 * 1024)
     parser.add_argument("--requests", type=int, default=250)
     parser.add_argument("--concurrency", type=int, default=16)
-    parser.add_argument("--warmups", type=int, default=32)
+    parser.add_argument("--prewarm-requests", type=int, default=250)
+    parser.add_argument(
+        "--warmups",
+        type=int,
+        default=2000,
+        help="minimum warmup requests per target and read scenario",
+    )
+    parser.add_argument(
+        "--warmup-seconds",
+        type=float,
+        default=5.0,
+        help="minimum warmup duration per target and read scenario",
+    )
     parser.add_argument("--rounds", type=int, default=3)
     parser.add_argument("--publish-requests", type=int, default=24)
     parser.add_argument("--publish-concurrency", type=int, default=8)
     parser.add_argument("--run-id", default=dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d%H%M%S"))
     parser.add_argument("--skip-prepare", action="store_true")
+    parser.add_argument("--skip-publish", action="store_true")
     parser.add_argument("--timeout", type=float, default=60.0)
     parser.add_argument("--output", type=pathlib.Path)
     return parser.parse_args()
@@ -451,8 +536,16 @@ def main() -> None:
         args.publish_requests,
         args.publish_concurrency,
     ]
-    if any(value < 1 for value in positive) or args.warmups < 0:
-        raise SystemExit("counts, sizes, concurrency, and rounds must be positive")
+    if (
+        any(value < 1 for value in positive)
+        or args.prewarm_requests < 0
+        or args.warmups < 0
+        or args.warmup_seconds < 0
+    ):
+        raise SystemExit(
+            "counts, sizes, concurrency, and rounds must be positive; "
+            "pre-warm and warmup thresholds cannot be negative"
+        )
     run_id = re.sub(r"[^a-zA-Z0-9-]", "-", args.run_id).strip("-").lower()
     if not run_id:
         raise SystemExit("--run-id must contain at least one letter or digit")
@@ -503,65 +596,91 @@ def main() -> None:
     samples: dict[str, dict[str, list[Measurement]]] = {
         scenario.name: {target.name: [] for target in targets} for scenario in scenarios
     }
+    prewarm_samples: dict[str, dict[str, Measurement]] = {}
+    warmup_results: dict[str, dict[str, Warmup]] = {}
     raw_results: list[dict[str, Any]] = []
     for scenario_index, scenario in enumerate(scenarios):
+        ordered = targets if scenario_index % 2 == 0 else list(reversed(targets))
+        if args.prewarm_requests:
+            prewarm_samples[scenario.name] = {}
+            for target in ordered:
+                value = measure_get(
+                    target,
+                    scenario,
+                    args.prewarm_requests,
+                    min(args.concurrency, args.prewarm_requests),
+                    args.timeout,
+                )
+                prewarm_samples[scenario.name][target.name] = value
+                raw_results.append({
+                    "phase": "pre-warm",
+                    "round": 1,
+                    "scenario": scenario.name,
+                    "target": target.name,
+                    "measurement": asdict(value),
+                })
+        warmup_results[scenario.name] = {}
+        for target in ordered:
+            warmup_results[scenario.name][target.name] = warmup_get(
+                target,
+                scenario,
+                args.warmups,
+                args.warmup_seconds,
+                args.concurrency,
+                args.timeout,
+            )
         for round_index in range(args.rounds):
             ordered = targets if (scenario_index + round_index) % 2 == 0 else list(reversed(targets))
             for target in ordered:
-                if args.warmups:
-                    measure_get(
-                        target,
-                        scenario,
-                        args.warmups,
-                        min(args.concurrency, args.warmups),
-                        args.timeout,
-                    )
                 value = measure_get(
                     target, scenario, args.requests, args.concurrency, args.timeout
                 )
                 samples[scenario.name][target.name].append(value)
                 raw_results.append({
+                    "phase": "steady-state",
                     "round": round_index + 1,
                     "scenario": scenario.name,
                     "target": target.name,
                     "measurement": asdict(value),
                 })
 
-    publish_name = "hosted publish"
-    samples[publish_name] = {target.name: [] for target in targets}
-    for round_index in range(args.rounds):
-        fixtures = []
-        for index in range(args.publish_requests):
-            module = f"example.com/kkrepo/go-perf-{run_id}-{round_index}-{index}"
-            version = "v1.0.0"
-            fixtures.append((module, version, module_archive(module, version, args.payload_bytes)))
-        ordered = targets if round_index % 2 == 0 else list(reversed(targets))
-        for target in ordered:
-            value = measure_publish(
-                target, fixtures, args.publish_concurrency, args.timeout
-            )
-            verify_published(target, fixtures, args.timeout)
-            samples[publish_name][target.name].append(value)
-            raw_results.append({
-                "round": round_index + 1,
-                "scenario": publish_name,
-                "target": target.name,
-                "measurement": asdict(value),
-            })
+    if not args.skip_publish:
+        publish_name = "hosted publish"
+        samples[publish_name] = {target.name: [] for target in targets}
+        for round_index in range(args.rounds):
+            fixtures = []
+            for index in range(args.publish_requests):
+                module = f"example.com/kkrepo/go-perf-{run_id}-{round_index}-{index}"
+                version = "v1.0.0"
+                fixtures.append(
+                    (module, version, module_archive(module, version, args.payload_bytes))
+                )
+            ordered = targets if round_index % 2 == 0 else list(reversed(targets))
+            for target in ordered:
+                value = measure_publish(
+                    target, fixtures, args.publish_concurrency, args.timeout
+                )
+                verify_published(target, fixtures, args.timeout)
+                samples[publish_name][target.name].append(value)
+                raw_results.append({
+                    "phase": "publication",
+                    "round": round_index + 1,
+                    "scenario": publish_name,
+                    "target": target.name,
+                    "measurement": asdict(value),
+                })
 
     summaries: dict[str, Any] = {}
     for name, target_samples in samples.items():
         nexus = median_measurement(target_samples["Nexus"])
         candidate = median_measurement(target_samples["kkRepo"])
-        summaries[name] = {
-            "Nexus": asdict(nexus),
-            "kkRepo": asdict(candidate),
-            "throughput_ratio": ratio(
-                candidate.requests_per_second, nexus.requests_per_second
-            ),
-            "p50_latency_ratio": ratio(candidate.p50_ms, nexus.p50_ms),
-            "p95_latency_ratio": ratio(candidate.p95_ms, nexus.p95_ms),
-        }
+        summaries[name] = comparison_summary(nexus, candidate)
+
+    prewarm_summaries: dict[str, Any] = {}
+    for name, target_samples in prewarm_samples.items():
+        prewarm_summaries[name] = comparison_summary(
+            target_samples["Nexus"], target_samples["kkRepo"]
+        )
 
     report: dict[str, Any] = {
         "generated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -576,10 +695,13 @@ def main() -> None:
             "payload_bytes": args.payload_bytes,
             "requests": args.requests,
             "concurrency": args.concurrency,
+            "prewarm_requests": args.prewarm_requests,
             "warmups": args.warmups,
+            "warmup_seconds": args.warmup_seconds,
             "rounds": args.rounds,
             "publish_requests": args.publish_requests,
             "publish_concurrency": args.publish_concurrency,
+            "skip_publish": args.skip_publish,
             "run_id": run_id,
             "nexus_hosted_url": args.nexus_hosted_url,
             "nexus_group_url": args.nexus_group_url,
@@ -588,6 +710,13 @@ def main() -> None:
         },
         "correctness": correctness,
         "summaries": summaries,
+        "prewarm_summaries": prewarm_summaries,
+        "warmup_results": {
+            scenario: {
+                target: asdict(result) for target, result in target_results.items()
+            }
+            for scenario, target_results in warmup_results.items()
+        },
         "raw_results": raw_results,
     }
     rendered = markdown(report)

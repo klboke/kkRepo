@@ -95,11 +95,12 @@ class GoHostedServiceTest {
   @Test
   void listsMigratedAndNativeComponentsInGoSemverOrderWithoutPseudoVersions() throws Exception {
     Fixture fixture = fixture();
-    when(fixture.componentDao.listByName(10L, MODULE)).thenReturn(List.of(
-        component(1L, "v1.10.0", "go-module", Instant.parse("2026-01-03T00:00:00Z")),
-        component(2L, "v1.2.0", "package", Instant.parse("2026-01-02T00:00:00Z")),
-        component(3L, "v1.3.0-0.20260101000000-abcdef123456", "package",
-            Instant.parse("2026-01-01T00:00:00Z"))));
+    when(fixture.componentDao.listVersionsByName(10L, RepositoryFormat.GO, MODULE)).thenReturn(
+        List.of(
+            "v1.10.0",
+            "v1.2.0",
+            "v1.3.0-0.20260101000000-abcdef123456",
+            "not-a-version"));
 
     MavenResponse response = fixture.service.get(runtime("ALLOW_ONCE"), MODULE + "/@v/list", false);
 
@@ -107,6 +108,18 @@ class GoHostedServiceTest {
         new String(response.body().readAllBytes(), StandardCharsets.UTF_8));
     assertEquals("text/plain", response.contentType());
     assertNull(response.lastModified());
+  }
+
+  @Test
+  void returnsSuccessfulEmptyListWhenOnlyPseudoVersionsExist() throws Exception {
+    Fixture fixture = fixture();
+    when(fixture.componentDao.listVersionsByName(10L, RepositoryFormat.GO, MODULE)).thenReturn(
+        List.of("v0.0.0-20260101000000-abcdef123456"));
+
+    MavenResponse response = fixture.service.get(
+        runtime("ALLOW_ONCE"), MODULE + "/@v/list", false);
+
+    assertEquals("", new String(response.body().readAllBytes(), StandardCharsets.UTF_8));
   }
 
   @Test
@@ -169,7 +182,8 @@ class GoHostedServiceTest {
   @Test
   void rejectsEmptyListsInvalidPathsAndNonHostedRepositories() {
     Fixture fixture = fixture();
-    when(fixture.componentDao.listByName(10L, MODULE)).thenReturn(List.of());
+    when(fixture.componentDao.listVersionsByName(10L, RepositoryFormat.GO, MODULE))
+        .thenReturn(List.of());
 
     assertThrows(MavenExceptions.MavenNotFoundException.class,
         () -> fixture.service.get(runtime("ALLOW_ONCE"), MODULE + "/@v/list", false));

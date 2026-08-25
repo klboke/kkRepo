@@ -13,9 +13,10 @@ import java.nio.charset.StandardCharsets;
 import java.time.DateTimeException;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
+import java.util.TreeSet;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -49,27 +50,18 @@ public class GoGroupService {
   }
 
   private MavenResponse list(RepositoryRuntime group, GoPath path, boolean headOnly) {
-    Set<String> versions = new LinkedHashSet<>();
+    Set<String> versions = new TreeSet<>(
+        GoVersions.COMPARATOR.thenComparing(Comparator.naturalOrder()));
     MavenExceptions.BadUpstreamException lastUpstream = null;
     boolean successfulMember = false;
     int metadataBytes = 0;
     for (RepositoryRuntime member : group.members()) {
       if (!eligible(member)) continue;
       try {
-        MavenResponse response = memberGet(member, path.path(), false);
-        byte[] body = readBounded(response, MAX_AGGREGATED_METADATA_BYTES - metadataBytes);
-        metadataBytes += body.length;
-        Set<String> memberVersions = new LinkedHashSet<>();
-        for (String line : new String(body, StandardCharsets.UTF_8).split("\\R")) {
-          if (line.isBlank()) continue;
-          String version = line.trim();
-          if (!GoVersions.isCanonical(version)) {
-            throw new MavenExceptions.BadUpstreamException(
-                "Go group member returned an invalid version: " + version);
-          }
-          memberVersions.add(version);
-        }
-        versions.addAll(memberVersions);
+        VersionList memberVersions = memberVersions(
+            member, path, MAX_AGGREGATED_METADATA_BYTES - metadataBytes);
+        metadataBytes += memberVersions.serializedBytes();
+        versions.addAll(memberVersions.versions());
         successfulMember = true;
       } catch (MavenExceptions.MavenNotFoundException ignored) {
         // Continue in configured member order.
@@ -84,10 +76,52 @@ public class GoGroupService {
       if (lastUpstream != null) throw lastUpstream;
       throw new MavenExceptions.MavenNotFoundException(path.path());
     }
-    List<String> listed = GoVersions.listVersions(versions);
-    String body = String.join("\n", listed);
+    String body = String.join("\n", versions);
     // Nexus group lists are generated metadata and expose neither ETag nor Last-Modified.
     return GoResponses.text(body, null, headOnly);
+  }
+
+  private VersionList memberVersions(
+      RepositoryRuntime member, GoPath path, int remainingBytes) throws IOException {
+    return switch (member.type()) {
+      case HOSTED -> {
+        List<String> versions = hosted.listVersions(member, path);
+        yield new VersionList(versions, serializedListBytes(versions, remainingBytes));
+      }
+      case PROXY -> {
+        MavenResponse response = proxy.get(member, path.path(), false);
+        byte[] body = readBounded(response, remainingBytes);
+        List<String> versions = new ArrayList<>();
+        for (String line : new String(body, StandardCharsets.UTF_8).split("\\R")) {
+          if (line.isBlank()) continue;
+          String version = line.trim();
+          if (!GoVersions.isCanonical(version)) {
+            throw new MavenExceptions.BadUpstreamException(
+                "Go group member returned an invalid version: " + version);
+          }
+          if (!GoVersions.isPseudoVersion(version)) {
+            versions.add(version);
+          }
+        }
+        yield new VersionList(versions, body.length);
+      }
+      case GROUP -> throw new MavenExceptions.MethodNotAllowed(
+          "Nested Go group repositories are not supported: " + member.name());
+    };
+  }
+
+  private static int serializedListBytes(List<String> versions, int remainingBytes) {
+    if (remainingBytes < 0) {
+      throw metadataLimitExceeded();
+    }
+    long bytes = Math.max(0, versions.size() - 1);
+    for (String version : versions) {
+      bytes += version.getBytes(StandardCharsets.UTF_8).length;
+      if (bytes > remainingBytes) {
+        throw metadataLimitExceeded();
+      }
+    }
+    return (int) bytes;
   }
 
   private MavenResponse latest(RepositoryRuntime group, GoPath path, boolean headOnly) {
@@ -167,18 +201,21 @@ public class GoGroupService {
 
   private static byte[] readBounded(MavenResponse response, int remaining) throws IOException {
     if (remaining < 0) {
-      throw new MavenExceptions.BadUpstreamException(
-          "Go group metadata exceeds the aggregation limit");
+      throw metadataLimitExceeded();
     }
     try (InputStream body = response.body()) {
       if (body == null) return new byte[0];
       byte[] bytes = body.readNBytes(remaining + 1);
       if (bytes.length > remaining) {
-        throw new MavenExceptions.BadUpstreamException(
-            "Go group metadata exceeds the aggregation limit");
+        throw metadataLimitExceeded();
       }
       return bytes;
     }
+  }
+
+  private static MavenExceptions.BadUpstreamException metadataLimitExceeded() {
+    return new MavenExceptions.BadUpstreamException(
+        "Go group metadata exceeds the aggregation limit");
   }
 
   private static String requiredText(JsonNode node, String field) {
@@ -209,5 +246,8 @@ public class GoGroupService {
   }
 
   private record LatestCandidate(GoVersions.Candidate candidate, Instant lastModified) {
+  }
+
+  private record VersionList(List<String> versions, int serializedBytes) {
   }
 }
