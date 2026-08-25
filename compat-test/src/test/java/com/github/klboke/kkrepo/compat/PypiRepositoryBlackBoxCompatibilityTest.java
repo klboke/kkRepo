@@ -113,11 +113,22 @@ class PypiRepositoryBlackBoxCompatibilityTest {
       ensureKkRepoRepositories(config);
     }
 
-    Exchange reference = get(config.nexusRootIndexProxy(), "simple/torch/");
-    Exchange candidate = get(config.nexusPlusRootIndexProxy(), "simple/torch/");
-    assertProjectIndexMatches("proxy empty remote index path", reference, candidate, null);
-    assertFalse(linkMap(candidate.body()).isEmpty(),
-        "PyTorch root index proxy should expose at least one torch distribution");
+    // Nexus 3.94 can expose an empty remote index path directly below the repository root.
+    Exchange reference = getProjectIndexEventually(
+        config.nexusRootIndexProxy(), "simple/torch/", "torch/");
+    Exchange candidate = getProjectIndexEventually(
+        config.nexusPlusRootIndexProxy(), "simple/torch/");
+    assert2xx("proxy empty remote index path reference", reference);
+    assert2xx("proxy empty remote index path candidate", candidate);
+
+    Map<String, String> referencePackages = packageLinks(reference.body());
+    Map<String, String> candidatePackages = packageLinks(candidate.body());
+    assertFalse(referencePackages.isEmpty(),
+        "Nexus root index proxy should expose at least one torch distribution");
+    assertFalse(candidatePackages.isEmpty(),
+        "kkRepo root index proxy should expose at least one torch distribution");
+    assertTrue(referencePackages.entrySet().stream().anyMatch(candidatePackages.entrySet()::contains),
+        "Nexus and kkRepo root index proxies should expose at least one common torch distribution");
   }
 
   @Test
@@ -269,6 +280,14 @@ class PypiRepositoryBlackBoxCompatibilityTest {
     return links;
   }
 
+  private static Map<String, String> packageLinks(byte[] htmlBytes) {
+    Map<String, String> packages = new LinkedHashMap<>();
+    linkMap(htmlBytes).forEach((name, path) -> {
+      if (path.startsWith("packages/")) packages.put(name, path);
+    });
+    return packages;
+  }
+
   private static String localPath(String href) {
     String result = href == null ? "" : href;
     int hash = result.indexOf('#');
@@ -316,6 +335,22 @@ class PypiRepositoryBlackBoxCompatibilityTest {
       last = get(endpoint, path);
       if (last.status() >= 200 && last.status() < 300 && linkMap(last.body()).containsKey(expectedLink)) {
         return last;
+      }
+      Thread.sleep(250);
+    } while (System.nanoTime() < deadline);
+    return last;
+  }
+
+  private static Exchange getProjectIndexEventually(Endpoint endpoint, String... paths) throws Exception {
+    long deadline = System.nanoTime() + INDEX_REBUILD_TIMEOUT.toNanos();
+    Exchange last = null;
+    do {
+      for (String path : paths) {
+        last = get(endpoint, path);
+        if (last.status() >= 200 && last.status() < 300
+            && !packageLinks(last.body()).isEmpty()) {
+          return last;
+        }
       }
       Thread.sleep(250);
     } while (System.nanoTime() < deadline);
