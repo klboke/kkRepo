@@ -93,7 +93,7 @@ test("uses the rendered tree entry when restoring a direct asset URL", async () 
   const source = readFileSync(resolve(
     __dirname,
     "../../main/resources/META-INF/resources/browse/assets/browse.js"), "utf8");
-  const start = source.indexOf("async function selectInitialTreePath");
+  const start = source.indexOf("function centerTreeRow");
   const end = source.indexOf("async function revealTreePath", start);
   assert.notEqual(start, -1);
   assert.notEqual(end, -1);
@@ -101,7 +101,17 @@ test("uses the rendered tree entry when restoring a direct asset URL", async () 
   const path = "v1/providers/acme/demo/1.0.10/download/linux/amd64/"
     + "terraform-provider-demo_1.0.10_linux_amd64.zip";
   const entry = { path, name: path.split("/").at(-1), leaf: true };
-  const row = { scrollIntoView() {} };
+  const tree = {
+    clientHeight: 200,
+    scrollHeight: 1000,
+    scrollTop: 20,
+    getBoundingClientRect: () => ({ top: 100 }),
+  };
+  const row = {
+    closest: (selector) => selector === ".tree-left" ? tree : null,
+    getBoundingClientRect: () => ({ top: 250, height: 20 }),
+    scrollIntoView: () => { throw new Error("must not scroll the page"); },
+  };
   const node = { querySelector: () => row };
   let displayed = null;
   const context = vm.createContext({
@@ -123,6 +133,7 @@ test("uses the rendered tree entry when restoring a direct asset URL", async () 
   );
   await context.selectInitialTreePath();
   assert.equal(displayed, entry);
+  assert.equal(tree.scrollTop, 80);
 });
 
 test("renders folder details with the repository format icon", async () => {

@@ -277,6 +277,9 @@ select {
 
 .nx-sidebar {
   grid-row: 2;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   background: var(--sidebar);
 }
 

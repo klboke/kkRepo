@@ -1547,6 +1547,18 @@ function pathSelectorValue(path) {
   return String(path).replaceAll("\\", "\\\\").replaceAll('"', '\\"');
 }
 
+function centerTreeRow(row) {
+  const tree = row?.closest?.(".tree-left");
+  if (!tree) return;
+  const treeRect = tree.getBoundingClientRect();
+  const rowRect = row.getBoundingClientRect();
+  const target = tree.scrollTop
+    + rowRect.top + (rowRect.height / 2)
+    - treeRect.top - (tree.clientHeight / 2);
+  const maxScrollTop = Math.max(0, tree.scrollHeight - tree.clientHeight);
+  tree.scrollTop = Math.min(maxScrollTop, Math.max(0, target));
+}
+
 async function selectInitialTreePath() {
   if (!state.path) return;
   await revealTreePath(state.path);
@@ -1554,7 +1566,7 @@ async function selectInitialTreePath() {
   const row = node?.querySelector(":scope > .tree-row");
   if (!row) return;
   selectRow(row);
-  row.scrollIntoView({ block: "center" });
+  centerTreeRow(row);
   const entry = treeNodeEntries.get(node) || findCachedTreeEntry(state.path);
   if (!entry) return;
   if (entry.leaf) await showAssetDetail(entry);
