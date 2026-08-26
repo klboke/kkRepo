@@ -21,7 +21,7 @@ class BrowseUiScrollbarContractTest {
 
     assertTrue(theme >= 0 && scrollbars > theme && components > scrollbars);
     assertTrue(index.contains(
-        "/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-2"));
+        "/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-3"));
   }
 
   @Test
@@ -30,6 +30,9 @@ class BrowseUiScrollbarContractTest {
     String browse = resource("/META-INF/resources/browse/assets/browse.css");
 
     assertTrue(shared.contains("--ui-scrollbar-size: 6px"));
+    assertTrue(shared.contains("--ui-scrollbar-thumb: rgba(36, 50, 46, 0.54)"));
+    assertTrue(shared.contains("--ui-scrollbar-thumb-hover: rgba(36, 50, 46, 0.7)"));
+    assertTrue(shared.contains("@supports (color: color-mix(in srgb, black, transparent))"));
     assertTrue(shared.contains("color-mix(in srgb, var(--ink-2) 54%, transparent)"));
     assertTrue(shared.contains("color-mix(in srgb, var(--ink-2) 70%, transparent)"));
     assertTrue(shared.contains("*::-webkit-scrollbar"));
