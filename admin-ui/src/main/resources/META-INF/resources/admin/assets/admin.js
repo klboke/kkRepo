@@ -3467,15 +3467,22 @@ function syncUiSettingsForm() {
     const themes = settings.supportedDefaultThemes?.length
       ? settings.supportedDefaultThemes
       : ["default"];
+    const savedTheme = settings.defaultTheme || "default";
+    const hasPreview = previewTheme
+      && themes.includes(previewTheme)
+      && previewTheme !== savedTheme;
     themeSelect.replaceChildren(...themes.map((theme) => {
       const option = document.createElement("option");
       option.value = theme;
       option.textContent = uiThemeLabel(theme);
       return option;
     }));
-    themeSelect.value = previewTheme && themes.includes(previewTheme)
-      ? previewTheme
-      : settings.defaultTheme || "default";
+    themeSelect.value = hasPreview ? previewTheme : savedTheme;
+    if (hasPreview) {
+      // Loading persisted settings applies their theme before dispatching the
+      // change event, so restore the administrator's unsaved preview here.
+      window.kkrepoTheme?.applyTheme(themeSelect.value, themes);
+    }
   }
   syncUiThemePreviewStatus();
   clearRequiredFieldErrors(uiSettingsRequiredFields);

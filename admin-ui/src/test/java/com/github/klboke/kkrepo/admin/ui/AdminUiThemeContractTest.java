@@ -33,6 +33,7 @@ class AdminUiThemeContractTest {
     assertTrue(index.contains("id=\"ui-theme-preview-status\" role=\"status\" aria-live=\"polite\" hidden"));
     assertTrue(javascript.contains("saveSettings(languageSelect.value, themeSelect.value)"));
     assertTrue(javascript.contains("window.kkrepoTheme.applyTheme("));
+    assertTrue(javascript.contains("window.kkrepoTheme?.applyTheme(themeSelect.value, themes)"));
     assertTrue(javascript.contains("addEventListener(\"change\", previewUiTheme)"));
     assertTrue(javascript.contains("settings.supportedDefaultThemes"));
     assertTrue(javascript.contains("if (theme === \"jfrog\") return \"JFrog\""));
