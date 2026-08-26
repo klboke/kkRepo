@@ -206,6 +206,10 @@ Repository format roadmap:
 
 Token types exposed in the user and admin UI include protocol-specific tokens (`NpmToken`, `CargoToken`, `PubToken`, `NuGetApiKey`, `RubyGemsApiKey`) plus `GenericToken` for Terraform service URLs, Ansible Galaxy clients, CI, scripts, and custom HTTP clients that can send the configured API-key header or bearer token.
 
+## Who Is Using kkRepo?
+
+If your company, enterprise, or organization uses kkRepo, you are welcome to share your deployment in the [English user registration issue](https://github.com/klboke/kkRepo/issues/94) or the [Chinese user registration issue](https://github.com/klboke/kkRepo/issues/93). These issues are for usage registration only; please use the regular issue templates for bug reports and feature requests.
+
 ## Contributing
 
 Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor workflow, PR expectations, compatibility testing expectations, and multi-replica design constraints. Community behavior expectations are documented in [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
