@@ -17,9 +17,9 @@ test("keeps the expanded navigation inside the sidebar scroll container", () => 
   assert.match(sidebarRule, /overflow-y:\s*auto/);
 });
 
-test("cache-busts the tree scroll fix assets", () => {
+test("cache-busts the current Browse assets", () => {
   const html = readFileSync(resolve(browseRoot, "index.html"), "utf8");
 
-  assert.match(html, /browse\.css\?v=20260826-tree-scroll-1/);
-  assert.match(html, /browse\.js\?v=20260826-tree-scroll-1/);
+  assert.match(html, /browse\.css\?v=20260826-search-menu-1/);
+  assert.match(html, /browse\.js\?v=20260826-search-menu-1/);
 });

@@ -17,7 +17,7 @@ class BrowseCondaContractTest {
     String javascript = resource("/META-INF/resources/browse/assets/browse.js");
     String stylesheet = resource("/META-INF/resources/browse/assets/format-icons.css");
 
-    assertTrue(index.contains("data-search-format=\"conda\""));
+    assertTrue(index.contains("<option value=\"conda\">Conda</option>"));
     assertTrue(index.contains("data-format=\"conda\""));
     assertTrue(javascript.contains("renderAttributeGroup(\"Conda\", detail.conda)"));
     assertTrue(javascript.contains("function condaUsageDetail(entry, detail = null)"));

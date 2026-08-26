@@ -22,6 +22,7 @@ let uploadSpecsCache = new Map();
 let uploadAssetCount = 1;
 let repositorySort = { key: "name", direction: "asc" };
 let activeSearchFormat = "maven2";
+let activeCustomSearchFormat = "maven2";
 let currentSession = null;
 let currentPermissions = [];
 let adminBootstrapStatus = null;
@@ -32,11 +33,14 @@ let latestGeneratedApiToken = "";
 const APP_HASH_PREFIX = "browse";
 const BROWSE_HASH = `${APP_HASH_PREFIX}/browse`;
 const DEFAULT_SEARCH_FORMAT = "maven2";
+const ALL_SEARCH_FORMAT = "all";
+const CUSTOM_SEARCH_FORMAT = "custom";
 const COMPONENT_SEARCH_LIMIT = 20;
 const AUTH_SNAPSHOT_KEY = "nexusPlus.authSnapshot";
 const AUTH_SNAPSHOT_MAX_AGE_MS = 10 * 60 * 1000;
 let pendingLoginReturnTo = readPendingLoginReturnTo();
 const SEARCH_ROUTE_FORMAT = {
+  all: "all",
   custom: "custom",
   cargo: "cargo",
   go: "go",
@@ -58,8 +62,11 @@ const SEARCH_ROUTE_FORMAT = {
   rubygems: "rubygems",
   yum: "yum",
   npm: "npm",
+  docker: "docker",
+  raw: "raw",
 };
 const FORMAT_ROUTE_SEGMENT = {
+  all: "all",
   custom: "custom",
   cargo: "cargo",
   go: "go",
@@ -81,9 +88,12 @@ const FORMAT_ROUTE_SEGMENT = {
   rubygems: "rubygems",
   yum: "yum",
   npm: "npm",
+  docker: "docker",
+  raw: "raw",
 };
 const SEARCH_FORMAT_LABEL = {
-  custom: "All formats",
+  all: "All components",
+  custom: "Custom search",
   cargo: "Cargo",
   go: "Go",
   helm: "Helm",
@@ -104,6 +114,8 @@ const SEARCH_FORMAT_LABEL = {
   rubygems: "RubyGems",
   yum: "Yum",
   npm: "npm",
+  docker: "Docker / OCI",
+  raw: "Raw",
 };
 
 function installCsrfFetch() {
@@ -149,15 +161,36 @@ function normalizeSearchFormat(format) {
   return SEARCH_ROUTE_FORMAT[format] || DEFAULT_SEARCH_FORMAT;
 }
 
+function normalizeCustomSearchFormat(format) {
+  const normalized = SEARCH_ROUTE_FORMAT[format];
+  if (!normalized || normalized === ALL_SEARCH_FORMAT || normalized === CUSTOM_SEARCH_FORMAT) {
+    return DEFAULT_SEARCH_FORMAT;
+  }
+  return normalized;
+}
+
 function searchFormatLabel(format) {
   return SEARCH_FORMAT_LABEL[normalizeSearchFormat(format)];
 }
 
-function searchHash(format, keyword = "") {
+function searchPageTitle(format) {
+  const normalized = normalizeSearchFormat(format);
+  if (normalized === ALL_SEARCH_FORMAT) return "Search all components";
+  if (normalized === CUSTOM_SEARCH_FORMAT) return "Custom search";
+  return `Search ${searchFormatLabel(normalized)}`;
+}
+
+function searchHash(format, keyword = "", customFormat = DEFAULT_SEARCH_FORMAT) {
   const normalized = normalizeSearchFormat(format);
   const base = `#${APP_HASH_PREFIX}/search/${FORMAT_ROUTE_SEGMENT[normalized]}`;
+  const params = new URLSearchParams();
+  if (normalized === CUSTOM_SEARCH_FORMAT) {
+    params.set("format", normalizeCustomSearchFormat(customFormat));
+  }
   const q = String(keyword || "").trim();
-  return q ? `${base}?${new URLSearchParams({ q }).toString()}` : base;
+  if (q) params.set("q", q);
+  const query = params.toString();
+  return query ? `${base}?${query}` : base;
 }
 
 function repositoryBrowseHash(repoName, path = "") {
@@ -237,10 +270,19 @@ function parseBrowseHash() {
     const separator = routeValue.indexOf("?");
     const rawFormat = separator === -1 ? routeValue : routeValue.slice(0, separator);
     const query = separator === -1 ? "" : routeValue.slice(separator + 1);
+    const params = new URLSearchParams(query);
+    let searchFormat = normalizeSearchFormat(rawFormat);
+    // Before Custom search gained a format selector, this route represented all formats.
+    if (searchFormat === CUSTOM_SEARCH_FORMAT && !params.has("format")) {
+      searchFormat = ALL_SEARCH_FORMAT;
+    }
     return {
       view: "search",
-      searchFormat: normalizeSearchFormat(rawFormat),
-      keyword: new URLSearchParams(query).get("q") || "",
+      searchFormat,
+      customSearchFormat: searchFormat === CUSTOM_SEARCH_FORMAT
+        ? normalizeCustomSearchFormat(params.get("format"))
+        : undefined,
+      keyword: params.get("q") || "",
     };
   }
   const prefix = `${BROWSE_HASH}:`;
@@ -701,18 +743,21 @@ async function fetchChildren(repo, path) {
   return data.entries;
 }
 
-function componentSearchParams(format, keyword) {
+function componentSearchParams(format, keyword, customFormat = DEFAULT_SEARCH_FORMAT) {
   const params = new URLSearchParams();
   const q = (keyword || "").trim();
   if (q) params.set("q", q);
   const normalizedFormat = normalizeSearchFormat(format);
-  if (normalizedFormat !== "custom") params.set("format", normalizedFormat);
+  const effectiveFormat = normalizedFormat === CUSTOM_SEARCH_FORMAT
+    ? normalizeCustomSearchFormat(customFormat)
+    : normalizedFormat;
+  if (effectiveFormat !== ALL_SEARCH_FORMAT) params.set("format", effectiveFormat);
   params.set("limit", String(COMPONENT_SEARCH_LIMIT));
   return params;
 }
 
-async function fetchSearchComponents(format, keyword) {
-  const params = componentSearchParams(format, keyword);
+async function fetchSearchComponents(format, keyword, customFormat = DEFAULT_SEARCH_FORMAT) {
+  const params = componentSearchParams(format, keyword, customFormat);
   const res = await fetch(`/internal/search/components?${params.toString()}`, {
     headers: { Accept: "application/json" },
     cache: "no-store",
@@ -1217,18 +1262,28 @@ async function copyGeneratedToken() {
   setTimeout(() => { button.textContent = "Copy"; }, 1200);
 }
 
-function activateSearch(format = DEFAULT_SEARCH_FORMAT, syncHash = true) {
+function activateSearch(
+    format = DEFAULT_SEARCH_FORMAT,
+    syncHash = true,
+    customFormat = activeCustomSearchFormat) {
   const normalized = normalizeSearchFormat(format);
-  if (syncHash) pushBrowseRoute(searchHash(normalized));
+  activeCustomSearchFormat = normalizeCustomSearchFormat(customFormat);
+  if (syncHash) pushBrowseRoute(searchHash(normalized, "", activeCustomSearchFormat));
   setSearchSubnavOpen(true);
   switchView("search");
-  selectSearchFormat(normalized);
+  selectSearchFormat(normalized, activeCustomSearchFormat);
   return normalized;
 }
 
-function showSearch(format = DEFAULT_SEARCH_FORMAT, syncHash = true, keyword = null) {
+function showSearch(
+    format = DEFAULT_SEARCH_FORMAT,
+    syncHash = true,
+    keyword = null,
+    customFormat = activeCustomSearchFormat) {
   if (keyword !== null) document.getElementById("component-keyword").value = keyword;
-  renderSearch(activateSearch(format, syncHash));
+  renderSearch(
+      activateSearch(format, syncHash, customFormat),
+      activeCustomSearchFormat);
 }
 
 function openSearchResult(component) {
@@ -4036,10 +4091,14 @@ async function uploadError(response) {
   }
 }
 
-async function renderSearch(format = DEFAULT_SEARCH_FORMAT) {
+async function renderSearch(
+    format = DEFAULT_SEARCH_FORMAT,
+    customFormat = activeCustomSearchFormat) {
   const seq = ++searchRequestSeq;
+  const normalizedFormat = normalizeSearchFormat(format);
+  activeCustomSearchFormat = normalizeCustomSearchFormat(customFormat);
   const keyword = document.getElementById("component-keyword").value.trim().toLowerCase();
-  const target = `/browse/${searchHash(format, keyword)}`;
+  const target = `/browse/${searchHash(normalizedFormat, keyword, activeCustomSearchFormat)}`;
   const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
   if (current !== target) window.history.replaceState(null, "", target);
   window.kkrepoGlobalComponentSearch?.setKeyword(document, keyword);
@@ -4047,7 +4106,10 @@ async function renderSearch(format = DEFAULT_SEARCH_FORMAT) {
     '<tr><td colspan="7" class="muted-row">Searching...</td></tr>';
   let payload;
   try {
-    payload = await fetchSearchComponents(format, keyword);
+    payload = await fetchSearchComponents(
+        normalizedFormat,
+        keyword,
+        activeCustomSearchFormat);
   } catch (error) {
     if (seq !== searchRequestSeq) return;
     document.getElementById("component-total").textContent = "0";
@@ -4126,10 +4188,15 @@ function clearSearchFormatSelection() {
   });
 }
 
-function selectSearchFormat(format) {
+function selectSearchFormat(format, customFormat = activeCustomSearchFormat) {
   activeSearchFormat = normalizeSearchFormat(format);
-  document.getElementById("component-search-format").textContent =
-    searchFormatLabel(activeSearchFormat);
+  activeCustomSearchFormat = normalizeCustomSearchFormat(customFormat);
+  document.getElementById("component-search-title").textContent =
+    searchPageTitle(activeSearchFormat);
+  const customField = document.getElementById("component-custom-format-field");
+  const customSelect = document.getElementById("component-custom-format");
+  if (customField) customField.hidden = activeSearchFormat !== CUSTOM_SEARCH_FORMAT;
+  if (customSelect) customSelect.value = activeCustomSearchFormat;
   document.querySelectorAll(".side-subitem").forEach((entry) => {
     entry.classList.toggle("is-active", entry.dataset.searchFormat === activeSearchFormat);
   });
@@ -4154,7 +4221,7 @@ function applyHashRoute() {
     return true;
   }
   if (route.view === "search") {
-    showSearch(route.searchFormat, false, route.keyword);
+    showSearch(route.searchFormat, false, route.keyword, route.customSearchFormat);
     return true;
   }
   switchView("browse");
@@ -4270,6 +4337,9 @@ document.querySelectorAll(".side-subitem").forEach((item) => {
 document.getElementById("repository-filter").addEventListener("input", () => {
   if (state.mode === "repos") renderRepoList();
 });
+document.getElementById("component-custom-format").addEventListener("change", (event) => {
+  activeCustomSearchFormat = normalizeCustomSearchFormat(event.target.value);
+});
 document.querySelectorAll("[data-repo-sort]").forEach((button) => {
   button.addEventListener("click", () => toggleRepositorySort(button.dataset.repoSort));
 });
@@ -4282,7 +4352,7 @@ document.getElementById("upload-fields").addEventListener("input", updateUploadP
 document.getElementById("upload-fields").addEventListener("change", updateUploadPath);
 document.getElementById("component-search-form").addEventListener("submit", (event) => {
   event.preventDefault();
-  renderSearch(activeSearchFormat);
+  renderSearch(activeSearchFormat, activeCustomSearchFormat);
 });
 document.getElementById("upload-form").addEventListener("submit", uploadSelectedAsset);
 document.getElementById("my-token-form").addEventListener("submit", createCurrentApiKey);

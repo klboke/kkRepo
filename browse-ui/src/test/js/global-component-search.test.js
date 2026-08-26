@@ -47,6 +47,7 @@ function loadBrowseSearchHelpers() {
     ${source.slice(openResultStart, openResultEnd)}
     globalThis.searchHash = searchHash;
     globalThis.searchFormatLabel = searchFormatLabel;
+    globalThis.searchPageTitle = searchPageTitle;
     globalThis.repositoryBrowseHash = repositoryBrowseHash;
     globalThis.componentBrowsePath = componentBrowsePath;
     globalThis.parseBrowseHash = parseBrowseHash;
@@ -57,13 +58,13 @@ function loadBrowseSearchHelpers() {
   return context;
 }
 
-test("builds a custom search target and restores its keyword", () => {
+test("builds an all-component search target and restores its keyword", () => {
   assert.equal(
     globalSearch.target("  grpcur  "),
-    "/browse/#browse/search/custom?q=grpcur",
+    "/browse/#browse/search/all?q=grpcur",
   );
   assert.equal(
-    globalSearch.keywordFromHash("#browse/search/custom?q=grpcurl+linux"),
+    globalSearch.keywordFromHash("#browse/search/all?q=grpcurl+linux"),
     "grpcurl linux",
   );
   assert.equal(globalSearch.target("   "), null);
@@ -89,7 +90,7 @@ test("binds the topbar form, focuses empty input, and navigates on submit", () =
     },
   };
   const locationRef = {
-    hash: "#browse/search/custom?q=existing",
+    hash: "#browse/search/all?q=existing",
     assign(value) { assigned = value; },
   };
 
@@ -103,39 +104,58 @@ test("binds the topbar form, focuses empty input, and navigates on submit", () =
 
   input.value = " grpcurl ";
   submit({ preventDefault() {} });
-  assert.equal(assigned, "/browse/#browse/search/custom?q=grpcurl");
+  assert.equal(assigned, "/browse/#browse/search/all?q=grpcurl");
 });
 
-test("custom route omits format while format-specific search keeps it", () => {
+test("all route omits format while custom and quick searches keep one format", () => {
   const helpers = loadBrowseSearchHelpers();
 
   assert.equal(
-    helpers.searchHash("custom", " grpcur "),
-    "#browse/search/custom?q=grpcur",
+    helpers.searchHash("all", " grpcur "),
+    "#browse/search/all?q=grpcur",
   );
   assert.equal(
-    helpers.componentSearchParams("custom", "grpcur").toString(),
+    helpers.componentSearchParams("all", "grpcur").toString(),
     "q=grpcur&limit=20",
+  );
+  assert.equal(
+    helpers.searchHash("custom", " nginx ", "docker"),
+    "#browse/search/custom?format=docker&q=nginx",
+  );
+  assert.equal(
+    helpers.componentSearchParams("custom", "nginx", "docker").toString(),
+    "q=nginx&format=docker&limit=20",
   );
   assert.equal(
     helpers.componentSearchParams("maven2", "junit").toString(),
     "q=junit&format=maven2&limit=20",
   );
 
-  helpers.window.location.hash = "#browse/search/custom?q=grpcurl+linux";
-  const route = helpers.parseBrowseHash();
-  assert.equal(route.view, "search");
-  assert.equal(route.searchFormat, "custom");
-  assert.equal(route.keyword, "grpcurl linux");
+  helpers.window.location.hash = "#browse/search/custom?format=go&q=grpcurl+linux";
+  const customRoute = helpers.parseBrowseHash();
+  assert.equal(customRoute.view, "search");
+  assert.equal(customRoute.searchFormat, "custom");
+  assert.equal(customRoute.customSearchFormat, "go");
+  assert.equal(customRoute.keyword, "grpcurl linux");
+
+  helpers.window.location.hash = "#browse/search/custom?q=legacy";
+  const legacyRoute = helpers.parseBrowseHash();
+  assert.equal(legacyRoute.searchFormat, "all");
+  assert.equal(legacyRoute.keyword, "legacy");
 });
 
 test("uses the selected repository format in the search page title", () => {
   const helpers = loadBrowseSearchHelpers();
 
-  assert.equal(helpers.searchFormatLabel("custom"), "All formats");
+  assert.equal(helpers.searchFormatLabel("all"), "All components");
+  assert.equal(helpers.searchFormatLabel("custom"), "Custom search");
   assert.equal(helpers.searchFormatLabel("maven2"), "Maven");
+  assert.equal(helpers.searchFormatLabel("docker"), "Docker / OCI");
   assert.equal(helpers.searchFormatLabel("ansiblegalaxy"), "Ansible Galaxy");
   assert.equal(helpers.searchFormatLabel("alpine"), "Alpine / APK");
+  assert.equal(helpers.searchPageTitle("all"), "Search all components");
+  assert.equal(helpers.searchPageTitle("custom"), "Custom search");
+  assert.equal(helpers.searchPageTitle("docker"), "Search Docker / OCI");
 });
 
 test("opens a Hugging Face search result at its immutable revision path", () => {

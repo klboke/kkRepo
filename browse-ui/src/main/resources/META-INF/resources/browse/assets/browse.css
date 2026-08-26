@@ -638,6 +638,7 @@ h1 {
 .search-form {
   display: flex;
   align-items: end;
+  flex-wrap: wrap;
   gap: 6px;
   padding: 0 12px 10px;
 }
@@ -649,13 +650,22 @@ h1 {
   font-weight: 700;
 }
 
-.search-form input {
+.search-form input,
+.search-form select {
   width: 300px;
   height: 32px;
   border: 1px solid #d3d3d3;
   border-radius: 3px;
   padding: 0 8px;
   font-weight: 400;
+}
+
+.search-form select {
+  width: 220px;
+}
+
+.search-format-field[hidden] {
+  display: none;
 }
 
 .criteria-button {
@@ -2044,6 +2054,7 @@ h2 {
 
 .filter-box,
 .search-form input,
+.search-form select,
 .upload-form input,
 .upload-form select,
 .upload-form textarea,
@@ -2227,6 +2238,7 @@ h2 {
 }
 
 .search-form input,
+.search-form select,
 .upload-form input,
 .upload-form select {
   height: 36px;

@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-4">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20260811-conan-1">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20260818-user-round-1">
-    <link rel="stylesheet" href="/browse/assets/browse.css?v=20260826-tree-scroll-1">
+    <link rel="stylesheet" href="/browse/assets/browse.css?v=20260826-search-menu-1">
     <link rel="stylesheet" href="/browse/assets/account-menu.css?v=20260824-ui-themes-3">
     <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=20260819-topbar-control-height-1">
     <link rel="stylesheet" href="/login/assets/login-modal.css?v=20260818-login-icons-1">
@@ -89,27 +89,16 @@
             <span class="side-caret lucide-icon icon-chevron-down" aria-hidden="true"></span>
           </button>
           <div class="search-subnav" id="search-subnav" hidden>
-            <button class="side-subitem" data-search-format="custom" type="button"><span class="search-all-icon lucide-icon icon-package-search" aria-hidden="true"></span><span>All formats</span></button>
-            <button class="side-subitem" data-search-format="cargo" type="button"><span class="format-logo format-logo-cargo" aria-hidden="true"></span><span>Cargo</span></button>
+            <button class="side-subitem" data-search-format="all" type="button"><span class="search-all-icon lucide-icon icon-package-search" aria-hidden="true"></span><span>All components</span></button>
+            <button class="side-subitem" data-search-format="custom" type="button"><span class="search-all-icon lucide-icon icon-list-filter" aria-hidden="true"></span><span>Custom search</span></button>
+            <button class="side-subitem" data-search-format="maven2" type="button"><span class="format-logo format-logo-maven" aria-hidden="true"></span><span>Maven</span></button>
+            <button class="side-subitem" data-search-format="npm" type="button"><span class="format-logo format-logo-npm" aria-hidden="true"></span><span>npm</span></button>
+            <button class="side-subitem" data-search-format="pypi" type="button"><span class="format-logo format-logo-pypi" aria-hidden="true"></span><span>PyPI</span></button>
+            <button class="side-subitem" data-search-format="docker" type="button"><span class="format-logo format-logo-docker" aria-hidden="true"></span><span>Docker / OCI</span></button>
+            <button class="side-subitem" data-search-format="nuget" type="button"><span class="format-logo format-logo-nuget" aria-hidden="true"></span><span>NuGet</span></button>
             <button class="side-subitem" data-search-format="go" type="button"><span class="format-logo format-logo-go" aria-hidden="true"></span><span>Go</span></button>
             <button class="side-subitem" data-search-format="helm" type="button"><span class="format-logo format-logo-helm" aria-hidden="true"></span><span>Helm</span></button>
-            <button class="side-subitem" data-search-format="maven2" type="button"><span class="format-logo format-logo-maven" aria-hidden="true"></span><span>Maven</span></button>
-            <button class="side-subitem" data-search-format="nuget" type="button"><span class="format-logo format-logo-nuget" aria-hidden="true"></span><span>NuGet</span></button>
-            <button class="side-subitem" data-search-format="pub" type="button"><span class="format-logo format-logo-pub" aria-hidden="true"></span><span>Pub</span></button>
-            <button class="side-subitem" data-search-format="composer" type="button"><span class="format-logo format-logo-composer" aria-hidden="true"></span><span>Composer</span></button>
-            <button class="side-subitem" data-search-format="terraform" type="button"><span class="format-logo format-logo-terraform" aria-hidden="true"></span><span>Terraform</span></button>
-            <button class="side-subitem" data-search-format="swift" type="button"><span class="format-logo format-logo-swift" aria-hidden="true"></span><span>Swift</span></button>
-            <button class="side-subitem" data-search-format="ansiblegalaxy" type="button"><span class="format-logo format-logo-ansiblegalaxy" aria-hidden="true"></span><span>Ansible Galaxy</span></button>
-            <button class="side-subitem" data-search-format="conda" type="button"><span class="format-logo format-logo-conda" aria-hidden="true"></span><span>Conda</span></button>
-            <button class="side-subitem" data-search-format="conan" type="button"><span class="format-logo format-logo-conan" aria-hidden="true"></span><span>Conan 2</span></button>
-            <button class="side-subitem" data-search-format="apt" type="button"><span class="format-logo format-logo-apt" aria-hidden="true"></span><span>APT / Debian</span></button>
-            <button class="side-subitem" data-search-format="alpine" type="button"><span class="format-logo format-logo-alpine" aria-hidden="true"></span><span>Alpine / APK</span></button>
-            <button class="side-subitem" data-search-format="r" type="button"><span class="format-logo format-logo-r" aria-hidden="true"></span><span>R / CRAN</span></button>
-            <button class="side-subitem" data-search-format="huggingface" type="button"><span class="format-logo format-logo-huggingface" aria-hidden="true"></span><span>Hugging Face Models</span></button>
-            <button class="side-subitem" data-search-format="pypi" type="button"><span class="format-logo format-logo-pypi" aria-hidden="true"></span><span>PyPI</span></button>
-            <button class="side-subitem" data-search-format="rubygems" type="button"><span class="format-logo format-logo-rubygems" aria-hidden="true"></span><span>RubyGems</span></button>
-            <button class="side-subitem" data-search-format="yum" type="button"><span class="format-logo format-logo-yum" aria-hidden="true"></span><span>Yum</span></button>
-            <button class="side-subitem" data-search-format="npm" type="button"><span class="format-logo format-logo-npm" aria-hidden="true"></span><span>npm</span></button>
+            <button class="side-subitem" data-search-format="cargo" type="button"><span class="format-logo format-logo-cargo" aria-hidden="true"></span><span>Cargo</span></button>
           </div>
           <button class="side-item" data-view="browse" type="button">
             <span class="side-icon lucide-icon icon-library" aria-hidden="true"></span>
@@ -372,10 +361,37 @@
         <section class="view" id="search-view">
           <div class="page-heading">
             <span class="heading-icon"><span class="lucide-icon icon-search" aria-hidden="true"></span></span>
-            <h1><span>Search</span> <span id="component-search-format">Maven</span></h1>
+            <h1 id="component-search-title">Search Maven</h1>
             <span class="heading-copy">Search for components by attribute</span>
           </div>
           <form class="search-form" id="component-search-form">
+            <label class="search-format-field" id="component-custom-format-field" hidden>
+              <span>Format</span>
+              <select id="component-custom-format">
+                <option value="maven2">Maven</option>
+                <option value="npm">npm</option>
+                <option value="pypi">PyPI</option>
+                <option value="cargo">Cargo</option>
+                <option value="pub">Pub</option>
+                <option value="composer">Composer</option>
+                <option value="go">Go</option>
+                <option value="helm">Helm</option>
+                <option value="docker">Docker / OCI</option>
+                <option value="nuget">NuGet</option>
+                <option value="rubygems">RubyGems</option>
+                <option value="yum">Yum</option>
+                <option value="terraform">Terraform</option>
+                <option value="swift">Swift</option>
+                <option value="ansiblegalaxy">Ansible Galaxy</option>
+                <option value="conda">Conda</option>
+                <option value="conan">Conan 2</option>
+                <option value="apt">APT / Debian</option>
+                <option value="alpine">Alpine / APK</option>
+                <option value="r">R / CRAN</option>
+                <option value="huggingface">Hugging Face Models</option>
+                <option value="raw">Raw</option>
+              </select>
+            </label>
             <label>
               <span>Keyword</span>
               <input id="component-keyword" type="search" placeholder="Any">
@@ -486,7 +502,7 @@
     <script src="/login/assets/ui-i18n.js?v=20260824-ui-themes-2"></script>
     <script src="/login/assets/product-update.js?v=20260819-version-update-1"></script>
     <script src="/login/assets/login-modal.js?v=20260818-login-icons-3"></script>
-    <script src="/browse/assets/global-component-search.js?v=20260817-global-search-2"></script>
-    <script src="/browse/assets/browse.js?v=20260826-tree-scroll-1"></script>
+    <script src="/browse/assets/global-component-search.js?v=20260826-search-menu-1"></script>
+    <script src="/browse/assets/browse.js?v=20260826-search-menu-1"></script>
   </body>
 </html>

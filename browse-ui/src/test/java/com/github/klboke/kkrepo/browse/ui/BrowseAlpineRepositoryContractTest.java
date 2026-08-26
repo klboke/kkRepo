@@ -17,7 +17,7 @@ class BrowseAlpineRepositoryContractTest {
     String stylesheet = resource("/META-INF/resources/browse/assets/format-icons.css");
     String browseStylesheet = resource("/META-INF/resources/browse/assets/browse.css");
 
-    assertTrue(index.contains("data-search-format=\"alpine\""));
+    assertTrue(index.contains("<option value=\"alpine\">Alpine / APK</option>"));
     assertTrue(index.contains("data-format=\"alpine\""));
     assertTrue(index.contains("Alpine / APK"));
     assertTrue(javascript.contains("function alpineUsageDetail"));

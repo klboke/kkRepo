@@ -15,7 +15,7 @@ class BrowseAnsibleGalaxyContractTest {
     String index = resource("/META-INF/resources/browse/index.html");
     String javascript = resource("/META-INF/resources/browse/assets/browse.js");
 
-    assertTrue(index.contains("data-search-format=\"ansiblegalaxy\""));
+    assertTrue(index.contains("<option value=\"ansiblegalaxy\">Ansible Galaxy</option>"));
     assertTrue(index.contains("data-format=\"ansiblegalaxy\""));
     assertTrue(javascript.contains("function ansibleGalaxyUsageDetail"));
     assertTrue(javascript.contains("renderAttributeGroup(\"Ansible Galaxy\", detail.ansible)"));
