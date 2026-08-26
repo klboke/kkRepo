@@ -23,6 +23,14 @@ class AdminUiThemeContractTest {
   }
 
   @Test
+  void topbarFocusOutlineComesFromTheSelectedTheme() throws IOException {
+    String stylesheet = resource("/META-INF/resources/admin/assets/admin.css");
+
+    assertTrue(stylesheet.contains("outline: 2px solid var(--topbar-focus-outline)"));
+    assertFalse(stylesheet.contains("outline: 2px solid #ffffff"));
+  }
+
+  @Test
   void exposesDefaultThemeSelectionInUiSettings() throws IOException {
     String index = resource("/META-INF/resources/admin/index.html");
     String javascript = resource("/META-INF/resources/admin/assets/admin.js");

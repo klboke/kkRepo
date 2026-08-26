@@ -10,8 +10,8 @@
   color-scheme: light;
 
   /* ===== Brand ===== */
-  --brand: #3f9665;
-  --brand-strong: #2f7650;
+  --brand: #2f7650;
+  --brand-strong: #286744;
   --brand-tint: #edf7f1;
   --brand-tint-strong: #dcefe4;
   --brand-bright: #70c795;
@@ -54,6 +54,7 @@
   --topbar-hover: #f1f3f4;
   --topbar-active: var(--brand);
   --topbar-selection: var(--brand);
+  --topbar-focus-outline: var(--brand-strong);
 
   /* ===== Signed-in account identity ===== */
   --account-focus-ring-color: rgba(112, 199, 149, 0.3);

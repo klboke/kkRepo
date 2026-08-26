@@ -42,6 +42,14 @@ class BrowseUiThemeContractTest {
   }
 
   @Test
+  void topbarFocusOutlineComesFromTheSelectedTheme() throws IOException {
+    String stylesheet = resource("/META-INF/resources/browse/assets/browse.css");
+
+    assertTrue(stylesheet.contains("outline: 2px solid var(--topbar-focus-outline)"));
+    assertFalse(stylesheet.contains("outline: 2px solid #ffffff"));
+  }
+
+  @Test
   void indigoThemeImplementsTheCompleteSharedTokenContract() throws IOException {
     String defaultTheme = resource("/META-INF/resources/browse/assets/themes/default.css");
     String indigoTheme = resource("/META-INF/resources/browse/assets/themes/indigo.css");
@@ -109,13 +117,15 @@ class BrowseUiThemeContractTest {
     String nexusTheme = resource("/META-INF/resources/browse/assets/themes/nexus.css");
 
     assertTrue(nexusTheme.contains("color-scheme: light"));
-    assertTrue(nexusTheme.contains("--brand: #3f9665"));
+    assertTrue(nexusTheme.contains("--brand: #2f7650"));
+    assertTrue(nexusTheme.contains("--brand-strong: #286744"));
     assertTrue(nexusTheme.contains("--brand-bright: #70c795"));
     assertTrue(nexusTheme.contains("--accent: #2f6fa7"));
     assertTrue(nexusTheme.contains("--canvas: #f5f6f7"));
     assertTrue(nexusTheme.contains("--topbar: #ffffff"));
     assertTrue(nexusTheme.contains("--topbar-ink: #1f2226"));
     assertTrue(nexusTheme.contains("--topbar-selection: var(--brand)"));
+    assertTrue(nexusTheme.contains("--topbar-focus-outline: var(--brand-strong)"));
     assertTrue(nexusTheme.contains(":root[data-theme=\"nexus\"] .workspace-tab.is-active"));
     assertTrue(nexusTheme.contains(":root[data-theme=\"nexus\"] .global-component-search input"));
     assertTrue(nexusTheme.contains(

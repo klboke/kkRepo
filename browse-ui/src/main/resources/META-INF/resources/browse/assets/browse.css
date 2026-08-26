@@ -99,7 +99,7 @@ select {
 }
 
 .product-update-link:focus-visible {
-  outline: 2px solid #ffffff;
+  outline: 2px solid var(--topbar-focus-outline);
   outline-offset: 1px;
 }
 
@@ -161,7 +161,7 @@ select {
 .product-link:focus-visible,
 .product-version:focus-visible {
   border-radius: 3px;
-  outline: 2px solid #ffffff;
+  outline: 2px solid var(--topbar-focus-outline);
   outline-offset: 2px;
 }
 
