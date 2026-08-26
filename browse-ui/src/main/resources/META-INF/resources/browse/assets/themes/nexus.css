@@ -53,7 +53,7 @@
   --topbar-muted: #626970;
   --topbar-hover: #f1f3f4;
   --topbar-active: var(--brand);
-  --topbar-selection: var(--brand-tint-strong);
+  --topbar-selection: var(--brand);
 
   /* ===== Signed-in account identity ===== */
   --account-focus-ring-color: rgba(112, 199, 149, 0.3);
@@ -128,6 +128,10 @@
  * application bar self-contained in this theme without affecting other themes. */
 :root[data-theme="nexus"] .nx-topbar {
   box-shadow: 0 1px 0 rgba(31, 34, 38, 0.06);
+}
+
+:root[data-theme="nexus"] .workspace-tab.is-active {
+  color: #ffffff;
 }
 
 :root[data-theme="nexus"] .global-component-search input,

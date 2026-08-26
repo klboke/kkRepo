@@ -115,6 +115,8 @@ class BrowseUiThemeContractTest {
     assertTrue(nexusTheme.contains("--canvas: #f5f6f7"));
     assertTrue(nexusTheme.contains("--topbar: #ffffff"));
     assertTrue(nexusTheme.contains("--topbar-ink: #1f2226"));
+    assertTrue(nexusTheme.contains("--topbar-selection: var(--brand)"));
+    assertTrue(nexusTheme.contains(":root[data-theme=\"nexus\"] .workspace-tab.is-active"));
     assertTrue(nexusTheme.contains(":root[data-theme=\"nexus\"] .global-component-search input"));
     assertTrue(nexusTheme.contains(
         "--account-avatar-background: linear-gradient(145deg, #4aa673, #2f6fa7)"));
