@@ -208,7 +208,7 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 
 ## 谁在使用 kkRepo？
 
-如果你的公司、企业或组织正在使用 kkRepo，欢迎前往[中文用户登记 Issue](https://github.com/klboke/kkRepo/issues/93)或[英文用户登记 Issue](https://github.com/klboke/kkRepo/issues/94)留下部署信息。登记 Issue 仅用于使用方登记；Bug 和功能建议请使用常规 Issue 模板提交。
+如果你的公司、企业或组织正在使用 kkRepo，欢迎前往[用户登记 Issue](https://github.com/klboke/kkRepo/issues/93)留下部署信息。该 Issue 仅用于使用方登记；Bug 和功能建议请使用常规 Issue 模板提交。
 
 ## 参与贡献
 

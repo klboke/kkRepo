@@ -208,7 +208,7 @@ Token types exposed in the user and admin UI include protocol-specific tokens (`
 
 ## Who Is Using kkRepo?
 
-If your company, enterprise, or organization uses kkRepo, you are welcome to share your deployment in the [English user registration issue](https://github.com/klboke/kkRepo/issues/94) or the [Chinese user registration issue](https://github.com/klboke/kkRepo/issues/93). These issues are for usage registration only; please use the regular issue templates for bug reports and feature requests.
+If your company, enterprise, or organization uses kkRepo, you are welcome to share your deployment in the [user registration issue](https://github.com/klboke/kkRepo/issues/94). This issue is for usage registration only; please use the regular issue templates for bug reports and feature requests.
 
 ## Contributing
 
