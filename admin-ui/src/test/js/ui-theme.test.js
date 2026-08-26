@@ -50,7 +50,7 @@ test("boots with the current kkRepo CSS as the default theme", () => {
 });
 
 test("loads every registered bundled theme template from cached UI settings", () => {
-  const themes = ["indigo", "ocean", "sunset", "jfrog"];
+  const themes = ["indigo", "ocean", "sunset", "jfrog", "nexus"];
 
   for (const theme of themes) {
     const view = fixture({
@@ -67,7 +67,7 @@ test("loads every registered bundled theme template from cached UI settings", ()
 });
 
 test("previews a selected theme without persisting browser settings", () => {
-  const themes = ["default", "indigo", "ocean", "sunset", "jfrog"];
+  const themes = ["default", "indigo", "ocean", "sunset", "jfrog", "nexus"];
   const view = fixture({ defaultTheme: "default", supportedDefaultThemes: themes });
 
   assert.equal(view.binding.applyTheme("jfrog", themes), "jfrog");

@@ -103,6 +103,22 @@ class BrowseUiThemeContractTest {
     assertEquals(customPropertyNames(defaultTheme), customPropertyNames(jfrogTheme));
   }
 
+  @Test
+  void nexusThemeImplementsTheCompleteSharedTokenContract() throws IOException {
+    String defaultTheme = resource("/META-INF/resources/browse/assets/themes/default.css");
+    String nexusTheme = resource("/META-INF/resources/browse/assets/themes/nexus.css");
+
+    assertTrue(nexusTheme.contains("color-scheme: light"));
+    assertTrue(nexusTheme.contains("--brand: #3f9665"));
+    assertTrue(nexusTheme.contains("--brand-bright: #70c795"));
+    assertTrue(nexusTheme.contains("--accent: #2f6fa7"));
+    assertTrue(nexusTheme.contains("--canvas: #f5f6f7"));
+    assertTrue(nexusTheme.contains("--topbar: #1b1d20"));
+    assertTrue(nexusTheme.contains(
+        "--account-avatar-background: linear-gradient(145deg, #4aa673, #2f6fa7)"));
+    assertEquals(customPropertyNames(defaultTheme), customPropertyNames(nexusTheme));
+  }
+
   private Set<String> customPropertyNames(String css) {
     Set<String> names = new HashSet<>();
     Matcher matcher = Pattern.compile("(--[a-z0-9-]+)\\s*:").matcher(css);
