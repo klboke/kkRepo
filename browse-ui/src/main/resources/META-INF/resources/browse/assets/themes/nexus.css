@@ -1,10 +1,10 @@
 /*
  * kkRepo Nexus-inspired theme.
  *
- * A restrained repository-console palette with graphite navigation, Sonatype-
- * inspired green selection states, blue information accents and compact neutral
- * surfaces. It follows the complete semantic token contract in default.css
- * without copying Sonatype logos, product names or other branded assets.
+ * A restrained repository-console palette with a white application bar,
+ * Sonatype-inspired green selection states, blue information accents and
+ * compact neutral surfaces. It follows the complete semantic token contract in
+ * default.css without copying Sonatype logos, product names or branded assets.
  */
 :root {
   color-scheme: light;
@@ -46,19 +46,19 @@
   --info-bg: #eef5fb;
   --info-line: #bfd4e6;
 
-  /* ===== Graphite topbar ===== */
-  --topbar: #1b1d20;
-  --topbar-line: #34383d;
-  --topbar-ink: #f7f8f8;
-  --topbar-muted: #c3c8cd;
-  --topbar-hover: rgba(255, 255, 255, 0.09);
-  --topbar-active: var(--brand-bright);
-  --topbar-selection: linear-gradient(180deg, #438f63, #347a53);
+  /* ===== White application bar ===== */
+  --topbar: #ffffff;
+  --topbar-line: #d7dadd;
+  --topbar-ink: #1f2226;
+  --topbar-muted: #626970;
+  --topbar-hover: #f1f3f4;
+  --topbar-active: var(--brand);
+  --topbar-selection: var(--brand-tint-strong);
 
   /* ===== Signed-in account identity ===== */
   --account-focus-ring-color: rgba(112, 199, 149, 0.3);
   --account-avatar-background: linear-gradient(145deg, #4aa673, #2f6fa7);
-  --account-avatar-border: rgba(255, 255, 255, 0.2);
+  --account-avatar-border: rgba(31, 34, 38, 0.14);
   --account-avatar-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.2);
   --account-avatar-ink: #ffffff;
   --account-avatar-presence: #70c795;
@@ -122,4 +122,31 @@
   --row-alt: var(--surface-muted);
   --header: var(--surface-sunken);
   --panel: var(--surface);
+}
+
+/* The shared shell defaults are tuned for dark topbars. Keep the light Nexus
+ * application bar self-contained in this theme without affecting other themes. */
+:root[data-theme="nexus"] .nx-topbar {
+  box-shadow: 0 1px 0 rgba(31, 34, 38, 0.06);
+}
+
+:root[data-theme="nexus"] .global-component-search input,
+:root[data-theme="nexus"] .user-menu-trigger,
+:root[data-theme="nexus"] .account-login {
+  border-color: var(--line);
+  background: var(--surface);
+}
+
+:root[data-theme="nexus"] .global-component-search input:hover,
+:root[data-theme="nexus"] .user-menu-trigger:hover,
+:root[data-theme="nexus"] .user-menu-trigger[aria-expanded="true"],
+:root[data-theme="nexus"] .account-login:hover {
+  border-color: var(--line-strong);
+  background: var(--topbar-hover);
+}
+
+:root[data-theme="nexus"] .global-component-search input:focus-visible,
+:root[data-theme="nexus"] .account-login:focus-visible {
+  border-color: var(--brand);
+  box-shadow: var(--focus-ring);
 }
