@@ -643,7 +643,8 @@ h1 {
   padding: 0 12px 10px;
 }
 
-.search-form label {
+.search-form label,
+.search-format-field {
   display: grid;
   gap: 6px;
   color: #3c3c3c;
@@ -666,6 +667,160 @@ h1 {
 
 .search-format-field[hidden] {
   display: none;
+}
+
+.search-format-combobox {
+  position: relative;
+  width: 240px;
+}
+
+.search-format-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  height: 36px;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  padding: 0 10px;
+  text-align: left;
+}
+
+.search-format-trigger:hover,
+.search-format-trigger[aria-expanded="true"] {
+  border-color: var(--active);
+  background: var(--brand-tint);
+}
+
+.search-format-trigger:focus-visible,
+.search-format-option:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.search-format-value,
+.search-format-option {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+}
+
+.search-format-value {
+  flex: 1;
+  overflow: hidden;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.search-format-value > span:last-child,
+.search-format-option > span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-format-caret {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+  transition: transform 0.12s ease;
+}
+
+.search-format-trigger[aria-expanded="true"] .search-format-caret {
+  transform: rotate(180deg);
+}
+
+.search-format-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 80;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow-pop);
+  padding: 6px;
+}
+
+.search-format-filter {
+  width: 100%;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--text);
+  margin-bottom: 6px;
+  padding: 0 9px;
+}
+
+.search-format-filter:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.search-format-options {
+  display: grid;
+  max-height: min(340px, calc(100vh - 270px));
+  gap: 2px;
+  overflow-y: auto;
+}
+
+.search-format-option {
+  width: 100%;
+  min-height: 38px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  padding: 6px 9px;
+  text-align: left;
+}
+
+.search-format-option::after {
+  content: "";
+  width: 6px;
+  height: 11px;
+  flex: 0 0 auto;
+  border: solid var(--active);
+  border-width: 0 2px 2px 0;
+  margin: -2px 3px 0 auto;
+  opacity: 0;
+  transform: rotate(45deg);
+}
+
+.search-format-option:hover,
+.search-format-option.is-active {
+  background: var(--brand-tint);
+}
+
+.search-format-option[aria-selected="true"] {
+  background: var(--brand-tint-strong);
+}
+
+.search-format-option[aria-selected="true"]::after {
+  opacity: 1;
+}
+
+.search-format-value .format-logo,
+.search-format-option .format-logo {
+  width: 20px;
+  height: 20px;
+  flex-basis: 20px;
+}
+
+.search-format-empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 16px 10px;
+  text-align: center;
 }
 
 .criteria-button {
@@ -2229,6 +2384,7 @@ h2 {
 }
 
 .search-form label,
+.search-format-field,
 .upload-form label,
 .admin-bootstrap-grid label,
 .token-form label {

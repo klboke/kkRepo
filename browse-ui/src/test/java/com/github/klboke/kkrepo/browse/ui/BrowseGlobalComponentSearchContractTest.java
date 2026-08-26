@@ -16,6 +16,7 @@ class BrowseGlobalComponentSearchContractTest {
   void browseExposesGlobalAllAndCustomFormatSearch() throws IOException {
     String index = resource("/META-INF/resources/browse/index.html");
     String javascript = resource("/META-INF/resources/browse/assets/browse.js");
+    String browseStylesheet = resource("/META-INF/resources/browse/assets/browse.css");
     String sharedJavascript =
         resource("/META-INF/resources/browse/assets/global-component-search.js");
     String sharedStylesheet =
@@ -36,7 +37,20 @@ class BrowseGlobalComponentSearchContractTest {
         .filter(line -> line.contains("class=\"side-subitem\""))
         .count());
     assertTrue(index.contains("<form class=\"search-form\" id=\"component-search-form\">"));
-    assertTrue(index.contains("<select id=\"component-custom-format\">"));
+    assertTrue(index.contains(
+        "<select id=\"component-custom-format\" hidden aria-hidden=\"true\" tabindex=\"-1\">"));
+    assertTrue(index.contains("aria-haspopup=\"listbox\""));
+    assertTrue(index.contains("placeholder=\"Filter formats\""));
+    assertTrue(index.contains("id=\"component-custom-format-options\""));
+    assertTrue(index.indexOf("id=\"component-custom-format-filter\"")
+        < index.indexOf("id=\"component-custom-format-options\""));
+    assertEquals(22L, index.lines()
+        .filter(line -> line.contains("class=\"search-format-option\""))
+        .count());
+    assertTrue(index.contains(
+        "data-custom-search-format=\"docker\"><span class=\"format-logo format-logo-docker\""));
+    assertTrue(index.contains(
+        "data-custom-search-format=\"huggingface\"><span class=\"format-logo format-logo-huggingface\""));
     assertTrue(index.contains("<h1 id=\"component-search-title\">Search Maven</h1>"));
     assertTrue(index.contains(
         "/browse/assets/global-component-search.css?v=20260819-topbar-control-height-1"));
@@ -51,6 +65,14 @@ class BrowseGlobalComponentSearchContractTest {
         "showSearch(route.searchFormat, false, route.keyword, route.customSearchFormat)"));
     assertTrue(javascript.contains("document.getElementById(\"component-search-form\")"));
     assertTrue(javascript.contains("searchPageTitle(activeSearchFormat)"));
+    assertTrue(javascript.contains("bindCustomSearchFormatCombobox();"));
+    assertTrue(javascript.contains("filterCustomSearchFormatOptions"));
+    assertTrue(javascript.contains("moveActiveCustomSearchFormatOption"));
+
+    assertTrue(browseStylesheet.contains(".search-format-popover"));
+    assertTrue(browseStylesheet.contains(".search-format-filter"));
+    assertTrue(browseStylesheet.contains("top: calc(100% + 6px);"));
+    assertTrue(browseStylesheet.contains(".search-format-option .format-logo"));
 
     assertTrue(sharedJavascript.contains("/browse/#browse/search/all"));
     assertTrue(sharedJavascript.contains("locationRef.assign(destination)"));
