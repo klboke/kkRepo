@@ -20,7 +20,7 @@ test("keeps the expanded navigation inside the sidebar scroll container", () => 
 test("cache-busts the current Browse assets", () => {
   const html = readFileSync(resolve(browseRoot, "index.html"), "utf8");
 
-  assert.match(html, /browse\.css\?v=20260826-search-menu-3/);
+  assert.match(html, /browse\.css\?v=20260826-search-menu-4/);
   assert.match(html, /browse\.js\?v=20260826-search-menu-3/);
 });
 
@@ -29,6 +29,7 @@ test("keeps the icon format picker below its trigger", () => {
   const css = readFileSync(resolve(browseRoot, "assets/browse.css"), "utf8");
   const comboboxRule = css.match(/\.search-format-combobox\s*\{([^}]*)\}/)?.[1] || "";
   const popoverRule = css.match(/\.search-format-popover\s*\{([^}]*)\}/)?.[1] || "";
+  const filterRule = css.match(/\.search-form \.search-format-filter\s*\{([^}]*)\}/)?.[1] || "";
 
   assert.equal((html.match(/class="search-format-option"/g) || []).length, 22);
   assert.match(html, /aria-haspopup="listbox"/);
@@ -43,4 +44,5 @@ test("keeps the icon format picker below its trigger", () => {
   assert.match(popoverRule, /position:\s*absolute/);
   assert.match(popoverRule, /top:\s*calc\(100% \+ 6px\)/);
   assert.doesNotMatch(popoverRule, /bottom:/);
+  assert.match(filterRule, /width:\s*100%/);
 });

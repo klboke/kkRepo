@@ -748,7 +748,7 @@ h1 {
   padding: 6px;
 }
 
-.search-format-filter {
+.search-form .search-format-filter {
   width: 100%;
   height: 36px;
   border: 1px solid var(--line);
@@ -759,7 +759,7 @@ h1 {
   padding: 0 9px;
 }
 
-.search-format-filter:focus-visible {
+.search-form .search-format-filter:focus-visible {
   outline: 3px solid var(--focus);
   outline-offset: 1px;
 }

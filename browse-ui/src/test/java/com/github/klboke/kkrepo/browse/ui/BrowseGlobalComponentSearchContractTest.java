@@ -70,7 +70,7 @@ class BrowseGlobalComponentSearchContractTest {
     assertTrue(javascript.contains("moveActiveCustomSearchFormatOption"));
 
     assertTrue(browseStylesheet.contains(".search-format-popover"));
-    assertTrue(browseStylesheet.contains(".search-format-filter"));
+    assertTrue(browseStylesheet.contains(".search-form .search-format-filter"));
     assertTrue(browseStylesheet.contains("top: calc(100% + 6px);"));
     assertTrue(browseStylesheet.contains(".search-format-option .format-logo"));
 
