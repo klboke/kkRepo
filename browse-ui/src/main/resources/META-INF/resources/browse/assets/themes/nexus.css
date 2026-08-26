@@ -14,7 +14,7 @@
   --brand-strong: #286744;
   --brand-tint: #edf7f1;
   --brand-tint-strong: #dcefe4;
-  --brand-bright: #70c795;
+  --brand-bright: #347f56;
 
   /* ===== Signature accent ===== */
   --accent: #2f6fa7;
@@ -24,7 +24,7 @@
   --ink-1: #1f2226;
   --ink-2: #34383d;
   --ink-3: #626970;
-  --ink-4: #8b9198;
+  --ink-4: #6c7279;
   --line: #d7dadd;
   --line-strong: #b9bec4;
   --surface: #ffffff;
@@ -62,7 +62,7 @@
   --account-avatar-border: rgba(31, 34, 38, 0.14);
   --account-avatar-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.2);
   --account-avatar-ink: #ffffff;
-  --account-avatar-presence: #70c795;
+  --account-avatar-presence: var(--brand-bright);
 
   /* ===== Radius scale ===== */
   --r-xs: 3px;
@@ -80,7 +80,7 @@
   --shadow-press: inset 0 1px 2px rgba(31, 34, 38, 0.18);
 
   /* ===== Focus ===== */
-  --focus: rgba(63, 150, 101, 0.24);
+  --focus: var(--brand);
   --focus-ring: 0 0 0 3px var(--focus);
 
   /* ===== Spacing scale ===== */

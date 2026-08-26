@@ -23,7 +23,10 @@ class BrowseUiThemeContractTest {
     int bootstrap = index.indexOf("/login/assets/ui-theme.js");
     int components = index.indexOf("/browse/assets/browse.css");
     assertTrue(theme >= 0 && bootstrap > theme && components > bootstrap);
-    assertTrue(index.contains("/browse/assets/themes/default.css"));
+    assertTrue(index.contains(
+        "/browse/assets/themes/default.css?v=20260826-nexus-a11y-1"));
+    assertTrue(index.contains("/login/assets/ui-theme.js?v=20260826-nexus-a11y-1"));
+    assertTrue(index.contains("/browse/assets/browse.css?v=20260826-nexus-a11y-1"));
     assertFalse(index.contains("/browse/assets/tokens.css"));
   }
 
@@ -121,7 +124,7 @@ class BrowseUiThemeContractTest {
     assertTrue(nexusTheme.contains("color-scheme: light"));
     assertTrue(nexusTheme.contains("--brand: #2f7650"));
     assertTrue(nexusTheme.contains("--brand-strong: #286744"));
-    assertTrue(nexusTheme.contains("--brand-bright: #70c795"));
+    assertTrue(nexusTheme.contains("--brand-bright: #347f56"));
     assertTrue(nexusTheme.contains("--accent: #2f6fa7"));
     assertTrue(nexusTheme.contains("--canvas: #f5f6f7"));
     assertTrue(nexusTheme.contains("--topbar: #ffffff"));
@@ -129,6 +132,8 @@ class BrowseUiThemeContractTest {
     assertTrue(nexusTheme.contains("--topbar-selection: var(--brand)"));
     assertTrue(nexusTheme.contains("--topbar-focus-outline: var(--brand-strong)"));
     assertTrue(nexusTheme.contains("--account-focus-ring-color: var(--brand)"));
+    assertTrue(nexusTheme.contains("--ink-4: #6c7279"));
+    assertTrue(nexusTheme.contains("--focus: var(--brand)"));
     assertTrue(nexusTheme.contains(":root[data-theme=\"nexus\"] .workspace-tab.is-active"));
     assertTrue(nexusTheme.contains(":root[data-theme=\"nexus\"] .global-component-search input"));
     assertTrue(nexusTheme.contains(

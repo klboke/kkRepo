@@ -45,7 +45,7 @@ test("boots with the current kkRepo CSS as the default theme", () => {
   assert.equal(view.rootAttributes.get("data-theme"), "default");
   assert.equal(
     view.stylesheetAttributes.get("href"),
-    "/browse/assets/themes/default.css?v=20260824-ui-themes-3",
+    "/browse/assets/themes/default.css?v=20260826-nexus-a11y-1",
   );
 });
 
@@ -61,7 +61,7 @@ test("loads every registered bundled theme template from cached UI settings", ()
     assert.equal(view.binding.currentTheme(), theme);
     assert.equal(
       view.stylesheetAttributes.get("href"),
-      `/browse/assets/themes/${theme}.css?v=20260824-ui-themes-3`,
+      `/browse/assets/themes/${theme}.css?v=20260826-nexus-a11y-1`,
     );
   }
 });
@@ -75,7 +75,7 @@ test("previews a selected theme without persisting browser settings", () => {
   assert.equal(view.rootAttributes.get("data-theme"), "jfrog");
   assert.equal(
     view.stylesheetAttributes.get("href"),
-    "/browse/assets/themes/jfrog.css?v=20260824-ui-themes-3",
+    "/browse/assets/themes/jfrog.css?v=20260826-nexus-a11y-1",
   );
   assert.deepEqual(view.storageWrites, []);
 });
@@ -100,6 +100,6 @@ test("falls back to the default template when a selected stylesheet is missing",
   assert.equal(view.binding.currentTheme(), "default");
   assert.equal(
     view.stylesheetAttributes.get("href"),
-    "/browse/assets/themes/default.css?v=20260824-ui-themes-3",
+    "/browse/assets/themes/default.css?v=20260826-nexus-a11y-1",
   );
 });
