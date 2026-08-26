@@ -1,0 +1,157 @@
+/*
+ * kkRepo Nexus-inspired theme.
+ *
+ * A restrained repository-console palette with a white application bar,
+ * Sonatype-inspired green selection states, blue information accents and
+ * compact neutral surfaces. It follows the complete semantic token contract in
+ * default.css without copying Sonatype logos, product names or branded assets.
+ */
+:root {
+  color-scheme: light;
+
+  /* ===== Brand ===== */
+  --brand: #2f7650;
+  --brand-strong: #286744;
+  --brand-tint: #edf7f1;
+  --brand-tint-strong: #dcefe4;
+  --brand-bright: #347f56;
+
+  /* ===== Signature accent ===== */
+  --accent: #2f6fa7;
+  --accent-soft: #eef5fb;
+
+  /* ===== Neutral ramp ===== */
+  --ink-1: #1f2226;
+  --ink-2: #34383d;
+  --ink-3: #626970;
+  --ink-4: #6c7279;
+  --line: #d7dadd;
+  --line-strong: #b9bec4;
+  --surface: #ffffff;
+  --surface-muted: #f8f9fa;
+  --surface-sunken: #eceeef;
+  --canvas: #f5f6f7;
+
+  /* ===== Semantic status ===== */
+  --success: #347a53;
+  --success-bg: #edf7f1;
+  --success-line: #b8ddc7;
+  --warning: #9a5b16;
+  --warning-bg: #fff6e8;
+  --warning-line: #ead09e;
+  --danger: #ad372f;
+  --danger-bg: #fff0ef;
+  --danger-line: #e8bab6;
+  --info: #2f6fa7;
+  --info-bg: #eef5fb;
+  --info-line: #bfd4e6;
+
+  /* ===== White application bar ===== */
+  --topbar: #ffffff;
+  --topbar-line: #d7dadd;
+  --topbar-ink: #1f2226;
+  --topbar-muted: #626970;
+  --topbar-hover: #f1f3f4;
+  --topbar-active: var(--brand);
+  --topbar-selection: var(--brand);
+  --topbar-focus-outline: var(--brand-strong);
+
+  /* ===== Signed-in account identity ===== */
+  --account-focus-ring-color: var(--brand);
+  --account-avatar-background: linear-gradient(145deg, #4aa673, #2f6fa7);
+  --account-avatar-border: rgba(31, 34, 38, 0.14);
+  --account-avatar-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  --account-avatar-ink: #ffffff;
+  --account-avatar-presence: var(--brand-bright);
+
+  /* ===== Radius scale ===== */
+  --r-xs: 3px;
+  --r-sm: 4px;
+  --r-md: 6px;
+  --r-lg: 8px;
+  --r-pill: 999px;
+
+  /* ===== Elevation ===== */
+  --shadow-sm: 0 1px 2px rgba(31, 34, 38, 0.08);
+  --shadow-soft: 0 8px 22px rgba(31, 34, 38, 0.1);
+  --shadow-pop: 0 16px 38px rgba(31, 34, 38, 0.2);
+  --shadow-modal: 0 26px 72px rgba(22, 25, 29, 0.3);
+  --shadow-nav: 0 5px 14px rgba(63, 150, 101, 0.2);
+  --shadow-press: inset 0 1px 2px rgba(31, 34, 38, 0.18);
+
+  /* ===== Focus ===== */
+  --focus: var(--brand);
+  --focus-ring: 0 0 0 3px var(--focus);
+
+  /* ===== Spacing scale ===== */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+
+  /* ===== Typography ===== */
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-base: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 18px;
+  --fs-2xl: 22px;
+  --fs-3xl: 26px;
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+  --lh-tight: 1.25;
+  --lh-base: 1.5;
+
+  /* ===== Table ===== */
+  --row-hover: var(--brand-tint);
+  --table-head-ink: var(--ink-3);
+
+  /* ===== Legacy aliases ===== */
+  --active: var(--brand);
+  --active-ink: #ffffff;
+  --sidebar: var(--surface);
+  --sidebar-head: var(--surface);
+  --text: var(--ink-2);
+  --muted: var(--ink-3);
+  --row: var(--surface);
+  --row-alt: var(--surface-muted);
+  --header: var(--surface-sunken);
+  --panel: var(--surface);
+}
+
+/* The shared shell defaults are tuned for dark topbars. Keep the light Nexus
+ * application bar self-contained in this theme without affecting other themes. */
+:root[data-theme="nexus"] .nx-topbar {
+  box-shadow: 0 1px 0 rgba(31, 34, 38, 0.06);
+}
+
+:root[data-theme="nexus"] .workspace-tab.is-active {
+  color: #ffffff;
+}
+
+:root[data-theme="nexus"] .global-component-search input,
+:root[data-theme="nexus"] .user-menu-trigger,
+:root[data-theme="nexus"] .account-login {
+  border-color: var(--line);
+  background: var(--surface);
+}
+
+:root[data-theme="nexus"] .global-component-search input:hover,
+:root[data-theme="nexus"] .user-menu-trigger:hover,
+:root[data-theme="nexus"] .user-menu-trigger[aria-expanded="true"],
+:root[data-theme="nexus"] .account-login:hover {
+  border-color: var(--line-strong);
+  background: var(--topbar-hover);
+}
+
+:root[data-theme="nexus"] .global-component-search input:focus-visible,
+:root[data-theme="nexus"] .account-login:focus-visible {
+  border-color: var(--brand);
+  box-shadow: var(--focus-ring);
+}

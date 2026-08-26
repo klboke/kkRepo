@@ -25,7 +25,7 @@
   }
 
   function stylesheetHref(theme) {
-    return `/browse/assets/themes/${encodeURIComponent(theme)}.css?v=20260824-ui-themes-3`;
+    return `/browse/assets/themes/${encodeURIComponent(theme)}.css?v=20260826-nexus-a11y-1`;
   }
 
   function bind(documentRef, windowRef) {

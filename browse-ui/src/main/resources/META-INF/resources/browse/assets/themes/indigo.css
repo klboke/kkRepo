@@ -54,6 +54,7 @@
   --topbar-hover: rgba(255, 255, 255, 0.08);
   --topbar-active: var(--brand-bright);
   --topbar-selection: linear-gradient(180deg, #4f46e5, #3730a3);
+  --topbar-focus-outline: #ffffff;
 
   /* ===== Signed-in account identity ===== */
   --account-focus-ring-color: rgba(129, 140, 248, 0.32);
