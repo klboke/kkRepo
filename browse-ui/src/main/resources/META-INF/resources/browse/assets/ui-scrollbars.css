@@ -2,15 +2,15 @@
 
 :root {
   --ui-scrollbar-size: 6px;
-  --ui-scrollbar-thumb: rgba(36, 50, 46, 0.54);
-  --ui-scrollbar-thumb-hover: rgba(36, 50, 46, 0.7);
+  --ui-scrollbar-thumb: rgba(18, 33, 29, 0.5);
+  --ui-scrollbar-thumb-hover: rgba(18, 33, 29, 0.6);
 }
 
 @supports (color: color-mix(in srgb, black, transparent)) {
   :root {
     /* Stays translucent while retaining at least 3:1 contrast in bundled themes. */
-    --ui-scrollbar-thumb: color-mix(in srgb, var(--ink-2) 54%, transparent);
-    --ui-scrollbar-thumb-hover: color-mix(in srgb, var(--ink-2) 70%, transparent);
+    --ui-scrollbar-thumb: color-mix(in srgb, var(--ink-1) 50%, transparent);
+    --ui-scrollbar-thumb-hover: color-mix(in srgb, var(--ink-1) 60%, transparent);
   }
 }
 
