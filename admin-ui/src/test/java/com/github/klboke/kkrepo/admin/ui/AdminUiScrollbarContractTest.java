@@ -22,7 +22,7 @@ class AdminUiScrollbarContractTest {
 
     assertTrue(theme >= 0 && scrollbars > theme && components > scrollbars);
     assertTrue(index.contains(
-        "/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-1"));
+        "/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-2"));
     assertFalse(admin.contains("::-webkit-scrollbar"));
     assertFalse(admin.contains("scrollbar-color:"));
     assertFalse(admin.contains("scrollbar-width:"));

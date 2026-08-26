@@ -21,7 +21,7 @@ class BrowseUiScrollbarContractTest {
 
     assertTrue(theme >= 0 && scrollbars > theme && components > scrollbars);
     assertTrue(index.contains(
-        "/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-1"));
+        "/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-2"));
   }
 
   @Test
@@ -30,14 +30,14 @@ class BrowseUiScrollbarContractTest {
     String browse = resource("/META-INF/resources/browse/assets/browse.css");
 
     assertTrue(shared.contains("--ui-scrollbar-size: 6px"));
-    assertTrue(shared.contains("color-mix(in srgb, var(--ink-3) 24%, transparent)"));
-    assertTrue(shared.contains("* {\n"
-        + "  scrollbar-color: var(--ui-scrollbar-thumb) transparent;\n"
-        + "  scrollbar-width: thin;\n"
-        + "}"));
+    assertTrue(shared.contains("color-mix(in srgb, var(--ink-2) 54%, transparent)"));
+    assertTrue(shared.contains("color-mix(in srgb, var(--ink-2) 70%, transparent)"));
     assertTrue(shared.contains("*::-webkit-scrollbar"));
     assertTrue(shared.contains("height: var(--ui-scrollbar-size)"));
     assertTrue(shared.contains("*::-webkit-scrollbar-thumb:hover"));
+    assertTrue(shared.contains("@supports not selector(::-webkit-scrollbar)"));
+    assertTrue(shared.contains("scrollbar-color: var(--ui-scrollbar-thumb) transparent"));
+    assertTrue(shared.contains("scrollbar-width: thin"));
     assertFalse(browse.contains("::-webkit-scrollbar"));
     assertFalse(browse.contains("scrollbar-color:"));
     assertFalse(browse.contains("scrollbar-width:"));
