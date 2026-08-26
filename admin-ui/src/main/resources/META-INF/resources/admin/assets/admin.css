@@ -899,6 +899,14 @@ body {
   line-height: 1.45;
 }
 
+.ui-theme-preview-status {
+  padding: 8px 10px;
+  border: 1px solid var(--warning-line);
+  border-radius: var(--r-sm);
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
 .form-grid input,
 .form-grid select,
 .form-grid textarea {
