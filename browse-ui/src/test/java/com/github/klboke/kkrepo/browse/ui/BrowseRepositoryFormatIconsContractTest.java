@@ -13,10 +13,9 @@ class BrowseRepositoryFormatIconsContractTest {
   private static final List<String> FORMATS = List.of(
       "maven2", "npm", "pypi", "cargo", "pub", "composer", "terraform", "swift",
       "ansiblegalaxy", "conda", "conan", "apt", "alpine", "huggingface", "go",
-      "helm", "docker", "nuget", "rubygems", "yum", "raw");
+      "helm", "docker", "nuget", "rubygems", "yum", "r", "raw");
   private static final List<String> SEARCH_FORMATS = List.of(
-      "cargo", "go", "helm", "maven2", "nuget",
-      "pub", "pypi", "rubygems", "swift", "ansiblegalaxy", "conda", "conan", "apt", "alpine", "huggingface", "yum", "npm");
+      "maven2", "npm", "pypi", "docker", "nuget", "go", "helm", "cargo");
 
   @Test
   void repositoryFormatColumnUsesSharedBrandIcons() throws IOException {
@@ -38,6 +37,7 @@ class BrowseRepositoryFormatIconsContractTest {
               + iconName(format) + "\""), format);
     }
     for (String format : FORMATS) {
+      assertTrue(index.contains("<option value=\"" + format + "\">"), format);
       assertTrue(javascript.contains(format + ": \"" + iconName(format) + "\""), format);
     }
   }

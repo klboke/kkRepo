@@ -4,7 +4,7 @@
   root.kkrepoGlobalComponentSearch = api;
   if (root.document && root.location) api.bind(root.document, root.location);
 }(typeof globalThis !== "undefined" ? globalThis : this, function () {
-  const SEARCH_ROUTE = "/browse/#browse/search/custom";
+  const SEARCH_ROUTE = "/browse/#browse/search/all";
 
   function normalizeKeyword(value) {
     return String(value || "").trim();

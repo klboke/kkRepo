@@ -17,7 +17,7 @@ class BrowseAptRepositoryContractTest {
     String javascript = resource("/META-INF/resources/browse/assets/browse.js");
     String stylesheet = resource("/META-INF/resources/browse/assets/format-icons.css");
 
-    assertTrue(index.contains("data-search-format=\"apt\""));
+    assertTrue(index.contains("<option value=\"apt\">APT / Debian</option>"));
     assertTrue(index.contains("data-format=\"apt\""));
     assertTrue(index.contains("APT / Debian"));
     assertTrue(javascript.contains("function aptUsageDetail"));

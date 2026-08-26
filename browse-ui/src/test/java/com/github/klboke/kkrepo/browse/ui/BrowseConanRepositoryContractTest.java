@@ -16,7 +16,7 @@ class BrowseConanRepositoryContractTest {
     String javascript = resource("/META-INF/resources/browse/assets/browse.js");
     String stylesheet = resource("/META-INF/resources/browse/assets/format-icons.css");
 
-    assertTrue(index.contains("data-search-format=\"conan\""));
+    assertTrue(index.contains("<option value=\"conan\">Conan 2</option>"));
     assertTrue(index.contains("data-format=\"conan\""));
     assertTrue(javascript.contains("function conanUsageDetail"));
     assertTrue(javascript.contains("conan remote add"));
