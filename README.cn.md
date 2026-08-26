@@ -206,6 +206,10 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 
 用户和管理端 UI 已暴露的 token 类型包括协议专用 token（`NpmToken`、`CargoToken`、`PubToken`、`NuGetApiKey`、`RubyGemsApiKey`），以及面向 Terraform 服务 URL、Ansible Galaxy 客户端、CI、脚本和自定义 HTTP 客户端的 `GenericToken`；`GenericToken` 适用于能够发送已配置 API-key header 或 bearer token 的调用方。
 
+## 谁在使用 kkRepo？
+
+如果你的公司、企业或组织正在使用 kkRepo，欢迎前往[用户登记 Issue](https://github.com/klboke/kkRepo/issues/93)留下部署信息。该 Issue 仅用于使用方登记；Bug 和功能建议请使用常规 Issue 模板提交。
+
 ## 参与贡献
 
 欢迎提交 issue 和 pull request。贡献流程、PR 要求、兼容性测试要求和多副本设计约束见 [CONTRIBUTING.md](CONTRIBUTING.md)。社区行为准则见 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
