@@ -85,7 +85,7 @@ select {
   place-items: center;
   margin-left: 3px;
   border-radius: var(--r-xs);
-  color: var(--brand-bright);
+  color: var(--topbar-active);
   font-size: 15px;
   line-height: 1;
   text-decoration: none;
@@ -257,7 +257,7 @@ select {
   width: 18px;
   height: 18px;
   flex: 0 0 18px;
-  color: var(--brand-bright);
+  color: var(--topbar-active);
 }
 
 .account-entry-title {

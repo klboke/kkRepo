@@ -47,6 +47,8 @@ class BrowseUiThemeContractTest {
 
     assertTrue(stylesheet.contains("outline: 2px solid var(--topbar-focus-outline)"));
     assertFalse(stylesheet.contains("outline: 2px solid #ffffff"));
+    assertTrue(componentUsesToken(stylesheet, ".product-update-link", "--topbar-active"));
+    assertTrue(componentUsesToken(stylesheet, ".account-login-icon", "--topbar-active"));
   }
 
   @Test
@@ -126,6 +128,7 @@ class BrowseUiThemeContractTest {
     assertTrue(nexusTheme.contains("--topbar-ink: #1f2226"));
     assertTrue(nexusTheme.contains("--topbar-selection: var(--brand)"));
     assertTrue(nexusTheme.contains("--topbar-focus-outline: var(--brand-strong)"));
+    assertTrue(nexusTheme.contains("--account-focus-ring-color: var(--brand)"));
     assertTrue(nexusTheme.contains(":root[data-theme=\"nexus\"] .workspace-tab.is-active"));
     assertTrue(nexusTheme.contains(":root[data-theme=\"nexus\"] .global-component-search input"));
     assertTrue(nexusTheme.contains(
@@ -140,6 +143,11 @@ class BrowseUiThemeContractTest {
       names.add(matcher.group(1));
     }
     return names;
+  }
+
+  private boolean componentUsesToken(String css, String selector, String token) {
+    return Pattern.compile(Pattern.quote(selector) + "\\s*\\{[^}]*var\\("
+        + Pattern.quote(token) + "\\)", Pattern.DOTALL).matcher(css).find();
   }
 
   private String resource(String path) throws IOException {

@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 
 class AdminUiThemeContractTest {
@@ -28,6 +29,8 @@ class AdminUiThemeContractTest {
 
     assertTrue(stylesheet.contains("outline: 2px solid var(--topbar-focus-outline)"));
     assertFalse(stylesheet.contains("outline: 2px solid #ffffff"));
+    assertTrue(Pattern.compile("\\.product-update-link\\s*\\{[^}]*var\\(--topbar-active\\)",
+        Pattern.DOTALL).matcher(stylesheet).find());
   }
 
   @Test

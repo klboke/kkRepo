@@ -57,7 +57,7 @@
   --topbar-focus-outline: var(--brand-strong);
 
   /* ===== Signed-in account identity ===== */
-  --account-focus-ring-color: rgba(112, 199, 149, 0.3);
+  --account-focus-ring-color: var(--brand);
   --account-avatar-background: linear-gradient(145deg, #4aa673, #2f6fa7);
   --account-avatar-border: rgba(31, 34, 38, 0.14);
   --account-avatar-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.2);
