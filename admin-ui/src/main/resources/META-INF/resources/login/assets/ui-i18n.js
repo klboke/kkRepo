@@ -318,6 +318,7 @@
     "English": "英文",
     "Save UI settings": "保存界面设置",
     "These preferences are stored in the database and apply to the administration, browse, and sign-in UI on every replica. The current kkRepo design is provided as the default CSS theme template.": "这些设置存储在数据库中，对所有副本的管理、浏览和登录界面均生效。当前 kkRepo 设计作为默认 CSS 主题模板提供。",
+    "Theme preview is active. Save UI settings to make it the default.": "正在预览所选主题。保存界面设置后，它才会成为默认主题。",
     "Welcome": "欢迎",
     "Enterprise-grade artifact management for modern software delivery": "面向现代软件交付的企业级制品管理",
     "Initial administrator setup": "初始管理员设置",

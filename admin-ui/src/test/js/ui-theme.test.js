@@ -10,6 +10,7 @@ const uiTheme = require(resolve(
 function fixture(cachedSettings) {
   const stylesheetAttributes = new Map();
   const rootAttributes = new Map();
+  const storageWrites = [];
   const stylesheet = {
     onerror: null,
     setAttribute(name, value) { stylesheetAttributes.set(name, value); },
@@ -28,10 +29,13 @@ function fixture(cachedSettings) {
         assert.equal(key, "kkrepo.uiSettings");
         return JSON.stringify(cachedSettings || {});
       },
+      setItem(key, value) {
+        storageWrites.push([key, value]);
+      },
     },
   };
   const binding = uiTheme.bind(documentRef, windowRef);
-  return { binding, rootAttributes, stylesheet, stylesheetAttributes };
+  return { binding, rootAttributes, stylesheet, stylesheetAttributes, storageWrites };
 }
 
 test("boots with the current kkRepo CSS as the default theme", () => {
@@ -60,6 +64,20 @@ test("loads every registered bundled theme template from cached UI settings", ()
       `/browse/assets/themes/${theme}.css?v=20260824-ui-themes-3`,
     );
   }
+});
+
+test("previews a selected theme without persisting browser settings", () => {
+  const themes = ["default", "indigo", "ocean", "sunset", "jfrog"];
+  const view = fixture({ defaultTheme: "default", supportedDefaultThemes: themes });
+
+  assert.equal(view.binding.applyTheme("jfrog", themes), "jfrog");
+  assert.equal(view.binding.currentTheme(), "jfrog");
+  assert.equal(view.rootAttributes.get("data-theme"), "jfrog");
+  assert.equal(
+    view.stylesheetAttributes.get("href"),
+    "/browse/assets/themes/jfrog.css?v=20260824-ui-themes-3",
+  );
+  assert.deepEqual(view.storageWrites, []);
 });
 
 test("rejects unregistered and path-like theme identifiers", () => {
