@@ -10,14 +10,16 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
+import com.github.klboke.kkrepo.server.blob.BlobTransactionCleanup;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
-import com.github.klboke.kkrepo.server.blob.BlobTransactionCleanup;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
+import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
 import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -32,7 +34,6 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
-import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -60,6 +61,9 @@ public class GoAssetWriter {
     public void discardBody() {
       TempBlobFiles.deleteQuietly(responseFile);
     }
+  }
+
+  public record ReleaseStored(Stored module, Stored info, Stored archive) {
   }
 
   private record Digests(String md5, String sha1, String sha256, long size) {}
@@ -93,7 +97,8 @@ public class GoAssetWriter {
       Stored stored = executePersist(
           "Persist Go asset " + runtime.name() + "/" + path.path(),
           () -> persist(runtime, blobStoreId, path, upload, extraBlobAttributes,
-              keepResponseFile ? upload.tempFile() : null));
+              keepResponseFile ? upload.tempFile() : null,
+              "proxy", ProxyRequestAudit.currentClientIp(), Instant.now(), true));
       cleanupUnusedUploadedBlob(storage, blobStoreId, upload, stored.blob());
       if (!keepResponseFile) {
         TempBlobFiles.deleteQuietly(upload.tempFile());
@@ -103,6 +108,73 @@ public class GoAssetWriter {
       cleanupUploadedBlob(storage, blobStoreId, upload);
       TempBlobFiles.deleteQuietly(upload.tempFile());
       throw e;
+    }
+  }
+
+  /**
+   * Uploads all three immutable Go release assets before publishing their bindings in one
+   * database transaction. Readers on every replica therefore observe either the prior release or
+   * the complete new release; no process-local publish state participates in correctness.
+   */
+  public ReleaseStored writeHostedRelease(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      GoPath modulePath,
+      byte[] moduleBody,
+      GoPath infoPath,
+      byte[] infoBody,
+      GoPath archivePath,
+      Path archiveFile,
+      String createdBy,
+      String createdByIp,
+      boolean allowReplace) {
+    requireReleasePaths(modulePath, infoPath, archivePath);
+    DigestedUpload moduleUpload = null;
+    DigestedUpload infoUpload = null;
+    DigestedUpload archiveUpload = null;
+    try {
+      moduleUpload = uploadWithDigests(
+          runtime, storage, blobStoreId, modulePath,
+          new ByteArrayInputStream(moduleBody), Map.of());
+      infoUpload = uploadWithDigests(
+          runtime, storage, blobStoreId, infoPath,
+          new ByteArrayInputStream(infoBody), Map.of());
+      archiveUpload = uploadFileWithDigests(
+          runtime, storage, blobStoreId, archivePath, archiveFile, Map.of());
+      DigestedUpload finalModuleUpload = moduleUpload;
+      DigestedUpload finalInfoUpload = infoUpload;
+      DigestedUpload finalArchiveUpload = archiveUpload;
+      Instant publishedAt = Instant.now();
+      ReleaseStored stored = executePersist(
+          "Persist Go release " + runtime.name() + "/" + archivePath.module()
+              + "@" + archivePath.version(),
+          () -> {
+            if (!allowReplace) {
+              rejectExisting(runtime, modulePath, infoPath, archivePath);
+            }
+            Stored module = persist(
+                runtime, blobStoreId, modulePath, finalModuleUpload, Map.of(), null,
+                createdBy, createdByIp, publishedAt, allowReplace);
+            Stored info = persist(
+                runtime, blobStoreId, infoPath, finalInfoUpload, Map.of(), null,
+                createdBy, createdByIp, publishedAt, allowReplace);
+            Stored archive = persist(
+                runtime, blobStoreId, archivePath, finalArchiveUpload, Map.of(), null,
+                createdBy, createdByIp, publishedAt, allowReplace);
+            return new ReleaseStored(module, info, archive);
+          });
+      cleanupUnusedUploadedBlob(storage, blobStoreId, moduleUpload, stored.module().blob());
+      cleanupUnusedUploadedBlob(storage, blobStoreId, infoUpload, stored.info().blob());
+      cleanupUnusedUploadedBlob(storage, blobStoreId, archiveUpload, stored.archive().blob());
+      deleteUploadTemps(moduleUpload, infoUpload, archiveUpload);
+      return stored;
+    } catch (RuntimeException error) {
+      cleanupUploadedBlob(storage, blobStoreId, moduleUpload);
+      cleanupUploadedBlob(storage, blobStoreId, infoUpload);
+      cleanupUploadedBlob(storage, blobStoreId, archiveUpload);
+      deleteUploadTemps(moduleUpload, infoUpload, archiveUpload);
+      throw error;
     }
   }
 
@@ -148,6 +220,48 @@ public class GoAssetWriter {
         throw new IllegalStateException("Failed to buffer Go proxy content for " + path.path(), io);
       }
       throw (RuntimeException) e;
+    }
+  }
+
+  private DigestedUpload uploadFileWithDigests(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      GoPath path,
+      Path file,
+      Map<String, String> extraBlobAttributes) {
+    try {
+      MessageDigest md5 = digest("MD5");
+      MessageDigest sha1 = digest("SHA-1");
+      MessageDigest sha256 = digest("SHA-256");
+      long size = 0;
+      try (InputStream input = Files.newInputStream(file)) {
+        byte[] buffer = new byte[TempBlobFiles.responseBufferSize()];
+        for (int read; (read = input.read(buffer)) >= 0;) {
+          if (read == 0) continue;
+          size += read;
+          md5.update(buffer, 0, read);
+          sha1.update(buffer, 0, read);
+          sha256.update(buffer, 0, read);
+        }
+      }
+      String sha256Hex = hex(sha256.digest());
+      Digests digests = new Digests(hex(md5.digest()), hex(sha1.digest()), sha256Hex, size);
+      Optional<AssetBlobRecord> reusable = precheckedReusableBlob(
+          blobStoreId, sha256Hex, size, extraBlobAttributes);
+      if (reusable.isPresent()) {
+        AssetBlobRecord blob = reusable.orElseThrow();
+        return new DigestedUpload(
+            BlobReferenceCodec.reference(
+                blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size()),
+            digests,
+            null,
+            false);
+      }
+      BlobReference reference = storage.putFile(runtime.name(), path.path(), file, sha256Hex);
+      return new DigestedUpload(reference, digests, null, true);
+    } catch (IOException error) {
+      throw new IllegalStateException("Failed to upload Go content for " + path.path(), error);
     }
   }
 
@@ -200,8 +314,11 @@ public class GoAssetWriter {
       GoPath path,
       DigestedUpload upload,
       Map<String, String> extraBlobAttributes,
-      Path responseFile) {
-    Instant now = Instant.now();
+      Path responseFile,
+      String createdBy,
+      String createdByIp,
+      Instant now,
+      boolean replaceExisting) {
     BlobReference ref = upload.reference();
     Digests digests = upload.digests();
     String blobRef = BlobReferenceCodec.format(ref);
@@ -228,9 +345,9 @@ public class GoAssetWriter {
           digests.sha256(),
           digests.md5(),
           digests.size(),
-          path.contentType(),
-          "proxy",
-          ProxyRequestAudit.currentClientIp(),
+          contentType(runtime, path),
+          createdBy,
+          createdByIp,
           now,
           now,
           blobAttrs);
@@ -248,9 +365,13 @@ public class GoAssetWriter {
     Map<String, Object> attrs = assetAttributes(path);
     AssetRecord persistedAsset;
     if (existing.isPresent()) {
+      if (!replaceExisting) {
+        throw new MavenExceptions.WritePolicyDenied("Go module version already exists: "
+            + path.module() + " " + path.version());
+      }
       AssetRecord prior = existing.get();
       persistedAsset = updateExistingAsset(prior, componentId, blobId, path.kind().name(),
-          path.contentType(), digests.size(), now, attrs);
+          contentType(runtime, path), digests.size(), now, attrs);
     } else {
       AssetRecord record = new AssetRecord(
           null,
@@ -262,7 +383,7 @@ public class GoAssetWriter {
           PersistenceHashes.pathHash(path.path()),
           path.fileName(),
           path.kind().name(),
-          path.contentType(),
+          contentType(runtime, path),
           digests.size(),
           null,
           now,
@@ -279,9 +400,13 @@ public class GoAssetWriter {
         AssetRecord prior = assetDao.findAssetByPath(runtime.id(), path.path())
             .orElseThrow(() -> new IllegalStateException(
                 "Concurrent Go asset insert won but row is not visible for " + runtime.name() + "/" + path.path()));
+        if (!replaceExisting) {
+          throw new MavenExceptions.WritePolicyDenied("Go module version already exists: "
+              + path.module() + " " + path.version());
+        }
         previousBlobId = prior.assetBlobId();
         persistedAsset = updateExistingAsset(prior, componentId, blobId, path.kind().name(),
-            path.contentType(), digests.size(), now, attrs);
+            contentType(runtime, path), digests.size(), now, attrs);
       }
     }
 
@@ -289,14 +414,42 @@ public class GoAssetWriter {
       assetDao.markBlobDeletedIfUnreferenced(previousBlobId, "asset replaced");
     }
 
-    try {
-      browseNodeDao.upsertPathAncestors(runtime.id(), path.path(), persistedAsset.id(), componentId);
-    } catch (CannotAcquireLockException ignored) {
-      // Browse indexing is a side effect for proxy reads; content serving must not fail on
-      // concurrent first-hit directory creation.
-    }
+    // A MySQL deadlock rolls back the complete transaction before Spring translates it to
+    // CannotAcquireLockException. Do not swallow that exception here: the surrounding
+    // TransientTransactionRetry must replay the complete release, otherwise later statements
+    // could commit only a suffix of the .mod/.info/.zip set.
+    browseNodeDao.upsertPathAncestors(
+        runtime.id(), path.path(), persistedAsset.id(), componentId);
     assetMetadataCache.evictAfterCommit(runtime.id(), path.path());
     return new Stored(persistedAsset, persistedBlob, responseFile);
+  }
+
+  private void rejectExisting(RepositoryRuntime runtime, GoPath... paths) {
+    for (GoPath path : paths) {
+      if (assetDao.findAssetByPath(runtime.id(), path.path()).isPresent()) {
+        throw new MavenExceptions.WritePolicyDenied("Go module version already exists: "
+            + path.module() + " " + path.version());
+      }
+    }
+  }
+
+  private static void requireReleasePaths(GoPath module, GoPath info, GoPath archive) {
+    if (module.kind() != GoAssetKind.MODULE
+        || info.kind() != GoAssetKind.INFO
+        || archive.kind() != GoAssetKind.PACKAGE
+        || !module.module().equals(info.module())
+        || !module.module().equals(archive.module())
+        || !module.version().equals(info.version())
+        || !module.version().equals(archive.version())) {
+      throw new IllegalArgumentException("Go hosted release paths do not describe one coordinate");
+    }
+  }
+
+  private static void deleteUploadTemps(DigestedUpload... uploads) {
+    if (uploads == null) return;
+    for (DigestedUpload upload : uploads) {
+      if (upload != null) TempBlobFiles.deleteQuietly(upload.tempFile());
+    }
   }
 
   private AssetRecord updateExistingAsset(
@@ -341,6 +494,10 @@ public class GoAssetWriter {
     }
     attributes.put("asset_kind", path.kind().name());
     return attributes;
+  }
+
+  private static String contentType(RepositoryRuntime runtime, GoPath path) {
+    return runtime.isProxy() ? path.proxyContentType() : path.contentType();
   }
 
   private static long streamWithDigests(InputStream in, OutputStream out, MessageDigest... digests)

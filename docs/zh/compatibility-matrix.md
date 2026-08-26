@@ -29,7 +29,7 @@
 | Maven | hosted / proxy / group | Maven deploy、PUT 上传、GET/HEAD/checksum 读取、snapshot/release metadata、管理台组件上传 | 支持 | 默认迁移 hosted；proxy 可选 | `MavenRepositoryBlackBoxCompatibilityTest`、`MavenMetadataMergeCompatibilityTest`、`MavenWritePolicyCompatibilityTest`、`ComponentUploadBlackBoxCompatibilityTest` |
 | npm | hosted / proxy / group | `npm publish`、tarball 下载、包 metadata、dist-tags、audit endpoint 兼容、管理台上传 | 支持 | 默认迁移 hosted；proxy 可选 | `NpmProtocolCompatibilityTest`、`NpmRepositoryBlackBoxCompatibilityTest`、`ComponentUploadBlackBoxCompatibilityTest` |
 | PyPI | hosted / proxy / group | `twine upload`、包下载、simple index 读取、管理台上传 | 支持 simple index | 默认迁移 hosted；proxy 可选 | `PypiRepositoryBlackBoxCompatibilityTest`、`ComponentUploadBlackBoxCompatibilityTest` |
-| Go | proxy / group | Go module proxy 读取：list、info、mod、zip、latest、group fallback | 支持 | proxy 可选 | `GoProxyBlackBoxCompatibilityTest` |
+| Go | hosted / proxy / group | Nexus 兼容 module ZIP PUT 与 UI/API 上传；list、info、mod、zip、latest；group 语义合并与有序 fallback；Cleanup 与 ZIP 扫描 | 支持 | hosted 默认迁移；proxy 可选 | `GoProxyBlackBoxCompatibilityTest`、Go protocol/server 测试、真实 Go 客户端 E2E、Cleanup/扫描合同与 Nexus 性能基线 |
 | Helm | hosted / proxy | Chart push、PUT 上传、chart 下载、`index.yaml`、proxy index rewrite、管理台上传 | 支持 `index.yaml` | 默认迁移 hosted；proxy 可选 | `HelmRepositoryBlackBoxCompatibilityTest`、`ComponentUploadBlackBoxCompatibilityTest` |
 | Cargo / Rust | hosted / proxy / group | Sparse registry 读取、`cargo publish`、`.crate` 下载、yank/unyank、Cargo search、CargoToken 认证、UI/API `.crate` 上传 | 支持 sparse index 和 Cargo search | source profile 确认 Cargo content 后支持 datastore H2/PostgreSQL hosted；proxy 仅在显式选择且计划为 `FULL` 时迁移 | `CargoRepositoryBlackBoxCompatibilityTest`、`ComponentUploadBlackBoxCompatibilityTest` |
 | Dart / Pub | hosted / proxy / group | `dart pub publish`、`dart pub get`、`flutter pub get`、package metadata、archive 下载、Nexus `api/archives` 下载别名、`archive_sha256`、PubToken 认证、UI/API `.tar.gz` 上传 | 支持 package/version metadata 和 archive 属性 | Nexus 3.92.0 datastore source profile 确认 Pub content 后支持 hosted full；proxy cache 仅在显式选择 backup 且计划为 `FULL` 时迁移 | `PubRepositoryBlackBoxCompatibilityTest`、`ComponentUploadBlackBoxCompatibilityTest` |
@@ -116,6 +116,7 @@ kkrepo 把迁移作为产品能力，而不是一次性脚本：
 - 元数据迁移覆盖用户、角色、权限、blob store、repository 定义和相关兼容数据。
 - 仓库数据迁移默认扫描 hosted 仓库。
 - proxy 仓库可显式指定，用于迁移历史备份数据或回源缓存数据。
+- Source content model 已证明时，Go hosted definition 与 module asset 使用标准 preflight、可恢复 blob/checksum 和报告流程。遗留 `package` component kind 与原生 `go-module` row 在 Cleanup 中属于同一 family；Go proxy cache 迁移仍需显式选择。
 - Cargo / Rust hosted 仓库数据迁移已支持 datastore H2/PostgreSQL 源端，但必须由 preflight 证明 Cargo content model；未知 schema 默认 fail closed。
 - Dart / Pub hosted 仓库数据迁移已支持 Nexus 3.92.0+ datastore 源端，但必须由 preflight 证明 Pub content model；Pub proxy cache 迁移要求显式选择且 plan 为 `FULL`。
 - Composer 只迁移 Nexus 原生 proxy repository；未显式选择时只迁移配置，不迁移 cache。选择 cache 迁移时必须由 source profile 证明 Composer datastore content model，未知或非原生 Composer source fail closed。
@@ -151,7 +152,7 @@ kkrepo 把迁移作为产品能力，而不是一次性脚本：
 - Alpine 当前支持 APK v2 hosted/proxy/group 工作流。`Packages.adb`、APK v3 package container、DSA signing key、unsigned hosted/group index 和 private-key 下载不在支持面。Nexus 3.94 的 unsigned-upload Q1/architecture 投影差异在与 apk-tools 完整性校验冲突时不会复制。详见 [Alpine / APK 仓库使用指南](repository-guides/alpine-apk.md)。
 - R 当前支持 source `.tar.gz` hosted/proxy/group 工作流。Hosted/group 的 Windows `.zip`、macOS `.tgz`、`PACKAGES.rds`、自动 Archive alias、package build/check 和 CRAN submission 不在支持面；这些静态路径仍可由 proxy 直连。详见 [R / CRAN 仓库使用指南](repository-guides/r-cran.md)。
 - Hugging Face 当前只支持 Models proxy。Hosted/group、Datasets、Spaces、Kernels、Buckets、推理 API、Git push、LFS/Xet upload 与 Hub 社区/Web API 不在当前支持面；客户端不会收到上游 CDN/signed/Xet 路由。详见 [Hugging Face Models 仓库使用指南](repository-guides/hugging-face-models.md)。
-- Go 不支持 hosted 上传；Go module proxy 行为以读取代理为主。
+- Go hosted 发布使用 Nexus 兼容的仓库根 `<version>.zip` PUT 或 UI/Components API。Go 客户端没有独立 publish 命令；调用方必须构造 root、module path、version 与 `go.mod` 一致的规范 ZIP。
 - 不承诺覆盖每一个 Nexus UI endpoint。只有在支持用户工作流或迁移兼容需要时，才补对应 endpoint。
 - 当协议允许非确定性时，测试中可能规范化排序、时间戳、生成 ID 和 hostname。
 - File blob storage 可用于本地试用和开发；生产部署建议使用 OSS/S3 兼容存储。

@@ -55,10 +55,21 @@ public final class TempBlobFiles {
   }
 
   public static void copyResponse(InputStream in, OutputStream out) throws IOException {
-    copyResponse(in, out, null);
+    copyResponse(in, out, null, -1);
   }
 
   public static void copyResponse(InputStream in, OutputStream out, HttpServletRequest request) throws IOException {
+    copyResponse(in, out, request, -1);
+  }
+
+  /**
+   * Copies a response without allocating a large transfer buffer for a known small body. The
+   * configured buffer remains the upper bound and unknown-length responses retain the configured
+   * size.
+   */
+  public static void copyResponse(
+      InputStream in, OutputStream out, HttpServletRequest request, long contentLength)
+      throws IOException {
     if (in == null) {
       return;
     }
@@ -84,7 +95,7 @@ public final class TempBlobFiles {
         }
         return;
       }
-      byte[] buffer = new byte[responseBufferSize()];
+      byte[] buffer = new byte[responseBufferSize(contentLength)];
       int read;
       while ((read = src.read(buffer)) != -1) {
         try {
@@ -105,6 +116,14 @@ public final class TempBlobFiles {
         }
       }
     }
+  }
+
+  private static int responseBufferSize(long contentLength) {
+    int configuredSize = responseBufferSize();
+    if (contentLength < 0 || contentLength >= configuredSize) {
+      return configuredSize;
+    }
+    return Math.max(MIN_TRANSFER_BUFFER_SIZE, (int) contentLength);
   }
 
   static boolean isClientAbort(Throwable exception) {

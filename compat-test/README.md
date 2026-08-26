@@ -84,7 +84,7 @@ Available suites:
 - `nexus`: the disposable Nexus reference matrix. It enables write checks and compares kkrepo with
   Nexus across Maven, npm, PyPI, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift, Ansible Galaxy,
   Conda, APT/Debian, Conan 2, Alpine/APK, R/CRAN, Raw, selected NuGet/RubyGems/Yum behavior,
-  Go proxy endpoints, Helm hosted round trips, component upload specs, and selected security/admin
+  Go hosted publication plus proxy/group endpoints, Helm hosted round trips, component upload specs, and selected security/admin
   contracts. Composer is required when enabled; a missing Nexus Composer endpoint fails instead of skipping.
   The self-contained Conda fixtures run in this module, while the live Conda comparison is enabled
   explicitly as described below.
@@ -92,8 +92,9 @@ Available suites:
 - `client-e2e`: starts from the disposable kkrepo service and uses real package clients to publish
   and then download/resolve through hosted and group/proxy repositories. It covers Maven, npm,
   PyPI, Helm, Cargo/Rust, Dart/Pub, Flutter Pub, Composer/PHP, Terraform 0.13/current, Ansible Galaxy
-  2.9/current, Conda, APT/Debian, Conan 2, Alpine/APK, R 4.5/4.6, NuGet, RubyGems, Yum, and Docker/OCI. Go is
-  resolve-only through the Go proxy because hosted Go publishing is not a supported repository mode.
+  2.9/current, Conda, APT/Debian, Conan 2, Alpine/APK, R 4.5/4.6, NuGet, RubyGems, Yum, and Docker/OCI.
+  Go uploads an internal module to hosted, resolves it through group, and then resolves a public
+  module through the same group's proxy fallback.
   SwiftPM is included when `swift` or `SWIFT_E2E_BINS` is available; it publishes to Swift hosted,
   resolves and builds through group, checks immutable conflict and checksum replay, and exercises
   GitHub SCM-to-registry replacement through proxy.
@@ -682,9 +683,11 @@ Useful thresholds:
 - `COMPAT_PERF_WARMUPS`, default `2`
 - `COMPAT_PERF_SAMPLES`, default `8`
 
-## Go Proxy And Group Compatibility
+## Go Hosted, Proxy, And Group Compatibility
 
-The Go black-box test compares kkrepo against Nexus Go proxy and group repositories. By default
+The Go black-box test compares kkrepo against Nexus 3.93+ Go hosted, proxy, and group repositories.
+It covers repository-root `<version>.zip` publication; list/info/mod/zip/latest and HEAD responses;
+hosted-first group reads; ordered proxy fallback; media types; and generated metadata. By default
 it targets the local Nexus at `http://localhost:28090` with `admin` / `Admin1234`, and kkrepo at
 `http://127.0.0.1:18090`. Override `GO_KKREPO_COMPAT_BASE_URL` when testing a non-default
 kkrepo port.
@@ -704,10 +707,10 @@ mvn -pl compat-test -am \
   test
 ```
 
-The test creates/updates `go-proxy-compat`, `go-group-compat-miss`,
+The test creates/updates `go-hosted-compat`, `go-proxy-compat`, `go-group-compat-miss`,
 `go-group-compat-hit`, and `go-group-compat` on both sides. Override with
 `GO_NEXUS_COMPAT_BASE_URL`, `GO_KKREPO_COMPAT_BASE_URL`,
-`GO_NEXUS_COMPAT_PASSWORD`, `GO_GROUP_COMPAT_REPOSITORY`, and related
+`GO_NEXUS_COMPAT_PASSWORD`, `GO_HOSTED_COMPAT_REPOSITORY`, `GO_GROUP_COMPAT_REPOSITORY`, and related
 `GO_GROUP_COMPAT_*` settings when needed.
 
 ## Helm Hosted And Proxy Compatibility
@@ -872,3 +875,9 @@ The migration script uses the local Nexus REST endpoint `http://localhost:28090/
 pushes a fixture image to `docker-hosted`, starts repository-data metadata and
 package migration for only that Docker repository, then pulls the image from the
 kkrepo Docker connector `127.0.0.1:18183`.
+
+When `GO_MIGRATION_ENABLED=true`, the same script also creates and publishes a native Go module in
+the Nexus 3.94 `go-hosted` repository, requires a `FULL` datastore-backed migration plan, migrates
+its assets, checks the module ZIP digest, and runs `go mod download` against both kkrepo replicas.
+The migration workflow enables this fixture only for its Nexus 3.94 H2/PostgreSQL lanes because Go
+hosted repositories were introduced in Nexus 3.93.

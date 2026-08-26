@@ -75,7 +75,7 @@ Admin UI and Browse UI are served by the Spring Boot service as static assets:
 | `protocol-maven` | Maven parsing, metadata, layout, and policy helpers |
 | `protocol-npm` | npm path and metadata helpers |
 | `protocol-pypi` | PyPI protocol helpers |
-| `protocol-go` | Go module proxy helpers |
+| `protocol-go` | Go module path/version validation plus hosted, proxy, and group protocol helpers |
 | `protocol-helm` | Helm chart and index helpers |
 | `protocol-cargo` | Cargo sparse registry path, index, publish body, checksum, and error helpers |
 | `protocol-pub` | Dart Pub package name, hosted URL, path, archive, version metadata, and error helpers |

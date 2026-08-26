@@ -15,6 +15,7 @@ import com.github.klboke.kkrepo.server.cargo.CargoHostedService;
 import com.github.klboke.kkrepo.server.composer.ComposerHostedService;
 import com.github.klboke.kkrepo.server.conda.CondaService;
 import com.github.klboke.kkrepo.server.conan.ConanService;
+import com.github.klboke.kkrepo.server.goartifact.GoHostedService;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenHostedService;
@@ -71,6 +72,7 @@ public class ComponentUploadService {
       singleAsset("npm"),
       singleAsset("pypi"),
       singleAsset("helm"),
+      singleAsset("go"),
       singleAsset("cargo"),
       singleAsset("pub"),
       new UploadDefinition(
@@ -155,6 +157,7 @@ public class ComponentUploadService {
   private final NpmHostedService npmHosted;
   private final PypiHostedService pypiHosted;
   private final HelmHostedService helmHosted;
+  private GoHostedService goHosted;
   private final CargoHostedService cargoHosted;
   private final PubHostedService pubHosted;
   private final ComposerHostedService composerHosted;
@@ -253,6 +256,11 @@ public class ComponentUploadService {
   }
 
   @Autowired(required = false)
+  void setGoHostedService(GoHostedService goHosted) {
+    this.goHosted = goHosted;
+  }
+
+  @Autowired(required = false)
   void setCondaService(CondaService condaService) {
     this.condaService = condaService;
   }
@@ -313,7 +321,7 @@ public class ComponentUploadService {
       case NPM -> uploadNpm(runtime, upload, createdBy, createdByIp);
       case PYPI -> uploadPypi(runtime, upload, createdBy, createdByIp);
       case HELM -> uploadHelm(runtime, upload, createdBy, createdByIp);
-      case GO -> throw new UploadValidationException("Go hosted upload is not supported");
+      case GO -> uploadGo(runtime, upload, createdBy, createdByIp);
       case CARGO -> uploadCargo(runtime, upload, createdBy, createdByIp);
       case PUB -> uploadPub(runtime, upload, createdBy, createdByIp);
       case COMPOSER -> uploadComposer(runtime, upload, createdBy, createdByIp);
@@ -334,6 +342,29 @@ public class ComponentUploadService {
       case RAW -> uploadRaw(runtime, upload, createdBy, createdByIp);
     };
     return new UploadResult(paths);
+  }
+
+  private List<String> uploadGo(
+      RepositoryRuntime runtime,
+      NormalizedUpload upload,
+      String createdBy,
+      String createdByIp) throws IOException {
+    if (goHosted == null) {
+      throw new UploadValidationException("Go upload service is unavailable");
+    }
+    if (upload.assets().size() != 1) {
+      throw new UploadValidationException("Go upload requires exactly one module zip");
+    }
+    AssetUpload asset = upload.assets().getFirst();
+    if (asset.file().getOriginalFilename() == null
+        || asset.file().getOriginalFilename().isBlank()) {
+      throw new UploadValidationException("Go module zip filename is required");
+    }
+    String filename = originalFilename(asset.file());
+    try (InputStream body = asset.file().getInputStream()) {
+      return List.of(goHosted.publish(
+          runtime, filename, body, createdBy, createdByIp).archivePath());
+    }
   }
 
   private List<String> uploadConda(

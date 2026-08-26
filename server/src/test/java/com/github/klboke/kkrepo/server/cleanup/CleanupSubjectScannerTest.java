@@ -83,6 +83,26 @@ class CleanupSubjectScannerTest {
   }
 
   @Test
+  void goRetainCountTreatsMigratedAndNativeKindsAsOneModuleFamily() {
+    ComponentRecord migrated = goComponent(11L, "v1.2.0", "package");
+    ComponentRecord nativeHosted = goComponent(12L, "v1.10.0", "go-module");
+    when(componentDao.listCleanupPage(1, null, 11))
+        .thenReturn(List.of(nativeHosted, migrated));
+    doReturn(List.of(goAsset(11L, "v1.2.0"), goAsset(12L, "v1.10.0")))
+        .when(assetDao).listAssetsByComponents(List.of(12L, 11L));
+
+    var result = scanner.scan(
+        repository(RepositoryFormat.GO),
+        Map.of("retainCount", 1),
+        10,
+        Instant.parse("2026-08-01T00:00:00Z"));
+
+    assertEquals(1, result.candidates().size());
+    assertEquals("v1.2.0", result.candidates().getFirst().subject().version());
+    assertEquals(2, result.candidates().getFirst().reason().get("versionRank"));
+  }
+
+  @Test
   void retainsEveryCondaBuildOfTheNewestVersion() {
     List<ComponentRecord> components = List.of(
         condaComponent(11L, "1.0", "py310_0"),
@@ -409,6 +429,39 @@ class CleanupSubjectScannerTest {
             "filename", filename,
             "browsePath", "noarch/demo/" + version + "/" + filename),
         Instant.parse("2026-01-01T00:00:00Z"));
+  }
+
+  private static ComponentRecord goComponent(long id, String version, String kind) {
+    return new ComponentRecord(
+        id,
+        1,
+        RepositoryFormat.GO,
+        null,
+        "example.com/acme/demo",
+        version,
+        kind,
+        new byte[] {(byte) id},
+        Map.of(),
+        Instant.parse("2026-01-01T00:00:00Z"));
+  }
+
+  private static AssetRecord goAsset(long componentId, String version) {
+    String path = "example.com/acme/demo/@v/" + version + ".zip";
+    return new AssetRecord(
+        componentId,
+        1,
+        componentId,
+        componentId,
+        RepositoryFormat.GO,
+        path,
+        new byte[] {(byte) componentId},
+        version + ".zip",
+        "PACKAGE",
+        "application/zip",
+        100L,
+        Instant.parse("2025-01-01T00:00:00Z"),
+        Instant.parse("2026-01-01T00:00:00Z"),
+        Map.of());
   }
 
   private static AssetRecord condaAsset(long componentId, String version, String build) {

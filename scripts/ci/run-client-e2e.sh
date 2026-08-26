@@ -815,27 +815,67 @@ EOF
 
 test_go() {
   need go
+  need zip
   local dir="$WORK_DIR/go"
-  mkdir -p "$dir"
-  cat >"$dir/go.mod" <<'EOF'
+  local module="kkrepo-client-e2e.local/module-$STAMP"
+  local version="v1.0.0"
+  local hosted_root="$dir/hosted/$module@$version"
+  mkdir -p "$hosted_root"
+  cat >"$hosted_root/go.mod" <<EOF
+module $module
+
+go 1.22
+EOF
+  cat >"$hosted_root/module.go" <<'EOF'
+package module
+
+const Value = "kkrepo client e2e"
+EOF
+  (
+    cd "$dir/hosted"
+    zip -qr "$dir/$version.zip" "$module@$version"
+  )
+  run_logged go-hosted-upload curl -m 30 --fail-with-body -sS -u "$KKREPO_AUTH" \
+    --upload-file "$dir/$version.zip" \
+    "$KKREPO_URL/repository/go-hosted/$version.zip"
+
+  mkdir -p "$dir/private"
+  cat >"$dir/private/go.mod" <<'EOF'
+module kkrepo-client-e2e.local/probe
+
+go 1.22
+EOF
+  run_logged go-hosted-download env \
+    GOPROXY="$KKREPO_URL/repository/go-group/" \
+    GONOSUMDB="$module" \
+    GOSUMDB=off \
+    GOMODCACHE="$dir/private/gomodcache" \
+    GOCACHE="$dir/private/gocache" \
+    go mod download -json "$module@$version"
+  test -f "$dir/private/gomodcache/cache/download/$module/@v/$version.info"
+  test -f "$dir/private/gomodcache/cache/download/$module/@v/$version.mod"
+  test -f "$dir/private/gomodcache/cache/download/$module/@v/$version.zip"
+
+  mkdir -p "$dir/public"
+  cat >"$dir/public/go.mod" <<'EOF'
 module kkrepo-client-e2e.local/probe
 
 go 1.22
 
 require rsc.io/quote v1.5.2
 EOF
-  # Go refuses userinfo credentials on explicit HTTP module proxy URLs; the
-  # disposable kkrepo fixture keeps anonymous read enabled for this resolve-only flow.
+  # Go refuses userinfo credentials on explicit HTTP module proxy URLs; the disposable fixture
+  # keeps anonymous read enabled while the group proves hosted-first then proxy fallback.
   run_logged go-download env \
-    GOPROXY="$KKREPO_URL/repository/go-proxy/" \
+    GOPROXY="$KKREPO_URL/repository/go-group/" \
     GONOSUMDB=rsc.io/quote \
     GOSUMDB=off \
-    GOMODCACHE="$dir/gomodcache" \
-    GOCACHE="$dir/gocache" \
+    GOMODCACHE="$dir/public/gomodcache" \
+    GOCACHE="$dir/public/gocache" \
     go mod download -json rsc.io/quote@v1.5.2
-  test -f "$dir/gomodcache/cache/download/rsc.io/quote/@v/v1.5.2.info"
-  test -f "$dir/gomodcache/cache/download/rsc.io/quote/@v/v1.5.2.mod"
-  test -f "$dir/gomodcache/cache/download/rsc.io/quote/@v/v1.5.2.zip"
+  test -f "$dir/public/gomodcache/cache/download/rsc.io/quote/@v/v1.5.2.info"
+  test -f "$dir/public/gomodcache/cache/download/rsc.io/quote/@v/v1.5.2.mod"
+  test -f "$dir/public/gomodcache/cache/download/rsc.io/quote/@v/v1.5.2.zip"
 }
 
 test_helm() {
@@ -1861,13 +1901,17 @@ swift_registry_login() {
   local directory="$3"
   local home="$4"
   local registry="$5"
+  local step="swift-$label-registry-login"
+  local status=0
   prepare_swift_netrc "$home"
-  run_logged_in "swift-$label-registry-login" "$directory" \
+  run_logged_in "$step" "$directory" \
     run_with_timeout "$SWIFT_LOGIN_TIMEOUT_SECONDS" env \
     HOME="$home" XDG_CONFIG_HOME="$home/.config" \
     "$swift_bin" package-registry login "$registry/login" \
     --netrc --netrc-file "$home/.netrc" \
-    --username "$KKREPO_USER" --password "$KKREPO_PASSWORD" --no-confirm
+    --username "$KKREPO_USER" --password "$KKREPO_PASSWORD" --no-confirm \
+    || status=$?
+  accept_swift_registry_login_exit "$step" "$status" "$home/.netrc"
 }
 
 assert_swift_invalid_login() {
@@ -1905,15 +1949,41 @@ swift_registry_token_login() {
   local directory="$3"
   local home="$4"
   local registry="$5"
+  local step="swift-$label-registry-token-login"
+  local status=0
   local token
   token="$(create_api_key GenericToken "Swift client E2E $label $STAMP")"
   add_redaction_value "$token"
   prepare_swift_netrc "$home"
-  run_logged_in "swift-$label-registry-token-login" "$directory" \
+  run_logged_in "$step" "$directory" \
     run_with_timeout "$SWIFT_LOGIN_TIMEOUT_SECONDS" env \
     HOME="$home" XDG_CONFIG_HOME="$home/.config" \
     "$swift_bin" package-registry login "$registry/login" \
-    --netrc --netrc-file "$home/.netrc" --token "$token" --no-confirm
+    --netrc --netrc-file "$home/.netrc" --token "$token" --no-confirm \
+    || status=$?
+  accept_swift_registry_login_exit "$step" "$status" "$home/.netrc"
+}
+
+accept_swift_registry_login_exit() {
+  local step="$1"
+  local status="$2"
+  local netrc_file="$3"
+  local log_file="$ARTIFACT_DIR/$step.log"
+  if [[ "$status" -eq 0 ]]; then
+    return 0
+  fi
+  # Swift 6 can sporadically SIGSEGV during process teardown after it has already
+  # persisted the credentials and registry configuration. Only accept that exact
+  # exit and all three success markers; later authenticated operations still prove
+  # that the saved credentials work against the repository.
+  if [[ "$status" -eq 139 && "$step" == swift-6.x-* && -s "$netrc_file" ]] \
+      && grep -Fq 'Login successful.' "$log_file" \
+      && grep -Fq 'Credentials have been saved to netrc file.' "$log_file" \
+      && grep -Fq 'Registry configuration updated.' "$log_file"; then
+    log "$step completed before the Swift client crashed during process teardown"
+    return 0
+  fi
+  return "$status"
 }
 
 swift_supports_registry_login() {
@@ -3947,7 +4017,7 @@ run_selected_tests() {
         ;;
       go)
         test_go
-        register_cleanup_fixture go go-proxy "*rsc.io/quote*" go
+        register_cleanup_fixture go go-hosted "*module-$STAMP*" go
         ;;
       helm)
         test_helm

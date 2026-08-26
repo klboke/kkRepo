@@ -12,6 +12,6 @@ public final class GoRepositoryProtocol implements RepositoryProtocol {
 
   @Override
   public ProtocolCapability capability() {
-    return new ProtocolCapability(false, false, true, true, true);
+    return new ProtocolCapability(true, true, true, true, true);
   }
 }

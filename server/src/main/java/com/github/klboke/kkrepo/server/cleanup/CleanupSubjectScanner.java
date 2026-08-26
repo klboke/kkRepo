@@ -543,13 +543,19 @@ public class CleanupSubjectScanner {
   private static String familyKey(ComponentRecord component) {
     return familyPart(component.namespace())
         + familyPart(component.name())
-        + familyPart(component.kind());
+        + familyPart(familyKind(component));
   }
 
   private static boolean sameFamily(ComponentRecord left, ComponentRecord right) {
     return value(left.namespace()).equals(value(right.namespace()))
         && value(left.name()).equals(value(right.name()))
-        && value(left.kind()).equals(value(right.kind()));
+        && value(familyKind(left)).equals(value(familyKind(right)));
+  }
+
+  private static String familyKind(ComponentRecord component) {
+    // Older Nexus datastore imports used the generic "package" kind for Go. Treat those rows and
+    // native go-module rows as one module family so retainCount is correct after a live migration.
+    return component.format() == RepositoryFormat.GO ? "go-module" : component.kind();
   }
 
   private static CleanupScanCursor componentCursor(

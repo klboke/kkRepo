@@ -64,9 +64,6 @@ final class NexusRepositorySupport {
     if (repositoryType == null) {
       return "repository type is not recognized";
     }
-    if (repositoryFormat == RepositoryFormat.GO && repositoryType == RepositoryType.HOSTED) {
-      return "go hosted has no target recipe";
-    }
     if (repositoryFormat == RepositoryFormat.HELM && repositoryType == RepositoryType.GROUP) {
       return "helm group has no target recipe";
     }

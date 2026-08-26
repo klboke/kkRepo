@@ -64,6 +64,25 @@ class GoProxyServiceTest {
   }
 
   @Test
+  void preservesNexusProxyInfoMediaTypeAndValidators() {
+    Fixture fixture = fixture();
+    String infoPath = "example.com/acme/demo/@v/v1.2.3.info";
+    Instant updatedAt = Instant.now();
+    CachedAssetMetadata cached = snapshot(
+        infoPath,
+        updatedAt,
+        Map.of("remoteEtag", "info-etag"));
+    when(fixture.cache.find(eq(10L), eq(infoPath), any())).thenReturn(Optional.of(cached));
+    when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
+
+    MavenResponse response = fixture.service.get(runtime(60, 7L), infoPath, true);
+
+    assertEquals("text/plain", response.contentType());
+    assertEquals("info-etag", response.etag());
+    assertEquals(updatedAt, response.lastModified());
+  }
+
+  @Test
   void honorsNegativeCacheAndBlockedUpstreamFallback() {
     Fixture fixture = fixture();
     RepositoryRuntime runtime = runtime(1, 7L);

@@ -16,7 +16,7 @@ the recipe combinations and protocol boundaries supported by each format.
 | Maven | hosted / proxy / group | [Maven recipe](../client-recipes.md#maven) | [Maven Repository Guide](maven.md) |
 | npm | hosted / proxy / group | [npm recipe](../client-recipes.md#npm) | [npm Repository Guide](npm.md) |
 | PyPI | hosted / proxy / group | [PyPI recipe](../client-recipes.md#pypi) | [PyPI Repository Guide](pypi.md) |
-| Go | proxy / group | [Go recipe](../client-recipes.md#go) | [Go Repository Guide](go.md) |
+| Go | hosted / proxy / group | [Go recipe](../client-recipes.md#go) | [Go Repository Guide](go.md) |
 | Helm | hosted / proxy | [Helm recipe](../client-recipes.md#helm) | [Helm Repository Guide](helm.md) |
 | Cargo / Rust | hosted / proxy / group | [Cargo / Rust recipe](../client-recipes.md#cargo--rust) | [Cargo / Rust Repository Guide](cargo-rust.md) |
 | Dart / Pub | hosted / proxy / group | [Dart / Pub recipe](../client-recipes.md#dart--pub) | [Dart / Pub Repository Guide](dart-pub.md) |

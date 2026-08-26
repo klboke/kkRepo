@@ -1,5 +1,7 @@
 package com.github.klboke.kkrepo.server.goartifact;
 
+import com.github.klboke.kkrepo.protocol.goartifact.GoModulePaths;
+import com.github.klboke.kkrepo.protocol.goartifact.GoVersions;
 import java.util.Set;
 
 public record GoPath(String path, String module, String version, GoAssetKind kind) {
@@ -30,12 +32,26 @@ public record GoPath(String path, String module, String version, GoAssetKind kin
     if (dot <= 0 || dot == file.length() - 1) {
       throw new IllegalArgumentException("Invalid Go module version path: " + path);
     }
-    String version = file.substring(0, dot);
+    String escapedVersion = file.substring(0, dot);
     String extension = file.substring(dot + 1);
     if (!VERSIONED_EXTENSIONS.contains(extension)) {
       throw new IllegalArgumentException("Unsupported Go module extension: " + extension);
     }
+    String version = GoVersions.unescape(escapedVersion);
+    GoModulePaths.requireVersionSuffix(GoModulePaths.unescape(module), version);
     return new GoPath(path, requireModule(module, path), version, GoAssetKind.fromExtension(extension));
+  }
+
+  public static GoPath versioned(String module, String version, GoAssetKind kind) {
+    if (kind != GoAssetKind.PACKAGE && kind != GoAssetKind.INFO && kind != GoAssetKind.MODULE) {
+      throw new IllegalArgumentException("Go path kind is not versioned: " + kind);
+    }
+    String canonicalModule = GoModulePaths.require(module);
+    String canonicalVersion = GoVersions.requireCanonical(version);
+    GoModulePaths.requireVersionSuffix(canonicalModule, canonicalVersion);
+    String path = GoModulePaths.escape(canonicalModule) + "/@v/"
+        + GoVersions.escape(canonicalVersion) + "." + kind.extension();
+    return new GoPath(path, canonicalModule, canonicalVersion, kind);
   }
 
   public boolean hasComponent() {
@@ -54,8 +70,19 @@ public record GoPath(String path, String module, String version, GoAssetKind kin
   public String contentType() {
     return switch (kind) {
       case PACKAGE -> "application/zip";
+      case INFO -> "application/json";
+      // Nexus exposes the JSON @latest document as text/plain for all Go recipes.
+      case LATEST -> "text/plain";
+      case LIST, MODULE -> "text/plain";
+    };
+  }
+
+  /** Nexus preserves the upstream Go proxy media types for cached metadata. */
+  public String proxyContentType() {
+    return switch (kind) {
       case LIST -> "application/json";
-      case INFO, LATEST, MODULE -> "text/plain";
+      case INFO -> "text/plain";
+      default -> contentType();
     };
   }
 
@@ -71,6 +98,10 @@ public record GoPath(String path, String module, String version, GoAssetKind kin
     if (module == null || module.isBlank() || module.contains("@v")) {
       throw new IllegalArgumentException("Invalid Go module path: " + path);
     }
-    return module;
+    try {
+      return GoModulePaths.unescape(module);
+    } catch (IllegalArgumentException error) {
+      throw new IllegalArgumentException("Invalid Go module path: " + path, error);
+    }
   }
 }

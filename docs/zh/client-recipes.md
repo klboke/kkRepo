@@ -138,7 +138,7 @@ twine upload -r kkrepo dist/*
 
 ## Go
 
-配置 Go module proxy 或 group 仓库：
+把 Go module group 配置为客户端统一读取入口：
 
 ```bash
 go env -w GOPROXY=https://nexus.example.com/repository/go-group/,direct
@@ -158,7 +158,19 @@ go list -m github.com/pkg/errors@latest
 go mod download github.com/pkg/errors
 ```
 
-Go 不支持 hosted 上传；当前以 Go proxy/group 读取代理行为为主。
+向 hosted 仓库发布规范 module ZIP。Archive 必须只有一个 `<module>@<version>/` root，
+上传文件名必须为 `<version>.zip`：
+
+```bash
+curl --fail-with-body \
+  -u "$KKREPO_USER:$KKREPO_PASSWORD" \
+  --upload-file v1.2.3.zip \
+  https://nexus.example.com/repository/go-hosted/v1.2.3.zip
+```
+
+建议在 `go-group` 中把 `go-hosted` 放在 `go-proxy` 前，让私有 module 优先于公共上游。
+Archive 校验、write policy、Cleanup 和 Artifact Scanning 语义见
+[Go 仓库使用指南](repository-guides/go.md)。
 
 ## Helm
 

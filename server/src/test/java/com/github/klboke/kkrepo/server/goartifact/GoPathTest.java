@@ -29,8 +29,16 @@ class GoPathTest {
   void exposesProtocolContentTypesAndMetadataKinds() {
     assertEquals("application/zip",
         GoPath.parse("example.com/demo/@v/v1.0.0.zip").contentType());
-    assertEquals("application/json",
+    assertEquals("text/plain",
         GoPath.parse("example.com/demo/@v/list").contentType());
+    assertEquals("application/json",
+        GoPath.parse("example.com/demo/@v/list").proxyContentType());
+    assertEquals("text/plain",
+        GoPath.parse("example.com/demo/@v/v1.0.0.info").proxyContentType());
+    assertEquals("text/plain",
+        GoPath.parse("example.com/demo/@latest").contentType());
+    assertEquals("application/json",
+        GoPath.parse("example.com/demo/@v/v1.0.0.info").contentType());
     assertEquals("text/plain",
         GoPath.parse("example.com/demo/@v/v1.0.0.mod").contentType());
     assertFalse(GoPath.parse("example.com/demo/@v/v1.0.0.zip").metadata());
@@ -48,5 +56,24 @@ class GoPathTest {
         () -> GoPath.parse("example.com/demo/@v/v1.0.0.txt"));
     assertThrows(IllegalArgumentException.class,
         () -> GoPath.parse("example.com/@v/demo/@v/v1.0.0.mod"));
+    assertThrows(IllegalArgumentException.class,
+        () -> GoPath.parse("example.com/!A/demo/@v/list"));
+    assertThrows(IllegalArgumentException.class,
+        () -> GoPath.versioned("example.com/demo", "v1.0.0", GoAssetKind.LIST));
+    assertThrows(IllegalStateException.class, GoAssetKind.LATEST::extension);
+  }
+
+  @Test
+  void decodesEscapedCoordinatesAndBuildsCanonicalPaths() {
+    GoPath parsed = GoPath.parse("example.com/!acme/!demo/@v/v1.2.3-!r!c1.mod");
+    assertEquals("example.com/Acme/Demo", parsed.module());
+    assertEquals("v1.2.3-RC1", parsed.version());
+    assertEquals(
+        "example.com/!acme/!demo/@v/v1.2.3-!r!c1.zip",
+        GoPath.versioned(
+            "example.com/Acme/Demo", "v1.2.3-RC1", GoAssetKind.PACKAGE).path());
+    assertEquals("application/zip",
+        GoPath.versioned("example.com/demo", "v1.0.0", GoAssetKind.PACKAGE)
+            .proxyContentType());
   }
 }

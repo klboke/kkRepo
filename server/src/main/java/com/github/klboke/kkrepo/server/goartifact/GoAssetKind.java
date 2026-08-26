@@ -15,4 +15,13 @@ public enum GoAssetKind {
       default -> throw new IllegalArgumentException("Unsupported Go module extension: " + extension);
     };
   }
+
+  String extension() {
+    return switch (this) {
+      case PACKAGE -> "zip";
+      case INFO -> "info";
+      case MODULE -> "mod";
+      case LIST, LATEST -> throw new IllegalStateException("Go metadata kind has no file extension: " + this);
+    };
+  }
 }

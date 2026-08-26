@@ -5,6 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -14,9 +17,12 @@ import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
 import java.util.Optional;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.Test;
 
 class GoProxyBlackBoxCompatibilityTest {
+  private static final ObjectMapper JSON = new ObjectMapper().findAndRegisterModules();
   private static final HttpClient HTTP = HttpClient.newBuilder()
       .connectTimeout(Duration.ofSeconds(20))
       .followRedirects(HttpClient.Redirect.NORMAL)
@@ -55,10 +61,12 @@ class GoProxyBlackBoxCompatibilityTest {
     assumeTrue(config.candidateManagementConfigured(),
         "kkrepo repository setup requires GO_KKREPO_COMPAT_USERNAME and GO_KKREPO_COMPAT_PASSWORD");
 
+    ensureReferenceHostedRepository(config);
     ensureReferenceProxyRepository(config, config.groupMissRepository(), config.missingRemoteUrl());
     ensureReferenceProxyRepository(config, config.groupHitRepository(), config.remoteUrl());
     ensureReferenceGroupRepository(config);
     ensureCandidateBlobStore(config);
+    ensureCandidateHostedRepository(config);
     ensureCandidateProxyRepository(config, config.groupMissRepository(), config.missingRemoteUrl());
     ensureCandidateProxyRepository(config, config.groupHitRepository(), config.remoteUrl());
     ensureCandidateGroupRepository(config);
@@ -72,8 +80,102 @@ class GoProxyBlackBoxCompatibilityTest {
     }
   }
 
+  @Test
+  void hostedPublicationAndHostedFirstGroupResolutionMatchNexusWhenConfigured() throws Exception {
+    GoCompatConfig config = GoCompatConfig.load();
+    assumeTrue(config.referenceReachable(),
+        "Reference Nexus is not reachable; start Nexus 3.93+ or override GO_NEXUS_COMPAT_BASE_URL");
+    assumeTrue(config.candidateReachable(),
+        "kkrepo is not reachable; start it or override GO_KKREPO_COMPAT_BASE_URL");
+    assumeTrue(config.candidateManagementConfigured(),
+        "kkrepo repository setup requires GO_KKREPO_COMPAT_USERNAME and GO_KKREPO_COMPAT_PASSWORD");
+
+    ensureReferenceHostedRepository(config);
+    ensureReferenceProxyRepository(config, config.groupMissRepository(), config.missingRemoteUrl());
+    ensureReferenceProxyRepository(config, config.groupHitRepository(), config.remoteUrl());
+    ensureReferenceGroupRepository(config);
+    ensureCandidateBlobStore(config);
+    ensureCandidateHostedRepository(config);
+    ensureCandidateProxyRepository(config, config.groupMissRepository(), config.missingRemoteUrl());
+    ensureCandidateProxyRepository(config, config.groupHitRepository(), config.remoteUrl());
+    ensureCandidateGroupRepository(config);
+
+    String module = "example.com/kkrepo/go-compat";
+    String version = "v1.2.3";
+    byte[] archive = moduleArchive(module, version);
+    Exchange referenceUpload = send(config.nexusAdminRequest(URI.create(
+            config.nexusBaseUrl() + "/repository/" + config.hostedRepository() + "/" + version + ".zip"))
+        .header("Content-Type", "application/zip")
+        .PUT(HttpRequest.BodyPublishers.ofByteArray(archive)));
+    Exchange candidateUpload = send(config.nexusPlusAdminRequest(URI.create(
+            config.nexusPlusBaseUrl() + "/repository/" + config.hostedRepository() + "/" + version + ".zip"))
+        .header("Content-Type", "application/zip")
+        .PUT(HttpRequest.BodyPublishers.ofByteArray(archive)));
+    assertEquals(referenceUpload.status(), candidateUpload.status(), "hosted upload status");
+    assertTrue(referenceUpload.status() >= 200 && referenceUpload.status() < 300,
+        "reference hosted upload status=" + referenceUpload.status()
+            + " body=" + new String(referenceUpload.body(), StandardCharsets.UTF_8));
+
+    Endpoint referenceHosted = config.referenceHostedEndpoint();
+    Endpoint candidateHosted = config.candidateHostedEndpoint();
+    assertSameExchange("hosted list",
+        send(referenceHosted.request(module + "/@v/list", "GET")),
+        send(candidateHosted.request(module + "/@v/list", "GET")), true);
+    assertSameExchange("hosted mod",
+        send(referenceHosted.request(module + "/@v/" + version + ".mod", "GET")),
+        send(candidateHosted.request(module + "/@v/" + version + ".mod", "GET")), true);
+    assertSameExchange("hosted zip",
+        send(referenceHosted.request(module + "/@v/" + version + ".zip", "GET")),
+        send(candidateHosted.request(module + "/@v/" + version + ".zip", "GET")), true);
+    assertSameInfo("hosted info",
+        send(referenceHosted.request(module + "/@v/" + version + ".info", "GET")),
+        send(candidateHosted.request(module + "/@v/" + version + ".info", "GET")));
+    assertSameInfo("hosted latest",
+        send(referenceHosted.request(module + "/@latest", "GET")),
+        send(candidateHosted.request(module + "/@latest", "GET")));
+
+    assertSameExchange("group hosted mod",
+        send(config.referenceGroupEndpoint().request(module + "/@v/" + version + ".mod", "GET")),
+        send(config.candidateGroupEndpoint().request(module + "/@v/" + version + ".mod", "GET")), true);
+    assertSameExchange("group hosted zip",
+        send(config.referenceGroupEndpoint().request(module + "/@v/" + version + ".zip", "GET")),
+        send(config.candidateGroupEndpoint().request(module + "/@v/" + version + ".zip", "GET")), true);
+  }
+
   private static void ensureReferenceRepository(GoCompatConfig config) throws Exception {
     ensureReferenceProxyRepository(config, config.nexusRepository(), config.remoteUrl());
+  }
+
+  private static void ensureReferenceHostedRepository(GoCompatConfig config) throws Exception {
+    URI getUri = URI.create(config.nexusBaseUrl()
+        + "/service/rest/v1/repositories/go/hosted/" + config.hostedRepository());
+    Exchange get = send(config.nexusAdminRequest(getUri).GET());
+    assumeTrue(get.status() == 200 || get.status() == 404,
+        "reference Nexus does not expose Go hosted repository management (requires 3.93+): status="
+            + get.status());
+    String body = """
+        {
+          "name": "%s",
+          "online": true,
+          "storage": {
+            "blobStoreName": "default",
+            "strictContentTypeValidation": true,
+            "writePolicy": "ALLOW"
+          }
+        }
+        """.formatted(config.hostedRepository());
+    String path = get.status() == 200
+        ? "/service/rest/v1/repositories/go/hosted/" + config.hostedRepository()
+        : "/service/rest/v1/repositories/go/hosted";
+    HttpRequest.Builder request = config.nexusAdminRequest(URI.create(config.nexusBaseUrl() + path))
+        .header("Content-Type", "application/json")
+        .timeout(Duration.ofSeconds(30));
+    Exchange saved = send(get.status() == 200
+        ? request.PUT(HttpRequest.BodyPublishers.ofString(body))
+        : request.POST(HttpRequest.BodyPublishers.ofString(body)));
+    assertTrue(saved.status() >= 200 && saved.status() < 300,
+        "save reference go hosted repository status=" + saved.status()
+            + " body=" + new String(saved.body(), StandardCharsets.UTF_8));
   }
 
   private static void ensureReferenceProxyRepository(
@@ -139,11 +241,12 @@ class GoProxyBlackBoxCompatibilityTest {
             "strictContentTypeValidation": true
           },
           "group": {
-            "memberNames": ["%s", "%s"]
+            "memberNames": ["%s", "%s", "%s"]
           }
         }
         """.formatted(
         config.groupRepository(),
+        config.hostedRepository(),
         config.groupMissRepository(),
         config.groupHitRepository());
     String path = get.status() == 200
@@ -194,6 +297,39 @@ class GoProxyBlackBoxCompatibilityTest {
 
   private static void ensureCandidateRepository(GoCompatConfig config) throws Exception {
     ensureCandidateProxyRepository(config, config.nexusPlusRepository(), config.remoteUrl());
+  }
+
+  private static void ensureCandidateHostedRepository(GoCompatConfig config) throws Exception {
+    Exchange get = send(config.nexusPlusAdminRequest(URI.create(
+            config.nexusPlusBaseUrl() + "/internal/repositories/" + config.hostedRepository()))
+        .timeout(Duration.ofSeconds(30))
+        .GET());
+    assertTrue(get.status() == 200 || get.status() == 404,
+        "kkrepo go hosted repository lookup status=" + get.status()
+            + " body=" + new String(get.body(), StandardCharsets.UTF_8));
+    String body = """
+        {
+          "name": "%s",
+          "recipe": "go-hosted",
+          "online": true,
+          "blobStoreName": "%s",
+          "strictContentTypeValidation": true,
+          "hosted": {"writePolicy": "ALLOW"}
+        }
+        """.formatted(config.hostedRepository(), config.blobStoreName());
+    String path = get.status() == 200
+        ? "/internal/repositories/" + config.hostedRepository()
+        : "/internal/repositories";
+    HttpRequest.Builder request = config.nexusPlusAdminRequest(
+            URI.create(config.nexusPlusBaseUrl() + path))
+        .timeout(Duration.ofSeconds(30))
+        .header("Content-Type", "application/json");
+    Exchange saved = send(get.status() == 200
+        ? request.PUT(HttpRequest.BodyPublishers.ofString(body))
+        : request.POST(HttpRequest.BodyPublishers.ofString(body)));
+    assertTrue(saved.status() >= 200 && saved.status() < 300,
+        "save kkrepo go hosted repository status=" + saved.status()
+            + " body=" + new String(saved.body(), StandardCharsets.UTF_8));
   }
 
   private static void ensureCandidateProxyRepository(
@@ -252,12 +388,13 @@ class GoProxyBlackBoxCompatibilityTest {
           "blobStoreName": "%s",
           "strictContentTypeValidation": true,
           "group": {
-            "memberNames": ["%s", "%s"]
+            "memberNames": ["%s", "%s", "%s"]
           }
         }
         """.formatted(
         config.groupRepository(),
         config.blobStoreName(),
+        config.hostedRepository(),
         config.groupMissRepository(),
         config.groupHitRepository());
     String path = get.status() == 200
@@ -303,6 +440,33 @@ class GoProxyBlackBoxCompatibilityTest {
     }
     assertEquals(reference.lastModified().isPresent(), candidate.lastModified().isPresent(),
         label + " Last-Modified presence");
+  }
+
+  private static void assertSameInfo(String label, Exchange reference, Exchange candidate)
+      throws Exception {
+    assertEquals(reference.status(), candidate.status(), label + " status");
+    assertEquals(reference.contentType().orElse(null), candidate.contentType().orElse(null),
+        label + " Content-Type");
+    JsonNode referenceJson = JSON.readTree(reference.body());
+    JsonNode candidateJson = JSON.readTree(candidate.body());
+    assertEquals(referenceJson.path("Version").asText(), candidateJson.path("Version").asText(),
+        label + " Version");
+    assertTrue(!referenceJson.path("Time").asText().isBlank(), label + " reference Time");
+    assertTrue(!candidateJson.path("Time").asText().isBlank(), label + " candidate Time");
+  }
+
+  private static byte[] moduleArchive(String module, String version) throws Exception {
+    ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+    try (ZipOutputStream zip = new ZipOutputStream(bytes)) {
+      String root = module + "@" + version + "/";
+      zip.putNextEntry(new ZipEntry(root + "go.mod"));
+      zip.write(("module " + module + "\n\ngo 1.22\n").getBytes(StandardCharsets.UTF_8));
+      zip.closeEntry();
+      zip.putNextEntry(new ZipEntry(root + "compat.go"));
+      zip.write("package compat\n\nconst Value = 42\n".getBytes(StandardCharsets.UTF_8));
+      zip.closeEntry();
+    }
+    return bytes.toByteArray();
   }
 
   private record Probe(String method, String path, String label, boolean compareBody) {
@@ -354,6 +518,7 @@ class GoProxyBlackBoxCompatibilityTest {
       Optional<String> nexusPlusUsername,
       Optional<String> nexusPlusPassword,
       String nexusPlusRepository,
+      String hostedRepository,
       String groupRepository,
       String groupMissRepository,
       String groupHitRepository,
@@ -385,6 +550,8 @@ class GoProxyBlackBoxCompatibilityTest {
               .or(CompatDefaults::nexusPlusPassword),
           setting("compat.go.nexusPlus.repository", "GO_KKREPO_COMPAT_REPOSITORY")
               .orElse("go-proxy-compat"),
+          setting("compat.go.hosted.repository", "GO_HOSTED_COMPAT_REPOSITORY")
+              .orElse("go-hosted-compat"),
           setting("compat.go.group.repository", "GO_GROUP_COMPAT_REPOSITORY")
               .orElse("go-group-compat"),
           setting("compat.go.group.missRepository", "GO_GROUP_COMPAT_MISS_REPOSITORY")
@@ -420,6 +587,16 @@ class GoProxyBlackBoxCompatibilityTest {
 
     Endpoint candidateEndpoint() {
       return new Endpoint(nexusPlusBaseUrl, nexusPlusRepository, Optional.empty(), Optional.empty());
+    }
+
+    Endpoint referenceHostedEndpoint() {
+      return new Endpoint(nexusBaseUrl, hostedRepository,
+          Optional.of(nexusUsername), Optional.of(nexusPassword));
+    }
+
+    Endpoint candidateHostedEndpoint() {
+      return new Endpoint(
+          nexusPlusBaseUrl, hostedRepository, Optional.empty(), Optional.empty());
     }
 
     Endpoint referenceGroupEndpoint() {

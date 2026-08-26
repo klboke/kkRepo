@@ -31,6 +31,7 @@ public final class RepositoryRecipes {
       new RepositoryRecipe("composer-hosted", RepositoryFormat.COMPOSER, RepositoryType.HOSTED),
       new RepositoryRecipe("composer-proxy", RepositoryFormat.COMPOSER, RepositoryType.PROXY),
       new RepositoryRecipe("composer-group", RepositoryFormat.COMPOSER, RepositoryType.GROUP),
+      new RepositoryRecipe("go-hosted", RepositoryFormat.GO, RepositoryType.HOSTED),
       new RepositoryRecipe("go-proxy", RepositoryFormat.GO, RepositoryType.PROXY),
       new RepositoryRecipe("go-group", RepositoryFormat.GO, RepositoryType.GROUP),
       new RepositoryRecipe("helm-hosted", RepositoryFormat.HELM, RepositoryType.HOSTED),
