@@ -2,7 +2,42 @@
 
 All notable public changes to kkrepo are documented in this file.
 
-This project follows a pragmatic early-stage release process. Until a stable `1.0.0` release is announced, minor versions may include behavior changes, but releases should call out migration impact, compatibility changes, and operational notes.
+This project follows a pragmatic release process. Stable releases call out migration impact, compatibility changes, operational notes, and any known behavior changes in their release section.
+
+## 1.0.0 - 2026-08-27
+
+### Added
+
+- Nexus-compatible R / CRAN hosted, proxy, and group repositories with immutable source-package publication, deterministic indexes, snapshot-bound group resolution, migration, cleanup, security scanning, and real R client coverage. (#244)
+- Go hosted repositories with validated atomic `.mod`/`.info`/`.zip` publication, write policies, component upload, migration, cleanup, scanning, and complete hosted/proxy group behavior. (#256)
+- Database-backed UI theme selection across Admin, Browse, and sign-in, including the original kkRepo design plus Indigo, Ocean, Sunset, JFrog-inspired, and Nexus-inspired themes, with safe fallback and unsaved Admin preview. (#245, #261, #264)
+- Nexus-compatible configurable remote index paths for PyPI proxy repositories, including explicit root-index support for upstreams such as PyTorch. (#257)
+
+### Changed
+
+- Repository request routing now uses a fail-closed protocol-handler SPI with deterministic route precedence, while existing protocol behavior remains behind a compatible built-in handler; security-scan persistence responsibilities were split into focused collaborators. (#246)
+- Browse upload forms are driven by repository capabilities, adding Raw directory, per-file name, and multi-file controls while retaining strict single-file behavior for NuGet and RubyGems. (#258)
+- Browse search navigation, format selection, side-panel scrolling, package-detail layout stability, and shared Admin/Browse scrollbar styling were refined without changing protocol routes. (#260, #263)
+- Quickstart defaults, Dockerfile packaging, deployment documentation, Helm application version, runtime checks, and the optional scanner profile now use `1.0.0`.
+- Spring Boot, Guava, the AWS SDK, zstd-jni, and GraalVM Native Build Tools were refreshed. (#247, #248, #249, #250, #251)
+
+### Fixed
+
+- Browse deletion now derives Maven release, snapshot, timestamped-snapshot, and version-level metadata coordinates correctly before enqueueing GA/GAV metadata rebuilds. (#241, #242)
+- PyPI hosted uploads accept metadata-heavy Twine multipart requests through a bounded, configurable Tomcat part-count limit. (#254)
+- MySQL component search no longer loses valid matches when coordinates include InnoDB default stopwords such as `com`. (#259)
+
+### Compatibility And Validation
+
+- R / CRAN includes MySQL/PostgreSQL V49 persistence contracts, multi-replica leases and recovery, Nexus 3.94 black-box comparison, R 4.5/4.6 client E2E, million-row indexed-plan gates, and measured HTTP/client performance checks. (#244)
+- Go hosted/group behavior is covered by official Go module validation, live Nexus comparison, real Go client publication/resolution/cleanup flows, multi-replica-safe database transactions, and bounded archive inspection. (#256)
+- PyPI index-path behavior and upload limits, Maven browse deletion, repository upload specs, theme persistence, and UI behavior include targeted compatibility, database, contract, and executable JavaScript coverage. (#241, #242, #245, #254, #257, #258, #259, #260, #261, #263, #264)
+
+### Upgrade Notes
+
+- Existing `0.9.0` MySQL and PostgreSQL deployments can upgrade in place through Flyway V49-V50. Back up the relational database and blob store together, allow migrations to complete before serving traffic, and do not run mixed application versions after the new schema is applied.
+- V49 adds R / CRAN package, publication, snapshot, group-binding, proxy, tombstone, migration, and lease state. V50 adds the shared default UI theme setting and preserves the existing kkRepo design for upgraded installations.
+- New R / CRAN repositories are not created automatically. Existing PyPI proxies retain `/simple` when no remote index path is configured, and existing Go proxy/group repositories keep their current behavior until a hosted member is explicitly created or added.
 
 ## 0.9.0 - 2026-08-20
 

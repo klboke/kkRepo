@@ -3,5 +3,5 @@ name: kkrepo
 description: Multi-replica kkRepo artifact repository with an external MySQL or PostgreSQL database
 type: application
 version: 0.2.0
-appVersion: "0.9.0"
+appVersion: "1.0.0"
 kubeVersion: ">=1.27.0-0"
