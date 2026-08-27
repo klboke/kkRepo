@@ -5,6 +5,7 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
 import com.github.klboke.kkrepo.server.RepositoryProtocolController;
 import com.github.klboke.kkrepo.server.routing.RepositoryProtocolHandler;
+import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
 import com.tngtech.archunit.lang.ArchRule;
@@ -12,6 +13,9 @@ import org.junit.jupiter.api.Test;
 
 class RepositoryRoutingArchitectureTest {
   private static final String ROOT = "com.github.klboke.kkrepo";
+  private static final JavaClasses ALL_PROJECT_CLASSES = new ClassFileImporter()
+      .withImportOption(new ImportOption.DoNotIncludeTests())
+      .importPackages(ROOT);
 
   @Test
   void repositoryProtocolControllerDependsOnlyOnTheRoutingBoundary() {
@@ -24,7 +28,7 @@ class RepositoryRoutingArchitectureTest {
             "com.github.klboke.kkrepo.server",
             "com.github.klboke.kkrepo.server.routing");
 
-    rule.check(serverClasses());
+    rule.check(ALL_PROJECT_CLASSES);
   }
 
   @Test
@@ -55,7 +59,7 @@ class RepositoryRoutingArchitectureTest {
             "..server.yum..")
         .should().dependOnClassesThat().resideInAnyPackage("..server.routing..");
 
-    rule.check(serverClasses());
+    rule.check(ALL_PROJECT_CLASSES);
   }
 
   @Test
@@ -64,7 +68,7 @@ class RepositoryRoutingArchitectureTest {
         .that().resideInAnyPackage("..protocol..")
         .should().dependOnClassesThat().resideInAnyPackage("..server..");
 
-    rule.check(allProjectClasses());
+    rule.check(ALL_PROJECT_CLASSES);
   }
 
   @Test
@@ -73,18 +77,6 @@ class RepositoryRoutingArchitectureTest {
         .that().implement(RepositoryProtocolHandler.class)
         .should().resideInAPackage("..server.routing..");
 
-    rule.check(serverClasses());
-  }
-
-  private static com.tngtech.archunit.core.domain.JavaClasses serverClasses() {
-    return new ClassFileImporter()
-        .withImportOption(new ImportOption.DoNotIncludeTests())
-        .importPackages(ROOT + ".server");
-  }
-
-  private static com.tngtech.archunit.core.domain.JavaClasses allProjectClasses() {
-    return new ClassFileImporter()
-        .withImportOption(new ImportOption.DoNotIncludeTests())
-        .importPackages(ROOT);
+    rule.check(ALL_PROJECT_CLASSES);
   }
 }

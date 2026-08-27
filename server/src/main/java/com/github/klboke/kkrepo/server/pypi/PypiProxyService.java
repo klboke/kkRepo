@@ -368,22 +368,24 @@ public class PypiProxyService {
 
   private PypiExceptions.BadUpstreamException temporarilyBlocked(
       RepositoryRuntime runtime, String path) {
-    Optional<ProxyStateDao.ProxyRemoteState> state = proxyStateDao.loadState(runtime.id());
-    if (state.isPresent()) {
-      ProxyStateDao.ProxyRemoteState blocked = state.orElseThrow();
-      log.debug(
-          "PyPI proxy request skipped while upstream is blocked: repository={} path={} "
-              + "failCount={} blockedUntil={} lastFailureAt={} lastError={}",
-          runtime.name(),
-          proxyLogValue(path),
-          blocked.failCount(),
-          blocked.blockedUntil(),
-          blocked.lastFailureAt(),
-          proxyLogValue(blocked.lastError()));
-    } else {
-      log.debug(
-          "PyPI proxy request skipped while upstream is blocked: repository={} path={} state=unavailable",
-          runtime.name(), proxyLogValue(path));
+    if (log.isDebugEnabled()) {
+      Optional<ProxyStateDao.ProxyRemoteState> state = proxyStateDao.loadState(runtime.id());
+      if (state.isPresent()) {
+        ProxyStateDao.ProxyRemoteState blocked = state.orElseThrow();
+        log.debug(
+            "PyPI proxy request skipped while upstream is blocked: repository={} path={} "
+                + "failCount={} blockedUntil={} lastFailureAt={} lastError={}",
+            runtime.name(),
+            proxyLogValue(path),
+            blocked.failCount(),
+            blocked.blockedUntil(),
+            blocked.lastFailureAt(),
+            proxyLogValue(blocked.lastError()));
+      } else {
+        log.debug(
+            "PyPI proxy request skipped while upstream is blocked: repository={} path={} state=unavailable",
+            runtime.name(), proxyLogValue(path));
+      }
     }
     return new PypiExceptions.BadUpstreamException(
         "Upstream temporarily blocked: " + runtime.proxyRemoteUrl());

@@ -60,12 +60,14 @@ class DatabaseServerSmokeTest {
   private static final MySQLContainer MYSQL = new MySQLContainer("mysql:8.0")
       .withDatabaseName("kkrepo")
       .withUsername("kkrepo")
-      .withPassword("kkrepo");
+      .withPassword("kkrepo")
+      .withTmpFs(Map.of("/var/lib/mysql", "rw"));
   private static final PostgreSQLContainer POSTGRESQL = new PostgreSQLContainer(
       System.getProperty("kkrepo.test.postgresql.image", "postgres:12"))
       .withDatabaseName("kkrepo")
       .withUsername("kkrepo")
-      .withPassword("kkrepo");
+      .withPassword("kkrepo")
+      .withTmpFs(Map.of("/var/lib/postgresql/data", "rw"));
 
   @AfterAll
   static void stopDatabases() {

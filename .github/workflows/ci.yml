@@ -43,7 +43,7 @@ jobs:
           docker compose -f docker-compose.quickstart-postgresql.yml config
 
       - name: Run server tests
-        run: mvn -B -ntp -pl server,scanner-adapter -am -Dsurefire.failIfNoSpecifiedTests=false verify
+        run: mvn -B -ntp -T 4 -pl server,scanner-adapter -am '-Dsurefire.excludes=**/DatabaseServerSmokeTest.java' -Dsurefire.failIfNoSpecifiedTests=false verify
 
       - name: Run non-live compatibility tests
         run: mvn -B -ntp -pl compat-test -am -Dtest=MavenMetadataMergeCompatibilityTest,MavenWritePolicyCompatibilityTest,NpmProtocolCompatibilityTest -Dsurefire.failIfNoSpecifiedTests=false verify
@@ -108,6 +108,13 @@ jobs:
           java-version: "25"
           cache: maven
       - run: mvn -B -ntp -pl server -am -Dtest=DatabaseServerSmokeTest#${{ matrix.method }} -Dsurefire.failIfNoSpecifiedTests=false test
+      - name: Upload smoke coverage to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          directory: .
+          fail_ci_if_error: true
+          flags: server-smoke-${{ matrix.database }}
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   mysql-v29-upgrade-compatibility:
     name: mysql-v29-upgrade-compatibility

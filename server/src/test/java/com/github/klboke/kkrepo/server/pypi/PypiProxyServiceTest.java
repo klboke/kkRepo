@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -124,6 +125,28 @@ class PypiProxyServiceTest {
     assertEquals(1, capture.appender().list.size());
     assertEquals(Level.DEBUG, capture.appender().list.get(0).getLevel());
     assertTrue(capture.appender().list.get(0).getFormattedMessage().contains("state=unavailable"));
+  }
+
+  @Test
+  void blockedCacheMissDoesNotLoadDiagnosticStateWhenDebugLoggingIsDisabled() {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(1, 7L);
+    when(fixture.cache.find(eq(10L), eq("simple/certifi/"), any()))
+        .thenReturn(Optional.empty());
+    when(fixture.proxyStateDao.isBlocked(eq(10L), any())).thenReturn(true);
+    Logger logger = (Logger) LoggerFactory.getLogger(PypiProxyService.class);
+    Level priorLevel = logger.getLevel();
+    logger.setLevel(Level.INFO);
+
+    try {
+      assertThrows(
+          PypiExceptions.BadUpstreamException.class,
+          () -> fixture.service.getIndex(runtime, "certifi", false));
+    } finally {
+      logger.setLevel(priorLevel);
+    }
+
+    verify(fixture.proxyStateDao, never()).loadState(anyLong());
   }
 
   @Test
