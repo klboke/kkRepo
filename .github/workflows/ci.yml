@@ -107,7 +107,7 @@ jobs:
           distribution: temurin
           java-version: "25"
           cache: maven
-      - run: mvn -B -ntp -pl server -am -Dtest=DatabaseServerSmokeTest#${{ matrix.method }} -Dsurefire.failIfNoSpecifiedTests=false test
+      - run: mvn -B -ntp -pl server -am -Dtest=DatabaseServerSmokeTest#${{ matrix.method }} -Dsurefire.failIfNoSpecifiedTests=false verify
       - name: Upload smoke coverage to Codecov
         uses: codecov/codecov-action@v7
         with:
