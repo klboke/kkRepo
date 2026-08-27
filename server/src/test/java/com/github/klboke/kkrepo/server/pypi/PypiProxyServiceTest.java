@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.pypi;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -14,6 +15,9 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
@@ -36,6 +40,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 class PypiProxyServiceTest {
   @Test
@@ -57,6 +62,65 @@ class PypiProxyServiceTest {
     when(fixture.proxyStateDao.isBlocked(eq(10L), any())).thenReturn(true);
     when(fixture.reader.serveSnapshot(stale, false, "simple/demo/")).thenReturn(expected);
     assertSame(expected, fixture.service.getIndex(runtime(1, 7L), "demo", false));
+  }
+
+  @Test
+  void blockedCacheMissLogsStoredUpstreamFailure() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(1, 7L);
+    Instant now = Instant.now();
+    when(fixture.cache.find(eq(10L), eq("simple/certifi/"), any()))
+        .thenReturn(Optional.empty());
+    when(fixture.proxyStateDao.isBlocked(eq(10L), any())).thenReturn(true);
+    when(fixture.proxyStateDao.loadState(10L)).thenReturn(Optional.of(
+        new ProxyStateDao.ProxyRemoteState(
+            10L,
+            now.plusSeconds(300),
+            4,
+            null,
+            now,
+            "Upstream IO error:\nconnection reset")));
+    ListAppender<ILoggingEvent> appender = attachAppender();
+
+    try {
+      PypiExceptions.BadUpstreamException failure = assertThrows(
+          PypiExceptions.BadUpstreamException.class,
+          () -> fixture.service.getIndex(runtime, "certifi", false));
+      assertTrue(failure.getMessage().contains("Upstream temporarily blocked"));
+    } finally {
+      detachAppender(appender);
+    }
+
+    assertEquals(1, appender.list.size());
+    String message = appender.list.get(0).getFormattedMessage();
+    assertTrue(message.contains("repository=pypi"));
+    assertTrue(message.contains("path=simple/certifi/"));
+    assertTrue(message.contains("failCount=4"));
+    assertTrue(message.contains("lastError=Upstream IO error: connection reset"));
+    assertFalse(message.contains("\n"));
+    verify(fixture.fetcher, never()).fetchWithBodyRetry(any(), anyString(), any());
+  }
+
+  @Test
+  void blockedCacheMissLogsWhenSharedStateDisappearsConcurrently() {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(1, 7L);
+    when(fixture.cache.find(eq(10L), eq("simple/certifi/"), any()))
+        .thenReturn(Optional.empty());
+    when(fixture.proxyStateDao.isBlocked(eq(10L), any())).thenReturn(true);
+    when(fixture.proxyStateDao.loadState(10L)).thenReturn(Optional.empty());
+    ListAppender<ILoggingEvent> appender = attachAppender();
+
+    try {
+      assertThrows(
+          PypiExceptions.BadUpstreamException.class,
+          () -> fixture.service.getIndex(runtime, "certifi", false));
+    } finally {
+      detachAppender(appender);
+    }
+
+    assertEquals(1, appender.list.size());
+    assertTrue(appender.list.get(0).getFormattedMessage().contains("state=unavailable"));
   }
 
   @Test
@@ -269,6 +333,19 @@ class PypiProxyServiceTest {
       HttpRemoteFetcher.ResultHandler<PypiResponse> handler = invocation.getArgument(2);
       return handler.handle(result);
     }).when(fetcher).fetchWithBodyRetry(any(), anyString(), any());
+  }
+
+  private static ListAppender<ILoggingEvent> attachAppender() {
+    Logger logger = (Logger) LoggerFactory.getLogger(PypiProxyService.class);
+    ListAppender<ILoggingEvent> appender = new ListAppender<>();
+    appender.start();
+    logger.addAppender(appender);
+    return appender;
+  }
+
+  private static void detachAppender(ListAppender<ILoggingEvent> appender) {
+    Logger logger = (Logger) LoggerFactory.getLogger(PypiProxyService.class);
+    logger.detachAppender(appender);
   }
 
   private static Fixture fixture() {

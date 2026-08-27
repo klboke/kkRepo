@@ -16,9 +16,14 @@ import jakarta.servlet.http.HttpSession;
 import java.io.Serializable;
 import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
+import java.security.AlgorithmParameters;
 import java.security.KeyFactory;
+import java.security.PublicKey;
 import java.security.Signature;
-import java.security.interfaces.RSAPublicKey;
+import java.security.spec.ECGenParameterSpec;
+import java.security.spec.ECParameterSpec;
+import java.security.spec.ECPoint;
+import java.security.spec.ECPublicKeySpec;
 import java.security.spec.RSAPublicKeySpec;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -44,6 +49,8 @@ import javax.naming.directory.Attributes;
 import javax.naming.directory.SearchControls;
 import javax.naming.directory.SearchResult;
 import javax.naming.ldap.InitialLdapContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.session.FindByIndexNameSessionRepository;
@@ -55,6 +62,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 @Service
 public class SecurityAuthenticationService {
+  private static final Logger log = LoggerFactory.getLogger(SecurityAuthenticationService.class);
   private static final String DEFAULT_SOURCE = "Local";
   private static final String DEFAULT_ANONYMOUS_USER_ID = "anonymous";
   private static final String DEFAULT_ANONYMOUS_REALM_NAME = "NexusAuthorizingRealm";
@@ -839,20 +847,32 @@ public class SecurityAuthenticationService {
   }
 
   private Optional<OidcProfile> validateOidcToken(SecurityRealmRecord realm, String token) {
+    String alg = null;
+    String kid = null;
     try {
       String[] parts = token.split("\\.", -1);
       Map<String, Object> header = readJwtJson(parts[0]);
       Map<String, Object> claims = readJwtJson(parts[1]);
-      String alg = asString(header.get("alg"));
+      alg = asString(header.get("alg"));
+      kid = asString(header.get("kid"));
       if (alg == null || "none".equalsIgnoreCase(alg)) {
+        log.debug(
+            "OIDC token validation rejected: realm={} alg={} kid={} reason=missing or unsigned algorithm",
+            realm.realmId(), oidcLogValue(alg), oidcLogValue(kid));
         return Optional.empty();
       }
       Map<String, Object> config = attributes(realm);
-      RSAPublicKey key = oidcSigningKey(config, asString(header.get("kid")));
+      PublicKey key = oidcSigningKey(config, kid, alg);
       if (!verifyJwt(parts, alg, key)) {
+        log.debug(
+            "OIDC token validation rejected: realm={} alg={} kid={} reason=signature verification failed",
+            realm.realmId(), oidcLogValue(alg), oidcLogValue(kid));
         return Optional.empty();
       }
       if (!validClaims(config, claims)) {
+        log.debug(
+            "OIDC token validation rejected: realm={} alg={} kid={} reason=claims validation failed",
+            realm.realmId(), oidcLogValue(alg), oidcLogValue(kid));
         return Optional.empty();
       }
       String userId = claimString(claims, defaultString(stringConfig(config, "userIdClaim", "usernameClaim"), "preferred_username"));
@@ -860,6 +880,9 @@ public class SecurityAuthenticationService {
         userId = claimString(claims, "sub");
       }
       if (userId == null) {
+        log.debug(
+            "OIDC token validation rejected: realm={} alg={} kid={} reason=user identifier claim is missing",
+            realm.realmId(), oidcLogValue(alg), oidcLogValue(kid));
         return Optional.empty();
       }
       Set<String> roles = new LinkedHashSet<>();
@@ -877,7 +900,19 @@ public class SecurityAuthenticationService {
           claimString(claims, "sub"),
           roles,
           claims));
+    } catch (SecurityValidationException e) {
+      log.warn(
+          "OIDC token validation rejected: realm={} alg={} kid={} reason={}",
+          realm.realmId(), oidcLogValue(alg), oidcLogValue(kid), oidcLogValue(e.getMessage()));
+      return Optional.empty();
     } catch (Exception e) {
+      log.debug(
+          "OIDC token validation failed: realm={} alg={} kid={} cause={} reason={}",
+          realm.realmId(),
+          oidcLogValue(alg),
+          oidcLogValue(kid),
+          e.getClass().getSimpleName(),
+          oidcLogValue(e.getMessage()));
       return Optional.empty();
     }
   }
@@ -887,11 +922,15 @@ public class SecurityAuthenticationService {
     return objectMapper.readValue(decoded, JSON_MAP);
   }
 
-  private boolean verifyJwt(String[] parts, String alg, RSAPublicKey key) throws Exception {
+  private boolean verifyJwt(String[] parts, String alg, PublicKey key) throws Exception {
+    byte[] signature = Base64.getUrlDecoder().decode(parts[2]);
+    if ("ES256".equals(alg) && signature.length != 64) {
+      return false;
+    }
     Signature verifier = Signature.getInstance(signatureAlgorithm(alg));
     verifier.initVerify(key);
     verifier.update((parts[0] + "." + parts[1]).getBytes(StandardCharsets.US_ASCII));
-    return verifier.verify(Base64.getUrlDecoder().decode(parts[2]));
+    return verifier.verify(signature);
   }
 
   private String signatureAlgorithm(String alg) {
@@ -899,12 +938,15 @@ public class SecurityAuthenticationService {
       case "RS256" -> "SHA256withRSA";
       case "RS384" -> "SHA384withRSA";
       case "RS512" -> "SHA512withRSA";
+      case "ES256" -> "SHA256withECDSAinP1363Format";
       default -> throw new SecurityValidationException("Unsupported OIDC JWT alg: " + alg);
     };
   }
 
   @SuppressWarnings("unchecked")
-  private RSAPublicKey oidcSigningKey(Map<String, Object> config, String kid) throws Exception {
+  private PublicKey oidcSigningKey(Map<String, Object> config, String kid, String alg) throws Exception {
+    String expectedKeyType = expectedJwkKeyType(alg);
+    String expectedCurve = expectedJwkCurve(alg);
     String jwksUri = required(config, "jwksUri", "jwks_url", "jwkSetUri");
     long cacheSeconds = intConfig(config, 300, "jwksCacheSeconds");
     Map<String, Object> jwks = sharedCache == null
@@ -938,18 +980,86 @@ public class SecurityAuthenticationService {
         continue;
       }
       Map<String, Object> key = (Map<String, Object>) rawKey;
-      if (!"RSA".equals(asString(key.get("kty")))) {
+      if (!expectedKeyType.equals(asString(key.get("kty")))) {
         continue;
       }
       String keyId = asString(key.get("kid"));
       if (kid != null && !kid.equals(keyId)) {
         continue;
       }
-      BigInteger modulus = new BigInteger(1, Base64.getUrlDecoder().decode(asString(key.get("n"))));
-      BigInteger exponent = new BigInteger(1, Base64.getUrlDecoder().decode(asString(key.get("e"))));
-      return (RSAPublicKey) KeyFactory.getInstance("RSA").generatePublic(new RSAPublicKeySpec(modulus, exponent));
+      String keyAlgorithm = asString(key.get("alg"));
+      if (keyAlgorithm != null && !alg.equals(keyAlgorithm)) {
+        continue;
+      }
+      String use = asString(key.get("use"));
+      if (use != null && !"sig".equals(use)) {
+        continue;
+      }
+      if (expectedCurve != null && !expectedCurve.equals(asString(key.get("crv")))) {
+        continue;
+      }
+      try {
+        return "RSA".equals(expectedKeyType)
+            ? rsaPublicKey(key)
+            : ecPublicKey(key, alg);
+      } catch (Exception e) {
+        throw new SecurityValidationException(
+            "OIDC signing key is invalid for kid: " + kid, e);
+      }
     }
-    throw new SecurityValidationException("OIDC signing key not found for kid: " + kid);
+    throw new SecurityValidationException(
+        "OIDC signing key not found for kid " + kid + " and alg " + alg);
+  }
+
+  private PublicKey rsaPublicKey(Map<String, Object> key) throws Exception {
+    BigInteger modulus = unsignedJwkInteger(key, "n");
+    BigInteger exponent = unsignedJwkInteger(key, "e");
+    return KeyFactory.getInstance("RSA").generatePublic(new RSAPublicKeySpec(modulus, exponent));
+  }
+
+  private PublicKey ecPublicKey(Map<String, Object> key, String alg) throws Exception {
+    AlgorithmParameters parameters = AlgorithmParameters.getInstance("EC");
+    parameters.init(new ECGenParameterSpec(jcaCurveName(alg)));
+    ECParameterSpec curve = parameters.getParameterSpec(ECParameterSpec.class);
+    ECPoint point = new ECPoint(unsignedJwkInteger(key, "x"), unsignedJwkInteger(key, "y"));
+    return KeyFactory.getInstance("EC").generatePublic(new ECPublicKeySpec(point, curve));
+  }
+
+  private BigInteger unsignedJwkInteger(Map<String, Object> key, String name) {
+    String encoded = asString(key.get(name));
+    if (encoded == null || encoded.isBlank()) {
+      throw new SecurityValidationException("OIDC JWK is missing " + name);
+    }
+    return new BigInteger(1, Base64.getUrlDecoder().decode(encoded));
+  }
+
+  private String expectedJwkKeyType(String alg) {
+    return switch (alg) {
+      case "RS256", "RS384", "RS512" -> "RSA";
+      case "ES256" -> "EC";
+      default -> throw new SecurityValidationException("Unsupported OIDC JWT alg: " + alg);
+    };
+  }
+
+  private String expectedJwkCurve(String alg) {
+    return switch (alg) {
+      case "RS256", "RS384", "RS512" -> null;
+      case "ES256" -> "P-256";
+      default -> throw new SecurityValidationException("Unsupported OIDC JWT alg: " + alg);
+    };
+  }
+
+  private String jcaCurveName(String alg) {
+    return switch (alg) {
+      case "ES256" -> "secp256r1";
+      default -> throw new SecurityValidationException("Unsupported OIDC EC JWT alg: " + alg);
+    };
+  }
+
+  private static String oidcLogValue(String value) {
+    if (value == null || value.isBlank()) return "-";
+    String normalized = value.replaceAll("[\\p{Cntrl}]", " ");
+    return normalized.length() <= 256 ? normalized : normalized.substring(0, 256);
   }
 
   private boolean validClaims(Map<String, Object> config, Map<String, Object> claims) {
