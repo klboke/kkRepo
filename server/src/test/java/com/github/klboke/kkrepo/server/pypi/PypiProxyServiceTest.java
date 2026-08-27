@@ -15,6 +15,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
@@ -80,7 +81,7 @@ class PypiProxyServiceTest {
             null,
             now,
             "Upstream IO error:\nconnection reset")));
-    ListAppender<ILoggingEvent> appender = attachAppender();
+    LogCapture capture = attachAppender();
 
     try {
       PypiExceptions.BadUpstreamException failure = assertThrows(
@@ -88,11 +89,12 @@ class PypiProxyServiceTest {
           () -> fixture.service.getIndex(runtime, "certifi", false));
       assertTrue(failure.getMessage().contains("Upstream temporarily blocked"));
     } finally {
-      detachAppender(appender);
+      detachAppender(capture);
     }
 
-    assertEquals(1, appender.list.size());
-    String message = appender.list.get(0).getFormattedMessage();
+    assertEquals(1, capture.appender().list.size());
+    assertEquals(Level.DEBUG, capture.appender().list.get(0).getLevel());
+    String message = capture.appender().list.get(0).getFormattedMessage();
     assertTrue(message.contains("repository=pypi"));
     assertTrue(message.contains("path=simple/certifi/"));
     assertTrue(message.contains("failCount=4"));
@@ -109,18 +111,19 @@ class PypiProxyServiceTest {
         .thenReturn(Optional.empty());
     when(fixture.proxyStateDao.isBlocked(eq(10L), any())).thenReturn(true);
     when(fixture.proxyStateDao.loadState(10L)).thenReturn(Optional.empty());
-    ListAppender<ILoggingEvent> appender = attachAppender();
+    LogCapture capture = attachAppender();
 
     try {
       assertThrows(
           PypiExceptions.BadUpstreamException.class,
           () -> fixture.service.getIndex(runtime, "certifi", false));
     } finally {
-      detachAppender(appender);
+      detachAppender(capture);
     }
 
-    assertEquals(1, appender.list.size());
-    assertTrue(appender.list.get(0).getFormattedMessage().contains("state=unavailable"));
+    assertEquals(1, capture.appender().list.size());
+    assertEquals(Level.DEBUG, capture.appender().list.get(0).getLevel());
+    assertTrue(capture.appender().list.get(0).getFormattedMessage().contains("state=unavailable"));
   }
 
   @Test
@@ -335,18 +338,22 @@ class PypiProxyServiceTest {
     }).when(fetcher).fetchWithBodyRetry(any(), anyString(), any());
   }
 
-  private static ListAppender<ILoggingEvent> attachAppender() {
+  private static LogCapture attachAppender() {
     Logger logger = (Logger) LoggerFactory.getLogger(PypiProxyService.class);
+    Level priorLevel = logger.getLevel();
+    logger.setLevel(Level.DEBUG);
     ListAppender<ILoggingEvent> appender = new ListAppender<>();
     appender.start();
     logger.addAppender(appender);
-    return appender;
+    return new LogCapture(logger, priorLevel, appender);
   }
 
-  private static void detachAppender(ListAppender<ILoggingEvent> appender) {
-    Logger logger = (Logger) LoggerFactory.getLogger(PypiProxyService.class);
-    logger.detachAppender(appender);
+  private static void detachAppender(LogCapture capture) {
+    capture.logger().detachAppender(capture.appender());
+    capture.logger().setLevel(capture.priorLevel());
   }
+
+  private record LogCapture(Logger logger, Level priorLevel, ListAppender<ILoggingEvent> appender) {}
 
   private static Fixture fixture() {
     AssetDao assetDao = mock(AssetDao.class);

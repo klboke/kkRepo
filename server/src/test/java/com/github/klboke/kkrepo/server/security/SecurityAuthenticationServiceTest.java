@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
@@ -808,17 +809,18 @@ class SecurityAuthenticationServiceTest {
         "{\"alg\":\"HS256\",\"kid\":\"unsupported-key\"}",
         "{\"sub\":\"sensitive-user\",\"exp\":4102444800}",
         "sensitive-signature");
-    ListAppender<ILoggingEvent> appender = attachAuthenticationAppender();
+    LogCapture capture = attachAuthenticationAppender();
 
     try {
       assertFalse(service.authenticate(request(Map.of(
           "Authorization", "Bearer " + token))).isPresent());
     } finally {
-      detachAuthenticationAppender(appender);
+      detachAuthenticationAppender(capture);
     }
 
-    assertEquals(1, appender.list.size());
-    String message = appender.list.get(0).getFormattedMessage();
+    assertEquals(1, capture.appender().list.size());
+    assertEquals(Level.DEBUG, capture.appender().list.get(0).getLevel());
+    String message = capture.appender().list.get(0).getFormattedMessage();
     assertTrue(message.contains("alg=HS256"));
     assertTrue(message.contains("kid=unsupported-key"));
     assertTrue(message.contains("Unsupported OIDC JWT alg: HS256"));
@@ -1205,18 +1207,22 @@ class SecurityAuthenticationServiceTest {
     return base64Url(fixed);
   }
 
-  private static ListAppender<ILoggingEvent> attachAuthenticationAppender() {
+  private static LogCapture attachAuthenticationAppender() {
     Logger logger = (Logger) LoggerFactory.getLogger(SecurityAuthenticationService.class);
+    Level priorLevel = logger.getLevel();
+    logger.setLevel(Level.DEBUG);
     ListAppender<ILoggingEvent> appender = new ListAppender<>();
     appender.start();
     logger.addAppender(appender);
-    return appender;
+    return new LogCapture(logger, priorLevel, appender);
   }
 
-  private static void detachAuthenticationAppender(ListAppender<ILoggingEvent> appender) {
-    Logger logger = (Logger) LoggerFactory.getLogger(SecurityAuthenticationService.class);
-    logger.detachAppender(appender);
+  private static void detachAuthenticationAppender(LogCapture capture) {
+    capture.logger().detachAppender(capture.appender());
+    capture.logger().setLevel(capture.priorLevel());
   }
+
+  private record LogCapture(Logger logger, Level priorLevel, ListAppender<ILoggingEvent> appender) {}
 
   private static String base64Url(byte[] bytes) {
     return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);

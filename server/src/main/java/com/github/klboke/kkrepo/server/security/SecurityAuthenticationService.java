@@ -901,7 +901,7 @@ public class SecurityAuthenticationService {
           roles,
           claims));
     } catch (SecurityValidationException e) {
-      log.warn(
+      log.debug(
           "OIDC token validation rejected: realm={} alg={} kid={} reason={}",
           realm.realmId(), oidcLogValue(alg), oidcLogValue(kid), oidcLogValue(e.getMessage()));
       return Optional.empty();
