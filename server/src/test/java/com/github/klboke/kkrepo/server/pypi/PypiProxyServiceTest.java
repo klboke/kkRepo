@@ -131,7 +131,7 @@ class PypiProxyServiceTest {
   void blockedCacheMissDoesNotLoadDiagnosticStateWhenDebugLoggingIsDisabled() {
     Fixture fixture = fixture();
     RepositoryRuntime runtime = runtime(1, 7L);
-    when(fixture.cache.find(eq(10L), eq("simple/certifi/"), any()))
+    when(fixture.cache.find(eq(10L), eq("packages/certifi.whl"), any()))
         .thenReturn(Optional.empty());
     when(fixture.proxyStateDao.isBlocked(eq(10L), any())).thenReturn(true);
     Logger logger = (Logger) LoggerFactory.getLogger(PypiProxyService.class);
@@ -141,7 +141,7 @@ class PypiProxyServiceTest {
     try {
       assertThrows(
           PypiExceptions.BadUpstreamException.class,
-          () -> fixture.service.getIndex(runtime, "certifi", false));
+          () -> fixture.service.getPackage(runtime, "packages/certifi.whl", false));
     } finally {
       logger.setLevel(priorLevel);
     }

@@ -800,6 +800,121 @@ class SecurityAuthenticationServiceTest {
   }
 
   @Test
+  void logsOidcRejectionReasonsForUnsignedInvalidClaimsMissingUserAndMalformedTokens()
+      throws Exception {
+    KeyPair keyPair = rsaKeyPair();
+    String kid = "validation-key";
+    HttpServer jwks = jwksServer(jwksJson(keyPair, kid));
+    jwks.start();
+    try {
+      FakeSecurityDao dao = new FakeSecurityDao();
+      dao.realm(new SecurityRealmRecord(
+          1L,
+          "oidc",
+          "OIDC",
+          "OIDC",
+          true,
+          0,
+          Map.of(
+              "source", "OIDC",
+              "issuer", "https://issuer.example.com",
+              "audience", "kkrepo",
+              "jwksUri", "http://127.0.0.1:" + jwks.getAddress().getPort() + "/jwks")));
+      SecurityAuthenticationService service = service(dao);
+      String unsigned = jwt(
+          "{\"alg\":\"none\",\"kid\":\"unsigned-key\"}",
+          "{\"sub\":\"sensitive-unsigned-user\"}",
+          "sensitive-unsigned-signature");
+      String expired = signedJwt(
+          keyPair,
+          kid,
+          Map.of(
+              "iss", "https://issuer.example.com",
+              "aud", List.of("kkrepo"),
+              "sub", "expired-user",
+              "exp", 1));
+      String missingUser = signedJwt(
+          keyPair,
+          kid,
+          Map.of(
+              "iss", "https://issuer.example.com",
+              "aud", List.of("kkrepo"),
+              "exp", Instant.now().plusSeconds(300).getEpochSecond()));
+      LogCapture capture = attachAuthenticationAppender();
+
+      try {
+        assertFalse(service.authenticate(request(Map.of(
+            "Authorization", "Bearer " + unsigned))).isPresent());
+        assertFalse(service.authenticate(request(Map.of(
+            "Authorization", "Bearer " + expired))).isPresent());
+        assertFalse(service.authenticate(request(Map.of(
+            "Authorization", "Bearer " + missingUser))).isPresent());
+        assertFalse(service.authenticate(request(Map.of(
+            "Authorization", "Bearer not-a-jwt.payload.signature"))).isPresent());
+      } finally {
+        detachAuthenticationAppender(capture);
+      }
+
+      List<String> messages = capture.appender().list.stream()
+          .map(ILoggingEvent::getFormattedMessage)
+          .toList();
+      assertEquals(4, messages.size());
+      assertTrue(messages.stream().anyMatch(message ->
+          message.contains("reason=missing or unsigned algorithm")));
+      assertTrue(messages.stream().anyMatch(message ->
+          message.contains("reason=claims validation failed")));
+      assertTrue(messages.stream().anyMatch(message ->
+          message.contains("reason=user identifier claim is missing")));
+      assertTrue(messages.stream().anyMatch(message ->
+          message.contains("OIDC token validation failed")
+              && message.contains("cause=")));
+      assertFalse(String.join("\n", messages).contains("sensitive-unsigned-user"));
+      assertFalse(String.join("\n", messages).contains("sensitive-unsigned-signature"));
+    } finally {
+      jwks.stop(0);
+    }
+  }
+
+  @Test
+  void rejectsMatchingEcJwkWhenRequiredCoordinateIsMissing() throws Exception {
+    String kid = "broken-ec";
+    String body = OBJECT_MAPPER.writeValueAsString(Map.of(
+        "keys",
+        List.of(Map.of(
+            "kty", "EC",
+            "kid", kid,
+            "alg", "ES256",
+            "use", "sig",
+            "crv", "P-256",
+            "y", "AQ"))));
+    HttpServer jwks = jwksServer(body);
+    jwks.start();
+    try {
+      FakeSecurityDao dao = new FakeSecurityDao();
+      dao.realm(new SecurityRealmRecord(
+          1L,
+          "oidc",
+          "OIDC",
+          "OIDC",
+          true,
+          0,
+          Map.of(
+              "source", "OIDC",
+              "jwksUri", "http://127.0.0.1:" + jwks.getAddress().getPort() + "/jwks")));
+      SecurityAuthenticationService service = service(dao);
+      String token = jwt(
+          "{\"alg\":\"ES256\",\"kid\":\"broken-ec\"}",
+          "{\"sub\":\"alice\",\"exp\":4102444800}",
+          "signature");
+
+      assertFalse(service.authenticate(request(Map.of(
+          "Authorization", "Bearer " + token))).isPresent());
+    } finally {
+      jwks.stop(0);
+    }
+  }
+
+  @Test
   void logsUnsupportedOidcAlgorithmWithoutTokenOrClaims() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.realm(new SecurityRealmRecord(
@@ -1158,6 +1273,21 @@ class SecurityAuthenticationServiceTest {
                 "use", "sig",
                 "n", base64UrlUnsigned(rsaPublicKey.getModulus()),
                 "e", base64UrlUnsigned(rsaPublicKey.getPublicExponent())),
+            Map.of(
+                "kty", "EC",
+                "kid", ecKid,
+                "alg", "RS256"),
+            Map.of(
+                "kty", "EC",
+                "kid", ecKid,
+                "alg", "ES256",
+                "use", "enc"),
+            Map.of(
+                "kty", "EC",
+                "kid", ecKid,
+                "alg", "ES256",
+                "use", "sig",
+                "crv", "P-384"),
             Map.of(
                 "kty", "EC",
                 "kid", ecKid,
