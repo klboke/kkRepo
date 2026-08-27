@@ -25,10 +25,13 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 @Service
 public class PypiProxyService {
+  private static final Logger log = LoggerFactory.getLogger(PypiProxyService.class);
   private static final long[] BACKOFF_SECONDS = {30, 60, 120, 300, 600, 1800};
 
   private final AssetDao assetDao;
@@ -88,7 +91,7 @@ public class PypiProxyService {
     }
     if (proxyStateDao.isBlocked(runtime.id(), now)) {
       if (cached.isPresent()) return reader.serveSnapshot(cached.get(), headOnly, path);
-      throw new PypiExceptions.BadUpstreamException("Upstream temporarily blocked: " + runtime.proxyRemoteUrl());
+      throw temporarilyBlocked(runtime, path);
     }
 
     String projectName = PypiPaths.packageNameFromPath(path);
@@ -126,7 +129,7 @@ public class PypiProxyService {
     }
     if (proxyStateDao.isBlocked(runtime.id(), now)) {
       if (cached.isPresent()) return reader.serveSnapshot(cached.get(), headOnly, path);
-      throw new PypiExceptions.BadUpstreamException("Upstream temporarily blocked: " + runtime.proxyRemoteUrl());
+      throw temporarilyBlocked(runtime, path);
     }
 
     String url = upstreamIndexUrl(runtime, projectName);
@@ -355,9 +358,43 @@ public class PypiProxyService {
     long block = runtime.autoBlockOrDefault()
         ? BACKOFF_SECONDS[Math.min(failCount, BACKOFF_SECONDS.length - 1)]
         : 0;
+    log.warn(
+        "PyPI proxy upstream request failed: repository={} path={} failCount={} blockSeconds={} error={}",
+        runtime.name(), proxyLogValue(path), failCount + 1, block, proxyLogValue(error));
     proxyStateDao.recordFailure(runtime.id(), block, error, now);
     if (cached.isPresent()) return reader.serveSnapshot(cached.get(), headOnly, path);
     throw new PypiExceptions.BadUpstreamException(error);
+  }
+
+  private PypiExceptions.BadUpstreamException temporarilyBlocked(
+      RepositoryRuntime runtime, String path) {
+    if (log.isDebugEnabled()) {
+      Optional<ProxyStateDao.ProxyRemoteState> state = proxyStateDao.loadState(runtime.id());
+      if (state.isPresent()) {
+        ProxyStateDao.ProxyRemoteState blocked = state.orElseThrow();
+        log.debug(
+            "PyPI proxy request skipped while upstream is blocked: repository={} path={} "
+                + "failCount={} blockedUntil={} lastFailureAt={} lastError={}",
+            runtime.name(),
+            proxyLogValue(path),
+            blocked.failCount(),
+            blocked.blockedUntil(),
+            blocked.lastFailureAt(),
+            proxyLogValue(blocked.lastError()));
+      } else {
+        log.debug(
+            "PyPI proxy request skipped while upstream is blocked: repository={} path={} state=unavailable",
+            runtime.name(), proxyLogValue(path));
+      }
+    }
+    return new PypiExceptions.BadUpstreamException(
+        "Upstream temporarily blocked: " + runtime.proxyRemoteUrl());
+  }
+
+  private static String proxyLogValue(String value) {
+    if (value == null || value.isBlank()) return "-";
+    String normalized = value.replaceAll("[\\p{Cntrl}]", " ");
+    return normalized.length() <= 1024 ? normalized : normalized.substring(0, 1024);
   }
 
   private boolean isFresh(

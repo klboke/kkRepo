@@ -6,6 +6,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ApiKeyRecord;
@@ -28,7 +32,9 @@ import java.nio.charset.StandardCharsets;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.Signature;
+import java.security.interfaces.ECPublicKey;
 import java.security.interfaces.RSAPublicKey;
+import java.security.spec.ECGenParameterSpec;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -42,6 +48,7 @@ import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.transaction.PlatformTransactionManager;
 
@@ -722,6 +729,221 @@ class SecurityAuthenticationServiceTest {
   }
 
   @Test
+  void authenticatesEs256OidcBearerJwtAgainstMatchingEcJwkAlongsideRsaKey() throws Exception {
+    KeyPair rsaKeyPair = rsaKeyPair();
+    KeyPair ecKeyPair = ecKeyPair("secp256r1");
+    String ecKid = "authelia-es256";
+    HttpServer jwks = jwksServer(mixedRsaAndEcJwksJson(
+        rsaKeyPair, "authelia-rsa256", ecKeyPair, ecKid));
+    jwks.start();
+    try {
+      FakeSecurityDao dao = new FakeSecurityDao();
+      dao.realm(new SecurityRealmRecord(
+          1L,
+          "oidc",
+          "OIDC",
+          "OIDC",
+          true,
+          0,
+          Map.of(
+              "source", "OIDC",
+              "issuer", "https://issuer.example.com",
+              "audience", "kkrepo",
+              "jwksUri", "http://jwks.rebind.invalid:" + jwks.getAddress().getPort() + "/jwks",
+              "userIdClaim", "preferred_username",
+              "groupsClaim", "groups")));
+      OutboundRequestPolicy pinnedPolicy = new OutboundRequestPolicy(
+          true,
+          "",
+          host -> new InetAddress[] {InetAddress.getByAddress(
+              host, new byte[] {127, 0, 0, 1})});
+      SecurityAuthenticationService service = service(dao, "nx-anonymous", pinnedPolicy);
+      String token = signedJwt(
+          ecKeyPair,
+          ecKid,
+          "ES256",
+          "SHA256withECDSAinP1363Format",
+          Map.of(
+              "iss", "https://issuer.example.com",
+              "aud", List.of("kkrepo"),
+              "sub", "subject-es256",
+              "preferred_username", "alice-es256",
+              "groups", List.of("admins"),
+              "exp", Instant.now().plusSeconds(300).getEpochSecond()));
+
+      Optional<AuthenticatedSubject> authenticated = service.authenticate(request(Map.of(
+          "Authorization", "Bearer " + token)));
+
+      assertTrue(authenticated.isPresent());
+      assertEquals("alice-es256", authenticated.get().userId());
+      assertTrue(authenticated.get().permissionSubject().groupIds().contains("admins"));
+      assertEquals(
+          "subject-es256",
+          dao.findUser("OIDC", "alice-es256").orElseThrow().externalId());
+
+      String derEncodedSignatureToken = signedJwt(
+          ecKeyPair,
+          ecKid,
+          "ES256",
+          "SHA256withECDSA",
+          Map.of(
+              "iss", "https://issuer.example.com",
+              "aud", List.of("kkrepo"),
+              "sub", "subject-invalid-signature-encoding",
+              "preferred_username", "invalid-signature-encoding",
+              "exp", Instant.now().plusSeconds(300).getEpochSecond()));
+      assertFalse(service.authenticate(request(Map.of(
+          "Authorization", "Bearer " + derEncodedSignatureToken))).isPresent());
+    } finally {
+      jwks.stop(0);
+    }
+  }
+
+  @Test
+  void logsOidcRejectionReasonsForUnsignedInvalidClaimsMissingUserAndMalformedTokens()
+      throws Exception {
+    KeyPair keyPair = rsaKeyPair();
+    String kid = "validation-key";
+    HttpServer jwks = jwksServer(jwksJson(keyPair, kid));
+    jwks.start();
+    try {
+      FakeSecurityDao dao = new FakeSecurityDao();
+      dao.realm(new SecurityRealmRecord(
+          1L,
+          "oidc",
+          "OIDC",
+          "OIDC",
+          true,
+          0,
+          Map.of(
+              "source", "OIDC",
+              "issuer", "https://issuer.example.com",
+              "audience", "kkrepo",
+              "jwksUri", "http://127.0.0.1:" + jwks.getAddress().getPort() + "/jwks")));
+      SecurityAuthenticationService service = service(dao);
+      String unsigned = jwt(
+          "{\"alg\":\"none\",\"kid\":\"unsigned-key\"}",
+          "{\"sub\":\"sensitive-unsigned-user\"}",
+          "sensitive-unsigned-signature");
+      String expired = signedJwt(
+          keyPair,
+          kid,
+          Map.of(
+              "iss", "https://issuer.example.com",
+              "aud", List.of("kkrepo"),
+              "sub", "expired-user",
+              "exp", 1));
+      String missingUser = signedJwt(
+          keyPair,
+          kid,
+          Map.of(
+              "iss", "https://issuer.example.com",
+              "aud", List.of("kkrepo"),
+              "exp", Instant.now().plusSeconds(300).getEpochSecond()));
+      LogCapture capture = attachAuthenticationAppender();
+
+      try {
+        assertFalse(service.authenticate(request(Map.of(
+            "Authorization", "Bearer " + unsigned))).isPresent());
+        assertFalse(service.authenticate(request(Map.of(
+            "Authorization", "Bearer " + expired))).isPresent());
+        assertFalse(service.authenticate(request(Map.of(
+            "Authorization", "Bearer " + missingUser))).isPresent());
+        assertFalse(service.authenticate(request(Map.of(
+            "Authorization", "Bearer not-a-jwt.payload.signature"))).isPresent());
+      } finally {
+        detachAuthenticationAppender(capture);
+      }
+
+      List<String> messages = capture.appender().list.stream()
+          .map(ILoggingEvent::getFormattedMessage)
+          .toList();
+      assertEquals(4, messages.size());
+      assertTrue(messages.stream().anyMatch(message ->
+          message.contains("reason=missing or unsigned algorithm")));
+      assertTrue(messages.stream().anyMatch(message ->
+          message.contains("reason=claims validation failed")));
+      assertTrue(messages.stream().anyMatch(message ->
+          message.contains("reason=user identifier claim is missing")));
+      assertTrue(messages.stream().anyMatch(message ->
+          message.contains("OIDC token validation failed")
+              && message.contains("cause=")));
+      assertFalse(String.join("\n", messages).contains("sensitive-unsigned-user"));
+      assertFalse(String.join("\n", messages).contains("sensitive-unsigned-signature"));
+    } finally {
+      jwks.stop(0);
+    }
+  }
+
+  @Test
+  void rejectsMatchingEcJwkWhenRequiredCoordinateIsMissing() throws Exception {
+    String kid = "broken-ec";
+    String body = OBJECT_MAPPER.writeValueAsString(Map.of(
+        "keys",
+        List.of(Map.of(
+            "kty", "EC",
+            "kid", kid,
+            "alg", "ES256",
+            "use", "sig",
+            "crv", "P-256",
+            "y", "AQ"))));
+    HttpServer jwks = jwksServer(body);
+    jwks.start();
+    try {
+      FakeSecurityDao dao = new FakeSecurityDao();
+      dao.realm(new SecurityRealmRecord(
+          1L,
+          "oidc",
+          "OIDC",
+          "OIDC",
+          true,
+          0,
+          Map.of(
+              "source", "OIDC",
+              "jwksUri", "http://127.0.0.1:" + jwks.getAddress().getPort() + "/jwks")));
+      SecurityAuthenticationService service = service(dao);
+      String token = jwt(
+          "{\"alg\":\"ES256\",\"kid\":\"broken-ec\"}",
+          "{\"sub\":\"alice\",\"exp\":4102444800}",
+          "signature");
+
+      assertFalse(service.authenticate(request(Map.of(
+          "Authorization", "Bearer " + token))).isPresent());
+    } finally {
+      jwks.stop(0);
+    }
+  }
+
+  @Test
+  void logsUnsupportedOidcAlgorithmWithoutTokenOrClaims() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.realm(new SecurityRealmRecord(
+        1L, "oidc", "OIDC", "OIDC", true, 0, Map.of("source", "OIDC")));
+    SecurityAuthenticationService service = service(dao);
+    String token = jwt(
+        "{\"alg\":\"HS256\",\"kid\":\"unsupported-key\"}",
+        "{\"sub\":\"sensitive-user\",\"exp\":4102444800}",
+        "sensitive-signature");
+    LogCapture capture = attachAuthenticationAppender();
+
+    try {
+      assertFalse(service.authenticate(request(Map.of(
+          "Authorization", "Bearer " + token))).isPresent());
+    } finally {
+      detachAuthenticationAppender(capture);
+    }
+
+    assertEquals(1, capture.appender().list.size());
+    assertEquals(Level.DEBUG, capture.appender().list.get(0).getLevel());
+    String message = capture.appender().list.get(0).getFormattedMessage();
+    assertTrue(message.contains("alg=HS256"));
+    assertTrue(message.contains("kid=unsupported-key"));
+    assertTrue(message.contains("Unsupported OIDC JWT alg: HS256"));
+    assertFalse(message.contains("sensitive-user"));
+    assertFalse(message.contains("sensitive-signature"));
+  }
+
+  @Test
   void authenticatesAnonymousUserThroughConfiguredRealmAndAssignedRoles() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.anonymous(new SecurityAnonymousConfigRecord(
@@ -1006,6 +1228,12 @@ class SecurityAuthenticationServiceTest {
     return generator.generateKeyPair();
   }
 
+  private static KeyPair ecKeyPair(String curve) throws Exception {
+    KeyPairGenerator generator = KeyPairGenerator.getInstance("EC");
+    generator.initialize(new ECGenParameterSpec(curve));
+    return generator.generateKeyPair();
+  }
+
   private static HttpServer jwksServer(String jwksJson) throws Exception {
     HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     server.createContext("/jwks", exchange -> {
@@ -1031,10 +1259,58 @@ class SecurityAuthenticationServiceTest {
             "e", base64UrlUnsigned(publicKey.getPublicExponent())))));
   }
 
+  private static String mixedRsaAndEcJwksJson(
+      KeyPair rsaKeyPair, String rsaKid, KeyPair ecKeyPair, String ecKid) throws Exception {
+    RSAPublicKey rsaPublicKey = (RSAPublicKey) rsaKeyPair.getPublic();
+    ECPublicKey ecPublicKey = (ECPublicKey) ecKeyPair.getPublic();
+    return OBJECT_MAPPER.writeValueAsString(Map.of(
+        "keys",
+        List.of(
+            Map.of(
+                "kty", "RSA",
+                "kid", rsaKid,
+                "alg", "RS256",
+                "use", "sig",
+                "n", base64UrlUnsigned(rsaPublicKey.getModulus()),
+                "e", base64UrlUnsigned(rsaPublicKey.getPublicExponent())),
+            Map.of(
+                "kty", "EC",
+                "kid", ecKid,
+                "alg", "RS256"),
+            Map.of(
+                "kty", "EC",
+                "kid", ecKid,
+                "alg", "ES256",
+                "use", "enc"),
+            Map.of(
+                "kty", "EC",
+                "kid", ecKid,
+                "alg", "ES256",
+                "use", "sig",
+                "crv", "P-384"),
+            Map.of(
+                "kty", "EC",
+                "kid", ecKid,
+                "alg", "ES256",
+                "use", "sig",
+                "crv", "P-256",
+                "x", base64UrlUnsigned(ecPublicKey.getW().getAffineX(), 32),
+                "y", base64UrlUnsigned(ecPublicKey.getW().getAffineY(), 32)))));
+  }
+
   private static String signedJwt(KeyPair keyPair, String kid, Map<String, Object> claims) throws Exception {
-    String header = base64UrlJson(Map.of("alg", "RS256", "kid", kid, "typ", "JWT"));
+    return signedJwt(keyPair, kid, "RS256", "SHA256withRSA", claims);
+  }
+
+  private static String signedJwt(
+      KeyPair keyPair,
+      String kid,
+      String algorithm,
+      String signatureAlgorithm,
+      Map<String, Object> claims) throws Exception {
+    String header = base64UrlJson(Map.of("alg", algorithm, "kid", kid, "typ", "JWT"));
     String payload = base64UrlJson(claims);
-    Signature signature = Signature.getInstance("SHA256withRSA");
+    Signature signature = Signature.getInstance(signatureAlgorithm);
     signature.initSign(keyPair.getPrivate());
     signature.update((header + "." + payload).getBytes(StandardCharsets.US_ASCII));
     return header + "." + payload + "." + base64Url(signature.sign());
@@ -1051,6 +1327,32 @@ class SecurityAuthenticationServiceTest {
     }
     return base64Url(bytes);
   }
+
+  private static String base64UrlUnsigned(BigInteger value, int length) {
+    byte[] bytes = value.toByteArray();
+    byte[] fixed = new byte[length];
+    int sourceOffset = Math.max(0, bytes.length - length);
+    int copied = Math.min(bytes.length, length);
+    System.arraycopy(bytes, sourceOffset, fixed, length - copied, copied);
+    return base64Url(fixed);
+  }
+
+  private static LogCapture attachAuthenticationAppender() {
+    Logger logger = (Logger) LoggerFactory.getLogger(SecurityAuthenticationService.class);
+    Level priorLevel = logger.getLevel();
+    logger.setLevel(Level.DEBUG);
+    ListAppender<ILoggingEvent> appender = new ListAppender<>();
+    appender.start();
+    logger.addAppender(appender);
+    return new LogCapture(logger, priorLevel, appender);
+  }
+
+  private static void detachAuthenticationAppender(LogCapture capture) {
+    capture.logger().detachAppender(capture.appender());
+    capture.logger().setLevel(capture.priorLevel());
+  }
+
+  private record LogCapture(Logger logger, Level priorLevel, ListAppender<ILoggingEvent> appender) {}
 
   private static String base64Url(byte[] bytes) {
     return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
