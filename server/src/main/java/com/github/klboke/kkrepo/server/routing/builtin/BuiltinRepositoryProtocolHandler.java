@@ -501,7 +501,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
       String rawPath = extractRepositoryPath(name, request);
       if (NpmTokenService.isLoginPath(rawPath)) {
         try (InputStream body = request.getInputStream()) {
-          return toStreamingResponse(npmToken.login(body));
+          return toByteArrayResponse(npmToken.login(body));
         }
       }
       NpmPath path = npmParser.parse(rawPath);
