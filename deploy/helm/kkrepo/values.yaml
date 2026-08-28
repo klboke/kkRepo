@@ -136,15 +136,15 @@ securityScanning:
     delay: 1h
     initialDelay: 5m
   limits:
-    maxOciRequestBytes: 65536
-    maxInputBytes: 2147483648
-    maxOutputBytes: 16777216
-    maxResponseBytes: 67108864
-    maxResponseTokens: 262144
-    responseMemoryBudgetBytes: 268435456
-    maxStderrBytes: 262144
+    maxOciRequestBytes: '65536'
+    maxInputBytes: '2147483648'
+    maxOutputBytes: '16777216'
+    maxResponseBytes: '67108864'
+    maxResponseTokens: '262144'
+    responseMemoryBudgetBytes: '268435456'
+    maxStderrBytes: '262144'
     # Shared admission budget across concurrent scans. Keep this below scratchVolumeSize.
-    maxScratchBytes: 7516192768
+    maxScratchBytes: '7516192768'
     scratchVolumeSize: 8Gi
     maxConcurrentScans: 2
     maxQueuedScans: 4
