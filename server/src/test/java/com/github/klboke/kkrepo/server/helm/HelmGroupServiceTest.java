@@ -9,6 +9,7 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -188,7 +189,8 @@ class HelmGroupServiceTest {
   }
 
   @Test
-  void isolatesMissingUnreadableAndInvalidMemberIndexes() throws Exception {
+  void isolatesMissingUnreadableAndInvalidMemberIndexesWithoutCachingPartialMerge()
+      throws Exception {
     Fixture fixture = fixture();
     RepositoryRuntime missing = runtime(1L, "missing", RepositoryType.HOSTED, true, List.of());
     RepositoryRuntime unreadable = runtime(2L, "unreadable", RepositoryType.HOSTED, true, List.of());
@@ -223,11 +225,57 @@ class HelmGroupServiceTest {
               version: 1.0.0
               urls: [good.tgz]
         """));
+    when(fixture.indexCache.enabled()).thenReturn(true);
 
     MavenResponse merged = fixture.service.get(group, "index.yaml", false);
     assertEquals(
         List.of(new HelmIndex.Entry("good", "1.0.0", List.of("good-1.0.0.tgz"))),
         HelmIndex.entries(merged.body().readAllBytes()));
+    verify(fixture.writer, never()).writeBytes(
+        any(), any(), any(Long.class), any(), any(), any(), any(), any(), anyMap(), anyMap(),
+        any(), any());
+  }
+
+  @Test
+  void doesNotCacheAnOuterIndexWhenNestedAggregationIsDegraded() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime outerHosted = runtime(
+        1L, "outer-hosted", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime nestedHosted = runtime(
+        2L, "nested-hosted", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime unavailable = runtime(
+        3L, "unavailable", RepositoryType.PROXY, true, List.of());
+    RepositoryRuntime nested = runtime(
+        4L, "nested", RepositoryType.GROUP, true, List.of(nestedHosted, unavailable));
+    RepositoryRuntime group = runtime(
+        10L, "all", RepositoryType.GROUP, true, List.of(outerHosted, nested));
+    when(fixture.indexCache.enabled()).thenReturn(true);
+    when(fixture.hosted.get(outerHosted, "index.yaml", false)).thenReturn(index("""
+        entries:
+          outer:
+            - name: outer
+              version: 1.0.0
+              urls: [outer.tgz]
+        """));
+    when(fixture.hosted.get(nestedHosted, "index.yaml", false)).thenReturn(index("""
+        entries:
+          nested:
+            - name: nested
+              version: 1.0.0
+              urls: [nested.tgz]
+        """));
+    when(fixture.proxy.get(unavailable, "index.yaml", false))
+        .thenThrow(new MavenExceptions.BadUpstreamException("temporarily unavailable"));
+
+    MavenResponse merged = fixture.service.get(group, "index.yaml", false);
+
+    assertEquals(List.of(
+        new HelmIndex.Entry("outer", "1.0.0", List.of("outer-1.0.0.tgz")),
+        new HelmIndex.Entry("nested", "1.0.0", List.of("nested-1.0.0.tgz"))),
+        HelmIndex.entries(merged.body().readAllBytes()));
+    verify(fixture.writer, never()).writeBytes(
+        any(), any(), any(Long.class), any(), any(), any(), any(), any(), anyMap(), anyMap(),
+        any(), any());
   }
 
   @Test

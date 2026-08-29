@@ -58,11 +58,11 @@ public class HelmGroupService {
     String path = HelmHostedService.normalizePath(rawPath);
     HelmAssetKind kind = readableKind(path);
     return kind == HelmAssetKind.INDEX
-        ? getIndex(group, headOnly, new HashSet<>())
+        ? getIndex(group, headOnly, new HashSet<>()).response()
         : getAsset(group, path, kind, headOnly, new HashSet<>());
   }
 
-  private MavenResponse getIndex(
+  private IndexResult getIndex(
       RepositoryRuntime group, boolean headOnly, Set<Long> resolvingGroups) {
     if (!resolvingGroups.add(group.id())) {
       throw new MavenExceptions.MethodNotAllowed(
@@ -73,15 +73,21 @@ public class HelmGroupService {
       if (indexCache != null) {
         Optional<CachedAssetMetadata> cached = indexCache.findFresh(group, now);
         if (cached.isPresent()) {
-          return reader.serveSnapshot(cached.orElseThrow(), headOnly, HelmHostedService.INDEX_PATH);
+          return new IndexResult(
+              reader.serveSnapshot(
+                  cached.orElseThrow(), headOnly, HelmHostedService.INDEX_PATH),
+              true);
         }
       }
 
       NexusLikeCacheInfo cacheInfo = indexCache == null ? null : indexCache.current(group, now);
-      List<byte[]> indexes = memberIndexes(group, resolvingGroups);
-      byte[] body = HelmIndex.mergeGroupIndexes(indexes, now);
-      if (indexCache == null || !indexCache.enabled()) {
-        return indexResponse(body, headOnly, null, now);
+      MemberIndexes memberIndexes = memberIndexes(group, resolvingGroups);
+      byte[] body = HelmIndex.mergeGroupIndexes(memberIndexes.indexes(), now);
+      // A partial response is still useful, but no replica may publish it as fresh under the
+      // shared watermark and thereby hide a recovered member until metadata expiry.
+      if (!memberIndexes.complete() || indexCache == null || !indexCache.enabled()) {
+        return new IndexResult(
+            indexResponse(body, headOnly, null, now), memberIndexes.complete());
       }
 
       long blobStoreId = requireBlobStore(group);
@@ -100,46 +106,57 @@ public class HelmGroupService {
           "group",
           null);
       reader.beforeRead(stored.asset().id(), stored.blob().id(), stored.asset().repositoryId());
-      return indexResponse(body, headOnly, stored.blob().sha1(), stored.asset().lastUpdatedAt());
+      return new IndexResult(
+          indexResponse(body, headOnly, stored.blob().sha1(), stored.asset().lastUpdatedAt()),
+          true);
     } finally {
       resolvingGroups.remove(group.id());
     }
   }
 
-  private List<byte[]> memberIndexes(
+  private MemberIndexes memberIndexes(
       RepositoryRuntime group, Set<Long> resolvingGroups) {
     List<byte[]> indexes = new ArrayList<>();
+    boolean complete = true;
     int total = 0;
     for (RepositoryRuntime member : group.members()) {
       if (!eligible(member)) continue;
       MavenResponse response;
       try {
-        response = switch (member.type()) {
-          case HOSTED -> hosted.get(member, HelmHostedService.INDEX_PATH, false);
-          case PROXY -> proxy.get(member, HelmHostedService.INDEX_PATH, false);
-          case GROUP -> getIndex(member, false, resolvingGroups);
-        };
-      } catch (MavenExceptions.MavenNotFoundException
-          | MavenExceptions.BadUpstreamException
+        if (member.isGroup()) {
+          IndexResult nested = getIndex(member, false, resolvingGroups);
+          response = nested.response();
+          complete &= nested.complete();
+        } else {
+          response = member.isHosted()
+              ? hosted.get(member, HelmHostedService.INDEX_PATH, false)
+              : proxy.get(member, HelmHostedService.INDEX_PATH, false);
+        }
+      } catch (MavenExceptions.MavenNotFoundException ignored) {
+        continue;
+      } catch (MavenExceptions.BadUpstreamException
           | MavenExceptions.MethodNotAllowed ignored) {
+        complete = false;
         continue;
       }
       byte[] body;
       try {
         body = readBounded(response, MAX_AGGREGATED_INDEX_BYTES - total);
       } catch (IOException e) {
+        complete = false;
         continue;
       }
       // Isolate an invalid upstream/member index instead of making every healthy member unusable.
       try {
         HelmIndex.entries(body);
       } catch (RuntimeException ignored) {
+        complete = false;
         continue;
       }
       total += body.length;
       indexes.add(body);
     }
-    return indexes;
+    return new MemberIndexes(indexes, complete);
   }
 
   private MavenResponse getAsset(
@@ -257,5 +274,11 @@ public class HelmGroupService {
       throw new IllegalStateException("Helm group " + runtime.name() + " has no blob store assigned");
     }
     return runtime.blobStoreId();
+  }
+
+  private record IndexResult(MavenResponse response, boolean complete) {
+  }
+
+  private record MemberIndexes(List<byte[]> indexes, boolean complete) {
   }
 }
