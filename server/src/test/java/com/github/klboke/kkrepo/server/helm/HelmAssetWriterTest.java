@@ -151,7 +151,7 @@ class HelmAssetWriterTest {
   }
 
   @Test
-  void indexWriteInvalidatesContainingGroupIndexes() {
+  void indexWriteInvalidatesContainingGroupIndexesAndContentWinners() {
     Fixture fixture = fixture();
     stubNewAsset(fixture, "index.yaml");
 
@@ -161,8 +161,8 @@ class HelmAssetWriterTest {
         "text/x-yaml", HelmAssetKind.INDEX, null,
         Map.of(), Map.of(), "hosted", null);
 
-    verify(fixture.groupMemberAssetCache, never())
-        .invalidateMemberAfterCommit(anyLong(), any(NexusCacheType.class));
+    verify(fixture.groupMemberAssetCache)
+        .invalidateMemberAfterCommit(10L, NexusCacheType.CONTENT);
     verify(fixture.groupIndexCache).invalidateMemberAfterCommit(10L);
   }
 

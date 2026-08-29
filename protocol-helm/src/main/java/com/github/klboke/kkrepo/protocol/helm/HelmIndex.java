@@ -92,6 +92,18 @@ public final class HelmIndex {
     loadValidIndex(yamlBytes);
   }
 
+  /** Return whether a chart coordinate is safe to embed as one repository path segment. */
+  public static boolean isSafeChartPathSegment(String value) {
+    return value != null
+        && !value.isBlank()
+        && value.indexOf('\0') < 0
+        && !value.contains("/")
+        && !value.contains("\\")
+        && !value.equals(".")
+        && !value.equals("..")
+        && !value.contains("..");
+  }
+
   /**
    * Merge member indexes in configured group order.
    *
@@ -456,7 +468,7 @@ public final class HelmIndex {
       throw new IllegalArgumentException("Invalid Helm index entries: expected a mapping");
     }
     for (Map.Entry<?, ?> entry : entries.entrySet()) {
-      if (!(entry.getKey() instanceof String name) || name.isBlank()) {
+      if (!(entry.getKey() instanceof String name) || !isSafeChartPathSegment(name)) {
         throw new IllegalArgumentException("Invalid Helm index entry: expected a chart name");
       }
       if (!(entry.getValue() instanceof List<?> versions)) {
@@ -468,12 +480,13 @@ public final class HelmIndex {
           throw new IllegalArgumentException(
               "Invalid Helm index entry " + name + ": expected a release mapping");
         }
-        if (!(release.get("name") instanceof String releaseName) || releaseName.isBlank()) {
+        if (!(release.get("name") instanceof String releaseName)
+            || !isSafeChartPathSegment(releaseName)) {
           throw new IllegalArgumentException(
               "Invalid Helm index entry " + name + ": expected a release name");
         }
         if (!(release.get("version") instanceof String releaseVersion)
-            || releaseVersion.isBlank()) {
+            || !isSafeChartPathSegment(releaseVersion)) {
           throw new IllegalArgumentException(
               "Invalid Helm index entry " + name + ": expected a release version");
         }

@@ -324,7 +324,7 @@ class HelmAssetWriter {
 
   private void notifyContainingGroups(RepositoryRuntime runtime, String kind) {
     if (runtime.isGroup()) return;
-    if (groupMemberAssetCache != null && !HelmAssetKind.INDEX.name().equals(kind)) {
+    if (groupMemberAssetCache != null) {
       groupMemberAssetCache.invalidateMemberAfterCommit(runtime.id(), NexusCacheType.CONTENT);
     }
     if (groupIndexCache != null && HelmAssetKind.INDEX.name().equals(kind)) {

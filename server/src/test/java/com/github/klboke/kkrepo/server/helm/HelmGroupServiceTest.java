@@ -8,6 +8,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -123,11 +124,47 @@ class HelmGroupServiceTest {
     Fixture fixture = fixture();
     RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of());
     CachedAssetMetadata cached = mock(CachedAssetMetadata.class);
-    MavenResponse expected = MavenResponse.noBody(200);
     when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.of(cached));
-    when(fixture.reader.serveSnapshot(cached, true, "index.yaml")).thenReturn(expected);
+    when(fixture.reader.serveSnapshot(cached, false, "index.yaml"))
+        .thenAnswer(ignored -> index("entries: {}\n"));
 
-    assertSame(expected, fixture.service.get(group, "index.yaml", true));
+    MavenResponse response = fixture.service.get(group, "index.yaml", true);
+
+    assertEquals(200, response.status());
+    assertEquals("text/x-yaml", response.contentType());
+    verify(fixture.reader).serveSnapshot(cached, false, "index.yaml");
+  }
+
+  @Test
+  void rebuildsFreshDurableIndexWhenItsBlobCannotBeOpened() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime hosted = runtime(2L, "private", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of(hosted));
+    CachedAssetMetadata cached = mock(CachedAssetMetadata.class);
+    when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.of(cached));
+    when(fixture.reader.serveSnapshot(cached, false, "index.yaml"))
+        .thenReturn(MavenResponse.ok(
+            () -> {
+              throw new MavenExceptions.MavenNotFoundException("missing cached blob");
+            },
+            1L,
+            HelmIndex.CONTENT_TYPE,
+            "old",
+            Instant.EPOCH));
+    when(fixture.hosted.get(hosted, "index.yaml", false)).thenAnswer(ignored -> index("""
+        entries:
+          private:
+            - name: private
+              version: 1.0.0
+              urls: [private.tgz]
+        """));
+
+    MavenResponse response = fixture.service.get(group, "index.yaml", false);
+
+    assertEquals(
+        List.of(new HelmIndex.Entry("private", "1.0.0", List.of("private-1.0.0.tgz"))),
+        HelmIndex.entries(response.body().readAllBytes()));
+    verify(fixture.indexCache).invalidateGroupAfterCommit(group.id());
   }
 
   @Test
@@ -165,6 +202,75 @@ class HelmGroupServiceTest {
         HelmIndex.entries(response.body().readAllBytes()));
     verify(fixture.reader).beforeRead(
         stored.asset().id(), stored.blob().id(), stored.asset().repositoryId());
+  }
+
+  @Test
+  void capturesTheGroupWatermarkAfterMemberRefresh() {
+    Fixture fixture = fixture();
+    RepositoryRuntime hosted = runtime(2L, "private", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of(hosted));
+    AtomicBoolean memberRefreshed = new AtomicBoolean();
+    NexusLikeCacheInfo postRefresh = new NexusLikeCacheInfo(
+        Instant.parse("2026-08-30T00:00:01Z"), "post-refresh", NexusCacheType.METADATA);
+    Map<String, Object> attributes = Map.of("helmGroupIndex", true);
+    HelmAssetWriter.Stored stored = storedIndex();
+    when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.empty());
+    when(fixture.indexCache.enabled()).thenReturn(true);
+    when(fixture.hosted.get(hosted, "index.yaml", false)).thenAnswer(ignored -> {
+      memberRefreshed.set(true);
+      return index("entries: {}\n");
+    });
+    when(fixture.indexCache.current(eq(group), any())).thenAnswer(ignored -> {
+      assertTrue(memberRefreshed.get());
+      return postRefresh;
+    });
+    when(fixture.indexCache.freshAttributes(group, postRefresh, null)).thenReturn(attributes);
+    when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
+    when(fixture.writer.writeBytes(
+        eq(group), eq(fixture.storage), eq(7L), eq("index.yaml"), any(byte[].class),
+        eq(HelmIndex.CONTENT_TYPE), eq(com.github.klboke.kkrepo.protocol.helm.HelmAssetKind.INDEX),
+        isNull(), eq(attributes), anyMap(), eq("group"), isNull()))
+        .thenReturn(stored);
+
+    assertEquals(200, fixture.service.get(group, "index.yaml", false).status());
+
+    verify(fixture.indexCache).freshAttributes(group, postRefresh, null);
+  }
+
+  @Test
+  void servesCompleteMergeWhenDurableCachePersistenceFails() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime hosted = runtime(2L, "private", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of(hosted));
+    NexusLikeCacheInfo cacheInfo = new NexusLikeCacheInfo(
+        Instant.parse("2026-08-30T00:00:00Z"), "token", NexusCacheType.METADATA);
+    Map<String, Object> attributes = Map.of("helmGroupIndex", true);
+    when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.empty());
+    when(fixture.indexCache.enabled()).thenReturn(true);
+    when(fixture.indexCache.current(eq(group), any())).thenReturn(cacheInfo);
+    when(fixture.indexCache.freshAttributes(group, cacheInfo, null)).thenReturn(attributes);
+    when(fixture.hosted.get(hosted, "index.yaml", false)).thenAnswer(ignored -> index("""
+        entries:
+          private:
+            - name: private
+              version: 1.0.0
+              urls: [private.tgz]
+        """));
+    when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
+    when(fixture.writer.writeBytes(
+        eq(group), eq(fixture.storage), eq(7L), eq("index.yaml"), any(byte[].class),
+        eq(HelmIndex.CONTENT_TYPE), eq(com.github.klboke.kkrepo.protocol.helm.HelmAssetKind.INDEX),
+        isNull(), eq(attributes), anyMap(), eq("group"), isNull()))
+        .thenThrow(new IllegalStateException("group blob store unavailable"));
+    doThrow(new IllegalStateException("watermark unavailable"))
+        .when(fixture.indexCache).invalidateGroupAfterCommit(group.id());
+
+    MavenResponse response = fixture.service.get(group, "index.yaml", false);
+
+    assertEquals(
+        List.of(new HelmIndex.Entry("private", "1.0.0", List.of("private-1.0.0.tgz"))),
+        HelmIndex.entries(response.body().readAllBytes()));
+    verify(fixture.indexCache).invalidateGroupAfterCommit(group.id());
   }
 
   @Test
@@ -459,7 +565,7 @@ class HelmGroupServiceTest {
   }
 
   @Test
-  void reportsUnreadableAndInvalidCachedGroupIndexes() {
+  void rebuildsUnreadableAndInvalidCachedGroupIndexes() throws Exception {
     Fixture unreadable = fixture();
     RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of());
     CachedAssetMetadata unreadableIndex = mock(CachedAssetMetadata.class);
@@ -473,10 +579,10 @@ class HelmGroupServiceTest {
           }
         }));
 
-    MavenExceptions.BadUpstreamException readFailure = assertThrows(
-        MavenExceptions.BadUpstreamException.class,
-        () -> unreadable.service.get(group, "demo-1.0.0.tgz", false));
-    assertTrue(readFailure.getMessage().contains("Failed reading Helm group index"));
+    assertEquals(
+        List.of(),
+        HelmIndex.entries(unreadable.service.get(group, "index.yaml", false).body().readAllBytes()));
+    verify(unreadable.indexCache).invalidateGroupAfterCommit(group.id());
 
     Fixture invalid = fixture();
     CachedAssetMetadata invalidIndex = mock(CachedAssetMetadata.class);
@@ -484,10 +590,10 @@ class HelmGroupServiceTest {
     when(invalid.reader.serveSnapshot(invalidIndex, false, "index.yaml"))
         .thenAnswer(ignored -> index("entries: ["));
 
-    MavenExceptions.BadUpstreamException invalidFailure = assertThrows(
-        MavenExceptions.BadUpstreamException.class,
-        () -> invalid.service.get(group, "demo-1.0.0.tgz", false));
-    assertTrue(invalidFailure.getMessage().contains("Invalid Helm group index"));
+    assertEquals(
+        List.of(),
+        HelmIndex.entries(invalid.service.get(group, "index.yaml", false).body().readAllBytes()));
+    verify(invalid.indexCache).invalidateGroupAfterCommit(group.id());
   }
 
   @Test

@@ -21,12 +21,15 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 /** Nexus-compatible ordered aggregation for classic Helm chart repositories. */
 @Service
 public class HelmGroupService {
   static final int MAX_AGGREGATED_INDEX_BYTES = 64 * 1024 * 1024;
+  private static final Logger log = LoggerFactory.getLogger(HelmGroupService.class);
 
   private final HelmHostedService hosted;
   private final HelmProxyService proxy;
@@ -74,15 +77,32 @@ public class HelmGroupService {
         Optional<CachedAssetMetadata> cached = indexCache.findFresh(group, now);
         if (cached.isPresent()) {
           CachedAssetMetadata snapshot = cached.orElseThrow();
-          return new IndexResult(
-              reader.serveSnapshot(
-                  snapshot, headOnly, HelmHostedService.INDEX_PATH),
-              true,
-              indexCache.memberIndexFreshUntil(snapshot));
+          MavenResponse cachedResponse = reader.serveSnapshot(
+              snapshot, false, HelmHostedService.INDEX_PATH);
+          try {
+            // Group metadata is reconstructable. Open and validate the cached blob before
+            // accepting its watermark so a missing/corrupt object cannot pin every replica to a
+            // broken lazy response until the normal metadata TTL expires.
+            byte[] cachedBody = readBounded(cachedResponse, MAX_AGGREGATED_INDEX_BYTES);
+            HelmIndex.validateIndex(cachedBody);
+            return new IndexResult(
+                indexResponse(
+                    cachedBody,
+                    headOnly,
+                    cachedResponse.etag(),
+                    cachedResponse.lastModified()),
+                true,
+                indexCache.memberIndexFreshUntil(snapshot));
+          } catch (IOException | RuntimeException e) {
+            log.warn(
+                "Failed reading durable Helm group index cache for {}; rebuilding",
+                group.name(),
+                e);
+            invalidateGroupIndexCache(group.id());
+          }
         }
       }
 
-      NexusLikeCacheInfo cacheInfo = indexCache == null ? null : indexCache.current(group, now);
       MemberIndexes memberIndexes = memberIndexes(group, resolvingGroups);
       byte[] body = HelmIndex.mergeGroupIndexes(memberIndexes.indexes(), now);
       ensureIndexWithinLimit(body.length);
@@ -96,20 +116,39 @@ public class HelmGroupService {
       }
 
       long blobStoreId = requireBlobStore(group);
-      BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);
-      HelmAssetWriter.Stored stored = writer.writeBytes(
-          group,
-          storage,
-          blobStoreId,
-          HelmHostedService.INDEX_PATH,
-          body,
-          HelmIndex.CONTENT_TYPE,
-          HelmAssetKind.INDEX,
-          null,
-          indexCache.freshAttributes(group, cacheInfo, memberIndexes.freshUntil()),
-          java.util.Map.of(),
-          "group",
-          null);
+      HelmAssetWriter.Stored stored;
+      try {
+        // Member reads may synchronously refresh an index and advance this group token. Capture
+        // the publication watermark only after collecting every member so the stored merge is not
+        // stale the moment it is committed.
+        NexusLikeCacheInfo cacheInfo = indexCache.current(group, Instant.now());
+        BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);
+        stored = writer.writeBytes(
+            group,
+            storage,
+            blobStoreId,
+            HelmHostedService.INDEX_PATH,
+            body,
+            HelmIndex.CONTENT_TYPE,
+            HelmAssetKind.INDEX,
+            null,
+            indexCache.freshAttributes(group, cacheInfo, memberIndexes.freshUntil()),
+            java.util.Map.of(),
+            "group",
+            null);
+      } catch (RuntimeException e) {
+        // Persistence is an optimization: a complete authoritative merge remains safe to serve
+        // from memory when the group's cache blob store or metadata write is temporarily down.
+        log.warn(
+            "Failed persisting durable Helm group index cache for {}; serving in-memory merge",
+            group.name(),
+            e);
+        invalidateGroupIndexCache(group.id());
+        return new IndexResult(
+            indexResponse(body, headOnly, null, now),
+            true,
+            memberIndexes.freshUntil());
+      }
       reader.beforeRead(stored.asset().id(), stored.blob().id(), stored.asset().repositoryId());
       return new IndexResult(
           indexResponse(body, headOnly, stored.blob().sha1(), stored.asset().lastUpdatedAt()),
@@ -391,6 +430,14 @@ public class HelmGroupService {
     if (runtime.format() != RepositoryFormat.HELM || !runtime.isGroup()) {
       throw new MavenExceptions.MethodNotAllowed(
           "Operation is only valid on Helm group repositories");
+    }
+  }
+
+  private void invalidateGroupIndexCache(long groupId) {
+    try {
+      indexCache.invalidateGroupAfterCommit(groupId);
+    } catch (RuntimeException e) {
+      log.warn("Failed invalidating broken Helm group index cache for group {}", groupId, e);
     }
   }
 

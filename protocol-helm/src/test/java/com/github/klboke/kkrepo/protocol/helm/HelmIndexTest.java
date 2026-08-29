@@ -346,7 +346,10 @@ class HelmIndexTest {
         "entries: {demo: [{name: demo, version: 1.0.0, urls: []}]}",
         "entries: {demo: [{name: demo, version: 1.0.0, urls: error}]}",
         "entries: {demo: [{name: demo, version: 1.0.0, urls: [false]}]}",
-        "entries: {demo: [{name: demo, version: 1.0.0, urls: [{nested: value}]}]}")) {
+        "entries: {demo: [{name: demo, version: 1.0.0, urls: [{nested: value}]}]}",
+        "entries: {'../private': [{name: demo, version: 1.0.0, urls: [demo.tgz]}]}",
+        "entries: {demo: [{name: '../private', version: 1.0.0, urls: [demo.tgz]}]}",
+        "entries: {demo: [{name: demo, version: '1.0.0/escape', urls: [demo.tgz]}]}")) {
       assertThrows(
           IllegalArgumentException.class,
           () -> HelmIndex.rewriteProxyIndex(

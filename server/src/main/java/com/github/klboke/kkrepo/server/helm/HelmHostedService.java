@@ -289,13 +289,7 @@ public class HelmHostedService {
   }
 
   private static void validateChartPathSegment(String field, String value) {
-    if (value == null || value.isBlank()
-        || value.indexOf('\0') >= 0
-        || value.contains("/")
-        || value.contains("\\")
-        || value.equals(".")
-        || value.equals("..")
-        || value.contains("..")) {
+    if (!HelmIndex.isSafeChartPathSegment(value)) {
       throw new MavenExceptions.LayoutPolicyViolation("Invalid Helm chart " + field + ": " + value);
     }
   }
