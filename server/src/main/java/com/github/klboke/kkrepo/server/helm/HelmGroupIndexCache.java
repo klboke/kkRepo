@@ -34,6 +34,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 @Service
 public class HelmGroupIndexCache {
   static final String GROUP_INDEX_ATTRIBUTE = "helmGroupIndex";
+  static final String MEMBER_INDEX_FRESH_UNTIL_ATTRIBUTE = "helmGroupMemberIndexFreshUntil";
 
   private static final Logger log = LoggerFactory.getLogger(HelmGroupIndexCache.class);
   private static final Object PENDING_MEMBERS_KEY =
@@ -80,6 +81,13 @@ public class HelmGroupIndexCache {
         || !Boolean.TRUE.equals(attributes.get(GROUP_INDEX_ATTRIBUTE))) {
       return Optional.empty();
     }
+    if (attributes.containsKey(MEMBER_INDEX_FRESH_UNTIL_ATTRIBUTE)) {
+      Instant memberIndexFreshUntil = instantAttribute(
+          attributes, MEMBER_INDEX_FRESH_UNTIL_ATTRIBUTE);
+      if (memberIndexFreshUntil == null || !now.isBefore(memberIndexFreshUntil)) {
+        return Optional.empty();
+      }
+    }
     NexusLikeCacheInfo cacheInfo = NexusLikeCacheInfo.fromAttributes(attributes).orElse(null);
     if (cacheController.isStale(
         group.id(),
@@ -97,9 +105,34 @@ public class HelmGroupIndexCache {
   }
 
   public Map<String, Object> freshAttributes(NexusLikeCacheInfo cacheInfo) {
+    return freshAttributes(cacheInfo, null);
+  }
+
+  public Map<String, Object> freshAttributes(
+      NexusLikeCacheInfo cacheInfo, Instant memberIndexFreshUntil) {
     Map<String, Object> attributes = new LinkedHashMap<>();
     attributes.put(GROUP_INDEX_ATTRIBUTE, true);
+    if (memberIndexFreshUntil != null) {
+      attributes.put(MEMBER_INDEX_FRESH_UNTIL_ATTRIBUTE, memberIndexFreshUntil.toString());
+    }
     return NexusLikeCacheInfo.applyToAttributes(attributes, cacheInfo);
+  }
+
+  public Instant memberIndexFreshUntil(CachedAssetMetadata metadata) {
+    return metadata == null
+        ? null
+        : instantAttribute(metadata.attributes(), MEMBER_INDEX_FRESH_UNTIL_ATTRIBUTE);
+  }
+
+  private static Instant instantAttribute(Map<String, Object> attributes, String name) {
+    if (attributes == null) return null;
+    Object raw = attributes.get(name);
+    if (raw == null || raw.toString().isBlank()) return null;
+    try {
+      return Instant.parse(raw.toString());
+    } catch (RuntimeException ignored) {
+      return null;
+    }
   }
 
   public void invalidateMemberAfterCommit(long memberRepositoryId) {

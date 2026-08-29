@@ -29,6 +29,8 @@ public class HelmProxyService {
   private static final long[] BACKOFF_SECONDS = {30, 60, 120, 300, 600, 1800};
   static final String INDEX_AUTHORITATIVE_ATTRIBUTE =
       HelmProxyService.class.getName() + ".indexAuthoritative";
+  static final String INDEX_FRESH_UNTIL_ATTRIBUTE =
+      HelmProxyService.class.getName() + ".indexFreshUntil";
 
   private final AssetDao assetDao;
   private final BlobStorageRegistry blobStorageRegistry;
@@ -75,7 +77,10 @@ public class HelmProxyService {
     Optional<CachedAssetMetadata> cached = lookupCached(runtime, HelmHostedService.INDEX_PATH);
     Instant now = Instant.now();
     if (cached.isPresent() && isFresh(cached.get(), runtime.metadataMaxAgeMinutesOrDefault(), now)) {
-      return reader.serveSnapshot(cached.get(), headOnly, HelmHostedService.INDEX_PATH);
+      return authoritativeIndexResponse(
+          reader.serveSnapshot(cached.get(), headOnly, HelmHostedService.INDEX_PATH),
+          runtime.metadataMaxAgeMinutesOrDefault(),
+          cached.get().lastUpdatedAt());
     }
     if (negativeCache.isNotFoundCached(runtime, HelmHostedService.INDEX_PATH)) {
       throw new MavenExceptions.MavenNotFoundException(HelmHostedService.INDEX_PATH);
@@ -139,13 +144,19 @@ public class HelmProxyService {
           assetMetadataCache.touchVerified(runtime.id(), HelmHostedService.INDEX_PATH, now);
           proxyStateDao.recordSuccess(runtime.id(), now);
           negativeCache.invalidate(runtime, HelmHostedService.INDEX_PATH);
-          return reader.serveSnapshot(cached.get(), headOnly, HelmHostedService.INDEX_PATH);
+          return authoritativeIndexResponse(
+              reader.serveSnapshot(cached.get(), headOnly, HelmHostedService.INDEX_PATH),
+              runtime.metadataMaxAgeMinutesOrDefault(),
+              now);
         }
         if (status >= 200 && status < 300) {
           negativeCache.invalidate(runtime, HelmHostedService.INDEX_PATH);
           HelmAssetWriter.Stored stored = cacheIndex(runtime, result, !headOnly);
           proxyStateDao.recordSuccess(runtime.id(), now);
-          return responseFromStored(stored, headOnly);
+          return authoritativeIndexResponse(
+              responseFromStored(stored, headOnly),
+              runtime.metadataMaxAgeMinutesOrDefault(),
+              now);
         }
         if (status == 404 || status == 410) {
           proxyStateDao.recordSuccess(runtime.id(), now);
@@ -347,7 +358,17 @@ public class HelmProxyService {
   }
 
   private static MavenResponse staleIndexResponse(MavenResponse response) {
-    return response.withInternalAttribute(INDEX_AUTHORITATIVE_ATTRIBUTE, false);
+    return response
+        .withInternalAttribute(INDEX_AUTHORITATIVE_ATTRIBUTE, false)
+        .withInternalAttribute(INDEX_FRESH_UNTIL_ATTRIBUTE, null);
+  }
+
+  private static MavenResponse authoritativeIndexResponse(
+      MavenResponse response, int ttlMinutes, Instant verifiedAt) {
+    if (ttlMinutes < 0 || verifiedAt == null) return response;
+    return response.withInternalAttribute(
+        INDEX_FRESH_UNTIL_ATTRIBUTE,
+        verifiedAt.plusSeconds(ttlMinutes * 60L));
   }
 
   private boolean isFresh(CachedAssetMetadata snapshot, int ttlMinutes, Instant now) {

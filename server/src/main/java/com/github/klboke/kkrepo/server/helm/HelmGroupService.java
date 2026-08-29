@@ -73,10 +73,12 @@ public class HelmGroupService {
       if (indexCache != null) {
         Optional<CachedAssetMetadata> cached = indexCache.findFresh(group, now);
         if (cached.isPresent()) {
+          CachedAssetMetadata snapshot = cached.orElseThrow();
           return new IndexResult(
               reader.serveSnapshot(
-                  cached.orElseThrow(), headOnly, HelmHostedService.INDEX_PATH),
-              true);
+                  snapshot, headOnly, HelmHostedService.INDEX_PATH),
+              true,
+              indexCache.memberIndexFreshUntil(snapshot));
         }
       }
 
@@ -88,7 +90,9 @@ public class HelmGroupService {
       // shared watermark and thereby hide a recovered member until metadata expiry.
       if (!memberIndexes.complete() || indexCache == null || !indexCache.enabled()) {
         return new IndexResult(
-            indexResponse(body, headOnly, null, now), memberIndexes.complete());
+            indexResponse(body, headOnly, null, now),
+            memberIndexes.complete(),
+            memberIndexes.freshUntil());
       }
 
       long blobStoreId = requireBlobStore(group);
@@ -102,14 +106,15 @@ public class HelmGroupService {
           HelmIndex.CONTENT_TYPE,
           HelmAssetKind.INDEX,
           null,
-          indexCache.freshAttributes(cacheInfo),
+          indexCache.freshAttributes(cacheInfo, memberIndexes.freshUntil()),
           java.util.Map.of(),
           "group",
           null);
       reader.beforeRead(stored.asset().id(), stored.blob().id(), stored.asset().repositoryId());
       return new IndexResult(
           indexResponse(body, headOnly, stored.blob().sha1(), stored.asset().lastUpdatedAt()),
-          true);
+          true,
+          memberIndexes.freshUntil());
     } finally {
       resolvingGroups.remove(group.id());
     }
@@ -119,15 +124,18 @@ public class HelmGroupService {
       RepositoryRuntime group, Set<Long> resolvingGroups) {
     List<byte[]> indexes = new ArrayList<>();
     boolean complete = true;
+    Instant freshUntil = null;
     int total = 0;
     for (RepositoryRuntime member : group.members()) {
       if (!eligible(member)) continue;
       MavenResponse response;
+      Instant memberFreshUntil = null;
       try {
         if (member.isGroup()) {
           IndexResult nested = getIndex(member, false, resolvingGroups);
           response = nested.response();
           complete &= nested.complete();
+          memberFreshUntil = nested.freshUntil();
         } else {
           response = member.isHosted()
               ? hosted.get(member, HelmHostedService.INDEX_PATH, false)
@@ -135,6 +143,14 @@ public class HelmGroupService {
           if (member.isProxy() && Boolean.FALSE.equals(
               response.internalAttribute(HelmProxyService.INDEX_AUTHORITATIVE_ATTRIBUTE))) {
             complete = false;
+          }
+          if (member.isProxy()) {
+            memberFreshUntil = indexFreshUntil(response);
+            if (member.metadataMaxAgeMinutesOrDefault() >= 0 && memberFreshUntil == null) {
+              // A finite proxy metadata TTL without its absolute deadline cannot safely seed a
+              // durable group cache: doing so would restart the member's full TTL at merge time.
+              complete = false;
+            }
           }
         }
       } catch (MavenExceptions.MavenNotFoundException ignored) {
@@ -163,8 +179,25 @@ public class HelmGroupService {
       }
       total += body.length;
       indexes.add(body);
+      freshUntil = earliest(freshUntil, memberFreshUntil);
     }
-    return new MemberIndexes(indexes, complete);
+    return new MemberIndexes(indexes, complete, freshUntil);
+  }
+
+  private static Instant indexFreshUntil(MavenResponse response) {
+    Object raw = response.internalAttribute(HelmProxyService.INDEX_FRESH_UNTIL_ATTRIBUTE);
+    if (raw instanceof Instant instant) return instant;
+    if (raw == null) return null;
+    try {
+      return Instant.parse(raw.toString());
+    } catch (RuntimeException ignored) {
+      return null;
+    }
+  }
+
+  private static Instant earliest(Instant current, Instant candidate) {
+    if (candidate == null) return current;
+    return current == null || candidate.isBefore(current) ? candidate : current;
   }
 
   private MavenResponse getAsset(
@@ -367,9 +400,9 @@ public class HelmGroupService {
     return runtime.blobStoreId();
   }
 
-  private record IndexResult(MavenResponse response, boolean complete) {
+  private record IndexResult(MavenResponse response, boolean complete, Instant freshUntil) {
   }
 
-  private record MemberIndexes(List<byte[]> indexes, boolean complete) {
+  private record MemberIndexes(List<byte[]> indexes, boolean complete, Instant freshUntil) {
   }
 }

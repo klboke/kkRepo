@@ -235,9 +235,9 @@ public final class HelmIndex {
   }
 
   private static String normalizeDigest(String digest) {
-    return digest == null || digest.isBlank()
-        ? null
-        : digest.trim().toLowerCase(java.util.Locale.ROOT);
+    if (digest == null || digest.isBlank()) return null;
+    String normalized = digest.trim().toLowerCase(java.util.Locale.ROOT);
+    return normalized.startsWith("sha256:") ? normalized.substring(7) : normalized;
   }
 
   private static Map<String, Object> chartEntry(ChartRecord chart) {

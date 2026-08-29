@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.helm;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -71,6 +72,45 @@ class HelmGroupIndexCacheTest {
 
     controller.invalidate(group.id(), NexusCacheType.METADATA);
     assertFalse(cache.findFresh(group, java.time.Instant.now()).isPresent());
+  }
+
+  @Test
+  void expiresAtTheEarliestMemberIndexDeadlineWithoutRestartingItsTtl() {
+    StubRepositoryDao repositories = new StubRepositoryDao();
+    AssetMetadataCache metadata = mock(AssetMetadataCache.class);
+    NexusLikeCacheController controller = new NexusLikeCacheController(
+        new InMemoryVersionWatermark(), 60);
+    HelmGroupIndexCache cache = new HelmGroupIndexCache(
+        repositories, mock(AssetDao.class), metadata, controller, true);
+    RepositoryRuntime group = runtime(21L, 60);
+    java.time.Instant now = java.time.Instant.parse("2026-08-30T00:00:00Z");
+    java.time.Instant memberFreshUntil = now.plusSeconds(30);
+    NexusLikeCacheInfo info = cache.current(group, now);
+    CachedAssetMetadata snapshot = snapshot(
+        "INDEX", cache.freshAttributes(info, memberFreshUntil), true);
+    when(metadata.find(eq(group.id()), eq("index.yaml"), any()))
+        .thenReturn(Optional.of(snapshot));
+
+    assertEquals(memberFreshUntil, cache.memberIndexFreshUntil(snapshot));
+    assertTrue(cache.findFresh(group, now.plusSeconds(29)).isPresent());
+    assertFalse(cache.findFresh(group, memberFreshUntil).isPresent());
+  }
+
+  @Test
+  void rejectsMalformedMemberFreshnessDeadlines() {
+    AssetMetadataCache metadata = mock(AssetMetadataCache.class);
+    NexusLikeCacheController controller = new NexusLikeCacheController(
+        new InMemoryVersionWatermark(), 60);
+    HelmGroupIndexCache cache = new HelmGroupIndexCache(
+        new StubRepositoryDao(), mock(AssetDao.class), metadata, controller, true);
+    RepositoryRuntime group = runtime(21L, 60);
+    java.time.Instant now = java.time.Instant.parse("2026-08-30T00:00:00Z");
+    Map<String, Object> attributes = new HashMap<>(cache.freshAttributes(cache.current(group, now)));
+    attributes.put(HelmGroupIndexCache.MEMBER_INDEX_FRESH_UNTIL_ATTRIBUTE, "not-an-instant");
+    when(metadata.find(eq(group.id()), eq("index.yaml"), any()))
+        .thenReturn(Optional.of(snapshot("INDEX", attributes, true)));
+
+    assertFalse(cache.findFresh(group, now).isPresent());
   }
 
   @Test

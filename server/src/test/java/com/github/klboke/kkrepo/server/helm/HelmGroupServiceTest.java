@@ -142,7 +142,7 @@ class HelmGroupServiceTest {
     when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.empty());
     when(fixture.indexCache.enabled()).thenReturn(true);
     when(fixture.indexCache.current(eq(group), any())).thenReturn(cacheInfo);
-    when(fixture.indexCache.freshAttributes(cacheInfo)).thenReturn(attributes);
+    when(fixture.indexCache.freshAttributes(cacheInfo, null)).thenReturn(attributes);
     when(fixture.hosted.get(hosted, "index.yaml", false)).thenAnswer(ignored -> index("""
         entries:
           private:
@@ -165,6 +165,73 @@ class HelmGroupServiceTest {
         HelmIndex.entries(response.body().readAllBytes()));
     verify(fixture.reader).beforeRead(
         stored.asset().id(), stored.blob().id(), stored.asset().repositoryId());
+  }
+
+  @Test
+  void preservesTheProxyIndexAbsoluteFreshnessDeadlineInTheDurableMerge() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime proxy = runtime(2L, "upstream", RepositoryType.PROXY, true, List.of());
+    RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of(proxy));
+    NexusLikeCacheInfo cacheInfo = new NexusLikeCacheInfo(
+        Instant.parse("2026-08-30T00:00:00Z"), "token", NexusCacheType.METADATA);
+    Instant memberFreshUntil = Instant.parse("2026-08-30T00:00:30Z");
+    Map<String, Object> attributes = Map.of(
+        "helmGroupIndex", true,
+        "helmGroupMemberIndexFreshUntil", memberFreshUntil.toString());
+    HelmAssetWriter.Stored stored = storedIndex();
+    when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.empty());
+    when(fixture.indexCache.enabled()).thenReturn(true);
+    when(fixture.indexCache.current(eq(group), any())).thenReturn(cacheInfo);
+    when(fixture.indexCache.freshAttributes(cacheInfo, memberFreshUntil)).thenReturn(attributes);
+    when(fixture.proxy.get(proxy, "index.yaml", false)).thenAnswer(ignored -> index("""
+        entries:
+          public:
+            - name: public
+              version: 1.0.0
+              urls: [public.tgz]
+        """).withInternalAttribute(
+            HelmProxyService.INDEX_FRESH_UNTIL_ATTRIBUTE, memberFreshUntil));
+    when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
+    when(fixture.writer.writeBytes(
+        eq(group), eq(fixture.storage), eq(7L), eq("index.yaml"), any(byte[].class),
+        eq(HelmIndex.CONTENT_TYPE), eq(com.github.klboke.kkrepo.protocol.helm.HelmAssetKind.INDEX),
+        isNull(), eq(attributes), anyMap(), eq("group"), isNull()))
+        .thenReturn(stored);
+
+    MavenResponse response = fixture.service.get(group, "index.yaml", false);
+
+    assertEquals(200, response.status());
+    verify(fixture.indexCache).freshAttributes(cacheInfo, memberFreshUntil);
+  }
+
+  @Test
+  void carriesACachedNestedGroupMemberDeadlineIntoTheOuterCache() {
+    Fixture fixture = fixture();
+    RepositoryRuntime nested = runtime(2L, "nested", RepositoryType.GROUP, true, List.of());
+    RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of(nested));
+    CachedAssetMetadata cachedNested = mock(CachedAssetMetadata.class);
+    Instant memberFreshUntil = Instant.parse("2026-08-30T00:00:30Z");
+    NexusLikeCacheInfo cacheInfo = new NexusLikeCacheInfo(
+        Instant.parse("2026-08-30T00:00:00Z"), "token", NexusCacheType.METADATA);
+    Map<String, Object> attributes = Map.of("helmGroupIndex", true);
+    HelmAssetWriter.Stored stored = storedIndex();
+    when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.empty());
+    when(fixture.indexCache.findFresh(eq(nested), any())).thenReturn(Optional.of(cachedNested));
+    when(fixture.indexCache.memberIndexFreshUntil(cachedNested)).thenReturn(memberFreshUntil);
+    when(fixture.reader.serveSnapshot(cachedNested, false, "index.yaml"))
+        .thenAnswer(ignored -> index("entries: {}\n"));
+    when(fixture.indexCache.enabled()).thenReturn(true);
+    when(fixture.indexCache.current(eq(group), any())).thenReturn(cacheInfo);
+    when(fixture.indexCache.freshAttributes(cacheInfo, memberFreshUntil)).thenReturn(attributes);
+    when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
+    when(fixture.writer.writeBytes(
+        eq(group), eq(fixture.storage), eq(7L), eq("index.yaml"), any(byte[].class),
+        eq(HelmIndex.CONTENT_TYPE), eq(com.github.klboke.kkrepo.protocol.helm.HelmAssetKind.INDEX),
+        isNull(), eq(attributes), anyMap(), eq("group"), isNull()))
+        .thenReturn(stored);
+
+    assertEquals(200, fixture.service.get(group, "index.yaml", false).status());
+    verify(fixture.indexCache).freshAttributes(cacheInfo, memberFreshUntil);
   }
 
   @Test

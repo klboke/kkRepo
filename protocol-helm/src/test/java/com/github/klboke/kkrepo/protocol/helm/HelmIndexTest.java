@@ -258,6 +258,34 @@ class HelmIndexTest {
   }
 
   @Test
+  void treatsOptionalSha256DigestPrefixesAsTheSameRelease() {
+    byte[] prefixed = """
+        entries:
+          demo:
+            - name: demo
+              version: 1.0.0
+              digest: sha256:BBBB
+              urls: [demo-1.0.0.tgz]
+        """.getBytes(StandardCharsets.UTF_8);
+    byte[] bare = """
+        entries:
+          demo:
+            - name: demo
+              version: 1.0.0
+              digest: bbbb
+              urls: [demo-1.0.0.tgz]
+        """.getBytes(StandardCharsets.UTF_8);
+
+    HelmIndex.Release prefixedRelease = HelmIndex.releaseForPath(
+        prefixed, "demo-1.0.0.tgz").orElseThrow();
+    HelmIndex.Release bareRelease = HelmIndex.releaseForPath(
+        bare, "demo-1.0.0.tgz").orElseThrow();
+
+    assertTrue(HelmIndex.containsRelease(bare, prefixedRelease, "demo-1.0.0.tgz"));
+    assertTrue(HelmIndex.containsRelease(prefixed, bareRelease, "demo-1.0.0.tgz"));
+  }
+
+  @Test
   void releaseLookupSkipsInvalidCoordinatesAndHandlesAbsentPathsWithoutDigest() {
     byte[] body = """
         entries:

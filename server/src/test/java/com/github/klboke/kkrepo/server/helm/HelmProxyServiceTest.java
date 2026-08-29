@@ -57,6 +57,9 @@ class HelmProxyServiceTest {
     when(fixture.reader.serveSnapshot(chart, false, "demo-1.0.0.tgz")).thenReturn(chartResponse);
 
     assertSame(indexResponse, fixture.service.get(runtime, "index.yaml", true));
+    assertEquals(
+        index.lastUpdatedAt().plusSeconds(60L * 60),
+        indexResponse.internalAttribute(HelmProxyService.INDEX_FRESH_UNTIL_ATTRIBUTE));
     assertSame(chartResponse, fixture.service.get(runtime, "demo-1.0.0.tgz", false));
     verify(fixture.negativeCache, never()).isNotFoundCached(eq(runtime), anyString());
   }
@@ -208,8 +211,14 @@ class HelmProxyServiceTest {
     respond(fixture.fetcher, new HttpRemoteFetcher.Result(
         304, Map.of(), new ByteArrayInputStream(new byte[0])));
 
-    assertSame(expected, fixture.service.get(runtime, "index.yaml", false));
-    verify(fixture.assetDao).touchAssetLastUpdated(eq(stale.assetId()), any());
+    MavenResponse response = fixture.service.get(runtime, "index.yaml", false);
+    assertSame(expected, response);
+    org.mockito.ArgumentCaptor<Instant> verifiedAt =
+        org.mockito.ArgumentCaptor.forClass(Instant.class);
+    verify(fixture.assetDao).touchAssetLastUpdated(eq(stale.assetId()), verifiedAt.capture());
+    assertEquals(
+        verifiedAt.getValue().plusSeconds(60),
+        response.internalAttribute(HelmProxyService.INDEX_FRESH_UNTIL_ATTRIBUTE));
     verify(fixture.cache).touchVerified(eq(runtime.id()), eq("index.yaml"), any());
 
     Fixture missing = fixture();
