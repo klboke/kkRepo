@@ -175,7 +175,7 @@ class HelmGroupServiceTest {
     RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of(hosted, proxy));
     MavenResponse expected = asset("same");
     when(fixture.memberCache.get(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT))
-        .thenReturn(Optional.of(proxy.id()));
+        .thenReturn(Optional.of(hosted.id()));
     when(fixture.hosted.get(hosted, "index.yaml", false)).thenAnswer(ignored -> index("""
         entries:
           demo:
@@ -192,13 +192,13 @@ class HelmGroupServiceTest {
               digest: same
               urls: [demo-1.0.0.tgz]
         """));
-    when(fixture.proxy.get(proxy, "demo-1.0.0.tgz", false))
+    when(fixture.hosted.get(hosted, "demo-1.0.0.tgz", false))
         .thenReturn(asset("different"));
-    when(fixture.hosted.get(hosted, "demo-1.0.0.tgz", false)).thenReturn(expected);
+    when(fixture.proxy.get(proxy, "demo-1.0.0.tgz", false)).thenReturn(expected);
 
     assertSame(expected, fixture.service.get(group, "demo-1.0.0.tgz", false));
     verify(fixture.memberCache).evict(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT);
-    verify(fixture.memberCache).put(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, hosted.id());
+    verify(fixture.memberCache).put(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, proxy.id());
   }
 
   @Test
@@ -344,6 +344,27 @@ class HelmGroupServiceTest {
     assertTrue(mismatchedBodyClosed.get());
     verify(fixture.memberCache).put(
         group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, fallback.id());
+  }
+
+  @Test
+  void preservesDirectProxyBehaviorWhenUpstreamIndexDigestDisagreesWithReleaseAsset() {
+    Fixture fixture = fixture();
+    RepositoryRuntime proxy = runtime(
+        2L, "upstream", RepositoryType.PROXY, true, List.of());
+    RepositoryRuntime group = runtime(
+        10L, "all", RepositoryType.GROUP, true, List.of(proxy));
+    CachedAssetMetadata cachedIndex = mock(CachedAssetMetadata.class);
+    MavenResponse expected = asset("actual-upstream-digest");
+    when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.of(cachedIndex));
+    when(fixture.reader.serveSnapshot(cachedIndex, false, "index.yaml"))
+        .thenAnswer(ignored -> selectedIndex("advertised-upstream-digest"));
+    when(fixture.proxy.get(proxy, "index.yaml", false))
+        .thenAnswer(ignored -> selectedIndex("advertised-upstream-digest"));
+    when(fixture.proxy.get(proxy, "demo-1.0.0.tgz", false)).thenReturn(expected);
+
+    assertSame(expected, fixture.service.get(group, "demo-1.0.0.tgz", false));
+    verify(fixture.memberCache).put(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, proxy.id());
   }
 
   @Test

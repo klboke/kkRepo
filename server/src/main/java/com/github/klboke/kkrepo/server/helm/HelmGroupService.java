@@ -196,7 +196,7 @@ public class HelmGroupService {
             if (memberAdvertises(cachedMember, release, path)) {
               MavenResponse response =
                   dispatchAsset(cachedMember, path, kind, headOnly, resolvingGroups);
-              if (matchesAdvertisedDigest(kind, release, response)) {
+              if (matchesAdvertisedDigest(cachedMember, kind, release, response)) {
                 return response;
               }
               response.closeBodyIfOpen();
@@ -216,7 +216,7 @@ public class HelmGroupService {
         if (!memberAdvertises(member, release, path)) continue;
         try {
           MavenResponse response = dispatchAsset(member, path, kind, headOnly, resolvingGroups);
-          if (!matchesAdvertisedDigest(kind, release, response)) {
+          if (!matchesAdvertisedDigest(member, kind, release, response)) {
             response.closeBodyIfOpen();
             continue;
           }
@@ -288,8 +288,17 @@ public class HelmGroupService {
   }
 
   private static boolean matchesAdvertisedDigest(
-      HelmAssetKind kind, HelmIndex.Release release, MavenResponse response) {
-    if (kind != HelmAssetKind.PACKAGE
+      RepositoryRuntime member,
+      HelmAssetKind kind,
+      HelmIndex.Release release,
+      MavenResponse response) {
+    // A hosted member is authoritative for both its generated index and stored blob, so a
+    // mismatch identifies the asynchronous overwrite window. Proxy repositories must preserve
+    // direct-proxy behavior when an upstream publishes an index digest that disagrees with its
+    // release asset (the official Helm examples repository currently has such a release). Nested
+    // groups apply this check recursively to any hosted leaf before returning its response.
+    if (!member.isHosted()
+        || kind != HelmAssetKind.PACKAGE
         || release.digest() == null
         || release.digest().isBlank()) {
       return true;
