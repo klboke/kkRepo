@@ -89,6 +89,8 @@ public abstract class PersistenceApiContract {
 
   protected abstract Set<String> databaseTables();
 
+  protected abstract int seedHelmProxyLegacyCacheFence(long repositoryId, long assetId);
+
   @Test
   void baselineContainsTheCompleteSharedLogicalSchema() {
     assertEquals(Set.of(
@@ -164,6 +166,7 @@ public abstract class PersistenceApiContract {
         "docker_tag",
         "docker_upload_chunk",
         "docker_upload_session",
+        "helm_proxy_legacy_cache_fence",
         "huggingface_api_cache",
         "huggingface_file",
         "huggingface_model_revision",
@@ -2458,6 +2461,89 @@ public abstract class PersistenceApiContract {
         scans.findDownloadPolicySnapshots(assetId, repositoryId)
             .getFirst()
             .requiredWaiverRevision());
+  }
+
+  @Test
+  void helmProxyLegacyCacheBindingIsFencedByUpgradeAndConfigurationChanges() throws Exception {
+    long repositoryId = createRepository(
+        "helm-proxy-legacy-fence", RepositoryFormat.HELM, RepositoryType.PROXY);
+    RepositoryRecord repository = stores().repositories().findById(repositoryId).orElseThrow();
+    long assetId = insertLegacyHelmIndex(repository, "helm-legacy-index");
+    assertEquals(1, seedHelmProxyLegacyCacheFence(repositoryId, assetId));
+
+    assertEquals(1, stores().assets().bindLegacyHelmProxyCacheConfiguration(
+        assetId, repositoryId, "helmProxyConfiguration", "initial"));
+    assertEquals(0, stores().assets().bindLegacyHelmProxyCacheConfiguration(
+        assetId, repositoryId, "helmProxyConfiguration", "concurrent"));
+
+    Instant eligibleAssetTime = stores().assets().findAssetById(assetId)
+        .orElseThrow().lastUpdatedAt();
+    stores().assets().updateAssetAttributes(assetId, Map.of("remoteUrls", Map.of()));
+    stores().assets().touchAssetLastUpdated(assetId, eligibleAssetTime.plusSeconds(1));
+    assertEquals(0, stores().assets().bindLegacyHelmProxyCacheConfiguration(
+        assetId, repositoryId, "helmProxyConfiguration", "activation-boundary"));
+
+    stores().assets().touchAssetLastUpdated(assetId, eligibleAssetTime.plusSeconds(10));
+    assertEquals(0, stores().assets().bindLegacyHelmProxyCacheConfiguration(
+        assetId, repositoryId, "helmProxyConfiguration", "late-old-replica"));
+
+    stores().assets().touchAssetLastUpdated(assetId, eligibleAssetTime);
+    Instant previousConfigurationTime = stores().repositories().findUpdatedAt(repositoryId)
+        .orElseThrow();
+    Thread.sleep(10);
+    stores().repositories().update(new RepositoryRecord(
+        repository.id(),
+        repository.name(),
+        repository.format(),
+        repository.type(),
+        repository.recipeName(),
+        repository.online(),
+        repository.blobStoreId(),
+        repository.routingRuleId(),
+        "https://changed.example.test/",
+        repository.versionPolicy(),
+        repository.layoutPolicy(),
+        repository.writePolicy(),
+        repository.strictContentTypeValidation(),
+        repository.attributes()));
+    assertTrue(stores().repositories().findUpdatedAt(repositoryId).orElseThrow()
+        .isAfter(previousConfigurationTime));
+    assertEquals(0, stores().assets().bindLegacyHelmProxyCacheConfiguration(
+        assetId, repositoryId, "helmProxyConfiguration", "changed"));
+    assertEquals(
+        Map.of("remoteUrls", Map.of()),
+        stores().assets().findAssetById(assetId).orElseThrow().attributes());
+
+    long preconfiguredRepositoryId = createRepository(
+        "helm-proxy-configured-before-upgrade", RepositoryFormat.HELM, RepositoryType.PROXY);
+    RepositoryRecord preconfigured = stores().repositories()
+        .findById(preconfiguredRepositoryId).orElseThrow();
+    Thread.sleep(10);
+    stores().repositories().update(new RepositoryRecord(
+        preconfigured.id(),
+        preconfigured.name(),
+        preconfigured.format(),
+        preconfigured.type(),
+        preconfigured.recipeName(),
+        preconfigured.online(),
+        preconfigured.blobStoreId(),
+        preconfigured.routingRuleId(),
+        "https://configured-before-upgrade.example.test/",
+        preconfigured.versionPolicy(),
+        preconfigured.layoutPolicy(),
+        preconfigured.writePolicy(),
+        preconfigured.strictContentTypeValidation(),
+        preconfigured.attributes()));
+    long postConfigurationAssetId = insertLegacyHelmIndex(
+        preconfigured, "helm-post-configuration-legacy-index");
+
+    assertEquals(0, seedHelmProxyLegacyCacheFence(
+        preconfiguredRepositoryId, postConfigurationAssetId));
+    assertEquals(0, stores().assets().bindLegacyHelmProxyCacheConfiguration(
+        postConfigurationAssetId,
+        preconfiguredRepositoryId,
+        "helmProxyConfiguration",
+        "stale-pre-upgrade-writer"));
   }
 
   @Test
@@ -5188,6 +5274,26 @@ public abstract class PersistenceApiContract {
       String name, RepositoryFormat format, RepositoryType type) {
     long blobStoreId = stores().blobStores().insert(blobStore(name + "-store"));
     return insertRepository(name, format, type, blobStoreId);
+  }
+
+  private long insertLegacyHelmIndex(RepositoryRecord repository, String blobRef) {
+    long blobId = stores().assets().insertBlob(
+        blob(repository.blobStoreId(), "helm/" + blobRef + ".yaml", blobRef));
+    return stores().assets().insertAsset(new AssetRecord(
+        null,
+        repository.id(),
+        null,
+        blobId,
+        RepositoryFormat.HELM,
+        "index.yaml",
+        PersistenceHashes.pathHash("index.yaml"),
+        "index.yaml",
+        "INDEX",
+        "text/x-yaml",
+        42L,
+        null,
+        Instant.now(),
+        Map.of("remoteUrls", Map.of())));
   }
 
   private SwiftRegistryDao.Release insertSwiftReleaseFixture(

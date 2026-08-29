@@ -452,8 +452,33 @@ public final class HelmIndex {
     if (!(loaded instanceof Map<?, ?> map)) {
       throw new IllegalArgumentException("Invalid Helm index root: expected a mapping");
     }
-    if (!(map.get("entries") instanceof Map<?, ?>)) {
+    if (!(map.get("entries") instanceof Map<?, ?> entries)) {
       throw new IllegalArgumentException("Invalid Helm index entries: expected a mapping");
+    }
+    for (Map.Entry<?, ?> entry : entries.entrySet()) {
+      if (!(entry.getKey() instanceof String name) || name.isBlank()) {
+        throw new IllegalArgumentException("Invalid Helm index entry: expected a chart name");
+      }
+      if (!(entry.getValue() instanceof List<?> versions)) {
+        throw new IllegalArgumentException(
+            "Invalid Helm index entry " + name + ": expected a release list");
+      }
+      for (Object version : versions) {
+        if (!(version instanceof Map<?, ?> release)) {
+          throw new IllegalArgumentException(
+              "Invalid Helm index entry " + name + ": expected a release mapping");
+        }
+        Object urls = release.get("urls");
+        if (urls != null && !(urls instanceof List<?>)) {
+          throw new IllegalArgumentException(
+              "Invalid Helm index entry " + name + ": expected a URL list");
+        }
+        if (urls instanceof List<?> list && list.stream()
+            .anyMatch(url -> url instanceof Map<?, ?> || url instanceof Collection<?>)) {
+          throw new IllegalArgumentException(
+              "Invalid Helm index entry " + name + ": expected scalar URLs");
+        }
+      }
     }
     return (Map<String, Object>) map;
   }

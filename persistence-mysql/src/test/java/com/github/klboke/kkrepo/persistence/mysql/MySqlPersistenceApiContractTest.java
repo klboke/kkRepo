@@ -48,6 +48,11 @@ class MySqlPersistenceApiContractTest extends PersistenceApiContract {
     return backend.databaseTablesForContract();
   }
 
+  @Override
+  protected int seedHelmProxyLegacyCacheFence(long repositoryId, long assetId) {
+    return backend.seedHelmProxyLegacyCacheFence(repositoryId, assetId);
+  }
+
   private static final class Backend extends MySqlIntegrationTestSupport {
     private static void start() {
       startMySql();
@@ -67,6 +72,24 @@ class MySqlPersistenceApiContractTest extends PersistenceApiContract {
 
     private Set<String> databaseTablesForContract() {
       return databaseTables();
+    }
+
+    private int seedHelmProxyLegacyCacheFence(long repositoryId, long assetId) {
+      jdbc().update("""
+          UPDATE asset AS legacy_asset
+          JOIN repository AS active_repository
+            ON active_repository.id = legacy_asset.repository_id
+          SET legacy_asset.last_updated_at =
+            TIMESTAMPADD(SECOND, 1, active_repository.updated_at)
+          WHERE legacy_asset.id = ? AND active_repository.id = ?
+          """, assetId, repositoryId);
+      return jdbc().update("""
+          INSERT INTO helm_proxy_legacy_cache_fence
+            (repository_id, configuration_updated_at, activated_at)
+          SELECT id, updated_at, TIMESTAMPADD(SECOND, 2, updated_at)
+          FROM repository
+          WHERE id = ? AND updated_at = created_at
+          """, repositoryId);
     }
   }
 }

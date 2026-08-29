@@ -549,7 +549,7 @@ class HelmGroupServiceTest {
         }));
     when(fixture.hosted.get(invalid, "index.yaml", false)).thenReturn(index("entries: ["));
     when(fixture.hosted.get(schemaInvalid, "index.yaml", false))
-        .thenReturn(index("entries: []\n"));
+        .thenReturn(index("entries: {demo: [error]}\n"));
     when(fixture.hosted.get(lazyMissing, "index.yaml", false))
         .thenReturn(MavenResponse.ok(
             () -> {

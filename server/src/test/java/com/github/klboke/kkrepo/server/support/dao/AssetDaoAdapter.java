@@ -231,6 +231,12 @@ public class AssetDaoAdapter implements AssetDao {
   }
 
   @Override
+  public int bindLegacyHelmProxyCacheConfiguration(
+      long arg0, long arg1, String arg2, String arg3) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
   public int updateAssetBlobBinding(long arg0, long arg1, String arg2, long arg3, Instant arg4) {
     throw new UnsupportedOperationException();
   }

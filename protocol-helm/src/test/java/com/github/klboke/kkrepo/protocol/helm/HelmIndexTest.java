@@ -75,7 +75,6 @@ class HelmIndexTest {
             - name: empty
               version: 1.0.0
               urls: []
-          ignored: not-a-list
         """.getBytes(StandardCharsets.UTF_8);
 
     HelmIndex.RewriteResult result = HelmIndex.rewriteProxyIndex(
@@ -333,7 +332,15 @@ class HelmIndexTest {
 
   @Test
   void rejectsSchemaInvalidProxyIndexesWithoutChangingTolerantReadHelpers() {
-    for (String invalid : List.of("[]", "not-a-helm-index", "{}", "entries: []")) {
+    for (String invalid : List.of(
+        "[]",
+        "not-a-helm-index",
+        "{}",
+        "entries: []",
+        "entries: {demo: error}",
+        "entries: {demo: [error]}",
+        "entries: {demo: [{urls: error}]}",
+        "entries: {demo: [{urls: [{nested: value}]}]}")) {
       assertThrows(
           IllegalArgumentException.class,
           () -> HelmIndex.rewriteProxyIndex(

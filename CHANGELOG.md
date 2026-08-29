@@ -35,8 +35,8 @@ This project follows a pragmatic release process. Stable releases call out migra
 
 ### Upgrade Notes
 
-- Existing `0.9.0` MySQL and PostgreSQL deployments can upgrade in place through Flyway V49-V50. Back up the relational database and blob store together, allow migrations to complete before serving traffic, and do not run mixed application versions after the new schema is applied.
-- V49 adds R / CRAN package, publication, snapshot, group-binding, proxy, tombstone, migration, and lease state. V50 adds the shared default UI theme setting and preserves the existing kkRepo design for upgraded installations.
+- Existing `0.9.0` MySQL and PostgreSQL deployments can upgrade in place through Flyway V49-V51. Back up the relational database and blob store together, allow migrations to complete before serving traffic, and do not run mixed application versions after the new schema is applied.
+- V49 adds R / CRAN package, publication, snapshot, group-binding, proxy, tombstone, migration, and lease state. V50 adds the shared default UI theme setting. V51 adds a one-time Helm proxy legacy-cache fence: only never-reconfigured repositories can adopt pre-migration cache rows, and later writes or configuration changes force a rebuild.
 - New R / CRAN repositories are not created automatically. Existing PyPI proxies retain `/simple` when no remote index path is configured, and existing Go proxy/group repositories keep their current behavior until a hosted member is explicitly created or added.
 
 ## 0.9.0 - 2026-08-20

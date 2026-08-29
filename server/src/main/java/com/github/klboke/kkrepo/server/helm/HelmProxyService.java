@@ -3,7 +3,6 @@ package com.github.klboke.kkrepo.server.helm;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
-import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.protocol.helm.HelmAssetKind;
 import com.github.klboke.kkrepo.protocol.helm.HelmIndex;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
@@ -38,7 +37,6 @@ public class HelmProxyService {
   static final String PROXY_CONFIGURATION_ATTRIBUTE = "helmProxyConfiguration";
 
   private final AssetDao assetDao;
-  private final RepositoryDao repositoryDao;
   private final BlobStorageRegistry blobStorageRegistry;
   private final HelmAssetWriter writer;
   private final HelmAssetReader reader;
@@ -49,7 +47,6 @@ public class HelmProxyService {
 
   public HelmProxyService(
       AssetDao assetDao,
-      RepositoryDao repositoryDao,
       BlobStorageRegistry blobStorageRegistry,
       HelmAssetWriter writer,
       HelmAssetReader reader,
@@ -58,7 +55,6 @@ public class HelmProxyService {
       ProxyNegativeCache negativeCache,
       AssetMetadataCache assetMetadataCache) {
     this.assetDao = assetDao;
-    this.repositoryDao = repositoryDao;
     this.blobStorageRegistry = blobStorageRegistry;
     this.writer = writer;
     this.reader = reader;
@@ -128,17 +124,18 @@ public class HelmProxyService {
     String expected = configurationFingerprint(runtime);
     String recorded = stringAttr(snapshot.attributes(), PROXY_CONFIGURATION_ATTRIBUTE);
     if (expected.equals(recorded)) return Optional.of(snapshot);
-    if (recorded != null || !isLegacyProxyCacheEntry(runtime, snapshot, path)) {
+    if (recorded != null || !hasLegacyProxyCacheShape(snapshot, path)) {
       return Optional.empty();
     }
 
     // Assets written before the configuration fingerprint was introduced carry only remoteUrls
-    // (index) or remoteUrl (content). Bind those rows to the configuration active during the
-    // rolling upgrade so outage fallback remains available, then reject them after any later
-    // configuration change. The compare-and-set prevents stale replicas from overwriting a row
-    // already refreshed or bound under another configuration.
-    assetDao.putAssetStringAttributeIfAbsent(
-        snapshot.assetId(), PROXY_CONFIGURATION_ATTRIBUTE, expected);
+    // (index) or remoteUrl (content). V51 creates an upgrade fence only for repositories whose
+    // durable row has never changed since creation; a pre-migration configuration change therefore
+    // makes every unversioned row ineligible. The conditional update also requires the repository
+    // snapshot to remain current and the asset to predate migration activation, rejecting changes
+    // and old-replica writes on either side of the rolling-upgrade boundary.
+    assetDao.bindLegacyHelmProxyCacheConfiguration(
+        snapshot.assetId(), runtime.id(), PROXY_CONFIGURATION_ATTRIBUTE, expected);
     // Reload even after winning the bind: an older replica may have concurrently refreshed other
     // attributes before our key-level update, so the stale hot snapshot is never authoritative.
     assetMetadataCache.evict(runtime.id(), path);
@@ -152,21 +149,14 @@ public class HelmProxyService {
         () -> AssetMetadataCache.Loaded.from(assetDao.findAssetByPath(runtime.id(), path), assetDao));
   }
 
-  private boolean isLegacyProxyCacheEntry(
-      RepositoryRuntime runtime, CachedAssetMetadata snapshot, String path) {
+  private static boolean hasLegacyProxyCacheShape(
+      CachedAssetMetadata snapshot, String path) {
     Map<String, Object> attributes = snapshot.attributes();
     if (attributes == null) return false;
     String remoteUrl = stringAttr(attributes, "remoteUrl");
-    boolean knownLegacyShape = HelmHostedService.INDEX_PATH.equals(path)
+    return HelmHostedService.INDEX_PATH.equals(path)
         ? attributes.get("remoteUrls") instanceof Map<?, ?>
         : remoteUrl != null && !remoteUrl.isBlank();
-    if (!knownLegacyShape || snapshot.lastUpdatedAt() == null) return false;
-    // Repository updates advance this durable timestamp. A legacy asset must have been verified
-    // strictly after the active configuration was stored; otherwise a configuration change that
-    // happened before the lazy upgrade binding could incorrectly adopt old cache content.
-    return repositoryDao.findUpdatedAt(runtime.id())
-        .map(snapshot.lastUpdatedAt()::isAfter)
-        .orElse(false);
   }
 
   private MavenResponse fetchAndCacheIndex(
@@ -201,10 +191,26 @@ public class HelmProxyService {
         }
         if (status >= 200 && status < 300) {
           negativeCache.invalidate(runtime, HelmHostedService.INDEX_PATH);
-          HelmAssetWriter.Stored stored = cacheIndex(runtime, result, !headOnly);
+          long blobStoreId = requireBlobStore(runtime);
+          BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);
+          MavenResponse response;
+          try {
+            HelmAssetWriter.Stored stored = cacheIndex(
+                runtime, storage, blobStoreId, result, !headOnly);
+            response = responseFromStored(stored, headOnly);
+          } catch (IllegalArgumentException e) {
+            throw e;
+          } catch (RuntimeException e) {
+            return handleIndexUpstreamFailure(
+                runtime,
+                cached,
+                headOnly,
+                "Failed caching upstream Helm index: " + e.getMessage(),
+                now);
+          }
           proxyStateDao.recordSuccess(runtime.id(), now);
           return authoritativeIndexResponse(
-              responseFromStored(stored, headOnly),
+              response,
               runtime.metadataMaxAgeMinutesOrDefault(),
               now);
         }
@@ -230,7 +236,11 @@ public class HelmProxyService {
   }
 
   private HelmAssetWriter.Stored cacheIndex(
-      RepositoryRuntime runtime, HttpRemoteFetcher.Result result, boolean keepResponseFile)
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      HttpRemoteFetcher.Result result,
+      boolean keepResponseFile)
       throws IOException {
     byte[] upstream = UpstreamBodyReadException.readAllBytes(result.body());
     HelmIndex.RewriteResult rewritten = HelmIndex.rewriteProxyIndex(upstream, runtime.proxyRemoteUrl());
@@ -239,8 +249,8 @@ public class HelmProxyService {
     attrs.put(PROXY_CONFIGURATION_ATTRIBUTE, configurationFingerprint(runtime));
     return writer.writeBytes(
         runtime,
-        blobStorage(runtime),
-        requireBlobStore(runtime),
+        storage,
+        blobStoreId,
         HelmHostedService.INDEX_PATH,
         rewritten.body(),
         HelmIndex.CONTENT_TYPE,
@@ -287,22 +297,36 @@ public class HelmProxyService {
           Map<String, Object> attrs = new LinkedHashMap<>();
           attrs.put("remoteUrl", remoteUrl);
           attrs.put(PROXY_CONFIGURATION_ATTRIBUTE, configurationFingerprint(runtime));
-          HelmAssetWriter.Stored stored = writer.write(
-              runtime,
-              blobStorage(runtime),
-              requireBlobStore(runtime),
-              path,
-              result.body(),
-              result.contentType(),
-              kind,
-              null,
-              attrs,
-              remoteAttrs(result),
-              "proxy",
-              ProxyRequestAudit.currentClientIp(),
-              !headOnly);
+          long blobStoreId = requireBlobStore(runtime);
+          BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);
+          MavenResponse response;
+          try {
+            HelmAssetWriter.Stored stored = writer.write(
+                runtime,
+                storage,
+                blobStoreId,
+                path,
+                result.body(),
+                result.contentType(),
+                kind,
+                null,
+                attrs,
+                remoteAttrs(result),
+                "proxy",
+                ProxyRequestAudit.currentClientIp(),
+                !headOnly);
+            response = responseFromStored(stored, headOnly);
+          } catch (RuntimeException e) {
+            return handleUpstreamFailure(
+                runtime,
+                path,
+                cached,
+                headOnly,
+                "Failed caching upstream Helm content: " + e.getMessage(),
+                now);
+          }
           proxyStateDao.recordSuccess(runtime.id(), now);
-          return responseFromStored(stored, headOnly);
+          return response;
         }
         if (status == 404 || status == 410) {
           proxyStateDao.recordSuccess(runtime.id(), now);
@@ -449,10 +473,6 @@ public class HelmProxyService {
     if (!runtime.isProxy()) {
       throw new MavenExceptions.MethodNotAllowed("Operation is only valid on proxy Helm repositories");
     }
-  }
-
-  private BlobStorage blobStorage(RepositoryRuntime runtime) {
-    return blobStorageRegistry.forBlobStoreId(requireBlobStore(runtime));
   }
 
   private long requireBlobStore(RepositoryRuntime runtime) {

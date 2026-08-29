@@ -20,7 +20,6 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
-import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.protocol.helm.HelmAssetKind;
@@ -205,6 +204,39 @@ class HelmProxyServiceTest {
   }
 
   @Test
+  void translatesPackageCacheWriteFailuresToBadUpstream() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 1);
+    CachedAssetMetadata index = snapshot(
+        "index.yaml",
+        Instant.now(),
+        Map.of("remoteUrls", Map.of(
+            "demo-1.0.0.tgz", "https://cdn.example.test/demo-1.0.0.tgz")));
+    when(fixture.cache.find(eq(runtime.id()), anyString(), any()))
+        .thenAnswer(invocation -> invocation.getArgument(1).equals("index.yaml")
+            ? Optional.of(index)
+            : Optional.empty());
+    when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
+    respond(fixture.fetcher, new HttpRemoteFetcher.Result(
+        200,
+        Map.of("Content-Type", "application/gzip"),
+        new ByteArrayInputStream(new byte[] {1, 2, 3})));
+    when(fixture.writer.write(
+        eq(runtime), eq(fixture.storage), eq(7L), eq("demo-1.0.0.tgz"), any(),
+        eq("application/gzip"), eq(HelmAssetKind.PACKAGE), isNull(), any(), any(),
+        eq("proxy"), isNull(), eq(true)))
+        .thenThrow(new IllegalStateException("object storage unavailable"));
+
+    MavenExceptions.BadUpstreamException failure = assertThrows(
+        MavenExceptions.BadUpstreamException.class,
+        () -> fixture.service.get(runtime, "demo-1.0.0.tgz", false));
+
+    assertTrue(failure.getMessage().contains("Failed caching upstream Helm content"));
+    verify(fixture.proxyStateDao).recordFailure(
+        eq(runtime.id()), eq(30L), anyString(), any());
+  }
+
+  @Test
   void refetchesAStillFreshIndexWhenTheProxyConfigurationChanges() throws Exception {
     Fixture fixture = fixture();
     RepositoryRuntime oldRuntime = runtime(
@@ -276,9 +308,9 @@ class HelmProxyServiceTest {
           if (path.equals("index.yaml")) return Optional.of(load == 1 ? index : boundIndex);
           return Optional.of(load == 1 ? chart : boundChart);
         });
-    when(fixture.repositoryDao.findUpdatedAt(runtime.id())).thenReturn(Optional.of(Instant.EPOCH));
-    when(fixture.assetDao.putAssetStringAttributeIfAbsent(
-        eq(index.assetId()), eq(HelmProxyService.PROXY_CONFIGURATION_ATTRIBUTE), anyString()))
+    when(fixture.assetDao.bindLegacyHelmProxyCacheConfiguration(
+        eq(index.assetId()), eq(runtime.id()),
+        eq(HelmProxyService.PROXY_CONFIGURATION_ATTRIBUTE), anyString()))
         .thenReturn(1);
     when(fixture.reader.serveSnapshot(any(), eq(true), eq("index.yaml")))
         .thenReturn(indexResponse);
@@ -290,8 +322,10 @@ class HelmProxyServiceTest {
 
     org.mockito.ArgumentCaptor<String> fingerprints =
         org.mockito.ArgumentCaptor.forClass(String.class);
-    verify(fixture.assetDao, org.mockito.Mockito.times(2)).putAssetStringAttributeIfAbsent(
+    verify(fixture.assetDao, org.mockito.Mockito.times(2))
+        .bindLegacyHelmProxyCacheConfiguration(
         eq(index.assetId()),
+        eq(runtime.id()),
         eq(HelmProxyService.PROXY_CONFIGURATION_ATTRIBUTE),
         fingerprints.capture());
     assertTrue(fingerprints.getAllValues().stream().allMatch(
@@ -301,7 +335,7 @@ class HelmProxyServiceTest {
   }
 
   @Test
-  void rejectsUnboundLegacyCacheOlderThanTheRepositoryConfiguration() {
+  void rejectsLegacyCacheWhenTheDurableUpgradeFenceDoesNotBindIt() {
     Fixture fixture = fixture();
     RepositoryRuntime runtime = runtime(
         RepositoryType.PROXY, 60, "https://new.example.test/");
@@ -313,8 +347,10 @@ class HelmProxyServiceTest {
         false);
     when(fixture.cache.find(eq(runtime.id()), eq("index.yaml"), any()))
         .thenReturn(Optional.of(legacy));
-    when(fixture.repositoryDao.findUpdatedAt(runtime.id()))
-        .thenReturn(Optional.of(Instant.parse("2026-08-30T00:01:00Z")));
+    when(fixture.assetDao.bindLegacyHelmProxyCacheConfiguration(
+        eq(legacy.assetId()), eq(runtime.id()),
+        eq(HelmProxyService.PROXY_CONFIGURATION_ATTRIBUTE), anyString()))
+        .thenReturn(0);
     when(fixture.proxyStateDao.isBlocked(eq(runtime.id()), any())).thenReturn(true);
 
     assertThrows(
@@ -322,8 +358,9 @@ class HelmProxyServiceTest {
         () -> fixture.service.get(runtime, "index.yaml", false));
 
     verify(fixture.reader, never()).serveSnapshot(legacy, false, "index.yaml");
-    verify(fixture.assetDao, never()).putAssetStringAttributeIfAbsent(
-        anyLong(), anyString(), anyString());
+    verify(fixture.assetDao).bindLegacyHelmProxyCacheConfiguration(
+        eq(legacy.assetId()), eq(runtime.id()),
+        eq(HelmProxyService.PROXY_CONFIGURATION_ATTRIBUTE), anyString());
   }
 
   @Test
@@ -437,7 +474,10 @@ class HelmProxyServiceTest {
     when(schemaInvalid.reader.serveSnapshot(schemaInvalidStale, false, "index.yaml"))
         .thenReturn(schemaInvalidResponse);
     respond(schemaInvalid.fetcher, new HttpRemoteFetcher.Result(
-        200, Map.of(), new ByteArrayInputStream("entries: []\n".getBytes(StandardCharsets.UTF_8))));
+        200,
+        Map.of(),
+        new ByteArrayInputStream(
+            "entries: {demo: error}\n".getBytes(StandardCharsets.UTF_8))));
 
     assertEquals(Boolean.FALSE,
         schemaInvalid.service.get(runtime, "index.yaml", false)
@@ -460,6 +500,39 @@ class HelmProxyServiceTest {
     assertEquals(Boolean.FALSE,
         unreadable.service.get(runtime, "index.yaml", false)
             .internalAttribute(HelmProxyService.INDEX_AUTHORITATIVE_ATTRIBUTE));
+  }
+
+  @Test
+  void isolatesIndexCacheWriteFailuresBehindAStaleNonAuthoritativeFallback()
+      throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 1);
+    CachedAssetMetadata stale = snapshot("index.yaml", Instant.EPOCH, Map.of());
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.cache.find(eq(runtime.id()), eq("index.yaml"), any()))
+        .thenReturn(Optional.of(stale));
+    when(fixture.reader.serveSnapshot(stale, false, "index.yaml")).thenReturn(expected);
+    when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
+    respond(fixture.fetcher, new HttpRemoteFetcher.Result(
+        200,
+        Map.of("Content-Type", "text/x-yaml"),
+        new ByteArrayInputStream(
+            "apiVersion: v1\nentries: {}\n".getBytes(StandardCharsets.UTF_8))));
+    when(fixture.writer.writeBytes(
+        eq(runtime), eq(fixture.storage), eq(7L), eq("index.yaml"), any(byte[].class),
+        eq("text/x-yaml"), eq(HelmAssetKind.INDEX), isNull(), any(), any(),
+        eq("proxy"), isNull(), eq(true)))
+        .thenThrow(new IllegalStateException("object storage unavailable"));
+
+    MavenResponse response = fixture.service.get(runtime, "index.yaml", false);
+
+    assertSame(expected, response);
+    assertEquals(
+        Boolean.FALSE,
+        response.internalAttribute(HelmProxyService.INDEX_AUTHORITATIVE_ATTRIBUTE));
+    verify(fixture.proxyStateDao).recordFailure(
+        eq(runtime.id()), eq(30L), anyString(), any());
+    verify(fixture.proxyStateDao, never()).recordSuccess(eq(runtime.id()), any());
   }
 
   @Test
@@ -492,7 +565,6 @@ class HelmProxyServiceTest {
 
   private static Fixture fixture() {
     AssetDao assetDao = mock(AssetDao.class);
-    RepositoryDao repositoryDao = mock(RepositoryDao.class);
     BlobStorageRegistry registry = mock(BlobStorageRegistry.class);
     HelmAssetWriter writer = mock(HelmAssetWriter.class);
     HelmAssetReader reader = mock(HelmAssetReader.class);
@@ -502,10 +574,10 @@ class HelmProxyServiceTest {
     AssetMetadataCache cache = mock(AssetMetadataCache.class);
     BlobStorage storage = mock(BlobStorage.class);
     return new Fixture(
-        assetDao, repositoryDao, registry, writer, reader, proxyStateDao, fetcher, negativeCache,
+        assetDao, registry, writer, reader, proxyStateDao, fetcher, negativeCache,
         cache, storage,
         new HelmProxyService(
-            assetDao, repositoryDao, registry, writer, reader, proxyStateDao, fetcher,
+            assetDao, registry, writer, reader, proxyStateDao, fetcher,
             negativeCache, cache));
   }
 
@@ -567,7 +639,6 @@ class HelmProxyServiceTest {
 
   private record Fixture(
       AssetDao assetDao,
-      RepositoryDao repositoryDao,
       BlobStorageRegistry registry,
       HelmAssetWriter writer,
       HelmAssetReader reader,

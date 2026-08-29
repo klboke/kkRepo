@@ -233,6 +233,13 @@ public interface AssetDao {
   /** Atomically adds a string attribute only when the durable row does not contain the key. */
   int putAssetStringAttributeIfAbsent(long assetId, String attributeName, String value);
 
+  /**
+   * Atomically binds a pre-upgrade Helm proxy row to the active configuration only when the
+   * migration-time repository and asset fences still match.
+   */
+  int bindLegacyHelmProxyCacheConfiguration(
+      long assetId, long repositoryId, String attributeName, String value);
+
   int updateBlobAttributes(long blobId, java.util.Map<String, Object> attributes);
 
   long countAssetsByRepositoryId(long repositoryId);

@@ -1114,6 +1114,34 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         assetId);
   }
 
+  @Override
+  public int bindLegacyHelmProxyCacheConfiguration(
+      long assetId, long repositoryId, String attributeName, String value) {
+    String attribute = jsonColumns.extractText("attributes_json", attributeName);
+    String updated = jsonColumns.setText("attributes_json", attributeName);
+    return jdbcTemplate.update(
+        """
+        UPDATE asset
+        SET attributes_json = %s
+        WHERE id = ?
+          AND repository_id = ?
+          AND %s IS NULL
+          AND EXISTS (
+            SELECT 1
+            FROM helm_proxy_legacy_cache_fence fence
+            JOIN repository active_repository
+              ON active_repository.id = fence.repository_id
+            WHERE fence.repository_id = asset.repository_id
+              AND active_repository.updated_at = fence.configuration_updated_at
+              AND asset.last_updated_at > fence.configuration_updated_at
+              AND asset.last_updated_at < fence.activated_at
+          )
+        """.formatted(updated, attribute),
+        value,
+        assetId,
+        repositoryId);
+  }
+
   public int updateBlobAttributes(long blobId, java.util.Map<String, Object> attributes) {
     return jdbcTemplate.update("""
         UPDATE asset_blob SET attributes_json = ? WHERE id = ?
