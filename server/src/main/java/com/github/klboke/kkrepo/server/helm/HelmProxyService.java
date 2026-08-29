@@ -63,10 +63,10 @@ public class HelmProxyService {
     if (kind == HelmAssetKind.INDEX) {
       return getIndex(runtime, headOnly);
     }
-    if (kind != HelmAssetKind.PACKAGE) {
+    if (kind != HelmAssetKind.PACKAGE && kind != HelmAssetKind.PROVENANCE) {
       throw new MavenExceptions.MavenNotFoundException(path);
     }
-    return getPackage(runtime, path, headOnly);
+    return getPackage(runtime, path, kind, headOnly);
   }
 
   private MavenResponse getIndex(RepositoryRuntime runtime, boolean headOnly) {
@@ -85,7 +85,8 @@ public class HelmProxyService {
     return fetchAndCacheIndex(runtime, cached, headOnly, now);
   }
 
-  private MavenResponse getPackage(RepositoryRuntime runtime, String path, boolean headOnly) {
+  private MavenResponse getPackage(
+      RepositoryRuntime runtime, String path, HelmAssetKind kind, boolean headOnly) {
     Optional<CachedAssetMetadata> cached = lookupCached(runtime, path);
     Instant now = Instant.now();
     if (cached.isPresent() && isFresh(cached.get(), runtime.contentMaxAgeMinutesOrDefault(), now)) {
@@ -99,7 +100,7 @@ public class HelmProxyService {
       throw new MavenExceptions.BadUpstreamException("Upstream temporarily blocked: " + runtime.proxyRemoteUrl());
     }
     String remoteUrl = resolvePackageRemoteUrl(runtime, path, now);
-    return fetchAndCachePackage(runtime, path, remoteUrl, cached, headOnly, now);
+    return fetchAndCachePackage(runtime, path, kind, remoteUrl, cached, headOnly, now);
   }
 
   private Optional<CachedAssetMetadata> lookupCached(RepositoryRuntime runtime, String path) {
@@ -187,6 +188,7 @@ public class HelmProxyService {
   private MavenResponse fetchAndCachePackage(
       RepositoryRuntime runtime,
       String path,
+      HelmAssetKind kind,
       String remoteUrl,
       Optional<CachedAssetMetadata> cached,
       boolean headOnly,
@@ -223,7 +225,7 @@ public class HelmProxyService {
               path,
               result.body(),
               result.contentType(),
-              HelmAssetKind.PACKAGE,
+              kind,
               null,
               attrs,
               remoteAttrs(result),

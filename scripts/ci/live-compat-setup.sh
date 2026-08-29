@@ -790,6 +790,24 @@ ensure_kkrepo_repositories() {
     "hosted":{"writePolicy":"ALLOW"}
   }'
 
+  kkrepo_create_repo "helm-proxy" '{
+    "name":"helm-proxy",
+    "recipe":"helm-proxy",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "proxy":{"remoteUrl":"https://helm.github.io/examples","contentMaxAgeMinutes":1440,"metadataMaxAgeMinutes":1440,"autoBlock":true}
+  }'
+
+  kkrepo_create_repo "helm-group" '{
+    "name":"helm-group",
+    "recipe":"helm-group",
+    "online":true,
+    "blobStoreName":"default",
+    "strictContentTypeValidation":true,
+    "group":{"memberNames":["helm-hosted","helm-proxy"]}
+  }'
+
   kkrepo_create_repo "cargo-hosted" '{
     "name":"cargo-hosted",
     "recipe":"cargo-hosted",

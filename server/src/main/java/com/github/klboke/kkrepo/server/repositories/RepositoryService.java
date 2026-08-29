@@ -1101,6 +1101,7 @@ public class RepositoryService {
   private static boolean usesGroupMemberAssetCache(RepositoryFormat format) {
     return format == RepositoryFormat.NPM
         || format == RepositoryFormat.PYPI
+        || format == RepositoryFormat.HELM
         || format == RepositoryFormat.DOCKER
         || format == RepositoryFormat.PUB
         || format == RepositoryFormat.COMPOSER;
@@ -2141,6 +2142,7 @@ public class RepositoryService {
 
   private static boolean supportsNestedGroups(RepositoryFormat format) {
     return format == RepositoryFormat.PUB || format == RepositoryFormat.COMPOSER
+        || format == RepositoryFormat.HELM
         || format == RepositoryFormat.TERRAFORM || format == RepositoryFormat.SWIFT
         || format == RepositoryFormat.ANSIBLEGALAXY || format == RepositoryFormat.CONDA;
   }

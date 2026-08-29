@@ -14,9 +14,10 @@ import com.github.klboke.kkrepo.protocol.helm.HelmAssetKind;
 import com.github.klboke.kkrepo.protocol.helm.HelmChartMetadata;
 import com.github.klboke.kkrepo.protocol.helm.HelmChartPackageParser;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
-import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.blob.BlobTransactionCleanup;
+import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
+import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
 import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
@@ -37,6 +38,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -47,15 +49,31 @@ class HelmAssetWriter {
   private final BrowseNodeDao browseNodeDao;
   private final AssetMetadataCache assetMetadataCache;
   private final TransientTransactionRetry transactionRetry;
+  private final HelmGroupIndexCache groupIndexCache;
+  private final GroupMemberAssetCache groupMemberAssetCache;
   private final HelmChartPackageParser chartParser = new HelmChartPackageParser();
 
   HelmAssetWriter(AssetDao assetDao, ComponentDao componentDao, BrowseNodeDao browseNodeDao,
       AssetMetadataCache assetMetadataCache, TransientTransactionRetry transactionRetry) {
+    this(assetDao, componentDao, browseNodeDao, assetMetadataCache, transactionRetry, null, null);
+  }
+
+  @Autowired
+  HelmAssetWriter(
+      AssetDao assetDao,
+      ComponentDao componentDao,
+      BrowseNodeDao browseNodeDao,
+      AssetMetadataCache assetMetadataCache,
+      TransientTransactionRetry transactionRetry,
+      HelmGroupIndexCache groupIndexCache,
+      GroupMemberAssetCache groupMemberAssetCache) {
     this.assetDao = assetDao;
     this.componentDao = componentDao;
     this.browseNodeDao = browseNodeDao;
     this.assetMetadataCache = assetMetadataCache;
     this.transactionRetry = transactionRetry;
+    this.groupIndexCache = groupIndexCache;
+    this.groupMemberAssetCache = groupMemberAssetCache;
   }
 
   record Stored(AssetRecord asset, AssetBlobRecord blob, Digests digests, boolean created, Path responseFile) {
@@ -179,6 +197,7 @@ class HelmAssetWriter {
     if (componentId != null) {
       componentDao.deleteIfNoAssets(componentId);
     }
+    notifyContainingGroups(runtime, asset.kind());
     return 1;
   }
 
@@ -298,7 +317,18 @@ class HelmAssetWriter {
     }
     browseNodeDao.upsertPathAncestors(runtime.id(), path, persistedAsset.id(), componentId);
     assetMetadataCache.evictAfterCommit(runtime.id(), path);
+    notifyContainingGroups(runtime, kind.name());
     return new Stored(persistedAsset, persistedBlob, digests, created, responseFile);
+  }
+
+  private void notifyContainingGroups(RepositoryRuntime runtime, String kind) {
+    if (runtime.isGroup()) return;
+    if (groupMemberAssetCache != null) {
+      groupMemberAssetCache.invalidateMemberAfterCommit(runtime.id());
+    }
+    if (groupIndexCache != null && HelmAssetKind.INDEX.name().equals(kind)) {
+      groupIndexCache.invalidateMemberAfterCommit(runtime.id());
+    }
   }
 
   private AssetRecord updateExistingAsset(

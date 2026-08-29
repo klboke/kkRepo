@@ -174,10 +174,10 @@ Cleanup, and Artifact Scanning behavior.
 
 ## Helm
 
-Add a proxy or hosted chart repository:
+Add a group repository for reads so private charts resolve before the configured public fallback:
 
 ```bash
-helm repo add acme https://nexus.example.com/repository/helm-proxy/
+helm repo add acme https://nexus.example.com/repository/helm-group/
 helm repo update
 helm search repo acme
 ```
@@ -196,6 +196,9 @@ If using a Helm push plugin, point it at:
 ```text
 https://nexus.example.com/repository/helm-hosted/
 ```
+
+Configure `helm-group` with `helm-hosted` before `helm-proxy`. The merged `index.yaml` keeps the
+first member's release when multiple members publish the same chart name and version.
 
 ## Cargo / Rust
 

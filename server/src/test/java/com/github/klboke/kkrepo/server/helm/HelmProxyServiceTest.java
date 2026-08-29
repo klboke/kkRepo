@@ -153,6 +153,40 @@ class HelmProxyServiceTest {
   }
 
   @Test
+  void proxiesProvenanceFromUrlDerivedDuringIndexRewrite() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 1);
+    CachedAssetMetadata index = snapshot(
+        "index.yaml", Instant.now(),
+        Map.of("remoteUrls", Map.of(
+            "demo-1.0.0.tgz.prov", "https://cdn.example.test/charts/demo.tgz.prov")));
+    when(fixture.cache.find(eq(runtime.id()), anyString(), any()))
+        .thenAnswer(invocation -> invocation.getArgument(1).equals("index.yaml")
+            ? Optional.of(index)
+            : Optional.empty());
+    when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
+    AtomicReference<String> requestedUrl = new AtomicReference<>();
+    doAnswer(invocation -> {
+      HttpRemoteFetcher.Request request = invocation.getArgument(0);
+      requestedUrl.set(request.url());
+      @SuppressWarnings("unchecked")
+      HttpRemoteFetcher.ResultHandler<MavenResponse> handler = invocation.getArgument(2);
+      return handler.handle(new HttpRemoteFetcher.Result(
+          200, Map.of("Content-Type", "application/octet-stream"),
+          new ByteArrayInputStream(new byte[] {1, 2, 3})));
+    }).when(fixture.fetcher).fetchWithBodyRetry(any(), eq("demo-1.0.0.tgz.prov"), any());
+    HelmAssetWriter.Stored stored = stored("demo-1.0.0.tgz.prov", "application/octet-stream");
+    when(fixture.writer.write(
+        eq(runtime), eq(fixture.storage), eq(7L), eq("demo-1.0.0.tgz.prov"), any(),
+        eq("application/octet-stream"), eq(HelmAssetKind.PROVENANCE), eq(null), any(), any(),
+        eq("proxy"), isNull(), eq(false)))
+        .thenReturn(stored);
+
+    assertEquals(200, fixture.service.get(runtime, "demo-1.0.0.tgz.prov", true).status());
+    assertEquals("https://cdn.example.test/charts/demo.tgz.prov", requestedUrl.get());
+  }
+
+  @Test
   void handles304AndRemoteNotFound() throws Exception {
     Fixture fixture = fixture();
     RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 1);
@@ -183,8 +217,6 @@ class HelmProxyServiceTest {
     Fixture fixture = fixture();
     assertThrows(MavenExceptions.MethodNotAllowed.class,
         () -> fixture.service.get(runtime(RepositoryType.HOSTED, 1), "index.yaml", false));
-    assertThrows(MavenExceptions.MavenNotFoundException.class,
-        () -> fixture.service.get(runtime(RepositoryType.PROXY, 1), "demo.tgz.prov", false));
     assertThrows(MavenExceptions.MavenNotFoundException.class,
         () -> fixture.service.get(runtime(RepositoryType.PROXY, 1), "README.md", false));
     respond(fixture.fetcher, new HttpRemoteFetcher.Result(

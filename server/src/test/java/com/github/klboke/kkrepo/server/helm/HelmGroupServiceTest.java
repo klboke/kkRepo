@@ -1,0 +1,374 @@
+package com.github.klboke.kkrepo.server.helm;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import com.github.klboke.kkrepo.core.BlobStorage;
+import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.protocol.helm.HelmIndex;
+import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
+import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
+import com.github.klboke.kkrepo.server.cache.NexusCacheType;
+import com.github.klboke.kkrepo.server.cache.NexusLikeCacheInfo;
+import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
+import com.github.klboke.kkrepo.server.maven.MavenExceptions;
+import com.github.klboke.kkrepo.server.maven.MavenResponse;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import org.junit.jupiter.api.Test;
+
+class HelmGroupServiceTest {
+  @Test
+  void mergesMemberIndexesInOrderAndSkipsOfflineMembers() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime offline = runtime(1L, "offline", RepositoryType.HOSTED, false, List.of());
+    RepositoryRuntime first = runtime(2L, "first", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime second = runtime(3L, "second", RepositoryType.PROXY, true, List.of());
+    RepositoryRuntime group = runtime(
+        10L, "helm-all", RepositoryType.GROUP, true, List.of(offline, first, second));
+    when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.empty());
+    when(fixture.hosted.get(first, "index.yaml", false)).thenReturn(index("""
+        entries:
+          demo:
+            - name: demo
+              version: 1.0.0
+              appVersion: private
+              urls: [private/demo.tgz]
+        """));
+    when(fixture.proxy.get(second, "index.yaml", false)).thenReturn(index("""
+        entries:
+          demo:
+            - name: demo
+              version: 1.0.0
+              appVersion: public
+              urls: [demo-1.0.0.tgz]
+            - name: demo
+              version: 2.0.0
+              urls: [charts/current.tgz]
+        """));
+
+    MavenResponse response = fixture.service.get(group, "index.yaml", false);
+    byte[] body = response.body().readAllBytes();
+
+    assertEquals(200, response.status());
+    assertEquals(List.of(
+        new HelmIndex.Entry("demo", "1.0.0", List.of("demo-1.0.0.tgz")),
+        new HelmIndex.Entry("demo", "2.0.0", List.of("demo-2.0.0.tgz"))),
+        HelmIndex.entries(body));
+    assertTrue(new String(body, StandardCharsets.UTF_8).contains("appVersion: private"));
+  }
+
+  @Test
+  void resolvesNestedGroupChartsAndProvenanceThroughOrderedFallback() {
+    Fixture fixture = fixture();
+    RepositoryRuntime hosted = runtime(2L, "private", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime proxy = runtime(3L, "upstream", RepositoryType.PROXY, true, List.of());
+    RepositoryRuntime nested = runtime(4L, "nested", RepositoryType.GROUP, true, List.of(proxy));
+    RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of(hosted, nested));
+    MavenResponse chart = MavenResponse.noBody(200);
+    MavenResponse provenance = MavenResponse.noBody(200);
+    when(fixture.memberCache.get(any(), any(), any())).thenReturn(Optional.empty());
+    when(fixture.hosted.get(hosted, "demo-1.0.0.tgz", true))
+        .thenThrow(new MavenExceptions.MavenNotFoundException("missing"));
+    when(fixture.hosted.get(hosted, "demo-1.0.0.tgz.prov", true))
+        .thenThrow(new MavenExceptions.MavenNotFoundException("missing"));
+    when(fixture.proxy.get(proxy, "demo-1.0.0.tgz", true)).thenReturn(chart);
+    when(fixture.proxy.get(proxy, "demo-1.0.0.tgz.prov", true)).thenReturn(provenance);
+
+    assertSame(chart, fixture.service.get(group, "demo-1.0.0.tgz", true));
+    assertSame(provenance, fixture.service.get(group, "demo-1.0.0.tgz.prov", true));
+
+    verify(fixture.memberCache).put(nested, "demo-1.0.0.tgz", NexusCacheType.CONTENT, proxy.id());
+    verify(fixture.memberCache).put(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, nested.id());
+    verify(fixture.memberCache).put(
+        nested, "demo-1.0.0.tgz.prov", NexusCacheType.METADATA, proxy.id());
+    verify(fixture.memberCache).put(
+        group, "demo-1.0.0.tgz.prov", NexusCacheType.METADATA, nested.id());
+  }
+
+  @Test
+  void servesFreshDurableGroupIndexWithoutFanOut() {
+    Fixture fixture = fixture();
+    RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of());
+    CachedAssetMetadata cached = mock(CachedAssetMetadata.class);
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.of(cached));
+    when(fixture.reader.serveSnapshot(cached, true, "index.yaml")).thenReturn(expected);
+
+    assertSame(expected, fixture.service.get(group, "index.yaml", true));
+  }
+
+  @Test
+  void persistsMergedIndexWithSharedFreshnessWatermark() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime hosted = runtime(2L, "private", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of(hosted));
+    NexusLikeCacheInfo cacheInfo = new NexusLikeCacheInfo(
+        Instant.parse("2026-08-30T00:00:00Z"), "token", NexusCacheType.METADATA);
+    Map<String, Object> attributes = Map.of("helmGroupIndex", true);
+    HelmAssetWriter.Stored stored = storedIndex();
+    when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.empty());
+    when(fixture.indexCache.enabled()).thenReturn(true);
+    when(fixture.indexCache.current(eq(group), any())).thenReturn(cacheInfo);
+    when(fixture.indexCache.freshAttributes(cacheInfo)).thenReturn(attributes);
+    when(fixture.hosted.get(hosted, "index.yaml", false)).thenReturn(index("""
+        entries:
+          private:
+            - name: private
+              version: 1.0.0
+              urls: [private.tgz]
+        """));
+    when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
+    when(fixture.writer.writeBytes(
+        eq(group), eq(fixture.storage), eq(7L), eq("index.yaml"), any(byte[].class),
+        eq(HelmIndex.CONTENT_TYPE), eq(com.github.klboke.kkrepo.protocol.helm.HelmAssetKind.INDEX),
+        isNull(), eq(attributes), anyMap(), eq("group"), isNull()))
+        .thenReturn(stored);
+
+    MavenResponse response = fixture.service.get(group, "index.yaml", false);
+
+    assertEquals(200, response.status());
+    assertEquals(
+        List.of(new HelmIndex.Entry("private", "1.0.0", List.of("private-1.0.0.tgz"))),
+        HelmIndex.entries(response.body().readAllBytes()));
+    verify(fixture.reader).beforeRead(
+        stored.asset().id(), stored.blob().id(), stored.asset().repositoryId());
+  }
+
+  @Test
+  void evictsFailedCachedWinnerAndFallsBackInConfiguredOrder() {
+    Fixture fixture = fixture();
+    RepositoryRuntime hosted = runtime(2L, "private", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime proxy = runtime(3L, "upstream", RepositoryType.PROXY, true, List.of());
+    RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of(hosted, proxy));
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.memberCache.get(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT))
+        .thenReturn(Optional.of(proxy.id()));
+    when(fixture.proxy.get(proxy, "demo-1.0.0.tgz", false))
+        .thenThrow(new MavenExceptions.BadUpstreamException("unavailable"));
+    when(fixture.hosted.get(hosted, "demo-1.0.0.tgz", false)).thenReturn(expected);
+
+    assertSame(expected, fixture.service.get(group, "demo-1.0.0.tgz", false));
+    verify(fixture.memberCache).evict(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT);
+    verify(fixture.memberCache).put(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, hosted.id());
+  }
+
+  @Test
+  void usesCachedWinnerWithoutRepeatingMemberFanOut() {
+    Fixture fixture = fixture();
+    RepositoryRuntime hosted = runtime(2L, "private", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime proxy = runtime(3L, "upstream", RepositoryType.PROXY, true, List.of());
+    RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of(hosted, proxy));
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.memberCache.get(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT))
+        .thenReturn(Optional.of(proxy.id()));
+    when(fixture.proxy.get(proxy, "demo-1.0.0.tgz", true)).thenReturn(expected);
+
+    assertSame(expected, fixture.service.get(group, "demo-1.0.0.tgz", true));
+  }
+
+  @Test
+  void isolatesMissingUnreadableAndInvalidMemberIndexes() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime missing = runtime(1L, "missing", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime unreadable = runtime(2L, "unreadable", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime invalid = runtime(3L, "invalid", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime closeFailure = runtime(4L, "close-failure", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime good = runtime(5L, "good", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime group = runtime(
+        10L, "all", RepositoryType.GROUP, true,
+        List.of(missing, unreadable, invalid, closeFailure, good));
+    when(fixture.hosted.get(missing, "index.yaml", false))
+        .thenThrow(new MavenExceptions.MavenNotFoundException("missing"));
+    when(fixture.hosted.get(unreadable, "index.yaml", false))
+        .thenReturn(response(new InputStream() {
+          @Override
+          public int read() throws IOException {
+            throw new IOException("unreadable");
+          }
+        }));
+    when(fixture.hosted.get(invalid, "index.yaml", false)).thenReturn(index("entries: ["));
+    byte[] valid = "entries: {}\n".getBytes(StandardCharsets.UTF_8);
+    when(fixture.hosted.get(closeFailure, "index.yaml", false))
+        .thenReturn(response(new ByteArrayInputStream(valid) {
+          @Override
+          public void close() throws IOException {
+            throw new IOException("close failed");
+          }
+        }));
+    when(fixture.hosted.get(good, "index.yaml", false)).thenReturn(index("""
+        entries:
+          good:
+            - name: good
+              version: 1.0.0
+              urls: [good.tgz]
+        """));
+
+    MavenResponse merged = fixture.service.get(group, "index.yaml", false);
+    assertEquals(
+        List.of(new HelmIndex.Entry("good", "1.0.0", List.of("good-1.0.0.tgz"))),
+        HelmIndex.entries(merged.body().readAllBytes()));
+  }
+
+  @Test
+  void protectsIndexAndAssetTraversalFromCyclicRuntimeSnapshots() throws Exception {
+    Fixture fixture = fixture();
+    List<RepositoryRuntime> firstMembers = new ArrayList<>();
+    RepositoryRuntime first = runtime(10L, "first", RepositoryType.GROUP, true, firstMembers);
+    RepositoryRuntime second = runtime(20L, "second", RepositoryType.GROUP, true, List.of(first));
+    firstMembers.add(second);
+
+    MavenResponse index = fixture.service.get(first, "index.yaml", false);
+    assertEquals(List.of(), HelmIndex.entries(index.body().readAllBytes()));
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> fixture.service.get(first, "demo-1.0.0.tgz", false));
+  }
+
+  @Test
+  void servesDynamicHeadAndRejectsMissingGroupBlobStore() {
+    Fixture fixture = fixture();
+    RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of());
+    assertEquals(200, fixture.service.get(group, "index.yaml", true).status());
+
+    RepositoryRuntime noBlobStore = new RepositoryRuntime(
+        11L, "no-blob", RepositoryFormat.HELM, RepositoryType.GROUP, "helm-group", true, null,
+        null, null, null, true, null, 60, 60, true, null, List.of());
+    when(fixture.indexCache.enabled()).thenReturn(true);
+    assertThrows(IllegalStateException.class,
+        () -> fixture.service.get(noBlobStore, "index.yaml", false));
+  }
+
+  @Test
+  void remainsCorrectWithoutOptionalMemberWinnerCache() {
+    Fixture fixture = fixture();
+    RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of());
+    HelmGroupService withoutMemberCache = new HelmGroupService(
+        fixture.hosted, fixture.proxy, fixture.indexCache, null,
+        fixture.registry, fixture.writer, fixture.reader);
+
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> withoutMemberCache.get(group, "missing-1.0.0.tgz", false));
+  }
+
+  @Test
+  void rejectsIndexesBeyondTheAggregationLimitBeforeReading() {
+    MavenResponse response = MavenResponse.noBody(200);
+    MavenExceptions.BadUpstreamException error = assertThrows(
+        MavenExceptions.BadUpstreamException.class,
+        () -> HelmGroupService.readBounded(response, -1));
+    assertEquals("Helm group index exceeds the 64 MiB aggregation limit", error.getMessage());
+  }
+
+  @Test
+  void rejectsNonGroupAndUnknownPaths() {
+    Fixture fixture = fixture();
+    assertThrows(MavenExceptions.MethodNotAllowed.class, () -> fixture.service.get(
+        runtime(1L, "hosted", RepositoryType.HOSTED, true, List.of()), "index.yaml", false));
+    assertThrows(MavenExceptions.MavenNotFoundException.class, () -> fixture.service.get(
+        runtime(2L, "group", RepositoryType.GROUP, true, List.of()), "README.md", false));
+  }
+
+  private static Fixture fixture() {
+    HelmHostedService hosted = mock(HelmHostedService.class);
+    HelmProxyService proxy = mock(HelmProxyService.class);
+    HelmGroupIndexCache indexCache = mock(HelmGroupIndexCache.class);
+    GroupMemberAssetCache memberCache = mock(GroupMemberAssetCache.class);
+    BlobStorageRegistry registry = mock(BlobStorageRegistry.class);
+    HelmAssetWriter writer = mock(HelmAssetWriter.class);
+    HelmAssetReader reader = mock(HelmAssetReader.class);
+    BlobStorage storage = mock(BlobStorage.class);
+    when(indexCache.enabled()).thenReturn(false);
+    return new Fixture(
+        hosted,
+        proxy,
+        indexCache,
+        memberCache,
+        registry,
+        writer,
+        reader,
+        storage,
+        new HelmGroupService(hosted, proxy, indexCache, memberCache, registry, writer, reader));
+  }
+
+  private static HelmAssetWriter.Stored storedIndex() {
+    AssetRecord asset = new AssetRecord(
+        1L, 10L, null, 2L, RepositoryFormat.HELM, "index.yaml", null,
+        "index.yaml", "INDEX", HelmIndex.CONTENT_TYPE, 4L,
+        null, Instant.now(), Map.of());
+    AssetBlobRecord blob = new AssetBlobRecord(
+        2L, 7L, "blob://bucket/index", null, "index", null,
+        "sha1", "sha256", "md5", 4L, HelmIndex.CONTENT_TYPE, "group", null,
+        Instant.EPOCH, Instant.EPOCH, Map.of());
+    return new HelmAssetWriter.Stored(
+        asset, blob, new HelmAssetWriter.Digests("md5", "sha1", "sha256", "sha512", 4L),
+        true, null);
+  }
+
+  private static MavenResponse index(String body) {
+    byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+    return MavenResponse.ok(
+        new ByteArrayInputStream(bytes), bytes.length, HelmIndex.CONTENT_TYPE, null, Instant.EPOCH);
+  }
+
+  private static MavenResponse response(InputStream body) {
+    return MavenResponse.ok(body, 0L, HelmIndex.CONTENT_TYPE, null, Instant.EPOCH);
+  }
+
+  private static RepositoryRuntime runtime(
+      long id,
+      String name,
+      RepositoryType type,
+      boolean online,
+      List<RepositoryRuntime> members) {
+    return new RepositoryRuntime(
+        id,
+        name,
+        RepositoryFormat.HELM,
+        type,
+        "helm-" + type.name().toLowerCase(java.util.Locale.ROOT),
+        online,
+        7L,
+        type == RepositoryType.HOSTED ? "ALLOW" : null,
+        null,
+        null,
+        true,
+        type == RepositoryType.PROXY ? "https://charts.example.test/" : null,
+        60,
+        60,
+        true,
+        null,
+        members);
+  }
+
+  private record Fixture(
+      HelmHostedService hosted,
+      HelmProxyService proxy,
+      HelmGroupIndexCache indexCache,
+      GroupMemberAssetCache memberCache,
+      BlobStorageRegistry registry,
+      HelmAssetWriter writer,
+      HelmAssetReader reader,
+      BlobStorage storage,
+      HelmGroupService service) {
+  }
+}

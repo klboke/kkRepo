@@ -89,7 +89,95 @@ class HelmIndexTest {
     assertEquals(
         "https://repo.example.test/helm/fallback.tgz",
         result.remoteUrlsByLocalPath().get("fallback.tgz"));
-    assertEquals(3, result.remoteUrlsByLocalPath().size());
+    assertEquals(
+        "https://repo.example.test/helm/fallback.tgz.prov",
+        result.remoteUrlsByLocalPath().get("fallback.tgz.prov"));
+    assertEquals(4, result.remoteUrlsByLocalPath().size());
+  }
+
+  @Test
+  void mergesGroupIndexesInMemberOrderAndKeepsUniqueReleases() {
+    byte[] first = """
+        apiVersion: v1
+        entries:
+          demo:
+            - name: demo
+              version: 1.0.0
+              appVersion: first-member
+              urls:
+                - https://first.example.test/charts/original.tgz
+            - name: demo
+              version: 0.9.0
+              urls:
+                - demo-0.9.0.tgz
+        """.getBytes(StandardCharsets.UTF_8);
+    byte[] second = """
+        apiVersion: v1
+        entries:
+          demo:
+            - name: demo
+              version: 1.0.0
+              appVersion: second-member
+              urls:
+                - demo-1.0.0.tgz
+            - name: demo
+              version: 2.0.0
+              urls:
+                - charts/demo-current.tgz
+          other:
+            - name: other
+              version: 3.0.0
+              urls:
+                - other-3.0.0.tgz
+        """.getBytes(StandardCharsets.UTF_8);
+
+    byte[] merged = HelmIndex.mergeGroupIndexes(
+        List.of(first, second), Instant.parse("2026-08-30T00:00:00Z"));
+
+    assertEquals(List.of(
+        new HelmIndex.Entry("demo", "1.0.0", List.of("demo-1.0.0.tgz")),
+        new HelmIndex.Entry("demo", "0.9.0", List.of("demo-0.9.0.tgz")),
+        new HelmIndex.Entry("demo", "2.0.0", List.of("demo-2.0.0.tgz")),
+        new HelmIndex.Entry("other", "3.0.0", List.of("other-3.0.0.tgz"))),
+        HelmIndex.entries(merged));
+    assertTrue(text(merged).contains("appVersion: first-member"));
+    assertFalse(text(merged).contains("second-member"));
+    assertFalse(text(merged).contains("https://first.example.test"));
+    assertTrue(text(merged).contains("generated: '2026-08-30T00:00:00Z'"));
+  }
+
+  @Test
+  void ignoresEmptyAndMalformedGroupEntries() {
+    byte[] malformed = """
+        entries:
+          ignored: not-a-list
+          empty: []
+        """.getBytes(StandardCharsets.UTF_8);
+
+    byte[] merged = HelmIndex.mergeGroupIndexes(
+        Arrays.asList(null, new byte[0], "[]".getBytes(StandardCharsets.UTF_8), malformed), null);
+
+    assertEquals(List.of(), HelmIndex.entries(merged));
+    assertTrue(text(merged).contains("generated:"));
+  }
+
+  @Test
+  void derivesProvenanceBeforeChartUrlQueryAndFragment() {
+    byte[] upstream = """
+        entries:
+          demo:
+            - name: demo
+              version: 1.0.0
+              urls:
+                - charts/demo.tgz?download=1#release
+        """.getBytes(StandardCharsets.UTF_8);
+
+    HelmIndex.RewriteResult rewritten = HelmIndex.rewriteProxyIndex(
+        upstream, "https://repo.example.test/helm");
+
+    assertEquals(
+        "https://repo.example.test/helm/charts/demo.tgz.prov?download=1#release",
+        rewritten.remoteUrlsByLocalPath().get("demo-1.0.0.tgz.prov"));
   }
 
   @Test

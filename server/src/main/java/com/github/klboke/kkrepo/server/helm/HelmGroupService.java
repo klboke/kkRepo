@@ -1,0 +1,261 @@
+package com.github.klboke.kkrepo.server.helm;
+
+import com.github.klboke.kkrepo.core.BlobStorage;
+import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.protocol.helm.HelmAssetKind;
+import com.github.klboke.kkrepo.protocol.helm.HelmIndex;
+import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
+import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
+import com.github.klboke.kkrepo.server.cache.NexusCacheType;
+import com.github.klboke.kkrepo.server.cache.NexusLikeCacheInfo;
+import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
+import com.github.klboke.kkrepo.server.maven.MavenExceptions;
+import com.github.klboke.kkrepo.server.maven.MavenResponse;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import org.springframework.stereotype.Service;
+
+/** Nexus-compatible ordered aggregation for classic Helm chart repositories. */
+@Service
+public class HelmGroupService {
+  static final int MAX_AGGREGATED_INDEX_BYTES = 64 * 1024 * 1024;
+
+  private final HelmHostedService hosted;
+  private final HelmProxyService proxy;
+  private final HelmGroupIndexCache indexCache;
+  private final GroupMemberAssetCache memberAssetCache;
+  private final BlobStorageRegistry blobStorageRegistry;
+  private final HelmAssetWriter writer;
+  private final HelmAssetReader reader;
+
+  public HelmGroupService(
+      HelmHostedService hosted,
+      HelmProxyService proxy,
+      HelmGroupIndexCache indexCache,
+      GroupMemberAssetCache memberAssetCache,
+      BlobStorageRegistry blobStorageRegistry,
+      HelmAssetWriter writer,
+      HelmAssetReader reader) {
+    this.hosted = hosted;
+    this.proxy = proxy;
+    this.indexCache = indexCache;
+    this.memberAssetCache = memberAssetCache;
+    this.blobStorageRegistry = blobStorageRegistry;
+    this.writer = writer;
+    this.reader = reader;
+  }
+
+  public MavenResponse get(RepositoryRuntime group, String rawPath, boolean headOnly) {
+    ensureGroup(group);
+    String path = HelmHostedService.normalizePath(rawPath);
+    HelmAssetKind kind = readableKind(path);
+    return kind == HelmAssetKind.INDEX
+        ? getIndex(group, headOnly, new HashSet<>())
+        : getAsset(group, path, kind, headOnly, new HashSet<>());
+  }
+
+  private MavenResponse getIndex(
+      RepositoryRuntime group, boolean headOnly, Set<Long> resolvingGroups) {
+    if (!resolvingGroups.add(group.id())) {
+      throw new MavenExceptions.MethodNotAllowed(
+          "Cyclic Helm group repository membership: " + group.name());
+    }
+    try {
+      Instant now = Instant.now();
+      if (indexCache != null) {
+        Optional<CachedAssetMetadata> cached = indexCache.findFresh(group, now);
+        if (cached.isPresent()) {
+          return reader.serveSnapshot(cached.orElseThrow(), headOnly, HelmHostedService.INDEX_PATH);
+        }
+      }
+
+      NexusLikeCacheInfo cacheInfo = indexCache == null ? null : indexCache.current(group, now);
+      List<byte[]> indexes = memberIndexes(group, resolvingGroups);
+      byte[] body = HelmIndex.mergeGroupIndexes(indexes, now);
+      if (indexCache == null || !indexCache.enabled()) {
+        return indexResponse(body, headOnly, null, now);
+      }
+
+      long blobStoreId = requireBlobStore(group);
+      BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);
+      HelmAssetWriter.Stored stored = writer.writeBytes(
+          group,
+          storage,
+          blobStoreId,
+          HelmHostedService.INDEX_PATH,
+          body,
+          HelmIndex.CONTENT_TYPE,
+          HelmAssetKind.INDEX,
+          null,
+          indexCache.freshAttributes(cacheInfo),
+          java.util.Map.of(),
+          "group",
+          null);
+      reader.beforeRead(stored.asset().id(), stored.blob().id(), stored.asset().repositoryId());
+      return indexResponse(body, headOnly, stored.blob().sha1(), stored.asset().lastUpdatedAt());
+    } finally {
+      resolvingGroups.remove(group.id());
+    }
+  }
+
+  private List<byte[]> memberIndexes(
+      RepositoryRuntime group, Set<Long> resolvingGroups) {
+    List<byte[]> indexes = new ArrayList<>();
+    int total = 0;
+    for (RepositoryRuntime member : group.members()) {
+      if (!eligible(member)) continue;
+      MavenResponse response;
+      try {
+        response = switch (member.type()) {
+          case HOSTED -> hosted.get(member, HelmHostedService.INDEX_PATH, false);
+          case PROXY -> proxy.get(member, HelmHostedService.INDEX_PATH, false);
+          case GROUP -> getIndex(member, false, resolvingGroups);
+        };
+      } catch (MavenExceptions.MavenNotFoundException
+          | MavenExceptions.BadUpstreamException
+          | MavenExceptions.MethodNotAllowed ignored) {
+        continue;
+      }
+      byte[] body;
+      try {
+        body = readBounded(response, MAX_AGGREGATED_INDEX_BYTES - total);
+      } catch (IOException e) {
+        continue;
+      }
+      // Isolate an invalid upstream/member index instead of making every healthy member unusable.
+      try {
+        HelmIndex.entries(body);
+      } catch (RuntimeException ignored) {
+        continue;
+      }
+      total += body.length;
+      indexes.add(body);
+    }
+    return indexes;
+  }
+
+  private MavenResponse getAsset(
+      RepositoryRuntime group,
+      String path,
+      HelmAssetKind kind,
+      boolean headOnly,
+      Set<Long> resolvingGroups) {
+    if (!resolvingGroups.add(group.id())) {
+      throw new MavenExceptions.MethodNotAllowed(
+          "Cyclic Helm group repository membership: " + group.name());
+    }
+    NexusCacheType cacheType = kind == HelmAssetKind.PROVENANCE
+        ? NexusCacheType.METADATA
+        : NexusCacheType.CONTENT;
+    try {
+      Optional<Long> cachedMemberId = memberAssetCache == null
+          ? Optional.empty()
+          : memberAssetCache.get(group, path, cacheType);
+      if (cachedMemberId.isPresent()) {
+        RepositoryRuntime cachedMember = group.members().stream()
+            .filter(HelmGroupService::eligible)
+            .filter(member -> member.id() == cachedMemberId.orElseThrow())
+            .findFirst()
+            .orElse(null);
+        if (cachedMember != null) {
+          try {
+            return dispatchAsset(cachedMember, path, kind, headOnly, resolvingGroups);
+          } catch (MavenExceptions.MavenNotFoundException
+              | MavenExceptions.BadUpstreamException
+              | MavenExceptions.MethodNotAllowed ignored) {
+            memberAssetCache.evict(group, path, cacheType);
+          }
+        }
+      }
+
+      for (RepositoryRuntime member : group.members()) {
+        if (!eligible(member)) continue;
+        try {
+          MavenResponse response = dispatchAsset(member, path, kind, headOnly, resolvingGroups);
+          if (memberAssetCache != null) {
+            memberAssetCache.put(group, path, cacheType, member.id());
+          }
+          return response;
+        } catch (MavenExceptions.MavenNotFoundException
+            | MavenExceptions.BadUpstreamException
+            | MavenExceptions.MethodNotAllowed ignored) {
+          // Continue in configured member order until one member serves the path.
+        }
+      }
+      throw new MavenExceptions.MavenNotFoundException(path);
+    } finally {
+      resolvingGroups.remove(group.id());
+    }
+  }
+
+  private MavenResponse dispatchAsset(
+      RepositoryRuntime member,
+      String path,
+      HelmAssetKind kind,
+      boolean headOnly,
+      Set<Long> resolvingGroups) {
+    return switch (member.type()) {
+      case HOSTED -> hosted.get(member, path, headOnly);
+      case PROXY -> proxy.get(member, path, headOnly);
+      case GROUP -> getAsset(member, path, kind, headOnly, resolvingGroups);
+    };
+  }
+
+  static byte[] readBounded(MavenResponse response, int remaining) throws IOException {
+    if (remaining < 0) throw metadataLimitExceeded();
+    try (InputStream body = response.body()) {
+      if (body == null) return new byte[0];
+      byte[] bytes = body.readNBytes(remaining + 1);
+      if (bytes.length > remaining) throw metadataLimitExceeded();
+      return bytes;
+    }
+  }
+
+  private static MavenExceptions.BadUpstreamException metadataLimitExceeded() {
+    return new MavenExceptions.BadUpstreamException(
+        "Helm group index exceeds the 64 MiB aggregation limit");
+  }
+
+  private static MavenResponse indexResponse(
+      byte[] body, boolean headOnly, String etag, Instant lastModified) {
+    if (headOnly) {
+      return MavenResponse.noBody(200, body.length, HelmIndex.CONTENT_TYPE, etag, lastModified);
+    }
+    return MavenResponse.ok(
+        new ByteArrayInputStream(body), body.length, HelmIndex.CONTENT_TYPE, etag, lastModified);
+  }
+
+  private static boolean eligible(RepositoryRuntime member) {
+    return member != null && member.online() && member.format() == RepositoryFormat.HELM;
+  }
+
+  private static HelmAssetKind readableKind(String path) {
+    try {
+      return HelmAssetKind.fromPath(path);
+    } catch (IllegalArgumentException e) {
+      throw new MavenExceptions.MavenNotFoundException(path);
+    }
+  }
+
+  private static void ensureGroup(RepositoryRuntime runtime) {
+    if (runtime.format() != RepositoryFormat.HELM || !runtime.isGroup()) {
+      throw new MavenExceptions.MethodNotAllowed(
+          "Operation is only valid on Helm group repositories");
+    }
+  }
+
+  private static long requireBlobStore(RepositoryRuntime runtime) {
+    if (runtime.blobStoreId() == null) {
+      throw new IllegalStateException("Helm group " + runtime.name() + " has no blob store assigned");
+    }
+    return runtime.blobStoreId();
+  }
+}

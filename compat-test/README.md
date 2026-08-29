@@ -713,11 +713,13 @@ The test creates/updates `go-hosted-compat`, `go-proxy-compat`, `go-group-compat
 `GO_NEXUS_COMPAT_PASSWORD`, `GO_HOSTED_COMPAT_REPOSITORY`, `GO_GROUP_COMPAT_REPOSITORY`, and related
 `GO_GROUP_COMPAT_*` settings when needed.
 
-## Helm Hosted And Proxy Compatibility
+## Helm Hosted, Proxy, And Group Compatibility
 
-The Helm black-box test auto-creates `helm-hosted` and `helm-proxy` on both endpoints when missing.
+The Helm black-box test auto-creates `helm-hosted`, `helm-proxy`, and `helm-group` on both endpoints
+when missing.
 It covers hosted multipart chart push, hosted `index.yaml` and chart reads, hosted `HEAD`, hosted
-delete cleanup, plus proxy `index.yaml` URL rewriting and proxied chart download.
+delete cleanup, proxy `index.yaml` URL rewriting and proxied chart download, plus ordered group
+index aggregation and hosted/proxy chart resolution.
 
 ```bash
 NEXUS_COMPAT_BASE_URL=http://localhost:28090/ \
@@ -731,9 +733,9 @@ mvn -pl compat-test -am \
   test
 ```
 
-Override repository names with `COMPAT_HELM_HOSTED_REPOSITORY` and
-`COMPAT_HELM_PROXY_REPOSITORY`. Override the proxy upstream with `COMPAT_HELM_REMOTE_URL`; default
-is `https://charts.bitnami.com/bitnami`.
+Override repository names with `COMPAT_HELM_HOSTED_REPOSITORY`,
+`COMPAT_HELM_PROXY_REPOSITORY`, and `COMPAT_HELM_GROUP_REPOSITORY`. Override the proxy upstream
+with `COMPAT_HELM_REMOTE_URL`; default is `https://helm.github.io/examples`.
 
 ## Raw Hosted, Proxy, And Group Compatibility
 

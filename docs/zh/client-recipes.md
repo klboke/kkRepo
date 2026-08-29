@@ -174,10 +174,10 @@ Archive 校验、write policy、Cleanup 和 Artifact Scanning 语义见
 
 ## Helm
 
-添加 proxy 或 hosted chart 仓库：
+读取时添加 group 仓库，使私有 chart 优先于配置的公共上游：
 
 ```bash
-helm repo add acme https://nexus.example.com/repository/helm-proxy/
+helm repo add acme https://nexus.example.com/repository/helm-group/
 helm repo update
 helm search repo acme
 ```
@@ -196,6 +196,9 @@ curl -u alice:"$KKREPO_PASSWORD" \
 ```text
 https://nexus.example.com/repository/helm-hosted/
 ```
+
+在 `helm-group` 中把 `helm-hosted` 放在 `helm-proxy` 前。如果多个成员发布相同 chart 名称和
+版本，合并后的 `index.yaml` 保留第一个成员的 release。
 
 ## Cargo / Rust
 

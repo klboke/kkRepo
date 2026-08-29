@@ -54,6 +54,25 @@ import org.junit.jupiter.api.Test;
 class RepositoryServiceTest {
 
   @Test
+  void helmGroupAcceptsOrderedHostedAndNestedGroupMembers() {
+    RepositoryRecord hosted = helmRepository(61L, "helm-private", RepositoryType.HOSTED);
+    RepositoryRecord nested = helmRepository(62L, "helm-upstreams", RepositoryType.GROUP);
+    StubRepositoryDao repositories = new StubRepositoryDao(hosted, nested);
+    repositories.replaceMembers(62L, List.of(61L));
+    RepositoryService service = service(repositories);
+
+    RepositoryView created = service.create(new CreateCommand(
+        "helm-all", "helm-group", true, "default", true,
+        null, null, null, null, null,
+        new GroupSettings(List.of("helm-private", "helm-upstreams"))));
+
+    assertEquals(RepositoryFormat.HELM, created.format());
+    assertEquals(RepositoryType.GROUP, created.type());
+    assertEquals(List.of("helm-private", "helm-upstreams"), created.group().memberNames());
+    assertEquals(List.of(61L, 62L), repositories.membersByGroupId.get(100L));
+  }
+
+  @Test
   void pypiProxyRemoteIndexPathDefaultsPreservesEmptyAndRoundTripsUpdates() {
     StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
     RepositoryService service = service(repositories);
@@ -2343,6 +2362,25 @@ class RepositoryServiceTest {
         "ALLOW_ONCE",
         true,
         attributes);
+  }
+
+  private static RepositoryRecord helmRepository(long id, String name, RepositoryType type) {
+    String recipe = "helm-" + type.name().toLowerCase(java.util.Locale.ROOT);
+    return new RepositoryRecord(
+        id,
+        name,
+        RepositoryFormat.HELM,
+        type,
+        recipe,
+        true,
+        1L,
+        null,
+        null,
+        null,
+        null,
+        type == RepositoryType.HOSTED ? "ALLOW" : null,
+        true,
+        Map.of("recipe", recipe));
   }
 
   private static RepositoryRecord dockerRepository(long id, String name, int connectorPort) {

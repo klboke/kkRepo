@@ -80,7 +80,7 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 | npm | hosted / proxy / group | 支持 `npm publish`、dist-tag 和管理台上传 | 支持 | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 | PyPI | hosted / proxy / group | 支持 twine 上传和管理台上传 | 支持 simple index | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 | Go | hosted / proxy / group | 支持 Nexus 兼容的 `<version>.zip` PUT 与 UI/API 上传；Go 客户端可通过同一 group 解析私有 hosted 和公共 proxy module | 支持 | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
-| Helm | hosted / proxy | 支持 chart push、PUT 上传和管理台上传 | 支持 index.yaml | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
+| Helm | hosted / proxy / group | 支持 chart push、PUT 上传、有序 group 解析和管理台上传 | 支持 index.yaml 聚合 | 默认迁移 hosted；proxy 可选；group definition 支持迁移 |
 | Cargo / Rust | hosted / proxy / group | 支持 `cargo publish`、yank/unyank、`CargoToken` 认证和 UI/API `.crate` 上传 | 支持 sparse index 和 `cargo search` | 支持 Cargo 仓库迁移 |
 | Dart / Pub | hosted / proxy / group | 支持 `dart pub publish`、`dart pub get`、`flutter pub get`、`PubToken` 认证和 UI/API `.tar.gz` 上传 | 支持 package/version metadata、archive 属性和 Pub 搜索 | 支持 Nexus 3.92.0 Pub hosted 迁移，以及显式选择的 proxy cache 迁移 |
 | Composer / PHP | hosted / proxy / group | Composer 没有标准 publish 命令；支持 Components API 和 UI 上传 zip/tar archive，并通过 Composer 2 安装 | 支持 package/version、dist、HTML View、Browse/Search 和 Usage | Nexus 原生 Composer proxy 配置可迁移；cache 仅在管理员显式选择且 source profile 证明后迁移 |
@@ -199,7 +199,7 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 13. ✅ R / CRAN - 已实现 hosted/proxy/group、有界 source package 校验、确定性 `PACKAGES.gz`、延迟校验 proxy、snapshot-bound group、UI/API 上传、Browse/Search、Cleanup、partial-coverage 扫描、shape-gated Nexus 3.94 迁移、R 4.5/4.6 客户端 E2E、双数据库高效索引和可复现 Nexus 性能门禁（[使用指南](docs/zh/repository-guides/r-cran.md)、[设计说明](docs/zh/dev/r-cran-repository-design.md)、[性能基线](docs/zh/dev/r-cran-performance-baseline.md)）。
 14. ✅ Go - 已实现 hosted/proxy/group recipe、Nexus 兼容 module ZIP 发布、官方 path/version/archive 校验、有序 group 聚合、Cleanup、安全扫描、UI/API 上传、迁移、真实 Go 客户端 E2E、Nexus 3.94 黑盒对比和可复现性能基线（[使用指南](docs/zh/repository-guides/go.md)、[性能基线](docs/zh/dev/go-hosted-performance-baseline.md)）。
 15. ohpm / HarmonyOS - 规划中，覆盖 hosted、proxy、group、导入和管理端能力（[设计说明](docs/zh/dev/ohpm-repository-design.md)）
-16. Helm group 仓库 - 规划补齐 Nexus 兼容的 hosted、proxy 与 group member 有序聚合能力。
+16. ✅ Helm group 仓库 - 已实现 hosted、proxy 与嵌套 group member 的配置顺序聚合、首成员优先、持久化 index 缓存、真实 Helm 客户端验证和 Nexus definition 迁移（[使用指南](docs/zh/repository-guides/helm.md)）。
 17. Git Large File Storage (LFS) - 规划 Nexus 兼容的 hosted 仓库，用于 Git 大文件制品存储。
 18. Eclipse p2 - 规划 Nexus 兼容的 proxy 仓库，覆盖 Eclipse 与 Equinox update site。
 19. CocoaPods - 规划 Nexus 兼容的 proxy 仓库，用于代理 CocoaPods 依赖。

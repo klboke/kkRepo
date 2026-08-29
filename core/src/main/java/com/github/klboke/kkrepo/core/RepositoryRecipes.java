@@ -36,6 +36,7 @@ public final class RepositoryRecipes {
       new RepositoryRecipe("go-group", RepositoryFormat.GO, RepositoryType.GROUP),
       new RepositoryRecipe("helm-hosted", RepositoryFormat.HELM, RepositoryType.HOSTED),
       new RepositoryRecipe("helm-proxy", RepositoryFormat.HELM, RepositoryType.PROXY),
+      new RepositoryRecipe("helm-group", RepositoryFormat.HELM, RepositoryType.GROUP),
       new RepositoryRecipe("docker-hosted", RepositoryFormat.DOCKER, RepositoryType.HOSTED),
       new RepositoryRecipe("docker-proxy", RepositoryFormat.DOCKER, RepositoryType.PROXY),
       new RepositoryRecipe("docker-group", RepositoryFormat.DOCKER, RepositoryType.GROUP),

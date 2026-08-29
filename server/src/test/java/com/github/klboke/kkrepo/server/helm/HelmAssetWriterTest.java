@@ -25,6 +25,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.protocol.helm.HelmAssetKind;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
+import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -64,6 +65,7 @@ class HelmAssetWriterTest {
     verify(fixture.componentDao).upsertReturningId(any());
     verify(fixture.browseNodeDao).upsertPathAncestors(10L, "demo-1.2.3.tgz", 11L, 3L);
     verify(fixture.cache).evictAfterCommit(10L, "demo-1.2.3.tgz");
+    verify(fixture.groupMemberAssetCache).invalidateMemberAfterCommit(10L);
   }
 
   @Test
@@ -140,6 +142,22 @@ class HelmAssetWriterTest {
     verify(fixture.componentDao).deleteIfNoAssets(3L);
     verify(fixture.cache).evictAfterCommit(runtime.id(), "demo-1.0.0.tgz");
     verify(fixture.storage, never()).delete(any());
+    verify(fixture.groupMemberAssetCache).invalidateMemberAfterCommit(runtime.id());
+  }
+
+  @Test
+  void indexWriteInvalidatesContainingGroupIndexes() {
+    Fixture fixture = fixture();
+    stubNewAsset(fixture, "index.yaml");
+
+    fixture.writer.writeBytes(
+        runtime(), fixture.storage, 7L, "index.yaml",
+        "apiVersion: v1\nentries: {}\n".getBytes(StandardCharsets.UTF_8),
+        "text/x-yaml", HelmAssetKind.INDEX, null,
+        Map.of(), Map.of(), "hosted", null);
+
+    verify(fixture.groupMemberAssetCache).invalidateMemberAfterCommit(10L);
+    verify(fixture.groupIndexCache).invalidateMemberAfterCommit(10L);
   }
 
   private static void stubNewAsset(Fixture fixture, String path) {
@@ -167,14 +185,20 @@ class HelmAssetWriterTest {
     ComponentDao componentDao = mock(ComponentDao.class);
     BrowseNodeDao browseNodeDao = mock(BrowseNodeDao.class);
     AssetMetadataCache cache = mock(AssetMetadataCache.class);
+    HelmGroupIndexCache groupIndexCache = mock(HelmGroupIndexCache.class);
+    GroupMemberAssetCache groupMemberAssetCache = mock(GroupMemberAssetCache.class);
     BlobStorage storage = mock(BlobStorage.class);
     return new Fixture(
         assetDao,
         componentDao,
         browseNodeDao,
         cache,
+        groupIndexCache,
+        groupMemberAssetCache,
         storage,
-        new HelmAssetWriter(assetDao, componentDao, browseNodeDao, cache, null));
+        new HelmAssetWriter(
+            assetDao, componentDao, browseNodeDao, cache, null,
+            groupIndexCache, groupMemberAssetCache));
   }
 
   private static RepositoryRuntime runtime() {
@@ -209,6 +233,8 @@ class HelmAssetWriterTest {
       ComponentDao componentDao,
       BrowseNodeDao browseNodeDao,
       AssetMetadataCache cache,
+      HelmGroupIndexCache groupIndexCache,
+      GroupMemberAssetCache groupMemberAssetCache,
       BlobStorage storage,
       HelmAssetWriter writer) {
   }

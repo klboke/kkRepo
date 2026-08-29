@@ -12,9 +12,11 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
@@ -81,6 +83,51 @@ public final class HelmIndex {
       });
     }
     return new RewriteResult(dump(root), remoteUrlsByLocalPath);
+  }
+
+  /**
+   * Merge member indexes in configured group order.
+   *
+   * <p>Helm identifies one chart release by name and version. The first member providing a release
+   * therefore wins, while unique releases from later members remain visible. Member URLs are
+   * rewritten to repository-local paths so clients always download through the group endpoint.
+   */
+  public static byte[] mergeGroupIndexes(Collection<byte[]> memberIndexes, Instant generated) {
+    Map<String, Object> mergedEntries = new LinkedHashMap<>();
+    Map<String, Set<String>> releasesByEntry = new LinkedHashMap<>();
+    if (memberIndexes != null) {
+      for (byte[] memberIndex : memberIndexes) {
+        if (memberIndex == null || memberIndex.length == 0) continue;
+        Map<String, Object> root = load(memberIndex);
+        Object rawEntries = root.get("entries");
+        if (!(rawEntries instanceof Map<?, ?> entries)) continue;
+        entries.forEach((rawName, rawVersions) -> {
+          String entryName = rawName == null ? null : rawName.toString();
+          if (entryName == null || entryName.isBlank() || !(rawVersions instanceof List<?> versions)) {
+            return;
+          }
+          @SuppressWarnings("unchecked")
+          List<Object> mergedVersions = (List<Object>) mergedEntries.computeIfAbsent(
+              entryName, ignored -> new ArrayList<>());
+          Set<String> releases = releasesByEntry.computeIfAbsent(entryName, ignored -> new HashSet<>());
+          for (Object rawVersion : versions) {
+            if (!(rawVersion instanceof Map<?, ?> versionMap)) continue;
+            String name = string(versionMap.get("name"), entryName);
+            String version = string(versionMap.get("version"), null);
+            if (name == null || name.isBlank() || version == null || version.isBlank()) continue;
+            if (!releases.add(name + '\0' + version)) continue;
+            rewriteEntry(entryName, versionMap, null, new LinkedHashMap<>());
+            mergedVersions.add(versionMap);
+          }
+        });
+      }
+    }
+    mergedEntries.entrySet().removeIf(entry -> ((List<?>) entry.getValue()).isEmpty());
+    Map<String, Object> root = new LinkedHashMap<>();
+    root.put("apiVersion", API_VERSION);
+    root.put("entries", mergedEntries);
+    root.put("generated", INSTANTS.format(generated == null ? Instant.now() : generated));
+    return dump(root);
   }
 
   public static List<Entry> entries(byte[] yamlBytes) {
@@ -206,9 +253,28 @@ public final class HelmIndex {
       String local = localUrl(name, version, url);
       if (local == null || local.isBlank()) continue;
       rewritten.add(local);
-      remoteUrlsByLocalPath.putIfAbsent(local, resolveRemoteUrl(remoteBaseUrl, url));
+      String remote = resolveRemoteUrl(remoteBaseUrl, url);
+      if (local.toLowerCase().endsWith(".tgz.prov")) {
+        // An explicitly indexed provenance URL is authoritative over the derived chart sibling.
+        remoteUrlsByLocalPath.put(local, remote);
+      } else {
+        remoteUrlsByLocalPath.putIfAbsent(local, remote);
+      }
+      if (local.toLowerCase().endsWith(".tgz")) {
+        remoteUrlsByLocalPath.putIfAbsent(local + ".prov", provenanceUrl(remote));
+      }
     }
     putRaw(rawEntry, "urls", rewritten);
+  }
+
+  private static String provenanceUrl(String chartUrl) {
+    if (chartUrl == null || chartUrl.isBlank()) return chartUrl;
+    int query = chartUrl.indexOf('?');
+    int fragment = chartUrl.indexOf('#');
+    int suffix = query < 0 ? fragment : fragment < 0 ? query : Math.min(query, fragment);
+    return suffix < 0
+        ? chartUrl + ".prov"
+        : chartUrl.substring(0, suffix) + ".prov" + chartUrl.substring(suffix);
   }
 
   private static String localUrl(String name, String version, String oldUrl) {

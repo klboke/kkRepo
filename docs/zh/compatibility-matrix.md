@@ -30,7 +30,7 @@
 | npm | hosted / proxy / group | `npm publish`、tarball 下载、包 metadata、dist-tags、audit endpoint 兼容、管理台上传 | 支持 | 默认迁移 hosted；proxy 可选 | `NpmProtocolCompatibilityTest`、`NpmRepositoryBlackBoxCompatibilityTest`、`ComponentUploadBlackBoxCompatibilityTest` |
 | PyPI | hosted / proxy / group | `twine upload`、包下载、simple index 读取、管理台上传 | 支持 simple index | 默认迁移 hosted；proxy 可选 | `PypiRepositoryBlackBoxCompatibilityTest`、`ComponentUploadBlackBoxCompatibilityTest` |
 | Go | hosted / proxy / group | Nexus 兼容 module ZIP PUT 与 UI/API 上传；list、info、mod、zip、latest；group 语义合并与有序 fallback；Cleanup 与 ZIP 扫描 | 支持 | hosted 默认迁移；proxy 可选 | `GoProxyBlackBoxCompatibilityTest`、Go protocol/server 测试、真实 Go 客户端 E2E、Cleanup/扫描合同与 Nexus 性能基线 |
-| Helm | hosted / proxy | Chart push、PUT 上传、chart 下载、`index.yaml`、proxy index rewrite、管理台上传 | 支持 `index.yaml` | 默认迁移 hosted；proxy 可选 | `HelmRepositoryBlackBoxCompatibilityTest`、`ComponentUploadBlackBoxCompatibilityTest` |
+| Helm | hosted / proxy / group | Chart push、PUT 上传、chart/provenance 下载、proxy URL rewrite、有序与嵌套 group index 聚合、首成员 asset fallback、管理台上传 | 支持 `index.yaml` 聚合 | hosted 默认迁移；proxy 可选；支持 group definition | `HelmRepositoryBlackBoxCompatibilityTest`、Helm protocol/server 测试、真实 Helm client E2E、`ComponentUploadBlackBoxCompatibilityTest` |
 | Cargo / Rust | hosted / proxy / group | Sparse registry 读取、`cargo publish`、`.crate` 下载、yank/unyank、Cargo search、CargoToken 认证、UI/API `.crate` 上传 | 支持 sparse index 和 Cargo search | source profile 确认 Cargo content 后支持 datastore H2/PostgreSQL hosted；proxy 仅在显式选择且计划为 `FULL` 时迁移 | `CargoRepositoryBlackBoxCompatibilityTest`、`ComponentUploadBlackBoxCompatibilityTest` |
 | Dart / Pub | hosted / proxy / group | `dart pub publish`、`dart pub get`、`flutter pub get`、package metadata、archive 下载、Nexus `api/archives` 下载别名、`archive_sha256`、PubToken 认证、UI/API `.tar.gz` 上传 | 支持 package/version metadata 和 archive 属性 | Nexus 3.92.0 datastore source profile 确认 Pub content 后支持 hosted full；proxy cache 仅在显式选择 backup 且计划为 `FULL` 时迁移 | `PubRepositoryBlackBoxCompatibilityTest`、`ComponentUploadBlackBoxCompatibilityTest` |
 | Composer / PHP | hosted / proxy / group | Composer 2 `install/show`、`packages.json`、stable/dev p2 metadata、Nexus 风格 dist path、Basic auth、Components API/UI archive 上传、group canonical first-match | 支持 package/version、dist、HTML View、Browse/Search 和 Usage | Nexus 原生 Composer 仅支持 proxy；配置迁移后，cache 只有在管理员通过 `backupProxyRepositories` 显式选择且 source profile 证明 content model 时才迁移 | `ComposerRepositoryBlackBoxCompatibilityTest`、Composer server/protocol tests、真实 Composer client E2E、migration E2E |
@@ -75,7 +75,7 @@ Swift 验证证据按层级区分。Nexus 3.94.x 对比覆盖 canonical JSON/`Li
 /repository/maven-public/org/example/app/1.0.0/app-1.0.0.pom
 /repository/npm-hosted/@scope/package
 /repository/pypi-proxy/simple/demo/
-/repository/helm-hosted/index.yaml
+/repository/helm-group/index.yaml
 /repository/cargo-group/config.json
 /repository/cargo-hosted/crates/demo/1.0.0/download
 /repository/pub-group/api/packages/path
