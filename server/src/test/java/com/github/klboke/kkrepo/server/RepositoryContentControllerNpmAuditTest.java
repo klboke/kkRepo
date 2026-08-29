@@ -1,14 +1,21 @@
 package com.github.klboke.kkrepo.server;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
+import com.github.klboke.kkrepo.server.npm.NpmTokenService;
 import com.github.klboke.kkrepo.server.support.dao.RepositoryDaoAdapter;
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -51,7 +58,41 @@ class RepositoryContentControllerNpmAuditTest {
     assertEquals(0, ((Map<String, Object>) body.get("metadata")).get("totalDependencies"));
   }
 
+  @Test
+  void npmLegacyLoginReturnsMaterializedTokenJson() throws Exception {
+    assertLoginResponse("-/user/org.couchdb.user:alice");
+  }
+
+  private static void assertLoginResponse(String path) throws Exception {
+    FakeRepositoryDao repositories = new FakeRepositoryDao();
+    repositories.repository(repository("npm-example", RepositoryFormat.NPM, RepositoryType.HOSTED));
+    byte[] tokenJson = "{\"token\":\"NpmToken.generated-token\"}"
+        .getBytes(StandardCharsets.UTF_8);
+    NpmTokenService tokenService = mock(NpmTokenService.class);
+    when(tokenService.login(any()))
+        .thenReturn(MavenResponse.ok(
+            new ByteArrayInputStream(tokenJson), tokenJson.length, "application/json", null, null)
+            .withStatus(201));
+    RepositoryProtocolController controller = controller(repositories, tokenService);
+    MockHttpServletRequest request = new MockHttpServletRequest(
+        "PUT", "/repository/npm-example/" + path);
+    request.setContent("{\"name\":\"alice\",\"password\":\"secret\"}"
+        .getBytes(StandardCharsets.UTF_8));
+
+    ResponseEntity<?> response = controller.put("npm-example", request);
+
+    assertEquals(201, response.getStatusCode().value());
+    assertEquals(tokenJson.length, response.getHeaders().getContentLength());
+    assertEquals("{\"token\":\"NpmToken.generated-token\"}",
+        new String((byte[]) response.getBody(), StandardCharsets.UTF_8));
+  }
+
   private static RepositoryProtocolController controller(FakeRepositoryDao repositories) {
+    return controller(repositories, null);
+  }
+
+  private static RepositoryProtocolController controller(
+      FakeRepositoryDao repositories, NpmTokenService tokenService) {
     return RepositoryProtocolControllerTestSupport.controller(
         new RepositoryRuntimeRegistry(repositories, 0),
         null, null, null,
@@ -59,7 +100,7 @@ class RepositoryContentControllerNpmAuditTest {
         null, null,
         null,
         null, null, null,
-        null, null,
+        null, tokenService,
         null, null, null,
         null, null, null,
         null, null, null,
