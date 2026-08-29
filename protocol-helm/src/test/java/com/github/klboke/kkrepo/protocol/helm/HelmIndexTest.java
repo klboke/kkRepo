@@ -181,6 +181,53 @@ class HelmIndexTest {
   }
 
   @Test
+  void resolvesChartAndDerivedProvenanceToTheExactAdvertisedRelease() {
+    byte[] selected = """
+        entries:
+          demo:
+            - name: demo
+              version: 1.0.0
+              digest: BBBB
+              urls: [charts/original-name.tgz]
+        """.getBytes(StandardCharsets.UTF_8);
+    HelmIndex.Release release = HelmIndex.releaseForPath(selected, "demo-1.0.0.tgz")
+        .orElseThrow();
+
+    assertEquals(
+        new HelmIndex.Release("demo", "1.0.0", "BBBB", List.of("demo-1.0.0.tgz")),
+        release);
+    assertEquals(
+        release,
+        HelmIndex.releaseForPath(selected, "/demo-1.0.0.tgz.prov").orElseThrow());
+    assertTrue(HelmIndex.containsRelease(selected, release, "demo-1.0.0.tgz"));
+    assertTrue(HelmIndex.containsRelease(selected, release, "demo-1.0.0.tgz.prov"));
+  }
+
+  @Test
+  void rejectsSameCoordinatesWhenMemberDigestDoesNotMatchTheGroupWinner() {
+    byte[] selected = """
+        entries:
+          demo:
+            - name: demo
+              version: 1.0.0
+              digest: digest-b
+              urls: [demo-1.0.0.tgz]
+        """.getBytes(StandardCharsets.UTF_8);
+    byte[] conflicting = """
+        entries:
+          demo:
+            - name: demo
+              version: 1.0.0
+              digest: digest-a
+              urls: [demo-1.0.0.tgz]
+        """.getBytes(StandardCharsets.UTF_8);
+    HelmIndex.Release release = HelmIndex.releaseForPath(selected, "demo-1.0.0.tgz")
+        .orElseThrow();
+
+    assertFalse(HelmIndex.containsRelease(conflicting, release, "demo-1.0.0.tgz"));
+  }
+
+  @Test
   void toleratesMalformedAndNonMappingIndexes() {
     byte[] malformedUrl = """
         entries:

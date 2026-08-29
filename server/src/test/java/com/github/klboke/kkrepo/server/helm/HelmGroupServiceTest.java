@@ -89,6 +89,16 @@ class HelmGroupServiceTest {
     MavenResponse chart = MavenResponse.noBody(200);
     MavenResponse provenance = MavenResponse.noBody(200);
     when(fixture.memberCache.get(any(), any(), any())).thenReturn(Optional.empty());
+    when(fixture.hosted.get(hosted, "index.yaml", false))
+        .thenAnswer(ignored -> index("entries: {}\n"));
+    when(fixture.proxy.get(proxy, "index.yaml", false)).thenAnswer(ignored -> index("""
+        entries:
+          demo:
+            - name: demo
+              version: 1.0.0
+              digest: digest-b
+              urls: [demo-1.0.0.tgz]
+        """));
     when(fixture.hosted.get(hosted, "demo-1.0.0.tgz", true))
         .thenThrow(new MavenExceptions.MavenNotFoundException("missing"));
     when(fixture.hosted.get(hosted, "demo-1.0.0.tgz.prov", true))
@@ -132,7 +142,7 @@ class HelmGroupServiceTest {
     when(fixture.indexCache.enabled()).thenReturn(true);
     when(fixture.indexCache.current(eq(group), any())).thenReturn(cacheInfo);
     when(fixture.indexCache.freshAttributes(cacheInfo)).thenReturn(attributes);
-    when(fixture.hosted.get(hosted, "index.yaml", false)).thenReturn(index("""
+    when(fixture.hosted.get(hosted, "index.yaml", false)).thenAnswer(ignored -> index("""
         entries:
           private:
             - name: private
@@ -165,6 +175,22 @@ class HelmGroupServiceTest {
     MavenResponse expected = MavenResponse.noBody(200);
     when(fixture.memberCache.get(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT))
         .thenReturn(Optional.of(proxy.id()));
+    when(fixture.hosted.get(hosted, "index.yaml", false)).thenAnswer(ignored -> index("""
+        entries:
+          demo:
+            - name: demo
+              version: 1.0.0
+              digest: same
+              urls: [demo-1.0.0.tgz]
+        """));
+    when(fixture.proxy.get(proxy, "index.yaml", false)).thenAnswer(ignored -> index("""
+        entries:
+          demo:
+            - name: demo
+              version: 1.0.0
+              digest: same
+              urls: [demo-1.0.0.tgz]
+        """));
     when(fixture.proxy.get(proxy, "demo-1.0.0.tgz", false))
         .thenThrow(new MavenExceptions.BadUpstreamException("unavailable"));
     when(fixture.hosted.get(hosted, "demo-1.0.0.tgz", false)).thenReturn(expected);
@@ -183,9 +209,71 @@ class HelmGroupServiceTest {
     MavenResponse expected = MavenResponse.noBody(200);
     when(fixture.memberCache.get(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT))
         .thenReturn(Optional.of(proxy.id()));
+    when(fixture.hosted.get(hosted, "index.yaml", false))
+        .thenAnswer(ignored -> index("entries: {}\n"));
+    when(fixture.proxy.get(proxy, "index.yaml", false)).thenAnswer(ignored -> index("""
+        entries:
+          demo:
+            - name: demo
+              version: 1.0.0
+              digest: proxy
+              urls: [demo-1.0.0.tgz]
+        """));
     when(fixture.proxy.get(proxy, "demo-1.0.0.tgz", true)).thenReturn(expected);
 
     assertSame(expected, fixture.service.get(group, "demo-1.0.0.tgz", true));
+  }
+
+  @Test
+  void bindsChartAndProvenanceDownloadsToTheReleaseSelectedByTheMergedIndex() {
+    Fixture fixture = fixture();
+    RepositoryRuntime hosted = runtime(2L, "higher-priority", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime proxy = runtime(3L, "index-winner", RepositoryType.PROXY, true, List.of());
+    RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of(hosted, proxy));
+    CachedAssetMetadata cachedIndex = mock(CachedAssetMetadata.class);
+    MavenResponse chart = MavenResponse.noBody(200);
+    MavenResponse provenance = MavenResponse.noBody(200);
+    when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.of(cachedIndex));
+    when(fixture.reader.serveSnapshot(cachedIndex, false, "index.yaml")).thenAnswer(ignored -> index("""
+        entries:
+          demo:
+            - name: demo
+              version: 1.0.0
+              digest: digest-b
+              urls: [demo-1.0.0.tgz]
+        """));
+    when(fixture.hosted.get(hosted, "index.yaml", false)).thenAnswer(ignored -> index("""
+        entries:
+          demo:
+            - name: demo
+              version: 1.0.0
+              digest: digest-a
+              urls: [demo-1.0.0.tgz]
+        """));
+    when(fixture.proxy.get(proxy, "index.yaml", false)).thenAnswer(ignored -> index("""
+        entries:
+          demo:
+            - name: demo
+              version: 1.0.0
+              digest: digest-b
+              urls: [demo-1.0.0.tgz]
+        """));
+    when(fixture.hosted.get(hosted, "demo-1.0.0.tgz", false))
+        .thenReturn(MavenResponse.noBody(200));
+    when(fixture.hosted.get(hosted, "demo-1.0.0.tgz.prov", false))
+        .thenReturn(MavenResponse.noBody(200));
+    when(fixture.proxy.get(proxy, "demo-1.0.0.tgz", false)).thenReturn(chart);
+    when(fixture.proxy.get(proxy, "demo-1.0.0.tgz.prov", false)).thenReturn(provenance);
+
+    assertSame(chart, fixture.service.get(group, "demo-1.0.0.tgz", false));
+    assertSame(provenance, fixture.service.get(group, "demo-1.0.0.tgz.prov", false));
+
+    verify(fixture.hosted, never()).get(hosted, "demo-1.0.0.tgz", false);
+    verify(fixture.hosted, never()).get(hosted, "demo-1.0.0.tgz.prov", false);
+    verify(fixture.memberCache).put(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, proxy.id());
+    verify(fixture.memberCache).put(
+        group, "demo-1.0.0.tgz.prov", NexusCacheType.METADATA, proxy.id());
   }
 
   @Test

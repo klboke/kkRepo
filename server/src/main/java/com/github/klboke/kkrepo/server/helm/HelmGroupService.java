@@ -173,6 +173,7 @@ public class HelmGroupService {
         ? NexusCacheType.METADATA
         : NexusCacheType.CONTENT;
     try {
+      HelmIndex.Release release = advertisedRelease(group, path);
       Optional<Long> cachedMemberId = memberAssetCache == null
           ? Optional.empty()
           : memberAssetCache.get(group, path, cacheType);
@@ -184,17 +185,22 @@ public class HelmGroupService {
             .orElse(null);
         if (cachedMember != null) {
           try {
-            return dispatchAsset(cachedMember, path, kind, headOnly, resolvingGroups);
+            if (memberAdvertises(cachedMember, release, path)) {
+              return dispatchAsset(cachedMember, path, kind, headOnly, resolvingGroups);
+            }
           } catch (MavenExceptions.MavenNotFoundException
               | MavenExceptions.BadUpstreamException
               | MavenExceptions.MethodNotAllowed ignored) {
-            memberAssetCache.evict(group, path, cacheType);
+            // Re-resolve against the authoritative merged-index release below.
           }
+          memberAssetCache.evict(group, path, cacheType);
         }
       }
 
       for (RepositoryRuntime member : group.members()) {
         if (!eligible(member)) continue;
+        if (cachedMemberId.isPresent() && member.id() == cachedMemberId.orElseThrow()) continue;
+        if (!memberAdvertises(member, release, path)) continue;
         try {
           MavenResponse response = dispatchAsset(member, path, kind, headOnly, resolvingGroups);
           if (memberAssetCache != null) {
@@ -210,6 +216,44 @@ public class HelmGroupService {
       throw new MavenExceptions.MavenNotFoundException(path);
     } finally {
       resolvingGroups.remove(group.id());
+    }
+  }
+
+  private HelmIndex.Release advertisedRelease(RepositoryRuntime group, String path) {
+    try {
+      IndexResult index = getIndex(group, false, new HashSet<>());
+      byte[] body = readBounded(index.response(), MAX_AGGREGATED_INDEX_BYTES);
+      return HelmIndex.releaseForPath(body, path)
+          .orElseThrow(() -> new MavenExceptions.MavenNotFoundException(path));
+    } catch (IOException e) {
+      throw new MavenExceptions.BadUpstreamException(
+          "Failed reading Helm group index for " + group.name(), e);
+    } catch (MavenExceptions.MavenNotFoundException e) {
+      throw e;
+    } catch (RuntimeException e) {
+      throw new MavenExceptions.BadUpstreamException(
+          "Invalid Helm group index for " + group.name(), e);
+    }
+  }
+
+  private boolean memberAdvertises(
+      RepositoryRuntime member, HelmIndex.Release release, String path) {
+    try {
+      MavenResponse response = member.isGroup()
+          ? getIndex(member, false, new HashSet<>()).response()
+          : member.isHosted()
+              ? hosted.get(member, HelmHostedService.INDEX_PATH, false)
+              : proxy.get(member, HelmHostedService.INDEX_PATH, false);
+      byte[] body = readBounded(response, MAX_AGGREGATED_INDEX_BYTES);
+      return HelmIndex.containsRelease(body, release, path);
+    } catch (IOException
+        | MavenExceptions.MavenNotFoundException
+        | MavenExceptions.BadUpstreamException
+        | MavenExceptions.MethodNotAllowed ignored) {
+      return false;
+    } catch (RuntimeException ignored) {
+      // A malformed member index cannot be trusted to serve the release selected by the group.
+      return false;
     }
   }
 

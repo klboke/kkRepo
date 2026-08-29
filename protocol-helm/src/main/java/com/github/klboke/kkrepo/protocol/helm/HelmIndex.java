@@ -16,6 +16,8 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.LoaderOptions;
@@ -145,6 +147,92 @@ public final class HelmIndex {
       }
     });
     return result;
+  }
+
+  /**
+   * Resolve the release advertised for a repository-local chart or provenance path.
+   *
+   * <p>Provenance files are conventionally discovered by appending {@code .prov} to the chart
+   * URL, so they remain bound to the same release even when the index only lists the chart
+   * archive.
+   */
+  public static Optional<Release> releaseForPath(byte[] yamlBytes, String path) {
+    String requested = normalizeLocalPath(path);
+    return releases(yamlBytes).stream()
+        .filter(release -> advertises(release, requested))
+        .findFirst();
+  }
+
+  /** Return whether a member index advertises the exact release selected by a group index. */
+  public static boolean containsRelease(byte[] yamlBytes, Release expected, String path) {
+    if (expected == null) return false;
+    String requested = normalizeLocalPath(path);
+    return releases(yamlBytes).stream()
+        .anyMatch(candidate -> sameRelease(candidate, expected)
+            && advertises(candidate, requested));
+  }
+
+  private static List<Release> releases(byte[] yamlBytes) {
+    Map<String, Object> root = load(yamlBytes);
+    Object rawEntries = root.get("entries");
+    if (!(rawEntries instanceof Map<?, ?> entries)) return List.of();
+    List<Release> result = new ArrayList<>();
+    entries.forEach((name, rawVersions) -> {
+      if (!(rawVersions instanceof List<?> versions)) return;
+      for (Object rawVersion : versions) {
+        if (!(rawVersion instanceof Map<?, ?> versionMap)) continue;
+        String chartName = string(versionMap.get("name"), name == null ? null : name.toString());
+        String chartVersion = string(versionMap.get("version"), null);
+        if (chartName == null || chartName.isBlank()
+            || chartVersion == null || chartVersion.isBlank()) {
+          continue;
+        }
+        List<String> localUrls = stringList(versionMap.get("urls")).stream()
+            .map(url -> localUrl(chartName, chartVersion, url))
+            .filter(Objects::nonNull)
+            .filter(url -> !url.isBlank())
+            .toList();
+        result.add(new Release(
+            chartName,
+            chartVersion,
+            string(versionMap.get("digest"), null),
+            localUrls));
+      }
+    });
+    return result;
+  }
+
+  private static boolean sameRelease(Release candidate, Release expected) {
+    return Objects.equals(candidate.name(), expected.name())
+        && Objects.equals(candidate.version(), expected.version())
+        && Objects.equals(normalizeDigest(candidate.digest()), normalizeDigest(expected.digest()));
+  }
+
+  private static boolean advertises(Release release, String requested) {
+    if (requested == null || requested.isBlank()) return false;
+    for (String url : release.urls()) {
+      String local = normalizeLocalPath(url);
+      if (requested.equals(local)) return true;
+      if (requested.endsWith(".tgz.prov")
+          && local.endsWith(".tgz")
+          && requested.equals(local + ".prov")) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static String normalizeLocalPath(String path) {
+    if (path == null) return "";
+    String normalized = pathOf(path);
+    while (normalized.startsWith("/")) normalized = normalized.substring(1);
+    return normalized;
+  }
+
+  private static String normalizeDigest(String digest) {
+    return digest == null || digest.isBlank()
+        ? null
+        : digest.trim().toLowerCase(java.util.Locale.ROOT);
   }
 
   private static Map<String, Object> chartEntry(ChartRecord chart) {
@@ -392,5 +480,11 @@ public final class HelmIndex {
   }
 
   public record Entry(String name, String version, List<String> urls) {
+  }
+
+  public record Release(String name, String version, String digest, List<String> urls) {
+    public Release {
+      urls = urls == null ? List.of() : List.copyOf(urls);
+    }
   }
 }
