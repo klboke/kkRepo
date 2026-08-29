@@ -63,6 +63,27 @@ class RepositoryContentControllerNpmAuditTest {
     assertLoginResponse("-/user/org.couchdb.user:alice");
   }
 
+  @Test
+  void npmLegacyLogoutReturnsMaterializedJson() throws Exception {
+    FakeRepositoryDao repositories = new FakeRepositoryDao();
+    repositories.repository(repository("npm-example", RepositoryFormat.NPM, RepositoryType.HOSTED));
+    byte[] logoutJson = "{\"ok\":\"true\"}".getBytes(StandardCharsets.UTF_8);
+    NpmTokenService tokenService = mock(NpmTokenService.class);
+    when(tokenService.logout(any()))
+        .thenReturn(MavenResponse.ok(
+            new ByteArrayInputStream(logoutJson), logoutJson.length, "application/json", null, null));
+    RepositoryProtocolController controller = controller(repositories, tokenService);
+    MockHttpServletRequest request = new MockHttpServletRequest(
+        "DELETE", "/repository/npm-example/-/user/token/NpmToken.generated-token");
+
+    ResponseEntity<?> response = controller.delete("npm-example", request);
+
+    assertEquals(200, response.getStatusCode().value());
+    assertEquals(logoutJson.length, response.getHeaders().getContentLength());
+    assertEquals("{\"ok\":\"true\"}",
+        new String((byte[]) response.getBody(), StandardCharsets.UTF_8));
+  }
+
   private static void assertLoginResponse(String path) throws Exception {
     FakeRepositoryDao repositories = new FakeRepositoryDao();
     repositories.repository(repository("npm-example", RepositoryFormat.NPM, RepositoryType.HOSTED));

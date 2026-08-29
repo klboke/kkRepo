@@ -711,7 +711,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
     if (runtime.format() == RepositoryFormat.NPM) {
       String rawPath = extractRepositoryPath(name, request);
       if (NpmTokenService.isLogoutPath(rawPath)) {
-        return toStreamingResponse(npmToken.logout(request));
+        return toByteArrayResponse(npmToken.logout(request));
       }
       NpmPath path = npmParser.parse(rawPath);
       String userId = requestUserId(request);
