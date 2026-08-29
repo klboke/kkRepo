@@ -132,8 +132,8 @@ public class HelmProxyService {
     // (index) or remoteUrl (content). V51 creates an upgrade fence only for repositories whose
     // durable row has never changed since creation; a pre-migration configuration change therefore
     // makes every unversioned row ineligible. The conditional update also requires the repository
-    // snapshot to remain current and the asset to predate migration activation, rejecting changes
-    // and old-replica writes on either side of the rolling-upgrade boundary.
+    // snapshot to remain current and the asset's database-generated update timestamp to predate
+    // migration activation, rejecting changes and old-replica writes without trusting JVM clocks.
     assetDao.bindLegacyHelmProxyCacheConfiguration(
         snapshot.assetId(), runtime.id(), PROXY_CONFIGURATION_ATTRIBUTE, expected);
     // Reload even after winning the bind: an older replica may have concurrently refreshed other

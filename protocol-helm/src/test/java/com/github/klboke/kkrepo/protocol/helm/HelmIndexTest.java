@@ -70,11 +70,10 @@ class HelmIndexTest {
               urls:
                 - charts/demo-original.tgz
                 - https://cdn.example.test/demo-original.tgz.prov
-            - urls:
+            - name: fallback
+              version: 2.0.0
+              urls:
                 - fallback.tgz
-            - name: empty
-              version: 1.0.0
-              urls: []
         """.getBytes(StandardCharsets.UTF_8);
 
     HelmIndex.RewriteResult result = HelmIndex.rewriteProxyIndex(
@@ -88,10 +87,10 @@ class HelmIndexTest {
         result.remoteUrlsByLocalPath().get("demo-1.2.3.tgz.prov"));
     assertEquals(
         "https://repo.example.test/helm/fallback.tgz",
-        result.remoteUrlsByLocalPath().get("fallback.tgz"));
+        result.remoteUrlsByLocalPath().get("fallback-2.0.0.tgz"));
     assertEquals(
         "https://repo.example.test/helm/fallback.tgz.prov",
-        result.remoteUrlsByLocalPath().get("fallback.tgz.prov"));
+        result.remoteUrlsByLocalPath().get("fallback-2.0.0.tgz.prov"));
     assertEquals(4, result.remoteUrlsByLocalPath().size());
   }
 
@@ -312,7 +311,9 @@ class HelmIndexTest {
     byte[] malformedUrl = """
         entries:
           demo:
-            - urls:
+            - name: demo
+              version: 1.0.0
+              urls:
                 - "http://["
         """.getBytes(StandardCharsets.UTF_8);
 
@@ -339,8 +340,13 @@ class HelmIndexTest {
         "entries: []",
         "entries: {demo: error}",
         "entries: {demo: [error]}",
-        "entries: {demo: [{urls: error}]}",
-        "entries: {demo: [{urls: [{nested: value}]}]}")) {
+        "entries: {demo: [{}]}",
+        "entries: {demo: [{name: demo, urls: [demo-1.0.0.tgz]}]}",
+        "entries: {demo: [{name: demo, version: 1.0.0}]}",
+        "entries: {demo: [{name: demo, version: 1.0.0, urls: []}]}",
+        "entries: {demo: [{name: demo, version: 1.0.0, urls: error}]}",
+        "entries: {demo: [{name: demo, version: 1.0.0, urls: [false]}]}",
+        "entries: {demo: [{name: demo, version: 1.0.0, urls: [{nested: value}]}]}")) {
       assertThrows(
           IllegalArgumentException.class,
           () -> HelmIndex.rewriteProxyIndex(

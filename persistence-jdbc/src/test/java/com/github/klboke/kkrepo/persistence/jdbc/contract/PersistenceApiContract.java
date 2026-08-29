@@ -91,6 +91,8 @@ public abstract class PersistenceApiContract {
 
   protected abstract int seedHelmProxyLegacyCacheFence(long repositoryId, long assetId);
 
+  protected abstract int activateHelmProxyLegacyCacheFence(long repositoryId);
+
   @Test
   void baselineContainsTheCompleteSharedLogicalSchema() {
     assertEquals(Set.of(
@@ -2471,23 +2473,21 @@ public abstract class PersistenceApiContract {
     long assetId = insertLegacyHelmIndex(repository, "helm-legacy-index");
     assertEquals(1, seedHelmProxyLegacyCacheFence(repositoryId, assetId));
 
+    // A node clock ahead of the database cannot make a genuinely pre-activation row ineligible.
+    stores().assets().touchAssetLastUpdated(assetId, Instant.now().plusSeconds(3600));
     assertEquals(1, stores().assets().bindLegacyHelmProxyCacheConfiguration(
         assetId, repositoryId, "helmProxyConfiguration", "initial"));
     assertEquals(0, stores().assets().bindLegacyHelmProxyCacheConfiguration(
         assetId, repositoryId, "helmProxyConfiguration", "concurrent"));
 
-    Instant eligibleAssetTime = stores().assets().findAssetById(assetId)
-        .orElseThrow().lastUpdatedAt();
     stores().assets().updateAssetAttributes(assetId, Map.of("remoteUrls", Map.of()));
-    stores().assets().touchAssetLastUpdated(assetId, eligibleAssetTime.plusSeconds(1));
-    assertEquals(0, stores().assets().bindLegacyHelmProxyCacheConfiguration(
-        assetId, repositoryId, "helmProxyConfiguration", "activation-boundary"));
-
-    stores().assets().touchAssetLastUpdated(assetId, eligibleAssetTime.plusSeconds(10));
+    assertEquals(1, activateHelmProxyLegacyCacheFence(repositoryId));
+    // A lagging node clock cannot make a post-activation write look eligible: updated_at is owned
+    // by the database in both supported dialects.
+    stores().assets().touchAssetLastUpdated(assetId, Instant.EPOCH);
     assertEquals(0, stores().assets().bindLegacyHelmProxyCacheConfiguration(
         assetId, repositoryId, "helmProxyConfiguration", "late-old-replica"));
 
-    stores().assets().touchAssetLastUpdated(assetId, eligibleAssetTime);
     Instant previousConfigurationTime = stores().repositories().findUpdatedAt(repositoryId)
         .orElseThrow();
     Thread.sleep(10);

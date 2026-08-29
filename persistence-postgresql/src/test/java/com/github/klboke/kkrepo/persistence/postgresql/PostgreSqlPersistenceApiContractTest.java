@@ -53,6 +53,11 @@ class PostgreSqlPersistenceApiContractTest extends PersistenceApiContract {
     return backend.seedHelmProxyLegacyCacheFence(repositoryId, assetId);
   }
 
+  @Override
+  protected int activateHelmProxyLegacyCacheFence(long repositoryId) {
+    return backend.activateHelmProxyLegacyCacheFence(repositoryId);
+  }
+
   private static final class Backend extends PostgreSqlIntegrationTestSupport {
     private static void start() {
       startPostgreSql();
@@ -85,9 +90,17 @@ class PostgreSqlPersistenceApiContractTest extends PersistenceApiContract {
       return jdbc().update("""
           INSERT INTO helm_proxy_legacy_cache_fence
             (repository_id, configuration_updated_at, activated_at)
-          SELECT id, updated_at, updated_at + INTERVAL '2 seconds'
+          SELECT id, updated_at, CURRENT_TIMESTAMP + INTERVAL '1 day'
           FROM repository
           WHERE id = ? AND updated_at = created_at
+          """, repositoryId);
+    }
+
+    private int activateHelmProxyLegacyCacheFence(long repositoryId) {
+      return jdbc().update("""
+          UPDATE helm_proxy_legacy_cache_fence
+          SET activated_at = CURRENT_TIMESTAMP
+          WHERE repository_id = ?
           """, repositoryId);
     }
   }

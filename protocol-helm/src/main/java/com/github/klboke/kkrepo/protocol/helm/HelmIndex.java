@@ -468,15 +468,23 @@ public final class HelmIndex {
           throw new IllegalArgumentException(
               "Invalid Helm index entry " + name + ": expected a release mapping");
         }
-        Object urls = release.get("urls");
-        if (urls != null && !(urls instanceof List<?>)) {
+        if (!(release.get("name") instanceof String releaseName) || releaseName.isBlank()) {
           throw new IllegalArgumentException(
-              "Invalid Helm index entry " + name + ": expected a URL list");
+              "Invalid Helm index entry " + name + ": expected a release name");
         }
-        if (urls instanceof List<?> list && list.stream()
-            .anyMatch(url -> url instanceof Map<?, ?> || url instanceof Collection<?>)) {
+        if (!(release.get("version") instanceof String releaseVersion)
+            || releaseVersion.isBlank()) {
           throw new IllegalArgumentException(
-              "Invalid Helm index entry " + name + ": expected scalar URLs");
+              "Invalid Helm index entry " + name + ": expected a release version");
+        }
+        Object urls = release.get("urls");
+        if (!(urls instanceof List<?> list) || list.isEmpty()) {
+          throw new IllegalArgumentException(
+              "Invalid Helm index entry " + name + ": expected a non-empty URL list");
+        }
+        if (list.stream().anyMatch(url -> !(url instanceof String value) || value.isBlank())) {
+          throw new IllegalArgumentException(
+              "Invalid Helm index entry " + name + ": expected non-empty string URLs");
         }
       }
     }
