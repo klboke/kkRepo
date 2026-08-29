@@ -277,6 +277,118 @@ class HelmGroupServiceTest {
   }
 
   @Test
+  void fallsBackOnlyBetweenMembersAdvertisingTheSelectedRelease() {
+    Fixture fixture = fixture();
+    RepositoryRuntime unavailable = runtime(
+        2L, "unavailable", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime fallback = runtime(
+        3L, "fallback", RepositoryType.PROXY, true, List.of());
+    RepositoryRuntime group = runtime(
+        10L, "all", RepositoryType.GROUP, true, List.of(unavailable, fallback));
+    CachedAssetMetadata cachedIndex = mock(CachedAssetMetadata.class);
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.of(cachedIndex));
+    when(fixture.reader.serveSnapshot(cachedIndex, false, "index.yaml"))
+        .thenAnswer(ignored -> selectedIndex("digest-b"));
+    when(fixture.hosted.get(unavailable, "index.yaml", false))
+        .thenAnswer(ignored -> selectedIndex("digest-b"));
+    when(fixture.proxy.get(fallback, "index.yaml", false))
+        .thenAnswer(ignored -> selectedIndex("digest-b"));
+    when(fixture.hosted.get(unavailable, "demo-1.0.0.tgz", false))
+        .thenThrow(new MavenExceptions.MavenNotFoundException("not ready"));
+    when(fixture.proxy.get(fallback, "demo-1.0.0.tgz", false)).thenReturn(expected);
+
+    assertSame(expected, fixture.service.get(group, "demo-1.0.0.tgz", false));
+    verify(fixture.memberCache).put(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, fallback.id());
+  }
+
+  @Test
+  void rejectsAdvertisedReleaseWhenNoMemberCanServeItWithoutOptionalCache() {
+    Fixture fixture = fixture();
+    RepositoryRuntime hosted = runtime(2L, "hosted", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime group = runtime(
+        10L, "all", RepositoryType.GROUP, true, List.of(hosted));
+    CachedAssetMetadata cachedIndex = mock(CachedAssetMetadata.class);
+    HelmGroupService withoutMemberCache = new HelmGroupService(
+        fixture.hosted, fixture.proxy, fixture.indexCache, null,
+        fixture.registry, fixture.writer, fixture.reader);
+    when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.of(cachedIndex));
+    when(fixture.reader.serveSnapshot(cachedIndex, false, "index.yaml"))
+        .thenAnswer(ignored -> selectedIndex("digest-b"));
+    when(fixture.hosted.get(hosted, "index.yaml", false))
+        .thenAnswer(ignored -> selectedIndex("digest-b"));
+    when(fixture.hosted.get(hosted, "demo-1.0.0.tgz", false))
+        .thenThrow(new MavenExceptions.MavenNotFoundException("missing"));
+
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> withoutMemberCache.get(group, "demo-1.0.0.tgz", false));
+  }
+
+  @Test
+  void reportsUnreadableAndInvalidCachedGroupIndexes() {
+    Fixture unreadable = fixture();
+    RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of());
+    CachedAssetMetadata unreadableIndex = mock(CachedAssetMetadata.class);
+    when(unreadable.indexCache.findFresh(eq(group), any()))
+        .thenReturn(Optional.of(unreadableIndex));
+    when(unreadable.reader.serveSnapshot(unreadableIndex, false, "index.yaml"))
+        .thenReturn(response(new InputStream() {
+          @Override
+          public int read() throws IOException {
+            throw new IOException("unreadable group index");
+          }
+        }));
+
+    MavenExceptions.BadUpstreamException readFailure = assertThrows(
+        MavenExceptions.BadUpstreamException.class,
+        () -> unreadable.service.get(group, "demo-1.0.0.tgz", false));
+    assertTrue(readFailure.getMessage().contains("Failed reading Helm group index"));
+
+    Fixture invalid = fixture();
+    CachedAssetMetadata invalidIndex = mock(CachedAssetMetadata.class);
+    when(invalid.indexCache.findFresh(eq(group), any())).thenReturn(Optional.of(invalidIndex));
+    when(invalid.reader.serveSnapshot(invalidIndex, false, "index.yaml"))
+        .thenAnswer(ignored -> index("entries: ["));
+
+    MavenExceptions.BadUpstreamException invalidFailure = assertThrows(
+        MavenExceptions.BadUpstreamException.class,
+        () -> invalid.service.get(group, "demo-1.0.0.tgz", false));
+    assertTrue(invalidFailure.getMessage().contains("Invalid Helm group index"));
+  }
+
+  @Test
+  void skipsUnreadableAndInvalidMemberIndexesDuringBoundResolution() {
+    Fixture fixture = fixture();
+    RepositoryRuntime unreadable = runtime(
+        1L, "unreadable", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime invalid = runtime(
+        2L, "invalid", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime good = runtime(3L, "good", RepositoryType.PROXY, true, List.of());
+    RepositoryRuntime group = runtime(
+        10L, "all", RepositoryType.GROUP, true, List.of(unreadable, invalid, good));
+    CachedAssetMetadata cachedIndex = mock(CachedAssetMetadata.class);
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.of(cachedIndex));
+    when(fixture.reader.serveSnapshot(cachedIndex, false, "index.yaml"))
+        .thenAnswer(ignored -> selectedIndex("digest-b"));
+    when(fixture.hosted.get(unreadable, "index.yaml", false))
+        .thenReturn(response(new InputStream() {
+          @Override
+          public int read() throws IOException {
+            throw new IOException("unreadable member index");
+          }
+        }));
+    when(fixture.hosted.get(invalid, "index.yaml", false))
+        .thenAnswer(ignored -> index("entries: ["));
+    when(fixture.proxy.get(good, "index.yaml", false))
+        .thenAnswer(ignored -> selectedIndex("digest-b"));
+    when(fixture.proxy.get(good, "demo-1.0.0.tgz", false)).thenReturn(expected);
+
+    assertSame(expected, fixture.service.get(group, "demo-1.0.0.tgz", false));
+  }
+
+  @Test
   void isolatesMissingUnreadableAndInvalidMemberIndexesWithoutCachingPartialMerge()
       throws Exception {
     Fixture fixture = fixture();
@@ -464,6 +576,17 @@ class HelmGroupServiceTest {
     byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
     return MavenResponse.ok(
         new ByteArrayInputStream(bytes), bytes.length, HelmIndex.CONTENT_TYPE, null, Instant.EPOCH);
+  }
+
+  private static MavenResponse selectedIndex(String digest) {
+    return index("""
+        entries:
+          demo:
+            - name: demo
+              version: 1.0.0
+              digest: %s
+              urls: [demo-1.0.0.tgz]
+        """.formatted(digest));
   }
 
   private static MavenResponse response(InputStream body) {

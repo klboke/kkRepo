@@ -228,6 +228,29 @@ class HelmIndexTest {
   }
 
   @Test
+  void releaseLookupSkipsInvalidCoordinatesAndHandlesAbsentPathsWithoutDigest() {
+    byte[] body = """
+        entries:
+          ignored: not-a-list
+          broken:
+            - name: ""
+              version: ""
+              urls: [broken.tgz]
+          demo:
+            - name: demo
+              version: 1.0.0
+              urls: [charts/original.tgz]
+        """.getBytes(StandardCharsets.UTF_8);
+    HelmIndex.Release expected = new HelmIndex.Release(
+        "demo", "1.0.0", null, List.of("demo-1.0.0.tgz"));
+
+    assertTrue(HelmIndex.containsRelease(body, expected, "demo-1.0.0.tgz"));
+    assertFalse(HelmIndex.containsRelease(body, null, "demo-1.0.0.tgz"));
+    assertTrue(HelmIndex.releaseForPath(body, "missing-1.0.0.tgz").isEmpty());
+    assertTrue(HelmIndex.releaseForPath(body, null).isEmpty());
+  }
+
+  @Test
   void toleratesMalformedAndNonMappingIndexes() {
     byte[] malformedUrl = """
         entries:
