@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.protocol.helm;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.charset.StandardCharsets;
@@ -292,6 +293,14 @@ class HelmIndexTest {
     assertEquals("http://[", rewritten.remoteUrlsByLocalPath().get("["));
     assertEquals(List.of(), HelmIndex.entries("[]".getBytes(StandardCharsets.UTF_8)));
     assertEquals(List.of(), HelmIndex.entries("entries: []".getBytes(StandardCharsets.UTF_8)));
+  }
+
+  @Test
+  void reportsMalformedYamlThroughTheProtocolErrorBoundary() {
+    IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+        () -> HelmIndex.entries("entries: [".getBytes(StandardCharsets.UTF_8)));
+
+    assertEquals("Invalid Helm index YAML", error.getMessage());
   }
 
   @Test

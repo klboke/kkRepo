@@ -132,6 +132,10 @@ public class HelmGroupService {
           response = member.isHosted()
               ? hosted.get(member, HelmHostedService.INDEX_PATH, false)
               : proxy.get(member, HelmHostedService.INDEX_PATH, false);
+          if (member.isProxy() && Boolean.FALSE.equals(
+              response.internalAttribute(HelmProxyService.INDEX_AUTHORITATIVE_ATTRIBUTE))) {
+            complete = false;
+          }
         }
       } catch (MavenExceptions.MavenNotFoundException ignored) {
         // Proxy 404s are negative-cached for a much shorter interval than a durable group index.
@@ -190,7 +194,12 @@ public class HelmGroupService {
         if (cachedMember != null) {
           try {
             if (memberAdvertises(cachedMember, release, path)) {
-              return dispatchAsset(cachedMember, path, kind, headOnly, resolvingGroups);
+              MavenResponse response =
+                  dispatchAsset(cachedMember, path, kind, headOnly, resolvingGroups);
+              if (matchesAdvertisedDigest(kind, release, response)) {
+                return response;
+              }
+              response.closeBodyIfOpen();
             }
           } catch (MavenExceptions.MavenNotFoundException
               | MavenExceptions.BadUpstreamException
@@ -207,6 +216,10 @@ public class HelmGroupService {
         if (!memberAdvertises(member, release, path)) continue;
         try {
           MavenResponse response = dispatchAsset(member, path, kind, headOnly, resolvingGroups);
+          if (!matchesAdvertisedDigest(kind, release, response)) {
+            response.closeBodyIfOpen();
+            continue;
+          }
           if (memberAssetCache != null) {
             memberAssetCache.put(group, path, cacheType, member.id());
           }
@@ -272,6 +285,23 @@ public class HelmGroupService {
       case PROXY -> proxy.get(member, path, headOnly);
       case GROUP -> getAsset(member, path, kind, headOnly, resolvingGroups);
     };
+  }
+
+  private static boolean matchesAdvertisedDigest(
+      HelmAssetKind kind, HelmIndex.Release release, MavenResponse response) {
+    if (kind != HelmAssetKind.PACKAGE
+        || release.digest() == null
+        || release.digest().isBlank()) {
+      return true;
+    }
+    Object actual = response.internalAttribute(HelmAssetReader.SHA256_ATTRIBUTE);
+    return actual != null
+        && normalizeDigest(release.digest()).equalsIgnoreCase(normalizeDigest(actual.toString()));
+  }
+
+  private static String normalizeDigest(String digest) {
+    String value = digest.trim();
+    return value.regionMatches(true, 0, "sha256:", 0, 7) ? value.substring(7) : value;
   }
 
   static byte[] readBounded(MavenResponse response, int remaining) throws IOException {

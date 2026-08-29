@@ -32,6 +32,8 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -141,14 +143,22 @@ class HelmProxyServiceTest {
           200, Map.of("Content-Type", "application/gzip"),
           new ByteArrayInputStream(new byte[] {1, 2, 3})));
     }).when(fixture.fetcher).fetchWithBodyRetry(any(), eq("demo-1.0.0.tgz"), any());
-    HelmAssetWriter.Stored stored = stored("demo-1.0.0.tgz", "application/gzip");
+    Path responseFile = Files.createTempFile("kkrepo-helm-proxy-response-", ".tgz");
+    Files.write(responseFile, new byte[] {1, 2, 3, 4});
+    HelmAssetWriter.Stored stored = stored(
+        "demo-1.0.0.tgz", "application/gzip", responseFile);
     when(fixture.writer.write(
         eq(runtime), eq(fixture.storage), eq(7L), eq("demo-1.0.0.tgz"), any(),
         eq("application/gzip"), eq(HelmAssetKind.PACKAGE), eq(null), any(), any(),
-        eq("proxy"), isNull(), eq(false)))
+        eq("proxy"), isNull(), eq(true)))
         .thenReturn(stored);
 
-    assertEquals(200, fixture.service.get(runtime, "demo-1.0.0.tgz", true).status());
+    MavenResponse response = fixture.service.get(runtime, "demo-1.0.0.tgz", false);
+    assertEquals(200, response.status());
+    assertEquals("sha256", response.internalAttribute(HelmAssetReader.SHA256_ATTRIBUTE));
+    try (var body = response.body()) {
+      assertEquals(4, body.readAllBytes().length);
+    }
     assertEquals("https://cdn.example.test/charts/demo.tgz", requestedUrl.get());
   }
 
@@ -213,6 +223,92 @@ class HelmProxyServiceTest {
   }
 
   @Test
+  void marksStaleIndexFallbackAsNonAuthoritativeWhenRefreshFails() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 1);
+    CachedAssetMetadata stale = snapshot("index.yaml", Instant.EPOCH, Map.of());
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.cache.find(eq(runtime.id()), eq("index.yaml"), any()))
+        .thenReturn(Optional.of(stale));
+    when(fixture.reader.serveSnapshot(stale, false, "index.yaml")).thenReturn(expected);
+    respond(fixture.fetcher, new HttpRemoteFetcher.Result(
+        503, Map.of(), new ByteArrayInputStream(new byte[0])));
+
+    MavenResponse response = fixture.service.get(runtime, "index.yaml", false);
+
+    assertSame(expected, response);
+    assertEquals(Boolean.FALSE,
+        response.internalAttribute(HelmProxyService.INDEX_AUTHORITATIVE_ATTRIBUTE));
+    verify(fixture.proxyStateDao).recordFailure(eq(runtime.id()), eq(30L), anyString(), any());
+  }
+
+  @Test
+  void marksBlockedAndRemoteNotFoundIndexFallbacksAsNonAuthoritative() throws Exception {
+    RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 1);
+
+    Fixture blocked = fixture();
+    CachedAssetMetadata blockedStale = snapshot("index.yaml", Instant.EPOCH, Map.of());
+    MavenResponse blockedResponse = MavenResponse.noBody(200);
+    when(blocked.cache.find(eq(runtime.id()), eq("index.yaml"), any()))
+        .thenReturn(Optional.of(blockedStale));
+    when(blocked.proxyStateDao.isBlocked(eq(runtime.id()), any())).thenReturn(true);
+    when(blocked.reader.serveSnapshot(blockedStale, true, "index.yaml"))
+        .thenReturn(blockedResponse);
+
+    assertEquals(Boolean.FALSE,
+        blocked.service.get(runtime, "index.yaml", true)
+            .internalAttribute(HelmProxyService.INDEX_AUTHORITATIVE_ATTRIBUTE));
+
+    Fixture missing = fixture();
+    CachedAssetMetadata missingStale = snapshot("index.yaml", Instant.EPOCH, Map.of());
+    MavenResponse missingResponse = MavenResponse.noBody(200);
+    when(missing.cache.find(eq(runtime.id()), eq("index.yaml"), any()))
+        .thenReturn(Optional.of(missingStale));
+    when(missing.reader.serveSnapshot(missingStale, false, "index.yaml"))
+        .thenReturn(missingResponse);
+    respond(missing.fetcher, new HttpRemoteFetcher.Result(
+        404, Map.of(), new ByteArrayInputStream(new byte[0])));
+
+    assertEquals(Boolean.FALSE,
+        missing.service.get(runtime, "index.yaml", false)
+            .internalAttribute(HelmProxyService.INDEX_AUTHORITATIVE_ATTRIBUTE));
+  }
+
+  @Test
+  void marksInvalidAndUnreadableIndexFallbacksAsNonAuthoritative() throws Exception {
+    RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 1);
+
+    Fixture invalid = fixture();
+    CachedAssetMetadata invalidStale = snapshot("index.yaml", Instant.EPOCH, Map.of());
+    MavenResponse invalidResponse = MavenResponse.noBody(200);
+    when(invalid.cache.find(eq(runtime.id()), eq("index.yaml"), any()))
+        .thenReturn(Optional.of(invalidStale));
+    when(invalid.reader.serveSnapshot(invalidStale, false, "index.yaml"))
+        .thenReturn(invalidResponse);
+    respond(invalid.fetcher, new HttpRemoteFetcher.Result(
+        200, Map.of(), new ByteArrayInputStream("entries: [".getBytes(StandardCharsets.UTF_8))));
+
+    assertEquals(Boolean.FALSE,
+        invalid.service.get(runtime, "index.yaml", false)
+            .internalAttribute(HelmProxyService.INDEX_AUTHORITATIVE_ATTRIBUTE));
+
+    Fixture unreadable = fixture();
+    CachedAssetMetadata unreadableStale = snapshot("index.yaml", Instant.EPOCH, Map.of());
+    MavenResponse unreadableResponse = MavenResponse.noBody(200);
+    when(unreadable.cache.find(eq(runtime.id()), eq("index.yaml"), any()))
+        .thenReturn(Optional.of(unreadableStale));
+    when(unreadable.reader.serveSnapshot(unreadableStale, false, "index.yaml"))
+        .thenReturn(unreadableResponse);
+    doAnswer(invocation -> {
+      throw new IOException("unreadable index");
+    }).when(unreadable.fetcher).fetchWithBodyRetry(any(), eq("index.yaml"), any());
+
+    assertEquals(Boolean.FALSE,
+        unreadable.service.get(runtime, "index.yaml", false)
+            .internalAttribute(HelmProxyService.INDEX_AUTHORITATIVE_ATTRIBUTE));
+  }
+
+  @Test
   void rejectsUnsupportedRepositoryAndAssetKinds() throws Exception {
     Fixture fixture = fixture();
     assertThrows(MavenExceptions.MethodNotAllowed.class,
@@ -274,13 +370,18 @@ class HelmProxyServiceTest {
   }
 
   private static HelmAssetWriter.Stored stored(String path, String contentType) {
+    return stored(path, contentType, null);
+  }
+
+  private static HelmAssetWriter.Stored stored(
+      String path, String contentType, Path responseFile) {
     AssetRecord asset = new AssetRecord(
         1L, 10L, null, 2L, RepositoryFormat.HELM, path, null,
         path, path.equals("index.yaml") ? "INDEX" : "PACKAGE", contentType,
         4L, null, Instant.now(), Map.of());
     return new HelmAssetWriter.Stored(
         asset, blob(), new HelmAssetWriter.Digests("md5", "sha1", "sha256", "sha512", 4),
-        true, null);
+        true, responseFile);
   }
 
   private static AssetBlobRecord blob() {

@@ -423,7 +423,12 @@ public final class HelmIndex {
 
   @SuppressWarnings("unchecked")
   private static Map<String, Object> load(byte[] yamlBytes) {
-    Object loaded = loadYaml().load(new ByteArrayInputStream(yamlBytes));
+    Object loaded;
+    try {
+      loaded = loadYaml().load(new ByteArrayInputStream(yamlBytes));
+    } catch (RuntimeException e) {
+      throw new IllegalArgumentException("Invalid Helm index YAML", e);
+    }
     if (!(loaded instanceof Map<?, ?> map)) {
       return new LinkedHashMap<>();
     }

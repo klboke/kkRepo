@@ -27,6 +27,8 @@ import org.springframework.stereotype.Service;
 @Service
 public class HelmProxyService {
   private static final long[] BACKOFF_SECONDS = {30, 60, 120, 300, 600, 1800};
+  static final String INDEX_AUTHORITATIVE_ATTRIBUTE =
+      HelmProxyService.class.getName() + ".indexAuthoritative";
 
   private final AssetDao assetDao;
   private final BlobStorageRegistry blobStorageRegistry;
@@ -79,7 +81,10 @@ public class HelmProxyService {
       throw new MavenExceptions.MavenNotFoundException(HelmHostedService.INDEX_PATH);
     }
     if (proxyStateDao.isBlocked(runtime.id(), now)) {
-      if (cached.isPresent()) return reader.serveSnapshot(cached.get(), headOnly, HelmHostedService.INDEX_PATH);
+      if (cached.isPresent()) {
+        return staleIndexResponse(
+            reader.serveSnapshot(cached.get(), headOnly, HelmHostedService.INDEX_PATH));
+      }
       throw new MavenExceptions.BadUpstreamException("Upstream temporarily blocked: " + runtime.proxyRemoteUrl());
     }
     return fetchAndCacheIndex(runtime, cached, headOnly, now);
@@ -145,19 +150,20 @@ public class HelmProxyService {
         if (status == 404 || status == 410) {
           proxyStateDao.recordSuccess(runtime.id(), now);
           if (cached.isPresent()) {
-            return reader.serveSnapshot(cached.get(), headOnly, HelmHostedService.INDEX_PATH);
+            return staleIndexResponse(
+                reader.serveSnapshot(cached.get(), headOnly, HelmHostedService.INDEX_PATH));
           }
           if (status == 404) negativeCache.rememberNotFound(runtime, HelmHostedService.INDEX_PATH);
           throw new MavenExceptions.MavenNotFoundException(HelmHostedService.INDEX_PATH);
         }
-        return handleUpstreamFailure(runtime, HelmHostedService.INDEX_PATH, cached, headOnly,
+        return handleIndexUpstreamFailure(runtime, cached, headOnly,
             "Upstream returned " + status, now);
       });
     } catch (IllegalArgumentException e) {
-      return handleUpstreamFailure(runtime, HelmHostedService.INDEX_PATH, cached, headOnly,
+      return handleIndexUpstreamFailure(runtime, cached, headOnly,
           "Invalid upstream Helm index: " + e.getMessage(), now);
     } catch (IOException e) {
-      return handleUpstreamFailure(runtime, HelmHostedService.INDEX_PATH, cached, headOnly,
+      return handleIndexUpstreamFailure(runtime, cached, headOnly,
           "Upstream IO error: " + e.getMessage(), now);
     }
   }
@@ -271,10 +277,12 @@ public class HelmProxyService {
       if (headOnly) {
         stored.discardBody();
         return MavenResponse.noBody(200, stored.blob().size(), stored.asset().contentType(),
-            stored.blob().sha1(), stored.asset().lastUpdatedAt());
+            stored.blob().sha1(), stored.asset().lastUpdatedAt())
+            .withInternalAttribute(HelmAssetReader.SHA256_ATTRIBUTE, stored.blob().sha256());
       }
       return MavenResponse.ok(stored.openBody(), stored.blob().size(), stored.asset().contentType(),
-          stored.blob().sha1(), stored.asset().lastUpdatedAt());
+          stored.blob().sha1(), stored.asset().lastUpdatedAt())
+          .withInternalAttribute(HelmAssetReader.SHA256_ATTRIBUTE, stored.blob().sha256());
     } catch (RuntimeException e) {
       stored.discardBody();
       throw e;
@@ -326,6 +334,20 @@ public class HelmProxyService {
     proxyStateDao.recordFailure(runtime.id(), block, error, now);
     if (cached.isPresent()) return reader.serveSnapshot(cached.get(), headOnly, path);
     throw new MavenExceptions.BadUpstreamException(error);
+  }
+
+  private MavenResponse handleIndexUpstreamFailure(
+      RepositoryRuntime runtime,
+      Optional<CachedAssetMetadata> cached,
+      boolean headOnly,
+      String error,
+      Instant now) {
+    return staleIndexResponse(handleUpstreamFailure(
+        runtime, HelmHostedService.INDEX_PATH, cached, headOnly, error, now));
+  }
+
+  private static MavenResponse staleIndexResponse(MavenResponse response) {
+    return response.withInternalAttribute(INDEX_AUTHORITATIVE_ATTRIBUTE, false);
   }
 
   private boolean isFresh(CachedAssetMetadata snapshot, int ttlMinutes, Instant now) {
