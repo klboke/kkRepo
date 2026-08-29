@@ -31,6 +31,8 @@ public class GroupMemberAssetCache {
   private static final String NAMESPACE = "group-member-asset";
   private static final Object PENDING_MEMBERS =
       GroupMemberAssetCache.class.getName() + ".PENDING_MEMBERS";
+  private static final Object PENDING_TYPED_MEMBERS =
+      GroupMemberAssetCache.class.getName() + ".PENDING_TYPED_MEMBERS";
   private static final Object PENDING_GROUPS =
       GroupMemberAssetCache.class.getName() + ".PENDING_GROUPS";
 
@@ -109,6 +111,21 @@ public class GroupMemberAssetCache {
     deferAfterCommit(PENDING_MEMBERS, memberRepositoryId, this::invalidateContainingGroups);
   }
 
+  /** Invalidate only one winner-cache class without expiring unrelated group metadata. */
+  public void invalidateMemberAfterCommit(
+      long memberRepositoryId, NexusCacheType cacheType) {
+    if (cacheType == null) {
+      throw new IllegalArgumentException("Cache type is required");
+    }
+    if (!enabled || cacheController == null) {
+      return;
+    }
+    deferAfterCommit(
+        PENDING_TYPED_MEMBERS,
+        new MemberInvalidation(memberRepositoryId, cacheType),
+        this::invalidateContainingGroups);
+  }
+
   public void invalidateGroupAfterCommit(long groupId) {
     if (!enabled || cacheController == null) {
       return;
@@ -131,6 +148,23 @@ public class GroupMemberAssetCache {
     }
   }
 
+  private void invalidateContainingGroups(MemberInvalidation invalidation) {
+    invalidateContainingGroups(
+        invalidation.memberRepositoryId(), invalidation.cacheType(), new HashSet<>());
+  }
+
+  private void invalidateContainingGroups(
+      long memberRepositoryId, NexusCacheType cacheType, Set<Long> visited) {
+    for (RepositoryRecord group : repositoryDao.listGroupsContaining(memberRepositoryId)) {
+      Long groupId = group.id();
+      if (groupId == null || !visited.add(groupId)) {
+        continue;
+      }
+      cacheController.invalidate(groupId, cacheType);
+      invalidateContainingGroups(groupId, cacheType, visited);
+    }
+  }
+
   private void invalidateGroupAndAncestors(long groupId) {
     invalidateGroupAndAncestors(groupId, new HashSet<>());
   }
@@ -147,22 +181,23 @@ public class GroupMemberAssetCache {
     }
   }
 
-  private void deferAfterCommit(Object resourceKey, long id, java.util.function.LongConsumer action) {
+  private <T> void deferAfterCommit(
+      Object resourceKey, T item, java.util.function.Consumer<T> action) {
     if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-      action.accept(id);
+      action.accept(item);
       return;
     }
     @SuppressWarnings("unchecked")
-    Set<Long> pending = (Set<Long>) TransactionSynchronizationManager.getResource(resourceKey);
+    Set<T> pending = (Set<T>) TransactionSynchronizationManager.getResource(resourceKey);
     if (pending == null) {
       pending = new HashSet<>();
       TransactionSynchronizationManager.bindResource(resourceKey, pending);
-      Set<Long> snapshot = pending;
+      Set<T> snapshot = pending;
       TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
         @Override
         public void afterCommit() {
-          for (Long pendingId : snapshot) {
-            action.accept(pendingId);
+          for (T pendingItem : snapshot) {
+            action.accept(pendingItem);
           }
         }
 
@@ -172,7 +207,7 @@ public class GroupMemberAssetCache {
         }
       });
     }
-    pending.add(id);
+    pending.add(item);
   }
 
   private static String key(long groupId, NexusCacheType type, String path) {
@@ -181,4 +216,6 @@ public class GroupMemberAssetCache {
   }
 
   public record Entry(long memberRepositoryId, NexusLikeCacheInfo cacheInfo) {}
+
+  private record MemberInvalidation(long memberRepositoryId, NexusCacheType cacheType) {}
 }

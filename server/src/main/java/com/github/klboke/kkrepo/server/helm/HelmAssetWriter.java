@@ -18,6 +18,7 @@ import com.github.klboke.kkrepo.server.blob.BlobTransactionCleanup;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
+import com.github.klboke.kkrepo.server.cache.NexusCacheType;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
 import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
@@ -323,8 +324,8 @@ class HelmAssetWriter {
 
   private void notifyContainingGroups(RepositoryRuntime runtime, String kind) {
     if (runtime.isGroup()) return;
-    if (groupMemberAssetCache != null) {
-      groupMemberAssetCache.invalidateMemberAfterCommit(runtime.id());
+    if (groupMemberAssetCache != null && !HelmAssetKind.INDEX.name().equals(kind)) {
+      groupMemberAssetCache.invalidateMemberAfterCommit(runtime.id(), NexusCacheType.CONTENT);
     }
     if (groupIndexCache != null && HelmAssetKind.INDEX.name().equals(kind)) {
       groupIndexCache.invalidateMemberAfterCommit(runtime.id());

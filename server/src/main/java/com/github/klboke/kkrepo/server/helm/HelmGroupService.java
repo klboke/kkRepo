@@ -83,6 +83,7 @@ public class HelmGroupService {
       NexusLikeCacheInfo cacheInfo = indexCache == null ? null : indexCache.current(group, now);
       MemberIndexes memberIndexes = memberIndexes(group, resolvingGroups);
       byte[] body = HelmIndex.mergeGroupIndexes(memberIndexes.indexes(), now);
+      ensureIndexWithinLimit(body.length);
       // A partial response is still useful, but no replica may publish it as fresh under the
       // shared watermark and thereby hide a recovered member until metadata expiry.
       if (!memberIndexes.complete() || indexCache == null || !indexCache.enabled()) {
@@ -133,6 +134,9 @@ public class HelmGroupService {
               : proxy.get(member, HelmHostedService.INDEX_PATH, false);
         }
       } catch (MavenExceptions.MavenNotFoundException ignored) {
+        // Proxy 404s are negative-cached for a much shorter interval than a durable group index.
+        // Serve the healthy subset, but do not publish it as complete under the group watermark.
+        complete = false;
         continue;
       } catch (MavenExceptions.BadUpstreamException
           | MavenExceptions.MethodNotAllowed ignored) {
@@ -169,9 +173,9 @@ public class HelmGroupService {
       throw new MavenExceptions.MethodNotAllowed(
           "Cyclic Helm group repository membership: " + group.name());
     }
-    NexusCacheType cacheType = kind == HelmAssetKind.PROVENANCE
-        ? NexusCacheType.METADATA
-        : NexusCacheType.CONTENT;
+    // Chart archives and their provenance siblings share the content winner token. The Helm
+    // group index has its own METADATA watermark and must not be expired by a package cache fill.
+    NexusCacheType cacheType = NexusCacheType.CONTENT;
     try {
       HelmIndex.Release release = advertisedRelease(group, path);
       Optional<Long> cachedMemberId = memberAssetCache == null
@@ -278,6 +282,10 @@ public class HelmGroupService {
       if (bytes.length > remaining) throw metadataLimitExceeded();
       return bytes;
     }
+  }
+
+  static void ensureIndexWithinLimit(long size) {
+    if (size > MAX_AGGREGATED_INDEX_BYTES) throw metadataLimitExceeded();
   }
 
   private static MavenExceptions.BadUpstreamException metadataLimitExceeded() {

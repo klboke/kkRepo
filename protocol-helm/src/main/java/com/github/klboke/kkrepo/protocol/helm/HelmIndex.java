@@ -117,8 +117,13 @@ public final class HelmIndex {
             String name = string(versionMap.get("name"), entryName);
             String version = string(versionMap.get("version"), null);
             if (name == null || name.isBlank() || version == null || version.isBlank()) continue;
+            List<String> chartUrls = rewriteEntry(
+                entryName, versionMap, null, new LinkedHashMap<>()).stream()
+                .filter(HelmIndex::isChartArchiveUrl)
+                .toList();
+            if (chartUrls.isEmpty()) continue;
             if (!releases.add(name + '\0' + version)) continue;
-            rewriteEntry(entryName, versionMap, null, new LinkedHashMap<>());
+            putRaw(versionMap, "urls", chartUrls);
             mergedVersions.add(versionMap);
           }
         });
@@ -330,12 +335,12 @@ public final class HelmIndex {
     return value == null || value.isBlank() ? fallback : value;
   }
 
-  private static void rewriteEntry(String fallbackName, Map<?, ?> rawEntry, String remoteBaseUrl,
+  private static List<String> rewriteEntry(String fallbackName, Map<?, ?> rawEntry, String remoteBaseUrl,
       Map<String, String> remoteUrlsByLocalPath) {
     String name = string(rawEntry.get("name"), fallbackName);
     String version = string(rawEntry.get("version"), null);
     List<String> urls = stringList(rawEntry.get("urls"));
-    if (urls.isEmpty()) return;
+    if (urls.isEmpty()) return List.of();
     List<String> rewritten = new ArrayList<>(urls.size());
     for (String url : urls) {
       String local = localUrl(name, version, url);
@@ -353,6 +358,11 @@ public final class HelmIndex {
       }
     }
     putRaw(rawEntry, "urls", rewritten);
+    return rewritten;
+  }
+
+  private static boolean isChartArchiveUrl(String url) {
+    return normalizeLocalPath(url).toLowerCase(java.util.Locale.ROOT).endsWith(".tgz");
   }
 
   private static String provenanceUrl(String chartUrl) {

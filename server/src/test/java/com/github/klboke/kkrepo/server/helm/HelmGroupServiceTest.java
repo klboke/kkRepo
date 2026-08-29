@@ -112,9 +112,9 @@ class HelmGroupServiceTest {
     verify(fixture.memberCache).put(nested, "demo-1.0.0.tgz", NexusCacheType.CONTENT, proxy.id());
     verify(fixture.memberCache).put(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, nested.id());
     verify(fixture.memberCache).put(
-        nested, "demo-1.0.0.tgz.prov", NexusCacheType.METADATA, proxy.id());
+        nested, "demo-1.0.0.tgz.prov", NexusCacheType.CONTENT, proxy.id());
     verify(fixture.memberCache).put(
-        group, "demo-1.0.0.tgz.prov", NexusCacheType.METADATA, nested.id());
+        group, "demo-1.0.0.tgz.prov", NexusCacheType.CONTENT, nested.id());
   }
 
   @Test
@@ -273,7 +273,7 @@ class HelmGroupServiceTest {
     verify(fixture.memberCache).put(
         group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, proxy.id());
     verify(fixture.memberCache).put(
-        group, "demo-1.0.0.tgz.prov", NexusCacheType.METADATA, proxy.id());
+        group, "demo-1.0.0.tgz.prov", NexusCacheType.CONTENT, proxy.id());
   }
 
   @Test
@@ -479,6 +479,36 @@ class HelmGroupServiceTest {
   }
 
   @Test
+  void doesNotCacheAHealthySubsetWhileAProxyIndexIsMissing() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime healthy = runtime(
+        1L, "healthy", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime missing = runtime(
+        2L, "missing", RepositoryType.PROXY, true, List.of());
+    RepositoryRuntime group = runtime(
+        10L, "all", RepositoryType.GROUP, true, List.of(healthy, missing));
+    when(fixture.indexCache.enabled()).thenReturn(true);
+    when(fixture.hosted.get(healthy, "index.yaml", false)).thenReturn(index("""
+        entries:
+          healthy:
+            - name: healthy
+              version: 1.0.0
+              urls: [healthy.tgz]
+        """));
+    when(fixture.proxy.get(missing, "index.yaml", false))
+        .thenThrow(new MavenExceptions.MavenNotFoundException("negative cached"));
+
+    MavenResponse merged = fixture.service.get(group, "index.yaml", false);
+
+    assertEquals(
+        List.of(new HelmIndex.Entry("healthy", "1.0.0", List.of("healthy-1.0.0.tgz"))),
+        HelmIndex.entries(merged.body().readAllBytes()));
+    verify(fixture.writer, never()).writeBytes(
+        any(), any(), any(Long.class), any(), any(), any(), any(), any(), anyMap(), anyMap(),
+        any(), any());
+  }
+
+  @Test
   void protectsIndexAndAssetTraversalFromCyclicRuntimeSnapshots() throws Exception {
     Fixture fixture = fixture();
     List<RepositoryRuntime> firstMembers = new ArrayList<>();
@@ -519,12 +549,17 @@ class HelmGroupServiceTest {
   }
 
   @Test
-  void rejectsIndexesBeyondTheAggregationLimitBeforeReading() {
+  void rejectsInputAndSerializedIndexesBeyondTheAggregationLimit() {
     MavenResponse response = MavenResponse.noBody(200);
     MavenExceptions.BadUpstreamException error = assertThrows(
         MavenExceptions.BadUpstreamException.class,
         () -> HelmGroupService.readBounded(response, -1));
     assertEquals("Helm group index exceeds the 64 MiB aggregation limit", error.getMessage());
+
+    HelmGroupService.ensureIndexWithinLimit(HelmGroupService.MAX_AGGREGATED_INDEX_BYTES);
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> HelmGroupService.ensureIndexWithinLimit(
+            (long) HelmGroupService.MAX_AGGREGATED_INDEX_BYTES + 1));
   }
 
   @Test

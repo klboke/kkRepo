@@ -147,6 +147,35 @@ class HelmIndexTest {
   }
 
   @Test
+  void letsLaterMembersWinWhenEarlierReleaseHasNoChartArchiveUrl() {
+    byte[] unusable = """
+        entries:
+          demo:
+            - name: demo
+              version: 1.0.0
+              appVersion: unusable
+              urls: [demo.zip, demo.tgz.prov]
+        """.getBytes(StandardCharsets.UTF_8);
+    byte[] usable = """
+        entries:
+          demo:
+            - name: demo
+              version: 1.0.0
+              appVersion: usable
+              urls: [charts/original.tgz, ignored.zip]
+        """.getBytes(StandardCharsets.UTF_8);
+
+    byte[] merged = HelmIndex.mergeGroupIndexes(List.of(unusable, usable), Instant.EPOCH);
+
+    assertEquals(
+        List.of(new HelmIndex.Entry("demo", "1.0.0", List.of("demo-1.0.0.tgz"))),
+        HelmIndex.entries(merged));
+    assertTrue(text(merged).contains("appVersion: usable"));
+    assertFalse(text(merged).contains("appVersion: unusable"));
+    assertFalse(text(merged).contains("ignored.zip"));
+  }
+
+  @Test
   void ignoresEmptyAndMalformedGroupEntries() {
     byte[] malformed = """
         entries:
