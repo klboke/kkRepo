@@ -14,9 +14,7 @@ public interface RepositoryDao {
   Optional<RepositoryRecord> findByName(String name);
 
   /** Durable repository configuration timestamp used to fence pre-configuration cache entries. */
-  default Optional<Instant> findUpdatedAt(long id) {
-    return Optional.empty();
-  }
+  Optional<Instant> findUpdatedAt(long id);
 
   List<RepositoryRecord> list();
 

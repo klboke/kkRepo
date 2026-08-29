@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.support.dao;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -44,6 +45,11 @@ public class RepositoryDaoAdapter implements RepositoryDao {
 
   @Override
   public Optional<RepositoryRecord> findByName(String arg0) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public Optional<Instant> findUpdatedAt(long arg0) {
     throw new UnsupportedOperationException();
   }
 
