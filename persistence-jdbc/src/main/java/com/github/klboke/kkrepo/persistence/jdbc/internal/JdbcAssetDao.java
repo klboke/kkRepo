@@ -1102,6 +1102,18 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         """, jsonColumns.parameter(attributes), assetId);
   }
 
+  @Override
+  public int putAssetStringAttributeIfAbsent(
+      long assetId, String attributeName, String value) {
+    String attribute = jsonColumns.extractText("attributes_json", attributeName);
+    String updated = jsonColumns.setText("attributes_json", attributeName);
+    return jdbcTemplate.update(
+        "UPDATE asset SET attributes_json = " + updated
+            + " WHERE id = ? AND " + attribute + " IS NULL",
+        value,
+        assetId);
+  }
+
   public int updateBlobAttributes(long blobId, java.util.Map<String, Object> attributes) {
     return jdbcTemplate.update("""
         UPDATE asset_blob SET attributes_json = ? WHERE id = ?

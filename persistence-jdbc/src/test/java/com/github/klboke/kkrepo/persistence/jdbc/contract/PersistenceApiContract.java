@@ -1006,6 +1006,7 @@ public abstract class PersistenceApiContract {
   void securityScanningIsIdempotentFencedAndProtectsImmutableDocuments() throws Exception {
     SecurityScanDao scans = stores().securityScanning();
     long repositoryId = createRepository("scan-contract", RepositoryFormat.MAVEN2);
+    assertTrue(stores().repositories().findUpdatedAt(repositoryId).isPresent());
     long blobStoreId = stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
     Instant now = Instant.parse("2026-07-24T12:00:00Z");
 
@@ -1033,6 +1034,16 @@ public abstract class PersistenceApiContract {
     assertEquals(1, originalCandidate.contentGeneration());
     stores().assets().touchAssetLastUpdated(assetId, now.plusSeconds(1));
     stores().assets().updateAssetAttributes(assetId, Map.of("metadataOnly", true));
+    Map<String, Object> boundAttributes = Map.of(
+        "metadataOnly", true,
+        "configuration", "current");
+    assertEquals(1, stores().assets().putAssetStringAttributeIfAbsent(
+        assetId, "configuration", "current"));
+    assertEquals(0, stores().assets().putAssetStringAttributeIfAbsent(
+        assetId, "configuration", "stale"));
+    assertEquals(
+        boundAttributes,
+        stores().assets().findAssetById(assetId).orElseThrow().attributes());
     assertEquals(
         1,
         stores().artifactChanges().listAfter(0, 1000).stream()

@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.persistence.jdbc.internal;
 
+import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRows.nullableInstant;
 import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRows.nullableLong;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
@@ -9,8 +10,9 @@ import com.github.klboke.kkrepo.core.security.SecretCipher;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.EnumColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcInserts;
-import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcUpserts;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -133,6 +135,14 @@ public class JdbcRepositoryDao implements com.github.klboke.kkrepo.persistence.j
     return jdbcTemplate.query("SELECT * FROM repository WHERE name = ?", rowMapper, name)
         .stream()
         .findFirst();
+  }
+
+  @Override
+  public Optional<Instant> findUpdatedAt(long id) {
+    return jdbcTemplate.query(
+        "SELECT updated_at FROM repository WHERE id = ?",
+        (rs, rowNum) -> nullableInstant(rs, "updated_at"),
+        id).stream().findFirst();
   }
 
   public List<RepositoryRecord> list() {

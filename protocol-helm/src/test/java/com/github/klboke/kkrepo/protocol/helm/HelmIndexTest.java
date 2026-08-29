@@ -332,6 +332,22 @@ class HelmIndexTest {
   }
 
   @Test
+  void rejectsSchemaInvalidProxyIndexesWithoutChangingTolerantReadHelpers() {
+    for (String invalid : List.of("[]", "not-a-helm-index", "{}", "entries: []")) {
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> HelmIndex.rewriteProxyIndex(
+              invalid.getBytes(StandardCharsets.UTF_8), "https://repo.example.test/"));
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> HelmIndex.validateIndex(invalid.getBytes(StandardCharsets.UTF_8)));
+    }
+
+    assertEquals(List.of(), HelmIndex.entries("entries: []".getBytes(StandardCharsets.UTF_8)));
+    HelmIndex.validateIndex("apiVersion: v1\nentries: {}\n".getBytes(StandardCharsets.UTF_8));
+  }
+
+  @Test
   void readsFallbackNamesAndSkipsNonMappingVersions() {
     byte[] body = """
         entries:

@@ -402,6 +402,12 @@ public final class PostgreSqlDatabaseDialect implements DatabaseDialect {
     }
 
     @Override
+    public String setText(String column, String... path) {
+      return "jsonb_set(" + column(column) + ", '" + path(path)
+          + "', to_jsonb(CAST(? AS text)), true)";
+    }
+
+    @Override
     public String selectLongsFromArray(String columnAlias) {
       String alias = column(columnAlias);
       return """

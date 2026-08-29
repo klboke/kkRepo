@@ -44,6 +44,9 @@ class PostgreSqlDatabaseDialectTest {
         "jsonb_set(options_json, '{packageMigrationEnabled}', 'true'::jsonb, true)",
         dialect.json().setBoolean("options_json", true, "packageMigrationEnabled"));
     assertEquals(
+        "jsonb_set(attributes_json, '{configuration}', to_jsonb(CAST(? AS text)), true)",
+        dialect.json().setText("attributes_json", "configuration"));
+    assertEquals(
         "s.search_vector @@ to_tsquery('simple', ?)",
         dialect.search().componentSearchPredicate("s"));
     assertEquals(

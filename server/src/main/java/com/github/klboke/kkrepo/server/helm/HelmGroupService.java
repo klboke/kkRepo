@@ -166,13 +166,15 @@ public class HelmGroupService {
       byte[] body;
       try {
         body = readBounded(response, MAX_AGGREGATED_INDEX_BYTES - total);
-      } catch (IOException e) {
+      } catch (MetadataLimitExceeded e) {
+        throw e;
+      } catch (IOException | RuntimeException e) {
         complete = false;
         continue;
       }
       // Isolate an invalid upstream/member index instead of making every healthy member unusable.
       try {
-        HelmIndex.entries(body);
+        HelmIndex.validateIndex(body);
       } catch (RuntimeException ignored) {
         complete = false;
         continue;
@@ -360,9 +362,8 @@ public class HelmGroupService {
     if (size > MAX_AGGREGATED_INDEX_BYTES) throw metadataLimitExceeded();
   }
 
-  private static MavenExceptions.BadUpstreamException metadataLimitExceeded() {
-    return new MavenExceptions.BadUpstreamException(
-        "Helm group index exceeds the 64 MiB aggregation limit");
+  private static MetadataLimitExceeded metadataLimitExceeded() {
+    return new MetadataLimitExceeded();
   }
 
   private static MavenResponse indexResponse(
@@ -404,5 +405,12 @@ public class HelmGroupService {
   }
 
   private record MemberIndexes(List<byte[]> indexes, boolean complete, Instant freshUntil) {
+  }
+
+  private static final class MetadataLimitExceeded
+      extends MavenExceptions.BadUpstreamException {
+    private MetadataLimitExceeded() {
+      super("Helm group index exceeds the 64 MiB aggregation limit");
+    }
   }
 }

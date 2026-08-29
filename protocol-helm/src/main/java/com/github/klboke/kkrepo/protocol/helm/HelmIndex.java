@@ -71,7 +71,7 @@ public final class HelmIndex {
   }
 
   public static RewriteResult rewriteProxyIndex(byte[] yamlBytes, String remoteBaseUrl) {
-    Map<String, Object> root = load(yamlBytes);
+    Map<String, Object> root = loadValidIndex(yamlBytes);
     Object rawEntries = root.get("entries");
     Map<String, String> remoteUrlsByLocalPath = new LinkedHashMap<>();
     if (rawEntries instanceof Map<?, ?> entries) {
@@ -85,6 +85,11 @@ public final class HelmIndex {
       });
     }
     return new RewriteResult(dump(root), remoteUrlsByLocalPath);
+  }
+
+  /** Rejects parseable YAML documents that do not have the classic Helm index structure. */
+  public static void validateIndex(byte[] yamlBytes) {
+    loadValidIndex(yamlBytes);
   }
 
   /**
@@ -422,16 +427,33 @@ public final class HelmIndex {
     return URI.create(base).resolve(url).toString();
   }
 
-  @SuppressWarnings("unchecked")
-  private static Map<String, Object> load(byte[] yamlBytes) {
+  private static Object loadDocument(byte[] yamlBytes) {
     Object loaded;
     try {
       loaded = loadYaml().load(new ByteArrayInputStream(yamlBytes));
     } catch (RuntimeException e) {
       throw new IllegalArgumentException("Invalid Helm index YAML", e);
     }
+    return loaded;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> load(byte[] yamlBytes) {
+    Object loaded = loadDocument(yamlBytes);
     if (!(loaded instanceof Map<?, ?> map)) {
       return new LinkedHashMap<>();
+    }
+    return (Map<String, Object>) map;
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> loadValidIndex(byte[] yamlBytes) {
+    Object loaded = loadDocument(yamlBytes);
+    if (!(loaded instanceof Map<?, ?> map)) {
+      throw new IllegalArgumentException("Invalid Helm index root: expected a mapping");
+    }
+    if (!(map.get("entries") instanceof Map<?, ?>)) {
+      throw new IllegalArgumentException("Invalid Helm index entries: expected a mapping");
     }
     return (Map<String, Object>) map;
   }

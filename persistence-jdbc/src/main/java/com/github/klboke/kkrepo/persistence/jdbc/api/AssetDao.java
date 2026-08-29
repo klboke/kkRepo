@@ -230,6 +230,27 @@ public interface AssetDao {
 
   int updateAssetAttributes(long assetId, java.util.Map<String, Object> attributes);
 
+  /**
+   * Adds a string attribute only when the durable row does not already contain the key.
+   *
+   * <p>Production implementations must make the presence check and key-level update atomic. The
+   * default keeps lightweight test adapters source-compatible; it is not safe for concurrent use.
+   */
+  default int putAssetStringAttributeIfAbsent(long assetId, String attributeName, String value) {
+    Optional<AssetRecord> current = findAssetById(assetId);
+    if (current.isEmpty()) {
+      return 0;
+    }
+    AssetRecord asset = current.orElseThrow();
+    if (asset.attributes() != null && asset.attributes().containsKey(attributeName)) {
+      return 0;
+    }
+    java.util.Map<String, Object> replacement = new java.util.LinkedHashMap<>();
+    if (asset.attributes() != null) replacement.putAll(asset.attributes());
+    replacement.put(attributeName, value);
+    return updateAssetAttributes(assetId, replacement);
+  }
+
   int updateBlobAttributes(long blobId, java.util.Map<String, Object> attributes);
 
   long countAssetsByRepositoryId(long repositoryId);

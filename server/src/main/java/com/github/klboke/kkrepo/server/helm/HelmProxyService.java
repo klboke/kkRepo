@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.helm;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.protocol.helm.HelmAssetKind;
 import com.github.klboke.kkrepo.protocol.helm.HelmIndex;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
@@ -37,6 +38,7 @@ public class HelmProxyService {
   static final String PROXY_CONFIGURATION_ATTRIBUTE = "helmProxyConfiguration";
 
   private final AssetDao assetDao;
+  private final RepositoryDao repositoryDao;
   private final BlobStorageRegistry blobStorageRegistry;
   private final HelmAssetWriter writer;
   private final HelmAssetReader reader;
@@ -47,6 +49,7 @@ public class HelmProxyService {
 
   public HelmProxyService(
       AssetDao assetDao,
+      RepositoryDao repositoryDao,
       BlobStorageRegistry blobStorageRegistry,
       HelmAssetWriter writer,
       HelmAssetReader reader,
@@ -55,6 +58,7 @@ public class HelmProxyService {
       ProxyNegativeCache negativeCache,
       AssetMetadataCache assetMetadataCache) {
     this.assetDao = assetDao;
+    this.repositoryDao = repositoryDao;
     this.blobStorageRegistry = blobStorageRegistry;
     this.writer = writer;
     this.reader = reader;
@@ -118,11 +122,51 @@ public class HelmProxyService {
   }
 
   private Optional<CachedAssetMetadata> lookupCached(RepositoryRuntime runtime, String path) {
+    Optional<CachedAssetMetadata> cached = loadCached(runtime, path);
+    if (cached.isEmpty()) return Optional.empty();
+    CachedAssetMetadata snapshot = cached.orElseThrow();
+    String expected = configurationFingerprint(runtime);
+    String recorded = stringAttr(snapshot.attributes(), PROXY_CONFIGURATION_ATTRIBUTE);
+    if (expected.equals(recorded)) return Optional.of(snapshot);
+    if (recorded != null || !isLegacyProxyCacheEntry(runtime, snapshot, path)) {
+      return Optional.empty();
+    }
+
+    // Assets written before the configuration fingerprint was introduced carry only remoteUrls
+    // (index) or remoteUrl (content). Bind those rows to the configuration active during the
+    // rolling upgrade so outage fallback remains available, then reject them after any later
+    // configuration change. The compare-and-set prevents stale replicas from overwriting a row
+    // already refreshed or bound under another configuration.
+    assetDao.putAssetStringAttributeIfAbsent(
+        snapshot.assetId(), PROXY_CONFIGURATION_ATTRIBUTE, expected);
+    // Reload even after winning the bind: an older replica may have concurrently refreshed other
+    // attributes before our key-level update, so the stale hot snapshot is never authoritative.
+    assetMetadataCache.evict(runtime.id(), path);
+    return loadCached(runtime, path).filter(reloaded -> expected.equals(
+        stringAttr(reloaded.attributes(), PROXY_CONFIGURATION_ATTRIBUTE)));
+  }
+
+  private Optional<CachedAssetMetadata> loadCached(RepositoryRuntime runtime, String path) {
     return assetMetadataCache.find(
         runtime.id(), path,
-        () -> AssetMetadataCache.Loaded.from(assetDao.findAssetByPath(runtime.id(), path), assetDao))
-        .filter(snapshot -> configurationFingerprint(runtime).equals(
-            stringAttr(snapshot.attributes(), PROXY_CONFIGURATION_ATTRIBUTE)));
+        () -> AssetMetadataCache.Loaded.from(assetDao.findAssetByPath(runtime.id(), path), assetDao));
+  }
+
+  private boolean isLegacyProxyCacheEntry(
+      RepositoryRuntime runtime, CachedAssetMetadata snapshot, String path) {
+    Map<String, Object> attributes = snapshot.attributes();
+    if (attributes == null) return false;
+    String remoteUrl = stringAttr(attributes, "remoteUrl");
+    boolean knownLegacyShape = HelmHostedService.INDEX_PATH.equals(path)
+        ? attributes.get("remoteUrls") instanceof Map<?, ?>
+        : remoteUrl != null && !remoteUrl.isBlank();
+    if (!knownLegacyShape || snapshot.lastUpdatedAt() == null) return false;
+    // Repository updates advance this durable timestamp. A legacy asset must have been verified
+    // strictly after the active configuration was stored; otherwise a configuration change that
+    // happened before the lazy upgrade binding could incorrectly adopt old cache content.
+    return repositoryDao.findUpdatedAt(runtime.id())
+        .map(snapshot.lastUpdatedAt()::isAfter)
+        .orElse(false);
   }
 
   private MavenResponse fetchAndCacheIndex(

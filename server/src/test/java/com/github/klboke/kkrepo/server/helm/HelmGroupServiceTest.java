@@ -528,11 +528,16 @@ class HelmGroupServiceTest {
     RepositoryRuntime missing = runtime(1L, "missing", RepositoryType.HOSTED, true, List.of());
     RepositoryRuntime unreadable = runtime(2L, "unreadable", RepositoryType.HOSTED, true, List.of());
     RepositoryRuntime invalid = runtime(3L, "invalid", RepositoryType.HOSTED, true, List.of());
-    RepositoryRuntime closeFailure = runtime(4L, "close-failure", RepositoryType.HOSTED, true, List.of());
-    RepositoryRuntime good = runtime(5L, "good", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime schemaInvalid = runtime(
+        4L, "schema-invalid", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime lazyMissing = runtime(
+        5L, "lazy-missing", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime closeFailure = runtime(
+        6L, "close-failure", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime good = runtime(7L, "good", RepositoryType.HOSTED, true, List.of());
     RepositoryRuntime group = runtime(
         10L, "all", RepositoryType.GROUP, true,
-        List.of(missing, unreadable, invalid, closeFailure, good));
+        List.of(missing, unreadable, invalid, schemaInvalid, lazyMissing, closeFailure, good));
     when(fixture.hosted.get(missing, "index.yaml", false))
         .thenThrow(new MavenExceptions.MavenNotFoundException("missing"));
     when(fixture.hosted.get(unreadable, "index.yaml", false))
@@ -543,6 +548,17 @@ class HelmGroupServiceTest {
           }
         }));
     when(fixture.hosted.get(invalid, "index.yaml", false)).thenReturn(index("entries: ["));
+    when(fixture.hosted.get(schemaInvalid, "index.yaml", false))
+        .thenReturn(index("entries: []\n"));
+    when(fixture.hosted.get(lazyMissing, "index.yaml", false))
+        .thenReturn(MavenResponse.ok(
+            () -> {
+              throw new MavenExceptions.MavenNotFoundException("missing blob");
+            },
+            1L,
+            HelmIndex.CONTENT_TYPE,
+            null,
+            Instant.EPOCH));
     byte[] valid = "entries: {}\n".getBytes(StandardCharsets.UTF_8);
     when(fixture.hosted.get(closeFailure, "index.yaml", false))
         .thenReturn(response(new ByteArrayInputStream(valid) {
