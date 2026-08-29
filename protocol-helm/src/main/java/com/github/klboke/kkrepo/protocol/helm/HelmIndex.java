@@ -354,7 +354,7 @@ public final class HelmIndex {
         remoteUrlsByLocalPath.putIfAbsent(local, remote);
       }
       if (local.toLowerCase().endsWith(".tgz")) {
-        remoteUrlsByLocalPath.putIfAbsent(local + ".prov", provenanceUrl(remote));
+        remoteUrlsByLocalPath.putIfAbsent(local + ".prov", provenanceUrlForChart(remote));
       }
     }
     putRaw(rawEntry, "urls", rewritten);
@@ -365,7 +365,8 @@ public final class HelmIndex {
     return normalizeLocalPath(url).toLowerCase(java.util.Locale.ROOT).endsWith(".tgz");
   }
 
-  private static String provenanceUrl(String chartUrl) {
+  /** Derive the conventional provenance sibling without moving a query or fragment suffix. */
+  public static String provenanceUrlForChart(String chartUrl) {
     if (chartUrl == null || chartUrl.isBlank()) return chartUrl;
     int query = chartUrl.indexOf('?');
     int fragment = chartUrl.indexOf('#');

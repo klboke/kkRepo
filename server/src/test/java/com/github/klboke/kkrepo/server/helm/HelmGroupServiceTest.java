@@ -142,7 +142,7 @@ class HelmGroupServiceTest {
     when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.empty());
     when(fixture.indexCache.enabled()).thenReturn(true);
     when(fixture.indexCache.current(eq(group), any())).thenReturn(cacheInfo);
-    when(fixture.indexCache.freshAttributes(cacheInfo, null)).thenReturn(attributes);
+    when(fixture.indexCache.freshAttributes(group, cacheInfo, null)).thenReturn(attributes);
     when(fixture.hosted.get(hosted, "index.yaml", false)).thenAnswer(ignored -> index("""
         entries:
           private:
@@ -182,7 +182,8 @@ class HelmGroupServiceTest {
     when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.empty());
     when(fixture.indexCache.enabled()).thenReturn(true);
     when(fixture.indexCache.current(eq(group), any())).thenReturn(cacheInfo);
-    when(fixture.indexCache.freshAttributes(cacheInfo, memberFreshUntil)).thenReturn(attributes);
+    when(fixture.indexCache.freshAttributes(group, cacheInfo, memberFreshUntil))
+        .thenReturn(attributes);
     when(fixture.proxy.get(proxy, "index.yaml", false)).thenAnswer(ignored -> index("""
         entries:
           public:
@@ -201,7 +202,7 @@ class HelmGroupServiceTest {
     MavenResponse response = fixture.service.get(group, "index.yaml", false);
 
     assertEquals(200, response.status());
-    verify(fixture.indexCache).freshAttributes(cacheInfo, memberFreshUntil);
+    verify(fixture.indexCache).freshAttributes(group, cacheInfo, memberFreshUntil);
   }
 
   @Test
@@ -222,7 +223,8 @@ class HelmGroupServiceTest {
         .thenAnswer(ignored -> index("entries: {}\n"));
     when(fixture.indexCache.enabled()).thenReturn(true);
     when(fixture.indexCache.current(eq(group), any())).thenReturn(cacheInfo);
-    when(fixture.indexCache.freshAttributes(cacheInfo, memberFreshUntil)).thenReturn(attributes);
+    when(fixture.indexCache.freshAttributes(group, cacheInfo, memberFreshUntil))
+        .thenReturn(attributes);
     when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
     when(fixture.writer.writeBytes(
         eq(group), eq(fixture.storage), eq(7L), eq("index.yaml"), any(byte[].class),
@@ -231,7 +233,7 @@ class HelmGroupServiceTest {
         .thenReturn(stored);
 
     assertEquals(200, fixture.service.get(group, "index.yaml", false).status());
-    verify(fixture.indexCache).freshAttributes(cacheInfo, memberFreshUntil);
+    verify(fixture.indexCache).freshAttributes(group, cacheInfo, memberFreshUntil);
   }
 
   @Test

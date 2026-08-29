@@ -63,7 +63,7 @@ class HelmGroupIndexCacheTest {
         repositories, mock(AssetDao.class), metadata, controller, true);
     RepositoryRuntime group = runtime(21L, 60);
     NexusLikeCacheInfo info = cache.current(group, java.time.Instant.now());
-    Map<String, Object> attributes = cache.freshAttributes(info);
+    Map<String, Object> attributes = cache.freshAttributes(group, info, null);
     CachedAssetMetadata snapshot = snapshot("INDEX", attributes, true);
     when(metadata.find(eq(group.id()), eq("index.yaml"), any())).thenReturn(Optional.of(snapshot));
 
@@ -87,7 +87,7 @@ class HelmGroupIndexCacheTest {
     java.time.Instant memberFreshUntil = now.plusSeconds(30);
     NexusLikeCacheInfo info = cache.current(group, now);
     CachedAssetMetadata snapshot = snapshot(
-        "INDEX", cache.freshAttributes(info, memberFreshUntil), true);
+        "INDEX", cache.freshAttributes(group, info, memberFreshUntil), true);
     when(metadata.find(eq(group.id()), eq("index.yaml"), any()))
         .thenReturn(Optional.of(snapshot));
 
@@ -105,12 +105,34 @@ class HelmGroupIndexCacheTest {
         new StubRepositoryDao(), mock(AssetDao.class), metadata, controller, true);
     RepositoryRuntime group = runtime(21L, 60);
     java.time.Instant now = java.time.Instant.parse("2026-08-30T00:00:00Z");
-    Map<String, Object> attributes = new HashMap<>(cache.freshAttributes(cache.current(group, now)));
+    Map<String, Object> attributes = new HashMap<>(
+        cache.freshAttributes(group, cache.current(group, now), null));
     attributes.put(HelmGroupIndexCache.MEMBER_INDEX_FRESH_UNTIL_ATTRIBUTE, "not-an-instant");
     when(metadata.find(eq(group.id()), eq("index.yaml"), any()))
         .thenReturn(Optional.of(snapshot("INDEX", attributes, true)));
 
     assertFalse(cache.findFresh(group, now).isPresent());
+  }
+
+  @Test
+  void rejectsAnIndexBuiltFromAnOlderProxyConfigurationSnapshot() {
+    AssetMetadataCache metadata = mock(AssetMetadataCache.class);
+    NexusLikeCacheController controller = new NexusLikeCacheController(
+        new InMemoryVersionWatermark(), 60);
+    HelmGroupIndexCache cache = new HelmGroupIndexCache(
+        new StubRepositoryDao(), mock(AssetDao.class), metadata, controller, true);
+    RepositoryRuntime oldGroup = runtime(
+        21L, 60, List.of(proxyRuntime(11L, "https://old.example.test/")));
+    RepositoryRuntime updatedGroup = runtime(
+        21L, 60, List.of(proxyRuntime(11L, "https://new.example.test/")));
+    java.time.Instant now = java.time.Instant.parse("2026-08-30T00:00:00Z");
+    CachedAssetMetadata snapshot = snapshot(
+        "INDEX", cache.freshAttributes(oldGroup, cache.current(oldGroup, now), null), true);
+    when(metadata.find(eq(oldGroup.id()), eq("index.yaml"), any()))
+        .thenReturn(Optional.of(snapshot));
+
+    assertTrue(cache.findFresh(oldGroup, now).isPresent());
+    assertFalse(cache.findFresh(updatedGroup, now).isPresent());
   }
 
   @Test
@@ -196,9 +218,20 @@ class HelmGroupIndexCacheTest {
   }
 
   private static RepositoryRuntime runtime(long id, int metadataMaxAgeMinutes) {
+    return runtime(id, metadataMaxAgeMinutes, List.of());
+  }
+
+  private static RepositoryRuntime runtime(
+      long id, int metadataMaxAgeMinutes, List<RepositoryRuntime> members) {
     return new RepositoryRuntime(
         id, "helm-group", RepositoryFormat.HELM, RepositoryType.GROUP, "helm-group", true, 7L,
-        null, null, null, true, null, 60, metadataMaxAgeMinutes, true, null, List.of());
+        null, null, null, true, null, 60, metadataMaxAgeMinutes, true, null, members);
+  }
+
+  private static RepositoryRuntime proxyRuntime(long id, String remoteUrl) {
+    return new RepositoryRuntime(
+        id, "helm-proxy", RepositoryFormat.HELM, RepositoryType.PROXY, "helm-proxy", true, 7L,
+        null, null, null, true, remoteUrl, 60, 60, true, null, List.of());
   }
 
   private static RepositoryRecord group(long id, String name) {

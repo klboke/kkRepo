@@ -106,7 +106,7 @@ public class HelmGroupService {
           HelmIndex.CONTENT_TYPE,
           HelmAssetKind.INDEX,
           null,
-          indexCache.freshAttributes(cacheInfo, memberIndexes.freshUntil()),
+          indexCache.freshAttributes(group, cacheInfo, memberIndexes.freshUntil()),
           java.util.Map.of(),
           "group",
           null);

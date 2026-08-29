@@ -166,13 +166,13 @@ class HelmProxyServiceTest {
   }
 
   @Test
-  void proxiesProvenanceFromUrlDerivedDuringIndexRewrite() throws Exception {
+  void derivesProvenanceFromALegacyChartOnlyRemoteMapping() throws Exception {
     Fixture fixture = fixture();
     RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 1);
     CachedAssetMetadata index = snapshot(
         "index.yaml", Instant.now(),
         Map.of("remoteUrls", Map.of(
-            "demo-1.0.0.tgz.prov", "https://cdn.example.test/charts/demo.tgz.prov")));
+            "demo-1.0.0.tgz", "https://cdn.example.test/charts/demo.tgz?download=1#release")));
     when(fixture.cache.find(eq(runtime.id()), anyString(), any()))
         .thenAnswer(invocation -> invocation.getArgument(1).equals("index.yaml")
             ? Optional.of(index)
@@ -196,7 +196,44 @@ class HelmProxyServiceTest {
         .thenReturn(stored);
 
     assertEquals(200, fixture.service.get(runtime, "demo-1.0.0.tgz.prov", true).status());
-    assertEquals("https://cdn.example.test/charts/demo.tgz.prov", requestedUrl.get());
+    assertEquals(
+        "https://cdn.example.test/charts/demo.tgz.prov?download=1#release",
+        requestedUrl.get());
+  }
+
+  @Test
+  void refetchesAStillFreshIndexWhenTheProxyConfigurationChanges() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime oldRuntime = runtime(
+        RepositoryType.PROXY, 60, "https://old.example.test/");
+    RepositoryRuntime runtime = runtime(
+        RepositoryType.PROXY, 60, "https://new.example.test/");
+    CachedAssetMetadata oldIndex = snapshot(
+        "index.yaml",
+        Instant.now(),
+        Map.of(
+            "remoteUrls", Map.of(),
+            HelmProxyService.PROXY_CONFIGURATION_ATTRIBUTE,
+            HelmProxyService.configurationFingerprint(oldRuntime)),
+        false);
+    when(fixture.cache.find(eq(runtime.id()), eq("index.yaml"), any()))
+        .thenReturn(Optional.of(oldIndex));
+    when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
+    respond(fixture.fetcher, new HttpRemoteFetcher.Result(
+        200,
+        Map.of("Content-Type", "text/x-yaml"),
+        new ByteArrayInputStream("apiVersion: v1\nentries: {}\n".getBytes(StandardCharsets.UTF_8))));
+    HelmAssetWriter.Stored stored = stored("index.yaml", "text/x-yaml");
+    when(fixture.writer.writeBytes(
+        eq(runtime), eq(fixture.storage), eq(7L), eq("index.yaml"), any(byte[].class),
+        eq("text/x-yaml"), eq(HelmAssetKind.INDEX), eq(null), any(), any(),
+        eq("proxy"), isNull(), eq(false)))
+        .thenReturn(stored);
+
+    MavenResponse response = fixture.service.get(runtime, "index.yaml", true);
+
+    assertEquals(200, response.status());
+    verify(fixture.reader, never()).serveSnapshot(oldIndex, true, "index.yaml");
   }
 
   @Test
@@ -362,19 +399,36 @@ class HelmProxyServiceTest {
   }
 
   private static RepositoryRuntime runtime(RepositoryType type, int maxAgeMinutes) {
+    return runtime(type, maxAgeMinutes, "https://charts.example.test/");
+  }
+
+  private static RepositoryRuntime runtime(
+      RepositoryType type, int maxAgeMinutes, String remoteUrl) {
     return new RepositoryRuntime(
         10L, "helm", RepositoryFormat.HELM, type, "helm", true, 7L,
-        null, null, null, true, "https://charts.example.test/",
+        null, null, null, true, remoteUrl,
         maxAgeMinutes, maxAgeMinutes, true, null, List.of());
   }
 
   private static CachedAssetMetadata snapshot(
       String path, Instant updatedAt, Map<String, Object> attributes) {
+    return snapshot(path, updatedAt, attributes, true);
+  }
+
+  private static CachedAssetMetadata snapshot(
+      String path, Instant updatedAt, Map<String, Object> attributes, boolean addConfiguration) {
+    Map<String, Object> storedAttributes = new java.util.LinkedHashMap<>();
+    if (attributes != null) storedAttributes.putAll(attributes);
+    if (addConfiguration) {
+      storedAttributes.putIfAbsent(
+          HelmProxyService.PROXY_CONFIGURATION_ATTRIBUTE,
+          HelmProxyService.configurationFingerprint(runtime(RepositoryType.PROXY, 1)));
+    }
     AssetRecord asset = new AssetRecord(
         1L, 10L, null, 2L, RepositoryFormat.HELM, path, null,
         path, path.equals("index.yaml") ? "INDEX" : "PACKAGE",
         path.equals("index.yaml") ? "text/x-yaml" : "application/gzip",
-        4L, null, updatedAt, attributes);
+        4L, null, updatedAt, storedAttributes);
     return CachedAssetMetadata.of(asset, blob());
   }
 

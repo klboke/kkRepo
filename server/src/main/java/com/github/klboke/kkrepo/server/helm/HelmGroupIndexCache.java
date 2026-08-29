@@ -9,6 +9,9 @@ import com.github.klboke.kkrepo.server.cache.NexusCacheType;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheInfo;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -35,6 +38,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 public class HelmGroupIndexCache {
   static final String GROUP_INDEX_ATTRIBUTE = "helmGroupIndex";
   static final String MEMBER_INDEX_FRESH_UNTIL_ATTRIBUTE = "helmGroupMemberIndexFreshUntil";
+  static final String CONFIGURATION_FINGERPRINT_ATTRIBUTE = "helmGroupConfiguration";
 
   private static final Logger log = LoggerFactory.getLogger(HelmGroupIndexCache.class);
   private static final Object PENDING_MEMBERS_KEY =
@@ -81,6 +85,10 @@ public class HelmGroupIndexCache {
         || !Boolean.TRUE.equals(attributes.get(GROUP_INDEX_ATTRIBUTE))) {
       return Optional.empty();
     }
+    if (!configurationFingerprint(group).equals(
+        stringAttribute(attributes, CONFIGURATION_FINGERPRINT_ATTRIBUTE))) {
+      return Optional.empty();
+    }
     if (attributes.containsKey(MEMBER_INDEX_FRESH_UNTIL_ATTRIBUTE)) {
       Instant memberIndexFreshUntil = instantAttribute(
           attributes, MEMBER_INDEX_FRESH_UNTIL_ATTRIBUTE);
@@ -104,14 +112,13 @@ public class HelmGroupIndexCache {
     return cacheController.current(group.id(), NexusCacheType.METADATA, now);
   }
 
-  public Map<String, Object> freshAttributes(NexusLikeCacheInfo cacheInfo) {
-    return freshAttributes(cacheInfo, null);
-  }
-
   public Map<String, Object> freshAttributes(
-      NexusLikeCacheInfo cacheInfo, Instant memberIndexFreshUntil) {
+      RepositoryRuntime group,
+      NexusLikeCacheInfo cacheInfo,
+      Instant memberIndexFreshUntil) {
     Map<String, Object> attributes = new LinkedHashMap<>();
     attributes.put(GROUP_INDEX_ATTRIBUTE, true);
+    attributes.put(CONFIGURATION_FINGERPRINT_ATTRIBUTE, configurationFingerprint(group));
     if (memberIndexFreshUntil != null) {
       attributes.put(MEMBER_INDEX_FRESH_UNTIL_ATTRIBUTE, memberIndexFreshUntil.toString());
     }
@@ -133,6 +140,57 @@ public class HelmGroupIndexCache {
     } catch (RuntimeException ignored) {
       return null;
     }
+  }
+
+  static String configurationFingerprint(RepositoryRuntime group) {
+    StringBuilder material = new StringBuilder();
+    appendRuntimeConfiguration(material, group, new HashSet<>());
+    try {
+      byte[] digest = MessageDigest.getInstance("SHA-256")
+          .digest(material.toString().getBytes(StandardCharsets.UTF_8));
+      return java.util.HexFormat.of().formatHex(digest);
+    } catch (NoSuchAlgorithmException e) {
+      throw new IllegalStateException("SHA-256 is required by the JRE", e);
+    }
+  }
+
+  private static void appendRuntimeConfiguration(
+      StringBuilder material, RepositoryRuntime runtime, Set<Long> resolvingGroups) {
+    if (runtime == null) {
+      appendFingerprintField(material, null);
+      return;
+    }
+    appendFingerprintField(material, Long.toString(runtime.id()));
+    appendFingerprintField(material, runtime.format() == null ? null : runtime.format().name());
+    appendFingerprintField(material, runtime.type() == null ? null : runtime.type().name());
+    appendFingerprintField(material, Boolean.toString(runtime.online()));
+    if (runtime.isProxy()) {
+      appendFingerprintField(material, HelmProxyService.configurationFingerprint(runtime));
+    }
+    if (!runtime.isGroup()) return;
+    if (!resolvingGroups.add(runtime.id())) {
+      appendFingerprintField(material, "cycle");
+      return;
+    }
+    try {
+      if (runtime.members() != null) {
+        for (RepositoryRuntime member : runtime.members()) {
+          appendRuntimeConfiguration(material, member, resolvingGroups);
+        }
+      }
+    } finally {
+      resolvingGroups.remove(runtime.id());
+    }
+  }
+
+  private static void appendFingerprintField(StringBuilder material, String value) {
+    String normalized = value == null ? "" : value;
+    material.append(normalized.length()).append(':').append(normalized).append(';');
+  }
+
+  private static String stringAttribute(Map<String, Object> attributes, String name) {
+    Object raw = attributes == null ? null : attributes.get(name);
+    return raw == null ? null : raw.toString();
   }
 
   public void invalidateMemberAfterCommit(long memberRepositoryId) {

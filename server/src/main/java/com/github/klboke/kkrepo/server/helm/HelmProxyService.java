@@ -17,6 +17,9 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
 import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -31,6 +34,7 @@ public class HelmProxyService {
       HelmProxyService.class.getName() + ".indexAuthoritative";
   static final String INDEX_FRESH_UNTIL_ATTRIBUTE =
       HelmProxyService.class.getName() + ".indexFreshUntil";
+  static final String PROXY_CONFIGURATION_ATTRIBUTE = "helmProxyConfiguration";
 
   private final AssetDao assetDao;
   private final BlobStorageRegistry blobStorageRegistry;
@@ -116,7 +120,9 @@ public class HelmProxyService {
   private Optional<CachedAssetMetadata> lookupCached(RepositoryRuntime runtime, String path) {
     return assetMetadataCache.find(
         runtime.id(), path,
-        () -> AssetMetadataCache.Loaded.from(assetDao.findAssetByPath(runtime.id(), path), assetDao));
+        () -> AssetMetadataCache.Loaded.from(assetDao.findAssetByPath(runtime.id(), path), assetDao))
+        .filter(snapshot -> configurationFingerprint(runtime).equals(
+            stringAttr(snapshot.attributes(), PROXY_CONFIGURATION_ATTRIBUTE)));
   }
 
   private MavenResponse fetchAndCacheIndex(
@@ -186,6 +192,7 @@ public class HelmProxyService {
     HelmIndex.RewriteResult rewritten = HelmIndex.rewriteProxyIndex(upstream, runtime.proxyRemoteUrl());
     Map<String, Object> attrs = new LinkedHashMap<>();
     attrs.put("remoteUrls", rewritten.remoteUrlsByLocalPath());
+    attrs.put(PROXY_CONFIGURATION_ATTRIBUTE, configurationFingerprint(runtime));
     return writer.writeBytes(
         runtime,
         blobStorage(runtime),
@@ -235,6 +242,7 @@ public class HelmProxyService {
           negativeCache.invalidate(runtime, path);
           Map<String, Object> attrs = new LinkedHashMap<>();
           attrs.put("remoteUrl", remoteUrl);
+          attrs.put(PROXY_CONFIGURATION_ATTRIBUTE, configurationFingerprint(runtime));
           HelmAssetWriter.Stored stored = writer.write(
               runtime,
               blobStorage(runtime),
@@ -328,10 +336,19 @@ public class HelmProxyService {
     if (!(raw instanceof Map<?, ?> map)) {
       return null;
     }
-    Object exact = map.get(path);
+    String exact = mappedRemoteUrl(map, path);
+    if (exact != null) return exact;
+    if (path.toLowerCase(java.util.Locale.ROOT).endsWith(".tgz.prov")) {
+      String chartRemote = mappedRemoteUrl(map, path.substring(0, path.length() - 5));
+      if (chartRemote != null) return HelmIndex.provenanceUrlForChart(chartRemote);
+    }
+    return null;
+  }
+
+  private static String mappedRemoteUrl(Map<?, ?> remoteUrls, String path) {
+    Object exact = remoteUrls.get(path);
     if (exact != null) return exact.toString();
-    String file = fileName(path);
-    Object byFile = map.get(file);
+    Object byFile = remoteUrls.get(fileName(path));
     return byFile == null ? null : byFile.toString();
   }
 
@@ -425,5 +442,29 @@ public class HelmProxyService {
     } catch (RuntimeException ignored) {
       return null;
     }
+  }
+
+  static String configurationFingerprint(RepositoryRuntime runtime) {
+    StringBuilder material = new StringBuilder();
+    appendFingerprintField(material, runtime.proxyRemoteUrl());
+    appendFingerprintField(material, runtime.proxyRemoteUsername());
+    appendFingerprintField(material, runtime.proxyRemotePassword());
+    appendFingerprintField(material, runtime.proxyRemoteBearerToken());
+    appendFingerprintField(
+        material, runtime.outboundProxy() == null ? null : runtime.outboundProxy().cacheKey());
+    runtime.allowedRedirectHosts().stream().sorted()
+        .forEach(host -> appendFingerprintField(material, host));
+    try {
+      byte[] digest = MessageDigest.getInstance("SHA-256")
+          .digest(material.toString().getBytes(StandardCharsets.UTF_8));
+      return java.util.HexFormat.of().formatHex(digest);
+    } catch (NoSuchAlgorithmException e) {
+      throw new IllegalStateException("SHA-256 is required by the JRE", e);
+    }
+  }
+
+  private static void appendFingerprintField(StringBuilder material, String value) {
+    String normalized = value == null ? "" : value;
+    material.append(normalized.length()).append(':').append(normalized).append(';');
   }
 }
