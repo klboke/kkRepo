@@ -191,8 +191,20 @@ public class HelmGroupIndexCache {
         || !Boolean.TRUE.equals(attributes.get(GROUP_INDEX_ATTRIBUTE))) {
       return Optional.empty();
     }
-    if (!configurationFingerprint(group).equals(
-        stringAttribute(attributes, CONFIGURATION_FINGERPRINT_ATTRIBUTE))) {
+    String storedConfiguration =
+        stringAttribute(attributes, CONFIGURATION_FINGERPRINT_ATTRIBUTE);
+    try {
+      if (!cachedConfigurationMatchesDurable(group, storedConfiguration)) {
+        // A rolling-upgrade peer may change member order or configuration without enqueueing the
+        // Helm-specific marker. Reject the snapshot before a local catalog broadcast catches up,
+        // even when the request runtime still matches the stored value.
+        return Optional.empty();
+      }
+    } catch (RuntimeException e) {
+      log.warn(
+          "Failed reading durable Helm group configuration for {}; rejecting cached state",
+          group.name(),
+          e);
       return Optional.empty();
     }
     String storedMemberGeneration =
@@ -253,15 +265,27 @@ public class HelmGroupIndexCache {
   /**
    * Compares a request's possibly cached runtime with a fresh recursive database snapshot.
    *
-   * <p>This fence is used only while rebuilding a durable merged index. It prevents a replica
-   * that has not yet processed the repository-catalog broadcast from publishing an old member
-   * order or proxy configuration under a newly advanced cache token.
+   * <p>This fence prevents a replica that has not yet processed the repository-catalog broadcast
+   * from publishing an old member order or proxy configuration under a newly advanced cache
+   * token. Cached reads use the same durable comparison against the fingerprint stored with the
+   * merged index.
    */
   public boolean runtimeMatchesDurableConfiguration(RepositoryRuntime runtime) {
     if (runtime == null) return false;
     if (runtimeRegistry == null) return true;
     return runtimeRegistry.resolveFreshById(runtime.id())
         .map(durable -> configurationFingerprint(runtime).equals(configurationFingerprint(durable)))
+        .orElse(false);
+  }
+
+  private boolean cachedConfigurationMatchesDurable(
+      RepositoryRuntime runtime, String storedFingerprint) {
+    if (runtime == null || storedFingerprint == null) return false;
+    if (runtimeRegistry == null) {
+      return storedFingerprint.equals(configurationFingerprint(runtime));
+    }
+    return runtimeRegistry.resolveFreshById(runtime.id())
+        .map(durable -> storedFingerprint.equals(configurationFingerprint(durable)))
         .orElse(false);
   }
 

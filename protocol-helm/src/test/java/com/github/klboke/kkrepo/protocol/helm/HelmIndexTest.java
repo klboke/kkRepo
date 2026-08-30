@@ -242,6 +242,47 @@ class HelmIndexTest {
   }
 
   @Test
+  void groupMergeKeepsTheFirstReleaseWhenDifferentCoordinatesGenerateTheSamePath() {
+    byte[] first = """
+        entries:
+          demo:
+            - apiVersion: v2
+              name: demo
+              version: 1-2.0
+              digest: first-digest
+              urls: [charts/first.tgz]
+        """.getBytes(StandardCharsets.UTF_8);
+    byte[] second = """
+        entries:
+          demo-1:
+            - apiVersion: v2
+              name: demo-1
+              version: 2.0
+              digest: colliding-digest
+              urls: [charts/colliding.tgz]
+          safe:
+            - apiVersion: v2
+              name: safe
+              version: 3.0.0
+              digest: safe-digest
+              urls: [charts/safe.tgz]
+        """.getBytes(StandardCharsets.UTF_8);
+
+    byte[] merged = HelmIndex.mergeGroupIndexes(List.of(first, second), Instant.EPOCH);
+
+    assertEquals(List.of(
+        new HelmIndex.Entry("demo", "1-2.0", List.of("demo-1-2.0.tgz")),
+        new HelmIndex.Entry("safe", "3.0.0", List.of("safe-3.0.0.tgz"))),
+        HelmIndex.entries(merged));
+    HelmIndex.Release selected = HelmIndex.releaseForPath(merged, "demo-1-2.0.tgz")
+        .orElseThrow();
+    assertEquals("demo", selected.name());
+    assertEquals("1-2.0", selected.version());
+    assertEquals("first-digest", selected.digest());
+    assertFalse(text(merged).contains("colliding-digest"));
+  }
+
+  @Test
   void derivesProvenanceBeforeChartUrlQueryAndFragment() {
     byte[] upstream = """
         apiVersion: v1

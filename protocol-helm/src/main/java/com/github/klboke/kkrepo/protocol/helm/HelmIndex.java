@@ -206,6 +206,7 @@ public final class HelmIndex {
   public static byte[] mergeGroupIndexes(Collection<byte[]> memberIndexes, Instant generated) {
     Map<String, Object> mergedEntries = new LinkedHashMap<>();
     Map<String, Set<String>> releasesByEntry = new LinkedHashMap<>();
+    Map<String, String> releasesByLocalPath = new LinkedHashMap<>();
     if (memberIndexes != null) {
       for (byte[] memberIndex : memberIndexes) {
         if (memberIndex == null || memberIndex.length == 0) continue;
@@ -234,12 +235,26 @@ public final class HelmIndex {
                 || !isValidChartType(versionMap.get("type"))) {
               continue;
             }
+            String releaseKey = name + '\0' + version;
+            if (releases.contains(releaseKey)) continue;
             List<String> chartUrls = rewriteEntry(
                 entryName, versionMap, null, new LinkedHashMap<>()).stream()
                 .filter(HelmIndex::isChartArchiveUrl)
                 .toList();
             if (chartUrls.isEmpty()) continue;
-            if (!releases.add(name + '\0' + version)) continue;
+            // name-version is not an injective encoding: for example, demo@1-2.0 and
+            // demo-1@2.0 both become demo-1-2.0.tgz. Preserve configured first-wins order and
+            // omit a later ambiguous release instead of advertising a path that can resolve to
+            // only one source and violate the other release's digest.
+            if (chartUrls.stream().anyMatch(url -> {
+              String owner = releasesByLocalPath.get(normalizeLocalPath(url));
+              return owner != null && !owner.equals(releaseKey);
+            })) {
+              continue;
+            }
+            releases.add(releaseKey);
+            chartUrls.forEach(url ->
+                releasesByLocalPath.putIfAbsent(normalizeLocalPath(url), releaseKey));
             putRaw(versionMap, "urls", chartUrls);
             mergedVersions.add(versionMap);
           }

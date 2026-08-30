@@ -308,6 +308,36 @@ class HelmGroupIndexCacheTest {
   }
 
   @Test
+  void rejectsCachedIndexAgainstFreshDurableMembersBeforeTheLocalRuntimeRefreshes() {
+    RepositoryRuntime first = proxyRuntime(11L, "https://first.example.test/");
+    RepositoryRuntime second = proxyRuntime(12L, "https://second.example.test/");
+    RepositoryRuntime stale = runtime(21L, 60, List.of(first, second));
+    RepositoryRuntime durable = runtime(21L, 60, List.of(second, first));
+    RepositoryRuntimeRegistry runtimeRegistry = mock(RepositoryRuntimeRegistry.class);
+    when(runtimeRegistry.resolveFreshById(21L)).thenReturn(Optional.of(durable));
+    AssetDao assets = mock(AssetDao.class);
+    AssetMetadataCache metadata = mock(AssetMetadataCache.class);
+    NexusLikeCacheController controller = new NexusLikeCacheController(
+        new InMemoryVersionWatermark(), 60);
+    HelmGroupIndexCache cache = new HelmGroupIndexCache(
+        new StubRepositoryDao(),
+        assets,
+        metadata,
+        controller,
+        mock(RepositoryIndexRebuildDao.class),
+        runtimeRegistry,
+        true);
+    java.time.Instant now = java.time.Instant.parse("2026-08-30T00:00:00Z");
+    CachedAssetMetadata snapshot = snapshot(
+        "INDEX", cache.freshAttributes(stale, cache.current(stale, now), null), true);
+    when(metadata.find(eq(stale.id()), eq("index.yaml"), any()))
+        .thenReturn(Optional.of(snapshot));
+
+    assertFalse(cache.findFresh(stale, now).isPresent());
+    verify(runtimeRegistry).resolveFreshById(stale.id());
+  }
+
+  @Test
   void detectsAReorderedRuntimeAgainstFreshDurableRepositoryRows() {
     RepositoryRuntime first = proxyRuntime(11L, "https://first.example.test/");
     RepositoryRuntime second = proxyRuntime(12L, "https://second.example.test/");
