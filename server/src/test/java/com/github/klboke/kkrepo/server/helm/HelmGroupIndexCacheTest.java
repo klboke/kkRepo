@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -346,6 +348,108 @@ class HelmGroupIndexCacheTest {
         21L,
         RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
         "mixed-version-request");
+  }
+
+  @Test
+  void invalidatesCachedStateWhenTheDurableMemberGenerationCannotBeRead() {
+    StubRepositoryDao repositories = new StubRepositoryDao();
+    AssetMetadataCache metadata = mock(AssetMetadataCache.class);
+    RepositoryIndexRebuildDao rebuildQueue = mock(RepositoryIndexRebuildDao.class);
+    when(rebuildQueue.enqueueHelmGroupInvalidation(
+        21L, RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION))
+        .thenReturn("generation-read-failed");
+    when(rebuildQueue.acknowledgeHelmGroupInvalidationIfRequestToken(
+        21L,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        "generation-read-failed"))
+        .thenReturn(true);
+    NexusLikeCacheController controller =
+        new NexusLikeCacheController(new InMemoryVersionWatermark(), 60);
+    HelmGroupIndexCache cache = new HelmGroupIndexCache(
+        repositories, mock(AssetDao.class), metadata, controller, rebuildQueue, true);
+    RepositoryRuntime group = runtime(
+        21L, 60, List.of(proxyRuntime(11L, "https://charts.example.test/")));
+    java.time.Instant now = java.time.Instant.parse("2026-08-30T00:00:00Z");
+    Map<String, Object> attributes = cache.freshAttributes(
+        group, cache.current(group, now), null, "member-generation");
+    when(metadata.find(eq(group.id()), eq("index.yaml"), any()))
+        .thenReturn(Optional.of(snapshot("INDEX", attributes, true)));
+    when(metadata.currentRepositoryVersion(11L))
+        .thenThrow(new IllegalStateException("watermark unavailable"));
+
+    assertFalse(cache.findFresh(group, now).isPresent());
+
+    verify(rebuildQueue).enqueueHelmGroupInvalidation(
+        21L, RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION);
+    verify(rebuildQueue).acknowledgeHelmGroupInvalidationIfRequestToken(
+        21L,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        "generation-read-failed");
+  }
+
+  @Test
+  void rejectsInvalidFreshnessAndInvalidationInputs() {
+    HelmGroupIndexCache cache = new HelmGroupIndexCache(
+        new StubRepositoryDao(),
+        mock(AssetDao.class),
+        mock(AssetMetadataCache.class),
+        new NexusLikeCacheController(new InMemoryVersionWatermark(), 60),
+        mock(RepositoryIndexRebuildDao.class),
+        true);
+    RepositoryRuntime group = runtime(21L, 60);
+
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> cache.freshAttributes(group, cache.current(group, java.time.Instant.now()), null, " "));
+    assertNull(cache.memberIndexFreshUntil(null));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> cache.retryInvalidation(21L, "unsupported"));
+  }
+
+  @Test
+  void rejectsAnEmptyDurableInvalidationToken() {
+    StubRepositoryDao repositories = new StubRepositoryDao();
+    repositories.putGroupsContaining(11L, List.of(group(21L, "all")));
+    HelmGroupIndexCache cache = new HelmGroupIndexCache(
+        repositories,
+        mock(AssetDao.class),
+        mock(AssetMetadataCache.class),
+        new NexusLikeCacheController(new InMemoryVersionWatermark(), 60),
+        mock(RepositoryIndexRebuildDao.class),
+        true);
+
+    assertThrows(IllegalStateException.class, () -> cache.invalidateMemberAfterCommit(11L));
+  }
+
+  @Test
+  void leavesWatermarksUnchangedWhenANewerInvalidationSupersedesTheFastPath() {
+    StubRepositoryDao repositories = new StubRepositoryDao();
+    repositories.putGroupsContaining(11L, List.of(group(21L, "all")));
+    RepositoryIndexRebuildDao rebuildQueue = mock(RepositoryIndexRebuildDao.class);
+    when(rebuildQueue.enqueueHelmGroupInvalidation(
+        21L, RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION))
+        .thenReturn("superseded-request");
+    NexusLikeCacheController controller =
+        new NexusLikeCacheController(new InMemoryVersionWatermark(), 60);
+    HelmGroupIndexCache cache = new HelmGroupIndexCache(
+        repositories,
+        mock(AssetDao.class),
+        mock(AssetMetadataCache.class),
+        controller,
+        rebuildQueue,
+        true);
+    String metadataBefore = controller.currentToken(21L, NexusCacheType.METADATA);
+    String contentBefore = controller.currentToken(21L, NexusCacheType.CONTENT);
+
+    cache.invalidateMemberAfterCommit(11L);
+
+    assertEquals(metadataBefore, controller.currentToken(21L, NexusCacheType.METADATA));
+    assertEquals(contentBefore, controller.currentToken(21L, NexusCacheType.CONTENT));
+    verify(rebuildQueue).acknowledgeHelmGroupInvalidationIfRequestToken(
+        21L,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        "superseded-request");
   }
 
   @Test
