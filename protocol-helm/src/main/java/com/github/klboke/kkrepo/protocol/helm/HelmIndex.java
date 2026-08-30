@@ -97,10 +97,17 @@ public final class HelmIndex {
           // A classic chart repository can only serve chart archives through the URLs published
           // in index.yaml. Keep explicit provenance mappings for .prov requests, but never expose
           // unsupported upstream extensions as chart alternatives to Helm clients.
+          List<String> chartUrls = rewritten.stream()
+              .filter(HelmIndex::isChartArchiveUrl)
+              .toList();
+          if (chartUrls.isEmpty()) {
+            throw new IllegalArgumentException(
+                "Invalid Helm index entry: expected a resolvable chart archive URL");
+          }
           putRaw(
               versionMap,
               "urls",
-              rewritten.stream().filter(HelmIndex::isChartArchiveUrl).toList());
+              chartUrls);
         }
       });
     }
@@ -442,11 +449,12 @@ public final class HelmIndex {
     if (urls.isEmpty()) return List.of();
     List<String> rewritten = new ArrayList<>(urls.size());
     for (String url : urls) {
+      String remote = resolveRemoteUrl(remoteBaseUrl, url);
+      if (remote == null) continue;
       String local = localUrl(name, version, url);
       if (local == null || local.isBlank()) continue;
       if (!isChartArchiveUrl(local) && !isProvenanceUrl(local)) continue;
       rewritten.add(local);
-      String remote = resolveRemoteUrl(remoteBaseUrl, url);
       if (local.toLowerCase().endsWith(".tgz.prov")) {
         // An explicitly indexed provenance URL is authoritative over the derived chart sibling.
         remoteUrlsByLocalPath.put(local, remote);
@@ -467,6 +475,16 @@ public final class HelmIndex {
 
   private static boolean isProvenanceUrl(String url) {
     return normalizeLocalPath(url).toLowerCase(java.util.Locale.ROOT).endsWith(".tgz.prov");
+  }
+
+  private static boolean isValidUriReference(String url) {
+    if (url == null || url.isBlank()) return false;
+    try {
+      URI.create(url);
+      return true;
+    } catch (RuntimeException ignored) {
+      return false;
+    }
   }
 
   /** Derive the conventional provenance sibling without moving a query or fragment suffix. */
@@ -512,18 +530,17 @@ public final class HelmIndex {
   }
 
   private static String resolveRemoteUrl(String remoteBaseUrl, String url) {
-    URI uri;
     try {
-      uri = URI.create(url);
+      URI uri = URI.create(url);
+      if (uri.isAbsolute()) return uri.toString();
+      if (remoteBaseUrl == null || remoteBaseUrl.isBlank()) return uri.toString();
+      String base = remoteBaseUrl.endsWith("/")
+          ? remoteBaseUrl
+          : remoteBaseUrl + "/";
+      return URI.create(base).resolve(uri).toString();
     } catch (RuntimeException e) {
-      return url;
+      return null;
     }
-    if (uri.isAbsolute()) return uri.toString();
-    if (remoteBaseUrl == null || remoteBaseUrl.isBlank()) return url;
-    String base = remoteBaseUrl == null || remoteBaseUrl.endsWith("/")
-        ? remoteBaseUrl
-        : remoteBaseUrl + "/";
-    return URI.create(base).resolve(url).toString();
   }
 
   private static Object loadDocument(byte[] yamlBytes) {
@@ -592,9 +609,11 @@ public final class HelmIndex {
           throw new IllegalArgumentException(
               "Invalid Helm index entry " + name + ": expected non-empty string URLs");
         }
-        if (list.stream().map(String.class::cast).noneMatch(HelmIndex::isChartArchiveUrl)) {
+        if (list.stream().map(String.class::cast).noneMatch(
+            url -> isChartArchiveUrl(url) && isValidUriReference(url))) {
           throw new IllegalArgumentException(
-              "Invalid Helm index entry " + name + ": expected a chart archive URL");
+              "Invalid Helm index entry " + name
+                  + ": expected a resolvable chart archive URL");
         }
       }
     }

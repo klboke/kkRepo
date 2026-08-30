@@ -160,7 +160,7 @@ class HelmIndexTest {
             - name: demo
               version: 1.0.0
               appVersion: unusable
-              urls: [demo.zip, demo.tgz.prov]
+              urls: ["http://[/demo.tgz", demo.zip, demo.tgz.prov]
         """.getBytes(StandardCharsets.UTF_8);
     byte[] usable = """
         entries:
@@ -353,14 +353,41 @@ class HelmIndexTest {
             - name: demo
               version: 1.0.0
               urls:
-                - "http://["
+                - "http://[/demo.tgz"
         """.getBytes(StandardCharsets.UTF_8);
 
     assertThrows(
         IllegalArgumentException.class,
         () -> HelmIndex.rewriteProxyIndex(malformedUrl, null));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> HelmIndex.validateIndex(malformedUrl));
     assertEquals(List.of(), HelmIndex.entries("[]".getBytes(StandardCharsets.UTF_8)));
     assertEquals(List.of(), HelmIndex.entries("entries: []".getBytes(StandardCharsets.UTF_8)));
+  }
+
+  @Test
+  void dropsMalformedChartReferencesWhenAResolvableAlternativeExists() {
+    byte[] mixedUrls = """
+        entries:
+          demo:
+            - name: demo
+              version: 1.0.0
+              urls:
+                - "http://[/demo.tgz"
+                - charts/demo.tgz
+        """.getBytes(StandardCharsets.UTF_8);
+
+    HelmIndex.RewriteResult rewritten = HelmIndex.rewriteProxyIndex(
+        mixedUrls, "https://repo.example.test/root/");
+
+    assertEquals(
+        List.of(new HelmIndex.Entry("demo", "1.0.0", List.of("demo-1.0.0.tgz"))),
+        HelmIndex.entries(rewritten.body()));
+    assertEquals(
+        "https://repo.example.test/root/charts/demo.tgz",
+        rewritten.remoteUrlsByLocalPath().get("demo-1.0.0.tgz"));
+    assertFalse(rewritten.remoteUrlsByLocalPath().containsValue("http://[/demo.tgz"));
   }
 
   @Test
