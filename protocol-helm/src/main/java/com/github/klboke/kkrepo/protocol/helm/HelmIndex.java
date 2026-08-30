@@ -32,6 +32,7 @@ public final class HelmIndex {
   private static final int MAX_VERSION_LENGTH = 256;
   private static final String API_VERSION = "v1";
   private static final Set<String> CHART_API_VERSIONS = Set.of("v1", "v2");
+  private static final Set<String> CHART_TYPES = Set.of("application", "library");
   private static final DateTimeFormatter INSTANTS = DateTimeFormatter.ISO_INSTANT;
   // Helm parses chart versions with Masterminds semver.NewVersion: a lower-case v prefix,
   // shortened numeric cores, and leading zero coercion are accepted, while arbitrary labels are
@@ -229,7 +230,8 @@ public final class HelmIndex {
                 || !isSafeChartPathSegment(name)
                 || !isSafeChartPathSegment(version)
                 || !isValidChartVersion(version)
-                || !isValidChartApiVersion(string(versionMap.get("apiVersion"), null))) {
+                || !isValidChartApiVersion(string(versionMap.get("apiVersion"), null))
+                || !isValidChartType(versionMap.get("type"))) {
               continue;
             }
             List<String> chartUrls = rewriteEntry(
@@ -491,14 +493,24 @@ public final class HelmIndex {
     return normalizeLocalPath(url).toLowerCase(java.util.Locale.ROOT).endsWith(".tgz.prov");
   }
 
-  private static boolean isValidUriReference(String url) {
+  private static boolean isSupportedChartUrlReference(String url) {
     if (url == null || url.isBlank()) return false;
     try {
-      URI.create(url);
-      return true;
+      URI uri = URI.create(url);
+      if (!uri.isAbsolute()) return true;
+      String scheme = uri.getScheme();
+      return !uri.isOpaque()
+          && uri.getHost() != null
+          && !uri.getHost().isBlank()
+          && ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme));
     } catch (RuntimeException ignored) {
       return false;
     }
+  }
+
+  private static boolean isValidChartType(Object value) {
+    return value == null
+        || (value instanceof String type && (type.isEmpty() || CHART_TYPES.contains(type)));
   }
 
   /** Derive the conventional provenance sibling without moving a query or fragment suffix. */
@@ -531,7 +543,8 @@ public final class HelmIndex {
   private static String pathOf(String url) {
     if (url == null) return "";
     try {
-      return URI.create(url).getPath();
+      String path = URI.create(url).getPath();
+      return path == null ? "" : path;
     } catch (RuntimeException ignored) {
       return url;
     }
@@ -546,12 +559,17 @@ public final class HelmIndex {
   private static String resolveRemoteUrl(String remoteBaseUrl, String url) {
     try {
       URI uri = URI.create(url);
-      if (uri.isAbsolute()) return uri.toString();
+      if (uri.isAbsolute()) {
+        return isSupportedChartUrlReference(url) ? uri.toString() : null;
+      }
       if (remoteBaseUrl == null || remoteBaseUrl.isBlank()) return uri.toString();
       String base = remoteBaseUrl.endsWith("/")
           ? remoteBaseUrl
           : remoteBaseUrl + "/";
-      return URI.create(base).resolve(uri).toString();
+      URI resolved = URI.create(base).resolve(uri);
+      return isSupportedChartUrlReference(resolved.toString())
+          ? resolved.toString()
+          : null;
     } catch (RuntimeException e) {
       return null;
     }
@@ -616,6 +634,11 @@ public final class HelmIndex {
               "Invalid Helm index entry " + name
                   + ": expected chart apiVersion v1 or v2");
         }
+        if (!isValidChartType(release.get("type"))) {
+          throw new IllegalArgumentException(
+              "Invalid Helm index entry " + name
+                  + ": expected chart type application or library");
+        }
         if (!(release.get("version") instanceof String releaseVersion)
             || !isSafeChartPathSegment(releaseVersion)
             || !isValidChartVersion(releaseVersion)) {
@@ -633,7 +656,7 @@ public final class HelmIndex {
               "Invalid Helm index entry " + name + ": expected non-empty string URLs");
         }
         if (list.stream().map(String.class::cast).noneMatch(
-            url -> isChartArchiveUrl(url) && isValidUriReference(url))) {
+            url -> isChartArchiveUrl(url) && isSupportedChartUrlReference(url))) {
           throw new IllegalArgumentException(
               "Invalid Helm index entry " + name
                   + ": expected a resolvable chart archive URL");

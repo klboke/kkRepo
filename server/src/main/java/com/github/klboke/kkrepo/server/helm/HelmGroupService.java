@@ -135,14 +135,14 @@ public class HelmGroupService {
             selectedRelease(body, releasePath));
       }
 
-      long blobStoreId = requireBlobStore(group);
-      if (!aggregated.watermarkStable()) {
+      if (!aggregated.watermarkStable() || !runtimeMatchesDurableConfiguration(group)) {
         return new IndexResult(
             indexResponse(body, headOnly, null, aggregated.generatedAt()),
             false,
             memberIndexes.freshUntil(),
             selectedRelease(body, releasePath));
       }
+      long blobStoreId = requireBlobStore(group);
       HelmAssetWriter.Stored stored;
       try {
         BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);
@@ -192,6 +192,7 @@ public class HelmGroupService {
       RepositoryRuntime group, Set<Long> resolvingGroups) {
     Instant generatedAt = Instant.now();
     boolean trackWatermark = indexCache != null && indexCache.enabled();
+    boolean runtimeCurrentBefore = !trackWatermark || runtimeMatchesDurableConfiguration(group);
     String memberGenerationBefore = trackWatermark ? currentMemberGeneration(group) : null;
     NexusLikeCacheInfo before = trackWatermark ? currentWatermark(group) : null;
     MemberIndexes members = memberIndexes(group, resolvingGroups);
@@ -199,8 +200,11 @@ public class HelmGroupService {
     ensureIndexWithinLimit(body.length);
     NexusLikeCacheInfo after = trackWatermark ? currentWatermark(group) : null;
     String memberGenerationAfter = trackWatermark ? currentMemberGeneration(group) : null;
+    boolean runtimeCurrentAfter = !trackWatermark || runtimeMatchesDurableConfiguration(group);
     boolean stable = !trackWatermark
-        || (sameGeneration(before, after)
+        || (runtimeCurrentBefore
+            && runtimeCurrentAfter
+            && sameGeneration(before, after)
             && memberGenerationBefore != null
             && memberGenerationBefore.equals(memberGenerationAfter));
     return new AggregatedIndex(
@@ -222,6 +226,18 @@ public class HelmGroupService {
     } catch (RuntimeException e) {
       log.warn("Failed reading Helm group member generation for {}", group.name(), e);
       return null;
+    }
+  }
+
+  private boolean runtimeMatchesDurableConfiguration(RepositoryRuntime group) {
+    try {
+      return indexCache.runtimeMatchesDurableConfiguration(group);
+    } catch (RuntimeException e) {
+      log.warn(
+          "Failed comparing Helm group runtime with durable configuration for {}",
+          group.name(),
+          e);
+      return false;
     }
   }
 

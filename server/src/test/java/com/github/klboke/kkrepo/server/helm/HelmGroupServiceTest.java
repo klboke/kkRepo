@@ -377,6 +377,63 @@ class HelmGroupServiceTest {
   }
 
   @Test
+  void doesNotPublishAGroupIndexFromAStaleRuntimeMemberOrder() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime hosted = runtime(2L, "private", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of(hosted));
+    when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.empty());
+    when(fixture.indexCache.enabled()).thenReturn(true);
+    when(fixture.indexCache.current(eq(group), any())).thenReturn(cacheInfo("current"));
+    when(fixture.indexCache.runtimeMatchesDurableConfiguration(group)).thenReturn(false);
+    when(fixture.hosted.get(hosted, "index.yaml", false)).thenAnswer(ignored -> index("""
+        entries:
+          private:
+            - name: private
+              version: 1.0.0
+              urls: [private.tgz]
+        """));
+
+    MavenResponse response = fixture.service.get(group, "index.yaml", false);
+
+    assertEquals(
+        List.of(new HelmIndex.Entry("private", "1.0.0", List.of("private-1.0.0.tgz"))),
+        HelmIndex.entries(response.body().readAllBytes()));
+    verify(fixture.hosted, times(2)).get(hosted, "index.yaml", false);
+    verify(fixture.writer, never()).writeBytes(
+        any(), any(), any(Long.class), any(), any(), any(), any(), any(), anyMap(), anyMap(),
+        any(), any());
+  }
+
+  @Test
+  void rechecksDurableRuntimeConfigurationImmediatelyBeforePublication() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime hosted = runtime(2L, "private", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of(hosted));
+    when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.empty());
+    when(fixture.indexCache.enabled()).thenReturn(true);
+    when(fixture.indexCache.current(eq(group), any())).thenReturn(cacheInfo("current"));
+    when(fixture.indexCache.runtimeMatchesDurableConfiguration(group))
+        .thenReturn(true, true, false);
+    when(fixture.hosted.get(hosted, "index.yaml", false)).thenAnswer(ignored -> index("""
+        entries:
+          private:
+            - name: private
+              version: 1.0.0
+              urls: [private.tgz]
+        """));
+
+    MavenResponse response = fixture.service.get(group, "index.yaml", false);
+
+    assertEquals(
+        List.of(new HelmIndex.Entry("private", "1.0.0", List.of("private-1.0.0.tgz"))),
+        HelmIndex.entries(response.body().readAllBytes()));
+    verify(fixture.indexCache, times(3)).runtimeMatchesDurableConfiguration(group);
+    verify(fixture.writer, never()).writeBytes(
+        any(), any(), any(Long.class), any(), any(), any(), any(), any(), anyMap(), anyMap(),
+        any(), any());
+  }
+
+  @Test
   void servesCompleteMergeWhenDurableCachePersistenceFails() throws Exception {
     Fixture fixture = fixture();
     RepositoryRuntime hosted = runtime(2L, "private", RepositoryType.HOSTED, true, List.of());
@@ -1257,6 +1314,7 @@ class HelmGroupServiceTest {
         11L, "no-blob", RepositoryFormat.HELM, RepositoryType.GROUP, "helm-group", true, null,
         null, null, null, true, null, 60, 60, true, null, List.of());
     when(fixture.indexCache.enabled()).thenReturn(true);
+    when(fixture.indexCache.current(eq(noBlobStore), any())).thenReturn(cacheInfo("current"));
     assertThrows(IllegalStateException.class,
         () -> fixture.service.get(noBlobStore, "index.yaml", false));
   }
@@ -1346,6 +1404,7 @@ class HelmGroupServiceTest {
         proxy.get(
             invocation.getArgument(0), HelmHostedService.INDEX_PATH, false));
     when(indexCache.enabled()).thenReturn(false);
+    when(indexCache.runtimeMatchesDurableConfiguration(any())).thenReturn(true);
     when(indexCache.memberAssetGeneration(any())).thenReturn("member-generation");
     when(indexCache.winnerAssetGeneration(any(), any())).thenReturn("member-generation");
     when(memberCache.captureGeneration(any(), any())).thenAnswer(invocation -> {

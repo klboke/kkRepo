@@ -28,6 +28,7 @@ import com.github.klboke.kkrepo.server.cache.NexusLikeCacheInfo;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.cache.VersionWatermark;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.support.InMemoryVersionWatermark;
 import com.github.klboke.kkrepo.server.support.dao.RepositoryDaoAdapter;
 import java.util.HashMap;
@@ -206,7 +207,8 @@ class HelmGroupIndexCacheTest {
         mock(RepositoryIndexRebuildDao.class), true);
     RepositoryRuntime group = runtime(21L, 60);
     java.time.Instant now = java.time.Instant.parse("2026-08-30T00:00:00Z");
-    NexusLikeCacheInfo info = cache.current(group, now.minusSeconds(1));
+    NexusLikeCacheInfo info = controller.current(
+        group.id(), NexusCacheType.METADATA, now.minusSeconds(1));
     CachedAssetMetadata snapshot = snapshot(
         "INDEX", cache.freshAttributes(group, info, null), true);
     when(metadata.find(eq(group.id()), eq("index.yaml"), any()))
@@ -214,6 +216,7 @@ class HelmGroupIndexCacheTest {
 
     assertFalse(controller.isStale(
         group.id(), NexusCacheType.METADATA, info, 60, now));
+    assertEquals("2", cache.current(group, now).cacheToken());
     assertFalse(cache.findFresh(group, now).isPresent());
   }
 
@@ -230,7 +233,8 @@ class HelmGroupIndexCacheTest {
         mock(RepositoryIndexRebuildDao.class), true);
     RepositoryRuntime group = runtime(21L, 60);
     java.time.Instant now = java.time.Instant.parse("2026-08-30T00:00:00Z");
-    NexusLikeCacheInfo info = cache.current(group, now.minusSeconds(1));
+    NexusLikeCacheInfo info = controller.current(
+        group.id(), NexusCacheType.METADATA, now.minusSeconds(1));
     CachedAssetMetadata snapshot = snapshot(
         "INDEX", cache.freshAttributes(group, info, null), true);
     when(metadata.find(eq(group.id()), eq("index.yaml"), any()))
@@ -301,6 +305,30 @@ class HelmGroupIndexCacheTest {
 
     assertTrue(cache.findFresh(oldGroup, now).isPresent());
     assertFalse(cache.findFresh(updatedGroup, now).isPresent());
+  }
+
+  @Test
+  void detectsAReorderedRuntimeAgainstFreshDurableRepositoryRows() {
+    RepositoryRuntime first = proxyRuntime(11L, "https://first.example.test/");
+    RepositoryRuntime second = proxyRuntime(12L, "https://second.example.test/");
+    RepositoryRuntime stale = runtime(21L, 60, List.of(first, second));
+    RepositoryRuntime durable = runtime(21L, 60, List.of(second, first));
+    RepositoryRuntimeRegistry runtimeRegistry = mock(RepositoryRuntimeRegistry.class);
+    when(runtimeRegistry.resolveFreshById(21L))
+        .thenReturn(Optional.of(durable), Optional.of(stale), Optional.empty());
+    HelmGroupIndexCache cache = new HelmGroupIndexCache(
+        new StubRepositoryDao(),
+        mock(AssetDao.class),
+        mock(AssetMetadataCache.class),
+        new NexusLikeCacheController(new InMemoryVersionWatermark(), 60),
+        mock(RepositoryIndexRebuildDao.class),
+        runtimeRegistry,
+        true);
+
+    assertFalse(cache.runtimeMatchesDurableConfiguration(stale));
+    assertTrue(cache.runtimeMatchesDurableConfiguration(stale));
+    assertFalse(cache.runtimeMatchesDurableConfiguration(stale));
+    assertFalse(cache.runtimeMatchesDurableConfiguration(null));
   }
 
   @Test

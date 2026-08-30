@@ -418,6 +418,49 @@ class HelmIndexTest {
   }
 
   @Test
+  void rejectsUnsupportedAbsoluteChartUrlSchemes() {
+    for (String url : List.of(
+        "file:///tmp/demo.tgz",
+        "oci://registry.example.test/demo.tgz",
+        "https:demo.tgz",
+        "http:/demo.tgz")) {
+      byte[] body = ("apiVersion: v1\n"
+          + "entries: {demo: [{apiVersion: v2, name: demo, version: 1.0.0, "
+          + "urls: ['%s']}]}")
+          .formatted(url)
+          .getBytes(StandardCharsets.UTF_8);
+
+      assertThrows(IllegalArgumentException.class, () -> HelmIndex.validateIndex(body));
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> HelmIndex.rewriteProxyIndex(body, "https://repo.example.test/"));
+    }
+  }
+
+  @Test
+  void dropsUnsupportedAbsoluteChartUrlsWhenAnHttpAlternativeExists() {
+    byte[] body = """
+        apiVersion: v1
+        entries:
+          demo:
+            - apiVersion: v2
+              name: demo
+              version: 1.0.0
+              urls:
+                - file:///tmp/demo.tgz
+                - https://cdn.example.test/demo.tgz
+        """.getBytes(StandardCharsets.UTF_8);
+
+    HelmIndex.RewriteResult rewritten = HelmIndex.rewriteProxyIndex(
+        body, "https://repo.example.test/");
+
+    assertEquals(
+        "https://cdn.example.test/demo.tgz",
+        rewritten.remoteUrlsByLocalPath().get("demo-1.0.0.tgz"));
+    assertFalse(rewritten.remoteUrlsByLocalPath().containsValue("file:///tmp/demo.tgz"));
+  }
+
+  @Test
   void reportsMalformedYamlThroughTheProtocolErrorBoundary() {
     IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
         () -> HelmIndex.entries("entries: [".getBytes(StandardCharsets.UTF_8)));
@@ -455,6 +498,61 @@ class HelmIndexTest {
           IllegalArgumentException.class,
           () -> HelmIndex.rewriteProxyIndex(body, "https://repo.example.test/"));
     }
+  }
+
+  @Test
+  void acceptsDefaultApplicationAndLibraryChartTypes() {
+    for (String typeField : List.of("", "type: '', ", "type: application, ", "type: library, ")) {
+      byte[] body = ("apiVersion: v1\n"
+          + "entries: {demo: [{apiVersion: v2, %sname: demo, version: 1.0.0, "
+          + "urls: [demo.tgz]}]}")
+          .formatted(typeField)
+          .getBytes(StandardCharsets.UTF_8);
+
+      HelmIndex.validateIndex(body);
+    }
+  }
+
+  @Test
+  void rejectsUnsupportedReleaseChartTypesAndLetsALaterValidMemberWin() {
+    for (String type : List.of("plugin", "Application", " ")) {
+      byte[] body = ("apiVersion: v1\n"
+          + "entries: {demo: [{apiVersion: v2, type: '%s', name: demo, version: 1.0.0, "
+          + "urls: [demo.tgz]}]}")
+          .formatted(type)
+          .getBytes(StandardCharsets.UTF_8);
+
+      assertThrows(IllegalArgumentException.class, () -> HelmIndex.validateIndex(body));
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> HelmIndex.rewriteProxyIndex(body, "https://repo.example.test/"));
+    }
+
+    byte[] invalid = """
+        entries:
+          demo:
+            - apiVersion: v2
+              type: plugin
+              name: demo
+              version: 1.0.0
+              appVersion: invalid
+              urls: [demo.tgz]
+        """.getBytes(StandardCharsets.UTF_8);
+    byte[] valid = """
+        entries:
+          demo:
+            - apiVersion: v2
+              type: application
+              name: demo
+              version: 1.0.0
+              appVersion: valid
+              urls: [demo.tgz]
+        """.getBytes(StandardCharsets.UTF_8);
+
+    String merged = text(HelmIndex.mergeGroupIndexes(List.of(invalid, valid), Instant.EPOCH));
+
+    assertTrue(merged.contains("appVersion: valid"));
+    assertFalse(merged.contains("appVersion: invalid"));
   }
 
   @Test

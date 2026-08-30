@@ -13,6 +13,7 @@ import com.github.klboke.kkrepo.server.cache.NexusCacheType;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheInfo;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -60,6 +61,7 @@ public class HelmGroupIndexCache {
   private final AssetMetadataCache assetMetadataCache;
   private final NexusLikeCacheController cacheController;
   private final RepositoryIndexRebuildDao rebuildQueue;
+  private final RepositoryRuntimeRegistry runtimeRegistry;
   private final TransactionOperations transactions;
   private final boolean enabled;
 
@@ -70,6 +72,7 @@ public class HelmGroupIndexCache {
       AssetMetadataCache assetMetadataCache,
       NexusLikeCacheController cacheController,
       RepositoryIndexRebuildDao rebuildQueue,
+      RepositoryRuntimeRegistry runtimeRegistry,
       PlatformTransactionManager transactionManager,
       @Value("${kkrepo.cache.helm-group-index.enabled:true}") boolean enabled) {
     this(
@@ -78,6 +81,26 @@ public class HelmGroupIndexCache {
         assetMetadataCache,
         cacheController,
         rebuildQueue,
+        runtimeRegistry,
+        newInvalidationTransactions(transactionManager),
+        enabled);
+  }
+
+  HelmGroupIndexCache(
+      RepositoryDao repositoryDao,
+      AssetDao assetDao,
+      AssetMetadataCache assetMetadataCache,
+      NexusLikeCacheController cacheController,
+      RepositoryIndexRebuildDao rebuildQueue,
+      PlatformTransactionManager transactionManager,
+      boolean enabled) {
+    this(
+        repositoryDao,
+        assetDao,
+        assetMetadataCache,
+        cacheController,
+        rebuildQueue,
+        null,
         newInvalidationTransactions(transactionManager),
         enabled);
   }
@@ -95,6 +118,26 @@ public class HelmGroupIndexCache {
         assetMetadataCache,
         cacheController,
         rebuildQueue,
+        null,
+        TransactionOperations.withoutTransaction(),
+        enabled);
+  }
+
+  HelmGroupIndexCache(
+      RepositoryDao repositoryDao,
+      AssetDao assetDao,
+      AssetMetadataCache assetMetadataCache,
+      NexusLikeCacheController cacheController,
+      RepositoryIndexRebuildDao rebuildQueue,
+      RepositoryRuntimeRegistry runtimeRegistry,
+      boolean enabled) {
+    this(
+        repositoryDao,
+        assetDao,
+        assetMetadataCache,
+        cacheController,
+        rebuildQueue,
+        runtimeRegistry,
         TransactionOperations.withoutTransaction(),
         enabled);
   }
@@ -105,6 +148,7 @@ public class HelmGroupIndexCache {
       AssetMetadataCache assetMetadataCache,
       NexusLikeCacheController cacheController,
       RepositoryIndexRebuildDao rebuildQueue,
+      RepositoryRuntimeRegistry runtimeRegistry,
       TransactionOperations transactions,
       boolean enabled) {
     this.repositoryDao = repositoryDao;
@@ -112,6 +156,7 @@ public class HelmGroupIndexCache {
     this.assetMetadataCache = assetMetadataCache;
     this.cacheController = cacheController;
     this.rebuildQueue = rebuildQueue;
+    this.runtimeRegistry = runtimeRegistry;
     this.transactions = transactions;
     this.enabled = enabled;
   }
@@ -199,7 +244,25 @@ public class HelmGroupIndexCache {
   }
 
   public NexusLikeCacheInfo current(RepositoryRuntime group, Instant now) {
-    return cacheController.current(group.id(), NexusCacheType.METADATA, now);
+    return new NexusLikeCacheInfo(
+        now,
+        cacheController.currentDurableToken(group.id(), NexusCacheType.METADATA),
+        NexusCacheType.METADATA);
+  }
+
+  /**
+   * Compares a request's possibly cached runtime with a fresh recursive database snapshot.
+   *
+   * <p>This fence is used only while rebuilding a durable merged index. It prevents a replica
+   * that has not yet processed the repository-catalog broadcast from publishing an old member
+   * order or proxy configuration under a newly advanced cache token.
+   */
+  public boolean runtimeMatchesDurableConfiguration(RepositoryRuntime runtime) {
+    if (runtime == null) return false;
+    if (runtimeRegistry == null) return true;
+    return runtimeRegistry.resolveFreshById(runtime.id())
+        .map(durable -> configurationFingerprint(runtime).equals(configurationFingerprint(durable)))
+        .orElse(false);
   }
 
   public Map<String, Object> freshAttributes(
@@ -350,7 +413,27 @@ public class HelmGroupIndexCache {
     appendFingerprintField(material, Long.toString(runtime.id()));
     appendFingerprintField(material, runtime.format() == null ? null : runtime.format().name());
     appendFingerprintField(material, runtime.type() == null ? null : runtime.type().name());
+    appendFingerprintField(material, runtime.name());
+    appendFingerprintField(material, runtime.recipeName());
     appendFingerprintField(material, Boolean.toString(runtime.online()));
+    appendFingerprintField(
+        material, runtime.blobStoreId() == null ? null : runtime.blobStoreId().toString());
+    appendFingerprintField(material, runtime.writePolicy());
+    appendFingerprintField(material, runtime.versionPolicy());
+    appendFingerprintField(material, runtime.layoutPolicy());
+    appendFingerprintField(material, Boolean.toString(runtime.strictContentTypeValidation()));
+    appendFingerprintField(
+        material,
+        runtime.contentMaxAgeMinutes() == null
+            ? null
+            : runtime.contentMaxAgeMinutes().toString());
+    appendFingerprintField(
+        material,
+        runtime.metadataMaxAgeMinutes() == null
+            ? null
+            : runtime.metadataMaxAgeMinutes().toString());
+    appendFingerprintField(
+        material, runtime.autoBlock() == null ? null : runtime.autoBlock().toString());
     if (runtime.isProxy()) {
       appendFingerprintField(material, HelmProxyService.configurationFingerprint(runtime));
     }
