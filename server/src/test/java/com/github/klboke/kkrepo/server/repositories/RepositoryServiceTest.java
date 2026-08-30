@@ -26,6 +26,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityPrivilegeRecord;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
+import com.github.klboke.kkrepo.server.helm.HelmGroupIndexCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
@@ -70,6 +71,26 @@ class RepositoryServiceTest {
     assertEquals(RepositoryType.GROUP, created.type());
     assertEquals(List.of("helm-private", "helm-upstreams"), created.group().memberNames());
     assertEquals(List.of(61L, 62L), repositories.membersByGroupId.get(100L));
+  }
+
+  @Test
+  void helmMemberAndGroupConfigurationChangesUseDurableGroupInvalidation() {
+    RepositoryRecord hosted = helmRepository(61L, "helm-private", RepositoryType.HOSTED);
+    RepositoryRecord group = helmRepository(62L, "helm-all", RepositoryType.GROUP);
+    StubRepositoryDao repositories = new StubRepositoryDao(hosted, group);
+    repositories.replaceMembers(62L, List.of(61L));
+    HelmGroupIndexCache helmGroupIndexCache = mock(HelmGroupIndexCache.class);
+    RepositoryService service = service(repositories);
+    service.setHelmGroupIndexCache(helmGroupIndexCache);
+
+    service.update("helm-private", new UpdateCommand(
+        false, null, null, null, null, null, null, null, null, null, null, null));
+    service.update("helm-all", new UpdateCommand(
+        false, null, null, null, null, null, null, null, null, null, null, null));
+    service.replaceMembers("helm-all", List.of("helm-private"));
+
+    verify(helmGroupIndexCache).invalidateMemberAfterCommit(61L);
+    verify(helmGroupIndexCache, org.mockito.Mockito.times(2)).invalidateGroupAfterCommit(62L);
   }
 
   @Test

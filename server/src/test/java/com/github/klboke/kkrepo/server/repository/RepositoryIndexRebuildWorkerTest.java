@@ -100,7 +100,7 @@ class RepositoryIndexRebuildWorkerTest {
         RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
         RepositoryIndexRebuildDao.ROOT_SCOPE,
         Instant.now());
-    when(dao.claim(8)).thenReturn(List.of(claim));
+    when(dao.claimHelmGroupInvalidations(8)).thenReturn(List.of(claim));
 
     new RepositoryIndexRebuildWorker(
         dao,
@@ -118,7 +118,8 @@ class RepositoryIndexRebuildWorkerTest {
         true,
         new KkRepoMetrics(new SimpleMeterRegistry())).drain();
 
-    verify(groupIndexCache).retryInvalidation(21L);
+    verify(groupIndexCache).retryInvalidation(
+        21L, RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION);
   }
 
   @Test
@@ -131,8 +132,10 @@ class RepositoryIndexRebuildWorkerTest {
         RepositoryIndexRebuildDao.ROOT_SCOPE,
         Instant.now());
     IllegalStateException failure = new IllegalStateException("watermark unavailable");
-    when(dao.claim(8)).thenReturn(List.of(claim));
-    doThrow(failure).when(groupIndexCache).retryInvalidation(21L);
+    when(dao.claimHelmGroupInvalidations(8)).thenReturn(List.of(claim));
+    doThrow(failure)
+        .when(groupIndexCache)
+        .retryInvalidation(21L, RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION);
 
     new RepositoryIndexRebuildWorker(
         dao,

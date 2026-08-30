@@ -5,6 +5,7 @@ import java.util.List;
 
 public interface RepositoryIndexRebuildDao {
   String HELM_INDEX = "HELM_INDEX";
+  String HELM_GROUP_CONTENT_INVALIDATION = "HELM_GROUP_CONTENT_INVALIDATION";
   String HELM_GROUP_INVALIDATION = "HELM_GROUP_INVALIDATION";
   String PYPI_ROOT = "PYPI_ROOT";
   String PYPI_PROJECT = "PYPI_PROJECT";
@@ -30,9 +31,25 @@ public interface RepositoryIndexRebuildDao {
   boolean acknowledgeIfRequestToken(
       long repositoryId, String indexKind, String scopeKey, String requestToken);
 
+  /**
+   * Enqueues a Helm group invalidation in the dedicated rolling-upgrade-safe queue.
+   *
+   * <p>The dedicated queue is intentionally invisible to repository-index workers from releases
+   * that predate Helm group support. {@code invalidationKind} must be either {@link
+   * #HELM_GROUP_CONTENT_INVALIDATION} or {@link #HELM_GROUP_INVALIDATION}.
+   */
+  String enqueueHelmGroupInvalidation(long repositoryId, String invalidationKind);
+
+  /** Deletes a Helm group marker only when it still represents the supplied generation. */
+  boolean acknowledgeHelmGroupInvalidationIfRequestToken(
+      long repositoryId, String invalidationKind, String requestToken);
+
   void reenqueueFailure(Claim claim, RuntimeException error);
 
   List<Claim> claim(int maxItems);
+
+  /** Claims only the dedicated Helm group queue. Must be called inside a transaction. */
+  List<Claim> claimHelmGroupInvalidations(int maxItems);
 
   long countBacklog();
 

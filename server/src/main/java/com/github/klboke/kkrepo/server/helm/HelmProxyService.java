@@ -134,11 +134,17 @@ public class HelmProxyService {
     // makes every unversioned row ineligible. The conditional update also requires the repository
     // snapshot to remain current and the asset's database-generated update timestamp to predate
     // migration activation, rejecting changes and old-replica writes without trusting JVM clocks.
-    assetDao.bindLegacyHelmProxyCacheConfiguration(
+    int bound = assetDao.bindLegacyHelmProxyCacheConfiguration(
         snapshot.assetId(), runtime.id(), PROXY_CONFIGURATION_ATTRIBUTE, expected);
     // Reload even after winning the bind: an older replica may have concurrently refreshed other
     // attributes before our key-level update, so the stale hot snapshot is never authoritative.
-    assetMetadataCache.evict(runtime.id(), path);
+    if (bound > 0) {
+      assetMetadataCache.evict(runtime.id(), path);
+    } else {
+      // The durable row did not change. Drop only this request's stale read-through snapshot;
+      // advancing the repository watermark on every rejected legacy row would amplify outages.
+      assetMetadataCache.evictEntry(runtime.id(), path);
+    }
     return loadCached(runtime, path).filter(reloaded -> expected.equals(
         stringAttr(reloaded.attributes(), PROXY_CONFIGURATION_ATTRIBUTE)));
   }

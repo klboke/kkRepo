@@ -16,6 +16,7 @@ import com.github.klboke.kkrepo.server.swift.SwiftComponentService;
 import com.github.klboke.kkrepo.server.terraform.TerraformComponentService;
 import com.github.klboke.kkrepo.server.yum.YumService;
 import io.micrometer.core.instrument.Timer;
+import java.util.ArrayList;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -89,7 +90,11 @@ class RepositoryIndexRebuildWorker {
   }
 
   private void runBatch() {
-    List<Claim> claims = dao.claim(batchSize);
+    List<Claim> claims = new ArrayList<>(dao.claimHelmGroupInvalidations(batchSize));
+    int remaining = batchSize - claims.size();
+    if (remaining > 0) {
+      claims.addAll(dao.claim(remaining));
+    }
     if (claims.isEmpty()) return;
     metrics.incrementWorkerItems("repository_index_rebuild", "claim", "claimed", claims.size());
     for (Claim claim : claims) {
@@ -108,8 +113,9 @@ class RepositoryIndexRebuildWorker {
   }
 
   private void execute(Claim claim) {
-    if (RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION.equals(claim.indexKind())) {
-      helmGroupIndexCache.retryInvalidation(claim.repositoryId());
+    if (RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION.equals(claim.indexKind())
+        || RepositoryIndexRebuildDao.HELM_GROUP_CONTENT_INVALIDATION.equals(claim.indexKind())) {
+      helmGroupIndexCache.retryInvalidation(claim.repositoryId(), claim.indexKind());
       return;
     }
     RepositoryRuntime runtime = runtimeRegistry.resolveById(claim.repositoryId()).orElse(null);

@@ -143,6 +143,28 @@ class AssetMetadataCacheTest {
   }
 
   @Test
+  void entryOnlyEvictionReloadsThePathWithoutAdvancingTheRepositoryWatermark() {
+    InMemoryVersionWatermark watermark = new InMemoryVersionWatermark();
+    AssetMetadataCache cache = new AssetMetadataCache(
+        sharedCache, watermark, true, 120, 5);
+    AtomicInteger loads = new AtomicInteger();
+    cache.find(7L, "x.jar", () -> {
+      loads.incrementAndGet();
+      return Optional.of(new Loaded(asset(1L, 7L, "x.jar"), blob(10L)));
+    });
+
+    cache.evictEntry(7L, "x.jar");
+    Optional<CachedAssetMetadata> refreshed = cache.find(7L, "x.jar", () -> {
+      loads.incrementAndGet();
+      return Optional.of(new Loaded(asset(2L, 7L, "x.jar"), blob(20L)));
+    });
+
+    assertEquals(2, loads.get());
+    assertEquals(2L, refreshed.orElseThrow().assetId());
+    assertEquals(0L, watermark.current("asset-metadata:repo:7"));
+  }
+
+  @Test
   void evictAfterCommitRunsImmediatelyOutsideTransaction() {
     AssetMetadataCache cache = new AssetMetadataCache(sharedCache, true, 120, 5);
     AtomicInteger loads = new AtomicInteger();

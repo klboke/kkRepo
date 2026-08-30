@@ -51,6 +51,22 @@ public class RepositoryIndexRebuildDaoAdapter implements RepositoryIndexRebuildD
   }
 
   @Override
+  public String enqueueHelmGroupInvalidation(long arg0, String arg1) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public boolean acknowledgeHelmGroupInvalidationIfRequestToken(
+      long arg0, String arg1, String arg2) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public List<Claim> claimHelmGroupInvalidations(int arg0) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
   public boolean hasPending(long arg0, String arg1, String arg2) {
     throw new UnsupportedOperationException();
   }

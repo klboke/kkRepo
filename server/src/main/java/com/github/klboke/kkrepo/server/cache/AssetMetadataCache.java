@@ -204,6 +204,20 @@ public class AssetMetadataCache {
     evictLocal(repositoryId, storagePath);
   }
 
+  /**
+   * Evicts one read-through entry without advancing the repository watermark.
+   *
+   * <p>This is only safe when a conditional database correction did not modify any row and the
+   * caller must discard its own stale snapshot before re-reading. Durable writes must use {@link
+   * #evict} or {@link #evictAfterCommit} so sibling replicas are invalidated as well.
+   */
+  public void evictEntry(long repositoryId, String storagePath) {
+    if (!enabled) {
+      return;
+    }
+    evictLocal(repositoryId, storagePath);
+  }
+
   private void evictLocal(long repositoryId, String storagePath) {
     String key = key(repositoryId, storagePath);
     localSnapshots.invalidate(key);

@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
 
 /** Guards the frozen V1-V29 chain and validates repeat startup after newer migrations. */
 class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
-  private static final int LATEST_MIGRATION = 52;
+  private static final int LATEST_MIGRATION = 53;
   private static final Map<String, String> V29_SHA256 = checksums();
 
   @Test

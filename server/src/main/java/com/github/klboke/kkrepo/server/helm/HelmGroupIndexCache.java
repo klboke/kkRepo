@@ -250,24 +250,55 @@ public class HelmGroupIndexCache {
   }
 
   public void invalidateMemberAfterCommit(long memberRepositoryId) {
+    invalidateMemberAfterCommit(
+        memberRepositoryId, RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION);
+  }
+
+  /**
+   * Invalidates only ordered content winners after a package or provenance asset changes.
+   *
+   * <p>The member index did not change, so rebuilding every containing group's merged index would
+   * only create avoidable metadata work.
+   */
+  public void invalidateMemberContentAfterCommit(long memberRepositoryId) {
+    invalidateMemberAfterCommit(
+        memberRepositoryId, RepositoryIndexRebuildDao.HELM_GROUP_CONTENT_INVALIDATION);
+  }
+
+  private void invalidateMemberAfterCommit(long memberRepositoryId, String invalidationKind) {
+    if (!enabled) return;
     Set<Long> groups = new LinkedHashSet<>();
     collectContainingGroups(memberRepositoryId, groups);
-    enqueueInvalidations(groups);
+    enqueueInvalidations(groups, invalidationKind);
   }
 
   public void invalidateGroupAfterCommit(long groupId) {
     if (!enabled) return;
     Set<Long> groups = new LinkedHashSet<>();
     collectGroupAndAncestors(groupId, groups);
-    enqueueInvalidations(groups);
+    enqueueInvalidations(groups, RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION);
   }
 
   /** Called by the durable repository-index worker after it claims an invalidation marker. */
   public void retryInvalidation(long groupId) {
+    retryInvalidation(groupId, RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION);
+  }
+
+  /** Called by the durable repository-index worker after it claims an invalidation marker. */
+  public void retryInvalidation(long groupId, String invalidationKind) {
+    boolean invalidateMetadata =
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION.equals(invalidationKind);
+    if (!invalidateMetadata
+        && !RepositoryIndexRebuildDao.HELM_GROUP_CONTENT_INVALIDATION.equals(invalidationKind)) {
+      throw new IllegalArgumentException(
+          "Unsupported Helm group invalidation kind: " + invalidationKind);
+    }
     // Winner selection must move first. If the metadata bump then fails, the durable marker stays
     // queued while no replica can keep serving a member winner selected before this content change.
     cacheController.invalidateOrThrow(groupId, NexusCacheType.CONTENT);
-    cacheController.invalidateOrThrow(groupId, NexusCacheType.METADATA);
+    if (invalidateMetadata) {
+      cacheController.invalidateOrThrow(groupId, NexusCacheType.METADATA);
+    }
   }
 
   private void collectContainingGroups(long memberRepositoryId, Set<Long> groups) {
@@ -285,45 +316,44 @@ public class HelmGroupIndexCache {
     }
   }
 
-  private void enqueueInvalidations(Set<Long> groups) {
+  private void enqueueInvalidations(Set<Long> groups, String invalidationKind) {
     for (long groupId : groups) {
       // The marker participates in the member-asset write transaction. A committed member change
       // therefore always leaves durable retry work before the best-effort afterCommit fast path.
-      String requestToken = rebuildQueue.enqueueTracked(
-          groupId,
-          RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
-          RepositoryIndexRebuildDao.ROOT_SCOPE);
+      String requestToken =
+          rebuildQueue.enqueueHelmGroupInvalidation(groupId, invalidationKind);
       if (requestToken == null || requestToken.isBlank()) {
         throw new IllegalStateException(
             "Repository index rebuild queue returned an empty Helm invalidation token");
       }
-      deferAfterCommit(new PendingInvalidation(groupId, requestToken));
+      deferAfterCommit(new PendingInvalidation(groupId, invalidationKind, requestToken));
     }
   }
 
   private void attemptQueuedInvalidation(PendingInvalidation invalidation) {
     try {
       Boolean applied = transactions.execute(status -> {
-        boolean claimed = rebuildQueue.acknowledgeIfRequestToken(
+        boolean claimed = rebuildQueue.acknowledgeHelmGroupInvalidationIfRequestToken(
             invalidation.groupId(),
-            RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
-            RepositoryIndexRebuildDao.ROOT_SCOPE,
+            invalidation.invalidationKind(),
             invalidation.requestToken());
         if (!claimed) return false;
         // The conditional marker delete and both watermark bumps share one transaction. A failure
         // restores the marker, while a worker or newer enqueue that wins the row lock makes this
         // fast path a no-op instead of advancing the same generation twice.
-        retryInvalidation(invalidation.groupId());
+        retryInvalidation(invalidation.groupId(), invalidation.invalidationKind());
         return true;
       });
       if (!Boolean.TRUE.equals(applied)) {
         log.debug(
-            "Helm group invalidation marker for group {} was already claimed or superseded",
+            "Helm group {} invalidation marker for group {} was already claimed or superseded",
+            invalidation.invalidationKind(),
             invalidation.groupId());
       }
     } catch (RuntimeException e) {
       log.warn(
-          "Failed invalidating Helm group index token for group {}; durable retry retained",
+          "Failed applying Helm group {} invalidation token for group {}; durable retry retained",
+          invalidation.invalidationKind(),
           invalidation.groupId(),
           e);
     }
@@ -335,13 +365,13 @@ public class HelmGroupIndexCache {
       return;
     }
     @SuppressWarnings("unchecked")
-    Map<Long, PendingInvalidation> pending =
-        (Map<Long, PendingInvalidation>) TransactionSynchronizationManager.getResource(
-            PENDING_GROUPS_KEY);
+    Map<PendingInvalidationKey, PendingInvalidation> pending =
+        (Map<PendingInvalidationKey, PendingInvalidation>)
+            TransactionSynchronizationManager.getResource(PENDING_GROUPS_KEY);
     if (pending == null) {
       pending = new LinkedHashMap<>();
       TransactionSynchronizationManager.bindResource(PENDING_GROUPS_KEY, pending);
-      Map<Long, PendingInvalidation> snapshot = pending;
+      Map<PendingInvalidationKey, PendingInvalidation> snapshot = pending;
       TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
         @Override
         public void afterCommit() {
@@ -356,11 +386,16 @@ public class HelmGroupIndexCache {
         }
       });
     }
-    // Multiple writes to the same member inside one transaction leave only the newest marker token.
-    // A successful fast path can then acknowledge exactly that generation without deleting a
-    // concurrent invalidation committed by another transaction.
-    pending.put(invalidation.groupId(), invalidation);
+    // Multiple writes for the same group and invalidation kind inside one transaction leave only
+    // the newest marker token. A successful fast path can then acknowledge exactly that generation
+    // without deleting a concurrent invalidation committed by another transaction.
+    pending.put(
+        new PendingInvalidationKey(invalidation.groupId(), invalidation.invalidationKind()),
+        invalidation);
   }
 
-  private record PendingInvalidation(long groupId, String requestToken) {}
+  private record PendingInvalidationKey(long groupId, String invalidationKind) {}
+
+  private record PendingInvalidation(
+      long groupId, String invalidationKind, String requestToken) {}
 }

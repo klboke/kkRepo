@@ -35,8 +35,8 @@ This project follows a pragmatic release process. Stable releases call out migra
 
 ### Upgrade Notes
 
-- Existing `0.9.0` MySQL and PostgreSQL deployments can upgrade in place through Flyway V49-V52. Back up the relational database and blob store together, allow migrations to complete before serving traffic, and do not run mixed application versions after the new schema is applied.
-- V49 adds R / CRAN package, publication, snapshot, group-binding, proxy, tombstone, migration, and lease state. V50 adds the shared default UI theme setting. V51 adds a database-clock-fenced, one-time Helm proxy legacy-cache upgrade: only never-reconfigured repositories can adopt pre-migration cache rows, and later writes or configuration changes force a rebuild. V52 adds generation-safe acknowledgements for durable repository index and Helm group cache invalidation markers.
+- Existing `0.9.0` MySQL and PostgreSQL deployments can upgrade in place through Flyway V49-V53. Back up the relational database and blob store together, allow migrations to complete before serving traffic, and do not run mixed application versions after the new schema is applied.
+- V49 adds R / CRAN package, publication, snapshot, group-binding, proxy, tombstone, migration, and lease state. V50 adds the shared default UI theme setting. V51 adds a database-clock-fenced, one-time Helm proxy legacy-cache upgrade: only never-reconfigured repositories can adopt pre-migration cache rows, and later writes or configuration changes force a rebuild. V52 adds generation-safe acknowledgements for durable repository index markers. V53 isolates Helm group invalidation work in a dedicated queue that older repository-index workers cannot claim during a rolling upgrade.
 - New R / CRAN repositories are not created automatically. Existing PyPI proxies retain `/simple` when no remote index path is configured, and existing Go proxy/group repositories keep their current behavior until a hosted member is explicitly created or added.
 
 ## 0.9.0 - 2026-08-20

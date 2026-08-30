@@ -190,6 +190,32 @@ class HelmIndexTest {
   }
 
   @Test
+  void groupMergeDropsCoordinatesThatWouldCreateAmbiguousLocalUrls() {
+    byte[] unsafe = """
+        entries:
+          'demo?channel':
+            - name: 'demo?channel'
+              version: 1.0.0
+              urls: [demo.tgz]
+          demo:
+            - name: demo
+              version: '1.0.0%2fescape'
+              urls: [demo.tgz]
+          safe:
+            - name: safe
+              version: 1.0.0+build
+              urls: [safe.tgz]
+        """.getBytes(StandardCharsets.UTF_8);
+
+    byte[] merged = HelmIndex.mergeGroupIndexes(List.of(unsafe), Instant.EPOCH);
+
+    assertEquals(
+        List.of(new HelmIndex.Entry(
+            "safe", "1.0.0+build", List.of("safe-1.0.0+build.tgz"))),
+        HelmIndex.entries(merged));
+  }
+
+  @Test
   void derivesProvenanceBeforeChartUrlQueryAndFragment() {
     byte[] upstream = """
         entries:
@@ -348,6 +374,10 @@ class HelmIndexTest {
         "entries: {demo: [{name: demo, version: 1.0.0, urls: [false]}]}",
         "entries: {demo: [{name: demo, version: 1.0.0, urls: [{nested: value}]}]}",
         "entries: {'../private': [{name: demo, version: 1.0.0, urls: [demo.tgz]}]}",
+        "entries: {'demo?channel': [{name: demo, version: 1.0.0, urls: [demo.tgz]}]}",
+        "entries: {demo: [{name: 'demo#fragment', version: 1.0.0, urls: [demo.tgz]}]}",
+        "entries: {demo: [{name: demo, version: '1.0.0%2fescape', urls: [demo.tgz]}]}",
+        "entries: {demo: [{name: demo, version: '1.0.0%5cescape', urls: [demo.tgz]}]}",
         "entries: {demo: [{name: '../private', version: 1.0.0, urls: [demo.tgz]}]}",
         "entries: {demo: [{name: demo, version: '1.0.0/escape', urls: [demo.tgz]}]}")) {
       assertThrows(

@@ -193,7 +193,7 @@ class HelmAssetWriter {
     if (componentId != null) {
       componentDao.deleteIfNoAssets(componentId);
     }
-    notifyContainingGroups(runtime);
+    notifyContainingGroups(runtime, HelmAssetKind.INDEX.name().equals(asset.kind()));
     return 1;
   }
 
@@ -313,17 +313,20 @@ class HelmAssetWriter {
     }
     browseNodeDao.upsertPathAncestors(runtime.id(), path, persistedAsset.id(), componentId);
     assetMetadataCache.evictAfterCommit(runtime.id(), path);
-    notifyContainingGroups(runtime);
+    notifyContainingGroups(runtime, kind == HelmAssetKind.INDEX);
     return new Stored(persistedAsset, persistedBlob, digests, created, responseFile);
   }
 
-  private void notifyContainingGroups(RepositoryRuntime runtime) {
+  private void notifyContainingGroups(RepositoryRuntime runtime, boolean memberIndexChanged) {
     if (runtime.isGroup()) return;
     if (groupIndexCache != null) {
-      // Chart, provenance, and generated-index changes can all change an ordered group winner.
-      // The group invalidator writes a durable marker in this transaction and advances both the
-      // CONTENT winner token and the METADATA aggregate token after commit.
-      groupIndexCache.invalidateMemberAfterCommit(runtime.id());
+      // Every asset change can alter an ordered content winner. Only index.yaml changes can alter
+      // the merged group index, so package/provenance cache fills avoid a metadata rebuild.
+      if (memberIndexChanged) {
+        groupIndexCache.invalidateMemberAfterCommit(runtime.id());
+      } else {
+        groupIndexCache.invalidateMemberContentAfterCommit(runtime.id());
+      }
     }
   }
 

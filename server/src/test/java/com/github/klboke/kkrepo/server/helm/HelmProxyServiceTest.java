@@ -361,6 +361,8 @@ class HelmProxyServiceTest {
     verify(fixture.assetDao).bindLegacyHelmProxyCacheConfiguration(
         eq(legacy.assetId()), eq(runtime.id()),
         eq(HelmProxyService.PROXY_CONFIGURATION_ATTRIBUTE), anyString());
+    verify(fixture.cache).evictEntry(runtime.id(), "index.yaml");
+    verify(fixture.cache, never()).evict(runtime.id(), "index.yaml");
   }
 
   @Test

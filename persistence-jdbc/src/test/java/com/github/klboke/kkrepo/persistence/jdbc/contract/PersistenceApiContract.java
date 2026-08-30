@@ -168,6 +168,7 @@ public abstract class PersistenceApiContract {
         "docker_tag",
         "docker_upload_chunk",
         "docker_upload_session",
+        "helm_group_invalidation_marker",
         "helm_proxy_legacy_cache_fence",
         "huggingface_api_cache",
         "huggingface_file",
@@ -5069,20 +5070,17 @@ public abstract class PersistenceApiContract {
     long repositoryId = createRepository("tracked-index-marker", RepositoryFormat.HELM);
     RepositoryIndexRebuildDao queue = stores().repositoryIndexRebuild();
 
-    String first = queue.enqueueTracked(
+    String first = queue.enqueueHelmGroupInvalidation(
         repositoryId,
-        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
-        RepositoryIndexRebuildDao.ROOT_SCOPE);
-    String second = queue.enqueueTracked(
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION);
+    String second = queue.enqueueHelmGroupInvalidation(
         repositoryId,
-        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
-        RepositoryIndexRebuildDao.ROOT_SCOPE);
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION);
 
     assertNotEquals(first, second);
-    assertFalse(queue.acknowledgeIfRequestToken(
+    assertFalse(queue.acknowledgeHelmGroupInvalidationIfRequestToken(
         repositoryId,
         RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
-        RepositoryIndexRebuildDao.ROOT_SCOPE,
         first));
     assertTrue(queue.hasPending(
         repositoryId,
@@ -5091,10 +5089,9 @@ public abstract class PersistenceApiContract {
 
     String cacheVersionName = "helm-group-rollback-" + repositoryId;
     assertThrows(IllegalStateException.class, () -> inTransaction(() -> {
-      assertTrue(queue.acknowledgeIfRequestToken(
+      assertTrue(queue.acknowledgeHelmGroupInvalidationIfRequestToken(
           repositoryId,
           RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
-          RepositoryIndexRebuildDao.ROOT_SCOPE,
           second));
       stores().cacheVersions().bump(cacheVersionName);
       throw new IllegalStateException("force marker and watermark rollback");
@@ -5105,14 +5102,39 @@ public abstract class PersistenceApiContract {
         RepositoryIndexRebuildDao.ROOT_SCOPE));
     assertEquals(0L, stores().cacheVersions().current(cacheVersionName));
 
-    assertTrue(queue.acknowledgeIfRequestToken(
+    assertTrue(queue.acknowledgeHelmGroupInvalidationIfRequestToken(
         repositoryId,
         RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
-        RepositoryIndexRebuildDao.ROOT_SCOPE,
         second));
     assertFalse(queue.hasPending(
         repositoryId,
         RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        RepositoryIndexRebuildDao.ROOT_SCOPE));
+  }
+
+  @Test
+  void helmGroupInvalidationsAreInvisibleToPreFeatureRepositoryIndexClaims() {
+    long repositoryId = createRepository("dedicated-helm-group-marker", RepositoryFormat.HELM);
+    RepositoryIndexRebuildDao queue = stores().repositoryIndexRebuild();
+    queue.enqueueHelmGroupInvalidation(
+        repositoryId, RepositoryIndexRebuildDao.HELM_GROUP_CONTENT_INVALIDATION);
+
+    assertEquals(1L, queue.countBacklog());
+    assertTrue(inTransaction(() -> queue.claim(1)).isEmpty());
+    List<RepositoryIndexRebuildDao.Claim> claimed =
+        inTransaction(() -> queue.claimHelmGroupInvalidations(1));
+
+    assertEquals(1, claimed.size());
+    assertEquals(repositoryId, claimed.getFirst().repositoryId());
+    assertEquals(
+        RepositoryIndexRebuildDao.HELM_GROUP_CONTENT_INVALIDATION,
+        claimed.getFirst().indexKind());
+    queue.reenqueueFailure(claimed.getFirst(), new IllegalStateException("watermark unavailable"));
+    assertEquals(1L, queue.countFailures());
+    assertEquals(1, inTransaction(() -> queue.claimHelmGroupInvalidations(1)).size());
+    assertFalse(queue.hasPending(
+        repositoryId,
+        RepositoryIndexRebuildDao.HELM_GROUP_CONTENT_INVALIDATION,
         RepositoryIndexRebuildDao.ROOT_SCOPE));
   }
 

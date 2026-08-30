@@ -64,7 +64,7 @@ class HelmAssetWriterTest {
     verify(fixture.componentDao).upsertReturningId(any());
     verify(fixture.browseNodeDao).upsertPathAncestors(10L, "demo-1.2.3.tgz", 11L, 3L);
     verify(fixture.cache).evictAfterCommit(10L, "demo-1.2.3.tgz");
-    verify(fixture.groupIndexCache).invalidateMemberAfterCommit(10L);
+    verify(fixture.groupIndexCache).invalidateMemberContentAfterCommit(10L);
   }
 
   @Test
@@ -98,7 +98,7 @@ class HelmAssetWriterTest {
         eq(11L), eq(3L), eq(2L), eq("PROVENANCE"), eq("application/octet-stream"),
         eq((long) provenance.length), any(Instant.class), any());
     verify(fixture.assetDao).markBlobDeletedIfUnreferenced(99L, "asset replaced");
-    verify(fixture.groupIndexCache).invalidateMemberAfterCommit(runtime.id());
+    verify(fixture.groupIndexCache).invalidateMemberContentAfterCommit(runtime.id());
   }
 
   @Test
@@ -142,7 +142,7 @@ class HelmAssetWriterTest {
     verify(fixture.componentDao).deleteIfNoAssets(3L);
     verify(fixture.cache).evictAfterCommit(runtime.id(), "demo-1.0.0.tgz");
     verify(fixture.storage, never()).delete(any());
-    verify(fixture.groupIndexCache).invalidateMemberAfterCommit(runtime.id());
+    verify(fixture.groupIndexCache).invalidateMemberContentAfterCommit(runtime.id());
   }
 
   @Test

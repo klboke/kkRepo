@@ -45,14 +45,12 @@ class HelmGroupIndexCacheTest {
     StubRepositoryDao repositories = new StubRepositoryDao();
     repositories.putGroupsContaining(11L, List.of(group(21L, "all")));
     RepositoryIndexRebuildDao rebuildQueue = mock(RepositoryIndexRebuildDao.class);
-    when(rebuildQueue.enqueueTracked(
+    when(rebuildQueue.enqueueHelmGroupInvalidation(
+        21L,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION)).thenReturn("request");
+    when(rebuildQueue.acknowledgeHelmGroupInvalidationIfRequestToken(
         21L,
         RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
-        RepositoryIndexRebuildDao.ROOT_SCOPE)).thenReturn("request");
-    when(rebuildQueue.acknowledgeIfRequestToken(
-        21L,
-        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
-        RepositoryIndexRebuildDao.ROOT_SCOPE,
         "request")).thenReturn(true);
     PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
     when(transactionManager.getTransaction(any(TransactionDefinition.class)))
@@ -83,20 +81,18 @@ class HelmGroupIndexCacheTest {
     repositories.putGroupsContaining(11L, List.of(group(21L, "nested")));
     repositories.putGroupsContaining(21L, List.of(group(31L, "root")));
     RepositoryIndexRebuildDao rebuildQueue = mock(RepositoryIndexRebuildDao.class);
-    when(rebuildQueue.enqueueTracked(
+    when(rebuildQueue.enqueueHelmGroupInvalidation(
         21L,
-        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
-        RepositoryIndexRebuildDao.ROOT_SCOPE)).thenReturn("nested-request");
-    when(rebuildQueue.enqueueTracked(
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION)).thenReturn("nested-request");
+    when(rebuildQueue.enqueueHelmGroupInvalidation(
         31L,
-        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
-        RepositoryIndexRebuildDao.ROOT_SCOPE)).thenReturn("root-request");
-    when(rebuildQueue.acknowledgeIfRequestToken(
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION)).thenReturn("root-request");
+    when(rebuildQueue.acknowledgeHelmGroupInvalidationIfRequestToken(
         eq(21L), eq(RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION),
-        eq(RepositoryIndexRebuildDao.ROOT_SCOPE), eq("nested-request"))).thenReturn(true);
-    when(rebuildQueue.acknowledgeIfRequestToken(
+        eq("nested-request"))).thenReturn(true);
+    when(rebuildQueue.acknowledgeHelmGroupInvalidationIfRequestToken(
         eq(31L), eq(RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION),
-        eq(RepositoryIndexRebuildDao.ROOT_SCOPE), eq("root-request"))).thenReturn(true);
+        eq("root-request"))).thenReturn(true);
     NexusLikeCacheController controller = new NexusLikeCacheController(
         new InMemoryVersionWatermark(), 60);
     HelmGroupIndexCache cache = new HelmGroupIndexCache(
@@ -117,18 +113,15 @@ class HelmGroupIndexCacheTest {
     assertNotEquals(rootBefore, controller.currentToken(31L, NexusCacheType.METADATA));
     assertNotEquals(nestedContentBefore, controller.currentToken(21L, NexusCacheType.CONTENT));
     assertNotEquals(rootContentBefore, controller.currentToken(31L, NexusCacheType.CONTENT));
-    verify(rebuildQueue).enqueueTracked(
+    verify(rebuildQueue).enqueueHelmGroupInvalidation(
         21L,
-        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
-        RepositoryIndexRebuildDao.ROOT_SCOPE);
-    verify(rebuildQueue).enqueueTracked(
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION);
+    verify(rebuildQueue).enqueueHelmGroupInvalidation(
         31L,
-        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
-        RepositoryIndexRebuildDao.ROOT_SCOPE);
-    verify(rebuildQueue).acknowledgeIfRequestToken(
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION);
+    verify(rebuildQueue).acknowledgeHelmGroupInvalidationIfRequestToken(
         21L,
         RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
-        RepositoryIndexRebuildDao.ROOT_SCOPE,
         "nested-request");
 
     String beforeRetry = controller.currentToken(21L, NexusCacheType.METADATA);
@@ -136,6 +129,43 @@ class HelmGroupIndexCacheTest {
     cache.retryInvalidation(21L);
     assertNotEquals(beforeRetry, controller.currentToken(21L, NexusCacheType.METADATA));
     assertNotEquals(contentBeforeRetry, controller.currentToken(21L, NexusCacheType.CONTENT));
+  }
+
+  @Test
+  void packageChangeInvalidatesContentWinnersWithoutRebuildingMergedIndexes() {
+    StubRepositoryDao repositories = new StubRepositoryDao();
+    repositories.putGroupsContaining(11L, List.of(group(21L, "all")));
+    RepositoryIndexRebuildDao rebuildQueue = mock(RepositoryIndexRebuildDao.class);
+    when(rebuildQueue.enqueueHelmGroupInvalidation(
+        21L, RepositoryIndexRebuildDao.HELM_GROUP_CONTENT_INVALIDATION))
+        .thenReturn("content-request");
+    when(rebuildQueue.acknowledgeHelmGroupInvalidationIfRequestToken(
+        21L,
+        RepositoryIndexRebuildDao.HELM_GROUP_CONTENT_INVALIDATION,
+        "content-request"))
+        .thenReturn(true);
+    NexusLikeCacheController controller =
+        new NexusLikeCacheController(new InMemoryVersionWatermark(), 60);
+    HelmGroupIndexCache cache = new HelmGroupIndexCache(
+        repositories,
+        mock(AssetDao.class),
+        mock(AssetMetadataCache.class),
+        controller,
+        rebuildQueue,
+        true);
+    String metadataBefore = controller.currentToken(21L, NexusCacheType.METADATA);
+    String contentBefore = controller.currentToken(21L, NexusCacheType.CONTENT);
+
+    cache.invalidateMemberContentAfterCommit(11L);
+
+    assertEquals(metadataBefore, controller.currentToken(21L, NexusCacheType.METADATA));
+    assertNotEquals(contentBefore, controller.currentToken(21L, NexusCacheType.CONTENT));
+    verify(rebuildQueue).enqueueHelmGroupInvalidation(
+        21L, RepositoryIndexRebuildDao.HELM_GROUP_CONTENT_INVALIDATION);
+    verify(rebuildQueue).acknowledgeHelmGroupInvalidationIfRequestToken(
+        21L,
+        RepositoryIndexRebuildDao.HELM_GROUP_CONTENT_INVALIDATION,
+        "content-request");
   }
 
   @Test
@@ -260,20 +290,18 @@ class HelmGroupIndexCacheTest {
     NexusLikeCacheController controller = new NexusLikeCacheController(
         new InMemoryVersionWatermark(), 60);
     RepositoryIndexRebuildDao rebuildQueue = mock(RepositoryIndexRebuildDao.class);
-    when(rebuildQueue.enqueueTracked(
+    when(rebuildQueue.enqueueHelmGroupInvalidation(
         21L,
-        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
-        RepositoryIndexRebuildDao.ROOT_SCOPE)).thenReturn("nested-1", "nested-2");
-    when(rebuildQueue.enqueueTracked(
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION)).thenReturn("nested-1", "nested-2");
+    when(rebuildQueue.enqueueHelmGroupInvalidation(
         31L,
-        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
-        RepositoryIndexRebuildDao.ROOT_SCOPE)).thenReturn("root-1", "root-2");
-    when(rebuildQueue.acknowledgeIfRequestToken(
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION)).thenReturn("root-1", "root-2");
+    when(rebuildQueue.acknowledgeHelmGroupInvalidationIfRequestToken(
         eq(21L), eq(RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION),
-        eq(RepositoryIndexRebuildDao.ROOT_SCOPE), eq("nested-2"))).thenReturn(true);
-    when(rebuildQueue.acknowledgeIfRequestToken(
+        eq("nested-2"))).thenReturn(true);
+    when(rebuildQueue.acknowledgeHelmGroupInvalidationIfRequestToken(
         eq(31L), eq(RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION),
-        eq(RepositoryIndexRebuildDao.ROOT_SCOPE), eq("root-2"))).thenReturn(true);
+        eq("root-2"))).thenReturn(true);
     HelmGroupIndexCache cache = new HelmGroupIndexCache(
         repositories, mock(AssetDao.class), mock(AssetMetadataCache.class), controller,
         rebuildQueue, true);
@@ -295,15 +323,13 @@ class HelmGroupIndexCacheTest {
       assertNotEquals(rootBefore, controller.currentToken(31L, NexusCacheType.METADATA));
       assertNotEquals(nestedContentBefore, controller.currentToken(21L, NexusCacheType.CONTENT));
       assertNotEquals(rootContentBefore, controller.currentToken(31L, NexusCacheType.CONTENT));
-      verify(rebuildQueue).acknowledgeIfRequestToken(
+      verify(rebuildQueue).acknowledgeHelmGroupInvalidationIfRequestToken(
           21L,
           RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
-          RepositoryIndexRebuildDao.ROOT_SCOPE,
           "nested-2");
-      verify(rebuildQueue, never()).acknowledgeIfRequestToken(
+      verify(rebuildQueue, never()).acknowledgeHelmGroupInvalidationIfRequestToken(
           21L,
           RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
-          RepositoryIndexRebuildDao.ROOT_SCOPE,
           "nested-1");
       synchronizations.getFirst().afterCompletion(TransactionSynchronization.STATUS_COMMITTED);
     } finally {
@@ -317,13 +343,12 @@ class HelmGroupIndexCacheTest {
     repositories.putGroupsContaining(11L, List.of(group(21L, "all")));
     NexusLikeCacheController controller = mock(NexusLikeCacheController.class);
     RepositoryIndexRebuildDao rebuildQueue = mock(RepositoryIndexRebuildDao.class);
-    when(rebuildQueue.enqueueTracked(
+    when(rebuildQueue.enqueueHelmGroupInvalidation(
         21L,
-        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
-        RepositoryIndexRebuildDao.ROOT_SCOPE)).thenReturn("failed-request");
-    when(rebuildQueue.acknowledgeIfRequestToken(
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION)).thenReturn("failed-request");
+    when(rebuildQueue.acknowledgeHelmGroupInvalidationIfRequestToken(
         eq(21L), eq(RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION),
-        eq(RepositoryIndexRebuildDao.ROOT_SCOPE), eq("failed-request"))).thenReturn(true);
+        eq("failed-request"))).thenReturn(true);
     doThrow(new IllegalStateException("watermark unavailable"))
         .when(controller).invalidateOrThrow(21L, NexusCacheType.CONTENT);
     HelmGroupIndexCache cache = new HelmGroupIndexCache(
@@ -331,15 +356,13 @@ class HelmGroupIndexCacheTest {
         rebuildQueue, true);
 
     assertDoesNotThrow(() -> cache.invalidateMemberAfterCommit(11L));
-    verify(rebuildQueue).enqueueTracked(
+    verify(rebuildQueue).enqueueHelmGroupInvalidation(
         21L,
-        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
-        RepositoryIndexRebuildDao.ROOT_SCOPE);
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION);
     verify(controller, never()).invalidateOrThrow(21L, NexusCacheType.METADATA);
-    verify(rebuildQueue).acknowledgeIfRequestToken(
+    verify(rebuildQueue).acknowledgeHelmGroupInvalidationIfRequestToken(
         21L,
         RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
-        RepositoryIndexRebuildDao.ROOT_SCOPE,
         "failed-request");
   }
 

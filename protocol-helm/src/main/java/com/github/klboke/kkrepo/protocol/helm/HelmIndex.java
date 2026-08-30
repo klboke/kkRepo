@@ -94,14 +94,23 @@ public final class HelmIndex {
 
   /** Return whether a chart coordinate is safe to embed as one repository path segment. */
   public static boolean isSafeChartPathSegment(String value) {
-    return value != null
-        && !value.isBlank()
-        && value.indexOf('\0') < 0
-        && !value.contains("/")
-        && !value.contains("\\")
-        && !value.equals(".")
-        && !value.equals("..")
-        && !value.contains("..");
+    if (value == null
+        || value.isBlank()
+        || value.contains("/")
+        || value.contains("\\")
+        || value.contains("?")
+        || value.contains("#")
+        || value.contains("%")
+        || value.equals(".")
+        || value.equals("..")
+        || value.contains("..")) {
+      return false;
+    }
+    return value.codePoints()
+        .noneMatch(codePoint ->
+            Character.isISOControl(codePoint)
+                || Character.isWhitespace(codePoint)
+                || Character.isSpaceChar(codePoint));
   }
 
   /**
@@ -122,7 +131,8 @@ public final class HelmIndex {
         if (!(rawEntries instanceof Map<?, ?> entries)) continue;
         entries.forEach((rawName, rawVersions) -> {
           String entryName = rawName == null ? null : rawName.toString();
-          if (entryName == null || entryName.isBlank() || !(rawVersions instanceof List<?> versions)) {
+          if (!isSafeChartPathSegment(entryName)
+              || !(rawVersions instanceof List<?> versions)) {
             return;
           }
           @SuppressWarnings("unchecked")
@@ -133,7 +143,7 @@ public final class HelmIndex {
             if (!(rawVersion instanceof Map<?, ?> versionMap)) continue;
             String name = string(versionMap.get("name"), entryName);
             String version = string(versionMap.get("version"), null);
-            if (name == null || name.isBlank() || version == null || version.isBlank()) continue;
+            if (!isSafeChartPathSegment(name) || !isSafeChartPathSegment(version)) continue;
             List<String> chartUrls = rewriteEntry(
                 entryName, versionMap, null, new LinkedHashMap<>()).stream()
                 .filter(HelmIndex::isChartArchiveUrl)

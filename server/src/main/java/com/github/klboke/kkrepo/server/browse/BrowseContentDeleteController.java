@@ -36,6 +36,7 @@ import com.github.klboke.kkrepo.server.apt.AptService;
 import com.github.klboke.kkrepo.server.alpine.AlpineService;
 import com.github.klboke.kkrepo.server.conda.CondaBrowsePaths;
 import com.github.klboke.kkrepo.server.conda.CondaService;
+import com.github.klboke.kkrepo.server.helm.HelmGroupIndexCache;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
@@ -97,6 +98,7 @@ public class BrowseContentDeleteController {
   private RRegistryDao rRegistry;
   private RService rService;
   private CondaService condaService;
+  private HelmGroupIndexCache helmGroupIndexCache;
 
   public BrowseContentDeleteController(
       RepositoryDao repositoryDao,
@@ -168,6 +170,11 @@ public class BrowseContentDeleteController {
     this.runtimeRegistry = runtimeRegistry;
     this.rRegistry = rRegistry;
     this.rService = rService;
+  }
+
+  @Autowired
+  void setHelmDeleteSupport(HelmGroupIndexCache helmGroupIndexCache) {
+    this.helmGroupIndexCache = helmGroupIndexCache;
   }
 
   @DeleteMapping("/{repository}")
@@ -644,6 +651,9 @@ public class BrowseContentDeleteController {
     }
     enqueueMavenMetadataRebuild(target, storagePath);
     enqueueRepositoryIndexRebuild(target, storagePath);
+    if (target.format() == RepositoryFormat.HELM) {
+      helmGroupIndexCache.invalidateMemberContentAfterCommit(target.id());
+    }
     if (target.format() == RepositoryFormat.NPM) {
       if (npmPackageIds.isEmpty()) {
         npmGroupPackumentCache.invalidateMemberAfterCommit(target.id());
