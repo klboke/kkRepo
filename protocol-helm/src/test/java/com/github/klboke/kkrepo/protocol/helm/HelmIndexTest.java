@@ -637,6 +637,61 @@ class HelmIndexTest {
   }
 
   @Test
+  void validatesBooleanReleaseFlagsBeforeRepublishingThem() {
+    byte[] valid = """
+        apiVersion: v1
+        entries:
+          demo:
+            - apiVersion: v2
+              name: demo
+              version: 1.0.0
+              deprecated: true
+              removed: false
+              urls: [demo.tgz]
+        """.getBytes(StandardCharsets.UTF_8);
+
+    HelmIndex.validateIndex(valid);
+    String rewritten = text(HelmIndex.rewriteProxyIndex(
+        valid, "https://repo.example.test/").body());
+    assertTrue(rewritten.contains("deprecated: true"));
+    assertTrue(rewritten.contains("removed: false"));
+
+    byte[] validFallback = """
+        entries:
+          demo:
+            - apiVersion: v2
+              name: demo
+              version: 1.0.0
+              deprecated: false
+              removed: false
+              appVersion: valid
+              urls: [demo.tgz]
+        """.getBytes(StandardCharsets.UTF_8);
+    for (String field : List.of("deprecated", "removed")) {
+      byte[] malformed = ("""
+          apiVersion: v1
+          entries:
+            demo:
+              - apiVersion: v2
+                name: demo
+                version: 1.0.0
+                %s: not-a-boolean
+                appVersion: malformed
+                urls: [demo.tgz]
+          """.formatted(field)).getBytes(StandardCharsets.UTF_8);
+
+      assertThrows(IllegalArgumentException.class, () -> HelmIndex.validateIndex(malformed));
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> HelmIndex.rewriteProxyIndex(malformed, "https://repo.example.test/"));
+      String merged = text(HelmIndex.mergeGroupIndexes(
+          List.of(malformed, validFallback), Instant.EPOCH));
+      assertTrue(merged.contains("appVersion: valid"));
+      assertFalse(merged.contains("appVersion: malformed"));
+    }
+  }
+
+  @Test
   void reportsMalformedYamlThroughTheProtocolErrorBoundary() {
     IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
         () -> HelmIndex.entries("entries: [".getBytes(StandardCharsets.UTF_8)));

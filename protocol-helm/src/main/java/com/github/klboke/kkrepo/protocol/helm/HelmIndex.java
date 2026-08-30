@@ -262,6 +262,8 @@ public final class HelmIndex {
                 || !isValidChartVersion(version)
                 || !isValidChartApiVersion(string(versionMap.get("apiVersion"), null))
                 || !isValidChartType(versionMap.get("type"))
+                || !isOptionalBoolean(versionMap, "deprecated")
+                || !isOptionalBoolean(versionMap, "removed")
                 || !isValidTimestamp(versionMap.get("created"))) {
               continue;
             }
@@ -563,6 +565,10 @@ public final class HelmIndex {
         || (value instanceof String type && (type.isEmpty() || CHART_TYPES.contains(type)));
   }
 
+  private static boolean isOptionalBoolean(Map<?, ?> value, String key) {
+    return !value.containsKey(key) || value.get(key) == null || value.get(key) instanceof Boolean;
+  }
+
   private static boolean isValidTimestamp(Object value) {
     if (value == null || value instanceof java.util.Date || value instanceof Instant) return true;
     if (!(value instanceof String timestamp) || timestamp.isBlank()) return false;
@@ -702,6 +708,14 @@ public final class HelmIndex {
           throw new IllegalArgumentException(
               "Invalid Helm index entry " + name
                   + ": expected chart type application or library");
+        }
+        if (!isOptionalBoolean(release, "deprecated")) {
+          throw new IllegalArgumentException(
+              "Invalid Helm index entry " + name + ": expected boolean deprecated flag");
+        }
+        if (!isOptionalBoolean(release, "removed")) {
+          throw new IllegalArgumentException(
+              "Invalid Helm index entry " + name + ": expected boolean removed flag");
         }
         if (!isValidTimestamp(release.get("created"))) {
           throw new IllegalArgumentException(
