@@ -67,6 +67,34 @@ class HelmProxyServiceTest {
   }
 
   @Test
+  void groupIndexReadsTheCurrentDurableBindingInsteadOfAStaleMetadataSnapshot() {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 60);
+    Map<String, Object> attributes = Map.of(
+        HelmProxyService.PROXY_CONFIGURATION_ATTRIBUTE,
+        HelmProxyService.configurationFingerprint(runtime));
+    AssetRecord asset = new AssetRecord(
+        3L, runtime.id(), null, 4L, RepositoryFormat.HELM, "index.yaml", null,
+        "index.yaml", "INDEX", "text/x-yaml", 8L, null, Instant.now(), attributes);
+    AssetBlobRecord blob = new AssetBlobRecord(
+        4L, 7L, "blob://bucket/current-index", null, "current-index", null,
+        "sha1-current", "sha256-current", "md5-current", 8L, "text/x-yaml",
+        "proxy", "upstream", Instant.EPOCH, Instant.EPOCH, Map.of());
+    CachedAssetMetadata current = CachedAssetMetadata.of(asset, blob);
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.assetDao.findAssetByPath(runtime.id(), "index.yaml"))
+        .thenReturn(Optional.of(asset));
+    when(fixture.assetDao.findBlobById(blob.id())).thenReturn(Optional.of(blob));
+    when(fixture.reader.serveSnapshot(current, false, "index.yaml")).thenReturn(expected);
+
+    assertSame(expected, fixture.service.getIndexForGroup(runtime, false));
+
+    verify(fixture.cache, never()).find(eq(runtime.id()), eq("index.yaml"), any());
+    verify(fixture.assetDao).findAssetByPath(runtime.id(), "index.yaml");
+    verify(fixture.assetDao).findBlobById(blob.id());
+  }
+
+  @Test
   void honorsNegativeCacheAndBlockedUpstreamFallback() {
     Fixture fixture = fixture();
     RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 1);

@@ -19,6 +19,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
@@ -315,7 +316,7 @@ class HelmGroupIndexCacheTest {
   }
 
   @Test
-  void rejectsAndInvalidatesSnapshotsWhenAnOlderReplicaAdvancesAMemberGeneration() {
+  void rejectsAndInvalidatesSnapshotsWhenAnOlderReplicaUpdatesTheMemberIndexRow() {
     StubRepositoryDao repositories = new StubRepositoryDao();
     AssetMetadataCache metadata = mock(AssetMetadataCache.class);
     NexusLikeCacheController controller = new NexusLikeCacheController(
@@ -329,12 +330,16 @@ class HelmGroupIndexCacheTest {
         RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
         "mixed-version-request"))
         .thenReturn(true);
+    AssetDao assets = mock(AssetDao.class);
     HelmGroupIndexCache cache = new HelmGroupIndexCache(
-        repositories, mock(AssetDao.class), metadata, controller, rebuildQueue, true);
+        repositories, assets, metadata, controller, rebuildQueue, true);
     RepositoryRuntime group = runtime(
         21L, 60, List.of(proxyRuntime(11L, "https://charts.example.test/")));
     java.time.Instant now = java.time.Instant.parse("2026-08-30T00:00:00Z");
-    when(metadata.currentRepositoryVersion(11L)).thenReturn(1L, 2L);
+    when(assets.findAssetsByPathHash(any(), any()))
+        .thenReturn(Map.of(11L, indexAsset(11L, 101L, 201L)))
+        .thenReturn(Map.of(11L, indexAsset(
+            11L, 101L, 201L, java.time.Instant.EPOCH.plusSeconds(1))));
     Map<String, Object> attributes =
         cache.freshAttributes(group, cache.current(group, now), null);
     when(metadata.find(eq(group.id()), eq("index.yaml"), any()))
@@ -365,8 +370,9 @@ class HelmGroupIndexCacheTest {
         .thenReturn(true);
     NexusLikeCacheController controller =
         new NexusLikeCacheController(new InMemoryVersionWatermark(), 60);
+    AssetDao assets = mock(AssetDao.class);
     HelmGroupIndexCache cache = new HelmGroupIndexCache(
-        repositories, mock(AssetDao.class), metadata, controller, rebuildQueue, true);
+        repositories, assets, metadata, controller, rebuildQueue, true);
     RepositoryRuntime group = runtime(
         21L, 60, List.of(proxyRuntime(11L, "https://charts.example.test/")));
     java.time.Instant now = java.time.Instant.parse("2026-08-30T00:00:00Z");
@@ -374,8 +380,8 @@ class HelmGroupIndexCacheTest {
         group, cache.current(group, now), null, "member-generation");
     when(metadata.find(eq(group.id()), eq("index.yaml"), any()))
         .thenReturn(Optional.of(snapshot("INDEX", attributes, true)));
-    when(metadata.currentRepositoryVersion(11L))
-        .thenThrow(new IllegalStateException("watermark unavailable"));
+    when(assets.findAssetsByPathHash(any(), any()))
+        .thenThrow(new IllegalStateException("asset binding unavailable"));
 
     assertFalse(cache.findFresh(group, now).isPresent());
 
@@ -547,6 +553,29 @@ class HelmGroupIndexCacheTest {
         1L, 21L, null, withBlob ? 2L : null, RepositoryFormat.HELM,
         "index.yaml", "index.yaml", kind, "text/x-yaml", 4L,
         java.time.Instant.now(), attributes, blob);
+  }
+
+  private static AssetRecord indexAsset(long repositoryId, long assetId, long blobId) {
+    return indexAsset(repositoryId, assetId, blobId, java.time.Instant.EPOCH);
+  }
+
+  private static AssetRecord indexAsset(
+      long repositoryId, long assetId, long blobId, java.time.Instant lastUpdatedAt) {
+    return new AssetRecord(
+        assetId,
+        repositoryId,
+        null,
+        blobId,
+        RepositoryFormat.HELM,
+        "index.yaml",
+        null,
+        "index.yaml",
+        "INDEX",
+        "text/x-yaml",
+        4L,
+        null,
+        lastUpdatedAt,
+        Map.of());
   }
 
   private static RepositoryRuntime runtime(long id, int metadataMaxAgeMinutes) {

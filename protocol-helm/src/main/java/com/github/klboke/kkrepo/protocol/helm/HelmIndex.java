@@ -89,7 +89,17 @@ public final class HelmIndex {
 
   /** Rejects parseable YAML documents that do not have the classic Helm index structure. */
   public static void validateIndex(byte[] yamlBytes) {
-    loadValidIndex(yamlBytes);
+    parseValidatedIndex(yamlBytes);
+  }
+
+  /**
+   * Parse and validate a classic Helm index once for repeated release selection.
+   *
+   * <p>The returned view is detached from SnakeYAML's mutable object graph and can be safely
+   * retained for the lifetime of one request.
+   */
+  public static ValidatedIndex parseValidatedIndex(byte[] yamlBytes) {
+    return new ValidatedIndex(releases(loadValidIndex(yamlBytes)));
   }
 
   /** Return whether a chart coordinate is safe to embed as one repository path segment. */
@@ -143,7 +153,11 @@ public final class HelmIndex {
             if (!(rawVersion instanceof Map<?, ?> versionMap)) continue;
             String name = string(versionMap.get("name"), entryName);
             String version = string(versionMap.get("version"), null);
-            if (!isSafeChartPathSegment(name) || !isSafeChartPathSegment(version)) continue;
+            if (!entryName.equals(name)
+                || !isSafeChartPathSegment(name)
+                || !isSafeChartPathSegment(version)) {
+              continue;
+            }
             List<String> chartUrls = rewriteEntry(
                 entryName, versionMap, null, new LinkedHashMap<>()).stream()
                 .filter(HelmIndex::isChartArchiveUrl)
@@ -205,7 +219,10 @@ public final class HelmIndex {
   }
 
   private static List<Release> releases(byte[] yamlBytes) {
-    Map<String, Object> root = load(yamlBytes);
+    return releases(load(yamlBytes));
+  }
+
+  private static List<Release> releases(Map<String, Object> root) {
     Object rawEntries = root.get("entries");
     if (!(rawEntries instanceof Map<?, ?> entries)) return List.of();
     List<Release> result = new ArrayList<>();
@@ -234,7 +251,9 @@ public final class HelmIndex {
     return result;
   }
 
-  private static boolean sameRelease(Release candidate, Release expected) {
+  /** Compare chart identity and digest while accepting the optional {@code sha256:} prefix. */
+  public static boolean sameRelease(Release candidate, Release expected) {
+    if (candidate == null || expected == null) return false;
     return Objects.equals(candidate.name(), expected.name())
         && Objects.equals(candidate.version(), expected.version())
         && Objects.equals(normalizeDigest(candidate.digest()), normalizeDigest(expected.digest()));
@@ -495,6 +514,10 @@ public final class HelmIndex {
           throw new IllegalArgumentException(
               "Invalid Helm index entry " + name + ": expected a release name");
         }
+        if (!name.equals(releaseName)) {
+          throw new IllegalArgumentException(
+              "Invalid Helm index entry " + name + ": release name must match entry name");
+        }
         if (!(release.get("version") instanceof String releaseVersion)
             || !isSafeChartPathSegment(releaseVersion)) {
           throw new IllegalArgumentException(
@@ -579,6 +602,30 @@ public final class HelmIndex {
   public record Release(String name, String version, String digest, List<String> urls) {
     public Release {
       urls = urls == null ? List.of() : List.copyOf(urls);
+    }
+  }
+
+  /** An immutable release lookup derived from one fully validated index parse. */
+  public static final class ValidatedIndex {
+    private final List<Release> releases;
+
+    private ValidatedIndex(List<Release> releases) {
+      this.releases = releases == null ? List.of() : List.copyOf(releases);
+    }
+
+    public Optional<Release> releaseForPath(String path) {
+      String requested = normalizeLocalPath(path);
+      return releases.stream()
+          .filter(release -> advertises(release, requested))
+          .findFirst();
+    }
+
+    public boolean containsRelease(Release expected, String path) {
+      if (expected == null) return false;
+      String requested = normalizeLocalPath(path);
+      return releases.stream()
+          .anyMatch(candidate -> sameRelease(candidate, expected)
+              && advertises(candidate, requested));
     }
   }
 }

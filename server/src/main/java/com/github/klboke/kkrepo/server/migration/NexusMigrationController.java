@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.migration;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationPreflight;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationRequest;
@@ -36,7 +37,6 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -154,7 +154,7 @@ public class NexusMigrationController {
    * until the periodic catalog refresh fires.
    */
   private void refreshConfigCachesAfterMigration(NexusMigrationResult result) {
-    invalidateMigratedHelmGroups(result);
+    invalidateMigratedHelmRepositories(result);
     if (blobStorageRegistry != null) {
       blobStorageRegistry.refreshAllAndBroadcast();
     }
@@ -181,21 +181,34 @@ public class NexusMigrationController {
     }
   }
 
-  private void invalidateMigratedHelmGroups(NexusMigrationResult result) {
+  private void invalidateMigratedHelmRepositories(NexusMigrationResult result) {
     if (repositoryDao == null || result == null || result.preflight() == null) return;
-    result.preflight().groupRepositories().stream()
-        .filter(group -> RepositoryFormat.HELM.id().equalsIgnoreCase(group.format()))
-        .map(group -> repositoryDao.findByName(group.repository()).orElse(null))
-        .filter(Objects::nonNull)
-        .filter(group -> group.id() != null)
-        .forEach(group -> {
-          // Config migration bypasses RepositoryService, so explicitly advance both the durable
-          // merged-index watermark and the shared chart/provenance winner token after commit.
+    result.preflight().repositoriesToMigrate().stream()
+        .filter(repository ->
+            RepositoryFormat.HELM.id().equalsIgnoreCase(repository.format()))
+        .map(repository -> repositoryDao.findByName(repository.name()).orElse(null))
+        .filter(repository -> repository != null
+            && repository.id() != null
+            && repository.format() == RepositoryFormat.HELM)
+        .forEach(repository -> {
+          // Config migration bypasses RepositoryService. Invalidate every migrated Helm member,
+          // not only groups present in the Nexus source plan, so a pre-existing target-only group
+          // cannot retain an old chart/provenance winner. A migrated group also invalidates its
+          // own merged index while recursively covering any containing groups.
+          boolean group = repository.type() == RepositoryType.GROUP;
           if (helmGroupIndexCache != null) {
-            helmGroupIndexCache.invalidateGroupAfterCommit(group.id());
+            if (group) {
+              helmGroupIndexCache.invalidateGroupAfterCommit(repository.id());
+            } else {
+              helmGroupIndexCache.invalidateMemberAfterCommit(repository.id());
+            }
           }
           if (groupMemberAssetCache != null) {
-            groupMemberAssetCache.invalidateGroupAfterCommit(group.id());
+            if (group) {
+              groupMemberAssetCache.invalidateGroupAfterCommit(repository.id());
+            } else {
+              groupMemberAssetCache.invalidateMemberAfterCommit(repository.id());
+            }
           }
         });
   }

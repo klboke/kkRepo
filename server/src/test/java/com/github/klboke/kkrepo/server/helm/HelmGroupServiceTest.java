@@ -1083,6 +1083,9 @@ class HelmGroupServiceTest {
     HelmAssetWriter writer = mock(HelmAssetWriter.class);
     HelmAssetReader reader = mock(HelmAssetReader.class);
     BlobStorage storage = mock(BlobStorage.class);
+    when(proxy.getIndexForGroup(any(), eq(false))).thenAnswer(invocation ->
+        proxy.get(
+            invocation.getArgument(0), HelmHostedService.INDEX_PATH, false));
     when(indexCache.enabled()).thenReturn(false);
     when(indexCache.memberAssetGeneration(any())).thenReturn("member-generation");
     return new Fixture(

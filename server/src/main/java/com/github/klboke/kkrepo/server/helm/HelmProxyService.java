@@ -77,8 +77,28 @@ public class HelmProxyService {
     return getPackage(runtime, path, kind, headOnly);
   }
 
+  /**
+   * Reads the proxy index from its current database binding before applying normal proxy
+   * freshness rules.
+   *
+   * <p>Group index generation uses this path so an older replica's committed index refresh cannot
+   * be hidden by a stale node-local metadata snapshot when that writer's best-effort cache
+   * eviction failed. The group generation fence then brackets bytes loaded from the same durable
+   * asset binding it fingerprints.
+   */
+  MavenResponse getIndexForGroup(RepositoryRuntime runtime, boolean headOnly) {
+    ensureProxy(runtime);
+    return getIndex(runtime, headOnly, true);
+  }
+
   private MavenResponse getIndex(RepositoryRuntime runtime, boolean headOnly) {
-    Optional<CachedAssetMetadata> cached = lookupCached(runtime, HelmHostedService.INDEX_PATH);
+    return getIndex(runtime, headOnly, false);
+  }
+
+  private MavenResponse getIndex(
+      RepositoryRuntime runtime, boolean headOnly, boolean loadDurableBinding) {
+    Optional<CachedAssetMetadata> cached = lookupCached(
+        runtime, HelmHostedService.INDEX_PATH, loadDurableBinding);
     Instant now = Instant.now();
     if (cached.isPresent() && isFresh(cached.get(), runtime.metadataMaxAgeMinutesOrDefault(), now)) {
       return authoritativeIndexResponse(
@@ -118,7 +138,12 @@ public class HelmProxyService {
   }
 
   private Optional<CachedAssetMetadata> lookupCached(RepositoryRuntime runtime, String path) {
-    Optional<CachedAssetMetadata> cached = loadCached(runtime, path);
+    return lookupCached(runtime, path, false);
+  }
+
+  private Optional<CachedAssetMetadata> lookupCached(
+      RepositoryRuntime runtime, String path, boolean loadDurableBinding) {
+    Optional<CachedAssetMetadata> cached = loadCached(runtime, path, loadDurableBinding);
     if (cached.isEmpty()) return Optional.empty();
     CachedAssetMetadata snapshot = cached.orElseThrow();
     String expected = configurationFingerprint(runtime);
@@ -145,11 +170,21 @@ public class HelmProxyService {
       // advancing the repository watermark on every rejected legacy row would amplify outages.
       assetMetadataCache.evictEntry(runtime.id(), path);
     }
-    return loadCached(runtime, path).filter(reloaded -> expected.equals(
+    return loadCached(runtime, path, loadDurableBinding).filter(reloaded -> expected.equals(
         stringAttr(reloaded.attributes(), PROXY_CONFIGURATION_ATTRIBUTE)));
   }
 
   private Optional<CachedAssetMetadata> loadCached(RepositoryRuntime runtime, String path) {
+    return loadCached(runtime, path, false);
+  }
+
+  private Optional<CachedAssetMetadata> loadCached(
+      RepositoryRuntime runtime, String path, boolean loadDurableBinding) {
+    if (loadDurableBinding) {
+      return AssetMetadataCache.Loaded.from(
+              assetDao.findAssetByPath(runtime.id(), path), assetDao)
+          .map(loaded -> CachedAssetMetadata.of(loaded.asset(), loaded.blob()));
+    }
     return assetMetadataCache.find(
         runtime.id(), path,
         () -> AssetMetadataCache.Loaded.from(assetDao.findAssetByPath(runtime.id(), path), assetDao));

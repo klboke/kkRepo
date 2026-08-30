@@ -2,8 +2,10 @@ package com.github.klboke.kkrepo.server.helm;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
@@ -162,9 +164,9 @@ public class HelmGroupIndexCache {
     }
     if (storedMemberGeneration == null
         || !storedMemberGeneration.equals(currentMemberGeneration)) {
-      // Pre-feature replicas already advance the durable asset-metadata generation. Convert a
-      // detected mixed-version write into the same durable CONTENT+METADATA invalidation used by
-      // new writers before this request can consult a cached member winner.
+      // The source binding changed without this group observing its normal marker path. Convert
+      // that mixed-version or failed-callback write into the same durable CONTENT+METADATA
+      // invalidation used by new writers before this request can consult a cached member winner.
       invalidateGroupAfterCommit(group.id());
       return Optional.empty();
     }
@@ -241,20 +243,35 @@ public class HelmGroupIndexCache {
   }
 
   /**
-   * Hashes the durable per-repository generations for every direct and nested member.
+   * Hashes the transactionally durable {@code index.yaml} asset binding for every direct and
+   * nested member.
    *
-   * <p>{@link AssetMetadataCache} generations predate Helm groups and are advanced by old hosted
-   * and proxy writers, so this fence remains effective while replicas are upgraded gradually.
+   * <p>The asset row and blob binding are the relational source used to build a group index and
+   * are inserted, replaced, or deleted in the writer transaction. Reading those bindings directly
+   * avoids an after-commit callback gap, so the fence remains effective while replicas are
+   * upgraded gradually and when a writer's best-effort cache eviction fails.
    */
   public String memberAssetGeneration(RepositoryRuntime group) {
     Set<Long> memberRepositoryIds = new LinkedHashSet<>();
     collectMemberRepositoryIds(group, memberRepositoryIds, new HashSet<>());
+    Map<Long, AssetRecord> memberIndexes = assetDao.findAssetsByPathHash(
+        memberRepositoryIds, PersistenceHashes.pathHash(HelmHostedService.INDEX_PATH));
+    if (memberIndexes == null) {
+      throw new IllegalStateException("Asset DAO returned no Helm member index bindings");
+    }
     StringBuilder material = new StringBuilder();
     for (long memberRepositoryId : memberRepositoryIds) {
       appendFingerprintField(material, Long.toString(memberRepositoryId));
-      appendFingerprintField(
-          material,
-          Long.toString(assetMetadataCache.currentRepositoryVersion(memberRepositoryId)));
+      AssetRecord index = memberIndexes.get(memberRepositoryId);
+      appendFingerprintField(material, index == null || index.id() == null
+          ? null
+          : Long.toString(index.id()));
+      appendFingerprintField(material, index == null || index.assetBlobId() == null
+          ? null
+          : Long.toString(index.assetBlobId()));
+      appendFingerprintField(material, index == null || index.lastUpdatedAt() == null
+          ? null
+          : index.lastUpdatedAt().toString());
     }
     return sha256(material);
   }

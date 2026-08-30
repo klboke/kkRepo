@@ -17,6 +17,7 @@ import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMi
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationResult;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationTargetBlobStore;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationValidation;
+import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.RepositoryMigrationPlan;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
@@ -289,7 +290,23 @@ class NexusMigrationControllerTest {
         null,
         true,
         Map.of("recipe", "helm-group"));
+    RepositoryRecord helmHosted = new RepositoryRecord(
+        43L,
+        "helm-hosted",
+        RepositoryFormat.HELM,
+        RepositoryType.HOSTED,
+        "helm-hosted",
+        true,
+        7L,
+        null,
+        null,
+        null,
+        null,
+        "ALLOW",
+        true,
+        Map.of("recipe", "helm-hosted"));
     when(repositoryDao.findByName("helm-all")).thenReturn(Optional.of(helmGroup));
+    when(repositoryDao.findByName("helm-hosted")).thenReturn(Optional.of(helmHosted));
     HelmGroupIndexCache helmGroupIndexCache = mock(HelmGroupIndexCache.class);
     GroupMemberAssetCache groupMemberAssetCache = mock(GroupMemberAssetCache.class);
     NexusMigrationController controller = new TestableNexusMigrationController(
@@ -333,6 +350,8 @@ class NexusMigrationControllerTest {
     assertEquals(1, dockerConnectorRuntime.syncs);
     verify(helmGroupIndexCache).invalidateGroupAfterCommit(42L);
     verify(groupMemberAssetCache).invalidateGroupAfterCommit(42L);
+    verify(helmGroupIndexCache).invalidateMemberAfterCommit(43L);
+    verify(groupMemberAssetCache).invalidateMemberAfterCommit(43L);
   }
 
   private static NexusMigrationController controllerWith(BlobStoreRecord defaultStore) {
@@ -424,7 +443,23 @@ class NexusMigrationControllerTest {
             0,
             0,
             List.of(),
-            List.of(),
+            List.of(
+                new RepositoryMigrationPlan(
+                    "helm-all",
+                    RepositoryFormat.HELM.id(),
+                    "group",
+                    "helm-group",
+                    "default",
+                    true,
+                    null),
+                new RepositoryMigrationPlan(
+                    "helm-hosted",
+                    RepositoryFormat.HELM.id(),
+                    "hosted",
+                    "helm-hosted",
+                    "default",
+                    true,
+                    null)),
             List.of(),
             List.of(new GroupRepositoryMigrationPlan(
                 "helm-all", RepositoryFormat.HELM.id(), List.of("helm-hosted"))),

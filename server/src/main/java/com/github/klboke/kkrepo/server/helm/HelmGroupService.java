@@ -68,6 +68,14 @@ public class HelmGroupService {
 
   private IndexResult getIndex(
       RepositoryRuntime group, boolean headOnly, Set<Long> resolvingGroups) {
+    return getIndex(group, headOnly, resolvingGroups, null);
+  }
+
+  private IndexResult getIndex(
+      RepositoryRuntime group,
+      boolean headOnly,
+      Set<Long> resolvingGroups,
+      String releasePath) {
     if (!resolvingGroups.add(group.id())) {
       throw new MavenExceptions.MethodNotAllowed(
           "Cyclic Helm group repository membership: " + group.name());
@@ -85,7 +93,7 @@ public class HelmGroupService {
             // accepting its watermark so a missing/corrupt object cannot pin every replica to a
             // broken lazy response until the normal metadata TTL expires.
             byte[] cachedBody = readBounded(cachedResponse, MAX_AGGREGATED_INDEX_BYTES);
-            HelmIndex.validateIndex(cachedBody);
+            HelmIndex.ValidatedIndex validated = HelmIndex.parseValidatedIndex(cachedBody);
             return new IndexResult(
                 indexResponse(
                     cachedBody,
@@ -93,7 +101,8 @@ public class HelmGroupService {
                     cachedResponse.etag(),
                     cachedResponse.lastModified()),
                 true,
-                indexCache.memberIndexFreshUntil(snapshot));
+                indexCache.memberIndexFreshUntil(snapshot),
+                selectedRelease(validated, releasePath));
           } catch (IOException | RuntimeException e) {
             log.warn(
                 "Failed reading durable Helm group index cache for {}; rebuilding",
@@ -122,7 +131,8 @@ public class HelmGroupService {
         return new IndexResult(
             indexResponse(body, headOnly, null, aggregated.generatedAt()),
             memberIndexes.complete(),
-            memberIndexes.freshUntil());
+            memberIndexes.freshUntil(),
+            selectedRelease(body, releasePath));
       }
 
       long blobStoreId = requireBlobStore(group);
@@ -130,7 +140,8 @@ public class HelmGroupService {
         return new IndexResult(
             indexResponse(body, headOnly, null, aggregated.generatedAt()),
             false,
-            memberIndexes.freshUntil());
+            memberIndexes.freshUntil(),
+            selectedRelease(body, releasePath));
       }
       HelmAssetWriter.Stored stored;
       try {
@@ -163,13 +174,15 @@ public class HelmGroupService {
         return new IndexResult(
             indexResponse(body, headOnly, null, aggregated.generatedAt()),
             true,
-            memberIndexes.freshUntil());
+            memberIndexes.freshUntil(),
+            selectedRelease(body, releasePath));
       }
       reader.beforeRead(stored.asset().id(), stored.blob().id(), stored.asset().repositoryId());
       return new IndexResult(
           indexResponse(body, headOnly, stored.blob().sha1(), stored.asset().lastUpdatedAt()),
           true,
-          memberIndexes.freshUntil());
+          memberIndexes.freshUntil(),
+          selectedRelease(body, releasePath));
     } finally {
       resolvingGroups.remove(group.id());
     }
@@ -238,7 +251,7 @@ public class HelmGroupService {
         } else {
           response = member.isHosted()
               ? hosted.get(member, HelmHostedService.INDEX_PATH, false)
-              : proxy.get(member, HelmHostedService.INDEX_PATH, false);
+              : proxy.getIndexForGroup(member, false);
           if (member.isProxy() && Boolean.FALSE.equals(
               response.internalAttribute(HelmProxyService.INDEX_AUTHORITATIVE_ATTRIBUTE))) {
             complete = false;
@@ -385,32 +398,46 @@ public class HelmGroupService {
   }
 
   private HelmIndex.Release advertisedRelease(RepositoryRuntime group, String path) {
+    IndexResult index = null;
     try {
-      IndexResult index = getIndex(group, false, new HashSet<>());
-      byte[] body = readBounded(index.response(), MAX_AGGREGATED_INDEX_BYTES);
-      return HelmIndex.releaseForPath(body, path)
+      index = getIndex(group, false, new HashSet<>(), path);
+      return index.release()
           .orElseThrow(() -> new MavenExceptions.MavenNotFoundException(path));
-    } catch (IOException e) {
-      throw new MavenExceptions.BadUpstreamException(
-          "Failed reading Helm group index for " + group.name(), e);
     } catch (MavenExceptions.MavenNotFoundException e) {
       throw e;
     } catch (RuntimeException e) {
       throw new MavenExceptions.BadUpstreamException(
           "Invalid Helm group index for " + group.name(), e);
+    } finally {
+      if (index != null) index.response().closeBodyIfOpen();
     }
   }
 
   private boolean memberAdvertises(
       RepositoryRuntime member, HelmIndex.Release release, String path) {
+    if (member.isGroup()) {
+      IndexResult nested = null;
+      try {
+        nested = getIndex(member, false, new HashSet<>(), path);
+        return nested.release()
+            .map(candidate -> HelmIndex.sameRelease(candidate, release))
+            .orElse(false);
+      } catch (MavenExceptions.MavenNotFoundException
+          | MavenExceptions.BadUpstreamException
+          | MavenExceptions.MethodNotAllowed ignored) {
+        return false;
+      } catch (RuntimeException ignored) {
+        return false;
+      } finally {
+        if (nested != null) nested.response().closeBodyIfOpen();
+      }
+    }
     try {
-      MavenResponse response = member.isGroup()
-          ? getIndex(member, false, new HashSet<>()).response()
-          : member.isHosted()
-              ? hosted.get(member, HelmHostedService.INDEX_PATH, false)
-              : proxy.get(member, HelmHostedService.INDEX_PATH, false);
+      MavenResponse response = member.isHosted()
+          ? hosted.get(member, HelmHostedService.INDEX_PATH, false)
+          : proxy.getIndexForGroup(member, false);
       byte[] body = readBounded(response, MAX_AGGREGATED_INDEX_BYTES);
-      return HelmIndex.containsRelease(body, release, path);
+      return HelmIndex.parseValidatedIndex(body).containsRelease(release, path);
     } catch (IOException
         | MavenExceptions.MavenNotFoundException
         | MavenExceptions.BadUpstreamException
@@ -488,6 +515,17 @@ public class HelmGroupService {
         new ByteArrayInputStream(body), body.length, HelmIndex.CONTENT_TYPE, etag, lastModified);
   }
 
+  private static Optional<HelmIndex.Release> selectedRelease(
+      HelmIndex.ValidatedIndex index, String path) {
+    return path == null ? Optional.empty() : index.releaseForPath(path);
+  }
+
+  private static Optional<HelmIndex.Release> selectedRelease(byte[] body, String path) {
+    return path == null
+        ? Optional.empty()
+        : HelmIndex.parseValidatedIndex(body).releaseForPath(path);
+  }
+
   private static boolean eligible(RepositoryRuntime member) {
     return member != null && member.online() && member.format() == RepositoryFormat.HELM;
   }
@@ -522,7 +560,14 @@ public class HelmGroupService {
     return runtime.blobStoreId();
   }
 
-  private record IndexResult(MavenResponse response, boolean complete, Instant freshUntil) {
+  private record IndexResult(
+      MavenResponse response,
+      boolean complete,
+      Instant freshUntil,
+      Optional<HelmIndex.Release> release) {
+    private IndexResult {
+      release = release == null ? Optional.empty() : release;
+    }
   }
 
   private record MemberIndexes(List<byte[]> indexes, boolean complete, Instant freshUntil) {

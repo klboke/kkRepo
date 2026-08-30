@@ -70,6 +70,7 @@ class HelmIndexTest {
               urls:
                 - charts/demo-original.tgz
                 - https://cdn.example.test/demo-original.tgz.prov
+          fallback:
             - name: fallback
               version: 2.0.0
               urls:
@@ -244,7 +245,8 @@ class HelmIndexTest {
               digest: BBBB
               urls: [charts/original-name.tgz]
         """.getBytes(StandardCharsets.UTF_8);
-    HelmIndex.Release release = HelmIndex.releaseForPath(selected, "demo-1.0.0.tgz")
+    HelmIndex.ValidatedIndex validated = HelmIndex.parseValidatedIndex(selected);
+    HelmIndex.Release release = validated.releaseForPath("demo-1.0.0.tgz")
         .orElseThrow();
 
     assertEquals(
@@ -252,7 +254,8 @@ class HelmIndexTest {
         release);
     assertEquals(
         release,
-        HelmIndex.releaseForPath(selected, "/demo-1.0.0.tgz.prov").orElseThrow());
+        validated.releaseForPath("/demo-1.0.0.tgz.prov").orElseThrow());
+    assertTrue(validated.containsRelease(release, "demo-1.0.0.tgz"));
     assertTrue(HelmIndex.containsRelease(selected, release, "demo-1.0.0.tgz"));
     assertTrue(HelmIndex.containsRelease(selected, release, "demo-1.0.0.tgz.prov"));
   }
@@ -373,6 +376,7 @@ class HelmIndexTest {
         "entries: {demo: [{name: demo, version: 1.0.0, urls: error}]}",
         "entries: {demo: [{name: demo, version: 1.0.0, urls: [false]}]}",
         "entries: {demo: [{name: demo, version: 1.0.0, urls: [{nested: value}]}]}",
+        "entries: {alias: [{name: demo, version: 1.0.0, urls: [demo.tgz]}]}",
         "entries: {'../private': [{name: demo, version: 1.0.0, urls: [demo.tgz]}]}",
         "entries: {'demo?channel': [{name: demo, version: 1.0.0, urls: [demo.tgz]}]}",
         "entries: {demo: [{name: 'demo#fragment', version: 1.0.0, urls: [demo.tgz]}]}",
@@ -391,6 +395,32 @@ class HelmIndexTest {
 
     assertEquals(List.of(), HelmIndex.entries("entries: []".getBytes(StandardCharsets.UTF_8)));
     HelmIndex.validateIndex("apiVersion: v1\nentries: {}\n".getBytes(StandardCharsets.UTF_8));
+  }
+
+  @Test
+  void cannotPublishTwoEntryKeysAsTheSameRepositoryLocalChartUrl() {
+    byte[] mismatched = """
+        entries:
+          alias:
+            - name: demo
+              version: 1.0.0
+              digest: alias-digest
+              urls: [alias.tgz]
+        """.getBytes(StandardCharsets.UTF_8);
+    byte[] genuine = """
+        entries:
+          demo:
+            - name: demo
+              version: 1.0.0
+              digest: genuine-digest
+              urls: [demo.tgz]
+        """.getBytes(StandardCharsets.UTF_8);
+
+    assertThrows(IllegalArgumentException.class, () -> HelmIndex.validateIndex(mismatched));
+    assertEquals(
+        List.of(new HelmIndex.Entry("demo", "1.0.0", List.of("demo-1.0.0.tgz"))),
+        HelmIndex.entries(HelmIndex.mergeGroupIndexes(
+            List.of(mismatched, genuine), Instant.parse("2026-08-30T00:00:00Z"))));
   }
 
   @Test
