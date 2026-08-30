@@ -59,6 +59,8 @@ public class HelmGroupService {
 
   public MavenResponse get(RepositoryRuntime group, String rawPath, boolean headOnly) {
     ensureGroup(group);
+    group = resolveFreshGroupRuntime(group);
+    ensureGroup(group);
     String path = HelmHostedService.normalizePath(rawPath);
     HelmAssetKind kind = readableKind(path);
     return kind == HelmAssetKind.INDEX
@@ -125,6 +127,9 @@ public class HelmGroupService {
       }
       MemberIndexes memberIndexes = aggregated.memberIndexes();
       byte[] body = aggregated.body();
+      if (durableCacheEnabled && !runtimeMatchesDurableConfiguration(group)) {
+        throw staleRuntime(group);
+      }
       // A partial response is still useful, but no replica may publish it as fresh under the
       // shared watermark and thereby hide a recovered member until metadata expiry.
       if (!memberIndexes.complete() || !durableCacheEnabled) {
@@ -135,7 +140,7 @@ public class HelmGroupService {
             selectedRelease(body, releasePath));
       }
 
-      if (!aggregated.watermarkStable() || !runtimeMatchesDurableConfiguration(group)) {
+      if (!aggregated.watermarkStable()) {
         return new IndexResult(
             indexResponse(body, headOnly, null, aggregated.generatedAt()),
             false,
@@ -239,6 +244,23 @@ public class HelmGroupService {
           e);
       return false;
     }
+  }
+
+  private RepositoryRuntime resolveFreshGroupRuntime(RepositoryRuntime group) {
+    if (indexCache == null) return group;
+    try {
+      return indexCache.resolveFreshRuntime(group).orElseThrow(() -> staleRuntime(group));
+    } catch (MavenExceptions.BadUpstreamException e) {
+      throw e;
+    } catch (RuntimeException e) {
+      throw new MavenExceptions.BadUpstreamException(
+          "Failed loading durable Helm group runtime for " + group.name(), e);
+    }
+  }
+
+  private static MavenExceptions.BadUpstreamException staleRuntime(RepositoryRuntime group) {
+    return new MavenExceptions.BadUpstreamException(
+        "Helm group runtime does not match durable configuration: " + group.name());
   }
 
   private static boolean sameGeneration(

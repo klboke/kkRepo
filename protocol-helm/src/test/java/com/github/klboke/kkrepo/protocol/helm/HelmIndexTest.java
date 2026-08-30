@@ -692,6 +692,128 @@ class HelmIndexTest {
   }
 
   @Test
+  void validatesTheCompleteHelmIndexAndChartVersionFieldSchema() {
+    byte[] valid = """
+        apiVersion: v1
+        generated: '2026-08-30T12:00:00Z'
+        serverInfo: {contextPath: /charts}
+        publicKeys: [signing-key]
+        annotations: {owner: platform}
+        entries:
+          demo:
+            - apiVersion: v2
+              name: demo
+              home: https://example.test/demo
+              sources: [https://example.test/source]
+              version: 1.0.0
+              description: Demo chart
+              keywords: [demo]
+              maintainers:
+                - name: Example
+                  email: team@example.test
+                  url: https://example.test/team
+              icon: https://example.test/icon.png
+              condition: demo.enabled
+              tags: demo
+              appVersion: 2.0.0
+              deprecated: false
+              annotations: {category: test}
+              kubeVersion: '>=1.30.0'
+              dependencies:
+                - name: child
+                  version: '^1.0.0'
+                  repository: https://example.test/charts
+                  condition: child.enabled
+                  tags: [child]
+                  enabled: true
+                  import-values: [data, {child: exports, parent: imports}]
+                  alias: child-alias
+              type: application
+              urls: [demo.tgz]
+              created: '2026-08-30T12:00:00Z'
+              removed: false
+              digest: abc123
+              checksum: legacy-checksum
+              engine: legacy-engine
+              tillerVersion: legacy-tiller
+              url: legacy-url
+        """.getBytes(StandardCharsets.UTF_8);
+
+    HelmIndex.validateIndex(valid);
+    String rewritten = text(HelmIndex.rewriteProxyIndex(
+        valid, "https://repo.example.test/").body());
+    assertTrue(rewritten.contains("digest: abc123"));
+    assertTrue(rewritten.contains("name: child"));
+
+    byte[] validFallback = """
+        entries:
+          demo:
+            - apiVersion: v2
+              name: demo
+              version: 1.0.0
+              appVersion: valid
+              urls: [demo.tgz]
+        """.getBytes(StandardCharsets.UTF_8);
+    for (String invalidField : List.of(
+        "digest: [abc]",
+        "home: [https://example.test]",
+        "sources: source",
+        "sources: [source, {bad: value}]",
+        "annotations: []",
+        "annotations: {key: [value]}",
+        "maintainers: maintainer",
+        "maintainers: [null]",
+        "maintainers: [{name: [bad]}]",
+        "maintainers: [{unknown: value}]",
+        "dependencies: dependency",
+        "dependencies: [null]",
+        "dependencies: [{enabled: nope}]",
+        "dependencies: [{tags: tag}]",
+        "dependencies: [{import-values: value}]",
+        "dependencies: [{unknown: value}]",
+        "type: [application]",
+        "created: [today]",
+        "unknownField: value")) {
+      byte[] malformed = ("""
+          apiVersion: v1
+          entries:
+            demo:
+              - apiVersion: v2
+                name: demo
+                version: 1.0.0
+                %s
+                appVersion: malformed
+                urls: [demo.tgz]
+          """.formatted(invalidField)).getBytes(StandardCharsets.UTF_8);
+
+      assertThrows(IllegalArgumentException.class, () -> HelmIndex.validateIndex(malformed));
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> HelmIndex.rewriteProxyIndex(malformed, "https://repo.example.test/"));
+      String merged = text(HelmIndex.mergeGroupIndexes(
+          List.of(malformed, validFallback), Instant.EPOCH));
+      assertTrue(merged.contains("appVersion: valid"));
+      assertFalse(merged.contains("appVersion: malformed"));
+    }
+
+    for (String invalidRootField : List.of(
+        "publicKeys: signing-key",
+        "annotations: []",
+        "annotations: {owner: [platform]}",
+        "serverInfo: []",
+        "serverInfo: {1: value}",
+        "unknownRootField: value")) {
+      byte[] malformed = ("apiVersion: v1\nentries: {}\n" + invalidRootField + "\n")
+          .getBytes(StandardCharsets.UTF_8);
+
+      assertThrows(IllegalArgumentException.class, () -> HelmIndex.validateIndex(malformed));
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> HelmIndex.rewriteProxyIndex(malformed, "https://repo.example.test/"));
+    }
+  }
+
+  @Test
   void reportsMalformedYamlThroughTheProtocolErrorBoundary() {
     IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
         () -> HelmIndex.entries("entries: [".getBytes(StandardCharsets.UTF_8)));

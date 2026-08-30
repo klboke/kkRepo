@@ -34,6 +34,22 @@ public final class HelmIndex {
   private static final String API_VERSION = "v1";
   private static final Set<String> CHART_API_VERSIONS = Set.of("v1", "v2");
   private static final Set<String> CHART_TYPES = Set.of("application", "library");
+  private static final Set<String> INDEX_FIELDS = Set.of(
+      "serverInfo", "apiVersion", "generated", "entries", "publicKeys", "annotations");
+  private static final Set<String> RELEASE_FIELDS = Set.of(
+      "name", "home", "sources", "version", "description", "keywords", "maintainers",
+      "icon", "apiVersion", "condition", "tags", "appVersion", "deprecated", "annotations",
+      "kubeVersion", "dependencies", "type", "urls", "created", "removed", "digest",
+      "checksum", "engine", "tillerVersion", "url");
+  private static final Set<String> RELEASE_STRING_FIELDS = Set.of(
+      "name", "home", "version", "description", "icon", "apiVersion", "condition", "tags",
+      "appVersion", "kubeVersion", "digest", "checksum", "engine", "tillerVersion", "url");
+  private static final Set<String> MAINTAINER_FIELDS = Set.of("name", "email", "url");
+  private static final Set<String> DEPENDENCY_FIELDS = Set.of(
+      "name", "version", "repository", "condition", "tags", "enabled", "import-values",
+      "alias");
+  private static final Set<String> DEPENDENCY_STRING_FIELDS = Set.of(
+      "name", "version", "repository", "condition", "alias");
   private static final DateTimeFormatter INSTANTS = DateTimeFormatter.ISO_INSTANT;
   // Helm parses chart versions with Masterminds semver.NewVersion: a lower-case v prefix,
   // shortened numeric cores, and leading zero coercion are accepted, while arbitrary labels are
@@ -261,10 +277,7 @@ public final class HelmIndex {
                 || !isSafeChartPathSegment(version)
                 || !isValidChartVersion(version)
                 || !isValidChartApiVersion(string(versionMap.get("apiVersion"), null))
-                || !isValidChartType(versionMap.get("type"))
-                || !isOptionalBoolean(versionMap, "deprecated")
-                || !isOptionalBoolean(versionMap, "removed")
-                || !isValidTimestamp(versionMap.get("created"))) {
+                || !isValidReleaseSchema(versionMap)) {
               continue;
             }
             String releaseKey = name + '\0' + version;
@@ -565,6 +578,80 @@ public final class HelmIndex {
         || (value instanceof String type && (type.isEmpty() || CHART_TYPES.contains(type)));
   }
 
+  private static boolean isValidIndexSchema(Map<?, ?> index) {
+    return hasOnlyFields(index, INDEX_FIELDS)
+        && isOptionalStringFields(index, Set.of("apiVersion"))
+        && isValidTimestamp(index.get("generated"))
+        && isOptionalStringList(index, "publicKeys")
+        && isOptionalStringMap(index, "annotations")
+        && isOptionalStringKeyedMap(index, "serverInfo");
+  }
+
+  private static boolean isValidReleaseSchema(Map<?, ?> release) {
+    return hasOnlyFields(release, RELEASE_FIELDS)
+        && isOptionalStringFields(release, RELEASE_STRING_FIELDS)
+        && isOptionalStringList(release, "sources")
+        && isOptionalStringList(release, "keywords")
+        && isOptionalStringMap(release, "annotations")
+        && isValidMaintainers(release.get("maintainers"))
+        && isValidDependencies(release.get("dependencies"))
+        && isValidChartType(release.get("type"))
+        && isOptionalBoolean(release, "deprecated")
+        && isOptionalBoolean(release, "removed")
+        && isValidTimestamp(release.get("created"));
+  }
+
+  private static boolean isValidMaintainers(Object value) {
+    if (value == null) return true;
+    if (!(value instanceof List<?> maintainers)) return false;
+    return maintainers.stream().allMatch(raw -> raw instanceof Map<?, ?> maintainer
+        && hasOnlyFields(maintainer, MAINTAINER_FIELDS)
+        && isOptionalStringFields(maintainer, MAINTAINER_FIELDS));
+  }
+
+  private static boolean isValidDependencies(Object value) {
+    if (value == null) return true;
+    if (!(value instanceof List<?> dependencies)) return false;
+    return dependencies.stream().allMatch(raw -> raw instanceof Map<?, ?> dependency
+        && hasOnlyFields(dependency, DEPENDENCY_FIELDS)
+        && isOptionalStringFields(dependency, DEPENDENCY_STRING_FIELDS)
+        && isOptionalStringList(dependency, "tags")
+        && isOptionalBoolean(dependency, "enabled")
+        && (!dependency.containsKey("import-values")
+            || dependency.get("import-values") == null
+            || dependency.get("import-values") instanceof List<?>));
+  }
+
+  private static boolean hasOnlyFields(Map<?, ?> value, Set<String> fields) {
+    return value.keySet().stream()
+        .allMatch(key -> key instanceof String field && fields.contains(field));
+  }
+
+  private static boolean isOptionalStringFields(Map<?, ?> value, Set<String> fields) {
+    return fields.stream().allMatch(field -> !value.containsKey(field)
+        || value.get(field) == null
+        || value.get(field) instanceof String);
+  }
+
+  private static boolean isOptionalStringList(Map<?, ?> value, String key) {
+    if (!value.containsKey(key) || value.get(key) == null) return true;
+    if (!(value.get(key) instanceof List<?> list)) return false;
+    return list.stream().allMatch(item -> item == null || item instanceof String);
+  }
+
+  private static boolean isOptionalStringMap(Map<?, ?> value, String key) {
+    if (!value.containsKey(key) || value.get(key) == null) return true;
+    if (!(value.get(key) instanceof Map<?, ?> map)) return false;
+    return map.entrySet().stream().allMatch(entry -> entry.getKey() instanceof String
+        && (entry.getValue() == null || entry.getValue() instanceof String));
+  }
+
+  private static boolean isOptionalStringKeyedMap(Map<?, ?> value, String key) {
+    if (!value.containsKey(key) || value.get(key) == null) return true;
+    if (!(value.get(key) instanceof Map<?, ?> map)) return false;
+    return map.keySet().stream().allMatch(String.class::isInstance);
+  }
+
   private static boolean isOptionalBoolean(Map<?, ?> value, String key) {
     return !value.containsKey(key) || value.get(key) == null || value.get(key) instanceof Boolean;
   }
@@ -667,6 +754,9 @@ public final class HelmIndex {
     if (!(loaded instanceof Map<?, ?> map)) {
       throw new IllegalArgumentException("Invalid Helm index root: expected a mapping");
     }
+    if (!isValidIndexSchema(map)) {
+      throw new IllegalArgumentException("Invalid Helm index fields for Helm IndexFile v1");
+    }
     if (!API_VERSION.equals(map.get("apiVersion"))) {
       throw new IllegalArgumentException("Invalid Helm index apiVersion: expected v1");
     }
@@ -689,6 +779,10 @@ public final class HelmIndex {
           throw new IllegalArgumentException(
               "Invalid Helm index entry " + name + ": expected a release mapping");
         }
+        if (!isValidReleaseSchema(release)) {
+          throw new IllegalArgumentException(
+              "Invalid Helm index entry " + name + ": incompatible ChartVersion fields");
+        }
         if (!(release.get("name") instanceof String releaseName)
             || !isSafeChartPathSegment(releaseName)) {
           throw new IllegalArgumentException(
@@ -703,23 +797,6 @@ public final class HelmIndex {
           throw new IllegalArgumentException(
               "Invalid Helm index entry " + name
                   + ": expected chart apiVersion v1 or v2");
-        }
-        if (!isValidChartType(release.get("type"))) {
-          throw new IllegalArgumentException(
-              "Invalid Helm index entry " + name
-                  + ": expected chart type application or library");
-        }
-        if (!isOptionalBoolean(release, "deprecated")) {
-          throw new IllegalArgumentException(
-              "Invalid Helm index entry " + name + ": expected boolean deprecated flag");
-        }
-        if (!isOptionalBoolean(release, "removed")) {
-          throw new IllegalArgumentException(
-              "Invalid Helm index entry " + name + ": expected boolean removed flag");
-        }
-        if (!isValidTimestamp(release.get("created"))) {
-          throw new IllegalArgumentException(
-              "Invalid Helm index entry " + name + ": expected an RFC 3339 creation timestamp");
         }
         if (!(release.get("version") instanceof String releaseVersion)
             || !isSafeChartPathSegment(releaseVersion)

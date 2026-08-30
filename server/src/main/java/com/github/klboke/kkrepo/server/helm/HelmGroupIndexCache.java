@@ -278,6 +278,14 @@ public class HelmGroupIndexCache {
         .orElse(false);
   }
 
+  /** Reload one complete runtime graph directly from durable repository and ordered-member rows. */
+  public Optional<RepositoryRuntime> resolveFreshRuntime(RepositoryRuntime runtime) {
+    if (runtime == null) return Optional.empty();
+    return runtimeRegistry == null
+        ? Optional.of(runtime)
+        : runtimeRegistry.resolveFreshById(runtime.id());
+  }
+
   private boolean cachedConfigurationMatchesDurable(
       RepositoryRuntime runtime, String storedFingerprint) {
     if (runtime == null || storedFingerprint == null) return false;

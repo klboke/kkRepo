@@ -377,28 +377,41 @@ class HelmGroupServiceTest {
   }
 
   @Test
-  void doesNotPublishAGroupIndexFromAStaleRuntimeMemberOrder() throws Exception {
+  void reloadsAStaleRuntimeMemberOrderBeforeAggregating() throws Exception {
     Fixture fixture = fixture();
-    RepositoryRuntime hosted = runtime(2L, "private", RepositoryType.HOSTED, true, List.of());
-    RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of(hosted));
-    when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.empty());
-    when(fixture.indexCache.enabled()).thenReturn(true);
-    when(fixture.indexCache.current(eq(group), any())).thenReturn(cacheInfo("current"));
-    when(fixture.indexCache.runtimeMatchesDurableConfiguration(group)).thenReturn(false);
-    when(fixture.hosted.get(hosted, "index.yaml", false)).thenAnswer(ignored -> index("""
+    RepositoryRuntime staleWinner = runtime(
+        2L, "stale-winner", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime durableWinner = runtime(
+        3L, "durable-winner", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime stale = runtime(
+        10L, "all", RepositoryType.GROUP, true, List.of(staleWinner, durableWinner));
+    RepositoryRuntime durable = runtime(
+        10L, "all", RepositoryType.GROUP, true, List.of(durableWinner, staleWinner));
+    when(fixture.indexCache.resolveFreshRuntime(stale)).thenReturn(Optional.of(durable));
+    when(fixture.indexCache.findFresh(eq(durable), any())).thenReturn(Optional.empty());
+    when(fixture.hosted.get(staleWinner, "index.yaml", false)).thenAnswer(ignored -> index("""
         entries:
-          private:
-            - name: private
+          demo:
+            - name: demo
               version: 1.0.0
-              urls: [private.tgz]
+              appVersion: stale
+              urls: [demo.tgz]
+        """));
+    when(fixture.hosted.get(durableWinner, "index.yaml", false)).thenAnswer(ignored -> index("""
+        entries:
+          demo:
+            - name: demo
+              version: 1.0.0
+              appVersion: durable
+              urls: [demo.tgz]
         """));
 
-    MavenResponse response = fixture.service.get(group, "index.yaml", false);
+    MavenResponse response = fixture.service.get(stale, "index.yaml", false);
+    String body = new String(response.body().readAllBytes(), StandardCharsets.UTF_8);
 
-    assertEquals(
-        List.of(new HelmIndex.Entry("private", "1.0.0", List.of("private-1.0.0.tgz"))),
-        HelmIndex.entries(response.body().readAllBytes()));
-    verify(fixture.hosted, times(2)).get(hosted, "index.yaml", false);
+    assertTrue(body.contains("appVersion: durable"));
+    assertFalse(body.contains("appVersion: stale"));
+    verify(fixture.indexCache).resolveFreshRuntime(stale);
     verify(fixture.writer, never()).writeBytes(
         any(), any(), any(Long.class), any(), any(), any(), any(), any(), anyMap(), anyMap(),
         any(), any());
@@ -422,11 +435,9 @@ class HelmGroupServiceTest {
               urls: [private.tgz]
         """));
 
-    MavenResponse response = fixture.service.get(group, "index.yaml", false);
-
-    assertEquals(
-        List.of(new HelmIndex.Entry("private", "1.0.0", List.of("private-1.0.0.tgz"))),
-        HelmIndex.entries(response.body().readAllBytes()));
+    assertThrows(
+        MavenExceptions.BadUpstreamException.class,
+        () -> fixture.service.get(group, "index.yaml", false));
     verify(fixture.indexCache, times(3)).runtimeMatchesDurableConfiguration(group);
     verify(fixture.writer, never()).writeBytes(
         any(), any(), any(Long.class), any(), any(), any(), any(), any(), anyMap(), anyMap(),
@@ -1404,6 +1415,8 @@ class HelmGroupServiceTest {
         proxy.get(
             invocation.getArgument(0), HelmHostedService.INDEX_PATH, false));
     when(indexCache.enabled()).thenReturn(false);
+    when(indexCache.resolveFreshRuntime(any())).thenAnswer(invocation ->
+        Optional.of(invocation.getArgument(0)));
     when(indexCache.runtimeMatchesDurableConfiguration(any())).thenReturn(true);
     when(indexCache.memberAssetGeneration(any())).thenReturn("member-generation");
     when(indexCache.winnerAssetGeneration(any(), any())).thenReturn("member-generation");

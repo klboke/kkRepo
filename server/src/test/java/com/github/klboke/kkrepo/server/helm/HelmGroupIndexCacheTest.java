@@ -345,7 +345,11 @@ class HelmGroupIndexCacheTest {
     RepositoryRuntime durable = runtime(21L, 60, List.of(second, first));
     RepositoryRuntimeRegistry runtimeRegistry = mock(RepositoryRuntimeRegistry.class);
     when(runtimeRegistry.resolveFreshById(21L))
-        .thenReturn(Optional.of(durable), Optional.of(stale), Optional.empty());
+        .thenReturn(
+            Optional.of(durable),
+            Optional.of(durable),
+            Optional.of(stale),
+            Optional.empty());
     HelmGroupIndexCache cache = new HelmGroupIndexCache(
         new StubRepositoryDao(),
         mock(AssetDao.class),
@@ -355,10 +359,21 @@ class HelmGroupIndexCacheTest {
         runtimeRegistry,
         true);
 
+    assertEquals(durable, cache.resolveFreshRuntime(stale).orElseThrow());
     assertFalse(cache.runtimeMatchesDurableConfiguration(stale));
     assertTrue(cache.runtimeMatchesDurableConfiguration(stale));
     assertFalse(cache.runtimeMatchesDurableConfiguration(stale));
+    assertFalse(cache.resolveFreshRuntime(null).isPresent());
     assertFalse(cache.runtimeMatchesDurableConfiguration(null));
+
+    HelmGroupIndexCache withoutRegistry = new HelmGroupIndexCache(
+        new StubRepositoryDao(),
+        mock(AssetDao.class),
+        mock(AssetMetadataCache.class),
+        new NexusLikeCacheController(new InMemoryVersionWatermark(), 60),
+        mock(RepositoryIndexRebuildDao.class),
+        true);
+    assertEquals(stale, withoutRegistry.resolveFreshRuntime(stale).orElseThrow());
   }
 
   @Test
