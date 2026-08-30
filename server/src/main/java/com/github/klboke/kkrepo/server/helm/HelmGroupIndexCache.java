@@ -20,6 +20,7 @@ import java.time.Instant;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -252,26 +253,51 @@ public class HelmGroupIndexCache {
    * upgraded gradually and when a writer's best-effort cache eviction fails.
    */
   public String memberAssetGeneration(RepositoryRuntime group) {
+    return assetGeneration(group, List.of(HelmHostedService.INDEX_PATH));
+  }
+
+  /**
+   * Hashes both the member indexes that select a release and the exact requested asset binding.
+   *
+   * <p>The path binding closes the rolling-upgrade gap for package and provenance writes made by
+   * an older replica that does not enqueue Helm group invalidation markers. A later winner read
+   * observes the committed asset row directly even when the group CONTENT token did not advance.
+   */
+  public String winnerAssetGeneration(RepositoryRuntime group, String path) {
+    if (path == null || path.isBlank()) {
+      throw new IllegalArgumentException("Helm winner asset path is required");
+    }
+    return assetGeneration(
+        group,
+        HelmHostedService.INDEX_PATH.equals(path)
+            ? List.of(HelmHostedService.INDEX_PATH)
+            : List.of(HelmHostedService.INDEX_PATH, path));
+  }
+
+  private String assetGeneration(RepositoryRuntime group, List<String> paths) {
     Set<Long> memberRepositoryIds = new LinkedHashSet<>();
     collectMemberRepositoryIds(group, memberRepositoryIds, new HashSet<>());
-    Map<Long, AssetRecord> memberIndexes = assetDao.findAssetsByPathHash(
-        memberRepositoryIds, PersistenceHashes.pathHash(HelmHostedService.INDEX_PATH));
-    if (memberIndexes == null) {
-      throw new IllegalStateException("Asset DAO returned no Helm member index bindings");
-    }
     StringBuilder material = new StringBuilder();
-    for (long memberRepositoryId : memberRepositoryIds) {
-      appendFingerprintField(material, Long.toString(memberRepositoryId));
-      AssetRecord index = memberIndexes.get(memberRepositoryId);
-      appendFingerprintField(material, index == null || index.id() == null
-          ? null
-          : Long.toString(index.id()));
-      appendFingerprintField(material, index == null || index.assetBlobId() == null
-          ? null
-          : Long.toString(index.assetBlobId()));
-      appendFingerprintField(material, index == null || index.lastUpdatedAt() == null
-          ? null
-          : index.lastUpdatedAt().toString());
+    for (String path : paths) {
+      appendFingerprintField(material, path);
+      Map<Long, AssetRecord> bindings = assetDao.findAssetsByPathHash(
+          memberRepositoryIds, PersistenceHashes.pathHash(path));
+      if (bindings == null) {
+        throw new IllegalStateException("Asset DAO returned no Helm member asset bindings");
+      }
+      for (long memberRepositoryId : memberRepositoryIds) {
+        appendFingerprintField(material, Long.toString(memberRepositoryId));
+        AssetRecord asset = bindings.get(memberRepositoryId);
+        appendFingerprintField(material, asset == null || asset.id() == null
+            ? null
+            : Long.toString(asset.id()));
+        appendFingerprintField(material, asset == null || asset.assetBlobId() == null
+            ? null
+            : Long.toString(asset.assetBlobId()));
+        appendFingerprintField(material, asset == null || asset.lastUpdatedAt() == null
+            ? null
+            : asset.lastUpdatedAt().toString());
+      }
     }
     return sha256(material);
   }

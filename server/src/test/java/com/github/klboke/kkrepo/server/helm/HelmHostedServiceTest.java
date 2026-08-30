@@ -110,6 +110,11 @@ class HelmHostedServiceTest {
         "chart", "bad-version.tgz", "application/gzip", chartPackage("demo", "latest"));
     assertThrows(MavenExceptions.LayoutPolicyViolation.class,
         () -> fixture.service.push(runtime, invalidVersion, "user", "ip"));
+
+    MockMultipartFile invalidApiVersion = new MockMultipartFile(
+        "chart", "bad-api.tgz", "application/gzip", chartPackage("demo", "1.0.0", "v3"));
+    assertThrows(MavenExceptions.LayoutPolicyViolation.class,
+        () -> fixture.service.push(runtime, invalidApiVersion, "user", "ip"));
   }
 
   @Test
@@ -165,7 +170,12 @@ class HelmHostedServiceTest {
             "demo-latest.tgz",
             Instant.EPOCH,
             "legacy-digest",
-            Map.of("name", "demo", "version", "latest", "apiVersion", "v2"))));
+            Map.of("name", "demo", "version", "latest", "apiVersion", "v2")),
+        new HelmIndexRow(
+            "legacy-api-1.0.0.tgz",
+            Instant.EPOCH,
+            "legacy-api-digest",
+            Map.of("name", "legacy-api", "version", "1.0.0", "apiVersion", "v3"))));
     AtomicReference<byte[]> generated = new AtomicReference<>();
     when(fixture.writer.write(
         eq(runtime), eq(fixture.storage), eq(7L), eq("index.yaml"), any(),
@@ -213,13 +223,18 @@ class HelmHostedServiceTest {
   }
 
   private static byte[] chartPackage(String name, String version) throws Exception {
+    return chartPackage(name, version, "v2");
+  }
+
+  private static byte[] chartPackage(String name, String version, String apiVersion)
+      throws Exception {
     ByteArrayOutputStream tarBytes = new ByteArrayOutputStream();
     try (TarArchiveOutputStream tar = new TarArchiveOutputStream(tarBytes)) {
       byte[] body = """
-          apiVersion: v2
+          apiVersion: %s
           name: %s
           version: %s
-          """.formatted(name, version).getBytes(StandardCharsets.UTF_8);
+          """.formatted(apiVersion, name, version).getBytes(StandardCharsets.UTF_8);
       TarArchiveEntry entry = new TarArchiveEntry("chart/Chart.yaml");
       entry.setSize(body.length);
       tar.putArchiveEntry(entry);

@@ -67,14 +67,16 @@ class HelmIndexTest {
         apiVersion: v1
         entries:
           demo:
-            - name: demo
+            - apiVersion: v2
+              name: demo
               version: 1.2.3
               urls:
                 - charts/demo-original.tgz
                 - https://cdn.example.test/demo-original.tgz.prov
                 - https://cdn.example.test/demo-original.zip
           fallback:
-            - name: fallback
+            - apiVersion: v1
+              name: fallback
               version: 2.0.0
               urls:
                 - fallback.tgz
@@ -109,12 +111,14 @@ class HelmIndexTest {
         apiVersion: v1
         entries:
           demo:
-            - name: demo
+            - apiVersion: v2
+              name: demo
               version: 1.0.0
               appVersion: first-member
               urls:
                 - https://first.example.test/charts/original.tgz
-            - name: demo
+            - apiVersion: v2
+              name: demo
               version: 0.9.0
               urls:
                 - demo-0.9.0.tgz
@@ -123,17 +127,20 @@ class HelmIndexTest {
         apiVersion: v1
         entries:
           demo:
-            - name: demo
+            - apiVersion: v2
+              name: demo
               version: 1.0.0
               appVersion: second-member
               urls:
                 - demo-1.0.0.tgz
-            - name: demo
+            - apiVersion: v2
+              name: demo
               version: 2.0.0
               urls:
                 - charts/demo-current.tgz
           other:
-            - name: other
+            - apiVersion: v2
+              name: other
               version: 3.0.0
               urls:
                 - other-3.0.0.tgz
@@ -159,7 +166,8 @@ class HelmIndexTest {
     byte[] unusable = """
         entries:
           demo:
-            - name: demo
+            - apiVersion: v2
+              name: demo
               version: 1.0.0
               appVersion: unusable
               urls: ["http://[/demo.tgz", demo.zip, demo.tgz.prov]
@@ -167,7 +175,8 @@ class HelmIndexTest {
     byte[] usable = """
         entries:
           demo:
-            - name: demo
+            - apiVersion: v2
+              name: demo
               version: 1.0.0
               appVersion: usable
               urls: [charts/original.tgz, ignored.zip]
@@ -203,19 +212,23 @@ class HelmIndexTest {
     byte[] unsafe = """
         entries:
           'demo?channel':
-            - name: 'demo?channel'
+            - apiVersion: v2
+              name: 'demo?channel'
               version: 1.0.0
               urls: [demo.tgz]
           'demo:channel':
-            - name: 'demo:channel'
+            - apiVersion: v2
+              name: 'demo:channel'
               version: 1.0.0
               urls: [demo.tgz]
           demo:
-            - name: demo
+            - apiVersion: v2
+              name: demo
               version: '1.0.0%2fescape'
               urls: [demo.tgz]
           safe:
-            - name: safe
+            - apiVersion: v2
+              name: safe
               version: 1.0.0+build
               urls: [safe.tgz]
         """.getBytes(StandardCharsets.UTF_8);
@@ -234,7 +247,8 @@ class HelmIndexTest {
         apiVersion: v1
         entries:
           demo:
-            - name: demo
+            - apiVersion: v2
+              name: demo
               version: 1.0.0
               urls:
                 - charts/demo.tgz?download=1#release
@@ -254,7 +268,8 @@ class HelmIndexTest {
         apiVersion: v1
         entries:
           demo:
-            - name: demo
+            - apiVersion: v2
+              name: demo
               version: 1.0.0
               digest: BBBB
               urls: [charts/original-name.tgz]
@@ -279,7 +294,8 @@ class HelmIndexTest {
     byte[] selected = """
         entries:
           demo:
-            - name: demo
+            - apiVersion: v2
+              name: demo
               version: 1.0.0
               digest: digest-b
               urls: [demo-1.0.0.tgz]
@@ -287,7 +303,8 @@ class HelmIndexTest {
     byte[] conflicting = """
         entries:
           demo:
-            - name: demo
+            - apiVersion: v2
+              name: demo
               version: 1.0.0
               digest: digest-a
               urls: [demo-1.0.0.tgz]
@@ -303,7 +320,8 @@ class HelmIndexTest {
     byte[] prefixed = """
         entries:
           demo:
-            - name: demo
+            - apiVersion: v2
+              name: demo
               version: 1.0.0
               digest: sha256:BBBB
               urls: [demo-1.0.0.tgz]
@@ -311,7 +329,8 @@ class HelmIndexTest {
     byte[] bare = """
         entries:
           demo:
-            - name: demo
+            - apiVersion: v2
+              name: demo
               version: 1.0.0
               digest: bbbb
               urls: [demo-1.0.0.tgz]
@@ -355,7 +374,8 @@ class HelmIndexTest {
         apiVersion: v1
         entries:
           demo:
-            - name: demo
+            - apiVersion: v2
+              name: demo
               version: 1.0.0
               urls:
                 - "http://[/demo.tgz"
@@ -377,7 +397,8 @@ class HelmIndexTest {
         apiVersion: v1
         entries:
           demo:
-            - name: demo
+            - apiVersion: v2
+              name: demo
               version: 1.0.0
               urls:
                 - "http://[/demo.tgz"
@@ -420,6 +441,23 @@ class HelmIndexTest {
   }
 
   @Test
+  void rejectsMissingOrUnsupportedReleaseChartApiVersions() {
+    for (String releaseApiVersion : List.of("", "''", "v3")) {
+      String field = releaseApiVersion.isEmpty()
+          ? ""
+          : "apiVersion: " + releaseApiVersion + ", ";
+      byte[] body = ("apiVersion: v1\n"
+          + "entries: {demo: [{%sname: demo, version: 1.0.0, urls: [demo.tgz]}]}"
+              .formatted(field)).getBytes(StandardCharsets.UTF_8);
+
+      assertThrows(IllegalArgumentException.class, () -> HelmIndex.validateIndex(body));
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> HelmIndex.rewriteProxyIndex(body, "https://repo.example.test/"));
+    }
+  }
+
+  @Test
   void rejectsSchemaInvalidProxyIndexesWithoutChangingTolerantReadHelpers() {
     for (String invalidBody : List.of(
         "[]",
@@ -429,26 +467,26 @@ class HelmIndexTest {
         "entries: {demo: error}",
         "entries: {demo: [error]}",
         "entries: {demo: [{}]}",
-        "entries: {demo: [{name: demo, urls: [demo-1.0.0.tgz]}]}",
-        "entries: {demo: [{name: demo, version: 1.0.0}]}",
-        "entries: {demo: [{name: demo, version: 1.0.0, urls: []}]}",
-        "entries: {demo: [{name: demo, version: 1.0.0, urls: error}]}",
-        "entries: {demo: [{name: demo, version: 1.0.0, urls: [false]}]}",
-        "entries: {demo: [{name: demo, version: 1.0.0, urls: [{nested: value}]}]}",
-        "entries: {demo: [{name: demo, version: 1.0.0, urls: [demo.zip, demo.tgz.prov]}]}",
-        "entries: {alias: [{name: demo, version: 1.0.0, urls: [demo.tgz]}]}",
-        "entries: {'../private': [{name: demo, version: 1.0.0, urls: [demo.tgz]}]}",
-        "entries: {'demo?channel': [{name: demo, version: 1.0.0, urls: [demo.tgz]}]}",
-        "entries: {'demo:channel': [{name: 'demo:channel', version: 1.0.0, urls: [demo.tgz]}]}",
-        "entries: {demo: [{name: 'demo#fragment', version: 1.0.0, urls: [demo.tgz]}]}",
-        "entries: {demo: [{name: demo, version: '1.0.0%2fescape', urls: [demo.tgz]}]}",
-        "entries: {demo: [{name: demo, version: '1.0.0%5cescape', urls: [demo.tgz]}]}",
-        "entries: {demo: [{name: '../private', version: 1.0.0, urls: [demo.tgz]}]}",
-        "entries: {demo: [{name: demo, version: '1.0.0/escape', urls: [demo.tgz]}]}",
-        "entries: {demo: [{name: demo, version: latest, urls: [demo.tgz]}]}",
-        "entries: {demo: [{name: demo, version: 1.2.3.4, urls: [demo.tgz]}]}",
-        "entries: {demo: [{name: demo, version: '1.2.3-01', urls: [demo.tgz]}]}",
-        "entries: {demo: [{name: demo, version: '18446744073709551616', urls: [demo.tgz]}]}")) {
+        "entries: {demo: [{apiVersion: v2, name: demo, urls: [demo-1.0.0.tgz]}]}",
+        "entries: {demo: [{apiVersion: v2, name: demo, version: 1.0.0}]}",
+        "entries: {demo: [{apiVersion: v2, name: demo, version: 1.0.0, urls: []}]}",
+        "entries: {demo: [{apiVersion: v2, name: demo, version: 1.0.0, urls: error}]}",
+        "entries: {demo: [{apiVersion: v2, name: demo, version: 1.0.0, urls: [false]}]}",
+        "entries: {demo: [{apiVersion: v2, name: demo, version: 1.0.0, urls: [{nested: value}]}]}",
+        "entries: {demo: [{apiVersion: v2, name: demo, version: 1.0.0, urls: [demo.zip, demo.tgz.prov]}]}",
+        "entries: {alias: [{apiVersion: v2, name: demo, version: 1.0.0, urls: [demo.tgz]}]}",
+        "entries: {'../private': [{apiVersion: v2, name: demo, version: 1.0.0, urls: [demo.tgz]}]}",
+        "entries: {'demo?channel': [{apiVersion: v2, name: demo, version: 1.0.0, urls: [demo.tgz]}]}",
+        "entries: {'demo:channel': [{apiVersion: v2, name: 'demo:channel', version: 1.0.0, urls: [demo.tgz]}]}",
+        "entries: {demo: [{apiVersion: v2, name: 'demo#fragment', version: 1.0.0, urls: [demo.tgz]}]}",
+        "entries: {demo: [{apiVersion: v2, name: demo, version: '1.0.0%2fescape', urls: [demo.tgz]}]}",
+        "entries: {demo: [{apiVersion: v2, name: demo, version: '1.0.0%5cescape', urls: [demo.tgz]}]}",
+        "entries: {demo: [{apiVersion: v2, name: '../private', version: 1.0.0, urls: [demo.tgz]}]}",
+        "entries: {demo: [{apiVersion: v2, name: demo, version: '1.0.0/escape', urls: [demo.tgz]}]}",
+        "entries: {demo: [{apiVersion: v2, name: demo, version: latest, urls: [demo.tgz]}]}",
+        "entries: {demo: [{apiVersion: v2, name: demo, version: 1.2.3.4, urls: [demo.tgz]}]}",
+        "entries: {demo: [{apiVersion: v2, name: demo, version: '1.2.3-01', urls: [demo.tgz]}]}",
+        "entries: {demo: [{apiVersion: v2, name: demo, version: '18446744073709551616', urls: [demo.tgz]}]}")) {
       String invalid = invalidBody.startsWith("entries:")
           ? "apiVersion: v1\n" + invalidBody
           : invalidBody;
@@ -470,7 +508,7 @@ class HelmIndexTest {
     for (String version : List.of(
         "1", "1.2", "v1.2", "01.002.0003", "1.2.3-alpha.1+build.5")) {
       byte[] index = ("apiVersion: v1\n"
-          + "entries: {demo: [{name: demo, version: '%s', urls: [demo.tgz]}]}"
+          + "entries: {demo: [{apiVersion: v2, name: demo, version: '%s', urls: [demo.tgz]}]}"
           .formatted(version)).getBytes(StandardCharsets.UTF_8);
 
       HelmIndex.validateIndex(index);
@@ -483,7 +521,8 @@ class HelmIndexTest {
         apiVersion: v1
         entries:
           alias:
-            - name: demo
+            - apiVersion: v2
+              name: demo
               version: 1.0.0
               digest: alias-digest
               urls: [alias.tgz]
@@ -491,7 +530,8 @@ class HelmIndexTest {
     byte[] genuine = """
         entries:
           demo:
-            - name: demo
+            - apiVersion: v2
+              name: demo
               version: 1.0.0
               digest: genuine-digest
               urls: [demo.tgz]

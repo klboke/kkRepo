@@ -122,11 +122,16 @@ class HelmAssetWriter {
       HelmChartMetadata effectiveMetadata = metadata == null
           ? metadataFromBufferedUpload(kind, upload.tempFile())
           : metadata;
-      if (kind == HelmAssetKind.PACKAGE
-          && (effectiveMetadata == null
-              || !HelmIndex.isValidChartVersion(effectiveMetadata.version()))) {
-        throw new IllegalArgumentException(
-            "Invalid Helm chart version: expected a Helm-compatible semantic version");
+      if (kind == HelmAssetKind.PACKAGE) {
+        if (effectiveMetadata == null
+            || !HelmIndex.isValidChartApiVersion(effectiveMetadata.apiVersion())) {
+          throw new IllegalArgumentException(
+              "Invalid Helm chart apiVersion: expected v1 or v2");
+        }
+        if (!HelmIndex.isValidChartVersion(effectiveMetadata.version())) {
+          throw new IllegalArgumentException(
+              "Invalid Helm chart version: expected a Helm-compatible semantic version");
+        }
       }
       Stored stored = executePersist(
           "Persist Helm asset " + runtime.name() + "/" + path,

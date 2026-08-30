@@ -138,6 +138,22 @@ class HelmAssetWriterTest {
   }
 
   @Test
+  void rejectsUnsupportedChartApiVersionsBeforePersistenceAndCleansTheUploadedBlob()
+      throws Exception {
+    Fixture fixture = fixture();
+    byte[] chart = chartPackage("demo", "1.0.0", "v3");
+    stubBlobPersistence(fixture);
+
+    assertThrows(IllegalArgumentException.class, () -> fixture.writer.write(
+        runtime(), fixture.storage, 7L, "demo-1.0.0.tgz",
+        new ByteArrayInputStream(chart), null, HelmAssetKind.PACKAGE, null,
+        Map.of(), Map.of(), "user", "127.0.0.1"));
+
+    verify(fixture.componentDao, never()).upsertReturningId(any());
+    verify(fixture.storage).delete(any());
+  }
+
+  @Test
   void deletesMetadataAndUnreferencedBlob() {
     Fixture fixture = fixture();
     RepositoryRuntime runtime = runtime();
@@ -220,13 +236,18 @@ class HelmAssetWriterTest {
   }
 
   private static byte[] chartPackage(String name, String version) throws Exception {
+    return chartPackage(name, version, "v2");
+  }
+
+  private static byte[] chartPackage(String name, String version, String apiVersion)
+      throws Exception {
     ByteArrayOutputStream tarBytes = new ByteArrayOutputStream();
     try (TarArchiveOutputStream tar = new TarArchiveOutputStream(tarBytes)) {
       byte[] body = """
-          apiVersion: v2
+          apiVersion: %s
           name: %s
           version: %s
-          """.formatted(name, version).getBytes(StandardCharsets.UTF_8);
+          """.formatted(apiVersion, name, version).getBytes(StandardCharsets.UTF_8);
       TarArchiveEntry entry = new TarArchiveEntry(name + "/Chart.yaml");
       entry.setSize(body.length);
       tar.putArchiveEntry(entry);

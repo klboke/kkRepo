@@ -84,7 +84,7 @@ public class NexusLikeCacheController {
    * fail closed instead of publishing under a synthetic token.
    */
   public String currentDurableToken(long repositoryId, NexusCacheType type) {
-    return loadToken(tokenKey(repositoryId, type));
+    return loadDurableToken(tokenKey(repositoryId, type));
   }
 
   public void invalidate(long repositoryId, NexusCacheType type) {
@@ -116,6 +116,10 @@ public class NexusLikeCacheController {
 
   private String loadToken(String key) {
     return Long.toString(watermark.current(versionName(key)));
+  }
+
+  private String loadDurableToken(String key) {
+    return Long.toString(watermark.currentDurable(versionName(key)));
   }
 
   private void deferAfterCommit(String key) {

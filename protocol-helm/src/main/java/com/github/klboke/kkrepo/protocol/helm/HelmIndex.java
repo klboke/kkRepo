@@ -31,6 +31,7 @@ public final class HelmIndex {
   private static final int MAX_INDEX_CODE_POINTS = 64 * 1024 * 1024;
   private static final int MAX_VERSION_LENGTH = 256;
   private static final String API_VERSION = "v1";
+  private static final Set<String> CHART_API_VERSIONS = Set.of("v1", "v2");
   private static final DateTimeFormatter INSTANTS = DateTimeFormatter.ISO_INSTANT;
   // Helm parses chart versions with Masterminds semver.NewVersion: a lower-case v prefix,
   // shortened numeric cores, and leading zero coercion are accepted, while arbitrary labels are
@@ -64,6 +65,9 @@ public final class HelmIndex {
             .filter(chart -> isSafeChartPathSegment(chart.name()))
             .filter(chart -> isSafeChartPathSegment(chart.version()))
             .filter(chart -> isValidChartVersion(chart.version()))
+            .filter(chart -> chart.apiVersion() == null
+                || chart.apiVersion().isBlank()
+                || isValidChartApiVersion(chart.apiVersion()))
             .sorted(Comparator.comparing(ChartRecord::name)
                 .thenComparing(ChartRecord::version, Comparator.reverseOrder()))
             .toList();
@@ -186,6 +190,11 @@ public final class HelmIndex {
     return true;
   }
 
+  /** Return whether Helm accepts the release's Chart.yaml API version. */
+  public static boolean isValidChartApiVersion(String value) {
+    return value != null && CHART_API_VERSIONS.contains(value);
+  }
+
   /**
    * Merge member indexes in configured group order.
    *
@@ -219,7 +228,8 @@ public final class HelmIndex {
             if (!entryName.equals(name)
                 || !isSafeChartPathSegment(name)
                 || !isSafeChartPathSegment(version)
-                || !isValidChartVersion(version)) {
+                || !isValidChartVersion(version)
+                || !isValidChartApiVersion(string(versionMap.get("apiVersion"), null))) {
               continue;
             }
             List<String> chartUrls = rewriteEntry(
@@ -599,6 +609,12 @@ public final class HelmIndex {
         if (!name.equals(releaseName)) {
           throw new IllegalArgumentException(
               "Invalid Helm index entry " + name + ": release name must match entry name");
+        }
+        if (!(release.get("apiVersion") instanceof String releaseApiVersion)
+            || !isValidChartApiVersion(releaseApiVersion)) {
+          throw new IllegalArgumentException(
+              "Invalid Helm index entry " + name
+                  + ": expected chart apiVersion v1 or v2");
         }
         if (!(release.get("version") instanceof String releaseVersion)
             || !isSafeChartPathSegment(releaseVersion)

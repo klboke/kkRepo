@@ -340,7 +340,7 @@ public class HelmGroupService {
     NexusCacheType cacheType = NexusCacheType.CONTENT;
     try {
       GroupMemberAssetCache.Generation winnerGeneration =
-          captureWinnerGeneration(group, cacheType);
+          captureWinnerGeneration(group, cacheType, path);
       ReleaseSelection selection = advertisedRelease(group, path);
       HelmIndex.Release release = selection.release();
       Optional<Long> cachedMemberId = memberAssetCache == null || winnerGeneration == null
@@ -422,13 +422,22 @@ public class HelmGroupService {
   }
 
   private GroupMemberAssetCache.Generation captureWinnerGeneration(
-      RepositoryRuntime group, NexusCacheType cacheType) {
+      RepositoryRuntime group, NexusCacheType cacheType, String path) {
     if (memberAssetCache == null || indexCache == null) return null;
-    String sourceGeneration = currentMemberGeneration(group);
+    String sourceGeneration = currentWinnerGeneration(group, path);
     if (sourceGeneration == null || sourceGeneration.isBlank()) return null;
     return memberAssetCache.captureGeneration(group, cacheType)
         .map(generation -> generation.withSourceGeneration(sourceGeneration))
         .orElse(null);
+  }
+
+  private String currentWinnerGeneration(RepositoryRuntime group, String path) {
+    try {
+      return indexCache.winnerAssetGeneration(group, path);
+    } catch (RuntimeException e) {
+      log.warn("Failed reading Helm group winner generation for {} path {}", group.name(), path, e);
+      return null;
+    }
   }
 
   private ReleaseSelection advertisedRelease(RepositoryRuntime group, String path) {

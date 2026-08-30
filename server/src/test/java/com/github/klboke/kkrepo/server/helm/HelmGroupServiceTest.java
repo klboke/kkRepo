@@ -1239,13 +1239,14 @@ class HelmGroupServiceTest {
   }
 
   @Test
-  void disablesWinnerCachingWhenTheDurableMemberSourceGenerationIsUnavailable() {
+  void disablesWinnerCachingWhenTheDurableMemberSourceGenerationReadFails() {
     Fixture fixture = fixture();
     RepositoryRuntime hosted = runtime(2L, "hosted", RepositoryType.HOSTED, true, List.of());
     RepositoryRuntime group = runtime(
         10L, "all", RepositoryType.GROUP, true, List.of(hosted));
     MavenResponse expected = asset("digest-a");
-    when(fixture.indexCache.memberAssetGeneration(group)).thenReturn(null);
+    when(fixture.indexCache.winnerAssetGeneration(group, "demo-1.0.0.tgz"))
+        .thenThrow(new IllegalStateException("asset binding unavailable"));
     when(fixture.hosted.get(hosted, "index.yaml", false))
         .thenAnswer(ignored -> selectedIndex("digest-a"));
     when(fixture.hosted.get(hosted, "demo-1.0.0.tgz", false)).thenReturn(expected);
@@ -1294,6 +1295,7 @@ class HelmGroupServiceTest {
             invocation.getArgument(0), HelmHostedService.INDEX_PATH, false));
     when(indexCache.enabled()).thenReturn(false);
     when(indexCache.memberAssetGeneration(any())).thenReturn("member-generation");
+    when(indexCache.winnerAssetGeneration(any(), any())).thenReturn("member-generation");
     when(memberCache.captureGeneration(any(), any())).thenAnswer(invocation -> {
       RepositoryRuntime repository = invocation.getArgument(0);
       NexusCacheType cacheType = invocation.getArgument(1);
@@ -1340,6 +1342,8 @@ class HelmGroupServiceTest {
     String document = body.stripLeading().startsWith("apiVersion:")
         ? body
         : "apiVersion: v1\n" + body;
+    document = document.replaceAll(
+        "(?m)^(\\s*)- name:", "$1- apiVersion: v2\n$1  name:");
     byte[] bytes = document.getBytes(StandardCharsets.UTF_8);
     return MavenResponse.ok(
         new ByteArrayInputStream(bytes), bytes.length, HelmIndex.CONTENT_TYPE, null, Instant.EPOCH);

@@ -37,6 +37,11 @@ public class JdbcVersionWatermark implements VersionWatermark {
   }
 
   @Override
+  public long currentDurable(String name) {
+    return dao.current(name);
+  }
+
+  @Override
   public Map<String, Long> currentAll() {
     Map<String, Long> versions = dao.selectAll();
     versions.forEach(localVersions::put);

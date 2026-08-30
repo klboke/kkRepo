@@ -356,6 +356,68 @@ class HelmGroupIndexCacheTest {
   }
 
   @Test
+  void winnerGenerationTracksExactProvenanceBindingsWrittenByOlderReplicas() {
+    AssetDao assets = mock(AssetDao.class);
+    HelmGroupIndexCache cache = new HelmGroupIndexCache(
+        new StubRepositoryDao(),
+        assets,
+        mock(AssetMetadataCache.class),
+        new NexusLikeCacheController(new InMemoryVersionWatermark(), 60),
+        mock(RepositoryIndexRebuildDao.class),
+        true);
+    RepositoryRuntime group = runtime(
+        21L,
+        60,
+        List.of(
+            proxyRuntime(11L, "https://first.example.test/"),
+            proxyRuntime(12L, "https://second.example.test/")));
+    Map<Long, AssetRecord> indexes = Map.of(
+        11L, indexAsset(11L, 101L, 201L),
+        12L, indexAsset(12L, 102L, 202L));
+    AssetRecord laterWinner = provenanceAsset(12L, 112L, 212L);
+    AssetRecord newEarlierWinner = provenanceAsset(11L, 111L, 211L);
+    when(assets.findAssetsByPathHash(any(), any()))
+        .thenReturn(indexes)
+        .thenReturn(Map.of(12L, laterWinner))
+        .thenReturn(indexes)
+        .thenReturn(Map.of(11L, newEarlierWinner, 12L, laterWinner));
+
+    String before = cache.winnerAssetGeneration(group, "demo-1.0.0.tgz.prov");
+    String after = cache.winnerAssetGeneration(group, "demo-1.0.0.tgz.prov");
+
+    assertNotEquals(before, after);
+  }
+
+  @Test
+  void winnerGenerationValidatesPathsAndFailsClosedOnMissingAssetSnapshots() {
+    AssetDao assets = mock(AssetDao.class);
+    HelmGroupIndexCache cache = new HelmGroupIndexCache(
+        new StubRepositoryDao(),
+        assets,
+        mock(AssetMetadataCache.class),
+        new NexusLikeCacheController(new InMemoryVersionWatermark(), 60),
+        mock(RepositoryIndexRebuildDao.class),
+        true);
+    RepositoryRuntime group = runtime(
+        21L, 60, List.of(proxyRuntime(11L, "https://charts.example.test/")));
+    Map<Long, AssetRecord> indexes = Map.of(11L, indexAsset(11L, 101L, 201L));
+    when(assets.findAssetsByPathHash(any(), any()))
+        .thenReturn(indexes)
+        .thenReturn(indexes)
+        .thenReturn(indexes)
+        .thenReturn(null);
+
+    assertThrows(IllegalArgumentException.class, () -> cache.winnerAssetGeneration(group, null));
+    assertThrows(IllegalArgumentException.class, () -> cache.winnerAssetGeneration(group, " "));
+    assertEquals(
+        cache.memberAssetGeneration(group),
+        cache.winnerAssetGeneration(group, HelmHostedService.INDEX_PATH));
+    assertThrows(
+        IllegalStateException.class,
+        () -> cache.winnerAssetGeneration(group, "demo-1.0.0.tgz"));
+  }
+
+  @Test
   void invalidatesCachedStateWhenTheDurableMemberGenerationCannotBeRead() {
     StubRepositoryDao repositories = new StubRepositoryDao();
     AssetMetadataCache metadata = mock(AssetMetadataCache.class);
@@ -575,6 +637,24 @@ class HelmGroupIndexCacheTest {
         4L,
         null,
         lastUpdatedAt,
+        Map.of());
+  }
+
+  private static AssetRecord provenanceAsset(long repositoryId, long assetId, long blobId) {
+    return new AssetRecord(
+        assetId,
+        repositoryId,
+        null,
+        blobId,
+        RepositoryFormat.HELM,
+        "demo-1.0.0.tgz.prov",
+        null,
+        "demo-1.0.0.tgz.prov",
+        "PROVENANCE",
+        "application/octet-stream",
+        4L,
+        null,
+        java.time.Instant.EPOCH,
         Map.of());
   }
 

@@ -129,7 +129,8 @@ class HelmProxyServiceTest {
         apiVersion: v1
         entries:
           demo:
-            - name: demo
+            - apiVersion: v2
+              name: demo
               version: 1.0.0
               urls:
                 - charts/original.tgz
@@ -574,8 +575,14 @@ class HelmProxyServiceTest {
     respond(schemaInvalid.fetcher, new HttpRemoteFetcher.Result(
         200,
         Map.of(),
-        new ByteArrayInputStream(
-            "entries: {demo: error}\n".getBytes(StandardCharsets.UTF_8))));
+        new ByteArrayInputStream("""
+            apiVersion: v1
+            entries:
+              demo:
+                - name: demo
+                  version: 1.0.0
+                  urls: [demo.tgz]
+            """.getBytes(StandardCharsets.UTF_8))));
 
     assertEquals(Boolean.FALSE,
         schemaInvalid.service.get(runtime, "index.yaml", false)

@@ -1,11 +1,14 @@
 package com.github.klboke.kkrepo.server.cache;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.server.support.InMemoryVersionWatermark;
 import java.time.Instant;
@@ -56,6 +59,19 @@ class NexusLikeCacheControllerTest {
         IllegalStateException.class,
         () -> controller.invalidateOrThrow(7L, NexusCacheType.METADATA));
     assertDoesNotThrow(() -> controller.invalidate(7L, NexusCacheType.METADATA));
+  }
+
+  @Test
+  void durableTokenUsesTheUncachedWatermarkContract() {
+    VersionWatermark watermark = mock(VersionWatermark.class);
+    when(watermark.current("repo:7:CONTENT")).thenReturn(1L);
+    when(watermark.currentDurable("repo:7:CONTENT")).thenReturn(2L);
+    NexusLikeCacheController controller = new NexusLikeCacheController(watermark, 60);
+
+    assertEquals("1", controller.currentToken(7L, NexusCacheType.CONTENT));
+    assertEquals("2", controller.currentDurableToken(7L, NexusCacheType.CONTENT));
+
+    verify(watermark).currentDurable("repo:7:CONTENT");
   }
 
   @Test
