@@ -64,7 +64,8 @@ public class HelmHostedService {
       ensureIndex(runtime);
       // A sibling replica may rebuild this generated asset. Bypass the node-local hot entry so
       // the durable DB/blob binding becomes visible immediately instead of after the 60s TTL.
-      assetMetadataCache.evict(runtime.id(), path);
+      // This is a read-side refresh, so it must not advance the durable member-write generation.
+      assetMetadataCache.evictEntry(runtime.id(), path);
     }
     CachedAssetMetadata snapshot = assetMetadataCache.find(
         runtime.id(), path,

@@ -265,8 +265,6 @@ class HelmGroupIndexCacheTest {
         repositories, mock(AssetDao.class), metadata, controller,
         mock(RepositoryIndexRebuildDao.class), false);
     assertFalse(disabled.findFresh(group, java.time.Instant.now()).isPresent());
-    disabled.invalidateMemberAfterCommit(11L);
-    disabled.invalidateGroupAfterCommit(group.id());
 
     HelmGroupIndexCache enabled = new HelmGroupIndexCache(
         repositories, mock(AssetDao.class), metadata, controller,
@@ -281,6 +279,73 @@ class HelmGroupIndexCacheTest {
     assertFalse(enabled.findFresh(group, java.time.Instant.now()).isPresent());
     assertFalse(enabled.findFresh(group, java.time.Instant.now()).isPresent());
     assertFalse(enabled.findFresh(group, java.time.Instant.now()).isPresent());
+  }
+
+  @Test
+  void keepsWinnerInvalidationDurableWhenMergedIndexCachingIsDisabled() {
+    StubRepositoryDao repositories = new StubRepositoryDao();
+    repositories.putGroupsContaining(11L, List.of(group(21L, "all")));
+    RepositoryIndexRebuildDao rebuildQueue = mock(RepositoryIndexRebuildDao.class);
+    when(rebuildQueue.enqueueHelmGroupInvalidation(
+        21L, RepositoryIndexRebuildDao.HELM_GROUP_CONTENT_INVALIDATION))
+        .thenReturn("content-request");
+    when(rebuildQueue.acknowledgeHelmGroupInvalidationIfRequestToken(
+        21L,
+        RepositoryIndexRebuildDao.HELM_GROUP_CONTENT_INVALIDATION,
+        "content-request"))
+        .thenReturn(true);
+    HelmGroupIndexCache disabled = new HelmGroupIndexCache(
+        repositories,
+        mock(AssetDao.class),
+        mock(AssetMetadataCache.class),
+        new NexusLikeCacheController(new InMemoryVersionWatermark(), 60),
+        rebuildQueue,
+        false);
+
+    disabled.invalidateMemberContentAfterCommit(11L);
+
+    verify(rebuildQueue).enqueueHelmGroupInvalidation(
+        21L, RepositoryIndexRebuildDao.HELM_GROUP_CONTENT_INVALIDATION);
+    verify(rebuildQueue).acknowledgeHelmGroupInvalidationIfRequestToken(
+        21L,
+        RepositoryIndexRebuildDao.HELM_GROUP_CONTENT_INVALIDATION,
+        "content-request");
+  }
+
+  @Test
+  void rejectsAndInvalidatesSnapshotsWhenAnOlderReplicaAdvancesAMemberGeneration() {
+    StubRepositoryDao repositories = new StubRepositoryDao();
+    AssetMetadataCache metadata = mock(AssetMetadataCache.class);
+    NexusLikeCacheController controller = new NexusLikeCacheController(
+        new InMemoryVersionWatermark(), 60);
+    RepositoryIndexRebuildDao rebuildQueue = mock(RepositoryIndexRebuildDao.class);
+    when(rebuildQueue.enqueueHelmGroupInvalidation(
+        21L, RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION))
+        .thenReturn("mixed-version-request");
+    when(rebuildQueue.acknowledgeHelmGroupInvalidationIfRequestToken(
+        21L,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        "mixed-version-request"))
+        .thenReturn(true);
+    HelmGroupIndexCache cache = new HelmGroupIndexCache(
+        repositories, mock(AssetDao.class), metadata, controller, rebuildQueue, true);
+    RepositoryRuntime group = runtime(
+        21L, 60, List.of(proxyRuntime(11L, "https://charts.example.test/")));
+    java.time.Instant now = java.time.Instant.parse("2026-08-30T00:00:00Z");
+    when(metadata.currentRepositoryVersion(11L)).thenReturn(1L, 2L);
+    Map<String, Object> attributes =
+        cache.freshAttributes(group, cache.current(group, now), null);
+    when(metadata.find(eq(group.id()), eq("index.yaml"), any()))
+        .thenReturn(Optional.of(snapshot("INDEX", attributes, true)));
+
+    assertFalse(cache.findFresh(group, now).isPresent());
+
+    verify(rebuildQueue).enqueueHelmGroupInvalidation(
+        21L, RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION);
+    verify(rebuildQueue).acknowledgeHelmGroupInvalidationIfRequestToken(
+        21L,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        "mixed-version-request");
   }
 
   @Test

@@ -145,7 +145,10 @@ public class HelmGroupService {
             HelmAssetKind.INDEX,
             null,
             indexCache.freshAttributes(
-                group, aggregated.cacheInfo(), memberIndexes.freshUntil()),
+                group,
+                aggregated.cacheInfo(),
+                memberIndexes.freshUntil(),
+                aggregated.memberAssetGeneration()),
             java.util.Map.of(),
             "group",
             null);
@@ -176,13 +179,19 @@ public class HelmGroupService {
       RepositoryRuntime group, Set<Long> resolvingGroups) {
     Instant generatedAt = Instant.now();
     boolean trackWatermark = indexCache != null && indexCache.enabled();
+    String memberGenerationBefore = trackWatermark ? currentMemberGeneration(group) : null;
     NexusLikeCacheInfo before = trackWatermark ? currentWatermark(group) : null;
     MemberIndexes members = memberIndexes(group, resolvingGroups);
     byte[] body = HelmIndex.mergeGroupIndexes(members.indexes(), generatedAt);
     ensureIndexWithinLimit(body.length);
     NexusLikeCacheInfo after = trackWatermark ? currentWatermark(group) : null;
-    boolean stable = !trackWatermark || sameGeneration(before, after);
-    return new AggregatedIndex(members, body, generatedAt, after, stable);
+    String memberGenerationAfter = trackWatermark ? currentMemberGeneration(group) : null;
+    boolean stable = !trackWatermark
+        || (sameGeneration(before, after)
+            && memberGenerationBefore != null
+            && memberGenerationBefore.equals(memberGenerationAfter));
+    return new AggregatedIndex(
+        members, body, generatedAt, after, memberGenerationAfter, stable);
   }
 
   private NexusLikeCacheInfo currentWatermark(RepositoryRuntime group) {
@@ -190,6 +199,15 @@ public class HelmGroupService {
       return indexCache.current(group, Instant.now());
     } catch (RuntimeException e) {
       log.warn("Failed reading Helm group index watermark for {}", group.name(), e);
+      return null;
+    }
+  }
+
+  private String currentMemberGeneration(RepositoryRuntime group) {
+    try {
+      return indexCache.memberAssetGeneration(group);
+    } catch (RuntimeException e) {
+      log.warn("Failed reading Helm group member generation for {}", group.name(), e);
       return null;
     }
   }
@@ -515,6 +533,7 @@ public class HelmGroupService {
       byte[] body,
       Instant generatedAt,
       NexusLikeCacheInfo cacheInfo,
+      String memberAssetGeneration,
       boolean watermarkStable) {
   }
 

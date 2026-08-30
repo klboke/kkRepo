@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.helm;
 
+import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
@@ -44,6 +45,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class HelmGroupIndexCache {
   static final String GROUP_INDEX_ATTRIBUTE = "helmGroupIndex";
   static final String MEMBER_INDEX_FRESH_UNTIL_ATTRIBUTE = "helmGroupMemberIndexFreshUntil";
+  static final String MEMBER_ASSET_GENERATION_ATTRIBUTE = "helmGroupMemberAssetGeneration";
   static final String CONFIGURATION_FINGERPRINT_ATTRIBUTE = "helmGroupConfiguration";
 
   private static final Logger log = LoggerFactory.getLogger(HelmGroupIndexCache.class);
@@ -145,6 +147,27 @@ public class HelmGroupIndexCache {
         stringAttribute(attributes, CONFIGURATION_FINGERPRINT_ATTRIBUTE))) {
       return Optional.empty();
     }
+    String storedMemberGeneration =
+        stringAttribute(attributes, MEMBER_ASSET_GENERATION_ATTRIBUTE);
+    String currentMemberGeneration;
+    try {
+      currentMemberGeneration = memberAssetGeneration(group);
+    } catch (RuntimeException e) {
+      log.warn(
+          "Failed reading Helm group member generation for {}; invalidating cached state",
+          group.name(),
+          e);
+      invalidateGroupAfterCommit(group.id());
+      return Optional.empty();
+    }
+    if (storedMemberGeneration == null
+        || !storedMemberGeneration.equals(currentMemberGeneration)) {
+      // Pre-feature replicas already advance the durable asset-metadata generation. Convert a
+      // detected mixed-version write into the same durable CONTENT+METADATA invalidation used by
+      // new writers before this request can consult a cached member winner.
+      invalidateGroupAfterCommit(group.id());
+      return Optional.empty();
+    }
     if (attributes.containsKey(MEMBER_INDEX_FRESH_UNTIL_ATTRIBUTE)) {
       Instant memberIndexFreshUntil = instantAttribute(
           attributes, MEMBER_INDEX_FRESH_UNTIL_ATTRIBUTE);
@@ -172,9 +195,22 @@ public class HelmGroupIndexCache {
       RepositoryRuntime group,
       NexusLikeCacheInfo cacheInfo,
       Instant memberIndexFreshUntil) {
+    return freshAttributes(
+        group, cacheInfo, memberIndexFreshUntil, memberAssetGeneration(group));
+  }
+
+  public Map<String, Object> freshAttributes(
+      RepositoryRuntime group,
+      NexusLikeCacheInfo cacheInfo,
+      Instant memberIndexFreshUntil,
+      String memberAssetGeneration) {
+    if (memberAssetGeneration == null || memberAssetGeneration.isBlank()) {
+      throw new IllegalArgumentException("Helm group member asset generation is required");
+    }
     Map<String, Object> attributes = new LinkedHashMap<>();
     attributes.put(GROUP_INDEX_ATTRIBUTE, true);
     attributes.put(CONFIGURATION_FINGERPRINT_ATTRIBUTE, configurationFingerprint(group));
+    attributes.put(MEMBER_ASSET_GENERATION_ATTRIBUTE, memberAssetGeneration);
     if (memberIndexFreshUntil != null) {
       attributes.put(MEMBER_INDEX_FRESH_UNTIL_ATTRIBUTE, memberIndexFreshUntil.toString());
     }
@@ -201,6 +237,50 @@ public class HelmGroupIndexCache {
   static String configurationFingerprint(RepositoryRuntime group) {
     StringBuilder material = new StringBuilder();
     appendRuntimeConfiguration(material, group, new HashSet<>());
+    return sha256(material);
+  }
+
+  /**
+   * Hashes the durable per-repository generations for every direct and nested member.
+   *
+   * <p>{@link AssetMetadataCache} generations predate Helm groups and are advanced by old hosted
+   * and proxy writers, so this fence remains effective while replicas are upgraded gradually.
+   */
+  public String memberAssetGeneration(RepositoryRuntime group) {
+    Set<Long> memberRepositoryIds = new LinkedHashSet<>();
+    collectMemberRepositoryIds(group, memberRepositoryIds, new HashSet<>());
+    StringBuilder material = new StringBuilder();
+    for (long memberRepositoryId : memberRepositoryIds) {
+      appendFingerprintField(material, Long.toString(memberRepositoryId));
+      appendFingerprintField(
+          material,
+          Long.toString(assetMetadataCache.currentRepositoryVersion(memberRepositoryId)));
+    }
+    return sha256(material);
+  }
+
+  private static void collectMemberRepositoryIds(
+      RepositoryRuntime runtime,
+      Set<Long> memberRepositoryIds,
+      Set<Long> resolvingGroups) {
+    if (runtime == null || !runtime.isGroup() || !resolvingGroups.add(runtime.id())) return;
+    try {
+      if (runtime.members() == null) return;
+      for (RepositoryRuntime member : runtime.members()) {
+        if (member == null || !member.online() || member.format() != RepositoryFormat.HELM) {
+          continue;
+        }
+        memberRepositoryIds.add(member.id());
+        if (member.isGroup()) {
+          collectMemberRepositoryIds(member, memberRepositoryIds, resolvingGroups);
+        }
+      }
+    } finally {
+      resolvingGroups.remove(runtime.id());
+    }
+  }
+
+  private static String sha256(CharSequence material) {
     try {
       byte[] digest = MessageDigest.getInstance("SHA-256")
           .digest(material.toString().getBytes(StandardCharsets.UTF_8));
@@ -266,14 +346,12 @@ public class HelmGroupIndexCache {
   }
 
   private void invalidateMemberAfterCommit(long memberRepositoryId, String invalidationKind) {
-    if (!enabled) return;
     Set<Long> groups = new LinkedHashSet<>();
     collectContainingGroups(memberRepositoryId, groups);
     enqueueInvalidations(groups, invalidationKind);
   }
 
   public void invalidateGroupAfterCommit(long groupId) {
-    if (!enabled) return;
     Set<Long> groups = new LinkedHashSet<>();
     collectGroupAndAncestors(groupId, groups);
     enqueueInvalidations(groups, RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION);

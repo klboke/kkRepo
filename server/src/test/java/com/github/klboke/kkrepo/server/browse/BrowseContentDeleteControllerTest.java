@@ -796,6 +796,29 @@ class BrowseContentDeleteControllerTest {
   }
 
   @Test
+  void invalidatesHelmGroupMetadataAfterProxyIndexDeletion() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord repository =
+        repository(1L, "helm-proxy", RepositoryFormat.HELM, RepositoryType.PROXY);
+    String path = "index.yaml";
+    AssetRecord index = asset(
+        11L, null, 31L, RepositoryFormat.HELM, path, "INDEX", Map.of());
+    when(fixture.repositoryDao.findByName(repository.name())).thenReturn(Optional.of(repository));
+    when(fixture.assetDao.findAssetByPath(repository.id(), path)).thenReturn(Optional.of(index));
+    when(fixture.assetDao.listAssetsByPrefix(repository.id(), path + "/"))
+        .thenReturn(List.of());
+
+    fixture.controller.delete(
+        repository.name(), path, null, new MockHttpServletRequest());
+
+    verify(fixture.helmGroupIndexCache).invalidateMemberAfterCommit(repository.id());
+    verify(fixture.helmGroupIndexCache, never())
+        .invalidateMemberContentAfterCommit(repository.id());
+    verify(fixture.indexRebuildDao, never()).enqueue(
+        repository.id(), RepositoryIndexRebuildDao.HELM_INDEX);
+  }
+
+  @Test
   void mapsPypiPublicPathAndRebuildsProjectAndRootIndexes() {
     Fixture fixture = fixture(true, AccessDecision.allow());
     RepositoryRecord repository =

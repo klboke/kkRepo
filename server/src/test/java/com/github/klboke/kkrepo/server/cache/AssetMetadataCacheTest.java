@@ -406,6 +406,17 @@ class AssetMetadataCacheTest {
   }
 
   @Test
+  void disabledReadThroughCacheStillAdvancesTheDurableRepositoryGeneration() {
+    InMemoryVersionWatermark watermark = new InMemoryVersionWatermark();
+    AssetMetadataCache cache = new AssetMetadataCache(
+        sharedCache, watermark, false, 120, 5);
+
+    cache.evictAfterCommit(7L, "x.jar");
+
+    assertEquals(1L, cache.currentRepositoryVersion(7L));
+  }
+
+  @Test
   void snapshotRoundTripsAssetAndBlob() {
     AssetMetadataCache cache = new AssetMetadataCache(sharedCache, true, 120, 5);
     AssetRecord a = asset(1L, 7L, "x.jar");

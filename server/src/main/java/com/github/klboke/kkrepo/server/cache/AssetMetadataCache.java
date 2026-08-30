@@ -197,11 +197,10 @@ public class AssetMetadataCache {
 
   /** Evict immediately. Prefer {@link #evictAfterCommit} from inside a transaction. */
   public void evict(long repositoryId, String storagePath) {
-    if (!enabled) {
-      return;
-    }
     invalidateRepositoryVersion(repositoryId);
-    evictLocal(repositoryId, storagePath);
+    if (enabled) {
+      evictLocal(repositoryId, storagePath);
+    }
   }
 
   /**
@@ -236,12 +235,14 @@ public class AssetMetadataCache {
    * into a single eviction.
    */
   public void evictAfterCommit(long repositoryId, String storagePath) {
-    if (!enabled || storagePath == null) {
+    if (storagePath == null) {
       return;
     }
     if (!TransactionSynchronizationManager.isSynchronizationActive()) {
       invalidateRepositoryVersion(repositoryId);
-      evictLocal(repositoryId, storagePath);
+      if (enabled) {
+        evictLocal(repositoryId, storagePath);
+      }
       return;
     }
     @SuppressWarnings("unchecked")
@@ -268,7 +269,9 @@ public class AssetMetadataCache {
             if (invalidatedRepositories.add(repoId)) {
               invalidateRepositoryVersion(repoId);
             }
-            evictLocal(repoId, path);
+            if (enabled) {
+              evictLocal(repoId, path);
+            }
           }
         }
 
@@ -283,11 +286,21 @@ public class AssetMetadataCache {
 
   /** Bulk-evict every entry under a repository. Use on repository delete / format wipe. */
   public void evictRepository(long repositoryId) {
-    if (!enabled) {
-      return;
-    }
     invalidateRepositoryVersion(repositoryId);
-    evictRepositoryLocal(repositoryId);
+    if (enabled) {
+      evictRepositoryLocal(repositoryId);
+    }
+  }
+
+  /**
+   * Returns the durable generation advanced by every asset write or delete in this repository.
+   *
+   * <p>The generation remains available when metadata read-through caching is disabled. Protocol
+   * caches use it to fence snapshots created during rolling upgrades, including writes performed
+   * by older replicas that do not know about the protocol-specific cache.
+   */
+  public long currentRepositoryVersion(long repositoryId) {
+    return watermark == null ? 0L : watermark.current(versionName(repositoryId));
   }
 
   private void evictRepositoryLocal(long repositoryId) {

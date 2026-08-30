@@ -20,6 +20,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
 import com.github.klboke.kkrepo.protocol.conda.CondaPath;
+import com.github.klboke.kkrepo.protocol.helm.HelmAssetKind;
 import com.github.klboke.kkrepo.protocol.nuget.NugetPath;
 import com.github.klboke.kkrepo.protocol.nuget.NugetPathParser;
 import com.github.klboke.kkrepo.protocol.nuget.NugetPaths;
@@ -643,6 +644,10 @@ public class BrowseContentDeleteController {
         .map(BrowseContentDeleteController::pypiProjectForInvalidation)
         .filter(id -> id != null && !id.isBlank())
         .collect(Collectors.toSet());
+    boolean helmIndexDeleted = target.format() == RepositoryFormat.HELM
+        && assets.stream().anyMatch(asset ->
+            HelmAssetKind.INDEX.name().equalsIgnoreCase(asset.kind())
+                || "index.yaml".equals(asset.path()));
     for (AssetRecord asset : assets) {
       deleteAsset(asset);
     }
@@ -652,7 +657,11 @@ public class BrowseContentDeleteController {
     enqueueMavenMetadataRebuild(target, storagePath);
     enqueueRepositoryIndexRebuild(target, storagePath);
     if (target.format() == RepositoryFormat.HELM) {
-      helmGroupIndexCache.invalidateMemberContentAfterCommit(target.id());
+      if (helmIndexDeleted) {
+        helmGroupIndexCache.invalidateMemberAfterCommit(target.id());
+      } else {
+        helmGroupIndexCache.invalidateMemberContentAfterCommit(target.id());
+      }
     }
     if (target.format() == RepositoryFormat.NPM) {
       if (npmPackageIds.isEmpty()) {

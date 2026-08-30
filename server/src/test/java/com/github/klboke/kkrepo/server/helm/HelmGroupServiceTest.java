@@ -181,7 +181,8 @@ class HelmGroupServiceTest {
     when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.empty());
     when(fixture.indexCache.enabled()).thenReturn(true);
     when(fixture.indexCache.current(eq(group), any())).thenReturn(cacheInfo);
-    when(fixture.indexCache.freshAttributes(group, cacheInfo, null)).thenReturn(attributes);
+    when(fixture.indexCache.freshAttributes(
+        group, cacheInfo, null, "member-generation")).thenReturn(attributes);
     when(fixture.hosted.get(hosted, "index.yaml", false)).thenAnswer(ignored -> index("""
         entries:
           private:
@@ -239,7 +240,8 @@ class HelmGroupServiceTest {
                       version: 2.0.0
                       urls: [private-2.0.0.tgz]
                 """));
-    when(fixture.indexCache.freshAttributes(group, postRefresh, null)).thenReturn(attributes);
+    when(fixture.indexCache.freshAttributes(
+        group, postRefresh, null, "member-generation")).thenReturn(attributes);
     when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
     when(fixture.writer.writeBytes(
         eq(group), eq(fixture.storage), eq(7L), eq("index.yaml"), any(byte[].class),
@@ -253,7 +255,57 @@ class HelmGroupServiceTest {
         List.of(new HelmIndex.Entry("private", "2.0.0", List.of("private-2.0.0.tgz"))),
         HelmIndex.entries(response.body().readAllBytes()));
     verify(fixture.hosted, times(2)).get(hosted, "index.yaml", false);
-    verify(fixture.indexCache).freshAttributes(group, postRefresh, null);
+    verify(fixture.indexCache).freshAttributes(
+        group, postRefresh, null, "member-generation");
+  }
+
+  @Test
+  void retriesCollectionWhenAnOlderReplicaAdvancesAMemberAssetGeneration() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime hosted = runtime(2L, "private", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of(hosted));
+    NexusLikeCacheInfo cacheInfo = new NexusLikeCacheInfo(
+        Instant.parse("2026-08-30T00:00:00Z"), "token", NexusCacheType.METADATA);
+    AtomicInteger memberReads = new AtomicInteger();
+    Map<String, Object> attributes = Map.of("helmGroupIndex", true);
+    HelmAssetWriter.Stored stored = storedIndex();
+    when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.empty());
+    when(fixture.indexCache.enabled()).thenReturn(true);
+    when(fixture.indexCache.current(eq(group), any())).thenReturn(cacheInfo);
+    when(fixture.indexCache.memberAssetGeneration(group))
+        .thenReturn("member-1", "member-2", "member-2", "member-2");
+    when(fixture.hosted.get(hosted, "index.yaml", false)).thenAnswer(ignored ->
+        memberReads.incrementAndGet() == 1
+            ? index("""
+                entries:
+                  private:
+                    - name: private
+                      version: 1.0.0
+                      urls: [private-1.0.0.tgz]
+                """)
+            : index("""
+                entries:
+                  private:
+                    - name: private
+                      version: 2.0.0
+                      urls: [private-2.0.0.tgz]
+                """));
+    when(fixture.indexCache.freshAttributes(group, cacheInfo, null, "member-2"))
+        .thenReturn(attributes);
+    when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
+    when(fixture.writer.writeBytes(
+        eq(group), eq(fixture.storage), eq(7L), eq("index.yaml"), any(byte[].class),
+        eq(HelmIndex.CONTENT_TYPE), eq(com.github.klboke.kkrepo.protocol.helm.HelmAssetKind.INDEX),
+        isNull(), eq(attributes), anyMap(), eq("group"), isNull()))
+        .thenReturn(stored);
+
+    MavenResponse response = fixture.service.get(group, "index.yaml", false);
+
+    assertEquals(
+        List.of(new HelmIndex.Entry("private", "2.0.0", List.of("private-2.0.0.tgz"))),
+        HelmIndex.entries(response.body().readAllBytes()));
+    verify(fixture.hosted, times(2)).get(hosted, "index.yaml", false);
+    verify(fixture.indexCache).freshAttributes(group, cacheInfo, null, "member-2");
   }
 
   @Test
@@ -325,7 +377,8 @@ class HelmGroupServiceTest {
     when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.empty());
     when(fixture.indexCache.enabled()).thenReturn(true);
     when(fixture.indexCache.current(eq(group), any())).thenReturn(cacheInfo);
-    when(fixture.indexCache.freshAttributes(group, cacheInfo, null)).thenReturn(attributes);
+    when(fixture.indexCache.freshAttributes(
+        group, cacheInfo, null, "member-generation")).thenReturn(attributes);
     when(fixture.hosted.get(hosted, "index.yaml", false)).thenAnswer(ignored -> index("""
         entries:
           private:
@@ -365,7 +418,8 @@ class HelmGroupServiceTest {
     when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.empty());
     when(fixture.indexCache.enabled()).thenReturn(true);
     when(fixture.indexCache.current(eq(group), any())).thenReturn(cacheInfo);
-    when(fixture.indexCache.freshAttributes(group, cacheInfo, memberFreshUntil))
+    when(fixture.indexCache.freshAttributes(
+        group, cacheInfo, memberFreshUntil, "member-generation"))
         .thenReturn(attributes);
     when(fixture.proxy.get(proxy, "index.yaml", false)).thenAnswer(ignored -> index("""
         entries:
@@ -385,7 +439,8 @@ class HelmGroupServiceTest {
     MavenResponse response = fixture.service.get(group, "index.yaml", false);
 
     assertEquals(200, response.status());
-    verify(fixture.indexCache).freshAttributes(group, cacheInfo, memberFreshUntil);
+    verify(fixture.indexCache).freshAttributes(
+        group, cacheInfo, memberFreshUntil, "member-generation");
   }
 
   @Test
@@ -406,7 +461,8 @@ class HelmGroupServiceTest {
         .thenAnswer(ignored -> index("entries: {}\n"));
     when(fixture.indexCache.enabled()).thenReturn(true);
     when(fixture.indexCache.current(eq(group), any())).thenReturn(cacheInfo);
-    when(fixture.indexCache.freshAttributes(group, cacheInfo, memberFreshUntil))
+    when(fixture.indexCache.freshAttributes(
+        group, cacheInfo, memberFreshUntil, "member-generation"))
         .thenReturn(attributes);
     when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
     when(fixture.writer.writeBytes(
@@ -416,7 +472,8 @@ class HelmGroupServiceTest {
         .thenReturn(stored);
 
     assertEquals(200, fixture.service.get(group, "index.yaml", false).status());
-    verify(fixture.indexCache).freshAttributes(group, cacheInfo, memberFreshUntil);
+    verify(fixture.indexCache).freshAttributes(
+        group, cacheInfo, memberFreshUntil, "member-generation");
   }
 
   @Test
@@ -1027,6 +1084,7 @@ class HelmGroupServiceTest {
     HelmAssetReader reader = mock(HelmAssetReader.class);
     BlobStorage storage = mock(BlobStorage.class);
     when(indexCache.enabled()).thenReturn(false);
+    when(indexCache.memberAssetGeneration(any())).thenReturn("member-generation");
     return new Fixture(
         hosted,
         proxy,
