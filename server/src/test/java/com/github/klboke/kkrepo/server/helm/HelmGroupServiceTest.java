@@ -554,6 +554,58 @@ class HelmGroupServiceTest {
   }
 
   @Test
+  void rechecksTheExactSourceGenerationBeforeUsingACachedWinner() {
+    Fixture fixture = fixture();
+    RepositoryRuntime hosted = runtime(2L, "private", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime proxy = runtime(3L, "upstream", RepositoryType.PROXY, true, List.of());
+    RepositoryRuntime group = runtime(
+        10L, "all", RepositoryType.GROUP, true, List.of(hosted, proxy));
+    MavenResponse expected = asset("same");
+    GroupMemberAssetCache.Generation captured = new GroupMemberAssetCache.Generation(
+        group.id(), NexusCacheType.CONTENT, "winner-generation", "before");
+    when(fixture.indexCache.winnerAssetGeneration(group, "demo-1.0.0.tgz"))
+        .thenReturn("before", "after");
+    when(fixture.memberCache.getIfCurrent(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, captured))
+        .thenReturn(Optional.of(proxy.id()));
+    when(fixture.hosted.get(hosted, "index.yaml", false))
+        .thenAnswer(ignored -> selectedIndex("same"));
+    when(fixture.proxy.get(proxy, "index.yaml", false))
+        .thenAnswer(ignored -> selectedIndex("same"));
+    when(fixture.hosted.get(hosted, "demo-1.0.0.tgz", false)).thenReturn(expected);
+
+    assertSame(expected, fixture.service.get(group, "demo-1.0.0.tgz", false));
+
+    verify(fixture.indexCache, times(2))
+        .winnerAssetGeneration(group, "demo-1.0.0.tgz");
+    verify(fixture.memberCache, never()).getIfCurrent(any(), any(), any(), any());
+    verify(fixture.proxy, never()).get(proxy, "demo-1.0.0.tgz", false);
+    verify(fixture.memberCache, never()).putIfCurrent(
+        any(), any(), any(), any(Long.class), any());
+  }
+
+  @Test
+  void rechecksTheExactSourceGenerationBeforePublishingAWinner() {
+    Fixture fixture = fixture();
+    RepositoryRuntime hosted = runtime(2L, "private", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime group = runtime(
+        10L, "all", RepositoryType.GROUP, true, List.of(hosted));
+    MavenResponse expected = asset("same");
+    when(fixture.indexCache.winnerAssetGeneration(group, "demo-1.0.0.tgz"))
+        .thenReturn("stable", "stable", "changed");
+    when(fixture.hosted.get(hosted, "index.yaml", false))
+        .thenAnswer(ignored -> selectedIndex("same"));
+    when(fixture.hosted.get(hosted, "demo-1.0.0.tgz", false)).thenReturn(expected);
+
+    assertSame(expected, fixture.service.get(group, "demo-1.0.0.tgz", false));
+
+    verify(fixture.indexCache, times(3))
+        .winnerAssetGeneration(group, "demo-1.0.0.tgz");
+    verify(fixture.memberCache, never()).putIfCurrent(
+        any(), any(), any(), any(Long.class), any());
+  }
+
+  @Test
   void bindsChartAndProvenanceDownloadsToTheReleaseSelectedByTheMergedIndex() {
     Fixture fixture = fixture();
     RepositoryRuntime hosted = runtime(2L, "higher-priority", RepositoryType.HOSTED, true, List.of());

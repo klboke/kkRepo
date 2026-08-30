@@ -75,6 +75,21 @@ class NexusLikeCacheControllerTest {
   }
 
   @Test
+  void durableStalenessBypassesANodeLocalTokenThatHasNotExpired() {
+    VersionWatermark watermark = mock(VersionWatermark.class);
+    when(watermark.current("repo:7:METADATA")).thenReturn(1L);
+    when(watermark.currentDurable("repo:7:METADATA")).thenReturn(2L);
+    NexusLikeCacheController controller = new NexusLikeCacheController(watermark, 60);
+    Instant now = Instant.parse("2026-08-30T00:00:00Z");
+    NexusLikeCacheInfo cached = controller.current(
+        7L, NexusCacheType.METADATA, now.minusSeconds(1));
+
+    assertFalse(controller.isStale(7L, NexusCacheType.METADATA, cached, 60, now));
+    assertTrue(controller.isDurablyStale(
+        7L, NexusCacheType.METADATA, cached, 60, now));
+  }
+
+  @Test
   void cacheInfoRoundTripsThroughAssetAttributes() {
     NexusLikeCacheInfo cacheInfo = new NexusLikeCacheInfo(
         Instant.parse("2026-06-02T00:00:00Z"),

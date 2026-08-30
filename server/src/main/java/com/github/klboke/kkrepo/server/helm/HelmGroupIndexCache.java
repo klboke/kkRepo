@@ -179,12 +179,20 @@ public class HelmGroupIndexCache {
       }
     }
     NexusLikeCacheInfo cacheInfo = NexusLikeCacheInfo.fromAttributes(attributes).orElse(null);
-    if (cacheController.isStale(
-        group.id(),
-        NexusCacheType.METADATA,
-        cacheInfo,
-        group.effectiveMetadataMaxAgeMinutesOrDefault(),
-        now)) {
+    try {
+      if (cacheController.isDurablyStale(
+          group.id(),
+          NexusCacheType.METADATA,
+          cacheInfo,
+          group.effectiveMetadataMaxAgeMinutesOrDefault(),
+          now)) {
+        return Optional.empty();
+      }
+    } catch (RuntimeException e) {
+      log.warn(
+          "Failed reading durable Helm group index watermark for {}; rejecting cached state",
+          group.name(),
+          e);
       return Optional.empty();
     }
     return cached;

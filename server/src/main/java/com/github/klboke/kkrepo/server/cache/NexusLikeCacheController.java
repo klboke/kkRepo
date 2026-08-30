@@ -49,13 +49,41 @@ public class NexusLikeCacheController {
       NexusLikeCacheInfo cacheInfo,
       int maxAgeMinutes,
       Instant now) {
+    return isStale(
+        repositoryId, type, cacheInfo, maxAgeMinutes, now, false);
+  }
+
+  /**
+   * Checks freshness against the durable cache token instead of the node-local hot cache.
+   *
+   * <p>Persistence failures are propagated so correctness-critical cache reads can fail closed.
+   */
+  public boolean isDurablyStale(
+      long repositoryId,
+      NexusCacheType type,
+      NexusLikeCacheInfo cacheInfo,
+      int maxAgeMinutes,
+      Instant now) {
+    return isStale(
+        repositoryId, type, cacheInfo, maxAgeMinutes, now, true);
+  }
+
+  private boolean isStale(
+      long repositoryId,
+      NexusCacheType type,
+      NexusLikeCacheInfo cacheInfo,
+      int maxAgeMinutes,
+      Instant now,
+      boolean durable) {
     if (cacheInfo == null || cacheInfo.lastVerified() == null) {
       return true;
     }
     if (cacheInfo.invalidated()) {
       return true;
     }
-    String currentToken = currentToken(repositoryId, type);
+    String currentToken = durable
+        ? currentDurableToken(repositoryId, type)
+        : currentToken(repositoryId, type);
     if (currentToken != null && !currentToken.equals(cacheInfo.cacheToken())) {
       return true;
     }

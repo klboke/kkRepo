@@ -343,6 +343,7 @@ public class HelmGroupService {
           captureWinnerGeneration(group, cacheType, path);
       ReleaseSelection selection = advertisedRelease(group, path);
       HelmIndex.Release release = selection.release();
+      winnerGeneration = retainCurrentWinnerGeneration(group, path, winnerGeneration);
       Optional<Long> cachedMemberId = memberAssetCache == null || winnerGeneration == null
           ? Optional.empty()
           : memberAssetCache.getIfCurrent(group, path, cacheType, winnerGeneration);
@@ -383,8 +384,12 @@ public class HelmGroupService {
           }
           response = materializeCandidateBody(member, path, response, headOnly);
           if (memberAssetCache != null && winnerGeneration != null && selection.complete()) {
-            memberAssetCache.putIfCurrent(
-                group, path, cacheType, member.id(), winnerGeneration);
+            GroupMemberAssetCache.Generation publishGeneration =
+                retainCurrentWinnerGeneration(group, path, winnerGeneration);
+            if (publishGeneration != null) {
+              memberAssetCache.putIfCurrent(
+                  group, path, cacheType, member.id(), publishGeneration);
+            }
           }
           return response;
         } catch (MavenExceptions.MavenNotFoundException
@@ -438,6 +443,17 @@ public class HelmGroupService {
       log.warn("Failed reading Helm group winner generation for {} path {}", group.name(), path, e);
       return null;
     }
+  }
+
+  private GroupMemberAssetCache.Generation retainCurrentWinnerGeneration(
+      RepositoryRuntime group,
+      String path,
+      GroupMemberAssetCache.Generation generation) {
+    if (generation == null) return null;
+    String currentSourceGeneration = currentWinnerGeneration(group, path);
+    return Objects.equals(generation.sourceGeneration(), currentSourceGeneration)
+        ? generation
+        : null;
   }
 
   private ReleaseSelection advertisedRelease(RepositoryRuntime group, String path) {

@@ -26,6 +26,7 @@ import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.cache.NexusCacheType;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheInfo;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
+import com.github.klboke.kkrepo.server.cache.VersionWatermark;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.support.InMemoryVersionWatermark;
 import com.github.klboke.kkrepo.server.support.dao.RepositoryDaoAdapter;
@@ -191,6 +192,51 @@ class HelmGroupIndexCacheTest {
 
     controller.invalidate(group.id(), NexusCacheType.METADATA);
     assertFalse(cache.findFresh(group, java.time.Instant.now()).isPresent());
+  }
+
+  @Test
+  void rejectsCachedIndexesAfterARemoteDurableWatermarkAdvance() {
+    VersionWatermark watermark = mock(VersionWatermark.class);
+    when(watermark.current("repo:21:METADATA")).thenReturn(1L);
+    when(watermark.currentDurable("repo:21:METADATA")).thenReturn(2L);
+    NexusLikeCacheController controller = new NexusLikeCacheController(watermark, 60);
+    AssetMetadataCache metadata = mock(AssetMetadataCache.class);
+    HelmGroupIndexCache cache = new HelmGroupIndexCache(
+        new StubRepositoryDao(), mock(AssetDao.class), metadata, controller,
+        mock(RepositoryIndexRebuildDao.class), true);
+    RepositoryRuntime group = runtime(21L, 60);
+    java.time.Instant now = java.time.Instant.parse("2026-08-30T00:00:00Z");
+    NexusLikeCacheInfo info = cache.current(group, now.minusSeconds(1));
+    CachedAssetMetadata snapshot = snapshot(
+        "INDEX", cache.freshAttributes(group, info, null), true);
+    when(metadata.find(eq(group.id()), eq("index.yaml"), any()))
+        .thenReturn(Optional.of(snapshot));
+
+    assertFalse(controller.isStale(
+        group.id(), NexusCacheType.METADATA, info, 60, now));
+    assertFalse(cache.findFresh(group, now).isPresent());
+  }
+
+  @Test
+  void rejectsCachedIndexesWhenTheDurableWatermarkCannotBeRead() {
+    VersionWatermark watermark = mock(VersionWatermark.class);
+    when(watermark.current("repo:21:METADATA")).thenReturn(1L);
+    when(watermark.currentDurable("repo:21:METADATA"))
+        .thenThrow(new IllegalStateException("database unavailable"));
+    NexusLikeCacheController controller = new NexusLikeCacheController(watermark, 60);
+    AssetMetadataCache metadata = mock(AssetMetadataCache.class);
+    HelmGroupIndexCache cache = new HelmGroupIndexCache(
+        new StubRepositoryDao(), mock(AssetDao.class), metadata, controller,
+        mock(RepositoryIndexRebuildDao.class), true);
+    RepositoryRuntime group = runtime(21L, 60);
+    java.time.Instant now = java.time.Instant.parse("2026-08-30T00:00:00Z");
+    NexusLikeCacheInfo info = cache.current(group, now.minusSeconds(1));
+    CachedAssetMetadata snapshot = snapshot(
+        "INDEX", cache.freshAttributes(group, info, null), true);
+    when(metadata.find(eq(group.id()), eq("index.yaml"), any()))
+        .thenReturn(Optional.of(snapshot));
+
+    assertFalse(cache.findFresh(group, now).isPresent());
   }
 
   @Test
