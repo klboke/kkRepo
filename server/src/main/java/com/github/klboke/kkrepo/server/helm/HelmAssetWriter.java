@@ -13,6 +13,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.protocol.helm.HelmAssetKind;
 import com.github.klboke.kkrepo.protocol.helm.HelmChartMetadata;
 import com.github.klboke.kkrepo.protocol.helm.HelmChartPackageParser;
+import com.github.klboke.kkrepo.protocol.helm.HelmIndex;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.blob.BlobTransactionCleanup;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
@@ -121,6 +122,12 @@ class HelmAssetWriter {
       HelmChartMetadata effectiveMetadata = metadata == null
           ? metadataFromBufferedUpload(kind, upload.tempFile())
           : metadata;
+      if (kind == HelmAssetKind.PACKAGE
+          && (effectiveMetadata == null
+              || !HelmIndex.isValidChartVersion(effectiveMetadata.version()))) {
+        throw new IllegalArgumentException(
+            "Invalid Helm chart version: expected a Helm-compatible semantic version");
+      }
       Stored stored = executePersist(
           "Persist Helm asset " + runtime.name() + "/" + path,
           () -> persist(runtime, blobStoreId, path, upload, contentTypeHint, kind,

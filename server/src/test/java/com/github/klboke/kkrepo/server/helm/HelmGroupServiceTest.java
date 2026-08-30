@@ -1239,6 +1239,25 @@ class HelmGroupServiceTest {
   }
 
   @Test
+  void disablesWinnerCachingWhenTheDurableMemberSourceGenerationIsUnavailable() {
+    Fixture fixture = fixture();
+    RepositoryRuntime hosted = runtime(2L, "hosted", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime group = runtime(
+        10L, "all", RepositoryType.GROUP, true, List.of(hosted));
+    MavenResponse expected = asset("digest-a");
+    when(fixture.indexCache.memberAssetGeneration(group)).thenReturn(null);
+    when(fixture.hosted.get(hosted, "index.yaml", false))
+        .thenAnswer(ignored -> selectedIndex("digest-a"));
+    when(fixture.hosted.get(hosted, "demo-1.0.0.tgz", false)).thenReturn(expected);
+
+    assertSame(expected, fixture.service.get(group, "demo-1.0.0.tgz", false));
+
+    verify(fixture.memberCache, never()).getIfCurrent(any(), any(), any(), any());
+    verify(fixture.memberCache, never()).putIfCurrent(
+        any(), any(), any(), any(Long.class), any());
+  }
+
+  @Test
   void rejectsInputAndSerializedIndexesBeyondTheAggregationLimit() {
     MavenResponse response = MavenResponse.noBody(200);
     MavenExceptions.BadUpstreamException error = assertThrows(
@@ -1296,7 +1315,7 @@ class HelmGroupServiceTest {
   private static GroupMemberAssetCache.Generation winnerGeneration(
       RepositoryRuntime repository) {
     return new GroupMemberAssetCache.Generation(
-        repository.id(), NexusCacheType.CONTENT, "winner-generation");
+        repository.id(), NexusCacheType.CONTENT, "winner-generation", "member-generation");
   }
 
   private static HelmAssetWriter.Stored storedIndex() {
@@ -1318,7 +1337,10 @@ class HelmGroupServiceTest {
   }
 
   private static MavenResponse index(String body) {
-    byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+    String document = body.stripLeading().startsWith("apiVersion:")
+        ? body
+        : "apiVersion: v1\n" + body;
+    byte[] bytes = document.getBytes(StandardCharsets.UTF_8);
     return MavenResponse.ok(
         new ByteArrayInputStream(bytes), bytes.length, HelmIndex.CONTENT_TYPE, null, Instant.EPOCH);
   }

@@ -151,6 +151,38 @@ class GroupMemberAssetCacheTest {
   }
 
   @Test
+  void memberSourceGenerationFencesWinnersWhenTheGroupTokenDoesNotMove() {
+    InMemorySharedCache shared = new InMemorySharedCache();
+    GroupMemberAssetCache cache = new GroupMemberAssetCache(
+        shared,
+        new StubRepositoryDao(),
+        new NexusLikeCacheController(new InMemoryVersionWatermark(), 60),
+        true,
+        86400);
+    RepositoryRuntime group = runtime(999L, "helm-group");
+    GroupMemberAssetCache.Generation original = cache.captureGeneration(
+        group, NexusCacheType.CONTENT).orElseThrow().withSourceGeneration("member-index-1");
+
+    cache.putIfCurrent(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, 101L, original);
+
+    GroupMemberAssetCache.Generation changed = new GroupMemberAssetCache.Generation(
+        group.id(), NexusCacheType.CONTENT, original.cacheToken(), "member-index-2");
+    assertEquals(
+        101L,
+        cache.getIfCurrent(
+            group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, original).orElseThrow());
+    assertTrue(cache.getIfCurrent(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, changed).isEmpty());
+    assertEquals(
+        "member-index-1",
+        shared.getJson(
+            "group-member-asset",
+            "999:CONTENT:demo-1.0.0.tgz",
+            GroupMemberAssetCache.Entry.class).orElseThrow().sourceGeneration());
+  }
+
+  @Test
   void generationAwareReadContainsSharedCacheFailures() {
     InMemorySharedCache shared = new InMemorySharedCache() {
       @Override

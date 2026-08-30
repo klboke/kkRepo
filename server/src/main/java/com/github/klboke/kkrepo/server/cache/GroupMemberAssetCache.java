@@ -7,6 +7,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashSet;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import org.slf4j.Logger;
@@ -23,7 +24,9 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * still comes from the member repository's hosted/proxy path, so losing this cache only reverts to
  * member fan-out. Correctness is guarded by group repository cache tokens: member writes/deletes and
  * repository membership/config changes invalidate the token for every containing group after
- * commit, causing stale entries to be ignored by all replicas.
+ * commit, causing stale entries to be ignored by all replicas. Formats with an independently
+ * durable source binding can additionally attach that fingerprint to the entry, closing races in
+ * which source membership changes and member writes commit in the opposite order.
  */
 @Service
 public class GroupMemberAssetCache {
@@ -104,6 +107,10 @@ public class GroupMemberAssetCache {
               cacheController.currentDurableToken(group.id(), cacheType))) {
         return Optional.empty();
       }
+      if (generation != null
+          && !Objects.equals(generation.sourceGeneration(), entry.get().sourceGeneration())) {
+        return Optional.empty();
+      }
       boolean stale = generation == null
           ? cacheController.isStale(
               group.id(), cacheType, entry.get().cacheInfo(), maxAgeMinutes, Instant.now())
@@ -138,7 +145,10 @@ public class GroupMemberAssetCache {
       sharedCache.putJson(
           NAMESPACE,
           key(group.id(), cacheType, path),
-          new Entry(memberRepositoryId, cacheController.current(group.id(), cacheType, Instant.now())),
+          new Entry(
+              memberRepositoryId,
+              cacheController.current(group.id(), cacheType, Instant.now()),
+              null),
           entryTtl);
     } catch (RuntimeException e) {
       log.warn("Failed writing group member asset cache for group {} path {}", group.id(), path, e);
@@ -198,7 +208,8 @@ public class GroupMemberAssetCache {
           key(group.id(), cacheType, path),
           new Entry(
               memberRepositoryId,
-              new NexusLikeCacheInfo(Instant.now(), generation.cacheToken(), cacheType)),
+              new NexusLikeCacheInfo(Instant.now(), generation.cacheToken(), cacheType),
+              generation.sourceGeneration()),
           entryTtl);
     } catch (RuntimeException e) {
       log.warn("Failed conditionally writing group member asset cache for group {} path {}",
@@ -328,10 +339,33 @@ public class GroupMemberAssetCache {
     return groupId + ":" + cacheType.name() + ":" + path;
   }
 
-  public record Entry(long memberRepositoryId, NexusLikeCacheInfo cacheInfo) {}
+  /**
+   * A source generation is optional for formats whose group token fully describes winner inputs.
+   * Helm supplies the durable member-index binding fingerprint so a membership/index-write race
+   * cannot publish a winner that survives under an otherwise unchanged CONTENT token.
+   */
+  public record Entry(
+      long memberRepositoryId,
+      NexusLikeCacheInfo cacheInfo,
+      String sourceGeneration) {
+    public Entry(long memberRepositoryId, NexusLikeCacheInfo cacheInfo) {
+      this(memberRepositoryId, cacheInfo, null);
+    }
+  }
 
   public record Generation(
-      long repositoryId, NexusCacheType cacheType, String cacheToken) {}
+      long repositoryId,
+      NexusCacheType cacheType,
+      String cacheToken,
+      String sourceGeneration) {
+    public Generation(long repositoryId, NexusCacheType cacheType, String cacheToken) {
+      this(repositoryId, cacheType, cacheToken, null);
+    }
+
+    public Generation withSourceGeneration(String value) {
+      return new Generation(repositoryId, cacheType, cacheToken, value);
+    }
+  }
 
   private record MemberInvalidation(long memberRepositoryId, NexusCacheType cacheType) {}
 }

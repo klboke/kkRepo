@@ -58,8 +58,12 @@ public final class HelmIndex {
     List<ChartRecord> sorted = charts == null
         ? List.of()
         : charts.stream()
-            .filter(chart -> chart.name() != null && !chart.name().isBlank())
-            .filter(chart -> chart.version() != null && !chart.version().isBlank())
+            // Legacy rows written before hosted package validation may contain coordinates that
+            // Helm cannot load. Omit only those releases so one bad row never invalidates the
+            // hosted member's entire generated index when it is consumed through a group.
+            .filter(chart -> isSafeChartPathSegment(chart.name()))
+            .filter(chart -> isSafeChartPathSegment(chart.version()))
+            .filter(chart -> isValidChartVersion(chart.version()))
             .sorted(Comparator.comparing(ChartRecord::name)
                 .thenComparing(ChartRecord::version, Comparator.reverseOrder()))
             .toList();
@@ -567,6 +571,9 @@ public final class HelmIndex {
     Object loaded = loadDocument(yamlBytes);
     if (!(loaded instanceof Map<?, ?> map)) {
       throw new IllegalArgumentException("Invalid Helm index root: expected a mapping");
+    }
+    if (!API_VERSION.equals(map.get("apiVersion"))) {
+      throw new IllegalArgumentException("Invalid Helm index apiVersion: expected v1");
     }
     if (!(map.get("entries") instanceof Map<?, ?> entries)) {
       throw new IllegalArgumentException("Invalid Helm index entries: expected a mapping");

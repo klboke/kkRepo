@@ -20,7 +20,9 @@ class HelmIndexTest {
         chart("demo", "1.0.0"),
         chart("demo", "2.0.0"),
         chart("", "3.0.0"),
-        chart("ignored", null)),
+        chart("ignored", null),
+        chart("legacy", "latest"),
+        chart("unsafe:chart", "1.0.0")),
         Instant.parse("2026-07-13T00:00:00Z"));
 
     assertEquals(List.of(
@@ -229,6 +231,7 @@ class HelmIndexTest {
   @Test
   void derivesProvenanceBeforeChartUrlQueryAndFragment() {
     byte[] upstream = """
+        apiVersion: v1
         entries:
           demo:
             - name: demo
@@ -248,6 +251,7 @@ class HelmIndexTest {
   @Test
   void resolvesChartAndDerivedProvenanceToTheExactAdvertisedRelease() {
     byte[] selected = """
+        apiVersion: v1
         entries:
           demo:
             - name: demo
@@ -348,6 +352,7 @@ class HelmIndexTest {
   @Test
   void rejectsUnserviceableUrlsAndKeepsTolerantReadHelpers() {
     byte[] malformedUrl = """
+        apiVersion: v1
         entries:
           demo:
             - name: demo
@@ -369,6 +374,7 @@ class HelmIndexTest {
   @Test
   void dropsMalformedChartReferencesWhenAResolvableAlternativeExists() {
     byte[] mixedUrls = """
+        apiVersion: v1
         entries:
           demo:
             - name: demo
@@ -399,8 +405,23 @@ class HelmIndexTest {
   }
 
   @Test
-  void rejectsSchemaInvalidProxyIndexesWithoutChangingTolerantReadHelpers() {
+  void rejectsMissingOrUnsupportedClassicIndexApiVersions() {
     for (String invalid : List.of(
+        "entries: {}\n",
+        "apiVersion: v2\nentries: {}\n",
+        "apiVersion: ''\nentries: {}\n")) {
+      byte[] body = invalid.getBytes(StandardCharsets.UTF_8);
+
+      assertThrows(IllegalArgumentException.class, () -> HelmIndex.validateIndex(body));
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> HelmIndex.rewriteProxyIndex(body, "https://repo.example.test/"));
+    }
+  }
+
+  @Test
+  void rejectsSchemaInvalidProxyIndexesWithoutChangingTolerantReadHelpers() {
+    for (String invalidBody : List.of(
         "[]",
         "not-a-helm-index",
         "{}",
@@ -428,6 +449,9 @@ class HelmIndexTest {
         "entries: {demo: [{name: demo, version: 1.2.3.4, urls: [demo.tgz]}]}",
         "entries: {demo: [{name: demo, version: '1.2.3-01', urls: [demo.tgz]}]}",
         "entries: {demo: [{name: demo, version: '18446744073709551616', urls: [demo.tgz]}]}")) {
+      String invalid = invalidBody.startsWith("entries:")
+          ? "apiVersion: v1\n" + invalidBody
+          : invalidBody;
       assertThrows(
           IllegalArgumentException.class,
           () -> HelmIndex.rewriteProxyIndex(
@@ -445,7 +469,8 @@ class HelmIndexTest {
   void acceptsTheCoercibleSemanticVersionsSupportedByHelm() {
     for (String version : List.of(
         "1", "1.2", "v1.2", "01.002.0003", "1.2.3-alpha.1+build.5")) {
-      byte[] index = ("entries: {demo: [{name: demo, version: '%s', urls: [demo.tgz]}]}"
+      byte[] index = ("apiVersion: v1\n"
+          + "entries: {demo: [{name: demo, version: '%s', urls: [demo.tgz]}]}"
           .formatted(version)).getBytes(StandardCharsets.UTF_8);
 
       HelmIndex.validateIndex(index);
@@ -455,6 +480,7 @@ class HelmIndexTest {
   @Test
   void cannotPublishTwoEntryKeysAsTheSameRepositoryLocalChartUrl() {
     byte[] mismatched = """
+        apiVersion: v1
         entries:
           alias:
             - name: demo

@@ -15,9 +15,11 @@ import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao.HelmIndexRow;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.protocol.helm.HelmAssetKind;
+import com.github.klboke.kkrepo.protocol.helm.HelmIndex;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
@@ -31,6 +33,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.zip.GZIPOutputStream;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
@@ -102,6 +105,11 @@ class HelmHostedServiceTest {
         "chart", "bad.tgz", "application/gzip", chartPackage("../bad", "1.0.0"));
     assertThrows(MavenExceptions.LayoutPolicyViolation.class,
         () -> fixture.service.push(runtime, invalid, "user", "ip"));
+
+    MockMultipartFile invalidVersion = new MockMultipartFile(
+        "chart", "bad-version.tgz", "application/gzip", chartPackage("demo", "latest"));
+    assertThrows(MavenExceptions.LayoutPolicyViolation.class,
+        () -> fixture.service.push(runtime, invalidVersion, "user", "ip"));
   }
 
   @Test
@@ -141,6 +149,39 @@ class HelmHostedServiceTest {
     assertEquals(200, fixture.service.delete(runtime, "demo.tgz").status());
     verify(fixture.indexDao).enqueue(runtime.id(), RepositoryIndexRebuildDao.HELM_INDEX);
     verify(fixture.writer, never()).deleteAsset(runtime, fixture.storage, "index.yaml");
+  }
+
+  @Test
+  void generatedIndexOmitsLegacyInvalidVersionsWithoutDroppingValidReleases() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.HOSTED, 7L, "ALLOW");
+    when(fixture.assetDao.listHelmIndexRows(runtime.id())).thenReturn(List.of(
+        new HelmIndexRow(
+            "demo-1.0.0.tgz",
+            Instant.EPOCH,
+            "valid-digest",
+            Map.of("name", "demo", "version", "1.0.0", "apiVersion", "v2")),
+        new HelmIndexRow(
+            "demo-latest.tgz",
+            Instant.EPOCH,
+            "legacy-digest",
+            Map.of("name", "demo", "version", "latest", "apiVersion", "v2"))));
+    AtomicReference<byte[]> generated = new AtomicReference<>();
+    when(fixture.writer.write(
+        eq(runtime), eq(fixture.storage), eq(7L), eq("index.yaml"), any(),
+        eq(HelmIndex.CONTENT_TYPE), eq(HelmAssetKind.INDEX), eq(null),
+        eq(Map.of()), eq(Map.of()), eq("system"), eq(null)))
+        .thenAnswer(invocation -> {
+          generated.set(invocation.<java.io.InputStream>getArgument(4).readAllBytes());
+          return null;
+        });
+
+    fixture.service.rebuildIndex(runtime, fixture.storage, 7L, "system", null);
+
+    HelmIndex.validateIndex(generated.get());
+    assertEquals(
+        List.of(new HelmIndex.Entry("demo", "1.0.0", List.of("demo-1.0.0.tgz"))),
+        HelmIndex.entries(generated.get()));
   }
 
   private static Fixture fixture() {

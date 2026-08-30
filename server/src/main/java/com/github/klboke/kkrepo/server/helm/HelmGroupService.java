@@ -339,12 +339,11 @@ public class HelmGroupService {
     // group index has its own METADATA watermark and must not be expired by a package cache fill.
     NexusCacheType cacheType = NexusCacheType.CONTENT;
     try {
-      GroupMemberAssetCache.Generation winnerGeneration = memberAssetCache == null
-          ? null
-          : memberAssetCache.captureGeneration(group, cacheType).orElse(null);
+      GroupMemberAssetCache.Generation winnerGeneration =
+          captureWinnerGeneration(group, cacheType);
       ReleaseSelection selection = advertisedRelease(group, path);
       HelmIndex.Release release = selection.release();
-      Optional<Long> cachedMemberId = memberAssetCache == null
+      Optional<Long> cachedMemberId = memberAssetCache == null || winnerGeneration == null
           ? Optional.empty()
           : memberAssetCache.getIfCurrent(group, path, cacheType, winnerGeneration);
       if (cachedMemberId.isPresent()) {
@@ -383,7 +382,7 @@ public class HelmGroupService {
             continue;
           }
           response = materializeCandidateBody(member, path, response, headOnly);
-          if (memberAssetCache != null && selection.complete()) {
+          if (memberAssetCache != null && winnerGeneration != null && selection.complete()) {
             memberAssetCache.putIfCurrent(
                 group, path, cacheType, member.id(), winnerGeneration);
           }
@@ -420,6 +419,16 @@ public class HelmGroupService {
           "Failed opening Helm group member asset " + member.name() + "/" + path,
           e);
     }
+  }
+
+  private GroupMemberAssetCache.Generation captureWinnerGeneration(
+      RepositoryRuntime group, NexusCacheType cacheType) {
+    if (memberAssetCache == null || indexCache == null) return null;
+    String sourceGeneration = currentMemberGeneration(group);
+    if (sourceGeneration == null || sourceGeneration.isBlank()) return null;
+    return memberAssetCache.captureGeneration(group, cacheType)
+        .map(generation -> generation.withSourceGeneration(sourceGeneration))
+        .orElse(null);
   }
 
   private ReleaseSelection advertisedRelease(RepositoryRuntime group, String path) {

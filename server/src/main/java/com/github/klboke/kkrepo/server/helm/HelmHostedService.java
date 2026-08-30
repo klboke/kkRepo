@@ -121,6 +121,7 @@ public class HelmHostedService {
     }
     validateChartPathSegment("name", metadata.name());
     validateChartPathSegment("version", metadata.version());
+    validateChartVersion(metadata.version());
     String path = metadata.name() + "-" + metadata.version() + HelmAssetKind.PACKAGE.extension();
     if (assetDao.findAssetByPath(runtime.id(), path).isPresent()) {
       throw new MavenExceptions.WritePolicyDenied("Asset already exists: " + path);
@@ -292,6 +293,13 @@ public class HelmHostedService {
   private static void validateChartPathSegment(String field, String value) {
     if (!HelmIndex.isSafeChartPathSegment(value)) {
       throw new MavenExceptions.LayoutPolicyViolation("Invalid Helm chart " + field + ": " + value);
+    }
+  }
+
+  private static void validateChartVersion(String version) {
+    if (!HelmIndex.isValidChartVersion(version)) {
+      throw new MavenExceptions.LayoutPolicyViolation(
+          "Invalid Helm chart version: expected a Helm-compatible semantic version");
     }
   }
 

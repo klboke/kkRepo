@@ -123,6 +123,21 @@ class HelmAssetWriterTest {
   }
 
   @Test
+  void rejectsNonSemVerPackagesBeforePersistenceAndCleansTheUploadedBlob() throws Exception {
+    Fixture fixture = fixture();
+    byte[] chart = chartPackage("demo", "latest");
+    stubBlobPersistence(fixture);
+
+    assertThrows(IllegalArgumentException.class, () -> fixture.writer.write(
+        runtime(), fixture.storage, 7L, "demo-latest.tgz",
+        new ByteArrayInputStream(chart), null, HelmAssetKind.PACKAGE, null,
+        Map.of(), Map.of(), "user", "127.0.0.1"));
+
+    verify(fixture.componentDao, never()).upsertReturningId(any());
+    verify(fixture.storage).delete(any());
+  }
+
+  @Test
   void deletesMetadataAndUnreferencedBlob() {
     Fixture fixture = fixture();
     RepositoryRuntime runtime = runtime();
