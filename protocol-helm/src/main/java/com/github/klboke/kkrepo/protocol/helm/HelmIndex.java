@@ -19,6 +19,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.yaml.snakeyaml.DumperOptions;
 import org.yaml.snakeyaml.LoaderOptions;
 import org.yaml.snakeyaml.Yaml;
@@ -27,8 +29,16 @@ import org.yaml.snakeyaml.constructor.SafeConstructor;
 public final class HelmIndex {
   public static final String CONTENT_TYPE = "text/x-yaml";
   private static final int MAX_INDEX_CODE_POINTS = 64 * 1024 * 1024;
+  private static final int MAX_VERSION_LENGTH = 256;
   private static final String API_VERSION = "v1";
   private static final DateTimeFormatter INSTANTS = DateTimeFormatter.ISO_INSTANT;
+  // Helm parses chart versions with Masterminds semver.NewVersion: a lower-case v prefix,
+  // shortened numeric cores, and leading zero coercion are accepted, while arbitrary labels are
+  // not. Keep this grammar local to the Helm protocol instead of imposing strict SemVer on it.
+  private static final Pattern HELM_VERSION = Pattern.compile(
+      "^v?([0-9]+)(?:\\.([0-9]+))?(?:\\.([0-9]+))?"
+          + "(?:-([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?"
+          + "(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$");
 
   private HelmIndex() {
   }
@@ -133,6 +143,37 @@ public final class HelmIndex {
                 || Character.isSpaceChar(codePoint));
   }
 
+  /** Return whether Helm can coerce the supplied chart version into SemVer. */
+  public static boolean isValidChartVersion(String value) {
+    if (value == null || value.length() > MAX_VERSION_LENGTH) return false;
+    Matcher matcher = HELM_VERSION.matcher(value);
+    if (!matcher.matches()) return false;
+    for (int group = 1; group <= 3; group++) {
+      String segment = matcher.group(group);
+      if (segment == null) continue;
+      try {
+        int firstSignificantDigit = 0;
+        while (firstSignificantDigit < segment.length() - 1
+            && segment.charAt(firstSignificantDigit) == '0') {
+          firstSignificantDigit++;
+        }
+        Long.parseUnsignedLong(segment.substring(firstSignificantDigit));
+      } catch (NumberFormatException e) {
+        return false;
+      }
+    }
+    String prerelease = matcher.group(4);
+    if (prerelease == null) return true;
+    for (String identifier : prerelease.split("\\.")) {
+      if (identifier.length() > 1
+          && identifier.charAt(0) == '0'
+          && identifier.chars().allMatch(character -> character >= '0' && character <= '9')) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   /**
    * Merge member indexes in configured group order.
    *
@@ -165,7 +206,8 @@ public final class HelmIndex {
             String version = string(versionMap.get("version"), null);
             if (!entryName.equals(name)
                 || !isSafeChartPathSegment(name)
-                || !isSafeChartPathSegment(version)) {
+                || !isSafeChartPathSegment(version)
+                || !isValidChartVersion(version)) {
               continue;
             }
             List<String> chartUrls = rewriteEntry(
@@ -534,9 +576,11 @@ public final class HelmIndex {
               "Invalid Helm index entry " + name + ": release name must match entry name");
         }
         if (!(release.get("version") instanceof String releaseVersion)
-            || !isSafeChartPathSegment(releaseVersion)) {
+            || !isSafeChartPathSegment(releaseVersion)
+            || !isValidChartVersion(releaseVersion)) {
           throw new IllegalArgumentException(
-              "Invalid Helm index entry " + name + ": expected a release version");
+              "Invalid Helm index entry " + name
+                  + ": expected a Helm-compatible release version");
         }
         Object urls = release.get("urls");
         if (!(urls instanceof List<?> list) || list.isEmpty()) {

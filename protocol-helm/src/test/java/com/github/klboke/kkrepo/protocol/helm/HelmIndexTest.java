@@ -391,7 +391,11 @@ class HelmIndexTest {
         "entries: {demo: [{name: demo, version: '1.0.0%2fescape', urls: [demo.tgz]}]}",
         "entries: {demo: [{name: demo, version: '1.0.0%5cescape', urls: [demo.tgz]}]}",
         "entries: {demo: [{name: '../private', version: 1.0.0, urls: [demo.tgz]}]}",
-        "entries: {demo: [{name: demo, version: '1.0.0/escape', urls: [demo.tgz]}]}")) {
+        "entries: {demo: [{name: demo, version: '1.0.0/escape', urls: [demo.tgz]}]}",
+        "entries: {demo: [{name: demo, version: latest, urls: [demo.tgz]}]}",
+        "entries: {demo: [{name: demo, version: 1.2.3.4, urls: [demo.tgz]}]}",
+        "entries: {demo: [{name: demo, version: '1.2.3-01', urls: [demo.tgz]}]}",
+        "entries: {demo: [{name: demo, version: '18446744073709551616', urls: [demo.tgz]}]}")) {
       assertThrows(
           IllegalArgumentException.class,
           () -> HelmIndex.rewriteProxyIndex(
@@ -403,6 +407,17 @@ class HelmIndexTest {
 
     assertEquals(List.of(), HelmIndex.entries("entries: []".getBytes(StandardCharsets.UTF_8)));
     HelmIndex.validateIndex("apiVersion: v1\nentries: {}\n".getBytes(StandardCharsets.UTF_8));
+  }
+
+  @Test
+  void acceptsTheCoercibleSemanticVersionsSupportedByHelm() {
+    for (String version : List.of(
+        "1", "1.2", "v1.2", "01.002.0003", "1.2.3-alpha.1+build.5")) {
+      byte[] index = ("entries: {demo: [{name: demo, version: '%s', urls: [demo.tgz]}]}"
+          .formatted(version)).getBytes(StandardCharsets.UTF_8);
+
+      HelmIndex.validateIndex(index);
+    }
   }
 
   @Test

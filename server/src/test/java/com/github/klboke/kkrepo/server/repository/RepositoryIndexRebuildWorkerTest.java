@@ -157,6 +157,52 @@ class RepositoryIndexRebuildWorkerTest {
   }
 
   @Test
+  void alternatesSaturatedQueuesSoSingleItemBatchesCannotStarve() {
+    RepositoryIndexRebuildDao dao = mock(RepositoryIndexRebuildDao.class);
+    RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
+    BlobStorageRegistry storages = mock(BlobStorageRegistry.class);
+    HelmGroupIndexCache groupIndexCache = mock(HelmGroupIndexCache.class);
+    PypiHostedService pypi = mock(PypiHostedService.class);
+    BlobStorage storage = mock(BlobStorage.class);
+    RepositoryRuntime pypiRuntime = runtime(22L, RepositoryFormat.PYPI, 7L);
+    Claim helmClaim = claim(
+        21L,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        RepositoryIndexRebuildDao.ROOT_SCOPE,
+        Instant.now());
+    Claim genericClaim = claim(
+        pypiRuntime.id(), RepositoryIndexRebuildDao.PYPI_ROOT, null, Instant.now());
+    when(dao.claimHelmGroupInvalidations(1)).thenReturn(List.of(helmClaim));
+    when(dao.claim(1)).thenReturn(List.of(genericClaim));
+    when(runtimes.resolveById(pypiRuntime.id())).thenReturn(Optional.of(pypiRuntime));
+    when(storages.forBlobStoreId(7L)).thenReturn(storage);
+    RepositoryIndexRebuildWorker worker = new RepositoryIndexRebuildWorker(
+        dao,
+        runtimes,
+        storages,
+        mock(HelmHostedService.class),
+        groupIndexCache,
+        pypi,
+        mock(YumService.class),
+        mock(RubygemsService.class),
+        mock(TerraformComponentService.class),
+        mock(SwiftComponentService.class),
+        new RecordingTransactionManager(),
+        1,
+        true,
+        new KkRepoMetrics(new SimpleMeterRegistry()));
+
+    worker.drain();
+    worker.drain();
+
+    verify(dao).claimHelmGroupInvalidations(1);
+    verify(dao).claim(1);
+    verify(groupIndexCache).retryInvalidation(
+        helmClaim.repositoryId(), RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION);
+    verify(pypi).rebuildRootIndex(pypiRuntime, storage, 7L, "system", null);
+  }
+
+  @Test
   void ignoresMissingNonHostedWrongFormatAndBlankProjectClaims() {
     RepositoryIndexRebuildDao dao = mock(RepositoryIndexRebuildDao.class);
     RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);

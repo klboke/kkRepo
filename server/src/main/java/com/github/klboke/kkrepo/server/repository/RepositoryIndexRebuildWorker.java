@@ -18,6 +18,7 @@ import com.github.klboke.kkrepo.server.yum.YumService;
 import io.micrometer.core.instrument.Timer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -44,6 +45,8 @@ class RepositoryIndexRebuildWorker {
   private final KkRepoMetrics metrics;
   private final int batchSize;
   private final boolean enabled;
+  // This flag only chooses which durable queue is claimed first; it is not correctness state.
+  private final AtomicBoolean helmInvalidationsFirst = new AtomicBoolean(true);
 
   RepositoryIndexRebuildWorker(
       RepositoryIndexRebuildDao dao,
@@ -90,10 +93,15 @@ class RepositoryIndexRebuildWorker {
   }
 
   private void runBatch() {
-    List<Claim> claims = new ArrayList<>(dao.claimHelmGroupInvalidations(batchSize));
+    boolean helmFirst = claimHelmInvalidationsFirst();
+    List<Claim> claims = helmFirst
+        ? new ArrayList<>(dao.claimHelmGroupInvalidations(batchSize))
+        : new ArrayList<>(dao.claim(batchSize));
     int remaining = batchSize - claims.size();
     if (remaining > 0) {
-      claims.addAll(dao.claim(remaining));
+      claims.addAll(helmFirst
+          ? dao.claim(remaining)
+          : dao.claimHelmGroupInvalidations(remaining));
     }
     if (claims.isEmpty()) return;
     metrics.incrementWorkerItems("repository_index_rebuild", "claim", "claimed", claims.size());
@@ -109,6 +117,13 @@ class RepositoryIndexRebuildWorker {
             claim.repositoryId(), claim.indexKind(), claim.scopeKey(), e);
         dao.reenqueueFailure(claim, e);
       }
+    }
+  }
+
+  private boolean claimHelmInvalidationsFirst() {
+    while (true) {
+      boolean current = helmInvalidationsFirst.get();
+      if (helmInvalidationsFirst.compareAndSet(current, !current)) return current;
     }
   }
 

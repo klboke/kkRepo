@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.helm;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -103,15 +104,20 @@ class HelmGroupServiceTest {
               digest: digest-b
               urls: [demo-1.0.0.tgz]
         """));
-    when(fixture.hosted.get(hosted, "demo-1.0.0.tgz", true))
+    when(fixture.hosted.get(hosted, "demo-1.0.0.tgz", false))
         .thenThrow(new MavenExceptions.MavenNotFoundException("missing"));
-    when(fixture.hosted.get(hosted, "demo-1.0.0.tgz.prov", true))
+    when(fixture.hosted.get(hosted, "demo-1.0.0.tgz.prov", false))
         .thenThrow(new MavenExceptions.MavenNotFoundException("missing"));
-    when(fixture.proxy.get(proxy, "demo-1.0.0.tgz", true)).thenReturn(chart);
-    when(fixture.proxy.get(proxy, "demo-1.0.0.tgz.prov", true)).thenReturn(provenance);
+    when(fixture.proxy.get(proxy, "demo-1.0.0.tgz", false)).thenReturn(chart);
+    when(fixture.proxy.get(proxy, "demo-1.0.0.tgz.prov", false)).thenReturn(provenance);
 
-    assertSame(chart, fixture.service.get(group, "demo-1.0.0.tgz", true));
-    assertSame(provenance, fixture.service.get(group, "demo-1.0.0.tgz.prov", true));
+    MavenResponse chartHead = fixture.service.get(group, "demo-1.0.0.tgz", true);
+    MavenResponse provenanceHead = fixture.service.get(group, "demo-1.0.0.tgz.prov", true);
+
+    assertEquals(200, chartHead.status());
+    assertFalse(chartHead.hasBody());
+    assertEquals(200, provenanceHead.status());
+    assertFalse(provenanceHead.hasBody());
 
     verify(fixture.memberCache).put(nested, "demo-1.0.0.tgz", NexusCacheType.CONTENT, proxy.id());
     verify(fixture.memberCache).put(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, nested.id());
@@ -529,9 +535,15 @@ class HelmGroupServiceTest {
               digest: proxy
               urls: [demo-1.0.0.tgz]
         """));
-    when(fixture.proxy.get(proxy, "demo-1.0.0.tgz", true)).thenReturn(expected);
+    when(fixture.proxy.get(proxy, "demo-1.0.0.tgz", false)).thenReturn(expected);
 
-    assertSame(expected, fixture.service.get(group, "demo-1.0.0.tgz", true));
+    MavenResponse response = fixture.service.get(group, "demo-1.0.0.tgz", true);
+
+    assertEquals(200, response.status());
+    assertFalse(response.hasBody());
+    verify(fixture.proxy).get(proxy, "demo-1.0.0.tgz", false);
+    verify(fixture.proxy, never()).get(proxy, "demo-1.0.0.tgz", true);
+    verify(fixture.hosted, never()).get(hosted, "demo-1.0.0.tgz", false);
   }
 
   @Test
@@ -655,6 +667,72 @@ class HelmGroupServiceTest {
     when(fixture.proxy.get(proxy, "demo-1.0.0.tgz", false)).thenReturn(expected);
 
     assertSame(expected, fixture.service.get(group, "demo-1.0.0.tgz", false));
+    verify(fixture.memberCache).evict(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT);
+    verify(fixture.memberCache).put(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, proxy.id());
+  }
+
+  @Test
+  void headProbesLazyCandidatesBeforeCachingTheWinner() {
+    Fixture fixture = fixture();
+    RepositoryRuntime hosted = runtime(2L, "cached", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime proxy = runtime(3L, "fallback", RepositoryType.PROXY, true, List.of());
+    RepositoryRuntime group = runtime(
+        10L, "all", RepositoryType.GROUP, true, List.of(hosted, proxy));
+    CachedAssetMetadata cachedIndex = mock(CachedAssetMetadata.class);
+    AtomicBoolean fallbackBodyOpened = new AtomicBoolean();
+    AtomicBoolean fallbackBodyClosed = new AtomicBoolean();
+    when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.of(cachedIndex));
+    when(fixture.reader.serveSnapshot(cachedIndex, false, "index.yaml"))
+        .thenAnswer(ignored -> selectedIndex("digest-b"));
+    when(fixture.memberCache.get(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT))
+        .thenReturn(Optional.of(hosted.id()));
+    when(fixture.hosted.get(hosted, "index.yaml", false))
+        .thenAnswer(ignored -> selectedIndex("digest-b"));
+    when(fixture.proxy.get(proxy, "index.yaml", false))
+        .thenAnswer(ignored -> selectedIndex("digest-b"));
+    when(fixture.hosted.get(hosted, "demo-1.0.0.tgz", false))
+        .thenReturn(MavenResponse.ok(
+            () -> {
+              throw new IllegalStateException("object store unavailable");
+            },
+            42L,
+            "application/gzip",
+            "missing",
+            Instant.EPOCH)
+            .withInternalAttribute(HelmAssetReader.SHA256_ATTRIBUTE, "digest-b"));
+    when(fixture.proxy.get(proxy, "demo-1.0.0.tgz", false))
+        .thenReturn(MavenResponse.ok(
+            () -> {
+              fallbackBodyOpened.set(true);
+              return new ByteArrayInputStream(new byte[] {1}) {
+                @Override
+                public void close() throws IOException {
+                  fallbackBodyClosed.set(true);
+                  super.close();
+                }
+              };
+            },
+            1L,
+            "application/gzip",
+            "fallback",
+            Instant.EPOCH)
+            .withHeader("X-Helm-Test", "fallback")
+            .withInternalAttribute(HelmAssetReader.SHA256_ATTRIBUTE, "digest-b"));
+
+    MavenResponse response = fixture.service.get(group, "demo-1.0.0.tgz", true);
+
+    assertEquals(200, response.status());
+    assertFalse(response.hasBody());
+    assertEquals(1L, response.contentLength());
+    assertEquals("fallback", response.etag());
+    assertEquals("fallback", response.headers().get("X-Helm-Test"));
+    assertTrue(fallbackBodyOpened.get());
+    assertTrue(fallbackBodyClosed.get());
+    verify(fixture.hosted).get(hosted, "demo-1.0.0.tgz", false);
+    verify(fixture.hosted, never()).get(hosted, "demo-1.0.0.tgz", true);
+    verify(fixture.proxy).get(proxy, "demo-1.0.0.tgz", false);
+    verify(fixture.proxy, never()).get(proxy, "demo-1.0.0.tgz", true);
     verify(fixture.memberCache).evict(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT);
     verify(fixture.memberCache).put(
         group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, proxy.id());
@@ -848,6 +926,8 @@ class HelmGroupServiceTest {
     RepositoryRuntime invalid = runtime(3L, "invalid", RepositoryType.HOSTED, true, List.of());
     RepositoryRuntime schemaInvalid = runtime(
         4L, "schema-invalid", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime semanticVersionInvalid = runtime(
+        8L, "semver-invalid", RepositoryType.HOSTED, true, List.of());
     RepositoryRuntime lazyMissing = runtime(
         5L, "lazy-missing", RepositoryType.HOSTED, true, List.of());
     RepositoryRuntime closeFailure = runtime(
@@ -855,7 +935,15 @@ class HelmGroupServiceTest {
     RepositoryRuntime good = runtime(7L, "good", RepositoryType.HOSTED, true, List.of());
     RepositoryRuntime group = runtime(
         10L, "all", RepositoryType.GROUP, true,
-        List.of(missing, unreadable, invalid, schemaInvalid, lazyMissing, closeFailure, good));
+        List.of(
+            missing,
+            unreadable,
+            invalid,
+            schemaInvalid,
+            semanticVersionInvalid,
+            lazyMissing,
+            closeFailure,
+            good));
     when(fixture.hosted.get(missing, "index.yaml", false))
         .thenThrow(new MavenExceptions.MavenNotFoundException("missing"));
     when(fixture.hosted.get(unreadable, "index.yaml", false))
@@ -868,6 +956,13 @@ class HelmGroupServiceTest {
     when(fixture.hosted.get(invalid, "index.yaml", false)).thenReturn(index("entries: ["));
     when(fixture.hosted.get(schemaInvalid, "index.yaml", false))
         .thenReturn(index("entries: {demo: [error]}\n"));
+    when(fixture.hosted.get(semanticVersionInvalid, "index.yaml", false)).thenReturn(index("""
+        entries:
+          demo:
+            - name: demo
+              version: latest
+              urls: [demo-latest.tgz]
+        """));
     when(fixture.hosted.get(lazyMissing, "index.yaml", false))
         .thenReturn(MavenResponse.ok(
             () -> {

@@ -353,7 +353,7 @@ public class HelmGroupService {
           try {
             if (memberAdvertises(cachedMember, release, path)) {
               MavenResponse response =
-                  dispatchAsset(cachedMember, path, kind, headOnly, resolvingGroups);
+                  dispatchAsset(cachedMember, path, kind, false, resolvingGroups);
               if (matchesAdvertisedDigest(cachedMember, kind, release, response)) {
                 return materializeCandidateBody(cachedMember, path, response, headOnly);
               }
@@ -373,7 +373,7 @@ public class HelmGroupService {
         if (cachedMemberId.isPresent() && member.id() == cachedMemberId.orElseThrow()) continue;
         if (!memberAdvertises(member, release, path)) continue;
         try {
-          MavenResponse response = dispatchAsset(member, path, kind, headOnly, resolvingGroups);
+          MavenResponse response = dispatchAsset(member, path, kind, false, resolvingGroups);
           if (!matchesAdvertisedDigest(member, kind, release, response)) {
             response.closeBodyIfOpen();
             continue;
@@ -397,9 +397,18 @@ public class HelmGroupService {
 
   private static MavenResponse materializeCandidateBody(
       RepositoryRuntime member, String path, MavenResponse response, boolean headOnly) {
-    if (headOnly) return response;
     try {
-      return response.materializeBody();
+      MavenResponse materialized = response.materializeBody();
+      if (!headOnly) return materialized;
+      materialized.closeBodyIfOpen();
+      MavenResponse head = MavenResponse.noBody(
+          materialized.status(),
+          materialized.contentLength(),
+          materialized.contentType(),
+          materialized.etag(),
+          materialized.lastModified());
+      materialized.headers().forEach(head::withHeader);
+      return head;
     } catch (RuntimeException e) {
       response.closeBodyIfOpen();
       throw new MavenExceptions.BadUpstreamException(
