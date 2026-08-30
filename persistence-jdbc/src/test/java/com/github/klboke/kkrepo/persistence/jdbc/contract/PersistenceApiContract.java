@@ -2482,11 +2482,22 @@ public abstract class PersistenceApiContract {
 
     stores().assets().updateAssetAttributes(assetId, Map.of("remoteUrls", Map.of()));
     assertEquals(1, activateHelmProxyLegacyCacheFence(repositoryId));
-    // A lagging node clock cannot make a post-activation write look eligible: updated_at is owned
-    // by the database in both supported dialects.
+    // An old replica's 304 verification touch changes the asset row but not its cached bytes. The
+    // pre-activation blob remains eligible for one atomic configuration binding.
     stores().assets().touchAssetLastUpdated(assetId, Instant.EPOCH);
+    assertEquals(1, stores().assets().bindLegacyHelmProxyCacheConfiguration(
+        assetId, repositoryId, "helmProxyConfiguration", "late-old-replica-304"));
+
+    // A real content generation created after activation must remain fenced even when a lagging
+    // old replica supplies an application timestamp from before the upgrade.
+    stores().assets().updateAssetAttributes(assetId, Map.of("remoteUrls", Map.of()));
+    Thread.sleep(10);
+    long postActivationBlobId = stores().assets().insertBlob(
+        blob(repository.blobStoreId(), "helm/post-activation-index.yaml", "post-activation"));
+    stores().assets().updateAssetBlobBinding(
+        assetId, postActivationBlobId, "text/x-yaml", 42L, Instant.EPOCH);
     assertEquals(0, stores().assets().bindLegacyHelmProxyCacheConfiguration(
-        assetId, repositoryId, "helmProxyConfiguration", "late-old-replica"));
+        assetId, repositoryId, "helmProxyConfiguration", "late-old-replica-content"));
 
     Instant previousConfigurationTime = stores().repositories().findUpdatedAt(repositoryId)
         .orElseThrow();

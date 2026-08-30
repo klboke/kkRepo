@@ -19,6 +19,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import org.slf4j.Logger;
@@ -103,25 +104,36 @@ public class HelmGroupService {
         }
       }
 
-      MemberIndexes memberIndexes = memberIndexes(group, resolvingGroups);
-      byte[] body = HelmIndex.mergeGroupIndexes(memberIndexes.indexes(), now);
-      ensureIndexWithinLimit(body.length);
+      AggregatedIndex aggregated = aggregateIndex(group, resolvingGroups);
+      boolean durableCacheEnabled = indexCache != null && indexCache.enabled();
+      if (aggregated.memberIndexes().complete()
+          && durableCacheEnabled
+          && !aggregated.watermarkStable()) {
+        // A member changed while its bytes were being collected. Retry once against the new
+        // generation; sustained churn remains safe to serve but must not seed this group or a
+        // containing group's durable cache.
+        aggregated = aggregateIndex(group, resolvingGroups);
+      }
+      MemberIndexes memberIndexes = aggregated.memberIndexes();
+      byte[] body = aggregated.body();
       // A partial response is still useful, but no replica may publish it as fresh under the
       // shared watermark and thereby hide a recovered member until metadata expiry.
-      if (!memberIndexes.complete() || indexCache == null || !indexCache.enabled()) {
+      if (!memberIndexes.complete() || !durableCacheEnabled) {
         return new IndexResult(
-            indexResponse(body, headOnly, null, now),
+            indexResponse(body, headOnly, null, aggregated.generatedAt()),
             memberIndexes.complete(),
             memberIndexes.freshUntil());
       }
 
       long blobStoreId = requireBlobStore(group);
+      if (!aggregated.watermarkStable()) {
+        return new IndexResult(
+            indexResponse(body, headOnly, null, aggregated.generatedAt()),
+            false,
+            memberIndexes.freshUntil());
+      }
       HelmAssetWriter.Stored stored;
       try {
-        // Member reads may synchronously refresh an index and advance this group token. Capture
-        // the publication watermark only after collecting every member so the stored merge is not
-        // stale the moment it is committed.
-        NexusLikeCacheInfo cacheInfo = indexCache.current(group, Instant.now());
         BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);
         stored = writer.writeBytes(
             group,
@@ -132,7 +144,8 @@ public class HelmGroupService {
             HelmIndex.CONTENT_TYPE,
             HelmAssetKind.INDEX,
             null,
-            indexCache.freshAttributes(group, cacheInfo, memberIndexes.freshUntil()),
+            indexCache.freshAttributes(
+                group, aggregated.cacheInfo(), memberIndexes.freshUntil()),
             java.util.Map.of(),
             "group",
             null);
@@ -145,7 +158,7 @@ public class HelmGroupService {
             e);
         invalidateGroupIndexCache(group.id());
         return new IndexResult(
-            indexResponse(body, headOnly, null, now),
+            indexResponse(body, headOnly, null, aggregated.generatedAt()),
             true,
             memberIndexes.freshUntil());
       }
@@ -157,6 +170,35 @@ public class HelmGroupService {
     } finally {
       resolvingGroups.remove(group.id());
     }
+  }
+
+  private AggregatedIndex aggregateIndex(
+      RepositoryRuntime group, Set<Long> resolvingGroups) {
+    Instant generatedAt = Instant.now();
+    boolean trackWatermark = indexCache != null && indexCache.enabled();
+    NexusLikeCacheInfo before = trackWatermark ? currentWatermark(group) : null;
+    MemberIndexes members = memberIndexes(group, resolvingGroups);
+    byte[] body = HelmIndex.mergeGroupIndexes(members.indexes(), generatedAt);
+    ensureIndexWithinLimit(body.length);
+    NexusLikeCacheInfo after = trackWatermark ? currentWatermark(group) : null;
+    boolean stable = !trackWatermark || sameGeneration(before, after);
+    return new AggregatedIndex(members, body, generatedAt, after, stable);
+  }
+
+  private NexusLikeCacheInfo currentWatermark(RepositoryRuntime group) {
+    try {
+      return indexCache.current(group, Instant.now());
+    } catch (RuntimeException e) {
+      log.warn("Failed reading Helm group index watermark for {}", group.name(), e);
+      return null;
+    }
+  }
+
+  private static boolean sameGeneration(
+      NexusLikeCacheInfo before, NexusLikeCacheInfo after) {
+    return before != null
+        && after != null
+        && Objects.equals(before.cacheToken(), after.cacheToken());
   }
 
   private MemberIndexes memberIndexes(
@@ -271,7 +313,7 @@ public class HelmGroupService {
               MavenResponse response =
                   dispatchAsset(cachedMember, path, kind, headOnly, resolvingGroups);
               if (matchesAdvertisedDigest(cachedMember, kind, release, response)) {
-                return response;
+                return materializeCandidateBody(cachedMember, path, response, headOnly);
               }
               response.closeBodyIfOpen();
             }
@@ -294,6 +336,7 @@ public class HelmGroupService {
             response.closeBodyIfOpen();
             continue;
           }
+          response = materializeCandidateBody(member, path, response, headOnly);
           if (memberAssetCache != null) {
             memberAssetCache.put(group, path, cacheType, member.id());
           }
@@ -307,6 +350,19 @@ public class HelmGroupService {
       throw new MavenExceptions.MavenNotFoundException(path);
     } finally {
       resolvingGroups.remove(group.id());
+    }
+  }
+
+  private static MavenResponse materializeCandidateBody(
+      RepositoryRuntime member, String path, MavenResponse response, boolean headOnly) {
+    if (headOnly) return response;
+    try {
+      return response.materializeBody();
+    } catch (RuntimeException e) {
+      response.closeBodyIfOpen();
+      throw new MavenExceptions.BadUpstreamException(
+          "Failed opening Helm group member asset " + member.name() + "/" + path,
+          e);
     }
   }
 
@@ -452,6 +508,14 @@ public class HelmGroupService {
   }
 
   private record MemberIndexes(List<byte[]> indexes, boolean complete, Instant freshUntil) {
+  }
+
+  private record AggregatedIndex(
+      MemberIndexes memberIndexes,
+      byte[] body,
+      Instant generatedAt,
+      NexusLikeCacheInfo cacheInfo,
+      boolean watermarkStable) {
   }
 
   private static final class MetadataLimitExceeded

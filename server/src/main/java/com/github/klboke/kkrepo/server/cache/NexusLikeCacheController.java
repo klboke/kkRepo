@@ -76,14 +76,16 @@ public class NexusLikeCacheController {
   }
 
   public void invalidate(long repositoryId, NexusCacheType type) {
-    String key = tokenKey(repositoryId, type);
     try {
-      watermark.bump(versionName(key));
+      invalidateOrThrow(repositoryId, type);
     } catch (RuntimeException e) {
-      log.warn("Failed invalidating repository cache token {}", key, e);
-    } finally {
-      localTokens.invalidate(key);
+      log.warn("Failed invalidating repository cache token {}", tokenKey(repositoryId, type), e);
     }
+  }
+
+  /** Advances a cache token and propagates persistence failures to correctness-critical callers. */
+  public void invalidateOrThrow(long repositoryId, NexusCacheType type) {
+    invalidateTokenKeyOrThrow(tokenKey(repositoryId, type));
   }
 
   public void invalidateAll(long repositoryId) {
@@ -135,9 +137,15 @@ public class NexusLikeCacheController {
 
   private void invalidateTokenKey(String key) {
     try {
-      watermark.bump(versionName(key));
+      invalidateTokenKeyOrThrow(key);
     } catch (RuntimeException e) {
       log.warn("Failed invalidating repository cache token {}", key, e);
+    }
+  }
+
+  private void invalidateTokenKeyOrThrow(String key) {
+    try {
+      watermark.bump(versionName(key));
     } finally {
       localTokens.invalidate(key);
     }

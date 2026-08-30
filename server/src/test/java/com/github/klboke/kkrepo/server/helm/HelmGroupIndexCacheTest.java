@@ -7,12 +7,15 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
@@ -36,6 +39,7 @@ class HelmGroupIndexCacheTest {
     StubRepositoryDao repositories = new StubRepositoryDao();
     repositories.putGroupsContaining(11L, List.of(group(21L, "nested")));
     repositories.putGroupsContaining(21L, List.of(group(31L, "root")));
+    RepositoryIndexRebuildDao rebuildQueue = mock(RepositoryIndexRebuildDao.class);
     NexusLikeCacheController controller = new NexusLikeCacheController(
         new InMemoryVersionWatermark(), 60);
     HelmGroupIndexCache cache = new HelmGroupIndexCache(
@@ -43,6 +47,7 @@ class HelmGroupIndexCacheTest {
         mock(AssetDao.class),
         mock(AssetMetadataCache.class),
         controller,
+        rebuildQueue,
         true);
     String nestedBefore = controller.currentToken(21L, NexusCacheType.METADATA);
     String rootBefore = controller.currentToken(31L, NexusCacheType.METADATA);
@@ -51,6 +56,18 @@ class HelmGroupIndexCacheTest {
 
     assertNotEquals(nestedBefore, controller.currentToken(21L, NexusCacheType.METADATA));
     assertNotEquals(rootBefore, controller.currentToken(31L, NexusCacheType.METADATA));
+    verify(rebuildQueue).enqueue(
+        21L,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        RepositoryIndexRebuildDao.ROOT_SCOPE);
+    verify(rebuildQueue).enqueue(
+        31L,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        RepositoryIndexRebuildDao.ROOT_SCOPE);
+
+    String beforeRetry = controller.currentToken(21L, NexusCacheType.METADATA);
+    cache.retryInvalidation(21L);
+    assertNotEquals(beforeRetry, controller.currentToken(21L, NexusCacheType.METADATA));
   }
 
   @Test
@@ -60,7 +77,8 @@ class HelmGroupIndexCacheTest {
     NexusLikeCacheController controller = new NexusLikeCacheController(
         new InMemoryVersionWatermark(), 60);
     HelmGroupIndexCache cache = new HelmGroupIndexCache(
-        repositories, mock(AssetDao.class), metadata, controller, true);
+        repositories, mock(AssetDao.class), metadata, controller,
+        mock(RepositoryIndexRebuildDao.class), true);
     RepositoryRuntime group = runtime(21L, 60);
     NexusLikeCacheInfo info = cache.current(group, java.time.Instant.now());
     Map<String, Object> attributes = cache.freshAttributes(group, info, null);
@@ -81,7 +99,8 @@ class HelmGroupIndexCacheTest {
     NexusLikeCacheController controller = new NexusLikeCacheController(
         new InMemoryVersionWatermark(), 60);
     HelmGroupIndexCache cache = new HelmGroupIndexCache(
-        repositories, mock(AssetDao.class), metadata, controller, true);
+        repositories, mock(AssetDao.class), metadata, controller,
+        mock(RepositoryIndexRebuildDao.class), true);
     RepositoryRuntime group = runtime(21L, 60);
     java.time.Instant now = java.time.Instant.parse("2026-08-30T00:00:00Z");
     java.time.Instant memberFreshUntil = now.plusSeconds(30);
@@ -102,7 +121,8 @@ class HelmGroupIndexCacheTest {
     NexusLikeCacheController controller = new NexusLikeCacheController(
         new InMemoryVersionWatermark(), 60);
     HelmGroupIndexCache cache = new HelmGroupIndexCache(
-        new StubRepositoryDao(), mock(AssetDao.class), metadata, controller, true);
+        new StubRepositoryDao(), mock(AssetDao.class), metadata, controller,
+        mock(RepositoryIndexRebuildDao.class), true);
     RepositoryRuntime group = runtime(21L, 60);
     java.time.Instant now = java.time.Instant.parse("2026-08-30T00:00:00Z");
     Map<String, Object> attributes = new HashMap<>(
@@ -120,7 +140,8 @@ class HelmGroupIndexCacheTest {
     NexusLikeCacheController controller = new NexusLikeCacheController(
         new InMemoryVersionWatermark(), 60);
     HelmGroupIndexCache cache = new HelmGroupIndexCache(
-        new StubRepositoryDao(), mock(AssetDao.class), metadata, controller, true);
+        new StubRepositoryDao(), mock(AssetDao.class), metadata, controller,
+        mock(RepositoryIndexRebuildDao.class), true);
     RepositoryRuntime oldGroup = runtime(
         21L, 60, List.of(proxyRuntime(11L, "https://old.example.test/")));
     RepositoryRuntime updatedGroup = runtime(
@@ -143,13 +164,15 @@ class HelmGroupIndexCacheTest {
         new InMemoryVersionWatermark(), 60);
     RepositoryRuntime group = runtime(21L, 60);
     HelmGroupIndexCache disabled = new HelmGroupIndexCache(
-        repositories, mock(AssetDao.class), metadata, controller, false);
+        repositories, mock(AssetDao.class), metadata, controller,
+        mock(RepositoryIndexRebuildDao.class), false);
     assertFalse(disabled.findFresh(group, java.time.Instant.now()).isPresent());
     disabled.invalidateMemberAfterCommit(11L);
     disabled.invalidateGroupAfterCommit(group.id());
 
     HelmGroupIndexCache enabled = new HelmGroupIndexCache(
-        repositories, mock(AssetDao.class), metadata, controller, true);
+        repositories, mock(AssetDao.class), metadata, controller,
+        mock(RepositoryIndexRebuildDao.class), true);
     when(metadata.find(eq(group.id()), eq("index.yaml"), any()))
         .thenReturn(Optional.empty())
         .thenReturn(Optional.of(snapshot("INDEX", Map.of(), true)))
@@ -169,7 +192,8 @@ class HelmGroupIndexCacheTest {
     NexusLikeCacheController controller = new NexusLikeCacheController(
         new InMemoryVersionWatermark(), 60);
     HelmGroupIndexCache cache = new HelmGroupIndexCache(
-        repositories, mock(AssetDao.class), mock(AssetMetadataCache.class), controller, true);
+        repositories, mock(AssetDao.class), mock(AssetMetadataCache.class), controller,
+        mock(RepositoryIndexRebuildDao.class), true);
     String nestedBefore = controller.currentToken(21L, NexusCacheType.METADATA);
     String rootBefore = controller.currentToken(31L, NexusCacheType.METADATA);
 
@@ -195,12 +219,18 @@ class HelmGroupIndexCacheTest {
     StubRepositoryDao repositories = new StubRepositoryDao();
     repositories.putGroupsContaining(11L, List.of(group(21L, "all")));
     NexusLikeCacheController controller = mock(NexusLikeCacheController.class);
-    org.mockito.Mockito.doThrow(new IllegalStateException("watermark unavailable"))
-        .when(controller).invalidate(21L, NexusCacheType.METADATA);
+    RepositoryIndexRebuildDao rebuildQueue = mock(RepositoryIndexRebuildDao.class);
+    doThrow(new IllegalStateException("watermark unavailable"))
+        .when(controller).invalidateOrThrow(21L, NexusCacheType.METADATA);
     HelmGroupIndexCache cache = new HelmGroupIndexCache(
-        repositories, mock(AssetDao.class), mock(AssetMetadataCache.class), controller, true);
+        repositories, mock(AssetDao.class), mock(AssetMetadataCache.class), controller,
+        rebuildQueue, true);
 
     assertDoesNotThrow(() -> cache.invalidateMemberAfterCommit(11L));
+    verify(rebuildQueue).enqueue(
+        21L,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        RepositoryIndexRebuildDao.ROOT_SCOPE);
   }
 
   private static CachedAssetMetadata snapshot(

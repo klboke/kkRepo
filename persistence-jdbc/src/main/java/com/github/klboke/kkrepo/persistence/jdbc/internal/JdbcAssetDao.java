@@ -1131,9 +1131,11 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
             FROM helm_proxy_legacy_cache_fence fence
             JOIN repository active_repository
               ON active_repository.id = fence.repository_id
+            JOIN asset_blob cached_blob
+              ON cached_blob.id = asset.asset_blob_id
             WHERE fence.repository_id = asset.repository_id
               AND active_repository.updated_at = fence.configuration_updated_at
-              AND asset.updated_at < fence.activated_at
+              AND cached_blob.created_at < fence.activated_at
           )
         """.formatted(updated, attribute),
         value,

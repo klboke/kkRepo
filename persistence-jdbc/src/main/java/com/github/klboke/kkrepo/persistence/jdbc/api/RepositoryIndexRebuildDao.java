@@ -5,6 +5,7 @@ import java.util.List;
 
 public interface RepositoryIndexRebuildDao {
   String HELM_INDEX = "HELM_INDEX";
+  String HELM_GROUP_INVALIDATION = "HELM_GROUP_INVALIDATION";
   String PYPI_ROOT = "PYPI_ROOT";
   String PYPI_PROJECT = "PYPI_PROJECT";
   String YUM_METADATA = "YUM_METADATA";

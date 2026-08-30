@@ -15,6 +15,7 @@ import org.springframework.transaction.annotation.Transactional;
 @Repository
 public class JdbcRepositoryIndexRebuildDao implements com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao {
   public static final String HELM_INDEX = "HELM_INDEX";
+  public static final String HELM_GROUP_INVALIDATION = "HELM_GROUP_INVALIDATION";
   public static final String PYPI_ROOT = "PYPI_ROOT";
   public static final String PYPI_PROJECT = "PYPI_PROJECT";
   public static final String YUM_METADATA = "YUM_METADATA";

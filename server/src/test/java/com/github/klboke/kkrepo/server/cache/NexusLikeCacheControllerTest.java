@@ -1,7 +1,11 @@
 package com.github.klboke.kkrepo.server.cache;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
 
 import com.github.klboke.kkrepo.server.support.InMemoryVersionWatermark;
 import java.time.Instant;
@@ -39,6 +43,19 @@ class NexusLikeCacheControllerTest {
     controller.invalidate(7L, NexusCacheType.CONTENT);
 
     assertTrue(controller.isStale(7L, NexusCacheType.CONTENT, before, -1, Instant.now()));
+  }
+
+  @Test
+  void strictInvalidationPropagatesWatermarkFailuresForDurableRetryCallers() {
+    VersionWatermark watermark = mock(VersionWatermark.class);
+    doThrow(new IllegalStateException("database unavailable"))
+        .when(watermark).bump("repo:7:METADATA");
+    NexusLikeCacheController controller = new NexusLikeCacheController(watermark, 60);
+
+    assertThrows(
+        IllegalStateException.class,
+        () -> controller.invalidateOrThrow(7L, NexusCacheType.METADATA));
+    assertDoesNotThrow(() -> controller.invalidate(7L, NexusCacheType.METADATA));
   }
 
   @Test

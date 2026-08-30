@@ -11,6 +11,7 @@ import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -38,6 +39,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 class HelmGroupServiceTest {
@@ -205,25 +207,38 @@ class HelmGroupServiceTest {
   }
 
   @Test
-  void capturesTheGroupWatermarkAfterMemberRefresh() {
+  void retriesCollectionWhenTheGroupWatermarkChangesAndPublishesTheStableGeneration()
+      throws Exception {
     Fixture fixture = fixture();
     RepositoryRuntime hosted = runtime(2L, "private", RepositoryType.HOSTED, true, List.of());
     RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of(hosted));
-    AtomicBoolean memberRefreshed = new AtomicBoolean();
+    NexusLikeCacheInfo preRefresh = new NexusLikeCacheInfo(
+        Instant.parse("2026-08-30T00:00:00Z"), "pre-refresh", NexusCacheType.METADATA);
     NexusLikeCacheInfo postRefresh = new NexusLikeCacheInfo(
         Instant.parse("2026-08-30T00:00:01Z"), "post-refresh", NexusCacheType.METADATA);
+    AtomicInteger memberReads = new AtomicInteger();
     Map<String, Object> attributes = Map.of("helmGroupIndex", true);
     HelmAssetWriter.Stored stored = storedIndex();
     when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.empty());
     when(fixture.indexCache.enabled()).thenReturn(true);
-    when(fixture.hosted.get(hosted, "index.yaml", false)).thenAnswer(ignored -> {
-      memberRefreshed.set(true);
-      return index("entries: {}\n");
-    });
-    when(fixture.indexCache.current(eq(group), any())).thenAnswer(ignored -> {
-      assertTrue(memberRefreshed.get());
-      return postRefresh;
-    });
+    when(fixture.indexCache.current(eq(group), any()))
+        .thenReturn(preRefresh, postRefresh, postRefresh, postRefresh);
+    when(fixture.hosted.get(hosted, "index.yaml", false)).thenAnswer(ignored ->
+        memberReads.incrementAndGet() == 1
+            ? index("""
+                entries:
+                  private:
+                    - name: private
+                      version: 1.0.0
+                      urls: [private-1.0.0.tgz]
+                """)
+            : index("""
+                entries:
+                  private:
+                    - name: private
+                      version: 2.0.0
+                      urls: [private-2.0.0.tgz]
+                """));
     when(fixture.indexCache.freshAttributes(group, postRefresh, null)).thenReturn(attributes);
     when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
     when(fixture.writer.writeBytes(
@@ -232,9 +247,71 @@ class HelmGroupServiceTest {
         isNull(), eq(attributes), anyMap(), eq("group"), isNull()))
         .thenReturn(stored);
 
-    assertEquals(200, fixture.service.get(group, "index.yaml", false).status());
+    MavenResponse response = fixture.service.get(group, "index.yaml", false);
 
+    assertEquals(
+        List.of(new HelmIndex.Entry("private", "2.0.0", List.of("private-2.0.0.tgz"))),
+        HelmIndex.entries(response.body().readAllBytes()));
+    verify(fixture.hosted, times(2)).get(hosted, "index.yaml", false);
     verify(fixture.indexCache).freshAttributes(group, postRefresh, null);
+  }
+
+  @Test
+  void doesNotPublishAGroupIndexWhenTheWatermarkChangesAcrossTheRetry() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime hosted = runtime(2L, "private", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of(hosted));
+    when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.empty());
+    when(fixture.indexCache.enabled()).thenReturn(true);
+    when(fixture.indexCache.current(eq(group), any())).thenReturn(
+        cacheInfo("generation-1"),
+        cacheInfo("generation-2"),
+        cacheInfo("generation-3"),
+        cacheInfo("generation-4"));
+    when(fixture.hosted.get(hosted, "index.yaml", false)).thenAnswer(ignored -> index("""
+        entries:
+          private:
+            - name: private
+              version: 1.0.0
+              urls: [private.tgz]
+        """));
+
+    MavenResponse response = fixture.service.get(group, "index.yaml", false);
+
+    assertEquals(
+        List.of(new HelmIndex.Entry("private", "1.0.0", List.of("private-1.0.0.tgz"))),
+        HelmIndex.entries(response.body().readAllBytes()));
+    verify(fixture.writer, never()).writeBytes(
+        any(), any(), any(Long.class), any(), any(), any(), any(), any(), anyMap(), anyMap(),
+        any(), any());
+  }
+
+  @Test
+  void doesNotPublishAGroupIndexWhenTheSharedWatermarkCannotBeRead() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime hosted = runtime(2L, "private", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of(hosted));
+    when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.empty());
+    when(fixture.indexCache.enabled()).thenReturn(true);
+    when(fixture.indexCache.current(eq(group), any()))
+        .thenThrow(new IllegalStateException("watermark unavailable"));
+    when(fixture.hosted.get(hosted, "index.yaml", false)).thenAnswer(ignored -> index("""
+        entries:
+          private:
+            - name: private
+              version: 1.0.0
+              urls: [private.tgz]
+        """));
+
+    MavenResponse response = fixture.service.get(group, "index.yaml", false);
+
+    assertEquals(
+        List.of(new HelmIndex.Entry("private", "1.0.0", List.of("private-1.0.0.tgz"))),
+        HelmIndex.entries(response.body().readAllBytes()));
+    verify(fixture.indexCache, times(4)).current(eq(group), any());
+    verify(fixture.writer, never()).writeBytes(
+        any(), any(), any(Long.class), any(), any(), any(), any(), any(), anyMap(), anyMap(),
+        any(), any());
   }
 
   @Test
@@ -462,6 +539,7 @@ class HelmGroupServiceTest {
     RepositoryRuntime group = runtime(
         10L, "all", RepositoryType.GROUP, true, List.of(unavailable, fallback));
     CachedAssetMetadata cachedIndex = mock(CachedAssetMetadata.class);
+    AtomicBoolean missingBodyOpened = new AtomicBoolean();
     MavenResponse expected = asset("digest-b");
     when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.of(cachedIndex));
     when(fixture.reader.serveSnapshot(cachedIndex, false, "index.yaml"))
@@ -471,12 +549,58 @@ class HelmGroupServiceTest {
     when(fixture.proxy.get(fallback, "index.yaml", false))
         .thenAnswer(ignored -> selectedIndex("digest-b"));
     when(fixture.hosted.get(unavailable, "demo-1.0.0.tgz", false))
-        .thenThrow(new MavenExceptions.MavenNotFoundException("not ready"));
+        .thenReturn(MavenResponse.ok(
+            () -> {
+              missingBodyOpened.set(true);
+              throw new MavenExceptions.MavenNotFoundException("missing member blob");
+            },
+            42L,
+            "application/gzip",
+            "missing",
+            Instant.EPOCH)
+            .withInternalAttribute(HelmAssetReader.SHA256_ATTRIBUTE, "digest-b"));
     when(fixture.proxy.get(fallback, "demo-1.0.0.tgz", false)).thenReturn(expected);
 
     assertSame(expected, fixture.service.get(group, "demo-1.0.0.tgz", false));
+    assertTrue(missingBodyOpened.get());
     verify(fixture.memberCache).put(
         group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, fallback.id());
+  }
+
+  @Test
+  void evictsALazyMissingCachedWinnerBeforeFallingBack() {
+    Fixture fixture = fixture();
+    RepositoryRuntime hosted = runtime(2L, "cached", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime proxy = runtime(3L, "fallback", RepositoryType.PROXY, true, List.of());
+    RepositoryRuntime group = runtime(
+        10L, "all", RepositoryType.GROUP, true, List.of(hosted, proxy));
+    CachedAssetMetadata cachedIndex = mock(CachedAssetMetadata.class);
+    MavenResponse expected = asset("digest-b");
+    when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.of(cachedIndex));
+    when(fixture.reader.serveSnapshot(cachedIndex, false, "index.yaml"))
+        .thenAnswer(ignored -> selectedIndex("digest-b"));
+    when(fixture.memberCache.get(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT))
+        .thenReturn(Optional.of(hosted.id()));
+    when(fixture.hosted.get(hosted, "index.yaml", false))
+        .thenAnswer(ignored -> selectedIndex("digest-b"));
+    when(fixture.proxy.get(proxy, "index.yaml", false))
+        .thenAnswer(ignored -> selectedIndex("digest-b"));
+    when(fixture.hosted.get(hosted, "demo-1.0.0.tgz", false))
+        .thenReturn(MavenResponse.ok(
+            () -> {
+              throw new IllegalStateException("object store unavailable");
+            },
+            42L,
+            "application/gzip",
+            "missing",
+            Instant.EPOCH)
+            .withInternalAttribute(HelmAssetReader.SHA256_ATTRIBUTE, "digest-b"));
+    when(fixture.proxy.get(proxy, "demo-1.0.0.tgz", false)).thenReturn(expected);
+
+    assertSame(expected, fixture.service.get(group, "demo-1.0.0.tgz", false));
+    verify(fixture.memberCache).evict(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT);
+    verify(fixture.memberCache).put(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, proxy.id());
   }
 
   @Test
@@ -896,6 +1020,10 @@ class HelmGroupServiceTest {
     return new HelmAssetWriter.Stored(
         asset, blob, new HelmAssetWriter.Digests("md5", "sha1", "sha256", "sha512", 4L),
         true, null);
+  }
+
+  private static NexusLikeCacheInfo cacheInfo(String token) {
+    return new NexusLikeCacheInfo(Instant.EPOCH, token, NexusCacheType.METADATA);
   }
 
   private static MavenResponse index(String body) {

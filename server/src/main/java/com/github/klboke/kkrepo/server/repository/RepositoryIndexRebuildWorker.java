@@ -5,6 +5,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao.Claim;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
+import com.github.klboke.kkrepo.server.helm.HelmGroupIndexCache;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
@@ -32,6 +33,7 @@ class RepositoryIndexRebuildWorker {
   private final RepositoryRuntimeRegistry runtimeRegistry;
   private final BlobStorageRegistry blobStorageRegistry;
   private final HelmHostedService helmHostedService;
+  private final HelmGroupIndexCache helmGroupIndexCache;
   private final PypiHostedService pypiHostedService;
   private final YumService yumService;
   private final RubygemsService rubygemsService;
@@ -47,6 +49,7 @@ class RepositoryIndexRebuildWorker {
       RepositoryRuntimeRegistry runtimeRegistry,
       BlobStorageRegistry blobStorageRegistry,
       HelmHostedService helmHostedService,
+      HelmGroupIndexCache helmGroupIndexCache,
       PypiHostedService pypiHostedService,
       YumService yumService,
       RubygemsService rubygemsService,
@@ -60,6 +63,7 @@ class RepositoryIndexRebuildWorker {
     this.runtimeRegistry = runtimeRegistry;
     this.blobStorageRegistry = blobStorageRegistry;
     this.helmHostedService = helmHostedService;
+    this.helmGroupIndexCache = helmGroupIndexCache;
     this.pypiHostedService = pypiHostedService;
     this.yumService = yumService;
     this.rubygemsService = rubygemsService;
@@ -104,6 +108,10 @@ class RepositoryIndexRebuildWorker {
   }
 
   private void execute(Claim claim) {
+    if (RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION.equals(claim.indexKind())) {
+      helmGroupIndexCache.retryInvalidation(claim.repositoryId());
+      return;
+    }
     RepositoryRuntime runtime = runtimeRegistry.resolveById(claim.repositoryId()).orElse(null);
     if (runtime == null) {
       return;

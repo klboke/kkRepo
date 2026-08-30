@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.helm;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
@@ -15,6 +16,7 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -41,8 +43,6 @@ public class HelmGroupIndexCache {
   static final String CONFIGURATION_FINGERPRINT_ATTRIBUTE = "helmGroupConfiguration";
 
   private static final Logger log = LoggerFactory.getLogger(HelmGroupIndexCache.class);
-  private static final Object PENDING_MEMBERS_KEY =
-      HelmGroupIndexCache.class.getName() + ".PENDING_MEMBERS";
   private static final Object PENDING_GROUPS_KEY =
       HelmGroupIndexCache.class.getName() + ".PENDING_GROUPS";
 
@@ -50,6 +50,7 @@ public class HelmGroupIndexCache {
   private final AssetDao assetDao;
   private final AssetMetadataCache assetMetadataCache;
   private final NexusLikeCacheController cacheController;
+  private final RepositoryIndexRebuildDao rebuildQueue;
   private final boolean enabled;
 
   public HelmGroupIndexCache(
@@ -57,11 +58,13 @@ public class HelmGroupIndexCache {
       AssetDao assetDao,
       AssetMetadataCache assetMetadataCache,
       NexusLikeCacheController cacheController,
+      RepositoryIndexRebuildDao rebuildQueue,
       @Value("${kkrepo.cache.helm-group-index.enabled:true}") boolean enabled) {
     this.repositoryDao = repositoryDao;
     this.assetDao = assetDao;
     this.assetMetadataCache = assetMetadataCache;
     this.cacheController = cacheController;
+    this.rebuildQueue = rebuildQueue;
     this.enabled = enabled;
   }
 
@@ -195,46 +198,59 @@ public class HelmGroupIndexCache {
 
   public void invalidateMemberAfterCommit(long memberRepositoryId) {
     if (!enabled) return;
-    deferAfterCommit(PENDING_MEMBERS_KEY, memberRepositoryId, this::invalidateContainingGroups);
+    Set<Long> groups = new LinkedHashSet<>();
+    collectContainingGroups(memberRepositoryId, groups);
+    enqueueInvalidations(groups);
   }
 
   public void invalidateGroupAfterCommit(long groupId) {
     if (!enabled) return;
-    deferAfterCommit(PENDING_GROUPS_KEY, groupId, this::invalidateGroupAndAncestors);
+    Set<Long> groups = new LinkedHashSet<>();
+    collectGroupAndAncestors(groupId, groups);
+    enqueueInvalidations(groups);
   }
 
-  private void invalidateContainingGroups(long memberRepositoryId) {
-    invalidateContainingGroups(memberRepositoryId, new HashSet<>());
+  /** Called by the durable repository-index worker after it claims an invalidation marker. */
+  public void retryInvalidation(long groupId) {
+    if (!enabled) return;
+    cacheController.invalidateOrThrow(groupId, NexusCacheType.METADATA);
   }
 
-  private void invalidateContainingGroups(long memberRepositoryId, Set<Long> visited) {
+  private void collectContainingGroups(long memberRepositoryId, Set<Long> groups) {
     for (RepositoryRecord group : repositoryDao.listGroupsContaining(memberRepositoryId)) {
       Long groupId = group.id();
-      if (groupId == null || !visited.add(groupId)) continue;
-      invalidateToken(groupId);
-      invalidateContainingGroups(groupId, visited);
+      if (groupId == null || !groups.add(groupId)) continue;
+      collectContainingGroups(groupId, groups);
     }
   }
 
-  private void invalidateGroupAndAncestors(long groupId) {
-    invalidateGroupAndAncestors(groupId, new HashSet<>());
-  }
-
-  private void invalidateGroupAndAncestors(long groupId, Set<Long> visited) {
-    if (!visited.add(groupId)) return;
-    invalidateToken(groupId);
+  private void collectGroupAndAncestors(long groupId, Set<Long> groups) {
+    if (!groups.add(groupId)) return;
     for (RepositoryRecord parent : repositoryDao.listGroupsContaining(groupId)) {
-      if (parent.id() != null) invalidateGroupAndAncestors(parent.id(), visited);
+      if (parent.id() != null) collectGroupAndAncestors(parent.id(), groups);
     }
   }
 
-  private void invalidateToken(long groupId) {
+  private void enqueueInvalidations(Set<Long> groups) {
+    for (long groupId : groups) {
+      // The marker participates in the member-index write transaction. A committed member change
+      // therefore always leaves durable retry work before the best-effort afterCommit fast path.
+      rebuildQueue.enqueue(
+          groupId,
+          RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+          RepositoryIndexRebuildDao.ROOT_SCOPE);
+      deferAfterCommit(PENDING_GROUPS_KEY, groupId, this::attemptQueuedInvalidation);
+    }
+  }
+
+  private void attemptQueuedInvalidation(long groupId) {
     try {
-      // The public entrypoints already defer this resolver until commit. Invalidate directly here
-      // so a callback running in afterCommit does not enqueue a second synchronization too late.
-      cacheController.invalidate(groupId, NexusCacheType.METADATA);
+      cacheController.invalidateOrThrow(groupId, NexusCacheType.METADATA);
     } catch (RuntimeException e) {
-      log.warn("Failed invalidating Helm group index token for group {}", groupId, e);
+      log.warn(
+          "Failed invalidating Helm group index token for group {}; durable retry retained",
+          groupId,
+          e);
     }
   }
 
