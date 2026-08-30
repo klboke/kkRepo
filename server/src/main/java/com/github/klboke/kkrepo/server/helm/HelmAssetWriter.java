@@ -17,8 +17,6 @@ import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.blob.BlobTransactionCleanup;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
-import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
-import com.github.klboke.kkrepo.server.cache.NexusCacheType;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
 import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
@@ -51,12 +49,11 @@ class HelmAssetWriter {
   private final AssetMetadataCache assetMetadataCache;
   private final TransientTransactionRetry transactionRetry;
   private final HelmGroupIndexCache groupIndexCache;
-  private final GroupMemberAssetCache groupMemberAssetCache;
   private final HelmChartPackageParser chartParser = new HelmChartPackageParser();
 
   HelmAssetWriter(AssetDao assetDao, ComponentDao componentDao, BrowseNodeDao browseNodeDao,
       AssetMetadataCache assetMetadataCache, TransientTransactionRetry transactionRetry) {
-    this(assetDao, componentDao, browseNodeDao, assetMetadataCache, transactionRetry, null, null);
+    this(assetDao, componentDao, browseNodeDao, assetMetadataCache, transactionRetry, null);
   }
 
   @Autowired
@@ -66,15 +63,13 @@ class HelmAssetWriter {
       BrowseNodeDao browseNodeDao,
       AssetMetadataCache assetMetadataCache,
       TransientTransactionRetry transactionRetry,
-      HelmGroupIndexCache groupIndexCache,
-      GroupMemberAssetCache groupMemberAssetCache) {
+      HelmGroupIndexCache groupIndexCache) {
     this.assetDao = assetDao;
     this.componentDao = componentDao;
     this.browseNodeDao = browseNodeDao;
     this.assetMetadataCache = assetMetadataCache;
     this.transactionRetry = transactionRetry;
     this.groupIndexCache = groupIndexCache;
-    this.groupMemberAssetCache = groupMemberAssetCache;
   }
 
   record Stored(AssetRecord asset, AssetBlobRecord blob, Digests digests, boolean created, Path responseFile) {
@@ -198,7 +193,7 @@ class HelmAssetWriter {
     if (componentId != null) {
       componentDao.deleteIfNoAssets(componentId);
     }
-    notifyContainingGroups(runtime, asset.kind());
+    notifyContainingGroups(runtime);
     return 1;
   }
 
@@ -318,16 +313,16 @@ class HelmAssetWriter {
     }
     browseNodeDao.upsertPathAncestors(runtime.id(), path, persistedAsset.id(), componentId);
     assetMetadataCache.evictAfterCommit(runtime.id(), path);
-    notifyContainingGroups(runtime, kind.name());
+    notifyContainingGroups(runtime);
     return new Stored(persistedAsset, persistedBlob, digests, created, responseFile);
   }
 
-  private void notifyContainingGroups(RepositoryRuntime runtime, String kind) {
+  private void notifyContainingGroups(RepositoryRuntime runtime) {
     if (runtime.isGroup()) return;
-    if (groupMemberAssetCache != null) {
-      groupMemberAssetCache.invalidateMemberAfterCommit(runtime.id(), NexusCacheType.CONTENT);
-    }
-    if (groupIndexCache != null && HelmAssetKind.INDEX.name().equals(kind)) {
+    if (groupIndexCache != null) {
+      // Chart, provenance, and generated-index changes can all change an ordered group winner.
+      // The group invalidator writes a durable marker in this transaction and advances both the
+      // CONTENT winner token and the METADATA aggregate token after commit.
       groupIndexCache.invalidateMemberAfterCommit(runtime.id());
     }
   }

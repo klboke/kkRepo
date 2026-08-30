@@ -422,12 +422,12 @@ public class HelmGroupService {
       HelmAssetKind kind,
       HelmIndex.Release release,
       MavenResponse response) {
-    // A hosted member is authoritative for both its generated index and stored blob, so a
-    // mismatch identifies the asynchronous overwrite window. Proxy repositories must preserve
-    // direct-proxy behavior when an upstream publishes an index digest that disagrees with its
-    // release asset (the official Helm examples repository currently has such a release). Nested
-    // groups apply this check recursively to any hosted leaf before returning its response.
-    if (!member.isHosted()
+    // Hosted repositories and nested groups are authoritative for the digest they advertise. A
+    // nested group independently reloads its own index while resolving, so the outer boundary must
+    // verify the returned bytes again in case the nested winner changed after the outer merge.
+    // Direct proxy members retain proxy behavior when an upstream index digest disagrees with its
+    // release asset (the official Helm examples repository currently has such a release).
+    if (!(member.isHosted() || member.isGroup())
         || kind != HelmAssetKind.PACKAGE
         || release.digest() == null
         || release.digest().isBlank()) {

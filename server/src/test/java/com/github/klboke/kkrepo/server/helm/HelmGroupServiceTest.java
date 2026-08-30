@@ -667,6 +667,37 @@ class HelmGroupServiceTest {
   }
 
   @Test
+  void rejectsNestedGroupBytesWhenItsWinnerChangesAfterTheOuterReleaseSelection() {
+    Fixture fixture = fixture();
+    RepositoryRuntime nestedHosted = runtime(
+        2L, "nested-hosted", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime nested = runtime(
+        3L, "nested", RepositoryType.GROUP, true, List.of(nestedHosted));
+    RepositoryRuntime fallback = runtime(
+        4L, "fallback", RepositoryType.PROXY, true, List.of());
+    RepositoryRuntime group = runtime(
+        10L, "all", RepositoryType.GROUP, true, List.of(nested, fallback));
+    AtomicInteger nestedIndexReads = new AtomicInteger();
+    MavenResponse changedNestedBytes = asset("digest-two");
+    MavenResponse expected = asset("digest-one");
+    when(fixture.memberCache.get(any(), any(), any())).thenReturn(Optional.empty());
+    when(fixture.hosted.get(nestedHosted, "index.yaml", false)).thenAnswer(ignored ->
+        nestedIndexReads.incrementAndGet() <= 2
+            ? selectedIndex("digest-one")
+            : selectedIndex("digest-two"));
+    when(fixture.proxy.get(fallback, "index.yaml", false))
+        .thenAnswer(ignored -> selectedIndex("digest-one"));
+    when(fixture.hosted.get(nestedHosted, "demo-1.0.0.tgz", false))
+        .thenReturn(changedNestedBytes);
+    when(fixture.proxy.get(fallback, "demo-1.0.0.tgz", false)).thenReturn(expected);
+
+    assertSame(expected, fixture.service.get(group, "demo-1.0.0.tgz", false));
+    assertEquals(4, nestedIndexReads.get());
+    verify(fixture.memberCache).put(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, fallback.id());
+  }
+
+  @Test
   void rejectsAdvertisedReleaseWhenMemberDigestCannotBeVerifiedWithoutOptionalCache() {
     Fixture fixture = fixture();
     RepositoryRuntime hosted = runtime(2L, "hosted", RepositoryType.HOSTED, true, List.of());

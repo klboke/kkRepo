@@ -5065,6 +5065,58 @@ public abstract class PersistenceApiContract {
   }
 
   @Test
+  void repositoryIndexMarkerAcknowledgementCannotDeleteANewerRequest() {
+    long repositoryId = createRepository("tracked-index-marker", RepositoryFormat.HELM);
+    RepositoryIndexRebuildDao queue = stores().repositoryIndexRebuild();
+
+    String first = queue.enqueueTracked(
+        repositoryId,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        RepositoryIndexRebuildDao.ROOT_SCOPE);
+    String second = queue.enqueueTracked(
+        repositoryId,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        RepositoryIndexRebuildDao.ROOT_SCOPE);
+
+    assertNotEquals(first, second);
+    assertFalse(queue.acknowledgeIfRequestToken(
+        repositoryId,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        RepositoryIndexRebuildDao.ROOT_SCOPE,
+        first));
+    assertTrue(queue.hasPending(
+        repositoryId,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        RepositoryIndexRebuildDao.ROOT_SCOPE));
+
+    String cacheVersionName = "helm-group-rollback-" + repositoryId;
+    assertThrows(IllegalStateException.class, () -> inTransaction(() -> {
+      assertTrue(queue.acknowledgeIfRequestToken(
+          repositoryId,
+          RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+          RepositoryIndexRebuildDao.ROOT_SCOPE,
+          second));
+      stores().cacheVersions().bump(cacheVersionName);
+      throw new IllegalStateException("force marker and watermark rollback");
+    }));
+    assertTrue(queue.hasPending(
+        repositoryId,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        RepositoryIndexRebuildDao.ROOT_SCOPE));
+    assertEquals(0L, stores().cacheVersions().current(cacheVersionName));
+
+    assertTrue(queue.acknowledgeIfRequestToken(
+        repositoryId,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        RepositoryIndexRebuildDao.ROOT_SCOPE,
+        second));
+    assertFalse(queue.hasPending(
+        repositoryId,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        RepositoryIndexRebuildDao.ROOT_SCOPE));
+  }
+
+  @Test
   void blobGcDockerAndPubUploadCoordinationRoundTrip() throws Exception {
     long repositoryId = createRepository("upload-coordination", RepositoryFormat.DOCKER);
     long blobStoreId = stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();

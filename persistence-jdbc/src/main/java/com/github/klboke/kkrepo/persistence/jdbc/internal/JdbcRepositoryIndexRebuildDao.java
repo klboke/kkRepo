@@ -7,6 +7,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcUpserts;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Propagation;
@@ -37,22 +38,38 @@ public class JdbcRepositoryIndexRebuildDao implements com.github.klboke.kkrepo.p
   }
 
   public void enqueue(long repositoryId, String indexKind, String scopeKey) {
+    enqueueTracked(repositoryId, indexKind, scopeKey);
+  }
+
+  public String enqueueTracked(long repositoryId, String indexKind, String scopeKey) {
     String normalizedScope = scope(scopeKey);
+    String requestToken = UUID.randomUUID().toString();
     JdbcUpserts.updateThenInsert(
         jdbcTemplate,
         """
         UPDATE repository_index_rebuild_marker
         SET requested_at = CURRENT_TIMESTAMP, attempts = 0,
-            last_attempted_at = NULL, last_error = NULL
+            last_attempted_at = NULL, last_error = NULL, request_token = ?
         WHERE repository_id = ? AND index_kind = ? AND scope_key = ?
         """,
-        new Object[]{repositoryId, indexKind, normalizedScope},
+        new Object[]{requestToken, repositoryId, indexKind, normalizedScope},
         """
         INSERT INTO repository_index_rebuild_marker
-          (repository_id, index_kind, scope_key, requested_at, attempts, last_attempted_at, last_error)
-        VALUES (?, ?, ?, CURRENT_TIMESTAMP, 0, NULL, NULL)
+          (repository_id, index_kind, scope_key, requested_at, attempts, last_attempted_at,
+           last_error, request_token)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP, 0, NULL, NULL, ?)
         """,
-        new Object[]{repositoryId, indexKind, normalizedScope});
+        new Object[]{repositoryId, indexKind, normalizedScope, requestToken});
+    return requestToken;
+  }
+
+  public boolean acknowledgeIfRequestToken(
+      long repositoryId, String indexKind, String scopeKey, String requestToken) {
+    if (requestToken == null || requestToken.isBlank()) return false;
+    return jdbcTemplate.update("""
+        DELETE FROM repository_index_rebuild_marker
+        WHERE repository_id = ? AND index_kind = ? AND scope_key = ? AND request_token = ?
+        """, repositoryId, indexKind, scope(scopeKey), requestToken) > 0;
   }
 
   public void reenqueueFailure(Claim claim, RuntimeException error) {

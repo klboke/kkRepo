@@ -41,6 +41,16 @@ public class RepositoryIndexRebuildDaoAdapter implements RepositoryIndexRebuildD
   }
 
   @Override
+  public String enqueueTracked(long arg0, String arg1, String arg2) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public boolean acknowledgeIfRequestToken(long arg0, String arg1, String arg2, String arg3) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
   public boolean hasPending(long arg0, String arg1, String arg2) {
     throw new UnsupportedOperationException();
   }

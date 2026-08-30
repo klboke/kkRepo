@@ -18,6 +18,18 @@ public interface RepositoryIndexRebuildDao {
 
   void enqueue(long repositoryId, String indexKind, String scopeKey);
 
+  /**
+   * Enqueues work and returns the opaque token for this exact marker generation.
+   *
+   * <p>Callers may use the token to acknowledge a successful fast path without deleting a newer
+   * concurrent request for the same repository, kind, and scope.
+   */
+  String enqueueTracked(long repositoryId, String indexKind, String scopeKey);
+
+  /** Deletes the marker only when it still represents the supplied request generation. */
+  boolean acknowledgeIfRequestToken(
+      long repositoryId, String indexKind, String scopeKey, String requestToken);
+
   void reenqueueFailure(Claim claim, RuntimeException error);
 
   List<Claim> claim(int maxItems);

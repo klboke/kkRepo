@@ -20,13 +20,17 @@ import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionOperations;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Durable Helm group index cache metadata.
@@ -51,21 +55,70 @@ public class HelmGroupIndexCache {
   private final AssetMetadataCache assetMetadataCache;
   private final NexusLikeCacheController cacheController;
   private final RepositoryIndexRebuildDao rebuildQueue;
+  private final TransactionOperations transactions;
   private final boolean enabled;
 
+  @Autowired
   public HelmGroupIndexCache(
       RepositoryDao repositoryDao,
       AssetDao assetDao,
       AssetMetadataCache assetMetadataCache,
       NexusLikeCacheController cacheController,
       RepositoryIndexRebuildDao rebuildQueue,
+      PlatformTransactionManager transactionManager,
       @Value("${kkrepo.cache.helm-group-index.enabled:true}") boolean enabled) {
+    this(
+        repositoryDao,
+        assetDao,
+        assetMetadataCache,
+        cacheController,
+        rebuildQueue,
+        newInvalidationTransactions(transactionManager),
+        enabled);
+  }
+
+  HelmGroupIndexCache(
+      RepositoryDao repositoryDao,
+      AssetDao assetDao,
+      AssetMetadataCache assetMetadataCache,
+      NexusLikeCacheController cacheController,
+      RepositoryIndexRebuildDao rebuildQueue,
+      boolean enabled) {
+    this(
+        repositoryDao,
+        assetDao,
+        assetMetadataCache,
+        cacheController,
+        rebuildQueue,
+        TransactionOperations.withoutTransaction(),
+        enabled);
+  }
+
+  private HelmGroupIndexCache(
+      RepositoryDao repositoryDao,
+      AssetDao assetDao,
+      AssetMetadataCache assetMetadataCache,
+      NexusLikeCacheController cacheController,
+      RepositoryIndexRebuildDao rebuildQueue,
+      TransactionOperations transactions,
+      boolean enabled) {
     this.repositoryDao = repositoryDao;
     this.assetDao = assetDao;
     this.assetMetadataCache = assetMetadataCache;
     this.cacheController = cacheController;
     this.rebuildQueue = rebuildQueue;
+    this.transactions = transactions;
     this.enabled = enabled;
+  }
+
+  private static TransactionOperations newInvalidationTransactions(
+      PlatformTransactionManager transactionManager) {
+    TransactionTemplate transactions = new TransactionTemplate(transactionManager);
+    // afterCommit callbacks still run before the original transaction resources are unbound.
+    // Always suspend those resources so the marker acknowledgement and watermark bumps receive
+    // their own commit or rollback boundary.
+    transactions.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    return transactions;
   }
 
   public boolean enabled() {
@@ -197,7 +250,6 @@ public class HelmGroupIndexCache {
   }
 
   public void invalidateMemberAfterCommit(long memberRepositoryId) {
-    if (!enabled) return;
     Set<Long> groups = new LinkedHashSet<>();
     collectContainingGroups(memberRepositoryId, groups);
     enqueueInvalidations(groups);
@@ -212,7 +264,9 @@ public class HelmGroupIndexCache {
 
   /** Called by the durable repository-index worker after it claims an invalidation marker. */
   public void retryInvalidation(long groupId) {
-    if (!enabled) return;
+    // Winner selection must move first. If the metadata bump then fails, the durable marker stays
+    // queued while no replica can keep serving a member winner selected before this content change.
+    cacheController.invalidateOrThrow(groupId, NexusCacheType.CONTENT);
     cacheController.invalidateOrThrow(groupId, NexusCacheType.METADATA);
   }
 
@@ -233,50 +287,80 @@ public class HelmGroupIndexCache {
 
   private void enqueueInvalidations(Set<Long> groups) {
     for (long groupId : groups) {
-      // The marker participates in the member-index write transaction. A committed member change
+      // The marker participates in the member-asset write transaction. A committed member change
       // therefore always leaves durable retry work before the best-effort afterCommit fast path.
-      rebuildQueue.enqueue(
+      String requestToken = rebuildQueue.enqueueTracked(
           groupId,
           RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
           RepositoryIndexRebuildDao.ROOT_SCOPE);
-      deferAfterCommit(PENDING_GROUPS_KEY, groupId, this::attemptQueuedInvalidation);
+      if (requestToken == null || requestToken.isBlank()) {
+        throw new IllegalStateException(
+            "Repository index rebuild queue returned an empty Helm invalidation token");
+      }
+      deferAfterCommit(new PendingInvalidation(groupId, requestToken));
     }
   }
 
-  private void attemptQueuedInvalidation(long groupId) {
+  private void attemptQueuedInvalidation(PendingInvalidation invalidation) {
     try {
-      cacheController.invalidateOrThrow(groupId, NexusCacheType.METADATA);
+      Boolean applied = transactions.execute(status -> {
+        boolean claimed = rebuildQueue.acknowledgeIfRequestToken(
+            invalidation.groupId(),
+            RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+            RepositoryIndexRebuildDao.ROOT_SCOPE,
+            invalidation.requestToken());
+        if (!claimed) return false;
+        // The conditional marker delete and both watermark bumps share one transaction. A failure
+        // restores the marker, while a worker or newer enqueue that wins the row lock makes this
+        // fast path a no-op instead of advancing the same generation twice.
+        retryInvalidation(invalidation.groupId());
+        return true;
+      });
+      if (!Boolean.TRUE.equals(applied)) {
+        log.debug(
+            "Helm group invalidation marker for group {} was already claimed or superseded",
+            invalidation.groupId());
+      }
     } catch (RuntimeException e) {
       log.warn(
           "Failed invalidating Helm group index token for group {}; durable retry retained",
-          groupId,
+          invalidation.groupId(),
           e);
     }
   }
 
-  private <T> void deferAfterCommit(Object resourceKey, T item, Consumer<T> resolver) {
+  private void deferAfterCommit(PendingInvalidation invalidation) {
     if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-      resolver.accept(item);
+      attemptQueuedInvalidation(invalidation);
       return;
     }
     @SuppressWarnings("unchecked")
-    Set<T> pending = (Set<T>) TransactionSynchronizationManager.getResource(resourceKey);
+    Map<Long, PendingInvalidation> pending =
+        (Map<Long, PendingInvalidation>) TransactionSynchronizationManager.getResource(
+            PENDING_GROUPS_KEY);
     if (pending == null) {
-      pending = new HashSet<>();
-      TransactionSynchronizationManager.bindResource(resourceKey, pending);
-      Set<T> snapshot = pending;
+      pending = new LinkedHashMap<>();
+      TransactionSynchronizationManager.bindResource(PENDING_GROUPS_KEY, pending);
+      Map<Long, PendingInvalidation> snapshot = pending;
       TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
         @Override
         public void afterCommit() {
-          for (T pendingItem : snapshot) resolver.accept(pendingItem);
+          for (PendingInvalidation pendingItem : snapshot.values()) {
+            attemptQueuedInvalidation(pendingItem);
+          }
         }
 
         @Override
         public void afterCompletion(int status) {
-          TransactionSynchronizationManager.unbindResourceIfPossible(resourceKey);
+          TransactionSynchronizationManager.unbindResourceIfPossible(PENDING_GROUPS_KEY);
         }
       });
     }
-    pending.add(item);
+    // Multiple writes to the same member inside one transaction leave only the newest marker token.
+    // A successful fast path can then acknowledge exactly that generation without deleting a
+    // concurrent invalidation committed by another transaction.
+    pending.put(invalidation.groupId(), invalidation);
   }
+
+  private record PendingInvalidation(long groupId, String requestToken) {}
 }
