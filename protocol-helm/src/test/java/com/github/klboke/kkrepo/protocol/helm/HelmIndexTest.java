@@ -106,6 +106,46 @@ class HelmIndexTest {
   }
 
   @Test
+  void proxyRewriteKeepsTheFirstReleaseWhenCoordinatesGenerateTheSamePath() {
+    byte[] upstream = """
+        apiVersion: v1
+        entries:
+          demo:
+            - apiVersion: v2
+              name: demo
+              version: 1-2.0
+              digest: first-digest
+              urls: [charts/first.tgz]
+          demo-1:
+            - apiVersion: v2
+              name: demo-1
+              version: '2.0'
+              digest: colliding-digest
+              urls: [charts/colliding.tgz]
+          safe:
+            - apiVersion: v2
+              name: safe
+              version: 3.0.0
+              digest: safe-digest
+              urls: [charts/safe.tgz]
+        """.getBytes(StandardCharsets.UTF_8);
+
+    HelmIndex.RewriteResult rewritten = HelmIndex.rewriteProxyIndex(
+        upstream, "https://repo.example.test/root/");
+
+    assertEquals(List.of(
+        new HelmIndex.Entry("demo", "1-2.0", List.of("demo-1-2.0.tgz")),
+        new HelmIndex.Entry("safe", "3.0.0", List.of("safe-3.0.0.tgz"))),
+        HelmIndex.entries(rewritten.body()));
+    assertEquals(
+        "https://repo.example.test/root/charts/first.tgz",
+        rewritten.remoteUrlsByLocalPath().get("demo-1-2.0.tgz"));
+    assertFalse(text(rewritten.body()).contains("colliding-digest"));
+    assertFalse(rewritten.remoteUrlsByLocalPath().containsValue(
+        "https://repo.example.test/root/charts/colliding.tgz"));
+  }
+
+  @Test
   void mergesGroupIndexesInMemberOrderAndKeepsUniqueReleases() {
     byte[] first = """
         apiVersion: v1
@@ -499,6 +539,101 @@ class HelmIndexTest {
         "https://cdn.example.test/demo.tgz",
         rewritten.remoteUrlsByLocalPath().get("demo-1.0.0.tgz"));
     assertFalse(rewritten.remoteUrlsByLocalPath().containsValue("file:///tmp/demo.tgz"));
+  }
+
+  @Test
+  void rejectsUrlsThatTheOutboundRequestPolicyCannotFetch() {
+    for (String url : List.of(
+        "https://user:pass@cdn.example.test/demo.tgz",
+        "https://cdn.example.test:0/demo.tgz",
+        "https://cdn.example.test:65536/demo.tgz")) {
+      byte[] body = ("apiVersion: v1\n"
+          + "entries: {demo: [{apiVersion: v2, name: demo, version: 1.0.0, "
+          + "urls: ['%s']}]}"
+          .formatted(url)).getBytes(StandardCharsets.UTF_8);
+
+      assertThrows(IllegalArgumentException.class, () -> HelmIndex.validateIndex(body));
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> HelmIndex.rewriteProxyIndex(body, "https://repo.example.test/"));
+    }
+
+    byte[] withFallback = """
+        apiVersion: v1
+        entries:
+          demo:
+            - apiVersion: v2
+              name: demo
+              version: 1.0.0
+              urls:
+                - https://user:pass@cdn.example.test/rejected.tgz
+                - https://cdn.example.test:0/rejected.tgz
+                - https://cdn.example.test/accepted.tgz
+        """.getBytes(StandardCharsets.UTF_8);
+
+    HelmIndex.RewriteResult rewritten = HelmIndex.rewriteProxyIndex(
+        withFallback, "https://repo.example.test/");
+
+    assertEquals(
+        "https://cdn.example.test/accepted.tgz",
+        rewritten.remoteUrlsByLocalPath().get("demo-1.0.0.tgz"));
+    assertEquals(2, rewritten.remoteUrlsByLocalPath().size());
+  }
+
+  @Test
+  void validatesIndexAndReleaseTimestampsBeforeRepublishingThem() {
+    byte[] valid = """
+        apiVersion: v1
+        generated: '2026-08-30T10:20:30.123456789-06:00'
+        entries:
+          demo:
+            - apiVersion: v2
+              name: demo
+              version: 1.0.0
+              created: 2026-08-30T10:20:30.123Z
+              urls: [demo.tgz]
+        """.getBytes(StandardCharsets.UTF_8);
+
+    HelmIndex.validateIndex(valid);
+    HelmIndex.rewriteProxyIndex(valid, "https://repo.example.test/");
+
+    byte[] malformedRelease = """
+        apiVersion: v1
+        entries:
+          demo:
+            - apiVersion: v2
+              name: demo
+              version: 1.0.0
+              created: yesterday
+              appVersion: malformed
+              urls: [demo.tgz]
+        """.getBytes(StandardCharsets.UTF_8);
+    byte[] validFallback = """
+        entries:
+          demo:
+            - apiVersion: v2
+              name: demo
+              version: 1.0.0
+              created: '2026-08-30T10:20:30+06:00'
+              appVersion: valid
+              urls: [demo.tgz]
+        """.getBytes(StandardCharsets.UTF_8);
+
+    assertThrows(IllegalArgumentException.class, () -> HelmIndex.validateIndex(malformedRelease));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> HelmIndex.rewriteProxyIndex(malformedRelease, "https://repo.example.test/"));
+    String merged = text(HelmIndex.mergeGroupIndexes(
+        List.of(malformedRelease, validFallback), Instant.EPOCH));
+    assertTrue(merged.contains("appVersion: valid"));
+    assertFalse(merged.contains("appVersion: malformed"));
+
+    byte[] malformedGenerated = """
+        apiVersion: v1
+        generated: yesterday
+        entries: {}
+        """.getBytes(StandardCharsets.UTF_8);
+    assertThrows(IllegalArgumentException.class, () -> HelmIndex.validateIndex(malformedGenerated));
   }
 
   @Test

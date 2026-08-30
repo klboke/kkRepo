@@ -9,6 +9,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -93,16 +94,26 @@ public final class HelmIndex {
     Map<String, Object> root = loadValidIndex(yamlBytes);
     Object rawEntries = root.get("entries");
     Map<String, String> remoteUrlsByLocalPath = new LinkedHashMap<>();
+    Map<String, String> releasesByLocalPath = new LinkedHashMap<>();
+    Set<String> acceptedReleases = new HashSet<>();
     if (rawEntries instanceof Map<?, ?> entries) {
+      Map<String, Object> rewrittenEntries = new LinkedHashMap<>();
       entries.forEach((name, rawVersions) -> {
         if (!(rawVersions instanceof List<?> versions)) return;
+        List<Object> acceptedVersions = new ArrayList<>(versions.size());
         for (Object rawVersion : versions) {
           if (!(rawVersion instanceof Map<?, ?> versionMap)) continue;
+          String releaseName = string(
+              versionMap.get("name"), name == null ? null : name.toString());
+          String releaseVersion = string(versionMap.get("version"), null);
+          String releaseKey = releaseName + '\0' + releaseVersion;
+          if (acceptedReleases.contains(releaseKey)) continue;
+          Map<String, String> releaseRemoteUrls = new LinkedHashMap<>();
           List<String> rewritten = rewriteEntry(
               name == null ? null : name.toString(),
               versionMap,
               remoteBaseUrl,
-              remoteUrlsByLocalPath);
+              releaseRemoteUrls);
           // A classic chart repository can only serve chart archives through the URLs published
           // in index.yaml. Keep explicit provenance mappings for .prov requests, but never expose
           // unsupported upstream extensions as chart alternatives to Helm clients.
@@ -113,12 +124,30 @@ public final class HelmIndex {
             throw new IllegalArgumentException(
                 "Invalid Helm index entry: expected a resolvable chart archive URL");
           }
+          // name-version is not an injective local-path encoding. Keep the first release that
+          // owns a generated chart path so every advertised digest resolves to that release's
+          // bytes, including for a direct proxy repository rather than only after group merging.
+          if (chartUrls.stream().anyMatch(url -> {
+            String owner = releasesByLocalPath.get(normalizeLocalPath(url));
+            return owner != null && !owner.equals(releaseKey);
+          })) {
+            continue;
+          }
+          acceptedReleases.add(releaseKey);
+          chartUrls.forEach(url ->
+              releasesByLocalPath.putIfAbsent(normalizeLocalPath(url), releaseKey));
+          releaseRemoteUrls.forEach(remoteUrlsByLocalPath::putIfAbsent);
           putRaw(
               versionMap,
               "urls",
               chartUrls);
+          acceptedVersions.add(versionMap);
+        }
+        if (!acceptedVersions.isEmpty()) {
+          rewrittenEntries.put(name.toString(), acceptedVersions);
         }
       });
+      root.put("entries", rewrittenEntries);
     }
     return new RewriteResult(dump(root), remoteUrlsByLocalPath);
   }
@@ -232,7 +261,8 @@ public final class HelmIndex {
                 || !isSafeChartPathSegment(version)
                 || !isValidChartVersion(version)
                 || !isValidChartApiVersion(string(versionMap.get("apiVersion"), null))
-                || !isValidChartType(versionMap.get("type"))) {
+                || !isValidChartType(versionMap.get("type"))
+                || !isValidTimestamp(versionMap.get("created"))) {
               continue;
             }
             String releaseKey = name + '\0' + version;
@@ -512,10 +542,15 @@ public final class HelmIndex {
     if (url == null || url.isBlank()) return false;
     try {
       URI uri = URI.create(url);
+      if (uri.isOpaque()
+          || uri.getUserInfo() != null
+          || uri.getPort() == 0
+          || uri.getPort() > 65535) {
+        return false;
+      }
       if (!uri.isAbsolute()) return true;
       String scheme = uri.getScheme();
-      return !uri.isOpaque()
-          && uri.getHost() != null
+      return uri.getHost() != null
           && !uri.getHost().isBlank()
           && ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme));
     } catch (RuntimeException ignored) {
@@ -526,6 +561,17 @@ public final class HelmIndex {
   private static boolean isValidChartType(Object value) {
     return value == null
         || (value instanceof String type && (type.isEmpty() || CHART_TYPES.contains(type)));
+  }
+
+  private static boolean isValidTimestamp(Object value) {
+    if (value == null || value instanceof java.util.Date || value instanceof Instant) return true;
+    if (!(value instanceof String timestamp) || timestamp.isBlank()) return false;
+    try {
+      Instant.parse(timestamp);
+      return true;
+    } catch (DateTimeParseException ignored) {
+      return false;
+    }
   }
 
   /** Derive the conventional provenance sibling without moving a query or fragment suffix. */
@@ -621,6 +667,9 @@ public final class HelmIndex {
     if (!(map.get("entries") instanceof Map<?, ?> entries)) {
       throw new IllegalArgumentException("Invalid Helm index entries: expected a mapping");
     }
+    if (!isValidTimestamp(map.get("generated"))) {
+      throw new IllegalArgumentException("Invalid Helm index generated timestamp");
+    }
     for (Map.Entry<?, ?> entry : entries.entrySet()) {
       if (!(entry.getKey() instanceof String name) || !isSafeChartPathSegment(name)) {
         throw new IllegalArgumentException("Invalid Helm index entry: expected a chart name");
@@ -653,6 +702,10 @@ public final class HelmIndex {
           throw new IllegalArgumentException(
               "Invalid Helm index entry " + name
                   + ": expected chart type application or library");
+        }
+        if (!isValidTimestamp(release.get("created"))) {
+          throw new IllegalArgumentException(
+              "Invalid Helm index entry " + name + ": expected an RFC 3339 creation timestamp");
         }
         if (!(release.get("version") instanceof String releaseVersion)
             || !isSafeChartPathSegment(releaseVersion)
