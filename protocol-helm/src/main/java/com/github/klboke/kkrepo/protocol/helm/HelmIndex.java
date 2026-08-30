@@ -130,6 +130,7 @@ public final class HelmIndex {
         || value.contains("\\")
         || value.contains("?")
         || value.contains("#")
+        || value.contains(":")
         || value.contains("%")
         || value.equals(".")
         || value.equals("..")

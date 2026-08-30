@@ -204,6 +204,10 @@ class HelmIndexTest {
             - name: 'demo?channel'
               version: 1.0.0
               urls: [demo.tgz]
+          'demo:channel':
+            - name: 'demo:channel'
+              version: 1.0.0
+              urls: [demo.tgz]
           demo:
             - name: demo
               version: '1.0.0%2fescape'
@@ -387,6 +391,7 @@ class HelmIndexTest {
         "entries: {alias: [{name: demo, version: 1.0.0, urls: [demo.tgz]}]}",
         "entries: {'../private': [{name: demo, version: 1.0.0, urls: [demo.tgz]}]}",
         "entries: {'demo?channel': [{name: demo, version: 1.0.0, urls: [demo.tgz]}]}",
+        "entries: {'demo:channel': [{name: 'demo:channel', version: 1.0.0, urls: [demo.tgz]}]}",
         "entries: {demo: [{name: 'demo#fragment', version: 1.0.0, urls: [demo.tgz]}]}",
         "entries: {demo: [{name: demo, version: '1.0.0%2fescape', urls: [demo.tgz]}]}",
         "entries: {demo: [{name: demo, version: '1.0.0%5cescape', urls: [demo.tgz]}]}",

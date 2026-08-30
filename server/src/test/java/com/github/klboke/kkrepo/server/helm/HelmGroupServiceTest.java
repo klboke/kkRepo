@@ -94,7 +94,8 @@ class HelmGroupServiceTest {
     RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of(hosted, nested));
     MavenResponse chart = asset("digest-b");
     MavenResponse provenance = MavenResponse.noBody(200);
-    when(fixture.memberCache.get(any(), any(), any())).thenReturn(Optional.empty());
+    when(fixture.memberCache.getIfCurrent(any(), any(), any(), any()))
+        .thenReturn(Optional.empty());
     when(fixture.hosted.get(hosted, "index.yaml", false))
         .thenAnswer(ignored -> index("entries: {}\n"));
     when(fixture.proxy.get(proxy, "index.yaml", false)).thenAnswer(ignored -> freshProxyIndex("""
@@ -492,7 +493,8 @@ class HelmGroupServiceTest {
     RepositoryRuntime proxy = runtime(3L, "upstream", RepositoryType.PROXY, true, List.of());
     RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of(hosted, proxy));
     MavenResponse expected = asset("same");
-    when(fixture.memberCache.get(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT))
+    when(fixture.memberCache.getIfCurrent(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, winnerGeneration(group)))
         .thenReturn(Optional.of(hosted.id()));
     when(fixture.hosted.get(hosted, "index.yaml", false)).thenAnswer(ignored -> index("""
         entries:
@@ -527,7 +529,8 @@ class HelmGroupServiceTest {
     RepositoryRuntime proxy = runtime(3L, "upstream", RepositoryType.PROXY, true, List.of());
     RepositoryRuntime group = runtime(10L, "all", RepositoryType.GROUP, true, List.of(hosted, proxy));
     MavenResponse expected = asset("proxy");
-    when(fixture.memberCache.get(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT))
+    when(fixture.memberCache.getIfCurrent(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, winnerGeneration(group)))
         .thenReturn(Optional.of(proxy.id()));
     when(fixture.hosted.get(hosted, "index.yaml", false))
         .thenAnswer(ignored -> index("entries: {}\n"));
@@ -680,7 +683,8 @@ class HelmGroupServiceTest {
     when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.of(cachedIndex));
     when(fixture.reader.serveSnapshot(cachedIndex, false, "index.yaml"))
         .thenAnswer(ignored -> selectedIndex("digest-b"));
-    when(fixture.memberCache.get(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT))
+    when(fixture.memberCache.getIfCurrent(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, winnerGeneration(group)))
         .thenReturn(Optional.of(hosted.id()));
     when(fixture.hosted.get(hosted, "index.yaml", false))
         .thenAnswer(ignored -> selectedIndex("digest-b"));
@@ -717,7 +721,8 @@ class HelmGroupServiceTest {
     when(fixture.indexCache.findFresh(eq(group), any())).thenReturn(Optional.of(cachedIndex));
     when(fixture.reader.serveSnapshot(cachedIndex, false, "index.yaml"))
         .thenAnswer(ignored -> selectedIndex("digest-b"));
-    when(fixture.memberCache.get(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT))
+    when(fixture.memberCache.getIfCurrent(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, winnerGeneration(group)))
         .thenReturn(Optional.of(hosted.id()));
     when(fixture.hosted.get(hosted, "index.yaml", false))
         .thenAnswer(ignored -> selectedIndex("digest-b"));
@@ -847,7 +852,8 @@ class HelmGroupServiceTest {
     AtomicInteger nestedIndexReads = new AtomicInteger();
     MavenResponse changedNestedBytes = asset("digest-two");
     MavenResponse expected = asset("digest-one");
-    when(fixture.memberCache.get(any(), any(), any())).thenReturn(Optional.empty());
+    when(fixture.memberCache.getIfCurrent(any(), any(), any(), any()))
+        .thenReturn(Optional.empty());
     when(fixture.hosted.get(nestedHosted, "index.yaml", false)).thenAnswer(ignored ->
         nestedIndexReads.incrementAndGet() <= 2
             ? selectedIndex("digest-one")

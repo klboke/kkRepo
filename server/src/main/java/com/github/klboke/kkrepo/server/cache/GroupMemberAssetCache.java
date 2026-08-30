@@ -58,16 +58,57 @@ public class GroupMemberAssetCache {
   }
 
   public Optional<Long> get(RepositoryRuntime group, String path, NexusCacheType type) {
+    return get(group, path, type, Optional.empty());
+  }
+
+  /**
+   * Reads a winner only when it was published under the captured durable generation and that
+   * generation remains current.
+   *
+   * <p>This avoids accepting an old shared entry through the node-local repository-token cache
+   * after another replica has already committed an invalidation.
+   */
+  public Optional<Long> getIfCurrent(
+      RepositoryRuntime group,
+      String path,
+      NexusCacheType type,
+      Generation generation) {
+    if (generation == null || generation.cacheToken() == null) {
+      return Optional.empty();
+    }
+    return get(group, path, type, Optional.of(generation));
+  }
+
+  private Optional<Long> get(
+      RepositoryRuntime group,
+      String path,
+      NexusCacheType type,
+      Optional<Generation> expectedGeneration) {
     if (!enabled || entryTtl.isZero() || group == null || path == null || cacheController == null) {
       return Optional.empty();
     }
+    NexusCacheType cacheType = type == null ? NexusCacheType.CONTENT : type;
+    Generation generation = expectedGeneration.orElse(null);
+    if (generation != null
+        && (generation.repositoryId() != group.id() || generation.cacheType() != cacheType)) {
+      return Optional.empty();
+    }
     try {
-      Optional<Entry> entry = sharedCache.getJson(NAMESPACE, key(group.id(), type, path), Entry.class);
+      Optional<Entry> entry = sharedCache.getJson(
+          NAMESPACE, key(group.id(), cacheType, path), Entry.class);
       if (entry.isEmpty()) {
         return Optional.empty();
       }
-      NexusCacheType cacheType = type == null ? NexusCacheType.CONTENT : type;
-      if (cacheController.isStale(group.id(), cacheType, entry.get().cacheInfo(), maxAgeMinutes, Instant.now())) {
+      if (generation != null
+          && !generation.cacheToken().equals(
+              cacheController.currentDurableToken(group.id(), cacheType))) {
+        return Optional.empty();
+      }
+      boolean stale = generation == null
+          ? cacheController.isStale(
+              group.id(), cacheType, entry.get().cacheInfo(), maxAgeMinutes, Instant.now())
+          : isStaleAtGeneration(entry.get().cacheInfo(), generation, Instant.now());
+      if (stale) {
         return Optional.empty();
       }
       return Optional.of(entry.get().memberRepositoryId());
@@ -75,6 +116,17 @@ public class GroupMemberAssetCache {
       log.warn("Failed reading group member asset cache for group {} path {}", group.id(), path, e);
       return Optional.empty();
     }
+  }
+
+  private boolean isStaleAtGeneration(
+      NexusLikeCacheInfo cacheInfo, Generation generation, Instant now) {
+    if (cacheInfo == null
+        || cacheInfo.lastVerified() == null
+        || cacheInfo.invalidated()
+        || !generation.cacheToken().equals(cacheInfo.cacheToken())) {
+      return true;
+    }
+    return !cacheInfo.lastVerified().plusSeconds(maxAgeMinutes * 60L).isAfter(now);
   }
 
   public void put(RepositoryRuntime group, String path, NexusCacheType type, long memberRepositoryId) {

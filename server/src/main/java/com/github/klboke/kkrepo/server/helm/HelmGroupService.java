@@ -346,7 +346,7 @@ public class HelmGroupService {
       HelmIndex.Release release = selection.release();
       Optional<Long> cachedMemberId = memberAssetCache == null
           ? Optional.empty()
-          : memberAssetCache.get(group, path, cacheType);
+          : memberAssetCache.getIfCurrent(group, path, cacheType, winnerGeneration);
       if (cachedMemberId.isPresent()) {
         RepositoryRuntime cachedMember = group.members().stream()
             .filter(HelmGroupService::eligible)

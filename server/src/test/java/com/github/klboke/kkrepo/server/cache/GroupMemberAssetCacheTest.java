@@ -17,6 +17,7 @@ import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -35,6 +36,15 @@ class GroupMemberAssetCacheTest {
     RepositoryRuntime group = runtime(999L, "helm-group");
 
     assertTrue(cache.captureGeneration(group, NexusCacheType.CONTENT).isEmpty());
+    assertTrue(cache.get(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT).isEmpty());
+    assertTrue(cache.getIfCurrent(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, null).isEmpty());
+    assertTrue(cache.getIfCurrent(
+        group,
+        "demo-1.0.0.tgz",
+        NexusCacheType.CONTENT,
+        new GroupMemberAssetCache.Generation(
+            group.id(), NexusCacheType.CONTENT, null)).isEmpty());
     assertDoesNotThrow(() -> cache.putIfCurrent(
         group,
         "demo-1.0.0.tgz",
@@ -85,6 +95,17 @@ class GroupMemberAssetCacheTest {
         "group-member-asset",
         "999:CONTENT:demo-1.0.0.tgz",
         GroupMemberAssetCache.Entry.class).isEmpty());
+    assertTrue(cache.getIfCurrent(
+        group,
+        "demo-1.0.0.tgz",
+        NexusCacheType.CONTENT,
+        new GroupMemberAssetCache.Generation(998L, NexusCacheType.CONTENT, "0")).isEmpty());
+    assertTrue(cache.getIfCurrent(
+        group,
+        "demo-1.0.0.tgz",
+        NexusCacheType.CONTENT,
+        new GroupMemberAssetCache.Generation(
+            group.id(), NexusCacheType.METADATA, "0")).isEmpty());
   }
 
   @Test
@@ -125,7 +146,55 @@ class GroupMemberAssetCacheTest {
 
     assertEquals(
         101L,
-        cache.get(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT).orElseThrow());
+        cache.getIfCurrent(
+            group, "demo-1.0.0.tgz", null, generation).orElseThrow());
+  }
+
+  @Test
+  void generationAwareReadContainsSharedCacheFailures() {
+    InMemorySharedCache shared = new InMemorySharedCache() {
+      @Override
+      public <T> Optional<T> getJson(
+          String namespace, String key, Class<T> type) {
+        throw new IllegalStateException("shared cache unavailable");
+      }
+    };
+    GroupMemberAssetCache cache = new GroupMemberAssetCache(
+        shared,
+        new StubRepositoryDao(),
+        new NexusLikeCacheController(new InMemoryVersionWatermark(), 60),
+        true,
+        86400);
+    RepositoryRuntime group = runtime(999L, "helm-group");
+    GroupMemberAssetCache.Generation generation = cache.captureGeneration(
+        group, NexusCacheType.CONTENT).orElseThrow();
+
+    assertTrue(cache.getIfCurrent(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, generation).isEmpty());
+  }
+
+  @Test
+  void generationAwareReadDoesNotTrustAStaleNodeLocalToken() {
+    InMemorySharedCache shared = new InMemorySharedCache();
+    InMemoryVersionWatermark watermark = new InMemoryVersionWatermark();
+    NexusLikeCacheController controller = new NexusLikeCacheController(watermark, 60);
+    GroupMemberAssetCache cache = new GroupMemberAssetCache(
+        shared, new StubRepositoryDao(), controller, true, 86400);
+    RepositoryRuntime group = runtime(999L, "helm-group");
+    cache.put(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, 101L);
+    GroupMemberAssetCache.Generation beforeInvalidation = cache.captureGeneration(
+        group, NexusCacheType.CONTENT).orElseThrow();
+
+    watermark.bump("repo:999:CONTENT");
+    GroupMemberAssetCache.Generation current = cache.captureGeneration(
+        group, NexusCacheType.CONTENT).orElseThrow();
+
+    assertEquals("0", controller.currentToken(group.id(), NexusCacheType.CONTENT));
+    assertEquals("1", current.cacheToken());
+    assertTrue(cache.getIfCurrent(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, beforeInvalidation).isEmpty());
+    assertTrue(cache.getIfCurrent(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, current).isEmpty());
   }
 
   @Test
