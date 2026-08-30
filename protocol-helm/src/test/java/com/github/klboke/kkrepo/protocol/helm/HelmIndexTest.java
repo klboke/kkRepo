@@ -70,6 +70,7 @@ class HelmIndexTest {
               urls:
                 - charts/demo-original.tgz
                 - https://cdn.example.test/demo-original.tgz.prov
+                - https://cdn.example.test/demo-original.zip
           fallback:
             - name: fallback
               version: 2.0.0
@@ -93,6 +94,11 @@ class HelmIndexTest {
         "https://repo.example.test/helm/fallback.tgz.prov",
         result.remoteUrlsByLocalPath().get("fallback-2.0.0.tgz.prov"));
     assertEquals(4, result.remoteUrlsByLocalPath().size());
+    assertEquals(
+        List.of(
+            new HelmIndex.Entry("demo", "1.2.3", List.of("demo-1.2.3.tgz")),
+            new HelmIndex.Entry("fallback", "2.0.0", List.of("fallback-2.0.0.tgz"))),
+        HelmIndex.entries(result.body()));
   }
 
   @Test
@@ -336,7 +342,7 @@ class HelmIndexTest {
   }
 
   @Test
-  void toleratesMalformedAndNonMappingIndexes() {
+  void rejectsUnserviceableUrlsAndKeepsTolerantReadHelpers() {
     byte[] malformedUrl = """
         entries:
           demo:
@@ -346,8 +352,9 @@ class HelmIndexTest {
                 - "http://["
         """.getBytes(StandardCharsets.UTF_8);
 
-    HelmIndex.RewriteResult rewritten = HelmIndex.rewriteProxyIndex(malformedUrl, null);
-    assertEquals("http://[", rewritten.remoteUrlsByLocalPath().get("["));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> HelmIndex.rewriteProxyIndex(malformedUrl, null));
     assertEquals(List.of(), HelmIndex.entries("[]".getBytes(StandardCharsets.UTF_8)));
     assertEquals(List.of(), HelmIndex.entries("entries: []".getBytes(StandardCharsets.UTF_8)));
   }
@@ -376,6 +383,7 @@ class HelmIndexTest {
         "entries: {demo: [{name: demo, version: 1.0.0, urls: error}]}",
         "entries: {demo: [{name: demo, version: 1.0.0, urls: [false]}]}",
         "entries: {demo: [{name: demo, version: 1.0.0, urls: [{nested: value}]}]}",
+        "entries: {demo: [{name: demo, version: 1.0.0, urls: [demo.zip, demo.tgz.prov]}]}",
         "entries: {alias: [{name: demo, version: 1.0.0, urls: [demo.tgz]}]}",
         "entries: {'../private': [{name: demo, version: 1.0.0, urls: [demo.tgz]}]}",
         "entries: {'demo?channel': [{name: demo, version: 1.0.0, urls: [demo.tgz]}]}",

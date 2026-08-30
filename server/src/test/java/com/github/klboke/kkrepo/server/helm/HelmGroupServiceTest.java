@@ -976,6 +976,36 @@ class HelmGroupServiceTest {
   }
 
   @Test
+  void isolatesHostedIndexGenerationFailuresWithoutCachingTheHealthySubset() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime unavailable = runtime(
+        1L, "unavailable", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime healthy = runtime(
+        2L, "healthy", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime group = runtime(
+        10L, "all", RepositoryType.GROUP, true, List.of(unavailable, healthy));
+    when(fixture.indexCache.enabled()).thenReturn(true);
+    when(fixture.hosted.get(unavailable, "index.yaml", false))
+        .thenThrow(new IllegalStateException("member blob store unavailable"));
+    when(fixture.hosted.get(healthy, "index.yaml", false)).thenReturn(index("""
+        entries:
+          healthy:
+            - name: healthy
+              version: 1.0.0
+              urls: [healthy.tgz]
+        """));
+
+    MavenResponse merged = fixture.service.get(group, "index.yaml", false);
+
+    assertEquals(
+        List.of(new HelmIndex.Entry("healthy", "1.0.0", List.of("healthy-1.0.0.tgz"))),
+        HelmIndex.entries(merged.body().readAllBytes()));
+    verify(fixture.writer, never()).writeBytes(
+        any(), any(), any(Long.class), any(), any(), any(), any(), any(), anyMap(), anyMap(),
+        any(), any());
+  }
+
+  @Test
   void doesNotCacheAGroupIndexBuiltFromAStaleProxyFallback() throws Exception {
     Fixture fixture = fixture();
     RepositoryRuntime healthy = runtime(

@@ -79,8 +79,18 @@ public final class HelmIndex {
         if (!(rawVersions instanceof List<?> versions)) return;
         for (Object rawVersion : versions) {
           if (!(rawVersion instanceof Map<?, ?> versionMap)) continue;
-          rewriteEntry(name == null ? null : name.toString(), versionMap, remoteBaseUrl,
+          List<String> rewritten = rewriteEntry(
+              name == null ? null : name.toString(),
+              versionMap,
+              remoteBaseUrl,
               remoteUrlsByLocalPath);
+          // A classic chart repository can only serve chart archives through the URLs published
+          // in index.yaml. Keep explicit provenance mappings for .prov requests, but never expose
+          // unsupported upstream extensions as chart alternatives to Helm clients.
+          putRaw(
+              versionMap,
+              "urls",
+              rewritten.stream().filter(HelmIndex::isChartArchiveUrl).toList());
         }
       });
     }
@@ -391,6 +401,7 @@ public final class HelmIndex {
     for (String url : urls) {
       String local = localUrl(name, version, url);
       if (local == null || local.isBlank()) continue;
+      if (!isChartArchiveUrl(local) && !isProvenanceUrl(local)) continue;
       rewritten.add(local);
       String remote = resolveRemoteUrl(remoteBaseUrl, url);
       if (local.toLowerCase().endsWith(".tgz.prov")) {
@@ -409,6 +420,10 @@ public final class HelmIndex {
 
   private static boolean isChartArchiveUrl(String url) {
     return normalizeLocalPath(url).toLowerCase(java.util.Locale.ROOT).endsWith(".tgz");
+  }
+
+  private static boolean isProvenanceUrl(String url) {
+    return normalizeLocalPath(url).toLowerCase(java.util.Locale.ROOT).endsWith(".tgz.prov");
   }
 
   /** Derive the conventional provenance sibling without moving a query or fragment suffix. */
@@ -531,6 +546,10 @@ public final class HelmIndex {
         if (list.stream().anyMatch(url -> !(url instanceof String value) || value.isBlank())) {
           throw new IllegalArgumentException(
               "Invalid Helm index entry " + name + ": expected non-empty string URLs");
+        }
+        if (list.stream().map(String.class::cast).noneMatch(HelmIndex::isChartArchiveUrl)) {
+          throw new IllegalArgumentException(
+              "Invalid Helm index entry " + name + ": expected a chart archive URL");
         }
       }
     }

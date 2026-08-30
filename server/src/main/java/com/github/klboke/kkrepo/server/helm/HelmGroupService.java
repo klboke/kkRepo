@@ -274,6 +274,17 @@ public class HelmGroupService {
           | MavenExceptions.MethodNotAllowed ignored) {
         complete = false;
         continue;
+      } catch (RuntimeException e) {
+        // Hosted index generation can fail before it reaches a protocol exception (for example,
+        // when the member blob store is unavailable). Keep that failure at the member boundary so
+        // healthy members remain readable, but never publish the degraded merge as fresh.
+        log.warn(
+            "Failed reading Helm member index {} for group {}; isolating member",
+            member.name(),
+            group.name(),
+            e);
+        complete = false;
+        continue;
       }
       byte[] body;
       try {
