@@ -119,12 +119,14 @@ class HelmGroupServiceTest {
     assertEquals(200, provenanceHead.status());
     assertFalse(provenanceHead.hasBody());
 
-    verify(fixture.memberCache).put(nested, "demo-1.0.0.tgz", NexusCacheType.CONTENT, proxy.id());
-    verify(fixture.memberCache).put(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, nested.id());
-    verify(fixture.memberCache).put(
-        nested, "demo-1.0.0.tgz.prov", NexusCacheType.CONTENT, proxy.id());
-    verify(fixture.memberCache).put(
-        group, "demo-1.0.0.tgz.prov", NexusCacheType.CONTENT, nested.id());
+    verify(fixture.memberCache).putIfCurrent(
+        nested, "demo-1.0.0.tgz", NexusCacheType.CONTENT, proxy.id(), winnerGeneration(nested));
+    verify(fixture.memberCache).putIfCurrent(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, nested.id(), winnerGeneration(group));
+    verify(fixture.memberCache).putIfCurrent(
+        nested, "demo-1.0.0.tgz.prov", NexusCacheType.CONTENT, proxy.id(), winnerGeneration(nested));
+    verify(fixture.memberCache).putIfCurrent(
+        group, "demo-1.0.0.tgz.prov", NexusCacheType.CONTENT, nested.id(), winnerGeneration(group));
   }
 
   @Test
@@ -513,7 +515,8 @@ class HelmGroupServiceTest {
 
     assertSame(expected, fixture.service.get(group, "demo-1.0.0.tgz", false));
     verify(fixture.memberCache).evict(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT);
-    verify(fixture.memberCache).put(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, proxy.id());
+    verify(fixture.memberCache).putIfCurrent(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, proxy.id(), winnerGeneration(group));
   }
 
   @Test
@@ -592,10 +595,10 @@ class HelmGroupServiceTest {
 
     verify(fixture.hosted, never()).get(hosted, "demo-1.0.0.tgz", false);
     verify(fixture.hosted, never()).get(hosted, "demo-1.0.0.tgz.prov", false);
-    verify(fixture.memberCache).put(
-        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, proxy.id());
-    verify(fixture.memberCache).put(
-        group, "demo-1.0.0.tgz.prov", NexusCacheType.CONTENT, proxy.id());
+    verify(fixture.memberCache).putIfCurrent(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, proxy.id(), winnerGeneration(group));
+    verify(fixture.memberCache).putIfCurrent(
+        group, "demo-1.0.0.tgz.prov", NexusCacheType.CONTENT, proxy.id(), winnerGeneration(group));
   }
 
   @Test
@@ -632,8 +635,8 @@ class HelmGroupServiceTest {
 
     assertSame(expected, fixture.service.get(group, "demo-1.0.0.tgz", false));
     assertTrue(missingBodyOpened.get());
-    verify(fixture.memberCache).put(
-        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, fallback.id());
+    verify(fixture.memberCache).putIfCurrent(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, fallback.id(), winnerGeneration(group));
   }
 
   @Test
@@ -668,8 +671,8 @@ class HelmGroupServiceTest {
 
     assertSame(expected, fixture.service.get(group, "demo-1.0.0.tgz", false));
     verify(fixture.memberCache).evict(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT);
-    verify(fixture.memberCache).put(
-        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, proxy.id());
+    verify(fixture.memberCache).putIfCurrent(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, proxy.id(), winnerGeneration(group));
   }
 
   @Test
@@ -734,8 +737,8 @@ class HelmGroupServiceTest {
     verify(fixture.proxy).get(proxy, "demo-1.0.0.tgz", false);
     verify(fixture.proxy, never()).get(proxy, "demo-1.0.0.tgz", true);
     verify(fixture.memberCache).evict(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT);
-    verify(fixture.memberCache).put(
-        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, proxy.id());
+    verify(fixture.memberCache).putIfCurrent(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, proxy.id(), winnerGeneration(group));
   }
 
   @Test
@@ -776,8 +779,8 @@ class HelmGroupServiceTest {
 
     assertSame(expected, fixture.service.get(group, "demo-1.0.0.tgz", false));
     assertTrue(mismatchedBodyClosed.get());
-    verify(fixture.memberCache).put(
-        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, fallback.id());
+    verify(fixture.memberCache).putIfCurrent(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, fallback.id(), winnerGeneration(group));
   }
 
   @Test
@@ -797,8 +800,8 @@ class HelmGroupServiceTest {
     when(fixture.proxy.get(proxy, "demo-1.0.0.tgz", false)).thenReturn(expected);
 
     assertSame(expected, fixture.service.get(group, "demo-1.0.0.tgz", false));
-    verify(fixture.memberCache).put(
-        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, proxy.id());
+    verify(fixture.memberCache).putIfCurrent(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, proxy.id(), winnerGeneration(group));
   }
 
   @Test
@@ -828,8 +831,8 @@ class HelmGroupServiceTest {
 
     assertSame(expected, fixture.service.get(group, "demo-1.0.0.tgz", false));
     assertEquals(4, nestedIndexReads.get());
-    verify(fixture.memberCache).put(
-        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, fallback.id());
+    verify(fixture.memberCache).putIfCurrent(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, fallback.id(), winnerGeneration(group));
   }
 
   @Test
@@ -1213,6 +1216,12 @@ class HelmGroupServiceTest {
             invocation.getArgument(0), HelmHostedService.INDEX_PATH, false));
     when(indexCache.enabled()).thenReturn(false);
     when(indexCache.memberAssetGeneration(any())).thenReturn("member-generation");
+    when(memberCache.captureGeneration(any(), any())).thenAnswer(invocation -> {
+      RepositoryRuntime repository = invocation.getArgument(0);
+      NexusCacheType cacheType = invocation.getArgument(1);
+      return Optional.of(new GroupMemberAssetCache.Generation(
+          repository.id(), cacheType, "winner-generation"));
+    });
     return new Fixture(
         hosted,
         proxy,
@@ -1223,6 +1232,12 @@ class HelmGroupServiceTest {
         reader,
         storage,
         new HelmGroupService(hosted, proxy, indexCache, memberCache, registry, writer, reader));
+  }
+
+  private static GroupMemberAssetCache.Generation winnerGeneration(
+      RepositoryRuntime repository) {
+    return new GroupMemberAssetCache.Generation(
+        repository.id(), NexusCacheType.CONTENT, "winner-generation");
   }
 
   private static HelmAssetWriter.Stored storedIndex() {

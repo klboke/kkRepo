@@ -75,6 +75,18 @@ public class NexusLikeCacheController {
     }
   }
 
+  /**
+   * Reads the durable cache token without consulting the node-local hot cache.
+   *
+   * <p>Callers that fence publication against concurrent invalidation must use this method both
+   * before doing work and immediately before publishing the result. Unlike {@link
+   * #currentToken(long, NexusCacheType)}, persistence failures are propagated so those callers can
+   * fail closed instead of publishing under a synthetic token.
+   */
+  public String currentDurableToken(long repositoryId, NexusCacheType type) {
+    return loadToken(tokenKey(repositoryId, type));
+  }
+
   public void invalidate(long repositoryId, NexusCacheType type) {
     try {
       invalidateOrThrow(repositoryId, type);

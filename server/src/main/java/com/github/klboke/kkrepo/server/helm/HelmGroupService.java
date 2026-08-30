@@ -339,6 +339,9 @@ public class HelmGroupService {
     // group index has its own METADATA watermark and must not be expired by a package cache fill.
     NexusCacheType cacheType = NexusCacheType.CONTENT;
     try {
+      GroupMemberAssetCache.Generation winnerGeneration = memberAssetCache == null
+          ? null
+          : memberAssetCache.captureGeneration(group, cacheType).orElse(null);
       HelmIndex.Release release = advertisedRelease(group, path);
       Optional<Long> cachedMemberId = memberAssetCache == null
           ? Optional.empty()
@@ -380,7 +383,8 @@ public class HelmGroupService {
           }
           response = materializeCandidateBody(member, path, response, headOnly);
           if (memberAssetCache != null) {
-            memberAssetCache.put(group, path, cacheType, member.id());
+            memberAssetCache.putIfCurrent(
+                group, path, cacheType, member.id(), winnerGeneration);
           }
           return response;
         } catch (MavenExceptions.MavenNotFoundException

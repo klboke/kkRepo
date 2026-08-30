@@ -232,7 +232,7 @@ class HelmProxyServiceTest {
   }
 
   @Test
-  void translatesPackageCacheWriteFailuresToBadUpstream() throws Exception {
+  void doesNotBlockHealthyUpstreamWhenPackageCacheWriteFails() throws Exception {
     Fixture fixture = fixture();
     RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 1);
     CachedAssetMetadata index = snapshot(
@@ -260,6 +260,74 @@ class HelmProxyServiceTest {
         () -> fixture.service.get(runtime, "demo-1.0.0.tgz", false));
 
     assertTrue(failure.getMessage().contains("Failed caching upstream Helm content"));
+    verify(fixture.proxyStateDao, never()).recordFailure(
+        eq(runtime.id()), anyLong(), anyString(), any());
+    verify(fixture.proxyStateDao, never()).recordSuccess(eq(runtime.id()), any());
+  }
+
+  @Test
+  void servesStalePackageWithoutBlockingHealthyUpstreamWhenCacheWriteFails()
+      throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 1);
+    CachedAssetMetadata index = snapshot(
+        "index.yaml",
+        Instant.now(),
+        Map.of("remoteUrls", Map.of(
+            "demo-1.0.0.tgz", "https://cdn.example.test/demo-1.0.0.tgz")));
+    CachedAssetMetadata stale = snapshot("demo-1.0.0.tgz", Instant.EPOCH, Map.of());
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.cache.find(eq(runtime.id()), anyString(), any()))
+        .thenAnswer(invocation -> Optional.of(
+            invocation.getArgument(1).equals("index.yaml") ? index : stale));
+    when(fixture.reader.serveSnapshot(stale, false, "demo-1.0.0.tgz"))
+        .thenReturn(expected);
+    when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
+    respond(fixture.fetcher, new HttpRemoteFetcher.Result(
+        200,
+        Map.of("Content-Type", "application/gzip"),
+        new ByteArrayInputStream(new byte[] {1, 2, 3})));
+    when(fixture.writer.write(
+        eq(runtime), eq(fixture.storage), eq(7L), eq("demo-1.0.0.tgz"), any(),
+        eq("application/gzip"), eq(HelmAssetKind.PACKAGE), isNull(), any(), any(),
+        eq("proxy"), isNull(), eq(true)))
+        .thenThrow(new IllegalStateException("object storage unavailable"));
+
+    assertSame(expected, fixture.service.get(runtime, "demo-1.0.0.tgz", false));
+    verify(fixture.proxyStateDao, never()).recordFailure(
+        eq(runtime.id()), anyLong(), anyString(), any());
+    verify(fixture.proxyStateDao, never()).recordSuccess(eq(runtime.id()), any());
+  }
+
+  @Test
+  void keepsInvalidUpstreamChartsInRemoteFailureAccounting() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 1);
+    CachedAssetMetadata index = snapshot(
+        "index.yaml",
+        Instant.now(),
+        Map.of("remoteUrls", Map.of(
+            "demo-1.0.0.tgz", "https://cdn.example.test/demo-1.0.0.tgz")));
+    when(fixture.cache.find(eq(runtime.id()), anyString(), any()))
+        .thenAnswer(invocation -> invocation.getArgument(1).equals("index.yaml")
+            ? Optional.of(index)
+            : Optional.empty());
+    when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
+    respond(fixture.fetcher, new HttpRemoteFetcher.Result(
+        200,
+        Map.of("Content-Type", "application/gzip"),
+        new ByteArrayInputStream(new byte[] {1, 2, 3})));
+    when(fixture.writer.write(
+        eq(runtime), eq(fixture.storage), eq(7L), eq("demo-1.0.0.tgz"), any(),
+        eq("application/gzip"), eq(HelmAssetKind.PACKAGE), isNull(), any(), any(),
+        eq("proxy"), isNull(), eq(true)))
+        .thenThrow(new IllegalArgumentException("invalid chart archive"));
+
+    MavenExceptions.BadUpstreamException failure = assertThrows(
+        MavenExceptions.BadUpstreamException.class,
+        () -> fixture.service.get(runtime, "demo-1.0.0.tgz", false));
+
+    assertTrue(failure.getMessage().contains("Invalid upstream Helm chart"));
     verify(fixture.proxyStateDao).recordFailure(
         eq(runtime.id()), eq(30L), anyString(), any());
   }
@@ -560,8 +628,8 @@ class HelmProxyServiceTest {
     assertEquals(
         Boolean.FALSE,
         response.internalAttribute(HelmProxyService.INDEX_AUTHORITATIVE_ATTRIBUTE));
-    verify(fixture.proxyStateDao).recordFailure(
-        eq(runtime.id()), eq(30L), anyString(), any());
+    verify(fixture.proxyStateDao, never()).recordFailure(
+        eq(runtime.id()), anyLong(), anyString(), any());
     verify(fixture.proxyStateDao, never()).recordSuccess(eq(runtime.id()), any());
   }
 

@@ -239,15 +239,13 @@ public class HelmProxyService {
             HelmAssetWriter.Stored stored = cacheIndex(
                 runtime, storage, blobStoreId, result, !headOnly);
             response = responseFromStored(stored, headOnly);
-          } catch (IllegalArgumentException e) {
+          } catch (IllegalArgumentException | UpstreamBodyReadException e) {
             throw e;
           } catch (RuntimeException e) {
-            return handleIndexUpstreamFailure(
-                runtime,
+            return handleIndexLocalCacheFailure(
                 cached,
                 headOnly,
-                "Failed caching upstream Helm index: " + e.getMessage(),
-                now);
+                "Failed caching upstream Helm index: " + e.getMessage());
           }
           proxyStateDao.recordSuccess(runtime.id(), now);
           return authoritativeIndexResponse(
@@ -357,14 +355,14 @@ public class HelmProxyService {
                 ProxyRequestAudit.currentClientIp(),
                 !headOnly);
             response = responseFromStored(stored, headOnly);
+          } catch (IllegalArgumentException | UpstreamBodyReadException e) {
+            throw e;
           } catch (RuntimeException e) {
-            return handleUpstreamFailure(
-                runtime,
+            return handleLocalCacheFailure(
                 path,
                 cached,
                 headOnly,
-                "Failed caching upstream Helm content: " + e.getMessage(),
-                now);
+                "Failed caching upstream Helm content: " + e.getMessage());
           }
           proxyStateDao.recordSuccess(runtime.id(), now);
           return response;
@@ -481,6 +479,23 @@ public class HelmProxyService {
       Instant now) {
     return staleIndexResponse(handleUpstreamFailure(
         runtime, HelmHostedService.INDEX_PATH, cached, headOnly, error, now));
+  }
+
+  private MavenResponse handleLocalCacheFailure(
+      String path,
+      Optional<CachedAssetMetadata> cached,
+      boolean headOnly,
+      String error) {
+    if (cached.isPresent()) {
+      return reader.serveSnapshot(cached.get(), headOnly, path);
+    }
+    throw new MavenExceptions.BadUpstreamException(error);
+  }
+
+  private MavenResponse handleIndexLocalCacheFailure(
+      Optional<CachedAssetMetadata> cached, boolean headOnly, String error) {
+    return staleIndexResponse(handleLocalCacheFailure(
+        HelmHostedService.INDEX_PATH, cached, headOnly, error));
   }
 
   private static MavenResponse staleIndexResponse(MavenResponse response) {

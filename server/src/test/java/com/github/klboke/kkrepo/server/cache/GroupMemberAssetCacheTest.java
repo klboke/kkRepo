@@ -1,6 +1,8 @@
 package com.github.klboke.kkrepo.server.cache;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
@@ -11,6 +13,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
 import com.github.klboke.kkrepo.server.support.InMemoryVersionWatermark;
 import com.github.klboke.kkrepo.server.support.dao.RepositoryDaoAdapter;
+import java.time.Duration;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,6 +22,132 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 class GroupMemberAssetCacheTest {
+
+  @Test
+  void disabledCacheDoesNotCaptureOrPublishWinnerGenerations() {
+    InMemorySharedCache shared = new InMemorySharedCache();
+    GroupMemberAssetCache cache = new GroupMemberAssetCache(
+        shared,
+        new StubRepositoryDao(),
+        new NexusLikeCacheController(new InMemoryVersionWatermark(), 60),
+        false,
+        86400);
+    RepositoryRuntime group = runtime(999L, "helm-group");
+
+    assertTrue(cache.captureGeneration(group, NexusCacheType.CONTENT).isEmpty());
+    assertDoesNotThrow(() -> cache.putIfCurrent(
+        group,
+        "demo-1.0.0.tgz",
+        NexusCacheType.CONTENT,
+        101L,
+        new GroupMemberAssetCache.Generation(999L, NexusCacheType.CONTENT, "0")));
+    assertTrue(shared.getJson(
+        "group-member-asset",
+        "999:CONTENT:demo-1.0.0.tgz",
+        GroupMemberAssetCache.Entry.class).isEmpty());
+  }
+
+  @Test
+  void generationCaptureFailsClosedWhenTheDurableWatermarkIsUnavailable() {
+    NexusLikeCacheController controller = new NexusLikeCacheController(
+        new InMemoryVersionWatermark(), 60) {
+      @Override
+      public String currentDurableToken(long repositoryId, NexusCacheType type) {
+        throw new IllegalStateException("database unavailable");
+      }
+    };
+    GroupMemberAssetCache cache = new GroupMemberAssetCache(
+        new InMemorySharedCache(), new StubRepositoryDao(), controller, true, 86400);
+
+    assertTrue(cache.captureGeneration(
+        runtime(999L, "helm-group"), NexusCacheType.CONTENT).isEmpty());
+  }
+
+  @Test
+  void conditionalPublicationRejectsAGenerationCapturedForAnotherGroup() {
+    InMemorySharedCache shared = new InMemorySharedCache();
+    GroupMemberAssetCache cache = new GroupMemberAssetCache(
+        shared,
+        new StubRepositoryDao(),
+        new NexusLikeCacheController(new InMemoryVersionWatermark(), 60),
+        true,
+        86400);
+    RepositoryRuntime group = runtime(999L, "helm-group");
+
+    cache.putIfCurrent(
+        group,
+        "demo-1.0.0.tgz",
+        NexusCacheType.CONTENT,
+        101L,
+        new GroupMemberAssetCache.Generation(998L, NexusCacheType.CONTENT, "0"));
+
+    assertTrue(shared.getJson(
+        "group-member-asset",
+        "999:CONTENT:demo-1.0.0.tgz",
+        GroupMemberAssetCache.Entry.class).isEmpty());
+  }
+
+  @Test
+  void conditionalPublicationContainsSharedCacheWriteFailures() {
+    InMemorySharedCache shared = new InMemorySharedCache() {
+      @Override
+      public void putJson(String namespace, String key, Object value, Duration ttl) {
+        throw new IllegalStateException("shared cache unavailable");
+      }
+    };
+    GroupMemberAssetCache cache = new GroupMemberAssetCache(
+        shared,
+        new StubRepositoryDao(),
+        new NexusLikeCacheController(new InMemoryVersionWatermark(), 60),
+        true,
+        86400);
+    RepositoryRuntime group = runtime(999L, "helm-group");
+    GroupMemberAssetCache.Generation generation = cache.captureGeneration(
+        group, NexusCacheType.CONTENT).orElseThrow();
+
+    assertDoesNotThrow(() -> cache.putIfCurrent(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, 101L, generation));
+  }
+
+  @Test
+  void publishesWinnerWhenCapturedGenerationRemainsCurrent() {
+    InMemorySharedCache shared = new InMemorySharedCache();
+    NexusLikeCacheController controller = new NexusLikeCacheController(
+        new InMemoryVersionWatermark(), 60);
+    GroupMemberAssetCache cache = new GroupMemberAssetCache(
+        shared, new StubRepositoryDao(), controller, true, 86400);
+    RepositoryRuntime group = runtime(999L, "helm-group");
+    GroupMemberAssetCache.Generation generation = cache.captureGeneration(
+        group, NexusCacheType.CONTENT).orElseThrow();
+
+    cache.putIfCurrent(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, 101L, generation);
+
+    assertEquals(
+        101L,
+        cache.get(group, "demo-1.0.0.tgz", NexusCacheType.CONTENT).orElseThrow());
+  }
+
+  @Test
+  void doesNotPublishWinnerWhenInvalidatedDuringResolution() {
+    InMemorySharedCache shared = new InMemorySharedCache();
+    NexusLikeCacheController controller = new NexusLikeCacheController(
+        new InMemoryVersionWatermark(), 60);
+    GroupMemberAssetCache cache = new GroupMemberAssetCache(
+        shared, new StubRepositoryDao(), controller, true, 86400);
+    RepositoryRuntime group = runtime(999L, "helm-group");
+    GroupMemberAssetCache.Generation generation = cache.captureGeneration(
+        group, NexusCacheType.CONTENT).orElseThrow();
+
+    controller.invalidateOrThrow(group.id(), NexusCacheType.CONTENT);
+    cache.putIfCurrent(
+        group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, 101L, generation);
+
+    assertFalse(shared.getJson(
+        "group-member-asset",
+        "999:CONTENT:demo-1.0.0.tgz",
+        GroupMemberAssetCache.Entry.class).isPresent());
+  }
 
   @Test
   void cachedMemberIsIgnoredAfterContainingGroupTokenInvalidation() {

@@ -93,6 +93,67 @@ public class GroupMemberAssetCache {
     }
   }
 
+  /** Captures the durable generation that must remain current while a winner is resolved. */
+  public Optional<Generation> captureGeneration(
+      RepositoryRuntime group, NexusCacheType type) {
+    if (!enabled || entryTtl.isZero() || group == null || cacheController == null) {
+      return Optional.empty();
+    }
+    NexusCacheType cacheType = type == null ? NexusCacheType.CONTENT : type;
+    try {
+      return Optional.of(new Generation(
+          group.id(),
+          cacheType,
+          cacheController.currentDurableToken(group.id(), cacheType)));
+    } catch (RuntimeException e) {
+      log.warn("Failed capturing group member asset generation for group {}", group.id(), e);
+      return Optional.empty();
+    }
+  }
+
+  /**
+   * Publishes a resolved winner only if no durable invalidation happened during resolution.
+   *
+   * <p>The entry deliberately carries the generation captured before resolution. If invalidation
+   * races the final shared-cache write after the comparison, readers still reject the entry by its
+   * old token.
+   */
+  public void putIfCurrent(
+      RepositoryRuntime group,
+      String path,
+      NexusCacheType type,
+      long memberRepositoryId,
+      Generation generation) {
+    if (!enabled
+        || entryTtl.isZero()
+        || group == null
+        || path == null
+        || cacheController == null
+        || generation == null) {
+      return;
+    }
+    NexusCacheType cacheType = type == null ? NexusCacheType.CONTENT : type;
+    if (generation.repositoryId() != group.id() || generation.cacheType() != cacheType) {
+      return;
+    }
+    try {
+      if (!generation.cacheToken().equals(
+          cacheController.currentDurableToken(group.id(), cacheType))) {
+        return;
+      }
+      sharedCache.putJson(
+          NAMESPACE,
+          key(group.id(), cacheType, path),
+          new Entry(
+              memberRepositoryId,
+              new NexusLikeCacheInfo(Instant.now(), generation.cacheToken(), cacheType)),
+          entryTtl);
+    } catch (RuntimeException e) {
+      log.warn("Failed conditionally writing group member asset cache for group {} path {}",
+          group.id(), path, e);
+    }
+  }
+
   public void evict(RepositoryRuntime group, String path, NexusCacheType type) {
     if (!enabled || group == null || path == null) {
       return;
@@ -216,6 +277,9 @@ public class GroupMemberAssetCache {
   }
 
   public record Entry(long memberRepositoryId, NexusLikeCacheInfo cacheInfo) {}
+
+  public record Generation(
+      long repositoryId, NexusCacheType cacheType, String cacheToken) {}
 
   private record MemberInvalidation(long memberRepositoryId, NexusCacheType cacheType) {}
 }
