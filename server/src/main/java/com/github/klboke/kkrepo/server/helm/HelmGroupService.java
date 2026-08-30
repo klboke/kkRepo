@@ -342,7 +342,8 @@ public class HelmGroupService {
       GroupMemberAssetCache.Generation winnerGeneration = memberAssetCache == null
           ? null
           : memberAssetCache.captureGeneration(group, cacheType).orElse(null);
-      HelmIndex.Release release = advertisedRelease(group, path);
+      ReleaseSelection selection = advertisedRelease(group, path);
+      HelmIndex.Release release = selection.release();
       Optional<Long> cachedMemberId = memberAssetCache == null
           ? Optional.empty()
           : memberAssetCache.get(group, path, cacheType);
@@ -382,7 +383,7 @@ public class HelmGroupService {
             continue;
           }
           response = materializeCandidateBody(member, path, response, headOnly);
-          if (memberAssetCache != null) {
+          if (memberAssetCache != null && selection.complete()) {
             memberAssetCache.putIfCurrent(
                 group, path, cacheType, member.id(), winnerGeneration);
           }
@@ -421,12 +422,13 @@ public class HelmGroupService {
     }
   }
 
-  private HelmIndex.Release advertisedRelease(RepositoryRuntime group, String path) {
+  private ReleaseSelection advertisedRelease(RepositoryRuntime group, String path) {
     IndexResult index = null;
     try {
       index = getIndex(group, false, new HashSet<>(), path);
-      return index.release()
+      HelmIndex.Release release = index.release()
           .orElseThrow(() -> new MavenExceptions.MavenNotFoundException(path));
+      return new ReleaseSelection(release, index.complete());
     } catch (MavenExceptions.MavenNotFoundException e) {
       throw e;
     } catch (RuntimeException e) {
@@ -593,6 +595,8 @@ public class HelmGroupService {
       release = release == null ? Optional.empty() : release;
     }
   }
+
+  private record ReleaseSelection(HelmIndex.Release release, boolean complete) {}
 
   private record MemberIndexes(List<byte[]> indexes, boolean complete, Instant freshUntil) {
   }

@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -96,7 +97,7 @@ class HelmGroupServiceTest {
     when(fixture.memberCache.get(any(), any(), any())).thenReturn(Optional.empty());
     when(fixture.hosted.get(hosted, "index.yaml", false))
         .thenAnswer(ignored -> index("entries: {}\n"));
-    when(fixture.proxy.get(proxy, "index.yaml", false)).thenAnswer(ignored -> index("""
+    when(fixture.proxy.get(proxy, "index.yaml", false)).thenAnswer(ignored -> freshProxyIndex("""
         entries:
           demo:
             - name: demo
@@ -501,7 +502,7 @@ class HelmGroupServiceTest {
               digest: same
               urls: [demo-1.0.0.tgz]
         """));
-    when(fixture.proxy.get(proxy, "index.yaml", false)).thenAnswer(ignored -> index("""
+    when(fixture.proxy.get(proxy, "index.yaml", false)).thenAnswer(ignored -> freshProxyIndex("""
         entries:
           demo:
             - name: demo
@@ -637,6 +638,34 @@ class HelmGroupServiceTest {
     assertTrue(missingBodyOpened.get());
     verify(fixture.memberCache).putIfCurrent(
         group, "demo-1.0.0.tgz", NexusCacheType.CONTENT, fallback.id(), winnerGeneration(group));
+  }
+
+  @Test
+  void doesNotCacheWinnerSelectedFromAPartialMemberIndex() {
+    Fixture fixture = fixture();
+    RepositoryRuntime unavailable = runtime(
+        2L, "unavailable", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime fallback = runtime(
+        3L, "fallback", RepositoryType.PROXY, true, List.of());
+    RepositoryRuntime group = runtime(
+        10L, "all", RepositoryType.GROUP, true, List.of(unavailable, fallback));
+    MavenResponse expected = asset(null);
+    when(fixture.hosted.get(unavailable, "index.yaml", false))
+        .thenThrow(new MavenExceptions.BadUpstreamException("temporarily unavailable"));
+    when(fixture.proxy.get(fallback, "index.yaml", false)).thenAnswer(ignored -> freshProxyIndex("""
+        entries:
+          demo:
+            - name: demo
+              version: 1.0.0
+              urls: [demo-1.0.0.tgz]
+        """));
+    when(fixture.proxy.get(fallback, "demo-1.0.0.tgz", false)).thenReturn(expected);
+
+    assertSame(expected, fixture.service.get(group, "demo-1.0.0.tgz", false));
+
+    verify(fixture.memberCache, never()).putIfCurrent(
+        eq(group), eq("demo-1.0.0.tgz"), eq(NexusCacheType.CONTENT),
+        anyLong(), any(GroupMemberAssetCache.Generation.class));
   }
 
   @Test
@@ -824,7 +853,14 @@ class HelmGroupServiceTest {
             ? selectedIndex("digest-one")
             : selectedIndex("digest-two"));
     when(fixture.proxy.get(fallback, "index.yaml", false))
-        .thenAnswer(ignored -> selectedIndex("digest-one"));
+        .thenAnswer(ignored -> freshProxyIndex("""
+            entries:
+              demo:
+                - name: demo
+                  version: 1.0.0
+                  digest: digest-one
+                  urls: [demo-1.0.0.tgz]
+            """));
     when(fixture.hosted.get(nestedHosted, "demo-1.0.0.tgz", false))
         .thenReturn(changedNestedBytes);
     when(fixture.proxy.get(fallback, "demo-1.0.0.tgz", false)).thenReturn(expected);
@@ -1180,6 +1216,23 @@ class HelmGroupServiceTest {
   }
 
   @Test
+  void servesAssetsWithoutOptionalMemberWinnerCache() {
+    Fixture fixture = fixture();
+    RepositoryRuntime hosted = runtime(2L, "hosted", RepositoryType.HOSTED, true, List.of());
+    RepositoryRuntime group = runtime(
+        10L, "all", RepositoryType.GROUP, true, List.of(hosted));
+    HelmGroupService withoutMemberCache = new HelmGroupService(
+        fixture.hosted, fixture.proxy, fixture.indexCache, null,
+        fixture.registry, fixture.writer, fixture.reader);
+    MavenResponse expected = asset("digest-a");
+    when(fixture.hosted.get(hosted, "index.yaml", false))
+        .thenAnswer(ignored -> selectedIndex("digest-a"));
+    when(fixture.hosted.get(hosted, "demo-1.0.0.tgz", false)).thenReturn(expected);
+
+    assertSame(expected, withoutMemberCache.get(group, "demo-1.0.0.tgz", false));
+  }
+
+  @Test
   void rejectsInputAndSerializedIndexesBeyondTheAggregationLimit() {
     MavenResponse response = MavenResponse.noBody(200);
     MavenExceptions.BadUpstreamException error = assertThrows(
@@ -1273,6 +1326,12 @@ class HelmGroupServiceTest {
               digest: %s
               urls: [demo-1.0.0.tgz]
         """.formatted(digest));
+  }
+
+  private static MavenResponse freshProxyIndex(String body) {
+    return index(body).withInternalAttribute(
+        HelmProxyService.INDEX_FRESH_UNTIL_ATTRIBUTE,
+        Instant.parse("2099-01-01T00:00:00Z"));
   }
 
   private static MavenResponse asset(String sha256) {
