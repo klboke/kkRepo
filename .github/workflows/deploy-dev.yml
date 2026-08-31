@@ -51,7 +51,7 @@ jobs:
 
       - name: Set up JDK 25
         if: steps.source.outputs.deploy == 'true'
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "25"

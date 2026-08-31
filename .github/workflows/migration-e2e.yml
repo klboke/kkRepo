@@ -263,7 +263,7 @@ jobs:
 
       - name: Set up JDK 25
         if: matrix.nexus-version == '3.92.0' || matrix.apt-migration-enabled
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "25"
