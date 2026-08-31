@@ -900,14 +900,17 @@ PY
     --upload-file "$dir/dist/$chart-1.0.0.tgz" \
     "$KKREPO_URL/repository/helm-hosted/$chart-1.0.0.tgz"
   wait_for_body_contains helm-index "$chart" \
-    "$KKREPO_URL/repository/helm-hosted/index.yaml" \
+    "$KKREPO_URL/repository/helm-group/index.yaml" \
     "$ARTIFACT_DIR/helm-index.yaml"
-  run_logged helm-repo-add helm repo add "kkrepo-e2e-$STAMP" "$KKREPO_URL/repository/helm-hosted" \
+  run_logged helm-repo-add helm repo add "kkrepo-e2e-$STAMP" "$KKREPO_URL/repository/helm-group" \
     --username "$KKREPO_USER" --password "$KKREPO_PASSWORD"
   run_logged helm-repo-update helm repo update
   mkdir -p "$dir/pulled"
   run_logged helm-pull helm pull "kkrepo-e2e-$STAMP/$chart" --version 1.0.0 --destination "$dir/pulled"
   test -f "$dir/pulled/$chart-1.0.0.tgz"
+  run_logged helm-pull-proxy helm pull "kkrepo-e2e-$STAMP/hello-world" \
+    --version 0.1.0 --destination "$dir/pulled"
+  test -f "$dir/pulled/hello-world-0.1.0.tgz"
 }
 
 test_cargo() {

@@ -38,6 +38,7 @@ import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.apt.AptService;
 import com.github.klboke.kkrepo.server.alpine.AlpineService;
 import com.github.klboke.kkrepo.server.conda.CondaService;
+import com.github.klboke.kkrepo.server.helm.HelmGroupIndexCache;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
@@ -774,6 +775,50 @@ class BrowseContentDeleteControllerTest {
   }
 
   @Test
+  void invalidatesHelmGroupContentAfterHostedChartDeletion() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord repository =
+        repository(1L, "helm", RepositoryFormat.HELM, RepositoryType.HOSTED);
+    String path = "demo-1.0.0.tgz";
+    AssetRecord chart = asset(
+        11L, 21L, 31L, RepositoryFormat.HELM, path, "chart", Map.of());
+    when(fixture.repositoryDao.findByName(repository.name())).thenReturn(Optional.of(repository));
+    when(fixture.assetDao.findAssetByPath(repository.id(), path)).thenReturn(Optional.of(chart));
+    when(fixture.assetDao.listAssetsByPrefix(repository.id(), path + "/"))
+        .thenReturn(List.of());
+
+    fixture.controller.delete(
+        repository.name(), path, null, new MockHttpServletRequest());
+
+    verify(fixture.indexRebuildDao).enqueue(
+        repository.id(), RepositoryIndexRebuildDao.HELM_INDEX);
+    verify(fixture.helmGroupIndexCache).invalidateMemberContentAfterCommit(repository.id());
+  }
+
+  @Test
+  void invalidatesHelmGroupMetadataAfterProxyIndexDeletion() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord repository =
+        repository(1L, "helm-proxy", RepositoryFormat.HELM, RepositoryType.PROXY);
+    String path = "index.yaml";
+    AssetRecord index = asset(
+        11L, null, 31L, RepositoryFormat.HELM, path, "INDEX", Map.of());
+    when(fixture.repositoryDao.findByName(repository.name())).thenReturn(Optional.of(repository));
+    when(fixture.assetDao.findAssetByPath(repository.id(), path)).thenReturn(Optional.of(index));
+    when(fixture.assetDao.listAssetsByPrefix(repository.id(), path + "/"))
+        .thenReturn(List.of());
+
+    fixture.controller.delete(
+        repository.name(), path, null, new MockHttpServletRequest());
+
+    verify(fixture.helmGroupIndexCache).invalidateMemberAfterCommit(repository.id());
+    verify(fixture.helmGroupIndexCache, never())
+        .invalidateMemberContentAfterCommit(repository.id());
+    verify(fixture.indexRebuildDao, never()).enqueue(
+        repository.id(), RepositoryIndexRebuildDao.HELM_INDEX);
+  }
+
+  @Test
   void mapsPypiPublicPathAndRebuildsProjectAndRootIndexes() {
     Fixture fixture = fixture(true, AccessDecision.allow());
     RepositoryRecord repository =
@@ -1251,6 +1296,7 @@ class BrowseContentDeleteControllerTest {
     AlpineService alpineService = mock(AlpineService.class);
     RRegistryDao rRegistry = mock(RRegistryDao.class);
     RService rService = mock(RService.class);
+    HelmGroupIndexCache helmGroupIndexCache = mock(HelmGroupIndexCache.class);
     PermissionSubject permissionSubject = mock(PermissionSubject.class);
     AuthenticatedSubject subject =
         new AuthenticatedSubject("test", "admin", "local", null, permissionSubject);
@@ -1266,12 +1312,13 @@ class BrowseContentDeleteControllerTest {
     controller.setAptDeleteSupport(runtimeRegistry, aptRegistry, aptService);
     controller.setAlpineDeleteSupport(runtimeRegistry, alpineRegistry, alpineService);
     controller.setRDeleteSupport(runtimeRegistry, rRegistry, rService);
+    controller.setHelmDeleteSupport(helmGroupIndexCache);
     return new Fixture(
         repositoryDao, assetDao, terraformRegistryDao, swiftRegistryDao, ansibleRegistryDao,
         browseNodeDao, componentDao, metadataRebuildDao,
         indexRebuildDao, npmCache, pypiCache, groupMemberAssetCache, cacheController,
         runtimeRegistry, condaService, aptRegistry, aptService, alpineRegistry, alpineService,
-        rRegistry, rService,
+        rRegistry, rService, helmGroupIndexCache,
         controller);
   }
 
@@ -1357,6 +1404,7 @@ class BrowseContentDeleteControllerTest {
       AlpineService alpineService,
       RRegistryDao rRegistry,
       RService rService,
+      HelmGroupIndexCache helmGroupIndexCache,
       BrowseContentDeleteController controller) {
   }
 }

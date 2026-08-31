@@ -89,6 +89,10 @@ public abstract class PersistenceApiContract {
 
   protected abstract Set<String> databaseTables();
 
+  protected abstract int seedHelmProxyLegacyCacheFence(long repositoryId, long assetId);
+
+  protected abstract int activateHelmProxyLegacyCacheFence(long repositoryId);
+
   @Test
   void baselineContainsTheCompleteSharedLogicalSchema() {
     assertEquals(Set.of(
@@ -164,6 +168,8 @@ public abstract class PersistenceApiContract {
         "docker_tag",
         "docker_upload_chunk",
         "docker_upload_session",
+        "helm_group_invalidation_marker",
+        "helm_proxy_legacy_cache_fence",
         "huggingface_api_cache",
         "huggingface_file",
         "huggingface_model_revision",
@@ -1006,6 +1012,7 @@ public abstract class PersistenceApiContract {
   void securityScanningIsIdempotentFencedAndProtectsImmutableDocuments() throws Exception {
     SecurityScanDao scans = stores().securityScanning();
     long repositoryId = createRepository("scan-contract", RepositoryFormat.MAVEN2);
+    assertTrue(stores().repositories().findUpdatedAt(repositoryId).isPresent());
     long blobStoreId = stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
     Instant now = Instant.parse("2026-07-24T12:00:00Z");
 
@@ -1033,6 +1040,16 @@ public abstract class PersistenceApiContract {
     assertEquals(1, originalCandidate.contentGeneration());
     stores().assets().touchAssetLastUpdated(assetId, now.plusSeconds(1));
     stores().assets().updateAssetAttributes(assetId, Map.of("metadataOnly", true));
+    Map<String, Object> boundAttributes = Map.of(
+        "metadataOnly", true,
+        "configuration", "current");
+    assertEquals(1, stores().assets().putAssetStringAttributeIfAbsent(
+        assetId, "configuration", "current"));
+    assertEquals(0, stores().assets().putAssetStringAttributeIfAbsent(
+        assetId, "configuration", "stale"));
+    assertEquals(
+        boundAttributes,
+        stores().assets().findAssetById(assetId).orElseThrow().attributes());
     assertEquals(
         1,
         stores().artifactChanges().listAfter(0, 1000).stream()
@@ -2447,6 +2464,98 @@ public abstract class PersistenceApiContract {
         scans.findDownloadPolicySnapshots(assetId, repositoryId)
             .getFirst()
             .requiredWaiverRevision());
+  }
+
+  @Test
+  void helmProxyLegacyCacheBindingIsFencedByUpgradeAndConfigurationChanges() throws Exception {
+    long repositoryId = createRepository(
+        "helm-proxy-legacy-fence", RepositoryFormat.HELM, RepositoryType.PROXY);
+    RepositoryRecord repository = stores().repositories().findById(repositoryId).orElseThrow();
+    long assetId = insertLegacyHelmIndex(repository, "helm-legacy-index");
+    assertEquals(1, seedHelmProxyLegacyCacheFence(repositoryId, assetId));
+
+    // A node clock ahead of the database cannot make a genuinely pre-activation row ineligible.
+    stores().assets().touchAssetLastUpdated(assetId, Instant.now().plusSeconds(3600));
+    assertEquals(1, stores().assets().bindLegacyHelmProxyCacheConfiguration(
+        assetId, repositoryId, "helmProxyConfiguration", "initial"));
+    assertEquals(0, stores().assets().bindLegacyHelmProxyCacheConfiguration(
+        assetId, repositoryId, "helmProxyConfiguration", "concurrent"));
+
+    stores().assets().updateAssetAttributes(assetId, Map.of("remoteUrls", Map.of()));
+    assertEquals(1, activateHelmProxyLegacyCacheFence(repositoryId));
+    // An old replica's 304 verification touch changes the asset row but not its cached bytes. The
+    // pre-activation blob remains eligible for one atomic configuration binding.
+    stores().assets().touchAssetLastUpdated(assetId, Instant.EPOCH);
+    assertEquals(1, stores().assets().bindLegacyHelmProxyCacheConfiguration(
+        assetId, repositoryId, "helmProxyConfiguration", "late-old-replica-304"));
+
+    // A real content generation created after activation must remain fenced even when a lagging
+    // old replica supplies an application timestamp from before the upgrade.
+    stores().assets().updateAssetAttributes(assetId, Map.of("remoteUrls", Map.of()));
+    Thread.sleep(10);
+    long postActivationBlobId = stores().assets().insertBlob(
+        blob(repository.blobStoreId(), "helm/post-activation-index.yaml", "post-activation"));
+    stores().assets().updateAssetBlobBinding(
+        assetId, postActivationBlobId, "text/x-yaml", 42L, Instant.EPOCH);
+    assertEquals(0, stores().assets().bindLegacyHelmProxyCacheConfiguration(
+        assetId, repositoryId, "helmProxyConfiguration", "late-old-replica-content"));
+
+    Instant previousConfigurationTime = stores().repositories().findUpdatedAt(repositoryId)
+        .orElseThrow();
+    Thread.sleep(10);
+    stores().repositories().update(new RepositoryRecord(
+        repository.id(),
+        repository.name(),
+        repository.format(),
+        repository.type(),
+        repository.recipeName(),
+        repository.online(),
+        repository.blobStoreId(),
+        repository.routingRuleId(),
+        "https://changed.example.test/",
+        repository.versionPolicy(),
+        repository.layoutPolicy(),
+        repository.writePolicy(),
+        repository.strictContentTypeValidation(),
+        repository.attributes()));
+    assertTrue(stores().repositories().findUpdatedAt(repositoryId).orElseThrow()
+        .isAfter(previousConfigurationTime));
+    assertEquals(0, stores().assets().bindLegacyHelmProxyCacheConfiguration(
+        assetId, repositoryId, "helmProxyConfiguration", "changed"));
+    assertEquals(
+        Map.of("remoteUrls", Map.of()),
+        stores().assets().findAssetById(assetId).orElseThrow().attributes());
+
+    long preconfiguredRepositoryId = createRepository(
+        "helm-proxy-configured-before-upgrade", RepositoryFormat.HELM, RepositoryType.PROXY);
+    RepositoryRecord preconfigured = stores().repositories()
+        .findById(preconfiguredRepositoryId).orElseThrow();
+    Thread.sleep(10);
+    stores().repositories().update(new RepositoryRecord(
+        preconfigured.id(),
+        preconfigured.name(),
+        preconfigured.format(),
+        preconfigured.type(),
+        preconfigured.recipeName(),
+        preconfigured.online(),
+        preconfigured.blobStoreId(),
+        preconfigured.routingRuleId(),
+        "https://configured-before-upgrade.example.test/",
+        preconfigured.versionPolicy(),
+        preconfigured.layoutPolicy(),
+        preconfigured.writePolicy(),
+        preconfigured.strictContentTypeValidation(),
+        preconfigured.attributes()));
+    long postConfigurationAssetId = insertLegacyHelmIndex(
+        preconfigured, "helm-post-configuration-legacy-index");
+
+    assertEquals(0, seedHelmProxyLegacyCacheFence(
+        preconfiguredRepositoryId, postConfigurationAssetId));
+    assertEquals(0, stores().assets().bindLegacyHelmProxyCacheConfiguration(
+        postConfigurationAssetId,
+        preconfiguredRepositoryId,
+        "helmProxyConfiguration",
+        "stale-pre-upgrade-writer"));
   }
 
   @Test
@@ -4957,6 +5066,79 @@ public abstract class PersistenceApiContract {
   }
 
   @Test
+  void repositoryIndexMarkerAcknowledgementCannotDeleteANewerRequest() {
+    long repositoryId = createRepository("tracked-index-marker", RepositoryFormat.HELM);
+    RepositoryIndexRebuildDao queue = stores().repositoryIndexRebuild();
+
+    String first = queue.enqueueHelmGroupInvalidation(
+        repositoryId,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION);
+    String second = queue.enqueueHelmGroupInvalidation(
+        repositoryId,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION);
+
+    assertNotEquals(first, second);
+    assertFalse(queue.acknowledgeHelmGroupInvalidationIfRequestToken(
+        repositoryId,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        first));
+    assertTrue(queue.hasPending(
+        repositoryId,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        RepositoryIndexRebuildDao.ROOT_SCOPE));
+
+    String cacheVersionName = "helm-group-rollback-" + repositoryId;
+    assertThrows(IllegalStateException.class, () -> inTransaction(() -> {
+      assertTrue(queue.acknowledgeHelmGroupInvalidationIfRequestToken(
+          repositoryId,
+          RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+          second));
+      stores().cacheVersions().bump(cacheVersionName);
+      throw new IllegalStateException("force marker and watermark rollback");
+    }));
+    assertTrue(queue.hasPending(
+        repositoryId,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        RepositoryIndexRebuildDao.ROOT_SCOPE));
+    assertEquals(0L, stores().cacheVersions().current(cacheVersionName));
+
+    assertTrue(queue.acknowledgeHelmGroupInvalidationIfRequestToken(
+        repositoryId,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        second));
+    assertFalse(queue.hasPending(
+        repositoryId,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        RepositoryIndexRebuildDao.ROOT_SCOPE));
+  }
+
+  @Test
+  void helmGroupInvalidationsAreInvisibleToPreFeatureRepositoryIndexClaims() {
+    long repositoryId = createRepository("dedicated-helm-group-marker", RepositoryFormat.HELM);
+    RepositoryIndexRebuildDao queue = stores().repositoryIndexRebuild();
+    queue.enqueueHelmGroupInvalidation(
+        repositoryId, RepositoryIndexRebuildDao.HELM_GROUP_CONTENT_INVALIDATION);
+
+    assertEquals(1L, queue.countBacklog());
+    assertTrue(inTransaction(() -> queue.claim(1)).isEmpty());
+    List<RepositoryIndexRebuildDao.Claim> claimed =
+        inTransaction(() -> queue.claimHelmGroupInvalidations(1));
+
+    assertEquals(1, claimed.size());
+    assertEquals(repositoryId, claimed.getFirst().repositoryId());
+    assertEquals(
+        RepositoryIndexRebuildDao.HELM_GROUP_CONTENT_INVALIDATION,
+        claimed.getFirst().indexKind());
+    queue.reenqueueFailure(claimed.getFirst(), new IllegalStateException("watermark unavailable"));
+    assertEquals(1L, queue.countFailures());
+    assertEquals(1, inTransaction(() -> queue.claimHelmGroupInvalidations(1)).size());
+    assertFalse(queue.hasPending(
+        repositoryId,
+        RepositoryIndexRebuildDao.HELM_GROUP_CONTENT_INVALIDATION,
+        RepositoryIndexRebuildDao.ROOT_SCOPE));
+  }
+
+  @Test
   void blobGcDockerAndPubUploadCoordinationRoundTrip() throws Exception {
     long repositoryId = createRepository("upload-coordination", RepositoryFormat.DOCKER);
     long blobStoreId = stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
@@ -5177,6 +5359,26 @@ public abstract class PersistenceApiContract {
       String name, RepositoryFormat format, RepositoryType type) {
     long blobStoreId = stores().blobStores().insert(blobStore(name + "-store"));
     return insertRepository(name, format, type, blobStoreId);
+  }
+
+  private long insertLegacyHelmIndex(RepositoryRecord repository, String blobRef) {
+    long blobId = stores().assets().insertBlob(
+        blob(repository.blobStoreId(), "helm/" + blobRef + ".yaml", blobRef));
+    return stores().assets().insertAsset(new AssetRecord(
+        null,
+        repository.id(),
+        null,
+        blobId,
+        RepositoryFormat.HELM,
+        "index.yaml",
+        PersistenceHashes.pathHash("index.yaml"),
+        "index.yaml",
+        "INDEX",
+        "text/x-yaml",
+        42L,
+        null,
+        Instant.now(),
+        Map.of("remoteUrls", Map.of())));
   }
 
   private SwiftRegistryDao.Release insertSwiftReleaseFixture(

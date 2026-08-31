@@ -7,6 +7,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashSet;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import org.slf4j.Logger;
@@ -23,7 +24,9 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * still comes from the member repository's hosted/proxy path, so losing this cache only reverts to
  * member fan-out. Correctness is guarded by group repository cache tokens: member writes/deletes and
  * repository membership/config changes invalidate the token for every containing group after
- * commit, causing stale entries to be ignored by all replicas.
+ * commit, causing stale entries to be ignored by all replicas. Formats with an independently
+ * durable source binding can additionally attach that fingerprint to the entry, closing races in
+ * which source membership changes and member writes commit in the opposite order.
  */
 @Service
 public class GroupMemberAssetCache {
@@ -31,6 +34,8 @@ public class GroupMemberAssetCache {
   private static final String NAMESPACE = "group-member-asset";
   private static final Object PENDING_MEMBERS =
       GroupMemberAssetCache.class.getName() + ".PENDING_MEMBERS";
+  private static final Object PENDING_TYPED_MEMBERS =
+      GroupMemberAssetCache.class.getName() + ".PENDING_TYPED_MEMBERS";
   private static final Object PENDING_GROUPS =
       GroupMemberAssetCache.class.getName() + ".PENDING_GROUPS";
 
@@ -56,16 +61,61 @@ public class GroupMemberAssetCache {
   }
 
   public Optional<Long> get(RepositoryRuntime group, String path, NexusCacheType type) {
+    return get(group, path, type, Optional.empty());
+  }
+
+  /**
+   * Reads a winner only when it was published under the captured durable generation and that
+   * generation remains current.
+   *
+   * <p>This avoids accepting an old shared entry through the node-local repository-token cache
+   * after another replica has already committed an invalidation.
+   */
+  public Optional<Long> getIfCurrent(
+      RepositoryRuntime group,
+      String path,
+      NexusCacheType type,
+      Generation generation) {
+    if (generation == null || generation.cacheToken() == null) {
+      return Optional.empty();
+    }
+    return get(group, path, type, Optional.of(generation));
+  }
+
+  private Optional<Long> get(
+      RepositoryRuntime group,
+      String path,
+      NexusCacheType type,
+      Optional<Generation> expectedGeneration) {
     if (!enabled || entryTtl.isZero() || group == null || path == null || cacheController == null) {
       return Optional.empty();
     }
+    NexusCacheType cacheType = type == null ? NexusCacheType.CONTENT : type;
+    Generation generation = expectedGeneration.orElse(null);
+    if (generation != null
+        && (generation.repositoryId() != group.id() || generation.cacheType() != cacheType)) {
+      return Optional.empty();
+    }
     try {
-      Optional<Entry> entry = sharedCache.getJson(NAMESPACE, key(group.id(), type, path), Entry.class);
+      Optional<Entry> entry = sharedCache.getJson(
+          NAMESPACE, key(group.id(), cacheType, path), Entry.class);
       if (entry.isEmpty()) {
         return Optional.empty();
       }
-      NexusCacheType cacheType = type == null ? NexusCacheType.CONTENT : type;
-      if (cacheController.isStale(group.id(), cacheType, entry.get().cacheInfo(), maxAgeMinutes, Instant.now())) {
+      if (generation != null
+          && !generation.cacheToken().equals(
+              cacheController.currentDurableToken(group.id(), cacheType))) {
+        return Optional.empty();
+      }
+      if (generation != null
+          && !Objects.equals(generation.sourceGeneration(), entry.get().sourceGeneration())) {
+        return Optional.empty();
+      }
+      boolean stale = generation == null
+          ? cacheController.isStale(
+              group.id(), cacheType, entry.get().cacheInfo(), maxAgeMinutes, Instant.now())
+          : isStaleAtGeneration(entry.get().cacheInfo(), generation, Instant.now());
+      if (stale) {
         return Optional.empty();
       }
       return Optional.of(entry.get().memberRepositoryId());
@@ -73,6 +123,17 @@ public class GroupMemberAssetCache {
       log.warn("Failed reading group member asset cache for group {} path {}", group.id(), path, e);
       return Optional.empty();
     }
+  }
+
+  private boolean isStaleAtGeneration(
+      NexusLikeCacheInfo cacheInfo, Generation generation, Instant now) {
+    if (cacheInfo == null
+        || cacheInfo.lastVerified() == null
+        || cacheInfo.invalidated()
+        || !generation.cacheToken().equals(cacheInfo.cacheToken())) {
+      return true;
+    }
+    return !cacheInfo.lastVerified().plusSeconds(maxAgeMinutes * 60L).isAfter(now);
   }
 
   public void put(RepositoryRuntime group, String path, NexusCacheType type, long memberRepositoryId) {
@@ -84,10 +145,75 @@ public class GroupMemberAssetCache {
       sharedCache.putJson(
           NAMESPACE,
           key(group.id(), cacheType, path),
-          new Entry(memberRepositoryId, cacheController.current(group.id(), cacheType, Instant.now())),
+          new Entry(
+              memberRepositoryId,
+              cacheController.current(group.id(), cacheType, Instant.now()),
+              null),
           entryTtl);
     } catch (RuntimeException e) {
       log.warn("Failed writing group member asset cache for group {} path {}", group.id(), path, e);
+    }
+  }
+
+  /** Captures the durable generation that must remain current while a winner is resolved. */
+  public Optional<Generation> captureGeneration(
+      RepositoryRuntime group, NexusCacheType type) {
+    if (!enabled || entryTtl.isZero() || group == null || cacheController == null) {
+      return Optional.empty();
+    }
+    NexusCacheType cacheType = type == null ? NexusCacheType.CONTENT : type;
+    try {
+      return Optional.of(new Generation(
+          group.id(),
+          cacheType,
+          cacheController.currentDurableToken(group.id(), cacheType)));
+    } catch (RuntimeException e) {
+      log.warn("Failed capturing group member asset generation for group {}", group.id(), e);
+      return Optional.empty();
+    }
+  }
+
+  /**
+   * Publishes a resolved winner only if no durable invalidation happened during resolution.
+   *
+   * <p>The entry deliberately carries the generation captured before resolution. If invalidation
+   * races the final shared-cache write after the comparison, readers still reject the entry by its
+   * old token.
+   */
+  public void putIfCurrent(
+      RepositoryRuntime group,
+      String path,
+      NexusCacheType type,
+      long memberRepositoryId,
+      Generation generation) {
+    if (!enabled
+        || entryTtl.isZero()
+        || group == null
+        || path == null
+        || cacheController == null
+        || generation == null) {
+      return;
+    }
+    NexusCacheType cacheType = type == null ? NexusCacheType.CONTENT : type;
+    if (generation.repositoryId() != group.id() || generation.cacheType() != cacheType) {
+      return;
+    }
+    try {
+      if (!generation.cacheToken().equals(
+          cacheController.currentDurableToken(group.id(), cacheType))) {
+        return;
+      }
+      sharedCache.putJson(
+          NAMESPACE,
+          key(group.id(), cacheType, path),
+          new Entry(
+              memberRepositoryId,
+              new NexusLikeCacheInfo(Instant.now(), generation.cacheToken(), cacheType),
+              generation.sourceGeneration()),
+          entryTtl);
+    } catch (RuntimeException e) {
+      log.warn("Failed conditionally writing group member asset cache for group {} path {}",
+          group.id(), path, e);
     }
   }
 
@@ -107,6 +233,21 @@ public class GroupMemberAssetCache {
       return;
     }
     deferAfterCommit(PENDING_MEMBERS, memberRepositoryId, this::invalidateContainingGroups);
+  }
+
+  /** Invalidate only one winner-cache class without expiring unrelated group metadata. */
+  public void invalidateMemberAfterCommit(
+      long memberRepositoryId, NexusCacheType cacheType) {
+    if (cacheType == null) {
+      throw new IllegalArgumentException("Cache type is required");
+    }
+    if (!enabled || cacheController == null) {
+      return;
+    }
+    deferAfterCommit(
+        PENDING_TYPED_MEMBERS,
+        new MemberInvalidation(memberRepositoryId, cacheType),
+        this::invalidateContainingGroups);
   }
 
   public void invalidateGroupAfterCommit(long groupId) {
@@ -131,6 +272,23 @@ public class GroupMemberAssetCache {
     }
   }
 
+  private void invalidateContainingGroups(MemberInvalidation invalidation) {
+    invalidateContainingGroups(
+        invalidation.memberRepositoryId(), invalidation.cacheType(), new HashSet<>());
+  }
+
+  private void invalidateContainingGroups(
+      long memberRepositoryId, NexusCacheType cacheType, Set<Long> visited) {
+    for (RepositoryRecord group : repositoryDao.listGroupsContaining(memberRepositoryId)) {
+      Long groupId = group.id();
+      if (groupId == null || !visited.add(groupId)) {
+        continue;
+      }
+      cacheController.invalidate(groupId, cacheType);
+      invalidateContainingGroups(groupId, cacheType, visited);
+    }
+  }
+
   private void invalidateGroupAndAncestors(long groupId) {
     invalidateGroupAndAncestors(groupId, new HashSet<>());
   }
@@ -147,22 +305,23 @@ public class GroupMemberAssetCache {
     }
   }
 
-  private void deferAfterCommit(Object resourceKey, long id, java.util.function.LongConsumer action) {
+  private <T> void deferAfterCommit(
+      Object resourceKey, T item, java.util.function.Consumer<T> action) {
     if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-      action.accept(id);
+      action.accept(item);
       return;
     }
     @SuppressWarnings("unchecked")
-    Set<Long> pending = (Set<Long>) TransactionSynchronizationManager.getResource(resourceKey);
+    Set<T> pending = (Set<T>) TransactionSynchronizationManager.getResource(resourceKey);
     if (pending == null) {
       pending = new HashSet<>();
       TransactionSynchronizationManager.bindResource(resourceKey, pending);
-      Set<Long> snapshot = pending;
+      Set<T> snapshot = pending;
       TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
         @Override
         public void afterCommit() {
-          for (Long pendingId : snapshot) {
-            action.accept(pendingId);
+          for (T pendingItem : snapshot) {
+            action.accept(pendingItem);
           }
         }
 
@@ -172,7 +331,7 @@ public class GroupMemberAssetCache {
         }
       });
     }
-    pending.add(id);
+    pending.add(item);
   }
 
   private static String key(long groupId, NexusCacheType type, String path) {
@@ -180,5 +339,33 @@ public class GroupMemberAssetCache {
     return groupId + ":" + cacheType.name() + ":" + path;
   }
 
-  public record Entry(long memberRepositoryId, NexusLikeCacheInfo cacheInfo) {}
+  /**
+   * A source generation is optional for formats whose group token fully describes winner inputs.
+   * Helm supplies the durable member-index binding fingerprint so a membership/index-write race
+   * cannot publish a winner that survives under an otherwise unchanged CONTENT token.
+   */
+  public record Entry(
+      long memberRepositoryId,
+      NexusLikeCacheInfo cacheInfo,
+      String sourceGeneration) {
+    public Entry(long memberRepositoryId, NexusLikeCacheInfo cacheInfo) {
+      this(memberRepositoryId, cacheInfo, null);
+    }
+  }
+
+  public record Generation(
+      long repositoryId,
+      NexusCacheType cacheType,
+      String cacheToken,
+      String sourceGeneration) {
+    public Generation(long repositoryId, NexusCacheType cacheType, String cacheToken) {
+      this(repositoryId, cacheType, cacheToken, null);
+    }
+
+    public Generation withSourceGeneration(String value) {
+      return new Generation(repositoryId, cacheType, cacheToken, value);
+    }
+  }
+
+  private record MemberInvalidation(long memberRepositoryId, NexusCacheType cacheType) {}
 }

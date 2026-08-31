@@ -67,6 +67,10 @@ public class JsonColumns {
     return dialect.setBoolean(column, value, path);
   }
 
+  public String setText(String column, String... path) {
+    return dialect.setText(column, path);
+  }
+
   public Map<String, Object> read(String value) {
     Map<String, Object> result = readValue(value, MAP_TYPE);
     return result == null ? Map.of() : result;

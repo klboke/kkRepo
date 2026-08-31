@@ -161,6 +161,50 @@ class HelmRepositoryBlackBoxCompatibilityTest {
     }
   }
 
+  @Test
+  void groupIndexAggregationMatchesNexusAndResolvesChartsWhenConfigured() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeTrue(config.configured(),
+        "Set NEXUS_COMPAT_BASE_URL and KKREPO_COMPAT_BASE_URL to run Helm black-box compatibility");
+
+    if (config.setupEnabled()) {
+      ensureNexusRepositories(config);
+      ensureKkRepoRepositories(config);
+    }
+
+    ChartFixture fixture = ChartFixture.create();
+    try {
+      assertEquals(201, push(config.nexusHosted(), fixture).status(), "reference hosted push status");
+      assertEquals(201, push(config.nexusPlusHosted(), fixture).status(), "kkrepo hosted push status");
+
+      Exchange referenceIndex = waitForIndexContains(config.nexusGroup(), fixture);
+      Exchange candidateIndex = waitForIndexContains(config.nexusPlusGroup(), fixture);
+      assertIndexContains("group index", referenceIndex, candidateIndex,
+          fixture.chartName(), fixture.version(), fixture.fileName());
+
+      // Nexus 3.94 currently serves an index document for this group chart path. Preserve its
+      // status contract while asserting the client-correct archive bytes from kkrepo.
+      assertSameStatus("group hosted chart",
+          get(config.nexusGroup(), fixture.fileName()),
+          get(config.nexusPlusGroup(), fixture.fileName()));
+      Exchange candidateHostedChart = get(config.nexusPlusGroup(), fixture.fileName());
+      assert2xx("kkrepo group hosted chart", candidateHostedChart);
+      assertArrayEquals(fixture.bytes(), candidateHostedChart.body(), "kkrepo group hosted chart body");
+
+      String proxyChartPath = firstCommonChartPath(referenceIndex, candidateIndex, fixture.fileName());
+      assertFalse(proxyChartPath.isBlank(), "group index should aggregate a common proxy chart URL");
+      Exchange candidateProxyChart = get(config.nexusPlusProxy(), proxyChartPath);
+      Exchange candidateGroupChart = get(config.nexusPlusGroup(), proxyChartPath);
+      assert2xx("kkrepo direct proxy chart", candidateProxyChart);
+      assert2xx("kkrepo group proxy chart", candidateGroupChart);
+      assertArrayEquals(candidateProxyChart.body(), candidateGroupChart.body(),
+          "group should resolve proxy chart bytes from its ordered members");
+    } finally {
+      delete(config.nexusHosted(), fixture.fileName());
+      delete(config.nexusPlusHosted(), fixture.fileName());
+    }
+  }
+
   private static Exchange push(Endpoint endpoint, ChartFixture fixture) throws Exception {
     String boundary = "kkrepo-helm-compat-" + System.nanoTime();
     ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -196,9 +240,16 @@ class HelmRepositoryBlackBoxCompatibilityTest {
   }
 
   private static String firstCommonChartPath(Exchange referenceIndex, Exchange candidateIndex) {
+    return firstCommonChartPath(referenceIndex, candidateIndex, "");
+  }
+
+  private static String firstCommonChartPath(
+      Exchange referenceIndex, Exchange candidateIndex, String excludedPath) {
     Set<String> reference = chartUrls(referenceIndex, null, null);
     for (String candidate : chartUrls(candidateIndex, null, null)) {
-      if (candidate.endsWith(".tgz") && reference.contains(candidate)) {
+      if (candidate.endsWith(".tgz")
+          && !candidate.equals(excludedPath)
+          && reference.contains(candidate)) {
         return candidate;
       }
     }
@@ -301,6 +352,16 @@ class HelmRepositoryBlackBoxCompatibilityTest {
               {"name":"%s","online":true,"storage":{"blobStoreName":"default","strictContentTypeValidation":true},"proxy":{"remoteUrl":"%s","contentMaxAge":1440,"metadataMaxAge":1440},"negativeCache":{"enabled":true,"timeToLive":1440},"httpClient":{"blocked":false,"autoBlock":true}}
               """.formatted(config.proxyRepository(), config.remoteUrl())))));
     }
+    repositories = send(config.nexusAdmin("/service/rest/v1/repositories").GET()).bodyAsString();
+    if (!repositories.contains("\"name\" : \"" + config.groupRepository() + "\"")) {
+      assert2xx("create Nexus Helm group", send(config.nexusAdmin(
+          "/service/rest/v1/repositories/helm/group")
+          .header("Content-Type", "application/json")
+          .POST(HttpRequest.BodyPublishers.ofString("""
+              {"name":"%s","online":true,"storage":{"blobStoreName":"default","strictContentTypeValidation":true},"group":{"memberNames":["%s","%s"]}}
+              """.formatted(
+                  config.groupRepository(), config.hostedRepository(), config.proxyRepository())))));
+    }
   }
 
   private static void ensureKkRepoRepositories(CompatConfig config) throws Exception {
@@ -319,6 +380,15 @@ class HelmRepositoryBlackBoxCompatibilityTest {
           .POST(HttpRequest.BodyPublishers.ofString("""
               {"name":"%s","recipe":"helm-proxy","online":true,"blobStoreName":"default","strictContentTypeValidation":true,"proxy":{"remoteUrl":"%s","contentMaxAgeMinutes":1440,"metadataMaxAgeMinutes":1440,"autoBlock":true}}
               """.formatted(config.proxyRepository(), config.remoteUrl())))));
+    }
+    repositories = send(config.nexusPlusInternal("/internal/repositories").GET()).bodyAsString();
+    if (!repositories.contains("\"name\":\"" + config.groupRepository() + "\"")) {
+      assert2xx("create kkrepo Helm group", send(config.nexusPlusInternal("/internal/repositories")
+          .header("Content-Type", "application/json")
+          .POST(HttpRequest.BodyPublishers.ofString("""
+              {"name":"%s","recipe":"helm-group","online":true,"blobStoreName":"default","strictContentTypeValidation":true,"group":{"memberNames":["%s","%s"]}}
+              """.formatted(
+                  config.groupRepository(), config.hostedRepository(), config.proxyRepository())))));
     }
   }
 
@@ -389,6 +459,7 @@ class HelmRepositoryBlackBoxCompatibilityTest {
       boolean setupEnabled,
       String hostedRepository,
       String proxyRepository,
+      String groupRepository,
       String remoteUrl) {
     static CompatConfig load() {
       Endpoint nexus = new Endpoint(
@@ -411,6 +482,7 @@ class HelmRepositoryBlackBoxCompatibilityTest {
           setup,
           setting("compat.helm.hostedRepository", "COMPAT_HELM_HOSTED_REPOSITORY").orElse("helm-hosted"),
           setting("compat.helm.proxyRepository", "COMPAT_HELM_PROXY_REPOSITORY").orElse("helm-proxy"),
+          setting("compat.helm.groupRepository", "COMPAT_HELM_GROUP_REPOSITORY").orElse("helm-group"),
           stripTrailingSlash(setting("compat.helm.remoteUrl", "COMPAT_HELM_REMOTE_URL")
               .orElse("https://helm.github.io/examples")));
     }
@@ -421,8 +493,10 @@ class HelmRepositoryBlackBoxCompatibilityTest {
 
     Endpoint nexusHosted() { return nexus.withRepository(hostedRepository); }
     Endpoint nexusProxy() { return nexus.withRepository(proxyRepository); }
+    Endpoint nexusGroup() { return nexus.withRepository(groupRepository); }
     Endpoint nexusPlusHosted() { return nexusPlus.withRepository(hostedRepository); }
     Endpoint nexusPlusProxy() { return nexusPlus.withRepository(proxyRepository); }
+    Endpoint nexusPlusGroup() { return nexusPlus.withRepository(groupRepository); }
 
     HttpRequest.Builder nexusAdmin(String path) {
       return nexus.raw(path);

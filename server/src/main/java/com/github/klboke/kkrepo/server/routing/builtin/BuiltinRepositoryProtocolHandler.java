@@ -37,6 +37,7 @@ import com.github.klboke.kkrepo.server.alpine.AlpineService;
 import com.github.klboke.kkrepo.server.goartifact.GoGroupService;
 import com.github.klboke.kkrepo.server.goartifact.GoHostedService;
 import com.github.klboke.kkrepo.server.goartifact.GoProxyService;
+import com.github.klboke.kkrepo.server.helm.HelmGroupService;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
 import com.github.klboke.kkrepo.server.helm.HelmProxyService;
 import com.github.klboke.kkrepo.server.huggingface.HuggingFaceService;
@@ -139,6 +140,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
   private GoHostedService goHosted;
   private final HelmHostedService helmHosted;
   private final HelmProxyService helmProxy;
+  private final HelmGroupService helmGroup;
   private final MavenHtmlListingService htmlListing;
   private final NpmHostedService npmHosted;
   private final NpmProxyService npmProxy;
@@ -238,7 +240,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
   public BuiltinRepositoryProtocolHandler(
       MavenHostedService hosted, MavenProxyService proxy, MavenGroupService group,
       GoProxyService goProxy, GoGroupService goGroup,
-      HelmHostedService helmHosted, HelmProxyService helmProxy,
+      HelmHostedService helmHosted, HelmProxyService helmProxy, HelmGroupService helmGroup,
       MavenHtmlListingService htmlListing,
       NpmHostedService npmHosted, NpmProxyService npmProxy, NpmGroupService npmGroup,
       NpmSearchService npmSearch, NpmTokenService npmToken,
@@ -261,6 +263,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
     this.goGroup = goGroup;
     this.helmHosted = helmHosted;
     this.helmProxy = helmProxy;
+    this.helmGroup = helmGroup;
     this.htmlListing = htmlListing;
     this.npmHosted = npmHosted;
     this.npmProxy = npmProxy;
@@ -290,6 +293,33 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
     this.forwardedHeaderPolicy = forwardedHeaderPolicy;
   }
 
+  /** Backward-compatible production constructor retained for focused unit tests. */
+  public BuiltinRepositoryProtocolHandler(
+      MavenHostedService hosted, MavenProxyService proxy, MavenGroupService group,
+      GoProxyService goProxy, GoGroupService goGroup,
+      HelmHostedService helmHosted, HelmProxyService helmProxy,
+      MavenHtmlListingService htmlListing,
+      NpmHostedService npmHosted, NpmProxyService npmProxy, NpmGroupService npmGroup,
+      NpmSearchService npmSearch, NpmTokenService npmToken,
+      PypiHostedService pypiHosted, PypiProxyService pypiProxy, PypiGroupService pypiGroup,
+      CargoHostedService cargoHosted, CargoProxyService cargoProxy, CargoGroupService cargoGroup,
+      PubHostedService pubHosted, PubProxyService pubProxy, PubGroupService pubGroup,
+      ComposerHostedService composerHosted, ComposerProxyService composerProxy,
+      ComposerGroupService composerGroup,
+      NugetService nuget,
+      RubygemsService rubygems,
+      YumService yum,
+      RawHostedService rawHosted, RawProxyService rawProxy, RawGroupService rawGroup,
+      ObjectMapper objectMapper,
+      ForwardedHeaderPolicy forwardedHeaderPolicy,
+      TerraformService terraform) {
+    this(hosted, proxy, group, goProxy, goGroup, helmHosted, helmProxy, null, htmlListing,
+        npmHosted, npmProxy, npmGroup, npmSearch, npmToken, pypiHosted, pypiProxy, pypiGroup,
+        cargoHosted, cargoProxy, cargoGroup, pubHosted, pubProxy, pubGroup,
+        composerHosted, composerProxy, composerGroup, nuget, rubygems, yum,
+        rawHosted, rawProxy, rawGroup, objectMapper, forwardedHeaderPolicy, terraform);
+  }
+
   /** Backward-compatible full constructor retained for focused unit tests. */
   public BuiltinRepositoryProtocolHandler(
       MavenHostedService hosted, MavenProxyService proxy, MavenGroupService group,
@@ -306,7 +336,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
       NugetService nuget, RubygemsService rubygems, YumService yum,
       RawHostedService rawHosted, RawProxyService rawProxy, RawGroupService rawGroup,
       ObjectMapper objectMapper, ForwardedHeaderPolicy forwardedHeaderPolicy) {
-    this(hosted, proxy, group, goProxy, goGroup, helmHosted, helmProxy, htmlListing,
+    this(hosted, proxy, group, goProxy, goGroup, helmHosted, helmProxy, null, htmlListing,
         npmHosted, npmProxy, npmGroup, npmSearch, npmToken, pypiHosted, pypiProxy, pypiGroup,
         cargoHosted, cargoProxy, cargoGroup, pubHosted, pubProxy, pubGroup,
         composerHosted, composerProxy, composerGroup, nuget, rubygems, yum,
@@ -330,7 +360,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
       RawHostedService rawHosted, RawProxyService rawProxy, RawGroupService rawGroup,
       ObjectMapper objectMapper,
       ForwardedHeaderPolicy forwardedHeaderPolicy) {
-    this(hosted, proxy, group, goProxy, goGroup, helmHosted, helmProxy, htmlListing,
+    this(hosted, proxy, group, goProxy, goGroup, helmHosted, helmProxy, null, htmlListing,
         npmHosted, npmProxy, npmGroup, npmSearch, npmToken,
         pypiHosted, pypiProxy, pypiGroup,
         cargoHosted, cargoProxy, cargoGroup,
@@ -1282,9 +1312,15 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
     return switch (runtime.type()) {
       case HOSTED -> helmHosted.get(runtime, rawPath, headOnly);
       case PROXY -> helmProxy.get(runtime, rawPath, headOnly);
-      case GROUP -> throw new MavenExceptions.MavenNotFoundException(
-          "Helm group repositories are not supported: " + runtime.name());
+      case GROUP -> helmGroup().get(runtime, rawPath, headOnly);
     };
+  }
+
+  private HelmGroupService helmGroup() {
+    if (helmGroup == null) {
+      throw new IllegalStateException("Helm group service is not available");
+    }
+    return helmGroup;
   }
 
   private MavenResponse dispatchGoGet(RepositoryRuntime runtime, String rawPath, boolean headOnly) {

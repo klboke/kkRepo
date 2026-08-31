@@ -13,9 +13,10 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.protocol.helm.HelmAssetKind;
 import com.github.klboke.kkrepo.protocol.helm.HelmChartMetadata;
 import com.github.klboke.kkrepo.protocol.helm.HelmChartPackageParser;
+import com.github.klboke.kkrepo.protocol.helm.HelmIndex;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
-import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.blob.BlobTransactionCleanup;
+import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
@@ -37,6 +38,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -47,15 +49,28 @@ class HelmAssetWriter {
   private final BrowseNodeDao browseNodeDao;
   private final AssetMetadataCache assetMetadataCache;
   private final TransientTransactionRetry transactionRetry;
+  private final HelmGroupIndexCache groupIndexCache;
   private final HelmChartPackageParser chartParser = new HelmChartPackageParser();
 
   HelmAssetWriter(AssetDao assetDao, ComponentDao componentDao, BrowseNodeDao browseNodeDao,
       AssetMetadataCache assetMetadataCache, TransientTransactionRetry transactionRetry) {
+    this(assetDao, componentDao, browseNodeDao, assetMetadataCache, transactionRetry, null);
+  }
+
+  @Autowired
+  HelmAssetWriter(
+      AssetDao assetDao,
+      ComponentDao componentDao,
+      BrowseNodeDao browseNodeDao,
+      AssetMetadataCache assetMetadataCache,
+      TransientTransactionRetry transactionRetry,
+      HelmGroupIndexCache groupIndexCache) {
     this.assetDao = assetDao;
     this.componentDao = componentDao;
     this.browseNodeDao = browseNodeDao;
     this.assetMetadataCache = assetMetadataCache;
     this.transactionRetry = transactionRetry;
+    this.groupIndexCache = groupIndexCache;
   }
 
   record Stored(AssetRecord asset, AssetBlobRecord blob, Digests digests, boolean created, Path responseFile) {
@@ -107,6 +122,17 @@ class HelmAssetWriter {
       HelmChartMetadata effectiveMetadata = metadata == null
           ? metadataFromBufferedUpload(kind, upload.tempFile())
           : metadata;
+      if (kind == HelmAssetKind.PACKAGE) {
+        if (effectiveMetadata == null
+            || !HelmIndex.isValidChartApiVersion(effectiveMetadata.apiVersion())) {
+          throw new IllegalArgumentException(
+              "Invalid Helm chart apiVersion: expected v1 or v2");
+        }
+        if (!HelmIndex.isValidChartVersion(effectiveMetadata.version())) {
+          throw new IllegalArgumentException(
+              "Invalid Helm chart version: expected a Helm-compatible semantic version");
+        }
+      }
       Stored stored = executePersist(
           "Persist Helm asset " + runtime.name() + "/" + path,
           () -> persist(runtime, blobStoreId, path, upload, contentTypeHint, kind,
@@ -179,6 +205,7 @@ class HelmAssetWriter {
     if (componentId != null) {
       componentDao.deleteIfNoAssets(componentId);
     }
+    notifyContainingGroups(runtime, HelmAssetKind.INDEX.name().equals(asset.kind()));
     return 1;
   }
 
@@ -298,7 +325,21 @@ class HelmAssetWriter {
     }
     browseNodeDao.upsertPathAncestors(runtime.id(), path, persistedAsset.id(), componentId);
     assetMetadataCache.evictAfterCommit(runtime.id(), path);
+    notifyContainingGroups(runtime, kind == HelmAssetKind.INDEX);
     return new Stored(persistedAsset, persistedBlob, digests, created, responseFile);
+  }
+
+  private void notifyContainingGroups(RepositoryRuntime runtime, boolean memberIndexChanged) {
+    if (runtime.isGroup()) return;
+    if (groupIndexCache != null) {
+      // Every asset change can alter an ordered content winner. Only index.yaml changes can alter
+      // the merged group index, so package/provenance cache fills avoid a metadata rebuild.
+      if (memberIndexChanged) {
+        groupIndexCache.invalidateMemberAfterCommit(runtime.id());
+      } else {
+        groupIndexCache.invalidateMemberContentAfterCommit(runtime.id());
+      }
+    }
   }
 
   private AssetRecord updateExistingAsset(

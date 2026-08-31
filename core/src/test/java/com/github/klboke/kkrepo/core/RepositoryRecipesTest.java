@@ -34,6 +34,9 @@ class RepositoryRecipesTest {
     assertRecipe(recipes, "go-hosted", RepositoryFormat.GO, RepositoryType.HOSTED);
     assertRecipe(recipes, "go-proxy", RepositoryFormat.GO, RepositoryType.PROXY);
     assertRecipe(recipes, "go-group", RepositoryFormat.GO, RepositoryType.GROUP);
+    assertRecipe(recipes, "helm-hosted", RepositoryFormat.HELM, RepositoryType.HOSTED);
+    assertRecipe(recipes, "helm-proxy", RepositoryFormat.HELM, RepositoryType.PROXY);
+    assertRecipe(recipes, "helm-group", RepositoryFormat.HELM, RepositoryType.GROUP);
     assertRecipe(recipes, "swift-hosted", RepositoryFormat.SWIFT, RepositoryType.HOSTED);
     assertRecipe(recipes, "swift-proxy", RepositoryFormat.SWIFT, RepositoryType.PROXY);
     assertRecipe(recipes, "swift-group", RepositoryFormat.SWIFT, RepositoryType.GROUP);

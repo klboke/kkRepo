@@ -15,6 +15,7 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao.Claim;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
+import com.github.klboke.kkrepo.server.helm.HelmGroupIndexCache;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
@@ -88,6 +89,117 @@ class RepositoryIndexRebuildWorkerTest {
     verify(pypi).rebuildProjectIndex(pypiRuntime, storage, 7L, "demo", "system", null);
     verify(yum).rebuildMetadata(yumRuntime, "system", null);
     verify(rubygems).rebuildGeneratedMetadata(rubygemsRuntime);
+  }
+
+  @Test
+  void retriesDurableHelmGroupInvalidationMarkers() {
+    RepositoryIndexRebuildDao dao = mock(RepositoryIndexRebuildDao.class);
+    HelmGroupIndexCache groupIndexCache = mock(HelmGroupIndexCache.class);
+    Claim claim = claim(
+        21L,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        RepositoryIndexRebuildDao.ROOT_SCOPE,
+        Instant.now());
+    when(dao.claimHelmGroupInvalidations(8)).thenReturn(List.of(claim));
+
+    new RepositoryIndexRebuildWorker(
+        dao,
+        mock(RepositoryRuntimeRegistry.class),
+        mock(BlobStorageRegistry.class),
+        mock(HelmHostedService.class),
+        groupIndexCache,
+        mock(PypiHostedService.class),
+        mock(YumService.class),
+        mock(RubygemsService.class),
+        mock(TerraformComponentService.class),
+        mock(SwiftComponentService.class),
+        new RecordingTransactionManager(),
+        8,
+        true,
+        new KkRepoMetrics(new SimpleMeterRegistry())).drain();
+
+    verify(groupIndexCache).retryInvalidation(
+        21L, RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION);
+  }
+
+  @Test
+  void reenqueuesFailedHelmGroupInvalidationMarkers() {
+    RepositoryIndexRebuildDao dao = mock(RepositoryIndexRebuildDao.class);
+    HelmGroupIndexCache groupIndexCache = mock(HelmGroupIndexCache.class);
+    Claim claim = claim(
+        21L,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        RepositoryIndexRebuildDao.ROOT_SCOPE,
+        Instant.now());
+    IllegalStateException failure = new IllegalStateException("watermark unavailable");
+    when(dao.claimHelmGroupInvalidations(8)).thenReturn(List.of(claim));
+    doThrow(failure)
+        .when(groupIndexCache)
+        .retryInvalidation(21L, RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION);
+
+    new RepositoryIndexRebuildWorker(
+        dao,
+        mock(RepositoryRuntimeRegistry.class),
+        mock(BlobStorageRegistry.class),
+        mock(HelmHostedService.class),
+        groupIndexCache,
+        mock(PypiHostedService.class),
+        mock(YumService.class),
+        mock(RubygemsService.class),
+        mock(TerraformComponentService.class),
+        mock(SwiftComponentService.class),
+        new RecordingTransactionManager(),
+        8,
+        true,
+        new KkRepoMetrics(new SimpleMeterRegistry())).drain();
+
+    verify(dao).reenqueueFailure(claim, failure);
+  }
+
+  @Test
+  void alternatesSaturatedQueuesSoSingleItemBatchesCannotStarve() {
+    RepositoryIndexRebuildDao dao = mock(RepositoryIndexRebuildDao.class);
+    RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
+    BlobStorageRegistry storages = mock(BlobStorageRegistry.class);
+    HelmGroupIndexCache groupIndexCache = mock(HelmGroupIndexCache.class);
+    PypiHostedService pypi = mock(PypiHostedService.class);
+    BlobStorage storage = mock(BlobStorage.class);
+    RepositoryRuntime pypiRuntime = runtime(22L, RepositoryFormat.PYPI, 7L);
+    Claim helmClaim = claim(
+        21L,
+        RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION,
+        RepositoryIndexRebuildDao.ROOT_SCOPE,
+        Instant.now());
+    Claim genericClaim = claim(
+        pypiRuntime.id(), RepositoryIndexRebuildDao.PYPI_ROOT, null, Instant.now());
+    when(dao.claimHelmGroupInvalidations(1)).thenReturn(List.of(helmClaim));
+    when(dao.claim(1)).thenReturn(List.of(genericClaim));
+    when(runtimes.resolveById(pypiRuntime.id())).thenReturn(Optional.of(pypiRuntime));
+    when(storages.forBlobStoreId(7L)).thenReturn(storage);
+    RepositoryIndexRebuildWorker worker = new RepositoryIndexRebuildWorker(
+        dao,
+        runtimes,
+        storages,
+        mock(HelmHostedService.class),
+        groupIndexCache,
+        pypi,
+        mock(YumService.class),
+        mock(RubygemsService.class),
+        mock(TerraformComponentService.class),
+        mock(SwiftComponentService.class),
+        new RecordingTransactionManager(),
+        1,
+        true,
+        new KkRepoMetrics(new SimpleMeterRegistry()));
+
+    worker.drain();
+    worker.drain();
+
+    verify(dao).claimHelmGroupInvalidations(1);
+    verify(dao).claim(1);
+    verify(groupIndexCache).retryInvalidation(
+        helmClaim.repositoryId(), RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION);
+    verify(pypi).rebuildRootIndex(pypiRuntime, storage, 7L, "system", null);
   }
 
   @Test
@@ -247,6 +359,7 @@ class RepositoryIndexRebuildWorkerTest {
         runtimes,
         storages,
         helm,
+        mock(HelmGroupIndexCache.class),
         pypi,
         yum,
         rubygems,

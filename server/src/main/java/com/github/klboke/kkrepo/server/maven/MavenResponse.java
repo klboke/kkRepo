@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Lightweight value object used by the facet services to describe the response the controller
@@ -96,6 +97,23 @@ public final class MavenResponse {
   public MavenResponse withContentType(String contentType) {
     return new MavenResponse(
         status, body, bodySupplier, contentLength, contentType, etag, lastModified, headers,
+        internalAttributes);
+  }
+
+  /** Opens a lazy response body once while preserving streaming and all response metadata. */
+  public MavenResponse materializeBody() {
+    if (body != null || bodySupplier == null) {
+      return this;
+    }
+    return new MavenResponse(
+        status,
+        Objects.requireNonNull(bodySupplier.open(), "Lazy response body supplier returned null"),
+        null,
+        contentLength,
+        contentType,
+        etag,
+        lastModified,
+        headers,
         internalAttributes);
   }
 

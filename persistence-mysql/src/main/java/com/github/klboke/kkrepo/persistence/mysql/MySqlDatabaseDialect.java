@@ -467,6 +467,11 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
     }
 
     @Override
+    public String setText(String column, String... path) {
+      return "JSON_SET(" + column(column) + ", '" + path(path) + "', ?)";
+    }
+
+    @Override
     public String selectLongsFromArray(String columnAlias) {
       String alias = column(columnAlias);
       return """

@@ -64,6 +64,7 @@ class HelmAssetWriterTest {
     verify(fixture.componentDao).upsertReturningId(any());
     verify(fixture.browseNodeDao).upsertPathAncestors(10L, "demo-1.2.3.tgz", 11L, 3L);
     verify(fixture.cache).evictAfterCommit(10L, "demo-1.2.3.tgz");
+    verify(fixture.groupIndexCache).invalidateMemberContentAfterCommit(10L);
   }
 
   @Test
@@ -97,6 +98,7 @@ class HelmAssetWriterTest {
         eq(11L), eq(3L), eq(2L), eq("PROVENANCE"), eq("application/octet-stream"),
         eq((long) provenance.length), any(Instant.class), any());
     verify(fixture.assetDao).markBlobDeletedIfUnreferenced(99L, "asset replaced");
+    verify(fixture.groupIndexCache).invalidateMemberContentAfterCommit(runtime.id());
   }
 
   @Test
@@ -121,6 +123,37 @@ class HelmAssetWriterTest {
   }
 
   @Test
+  void rejectsNonSemVerPackagesBeforePersistenceAndCleansTheUploadedBlob() throws Exception {
+    Fixture fixture = fixture();
+    byte[] chart = chartPackage("demo", "latest");
+    stubBlobPersistence(fixture);
+
+    assertThrows(IllegalArgumentException.class, () -> fixture.writer.write(
+        runtime(), fixture.storage, 7L, "demo-latest.tgz",
+        new ByteArrayInputStream(chart), null, HelmAssetKind.PACKAGE, null,
+        Map.of(), Map.of(), "user", "127.0.0.1"));
+
+    verify(fixture.componentDao, never()).upsertReturningId(any());
+    verify(fixture.storage).delete(any());
+  }
+
+  @Test
+  void rejectsUnsupportedChartApiVersionsBeforePersistenceAndCleansTheUploadedBlob()
+      throws Exception {
+    Fixture fixture = fixture();
+    byte[] chart = chartPackage("demo", "1.0.0", "v3");
+    stubBlobPersistence(fixture);
+
+    assertThrows(IllegalArgumentException.class, () -> fixture.writer.write(
+        runtime(), fixture.storage, 7L, "demo-1.0.0.tgz",
+        new ByteArrayInputStream(chart), null, HelmAssetKind.PACKAGE, null,
+        Map.of(), Map.of(), "user", "127.0.0.1"));
+
+    verify(fixture.componentDao, never()).upsertReturningId(any());
+    verify(fixture.storage).delete(any());
+  }
+
+  @Test
   void deletesMetadataAndUnreferencedBlob() {
     Fixture fixture = fixture();
     RepositoryRuntime runtime = runtime();
@@ -140,6 +173,21 @@ class HelmAssetWriterTest {
     verify(fixture.componentDao).deleteIfNoAssets(3L);
     verify(fixture.cache).evictAfterCommit(runtime.id(), "demo-1.0.0.tgz");
     verify(fixture.storage, never()).delete(any());
+    verify(fixture.groupIndexCache).invalidateMemberContentAfterCommit(runtime.id());
+  }
+
+  @Test
+  void indexWriteInvalidatesContainingGroupIndexesAndContentWinners() {
+    Fixture fixture = fixture();
+    stubNewAsset(fixture, "index.yaml");
+
+    fixture.writer.writeBytes(
+        runtime(), fixture.storage, 7L, "index.yaml",
+        "apiVersion: v1\nentries: {}\n".getBytes(StandardCharsets.UTF_8),
+        "text/x-yaml", HelmAssetKind.INDEX, null,
+        Map.of(), Map.of(), "hosted", null);
+
+    verify(fixture.groupIndexCache).invalidateMemberAfterCommit(10L);
   }
 
   private static void stubNewAsset(Fixture fixture, String path) {
@@ -167,14 +215,18 @@ class HelmAssetWriterTest {
     ComponentDao componentDao = mock(ComponentDao.class);
     BrowseNodeDao browseNodeDao = mock(BrowseNodeDao.class);
     AssetMetadataCache cache = mock(AssetMetadataCache.class);
+    HelmGroupIndexCache groupIndexCache = mock(HelmGroupIndexCache.class);
     BlobStorage storage = mock(BlobStorage.class);
     return new Fixture(
         assetDao,
         componentDao,
         browseNodeDao,
         cache,
+        groupIndexCache,
         storage,
-        new HelmAssetWriter(assetDao, componentDao, browseNodeDao, cache, null));
+        new HelmAssetWriter(
+            assetDao, componentDao, browseNodeDao, cache, null,
+            groupIndexCache));
   }
 
   private static RepositoryRuntime runtime() {
@@ -184,13 +236,18 @@ class HelmAssetWriterTest {
   }
 
   private static byte[] chartPackage(String name, String version) throws Exception {
+    return chartPackage(name, version, "v2");
+  }
+
+  private static byte[] chartPackage(String name, String version, String apiVersion)
+      throws Exception {
     ByteArrayOutputStream tarBytes = new ByteArrayOutputStream();
     try (TarArchiveOutputStream tar = new TarArchiveOutputStream(tarBytes)) {
       byte[] body = """
-          apiVersion: v2
+          apiVersion: %s
           name: %s
           version: %s
-          """.formatted(name, version).getBytes(StandardCharsets.UTF_8);
+          """.formatted(apiVersion, name, version).getBytes(StandardCharsets.UTF_8);
       TarArchiveEntry entry = new TarArchiveEntry(name + "/Chart.yaml");
       entry.setSize(body.length);
       tar.putArchiveEntry(entry);
@@ -209,6 +266,7 @@ class HelmAssetWriterTest {
       ComponentDao componentDao,
       BrowseNodeDao browseNodeDao,
       AssetMetadataCache cache,
+      HelmGroupIndexCache groupIndexCache,
       BlobStorage storage,
       HelmAssetWriter writer) {
   }

@@ -13,6 +13,9 @@ public interface JsonPersistenceDialect {
 
   String setBoolean(String column, boolean value, String... path);
 
+  /** Returns an expression that stores one string bind parameter at the JSON path. */
+  String setText(String column, String... path);
+
   /**
    * Returns a one-column SELECT that expands a JSON array bind parameter into BIGINT rows.
    * Implementations must validate {@code columnAlias} before interpolating it into SQL.

@@ -160,6 +160,13 @@ public class RepositoryRuntimeRegistry {
     });
   }
 
+  /** Resolve directly from durable repository and ordered-member rows, bypassing both cache tiers. */
+  @Transactional(readOnly = true)
+  public Optional<RepositoryRuntime> resolveFreshById(long id) {
+    return repositoryDao.findById(id)
+        .map(record -> toRuntime(record, new HashSet<>()));
+  }
+
   /**
    * Resolve a record already loaded by the request security filter. This avoids a second
    * repository SELECT in the controller while preserving the same runtime snapshot and

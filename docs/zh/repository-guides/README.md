@@ -15,7 +15,7 @@
 | npm | hosted / proxy / group | [npm 使用示例](../client-recipes.md#npm) | [npm 仓库使用指南](npm.md) |
 | PyPI | hosted / proxy / group | [PyPI 使用示例](../client-recipes.md#pypi) | [PyPI 仓库使用指南](pypi.md) |
 | Go | hosted / proxy / group | [Go 使用示例](../client-recipes.md#go) | [Go 仓库使用指南](go.md) |
-| Helm | hosted / proxy | [Helm 使用示例](../client-recipes.md#helm) | [Helm 仓库使用指南](helm.md) |
+| Helm | hosted / proxy / group | [Helm 使用示例](../client-recipes.md#helm) | [Helm 仓库使用指南](helm.md) |
 | Cargo / Rust | hosted / proxy / group | [Cargo / Rust 使用示例](../client-recipes.md#cargo--rust) | [Cargo / Rust 仓库使用指南](cargo-rust.md) |
 | Dart / Pub | hosted / proxy / group | [Dart / Pub 使用示例](../client-recipes.md#dart--pub) | [Dart / Pub 仓库使用指南](dart-pub.md) |
 | Composer / PHP | hosted / proxy / group | [Composer / PHP 使用示例](../client-recipes.md#composer--php) | [Composer / PHP 仓库使用指南](composer-php.md) |

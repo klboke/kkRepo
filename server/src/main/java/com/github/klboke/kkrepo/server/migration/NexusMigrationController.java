@@ -2,6 +2,8 @@ package com.github.klboke.kkrepo.server.migration;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.auth.AccessDecision;
+import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationPreflight;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationRequest;
@@ -14,7 +16,9 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
+import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
 import com.github.klboke.kkrepo.server.docker.DockerConnectorRuntime;
+import com.github.klboke.kkrepo.server.helm.HelmGroupIndexCache;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCatalogCache;
@@ -34,10 +38,11 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -70,6 +75,8 @@ public class NexusMigrationController {
   private final DockerConnectorRuntime dockerConnectorRuntime;
   private final TerraformRegistryDao terraformRegistry;
   private final PlatformTransactionManager transactionManager;
+  private HelmGroupIndexCache helmGroupIndexCache;
+  private GroupMemberAssetCache groupMemberAssetCache;
 
   public NexusMigrationController(
       ObjectMapper objectMapper,
@@ -112,6 +119,14 @@ public class NexusMigrationController {
     this.transactionManager = transactionManager;
   }
 
+  @Autowired
+  void configureHelmGroupCaches(
+      HelmGroupIndexCache helmGroupIndexCache,
+      GroupMemberAssetCache groupMemberAssetCache) {
+    this.helmGroupIndexCache = helmGroupIndexCache;
+    this.groupMemberAssetCache = groupMemberAssetCache;
+  }
+
   @PostMapping("/preflight")
   public NexusMigrationPreflight preflight(
       @RequestBody NexusMigrationCommand command,
@@ -126,7 +141,7 @@ public class NexusMigrationController {
       HttpServletRequest request) throws Exception {
     requireAdmin(request);
     NexusMigrationResult result = service().migrate(toRequest(command, false));
-    refreshConfigCachesAfterMigration();
+    refreshConfigCachesAfterMigration(result);
     return result;
   }
 
@@ -138,7 +153,8 @@ public class NexusMigrationController {
    * {@code /internal/repositories} (and blob-store/security views) keep serving pre-migration state
    * until the periodic catalog refresh fires.
    */
-  private void refreshConfigCachesAfterMigration() {
+  private void refreshConfigCachesAfterMigration(NexusMigrationResult result) {
+    invalidateMigratedHelmRepositories(result);
     if (blobStorageRegistry != null) {
       blobStorageRegistry.refreshAllAndBroadcast();
     }
@@ -163,6 +179,38 @@ public class NexusMigrationController {
     if (dockerConnectorRuntime != null) {
       dockerConnectorRuntime.sync();
     }
+  }
+
+  private void invalidateMigratedHelmRepositories(NexusMigrationResult result) {
+    if (repositoryDao == null || result == null || result.preflight() == null) return;
+    result.preflight().repositoriesToMigrate().stream()
+        .filter(repository ->
+            RepositoryFormat.HELM.id().equalsIgnoreCase(repository.format()))
+        .map(repository -> repositoryDao.findByName(repository.name()).orElse(null))
+        .filter(repository -> repository != null
+            && repository.id() != null
+            && repository.format() == RepositoryFormat.HELM)
+        .forEach(repository -> {
+          // Config migration bypasses RepositoryService. Invalidate every migrated Helm member,
+          // not only groups present in the Nexus source plan, so a pre-existing target-only group
+          // cannot retain an old chart/provenance winner. A migrated group also invalidates its
+          // own merged index while recursively covering any containing groups.
+          boolean group = repository.type() == RepositoryType.GROUP;
+          if (helmGroupIndexCache != null) {
+            if (group) {
+              helmGroupIndexCache.invalidateGroupAfterCommit(repository.id());
+            } else {
+              helmGroupIndexCache.invalidateMemberAfterCommit(repository.id());
+            }
+          }
+          if (groupMemberAssetCache != null) {
+            if (group) {
+              groupMemberAssetCache.invalidateGroupAfterCommit(repository.id());
+            } else {
+              groupMemberAssetCache.invalidateMemberAfterCommit(repository.id());
+            }
+          }
+        });
   }
 
   @PostMapping("/repository-data/start")

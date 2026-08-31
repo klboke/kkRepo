@@ -40,6 +40,9 @@ class MySqlDatabaseDialectTest {
         "JSON_SET(options_json, '$.packageMigrationEnabled', true)",
         dialect.json().setBoolean("options_json", true, "packageMigrationEnabled"));
     assertEquals(
+        "JSON_SET(attributes_json, '$.configuration', ?)",
+        dialect.json().setText("attributes_json", "configuration"));
+    assertEquals(
         "MATCH(s.namespace, s.name, s.version, s.keywords) AGAINST (? IN BOOLEAN MODE)",
         dialect.search().componentSearchPredicate("s"));
     assertEquals(

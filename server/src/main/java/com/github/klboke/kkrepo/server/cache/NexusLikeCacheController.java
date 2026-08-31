@@ -49,13 +49,41 @@ public class NexusLikeCacheController {
       NexusLikeCacheInfo cacheInfo,
       int maxAgeMinutes,
       Instant now) {
+    return isStale(
+        repositoryId, type, cacheInfo, maxAgeMinutes, now, false);
+  }
+
+  /**
+   * Checks freshness against the durable cache token instead of the node-local hot cache.
+   *
+   * <p>Persistence failures are propagated so correctness-critical cache reads can fail closed.
+   */
+  public boolean isDurablyStale(
+      long repositoryId,
+      NexusCacheType type,
+      NexusLikeCacheInfo cacheInfo,
+      int maxAgeMinutes,
+      Instant now) {
+    return isStale(
+        repositoryId, type, cacheInfo, maxAgeMinutes, now, true);
+  }
+
+  private boolean isStale(
+      long repositoryId,
+      NexusCacheType type,
+      NexusLikeCacheInfo cacheInfo,
+      int maxAgeMinutes,
+      Instant now,
+      boolean durable) {
     if (cacheInfo == null || cacheInfo.lastVerified() == null) {
       return true;
     }
     if (cacheInfo.invalidated()) {
       return true;
     }
-    String currentToken = currentToken(repositoryId, type);
+    String currentToken = durable
+        ? currentDurableToken(repositoryId, type)
+        : currentToken(repositoryId, type);
     if (currentToken != null && !currentToken.equals(cacheInfo.cacheToken())) {
       return true;
     }
@@ -75,15 +103,29 @@ public class NexusLikeCacheController {
     }
   }
 
+  /**
+   * Reads the durable cache token without consulting the node-local hot cache.
+   *
+   * <p>Callers that fence publication against concurrent invalidation must use this method both
+   * before doing work and immediately before publishing the result. Unlike {@link
+   * #currentToken(long, NexusCacheType)}, persistence failures are propagated so those callers can
+   * fail closed instead of publishing under a synthetic token.
+   */
+  public String currentDurableToken(long repositoryId, NexusCacheType type) {
+    return loadDurableToken(tokenKey(repositoryId, type));
+  }
+
   public void invalidate(long repositoryId, NexusCacheType type) {
-    String key = tokenKey(repositoryId, type);
     try {
-      watermark.bump(versionName(key));
+      invalidateOrThrow(repositoryId, type);
     } catch (RuntimeException e) {
-      log.warn("Failed invalidating repository cache token {}", key, e);
-    } finally {
-      localTokens.invalidate(key);
+      log.warn("Failed invalidating repository cache token {}", tokenKey(repositoryId, type), e);
     }
+  }
+
+  /** Advances a cache token and propagates persistence failures to correctness-critical callers. */
+  public void invalidateOrThrow(long repositoryId, NexusCacheType type) {
+    invalidateTokenKeyOrThrow(tokenKey(repositoryId, type));
   }
 
   public void invalidateAll(long repositoryId) {
@@ -102,6 +144,10 @@ public class NexusLikeCacheController {
 
   private String loadToken(String key) {
     return Long.toString(watermark.current(versionName(key)));
+  }
+
+  private String loadDurableToken(String key) {
+    return Long.toString(watermark.currentDurable(versionName(key)));
   }
 
   private void deferAfterCommit(String key) {
@@ -135,9 +181,15 @@ public class NexusLikeCacheController {
 
   private void invalidateTokenKey(String key) {
     try {
-      watermark.bump(versionName(key));
+      invalidateTokenKeyOrThrow(key);
     } catch (RuntimeException e) {
       log.warn("Failed invalidating repository cache token {}", key, e);
+    }
+  }
+
+  private void invalidateTokenKeyOrThrow(String key) {
+    try {
+      watermark.bump(versionName(key));
     } finally {
       localTokens.invalidate(key);
     }

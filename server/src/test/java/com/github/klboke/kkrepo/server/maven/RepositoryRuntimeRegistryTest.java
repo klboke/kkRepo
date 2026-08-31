@@ -103,6 +103,40 @@ class RepositoryRuntimeRegistryTest {
   }
 
   @Test
+  void freshIdResolutionBypassesCachedMemberOrder() {
+    FakeRepositoryDao dao = new FakeRepositoryDao();
+    RepositoryRecord root = repo(1, "root", RepositoryType.GROUP);
+    RepositoryRecord first = repo(2, "first", RepositoryType.HOSTED);
+    RepositoryRecord second = repo(3, "second", RepositoryType.HOSTED);
+    dao.add(root, List.of(first, second));
+    dao.add(first, List.of());
+    dao.add(second, List.of());
+    ObjectMapper mapper = new ObjectMapper()
+        .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+    RepositoryRuntimeRegistry registry = new RepositoryRuntimeRegistry(
+        dao, new InMemorySharedCache(mapper, 1000, null), mapper,
+        (CatalogCacheBroadcaster) null, 300);
+
+    assertEquals(
+        List.of("first", "second"),
+        registry.resolve("root").orElseThrow().members().stream()
+            .map(RepositoryRuntime::name)
+            .toList());
+    dao.add(root, List.of(second, first));
+
+    assertEquals(
+        List.of("first", "second"),
+        registry.resolve("root").orElseThrow().members().stream()
+            .map(RepositoryRuntime::name)
+            .toList());
+    assertEquals(
+        List.of("second", "first"),
+        registry.resolveFreshById(root.id()).orElseThrow().members().stream()
+            .map(RepositoryRuntime::name)
+            .toList());
+  }
+
+  @Test
   void missingRepositoryRecordIsNegativeCachedLocally() {
     FakeRepositoryDao dao = new FakeRepositoryDao();
     RepositoryRuntimeRegistry registry = new RepositoryRuntimeRegistry(dao, 300);

@@ -44,6 +44,7 @@ class HelmAssetReaderTest {
     assertEquals(4, response.contentLength());
     assertEquals("application/gzip", response.contentType());
     assertEquals("sha1", response.etag());
+    assertEquals("sha256", response.internalAttribute(HelmAssetReader.SHA256_ATTRIBUTE));
     verify(registry, never()).forBlobStoreId(7L);
   }
 
@@ -61,7 +62,13 @@ class HelmAssetReaderTest {
         CachedAssetMetadata.of(asset(), blob()), false, "demo-1.0.0.tgz");
 
     assertTrue(response.hasBody());
+    assertEquals("sha256", response.internalAttribute(HelmAssetReader.SHA256_ATTRIBUTE));
     assertEquals("body", new String(response.body().readAllBytes(), StandardCharsets.UTF_8));
+
+    MavenResponse head = reader.serveSnapshot(
+        CachedAssetMetadata.of(asset(), blob()), true, "demo-1.0.0.tgz");
+    assertFalse(head.hasBody());
+    assertEquals("sha256", head.internalAttribute(HelmAssetReader.SHA256_ATTRIBUTE));
   }
 
   @Test

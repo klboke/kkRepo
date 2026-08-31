@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.persistence.jdbc.api;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -11,6 +12,9 @@ public interface RepositoryDao {
   Optional<RepositoryRecord> findById(long id);
 
   Optional<RepositoryRecord> findByName(String name);
+
+  /** Durable repository configuration timestamp used to fence pre-configuration cache entries. */
+  Optional<Instant> findUpdatedAt(long id);
 
   List<RepositoryRecord> list();
 

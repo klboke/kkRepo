@@ -2,21 +2,32 @@ package com.github.klboke.kkrepo.server.migration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
+import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.ConfigMigrationCounts;
+import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.GroupRepositoryMigrationPlan;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationPreflight;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationRequest;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationResult;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationTargetBlobStore;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.NexusMigrationValidation;
+import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService.RepositoryMigrationPlan;
 import com.github.klboke.kkrepo.migration.nexus.NexusApiMigrationService;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
 import com.github.klboke.kkrepo.server.catalog.CatalogCacheBroadcaster;
 import com.github.klboke.kkrepo.server.docker.DockerConnectorManager;
 import com.github.klboke.kkrepo.server.docker.DockerConnectorRuntime;
+import com.github.klboke.kkrepo.server.helm.HelmGroupIndexCache;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCatalogCache;
@@ -263,9 +274,45 @@ class NexusMigrationControllerTest {
     CountingApiKeyAuthCache apiKeyAuthCache = new CountingApiKeyAuthCache();
     CountingBasicAuthCache basicAuthCache = new CountingBasicAuthCache();
     CountingDockerConnectorRuntime dockerConnectorRuntime = new CountingDockerConnectorRuntime();
+    RepositoryDao repositoryDao = mock(RepositoryDao.class);
+    RepositoryRecord helmGroup = new RepositoryRecord(
+        42L,
+        "helm-all",
+        RepositoryFormat.HELM,
+        RepositoryType.GROUP,
+        "helm-group",
+        true,
+        7L,
+        null,
+        null,
+        null,
+        null,
+        null,
+        true,
+        Map.of("recipe", "helm-group"));
+    RepositoryRecord helmHosted = new RepositoryRecord(
+        43L,
+        "helm-hosted",
+        RepositoryFormat.HELM,
+        RepositoryType.HOSTED,
+        "helm-hosted",
+        true,
+        7L,
+        null,
+        null,
+        null,
+        null,
+        "ALLOW",
+        true,
+        Map.of("recipe", "helm-hosted"));
+    when(repositoryDao.findByName("helm-all")).thenReturn(Optional.of(helmGroup));
+    when(repositoryDao.findByName("helm-hosted")).thenReturn(Optional.of(helmHosted));
+    HelmGroupIndexCache helmGroupIndexCache = mock(HelmGroupIndexCache.class);
+    GroupMemberAssetCache groupMemberAssetCache = mock(GroupMemberAssetCache.class);
     NexusMigrationController controller = new TestableNexusMigrationController(
         defaultBlobStore(),
         migrationService,
+        repositoryDao,
         repositoryCatalogCache,
         runtimeRegistry,
         blobStorageRegistry,
@@ -274,6 +321,7 @@ class NexusMigrationControllerTest {
         apiKeyAuthCache,
         basicAuthCache,
         dockerConnectorRuntime);
+    controller.configureHelmGroupCaches(helmGroupIndexCache, groupMemberAssetCache);
     MockHttpServletRequest request = new MockHttpServletRequest(
         "POST",
         "/internal/migration/nexus/run");
@@ -300,6 +348,10 @@ class NexusMigrationControllerTest {
     assertEquals(1, apiKeyAuthCache.evictions);
     assertEquals(1, basicAuthCache.evictions);
     assertEquals(1, dockerConnectorRuntime.syncs);
+    verify(helmGroupIndexCache).invalidateGroupAfterCommit(42L);
+    verify(groupMemberAssetCache).invalidateGroupAfterCommit(42L);
+    verify(helmGroupIndexCache).invalidateMemberAfterCommit(43L);
+    verify(groupMemberAssetCache).invalidateMemberAfterCommit(43L);
   }
 
   private static NexusMigrationController controllerWith(BlobStoreRecord defaultStore) {
@@ -391,9 +443,26 @@ class NexusMigrationControllerTest {
             0,
             0,
             List.of(),
+            List.of(
+                new RepositoryMigrationPlan(
+                    "helm-all",
+                    RepositoryFormat.HELM.id(),
+                    "group",
+                    "helm-group",
+                    "default",
+                    true,
+                    null),
+                new RepositoryMigrationPlan(
+                    "helm-hosted",
+                    RepositoryFormat.HELM.id(),
+                    "hosted",
+                    "helm-hosted",
+                    "default",
+                    true,
+                    null)),
             List.of(),
-            List.of(),
-            List.of(),
+            List.of(new GroupRepositoryMigrationPlan(
+                "helm-all", RepositoryFormat.HELM.id(), List.of("helm-hosted"))),
             List.of(),
             null,
             0,
@@ -411,6 +480,7 @@ class NexusMigrationControllerTest {
     private TestableNexusMigrationController(
         BlobStoreRecord defaultStore,
         NexusApiMigrationService migrationService,
+        RepositoryDao repositoryDao,
         RepositoryCatalogCache repositoryCatalogCache,
         RepositoryRuntimeRegistry runtimeRegistry,
         BlobStorageRegistry blobStorageRegistry,
@@ -422,7 +492,7 @@ class NexusMigrationControllerTest {
       super(
           null,
           new StubBlobStoreDao(defaultStore),
-          null,
+          repositoryDao,
           null,
           null,
           null,

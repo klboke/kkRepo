@@ -20,6 +20,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.docker.DockerConnectorRuntime;
+import com.github.klboke.kkrepo.server.helm.HelmGroupIndexCache;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmGroupPackumentCache;
@@ -88,6 +89,7 @@ public class RepositoryService {
   private final NpmGroupPackumentCache npmGroupPackumentCache;
   private final PypiGroupSimpleIndexCache pypiGroupSimpleIndexCache;
   private final GroupMemberAssetCache groupMemberAssetCache;
+  private HelmGroupIndexCache helmGroupIndexCache;
   private final NexusLikeCacheController cacheController;
   private final RepositoryCatalogCache repositoryCatalogCache;
   private final DockerConnectorRuntime dockerConnectorRuntime;
@@ -153,6 +155,11 @@ public class RepositoryService {
   @Autowired(required = false)
   void setAnsibleGalaxyRegistry(AnsibleGalaxyRegistryDao ansibleRegistry) {
     this.ansibleRegistry = ansibleRegistry;
+  }
+
+  @Autowired
+  void setHelmGroupIndexCache(HelmGroupIndexCache helmGroupIndexCache) {
+    this.helmGroupIndexCache = helmGroupIndexCache;
   }
 
   @Autowired(required = false)
@@ -497,6 +504,12 @@ public class RepositoryService {
       invalidateConanGroupBindings(existing.format(), existing.id());
       invalidateAlpineGroupSnapshots(existing.format(), existing.id());
       invalidateRGroupSnapshots(existing.format(), existing.id());
+    } else if (recipe.type() == RepositoryType.GROUP
+        && existing.format() == RepositoryFormat.HELM
+        && helmGroupIndexCache != null) {
+      // Group online/config changes can invalidate the persisted merged index even when the member
+      // list itself was omitted from the update request.
+      helmGroupIndexCache.invalidateGroupAfterCommit(existing.id());
     } else if (recipe.type() != RepositoryType.GROUP) {
       invalidateNpmMemberAfterCommit(existing.format(), existing.id());
       invalidatePypiMemberAfterCommit(existing.format(), existing.id());
@@ -1087,12 +1100,20 @@ public class RepositoryService {
   }
 
   private void invalidateGroupMemberMemberAfterCommit(RepositoryFormat format, long repositoryId) {
+    if (format == RepositoryFormat.HELM && helmGroupIndexCache != null) {
+      helmGroupIndexCache.invalidateMemberAfterCommit(repositoryId);
+      return;
+    }
     if (groupMemberAssetCache != null && usesGroupMemberAssetCache(format)) {
       groupMemberAssetCache.invalidateMemberAfterCommit(repositoryId);
     }
   }
 
   private void invalidateGroupMemberGroupAfterCommit(RepositoryFormat format, long groupId) {
+    if (format == RepositoryFormat.HELM && helmGroupIndexCache != null) {
+      helmGroupIndexCache.invalidateGroupAfterCommit(groupId);
+      return;
+    }
     if (groupMemberAssetCache != null && usesGroupMemberAssetCache(format)) {
       groupMemberAssetCache.invalidateGroupAfterCommit(groupId);
     }
@@ -2141,6 +2162,7 @@ public class RepositoryService {
 
   private static boolean supportsNestedGroups(RepositoryFormat format) {
     return format == RepositoryFormat.PUB || format == RepositoryFormat.COMPOSER
+        || format == RepositoryFormat.HELM
         || format == RepositoryFormat.TERRAFORM || format == RepositoryFormat.SWIFT
         || format == RepositoryFormat.ANSIBLEGALAXY || format == RepositoryFormat.CONDA;
   }

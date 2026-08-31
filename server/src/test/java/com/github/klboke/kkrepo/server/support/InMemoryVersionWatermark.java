@@ -19,6 +19,11 @@ public class InMemoryVersionWatermark implements VersionWatermark {
   }
 
   @Override
+  public long currentDurable(String name) {
+    return current(name);
+  }
+
+  @Override
   public Map<String, Long> currentAll() {
     return new LinkedHashMap<>(versions);
   }

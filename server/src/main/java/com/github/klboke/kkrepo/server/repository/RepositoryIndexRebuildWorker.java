@@ -5,6 +5,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao.Claim;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
+import com.github.klboke.kkrepo.server.helm.HelmGroupIndexCache;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
@@ -15,7 +16,9 @@ import com.github.klboke.kkrepo.server.swift.SwiftComponentService;
 import com.github.klboke.kkrepo.server.terraform.TerraformComponentService;
 import com.github.klboke.kkrepo.server.yum.YumService;
 import io.micrometer.core.instrument.Timer;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -32,6 +35,7 @@ class RepositoryIndexRebuildWorker {
   private final RepositoryRuntimeRegistry runtimeRegistry;
   private final BlobStorageRegistry blobStorageRegistry;
   private final HelmHostedService helmHostedService;
+  private final HelmGroupIndexCache helmGroupIndexCache;
   private final PypiHostedService pypiHostedService;
   private final YumService yumService;
   private final RubygemsService rubygemsService;
@@ -41,12 +45,15 @@ class RepositoryIndexRebuildWorker {
   private final KkRepoMetrics metrics;
   private final int batchSize;
   private final boolean enabled;
+  // This flag only chooses which durable queue is claimed first; it is not correctness state.
+  private final AtomicBoolean helmInvalidationsFirst = new AtomicBoolean(true);
 
   RepositoryIndexRebuildWorker(
       RepositoryIndexRebuildDao dao,
       RepositoryRuntimeRegistry runtimeRegistry,
       BlobStorageRegistry blobStorageRegistry,
       HelmHostedService helmHostedService,
+      HelmGroupIndexCache helmGroupIndexCache,
       PypiHostedService pypiHostedService,
       YumService yumService,
       RubygemsService rubygemsService,
@@ -60,6 +67,7 @@ class RepositoryIndexRebuildWorker {
     this.runtimeRegistry = runtimeRegistry;
     this.blobStorageRegistry = blobStorageRegistry;
     this.helmHostedService = helmHostedService;
+    this.helmGroupIndexCache = helmGroupIndexCache;
     this.pypiHostedService = pypiHostedService;
     this.yumService = yumService;
     this.rubygemsService = rubygemsService;
@@ -85,7 +93,16 @@ class RepositoryIndexRebuildWorker {
   }
 
   private void runBatch() {
-    List<Claim> claims = dao.claim(batchSize);
+    boolean helmFirst = claimHelmInvalidationsFirst();
+    List<Claim> claims = helmFirst
+        ? new ArrayList<>(dao.claimHelmGroupInvalidations(batchSize))
+        : new ArrayList<>(dao.claim(batchSize));
+    int remaining = batchSize - claims.size();
+    if (remaining > 0) {
+      claims.addAll(helmFirst
+          ? dao.claim(remaining)
+          : dao.claimHelmGroupInvalidations(remaining));
+    }
     if (claims.isEmpty()) return;
     metrics.incrementWorkerItems("repository_index_rebuild", "claim", "claimed", claims.size());
     for (Claim claim : claims) {
@@ -103,7 +120,19 @@ class RepositoryIndexRebuildWorker {
     }
   }
 
+  private boolean claimHelmInvalidationsFirst() {
+    while (true) {
+      boolean current = helmInvalidationsFirst.get();
+      if (helmInvalidationsFirst.compareAndSet(current, !current)) return current;
+    }
+  }
+
   private void execute(Claim claim) {
+    if (RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION.equals(claim.indexKind())
+        || RepositoryIndexRebuildDao.HELM_GROUP_CONTENT_INVALIDATION.equals(claim.indexKind())) {
+      helmGroupIndexCache.retryInvalidation(claim.repositoryId(), claim.indexKind());
+      return;
+    }
     RepositoryRuntime runtime = runtimeRegistry.resolveById(claim.repositoryId()).orElse(null);
     if (runtime == null) {
       return;

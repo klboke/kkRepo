@@ -64,7 +64,8 @@ public class HelmHostedService {
       ensureIndex(runtime);
       // A sibling replica may rebuild this generated asset. Bypass the node-local hot entry so
       // the durable DB/blob binding becomes visible immediately instead of after the 60s TTL.
-      assetMetadataCache.evict(runtime.id(), path);
+      // This is a read-side refresh, so it must not advance the durable member-write generation.
+      assetMetadataCache.evictEntry(runtime.id(), path);
     }
     CachedAssetMetadata snapshot = assetMetadataCache.find(
         runtime.id(), path,
@@ -120,6 +121,8 @@ public class HelmHostedService {
     }
     validateChartPathSegment("name", metadata.name());
     validateChartPathSegment("version", metadata.version());
+    validateChartApiVersion(metadata.apiVersion());
+    validateChartVersion(metadata.version());
     String path = metadata.name() + "-" + metadata.version() + HelmAssetKind.PACKAGE.extension();
     if (assetDao.findAssetByPath(runtime.id(), path).isPresent()) {
       throw new MavenExceptions.WritePolicyDenied("Asset already exists: " + path);
@@ -289,14 +292,22 @@ public class HelmHostedService {
   }
 
   private static void validateChartPathSegment(String field, String value) {
-    if (value == null || value.isBlank()
-        || value.indexOf('\0') >= 0
-        || value.contains("/")
-        || value.contains("\\")
-        || value.equals(".")
-        || value.equals("..")
-        || value.contains("..")) {
+    if (!HelmIndex.isSafeChartPathSegment(value)) {
       throw new MavenExceptions.LayoutPolicyViolation("Invalid Helm chart " + field + ": " + value);
+    }
+  }
+
+  private static void validateChartVersion(String version) {
+    if (!HelmIndex.isValidChartVersion(version)) {
+      throw new MavenExceptions.LayoutPolicyViolation(
+          "Invalid Helm chart version: expected a Helm-compatible semantic version");
+    }
+  }
+
+  private static void validateChartApiVersion(String apiVersion) {
+    if (!HelmIndex.isValidChartApiVersion(apiVersion)) {
+      throw new MavenExceptions.LayoutPolicyViolation(
+          "Invalid Helm chart apiVersion: expected v1 or v2");
     }
   }
 
