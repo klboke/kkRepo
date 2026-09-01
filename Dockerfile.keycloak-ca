@@ -1,6 +1,0 @@
-ARG BASE_IMAGE=dockerhub.kubekey.local/xyb/kkrepo:1.0.0-keycloak-ca
-FROM ${BASE_IMAGE}
-
-USER root
-COPY --chown=999:999 server/target/kkrepo-server-1.0.0.jar /app/kkrepo.jar
-USER 999:999
