@@ -39,6 +39,8 @@ assert "KKREPO_SCANNER_SERVICE_CREDENTIAL" not in updater["environment"], source
 assert updater["environment"]["KKREPO_SCANNER_DATABASE_UPDATE_ONLY"] == "true", source
 assert updater["environment"]["KKREPO_SCANNER_DB_AUTO_UPDATE"] == "false", source
 assert updater["environment"]["KKREPO_SCANNER_DATABASE_UPDATE_LOCK_TIMEOUT"] == "10m", source
+assert updater["environment"]["KKREPO_SCANNER_DB_UPDATE_URL"] == "https://grype.anchore.io/databases", source
+assert "KKREPO_SCANNER_DB_CA_CERT" not in updater["environment"], source
 assert set(updater["networks"]) == {"scanner-update-egress"}, source
 assert "scanner-update-egress" not in application["networks"], source
 assert set(application["networks"]) == {

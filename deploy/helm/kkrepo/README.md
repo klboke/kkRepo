@@ -35,13 +35,14 @@ helm upgrade --install kkrepo deploy/helm/kkrepo \
 ```
 
 For an HTTPS Grype database mirror, configure its URL and provide the CA certificate through a
-Secret. The chart passes these settings only to the non-serving database updater:
+Secret. For an existing release, use `helm upgrade --reuse-values` so its customized values are
+preserved. The chart passes these settings only to the non-serving database updater:
 
 ```bash
 kubectl create secret generic grype-mirror-ca \
   --from-file=ca.crt=/path/to/mirror-ca.crt
 
-helm upgrade --install kkrepo deploy/helm/kkrepo \
+helm upgrade kkrepo deploy/helm/kkrepo --reuse-values \
   --set securityScanning.enabled=true \
   --set securityScanning.scannerDatabase.updateUrl='https://192.168.1.100/grype-db' \
   --set securityScanning.scannerDatabase.caCert.existingSecret=grype-mirror-ca \
