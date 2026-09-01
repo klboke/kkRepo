@@ -103,6 +103,9 @@ http://{{ $scannerName }}-{{ $index }}.{{ $headlessName }}:{{ $root.Values.secur
 {{- if and .Values.securityScanning.enabled (not .Values.securityScanning.serviceCredential.existingSecret) }}
 {{- fail "securityScanning.serviceCredential.existingSecret is required when scanning is enabled" }}
 {{- end }}
+{{- if and .Values.securityScanning.enabled .Values.securityScanning.scannerDatabase.caCert.existingSecret (not .Values.securityScanning.scannerDatabase.caCert.key) }}
+{{- fail "securityScanning.scannerDatabase.caCert.key is required when a CA Secret is configured" }}
+{{- end }}
 {{- if and .Values.securityScanning.enabled (lt (int .Values.securityScanning.replicaCount) 1) }}
 {{- fail "securityScanning.replicaCount must be at least 1 when scanning is enabled" }}
 {{- end }}
