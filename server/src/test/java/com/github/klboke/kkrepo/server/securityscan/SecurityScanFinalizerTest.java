@@ -43,6 +43,19 @@ import org.mockito.ArgumentCaptor;
 
 class SecurityScanFinalizerTest {
   @Test
+  void doesNotUnboxNullPolicyAgeWhenConfigAgeIsAlsoUnset() {
+    RepositoryScanConfig config = new RepositoryScanConfig(
+        1L, true, 1L, true, true, EnforcementMode.AUDIT,
+        PolicyAction.ALLOW, PolicyAction.ALLOW, PolicyAction.ALLOW,
+        null, 101L, 1L, Instant.EPOCH, Instant.EPOCH);
+    ScanPolicy policy = new ScanPolicy(
+        101L, "policy", true, Severity.CRITICAL, false, false, false,
+        null, List.of(), 1L, "test", Instant.EPOCH, Instant.EPOCH);
+
+    assertEquals(null, SecurityScanFinalizer.staleAt(config, policy, Instant.EPOCH));
+  }
+
+  @Test
   void retriesRetryableFailuresAndFencesLeaseLoss() {
     SecurityScanDao scans = mock(SecurityScanDao.class);
     SecurityScanFinalizer finalizer = finalizer(scans);
