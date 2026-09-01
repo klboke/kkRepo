@@ -34,6 +34,26 @@ helm upgrade --install kkrepo deploy/helm/kkrepo \
   --set securityScanning.enabled=true
 ```
 
+For an HTTPS Grype database mirror, configure its URL and provide the CA certificate through a
+Secret. The chart passes these settings only to the non-serving database updater:
+
+```bash
+kubectl -n common create secret generic grype-mirror-ca \
+  --from-file=ca.crt=/path/to/mirror-ca.crt
+
+helm upgrade --install kkrepo deploy/helm/kkrepo \
+  --set securityScanning.enabled=true \
+  --set securityScanning.scannerDatabase.updateUrl='https://10.31.13.1/grype-db' \
+  --set securityScanning.scannerDatabase.caCert.existingSecret=grype-mirror-ca \
+  --set securityScanning.scannerDatabase.caCert.key=ca.crt \
+  --set securityScanning.networkPolicy.databaseMirror.enabled=true \
+  --set securityScanning.networkPolicy.databaseMirror.cidr='10.31.13.1/32'
+```
+
+Leave `updateUrl` empty to retain Grype's default database endpoint. The mirror URL must also be
+allowed by the updater NetworkPolicy when it points to a private address; use
+`securityScanning.networkPolicy.databaseMirror` for that explicit egress rule.
+
 The scanner NetworkPolicy permits DNS only to pods selected by
 `securityScanning.networkPolicy.dns`. Its defaults target `kube-dns` in `kube-system`; override
 both selectors for clusters that label the DNS workload differently. Empty selectors are rejected

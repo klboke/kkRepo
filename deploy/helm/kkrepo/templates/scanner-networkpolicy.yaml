@@ -87,5 +87,13 @@ spec:
       ports:
         - protocol: TCP
           port: 443
+    {{- if .Values.securityScanning.networkPolicy.databaseMirror.enabled }}
+    - to:
+        - ipBlock:
+            cidr: {{ required "securityScanning.networkPolicy.databaseMirror.cidr is required when the database mirror egress is enabled" .Values.securityScanning.networkPolicy.databaseMirror.cidr }}
+      ports:
+        - protocol: TCP
+          port: {{ .Values.securityScanning.networkPolicy.databaseMirror.port }}
+    {{- end }}
 {{- end }}
 {{- end }}
