@@ -85,6 +85,7 @@ class ContentSelectorManagementTest {
     repositories();
     var options = controller.options(request);
     assertTrue(options.permissions().get("create")); assertFalse(options.permissions().get("read"));
+    assertEquals(1, options.repositories().size());
     assertTrue(options.usedBy().isEmpty()); verify(security, never()).listPrivileges();
   }
 
@@ -113,7 +114,7 @@ class ContentSelectorManagementTest {
   }
 
   @Test
-  void selectorReadPermissionExposesUsageButDoesNotGrantWriteActions() {
+  void selectorReferencesRequirePrivilegeReadAndNeverGrantWriteActions() {
     repositories();
     var security = mock(SecurityManagementService.class);
     var request = mock(HttpServletRequest.class);
@@ -129,7 +130,13 @@ class ContentSelectorManagementTest {
             Map.of("selectorName", "team"), ""),
         new SecurityPayloads.PrivilegeView("unrelated", "unrelated", "", "wildcard", false, Map.of(), "")));
     var result = controller.options(request);
+    assertTrue(result.usedBy().isEmpty());
+    assertTrue(result.repositories().isEmpty());
+    verify(security, never()).listPrivileges();
+    when(security.decide(subject, "nexus:privileges:read")).thenReturn(AccessDecision.allow());
+    result = controller.options(request);
     assertEquals(Map.of("team", List.of("team-read")), result.usedBy());
+    assertEquals(1, result.repositories().size());
     assertTrue(result.permissions().get("read")); assertFalse(result.permissions().get("update"));
     assertFalse(result.permissions().get("createPrivilege"));
   }

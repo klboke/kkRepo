@@ -10,7 +10,7 @@ Content selectors grant access to matching paths within a repository. A selector
 4. Save the selector. Choose **Create privilege** on its row, choose the repository scope, and select actions. The default actions are `browse` and `read`.
 5. Open **Security → Roles**, add the new privilege to a role, and assign that role to the intended users.
 
-The list shows which privileges reference a selector. Referenced selectors cannot be deleted until those privileges are changed or removed. Names and selector types are immutable in the editor. Invalid new or changed expressions return HTTP 400 and leave the saved expression unchanged.
+The list shows which privileges reference a selector when the user also has `nexus:privileges:read`. Referenced selectors cannot be deleted until those privileges are changed or removed. Names and selector types are immutable in the editor. Invalid new or changed expressions return HTTP 400 and leave the saved expression unchanged.
 
 A preview is an administrative operation: it requires authentication and either `nexus:selectors:create` or `nexus:selectors:update`. Repository read access alone does not permit previewing another repository's content. CRUD uses `nexus:selectors:read/create/update/delete`; creating the privilege also requires `nexus:privileges:create`.
 

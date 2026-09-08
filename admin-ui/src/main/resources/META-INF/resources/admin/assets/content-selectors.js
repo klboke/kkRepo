@@ -60,7 +60,7 @@
       const row = document.createElement("tr");
       cell(row, selector.name, true); cell(row, selector.type);
       cell(row, selector.expression, true); cell(row, selector.description);
-      const usedBy = options.usedBy[selector.name] || [];
+      const usedBy = Object.hasOwn(options.usedBy, selector.name) ? options.usedBy[selector.name] : [];
       cell(row, usedBy.join(", "));
       const actions = document.createElement("td"); actions.className = "selector-actions";
       button(actions, options.permissions.update ? "Edit" : "View", () => edit(selector));

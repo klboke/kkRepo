@@ -47,8 +47,9 @@ public class ContentSelectorManagementController {
       throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Selector permission required");
     }
     permissions.put("createPrivilege", allowed(subject, "privileges:create"));
+    boolean readPrivileges = allowed(subject, "privileges:read");
     Map<String, List<String>> usedBy = new LinkedHashMap<>();
-    if (permissions.get("read")) {
+    if (permissions.get("read") && readPrivileges) {
       for (var privilege : security.listPrivileges()) {
         if (!"repository-content-selector".equals(privilege.type())) continue;
         Object selector = null;
@@ -59,9 +60,15 @@ public class ContentSelectorManagementController {
             .add(privilege.name());
       }
     }
-    return new Options(permissions, repositories.snapshot().records().stream()
-        .map(repository -> new RepositoryOption(repository.name(), repository.format().id(),
-            repository.type().name().toLowerCase(java.util.Locale.ROOT))).toList(), usedBy);
+    // Repository choices are needed for preview/privilege creation. Plain selector readers
+    // cannot use those actions and must not gain a repository configuration listing here.
+    List<RepositoryOption> repositoryOptions = permissions.get("create") || permissions.get("update")
+        || permissions.get("createPrivilege") || readPrivileges
+        ? repositories.snapshot().records().stream()
+            .map(repository -> new RepositoryOption(repository.name(), repository.format().id(),
+                repository.type().name().toLowerCase(java.util.Locale.ROOT))).toList()
+        : List.of();
+    return new Options(permissions, repositoryOptions, usedBy);
   }
 
   private boolean allowed(AuthenticatedSubject subject, String permission) {
