@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.security;
 
+import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.server.repositories.RepositoryNotFoundException;
 import com.github.klboke.kkrepo.server.repositories.RepositoryService;
 import com.github.klboke.kkrepo.server.repositories.RepositoryView;
@@ -65,8 +66,9 @@ public class NexusSecurityRestController {
   private static final Set<String> BREAD_ACTIONS = Set.of("browse", "read", "edit", "add", "delete", "*");
   private static final Set<String> CRUD_ACTIONS = Set.of(
       "read", "edit", "add", "delete", "associate", "disassociate", "*");
-  private static final Set<String> SUPPORTED_REPOSITORY_FORMATS = Set.of(
-      "*", "maven2", "npm", "pypi", "go", "helm", "raw");
+  private static final Set<String> SUPPORTED_REPOSITORY_FORMATS = java.util.stream.Stream.concat(
+      java.util.stream.Stream.of("*"), java.util.Arrays.stream(RepositoryFormat.values()).map(RepositoryFormat::id))
+      .collect(java.util.stream.Collectors.toUnmodifiableSet());
 
   private final SecurityManagementService securityService;
   private final RepositoryService repositoryService;

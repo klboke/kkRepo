@@ -356,9 +356,11 @@ final class ContentSelectorExpressionEvaluator {
       if ("coordinate.extension".equals(left.variable()) || "coordinate.extension".equals(right.variable())) {
         return normalize(left, false).replaceFirst("^\\.+", "").equals(normalize(right, false).replaceFirst("^\\.+", ""));
       }
-      if (left.bool() != null || right.bool() != null) return left.truthy() == right.truthy();
-      if (left.text() == null || right.text() == null) return Objects.equals(left.text(), right.text());
+      // Legacy path comparisons use literal text even for Boolean tokens. Moving this
+      // behind truthiness would turn `path == true` into a grant for every nonempty path.
       boolean path = new Operand(null, null, left.variable()).path() || new Operand(null, null, right.variable()).path();
+      if (!path && (left.bool() != null || right.bool() != null)) return left.truthy() == right.truthy();
+      if (left.text() == null || right.text() == null) return Objects.equals(left.text(), right.text());
       return normalize(left, path).equals(normalize(right, path));
     }
     private static String normalize(Value value, boolean path) {

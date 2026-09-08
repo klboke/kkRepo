@@ -54,6 +54,30 @@ import org.springframework.web.server.ResponseStatusException;
 
 class NexusSecurityRestControllerTest {
   @Test
+  void selectorPrivilegesAcceptEveryCatalogFormatForSpecificAndWildcardRepositories() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    var repositories = org.mockito.Mockito.mock(RepositoryService.class);
+    var controller = new NexusSecurityRestController(new SecurityManagementService(dao), repositories);
+    controller.createContentSelector(new NexusContentSelector("all-formats", "csel", "", "path =^ '/team/'"));
+    for (RepositoryFormat format : RepositoryFormat.values()) {
+      String repository = "repo-" + format.id();
+      org.mockito.Mockito.when(repositories.get(repository)).thenReturn(new RepositoryView(
+          1L, repository, format.id() + "-hosted", format, RepositoryType.HOSTED, true,
+          "default", false, "/repository/" + repository + "/", null, null, null, null, null, null));
+      for (String scope : List.of(repository, "*")) {
+        String name = "selector-" + format.id() + (scope.equals("*") ? "-all" : "-one");
+        var payload = new NexusPrivilege(null, name, null, null, null, null,
+            List.of("browse", "read"), format.id(), scope, "all-formats", null, null);
+        assertEquals(201, controller.createRepositoryContentSelectorPrivilege(payload).getStatusCode().value());
+        assertEquals(204, controller.updateRepositoryContentSelectorPrivilege(name, payload).getStatusCode().value());
+        var properties = dao.findPrivilege(name).orElseThrow().properties();
+        assertEquals(format.id(), properties.get("format"));
+        assertEquals(scope, properties.get("repository"));
+      }
+    }
+  }
+
+  @Test
   void concurrentSelectorCreateConflictCannotFallBackToUpdatingTheWinner() {
     var dao = org.mockito.Mockito.mock(SecurityDao.class);
     org.mockito.Mockito.doThrow(new org.springframework.dao.DuplicateKeyException("duplicate target"))

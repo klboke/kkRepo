@@ -9,6 +9,22 @@ import org.junit.jupiter.api.Test;
 class ContentSelectorExpressionEvaluatorTest {
 
   @Test
+  void legacyBooleanPathComparisonsRetainLiteralPathSemantics() {
+    for (String alias : java.util.List.of("path", "name", "asset.name", "asset.path", "content.path")) {
+      for (String literal : java.util.List.of("true", "false")) {
+        for (String expression : java.util.List.of(alias + " == " + literal, literal + " == " + alias)) {
+          assertTrue(ContentSelectorExpressionEvaluator.matches(expression, "raw", "raw", "/" + literal), expression);
+          assertFalse(ContentSelectorExpressionEvaluator.matches(expression, "raw", "raw", "private/secret"), expression);
+          assertFalse(ContentSelectorExpressionEvaluator.matches(expression, "raw", "raw", ""), expression);
+        }
+        assertFalse(ContentSelectorExpressionEvaluator.matches(alias + " != " + literal, "raw", "raw", literal));
+        assertTrue(ContentSelectorExpressionEvaluator.matches(alias + " != " + literal, "raw", "raw", "private/secret"));
+      }
+    }
+    assertTrue(ContentSelectorExpressionEvaluator.matches("format == true", "raw", "raw", "a"));
+  }
+
+  @Test
   void validatesPortableCselAndRejectsInvalidOrUnsupportedSyntax() {
     for (String expression : java.util.List.of(
         "format == 'raw' and (path =^ '/team/' or path == '/README')",
