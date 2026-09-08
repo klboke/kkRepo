@@ -496,6 +496,16 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
         """, repositoryTargetRowMapper, targetId).stream().findFirst();
   }
 
+  @Override
+  public void insertRepositoryTarget(SecurityRepositoryTargetRecord record) {
+    jdbcTemplate.update("""
+        INSERT INTO security_repository_target
+          (target_id, name, format, content_expression, path_patterns_json, attributes_json)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """, record.targetId(), record.name(), record.format(), record.contentExpression(),
+        jsonColumns.parameter(record.pathPatterns()), jsonColumns.parameter(record.attributes()));
+  }
+
   public void upsertRepositoryTarget(SecurityRepositoryTargetRecord record) {
     Object pathPatterns = jsonColumns.parameter(record.pathPatterns());
     Object attributes = jsonColumns.parameter(record.attributes());

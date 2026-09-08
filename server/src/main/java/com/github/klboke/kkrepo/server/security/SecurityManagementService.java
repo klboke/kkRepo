@@ -721,7 +721,16 @@ public class SecurityManagementService implements AccessDecisionService {
   }
 
   @Transactional
+  public RepositoryTargetView createContentSelector(RepositoryTargetCommand command) {
+    return saveRepositoryTarget(command, true);
+  }
+
+  @Transactional
   public RepositoryTargetView saveRepositoryTarget(RepositoryTargetCommand command) {
+    return saveRepositoryTarget(command, false);
+  }
+
+  private RepositoryTargetView saveRepositoryTarget(RepositoryTargetCommand command, boolean createOnly) {
     String targetId = requireText(command.targetId(), "targetId");
     if (command.attributes() != null && "nexus-content-selector".equals(command.attributes().get("source"))) {
       String type = String.valueOf(command.attributes().getOrDefault("type", "csel"));
@@ -745,7 +754,15 @@ public class SecurityManagementService implements AccessDecisionService {
         blankToNull(command.contentExpression()),
         Map.of("patterns", pathPatterns),
         copyMap(command.attributes()));
-    securityDao.upsertRepositoryTarget(record);
+    if (createOnly) {
+      try {
+        securityDao.insertRepositoryTarget(record);
+      } catch (org.springframework.dao.DuplicateKeyException e) {
+        throw new SecurityValidationException("Content selector already exists: " + targetId);
+      }
+    } else {
+      securityDao.upsertRepositoryTarget(record);
+    }
     invalidateAuthorizationCacheAfterCommit();
     return toRepositoryTargetView(securityDao.findRepositoryTarget(targetId).orElseThrow());
   }

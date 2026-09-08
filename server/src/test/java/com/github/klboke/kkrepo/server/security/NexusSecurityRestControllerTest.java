@@ -53,6 +53,21 @@ import org.junit.jupiter.api.Test;
 import org.springframework.web.server.ResponseStatusException;
 
 class NexusSecurityRestControllerTest {
+  @Test
+  void concurrentSelectorCreateConflictCannotFallBackToUpdatingTheWinner() {
+    var dao = org.mockito.Mockito.mock(SecurityDao.class);
+    org.mockito.Mockito.doThrow(new org.springframework.dao.DuplicateKeyException("duplicate target"))
+        .when(dao).insertRepositoryTarget(org.mockito.ArgumentMatchers.any());
+    var service = new SecurityManagementService(dao);
+    var command = new SecurityPayloads.RepositoryTargetCommand("team", "team", "*", "path =^ '/team/'",
+        List.of(), Map.of("source", "nexus-content-selector", "type", "csel"));
+    assertThrows(SecurityValidationException.class, () -> service.createContentSelector(command));
+    org.mockito.Mockito.verify(dao, org.mockito.Mockito.never()).upsertRepositoryTarget(org.mockito.ArgumentMatchers.any());
+    var invalidName = new SecurityPayloads.RepositoryTargetCommand("bad name", "bad name", "*", "path =^ '/'",
+        List.of(), Map.of("source", "nexus-content-selector", "type", "csel"));
+    assertThrows(SecurityValidationException.class, () -> service.createContentSelector(invalidName));
+  }
+
 
   @Test
   void userSourcesExposeConfiguredRealmSources() {
@@ -2917,6 +2932,12 @@ class NexusSecurityRestControllerTest {
     @Override
     public Optional<SecurityRepositoryTargetRecord> findRepositoryTarget(String targetId) {
       return Optional.ofNullable(repositoryTargets.get(targetId));
+    }
+
+    @Override
+    public void insertRepositoryTarget(SecurityRepositoryTargetRecord record) {
+      if (repositoryTargets.containsKey(record.targetId())) throw new org.springframework.dao.DuplicateKeyException("duplicate target");
+      upsertRepositoryTarget(record);
     }
 
     @Override

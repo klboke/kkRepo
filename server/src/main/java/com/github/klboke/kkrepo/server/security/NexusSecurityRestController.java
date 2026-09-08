@@ -360,7 +360,7 @@ public class NexusSecurityRestController {
     if (securityService.findRepositoryTarget(name).isPresent()) {
       throw new SecurityValidationException("Content selector already exists: " + name);
     }
-    securityService.saveRepositoryTarget(toRepositoryTargetCommand(name, request, "csel"));
+    securityService.createContentSelector(toRepositoryTargetCommand(name, request, "csel"));
     return ResponseEntity.noContent().build();
   }
 

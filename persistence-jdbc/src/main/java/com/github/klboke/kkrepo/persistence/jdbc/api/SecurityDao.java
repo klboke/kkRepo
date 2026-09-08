@@ -84,6 +84,11 @@ public interface SecurityDao {
 
   Optional<SecurityRepositoryTargetRecord> findRepositoryTarget(String targetId);
 
+  /** Inserts a new target; a duplicate identity must fail without updating the existing target. */
+  default void insertRepositoryTarget(SecurityRepositoryTargetRecord record) {
+    throw new UnsupportedOperationException("Atomic target creation is not implemented");
+  }
+
   void upsertRepositoryTarget(SecurityRepositoryTargetRecord record);
 
   int deleteRepositoryTarget(String targetId);

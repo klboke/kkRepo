@@ -20,6 +20,11 @@
   const originalTitle = document.title;
 
   const zh = {
+    "Refresh": "刷新",
+    "View": "查看",
+    "Edit": "编辑",
+    "Delete": "删除",
+    "All repositories": "全部仓库",
     "Content Selectors": "内容选择器",
     "Grant access to selected repository content": "按内容范围授予仓库访问权限",
     "Create selector": "创建选择器",
@@ -746,6 +751,10 @@
         return `${zh[prefix] || prefix}：${body.slice(prefix.length + 2)}`;
       }
     }
+    match = body.match(/^All (.+) repositories$/);
+    if (match) return `全部 ${match[1]} 仓库`;
+    match = body.match(/^Delete content selector "(.+)"\?$/);
+    if (match) return `删除内容选择器“${match[1]}”？`;
     match = body.match(/^Page (\d+) \/ (\d+)$/);
     if (match) return `第 ${match[1]} 页 / 共 ${match[2]} 页`;
     match = body.match(/^(\d+)-(\d+) of (\d+)$/);

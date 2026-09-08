@@ -84,6 +84,30 @@ import org.springframework.dao.DuplicateKeyException;
 /** Reusable black-box contract that every database backend must pass through the public API. */
 public abstract class PersistenceApiContract {
   @Test
+  void concurrentSelectorCreationNeverOverwritesTheWinningExpression() throws Exception {
+    CyclicBarrier ready = new CyclicBarrier(2);
+    List<Callable<String>> attempts = List.of("path =^ '/one/'", "path =^ '/two/'").stream()
+        .<Callable<String>>map(expression -> () -> {
+          ready.await(10, java.util.concurrent.TimeUnit.SECONDS);
+          try {
+            return inTransaction(() -> {
+              stores().security().insertRepositoryTarget(
+                  new com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRepositoryTargetRecord(
+                      null, "concurrent-selector", "concurrent-selector", "*", expression,
+                      Map.of("patterns", List.of()), Map.of("source", "nexus-content-selector", "type", "csel")));
+              return expression;
+            });
+          } catch (DuplicateKeyException expected) {
+            return "duplicate";
+          }
+        }).toList();
+    List<String> results = invokeConcurrently(attempts, 2);
+    assertEquals(1, results.stream().filter("duplicate"::equals).count());
+    String winner = results.stream().filter(result -> !result.equals("duplicate")).findFirst().orElseThrow();
+    assertEquals(winner, stores().security().findRepositoryTarget("concurrent-selector").orElseThrow().contentExpression());
+  }
+
+  @Test
   void selectorCandidateBooleanScopesStayWithinTheirRepositories() {
     long repo = createRepository("selector-boolean", RepositoryFormat.RAW);
     long other = createRepository("selector-boolean-other", RepositoryFormat.RAW);
