@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.browse;
 
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter;
 import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
@@ -217,6 +218,19 @@ public class ComponentSearchController {
       RepositoryFormat repositoryFormat,
       int candidateLimit,
       boolean scanForCoordinateFilters) {
+    Map<Long, AssetPathFilter> candidateFilters = new LinkedHashMap<>();
+    Map<String, RepositoryRecord> records = new LinkedHashMap<>();
+    repositoryCatalogCache.snapshot().records().forEach(record -> records.put(record.name(), record));
+    for (Long repositoryId : scope.selectorRepositoryIds()) {
+      var filter = AssetPathFilter.NONE;
+      for (BrowseContext context : scope.selectorContexts(repositoryId)) {
+        RepositoryRecord repository = records.get(context.repositoryName());
+        if (repository == null) continue;
+        filter = AssetPathFilter.or(filter,
+            securityService.selectorCandidateFilter(subject.permissionSubject(), repositoryPermission(repository)));
+      }
+      candidateFilters.put(repositoryId, filter);
+    }
     List<ComponentSearchRow> visible = new ArrayList<>();
     ComponentSearchCursor cursor = null;
     int scanned = 0;
@@ -225,7 +239,7 @@ public class ComponentSearchController {
         && (scanForCoordinateFilters || visible.size() < candidateLimit)) {
       int pageLimit = Math.min(SELECTOR_PAGE_SIZE, MAX_SELECTOR_CANDIDATES - scanned);
       List<ComponentSearchRow> page = componentDao.searchPageByRepositoryIds(
-          scope.selectorRepositoryIds(), repositoryFormat, keyword, cursor, pageLimit);
+          scope.selectorRepositoryIds(), repositoryFormat, keyword, cursor, pageLimit, candidateFilters);
       if (page.isEmpty()) {
         reachedEnd = true;
         break;

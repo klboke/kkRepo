@@ -356,6 +356,7 @@ public class NexusSecurityRestController {
   @PostMapping("/content-selectors")
   public ResponseEntity<Void> createContentSelector(@RequestBody NexusContentSelector request) {
     String name = requireText(request.name(), "name");
+    validateNexusName(name, "name");
     if (securityService.findRepositoryTarget(name).isPresent()) {
       throw new SecurityValidationException("Content selector already exists: " + name);
     }

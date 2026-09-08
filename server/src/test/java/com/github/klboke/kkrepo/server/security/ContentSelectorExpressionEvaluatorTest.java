@@ -1,11 +1,65 @@
 package com.github.klboke.kkrepo.server.security;
 
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.*;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 
 class ContentSelectorExpressionEvaluatorTest {
+
+  @Test
+  void validatesPortableCselAndRejectsInvalidOrUnsupportedSyntax() {
+    for (String expression : java.util.List.of(
+        "format == 'raw' and (path =^ '/team/' or path == '/README')",
+        "path != '/private'", "path =~ '^/team/.*'")) {
+      assertDoesNotThrow(() -> ContentSelectorExpressionEvaluator.validate("csel", expression));
+    }
+    for (String expression : java.util.List.of("", "path ==", "unknown != 'secret'",
+        "maven.groupId == 'org.example'", "coordinate.groupId == 'org.example'",
+        "not (path == '/private')", "true", "path =~ '['", "path =~ '(?<=team).*'",
+        "path == 'a' trailing", "(".repeat(65) + "path == 'a'" + ")".repeat(65),
+        "path == '" + "a".repeat(8192) + "'")) {
+      assertThrows(SecurityValidationException.class,
+          () -> ContentSelectorExpressionEvaluator.validate("csel", expression), expression);
+    }
+    assertThrows(SecurityValidationException.class,
+        () -> ContentSelectorExpressionEvaluator.validate("groovy", "path == 'a'"));
+    assertDoesNotThrow(() -> ContentSelectorExpressionEvaluator.validate("jexl",
+        "coordinate.groupId == 'org.example' and not asset.name == '/private'"));
+  }
+
+  @Test
+  void candidateFiltersAreConservativeAcrossFormatsBooleanBranchesAndLegacyNegation() {
+    assertEquals(AssetPathFilter.prefix("team/"), filter("format == 'raw' and path =^ '/team/'"));
+    assertEquals(AssetPathFilter.NONE, filter("format == 'npm' and path =^ '/team/'"));
+    assertEquals(AssetPathFilter.exact("README"), filter("'/README' == path"));
+    assertEquals(AssetPathFilter.ALL, filter("path =~ '.*' or path =^ '/team/'"));
+    assertEquals(AssetPathFilter.ALL, filter("not path =^ '/team/'"));
+    assertEquals(AssetPathFilter.ALL, filter("path == true"));
+    assertEquals(AssetPathFilter.ALL, filter("true == path"));
+    assertEquals(AssetPathFilter.ALL, filter("path != '/private'"));
+    assertEquals(AssetPathFilter.ALL, filter("'/team/' =^ path"));
+    assertEquals(AssetPathFilter.NONE, filter("unknown == 'raw'"));
+    assertEquals(AssetPathFilter.or(AssetPathFilter.prefix("team/"), AssetPathFilter.exact("README")),
+        filter("path =^ '/team/' or path == '/README'"));
+    assertEquals(AssetPathFilter.prefix("team/"),
+        filter("path =^ '/team/' and coordinate.groupId == 'acme'"));
+  }
+
+  @Test
+  void compiledExpressionsDoNotCacheAuthorizationInputs() {
+    String expression = "format == 'raw' and path =^ '/team/'";
+    assertTrue(ContentSelectorExpressionEvaluator.matches(expression, "one", "raw", "team/a"));
+    assertFalse(ContentSelectorExpressionEvaluator.matches(expression, "one", "raw", "private/a"));
+    assertFalse(ContentSelectorExpressionEvaluator.matches(expression, "one", "npm", "team/a"));
+    assertFalse(ContentSelectorExpressionEvaluator.matches("path =^ '/private/'", "one", "raw", "team/a"));
+    assertTrue(ContentSelectorExpressionEvaluator.matches(expression, "two", "raw", "team/b"));
+  }
+
+  private static AssetPathFilter filter(String expression) {
+    return ContentSelectorExpressionEvaluator.candidateFilter(expression, "raw-hosted", "raw");
+  }
 
   @Test
   void evaluatesNexusStylePathRegexWithLeadingSlash() {

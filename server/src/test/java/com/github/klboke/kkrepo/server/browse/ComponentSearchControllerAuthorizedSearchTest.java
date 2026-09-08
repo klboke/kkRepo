@@ -512,6 +512,13 @@ class ComponentSearchControllerAuthorizedSearchTest {
     }
 
     @Override
+    public com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter selectorCandidateFilter(
+        PermissionSubject subject, RepositoryPermission permission) {
+      // Keep these tests exercising the bounded residual path when SQL cannot narrow candidates.
+      return com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter.ALL;
+    }
+
+    @Override
     public Map<RepositoryPermission, RepositoryAccessMode> repositoryAccessModes(
         PermissionSubject subject,
         Collection<RepositoryPermission> permissions) {

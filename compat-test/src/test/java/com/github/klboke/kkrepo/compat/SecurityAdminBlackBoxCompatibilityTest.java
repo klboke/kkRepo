@@ -45,6 +45,119 @@ class SecurityAdminBlackBoxCompatibilityTest {
         field(candidate, "repository-content-selector", "contentSelector").path("storeApi").asText());
   }
 
+  /** Nexus 3.94 UI posts expressions here before persisting a selector. */
+  @Test
+  void contentSelectorManagementPreviewAndWriteIsolationMatchNexus() throws Exception {
+    Config config = Config.load();
+    assumeTrue(config.enabled(), "Set COMPAT_SECURITY_ENABLED=true to run security admin compatibility checks");
+    String suffix = Long.toString(System.currentTimeMillis());
+    String repo = "csel-raw-" + suffix;
+    ContentSelectorFixture fixture = new ContentSelectorFixture("csel-" + suffix,
+        "csel-priv-" + suffix, "csel-role-" + suffix, "csel-user-" + suffix, "NxpCompat123!");
+    for (Endpoint admin : List.of(config.reference(), config.candidate())) {
+      try {
+        // Fixture setup uses each product's existing repository management API.
+        if (admin.equals(config.candidate())) {
+          admin.postJson("/internal/repositories", Map.of("name", repo, "recipe", "raw-hosted", "online", true,
+              "blobStoreName", "default", "strictContentTypeValidation", false,
+              "hosted", Map.of("writePolicy", "ALLOW"))).assertStatus(201, "create isolated kkrepo repository");
+        } else {
+          admin.postJson("/service/rest/v1/repositories/raw/hosted", Map.of("name", repo, "online", true,
+              "storage", Map.of("blobStoreName", "default", "strictContentTypeValidation", false, "writePolicy", "ALLOW")))
+              .assertStatus(201, "create isolated Nexus repository");
+        }
+        admin.postJson("/service/rest/v1/security/content-selectors", Map.of("name", fixture.selectorName(),
+            "type", "csel", "description", "Selector contract", "expression", "format == 'raw' and path =^ '/team/'"))
+            .assertStatus(204, "create selector");
+        admin.postJson("/service/rest/v1/security/privileges/repository-content-selector", Map.of(
+            "name", fixture.privilegeId(), "description", "Selector contract", "contentSelector", fixture.selectorName(),
+            "format", "raw", "repository", repo, "actions", List.of("browse", "read", "edit")))
+            .assertStatus(201, "create selector privilege");
+        admin.postJson("/service/rest/v1/security/roles", Map.of("id", fixture.roleId(), "name", fixture.roleId(),
+            "description", "Selector contract", "privileges", List.of(fixture.privilegeId()), "roles", List.of()))
+            .assertStatus(200, "create role");
+        admin.postJson("/service/rest/v1/security/users", Map.of("userId", fixture.userId(), "firstName", "Selector",
+            "lastName", "Contract", "emailAddress", "selector@example.invalid", "password", fixture.password(),
+            "status", "active", "roles", List.of(fixture.roleId()))).assertStatus(200, "create user");
+        Endpoint user = admin.as(fixture.userId(), fixture.password());
+        var allowed = user.send("PUT", "/repository/" + repo + "/team/a.txt",
+            HttpRequest.BodyPublishers.ofString("allowed"), "text/plain");
+        assertTrue(allowed.status() >= 200 && allowed.status() < 300, allowed.bodyText());
+        user.send("PUT", "/repository/" + repo + "/private/secret.txt",
+            HttpRequest.BodyPublishers.ofString("denied"), "text/plain").assertStatus(403, "nonmatching upload denied");
+        user.get("/repository/" + repo + "/team/a.txt").assertStatus(200, "matching download allowed");
+        var previewInput = Map.of("repository", repo, "type", "csel", "expression", "path =^ '/team/'");
+        user.postJson("/service/rest/internal/ui/content-selectors/preview", previewInput)
+            .assertStatus(403, "repository rights do not grant administrative preview");
+        var preview = admin.postJson("/service/rest/internal/ui/content-selectors/preview", previewInput);
+        preview.assertStatus(200, "preview");
+        var json = MAPPER.readTree(preview.bodyText());
+        assertEquals(1, json.path("total").asInt());
+        assertEquals("/team/a.txt", json.path("results").get(0).path("name").asText());
+        assertEquals(repo, json.path("results").get(0).path("repositoryName").asText());
+        admin.send("PUT", "/service/rest/v1/security/content-selectors/" + fixture.selectorName(),
+            HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(Map.of("expression", "path ==", "description", "invalid"))),
+            "application/json").assertStatus(400, "invalid update rejected");
+        user.get("/repository/" + repo + "/team/a.txt").assertStatus(200, "invalid update preserves grant");
+        admin.delete("/service/rest/v1/security/content-selectors/" + fixture.selectorName())
+            .assertStatus(400, "referenced selector cannot be deleted");
+        Optional<String> secondaryUrl = setting("compat.security.secondaryBaseUrl", "SECURITY_KKREPO_SECONDARY_BASE_URL");
+        if (admin.equals(config.candidate()) && secondaryUrl.isPresent()) {
+          Endpoint secondary = new Endpoint(secondaryUrl.get(), fixture.userId(), fixture.password());
+          awaitSelectorWrite(secondary, "/repository/" + repo + "/team/a.txt", true);
+          admin.send("PUT", "/service/rest/v1/security/content-selectors/" + fixture.selectorName(),
+              HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(Map.of(
+                  "expression", "format == 'raw' and path =^ '/private/'", "description", "Changed on primary"))),
+              "application/json").assertStatus(204, "change selector on primary");
+          awaitSelectorWrite(secondary, "/repository/" + repo + "/team/a.txt", false);
+          awaitSelectorWrite(secondary, "/repository/" + repo + "/private/new.txt", true);
+        }
+      } finally {
+        admin.delete("/repository/" + repo + "/team/a.txt").assertDeleted("remove selector test asset");
+        admin.delete("/repository/" + repo + "/private/new.txt").assertDeleted("remove secondary selector test asset");
+        cleanupContentSelectorFixture(admin, fixture);
+        admin.delete((admin.equals(config.candidate()) ? "/internal/repositories/" : "/service/rest/v1/repositories/")
+            + repo).assertDeleted("remove isolated raw repository");
+      }
+    }
+  }
+
+  private static void awaitSelectorWrite(Endpoint endpoint, String path, boolean allowed) throws Exception {
+    long deadline = System.nanoTime() + Duration.ofSeconds(15).toNanos();
+    Exchange result;
+    do {
+      result = endpoint.send("PUT", path, HttpRequest.BodyPublishers.ofString("replica selector fixture"), "text/plain");
+      if (allowed ? result.status() >= 200 && result.status() < 300 : result.status() == 403) return;
+      Thread.sleep(100);
+    } while (System.nanoTime() < deadline);
+    throw new AssertionError("Selector replica did not converge for " + path + ": " + result);
+  }
+
+  @Test
+  void contentSelectorPreviewValidatesCselBeforeSearching() throws Exception {
+    Config config = Config.load();
+    assumeTrue(config.enabled(), "Set COMPAT_SECURITY_ENABLED=true");
+    for (String expression : List.of(
+        "format == \"raw\" and path =^ \"/team/\"",
+        "path =~ \"^/team/.*\"")) {
+      for (Endpoint endpoint : List.of(config.reference(), config.candidate())) {
+        Exchange result = endpoint.postJson("/service/rest/internal/ui/content-selectors/preview",
+            Map.of("repository", "*-raw", "type", "csel", "expression", expression));
+        result.assertStatus(200, "preview valid selector");
+        assertTrue(MAPPER.readTree(result.bodyText()).path("results").isArray());
+        assertTrue(MAPPER.readTree(result.bodyText()).path("results").size() <= 10);
+      }
+    }
+    for (String expression : List.of("path ==", "maven.groupId == \"org.example\"",
+        "not (path == \"/private/\")")) {
+      for (Endpoint endpoint : List.of(config.reference(), config.candidate())) {
+        endpoint.postJson("/service/rest/internal/ui/content-selectors/preview",
+            Map.of("repository", "*-raw", "type", "csel", "expression", expression))
+            .assertStatus(400, "reject unsupported CSEL");
+      }
+    }
+  }
+
   @Test
   void repositoryReferenceStoreIncludesAllRepositorySelectors() throws Exception {
     Config config = Config.load();

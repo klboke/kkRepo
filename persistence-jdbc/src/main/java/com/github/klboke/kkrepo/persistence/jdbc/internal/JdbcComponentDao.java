@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.persistence.jdbc.internal;
 
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter;
 import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRows.nullableInstant;
 import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRows.nullableTimestamp;
 
@@ -317,6 +318,14 @@ public class JdbcComponentDao implements com.github.klboke.kkrepo.persistence.jd
       String keyword,
       ComponentSearchCursor after,
       int limit) {
+    return searchPageByRepositoryIds(repositoryIds, format, keyword, after, limit, Map.of());
+  }
+
+  @Override
+  public List<ComponentSearchRow> searchPageByRepositoryIds(
+      List<Long> repositoryIds, RepositoryFormat format, String keyword,
+      ComponentSearchCursor after, int limit,
+      Map<Long, AssetPathFilter> filters) {
     if (repositoryIds == null || repositoryIds.isEmpty()) {
       return List.of();
     }
@@ -373,6 +382,11 @@ public class JdbcComponentDao implements com.github.klboke.kkrepo.persistence.jd
       args.addAll(repositoryIds);
       sql.append("  AND ").append(searchDialect.componentSearchPredicate("cs")).append('\n');
       args.add(booleanQuery);
+    }
+    if (!filters.isEmpty()) {
+      sql.append(" AND EXISTS (SELECT 1 FROM asset selector_asset WHERE selector_asset.component_id = c.id")
+          .append(" AND selector_asset.repository_id = c.repository_id AND ")
+          .append(SelectorCandidateSql.repositories("selector_asset", filters, args)).append(")\n");
     }
     sql.append("  AND ").append(SEARCH_VISIBLE_PREDICATE).append('\n');
     String orderAlias = orderedPlan ? "search_order" : "c";

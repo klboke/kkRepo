@@ -2,6 +2,8 @@
 
 This document explains the current kkrepo security model: authentication, authorization, secrets, audit logs, and operational boundaries.
 
+See [Content Selectors](content-selectors.md) for path expressions, the management UI, preview limits, and additive grant behavior.
+
 For vulnerability reporting, use [SECURITY.md](../../SECURITY.md).
 
 ## Goals

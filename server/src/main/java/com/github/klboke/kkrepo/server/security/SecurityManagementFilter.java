@@ -71,6 +71,11 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
   private Optional<String> permissionFor(HttpServletRequest request) {
     String method = request.getMethod().toUpperCase();
     String uri = stripContextPath(request);
+    if (uri.equals("/service/rest/internal/ui/content-selectors/preview")
+        || uri.equals("/internal/security/content-selectors/options")) {
+      // The controller enforces the selector create OR update permission for preview.
+      return Optional.of(AUTHENTICATED_ONLY);
+    }
     if (uri.startsWith("/service/rest/v1/security/")) {
       return serviceRestPermission(method, uri);
     }

@@ -597,6 +597,27 @@ class NexusSecurityRestControllerTest {
   }
 
   @Test
+  void invalidSelectorWritesLeaveTheExistingExpressionUntouched() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    var controller = controller(dao);
+    assertThrows(SecurityValidationException.class, () -> controller.createContentSelector(
+        new NexusContentSelector("invalid", "csel", "", "path ==")));
+    assertTrue(dao.findRepositoryTarget("invalid").isEmpty());
+    controller.createContentSelector(new NexusContentSelector("team", "csel", "", "path =^ '/team/'"));
+    assertThrows(SecurityValidationException.class, () -> controller.updateContentSelector("team",
+        new NexusContentSelector("team", "csel", "", "path =~ '['")));
+    assertEquals("path =^ '/team/'", dao.findRepositoryTarget("team").orElseThrow().contentExpression());
+    dao.repositoryTarget(new SecurityRepositoryTargetRecord(3L, "legacy", "legacy", "*",
+        "coordinate.groupId == 'acme'", Map.of("patterns", List.of()),
+        Map.of("source", "nexus-content-selector", "type", "csel")));
+    controller.updateContentSelector("legacy", new NexusContentSelector("legacy", "csel",
+        "Description only", "coordinate.groupId == 'acme'"));
+    assertEquals("Description only", dao.findRepositoryTarget("legacy").orElseThrow().attributes().get("description"));
+    assertThrows(SecurityValidationException.class, () -> controller.updateContentSelector("legacy",
+        new NexusContentSelector("legacy", "csel", "", "coordinate.groupId == 'other'")));
+  }
+
+  @Test
   void createdContentSelectorsAreTaggedSeparatelyFromRepositoryTargets() {
     FakeSecurityDao dao = new FakeSecurityDao();
     NexusSecurityRestController controller = controller(dao);

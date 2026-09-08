@@ -83,6 +83,57 @@ import org.springframework.dao.DuplicateKeyException;
 
 /** Reusable black-box contract that every database backend must pass through the public API. */
 public abstract class PersistenceApiContract {
+  @Test
+  void selectorCandidateBooleanScopesStayWithinTheirRepositories() {
+    long repo = createRepository("selector-boolean", RepositoryFormat.RAW);
+    long other = createRepository("selector-boolean-other", RepositoryFormat.RAW);
+    for (long repository : List.of(repo, other)) {
+      for (String path : List.of("team/public.txt", "private/secret.txt")) {
+        stores().assets().insertAsset(new AssetRecord(null, repository, null, null, RepositoryFormat.RAW,
+            path, sha256(path), path, "FILE", "text/plain", 1L, null, Instant.EPOCH, Map.of()));
+      }
+    }
+    var prefix = com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter.prefix("team/");
+    var exact = com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter.exact("team/public.txt");
+    var alternative = com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter.exact("private/secret.txt");
+    var combined = com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter.and(prefix,
+        com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter.or(exact, alternative));
+    var rows = stores().assets().listSelectorCandidates(Map.of(repo, combined,
+        other, com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter.NONE), 0, 20);
+    assertEquals(1, rows.size()); assertEquals(repo, rows.getFirst().repositoryId());
+    assertEquals("team/public.txt", rows.getFirst().path());
+    assertEquals(2, stores().assets().listSelectorCandidates(
+        Map.of(repo, com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter.ALL), 0, 20).size());
+  }
+
+  @Test
+  void selectorCandidatesFilterBeforePaginationAndEscapeSqlWildcards() {
+    long repo = createRepository("selector-candidates", RepositoryFormat.RAW);
+    long other = createRepository("selector-other", RepositoryFormat.RAW);
+    var now = Instant.parse("2026-09-08T00:00:00Z");
+    long matchedComponent = 0;
+    long matchedAsset = 0;
+    for (int index = 0; index < 1005; index++) {
+      long repository = index == 1004 ? other : repo;
+      String path = index >= 1003 ? "team/%_!/allowed.txt" : "private/" + index;
+      long component = stores().components().upsertReturningId(component(repository,
+          RepositoryFormat.RAW, "", "file" + index, "1", Map.of(), now.minusSeconds(index)));
+      long asset = stores().assets().insertAsset(new AssetRecord(null, repository, component, null,
+          RepositoryFormat.RAW, path, sha256(path), "file" + index, "FILE", "text/plain", 1L,
+          null, now, Map.of()));
+      if (index == 1003) { matchedComponent = component; matchedAsset = asset; }
+    }
+    var filters = Map.of(repo, com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter.prefix("team/%_!/"));
+    var results = stores().components().searchPageByRepositoryIds(List.of(repo), null, null, null, 20, filters);
+    assertEquals(List.of(matchedComponent), results.stream().map(row -> row.id()).toList());
+    var candidates = stores().assets().listSelectorCandidates(filters, 0, 20);
+    assertEquals(List.of(matchedAsset), candidates.stream().map(asset -> asset.id()).toList());
+    assertTrue(stores().assets().listSelectorCandidates(filters, matchedAsset, 20).isEmpty());
+    assertTrue(stores().assets().listSelectorCandidates(Map.of(), 0, 20).isEmpty());
+    var exact = Map.of(repo, com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter.exact("team/%_!/allowed.txt"));
+    assertEquals(1, stores().assets().listSelectorCandidates(exact, 0, 20).size());
+  }
+
   protected abstract PersistenceStores stores();
 
   protected abstract <T> T inTransaction(Supplier<T> action);

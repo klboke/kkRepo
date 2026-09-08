@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.security;
 
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter;
 import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.auth.AccessDecisionService;
 import com.github.klboke.kkrepo.auth.PermissionAction;
@@ -722,6 +723,19 @@ public class SecurityManagementService implements AccessDecisionService {
   @Transactional
   public RepositoryTargetView saveRepositoryTarget(RepositoryTargetCommand command) {
     String targetId = requireText(command.targetId(), "targetId");
+    if (command.attributes() != null && "nexus-content-selector".equals(command.attributes().get("source"))) {
+      String type = String.valueOf(command.attributes().getOrDefault("type", "csel"));
+      var existing = securityDao.findRepositoryTarget(targetId);
+      if (existing.isEmpty() && (targetId.length() > 255
+          || !targetId.matches("[a-zA-Z0-9-][a-zA-Z0-9_.-]*"))) {
+        throw new SecurityValidationException("Content selector name must use letters, digits, hyphens, underscores or dots and start with a letter, digit or hyphen");
+      }
+      // Imported legacy expressions remain editable without silently changing their permissions.
+      boolean unchanged = existing.filter(target -> java.util.Objects.equals(
+          blankToNull(target.contentExpression()), blankToNull(command.contentExpression())) && type.equalsIgnoreCase(
+              String.valueOf(target.attributes() == null ? "csel" : target.attributes().getOrDefault("type", "csel")))).isPresent();
+      if (!unchanged) ContentSelectorExpressionEvaluator.validate(type, command.contentExpression());
+    }
     List<String> pathPatterns = normalizeList(command.pathPatterns());
     SecurityRepositoryTargetRecord record = new SecurityRepositoryTargetRecord(
         null,
@@ -938,6 +952,25 @@ public class SecurityManagementService implements AccessDecisionService {
         .distinct()
         .forEach(permission -> result.put(permission, repositoryAccessMode(snapshot, permission)));
     return Map.copyOf(result);
+  }
+
+  /** Conservative SQL candidate scope, using the same durable grants as exact authorization. */
+  public AssetPathFilter selectorCandidateFilter(
+      PermissionSubject subject, RepositoryPermission requested) {
+    var all = AssetPathFilter.ALL;
+    var result = AssetPathFilter.NONE;
+    if (subject == null || requested == null) return result;
+    AuthorizationSnapshot snapshot = authorizationSnapshot(subject);
+    for (SecurityPrivilegeRecord privilege : snapshot.privileges()) {
+      if (wildcardMatches(toPermission(privilege), repositoryPermissionString(requested))) return all;
+      if (repositoryContentSelectorApplies(privilege, requested, snapshot.repositoryTargets())) {
+        var selector = snapshot.repositoryTargets().get(contentSelectorName(privilege.properties()));
+        var filter = ContentSelectorExpressionEvaluator.candidateFilter(selector.contentExpression(),
+            requested.repository(), requested.format() == null ? "*" : requested.format().id());
+        result = AssetPathFilter.or(result, filter);
+      }
+    }
+    return result;
   }
 
   /** Evaluates a bounded batch of real repository paths against one authorization snapshot. */

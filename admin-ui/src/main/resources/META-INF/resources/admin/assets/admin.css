@@ -4511,3 +4511,23 @@ code {
     justify-content: flex-end;
   }
 }
+
+#content-selectors-view .nx-table td code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+#content-selectors-view .selector-actions {
+  min-width: 190px;
+}
+#content-selectors-view .selector-actions button {
+  margin: 2px;
+}
+#selector-error, #selector-privilege-error {
+  color: var(--danger-color, #c23934);
+}
+
+#selector-preview-results .nx-table {
+  min-width: 0;
+  width: 100%;
+  table-layout: fixed;
+}

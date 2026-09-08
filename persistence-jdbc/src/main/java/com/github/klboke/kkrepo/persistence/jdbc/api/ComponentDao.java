@@ -102,6 +102,13 @@ public interface ComponentDao {
     return searchByRepositoryIds(repositoryIds, format, keyword, limit);
   }
 
+  /** Pushes only conservative path constraints down; callers still perform exact authorization. */
+  default List<ComponentSearchRow> searchPageByRepositoryIds(
+      List<Long> repositoryIds, RepositoryFormat format, String keyword,
+      ComponentSearchCursor after, int limit, Map<Long, AssetPathFilter> filters) {
+    return searchPageByRepositoryIds(repositoryIds, format, keyword, after, limit);
+  }
+
   List<ComponentRecord> searchComponentsByRepositoryIds(
       List<Long> repositoryIds,
       RepositoryFormat format,

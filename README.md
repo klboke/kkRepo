@@ -255,6 +255,7 @@ kkRepo is open sourced under the [Apache License 2.0](LICENSE).
 - [Production Hardening Guide](docs/en/production-hardening.md)
 - [Backup And Restore Guide](docs/en/backup-restore.md)
 - [Security Model](docs/en/security-model.md)
+- [Content Selectors](docs/en/content-selectors.md)
 - [MySQL ER Design](docs/en/mysql-er.md)
 - [Database Backends](docs/en/database-backends.md)
 - [Database Schema](docs/en/database-schema.md)

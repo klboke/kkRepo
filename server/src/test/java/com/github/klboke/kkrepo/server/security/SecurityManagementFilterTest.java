@@ -33,6 +33,22 @@ class SecurityManagementFilterTest {
   }
 
   @Test
+  void selectorPreviewAlwaysAuthenticatesEvenWithLegacyUiDisabled() throws Exception {
+    for (boolean legacy : java.util.List.of(false, true)) {
+      for (String path : java.util.List.of("/service/rest/internal/ui/content-selectors/preview",
+          "/internal/security/content-selectors/options")) {
+        var authentication = new StubAuthenticationService(Optional.empty());
+        var security = new RecordingSecurityService(AccessDecision.allow());
+        var response = new ResponseState();
+        var chain = new ChainState();
+        filter(authentication, security, legacy).doFilter(request("POST", path), response.proxy(), chain);
+        assertEquals(401, response.status);
+        assertEquals(0, chain.calls);
+      }
+    }
+  }
+
+  @Test
   void currentApiKeysRequireAuthenticationOnly() throws Exception {
     AuthenticatedSubject subject = subject("alice");
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject));
