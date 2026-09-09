@@ -26,6 +26,18 @@ import org.springframework.http.ResponseEntity;
 
 class AdminUiControllerTest {
   @Test
+  void selectorManagerCanEnterAdministrationWithoutGlobalAdministratorGrant() {
+    var security = org.mockito.Mockito.mock(SecurityManagementService.class);
+    var subject = subject("selector-manager");
+    org.mockito.Mockito.when(security.decide(org.mockito.ArgumentMatchers.eq(subject.permissionSubject()),
+        org.mockito.ArgumentMatchers.anyString())).thenReturn(AccessDecision.deny("missing"));
+    org.mockito.Mockito.when(security.decide(subject.permissionSubject(), "nexus:selectors:read"))
+        .thenReturn(AccessDecision.allow());
+    var controller = new AdminUiController(new StubAuthenticationService(Optional.of(subject)), security);
+    assertInstanceOf(ResponseEntity.class, controller.admin(request()));
+  }
+
+  @Test
   void rootRedirectsToBrowseWelcome() {
     AdminUiController controller = new AdminUiController(
         new StubAuthenticationService(Optional.empty()),

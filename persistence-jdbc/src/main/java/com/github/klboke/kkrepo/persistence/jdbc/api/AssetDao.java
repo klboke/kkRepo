@@ -129,6 +129,12 @@ public interface AssetDao {
 
   Optional<AssetBlobRecord> lockDeletedBlobById(long assetBlobId);
 
+  /** Stable candidate page for a selector preview; implementations must not load whole repositories. */
+  default List<AssetRecord> listSelectorCandidates(
+      Map<Long, AssetPathFilter> filters, long afterAssetId, int limit) {
+    throw new UnsupportedOperationException("Selector preview paging is not implemented");
+  }
+
   List<AssetRecord> listAssetsByPrefix(long repositoryId, String pathPrefix);
 
   /**

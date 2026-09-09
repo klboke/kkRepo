@@ -641,6 +641,19 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
         """, blobRowMapper, assetBlobId).stream().findFirst();
   }
 
+  @Override
+  public List<AssetRecord> listSelectorCandidates(
+      Map<Long, com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter> filters,
+      long afterAssetId, int limit) {
+    if (filters.isEmpty()) return List.of();
+    List<Object> args = new ArrayList<>();
+    String scope = SelectorCandidateSql.repositories("a", filters, args);
+    args.add(afterAssetId);
+    args.add(Math.max(1, Math.min(limit, 200)));
+    return jdbcTemplate.query("SELECT a.* FROM asset a WHERE " + scope
+        + " AND a.id > ? ORDER BY a.id LIMIT ?", assetRowMapper, args.toArray());
+  }
+
   public List<AssetRecord> listAssetsByPrefix(long repositoryId, String pathPrefix) {
     String prefix = pathPrefix == null ? "" : pathPrefix;
     if (prefix.isEmpty()) {

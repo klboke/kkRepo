@@ -40,7 +40,10 @@ public class AdminUiController {
     if (subject == null) {
       return AUTH_REQUIRED_WELCOME;
     }
-    if (!securityService.decide(subject.permissionSubject(), "nexus:*").allowed()) {
+    boolean allowed = securityService.decide(subject.permissionSubject(), "nexus:*").allowed()
+        || java.util.List.of("read", "create", "update", "delete").stream().anyMatch(action ->
+            securityService.decide(subject.permissionSubject(), "nexus:selectors:" + action).allowed());
+    if (!allowed) {
       return BROWSE_WELCOME;
     }
     request.setAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE, subject);

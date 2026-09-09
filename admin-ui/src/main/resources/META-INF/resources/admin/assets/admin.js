@@ -96,6 +96,7 @@ let securityScanWaiverContext = null;
 const AUDIT_LOG_DEFAULT_PAGE_SIZE = 15;
 let auditLogPage = { total: 0, page: 0, size: AUDIT_LOG_DEFAULT_PAGE_SIZE, items: [] };
 let currentSession = null;
+let currentAdminPermissions = [];
 let blobStoreHealth = {};
 let dockerOperations = null;
 let blobStoreFormMode = "create";
@@ -165,6 +166,7 @@ const CLEANUP_TABS = new Set(["policies", "runs"]);
 const viewHashRoutes = {
   repositories: "#admin/repository/repositories",
   "cleanup-policies": CLEANUP_ROUTE_BASE,
+  "content-selectors": "#admin/repository/content-selectors",
   blobstores: "#admin/repository/blobstores",
   "docker-registry": "#admin/repository/docker",
   "security-users": "#admin/security/users",
@@ -188,6 +190,7 @@ const hashViewRoutes = {
   "#admin/repository/repositories": "repositories",
   "#admin/repository/cleanup-policies": "cleanup-policies",
   "#admin/repository/cleanup": "cleanup-policies",
+  "#admin/repository/content-selectors": "content-selectors",
   "#admin/repository/blobstores": "blobstores",
   "#admin/repository/blob-stores": "blobstores",
   "#admin/repository/docker": "docker-registry",
@@ -788,7 +791,7 @@ function updateSessionControls(session) {
     userMenuTrigger.setAttribute("aria-label", `Account menu for ${qualifiedUser}`);
     sessionStorage.setItem(AUTH_SNAPSHOT_KEY, JSON.stringify({
       session: currentSession,
-      permissions: ["nexus:*"],
+      permissions: currentAdminPermissions,
       savedAt: Date.now(),
     }));
   } else {
@@ -858,15 +861,18 @@ function toggleUserMenu() {
 
 async function loadCurrentSession(options = {}) {
   try {
-    const response = await fetch("/internal/security/session", { cache: "no-store" });
+    const response = await fetch("/internal/security/context", { cache: "no-store" });
     if (response.status === 401 || response.status === 403) {
       updateSessionControls(null);
       window.location.href = authRequiredWelcome();
       return null;
     }
     if (!response.ok) throw new Error(await responseErrorMessage(response));
-    const session = await response.json();
+    const context = await response.json();
+    const session = context.session;
+    currentAdminPermissions = Array.isArray(context.permissions) ? context.permissions : [];
     updateSessionControls(session);
+    if (!session) window.location.href = authRequiredWelcome();
     return session;
   } catch (error) {
     updateSessionControls(null);
@@ -7366,6 +7372,7 @@ async function deleteCleanupPolicy(policyId) {
 }
 
 function switchView(view, options = {}) {
+  if (!currentAdminPermissions.includes("nexus:*") && view !== "content-selectors") return false;
   if (!document.getElementById(`${view}-view`)) return false;
   if (options.updateHash !== false) {
     updateHashForView(view, Boolean(options.replaceHash));
@@ -7389,6 +7396,7 @@ function switchView(view, options = {}) {
       { updateHash: false });
     loadCleanupPolicies();
   }
+  if (view === "content-selectors") window.KkContentSelectors.load();
   if (view === "docker-registry") loadDockerOperations();
   if (view === "security-users") loadSecurityUsers();
   if (view === "security-roles") loadSecurityRoles();
@@ -7890,6 +7898,16 @@ document.getElementById("repository-data-migration-refresh-button").addEventList
 hydrateSessionControls();
 loadCurrentSession({ quiet: true }).then((session) => {
   if (!session) return;
+  if (!currentAdminPermissions.includes("nexus:*")) {
+    document.querySelectorAll(".side-item").forEach((item) => {
+      item.hidden = item.dataset.view !== "content-selectors";
+    });
+    document.querySelectorAll(".side-group").forEach((item) => {
+      item.hidden = item.dataset.sideGroup !== "repository";
+    });
+    switchView("content-selectors");
+    return;
+  }
   loadRepositoryRecipes().then(() => {
     if (!applyHashRoute()) {
       loadRepositories();

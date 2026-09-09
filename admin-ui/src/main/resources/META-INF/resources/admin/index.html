@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-4">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20260811-conan-1">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20260818-user-round-1">
-    <link rel="stylesheet" href="./assets/admin.css?v=20260826-nexus-a11y-1">
+    <link rel="stylesheet" href="./assets/admin.css?v=20260909-selector-toolbar-1">
     <link rel="stylesheet" href="/browse/assets/account-menu.css?v=20260824-ui-themes-3">
     <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=20260819-topbar-control-height-1">
   </head>
@@ -84,6 +84,7 @@
           <div class="side-group-items" id="side-group-repository-items" data-side-group-items="repository">
             <button class="side-item is-active" data-view="repositories" type="button"><span class="side-item-icon lucide-icon icon-package" aria-hidden="true"></span><span>Repositories</span></button>
             <button class="side-item" data-view="cleanup-policies" type="button"><span class="side-item-icon lucide-icon icon-archive" aria-hidden="true"></span><span>Cleanup Policies</span></button>
+            <button class="side-item" data-view="content-selectors" type="button"><span class="side-item-icon lucide-icon icon-list-filter" aria-hidden="true"></span><span>Content Selectors</span></button>
             <button class="side-item" data-view="blobstores" type="button"><span class="side-item-icon lucide-icon icon-database" aria-hidden="true"></span><span>Blob Stores</span></button>
             <button class="side-item" data-view="docker-registry" type="button"><span class="side-item-icon lucide-icon icon-container" aria-hidden="true"></span><span>Docker Registry</span></button>
           </div>
@@ -589,6 +590,73 @@
           </div>
         </section>
 
+        <section class="view fixed-table-view" id="content-selectors-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-list-filter" aria-hidden="true"></span></span>
+            <h1>Content Selectors</h1><span class="heading-copy">Grant access to selected repository content</span>
+          </div>
+          <div class="action-bar">
+            <button class="create-button" id="selector-create" type="button" disabled>Create selector</button>
+            <button class="create-button secondary" id="selector-refresh" type="button">Refresh</button>
+            <label class="filter-box"><input id="selector-filter" type="search" placeholder="Filter selectors" aria-label="Filter selectors"></label>
+            <p class="form-note selector-access-note">Selector privileges add access. Broader repository grants, including inherited roles, still apply.</p>
+          </div>
+          <p id="selector-status" role="status" aria-live="polite"></p>
+          <div class="nx-table-frame fixed-table-frame">
+            <table class="nx-table"><thead><tr><th>Name</th><th>Type</th><th>Expression</th><th>Description</th><th>Used by privileges</th><th class="actions-column">Actions</th></tr></thead><tbody id="selector-table"></tbody></table>
+          </div>
+          <div class="form-modal" id="selector-form-modal" data-form-id="selector-form" role="dialog" aria-modal="true" aria-labelledby="selector-form-title" hidden>
+            <div class="form-modal-backdrop" data-modal-dismiss="selector-form"></div>
+            <div class="form-modal-panel">
+              <button class="form-modal-close" data-modal-dismiss="selector-form" type="button" aria-label="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
+              <form class="blobstore-form modal-form" id="selector-form" hidden>
+                <div class="form-title" id="selector-form-title">Create selector</div>
+                <div class="form-grid">
+                  <label><span>Name <span class="required-mark">*</span></span><input id="selector-name" required pattern="[a-zA-Z0-9\-][a-zA-Z0-9_.\-]*" maxlength="255"></label>
+                  <label><span>Type</span><input id="selector-type" value="csel" readonly></label>
+                  <label class="full-width"><span>Description</span><input id="selector-description" maxlength="1024"></label>
+                  <label class="full-width"><span>Expression <span class="required-mark">*</span></span><textarea id="selector-expression" rows="4" required maxlength="8192" spellcheck="false" aria-describedby="selector-syntax">format == "raw" and path =^ "/team/"</textarea></label>
+                </div>
+                <p class="form-note" id="selector-syntax">CSEL supports path and format; ==, !=, =^ (prefix), =~ (regex), and/or, and parentheses. Paths start with /. Use maven2 for Maven.</p>
+                <p class="form-note" id="selector-legacy" hidden>Imported expressions retain their existing behavior. Changed CSEL expressions must use path and format.</p>
+                <fieldset class="form-grid"><legend>Preview stored assets</legend>
+                  <label class="full-width"><span>Repository</span><select id="selector-repository"></select></label>
+                  <div class="form-actions full-width"><button class="create-button secondary" id="selector-preview" type="button">Preview</button></div>
+                </fieldset>
+                <p class="form-note">Preview shows up to 10 stored assets. Group access is evaluated through the group URL; preview member repositories here.</p>
+                <p id="selector-preview-status" role="status" aria-live="polite"></p>
+                <div class="nx-table-frame" id="selector-preview-results" hidden><table class="nx-table"><thead><tr><th>Repository</th><th>Format</th><th>Path</th></tr></thead><tbody id="selector-preview-table"></tbody></table></div>
+                <p id="selector-error" role="alert"></p>
+                <div class="form-actions"><button class="create-button" id="selector-save" type="submit">Save selector</button><button class="create-button secondary" type="button" data-modal-dismiss="selector-form">Cancel</button></div>
+              </form>
+            </div>
+          </div>
+          <div class="form-modal" id="selector-privilege-form-modal" data-form-id="selector-privilege-form" role="dialog" aria-modal="true" aria-labelledby="selector-privilege-form-title" hidden>
+            <div class="form-modal-backdrop" data-modal-dismiss="selector-privilege-form"></div>
+            <div class="form-modal-panel">
+              <button class="form-modal-close" data-modal-dismiss="selector-privilege-form" type="button" aria-label="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
+              <form class="blobstore-form modal-form" id="selector-privilege-form" hidden>
+                <div class="form-title" id="selector-privilege-form-title">Create selector privilege</div>
+                <div class="form-grid">
+                  <label><span>Name <span class="required-mark">*</span></span><input id="selector-privilege-name" required pattern="[a-zA-Z0-9\-][a-zA-Z0-9_.\-]*" maxlength="255"></label>
+                  <label><span>Content selector</span><input id="selector-privilege-selector" readonly></label>
+                  <label class="full-width"><span>Description</span><input id="selector-privilege-description" maxlength="1024"></label>
+                  <label class="full-width"><span>Repository scope</span><select id="selector-privilege-repository"></select></label>
+                </div>
+                <fieldset class="form-grid"><legend>Actions</legend>
+                  <label class="checkbox-field"><input type="checkbox" name="selector-action" value="browse" checked><span>browse</span></label>
+                  <label class="checkbox-field"><input type="checkbox" name="selector-action" value="read" checked><span>read</span></label>
+                  <label class="checkbox-field"><input type="checkbox" name="selector-action" value="add"><span>add</span></label>
+                  <label class="checkbox-field"><input type="checkbox" name="selector-action" value="edit"><span>edit</span></label>
+                  <label class="checkbox-field"><input type="checkbox" name="selector-action" value="delete"><span>delete</span></label>
+                </fieldset>
+                <p class="form-note">Assign the new privilege to a role in Security → Roles, then assign that role to users.</p>
+                <p id="selector-privilege-error" role="alert"></p>
+                <div class="form-actions"><button class="create-button" id="selector-privilege-save" type="submit">Create privilege</button><button class="create-button secondary" type="button" data-modal-dismiss="selector-privilege-form">Cancel</button></div>
+              </form>
+            </div>
+          </div>
+        </section>
         <section class="view cleanup-policies-view" id="cleanup-policies-view">
           <div class="page-heading">
             <span class="heading-icon"><span class="lucide-icon icon-archive" aria-hidden="true"></span></span>
@@ -1833,10 +1901,11 @@
       </main>
     </div>
 
-    <script src="/login/assets/ui-i18n.js?v=20260826-ui-theme-preview-1"></script>
+    <script src="/login/assets/ui-i18n.js?v=20260908-content-selectors-1"></script>
     <script src="/login/assets/product-update.js?v=20260819-version-update-1"></script>
     <script src="./assets/admin-filter.js?v=20260706-wildcard-filter-1"></script>
     <script src="/browse/assets/global-component-search.js?v=20260817-global-search-2"></script>
-    <script src="./assets/admin.js?v=20260826-ui-theme-preview-1"></script>
+    <script src="./assets/content-selectors.js?v=20260908-content-selectors-1"></script>
+    <script src="./assets/admin.js?v=20260908-content-selectors-1"></script>
   </body>
 </html>

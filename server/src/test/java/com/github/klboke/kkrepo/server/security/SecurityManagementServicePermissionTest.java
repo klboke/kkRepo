@@ -143,6 +143,28 @@ class SecurityManagementServicePermissionTest {
   }
 
   @Test
+  void selectorCandidateScopesFollowActionsAndAdditiveBroadGrants() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.assign("Local", "alice", "team");
+    dao.target(new SecurityRepositoryTargetRecord(1L, "selector", "selector", "*",
+        "format == 'maven2' and path =^ '/team/'", Map.of("patterns", List.of()), Map.of()));
+    dao.grant("team", privilege("team-read", "repository-content-selector",
+        Map.of("contentSelector", "selector", "repository", "releases", "format", "maven2", "actions", "read")));
+    var service = new SecurityManagementService(dao);
+    var permission = repositoryPermission("releases", "", PermissionAction.READ);
+    assertEquals(com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter.prefix("team/"),
+        service.selectorCandidateFilter(subject("alice"), permission));
+    assertEquals(com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter.NONE,
+        service.selectorCandidateFilter(subject("alice"), repositoryPermission("releases", "", PermissionAction.EDIT)));
+    assertEquals(com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter.NONE,
+        service.selectorCandidateFilter(subject("alice"), repositoryPermission("member", "", PermissionAction.READ)));
+    dao.grant("team", privilege("broad", "repository-view", Map.of("repository", "releases", "format", "maven2", "actions", "read")));
+    assertEquals(com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter.ALL,
+        service.selectorCandidateFilter(subject("alice"), permission));
+    assertTrue(service.decide(subject("alice"), repositoryPermission("releases", "private/a.jar", PermissionAction.READ)).allowed());
+  }
+
+  @Test
   void repositoryContentSelectorPrivilegeUsesNexusRepositorySelectorFormat() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.assign("Local", "alice", "nx-selector-reader");

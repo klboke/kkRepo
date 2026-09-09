@@ -255,6 +255,7 @@ kkRepo 使用 [Apache License 2.0](LICENSE) 开源。
 - [生产加固指南](docs/zh/production-hardening.md)
 - [备份恢复指南](docs/zh/backup-restore.md)
 - [安全模型](docs/zh/security-model.md)
+- [内容选择器](docs/zh/content-selectors.md)
 - [MySQL ER 设计](docs/zh/mysql-er.md)
 - [数据库后端指南](docs/zh/database-backends.md)
 - [数据库 Schema](docs/zh/database-schema.md)

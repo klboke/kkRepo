@@ -20,6 +20,41 @@
   const originalTitle = document.title;
 
   const zh = {
+    "Refresh": "刷新",
+    "View": "查看",
+    "Edit": "编辑",
+    "Delete": "删除",
+    "All repositories": "全部仓库",
+    "Content Selectors": "内容选择器",
+    "Grant access to selected repository content": "按内容范围授予仓库访问权限",
+    "Create selector": "创建选择器",
+    "Edit selector": "编辑选择器",
+    "View selector": "查看选择器",
+    "Save selector": "保存选择器",
+    "Content selector": "内容选择器",
+    "Expression": "表达式",
+    "Used by privileges": "引用此选择器的权限",
+    "Filter selectors": "筛选选择器",
+    "Selector privileges add access. Broader repository grants, including inherited roles, still apply.": "选择器权限会叠加授权。已有的整仓库权限（包括继承的角色权限）仍然生效。",
+    "CSEL supports path and format; ==, !=, =^ (prefix), =~ (regex), and/or, and parentheses. Paths start with /. Use maven2 for Maven.": "CSEL 支持 path 和 format，以及 ==、!=、=^（前缀）、=~（正则）、and/or 和括号。路径以 / 开头，Maven 格式使用 maven2。",
+    "Imported expressions retain their existing behavior. Changed CSEL expressions must use path and format.": "导入的表达式保留已有行为。修改 CSEL 表达式时需使用 path 和 format。",
+    "Preview stored assets": "预览已存储制品",
+    "Preview": "预览",
+    "Preview shows up to 10 stored assets. Group access is evaluated through the group URL; preview member repositories here.": "最多预览 10 个已存储制品。Group 权限通过 Group 地址判断；此处请选择成员仓库预览。",
+    "Create selector privilege": "创建内容选择器权限",
+    "Repository scope": "仓库范围",
+    "Assign the new privilege to a role in Security → Roles, then assign that role to users.": "在“安全 → 角色”中为角色添加新权限，再将角色分配给用户。",
+    "No content selectors found.": "没有找到内容选择器。",
+    "Selector read permission is required to view the list.": "查看列表需要内容选择器读取权限。",
+    "Loading preview…": "正在加载预览…",
+    "Preview is limited. Narrow the expression or repository to see more specific matches.": "预览已达到上限。请缩小表达式或仓库范围以查看更精确的匹配。",
+    "Preview complete.": "预览完成。",
+    "No matching stored assets.": "没有匹配的已存储制品。",
+    "Content selector saved.": "内容选择器已保存。",
+    "Privilege created. Assign it to a role in Security → Roles.": "权限已创建。请在“安全 → 角色”中将其分配给角色。",
+    "Loading content selectors…": "正在加载内容选择器…",
+    "Select at least one action.": "请至少选择一项操作。",
+    "Repository no longer exists. Refresh and try again.": "仓库已不存在，请刷新后重试。",
     "kkrepo administration": "kkrepo 管理后台",
     "kkrepo browse": "kkrepo 浏览",
     "kkrepo Repository Manager": "kkrepo 仓库管理器",
@@ -716,6 +751,10 @@
         return `${zh[prefix] || prefix}：${body.slice(prefix.length + 2)}`;
       }
     }
+    match = body.match(/^All (.+) repositories$/);
+    if (match) return `全部 ${match[1]} 仓库`;
+    match = body.match(/^Delete content selector "(.+)"\?$/);
+    if (match) return `删除内容选择器“${match[1]}”？`;
     match = body.match(/^Page (\d+) \/ (\d+)$/);
     if (match) return `第 ${match[1]} 页 / 共 ${match[2]} 页`;
     match = body.match(/^(\d+)-(\d+) of (\d+)$/);

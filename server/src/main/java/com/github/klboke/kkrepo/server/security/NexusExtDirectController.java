@@ -917,7 +917,7 @@ public class NexusExtDirectController {
     if (securityService.findRepositoryTarget(name).filter(this::isContentSelector).isPresent()) {
       throw new SecurityValidationException("Selector already exists: " + name);
     }
-    return toUiSelector(securityService.saveRepositoryTarget(toSelectorCommand(name, payload, text(payload, "type"))), true);
+    return toUiSelector(securityService.createContentSelector(toSelectorCommand(name, payload, text(payload, "type"))), true);
   }
 
   private NexusUiSelector updateSelector(JsonNode payload) {

@@ -53,6 +53,45 @@ import org.junit.jupiter.api.Test;
 import org.springframework.web.server.ResponseStatusException;
 
 class NexusSecurityRestControllerTest {
+  @Test
+  void selectorPrivilegesAcceptEveryCatalogFormatForSpecificAndWildcardRepositories() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    var repositories = org.mockito.Mockito.mock(RepositoryService.class);
+    var controller = new NexusSecurityRestController(new SecurityManagementService(dao), repositories);
+    controller.createContentSelector(new NexusContentSelector("all-formats", "csel", "", "path =^ '/team/'"));
+    for (RepositoryFormat format : RepositoryFormat.values()) {
+      String repository = "repo-" + format.id();
+      org.mockito.Mockito.when(repositories.get(repository)).thenReturn(new RepositoryView(
+          1L, repository, format.id() + "-hosted", format, RepositoryType.HOSTED, true,
+          "default", false, "/repository/" + repository + "/", null, null, null, null, null, null));
+      for (String scope : List.of(repository, "*")) {
+        String name = "selector-" + format.id() + (scope.equals("*") ? "-all" : "-one");
+        var payload = new NexusPrivilege(null, name, null, null, null, null,
+            List.of("browse", "read"), format.id(), scope, "all-formats", null, null);
+        assertEquals(201, controller.createRepositoryContentSelectorPrivilege(payload).getStatusCode().value());
+        assertEquals(204, controller.updateRepositoryContentSelectorPrivilege(name, payload).getStatusCode().value());
+        var properties = dao.findPrivilege(name).orElseThrow().properties();
+        assertEquals(format.id(), properties.get("format"));
+        assertEquals(scope, properties.get("repository"));
+      }
+    }
+  }
+
+  @Test
+  void concurrentSelectorCreateConflictCannotFallBackToUpdatingTheWinner() {
+    var dao = org.mockito.Mockito.mock(SecurityDao.class);
+    org.mockito.Mockito.doThrow(new org.springframework.dao.DuplicateKeyException("duplicate target"))
+        .when(dao).insertRepositoryTarget(org.mockito.ArgumentMatchers.any());
+    var service = new SecurityManagementService(dao);
+    var command = new SecurityPayloads.RepositoryTargetCommand("team", "team", "*", "path =^ '/team/'",
+        List.of(), Map.of("source", "nexus-content-selector", "type", "csel"));
+    assertThrows(SecurityValidationException.class, () -> service.createContentSelector(command));
+    org.mockito.Mockito.verify(dao, org.mockito.Mockito.never()).upsertRepositoryTarget(org.mockito.ArgumentMatchers.any());
+    var invalidName = new SecurityPayloads.RepositoryTargetCommand("bad name", "bad name", "*", "path =^ '/'",
+        List.of(), Map.of("source", "nexus-content-selector", "type", "csel"));
+    assertThrows(SecurityValidationException.class, () -> service.createContentSelector(invalidName));
+  }
+
 
   @Test
   void userSourcesExposeConfiguredRealmSources() {
@@ -594,6 +633,27 @@ class NexusSecurityRestControllerTest {
     assertEquals(1, selectors.size());
     assertEquals("team-a", selectors.get(0).name());
     assertEquals("Team A", selectors.get(0).description());
+  }
+
+  @Test
+  void invalidSelectorWritesLeaveTheExistingExpressionUntouched() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    var controller = controller(dao);
+    assertThrows(SecurityValidationException.class, () -> controller.createContentSelector(
+        new NexusContentSelector("invalid", "csel", "", "path ==")));
+    assertTrue(dao.findRepositoryTarget("invalid").isEmpty());
+    controller.createContentSelector(new NexusContentSelector("team", "csel", "", "path =^ '/team/'"));
+    assertThrows(SecurityValidationException.class, () -> controller.updateContentSelector("team",
+        new NexusContentSelector("team", "csel", "", "path =~ '['")));
+    assertEquals("path =^ '/team/'", dao.findRepositoryTarget("team").orElseThrow().contentExpression());
+    dao.repositoryTarget(new SecurityRepositoryTargetRecord(3L, "legacy", "legacy", "*",
+        "coordinate.groupId == 'acme'", Map.of("patterns", List.of()),
+        Map.of("source", "nexus-content-selector", "type", "csel")));
+    controller.updateContentSelector("legacy", new NexusContentSelector("legacy", "csel",
+        "Description only", "coordinate.groupId == 'acme'"));
+    assertEquals("Description only", dao.findRepositoryTarget("legacy").orElseThrow().attributes().get("description"));
+    assertThrows(SecurityValidationException.class, () -> controller.updateContentSelector("legacy",
+        new NexusContentSelector("legacy", "csel", "", "coordinate.groupId == 'other'")));
   }
 
   @Test
@@ -2896,6 +2956,12 @@ class NexusSecurityRestControllerTest {
     @Override
     public Optional<SecurityRepositoryTargetRecord> findRepositoryTarget(String targetId) {
       return Optional.ofNullable(repositoryTargets.get(targetId));
+    }
+
+    @Override
+    public void insertRepositoryTarget(SecurityRepositoryTargetRecord record) {
+      if (repositoryTargets.containsKey(record.targetId())) throw new org.springframework.dao.DuplicateKeyException("duplicate target");
+      upsertRepositoryTarget(record);
     }
 
     @Override

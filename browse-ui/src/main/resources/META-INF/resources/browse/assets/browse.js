@@ -561,11 +561,12 @@ function can(permission) {
 }
 
 function hasAdminEntryPermission() {
-  return can("nexus:*");
+  return can("nexus:*") || ["read", "create", "update", "delete"]
+    .some((action) => can(`nexus:selectors:${action}`));
 }
 
 function canDeleteBrowseContent() {
-  return Boolean(currentSession && hasAdminEntryPermission());
+  return Boolean(currentSession && can("nexus:*"));
 }
 
 function hasUploadPermission() {
@@ -600,6 +601,7 @@ function updateTopbarAuth() {
   const signedIn = Boolean(currentSession && currentSession.userId);
   if (adminLink) {
     adminLink.hidden = !signedIn || !hasAdminEntryPermission();
+    adminLink.href = can("nexus:*") ? "/admin/" : "/admin/#admin/repository/content-selectors";
   }
   loginButton.hidden = signedIn;
   userMenu.hidden = !signedIn;
