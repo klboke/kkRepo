@@ -6,19 +6,25 @@ repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 for compose_file in \
   "$repository_root/docker-compose.quickstart.yml" \
   "$repository_root/docker-compose.quickstart-postgresql.yml"; do
+
   rendered="$(mktemp)"
-  trap 'rm -f "$rendered"' EXIT
+  custom_rendered="$(mktemp)"
+
+  trap 'rm -f "$rendered" "$custom_rendered"' EXIT
+
   docker compose \
     -f "$compose_file" \
     --profile security-scanning \
     config \
     --format json >"$rendered"
+
   python3 - "$compose_file" "$rendered" <<'PY'
 import json
 import pathlib
 import sys
 
 source = pathlib.Path(sys.argv[1]).name
+
 with open(sys.argv[2], encoding="utf-8") as handle:
     model = json.load(handle)
 
@@ -57,10 +63,35 @@ def mounted_volume(service):
 
 scanner_volume = mounted_volume(scanner)
 updater_volume = mounted_volume(updater)
+
 assert scanner_volume["source"] == updater_volume["source"], source
 assert scanner_volume["read_only"] is True, source
 assert updater_volume.get("read_only", False) is False, source
 PY
-  rm -f "$rendered"
+
+  KKREPO_SCANNER_DB_UPDATE_URL="https://192.168.1.100/grype-db" \
+  docker compose \
+    -f "$compose_file" \
+    --profile security-scanning \
+    config \
+    --format json >"$custom_rendered"
+
+  python3 - "$compose_file" "$custom_rendered" <<'PY'
+import json
+import pathlib
+import sys
+
+source = pathlib.Path(sys.argv[1]).name
+
+with open(sys.argv[2], encoding="utf-8") as handle:
+    model = json.load(handle)
+
+updater = model["services"]["scanner-database-updater"]
+
+assert updater["environment"]["KKREPO_SCANNER_DB_UPDATE_URL"] == "https://192.168.1.100/grype-db", source
+PY
+
+  rm -f "$rendered" "$custom_rendered"
   trap - EXIT
+
 done

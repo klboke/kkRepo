@@ -121,4 +121,10 @@ http://{{ $scannerName }}-{{ $index }}.{{ $headlessName }}:{{ $root.Values.secur
 {{- if and .Values.securityScanning.enabled (gt (int .Values.securityScanning.replicaCount) 1) .Values.securityScanning.scannerDatabase.persistence.enabled (not .Values.securityScanning.scannerDatabase.persistence.existingClaim) }}
 {{- fail "multiple scanner replicas with persistence require scannerDatabase.persistence.existingClaim backed by ReadWriteMany storage" }}
 {{- end }}
+{{- if and .Values.securityScanning.enabled .Values.securityScanning.networkPolicy.databaseMirror.enabled (not .Values.securityScanning.networkPolicy.databaseMirror.cidr) }}
+{{- fail "securityScanning.networkPolicy.databaseMirror.cidr is required when databaseMirror.enabled=true" }}
+{{- end }}
+{{- if and .Values.securityScanning.enabled .Values.securityScanning.networkPolicy.databaseMirror.enabled (not .Values.securityScanning.networkPolicy.databaseMirror.port) }}
+{{- fail "securityScanning.networkPolicy.databaseMirror.port is required when databaseMirror.enabled=true" }}
+{{- end }}
 {{- end }}
