@@ -4512,6 +4512,17 @@ code {
   }
 }
 
+#content-selectors-view .action-bar {
+  flex-wrap: wrap;
+}
+#content-selectors-view .action-bar > .create-button,
+#content-selectors-view .action-bar > .filter-box {
+  flex-shrink: 0;
+}
+#content-selectors-view .selector-access-note {
+  flex: 1 1 320px;
+  min-width: 0;
+}
 #content-selectors-view .nx-table td code {
   white-space: pre-wrap;
   overflow-wrap: anywhere;

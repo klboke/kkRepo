@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-4">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20260811-conan-1">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20260818-user-round-1">
-    <link rel="stylesheet" href="./assets/admin.css?v=20260908-content-selectors-1">
+    <link rel="stylesheet" href="./assets/admin.css?v=20260909-selector-toolbar-1">
     <link rel="stylesheet" href="/browse/assets/account-menu.css?v=20260824-ui-themes-3">
     <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=20260819-topbar-control-height-1">
   </head>
@@ -599,8 +599,8 @@
             <button class="create-button" id="selector-create" type="button" disabled>Create selector</button>
             <button class="create-button secondary" id="selector-refresh" type="button">Refresh</button>
             <label class="filter-box"><input id="selector-filter" type="search" placeholder="Filter selectors" aria-label="Filter selectors"></label>
+            <p class="form-note selector-access-note">Selector privileges add access. Broader repository grants, including inherited roles, still apply.</p>
           </div>
-          <p class="form-note">Selector privileges add access. Broader repository grants, including inherited roles, still apply.</p>
           <p id="selector-status" role="status" aria-live="polite"></p>
           <div class="nx-table-frame fixed-table-frame">
             <table class="nx-table"><thead><tr><th>Name</th><th>Type</th><th>Expression</th><th>Description</th><th>Used by privileges</th><th class="actions-column">Actions</th></tr></thead><tbody id="selector-table"></tbody></table>
