@@ -2,7 +2,6 @@ package com.github.klboke.kkrepo.server.browse;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -20,7 +19,6 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifest
 import com.github.klboke.kkrepo.server.docker.DockerManifestStore;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
-import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -87,69 +85,35 @@ class DockerBrowseDeleteServiceTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"team", "team/app"})
-  void directoryDeletionDeduplicatesDigestsAndKeepsLiteralSubtree(String path) {
-    when(docker.listBrowseImages(hosted.id(), path)).thenReturn(List.of(
-        image("team/app"), image("team/app/child"), image("teamb/app")));
-    when(docker.listBrowseReferences(hosted.id(), "team/app"))
-        .thenReturn(List.of(reference("latest"), reference("1.0.0"), reference(DIGEST)));
-    when(docker.listBrowseReferences(hosted.id(), "team/app/child"))
-        .thenReturn(List.of(reference(DIGEST)));
-    RepositoryRuntime runtime = runtime(hosted);
-    when(manifests.deleteReference(eq(runtime), anyString(), eq(DIGEST))).thenReturn(1);
-    assertEquals(2, service.delete(hosted, path, null).deletedAssets());
-    verify(manifests).deleteReference(runtime, "team/app", DIGEST);
-    verify(manifests).deleteReference(runtime, "team/app/child", DIGEST);
-    verify(docker, never()).listBrowseReferences(hosted.id(), "teamb/app");
+  @ValueSource(strings = {"team", "team/manifests", "team/app/manifests",
+      "team/manifests/child/manifests", "team/app/manifests/latest/child"})
+  void directoryPathsCannotBeReinterpretedAsAnotherImage(String path) {
+    status(HttpStatus.BAD_REQUEST, () -> service.delete(hosted, path, null));
+    verifyNoInteractions(docker, manifests);
   }
 
   @Test
-  void sqlWildcardMatchesCannotBroadenDirectoryDeletion() {
-    when(docker.listBrowseImages(hosted.id(), "team_app"))
-        .thenReturn(List.of(image("team_app"), image("teamXapp")));
-    when(docker.listBrowseReferences(hosted.id(), "team_app"))
-        .thenReturn(List.of(reference(DIGEST)));
-    RepositoryRuntime runtime = runtime(hosted);
-    when(manifests.deleteReference(runtime, "team_app", DIGEST)).thenReturn(1);
-    assertEquals(1, service.delete(hosted, "team_app", null).deletedAssets());
-    verify(docker, never()).listBrowseReferences(hosted.id(), "teamXapp");
-  }
-
-  @Test
-  void manifestsDirectoryDeletesOnlyTheExactImage() {
-    when(docker.imageExists(hosted.id(), "team/app")).thenReturn(true);
-    when(docker.listBrowseReferences(hosted.id(), "team/app"))
-        .thenReturn(List.of(reference("latest"), reference(DIGEST)));
-    RepositoryRuntime runtime = runtime(hosted);
-    when(manifests.deleteReference(runtime, "team/app", DIGEST)).thenReturn(1);
-    assertEquals(1, service.delete(hosted, "team/app/manifests", null).deletedAssets());
-    verify(docker, never()).listBrowseImages(anyLong(), anyString());
-    verify(manifests).deleteReference(runtime, "team/app", DIGEST);
-  }
-
-  @Test
-  void intermediateManifestsSegmentCanBelongToAnImageName() {
-    String path = "team/manifests/app/child";
-    when(docker.listBrowseImages(hosted.id(), path)).thenReturn(List.of(image(path)));
-    when(docker.listBrowseReferences(hosted.id(), path)).thenReturn(List.of(reference(DIGEST)));
-    RepositoryRuntime runtime = runtime(hosted);
-    when(manifests.deleteReference(runtime, path, DIGEST)).thenReturn(1);
-    assertEquals(1, service.delete(hosted, path, null).deletedAssets());
+  void imageNamesEndingInManifestsRetainTheirIdentity() {
+    for (String image : List.of("team", "team/manifests", "team/manifests/child")) {
+      RepositoryRuntime runtime = referenceExists(hosted, image, "latest");
+      assertEquals(1, service.delete(hosted, image + "/manifests/latest", null).deletedAssets());
+      verify(manifests).deleteReference(runtime, image, "latest");
+    }
   }
 
   @Test
   void missingPathsAndReferencesReturn404WithoutMutation() {
-    for (String path : List.of("missing", "missing/manifests", "missing/manifests/latest")) {
+    for (String path : List.of("missing/manifests/latest", "missing/manifests/" + DIGEST)) {
       status(HttpStatus.NOT_FOUND, () -> service.delete(hosted, path, null));
     }
     when(repositories.listMembers(group.id())).thenReturn(List.of());
-    status(HttpStatus.NOT_FOUND, () -> service.delete(group, "missing", null));
+    status(HttpStatus.NOT_FOUND, () -> service.delete(group, "missing/manifests/latest", null));
     verifyNoInteractions(manifests);
   }
 
   @Test
   void invalidPathsReturn400WithoutMutation() {
-    for (String path : List.of("", "Team/app", "team/app/manifests/bad tag")) {
+    for (String path : List.of("", "Team/app/manifests/latest", "team/app/manifests/", "team/app/manifests/bad tag")) {
       status(HttpStatus.BAD_REQUEST, () -> service.delete(hosted, path, null));
     }
     verifyNoInteractions(manifests);
@@ -157,11 +121,11 @@ class DockerBrowseDeleteServiceTest {
 
   @Test
   void sourceMustExistAndBelongToRequestedRepository() {
-    status(HttpStatus.NOT_FOUND, () -> service.delete(hosted, "team/app", "missing"));
+    status(HttpStatus.NOT_FOUND, () -> service.delete(hosted, "team/app/manifests/latest", "missing"));
     when(repositories.findByName(proxy.name())).thenReturn(Optional.of(proxy));
-    status(HttpStatus.BAD_REQUEST, () -> service.delete(hosted, "team/app", proxy.name()));
+    status(HttpStatus.BAD_REQUEST, () -> service.delete(hosted, "team/app/manifests/latest", proxy.name()));
     when(repositories.listMembers(group.id())).thenReturn(List.of(hosted));
-    status(HttpStatus.BAD_REQUEST, () -> service.delete(group, "team/app", proxy.name()));
+    status(HttpStatus.BAD_REQUEST, () -> service.delete(group, "team/app/manifests/latest", proxy.name()));
     verifyNoInteractions(docker, manifests);
   }
 
@@ -194,15 +158,6 @@ class DockerBrowseDeleteServiceTest {
   private static RepositoryRecord repository(long id, String name, RepositoryType type) {
     return new RepositoryRecord(id, name, RepositoryFormat.DOCKER, type, name,
         true, 7L, null, null, null, null, "ALLOW", true, Map.of());
-  }
-
-  private static DockerRegistryDao.BrowseImageRow image(String name) {
-    return new DockerRegistryDao.BrowseImageRow(name, Instant.EPOCH, 1L, "application/json");
-  }
-
-  private static DockerRegistryDao.BrowseReferenceRow reference(String value) {
-    return new DockerRegistryDao.BrowseReferenceRow(value, DIGEST, 11L, 1L,
-        "application/json", Instant.EPOCH);
   }
 
   private static void status(HttpStatus expected, Runnable action) {

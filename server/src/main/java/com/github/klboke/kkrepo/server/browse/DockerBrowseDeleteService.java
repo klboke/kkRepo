@@ -8,7 +8,6 @@ import com.github.klboke.kkrepo.protocol.docker.DockerPathParser;
 import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
 import com.github.klboke.kkrepo.server.docker.DockerManifestStore;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
-import java.util.LinkedHashSet;
 import java.util.List;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -37,25 +36,22 @@ public class DockerBrowseDeleteService {
   }
 
   /**
-   * Uses database-backed Docker identities, never generic asset path deletion. The transaction
-   * covers the selected references; concurrent uploads after the directory snapshot may remain.
+   * Uses database-backed Docker identities, never generic asset path deletion. Only tag/digest
+   * leaves are accepted; directory paths do not carry enough information to identify a selection.
    * DockerManifestStore maintains tag/manifest/blob state and shared cache versions after commit,
    * so sibling replicas observe the deletion without depending on this node's browse state.
    */
   @Transactional
   public BrowseContentDeleteController.BrowseDeleteResult delete(
       RepositoryRecord requested, String path, String sourceRepository) {
+    Reference reference = reference(path);
     for (RepositoryRecord source : sources(requested, sourceRepository)) {
-      List<Reference> references = references(source, path);
-      if (references.isEmpty()) {
+      if (dockerDao.findManifestByReference(source.id(), reference.image(), reference.value()).isEmpty()) {
         continue;
       }
       var runtime = runtimes.resolveById(source.id()).orElseThrow(() ->
           new ResponseStatusException(HttpStatus.CONFLICT, "Repository runtime is unavailable"));
-      int deleted = 0;
-      for (Reference reference : references) {
-        deleted += manifests.deleteReference(runtime, reference.image(), reference.value());
-      }
+      int deleted = manifests.deleteReference(runtime, reference.image(), reference.value());
       if (deleted == 0) {
         throw notFound(path);
       }
@@ -86,46 +82,30 @@ public class DockerBrowseDeleteService {
     return List.of(source);
   }
 
-  private List<Reference> references(RepositoryRecord source, String path) {
+  private static Reference reference(String path) {
     int marker = path.lastIndexOf(MANIFESTS + "/");
-    if (marker > 0) {
-      String value = path.substring(marker + MANIFESTS.length() + 1);
-      if (!value.contains("/")) {
-        String image = path.substring(0, marker);
-        validate(image, value);
-        return dockerDao.findManifestByReference(source.id(), image, value).isPresent()
-            ? List.of(new Reference(image, value)) : List.of();
-      }
+    if (marker <= 0) {
+      throw invalidPath();
     }
-    boolean manifestDirectory = path.endsWith(MANIFESTS);
-    String parent = manifestDirectory
-        ? path.substring(0, path.length() - MANIFESTS.length()) : path;
-    validate(parent, null);
-    List<String> images = manifestDirectory
-        ? dockerDao.imageExists(source.id(), parent) ? List.of(parent) : List.of()
-        : dockerDao.listBrowseImages(source.id(), parent).stream()
-            .map(DockerRegistryDao.BrowseImageRow::imageName)
-            // SQL LIKE can also match wildcard characters in names; deletion must stay literal.
-            .filter(image -> image.equals(parent) || image.startsWith(parent + "/"))
-            .toList();
-    LinkedHashSet<Reference> references = new LinkedHashSet<>();
-    for (String image : images) {
-      for (DockerRegistryDao.BrowseReferenceRow row : dockerDao.listBrowseReferences(source.id(), image)) {
-        references.add(new Reference(image, row.digest()));
-      }
+    String image = path.substring(0, marker);
+    String value = path.substring(marker + MANIFESTS.length() + 1);
+    if (value.isEmpty() || value.contains("/")) {
+      throw invalidPath();
     }
-    return List.copyOf(references);
-  }
-
-  private static void validate(String image, String reference) {
     try {
       DockerPathParser.validateImageName(image);
-      if (reference != null && !DockerPathParser.isDigestReference(reference)) {
-        DockerPathParser.validateTag(reference);
+      if (!DockerPathParser.isDigestReference(value)) {
+        DockerPathParser.validateTag(value);
       }
     } catch (DockerProtocolException invalid) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, invalid.getMessage(), invalid);
     }
+    return new Reference(image, value);
+  }
+
+  private static ResponseStatusException invalidPath() {
+    return new ResponseStatusException(
+        HttpStatus.BAD_REQUEST, "Docker deletion requires a tag or digest browse path");
   }
 
   private static ResponseStatusException notFound(String path) {

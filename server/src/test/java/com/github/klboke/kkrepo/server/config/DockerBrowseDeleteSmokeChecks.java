@@ -60,7 +60,7 @@ final class DockerBrowseDeleteSmokeChecks {
         """).formatted(configDigest.value(), config.length, layerDigest.value(), layer.length)
         .getBytes(StandardCharsets.UTF_8);
     var manifests = first.getBean(DockerManifestStore.class);
-    for (String image : List.of("team/app", "team/other", "outside/app")) {
+    for (String image : List.of("team/app", "team/other", "team", "team/manifests")) {
       manifests.putManifest(runtime, image, "latest", body, DockerConstants.MEDIA_TYPE_OCI_MANIFEST,
           "admin", "127.0.0.1", true);
     }
@@ -92,13 +92,18 @@ final class DockerBrowseDeleteSmokeChecks {
     assertEquals(200, request(second, "GET", "/v2/smoke-docker/team/other/blobs/" + layerDigest.value())
         .statusCode(), "shared layers remain downloadable");
 
-    delete(first, "smoke-docker", "team", "");
-    assertManifest(second, "smoke-docker", "team/other", "latest", 404);
-    assertManifest(second, "smoke-docker", "outside/app", "latest", 200);
-    delete(first, "smoke-docker", "outside/app/manifests", "");
-    assertManifest(second, "smoke-docker", "outside/app", "latest", 404);
+    for (String directory : List.of("team", "team/manifests", "team/other/manifests")) {
+      assertEquals(400, request(first, "DELETE",
+          "/internal/browse/smoke-docker?path=" + directory).statusCode());
+    }
+    assertManifest(second, "smoke-docker", "team/other", "latest", 200);
+    assertManifest(second, "smoke-docker", "team", "latest", 200);
+    assertManifest(second, "smoke-docker", "team/manifests", "latest", 200);
+    delete(first, "smoke-docker", "team/manifests/manifests/latest", "");
+    assertManifest(second, "smoke-docker", "team/manifests", "latest", 404);
+    assertManifest(second, "smoke-docker", "team", "latest", 200);
     assertEquals(404, request(first, "DELETE",
-        "/internal/browse/smoke-docker?path=outside/app/manifests/latest").statusCode());
+        "/internal/browse/smoke-docker?path=team/manifests/manifests/latest").statusCode());
   }
 
   private static void delete(ConfigurableApplicationContext context, String repository,

@@ -57,11 +57,11 @@ docker pull nexus.example.com/docker-group/team/alpine:3.20
 
 ## 清理与安全
 
-管理员可以在 Browse 中删除 tag、manifest digest 和镜像目录。删除 tag 只移除该标签；
-删除 digest 会移除该镜像中的对应 manifest 及其全部标签。删除目录会清理来源仓库中的
-对应镜像子树。从 group 发起删除时只影响选中的成员；删除 proxy 内容只清理本地缓存，
-后续仍可从上游重新获取。Browse 管理删除遵循门户的管理员权限规则，独立于 Registry V2
-写入策略。
+管理员可以在 Browse 中选中 tag 或 manifest digest 并删除。删除 tag 只移除该标签；
+删除 digest 会移除该镜像中的对应 manifest 及其全部标签。Docker 镜像和命名空间目录
+不是删除目标，API 会拒绝目录路径。从 group 发起删除时只影响选中的成员；删除 proxy
+内容只清理本地缓存，后续仍可从上游重新获取。Browse 管理删除遵循门户的管理员权限规则，
+独立于 Registry V2 写入策略。
 
 删除和 cleanup 会区分 tag、manifest 与共享 blob reference，不能直接从 blob storage 删除
 对象。先执行 cleanup preview，并由引用计数判断 blob 何时不再被引用。安全扫描应面向已提交
