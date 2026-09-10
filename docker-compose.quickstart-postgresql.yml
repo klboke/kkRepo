@@ -74,6 +74,24 @@ services:
       - application-egress
     restart: unless-stopped
 
+  # Keep probes outside the application image so JVM and shell-less Native both work.
+  # Compose reports application readiness on this service, not on kkrepo itself.
+  kkrepo-health:
+    image: alpine:3.20
+    init: true
+    depends_on:
+      - kkrepo
+    command: ["sleep", "infinity"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://kkrepo:8081/actuator/health/readiness >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    networks:
+      - application-egress
+    restart: unless-stopped
+
   scanner:
     image: ghcr.io/klboke/kkrepo-scanner:${KKREPO_SCANNER_IMAGE_TAG:-1.0.0}
     profiles: ["security-scanning"]
