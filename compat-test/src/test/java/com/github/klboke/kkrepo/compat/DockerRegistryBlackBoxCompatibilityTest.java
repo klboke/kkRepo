@@ -136,6 +136,55 @@ class DockerRegistryBlackBoxCompatibilityTest {
   }
 
   @Test
+  void browseDeletionPreservesTagsAndMatchesNexusManifestDeletionWhenConfigured() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeTrue(config.enabled() && config.configured() && config.writeEnabled(),
+        "Configure writable Nexus and kkrepo Docker endpoints to compare administrative deletion");
+    assumeTrue(CompatDefaults.nexusPlusBaseUrl().isPresent(), "Configure the kkrepo application URL");
+    Endpoint browse = new Endpoint("kkrepo-browse", CompatDefaults.nexusPlusBaseUrl(),
+        CompatDefaults.nexusPlusUsername(), CompatDefaults.nexusPlusPassword());
+    String image = config.uploadImage() + "/browse-delete-" + System.nanoTime();
+    byte[] layer = image.getBytes(StandardCharsets.UTF_8);
+    String layerDigest = "sha256:" + sha256(layer);
+    byte[] manifest = singleLayerManifest(layerDigest, layer.length).getBytes(StandardCharsets.UTF_8);
+    String digest = "sha256:" + sha256(manifest);
+    String imagePath = config.repositoryPath(image);
+    for (Endpoint endpoint : List.of(config.nexus(), config.nexusPlus())) {
+      pushBlob(endpoint, imagePath, "sha256:" + sha256(new byte[0]), new byte[0], true);
+      pushBlob(endpoint, imagePath, layerDigest, layer, true);
+      for (String tag : List.of("latest", "1.0.0")) {
+        assertEquals(201, put(endpoint, endpoint.v2(imagePath + "/manifests/" + tag),
+            DockerConstants.MEDIA_TYPE_OCI_MANIFEST, manifest, true).status());
+      }
+    }
+
+    // The portal's internal API must preserve the registry's tag-vs-manifest deletion semantics.
+    String browseUrl = "/internal/browse/" + encode(config.repository()) + "?path=";
+    assertEquals(200, delete(browse,
+        browse.resolve(browseUrl + encode(image + "/manifests/latest")), true).status());
+    assertEquals(404, get(config.nexusPlus(), config.nexusPlus().v2(imagePath + "/manifests/latest"),
+        dockerAccept(), true).status());
+    assertEquals(200, get(config.nexusPlus(), config.nexusPlus().v2(imagePath + "/manifests/1.0.0"),
+        dockerAccept(), true).status());
+    assertEquals(200, get(config.nexusPlus(), config.nexusPlus().v2(imagePath + "/manifests/" + digest),
+        dockerAccept(), true).status());
+
+    // Nexus's Registry V2 digest deletion is the reference for the resulting registry state.
+    assertEquals(202, delete(config.nexus(),
+        config.nexus().v2(imagePath + "/manifests/" + digest), true).status());
+    assertEquals(200, delete(browse,
+        browse.resolve(browseUrl + encode(image + "/manifests/" + digest)), true).status());
+    for (String reference : List.of("latest", "1.0.0", digest)) {
+      Exchange expected = get(config.nexus(), config.nexus().v2(imagePath + "/manifests/" + reference),
+          dockerAccept(), true);
+      Exchange actual = get(config.nexusPlus(), config.nexusPlus().v2(imagePath + "/manifests/" + reference),
+          dockerAccept(), true);
+      assertEquals(404, expected.status());
+      assertEquals(expected.status(), actual.status(), "deleted reference " + reference);
+    }
+  }
+
+  @Test
   void pathBasedRoutingMatchesConnectorWhenConfigured() throws Exception {
     CompatConfig config = CompatConfig.load();
     assumeTrue(config.enabled(),

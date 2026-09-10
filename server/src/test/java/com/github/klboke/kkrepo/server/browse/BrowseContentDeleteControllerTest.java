@@ -60,6 +60,22 @@ import org.springframework.web.server.ResponseStatusException;
 
 class BrowseContentDeleteControllerTest {
   @Test
+  void dockerDeletionDelegatesNormalizedBrowsePathAfterAdministratorAuthorization() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord repository = repository(1L, "docker", RepositoryFormat.DOCKER, RepositoryType.HOSTED);
+    DockerBrowseDeleteService docker = mock(DockerBrowseDeleteService.class);
+    fixture.controller.setDockerDeleteSupport(docker);
+    when(fixture.repositoryDao.findByName("docker")).thenReturn(Optional.of(repository));
+    var expected = new BrowseContentDeleteController.BrowseDeleteResult(
+        "docker", "docker", "hello-world/manifests/latest", 1);
+    when(docker.delete(repository, "hello-world/manifests/latest", "docker")).thenReturn(expected);
+    assertEquals(expected, fixture.controller.delete(
+        "docker", "/hello-world/manifests/latest/", "docker", new MockHttpServletRequest()));
+    verify(fixture.assetDao, never()).findAssetByPath(anyLong(), any());
+    verify(fixture.assetDao, never()).deleteAssetById(anyLong());
+  }
+
+  @Test
   void rHostedDeletionResolvesBrowseCoordinateAndDelegatesToProtocolService() {
     Fixture fixture = fixture(true, AccessDecision.allow());
     RepositoryRecord repository =

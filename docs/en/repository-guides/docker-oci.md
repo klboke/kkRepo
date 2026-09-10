@@ -59,6 +59,13 @@ Push only to hosted. Proxy and group are read endpoints even when the caller is 
 
 ## Cleanup And Security
 
+Administrators can delete tags, manifest digests, and image directories from Browse. Deleting a tag
+removes only that tag; deleting a digest removes that manifest and all of its tags in the image.
+Directory deletion removes the selected image subtree in the source repository. From a group,
+deletion affects the selected member only; proxy deletion removes local cached content, which can
+be fetched again from upstream. Administrative Browse deletion follows the portal's administrator
+permission rules, independently of the Registry V2 write policy.
+
 Delete and cleanup logic distinguishes tags, manifests, and shared blob references; do not delete
 objects directly from blob storage. Run cleanup preview and allow reference accounting to determine
 when a blob is unreferenced. Security scanning should target the committed manifest and layer set,

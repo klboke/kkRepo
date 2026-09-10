@@ -100,6 +100,7 @@ public class BrowseContentDeleteController {
   private RService rService;
   private CondaService condaService;
   private HelmGroupIndexCache helmGroupIndexCache;
+  private DockerBrowseDeleteService dockerDeleteService;
 
   public BrowseContentDeleteController(
       RepositoryDao repositoryDao,
@@ -176,6 +177,11 @@ public class BrowseContentDeleteController {
   @Autowired
   void setHelmDeleteSupport(HelmGroupIndexCache helmGroupIndexCache) {
     this.helmGroupIndexCache = helmGroupIndexCache;
+  }
+
+  @Autowired
+  void setDockerDeleteSupport(DockerBrowseDeleteService dockerDeleteService) {
+    this.dockerDeleteService = dockerDeleteService;
   }
 
   @DeleteMapping("/{repository}")
@@ -329,6 +335,9 @@ public class BrowseContentDeleteController {
     String publicPath = normalize(path);
     if (publicPath.isEmpty()) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "path is required");
+    }
+    if (requested.format() == RepositoryFormat.DOCKER) {
+      return dockerDeleteService.delete(requested, publicPath, sourceRepository);
     }
     AnsibleCoordinate ansibleCoordinate = requested.format() == RepositoryFormat.ANSIBLEGALAXY
         ? ansibleCoordinate(publicPath)
