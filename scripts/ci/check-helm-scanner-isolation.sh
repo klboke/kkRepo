@@ -63,8 +63,10 @@ grep -A1 -F "KKREPO_SCANNER_DATABASE_UPDATE_ONLY" <<<"$updater_cronjob" \
 grep -A1 -F "KKREPO_SCANNER_DATABASE_UPDATE_LOCK_TIMEOUT" <<<"$updater_cronjob" \
   | grep -Fq 'value: "10m"'
 
-grep -A1 -F "KKREPO_SCANNER_DB_UPDATE_URL" <<<"$updater_cronjob" \
-  | grep -Fq 'value: "https://grype.anchore.io/databases"'
+if grep -Fq "KKREPO_SCANNER_DB_UPDATE_URL" <<<"$updater_cronjob"; then
+  echo "database updater must leave the Grype update URL unset by default" >&2
+  exit 1
+fi
 
 if grep -Fq "KKREPO_SCANNER_DB_CA_CERT" <<<"$updater_cronjob"; then
   echo "database updater must not configure a CA certificate by default" >&2
@@ -168,4 +170,3 @@ grep -A2 -F "claimName: preloaded-scanner-db" "$preloaded" >/dev/null
 
 grep -A2 -F "mountPath: /var/lib/kkrepo-scanner/grype" "$preloaded" \
   | grep -Fq "readOnly: true"
-

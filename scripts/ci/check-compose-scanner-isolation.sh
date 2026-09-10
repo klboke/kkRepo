@@ -9,8 +9,23 @@ for compose_file in \
 
   rendered="$(mktemp)"
   custom_rendered="$(mktemp)"
+  custom_ca="$(mktemp)"
+  custom_override="$(mktemp)"
 
-  trap 'rm -f "$rendered" "$custom_rendered"' EXIT
+  printf '%s\n' 'test CA certificate' >"$custom_ca"
+  printf '%s\n' \
+    'services:' \
+    '  scanner-database-updater:' \
+    '    environment:' \
+    '      KKREPO_SCANNER_DB_CA_CERT: /etc/kkrepo-ca/ca.crt' \
+    '    volumes:' \
+    '      - type: bind' \
+    "        source: $custom_ca" \
+    '        target: /etc/kkrepo-ca/ca.crt' \
+    '        read_only: true' \
+    >"$custom_override"
+
+  trap 'rm -f "$rendered" "$custom_rendered" "$custom_ca" "$custom_override"' EXIT
 
   docker compose \
     -f "$compose_file" \
@@ -72,16 +87,18 @@ PY
   KKREPO_SCANNER_DB_UPDATE_URL="https://192.168.1.100/grype-db" \
   docker compose \
     -f "$compose_file" \
+    -f "$custom_override" \
     --profile security-scanning \
     config \
     --format json >"$custom_rendered"
 
-  python3 - "$compose_file" "$custom_rendered" <<'PY'
+  python3 - "$compose_file" "$custom_rendered" "$custom_ca" <<'PY'
 import json
 import pathlib
 import sys
 
 source = pathlib.Path(sys.argv[1]).name
+ca_file = str(pathlib.Path(sys.argv[3]).resolve())
 
 with open(sys.argv[2], encoding="utf-8") as handle:
     model = json.load(handle)
@@ -89,9 +106,17 @@ with open(sys.argv[2], encoding="utf-8") as handle:
 updater = model["services"]["scanner-database-updater"]
 
 assert updater["environment"]["KKREPO_SCANNER_DB_UPDATE_URL"] == "https://192.168.1.100/grype-db", source
+assert updater["environment"]["KKREPO_SCANNER_DB_CA_CERT"] == "/etc/kkrepo-ca/ca.crt", source
+
+ca_volume = next(
+    volume for volume in updater["volumes"]
+    if volume["target"] == "/etc/kkrepo-ca/ca.crt"
+)
+assert ca_volume["source"] == ca_file, source
+assert ca_volume["read_only"] is True, source
 PY
 
-  rm -f "$rendered" "$custom_rendered"
+  rm -f "$rendered" "$custom_rendered" "$custom_ca" "$custom_override"
   trap - EXIT
 
 done
