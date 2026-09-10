@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.compat;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -183,19 +184,37 @@ class DockerRegistryBlackBoxCompatibilityTest {
       assertEquals(expected.status(), actual.status(), "reference after tag deletion " + reference);
     }
 
-    // Nexus's administrative digest deletion removes the digest asset but retains tag assets.
-    // Keep kkrepo's existing OCI contract that also removes aliases; this PR only connects Browse.
+    // Both administrative APIs delete the selected digest entry while preserving tag assets.
     deleteNexusBrowseAsset(nexusUi, config.repository(), imagePath, digest, true);
-    assertEquals(200, get(config.nexus(), config.nexus().v2(imagePath + "/manifests/1.0.0"),
-        dockerAccept(), true).status());
     assertEquals(200, delete(browse,
         browse.resolve(browseUrl + encode(image + "/manifests/" + digest)), true).status());
-    for (String reference : List.of("latest", "1.0.0", digest)) {
+    for (String reference : List.of("latest", "1.0.0")) {
+      Exchange expected = get(config.nexus(), config.nexus().v2(imagePath + "/manifests/" + reference),
+          dockerAccept(), true);
       Exchange actual = get(config.nexusPlus(), config.nexusPlus().v2(imagePath + "/manifests/" + reference),
           dockerAccept(), true);
-      assertEquals(404, actual.status(), "deleted reference " + reference);
+      assertEquals(reference.equals("latest") ? 404 : 200, expected.status());
+      assertEquals(expected.status(), actual.status(), "reference after digest deletion " + reference);
+      if (expected.status() == 200) {
+        assertArrayEquals(expected.body(), actual.body(), "retained tag manifest bytes");
+      }
     }
+    Exchange remaining = get(browse, browse.resolve(browseUrl + encode(image + "/manifests")),
+        "application/json", true);
+    assertEquals(200, remaining.status());
+    assertTrue(new String(remaining.body(), StandardCharsets.UTF_8).contains(image + "/manifests/1.0.0"));
+    assertFalse(new String(remaining.body(), StandardCharsets.UTF_8).contains(digest));
+    assertEquals(404, get(browse, browse.resolve("/internal/browse/" + encode(config.repository())
+        + "/attributes?path=" + encode(image + "/manifests/" + digest)), "application/json", true).status());
+    assertEquals(404, delete(browse,
+        browse.resolve(browseUrl + encode(image + "/manifests/" + digest)), true).status());
     deleteNexusBrowseAsset(nexusUi, config.repository(), imagePath, "1.0.0", false);
+    assertEquals(200, delete(browse,
+        browse.resolve(browseUrl + encode(image + "/manifests/1.0.0")), true).status());
+    for (Endpoint endpoint : List.of(config.nexus(), config.nexusPlus())) {
+      assertEquals(404, get(endpoint, endpoint.v2(imagePath + "/manifests/1.0.0"),
+          dockerAccept(), true).status());
+    }
   }
 
   // Captured from Nexus 3.94's ComponentAssetTree and Browse controllers; see

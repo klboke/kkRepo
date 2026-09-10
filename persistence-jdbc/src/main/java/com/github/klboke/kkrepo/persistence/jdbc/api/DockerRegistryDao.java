@@ -70,6 +70,12 @@ public interface DockerRegistryDao {
 
   DeletedManifest deleteManifest(long repositoryId, String imageName, String digest);
 
+  /**
+   * Deletes only the selected administrative reference. Returned asset IDs are populated only
+   * when neither the digest reference nor any tags retain the manifest body. Requires a transaction.
+   */
+  DeletedManifest deleteBrowseReference(long repositoryId, String imageName, String reference);
+
   boolean referencedDigestExists(long repositoryId, String imageName, String digest);
 
   boolean imageReferencesDigest(long repositoryId, String imageName, String digest);

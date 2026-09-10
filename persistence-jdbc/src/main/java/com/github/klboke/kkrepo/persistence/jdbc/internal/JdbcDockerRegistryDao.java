@@ -428,13 +428,13 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
 
   @Transactional(propagation = Propagation.MANDATORY)
   public DeletedManifest deleteManifest(long repositoryId, String imageName, String digest) {
-    Optional<DockerManifestRecord> manifest = findManifestByDigest(repositoryId, imageName, digest);
+    Optional<DockerManifestRecord> manifest = findManifestByDigestForUpdate(repositoryId, imageName, digest);
     if (manifest.isEmpty()) {
       return DeletedManifest.notFound();
     }
     long id = manifest.get().id();
     Long assetBlobId = jdbcTemplate.queryForObject(
-        "SELECT asset_blob_id FROM asset WHERE id = ?",
+        "SELECT asset_blob_id FROM asset WHERE id = ? FOR UPDATE",
         (rs, rowNum) -> nullableLong(rs, "asset_blob_id"),
         manifest.get().assetId());
     jdbcTemplate.update("DELETE FROM docker_tag WHERE manifest_id = ?", id);
@@ -444,6 +444,41 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
         WHERE id = ?
         """, id);
     return new DeletedManifest(deleted, manifest.get().assetId(), assetBlobId);
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public DeletedManifest deleteBrowseReference(long repositoryId, String imageName, String reference) {
+    boolean digestReference = reference.contains(":");
+    Optional<DockerManifestRecord> selected = findManifestByReference(repositoryId, imageName, reference);
+    if (selected.isEmpty()) return DeletedManifest.notFound();
+    // Serialize with manifest upserts and other Browse deletes on every replica. Tag deletion also
+    // checks manifest_id so a concurrent retag cannot make us delete a different manifest's pointer.
+    Optional<DockerManifestRecord> locked = findManifestByDigestForUpdate(
+        repositoryId, imageName, selected.get().digest());
+    if (locked.isEmpty()) return DeletedManifest.notFound();
+    DockerManifestRecord manifest = locked.get();
+    if (digestReference) {
+      if (!manifest.hasDigestReference()) return DeletedManifest.notFound();
+      if (listTagsForManifestForUpdate(manifest.id()).isEmpty()) {
+        return deleteManifest(repositoryId, imageName, manifest.digest());
+      }
+      // Persist reference deletion separately from the shared manifest body. A subsequent push
+      // restores the digest reference through upsertManifest's replacement attributes.
+      jdbcTemplate.update("UPDATE docker_manifest SET attributes_json = "
+          + jsonColumns.setBoolean("attributes_json", true, DockerManifestRecord.DIGEST_REFERENCE_DELETED)
+          + " WHERE id = ?", manifest.id());
+    } else {
+      int deleted = jdbcTemplate.update("""
+          DELETE FROM docker_tag
+          WHERE repository_id = ? AND image_name_hash = ? AND tag_hash = ? AND manifest_id = ?
+          """, repositoryId, hash(imageName), hash(reference), manifest.id());
+      if (deleted == 0) return DeletedManifest.notFound();
+      if (!manifest.hasDigestReference() && listTagsForManifestForUpdate(manifest.id()).isEmpty()) {
+        return deleteManifest(repositoryId, imageName, manifest.digest());
+      }
+    }
+    return new DeletedManifest(1, null, null);
   }
 
   public boolean referencedDigestExists(long repositoryId, String imageName, String digest) {
@@ -752,8 +787,11 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
         WHERE m.repository_id = ?
           AND m.image_name_hash = ?
           AND m.deleted_at IS NULL
+          AND COALESCE(%s, 'false') <> 'true'
         ORDER BY reference
-        """, (rs, rowNum) -> new BrowseReferenceRow(
+        """.formatted(jsonColumns.extractText(
+            "m.attributes_json", DockerManifestRecord.DIGEST_REFERENCE_DELETED)),
+        (rs, rowNum) -> new BrowseReferenceRow(
             rs.getString("reference"),
             rs.getString("digest"),
             rs.getLong("asset_id"),
@@ -769,7 +807,8 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
     if (ref == null) {
       return Optional.empty();
     }
-    return findManifestByReference(repositoryId, ref.imageName(), ref.reference());
+    return findManifestByReference(repositoryId, ref.imageName(), ref.reference())
+        .filter(manifest -> !ref.reference().contains(":") || manifest.hasDigestReference());
   }
 
   public static byte[] hash(String value) {

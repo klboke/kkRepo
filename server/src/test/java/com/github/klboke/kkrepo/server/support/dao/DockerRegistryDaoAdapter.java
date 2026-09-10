@@ -39,6 +39,11 @@ public class DockerRegistryDaoAdapter implements DockerRegistryDao {
   }
 
   @Override
+  public DeletedManifest deleteBrowseReference(long arg0, String arg1, String arg2) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
   public int deleteTag(long arg0, String arg1, String arg2) {
     throw new UnsupportedOperationException();
   }

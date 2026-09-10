@@ -27,13 +27,21 @@ and compares the remaining tag/digest reads through Registry V2.
 
 The reference test follows the actual Nexus node lookup, asset lookup, and administrative
 delete calls for both a tag and a digest. Tag deletion preserves another tag and the
-digest on both systems. Nexus 3.94 administrative digest deletion removes the digest
-asset but retains tag assets; kkRepo retains its existing OCI behavior that removes
-the digest and its tag aliases. This reference difference is asserted explicitly.
+digest on both systems. Administrative digest deletion removes the selected digest
+entry and preserves tag assets on both systems. The test compares the retained tag's
+status and manifest bytes, verifies that the deleted digest entry cannot be opened
+or deleted again, and deletes the final tag through both administrative APIs.
 The test confirms Nexus asset removal by calling `readAsset` again and checking its
 `success: false` / `HTTP 404 Not Found` result. Registry digest reads can remain
 available after the administrative asset deletion, so they are not used as proof
 that the selected Nexus asset was removed.
+
+kkRepo persists digest-reference deletion in the manifest's database attributes,
+separately from the body still owned by its tags. Browse listing and detail lookup
+omit the deleted reference across replicas. Deletion locks the manifest row and
+releases the asset/blob reference only after both the digest entry and all tags
+are gone. A subsequent manifest push restores the digest entry. The Registry V2
+DELETE operation continues to remove the manifest and all associated tags.
 
 This fix accepts tag/digest leaves only. Docker directory deletion is not exposed in
 kkRepo Browse and directory requests are rejected. In particular, `team/manifests`

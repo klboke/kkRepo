@@ -57,8 +57,10 @@ docker pull nexus.example.com/docker-group/team/alpine:3.20
 
 ## 清理与安全
 
-管理员可以在 Browse 中选中 tag 或 manifest digest 并删除。删除 tag 只移除该标签；
-删除 digest 会移除该镜像中的对应 manifest 及其全部标签。Docker 镜像和命名空间目录
+管理员可以在 Browse 中选中 tag 或 manifest digest 并删除，每次只移除选中的引用。
+删除 digest 条目会保留已有 tag 及其可下载的 manifest 内容，与 Nexus 管理界面的资产删除行为一致。
+没有 tag 或 digest 条目引用内容后才释放内容，共享 blob 仍受保护；重新推送会恢复 digest 条目。
+Registry V2 的 digest 删除仍会移除 manifest 及其全部标签。Docker 镜像和命名空间目录
 不是删除目标，API 会拒绝目录路径。从 group 发起删除时只影响选中的成员；删除 proxy
 内容只清理本地缓存，后续仍可从上游重新获取。Browse 管理删除遵循门户的管理员权限规则，
 独立于 Registry V2 写入策略。

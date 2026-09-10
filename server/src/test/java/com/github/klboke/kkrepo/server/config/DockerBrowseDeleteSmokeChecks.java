@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.config;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
@@ -83,9 +84,29 @@ final class DockerBrowseDeleteSmokeChecks {
 
     delete(first, "smoke-docker-group", "team/app/manifests/" + app.manifest().digest(),
         "&source=smoke-docker");
-    assertManifest(second, "smoke-docker", "team/app", "1.0.0", 404);
-    assertManifest(second, "smoke-docker-group", "team/app", "1.0.0", 404);
+    assertManifest(second, "smoke-docker", "team/app", "1.0.0", 200);
+    assertManifest(second, "smoke-docker-group", "team/app", "1.0.0", 200);
+    HttpResponse<String> remaining = request(second, "GET",
+        "/internal/browse/smoke-docker-group?path=team/app/manifests");
+    assertEquals(200, remaining.statusCode(), remaining.body());
+    assertFalse(remaining.body().contains(app.manifest().digest()), remaining.body());
+    assertTrue(remaining.body().contains("team/app/manifests/1.0.0"), remaining.body());
+    assertEquals(404, request(second, "DELETE", "/internal/browse/smoke-docker?path="
+        + URLEncoder.encode("team/app/manifests/" + app.manifest().digest(), StandardCharsets.UTF_8))
+        .statusCode());
+
+    // A subsequent push reintroduces the deleted digest reference without replacing other tags.
+    manifests.putManifest(runtime, "team/app", "2.0.0", body,
+        DockerConstants.MEDIA_TYPE_OCI_MANIFEST, "admin", "127.0.0.1", true);
+    assertTrue(request(second, "GET", "/internal/browse/smoke-docker?path=team/app/manifests")
+        .body().contains(app.manifest().digest()));
+    delete(first, "smoke-docker", "team/app/manifests/" + app.manifest().digest(), "");
+    delete(first, "smoke-docker", "team/app/manifests/1.0.0", "");
+    assertManifest(second, "smoke-docker-group", "team/app", "2.0.0", 200);
+    delete(first, "smoke-docker", "team/app/manifests/2.0.0", "");
+    assertManifest(second, "smoke-docker-group", "team/app", "2.0.0", 404);
     assertManifest(second, "smoke-docker", "team/app", app.manifest().digest(), 404);
+    assertTrue(second.getBean(AssetDao.class).findAssetById(app.asset().id()).isEmpty());
     assertManifest(second, "smoke-docker", "team/other", "latest", 200);
     assertTrue(second.getBean(AssetDao.class).findBlobById(app.blob().id()).isPresent(),
         "the manifest body is still shared by another image");

@@ -46,12 +46,14 @@ public class DockerBrowseDeleteService {
       RepositoryRecord requested, String path, String sourceRepository) {
     Reference reference = reference(path);
     for (RepositoryRecord source : sources(requested, sourceRepository)) {
-      if (dockerDao.findManifestByReference(source.id(), reference.image(), reference.value()).isEmpty()) {
+      var manifest = dockerDao.findManifestByReference(source.id(), reference.image(), reference.value());
+      if (manifest.isEmpty() || (DockerPathParser.isDigestReference(reference.value())
+          && !manifest.get().hasDigestReference())) {
         continue;
       }
       var runtime = runtimes.resolveById(source.id()).orElseThrow(() ->
           new ResponseStatusException(HttpStatus.CONFLICT, "Repository runtime is unavailable"));
-      int deleted = manifests.deleteReference(runtime, reference.image(), reference.value());
+      int deleted = manifests.deleteBrowseReference(runtime, reference.image(), reference.value());
       if (deleted == 0) {
         throw notFound(path);
       }

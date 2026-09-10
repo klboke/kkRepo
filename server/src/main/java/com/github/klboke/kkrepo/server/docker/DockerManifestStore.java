@@ -307,17 +307,7 @@ public class DockerManifestStore {
   public int deleteReference(RepositoryRuntime runtime, String imageName, String reference) {
     if (DockerPathParser.isDigestReference(reference)) {
       DockerRegistryDao.DeletedManifest deleted = dockerDao.deleteManifest(runtime.id(), imageName, reference);
-      if (deleted.deleted() > 0) {
-        if (deleted.assetId() != null) {
-          assetDao.deleteAssetById(deleted.assetId());
-        }
-        if (deleted.assetBlobId() != null) {
-          assetDao.markBlobDeletedIfUnreferenced(
-              deleted.assetBlobId(), "docker manifest deleted");
-        }
-        invalidateGroupMemberCaches(runtime);
-      }
-      return deleted.deleted();
+      return completeReferenceDeletion(runtime, deleted);
     }
     DockerPathParser.validateTag(reference);
     int deleted = dockerDao.deleteTag(runtime.id(), imageName, reference);
@@ -325,6 +315,26 @@ public class DockerManifestStore {
       invalidateGroupMemberCaches(runtime);
     }
     return deleted;
+  }
+
+  /** Nexus Browse removes an individual asset reference, preserving tags that share its body. */
+  @Transactional
+  public int deleteBrowseReference(RepositoryRuntime runtime, String imageName, String reference) {
+    return completeReferenceDeletion(
+        runtime, dockerDao.deleteBrowseReference(runtime.id(), imageName, reference));
+  }
+
+  private int completeReferenceDeletion(RepositoryRuntime runtime, DockerRegistryDao.DeletedManifest deleted) {
+    if (deleted.deleted() > 0) {
+      if (deleted.assetId() != null) {
+        assetDao.deleteAssetById(deleted.assetId());
+      }
+      if (deleted.assetBlobId() != null) {
+        assetDao.markBlobDeletedIfUnreferenced(deleted.assetBlobId(), "docker manifest deleted");
+      }
+      invalidateGroupMemberCaches(runtime);
+    }
+    return deleted.deleted();
   }
 
   public List<DockerManifestRecord> referrers(

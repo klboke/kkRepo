@@ -380,6 +380,43 @@ class DockerManifestStoreTest {
   }
 
   @Test
+  void browseDigestDeletionRetainsAssetsAndInvalidatesSiblingCaches() {
+    AssetDao assets = mock(AssetDao.class);
+    DockerRegistryDao docker = mock(DockerRegistryDao.class);
+    var cache = mock(com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache.class);
+    RepositoryRuntime runtime = runtime("ALLOW");
+    DockerManifestStore store = new DockerManifestStore(assets, docker, mock(DockerBlobStore.class),
+        mock(DockerManifestParser.class), null, null, cache, null);
+    String digest = "sha256:" + "a".repeat(64);
+    when(docker.deleteBrowseReference(runtime.id(), "team/app", digest))
+        .thenReturn(new DockerRegistryDao.DeletedManifest(1, null, null));
+
+    assertEquals(1, store.deleteBrowseReference(runtime, "team/app", digest));
+
+    verify(docker, never()).deleteManifest(anyLong(), anyString(), anyString());
+    org.mockito.Mockito.verifyNoInteractions(assets);
+    verify(cache).invalidateMemberAfterCommit(runtime.id());
+  }
+
+  @Test
+  void browseLastReferenceDeletionReleasesAssetsAndMissingReferenceDoesNothing() {
+    AssetDao assets = mock(AssetDao.class);
+    DockerRegistryDao docker = mock(DockerRegistryDao.class);
+    RepositoryRuntime runtime = runtime("ALLOW");
+    DockerManifestStore store = new DockerManifestStore(assets, docker, mock(DockerBlobStore.class),
+        mock(DockerManifestParser.class), null, null);
+    when(docker.deleteBrowseReference(runtime.id(), "team/app", "latest"))
+        .thenReturn(DockerRegistryDao.DeletedManifest.notFound())
+        .thenReturn(new DockerRegistryDao.DeletedManifest(1, 200L, 300L));
+
+    assertEquals(0, store.deleteBrowseReference(runtime, "team/app", "latest"));
+    org.mockito.Mockito.verifyNoInteractions(assets);
+    assertEquals(1, store.deleteBrowseReference(runtime, "team/app", "latest"));
+    verify(assets).deleteAssetById(200L);
+    verify(assets).markBlobDeletedIfUnreferenced(300L, "docker manifest deleted");
+  }
+
+  @Test
   void hostedReferrersIncludeStoredManifestAnnotations() {
     DockerManifestStore manifestStore = mock(DockerManifestStore.class);
     DockerHostedService hosted = new DockerHostedService(

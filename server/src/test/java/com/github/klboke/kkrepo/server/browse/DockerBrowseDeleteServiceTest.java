@@ -48,7 +48,7 @@ class DockerBrowseDeleteServiceTest {
       assertEquals("docker", result.repository());
       assertEquals("docker", result.sourceRepository());
       assertEquals(1, result.deletedAssets());
-      verify(manifests).deleteReference(runtime, "team/app", reference);
+      verify(manifests).deleteBrowseReference(runtime, "team/app", reference);
     }
   }
 
@@ -58,7 +58,7 @@ class DockerBrowseDeleteServiceTest {
     when(repositories.findByName(proxy.name())).thenReturn(Optional.of(proxy));
     assertEquals(proxy.name(), service.delete(
         proxy, "hello-world/manifests/latest", "  " + proxy.name() + " ").sourceRepository());
-    verify(manifests).deleteReference(runtime, "hello-world", "latest");
+    verify(manifests).deleteBrowseReference(runtime, "hello-world", "latest");
   }
 
   @Test
@@ -70,7 +70,7 @@ class DockerBrowseDeleteServiceTest {
     assertEquals(group.name(), result.repository());
     assertEquals(proxy.name(), result.sourceRepository());
     verify(docker, never()).findManifestByReference(eq(hosted.id()), anyString(), anyString());
-    verify(manifests).deleteReference(runtime, "hello-world", "latest");
+    verify(manifests).deleteBrowseReference(runtime, "hello-world", "latest");
   }
 
   @Test
@@ -97,7 +97,7 @@ class DockerBrowseDeleteServiceTest {
     for (String image : List.of("team", "team/manifests", "team/manifests/child")) {
       RepositoryRuntime runtime = referenceExists(hosted, image, "latest");
       assertEquals(1, service.delete(hosted, image + "/manifests/latest", null).deletedAssets());
-      verify(manifests).deleteReference(runtime, image, "latest");
+      verify(manifests).deleteBrowseReference(runtime, image, "latest");
     }
   }
 
@@ -108,6 +108,14 @@ class DockerBrowseDeleteServiceTest {
     }
     when(repositories.listMembers(group.id())).thenReturn(List.of());
     status(HttpStatus.NOT_FOUND, () -> service.delete(group, "missing/manifests/latest", null));
+    verifyNoInteractions(manifests);
+  }
+
+  @Test
+  void deletedDigestCannotBeDeletedAgainWhileItsTagsRetainTheBody() {
+    DockerManifestRecord manifest = mock(DockerManifestRecord.class);
+    when(docker.findManifestByReference(hosted.id(), "team/app", DIGEST)).thenReturn(Optional.of(manifest));
+    status(HttpStatus.NOT_FOUND, () -> service.delete(hosted, "team/app/manifests/" + DIGEST, null));
     verifyNoInteractions(manifests);
   }
 
@@ -142,10 +150,11 @@ class DockerBrowseDeleteServiceTest {
   }
 
   private RepositoryRuntime referenceExists(RepositoryRecord repository, String image, String value) {
-    when(docker.findManifestByReference(repository.id(), image, value))
-        .thenReturn(Optional.of(mock(DockerManifestRecord.class)));
+    DockerManifestRecord manifest = mock(DockerManifestRecord.class);
+    when(manifest.hasDigestReference()).thenReturn(true);
+    when(docker.findManifestByReference(repository.id(), image, value)).thenReturn(Optional.of(manifest));
     RepositoryRuntime runtime = runtime(repository);
-    when(manifests.deleteReference(runtime, image, value)).thenReturn(1);
+    when(manifests.deleteBrowseReference(runtime, image, value)).thenReturn(1);
     return runtime;
   }
 
