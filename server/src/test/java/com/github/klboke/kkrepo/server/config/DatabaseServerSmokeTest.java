@@ -284,6 +284,8 @@ class DatabaseServerSmokeTest {
         null, null, 0, 10));
     assertEquals(1, audit.total());
     assertEquals("admin", audit.items().getFirst().actorUserId());
+
+    DockerBrowseDeleteSmokeChecks.exercise(first, second);
   }
 
   private static CleanupRunService.RunView awaitCleanupRun(

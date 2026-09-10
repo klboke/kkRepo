@@ -1,10 +1,13 @@
 package com.github.klboke.kkrepo.compat;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.protocol.docker.DockerConstants;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -24,6 +27,7 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 class DockerRegistryBlackBoxCompatibilityTest {
+  private static final ObjectMapper JSON = new ObjectMapper();
   private static final HttpClient HTTP = HttpClient.newBuilder()
       .connectTimeout(Duration.ofSeconds(20))
       .followRedirects(HttpClient.Redirect.NEVER)
@@ -133,6 +137,141 @@ class DockerRegistryBlackBoxCompatibilityTest {
       Exchange deleteTag = delete(config.nexusPlus(), config.nexusPlus().v2(config.repositoryPath(image + "/manifests/" + tag)), true);
       assertEquals(202, deleteTag.status(), "tag delete should match Registry V2 accepted semantics");
     }
+  }
+
+  @Test
+  void browseDeletionUsesNexusAdministrativeAssetMappingWhenConfigured() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeTrue(config.enabled() && config.configured() && config.writeEnabled(),
+        "Configure writable Nexus and kkrepo Docker endpoints to compare administrative deletion");
+    assumeTrue(CompatDefaults.nexusPlusBaseUrl().isPresent(), "Configure the kkrepo application URL");
+    Endpoint nexusUi = new Endpoint("nexus-ui", CompatDefaults.nexusBaseUrl(),
+        CompatDefaults.nexusUsername(), CompatDefaults.nexusPassword());
+    Endpoint browse = new Endpoint("kkrepo-browse", CompatDefaults.nexusPlusBaseUrl(),
+        CompatDefaults.nexusPlusUsername(), CompatDefaults.nexusPlusPassword());
+    String image = config.uploadImage() + "/browse-delete-" + System.nanoTime();
+    byte[] layer = image.getBytes(StandardCharsets.UTF_8);
+    String layerDigest = "sha256:" + sha256(layer);
+    byte[] manifest = singleLayerManifest(layerDigest, layer.length).getBytes(StandardCharsets.UTF_8);
+    String digest = "sha256:" + sha256(manifest);
+    String imagePath = config.repositoryPath(image);
+    for (Endpoint endpoint : List.of(config.nexus(), config.nexusPlus())) {
+      pushBlob(endpoint, imagePath, "sha256:" + sha256(new byte[0]), new byte[0], true);
+      pushBlob(endpoint, imagePath, layerDigest, layer, true);
+      for (String tag : List.of("latest", "1.0.0")) {
+        assertEquals(201, put(endpoint, endpoint.v2(imagePath + "/manifests/" + tag),
+            DockerConstants.MEDIA_TYPE_OCI_MANIFEST, manifest, true).status());
+      }
+    }
+
+    // Follow Nexus Browse's node -> readAsset -> deleteAsset mapping, not Registry V2 DELETE.
+    deleteNexusBrowseAsset(nexusUi, config.repository(), imagePath, "latest", false);
+    String browseUrl = "/internal/browse/" + encode(config.repository()) + "?path=";
+    Exchange deletedTag = delete(browse,
+        browse.resolve(browseUrl + encode(image + "/manifests/latest")), true);
+    assertEquals(200, deletedTag.status());
+    JsonNode deleted = JSON.readTree(deletedTag.body());
+    assertEquals(config.repository(), deleted.path("repository").asText());
+    assertEquals(config.repository(), deleted.path("sourceRepository").asText());
+    assertEquals(image + "/manifests/latest", deleted.path("path").asText());
+    assertEquals(1, deleted.path("deletedAssets").asInt());
+    for (String reference : List.of("latest", "1.0.0", digest)) {
+      Exchange expected = get(config.nexus(), config.nexus().v2(imagePath + "/manifests/" + reference),
+          dockerAccept(), true);
+      Exchange actual = get(config.nexusPlus(), config.nexusPlus().v2(imagePath + "/manifests/" + reference),
+          dockerAccept(), true);
+      assertEquals(reference.equals("latest") ? 404 : 200, expected.status());
+      assertEquals(expected.status(), actual.status(), "reference after tag deletion " + reference);
+    }
+
+    // Both administrative APIs delete the selected digest entry while preserving tag assets.
+    deleteNexusBrowseAsset(nexusUi, config.repository(), imagePath, digest, true);
+    assertEquals(200, delete(browse,
+        browse.resolve(browseUrl + encode(image + "/manifests/" + digest)), true).status());
+    for (String reference : List.of("latest", "1.0.0")) {
+      Exchange expected = get(config.nexus(), config.nexus().v2(imagePath + "/manifests/" + reference),
+          dockerAccept(), true);
+      Exchange actual = get(config.nexusPlus(), config.nexusPlus().v2(imagePath + "/manifests/" + reference),
+          dockerAccept(), true);
+      assertEquals(reference.equals("latest") ? 404 : 200, expected.status());
+      assertEquals(expected.status(), actual.status(), "reference after digest deletion " + reference);
+      if (expected.status() == 200) {
+        assertArrayEquals(expected.body(), actual.body(), "retained tag manifest bytes");
+      }
+    }
+    Exchange remaining = get(browse, browse.resolve(browseUrl + encode(image + "/manifests")),
+        "application/json", true);
+    assertEquals(200, remaining.status());
+    assertTrue(new String(remaining.body(), StandardCharsets.UTF_8).contains(image + "/manifests/1.0.0"));
+    assertFalse(new String(remaining.body(), StandardCharsets.UTF_8).contains(digest));
+    assertEquals(404, get(browse, browse.resolve("/internal/browse/" + encode(config.repository())
+        + "/attributes?path=" + encode(image + "/manifests/" + digest)), "application/json", true).status());
+    assertEquals(404, delete(browse,
+        browse.resolve(browseUrl + encode(image + "/manifests/" + digest)), true).status());
+    deleteNexusBrowseAsset(nexusUi, config.repository(), imagePath, "1.0.0", false);
+    assertEquals(200, delete(browse,
+        browse.resolve(browseUrl + encode(image + "/manifests/1.0.0")), true).status());
+    for (Endpoint endpoint : List.of(config.nexus(), config.nexusPlus())) {
+      assertEquals(404, get(endpoint, endpoint.v2(imagePath + "/manifests/1.0.0"),
+          dockerAccept(), true).status());
+    }
+  }
+
+  // Captured from Nexus 3.94's ComponentAssetTree and Browse controllers; see
+  // compat-test/docker-browse-delete-mapping.md for the source bundle and request contracts.
+  private static void deleteNexusBrowseAsset(Endpoint endpoint, String repository,
+      String imagePath, String reference, boolean digest) throws Exception {
+    String nodePath = "v2/" + imagePath + (digest ? "/manifests" : "/tags");
+    JsonNode selected = null;
+    long deadline = System.nanoTime() + Duration.ofSeconds(20).toNanos();
+    do {
+      JsonNode rows = nexusUi(endpoint, "coreui_Browse", "read",
+          List.of(Map.of("repositoryName", repository, "node", nodePath))).path("data");
+      for (JsonNode row : rows) {
+        if (reference.equals(row.path("text").asText())) {
+          selected = row;
+          break;
+        }
+      }
+      if (selected == null) Thread.sleep(100);
+    } while (selected == null && System.nanoTime() < deadline);
+    assertTrue(selected != null, "Nexus Browse did not expose " + nodePath + "/" + reference);
+    assertEquals("asset", selected.path("type").asText());
+    JsonNode asset = nexusUi(endpoint, "coreui_Component", "readAsset",
+        List.of(selected.path("assetId").asText(), repository)).path("data");
+    String assetPath = "/v2/" + imagePath + "/manifests/" + reference;
+    assertEquals(assetPath, asset.path("name").asText());
+    assertEquals(repository, asset.path("repositoryName").asText());
+    JsonNode result = nexusUi(endpoint, "coreui_Component", "deleteAsset",
+        List.of(asset.path("id").asText(), asset.path("repositoryName").asText()));
+    assertEquals(JSON.valueToTree(List.of(assetPath)), result.path("data"),
+        "Nexus UI response must identify the selected deleted asset");
+    JsonNode missing = nexusUi(endpoint, "coreui_Component", "readAsset",
+        List.of(asset.path("id").asText(), repository), false);
+    assertEquals("HTTP 404 Not Found", missing.path("message").asText(),
+        "The selected Nexus asset must be absent after administrative deletion");
+  }
+
+  private static JsonNode nexusUi(Endpoint endpoint, String action, String method, List<?> data)
+      throws Exception {
+    return nexusUi(endpoint, action, method, data, true);
+  }
+
+  private static JsonNode nexusUi(Endpoint endpoint, String action, String method, List<?> data,
+      boolean expectedSuccess)
+      throws Exception {
+    byte[] payload = JSON.writeValueAsBytes(Map.of(
+        "action", action, "method", method, "type", "rpc", "tid", 1, "data", data));
+    Exchange response = send(auth(endpoint, true,
+        HttpRequest.newBuilder(endpoint.resolve("/service/extdirect"))
+            .timeout(Duration.ofSeconds(30))
+            .header("Content-Type", "application/json")
+            .POST(HttpRequest.BodyPublishers.ofByteArray(payload))));
+    assertEquals(200, response.status(), "Nexus UI " + action + "." + method);
+    JsonNode envelope = JSON.readTree(response.body());
+    JsonNode result = (envelope.isArray() ? envelope.path(0) : envelope).path("result");
+    assertEquals(expectedSuccess, result.path("success").asBoolean(), result.toString());
+    return result;
   }
 
   @Test

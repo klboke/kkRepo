@@ -59,6 +59,16 @@ Push only to hosted. Proxy and group are read endpoints even when the caller is 
 
 ## Cleanup And Security
 
+Administrators can select a tag or manifest digest in Browse and delete it. Each operation removes
+only the selected reference: deleting a digest entry preserves existing tags and their downloadable
+manifest content, matching Nexus administrative asset deletion. Content is released when no tag or
+digest entry retains it; shared blobs remain protected. A subsequent push restores the digest entry.
+Registry V2 digest deletion still removes the manifest and all its tags. Docker
+image and namespace directories are not deletion targets; the API rejects directory paths.
+From a group, deletion affects the selected member only; proxy deletion removes local cached
+content, which can be fetched again from upstream. Administrative Browse deletion follows the
+portal's administrator permission rules, independently of the Registry V2 write policy.
+
 Delete and cleanup logic distinguishes tags, manifests, and shared blob references; do not delete
 objects directly from blob storage. Run cleanup preview and allow reference accounting to determine
 when a blob is unreferenced. Security scanning should target the committed manifest and layer set,

@@ -23,4 +23,10 @@ public record DockerManifestRecord(
     Map<String, Object> attributes,
     Instant createdAt,
     Instant updatedAt) {
+  public static final String DIGEST_REFERENCE_DELETED = "digestReferenceDeleted";
+
+  /** The manifest body may still be owned by tags after its Browse digest reference is deleted. */
+  public boolean hasDigestReference() {
+    return attributes == null || !Boolean.TRUE.equals(attributes.get(DIGEST_REFERENCE_DELETED));
+  }
 }

@@ -4951,6 +4951,151 @@ public abstract class PersistenceApiContract {
   }
 
   @Test
+  void dockerBrowseDeletionPreservesTagsUntilTheLastReferenceAndCanBeRepushed() {
+    DockerManifestRecord manifest = dockerBrowseFixture("docker-browse-delete");
+    DockerRegistryDao registry = stores().dockerRegistry();
+    long repo = manifest.repositoryId();
+    String image = manifest.imageName();
+    String digest = manifest.digest();
+    assertEquals(0, inTransaction(() -> registry.deleteBrowseReference(repo, image, "missing")).deleted());
+    assertThrows(IllegalStateException.class, () -> inTransaction(() -> {
+      registry.deleteBrowseReference(repo, image, digest);
+      throw new IllegalStateException("rollback administrative deletion");
+    }));
+    assertTrue(registry.findBrowseManifestByReferencePath(repo, image + "/manifests/" + digest).isPresent());
+
+    var deleted = inTransaction(() -> registry.deleteBrowseReference(repo, image, digest));
+    assertEquals(1, deleted.deleted());
+    assertNull(deleted.assetId(), "tag-owned manifest content must not be released");
+    assertNull(deleted.assetBlobId());
+    assertFalse(registry.findManifestByDigest(repo, image, digest).orElseThrow().hasDigestReference());
+    assertEquals(List.of("1.0.0", "latest"), registry.listBrowseReferences(repo, image).stream()
+        .map(DockerRegistryDao.BrowseReferenceRow::reference).toList());
+    assertTrue(registry.findBrowseManifestByReferencePath(repo, image + "/manifests/" + digest).isEmpty());
+    assertTrue(registry.findBrowseManifestByReferencePath(repo, image + "/manifests/1.0.0").isPresent());
+    assertEquals(0, inTransaction(() -> registry.deleteBrowseReference(repo, image, digest)).deleted());
+    assertNull(inTransaction(() -> registry.deleteBrowseReference(repo, image, "latest")).assetId());
+    assertTrue(registry.findManifestByTag(repo, image, "1.0.0").isPresent());
+    var last = inTransaction(() -> registry.deleteBrowseReference(repo, image, "1.0.0"));
+    assertEquals(1, last.deleted());
+    assertEquals(manifest.assetId(), last.assetId());
+    assertNotNull(last.assetBlobId());
+    assertTrue(registry.findManifestByDigest(repo, image, digest).isEmpty());
+    assertTrue(registry.listBrowseReferences(repo, image).isEmpty());
+
+    inTransaction(() -> registry.upsertManifest(manifest));
+    assertTrue(registry.findBrowseManifestByReferencePath(repo, image + "/manifests/" + digest).isPresent());
+    assertEquals(List.of(digest), registry.listBrowseReferences(repo, image).stream()
+        .map(DockerRegistryDao.BrowseReferenceRow::reference).toList());
+    assertEquals(manifest.assetId(), inTransaction(() ->
+        registry.deleteBrowseReference(repo, image, digest)).assetId(), "untagged digest can be released");
+  }
+
+  @Test
+  void dockerBrowseDigestDeletionSerializesAcrossReplicas() throws Exception {
+    DockerManifestRecord manifest = dockerBrowseFixture("docker-browse-concurrent");
+    DockerRegistryDao registry = stores().dockerRegistry();
+    CountDownLatch locked = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var first = executor.submit(() -> inTransaction(() -> {
+        var deleted = registry.deleteBrowseReference(
+            manifest.repositoryId(), manifest.imageName(), manifest.digest());
+        locked.countDown();
+        await(release);
+        return deleted.deleted();
+      }));
+      assertTrue(locked.await(30, java.util.concurrent.TimeUnit.SECONDS));
+      var second = executor.submit(() -> inTransaction(() -> registry.deleteBrowseReference(
+          manifest.repositoryId(), manifest.imageName(), manifest.digest()).deleted()));
+      try {
+        assertThrows(java.util.concurrent.TimeoutException.class,
+            () -> second.get(250, java.util.concurrent.TimeUnit.MILLISECONDS));
+      } finally {
+        release.countDown();
+      }
+      assertEquals(1, first.get(30, java.util.concurrent.TimeUnit.SECONDS));
+      assertEquals(0, second.get(30, java.util.concurrent.TimeUnit.SECONDS));
+    } finally {
+      release.countDown();
+    }
+    assertEquals(List.of("1.0.0", "latest"), registry.listTags(
+        manifest.repositoryId(), manifest.imageName(), null, 10));
+  }
+
+  @Test
+  void dockerBrowseDeleteUsesTheCurrentAssetAfterWaitingForRepublish() throws Exception {
+    DockerManifestRecord manifest = dockerBrowseFixture("docker-browse-republish");
+    DockerRegistryDao registry = stores().dockerRegistry();
+    long repo = manifest.repositoryId();
+    inTransaction(() -> {
+      registry.deleteTag(repo, manifest.imageName(), "latest");
+      registry.deleteTag(repo, manifest.imageName(), "1.0.0");
+      return null;
+    });
+    AssetRecord prior = stores().assets().findAssetById(manifest.assetId()).orElseThrow();
+    CountDownLatch publishing = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var writer = executor.submit(() -> inTransaction(() -> {
+        registry.findManifestByDigestForUpdate(repo, manifest.imageName(), manifest.digest()).orElseThrow();
+        String path = prior.path() + "/replacement";
+        long assetId = stores().assets().insertAsset(new AssetRecord(null, repo, null, prior.assetBlobId(),
+            prior.format(), path, PersistenceHashes.pathHash(path), prior.name(), prior.kind(),
+            prior.contentType(), prior.size(), null, Instant.now(), prior.attributes()));
+        registry.upsertManifest(new DockerManifestRecord(manifest.id(), repo, manifest.imageName(),
+            manifest.imageNameHash(), manifest.digestAlgorithm(), manifest.digest(), manifest.digestHash(),
+            manifest.mediaType(), null, null, null, assetId, manifest.size(), "publisher", "127.0.0.1",
+            null, Map.of(), manifest.createdAt(), Instant.now()));
+        publishing.countDown();
+        await(release);
+        return assetId;
+      }));
+      assertTrue(publishing.await(30, java.util.concurrent.TimeUnit.SECONDS));
+      var deleting = executor.submit(() -> inTransaction(() -> registry.deleteBrowseReference(
+          repo, manifest.imageName(), manifest.digest())));
+      try {
+        assertThrows(java.util.concurrent.TimeoutException.class,
+            () -> deleting.get(250, java.util.concurrent.TimeUnit.MILLISECONDS));
+      } finally {
+        release.countDown();
+      }
+      long publishedAsset = writer.get(30, java.util.concurrent.TimeUnit.SECONDS);
+      var deleted = deleting.get(30, java.util.concurrent.TimeUnit.SECONDS);
+      assertEquals(publishedAsset, deleted.assetId());
+      assertEquals(prior.assetBlobId(), deleted.assetBlobId());
+    } finally {
+      release.countDown();
+    }
+  }
+
+  private DockerManifestRecord dockerBrowseFixture(String repositoryName) {
+    long repositoryId = createRepository(repositoryName, RepositoryFormat.DOCKER);
+    long blobStoreId = stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
+    Instant now = Instant.now();
+    long blobId = stores().assets().insertBlob(
+        blob(blobStoreId, "docker/manifests/acme/app/v1", repositoryName + "-manifest"));
+    String image = "acme/app";
+    String digest = "sha256:" + "a".repeat(64);
+    String path = "docker/manifests/acme/app/sha256/" + "a".repeat(64);
+    long assetId = stores().assets().insertAsset(new AssetRecord(
+        null, repositoryId, null, blobId, RepositoryFormat.DOCKER,
+        path, PersistenceHashes.sha256(path), "manifest.json", "MANIFEST",
+        "application/vnd.oci.image.manifest.v1+json", 42L, null, now, Map.of()));
+    return inTransaction(() -> {
+      DockerManifestRecord manifest = stores().dockerRegistry().upsertManifest(new DockerManifestRecord(
+          null, repositoryId, image, PersistenceHashes.sha256(image), "sha256", digest, PersistenceHashes.sha256(digest),
+          "application/vnd.oci.image.manifest.v1+json", null, null, null, assetId, 42L,
+          "contract", "127.0.0.1", null, Map.of(), now, now));
+      for (String tag : List.of("latest", "1.0.0")) {
+        stores().dockerRegistry().upsertTag(new DockerTagRecord(null, repositoryId, image, PersistenceHashes.sha256(image),
+            tag, PersistenceHashes.sha256(tag), manifest.id(), digest, "contract", "127.0.0.1", now, now));
+      }
+      return manifest;
+    });
+  }
+
+  @Test
   void dockerCleanupBatchReadsAndLocksArePortable() {
     long repositoryId = createRepository("docker-cleanup-batches", RepositoryFormat.DOCKER);
     long blobStoreId = stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
