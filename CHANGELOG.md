@@ -4,6 +4,41 @@ All notable public changes to kkrepo are documented in this file.
 
 This project follows a pragmatic release process. Stable releases call out migration impact, compatibility changes, operational notes, and any known behavior changes in their release section.
 
+## 1.0.1 - 2026-09-10
+
+### Added
+
+- Nexus-compatible Helm group repositories with ordered index aggregation, chart and provenance fallback across hosted, proxy, and nested group members, blob-backed metadata caching, database-fenced multi-replica invalidation, migration, and real Helm client coverage. (#272)
+- Content Selector management and preview in Admin, including expression validation, permission-aware stored-asset previews, privilege-reference inspection, repository-scoped privilege creation, bounded compiled-expression caching, and conservative SQL candidate filtering before full authorization checks. (#283)
+- OIDC ID-token verification supports `ES256` with EC P-256 JWKs, strict JOSE key/algorithm checks, and sanitized validation diagnostics while retaining the existing RSA path. (#267)
+
+### Changed
+
+- Quickstart now includes a readiness sidecar that supports `docker compose up --wait` for JVM and Native runtimes with either MySQL or PostgreSQL, while preserving scanner network isolation. (#286)
+- Quickstart defaults, Dockerfile packaging, deployment documentation, Helm application version, runtime checks, and the optional scanner profile now use `1.0.1`.
+- The AWS SDK, Alibaba Cloud OSS SDK, zstd-jni, GraalVM Native Build Tools, Maven Compiler and Surefire plugins, Java setup action, and Swift setup action were refreshed. (#273, #274, #275, #276, #278, #279, #280, #281, #282)
+- CI runs the Maven reactor in parallel, keeps database smoke scenarios in their dedicated jobs, publishes their coverage separately, and avoids diagnostic circuit-state reads when PyPI DEBUG logging is disabled. (#267)
+
+### Fixed
+
+- Legacy npm login and logout responses are fully materialized so their JSON bodies match `Content-Length` and no longer terminate early through generic streaming response handling. (#270, #271)
+- Docker tag and digest leaves exposed by Browse can be deleted administratively with Nexus-compatible reference semantics, database row locking across replicas, and correct final-reference blob cleanup. (#287)
+- Helm scanner byte-limit values are rendered as strings so large integer settings are not converted to scientific notation before Spring configuration binding. (#268)
+- PyPI proxy failures now retain the original upstream diagnostic at WARN while repeated circuit-open requests stay at DEBUG, without changing Auto Block behavior. (#267)
+
+### Compatibility And Validation
+
+- Helm group behavior is covered by Nexus 3.94 comparison, official Helm metadata validation, MySQL/PostgreSQL persistence contracts, durable multi-replica coordination, and real Helm client pulls through hosted and proxy members. (#272)
+- Content Selector management is covered by Nexus 3.94 comparison, both database backends, two-replica convergence, permission isolation, large candidate sets, browser verification, and the full JVM/Native E2E matrix. (#283)
+- Docker Browse deletion is covered against Nexus 3.94 and across MySQL/PostgreSQL with two application replicas; quickstart readiness is exercised across JVM/Native and MySQL/PostgreSQL. (#286, #287)
+- OIDC, npm, PyPI, scanner configuration, dependency, and CI changes retain targeted unit, integration, smoke, coverage, CodeQL, and client validation. (#267, #268, #270, #271, #273, #274, #275, #276, #278, #279, #280, #281, #282)
+
+### Upgrade Notes
+
+- Existing `1.0.0` MySQL and PostgreSQL deployments can upgrade in place through Flyway V51-V53. Back up the relational database and blob store together, allow migrations to complete before serving traffic, and do not run mixed application versions after the new schema is applied.
+- V51 adds a database-clock-fenced, one-time Helm proxy legacy-cache upgrade. V52 adds generation-safe acknowledgements for durable repository index markers. V53 isolates Helm group invalidation work in a dedicated queue that older repository-index workers cannot claim during a rolling upgrade.
+- Helm group repositories are opt-in and are not created automatically. Existing Content Selector expressions remain usable; new or changed expressions are validated before persistence, and delegated management requires explicit privileges.
+
 ## 1.0.0 - 2026-08-27
 
 ### Added
@@ -35,8 +70,8 @@ This project follows a pragmatic release process. Stable releases call out migra
 
 ### Upgrade Notes
 
-- Existing `0.9.0` MySQL and PostgreSQL deployments can upgrade in place through Flyway V49-V53. Back up the relational database and blob store together, allow migrations to complete before serving traffic, and do not run mixed application versions after the new schema is applied.
-- V49 adds R / CRAN package, publication, snapshot, group-binding, proxy, tombstone, migration, and lease state. V50 adds the shared default UI theme setting. V51 adds a database-clock-fenced, one-time Helm proxy legacy-cache upgrade: only never-reconfigured repositories can adopt pre-migration cache rows, and later writes or configuration changes force a rebuild. V52 adds generation-safe acknowledgements for durable repository index markers. V53 isolates Helm group invalidation work in a dedicated queue that older repository-index workers cannot claim during a rolling upgrade.
+- Existing `0.9.0` MySQL and PostgreSQL deployments can upgrade in place through Flyway V49-V50. Back up the relational database and blob store together, allow migrations to complete before serving traffic, and do not run mixed application versions after the new schema is applied.
+- V49 adds R / CRAN package, publication, snapshot, group-binding, proxy, tombstone, migration, and lease state. V50 adds the shared default UI theme setting and preserves the existing kkRepo design for upgraded installations.
 - New R / CRAN repositories are not created automatically. Existing PyPI proxies retain `/simple` when no remote index path is configured, and existing Go proxy/group repositories keep their current behavior until a hosted member is explicitly created or added.
 
 ## 0.9.0 - 2026-08-20
