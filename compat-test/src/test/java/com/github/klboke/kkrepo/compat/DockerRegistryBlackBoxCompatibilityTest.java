@@ -136,7 +136,7 @@ class DockerRegistryBlackBoxCompatibilityTest {
   }
 
   @Test
-  void browseDeletionPreservesTagsAndMatchesNexusManifestDeletionWhenConfigured() throws Exception {
+  void browseDeletionMatchesNexusTagsAndRemovesDigestAliasesWhenConfigured() throws Exception {
     CompatConfig config = CompatConfig.load();
     assumeTrue(config.enabled() && config.configured() && config.writeEnabled(),
         "Configure writable Nexus and kkrepo Docker endpoints to compare administrative deletion");
@@ -160,28 +160,32 @@ class DockerRegistryBlackBoxCompatibilityTest {
 
     // The portal's internal API must preserve the registry's tag-vs-manifest deletion semantics.
     String browseUrl = "/internal/browse/" + encode(config.repository()) + "?path=";
+    assertEquals(202, delete(config.nexus(),
+        config.nexus().v2(imagePath + "/manifests/latest"), true).status());
     assertEquals(200, delete(browse,
         browse.resolve(browseUrl + encode(image + "/manifests/latest")), true).status());
-    assertEquals(404, get(config.nexusPlus(), config.nexusPlus().v2(imagePath + "/manifests/latest"),
-        dockerAccept(), true).status());
-    assertEquals(200, get(config.nexusPlus(), config.nexusPlus().v2(imagePath + "/manifests/1.0.0"),
-        dockerAccept(), true).status());
-    assertEquals(200, get(config.nexusPlus(), config.nexusPlus().v2(imagePath + "/manifests/" + digest),
-        dockerAccept(), true).status());
-
-    // Nexus's Registry V2 digest deletion is the reference for the resulting registry state.
-    assertEquals(202, delete(config.nexus(),
-        config.nexus().v2(imagePath + "/manifests/" + digest), true).status());
-    assertEquals(200, delete(browse,
-        browse.resolve(browseUrl + encode(image + "/manifests/" + digest)), true).status());
     for (String reference : List.of("latest", "1.0.0", digest)) {
       Exchange expected = get(config.nexus(), config.nexus().v2(imagePath + "/manifests/" + reference),
           dockerAccept(), true);
       Exchange actual = get(config.nexusPlus(), config.nexusPlus().v2(imagePath + "/manifests/" + reference),
           dockerAccept(), true);
-      assertEquals(404, expected.status());
-      assertEquals(expected.status(), actual.status(), "deleted reference " + reference);
+      assertEquals(reference.equals("latest") ? 404 : 200, expected.status());
+      assertEquals(expected.status(), actual.status(), "reference after tag deletion " + reference);
     }
+
+    // Preserve kkrepo's existing OCI digest-delete contract. Nexus 3.94 can retain tag aliases
+    // after digest deletion, so that known reference behavior is not a tag-deletion oracle.
+    assertEquals(200, delete(browse,
+        browse.resolve(browseUrl + encode(image + "/manifests/" + digest)), true).status());
+    for (String reference : List.of("latest", "1.0.0", digest)) {
+      Exchange actual = get(config.nexusPlus(), config.nexusPlus().v2(imagePath + "/manifests/" + reference),
+          dockerAccept(), true);
+      assertEquals(404, actual.status(), "deleted reference " + reference);
+    }
+    assertEquals(202, delete(config.nexus(),
+        config.nexus().v2(imagePath + "/manifests/1.0.0"), true).status());
+    assertEquals(202, delete(config.nexus(),
+        config.nexus().v2(imagePath + "/manifests/" + digest), true).status());
   }
 
   @Test
