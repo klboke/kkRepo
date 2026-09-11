@@ -58,6 +58,9 @@ public class AdminUiController {
   }
 
   private String redirect(HttpServletRequest request, String path) {
+    if (!forwardedHeaderPolicy.trusted(request)) {
+      return "redirect:" + path;
+    }
     return "redirect:"
         + forwardedHeaderPolicy.serverBaseUrl(request)
         + request.getContextPath()

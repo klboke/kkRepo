@@ -73,6 +73,18 @@ class AdminUiControllerTest {
         new StubSecurityService(AccessDecision.deny("missing")),
         new ForwardedHeaderPolicy("10.0.0.1"));
 
+    MockHttpServletRequest directRequest = new MockHttpServletRequest();
+    directRequest.setScheme("http");
+    directRequest.setServerName("kkrepo.internal");
+    directRequest.setServerPort(8080);
+    directRequest.setRemoteAddr("192.0.2.10");
+    directRequest.setContextPath("/kkrepo");
+    directRequest.addHeader("X-Forwarded-Proto", "https");
+    directRequest.addHeader("X-Forwarded-Host", "attacker.example.com");
+    directRequest.addHeader("X-Forwarded-Port", "443");
+
+    assertEquals("redirect:/browse/#browse/welcome", controller.index(directRequest));
+
     var response = MockMvcBuilders.standaloneSetup(controller).build()
         .perform(get("/")
             .with(request -> {
@@ -89,8 +101,21 @@ class AdminUiControllerTest {
         .getResponse();
 
     assertEquals(HttpStatus.FOUND.value(), response.getStatus());
-    assertEquals(
-        "http://kkrepo.internal:8080/browse/#browse/welcome", response.getHeader("Location"));
+    assertEquals("/browse/#browse/welcome", response.getHeader("Location"));
+  }
+
+  @Test
+  void rootRedirectRemainsRelativeForDirectIpv6Request() {
+    AdminUiController controller = new AdminUiController(
+        new StubAuthenticationService(Optional.empty()),
+        new StubSecurityService(AccessDecision.deny("missing")),
+        new ForwardedHeaderPolicy("10.0.0.1"));
+    MockHttpServletRequest directRequest = new MockHttpServletRequest();
+    directRequest.setServerName("2001:db8::1");
+    directRequest.setRemoteAddr("2001:db8::2");
+    directRequest.setContextPath("/kkrepo");
+
+    assertEquals("redirect:/browse/#browse/welcome", controller.index(directRequest));
   }
 
   @Test
@@ -100,8 +125,7 @@ class AdminUiControllerTest {
         new StubSecurityService(AccessDecision.allow()),
         new ForwardedHeaderPolicy(""));
 
-    assertEquals(
-        "redirect:http://localhost/browse/?login=1#browse/welcome", controller.admin(request()));
+    assertEquals("redirect:/browse/?login=1#browse/welcome", controller.admin(request()));
   }
 
   @Test
@@ -111,7 +135,7 @@ class AdminUiControllerTest {
         new StubSecurityService(AccessDecision.deny("missing nexus:*")),
         new ForwardedHeaderPolicy(""));
 
-    assertEquals("redirect:http://localhost/browse/#browse/welcome", controller.admin(request()));
+    assertEquals("redirect:/browse/#browse/welcome", controller.admin(request()));
   }
 
   @Test
