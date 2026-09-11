@@ -67,6 +67,34 @@ class AdminUiControllerTest {
   }
 
   @Test
+  void rootRedirectPreservesTrustedIpv6ForwardedPort() throws Exception {
+    AdminUiController controller = new AdminUiController(
+        new StubAuthenticationService(Optional.empty()),
+        new StubSecurityService(AccessDecision.deny("missing")),
+        new ForwardedHeaderPolicy("10.0.0.1"));
+
+    var response = MockMvcBuilders.standaloneSetup(controller).build()
+        .perform(get("/")
+            .with(request -> {
+              request.setScheme("http");
+              request.setServerName("kkrepo.internal");
+              request.setServerPort(8080);
+              request.setRemoteAddr("10.0.0.1");
+              return request;
+            })
+            .header("X-Forwarded-Proto", "https")
+            .header("X-Forwarded-Host", "[2001:db8::1]")
+            .header("X-Forwarded-Port", "8443"))
+        .andReturn()
+        .getResponse();
+
+    assertEquals(HttpStatus.FOUND.value(), response.getStatus());
+    assertEquals(
+        "https://[2001:db8::1]:8443/browse/#browse/welcome",
+        response.getHeader("Location"));
+  }
+
+  @Test
   void rootRedirectIgnoresUntrustedForwardedOrigin() throws Exception {
     AdminUiController controller = new AdminUiController(
         new StubAuthenticationService(Optional.empty()),

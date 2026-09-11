@@ -37,7 +37,8 @@ public class ForwardedHeaderPolicy {
     }
     String portHeader = trustedForwarded ? firstHeader(request, "X-Forwarded-Port", null) : null;
     String authority = host;
-    if (!host.contains(":")) {
+    boolean bracketedIpv6WithoutPort = host.startsWith("[") && host.endsWith("]");
+    if (!host.contains(":") || bracketedIpv6WithoutPort) {
       int port = parsePort(portHeader, request.getServerPort());
       boolean standard = ("http".equalsIgnoreCase(scheme) && port == 80)
           || ("https".equalsIgnoreCase(scheme) && port == 443);
