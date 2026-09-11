@@ -3,19 +3,18 @@ package com.github.klboke.kkrepo.server;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
+import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
 import com.github.klboke.kkrepo.server.support.dao.SecurityDaoAdapter;
 import jakarta.servlet.http.HttpServletRequest;
-import java.lang.reflect.Proxy;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
@@ -23,6 +22,8 @@ import org.springframework.core.io.Resource;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 class AdminUiControllerTest {
   @Test
@@ -33,24 +34,124 @@ class AdminUiControllerTest {
         org.mockito.ArgumentMatchers.anyString())).thenReturn(AccessDecision.deny("missing"));
     org.mockito.Mockito.when(security.decide(subject.permissionSubject(), "nexus:selectors:read"))
         .thenReturn(AccessDecision.allow());
-    var controller = new AdminUiController(new StubAuthenticationService(Optional.of(subject)), security);
+    var controller = new AdminUiController(
+        new StubAuthenticationService(Optional.of(subject)), security, new ForwardedHeaderPolicy(""));
     assertInstanceOf(ResponseEntity.class, controller.admin(request()));
   }
 
   @Test
-  void rootRedirectsToBrowseWelcome() {
+  void rootRedirectUsesTrustedForwardedOrigin() throws Exception {
     AdminUiController controller = new AdminUiController(
         new StubAuthenticationService(Optional.empty()),
-        new StubSecurityService(AccessDecision.deny("missing")));
+        new StubSecurityService(AccessDecision.deny("missing")),
+        new ForwardedHeaderPolicy("10.0.0.1"));
 
-    assertEquals("redirect:/browse/#browse/welcome", controller.index());
+    var response = MockMvcBuilders.standaloneSetup(controller).build()
+        .perform(get("/")
+            .with(request -> {
+              request.setScheme("http");
+              request.setServerName("kkrepo.internal");
+              request.setServerPort(8080);
+              request.setRemoteAddr("10.0.0.1");
+              return request;
+            })
+            .header("X-Forwarded-Proto", "https")
+            .header("X-Forwarded-Host", "nexus.example.com")
+            .header("X-Forwarded-Port", "443"))
+        .andReturn()
+        .getResponse();
+
+    assertEquals(HttpStatus.FOUND.value(), response.getStatus());
+    assertEquals(
+        "https://nexus.example.com/browse/#browse/welcome", response.getHeader("Location"));
+  }
+
+  @Test
+  void rootRedirectPreservesTrustedIpv6ForwardedPort() throws Exception {
+    AdminUiController controller = new AdminUiController(
+        new StubAuthenticationService(Optional.empty()),
+        new StubSecurityService(AccessDecision.deny("missing")),
+        new ForwardedHeaderPolicy("10.0.0.1"));
+
+    var response = MockMvcBuilders.standaloneSetup(controller).build()
+        .perform(get("/")
+            .with(request -> {
+              request.setScheme("http");
+              request.setServerName("kkrepo.internal");
+              request.setServerPort(8080);
+              request.setRemoteAddr("10.0.0.1");
+              return request;
+            })
+            .header("X-Forwarded-Proto", "https")
+            .header("X-Forwarded-Host", "[2001:db8::1]")
+            .header("X-Forwarded-Port", "8443"))
+        .andReturn()
+        .getResponse();
+
+    assertEquals(HttpStatus.FOUND.value(), response.getStatus());
+    assertEquals(
+        "https://[2001:db8::1]:8443/browse/#browse/welcome",
+        response.getHeader("Location"));
+  }
+
+  @Test
+  void rootRedirectIgnoresUntrustedForwardedOrigin() throws Exception {
+    AdminUiController controller = new AdminUiController(
+        new StubAuthenticationService(Optional.empty()),
+        new StubSecurityService(AccessDecision.deny("missing")),
+        new ForwardedHeaderPolicy("10.0.0.1"));
+
+    MockHttpServletRequest directRequest = new MockHttpServletRequest();
+    directRequest.setScheme("http");
+    directRequest.setServerName("kkrepo.internal");
+    directRequest.setServerPort(8080);
+    directRequest.setRemoteAddr("192.0.2.10");
+    directRequest.setContextPath("/kkrepo");
+    directRequest.addHeader("X-Forwarded-Proto", "https");
+    directRequest.addHeader("X-Forwarded-Host", "attacker.example.com");
+    directRequest.addHeader("X-Forwarded-Port", "443");
+
+    assertEquals("redirect:/browse/#browse/welcome", controller.index(directRequest));
+
+    var response = MockMvcBuilders.standaloneSetup(controller).build()
+        .perform(get("/")
+            .with(request -> {
+              request.setScheme("http");
+              request.setServerName("kkrepo.internal");
+              request.setServerPort(8080);
+              request.setRemoteAddr("192.0.2.10");
+              return request;
+            })
+            .header("X-Forwarded-Proto", "https")
+            .header("X-Forwarded-Host", "attacker.example.com")
+            .header("X-Forwarded-Port", "443"))
+        .andReturn()
+        .getResponse();
+
+    assertEquals(HttpStatus.FOUND.value(), response.getStatus());
+    assertEquals("/browse/#browse/welcome", response.getHeader("Location"));
+  }
+
+  @Test
+  void rootRedirectRemainsRelativeForDirectIpv6Request() {
+    AdminUiController controller = new AdminUiController(
+        new StubAuthenticationService(Optional.empty()),
+        new StubSecurityService(AccessDecision.deny("missing")),
+        new ForwardedHeaderPolicy("10.0.0.1"));
+    MockHttpServletRequest directRequest = new MockHttpServletRequest();
+    directRequest.setServerName("2001:db8::1");
+    directRequest.setRemoteAddr("2001:db8::2");
+    directRequest.setContextPath("/kkrepo");
+
+    assertEquals("redirect:/browse/#browse/welcome", controller.index(directRequest));
   }
 
   @Test
   void adminRedirectsWhenSessionIsMissing() {
     AdminUiController controller = new AdminUiController(
         new StubAuthenticationService(Optional.empty()),
-        new StubSecurityService(AccessDecision.allow()));
+        new StubSecurityService(AccessDecision.allow()),
+        new ForwardedHeaderPolicy(""));
 
     assertEquals("redirect:/browse/?login=1#browse/welcome", controller.admin(request()));
   }
@@ -59,7 +160,8 @@ class AdminUiControllerTest {
   void adminRedirectsWhenSubjectIsNotAdministrator() {
     AdminUiController controller = new AdminUiController(
         new StubAuthenticationService(Optional.of(subject("alice"))),
-        new StubSecurityService(AccessDecision.deny("missing nexus:*")));
+        new StubSecurityService(AccessDecision.deny("missing nexus:*")),
+        new ForwardedHeaderPolicy(""));
 
     assertEquals("redirect:/browse/#browse/welcome", controller.admin(request()));
   }
@@ -70,7 +172,8 @@ class AdminUiControllerTest {
     HttpServletRequest request = request();
     AdminUiController controller = new AdminUiController(
         new StubAuthenticationService(Optional.of(subject)),
-        new StubSecurityService(AccessDecision.allow()));
+        new StubSecurityService(AccessDecision.allow()),
+        new ForwardedHeaderPolicy(""));
 
     Object result = controller.admin(request);
 
@@ -92,32 +195,7 @@ class AdminUiControllerTest {
   }
 
   private static HttpServletRequest request() {
-    Map<String, Object> attributes = new LinkedHashMap<>();
-    return (HttpServletRequest) Proxy.newProxyInstance(
-        AdminUiControllerTest.class.getClassLoader(),
-        new Class<?>[] {HttpServletRequest.class},
-        (proxy, invoked, args) -> switch (invoked.getName()) {
-          case "getAttribute" -> attributes.get(String.valueOf(args[0]));
-          case "setAttribute" -> {
-            attributes.put(String.valueOf(args[0]), args[1]);
-            yield null;
-          }
-          case "toString" -> "AdminUiControllerTest request";
-          default -> primitiveDefault(invoked.getReturnType());
-        });
-  }
-
-  private static Object primitiveDefault(Class<?> type) {
-    if (boolean.class.equals(type)) {
-      return false;
-    }
-    if (int.class.equals(type) || long.class.equals(type) || short.class.equals(type) || byte.class.equals(type)) {
-      return 0;
-    }
-    if (char.class.equals(type)) {
-      return '\0';
-    }
-    return null;
+    return new MockHttpServletRequest();
   }
 
   private static class StubAuthenticationService extends SecurityAuthenticationService {
