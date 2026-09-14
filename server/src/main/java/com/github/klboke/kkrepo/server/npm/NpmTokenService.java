@@ -102,12 +102,16 @@ public class NpmTokenService {
     return normalizedPath(rawPath).startsWith("-/user/org.couchdb.user:");
   }
 
+  public static boolean isWebLoginPath(String rawPath) {
+    return "-/v1/login".equals(normalizedPath(rawPath));
+  }
+
   public static boolean isLogoutPath(String rawPath) {
     return normalizedPath(rawPath).startsWith("-/user/token/");
   }
 
   public static boolean isTokenPath(String rawPath) {
-    return isLoginPath(rawPath) || isLogoutPath(rawPath);
+    return isLoginPath(rawPath) || isWebLoginPath(rawPath) || isLogoutPath(rawPath);
   }
 
   private MavenResponse npmError(int status, String message) {

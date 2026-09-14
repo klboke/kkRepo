@@ -4,12 +4,15 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.server.maven.MavenErrorAdvice;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmTokenService;
@@ -20,8 +23,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 class RepositoryContentControllerNpmAuditTest {
 
@@ -56,6 +62,22 @@ class RepositoryContentControllerNpmAuditTest {
     assertEquals(Map.of(), body.get("advisories"));
     assertEquals(List.of(), body.get("muted"));
     assertEquals(0, ((Map<String, Object>) body.get("metadata")).get("totalDependencies"));
+  }
+
+  @Test
+  void npmWebLoginProbeReturnsMethodNotAllowedForPnpmClassicFallback() throws Exception {
+    FakeRepositoryDao repositories = new FakeRepositoryDao();
+    repositories.repository(repository("npm-example", RepositoryFormat.NPM, RepositoryType.HOSTED));
+    MockMvc mvc = MockMvcBuilders
+        .standaloneSetup(controller(repositories))
+        .setControllerAdvice(new MavenErrorAdvice())
+        .build();
+
+    mvc.perform(post("/repository/npm-example/-/v1/login")
+            .header("npm-auth-type", "web")
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{}"))
+        .andExpect(status().isMethodNotAllowed());
   }
 
   @Test

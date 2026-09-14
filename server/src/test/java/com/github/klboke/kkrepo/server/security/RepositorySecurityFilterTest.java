@@ -1008,6 +1008,28 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
+  void npmWebLoginProbeBypassesRepositoryContentPermissionFilter() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(subject("anonymous"));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.deny("should not be checked"));
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository("npm-hosted", RepositoryFormat.NPM)),
+        false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("POST", "/repository/npm-hosted/-/v1/login"),
+        response.proxy(),
+        chain);
+
+    assertEquals(0, authentication.anonymousCalls);
+    assertEquals(1, chain.calls);
+    assertEquals(0, response.status);
+  }
+
+  @Test
   void browseRestRouteRequiresBrowsePermission() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("alice")));
     RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
