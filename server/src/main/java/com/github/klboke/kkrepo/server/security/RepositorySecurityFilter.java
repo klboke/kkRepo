@@ -411,6 +411,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   private boolean isNpmTokenRoute(String method, String path) {
     String normalizedMethod = method == null ? "" : method.toUpperCase();
     return ("PUT".equals(normalizedMethod) && NpmTokenService.isLoginPath(path))
+        || ("POST".equals(normalizedMethod) && NpmTokenService.isWebLoginPath(path))
         || ("DELETE".equals(normalizedMethod) && NpmTokenService.isLogoutPath(path));
   }
 

@@ -17,6 +17,8 @@ STAMP="${CLIENT_E2E_STAMP:-$(date +%Y%m%d%H%M%S)}"
 START_TIMEOUT_SECONDS="${LIVE_COMPAT_START_TIMEOUT_SECONDS:-240}"
 SWIFT_LOGIN_TIMEOUT_SECONDS="${SWIFT_E2E_LOGIN_TIMEOUT_SECONDS:-60}"
 ANSIBLE_IMPORT_TIMEOUT_SECONDS="${ANSIBLE_E2E_IMPORT_TIMEOUT_SECONDS:-120}"
+PNPM_E2E_VERSION="${PNPM_E2E_VERSION:-11.19.0}"
+PNPM_LOGIN_TIMEOUT_SECONDS="${PNPM_E2E_LOGIN_TIMEOUT_SECONDS:-120}"
 CONDA_BIN="${CONDA_E2E_BIN:-${CONDA_BIN:-conda}}"
 CONDA_HOSTED_REPOSITORY="${CONDA_E2E_HOSTED_REPOSITORY:-conda-hosted}"
 CONDA_PROXY_REPOSITORY="${CONDA_E2E_PROXY_REPOSITORY:-conda-proxy}"
@@ -59,6 +61,10 @@ if [[ ! "$SWIFT_LOGIN_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ ! "$ANSIBLE_IMPORT_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   printf '[client-e2e] ANSIBLE_E2E_IMPORT_TIMEOUT_SECONDS must be a positive integer\n' >&2
+  exit 2
+fi
+if [[ ! "$PNPM_LOGIN_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+  printf '[client-e2e] PNPM_E2E_LOGIN_TIMEOUT_SECONDS must be a positive integer\n' >&2
   exit 2
 fi
 
@@ -746,14 +752,20 @@ EOF
 
 test_npm() {
   need npm
+  need npx
+  need python3
   local dir="$WORK_DIR/npm"
   local install_dir="$WORK_DIR/npm-install"
+  local pnpm_login_dir="$WORK_DIR/pnpm-login"
+  local pnpm_config_home="$pnpm_login_dir/config"
+  local pnpm_user_config="$pnpm_login_dir/user.npmrc"
   local package="@kkrepo-client-e2e/npm-$STAMP"
   local npm_registry_host token
   npm_registry_host="$(printf '%s' "$KKREPO_URL" | sed 's#^http[s]*://##')"
   token="$(create_api_key NpmToken "client e2e npm $STAMP")"
   add_redaction_value "$token"
-  mkdir -p "$dir" "$install_dir"
+  mkdir -p "$dir" "$install_dir" "$pnpm_login_dir"
+  : >"$pnpm_user_config"
   cat >"$dir/package.json" <<EOF
 {"name":"$package","version":"1.0.0","description":"kkrepo client e2e","main":"index.js"}
 EOF
@@ -771,6 +783,18 @@ EOF
   run_logged npm-install npm --userconfig "$dir/.npmrc" --prefix "$install_dir" install \
     --registry "$KKREPO_URL/repository/npm-group/" --ignore-scripts
   test -f "$install_dir/node_modules/@kkrepo-client-e2e/npm-$STAMP/index.js"
+  run_logged_in pnpm-login "$pnpm_login_dir" \
+    env XDG_CONFIG_HOME="$pnpm_config_home" NPM_CONFIG_USERCONFIG="$pnpm_user_config" \
+    python3 "$PROJECT_ROOT/scripts/ci/run-pnpm-login.py" \
+      "$PNPM_E2E_VERSION" "$KKREPO_URL/repository/npm-group/" \
+      "$KKREPO_USER" "$KKREPO_PASSWORD" "kkrepo-client-e2e@example.invalid" \
+      "$PNPM_LOGIN_TIMEOUT_SECONDS"
+  test -s "$pnpm_config_home/pnpm/auth.ini"
+  run_logged_output_in pnpm-whoami "$pnpm_login_dir" "$ARTIFACT_DIR/pnpm-whoami.txt" \
+    env XDG_CONFIG_HOME="$pnpm_config_home" NPM_CONFIG_USERCONFIG="$pnpm_user_config" \
+    npx --yes "pnpm@$PNPM_E2E_VERSION" whoami \
+      --registry "$KKREPO_URL/repository/npm-group/"
+  grep -qx "$KKREPO_USER" "$ARTIFACT_DIR/pnpm-whoami.txt"
   curl -m 10 -fsS -u "$KKREPO_AUTH" "$KKREPO_URL/repository/npm-group/@kkrepo-client-e2e%2fnpm-$STAMP" \
     -o "$ARTIFACT_DIR/npm-packument.json"
   grep -q '"1.0.0"' "$ARTIFACT_DIR/npm-packument.json"

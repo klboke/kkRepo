@@ -36,8 +36,14 @@ always-auth=true
 直接登录并发布到 hosted：
 
 ```bash
-npm login --registry=https://nexus.example.com/repository/npm-hosted/
+npm login --auth-type=legacy --registry=https://nexus.example.com/repository/npm-hosted/
 npm publish --registry=https://nexus.example.com/repository/npm-hosted/
+```
+
+pnpm 用户也可以直接登录。pnpm 的 Web 登录探测会自动回退到同一套 legacy token 登录流程：
+
+```bash
+pnpm login --registry=https://nexus.example.com/repository/npm-hosted/
 ```
 
 需要确保 package 永远不会发到公共 registry 时，在 `package.json` 中配置

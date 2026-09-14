@@ -38,8 +38,15 @@ credentials outside the project repository.
 Authenticate and publish directly to hosted:
 
 ```bash
-npm login --registry=https://nexus.example.com/repository/npm-hosted/
+npm login --auth-type=legacy --registry=https://nexus.example.com/repository/npm-hosted/
 npm publish --registry=https://nexus.example.com/repository/npm-hosted/
+```
+
+pnpm users can also log in directly. pnpm's web-login probe automatically falls back to the same
+legacy token login flow:
+
+```bash
+pnpm login --registry=https://nexus.example.com/repository/npm-hosted/
 ```
 
 Use `publishConfig.registry` in `package.json` when a package must never be sent to the public

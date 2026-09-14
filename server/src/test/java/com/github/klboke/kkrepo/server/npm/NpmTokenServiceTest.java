@@ -79,6 +79,10 @@ class NpmTokenServiceTest {
   @Test
   void encodedNpmTokenPathsAreRecognized() {
     assertEquals(true, NpmTokenService.isLoginPath("-/user/org.couchdb.user%3Aalice"));
+    assertEquals(true, NpmTokenService.isWebLoginPath("-/v1/login"));
+    assertEquals(true, NpmTokenService.isWebLoginPath("/-/v1/login"));
+    assertEquals(false, NpmTokenService.isWebLoginPath("-/v1/login/callback"));
+    assertEquals(true, NpmTokenService.isTokenPath("-/v1/login"));
     assertEquals(true, NpmTokenService.isLogoutPath("-/user/token/NpmToken.generated-token"));
   }
 

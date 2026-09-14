@@ -174,6 +174,20 @@ class NpmRepositoryBlackBoxCompatibilityTest {
   }
 
   @Test
+  void webLoginProbeAllowsPnpmToFallBackToClassicLoginWhenConfigured() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeTrue(config.configured(),
+        "Set NEXUS_COMPAT_BASE_URL and KKREPO_COMPAT_BASE_URL to run npm compatibility");
+
+    Exchange reference = webLoginProbe(config.nexusHosted());
+    Exchange candidate = webLoginProbe(config.nexusPlusHosted());
+
+    assertEquals(400, reference.status(), "Nexus web login probe status");
+    assertEquals(405, candidate.status(),
+        "kkrepo must return 405 so pnpm falls back to classic login");
+  }
+
+  @Test
   void proxyConcurrentTarballFetchesDoNotReturnServerErrorsWhenConfigured() throws Exception {
     CompatConfig config = CompatConfig.load();
     assumeTrue(config.configured(),
@@ -401,6 +415,15 @@ class NpmRepositoryBlackBoxCompatibilityTest {
         .timeout(Duration.ofSeconds(60))
         .header("Content-Type", "application/json")
         .PUT(HttpRequest.BodyPublishers.ofByteArray(body)));
+  }
+
+  private static Exchange webLoginProbe(Endpoint endpoint) throws Exception {
+    return send(HttpRequest.newBuilder(URI.create(endpoint.repositoryUrl() + "-/v1/login"))
+        .timeout(Duration.ofSeconds(60))
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .header("npm-auth-type", "web")
+        .POST(HttpRequest.BodyPublishers.ofString("{}")));
   }
 
   private static Exchange get(Endpoint endpoint, String path) throws Exception {
