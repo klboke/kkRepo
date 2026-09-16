@@ -94,11 +94,12 @@ PY
 
   python3 - "$compose_file" "$custom_rendered" "$custom_ca" <<'PY'
 import json
+import os
 import pathlib
 import sys
 
 source = pathlib.Path(sys.argv[1]).name
-ca_file = str(pathlib.Path(sys.argv[3]).resolve())
+ca_file = sys.argv[3]
 
 with open(sys.argv[2], encoding="utf-8") as handle:
     model = json.load(handle)
@@ -112,7 +113,7 @@ ca_volume = next(
     volume for volume in updater["volumes"]
     if volume["target"] == "/etc/kkrepo-ca/ca.crt"
 )
-assert ca_volume["source"] == ca_file, source
+assert os.path.samefile(ca_file, ca_volume["source"]), source
 assert ca_volume["read_only"] is True, source
 PY
 
