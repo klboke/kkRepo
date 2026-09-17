@@ -65,6 +65,8 @@ services:
 
   nexus:
     image: ${NEXUS_COMPAT_IMAGE:-sonatype/nexus3:3.29.2}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       INSTALL4J_ADD_VM_PARAMS: "-Xms512m -Xmx1536m -XX:MaxDirectMemorySize=1536m -Dnexus.scripts.allowCreation=true ${NEXUS_COMPAT_JVM_ARGS:-}"
     ports:
