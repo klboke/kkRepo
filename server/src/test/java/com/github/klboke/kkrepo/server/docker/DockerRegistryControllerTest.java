@@ -43,6 +43,22 @@ import org.springframework.test.web.servlet.RequestBuilder;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 class DockerRegistryControllerTest {
+
+  @Test
+  void malformedRepositoryNameReturnsDockerProtocolError() {
+    DockerRegistryController controller = controller(null, null);
+    for (String name : List.of("repo%", "repo%FF", "repo%2Fchild")) {
+      MockHttpServletRequest request = new MockHttpServletRequest(
+          "GET", "/v2/" + name + "/library/alpine/manifests/latest");
+
+      DockerProtocolException error = assertThrows(DockerProtocolException.class,
+          () -> controller.get(request, 100, null, null));
+
+      assertEquals(DockerErrorCode.NAME_INVALID, error.code());
+      assertEquals("Invalid repository URI path", error.getMessage());
+    }
+  }
+
   @Test
   void baseEndpointReturnsRegistryApiHeader() {
     DockerRegistryController controller = controller(null, null);

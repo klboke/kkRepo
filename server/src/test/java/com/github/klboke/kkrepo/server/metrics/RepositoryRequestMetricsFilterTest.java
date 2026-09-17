@@ -25,6 +25,28 @@ import org.springframework.mock.web.MockHttpServletResponse;
 class RepositoryRequestMetricsFilterTest {
 
   @Test
+  void malformedRepositoryNamesStillReachRequestValidation() throws Exception {
+    for (String path : new String[] {"/repository/repo%/content", "/v2/repo%FF/manifests/latest"}) {
+      SimpleMeterRegistry registry = new SimpleMeterRegistry();
+      RepositoryRequestMetricsFilter filter = new RepositoryRequestMetricsFilter(
+          new KkRepoMetrics(registry), true, "");
+      MockHttpServletRequest request = new MockHttpServletRequest("GET", path);
+      MockHttpServletResponse response = new MockHttpServletResponse();
+      int[] calls = {0};
+
+      filter.doFilter(request, response, (req, resp) -> {
+        calls[0]++;
+        response.sendError(400, "Invalid repository URI path");
+      });
+
+      assertEquals(1, calls[0]);
+      assertEquals(400, response.getStatus());
+      assertEquals("Invalid repository URI path", response.getErrorMessage());
+      assertTrue(registry.find("kkrepo_repository_requests_total").counters().isEmpty());
+    }
+  }
+
+  @Test
   void recordsLowCardinalityRRepositoryOperations() throws Exception {
     String[][] requests = {
         {"GET", "/repository/cran/src/contrib/PACKAGES.gz", "r_packages_index"},

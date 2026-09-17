@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.npm;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.klboke.kkrepo.core.http.UriPathDecoder;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
@@ -12,7 +13,6 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -146,43 +146,18 @@ public class NpmTokenService {
   }
 
   private static String normalizedPath(String rawPath) {
-    String path = percentDecode(rawPath == null ? "" : rawPath);
+    String path;
+    try {
+      // Only classify the endpoint here. The username/token suffix is opaque and may include
+      // encoded separators; authentication validates the actual credentials separately.
+      path = UriPathDecoder.decodeComponent(rawPath == null ? "" : rawPath);
+    } catch (IllegalArgumentException e) {
+      return ""; // Malformed paths must never be recognized as an authentication endpoint.
+    }
     while (path.startsWith("/")) {
       path = path.substring(1);
     }
     return path;
   }
 
-  private static String percentDecode(String value) {
-    byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
-    byte[] decoded = new byte[bytes.length];
-    int out = 0;
-    for (int i = 0; i < bytes.length; i++) {
-      byte b = bytes[i];
-      if (b == '%' && i + 2 < bytes.length) {
-        int hi = hex(bytes[i + 1]);
-        int lo = hex(bytes[i + 2]);
-        if (hi >= 0 && lo >= 0) {
-          decoded[out++] = (byte) ((hi << 4) + lo);
-          i += 2;
-          continue;
-        }
-      }
-      decoded[out++] = b;
-    }
-    return new String(decoded, 0, out, StandardCharsets.UTF_8);
-  }
-
-  private static int hex(byte b) {
-    if (b >= '0' && b <= '9') {
-      return b - '0';
-    }
-    if (b >= 'a' && b <= 'f') {
-      return b - 'a' + 10;
-    }
-    if (b >= 'A' && b <= 'F') {
-      return b - 'A' + 10;
-    }
-    return -1;
-  }
 }

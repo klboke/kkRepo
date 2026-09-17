@@ -9,6 +9,18 @@ class DockerPathParserTest {
   private final DockerPathParser parser = new DockerPathParser();
 
   @Test
+  void decodesEachReferenceAndUploadIdOnlyOnce() {
+    assertEquals("latest", parser.parse("library/alpine/manifests/%6Catest").reference());
+    assertEquals("%6Catest", parser.parse("library/alpine/manifests/%256Catest").reference());
+    assertEquals("id+suffix", parser.parse("library/alpine/blobs/uploads/id+suffix").uploadUuid());
+    assertEquals("id%2Fsuffix", parser.parse("library/alpine/blobs/uploads/id%252Fsuffix").uploadUuid());
+    assertThrows(DockerProtocolException.class,
+        () -> parser.parse("library%2Falpine/manifests/latest"));
+    assertThrows(DockerProtocolException.class,
+        () -> parser.parse("library/alpine/manifests/%C3%28"));
+  }
+
+  @Test
   void parsesMultiSegmentManifestFromRightSentinel() {
     DockerPath path = parser.parse("team/platform/api/manifests/latest");
 

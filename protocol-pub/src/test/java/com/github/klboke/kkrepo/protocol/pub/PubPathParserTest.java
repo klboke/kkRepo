@@ -8,6 +8,14 @@ class PubPathParserTest {
   private final PubPathParser parser = new PubPathParser();
 
   @Test
+  void rejectsEncodedRouteSeparatorsAndMalformedArchiveEncoding() {
+    for (String path : new String[] {"api%2fpackages/demo", "api/archives/demo-1.0.0%.tar.gz",
+        "api/archives/demo-1.0.0%GG.tar.gz", "api/archives/demo-1.0.0%C3%28.tar.gz"}) {
+      assertEquals(PubPath.Kind.UNKNOWN, new PubPathParser().parse(path).kind());
+    }
+  }
+
+  @Test
   void parsesHostedPubV2Paths() {
     assertEquals(PubPath.Kind.PACKAGE_METADATA,
         parser.parse("api/packages/example_package").kind());

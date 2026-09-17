@@ -3,7 +3,12 @@ package com.github.klboke.kkrepo.server.security;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.auth.AccessDecision;
@@ -19,10 +24,15 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.RepositoryProtocolController;
 import com.github.klboke.kkrepo.server.RepositoryProtocolControllerTestSupport;
+import com.github.klboke.kkrepo.server.goartifact.GoPath;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.pypi.PypiHostedService;
 import com.github.klboke.kkrepo.server.pypi.PypiResponse;
+import com.github.klboke.kkrepo.server.routing.RepositoryProtocolDispatcher;
+import com.github.klboke.kkrepo.server.routing.RepositoryProtocolHandler;
+import com.github.klboke.kkrepo.server.routing.RepositoryProtocolRequest;
+import com.github.klboke.kkrepo.server.routing.RepositoryProtocolRoute;
 import com.github.klboke.kkrepo.server.support.dao.AssetDaoAdapter;
 import com.github.klboke.kkrepo.server.support.dao.RepositoryDaoAdapter;
 import com.github.klboke.kkrepo.server.support.dao.SecurityDaoAdapter;
@@ -39,6 +49,8 @@ import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.session.web.http.SessionRepositoryFilter;
 
@@ -581,6 +593,110 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
+  void goAuthorizationAndDispatcherUseTheSameDecodedPathForEveryRecipe() throws Exception {
+    for (RepositoryType type : RepositoryType.values()) {
+      for (String method : List.of("GET", "HEAD")) {
+        for (String suffix : List.of("/@v/list", "/@latest", "/@v/v1.2.3.info",
+            "/@v/v1.2.3.mod", "/@v/v1.2.3.zip", "/@v/v1.2.3-%21r%21c1.info",
+            "/@v/v2.0.0+incompatible.mod", "/@v/v2.0.0%2Bincompatible.mod")) {
+          String raw = "github.com/%21burnt%21sushi/toml" + suffix;
+          String canonical = raw.replace("%21", "!").replace("%2B", "+");
+          FakeRepositoryDao repositories = new FakeRepositoryDao(repository(
+              "go-private", RepositoryFormat.GO, type)) {
+            @Override
+            public List<RepositoryRecord> listMembers(long repositoryId) {
+              return List.of();
+            }
+          };
+          RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow()) {
+            @Override
+            public AccessDecision decide(PermissionSubject subject, RepositoryPermission permission) {
+              super.decide(subject, permission);
+              return canonical.equals(permission.pathPattern())
+                  ? AccessDecision.allow() : AccessDecision.deny("non-canonical path");
+            }
+          };
+          RepositorySecurityFilter filter = filter(
+              new StubAuthenticationService(Optional.of(subject("alice"))), decisions, repositories, false);
+          var handler = mock(
+              RepositoryProtocolHandler.class);
+          when(handler.routes()).thenReturn(List.of(
+              RepositoryProtocolRoute.anyPath(
+                  RepositoryFormat.GO, type, HttpMethod.valueOf(method), 0)));
+          when(handler.handle(any())).thenAnswer(call -> {
+            RepositoryProtocolRequest routed = call.getArgument(0);
+            assertEquals(canonical, routed.path());
+            assertEquals("github.com/BurntSushi/toml",
+                GoPath.parse(routed.path()).module());
+            return ResponseEntity.ok().build();
+          });
+          var dispatcher = new RepositoryProtocolDispatcher(
+              new RepositoryRuntimeRegistry(repositories, 0), List.of(handler));
+          HttpServletRequest request = request(method, "/repository/go-private/" + raw);
+          filter.doFilter(request, new MockHttpServletResponse(), (filtered, response) ->
+              assertEquals(200, dispatcher.dispatchRead("go-private", (HttpServletRequest) filtered,
+                  HttpMethod.valueOf(method)).getStatusCode().value()));
+          assertEquals(canonical, decisions.permission.pathPattern());
+          verify(handler).handle(any());
+        }
+      }
+    }
+  }
+
+  @Test
+  void rejectsMalformedRepositoryNamesBeforeAuthentication() throws Exception {
+    for (String prefix : List.of("/repository/", "/service/rest/repository/browse/")) {
+      for (String name : List.of("repo%", "repo%FF", "repo%2Fchild")) {
+        StubAuthenticationService authentication =
+            new StubAuthenticationService(Optional.of(subject("alice")));
+        RepositorySecurityFilter filter = filter(authentication,
+            new RecordingDecisionService(AccessDecision.allow()),
+            new FakeRepositoryDao(repository("repo", RepositoryFormat.GO, RepositoryType.PROXY)), false);
+        ResponseState response = new ResponseState();
+        ChainState chain = new ChainState();
+
+        filter.doFilter(request("GET", prefix + name + "/content"), response.proxy(), chain);
+
+        assertEquals(400, response.status, prefix + name);
+        assertEquals("Invalid repository URI path", response.message);
+        assertEquals(0, authentication.calls);
+        assertEquals(0, chain.calls);
+      }
+    }
+  }
+
+  @Test
+  void goPathsRejectUnsafeEncodingAndNeverDecodeTwice() throws Exception {
+    for (String segment : List.of("%2f", "%5c", "%2e%2e", "%00", "%", "%GG", "%C3%28")) {
+      StubAuthenticationService authentication =
+          new StubAuthenticationService(Optional.of(subject("alice")));
+      RepositorySecurityFilter filter = filter(authentication,
+          new RecordingDecisionService(AccessDecision.allow()),
+          new FakeRepositoryDao(repository("go-private", RepositoryFormat.GO, RepositoryType.PROXY)), false);
+      ResponseState response = new ResponseState();
+      ChainState chain = new ChainState();
+      filter.doFilter(request("GET", "/repository/go-private/github.com/" + segment + "/toml/@v/list"),
+          response.proxy(), chain);
+      assertEquals(400, response.status, segment);
+      assertEquals(0, authentication.calls, segment);
+      assertEquals(0, chain.calls, segment);
+    }
+    RepositorySecurityFilter filter = filter(
+        new StubAuthenticationService(Optional.of(subject("alice"))),
+        new RecordingDecisionService(AccessDecision.allow()),
+        new FakeRepositoryDao(repository("go-private", RepositoryFormat.GO, RepositoryType.PROXY)), false);
+    HttpServletRequest request = request("GET",
+        "/repository/go-private/github.com/%2521azure/sdk/@v/v1.0.0.info");
+    ChainState chain = new ChainState();
+    filter.doFilter(request, new MockHttpServletResponse(), chain);
+    assertEquals(1, chain.calls);
+    String canonical = (String) request.getAttribute(RepositorySecurityFilter.NORMALIZED_REPOSITORY_PATH_ATTRIBUTE);
+    assertEquals("github.com/%21azure/sdk/@v/v1.0.0.info", canonical);
+    assertThrows(IllegalArgumentException.class,
+        () -> GoPath.parse(canonical));
+  }
+
+  @Test
   void pypiAuthorizationAndControllerReuseTheSameCanonicalPath() throws Exception {
     String canonicalPath =
         "packages/private/0.0.0+build/demo-0.0.0+build.whl";
@@ -675,7 +791,7 @@ class RepositorySecurityFilterTest {
     assertEquals(0, authentication.calls);
     assertEquals(0, chain.calls);
     assertEquals(HttpServletResponse.SC_BAD_REQUEST, response.status);
-    assertEquals("Invalid PyPI path segment", response.message);
+    assertEquals("Invalid PyPI path: Invalid URI path segment", response.message);
   }
 
   @Test

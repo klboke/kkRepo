@@ -1,7 +1,6 @@
 package com.github.klboke.kkrepo.protocol.docker;
 
-import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
+import com.github.klboke.kkrepo.core.http.UriPathDecoder;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -21,7 +20,7 @@ public final class DockerPathParser {
       return new DockerPath(
           DockerPath.Kind.MANIFEST,
           imageName(segments, manifests),
-          decode(segments.get(manifests + 1)),
+          segments.get(manifests + 1),
           digestIfPossible(segments.get(manifests + 1)),
           null);
     }
@@ -35,12 +34,12 @@ public final class DockerPathParser {
           imageName(segments, upload),
           null,
           null,
-          decode(segments.get(upload + 2)));
+          segments.get(upload + 2));
     }
     int blobs = indexOfEndpoint(segments, "blobs", 1);
     if (blobs > 0) {
       if (blobs + 2 == segments.size()) {
-        DockerDigest digest = DockerDigest.parse(decode(segments.get(blobs + 1)));
+        DockerDigest digest = DockerDigest.parse(segments.get(blobs + 1));
         return new DockerPath(DockerPath.Kind.BLOB, imageName(segments, blobs), null, digest, null);
       }
     }
@@ -50,7 +49,7 @@ public final class DockerPathParser {
     }
     int referrers = indexOfEndpoint(segments, "referrers", 1);
     if (referrers > 0) {
-      DockerDigest digest = DockerDigest.parse(decode(segments.get(referrers + 1)));
+      DockerDigest digest = DockerDigest.parse(segments.get(referrers + 1));
       return new DockerPath(DockerPath.Kind.REFERRERS, imageName(segments, referrers), null, digest, null);
     }
     throw new DockerProtocolException(DockerErrorCode.NAME_INVALID, "unsupported Docker registry path: " + path);
@@ -159,6 +158,10 @@ public final class DockerPathParser {
   }
 
   private static String decode(String value) {
-    return URLDecoder.decode(value, StandardCharsets.UTF_8);
+    try {
+      return UriPathDecoder.decodeSegment(value);
+    } catch (IllegalArgumentException e) {
+      throw new DockerProtocolException(DockerErrorCode.NAME_INVALID, "Invalid Docker URI path segment");
+    }
   }
 }

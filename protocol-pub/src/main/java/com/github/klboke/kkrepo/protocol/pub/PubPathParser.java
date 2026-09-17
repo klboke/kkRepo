@@ -1,11 +1,16 @@
 package com.github.klboke.kkrepo.protocol.pub;
 
-import java.nio.charset.StandardCharsets;
+import com.github.klboke.kkrepo.core.http.UriPathDecoder;
 
 public final class PubPathParser {
   public PubPath parse(String rawPath) {
     String raw = rawPath == null ? "" : rawPath;
-    String path = normalize(percentDecode(raw));
+    String path;
+    try {
+      path = normalize(UriPathDecoder.decodePath(raw));
+    } catch (IllegalArgumentException e) {
+      return new PubPath(PubPath.Kind.UNKNOWN, raw, null, null, null);
+    }
     if (path.isBlank()) {
       return new PubPath(PubPath.Kind.ROOT, raw, null, null, null);
     }
@@ -134,30 +139,4 @@ public final class PubPathParser {
     return normalized;
   }
 
-  private static String percentDecode(String value) {
-    byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
-    byte[] decoded = new byte[bytes.length];
-    int out = 0;
-    for (int i = 0; i < bytes.length; i++) {
-      byte b = bytes[i];
-      if (b == '%' && i + 2 < bytes.length) {
-        int hi = hex(bytes[i + 1]);
-        int lo = hex(bytes[i + 2]);
-        if (hi >= 0 && lo >= 0) {
-          decoded[out++] = (byte) ((hi << 4) + lo);
-          i += 2;
-          continue;
-        }
-      }
-      decoded[out++] = b;
-    }
-    return new String(decoded, 0, out, StandardCharsets.UTF_8);
-  }
-
-  private static int hex(byte b) {
-    if (b >= '0' && b <= '9') return b - '0';
-    if (b >= 'a' && b <= 'f') return b - 'a' + 10;
-    if (b >= 'A' && b <= 'F') return b - 'A' + 10;
-    return -1;
-  }
 }

@@ -1,10 +1,6 @@
 package com.github.klboke.kkrepo.protocol.conan;
 
-import java.io.ByteArrayOutputStream;
-import java.nio.ByteBuffer;
-import java.nio.charset.CharacterCodingException;
-import java.nio.charset.CodingErrorAction;
-import java.nio.charset.StandardCharsets;
+import com.github.klboke.kkrepo.core.http.UriPathDecoder;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -231,46 +227,13 @@ public final class ConanPathParser {
     if (raw.indexOf('#') >= 0 || raw.indexOf('\\') >= 0 || containsControl(raw)) {
       throw new IllegalArgumentException("Unsafe Conan request target");
     }
-    byte[] source = raw.getBytes(StandardCharsets.UTF_8);
-    ByteArrayOutputStream decoded = new ByteArrayOutputStream(source.length);
-    for (int index = 0; index < source.length; index++) {
-      int current = source[index] & 0xff;
-      if (current == '+' && !path) {
-        decoded.write(' ');
-        continue;
-      }
-      if (current != '%') {
-        decoded.write(current);
-        continue;
-      }
-      if (index + 2 >= source.length) {
-        throw new IllegalArgumentException("Incomplete percent encoding");
-      }
-      int high = hex(source[++index]);
-      int low = hex(source[++index]);
-      if (high < 0 || low < 0) throw new IllegalArgumentException("Invalid percent encoding");
-      int octet = (high << 4) | low;
-      if (path && (octet == '/' || octet == '\\' || octet == '%')) {
-        throw new IllegalArgumentException("Encoded separator or second encoding");
-      }
-      decoded.write(octet);
+    // Conan query parameters use form semantics; only literal plus signs become spaces.
+    String decoded = path ? UriPathDecoder.decodePath(raw)
+        : UriPathDecoder.decodeComponent(raw.replace('+', ' '));
+    if (path && decoded.indexOf('%') >= 0) {
+      throw new IllegalArgumentException("Encoded percent sign is not allowed in this protocol path");
     }
-    try {
-      return StandardCharsets.UTF_8.newDecoder()
-          .onMalformedInput(CodingErrorAction.REPORT)
-          .onUnmappableCharacter(CodingErrorAction.REPORT)
-          .decode(ByteBuffer.wrap(decoded.toByteArray()))
-          .toString();
-    } catch (CharacterCodingException invalid) {
-      throw new IllegalArgumentException("Invalid UTF-8 encoding", invalid);
-    }
-  }
-
-  private static int hex(byte value) {
-    if (value >= '0' && value <= '9') return value - '0';
-    if (value >= 'a' && value <= 'f') return value - 'a' + 10;
-    if (value >= 'A' && value <= 'F') return value - 'A' + 10;
-    return -1;
+    return decoded;
   }
 
   private static boolean containsControl(String value) {

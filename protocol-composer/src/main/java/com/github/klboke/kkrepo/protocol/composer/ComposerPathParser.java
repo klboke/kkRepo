@@ -1,12 +1,16 @@
 package com.github.klboke.kkrepo.protocol.composer;
 
-import java.nio.charset.StandardCharsets;
+import com.github.klboke.kkrepo.core.http.UriPathDecoder;
 
 /** Strict parser for Composer v2 repository paths. */
 public final class ComposerPathParser {
   public ComposerPath parse(String rawPath) {
     String raw = rawPath == null ? "" : rawPath;
-    return parseCanonical(raw, canonicalize(raw));
+    try {
+      return parseCanonical(raw, canonicalize(raw));
+    } catch (IllegalArgumentException e) {
+      return path(ComposerPath.Kind.UNKNOWN, raw);
+    }
   }
 
   /** Parses a path that has already been percent-decoded and normalized exactly once. */
@@ -16,7 +20,7 @@ public final class ComposerPathParser {
   }
 
   public String canonicalize(String rawPath) {
-    return normalize(percentDecode(rawPath == null ? "" : rawPath));
+    return normalize(UriPathDecoder.decodePath(rawPath == null ? "" : rawPath));
   }
 
   private static ComposerPath parseCanonical(String raw, String path) {
@@ -87,30 +91,4 @@ public final class ComposerPathParser {
     return path;
   }
 
-  private static String percentDecode(String value) {
-    byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
-    byte[] decoded = new byte[bytes.length];
-    int out = 0;
-    for (int i = 0; i < bytes.length; i++) {
-      byte b = bytes[i];
-      if (b == '%' && i + 2 < bytes.length) {
-        int hi = hex(bytes[i + 1]);
-        int lo = hex(bytes[i + 2]);
-        if (hi >= 0 && lo >= 0) {
-          decoded[out++] = (byte) ((hi << 4) + lo);
-          i += 2;
-          continue;
-        }
-      }
-      decoded[out++] = b;
-    }
-    return new String(decoded, 0, out, StandardCharsets.UTF_8);
-  }
-
-  private static int hex(byte value) {
-    if (value >= '0' && value <= '9') return value - '0';
-    if (value >= 'a' && value <= 'f') return value - 'a' + 10;
-    if (value >= 'A' && value <= 'F') return value - 'A' + 10;
-    return -1;
-  }
 }

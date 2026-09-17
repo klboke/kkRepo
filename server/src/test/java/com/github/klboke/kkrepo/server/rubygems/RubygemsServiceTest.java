@@ -40,6 +40,12 @@ import org.junit.jupiter.api.Test;
 
 class RubygemsServiceTest {
   @Test
+  void dependencyQueryValuesAreFormDecodedExactlyOnce() {
+    assertEquals(java.util.Set.of("a+b", "%61bc", "a b"),
+        RubygemsService.requestedGemNames("api/v1/dependencies?gems=a%2Bb,%2561bc,a+b"));
+  }
+
+  @Test
   void parsesGemMetadataYaml() {
     RubygemsService.GemMetadata metadata = RubygemsService.parseMetadataYaml("""
         --- !ruby/object:Gem::Specification

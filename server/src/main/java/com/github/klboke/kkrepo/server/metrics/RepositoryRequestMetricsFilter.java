@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.metrics;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.core.http.UriPathDecoder;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPath;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPathParser;
@@ -17,8 +18,6 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Locale;
@@ -63,7 +62,13 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
       HttpServletRequest request,
       HttpServletResponse response,
       FilterChain filterChain) throws ServletException, IOException {
-    Target target = target(request);
+    Target target;
+    try {
+      target = target(request);
+    } catch (IllegalArgumentException e) {
+      filterChain.doFilter(request, response);
+      return;
+    }
     if (target == null) {
       filterChain.doFilter(request, response);
       return;
@@ -683,7 +688,7 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
   }
 
   private static String decode(String value) {
-    return URLDecoder.decode(value, StandardCharsets.UTF_8);
+    return UriPathDecoder.decodeSegment(value);
   }
 
   private record Target(String repository, String path, String route) {

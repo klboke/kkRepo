@@ -1,10 +1,6 @@
 package com.github.klboke.kkrepo.protocol.alpine;
 
-import java.io.ByteArrayOutputStream;
-import java.nio.ByteBuffer;
-import java.nio.charset.CharacterCodingException;
-import java.nio.charset.CodingErrorAction;
-import java.nio.charset.StandardCharsets;
+import com.github.klboke.kkrepo.core.http.UriPathDecoder;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
@@ -106,31 +102,11 @@ public final class AlpinePathParser {
         || raw.chars().anyMatch(value -> value == 0 || value < 0x20 || value == 0x7f)) {
       throw new IllegalArgumentException("Unsafe Alpine path");
     }
-    byte[] source = raw.getBytes(StandardCharsets.UTF_8);
-    ByteArrayOutputStream decoded = new ByteArrayOutputStream(source.length);
-    for (int index = 0; index < source.length; index++) {
-      int value = source[index] & 0xff;
-      if (value != '%') {
-        decoded.write(value);
-        continue;
-      }
-      if (index + 2 >= source.length) throw new IllegalArgumentException("Incomplete encoding");
-      int high = Character.digit((char) source[++index], 16);
-      int low = Character.digit((char) source[++index], 16);
-      if (high < 0 || low < 0) throw new IllegalArgumentException("Invalid encoding");
-      int octet = (high << 4) | low;
-      if (octet == '/' || octet == '\\' || octet == '%' || octet == 0 || octet < 0x20) {
-        throw new IllegalArgumentException("Encoded separator or control");
-      }
-      decoded.write(octet);
+    String decoded = UriPathDecoder.decodePath(raw);
+    if (decoded.indexOf('%') >= 0) {
+      throw new IllegalArgumentException("Encoded percent sign is not allowed in this protocol path");
     }
-    try {
-      return StandardCharsets.UTF_8.newDecoder()
-          .onMalformedInput(CodingErrorAction.REPORT)
-          .onUnmappableCharacter(CodingErrorAction.REPORT)
-          .decode(ByteBuffer.wrap(decoded.toByteArray())).toString();
-    } catch (CharacterCodingException error) {
-      throw new IllegalArgumentException("Invalid UTF-8", error);
-    }
+    return decoded;
   }
+
 }
