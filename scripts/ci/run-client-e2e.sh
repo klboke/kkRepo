@@ -4056,7 +4056,7 @@ run_selected_tests() {
         ;;
       go)
         test_go
-        register_cleanup_fixture go go-hosted "*module-$STAMP*" go
+        register_cleanup_fixture go go-hosted "*Module-$STAMP*" go
         ;;
       helm)
         test_helm

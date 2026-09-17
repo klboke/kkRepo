@@ -644,6 +644,28 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
+  void rejectsMalformedRepositoryNamesBeforeAuthentication() throws Exception {
+    for (String prefix : List.of("/repository/", "/service/rest/repository/browse/")) {
+      for (String name : List.of("repo%", "repo%FF", "repo%2Fchild")) {
+        StubAuthenticationService authentication =
+            new StubAuthenticationService(Optional.of(subject("alice")));
+        RepositorySecurityFilter filter = filter(authentication,
+            new RecordingDecisionService(AccessDecision.allow()),
+            new FakeRepositoryDao(repository("repo", RepositoryFormat.GO, RepositoryType.PROXY)), false);
+        ResponseState response = new ResponseState();
+        ChainState chain = new ChainState();
+
+        filter.doFilter(request("GET", prefix + name + "/content"), response.proxy(), chain);
+
+        assertEquals(400, response.status, prefix + name);
+        assertEquals("Invalid repository URI path", response.message);
+        assertEquals(0, authentication.calls);
+        assertEquals(0, chain.calls);
+      }
+    }
+  }
+
+  @Test
   void goPathsRejectUnsafeEncodingAndNeverDecodeTwice() throws Exception {
     for (String segment : List.of("%2f", "%5c", "%2e%2e", "%00", "%", "%GG", "%C3%28")) {
       StubAuthenticationService authentication =

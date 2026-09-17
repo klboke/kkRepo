@@ -1327,7 +1327,9 @@ class RepositoryDataMigrationWriter {
     List<String> segments = new ArrayList<>();
     for (String segment : normalized.split("/")) {
       if (!segment.isBlank()) {
-        segments.add(UriPathDecoder.decodeSegment(segment));
+        // Nexus asset paths may encode an entire image name (team%2Fapp) as one component.
+        // Decode once here; Docker's image, tag and digest validators enforce the resulting identity.
+        segments.add(UriPathDecoder.decodeComponent(segment));
       }
     }
     return List.copyOf(segments);

@@ -21,6 +21,10 @@ class PypiRequestPathTest {
 
   @Test
   void rejectsMalformedEscapesSeparatorsAndTraversalSegments() {
+    for (String segment : new String[] {"demo%ZZ.whl", "demo%FF.whl", "demo%2Fevil.whl", "%2E%2E"}) {
+      assertThrows(PypiExceptions.BadRequestException.class,
+          () -> PypiRequestPath.decodeSegment(segment));
+    }
     assertThrows(PypiExceptions.BadRequestException.class,
         () -> PypiRequestPath.decode("packages/demo%2Fevil.whl"));
     assertThrows(PypiExceptions.BadRequestException.class,

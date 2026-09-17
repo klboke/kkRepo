@@ -36,7 +36,8 @@ decoded. Whole-URI inspection with `URI.getPath()` is separate from repository p
 | npm | Scoped identities retain encoded `/`; parsed package identities are not decoded a second time. Authentication endpoint matching preserves opaque username/token suffixes. |
 | Docker | Segments are decoded once; manifest references, digests and upload IDs reuse the decoded values. |
 | RubyGems | Compact-index path names use URI segment decoding. Dependency query values retain form decoding and are no longer decoded twice. |
-| Repository names, metrics, Docker migration | Shared segment decoding replaces form decoding; metrics defer malformed requests to request validation. |
+| Repository names, metrics | Shared segment decoding replaces form decoding; metrics defer malformed requests to request validation. |
+| Docker migration | Source asset components can contain encoded image-name separators (`team%2Fapp`), so component decoding preserves this Nexus migration behavior. Docker image, tag and digest validators still validate decoded identities. |
 
 Do not blanket-decode every protocol in the dispatcher. Some parsers own raw URI components and
 intentionally accept encoded separators; decoding globally would erase those boundaries or decode

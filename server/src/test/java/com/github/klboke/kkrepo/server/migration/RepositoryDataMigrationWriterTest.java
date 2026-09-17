@@ -36,6 +36,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifest
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestReferenceRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerTagRecord;
 import com.github.klboke.kkrepo.protocol.docker.DockerConstants;
+import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
 import com.github.klboke.kkrepo.protocol.maven.path.HashType;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
@@ -194,6 +195,29 @@ class RepositoryDataMigrationWriterTest {
 
     assertEquals("team/encoded", target.imageName());
     assertEquals("v1", target.reference());
+  }
+
+  @Test
+  void dockerMigrationTargetsValidateDecodedIdentitiesWithoutDecodingTwice() {
+    String digest = "sha256:" + "a".repeat(64);
+    var blob = RepositoryDataMigrationWriter
+        .dockerBlobMigrationTarget("v2/team%2fencoded/blobs/" + digest.replace(":", "%3A"))
+        .orElseThrow();
+
+    assertEquals("team/encoded", blob.imageName());
+    assertEquals(digest, blob.digest().value());
+    for (String image : List.of("team%252Fencoded", "team%2F..%2Fapp", "team%2F%2Fapp")) {
+      assertThrows(DockerProtocolException.class, () -> RepositoryDataMigrationWriter
+          .dockerManifestMigrationTarget("v2/" + image + "/manifests/v1"), image);
+      assertThrows(DockerProtocolException.class, () -> RepositoryDataMigrationWriter
+          .dockerBlobMigrationTarget("v2/" + image + "/blobs/" + digest), image);
+    }
+    assertThrows(DockerProtocolException.class, () -> RepositoryDataMigrationWriter
+        .dockerManifestMigrationTarget("v2/team%2Fapp/manifests/v1%2Fchild"));
+    for (String image : List.of("team%2", "team%FFapp")) {
+      assertThrows(IllegalArgumentException.class, () -> RepositoryDataMigrationWriter
+          .dockerManifestMigrationTarget("v2/" + image + "/manifests/v1"), image);
+    }
   }
 
   @Test
