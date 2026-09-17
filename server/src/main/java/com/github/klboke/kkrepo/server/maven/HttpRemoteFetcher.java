@@ -153,7 +153,12 @@ public class HttpRemoteFetcher {
     if (proxyFactory == null) {
       throw new IllegalStateException("Outbound HTTP client factory is required");
     }
-    return fetchInternal(req, redirects, req.resolvedTarget(outboundPolicy, "remote fetch"));
+    try {
+      return fetchInternal(req, redirects, req.resolvedTarget(outboundPolicy, "remote fetch"));
+    } catch (SecurityValidationException e) {
+      // Tag only transport validation failures, never a caller's response/scan policy failure.
+      throw new RemoteRequestRejectedException(e);
+    }
   }
 
   private Result fetchInternal(
@@ -317,6 +322,13 @@ public class HttpRemoteFetcher {
   @FunctionalInterface
   public interface ResultHandler<T> {
     T handle(Result result) throws IOException;
+  }
+
+  /** A rejected outbound request. Direct repository reads retain the existing HTTP 400 response. */
+  public static final class RemoteRequestRejectedException extends SecurityValidationException {
+    private RemoteRequestRejectedException(SecurityValidationException cause) {
+      super(cause.getMessage(), cause);
+    }
   }
 
   public enum TimeoutProfile {

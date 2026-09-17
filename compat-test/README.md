@@ -37,6 +37,18 @@ mvn -pl compat-test -am test
 The live black-box tests are skipped by default so the module stays deterministic in CI and local
 builds without Nexus.
 
+`MavenGroupFailureCompatibilityTest` runs with `COMPAT_WRITE_ENABLED=true` and is included in
+the `nexus` suite. It creates and deletes isolated proxy/hosted/group repositories on both servers,
+places the failing proxy first, and compares artifact/checksum GET and HEAD, metadata aggregation,
+and all-member misses for upstream 404/400/500 and a cross-origin redirect to a missing resource.
+The controlled HTTP fixtures run on the test runner; both repository servers must reach them via
+`MAVEN_GROUP_COMPAT_UPSTREAM_HOST` (default `host.docker.internal`, mapped by the compatibility
+compose files). For host-run services, set this to a host address reachable from both servers.
+The candidate must permit this private fixture address, as the compatibility compose files do.
+The redirect target remains unallowlisted, and the test verifies kkRepo never contacts it.
+On Nexus versions with the SSRF configuration API, the test temporarily adds only the fixture host
+to the private-network allowlist and removes that entry afterward, retaining existing settings.
+
 ## Disposable Live Compatibility Environment
 
 The GitHub `Live Compatibility` workflow uses the same commands below. It builds a candidate

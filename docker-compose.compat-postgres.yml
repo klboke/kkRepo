@@ -62,6 +62,8 @@ services:
 
   nexus:
     image: ${NEXUS_COMPAT_IMAGE:-sonatype/nexus3:3.92.0}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       nexus-postgres:
         condition: service_healthy

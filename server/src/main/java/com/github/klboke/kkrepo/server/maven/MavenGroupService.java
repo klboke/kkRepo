@@ -139,7 +139,7 @@ public class MavenGroupService {
         return response;
       } catch (MavenExceptions.MavenNotFoundException ignored) {
         // try next member
-      } catch (MavenExceptions.BadUpstreamException e) {
+      } catch (MavenExceptions.BadUpstreamException | HttpRemoteFetcher.RemoteRequestRejectedException e) {
         // Nexus group repositories only return successful member responses; keep probing.
       } catch (MavenExceptions.MethodNotAllowed ignored) {
         // member doesn't serve this kind of read; skip
@@ -289,7 +289,7 @@ public class MavenGroupService {
         body = response.body();
         if (body != null) result.add(body.readAllBytes());
       } catch (MavenExceptions.MavenNotFoundException | MavenExceptions.BadUpstreamException
-          | MavenExceptions.MethodNotAllowed ignored) {
+          | MavenExceptions.MethodNotAllowed | HttpRemoteFetcher.RemoteRequestRejectedException ignored) {
         // member doesn't have it / is down; skip
       } catch (IOException e) {
         throw new IllegalStateException("Failed reading metadata from member " + member.name(), e);
