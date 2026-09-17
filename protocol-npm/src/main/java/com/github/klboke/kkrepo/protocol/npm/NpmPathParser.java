@@ -6,7 +6,12 @@ public final class NpmPathParser {
   public NpmPath parse(String rawPath) {
     String raw = rawPath == null ? "" : rawPath;
     while (raw.startsWith("/")) raw = raw.substring(1);
-    String decoded = NpmPackageId.decode(raw);
+    String decoded;
+    try {
+      decoded = NpmPackageId.decode(raw);
+    } catch (IllegalArgumentException e) {
+      return simple(NpmPath.Kind.UNKNOWN, raw);
+    }
     while (decoded.startsWith("/")) decoded = decoded.substring(1);
     while (decoded.endsWith("/") && decoded.length() > 1) {
       decoded = decoded.substring(0, decoded.length() - 1);
@@ -59,7 +64,7 @@ public final class NpmPathParser {
     }
     try {
       return new NpmPath(tag == null ? NpmPath.Kind.DIST_TAGS : NpmPath.Kind.DIST_TAG,
-          raw, NpmPackageId.parse(packagePart), null, null, tag, null);
+          raw, NpmPackageId.parseDecoded(packagePart), null, null, tag, null);
     } catch (IllegalArgumentException e) {
       return simple(NpmPath.Kind.UNKNOWN, raw);
     }
@@ -83,7 +88,7 @@ public final class NpmPathParser {
     String packagePart = packageSegments == 2 ? parts[0] + "/" + parts[1] : parts[0];
     NpmPackageId packageId;
     try {
-      packageId = NpmPackageId.parse(packagePart);
+      packageId = NpmPackageId.parseDecoded(packagePart);
     } catch (IllegalArgumentException e) {
       return simple(NpmPath.Kind.UNKNOWN, raw);
     }

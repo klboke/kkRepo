@@ -3,11 +3,13 @@ package com.github.klboke.kkrepo.server.migration;
 import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.core.http.UriPathDecoder;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.HuggingFaceRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
@@ -18,29 +20,28 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestReferenceRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerTagRecord;
-import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPath;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPathParser;
 import com.github.klboke.kkrepo.protocol.docker.DockerDigest;
 import com.github.klboke.kkrepo.protocol.docker.DockerManifestDescriptor;
 import com.github.klboke.kkrepo.protocol.docker.DockerManifestMetadata;
 import com.github.klboke.kkrepo.protocol.docker.DockerPathParser;
+import com.github.klboke.kkrepo.protocol.huggingface.HuggingFaceFileKind;
+import com.github.klboke.kkrepo.protocol.huggingface.HuggingFacePath;
+import com.github.klboke.kkrepo.protocol.huggingface.HuggingFacePathParser;
 import com.github.klboke.kkrepo.protocol.maven.MavenContentType;
 import com.github.klboke.kkrepo.protocol.maven.path.ChecksumPayload;
 import com.github.klboke.kkrepo.protocol.maven.path.HashType;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
-import com.github.klboke.kkrepo.protocol.huggingface.HuggingFaceFileKind;
-import com.github.klboke.kkrepo.protocol.huggingface.HuggingFacePath;
-import com.github.klboke.kkrepo.protocol.huggingface.HuggingFacePathParser;
+import com.github.klboke.kkrepo.server.alpine.AlpineRepositoryDataMigrationWriter;
+import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyRepositoryDataMigrationWriter;
+import com.github.klboke.kkrepo.server.apt.AptRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.blob.BlobTransactionCleanup;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
-import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyRepositoryDataMigrationWriter;
-import com.github.klboke.kkrepo.server.alpine.AlpineRepositoryDataMigrationWriter;
-import com.github.klboke.kkrepo.server.apt.AptRepositoryDataMigrationWriter;
-import com.github.klboke.kkrepo.server.conda.CondaRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.conan.ConanRepositoryDataMigrationWriter;
+import com.github.klboke.kkrepo.server.conda.CondaRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.docker.DockerManifestParser;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.pub.PubRepositoryDataMigrationWriter;
@@ -53,8 +54,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
-import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -67,8 +66,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
-import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Component;
 
 @Component
 class RepositoryDataMigrationWriter {
@@ -1328,7 +1327,7 @@ class RepositoryDataMigrationWriter {
     List<String> segments = new ArrayList<>();
     for (String segment : normalized.split("/")) {
       if (!segment.isBlank()) {
-        segments.add(URLDecoder.decode(segment, StandardCharsets.UTF_8));
+        segments.add(UriPathDecoder.decodeSegment(segment));
       }
     }
     return List.copyOf(segments);

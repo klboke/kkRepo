@@ -8,6 +8,14 @@ class CargoPathParserTest {
   private final CargoPathParser parser = new CargoPathParser();
 
   @Test
+  void rejectsEncodedSeparatorsAndMalformedVersionEncoding() {
+    for (String path : new String[] {"api%2fv1/crates/new", "crates/demo/1.0.0%/download",
+        "crates/demo/1.0.0%GG/download", "crates/demo/1.0.0%C3%28/download"}) {
+      assertEquals(CargoPath.Kind.UNKNOWN, new CargoPathParser().parse(path).kind());
+    }
+  }
+
+  @Test
   void buildsOfficialIndexTiers() {
     assertEquals("1/a", CargoIndexPath.forCrate("a"));
     assertEquals("2/ab", CargoIndexPath.forCrate("ab"));

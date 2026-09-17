@@ -9,6 +9,15 @@ class ComposerPathParserTest {
   private final ComposerPathParser parser = new ComposerPathParser();
 
   @Test
+  void rejectsMalformedEncodingAndEncodedSegmentBoundaries() {
+    for (String filename : new String[] {"bad%.zip", "bad%GG.zip", "bad%C3%28.zip",
+        "bad%2Fname.zip", "%2e%2e", "bad%00.zip"}) {
+      assertEquals(ComposerPath.Kind.UNKNOWN,
+          new ComposerPathParser().parse("company/example/1.0.0/" + filename).kind());
+    }
+  }
+
+  @Test
   void parsesComposerV2Routes() {
     assertEquals(ComposerPath.Kind.PACKAGES, parser.parse("packages.json").kind());
     ComposerPath stable = parser.parse("p2/company/example.json");

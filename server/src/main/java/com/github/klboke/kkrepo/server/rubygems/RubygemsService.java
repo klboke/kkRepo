@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.rubygems;
 
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.core.http.UriPathDecoder;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
@@ -256,7 +257,7 @@ public class RubygemsService {
   }
 
   private MavenResponse compactInfo(RepositoryRuntime runtime, String name, boolean headOnly) {
-    String decoded = decode(name);
+    String decoded = UriPathDecoder.decodeSegment(name);
     String path = infoPath(decoded);
     if (runtime.isHosted()) {
       Optional<MavenResponse> stored = storedGenerated(runtime, path, headOnly);
@@ -621,7 +622,7 @@ public class RubygemsService {
       int eq = pair.indexOf('=');
       String key = eq < 0 ? pair : pair.substring(0, eq);
       String value = eq < 0 ? "" : pair.substring(eq + 1);
-      result.put(decode(key), decode(value));
+      result.put(decodeFormValue(key), decodeFormValue(value));
     }
     return result;
   }
@@ -633,7 +634,7 @@ public class RubygemsService {
     if (raw == null || raw.isBlank()) return Set.of();
     Set<String> names = new LinkedHashSet<>();
     for (String name : raw.split(",")) {
-      String decoded = decode(name).trim();
+      String decoded = name.trim(); // query() already decoded this parameter once.
       if (!decoded.isBlank()) names.add(decoded);
     }
     return names;
@@ -1260,7 +1261,7 @@ public class RubygemsService {
     return "?" + pathQuery + "&" + baseQuerySuffix.substring(1);
   }
 
-  private static String decode(String value) {
+  private static String decodeFormValue(String value) {
     return URLDecoder.decode(value == null ? "" : value, StandardCharsets.UTF_8);
   }
 

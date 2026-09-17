@@ -6,21 +6,22 @@ import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.core.http.UriPathDecoder;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPath;
 import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
+import com.github.klboke.kkrepo.protocol.composer.ComposerPathParser;
 import com.github.klboke.kkrepo.protocol.conda.CondaPath;
 import com.github.klboke.kkrepo.protocol.conda.CondaPathParser;
-import com.github.klboke.kkrepo.protocol.composer.ComposerPathParser;
 import com.github.klboke.kkrepo.protocol.pub.PubPath;
 import com.github.klboke.kkrepo.protocol.pub.PubPathParser;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPath;
 import com.github.klboke.kkrepo.protocol.terraform.TerraformPathParser;
-import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.conan.ConanAuthService;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmTokenService;
 import com.github.klboke.kkrepo.server.pypi.PypiExceptions;
 import com.github.klboke.kkrepo.server.pypi.PypiRequestPath;
@@ -29,7 +30,6 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
-import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -117,7 +117,13 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       HttpServletRequest request,
       HttpServletResponse response,
       FilterChain filterChain) throws ServletException, IOException {
-    Optional<RepositoryRequest> securedRequest = resolve(request);
+    Optional<RepositoryRequest> securedRequest;
+    try {
+      securedRequest = resolve(request);
+    } catch (IllegalArgumentException e) {
+      response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid repository URI path");
+      return;
+    }
     if (securedRequest.isEmpty()) {
       filterChain.doFilter(request, response);
       return;
@@ -137,7 +143,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
         target = target.withPath(canonicalPath);
         request.setAttribute(NORMALIZED_REPOSITORY_PATH_ATTRIBUTE, canonicalPath);
       }
-    } catch (PypiExceptions.BadRequestException e) {
+    } catch (PypiExceptions.BadRequestException | IllegalArgumentException e) {
       response.sendError(HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
       return;
     }
@@ -245,6 +251,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   private static String canonicalRepositoryPath(RepositoryFormat format, String path) {
     return switch (format) {
       case PYPI -> PypiRequestPath.decode(path);
+      case GO -> UriPathDecoder.decodePath(path);
       case COMPOSER -> COMPOSER_PATH_PARSER.canonicalize(path);
       default -> null;
     };
@@ -659,7 +666,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   }
 
   private static String decode(String value) {
-    return URLDecoder.decode(value, StandardCharsets.UTF_8);
+    return UriPathDecoder.decodeSegment(value);
   }
 
   private record RepositoryRequest(

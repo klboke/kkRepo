@@ -84,6 +84,9 @@ class NpmTokenServiceTest {
     assertEquals(false, NpmTokenService.isWebLoginPath("-/v1/login/callback"));
     assertEquals(true, NpmTokenService.isTokenPath("-/v1/login"));
     assertEquals(true, NpmTokenService.isLogoutPath("-/user/token/NpmToken.generated-token"));
+    assertEquals(true, NpmTokenService.isLogoutPath("-/user/token/opaque%2Ftoken%2Bvalue"));
+    assertEquals(false, NpmTokenService.isLoginPath("-/user/org.couchdb.user%GGalice"));
+    assertEquals(false, NpmTokenService.isWebLoginPath("-/v1/%256cogin"));
   }
 
   private static ByteArrayInputStream body(String json) {

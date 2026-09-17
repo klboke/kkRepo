@@ -1,7 +1,6 @@
 package com.github.klboke.kkrepo.protocol.terraform;
 
-import java.net.URLDecoder;
-import java.nio.charset.StandardCharsets;
+import com.github.klboke.kkrepo.core.http.UriPathDecoder;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -204,9 +203,8 @@ public final class TerraformPathParser {
 
   private static String decodeOnce(String value) {
     try {
-      // URLDecoder implements form semantics, where a literal '+' means a space. This value is a
-      // path segment, so protect literal plus signs while still decoding percent-encoded bytes.
-      return URLDecoder.decode(value.replace("+", "%2B"), StandardCharsets.UTF_8);
+      // The optional URL credential is opaque and may contain a percent-encoded base64 slash.
+      return UriPathDecoder.decodeComponent(value);
     } catch (IllegalArgumentException e) {
       throw new IllegalArgumentException("Invalid Terraform URL token encoding", e);
     }

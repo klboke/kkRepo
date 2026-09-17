@@ -841,7 +841,8 @@ test_go() {
   need go
   need zip
   local dir="$WORK_DIR/go"
-  local module="kkrepo-client-e2e.local/module-$STAMP"
+  local module="kkrepo-client-e2e.local/Module-$STAMP"
+  local escaped_module="kkrepo-client-e2e.local/!module-$STAMP"
   local version="v1.0.0"
   local hosted_root="$dir/hosted/$module@$version"
   mkdir -p "$hosted_root"
@@ -876,9 +877,9 @@ EOF
     GOMODCACHE="$dir/private/gomodcache" \
     GOCACHE="$dir/private/gocache" \
     go mod download -json "$module@$version"
-  test -f "$dir/private/gomodcache/cache/download/$module/@v/$version.info"
-  test -f "$dir/private/gomodcache/cache/download/$module/@v/$version.mod"
-  test -f "$dir/private/gomodcache/cache/download/$module/@v/$version.zip"
+  test -f "$dir/private/gomodcache/cache/download/$escaped_module/@v/$version.info"
+  test -f "$dir/private/gomodcache/cache/download/$escaped_module/@v/$version.mod"
+  test -f "$dir/private/gomodcache/cache/download/$escaped_module/@v/$version.zip"
 
   mkdir -p "$dir/public"
   cat >"$dir/public/go.mod" <<'EOF'
@@ -900,6 +901,17 @@ EOF
   test -f "$dir/public/gomodcache/cache/download/rsc.io/quote/@v/v1.5.2.info"
   test -f "$dir/public/gomodcache/cache/download/rsc.io/quote/@v/v1.5.2.mod"
   test -f "$dir/public/gomodcache/cache/download/rsc.io/quote/@v/v1.5.2.zip"
+
+  # The Go client sends ! as %21 for uppercase module identities (issue #299).
+  for recipe in go-proxy go-group; do
+    run_logged "go-uppercase-$recipe" env \
+      GOPROXY="$KKREPO_URL/repository/$recipe/" GOSUMDB=off \
+      GOMODCACHE="$dir/uppercase-$recipe/gomodcache" GOCACHE="$dir/uppercase-$recipe/gocache" \
+      go mod download -json github.com/BurntSushi/toml@v1.4.0
+    for ext in info mod zip; do
+      test -f "$dir/uppercase-$recipe/gomodcache/cache/download/github.com/!burnt!sushi/toml/@v/v1.4.0.$ext"
+    done
+  done
 }
 
 test_helm() {

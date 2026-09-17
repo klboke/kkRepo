@@ -1,10 +1,6 @@
 package com.github.klboke.kkrepo.protocol.huggingface;
 
-import java.io.ByteArrayOutputStream;
-import java.nio.ByteBuffer;
-import java.nio.charset.CharacterCodingException;
-import java.nio.charset.CodingErrorAction;
-import java.nio.charset.StandardCharsets;
+import com.github.klboke.kkrepo.core.http.UriPathDecoder;
 import java.util.regex.Pattern;
 
 /** Strict one-pass parser for the Models routes used by huggingface_hub. */
@@ -126,29 +122,12 @@ public final class HuggingFacePathParser {
 
   private static String decodeSegment(String raw, boolean allowEncodedSlash) {
     if (raw == null || raw.isEmpty()) return null;
-    byte[] source = raw.getBytes(StandardCharsets.UTF_8);
-    ByteArrayOutputStream decoded = new ByteArrayOutputStream(source.length);
-    for (int index = 0; index < source.length; index++) {
-      int value = source[index] & 0xff;
-      if (value != '%') {
-        decoded.write(value);
-        continue;
-      }
-      if (index + 2 >= source.length) return null;
-      int high = Character.digit((char) source[++index], 16);
-      int low = Character.digit((char) source[++index], 16);
-      if (high < 0 || low < 0) return null;
-      int octet = (high << 4) | low;
-      if (octet == '%' || octet == '\\' || octet == 0 || octet < 0x20
-          || (octet == '/' && !allowEncodedSlash)) return null;
-      decoded.write(octet);
-    }
     try {
-      return StandardCharsets.UTF_8.newDecoder()
-          .onMalformedInput(CodingErrorAction.REPORT)
-          .onUnmappableCharacter(CodingErrorAction.REPORT)
-          .decode(ByteBuffer.wrap(decoded.toByteArray())).toString();
-    } catch (CharacterCodingException error) {
+      // A revision is an opaque value and may contain refs%2Fpr%2F3. File segments may not.
+      String decoded = allowEncodedSlash
+          ? UriPathDecoder.decodeComponent(raw) : UriPathDecoder.decodeSegment(raw);
+      return decoded.indexOf('%') >= 0 ? null : decoded;
+    } catch (IllegalArgumentException error) {
       return null;
     }
   }
