@@ -6732,7 +6732,11 @@ function bindFieldHelpTooltips() {
     trigger.addEventListener("focus", () => showFieldHelpPopover(trigger));
     trigger.addEventListener("blur", scheduleFieldHelpPopoverHide);
     trigger.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") hideFieldHelpPopover();
+      if (event.key === "Escape" && !popover.hidden) {
+        event.preventDefault();
+        event.stopPropagation();
+        hideFieldHelpPopover();
+      }
     });
   });
   popover.addEventListener("mouseenter", clearFieldHelpHideTimer);
