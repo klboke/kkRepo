@@ -22,6 +22,8 @@ class OssClientFactoryTest {
         "",
         Map.of(
             "engine", S3BlobStoreConfig.ENGINE_OSS_NATIVE,
+            "accessKey", "ak",
+            "secretKey", "sk",
             "maxConnections", 17,
             "connectionAcquisitionTimeoutMs", 2345));
 

@@ -84,6 +84,28 @@ import org.springframework.dao.DuplicateKeyException;
 /** Reusable black-box contract that every database backend must pass through the public API. */
 public abstract class PersistenceApiContract {
   @Test
+  void blobStoreCredentialsRoundTripFromStaticToEmptyAndNull() {
+    var dao = stores().blobStores();
+    long id = dao.insert(new BlobStoreRecord(null, "s3-credentials-contract", "s3",
+        "https://s3.us-east-1.amazonaws.com", "us-east-1", "bucket", "",
+        Map.of("engine", "aws-s3", "accessKey", "test-ak", "secretKey", "test-sk")));
+    assertEquals("test-sk", dao.findById(id).orElseThrow().attributes().get("secretKey"));
+    for (String empty : new String[] {"", null}) {
+      Map<String, Object> attributes = new java.util.LinkedHashMap<>();
+      attributes.put("engine", "aws-s3");
+      attributes.put("accessKey", empty);
+      attributes.put("secretKey", empty);
+      dao.updateById(new BlobStoreRecord(id, "s3-credentials-contract", "s3",
+          "https://s3.us-east-1.amazonaws.com", "us-east-1", "bucket", "", attributes));
+      BlobStoreRecord reread = dao.findByName("s3-credentials-contract").orElseThrow();
+      assertTrue(reread.attributes().containsKey("accessKey"));
+      assertTrue(reread.attributes().containsKey("secretKey"));
+      assertEquals(empty, reread.attributes().get("accessKey"));
+      assertEquals(empty, reread.attributes().get("secretKey"));
+    }
+  }
+
+  @Test
   void concurrentSelectorCreationNeverOverwritesTheWinningExpression() throws Exception {
     CyclicBarrier ready = new CyclicBarrier(2);
     List<Callable<String>> attempts = List.of("path =^ '/one/'", "path =^ '/two/'").stream()

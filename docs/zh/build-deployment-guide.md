@@ -384,6 +384,10 @@ RestartSec=10
 WantedBy=multi-user.target
 ```
 
+## S3 认证
+
+如需使用 EC2 实例角色、EKS Pod Identity 或 IRSA，而不配置静态密钥，请参阅 [S3 凭据与 IAM 角色](s3-credentials.md)。该指南包含 IAM 权限、信任策略、ServiceAccount 配置，以及将已有 Blob Store 切换到 AWS 默认凭据链的方法。
+
 ## 生产部署架构
 
 生产部署建议使用多副本 kkrepo 服务、独立 MySQL 或 PostgreSQL 和 OSS/S3 blob store：
