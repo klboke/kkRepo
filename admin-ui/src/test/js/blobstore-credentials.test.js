@@ -92,3 +92,62 @@ test('OSS Native forces static keys while file storage does not require S3 crede
   assert.equal(context.validateBlobStoreForm(), true);
   assert.equal(element('blobstore-secret-key').required, false);
 });
+
+test('Escape dismisses credential help before closing the form and preserves unsaved values', () => {
+  const { context, element } = form();
+  const listeners = new Map();
+  const trigger = element('blobstore-credential-help');
+  const popover = element('field-help-popover');
+  const modal = element('blobstore-form-modal');
+  trigger.dataset.tooltip = 'Default AWS credentials';
+  trigger.addEventListener = (type, listener) => listeners.set(type, listener);
+  trigger.removeAttribute = () => {};
+  trigger.getBoundingClientRect = () => ({ left: 100, top: 100, bottom: 118, width: 18 });
+  popover.hidden = true;
+  popover.style = {};
+  popover.addEventListener = () => {};
+  popover.getBoundingClientRect = () => ({ width: 200, height: 60 });
+  modal.hidden = false;
+  modal.dataset.formId = 'blobstore-form';
+  context.document.querySelectorAll = selector => selector === '.field-help' ? [trigger] : [];
+  context.document.addEventListener = () => {};
+  context.window = { innerWidth: 1200, innerHeight: 800, addEventListener() {} };
+  context.clearTimeout = clearTimeout;
+  context.activeFormModal = () => modal.hidden ? null : modal;
+  context.dismissFormModal = formId => {
+    assert.equal(formId, 'blobstore-form');
+    modal.hidden = true;
+    element('blobstore-name').value = '';
+  };
+  vm.runInContext(`let activeFieldHelpTrigger = null; let fieldHelpHideTimer = null;\n`
+    + source.slice(source.indexOf('function clearFieldHelpHideTimer()'), source.indexOf('function refreshCleanupScheduleFields()'))
+    + source.slice(source.indexOf('function handleFormModalKeydown(event)'), source.indexOf('const blobStoreS3RequiredFields')), context);
+  context.bindFieldHelpTooltips();
+
+  function press(key) {
+    const event = {
+      key, defaultPrevented: false, propagationStopped: false,
+      preventDefault() { this.defaultPrevented = true; },
+      stopPropagation() { this.propagationStopped = true; },
+    };
+    listeners.get('keydown')(event);
+    if (!event.propagationStopped) context.handleFormModalKeydown(event);
+    return event;
+  }
+
+  element('blobstore-name').value = 'unsaved-store';
+  listeners.get('focus')();
+  assert.equal(popover.hidden, false);
+  assert.equal(press('Enter').defaultPrevented, false);
+  assert.equal(popover.hidden, false);
+
+  const firstEscape = press('Escape');
+  assert.equal(popover.hidden, true);
+  assert.equal(modal.hidden, false, 'dismissing the tooltip must leave the form open');
+  assert.equal(element('blobstore-name').value, 'unsaved-store');
+  assert.equal(firstEscape.defaultPrevented, true);
+
+  const secondEscape = press('Escape');
+  assert.equal(secondEscape.propagationStopped, false);
+  assert.equal(modal.hidden, true, 'Escape must still close the form once the tooltip is hidden');
+});
