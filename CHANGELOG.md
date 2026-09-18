@@ -4,6 +4,36 @@ All notable public changes to kkrepo are documented in this file.
 
 This project follows a pragmatic release process. Stable releases call out migration impact, compatibility changes, operational notes, and any known behavior changes in their release section.
 
+## 1.0.2 - 2026-09-18
+
+### Added
+
+- AWS S3 blob stores can use the AWS SDK default credentials chain, including environment session credentials, EC2 instance profiles, EKS Pod Identity, and IRSA. Admin and API credential-source selection can explicitly clear saved static keys; credential refresh remains owned by each SDK client. OSS Native stores continue to require static credentials. (#302)
+- Scanner database updaters support a custom Grype database mirror URL and CA certificate, with Compose and Helm configuration for internal HTTPS mirrors while preserving serving-scanner egress isolation. (#277)
+
+### Fixed
+
+- UI redirects honor trusted forwarded headers and preserve the configured servlet context path, preventing HTTPS reverse-proxy deployments from redirecting users to the wrong origin. Untrusted forwarded origins remain ignored. (#291)
+- The npm web-login probe returns HTTP 405 so pnpm 11 can fall back to legacy token authentication; the exact probe is accessible before repository authentication, while the legacy endpoint still validates credentials. (#295)
+- Maven groups continue to later members when a proxy member rejects an outbound address or redirect. Direct proxy diagnostics and unrelated security failures retain their existing behavior. (#298)
+- Go hosted, proxy, and group requests decode percent-encoded uppercase module escapes before authorization. A shared URI path decoder preserves literal plus signs, validates UTF-8, rejects unsafe path segments, and removes repeated decoding across protocol handlers. (#300)
+
+### Changed
+
+- Quickstart defaults, Dockerfile packaging, deployment documentation, Helm application version, runtime checks, and the optional scanner profile now use `1.0.2`.
+- The AWS SDK and GraalVM Native Build Tools were refreshed; MinIO E2E fixtures now pull from Quay. (#292, #293, #294)
+
+### Compatibility And Validation
+
+- Regression coverage includes trusted-proxy redirects, real pnpm login, Nexus Maven group failure fallback, uppercase Go module downloads, and protocol-specific URI decoding. (#291, #295, #298, #300)
+- S3 credential tests cover environment, IMDSv2, container, and IRSA/STS fixtures, temporary credential refresh, static precedence, multi-replica catalog refresh, and MySQL/PostgreSQL persistence. Real EC2/EKS IAM and deployment configuration remain operator-specific. (#302)
+
+### Upgrade Notes
+
+- Existing `1.0.1` MySQL and PostgreSQL deployments can upgrade in place; no new Flyway migrations are introduced and the schema remains at V53. Back up the relational database and blob store together before upgrading.
+- Existing static S3 credentials remain in use until the credential source is explicitly changed. Default credentials require a working AWS SDK credential source on every application replica.
+- Custom scanner database mirrors are optional; existing deployments keep the default Grype database source when no mirror is configured.
+
 ## 1.0.1 - 2026-09-10
 
 ### Added
