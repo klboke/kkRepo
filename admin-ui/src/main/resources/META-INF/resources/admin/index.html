@@ -875,12 +875,15 @@
                 <input id="blobstore-path" name="path" type="text" autocomplete="off">
               </label>
               <label class="s3-only">
-                <span>Credentials</span>
-                <select id="blobstore-credential-source" name="credentialSource" aria-describedby="blobstore-credential-help">
+                <span class="field-label">Credentials
+                  <span id="blobstore-credential-help" class="field-help" tabindex="0" role="note" aria-label="Default credentials use EC2 instance profiles, EKS Pod Identity / IRSA, or other AWS credentials and clear saved keys. OSS Native requires static keys." data-tooltip="Default credentials use EC2 instance profiles, EKS Pod Identity / IRSA, or other AWS credentials and clear saved keys. OSS Native requires static keys.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <select id="blobstore-credential-source" name="credentialSource">
                   <option value="default">Default AWS credentials</option>
                   <option value="static">Static access key / secret key</option>
                 </select>
-                <small id="blobstore-credential-help">Default credentials use EC2 instance profiles, EKS Pod Identity / IRSA, or other AWS credentials and clear saved keys. OSS Native requires static keys.</small>
               </label>
               <label class="s3-only static-credentials">
                 <span>Access key <span class="required-mark">*</span></span>
