@@ -186,6 +186,8 @@ class OssNativeBlobStorageTest {
         "prefix",
         Map.of(
             "engine", S3BlobStoreConfig.ENGINE_OSS_NATIVE,
+            "accessKey", "ak",
+            "secretKey", "sk",
             "multipartThresholdBytes", multipartThreshold,
             "multipartPartSizeBytes", 5L * 1024 * 1024,
             "multipartConcurrency", 2));

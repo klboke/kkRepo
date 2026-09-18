@@ -875,12 +875,20 @@
                 <input id="blobstore-path" name="path" type="text" autocomplete="off">
               </label>
               <label class="s3-only">
-                <span>Access key <span class="required-mark">*</span></span>
-                <input id="blobstore-access-key" name="accessKey" type="text" autocomplete="off" required>
+                <span>Credentials</span>
+                <select id="blobstore-credential-source" name="credentialSource" aria-describedby="blobstore-credential-help">
+                  <option value="default">Default AWS credentials</option>
+                  <option value="static">Static access key / secret key</option>
+                </select>
+                <small id="blobstore-credential-help">Default credentials use EC2 instance profiles, EKS Pod Identity / IRSA, or other AWS credentials and clear saved keys. OSS Native requires static keys.</small>
               </label>
-              <label class="s3-only">
+              <label class="s3-only static-credentials">
+                <span>Access key <span class="required-mark">*</span></span>
+                <input id="blobstore-access-key" name="accessKey" type="text" autocomplete="off">
+              </label>
+              <label class="s3-only static-credentials">
                 <span>Secret key <span class="required-mark">*</span></span>
-                <input id="blobstore-secret-key" name="secretKey" type="password" autocomplete="new-password" required>
+                <input id="blobstore-secret-key" name="secretKey" type="password" autocomplete="new-password">
               </label>
               <label class="checkbox-field s3-only">
                 <input id="blobstore-path-style" name="pathStyleAccess" type="checkbox" checked>

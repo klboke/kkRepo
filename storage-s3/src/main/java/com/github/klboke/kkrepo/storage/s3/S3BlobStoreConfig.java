@@ -27,6 +27,9 @@ public record S3BlobStoreConfig(
 
   public S3BlobStoreConfig {
     engine = normalizeEngine(engine);
+    accessKey = normalizeCredential(accessKey);
+    secretKey = normalizeCredential(secretKey);
+    validateCredentials(engine, accessKey, secretKey);
     prefix = prefix == null ? "" : prefix;
     maxConnections = Math.max(1, maxConnections);
     connectionTimeoutMs = Math.max(1, connectionTimeoutMs);
@@ -69,6 +72,31 @@ public record S3BlobStoreConfig(
 
   private static String stringAttr(Map<String, Object> attrs, String key) {
     return stringAttr(attrs, key, "");
+  }
+
+  /** Explicit empty credentials select the SDK chain; only absent legacy attributes inherit defaults. */
+  public static String credentialAttribute(Map<String, Object> attrs, String key, String fallback) {
+    Object value = attrs != null && attrs.containsKey(key) ? attrs.get(key) : fallback;
+    return normalizeCredential(value == null ? null : value.toString());
+  }
+
+  private static String normalizeCredential(String value) {
+    return value == null || value.isBlank() ? "" : value;
+  }
+
+  public static void validateCredentials(String engine, String accessKey, String secretKey) {
+    boolean accessMissing = accessKey == null || accessKey.isBlank();
+    boolean secretMissing = secretKey == null || secretKey.isBlank();
+    if (accessMissing != secretMissing) {
+      throw new IllegalArgumentException("accessKey and secretKey must both be provided or both be empty");
+    }
+    if (Engine.fromValue(engine) == Engine.OSS_NATIVE && accessMissing) {
+      throw new IllegalArgumentException("accessKey and secretKey are required for oss-native");
+    }
+  }
+
+  public boolean usesDefaultCredentials() {
+    return accessKey.isEmpty() && secretKey.isEmpty();
   }
 
   private static String stringAttr(Map<String, Object> attrs, String key, String fallback) {

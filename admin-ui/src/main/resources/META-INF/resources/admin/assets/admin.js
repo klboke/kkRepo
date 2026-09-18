@@ -1599,10 +1599,16 @@ function blobStoreFormPayload() {
     bucket: document.getElementById("blobstore-bucket").value.trim(),
     prefix: document.getElementById("blobstore-prefix").value.trim(),
     path: document.getElementById("blobstore-path").value.trim(),
-    accessKey: document.getElementById("blobstore-access-key").value.trim(),
-    secretKey: document.getElementById("blobstore-secret-key").value,
+    credentialSource: blobStoreCredentialSource(),
+    accessKey: blobStoreCredentialSource() === "default" ? "" : document.getElementById("blobstore-access-key").value.trim(),
+    secretKey: blobStoreCredentialSource() === "default" ? "" : document.getElementById("blobstore-secret-key").value,
     pathStyleAccess: document.getElementById("blobstore-path-style").checked
   };
+}
+
+function blobStoreCredentialSource() {
+  return document.getElementById("blobstore-engine").value === "aws-s3"
+    ? document.getElementById("blobstore-credential-source").value : "static";
 }
 
 function activeBlobStoreRequiredFields() {
@@ -1610,7 +1616,8 @@ function activeBlobStoreRequiredFields() {
   return (fileMode ? blobStoreFileRequiredFields : blobStoreS3RequiredFields)
     .filter((field) => !(
       (field.id === "blobstore-access-key" || field.id === "blobstore-secret-key")
-      && blobStoreFormMode === "edit"
+      && (blobStoreCredentialSource() === "default"
+        || (blobStoreFormMode === "edit" && document.getElementById(field.id).dataset.configured === "true"))
     ));
 }
 
@@ -1693,6 +1700,10 @@ function setAccessFieldMode(required, placeholder = "") {
 function refreshBlobStoreEngineControls() {
   const engine = document.getElementById("blobstore-engine").value;
   const fileMode = engine === "file";
+  const source = document.getElementById("blobstore-credential-source");
+  source.disabled = engine !== "aws-s3";
+  if (engine === "oss-native") source.value = "static";
+  const defaultCredentials = blobStoreCredentialSource() === "default";
   const pathStyle = document.getElementById("blobstore-path-style");
   const pathInput = document.getElementById("blobstore-path");
   document.querySelectorAll(".s3-only").forEach((element) => {
@@ -1711,6 +1722,19 @@ function refreshBlobStoreEngineControls() {
     "blobstore-path-style"
   ].forEach((id) => {
     document.getElementById(id).disabled = fileMode;
+  });
+  document.querySelectorAll(".static-credentials").forEach((element) => {
+    element.hidden = fileMode || defaultCredentials;
+  });
+  ["blobstore-access-key", "blobstore-secret-key"].forEach((id) => {
+    const input = document.getElementById(id);
+    input.disabled = fileMode || defaultCredentials;
+    input.classList.remove("is-invalid");
+    input.setAttribute("aria-invalid", "false");
+  });
+  const requiredFields = new Set(activeBlobStoreRequiredFields().map((field) => field.id));
+  blobStoreFormFields.forEach((field) => {
+    setFieldRequired(document.getElementById(field.id), requiredFields.has(field.id));
   });
   pathInput.disabled = !fileMode;
   pathInput.required = fileMode;
@@ -1733,6 +1757,9 @@ function showCreateBlobStoreForm() {
   document.getElementById("blobstore-name").disabled = false;
   document.getElementById("blobstore-name").value = "";
   document.getElementById("blobstore-engine").value = "aws-s3";
+  document.getElementById("blobstore-credential-source").value = "default";
+  document.getElementById("blobstore-access-key").dataset.configured = "false";
+  document.getElementById("blobstore-secret-key").dataset.configured = "false";
   document.getElementById("blobstore-endpoint").value = "http://127.0.0.1:9000";
   document.getElementById("blobstore-region").value = "cn-hangzhou";
   document.getElementById("blobstore-bucket").value = "";
@@ -1760,6 +1787,9 @@ function showEditBlobStoreForm(id) {
   document.getElementById("blobstore-name").disabled = true;
   document.getElementById("blobstore-name").value = store.name || "";
   document.getElementById("blobstore-engine").value = normalizeBlobStoreEngine(store.engine);
+  document.getElementById("blobstore-credential-source").value = store.credentialSource || "static";
+  document.getElementById("blobstore-access-key").dataset.configured = String(!!store.accessKeyConfigured);
+  document.getElementById("blobstore-secret-key").dataset.configured = String(!!store.secretConfigured);
   document.getElementById("blobstore-endpoint").value = store.endpoint || "";
   document.getElementById("blobstore-region").value = store.region || "cn-hangzhou";
   document.getElementById("blobstore-bucket").value = store.bucket || "";
@@ -7511,6 +7541,7 @@ document.getElementById("cancel-blobstore-button").addEventListener("click", hid
 document.getElementById("blobstore-form").addEventListener("submit", saveBlobStore);
 document.getElementById("save-blobstore-button").addEventListener("click", saveBlobStore);
 document.getElementById("blobstore-engine").addEventListener("change", refreshBlobStoreEngineControls);
+document.getElementById("blobstore-credential-source").addEventListener("change", refreshBlobStoreEngineControls);
 blobStoreFormFields.forEach((field) => {
   document.getElementById(field.id).addEventListener("input", clearBlobStoreFieldError);
 });

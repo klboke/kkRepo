@@ -50,11 +50,9 @@ public class S3ClientFactory {
   }
 
   private static S3Client build(S3BlobStoreConfig config) {
-    return S3Client.builder()
+    var builder = S3Client.builder()
         .endpointOverride(URI.create(config.endpoint()))
         .region(Region.of(config.region()))
-        .credentialsProvider(StaticCredentialsProvider.create(
-            AwsBasicCredentials.create(config.accessKey(), config.secretKey())))
         .httpClientBuilder(ApacheHttpClient.builder()
             .maxConnections(config.maxConnections())
             .connectionTimeout(Duration.ofMillis(config.connectionTimeoutMs()))
@@ -68,8 +66,15 @@ public class S3ClientFactory {
             // precomputed content length, which AWS S3, MinIO, OSS, COS, OBS all accept.
             .chunkedEncodingEnabled(false)
             .pathStyleAccessEnabled(config.pathStyleAccess())
-            .build())
-        .build();
+            .build());
+    if (!config.usesDefaultCredentials()) {
+      builder.credentialsProvider(StaticCredentialsProvider.create(
+          AwsBasicCredentials.create(config.accessKey(), config.secretKey())));
+    }
+    // With no explicit provider, the SDK owns an independent default credentials chain per client.
+    // It refreshes temporary credentials locally on each replica; neither resolved credentials nor
+    // tokens are persisted. Closing/replacing one store's client cannot close another store's chain.
+    return builder.build();
   }
 
   private static void closeQuietly(S3Client client) {

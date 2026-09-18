@@ -61,7 +61,7 @@ public class S3BlobStoreAdmin {
           0,
           0,
           "S3 API reachable");
-    } catch (S3Exception e) {
+    } catch (RuntimeException e) {
       return new S3BucketSummary(
           config.name(),
           config.endpoint(),
@@ -71,14 +71,15 @@ public class S3BlobStoreAdmin {
           false,
           0,
           0,
-          e.awsErrorDetails() == null ? e.getMessage() : e.awsErrorDetails().errorMessage());
+          e instanceof S3Exception s3 && s3.awsErrorDetails() != null
+              ? s3.awsErrorDetails().errorMessage() : e.getMessage());
     }
   }
 
   public S3ProbeResult probeReadWrite(S3BlobStoreConfig config) {
     S3BucketSummary current = summary(config);
     if (!current.bucketExists()) {
-      return new S3ProbeResult(false, "", "Bucket does not exist", current);
+      return new S3ProbeResult(false, "", current.message(), current);
     }
     BlobStorage blobStorage = storageFactory.forStore(config);
     String payload = "kkrepo-rustfs-probe " + Instant.now();

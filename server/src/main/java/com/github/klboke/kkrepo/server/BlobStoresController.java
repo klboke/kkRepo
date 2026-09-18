@@ -148,6 +148,8 @@ public class BlobStoresController {
           "",
           fileAttributes(required(request.path(), "path")));
     }
+    String engine = normalizeS3Engine(valueOrDefault(request.engine(), s3Properties.getEngine()));
+    String source = credentialSource(request.credentialSource(), engine);
     return new BlobStoreRecord(
         null,
         name,
@@ -157,9 +159,9 @@ public class BlobStoresController {
         required(request.bucket(), "bucket"),
         valueOrDefault(request.prefix(), ""),
         s3Attributes(
-            valueOrDefault(request.engine(), s3Properties.getEngine()),
-            required(request.accessKey(), "accessKey"),
-            required(request.secretKey(), "secretKey"),
+            engine,
+            createCredential(request.accessKey(), "accessKey", source),
+            createCredential(request.secretKey(), "secretKey", source),
             request.pathStyleAccess() == null ? s3Properties.isPathStyleAccess() : request.pathStyleAccess(),
             request.multipartThresholdBytes() == null
                 ? s3Properties.getMultipartThresholdBytes()
@@ -186,6 +188,9 @@ public class BlobStoresController {
               request.path(),
               stringAttr(existing.attributes(), FileBlobStoreConfig.ATTR_PATH, ""))));
     }
+    String engine = normalizeS3Engine(valueOrDefault(
+        request.engine(), stringAttr(existing.attributes(), "engine", s3Properties.getEngine())));
+    String source = credentialSource(request.credentialSource(), engine);
     return new BlobStoreRecord(
         existing.id(),
         existing.name(),
@@ -195,15 +200,9 @@ public class BlobStoresController {
         required(request.bucket(), "bucket"),
         valueOrDefault(request.prefix(), ""),
         s3Attributes(
-            valueOrDefault(
-                request.engine(),
-                stringAttr(existing.attributes(), "engine", s3Properties.getEngine())),
-            valueOrDefault(
-                request.accessKey(),
-                stringAttr(existing.attributes(), "accessKey", s3Properties.getAccessKey())),
-            valueOrDefault(
-                request.secretKey(),
-                stringAttr(existing.attributes(), "secretKey", s3Properties.getSecretKey())),
+            engine,
+            updateCredential(request.accessKey(), "accessKey", source, existing, s3Properties.getAccessKey()),
+            updateCredential(request.secretKey(), "secretKey", source, existing, s3Properties.getSecretKey()),
             request.pathStyleAccess() == null
                 ? boolAttr(existing.attributes(), "pathStyleAccess", s3Properties.isPathStyleAccess())
                 : request.pathStyleAccess(),
@@ -294,8 +293,8 @@ public class BlobStoresController {
         valueOrDefault(record.region(), s3Properties.getRegion()),
         valueOrDefault(record.bucket(), s3Properties.getBucket()),
         valueOrDefault(record.prefix(), ""),
-        stringAttr(record.attributes(), "accessKey", s3Properties.getAccessKey()),
-        stringAttr(record.attributes(), "secretKey", s3Properties.getSecretKey()),
+        S3BlobStoreConfig.credentialAttribute(record.attributes(), "accessKey", s3Properties.getAccessKey()),
+        S3BlobStoreConfig.credentialAttribute(record.attributes(), "secretKey", s3Properties.getSecretKey()),
         boolAttr(record.attributes(), "pathStyleAccess", s3Properties.isPathStyleAccess()),
         intAttr(record.attributes(), "maxConnections", s3Properties.getMaxConnections()),
         intAttr(record.attributes(), "connectionTimeoutMs", s3Properties.getConnectionTimeoutMs()),
@@ -326,6 +325,11 @@ public class BlobStoresController {
       long multipartThresholdBytes,
       long multipartPartSizeBytes,
       int multipartConcurrency) {
+    try {
+      S3BlobStoreConfig.validateCredentials(engine, accessKey, secretKey);
+    } catch (IllegalArgumentException e) {
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage(), e);
+    }
     Map<String, Object> attributes = new LinkedHashMap<>();
     attributes.put("engine", normalizeS3Engine(engine));
     attributes.put("accessKey", accessKey);
@@ -335,6 +339,32 @@ public class BlobStoresController {
     attributes.put("multipartPartSizeBytes", Math.max(5L * 1024 * 1024, multipartPartSizeBytes));
     attributes.put("multipartConcurrency", Math.max(1, multipartConcurrency));
     return attributes;
+  }
+
+  private static String credentialSource(String value, String engine) {
+    String source = normalize(value);
+    if (!source.isEmpty() && !source.equals("static") && !source.equals("default")) {
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "credentialSource must be static or default");
+    }
+    if (source.equals("default") && Engine.fromValue(engine) == Engine.OSS_NATIVE) {
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "oss-native requires static credentials");
+    }
+    return source;
+  }
+
+  private static String createCredential(String value, String field, String source) {
+    if (source.equals("default")) return "";
+    return source.equals("static") ? required(value, field) : valueOrDefault(value, "");
+  }
+
+  private static String updateCredential(
+      String value, String field, String source, BlobStoreRecord existing, String fallback) {
+    if (source.equals("default")) return "";
+    // Preserve the existing edit contract: blank input keeps the saved secret. An explicit
+    // credentialSource=default clears both attributes, including any legacy global fallback.
+    String resolved = valueOrDefault(value,
+        S3BlobStoreConfig.credentialAttribute(existing.attributes(), field, fallback));
+    return source.equals("static") ? required(resolved, field) : resolved;
   }
 
   private static Map<String, Object> fileAttributes(String path) {
@@ -402,6 +432,10 @@ public class BlobStoresController {
     String engine = fileStore
         ? FileBlobStoreConfig.ENGINE
         : normalizeS3Engine(stringAttr(record.attributes(), "engine", s3Properties.getEngine()));
+    boolean accessConfigured = !fileStore && !S3BlobStoreConfig.credentialAttribute(
+        record.attributes(), "accessKey", s3Properties.getAccessKey()).isBlank();
+    boolean secretConfigured = !fileStore && !S3BlobStoreConfig.credentialAttribute(
+        record.attributes(), "secretKey", s3Properties.getSecretKey()).isBlank();
     return new BlobStoreView(
         record.id(),
         record.name(),
@@ -424,9 +458,10 @@ public class BlobStoresController {
         summary == null ? 0 : summary.objectCount(),
         summary == null ? 0 : summary.totalSize(),
         "",
-        !fileStore && !stringAttr(record.attributes(), "accessKey", "").isBlank(),
-        !fileStore && !stringAttr(record.attributes(), "secretKey", "").isBlank(),
-        summary == null ? "" : summary.message());
+        accessConfigured,
+        secretConfigured,
+        summary == null ? "" : summary.message(),
+        fileStore ? "" : (accessConfigured || secretConfigured ? "static" : "default"));
   }
 
   private static String lifecycleState(BlobStoreRecord record, boolean configured, BlobStoreSummary summary) {
@@ -539,7 +574,8 @@ public class BlobStoresController {
       String accessKey,
       boolean accessKeyConfigured,
       boolean secretConfigured,
-      String message) {
+      String message,
+      String credentialSource) {
   }
 
   public record BlobStoreRequest(
@@ -556,7 +592,16 @@ public class BlobStoresController {
       Boolean pathStyleAccess,
       Long multipartThresholdBytes,
       Long multipartPartSizeBytes,
-      Integer multipartConcurrency) {
+      Integer multipartConcurrency,
+      String credentialSource) {
+    public BlobStoreRequest(
+        String name, String type, String engine, String endpoint, String region, String bucket,
+        String prefix, String path, String accessKey, String secretKey, Boolean pathStyleAccess,
+        Long multipartThresholdBytes, Long multipartPartSizeBytes, Integer multipartConcurrency) {
+      this(name, type, engine, endpoint, region, bucket, prefix, path, accessKey, secretKey, pathStyleAccess,
+          multipartThresholdBytes, multipartPartSizeBytes, multipartConcurrency, null);
+    }
+
     public BlobStoreRequest(
         String name,
         String type,
@@ -570,7 +615,7 @@ public class BlobStoresController {
         String secretKey,
         Boolean pathStyleAccess) {
       this(name, type, engine, endpoint, region, bucket, prefix, path, accessKey, secretKey, pathStyleAccess,
-          null, null, null);
+          null, null, null, null);
     }
   }
 

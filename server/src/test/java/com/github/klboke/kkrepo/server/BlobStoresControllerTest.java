@@ -4,6 +4,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.argThat;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
@@ -14,6 +19,8 @@ import com.github.klboke.kkrepo.storage.file.FileBlobStorePathValidator;
 import com.github.klboke.kkrepo.storage.file.admin.FileBlobStoreAdmin;
 import com.github.klboke.kkrepo.storage.file.config.FileStorageProperties;
 import com.github.klboke.kkrepo.storage.s3.config.S3StorageProperties;
+import com.github.klboke.kkrepo.storage.s3.admin.S3BlobStoreAdmin;
+import org.springframework.test.web.servlet.ResultMatcher;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
@@ -156,6 +163,87 @@ class BlobStoresControllerTest {
     assertEquals(8L * 1024 * 1024, stored.attributes().get("multipartPartSizeBytes"));
     assertEquals(6, stored.attributes().get("multipartConcurrency"));
     assertEquals(6, created.multipartConcurrency());
+  }
+
+  @Test
+  void awsCreateAcceptsAbsentEmptyAndBlankCredentialsAndRejectsPartialPairs() throws Exception {
+    InMemoryBlobStoreDao dao = new InMemoryBlobStoreDao();
+    var mvc = MockMvcBuilders.standaloneSetup(s3Controller(dao, new S3StorageProperties(), null)).build();
+    for (String keys : List.of("", ", \"accessKey\":\"\", \"secretKey\":\" \"")) {
+      String name = "aws-" + dao.list().size();
+      mvc.perform(post("/internal/blob-stores").contentType(MediaType.APPLICATION_JSON)
+          .content(s3Request(name, "aws-s3", keys)))
+          .andExpect(status().isOk()).andExpect(jsonField("credentialSource", "default"));
+      BlobStoreRecord saved = dao.findByName(name).orElseThrow();
+      assertEquals("", saved.attributes().get("accessKey"));
+      assertEquals("", saved.attributes().get("secretKey"));
+    }
+    for (String keys : List.of(
+        ", \"accessKey\":\"ak\"", ", \"secretKey\":\"sk\"",
+        ", \"credentialSource\":\"static\"", ", \"credentialSource\":\"unknown\"")) {
+      mvc.perform(post("/internal/blob-stores").contentType(MediaType.APPLICATION_JSON)
+          .content(s3Request("invalid", "aws-s3", keys))).andExpect(status().isBadRequest());
+    }
+    mvc.perform(post("/internal/blob-stores").contentType(MediaType.APPLICATION_JSON)
+        .content(s3Request("oss", "oss-native", ""))).andExpect(status().isBadRequest());
+    mvc.perform(post("/internal/blob-stores").contentType(MediaType.APPLICATION_JSON)
+        .content(s3Request("oss", "oss-native", ", \"credentialSource\":\"default\"")))
+        .andExpect(status().isBadRequest());
+    assertEquals(2, dao.list().size());
+  }
+
+  @Test
+  void updateKeepsStaticSecretsUnlessDefaultChainIsExplicitlySelected() throws Exception {
+    InMemoryBlobStoreDao dao = new InMemoryBlobStoreDao();
+    S3StorageProperties defaults = new S3StorageProperties();
+    defaults.setAccessKey("global-ak");
+    defaults.setSecretKey("global-sk");
+    var admin = mock(S3BlobStoreAdmin.class);
+    var controller = s3Controller(dao, defaults, admin);
+    var mvc = MockMvcBuilders.standaloneSetup(controller).build();
+    mvc.perform(post("/internal/blob-stores").contentType(MediaType.APPLICATION_JSON)
+        .content(s3Request("aws", "aws-s3", ", \"accessKey\":\"ak\", \"secretKey\":\"sk\"")))
+        .andExpect(status().isOk()).andExpect(jsonField("credentialSource", "static"));
+    long id = dao.findByName("aws").orElseThrow().id();
+    mvc.perform(put("/internal/blob-stores/" + id).contentType(MediaType.APPLICATION_JSON)
+        .content(s3Request("aws", "aws-s3", ", \"accessKey\":\"\", \"secretKey\":\"\"")))
+        .andExpect(status().isOk()).andExpect(jsonField("secretConfigured", true));
+    assertEquals("sk", dao.findById(id).orElseThrow().attributes().get("secretKey"));
+    mvc.perform(put("/internal/blob-stores/" + id).contentType(MediaType.APPLICATION_JSON)
+        .content(s3Request("aws", "aws-s3", ", \"credentialSource\":\"default\"")))
+        .andExpect(status().isOk()).andExpect(jsonField("credentialSource", "default"))
+        .andExpect(jsonField("accessKeyConfigured", false))
+        .andExpect(jsonField("secretConfigured", false));
+    assertEquals("", dao.findById(id).orElseThrow().attributes().get("accessKey"));
+    assertEquals("", dao.findById(id).orElseThrow().attributes().get("secretKey"));
+    // Both management summaries and subsequent edits must retain the empty state despite globals.
+    mvc.perform(put("/internal/blob-stores/" + id).contentType(MediaType.APPLICATION_JSON)
+        .content(s3Request("aws", "aws-s3", ""))).andExpect(status().isOk());
+    verify(admin, atLeastOnce()).summary(argThat(config -> config.usesDefaultCredentials()));
+    assertEquals("", dao.findById(id).orElseThrow().attributes().get("secretKey"));
+    mvc.perform(put("/internal/blob-stores/" + id).contentType(MediaType.APPLICATION_JSON)
+        .content(s3Request("aws", "aws-s3", ", \"credentialSource\":\"static\"")))
+        .andExpect(status().isBadRequest());
+    mvc.perform(put("/internal/blob-stores/" + id).contentType(MediaType.APPLICATION_JSON)
+        .content(s3Request("aws", "aws-s3", ", \"credentialSource\":\"static\", \"accessKey\":\"new-ak\", \"secretKey\":\"new-sk\"")))
+        .andExpect(status().isOk()).andExpect(jsonField("credentialSource", "static"));
+    assertEquals("new-sk", dao.findById(id).orElseThrow().attributes().get("secretKey"));
+  }
+
+  private static BlobStoresController s3Controller(InMemoryBlobStoreDao dao, S3StorageProperties defaults,
+      S3BlobStoreAdmin admin) {
+    return new BlobStoresController(dao, admin, null, null, null, defaults, null, new MockEnvironment());
+  }
+
+  private static ResultMatcher jsonField(String key, Object value) {
+    String expected = "\"" + key + "\":" + (value instanceof String ? "\"" + value + "\"" : value);
+    return result -> assertTrue(result.getResponse().getContentAsString().contains(expected),
+        result.getResponse().getContentAsString());
+  }
+
+  private static String s3Request(String name, String engine, String keys) {
+    return "{\"name\":\"" + name + "\",\"type\":\"s3\",\"engine\":\"" + engine
+        + "\",\"endpoint\":\"http://localhost:9000\",\"region\":\"us-east-1\",\"bucket\":\"bucket\"" + keys + "}";
   }
 
   @Test

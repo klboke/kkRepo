@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.maven;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
@@ -86,6 +87,26 @@ class BlobStorageRegistryTest {
     assertEquals("new-bucket", siblingNode.configFor(1).bucket());
     assertEquals(1, broadcaster.publishCalls);
     assertEquals(0, dao.findByIdCalls);
+  }
+
+  @Test
+  void defaultCredentialSelectionPropagatesAcrossReplicasWithoutGlobalKeyFallback() {
+    InMemoryBlobStoreDao dao = new InMemoryBlobStoreDao();
+    dao.put(s3Store(1, "default", "bucket"));
+    S3StorageProperties defaults = new S3StorageProperties();
+    defaults.setAccessKey("global-ak");
+    defaults.setSecretKey("global-sk");
+    InMemoryBroadcaster broadcaster = new InMemoryBroadcaster();
+    BlobStorageRegistry first = new BlobStorageRegistry(dao, null, null, defaults, true, broadcaster);
+    BlobStorageRegistry second = new BlobStorageRegistry(dao, null, null, defaults, true, broadcaster);
+    first.warmUpBlobStoreCatalog();
+    second.warmUpBlobStoreCatalog();
+    assertEquals("ak", second.configFor(1).accessKey());
+    dao.put(new BlobStoreRecord(1L, "default", "s3", "https://s3.us-east-1.amazonaws.com",
+        "us-east-1", "bucket", "", Map.of("engine", "aws-s3", "accessKey", "", "secretKey", "")));
+    first.refreshAllAndBroadcast();
+    assertTrue(first.configFor(1).usesDefaultCredentials());
+    assertTrue(second.configFor(1).usesDefaultCredentials());
   }
 
   private static BlobStorageRegistry registry(InMemoryBlobStoreDao dao) {
