@@ -1,6 +1,6 @@
 -- Same skewed inventory as the MySQL fixture, with the complete migrated schema.
 INSERT INTO blob_store (id,name,type,attributes_json)
-SELECT n,'usage-store-'||n,'FILE',jsonb_build_object('path','/tmp/usage-store-'||n) FROM generate_series(1,10) n;
+SELECT n,'usage-store-'||n,'FILE',jsonb_build_object('path','/tmp/kkrepo-usage-postgresql/store-'||n) FROM generate_series(1,10) n;
 INSERT INTO repository (id,name,format,type,recipe_name,blob_store_id,attributes_json)
 SELECT n,'usage-repo-'||n,'raw','hosted','raw-hosted',1+(n-1)/10,'{}'::jsonb FROM generate_series(1,100) n;
 INSERT INTO asset_blob (id,blob_store_id,blob_ref,blob_ref_hash,object_key,object_key_hash,size,deleted_at,attributes_json)
@@ -16,6 +16,11 @@ FROM generate_series(1,1000000) n;
 INSERT INTO blob_reference (owner_type,owner_id,blob_id,created_at)
 SELECT 'usage-report',n,n,CURRENT_TIMESTAMP FROM generate_series(800001,900000) n;
 UPDATE asset_blob SET external_reference_count=1 WHERE id>800000 AND id<=900000;
+-- Explicit fixture IDs do not advance PostgreSQL sequences. Keep later UI writes usable.
+SELECT setval(pg_get_serial_sequence('blob_store','id'), (SELECT MAX(id) FROM blob_store));
+SELECT setval(pg_get_serial_sequence('repository','id'), (SELECT MAX(id) FROM repository));
+SELECT setval(pg_get_serial_sequence('asset_blob','id'), (SELECT MAX(id) FROM asset_blob));
+SELECT setval(pg_get_serial_sequence('asset','id'), (SELECT MAX(id) FROM asset));
 VACUUM (ANALYZE) asset;
 VACUUM (ANALYZE) asset_blob;
 SELECT 'dataset',(SELECT COUNT(*) FROM asset),(SELECT COUNT(*) FROM asset_blob);

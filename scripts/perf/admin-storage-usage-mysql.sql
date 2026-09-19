@@ -10,7 +10,7 @@ CROSS JOIN (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 
 CROSS JOIN (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) e
 CROSS JOIN (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) f;
 INSERT INTO blob_store (id, name, type, attributes_json)
-SELECT n, CONCAT('usage-store-',n), 'FILE', JSON_OBJECT('path',CONCAT('/tmp/usage-store-',n)) FROM usage_perf_n WHERE n<=10;
+SELECT n, CONCAT('usage-store-',n), 'FILE', JSON_OBJECT('path',CONCAT('/tmp/kkrepo-usage-mysql/store-',n)) FROM usage_perf_n WHERE n<=10;
 INSERT INTO repository (id,name,format,type,recipe_name,blob_store_id,attributes_json)
 SELECT n,CONCAT('usage-repo-',n),'raw','hosted','raw-hosted',1+FLOOR((n-1)/10),JSON_OBJECT() FROM usage_perf_n WHERE n<=100;
 INSERT INTO asset_blob (id,blob_store_id,blob_ref,blob_ref_hash,object_key,object_key_hash,size,deleted_at,attributes_json)
