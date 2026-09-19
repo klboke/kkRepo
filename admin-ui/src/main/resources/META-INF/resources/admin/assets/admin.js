@@ -5,8 +5,13 @@ if (window.location.hash === "#browse" || window.location.hash.startsWith("#brow
 installCsrfFetch();
 
 let repositories = [];
+let repositoryUsage;
+let repositoryLoadVersion = 0;
 let repositoryRecipes = [];
 let blobStores = [];
+let blobStoreUsage;
+let blobStoreLoadVersion = 0;
+let blobStoreUsageSort = "name";
 let cleanupPolicies = [];
 let cleanupCapabilities = [];
 let cleanupRuns = [];
@@ -1292,13 +1297,16 @@ function setCheckboxValue(id, value, fallback = false) {
 
 function filteredRepositories() {
   const filter = document.getElementById("repository-filter").value.trim().toLowerCase();
+  const store = document.getElementById("repository-store-filter").value;
   return repositories.filter((repo) => {
+    if (store && repo.blobStoreName !== store) return false;
     if (!filter) return true;
     return `${repo.name} ${lowerOrEmpty(repo.type)} ${lowerOrEmpty(repo.format)} ${lowerOrEmpty(repo.recipe)} ${lowerOrEmpty(repo.blobStoreName)} ${lowerOrEmpty(repositoryDisplayUrl(repo))}`.includes(filter);
   });
 }
 
 function repositorySortValue(repo, key) {
+  if (["assetCount", "totalBytes"].includes(key)) return repositoryUsage?.usage?.[repo.id]?.[key] ?? null;
   if (key === "recipe") return repo.recipe || "";
   if (key === "type") return lowerOrEmpty(repo.type);
   if (key === "format") return lowerOrEmpty(repo.format);
@@ -1309,7 +1317,8 @@ function sortRepositories(rows) {
   return [...rows].sort((a, b) => {
     const left = repositorySortValue(a, repositorySort.key);
     const right = repositorySortValue(b, repositorySort.key);
-    const primary = left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" });
+    if (left == null || right == null) return left == null ? (right == null ? 0 : 1) : -1;
+    const primary = typeof left === "number" ? left - right : left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" });
     const fallback = (a.name || "").localeCompare(b.name || "", undefined, { numeric: true, sensitivity: "base" });
     const result = primary || fallback;
     return repositorySort.direction === "asc" ? result : -result;
@@ -1323,7 +1332,7 @@ function toggleRepositorySort(key) {
       direction: repositorySort.direction === "asc" ? "desc" : "asc",
     };
   } else {
-    repositorySort = { key, direction: "asc" };
+    repositorySort = { key, direction: ["assetCount", "totalBytes"].includes(key) ? "desc" : "asc" };
   }
   renderRepositories();
 }
@@ -1334,7 +1343,8 @@ function updateRepositorySortHeaders() {
     const direction = active ? repositorySort.direction : null;
     const indicator = button.querySelector(".repo-sort-indicator");
     button.classList.toggle("is-active", active);
-    button.setAttribute("aria-label", `${button.dataset.repositorySort} sort ${direction || "none"}`);
+    const label = button.querySelector("span:last-child").textContent;
+    button.setAttribute("aria-label", `${label} sort ${!active ? "none" : direction === "asc" ? "ascending" : "descending"}`);
     button.closest("th").setAttribute(
       "aria-sort",
       !active ? "none" : direction === "asc" ? "ascending" : "descending",
@@ -1361,7 +1371,9 @@ function filteredBlobStores() {
 
 function renderRepositories() {
   updateRepositorySortHeaders();
-  const rows = sortRepositories(filteredRepositories()).map((repo) => {
+  const filtered = filteredRepositories();
+  renderUsageSummary("repository", filtered, repositoryUsage);
+  const rows = sortRepositories(filtered).map((repo) => {
     const status = repo.online ? "Online" : "Offline";
     const tone = repo.online ? "ok" : "warn";
     const displayUrl = repositoryDisplayUrl(repo);
@@ -1377,6 +1389,8 @@ function renderRepositories() {
         <td>${formatBadge(repo.format)}</td>
         <td><span class="state-badge compact ${tone}">${status}</span></td>
         <td>${blobStore}</td>
+        <td class="inventory-count">${renderInventoryMetric(repositoryUsage, repo.id, "assetCount")}</td>
+        <td class="inventory-count">${renderInventoryMetric(repositoryUsage, repo.id, "totalBytes", true)}</td>
         <td><code>${escapeHtml(displayUrl)}</code></td>
         <td class="actions-column">
           <button class="row-action edit-repository-button" data-name="${escapeHtml(repo.name)}" type="button">edit</button>
@@ -1386,7 +1400,7 @@ function renderRepositories() {
     `;
   }).join("");
   document.getElementById("repository-table").innerHTML = rows
-    || '<tr><td colspan="9" class="placeholder">No repositories yet. Create your first one.</td></tr>';
+    || '<tr><td colspan="11" class="placeholder">No matching repositories.</td></tr>';
 }
 
 function repositoryDisplayUrl(repo) {
@@ -1510,50 +1524,130 @@ async function clearDockerCache() {
 }
 
 function renderBlobStores() {
-  document.getElementById("blobstore-table").innerHTML = filteredBlobStores().map((store) => {
+  const filtered = filteredBlobStores();
+  renderUsageSummary("blobstore", filtered, blobStoreUsage);
+  const rows = [...filtered].sort((a, b) => {
+    if (blobStoreUsageSort !== "name") {
+      const left = blobStoreUsage?.usage?.[a.id]?.[blobStoreUsageSort];
+      const right = blobStoreUsage?.usage?.[b.id]?.[blobStoreUsageSort];
+      if (left == null || right == null) return left == null ? (right == null ? 0 : 1) : -1;
+      if (left !== right) return right - left;
+    }
+    return a.name.localeCompare(b.name, undefined, { numeric: true });
+  });
+  document.getElementById("blobstore-table").innerHTML = rows.map((store) => {
     const fileStore = isFileBlobStore(store);
-    const target = fileStore
-      ? `<code>${escapeHtml(store.path || "")}</code>`
-      : escapeHtml(store.bucket || "");
-    const secondary = fileStore
-      ? `<code title="${escapeHtml(store.resolvedPath || "")}">${escapeHtml(store.resolvedPath || "")}</code>`
-      : (store.prefix ? `<code>${escapeHtml(store.prefix)}</code>` : '<span class="health-muted">-</span>');
-    const endpoint = fileStore
-      ? '<span class="health-muted">-</span>'
-      : `<code>${escapeHtml(store.endpoint || "")}</code>`;
-    const pathStyle = fileStore
-      ? '<span class="health-muted">-</span>'
-      : pathStyleBadge(Boolean(store.pathStyleAccess));
+    const target = fileStore ? store.path : store.bucket;
+    const detail = fileStore ? store.resolvedPath : [store.endpoint, store.prefix].filter(Boolean).join(" / ");
     return `
       <tr>
         <td class="icon-column">${blobStoreIcon(store.type)}</td>
         <td>${escapeHtml(store.name)}</td>
-        <td>${escapeHtml(store.type)}</td>
-        <td>${engineLabel(store.engine)}</td>
+        <td>${engineLabel(store.engine)}${fileStore ? "" : `<small class="usage-secondary">${escapeHtml(store.type)}</small>`}</td>
         <td>${healthBadge(store)}</td>
-        <td>${target}</td>
-        <td>${secondary}</td>
-        <td>${endpoint}</td>
-        <td>${pathStyle}</td>
+        <td class="inventory-count">${renderInventoryMetric(blobStoreUsage, store.id, "blobCount")}</td>
+        <td class="inventory-count">${renderInventoryMetric(blobStoreUsage, store.id, "totalBytes", true)}</td>
+        <td class="inventory-count">${renderInventoryMetric(blobStoreUsage, store.id, "pendingDeletionBytes", true)}
+          <small class="usage-secondary">${renderInventoryMetric(blobStoreUsage, store.id, "pendingDeletionCount")} <span>blobs</span></small></td>
+        <td class="usage-location"><code>${escapeHtml(target || "")}</code>
+          ${detail && detail !== target ? `<small class="usage-secondary" title="${escapeHtml(detail)}">${escapeHtml(detail)}</small>` : ""}
+          ${fileStore ? "" : pathStyleBadge(Boolean(store.pathStyleAccess))}</td>
         <td class="actions-column">
           ${store.id == null ? '<span class="health-muted">-</span>' : `
+            <button class="row-action store-repositories-button" data-store-name="${escapeHtml(store.name)}" type="button">Repositories</button>
             <button class="row-action edit-blobstore-button" data-id="${store.id}" type="button">edit</button>
             <button class="row-action check-blobstore-button" data-id="${store.id}" data-name="${escapeHtml(store.name)}" type="button">check</button>
           `}
         </td>
       </tr>
     `;
-  }).join("");
+  }).join("") || '<tr><td colspan="9" class="placeholder">No blob stores found.</td></tr>';
+}
+
+// undefined = loading; null = unavailable. A successful response contains explicit
+// zeros for empty entities; missing or invalid values must never masquerade as zero.
+function inventoryValue(snapshot, id, key) {
+  const value = snapshot?.usage?.[String(id)]?.[key];
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function formatInventoryBytes(value) {
+  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+  const unit = Math.min(Math.floor(Math.log2(Math.max(1, value)) / 10), units.length - 1);
+  return `${(value / (1024 ** unit)).toLocaleString(document.documentElement.lang || undefined,
+    { maximumFractionDigits: unit === 0 ? 0 : 1 })} ${units[unit]}`;
+}
+
+function renderInventoryMetric(snapshot, id, key, bytes = false) {
+  if (snapshot === undefined) return '<span class="health-muted" title="Loading usage…">…</span>';
+  const value = inventoryValue(snapshot, id, key);
+  if (value == null) return '<span class="health-muted" title="Usage unavailable. Refresh to retry.">—</span>';
+  const formatted = bytes ? formatInventoryBytes(value) : value.toLocaleString(document.documentElement.lang || undefined);
+  const unknown = bytes && key === "totalBytes" && inventoryValue(snapshot, id, "unknownSizeCount") > 0;
+  return unknown ? `<span title="Some asset sizes are unknown; this is a lower bound.">≥ ${escapeHtml(formatted)}</span>` : escapeHtml(formatted);
+}
+
+function renderUsageSummary(kind, rows, snapshot) {
+  const blob = kind === "blobstore";
+  const keys = blob ? ["blobCount", "totalBytes", "pendingDeletionBytes"] : ["assetCount", "totalBytes"];
+  const totals = {};
+  keys.forEach((key) => {
+    const values = rows.map((row) => inventoryValue(snapshot, row.id, key));
+    totals[key] = values.some((value) => value == null) ? null : values.reduce((a, b) => a + b, 0);
+  });
+  totals.unknownSizeCount = rows.some((row) => inventoryValue(snapshot, row.id, "unknownSizeCount") > 0) ? 1 : 0;
+  const totalSnapshot = snapshot === undefined ? undefined : snapshot === null ? null : { usage: { all: totals } };
+  const card = (label, value) => `<div><span>${label}</span><strong>${value}</strong></div>`;
+  document.getElementById(`${kind}-usage-summary`).innerHTML =
+    card(blob ? "Matching blob stores" : "Matching repositories", rows.length.toLocaleString())
+    + card(blob ? "Blob Count" : "Asset Count", renderInventoryMetric(totalSnapshot, "all", keys[0]))
+    + card(blob ? "Stored blob size" : "Logical asset size", renderInventoryMetric(totalSnapshot, "all", "totalBytes", true))
+    + (blob ? card("Pending cleanup", renderInventoryMetric(totalSnapshot, "all", "pendingDeletionBytes", true)) : "");
+  const time = snapshot?.calculatedAt ? new Date(snapshot.calculatedAt) : null;
+  document.getElementById(`${kind}-usage-updated`).textContent = snapshot === undefined ? "Loading usage…"
+    : time && !Number.isNaN(time.valueOf()) ? `Updated: ${time.toLocaleTimeString(document.documentElement.lang || undefined)}`
+    : "Usage unavailable. Refresh to retry.";
+}
+
+function refreshRepositoryStoreFilter() {
+  const select = document.getElementById("repository-store-filter");
+  const selected = select.value;
+  const names = [...new Set(repositories.map((repo) => repo.blobStoreName).filter(Boolean))].sort();
+  // Preserve a drill-down to a store with no visible repositories.
+  if (selected && !names.includes(selected)) names.push(selected);
+  select.innerHTML = '<option value="">All blob stores</option>'
+    + names.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("");
+  select.value = selected;
+}
+
+async function fetchInventoryUsage(url) {
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) throw new Error(await responseErrorMessage(response));
+  return response.json();
 }
 
 async function loadBlobStores(options = {}) {
+  const version = ++blobStoreLoadVersion;
+  blobStoreUsage = undefined;
   try {
     const response = await fetch("/internal/blob-stores", { cache: "no-store" });
     if (!response.ok) throw new Error(await responseErrorMessage(response));
     const payload = await response.json();
+    if (version !== blobStoreLoadVersion) return;
     blobStores = payload.stores || [];
+    // Deliberately do not await inventory: a cold aggregate must not delay the grid.
+    if (!blobStores.length) blobStoreUsage = { usage: {}, calculatedAt: new Date().toISOString() };
+    if (blobStores.length) {
+      fetchInventoryUsage("/internal/blob-stores/statistics/usage").catch(() => null).then((snapshot) => {
+        if (version !== blobStoreLoadVersion) return;
+        blobStoreUsage = snapshot;
+        renderBlobStores();
+      });
+    }
   } catch (error) {
+    if (version !== blobStoreLoadVersion) return;
     blobStores = [];
+    blobStoreUsage = null;
     showToast(`Failed to load blob stores: ${error.message}`, "error");
   }
   renderBlobStores();
@@ -1576,14 +1670,29 @@ async function loadRepositoryRecipes() {
 }
 
 async function loadRepositories() {
+  const version = ++repositoryLoadVersion;
+  repositoryUsage = undefined;
   try {
     const response = await fetch("/internal/repositories?purpose=admin", { cache: "no-store" });
     if (!response.ok) throw new Error(await responseErrorMessage(response));
-    repositories = await response.json();
+    const payload = await response.json();
+    if (version !== repositoryLoadVersion) return;
+    repositories = payload;
+    if (!repositories.length) repositoryUsage = { usage: {}, calculatedAt: new Date().toISOString() };
+    if (repositories.length) {
+      fetchInventoryUsage("/internal/repositories/statistics/usage").catch(() => null).then((snapshot) => {
+        if (version !== repositoryLoadVersion) return;
+        repositoryUsage = snapshot;
+        renderRepositories();
+      });
+    }
   } catch (error) {
+    if (version !== repositoryLoadVersion) return;
     repositories = [];
+    repositoryUsage = null;
     showToast(`Failed to load repositories: ${error.message}`, "error");
   }
+  refreshRepositoryStoreFilter();
   renderRepositories();
   refreshRepositoryMemberOptions();
 }
@@ -7499,6 +7608,23 @@ window.addEventListener("hashchange", applyHashRoute);
 window.addEventListener("popstate", applyHashRoute);
 
 document.getElementById("repository-filter").addEventListener("input", renderRepositories);
+document.getElementById("repository-store-filter").addEventListener("change", renderRepositories);
+document.getElementById("repository-usage-refresh").addEventListener("click", () => loadRepositories());
+document.getElementById("blobstore-usage-refresh").addEventListener("click", () => loadBlobStores());
+document.getElementById("blobstore-usage-sort").addEventListener("change", (event) => {
+  blobStoreUsageSort = event.target.value;
+  renderBlobStores();
+});
+document.getElementById("blobstore-table").addEventListener("click", (event) => {
+  const button = event.target.closest(".store-repositories-button");
+  if (!button) return;
+  const select = document.getElementById("repository-store-filter");
+  select.innerHTML = `<option value="${escapeHtml(button.dataset.storeName)}">${escapeHtml(button.dataset.storeName)}</option>`;
+  select.value = button.dataset.storeName;
+  document.getElementById("repository-filter").value = "";
+  repositorySort = { key: "totalBytes", direction: "desc" };
+  switchView("repositories");
+});
 document.addEventListener("click", (event) => {
   const sortButton = event.target.closest("[data-repository-sort]");
   if (!sortButton) return;
