@@ -246,6 +246,7 @@ kkRepo 使用 [Apache License 2.0](LICENSE) 开源。
 - [构建部署指南](docs/zh/build-deployment-guide.md)
 - [Artifact Scanning 使用指南](docs/zh/artifact-scanning-guide.md)
 - [Cleanup Policy 使用指南](docs/zh/cleanup-policy-guide.md)
+- [管理后台存储用量](docs/zh/admin-storage-usage.md)
 - [仓库使用指南](docs/zh/repository-guides/README.md)
 - [Native Image 与 JVM 选型指南](docs/zh/native-vs-jvm-guide.md)
 - [Nginx 反向代理配置注意事项](docs/zh/nginx-reverse-proxy.md)

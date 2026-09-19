@@ -66,6 +66,8 @@ public interface PersistenceStores extends AutoCloseable {
 
   SecurityScanDao securityScanning();
 
+  StorageStatisticsDao storageStatistics();
+
   SwiftRegistryDao swiftRegistry();
 
   TerraformRegistryDao terraformRegistry();

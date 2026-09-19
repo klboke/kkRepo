@@ -1223,7 +1223,7 @@ body {
 }
 
 .blobstores-table {
-  min-width: 1240px;
+  min-width: 1100px;
 }
 
 .state-badge {
@@ -4542,3 +4542,25 @@ code {
   width: 100%;
   table-layout: fixed;
 }
+
+/* Keep inventory magnitudes comparable without making configuration columns wider. */
+.nx-table .inventory-count {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-overview { flex: 0 0 auto; margin: 0 24px 12px; }
+.usage-overview .summary-grid { margin-top: 0; }
+.usage-note { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--text-muted, #616161); font-size: 12px; margin-top: 5px; }
+.usage-secondary { display: block; margin-top: 3px; color: var(--text-muted, #616161); font-size: 12px; font-weight: normal; }
+.usage-location { max-width: 260px; min-width: 140px; }
+.usage-location .usage-secondary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-location code { overflow-wrap: anywhere; }
+.inventory-count .repo-sort-button { justify-content: flex-end; }
+.usage-table .actions-column { white-space: normal; }
+.usage-table .actions-column .row-action { margin-top: 2px; margin-bottom: 2px; padding: 0 8px; }
+.blobstores-table .health-detail { max-width: 140px; }
+.usage-table td.actions-column { position: sticky; right: 0; background: var(--row); box-shadow: -1px 0 var(--line); }
+.usage-table tr:hover td.actions-column { background: var(--row-hover); }
+.fixed-table-view .fixed-table-frame .usage-table th.actions-column { right: 0; z-index: 2; box-shadow: -1px 0 var(--line); }

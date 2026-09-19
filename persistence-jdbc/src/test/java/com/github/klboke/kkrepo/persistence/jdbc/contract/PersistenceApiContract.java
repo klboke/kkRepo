@@ -10,6 +10,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao.BlobStoreUsage;
+import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao.RepositoryUsage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
@@ -189,6 +191,53 @@ public abstract class PersistenceApiContract {
   protected abstract int seedHelmProxyLegacyCacheFence(long repositoryId, long assetId);
 
   protected abstract int activateHelmProxyLegacyCacheFence(long repositoryId);
+
+  @Test
+  void storageUsageCountsSharedObjectsPendingGcAndRepositoryOwnedAssets() {
+    String prefix = "usage-" + java.util.UUID.randomUUID();
+    long store = stores().blobStores().insert(blobStore(prefix));
+    long otherStore = stores().blobStores().insert(blobStore(prefix + "-other"));
+    long first = insertRepository(prefix + "-hosted", RepositoryFormat.RAW, store);
+    long group = insertRepository(prefix + "-group", RepositoryFormat.RAW, RepositoryType.GROUP, store);
+    long empty = insertRepository(prefix + "-empty", RepositoryFormat.RAW, otherStore);
+    long shared = stores().assets().insertBlob(blob(store, "shared", "shared"));
+    long report = stores().assets().insertBlob(blob(store, "report", "report"));
+    long other = stores().assets().insertBlob(blob(otherStore, "other", "other"));
+    long firstAsset = stores().assets().insertAsset(new AssetRecord(null, first, null, shared,
+        RepositoryFormat.RAW, "one.bin", sha256("one.bin"), "one.bin", "PACKAGE",
+        "application/octet-stream", 42L, null, Instant.now(), Map.of()));
+    stores().assets().insertAsset(new AssetRecord(null, first, null, shared,
+        RepositoryFormat.RAW, "copy.bin", sha256("copy.bin"), "copy.bin", "PACKAGE",
+        "application/octet-stream", 42L, null, Instant.now(), Map.of()));
+    stores().assets().insertAsset(new AssetRecord(null, first, null, null,
+        RepositoryFormat.RAW, "unknown", sha256("unknown"), "unknown", "METADATA",
+        "text/plain", null, null, Instant.now(), Map.of()));
+    long groupAsset = stores().assets().insertAsset(new AssetRecord(null, group, null, shared,
+        RepositoryFormat.RAW, "cached.bin", sha256("cached.bin"), "cached.bin", "PACKAGE",
+        "application/octet-stream", 42L, null, Instant.now(), Map.of()));
+    var statistics = stores().storageStatistics();
+    assertEquals(new BlobStoreUsage(2, 84, 0, 0), statistics.blobStoreUsage().get(store));
+    assertEquals(1, statistics.blobStoreUsage().get(otherStore).blobCount());
+    assertEquals(new RepositoryUsage(3, 84, 1), statistics.repositoryUsage().get(first));
+    assertEquals(1, statistics.repositoryUsage().get(group).assetCount());
+    assertFalse(statistics.repositoryUsage().containsKey(empty));
+
+    // Non-asset owners are counted, but their live blobs are not reclaimable.
+    assertTrue(stores().blobReferences().retain("usage-report", report, report));
+    assertEquals(0, stores().assets().markBlobDeletedIfUnreferenced(report, "still referenced"));
+    stores().blobReferences().releaseOwner("usage-report", report);
+    assertEquals(1, stores().assets().markBlobDeletedIfUnreferenced(report, "report deleted"));
+    assertEquals(new BlobStoreUsage(2, 84, 1, 42), statistics.blobStoreUsage().get(store));
+    assertEquals(1, stores().assets().hardDeleteBlobByIdIfDeleted(report));
+    assertEquals(1, statistics.blobStoreUsage().get(store).blobCount());
+
+    stores().assets().deleteAssetById(firstAsset);
+    assertEquals(2, statistics.repositoryUsage().get(first).assetCount());
+    assertEquals(1, statistics.blobStoreUsage().get(store).blobCount());
+    stores().assets().updateAssetBlobBinding(groupAsset, other, "application/octet-stream", 100L, Instant.now());
+    assertEquals(1, statistics.repositoryUsage().get(group).assetCount());
+    assertEquals(100, statistics.repositoryUsage().get(group).totalBytes());
+  }
 
   @Test
   void baselineContainsTheCompleteSharedLogicalSchema() {

@@ -11,6 +11,9 @@ import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.argThat;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao.BlobStoreUsage;
+import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao;
+import com.github.klboke.kkrepo.server.statistics.StorageStatisticsService;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.server.support.dao.BlobStoreDaoAdapter;
@@ -39,6 +42,28 @@ import org.springframework.web.server.ResponseStatusException;
 class BlobStoresControllerTest {
   @TempDir
   Path tempDir;
+
+  @Test
+  void usageEndpointUsesCatalogWithoutProbingObjectStorage() throws Exception {
+    InMemoryBlobStoreDao dao = new InMemoryBlobStoreDao();
+    long id = dao.insert(fileRecord("inventory", "inventory"));
+    var statisticsDao = mock(StorageStatisticsDao.class);
+    org.mockito.Mockito.when(statisticsDao.blobStoreUsage()).thenReturn(Map.of(id,
+        new BlobStoreUsage(5, 1234, 2, 400)));
+    S3BlobStoreAdmin s3 = mock(S3BlobStoreAdmin.class);
+    FileBlobStoreAdmin file = mock(FileBlobStoreAdmin.class);
+    BlobStoresController controller = new BlobStoresController(dao, s3, file, null, null,
+        new S3StorageProperties(), null, null);
+    controller.setStorageStatistics(new StorageStatisticsService(statisticsDao));
+    var mvc = MockMvcBuilders.standaloneSetup(controller).build();
+    var result = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
+        "/internal/blob-stores/statistics/usage")).andExpect(status().isOk()).andReturn();
+    var json = new com.fasterxml.jackson.databind.ObjectMapper().readTree(result.getResponse().getContentAsString());
+    assertEquals(5, json.path("usage").path(Long.toString(id)).path("blobCount").asLong());
+    assertEquals(400, json.path("usage").path(Long.toString(id)).path("pendingDeletionBytes").asLong());
+    assertEquals(30, json.path("maxAgeSeconds").asLong());
+    org.mockito.Mockito.verifyNoInteractions(s3, file);
+  }
 
   @Test
   void emptyDatabaseDoesNotExposeRuntimeConfiguredBlobStore() {

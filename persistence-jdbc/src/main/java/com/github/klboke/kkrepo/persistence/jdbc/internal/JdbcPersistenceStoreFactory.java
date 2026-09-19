@@ -27,6 +27,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.MigrationJobDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.NpmReleaseIndexDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceStoreFactory;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceStores;
+import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PubUploadSessionDao;
@@ -94,6 +95,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
         new JdbcSecurityAuditDao(jdbc, json),
         new JdbcSecurityDao(jdbc, json, dialect),
         new JdbcSecurityScanDao(jdbc, json, dialect),
+        new JdbcStorageStatisticsDao(jdbc),
         new JdbcSwiftRegistryDao(jdbc, json, dialect),
         new JdbcTerraformRegistryDao(jdbc),
         new JdbcUiSettingsDao(jdbc));
@@ -132,6 +134,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
       SecurityAuditDao securityAudit,
       SecurityDao security,
       SecurityScanDao securityScanning,
+      StorageStatisticsDao storageStatistics,
       SwiftRegistryDao swiftRegistry,
       TerraformRegistryDao terraformRegistry,
       UiSettingsDao uiSettings) implements PersistenceStores {
