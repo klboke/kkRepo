@@ -20,12 +20,43 @@ function setup(fetch) {
     blobRenders: 0, repoRenders: 0,
   };
   vm.createContext(context);
-  vm.runInContext('let repositories = [], blobStores = [], repositoryUsage, blobStoreUsage; let repositoryLoadVersion = 0, blobStoreLoadVersion = 0; let repositorySort = {key:"name",direction:"asc"};\n'
+  vm.runInContext('let repositories = [], blobStores = [], repositoryUsage, blobStoreUsage; let repositoryLoadVersion = 0, blobStoreLoadVersion = 0; let repositorySort = {key:"name",direction:"asc"}, blobStoreSort = {key:"name",direction:"asc"};\n'
     + source.slice(source.indexOf('function filteredRepositories()'), source.indexOf('function toggleRepositorySort('))
+    + source.slice(source.indexOf('function blobStoreSortValue('), source.indexOf('function renderBlobStores('))
     + source.slice(source.indexOf('function inventoryValue('), source.indexOf('function blobStoreFormPayload()')), context);
   return { context, element, run: code => vm.runInContext(code, context) };
 }
 const response = value => ({ ok: true, json: async () => value });
+test('blob store headers sort numbers in both directions with zero before unavailable values', () => {
+  const { context: c, run } = setup();
+  const rows = [{id:1,name:'store-2'},{id:2,name:'store-10'},{id:3,name:'zero'},{id:4,name:'unavailable'}];
+  for (const key of ['blobCount', 'totalBytes', 'pendingDeletionBytes']) {
+    run(`blobStoreUsage={usage:{1:{${key}:9},2:{${key}:100},3:{${key}:0}}}; blobStoreSort={key:'${key}',direction:'desc'};`);
+    assert.equal(c.sortBlobStores(rows).map(r=>r.id).join(','), '2,1,3,4');
+    run('blobStoreSort.direction="asc"');
+    assert.equal(c.sortBlobStores(rows).map(r=>r.id).join(','), '3,1,2,4');
+  }
+  run('blobStoreSort={key:"name",direction:"asc"}');
+  assert.equal(c.sortBlobStores(rows).map(r=>r.id).join(','), '1,2,4,3');
+  run('blobStoreSort.direction="desc"');
+  assert.equal(c.sortBlobStores(rows).map(r=>r.id).join(','), '3,4,2,1');
+  assert.equal(rows.map(r=>r.id).join(','), '1,2,3,4');
+});
+test('blob header clicks toggle direction and new metric columns start largest first', () => {
+  const { context: c, run } = setup();
+  c.toggleBlobStoreSort('name');
+  assert.equal(run('blobStoreSort.direction'), 'desc');
+  for (const key of ['blobCount', 'totalBytes', 'pendingDeletionBytes']) {
+    c.toggleBlobStoreSort(key);
+    assert.equal(run('blobStoreSort.key'), key);
+    assert.equal(run('blobStoreSort.direction'), 'desc');
+    c.toggleBlobStoreSort(key);
+    assert.equal(run('blobStoreSort.direction'), 'asc');
+  }
+  c.toggleBlobStoreSort('name');
+  assert.equal(run('blobStoreSort.direction'), 'asc');
+  assert.equal(c.blobRenders, 8);
+});
 test('distinguishes pending, failed, missing and zero usage; formats binary units and unknown sizes', () => {
   const { context: c } = setup();
   assert.match(c.renderInventoryMetric(undefined, 1, 'assetCount'), /…/);

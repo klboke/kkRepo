@@ -5,7 +5,9 @@ capacity investigation. Start with the largest stores, inspect pending cleanup,
 then use a store's **Repositories** action to see its configured repositories
 sorted by logical size. The exact store filter can be cleared with **All blob
 stores**. Summary cards follow the current filter rather than displaying hidden
-or unrelated totals.
+or unrelated totals. In Blob Stores, click the Name, Blob Count, Stored size, or
+Pending cleanup header to sort; click again to reverse direction. Numeric
+columns start largest first, and unavailable values stay last in both directions.
 
 ## Metrics and decisions
 

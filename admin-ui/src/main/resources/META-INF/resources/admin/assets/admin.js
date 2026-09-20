@@ -11,7 +11,7 @@ let repositoryRecipes = [];
 let blobStores = [];
 let blobStoreUsage;
 let blobStoreLoadVersion = 0;
-let blobStoreUsageSort = "name";
+let blobStoreSort = { key: "name", direction: "asc" };
 let cleanupPolicies = [];
 let cleanupCapabilities = [];
 let cleanupRuns = [];
@@ -1340,9 +1340,13 @@ function toggleRepositorySort(key) {
 }
 
 function updateRepositorySortHeaders() {
-  document.querySelectorAll("[data-repository-sort]").forEach((button) => {
-    const active = button.dataset.repositorySort === repositorySort.key;
-    const direction = active ? repositorySort.direction : null;
+  updateTableSortHeaders("repository", repositorySort);
+}
+
+function updateTableSortHeaders(kind, sort) {
+  document.querySelectorAll(`[data-${kind}-sort]`).forEach((button) => {
+    const active = button.dataset[`${kind}Sort`] === sort.key;
+    const direction = active ? sort.direction : null;
     const indicator = button.querySelector(".repo-sort-indicator");
     button.classList.toggle("is-active", active);
     const label = button.querySelector("span:last-child").textContent;
@@ -1525,18 +1529,35 @@ async function clearDockerCache() {
   }
 }
 
+function blobStoreSortValue(store, key) {
+  return key === "name" ? store.name || "" : inventoryValue(blobStoreUsage, store.id, key);
+}
+
+function sortBlobStores(rows) {
+  return [...rows].sort((a, b) => {
+    const left = blobStoreSortValue(a, blobStoreSort.key);
+    const right = blobStoreSortValue(b, blobStoreSort.key);
+    if (left == null || right == null) return left == null ? (right == null ? 0 : 1) : -1;
+    const primary = typeof left === "number" ? left - right : left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" });
+    const fallback = (a.name || "").localeCompare(b.name || "", undefined, { numeric: true, sensitivity: "base" });
+    return blobStoreSort.direction === "asc" ? primary || fallback : -(primary || fallback);
+  });
+}
+
+function toggleBlobStoreSort(key) {
+  blobStoreSort = {
+    key,
+    direction: blobStoreSort.key === key ? (blobStoreSort.direction === "asc" ? "desc" : "asc")
+      : key === "name" ? "asc" : "desc",
+  };
+  renderBlobStores();
+}
+
 function renderBlobStores() {
+  updateTableSortHeaders("blobstore", blobStoreSort);
   const filtered = filteredBlobStores();
   renderUsageSummary("blobstore", filtered, blobStoreUsage);
-  const rows = [...filtered].sort((a, b) => {
-    if (blobStoreUsageSort !== "name") {
-      const left = blobStoreUsage?.usage?.[a.id]?.[blobStoreUsageSort];
-      const right = blobStoreUsage?.usage?.[b.id]?.[blobStoreUsageSort];
-      if (left == null || right == null) return left == null ? (right == null ? 0 : 1) : -1;
-      if (left !== right) return right - left;
-    }
-    return a.name.localeCompare(b.name, undefined, { numeric: true });
-  });
+  const rows = sortBlobStores(filtered);
   document.getElementById("blobstore-table").innerHTML = rows.map((store) => {
     const fileStore = isFileBlobStore(store);
     const target = fileStore ? store.path : store.bucket;
@@ -7682,10 +7703,6 @@ document.getElementById("repository-filter").addEventListener("input", renderRep
 document.getElementById("repository-store-filter").addEventListener("change", renderRepositories);
 document.getElementById("repository-usage-refresh").addEventListener("click", () => loadRepositories());
 document.getElementById("blobstore-usage-refresh").addEventListener("click", () => loadBlobStores());
-document.getElementById("blobstore-usage-sort").addEventListener("change", (event) => {
-  blobStoreUsageSort = event.target.value;
-  renderBlobStores();
-});
 document.getElementById("blobstore-table").addEventListener("click", (event) => {
   const copyButton = event.target.closest(".usage-location-copy");
   if (copyButton) {
@@ -7703,8 +7720,9 @@ document.getElementById("blobstore-table").addEventListener("click", (event) => 
 });
 document.addEventListener("click", (event) => {
   const sortButton = event.target.closest("[data-repository-sort]");
-  if (!sortButton) return;
-  toggleRepositorySort(sortButton.dataset.repositorySort);
+  if (sortButton) toggleRepositorySort(sortButton.dataset.repositorySort);
+  const blobSortButton = event.target.closest("[data-blobstore-sort]");
+  if (blobSortButton) toggleBlobStoreSort(blobSortButton.dataset.blobstoreSort);
 });
 document.getElementById("blobstore-filter").addEventListener("input", renderBlobStores);
 document.getElementById("user-menu").addEventListener("mouseenter", openUserMenu);

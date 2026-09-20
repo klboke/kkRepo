@@ -850,7 +850,6 @@
               <input id="blobstore-filter" type="search" placeholder="Filter">
             </label>
             <button class="create-button secondary" id="blobstore-usage-refresh" type="button"><span class="lucide-icon icon-refresh-cw" aria-hidden="true"></span> Refresh</button>
-            <label class="select-filter"><span>Sort by</span><select id="blobstore-usage-sort"><option value="name">Name</option><option value="totalBytes">Largest stored size</option><option value="pendingDeletionBytes">Most pending cleanup</option><option value="blobCount">Most blobs</option></select></label>
           </div>
           <div class="usage-overview">
             <div class="summary-grid" id="blobstore-usage-summary" aria-live="polite">
@@ -939,12 +938,12 @@
               <thead>
                 <tr>
                   <th class="icon-column"></th>
-                  <th>Name</th>
+                  <th aria-sort="ascending"><button class="repo-sort-button is-active" data-blobstore-sort="name" type="button"><span class="repo-sort-indicator lucide-icon icon-arrow-up" aria-hidden="true"></span><span>Name</span></button></th>
                   <th>Engine / Type</th>
                   <th>Health</th>
-                  <th class="inventory-count" title="Registered blobs; shared blobs count once. Includes blobs awaiting cleanup.">Blob Count</th>
-                  <th class="inventory-count">Stored size</th>
-                  <th class="inventory-count" title="Soft-deleted blobs still waiting for physical cleanup. This space has not been freed yet.">Pending cleanup</th>
+                  <th class="inventory-count" title="Registered blobs; shared blobs count once. Includes blobs awaiting cleanup." aria-sort="none"><button class="repo-sort-button" data-blobstore-sort="blobCount" type="button"><span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span><span>Blob Count</span></button></th>
+                  <th class="inventory-count" aria-sort="none"><button class="repo-sort-button" data-blobstore-sort="totalBytes" type="button"><span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span><span>Stored size</span></button></th>
+                  <th class="inventory-count" title="Soft-deleted blobs still waiting for physical cleanup. This space has not been freed yet." aria-sort="none"><button class="repo-sort-button" data-blobstore-sort="pendingDeletionBytes" type="button"><span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span><span>Pending cleanup</span></button></th>
                   <th>Storage location</th>
                   <th class="actions-column">Actions</th>
                 </tr>
@@ -1940,11 +1939,11 @@
       </main>
     </div>
 
-    <script src="/login/assets/ui-i18n.js?v=20260920-storage-copy-1"></script>
+    <script src="/login/assets/ui-i18n.js?v=20260920-storage-header-sort-1"></script>
     <script src="/login/assets/product-update.js?v=20260819-version-update-1"></script>
     <script src="./assets/admin-filter.js?v=20260706-wildcard-filter-1"></script>
     <script src="/browse/assets/global-component-search.js?v=20260817-global-search-2"></script>
     <script src="./assets/content-selectors.js?v=20260908-content-selectors-1"></script>
-    <script src="./assets/admin.js?v=20260920-storage-ellipsis-1"></script>
+    <script src="./assets/admin.js?v=20260920-storage-header-sort-1"></script>
   </body>
 </html>
