@@ -4556,8 +4556,18 @@ code {
 .usage-overview .summary-grid .field-help { display: inline-flex; }
 .usage-secondary { display: block; margin-top: 3px; color: var(--text-muted, #616161); font-size: 12px; font-weight: normal; }
 .usage-location { max-width: 260px; min-width: 140px; }
-.usage-location .usage-secondary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.usage-location code { display: block; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-location-value { display: flex; align-items: flex-start; gap: 4px; width: 260px; max-width: 100%; }
+.usage-location-details { flex: 1; min-width: 0; }
+.usage-location-details summary { display: flex; align-items: center; gap: 4px; cursor: pointer; list-style: none; }
+.usage-location-details summary::-webkit-details-marker { display: none; }
+.usage-location-details summary code { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-location-details summary .lucide-icon { flex: 0 0 14px; width: 14px; height: 14px; }
+.usage-location-details[open] summary .lucide-icon { transform: rotate(180deg); }
+.usage-location code.usage-location-full { display: block; margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.usage-location-copy { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 24px; width: 24px; height: 24px; padding: 3px; border: 1px solid var(--line); border-radius: 4px; background: var(--row); color: var(--text); cursor: pointer; }
+.usage-location-copy:hover { background: var(--row-hover); }
+.usage-location-copy .lucide-icon { width: 14px; height: 14px; }
+.usage-location-details summary:focus-visible, .usage-location-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .inventory-count .repo-sort-button { justify-content: flex-end; }
 .usage-table .actions-column { white-space: normal; }
 .usage-table .actions-column .row-action { margin-top: 2px; margin-bottom: 2px; padding: 0 8px; }

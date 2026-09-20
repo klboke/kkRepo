@@ -18,7 +18,8 @@ class StorageUsageJavascriptTest {
     Process process = new ProcessBuilder(
         "node",
         "--test",
-        Path.of("src/test/js/storage-usage.test.js").toString())
+        Path.of("src/test/js/storage-usage.test.js").toString(),
+        Path.of("src/test/js/location-copy.test.js").toString())
         .redirectErrorStream(true)
         .start();
 

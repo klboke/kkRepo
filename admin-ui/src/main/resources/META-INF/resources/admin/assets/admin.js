@@ -1393,7 +1393,7 @@ function renderRepositories() {
         <td>${blobStore}</td>
         <td class="inventory-count">${renderRepositoryMetric(repositoryUsage, repo, "assetCount")}</td>
         <td class="inventory-count">${renderRepositoryMetric(repositoryUsage, repo, "totalBytes", true)}</td>
-        <td class="usage-location"><code title="${escapeHtml(displayUrl)}">${escapeHtml(displayUrl)}</code></td>
+        <td class="usage-location">${renderCopyableLocation(displayUrl, "Copy URL")}</td>
         <td class="actions-column">
           <button class="row-action edit-repository-button" data-name="${escapeHtml(repo.name)}" type="button">edit</button>
           <button class="row-action delete-repository-button" data-name="${escapeHtml(repo.name)}" type="button">delete</button>
@@ -1551,8 +1551,8 @@ function renderBlobStores() {
         <td class="inventory-count">${renderInventoryMetric(blobStoreUsage, store.id, "totalBytes", true)}</td>
         <td class="inventory-count">${renderInventoryMetric(blobStoreUsage, store.id, "pendingDeletionBytes", true)}
           <small class="usage-secondary">${renderInventoryMetric(blobStoreUsage, store.id, "pendingDeletionCount")} <span>blobs</span></small></td>
-        <td class="usage-location"><code title="${escapeHtml(target || "")}">${escapeHtml(target || "")}</code>
-          ${detail && detail !== target ? `<small class="usage-secondary" title="${escapeHtml(detail)}">${escapeHtml(detail)}</small>` : ""}
+        <td class="usage-location">${renderCopyableLocation(target, "Copy storage location")}
+          ${detail && detail !== target ? `<div class="usage-secondary">${renderCopyableLocation(detail, "Copy storage location")}</div>` : ""}
           ${fileStore ? "" : pathStyleBadge(Boolean(store.pathStyleAccess))}</td>
         <td class="actions-column">
           ${store.id == null ? '<span class="health-muted">-</span>' : `
@@ -1564,6 +1564,60 @@ function renderBlobStores() {
       </tr>
     `;
   }).join("") || '<tr><td colspan="9" class="placeholder">No blob stores found.</td></tr>';
+}
+
+function renderCopyableLocation(value, copyLabel) {
+  if (!value) return '<span class="health-muted">—</span>';
+  const text = escapeHtml(value);
+  return `<div class="usage-location-value">
+    <details class="usage-location-details">
+      <summary title="Expand or collapse full value"><code title="${text}">${text}</code><span class="lucide-icon icon-chevron-down" aria-hidden="true"></span></summary>
+      <code class="usage-location-full">${text}</code>
+    </details>
+    <button class="usage-location-copy" type="button" data-copy-value="${text}" title="${escapeHtml(copyLabel)}" aria-label="${escapeHtml(copyLabel)}"><span class="lucide-icon icon-copy" aria-hidden="true"></span></button>
+  </div>`;
+}
+
+async function copyLocationValue(button) {
+  const value = button.dataset.copyValue;
+  if (!value) return;
+  try {
+    await copyLocationText(value);
+    showToast("Copied", "ok");
+  } catch {
+    showToast("Copy failed. Expand the value to select and copy it manually.", "error");
+  }
+}
+
+async function copyLocationText(value) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // HTTP deployments and denied Clipboard API permission use the selection fallback.
+    }
+  }
+  const previousFocus = document.activeElement;
+  const selection = window.getSelection();
+  const ranges = selection ? Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i).cloneRange()) : [];
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.readOnly = true;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  try {
+    textarea.select();
+    if (!document.execCommand("copy")) throw new Error("Copy unavailable");
+  } finally {
+    textarea.remove();
+    previousFocus?.focus({ preventScroll: true });
+    if (selection) {
+      selection.removeAllRanges();
+      ranges.forEach((range) => selection.addRange(range));
+    }
+  }
 }
 
 // undefined = loading; null = unavailable. A successful response contains explicit
@@ -7633,6 +7687,11 @@ document.getElementById("blobstore-usage-sort").addEventListener("change", (even
   renderBlobStores();
 });
 document.getElementById("blobstore-table").addEventListener("click", (event) => {
+  const copyButton = event.target.closest(".usage-location-copy");
+  if (copyButton) {
+    copyLocationValue(copyButton);
+    return;
+  }
   const button = event.target.closest(".store-repositories-button");
   if (!button) return;
   const select = document.getElementById("repository-store-filter");
@@ -7731,6 +7790,11 @@ bindRequiredFieldErrors(repositoryRequiredFields);
 bindMemberTransferEvents();
 bindSecurityTransfers();
 document.getElementById("repository-table").addEventListener("click", (event) => {
+  const copyButton = event.target.closest(".usage-location-copy");
+  if (copyButton) {
+    copyLocationValue(copyButton);
+    return;
+  }
   const editButton = event.target.closest(".edit-repository-button");
   if (editButton) {
     showEditRepositoryForm(editButton.dataset.name);
