@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-4">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20260811-conan-1">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20260818-user-round-1">
-    <link rel="stylesheet" href="./assets/admin.css?v=20260909-selector-toolbar-1">
+    <link rel="stylesheet" href="./assets/admin.css?v=20260920-storage-ellipsis-1">
     <link rel="stylesheet" href="/browse/assets/account-menu.css?v=20260824-ui-themes-3">
     <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=20260819-topbar-control-height-1">
   </head>
@@ -135,6 +135,19 @@
               <span class="filter-icon lucide-icon icon-list-filter" aria-hidden="true"></span>
               <input id="repository-filter" type="search" placeholder="Filter">
             </label>
+            <button class="create-button secondary" id="repository-usage-refresh" type="button"><span class="lucide-icon icon-refresh-cw" aria-hidden="true"></span> Refresh</button>
+            <label class="select-filter"><span>Blob store</span><select id="repository-store-filter" aria-label="Filter by blob store"><option value="">All blob stores</option></select></label>
+          </div>
+          <div class="usage-overview">
+            <div class="summary-grid" id="repository-usage-summary" aria-live="polite">
+              <div>
+                <span class="field-label"><span>Updated</span><span class="field-help" tabindex="0" role="note" aria-label="Snapshots are cached for 30 seconds. Refresh reloads the latest available snapshot." data-tooltip="Snapshots are cached for 30 seconds. Refresh reloads the latest available snapshot."><span class="lucide-icon icon-info" aria-hidden="true"></span></span></span>
+                <strong id="repository-usage-updated" title="Loading usage…">…</strong>
+              </div>
+              <div><span>Matching repositories</span><strong id="repository-usage-matching">0</strong></div>
+              <div><span class="field-label"><span>Asset Count</span><span class="field-help" tabindex="0" role="note" aria-label="Stored files in hosted and proxy repositories, including metadata and cached files. Group repositories are excluded from usage totals." data-tooltip="Stored files in hosted and proxy repositories, including metadata and cached files. Group repositories are excluded from usage totals."><span class="lucide-icon icon-info" aria-hidden="true"></span></span></span><strong id="repository-usage-count">…</strong></div>
+              <div><span class="field-label"><span>Logical asset size</span><span class="field-help" tabindex="0" role="note" aria-label="Logical asset size includes metadata and cached files. Shared content can be counted in multiple repositories. Group repositories are excluded from usage totals." data-tooltip="Logical asset size includes metadata and cached files. Shared content can be counted in multiple repositories. Group repositories are excluded from usage totals."><span class="lucide-icon icon-info" aria-hidden="true"></span></span></span><strong id="repository-usage-size">…</strong></div>
+            </div>
           </div>
           <div class="form-modal" id="repository-form-modal" data-form-id="repository-form" role="dialog" aria-modal="true" aria-labelledby="repository-form-title" hidden>
             <div class="form-modal-backdrop" data-modal-dismiss="repository-form"></div>
@@ -551,7 +564,7 @@
             </div>
           </div>
           <div class="nx-table-frame fixed-table-frame">
-            <table class="nx-table">
+            <table class="nx-table usage-table">
               <thead>
                 <tr>
                   <th class="icon-column"></th>
@@ -581,6 +594,8 @@
                   </th>
                   <th>Status</th>
                   <th>Blob store</th>
+                  <th class="inventory-count" aria-sort="none" title="Stored files, including metadata and this repository’s own cache."><button class="repo-sort-button" data-repository-sort="assetCount" type="button"><span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span><span>Asset Count</span></button></th>
+                  <th class="inventory-count" aria-sort="none" title="Sum of asset sizes; shared content is counted per asset. This is not physical storage usage."><button class="repo-sort-button" data-repository-sort="totalBytes" type="button"><span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span><span>Logical size</span></button></th>
                   <th>URL</th>
                   <th class="actions-column">Actions</th>
                 </tr>
@@ -822,7 +837,7 @@
           </div>
         </section>
 
-        <section class="view" id="blobstores-view">
+        <section class="view fixed-table-view" id="blobstores-view">
           <div class="page-heading">
             <span class="heading-icon"><span class="lucide-icon icon-database" aria-hidden="true"></span></span>
             <h1>Blob Stores</h1>
@@ -834,6 +849,19 @@
               <span class="filter-icon lucide-icon icon-list-filter" aria-hidden="true"></span>
               <input id="blobstore-filter" type="search" placeholder="Filter">
             </label>
+            <button class="create-button secondary" id="blobstore-usage-refresh" type="button"><span class="lucide-icon icon-refresh-cw" aria-hidden="true"></span> Refresh</button>
+          </div>
+          <div class="usage-overview">
+            <div class="summary-grid" id="blobstore-usage-summary" aria-live="polite">
+              <div>
+                <span class="field-label"><span>Updated</span><span class="field-help" tabindex="0" role="note" aria-label="Snapshots are cached for 30 seconds. Refresh reloads the latest available snapshot." data-tooltip="Snapshots are cached for 30 seconds. Refresh reloads the latest available snapshot."><span class="lucide-icon icon-info" aria-hidden="true"></span></span></span>
+                <strong id="blobstore-usage-updated" title="Loading usage…">…</strong>
+              </div>
+              <div><span>Matching blob stores</span><strong id="blobstore-usage-matching">0</strong></div>
+              <div><span>Blob Count</span><strong id="blobstore-usage-count">…</strong></div>
+              <div><span class="field-label"><span>Stored blob size</span><span class="field-help" tabindex="0" role="note" aria-label="Stored blob size includes pending cleanup and excludes temporary uploads and bucket version history." data-tooltip="Stored blob size includes pending cleanup and excludes temporary uploads and bucket version history."><span class="lucide-icon icon-info" aria-hidden="true"></span></span></span><strong id="blobstore-usage-size">…</strong></div>
+              <div><span>Pending cleanup</span><strong id="blobstore-usage-pending">…</strong></div>
+            </div>
           </div>
           <div class="form-modal" id="blobstore-form-modal" data-form-id="blobstore-form" role="dialog" aria-modal="true" aria-labelledby="blobstore-form-title" hidden>
             <div class="form-modal-backdrop" data-modal-dismiss="blobstore-form"></div>
@@ -905,19 +933,18 @@
           </form>
             </div>
           </div>
-          <div class="nx-table-frame">
-            <table class="nx-table blobstores-table">
+          <div class="nx-table-frame fixed-table-frame">
+            <table class="nx-table blobstores-table usage-table">
               <thead>
                 <tr>
                   <th class="icon-column"></th>
-                  <th>Name</th>
-                  <th>Type</th>
-                  <th>Engine</th>
+                  <th aria-sort="ascending"><button class="repo-sort-button is-active" data-blobstore-sort="name" type="button"><span class="repo-sort-indicator lucide-icon icon-arrow-up" aria-hidden="true"></span><span>Name</span></button></th>
+                  <th>Engine / Type</th>
                   <th>Health</th>
-                  <th>Bucket / Path</th>
-                  <th>Prefix / Resolved path</th>
-                  <th>Endpoint</th>
-                  <th>Path style</th>
+                  <th class="inventory-count" title="Registered blobs; shared blobs count once. Includes blobs awaiting cleanup." aria-sort="none"><button class="repo-sort-button" data-blobstore-sort="blobCount" type="button"><span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span><span>Blob Count</span></button></th>
+                  <th class="inventory-count" aria-sort="none"><button class="repo-sort-button" data-blobstore-sort="totalBytes" type="button"><span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span><span>Stored size</span></button></th>
+                  <th class="inventory-count" title="Soft-deleted blobs still waiting for physical cleanup. This space has not been freed yet." aria-sort="none"><button class="repo-sort-button" data-blobstore-sort="pendingDeletionBytes" type="button"><span class="repo-sort-indicator lucide-icon icon-arrow-up-down" aria-hidden="true"></span><span>Pending cleanup</span></button></th>
+                  <th>Storage location</th>
                   <th class="actions-column">Actions</th>
                 </tr>
               </thead>
@@ -1912,11 +1939,11 @@
       </main>
     </div>
 
-    <script src="/login/assets/ui-i18n.js?v=20260908-content-selectors-1"></script>
+    <script src="/login/assets/ui-i18n.js?v=20260920-storage-header-sort-1"></script>
     <script src="/login/assets/product-update.js?v=20260819-version-update-1"></script>
     <script src="./assets/admin-filter.js?v=20260706-wildcard-filter-1"></script>
     <script src="/browse/assets/global-component-search.js?v=20260817-global-search-2"></script>
     <script src="./assets/content-selectors.js?v=20260908-content-selectors-1"></script>
-    <script src="./assets/admin.js?v=20260918-field-help-escape-1"></script>
+    <script src="./assets/admin.js?v=20260920-storage-integers-1"></script>
   </body>
 </html>

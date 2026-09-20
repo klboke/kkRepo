@@ -20,6 +20,37 @@
   const originalTitle = document.title;
 
   const zh = {
+    "Updated": "更新时间",
+    "No matching repositories.": "没有匹配的仓库。",
+    "Loading usage…": "正在加载用量…",
+    "Usage unavailable. Refresh to retry.": "用量暂不可用，请刷新重试。",
+    "Some asset sizes are unknown; this is a lower bound.": "部分制品大小未知，此数值为已知大小的下限。",
+    "Matching blob stores": "匹配的 Blob 存储",
+    "Matching repositories": "匹配的仓库",
+    "Stored blob size": "Blob 存储用量",
+    "Logical asset size": "制品逻辑用量",
+    "Pending cleanup": "待回收",
+    "blobs": "个 Blob",
+    "All blob stores": "全部 Blob 存储",
+    "Filter by blob store": "按 Blob 存储筛选",
+    "Logical size": "逻辑用量",
+    "Stored size": "存储用量",
+    "Engine / Type": "引擎 / 类型",
+    "Storage location": "存储位置",
+    "Copy URL": "复制 URL",
+    "Copy storage location": "复制存储位置",
+    "Expand or collapse full value": "展开或收起完整内容",
+    "Copy failed. Expand the value to select and copy it manually.": "复制失败，请展开完整内容后选择并手动复制。",
+    "No blob stores found.": "没有找到 Blob 存储。",
+    "Stored files, including metadata and this repository’s own cache.": "已存储文件，包括元数据和本仓库自身的缓存。",
+    "Sum of asset sizes; shared content is counted per asset. This is not physical storage usage.": "制品文件大小之和，共享内容按制品分别计入，不代表物理存储占用。",
+    "Registered blobs; shared blobs count once. Includes blobs awaiting cleanup.": "已登记的 Blob，共享 Blob 只计一次，包含待回收的 Blob。",
+    "Soft-deleted blobs still waiting for physical cleanup. This space has not been freed yet.": "已软删除但尚待物理清理的 Blob，这部分空间尚未释放。",
+    "Stored blob size includes pending cleanup and excludes temporary uploads and bucket version history.": "Blob 存储用量包含待回收数据，不含临时上传和存储桶历史版本。",
+    "Logical asset size includes metadata and cached files. Shared content can be counted in multiple repositories. Group repositories are excluded from usage totals.": "制品逻辑用量包含元数据和缓存文件，共享内容可能在多个仓库中分别计入；Group 仓库不计入用量汇总。",
+    "Stored files in hosted and proxy repositories, including metadata and cached files. Group repositories are excluded from usage totals.": "Hosted 和 Proxy 仓库中已存储的文件，包括元数据和缓存文件；Group 仓库不计入用量汇总。",
+    "Not applicable to group repositories. Inspect member repositories for usage.": "Group 仓库不适用，请查看成员仓库的用量。",
+    "Snapshots are cached for 30 seconds. Refresh reloads the latest available snapshot.": "统计快照缓存 30 秒，刷新会重新加载当前可用的最新快照。",
     "Refresh": "刷新",
     "View": "查看",
     "Edit": "编辑",
@@ -76,6 +107,8 @@
     "Name": "名称",
     "Blob store": "Blob 存储",
     "Blob Stores": "Blob 存储",
+    "Blob Count": "Blob 数量",
+    "Asset Count": "制品文件数",
     "Manage blob stores": "管理 Blob 存储",
     "Create blob store": "创建 Blob 存储",
     "Save blob store": "保存 Blob 存储",
@@ -739,6 +772,7 @@
 
   function translateBody(body) {
     if (!body) return body;
+    if (body.startsWith("Updated: ")) return `更新于：${body.slice(9)}`;
     if (zh[body]) return zh[body];
     let match = body.match(/^([^A-Za-z0-9\u4e00-\u9fff]+)\s+(.+)$/);
     if (match) {

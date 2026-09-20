@@ -592,7 +592,7 @@ class SecurityManagementFilterTest {
     ChainState chain = new ChainState();
 
     filter.doFilter(
-        request("GET", "/internal/blob-stores"),
+        request("GET", "/internal/blob-stores/statistics/usage"),
         response.proxy(),
         chain);
 

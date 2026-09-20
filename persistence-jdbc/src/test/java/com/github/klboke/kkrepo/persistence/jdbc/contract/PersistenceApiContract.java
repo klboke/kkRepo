@@ -10,6 +10,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao.BlobStoreUsage;
+import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao.RepositoryUsage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
@@ -56,6 +58,7 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.SubjectKind;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.TaskStatus;
 import com.github.klboke.kkrepo.security.scan.ScanTaskPriorities;
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -189,6 +192,83 @@ public abstract class PersistenceApiContract {
   protected abstract int seedHelmProxyLegacyCacheFence(long repositoryId, long assetId);
 
   protected abstract int activateHelmProxyLegacyCacheFence(long repositoryId);
+
+  @Test
+  void storageUsageCountsSharedObjectsPendingGcAndRepositoryOwnedAssets() {
+    String prefix = "usage-" + java.util.UUID.randomUUID();
+    long store = stores().blobStores().insert(blobStore(prefix));
+    long otherStore = stores().blobStores().insert(blobStore(prefix + "-other"));
+    long first = insertRepository(prefix + "-hosted", RepositoryFormat.RAW, store);
+    long group = insertRepository(prefix + "-group", RepositoryFormat.RAW, RepositoryType.GROUP, store);
+    long empty = insertRepository(prefix + "-empty", RepositoryFormat.RAW, otherStore);
+    long shared = stores().assets().insertBlob(blob(store, "shared", "shared"));
+    long report = stores().assets().insertBlob(blob(store, "report", "report"));
+    long other = stores().assets().insertBlob(blob(otherStore, "other", "other"));
+    long firstAsset = stores().assets().insertAsset(new AssetRecord(null, first, null, shared,
+        RepositoryFormat.RAW, "one.bin", sha256("one.bin"), "one.bin", "PACKAGE",
+        "application/octet-stream", 42L, null, Instant.now(), Map.of()));
+    stores().assets().insertAsset(new AssetRecord(null, first, null, shared,
+        RepositoryFormat.RAW, "copy.bin", sha256("copy.bin"), "copy.bin", "PACKAGE",
+        "application/octet-stream", 42L, null, Instant.now(), Map.of()));
+    stores().assets().insertAsset(new AssetRecord(null, first, null, null,
+        RepositoryFormat.RAW, "unknown", sha256("unknown"), "unknown", "METADATA",
+        "text/plain", null, null, Instant.now(), Map.of()));
+    long groupAsset = stores().assets().insertAsset(new AssetRecord(null, group, null, shared,
+        RepositoryFormat.RAW, "cached.bin", sha256("cached.bin"), "cached.bin", "PACKAGE",
+        "application/octet-stream", 42L, null, Instant.now(), Map.of()));
+    var statistics = stores().storageStatistics();
+    assertEquals(new BlobStoreUsage(2, 84, 0, 0), statistics.blobStoreUsage().get(store));
+    assertEquals(BigInteger.valueOf(1), statistics.blobStoreUsage().get(otherStore).blobCount());
+    assertEquals(new RepositoryUsage(3, 84, 1), statistics.repositoryUsage().get(first));
+    assertEquals(BigInteger.valueOf(1), statistics.repositoryUsage().get(group).assetCount());
+    assertFalse(statistics.repositoryUsage().containsKey(empty));
+
+    // Non-asset owners are counted, but their live blobs are not reclaimable.
+    assertTrue(stores().blobReferences().retain("usage-report", report, report));
+    assertEquals(0, stores().assets().markBlobDeletedIfUnreferenced(report, "still referenced"));
+    stores().blobReferences().releaseOwner("usage-report", report);
+    assertEquals(1, stores().assets().markBlobDeletedIfUnreferenced(report, "report deleted"));
+    assertEquals(new BlobStoreUsage(2, 84, 1, 42), statistics.blobStoreUsage().get(store));
+    assertEquals(1, stores().assets().hardDeleteBlobByIdIfDeleted(report));
+    assertEquals(BigInteger.valueOf(1), statistics.blobStoreUsage().get(store).blobCount());
+
+    stores().assets().deleteAssetById(firstAsset);
+    assertEquals(BigInteger.valueOf(2), statistics.repositoryUsage().get(first).assetCount());
+    assertEquals(BigInteger.valueOf(1), statistics.blobStoreUsage().get(store).blobCount());
+    stores().assets().updateAssetBlobBinding(groupAsset, other, "application/octet-stream", 100L, Instant.now());
+    assertEquals(BigInteger.valueOf(1), statistics.repositoryUsage().get(group).assetCount());
+    assertEquals(BigInteger.valueOf(100), statistics.repositoryUsage().get(group).totalBytes());
+  }
+
+  @Test
+  void storageUsagePreservesSumsBeyondLongRange() {
+    String prefix = "usage-large-" + java.util.UUID.randomUUID();
+    long store = stores().blobStores().insert(blobStore(prefix));
+    long repository = insertRepository(prefix, RepositoryFormat.RAW, store);
+    BigInteger total = BigInteger.valueOf(Long.MAX_VALUE).multiply(BigInteger.TWO);
+    List<Long> blobs = new ArrayList<>();
+    for (int index = 0; index < 2; index++) {
+      String path = "large-" + index;
+      blobs.add(stores().assets().insertBlob(blob(store, path, path, Long.MAX_VALUE)));
+      // Independent asset sizes exercise the logical aggregate as well as physical inventory.
+      stores().assets().insertAsset(new AssetRecord(null, repository, null, null,
+          RepositoryFormat.RAW, path, sha256(path), path, "PACKAGE",
+          "application/octet-stream", Long.MAX_VALUE, null, Instant.now(), Map.of()));
+    }
+    stores().assets().insertAsset(new AssetRecord(null, repository, null, null,
+        RepositoryFormat.RAW, "unknown", sha256("unknown"), "unknown", "METADATA",
+        "text/plain", null, null, Instant.now(), Map.of()));
+    var statistics = stores().storageStatistics();
+    assertEquals(new BlobStoreUsage(BigInteger.TWO, total, BigInteger.ZERO, BigInteger.ZERO),
+        statistics.blobStoreUsage().get(store));
+    assertEquals(new RepositoryUsage(BigInteger.valueOf(3), total, BigInteger.ONE),
+        statistics.repositoryUsage().get(repository));
+    for (long blob : blobs) {
+      assertEquals(1, stores().assets().markBlobDeletedIfUnreferenced(blob, "large inventory contract"));
+    }
+    assertEquals(new BlobStoreUsage(BigInteger.TWO, total, BigInteger.TWO, total),
+        statistics.blobStoreUsage().get(store));
+  }
 
   @Test
   void baselineContainsTheCompleteSharedLogicalSchema() {
@@ -5711,10 +5791,14 @@ public abstract class PersistenceApiContract {
   }
 
   private static AssetBlobRecord blob(long blobStoreId, String objectKey, String blobRef) {
+    return blob(blobStoreId, objectKey, blobRef, 42);
+  }
+
+  private static AssetBlobRecord blob(long blobStoreId, String objectKey, String blobRef, long size) {
     Instant now = Instant.parse("2026-07-13T08:00:00Z");
     return new AssetBlobRecord(
         null, blobStoreId, blobRef, sha256(blobRef), objectKey, sha256(objectKey),
-        "1".repeat(40), "2".repeat(64), "3".repeat(32), 42,
+        "1".repeat(40), "2".repeat(64), "3".repeat(32), size,
         "application/octet-stream", "contract",
         "127.0.0.1", now, now, Map.of("origin", "contract"));
   }

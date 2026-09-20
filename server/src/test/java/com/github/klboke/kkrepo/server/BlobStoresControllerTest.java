@@ -11,6 +11,9 @@ import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.argThat;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao.BlobStoreUsage;
+import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao;
+import com.github.klboke.kkrepo.server.statistics.StorageStatisticsService;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.server.support.dao.BlobStoreDaoAdapter;
@@ -21,6 +24,7 @@ import com.github.klboke.kkrepo.storage.file.config.FileStorageProperties;
 import com.github.klboke.kkrepo.storage.s3.config.S3StorageProperties;
 import com.github.klboke.kkrepo.storage.s3.admin.S3BlobStoreAdmin;
 import org.springframework.test.web.servlet.ResultMatcher;
+import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
@@ -39,6 +43,36 @@ import org.springframework.web.server.ResponseStatusException;
 class BlobStoresControllerTest {
   @TempDir
   Path tempDir;
+
+  @Test
+  void usageEndpointUsesCatalogWithoutProbingObjectStorage() throws Exception {
+    InMemoryBlobStoreDao dao = new InMemoryBlobStoreDao();
+    long id = dao.insert(fileRecord("inventory", "inventory"));
+    long emptyId = dao.insert(fileRecord("empty", "empty"));
+    var statisticsDao = mock(StorageStatisticsDao.class);
+    org.mockito.Mockito.when(statisticsDao.blobStoreUsage()).thenReturn(Map.of(id,
+        new BlobStoreUsage(new BigInteger("9007199254740993"), new BigInteger("18446744073709551614"),
+            new BigInteger("9007199254740992"), new BigInteger("18446744073709551613"))));
+    S3BlobStoreAdmin s3 = mock(S3BlobStoreAdmin.class);
+    FileBlobStoreAdmin file = mock(FileBlobStoreAdmin.class);
+    BlobStoresController controller = new BlobStoresController(dao, s3, file, null, null,
+        new S3StorageProperties(), null, null);
+    controller.setStorageStatistics(new StorageStatisticsService(statisticsDao));
+    var mvc = MockMvcBuilders.standaloneSetup(controller).build();
+    var result = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
+        "/internal/blob-stores/statistics/usage")).andExpect(status().isOk()).andReturn();
+    var json = new com.fasterxml.jackson.databind.ObjectMapper().readTree(result.getResponse().getContentAsString());
+    var usage = json.path("usage").path(Long.toString(id));
+    Map.of("blobCount", "9007199254740993", "totalBytes", "18446744073709551614",
+        "pendingDeletionCount", "9007199254740992", "pendingDeletionBytes", "18446744073709551613")
+        .forEach((key, expected) -> {
+          assertTrue(usage.path(key).isTextual(), key);
+          assertEquals(expected, usage.path(key).textValue(), key);
+          assertEquals("0", json.path("usage").path(Long.toString(emptyId)).path(key).textValue());
+        });
+    assertEquals(30, json.path("maxAgeSeconds").asLong());
+    org.mockito.Mockito.verifyNoInteractions(s3, file);
+  }
 
   @Test
   void emptyDatabaseDoesNotExposeRuntimeConfiguredBlobStore() {

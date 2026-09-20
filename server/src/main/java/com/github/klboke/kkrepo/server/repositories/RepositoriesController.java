@@ -18,6 +18,10 @@ import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CreateCommand;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.UpdateCommand;
+import com.github.klboke.kkrepo.server.statistics.StorageStatisticsService;
+import com.github.klboke.kkrepo.server.statistics.StorageStatisticsService.UsageSnapshot;
+import com.github.klboke.kkrepo.server.statistics.StorageUsageResponse;
+import com.github.klboke.kkrepo.server.statistics.StorageUsageResponse.RepositoryUsage;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
 import java.util.Map;
@@ -49,6 +53,7 @@ public class RepositoriesController {
   private RService rService;
   private ConanRegistryDao conanRegistry;
   private RepositoryRuntimeRegistry runtimeRegistry;
+  private StorageStatisticsService statistics;
 
   public RepositoriesController(
       RepositoryService service,
@@ -57,6 +62,19 @@ public class RepositoriesController {
     this.service = service;
     this.authenticationService = authenticationService;
     this.securityService = securityService;
+  }
+
+  @Autowired
+  void setStorageStatistics(StorageStatisticsService statistics) {
+    this.statistics = statistics;
+  }
+
+  @GetMapping("/statistics/usage")
+  public UsageSnapshot<RepositoryUsage> statistics(
+      HttpServletRequest request) {
+    requireAuthenticated(request);
+    return StorageUsageResponse.assets(
+        statistics.assets(list("admin", request).stream().map(RepositoryView::id).toList()));
   }
 
   @Autowired(required = false)

@@ -1,0 +1,19 @@
+backend=mysql
+first_blob_aggregate_ms=397.090
+first_repository_aggregate_ms=256.734
+assets=1000000 blobs=1000000 repositories=100 stores=10 pending_blobs=100000
+uncached_blob_aggregate n=20 p50_ms=335.926 p95_ms=347.999 max_ms=354.114
+uncached_repository_aggregate n=20 p50_ms=248.793 p95_ms=261.695 max_ms=264.526
+16_concurrent_cold_service_pairs n=16 p50_ms=643.703 p95_ms=647.584 max_ms=647.584
+cold_concurrent_aggregate_queries=2
+cached_service_pair n=1000 p50_ms=0.018 p95_ms=0.067 max_ms=0.257
+warm_additional_aggregate_queries=0
+dirty_rows_per_table=20000; no vacuum after updates
+-> Group aggregate: count(asset.size), count(0), sum(asset.size), count(0)  (cost=200867 rows=95) (actual time=686..843 rows=100 loops=1)
+    -> Covering index scan on asset using idx_asset_repository_usage  (cost=106127 rows=947400) (actual time=0.025..755 rows=1e+6 loops=1)
+
+-> Group aggregate: sum(asset_blob.size), count(0), sum((case when (asset_blob.deleted_at is not null) then 1 else 0 end)), sum((case when (asset_blob.deleted_at is not null) then asset_blob.size else 0 end))  (cost=198787 rows=9) (actual time=453..685 rows=10 loops=1)
+    -> Covering index scan on asset_blob using idx_asset_blob_usage  (cost=104227 rows=945603) (actual time=0.0202..524 rows=1e+6 loops=1)
+
+after_updates_blob_aggregate n=20 p50_ms=356.970 p95_ms=378.525 max_ms=408.125
+after_updates_repository_aggregate n=20 p50_ms=250.252 p95_ms=273.659 max_ms=347.383

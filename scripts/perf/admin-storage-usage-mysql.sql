@@ -1,0 +1,33 @@
+-- One million registered blobs and one million assets; 100 repositories, 10 stores.
+-- 60% of rows belong to one repository/store; 20% of assets share existing blobs.
+CREATE TABLE usage_perf_n (n INT PRIMARY KEY) ENGINE=InnoDB;
+INSERT INTO usage_perf_n
+SELECT 1 + a.n + b.n*10 + c.n*100 + d.n*1000 + e.n*10000 + f.n*100000
+FROM (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) a
+CROSS JOIN (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) b
+CROSS JOIN (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) c
+CROSS JOIN (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) d
+CROSS JOIN (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) e
+CROSS JOIN (SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) f;
+INSERT INTO blob_store (id, name, type, attributes_json)
+SELECT n, CONCAT('usage-store-',n), 'FILE', JSON_OBJECT('path',CONCAT('/tmp/kkrepo-usage-mysql/store-',n)) FROM usage_perf_n WHERE n<=10;
+INSERT INTO repository (id,name,format,type,recipe_name,blob_store_id,attributes_json)
+SELECT n,CONCAT('usage-repo-',n),'raw','hosted','raw-hosted',1+FLOOR((n-1)/10),JSON_OBJECT() FROM usage_perf_n WHERE n<=100;
+INSERT INTO asset_blob (id,blob_store_id,blob_ref,blob_ref_hash,object_key,object_key_hash,size,deleted_at,attributes_json)
+SELECT n,CASE WHEN n<=600000 THEN 1 ELSE 1+FLOOR((1+MOD(n-600001,99))/10) END,
+ CONCAT('file:usage/',n),UNHEX(LPAD(HEX(n),64,'0')),CONCAT('objects/',n),UNHEX(LPAD(HEX(n),64,'0')),
+ 1024+MOD(n,4096),CASE WHEN n>900000 THEN CURRENT_TIMESTAMP ELSE NULL END,JSON_OBJECT('fixture',REPEAT('x',256))
+FROM usage_perf_n;
+INSERT INTO asset (id,repository_id,asset_blob_id,format,path,path_hash,name,kind,size,attributes_json)
+SELECT n,CASE WHEN n<=600000 THEN 1 WHEN n>800000 THEN 2+MOD(n,9) ELSE 2+MOD(n-600001,99) END,
+ CASE WHEN n>800000 THEN n-800000 ELSE n END,'raw',CONCAT('packages/',n,'.bin'),UNHEX(LPAD(HEX(n),64,'0')),
+ CONCAT(n,'.bin'),'PACKAGE',1024+MOD(CASE WHEN n>800000 THEN n-800000 ELSE n END,4096),JSON_OBJECT('fixture',REPEAT('x',256))
+FROM usage_perf_n;
+-- Non-asset documents remain part of storage inventory.
+INSERT INTO blob_reference (owner_type,owner_id,blob_id,created_at)
+SELECT 'usage-report',n,n,CURRENT_TIMESTAMP FROM usage_perf_n WHERE n>800000 AND n<=900000;
+UPDATE asset_blob SET external_reference_count=1 WHERE id>800000 AND id<=900000;
+ANALYZE TABLE asset,asset_blob;
+SELECT 'dataset', (SELECT COUNT(*) FROM asset), (SELECT COUNT(*) FROM asset_blob);
+EXPLAIN ANALYZE SELECT blob_store_id,COUNT(*),COALESCE(SUM(size),0),SUM(CASE WHEN deleted_at IS NOT NULL THEN 1 ELSE 0 END),SUM(CASE WHEN deleted_at IS NOT NULL THEN size ELSE 0 END) FROM asset_blob GROUP BY blob_store_id;
+EXPLAIN ANALYZE SELECT repository_id,COUNT(*),COALESCE(SUM(size),0),COUNT(*)-COUNT(size) FROM asset GROUP BY repository_id;

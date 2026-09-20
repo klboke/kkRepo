@@ -3,6 +3,9 @@ package com.github.klboke.kkrepo.server.repositories;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao.RepositoryUsage;
+import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao;
+import com.github.klboke.kkrepo.server.statistics.StorageStatisticsService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
@@ -21,6 +24,7 @@ import com.github.klboke.kkrepo.server.support.dao.SecurityDaoAdapter;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
 import java.lang.reflect.Proxy;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -33,6 +37,58 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
 class RepositoriesControllerSecurityTest {
+
+  @Test
+  void usageRequiresAuthenticationAndUsesAdminReadScope() {
+    StubRepositoryService repositories = new StubRepositoryService();
+    repositories.repositories = List.of(repo("maven-public", RepositoryFormat.MAVEN2));
+    RecordingSecurityService security = new RecordingSecurityService(permission ->
+        permission.equals("nexus:repository-admin:maven2:maven-public:read")
+            ? AccessDecision.allow() : AccessDecision.deny("missing permission"));
+    RepositoriesController controller = controller(repositories, subject("alice"), security);
+    var statisticsDao = org.mockito.Mockito.mock(StorageStatisticsDao.class);
+    Long id = repositories.repositories.getFirst().id();
+    org.mockito.Mockito.when(statisticsDao.repositoryUsage()).thenReturn(Map.of(id,
+        new RepositoryUsage(12, 1000, 0),
+        999L, new RepositoryUsage(99, 2000, 0)));
+    controller.setStorageStatistics(new StorageStatisticsService(statisticsDao));
+    assertEquals(Set.of(id), controller.statistics(request("GET", "/internal/repositories/statistics/usage")).usage().keySet());
+    assertEquals("12", controller.statistics(request("GET", "/internal/repositories/statistics/usage")).usage().get(id).assetCount());
+    org.mockito.Mockito.verify(statisticsDao, org.mockito.Mockito.times(1)).repositoryUsage();
+    RepositoriesController denied = controller(repositories, subject("reader"),
+        new RecordingSecurityService(permission -> AccessDecision.deny("browse only")));
+    denied.setStorageStatistics(new StorageStatisticsService(statisticsDao));
+    assertEquals(Map.of(), denied.statistics(request("GET", "/internal/repositories/statistics/usage")).usage());
+    RepositoriesController anonymous = controller(repositories, null, security);
+    assertThrows(ResponseStatusException.class,
+        () -> anonymous.statistics(request("GET", "/internal/repositories/statistics/usage")));
+  }
+
+  @Test
+  void usageHttpResponsePreservesArbitraryPrecisionMetricsAsDecimalStrings() throws Exception {
+    StubRepositoryService repositories = new StubRepositoryService();
+    repositories.repositories = List.of(repo("large", RepositoryFormat.MAVEN2));
+    RepositoriesController controller = controller(repositories, subject("admin"),
+        new RecordingSecurityService(permission -> AccessDecision.allow()));
+    var dao = org.mockito.Mockito.mock(StorageStatisticsDao.class);
+    Long id = repositories.repositories.getFirst().id();
+    org.mockito.Mockito.when(dao.repositoryUsage()).thenReturn(Map.of(id,
+        new RepositoryUsage(new BigInteger("9007199254740993"),
+            new BigInteger("18446744073709551614"), BigInteger.ZERO)));
+    controller.setStorageStatistics(new StorageStatisticsService(dao));
+    var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller).build();
+    var response = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
+        "/internal/repositories/statistics/usage"))
+        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+        .andReturn().getResponse();
+    var json = new ObjectMapper().readTree(response.getContentAsString());
+    var usage = json.path("usage").path(Long.toString(id));
+    assertEquals("9007199254740993", usage.path("assetCount").textValue());
+    assertEquals("18446744073709551614", usage.path("totalBytes").textValue());
+    assertEquals("0", usage.path("unknownSizeCount").textValue());
+    assertEquals(30, json.path("maxAgeSeconds").intValue());
+    org.junit.jupiter.api.Assertions.assertFalse(json.path("calculatedAt").isMissingNode());
+  }
 
   @Test
   void adminListOnlyReturnsRepositoriesWithRepositoryAdminReadPermission() {

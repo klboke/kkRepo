@@ -11,6 +11,9 @@ import org.springframework.util.ClassUtils;
 public final class JacksonRuntimeHints implements RuntimeHintsRegistrar {
   static final List<String> BINDING_TYPES =
       List.of(
+          "com.github.klboke.kkrepo.server.statistics.StorageUsageResponse$BlobStoreUsage",
+          "com.github.klboke.kkrepo.server.statistics.StorageUsageResponse$RepositoryUsage",
+          "com.github.klboke.kkrepo.server.statistics.StorageStatisticsService$UsageSnapshot",
           "com.github.klboke.kkrepo.server.security.AuthenticatedSubject",
           "com.github.klboke.kkrepo.auth.PermissionSubject",
           "com.github.klboke.kkrepo.server.security.SecurityAuthorizationCache$AuthorizationSnapshot",

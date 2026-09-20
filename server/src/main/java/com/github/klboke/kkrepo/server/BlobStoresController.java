@@ -3,6 +3,10 @@ package com.github.klboke.kkrepo.server;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
+import com.github.klboke.kkrepo.server.statistics.StorageStatisticsService;
+import com.github.klboke.kkrepo.server.statistics.StorageStatisticsService.UsageSnapshot;
+import com.github.klboke.kkrepo.server.statistics.StorageUsageResponse;
+import com.github.klboke.kkrepo.server.statistics.StorageUsageResponse.BlobStoreUsage;
 import com.github.klboke.kkrepo.storage.file.FileBlobStoreConfig;
 import com.github.klboke.kkrepo.storage.file.FileBlobStorePathValidator;
 import com.github.klboke.kkrepo.storage.file.FileBlobStorageFactory;
@@ -20,6 +24,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.env.Environment;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -44,6 +49,20 @@ public class BlobStoresController {
   private final S3StorageProperties s3Properties;
   private final BlobStorageRegistry blobStorageRegistry;
   private final Environment environment;
+  private StorageStatisticsService statistics;
+
+  @Autowired
+  void setStorageStatistics(StorageStatisticsService statistics) {
+    this.statistics = statistics;
+  }
+
+  @GetMapping("/statistics/usage")
+  public UsageSnapshot<BlobStoreUsage> statistics() {
+    // SecurityManagementFilter requires nexus:blobstores:read for this endpoint.
+    // Read only the catalog here: the count request must never probe S3/OSS/File stores.
+    return StorageUsageResponse.blobs(
+        statistics.blobs(blobStoreRecords().stream().map(BlobStoreRecord::id).toList()));
+  }
 
   public BlobStoresController(
       BlobStoreDao blobStoreDao,

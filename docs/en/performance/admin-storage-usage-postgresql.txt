@@ -1,0 +1,43 @@
+backend=postgresql
+first_blob_aggregate_ms=159.922
+first_repository_aggregate_ms=77.484
+assets=1000000 blobs=1000000 repositories=100 stores=10 pending_blobs=100000
+uncached_blob_aggregate n=20 p50_ms=98.432 p95_ms=104.115 max_ms=106.209
+uncached_repository_aggregate n=20 p50_ms=78.796 p95_ms=88.792 max_ms=91.033
+16_concurrent_cold_service_pairs n=16 p50_ms=200.007 p95_ms=203.943 max_ms=203.943
+cold_concurrent_aggregate_queries=2
+cached_service_pair n=1000 p50_ms=0.022 p95_ms=0.069 max_ms=0.401
+warm_additional_aggregate_queries=0
+dirty_rows_per_table=20000; no vacuum after updates
+Finalize GroupAggregate  (cost=1000.45..42314.07 rows=100 width=56) (actual time=509.637..591.842 rows=100 loops=1)
+  Group Key: repository_id
+  Buffers: shared hit=376976 read=17354 dirtied=21019 written=14808
+  ->  Gather Merge  (cost=1000.45..42309.57 rows=200 width=56) (actual time=495.167..591.316 rows=300 loops=1)
+        Workers Planned: 2
+        Workers Launched: 2
+        Buffers: shared hit=376976 read=17354 dirtied=21019 written=14808
+        ->  Partial GroupAggregate  (cost=0.42..41286.46 rows=100 width=56) (actual time=492.080..559.874 rows=100 loops=3)
+              Group Key: repository_id
+              Buffers: shared hit=376976 read=17354 dirtied=21019 written=14808
+              ->  Parallel Index Only Scan using idx_asset_repository_usage on asset  (cost=0.42..37035.25 rows=424996 width=16) (actual time=0.036..525.251 rows=333333 loops=3)
+                    Heap Fetches: 379992
+                    Buffers: shared hit=376976 read=17354 dirtied=21019 written=14808
+Planning Time: 0.268 ms
+Execution Time: 591.911 ms
+Finalize GroupAggregate  (cost=1000.45..43454.89 rows=10 width=88) (actual time=156.935..249.482 rows=10 loops=1)
+  Group Key: blob_store_id
+  Buffers: shared hit=354884 read=59 dirtied=61 written=13
+  ->  Gather Merge  (cost=1000.45..43454.39 rows=20 width=88) (actual time=150.759..249.391 rows=30 loops=1)
+        Workers Planned: 2
+        Workers Launched: 2
+        Buffers: shared hit=354884 read=59 dirtied=61 written=13
+        ->  Partial GroupAggregate  (cost=0.42..42452.06 rows=10 width=88) (actual time=147.164..208.602 rows=10 loops=3)
+              Group Key: blob_store_id
+              Buffers: shared hit=354884 read=59 dirtied=61 written=13
+              ->  Parallel Index Only Scan using idx_asset_blob_usage on asset_blob  (cost=0.42..37244.85 rows=416565 width=24) (actual time=0.016..168.658 rows=333333 loops=3)
+                    Heap Fetches: 359994
+                    Buffers: shared hit=354884 read=59 dirtied=61 written=13
+Planning Time: 0.121 ms
+Execution Time: 249.516 ms
+after_updates_blob_aggregate n=20 p50_ms=217.840 p95_ms=244.462 max_ms=289.687
+after_updates_repository_aggregate n=20 p50_ms=199.849 p95_ms=223.475 max_ms=228.963
