@@ -43,6 +43,8 @@ import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
+import java.net.ConnectException;
+import java.nio.channels.UnresolvedAddressException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
@@ -117,6 +119,20 @@ class NexusMigrationControllerTest {
     assertEquals(
         "Nexus API /service/rest/v1/security/users?source=default timed out after 30s",
         response.getBody().get("message"));
+  }
+
+  @Test
+  void sourceRequestFailureHandlerFallsBackToExceptionTypeWhenMessageIsMissing() {
+    NexusMigrationController controller = controllerWith(null);
+    ConnectException failure = new ConnectException();
+    failure.initCause(new UnresolvedAddressException());
+
+    ResponseEntity<Map<String, Object>> response = controller.handleSourceRequestFailure(failure);
+
+    assertEquals(HttpStatus.BAD_GATEWAY, response.getStatusCode());
+    assertEquals(HttpStatus.BAD_GATEWAY.value(), response.getBody().get("status"));
+    assertEquals("Bad Gateway", response.getBody().get("error"));
+    assertEquals("ConnectException", response.getBody().get("message"));
   }
 
   @Test
