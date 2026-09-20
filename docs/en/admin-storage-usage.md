@@ -14,13 +14,18 @@ or unrelated totals.
 | Where is registered storage concentrated? | Blob Stores: Blob Count, Stored size; sort by largest size | Each registered object counts once, including shared blobs and non-asset documents. |
 | Why has deleting content not released space? | Blob Stores: Pending cleanup bytes and blob count | Soft-deleted objects waiting for physical GC; already included in Stored size. |
 | Which repositories should I inspect? | Store's Repositories action; repository size sort | Filters by configured store; repositories can also refer to shared content in other stores. |
-| How many files does a repository hold? | Repositories: Asset Count | Includes artifact files, persisted metadata/checksums and that repository's own group cache. |
+| How many files does a repository hold? | Repositories: Asset Count | Hosted uploads and proxy caches, including persisted metadata/checksums; groups display `—`. |
 | Which repositories have the most logical content? | Repositories: Logical size | Sum of asset sizes, with shared content counted per asset. It is not physical occupied space. |
 | Is the inventory current and complete? | Updated time, loading/error markers, size lower bound | Snapshots are cached for 30 seconds; `≥` indicates some asset sizes are unknown. |
 
 Hosted repositories count stored uploads, proxy repositories count their local
-cached content, and group repositories count their own persisted entries without
-summing their members. Asset Count is not a package/version count. Pending cleanup
+cached content. Group repositories display `—` for Asset Count and logical size
+and are excluded from usage totals and numeric sorting. They still count toward
+Matching repositories; a group-only filter displays `—` in both usage summaries.
+The tooltip identifies this as not applicable, rather than a statistics failure.
+Some group protocols persist cache references or generated metadata: the raw
+statistics endpoint retains these entries, and any registered blobs remain in
+Blob Stores totals. Asset Count is not a package/version count. Pending cleanup
 is an inventory backlog, not a claim that every byte can be reclaimed immediately.
 
 Blob size comes from the database. It excludes unregistered objects, incomplete
@@ -32,7 +37,8 @@ so repository totals are never presented as a reconciliation of physical bytes.
 ## Freshness, failures and permissions
 
 The first summary card shows the snapshot update time; its info icon explains the
-cache and refresh behavior. Long storage paths and URLs are truncated in the table
+cache and refresh behavior. Metric definitions appear in info popovers beside
+the corresponding summary titles, without standalone explanation lines. Long storage paths and URLs are truncated in the table
 with their full values available on hover.
 
 The configuration list renders first and usage loads independently. Refresh reloads

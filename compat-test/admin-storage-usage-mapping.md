@@ -38,8 +38,12 @@ unregistered objects and bucket version history are excluded. Non-asset objects
 registered in `asset_blob` (such as scan documents) are included. A GC backlog is
 inventory awaiting reclamation, not a promise of immediately reclaimable bytes.
 
-Repository metrics count each repository's own asset rows, including metadata,
-checksums and group caches. Members are not summed. Logical size counts shared
+The raw repository endpoint counts each repository's own asset rows, including
+metadata, checksums and group caches. Members are not summed. The admin view
+shows group Asset Count and logical size as `—` (not applicable), excludes groups
+from usage summaries and sorts them after numeric values in either direction.
+Matching repositories still includes groups; group-only usage summaries show `—`.
+Registered group blobs remain included in Blob Stores totals. Logical size counts shared
 content once per asset, so adding repository sizes is not a physical storage
 estimate. Unknown asset sizes produce a lower-bound size indicator. These
 repository metrics and pending cleanup breakdown are kkRepo admin extensions,

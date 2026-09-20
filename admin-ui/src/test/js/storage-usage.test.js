@@ -47,6 +47,56 @@ test('summary follows filtered rows and does not turn partial missing statistics
   c.renderUsageSummary('repository', [{id:1},{id:3}], {usage:{1:{assetCount:2,totalBytes:2048}},calculatedAt:'2026-09-19T10:00:00Z'});
   assert.match(element('repository-usage-size').innerHTML, /—/);
 });
+test('group usage is not applicable even with cached assets or unavailable statistics', () => {
+  const { context: c } = setup();
+  const snapshot = {usage:{1:{assetCount:7,totalBytes:2048}}};
+  for (const state of [undefined, null, snapshot]) {
+    for (const type of ['group', 'GROUP']) {
+      for (const key of ['assetCount', 'totalBytes']) {
+        const rendered = c.renderRepositoryMetric(state, {id:1,type}, key, key === 'totalBytes');
+        assert.match(rendered, /Not applicable to group repositories/);
+        assert.match(rendered, />—</);
+        assert.doesNotMatch(rendered, /Loading|unavailable|2048|7/);
+      }
+    }
+  }
+  assert.equal(c.renderRepositoryMetric(snapshot, {id:1,type:'hosted'}, 'assetCount'), '7');
+  assert.equal(c.renderRepositoryMetric(snapshot, {id:1,type:'proxy'}, 'totalBytes', true), '2 KiB');
+});
+test('repository totals exclude groups but matching count includes them, including group-only filters', () => {
+  const { context: c, element } = setup();
+  const rows = [{id:1,type:'hosted'}, {id:2,type:'proxy'}, {id:3,type:'GROUP'}];
+  const snapshot = {usage:{1:{assetCount:2,totalBytes:2048},2:{assetCount:0,totalBytes:0},3:{assetCount:100,totalBytes:9999,unknownSizeCount:1}}};
+  c.renderUsageSummary('repository', rows, snapshot);
+  assert.equal(element('repository-usage-matching').textContent, '3');
+  assert.equal(element('repository-usage-count').innerHTML, '2');
+  assert.equal(element('repository-usage-size').innerHTML, '2 KiB');
+  delete snapshot.usage[3];
+  c.renderUsageSummary('repository', rows, snapshot);
+  assert.equal(element('repository-usage-count').innerHTML, '2');
+  for (const state of [undefined, null, snapshot]) {
+    c.renderUsageSummary('repository', [rows[2]], state);
+    assert.equal(element('repository-usage-matching').textContent, '1');
+    assert.match(element('repository-usage-count').innerHTML, /Not applicable.*>—</);
+    assert.match(element('repository-usage-size').innerHTML, /Not applicable.*>—</);
+  }
+  c.renderUsageSummary('repository', [], snapshot);
+  assert.equal(element('repository-usage-count').innerHTML, '0');
+  assert.equal(element('repository-usage-size').innerHTML, '0 B');
+  c.renderUsageSummary('blobstore', [{id:3,type:'group'}], {usage:{3:{blobCount:100,totalBytes:9999,pendingDeletionBytes:0}}});
+  assert.equal(element('blobstore-usage-count').innerHTML, '100');
+});
+test('group cache values never affect ascending or descending usage sorting', () => {
+  const { context: c, run } = setup();
+  const rows = [{id:1,name:'hosted',type:'hosted'},{id:2,name:'proxy',type:'proxy'},{id:3,name:'group',type:'group'}];
+  run('repositoryUsage = {usage:{1:{assetCount:9,totalBytes:9},2:{assetCount:100,totalBytes:100},3:{assetCount:999,totalBytes:999}}};');
+  for (const key of ['assetCount', 'totalBytes']) {
+    run(`repositorySort={key:'${key}',direction:'desc'};`);
+    assert.equal(c.sortRepositories(rows).map(r=>r.id).join(','), '2,1,3');
+    run(`repositorySort={key:'${key}',direction:'asc'};`);
+    assert.equal(c.sortRepositories(rows).map(r=>r.id).join(','), '1,2,3');
+  }
+});
 test('refresh updates the timestamp without replacing the summary and its help trigger', () => {
   const { context: c, element } = setup();
   element('blobstore-usage-summary').innerHTML = 'existing help trigger';

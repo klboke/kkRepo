@@ -1306,7 +1306,9 @@ function filteredRepositories() {
 }
 
 function repositorySortValue(repo, key) {
-  if (["assetCount", "totalBytes"].includes(key)) return repositoryUsage?.usage?.[repo.id]?.[key] ?? null;
+  if (["assetCount", "totalBytes"].includes(key)) {
+    return lowerOrEmpty(repo.type) === "group" ? null : inventoryValue(repositoryUsage, repo.id, key);
+  }
   if (key === "recipe") return repo.recipe || "";
   if (key === "type") return lowerOrEmpty(repo.type);
   if (key === "format") return lowerOrEmpty(repo.format);
@@ -1389,8 +1391,8 @@ function renderRepositories() {
         <td>${formatBadge(repo.format)}</td>
         <td><span class="state-badge compact ${tone}">${status}</span></td>
         <td>${blobStore}</td>
-        <td class="inventory-count">${renderInventoryMetric(repositoryUsage, repo.id, "assetCount")}</td>
-        <td class="inventory-count">${renderInventoryMetric(repositoryUsage, repo.id, "totalBytes", true)}</td>
+        <td class="inventory-count">${renderRepositoryMetric(repositoryUsage, repo, "assetCount")}</td>
+        <td class="inventory-count">${renderRepositoryMetric(repositoryUsage, repo, "totalBytes", true)}</td>
         <td class="usage-location"><code title="${escapeHtml(displayUrl)}">${escapeHtml(displayUrl)}</code></td>
         <td class="actions-column">
           <button class="row-action edit-repository-button" data-name="${escapeHtml(repo.name)}" type="button">edit</button>
@@ -1587,19 +1589,32 @@ function renderInventoryMetric(snapshot, id, key, bytes = false) {
   return unknown ? `<span title="Some asset sizes are unknown; this is a lower bound.">≥ ${escapeHtml(formatted)}</span>` : escapeHtml(formatted);
 }
 
+function renderGroupUsage() {
+  return '<span class="health-muted" title="Not applicable to group repositories. Inspect member repositories for usage.">—</span>';
+}
+
+function renderRepositoryMetric(snapshot, repo, key, bytes = false) {
+  return lowerOrEmpty(repo.type) === "group" ? renderGroupUsage()
+    : renderInventoryMetric(snapshot, repo.id, key, bytes);
+}
+
 function renderUsageSummary(kind, rows, snapshot) {
   const blob = kind === "blobstore";
+  // Groups are routing views, so their persisted cache entries are not presented
+  // as independent repository usage. Physical blobs remain in blob-store totals.
+  const usageRows = blob ? rows : rows.filter((row) => lowerOrEmpty(row.type) !== "group");
+  const groupOnly = !blob && rows.length > 0 && usageRows.length === 0;
   const keys = blob ? ["blobCount", "totalBytes", "pendingDeletionBytes"] : ["assetCount", "totalBytes"];
   const totals = {};
   keys.forEach((key) => {
-    const values = rows.map((row) => inventoryValue(snapshot, row.id, key));
+    const values = usageRows.map((row) => inventoryValue(snapshot, row.id, key));
     totals[key] = values.some((value) => value == null) ? null : values.reduce((a, b) => a + b, 0);
   });
-  totals.unknownSizeCount = rows.some((row) => inventoryValue(snapshot, row.id, "unknownSizeCount") > 0) ? 1 : 0;
+  totals.unknownSizeCount = usageRows.some((row) => inventoryValue(snapshot, row.id, "unknownSizeCount") > 0) ? 1 : 0;
   const totalSnapshot = snapshot === undefined ? undefined : snapshot === null ? null : { usage: { all: totals } };
   document.getElementById(`${kind}-usage-matching`).textContent = rows.length.toLocaleString();
-  document.getElementById(`${kind}-usage-count`).innerHTML = renderInventoryMetric(totalSnapshot, "all", keys[0]);
-  document.getElementById(`${kind}-usage-size`).innerHTML = renderInventoryMetric(totalSnapshot, "all", "totalBytes", true);
+  document.getElementById(`${kind}-usage-count`).innerHTML = groupOnly ? renderGroupUsage() : renderInventoryMetric(totalSnapshot, "all", keys[0]);
+  document.getElementById(`${kind}-usage-size`).innerHTML = groupOnly ? renderGroupUsage() : renderInventoryMetric(totalSnapshot, "all", "totalBytes", true);
   if (blob) document.getElementById("blobstore-usage-pending").innerHTML = renderInventoryMetric(totalSnapshot, "all", "pendingDeletionBytes", true);
   // Keep the summary DOM (including its bound help trigger) stable during refreshes.
   const time = snapshot?.calculatedAt ? new Date(snapshot.calculatedAt) : null;

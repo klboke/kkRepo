@@ -4554,7 +4554,6 @@ code {
 .usage-overview .summary-grid { margin-top: 0; }
 .usage-overview .summary-grid .field-label { display: flex; }
 .usage-overview .summary-grid .field-help { display: inline-flex; }
-.usage-note { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--text-muted, #616161); font-size: 12px; margin-top: 5px; }
 .usage-secondary { display: block; margin-top: 3px; color: var(--text-muted, #616161); font-size: 12px; font-weight: normal; }
 .usage-location { max-width: 260px; min-width: 140px; }
 .usage-location .usage-secondary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
