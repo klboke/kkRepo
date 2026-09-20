@@ -94,7 +94,7 @@ class RepositorySecurityFilterTest {
   }
 
   @Test
-  void readOnlyAnonymousRequestsAreForbiddenWhenAnonymousRoleLacksPermission() throws Exception {
+  void readOnlyAnonymousRequestsChallengeWhenAnonymousRoleLacksPermission() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(subject("anonymous"));
     RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.deny("missing permission"));
     RepositorySecurityFilter filter = filter(
@@ -112,8 +112,64 @@ class RepositorySecurityFilterTest {
 
     assertEquals(1, authentication.anonymousCalls);
     assertEquals(0, chain.calls);
+    assertEquals(HttpServletResponse.SC_UNAUTHORIZED, response.status);
+    assertEquals("Basic realm=\"kkrepo\"", response.headers.get("WWW-Authenticate"));
+    assertEquals("Authentication required", response.message);
+  }
+
+  @Test
+  void nugetAnonymousReadWithoutPermissionChallengesForBasicCredentials() throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(subject("docker-anon"));
+    RecordingDecisionService decisions =
+        new RecordingDecisionService(AccessDecision.deny("missing read"));
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "nuget-proxy", RepositoryFormat.NUGET, RepositoryType.PROXY)),
+        true);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/repository/nuget-proxy/index.json"),
+        response.proxy(),
+        chain);
+
+    assertEquals(1, authentication.anonymousCalls);
+    assertEquals(0, chain.calls);
+    assertEquals("docker-anon", decisions.subject.userId());
+    assertEquals(HttpServletResponse.SC_UNAUTHORIZED, response.status);
+    assertEquals("Basic realm=\"kkrepo\"", response.headers.get("WWW-Authenticate"));
+  }
+
+  @Test
+  void nugetAuthenticatedReadWithoutPermissionRemainsForbidden() throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingDecisionService decisions =
+        new RecordingDecisionService(AccessDecision.deny("missing read"));
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "nuget-proxy", RepositoryFormat.NUGET, RepositoryType.PROXY)),
+        true);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("GET", "/repository/nuget-proxy/index.json"),
+        response.proxy(),
+        chain);
+
+    assertEquals(0, authentication.anonymousCalls);
+    assertEquals(0, chain.calls);
+    assertEquals("alice", decisions.subject.userId());
     assertEquals(HttpServletResponse.SC_FORBIDDEN, response.status);
-    assertEquals("missing permission", response.message);
+    assertNull(response.headers.get("WWW-Authenticate"));
+    assertEquals("missing read", response.message);
   }
 
   @Test

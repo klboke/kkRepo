@@ -220,6 +220,10 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
 
     AccessDecision decision = decide(authenticated.get(), repository.get(), target);
     if (!decision.allowed()) {
+      if (authenticatedAnonymously) {
+        challenge(request, response, repository.get(), target);
+        return;
+      }
       if (repository.get().format() == RepositoryFormat.SWIFT) {
         swiftProblem(response, HttpServletResponse.SC_FORBIDDEN, "Forbidden", decision.reason());
         return;
