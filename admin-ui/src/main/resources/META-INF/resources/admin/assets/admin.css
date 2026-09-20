@@ -4550,8 +4550,8 @@ code {
   font-variant-numeric: tabular-nums;
 }
 
-.usage-overview { flex: 0 0 auto; margin: 0 24px 12px; }
-.usage-overview .summary-grid { margin-top: 0; }
+.usage-overview { flex: 0 0 auto; margin: 0 24px 8px; }
+.usage-overview .summary-grid { margin: 0; }
 .usage-overview .summary-grid .field-label { display: flex; }
 .usage-overview .summary-grid .field-help { display: inline-flex; }
 .usage-secondary { display: block; margin-top: 3px; color: var(--text-muted, #616161); font-size: 12px; font-weight: normal; }
