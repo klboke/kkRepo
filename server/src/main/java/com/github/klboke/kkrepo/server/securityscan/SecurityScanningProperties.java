@@ -6,7 +6,13 @@ import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
-/** Operational settings. Durable ownership and correctness remain in the relational database. */
+/**
+ * Operational settings. Durable ownership and correctness remain in the relational database.
+ *
+ * <p>The deployment {@code enabled} flag is a runtime work gate. Security-scanning beans must
+ * remain registered because native AOT processing freezes property-driven bean conditions at build
+ * time.
+ */
 @Component
 @ConfigurationProperties(prefix = "kkrepo.security-scanning")
 public class SecurityScanningProperties {

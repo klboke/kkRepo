@@ -11,7 +11,6 @@ import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.dao.RecoverableDataAccessException;
 import org.springframework.dao.TransientDataAccessException;
@@ -20,8 +19,6 @@ import org.springframework.stereotype.Component;
 
 /** Cursor-based history discovery; repeated pages are idempotent and bounded. */
 @Component
-@ConditionalOnProperty(
-    prefix = "kkrepo.security-scanning", name = "enabled", havingValue = "true")
 public class SecurityScanBackfillWorker {
   private static final Logger log = LoggerFactory.getLogger(SecurityScanBackfillWorker.class);
 
@@ -43,6 +40,9 @@ public class SecurityScanBackfillWorker {
       fixedDelayString = "${kkrepo.security-scanning.backfill-delay-ms:1000}",
       initialDelayString = "${kkrepo.security-scanning.initial-delay-ms:5000}")
   public void runOnce() {
+    if (!properties.isEnabled()) {
+      return;
+    }
     for (BackfillJob job : coordinator.claim(workerId)) {
       process(job);
     }

@@ -2,7 +2,6 @@ package com.github.klboke.kkrepo.server.securityscan;
 
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicBoolean;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 /**
@@ -18,16 +17,21 @@ import org.springframework.stereotype.Component;
  * it is being validated and persisted.
  */
 @Component
-@ConditionalOnProperty(
-    prefix = "kkrepo.security-scanning", name = "enabled", havingValue = "true")
 public class SecurityScanResponseMemoryBudget {
   static final int TRANSIENT_BYTES_PER_WIRE_BYTE = 3;
   static final int TRANSIENT_BYTES_PER_JSON_TOKEN = 256;
 
   private final Semaphore permits;
   private final int maxConcurrentTasks;
+  private final boolean enabled;
 
   public SecurityScanResponseMemoryBudget(SecurityScanningProperties properties) {
+    enabled = properties.isEnabled();
+    if (!enabled) {
+      maxConcurrentTasks = 0;
+      permits = new Semaphore(0, true);
+      return;
+    }
     long configuredBudget = properties.getResponseMemoryBudgetBytes();
     long maximumHeapShare = Runtime.getRuntime().maxMemory() / 2;
     if (configuredBudget > maximumHeapShare) {
@@ -57,6 +61,9 @@ public class SecurityScanResponseMemoryBudget {
   }
 
   public Lease acquire() throws InterruptedException {
+    if (!enabled) {
+      throw new IllegalStateException("Security scanning is disabled");
+    }
     permits.acquire();
     return new Lease(permits);
   }

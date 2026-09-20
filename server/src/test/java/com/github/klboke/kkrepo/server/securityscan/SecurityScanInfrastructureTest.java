@@ -179,17 +179,20 @@ class SecurityScanInfrastructureTest {
   void candidateWorkerContinuesWhenEitherDurableBatchFails() {
     SecurityScanArtifactChangeService changes = mock(SecurityScanArtifactChangeService.class);
     SecurityScanCandidateService candidates = mock(SecurityScanCandidateService.class);
-    SecurityScanArtifactChangeWorker changeWorker = new SecurityScanArtifactChangeWorker(changes);
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.setEnabled(true);
+    SecurityScanArtifactChangeWorker changeWorker =
+        new SecurityScanArtifactChangeWorker(changes, properties);
     doThrow(new IllegalStateException("changes")).when(changes).processBatch();
 
     changeWorker.runOnce();
-    new SecurityScanCandidateWorker(candidates).runOnce();
+    new SecurityScanCandidateWorker(candidates, properties).runOnce();
 
     verify(candidates).processBatch();
 
     SecurityScanCandidateService secondCandidates = mock(SecurityScanCandidateService.class);
     doThrow(new IllegalStateException("candidates")).when(secondCandidates).processBatch();
-    new SecurityScanCandidateWorker(secondCandidates).runOnce();
+    new SecurityScanCandidateWorker(secondCandidates, properties).runOnce();
   }
 
   @Test
@@ -197,6 +200,7 @@ class SecurityScanInfrastructureTest {
     SecurityScanDao scans = mock(SecurityScanDao.class);
     SecurityScanBackfillCoordinator coordinator = mock(SecurityScanBackfillCoordinator.class);
     SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.setEnabled(true);
     BackfillJob success = backfill(1L, "lease-1");
     BackfillJob failure = backfill(2L, "lease-2");
     when(coordinator.claim(any())).thenReturn(List.of(success, failure));
@@ -234,6 +238,7 @@ class SecurityScanInfrastructureTest {
     SecurityScanDao scans = mock(SecurityScanDao.class);
     SecurityScanBackfillCoordinator coordinator = mock(SecurityScanBackfillCoordinator.class);
     SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.setEnabled(true);
     properties.getWorker().setMaxAttempts(2);
     BackfillJob retryable = backfill(1L, "lease-1", 1);
     BackfillJob exhausted = backfill(2L, "lease-2", 2);
@@ -271,6 +276,7 @@ class SecurityScanInfrastructureTest {
     SecurityScanDao scans = mock(SecurityScanDao.class);
     SecurityScanBackfillCoordinator coordinator = mock(SecurityScanBackfillCoordinator.class);
     SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.setEnabled(true);
     properties.getWorker().setBackfillBatchSize(10);
     properties.getWorker().setBackfillMaxPagesPerRun(2);
     properties.getWorker().setLeaseSeconds(30);
@@ -342,8 +348,10 @@ class SecurityScanInfrastructureTest {
     when(changes.retainedRange())
         .thenReturn(Optional.of(
             new ArtifactChangeDao.EventRange(10L, 21L, Instant.now().minusSeconds(30))));
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.setEnabled(true);
     SecurityScanArtifactChangeMetrics eventMetrics =
-        new SecurityScanArtifactChangeMetrics(changes, registry);
+        new SecurityScanArtifactChangeMetrics(changes, registry, properties);
 
     eventMetrics.refresh();
 
@@ -370,7 +378,6 @@ class SecurityScanInfrastructureTest {
 
     SecurityScanDao scans = mock(SecurityScanDao.class);
     SecurityScanMetrics metrics = mock(SecurityScanMetrics.class);
-    SecurityScanningProperties properties = new SecurityScanningProperties();
     properties.getRetention().setTerminalTaskDays(7);
     properties.getRetention().setResultDays(30);
     properties.getRetention().setBatchSize(50);

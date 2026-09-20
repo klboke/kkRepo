@@ -6,22 +6,23 @@ import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.atomic.AtomicLong;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /** Backlog visibility for the durable artifact-change projection. */
 @Component
-@ConditionalOnProperty(
-    prefix = "kkrepo.security-scanning", name = "enabled", havingValue = "true")
 public class SecurityScanArtifactChangeMetrics {
   private final ArtifactChangeDao changes;
+  private final SecurityScanningProperties properties;
   private final AtomicLong backlog = new AtomicLong();
   private final AtomicLong oldestAgeSeconds = new AtomicLong();
 
   public SecurityScanArtifactChangeMetrics(
-      ArtifactChangeDao changes, MeterRegistry registry) {
+      ArtifactChangeDao changes,
+      MeterRegistry registry,
+      SecurityScanningProperties properties) {
     this.changes = changes;
+    this.properties = properties;
     Gauge.builder("kkrepo_security_scan_artifact_event_backlog", backlog, AtomicLong::get)
         .description("Unreclaimed artifact content-change events")
         .register(registry);
@@ -35,6 +36,11 @@ public class SecurityScanArtifactChangeMetrics {
 
   @Scheduled(fixedDelayString = "${kkrepo.security-scanning.metrics-refresh:15s}")
   public void refresh() {
+    if (!properties.isEnabled()) {
+      backlog.set(0);
+      oldestAgeSeconds.set(0);
+      return;
+    }
     Instant now = Instant.now();
     changes.retainedRange().ifPresentOrElse(range -> {
       backlog.set(range.estimatedCount());

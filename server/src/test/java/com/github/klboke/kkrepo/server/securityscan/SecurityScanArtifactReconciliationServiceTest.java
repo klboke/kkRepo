@@ -112,8 +112,10 @@ class SecurityScanArtifactReconciliationServiceTest {
     SecurityScanArtifactReconciliationService reconciliation =
         mock(SecurityScanArtifactReconciliationService.class);
     when(reconciliation.processBatch()).thenThrow(new IllegalStateException("database"));
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.setEnabled(true);
 
-    new SecurityScanArtifactReconciliationWorker(reconciliation).runOnce();
+    new SecurityScanArtifactReconciliationWorker(reconciliation, properties).runOnce();
 
     verify(reconciliation).processBatch();
   }

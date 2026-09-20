@@ -22,14 +22,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import io.micrometer.core.instrument.Timer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /** Executes claimed tasks concurrently while DB leases remain the cluster ownership authority. */
 @Component
-@ConditionalOnProperty(
-    prefix = "kkrepo.security-scanning", name = "enabled", havingValue = "true")
 public class SecurityScanTaskWorker {
   private static final Logger log = LoggerFactory.getLogger(SecurityScanTaskWorker.class);
   private static final long SHUTDOWN_GRACE_SECONDS = 10;
@@ -78,6 +75,9 @@ public class SecurityScanTaskWorker {
       fixedDelayString = "${kkrepo.security-scanning.task-delay-ms:1000}",
       initialDelayString = "${kkrepo.security-scanning.initial-delay-ms:5000}")
   public void runOnce() {
+    if (!properties.isEnabled()) {
+      return;
+    }
     reapExpiredExhaustedTasks();
     List<ScanTask> tasks;
     try {

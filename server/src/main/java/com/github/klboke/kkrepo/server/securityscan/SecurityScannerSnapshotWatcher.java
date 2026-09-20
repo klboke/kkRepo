@@ -7,7 +7,6 @@ import java.time.Instant;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -16,8 +15,6 @@ import org.springframework.stereotype.Component;
  * cursor service; no JVM-local observation is correctness-critical.
  */
 @Component
-@ConditionalOnProperty(
-    prefix = "kkrepo.security-scanning", name = "enabled", havingValue = "true")
 public class SecurityScannerSnapshotWatcher {
   private static final Logger log =
       LoggerFactory.getLogger(SecurityScannerSnapshotWatcher.class);
@@ -26,22 +23,28 @@ public class SecurityScannerSnapshotWatcher {
   private final SecurityScannerSnapshotService snapshots;
   private final SecurityScannerSnapshotRematchService rematches;
   private final SecurityScanAuditService audit;
+  private final SecurityScanningProperties properties;
 
   public SecurityScannerSnapshotWatcher(
       SecurityScanDao scans,
       SecurityScannerSnapshotService snapshots,
       SecurityScannerSnapshotRematchService rematches,
-      SecurityScanAuditService audit) {
+      SecurityScanAuditService audit,
+      SecurityScanningProperties properties) {
     this.scans = scans;
     this.snapshots = snapshots;
     this.rematches = rematches;
     this.audit = audit;
+    this.properties = properties;
   }
 
   @Scheduled(
       fixedDelayString = "${kkrepo.security-scanning.snapshot-watch-delay:60s}",
       initialDelayString = "${kkrepo.security-scanning.snapshot-watch-initial-delay:15s}")
   public void reconcile() {
+    if (!properties.isEnabled()) {
+      return;
+    }
     ScannerSnapshot previous = scans.latestReadyScannerSnapshot(
         SecurityScannerStatus.maximumProvenanceTimestamp(Instant.now())).orElse(null);
     ScannerSnapshot current;
