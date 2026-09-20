@@ -32,7 +32,6 @@ import java.util.Objects;
 import java.util.OptionalLong;
 import java.util.Set;
 import java.util.UUID;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -43,8 +42,6 @@ import org.springframework.transaction.annotation.Transactional;
  * cursors continue through assets. Deterministic task keys remain a second idempotency boundary.
  */
 @Component
-@ConditionalOnProperty(
-    prefix = "kkrepo.security-scanning", name = "enabled", havingValue = "true")
 public class SecurityPolicyReconciler {
   static final String WORK_CURSOR = "security_scan_policy_work";
   static final String ASSET_CURSOR_PREFIX = "security_scan_policy_assets:";
@@ -76,6 +73,9 @@ public class SecurityPolicyReconciler {
       initialDelayString = "${kkrepo.security-scanning.policy-reconcile-initial-delay:20s}")
   @Transactional
   public void runOnce() {
+    if (!properties.isEnabled()) {
+      return;
+    }
     int batchSize = properties.getWorker().getSnapshotRematchBatchSize();
     int maxBatches = properties.getWorker().getSnapshotRematchMaxBatches();
     int remaining = batchSize * maxBatches;

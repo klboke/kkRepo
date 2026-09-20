@@ -10,14 +10,14 @@ class SecurityScanResponseMemoryBudgetTest {
   @Test
   void conservativeDefaultsAdmitOneLargeDecodedResponse() {
     SecurityScanResponseMemoryBudget budget =
-        new SecurityScanResponseMemoryBudget(new SecurityScanningProperties());
+        new SecurityScanResponseMemoryBudget(enabledProperties());
 
     assertEquals(1, budget.maxConcurrentTasks());
   }
 
   @Test
   void derivesSharedConcurrencyFromTheBoundedWireAndTokenEnvelope() {
-    SecurityScanningProperties properties = new SecurityScanningProperties();
+    SecurityScanningProperties properties = enabledProperties();
     properties.setMaxResponseBytes(1024);
     properties.setMaxResponseTokens(1024);
     properties.setResponseMemoryBudgetBytes(530_432);
@@ -31,7 +31,7 @@ class SecurityScanResponseMemoryBudgetTest {
 
   @Test
   void neverAdmitsMoreTasksThanTheWorkerCanClaim() {
-    SecurityScanningProperties properties = new SecurityScanningProperties();
+    SecurityScanningProperties properties = enabledProperties();
     properties.setMaxResponseBytes(1024);
     properties.setMaxResponseTokens(1024);
     properties.setResponseMemoryBudgetBytes(795_648);
@@ -45,7 +45,7 @@ class SecurityScanResponseMemoryBudgetTest {
 
   @Test
   void rejectsAConfigurationThatCannotAdmitOneBoundedResponse() {
-    SecurityScanningProperties properties = new SecurityScanningProperties();
+    SecurityScanningProperties properties = enabledProperties();
     properties.setMaxResponseBytes(1024);
     properties.setMaxResponseTokens(1024);
     properties.setResponseMemoryBudgetBytes(265_215);
@@ -59,7 +59,7 @@ class SecurityScanResponseMemoryBudgetTest {
 
   @Test
   void rejectsAnOverflowingResponseReservation() {
-    SecurityScanningProperties properties = new SecurityScanningProperties();
+    SecurityScanningProperties properties = enabledProperties();
     properties.setMaxResponseBytes(Long.MAX_VALUE);
     properties.setMaxResponseTokens(Integer.MAX_VALUE);
 
@@ -72,7 +72,7 @@ class SecurityScanResponseMemoryBudgetTest {
 
   @Test
   void rejectsABudgetLargerThanHalfTheJvmHeap() {
-    SecurityScanningProperties properties = new SecurityScanningProperties();
+    SecurityScanningProperties properties = enabledProperties();
     properties.setMaxResponseBytes(1024);
     properties.setMaxResponseTokens(1024);
     properties.setResponseMemoryBudgetBytes(Long.MAX_VALUE);
@@ -82,5 +82,23 @@ class SecurityScanResponseMemoryBudgetTest {
         () -> new SecurityScanResponseMemoryBudget(properties));
 
     assertTrue(failure.getMessage().contains("half"));
+  }
+
+  @Test
+  void disabledDeploymentDoesNotValidateOrReserveScannerResponseMemory() {
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.setResponseMemoryBudgetBytes(Long.MAX_VALUE);
+
+    SecurityScanResponseMemoryBudget budget =
+        new SecurityScanResponseMemoryBudget(properties);
+
+    assertEquals(0, budget.maxConcurrentTasks());
+    assertThrows(IllegalStateException.class, budget::acquire);
+  }
+
+  private static SecurityScanningProperties enabledProperties() {
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.setEnabled(true);
+    return properties;
   }
 }

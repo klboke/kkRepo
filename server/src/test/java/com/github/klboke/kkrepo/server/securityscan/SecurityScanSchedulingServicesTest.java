@@ -469,8 +469,10 @@ class SecurityScanSchedulingServicesTest {
     SecurityScannerSnapshotRematchService rematches =
         mock(SecurityScannerSnapshotRematchService.class);
     SecurityScanAuditService audit = mock(SecurityScanAuditService.class);
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.setEnabled(true);
     SecurityScannerSnapshotWatcher watcher =
-        new SecurityScannerSnapshotWatcher(scans, snapshots, rematches, audit);
+        new SecurityScannerSnapshotWatcher(scans, snapshots, rematches, audit, properties);
     ScannerSnapshot previous =
         snapshot(1L, true, "db-1", Instant.now(), "old");
     ScannerSnapshot current =
@@ -601,6 +603,7 @@ class SecurityScanSchedulingServicesTest {
     AssetDao assets = mock(AssetDao.class);
     SecurityScanCandidateClassifier classifier = mock(SecurityScanCandidateClassifier.class);
     SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.setEnabled(true);
     SecurityPolicyReconciler reconciler =
         new SecurityPolicyReconciler(
             scans, repositories, assets, classifier, properties, mock(MaintenanceCursorDao.class));
@@ -675,6 +678,7 @@ class SecurityScanSchedulingServicesTest {
     AssetDao assets = mock(AssetDao.class);
     SecurityScanCandidateClassifier classifier = mock(SecurityScanCandidateClassifier.class);
     SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.setEnabled(true);
     MaintenanceCursorDao cursors = mock(MaintenanceCursorDao.class);
     SecurityPolicyReconciler reconciler =
         new SecurityPolicyReconciler(
@@ -712,6 +716,7 @@ class SecurityScanSchedulingServicesTest {
     SecurityScanDao scans = mock(SecurityScanDao.class);
     RepositoryDao repositories = mock(RepositoryDao.class);
     SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.setEnabled(true);
     properties.getWorker().setSnapshotRematchBatchSize(10);
     properties.getWorker().setSnapshotRematchMaxBatches(2);
     MaintenanceCursorDao cursors = mock(MaintenanceCursorDao.class);
@@ -752,6 +757,7 @@ class SecurityScanSchedulingServicesTest {
     AssetDao assets = mock(AssetDao.class);
     SecurityScanCandidateClassifier classifier = mock(SecurityScanCandidateClassifier.class);
     SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.setEnabled(true);
     properties.getWorker().setSnapshotRematchBatchSize(1);
     properties.getWorker().setSnapshotRematchMaxBatches(1);
     MaintenanceCursorDao cursors = mock(MaintenanceCursorDao.class);

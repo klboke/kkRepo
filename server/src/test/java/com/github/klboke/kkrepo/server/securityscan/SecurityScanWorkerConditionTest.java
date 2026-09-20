@@ -3,6 +3,8 @@ package com.github.klboke.kkrepo.server.securityscan;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.ArtifactChangeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ArtifactChangeEventMode;
@@ -27,13 +29,25 @@ class SecurityScanWorkerConditionTest {
   }
 
   @Test
-  void historicalWorkersAndMaintenanceAreAbsentByDefault() {
+  void historicalWorkersRemainInTheAotBeanGraphButStayIdleByDefault() {
     try (AnnotationConfigApplicationContext context = context(false)) {
-      assertTrue(context.getBeansOfType(SecurityScanArtifactChangeWorker.class).isEmpty());
-      assertTrue(
+      assertFalse(context.getBeansOfType(SecurityScanArtifactChangeWorker.class).isEmpty());
+      assertFalse(
           context.getBeansOfType(SecurityScanArtifactReconciliationWorker.class).isEmpty());
-      assertTrue(context.getBeansOfType(SecurityScanArtifactChangeMetrics.class).isEmpty());
-      assertTrue(context.getBeansOfType(SecurityScanRetentionWorker.class).isEmpty());
+      assertFalse(context.getBeansOfType(SecurityScanArtifactChangeMetrics.class).isEmpty());
+      assertFalse(context.getBeansOfType(SecurityScanRetentionWorker.class).isEmpty());
+
+      context.getBean(SecurityScanArtifactChangeWorker.class).runOnce();
+      context.getBean(SecurityScanArtifactReconciliationWorker.class).runOnce();
+      context.getBean(SecurityScanArtifactChangeMetrics.class).refresh();
+      context.getBean(SecurityScanRetentionWorker.class).runOnce();
+
+      verifyNoInteractions(
+          context.getBean(SecurityScanArtifactChangeService.class),
+          context.getBean(SecurityScanArtifactReconciliationService.class),
+          context.getBean(ArtifactChangeDao.class),
+          context.getBean(SecurityScanDao.class),
+          context.getBean(SecurityScanMetrics.class));
     }
   }
 
@@ -45,6 +59,14 @@ class SecurityScanWorkerConditionTest {
           context.getBeansOfType(SecurityScanArtifactReconciliationWorker.class).isEmpty());
       assertFalse(context.getBeansOfType(SecurityScanArtifactChangeMetrics.class).isEmpty());
       assertFalse(context.getBeansOfType(SecurityScanRetentionWorker.class).isEmpty());
+
+      context.getBean(SecurityScanArtifactChangeWorker.class).runOnce();
+      context.getBean(SecurityScanArtifactReconciliationWorker.class).runOnce();
+      context.getBean(SecurityScanArtifactChangeMetrics.class).refresh();
+
+      verify(context.getBean(SecurityScanArtifactChangeService.class)).processBatch();
+      verify(context.getBean(SecurityScanArtifactReconciliationService.class)).processBatch();
+      verify(context.getBean(ArtifactChangeDao.class)).retainedRange();
     }
   }
 
@@ -65,7 +87,11 @@ class SecurityScanWorkerConditionTest {
     context.registerBean(ArtifactChangeDao.class, () -> mock(ArtifactChangeDao.class));
     context.registerBean(SecurityScanDao.class, () -> mock(SecurityScanDao.class));
     context.registerBean(MeterRegistry.class, SimpleMeterRegistry::new);
-    context.registerBean(SecurityScanningProperties.class, SecurityScanningProperties::new);
+    context.registerBean(SecurityScanningProperties.class, () -> {
+      SecurityScanningProperties properties = new SecurityScanningProperties();
+      properties.setEnabled(enabled);
+      return properties;
+    });
     context.registerBean(SecurityScanMetrics.class, () -> mock(SecurityScanMetrics.class));
     context.register(
         SecurityScanArtifactChangeWorker.class,

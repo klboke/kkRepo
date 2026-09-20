@@ -330,6 +330,7 @@ class SecurityScanTaskWorkerTest {
     final SecurityScanTaskWorker worker;
 
     Fixture() {
+      properties.setEnabled(true);
       properties.getWorker().setBatchSize(1);
       properties.getWorker().setLeaseSeconds(30);
       properties.getWorker().setHeartbeatSeconds(5);
