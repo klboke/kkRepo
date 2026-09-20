@@ -51,6 +51,9 @@ The configuration list renders first and usage loads independently. Refresh relo
 the latest available snapshot; it does not bypass the 30-second cache. A failed or
 missing statistic displays `—`, an in-flight statistic displays `…`, and an empty
 entity displays `0`. A statistics failure does not prevent configuration editing.
+Counts and byte totals are transferred as decimal strings and calculated with
+`BigInt` in the UI. Values above 8 PiB, adjacent large counts, and filtered sums
+remain exact; byte labels use integer arithmetic to round to one decimal.
 No count is used to authorize a request or enforce a quota.
 
 Each replica rebuilds its own short-lived cache from the shared database and

@@ -8,7 +8,6 @@ import com.github.klboke.kkrepo.core.RepositoryRecipe;
 import com.github.klboke.kkrepo.core.RepositoryRecipes;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
-import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao.RepositoryUsage;
 import com.github.klboke.kkrepo.server.apt.AptService;
 import com.github.klboke.kkrepo.server.alpine.AlpineService;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
@@ -21,6 +20,8 @@ import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CreateCom
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.UpdateCommand;
 import com.github.klboke.kkrepo.server.statistics.StorageStatisticsService;
 import com.github.klboke.kkrepo.server.statistics.StorageStatisticsService.UsageSnapshot;
+import com.github.klboke.kkrepo.server.statistics.StorageUsageResponse;
+import com.github.klboke.kkrepo.server.statistics.StorageUsageResponse.RepositoryUsage;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
 import java.util.Map;
@@ -72,7 +73,8 @@ public class RepositoriesController {
   public UsageSnapshot<RepositoryUsage> statistics(
       HttpServletRequest request) {
     requireAuthenticated(request);
-    return statistics.assets(list("admin", request).stream().map(RepositoryView::id).toList());
+    return StorageUsageResponse.assets(
+        statistics.assets(list("admin", request).stream().map(RepositoryView::id).toList()));
   }
 
   @Autowired(required = false)

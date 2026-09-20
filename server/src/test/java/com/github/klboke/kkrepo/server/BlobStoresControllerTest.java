@@ -47,9 +47,11 @@ class BlobStoresControllerTest {
   void usageEndpointUsesCatalogWithoutProbingObjectStorage() throws Exception {
     InMemoryBlobStoreDao dao = new InMemoryBlobStoreDao();
     long id = dao.insert(fileRecord("inventory", "inventory"));
+    long emptyId = dao.insert(fileRecord("empty", "empty"));
     var statisticsDao = mock(StorageStatisticsDao.class);
     org.mockito.Mockito.when(statisticsDao.blobStoreUsage()).thenReturn(Map.of(id,
-        new BlobStoreUsage(5, 1234, 2, 400)));
+        new BlobStoreUsage(9_007_199_254_740_993L, Long.MAX_VALUE,
+            9_007_199_254_740_992L, 9_007_199_254_740_993L)));
     S3BlobStoreAdmin s3 = mock(S3BlobStoreAdmin.class);
     FileBlobStoreAdmin file = mock(FileBlobStoreAdmin.class);
     BlobStoresController controller = new BlobStoresController(dao, s3, file, null, null,
@@ -59,8 +61,14 @@ class BlobStoresControllerTest {
     var result = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
         "/internal/blob-stores/statistics/usage")).andExpect(status().isOk()).andReturn();
     var json = new com.fasterxml.jackson.databind.ObjectMapper().readTree(result.getResponse().getContentAsString());
-    assertEquals(5, json.path("usage").path(Long.toString(id)).path("blobCount").asLong());
-    assertEquals(400, json.path("usage").path(Long.toString(id)).path("pendingDeletionBytes").asLong());
+    var usage = json.path("usage").path(Long.toString(id));
+    Map.of("blobCount", "9007199254740993", "totalBytes", "9223372036854775807",
+        "pendingDeletionCount", "9007199254740992", "pendingDeletionBytes", "9007199254740993")
+        .forEach((key, expected) -> {
+          assertTrue(usage.path(key).isTextual(), key);
+          assertEquals(expected, usage.path(key).textValue(), key);
+          assertEquals("0", json.path("usage").path(Long.toString(emptyId)).path(key).textValue());
+        });
     assertEquals(30, json.path("maxAgeSeconds").asLong());
     org.mockito.Mockito.verifyNoInteractions(s3, file);
   }

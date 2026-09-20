@@ -1,11 +1,12 @@
 package com.github.klboke.kkrepo.server;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
-import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao.BlobStoreUsage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.statistics.StorageStatisticsService;
 import com.github.klboke.kkrepo.server.statistics.StorageStatisticsService.UsageSnapshot;
+import com.github.klboke.kkrepo.server.statistics.StorageUsageResponse;
+import com.github.klboke.kkrepo.server.statistics.StorageUsageResponse.BlobStoreUsage;
 import com.github.klboke.kkrepo.storage.file.FileBlobStoreConfig;
 import com.github.klboke.kkrepo.storage.file.FileBlobStorePathValidator;
 import com.github.klboke.kkrepo.storage.file.FileBlobStorageFactory;
@@ -59,7 +60,8 @@ public class BlobStoresController {
   public UsageSnapshot<BlobStoreUsage> statistics() {
     // SecurityManagementFilter requires nexus:blobstores:read for this endpoint.
     // Read only the catalog here: the count request must never probe S3/OSS/File stores.
-    return statistics.blobs(blobStoreRecords().stream().map(BlobStoreRecord::id).toList());
+    return StorageUsageResponse.blobs(
+        statistics.blobs(blobStoreRecords().stream().map(BlobStoreRecord::id).toList()));
   }
 
   public BlobStoresController(

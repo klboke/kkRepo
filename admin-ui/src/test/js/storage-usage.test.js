@@ -27,6 +27,67 @@ function setup(fetch) {
   return { context, element, run: code => vm.runInContext(code, context) };
 }
 const response = value => ({ ok: true, json: async () => value });
+test('decimal-string JSON metrics preserve the full long range and reject already-rounded numbers', () => {
+  const { context: c } = setup();
+  const snapshot = JSON.parse('{"usage":{"1":{"assetCount":"9007199254740993","totalBytes":"9223372036854775807","unknownSizeCount":"0"}}}');
+  assert.equal(c.inventoryValue(snapshot, 1, 'assetCount'), 9007199254740993n);
+  assert.equal(c.inventoryValue(snapshot, 1, 'totalBytes'), 9223372036854775807n);
+  assert.equal(c.renderInventoryMetric(snapshot, 1, 'assetCount'), '9,007,199,254,740,993');
+  assert.equal(c.renderInventoryMetric(snapshot, 1, 'totalBytes', true), '8 EiB');
+  assert.equal(c.renderInventoryMetric({usage:{1:{assetCount:'0'}}}, 1, 'assetCount'), '0');
+  assert.equal(c.inventoryValue({usage:{1:{assetCount:Number.MAX_SAFE_INTEGER}}}, 1, 'assetCount'), 9007199254740991n);
+  for (const value of [9007199254740992, -1, -1n, '', '-1', '1.5', '1e3', 'injected', null]) {
+    assert.equal(c.inventoryValue({usage:{1:{assetCount:value}}}, 1, 'assetCount'), null);
+  }
+});
+test('byte formatting rounds with integer arithmetic and preserves localized large integer parts', () => {
+  const { context: c } = setup();
+  assert.equal(c.formatInventoryBytes(1536n), '1.5 KiB');
+  assert.equal(c.formatInventoryBytes(1048n), '1 KiB');
+  assert.equal(c.formatInventoryBytes(1080n), '1.1 KiB');
+  assert.equal(c.formatInventoryBytes(9007199254740993n), '8 PiB');
+  const large = 1234567890123456789n * (1024n ** 6n) + (1024n ** 6n) / 2n;
+  assert.equal(c.formatInventoryBytes(large), '1,234,567,890,123,456,789.5 EiB');
+  c.document.documentElement.lang = 'de-DE';
+  assert.equal(c.formatInventoryBytes(large), '1.234.567.890.123.456.789,5 EiB');
+});
+test('filtered summaries remain exact above the safe integer limit and even beyond a single Java long', () => {
+  const { context: c, element } = setup();
+  for (const kind of ['repository', 'blobstore']) {
+    const key = kind === 'repository' ? 'assetCount' : 'blobCount';
+    const rows = [{id:1}, {id:2}];
+    const safe = '4503599627370497';
+    const usage = Object.fromEntries(rows.map(row => [row.id, {[key]:safe,totalBytes:safe,pendingDeletionBytes:safe,unknownSizeCount:'0'}]));
+    c.renderUsageSummary(kind, rows, {usage});
+    assert.equal(element(`${kind}-usage-count`).innerHTML, '9,007,199,254,740,994');
+    assert.equal(element(`${kind}-usage-size`).innerHTML, '8 PiB');
+    if (kind === 'blobstore') assert.equal(element('blobstore-usage-pending').innerHTML, '8 PiB');
+    for (const row of rows) usage[row.id] = {[key]:'9223372036854775807',totalBytes:'9223372036854775807',pendingDeletionBytes:'9223372036854775807',unknownSizeCount:'0'};
+    c.renderUsageSummary(kind, rows, {usage});
+    assert.equal(element(`${kind}-usage-count`).innerHTML, '18,446,744,073,709,551,614');
+    assert.equal(element(`${kind}-usage-size`).innerHTML, '16 EiB');
+    if (kind === 'blobstore') assert.equal(element('blobstore-usage-pending').innerHTML, '16 EiB');
+    c.renderUsageSummary(kind, [rows[0]], {usage});
+    assert.equal(element(`${kind}-usage-count`).innerHTML, '9,223,372,036,854,775,807');
+    usage[1].unknownSizeCount = '1';
+    c.renderUsageSummary(kind, [rows[0]], {usage});
+    assert.match(element(`${kind}-usage-size`).innerHTML, /≥ 8 EiB/);
+  }
+});
+test('usage sorting distinguishes adjacent large integers instead of comparing rounded or lexical values', () => {
+  const { context: c, run } = setup();
+  const rows = [{id:1,name:'z'},{id:2,name:'a'},{id:3,name:'middle'},{id:4,name:'small'}];
+  for (const kind of ['repository', 'blobstore']) {
+    for (const key of kind === 'repository' ? ['assetCount','totalBytes'] : ['blobCount','totalBytes','pendingDeletionBytes']) {
+      const state = kind === 'repository' ? 'repository' : 'blobStore';
+      run(`${state}Usage={usage:{1:{${key}:"9007199254740992"},2:{${key}:"9007199254740993"},3:{${key}:"9223372036854775807"},4:{${key}:"99"}}}; ${state}Sort={key:"${key}",direction:"asc"};`);
+      const sort = kind === 'repository' ? c.sortRepositories : c.sortBlobStores;
+      assert.equal(sort(rows).map(r=>r.id).join(','), '4,1,2,3');
+      run(`${state}Sort.direction="desc"`);
+      assert.equal(sort(rows).map(r=>r.id).join(','), '3,2,1,4');
+    }
+  }
+});
 test('blob store headers sort numbers in both directions with zero before unavailable values', () => {
   const { context: c, run } = setup();
   const rows = [{id:1,name:'store-2'},{id:2,name:'store-10'},{id:3,name:'zero'},{id:4,name:'unavailable'}];

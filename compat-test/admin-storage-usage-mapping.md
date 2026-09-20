@@ -50,6 +50,11 @@ repository metrics and pending cleanup breakdown are kkRepo admin extensions,
 not claims of identical Nexus repository-list fields.
 
 Endpoints return `{usage: {"<id>": {...}}, calculatedAt: <timestamp>, maxAgeSeconds: 30}`.
+Every count and byte field inside `usage` is a decimal JSON string, including
+zero (`"0"`), so a Java `long` survives JSON parsing without precision loss.
+The UI uses `BigInt` for parsing, sorting and filtered sums, including totals
+beyond the range of an individual Java `long`. Byte display is rounded to one
+decimal using integer arithmetic; `calculatedAt` and `maxAgeSeconds` are unchanged.
 The UI loads them separately from configuration lists. Missing/failed values
 render as unavailable, never fabricated zero. Each replica uses a rebuildable
 30-second cache and coalesces concurrent loads. Authorization is checked on every

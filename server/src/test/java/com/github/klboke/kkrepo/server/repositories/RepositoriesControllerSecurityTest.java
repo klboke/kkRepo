@@ -52,7 +52,7 @@ class RepositoriesControllerSecurityTest {
         999L, new RepositoryUsage(99, 2000, 0)));
     controller.setStorageStatistics(new StorageStatisticsService(statisticsDao));
     assertEquals(Set.of(id), controller.statistics(request("GET", "/internal/repositories/statistics/usage")).usage().keySet());
-    assertEquals(12, controller.statistics(request("GET", "/internal/repositories/statistics/usage")).usage().get(id).assetCount());
+    assertEquals("12", controller.statistics(request("GET", "/internal/repositories/statistics/usage")).usage().get(id).assetCount());
     org.mockito.Mockito.verify(statisticsDao, org.mockito.Mockito.times(1)).repositoryUsage();
     RepositoriesController denied = controller(repositories, subject("reader"),
         new RecordingSecurityService(permission -> AccessDecision.deny("browse only")));
@@ -61,6 +61,31 @@ class RepositoriesControllerSecurityTest {
     RepositoriesController anonymous = controller(repositories, null, security);
     assertThrows(ResponseStatusException.class,
         () -> anonymous.statistics(request("GET", "/internal/repositories/statistics/usage")));
+  }
+
+  @Test
+  void usageHttpResponsePreservesLongMetricsAsDecimalStrings() throws Exception {
+    StubRepositoryService repositories = new StubRepositoryService();
+    repositories.repositories = List.of(repo("large", RepositoryFormat.MAVEN2));
+    RepositoriesController controller = controller(repositories, subject("admin"),
+        new RecordingSecurityService(permission -> AccessDecision.allow()));
+    var dao = org.mockito.Mockito.mock(StorageStatisticsDao.class);
+    Long id = repositories.repositories.getFirst().id();
+    org.mockito.Mockito.when(dao.repositoryUsage()).thenReturn(Map.of(id,
+        new RepositoryUsage(9_007_199_254_740_993L, Long.MAX_VALUE, 0)));
+    controller.setStorageStatistics(new StorageStatisticsService(dao));
+    var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller).build();
+    var response = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
+        "/internal/repositories/statistics/usage"))
+        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+        .andReturn().getResponse();
+    var json = new ObjectMapper().readTree(response.getContentAsString());
+    var usage = json.path("usage").path(Long.toString(id));
+    assertEquals("9007199254740993", usage.path("assetCount").textValue());
+    assertEquals("9223372036854775807", usage.path("totalBytes").textValue());
+    assertEquals("0", usage.path("unknownSizeCount").textValue());
+    assertEquals(30, json.path("maxAgeSeconds").intValue());
+    org.junit.jupiter.api.Assertions.assertFalse(json.path("calculatedAt").isMissingNode());
   }
 
   @Test

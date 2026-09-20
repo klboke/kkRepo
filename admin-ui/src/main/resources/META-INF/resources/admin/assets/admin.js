@@ -1320,7 +1320,7 @@ function sortRepositories(rows) {
     const left = repositorySortValue(a, repositorySort.key);
     const right = repositorySortValue(b, repositorySort.key);
     if (left == null || right == null) return left == null ? (right == null ? 0 : 1) : -1;
-    const primary = typeof left === "number" ? left - right : left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" });
+    const primary = typeof left === "bigint" ? (left < right ? -1 : left > right ? 1 : 0) : left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" });
     const fallback = (a.name || "").localeCompare(b.name || "", undefined, { numeric: true, sensitivity: "base" });
     const result = primary || fallback;
     return repositorySort.direction === "asc" ? result : -result;
@@ -1538,7 +1538,7 @@ function sortBlobStores(rows) {
     const left = blobStoreSortValue(a, blobStoreSort.key);
     const right = blobStoreSortValue(b, blobStoreSort.key);
     if (left == null || right == null) return left == null ? (right == null ? 0 : 1) : -1;
-    const primary = typeof left === "number" ? left - right : left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" });
+    const primary = typeof left === "bigint" ? (left < right ? -1 : left > right ? 1 : 0) : left.localeCompare(right, undefined, { numeric: true, sensitivity: "base" });
     const fallback = (a.name || "").localeCompare(b.name || "", undefined, { numeric: true, sensitivity: "base" });
     return blobStoreSort.direction === "asc" ? primary || fallback : -(primary || fallback);
   });
@@ -1645,14 +1645,30 @@ async function copyLocationText(value) {
 // zeros for empty entities; missing or invalid values must never masquerade as zero.
 function inventoryValue(snapshot, id, key) {
   const value = snapshot?.usage?.[String(id)]?.[key];
-  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+  if (typeof value === "bigint") return value >= 0n ? value : null;
+  if (typeof value === "string" && /^(0|[1-9][0-9]*)$/.test(value)) return BigInt(value);
+  // Accept older servers during rollout, but never trust an already-rounded JSON number.
+  return Number.isSafeInteger(value) && value >= 0 ? BigInt(value) : null;
 }
 
 function formatInventoryBytes(value) {
-  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
-  const unit = Math.min(Math.floor(Math.log2(Math.max(1, value)) / 10), units.length - 1);
-  return `${(value / (1024 ** unit)).toLocaleString(document.documentElement.lang || undefined,
-    { maximumFractionDigits: unit === 0 ? 0 : 1 })} ${units[unit]}`;
+  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
+  const bytes = BigInt(value);
+  const locale = document.documentElement.lang || undefined;
+  let unit = 0, divisor = 1n;
+  while (bytes >= divisor * 1024n && unit < units.length - 1) {
+    divisor *= 1024n;
+    unit++;
+  }
+  if (unit === 0) return `${bytes.toLocaleString(locale)} B`;
+  // Round to one decimal using integer arithmetic, including totals above Long.MAX_VALUE.
+  const tenths = (bytes * 10n + divisor / 2n) / divisor;
+  const whole = tenths / 10n, fraction = tenths % 10n;
+  const formatted = fraction === 0n ? whole.toLocaleString(locale)
+    : new Intl.NumberFormat(locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+      .formatToParts(whole).map((part) => part.type === "fraction"
+        ? fraction.toLocaleString(locale) : part.value).join("");
+  return `${formatted} ${units[unit]}`;
 }
 
 function renderInventoryMetric(snapshot, id, key, bytes = false) {
@@ -1660,7 +1676,7 @@ function renderInventoryMetric(snapshot, id, key, bytes = false) {
   const value = inventoryValue(snapshot, id, key);
   if (value == null) return '<span class="health-muted" title="Usage unavailable. Refresh to retry.">—</span>';
   const formatted = bytes ? formatInventoryBytes(value) : value.toLocaleString(document.documentElement.lang || undefined);
-  const unknown = bytes && key === "totalBytes" && inventoryValue(snapshot, id, "unknownSizeCount") > 0;
+  const unknown = bytes && key === "totalBytes" && inventoryValue(snapshot, id, "unknownSizeCount") > 0n;
   return unknown ? `<span title="Some asset sizes are unknown; this is a lower bound.">≥ ${escapeHtml(formatted)}</span>` : escapeHtml(formatted);
 }
 
@@ -1683,9 +1699,9 @@ function renderUsageSummary(kind, rows, snapshot) {
   const totals = {};
   keys.forEach((key) => {
     const values = usageRows.map((row) => inventoryValue(snapshot, row.id, key));
-    totals[key] = values.some((value) => value == null) ? null : values.reduce((a, b) => a + b, 0);
+    totals[key] = values.some((value) => value == null) ? null : values.reduce((a, b) => a + b, 0n);
   });
-  totals.unknownSizeCount = usageRows.some((row) => inventoryValue(snapshot, row.id, "unknownSizeCount") > 0) ? 1 : 0;
+  totals.unknownSizeCount = usageRows.some((row) => inventoryValue(snapshot, row.id, "unknownSizeCount") > 0n) ? 1n : 0n;
   const totalSnapshot = snapshot === undefined ? undefined : snapshot === null ? null : { usage: { all: totals } };
   document.getElementById(`${kind}-usage-matching`).textContent = rows.length.toLocaleString();
   document.getElementById(`${kind}-usage-count`).innerHTML = groupOnly ? renderGroupUsage() : renderInventoryMetric(totalSnapshot, "all", keys[0]);
