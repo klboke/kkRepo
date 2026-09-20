@@ -15,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -237,6 +238,48 @@ class SecurityAdminBlackBoxCompatibilityTest {
   }
 
   @Test
+  void anonymousNugetDenialAdvertisesBasicChallenge() throws Exception {
+    Config config = Config.load();
+    assumeTrue(config.enabled(), "Set COMPAT_SECURITY_ENABLED=true to run security admin compatibility checks");
+
+    String suffix = Long.toString(System.currentTimeMillis());
+    AnonymousChallengeFixture fixture = new AnonymousChallengeFixture(
+        "auth-nuget-" + suffix,
+        "auth-role-" + suffix,
+        "auth-user-" + suffix,
+        "NxpCompat123!");
+    for (Endpoint admin : List.of(config.reference(), config.candidate())) {
+      Map<String, Object> originalAnonymous = anonymousSettings(admin);
+      try {
+        installAnonymousChallengeFixture(admin, config, fixture);
+        admin.putJson("/service/rest/v1/security/anonymous", Map.of(
+            "enabled", true,
+            "userId", fixture.userId(),
+            "realmName", "NexusAuthorizingRealm"))
+            .assertStatus(200, "enable restricted anonymous user");
+
+        Exchange anonymous = admin.withoutAuthentication()
+            .get("/repository/" + fixture.repository() + "/index.json");
+        anonymous.assertStatus(401, "anonymous repository denial should challenge");
+        assertTrue(anonymous.wwwAuthenticate().orElse("")
+                .toLowerCase(Locale.ROOT).startsWith("basic "),
+            "anonymous denial should advertise Basic authentication");
+      } finally {
+        admin.putJson("/service/rest/v1/security/anonymous", originalAnonymous)
+            .assertStatus(200, "restore anonymous settings");
+        admin.delete("/service/rest/v1/security/users/" + fixture.userId())
+            .assertDeleted("delete anonymous challenge user");
+        admin.delete("/service/rest/v1/security/roles/" + fixture.roleId())
+            .assertDeleted("delete anonymous challenge role");
+        admin.delete((admin.equals(config.candidate())
+                ? "/internal/repositories/"
+                : "/service/rest/v1/repositories/") + fixture.repository())
+            .assertDeleted("delete anonymous challenge repository");
+      }
+    }
+  }
+
+  @Test
   void nonAdminRepositoryRoleCanBrowseButCannotUseSecurityAdministration() throws Exception {
     Config config = Config.load();
     assumeTrue(config.enabled(), "Set COMPAT_SECURITY_ENABLED=true to run security admin compatibility checks");
@@ -434,6 +477,55 @@ class SecurityAdminBlackBoxCompatibilityTest {
         "roles", List.of(fixture.roleId()))).assertStatus(200, "create non-admin user");
   }
 
+  private static Map<String, Object> anonymousSettings(Endpoint endpoint) throws Exception {
+    Exchange response = endpoint.get("/service/rest/v1/security/anonymous");
+    response.assertStatus(200, "read anonymous settings");
+    JsonNode settings = MAPPER.readTree(response.bodyText());
+    return Map.of(
+        "enabled", settings.path("enabled").asBoolean(),
+        "userId", settings.path("userId").asText(),
+        "realmName", settings.path("realmName").asText());
+  }
+
+  private static void installAnonymousChallengeFixture(
+      Endpoint endpoint, Config config, AnonymousChallengeFixture fixture) throws Exception {
+    if (endpoint.equals(config.candidate())) {
+      endpoint.postJson("/internal/repositories", Map.of(
+          "name", fixture.repository(),
+          "recipe", "nuget-hosted",
+          "online", true,
+          "blobStoreName", "default",
+          "strictContentTypeValidation", true,
+          "hosted", Map.of("writePolicy", "ALLOW")))
+          .assertStatus(201, "create anonymous challenge kkrepo repository");
+    } else {
+      endpoint.postJson("/service/rest/v1/repositories/nuget/hosted", Map.of(
+          "name", fixture.repository(),
+          "online", true,
+          "storage", Map.of(
+              "blobStoreName", "default",
+              "strictContentTypeValidation", true,
+              "writePolicy", "ALLOW")))
+          .assertStatus(201, "create anonymous challenge Nexus repository");
+    }
+    endpoint.postJson("/service/rest/v1/security/roles", Map.of(
+        "id", fixture.roleId(),
+        "name", fixture.roleId(),
+        "description", "Anonymous authentication challenge compatibility",
+        "privileges", List.of("nx-healthcheck-read"),
+        "roles", List.of()))
+        .assertStatus(200, "create anonymous challenge role");
+    endpoint.postJson("/service/rest/v1/security/users", Map.of(
+        "userId", fixture.userId(),
+        "firstName", "Anonymous",
+        "lastName", "Challenge",
+        "emailAddress", fixture.userId() + "@example.invalid",
+        "password", fixture.password(),
+        "status", "active",
+        "roles", List.of(fixture.roleId())))
+        .assertStatus(200, "create anonymous challenge user");
+  }
+
   private static void cleanupNonAdminFixture(Endpoint endpoint, NonAdminFixture fixture) throws Exception {
     endpoint.delete("/service/rest/v1/security/users/" + fixture.userId()).assertDeleted("delete non-admin user");
     endpoint.delete("/service/rest/v1/security/roles/" + fixture.roleId()).assertDeleted("delete non-admin role");
@@ -513,6 +605,10 @@ class SecurityAdminBlackBoxCompatibilityTest {
       return new Endpoint(baseUrl, username, password);
     }
 
+    Endpoint withoutAuthentication() {
+      return new Endpoint(baseUrl, null, null);
+    }
+
     JsonNode extDirect(String action, String method, String... data) throws Exception {
       String payload = "[{\"action\":\"" + action + "\",\"method\":\"" + method
           + "\",\"type\":\"rpc\",\"tid\":1,\"data\":[" + String.join(",", data) + "]}]";
@@ -544,6 +640,12 @@ class SecurityAdminBlackBoxCompatibilityTest {
           "application/json");
     }
 
+    Exchange putJson(String path, Object body) throws Exception {
+      return send("PUT", path,
+          HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(body), StandardCharsets.UTF_8),
+          "application/json");
+    }
+
     private Exchange send(
         String method,
         String path,
@@ -551,14 +653,19 @@ class SecurityAdminBlackBoxCompatibilityTest {
         String contentType) throws Exception {
       HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(baseUrl + path))
           .timeout(TIMEOUT)
-          .header("Authorization", basic(username, password))
           .header("Accept", "*/*");
+      if (username != null && password != null) {
+        builder.header("Authorization", basic(username, password));
+      }
       if (contentType != null) {
         builder.header("Content-Type", contentType);
       }
       HttpRequest request = builder.method(method, body).build();
       HttpResponse<String> response = CLIENT.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-      return new Exchange(response.statusCode(), response.body());
+      return new Exchange(
+          response.statusCode(),
+          response.body(),
+          response.headers().firstValue("WWW-Authenticate"));
     }
 
     private static String basic(String username, String password) {
@@ -567,7 +674,7 @@ class SecurityAdminBlackBoxCompatibilityTest {
     }
   }
 
-  private record Exchange(int status, String bodyText) {
+  private record Exchange(int status, String bodyText, Optional<String> wwwAuthenticate) {
     void assertStatus(int expected, String label) {
       assertEquals(expected, status, label + ": " + bodyText);
     }
@@ -578,6 +685,13 @@ class SecurityAdminBlackBoxCompatibilityTest {
   }
 
   private record NonAdminFixture(String privilegeId, String roleId, String userId, String password) {
+  }
+
+  private record AnonymousChallengeFixture(
+      String repository,
+      String roleId,
+      String userId,
+      String password) {
   }
 
   private record ContentSelectorFixture(
