@@ -39,8 +39,9 @@ so repository totals are never presented as a reconciliation of physical bytes.
 The first summary card shows the snapshot update time; its info icon explains the
 cache and refresh behavior. Metric definitions appear in info popovers beside
 the corresponding summary titles, without standalone explanation lines. Long storage paths and URLs are truncated in the table
-with their full values available on hover. Expand the chevron to read and select
-the complete value within the cell, or use the copy icon to copy it directly.
+with their full values available on hover. Click the truncated text or its ellipsis to read and select the complete value
+within the cell, or use the copy icon to copy it directly. There is no separate
+expand icon beside values that already fit.
 Copying also supports HTTP deployments; if the browser blocks copying, the UI
 offers manual selection rather than reporting success.
 

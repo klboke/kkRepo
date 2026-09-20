@@ -4558,11 +4558,9 @@ code {
 .usage-location { max-width: 260px; min-width: 140px; }
 .usage-location-value { display: flex; align-items: flex-start; gap: 4px; width: 260px; max-width: 100%; }
 .usage-location-details { flex: 1; min-width: 0; }
-.usage-location-details summary { display: flex; align-items: center; gap: 4px; cursor: pointer; list-style: none; }
+.usage-location-details summary { display: flex; align-items: center; cursor: pointer; list-style: none; }
 .usage-location-details summary::-webkit-details-marker { display: none; }
 .usage-location-details summary code { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.usage-location-details summary .lucide-icon { flex: 0 0 14px; width: 14px; height: 14px; }
-.usage-location-details[open] summary .lucide-icon { transform: rotate(180deg); }
 .usage-location code.usage-location-full { display: block; margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .usage-location-copy { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 24px; width: 24px; height: 24px; padding: 3px; border: 1px solid var(--line); border-radius: 4px; background: var(--row); color: var(--text); cursor: pointer; }
 .usage-location-copy:hover { background: var(--row-hover); }

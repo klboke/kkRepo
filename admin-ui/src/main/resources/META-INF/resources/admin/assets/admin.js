@@ -1571,7 +1571,7 @@ function renderCopyableLocation(value, copyLabel) {
   const text = escapeHtml(value);
   return `<div class="usage-location-value">
     <details class="usage-location-details">
-      <summary title="Expand or collapse full value"><code title="${text}">${text}</code><span class="lucide-icon icon-chevron-down" aria-hidden="true"></span></summary>
+      <summary title="Expand or collapse full value"><code title="${text}">${text}</code></summary>
       <code class="usage-location-full">${text}</code>
     </details>
     <button class="usage-location-copy" type="button" data-copy-value="${text}" title="${escapeHtml(copyLabel)}" aria-label="${escapeHtml(copyLabel)}"><span class="lucide-icon icon-copy" aria-hidden="true"></span></button>
