@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.quartz.JobDataMap;
 import org.quartz.JobExecutionContext;
 import org.quartz.JobExecutionException;
+import org.quartz.Scheduler;
 import org.springframework.test.util.ReflectionTestUtils;
 
 class CleanupQuartzJobTest {
@@ -108,6 +109,50 @@ class CleanupQuartzJobTest {
     verifyNoInteractions(cleanupDao, runs);
   }
 
+  @Test
+  void usesOriginalScheduledFireIdentityWhenRecoveringContextHasNoScheduledFireTime()
+      throws Exception {
+    CleanupPolicyDao cleanupDao = mock(CleanupPolicyDao.class);
+    CleanupRunService runs = mock(CleanupRunService.class);
+    when(cleanupDao.findPolicy(7)).thenReturn(Optional.of(policy(3, "ACTIVE")));
+    when(cleanupDao.findSchedule(7)).thenReturn(Optional.of(schedule(true)));
+    CleanupQuartzJob job = job(cleanupDao, runs);
+
+    job.executeInternal(context(
+        7, 3, null, ACTUAL_FIRE_TIME, true, Long.toString(FIRE_TIME.toEpochMilli())));
+
+    verify(runs).startScheduled(7, FIRE_TIME);
+    verify(runs, never()).startScheduled(7, ACTUAL_FIRE_TIME);
+  }
+
+  @Test
+  void rejectsRecoveryWithoutOriginalScheduledFireIdentity() {
+    CleanupPolicyDao cleanupDao = mock(CleanupPolicyDao.class);
+    CleanupRunService runs = mock(CleanupRunService.class);
+    CleanupQuartzJob job = job(cleanupDao, runs);
+
+    JobExecutionException failure = assertThrows(
+        JobExecutionException.class,
+        () -> job.executeInternal(context(7, 3, null, ACTUAL_FIRE_TIME, true, null)));
+
+    assertFalse(failure.refireImmediately());
+    verifyNoInteractions(cleanupDao, runs);
+  }
+
+  @Test
+  void rejectsRecoveryWithInvalidOriginalScheduledFireIdentity() {
+    CleanupPolicyDao cleanupDao = mock(CleanupPolicyDao.class);
+    CleanupRunService runs = mock(CleanupRunService.class);
+    CleanupQuartzJob job = job(cleanupDao, runs);
+
+    JobExecutionException failure = assertThrows(
+        JobExecutionException.class,
+        () -> job.executeInternal(context(7, 3, null, ACTUAL_FIRE_TIME, true, "invalid")));
+
+    assertFalse(failure.refireImmediately());
+    verifyNoInteractions(cleanupDao, runs);
+  }
+
   private static CleanupQuartzJob job(CleanupPolicyDao cleanupDao, CleanupRunService runs) {
     return job(cleanupDao, runs, new CleanupRuntimeProperties());
   }
@@ -129,13 +174,29 @@ class CleanupQuartzJobTest {
 
   private static JobExecutionContext context(
       long policyId, long revision, Instant scheduledFireTime, Instant fireTime) {
+    return context(policyId, revision, scheduledFireTime, fireTime, false, null);
+  }
+
+  private static JobExecutionContext context(
+      long policyId,
+      long revision,
+      Instant scheduledFireTime,
+      Instant fireTime,
+      boolean recovering,
+      String originalScheduledFireTime) {
     JobExecutionContext context = mock(JobExecutionContext.class);
     JobDataMap data = new JobDataMap();
     data.put(CleanupQuartzJob.POLICY_ID, policyId);
     data.put(CleanupQuartzJob.POLICY_REVISION, revision);
+    if (originalScheduledFireTime != null) {
+      data.put(
+          Scheduler.FAILED_JOB_ORIGINAL_TRIGGER_SCHEDULED_FIRETIME_IN_MILLISECONDS,
+          originalScheduledFireTime);
+    }
     when(context.getMergedJobDataMap()).thenReturn(data);
     when(context.getScheduledFireTime()).thenReturn(date(scheduledFireTime));
     when(context.getFireTime()).thenReturn(date(fireTime));
+    when(context.isRecovering()).thenReturn(recovering);
     return context;
   }
 
