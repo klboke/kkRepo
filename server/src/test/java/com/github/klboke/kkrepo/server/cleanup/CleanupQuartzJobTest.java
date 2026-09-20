@@ -1,10 +1,12 @@
 package com.github.klboke.kkrepo.server.cleanup;
 
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
@@ -23,6 +25,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 class CleanupQuartzJobTest {
   private static final Instant FIRE_TIME = Instant.parse("2026-08-02T02:00:00Z");
+  private static final Instant ACTUAL_FIRE_TIME = Instant.parse("2026-08-02T02:00:03Z");
 
   @Test
   void executesCurrentEnabledPolicyWithTheScheduledFireIdentity() throws Exception {
@@ -78,6 +81,33 @@ class CleanupQuartzJobTest {
     assertTrue(failure.refireImmediately());
   }
 
+  @Test
+  void fallsBackToActualFireTimeWhenScheduledFireTimeIsMissing() throws Exception {
+    CleanupPolicyDao cleanupDao = mock(CleanupPolicyDao.class);
+    CleanupRunService runs = mock(CleanupRunService.class);
+    when(cleanupDao.findPolicy(7)).thenReturn(Optional.of(policy(3, "ACTIVE")));
+    when(cleanupDao.findSchedule(7)).thenReturn(Optional.of(schedule(true)));
+    CleanupQuartzJob job = job(cleanupDao, runs);
+
+    job.executeInternal(context(7, 3, null, ACTUAL_FIRE_TIME));
+
+    verify(runs).startScheduled(7, ACTUAL_FIRE_TIME);
+  }
+
+  @Test
+  void rejectsFireWithoutScheduledOrActualFireTimeWithoutRefire() {
+    CleanupPolicyDao cleanupDao = mock(CleanupPolicyDao.class);
+    CleanupRunService runs = mock(CleanupRunService.class);
+    CleanupQuartzJob job = job(cleanupDao, runs);
+
+    JobExecutionException failure = assertThrows(
+        JobExecutionException.class,
+        () -> job.executeInternal(context(7, 3, null, null)));
+
+    assertFalse(failure.refireImmediately());
+    verifyNoInteractions(cleanupDao, runs);
+  }
+
   private static CleanupQuartzJob job(CleanupPolicyDao cleanupDao, CleanupRunService runs) {
     return job(cleanupDao, runs, new CleanupRuntimeProperties());
   }
@@ -94,13 +124,23 @@ class CleanupQuartzJobTest {
   }
 
   private static JobExecutionContext context(long policyId, long revision) {
+    return context(policyId, revision, FIRE_TIME, null);
+  }
+
+  private static JobExecutionContext context(
+      long policyId, long revision, Instant scheduledFireTime, Instant fireTime) {
     JobExecutionContext context = mock(JobExecutionContext.class);
     JobDataMap data = new JobDataMap();
     data.put(CleanupQuartzJob.POLICY_ID, policyId);
     data.put(CleanupQuartzJob.POLICY_REVISION, revision);
     when(context.getMergedJobDataMap()).thenReturn(data);
-    when(context.getScheduledFireTime()).thenReturn(Date.from(FIRE_TIME));
+    when(context.getScheduledFireTime()).thenReturn(date(scheduledFireTime));
+    when(context.getFireTime()).thenReturn(date(fireTime));
     return context;
+  }
+
+  private static Date date(Instant value) {
+    return value == null ? null : Date.from(value);
   }
 
   private static CleanupPolicy policy(long revision, String state) {
