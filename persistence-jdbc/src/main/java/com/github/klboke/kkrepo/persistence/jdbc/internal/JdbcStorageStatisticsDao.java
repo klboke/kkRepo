@@ -27,7 +27,8 @@ public class JdbcStorageStatisticsDao implements StorageStatisticsDao {
         """, rs -> {
       Map<Long, BlobStoreUsage> result = new LinkedHashMap<>();
       while (rs.next()) result.put(rs.getLong(1),
-          new BlobStoreUsage(rs.getLong(2), rs.getLong(3), rs.getLong(4), rs.getLong(5)));
+          new BlobStoreUsage(rs.getBigDecimal(2).toBigIntegerExact(), rs.getBigDecimal(3).toBigIntegerExact(),
+              rs.getBigDecimal(4).toBigIntegerExact(), rs.getBigDecimal(5).toBigIntegerExact()));
       return Map.copyOf(result);
     });
   }
@@ -43,7 +44,8 @@ public class JdbcStorageStatisticsDao implements StorageStatisticsDao {
         """, rs -> {
       Map<Long, RepositoryUsage> result = new LinkedHashMap<>();
       while (rs.next()) result.put(rs.getLong(1),
-          new RepositoryUsage(rs.getLong(2), rs.getLong(3), rs.getLong(4)));
+          new RepositoryUsage(rs.getBigDecimal(2).toBigIntegerExact(), rs.getBigDecimal(3).toBigIntegerExact(),
+              rs.getBigDecimal(4).toBigIntegerExact()));
       return Map.copyOf(result);
     });
   }

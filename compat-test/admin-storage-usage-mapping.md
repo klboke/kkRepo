@@ -51,7 +51,9 @@ not claims of identical Nexus repository-list fields.
 
 Endpoints return `{usage: {"<id>": {...}}, calculatedAt: <timestamp>, maxAgeSeconds: 30}`.
 Every count and byte field inside `usage` is a decimal JSON string, including
-zero (`"0"`), so a Java `long` survives JSON parsing without precision loss.
+zero (`"0"`). JDBC reads aggregates as `BigInteger`, preserving MySQL DECIMAL and
+PostgreSQL NUMERIC sums even when their value exceeds `Long.MAX_VALUE`; the
+response therefore survives JSON parsing without precision loss.
 The UI uses `BigInt` for parsing, sorting and filtered sums, including totals
 beyond the range of an individual Java `long`. Byte display is rounded to one
 decimal using integer arithmetic; `calculatedAt` and `maxAgeSeconds` are unchanged.

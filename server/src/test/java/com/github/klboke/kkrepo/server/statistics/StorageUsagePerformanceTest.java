@@ -34,17 +34,17 @@ class StorageUsagePerformanceTest {
       StorageStatisticsDao dao = stores.storageStatistics();
       var blobs = timed(report, "first_blob_aggregate", dao::blobStoreUsage);
       var repos = timed(report, "first_repository_aggregate", dao::repositoryUsage);
-      assertEquals(1_000_000, blobs.values().stream().mapToLong(StorageStatisticsDao.BlobStoreUsage::blobCount).sum());
-      assertEquals(100_000, blobs.values().stream().mapToLong(StorageStatisticsDao.BlobStoreUsage::pendingDeletionCount).sum());
-      assertEquals(1_000_000, repos.values().stream().mapToLong(StorageStatisticsDao.RepositoryUsage::assetCount).sum());
+      assertEquals(1_000_000, blobs.values().stream().mapToLong(usage -> usage.blobCount().longValueExact()).sum());
+      assertEquals(100_000, blobs.values().stream().mapToLong(usage -> usage.pendingDeletionCount().longValueExact()).sum());
+      assertEquals(1_000_000, repos.values().stream().mapToLong(usage -> usage.assetCount().longValueExact()).sum());
       assertEquals(10, blobs.size());
       assertEquals(100, repos.size());
       assertEquals(LongStream.rangeClosed(1, 1_000_000).map(n -> 1024 + n % 4096).sum(),
-          blobs.values().stream().mapToLong(StorageStatisticsDao.BlobStoreUsage::totalBytes).sum());
+          blobs.values().stream().mapToLong(usage -> usage.totalBytes().longValueExact()).sum());
       assertEquals(LongStream.rangeClosed(900_001, 1_000_000).map(n -> 1024 + n % 4096).sum(),
-          blobs.values().stream().mapToLong(StorageStatisticsDao.BlobStoreUsage::pendingDeletionBytes).sum());
+          blobs.values().stream().mapToLong(usage -> usage.pendingDeletionBytes().longValueExact()).sum());
       assertEquals(LongStream.rangeClosed(1, 1_000_000).map(n -> 1024 + (n > 800_000 ? n - 800_000 : n) % 4096).sum(),
-          repos.values().stream().mapToLong(StorageStatisticsDao.RepositoryUsage::totalBytes).sum());
+          repos.values().stream().mapToLong(usage -> usage.totalBytes().longValueExact()).sum());
       report.append("assets=1000000 blobs=1000000 repositories=100 stores=10 pending_blobs=100000\n");
       repeated(report, "uncached_blob_aggregate", 20, dao::blobStoreUsage);
       repeated(report, "uncached_repository_aggregate", 20, dao::repositoryUsage);

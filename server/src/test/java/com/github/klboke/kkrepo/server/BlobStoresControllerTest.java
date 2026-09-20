@@ -24,6 +24,7 @@ import com.github.klboke.kkrepo.storage.file.config.FileStorageProperties;
 import com.github.klboke.kkrepo.storage.s3.config.S3StorageProperties;
 import com.github.klboke.kkrepo.storage.s3.admin.S3BlobStoreAdmin;
 import org.springframework.test.web.servlet.ResultMatcher;
+import java.math.BigInteger;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
@@ -50,8 +51,8 @@ class BlobStoresControllerTest {
     long emptyId = dao.insert(fileRecord("empty", "empty"));
     var statisticsDao = mock(StorageStatisticsDao.class);
     org.mockito.Mockito.when(statisticsDao.blobStoreUsage()).thenReturn(Map.of(id,
-        new BlobStoreUsage(9_007_199_254_740_993L, Long.MAX_VALUE,
-            9_007_199_254_740_992L, 9_007_199_254_740_993L)));
+        new BlobStoreUsage(new BigInteger("9007199254740993"), new BigInteger("18446744073709551614"),
+            new BigInteger("9007199254740992"), new BigInteger("18446744073709551613"))));
     S3BlobStoreAdmin s3 = mock(S3BlobStoreAdmin.class);
     FileBlobStoreAdmin file = mock(FileBlobStoreAdmin.class);
     BlobStoresController controller = new BlobStoresController(dao, s3, file, null, null,
@@ -62,8 +63,8 @@ class BlobStoresControllerTest {
         "/internal/blob-stores/statistics/usage")).andExpect(status().isOk()).andReturn();
     var json = new com.fasterxml.jackson.databind.ObjectMapper().readTree(result.getResponse().getContentAsString());
     var usage = json.path("usage").path(Long.toString(id));
-    Map.of("blobCount", "9007199254740993", "totalBytes", "9223372036854775807",
-        "pendingDeletionCount", "9007199254740992", "pendingDeletionBytes", "9007199254740993")
+    Map.of("blobCount", "9007199254740993", "totalBytes", "18446744073709551614",
+        "pendingDeletionCount", "9007199254740992", "pendingDeletionBytes", "18446744073709551613")
         .forEach((key, expected) -> {
           assertTrue(usage.path(key).isTextual(), key);
           assertEquals(expected, usage.path(key).textValue(), key);

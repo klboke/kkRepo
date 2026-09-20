@@ -24,6 +24,7 @@ import com.github.klboke.kkrepo.server.support.dao.SecurityDaoAdapter;
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletRequest;
 import java.lang.reflect.Proxy;
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -64,7 +65,7 @@ class RepositoriesControllerSecurityTest {
   }
 
   @Test
-  void usageHttpResponsePreservesLongMetricsAsDecimalStrings() throws Exception {
+  void usageHttpResponsePreservesArbitraryPrecisionMetricsAsDecimalStrings() throws Exception {
     StubRepositoryService repositories = new StubRepositoryService();
     repositories.repositories = List.of(repo("large", RepositoryFormat.MAVEN2));
     RepositoriesController controller = controller(repositories, subject("admin"),
@@ -72,7 +73,8 @@ class RepositoriesControllerSecurityTest {
     var dao = org.mockito.Mockito.mock(StorageStatisticsDao.class);
     Long id = repositories.repositories.getFirst().id();
     org.mockito.Mockito.when(dao.repositoryUsage()).thenReturn(Map.of(id,
-        new RepositoryUsage(9_007_199_254_740_993L, Long.MAX_VALUE, 0)));
+        new RepositoryUsage(new BigInteger("9007199254740993"),
+            new BigInteger("18446744073709551614"), BigInteger.ZERO)));
     controller.setStorageStatistics(new StorageStatisticsService(dao));
     var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller).build();
     var response = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(
@@ -82,7 +84,7 @@ class RepositoriesControllerSecurityTest {
     var json = new ObjectMapper().readTree(response.getContentAsString());
     var usage = json.path("usage").path(Long.toString(id));
     assertEquals("9007199254740993", usage.path("assetCount").textValue());
-    assertEquals("9223372036854775807", usage.path("totalBytes").textValue());
+    assertEquals("18446744073709551614", usage.path("totalBytes").textValue());
     assertEquals("0", usage.path("unknownSizeCount").textValue());
     assertEquals(30, json.path("maxAgeSeconds").intValue());
     org.junit.jupiter.api.Assertions.assertFalse(json.path("calculatedAt").isMissingNode());

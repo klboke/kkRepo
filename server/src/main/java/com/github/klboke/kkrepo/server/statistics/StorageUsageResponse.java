@@ -13,15 +13,14 @@ public final class StorageUsageResponse {
   public static UsageSnapshot<BlobStoreUsage> blobs(
       UsageSnapshot<StorageStatisticsDao.BlobStoreUsage> snapshot) {
     return map(snapshot, usage -> new BlobStoreUsage(
-        Long.toString(usage.blobCount()), Long.toString(usage.totalBytes()),
-        Long.toString(usage.pendingDeletionCount()), Long.toString(usage.pendingDeletionBytes())));
+        usage.blobCount().toString(), usage.totalBytes().toString(),
+        usage.pendingDeletionCount().toString(), usage.pendingDeletionBytes().toString()));
   }
 
   public static UsageSnapshot<RepositoryUsage> assets(
       UsageSnapshot<StorageStatisticsDao.RepositoryUsage> snapshot) {
     return map(snapshot, usage -> new RepositoryUsage(
-        Long.toString(usage.assetCount()), Long.toString(usage.totalBytes()),
-        Long.toString(usage.unknownSizeCount())));
+        usage.assetCount().toString(), usage.totalBytes().toString(), usage.unknownSizeCount().toString()));
   }
 
   private static <S, T> UsageSnapshot<T> map(UsageSnapshot<S> snapshot, Function<S, T> convert) {

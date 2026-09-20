@@ -6,6 +6,7 @@ import static org.mockito.Mockito.*;
 import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao.BlobStoreUsage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao.RepositoryUsage;
+import java.math.BigInteger;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -43,9 +44,9 @@ class StorageStatisticsServiceTest {
     when(dao.blobStoreUsage()).thenReturn(Map.of(1L, new BlobStoreUsage(1, 10, 0, 0)))
         .thenReturn(Map.of(1L, new BlobStoreUsage(2, 20, 0, 0)));
     var expired = new StorageStatisticsService(dao, Duration.ofNanos(1));
-    assertEquals(1, expired.blobs(List.of(1L)).usage().get(1L).blobCount());
-    assertEquals(2, expired.blobs(List.of(1L)).usage().get(1L).blobCount());
-    assertEquals(2, new StorageStatisticsService(dao).blobs(List.of(1L)).usage().get(1L).blobCount());
+    assertEquals(BigInteger.valueOf(1), expired.blobs(List.of(1L)).usage().get(1L).blobCount());
+    assertEquals(BigInteger.valueOf(2), expired.blobs(List.of(1L)).usage().get(1L).blobCount());
+    assertEquals(BigInteger.valueOf(2), new StorageStatisticsService(dao).blobs(List.of(1L)).usage().get(1L).blobCount());
     when(dao.repositoryUsage()).thenThrow(new IllegalStateException("database unavailable"))
         .thenReturn(Map.of());
     var service = new StorageStatisticsService(dao);
@@ -70,7 +71,7 @@ class StorageStatisticsServiceTest {
           .mapToObj(i -> pool.submit(() -> service.assets(List.of(1L)))).toList();
       assertTrue(loading.await(5, TimeUnit.SECONDS));
       release.countDown();
-      for (var request : requests) assertEquals(1_000_000,
+      for (var request : requests) assertEquals(BigInteger.valueOf(1_000_000),
           request.get(5, TimeUnit.SECONDS).usage().get(1L).assetCount());
     } finally {
       release.countDown();
