@@ -1391,7 +1391,7 @@ function renderRepositories() {
         <td>${blobStore}</td>
         <td class="inventory-count">${renderInventoryMetric(repositoryUsage, repo.id, "assetCount")}</td>
         <td class="inventory-count">${renderInventoryMetric(repositoryUsage, repo.id, "totalBytes", true)}</td>
-        <td><code>${escapeHtml(displayUrl)}</code></td>
+        <td class="usage-location"><code title="${escapeHtml(displayUrl)}">${escapeHtml(displayUrl)}</code></td>
         <td class="actions-column">
           <button class="row-action edit-repository-button" data-name="${escapeHtml(repo.name)}" type="button">edit</button>
           <button class="row-action delete-repository-button" data-name="${escapeHtml(repo.name)}" type="button">delete</button>
@@ -1549,7 +1549,7 @@ function renderBlobStores() {
         <td class="inventory-count">${renderInventoryMetric(blobStoreUsage, store.id, "totalBytes", true)}</td>
         <td class="inventory-count">${renderInventoryMetric(blobStoreUsage, store.id, "pendingDeletionBytes", true)}
           <small class="usage-secondary">${renderInventoryMetric(blobStoreUsage, store.id, "pendingDeletionCount")} <span>blobs</span></small></td>
-        <td class="usage-location"><code>${escapeHtml(target || "")}</code>
+        <td class="usage-location"><code title="${escapeHtml(target || "")}">${escapeHtml(target || "")}</code>
           ${detail && detail !== target ? `<small class="usage-secondary" title="${escapeHtml(detail)}">${escapeHtml(detail)}</small>` : ""}
           ${fileStore ? "" : pathStyleBadge(Boolean(store.pathStyleAccess))}</td>
         <td class="actions-column">
@@ -1597,16 +1597,18 @@ function renderUsageSummary(kind, rows, snapshot) {
   });
   totals.unknownSizeCount = rows.some((row) => inventoryValue(snapshot, row.id, "unknownSizeCount") > 0) ? 1 : 0;
   const totalSnapshot = snapshot === undefined ? undefined : snapshot === null ? null : { usage: { all: totals } };
-  const card = (label, value) => `<div><span>${label}</span><strong>${value}</strong></div>`;
-  document.getElementById(`${kind}-usage-summary`).innerHTML =
-    card(blob ? "Matching blob stores" : "Matching repositories", rows.length.toLocaleString())
-    + card(blob ? "Blob Count" : "Asset Count", renderInventoryMetric(totalSnapshot, "all", keys[0]))
-    + card(blob ? "Stored blob size" : "Logical asset size", renderInventoryMetric(totalSnapshot, "all", "totalBytes", true))
-    + (blob ? card("Pending cleanup", renderInventoryMetric(totalSnapshot, "all", "pendingDeletionBytes", true)) : "");
+  document.getElementById(`${kind}-usage-matching`).textContent = rows.length.toLocaleString();
+  document.getElementById(`${kind}-usage-count`).innerHTML = renderInventoryMetric(totalSnapshot, "all", keys[0]);
+  document.getElementById(`${kind}-usage-size`).innerHTML = renderInventoryMetric(totalSnapshot, "all", "totalBytes", true);
+  if (blob) document.getElementById("blobstore-usage-pending").innerHTML = renderInventoryMetric(totalSnapshot, "all", "pendingDeletionBytes", true);
+  // Keep the summary DOM (including its bound help trigger) stable during refreshes.
   const time = snapshot?.calculatedAt ? new Date(snapshot.calculatedAt) : null;
-  document.getElementById(`${kind}-usage-updated`).textContent = snapshot === undefined ? "Loading usage…"
-    : time && !Number.isNaN(time.valueOf()) ? `Updated: ${time.toLocaleTimeString(document.documentElement.lang || undefined)}`
-    : "Usage unavailable. Refresh to retry.";
+  const validTime = time && !Number.isNaN(time.valueOf());
+  const updated = document.getElementById(`${kind}-usage-updated`);
+  updated.textContent = snapshot === undefined ? "…"
+    : validTime ? time.toLocaleTimeString(document.documentElement.lang || undefined) : "—";
+  updated.title = snapshot === undefined ? "Loading usage…"
+    : validTime ? time.toLocaleString(document.documentElement.lang || undefined) : "Usage unavailable. Refresh to retry.";
 }
 
 function refreshRepositoryStoreFilter() {

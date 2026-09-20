@@ -41,10 +41,24 @@ test('distinguishes pending, failed, missing and zero usage; formats binary unit
 test('summary follows filtered rows and does not turn partial missing statistics into zero', () => {
   const { context: c, element } = setup();
   c.renderUsageSummary('repository', [{id:1}], {usage:{1:{assetCount:2,totalBytes:2048,unknownSizeCount:0},2:{assetCount:99,totalBytes:999}},calculatedAt:'2026-09-19T10:00:00Z'});
-  assert.match(element('repository-usage-summary').innerHTML, /2 KiB/);
-  assert.doesNotMatch(element('repository-usage-summary').innerHTML, /999/);
+  assert.equal(element('repository-usage-matching').textContent, '1');
+  assert.equal(element('repository-usage-count').innerHTML, '2');
+  assert.equal(element('repository-usage-size').innerHTML, '2 KiB');
   c.renderUsageSummary('repository', [{id:1},{id:3}], {usage:{1:{assetCount:2,totalBytes:2048}},calculatedAt:'2026-09-19T10:00:00Z'});
-  assert.match(element('repository-usage-summary').innerHTML, /—/);
+  assert.match(element('repository-usage-size').innerHTML, /—/);
+});
+test('refresh updates the timestamp without replacing the summary and its help trigger', () => {
+  const { context: c, element } = setup();
+  element('blobstore-usage-summary').innerHTML = 'existing help trigger';
+  c.renderUsageSummary('blobstore', [{id:1}], undefined);
+  assert.equal(element('blobstore-usage-updated').textContent, '…');
+  c.renderUsageSummary('blobstore', [{id:1}], {usage:{1:{blobCount:2,totalBytes:2048,pendingDeletionBytes:1024}},calculatedAt:'2026-09-20T10:00:00Z'});
+  assert.equal(element('blobstore-usage-updated').textContent, new Date('2026-09-20T10:00:00Z').toLocaleTimeString('en'));
+  assert.equal(element('blobstore-usage-pending').innerHTML, '1 KiB');
+  c.renderUsageSummary('blobstore', [{id:1}], null);
+  assert.equal(element('blobstore-usage-updated').textContent, '—');
+  assert.equal(element('blobstore-usage-updated').title, 'Usage unavailable. Refresh to retry.');
+  assert.equal(element('blobstore-usage-summary').innerHTML, 'existing help trigger');
 });
 for (const kind of ['repository', 'blobstore']) {
   test(`${kind} list renders before slow statistics and ignores a stale refresh`, async () => {

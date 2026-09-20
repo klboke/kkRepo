@@ -20,6 +20,7 @@
   const originalTitle = document.title;
 
   const zh = {
+    "Updated": "更新时间",
     "No matching repositories.": "没有匹配的仓库。",
     "Loading usage…": "正在加载用量…",
     "Usage unavailable. Refresh to retry.": "用量暂不可用，请刷新重试。",

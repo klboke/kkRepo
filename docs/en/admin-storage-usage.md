@@ -31,6 +31,10 @@ so repository totals are never presented as a reconciliation of physical bytes.
 
 ## Freshness, failures and permissions
 
+The first summary card shows the snapshot update time; its info icon explains the
+cache and refresh behavior. Long storage paths and URLs are truncated in the table
+with their full values available on hover.
+
 The configuration list renders first and usage loads independently. Refresh reloads
 the latest available snapshot; it does not bypass the 30-second cache. A failed or
 missing statistic displays `—`, an in-flight statistic displays `…`, and an empty

@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-4">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20260811-conan-1">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20260818-user-round-1">
-    <link rel="stylesheet" href="./assets/admin.css?v=20260919-storage-usage-1">
+    <link rel="stylesheet" href="./assets/admin.css?v=20260920-storage-layout-1">
     <link rel="stylesheet" href="/browse/assets/account-menu.css?v=20260824-ui-themes-3">
     <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=20260819-topbar-control-height-1">
   </head>
@@ -139,9 +139,16 @@
             <label class="select-filter"><span>Blob store</span><select id="repository-store-filter" aria-label="Filter by blob store"><option value="">All blob stores</option></select></label>
           </div>
           <div class="usage-overview">
-            <div class="summary-grid" id="repository-usage-summary" aria-live="polite"></div>
+            <div class="summary-grid" id="repository-usage-summary" aria-live="polite">
+              <div>
+                <span class="field-label"><span>Updated</span><span class="field-help" tabindex="0" role="note" aria-label="Snapshots are cached for 30 seconds. Refresh reloads the latest available snapshot." data-tooltip="Snapshots are cached for 30 seconds. Refresh reloads the latest available snapshot."><span class="lucide-icon icon-info" aria-hidden="true"></span></span></span>
+                <strong id="repository-usage-updated" title="Loading usage…">…</strong>
+              </div>
+              <div><span>Matching repositories</span><strong id="repository-usage-matching">0</strong></div>
+              <div><span>Asset Count</span><strong id="repository-usage-count">…</strong></div>
+              <div><span>Logical asset size</span><strong id="repository-usage-size">…</strong></div>
+            </div>
             <div class="usage-note"><span>Logical asset size includes metadata and cached files. Shared content can be counted in multiple repositories.</span></div>
-            <div class="usage-note"><span id="repository-usage-updated" aria-live="polite">Loading usage…</span><span>Snapshots are cached for 30 seconds. Refresh reloads the latest available snapshot.</span></div>
           </div>
           <div class="form-modal" id="repository-form-modal" data-form-id="repository-form" role="dialog" aria-modal="true" aria-labelledby="repository-form-title" hidden>
             <div class="form-modal-backdrop" data-modal-dismiss="repository-form"></div>
@@ -847,9 +854,17 @@
             <label class="select-filter"><span>Sort by</span><select id="blobstore-usage-sort"><option value="name">Name</option><option value="totalBytes">Largest stored size</option><option value="pendingDeletionBytes">Most pending cleanup</option><option value="blobCount">Most blobs</option></select></label>
           </div>
           <div class="usage-overview">
-            <div class="summary-grid" id="blobstore-usage-summary" aria-live="polite"></div>
+            <div class="summary-grid" id="blobstore-usage-summary" aria-live="polite">
+              <div>
+                <span class="field-label"><span>Updated</span><span class="field-help" tabindex="0" role="note" aria-label="Snapshots are cached for 30 seconds. Refresh reloads the latest available snapshot." data-tooltip="Snapshots are cached for 30 seconds. Refresh reloads the latest available snapshot."><span class="lucide-icon icon-info" aria-hidden="true"></span></span></span>
+                <strong id="blobstore-usage-updated" title="Loading usage…">…</strong>
+              </div>
+              <div><span>Matching blob stores</span><strong id="blobstore-usage-matching">0</strong></div>
+              <div><span>Blob Count</span><strong id="blobstore-usage-count">…</strong></div>
+              <div><span>Stored blob size</span><strong id="blobstore-usage-size">…</strong></div>
+              <div><span>Pending cleanup</span><strong id="blobstore-usage-pending">…</strong></div>
+            </div>
             <div class="usage-note"><span>Stored blob size includes pending cleanup and excludes temporary uploads and bucket version history.</span></div>
-            <div class="usage-note"><span id="blobstore-usage-updated" aria-live="polite">Loading usage…</span><span>Snapshots are cached for 30 seconds. Refresh reloads the latest available snapshot.</span></div>
           </div>
           <div class="form-modal" id="blobstore-form-modal" data-form-id="blobstore-form" role="dialog" aria-modal="true" aria-labelledby="blobstore-form-title" hidden>
             <div class="form-modal-backdrop" data-modal-dismiss="blobstore-form"></div>
@@ -1927,11 +1942,11 @@
       </main>
     </div>
 
-    <script src="/login/assets/ui-i18n.js?v=20260919-storage-usage-1"></script>
+    <script src="/login/assets/ui-i18n.js?v=20260920-storage-layout-1"></script>
     <script src="/login/assets/product-update.js?v=20260819-version-update-1"></script>
     <script src="./assets/admin-filter.js?v=20260706-wildcard-filter-1"></script>
     <script src="/browse/assets/global-component-search.js?v=20260817-global-search-2"></script>
     <script src="./assets/content-selectors.js?v=20260908-content-selectors-1"></script>
-    <script src="./assets/admin.js?v=20260919-storage-usage-1"></script>
+    <script src="./assets/admin.js?v=20260920-storage-layout-1"></script>
   </body>
 </html>
