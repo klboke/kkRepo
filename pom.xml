@@ -65,7 +65,7 @@
     <xz.version>1.12</xz.version>
     <zstd.jni.version>1.5.7-17</zstd.jni.version>
     <commons.lang3.version>3.20.0</commons.lang3.version>
-    <bouncycastle.version>1.85</bouncycastle.version>
+    <bouncycastle.version>1.86</bouncycastle.version>
     <jacoco.version>0.8.15</jacoco.version>
     <archunit.version>1.5.0</archunit.version>
     <flatten.maven.plugin.version>1.8.0</flatten.maven.plugin.version>
