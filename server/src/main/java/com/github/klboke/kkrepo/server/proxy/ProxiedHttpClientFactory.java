@@ -137,6 +137,14 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
     cache.cleanUp();
   }
 
+  /** Drop all authenticated pools owned by a changed/deleted repository on this node. */
+  public void invalidateNtlm(String owner) {
+    String prefix = "ntlm\n" + (owner == null ? "" : owner) + "\n";
+    cache.asMap().keySet().stream().filter(key -> key.startsWith(prefix)).toList()
+        .forEach(cache::invalidate);
+    cache.cleanUp();
+  }
+
   private static String cacheKey(String owner, OutboundProxyConfig config) {
     return (owner == null ? "" : owner) + "\n" + config.cacheKey();
   }
@@ -208,15 +216,36 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
       byte[] body,
       long responseTimeoutMillis)
       throws IOException {
+    return execute(owner, config, method, target, headers, body, responseTimeoutMillis, null);
+  }
+
+  /**
+   * NTLM is connection-bound. Each repository, credential version and origin has a separate
+   * rebuildable, idle-expiring pool. Every replica selects its pool from the current database
+   * snapshot, so rotated credentials cannot reuse an older authenticated connection.
+   */
+  @SuppressWarnings({"resource", "deprecation"}) // Explicit compatibility with NTLM-only upstreams.
+  public ProxiedResponse execute(
+      String owner, OutboundProxyConfig config, String method, ResolvedHttpTarget target,
+      Map<String, String> headers, byte[] body, long responseTimeoutMillis, NtlmCredentials ntlm)
+      throws IOException {
     if (target == null) {
       throw new IllegalArgumentException("resolved outbound target is required");
     }
-    CloseableHttpClient client = config != null && config.enabled()
-        ? clientFor(owner, config)
-        : directClient;
+    CloseableHttpClient client;
+    if (ntlm == null) {
+      client = config != null && config.enabled() ? clientFor(owner, config) : directClient;
+    } else {
+      String key = "ntlm\n" + (owner == null ? "" : owner) + "\n" + ntlm.cacheKey()
+          + "\n" + target.uri().getScheme() + "://" + target.uri().getRawAuthority()
+          + "\n" + (config == null ? "direct" : config.cacheKey());
+      client = cache.get(key, ignored -> config != null && config.enabled() ? build(config) : buildDirect());
+    }
     boolean proxyEnabled = config != null && config.enabled();
     RequestConfig requestConfig = RequestConfig.custom()
         .setResponseTimeout(Timeout.ofMilliseconds(Math.max(1L, responseTimeoutMillis)))
+        .setTargetPreferredAuthSchemes(ntlm == null ? null : java.util.List.of("NTLM"))
+        .setProxyPreferredAuthSchemes(ntlm == null ? null : java.util.List.of("Basic", "Digest"))
         .build();
     String requestMethod = method == null || method.isBlank() ? "GET" : method;
     if (target.proxyResolvesDns()) {
@@ -225,7 +254,7 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
             "proxy-resolved outbound target requires an enabled proxy config");
       }
       return executeAtTarget(
-          client, config, requestMethod, target.uri(), null, true, headers, body, requestConfig);
+          client, config, requestMethod, target.uri(), null, true, headers, body, requestConfig, ntlm);
     }
     boolean retryable =
         "GET".equalsIgnoreCase(requestMethod) || "HEAD".equalsIgnoreCase(requestMethod);
@@ -233,7 +262,7 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
     for (InetAddress address : target.addresses()) {
       try {
         return executeAtTarget(
-            client, config, requestMethod, target.uri(), address, false, headers, body, requestConfig);
+            client, config, requestMethod, target.uri(), address, false, headers, body, requestConfig, ntlm);
       } catch (IOException e) {
         failure = e;
         if (!retryable) {
@@ -254,7 +283,8 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
       boolean proxyResolvesDns,
       Map<String, String> headers,
       byte[] body,
-      RequestConfig requestConfig)
+      RequestConfig requestConfig,
+      NtlmCredentials ntlm)
       throws IOException {
     int port = effectivePort(uri);
     String originalHost = endpointHost(uri);
@@ -291,6 +321,7 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
     HttpClientContext context = HttpClientContext.create();
     context.setRequestConfig(requestConfig);
     context.setAttribute(ORIGINAL_TARGET_CONTEXT, originalTarget);
+    if (ntlm != null) configureNtlm(context, connectionTarget, originalTarget, config, ntlm);
     // executeOpen returns a live, caller-closed response required by streaming callers.
     ClassicHttpResponse response = client.executeOpen(connectionTarget, request, context);
     Map<String, String> responseHeaders = new LinkedHashMap<>();
@@ -298,6 +329,32 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
       responseHeaders.putIfAbsent(header.getName(), header.getValue());
     }
     return new ProxiedResponse(response, responseHeaders);
+  }
+
+  @SuppressWarnings("deprecation") // Apache retains NTLM as an opt-in scheme for legacy servers.
+  private static void configureNtlm(
+      HttpClientContext context, HttpHost connectionTarget, HttpHost originalTarget,
+      OutboundProxyConfig proxy, NtlmCredentials ntlm) {
+    BasicCredentialsProvider credentials = new BasicCredentialsProvider();
+    var upstream = new org.apache.hc.client5.http.auth.NTCredentials(
+        ntlm.username(), ntlm.password().toCharArray(), ntlm.workstation(), ntlm.domain());
+    // Match only the validated destination and only NTLM; never answer a proxy challenge with
+    // upstream credentials. The route can use a pinned address while the request uses its host.
+    for (HttpHost target : new HttpHost[] {connectionTarget, originalTarget}) {
+      credentials.setCredentials(new AuthScope(target.getSchemeName(), target.getHostName(),
+          target.getPort(), null, "NTLM"), upstream);
+    }
+    if (proxy != null && proxy.authenticated() && proxy.type() == OutboundProxyConfig.Type.HTTP) {
+      credentials.setCredentials(new AuthScope(proxy.host(), proxy.port()),
+          new UsernamePasswordCredentials(proxy.username(), passwordChars(proxy.password())));
+    }
+    context.setCredentialsProvider(credentials);
+    context.setAuthSchemeRegistry(RegistryBuilder.<org.apache.hc.client5.http.auth.AuthSchemeFactory>create()
+        .register("NTLM", org.apache.hc.client5.http.impl.auth.NTLMSchemeFactory.INSTANCE)
+        .register("Basic", org.apache.hc.client5.http.impl.auth.BasicSchemeFactory.INSTANCE)
+        .register("Digest", org.apache.hc.client5.http.impl.auth.DigestSchemeFactory.INSTANCE)
+        .build());
+    context.setUserToken(ntlm.cacheKey());
   }
 
   private static String requestPath(URI uri) {

@@ -259,3 +259,27 @@ Report privately if the issue could cause:
 - Migration data leakage.
 
 See [SECURITY.md](../../SECURITY.md).
+
+## NuGet upstream NTLM authentication
+
+Reference: [Microsoft NTLM connection-oriented flow](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/1fbf5c3b-04c1-4591-a4be-9dc232c4744b).
+
+NuGet proxy repositories can authenticate to NTLM upstreams, including on-premises feeds that require Windows credentials. In Admin → Repositories, choose **NTLM** under **Upstream authentication**, enter the remote username/password, and optionally provide the **NTLM domain** and **NTLM workstation**. A `DOMAIN\username` username is accepted; an explicitly supplied domain takes precedence. Clear any saved Bearer token before selecting NTLM.
+
+The equivalent `/internal/repositories` proxy settings are:
+
+```json
+{
+  "remoteAuthenticationType": "ntlm",
+  "remoteUsername": "service-user",
+  "remotePassword": "<password>",
+  "remoteNtlmDomain": "DOMAIN",
+  "remoteNtlmHost": "KKREPO"
+}
+```
+
+The default `auto` mode preserves existing Basic/Bearer behavior. NTLM is explicitly selected and responds to an upstream NTLM challenge; it does not send a preemptive Basic password or fall back to Basic. This adds upstream NTLM authentication for NuGet proxy repositories, not Kerberos/SPNEGO or Windows login to kkRepo. Private upstream hosts still require the outbound allowlist described above. Availability of NTLM does not imply that every Azure DevOps-specific NuGet API behavior has been verified.
+
+Passwords use the existing encrypted `remotePassword` storage and redacted API responses. Nexus NuGet migration preserves NTLM type/domain/workstation when exported, and existing missing/masked-password checks still require the operator to re-enter unavailable secrets. Authenticated connections are isolated by repository, origin, outbound proxy and credential fingerprint. Each replica builds a disposable local pool from database-backed configuration; credential changes select a new pool, local update/delete evicts the old pool, and idle pools expire after `kkrepo.outbound-proxy.idle-ttl-ms`. Same-origin redirects retain authentication; cross-origin redirects require the usual allowlist and never carry NTLM credentials.
+
+The current Apache HttpClient dependency retains NTLM as a deprecated, opt-in scheme. The transport registers it explicitly for NTLM requests without changing the default authentication registry. Keep the NTLMv2 handshake tests when upgrading HttpClient. Reference comparison: `python3 compat-test/scripts/ntlm-upstream.py --nexus http://localhost:28090 --kkrepo http://localhost:18090` against disposable instances, with `--upstream-host` set to a hostname/IP reachable from both servers. Add `--dotnet` to verify a real .NET 8 restore using isolated package caches. The fixture verifies the NTLMv2 password proof, GET/HEAD results and exact package bytes, and removes its repositories and temporary Nexus SSRF exception.

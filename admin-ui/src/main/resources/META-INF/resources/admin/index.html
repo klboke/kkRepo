@@ -267,6 +267,21 @@
                 <input id="repository-allowed-redirect-hosts" type="text" spellcheck="false"
                   autocomplete="off" placeholder="artifacts.example.com">
               </label>
+              <label id="repository-remote-authentication-field" hidden>
+                <span>Upstream authentication</span>
+                <select id="repository-remote-authentication-type">
+                  <option value="auto">Basic / Bearer</option>
+                  <option value="ntlm">NTLM</option>
+                </select>
+              </label>
+              <label id="repository-remote-ntlm-domain-field" hidden>
+                <span>NTLM domain</span>
+                <input id="repository-remote-ntlm-domain" type="text" autocomplete="off" placeholder="DOMAIN">
+              </label>
+              <label id="repository-remote-ntlm-host-field" hidden>
+                <span>NTLM workstation (optional)</span>
+                <input id="repository-remote-ntlm-host" type="text" autocomplete="off">
+              </label>
               <label>
                 <span>Remote username</span>
                 <input id="repository-remote-username" type="text" autocomplete="off">

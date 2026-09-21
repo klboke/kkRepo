@@ -14,6 +14,7 @@ import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import com.github.klboke.kkrepo.server.proxy.NtlmCredentials;
 import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
@@ -189,14 +190,13 @@ public class HttpRemoteFetcher {
     Duration timeout = requestTimeout(req);
     ProxiedHttpClientFactory.ProxiedResponse response = null;
     try {
-      response = proxyFactory.execute(
-          req.repository(),
-          req.outboundProxy(),
-          req.method(),
-          target,
-          headers,
-          req.requestBody(),
-          timeout.toMillis());
+      if (req.ntlmCredentials() == null) {
+        response = proxyFactory.execute(req.repository(), req.outboundProxy(), req.method(),
+            target, headers, req.requestBody(), timeout.toMillis());
+      } else {
+        response = proxyFactory.execute(req.repository(), req.outboundProxy(), req.method(),
+            target, headers, req.requestBody(), timeout.toMillis(), req.ntlmCredentials());
+      }
       String location = redirectLocation(response);
       if (location != null) {
         int redirectStatus = response.status();
@@ -224,7 +224,8 @@ public class HttpRemoteFetcher {
             req.outboundProxy(),
             req.accept(),
             preserveBody ? req.requestBody() : null,
-            preserveBody ? req.requestContentType() : null);
+            preserveBody ? req.requestContentType() : null,
+            Request.sameOrigin(uri, redirected) ? req.ntlmCredentials() : null);
         Result redirectedResult = fetchInternal(
             redirectedRequest,
             redirects + 1,
@@ -353,7 +354,30 @@ public class HttpRemoteFetcher {
       OutboundProxyConfig outboundProxy,
       String accept,
       byte[] requestBody,
-      String requestContentType) {
+      String requestContentType,
+      NtlmCredentials ntlmCredentials) {
+    /** Compatibility constructor for callers that predate upstream NTLM authentication. */
+    public Request(
+        String url,
+        String etag,
+        Instant lastModified,
+        Duration timeout,
+        TimeoutProfile timeoutProfile,
+        boolean headOnly,
+        String repository,
+        String format,
+        String trustedHost,
+        String authorizationHeader,
+        Set<String> allowedUnsignedRedirectHosts,
+        OutboundProxyConfig outboundProxy,
+        String accept,
+        byte[] requestBody,
+        String requestContentType) {
+      this(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format, trustedHost,
+          authorizationHeader, allowedUnsignedRedirectHosts, outboundProxy, accept, requestBody,
+          requestContentType, null);
+    }
+
     /** Compatibility constructor retained for callers that specify a custom Accept header. */
     public Request(
         String url,
@@ -445,19 +469,19 @@ public class HttpRemoteFetcher {
     public Request withConditional(String etag, Instant lastModified) {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
           repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts,
-          outboundProxy, accept, requestBody, requestContentType);
+          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials);
     }
 
     public Request withTimeoutProfile(TimeoutProfile timeoutProfile) {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
           repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts,
-          outboundProxy, accept, requestBody, requestContentType);
+          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials);
     }
 
     public Request withAccept(String accept) {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
           repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts,
-          outboundProxy, accept, requestBody, requestContentType);
+          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials);
     }
 
     /** Creates a read-only POST request, used by Hub paths-info. */
@@ -465,7 +489,7 @@ public class HttpRemoteFetcher {
       if (body == null) throw new IllegalArgumentException("Request body is required");
       return new Request(url, etag, lastModified, timeout, timeoutProfile, false,
           repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts,
-          outboundProxy, accept, body, contentType);
+          outboundProxy, accept, body, contentType, ntlmCredentials);
     }
 
     public Request withRepository(RepositoryRuntime runtime) {
@@ -489,7 +513,8 @@ public class HttpRemoteFetcher {
           runtime == null ? null : runtime.outboundProxy(),
           accept,
           requestBody,
-          requestContentType);
+          requestContentType,
+          includeAuthorization && trusted != null ? runtime.ntlmCredentials() : null);
     }
 
     public Request withRepositoryAllowingUnsignedRedirects(
@@ -520,7 +545,8 @@ public class HttpRemoteFetcher {
           runtime == null ? null : runtime.outboundProxy(),
           accept,
           requestBody,
-          requestContentType);
+          requestContentType,
+          includeAuthorization && trusted != null ? runtime.ntlmCredentials() : null);
     }
 
     public String method() {
@@ -647,6 +673,7 @@ public class HttpRemoteFetcher {
       if (runtime == null) {
         return null;
       }
+      if (runtime.ntlmCredentials() != null) return null;
       if (runtime.proxyRemoteBearerToken() != null && !runtime.proxyRemoteBearerToken().isBlank()) {
         return "Bearer " + runtime.proxyRemoteBearerToken().trim();
       }

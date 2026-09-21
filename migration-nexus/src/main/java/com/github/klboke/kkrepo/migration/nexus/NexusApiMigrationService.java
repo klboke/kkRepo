@@ -1113,6 +1113,15 @@ public class NexusApiMigrationService {
     Object httpClient = value(document, "httpClient");
     putIfNotNull(attributes, "autoBlock", boolOrNull(nested(httpClient, "autoBlock")));
     putProxyAuthentication(attributes, nested(httpClient, "authentication"));
+    Object authentication = nested(httpClient, "authentication");
+    if ("nuget".equalsIgnoreCase(repositoryFormat(document))
+        && "ntlm".equalsIgnoreCase(string(nested(authentication, "type")))) {
+      attributes.put("remoteAuthenticationType", "ntlm");
+      putIfNotNull(attributes, "remoteNtlmDomain", firstNonBlank(
+          string(nested(authentication, "ntlmDomain")), string(nested(authentication, "domain"))));
+      putIfNotNull(attributes, "remoteNtlmHost", firstNonBlank(
+          string(nested(authentication, "ntlmHost")), string(nested(authentication, "host"))));
+    }
     putIfNotNull(attributes, "negativeCache", value(document, "negativeCache"));
     // The source snapshot already keeps a recursively redacted copy. Do not persist the raw
     // nested httpClient here; runtime credentials live only in the DAO-encrypted fields above.

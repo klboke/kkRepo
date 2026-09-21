@@ -67,6 +67,27 @@ import org.springframework.transaction.support.SimpleTransactionStatus;
 class NexusApiMigrationServiceTest {
 
   @Test
+  void preservesNugetNtlmAuthenticationDuringMigration() {
+    FakeBlobStoreDao blobStores = new FakeBlobStoreDao();
+    FakeRepositoryDao repositories = new FakeRepositoryDao();
+    NexusApiMigrationService service = new NexusApiMigrationService(new ObjectMapper(),
+        blobStores.asDao(), repositories.asDao(), null, new FakeMigrationJobDao(), noopSecurityWriter());
+    NexusInventory inventory = new NexusInventory(List.of(Map.of("name", "default")),
+        List.of(repository("nuget-ntlm", "nuget", "proxy", Map.of(
+            "storage", storage("default"),
+            "proxy", Map.of("remoteUrl", "https://devops.example/nuget/v3/index.json"),
+            "httpClient", Map.of("authentication", Map.of("type", "ntlm", "username", "User",
+                "password", "Password", "ntlmDomain", "Domain", "ntlmHost", "KKREPO"))))),
+        NexusSecurityExport.empty(), List.of());
+    service.migrate(inventory, request("https://old-nexus.example"));
+    Map<?, ?> proxy = (Map<?, ?>) repositories.required("nuget-ntlm").attributes().get("proxy");
+    assertEquals("ntlm", proxy.get("remoteAuthenticationType"));
+    assertEquals("Domain", proxy.get("remoteNtlmDomain"));
+    assertEquals("KKREPO", proxy.get("remoteNtlmHost"));
+    assertEquals("Password", proxy.get("remotePassword"));
+  }
+
+  @Test
   void migratesPypiRemoteIndexPathIncludingAnExplicitEmptyValue() {
     FakeRepositoryDao repositories = new FakeRepositoryDao();
     NexusApiMigrationService service = service(new FakeBlobStoreDao(), repositories);

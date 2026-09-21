@@ -641,6 +641,9 @@ public class RepositoryService {
     if (proxiedHttpClientFactory == null) {
       return;
     }
+    if (!java.util.Objects.equals(proxyChildMap(previousAttributes), proxyChildMap(newAttributes))) {
+      proxiedHttpClientFactory.invalidateNtlm(repositoryName);
+    }
     OutboundProxyConfig previous = OutboundProxyConfig.fromAttributes(proxyChildMap(previousAttributes));
     if (previous == null) {
       return;
@@ -656,6 +659,7 @@ public class RepositoryService {
     if (proxiedHttpClientFactory == null) {
       return;
     }
+    proxiedHttpClientFactory.invalidateNtlm(repositoryName);
     proxiedHttpClientFactory.invalidate(
         repositoryName, OutboundProxyConfig.fromAttributes(proxyChildMap(attributes)));
   }
@@ -1313,7 +1317,8 @@ public class RepositoryService {
         settings.outboundProxyPassword(),
         settings.outboundProxyPasswordConfigured(),
         settings.minimumReleaseAgeMinutes(),
-        settings.allowedRedirectHosts());
+        settings.allowedRedirectHosts(),
+        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost());
   }
 
   private static String defaultRemoteUrl(RepositoryFormat format) {
@@ -1351,7 +1356,8 @@ public class RepositoryService {
         settings.outboundProxyPassword(),
         settings.outboundProxyPasswordConfigured(),
         settings.minimumReleaseAgeMinutes(),
-        settings.allowedRedirectHosts());
+        settings.allowedRedirectHosts(),
+        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost());
   }
 
   private static ProxySettings withAllowedRedirectHosts(
@@ -1373,7 +1379,8 @@ public class RepositoryService {
         settings.outboundProxyPassword(),
         settings.outboundProxyPasswordConfigured(),
         settings.minimumReleaseAgeMinutes(),
-        allowedRedirectHosts);
+        allowedRedirectHosts,
+        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost());
   }
 
   private void validateProxy(ProxySettings settings, RepositoryFormat format) {
@@ -1383,6 +1390,22 @@ public class RepositoryService {
     if (settings.remotePassword() != null && !settings.remotePassword().isBlank()
         && (settings.remoteUsername() == null || settings.remoteUsername().isBlank())) {
       throw new RepositoryValidationException("proxy.remoteUsername is required when proxy.remotePassword is set");
+    }
+    String authType = settings.remoteAuthenticationType();
+    if (authType != null && !authType.isBlank() && !"auto".equals(authType) && !"ntlm".equals(authType)) {
+      throw new RepositoryValidationException("proxy.remoteAuthenticationType must be auto or ntlm");
+    }
+    if ("ntlm".equals(authType)) {
+      if (format != RepositoryFormat.NUGET) {
+        throw new RepositoryValidationException("NTLM upstream authentication is currently supported for NuGet proxy repositories");
+      }
+      if (settings.remoteUsername() == null || settings.remoteUsername().isBlank()
+          || settings.remotePassword() == null || settings.remotePassword().isBlank()) {
+        throw new RepositoryValidationException("NTLM requires proxy.remoteUsername and proxy.remotePassword");
+      }
+      if (settings.remoteBearerToken() != null && !settings.remoteBearerToken().isBlank()) {
+        throw new RepositoryValidationException("Clear proxy.remoteBearerToken before selecting NTLM authentication");
+      }
     }
     OutboundProxyConfig outboundProxy = validateOutboundProxy(settings);
     try {
@@ -1562,7 +1585,10 @@ public class RepositoryService {
             : incoming.minimumReleaseAgeMinutes(),
         incoming.allowedRedirectHosts() == null
             ? base.allowedRedirectHosts()
-            : incoming.allowedRedirectHosts());
+            : incoming.allowedRedirectHosts(),
+        incoming.remoteAuthenticationType() == null ? base.remoteAuthenticationType() : incoming.remoteAuthenticationType(),
+        incoming.remoteNtlmDomain() == null ? base.remoteNtlmDomain() : blankToNull(incoming.remoteNtlmDomain()),
+        incoming.remoteNtlmHost() == null ? base.remoteNtlmHost() : blankToNull(incoming.remoteNtlmHost()));
   }
 
   private static String mergedOutboundProxyPassword(ProxySettings base, ProxySettings incoming) {
@@ -1606,6 +1632,9 @@ public class RepositoryService {
     if (proxy.allowedRedirectHosts() != null && !proxy.allowedRedirectHosts().isEmpty()) {
       map.put("allowedRedirectHosts", List.copyOf(proxy.allowedRedirectHosts()));
     }
+    if (proxy.remoteAuthenticationType() != null) map.put("remoteAuthenticationType", proxy.remoteAuthenticationType());
+    if (proxy.remoteNtlmDomain() != null) map.put("remoteNtlmDomain", proxy.remoteNtlmDomain());
+    if (proxy.remoteNtlmHost() != null) map.put("remoteNtlmHost", proxy.remoteNtlmHost());
     if (proxy.autoBlock() != null) map.put("autoBlock", proxy.autoBlock());
     if (proxy.remoteUsername() != null && !proxy.remoteUsername().isBlank()) {
       map.put("remoteUsername", proxy.remoteUsername());
@@ -2057,7 +2086,10 @@ public class RepositoryService {
         blankToNull(stringOrNull(proxyMap.get("outboundProxyPassword"))),
         null,
         intValue(proxyMap.get("minimumReleaseAgeMinutes")),
-        stringList(proxyMap.get("allowedRedirectHosts")));
+        stringList(proxyMap.get("allowedRedirectHosts")),
+        stringOrNull(proxyMap.get("remoteAuthenticationType")),
+        stringOrNull(proxyMap.get("remoteNtlmDomain")),
+        stringOrNull(proxyMap.get("remoteNtlmHost")));
   }
 
   private static ProxySettings readProxyAttributesOrDefaults(RepositoryRecord record) {
@@ -2083,7 +2115,8 @@ public class RepositoryService {
         null,
         outboundPassword != null && !outboundPassword.isBlank(),
         effective.minimumReleaseAgeMinutes() == null ? 0 : effective.minimumReleaseAgeMinutes(),
-        effective.allowedRedirectHosts() == null ? List.of() : effective.allowedRedirectHosts());
+        effective.allowedRedirectHosts() == null ? List.of() : effective.allowedRedirectHosts(),
+        effective.remoteAuthenticationType(), effective.remoteNtlmDomain(), effective.remoteNtlmHost());
   }
 
   private static String stringOrNull(Object value) {
