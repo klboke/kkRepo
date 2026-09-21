@@ -55,6 +55,70 @@ import org.junit.jupiter.api.Test;
 class RepositoryServiceTest {
 
   @Test
+  void nugetNtlmSettingsRoundTripPreservePasswordAndReachRuntime() throws Exception {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    ProxiedHttpClientFactory factory = mock(ProxiedHttpClientFactory.class);
+    RepositoryService service = service(repositories, factory);
+    var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+    ProxySettings settings = mapper.readValue("""
+        {"remoteUrl":"https://api.nuget.org/v3/index.json", "remoteAuthenticationType":"ntlm",
+         "remoteUsername":"User", "remotePassword":"Password", "remoteNtlmDomain":"Domain",
+         "remoteNtlmHost":"KKREPO"}
+        """, ProxySettings.class);
+    RepositoryView created = service.create(new CreateCommand("ntlm-feed", "nuget-proxy", true,
+        "default", false, null, settings, null, null, null, null));
+    assertEquals("ntlm", created.proxy().remoteAuthenticationType());
+    assertEquals("Domain", created.proxy().remoteNtlmDomain());
+    assertEquals("KKREPO", created.proxy().remoteNtlmHost());
+    assertNull(created.proxy().remotePassword());
+    assertEquals(true, created.proxy().remotePasswordConfigured());
+    var runtime = new RepositoryRuntimeRegistry(repositories, 0).resolve("ntlm-feed").orElseThrow();
+    assertEquals("Password", runtime.ntlmCredentials().password());
+    var request = com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher.Request
+        .get("https://api.nuget.org/v3-flatcontainer/test/index.json").withRepository(runtime);
+    assertEquals(runtime.ntlmCredentials(), request.ntlmCredentials());
+    assertNull(request.authorizationHeader(), "NTLM must not preemptively transmit a Basic password");
+    assertEquals(runtime.ntlmCredentials(), request.withAccept("application/json")
+        .withConditional("etag", null).withTimeoutProfile(
+            com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher.TimeoutProfile.METADATA).ntlmCredentials());
+    assertNull(com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher.Request
+        .get("https://other.example/index.json").withRepository(runtime).ntlmCredentials());
+    assertNull(com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher.Request
+        .get(runtime.proxyRemoteUrl()).withRepository(runtime, false).ntlmCredentials());
+    RepositoryView updated = service.update("ntlm-feed", new UpdateCommand(true, null, null,
+        null, new ProxySettings(null, null, null, null), null, null, null, null));
+    assertEquals("ntlm", updated.proxy().remoteAuthenticationType());
+    assertEquals("Domain", updated.proxy().remoteNtlmDomain());
+    assertEquals(true, updated.proxy().remotePasswordConfigured());
+    ProxySettings clear = mapper.readValue("""
+        {"remoteAuthenticationType":"auto", "remoteNtlmDomain":"", "remoteNtlmHost":"",
+         "remotePasswordConfigured":false}
+        """, ProxySettings.class);
+    RepositoryView cleared = service.update("ntlm-feed", new UpdateCommand(true, null, null,
+        null, clear, null, null, null, null));
+    assertEquals("auto", cleared.proxy().remoteAuthenticationType());
+    assertNull(cleared.proxy().remoteNtlmDomain());
+    assertEquals(false, cleared.proxy().remotePasswordConfigured());
+    verify(factory).invalidateNtlm("ntlm-feed");
+  }
+
+  @Test
+  void rejectsUnsupportedOrIncompleteNtlmAuthentication() throws Exception {
+    var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+    for (String extra : List.of(
+        "\"remoteAuthenticationType\":\"kerberos\"",
+        "\"remoteAuthenticationType\":\"ntlm\"",
+        "\"remoteAuthenticationType\":\"ntlm\",\"remoteUsername\":\"User\"",
+        "\"remoteAuthenticationType\":\"ntlm\",\"remoteUsername\":\"User\",\"remotePassword\":\"secret\",\"remoteBearerToken\":\"token\"")) {
+      ProxySettings settings = mapper.readValue("{\"remoteUrl\":\"https://api.nuget.org/v3/index.json\"," + extra + "}",
+          ProxySettings.class);
+      RepositoryService service = service(new StubRepositoryDao(repository(1L)));
+      assertThrows(RepositoryValidationException.class, () -> service.create(new CreateCommand(
+          "ntlm-feed", "nuget-proxy", true, "default", false, null, settings, null, null, null, null)));
+    }
+  }
+
+  @Test
   void helmGroupAcceptsOrderedHostedAndNestedGroupMembers() {
     RepositoryRecord hosted = helmRepository(61L, "helm-private", RepositoryType.HOSTED);
     RepositoryRecord nested = helmRepository(62L, "helm-upstreams", RepositoryType.GROUP);

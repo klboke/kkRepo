@@ -2640,6 +2640,12 @@ function refreshRepositoryRecipeControls() {
   const format = recipe ? recipe.format : null;
   document.getElementById("repository-hosted-fields").hidden = type !== "HOSTED";
   document.getElementById("repository-proxy-fields").hidden = type !== "PROXY";
+  const ntlmAvailable = type === "PROXY" && format === "nuget";
+  document.getElementById("repository-remote-authentication-field").hidden = !ntlmAvailable;
+  if (!ntlmAvailable) document.getElementById("repository-remote-authentication-type").value = "auto";
+  const ntlmSelected = ntlmAvailable && document.getElementById("repository-remote-authentication-type").value === "ntlm";
+  document.getElementById("repository-remote-ntlm-domain-field").hidden = !ntlmSelected;
+  document.getElementById("repository-remote-ntlm-host-field").hidden = !ntlmSelected;
   document.getElementById("repository-outbound-proxy-fields").hidden = type !== "PROXY";
   document.getElementById("repository-group-fields").hidden = type !== "GROUP";
   document.getElementById("repository-docker-fields").hidden = format !== "docker";
@@ -3010,6 +3016,9 @@ function repositoryFormPayload() {
         ? (minimumReleaseAge === "" ? 0 : Number(minimumReleaseAge))
         : null,
       autoBlock: document.getElementById("repository-auto-block").checked,
+      remoteAuthenticationType: textInputValue("repository-remote-authentication-type"),
+      remoteNtlmDomain: textInputValue("repository-remote-ntlm-domain"),
+      remoteNtlmHost: textInputValue("repository-remote-ntlm-host"),
       remoteUsername: textInputValue("repository-remote-username"),
       remotePassword: textInputValue("repository-remote-password"),
       remotePasswordConfigured: document.getElementById("repository-remote-password-clear").checked ? false : null,
@@ -3099,6 +3108,9 @@ function setRepositoryFormDefaults() {
   document.getElementById("repository-remote-url").value = "";
   document.getElementById("repository-pypi-index-path").value = "/simple";
   document.getElementById("repository-allowed-redirect-hosts").value = "";
+  document.getElementById("repository-remote-authentication-type").value = "auto";
+  document.getElementById("repository-remote-ntlm-domain").value = "";
+  document.getElementById("repository-remote-ntlm-host").value = "";
   document.getElementById("repository-remote-username").value = "";
   document.getElementById("repository-remote-password").value = "";
   document.getElementById("repository-remote-password").placeholder = "";
@@ -3214,6 +3226,9 @@ function showEditRepositoryForm(name) {
     document.getElementById("repository-remote-url").value = repo.proxy.remoteUrl || "";
     document.getElementById("repository-allowed-redirect-hosts").value =
       Array.isArray(repo.proxy.allowedRedirectHosts) ? repo.proxy.allowedRedirectHosts.join(", ") : "";
+    document.getElementById("repository-remote-authentication-type").value = repo.proxy.remoteAuthenticationType || "auto";
+    document.getElementById("repository-remote-ntlm-domain").value = repo.proxy.remoteNtlmDomain || "";
+    document.getElementById("repository-remote-ntlm-host").value = repo.proxy.remoteNtlmHost || "";
     document.getElementById("repository-remote-username").value = repo.proxy.remoteUsername || "";
     document.getElementById("repository-remote-password").value = "";
     document.getElementById("repository-remote-password").placeholder =
@@ -7805,6 +7820,7 @@ document.getElementById("repository-form").addEventListener("submit", (event) =>
 });
 bindRepositoryRecipeCombobox();
 document.getElementById("repository-recipe").addEventListener("change", refreshRepositoryRecipeControls);
+document.getElementById("repository-remote-authentication-type").addEventListener("change", refreshRepositoryRecipeControls);
 document.getElementById("repository-docker-connector-enabled").addEventListener("change", refreshDockerConnectorControls);
 document.getElementById("repository-apt-flat").addEventListener("change", refreshAptControls);
 document.getElementById("repository-conan-refresh-status").addEventListener("click", () => loadConanStatus());

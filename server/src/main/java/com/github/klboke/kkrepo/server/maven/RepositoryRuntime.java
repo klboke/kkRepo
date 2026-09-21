@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.maven;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.server.proxy.NtlmCredentials;
 import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -41,7 +42,43 @@ public record RepositoryRuntime(
     List<RepositoryRuntime> members,
     OutboundProxyConfig outboundProxy,
     Integer minimumReleaseAgeMinutes,
-    Set<String> allowedRedirectHosts) {
+    Set<String> allowedRedirectHosts,
+    NtlmCredentials ntlmCredentials) {
+  /** Compatibility constructor for callers that predate upstream NTLM authentication. */
+  public RepositoryRuntime(
+      long id,
+      String name,
+      RepositoryFormat format,
+      RepositoryType type,
+      String recipeName,
+      boolean online,
+      Long blobStoreId,
+      String writePolicy,
+      String versionPolicy,
+      String layoutPolicy,
+      boolean strictContentTypeValidation,
+      String proxyRemoteUrl,
+      Integer contentMaxAgeMinutes,
+      Integer metadataMaxAgeMinutes,
+      Boolean autoBlock,
+      String proxyRemoteUsername,
+      String proxyRemotePassword,
+      String proxyRemoteBearerToken,
+      String rawContentDisposition,
+      Boolean dockerConnectorEnabled,
+      Integer dockerConnectorPort,
+      String dockerConnectorPublicUrl,
+      Boolean cargoRequireAuthentication,
+      List<RepositoryRuntime> members,
+      OutboundProxyConfig outboundProxy,
+      Integer minimumReleaseAgeMinutes,
+      Set<String> allowedRedirectHosts) {
+    this(id, name, format, type, recipeName, online, blobStoreId, writePolicy, versionPolicy, layoutPolicy,
+        strictContentTypeValidation, proxyRemoteUrl, contentMaxAgeMinutes, metadataMaxAgeMinutes, autoBlock,
+        proxyRemoteUsername, proxyRemotePassword, proxyRemoteBearerToken, rawContentDisposition,
+        dockerConnectorEnabled, dockerConnectorPort, dockerConnectorPublicUrl, cargoRequireAuthentication,
+        members, outboundProxy, minimumReleaseAgeMinutes, allowedRedirectHosts, null);
+  }
 
   public RepositoryRuntime {
     if (allowedRedirectHosts == null || allowedRedirectHosts.isEmpty()) {

@@ -248,3 +248,25 @@ KKREPO_OUTBOUND_ALLOWED_HOSTS=
 - 迁移数据泄露。
 
 详见 [SECURITY.md](../../SECURITY.md)。
+
+### NuGet 上游 NTLM 认证
+
+NuGet proxy 仓库支持使用 NTLM 访问要求 Windows 凭据的上游。在管理控制台的仓库配置中，将「上游认证方式」设为 **NTLM**，填写远端用户名、密码，以及可选的 NTLM 域和工作站名称。用户名也可以填写 `DOMAIN\username`；显式配置的域优先。切换前须清除已保存的 Bearer token。
+
+对应 `/internal/repositories` 的 proxy 配置如下：
+
+```json
+{
+  "remoteAuthenticationType": "ntlm",
+  "remoteUsername": "service-user",
+  "remotePassword": "<password>",
+  "remoteNtlmDomain": "DOMAIN",
+  "remoteNtlmHost": "KKREPO"
+}
+```
+
+默认的 `auto` 模式保留现有 Basic/Bearer 行为。NTLM 模式收到上游挑战后才开始握手，不预先发送 Basic 密码，也不回退到 Basic。本功能用于 NuGet proxy 上游认证，不包含 Kerberos/SPNEGO 或使用 Windows 账号登录 kkRepo。私有地址仍需要出站白名单；支持 NTLM 不代表已验证所有 Azure DevOps 专有 NuGet API 行为。
+
+密码继续使用加密存储的 `remotePassword`，API 不返回明文。Nexus NuGet 迁移会保留导出的 NTLM 类型、域和工作站；缺失或被掩码遮蔽的密码仍需由管理员重新填写。认证连接按仓库、源站、出站代理和凭据指纹隔离。各副本依据数据库配置独立建立可重建的本地连接池；凭据更新会选择新连接池，本节点更新/删除会清理旧池，空闲池按 `kkrepo.outbound-proxy.idle-ttl-ms` 到期。相同源站的重定向保留认证，跨源站重定向必须通过原有白名单检查且不携带 NTLM 凭据。
+
+当前 Apache HttpClient 依赖保留了已弃用、需显式注册的 NTLM 实现。仅 NTLM 请求启用该实现，升级依赖时必须保留 NTLMv2 握手回归测试。参考对照脚本为 `compat-test/scripts/ntlm-upstream.py`，可分别或同时连接临时 Nexus/kkRepo 实例，校验 NTLMv2 密码证明、包内容和 GET/HEAD 响应，并清理测试仓库及临时 Nexus SSRF 白名单项。指定双方可达的 `--upstream-host`；添加 `--dotnet` 可使用独立包缓存执行真实 .NET 8 restore。
