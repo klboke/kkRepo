@@ -38,10 +38,57 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
 
 class SecurityScanFinalizerTest {
+  @ParameterizedTest
+  @MethodSource("resultAgeConfigurations")
+  void finalizesRunsForEveryResultAgeConfiguration(
+      Long configAge, Long policyAge, boolean policyConfigured, Instant expectedStaleAt) {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    SecurityScanFinalizer finalizer = finalizer(scans);
+    Instant completedAt = Instant.parse("2026-09-21T00:00:00Z");
+    ScanTask task = task(1, 3);
+    ScanProfile profile = profile(completedAt);
+    Long policyId = policyConfigured ? 101L : null;
+    RepositoryScanConfig config = config(1L, policyId, configAge);
+    ScanRun run = run(completedAt);
+
+    when(scans.insertRunOrFindExisting(run)).thenReturn(run);
+    if (policyConfigured) {
+      when(scans.findPolicy(101L))
+          .thenReturn(Optional.of(policy(101L, Severity.HIGH, policyAge, completedAt)));
+    }
+    when(scans.findRepositoryConfig(1L)).thenReturn(Optional.of(config));
+    when(scans.upsertAssetStateIfCurrent(any()))
+        .thenAnswer(invocation -> invocation.getArgument(0));
+    when(scans.upsertAssetPolicyStateIfCurrent(any()))
+        .thenAnswer(invocation -> invocation.getArgument(0));
+    when(scans.completeTask(eq(5L), eq("lease"), any())).thenReturn(true);
+
+    finalizer.finalizeRun(
+        task, profile, config, "sha256:" + "a".repeat(64), run, List.of());
+
+    ArgumentCaptor<AssetSecurityState> state =
+        ArgumentCaptor.forClass(AssetSecurityState.class);
+    verify(scans).upsertAssetStateIfCurrent(state.capture());
+    assertEquals(expectedStaleAt, state.getValue().staleAt());
+  }
+
+  private static Stream<Arguments> resultAgeConfigurations() {
+    Instant completedAt = Instant.parse("2026-09-21T00:00:00Z");
+    return Stream.of(
+        Arguments.of(null, null, false, null),
+        Arguments.of(3600L, null, false, completedAt.plusSeconds(3600)),
+        Arguments.of(null, 1800L, true, completedAt.plusSeconds(1800)),
+        Arguments.of(3600L, 1800L, true, completedAt.plusSeconds(1800)));
+  }
+
   @Test
   void retriesRetryableFailuresAndFencesLeaseLoss() {
     SecurityScanDao scans = mock(SecurityScanDao.class);
@@ -578,16 +625,26 @@ class SecurityScanFinalizerTest {
   }
 
   private static RepositoryScanConfig config(long repositoryId, long policyId) {
+    return config(repositoryId, policyId, 3600L);
+  }
+
+  private static RepositoryScanConfig config(
+      long repositoryId, Long policyId, Long maxResultAgeSeconds) {
     return new RepositoryScanConfig(
         repositoryId, true, 1L, true, true, EnforcementMode.AUDIT,
         PolicyAction.BLOCK, PolicyAction.BLOCK, PolicyAction.BLOCK,
-        3600L, policyId, 1L, Instant.EPOCH, Instant.EPOCH);
+        maxResultAgeSeconds, policyId, 1L, Instant.EPOCH, Instant.EPOCH);
   }
 
   private static ScanPolicy policy(long id, Severity severity, Instant now) {
+    return policy(id, severity, 3600L, now);
+  }
+
+  private static ScanPolicy policy(
+      long id, Severity severity, Long maxResultAgeSeconds, Instant now) {
     return new ScanPolicy(
         id, "policy-" + id, true, severity, false, false, true,
-        3600L, List.of("linux/amd64"), 1L, "test", now, now);
+        maxResultAgeSeconds, List.of("linux/amd64"), 1L, "test", now, now);
   }
 
   private static ScanRun run(Instant now) {
