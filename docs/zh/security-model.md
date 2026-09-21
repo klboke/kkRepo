@@ -249,7 +249,7 @@ KKREPO_OUTBOUND_ALLOWED_HOSTS=
 
 详见 [SECURITY.md](../../SECURITY.md)。
 
-### NuGet 上游 NTLM 认证
+## NuGet 上游 NTLM 认证
 
 NuGet proxy 仓库支持使用 NTLM 访问要求 Windows 凭据的上游。在管理控制台的仓库配置中，将「上游认证方式」设为 **NTLM**，填写远端用户名、密码，以及可选的 NTLM 域和工作站名称。用户名也可以填写 `DOMAIN\username`；显式配置的域优先。切换前须清除已保存的 Bearer token。
 

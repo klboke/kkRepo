@@ -260,7 +260,7 @@ Report privately if the issue could cause:
 
 See [SECURITY.md](../../SECURITY.md).
 
-### NuGet upstream NTLM authentication
+## NuGet upstream NTLM authentication
 
 Reference: [Microsoft NTLM connection-oriented flow](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-nlmp/1fbf5c3b-04c1-4591-a4be-9dc232c4744b).
 
