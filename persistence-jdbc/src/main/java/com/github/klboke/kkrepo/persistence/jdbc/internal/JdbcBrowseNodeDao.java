@@ -243,6 +243,23 @@ public class JdbcBrowseNodeDao implements com.github.klboke.kkrepo.persistence.j
         .findFirst();
   }
 
+  @Override
+  public Map<Long, String> findPathsByAssetIds(List<Long> assetIds) {
+    List<Long> ids = assetIds == null
+        ? List.of()
+        : assetIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
+    if (ids.isEmpty()) return Map.of();
+    String placeholders = String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
+    Map<Long, String> paths = new HashMap<>(ids.size() * 2);
+    jdbcTemplate.query(
+        "SELECT asset_id, path FROM browse_node WHERE asset_id IN (" + placeholders + ")",
+        rs -> {
+          paths.put(rs.getLong("asset_id"), rs.getString("path"));
+        },
+        ids.toArray());
+    return Map.copyOf(paths);
+  }
+
   private Optional<NodeRef> findNodeByAssetId(long assetId) {
     List<NodeRef> rows = jdbcTemplate.query(
         "SELECT parent_id FROM browse_node WHERE asset_id = ?",

@@ -117,15 +117,7 @@ public class BrowseController {
     rejectHiddenPath(repo.format(), parent);
     // For GROUP repos browse_node has nothing of its own — fan out across members and merge.
     // The first member that surfaces a given path wins (matches Maven group "first-win" rules).
-    List<RepositoryRecord> sources = repo.type() == RepositoryType.GROUP
-        ? repo.format() == RepositoryFormat.SWIFT
-            ? BrowseRepositorySources.swiftSources(repo, repositoryDao)
-            : repo.format() == RepositoryFormat.ANSIBLEGALAXY
-                ? BrowseRepositorySources.ansibleSources(repo, repositoryDao)
-                : repo.format() == RepositoryFormat.CONDA
-                    ? BrowseRepositorySources.condaSources(repo, repositoryDao)
-            : repositoryDao.listMembers(repo.id())
-        : List.of(repo);
+    List<RepositoryRecord> sources = BrowseRepositorySources.sources(repo, repositoryDao);
     sources = selectSources(repo, sources, sourceRepository);
     if (repo.format() == RepositoryFormat.DOCKER && dockerBrowseService != null) {
       return new BrowseListing(repo.name(), parent, dockerBrowseService.list(repo, sources, parent));

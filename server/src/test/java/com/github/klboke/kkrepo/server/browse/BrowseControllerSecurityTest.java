@@ -104,6 +104,36 @@ class BrowseControllerSecurityTest {
   }
 
   @Test
+  void listCanRestrictANestedGroupDeepLinkToItsTransitiveSourceRepository() {
+    RepositoryRecord outer = repo(
+        1L, "helm-public", RepositoryFormat.HELM, RepositoryType.GROUP);
+    RepositoryRecord nested = repo(
+        2L, "helm-team", RepositoryFormat.HELM, RepositoryType.GROUP);
+    RepositoryRecord hosted = repo(
+        3L, "helm-hosted", RepositoryFormat.HELM, RepositoryType.HOSTED);
+    StubRepositoryDao repositories = new StubRepositoryDao(Map.of(outer.name(), outer));
+    repositories.members.put(outer.id(), List.of(nested));
+    repositories.members.put(nested.id(), List.of(hosted));
+    StubBrowseNodeDao browseNodes = new StubBrowseNodeDao();
+    browseNodes.children.put(key(hosted.id(), "charts/demo"), List.of(child(
+        "charts/demo/demo-1.0.0.tgz", "demo-1.0.0.tgz", true)));
+    RecordingSecurityService security = new RecordingSecurityService(
+        permission -> AccessDecision.allow());
+    BrowseController controller = controller(
+        repositories, browseNodes, subject("alice"), null, security);
+
+    BrowseController.BrowseListing listing = controller.list(
+        outer.name(),
+        "charts/demo",
+        hosted.name(),
+        request("GET", "/internal/browse/" + outer.name()));
+
+    assertEquals(List.of("demo-1.0.0.tgz"), listing.entries().stream()
+        .map(BrowseController.BrowseEntry::name).toList());
+    assertEquals(List.of(key(hosted.id(), "charts/demo")), browseNodes.calls);
+  }
+
+  @Test
   void listRejectsADeepLinkSourceOutsideTheGroup() {
     RepositoryRecord group = repo(
         1L, "maven-public", RepositoryFormat.MAVEN2, RepositoryType.GROUP);

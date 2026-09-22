@@ -2108,6 +2108,15 @@ public abstract class PersistenceApiContract {
         scans.listCurrentRunSubjects(runId, 0, 0, 10).stream()
             .map(SecurityScanDao.ScanRunSubject::repositoryId)
             .toList());
+    assertEquals(
+        List.of(repositoryId, groupRepositoryId),
+        scans.listCurrentRunSubjects(
+                runId, List.of(repositoryId, groupRepositoryId), 0, 0, 10).stream()
+            .map(SecurityScanDao.ScanRunSubject::repositoryId)
+            .toList());
+    assertEquals(
+        2,
+        scans.countCurrentRunSubjects(runId, List.of(repositoryId, groupRepositoryId)));
 
     SecurityScanDao.AssetSecurityState storedState = scans.upsertAssetStateIfCurrent(
         new SecurityScanDao.AssetSecurityState(
@@ -2538,6 +2547,13 @@ public abstract class PersistenceApiContract {
         1,
         scans.findCandidate(assetId).orElseThrow().contentGeneration(),
         "asset writes must not synchronously mutate scan candidates");
+    assertTrue(
+        scans.listCurrentRunSubjects(runId, 0, 0, 10).isEmpty(),
+        "the live asset binding must hide historical findings before projection catches up");
+    assertEquals(
+        0,
+        scans.countCurrentRunSubjects(runId, List.of(repositoryId, groupRepositoryId)),
+        "the affected-artifact count must use the live asset binding as its final truth");
     List<ArtifactChangeDao.ArtifactChange> replacementEvents = stores().artifactChanges()
         .listAfter(originalEvents.getFirst().id(), 1000).stream()
         .filter(event -> event.assetId() == assetId)
@@ -5303,6 +5319,10 @@ public abstract class PersistenceApiContract {
 
     stores().browseNodes().upsertPathAncestors(repositoryId, path, assetId, null);
     assertTrue(stores().browseNodes().listChildren(repositoryId, "").getFirst().hasAssetSubtree());
+    assertEquals(
+        Map.of(assetId, path),
+        stores().browseNodes().findPathsByAssetIds(List.of(assetId, assetId, 999_999L)),
+        "asset lookup must return the indexed Repository Browser projection path");
 
     assertEquals(1, stores().browseNodes().deleteByAssetId(assetId));
     assertTrue(stores().browseNodes().listChildren(repositoryId, "").isEmpty());

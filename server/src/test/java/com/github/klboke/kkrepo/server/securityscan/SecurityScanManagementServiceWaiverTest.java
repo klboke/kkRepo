@@ -18,6 +18,7 @@ import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanFinding;
@@ -45,6 +46,7 @@ class SecurityScanManagementServiceWaiverTest {
   private SecurityScanDao scans;
   private RepositoryDao repositories;
   private AssetDao assets;
+  private BrowseNodeDao browseNodes;
   private SecurityManagementService security;
   private SecurityScanDocumentStore documents;
   private SecurityScanningProperties properties;
@@ -58,6 +60,7 @@ class SecurityScanManagementServiceWaiverTest {
     scans = mock(SecurityScanDao.class);
     repositories = mock(RepositoryDao.class);
     assets = mock(AssetDao.class);
+    browseNodes = mock(BrowseNodeDao.class);
     security = mock(SecurityManagementService.class);
     documents = mock(SecurityScanDocumentStore.class);
     properties = mock(SecurityScanningProperties.class);
@@ -66,6 +69,7 @@ class SecurityScanManagementServiceWaiverTest {
         scans,
         repositories,
         assets,
+        browseNodes,
         security,
         documents,
         mock(SecurityScanDocumentPersistence.class),
@@ -196,7 +200,8 @@ class SecurityScanManagementServiceWaiverTest {
         .thenReturn(List.of(finding(41L, 7L)));
     when(scans.listRunSubjects(eq(7L), anyLong(), anyLong(), anyInt()))
         .thenReturn(subjects);
-    when(scans.listCurrentRunSubjects(eq(7L), anyLong(), anyLong(), anyInt()))
+    when(scans.countCurrentRunSubjects(7L, List.of(11L, 12L))).thenReturn(2L);
+    when(scans.listCurrentRunSubjects(7L, List.of(11L, 12L), 0L, 0L, 3))
         .thenReturn(subjects);
     when(assets.findAssetsByIds(List.of(23L, 23L))).thenReturn(Map.of(23L, artifact));
     when(scans.listWaiversForFindings(
@@ -206,7 +211,7 @@ class SecurityScanManagementServiceWaiverTest {
     var page = service.findingPage(actor, null, null, null, null, 0L, 1);
 
     var finding = page.items().getFirst();
-    assertEquals(2, finding.affectedArtifactCount());
+    assertEquals(2L, finding.affectedArtifactCount());
     assertEquals(2, finding.affectedArtifacts().size());
     assertEquals("maven-hosted", finding.affectedArtifacts().getFirst().repository());
     assertEquals("maven-public", finding.affectedArtifacts().get(1).repository());
@@ -214,6 +219,8 @@ class SecurityScanManagementServiceWaiverTest {
     assertEquals(
         "com/acme/demo/1.0/demo-1.0.jar",
         finding.affectedArtifacts().get(1).browsePath());
+    verify(scans).countCurrentRunSubjects(7L, List.of(11L, 12L));
+    verify(scans).listCurrentRunSubjects(7L, List.of(11L, 12L), 0L, 0L, 3);
   }
 
   @Test
@@ -229,9 +236,9 @@ class SecurityScanManagementServiceWaiverTest {
     when(repositories.list()).thenReturn(List.of(repository));
     when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
         .thenReturn(AccessDecision.allow());
-    when(scans.listCurrentRunSubjects(7L, 0L, 0L, 1000))
+    when(scans.listCurrentRunSubjects(7L, List.of(11L), 0L, 0L, 2))
         .thenReturn(List.of(firstSubject, secondSubject));
-    when(scans.listCurrentRunSubjects(7L, 11L, 23L, 1000))
+    when(scans.listCurrentRunSubjects(7L, List.of(11L), 11L, 23L, 2))
         .thenReturn(List.of(secondSubject));
     when(assets.findAssetsByIds(List.of(23L, 24L)))
         .thenReturn(Map.of(23L, first, 24L, second));
@@ -282,12 +289,14 @@ class SecurityScanManagementServiceWaiverTest {
   }
 
   @Test
-  void findingArtifactsUseConfiguredAndFormatSpecificBrowsePaths() {
+  void findingArtifactsUseProjectedConfiguredAndFormatSpecificBrowsePaths() {
     Instant now = Instant.now();
     RepositoryRecord maven = repository(
         11L, "maven-hosted", RepositoryFormat.MAVEN2, RepositoryType.HOSTED);
     RepositoryRecord pypi = repository(
         12L, "pypi-hosted", RepositoryFormat.PYPI, RepositoryType.HOSTED);
+    RepositoryRecord apt = repository(
+        13L, "apt-hosted", RepositoryFormat.APT, RepositoryType.HOSTED);
     AssetRecord configured = asset(
         23L,
         11L,
@@ -300,22 +309,35 @@ class SecurityScanManagementServiceWaiverTest {
         RepositoryFormat.PYPI,
         "packages/ab/cd/demo-1.0-py3-none-any.whl",
         Map.of());
+    AssetRecord debian = asset(
+        25L,
+        13L,
+        RepositoryFormat.APT,
+        "pool/main/d/demo/demo_1.0_amd64.deb",
+        Map.of());
     List<ScanRunSubject> subjects = List.of(
         new ScanRunSubject(7L, 11L, 23L, 3L, 1L, now),
-        new ScanRunSubject(7L, 12L, 24L, 3L, 1L, now));
+        new ScanRunSubject(7L, 12L, 24L, 3L, 1L, now),
+        new ScanRunSubject(7L, 13L, 25L, 3L, 1L, now));
     when(scans.findFinding(41L)).thenReturn(Optional.of(finding(41L, 7L)));
-    when(scans.listRepositoryIdsForRun(7L)).thenReturn(List.of(11L, 12L));
-    when(repositories.list()).thenReturn(List.of(maven, pypi));
+    when(scans.listRepositoryIdsForRun(7L)).thenReturn(List.of(11L, 12L, 13L));
+    when(repositories.list()).thenReturn(List.of(maven, pypi, apt));
     when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
         .thenReturn(AccessDecision.allow());
-    when(scans.listCurrentRunSubjects(7L, 0L, 0L, 1000)).thenReturn(subjects);
-    when(assets.findAssetsByIds(List.of(23L, 24L)))
-        .thenReturn(Map.of(23L, configured, 24L, python));
+    when(scans.listCurrentRunSubjects(
+        7L, List.of(11L, 12L, 13L), 0L, 0L, 11)).thenReturn(subjects);
+    when(assets.findAssetsByIds(List.of(23L, 24L, 25L)))
+        .thenReturn(Map.of(23L, configured, 24L, python, 25L, debian));
+    when(browseNodes.findPathsByAssetIds(List.of(23L, 24L, 25L))).thenReturn(Map.of(
+        25L, "bookworm/main/demo/1.0/amd64/demo_1.0_amd64.deb"));
 
     var page = service.findingArtifacts(actor, 41L, 0L, 0L, 10);
 
     assertEquals(
-        List.of("com/acme/demo/1.0/demo-1.0.jar", "ab/cd/demo-1.0-py3-none-any.whl"),
+        List.of(
+            "com/acme/demo/1.0/demo-1.0.jar",
+            "ab/cd/demo-1.0-py3-none-any.whl",
+            "bookworm/main/demo/1.0/amd64/demo_1.0_amd64.deb"),
         page.items().stream().map(
             SecurityScanManagementService.FindingArtifactView::browsePath).toList());
   }

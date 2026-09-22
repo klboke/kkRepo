@@ -269,6 +269,22 @@ public interface SecurityScanDao {
   List<ScanRunSubject> listCurrentRunSubjects(
       long scanRunId, long afterRepositoryId, long afterAssetId, int maxItems);
 
+  /**
+   * Lists current run subjects within the supplied visible repository contexts.
+   *
+   * <p>The database also validates that a group context still resolves to the asset's source
+   * repository, avoiding an application-side scan across hidden or detached subjects.
+   */
+  List<ScanRunSubject> listCurrentRunSubjects(
+      long scanRunId,
+      List<Long> repositoryIds,
+      long afterRepositoryId,
+      long afterAssetId,
+      int maxItems);
+
+  /** Counts current run subjects within visible, currently valid repository contexts. */
+  long countCurrentRunSubjects(long scanRunId, List<Long> repositoryIds);
+
   boolean runSubjectExists(long scanRunId, long repositoryId, long assetId);
 
   List<Long> listRepositoryIdsForSbom(long sbomId);

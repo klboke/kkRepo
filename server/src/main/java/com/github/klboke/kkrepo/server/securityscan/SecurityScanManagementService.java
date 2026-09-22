@@ -4,6 +4,7 @@ import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.AssetSecurityState;
@@ -61,11 +62,11 @@ public class SecurityScanManagementService {
   private static final int REPOSITORY_SEARCH_BATCH_SIZE = 256;
   private static final int WAIVER_MATCH_PAGE_SIZE = 256;
   private static final int FINDING_ARTIFACT_PREVIEW_LIMIT = 3;
-  private static final int FINDING_ARTIFACT_SCAN_PAGE_SIZE = 1000;
 
   private final SecurityScanDao scans;
   private final RepositoryDao repositories;
   private final AssetDao assets;
+  private final BrowseNodeDao browseNodes;
   private final SecurityManagementService security;
   private final SecurityScanDocumentStore documents;
   private final SecurityScanDocumentPersistence documentPersistence;
@@ -77,6 +78,7 @@ public class SecurityScanManagementService {
       SecurityScanDao scans,
       RepositoryDao repositories,
       AssetDao assets,
+      BrowseNodeDao browseNodes,
       SecurityManagementService security,
       SecurityScanDocumentStore documents,
       SecurityScanDocumentPersistence documentPersistence,
@@ -85,6 +87,7 @@ public class SecurityScanManagementService {
     this.scans = scans;
     this.repositories = repositories;
     this.assets = assets;
+    this.browseNodes = browseNodes;
     this.security = security;
     this.documents = documents;
     this.documentPersistence = documentPersistence;
@@ -396,24 +399,14 @@ public class SecurityScanManagementService {
     }
 
     int safeLimit = limit(requestedLimit);
-    List<FindingArtifactView> matches = new ArrayList<>(safeLimit + 1);
-    long repositoryCursor = Math.max(0, afterRepositoryId);
-    long assetCursor = Math.max(0, afterAssetId);
-    while (matches.size() <= safeLimit) {
-      List<ScanRunSubject> page = scans.listCurrentRunSubjects(
-          finding.scanRunId(), repositoryCursor, assetCursor, FINDING_ARTIFACT_SCAN_PAGE_SIZE);
-      if (page.isEmpty()) break;
-      matches.addAll(findingArtifactViews(
-          page, visibleRepositoryNames, repositoriesById, safeLimit + 1 - matches.size()));
-      ScanRunSubject last = page.getLast();
-      if (last.repositoryId() < repositoryCursor
-          || (last.repositoryId() == repositoryCursor && last.assetId() <= assetCursor)) {
-        break;
-      }
-      repositoryCursor = last.repositoryId();
-      assetCursor = last.assetId();
-      if (page.size() < FINDING_ARTIFACT_SCAN_PAGE_SIZE) break;
-    }
+    List<ScanRunSubject> subjects = scans.listCurrentRunSubjects(
+        finding.scanRunId(),
+        visibleRepositoryNames.keySet().stream().toList(),
+        Math.max(0, afterRepositoryId),
+        Math.max(0, afterAssetId),
+        safeLimit + 1);
+    List<FindingArtifactView> matches = findingArtifactViews(
+        subjects, visibleRepositoryNames, repositoriesById, safeLimit + 1);
     boolean hasMore = matches.size() > safeLimit;
     List<FindingArtifactView> items = hasMore
         ? List.copyOf(matches.subList(0, safeLimit))
@@ -429,31 +422,18 @@ public class SecurityScanManagementService {
       long scanRunId,
       Map<Long, String> visibleRepositoryNames,
       Map<Long, RepositoryRecord> repositoriesById) {
-    List<FindingArtifactView> preview = new ArrayList<>(FINDING_ARTIFACT_PREVIEW_LIMIT);
-    int totalCount = 0;
-    long repositoryCursor = 0;
-    long assetCursor = 0;
-    while (true) {
-      List<ScanRunSubject> page = scans.listCurrentRunSubjects(
-          scanRunId, repositoryCursor, assetCursor, FINDING_ARTIFACT_SCAN_PAGE_SIZE);
-      if (page.isEmpty()) break;
-      List<FindingArtifactView> current = findingArtifactViews(
-          page, visibleRepositoryNames, repositoriesById, page.size());
-      totalCount += current.size();
-      int remaining = FINDING_ARTIFACT_PREVIEW_LIMIT - preview.size();
-      if (remaining > 0) {
-        preview.addAll(current.subList(0, Math.min(remaining, current.size())));
-      }
-      ScanRunSubject last = page.getLast();
-      if (last.repositoryId() < repositoryCursor
-          || (last.repositoryId() == repositoryCursor && last.assetId() <= assetCursor)) {
-        break;
-      }
-      repositoryCursor = last.repositoryId();
-      assetCursor = last.assetId();
-      if (page.size() < FINDING_ARTIFACT_SCAN_PAGE_SIZE) break;
-    }
-    return new FindingArtifactSummary(List.copyOf(preview), totalCount);
+    List<Long> visibleRepositoryIds = visibleRepositoryNames.keySet().stream().toList();
+    long totalCount = scans.countCurrentRunSubjects(scanRunId, visibleRepositoryIds);
+    if (totalCount == 0) return new FindingArtifactSummary(List.of(), 0);
+    List<ScanRunSubject> previewSubjects = scans.listCurrentRunSubjects(
+        scanRunId, visibleRepositoryIds, 0, 0, FINDING_ARTIFACT_PREVIEW_LIMIT);
+    return new FindingArtifactSummary(
+        findingArtifactViews(
+            previewSubjects,
+            visibleRepositoryNames,
+            repositoriesById,
+            FINDING_ARTIFACT_PREVIEW_LIMIT),
+        totalCount);
   }
 
   private List<FindingArtifactView> findingArtifactViews(
@@ -462,8 +442,10 @@ public class SecurityScanManagementService {
       Map<Long, RepositoryRecord> repositoriesById,
       int maxItems) {
     if (subjects == null || subjects.isEmpty() || maxItems <= 0) return List.of();
-    Map<Long, AssetRecord> assetsById = assets.findAssetsByIds(
-        subjects.stream().map(ScanRunSubject::assetId).toList());
+    List<Long> assetIds = subjects.stream().map(ScanRunSubject::assetId).toList();
+    Map<Long, AssetRecord> assetsById = assets.findAssetsByIds(assetIds);
+    Map<Long, String> browsePaths = browseNodes.findPathsByAssetIds(assetIds);
+    if (browsePaths == null) browsePaths = Map.of();
     List<FindingArtifactView> views = new ArrayList<>(Math.min(subjects.size(), maxItems));
     for (ScanRunSubject subject : subjects) {
       String repositoryName = visibleRepositoryNames.get(subject.repositoryId());
@@ -481,13 +463,16 @@ public class SecurityScanManagementService {
           sourceRepository,
           subject.assetId(),
           asset.path(),
-          findingBrowsePath(asset)));
+          findingBrowsePath(asset, browsePaths.get(subject.assetId()))));
       if (views.size() >= maxItems) break;
     }
     return List.copyOf(views);
   }
 
-  private static String findingBrowsePath(AssetRecord asset) {
+  private static String findingBrowsePath(AssetRecord asset, String projectedPath) {
+    if (projectedPath != null && !projectedPath.isBlank()) {
+      return projectedPath;
+    }
     Object configured = asset.attributes() == null ? null : asset.attributes().get("browsePath");
     if (configured != null && !configured.toString().isBlank()) {
       return configured.toString();
@@ -727,7 +712,7 @@ public class SecurityScanManagementService {
     private FindingView view(
         ScanFinding finding,
         List<FindingArtifactView> affectedArtifacts,
-        int affectedArtifactCount) {
+        long affectedArtifactCount) {
       return FindingView.from(
           finding,
           repositoryNames.stream().sorted().toList(),
@@ -747,7 +732,7 @@ public class SecurityScanManagementService {
 
   private record FindingArtifactSummary(
       List<FindingArtifactView> items,
-      int totalCount) {}
+      long totalCount) {}
 
   public AssetDetail asset(AuthenticatedSubject actor, long assetId) {
     AssetDao.AssetWithBlob content = assets.findAssetWithBlobById(assetId)
@@ -1589,7 +1574,7 @@ public class SecurityScanManagementService {
       long scanRunId,
       List<String> repositories,
       List<FindingArtifactView> affectedArtifacts,
-      int affectedArtifactCount,
+      long affectedArtifactCount,
       String advisoryId,
       List<String> aliases,
       String dataSource,
@@ -1618,7 +1603,7 @@ public class SecurityScanManagementService {
         ScanFinding finding,
         List<String> repositories,
         List<FindingArtifactView> affectedArtifacts,
-        int affectedArtifactCount,
+        long affectedArtifactCount,
         int activeWaiverCount,
         int expiredWaiverCount,
         int waiverTargetCount,
