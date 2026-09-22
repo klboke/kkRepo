@@ -61,6 +61,9 @@ import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
@@ -326,6 +329,43 @@ class SecurityScanManagementServiceCoreTest {
     when(assets.findAssetWithBlobById(22L))
         .thenReturn(Optional.of(new AssetDao.AssetWithBlob(noBlobAsset, null)));
     assertStatus(HttpStatus.CONFLICT, () -> service.rescan(actor, 22L));
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false, 1", "true, 2"})
+  void groupScanConfigChangesLeaveMemberContentForPolicyReconciliation(
+      boolean previouslyEnabled, long previousProfileId) {
+    RepositoryRecord group = repository(3L, "maven-group", RepositoryType.GROUP);
+    when(repositories.findById(3L)).thenReturn(Optional.of(group));
+    when(scans.findProfile(1L)).thenReturn(Optional.of(profile));
+    when(scans.findRepositoryConfig(3L))
+        .thenReturn(Optional.of(config(3L, previouslyEnabled, previousProfileId, null)));
+    when(scans.upsertRepositoryConfig(any())).thenAnswer(invocation -> invocation.getArgument(0));
+    when(scope.sourceRepositoryIds(3L)).thenReturn(List.of(1L, 2L));
+    when(scope.appliesToSource(any(), anyLong())).thenReturn(true);
+
+    RepositoryScanConfig updated = service.updateRepositoryConfig(actor, 3L, new ConfigCommand(
+        true, 1L, true, true, null, null, null, null, null, null));
+
+    assertTrue(updated.enabled());
+    assertEquals(2L, updated.configRevision());
+    verify(scans, never()).createBackfillJob(anyLong(), anyString(), any());
+  }
+
+  @ParameterizedTest
+  @EnumSource(value = RepositoryType.class, names = {"HOSTED", "PROXY"})
+  void enablingSourceRepositoryScanningStillCreatesContentBackfill(RepositoryType type) {
+    when(repositories.findById(1L)).thenReturn(Optional.of(repository(1L, "source", type)));
+    when(scans.findProfile(1L)).thenReturn(Optional.of(profile));
+    when(scans.findRepositoryConfig(1L)).thenReturn(Optional.of(config(1L, false, 1L, null)));
+    when(scans.upsertRepositoryConfig(any())).thenAnswer(invocation -> invocation.getArgument(0));
+    when(scope.sourceRepositoryIds(1L)).thenReturn(List.of(1L));
+    when(scope.appliesToSource(any(), eq(1L))).thenReturn(true);
+
+    service.updateRepositoryConfig(actor, 1L, new ConfigCommand(
+        true, 1L, true, true, null, null, null, null, null, null));
+
+    verify(scans).createBackfillJob(eq(1L), eq("admin"), any());
   }
 
   @Test

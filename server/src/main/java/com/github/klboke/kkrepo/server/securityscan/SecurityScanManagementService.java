@@ -695,7 +695,7 @@ public class SecurityScanManagementService {
   @Transactional
   public RepositoryScanConfig updateRepositoryConfig(
       AuthenticatedSubject actor, long repositoryId, ConfigCommand command) {
-    requireRepositoryAdmin(actor, repositoryId);
+    RepositoryRecord repository = requireRepositoryAdmin(actor, repositoryId);
     if (command == null) throw badRequest("Configuration is required");
     ScanProfile profile = scans.findProfile(command.profileId())
         .orElseThrow(() -> badRequest("Unknown scan profile"));
@@ -721,7 +721,9 @@ public class SecurityScanManagementService {
         Math.max(1, previous.configRevision() + 1),
         previous.createdAt() == null ? now : previous.createdAt(),
         now));
-    if (requiresBackfill(previous, updated)) {
+    // Groups add policy contexts over member content. The durable policy reconciler reuses
+    // current results and discovers missing profiles/candidates without resetting completed scans.
+    if (repository.type() != RepositoryType.GROUP && requiresBackfill(previous, updated)) {
       for (long sourceRepositoryId : repositoryScope.sourceRepositoryIds(repositoryId)) {
         if (repositoryScope.appliesToSource(updated, sourceRepositoryId)) {
           scans.createBackfillJob(sourceRepositoryId, actor.userId(), now);
