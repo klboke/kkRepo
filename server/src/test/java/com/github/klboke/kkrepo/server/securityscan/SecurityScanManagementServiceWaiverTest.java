@@ -19,6 +19,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanFinding;
@@ -27,6 +28,8 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanRunSubj
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanWaiver;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerTagRecord;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
@@ -47,6 +50,7 @@ class SecurityScanManagementServiceWaiverTest {
   private RepositoryDao repositories;
   private AssetDao assets;
   private BrowseNodeDao browseNodes;
+  private DockerRegistryDao docker;
   private SecurityManagementService security;
   private SecurityScanDocumentStore documents;
   private SecurityScanningProperties properties;
@@ -61,6 +65,7 @@ class SecurityScanManagementServiceWaiverTest {
     repositories = mock(RepositoryDao.class);
     assets = mock(AssetDao.class);
     browseNodes = mock(BrowseNodeDao.class);
+    docker = mock(DockerRegistryDao.class);
     security = mock(SecurityManagementService.class);
     documents = mock(SecurityScanDocumentStore.class);
     properties = mock(SecurityScanningProperties.class);
@@ -70,6 +75,7 @@ class SecurityScanManagementServiceWaiverTest {
         repositories,
         assets,
         browseNodes,
+        docker,
         security,
         documents,
         mock(SecurityScanDocumentPersistence.class),
@@ -338,6 +344,64 @@ class SecurityScanManagementServiceWaiverTest {
             "com/acme/demo/1.0/demo-1.0.jar",
             "ab/cd/demo-1.0-py3-none-any.whl",
             "bookworm/main/demo/1.0/amd64/demo_1.0_amd64.deb"),
+        page.items().stream().map(
+            SecurityScanManagementService.FindingArtifactView::browsePath).toList());
+  }
+
+  @Test
+  void findingArtifactsUseLiveDockerManifestReferencesAsBrowsePaths() {
+    Instant now = Instant.now();
+    RepositoryRecord repository = repository(
+        14L, "docker-hosted", RepositoryFormat.DOCKER, RepositoryType.HOSTED);
+    String digest = "sha256:" + "a".repeat(64);
+    String taggedDigest = "sha256:" + "b".repeat(64);
+    AssetRecord digestAsset = asset(
+        26L,
+        repository.id(),
+        RepositoryFormat.DOCKER,
+        "docker/manifests/team/demo/sha256/" + "a".repeat(64),
+        Map.of());
+    AssetRecord taggedAsset = asset(
+        27L,
+        repository.id(),
+        RepositoryFormat.DOCKER,
+        "docker/manifests/team/demo/sha256/" + "b".repeat(64),
+        Map.of());
+    DockerManifestRecord digestManifest = new DockerManifestRecord(
+        91L, repository.id(), "team/demo", new byte[0], "sha256", digest,
+        new byte[0], "application/vnd.oci.image.manifest.v1+json", null, null, null,
+        digestAsset.id(), digestAsset.size(), null, null, null, Map.of(), now, now);
+    DockerManifestRecord taggedManifest = new DockerManifestRecord(
+        92L, repository.id(), "team/demo", new byte[0], "sha256", taggedDigest,
+        new byte[0], "application/vnd.oci.image.manifest.v1+json", null, null, null,
+        taggedAsset.id(), taggedAsset.size(), null, null, null,
+        Map.of(DockerManifestRecord.DIGEST_REFERENCE_DELETED, true), now, now);
+    DockerTagRecord tag = new DockerTagRecord(
+        93L, repository.id(), "team/demo", new byte[0], "stable", new byte[0],
+        taggedManifest.id(), taggedDigest, null, null, now, now);
+    List<ScanRunSubject> subjects = List.of(
+        new ScanRunSubject(7L, repository.id(), digestAsset.id(), 3L, 1L, now),
+        new ScanRunSubject(7L, repository.id(), taggedAsset.id(), 3L, 1L, now));
+    when(scans.findFinding(41L)).thenReturn(Optional.of(finding(41L, 7L)));
+    when(scans.listRepositoryIdsForRun(7L)).thenReturn(List.of(repository.id()));
+    when(repositories.list()).thenReturn(List.of(repository));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.allow());
+    when(scans.listCurrentRunSubjects(
+        7L, List.of(repository.id()), 0L, 0L, 11)).thenReturn(subjects);
+    when(assets.findAssetsByIds(List.of(digestAsset.id(), taggedAsset.id())))
+        .thenReturn(Map.of(digestAsset.id(), digestAsset, taggedAsset.id(), taggedAsset));
+    when(docker.findManifestsByAssetIds(List.of(digestAsset.id(), taggedAsset.id())))
+        .thenReturn(Map.of(
+            digestAsset.id(), digestManifest,
+            taggedAsset.id(), taggedManifest));
+    when(docker.listTagsForManifests(List.of(taggedManifest.id())))
+        .thenReturn(Map.of(taggedManifest.id(), List.of(tag)));
+
+    var page = service.findingArtifacts(actor, 41L, 0L, 0L, 10);
+
+    assertEquals(
+        List.of("team/demo/manifests/" + digest, "team/demo/manifests/stable"),
         page.items().stream().map(
             SecurityScanManagementService.FindingArtifactView::browsePath).toList());
   }

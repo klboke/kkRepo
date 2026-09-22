@@ -5,6 +5,7 @@ import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.AssetSecurityState;
@@ -23,6 +24,8 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.TaskDraft;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerTagRecord;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.EnforcementMode;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyAction;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.RequestReason;
@@ -67,6 +70,7 @@ public class SecurityScanManagementService {
   private final RepositoryDao repositories;
   private final AssetDao assets;
   private final BrowseNodeDao browseNodes;
+  private final DockerRegistryDao docker;
   private final SecurityManagementService security;
   private final SecurityScanDocumentStore documents;
   private final SecurityScanDocumentPersistence documentPersistence;
@@ -79,6 +83,7 @@ public class SecurityScanManagementService {
       RepositoryDao repositories,
       AssetDao assets,
       BrowseNodeDao browseNodes,
+      DockerRegistryDao docker,
       SecurityManagementService security,
       SecurityScanDocumentStore documents,
       SecurityScanDocumentPersistence documentPersistence,
@@ -88,6 +93,7 @@ public class SecurityScanManagementService {
     this.repositories = repositories;
     this.assets = assets;
     this.browseNodes = browseNodes;
+    this.docker = docker;
     this.security = security;
     this.documents = documents;
     this.documentPersistence = documentPersistence;
@@ -446,6 +452,7 @@ public class SecurityScanManagementService {
     Map<Long, AssetRecord> assetsById = assets.findAssetsByIds(assetIds);
     Map<Long, String> browsePaths = browseNodes.findPathsByAssetIds(assetIds);
     if (browsePaths == null) browsePaths = Map.of();
+    Map<Long, String> dockerBrowsePaths = dockerBrowsePaths(assetIds);
     List<FindingArtifactView> views = new ArrayList<>(Math.min(subjects.size(), maxItems));
     for (ScanRunSubject subject : subjects) {
       String repositoryName = visibleRepositoryNames.get(subject.repositoryId());
@@ -463,15 +470,52 @@ public class SecurityScanManagementService {
           sourceRepository,
           subject.assetId(),
           asset.path(),
-          findingBrowsePath(asset, browsePaths.get(subject.assetId()))));
+          findingBrowsePath(
+              asset,
+              browsePaths.get(subject.assetId()),
+              dockerBrowsePaths.get(subject.assetId()))));
       if (views.size() >= maxItems) break;
     }
     return List.copyOf(views);
   }
 
-  private static String findingBrowsePath(AssetRecord asset, String projectedPath) {
+  private Map<Long, String> dockerBrowsePaths(List<Long> assetIds) {
+    Map<Long, DockerManifestRecord> manifests = docker.findManifestsByAssetIds(assetIds);
+    if (manifests == null || manifests.isEmpty()) return Map.of();
+    List<Long> taggedManifestIds = manifests.values().stream()
+        .filter(manifest -> !manifest.hasDigestReference())
+        .map(DockerManifestRecord::id)
+        .filter(java.util.Objects::nonNull)
+        .toList();
+    Map<Long, List<DockerTagRecord>> tagsByManifestId = taggedManifestIds.isEmpty()
+        ? Map.of()
+        : docker.listTagsForManifests(taggedManifestIds);
+    if (tagsByManifestId == null) tagsByManifestId = Map.of();
+    Map<Long, String> paths = new LinkedHashMap<>();
+    for (Map.Entry<Long, DockerManifestRecord> entry : manifests.entrySet()) {
+      DockerManifestRecord manifest = entry.getValue();
+      String reference = manifest.hasDigestReference()
+          ? manifest.digest()
+          : tagsByManifestId.getOrDefault(manifest.id(), List.of()).stream()
+              .map(DockerTagRecord::tag)
+              .filter(tag -> tag != null && !tag.isBlank())
+              .findFirst()
+              .orElse(null);
+      if (manifest.imageName() != null && !manifest.imageName().isBlank()
+          && reference != null && !reference.isBlank()) {
+        paths.put(entry.getKey(), manifest.imageName() + "/manifests/" + reference);
+      }
+    }
+    return Map.copyOf(paths);
+  }
+
+  private static String findingBrowsePath(
+      AssetRecord asset, String projectedPath, String dockerBrowsePath) {
     if (projectedPath != null && !projectedPath.isBlank()) {
       return projectedPath;
+    }
+    if (dockerBrowsePath != null && !dockerBrowsePath.isBlank()) {
+      return dockerBrowsePath;
     }
     Object configured = asset.attributes() == null ? null : asset.attributes().get("browsePath");
     if (configured != null && !configured.toString().isBlank()) {

@@ -740,16 +740,7 @@ public class BrowseContentDeleteController {
   }
 
   private List<RepositoryRecord> repositorySources(RepositoryRecord repository) {
-    if (repository.format() == RepositoryFormat.SWIFT) {
-      return BrowseRepositorySources.swiftSources(repository, repositoryDao);
-    }
-    if (repository.format() == RepositoryFormat.ANSIBLEGALAXY) {
-      return BrowseRepositorySources.ansibleSources(repository, repositoryDao);
-    }
-    if (repository.format() == RepositoryFormat.CONDA) {
-      return BrowseRepositorySources.condaSources(repository, repositoryDao);
-    }
-    return repositoryDao.listMembers(repository.id());
+    return BrowseRepositorySources.sources(repository, repositoryDao);
   }
 
   private AnsibleGalaxyRegistryDao.CollectionVersion requireMatchingAnsibleVersion(
