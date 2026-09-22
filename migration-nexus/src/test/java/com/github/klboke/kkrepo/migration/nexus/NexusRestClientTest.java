@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.migration.nexus;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -9,6 +10,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.NexusInventory;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.HttpTextResponse;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.SourceProbe;
+import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityExportReader;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpRequest;
@@ -57,6 +59,24 @@ class NexusRestClientTest {
     assertTrue(nexus.scriptDeleted);
     assertEquals("/service/rest/v1/security/users?source=default", nexus.usersPath);
     assertEquals("/service/rest/v1/security/roles?source=default", nexus.rolesPath);
+  }
+
+  @Test
+  void readsPrivilegesWithNullValuesReturnedBySourceRestApi() throws Exception {
+    FakeNexus nexus = new FakeNexus(true);
+    nexus.nullValuedPrivilege = true;
+
+    NexusInventory inventory = client(nexus).readInventory();
+    Map<String, Object> privilege = inventory.securityExport().privileges().getFirst();
+
+    assertEquals("nx-pro-example", privilege.get("name"));
+    assertTrue(privilege.containsKey("description"));
+    assertNull(privilege.get("description"));
+    assertNull(new NexusSecurityExportReader()
+        .read(inventory.securityExport())
+        .privileges()
+        .getFirst()
+        .description());
   }
 
   @Test
@@ -374,6 +394,7 @@ class NexusRestClientTest {
     private int scriptRuns;
     private String profileRunContentType = "";
     private boolean emptyStatusBody;
+    private boolean nullValuedPrivilege;
 
     private FakeNexus(boolean scriptApiEnabled) {
       this.scriptApiEnabled = scriptApiEnabled;
@@ -426,6 +447,16 @@ class NexusRestClientTest {
                 "roles", List.of())));
       }
       if ("GET".equals(method) && "/service/rest/v1/security/privileges".equals(path)) {
+        if (nullValuedPrivilege) {
+          LinkedHashMap<String, Object> privilege = new LinkedHashMap<>();
+          privilege.put("name", "nx-pro-example");
+          privilege.put("description", null);
+          privilege.put("type", "application");
+          privilege.put("readOnly", true);
+          privilege.put("domain", "pro-example");
+          privilege.put("actions", List.of("read"));
+          return json(200, List.of(privilege));
+        }
         return json(200, List.of());
       }
       if ("GET".equals(method) && "/service/rest/v1/security/content-selectors".equals(path)) {

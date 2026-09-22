@@ -1,7 +1,9 @@
 package com.github.klboke.kkrepo.migration.nexus.security;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -114,6 +116,27 @@ class NexusSecurityExportReaderTest {
 
     assertEquals(false, batch.anonymousConfig().enabled());
     assertEquals("anonymous", batch.anonymousConfig().userId());
+  }
+
+  @Test
+  void preservesNullValuesInAnonymousConfig() {
+    LinkedHashMap<String, Object> anonymous = new LinkedHashMap<>();
+    anonymous.put("enabled", false);
+    anonymous.put("userId", null);
+
+    NexusSecurityMigrationBatch batch = reader.read(new NexusSecurityExport(
+        List.of(),
+        List.of(),
+        List.of(),
+        List.of(),
+        List.of(),
+        List.of(),
+        List.of(),
+        List.of(),
+        anonymous));
+
+    assertEquals(false, batch.anonymousConfig().enabled());
+    assertNull(batch.anonymousConfig().userId());
   }
 
   @Test

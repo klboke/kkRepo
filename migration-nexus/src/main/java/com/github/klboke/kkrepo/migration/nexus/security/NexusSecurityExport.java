@@ -1,7 +1,10 @@
 package com.github.klboke.kkrepo.migration.nexus.security;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 public record NexusSecurityExport(
     List<Map<String, Object>> users,
@@ -23,7 +26,7 @@ public record NexusSecurityExport(
     contentSelectors = safeDocuments(contentSelectors);
     repositoryTargets = safeDocuments(repositoryTargets);
     realmOrder = realmOrder == null ? List.of() : List.copyOf(realmOrder);
-    anonymous = anonymous == null ? Map.of() : Map.copyOf(anonymous);
+    anonymous = safeDocument(anonymous);
   }
 
   public static NexusSecurityExport empty() {
@@ -40,6 +43,17 @@ public record NexusSecurityExport(
   }
 
   private static List<Map<String, Object>> safeDocuments(List<Map<String, Object>> documents) {
-    return documents == null ? List.of() : documents.stream().map(Map::copyOf).toList();
+    return documents == null
+        ? List.of()
+        : documents.stream()
+            .filter(Objects::nonNull)
+            .map(NexusSecurityExport::safeDocument)
+            .toList();
+  }
+
+  private static Map<String, Object> safeDocument(Map<String, Object> document) {
+    return document == null || document.isEmpty()
+        ? Map.of()
+        : Collections.unmodifiableMap(new LinkedHashMap<>(document));
   }
 }
