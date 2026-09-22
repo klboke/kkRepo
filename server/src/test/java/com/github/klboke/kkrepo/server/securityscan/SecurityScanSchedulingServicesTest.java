@@ -672,6 +672,74 @@ class SecurityScanSchedulingServicesTest {
   }
 
   @Test
+  void groupPolicyReconciliationReusesCompletedMembersAndScansMissingResults() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    AssetDao assets = mock(AssetDao.class);
+    SecurityScanCandidateClassifier classifier = mock(SecurityScanCandidateClassifier.class);
+    SecurityScanningProperties properties = new SecurityScanningProperties();
+    properties.setEnabled(true);
+    MaintenanceCursorDao cursors = mock(MaintenanceCursorDao.class);
+    SecurityPolicyReconciler reconciler = new SecurityPolicyReconciler(
+        scans, repositories, assets, classifier, properties, cursors);
+    RepositoryRecord group = repository(100, RepositoryType.GROUP);
+    RepositoryRecord member = repository(101, RepositoryType.HOSTED);
+    RepositoryScanConfig config = config(100, 3);
+    ScanProfile profile = profile(3L, true);
+    Instant now = Instant.now();
+    when(repositories.list()).thenReturn(List.of(group, member));
+    when(repositories.listAllGroupMembers())
+        .thenReturn(Map.of(100L, List.of("repository-101")));
+    when(scans.findRepositoryConfigs(List.of(100L, 101L))).thenReturn(List.of(config));
+    when(scans.listProfiles()).thenReturn(List.of(profile));
+    when(cursors.tryLockLastSeenId(SecurityPolicyReconciler.WORK_CURSOR))
+        .thenReturn(OptionalLong.of(0));
+    when(cursors.tryLockLastSeenId(SecurityPolicyReconciler.assetCursorName(100L, 101L)))
+        .thenReturn(OptionalLong.of(0));
+    when(cursors.updateLastSeenId(any(), anyLong())).thenReturn(1);
+    when(scans.listPolicyEvaluationTargets(
+        eq(101L), eq(100L), eq(3L), eq(config.configRevision()),
+        eq(null), eq(null), eq(0L), any(), anyInt()))
+        .thenReturn(List.of(
+            // A completed scan needs only the newly enabled group's policy context.
+            new PolicyEvaluationTarget(11, 101, 1, 1L, 44L, ScanState.COMPLETE, 0, null),
+            // No result for the group's profile must still schedule a full scan.
+            new PolicyEvaluationTarget(12, 101, 1, null, null, null, 0, null),
+            // A completed result from an older content generation cannot be reused.
+            new PolicyEvaluationTarget(13, 101, 2, 1L, 45L, ScanState.COMPLETE, 0, null),
+            // Previously untracked content needs its initial candidate marker.
+            new PolicyEvaluationTarget(14, 101, 0, null, null, null, 0, null)));
+    for (long id = 11; id <= 14; id++) {
+      AssetWithBlob content = content(id, 101, id + 10);
+      when(assets.findAssetWithBlobById(id)).thenReturn(Optional.of(content));
+      if (id != 14) {
+        long generation = id == 13 ? 2 : 1;
+        when(scans.findCandidate(id)).thenReturn(Optional.of(
+            new ScanCandidate(id, id + 10, generation, generation, now, now)));
+      }
+    }
+    when(classifier.classify(any(), any(), eq(profile)))
+        .thenReturn(classification(CandidateDisposition.SCANNABLE));
+
+    reconciler.runOnce();
+
+    ArgumentCaptor<TaskDraft> drafts = ArgumentCaptor.forClass(TaskDraft.class);
+    verify(scans, org.mockito.Mockito.times(3)).createTask(drafts.capture());
+    assertEquals(List.of(11L, 12L, 13L),
+        drafts.getAllValues().stream().map(TaskDraft::assetId).toList());
+    assertEquals(List.of(ScanStage.POLICY_ONLY, ScanStage.CATALOG_AND_MATCH,
+        ScanStage.CATALOG_AND_MATCH),
+        drafts.getAllValues().stream().map(TaskDraft::stage).toList());
+    assertTrue(drafts.getAllValues().stream()
+        .allMatch(task -> task.repositoryId() == 101 && task.profileId() == 3));
+    verify(scans).markRepositoryAssetsForBackfill(101L, 13L, 1);
+    verify(scans, org.mockito.Mockito.times(1))
+        .markRepositoryAssetsForBackfill(anyLong(), anyLong(), anyInt());
+    verify(scans, never()).upsertAssetStateIfCurrent(any());
+    verify(cursors).updateLastSeenId(SecurityPolicyReconciler.assetCursorName(100L, 101L), 14L);
+  }
+
+  @Test
   void policyReconcilerTraversesGroupSourcesAndPropagatesBatchFailuresForRollback() {
     SecurityScanDao scans = mock(SecurityScanDao.class);
     RepositoryDao repositories = mock(RepositoryDao.class);
