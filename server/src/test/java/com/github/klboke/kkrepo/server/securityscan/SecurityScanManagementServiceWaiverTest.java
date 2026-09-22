@@ -252,6 +252,75 @@ class SecurityScanManagementServiceWaiverTest {
   }
 
   @Test
+  void findingPageRejectsAnExplicitRepositoryWithoutBrowsePermission() {
+    RepositoryRecord repository = repository(11L, "maven-hosted");
+    when(repositories.list()).thenReturn(List.of(repository));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.deny("browse denied"));
+
+    ResponseStatusException error = assertThrows(
+        ResponseStatusException.class,
+        () -> service.findingPage(actor, 11L, null, null, null, 0L, 1));
+
+    assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode());
+  }
+
+  @Test
+  void findingArtifactsHideFindingsWithoutAVisibleRepository() {
+    RepositoryRecord repository = repository(11L, "maven-hosted");
+    when(scans.findFinding(41L)).thenReturn(Optional.of(finding(41L, 7L)));
+    when(scans.listRepositoryIdsForRun(7L)).thenReturn(List.of(11L));
+    when(repositories.list()).thenReturn(List.of(repository));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.deny("browse denied"));
+
+    ResponseStatusException error = assertThrows(
+        ResponseStatusException.class,
+        () -> service.findingArtifacts(actor, 41L, 0L, 0L, 10));
+
+    assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode());
+  }
+
+  @Test
+  void findingArtifactsUseConfiguredAndFormatSpecificBrowsePaths() {
+    Instant now = Instant.now();
+    RepositoryRecord maven = repository(
+        11L, "maven-hosted", RepositoryFormat.MAVEN2, RepositoryType.HOSTED);
+    RepositoryRecord pypi = repository(
+        12L, "pypi-hosted", RepositoryFormat.PYPI, RepositoryType.HOSTED);
+    AssetRecord configured = asset(
+        23L,
+        11L,
+        RepositoryFormat.MAVEN2,
+        "storage/internal/demo-1.0.jar",
+        Map.of("browsePath", "com/acme/demo/1.0/demo-1.0.jar"));
+    AssetRecord python = asset(
+        24L,
+        12L,
+        RepositoryFormat.PYPI,
+        "packages/ab/cd/demo-1.0-py3-none-any.whl",
+        Map.of());
+    List<ScanRunSubject> subjects = List.of(
+        new ScanRunSubject(7L, 11L, 23L, 3L, 1L, now),
+        new ScanRunSubject(7L, 12L, 24L, 3L, 1L, now));
+    when(scans.findFinding(41L)).thenReturn(Optional.of(finding(41L, 7L)));
+    when(scans.listRepositoryIdsForRun(7L)).thenReturn(List.of(11L, 12L));
+    when(repositories.list()).thenReturn(List.of(maven, pypi));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.allow());
+    when(scans.listCurrentRunSubjects(7L, 0L, 0L, 1000)).thenReturn(subjects);
+    when(assets.findAssetsByIds(List.of(23L, 24L)))
+        .thenReturn(Map.of(23L, configured, 24L, python));
+
+    var page = service.findingArtifacts(actor, 41L, 0L, 0L, 10);
+
+    assertEquals(
+        List.of("com/acme/demo/1.0/demo-1.0.jar", "ab/cd/demo-1.0-py3-none-any.whl"),
+        page.items().stream().map(
+            SecurityScanManagementService.FindingArtifactView::browsePath).toList());
+  }
+
+  @Test
   void findingSearchMatchesRepositoryNameWithoutPerFindingRepositoryLookup() {
     Instant now = Instant.now();
     RepositoryRecord repository = repository(11L, "maven-hosted");
@@ -1033,10 +1102,15 @@ class SecurityScanManagementServiceWaiverTest {
 
   private static RepositoryRecord repository(
       long id, String name, RepositoryType type) {
+    return repository(id, name, RepositoryFormat.MAVEN2, type);
+  }
+
+  private static RepositoryRecord repository(
+      long id, String name, RepositoryFormat format, RepositoryType type) {
     return new RepositoryRecord(
         id,
         name,
-        RepositoryFormat.MAVEN2,
+        format,
         type,
         type == RepositoryType.GROUP ? "maven2-group" : "maven2-hosted",
         true,
@@ -1051,12 +1125,21 @@ class SecurityScanManagementServiceWaiverTest {
   }
 
   private static AssetRecord asset(long id, long repositoryId, String path) {
+    return asset(id, repositoryId, RepositoryFormat.MAVEN2, path, Map.of());
+  }
+
+  private static AssetRecord asset(
+      long id,
+      long repositoryId,
+      RepositoryFormat format,
+      String path,
+      Map<String, Object> attributes) {
     return new AssetRecord(
         id,
         repositoryId,
         null,
         1L,
-        RepositoryFormat.MAVEN2,
+        format,
         path,
         null,
         "demo-1.0.jar",
@@ -1065,7 +1148,7 @@ class SecurityScanManagementServiceWaiverTest {
         1024L,
         null,
         Instant.now(),
-        Map.of());
+        attributes);
   }
 
   private static ScanWaiver waiver(
