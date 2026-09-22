@@ -73,6 +73,61 @@ class BrowseControllerSecurityTest {
   }
 
   @Test
+  void listCanRestrictAGroupDeepLinkToItsExactSourceRepository() {
+    RepositoryRecord group = repo(
+        1L, "maven-public", RepositoryFormat.MAVEN2, RepositoryType.GROUP);
+    RepositoryRecord first = repo(
+        2L, "maven-first", RepositoryFormat.MAVEN2, RepositoryType.HOSTED);
+    RepositoryRecord second = repo(
+        3L, "maven-second", RepositoryFormat.MAVEN2, RepositoryType.HOSTED);
+    StubRepositoryDao repositories = new StubRepositoryDao(Map.of(group.name(), group));
+    repositories.members.put(group.id(), List.of(first, second));
+    StubBrowseNodeDao browseNodes = new StubBrowseNodeDao();
+    browseNodes.children.put(key(first.id(), "com/acme"), List.of(child(
+        "com/acme/first", "first", false)));
+    browseNodes.children.put(key(second.id(), "com/acme"), List.of(child(
+        "com/acme/second", "second", false)));
+    RecordingSecurityService security = new RecordingSecurityService(
+        permission -> AccessDecision.allow());
+    BrowseController controller = controller(
+        repositories, browseNodes, subject("alice"), null, security);
+
+    BrowseController.BrowseListing listing = controller.list(
+        group.name(),
+        "com/acme",
+        second.name(),
+        request("GET", "/internal/browse/" + group.name()));
+
+    assertEquals(List.of("second"), listing.entries().stream()
+        .map(BrowseController.BrowseEntry::name).toList());
+    assertEquals(List.of(key(second.id(), "com/acme")), browseNodes.calls);
+  }
+
+  @Test
+  void listRejectsADeepLinkSourceOutsideTheGroup() {
+    RepositoryRecord group = repo(
+        1L, "maven-public", RepositoryFormat.MAVEN2, RepositoryType.GROUP);
+    RepositoryRecord member = repo(
+        2L, "maven-member", RepositoryFormat.MAVEN2, RepositoryType.HOSTED);
+    StubRepositoryDao repositories = new StubRepositoryDao(Map.of(group.name(), group));
+    repositories.members.put(group.id(), List.of(member));
+    RecordingSecurityService security = new RecordingSecurityService(
+        permission -> AccessDecision.allow());
+    BrowseController controller = controller(
+        repositories, new StubBrowseNodeDao(), subject("alice"), null, security);
+
+    ResponseStatusException failure = assertThrows(
+        ResponseStatusException.class,
+        () -> controller.list(
+            group.name(),
+            "com/acme",
+            "maven-unrelated",
+            request("GET", "/internal/browse/" + group.name())));
+
+    assertEquals(HttpStatus.BAD_REQUEST, failure.getStatusCode());
+  }
+
+  @Test
   void listDoesNotReadBrowseNodesWhenBrowsePermissionIsDenied() {
     RepositoryRecord repository = repo(1L, "npm-group", RepositoryFormat.NPM, RepositoryType.GROUP);
     StubRepositoryDao repositories = new StubRepositoryDao(Map.of(repository.name(), repository));

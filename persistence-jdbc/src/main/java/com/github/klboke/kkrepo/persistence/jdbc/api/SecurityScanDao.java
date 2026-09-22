@@ -261,6 +261,14 @@ public interface SecurityScanDao {
   List<ScanRunSubject> listRunSubjects(
       long scanRunId, long afterRepositoryId, long afterAssetId, int maxItems);
 
+  /**
+   * Lists run subjects whose recorded content generation still matches the current asset
+   * candidate. This prevents historical findings from being presented as remediation targets
+   * after an asset path has been overwritten with different content.
+   */
+  List<ScanRunSubject> listCurrentRunSubjects(
+      long scanRunId, long afterRepositoryId, long afterAssetId, int maxItems);
+
   boolean runSubjectExists(long scanRunId, long repositoryId, long assetId);
 
   List<Long> listRepositoryIdsForSbom(long sbomId);

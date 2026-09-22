@@ -98,6 +98,7 @@ let editingSecurityScanPolicyId = null;
 let editingSecurityScanPolicyEnabled = true;
 let editingSecurityScanPolicyPlatforms = ["linux/amd64"];
 let securityScanWaiverContext = null;
+let securityScanFindingArtifactDetail = null;
 const AUDIT_LOG_DEFAULT_PAGE_SIZE = 15;
 let auditLogPage = { total: 0, page: 0, size: AUDIT_LOG_DEFAULT_PAGE_SIZE, items: [] };
 let currentSession = null;
@@ -5433,6 +5434,16 @@ function renderSecurityScanTasks() {
 }
 
 function renderSecurityScanFindingRepositories(finding) {
+  const artifacts = Array.isArray(finding.affectedArtifacts)
+    ? finding.affectedArtifacts.filter((artifact) => artifact?.repository && artifact?.browsePath)
+    : [];
+  if (artifacts.length > 0) {
+    const artifact = artifacts[0];
+    const count = Number(finding.affectedArtifactCount || artifacts.length);
+    const label = `${artifact.repository}: ${artifact.browsePath}`;
+    const more = count > 1 ? ` +${count - 1}` : "";
+    return `<span class="security-scan-finding-artifacts-preview"><a href="${escapeHtml(securityScanFindingArtifactBrowseUrl(artifact))}" title="${escapeHtml(`Open ${label} in Repository Browser`)}">${escapeHtml(label)}</a>${escapeHtml(more)}</span>`;
+  }
   const repositories = Array.isArray(finding.repositories)
     ? finding.repositories.filter(Boolean)
     : [];
@@ -5442,6 +5453,17 @@ function renderSecurityScanFindingRepositories(finding) {
     ? `${repositories[0]} +${repositories.length - 1}`
     : repositories[0];
   return `<span class="security-scan-finding-repositories" title="${escapeHtml(fullLabel)}">${escapeHtml(visibleLabel)}</span>`;
+}
+
+function securityScanFindingArtifactBrowseUrl(artifact) {
+  const repository = String(artifact?.repository || "");
+  const path = String(artifact?.browsePath || artifact?.assetPath || "");
+  const source = String(artifact?.sourceRepository || "");
+  const params = new URLSearchParams();
+  if (path) params.set("path", path);
+  if (source && source !== repository) params.set("source", source);
+  const query = params.toString();
+  return `/browse/#browse/browse:${encodeURIComponent(repository)}${query ? `?${query}` : ""}`;
 }
 
 function securityScanExternalHttpUrl(value) {
@@ -6100,6 +6122,91 @@ function renderSecurityScanFindingDetailSection(title, fields) {
     </section>`;
 }
 
+function renderSecurityScanFindingArtifactDetail(finding) {
+  const count = Number(finding.affectedArtifactCount || 0);
+  return `
+    <section class="security-scan-finding-detail-section security-scan-finding-artifact-section">
+      <div class="security-scan-finding-artifact-heading">
+        <h3>Affected artifacts</h3>
+        <span>${escapeHtml(count)} visible</span>
+      </div>
+      <div class="security-scan-finding-artifact-list" id="security-scan-finding-artifact-list">
+        <div class="placeholder">Loading affected artifacts…</div>
+      </div>
+      <button class="row-action security-scan-finding-artifacts-more" id="security-scan-finding-artifacts-more" type="button" hidden>Show more</button>
+    </section>`;
+}
+
+function renderSecurityScanFindingArtifactItems() {
+  const state = securityScanFindingArtifactDetail;
+  if (!state) return;
+  const list = document.getElementById("security-scan-finding-artifact-list");
+  const more = document.getElementById("security-scan-finding-artifacts-more");
+  if (!list || !more) return;
+  list.innerHTML = state.items.map((artifact) => {
+    const source = artifact.sourceRepository && artifact.sourceRepository !== artifact.repository
+      ? `<span>Source: ${escapeHtml(artifact.sourceRepository)}</span>`
+      : "";
+    return `
+      <a class="security-scan-finding-artifact-link"
+         href="${escapeHtml(securityScanFindingArtifactBrowseUrl(artifact))}">
+        <strong>${escapeHtml(artifact.repository)}</strong>
+        <code>${escapeHtml(artifact.browsePath || artifact.assetPath)}</code>
+        ${source}
+        ${lucideIcon("external-link")}
+      </a>`;
+  }).join("") || '<div class="placeholder">No currently visible artifact is associated with this finding.</div>';
+  more.hidden = state.nextRepositoryId == null || state.nextAssetId == null;
+  more.disabled = state.loading;
+  more.textContent = state.loading ? "Loading…" : "Show more";
+}
+
+async function loadSecurityScanFindingArtifacts(findingId, reset = false) {
+  if (reset || !securityScanFindingArtifactDetail
+      || Number(securityScanFindingArtifactDetail.findingId) !== Number(findingId)) {
+    securityScanFindingArtifactDetail = {
+      findingId: Number(findingId),
+      items: [],
+      nextRepositoryId: 0,
+      nextAssetId: 0,
+      loading: false
+    };
+  }
+  const state = securityScanFindingArtifactDetail;
+  if (state.loading || state.nextRepositoryId == null || state.nextAssetId == null) return;
+  state.loading = true;
+  renderSecurityScanFindingArtifactItems();
+  const params = new URLSearchParams({
+    afterRepositoryId: String(state.nextRepositoryId),
+    afterAssetId: String(state.nextAssetId),
+    limit: "25"
+  });
+  try {
+    const response = await fetch(
+      `/internal/security/scanning/findings/${encodeURIComponent(findingId)}/artifacts?${params.toString()}`,
+      { cache: "no-store" });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    const page = await response.json();
+    const seen = new Set(state.items.map(
+      (artifact) => `${artifact.repositoryId}:${artifact.assetId}`));
+    for (const artifact of page.items || []) {
+      const key = `${artifact.repositoryId}:${artifact.assetId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      state.items.push(artifact);
+    }
+    state.nextRepositoryId = page.nextRepositoryId ?? null;
+    state.nextAssetId = page.nextAssetId ?? null;
+  } catch (error) {
+    showToast(`Unable to load affected artifacts: ${error.message}`, "error");
+    state.nextRepositoryId = null;
+    state.nextAssetId = null;
+  } finally {
+    state.loading = false;
+    renderSecurityScanFindingArtifactItems();
+  }
+}
+
 function showSecurityScanFindingDetail(findingId) {
   const finding = securityScanState.findings.find(
     (item) => Number(item.id) === Number(findingId));
@@ -6129,6 +6236,7 @@ function showSecurityScanFindingDetail(findingId) {
       <div><span>Fixed versions</span><strong>${escapeHtml(securityScanFindingDetailValue(finding.fixedVersions))}</strong></div>
       <div><span>Waiver coverage</span><strong>${escapeHtml(waiverCoverage)}</strong></div>
     </div>
+    ${renderSecurityScanFindingArtifactDetail(finding)}
     <div class="security-scan-finding-detail-sections">
       ${renderSecurityScanFindingDetailSection("Vulnerability", [
         ["Aliases", finding.aliases],
@@ -6147,9 +6255,11 @@ function showSecurityScanFindingDetail(findingId) {
       ])}
     </div>`;
   openFormModal("security-scan-finding-detail", "security-scan-close-finding-detail-button");
+  loadSecurityScanFindingArtifacts(finding.id, true);
 }
 
 function hideSecurityScanFindingDetail() {
+  securityScanFindingArtifactDetail = null;
   closeFormModal("security-scan-finding-detail");
 }
 
@@ -8003,6 +8113,12 @@ document.getElementById("security-scan-view-all-waivers-button").addEventListene
   "click", viewAllSecurityScanWaivers);
 document.getElementById("security-scan-close-finding-detail-button").addEventListener(
   "click", hideSecurityScanFindingDetail);
+document.getElementById("security-scan-finding-detail-content").addEventListener("click", (event) => {
+  const more = event.target.closest(".security-scan-finding-artifacts-more");
+  if (more && securityScanFindingArtifactDetail) {
+    loadSecurityScanFindingArtifacts(securityScanFindingArtifactDetail.findingId);
+  }
+});
 bindRequiredFieldErrors(securityScanWaiverRequiredFields);
 document.getElementById("security-scan-finding-table").addEventListener("click", (event) => {
   const viewButton = event.target.closest(".security-scan-finding-view");

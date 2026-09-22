@@ -15,6 +15,7 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.TaskStatus;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.ConfigCommand;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.CursorPage;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.FindingArtifactPage;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.PolicyCommand;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.SbomDownload;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.WaiverCommand;
@@ -44,6 +45,8 @@ class SecurityScanManagementControllerTest {
         .thenReturn(new CursorPage<>(List.of(), null));
     when(service.findingPage(actor, 9L, 10L, Severity.HIGH, "finding", 11L, 12))
         .thenReturn(new CursorPage<>(List.of(), null));
+    when(service.findingArtifacts(actor, 24L, 25L, 26L, 27))
+        .thenReturn(new FindingArtifactPage(List.of(), null, null));
     when(service.policyPage(actor, "policy", 13L, 14))
         .thenReturn(new CursorPage<>(List.of(), null));
     when(service.waiverPage(actor, 15L, "waiver", 16L, 17))
@@ -86,6 +89,8 @@ class SecurityScanManagementControllerTest {
     assertEquals(
         List.of(),
         controller.findings(9L, 10L, Severity.HIGH, "finding", 11L, 12, request).items());
+    assertEquals(
+        List.of(), controller.findingArtifacts(24L, 25L, 26L, 27, request).items());
     controller.findingWaiverContext(24L, request);
     controller.findingWaivers(24L, request);
     controller.asset(25L, request);

@@ -2103,6 +2103,11 @@ public abstract class PersistenceApiContract {
         scans.listRunSubjects(runId, 0, 0, 10).stream()
             .map(SecurityScanDao.ScanRunSubject::repositoryId)
             .toList());
+    assertEquals(
+        List.of(repositoryId, groupRepositoryId),
+        scans.listCurrentRunSubjects(runId, 0, 0, 10).stream()
+            .map(SecurityScanDao.ScanRunSubject::repositoryId)
+            .toList());
 
     SecurityScanDao.AssetSecurityState storedState = scans.upsertAssetStateIfCurrent(
         new SecurityScanDao.AssetSecurityState(
@@ -2545,6 +2550,9 @@ public abstract class PersistenceApiContract {
     assertEquals(replacementBlobId, replacementEvents.getFirst().assetBlobId());
     assertEquals(1, foldArtifactChanges(artifactChangeCursor));
     assertEquals(2, scans.findCandidate(assetId).orElseThrow().contentGeneration());
+    assertTrue(
+        scans.listCurrentRunSubjects(runId, 0, 0, 10).isEmpty(),
+        "historical findings must not target an asset after its content generation changes");
     SecurityScanDao.ScanSummary obsoleteGenerationSummary =
         scans.summary(List.of(repositoryId));
     assertEquals(0, obsoleteGenerationSummary.completeAssets());

@@ -60,6 +60,8 @@ public class SecurityScanManagementService {
   private static final int MAX_POLICY_NAME_LENGTH = 128;
   private static final int REPOSITORY_SEARCH_BATCH_SIZE = 256;
   private static final int WAIVER_MATCH_PAGE_SIZE = 256;
+  private static final int FINDING_ARTIFACT_PREVIEW_LIMIT = 3;
+  private static final int FINDING_ARTIFACT_SCAN_PAGE_SIZE = 1000;
 
   private final SecurityScanDao scans;
   private final RepositoryDao repositories;
@@ -279,19 +281,30 @@ public class SecurityScanManagementService {
       long afterId,
       int requestedLimit) {
     if (runId != null) requireVisibleRun(actor, runId);
+    List<RepositoryRecord> repositoryRows = repositories.list();
+    Map<Long, RepositoryRecord> repositoriesById = new LinkedHashMap<>();
+    Map<Long, String> visibleRepositoryNames = new LinkedHashMap<>();
+    for (RepositoryRecord repository : repositoryRows) {
+      repositoriesById.put(repository.id(), repository);
+      if (canBrowse(actor, repository)) {
+        visibleRepositoryNames.put(repository.id(), repository.name());
+      }
+    }
     String normalizedQuery = normalizedQuery(query);
     int safeLimit = limit(requestedLimit);
     List<ScanFinding> candidates;
     if (repositoryId == null) {
       candidates = scans.listFindingsByRepositories(
-          visibleRepositoryIds(actor).stream().toList(),
+          visibleRepositoryNames.keySet().stream().toList(),
           runId,
           severity,
           normalizedQuery,
           afterId,
           safeLimit + 1);
     } else {
-      requireVisibleRepository(actor, repositoryId);
+      if (!visibleRepositoryNames.containsKey(repositoryId)) {
+        throw notFound("Repository not found");
+      }
       candidates = scans.listFindings(
           repositoryId, runId, severity, normalizedQuery, afterId, safeLimit + 1);
     }
@@ -299,10 +312,6 @@ public class SecurityScanManagementService {
         cursorPage(candidates, safeLimit, ScanFinding::id);
     if (rawPage.items().isEmpty()) {
       return new CursorPage<>(List.of(), rawPage.nextAfter());
-    }
-    Map<Long, String> visibleRepositoryNames = new LinkedHashMap<>();
-    for (RepositoryRecord repository : visibleRepositories(actor)) {
-      visibleRepositoryNames.put(repository.id(), repository.name());
     }
     Set<Long> visibleRepositoryIds = visibleRepositoryNames.keySet();
     Instant now = Instant.now();
@@ -323,6 +332,10 @@ public class SecurityScanManagementService {
             accumulators.get(finding.id()).acceptSubject(repositoryName);
           }
         }));
+    Map<Long, FindingArtifactSummary> artifactSummariesByRun = new LinkedHashMap<>();
+    findingsByRun.keySet().forEach(scanRunId -> artifactSummariesByRun.put(
+        scanRunId,
+        findingArtifactSummary(scanRunId, visibleRepositoryNames, repositoriesById)));
     forEachWaiverPageForFindings(rawPage.items(), waiverPage -> {
       Map<Long, PageWaiverMatches> pageMatches = new LinkedHashMap<>();
       rawPage.items().forEach(
@@ -349,9 +362,143 @@ public class SecurityScanManagementService {
           accumulators.get(findingId).acceptWaiverCounts(matches));
     });
     List<FindingView> views = rawPage.items().stream()
-        .map(finding -> accumulators.get(finding.id()).view(finding))
+        .map(finding -> {
+          FindingArtifactSummary summary = artifactSummariesByRun.getOrDefault(
+              finding.scanRunId(), new FindingArtifactSummary(List.of(), 0));
+          return accumulators.get(finding.id()).view(
+              finding, summary.items(), summary.totalCount());
+        })
         .toList();
     return new CursorPage<>(views, rawPage.nextAfter());
+  }
+
+  public FindingArtifactPage findingArtifacts(
+      AuthenticatedSubject actor,
+      long findingId,
+      long afterRepositoryId,
+      long afterAssetId,
+      int requestedLimit) {
+    ScanFinding finding = scans.findFinding(findingId)
+        .orElseThrow(() -> notFound("Security scan finding not found"));
+    List<RepositoryRecord> repositoryRows = repositories.list();
+    Map<Long, RepositoryRecord> repositoriesById = new LinkedHashMap<>();
+    Map<Long, String> visibleRepositoryNames = new LinkedHashMap<>();
+    for (RepositoryRecord repository : repositoryRows) {
+      repositoriesById.put(repository.id(), repository);
+      if (canBrowse(actor, repository)) {
+        visibleRepositoryNames.put(repository.id(), repository.name());
+      }
+    }
+    boolean visible = scans.listRepositoryIdsForRun(finding.scanRunId()).stream()
+        .anyMatch(visibleRepositoryNames::containsKey);
+    if (!visible) {
+      throw notFound("Security scan finding not found");
+    }
+
+    int safeLimit = limit(requestedLimit);
+    List<FindingArtifactView> matches = new ArrayList<>(safeLimit + 1);
+    long repositoryCursor = Math.max(0, afterRepositoryId);
+    long assetCursor = Math.max(0, afterAssetId);
+    while (matches.size() <= safeLimit) {
+      List<ScanRunSubject> page = scans.listCurrentRunSubjects(
+          finding.scanRunId(), repositoryCursor, assetCursor, FINDING_ARTIFACT_SCAN_PAGE_SIZE);
+      if (page.isEmpty()) break;
+      matches.addAll(findingArtifactViews(
+          page, visibleRepositoryNames, repositoriesById, safeLimit + 1 - matches.size()));
+      ScanRunSubject last = page.getLast();
+      if (last.repositoryId() < repositoryCursor
+          || (last.repositoryId() == repositoryCursor && last.assetId() <= assetCursor)) {
+        break;
+      }
+      repositoryCursor = last.repositoryId();
+      assetCursor = last.assetId();
+      if (page.size() < FINDING_ARTIFACT_SCAN_PAGE_SIZE) break;
+    }
+    boolean hasMore = matches.size() > safeLimit;
+    List<FindingArtifactView> items = hasMore
+        ? List.copyOf(matches.subList(0, safeLimit))
+        : List.copyOf(matches);
+    FindingArtifactView last = hasMore ? items.getLast() : null;
+    return new FindingArtifactPage(
+        items,
+        last == null ? null : last.repositoryId(),
+        last == null ? null : last.assetId());
+  }
+
+  private FindingArtifactSummary findingArtifactSummary(
+      long scanRunId,
+      Map<Long, String> visibleRepositoryNames,
+      Map<Long, RepositoryRecord> repositoriesById) {
+    List<FindingArtifactView> preview = new ArrayList<>(FINDING_ARTIFACT_PREVIEW_LIMIT);
+    int totalCount = 0;
+    long repositoryCursor = 0;
+    long assetCursor = 0;
+    while (true) {
+      List<ScanRunSubject> page = scans.listCurrentRunSubjects(
+          scanRunId, repositoryCursor, assetCursor, FINDING_ARTIFACT_SCAN_PAGE_SIZE);
+      if (page.isEmpty()) break;
+      List<FindingArtifactView> current = findingArtifactViews(
+          page, visibleRepositoryNames, repositoriesById, page.size());
+      totalCount += current.size();
+      int remaining = FINDING_ARTIFACT_PREVIEW_LIMIT - preview.size();
+      if (remaining > 0) {
+        preview.addAll(current.subList(0, Math.min(remaining, current.size())));
+      }
+      ScanRunSubject last = page.getLast();
+      if (last.repositoryId() < repositoryCursor
+          || (last.repositoryId() == repositoryCursor && last.assetId() <= assetCursor)) {
+        break;
+      }
+      repositoryCursor = last.repositoryId();
+      assetCursor = last.assetId();
+      if (page.size() < FINDING_ARTIFACT_SCAN_PAGE_SIZE) break;
+    }
+    return new FindingArtifactSummary(List.copyOf(preview), totalCount);
+  }
+
+  private List<FindingArtifactView> findingArtifactViews(
+      List<ScanRunSubject> subjects,
+      Map<Long, String> visibleRepositoryNames,
+      Map<Long, RepositoryRecord> repositoriesById,
+      int maxItems) {
+    if (subjects == null || subjects.isEmpty() || maxItems <= 0) return List.of();
+    Map<Long, AssetRecord> assetsById = assets.findAssetsByIds(
+        subjects.stream().map(ScanRunSubject::assetId).toList());
+    List<FindingArtifactView> views = new ArrayList<>(Math.min(subjects.size(), maxItems));
+    for (ScanRunSubject subject : subjects) {
+      String repositoryName = visibleRepositoryNames.get(subject.repositoryId());
+      AssetRecord asset = assetsById.get(subject.assetId());
+      if (repositoryName == null || asset == null) continue;
+      RepositoryRecord context = repositoriesById.get(subject.repositoryId());
+      if (context == null || !isAssetInRepositoryContext(context, asset)) continue;
+      RepositoryRecord source = repositoriesById.get(asset.repositoryId());
+      String sourceRepository = source == null ? null : source.name();
+      if (sourceRepository == null || sourceRepository.isBlank()) continue;
+      views.add(new FindingArtifactView(
+          subject.repositoryId(),
+          repositoryName,
+          asset.repositoryId(),
+          sourceRepository,
+          subject.assetId(),
+          asset.path(),
+          findingBrowsePath(asset)));
+      if (views.size() >= maxItems) break;
+    }
+    return List.copyOf(views);
+  }
+
+  private static String findingBrowsePath(AssetRecord asset) {
+    Object configured = asset.attributes() == null ? null : asset.attributes().get("browsePath");
+    if (configured != null && !configured.toString().isBlank()) {
+      return configured.toString();
+    }
+    String path = asset.path();
+    if (asset.format() == com.github.klboke.kkrepo.core.RepositoryFormat.PYPI
+        && path != null
+        && path.startsWith("packages/")) {
+      return path.substring("packages/".length());
+    }
+    return path;
   }
 
   public FindingWaiverContext findingWaiverContext(
@@ -577,10 +724,15 @@ public class SecurityScanManagementService {
       expiredWaiverCount += matches.expiredWaiverIds.size();
     }
 
-    private FindingView view(ScanFinding finding) {
+    private FindingView view(
+        ScanFinding finding,
+        List<FindingArtifactView> affectedArtifacts,
+        int affectedArtifactCount) {
       return FindingView.from(
           finding,
           repositoryNames.stream().sorted().toList(),
+          affectedArtifacts,
+          affectedArtifactCount,
           activeWaiverCount,
           expiredWaiverCount,
           targetCount,
@@ -592,6 +744,10 @@ public class SecurityScanManagementService {
     private final Set<Long> activeWaiverIds = new LinkedHashSet<>();
     private final Set<Long> expiredWaiverIds = new LinkedHashSet<>();
   }
+
+  private record FindingArtifactSummary(
+      List<FindingArtifactView> items,
+      int totalCount) {}
 
   public AssetDetail asset(AuthenticatedSubject actor, long assetId) {
     AssetDao.AssetWithBlob content = assets.findAssetWithBlobById(assetId)
@@ -1346,6 +1502,15 @@ public class SecurityScanManagementService {
     }
   }
 
+  public record FindingArtifactPage(
+      List<FindingArtifactView> items,
+      Long nextRepositoryId,
+      Long nextAssetId) {
+    public FindingArtifactPage {
+      items = items == null ? List.of() : List.copyOf(items);
+    }
+  }
+
   public record Overview(
       boolean deploymentEnabled,
       SecurityScanDao.ScannerSnapshot scanner,
@@ -1423,6 +1588,8 @@ public class SecurityScanManagementService {
       long id,
       long scanRunId,
       List<String> repositories,
+      List<FindingArtifactView> affectedArtifacts,
+      int affectedArtifactCount,
       String advisoryId,
       List<String> aliases,
       String dataSource,
@@ -1444,17 +1611,21 @@ public class SecurityScanManagementService {
       int waivedTargetCount) {
     public FindingView {
       repositories = repositories == null ? List.of() : List.copyOf(repositories);
+      affectedArtifacts = affectedArtifacts == null ? List.of() : List.copyOf(affectedArtifacts);
     }
 
     static FindingView from(
         ScanFinding finding,
         List<String> repositories,
+        List<FindingArtifactView> affectedArtifacts,
+        int affectedArtifactCount,
         int activeWaiverCount,
         int expiredWaiverCount,
         int waiverTargetCount,
         int waivedTargetCount) {
       return new FindingView(
-          finding.id(), finding.scanRunId(), repositories, finding.advisoryId(), finding.aliases(),
+          finding.id(), finding.scanRunId(), repositories, affectedArtifacts, affectedArtifactCount,
+          finding.advisoryId(), finding.aliases(),
           finding.dataSource(), finding.packageUrl(), finding.packageName(),
           finding.installedVersion(), finding.fixedVersions(), finding.severity().name(),
           finding.severitySource(), finding.cvssVector(), finding.cvssScore(), finding.title(),
@@ -1462,6 +1633,15 @@ public class SecurityScanManagementService {
           activeWaiverCount, expiredWaiverCount, waiverTargetCount, waivedTargetCount);
     }
   }
+
+  public record FindingArtifactView(
+      long repositoryId,
+      String repository,
+      long sourceRepositoryId,
+      String sourceRepository,
+      long assetId,
+      String assetPath,
+      String browsePath) {}
 
   public record FindingWaiverDetail(
       long findingId,

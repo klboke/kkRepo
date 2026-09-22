@@ -200,7 +200,7 @@ class AdminSecurityScanningCapabilityContractTest {
     String css = resource("/META-INF/resources/admin/assets/admin.css");
 
     assertTrue(index.contains(
-        "<thead><tr><th>Severity</th><th>Advisory</th><th>Repositories</th>"
+        "<thead><tr><th>Severity</th><th>Advisory</th><th>Affected artifacts</th>"
             + "<th>Package</th><th>Installed</th><th>Fixed</th><th>Waiver</th>"
             + "<th class=\"actions-column security-scan-finding-actions\">Actions</th></tr></thead>"));
     assertFalse(index.contains(
@@ -213,7 +213,13 @@ class AdminSecurityScanningCapabilityContractTest {
 
     assertTrue(javascript.contains("function renderSecurityScanFindingActions(finding)"));
     assertTrue(javascript.contains("function renderSecurityScanFindingRepositories(finding)"));
+    assertTrue(javascript.contains("finding.affectedArtifacts"));
     assertTrue(javascript.contains("finding.repositories.filter(Boolean)"));
+    assertTrue(javascript.contains("function securityScanFindingArtifactBrowseUrl(artifact)"));
+    assertTrue(javascript.contains("sourceRepository"));
+    assertTrue(javascript.contains("/artifacts?${params.toString()}`"));
+    assertTrue(javascript.contains("afterRepositoryId"));
+    assertTrue(javascript.contains("afterAssetId"));
     assertTrue(javascript.contains(
         "CRITICAL: { tone: \"is-critical\", icon: \"octagon-alert\" }"));
     assertTrue(javascript.contains(
@@ -245,6 +251,8 @@ class AdminSecurityScanningCapabilityContractTest {
     assertFalse(css.contains(".security-scan-finding-detail-grid"));
     assertTrue(css.contains(".security-scan-finding-detail-hero"));
     assertTrue(css.contains(".security-scan-finding-detail-section dl > div"));
+    assertTrue(css.contains(".security-scan-finding-artifact-link"));
+    assertTrue(css.contains(".security-scan-finding-artifacts-preview"));
     assertTrue(css.contains(".security-scan-finding-actions"));
     assertTrue(css.contains(".security-scan-severity.is-critical"));
     assertTrue(css.contains(".security-scan-severity.is-high"));

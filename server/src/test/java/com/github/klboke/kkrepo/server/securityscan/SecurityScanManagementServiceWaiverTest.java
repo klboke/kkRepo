@@ -179,6 +179,79 @@ class SecurityScanManagementServiceWaiverTest {
   }
 
   @Test
+  void findingPagePreviewsAffectedArtifactsAcrossSourceAndGroupContexts() {
+    Instant now = Instant.now();
+    RepositoryRecord source = repository(11L, "maven-hosted");
+    RepositoryRecord group = repository(12L, "maven-public", RepositoryType.GROUP);
+    AssetRecord artifact = asset(23L, 11L, "com/acme/demo/1.0/demo-1.0.jar");
+    List<ScanRunSubject> subjects = List.of(
+        new ScanRunSubject(7L, 11L, 23L, 3L, 1L, now),
+        new ScanRunSubject(7L, 12L, 23L, 3L, 1L, now));
+    when(repositories.list()).thenReturn(List.of(source, group));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.allow());
+    when(repositoryScope.sourceRepositoryIds(12L)).thenReturn(List.of(11L));
+    when(scans.listFindingsByRepositories(
+        List.of(11L, 12L), null, null, null, 0L, 2))
+        .thenReturn(List.of(finding(41L, 7L)));
+    when(scans.listRunSubjects(eq(7L), anyLong(), anyLong(), anyInt()))
+        .thenReturn(subjects);
+    when(scans.listCurrentRunSubjects(eq(7L), anyLong(), anyLong(), anyInt()))
+        .thenReturn(subjects);
+    when(assets.findAssetsByIds(List.of(23L, 23L))).thenReturn(Map.of(23L, artifact));
+    when(scans.listWaiversForFindings(
+        any(), any(), any(), any(), anyLong(), anyInt()))
+        .thenReturn(List.of());
+
+    var page = service.findingPage(actor, null, null, null, null, 0L, 1);
+
+    var finding = page.items().getFirst();
+    assertEquals(2, finding.affectedArtifactCount());
+    assertEquals(2, finding.affectedArtifacts().size());
+    assertEquals("maven-hosted", finding.affectedArtifacts().getFirst().repository());
+    assertEquals("maven-public", finding.affectedArtifacts().get(1).repository());
+    assertEquals("maven-hosted", finding.affectedArtifacts().get(1).sourceRepository());
+    assertEquals(
+        "com/acme/demo/1.0/demo-1.0.jar",
+        finding.affectedArtifacts().get(1).browsePath());
+  }
+
+  @Test
+  void findingArtifactsUseACompoundKeysetCursor() {
+    Instant now = Instant.now();
+    RepositoryRecord repository = repository(11L, "maven-hosted");
+    AssetRecord first = asset(23L, 11L, "com/acme/demo/1.0/demo-1.0.jar");
+    AssetRecord second = asset(24L, 11L, "com/acme/demo/2.0/demo-2.0.jar");
+    ScanRunSubject firstSubject = new ScanRunSubject(7L, 11L, 23L, 3L, 1L, now);
+    ScanRunSubject secondSubject = new ScanRunSubject(7L, 11L, 24L, 3L, 1L, now);
+    when(scans.findFinding(41L)).thenReturn(Optional.of(finding(41L, 7L)));
+    when(scans.listRepositoryIdsForRun(7L)).thenReturn(List.of(11L));
+    when(repositories.list()).thenReturn(List.of(repository));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.allow());
+    when(scans.listCurrentRunSubjects(7L, 0L, 0L, 1000))
+        .thenReturn(List.of(firstSubject, secondSubject));
+    when(scans.listCurrentRunSubjects(7L, 11L, 23L, 1000))
+        .thenReturn(List.of(secondSubject));
+    when(assets.findAssetsByIds(List.of(23L, 24L)))
+        .thenReturn(Map.of(23L, first, 24L, second));
+    when(assets.findAssetsByIds(List.of(24L))).thenReturn(Map.of(24L, second));
+
+    var firstPage = service.findingArtifacts(actor, 41L, 0L, 0L, 1);
+    var secondPage = service.findingArtifacts(
+        actor, 41L, firstPage.nextRepositoryId(), firstPage.nextAssetId(), 1);
+
+    assertEquals(List.of(23L), firstPage.items().stream().map(
+        SecurityScanManagementService.FindingArtifactView::assetId).toList());
+    assertEquals(11L, firstPage.nextRepositoryId());
+    assertEquals(23L, firstPage.nextAssetId());
+    assertEquals(List.of(24L), secondPage.items().stream().map(
+        SecurityScanManagementService.FindingArtifactView::assetId).toList());
+    assertNull(secondPage.nextRepositoryId());
+    assertNull(secondPage.nextAssetId());
+  }
+
+  @Test
   void findingSearchMatchesRepositoryNameWithoutPerFindingRepositoryLookup() {
     Instant now = Instant.now();
     RepositoryRecord repository = repository(11L, "maven-hosted");

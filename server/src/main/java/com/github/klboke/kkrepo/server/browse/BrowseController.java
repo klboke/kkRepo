@@ -106,6 +106,7 @@ public class BrowseController {
   public BrowseListing list(
       @PathVariable("repository") String repository,
       @RequestParam(value = "path", required = false) String path,
+      @RequestParam(value = "source", required = false) String sourceRepository,
       HttpServletRequest request) {
     RepositoryRecord repo = repositoryDao.findByName(repository)
         .orElseThrow(() -> new RepositoryNotFoundException(repository));
@@ -125,6 +126,7 @@ public class BrowseController {
                     ? BrowseRepositorySources.condaSources(repo, repositoryDao)
             : repositoryDao.listMembers(repo.id())
         : List.of(repo);
+    sources = selectSources(repo, sources, sourceRepository);
     if (repo.format() == RepositoryFormat.DOCKER && dockerBrowseService != null) {
       return new BrowseListing(repo.name(), parent, dockerBrowseService.list(repo, sources, parent));
     }
@@ -173,6 +175,26 @@ public class BrowseController {
     // Final ordering: directories first then files, alphabetical within each bucket.
     entries = sorted(repo.format(), entries);
     return new BrowseListing(repo.name(), browsePath.publicParent(), entries);
+  }
+
+  BrowseListing list(
+      String repository, String path, HttpServletRequest request) {
+    return list(repository, path, null, request);
+  }
+
+  private static List<RepositoryRecord> selectSources(
+      RepositoryRecord visibleRepository,
+      List<RepositoryRecord> sources,
+      String requestedSource) {
+    if (requestedSource == null || requestedSource.isBlank()) return sources;
+    String normalized = requestedSource.trim();
+    return sources.stream()
+        .filter(source -> source.name().equals(normalized))
+        .findFirst()
+        .map(List::of)
+        .orElseThrow(() -> new ResponseStatusException(
+            HttpStatus.BAD_REQUEST,
+            "source is not available through " + visibleRepository.name()));
   }
 
   private static List<BrowseEntry> sorted(List<BrowseEntry> entries) {

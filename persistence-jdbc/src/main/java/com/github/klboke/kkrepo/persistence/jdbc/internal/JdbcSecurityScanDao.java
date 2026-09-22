@@ -2349,6 +2349,44 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   @Override
+  public List<ScanRunSubject> listCurrentRunSubjects(
+      long scanRunId, long afterRepositoryId, long afterAssetId, int maxItems) {
+    return jdbc.query("""
+        SELECT
+          subject.scan_run_id,
+          subject.repository_id,
+          subject.asset_id,
+          MIN(subject.profile_id) AS profile_id,
+          MIN(subject.content_generation) AS content_generation,
+          MIN(subject.associated_at) AS associated_at
+        FROM security_scan_run_subject subject
+        JOIN security_scan_candidate candidate
+          ON candidate.asset_id = subject.asset_id
+         AND candidate.content_generation = subject.content_generation
+        WHERE subject.scan_run_id = ?
+          AND (
+            subject.repository_id > ?
+            OR (subject.repository_id = ? AND subject.asset_id > ?)
+          )
+        GROUP BY subject.scan_run_id, subject.repository_id, subject.asset_id
+        ORDER BY subject.repository_id, subject.asset_id
+        LIMIT ?
+        """,
+        (rs, rowNum) -> new ScanRunSubject(
+            rs.getLong("scan_run_id"),
+            rs.getLong("repository_id"),
+            rs.getLong("asset_id"),
+            rs.getLong("profile_id"),
+            rs.getLong("content_generation"),
+            nullableInstant(rs, "associated_at")),
+        scanRunId,
+        Math.max(0, afterRepositoryId),
+        Math.max(0, afterRepositoryId),
+        Math.max(0, afterAssetId),
+        safeLimit(maxItems));
+  }
+
+  @Override
   public boolean runSubjectExists(long scanRunId, long repositoryId, long assetId) {
     List<Integer> matches = jdbc.query("""
         SELECT 1

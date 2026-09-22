@@ -3008,6 +3008,23 @@ code {
   white-space: nowrap;
 }
 
+.security-scan-finding-artifacts-preview {
+  display: inline-flex;
+  align-items: center;
+  max-width: 360px;
+  font-weight: var(--fw-semibold);
+  white-space: nowrap;
+}
+
+.security-scan-finding-artifacts-preview a {
+  display: inline-block;
+  max-width: 320px;
+  color: var(--active);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
 .security-scan-finding-detail-content {
   margin-top: 2px;
 }
@@ -3089,6 +3106,67 @@ code {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 32px;
   padding-top: 22px;
+}
+
+.security-scan-finding-artifact-section {
+  padding: 20px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.security-scan-finding-artifact-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.security-scan-finding-artifact-heading span {
+  color: var(--ink-4);
+  font-size: 12px;
+  font-weight: var(--fw-semibold);
+}
+
+.security-scan-finding-artifact-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.security-scan-finding-artifact-link {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.45fr) minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink-2);
+  background: var(--surface);
+}
+
+.security-scan-finding-artifact-link:hover {
+  border-color: var(--brand);
+  color: var(--active);
+}
+
+.security-scan-finding-artifact-link code {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.security-scan-finding-artifact-link span {
+  color: var(--ink-4);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.security-scan-finding-artifact-link .lucide-icon {
+  width: 15px;
+  height: 15px;
+}
+
+.security-scan-finding-artifacts-more {
+  margin-top: 10px;
 }
 
 .security-scan-finding-detail-section h3 {
