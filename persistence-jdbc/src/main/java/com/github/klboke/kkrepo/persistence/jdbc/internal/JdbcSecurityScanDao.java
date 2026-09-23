@@ -43,6 +43,7 @@ import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -82,6 +83,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
           .thenComparingLong(ClaimCandidate::id);
 
   private final JdbcTemplate jdbc;
+  private final String completionTaskTable;
+  private final String repositoryCompletionTaskTable;
   private final BlobReferenceDao blobReferences;
   private final JdbcSecurityScanRepositoryScope repositoryScope;
   private final JdbcSecurityScanRetentionDao retention;
@@ -495,6 +498,10 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   public JdbcSecurityScanDao(
       JdbcTemplate jdbc, JsonColumns json, DatabaseDialect databaseDialect) {
     this.jdbc = jdbc;
+    this.completionTaskTable = databaseDialect.tableReferenceWithPreferredIndex(
+        "security_scan_task t", "idx_security_scan_task_completion");
+    this.repositoryCompletionTaskTable = databaseDialect.tableReferenceWithPreferredIndex(
+        "security_scan_task t", "idx_security_scan_task_repo_completion");
     this.json = json;
     this.blobReferences = new JdbcBlobReferenceDao(jdbc);
     this.repositoryScope = new JdbcSecurityScanRepositoryScope(json, databaseDialect.json());
@@ -1273,6 +1280,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   @Override
+  @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
   public List<ScanTask> listTasks(
       Long repositoryId,
       TaskStatus status,
@@ -1293,6 +1301,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   @Override
+  @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
   public List<ScanTask> listTasksByRepositories(
       List<Long> repositoryIds,
       TaskStatus status,
@@ -1317,20 +1326,24 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       sql.append(repositoryScope.taskRepositoryScopeCte());
       args.add(repositoryScope.parameter(repositoryIds));
     }
-    sql.append("""
-        SELECT t.*
-        FROM security_scan_task t
-        JOIN repository r ON r.id = t.repository_id
-        LEFT JOIN asset a ON a.id = t.asset_id
-        WHERE 1 = 1
-        """);
-    appendScanPageBoundary(sql, args, "t", "finished_at", afterId, completion);
+    String pattern = searchPattern(query);
+    // MySQL can otherwise prefer the primary key for NULL timestamps and scan completed history.
+    String taskTable = completion == null || pattern != null ? "security_scan_task t"
+        : repositoryId == null ? completionTaskTable : repositoryCompletionTaskTable;
+    sql.append("SELECT t.* FROM ").append(taskTable);
+    if (pattern != null) {
+      sql.append(" JOIN repository r ON r.id = t.repository_id")
+          .append(" LEFT JOIN asset a ON a.id = t.asset_id");
+    }
+    sql.append(" WHERE 1 = 1");
     if (repositoryId != null) {
       sql.append(" AND t.repository_id = ?");
       args.add(repositoryId);
     } else if (repositoryIds != null) {
+      // A bounded scalar lookup preserves the completion-index walk. MySQL may flatten
+      // EXISTS into a duplicate-removing semijoin that sorts the entire visible history.
       sql.append("""
-           AND EXISTS (
+           AND (
              SELECT 1
              FROM task_repository_scope scope
              JOIN repository source_repository
@@ -1352,14 +1365,14 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
                    )
                  )
                )
-           )
+             LIMIT 1
+           ) IS NOT NULL
           """);
     }
     if (status != null) {
       sql.append(" AND t.status = ?");
       args.add(status.name());
     }
-    String pattern = searchPattern(query);
     if (pattern != null) {
       sql.append("""
            AND (
@@ -1382,10 +1395,37 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       }
       sql.append(")");
     }
-    appendScanPageOrder(sql, "t", "finished_at", completion);
+    int limit = safeLimit(maxItems);
+    if (completion == null) {
+      return queryScanPage(sql, args, "t", "finished_at", afterId, limit, null, false, taskMapper);
+    }
+    // Separate ranges keep NULLs last in both directions without sorting the whole history.
+    // The timestamp/ID indexes can be scanned forwards or backwards for each bounded query.
+    // Spring-managed completion-list entry points use one repeatable-read snapshot for both ranges.
+    if (completion.afterId() > 0 && completion.afterTime() == null) {
+      return queryScanPage(new StringBuilder(sql).append(" AND t.finished_at IS NULL"),
+          args, "t", "finished_at", 0, limit, completion, true, taskMapper);
+    }
+    List<ScanTask> rows = new ArrayList<>(queryScanPage(
+        new StringBuilder(sql).append(" AND t.finished_at IS NOT NULL"),
+        args, "t", "finished_at", 0, limit, completion, false, taskMapper));
+    if (rows.size() < limit) {
+      rows.addAll(queryScanPage(new StringBuilder(sql).append(" AND t.finished_at IS NULL"),
+          args, "t", "finished_at", 0, limit - rows.size(),
+          new CompletionOrder(completion.ascending(), 0, null), true, taskMapper));
+    }
+    return rows;
+  }
+
+  private <T> List<T> queryScanPage(
+      StringBuilder sql, List<Object> baseArgs, String alias, String column,
+      long afterId, int limit, CompletionOrder completion, boolean unfinished, RowMapper<T> mapper) {
+    List<Object> args = new ArrayList<>(baseArgs);
+    appendScanPageBoundary(sql, args, alias, column, afterId, completion);
+    appendScanPageOrder(sql, alias, column, completion, unfinished);
     sql.append(" LIMIT ?");
-    args.add(safeLimit(maxItems));
-    return jdbc.query(sql.toString(), taskMapper, args.toArray());
+    args.add(limit);
+    return jdbc.query(sql.toString(), mapper, args.toArray());
   }
 
   // Only internal column names and fixed direction tokens reach SQL. Cursor values are bound.
@@ -1405,10 +1445,12 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
           .append(alias).append(".id").append(comparison);
       args.add(completion.afterId());
     } else {
-      sql.append(" AND (").append(time).append(comparison)
+      sql.append(" AND ").append(time).append(completion.ascending() ? " >= ?" : " <= ?")
+          .append(" AND (").append(time).append(comparison)
           .append(" OR (").append(time).append(" = ? AND ")
           .append(alias).append(".id").append(comparison)
-          .append(") OR ").append(time).append(" IS NULL)");
+          .append("))");
+      args.add(nullableTimestamp(completion.afterTime()));
       args.add(nullableTimestamp(completion.afterTime()));
       args.add(nullableTimestamp(completion.afterTime()));
       args.add(completion.afterId());
@@ -1416,16 +1458,16 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   private static void appendScanPageOrder(
-      StringBuilder sql, String alias, String column, CompletionOrder completion) {
+      StringBuilder sql, String alias, String column, CompletionOrder completion, boolean unfinished) {
     if (completion == null) {
       sql.append(" ORDER BY ").append(alias).append(".id");
       return;
     }
     String time = alias + "." + column;
     String direction = completion.ascending() ? " ASC" : " DESC";
-    sql.append(" ORDER BY CASE WHEN ").append(time).append(" IS NULL THEN 1 ELSE 0 END, ")
-        .append(time).append(direction).append(", ").append(alias).append(".id")
-        .append(direction);
+    sql.append(" ORDER BY ");
+    if (!unfinished) sql.append(time).append(direction).append(", ");
+    sql.append(alias).append(".id").append(direction);
   }
 
   @Override
@@ -2288,24 +2330,25 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         FROM security_scan_run sr
         WHERE 1 = 1
         """);
-    appendScanPageBoundary(sql, args, "sr", "completed_at", afterId, completion);
     if (repositoryId != null) {
       sql.append("""
-           AND EXISTS (
+           AND (
              SELECT 1 FROM security_scan_run_subject s
              WHERE s.scan_run_id = sr.id AND s.repository_id = ?
-           )
+             LIMIT 1
+           ) IS NOT NULL
           """);
       args.add(repositoryId);
     } else if (repositoryIds != null) {
       sql.append("""
-           AND EXISTS (
+           AND (
              SELECT 1
              FROM security_scan_run_subject s
              JOIN visible_repository visible
                ON visible.repository_id = s.repository_id
              WHERE s.scan_run_id = sr.id
-           )
+             LIMIT 1
+           ) IS NOT NULL
           """);
     }
     String pattern = searchPattern(query);
@@ -2349,10 +2392,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       }
       sql.append(")");
     }
-    appendScanPageOrder(sql, "sr", "completed_at", completion);
-    sql.append(" LIMIT ?");
-    args.add(safeLimit(maxItems));
-    return jdbc.query(sql.toString(), runMapper, args.toArray());
+    return queryScanPage(sql, args, "sr", "completed_at", afterId, safeLimit(maxItems),
+        completion, false, runMapper);
   }
 
   @Override

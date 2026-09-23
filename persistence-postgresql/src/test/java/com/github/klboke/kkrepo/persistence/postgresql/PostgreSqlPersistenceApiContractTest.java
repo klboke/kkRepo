@@ -58,7 +58,17 @@ class PostgreSqlPersistenceApiContractTest extends PersistenceApiContract {
     return backend.activateHelmProxyLegacyCacheFence(repositoryId);
   }
 
+  @Override
+  protected void verifySecurityScanCompletionPlans(long repositoryId, long taskId, long runId) {
+    backend.verifyCompletionPlans(repositoryId, taskId, runId);
+  }
+
   private static final class Backend extends PostgreSqlIntegrationTestSupport {
+    private void verifyCompletionPlans(long repositoryId, long taskId, long runId) {
+      com.github.klboke.kkrepo.persistence.jdbc.internal.ScanCompletionQueryPlanAssertions.verify(
+          jdbc(), dialect(), true, repositoryId, taskId, runId);
+    }
+
     private static void start() {
       startPostgreSql();
     }

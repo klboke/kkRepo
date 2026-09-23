@@ -189,6 +189,9 @@ public abstract class PersistenceApiContract {
 
   protected abstract Set<String> databaseTables();
 
+  protected abstract void verifySecurityScanCompletionPlans(
+      long repositoryId, long taskId, long runId);
+
   protected abstract int seedHelmProxyLegacyCacheFence(long repositoryId, long assetId);
 
   protected abstract int activateHelmProxyLegacyCacheFence(long repositoryId);
@@ -3566,6 +3569,10 @@ public abstract class PersistenceApiContract {
       List<Long> expectedTasks = ascending
           ? List.of(tasks.get(1), tasks.get(0), tasks.get(2), tasks.get(3), tasks.get(4))
           : List.of(tasks.get(2), tasks.get(0), tasks.get(1), tasks.get(4), tasks.get(3));
+      assertEquals(expectedTasks.subList(0, 4), scans.listTasks(
+          repositoryId, null, null, 0, 4, new SecurityScanDao.CompletionOrder(ascending, 0, null))
+          .stream().map(SecurityScanDao.ScanTask::id).toList(),
+          "a page spanning completed and unfinished ranges preserves nulls-last ordering");
       List<Long> expectedRuns = ascending
           ? List.of(runs.get(1), runs.get(0), runs.get(2))
           : List.of(runs.get(2), runs.get(0), runs.get(1));
@@ -3608,6 +3615,7 @@ public abstract class PersistenceApiContract {
         repositoryId, TaskStatus.CANCELLED, null, 0, 10,
         new SecurityScanDao.CompletionOrder(false, tasks.get(2), now.plusSeconds(30)))
         .stream().map(SecurityScanDao.ScanTask::id).toList());
+    verifySecurityScanCompletionPlans(repositoryId, tasks.get(0), runs.get(0));
   }
 
   @Test
