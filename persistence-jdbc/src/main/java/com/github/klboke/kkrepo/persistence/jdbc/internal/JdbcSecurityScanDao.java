@@ -1269,7 +1269,17 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       String query,
       long afterId,
       int maxItems) {
-    return listTasks(repositoryId, null, status, query, afterId, maxItems);
+    return listTasks(repositoryId, status, query, afterId, maxItems, null);
+  }
+
+  @Override
+  public List<ScanTask> listTasks(
+      Long repositoryId,
+      TaskStatus status,
+      String query,
+      long afterId,
+      int maxItems, CompletionOrder completion) {
+    return listTasks(repositoryId, null, status, query, afterId, maxItems, completion);
   }
 
   @Override
@@ -1279,9 +1289,19 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       String query,
       long afterId,
       int maxItems) {
+    return listTasksByRepositories(repositoryIds, status, query, afterId, maxItems, null);
+  }
+
+  @Override
+  public List<ScanTask> listTasksByRepositories(
+      List<Long> repositoryIds,
+      TaskStatus status,
+      String query,
+      long afterId,
+      int maxItems, CompletionOrder completion) {
     List<Long> ids = repositoryScope.distinctLongs(repositoryIds);
     if (ids.isEmpty()) return List.of();
-    return listTasks(null, ids, status, query, afterId, maxItems);
+    return listTasks(null, ids, status, query, afterId, maxItems, completion);
   }
 
   private List<ScanTask> listTasks(
@@ -1290,7 +1310,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       TaskStatus status,
       String query,
       long afterId,
-      int maxItems) {
+      int maxItems, CompletionOrder completion) {
     List<Object> args = new ArrayList<>();
     StringBuilder sql = new StringBuilder();
     if (repositoryIds != null) {
@@ -1302,9 +1322,9 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         FROM security_scan_task t
         JOIN repository r ON r.id = t.repository_id
         LEFT JOIN asset a ON a.id = t.asset_id
-        WHERE t.id > ?
+        WHERE 1 = 1
         """);
-    args.add(Math.max(0, afterId));
+    appendScanPageBoundary(sql, args, "t", "finished_at", afterId, completion);
     if (repositoryId != null) {
       sql.append(" AND t.repository_id = ?");
       args.add(repositoryId);
@@ -1362,9 +1382,50 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       }
       sql.append(")");
     }
-    sql.append(" ORDER BY t.id LIMIT ?");
+    appendScanPageOrder(sql, "t", "finished_at", completion);
+    sql.append(" LIMIT ?");
     args.add(safeLimit(maxItems));
     return jdbc.query(sql.toString(), taskMapper, args.toArray());
+  }
+
+  // Only internal column names and fixed direction tokens reach SQL. Cursor values are bound.
+  private static void appendScanPageBoundary(
+      StringBuilder sql, List<Object> args, String alias, String column,
+      long afterId, CompletionOrder completion) {
+    if (completion == null) {
+      sql.append(" AND ").append(alias).append(".id > ?");
+      args.add(Math.max(0, afterId));
+      return;
+    }
+    if (completion.afterId() <= 0) return;
+    String time = alias + "." + column;
+    String comparison = completion.ascending() ? " > ?" : " < ?";
+    if (completion.afterTime() == null) {
+      sql.append(" AND ").append(time).append(" IS NULL AND ")
+          .append(alias).append(".id").append(comparison);
+      args.add(completion.afterId());
+    } else {
+      sql.append(" AND (").append(time).append(comparison)
+          .append(" OR (").append(time).append(" = ? AND ")
+          .append(alias).append(".id").append(comparison)
+          .append(") OR ").append(time).append(" IS NULL)");
+      args.add(nullableTimestamp(completion.afterTime()));
+      args.add(nullableTimestamp(completion.afterTime()));
+      args.add(completion.afterId());
+    }
+  }
+
+  private static void appendScanPageOrder(
+      StringBuilder sql, String alias, String column, CompletionOrder completion) {
+    if (completion == null) {
+      sql.append(" ORDER BY ").append(alias).append(".id");
+      return;
+    }
+    String time = alias + "." + column;
+    String direction = completion.ascending() ? " ASC" : " DESC";
+    sql.append(" ORDER BY CASE WHEN ").append(time).append(" IS NULL THEN 1 ELSE 0 END, ")
+        .append(time).append(direction).append(", ").append(alias).append(".id")
+        .append(direction);
   }
 
   @Override
@@ -2187,15 +2248,27 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Override
   public List<ScanRun> listRuns(
       Long repositoryId, String query, long afterId, int maxItems) {
-    return listRuns(repositoryId, null, query, afterId, maxItems);
+    return listRuns(repositoryId, query, afterId, maxItems, null);
+  }
+
+  @Override
+  public List<ScanRun> listRuns(
+      Long repositoryId, String query, long afterId, int maxItems, CompletionOrder completion) {
+    return listRuns(repositoryId, null, query, afterId, maxItems, completion);
   }
 
   @Override
   public List<ScanRun> listRunsByRepositories(
       List<Long> repositoryIds, String query, long afterId, int maxItems) {
+    return listRunsByRepositories(repositoryIds, query, afterId, maxItems, null);
+  }
+
+  @Override
+  public List<ScanRun> listRunsByRepositories(
+      List<Long> repositoryIds, String query, long afterId, int maxItems, CompletionOrder completion) {
     List<Long> ids = repositoryScope.distinctLongs(repositoryIds);
     if (ids.isEmpty()) return List.of();
-    return listRuns(null, ids, query, afterId, maxItems);
+    return listRuns(null, ids, query, afterId, maxItems, completion);
   }
 
   private List<ScanRun> listRuns(
@@ -2203,7 +2276,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       List<Long> repositoryIds,
       String query,
       long afterId,
-      int maxItems) {
+      int maxItems, CompletionOrder completion) {
     StringBuilder sql = new StringBuilder();
     List<Object> args = new ArrayList<>();
     if (repositoryIds != null) {
@@ -2213,9 +2286,9 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     sql.append("""
         SELECT sr.*
         FROM security_scan_run sr
-        WHERE sr.id > ?
+        WHERE 1 = 1
         """);
-    args.add(Math.max(0, afterId));
+    appendScanPageBoundary(sql, args, "sr", "completed_at", afterId, completion);
     if (repositoryId != null) {
       sql.append("""
            AND EXISTS (
@@ -2276,7 +2349,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       }
       sql.append(")");
     }
-    sql.append(" ORDER BY sr.id LIMIT ?");
+    appendScanPageOrder(sql, "sr", "completed_at", completion);
+    sql.append(" LIMIT ?");
     args.add(safeLimit(maxItems));
     return jdbc.query(sql.toString(), runMapper, args.toArray());
   }

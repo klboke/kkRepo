@@ -283,3 +283,16 @@ The default `auto` mode preserves existing Basic/Bearer behavior. NTLM is explic
 Passwords use the existing encrypted `remotePassword` storage and redacted API responses. Nexus NuGet migration preserves NTLM type/domain/workstation when exported, and existing missing/masked-password checks still require the operator to re-enter unavailable secrets. Authenticated connections are isolated by repository, origin, outbound proxy and credential fingerprint. Each replica builds a disposable local pool from database-backed configuration; credential changes select a new pool, local update/delete evicts the old pool, and idle pools expire after `kkrepo.outbound-proxy.idle-ttl-ms`. Same-origin redirects retain authentication; cross-origin redirects require the usual allowlist and never carry NTLM credentials.
 
 The current Apache HttpClient dependency retains NTLM as a deprecated, opt-in scheme. The transport registers it explicitly for NTLM requests without changing the default authentication registry. Keep the NTLMv2 handshake tests when upgrading HttpClient. Reference comparison: `python3 compat-test/scripts/ntlm-upstream.py --nexus http://localhost:28090 --kkrepo http://localhost:18090` against disposable instances, with `--upstream-host` set to a hostname/IP reachable from both servers. Add `--dotnet` to verify a real .NET 8 restore using isolated package caches. The fixture verifies the NTLMv2 password proof, GET/HEAD results and exact package bytes, and removes its repositories and temporary Nexus SSRF exception.
+
+## Scan activity ordering
+
+Admin → Security Scanning → Tasks / Overview (scan runs) defaults to **Newest first** by the actual completion time. Use the **Finished** (tasks) or **Completed** (runs) selector to switch to **Oldest first**. Tasks also display their finished timestamp. Unfinished tasks appear last in either direction; IDs break timestamp ties in the selected direction. Search and repository visibility are applied before pagination.
+
+The management API supports the same ordering:
+
+- `GET /internal/security/scanning/tasks?sort=finished_at&direction=desc&limit=25` (optionally add `status=FAILED`, `repositoryId`, or `q`).
+- `GET /internal/security/scanning/runs?sort=completed_at&direction=asc&limit=25` (optionally add `repositoryId` or `q`).
+
+Completion sorting defaults to `direction=desc` when direction is omitted. Pass the response's opaque `nextCursor` as `cursor` for the next page, keeping the same sort, direction, and filters; a null cursor means the end. Start a new page sequence after changing filters or ordering. Completion sorting does not use `after`/`nextAfter`. Omitting `sort` (or using `sort=id&direction=asc`) preserves the existing ascending ID API and `after`/`nextAfter` pagination for older clients. Unsupported sort fields, directions, or malformed/mismatched cursors return HTTP 400.
+
+The cursor carries the completion timestamp and ID, so any replica can continue the page without looking up the previous boundary row. Pages reflect live data rather than a frozen snapshot: retries, newly completed tasks, or retention deletions can change the list while browsing. Refresh from the first page for the latest activity.

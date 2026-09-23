@@ -270,3 +270,16 @@ NuGet proxy 仓库支持使用 NTLM 访问要求 Windows 凭据的上游。在�
 密码继续使用加密存储的 `remotePassword`，API 不返回明文。Nexus NuGet 迁移会保留导出的 NTLM 类型、域和工作站；缺失或被掩码遮蔽的密码仍需由管理员重新填写。认证连接按仓库、源站、出站代理和凭据指纹隔离。各副本依据数据库配置独立建立可重建的本地连接池；凭据更新会选择新连接池，本节点更新/删除会清理旧池，空闲池按 `kkrepo.outbound-proxy.idle-ttl-ms` 到期。相同源站的重定向保留认证，跨源站重定向必须通过原有白名单检查且不携带 NTLM 凭据。
 
 当前 Apache HttpClient 依赖保留了已弃用、需显式注册的 NTLM 实现。仅 NTLM 请求启用该实现，升级依赖时必须保留 NTLMv2 握手回归测试。参考对照脚本为 `compat-test/scripts/ntlm-upstream.py`，可分别或同时连接临时 Nexus/kkRepo 实例，校验 NTLMv2 密码证明、包内容和 GET/HEAD 响应，并清理测试仓库及临时 Nexus SSRF 白名单项。指定双方可达的 `--upstream-host`；添加 `--dotnet` 可使用独立包缓存执行真实 .NET 8 restore。
+
+## 扫描活动排序
+
+管理控制台 → Security Scanning → Tasks / Overview（扫描运行记录）默认按实际完成时间显示 **Newest first（最新优先）**。可通过任务的 **Finished** 或运行记录的 **Completed** 选择框切换为 **Oldest first（最早优先）**。任务列表同时显示完成时间。未完成任务在两个方向都排在最后；完成时间相同时按所选方向的 ID 排序。搜索和仓库可见性过滤均在分页前执行。
+
+管理 API 支持相同排序：
+
+- `GET /internal/security/scanning/tasks?sort=finished_at&direction=desc&limit=25`，可附加 `status=FAILED`、`repositoryId` 或 `q`。
+- `GET /internal/security/scanning/runs?sort=completed_at&direction=asc&limit=25`，可附加 `repositoryId` 或 `q`。
+
+选择完成时间排序但省略方向时，默认 `direction=desc`。将响应中的不透明 `nextCursor` 作为下一页的 `cursor`，并保持排序、方向和过滤条件一致；游标为空表示没有下一页。修改排序或过滤条件后应从第一页重新查询。完成时间排序不使用 `after`/`nextAfter`。省略 `sort`（或使用 `sort=id&direction=asc`）时，保留原有 ID 升序和 `after`/`nextAfter` 分页，兼容旧客户端。不支持的字段、方向以及格式错误或与排序不匹配的游标返回 HTTP 400。
+
+游标保存完成时间和 ID，任何服务副本都能继续分页，无需重新查询上一页的边界记录。列表反映实时数据，并非固定快照：任务重试、新完成任务或历史清理可能在浏览期间改变列表。查看最新活动时请从第一页刷新。

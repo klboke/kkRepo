@@ -1547,6 +1547,12 @@
               </label>
               <button class="create-button secondary" type="submit">Search</button>
               <button class="create-button secondary" data-security-scan-clear="runs" type="button">Clear</button>
+              <label class="select-filter"><span>Completed</span>
+                <select data-security-scan-sort-direction="runs">
+                  <option value="desc" selected>Newest first</option>
+                  <option value="asc">Oldest first</option>
+                </select>
+              </label>
             </form>
             <div class="nx-table-frame">
               <table class="nx-table">
@@ -1571,10 +1577,16 @@
               </label>
               <button class="create-button secondary" type="submit">Search</button>
               <button class="create-button secondary" data-security-scan-clear="tasks" type="button">Clear</button>
+              <label class="select-filter"><span>Finished</span>
+                <select data-security-scan-sort-direction="tasks">
+                  <option value="desc" selected>Newest first</option>
+                  <option value="asc">Oldest first</option>
+                </select>
+              </label>
             </form>
             <div class="nx-table-frame">
               <table class="nx-table">
-                <thead><tr><th>ID</th><th>Repository</th><th>Asset</th><th>Stage</th><th>Reason</th><th>Status</th><th>Attempts</th><th>Lease until</th><th>Error</th><th class="actions-column">Actions</th></tr></thead>
+                <thead><tr><th>ID</th><th>Repository</th><th>Asset</th><th>Stage</th><th>Reason</th><th>Status</th><th>Attempts</th><th>Lease until</th><th>Finished</th><th>Error</th><th class="actions-column">Actions</th></tr></thead>
                 <tbody id="security-scan-task-table"></tbody>
               </table>
             </div>
@@ -1959,6 +1971,6 @@
     <script src="./assets/admin-filter.js?v=20260706-wildcard-filter-1"></script>
     <script src="/browse/assets/global-component-search.js?v=20260817-global-search-2"></script>
     <script src="./assets/content-selectors.js?v=20260908-content-selectors-1"></script>
-    <script src="./assets/admin.js?v=20260920-storage-integers-1"></script>
+    <script src="./assets/admin.js?v=20260923-scan-completion-sort-1"></script>
   </body>
 </html>

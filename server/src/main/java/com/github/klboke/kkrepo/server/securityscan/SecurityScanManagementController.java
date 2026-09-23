@@ -74,8 +74,11 @@ public class SecurityScanManagementController {
       @RequestParam(name = "q", required = false) String query,
       @RequestParam(name = "after", defaultValue = "0") long after,
       @RequestParam(name = "limit", defaultValue = "25") int limit,
+      @RequestParam(name = "sort", required = false) String sort,
+      @RequestParam(name = "direction", required = false) String direction,
+      @RequestParam(name = "cursor", required = false) String cursor,
       HttpServletRequest request) {
-    return service.taskPage(actor(request), repositoryId, status, query, after, limit);
+    return service.taskPage(actor(request), repositoryId, status, query, after, limit, sort, direction, cursor);
   }
 
   @GetMapping("/runs")
@@ -84,8 +87,11 @@ public class SecurityScanManagementController {
       @RequestParam(name = "q", required = false) String query,
       @RequestParam(name = "after", defaultValue = "0") long after,
       @RequestParam(name = "limit", defaultValue = "25") int limit,
+      @RequestParam(name = "sort", required = false) String sort,
+      @RequestParam(name = "direction", required = false) String direction,
+      @RequestParam(name = "cursor", required = false) String cursor,
       HttpServletRequest request) {
-    return service.runPage(actor(request), repositoryId, query, after, limit);
+    return service.runPage(actor(request), repositoryId, query, after, limit, sort, direction, cursor);
   }
 
   @GetMapping("/findings")

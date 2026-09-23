@@ -90,6 +90,7 @@ let securityScanPages = Object.fromEntries(
       page: 0,
       size: SECURITY_SCAN_DEFAULT_PAGE_SIZE,
       query: "",
+      direction: "desc",
       nextAfter: null
     }
   ]));
@@ -5426,11 +5427,12 @@ function renderSecurityScanTasks() {
           <td><span class="state-badge compact ${securityScanTone(task.status)}">${escapeHtml(task.status)}</span></td>
           <td>${escapeHtml(`${task.attempts}/${task.maxAttempts}`)}</td>
           <td>${escapeHtml(formatDateTime(task.leaseUntil))}</td>
+          <td>${escapeHtml(formatDateTime(task.finishedAt))}</td>
           <td title="${escapeHtml(task.lastErrorSummary || "")}">${escapeHtml(task.lastErrorCode || "-")}</td>
           <td class="actions-column">${retry}${cancel}${rescan}</td>
         </tr>`;
     }).join("")
-      || '<tr><td colspan="10" class="placeholder">No scan tasks are visible.</td></tr>';
+      || '<tr><td colspan="11" class="placeholder">No scan tasks are visible.</td></tr>';
 }
 
 function renderSecurityScanFindingRepositories(finding) {
@@ -5609,7 +5611,13 @@ function renderSecurityScanWaivers() {
 function securityScanPageParams(key) {
   const page = securityScanPages[key];
   const params = new URLSearchParams();
-  params.set("after", String(page.after || 0));
+  if (key === "tasks" || key === "runs") {
+    params.set("sort", key === "tasks" ? "finished_at" : "completed_at");
+    params.set("direction", page.direction);
+    if (page.after) params.set("cursor", page.after);
+  } else {
+    params.set("after", String(page.after || 0));
+  }
   params.set("limit", String(page.size || SECURITY_SCAN_DEFAULT_PAGE_SIZE));
   if (page.query) params.set("q", page.query);
   return params;
@@ -5678,7 +5686,7 @@ async function loadSecurityScanList(key) {
     return loadSecurityScanList(key);
   }
   securityScanState[key] = items;
-  page.nextAfter = payload?.nextAfter ?? null;
+  page.nextAfter = payload?.nextCursor ?? payload?.nextAfter ?? null;
   renderSecurityScanList(key);
 }
 
@@ -5710,6 +5718,12 @@ async function moveSecurityScanPage(key, direction) {
     page.page -= 1;
     page.after = page.cursors.at(-1) || 0;
   }
+  await loadSecurityScanList(key);
+}
+
+async function sortSecurityScanPage(key, direction) {
+  securityScanPages[key].direction = direction;
+  resetSecurityScanPage(key);
   await loadSecurityScanList(key);
 }
 
@@ -5748,7 +5762,7 @@ async function loadSecurityScanning() {
   keys.forEach((key, index) => {
     const payload = pages[index];
     securityScanState[key] = Array.isArray(payload?.items) ? payload.items : [];
-    securityScanPages[key].nextAfter = payload?.nextAfter ?? null;
+    securityScanPages[key].nextAfter = payload?.nextCursor ?? payload?.nextAfter ?? null;
   });
   renderSecurityScanning();
   const emptyLaterPages = keys.filter(
@@ -8080,6 +8094,11 @@ document.querySelectorAll("[data-security-scan-page-action]").forEach((button) =
     () => moveSecurityScanPage(
       button.dataset.securityScanPageList,
       button.dataset.securityScanPageAction));
+});
+document.querySelectorAll("[data-security-scan-sort-direction]").forEach((select) => {
+  select.addEventListener(
+    "change",
+    () => sortSecurityScanPage(select.dataset.securityScanSortDirection, select.value));
 });
 document.querySelectorAll("[data-security-scan-page-size]").forEach((select) => {
   select.addEventListener(

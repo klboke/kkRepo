@@ -152,6 +152,17 @@ public interface SecurityScanDao {
       long afterId,
       int maxItems);
 
+  /** Completion-time keyset order; null timestamps sort last in either direction. */
+  record CompletionOrder(boolean ascending, long afterId, Instant afterTime) {}
+
+  List<ScanTask> listTasks(
+      Long repositoryId, TaskStatus status, String query, long afterId, int maxItems,
+      CompletionOrder completion);
+
+  List<ScanTask> listTasksByRepositories(
+      List<Long> repositoryIds, TaskStatus status, String query, long afterId, int maxItems,
+      CompletionOrder completion);
+
   /** Claims tasks with row locks and assigns a distinct lease token to every task. */
   List<ScanTask> claimTasks(
       String workerId, Instant now, Instant leaseUntil, int maxItems);
@@ -241,6 +252,13 @@ public interface SecurityScanDao {
 
   List<ScanRun> listRunsByRepositories(
       List<Long> repositoryIds, String query, long afterId, int maxItems);
+
+  List<ScanRun> listRuns(
+      Long repositoryId, String query, long afterId, int maxItems, CompletionOrder completion);
+
+  List<ScanRun> listRunsByRepositories(
+      List<Long> repositoryIds, String query, long afterId, int maxItems,
+      CompletionOrder completion);
 
   void associateRun(
       long scanRunId,

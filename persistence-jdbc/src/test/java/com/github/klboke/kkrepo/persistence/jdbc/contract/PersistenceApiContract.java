@@ -3513,6 +3513,104 @@ public abstract class PersistenceApiContract {
   }
 
   @Test
+  void securityScanningSortsCompletionPagesAcrossTiesNullsAndRepositoryScopes() {
+    SecurityScanDao scans = stores().securityScanning();
+    long repositoryId = createRepository("scan-completion-order", RepositoryFormat.MAVEN2);
+    long hiddenRepositoryId = createRepository("scan-completion-hidden", RepositoryFormat.MAVEN2);
+    long blobStoreId = stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
+    Instant now = Instant.parse("2026-09-23T12:00:00.123Z");
+    long blobId = stores().assets().insertBlob(blob(blobStoreId, "sort/artifact", "sort-artifact"));
+    String path = "sort/artifact.jar";
+    long assetId = stores().assets().insertAsset(new AssetRecord(
+        null, repositoryId, null, blobId, RepositoryFormat.MAVEN2, path,
+        PersistenceHashes.pathHash(path), "artifact.jar", "ARTIFACT",
+        "application/java-archive", 42L, null, now, Map.of()));
+    var profile = scans.createProfile(new SecurityScanDao.ScanProfile(
+        null, "completion-order", true, "syft", "grype", List.of("vuln"), Map.of(),
+        1048576, 1000, 10485760, 1048576, 2, 60, OciPlatformPolicy.REQUIRED_SET,
+        List.of(), "329a".repeat(16), 1, now, now));
+    var snapshot = scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+        null, "contract-adapter", "v1", "grype", "1", "completion-order-db",
+        now, "329b".repeat(16), "329c".repeat(16), now, true, Map.of()));
+    long documentId = stores().assets().insertBlob(blob(blobStoreId, "sort/sbom", "sort-sbom"));
+    var sbom = scans.insertSbomOrFindExisting(new SecurityScanDao.Sbom(
+        null, SubjectKind.ASSET_BLOB, "sha256:" + "329d".repeat(16), null,
+        "syft", "1", "329e".repeat(16), "329f".repeat(16), documentId,
+        "3290".repeat(16), "CycloneDX", "1.6", 1, 0, true, now));
+    List<Long> tasks = new ArrayList<>();
+    List<Long> runs = new ArrayList<>();
+    // IDs deliberately disagree with completion order; two timestamps tie and two tasks are pending.
+    for (int i = 0; i < 6; i++) {
+      long repo = i == 5 ? hiddenRepositoryId : repositoryId;
+      long task = scans.createTask(new SecurityScanDao.TaskDraft(
+          repo, null, SubjectKind.ASSET_BLOB, "sort-subject-" + i, 1, profile.id(), 1,
+          snapshot.id(), ScanStage.CATALOG_AND_MATCH, RequestReason.MANUAL, 0, 5,
+          "contract", null, null, now));
+      tasks.add(task);
+      if (i < 3 || i == 5) {
+        Instant completed = now.plusSeconds(i == 0 || i == 2 ? 30 : 10);
+        assertTrue(scans.cancelTask(task, completed));
+        String fingerprint = String.format("%064x", 32900 + i);
+        var run = scans.insertRunOrFindExisting(new SecurityScanDao.ScanRun(
+            null, task, sbom.id(), snapshot.id(), fingerprint, fingerprint,
+            ScanState.COMPLETE, ScanCompleteness.COMPLETE, documentId, fingerprint,
+            0, 0, 0, 0, 0, 0, 0, Severity.UNKNOWN, now, completed, completed));
+        runs.add(run.id());
+        inTransaction(() -> {
+          scans.associateRun(run.id(), repo, assetId, profile.id(), 1, completed);
+          return null;
+        });
+      }
+    }
+    for (boolean ascending : List.of(true, false)) {
+      List<Long> expectedTasks = ascending
+          ? List.of(tasks.get(1), tasks.get(0), tasks.get(2), tasks.get(3), tasks.get(4))
+          : List.of(tasks.get(2), tasks.get(0), tasks.get(1), tasks.get(4), tasks.get(3));
+      List<Long> expectedRuns = ascending
+          ? List.of(runs.get(1), runs.get(0), runs.get(2))
+          : List.of(runs.get(2), runs.get(0), runs.get(1));
+      for (boolean scoped : List.of(true, false)) {
+        List<Long> actualTasks = new ArrayList<>();
+        var order = new SecurityScanDao.CompletionOrder(ascending, 0, null);
+        for (int page = 0; page < 10; page++) {
+          var rows = scoped
+              ? scans.listTasksByRepositories(List.of(repositoryId), null, "completion-order", 0, 1, order)
+              : scans.listTasks(repositoryId, null, "completion-order", 0, 1, order);
+          if (rows.isEmpty()) break;
+          var row = rows.getFirst();
+          actualTasks.add(row.id());
+          order = new SecurityScanDao.CompletionOrder(ascending, row.id(), row.finishedAt());
+        }
+        assertEquals(expectedTasks, actualTasks);
+        List<Long> actualRuns = new ArrayList<>();
+        order = new SecurityScanDao.CompletionOrder(ascending, 0, null);
+        for (int page = 0; page < 10; page++) {
+          var rows = scoped
+              ? scans.listRunsByRepositories(List.of(repositoryId), "complete", 0, 1, order)
+              : scans.listRuns(repositoryId, "complete", 0, 1, order);
+          if (rows.isEmpty()) break;
+          var row = rows.getFirst();
+          actualRuns.add(row.id());
+          order = new SecurityScanDao.CompletionOrder(ascending, row.id(), row.completedAt());
+        }
+        assertEquals(expectedRuns, actualRuns);
+      }
+    }
+    var newest = new SecurityScanDao.CompletionOrder(false, 0, null);
+    assertEquals(3, scans.listTasks(repositoryId, TaskStatus.CANCELLED, null, 0, 10, newest).size());
+    assertTrue(scans.listTasksByRepositories(List.of(), null, null, 0, 10, newest).isEmpty());
+    assertTrue(scans.listRunsByRepositories(List.of(), null, 0, 10, newest).isEmpty());
+    assertEquals(tasks.subList(0, 5), scans.listTasks(repositoryId, null, 0, 10).stream()
+        .map(SecurityScanDao.ScanTask::id).toList(), "legacy ID pagination stays unchanged");
+    // A retried boundary loses finished_at; the previous cursor still uses its captured timestamp.
+    assertTrue(scans.requeueTask(tasks.get(2), now.plusSeconds(60), "contract"));
+    assertEquals(List.of(tasks.get(0), tasks.get(1)), scans.listTasks(
+        repositoryId, TaskStatus.CANCELLED, null, 0, 10,
+        new SecurityScanDao.CompletionOrder(false, tasks.get(2), now.plusSeconds(30)))
+        .stream().map(SecurityScanDao.ScanTask::id).toList());
+  }
+
+  @Test
   void securityScanningRecoversFinalAttemptsAndCleansUnreferencedHistory() {
     SecurityScanDao scans = stores().securityScanning();
     long repositoryId =
