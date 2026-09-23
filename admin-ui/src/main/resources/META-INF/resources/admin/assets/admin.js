@@ -5563,23 +5563,67 @@ function renderSecurityScanRepositoryStatus(enabled) {
     </span>`;
 }
 
+function renderSecurityScanSetting(label, explanation) {
+  return `<span class="security-scan-setting">${escapeHtml(label)}<span class="field-help" tabindex="0" role="note" aria-label="${escapeHtml(explanation)}" data-tooltip="${escapeHtml(explanation)}"><span class="lucide-icon icon-info" aria-hidden="true"></span></span></span>`;
+}
+
+function renderSecurityScanResultValidity(repository) {
+  const validity = repository.resultValidity;
+  if (!validity) return renderSecurityScanSetting("Unavailable", "Effective result validity is unavailable. Refresh after the server update completes.");
+  const label = formatSecurityScanValidity(validity.maxResultAgeSeconds) || "No expiry";
+  const sources = {
+    POLICY: "Inherited from the active scan policy.",
+    REPOSITORY: "Set by the repository; the active policy adds no expiry limit.",
+    BOTH: "The shorter of the repository and active policy validity periods applies.",
+    NO_EXPIRY: "Neither the repository nor the active policy sets an age limit. This does not mean the artifact is safe or its scan is current."
+  };
+  return renderSecurityScanSetting(label, `${sources[validity.source] || ""} Age is measured from scan completion. Expired results use pending handling; policy or scanner changes can also require reevaluation.`);
+}
+
+function renderSecurityScanExceptionHandling(repository) {
+  const config = repository.config || {};
+  const inactive = config.enabled !== true || securityScanState.summary?.deploymentEnabled === false;
+  const audit = config.enforcementMode !== "ENFORCE";
+  const context = inactive
+    ? "Scanning is disabled for this repository or deployment; these actions are not applied here."
+    : audit
+      ? "AUDIT records decisions without blocking downloads."
+      : "ENFORCE applies these actions to downloads.";
+  const actions = [
+    ["Pending", "pendingAction", "Missing, running, stale, or expired results."],
+    ["Failure", "failureAction", "Failed or cancelled scans, unavailable profiles, or artifacts rejected by scan limits."],
+    ["Partial", "partialAction", "Incomplete scan coverage or missing required platforms. With an enabled policy, Allow continues vulnerability evaluation; it does not guarantee a download is allowed."]
+  ];
+  return `<div class="security-scan-exception-handling">${actions.map(([label, key, explanation]) => {
+    const configured = config[key] === "BLOCK" ? "Block" : "Allow";
+    const policyDisabled = key === "partialAction" && repository.policyEnabled === false;
+    const action = policyDisabled ? "Allow" : configured;
+    const effective = inactive ? `${action} (inactive)` : audit ? `${action} (audit)` : action;
+    const detail = `${label}: ${effective}. Configured action: ${configured}. ${explanation} ${context}${policyDisabled ? " The scan policy is disabled, so partial-result checks are bypassed; pending and failure actions still apply." : ""} Other applicable repository policies may still block a download.`;
+    return renderSecurityScanSetting(`${label}: ${effective}`, detail);
+  }).join("")}</div>`;
+}
+
 function renderSecurityScanRepositories() {
-  document.getElementById("security-scan-repository-table").innerHTML =
+  const table = document.getElementById("security-scan-repository-table");
+  table.innerHTML =
     securityScanState.repositories.map((repository) => {
       const config = repository.config;
+      const policy = repository.policyName || "Built-in critical baseline";
       return `
         <tr>
           <td>${renderSecurityScanRepositoryStatus(config?.enabled === true)}</td>
-          <td>${escapeHtml(repository.name)}</td>
-          <td>${escapeHtml(repository.format)}</td>
-          <td>${escapeHtml(repository.type)}</td>
+          <td>${renderSecurityScanSetting(repository.name, `Format: ${repository.format}. Type: ${repository.type}.`)}</td>
           <td>${escapeHtml(repository.profileName || "Unavailable profile")}</td>
-          <td>${escapeHtml(repository.policyName || "Built-in critical baseline")}</td>
+          <td>${escapeHtml(policy)}${repository.policyEnabled === false ? " (disabled)" : ""}</td>
           <td>${escapeHtml(config?.enforcementMode || "AUDIT")}</td>
+          <td>${renderSecurityScanResultValidity(repository)}</td>
+          <td>${renderSecurityScanExceptionHandling(repository)}</td>
           <td class="actions-column"><button class="row-action security-scan-repository-edit" data-id="${repository.id}" type="button">configure</button></td>
         </tr>`;
     }).join("")
       || '<tr><td colspan="8" class="placeholder">No repositories are visible.</td></tr>';
+  table.querySelectorAll(".field-help").forEach(bindFieldHelpTrigger);
 }
 
 function renderSecurityScanPolicies() {
@@ -7085,21 +7129,23 @@ function scheduleFieldHelpPopoverHide() {
   }, 220);
 }
 
+function bindFieldHelpTrigger(trigger) {
+  trigger.addEventListener("mouseenter", () => showFieldHelpPopover(trigger));
+  trigger.addEventListener("mouseleave", scheduleFieldHelpPopoverHide);
+  trigger.addEventListener("focus", () => showFieldHelpPopover(trigger));
+  trigger.addEventListener("blur", scheduleFieldHelpPopoverHide);
+  trigger.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !document.getElementById("field-help-popover").hidden) {
+      event.preventDefault();
+      event.stopPropagation();
+      hideFieldHelpPopover();
+    }
+  });
+}
+
 function bindFieldHelpTooltips() {
   const popover = document.getElementById("field-help-popover");
-  document.querySelectorAll(".field-help").forEach((trigger) => {
-    trigger.addEventListener("mouseenter", () => showFieldHelpPopover(trigger));
-    trigger.addEventListener("mouseleave", scheduleFieldHelpPopoverHide);
-    trigger.addEventListener("focus", () => showFieldHelpPopover(trigger));
-    trigger.addEventListener("blur", scheduleFieldHelpPopoverHide);
-    trigger.addEventListener("keydown", (event) => {
-      if (event.key === "Escape" && !popover.hidden) {
-        event.preventDefault();
-        event.stopPropagation();
-        hideFieldHelpPopover();
-      }
-    });
-  });
+  document.querySelectorAll(".field-help").forEach(bindFieldHelpTrigger);
   popover.addEventListener("mouseenter", clearFieldHelpHideTimer);
   popover.addEventListener("mouseleave", scheduleFieldHelpPopoverHide);
   document.addEventListener("scroll", () => {

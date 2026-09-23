@@ -458,8 +458,14 @@ target is applicable.
 
 ### Repositories
 
-Repositories shows Enabled/Disabled, format, type, profile, policy, and mode for every visible
-repository. This is the only UI location for repository scan activation.
+Repositories shows Enabled/Disabled, profile, policy, mode, effective result validity, and
+pending/failure/partial handling for every visible repository. Repository format and type are
+available in the repository-name tooltip. Validity is inherited from the active policy when
+unset on the repository; when both set a limit, the shorter period applies. Disabled policies
+add no age limit. Tooltips explain the value source and exception actions, including audit-only
+or inactive settings and the partial-result bypass for disabled policies. Allowing partial
+results still permits vulnerability evaluation. Tooltips open on hover or keyboard focus.
+This is the only UI location for repository scan activation.
 
 ### Policies
 
