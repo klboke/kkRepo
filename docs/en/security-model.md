@@ -286,7 +286,7 @@ The current Apache HttpClient dependency retains NTLM as a deprecated, opt-in sc
 
 ## Scan activity ordering
 
-Admin → Security Scanning → Tasks / Overview (scan runs) defaults to **Newest first** by the actual completion time. Use the **Finished** (tasks) or **Completed** (runs) selector to switch to **Oldest first**. Tasks also display their finished timestamp. Unfinished tasks appear last in either direction; IDs break timestamp ties in the selected direction. Search and repository visibility are applied before pagination.
+Admin → Security Scanning → Tasks / Overview (scan runs) defaults to newest first by the actual completion time. Click the **Finished** (tasks) or **Completed** (runs) column header to toggle ascending/descending order; the arrow shows the current direction, matching the repository list. Tasks also display their finished timestamp. Unfinished tasks appear last in either direction; IDs break timestamp ties in the selected direction. Search and repository visibility are applied before pagination.
 
 The management API supports the same ordering:
 

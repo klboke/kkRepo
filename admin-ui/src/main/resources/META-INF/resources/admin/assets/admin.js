@@ -5788,6 +5788,10 @@ async function moveSecurityScanPage(key, direction) {
 
 async function sortSecurityScanPage(key, direction) {
   securityScanPages[key].direction = direction;
+  updateTableSortHeaders(key, {
+    key: key === "tasks" ? "finished_at" : "completed_at",
+    direction,
+  });
   resetSecurityScanPage(key);
   await loadSecurityScanList(key);
 }
@@ -8163,10 +8167,11 @@ document.querySelectorAll("[data-security-scan-page-action]").forEach((button) =
       button.dataset.securityScanPageList,
       button.dataset.securityScanPageAction));
 });
-document.querySelectorAll("[data-security-scan-sort-direction]").forEach((select) => {
-  select.addEventListener(
-    "change",
-    () => sortSecurityScanPage(select.dataset.securityScanSortDirection, select.value));
+["tasks", "runs"].forEach((key) => {
+  document.querySelectorAll(`[data-${key}-sort]`).forEach((button) => {
+    button.addEventListener("click", () => sortSecurityScanPage(
+      key, securityScanPages[key].direction === "desc" ? "asc" : "desc"));
+  });
 });
 document.querySelectorAll("[data-security-scan-page-size]").forEach((select) => {
   select.addEventListener(

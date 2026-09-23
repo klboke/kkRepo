@@ -7,9 +7,31 @@ const source = readFileSync(join(__dirname, '../../main/resources/META-INF/resou
 
 function setup() {
   const requests = [];
+  const headers = {};
+  for (const [key, field, label] of [['tasks', 'finished_at', 'Finished'], ['runs', 'completed_at', 'Completed']]) {
+    const classes = new Set(['lucide-icon', 'icon-arrow-down']);
+    const attributes = {};
+    const indicator = {classList: {
+      add: value => classes.add(value),
+      toggle: (value, enabled) => enabled ? classes.add(value) : classes.delete(value),
+    }};
+    const header = {
+      dataset: {[`${key}Sort`]: field},
+      classList: {toggle: () => {}},
+      querySelector: selector => selector === '.repo-sort-indicator' ? indicator : {textContent: label},
+      setAttribute: (name, value) => { attributes[name] = value; },
+      closest: () => ({setAttribute: (name, value) => { attributes[name] = value; }}),
+      addEventListener: (event, listener) => { header[event] = listener; },
+      classes, attributes,
+    };
+    headers[key] = header;
+  }
   const context = {
     URLSearchParams,
-    document: {querySelector: () => null},
+    document: {
+      querySelector: () => null,
+      querySelectorAll: selector => [headers[selector === '[data-tasks-sort]' ? 'tasks' : 'runs']],
+    },
     fetchJson: async url => {
       requests.push(new URL(url, 'https://kkrepo.test').searchParams);
       return {items: [{id: 99}], nextCursor: 'opaque-boundary'};
@@ -17,9 +39,12 @@ function setup() {
   };
   vm.createContext(context);
   vm.runInContext(source.slice(source.indexOf('let securityScanState ='), source.indexOf('let securityScanPolicyFormMode'))
-    + source.slice(source.indexOf('function securityScanPageParams('), source.indexOf('function renderSecurityScanning()')), context);
+    + source.slice(source.indexOf('function securityScanPageParams('), source.indexOf('function renderSecurityScanning()'))
+    + source.slice(source.indexOf('function updateTableSortHeaders('), source.indexOf('function filteredBlobStores('))
+    + source.slice(source.indexOf('["tasks", "runs"].forEach((key) => {'),
+      source.indexOf('document.querySelectorAll("[data-security-scan-page-size]")')), context);
   context.renderSecurityScanList = () => {};
-  return {c: context, requests, run: code => vm.runInContext(code, context)};
+  return {c: context, requests, headers, run: code => vm.runInContext(code, context)};
 }
 
 test('task and run requests explicitly default to descending completion time', async () => {
@@ -36,7 +61,7 @@ test('task and run requests explicitly default to descending completion time', a
 });
 
 test('next and previous use opaque cursors and changing order resets pagination', async () => {
-  const {c, requests, run} = setup();
+  const {c, requests, headers, run} = setup();
   await c.loadSecurityScanList('tasks');
   await c.moveSecurityScanPage('tasks', 'next');
   assert.equal(requests.at(-1).get('cursor'), 'opaque-boundary');
@@ -44,11 +69,25 @@ test('next and previous use opaque cursors and changing order resets pagination'
   await c.moveSecurityScanPage('tasks', 'prev');
   assert.equal(requests.at(-1).has('cursor'), false);
   await c.moveSecurityScanPage('tasks', 'next');
-  await c.sortSecurityScanPage('tasks', 'asc');
+  await headers.tasks.click();
   assert.equal(requests.at(-1).get('direction'), 'asc');
   assert.equal(requests.at(-1).has('cursor'), false);
   assert.equal(run('securityScanPages.tasks.page'), 0);
   assert.equal(run('securityScanPages.tasks.cursors.length'), 1);
+});
+
+test('completion header clicks toggle both API order and accessible arrow state', async () => {
+  const {requests, headers} = setup();
+  for (const [key, label] of [['tasks', 'Finished'], ['runs', 'Completed']]) {
+    for (const [direction, ariaDirection, icon] of [['asc', 'ascending', 'up'], ['desc', 'descending', 'down']]) {
+      await headers[key].click();
+      assert.equal(requests.at(-1).get('direction'), direction);
+      assert.equal(headers[key].attributes['aria-sort'], ariaDirection);
+      assert.equal(headers[key].attributes['aria-label'], `${label} sort ${ariaDirection}`);
+      assert.equal(headers[key].classes.has(`icon-arrow-${icon}`), true);
+      assert.equal(headers[key].classes.has(`icon-arrow-${icon === 'up' ? 'down' : 'up'}`), false);
+    }
+  }
 });
 
 test('search and page size changes reset the cursor but retain sort direction', async () => {
