@@ -41,6 +41,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.TaskDraft;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.EnforcementMode;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.OciPlatformPolicy;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyAction;
@@ -77,6 +78,7 @@ class SecurityScanManagementServiceCoreTest {
   private RepositoryDao repositories;
   private AssetDao assets;
   private BrowseNodeDao browseNodes;
+  private DockerRegistryDao docker;
   private SecurityManagementService security;
   private SecurityScanDocumentStore documents;
   private SecurityScanDocumentPersistence documentPersistence;
@@ -93,6 +95,7 @@ class SecurityScanManagementServiceCoreTest {
     repositories = mock(RepositoryDao.class);
     assets = mock(AssetDao.class);
     browseNodes = mock(BrowseNodeDao.class);
+    docker = mock(DockerRegistryDao.class);
     security = mock(SecurityManagementService.class);
     documents = mock(SecurityScanDocumentStore.class);
     documentPersistence = mock(SecurityScanDocumentPersistence.class);
@@ -116,7 +119,7 @@ class SecurityScanManagementServiceCoreTest {
         repositories,
         assets,
         browseNodes,
-        mock(DockerRegistryDao.class),
+        docker,
         security,
         documents,
         documentPersistence,
@@ -337,6 +340,127 @@ class SecurityScanManagementServiceCoreTest {
 
     verify(scans).listTasksByRepositories(List.of(2L), null, null, 0, 11, null);
     verify(scans).requeueTask(eq(77L), any(), eq("admin"));
+  }
+
+  @Test
+  void taskPageResolvesAssetsInBatchesAndPreservesPaginationAndMissingAssets() {
+    ScanTask first = scanTask(7L, 20L);
+    ScanTask deleted = scanTask(8L, 21L);
+    ScanTask withoutAsset = scanTask(9L, null);
+    ScanTask next = scanTask(10L, 20L);
+    String path = "com/acme/demo/1.0/demo-1.0.jar";
+    when(scans.listTasks(1L, null, null, 0, 4, null))
+        .thenReturn(List.of(first, deleted, withoutAsset, next));
+    when(assets.findAssetsByIds(List.of(20L, 21L)))
+        .thenReturn(Map.of(20L, asset(20L, RepositoryFormat.MAVEN2, path, "artifact")));
+    when(browseNodes.findPathsByAssetIds(List.of(20L, 21L)))
+        .thenReturn(Map.of(20L, "projected/" + path));
+
+    var page = service.taskPage(actor, 1L, null, null, 0, 3);
+
+    assertEquals(3, page.items().size());
+    assertEquals(9L, page.nextAfter());
+    var resolved = page.items().getFirst();
+    assertEquals(path, resolved.assetPath());
+    assertEquals("projected/" + path, resolved.browsePath());
+    assertEquals("maven-hosted", resolved.browseRepository());
+    assertEquals(21L, page.items().get(1).assetId());
+    assertNull(page.items().get(1).assetPath());
+    assertNull(page.items().get(1).browseRepository());
+    assertNull(page.items().get(2).assetId());
+    verify(assets).findAssetsByIds(List.of(20L, 21L));
+    verify(assets, never()).findAssetById(anyLong());
+    var completion = new SecurityScanDao.CompletionOrder(false, 0, null);
+    when(first.finishedAt()).thenReturn(Instant.parse("2026-09-23T00:00:00Z"));
+    when(scans.listTasks(1L, null, null, 0, 2, completion)).thenReturn(List.of(first, next));
+    when(assets.findAssetsByIds(List.of(20L)))
+        .thenReturn(Map.of(20L, asset(20L, RepositoryFormat.MAVEN2, path, "artifact")));
+    when(browseNodes.findPathsByAssetIds(List.of(20L))).thenReturn(Map.of(20L, "projected/" + path));
+    var sorted = service.taskPage(actor, 1L, null, null, 0, 1, "finished_at", "desc", null);
+    assertEquals(path, sorted.items().getFirst().assetPath());
+    assertEquals("projected/" + path, sorted.items().getFirst().browsePath());
+    assertEquals("maven-hosted", sorted.items().getFirst().browseRepository());
+    assertNotNull(sorted.nextCursor());
+    assertNull(sorted.nextAfter());
+  }
+
+  @ParameterizedTest
+  @CsvSource({"true,true", "false,true", "true,false", "false,false"})
+  void taskLinksUseVisibleGroupContextWhenSelectedOrSourceIsHidden(
+      boolean selectGroup, boolean sourceVisible) {
+    RepositoryRecord group = repository(2L, "maven-group", RepositoryType.GROUP);
+    when(repositories.list()).thenReturn(List.of(repository, group));
+    when(repositories.findById(2L)).thenReturn(Optional.of(group));
+    when(scope.sourceRepositoryIds(2L)).thenReturn(List.of(1L));
+    if (!sourceVisible) {
+      when(security.decide(eq(actor.permissionSubject()),
+          argThat((RepositoryPermission permission) ->
+              permission.repository().equals(repository.name()))))
+          .thenReturn(AccessDecision.deny("group access only"));
+    }
+    List<Long> visibleIds = selectGroup || !sourceVisible ? List.of(2L) : List.of(2L, 1L);
+    ScanTask scanTask = scanTask(7L, 20L);
+    when(scans.listTasksByRepositories(visibleIds, null, null, 0, 11, null))
+        .thenReturn(List.of(scanTask));
+    when(assets.findAssetsByIds(List.of(20L)))
+        .thenReturn(Map.of(20L, asset(20L, RepositoryFormat.MAVEN2, "demo.jar", "artifact")));
+
+    var task = service.taskPage(actor, selectGroup ? 2L : null, null, null, 0, 10)
+        .items().getFirst();
+
+    assertEquals("maven-hosted", task.repository());
+    assertEquals(selectGroup || !sourceVisible ? "maven-group" : "maven-hosted",
+        task.browseRepository());
+    assertEquals("demo.jar", task.browsePath());
+  }
+
+  @Test
+  void taskPageDoesNotResolveAnAssetFromAnUnrelatedRepository() {
+    ScanTask scanTask = scanTask(7L, 20L);
+    when(scans.listTasks(1L, null, null, 0, 11, null))
+        .thenReturn(List.of(scanTask));
+    AssetRecord unrelated = mock(AssetRecord.class);
+    when(unrelated.repositoryId()).thenReturn(99L);
+    when(assets.findAssetsByIds(List.of(20L))).thenReturn(Map.of(20L, unrelated));
+
+    var task = service.taskPage(actor, 1L, null, null, 0, 10).items().getFirst();
+
+    assertNull(task.assetPath());
+    assertNull(task.browsePath());
+    assertNull(task.browseRepository());
+  }
+
+  @Test
+  void taskPageUsesLiveDockerManifestBrowsePath() {
+    String digest = "sha256:" + "a".repeat(64);
+    String storagePath = "docker/manifests/team/demo/sha256/" + "a".repeat(64);
+    ScanTask scanTask = scanTask(7L, 20L);
+    when(scans.listTasks(1L, null, null, 0, 11, null))
+        .thenReturn(List.of(scanTask));
+    when(assets.findAssetsByIds(List.of(20L)))
+        .thenReturn(Map.of(20L, asset(20L, RepositoryFormat.DOCKER, storagePath, "manifest")));
+    DockerManifestRecord manifest = mock(DockerManifestRecord.class);
+    when(manifest.hasDigestReference()).thenReturn(true);
+    when(manifest.imageName()).thenReturn("team/demo");
+    when(manifest.digest()).thenReturn(digest);
+    when(docker.findManifestsByAssetIds(List.of(20L))).thenReturn(Map.of(20L, manifest));
+
+    var task = service.taskPage(actor, 1L, null, null, 0, 10).items().getFirst();
+
+    assertEquals(storagePath, task.assetPath());
+    assertEquals("team/demo/manifests/" + digest, task.browsePath());
+  }
+
+  private static ScanTask scanTask(long id, Long assetId) {
+    ScanTask task = mock(ScanTask.class);
+    when(task.id()).thenReturn(id);
+    when(task.repositoryId()).thenReturn(1L);
+    when(task.assetId()).thenReturn(assetId);
+    when(task.subjectKind()).thenReturn(SubjectKind.ASSET_BLOB);
+    when(task.stage()).thenReturn(ScanStage.CATALOG_AND_MATCH);
+    when(task.requestReason()).thenReturn(RequestReason.MANUAL);
+    when(task.status()).thenReturn(TaskStatus.PENDING);
+    return task;
   }
 
   @Test

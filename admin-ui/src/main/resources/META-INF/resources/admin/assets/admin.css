@@ -3008,6 +3008,23 @@ code {
   white-space: nowrap;
 }
 
+.security-scan-task-asset {
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  max-width: 360px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.security-scan-task-asset a {
+  color: var(--active);
+}
+
+.security-scan-task-asset small {
+  color: var(--muted);
+}
+
 .security-scan-finding-artifacts-preview {
   display: inline-flex;
   align-items: center;
