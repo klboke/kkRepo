@@ -18,6 +18,8 @@ import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanFinding;
@@ -26,6 +28,8 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanRunSubj
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanWaiver;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerTagRecord;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.Severity;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
@@ -45,6 +49,8 @@ class SecurityScanManagementServiceWaiverTest {
   private SecurityScanDao scans;
   private RepositoryDao repositories;
   private AssetDao assets;
+  private BrowseNodeDao browseNodes;
+  private DockerRegistryDao docker;
   private SecurityManagementService security;
   private SecurityScanDocumentStore documents;
   private SecurityScanningProperties properties;
@@ -58,6 +64,8 @@ class SecurityScanManagementServiceWaiverTest {
     scans = mock(SecurityScanDao.class);
     repositories = mock(RepositoryDao.class);
     assets = mock(AssetDao.class);
+    browseNodes = mock(BrowseNodeDao.class);
+    docker = mock(DockerRegistryDao.class);
     security = mock(SecurityManagementService.class);
     documents = mock(SecurityScanDocumentStore.class);
     properties = mock(SecurityScanningProperties.class);
@@ -66,6 +74,8 @@ class SecurityScanManagementServiceWaiverTest {
         scans,
         repositories,
         assets,
+        browseNodes,
+        docker,
         security,
         documents,
         mock(SecurityScanDocumentPersistence.class),
@@ -176,6 +186,224 @@ class SecurityScanManagementServiceWaiverTest {
     assertEquals(41L, page.nextAfter());
     verify(scans).listFindingsByRepositories(
         List.of(11L), null, null, "demo", 0L, 2);
+  }
+
+  @Test
+  void findingPagePreviewsAffectedArtifactsAcrossSourceAndGroupContexts() {
+    Instant now = Instant.now();
+    RepositoryRecord source = repository(11L, "maven-hosted");
+    RepositoryRecord group = repository(12L, "maven-public", RepositoryType.GROUP);
+    AssetRecord artifact = asset(23L, 11L, "com/acme/demo/1.0/demo-1.0.jar");
+    List<ScanRunSubject> subjects = List.of(
+        new ScanRunSubject(7L, 11L, 23L, 3L, 1L, now),
+        new ScanRunSubject(7L, 12L, 23L, 3L, 1L, now));
+    when(repositories.list()).thenReturn(List.of(source, group));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.allow());
+    when(repositoryScope.sourceRepositoryIds(12L)).thenReturn(List.of(11L));
+    when(scans.listFindingsByRepositories(
+        List.of(11L, 12L), null, null, null, 0L, 2))
+        .thenReturn(List.of(finding(41L, 7L)));
+    when(scans.listRunSubjects(eq(7L), anyLong(), anyLong(), anyInt()))
+        .thenReturn(subjects);
+    when(scans.countCurrentRunSubjects(7L, List.of(11L, 12L))).thenReturn(2L);
+    when(scans.listCurrentRunSubjects(7L, List.of(11L, 12L), 0L, 0L, 3))
+        .thenReturn(subjects);
+    when(assets.findAssetsByIds(List.of(23L, 23L))).thenReturn(Map.of(23L, artifact));
+    when(scans.listWaiversForFindings(
+        any(), any(), any(), any(), anyLong(), anyInt()))
+        .thenReturn(List.of());
+
+    var page = service.findingPage(actor, null, null, null, null, 0L, 1);
+
+    var finding = page.items().getFirst();
+    assertEquals(2L, finding.affectedArtifactCount());
+    assertEquals(2, finding.affectedArtifacts().size());
+    assertEquals("maven-hosted", finding.affectedArtifacts().getFirst().repository());
+    assertEquals("maven-public", finding.affectedArtifacts().get(1).repository());
+    assertEquals("maven-hosted", finding.affectedArtifacts().get(1).sourceRepository());
+    assertEquals(
+        "com/acme/demo/1.0/demo-1.0.jar",
+        finding.affectedArtifacts().get(1).browsePath());
+    verify(scans).countCurrentRunSubjects(7L, List.of(11L, 12L));
+    verify(scans).listCurrentRunSubjects(7L, List.of(11L, 12L), 0L, 0L, 3);
+  }
+
+  @Test
+  void findingArtifactsUseACompoundKeysetCursor() {
+    Instant now = Instant.now();
+    RepositoryRecord repository = repository(11L, "maven-hosted");
+    AssetRecord first = asset(23L, 11L, "com/acme/demo/1.0/demo-1.0.jar");
+    AssetRecord second = asset(24L, 11L, "com/acme/demo/2.0/demo-2.0.jar");
+    ScanRunSubject firstSubject = new ScanRunSubject(7L, 11L, 23L, 3L, 1L, now);
+    ScanRunSubject secondSubject = new ScanRunSubject(7L, 11L, 24L, 3L, 1L, now);
+    when(scans.findFinding(41L)).thenReturn(Optional.of(finding(41L, 7L)));
+    when(scans.listRepositoryIdsForRun(7L)).thenReturn(List.of(11L));
+    when(repositories.list()).thenReturn(List.of(repository));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.allow());
+    when(scans.listCurrentRunSubjects(7L, List.of(11L), 0L, 0L, 2))
+        .thenReturn(List.of(firstSubject, secondSubject));
+    when(scans.listCurrentRunSubjects(7L, List.of(11L), 11L, 23L, 2))
+        .thenReturn(List.of(secondSubject));
+    when(assets.findAssetsByIds(List.of(23L, 24L)))
+        .thenReturn(Map.of(23L, first, 24L, second));
+    when(assets.findAssetsByIds(List.of(24L))).thenReturn(Map.of(24L, second));
+
+    var firstPage = service.findingArtifacts(actor, 41L, 0L, 0L, 1);
+    var secondPage = service.findingArtifacts(
+        actor, 41L, firstPage.nextRepositoryId(), firstPage.nextAssetId(), 1);
+
+    assertEquals(List.of(23L), firstPage.items().stream().map(
+        SecurityScanManagementService.FindingArtifactView::assetId).toList());
+    assertEquals(11L, firstPage.nextRepositoryId());
+    assertEquals(23L, firstPage.nextAssetId());
+    assertEquals(List.of(24L), secondPage.items().stream().map(
+        SecurityScanManagementService.FindingArtifactView::assetId).toList());
+    assertNull(secondPage.nextRepositoryId());
+    assertNull(secondPage.nextAssetId());
+  }
+
+  @Test
+  void findingPageRejectsAnExplicitRepositoryWithoutBrowsePermission() {
+    RepositoryRecord repository = repository(11L, "maven-hosted");
+    when(repositories.list()).thenReturn(List.of(repository));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.deny("browse denied"));
+
+    ResponseStatusException error = assertThrows(
+        ResponseStatusException.class,
+        () -> service.findingPage(actor, 11L, null, null, null, 0L, 1));
+
+    assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode());
+  }
+
+  @Test
+  void findingArtifactsHideFindingsWithoutAVisibleRepository() {
+    RepositoryRecord repository = repository(11L, "maven-hosted");
+    when(scans.findFinding(41L)).thenReturn(Optional.of(finding(41L, 7L)));
+    when(scans.listRepositoryIdsForRun(7L)).thenReturn(List.of(11L));
+    when(repositories.list()).thenReturn(List.of(repository));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.deny("browse denied"));
+
+    ResponseStatusException error = assertThrows(
+        ResponseStatusException.class,
+        () -> service.findingArtifacts(actor, 41L, 0L, 0L, 10));
+
+    assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode());
+  }
+
+  @Test
+  void findingArtifactsUseProjectedConfiguredAndFormatSpecificBrowsePaths() {
+    Instant now = Instant.now();
+    RepositoryRecord maven = repository(
+        11L, "maven-hosted", RepositoryFormat.MAVEN2, RepositoryType.HOSTED);
+    RepositoryRecord pypi = repository(
+        12L, "pypi-hosted", RepositoryFormat.PYPI, RepositoryType.HOSTED);
+    RepositoryRecord apt = repository(
+        13L, "apt-hosted", RepositoryFormat.APT, RepositoryType.HOSTED);
+    AssetRecord configured = asset(
+        23L,
+        11L,
+        RepositoryFormat.MAVEN2,
+        "storage/internal/demo-1.0.jar",
+        Map.of("browsePath", "com/acme/demo/1.0/demo-1.0.jar"));
+    AssetRecord python = asset(
+        24L,
+        12L,
+        RepositoryFormat.PYPI,
+        "packages/ab/cd/demo-1.0-py3-none-any.whl",
+        Map.of());
+    AssetRecord debian = asset(
+        25L,
+        13L,
+        RepositoryFormat.APT,
+        "pool/main/d/demo/demo_1.0_amd64.deb",
+        Map.of());
+    List<ScanRunSubject> subjects = List.of(
+        new ScanRunSubject(7L, 11L, 23L, 3L, 1L, now),
+        new ScanRunSubject(7L, 12L, 24L, 3L, 1L, now),
+        new ScanRunSubject(7L, 13L, 25L, 3L, 1L, now));
+    when(scans.findFinding(41L)).thenReturn(Optional.of(finding(41L, 7L)));
+    when(scans.listRepositoryIdsForRun(7L)).thenReturn(List.of(11L, 12L, 13L));
+    when(repositories.list()).thenReturn(List.of(maven, pypi, apt));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.allow());
+    when(scans.listCurrentRunSubjects(
+        7L, List.of(11L, 12L, 13L), 0L, 0L, 11)).thenReturn(subjects);
+    when(assets.findAssetsByIds(List.of(23L, 24L, 25L)))
+        .thenReturn(Map.of(23L, configured, 24L, python, 25L, debian));
+    when(browseNodes.findPathsByAssetIds(List.of(23L, 24L, 25L))).thenReturn(Map.of(
+        25L, "bookworm/main/demo/1.0/amd64/demo_1.0_amd64.deb"));
+
+    var page = service.findingArtifacts(actor, 41L, 0L, 0L, 10);
+
+    assertEquals(
+        List.of(
+            "com/acme/demo/1.0/demo-1.0.jar",
+            "ab/cd/demo-1.0-py3-none-any.whl",
+            "bookworm/main/demo/1.0/amd64/demo_1.0_amd64.deb"),
+        page.items().stream().map(
+            SecurityScanManagementService.FindingArtifactView::browsePath).toList());
+  }
+
+  @Test
+  void findingArtifactsUseLiveDockerManifestReferencesAsBrowsePaths() {
+    Instant now = Instant.now();
+    RepositoryRecord repository = repository(
+        14L, "docker-hosted", RepositoryFormat.DOCKER, RepositoryType.HOSTED);
+    String digest = "sha256:" + "a".repeat(64);
+    String taggedDigest = "sha256:" + "b".repeat(64);
+    AssetRecord digestAsset = asset(
+        26L,
+        repository.id(),
+        RepositoryFormat.DOCKER,
+        "docker/manifests/team/demo/sha256/" + "a".repeat(64),
+        Map.of());
+    AssetRecord taggedAsset = asset(
+        27L,
+        repository.id(),
+        RepositoryFormat.DOCKER,
+        "docker/manifests/team/demo/sha256/" + "b".repeat(64),
+        Map.of());
+    DockerManifestRecord digestManifest = new DockerManifestRecord(
+        91L, repository.id(), "team/demo", new byte[0], "sha256", digest,
+        new byte[0], "application/vnd.oci.image.manifest.v1+json", null, null, null,
+        digestAsset.id(), digestAsset.size(), null, null, null, Map.of(), now, now);
+    DockerManifestRecord taggedManifest = new DockerManifestRecord(
+        92L, repository.id(), "team/demo", new byte[0], "sha256", taggedDigest,
+        new byte[0], "application/vnd.oci.image.manifest.v1+json", null, null, null,
+        taggedAsset.id(), taggedAsset.size(), null, null, null,
+        Map.of(DockerManifestRecord.DIGEST_REFERENCE_DELETED, true), now, now);
+    DockerTagRecord tag = new DockerTagRecord(
+        93L, repository.id(), "team/demo", new byte[0], "stable", new byte[0],
+        taggedManifest.id(), taggedDigest, null, null, now, now);
+    List<ScanRunSubject> subjects = List.of(
+        new ScanRunSubject(7L, repository.id(), digestAsset.id(), 3L, 1L, now),
+        new ScanRunSubject(7L, repository.id(), taggedAsset.id(), 3L, 1L, now));
+    when(scans.findFinding(41L)).thenReturn(Optional.of(finding(41L, 7L)));
+    when(scans.listRepositoryIdsForRun(7L)).thenReturn(List.of(repository.id()));
+    when(repositories.list()).thenReturn(List.of(repository));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.allow());
+    when(scans.listCurrentRunSubjects(
+        7L, List.of(repository.id()), 0L, 0L, 11)).thenReturn(subjects);
+    when(assets.findAssetsByIds(List.of(digestAsset.id(), taggedAsset.id())))
+        .thenReturn(Map.of(digestAsset.id(), digestAsset, taggedAsset.id(), taggedAsset));
+    when(docker.findManifestsByAssetIds(List.of(digestAsset.id(), taggedAsset.id())))
+        .thenReturn(Map.of(
+            digestAsset.id(), digestManifest,
+            taggedAsset.id(), taggedManifest));
+    when(docker.listTagsForManifests(List.of(taggedManifest.id())))
+        .thenReturn(Map.of(taggedManifest.id(), List.of(tag)));
+
+    var page = service.findingArtifacts(actor, 41L, 0L, 0L, 10);
+
+    assertEquals(
+        List.of("team/demo/manifests/" + digest, "team/demo/manifests/stable"),
+        page.items().stream().map(
+            SecurityScanManagementService.FindingArtifactView::browsePath).toList());
   }
 
   @Test
@@ -960,10 +1188,15 @@ class SecurityScanManagementServiceWaiverTest {
 
   private static RepositoryRecord repository(
       long id, String name, RepositoryType type) {
+    return repository(id, name, RepositoryFormat.MAVEN2, type);
+  }
+
+  private static RepositoryRecord repository(
+      long id, String name, RepositoryFormat format, RepositoryType type) {
     return new RepositoryRecord(
         id,
         name,
-        RepositoryFormat.MAVEN2,
+        format,
         type,
         type == RepositoryType.GROUP ? "maven2-group" : "maven2-hosted",
         true,
@@ -978,12 +1211,21 @@ class SecurityScanManagementServiceWaiverTest {
   }
 
   private static AssetRecord asset(long id, long repositoryId, String path) {
+    return asset(id, repositoryId, RepositoryFormat.MAVEN2, path, Map.of());
+  }
+
+  private static AssetRecord asset(
+      long id,
+      long repositoryId,
+      RepositoryFormat format,
+      String path,
+      Map<String, Object> attributes) {
     return new AssetRecord(
         id,
         repositoryId,
         null,
         1L,
-        RepositoryFormat.MAVEN2,
+        format,
         path,
         null,
         "demo-1.0.jar",
@@ -992,7 +1234,7 @@ class SecurityScanManagementServiceWaiverTest {
         1024L,
         null,
         Instant.now(),
-        Map.of());
+        attributes);
   }
 
   private static ScanWaiver waiver(

@@ -22,6 +22,8 @@ import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
@@ -73,6 +75,7 @@ class SecurityScanManagementServiceCoreTest {
   private SecurityScanDao scans;
   private RepositoryDao repositories;
   private AssetDao assets;
+  private BrowseNodeDao browseNodes;
   private SecurityManagementService security;
   private SecurityScanDocumentStore documents;
   private SecurityScanDocumentPersistence documentPersistence;
@@ -88,6 +91,7 @@ class SecurityScanManagementServiceCoreTest {
     scans = mock(SecurityScanDao.class);
     repositories = mock(RepositoryDao.class);
     assets = mock(AssetDao.class);
+    browseNodes = mock(BrowseNodeDao.class);
     security = mock(SecurityManagementService.class);
     documents = mock(SecurityScanDocumentStore.class);
     documentPersistence = mock(SecurityScanDocumentPersistence.class);
@@ -110,6 +114,8 @@ class SecurityScanManagementServiceCoreTest {
         scans,
         repositories,
         assets,
+        browseNodes,
+        mock(DockerRegistryDao.class),
         security,
         documents,
         documentPersistence,

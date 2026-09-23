@@ -544,6 +544,34 @@ class BrowseContentDeleteControllerTest {
   }
 
   @Test
+  void helmGroupDeletionAcceptsATransitiveSourceRepository() {
+    Fixture fixture = fixture(true, AccessDecision.allow());
+    RepositoryRecord hosted =
+        repository(1L, "helm-hosted", RepositoryFormat.HELM, RepositoryType.HOSTED);
+    RepositoryRecord nested =
+        repository(2L, "helm-nested", RepositoryFormat.HELM, RepositoryType.GROUP);
+    RepositoryRecord group =
+        repository(3L, "helm-group", RepositoryFormat.HELM, RepositoryType.GROUP);
+    String path = "demo-1.0.0.tgz";
+    AssetRecord chart = asset(
+        11L, 21L, 31L, RepositoryFormat.HELM, path, "chart", Map.of());
+    when(fixture.repositoryDao.findByName(group.name())).thenReturn(Optional.of(group));
+    when(fixture.repositoryDao.findByName(hosted.name())).thenReturn(Optional.of(hosted));
+    when(fixture.repositoryDao.listMembers(group.id())).thenReturn(List.of(nested));
+    when(fixture.repositoryDao.listMembers(nested.id())).thenReturn(List.of(hosted, group));
+    when(fixture.assetDao.findAssetByPath(hosted.id(), path)).thenReturn(Optional.of(chart));
+    when(fixture.assetDao.listAssetsByPrefix(hosted.id(), path + "/"))
+        .thenReturn(List.of());
+
+    BrowseContentDeleteController.BrowseDeleteResult result = fixture.controller.delete(
+        group.name(), path, hosted.name(), new MockHttpServletRequest());
+
+    assertEquals(hosted.name(), result.sourceRepository());
+    assertEquals(1, result.deletedAssets());
+    verify(fixture.assetDao).deleteAssetById(chart.id());
+  }
+
+  @Test
   void deletesMavenAssetChecksumSiblingAndEnqueuesMetadataRebuilds() {
     Fixture fixture = fixture(true, AccessDecision.allow());
     RepositoryRecord repository =

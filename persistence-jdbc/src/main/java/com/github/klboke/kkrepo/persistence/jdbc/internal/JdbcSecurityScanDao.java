@@ -2349,6 +2349,138 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   @Override
+  public List<ScanRunSubject> listCurrentRunSubjects(
+      long scanRunId, long afterRepositoryId, long afterAssetId, int maxItems) {
+    return jdbc.query("""
+        SELECT
+          subject.scan_run_id,
+          subject.repository_id,
+          subject.asset_id,
+          MIN(subject.profile_id) AS profile_id,
+          MIN(subject.content_generation) AS content_generation,
+          MIN(subject.associated_at) AS associated_at
+        FROM security_scan_run_subject subject
+        JOIN security_scan_candidate candidate
+          ON candidate.asset_id = subject.asset_id
+         AND candidate.content_generation = subject.content_generation
+        JOIN asset live_asset
+          ON live_asset.id = subject.asset_id
+         AND live_asset.asset_blob_id = candidate.asset_blob_id
+        WHERE subject.scan_run_id = ?
+          AND (
+            subject.repository_id > ?
+            OR (subject.repository_id = ? AND subject.asset_id > ?)
+          )
+        GROUP BY subject.scan_run_id, subject.repository_id, subject.asset_id
+        ORDER BY subject.repository_id, subject.asset_id
+        LIMIT ?
+        """,
+        (rs, rowNum) -> new ScanRunSubject(
+            rs.getLong("scan_run_id"),
+            rs.getLong("repository_id"),
+            rs.getLong("asset_id"),
+            rs.getLong("profile_id"),
+            rs.getLong("content_generation"),
+            nullableInstant(rs, "associated_at")),
+        scanRunId,
+        Math.max(0, afterRepositoryId),
+        Math.max(0, afterRepositoryId),
+        Math.max(0, afterAssetId),
+        safeLimit(maxItems));
+  }
+
+  @Override
+  public List<ScanRunSubject> listCurrentRunSubjects(
+      long scanRunId,
+      List<Long> repositoryIds,
+      long afterRepositoryId,
+      long afterAssetId,
+      int maxItems) {
+    List<Long> ids = repositoryScope.distinctLongs(repositoryIds);
+    if (ids.isEmpty()) return List.of();
+    return jdbc.query(currentRunSubjectScopeCte() + """
+        SELECT
+          subject.scan_run_id,
+          subject.repository_id,
+          subject.asset_id,
+          MIN(subject.profile_id) AS profile_id,
+          MIN(subject.content_generation) AS content_generation,
+          MIN(subject.associated_at) AS associated_at
+        FROM security_scan_run_subject subject
+        JOIN security_scan_candidate candidate
+          ON candidate.asset_id = subject.asset_id
+         AND candidate.content_generation = subject.content_generation
+        JOIN asset live_asset
+          ON live_asset.id = subject.asset_id
+         AND live_asset.asset_blob_id = candidate.asset_blob_id
+        JOIN visible_context_source scope
+          ON scope.context_repository_id = subject.repository_id
+         AND scope.source_repository_id = live_asset.repository_id
+        WHERE subject.scan_run_id = ?
+          AND (
+            subject.repository_id > ?
+            OR (subject.repository_id = ? AND subject.asset_id > ?)
+          )
+        GROUP BY subject.scan_run_id, subject.repository_id, subject.asset_id
+        ORDER BY subject.repository_id, subject.asset_id
+        LIMIT ?
+        """,
+        (rs, rowNum) -> new ScanRunSubject(
+            rs.getLong("scan_run_id"),
+            rs.getLong("repository_id"),
+            rs.getLong("asset_id"),
+            rs.getLong("profile_id"),
+            rs.getLong("content_generation"),
+            nullableInstant(rs, "associated_at")),
+        repositoryScope.parameter(ids),
+        scanRunId,
+        Math.max(0, afterRepositoryId),
+        Math.max(0, afterRepositoryId),
+        Math.max(0, afterAssetId),
+        safeLimit(maxItems));
+  }
+
+  @Override
+  public long countCurrentRunSubjects(long scanRunId, List<Long> repositoryIds) {
+    List<Long> ids = repositoryScope.distinctLongs(repositoryIds);
+    if (ids.isEmpty()) return 0;
+    Long count = jdbc.queryForObject(currentRunSubjectScopeCte() + """
+        SELECT COUNT(*)
+        FROM (
+          SELECT subject.repository_id, subject.asset_id
+          FROM security_scan_run_subject subject
+          JOIN security_scan_candidate candidate
+            ON candidate.asset_id = subject.asset_id
+           AND candidate.content_generation = subject.content_generation
+          JOIN asset live_asset
+            ON live_asset.id = subject.asset_id
+           AND live_asset.asset_blob_id = candidate.asset_blob_id
+          JOIN visible_context_source scope
+            ON scope.context_repository_id = subject.repository_id
+           AND scope.source_repository_id = live_asset.repository_id
+          WHERE subject.scan_run_id = ?
+          GROUP BY subject.repository_id, subject.asset_id
+        ) current_subject
+        """, Long.class, repositoryScope.parameter(ids), scanRunId);
+    return count == null ? 0 : count;
+  }
+
+  private String currentRunSubjectScopeCte() {
+    return repositoryScope.recursiveRepositoryScopeCte() + """
+        ,
+        visible_context_source(context_repository_id, source_repository_id) AS (
+          SELECT repository_id, repository_id
+          FROM visible_repository
+          UNION
+          SELECT context.context_repository_id, member.member_repository_id
+          FROM visible_context_source context
+          JOIN repository_member member
+            ON member.repository_id = context.source_repository_id
+        )
+        """;
+  }
+
+  @Override
   public boolean runSubjectExists(long scanRunId, long repositoryId, long assetId) {
     List<Integer> matches = jdbc.query("""
         SELECT 1

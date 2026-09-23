@@ -158,6 +158,26 @@ test("uses the selected repository format in the search page title", () => {
   assert.equal(helpers.searchPageTitle("docker"), "Search Docker / OCI");
 });
 
+test("keeps an exact group source in repository browse deep links", () => {
+  const helpers = loadBrowseSearchHelpers();
+
+  assert.equal(
+    helpers.repositoryBrowseHash(
+      "maven-public",
+      "com/acme/demo/1.0/demo-1.0.jar",
+      "maven-hosted",
+    ),
+    "#browse/browse:maven-public?path=com%2Facme%2Fdemo%2F1.0%2Fdemo-1.0.jar&source=maven-hosted",
+  );
+
+  helpers.window.location.hash =
+    "#browse/browse:maven-public?path=com%2Facme%2Fdemo%2F1.0%2Fdemo-1.0.jar&source=maven-hosted";
+  const route = helpers.parseBrowseHash();
+  assert.equal(route.repo, "maven-public");
+  assert.equal(route.path, "com/acme/demo/1.0/demo-1.0.jar");
+  assert.equal(route.source, "maven-hosted");
+});
+
 test("opens a Hugging Face search result at its immutable revision path", () => {
   const helpers = loadBrowseSearchHelpers();
   const commit = "f2efe525625e508121ef8e13b7c37e6324073378";

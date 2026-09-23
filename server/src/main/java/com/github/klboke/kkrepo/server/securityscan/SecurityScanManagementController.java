@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.AssetDetail;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.ConfigCommand;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.CursorPage;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.FindingArtifactPage;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.FindingView;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.FindingWaiverContext;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.FindingWaiverDetail;
@@ -98,6 +99,17 @@ public class SecurityScanManagementController {
       HttpServletRequest request) {
     return service.findingPage(
         actor(request), repositoryId, runId, severity, query, after, limit);
+  }
+
+  @GetMapping("/findings/{findingId}/artifacts")
+  public FindingArtifactPage findingArtifacts(
+      @PathVariable("findingId") long findingId,
+      @RequestParam(name = "afterRepositoryId", defaultValue = "0") long afterRepositoryId,
+      @RequestParam(name = "afterAssetId", defaultValue = "0") long afterAssetId,
+      @RequestParam(name = "limit", defaultValue = "25") int limit,
+      HttpServletRequest request) {
+    return service.findingArtifacts(
+        actor(request), findingId, afterRepositoryId, afterAssetId, limit);
   }
 
   @GetMapping("/findings/{findingId}/waiver-context")

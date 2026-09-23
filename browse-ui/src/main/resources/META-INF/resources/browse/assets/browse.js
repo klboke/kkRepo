@@ -5,8 +5,8 @@
 
 installCsrfFetch();
 
-const state = { mode: "repos", repo: null, path: "" };
-const treeCache = new Map(); // key = `${repo}::${path}`, value = entries[]
+const state = { mode: "repos", repo: null, path: "", source: "" };
+const treeCache = new Map(); // key = `${repo}::${source}::${path}`, value = entries[]
 const expanded = new Set();   // keys (same shape as treeCache) currently expanded
 const treeMountLoads = new WeakMap();
 const treeNodeEntries = new WeakMap();
@@ -194,11 +194,15 @@ function searchHash(format, keyword = "", customFormat = DEFAULT_SEARCH_FORMAT) 
   return query ? `${base}?${query}` : base;
 }
 
-function repositoryBrowseHash(repoName, path = "") {
+function repositoryBrowseHash(repoName, path = "", sourceRepository = "") {
   const hash = `#${BROWSE_HASH}:${encodeURIComponent(repoName)}`;
-  if (!path) return hash;
-  const params = new URLSearchParams({ path });
-  return `${hash}?${params.toString()}`;
+  const params = new URLSearchParams();
+  if (path) params.set("path", path);
+  if (sourceRepository && sourceRepository !== repoName) {
+    params.set("source", sourceRepository);
+  }
+  const query = params.toString();
+  return query ? `${hash}?${query}` : hash;
 }
 
 function componentBrowsePath(component) {
@@ -293,11 +297,13 @@ function parseBrowseHash() {
   const encodedRepo = separator === -1 ? routeValue : routeValue.slice(0, separator);
   const query = separator === -1 ? "" : routeValue.slice(separator + 1);
   if (!encodedRepo) return { view: "browse", repo: null };
-  const path = new URLSearchParams(query).get("path") || "";
+  const params = new URLSearchParams(query);
+  const path = params.get("path") || "";
+  const source = params.get("source") || "";
   try {
-    return { view: "browse", repo: decodeURIComponent(encodedRepo), path };
+    return { view: "browse", repo: decodeURIComponent(encodedRepo), path, source };
   } catch {
-    return { view: "browse", repo: encodedRepo, path };
+    return { view: "browse", repo: encodedRepo, path, source };
   }
 }
 
@@ -736,9 +742,14 @@ async function fetchUploadSpecs() {
 }
 
 async function fetchChildren(repo, path) {
-  const key = `${repo}::${path}`;
+  const source = state.repo === repo ? state.source : "";
+  const key = `${repo}::${source}::${path}`;
   if (treeCache.has(key)) return treeCache.get(key);
-  const url = `/internal/browse/${encodeURIComponent(repo)}${path ? `?path=${encodeURIComponent(path)}` : ""}`;
+  const params = new URLSearchParams();
+  if (path) params.set("path", path);
+  if (source) params.set("source", source);
+  const query = params.toString();
+  const url = `/internal/browse/${encodeURIComponent(repo)}${query ? `?${query}` : ""}`;
   const res = await fetch(url, { headers: { Accept: "application/json" } });
   if (!res.ok) throw new Error(`Browse failed: ${res.status}`);
   const data = await res.json();
@@ -988,21 +999,23 @@ function showRepositoryList(syncHash = true) {
   state.mode = "repos";
   state.repo = null;
   state.path = "";
+  state.source = "";
   expanded.clear();
   restoreBrowseListLayout();
   renderRepoList();
 }
 
-function showRepositoryTree(repoName, syncHash = true, path = "") {
+function showRepositoryTree(repoName, syncHash = true, path = "", sourceRepository = "") {
   if (!repoName) {
     showRepositoryList(syncHash);
     return;
   }
-  if (syncHash) pushBrowseRoute(repositoryBrowseHash(repoName, path));
+  if (syncHash) pushBrowseRoute(repositoryBrowseHash(repoName, path, sourceRepository));
   switchView("browse");
   state.mode = "tree";
   state.repo = repoName;
   state.path = path || "";
+  state.source = sourceRepository || "";
   expanded.clear();
   treeCache.clear();
   renderTree();
@@ -1588,7 +1601,7 @@ function selectRow(row) {
 function syncTreePath(entry) {
   if (!state.repo || !entry || !entry.path) return;
   state.path = entry.path;
-  const target = `/browse/${repositoryBrowseHash(state.repo, entry.path)}`;
+  const target = `/browse/${repositoryBrowseHash(state.repo, entry.path, state.source)}`;
   const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
   if (current !== target) {
     window.history.replaceState(null, "", target);
@@ -4408,7 +4421,9 @@ function applyHashRoute() {
     return true;
   }
   switchView("browse");
-  if (route.repo && repositoryExists(route.repo)) showRepositoryTree(route.repo, false, route.path || "");
+  if (route.repo && repositoryExists(route.repo)) {
+    showRepositoryTree(route.repo, false, route.path || "", route.source || "");
+  }
   else showRepositoryList(false);
   canonicalizeBrowseRoute();
   return true;

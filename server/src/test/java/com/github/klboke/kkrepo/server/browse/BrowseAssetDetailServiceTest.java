@@ -149,6 +149,38 @@ class BrowseAssetDetailServiceTest {
   }
 
   @Test
+  void helmGroupDetailAcceptsATransitiveSourceRepository() {
+    RepositoryRecord group = repository(
+        90L, "helm-group", RepositoryFormat.HELM, RepositoryType.GROUP);
+    RepositoryRecord nested = repository(
+        91L, "helm-nested", RepositoryFormat.HELM, RepositoryType.GROUP);
+    RepositoryRecord hosted = repository(
+        92L, "helm-hosted", RepositoryFormat.HELM, RepositoryType.HOSTED);
+    String path = "demo-1.0.0.tgz";
+    AssetRecord chart = new AssetRecord(
+        93L, hosted.id(), 94L, 95L, RepositoryFormat.HELM,
+        path, PersistenceHashes.pathHash(path), path,
+        "chart", "application/gzip", 512L, null, Instant.EPOCH, Map.of());
+    StubAssetDao assets = new StubAssetDao(
+        Map.of(key(hosted.id(), path), chart), Map.of(95L, blob(95L, 512L)));
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    when(repositories.listMembers(group.id())).thenReturn(List.of(nested));
+    when(repositories.listMembers(nested.id())).thenReturn(List.of(hosted, group));
+    BrowseAssetDetailService service = new BrowseAssetDetailService(
+        repositories,
+        assets,
+        new StubBlobStorageRegistry(new StubBlobStorage(new byte[0])),
+        new ObjectMapper());
+
+    BrowseAssetDetailService.BrowseAssetDetail detail =
+        service.detail(group, path, hosted.name());
+
+    assertEquals(group.name(), detail.repository());
+    assertEquals(hosted.name(), detail.sourceRepository());
+    assertEquals(path, detail.path());
+  }
+
+  @Test
   void rDetailFailsClosedForMissingOrConflictingRegistryState() {
     RepositoryRecord repository = repository(
         84L, "cran-hosted", RepositoryFormat.R, RepositoryType.HOSTED);

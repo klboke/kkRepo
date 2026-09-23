@@ -4,6 +4,8 @@ import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.AssetSecurityState;
@@ -22,6 +24,8 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.TaskDraft;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerTagRecord;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.EnforcementMode;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.PolicyAction;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.RequestReason;
@@ -60,10 +64,13 @@ public class SecurityScanManagementService {
   private static final int MAX_POLICY_NAME_LENGTH = 128;
   private static final int REPOSITORY_SEARCH_BATCH_SIZE = 256;
   private static final int WAIVER_MATCH_PAGE_SIZE = 256;
+  private static final int FINDING_ARTIFACT_PREVIEW_LIMIT = 3;
 
   private final SecurityScanDao scans;
   private final RepositoryDao repositories;
   private final AssetDao assets;
+  private final BrowseNodeDao browseNodes;
+  private final DockerRegistryDao docker;
   private final SecurityManagementService security;
   private final SecurityScanDocumentStore documents;
   private final SecurityScanDocumentPersistence documentPersistence;
@@ -75,6 +82,8 @@ public class SecurityScanManagementService {
       SecurityScanDao scans,
       RepositoryDao repositories,
       AssetDao assets,
+      BrowseNodeDao browseNodes,
+      DockerRegistryDao docker,
       SecurityManagementService security,
       SecurityScanDocumentStore documents,
       SecurityScanDocumentPersistence documentPersistence,
@@ -83,6 +92,8 @@ public class SecurityScanManagementService {
     this.scans = scans;
     this.repositories = repositories;
     this.assets = assets;
+    this.browseNodes = browseNodes;
+    this.docker = docker;
     this.security = security;
     this.documents = documents;
     this.documentPersistence = documentPersistence;
@@ -279,19 +290,30 @@ public class SecurityScanManagementService {
       long afterId,
       int requestedLimit) {
     if (runId != null) requireVisibleRun(actor, runId);
+    List<RepositoryRecord> repositoryRows = repositories.list();
+    Map<Long, RepositoryRecord> repositoriesById = new LinkedHashMap<>();
+    Map<Long, String> visibleRepositoryNames = new LinkedHashMap<>();
+    for (RepositoryRecord repository : repositoryRows) {
+      repositoriesById.put(repository.id(), repository);
+      if (canBrowse(actor, repository)) {
+        visibleRepositoryNames.put(repository.id(), repository.name());
+      }
+    }
     String normalizedQuery = normalizedQuery(query);
     int safeLimit = limit(requestedLimit);
     List<ScanFinding> candidates;
     if (repositoryId == null) {
       candidates = scans.listFindingsByRepositories(
-          visibleRepositoryIds(actor).stream().toList(),
+          visibleRepositoryNames.keySet().stream().toList(),
           runId,
           severity,
           normalizedQuery,
           afterId,
           safeLimit + 1);
     } else {
-      requireVisibleRepository(actor, repositoryId);
+      if (!visibleRepositoryNames.containsKey(repositoryId)) {
+        throw notFound("Repository not found");
+      }
       candidates = scans.listFindings(
           repositoryId, runId, severity, normalizedQuery, afterId, safeLimit + 1);
     }
@@ -299,10 +321,6 @@ public class SecurityScanManagementService {
         cursorPage(candidates, safeLimit, ScanFinding::id);
     if (rawPage.items().isEmpty()) {
       return new CursorPage<>(List.of(), rawPage.nextAfter());
-    }
-    Map<Long, String> visibleRepositoryNames = new LinkedHashMap<>();
-    for (RepositoryRecord repository : visibleRepositories(actor)) {
-      visibleRepositoryNames.put(repository.id(), repository.name());
     }
     Set<Long> visibleRepositoryIds = visibleRepositoryNames.keySet();
     Instant now = Instant.now();
@@ -323,6 +341,10 @@ public class SecurityScanManagementService {
             accumulators.get(finding.id()).acceptSubject(repositoryName);
           }
         }));
+    Map<Long, FindingArtifactSummary> artifactSummariesByRun = new LinkedHashMap<>();
+    findingsByRun.keySet().forEach(scanRunId -> artifactSummariesByRun.put(
+        scanRunId,
+        findingArtifactSummary(scanRunId, visibleRepositoryNames, repositoriesById)));
     forEachWaiverPageForFindings(rawPage.items(), waiverPage -> {
       Map<Long, PageWaiverMatches> pageMatches = new LinkedHashMap<>();
       rawPage.items().forEach(
@@ -349,9 +371,163 @@ public class SecurityScanManagementService {
           accumulators.get(findingId).acceptWaiverCounts(matches));
     });
     List<FindingView> views = rawPage.items().stream()
-        .map(finding -> accumulators.get(finding.id()).view(finding))
+        .map(finding -> {
+          FindingArtifactSummary summary = artifactSummariesByRun.getOrDefault(
+              finding.scanRunId(), new FindingArtifactSummary(List.of(), 0));
+          return accumulators.get(finding.id()).view(
+              finding, summary.items(), summary.totalCount());
+        })
         .toList();
     return new CursorPage<>(views, rawPage.nextAfter());
+  }
+
+  public FindingArtifactPage findingArtifacts(
+      AuthenticatedSubject actor,
+      long findingId,
+      long afterRepositoryId,
+      long afterAssetId,
+      int requestedLimit) {
+    ScanFinding finding = scans.findFinding(findingId)
+        .orElseThrow(() -> notFound("Security scan finding not found"));
+    List<RepositoryRecord> repositoryRows = repositories.list();
+    Map<Long, RepositoryRecord> repositoriesById = new LinkedHashMap<>();
+    Map<Long, String> visibleRepositoryNames = new LinkedHashMap<>();
+    for (RepositoryRecord repository : repositoryRows) {
+      repositoriesById.put(repository.id(), repository);
+      if (canBrowse(actor, repository)) {
+        visibleRepositoryNames.put(repository.id(), repository.name());
+      }
+    }
+    boolean visible = scans.listRepositoryIdsForRun(finding.scanRunId()).stream()
+        .anyMatch(visibleRepositoryNames::containsKey);
+    if (!visible) {
+      throw notFound("Security scan finding not found");
+    }
+
+    int safeLimit = limit(requestedLimit);
+    List<ScanRunSubject> subjects = scans.listCurrentRunSubjects(
+        finding.scanRunId(),
+        visibleRepositoryNames.keySet().stream().toList(),
+        Math.max(0, afterRepositoryId),
+        Math.max(0, afterAssetId),
+        safeLimit + 1);
+    List<FindingArtifactView> matches = findingArtifactViews(
+        subjects, visibleRepositoryNames, repositoriesById, safeLimit + 1);
+    boolean hasMore = matches.size() > safeLimit;
+    List<FindingArtifactView> items = hasMore
+        ? List.copyOf(matches.subList(0, safeLimit))
+        : List.copyOf(matches);
+    FindingArtifactView last = hasMore ? items.getLast() : null;
+    return new FindingArtifactPage(
+        items,
+        last == null ? null : last.repositoryId(),
+        last == null ? null : last.assetId());
+  }
+
+  private FindingArtifactSummary findingArtifactSummary(
+      long scanRunId,
+      Map<Long, String> visibleRepositoryNames,
+      Map<Long, RepositoryRecord> repositoriesById) {
+    List<Long> visibleRepositoryIds = visibleRepositoryNames.keySet().stream().toList();
+    long totalCount = scans.countCurrentRunSubjects(scanRunId, visibleRepositoryIds);
+    if (totalCount == 0) return new FindingArtifactSummary(List.of(), 0);
+    List<ScanRunSubject> previewSubjects = scans.listCurrentRunSubjects(
+        scanRunId, visibleRepositoryIds, 0, 0, FINDING_ARTIFACT_PREVIEW_LIMIT);
+    return new FindingArtifactSummary(
+        findingArtifactViews(
+            previewSubjects,
+            visibleRepositoryNames,
+            repositoriesById,
+            FINDING_ARTIFACT_PREVIEW_LIMIT),
+        totalCount);
+  }
+
+  private List<FindingArtifactView> findingArtifactViews(
+      List<ScanRunSubject> subjects,
+      Map<Long, String> visibleRepositoryNames,
+      Map<Long, RepositoryRecord> repositoriesById,
+      int maxItems) {
+    if (subjects == null || subjects.isEmpty() || maxItems <= 0) return List.of();
+    List<Long> assetIds = subjects.stream().map(ScanRunSubject::assetId).toList();
+    Map<Long, AssetRecord> assetsById = assets.findAssetsByIds(assetIds);
+    Map<Long, String> browsePaths = browseNodes.findPathsByAssetIds(assetIds);
+    if (browsePaths == null) browsePaths = Map.of();
+    Map<Long, String> dockerBrowsePaths = dockerBrowsePaths(assetIds);
+    List<FindingArtifactView> views = new ArrayList<>(Math.min(subjects.size(), maxItems));
+    for (ScanRunSubject subject : subjects) {
+      String repositoryName = visibleRepositoryNames.get(subject.repositoryId());
+      AssetRecord asset = assetsById.get(subject.assetId());
+      if (repositoryName == null || asset == null) continue;
+      RepositoryRecord context = repositoriesById.get(subject.repositoryId());
+      if (context == null || !isAssetInRepositoryContext(context, asset)) continue;
+      RepositoryRecord source = repositoriesById.get(asset.repositoryId());
+      String sourceRepository = source == null ? null : source.name();
+      if (sourceRepository == null || sourceRepository.isBlank()) continue;
+      views.add(new FindingArtifactView(
+          subject.repositoryId(),
+          repositoryName,
+          asset.repositoryId(),
+          sourceRepository,
+          subject.assetId(),
+          asset.path(),
+          findingBrowsePath(
+              asset,
+              browsePaths.get(subject.assetId()),
+              dockerBrowsePaths.get(subject.assetId()))));
+      if (views.size() >= maxItems) break;
+    }
+    return List.copyOf(views);
+  }
+
+  private Map<Long, String> dockerBrowsePaths(List<Long> assetIds) {
+    Map<Long, DockerManifestRecord> manifests = docker.findManifestsByAssetIds(assetIds);
+    if (manifests == null || manifests.isEmpty()) return Map.of();
+    List<Long> taggedManifestIds = manifests.values().stream()
+        .filter(manifest -> !manifest.hasDigestReference())
+        .map(DockerManifestRecord::id)
+        .filter(java.util.Objects::nonNull)
+        .toList();
+    Map<Long, List<DockerTagRecord>> tagsByManifestId = taggedManifestIds.isEmpty()
+        ? Map.of()
+        : docker.listTagsForManifests(taggedManifestIds);
+    if (tagsByManifestId == null) tagsByManifestId = Map.of();
+    Map<Long, String> paths = new LinkedHashMap<>();
+    for (Map.Entry<Long, DockerManifestRecord> entry : manifests.entrySet()) {
+      DockerManifestRecord manifest = entry.getValue();
+      String reference = manifest.hasDigestReference()
+          ? manifest.digest()
+          : tagsByManifestId.getOrDefault(manifest.id(), List.of()).stream()
+              .map(DockerTagRecord::tag)
+              .filter(tag -> tag != null && !tag.isBlank())
+              .findFirst()
+              .orElse(null);
+      if (manifest.imageName() != null && !manifest.imageName().isBlank()
+          && reference != null && !reference.isBlank()) {
+        paths.put(entry.getKey(), manifest.imageName() + "/manifests/" + reference);
+      }
+    }
+    return Map.copyOf(paths);
+  }
+
+  private static String findingBrowsePath(
+      AssetRecord asset, String projectedPath, String dockerBrowsePath) {
+    if (projectedPath != null && !projectedPath.isBlank()) {
+      return projectedPath;
+    }
+    if (dockerBrowsePath != null && !dockerBrowsePath.isBlank()) {
+      return dockerBrowsePath;
+    }
+    Object configured = asset.attributes() == null ? null : asset.attributes().get("browsePath");
+    if (configured != null && !configured.toString().isBlank()) {
+      return configured.toString();
+    }
+    String path = asset.path();
+    if (asset.format() == com.github.klboke.kkrepo.core.RepositoryFormat.PYPI
+        && path != null
+        && path.startsWith("packages/")) {
+      return path.substring("packages/".length());
+    }
+    return path;
   }
 
   public FindingWaiverContext findingWaiverContext(
@@ -577,10 +753,15 @@ public class SecurityScanManagementService {
       expiredWaiverCount += matches.expiredWaiverIds.size();
     }
 
-    private FindingView view(ScanFinding finding) {
+    private FindingView view(
+        ScanFinding finding,
+        List<FindingArtifactView> affectedArtifacts,
+        long affectedArtifactCount) {
       return FindingView.from(
           finding,
           repositoryNames.stream().sorted().toList(),
+          affectedArtifacts,
+          affectedArtifactCount,
           activeWaiverCount,
           expiredWaiverCount,
           targetCount,
@@ -592,6 +773,10 @@ public class SecurityScanManagementService {
     private final Set<Long> activeWaiverIds = new LinkedHashSet<>();
     private final Set<Long> expiredWaiverIds = new LinkedHashSet<>();
   }
+
+  private record FindingArtifactSummary(
+      List<FindingArtifactView> items,
+      long totalCount) {}
 
   public AssetDetail asset(AuthenticatedSubject actor, long assetId) {
     AssetDao.AssetWithBlob content = assets.findAssetWithBlobById(assetId)
@@ -1348,6 +1533,15 @@ public class SecurityScanManagementService {
     }
   }
 
+  public record FindingArtifactPage(
+      List<FindingArtifactView> items,
+      Long nextRepositoryId,
+      Long nextAssetId) {
+    public FindingArtifactPage {
+      items = items == null ? List.of() : List.copyOf(items);
+    }
+  }
+
   public record Overview(
       boolean deploymentEnabled,
       SecurityScanDao.ScannerSnapshot scanner,
@@ -1425,6 +1619,8 @@ public class SecurityScanManagementService {
       long id,
       long scanRunId,
       List<String> repositories,
+      List<FindingArtifactView> affectedArtifacts,
+      long affectedArtifactCount,
       String advisoryId,
       List<String> aliases,
       String dataSource,
@@ -1446,17 +1642,21 @@ public class SecurityScanManagementService {
       int waivedTargetCount) {
     public FindingView {
       repositories = repositories == null ? List.of() : List.copyOf(repositories);
+      affectedArtifacts = affectedArtifacts == null ? List.of() : List.copyOf(affectedArtifacts);
     }
 
     static FindingView from(
         ScanFinding finding,
         List<String> repositories,
+        List<FindingArtifactView> affectedArtifacts,
+        long affectedArtifactCount,
         int activeWaiverCount,
         int expiredWaiverCount,
         int waiverTargetCount,
         int waivedTargetCount) {
       return new FindingView(
-          finding.id(), finding.scanRunId(), repositories, finding.advisoryId(), finding.aliases(),
+          finding.id(), finding.scanRunId(), repositories, affectedArtifacts, affectedArtifactCount,
+          finding.advisoryId(), finding.aliases(),
           finding.dataSource(), finding.packageUrl(), finding.packageName(),
           finding.installedVersion(), finding.fixedVersions(), finding.severity().name(),
           finding.severitySource(), finding.cvssVector(), finding.cvssScore(), finding.title(),
@@ -1464,6 +1664,15 @@ public class SecurityScanManagementService {
           activeWaiverCount, expiredWaiverCount, waiverTargetCount, waivedTargetCount);
     }
   }
+
+  public record FindingArtifactView(
+      long repositoryId,
+      String repository,
+      long sourceRepositoryId,
+      String sourceRepository,
+      long assetId,
+      String assetPath,
+      String browsePath) {}
 
   public record FindingWaiverDetail(
       long findingId,

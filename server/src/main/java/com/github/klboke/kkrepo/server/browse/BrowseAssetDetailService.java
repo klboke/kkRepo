@@ -949,13 +949,8 @@ public class BrowseAssetDetailService {
           .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Asset not found"));
       return new ResolvedAsset(visibleRepository, asset, null);
     }
-    List<RepositoryRecord> members = visibleRepository.format() == RepositoryFormat.SWIFT
-        ? BrowseRepositorySources.swiftSources(visibleRepository, repositoryDao)
-        : visibleRepository.format() == RepositoryFormat.ANSIBLEGALAXY
-            ? BrowseRepositorySources.ansibleSources(visibleRepository, repositoryDao)
-            : visibleRepository.format() == RepositoryFormat.CONDA
-                ? BrowseRepositorySources.condaSources(visibleRepository, repositoryDao)
-            : repositoryDao.listMembers(visibleRepository.id());
+    List<RepositoryRecord> members = BrowseRepositorySources.sources(
+        visibleRepository, repositoryDao);
     if (sourceRepositoryName != null && !sourceRepositoryName.isBlank()) {
       RepositoryRecord source = members.stream()
           .filter(member -> member.name().equals(sourceRepositoryName))
