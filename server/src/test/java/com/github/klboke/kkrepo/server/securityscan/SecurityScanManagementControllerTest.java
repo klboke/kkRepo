@@ -28,6 +28,59 @@ import org.springframework.web.server.ResponseStatusException;
 
 class SecurityScanManagementControllerTest {
   @Test
+  void completionEndpointsReturn400ForOutOfRangeCursorTimestamps() throws Exception {
+    var service = mock(SecurityScanManagementService.class, org.mockito.Mockito.CALLS_REAL_METHODS);
+    var controller = new SecurityScanManagementController(service, mock(SecurityScanMutationService.class));
+    var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller).build();
+    for (String endpoint : List.of("tasks", "runs")) {
+      String field = endpoint.equals("tasks") ? "finished_at" : "completed_at";
+      String cursor = java.util.Base64.getUrlEncoder().encodeToString(
+          ("1|" + field + "|desc|+1000000000-12-31T23:59:59.999999999Z|1")
+              .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+      mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+              .get("/internal/security/scanning/" + endpoint)
+              .param("sort", field).param("cursor", cursor)
+              .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE, mock(AuthenticatedSubject.class)))
+          .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest());
+    }
+  }
+
+  @Test
+  void completionEndpointsReturn400ForConnectionTimezoneOverflow() throws Exception {
+    var service = mock(SecurityScanManagementService.class);
+    var actor = mock(AuthenticatedSubject.class);
+    var error = new com.github.klboke.kkrepo.persistence.jdbc.api.InvalidScanCompletionCursorException(null);
+    when(service.taskPage(actor, null, null, null, 0, 25, "finished_at", null, "cursor"))
+        .thenThrow(error);
+    when(service.runPage(actor, null, null, 0, 25, "completed_at", null, "cursor"))
+        .thenThrow(error);
+    var controller = new SecurityScanManagementController(service, mock(SecurityScanMutationService.class));
+    var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller).build();
+    for (String endpoint : List.of("tasks", "runs")) {
+      String field = endpoint.equals("tasks") ? "finished_at" : "completed_at";
+      mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+              .get("/internal/security/scanning/" + endpoint)
+              .param("sort", field).param("cursor", "cursor")
+              .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE, actor))
+          .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest());
+    }
+  }
+
+  @Test
+  void forwardsCompletionSortAndCursorParameters() {
+    var service = mock(SecurityScanManagementService.class);
+    var controller = new SecurityScanManagementController(service, mock(SecurityScanMutationService.class));
+    var request = mock(HttpServletRequest.class);
+    var actor = mock(AuthenticatedSubject.class);
+    when(request.getAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE)).thenReturn(actor);
+    controller.tasks(3L, TaskStatus.FAILED, "error", 0, 25, "finished_at", "desc", "task-cursor", request);
+    verify(service).taskPage(actor, 3L, TaskStatus.FAILED, "error", 0, 25,
+        "finished_at", "desc", "task-cursor");
+    controller.runs(3L, "complete", 0, 25, "completed_at", "asc", "run-cursor", request);
+    verify(service).runPage(actor, 3L, "complete", 0, 25, "completed_at", "asc", "run-cursor");
+  }
+
+  @Test
   void delegatesEveryManagementEndpointAndBuildsMutationResponses() {
     SecurityScanManagementService service = mock(SecurityScanManagementService.class);
     SecurityScanMutationService mutations = mock(SecurityScanMutationService.class);
@@ -39,9 +92,9 @@ class SecurityScanManagementControllerTest {
 
     when(service.repositoryPage(actor, "repo", 1L, 2))
         .thenReturn(new CursorPage<>(List.of(), null));
-    when(service.taskPage(actor, 3L, TaskStatus.PENDING, "task", 4L, 5))
+    when(service.taskPage(actor, 3L, TaskStatus.PENDING, "task", 4L, 5, null, null, null))
         .thenReturn(new CursorPage<>(List.of(), null));
-    when(service.runPage(actor, 6L, "run", 7L, 8))
+    when(service.runPage(actor, 6L, "run", 7L, 8, null, null, null))
         .thenReturn(new CursorPage<>(List.of(), null));
     when(service.findingPage(actor, 9L, 10L, Severity.HIGH, "finding", 11L, 12))
         .thenReturn(new CursorPage<>(List.of(), null));
@@ -84,8 +137,8 @@ class SecurityScanManagementControllerTest {
     assertEquals(List.of(), controller.repositories("repo", 1L, 2, request).items());
     assertEquals(
         List.of(),
-        controller.tasks(3L, TaskStatus.PENDING, "task", 4L, 5, request).items());
-    assertEquals(List.of(), controller.runs(6L, "run", 7L, 8, request).items());
+        controller.tasks(3L, TaskStatus.PENDING, "task", 4L, 5, null, null, null, request).items());
+    assertEquals(List.of(), controller.runs(6L, "run", 7L, 8, null, null, null, request).items());
     assertEquals(
         List.of(),
         controller.findings(9L, 10L, Severity.HIGH, "finding", 11L, 12, request).items());

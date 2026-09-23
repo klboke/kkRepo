@@ -201,15 +201,35 @@ class SecurityScanManagementServiceCoreTest {
     when(task.requestReason()).thenReturn(RequestReason.MANUAL);
     when(task.status()).thenReturn(TaskStatus.PENDING);
     when(task.maxAttempts()).thenReturn(5);
-    when(scans.listTasks(1L, TaskStatus.PENDING, "demo", 0, 2))
+    when(scans.listTasks(1L, TaskStatus.PENDING, "demo", 0, 2, null))
         .thenReturn(List.of(task));
     var taskPage = service.taskPage(actor, 1L, TaskStatus.PENDING, "demo", 0, 1);
     assertEquals("maven-hosted", taskPage.items().getFirst().repository());
 
     ScanRun run = run(9L);
-    when(scans.listRuns(1L, "demo", 0, 2)).thenReturn(List.of(run));
+    when(scans.listRuns(1L, "demo", 0, 2, null)).thenReturn(List.of(run));
     var runPage = service.runPage(actor, 1L, "demo", 0, 1);
     assertEquals("COMPLETE", runPage.items().getFirst().status());
+
+    var order = new SecurityScanDao.CompletionOrder(false, 0, null);
+    when(task.finishedAt()).thenReturn(Instant.parse("2026-09-23T00:00:00Z"));
+    when(scans.listTasks(1L, TaskStatus.PENDING, "demo", 0, 2, order))
+        .thenReturn(List.of(task, task));
+    var completedTasks = service.taskPage(
+        actor, 1L, TaskStatus.PENDING, "demo", 0, 1, "finished_at", "desc", null);
+    assertNotNull(completedTasks.nextCursor());
+    assertEquals(task.finishedAt(), completedTasks.items().getFirst().finishedAt());
+    assertNull(completedTasks.nextAfter());
+    when(scans.listRuns(1L, "demo", 0, 2, order)).thenReturn(List.of(run, run));
+    var completedRuns = service.runPage(actor, 1L, "demo", 0, 1, "completed_at", "desc", null);
+    assertNotNull(completedRuns.nextCursor());
+    var boundary = ScanCompletionPagination.parse(
+        "completed_at", "completed_at", "desc", completedRuns.nextCursor(), 0);
+    service.runPage(actor, 1L, "demo", 0, 1, "completed_at", "desc", completedRuns.nextCursor());
+    verify(scans).listRuns(1L, "demo", 0, 2, boundary);
+    service.runPage(actor, null, "demo", 0, 1, "completed_at", "desc", null);
+    verify(scans).listRunsByRepositories(List.of(1L, 2L), "demo", 0, 2, order);
+
   }
 
   @Test
@@ -269,7 +289,8 @@ class SecurityScanManagementServiceCoreTest {
         eq(null),
         eq(null),
         eq(0L),
-        eq(11));
+        eq(11),
+        eq(null));
     assertEquals(300, taskScope.getValue().size());
     assertEquals(
         manyRepositories.stream()
@@ -298,7 +319,7 @@ class SecurityScanManagementServiceCoreTest {
     when(task.requestReason()).thenReturn(RequestReason.CONTENT_CHANGED);
     when(task.status()).thenReturn(TaskStatus.FAILED);
     when(task.maxAttempts()).thenReturn(5);
-    when(scans.listTasksByRepositories(List.of(2L), null, null, 0, 11))
+    when(scans.listTasksByRepositories(List.of(2L), null, null, 0, 11, null))
         .thenReturn(List.of(task));
     when(scans.findTask(77L)).thenReturn(Optional.of(task));
     when(scope.effectiveConfigsForSource(1L))
@@ -308,9 +329,16 @@ class SecurityScanManagementServiceCoreTest {
     var page = service.taskPage(actor, null, null, null, 0, 10);
     assertEquals(1, page.items().size());
     assertEquals("maven-hosted", page.items().getFirst().repository());
+    var order = new SecurityScanDao.CompletionOrder(true, 0, null);
+    when(scans.listTasksByRepositories(List.of(2L), null, null, 0, 11, order))
+        .thenReturn(List.of(task));
+    assertEquals(77L, service.taskPage(
+        actor, null, null, null, 0, 10, "finished_at", "asc", null).items().getFirst().id());
+    assertEquals(77L, service.taskPage(
+        actor, 2L, null, null, 0, 10, "finished_at", "asc", null).items().getFirst().id());
     service.retry(actor, 77L);
 
-    verify(scans).listTasksByRepositories(List.of(2L), null, null, 0, 11);
+    verify(scans).listTasksByRepositories(List.of(2L), null, null, 0, 11, null);
     verify(scans).requeueTask(eq(77L), any(), eq("admin"));
   }
 
@@ -321,7 +349,7 @@ class SecurityScanManagementServiceCoreTest {
     ScanTask withoutAsset = scanTask(9L, null);
     ScanTask next = scanTask(10L, 20L);
     String path = "com/acme/demo/1.0/demo-1.0.jar";
-    when(scans.listTasks(1L, null, null, 0, 4))
+    when(scans.listTasks(1L, null, null, 0, 4, null))
         .thenReturn(List.of(first, deleted, withoutAsset, next));
     when(assets.findAssetsByIds(List.of(20L, 21L)))
         .thenReturn(Map.of(20L, asset(20L, RepositoryFormat.MAVEN2, path, "artifact")));
@@ -342,6 +370,18 @@ class SecurityScanManagementServiceCoreTest {
     assertNull(page.items().get(2).assetId());
     verify(assets).findAssetsByIds(List.of(20L, 21L));
     verify(assets, never()).findAssetById(anyLong());
+    var completion = new SecurityScanDao.CompletionOrder(false, 0, null);
+    when(first.finishedAt()).thenReturn(Instant.parse("2026-09-23T00:00:00Z"));
+    when(scans.listTasks(1L, null, null, 0, 2, completion)).thenReturn(List.of(first, next));
+    when(assets.findAssetsByIds(List.of(20L)))
+        .thenReturn(Map.of(20L, asset(20L, RepositoryFormat.MAVEN2, path, "artifact")));
+    when(browseNodes.findPathsByAssetIds(List.of(20L))).thenReturn(Map.of(20L, "projected/" + path));
+    var sorted = service.taskPage(actor, 1L, null, null, 0, 1, "finished_at", "desc", null);
+    assertEquals(path, sorted.items().getFirst().assetPath());
+    assertEquals("projected/" + path, sorted.items().getFirst().browsePath());
+    assertEquals("maven-hosted", sorted.items().getFirst().browseRepository());
+    assertNotNull(sorted.nextCursor());
+    assertNull(sorted.nextAfter());
   }
 
   @ParameterizedTest
@@ -360,7 +400,7 @@ class SecurityScanManagementServiceCoreTest {
     }
     List<Long> visibleIds = selectGroup || !sourceVisible ? List.of(2L) : List.of(2L, 1L);
     ScanTask scanTask = scanTask(7L, 20L);
-    when(scans.listTasksByRepositories(visibleIds, null, null, 0, 11))
+    when(scans.listTasksByRepositories(visibleIds, null, null, 0, 11, null))
         .thenReturn(List.of(scanTask));
     when(assets.findAssetsByIds(List.of(20L)))
         .thenReturn(Map.of(20L, asset(20L, RepositoryFormat.MAVEN2, "demo.jar", "artifact")));
@@ -377,7 +417,7 @@ class SecurityScanManagementServiceCoreTest {
   @Test
   void taskPageDoesNotResolveAnAssetFromAnUnrelatedRepository() {
     ScanTask scanTask = scanTask(7L, 20L);
-    when(scans.listTasks(1L, null, null, 0, 11))
+    when(scans.listTasks(1L, null, null, 0, 11, null))
         .thenReturn(List.of(scanTask));
     AssetRecord unrelated = mock(AssetRecord.class);
     when(unrelated.repositoryId()).thenReturn(99L);
@@ -395,7 +435,7 @@ class SecurityScanManagementServiceCoreTest {
     String digest = "sha256:" + "a".repeat(64);
     String storagePath = "docker/manifests/team/demo/sha256/" + "a".repeat(64);
     ScanTask scanTask = scanTask(7L, 20L);
-    when(scans.listTasks(1L, null, null, 0, 11))
+    when(scans.listTasks(1L, null, null, 0, 11, null))
         .thenReturn(List.of(scanTask));
     when(assets.findAssetsByIds(List.of(20L)))
         .thenReturn(Map.of(20L, asset(20L, RepositoryFormat.DOCKER, storagePath, "manifest")));

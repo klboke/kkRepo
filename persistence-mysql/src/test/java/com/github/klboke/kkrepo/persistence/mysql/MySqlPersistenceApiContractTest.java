@@ -58,7 +58,17 @@ class MySqlPersistenceApiContractTest extends PersistenceApiContract {
     return backend.activateHelmProxyLegacyCacheFence(repositoryId);
   }
 
+  @Override
+  protected void verifySecurityScanCompletionPlans(long repositoryId, long taskId, long runId) {
+    backend.verifyCompletionPlans(repositoryId, taskId, runId);
+  }
+
   private static final class Backend extends MySqlIntegrationTestSupport {
+    private void verifyCompletionPlans(long repositoryId, long taskId, long runId) {
+      com.github.klboke.kkrepo.persistence.jdbc.internal.ScanCompletionQueryPlanAssertions.verify(
+          jdbc(), dialect(), false, repositoryId, taskId, runId);
+    }
+
     private static void start() {
       startMySql();
     }

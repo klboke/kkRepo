@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
+import com.github.klboke.kkrepo.persistence.jdbc.api.InvalidScanCompletionCursorException;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.RepositoryScanConfig;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanPolicy;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanWaiver;
@@ -29,6 +30,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -53,6 +55,11 @@ public class SecurityScanManagementController {
     this.mutations = mutations;
   }
 
+  @ExceptionHandler(InvalidScanCompletionCursorException.class)
+  public ResponseEntity<Map<String, String>> invalidCompletionCursor() {
+    return ResponseEntity.badRequest().body(Map.of("message", "Invalid completion cursor timestamp"));
+  }
+
   @GetMapping("/summary")
   public Overview summary(HttpServletRequest request) {
     return service.overview(actor(request));
@@ -74,8 +81,11 @@ public class SecurityScanManagementController {
       @RequestParam(name = "q", required = false) String query,
       @RequestParam(name = "after", defaultValue = "0") long after,
       @RequestParam(name = "limit", defaultValue = "25") int limit,
+      @RequestParam(name = "sort", required = false) String sort,
+      @RequestParam(name = "direction", required = false) String direction,
+      @RequestParam(name = "cursor", required = false) String cursor,
       HttpServletRequest request) {
-    return service.taskPage(actor(request), repositoryId, status, query, after, limit);
+    return service.taskPage(actor(request), repositoryId, status, query, after, limit, sort, direction, cursor);
   }
 
   @GetMapping("/runs")
@@ -84,8 +94,11 @@ public class SecurityScanManagementController {
       @RequestParam(name = "q", required = false) String query,
       @RequestParam(name = "after", defaultValue = "0") long after,
       @RequestParam(name = "limit", defaultValue = "25") int limit,
+      @RequestParam(name = "sort", required = false) String sort,
+      @RequestParam(name = "direction", required = false) String direction,
+      @RequestParam(name = "cursor", required = false) String cursor,
       HttpServletRequest request) {
-    return service.runPage(actor(request), repositoryId, query, after, limit);
+    return service.runPage(actor(request), repositoryId, query, after, limit, sort, direction, cursor);
   }
 
   @GetMapping("/findings")

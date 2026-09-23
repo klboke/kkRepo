@@ -1550,7 +1550,7 @@
             </form>
             <div class="nx-table-frame">
               <table class="nx-table">
-                <thead><tr><th>Run</th><th>Task</th><th>Status</th><th>Completeness</th><th>Findings</th><th>Critical</th><th>High</th><th>Completed</th><th>SBOM</th></tr></thead>
+                <thead><tr><th>Run</th><th>Task</th><th>Status</th><th>Completeness</th><th>Findings</th><th>Critical</th><th>High</th><th aria-sort="descending"><button class="repo-sort-button is-active" data-runs-sort="completed_at" type="button" aria-label="Completed sort descending"><span class="repo-sort-indicator lucide-icon icon-arrow-down" aria-hidden="true"></span><span>Completed</span></button></th><th>SBOM</th></tr></thead>
                 <tbody id="security-scan-run-table"></tbody>
               </table>
             </div>
@@ -1574,7 +1574,7 @@
             </form>
             <div class="nx-table-frame">
               <table class="nx-table">
-                <thead><tr><th>ID</th><th>Repository</th><th>Asset</th><th>Stage</th><th>Reason</th><th>Status</th><th>Attempts</th><th>Lease until</th><th>Error</th><th class="actions-column">Actions</th></tr></thead>
+                <thead><tr><th>ID</th><th>Repository</th><th>Asset</th><th>Stage</th><th>Reason</th><th>Status</th><th>Attempts</th><th>Lease until</th><th aria-sort="descending"><button class="repo-sort-button is-active" data-tasks-sort="finished_at" type="button" aria-label="Finished sort descending"><span class="repo-sort-indicator lucide-icon icon-arrow-down" aria-hidden="true"></span><span>Finished</span></button></th><th>Error</th><th class="actions-column">Actions</th></tr></thead>
                 <tbody id="security-scan-task-table"></tbody>
               </table>
             </div>
@@ -1959,6 +1959,6 @@
     <script src="./assets/admin-filter.js?v=20260706-wildcard-filter-1"></script>
     <script src="/browse/assets/global-component-search.js?v=20260817-global-search-2"></script>
     <script src="./assets/content-selectors.js?v=20260908-content-selectors-1"></script>
-    <script src="./assets/admin.js?v=20260923-scan-task-assets-2"></script>
+    <script src="./assets/admin.js?v=20260923-scan-completion-sort-4"></script>
   </body>
 </html>

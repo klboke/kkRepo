@@ -12,7 +12,30 @@ import org.junit.jupiter.api.Test;
 
 /** Proves the PostgreSQL baseline validates and remains idempotent on repeated startup. */
 class PostgreSqlMigrationCompatibilityTest extends PostgreSqlIntegrationTestSupport {
-  private static final int LATEST_MIGRATION = 54;
+  private static final int LATEST_MIGRATION = 55;
+
+  @Test
+  void completionIndexesCanResumeAnInterruptedConcurrentBuild() throws Exception {
+    String path = "db/migration/postgresql/V55__security_scan_completion_indexes.sql";
+    try (InputStream stream = getClass().getResourceAsStream("/" + path + ".conf")) {
+      assertNotNull(stream);
+      assertEquals("executeInTransaction=false", new String(stream.readAllBytes(), StandardCharsets.UTF_8).trim());
+    }
+    jdbc().execute("DROP INDEX idx_security_scan_run_completion");
+    jdbc().execute((org.springframework.jdbc.core.ConnectionCallback<Void>) connection -> {
+      org.springframework.jdbc.datasource.init.ScriptUtils.executeSqlScript(connection,
+          new org.springframework.core.io.support.EncodedResource(
+              new org.springframework.core.io.ClassPathResource(path), StandardCharsets.UTF_8));
+      return null;
+    });
+    assertEquals(5, jdbc().queryForObject("""
+        SELECT COUNT(*) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+        WHERE c.relname IN ('idx_security_scan_task_completion',
+          'idx_security_scan_task_repo_completion', 'idx_security_scan_run_completion',
+          'idx_security_scan_task_status_completion', 'idx_security_scan_task_repo_status_completion')
+          AND i.indisvalid
+        """, Integer.class));
+  }
 
   @Test
   void baselineValidatesAndSecondMigrateHasNoPendingWork() {

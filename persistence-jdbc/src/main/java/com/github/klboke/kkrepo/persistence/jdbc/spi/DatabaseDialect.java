@@ -4,6 +4,16 @@ package com.github.klboke.kkrepo.persistence.jdbc.spi;
 public interface DatabaseDialect {
   DatabaseType type();
 
+  /** Invalid datetime format or overflow after conversion in the JDBC connection timezone. */
+  default boolean isInvalidDatetime(java.sql.SQLException exception) {
+    return "22007".equals(exception.getSQLState()) || "22008".equals(exception.getSQLState());
+  }
+
+  /** Keeps fixed-NULL index columns in ORDER BY where needed to preserve index ordering. */
+  default boolean orderByNullEqualityColumns() {
+    return true;
+  }
+
   /** Returns a backend-specific table reference that prefers the named production index. */
   default String tableReferenceWithPreferredIndex(String tableName, String indexName) {
     return tableName;

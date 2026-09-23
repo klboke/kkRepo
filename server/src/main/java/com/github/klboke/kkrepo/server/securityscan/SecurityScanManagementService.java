@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.AssetSecurityState;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.CompletionOrder;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.RepositoryScanConfig;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanCandidate;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanFinding;
@@ -209,6 +210,18 @@ public class SecurityScanManagementService {
       String query,
       long afterId,
       int requestedLimit) {
+    return taskPage(actor, repositoryId, status, query, afterId, requestedLimit, null, null, null);
+  }
+
+  public CursorPage<TaskView> taskPage(
+      AuthenticatedSubject actor,
+      Long repositoryId,
+      TaskStatus status,
+      String query,
+      long afterId,
+      int requestedLimit, String sort, String direction, String cursor) {
+    CompletionOrder completion = ScanCompletionPagination.parse(
+        "finished_at", sort, direction, cursor, afterId);
     String normalizedQuery = normalizedQuery(query);
     int safeLimit = limit(requestedLimit);
     List<RepositoryRecord> visible = visibleRepositories(actor);
@@ -219,14 +232,14 @@ public class SecurityScanManagementService {
           status,
           normalizedQuery,
           afterId,
-          safeLimit + 1);
+          safeLimit + 1, completion);
     } else {
       RepositoryRecord context = requireVisibleRepository(actor, repositoryId);
       rows = context.type() == RepositoryType.GROUP
           ? scans.listTasksByRepositories(
-              List.of(repositoryId), status, normalizedQuery, afterId, safeLimit + 1)
+              List.of(repositoryId), status, normalizedQuery, afterId, safeLimit + 1, completion)
           : scans.listTasks(
-              repositoryId, status, normalizedQuery, afterId, safeLimit + 1);
+              repositoryId, status, normalizedQuery, afterId, safeLimit + 1, completion);
     }
     Map<Long, String> repositoryNames = new LinkedHashMap<>();
     for (RepositoryRecord repository : visible) {
@@ -263,7 +276,9 @@ public class SecurityScanManagementService {
               asset, browsePaths.get(asset.id()), dockerPaths.get(asset.id())),
           browseRepository));
     }
-    return cursorPage(views, safeLimit, TaskView::id);
+    return completion == null ? cursorPage(views, safeLimit, TaskView::id)
+        : ScanCompletionPagination.page(views, safeLimit, TaskView::id,
+            TaskView::finishedAt, "finished_at", completion);
   }
 
   private String taskBrowseRepository(
@@ -297,6 +312,17 @@ public class SecurityScanManagementService {
       String query,
       long afterId,
       int requestedLimit) {
+    return runPage(actor, repositoryId, query, afterId, requestedLimit, null, null, null);
+  }
+
+  public CursorPage<RunView> runPage(
+      AuthenticatedSubject actor,
+      Long repositoryId,
+      String query,
+      long afterId,
+      int requestedLimit, String sort, String direction, String cursor) {
+    CompletionOrder completion = ScanCompletionPagination.parse(
+        "completed_at", sort, direction, cursor, afterId);
     String normalizedQuery = normalizedQuery(query);
     int safeLimit = limit(requestedLimit);
     List<ScanRun> rows;
@@ -305,13 +331,15 @@ public class SecurityScanManagementService {
           visibleRepositoryIds(actor).stream().toList(),
           normalizedQuery,
           afterId,
-          safeLimit + 1);
+          safeLimit + 1, completion);
     } else {
       requireVisibleRepository(actor, repositoryId);
-      rows = scans.listRuns(repositoryId, normalizedQuery, afterId, safeLimit + 1);
+      rows = scans.listRuns(repositoryId, normalizedQuery, afterId, safeLimit + 1, completion);
     }
     List<RunView> views = rows.stream().map(RunView::from).toList();
-    return cursorPage(views, safeLimit, RunView::id);
+    return completion == null ? cursorPage(views, safeLimit, RunView::id)
+        : ScanCompletionPagination.page(views, safeLimit, RunView::id,
+            RunView::completedAt, "completed_at", completion);
   }
 
   public List<FindingView> findings(
@@ -1571,7 +1599,11 @@ public class SecurityScanManagementService {
     return new ResponseStatusException(HttpStatus.NOT_FOUND, message);
   }
 
-  public record CursorPage<T>(List<T> items, Long nextAfter) {
+  public record CursorPage<T>(List<T> items, Long nextAfter, String nextCursor) {
+    public CursorPage(List<T> items, Long nextAfter) {
+      this(items, nextAfter, null);
+    }
+
     public CursorPage {
       items = items == null ? List.of() : List.copyOf(items);
     }

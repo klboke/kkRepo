@@ -8,6 +8,7 @@ import static com.github.klboke.kkrepo.security.scan.ScanEnums.SCANNER_OBSERVATI
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobReferenceDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.InvalidScanCompletionCursorException;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.EnumColumns;
@@ -40,9 +41,11 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.UUID;
 import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -82,6 +85,11 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
           .thenComparingLong(ClaimCandidate::id);
 
   private final JdbcTemplate jdbc;
+  private final DatabaseDialect databaseDialect;
+  private final String completionTaskTable;
+  private final String repositoryCompletionTaskTable;
+  private final String statusCompletionTaskTable;
+  private final String repositoryStatusCompletionTaskTable;
   private final BlobReferenceDao blobReferences;
   private final JdbcSecurityScanRepositoryScope repositoryScope;
   private final JdbcSecurityScanRetentionDao retention;
@@ -495,6 +503,15 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   public JdbcSecurityScanDao(
       JdbcTemplate jdbc, JsonColumns json, DatabaseDialect databaseDialect) {
     this.jdbc = jdbc;
+    this.databaseDialect = databaseDialect;
+    this.completionTaskTable = databaseDialect.tableReferenceWithPreferredIndex(
+        "security_scan_task t", "idx_security_scan_task_completion");
+    this.repositoryCompletionTaskTable = databaseDialect.tableReferenceWithPreferredIndex(
+        "security_scan_task t", "idx_security_scan_task_repo_completion");
+    this.statusCompletionTaskTable = databaseDialect.tableReferenceWithPreferredIndex(
+        "security_scan_task t", "idx_security_scan_task_status_completion");
+    this.repositoryStatusCompletionTaskTable = databaseDialect.tableReferenceWithPreferredIndex(
+        "security_scan_task t", "idx_security_scan_task_repo_status_completion");
     this.json = json;
     this.blobReferences = new JdbcBlobReferenceDao(jdbc);
     this.repositoryScope = new JdbcSecurityScanRepositoryScope(json, databaseDialect.json());
@@ -1269,7 +1286,18 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       String query,
       long afterId,
       int maxItems) {
-    return listTasks(repositoryId, null, status, query, afterId, maxItems);
+    return listTasks(repositoryId, status, query, afterId, maxItems, null);
+  }
+
+  @Override
+  @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+  public List<ScanTask> listTasks(
+      Long repositoryId,
+      TaskStatus status,
+      String query,
+      long afterId,
+      int maxItems, CompletionOrder completion) {
+    return listTasks(repositoryId, null, status, query, afterId, maxItems, completion);
   }
 
   @Override
@@ -1279,9 +1307,20 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       String query,
       long afterId,
       int maxItems) {
+    return listTasksByRepositories(repositoryIds, status, query, afterId, maxItems, null);
+  }
+
+  @Override
+  @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+  public List<ScanTask> listTasksByRepositories(
+      List<Long> repositoryIds,
+      TaskStatus status,
+      String query,
+      long afterId,
+      int maxItems, CompletionOrder completion) {
     List<Long> ids = repositoryScope.distinctLongs(repositoryIds);
     if (ids.isEmpty()) return List.of();
-    return listTasks(null, ids, status, query, afterId, maxItems);
+    return listTasks(null, ids, status, query, afterId, maxItems, completion);
   }
 
   private List<ScanTask> listTasks(
@@ -1290,27 +1329,35 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       TaskStatus status,
       String query,
       long afterId,
-      int maxItems) {
+      int maxItems, CompletionOrder completion) {
     List<Object> args = new ArrayList<>();
     StringBuilder sql = new StringBuilder();
     if (repositoryIds != null) {
       sql.append(repositoryScope.taskRepositoryScopeCte());
       args.add(repositoryScope.parameter(repositoryIds));
     }
-    sql.append("""
-        SELECT t.*
-        FROM security_scan_task t
-        JOIN repository r ON r.id = t.repository_id
-        LEFT JOIN asset a ON a.id = t.asset_id
-        WHERE t.id > ?
-        """);
-    args.add(Math.max(0, afterId));
+    String pattern = searchPattern(query);
+    // MySQL can otherwise prefer the primary key for NULL timestamps and scan completed history.
+    String taskTable = "security_scan_task t";
+    if (completion != null && pattern == null) {
+      taskTable = status == null
+          ? (repositoryId == null ? completionTaskTable : repositoryCompletionTaskTable)
+          : (repositoryId == null ? statusCompletionTaskTable : repositoryStatusCompletionTaskTable);
+    }
+    sql.append("SELECT t.* FROM ").append(taskTable);
+    if (pattern != null) {
+      sql.append(" JOIN repository r ON r.id = t.repository_id")
+          .append(" LEFT JOIN asset a ON a.id = t.asset_id");
+    }
+    sql.append(" WHERE 1 = 1");
     if (repositoryId != null) {
       sql.append(" AND t.repository_id = ?");
       args.add(repositoryId);
     } else if (repositoryIds != null) {
+      // A bounded scalar lookup preserves the completion-index walk. MySQL may flatten
+      // EXISTS into a duplicate-removing semijoin that sorts the entire visible history.
       sql.append("""
-           AND EXISTS (
+           AND (
              SELECT 1
              FROM task_repository_scope scope
              JOIN repository source_repository
@@ -1332,14 +1379,14 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
                    )
                  )
                )
-           )
+             LIMIT 1
+           ) IS NOT NULL
           """);
     }
     if (status != null) {
       sql.append(" AND t.status = ?");
       args.add(status.name());
     }
-    String pattern = searchPattern(query);
     if (pattern != null) {
       sql.append("""
            AND (
@@ -1362,9 +1409,95 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       }
       sql.append(")");
     }
-    sql.append(" ORDER BY t.id LIMIT ?");
-    args.add(safeLimit(maxItems));
-    return jdbc.query(sql.toString(), taskMapper, args.toArray());
+    int limit = safeLimit(maxItems);
+    if (completion == null) {
+      return queryScanPage(sql, args, "t", "finished_at", afterId, limit, null, false, taskMapper);
+    }
+    // Separate ranges keep NULLs last in both directions without sorting the whole history.
+    // The timestamp/ID indexes can be scanned forwards or backwards for each bounded query.
+    // Spring-managed completion-list entry points use one repeatable-read snapshot for both ranges.
+    if (completion.afterId() > 0 && completion.afterTime() == null) {
+      return queryScanPage(new StringBuilder(sql).append(" AND t.finished_at IS NULL"),
+          args, "t", "finished_at", 0, limit, completion, true, taskMapper);
+    }
+    List<ScanTask> rows = new ArrayList<>(queryScanPage(
+        new StringBuilder(sql).append(" AND t.finished_at IS NOT NULL"),
+        args, "t", "finished_at", 0, limit, completion, false, taskMapper));
+    if (rows.size() < limit) {
+      rows.addAll(queryScanPage(new StringBuilder(sql).append(" AND t.finished_at IS NULL"),
+          args, "t", "finished_at", 0, limit - rows.size(),
+          new CompletionOrder(completion.ascending(), 0, null), true, taskMapper));
+    }
+    return rows;
+  }
+
+  private <T> List<T> queryScanPage(
+      StringBuilder sql, List<Object> baseArgs, String alias, String column,
+      long afterId, int limit, CompletionOrder completion, boolean unfinished, RowMapper<T> mapper) {
+    List<Object> args = new ArrayList<>(baseArgs);
+    appendScanPageBoundary(sql, args, alias, column, afterId, completion);
+    appendScanPageOrder(sql, alias, column, completion, unfinished);
+    sql.append(" LIMIT ?");
+    args.add(limit);
+    try {
+      return jdbc.query(sql.toString(), mapper, args.toArray());
+    } catch (DataAccessException exception) {
+      // JVM-only validation cannot predict the driver's configured connection timezone.
+      // Translate only datetime failures on a timestamp-bearing cursor, not other DB failures.
+      if (completion != null && completion.afterTime() != null) {
+        for (Throwable cause = exception; cause != null; cause = cause.getCause()) {
+          if (cause instanceof SQLException sqlException
+              && databaseDialect.isInvalidDatetime(sqlException)) {
+            throw new InvalidScanCompletionCursorException(exception);
+          }
+        }
+      }
+      throw exception;
+    }
+  }
+
+  // Only internal column names and fixed direction tokens reach SQL. Cursor values are bound.
+  private static void appendScanPageBoundary(
+      StringBuilder sql, List<Object> args, String alias, String column,
+      long afterId, CompletionOrder completion) {
+    if (completion == null) {
+      sql.append(" AND ").append(alias).append(".id > ?");
+      args.add(Math.max(0, afterId));
+      return;
+    }
+    if (completion.afterId() <= 0) return;
+    String time = alias + "." + column;
+    String comparison = completion.ascending() ? " > ?" : " < ?";
+    if (completion.afterTime() == null) {
+      sql.append(" AND ").append(time).append(" IS NULL AND ")
+          .append(alias).append(".id").append(comparison);
+      args.add(completion.afterId());
+    } else {
+      sql.append(" AND ").append(time).append(completion.ascending() ? " >= ?" : " <= ?")
+          .append(" AND (").append(time).append(comparison)
+          .append(" OR (").append(time).append(" = ? AND ")
+          .append(alias).append(".id").append(comparison)
+          .append("))");
+      args.add(nullableTimestamp(completion.afterTime()));
+      args.add(nullableTimestamp(completion.afterTime()));
+      args.add(nullableTimestamp(completion.afterTime()));
+      args.add(completion.afterId());
+    }
+  }
+
+  private void appendScanPageOrder(
+      StringBuilder sql, String alias, String column, CompletionOrder completion, boolean unfinished) {
+    if (completion == null) {
+      sql.append(" ORDER BY ").append(alias).append(".id");
+      return;
+    }
+    String time = alias + "." + column;
+    String direction = completion.ascending() ? " ASC" : " DESC";
+    sql.append(" ORDER BY ");
+    if (!unfinished || databaseDialect.orderByNullEqualityColumns()) {
+      sql.append(time).append(direction).append(", ");
+    }
+    sql.append(alias).append(".id").append(direction);
   }
 
   @Override
@@ -2187,15 +2320,27 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Override
   public List<ScanRun> listRuns(
       Long repositoryId, String query, long afterId, int maxItems) {
-    return listRuns(repositoryId, null, query, afterId, maxItems);
+    return listRuns(repositoryId, query, afterId, maxItems, null);
+  }
+
+  @Override
+  public List<ScanRun> listRuns(
+      Long repositoryId, String query, long afterId, int maxItems, CompletionOrder completion) {
+    return listRuns(repositoryId, null, query, afterId, maxItems, completion);
   }
 
   @Override
   public List<ScanRun> listRunsByRepositories(
       List<Long> repositoryIds, String query, long afterId, int maxItems) {
+    return listRunsByRepositories(repositoryIds, query, afterId, maxItems, null);
+  }
+
+  @Override
+  public List<ScanRun> listRunsByRepositories(
+      List<Long> repositoryIds, String query, long afterId, int maxItems, CompletionOrder completion) {
     List<Long> ids = repositoryScope.distinctLongs(repositoryIds);
     if (ids.isEmpty()) return List.of();
-    return listRuns(null, ids, query, afterId, maxItems);
+    return listRuns(null, ids, query, afterId, maxItems, completion);
   }
 
   private List<ScanRun> listRuns(
@@ -2203,7 +2348,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       List<Long> repositoryIds,
       String query,
       long afterId,
-      int maxItems) {
+      int maxItems, CompletionOrder completion) {
     StringBuilder sql = new StringBuilder();
     List<Object> args = new ArrayList<>();
     if (repositoryIds != null) {
@@ -2213,26 +2358,27 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     sql.append("""
         SELECT sr.*
         FROM security_scan_run sr
-        WHERE sr.id > ?
+        WHERE 1 = 1
         """);
-    args.add(Math.max(0, afterId));
     if (repositoryId != null) {
       sql.append("""
-           AND EXISTS (
+           AND (
              SELECT 1 FROM security_scan_run_subject s
              WHERE s.scan_run_id = sr.id AND s.repository_id = ?
-           )
+             LIMIT 1
+           ) IS NOT NULL
           """);
       args.add(repositoryId);
     } else if (repositoryIds != null) {
       sql.append("""
-           AND EXISTS (
+           AND (
              SELECT 1
              FROM security_scan_run_subject s
              JOIN visible_repository visible
                ON visible.repository_id = s.repository_id
              WHERE s.scan_run_id = sr.id
-           )
+             LIMIT 1
+           ) IS NOT NULL
           """);
     }
     String pattern = searchPattern(query);
@@ -2276,9 +2422,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       }
       sql.append(")");
     }
-    sql.append(" ORDER BY sr.id LIMIT ?");
-    args.add(safeLimit(maxItems));
-    return jdbc.query(sql.toString(), runMapper, args.toArray());
+    return queryScanPage(sql, args, "sr", "completed_at", afterId, safeLimit(maxItems),
+        completion, false, runMapper);
   }
 
   @Override
