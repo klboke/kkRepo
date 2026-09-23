@@ -5434,7 +5434,7 @@ function renderSecurityScanTasks() {
 }
 
 function renderSecurityScanTaskAsset(task) {
-  if (task.assetId == null) return "-";
+  if (task.assetId == null) return '<span class="security-scan-task-asset">Asset unavailable</span>';
   const path = task.browsePath || task.assetPath;
   const identity = `<small>Asset ID: ${escapeHtml(task.assetId)}</small>`;
   if (!path) {

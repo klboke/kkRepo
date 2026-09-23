@@ -394,7 +394,8 @@ Scanner 健康状态以最近一次 adapter 观测为准；界面展示的 Vulne
 
 Tasks 展示任务 stage、触发原因、状态、尝试次数、lease 和错误码。
 Asset 列同时展示仓库浏览路径和内部 asset ID。点击路径可在 Repository Browser 中打开资产；
-通过 group 查看时会保留成员来源。资产已删除或无法解析时，任务仍保留 ID，并显示“Asset unavailable”。
+通过 group 查看时会保留成员来源。资产无法解析时显示“Asset unavailable”。删除资产会清空任务中的
+资产引用，历史任务不会保留原资产 ID 和路径。
 
 - `PENDING` / `RETRY_WAIT` / `RUNNING`：可 cancel。
 - `FAILED` / `CANCELLED`：可 retry。

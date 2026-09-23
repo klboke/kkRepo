@@ -52,16 +52,16 @@ test('group link retains the member source and safely encodes special characters
   assert.ok(!html.includes('<script>'));
 });
 
-test('deleted assets keep a readable ID without a broken browser link', () => {
+test('assets disappearing during lookup keep the returned ID without a broken browser link', () => {
   const html = render({ ...task, assetPath: null, browsePath: null, browseRepository: null });
   assert.match(html, /Asset ID: 20/);
   assert.match(html, /Asset unavailable/);
   assert.ok(!html.includes('href='));
 });
 
-test('tasks without an asset do not claim it was deleted or offer a rescan', () => {
+test('deletion-nulled asset references show unavailable without inventing an ID or offering a rescan', () => {
   const html = render({ ...task, assetId: null, assetPath: null, browsePath: null, browseRepository: null });
-  assert.ok(!html.includes('Asset unavailable'));
+  assert.ok(html.includes('Asset unavailable'));
   assert.ok(!html.includes('Asset ID:'));
   assert.ok(!html.includes('security-scan-asset-rescan'));
 });
