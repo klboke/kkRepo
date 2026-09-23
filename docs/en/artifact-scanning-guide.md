@@ -432,6 +432,9 @@ The Runs table shows completed scan runs, completeness, finding counts, and comp
 ### Tasks
 
 Tasks show stage, trigger reason, status, attempts, lease, and error code.
+The Asset column shows the repository browser path alongside the internal asset ID. Click the
+path to open the asset in Repository Browser; group views preserve the member source. If an asset
+has been deleted or can no longer be resolved, the task keeps its ID and shows “Asset unavailable”.
 
 - `PENDING` / `RETRY_WAIT` / `RUNNING`: cancel is available.
 - `FAILED` / `CANCELLED`: retry is available.

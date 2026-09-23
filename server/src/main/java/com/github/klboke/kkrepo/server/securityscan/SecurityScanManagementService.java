@@ -236,10 +236,51 @@ public class SecurityScanManagementService {
             .ifPresent(name -> repositoryNames.put(task.repositoryId(), name));
       }
     }
-    List<TaskView> views = rows.stream()
-        .map(task -> TaskView.from(task, repositoryNames.get(task.repositoryId())))
-        .toList();
+    List<Long> assetIds = rows.stream().map(ScanTask::assetId)
+        .filter(java.util.Objects::nonNull).distinct().toList();
+    Map<Long, AssetRecord> assetsById = assetIds.isEmpty()
+        ? Map.of() : assets.findAssetsByIds(assetIds);
+    Map<Long, String> browsePaths = assetIds.isEmpty()
+        ? Map.of() : browseNodes.findPathsByAssetIds(assetIds);
+    Map<Long, String> dockerPaths = assetIds.isEmpty() ? Map.of() : dockerBrowsePaths(assetIds);
+    // Request-local memoization only; group membership is read from shared persistence each request.
+    Map<Long, List<Long>> groupSources = new LinkedHashMap<>();
+    List<TaskView> views = new ArrayList<>(rows.size());
+    for (ScanTask task : rows) {
+      AssetRecord asset = task.assetId() == null ? null : assetsById.get(task.assetId());
+      if (asset != null && asset.repositoryId() != task.repositoryId()) asset = null;
+      String browseRepository = null;
+      if (asset != null) {
+        browseRepository = taskBrowseRepository(visible, repositoryId, asset, groupSources);
+      }
+      views.add(TaskView.from(
+          task, repositoryNames.get(task.repositoryId()),
+          asset == null ? null : asset.path(),
+          asset == null ? null : findingBrowsePath(
+              asset, browsePaths.get(asset.id()), dockerPaths.get(asset.id())),
+          browseRepository));
+    }
     return cursorPage(views, safeLimit, TaskView::id);
+  }
+
+  private String taskBrowseRepository(
+      List<RepositoryRecord> visible,
+      Long requestedRepositoryId,
+      AssetRecord asset,
+      Map<Long, List<Long>> groupSources) {
+    // Preserve a selected group context, otherwise prefer a directly visible source repository.
+    List<RepositoryRecord> candidates = new ArrayList<>(visible);
+    candidates.sort(Comparator.comparingInt(repository ->
+        repository.id().equals(requestedRepositoryId) ? 0
+            : repository.id() == asset.repositoryId() ? 1 : 2));
+    return candidates.stream()
+        .filter(repository -> repository.id() == asset.repositoryId()
+            || (repository.type() == RepositoryType.GROUP
+                && groupSources.computeIfAbsent(
+                    repository.id(), repositoryScope::sourceRepositoryIds)
+                    .contains(asset.repositoryId())))
+        .map(RepositoryRecord::name)
+        .findFirst().orElse(null);
   }
 
   public List<RunView> runs(
@@ -1564,6 +1605,9 @@ public class SecurityScanManagementService {
       long repositoryId,
       String repository,
       Long assetId,
+      String assetPath,
+      String browsePath,
+      String browseRepository,
       String subjectKind,
       String stage,
       String reason,
@@ -1580,9 +1624,12 @@ public class SecurityScanManagementService {
       Instant requestedAt,
       Instant startedAt,
       Instant finishedAt) {
-    static TaskView from(ScanTask task, String repository) {
+    static TaskView from(
+        ScanTask task, String repository, String assetPath, String browsePath,
+        String browseRepository) {
       return new TaskView(
-          task.id(), task.repositoryId(), repository, task.assetId(), task.subjectKind().name(),
+          task.id(), task.repositoryId(), repository, task.assetId(),
+          assetPath, browsePath, browseRepository, task.subjectKind().name(),
           task.stage().name(), task.requestReason().name(), task.priority(), task.status().name(),
           task.attempts(), task.maxAttempts(), task.nextAttemptAt(), task.claimedBy(),
           task.leaseUntil(), task.lastErrorCode(), task.lastErrorSummary(), task.requestedBy(),
