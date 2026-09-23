@@ -5420,7 +5420,7 @@ function renderSecurityScanTasks() {
         <tr>
           <td>${escapeHtml(task.id)}</td>
           <td>${escapeHtml(task.repository || `#${task.repositoryId}`)}</td>
-          <td>${escapeHtml(task.assetId ?? "-")}</td>
+          <td>${renderSecurityScanTaskAsset(task)}</td>
           <td>${escapeHtml(task.stage)}</td>
           <td>${escapeHtml(task.reason)}</td>
           <td><span class="state-badge compact ${securityScanTone(task.status)}">${escapeHtml(task.status)}</span></td>
@@ -5431,6 +5431,23 @@ function renderSecurityScanTasks() {
         </tr>`;
     }).join("")
       || '<tr><td colspan="10" class="placeholder">No scan tasks are visible.</td></tr>';
+}
+
+function renderSecurityScanTaskAsset(task) {
+  if (task.assetId == null) return '<span class="security-scan-task-asset">Asset unavailable</span>';
+  const path = task.browsePath || task.assetPath;
+  const identity = `<small>Asset ID: ${escapeHtml(task.assetId)}</small>`;
+  if (!path) {
+    return `<span class="security-scan-task-asset">${identity}<span>Asset unavailable</span></span>`;
+  }
+  const label = task.browseRepository
+    ? `<a href="${escapeHtml(securityScanFindingArtifactBrowseUrl({
+        repository: task.browseRepository,
+        sourceRepository: task.repository,
+        browsePath: path
+      }))}" title="${escapeHtml(`Open ${task.repository}: ${path} in Repository Browser`)}">${escapeHtml(path)}</a>`
+    : `<span>${escapeHtml(path)}</span>`;
+  return `<span class="security-scan-task-asset">${label}${identity}</span>`;
 }
 
 function renderSecurityScanFindingRepositories(finding) {
