@@ -284,7 +284,7 @@ class AdminSecurityScanningCapabilityContractTest {
     assertTrue(css.contains(".security-scan-scanner-state.is-degraded"));
     assertTrue(css.contains(".security-scan-scanner-state.is-disabled"));
     assertTrue(index.contains(
-        "<thead><tr><th>Status</th><th>Repository</th><th>Format</th><th>Type</th>"));
+        "<thead><tr><th>Status</th><th>Repository</th><th>Profile</th><th>Policy</th>"));
     assertTrue(javascript.contains("function renderSecurityScanRepositoryStatus(enabled)"));
     assertTrue(javascript.contains(
         "{ label: \"Enabled\", tone: \"ok\", icon: \"check\" }"));

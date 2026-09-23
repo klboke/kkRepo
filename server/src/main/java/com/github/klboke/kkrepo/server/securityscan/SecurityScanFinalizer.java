@@ -423,17 +423,7 @@ public class SecurityScanFinalizer {
 
   private static Instant staleAt(
       RepositoryScanConfig config, ScanPolicy policy, Instant completedAt) {
-    Long configAge = config.maxResultAgeSeconds();
-    Long policyAge =
-        policy == null || !policy.enabled() ? null : policy.maxResultAgeSeconds();
-    Long age;
-    if (configAge == null) {
-      age = policyAge;
-    } else if (policyAge == null) {
-      age = configAge;
-    } else {
-      age = Math.min(configAge, policyAge);
-    }
+    Long age = SecurityScanResultValidity.resolve(config, policy).maxResultAgeSeconds();
     return age == null || completedAt == null ? null : completedAt.plusSeconds(Math.max(1, age));
   }
 
