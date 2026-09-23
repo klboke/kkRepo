@@ -417,8 +417,11 @@ Finding 表示 scanner 数据库在某次 run 中的匹配结果。`0 findings` 
 
 ### Repositories
 
-Repositories 展示每个可见仓库的 Enabled/Disabled、format、type、profile、policy
-和 mode。这里是仓库扫描业务开关的唯一 UI 入口。
+Repositories 展示每个可见仓库的 Enabled/Disabled、profile、policy、mode、实际结果有效期，
+以及 pending/failure/partial 处理方式。format 和 type 收入仓库名旁的提示。仓库未设置有效期时
+继承启用中的策略；两者均设置时取较短值，禁用策略不附加有效期限制。提示解释取值来源、
+仅审计或未启用的动作，以及策略禁用时跳过 partial 检查的行为。允许 partial 仍会继续漏洞判定。
+提示支持鼠标悬停和键盘聚焦。这里是仓库扫描业务开关的唯一 UI 入口。
 
 ### Policies
 

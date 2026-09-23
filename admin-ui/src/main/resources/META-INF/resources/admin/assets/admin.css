@@ -4651,3 +4651,15 @@ code {
 .usage-table td.actions-column { position: sticky; right: 0; z-index: 1; background: var(--row); box-shadow: -1px 0 var(--line); }
 .usage-table tr:hover td.actions-column { background: var(--row-hover); }
 .fixed-table-view .fixed-table-frame .usage-table th.actions-column { right: 0; z-index: 2; box-shadow: -1px 0 var(--line); }
+
+.security-scan-setting {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.security-scan-exception-handling {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+}

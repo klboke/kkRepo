@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -32,8 +33,13 @@ class SecurityScanOverviewJsonTest {
             "PROXY",
             "syft-grype-v1",
             "default-audit",
-            null));
+            null,
+            new SecurityScanResultValidity(86400L, "POLICY"),
+            true));
 
+    assertEquals(86400L, json.get("resultValidity").get("maxResultAgeSeconds").asLong());
+    assertEquals("POLICY", json.get("resultValidity").get("source").asText());
+    assertTrue(json.get("policyEnabled").asBoolean());
     assertTrue(json.has("profileName"));
     assertTrue(json.has("policyName"));
     assertFalse(json.get("profileName").asText().matches("\\d+"));
