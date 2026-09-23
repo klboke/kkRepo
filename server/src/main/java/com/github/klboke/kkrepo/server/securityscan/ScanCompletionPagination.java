@@ -3,7 +3,9 @@ package com.github.klboke.kkrepo.server.securityscan;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.CompletionOrder;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.CursorPage;
 import java.nio.charset.StandardCharsets;
+import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.Base64;
 import java.util.List;
 import java.util.function.Function;
@@ -12,6 +14,10 @@ import org.springframework.web.server.ResponseStatusException;
 
 /** Stateless timestamp/ID cursors can be served by any replica, even after the boundary is deleted. */
 final class ScanCompletionPagination {
+  // Common column range, checked after the same JDBC conversion used by the DAO.
+  private static final LocalDateTime MIN_COMPLETION = LocalDateTime.parse("1000-01-01T00:00:00");
+  private static final LocalDateTime MAX_COMPLETION = LocalDateTime.parse("9999-12-31T23:59:59.999");
+
   private ScanCompletionPagination() {}
 
   static CompletionOrder parse(
@@ -40,6 +46,12 @@ final class ScanCompletionPagination {
       long id = Long.parseLong(parts[4]);
       if (id <= 0) throw new IllegalArgumentException();
       Instant time = parts[3].isEmpty() ? null : Instant.parse(parts[3]);
+      if (time != null) {
+        LocalDateTime jdbcTime = Timestamp.from(time).toLocalDateTime();
+        if (jdbcTime.isBefore(MIN_COMPLETION) || jdbcTime.isAfter(MAX_COMPLETION)) {
+          throw new IllegalArgumentException();
+        }
+      }
       return new CompletionOrder(ascending, id, time);
     } catch (IllegalArgumentException | java.time.DateTimeException exception) {
       throw invalid("Invalid completion cursor for this sort order");

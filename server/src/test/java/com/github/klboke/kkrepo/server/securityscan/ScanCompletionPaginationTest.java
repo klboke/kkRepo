@@ -67,6 +67,27 @@ class ScanCompletionPaginationTest {
         "finished_at", "finished_at", "desc", null, 5));
   }
 
+  @Test
+  void rejectsJdbcOverflowAndDatabaseRangeViolationsAsBadRequests() {
+    for (String field : List.of("finished_at", "completed_at")) {
+      for (String time : List.of(
+          "+1000000000-12-31T23:59:59.999999999Z",
+          "-1000000000-01-01T00:00:00Z",
+          "0900-12-31T23:59:59.999Z", "+11000-01-01T00:00:00Z",
+          "+10000-06-01T00:00:00Z")) {
+        var error = assertThrows(ResponseStatusException.class, () -> ScanCompletionPagination.parse(
+            field, field, "desc", token("1|" + field + "|desc|" + time + "|1"), 0));
+        assertEquals(HttpStatus.BAD_REQUEST, error.getStatusCode());
+      }
+      for (String localTime : List.of("1000-01-01 00:00:00", "9999-12-31 23:59:59.999")) {
+        String time = java.sql.Timestamp.valueOf(localTime).toInstant().toString();
+        var order = ScanCompletionPagination.parse(
+            field, field, "desc", token("1|" + field + "|desc|" + time + "|1"), 0);
+        assertEquals(Instant.parse(time), order.afterTime());
+      }
+    }
+  }
+
   private static String token(String value) {
     return Base64.getUrlEncoder().encodeToString(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));
   }

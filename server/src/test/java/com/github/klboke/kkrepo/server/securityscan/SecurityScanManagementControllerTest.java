@@ -28,6 +28,24 @@ import org.springframework.web.server.ResponseStatusException;
 
 class SecurityScanManagementControllerTest {
   @Test
+  void completionEndpointsReturn400ForOutOfRangeCursorTimestamps() throws Exception {
+    var service = mock(SecurityScanManagementService.class, org.mockito.Mockito.CALLS_REAL_METHODS);
+    var controller = new SecurityScanManagementController(service, mock(SecurityScanMutationService.class));
+    var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller).build();
+    for (String endpoint : List.of("tasks", "runs")) {
+      String field = endpoint.equals("tasks") ? "finished_at" : "completed_at";
+      String cursor = java.util.Base64.getUrlEncoder().encodeToString(
+          ("1|" + field + "|desc|+1000000000-12-31T23:59:59.999999999Z|1")
+              .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+      mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+              .get("/internal/security/scanning/" + endpoint)
+              .param("sort", field).param("cursor", cursor)
+              .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE, mock(AuthenticatedSubject.class)))
+          .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest());
+    }
+  }
+
+  @Test
   void forwardsCompletionSortAndCursorParameters() {
     var service = mock(SecurityScanManagementService.class);
     var controller = new SecurityScanManagementController(service, mock(SecurityScanMutationService.class));
