@@ -14,7 +14,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 /** Stateless timestamp/ID cursors can be served by any replica, even after the boundary is deleted. */
 final class ScanCompletionPagination {
-  // Common column range, checked after the same JDBC conversion used by the DAO.
+  // Early JVM-side range check; the DAO also handles datetime overflow in the connection timezone.
   private static final LocalDateTime MIN_COMPLETION = LocalDateTime.parse("1000-01-01T00:00:00");
   private static final LocalDateTime MAX_COMPLETION = LocalDateTime.parse("9999-12-31T23:59:59.999");
 

@@ -48,6 +48,19 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
   }
 
   @Override
+  public boolean isInvalidDatetime(java.sql.SQLException exception) {
+    // MySQL reports an out-of-range DATETIME comparison as HY000 / ER_WRONG_VALUE (1525).
+    return DatabaseDialect.super.isInvalidDatetime(exception)
+        || ("HY000".equals(exception.getSQLState()) && exception.getErrorCode() == 1525);
+  }
+
+  @Override
+  public boolean orderByNullEqualityColumns() {
+    // MySQL filesorts ORDER BY nullable_column, id even when nullable_column IS NULL.
+    return false;
+  }
+
+  @Override
   public String tableReferenceWithPreferredIndex(String tableName, String indexName) {
     return tableName + " FORCE INDEX (" + indexName + ")";
   }

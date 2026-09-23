@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
+import com.github.klboke.kkrepo.security.scan.ScanEnums.TaskStatus;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.CompletionOrder;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
@@ -36,18 +37,23 @@ public final class ScanCompletionQueryPlanAssertions {
     for (String table : List.of("security_scan_task", "security_scan_run", "security_scan_run_subject")) {
       jdbc.execute((postgres ? "ANALYZE " : "ANALYZE TABLE ") + table);
     }
+    long pendingBoundaryId = jdbc.queryForObject(
+        "SELECT id FROM security_scan_task WHERE dedupe_key = ?", Long.class,
+        PersistenceHashes.sha256("completion-plan-4000"));
     RecordingJdbcTemplate recording = new RecordingJdbcTemplate(jdbc);
     var dao = new JdbcSecurityScanDao(recording, new JsonColumns(new ObjectMapper(), dialect), dialect);
     for (boolean ascending : List.of(true, false)) {
       for (boolean scoped : List.of(true, false)) {
-        for (CompletionOrder order : List.of(
-            new CompletionOrder(ascending, 0, null),
-            new CompletionOrder(ascending, taskId, Instant.parse("2026-09-23T01:00:00Z")),
-            new CompletionOrder(ascending, taskId, null))) {
-          recording.queries.clear();
-          if (scoped) dao.listTasksByRepositories(List.of(repositoryId), null, null, 0, 10, order);
-          else dao.listTasks(repositoryId, null, null, 0, 10, order);
-          assertPlans(jdbc, recording, postgres, "idx_security_scan_task_");
+        for (TaskStatus status : java.util.Arrays.asList(null, TaskStatus.FAILED)) {
+          for (CompletionOrder order : List.of(
+              new CompletionOrder(ascending, 0, null),
+              new CompletionOrder(ascending, taskId, Instant.parse("2026-09-23T01:00:00Z")),
+              new CompletionOrder(ascending, pendingBoundaryId, null))) {
+            recording.queries.clear();
+            if (scoped) dao.listTasksByRepositories(List.of(repositoryId), status, null, 0, 10, order);
+            else dao.listTasks(repositoryId, status, null, 0, 10, order);
+            assertPlans(jdbc, recording, postgres, "idx_security_scan_task_");
+          }
         }
         for (CompletionOrder order : List.of(
             new CompletionOrder(ascending, 0, null),
@@ -68,7 +74,8 @@ public final class ScanCompletionQueryPlanAssertions {
         .keySet().stream().filter(column -> !column.equals("id") && !column.equals("attempts_remaining"))
         .toList();
     String projection = String.join(", ", columns.stream()
-        .map(column -> column.equals(timeColumn) || column.equals(keyColumn) ? "?" : column).toList());
+        .map(column -> column.equals(timeColumn) || column.equals(keyColumn)
+            || (task && column.equals("status")) ? "?" : column).toList());
     String sql = "INSERT INTO " + table + " (" + String.join(", ", columns) + ") SELECT "
         + projection + " FROM " + table + " WHERE id = ?";
     List<Object[]> batch = new ArrayList<>();
@@ -76,6 +83,7 @@ public final class ScanCompletionQueryPlanAssertions {
       String key = "completion-plan-" + i;
       Map<String, Object> values = new java.util.HashMap<>();
       values.put(keyColumn, task ? PersistenceHashes.sha256(key) : key);
+      if (task) values.put("status", i % 101 == 0 ? "FAILED" : "SUCCEEDED");
       values.put(timeColumn, task && i % 4 == 0 ? null
           : Timestamp.from(Instant.parse("2026-09-23T00:00:00Z").plusSeconds(i)));
       List<Object> args = new ArrayList<>();
@@ -98,13 +106,11 @@ public final class ScanCompletionQueryPlanAssertions {
           String.class, query.args());
       try {
         var tree = new ObjectMapper().readTree(plan);
-        // NULL-only pages order by ID. PostgreSQL may choose its ordered primary-key walk
-        // when the pending density makes that cheaper; it must still avoid sorting history.
-        boolean pending = query.sql().contains(" AND t.finished_at IS NULL");
+        boolean statusFiltered = query.sql().contains(" AND t.status = ?");
         assertTrue(tree.findValues(postgres ? "Index Name" : "key").stream()
             .map(JsonNode::asText)
-            .anyMatch(name -> (name.startsWith(index) && name.endsWith("completion"))
-                || (postgres && pending && name.equals("security_scan_task_pkey"))),
+            .anyMatch(name -> name.startsWith(index) && name.endsWith("completion")
+                && (!statusFiltered || name.contains("status_completion"))),
             query.sql() + "\n" + plan);
         assertFalse(postgres ? sortsResultRows(tree.get(0).path("Plan"))
             : tree.path("query_block").path("ordering_operation").path("using_filesort").asBoolean(),

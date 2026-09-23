@@ -28,10 +28,11 @@ class PostgreSqlMigrationCompatibilityTest extends PostgreSqlIntegrationTestSupp
               new org.springframework.core.io.ClassPathResource(path), StandardCharsets.UTF_8));
       return null;
     });
-    assertEquals(3, jdbc().queryForObject("""
+    assertEquals(5, jdbc().queryForObject("""
         SELECT COUNT(*) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
         WHERE c.relname IN ('idx_security_scan_task_completion',
-          'idx_security_scan_task_repo_completion', 'idx_security_scan_run_completion')
+          'idx_security_scan_task_repo_completion', 'idx_security_scan_run_completion',
+          'idx_security_scan_task_status_completion', 'idx_security_scan_task_repo_status_completion')
           AND i.indisvalid
         """, Integer.class));
   }

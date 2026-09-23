@@ -280,8 +280,8 @@ NuGet proxy 仓库支持使用 NTLM 访问要求 Windows 凭据的上游。在�
 - `GET /internal/security/scanning/tasks?sort=finished_at&direction=desc&limit=25`，可附加 `status=FAILED`、`repositoryId` 或 `q`。
 - `GET /internal/security/scanning/runs?sort=completed_at&direction=asc&limit=25`，可附加 `repositoryId` 或 `q`。
 
-选择完成时间排序但省略方向时，默认 `direction=desc`。将响应中的不透明 `nextCursor` 作为下一页的 `cursor`，并保持排序、方向和过滤条件一致；游标为空表示没有下一页。修改排序或过滤条件后应从第一页重新查询。完成时间排序不使用 `after`/`nextAfter`。省略 `sort`（或使用 `sort=id&direction=asc`）时，保留原有 ID 升序和 `after`/`nextAfter` 分页，兼容旧客户端。不支持的字段、方向以及格式错误或与排序不匹配的游标返回 HTTP 400。
+选择完成时间排序但省略方向时，默认 `direction=desc`。将响应中的不透明 `nextCursor` 作为下一页的 `cursor`，并保持排序、方向和过滤条件一致；游标为空表示没有下一页。修改排序或过滤条件后应从第一页重新查询。完成时间排序不使用 `after`/`nextAfter`。省略 `sort`（或使用 `sort=id&direction=asc`）时，保留原有 ID 升序和 `after`/`nextAfter` 分页，兼容旧客户端。不支持的字段、方向、格式错误或与排序不匹配的游标，以及超出 JDBC 连接支持范围的时间戳均返回 HTTP 400。
 
 游标保存完成时间和 ID，任何服务副本都能继续分页，无需重新查询上一页的边界记录。列表反映实时数据，并非固定快照：任务重试、新完成任务或历史清理可能在浏览期间改变列表。查看最新活动时请从第一页刷新。
 
-完成时间分页使用 V55 迁移新增的时间戳／ID 索引。任务分别查询已完成和未完成区间，每次最多读取该页剩余条数，服务端在同一个只读事务内完成两次读取。这样既保持未完成任务排在最后，也避免对全部历史记录进行空值排序。MySQL 使用在线索引构建，PostgreSQL 使用并发索引构建；迁移支持中断后重试。
+完成时间分页使用 V55 迁移新增的时间戳／ID 索引，并为按状态筛选的任务列表提供状态前导索引（包括指定仓库的列表）。任务分别查询已完成和未完成区间，每次最多读取该页剩余条数，服务端在同一个只读事务内完成两次读取。这样既保持未完成任务排在最后，也避免对全部历史记录进行空值排序。MySQL 使用在线索引构建，PostgreSQL 使用并发索引构建；迁移支持中断后重试。

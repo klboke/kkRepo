@@ -46,6 +46,27 @@ class SecurityScanManagementControllerTest {
   }
 
   @Test
+  void completionEndpointsReturn400ForConnectionTimezoneOverflow() throws Exception {
+    var service = mock(SecurityScanManagementService.class);
+    var actor = mock(AuthenticatedSubject.class);
+    var error = new com.github.klboke.kkrepo.persistence.jdbc.api.InvalidScanCompletionCursorException(null);
+    when(service.taskPage(actor, null, null, null, 0, 25, "finished_at", null, "cursor"))
+        .thenThrow(error);
+    when(service.runPage(actor, null, null, 0, 25, "completed_at", null, "cursor"))
+        .thenThrow(error);
+    var controller = new SecurityScanManagementController(service, mock(SecurityScanMutationService.class));
+    var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(controller).build();
+    for (String endpoint : List.of("tasks", "runs")) {
+      String field = endpoint.equals("tasks") ? "finished_at" : "completed_at";
+      mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+              .get("/internal/security/scanning/" + endpoint)
+              .param("sort", field).param("cursor", "cursor")
+              .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE, actor))
+          .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest());
+    }
+  }
+
+  @Test
   void forwardsCompletionSortAndCursorParameters() {
     var service = mock(SecurityScanManagementService.class);
     var controller = new SecurityScanManagementController(service, mock(SecurityScanMutationService.class));

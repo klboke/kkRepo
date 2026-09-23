@@ -8,6 +8,7 @@ import static com.github.klboke.kkrepo.security.scan.ScanEnums.SCANNER_OBSERVATI
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobReferenceDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.InvalidScanCompletionCursorException;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.EnumColumns;
@@ -40,6 +41,7 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.UUID;
 import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
@@ -83,8 +85,11 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
           .thenComparingLong(ClaimCandidate::id);
 
   private final JdbcTemplate jdbc;
+  private final DatabaseDialect databaseDialect;
   private final String completionTaskTable;
   private final String repositoryCompletionTaskTable;
+  private final String statusCompletionTaskTable;
+  private final String repositoryStatusCompletionTaskTable;
   private final BlobReferenceDao blobReferences;
   private final JdbcSecurityScanRepositoryScope repositoryScope;
   private final JdbcSecurityScanRetentionDao retention;
@@ -498,10 +503,15 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   public JdbcSecurityScanDao(
       JdbcTemplate jdbc, JsonColumns json, DatabaseDialect databaseDialect) {
     this.jdbc = jdbc;
+    this.databaseDialect = databaseDialect;
     this.completionTaskTable = databaseDialect.tableReferenceWithPreferredIndex(
         "security_scan_task t", "idx_security_scan_task_completion");
     this.repositoryCompletionTaskTable = databaseDialect.tableReferenceWithPreferredIndex(
         "security_scan_task t", "idx_security_scan_task_repo_completion");
+    this.statusCompletionTaskTable = databaseDialect.tableReferenceWithPreferredIndex(
+        "security_scan_task t", "idx_security_scan_task_status_completion");
+    this.repositoryStatusCompletionTaskTable = databaseDialect.tableReferenceWithPreferredIndex(
+        "security_scan_task t", "idx_security_scan_task_repo_status_completion");
     this.json = json;
     this.blobReferences = new JdbcBlobReferenceDao(jdbc);
     this.repositoryScope = new JdbcSecurityScanRepositoryScope(json, databaseDialect.json());
@@ -1328,8 +1338,12 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     }
     String pattern = searchPattern(query);
     // MySQL can otherwise prefer the primary key for NULL timestamps and scan completed history.
-    String taskTable = completion == null || pattern != null ? "security_scan_task t"
-        : repositoryId == null ? completionTaskTable : repositoryCompletionTaskTable;
+    String taskTable = "security_scan_task t";
+    if (completion != null && pattern == null) {
+      taskTable = status == null
+          ? (repositoryId == null ? completionTaskTable : repositoryCompletionTaskTable)
+          : (repositoryId == null ? statusCompletionTaskTable : repositoryStatusCompletionTaskTable);
+    }
     sql.append("SELECT t.* FROM ").append(taskTable);
     if (pattern != null) {
       sql.append(" JOIN repository r ON r.id = t.repository_id")
@@ -1425,7 +1439,21 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     appendScanPageOrder(sql, alias, column, completion, unfinished);
     sql.append(" LIMIT ?");
     args.add(limit);
-    return jdbc.query(sql.toString(), mapper, args.toArray());
+    try {
+      return jdbc.query(sql.toString(), mapper, args.toArray());
+    } catch (DataAccessException exception) {
+      // JVM-only validation cannot predict the driver's configured connection timezone.
+      // Translate only datetime failures on a timestamp-bearing cursor, not other DB failures.
+      if (completion != null && completion.afterTime() != null) {
+        for (Throwable cause = exception; cause != null; cause = cause.getCause()) {
+          if (cause instanceof SQLException sqlException
+              && databaseDialect.isInvalidDatetime(sqlException)) {
+            throw new InvalidScanCompletionCursorException(exception);
+          }
+        }
+      }
+      throw exception;
+    }
   }
 
   // Only internal column names and fixed direction tokens reach SQL. Cursor values are bound.
@@ -1457,7 +1485,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     }
   }
 
-  private static void appendScanPageOrder(
+  private void appendScanPageOrder(
       StringBuilder sql, String alias, String column, CompletionOrder completion, boolean unfinished) {
     if (completion == null) {
       sql.append(" ORDER BY ").append(alias).append(".id");
@@ -1466,7 +1494,9 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     String time = alias + "." + column;
     String direction = completion.ascending() ? " ASC" : " DESC";
     sql.append(" ORDER BY ");
-    if (!unfinished) sql.append(time).append(direction).append(", ");
+    if (!unfinished || databaseDialect.orderByNullEqualityColumns()) {
+      sql.append(time).append(direction).append(", ");
+    }
     sql.append(alias).append(".id").append(direction);
   }
 

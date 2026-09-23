@@ -18,7 +18,7 @@ class MySqlSecurityScanSummaryIndexTest extends MySqlIntegrationTestSupport {
   void completionIndexesResumeAfterPartiallyCommittedOnlineDdl() throws Exception {
     String path = "db/migration/mysql/V55__security_scan_completion_indexes.sql";
     String migration = resource(path);
-    assertEquals(3, occurrences(migration, "ALGORITHM=INPLACE, LOCK=NONE"));
+    assertEquals(5, occurrences(migration, "ALGORITHM=INPLACE, LOCK=NONE"));
     jdbc().execute("ALTER TABLE security_scan_run DROP INDEX idx_security_scan_run_completion");
     for (int attempt = 0; attempt < 2; attempt++) {
       jdbc().execute((org.springframework.jdbc.core.ConnectionCallback<Void>) connection -> {
@@ -30,6 +30,10 @@ class MySqlSecurityScanSummaryIndexTest extends MySqlIntegrationTestSupport {
           indexColumns("security_scan_task", "idx_security_scan_task_completion"));
       assertEquals(List.of("repository_id", "finished_at", "id"),
           indexColumns("security_scan_task", "idx_security_scan_task_repo_completion"));
+      assertEquals(List.of("status", "finished_at", "id"),
+          indexColumns("security_scan_task", "idx_security_scan_task_status_completion"));
+      assertEquals(List.of("repository_id", "status", "finished_at", "id"),
+          indexColumns("security_scan_task", "idx_security_scan_task_repo_status_completion"));
       assertEquals(List.of("completed_at", "id"),
           indexColumns("security_scan_run", "idx_security_scan_run_completion"));
     }

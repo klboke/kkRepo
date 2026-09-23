@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
+import com.github.klboke.kkrepo.persistence.jdbc.api.InvalidScanCompletionCursorException;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.RepositoryScanConfig;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanPolicy;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanWaiver;
@@ -29,6 +30,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -51,6 +53,11 @@ public class SecurityScanManagementController {
       SecurityScanManagementService service, SecurityScanMutationService mutations) {
     this.service = service;
     this.mutations = mutations;
+  }
+
+  @ExceptionHandler(InvalidScanCompletionCursorException.class)
+  public ResponseEntity<Map<String, String>> invalidCompletionCursor() {
+    return ResponseEntity.badRequest().body(Map.of("message", "Invalid completion cursor timestamp"));
   }
 
   @GetMapping("/summary")
