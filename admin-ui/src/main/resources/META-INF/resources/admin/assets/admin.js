@@ -91,6 +91,7 @@ let securityScanPages = Object.fromEntries(
       size: SECURITY_SCAN_DEFAULT_PAGE_SIZE,
       query: "",
       direction: "desc",
+      requestVersion: 0,
       nextAfter: null
     }
   ]));
@@ -5625,10 +5626,12 @@ function securityScanPageParams(key) {
 
 async function fetchSecurityScanPage(key) {
   const endpoint = securityScanListEndpoints[key];
-  return fetchJson(
+  const requestVersion = ++securityScanPages[key].requestVersion;
+  const payload = await fetchJson(
     `/internal/security/scanning/${endpoint}?${securityScanPageParams(key).toString()}`,
     { items: [], nextAfter: null },
     `Failed to load scan ${key}`);
+  return { ...payload, requestVersion };
 }
 
 function resetSecurityScanPage(key) {
@@ -5679,6 +5682,7 @@ async function loadSecurityScanList(key) {
   const payload = await fetchSecurityScanPage(key);
   const items = Array.isArray(payload?.items) ? payload.items : [];
   const page = securityScanPages[key];
+  if (payload.requestVersion !== page.requestVersion) return;
   if (items.length === 0 && page.page > 0) {
     page.cursors.pop();
     page.page -= 1;
@@ -5761,6 +5765,7 @@ async function loadSecurityScanning() {
   securityScanState.summary = summary;
   keys.forEach((key, index) => {
     const payload = pages[index];
+    if (payload.requestVersion !== securityScanPages[key].requestVersion) return;
     securityScanState[key] = Array.isArray(payload?.items) ? payload.items : [];
     securityScanPages[key].nextAfter = payload?.nextCursor ?? payload?.nextAfter ?? null;
   });

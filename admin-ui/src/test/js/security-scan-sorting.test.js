@@ -67,3 +67,18 @@ test('search and page size changes reset the cursor but retain sort direction', 
   assert.equal(requests.at(-1).has('cursor'), false);
   assert.equal(requests.at(-1).get('direction'), 'asc');
 });
+
+test('a slower previous request cannot overwrite a newly selected sort order', async () => {
+  const {c, run} = setup();
+  const pending = [];
+  c.fetchJson = () => new Promise(resolve => pending.push(resolve));
+  const oldRequest = c.sortSecurityScanPage('tasks', 'asc');
+  const newRequest = c.sortSecurityScanPage('tasks', 'desc');
+  pending[1]({items: [{id: 2}], nextCursor: 'new-boundary'});
+  await newRequest;
+  pending[0]({items: [{id: 1}], nextCursor: 'old-boundary'});
+  await oldRequest;
+  assert.equal(run('securityScanState.tasks[0].id'), 2);
+  assert.equal(run('securityScanPages.tasks.nextAfter'), 'new-boundary');
+  assert.equal(run('securityScanPages.tasks.direction'), 'desc');
+});
