@@ -140,9 +140,9 @@ public class SecurityScanManagementService {
     for (ScanProfile profile : profiles) {
       if (profile.id() != null) profileNames.put(profile.id(), profile.name());
     }
-    Map<Long, String> policyNames = new LinkedHashMap<>();
+    Map<Long, ScanPolicy> policies = new LinkedHashMap<>();
     for (ScanPolicy policy : scans.listPolicies()) {
-      if (policy.id() != null) policyNames.put(policy.id(), policy.name());
+      if (policy.id() != null) policies.put(policy.id(), policy);
     }
     Map<Long, RepositoryScanConfig> configurations = new LinkedHashMap<>();
     for (RepositoryScanConfig config : scans.findRepositoryConfigs(
@@ -153,14 +153,17 @@ public class SecurityScanManagementService {
         .map(repository -> {
           RepositoryScanConfig config = configurations.get(repository.id());
           if (config == null) config = defaultConfig(repository.id(), profiles);
+          ScanPolicy policy = config.policyId() == null ? null : policies.get(config.policyId());
           return new RepositoryView(
               repository.id(),
               repository.name(),
               repository.format().name(),
               repository.type().name(),
               profileNames.get(config.profileId()),
-              config.policyId() == null ? null : policyNames.get(config.policyId()),
-              config);
+              policy == null ? null : policy.name(),
+              config,
+              SecurityScanResultValidity.resolve(config, policy),
+              policy == null || policy.enabled());
         })
         .toList();
   }
@@ -1557,7 +1560,9 @@ public class SecurityScanManagementService {
       String type,
       String profileName,
       String policyName,
-      RepositoryScanConfig config) {}
+      RepositoryScanConfig config,
+      SecurityScanResultValidity resultValidity,
+      boolean policyEnabled) {}
 
   public record TaskView(
       long id,

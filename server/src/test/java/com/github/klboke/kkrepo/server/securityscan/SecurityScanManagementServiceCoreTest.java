@@ -123,6 +123,47 @@ class SecurityScanManagementServiceCoreTest {
         scope);
   }
 
+  @ParameterizedTest
+  @CsvSource(value = {
+      "null, null, true, null, NO_EXPIRY",
+      "null, 86400, true, 86400, POLICY",
+      "604800, null, true, 604800, REPOSITORY",
+      "604800, 86400, true, 86400, BOTH",
+      "86400, 604800, true, 86400, BOTH",
+      "86400, 86400, true, 86400, BOTH",
+      "null, 86400, false, null, NO_EXPIRY",
+      "604800, 86400, false, 604800, REPOSITORY"
+  }, nullValues = "null")
+  void repositoryPageResolvesRuntimeValidityWithoutChangingEditableConfig(
+      Long repositoryAge, Long policyAge, boolean enabled, Long effectiveAge, String source) {
+    RepositoryScanConfig config = new RepositoryScanConfig(
+        1L, true, 1L, true, true, EnforcementMode.ENFORCE,
+        PolicyAction.BLOCK, PolicyAction.ALLOW, PolicyAction.BLOCK,
+        repositoryAge, 10L, 1, NOW, NOW);
+    ScanPolicy policy = new ScanPolicy(
+        10L, "critical", enabled, Severity.CRITICAL, false, false, false,
+        policyAge, List.of(), 1, "admin", NOW, NOW);
+    when(scans.findRepositoryConfigs(any())).thenReturn(List.of(config));
+    when(scans.listPolicies()).thenReturn(List.of(policy));
+
+    var view = service.repositoryPage(actor, null, 0, 10).items().getFirst();
+
+    assertEquals(effectiveAge, view.resultValidity().maxResultAgeSeconds());
+    assertEquals(source, view.resultValidity().source());
+    assertEquals(enabled, view.policyEnabled());
+    assertSame(config, view.config());
+    assertEquals(repositoryAge, view.config().maxResultAgeSeconds());
+    assertEquals(PolicyAction.BLOCK, view.config().partialAction());
+    verify(scans, never()).findPolicy(anyLong());
+  }
+
+  @Test
+  void repositoryViewWithoutAssignedPolicyUsesBaselineWithoutAnAgeLimit() {
+    var view = service.repositoryViews(actor).getFirst();
+    assertEquals(new SecurityScanResultValidity(null, "NO_EXPIRY"), view.resultValidity());
+    assertTrue(view.policyEnabled());
+  }
+
   @Test
   void aggregatesOverviewAndBuildsCursorPagesForRepositoriesTasksAndRuns() {
     RepositoryRecord proxy = repository(2L, "maven-proxy", RepositoryType.PROXY);
