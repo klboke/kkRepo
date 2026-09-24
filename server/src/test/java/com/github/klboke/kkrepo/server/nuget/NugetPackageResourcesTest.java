@@ -114,7 +114,7 @@ class NugetPackageResourcesTest {
   void sourceNamedQueriesRemainOpaqueThroughProxyAndGroupLinks(String query) throws Exception {
     RecordingProxy proxy = new RecordingProxy();
     String suffix = "arp.projects/1.10.21/arp.projects.1.10.21.nupkg";
-    proxy.metadata = "{\"packageContent\":\"" + FLAT + suffix + "?" + query + "\"}";
+    proxy.metadata = "{\"@id\":\"" + REG + "arp.projects/1.10.21.json\",\"packageContent\":\"" + FLAT + suffix + "?" + query + "\"}";
     NugetService service = new NugetService(null, proxy, null, MAPPER);
     for (RepositoryRuntime entry : List.of(runtime(), group(2L, runtime()))) {
       URI link = URI.create(json(service.get(entry, "v3/registration5-semver1/arp.projects/1.10.21.json",
@@ -138,7 +138,10 @@ class NugetPackageResourcesTest {
       boolean content = suffix.endsWith(".nupkg");
       String remote = (content ? FLAT : REG) + suffix + "?" + query;
       String field = content ? "packageContent" : "@id";
-      proxy.metadata = MAPPER.writeValueAsString(Map.of(field, remote));
+      Map<String, String> links = new HashMap<>();
+      links.put("@id", REG + "arp.projects/1.10.21.json");
+      links.put(field, remote);
+      proxy.metadata = MAPPER.writeValueAsString(links);
       for (RepositoryRuntime entry : List.of(runtime(), group(2L, runtime()))) {
         URI link = URI.create(json(service.get(entry, "v3/registration5-semver1/arp.projects/1.10.21.json",
             BASE, null, false)).path(field).asText());
@@ -162,7 +165,7 @@ class NugetPackageResourcesTest {
     RecordingProxy proxy = new RecordingProxy();
     proxy.flat = FLAT + "?key=secret";
     String path = "v3-flatcontainer/arp.projects/1.10.21/arp.projects.1.10.21.nupkg";
-    proxy.metadata = "{\"packageContent\":\"" + FLAT + path.substring("v3-flatcontainer/".length())
+    proxy.metadata = "{\"@id\":\"" + REG + "arp.projects/1.10.21.json\",\"packageContent\":\"" + FLAT + path.substring("v3-flatcontainer/".length())
         + "?cursor=1&key=secret&sig=s\"}";
     NugetService service = new NugetService(null, proxy, null, MAPPER);
     URI link = URI.create(json(service.get(runtime(), "v3/registration5-semver1/arp.projects/1.10.21.json",
@@ -314,33 +317,34 @@ class NugetPackageResourcesTest {
     RecordingProxy proxy = new RecordingProxy();
     proxy.cacheRegistration = true;
     String packageSuffix = "arp.projects/1.10.21/arp.projects.1.10.21.nupkg";
-    proxy.metadata = "{\"packageContent\":\"" + FLAT + packageSuffix + "\"}";
-    String path = "v3/registration5-semver1/arp.projects/index.json";
+    proxy.metadata = "{\"@id\":\"" + REG + "arp.projects/1.10.21.json\",\"packageContent\":\"" + FLAT + packageSuffix + "\"}";
+    String path = "v3/registration5-semver1/arp.projects/1.10.21.json";
     assertEquals(BASE + "v3-flatcontainer/" + packageSuffix, json(get(proxy, path, false)).path("packageContent").asText());
     // Discovery expires before the registration document. Its URL remains the same,
     // but the new document now points to the replacement PackageBaseAddress.
     proxy.flat = "https://replacement.example/flat2/";
-    proxy.metadata = "{\"packageContent\":\"" + proxy.flat + packageSuffix + "\"}";
+    proxy.metadata = "{\"@id\":\"" + REG + "arp.projects/1.10.21.json\",\"packageContent\":\"" + proxy.flat + packageSuffix + "\"}";
     assertEquals(BASE + "v3-flatcontainer/" + packageSuffix, json(get(proxy, path, false)).path("packageContent").asText());
-    assertEquals(REG + "arp.projects/index.json", proxy.urls.getLast());
+    assertEquals(REG + "arp.projects/1.10.21.json", proxy.urls.getLast());
   }
 
   @Test
   void rewritesRegistrationPagesLeavesDependenciesAndPackageLinks() throws Exception {
     RecordingProxy proxy = new RecordingProxy();
     proxy.metadata = """
-        {"@id":"%sarp.projects/index.json","items":[
-          {"@id":"%sarp.projects/page/1.0.0/2.0.0.json","parent":"%sarp.projects/index.json"},
-          {"@id":"%sarp.projects/1.10.21.json", "packageContent":"%sarp.projects/1.10.21/arp.projects.1.10.21.nupkg",
-           "catalogEntry":{"id":"arp.projects","projectUrl":"https://project.example/",
-             "dependencyGroups":[{"dependencies":[{"registration":"%sdependency/index.json"}]}]}}]}
-        """.formatted(REG, REG, REG, REG, FLAT, REG);
+        {"@id":"%sarp.projects/index.json","count":2,"items":[
+          {"@id":"%sarp.projects/page/1.0.0/2.0.0.json","count":2,"lower":"1.0.0","upper":"2.0.0","parent":"%sarp.projects/index.json"},
+          {"@id":"%sarp.projects/index.json#page","count":1,"lower":"1.10.21","upper":"1.10.21","items":[
+           {"@id":"%sarp.projects/1.10.21.json", "packageContent":"%sarp.projects/1.10.21/arp.projects.1.10.21.nupkg",
+            "catalogEntry":{"@id":"%sarp.projects/1.10.21.json","id":"arp.projects","version":"1.10.21","projectUrl":"https://project.example/",
+             "dependencyGroups":[{"dependencies":[{"registration":"%sdependency/index.json"}]}]}}]}]}
+        """.formatted(REG, REG, REG, REG, REG, FLAT, REG, REG);
     JsonNode result = json(get(proxy, "v3/registration5-semver1/arp.projects/index.json", false));
     assertEquals(BASE + "v3/registration5-semver1/arp.projects/index.json", result.path("@id").asText());
     assertEquals(BASE + "v3/registration5-semver1/arp.projects/page/1.0.0/2.0.0.json",
         result.path("items").get(0).path("@id").asText());
     assertEquals(BASE + "v3-flatcontainer/arp.projects/1.10.21/arp.projects.1.10.21.nupkg",
-        result.path("items").get(1).path("packageContent").asText());
+        result.path("items").get(1).path("items").get(0).path("packageContent").asText());
     assertFalse(result.toString().contains("devops.example"));
     assertFalse(result.toString().contains("content.example"));
     assertTrue(result.toString().contains("https://project.example/"));
@@ -354,7 +358,7 @@ class NugetPackageResourcesTest {
     proxy.registration = "https://feed.example/api/";
     proxy.flat = proxy.registration + "flat/";
     proxy.metadata = """
-        {"@id":"https://feed.example/api/demo/index.json",
+        {"@id":"https://feed.example/api/demo/index.json","count":0,"items":[],
          "parent":"https://feed.example/api/demo/index.json",
          "registration":"https://feed.example/api/dependency/index.json",
          "packageContent":"https://feed.example/api/flat/demo/1.0.0/demo.1.0.0.nupkg"}
@@ -380,7 +384,7 @@ class NugetPackageResourcesTest {
   @Test
   void registrationHeadDescribesRewrittenBodyAndClosesUpstreamResponse() throws Exception {
     RecordingProxy proxy = new RecordingProxy();
-    proxy.metadata = "{\"@id\":\"" + REG + "arp.projects/index.json\"}";
+    proxy.metadata = "{\"@id\":\"" + REG + "arp.projects/index.json\",\"count\":0,\"items\":[]}";
     MavenResponse get = get(proxy, "v3/registration5-semver1/arp.projects/index.json", false);
     int length;
     try (var body = get.body()) { length = body.readAllBytes().length; }
@@ -394,7 +398,7 @@ class NugetPackageResourcesTest {
   @Test
   void decodesGzippedRegistrationFromTheDurableMetadataCache() throws Exception {
     RecordingProxy proxy = new RecordingProxy();
-    proxy.metadata = "{\"@id\":\"" + REG + "arp.projects/index.json\"}";
+    proxy.metadata = "{\"@id\":\"" + REG + "arp.projects/index.json\",\"count\":0,\"items\":[]}";
     proxy.gzipMetadata = true;
     JsonNode result = json(get(proxy, "v3/registration5-semver1/arp.projects/index.json", false));
     assertEquals(BASE + "v3/registration5-semver1/arp.projects/index.json", result.path("@id").asText());
@@ -427,7 +431,7 @@ class NugetPackageResourcesTest {
   void registrationKeepsPageParametersButHidesResourceCredentials(String suffix) throws Exception {
     RecordingProxy proxy = new RecordingProxy();
     proxy.registration = REG + "?token=private";
-    proxy.metadata = "{\"@id\":\"" + REG + suffix + "?token=private&api-version=7#page\"}";
+    proxy.metadata = "{\"@id\":\"" + REG + suffix + "?token=private&api-version=7#page\",\"count\":0,\"items\":[]}";
     MockHttpServletRequest request = new MockHttpServletRequest();
     request.setQueryString("api-version=7");
     JsonNode result = json(new NugetService(null, proxy, null, MAPPER).get(runtime(),
@@ -442,7 +446,7 @@ class NugetPackageResourcesTest {
   void supportsRegistrationResourceVersions(String version) throws Exception {
     RecordingProxy proxy = new RecordingProxy();
     proxy.registrationType = "RegistrationsBaseUrl" + version;
-    proxy.metadata = "{}";
+    proxy.metadata = "{\"count\":0,\"items\":[]}";
     String flavor = version.equals("/3.6.0") ? "semver2" : "semver1";
     get(proxy, "v3/registration5-" + flavor + "/arp.projects/index.json", false).body().close();
     assertEquals(REG + "arp.projects/index.json", proxy.urls.getLast());
@@ -463,7 +467,7 @@ class NugetPackageResourcesTest {
       assertEquals(BASE + "v3/registration5-" + flavor + "/", advertised.get("RegistrationsBaseUrl/" + version));
       String endpoint = REG + (version.equals("3.6.0") ? "modern/" : "legacy/");
       for (String suffix : List.of("arp.projects/index.json", "arp.projects/page/1/2.json", "arp.projects/1.10.21.json")) {
-        proxy.metadata = "{\"@id\":\"" + endpoint + suffix + "\"}";
+        proxy.metadata = "{\"@id\":\"" + endpoint + suffix + "\",\"count\":0,\"items\":[]}";
         String path = "v3/registration5-" + flavor + "/" + suffix;
         assertEquals(BASE + path, json(get(proxy, path, false)).path("@id").asText());
         assertEquals(endpoint + suffix, proxy.urls.getLast());
@@ -481,7 +485,7 @@ class NugetPackageResourcesTest {
     RecordingProxy proxy = new RecordingProxy();
     proxy.registration = REG + "?" + key + "=secret";
     String decoded = java.net.URLDecoder.decode(key, StandardCharsets.UTF_8).replace(" ", "%20");
-    proxy.metadata = "{\"@id\":\"" + REG + "arp.projects/index.json?" + decoded + "=secret&api-version=7\"}";
+    proxy.metadata = "{\"@id\":\"" + REG + "arp.projects/index.json?" + decoded + "=secret&api-version=7\",\"count\":0,\"items\":[]}";
     JsonNode result = json(get(proxy, "v3/registration5-semver1/arp.projects/index.json", false));
     assertFalse(result.toString().contains("secret"));
     URI local = URI.create(result.path("@id").asText());
@@ -494,13 +498,48 @@ class NugetPackageResourcesTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"{", "[]", "null"})
+  @ValueSource(strings = {"{", "[]", "null", "{}", "{\"items\":null}", "{\"items\":{}}",
+      "{\"count\":1,\"items\":[{}]}", "{\"@id\":\"https://feed.example/demo/index.json\"}"})
   void registrationValidationRejectsBadJsonBeforeCachePublication(String malformed) {
     RecordingProxy proxy = new RecordingProxy();
     proxy.metadata = malformed;
     assertThrows(MavenExceptions.BadUpstreamException.class,
         () -> get(proxy, "v3/registration5-semver1/demo/index.json", false));
     assertTrue(proxy.closed);
+  }
+
+  @Test
+  void validatesIndexPageAndStandaloneLeafShapesWithoutRequiringOptionalLeafFields() throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    String pageUrl = REG + "demo/page.json";
+    String validPage = registrationPage(pageUrl, registrationLeaf("1.0.0", "a"));
+    String index = registrationIndex(validPage);
+    for (String valid : List.of(index, validPage,
+        registrationIndex(pageReference(pageUrl, 1).replace("}", ",\"items\":null}")),
+        "{\"@id\":\"" + REG + "demo/leaf\"}",
+        "{\"@id\":\"" + REG + "demo/leaf\",\"catalogEntry\":\"https://catalog.example/entry\",\"listed\":true,\"published\":\"2026-01-01T00:00:00Z\"}")) {
+      proxy.metadata = valid;
+      assertEquals(200, get(proxy, "v3/registration5-semver1/demo/opaque", false).status());
+    }
+    for (String invalid : List.of(index.replace("\"count\":1", "\"count\":2"),
+        index.replace("\"count\":1", "\"count\":\"1\""),
+        index.replace("\"count\":1", "\"count\":-1"),
+        index.replace("\"count\":1", "\"count\":999999999999999"),
+        validPage.replace("\"lower\":\"1.0.0\"", "\"lower\":\"\""),
+        validPage.replace("\"upper\":\"1.10.0\"", "\"upper\":null"),
+        validPage.replace("\"id\":\"demo\"", "\"id\":null"),
+        validPage.replace("\"version\":\"1.0.0\"", "\"version\":\"\""),
+        validPage.replace("\"packageContent\":", "\"unexpected\":"),
+        "{}", "{\"@id\":7}", "{\"@id\":\"relative\"}",
+        "{\"@id\":\"https://feed.example/leaf\",\"catalogEntry\":{}}",
+        "{\"@id\":\"https://feed.example/leaf\",\"catalogEntry\":[]}",
+        "{\"@id\":\"https://feed.example/leaf\",\"listed\":\"yes\"}",
+        "{\"@id\":\"https://feed.example/leaf\",\"published\":123}")) {
+      proxy.metadata = invalid;
+      assertThrows(MavenExceptions.BadUpstreamException.class,
+          () -> get(proxy, "v3/registration5-semver1/demo/opaque", false), invalid);
+      assertTrue(proxy.closed);
+    }
   }
 
   @ParameterizedTest
@@ -520,9 +559,9 @@ class NugetPackageResourcesTest {
     RecordingProxy proxy = new RecordingProxy();
     String index = REG + "demo/index.json";
     String page = REG + "demo/page.json?api=one";
-    proxy.responses.put("1 " + index, "{\"items\":[{\"@id\":\"" + page + "\"}]}");
-    proxy.responses.put("1 " + page, "{\"items\":[" + registrationLeaf("1.0.0", "a") + "," + registrationLeaf("1.10.0", "a") + "]}");
-    proxy.responses.put("5 " + index, "{\"items\":[{\"items\":[" + registrationLeaf("1.0.0", "b") + "," + registrationLeaf("1.9.0", "b") + "]}]}");
+    proxy.responses.put("1 " + index, registrationIndex(pageReference(page, 2)));
+    proxy.responses.put("1 " + page, registrationPage(page, registrationLeaf("1.0.0", "a"), registrationLeaf("1.10.0", "a")));
+    proxy.responses.put("5 " + index, registrationIndex(registrationPage(index + "#page", registrationLeaf("1.0.0", "b"), registrationLeaf("1.9.0", "b"))));
     if (!withQuery) proxy.responses.replaceAll((key, value) -> value.replace("?sig=a", "").replace("?sig=b", ""));
     RepositoryRuntime group = group(2L, group(3L, runtime()), runtime(5L));
     NugetService service = new NugetService(null, proxy, null, MAPPER);
@@ -559,10 +598,9 @@ class NugetPackageResourcesTest {
   void groupRegistrationDropsIncompleteMembersAndEnforcesSharedMetadataLimits() throws Exception {
     RecordingProxy proxy = new RecordingProxy();
     String index = REG + "demo/index.json", page = REG + "demo/page.json";
-    proxy.responses.put("1 " + index, "{\"items\":[{\"items\":[" + registrationLeaf("1.0.0", "a")
-        + "]},{\"@id\":\"" + page + "\"}]}");
+    proxy.responses.put("1 " + index, registrationIndex(registrationPage(index + "#page", registrationLeaf("1.0.0", "a")), pageReference(page, 1)));
     proxy.responses.put("1 " + page, "{}");
-    proxy.responses.put("5 " + index, "{\"items\":[{\"items\":[" + registrationLeaf("1.9.0", "b") + "]}]}");
+    proxy.responses.put("5 " + index, registrationIndex(registrationPage(index + "#page", registrationLeaf("1.9.0", "b"))));
     NugetService service = new NugetService(null, proxy, null, MAPPER);
     JsonNode result = json(service.get(group(2L, runtime(), runtime(5L)),
         "v3/registration5-semver2/demo/index.json", BASE, null, false));
@@ -597,14 +635,14 @@ class NugetPackageResourcesTest {
   void groupRegistrationCannotReturnPartialResultsAfterExhaustingThePageBudget() {
     RecordingProxy proxy = new RecordingProxy();
     String index = REG + "demo/index.json";
-    proxy.responses.put("1 " + index, "{\"items\":[{\"items\":[" + registrationLeaf("1.0.0", "a") + "]}]}");
+    proxy.responses.put("1 " + index, registrationIndex(registrationPage(index + "#page", registrationLeaf("1.0.0", "a"))));
     List<String> pages = new ArrayList<>();
     for (int i = 0; i < 512; i++) {
       String url = REG + "demo/page" + i + ".json";
-      pages.add("{\"@id\":\"" + url + "\"}");
-      proxy.responses.put("5 " + url, "{\"items\":[]}");
+      pages.add(pageReference(url, 0));
+      proxy.responses.put("5 " + url, registrationPage(url));
     }
-    proxy.responses.put("5 " + index, "{\"items\":[" + String.join(",", pages) + "]}");
+    proxy.responses.put("5 " + index, registrationIndex(pages.toArray(String[]::new)));
     NugetService service = new NugetService(null, proxy, null, MAPPER);
     assertThrows(NugetUpstreamResources.RegistrationLimitException.class,
         () -> service.get(group(2L, runtime(), runtime(5L)), "v3/registration5-semver2/demo/index.json", BASE, null, false));
@@ -623,10 +661,46 @@ class NugetPackageResourcesTest {
   }
 
   private static String registrationLeaf(String version, String source) {
-    return "{\"@id\":\"" + REG + "demo/" + version + ".json\",\"catalogEntry\":{\"id\":\"demo\",\"version\":\""
+    return "{\"@id\":\"" + REG + "demo/" + version + ".json\",\"catalogEntry\":{\"@id\":\"" + REG + "demo/" + version + ".json\",\"id\":\"demo\",\"version\":\""
         + version + "\",\"description\":\"" + source
         + "\",\"dependencyGroups\":[{\"dependencies\":[{\"id\":\"dep-" + source + "\",\"range\":\"[1.0.0,)\"}]}]},"
         + "\"packageContent\":\"" + FLAT + "demo/" + version + "/demo." + version + ".nupkg?sig=" + source + "\"}";
+  }
+
+  private static String registrationIndex(String... pages) {
+    return "{\"count\":" + pages.length + ",\"items\":[" + String.join(",", pages) + "]}";
+  }
+
+  private static String pageReference(String url, int count) {
+    return "{\"@id\":\"" + url + "\",\"count\":" + count + ",\"lower\":\"1.0.0\",\"upper\":\"1.10.0\"}";
+  }
+
+  private static String registrationPage(String url, String... leaves) {
+    String reference = pageReference(url, leaves.length);
+    return reference.substring(0, reference.length() - 1) + ",\"items\":[" + String.join(",", leaves) + "]}";
+  }
+
+  @Test
+  void plainRegistrationLinksRetainTheSelectedMemberAfterMerging() throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    String index = REG + "demo/index.json";
+    String leafUrl = REG + "demo/1.9.0.json";
+    proxy.responses.put("1 " + index, "{\"count\":0,\"items\":[]}");
+    proxy.responses.put("5 " + index, "{\"count\":1,\"items\":[{\"@id\":\"" + index
+        + "#page\",\"count\":1,\"lower\":\"1.9.0\",\"upper\":\"1.9.0\",\"items\":["
+        + registrationLeaf("1.9.0", "b") + "]}]}");
+    proxy.responses.put("1 " + leafUrl, "{\"@id\":\"" + leafUrl + "\",\"source\":\"wrong\"}");
+    proxy.responses.put("5 " + leafUrl, "{\"@id\":\"" + leafUrl + "\",\"source\":\"selected\"}");
+    RepositoryRuntime group = group(2L, runtime(), runtime(5L));
+    NugetService service = new NugetService(null, proxy, null, MAPPER);
+    JsonNode indexBody = json(service.get(group, "v3/registration5-semver2/demo/index.json", BASE, null, false));
+    URI link = URI.create(indexBody.path("items").get(0).path("items").get(0).path("@id").asText());
+    MockHttpServletRequest request = new MockHttpServletRequest();
+    request.setQueryString(link.getRawQuery());
+    proxy.repositories.clear();
+    JsonNode leaf = json(service.get(group, link.getRawPath().substring(URI.create(BASE).getRawPath().length()), BASE, request, false));
+    assertEquals("selected", leaf.path("source").asText());
+    assertEquals(List.of(5L, 5L), proxy.repositories);
   }
 
   @Test
@@ -772,7 +846,7 @@ class NugetPackageResourcesTest {
   void equivalentResourceUrisAreRewrittenAndCredentialsRemainHidden(String endpoint) throws Exception {
     RecordingProxy proxy = new RecordingProxy();
     proxy.registration = endpoint + "?signature=secret";
-    proxy.metadata = "{\"@id\":\"" + REG + "arp.projects/index.json?sig%6Eature=secret&page=2\"}";
+    proxy.metadata = "{\"@id\":\"" + REG + "arp.projects/index.json?sig%6Eature=secret&page=2\",\"count\":0,\"items\":[]}";
     JsonNode result = json(get(proxy, "v3/registration5-semver1/arp.projects/index.json", false));
     URI local = URI.create(result.path("@id").asText());
     assertTrue(local.toString().startsWith(BASE + "v3/registration5-semver1/arp.projects/index.json?page=2"));
@@ -897,7 +971,7 @@ class NugetPackageResourcesTest {
     private String registration = REG;
     private String registrationType = "RegistrationsBaseUrl/3.4.0";
     private String index;
-    private String metadata = "{\"versions\":[\"1.10.21\"]}";
+    private String metadata = "{\"versions\":[\"1.10.21\"],\"count\":0,\"items\":[]}";
     private final Map<String, String> responses = new HashMap<>();
     private boolean closed;
     private boolean lastHead;

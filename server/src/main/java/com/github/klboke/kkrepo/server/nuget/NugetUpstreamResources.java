@@ -115,7 +115,9 @@ final class NugetUpstreamResources {
     String remoteUrl = packageUrl(endpoint, path, registrationPrefix, runtime);
     // Registration bodies contain package links. Refresh them when either resource moves,
     // even when discovery expires before an otherwise fresh registration cache entry.
-    JsonNode document = registrationDocument(proxy, mapper, runtime, remoteUrl, endpoint, flatEndpoint, "document");
+    String suffix = path.substring(registrationPrefix.length()).split("\\?", 2)[0];
+    String kind = suffix.matches("[^/]+/index\\.json") ? "index" : "document";
+    JsonNode document = registrationDocument(proxy, mapper, runtime, remoteUrl, endpoint, flatEndpoint, kind);
     String base = repositoryBaseUrl.endsWith("/") ? repositoryBaseUrl : repositoryBaseUrl + "/";
     rewriteLinks(document, endpoint, flatEndpoint, base, registrationPrefix, groupId, runtime);
     try {
@@ -191,18 +193,10 @@ final class NugetUpstreamResources {
       String url, String registration, String flat, String kind) {
     MavenResponse response = proxy.getMetadataFromUrlHidden(runtime,
         cacheKey("registration", url + "\n" + registration + "\n" + flat), url, false,
-        "nuget-registration-" + kind + "-v2", body -> {
+        "nuget-registration-" + kind + "-v3", body -> {
           ValidatedJson validated = validatedJson(mapper, body, MAX_REGISTRATION_BYTES, "registration");
           JsonNode document = validated.document();
-          if (!kind.equals("document")) {
-            if (!document.path("items").isArray()) throw new MavenExceptions.BadUpstreamException("Invalid NuGet registration " + kind);
-            for (JsonNode item : document.path("items")) {
-              if (kind.equals("page")) requireRegistrationLeaf(item);
-              else if (item.path("items").isArray()) item.path("items").forEach(NugetUpstreamResources::requireRegistrationLeaf);
-              else if (item.hasNonNull("items")) throw new MavenExceptions.BadUpstreamException("Invalid NuGet registration page");
-              else requireHttpUrl(item.path("@id").asText().split("#", 2)[0]);
-            }
-          }
+          validateRegistration(document, kind);
           // Exercise link validation before cache publication too. Only the original bytes
           // are stored; per-request group URLs and routing proofs are generated when served.
           rewriteLinks(document, registration, flat, "", REGISTRATION, null, runtime);
@@ -211,13 +205,69 @@ final class NugetUpstreamResources {
     return readJson(mapper, response, MAX_REGISTRATION_BYTES, "registration");
   }
 
-  private static void requireRegistrationLeaf(JsonNode leaf) {
-    if (!leaf.isObject() || !leaf.path("catalogEntry").isObject()
-        || !leaf.path("catalogEntry").path("version").isTextual()
-        || leaf.path("catalogEntry").path("version").asText().isBlank()
-        || !leaf.path("packageContent").isTextual()) {
-      throw new MavenExceptions.BadUpstreamException("Invalid NuGet registration leaf");
+  private static void validateRegistration(JsonNode document, String kind) {
+    if (kind.equals("index") || (kind.equals("document") && document.has("items")
+        && !document.has("lower") && !document.has("upper"))) {
+      requireItems(document);
+      document.path("items").forEach(page -> requireRegistrationPage(page, false));
+    } else if (kind.equals("page") || document.has("items") || document.has("lower") || document.has("upper")) {
+      requireRegistrationPage(document, true);
+    } else {
+      // A standalone leaf only requires @id. Catalog URLs and packageContent are
+      // optional in the official protocol; an inline page leaf has a richer shape.
+      requireRegistrationUrl(document, "@id");
+      if (document.hasNonNull("catalogEntry")) {
+        if (document.path("catalogEntry").isObject()) requireCatalog(document.path("catalogEntry"));
+        else requireRegistrationUrl(document, "catalogEntry");
+      }
+      if (document.hasNonNull("listed") && !document.path("listed").isBoolean()) invalidRegistration();
+      if (document.hasNonNull("published")) requireText(document, "published");
     }
+    for (String field : List.of("@id", "parent", "registration", "packageContent")) {
+      if (document.hasNonNull(field)) requireRegistrationUrl(document, field);
+    }
+  }
+
+  private static void requireRegistrationPage(JsonNode page, boolean requireLeaves) {
+    requireRegistrationUrl(page, "@id");
+    requireText(page, "lower");
+    requireText(page, "upper");
+    if (!page.path("count").isIntegralNumber() || !page.path("count").canConvertToInt() || page.path("count").asInt() < 0) invalidRegistration();
+    if (page.hasNonNull("parent")) requireRegistrationUrl(page, "parent");
+    if (requireLeaves || page.hasNonNull("items")) {
+      requireItems(page);
+      page.path("items").forEach(NugetUpstreamResources::requireRegistrationLeaf);
+    }
+  }
+
+  private static void requireItems(JsonNode document) {
+    if (!document.path("items").isArray() || !document.path("count").isIntegralNumber()
+        || !document.path("count").canConvertToInt() || document.path("count").asInt() != document.path("items").size()) invalidRegistration();
+  }
+
+  private static void requireRegistrationLeaf(JsonNode leaf) {
+    requireRegistrationUrl(leaf, "@id");
+    requireRegistrationUrl(leaf, "packageContent");
+    requireCatalog(leaf.path("catalogEntry"));
+  }
+
+  private static void requireCatalog(JsonNode catalog) {
+    requireRegistrationUrl(catalog, "@id");
+    requireText(catalog, "id");
+    requireText(catalog, "version");
+  }
+
+  private static void requireText(JsonNode node, String field) {
+    if (!node.path(field).isTextual() || node.path(field).asText().isBlank()) invalidRegistration();
+  }
+
+  private static void requireRegistrationUrl(JsonNode node, String field) {
+    requireText(node, field);
+    requireHttpUrl(node.path(field).asText().split("#", 2)[0]);
+  }
+
+  private static void invalidRegistration() {
+    throw new MavenExceptions.BadUpstreamException("Invalid NuGet registration structure");
   }
 
   static String registrationPrefix(String path) {
@@ -338,9 +388,9 @@ final class NugetUpstreamResources {
       query = target.substring(target.indexOf('?') + 1);
     }
     boolean hasQuery = query != null && !query.isEmpty();
-    if (groupId != null && (hasQuery || prefix.equals(FLAT))) {
-      // Package links retain their selected member even without a query. A different
-      // member may serve bytes despite having no usable registration for that version.
+    if (groupId != null) {
+      // Every emitted resource link retains its selected member, including plain
+      // registration URLs: another member may serve different metadata at that suffix.
       String requestPath = NugetPathParser.normalize(prefix + suffix) + (hasQuery ? "?" + query : "");
       target += (hasQuery ? "&" : "?") + SOURCE_MEMBER_QUERY + "=" + NugetResourceLinkToken.issue(groupId, runtime.id(), requestPath,
           NugetResourceLinkToken.identity(runtime.proxyRemoteUrl(), endpoint));

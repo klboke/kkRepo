@@ -557,7 +557,7 @@ mvn -pl compat-test -am \
 The isolated NuGet V3 fixtures exercise NTLM resource discovery and paginated group registration
 merging against disposable repositories. The group fixture compares member precedence, numeric
 version ordering, signed package links, and dependency metadata with Nexus; kkRepo also verifies
-that signed downloads reach only the selected member. An additional kkRepo case requires exact
+that signed downloads and plain registration leaf, parent and index links reach only the selected member. An additional kkRepo case requires exact
 raw query ordering while hiding resource credentials, follows direct/group links, and checks
 that a proven repository-root fallback survives a root-page outage with automatic blocking enabled.
 Pass `--kkrepo-secondary URL` to run the outage phase through a second replica sharing the same

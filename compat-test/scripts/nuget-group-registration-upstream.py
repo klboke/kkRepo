@@ -49,21 +49,26 @@ class Upstream(http.server.BaseHTTPRequestHandler):
         elif uri.path == '/flat/demo/index.json':
             body = {'versions': server.versions}
         elif uri.path == '/reg/demo/index.json':
-            body = {'@id': server.root + uri.path, 'count': 1, 'items': [
+            body = {'@id': server.root + uri.path, 'source': server.feed, 'count': 1, 'items': [
                 {'@id': server.root + '/reg/demo/page.json?' + server.page_query, 'count': 2,
                  'lower': server.versions[0], 'upper': server.versions[1]}]}
         elif uri.path == '/reg/demo/page.json':
             leaves = []
             for version in server.versions:
                 leaf = server.root + '/reg/demo/' + version + '.json'
-                leaves.append({'@id': leaf, 'catalogEntry': {
+                leaves.append({'@id': leaf, 'parent': server.root + '/reg/demo/page.json',
+                    'registration': server.root + '/reg/demo/index.json', 'catalogEntry': {
                     '@id': leaf, 'id': 'demo', 'version': version, 'listed': True,
                     'description': server.feed, 'dependencyGroups': [{'targetFramework': 'net8.0',
                         'dependencies': [{'id': 'dep-' + server.feed, 'range': '[1.0.0,)'}]}]},
                     'packageContent': server.root + '/flat/demo/' + version + '/demo.' + version
                                       + '.nupkg' + ('' if version == '1.9.0' else '?' + server.signed_query)})
-            body = {'@id': server.root + uri.path, 'count': 2, 'parent': server.root + '/reg/demo/index.json',
+            body = {'@id': server.root + uri.path, 'source': server.feed, 'count': 2, 'parent': server.root + '/reg/demo/index.json',
                     'lower': server.versions[0], 'upper': server.versions[1], 'items': leaves}
+        elif uri.path.startswith('/reg/demo/') and uri.path.endswith('.json'):
+            # The earlier member can serve a leaf omitted from its registration index.
+            # A merged link must still reach the member selected by that index.
+            body = {'@id': server.root + uri.path, 'source': server.feed}
         elif uri.path.endswith('.nupkg') and uri.path.split('/')[3] in server.versions:
             expected_query = server.resource_query.lstrip('?') if uri.path.split('/')[3] == '1.9.0' else server.signed_query
             if uri.query != expected_query:
@@ -176,6 +181,10 @@ def exercise(base, credentials, nexus, host, ordered_query=False, secondary=None
             assert link.netloc == urllib.parse.urlsplit(base).netloc, link
             assert urllib.parse.parse_qs(link.query).get('sig', []) == ([] if version == '1.9.0' else [source]), link
             if not nexus:
+                for field in ['@id', 'parent', 'registration']:
+                    metadata_link = urllib.parse.urlsplit(leaf[field])
+                    status, metadata, _ = request(base, metadata_link.path + '?' + metadata_link.query, credentials)
+                    assert status == 200 and json.loads(metadata)['source'] == source, (field, status, metadata)
                 for server in servers:
                     server.requests.clear()
                 for method in ['GET', 'HEAD']:

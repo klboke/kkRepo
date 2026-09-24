@@ -120,7 +120,7 @@ class Upstream(http.server.BaseHTTPRequestHandler):
                 self.send(200, package.read('ntlm.fixture.nuspec'), {'Content-Type': 'application/xml'})
             return
         elif path.startswith(root + 'metadata/registrations2/') and getattr(self.server, 'invalid_registration', False):
-            self.send(200, b'[]', {'Content-Type': 'application/json'})
+            self.send(200, b'{}', {'Content-Type': 'application/json'})
             return
         elif path == root + 'metadata/registrations2/ntlm.fixture/index.json':
             body = {'@id': registration + 'ntlm.fixture/index.json', 'count': 1, 'items': [
