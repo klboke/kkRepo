@@ -368,11 +368,12 @@ class NugetPackageResourcesTest {
 
   @ParameterizedTest
   @ValueSource(strings = {"page%20one.json", "page%2Fone.json", "page%25one.json", "page+one.json",
-      "page%3Fone.json", "page%F0%9F%93%A6.json"})
+      "page%3Fone.json", "page%F0%9F%93%A6.json", "page//one.json", "page///one.json",
+      "page/", "/page.json", "//page.json", "//page:one.json", "page//"})
   void rewrittenOpaquePathsRoundTripWithoutDecodingOrDoubleEncoding(String file) throws Exception {
     RecordingProxy proxy = new RecordingProxy();
     NugetService service = new NugetService(null, proxy, null, MAPPER);
-    String suffix = "arp.projects/" + file;
+    String suffix = file.startsWith("/") ? file : "arp.projects/" + file;
     proxy.metadata = "{\"@id\":\"" + REG + suffix + "?api-version=7\"}";
     for (RepositoryRuntime entry : List.of(runtime(), group(2L, runtime()))) {
       URI link = URI.create(json(service.get(entry, "v3/registration5-semver1/arp.projects/1.10.21.json",
@@ -431,7 +432,8 @@ class NugetPackageResourcesTest {
 
   @ParameterizedTest
   @ValueSource(strings = {"https://DEVOPS.EXAMPLE:443/custom/registrations2/", "HTTPS://devops.example/custom/registrations2/",
-      "https://devops.example/custom/%72egistrations2/", "https://devops.example/custom/unused/../registrations2/"})
+      "https://devops.example/custom/%72egistrations2/", "https://devops.example/custom/unused/../registrations2/",
+      "https://devops.example./custom/registrations2/"})
   void equivalentResourceUrisAreRewrittenAndCredentialsRemainHidden(String endpoint) throws Exception {
     RecordingProxy proxy = new RecordingProxy();
     proxy.registration = endpoint + "?signature=secret";
@@ -439,6 +441,43 @@ class NugetPackageResourcesTest {
     JsonNode result = json(get(proxy, "v3/registration5-semver1/arp.projects/index.json", false));
     assertEquals(BASE + "v3/registration5-semver1/arp.projects/index.json?page=2", result.path("@id").asText());
     assertFalse(result.toString().contains("secret"));
+  }
+
+  @Test
+  void absoluteDnsLinksStayLocalAndKeepResourceCredentialsServerSide() throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    proxy.registration = REG + "?signature=registration-secret";
+    proxy.flat = FLAT + "?signature=package-secret";
+    proxy.metadata = "{\"@id\":\"" + REG.replace("devops.example", "DEVOPS.EXAMPLE.")
+        + "arp.projects/page.json?signature=registration-secret&page=2\",\"packageContent\":\""
+        + FLAT.replace("content.example", "CONTENT.EXAMPLE.")
+        + "arp.projects/1.10.21/arp.projects.1.10.21.nupkg?signature=package-secret\"}";
+    for (RepositoryRuntime entry : List.of(runtime(), group(2L, runtime()))) {
+      NugetService service = new NugetService(null, proxy, null, MAPPER);
+      JsonNode document = json(service.get(entry, "v3/registration5-semver1/arp.projects/1.10.21.json",
+          BASE, null, false));
+      assertFalse(document.toString().contains("secret"));
+      for (String field : List.of("@id", "packageContent")) {
+        assertTrue(document.path(field).asText().startsWith(BASE));
+        URI link = URI.create(document.path(field).asText());
+        String path = link.getRawPath().substring(URI.create(BASE).getRawPath().length());
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setQueryString(link.getRawQuery());
+        service.get(entry, path, BASE, request, false).body().close();
+        assertEquals(field.equals("@id")
+            ? REG + "arp.projects/page.json?signature=registration-secret&page=2"
+            : FLAT + "arp.projects/1.10.21/arp.projects.1.10.21.nupkg?signature=package-secret", proxy.urls.getLast());
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"page//./one.json", "page/unused/..//one.json", "page//unused/../one.json", "page//%2E/one.json"})
+  void removingDotSegmentsRetainsAdjacentEmptySegments(String file) throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    proxy.metadata = "{\"@id\":\"" + REG + "arp.projects/" + file + "\"}";
+    JsonNode result = json(get(proxy, "v3/registration5-semver1/arp.projects/1.10.21.json", false));
+    assertEquals(BASE + "v3/registration5-semver1/arp.projects/page//one.json", result.path("@id").asText());
   }
 
   @ParameterizedTest

@@ -257,7 +257,7 @@ def main():
                          '<authors>compat</authors><description>NTLM fixture</description></metadata></package>')
     fixture = http.server.ThreadingHTTPServer(('0.0.0.0', 0), Upstream)
     fixture.remote = 'http://' + args.upstream_host + ':' + str(fixture.server_port) + '/collection/_packaging/feed/nuget/v3/'
-    fixture.registration_page = 'page/page%20one%2Fpart.json' if args.encoded_registration else 'page/1.0.0/1.0.0.json'
+    fixture.registration_page = 'page//page%20one%2Fpart.json' if args.encoded_registration else 'page/1.0.0/1.0.0.json'
     fixture.package, fixture.authenticated = package.getvalue(), 0
     threading.Thread(target=fixture.serve_forever, daemon=True).start()
     nexus_auth = os.environ.get('NEXUS_COMPAT_AUTH', 'admin:Admin1234')

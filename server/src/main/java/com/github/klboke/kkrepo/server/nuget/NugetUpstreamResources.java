@@ -18,6 +18,7 @@ import java.io.PushbackInputStream;
 import java.net.URI;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.List;
@@ -135,7 +136,10 @@ final class NugetUpstreamResources {
     }
     // The NuGet servlet boundary supplies a raw path. Preserve valid escapes instead
     // of encoding '%' a second time; encoded separators stay inside their segment.
-    String encoded = RemoteUrlBuilder.encodePath(suffix);
+    // Encode in path context: a suffix's leading '/' or ':' cannot change the authority
+    // because it is appended to an absolute resource URL, never URI.resolve'd on its own.
+    String prefix = "resource/";
+    String encoded = RemoteUrlBuilder.encodePath(prefix + suffix).substring(prefix.length());
     int query = endpoint.indexOf('?');
     String base = query < 0 ? endpoint : endpoint.substring(0, query);
     return base + (base.endsWith("/") ? "" : "/") + encoded
@@ -169,7 +173,7 @@ final class NugetUpstreamResources {
     } catch (IllegalArgumentException e) {
       throw new MavenExceptions.BadUpstreamException("Invalid NuGet registration link");
     }
-    if (link.getHost() == null || !source.getHost().equalsIgnoreCase(link.getHost())
+    if (link.getHost() == null || !dnsHost(source).equalsIgnoreCase(dnsHost(link))
         || !source.getScheme().equalsIgnoreCase(link.getScheme()) || effectivePort(source) != effectivePort(link)) return value;
     if (link.getRawUserInfo() != null) throw new MavenExceptions.BadUpstreamException("Invalid NuGet registration link");
     String root = normalizedPath(source);
@@ -194,6 +198,12 @@ final class NugetUpstreamResources {
     return base + target + (link.getRawFragment() == null ? "" : "#" + link.getRawFragment());
   }
 
+  private static String dnsHost(URI uri) {
+    String host = uri.getHost();
+    // A terminal root label is the absolute spelling of the same DNS name (RFC 1034).
+    return host.endsWith(".") ? host.substring(0, host.length() - 1) : host;
+  }
+
   private static int effectivePort(URI uri) {
     return uri.getPort() >= 0 ? uri.getPort() : "https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80;
   }
@@ -216,7 +226,23 @@ final class NugetUpstreamResources {
         path.append(ch);
       }
     }
-    return path.isEmpty() ? "/" : URI.create("http://resource" + path).normalize().getRawPath();
+    if (path.isEmpty()) return "/";
+    // RFC 3986 dot-segment removal. URI.normalize() also collapses empty segments,
+    // which are significant in the opaque page/leaf URLs advertised by NuGet feeds.
+    String[] segments = path.substring(1).split("/", -1);
+    List<String> normalized = new ArrayList<>();
+    for (int i = 0; i < segments.length; i++) {
+      String segment = segments[i];
+      if (segment.equals("..")) {
+        if (!normalized.isEmpty()) normalized.removeLast();
+      } else if (!segment.equals(".")) {
+        normalized.add(segment);
+      }
+      if (i == segments.length - 1 && (segment.equals(".") || segment.equals(".."))) {
+        normalized.add("");
+      }
+    }
+    return "/" + String.join("/", normalized);
   }
 
   private static void rejectQueryOverrides(String endpoint, String query) {
