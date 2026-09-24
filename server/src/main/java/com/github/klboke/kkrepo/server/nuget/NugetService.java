@@ -71,9 +71,10 @@ public class NugetService {
       case QUERY -> query(runtime, request, repositoryBaseUrl, headOnly);
       case AUTOCOMPLETE -> autocomplete(runtime, request, headOnly);
       case FLAT_CONTAINER_VERSION_INDEX -> versionIndex(runtime, path.packageId(), headOnly);
-      case REGISTRATION_INDEX -> registrationIndex(runtime, path.packageId(), repositoryBaseUrl, headOnly);
+      case REGISTRATION_INDEX -> registrationIndex(runtime, path.packageId(), repositoryBaseUrl, request, headOnly);
       case FLAT_CONTAINER_PACKAGE, FLAT_CONTAINER_NUSPEC, RAW ->
-          dispatchRawGet(runtime, path.rawPath(), headOnly);
+          dispatchRawGet(runtime, NugetUpstreamResources.registrationPrefix(path.rawPath()) == null
+              ? path.rawPath() : queryStringPath(path.rawPath(), request), repositoryBaseUrl, headOnly);
       case PACKAGE_PUBLISH, PACKAGE_DELETE -> throw new MavenExceptions.MethodNotAllowed(
           "NuGet package publish requires PUT/DELETE");
     };
@@ -137,25 +138,33 @@ public class NugetService {
     throw new MavenExceptions.MethodNotAllowed("Unsupported NuGet DELETE path: " + rawPath);
   }
 
-  private MavenResponse dispatchRawGet(RepositoryRuntime runtime, String rawPath, boolean headOnly) {
+  private MavenResponse dispatchRawGet(RepositoryRuntime runtime, String rawPath, String repositoryBaseUrl, boolean headOnly) {
     // Package bodies remain on RawAssetReader: it resolves the concrete asset, applies
     // ArtifactDownloadPolicy with the request's entry-repository context, then opens the blob.
     return switch (runtime.type()) {
       case HOSTED -> hosted.get(runtime, rawPath, headOnly);
-      case PROXY -> proxyGet(runtime, rawPath, headOnly);
-      case GROUP -> firstWin(runtime, rawPath, headOnly);
+      case PROXY -> proxyGet(runtime, rawPath, repositoryBaseUrl, headOnly);
+      case GROUP -> firstWin(runtime, rawPath, repositoryBaseUrl, headOnly);
     };
   }
 
   private MavenResponse proxyGet(RepositoryRuntime runtime, String rawPath, boolean headOnly) {
+    return proxyGet(runtime, rawPath, null, headOnly);
+  }
+
+  private MavenResponse proxyGet(
+      RepositoryRuntime runtime, String rawPath, String repositoryBaseUrl, boolean headOnly) {
+    if (NugetUpstreamResources.isPackagePath(rawPath)) {
+      return NugetUpstreamResources.getPackage(proxy, objectMapper, runtime, rawPath, repositoryBaseUrl, headOnly);
+    }
     if (rawPath.equals("query") || rawPath.startsWith("query?")
         || rawPath.equals("autocomplete") || rawPath.startsWith("autocomplete?")) {
-      return NugetSearchResources.get(proxy, objectMapper, runtime, rawPath, headOnly);
+      return NugetUpstreamResources.get(proxy, objectMapper, runtime, rawPath, headOnly);
     }
     return proxy.getAssetFromUrl(runtime, rawPath, remoteUrlForPath(runtime, rawPath), headOnly);
   }
 
-  private MavenResponse firstWin(RepositoryRuntime group, String rawPath, boolean headOnly) {
+  private MavenResponse firstWin(RepositoryRuntime group, String rawPath, String repositoryBaseUrl, boolean headOnly) {
     if (group.members().isEmpty()) {
       throw new MavenExceptions.MavenNotFoundException(rawPath);
     }
@@ -163,8 +172,8 @@ public class NugetService {
       try {
         return switch (member.type()) {
           case HOSTED -> hosted.get(member, rawPath, headOnly);
-          case PROXY -> proxyGet(member, rawPath, headOnly);
-          case GROUP -> firstWin(member, rawPath, headOnly);
+          case PROXY -> proxyGet(member, rawPath, repositoryBaseUrl, headOnly);
+          case GROUP -> firstWin(member, rawPath, repositoryBaseUrl, headOnly);
         };
       } catch (MavenExceptions.MavenNotFoundException ignored) {
         // try next member
@@ -251,9 +260,11 @@ public class NugetService {
       RepositoryRuntime runtime,
       String packageId,
       String repositoryBaseUrl,
+      HttpServletRequest request,
       boolean headOnly) {
     if (runtime.type() == RepositoryType.PROXY) {
-      return proxyGet(runtime, NugetPaths.registrationIndex(packageId), headOnly);
+      return proxyGet(runtime, queryStringPath(NugetPaths.registrationIndex(packageId), request),
+          repositoryBaseUrl, headOnly);
     }
     String normalizedId = NugetPaths.normalizePackageId(packageId);
     String base = repositoryBaseUrl.endsWith("/") ? repositoryBaseUrl : repositoryBaseUrl + "/";

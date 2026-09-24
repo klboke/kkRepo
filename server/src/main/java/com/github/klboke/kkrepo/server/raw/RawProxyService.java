@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.raw;
 
 import com.github.klboke.kkrepo.core.BlobStorage;
+import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
@@ -95,7 +96,7 @@ public class RawProxyService {
     if (cached.isPresent() && isFresh(cached.get(), runtime.contentMaxAgeMinutesOrDefault(), now)) {
       return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
     }
-    if (negativeCache.isNotFoundCached(runtime, path)) {
+    if (negativeCache.isNotFoundCached(runtime, negativeCachePath(runtime, path, sourceFingerprint))) {
       throw new MavenExceptions.MavenNotFoundException(path);
     }
     if (proxyStateDao.isBlocked(runtime.id(), now)) {
@@ -233,7 +234,7 @@ public class RawProxyService {
     if (cached.isPresent() && isFresh(cached.get(), maxAgeMinutes, now)) {
       return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
     }
-    if (negativeCache.isNotFoundCached(runtime, path)) {
+    if (negativeCache.isNotFoundCached(runtime, negativeCachePath(runtime, path, sourceFingerprint))) {
       throw new MavenExceptions.MavenNotFoundException(path);
     }
     if (proxyStateDao.isBlocked(runtime.id(), now)) {
@@ -333,11 +334,11 @@ public class RawProxyService {
           assetDao.touchAssetLastUpdated(cached.get().assetId(), now);
           assetMetadataCache.touchVerified(runtime.id(), path, now);
           proxyStateDao.recordSuccess(runtime.id(), now);
-          negativeCache.invalidate(runtime, path);
+          negativeCache.invalidate(runtime, negativeCachePath(runtime, path, sourceFingerprint));
           return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
         }
         if (status >= 200 && status < 300) {
-          negativeCache.invalidate(runtime, path);
+          negativeCache.invalidate(runtime, negativeCachePath(runtime, path, sourceFingerprint));
           RawAssetWriter.Stored stored = persist(
               runtime, path, result, sourceFingerprint, componentBinding, browsePath);
           try {
@@ -362,7 +363,7 @@ public class RawProxyService {
           if (cached.isPresent()) {
             return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
           }
-          if (status == 404) negativeCache.rememberNotFound(runtime, path);
+          if (status == 404) negativeCache.rememberNotFound(runtime, negativeCachePath(runtime, path, sourceFingerprint));
           throw new MavenExceptions.MavenNotFoundException(path);
         }
         return handleUpstreamFailure(runtime, path, cached, headOnly,
@@ -449,8 +450,17 @@ public class RawProxyService {
     String source = configuredSource == null || configuredSource.isBlank()
         ? remoteUrl
         : configuredSource;
+    if (runtime != null && runtime.format() == RepositoryFormat.NUGET) {
+      // A service index can move a resource without changing the configured index URL.
+      return HexFormat.of().formatHex(PersistenceHashes.sha256("nuget-resource-v1", source + "\n" + remoteUrl));
+    }
     return HexFormat.of().formatHex(
         PersistenceHashes.sha256("raw-proxy-source-v1", source));
+  }
+
+  private static String negativeCachePath(RepositoryRuntime runtime, String path, String sourceFingerprint) {
+    // Discovered NuGet URLs must not inherit misses for the old guessed URL or a replaced endpoint.
+    return runtime.format() == RepositoryFormat.NUGET ? path + "@source:" + sourceFingerprint : path;
   }
 
   private void ensureProxy(RepositoryRuntime runtime) {

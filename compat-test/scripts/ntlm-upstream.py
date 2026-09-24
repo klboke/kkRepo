@@ -8,6 +8,7 @@ Only synthetic credentials are used. Repository and temporary SSRF exceptions ar
 """
 import argparse
 import base64
+import gzip
 import hashlib
 import hmac
 import http.server
@@ -23,6 +24,7 @@ from xml.sax.saxutils import escape
 import threading
 import urllib.error
 import urllib.request
+import urllib.parse
 import uuid
 import zipfile
 
@@ -90,14 +92,50 @@ class Upstream(http.server.BaseHTTPRequestHandler):
         if not getattr(self, 'authenticated', False):
             self.send(401, headers={'WWW-Authenticate': 'NTLM'})
             return
-        if self.path.endswith('/index.json') and '/flat/' not in self.path and '/v3-flatcontainer/' not in self.path:
-            body = json.dumps({'version': '3.0.0', 'resources': [
-                {'@id': self.server.remote + 'flat/', '@type': 'PackageBaseAddress/3.0.0'}]}).encode()
-            self.send(200, body, {'Content-Type': 'application/json'})
-        elif self.path.endswith('.nupkg'):
+        path = urllib.parse.urlsplit(self.path).path
+        root = urllib.parse.urlsplit(self.server.remote).path
+        flat = self.server.remote + 'content/flat2/'
+        registration = self.server.remote + 'metadata/registrations2/'
+        leaf = {'@id': registration + 'ntlm.fixture/1.0.0.json',
+                'catalogEntry': {'@id': registration + 'ntlm.fixture/1.0.0.json',
+                                 'id': 'ntlm.fixture', 'version': '1.0.0', 'listed': True,
+                                 'description': 'NTLM fixture', 'dependencyGroups': []},
+                'packageContent': flat + 'ntlm.fixture/1.0.0/ntlm.fixture.1.0.0.nupkg'}
+        if path == root + 'index.json':
+            body = {'version': '3.0.0', 'resources': [
+                {'@id': flat, '@type': 'PackageBaseAddress/3.0.0'},
+                {'@id': registration, '@type': 'RegistrationsBaseUrl/3.6.0'}]}
+        elif path == root + 'content/flat2/ntlm.fixture/index.json':
+            body = {'versions': ['1.0.0']}
+        elif path == root + 'content/flat2/ntlm.fixture/1.0.0/ntlm.fixture.1.0.0.nupkg':
             self.send(200, self.server.package, {'Content-Type': 'application/octet-stream'})
+            return
+        elif path == root + 'content/flat2/ntlm.fixture/1.0.0/ntlm.fixture.nuspec':
+            with zipfile.ZipFile(io.BytesIO(self.server.package)) as package:
+                self.send(200, package.read('ntlm.fixture.nuspec'), {'Content-Type': 'application/xml'})
+            return
+        elif path == root + 'metadata/registrations2/ntlm.fixture/index.json':
+            body = {'@id': registration + 'ntlm.fixture/index.json', 'count': 1, 'items': [
+                {'@id': registration + 'ntlm.fixture/page/1.0.0/1.0.0.json',
+                 'count': 1, 'lower': '1.0.0', 'upper': '1.0.0'}]}
+        elif path == root + 'metadata/registrations2/ntlm.fixture/page/1.0.0/1.0.0.json':
+            body = {'@id': registration + 'ntlm.fixture/page/1.0.0/1.0.0.json', 'count': 1,
+                    'parent': registration + 'ntlm.fixture/index.json',
+                    'lower': '1.0.0', 'upper': '1.0.0', 'items': [leaf]}
+        elif path == root + 'metadata/registrations2/ntlm.fixture/1.0.0.json':
+            body = {'@id': leaf['@id'], 'listed': True,
+                    'registration': registration + 'ntlm.fixture/index.json',
+                    'packageContent': leaf['packageContent']}
         else:
-            self.send(200, b'{"versions":["1.0.0"]}', {'Content-Type': 'application/json'})
+            print('Unexpected upstream path:', path, flush=True)
+            self.send(404, b'unknown fixture endpoint')
+            return
+        headers = {'Content-Type': 'application/json'}
+        content = json.dumps(body).encode()
+        if path.startswith(root + 'metadata/registrations2/'):
+            content = gzip.compress(content)
+            headers['Content-Encoding'] = 'gzip'
+        self.send(200, content, headers)
 
 
 def request(base, path, credentials, method='GET', data=None):
@@ -107,7 +145,10 @@ def request(base, path, credentials, method='GET', data=None):
         'Content-Type': 'application/json'})
     try:
         with urllib.request.urlopen(req, timeout=45) as response:
-            return response.status, response.read(), response.headers
+            body = response.read()
+            if response.headers.get('Content-Encoding') == 'gzip':
+                body = gzip.decompress(body)
+            return response.status, body, response.headers
     except urllib.error.HTTPError as error:
         return error.code, error.read(), error.headers
 
@@ -138,7 +179,31 @@ def exercise(base, credentials, nexus, fixture, dotnet=False):
         status, index, _ = request(base, '/repository/' + name + '/index.json', credentials)
         assert status == 200, (status, index)
         flat = next(r['@id'] for r in json.loads(index)['resources'] if r['@type'] == 'PackageBaseAddress/3.0.0')
-        path = urllib.parse.urlsplit(flat).path + 'ntlm.fixture/1.0.0/ntlm.fixture.1.0.0.nupkg'
+        flat_path = urllib.parse.urlsplit(flat).path.rstrip('/') + '/'
+        print(('Nexus' if nexus else 'kkRepo'), 'advertised flat resource:', flat, flush=True)
+        status, versions, _ = request(base, flat_path + 'ntlm.fixture/index.json', credentials)
+        assert status == 200 and json.loads(versions)['versions'] == ['1.0.0'], (status, versions)
+        resources = json.loads(index)['resources']
+        registration = next(r['@id'] for r in resources if r['@type'] == 'RegistrationsBaseUrl/3.6.0')
+        status, registration_body, _ = request(base,
+            urllib.parse.urlsplit(registration).path.rstrip('/') + '/ntlm.fixture/index.json', credentials)
+        assert status == 200, (status, registration_body)
+        page = json.loads(registration_body)['items'][0]
+        if 'items' not in page:
+            page_url = urllib.parse.urlsplit(page['@id'])
+            assert page_url.netloc == urllib.parse.urlsplit(base).netloc, page
+            status, page_body, _ = request(base, page_url.path, credentials)
+            assert status == 200, (status, page_body)
+            page = json.loads(page_body)
+        package_url = urllib.parse.urlsplit(page['items'][0]['packageContent'])
+        assert package_url.netloc == urllib.parse.urlsplit(base).netloc, page
+        leaf_url = urllib.parse.urlsplit(page['items'][0]['@id'])
+        assert leaf_url.netloc == urllib.parse.urlsplit(base).netloc, page
+        status, leaf_body, _ = request(base, leaf_url.path, credentials)
+        assert status == 200 and json.loads(leaf_body)['listed'], (status, leaf_body)
+        status, package_body, _ = request(base, package_url.path, credentials)
+        assert status == 200 and package_body == fixture.package, (status, package_body)
+        path = flat_path + 'ntlm.fixture/1.0.0/ntlm.fixture.1.0.0.nupkg'
         status, body, _ = request(base, path, credentials)
         assert status == 200, (status, body)
         assert body == fixture.package
@@ -165,7 +230,7 @@ def exercise(base, credentials, nexus, fixture, dotnet=False):
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
                 assert (work / 'packages/ntlm.fixture/1.0.0/ntlm.fixture.1.0.0.nupkg').read_bytes() == fixture.package
                 print(('Nexus' if nexus else 'kkRepo'), 'dotnet restore: PASS')
-        print(('Nexus' if nexus else 'kkRepo'), 'GET/HEAD, package SHA-256, NTLMv2 proof: PASS',
+        print(('Nexus' if nexus else 'kkRepo'), 'versions/registration pages, GET/HEAD, package SHA-256, NTLMv2 proof: PASS',
               hashlib.sha256(body).hexdigest())
     finally:
         if not nexus:
@@ -188,7 +253,7 @@ def main():
         archive.writestr('ntlm.fixture.nuspec', '<package><metadata><id>ntlm.fixture</id><version>1.0.0</version>'
                          '<authors>compat</authors><description>NTLM fixture</description></metadata></package>')
     fixture = http.server.ThreadingHTTPServer(('0.0.0.0', 0), Upstream)
-    fixture.remote = 'http://' + args.upstream_host + ':' + str(fixture.server_port) + '/'
+    fixture.remote = 'http://' + args.upstream_host + ':' + str(fixture.server_port) + '/collection/_packaging/feed/nuget/v3/'
     fixture.package, fixture.authenticated = package.getvalue(), 0
     threading.Thread(target=fixture.serve_forever, daemon=True).start()
     nexus_auth = os.environ.get('NEXUS_COMPAT_AUTH', 'admin:Admin1234')

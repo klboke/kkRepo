@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
-class NugetSearchResourcesTest {
+class NugetUpstreamResourcesTest {
   private static final ObjectMapper MAPPER = new ObjectMapper();
 
   @ParameterizedTest
@@ -108,7 +108,7 @@ class NugetSearchResourcesTest {
     RepositoryRuntime runtime = new RepositoryRuntime(1L, "nuget", RepositoryFormat.NUGET,
         RepositoryType.PROXY, "nuget-proxy", true, 1L, null, null, null, true,
         upstream, 1440, 5, true, null, List.of());
-    return NugetSearchResources.get(proxy, MAPPER, runtime, path, head);
+    return NugetUpstreamResources.get(proxy, MAPPER, runtime, path, head);
   }
 
   private static String index(String type, String endpoint) {

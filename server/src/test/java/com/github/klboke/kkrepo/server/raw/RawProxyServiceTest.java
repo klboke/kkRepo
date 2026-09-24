@@ -10,6 +10,7 @@ import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -30,8 +31,10 @@ import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 import java.time.Instant;
 import java.util.List;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
@@ -310,6 +313,61 @@ class RawProxyServiceTest {
     assertThrows(MavenExceptions.BadUpstreamException.class,
         () -> fixture.service.getAssetFromUrl(
             runtime, "file.txt", "https://cdn.example.test/file.txt", false));
+  }
+
+  @Test
+  void nugetResourceChangesDoNotReuseFreshContentFromThePreviousEndpoint() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = nugetRuntime();
+    String path = "v3-flatcontainer/demo/1.0.0/demo.1.0.0.nupkg";
+    String previous = "https://upstream.example.test/flat2/" + path;
+    String replacement = "https://upstream.example.test/new-flat2/" + path;
+    CachedAssetMetadata cached = snapshot(Instant.now(), Map.of(
+        RawProxyService.REMOTE_SOURCE_FINGERPRINT, RawProxyService.remoteSourceFingerprint(runtime, previous),
+        "remoteEtag", "old-etag"));
+    when(fixture.cache.find(eq(runtime.id()), eq(path), any())).thenReturn(Optional.of(cached));
+    doAnswer(invocation -> {
+      HttpRemoteFetcher.Request request = invocation.getArgument(0);
+      assertEquals(replacement, request.url());
+      assertEquals(null, request.etag());
+      HttpRemoteFetcher.ResultHandler<?> handler = invocation.getArgument(2);
+      return handler.handle(new HttpRemoteFetcher.Result(404, Map.of(), InputStream.nullInputStream()));
+    }).when(fixture.fetcher).fetchWithBodyRetry(any(), eq(path), any());
+
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> fixture.service.getAssetFromUrl(runtime, path, replacement, false));
+    verify(fixture.reader, never()).serveSnapshot(cached, false, path, "ATTACHMENT");
+  }
+
+  @Test
+  void nugetMissesAreCachedPerDiscoveredEndpointAndIgnoreLegacyGuessedPathMisses() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = nugetRuntime();
+    String path = "v3-flatcontainer/demo/1.0.0/demo.1.0.0.nupkg";
+    String first = "https://upstream.example.test/flat2/" + path;
+    String second = "https://upstream.example.test/new-flat2/" + path;
+    var misses = new HashSet<>(List.of(path)); // A 404 left by the pre-discovery implementation.
+    when(fixture.negativeCache.isNotFoundCached(eq(runtime), any(String.class)))
+        .thenAnswer(invocation -> misses.contains(invocation.getArgument(1)));
+    doAnswer(invocation -> { misses.add(invocation.getArgument(1)); return null; })
+        .when(fixture.negativeCache).rememberNotFound(eq(runtime), any(String.class));
+    doAnswer(invocation -> {
+      HttpRemoteFetcher.ResultHandler<?> handler = invocation.getArgument(2);
+      return handler.handle(new HttpRemoteFetcher.Result(404, Map.of(), InputStream.nullInputStream()));
+    }).when(fixture.fetcher).fetchWithBodyRetry(any(), eq(path), any());
+
+    for (String url : List.of(first, first, second, second)) {
+      assertThrows(MavenExceptions.MavenNotFoundException.class,
+          () -> fixture.service.getAssetFromUrl(runtime, path, url, false));
+    }
+    verify(fixture.fetcher, times(2)).fetchWithBodyRetry(any(), eq(path), any());
+    assertEquals(3, misses.size());
+  }
+
+  private static RepositoryRuntime nugetRuntime() {
+    return new RepositoryRuntime(10L, "nuget-proxy", RepositoryFormat.NUGET, RepositoryType.PROXY,
+        "nuget-proxy", true, 1L, null, null, null, true,
+        "https://upstream.example.test/v3/index.json", 60, 60, true, "ATTACHMENT", List.of());
   }
 
   @Test
