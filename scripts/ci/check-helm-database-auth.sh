@@ -9,6 +9,19 @@ helm template auth-check "$repository_root/deploy/helm/kkrepo" > "$work_dir/pass
 grep -q 'name: SPRING_DATASOURCE_PASSWORD' "$work_dir/password.yaml"
 grep -q 'name: kkrepo-database' "$work_dir/password.yaml"
 
+# Reused values from releases predating IAM have neither auth nor iam. Null
+# removes the chart defaults so the render exercises that missing-field case.
+for backend in mysql postgresql; do
+  helm install auth-check "$repository_root/deploy/helm/kkrepo" --dry-run=client \
+    --set database.type="$backend" --set database.auth=null --set database.iam=null \
+    --set database.existingSecret=legacy-database \
+    --set database.passwordKey=legacy-password > "$work_dir/legacy.txt"
+  grep -A1 'name: KKREPO_DATABASE_AUTH' "$work_dir/legacy.txt" | grep -q 'value: "password"'
+  grep -A4 'name: SPRING_DATASOURCE_PASSWORD' "$work_dir/legacy.txt" | grep -q 'name: legacy-database'
+  grep -A4 'name: SPRING_DATASOURCE_PASSWORD' "$work_dir/legacy.txt" | grep -q 'key: legacy-password'
+  grep -q 'database:   legacy-database / legacy-password' "$work_dir/legacy.txt"
+done
+
 for backend in mysql postgresql; do
   helm template auth-check "$repository_root/deploy/helm/kkrepo" \
     --set database.type="$backend" --set database.auth=iam \

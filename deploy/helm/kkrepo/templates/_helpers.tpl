@@ -87,8 +87,13 @@ http://{{ $scannerName }}-{{ $index }}.{{ $headlessName }}:{{ $root.Values.secur
 {{- end }}
 {{- end }}
 
+{{/* Releases predating IAM have no database.auth when upgraded with --reuse-values. */}}
+{{- define "kkrepo.databaseAuth" -}}
+{{- default "password" .Values.database.auth -}}
+{{- end }}
+
 {{- define "kkrepo.validate" -}}
-{{- if not (has .Values.database.auth (list "password" "iam")) }}
+{{- if not (has (include "kkrepo.databaseAuth" .) (list "password" "iam")) }}
 {{- fail "database.auth must be password or iam" }}
 {{- end }}
 {{- if not (has .Values.database.type (list "mysql" "postgresql")) }}

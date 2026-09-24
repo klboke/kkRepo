@@ -1,3 +1,4 @@
+{{- $databaseAuth := include "kkrepo.databaseAuth" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -50,8 +51,8 @@ spec:
             - name: KKREPO_DATABASE_TYPE
               value: {{ .Values.database.type | quote }}
             - name: KKREPO_DATABASE_AUTH
-              value: {{ .Values.database.auth | quote }}
-            {{- if eq .Values.database.auth "iam" }}
+              value: {{ $databaseAuth | quote }}
+            {{- if eq $databaseAuth "iam" }}
             - name: KKREPO_DATABASE_IAM_REGION
               value: {{ .Values.database.iam.region | quote }}
             {{- end }}
@@ -59,7 +60,7 @@ spec:
               value: {{ required "database.url is required" .Values.database.url | quote }}
             - name: SPRING_DATASOURCE_USERNAME
               value: {{ required "database.username is required" .Values.database.username | quote }}
-            {{- if eq .Values.database.auth "password" }}
+            {{- if eq $databaseAuth "password" }}
             - name: SPRING_DATASOURCE_PASSWORD
               valueFrom:
                 secretKeyRef:
