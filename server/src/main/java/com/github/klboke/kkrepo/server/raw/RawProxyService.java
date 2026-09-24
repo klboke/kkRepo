@@ -256,13 +256,15 @@ public class RawProxyService {
       String cacheSourceUrl,
       boolean headOnly) {
     String sourceFingerprint = remoteSourceFingerprint(runtime, cacheSourceUrl);
+    // An expired/forged request signature must not poison the canonical package miss cache.
+    boolean cacheMisses = remoteUrl.equals(cacheSourceUrl);
     Optional<CachedAssetMetadata> cached = sourceCompatible(
         lookupCached(runtime, path), sourceFingerprint, runtime);
     Instant now = Instant.now();
     if (cached.isPresent() && isFresh(cached.get(), maxAgeMinutes, now)) {
       return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
     }
-    if (negativeCache.isNotFoundCached(runtime, negativeCachePath(runtime, path, sourceFingerprint))) {
+    if (cacheMisses && negativeCache.isNotFoundCached(runtime, negativeCachePath(runtime, path, sourceFingerprint))) {
       throw new MavenExceptions.MavenNotFoundException(path);
     }
     if (proxyStateDao.isBlocked(runtime.id(), now)) {
@@ -273,7 +275,7 @@ public class RawProxyService {
     }
     return fetchAndCacheUrl(
         runtime, path, remoteUrl, sourceFingerprint, cached, headOnly, now, timeoutProfile,
-        componentBinding, browsePath);
+        componentBinding, browsePath, cacheMisses);
   }
 
   private Optional<CachedAssetMetadata> lookupCached(RepositoryRuntime runtime, String path) {
@@ -303,7 +305,7 @@ public class RawProxyService {
         .withRepository(runtime);
     return fetchAndCache(
         runtime, path, sourceFingerprint, cached, headOnly, now, req,
-        ComponentBinding.perAsset(), path);
+        ComponentBinding.perAsset(), path, true);
   }
 
   private MavenResponse fetchAndCacheUrl(
@@ -316,7 +318,7 @@ public class RawProxyService {
       Instant now,
       HttpRemoteFetcher.TimeoutProfile timeoutProfile,
       ComponentBinding componentBinding,
-      String browsePath) {
+      String browsePath, boolean cacheMisses) {
     String etag = null;
     Instant lastModified = null;
     if (cached.isPresent() && cached.get().blob() != null) {
@@ -328,7 +330,7 @@ public class RawProxyService {
         runtime, remoteUrl, etag, lastModified).withTimeoutProfile(timeoutProfile);
     return fetchAndCache(
         runtime, path, sourceFingerprint, cached, headOnly, now, req, componentBinding,
-        browsePath);
+        browsePath, cacheMisses);
   }
 
   static HttpRemoteFetcher.Request cachePopulationRequest(
@@ -354,7 +356,7 @@ public class RawProxyService {
       Instant now,
       HttpRemoteFetcher.Request req,
       ComponentBinding componentBinding,
-      String browsePath) {
+      String browsePath, boolean cacheMisses) {
     try {
       return fetcher.fetchWithBodyRetry(req, path, result -> {
         int status = result.status();
@@ -401,7 +403,7 @@ public class RawProxyService {
           if (cached.isPresent()) {
             return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
           }
-          if (status == 404) negativeCache.rememberNotFound(runtime, negativeCachePath(runtime, path, sourceFingerprint));
+          if (status == 404 && cacheMisses) negativeCache.rememberNotFound(runtime, negativeCachePath(runtime, path, sourceFingerprint));
           throw new MavenExceptions.MavenNotFoundException(path);
         }
         return handleUpstreamFailure(runtime, path, cached, headOnly,

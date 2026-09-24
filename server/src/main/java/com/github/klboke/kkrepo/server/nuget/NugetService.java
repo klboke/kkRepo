@@ -69,11 +69,12 @@ public class NugetService {
     NugetPath path = parser.parse(rawPath);
     if (runtime.type() == RepositoryType.GROUP && NugetUpstreamResources.isPackagePath(path.rawPath())) {
       PackageRequest packageRequest = packageRequest(path.rawPath(), request);
-      if (packageRequest.sourceMember() != null) {
-        RepositoryRuntime member = findProxyMember(runtime, packageRequest.sourceMember());
+      if (packageRequest.sourceToken() != null) {
+        long memberId = NugetResourceLinkToken.verify(runtime.id(), packageRequest.path(), packageRequest.sourceToken());
+        RepositoryRuntime member = findProxyMember(runtime, memberId);
         if (member == null) throw new MavenExceptions.MavenNotFoundException(path.rawPath());
         // A signed link belongs to this member. Never retry it against another upstream.
-        return proxyGet(member, packageRequest.path(), repositoryBaseUrl, true, headOnly);
+        return proxyGet(member, packageRequest.path(), repositoryBaseUrl, runtime.id(), headOnly);
       }
     }
     return switch (path.kind()) {
@@ -154,7 +155,7 @@ public class NugetService {
     return switch (runtime.type()) {
       case HOSTED -> hosted.get(runtime, rawPath, headOnly);
       case PROXY -> proxyGet(runtime, packageRequestPath(rawPath, request), repositoryBaseUrl, headOnly);
-      case GROUP -> firstWin(runtime, rawPath, repositoryBaseUrl, headOnly);
+      case GROUP -> firstWin(runtime, rawPath, repositoryBaseUrl, runtime.id(), headOnly);
     };
   }
 
@@ -164,14 +165,14 @@ public class NugetService {
 
   private MavenResponse proxyGet(
       RepositoryRuntime runtime, String rawPath, String repositoryBaseUrl, boolean headOnly) {
-    return proxyGet(runtime, rawPath, repositoryBaseUrl, false, headOnly);
+    return proxyGet(runtime, rawPath, repositoryBaseUrl, null, headOnly);
   }
 
   private MavenResponse proxyGet(
-      RepositoryRuntime runtime, String rawPath, String repositoryBaseUrl, boolean groupRequest, boolean headOnly) {
+      RepositoryRuntime runtime, String rawPath, String repositoryBaseUrl, Long groupId, boolean headOnly) {
     if (NugetUpstreamResources.isPackagePath(rawPath)) {
       return NugetUpstreamResources.getPackage(
-          proxy, objectMapper, runtime, rawPath, repositoryBaseUrl, groupRequest, headOnly);
+          proxy, objectMapper, runtime, rawPath, repositoryBaseUrl, groupId, headOnly);
     }
     if (rawPath.equals("query") || rawPath.startsWith("query?")
         || rawPath.equals("autocomplete") || rawPath.startsWith("autocomplete?")) {
@@ -181,7 +182,7 @@ public class NugetService {
   }
 
   private MavenResponse firstWin(
-      RepositoryRuntime group, String rawPath, String repositoryBaseUrl, boolean headOnly) {
+      RepositoryRuntime group, String rawPath, String repositoryBaseUrl, long entryGroupId, boolean headOnly) {
     if (group.members().isEmpty()) {
       throw new MavenExceptions.MavenNotFoundException(rawPath);
     }
@@ -190,8 +191,8 @@ public class NugetService {
         return switch (member.type()) {
           case HOSTED -> hosted.get(member, rawPath, headOnly);
           // Unscoped queries must not be broadcast to unrelated feeds while probing.
-          case PROXY -> proxyGet(member, rawPath, repositoryBaseUrl, true, headOnly);
-          case GROUP -> firstWin(member, rawPath, repositoryBaseUrl, headOnly);
+          case PROXY -> proxyGet(member, rawPath, repositoryBaseUrl, entryGroupId, headOnly);
+          case GROUP -> firstWin(member, rawPath, repositoryBaseUrl, entryGroupId, headOnly);
         };
       } catch (MavenExceptions.MavenNotFoundException ignored) {
         // try next member
@@ -661,21 +662,20 @@ public class NugetService {
     return null;
   }
 
-  private record PackageRequest(String path, Long sourceMember) {}
+  private record PackageRequest(String path, String sourceToken) {}
 
   private static PackageRequest packageRequest(String path, HttpServletRequest request) {
     String fullPath = queryStringPath(path, request);
     int queryIndex = fullPath.indexOf('?');
     if (queryIndex < 0) return new PackageRequest(path, null);
     List<String> forwarded = new ArrayList<>();
-    Long sourceMember = null;
+    String sourceToken = null;
     for (String pair : fullPath.substring(queryIndex + 1).split("&", -1)) {
       String[] parts = pair.split("=", 2);
       try {
         if (URLDecoder.decode(parts[0], StandardCharsets.UTF_8).equals(NugetUpstreamResources.SOURCE_MEMBER_QUERY)) {
-          if (sourceMember != null || parts.length != 2) throw new IllegalArgumentException();
-          sourceMember = Long.valueOf(URLDecoder.decode(parts[1], StandardCharsets.UTF_8));
-          if (sourceMember <= 0) throw new IllegalArgumentException();
+          if (sourceToken != null || parts.length != 2) throw new IllegalArgumentException();
+          sourceToken = URLDecoder.decode(parts[1], StandardCharsets.UTF_8);
         } else {
           forwarded.add(pair); // Preserve the exact encoding of opaque signatures.
         }
@@ -683,7 +683,7 @@ public class NugetService {
         throw new MavenExceptions.MavenNotFoundException("Invalid NuGet resource source");
       }
     }
-    return new PackageRequest(path + (forwarded.isEmpty() ? "" : "?" + String.join("&", forwarded)), sourceMember);
+    return new PackageRequest(path + (forwarded.isEmpty() ? "" : "?" + String.join("&", forwarded)), sourceToken);
   }
 
   private static String queryStringPath(String path, HttpServletRequest request) {

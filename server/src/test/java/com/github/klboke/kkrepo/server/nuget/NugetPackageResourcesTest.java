@@ -73,7 +73,8 @@ class NugetPackageResourcesTest {
         "nuget-group", true, 1L, null, null, null, true, null, null, null, null, null, List.of(runtime()));
     for (RepositoryRuntime repository : List.of(runtime(), group)) {
       request.setQueryString("sig=a%2Bb%2Fc&expires=123"
-          + (repository.type() == RepositoryType.GROUP ? "&_kkrepoNugetSource=1" : ""));
+          + (repository.type() == RepositoryType.GROUP ? "&_kkrepoNugetSource="
+              + NugetResourceLinkToken.issue(group.id(), runtime().id(), path + "?sig=a%2Bb%2Fc&expires=123") : ""));
       for (boolean head : List.of(false, true)) {
         MavenResponse response = service.get(repository, path, BASE, request, head);
         if (response.body() != null) response.body().close();
@@ -119,14 +120,16 @@ class NugetPackageResourcesTest {
         + "\"packageContent\":\"" + FLAT + "arp.projects/1.10.21/arp.projects.1.10.21.nupkg?sig=a%2Bb%2Fc&expires=123\"}";
     JsonNode leaf = json(service.get(group, leafPath, BASE, null, false));
     assertEquals(List.of(4L, 1L, 1L), proxy.repositories);
-    assertEquals(BASE + leafPath + "?api-version=7&_kkrepoNugetSource=1#leaf", leaf.path("@id").asText());
+    assertEquals(BASE + leafPath + "?api-version=7&_kkrepoNugetSource="
+        + NugetResourceLinkToken.issue(group.id(), runtime().id(), leafPath + "?api-version=7") + "#leaf",
+        leaf.path("@id").asText());
     URI link = URI.create(leaf.path("packageContent").asText());
     assertEquals(URI.create(BASE + packagePath).getPath(), link.getPath());
     MockHttpServletRequest request = new MockHttpServletRequest();
     request.setQueryString(link.getRawQuery());
     for (boolean head : List.of(false, true)) {
       proxy.repositories.clear();
-      MavenResponse response = service.get(group, packagePath, BASE, request, head);
+      MavenResponse response = new NugetService(null, proxy, null, MAPPER).get(group, packagePath, BASE, request, head);
       if (response.body() != null) response.body().close();
       assertEquals(List.of(1L, 1L), proxy.repositories);
       assertEquals(FLAT + "arp.projects/1.10.21/arp.projects.1.10.21.nupkg?sig=a%2Bb%2Fc&expires=123",
@@ -157,7 +160,8 @@ class NugetPackageResourcesTest {
   void encodedSourceSelectorIsConsumedBeforeUpstreamFetch() throws Exception {
     RecordingProxy proxy = new RecordingProxy();
     MockHttpServletRequest request = new MockHttpServletRequest();
-    request.setQueryString("sig=a%2Bb&&%5FkkrepoNugetSource=%31&");
+    request.setQueryString("sig=a%2Bb&&%5FkkrepoNugetSource=" + NugetResourceLinkToken.issue(2L, 1L,
+        "v3/registration5-semver1/arp.projects/index.json?sig=a%2Bb&&") + "&");
     new NugetService(null, proxy, null, MAPPER).get(group(2L, runtime()),
         "v3/registration5-semver1/arp.projects/index.json", BASE, request, false).body().close();
     assertEquals(REG + "arp.projects/index.json?sig=a%2Bb&&", proxy.urls.getLast());
@@ -343,6 +347,56 @@ class NugetPackageResourcesTest {
     assertSame(proxy.discoveryFailure, assertThrows(MavenExceptions.BadUpstreamException.class, () -> get(proxy, path, true)));
     assertThrows(MavenExceptions.BadUpstreamException.class,
         () -> get(proxy, "v3-flatcontainer/arp.projects/index.json", false));
+  }
+
+  @Test
+  void routingProofRejectsChangesToMemberGroupPathOrSignedQuery() throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    NugetService service = new NugetService(null, proxy, null, MAPPER);
+    String path = "v3-flatcontainer/arp.projects/1.10.21/arp.projects.1.10.21.nupkg";
+    String token = NugetResourceLinkToken.issue(2L, 1L, path + "?sig=secret");
+    for (String query : List.of("sig=secret&_kkrepoNugetSource=" + token.replaceFirst("1\\.", "4."),
+        "sig=changed&_kkrepoNugetSource=" + token, "sig=secret&_kkrepoNugetSource=" + token + "x")) {
+      MockHttpServletRequest request = new MockHttpServletRequest();
+      request.setQueryString(query);
+      assertThrows(MavenExceptions.MavenNotFoundException.class,
+          () -> service.get(group(2L, runtime(), runtime(4L)), path, BASE, request, false));
+    }
+    MockHttpServletRequest request = new MockHttpServletRequest();
+    request.setQueryString("sig=secret&_kkrepoNugetSource=" + token);
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(group(3L, runtime()), path, BASE, request, false));
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(group(2L, runtime()), path.replace("1.10.21", "1.10.22"), BASE, request, false));
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(group(2L, runtime(4L)), path, BASE, request, false));
+    assertTrue(proxy.urls.isEmpty());
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"https://DEVOPS.EXAMPLE:443/custom/registrations2/", "HTTPS://devops.example/custom/registrations2/",
+      "https://devops.example/custom/%72egistrations2/", "https://devops.example/custom/unused/../registrations2/"})
+  void equivalentResourceUrisAreRewrittenAndCredentialsRemainHidden(String endpoint) throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    proxy.registration = endpoint + "?signature=secret";
+    proxy.metadata = "{\"@id\":\"" + REG + "arp.projects/index.json?sig%6Eature=secret&page=2\"}";
+    JsonNode result = json(get(proxy, "v3/registration5-semver1/arp.projects/index.json", false));
+    assertEquals(BASE + "v3/registration5-semver1/arp.projects/index.json?page=2", result.path("@id").asText());
+    assertFalse(result.toString().contains("secret"));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"tenant", "%74enant"})
+  void clientQueriesCannotOverrideResourceOwnedFeedParameters(String key) {
+    RecordingProxy proxy = new RecordingProxy();
+    proxy.flat = FLAT + "?tenant=private";
+    MockHttpServletRequest request = new MockHttpServletRequest();
+    request.setQueryString(key + "=other");
+    var error = assertThrows(MavenExceptions.BadRequestException.class,
+        () -> new NugetService(null, proxy, null, MAPPER).get(runtime(),
+            "v3-flatcontainer/arp.projects/1.10.21/arp.projects.nuspec", BASE, request, false));
+    assertFalse(error.getMessage().contains("private"));
+    assertEquals(List.of(INDEX), proxy.urls);
   }
 
   @Test

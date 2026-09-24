@@ -459,6 +459,34 @@ class RawProxyServiceTest {
   }
 
   @Test
+  void signedMissesDoNotPoisonOrConsultTheCanonicalNegativeCache() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = nugetRuntime();
+    String path = "v3-flatcontainer/demo/1.0.0/demo.1.0.0.nupkg";
+    String stable = "https://upstream.example.test/flat2/demo.nupkg";
+    BlobStorage storage = mock(BlobStorage.class);
+    when(fixture.registry.forBlobStoreId(1L)).thenReturn(storage);
+    CachedAssetMetadata content = snapshot(Instant.now());
+    RawAssetWriter.Stored stored = new RawAssetWriter.Stored(content.toAssetRecord(), content.toBlobRecord(), null, true, null);
+    when(fixture.writer.write(eq(runtime), eq(storage), eq(1L), eq(path), any(), any(), any(), eq("proxy"), isNull(), eq(true)))
+        .thenReturn(stored);
+    when(fixture.reader.serve(stored.asset(), true, path, "ATTACHMENT")).thenReturn(MavenResponse.noBody(200));
+    when(fixture.negativeCache.isNotFoundCached(eq(runtime), any(String.class))).thenReturn(true);
+    doAnswer(invocation -> {
+      HttpRemoteFetcher.Request request = invocation.getArgument(0);
+      HttpRemoteFetcher.ResultHandler<?> handler = invocation.getArgument(2);
+      return handler.handle(new HttpRemoteFetcher.Result(request.url().endsWith("expired") ? 404 : 200,
+          Map.of("Content-Type", "application/zip"), InputStream.nullInputStream()));
+    }).when(fixture.fetcher).fetchWithBodyRetry(any(), eq(path), any());
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> fixture.service.getAssetFromUrl(runtime, path, stable + "?sig=expired", stable, true));
+    assertEquals(200, fixture.service.getAssetFromUrl(runtime, path, stable + "?sig=valid", stable, true).status());
+    verify(fixture.fetcher, times(2)).fetchWithBodyRetry(any(), eq(path), any());
+    verify(fixture.negativeCache, never()).isNotFoundCached(eq(runtime), any(String.class));
+    verify(fixture.negativeCache, never()).rememberNotFound(eq(runtime), any(String.class));
+  }
+
+  @Test
   void nugetResourceChangesDoNotReuseFreshContentFromThePreviousEndpoint() throws Exception {
     Fixture fixture = fixture();
     RepositoryRuntime runtime = nugetRuntime();

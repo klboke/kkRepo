@@ -271,6 +271,8 @@ NuGet proxy 仓库支持使用 NTLM 访问要求 Windows 凭据的上游。在�
 
 NuGet service index 发现不会向其他源站委托仓库凭据。发现的资源遵循现有出站请求的同源校验；私有地址白名单和 `allowedRedirectHosts` 均不授权跨源共享 Basic/Bearer/NTLM 凭据。如果需要认证的资源使用规范主机名，且该源站也提供 service index，可将其配置为上游地址。需要跨多个源站共享凭据的 feed 需要单独配置凭据委托功能，目前尚不支持。
 
+带查询参数的 NuGet group 资源链接携带绑定入口 group、来源成员、包路径和原始查询串的认证路由证明。各副本使用已有的部署 credential secret 校验，仍执行仓库权限检查，并依据当前 group 配置检查成员关系。客户端不能覆盖资源自身的查询参数；签名下载请求失败不会写入普通包请求的负缓存。
+
 当前 Apache HttpClient 依赖保留了已弃用、需显式注册的 NTLM 实现。仅 NTLM 请求启用该实现，升级依赖时必须保留 NTLMv2 握手回归测试。参考对照脚本为 `compat-test/scripts/ntlm-upstream.py`，可分别或同时连接临时 Nexus/kkRepo 实例，校验 NTLMv2 密码证明、包内容和 GET/HEAD 响应，并清理测试仓库及临时 Nexus SSRF 白名单项。指定双方可达的 `--upstream-host`；添加 `--dotnet` 可使用独立包缓存执行真实 .NET 8 restore。
 
 ## 扫描活动排序

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
+import com.github.klboke.kkrepo.protocol.nuget.NugetPathParser;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
@@ -47,6 +48,7 @@ final class NugetUpstreamResources {
     String type = "query".equals(operation) ? "SearchQueryService" : "SearchAutocompleteService";
     JsonNode resources = resources(proxy, mapper, runtime);
     String endpoint = resourceUrl(resources, type, VERSIONS);
+    rejectQueryOverrides(endpoint, query);
     String remoteUrl = endpoint + (query.isEmpty() ? "" :
         (URI.create(endpoint).getRawQuery() == null ? "?" : "&") + query);
     // The shared fetcher validates destinations and only sends credentials to the configured origin.
@@ -60,7 +62,7 @@ final class NugetUpstreamResources {
 
   static MavenResponse getPackage(
       RawProxyService proxy, ObjectMapper mapper, RepositoryRuntime runtime,
-      String path, String repositoryBaseUrl, boolean groupRequest, boolean headOnly) {
+      String path, String repositoryBaseUrl, Long groupId, boolean headOnly) {
     JsonNode resources;
     try {
       resources = resources(proxy, mapper, runtime);
@@ -97,7 +99,7 @@ final class NugetUpstreamResources {
         runtime, cacheKey("registration", remoteUrl + "\n" + flatEndpoint), remoteUrl, false);
     JsonNode document = readJson(mapper, response, MAX_REGISTRATION_BYTES, "registration");
     String base = repositoryBaseUrl.endsWith("/") ? repositoryBaseUrl : repositoryBaseUrl + "/";
-    rewriteLinks(document, endpoint, flatEndpoint, base, registrationPrefix, groupRequest ? runtime.id() : null);
+    rewriteLinks(document, endpoint, flatEndpoint, base, registrationPrefix, groupId, runtime.id());
     try {
       byte[] bytes = mapper.writeValueAsBytes(document);
       return headOnly ? MavenResponse.noBody(200, bytes.length, "application/json", null, null)
@@ -118,6 +120,7 @@ final class NugetUpstreamResources {
     int suffixQuery = suffix.indexOf('?');
     String extraQuery = suffixQuery < 0 ? "" : suffix.substring(suffixQuery + 1);
     if (suffixQuery >= 0) suffix = suffix.substring(0, suffixQuery);
+    rejectQueryOverrides(endpoint, extraQuery);
     StringBuilder encoded = new StringBuilder();
     for (String segment : suffix.split("/", -1)) {
       if (segment.equals(".") || segment.equals("..")) {
@@ -133,52 +136,89 @@ final class NugetUpstreamResources {
             : "?" + uri.getRawQuery() + (extraQuery.isEmpty() ? "" : "&" + extraQuery));
   }
 
-  private static void rewriteLinks(JsonNode node, String registration, String flat, String base, String registrationPrefix, Long sourceMember) {
+  private static void rewriteLinks(JsonNode node, String registration, String flat, String base, String registrationPrefix, Long groupId, long sourceMember) {
     if (node.isObject()) {
       ObjectNode object = (ObjectNode) node;
       for (String field : List.of("@id", "parent", "registration", "packageContent")) {
         JsonNode value = object.get(field);
         if (value != null && value.isTextual()) {
-          String rewritten = localLink(value.asText(), registration, base + registrationPrefix, sourceMember);
-          rewritten = localLink(rewritten, flat, base + FLAT, sourceMember);
+          String rewritten = localLink(value.asText(), registration, base, registrationPrefix, groupId, sourceMember);
+          rewritten = localLink(rewritten, flat, base, FLAT, groupId, sourceMember);
           object.put(field, rewritten);
         }
       }
     }
     if (node.isContainerNode()) {
-      for (JsonNode child : node) rewriteLinks(child, registration, flat, base, registrationPrefix, sourceMember);
+      for (JsonNode child : node) rewriteLinks(child, registration, flat, base, registrationPrefix, groupId, sourceMember);
     }
   }
 
-  private static String localLink(String value, String endpoint, String localBase, Long sourceMember) {
+  private static String localLink(
+      String value, String endpoint, String base, String prefix, Long groupId, long sourceMember) {
     URI source = URI.create(endpoint);
-    int query = endpoint.indexOf('?');
-    String root = query < 0 ? endpoint : endpoint.substring(0, query);
+    URI link;
+    try {
+      link = URI.create(value);
+    } catch (IllegalArgumentException e) {
+      throw new MavenExceptions.BadUpstreamException("Invalid NuGet registration link");
+    }
+    if (link.getHost() == null || !source.getHost().equalsIgnoreCase(link.getHost())
+        || !source.getScheme().equalsIgnoreCase(link.getScheme()) || effectivePort(source) != effectivePort(link)) return value;
+    if (link.getRawUserInfo() != null) throw new MavenExceptions.BadUpstreamException("Invalid NuGet registration link");
+    String root = normalizedPath(source);
     if (!root.endsWith("/")) root += "/";
-    if (!value.startsWith(root)) return value;
-    String suffix = value.substring(root.length());
+    String linkPath = normalizedPath(link);
+    if (!linkPath.startsWith(root)) return value;
+    String suffix = linkPath.substring(root.length());
+    String query = link.getRawQuery();
     // Resource query credentials are applied server-side, never copied into client-facing links.
-    int suffixQuery = suffix.indexOf('?');
-    if (suffixQuery >= 0 && source.getRawQuery() != null) {
-      var resourceKeys = Arrays.stream(source.getRawQuery().split("&"))
+    if (query != null && source.getRawQuery() != null) {
+      var resourceKeys = Arrays.stream(source.getRawQuery().split("&", -1))
           .map(NugetUpstreamResources::queryName).collect(Collectors.toSet());
-      int fragmentIndex = suffix.indexOf('#', suffixQuery);
-      String fragment = fragmentIndex < 0 ? "" : suffix.substring(fragmentIndex);
-      String linkQuery = suffix.substring(suffixQuery + 1, fragmentIndex < 0 ? suffix.length() : fragmentIndex);
-      String remaining = Arrays.stream(linkQuery.split("&", -1))
+      query = Arrays.stream(query.split("&", -1))
           .filter(pair -> !resourceKeys.contains(queryName(pair))).collect(Collectors.joining("&"));
-      suffix = suffix.substring(0, suffixQuery) + (remaining.isEmpty() ? "" : "?" + remaining) + fragment;
     }
-    // Query-bearing links can carry feed-specific credentials. Keep the group URL for
-    // authorization, but route them only to their originating member on every replica.
-    // Ordinary links retain normal group lookup/merge behavior.
-    int fragmentIndex = suffix.indexOf('#');
-    String fragment = fragmentIndex < 0 ? "" : suffix.substring(fragmentIndex);
-    String target = fragmentIndex < 0 ? suffix : suffix.substring(0, fragmentIndex);
-    if (sourceMember != null && target.contains("?")) {
-      target += "&" + SOURCE_MEMBER_QUERY + "=" + sourceMember;
+    String target = prefix + suffix + (query == null || query.isEmpty() ? "" : "?" + query);
+    if (groupId != null && query != null && !query.isEmpty()) {
+      // Bind the routing proof to the decoded request path and exact opaque query.
+      String requestPath = NugetPathParser.normalize(URI.create(prefix + suffix).getPath()) + "?" + query;
+      target += "&" + SOURCE_MEMBER_QUERY + "=" + NugetResourceLinkToken.issue(groupId, sourceMember, requestPath);
     }
-    return localBase + target + fragment;
+    return base + target + (link.getRawFragment() == null ? "" : "#" + link.getRawFragment());
+  }
+
+  private static int effectivePort(URI uri) {
+    return uri.getPort() >= 0 ? uri.getPort() : "https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80;
+  }
+
+  private static String normalizedPath(URI uri) {
+    String raw = URI.create(uri.toASCIIString()).getRawPath();
+    StringBuilder path = new StringBuilder();
+    for (int i = 0; i < raw.length(); i++) {
+      char ch = raw.charAt(i);
+      if (ch == '%' && i + 2 < raw.length()) {
+        char decoded = (char) Integer.parseInt(raw.substring(i + 1, i + 3), 16);
+        if ((decoded >= 'a' && decoded <= 'z') || (decoded >= 'A' && decoded <= 'Z')
+            || (decoded >= '0' && decoded <= '9') || "-._~".indexOf(decoded) >= 0) {
+          path.append(decoded);
+        } else {
+          path.append('%').append(raw.substring(i + 1, i + 3).toUpperCase(java.util.Locale.ROOT));
+        }
+        i += 2;
+      } else {
+        path.append(ch);
+      }
+    }
+    return path.isEmpty() ? "/" : URI.create("http://resource" + path).normalize().getRawPath();
+  }
+
+  private static void rejectQueryOverrides(String endpoint, String query) {
+    String owned = URI.create(endpoint).getRawQuery();
+    if (owned == null || query.isEmpty()) return;
+    var keys = Arrays.stream(owned.split("&", -1)).map(NugetUpstreamResources::queryName).collect(Collectors.toSet());
+    if (Arrays.stream(query.split("&", -1)).map(NugetUpstreamResources::queryName).anyMatch(keys::contains)) {
+      throw new MavenExceptions.BadRequestException("NuGet request cannot override resource query parameters");
+    }
   }
 
   private static String queryName(String pair) {
