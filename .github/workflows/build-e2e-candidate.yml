@@ -80,7 +80,8 @@ jobs:
         with:
           distribution: temurin
           java-version: "25"
-          cache: maven
+          # source_sha can select code outside a privileged caller's branch. Do not let
+          # executing that code populate a cache that trusted default-branch jobs restore.
 
       - name: Build JVM candidate image
         if: inputs.runtime == 'jvm'

@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 class RdsIamConnectionSettingsTest {
   @Test
   void extractsBackendDefaultPortsAndExplicitPorts() {
+    assertThrows(IllegalArgumentException.class, () -> settings("unsupported", "jdbc:h2:mem:test"));
     assertEquals(new RdsIamConnectionSettings("db.example", 3306, "db_user"),
         settings("mysql", "jdbc:mysql://db.example/kkrepo?sslMode=VERIFY_IDENTITY"));
     assertEquals(new RdsIamConnectionSettings("db.example", 5432, "db_user"),

@@ -7,15 +7,16 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
 
 import com.zaxxer.hikari.HikariDataSource;
 import java.util.Map;
+import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.mock.env.MockEnvironment;
-import org.springframework.jdbc.datasource.DriverManagerDataSource;
 
 class DatabaseAuthenticationPostProcessorTest {
   @Test
@@ -61,10 +62,10 @@ class DatabaseAuthenticationPostProcessorTest {
     var processor = new DatabaseAuthenticationPostProcessor(environment);
     assertSame(this, processor.postProcessBeforeInitialization(this, "unrelated"));
     assertThrows(IllegalArgumentException.class,
-        () -> processor.postProcessBeforeInitialization(new DriverManagerDataSource(), "dataSource"));
+        () -> processor.postProcessBeforeInitialization(mock(DataSource.class), "dataSource"));
     environment.setProperty("kkrepo.database.auth", "iam");
     assertThrows(IllegalArgumentException.class,
-        () -> processor.postProcessBeforeInitialization(new DriverManagerDataSource(), "dataSource"));
+        () -> processor.postProcessBeforeInitialization(mock(DataSource.class), "dataSource"));
     processor.destroy();
   }
 
