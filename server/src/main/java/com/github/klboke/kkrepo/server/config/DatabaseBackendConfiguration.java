@@ -11,10 +11,17 @@ import org.springframework.boot.flyway.autoconfigure.FlywayConfigurationCustomiz
 import org.springframework.boot.flyway.autoconfigure.FlywayMigrationStrategy;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
 
 /** Selects and validates the configured relational database backend before migration. */
 @Configuration(proxyBeanMethods = false)
 public class DatabaseBackendConfiguration {
+  // Register unconditionally: IAM must remain selectable at runtime in the Native image.
+  @Bean
+  static DatabaseAuthenticationPostProcessor databaseAuthenticationPostProcessor(Environment environment) {
+    return new DatabaseAuthenticationPostProcessor(environment);
+  }
+
   @Bean
   DatabaseDialect databaseDialect(
       @Value("${kkrepo.database.type:mysql}") String configuredType) {

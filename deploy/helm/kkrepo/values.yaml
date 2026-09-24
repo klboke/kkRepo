@@ -37,6 +37,11 @@ service:
 database:
   # Supported values: mysql, postgresql.
   type: mysql
+  # password or iam (AWS RDS/Aurora). IAM does not require a database password Secret.
+  auth: password
+  iam:
+    # Empty uses the AWS SDK region chain, for example AWS_REGION.
+    region: ""
   url: jdbc:mysql://mysql.example:3306/kkrepo?useUnicode=true&characterEncoding=utf8&useSSL=true&serverTimezone=UTC
   username: kkrepo
   existingSecret: kkrepo-database
@@ -57,6 +62,8 @@ encryption:
 # Reference an existing Secret containing S3/OSS credentials and any extra app environment values.
 extraEnvFrom: []
 extraEnv: []
+extraVolumes: []
+extraVolumeMounts: []
 
 blobStorage:
   file:

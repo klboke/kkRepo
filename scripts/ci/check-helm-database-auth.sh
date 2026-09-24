@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+work_dir="$(mktemp -d)"
+trap 'rm -rf "$work_dir"' EXIT
+
+helm template auth-check "$repository_root/deploy/helm/kkrepo" > "$work_dir/password.yaml"
+grep -q 'name: SPRING_DATASOURCE_PASSWORD' "$work_dir/password.yaml"
+grep -q 'name: kkrepo-database' "$work_dir/password.yaml"
+
+# Reused values from releases predating IAM have neither auth nor iam. Null
+# removes the chart defaults so the render exercises that missing-field case.
+for backend in mysql postgresql; do
+  helm install auth-check "$repository_root/deploy/helm/kkrepo" --dry-run=client \
+    --set database.type="$backend" --set database.auth=null --set database.iam=null \
+    --set database.existingSecret=legacy-database \
+    --set database.passwordKey=legacy-password > "$work_dir/legacy.txt"
+  grep -A1 'name: KKREPO_DATABASE_AUTH' "$work_dir/legacy.txt" | grep -q 'value: "password"'
+  grep -A4 'name: SPRING_DATASOURCE_PASSWORD' "$work_dir/legacy.txt" | grep -q 'name: legacy-database'
+  grep -A4 'name: SPRING_DATASOURCE_PASSWORD' "$work_dir/legacy.txt" | grep -q 'key: legacy-password'
+  grep -q 'database:   legacy-database / legacy-password' "$work_dir/legacy.txt"
+done
+
+for backend in mysql postgresql; do
+  helm template auth-check "$repository_root/deploy/helm/kkrepo" \
+    --set database.type="$backend" --set database.auth=iam \
+    --set database.iam.region=us-east-1 --set database.existingSecret= \
+    --set 'extraVolumes[0].name=rds-ca' \
+    --set 'extraVolumes[0].configMap.name=rds-ca' \
+    --set 'extraVolumeMounts[0].name=rds-ca' \
+    --set 'extraVolumeMounts[0].mountPath=/etc/rds' \
+    --set 'extraVolumeMounts[0].readOnly=true' > "$work_dir/iam.yaml"
+  grep -A1 'name: KKREPO_DATABASE_AUTH' "$work_dir/iam.yaml" | grep -q 'value: "iam"'
+  grep -A1 'name: KKREPO_DATABASE_IAM_REGION' "$work_dir/iam.yaml" | grep -q 'value: "us-east-1"'
+  grep -q 'mountPath: /etc/rds' "$work_dir/iam.yaml"
+  if grep -q 'SPRING_DATASOURCE_PASSWORD\|kkrepo-database' "$work_dir/iam.yaml"; then
+    echo 'IAM deployment must not reference a database password Secret' >&2
+    exit 1
+  fi
+  # Legacy releases can enable IAM while relying on the AWS SDK region chain.
+  for region_override in database.iam=null database.iam.region=null; do
+    helm template auth-check "$repository_root/deploy/helm/kkrepo" \
+      --set database.type="$backend" --set database.auth=iam \
+      --set "$region_override" --set database.existingSecret= > "$work_dir/iam-default-region.yaml"
+    grep -A1 'name: KKREPO_DATABASE_AUTH' "$work_dir/iam-default-region.yaml" | grep -q 'value: "iam"'
+    grep -A1 'name: KKREPO_DATABASE_IAM_REGION' "$work_dir/iam-default-region.yaml" | grep -q 'value: ""'
+    if grep -q 'SPRING_DATASOURCE_PASSWORD\|kkrepo-database' "$work_dir/iam-default-region.yaml"; then
+      echo 'IAM with the SDK region chain must not reference a database password Secret' >&2
+      exit 1
+    fi
+  done
+done
+if helm template auth-check "$repository_root/deploy/helm/kkrepo" \
+    --set database.auth=invalid > "$work_dir/invalid.log" 2>&1; then
+  echo 'Invalid database auth mode was accepted' >&2
+  exit 1
+fi
+grep -q 'database.auth must be password or iam' "$work_dir/invalid.log"
+echo 'Helm database authentication checks passed'

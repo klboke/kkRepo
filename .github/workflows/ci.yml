@@ -148,6 +148,7 @@ jobs:
             --set securityScanning.enabled=true \
             --set securityScanning.serviceCredential.existingSecret=kkrepo-scanner
           scripts/ci/check-helm-scanner-isolation.sh
+          scripts/ci/check-helm-database-auth.sh
 
   dev-runtime-deploy-contract:
     name: dev-runtime-deploy-contract
