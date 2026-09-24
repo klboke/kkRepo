@@ -27,11 +27,13 @@ import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
+import com.github.klboke.kkrepo.server.maven.MavenErrorAdvice;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
+import java.io.IOException;
 import java.time.Instant;
 import java.util.List;
 import java.util.HashSet;
@@ -313,6 +315,39 @@ class RawProxyServiceTest {
     assertThrows(MavenExceptions.BadUpstreamException.class,
         () -> fixture.service.getAssetFromUrl(
             runtime, "file.txt", "https://cdn.example.test/file.txt", false));
+  }
+
+  @Test
+  void blockedUpstreamResponsesDoNotExposeConfiguredOrDiscoveredUrls() {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = nugetRuntime();
+    when(fixture.proxyStateDao.isBlocked(eq(runtime.id()), any())).thenReturn(true);
+    String path = "v3-flatcontainer/demo/1.0.0/demo.1.0.0.nupkg";
+    String signed = "https://upstream.example.test/flat2/demo.nupkg?token=private-secret";
+    for (boolean discovered : List.of(true, false)) {
+      var error = assertThrows(MavenExceptions.BadUpstreamException.class, () -> {
+        if (discovered) fixture.service.getAssetFromUrl(runtime, path, signed, false);
+        else fixture.service.getAsset(runtime, path, false);
+      });
+      var response = new MavenErrorAdvice().upstream(error);
+      assertEquals(502, response.getStatusCode().value());
+      assertEquals("Upstream temporarily blocked", response.getBody().get("message"));
+    }
+  }
+
+  @Test
+  void transportErrorsDoNotExposeSignedUrlsToRepositoryReaders() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = nugetRuntime();
+    String path = "v3-flatcontainer/demo/1.0.0/demo.1.0.0.nupkg";
+    String signed = "https://upstream.example.test/flat2/demo.nupkg?token=private-secret";
+    when(fixture.fetcher.fetchWithBodyRetry(any(), eq(path), any()))
+        .thenThrow(new IOException("Too many redirects fetching " + signed));
+    var error = assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> fixture.service.getAssetFromUrl(runtime, path, signed, false));
+    var response = new MavenErrorAdvice().upstream(error);
+    assertEquals(502, response.getStatusCode().value());
+    assertEquals("Upstream IO error: IOException", response.getBody().get("message"));
   }
 
   @Test

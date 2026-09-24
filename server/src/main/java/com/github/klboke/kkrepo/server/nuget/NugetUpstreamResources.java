@@ -61,17 +61,21 @@ final class NugetUpstreamResources {
     if (path.startsWith(FLAT)) {
       String endpoint = resourceUrl(resources, "PackageBaseAddress", List.of("/3.0.0"));
       String remoteUrl = appendPath(endpoint, path.substring(FLAT.length()));
-      if (path.endsWith("/index.json")) {
+      int query = path.indexOf('?');
+      String assetPath = query < 0 ? path : path.substring(0, query);
+      if (assetPath.endsWith("/index.json")) {
         return proxy.getMetadataFromUrlHidden(runtime, cacheKey("versions", remoteUrl), remoteUrl, headOnly);
       }
       // Preserve canonical asset paths, Browse visibility and download-policy checks for package bodies.
-      return proxy.getAssetFromUrl(runtime, path, remoteUrl, headOnly);
+      return proxy.getAssetFromUrl(runtime, assetPath, remoteUrl, headOnly);
     }
     String endpoint = resourceUrl(resources, "RegistrationsBaseUrl", REGISTRATION_VERSIONS);
     String flatEndpoint = resourceUrl(resources, "PackageBaseAddress", List.of("/3.0.0"));
     String remoteUrl = appendPath(endpoint, path.substring(registrationPrefix(path).length()));
+    // Registration bodies contain package links. Refresh them when either resource moves,
+    // even when discovery expires before an otherwise fresh registration cache entry.
     MavenResponse response = proxy.getMetadataFromUrlHidden(
-        runtime, cacheKey("registration", remoteUrl), remoteUrl, false);
+        runtime, cacheKey("registration", remoteUrl + "\n" + flatEndpoint), remoteUrl, false);
     JsonNode document = readJson(mapper, response, MAX_REGISTRATION_BYTES, "registration");
     String base = repositoryBaseUrl.endsWith("/") ? repositoryBaseUrl : repositoryBaseUrl + "/";
     rewriteLinks(document, endpoint, flatEndpoint, base);

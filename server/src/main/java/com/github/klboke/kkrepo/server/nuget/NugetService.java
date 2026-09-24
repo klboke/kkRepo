@@ -73,8 +73,7 @@ public class NugetService {
       case FLAT_CONTAINER_VERSION_INDEX -> versionIndex(runtime, path.packageId(), headOnly);
       case REGISTRATION_INDEX -> registrationIndex(runtime, path.packageId(), repositoryBaseUrl, request, headOnly);
       case FLAT_CONTAINER_PACKAGE, FLAT_CONTAINER_NUSPEC, RAW ->
-          dispatchRawGet(runtime, NugetUpstreamResources.registrationPrefix(path.rawPath()) == null
-              ? path.rawPath() : queryStringPath(path.rawPath(), request), repositoryBaseUrl, headOnly);
+          dispatchRawGet(runtime, path.rawPath(), repositoryBaseUrl, request, headOnly);
       case PACKAGE_PUBLISH, PACKAGE_DELETE -> throw new MavenExceptions.MethodNotAllowed(
           "NuGet package publish requires PUT/DELETE");
     };
@@ -138,13 +137,14 @@ public class NugetService {
     throw new MavenExceptions.MethodNotAllowed("Unsupported NuGet DELETE path: " + rawPath);
   }
 
-  private MavenResponse dispatchRawGet(RepositoryRuntime runtime, String rawPath, String repositoryBaseUrl, boolean headOnly) {
+  private MavenResponse dispatchRawGet(
+      RepositoryRuntime runtime, String rawPath, String repositoryBaseUrl, HttpServletRequest request, boolean headOnly) {
     // Package bodies remain on RawAssetReader: it resolves the concrete asset, applies
     // ArtifactDownloadPolicy with the request's entry-repository context, then opens the blob.
     return switch (runtime.type()) {
       case HOSTED -> hosted.get(runtime, rawPath, headOnly);
-      case PROXY -> proxyGet(runtime, rawPath, repositoryBaseUrl, headOnly);
-      case GROUP -> firstWin(runtime, rawPath, repositoryBaseUrl, headOnly);
+      case PROXY -> proxyGet(runtime, packageRequestPath(rawPath, request), repositoryBaseUrl, headOnly);
+      case GROUP -> firstWin(runtime, rawPath, repositoryBaseUrl, request, headOnly);
     };
   }
 
@@ -164,7 +164,8 @@ public class NugetService {
     return proxy.getAssetFromUrl(runtime, rawPath, remoteUrlForPath(runtime, rawPath), headOnly);
   }
 
-  private MavenResponse firstWin(RepositoryRuntime group, String rawPath, String repositoryBaseUrl, boolean headOnly) {
+  private MavenResponse firstWin(
+      RepositoryRuntime group, String rawPath, String repositoryBaseUrl, HttpServletRequest request, boolean headOnly) {
     if (group.members().isEmpty()) {
       throw new MavenExceptions.MavenNotFoundException(rawPath);
     }
@@ -172,8 +173,8 @@ public class NugetService {
       try {
         return switch (member.type()) {
           case HOSTED -> hosted.get(member, rawPath, headOnly);
-          case PROXY -> proxyGet(member, rawPath, repositoryBaseUrl, headOnly);
-          case GROUP -> firstWin(member, rawPath, repositoryBaseUrl, headOnly);
+          case PROXY -> proxyGet(member, packageRequestPath(rawPath, request), repositoryBaseUrl, headOnly);
+          case GROUP -> firstWin(member, rawPath, repositoryBaseUrl, request, headOnly);
         };
       } catch (MavenExceptions.MavenNotFoundException ignored) {
         // try next member
@@ -623,6 +624,10 @@ public class NugetService {
     } catch (NumberFormatException e) {
       return fallback;
     }
+  }
+
+  private static String packageRequestPath(String path, HttpServletRequest request) {
+    return NugetUpstreamResources.isPackagePath(path) ? queryStringPath(path, request) : path;
   }
 
   private static String queryStringPath(String path, HttpServletRequest request) {

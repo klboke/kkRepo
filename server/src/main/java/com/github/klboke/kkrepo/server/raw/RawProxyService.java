@@ -103,7 +103,7 @@ public class RawProxyService {
       if (cached.isPresent()) {
         return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
       }
-      throw new MavenExceptions.BadUpstreamException("Upstream temporarily blocked: " + runtime.proxyRemoteUrl());
+      throw new MavenExceptions.BadUpstreamException("Upstream temporarily blocked");
     }
     return fetchAndCache(
         runtime, path, remoteUrl, sourceFingerprint, cached, headOnly, now);
@@ -241,7 +241,7 @@ public class RawProxyService {
       if (cached.isPresent()) {
         return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
       }
-      throw new MavenExceptions.BadUpstreamException("Upstream temporarily blocked: " + remoteUrl);
+      throw new MavenExceptions.BadUpstreamException("Upstream temporarily blocked");
     }
     return fetchAndCacheUrl(
         runtime, path, remoteUrl, sourceFingerprint, cached, headOnly, now, timeoutProfile,
@@ -370,8 +370,10 @@ public class RawProxyService {
             "Upstream returned " + status, now);
       });
     } catch (IOException e) {
+      // Transport exception messages can contain signed upstream URLs. Keep their
+      // diagnostic category, but never return the message to repository readers.
       return handleUpstreamFailure(runtime, path, cached, headOnly,
-          "Upstream IO error: " + e.getMessage(), now);
+          "Upstream IO error: " + e.getClass().getSimpleName(), now);
     }
   }
 

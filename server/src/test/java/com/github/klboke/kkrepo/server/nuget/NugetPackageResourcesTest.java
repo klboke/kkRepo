@@ -1,6 +1,9 @@
 package com.github.klboke.kkrepo.server.nuget;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -10,12 +13,15 @@ import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.raw.RawProxyService;
+import com.github.klboke.kkrepo.server.raw.RawHostedService;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.zip.GZIPOutputStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -51,6 +57,65 @@ class NugetPackageResourcesTest {
     assertEquals(FLAT + "arp.projects/1.10.21/" + file, proxy.urls.getLast());
     assertTrue(proxy.lastHead);
     assertEquals(1, proxy.contentRequests);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"arp.projects.1.10.21.nupkg", "arp.projects.nuspec"})
+  void packageRequestsForwardSignedQueriesWithoutAddingThemToAssetPaths(String file) throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    proxy.flat = FLAT + "?tenant=feed";
+    String path = "v3-flatcontainer/arp.projects/1.10.21/" + file;
+    MockHttpServletRequest request = new MockHttpServletRequest();
+    request.setQueryString("sig=a%2Bb%2Fc&expires=123");
+    NugetService service = new NugetService(null, proxy, null, MAPPER);
+    RepositoryRuntime group = new RepositoryRuntime(2L, "group", RepositoryFormat.NUGET, RepositoryType.GROUP,
+        "nuget-group", true, 1L, null, null, null, true, null, null, null, null, null, List.of(runtime()));
+    for (RepositoryRuntime repository : List.of(runtime(), group)) {
+      for (boolean head : List.of(false, true)) {
+        MavenResponse response = service.get(repository, path, BASE, request, head);
+        if (response.body() != null) response.body().close();
+        assertEquals(FLAT + "arp.projects/1.10.21/" + file + "?tenant=feed&sig=a%2Bb%2Fc&expires=123",
+            proxy.urls.getLast());
+        assertEquals(path, proxy.paths.getLast());
+        assertEquals(head, proxy.lastHead);
+      }
+    }
+  }
+
+  @Test
+  void groupKeepsHostedPathsCanonicalWhenFollowingASignedPackageLink() throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    RawHostedService hosted = mock(RawHostedService.class);
+    RepositoryRuntime hostedRepository = new RepositoryRuntime(3L, "hosted", RepositoryFormat.NUGET, RepositoryType.HOSTED,
+        "nuget-hosted", true, 1L, null, null, null, true, null, null, null, null, null, List.of());
+    RepositoryRuntime group = new RepositoryRuntime(2L, "group", RepositoryFormat.NUGET, RepositoryType.GROUP,
+        "nuget-group", true, 1L, null, null, null, true, null, null, null, null, null,
+        List.of(hostedRepository, runtime()));
+    String path = "v3-flatcontainer/arp.projects/1.10.21/arp.projects.1.10.21.nupkg";
+    when(hosted.get(hostedRepository, path, true)).thenThrow(new MavenExceptions.MavenNotFoundException(path));
+    MockHttpServletRequest request = new MockHttpServletRequest();
+    request.setQueryString("sig=signature");
+    MavenResponse response = new NugetService(hosted, proxy, null, MAPPER).get(group, path, BASE, request, true);
+    assertEquals(200, response.status());
+    verify(hosted).get(hostedRepository, path, true);
+    assertEquals(path, proxy.paths.getLast());
+    assertEquals(FLAT + "arp.projects/1.10.21/arp.projects.1.10.21.nupkg?sig=signature", proxy.urls.getLast());
+  }
+
+  @Test
+  void refreshingOnlyTheFlatResourceDoesNotReuseRegistrationLinksFromThePreviousResource() throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    proxy.cacheRegistration = true;
+    String packageSuffix = "arp.projects/1.10.21/arp.projects.1.10.21.nupkg";
+    proxy.metadata = "{\"packageContent\":\"" + FLAT + packageSuffix + "\"}";
+    String path = "v3/registration5-semver1/arp.projects/index.json";
+    assertEquals(BASE + "v3-flatcontainer/" + packageSuffix, json(get(proxy, path, false)).path("packageContent").asText());
+    // Discovery expires before the registration document. Its URL remains the same,
+    // but the new document now points to the replacement PackageBaseAddress.
+    proxy.flat = "https://replacement.example/flat2/";
+    proxy.metadata = "{\"packageContent\":\"" + proxy.flat + packageSuffix + "\"}";
+    assertEquals(BASE + "v3-flatcontainer/" + packageSuffix, json(get(proxy, path, false)).path("packageContent").asText());
+    assertEquals(REG + "arp.projects/index.json", proxy.urls.getLast());
   }
 
   @Test
@@ -209,6 +274,8 @@ class NugetPackageResourcesTest {
     private boolean closed;
     private boolean lastHead;
     private boolean gzipMetadata;
+    private boolean cacheRegistration;
+    private final Map<String, String> registrationCache = new HashMap<>();
     private int contentRequests;
     RecordingProxy() { super(null, null, null, null, null, null, null, null); }
 
@@ -217,6 +284,9 @@ class NugetPackageResourcesTest {
       String data = path.startsWith("_nuget/index/") ? index == null
           ? "{\"resources\":[{\"@type\":\"PackageBaseAddress/3.0.0\",\"@id\":\"" + flat
               + "\"},{\"@type\":\"" + registrationType + "\",\"@id\":\"" + registration + "\"}]}" : index : metadata;
+      if (cacheRegistration && path.startsWith("_nuget/registration/")) {
+        data = registrationCache.computeIfAbsent(path, ignored -> metadata);
+      }
       return record(path, url, head, data);
     }
 
