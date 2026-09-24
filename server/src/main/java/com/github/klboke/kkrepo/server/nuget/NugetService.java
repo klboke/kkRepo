@@ -666,7 +666,7 @@ public class NugetService {
     if (queryIndex < 0) return new PackageRequest(path, null);
     List<String> forwarded = new ArrayList<>();
     Long sourceMember = null;
-    for (String pair : fullPath.substring(queryIndex + 1).split("&")) {
+    for (String pair : fullPath.substring(queryIndex + 1).split("&", -1)) {
       String[] parts = pair.split("=", 2);
       try {
         if (URLDecoder.decode(parts[0], StandardCharsets.UTF_8).equals(NugetUpstreamResources.SOURCE_MEMBER_QUERY)) {

@@ -157,10 +157,10 @@ class NugetPackageResourcesTest {
   void encodedSourceSelectorIsConsumedBeforeUpstreamFetch() throws Exception {
     RecordingProxy proxy = new RecordingProxy();
     MockHttpServletRequest request = new MockHttpServletRequest();
-    request.setQueryString("sig=a%2Bb&%5FkkrepoNugetSource=%31");
+    request.setQueryString("sig=a%2Bb&&%5FkkrepoNugetSource=%31&");
     new NugetService(null, proxy, null, MAPPER).get(group(2L, runtime()),
         "v3/registration5-semver1/arp.projects/index.json", BASE, request, false).body().close();
-    assertEquals(REG + "arp.projects/index.json?sig=a%2Bb", proxy.urls.getLast());
+    assertEquals(REG + "arp.projects/index.json?sig=a%2Bb&&", proxy.urls.getLast());
   }
 
   private static RepositoryRuntime group(long id, RepositoryRuntime... members) {
