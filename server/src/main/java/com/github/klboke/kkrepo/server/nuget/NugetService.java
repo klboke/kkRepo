@@ -81,7 +81,7 @@ public class NugetService {
       case QUERY -> query(runtime, request, repositoryBaseUrl, headOnly);
       case AUTOCOMPLETE -> autocomplete(runtime, request, headOnly);
       case FLAT_CONTAINER_VERSION_INDEX -> versionIndex(runtime, path.packageId(), headOnly);
-      case REGISTRATION_INDEX -> registrationIndex(runtime, path.packageId(), repositoryBaseUrl, request, headOnly);
+      case REGISTRATION_INDEX -> registrationIndex(runtime, path.packageId(), path.rawPath(), repositoryBaseUrl, request, headOnly);
       case FLAT_CONTAINER_PACKAGE, FLAT_CONTAINER_NUSPEC, RAW ->
           dispatchRawGet(runtime, path.rawPath(), repositoryBaseUrl, request, headOnly);
       case PACKAGE_PUBLISH, PACKAGE_DELETE -> throw new MavenExceptions.MethodNotAllowed(
@@ -216,7 +216,7 @@ public class NugetService {
         resource(base + "autocomplete", "SearchAutocompleteService/3.0.0"),
         resource(base + "v3/registration5-semver1/", "RegistrationsBaseUrl/3.0.0"),
         resource(base + "v3/registration5-semver1/", "RegistrationsBaseUrl/3.4.0"),
-        resource(base + "v3/registration5-semver1/", "RegistrationsBaseUrl/3.6.0"),
+        resource(base + "v3/registration5-semver2/", "RegistrationsBaseUrl/3.6.0"),
         resource(base + NugetPaths.PACKAGE_PUBLISH, "PackagePublish/2.0.0"));
     Map<String, Object> body = new LinkedHashMap<>();
     body.put("version", "3.0.0");
@@ -277,11 +277,14 @@ public class NugetService {
   private MavenResponse registrationIndex(
       RepositoryRuntime runtime,
       String packageId,
+      String rawPath,
       String repositoryBaseUrl,
       HttpServletRequest request,
       boolean headOnly) {
+    String registrationPrefix = NugetUpstreamResources.registrationPrefix(rawPath);
+    String indexPath = registrationPrefix + NugetPaths.normalizePackageId(packageId) + "/index.json";
     if (runtime.type() == RepositoryType.PROXY) {
-      return proxyGet(runtime, queryStringPath(NugetPaths.registrationIndex(packageId), request),
+      return proxyGet(runtime, packageRequestPath(indexPath, request),
           repositoryBaseUrl, headOnly);
     }
     String normalizedId = NugetPaths.normalizePackageId(packageId);
@@ -289,18 +292,18 @@ public class NugetService {
     List<Map<String, Object>> items = new ArrayList<>();
     for (String version : versions(runtime, packageId)) {
       Map<String, Object> catalogEntry = new LinkedHashMap<>();
-      catalogEntry.put("@id", base + "v3/registration5-semver1/" + normalizedId + "/" + version + ".json");
+      catalogEntry.put("@id", base + registrationPrefix + normalizedId + "/" + version + ".json");
       catalogEntry.put("id", packageId);
       catalogEntry.put("version", version);
       catalogEntry.put("listed", true);
       Map<String, Object> item = new LinkedHashMap<>();
-      item.put("@id", base + "v3/registration5-semver1/" + normalizedId + "/" + version + ".json");
+      item.put("@id", base + registrationPrefix + normalizedId + "/" + version + ".json");
       item.put("catalogEntry", catalogEntry);
       item.put("packageContent", base + NugetPaths.flatContainerPackage(packageId, version));
       items.add(item);
     }
     Map<String, Object> body = new LinkedHashMap<>();
-    body.put("@id", base + NugetPaths.registrationIndex(packageId));
+    body.put("@id", base + indexPath);
     body.put("count", items.size());
     body.put("items", List.of(Map.of("count", items.size(), "items", items)));
     return json(body, headOnly);

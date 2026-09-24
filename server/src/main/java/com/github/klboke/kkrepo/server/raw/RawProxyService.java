@@ -115,6 +115,15 @@ public class RawProxyService {
         HttpRemoteFetcher.TimeoutProfile.CONTENT, ComponentBinding.perAsset(), headOnly);
   }
 
+  /** Offline upgrade fallback before any service index was cached; still applies download policy. */
+  public Optional<MavenResponse> getLegacyNugetAsset(RepositoryRuntime runtime, String path, boolean headOnly) {
+    if (runtime.format() != RepositoryFormat.NUGET) return Optional.empty();
+    return lookupCached(runtime, path)
+        .filter(cached -> cached.blob() != null && isLegacyNugetSource(runtime,
+            stringAttr(cached.blob().attributes(), REMOTE_SOURCE_FINGERPRINT)))
+        .map(cached -> reader.serveSnapshot(cached, headOnly, path, runtime.rawContentDispositionOrDefault()));
+  }
+
   /** Separates a stable discovered content URL from per-request download signatures. */
   public MavenResponse getAssetFromUrl(
       RepositoryRuntime runtime, String path, String remoteUrl, String cacheSourceUrl, boolean headOnly) {
@@ -351,7 +360,17 @@ public class RawProxyService {
         int status = result.status();
         if (status == 304 && cached.isPresent()) {
           assetDao.touchAssetLastUpdated(cached.get().assetId(), now);
-          assetMetadataCache.touchVerified(runtime.id(), path, now);
+          if (runtime.format() == RepositoryFormat.NUGET && cached.get().blob() != null
+              && !sourceFingerprint.equals(stringAttr(cached.get().blob().attributes(), REMOTE_SOURCE_FINGERPRINT))) {
+            Map<String, Object> attributes = new HashMap<>();
+            if (cached.get().blob().attributes() != null) attributes.putAll(cached.get().blob().attributes());
+            attributes.put(REMOTE_SOURCE_FINGERPRINT, sourceFingerprint);
+            assetDao.updateBlobAttributes(cached.get().blob().id(), attributes);
+            // Persist first, then invalidate the shared repository watermark for other replicas.
+            assetMetadataCache.evict(runtime.id(), path);
+          } else {
+            assetMetadataCache.touchVerified(runtime.id(), path, now);
+          }
           proxyStateDao.recordSuccess(runtime.id(), now);
           negativeCache.invalidate(runtime, negativeCachePath(runtime, path, sourceFingerprint));
           return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
@@ -468,12 +487,16 @@ public class RawProxyService {
     // Before resource discovery, NuGet used the configured index alone as its identity.
     // Keep those entries usable during an offline upgrade; a later 200 refresh records
     // the discovered resource. Reconfigured indexes must still reject the old entry.
-    if (runtime.format() == RepositoryFormat.NUGET && runtime.proxyRemoteUrl() != null
-        && actual.equals(HexFormat.of().formatHex(
-            PersistenceHashes.sha256("raw-proxy-source-v1", runtime.proxyRemoteUrl())))) {
+    if (isLegacyNugetSource(runtime, actual)) {
       return cached;
     }
     return Optional.empty();
+  }
+
+  private static boolean isLegacyNugetSource(RepositoryRuntime runtime, String actual) {
+    return runtime.format() == RepositoryFormat.NUGET && (actual == null || (runtime.proxyRemoteUrl() != null
+        && actual.equals(HexFormat.of().formatHex(
+            PersistenceHashes.sha256("raw-proxy-source-v1", runtime.proxyRemoteUrl())))));
   }
 
   static String remoteSourceFingerprint(RepositoryRuntime runtime, String remoteUrl) {

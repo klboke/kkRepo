@@ -13,6 +13,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.PushbackInputStream;
 import java.net.URI;
+import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
@@ -30,6 +31,8 @@ final class NugetUpstreamResources {
   private static final String REGISTRATION = "v3/registration5-semver1/";
   private static final List<String> REGISTRATION_VERSIONS =
       List.of("/3.6.0", "/3.4.0", "/3.0.0", "/3.0.0-rc", "/3.0.0-beta", "");
+  private static final List<String> LEGACY_REGISTRATION_VERSIONS =
+      List.of("/3.4.0", "/3.0.0", "/3.0.0-rc", "/3.0.0-beta", "");
   private static final List<String> VERSIONS = List.of("/3.5.0", "/3.0.0", "/3.0.0-rc", "/3.0.0-beta", "");
 
   private NugetUpstreamResources() {
@@ -58,7 +61,17 @@ final class NugetUpstreamResources {
   static MavenResponse getPackage(
       RawProxyService proxy, ObjectMapper mapper, RepositoryRuntime runtime,
       String path, String repositoryBaseUrl, boolean groupRequest, boolean headOnly) {
-    JsonNode resources = resources(proxy, mapper, runtime);
+    JsonNode resources;
+    try {
+      resources = resources(proxy, mapper, runtime);
+    } catch (MavenExceptions.BadUpstreamException | MavenExceptions.MavenNotFoundException failure) {
+      String canonical = path.split("\\?", 2)[0];
+      if (canonical.startsWith(FLAT)
+          && (canonical.endsWith(".nupkg") || canonical.endsWith(".nuspec") || canonical.endsWith("/index.json"))) {
+        return proxy.getLegacyNugetAsset(runtime, canonical, headOnly).orElseThrow(() -> failure);
+      }
+      throw failure;
+    }
     if (path.startsWith(FLAT)) {
       String endpoint = resourceUrl(resources, "PackageBaseAddress", List.of("/3.0.0"));
       String remoteUrl = appendPath(endpoint, path.substring(FLAT.length()));
@@ -68,19 +81,23 @@ final class NugetUpstreamResources {
         return proxy.getMetadataFromUrlHidden(runtime, cacheKey("versions", remoteUrl), remoteUrl, headOnly);
       }
       // Preserve canonical asset paths, Browse visibility and download-policy checks for package bodies.
+      // Resource queries can select a different tenant/feed. Keep their opaque identity;
+      // only client-supplied download queries are excluded from the package fingerprint.
       String cacheSourceUrl = appendPath(endpoint, assetPath.substring(FLAT.length()));
       return proxy.getAssetFromUrl(runtime, assetPath, remoteUrl, cacheSourceUrl, headOnly);
     }
-    String endpoint = resourceUrl(resources, "RegistrationsBaseUrl", REGISTRATION_VERSIONS);
+    String registrationPrefix = registrationPrefix(path);
+    String endpoint = resourceUrl(resources, "RegistrationsBaseUrl",
+        REGISTRATION.equals(registrationPrefix) ? LEGACY_REGISTRATION_VERSIONS : REGISTRATION_VERSIONS);
     String flatEndpoint = resourceUrl(resources, "PackageBaseAddress", List.of("/3.0.0"));
-    String remoteUrl = appendPath(endpoint, path.substring(registrationPrefix(path).length()));
+    String remoteUrl = appendPath(endpoint, path.substring(registrationPrefix.length()));
     // Registration bodies contain package links. Refresh them when either resource moves,
     // even when discovery expires before an otherwise fresh registration cache entry.
     MavenResponse response = proxy.getMetadataFromUrlHidden(
         runtime, cacheKey("registration", remoteUrl + "\n" + flatEndpoint), remoteUrl, false);
     JsonNode document = readJson(mapper, response, MAX_REGISTRATION_BYTES, "registration");
     String base = repositoryBaseUrl.endsWith("/") ? repositoryBaseUrl : repositoryBaseUrl + "/";
-    rewriteLinks(document, endpoint, flatEndpoint, base, groupRequest ? runtime.id() : null);
+    rewriteLinks(document, endpoint, flatEndpoint, base, registrationPrefix, groupRequest ? runtime.id() : null);
     try {
       byte[] bytes = mapper.writeValueAsBytes(document);
       return headOnly ? MavenResponse.noBody(200, bytes.length, "application/json", null, null)
@@ -116,20 +133,20 @@ final class NugetUpstreamResources {
             : "?" + uri.getRawQuery() + (extraQuery.isEmpty() ? "" : "&" + extraQuery));
   }
 
-  private static void rewriteLinks(JsonNode node, String registration, String flat, String base, Long sourceMember) {
+  private static void rewriteLinks(JsonNode node, String registration, String flat, String base, String registrationPrefix, Long sourceMember) {
     if (node.isObject()) {
       ObjectNode object = (ObjectNode) node;
       for (String field : List.of("@id", "parent", "registration", "packageContent")) {
         JsonNode value = object.get(field);
         if (value != null && value.isTextual()) {
-          String rewritten = localLink(value.asText(), registration, base + REGISTRATION, sourceMember);
+          String rewritten = localLink(value.asText(), registration, base + registrationPrefix, sourceMember);
           rewritten = localLink(rewritten, flat, base + FLAT, sourceMember);
           object.put(field, rewritten);
         }
       }
     }
     if (node.isContainerNode()) {
-      for (JsonNode child : node) rewriteLinks(child, registration, flat, base, sourceMember);
+      for (JsonNode child : node) rewriteLinks(child, registration, flat, base, registrationPrefix, sourceMember);
     }
   }
 
@@ -144,12 +161,12 @@ final class NugetUpstreamResources {
     int suffixQuery = suffix.indexOf('?');
     if (suffixQuery >= 0 && source.getRawQuery() != null) {
       var resourceKeys = Arrays.stream(source.getRawQuery().split("&"))
-          .map(pair -> pair.split("=", 2)[0]).collect(Collectors.toSet());
+          .map(NugetUpstreamResources::queryName).collect(Collectors.toSet());
       int fragmentIndex = suffix.indexOf('#', suffixQuery);
       String fragment = fragmentIndex < 0 ? "" : suffix.substring(fragmentIndex);
       String linkQuery = suffix.substring(suffixQuery + 1, fragmentIndex < 0 ? suffix.length() : fragmentIndex);
-      String remaining = Arrays.stream(linkQuery.split("&"))
-          .filter(pair -> !resourceKeys.contains(pair.split("=", 2)[0])).collect(Collectors.joining("&"));
+      String remaining = Arrays.stream(linkQuery.split("&", -1))
+          .filter(pair -> !resourceKeys.contains(queryName(pair))).collect(Collectors.joining("&"));
       suffix = suffix.substring(0, suffixQuery) + (remaining.isEmpty() ? "" : "?" + remaining) + fragment;
     }
     // Query-bearing links can carry feed-specific credentials. Keep the group URL for
@@ -162,6 +179,14 @@ final class NugetUpstreamResources {
       target += "&" + SOURCE_MEMBER_QUERY + "=" + sourceMember;
     }
     return localBase + target + fragment;
+  }
+
+  private static String queryName(String pair) {
+    try {
+      return URLDecoder.decode(pair.split("=", 2)[0], StandardCharsets.UTF_8);
+    } catch (IllegalArgumentException e) {
+      throw new MavenExceptions.BadUpstreamException("Invalid NuGet resource query");
+    }
   }
 
   private static JsonNode readJson(ObjectMapper mapper, MavenResponse response, int maxBytes, String kind) {

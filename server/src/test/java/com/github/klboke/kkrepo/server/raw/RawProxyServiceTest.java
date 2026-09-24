@@ -407,6 +407,55 @@ class RawProxyServiceTest {
     String moved = stable.replace("/flat2/", "/new-flat2/");
     assertThrows(MavenExceptions.BadUpstreamException.class,
         () -> fixture.service.getAssetFromUrl(runtime, path, moved + "&sig=rotated", moved, true));
+    String differentFeed = stable.replace("tenant=feed", "tenant=other");
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> fixture.service.getAssetFromUrl(runtime, path, differentFeed, differentFeed, true));
+  }
+
+  @Test
+  void legacy304PersistsTheDiscoveredSourceAndInvalidatesOtherReplicas() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = nugetRuntime();
+    String path = "v3-flatcontainer/demo/1.0.0/demo.1.0.0.nupkg";
+    String url = "https://upstream.example.test/flat2/demo.nupkg";
+    String legacy = HexFormat.of().formatHex(PersistenceHashes.sha256("raw-proxy-source-v1", runtime.proxyRemoteUrl()));
+    Map<String, Object> attributes = Map.of(RawProxyService.REMOTE_SOURCE_FINGERPRINT, legacy, "remoteEtag", "etag");
+    CachedAssetMetadata cached = snapshot(Instant.EPOCH, attributes);
+    when(fixture.cache.find(eq(runtime.id()), eq(path), any())).thenReturn(Optional.of(cached));
+    doAnswer(invocation -> {
+      HttpRemoteFetcher.Request request = invocation.getArgument(0);
+      assertEquals("etag", request.etag());
+      HttpRemoteFetcher.ResultHandler<?> handler = invocation.getArgument(2);
+      return handler.handle(new HttpRemoteFetcher.Result(304, Map.of(), InputStream.nullInputStream()));
+    }).when(fixture.fetcher).fetchWithBodyRetry(any(), eq(path), any());
+    fixture.service.getAssetFromUrl(runtime, path, url, false);
+    Map<String, Object> migrated = Map.of(RawProxyService.REMOTE_SOURCE_FINGERPRINT,
+        RawProxyService.remoteSourceFingerprint(runtime, url), "remoteEtag", "etag");
+    verify(fixture.assetDao).updateBlobAttributes(cached.blob().id(), migrated);
+    verify(fixture.cache).evict(runtime.id(), path);
+    verify(fixture.cache, never()).touchVerified(eq(runtime.id()), eq(path), any());
+    when(fixture.cache.find(eq(runtime.id()), eq(path), any())).thenReturn(Optional.of(snapshot(Instant.now(), migrated)));
+    when(fixture.proxyStateDao.isBlocked(eq(runtime.id()), any())).thenReturn(true);
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> fixture.service.getAssetFromUrl(runtime, path, url.replace("flat2", "moved"), false));
+  }
+
+  @Test
+  void offlineDiscoveryFallbackServesOnlyLegacyContentFromTheConfiguredIndex() throws Exception {
+    RepositoryRuntime runtime = nugetRuntime();
+    String path = "v3-flatcontainer/demo/1.0.0/demo.1.0.0.nupkg";
+    String legacy = HexFormat.of().formatHex(PersistenceHashes.sha256("raw-proxy-source-v1", runtime.proxyRemoteUrl()));
+    for (String fingerprint : List.of(legacy, "other-index", RawProxyService.remoteSourceFingerprint(runtime, "https://cdn/flat2/"))) {
+      Fixture fixture = fixture();
+      CachedAssetMetadata cached = snapshot(Instant.EPOCH, Map.of(RawProxyService.REMOTE_SOURCE_FINGERPRINT, fingerprint));
+      when(fixture.cache.find(eq(runtime.id()), eq(path), any())).thenReturn(Optional.of(cached));
+      MavenResponse expected = MavenResponse.noBody(200);
+      when(fixture.reader.serveSnapshot(cached, true, path, "ATTACHMENT")).thenReturn(expected);
+      assertEquals(fingerprint.equals(legacy) ? Optional.of(expected) : Optional.empty(),
+          fixture.service.getLegacyNugetAsset(runtime, path, true));
+      verify(fixture.fetcher, never()).fetchWithBodyRetry(any(), any(), any());
+    }
+    assertEquals(Optional.empty(), fixture().service.getLegacyNugetAsset(runtime(RepositoryType.PROXY, 60), path, false));
   }
 
   @Test
@@ -482,6 +531,7 @@ class RawProxyServiceTest {
     ProxyNegativeCache negativeCache = mock(ProxyNegativeCache.class);
     AssetMetadataCache cache = mock(AssetMetadataCache.class);
     return new Fixture(
+        assetDao,
         proxyStateDao,
         reader,
         negativeCache,
@@ -537,6 +587,7 @@ class RawProxyServiceTest {
   }
 
   private record Fixture(
+      AssetDao assetDao,
       ProxyStateDao proxyStateDao,
       RawAssetReader reader,
       ProxyNegativeCache negativeCache,

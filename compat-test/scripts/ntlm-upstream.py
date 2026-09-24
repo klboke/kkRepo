@@ -104,6 +104,7 @@ class Upstream(http.server.BaseHTTPRequestHandler):
         if path == root + 'index.json':
             body = {'version': '3.0.0', 'resources': [
                 {'@id': flat, '@type': 'PackageBaseAddress/3.0.0'},
+                {'@id': registration, '@type': 'RegistrationsBaseUrl/3.4.0'},
                 {'@id': registration, '@type': 'RegistrationsBaseUrl/3.6.0'}]}
         elif path == root + 'content/flat2/ntlm.fixture/index.json':
             body = {'versions': ['1.0.0']}

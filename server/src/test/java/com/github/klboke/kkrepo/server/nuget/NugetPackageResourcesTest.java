@@ -214,7 +214,7 @@ class NugetPackageResourcesTest {
     proxy.metadata = "{\"@id\":\"" + REG + suffix + "\"}";
     JsonNode result = json(get(proxy, "v3/registration5-semver2/" + suffix, false));
     assertEquals(REG + suffix, proxy.urls.getLast());
-    assertEquals(BASE + "v3/registration5-semver1/" + suffix, result.path("@id").asText());
+    assertEquals(BASE + "v3/registration5-semver2/" + suffix, result.path("@id").asText());
     assertEquals(0, proxy.contentRequests);
   }
 
@@ -284,8 +284,65 @@ class NugetPackageResourcesTest {
     RecordingProxy proxy = new RecordingProxy();
     proxy.registrationType = "RegistrationsBaseUrl" + version;
     proxy.metadata = "{}";
-    get(proxy, "v3/registration5-semver1/arp.projects/index.json", false).body().close();
+    String flavor = version.equals("/3.6.0") ? "semver2" : "semver1";
+    get(proxy, "v3/registration5-" + flavor + "/arp.projects/index.json", false).body().close();
     assertEquals(REG + "arp.projects/index.json", proxy.urls.getLast());
+  }
+
+  @Test
+  void registrationFlavorsSelectMatchingResourcesAndKeepTheirLocalLinks() throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    proxy.index = "{\"resources\":[{\"@type\":\"PackageBaseAddress/3.0.0\",\"@id\":\"" + FLAT
+        + "\"},{\"@type\":\"RegistrationsBaseUrl/3.4.0\",\"@id\":\"" + REG
+        + "legacy/\"},{\"@type\":\"RegistrationsBaseUrl/3.6.0\",\"@id\":\"" + REG + "modern/\"}]}";
+    NugetService service = new NugetService(null, proxy, null, MAPPER);
+    JsonNode index = json(service.get(runtime(), "index.json", BASE, null, false));
+    Map<String, String> advertised = new HashMap<>();
+    index.path("resources").forEach(r -> advertised.put(r.path("@type").asText(), r.path("@id").asText()));
+    for (String version : List.of("3.0.0", "3.4.0", "3.6.0")) {
+      String flavor = version.equals("3.6.0") ? "semver2" : "semver1";
+      assertEquals(BASE + "v3/registration5-" + flavor + "/", advertised.get("RegistrationsBaseUrl/" + version));
+      String endpoint = REG + (version.equals("3.6.0") ? "modern/" : "legacy/");
+      for (String suffix : List.of("arp.projects/index.json", "arp.projects/page/1/2.json", "arp.projects/1.10.21.json")) {
+        proxy.metadata = "{\"@id\":\"" + endpoint + suffix + "\"}";
+        String path = "v3/registration5-" + flavor + "/" + suffix;
+        assertEquals(BASE + path, json(get(proxy, path, false)).path("@id").asText());
+        assertEquals(endpoint + suffix, proxy.urls.getLast());
+      }
+    }
+    proxy.index = null;
+    proxy.registrationType = "RegistrationsBaseUrl/3.6.0";
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> get(proxy, "v3/registration5-semver1/arp.projects/index.json", false));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"sig%6Eature", "signature", "sign+ature", "sign%20ature"})
+  void encodedResourceCredentialNamesAreRemovedFromClientLinks(String key) throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    proxy.registration = REG + "?" + key + "=secret";
+    String decoded = java.net.URLDecoder.decode(key, StandardCharsets.UTF_8).replace(" ", "%20");
+    proxy.metadata = "{\"@id\":\"" + REG + "arp.projects/index.json?" + decoded + "=secret&api-version=7\"}";
+    JsonNode result = json(get(proxy, "v3/registration5-semver1/arp.projects/index.json", false));
+    assertFalse(result.toString().contains("secret"));
+    assertEquals(BASE + "v3/registration5-semver1/arp.projects/index.json?api-version=7", result.path("@id").asText());
+  }
+
+  @Test
+  void packageCacheRemainsReachableWhenDiscoveryWasNeverCached() throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    proxy.discoveryFailure = new MavenExceptions.BadUpstreamException("Upstream temporarily blocked");
+    proxy.legacyResponse = MavenResponse.noBody(200);
+    String path = "v3-flatcontainer/arp.projects/1.10.21/arp.projects.1.10.21.nupkg";
+    assertSame(proxy.legacyResponse, get(proxy, path, true));
+    assertEquals(path, proxy.legacyPath);
+    assertTrue(proxy.lastHead);
+    assertSame(proxy.legacyResponse, get(proxy, "v3-flatcontainer/arp.projects/index.json", false));
+    assertEquals("v3-flatcontainer/arp.projects/index.json", proxy.legacyPath);
+    proxy.legacyResponse = null;
+    assertSame(proxy.discoveryFailure, assertThrows(MavenExceptions.BadUpstreamException.class, () -> get(proxy, path, true)));
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> get(proxy, "v3-flatcontainer/arp.projects/index.json", false));
   }
 
   @Test
@@ -339,9 +396,12 @@ class NugetPackageResourcesTest {
     private final List<String> cacheSources = new ArrayList<>();
     private final List<Long> repositories = new ArrayList<>();
     private Long missingRepository;
+    private MavenExceptions.BadUpstreamException discoveryFailure;
+    private MavenResponse legacyResponse;
+    private String legacyPath;
     private String flat = FLAT;
     private String registration = REG;
-    private String registrationType = "RegistrationsBaseUrl/3.6.0";
+    private String registrationType = "RegistrationsBaseUrl/3.4.0";
     private String index;
     private String metadata = "{\"versions\":[\"1.10.21\"]}";
     private boolean closed;
@@ -354,6 +414,7 @@ class NugetPackageResourcesTest {
 
     @Override
     public MavenResponse getMetadataFromUrlHidden(RepositoryRuntime runtime, String path, String url, boolean head) {
+      if (discoveryFailure != null) throw discoveryFailure;
       repositories.add(runtime.id());
       if (missingRepository != null && runtime.id() == missingRepository) throw new MavenExceptions.MavenNotFoundException(path);
       String data = path.startsWith("_nuget/index/") ? index == null
@@ -363,6 +424,13 @@ class NugetPackageResourcesTest {
         data = registrationCache.computeIfAbsent(path, ignored -> metadata);
       }
       return record(path, url, head, data);
+    }
+
+    @Override
+    public java.util.Optional<MavenResponse> getLegacyNugetAsset(RepositoryRuntime runtime, String path, boolean head) {
+      legacyPath = path;
+      lastHead = head;
+      return java.util.Optional.ofNullable(legacyResponse);
     }
 
     @Override
