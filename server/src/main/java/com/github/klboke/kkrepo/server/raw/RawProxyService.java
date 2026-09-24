@@ -93,7 +93,7 @@ public class RawProxyService {
     String remoteUrl = buildRemoteUrl(runtime.proxyRemoteUrl(), remotePath);
     String sourceFingerprint = remoteSourceFingerprint(runtime, remoteUrl);
     Optional<CachedAssetMetadata> cached = sourceCompatible(
-        lookupCached(runtime, path), sourceFingerprint, runtime);
+        lookupCached(runtime, path), sourceFingerprint, runtime, remoteUrl);
     Instant now = Instant.now();
     if (cached.isPresent() && isFresh(cached.get(), runtime.contentMaxAgeMinutesOrDefault(), now)
         && (runtime.format() != RepositoryFormat.NUGET || canRevalidate(runtime, cached, sourceFingerprint))) {
@@ -250,7 +250,7 @@ public class RawProxyService {
       boolean headOnly) {
     String sourceFingerprint = remoteSourceFingerprint(runtime, remoteUrl);
     Optional<CachedAssetMetadata> cached = sourceCompatible(
-        lookupCached(runtime, path), sourceFingerprint, runtime)
+        lookupCached(runtime, path), sourceFingerprint, runtime, remoteUrl)
         .filter(snapshot -> validCachedMetadata(runtime, path, snapshot, componentBinding.validation()));
     Instant now = Instant.now();
     if (cached.isPresent() && isFresh(cached.get(), maxAgeMinutes, now)
@@ -501,13 +501,17 @@ public class RawProxyService {
   private static Optional<CachedAssetMetadata> sourceCompatible(
       Optional<CachedAssetMetadata> cached,
       String expectedFingerprint,
-      RepositoryRuntime runtime) {
+      RepositoryRuntime runtime, String remoteUrl) {
     if (cached.isEmpty() || cached.get().blob() == null) {
       return cached;
     }
     String actual = stringAttr(
         cached.get().blob().attributes(), REMOTE_SOURCE_FINGERPRINT);
-    if (actual == null || actual.equals(expectedFingerprint)) return cached;
+    if (expectedFingerprint.equals(actual)) return cached;
+    // An old canonical entry cannot prove which opaque query representation it held.
+    // Require the complete source identity even for stale fallback on query-bearing URLs.
+    if (runtime.format() == RepositoryFormat.NUGET && remoteUrl.contains("?")) return Optional.empty();
+    if (actual == null) return cached;
     // Before resource discovery, NuGet used the configured index alone as its identity.
     // Keep those entries usable during an offline upgrade; a later 200 refresh records
     // the discovered resource. Reconfigured indexes must still reject the old entry.

@@ -127,7 +127,7 @@ class NugetPackageResourcesTest {
   }
 
   @Test
-  void groupKeepsHostedPathsCanonicalAndDoesNotBroadcastUnscopedQueries() throws Exception {
+  void groupRejectsUnscopedQueriesWithoutReadingHostedOrProxyMembers() throws Exception {
     RecordingProxy proxy = new RecordingProxy();
     RawHostedService hosted = mock(RawHostedService.class);
     RepositoryRuntime hostedRepository = new RepositoryRuntime(3L, "hosted", RepositoryFormat.NUGET, RepositoryType.HOSTED,
@@ -139,10 +139,19 @@ class NugetPackageResourcesTest {
     when(hosted.get(hostedRepository, path, true)).thenThrow(new MavenExceptions.MavenNotFoundException(path));
     MockHttpServletRequest request = new MockHttpServletRequest();
     request.setQueryString("sig=signature");
-    MavenResponse response = new NugetService(hosted, proxy, null, MAPPER).get(group, path, BASE, request, true);
-    assertEquals(200, response.status());
+    NugetService service = new NugetService(hosted, proxy, null, MAPPER);
+    for (String resourcePath : List.of(path, path.replace(".nupkg", ".nuspec"),
+        "v3-flatcontainer/arp.projects/index.json", "v3/registration5-semver1/arp.projects/index.json",
+        "v3/registration5-semver2/arp.projects/page.json")) {
+      assertThrows(MavenExceptions.MavenNotFoundException.class,
+          () -> service.get(group, resourcePath, BASE, request, true));
+    }
+    org.mockito.Mockito.verifyNoInteractions(hosted);
+    assertTrue(proxy.repositories.isEmpty());
+    // Ordinary unsigned requests still follow the normal member order.
+    request.setQueryString(null);
+    assertEquals(200, service.get(group, path, BASE, request, true).status());
     verify(hosted).get(hostedRepository, path, true);
-    assertEquals(path, proxy.paths.getLast());
     assertEquals(FLAT + "arp.projects/1.10.21/arp.projects.1.10.21.nupkg", proxy.urls.getLast());
   }
 
@@ -183,7 +192,8 @@ class NugetPackageResourcesTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"99", "invalid", "0", "-1", "1&_kkrepoNugetSource=4", "1&%5FkkrepoNugetSource=1"})
+  @ValueSource(strings = {"99", "invalid", "0", "-1", "1&_kkrepoNugetSource=4", "1&%5FkkrepoNugetSource=1",
+      "%", "1&%ZZ=secret", "1&_kkrepoNugetSource"})
   void invalidOrNonMemberSourcesNeverFetchAnUpstream(String source) {
     RecordingProxy proxy = new RecordingProxy();
     MockHttpServletRequest request = new MockHttpServletRequest();
@@ -406,6 +416,61 @@ class NugetPackageResourcesTest {
         () -> get(proxy, "v3-flatcontainer/arp.projects/index.json", false));
   }
 
+  @Test
+  void legacyVersionIndexesRemainReachableAfterDiscoveryWhenTheResourceIsUnavailable() {
+    RecordingProxy proxy = new RecordingProxy();
+    String path = "v3-flatcontainer/arp.projects/index.json";
+    proxy.resourceFailure = new MavenExceptions.BadUpstreamException("Resource temporarily unavailable");
+    proxy.legacyResponse = MavenResponse.noBody(200);
+    for (boolean head : List.of(false, true)) {
+      assertSame(proxy.legacyResponse, get(proxy, path, head));
+      assertEquals(path, proxy.legacyPath);
+      assertEquals(head, proxy.lastHead);
+    }
+    proxy.legacyResponse = null;
+    assertSame(proxy.resourceFailure, assertThrows(MavenExceptions.BadUpstreamException.class, () -> get(proxy, path, false)));
+    proxy.legacyPath = null;
+    proxy.legacyResponse = MavenResponse.noBody(200);
+    proxy.resourceFailure = new MavenExceptions.MavenNotFoundException("Authoritative 404/410");
+    assertSame(proxy.resourceFailure, assertThrows(MavenExceptions.MavenNotFoundException.class, () -> get(proxy, path, false)));
+    assertNull(proxy.legacyPath);
+  }
+
+  @Test
+  void queryBearingRequestsNeverUseUnverifiedLegacyContentDuringOutages() {
+    String path = "v3-flatcontainer/arp.projects/index.json";
+    for (boolean discoveryFails : List.of(false, true)) {
+      RecordingProxy proxy = new RecordingProxy();
+      var failure = new MavenExceptions.BadUpstreamException("Resource temporarily unavailable");
+      if (discoveryFails) proxy.discoveryFailure = failure;
+      else proxy.resourceFailure = failure;
+      proxy.legacyResponse = MavenResponse.noBody(200);
+      assertSame(failure, assertThrows(MavenExceptions.BadUpstreamException.class,
+          () -> get(proxy, path + "?variant=fips", false)));
+      String proof = NugetResourceLinkToken.issue(2L, 1L, path + "?variant=fips", NugetResourceLinkToken.identity(INDEX, FLAT));
+      MockHttpServletRequest request = new MockHttpServletRequest();
+      request.setQueryString("variant=fips&_kkrepoNugetSource=" + proof);
+      assertSame(failure, assertThrows(MavenExceptions.BadUpstreamException.class,
+          () -> new NugetService(null, proxy, null, MAPPER).get(group(2L, runtime()), path, BASE, request, false)));
+      assertNull(proxy.legacyPath);
+    }
+  }
+
+  @Test
+  void publicResourceIdentityRequiresTheDeploymentSecretAndWorksAcrossReplicas() {
+    try (var secrets = org.mockito.Mockito.mockStatic(com.github.klboke.kkrepo.core.security.EncryptionSecrets.class)) {
+      secrets.when(com.github.klboke.kkrepo.core.security.EncryptionSecrets::credentialSecret).thenReturn("replica-shared-secret");
+      String identity = NugetResourceLinkToken.identity(INDEX, FLAT + "?password=short");
+      String token = NugetResourceLinkToken.issue(2L, 1L, "path?variant=fips", identity);
+      assertEquals(identity, NugetResourceLinkToken.identity(INDEX, FLAT + "?password=short"));
+      assertEquals(1L, NugetResourceLinkToken.verify(2L, "path?variant=fips", token));
+      secrets.when(com.github.klboke.kkrepo.core.security.EncryptionSecrets::credentialSecret).thenReturn("another-deployment-secret");
+      assertNotEquals(identity, NugetResourceLinkToken.identity(INDEX, FLAT + "?password=short"));
+      assertThrows(MavenExceptions.MavenNotFoundException.class,
+          () -> NugetResourceLinkToken.verify(2L, "path?variant=fips", token));
+    }
+  }
+
   @ParameterizedTest
   @ValueSource(strings = {"page%20one.json", "page%2Fone.json", "page%25one.json", "page+one.json",
       "page%3Fone.json", "page%F0%9F%93%A6.json", "page//one.json", "page///one.json",
@@ -589,6 +654,7 @@ class NugetPackageResourcesTest {
     private final List<Long> repositories = new ArrayList<>();
     private Long missingRepository;
     private RuntimeException discoveryFailure;
+    private RuntimeException resourceFailure;
     private MavenResponse legacyResponse;
     private String legacyPath;
     private String flat = FLAT;
@@ -615,6 +681,7 @@ class NugetPackageResourcesTest {
     @Override
     public MavenResponse getMetadataFromUrlHidden(RepositoryRuntime runtime, String path, String url, boolean head) {
       if (discoveryFailure != null) throw discoveryFailure;
+      if (!path.startsWith("_nuget/index/") && resourceFailure != null) throw resourceFailure;
       repositories.add(runtime.id());
       if (missingRepository != null && runtime.id() == missingRepository) throw new MavenExceptions.MavenNotFoundException(path);
       String data = path.startsWith("_nuget/index/") ? index == null

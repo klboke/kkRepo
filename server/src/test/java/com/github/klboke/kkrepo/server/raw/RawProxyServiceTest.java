@@ -441,6 +441,32 @@ class RawProxyServiceTest {
   }
 
   @Test
+  void querySelectedNugetContentNeverFallsBackToUnverifiedLegacyBytes() throws Exception {
+    RepositoryRuntime runtime = nugetRuntime();
+    String path = "v3-flatcontainer/demo/1.0.0/demo.1.0.0.nupkg";
+    String url = "https://upstream.example.test/flat2/demo.nupkg?variant=fips";
+    String legacy = HexFormat.of().formatHex(PersistenceHashes.sha256("raw-proxy-source-v1", runtime.proxyRemoteUrl()));
+    for (boolean fingerprinted : List.of(false, true)) {
+      for (boolean blocked : List.of(false, true)) {
+        Fixture fixture = fixture();
+        CachedAssetMetadata cached = snapshot(Instant.EPOCH,
+            fingerprinted ? Map.of(RawProxyService.REMOTE_SOURCE_FINGERPRINT, legacy) : Map.of());
+        when(fixture.cache.find(eq(runtime.id()), eq(path), any())).thenReturn(Optional.of(cached));
+        when(fixture.proxyStateDao.isBlocked(eq(runtime.id()), any())).thenReturn(blocked);
+        if (!blocked) {
+          doAnswer(call -> {
+            HttpRemoteFetcher.ResultHandler<?> handler = call.getArgument(2);
+            return handler.handle(new HttpRemoteFetcher.Result(503, Map.of(), InputStream.nullInputStream()));
+          }).when(fixture.fetcher).fetchWithBodyRetry(any(), eq(path), any());
+        }
+        assertThrows(MavenExceptions.BadUpstreamException.class,
+            () -> fixture.service.getAssetFromUrl(runtime, path, url, true));
+        verify(fixture.reader, never()).serveSnapshot(any(), eq(true), eq(path), any());
+      }
+    }
+  }
+
+  @Test
   void legacyNugetRefreshDropsValidatorsAndEstablishesSourceOnlyFromAFullResponse() throws Exception {
     RepositoryRuntime runtime = nugetRuntime();
     String path = "v3-flatcontainer/demo/1.0.0/demo.1.0.0.nupkg";
@@ -664,6 +690,35 @@ class RawProxyServiceTest {
     assertSame(expected, fixture.service.getMetadataFromUrlHidden(runtime, path, url, true, "test-index-v1", validator));
     assertEquals(2, fetches.get());
     verify(fixture.writer, times(1)).writeHidden(any(), any(), eq(1L), any(), any(), any(), any(), any(), any(), eq(true));
+  }
+
+  @Test
+  void validUnmarkedMetadataRemainsUsableWithoutAnUpstreamDuringUpgrade() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = nugetRuntime();
+    String path = "_nuget/index/test";
+    CachedAssetMetadata cached = snapshot(Instant.now(), Map.of(
+        RawProxyService.REMOTE_SOURCE_FINGERPRINT, RawProxyService.remoteSourceFingerprint(runtime, runtime.proxyRemoteUrl())));
+    when(fixture.cache.find(eq(runtime.id()), eq(path), any())).thenReturn(Optional.of(cached));
+    byte[] bytes = "{\"resources\":[]}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    when(fixture.reader.serveSnapshot(cached, false, path, "ATTACHMENT")).thenAnswer(call ->
+        MavenResponse.ok(new ByteArrayInputStream(bytes), bytes.length, "application/json", null, null));
+    var validations = new java.util.concurrent.atomic.AtomicInteger();
+    try (InputStream result = fixture.service.getMetadataFromUrlHidden(runtime, path, runtime.proxyRemoteUrl(), false,
+        "test-index-v1", body -> {
+          try (body) {
+            byte[] validated = body.readAllBytes();
+            assertEquals("{\"resources\":[]}", new String(validated, java.nio.charset.StandardCharsets.UTF_8));
+            validations.incrementAndGet();
+            return new ByteArrayInputStream(validated);
+          } catch (IOException e) { throw new AssertionError(e); }
+        }).body()) {
+      assertEquals("{\"resources\":[]}", new String(result.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+    }
+    assertEquals(1, validations.get());
+    verify(fixture.fetcher, never()).fetchWithBodyRetry(any(), any(), any());
+    verify(fixture.proxyStateDao, never()).isBlocked(eq(runtime.id()), any());
+    verify(fixture.assetDao, never()).touchAssetLastUpdated(eq(cached.assetId()), any());
   }
 
   @Test

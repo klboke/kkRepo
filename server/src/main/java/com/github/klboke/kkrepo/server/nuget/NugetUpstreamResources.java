@@ -75,7 +75,7 @@ final class NugetUpstreamResources {
     try {
       resources = resources(proxy, mapper, runtime);
     } catch (MavenExceptions.BadUpstreamException failure) {
-      if (sourceToken != null) throw failure;
+      if (sourceToken != null || path.contains("?")) throw failure;
       String canonical = path.split("\\?", 2)[0];
       if (canonical.startsWith(FLAT)
           && (canonical.endsWith(".nupkg") || canonical.endsWith(".nuspec") || canonical.endsWith("/index.json"))) {
@@ -90,7 +90,15 @@ final class NugetUpstreamResources {
       int query = path.indexOf('?');
       String assetPath = query < 0 ? path : path.substring(0, query);
       if (assetPath.endsWith("/index.json")) {
-        return proxy.getMetadataFromUrlHidden(runtime, cacheKey("versions", remoteUrl), remoteUrl, headOnly);
+        try {
+          return proxy.getMetadataFromUrlHidden(runtime, cacheKey("versions", remoteUrl), remoteUrl, headOnly);
+        } catch (MavenExceptions.BadUpstreamException failure) {
+          // Before discovery, version indexes lived at their canonical visible path.
+          // Only an outage can use that unverified entry; 404/410 remain authoritative.
+          // Legacy bytes cannot establish the identity of a query-selected representation.
+          if (sourceToken != null || query >= 0) throw failure;
+          return proxy.getLegacyNugetAsset(runtime, assetPath, headOnly).orElseThrow(() -> failure);
+        }
       }
       // Preserve canonical asset paths, Browse visibility and download-policy checks for package bodies.
       // RawProxyService binds cache content to the complete URL, including opaque queries.

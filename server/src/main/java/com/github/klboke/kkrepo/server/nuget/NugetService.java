@@ -77,6 +77,9 @@ public class NugetService {
         return NugetUpstreamResources.getPackage(proxy, objectMapper, member, packageRequest.path(),
             repositoryBaseUrl, runtime.id(), headOnly, packageRequest.sourceToken());
       }
+      if (packageRequest.path().contains("?")) {
+        throw new MavenExceptions.MavenNotFoundException("NuGet group resource query has no source");
+      }
     }
     return switch (path.kind()) {
       case SERVICE_INDEX -> serviceIndex(repositoryBaseUrl, headOnly);
