@@ -93,7 +93,8 @@ public class RawProxyService {
     Optional<CachedAssetMetadata> cached = sourceCompatible(
         lookupCached(runtime, path), sourceFingerprint, runtime);
     Instant now = Instant.now();
-    if (cached.isPresent() && isFresh(cached.get(), runtime.contentMaxAgeMinutesOrDefault(), now)) {
+    if (cached.isPresent() && isFresh(cached.get(), runtime.contentMaxAgeMinutesOrDefault(), now)
+        && (runtime.format() != RepositoryFormat.NUGET || canRevalidate(runtime, cached, sourceFingerprint))) {
       return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
     }
     if (negativeCache.isNotFoundCached(runtime, negativeCachePath(runtime, path, sourceFingerprint))) {
@@ -240,7 +241,8 @@ public class RawProxyService {
     Optional<CachedAssetMetadata> cached = sourceCompatible(
         lookupCached(runtime, path), sourceFingerprint, runtime);
     Instant now = Instant.now();
-    if (cached.isPresent() && isFresh(cached.get(), maxAgeMinutes, now)) {
+    if (cached.isPresent() && isFresh(cached.get(), maxAgeMinutes, now)
+        && (runtime.format() != RepositoryFormat.NUGET || canRevalidate(runtime, cached, sourceFingerprint))) {
       return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
     }
     if (negativeCache.isNotFoundCached(runtime, negativeCachePath(runtime, path, sourceFingerprint))) {
@@ -370,7 +372,10 @@ public class RawProxyService {
         }
         if (status == 404 || status == 410) {
           proxyStateDao.recordSuccess(runtime.id(), now);
-          if (cached.isPresent()) {
+          // A definitive miss is not an outage. Legacy bytes do not prove that this
+          // newly discovered source ever contained the package.
+          if (cached.isPresent()
+              && (runtime.format() != RepositoryFormat.NUGET || canRevalidate(runtime, cached, sourceFingerprint))) {
             return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
           }
           if (status == 404) negativeCache.rememberNotFound(runtime, negativeCachePath(runtime, path, sourceFingerprint));

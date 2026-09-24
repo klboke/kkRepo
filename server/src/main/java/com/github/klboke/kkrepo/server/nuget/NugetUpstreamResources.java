@@ -3,11 +3,13 @@ package com.github.klboke.kkrepo.server.nuget;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.github.klboke.kkrepo.core.http.UriPathDecoder;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.protocol.nuget.NugetPathParser;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.raw.RawProxyService;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -15,7 +17,6 @@ import java.io.InputStream;
 import java.io.PushbackInputStream;
 import java.net.URI;
 import java.net.URLDecoder;
-import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HexFormat;
@@ -66,7 +67,7 @@ final class NugetUpstreamResources {
     JsonNode resources;
     try {
       resources = resources(proxy, mapper, runtime);
-    } catch (MavenExceptions.BadUpstreamException | MavenExceptions.MavenNotFoundException failure) {
+    } catch (MavenExceptions.BadUpstreamException failure) {
       String canonical = path.split("\\?", 2)[0];
       if (canonical.startsWith(FLAT)
           && (canonical.endsWith(".nupkg") || canonical.endsWith(".nuspec") || canonical.endsWith("/index.json"))) {
@@ -119,14 +120,22 @@ final class NugetUpstreamResources {
     String extraQuery = suffixQuery < 0 ? "" : suffix.substring(suffixQuery + 1);
     if (suffixQuery >= 0) suffix = suffix.substring(0, suffixQuery);
     rejectQueryOverrides(endpoint, extraQuery);
-    StringBuilder encoded = new StringBuilder();
     for (String segment : suffix.split("/", -1)) {
-      if (segment.equals(".") || segment.equals("..")) {
+      String decoded;
+      try {
+        decoded = UriPathDecoder.decodeComponent(segment);
+      } catch (IllegalArgumentException invalid) {
         throw new MavenExceptions.MavenNotFoundException("Invalid NuGet resource path");
       }
-      if (!encoded.isEmpty()) encoded.append('/');
-      encoded.append(URLEncoder.encode(segment, StandardCharsets.UTF_8).replace("+", "%20"));
+      if (Arrays.stream(decoded.replace('\\', '/').split("/", -1))
+          .anyMatch(part -> part.equals(".") || part.equals(".."))
+          || decoded.chars().anyMatch(ch -> ch < 0x20 || ch == 0x7f)) {
+        throw new MavenExceptions.MavenNotFoundException("Invalid NuGet resource path");
+      }
     }
+    // The NuGet servlet boundary supplies a raw path. Preserve valid escapes instead
+    // of encoding '%' a second time; encoded separators stay inside their segment.
+    String encoded = RemoteUrlBuilder.encodePath(suffix);
     int query = endpoint.indexOf('?');
     String base = query < 0 ? endpoint : endpoint.substring(0, query);
     return base + (base.endsWith("/") ? "" : "/") + encoded
@@ -178,8 +187,8 @@ final class NugetUpstreamResources {
     }
     String target = prefix + suffix + (query == null || query.isEmpty() ? "" : "?" + query);
     if (groupId != null && query != null && !query.isEmpty()) {
-      // Bind the routing proof to the decoded request path and exact opaque query.
-      String requestPath = NugetPathParser.normalize(URI.create(prefix + suffix).getPath()) + "?" + query;
+      // Bind to the same raw path representation supplied by the NuGet servlet boundary.
+      String requestPath = NugetPathParser.normalize(prefix + suffix) + "?" + query;
       target += "&" + SOURCE_MEMBER_QUERY + "=" + NugetResourceLinkToken.issue(groupId, sourceMember, requestPath);
     }
     return base + target + (link.getRawFragment() == null ? "" : "#" + link.getRawFragment());

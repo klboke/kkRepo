@@ -1330,7 +1330,7 @@ test_nuget() {
   need dotnet
   run_logged nuget-ntlm-upstream env KKREPO_COMPAT_AUTH="$KKREPO_AUTH" \
     python3 "$PROJECT_ROOT/compat-test/scripts/ntlm-upstream.py" \
-    --kkrepo "$KKREPO_URL" --dotnet \
+    --kkrepo "$KKREPO_URL" --dotnet --encoded-registration \
     --upstream-host "${NUGET_NTLM_UPSTREAM_HOST:-host.docker.internal}"
   local dir="$WORK_DIR/nuget"
   local restore_dir="$WORK_DIR/nuget-restore"

@@ -366,6 +366,45 @@ class NugetPackageResourcesTest {
         () -> get(proxy, "v3-flatcontainer/arp.projects/index.json", false));
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"page%20one.json", "page%2Fone.json", "page%25one.json", "page+one.json",
+      "page%3Fone.json", "page%F0%9F%93%A6.json"})
+  void rewrittenOpaquePathsRoundTripWithoutDecodingOrDoubleEncoding(String file) throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    NugetService service = new NugetService(null, proxy, null, MAPPER);
+    String suffix = "arp.projects/" + file;
+    proxy.metadata = "{\"@id\":\"" + REG + suffix + "?api-version=7\"}";
+    for (RepositoryRuntime entry : List.of(runtime(), group(2L, runtime()))) {
+      URI link = URI.create(json(service.get(entry, "v3/registration5-semver1/arp.projects/1.10.21.json",
+          BASE, null, false)).path("@id").asText());
+      String raw = link.getRawPath().substring(URI.create(BASE).getRawPath().length());
+      assertEquals("v3/registration5-semver1/" + suffix, raw);
+      MockHttpServletRequest request = new MockHttpServletRequest();
+      request.setQueryString(link.getRawQuery());
+      service.get(entry, raw, BASE, request, false).body().close();
+      assertEquals(REG + suffix + "?api-version=7", proxy.urls.getLast());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"%2e%2e/secret", "folder%2F..%2Fsecret", "%GG", "%00", "%ff"})
+  void malformedEscapesAndEncodedTraversalNeverReachResourceFetch(String suffix) {
+    RecordingProxy proxy = new RecordingProxy();
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> get(proxy, "v3/registration5-semver1/" + suffix, false));
+    assertEquals(List.of(INDEX), proxy.urls);
+  }
+
+  @Test
+  void definitiveDiscoveryMissDoesNotFallBackToLegacyPackages() {
+    RecordingProxy proxy = new RecordingProxy();
+    proxy.discoveryFailure = new MavenExceptions.MavenNotFoundException("missing index");
+    proxy.legacyResponse = MavenResponse.noBody(200);
+    assertSame(proxy.discoveryFailure, assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> get(proxy, "v3-flatcontainer/arp.projects/1.10.21/arp.projects.1.10.21.nupkg", true)));
+    assertNull(proxy.legacyPath);
+  }
+
   @Test
   void routingProofRejectsChangesToMemberGroupPathOrSignedQuery() throws Exception {
     RecordingProxy proxy = new RecordingProxy();
@@ -466,7 +505,7 @@ class NugetPackageResourcesTest {
     private final List<String> paths = new ArrayList<>();
     private final List<Long> repositories = new ArrayList<>();
     private Long missingRepository;
-    private MavenExceptions.BadUpstreamException discoveryFailure;
+    private RuntimeException discoveryFailure;
     private MavenResponse legacyResponse;
     private String legacyPath;
     private String flat = FLAT;

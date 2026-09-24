@@ -374,6 +374,35 @@ class RawProxyServiceTest {
   }
 
   @Test
+  void legacyNugetEntriesOnlyFallBackOnOutagesAndNeverOnAuthoritativeMisses() throws Exception {
+    RepositoryRuntime runtime = nugetRuntime();
+    String path = "v3-flatcontainer/demo/1.0.0/demo.1.0.0.nupkg";
+    String url = "https://upstream.example.test/new-flat2/demo.nupkg";
+    String legacy = HexFormat.of().formatHex(PersistenceHashes.sha256("raw-proxy-source-v1", runtime.proxyRemoteUrl()));
+    for (int status : List.of(404, 410, 503)) {
+      for (Instant updatedAt : List.of(Instant.EPOCH, Instant.now())) {
+        Fixture fixture = fixture();
+        CachedAssetMetadata cached = snapshot(updatedAt, Map.of(RawProxyService.REMOTE_SOURCE_FINGERPRINT, legacy));
+        when(fixture.cache.find(eq(runtime.id()), eq(path), any())).thenReturn(Optional.of(cached));
+        MavenResponse fallback = MavenResponse.noBody(200);
+        when(fixture.reader.serveSnapshot(cached, true, path, "ATTACHMENT")).thenReturn(fallback);
+        doAnswer(invocation -> {
+          HttpRemoteFetcher.ResultHandler<?> handler = invocation.getArgument(2);
+          return handler.handle(new HttpRemoteFetcher.Result(status, Map.of(), InputStream.nullInputStream()));
+        }).when(fixture.fetcher).fetchWithBodyRetry(any(), eq(path), any());
+        if (status == 503) {
+          assertSame(fallback, fixture.service.getAssetFromUrl(runtime, path, url, true));
+        } else {
+          assertThrows(MavenExceptions.MavenNotFoundException.class,
+              () -> fixture.service.getAssetFromUrl(runtime, path, url, true));
+          verify(fixture.reader, never()).serveSnapshot(cached, true, path, "ATTACHMENT");
+        }
+        verify(fixture.fetcher).fetchWithBodyRetry(any(), eq(path), any());
+      }
+    }
+  }
+
+  @Test
   void nugetUpgradeRejectsLegacyCacheFromADifferentConfiguredIndex() {
     Fixture fixture = fixture();
     RepositoryRuntime runtime = nugetRuntime();

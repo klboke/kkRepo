@@ -96,6 +96,7 @@ class Upstream(http.server.BaseHTTPRequestHandler):
         root = urllib.parse.urlsplit(self.server.remote).path
         flat = self.server.remote + 'content/flat2/'
         registration = self.server.remote + 'metadata/registrations2/'
+        registration_page = 'ntlm.fixture/' + getattr(self.server, 'registration_page', 'page/1.0.0/1.0.0.json')
         leaf = {'@id': registration + 'ntlm.fixture/1.0.0.json',
                 'catalogEntry': {'@id': registration + 'ntlm.fixture/1.0.0.json',
                                  'id': 'ntlm.fixture', 'version': '1.0.0', 'listed': True,
@@ -117,10 +118,10 @@ class Upstream(http.server.BaseHTTPRequestHandler):
             return
         elif path == root + 'metadata/registrations2/ntlm.fixture/index.json':
             body = {'@id': registration + 'ntlm.fixture/index.json', 'count': 1, 'items': [
-                {'@id': registration + 'ntlm.fixture/page/1.0.0/1.0.0.json',
+                {'@id': registration + registration_page,
                  'count': 1, 'lower': '1.0.0', 'upper': '1.0.0'}]}
-        elif path == root + 'metadata/registrations2/ntlm.fixture/page/1.0.0/1.0.0.json':
-            body = {'@id': registration + 'ntlm.fixture/page/1.0.0/1.0.0.json', 'count': 1,
+        elif path == root + 'metadata/registrations2/' + registration_page:
+            body = {'@id': registration + registration_page, 'count': 1,
                     'parent': registration + 'ntlm.fixture/index.json',
                     'lower': '1.0.0', 'upper': '1.0.0', 'items': [leaf]}
         elif path == root + 'metadata/registrations2/ntlm.fixture/1.0.0.json':
@@ -246,6 +247,7 @@ def main():
     parser.add_argument('--nexus')
     parser.add_argument('--kkrepo')
     parser.add_argument('--dotnet', action='store_true', help='Also run a .NET 8 restore with an isolated package cache')
+    parser.add_argument('--encoded-registration', action='store_true', help='Exercise opaque escaped page paths (Nexus 3.94.0 returns 500 for this case)')
     parser.add_argument('--upstream-host', default='host.docker.internal')
     args = parser.parse_args()
     assert args.nexus or args.kkrepo, 'Specify --nexus and/or --kkrepo'
@@ -255,6 +257,7 @@ def main():
                          '<authors>compat</authors><description>NTLM fixture</description></metadata></package>')
     fixture = http.server.ThreadingHTTPServer(('0.0.0.0', 0), Upstream)
     fixture.remote = 'http://' + args.upstream_host + ':' + str(fixture.server_port) + '/collection/_packaging/feed/nuget/v3/'
+    fixture.registration_page = 'page/page%20one%2Fpart.json' if args.encoded_registration else 'page/1.0.0/1.0.0.json'
     fixture.package, fixture.authenticated = package.getvalue(), 0
     threading.Thread(target=fixture.serve_forever, daemon=True).start()
     nexus_auth = os.environ.get('NEXUS_COMPAT_AUTH', 'admin:Admin1234')
