@@ -32,6 +32,8 @@ import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.mock.web.MockFilterChain;
@@ -93,24 +95,30 @@ class DockerAuthFilterTest {
     verify(authenticationService).authenticate(request);
   }
 
-  @Test
-  void trustedForwardedHeadersDefinePublicBearerChallenge() throws Exception {
+  @ParameterizedTest
+  @CsvSource({
+      "10.0.0.1, 10.0.0.1",
+      "10.0.0.0/16, 10.0.12.34",
+      "10.0.0.0/16, 10.0.200.99",
+      "2001:db8::/32, 2001:db8:1234::1"
+  })
+  void trustedForwardedHeadersDefinePublicBearerChallenge(String trustedProxies, String remote) throws Exception {
     when(authService.challenge(
         "https://registry.example.com/service/rest/v1/docker/token",
         "registry.example.com"))
-        .thenReturn("public-challenge");
+        .thenCallRealMethod();
     SecurityAuthenticationService authenticationService = mock(SecurityAuthenticationService.class);
     DockerAuthFilter filter = new DockerAuthFilter(
         registry,
         authService,
         authenticationService,
         accessDecisionService,
-        new ForwardedHeaderPolicy("10.0.0.1"));
+        new ForwardedHeaderPolicy(trustedProxies));
     MockHttpServletRequest request = new MockHttpServletRequest("GET", "/v2/");
     request.setScheme("http");
     request.setServerName("kkrepo.internal");
     request.setServerPort(8080);
-    request.setRemoteAddr("10.0.0.1");
+    request.setRemoteAddr(remote);
     request.addHeader("X-Forwarded-Proto", "https");
     request.addHeader("X-Forwarded-Host", "registry.example.com");
     request.addHeader("X-Forwarded-Port", "443");
@@ -119,11 +127,15 @@ class DockerAuthFilterTest {
     filter.doFilter(request, response, new MockFilterChain());
 
     assertEquals(401, response.getStatus());
-    assertEquals("public-challenge", response.getHeader(HttpHeaders.WWW_AUTHENTICATE));
+    assertEquals(
+        "Bearer realm=\"https://registry.example.com/service/rest/v1/docker/token\","
+            + "service=\"registry.example.com\"",
+        response.getHeader(HttpHeaders.WWW_AUTHENTICATE));
   }
 
-  @Test
-  void untrustedForwardedHeadersCannotOverrideBearerChallenge() throws Exception {
+  @ParameterizedTest
+  @CsvSource({"10.0.0.1", "10.0.0.0/16", "2001:db8::/32"})
+  void untrustedForwardedHeadersCannotOverrideBearerChallenge(String trustedProxies) throws Exception {
     when(authService.challenge(
         "http://kkrepo.internal:8080/service/rest/v1/docker/token",
         "kkrepo.internal:8080"))
@@ -134,12 +146,13 @@ class DockerAuthFilterTest {
         authService,
         authenticationService,
         accessDecisionService,
-        new ForwardedHeaderPolicy("10.0.0.1"));
+        new ForwardedHeaderPolicy(trustedProxies));
     MockHttpServletRequest request = new MockHttpServletRequest("GET", "/v2/");
     request.setScheme("http");
     request.setServerName("kkrepo.internal");
     request.setServerPort(8080);
     request.setRemoteAddr("203.0.113.10");
+    request.addHeader("X-Forwarded-For", "10.0.12.34");
     request.addHeader("X-Forwarded-Proto", "https");
     request.addHeader("X-Forwarded-Host", "attacker.example.com");
     request.addHeader("X-Forwarded-Port", "443");

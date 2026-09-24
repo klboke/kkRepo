@@ -103,6 +103,8 @@ KKREPO_EXTERNAL_BASE_URL=https://nexus.example.com
 KKREPO_TRUSTED_PROXIES=10.0.12.34,10.0.12.35
 ```
 
+For load balancers whose node IPs rotate within stable, dedicated proxy subnets, this list also accepts IPv4/IPv6 CIDRs, for example `10.0.12.0/24,2001:db8:1234::/48`. Trust only the immediate proxy sources, restrict backend access, and apply the same setting to every replica. See the [trusted proxy configuration](nginx-reverse-proxy.md#kkrepo-settings) for validation and restart behavior.
+
 ## Session And Cookie Security
 
 Use HTTPS in production and enable secure cookies:
