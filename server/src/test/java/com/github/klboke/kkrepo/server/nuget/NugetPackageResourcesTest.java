@@ -127,6 +127,71 @@ class NugetPackageResourcesTest {
   }
 
   @ParameterizedTest
+  @ValueSource(strings = {"cursor=1&key=k&sig=s", "sig=s&key=k&cursor=1", "cursor=1&&k%65y=%6B&sig=s&",
+      "key=k&cursor=1&key=k&sig=s", "_kkrepoNugetQuery=upstream&cursor=1&key=k&sig=s"})
+  void resourceOwnedQueryPairsKeepTheirExactPositionsAndEncoding(String query) throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    proxy.flat = FLAT + "?key=k";
+    proxy.registration = REG + "?key=k";
+    NugetService service = new NugetService(null, proxy, null, MAPPER);
+    for (String suffix : List.of("arp.projects/1.10.21/arp.projects.1.10.21.nupkg", "arp.projects/page.json")) {
+      boolean content = suffix.endsWith(".nupkg");
+      String remote = (content ? FLAT : REG) + suffix + "?" + query;
+      String field = content ? "packageContent" : "@id";
+      proxy.metadata = MAPPER.writeValueAsString(Map.of(field, remote));
+      for (RepositoryRuntime entry : List.of(runtime(), group(2L, runtime()))) {
+        URI link = URI.create(json(service.get(entry, "v3/registration5-semver1/arp.projects/1.10.21.json",
+            BASE, null, false)).path(field).asText());
+        assertFalse(link.getRawQuery().contains("key=k"));
+        assertFalse(link.getRawQuery().contains("%6B"));
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setQueryString(link.getRawQuery());
+        String path = link.getRawPath().substring(URI.create(BASE).getRawPath().length());
+        for (boolean head : List.of(false, true)) {
+          MavenResponse response = service.get(entry, path, BASE, request, head);
+          if (response.body() != null) response.body().close();
+          assertEquals(remote, proxy.urls.getLast());
+        }
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"repository", "index", "endpoint", "path", "query"})
+  void encryptedQueriesCannotBeReusedForAnotherRequestOrResource(String changed) throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    proxy.flat = FLAT + "?key=secret";
+    String path = "v3-flatcontainer/arp.projects/1.10.21/arp.projects.1.10.21.nupkg";
+    proxy.metadata = "{\"packageContent\":\"" + FLAT + path.substring("v3-flatcontainer/".length())
+        + "?cursor=1&key=secret&sig=s\"}";
+    NugetService service = new NugetService(null, proxy, null, MAPPER);
+    URI link = URI.create(json(service.get(runtime(), "v3/registration5-semver1/arp.projects/1.10.21.json",
+        BASE, null, false)).path("packageContent").asText());
+    RepositoryRuntime current = changed.equals("repository") ? runtime(4L)
+        : changed.equals("index") ? runtime(1L, "https://changed.example/index.json") : runtime();
+    if (changed.equals("endpoint")) proxy.flat = FLAT + "?key=changed";
+    MockHttpServletRequest request = new MockHttpServletRequest();
+    request.setQueryString(changed.equals("query") ? link.getRawQuery().replace("cursor=1", "cursor=2") : link.getRawQuery());
+    String requestedPath = changed.equals("path") ? path.replace("1.10.21", "1.10.22") : path;
+    proxy.urls.clear();
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(current, requestedPath, BASE, request, false));
+    assertEquals(List.of(current.proxyRemoteUrl()), proxy.urls);
+    assertEquals(0, proxy.contentRequests);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"opaque", "v1.not!base64", "v1.cGxhaW50ZXh0", "v1.e2Flcy1nY20tdjF9YmFk"})
+  void unrecognizedQueryEnvelopeNamesStayOpaque(String value) throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    MockHttpServletRequest request = new MockHttpServletRequest();
+    String query = "_kkrepoNugetQuery=" + value;
+    request.setQueryString(query);
+    new NugetService(null, proxy, null, MAPPER).get(runtime(), "v3-flatcontainer/arp.projects/index.json", BASE, request, false).body().close();
+    assertEquals(FLAT + "arp.projects/index.json?" + query, proxy.urls.getLast());
+  }
+
+  @ParameterizedTest
   @ValueSource(strings = {"configured", "flat", "registration"})
   void oldGroupProofCannotSendQueriesToAReconfiguredResource(String changed) throws Exception {
     RecordingProxy proxy = new RecordingProxy();
@@ -419,7 +484,13 @@ class NugetPackageResourcesTest {
     proxy.metadata = "{\"@id\":\"" + REG + "arp.projects/index.json?" + decoded + "=secret&api-version=7\"}";
     JsonNode result = json(get(proxy, "v3/registration5-semver1/arp.projects/index.json", false));
     assertFalse(result.toString().contains("secret"));
-    assertEquals(BASE + "v3/registration5-semver1/arp.projects/index.json?api-version=7", result.path("@id").asText());
+    URI local = URI.create(result.path("@id").asText());
+    assertTrue(local.toString().startsWith(BASE + "v3/registration5-semver1/arp.projects/index.json?api-version=7"));
+    MockHttpServletRequest request = new MockHttpServletRequest();
+    request.setQueryString(local.getRawQuery());
+    new NugetService(null, proxy, null, MAPPER).get(runtime(), "v3/registration5-semver1/arp.projects/index.json",
+        BASE, request, false).body().close();
+    assertEquals(REG + "arp.projects/index.json?" + decoded + "=secret&api-version=7", proxy.urls.getLast());
   }
 
   @ParameterizedTest
@@ -703,8 +774,14 @@ class NugetPackageResourcesTest {
     proxy.registration = endpoint + "?signature=secret";
     proxy.metadata = "{\"@id\":\"" + REG + "arp.projects/index.json?sig%6Eature=secret&page=2\"}";
     JsonNode result = json(get(proxy, "v3/registration5-semver1/arp.projects/index.json", false));
-    assertEquals(BASE + "v3/registration5-semver1/arp.projects/index.json?page=2", result.path("@id").asText());
+    URI local = URI.create(result.path("@id").asText());
+    assertTrue(local.toString().startsWith(BASE + "v3/registration5-semver1/arp.projects/index.json?page=2"));
     assertFalse(result.toString().contains("secret"));
+    MockHttpServletRequest request = new MockHttpServletRequest();
+    request.setQueryString(local.getRawQuery());
+    new NugetService(null, proxy, null, MAPPER).get(runtime(), "v3/registration5-semver1/arp.projects/index.json",
+        BASE, request, false).body().close();
+    assertEquals(endpoint + "arp.projects/index.json?sig%6Eature=secret&page=2", proxy.urls.getLast());
   }
 
   @Test

@@ -34,16 +34,18 @@ class Upstream(http.server.BaseHTTPRequestHandler):
         server = self.server
         server.requests.append(self.path)
         uri = urllib.parse.urlsplit(self.path)
-        if uri.path == '/index.json':
+        if uri.path == '/feed':
+            body = b'<html>Repository root</html>'
+        elif uri.path in ['/index.json', '/feed/index.json']:
             body = {'version': '3.0.0', 'resources': [
-                {'@type': 'PackageBaseAddress/3.0.0', '@id': server.root + '/flat/'},
-                {'@type': 'RegistrationsBaseUrl/3.4.0', '@id': server.root + '/reg/'},
-                {'@type': 'RegistrationsBaseUrl/3.6.0', '@id': server.root + '/reg/'}]}
+                {'@type': 'PackageBaseAddress/3.0.0', '@id': server.root + '/flat/' + server.resource_query},
+                {'@type': 'RegistrationsBaseUrl/3.4.0', '@id': server.root + '/reg/' + server.resource_query},
+                {'@type': 'RegistrationsBaseUrl/3.6.0', '@id': server.root + '/reg/' + server.resource_query}]}
         elif uri.path == '/flat/demo/index.json':
             body = {'versions': server.versions}
         elif uri.path == '/reg/demo/index.json':
             body = {'@id': server.root + uri.path, 'count': 1, 'items': [
-                {'@id': server.root + '/reg/demo/page.json?api=one', 'count': 2,
+                {'@id': server.root + '/reg/demo/page.json?' + server.page_query, 'count': 2,
                  'lower': server.versions[0], 'upper': server.versions[1]}]}
         elif uri.path == '/reg/demo/page.json':
             leaves = []
@@ -54,12 +56,12 @@ class Upstream(http.server.BaseHTTPRequestHandler):
                     'description': server.feed, 'dependencyGroups': [{'targetFramework': 'net8.0',
                         'dependencies': [{'id': 'dep-' + server.feed, 'range': '[1.0.0,)'}]}]},
                     'packageContent': server.root + '/flat/demo/' + version + '/demo.' + version
-                                      + '.nupkg' + ('' if version == '1.9.0' else '?sig=' + server.feed)})
+                                      + '.nupkg' + ('' if version == '1.9.0' else '?' + server.signed_query)})
             body = {'@id': server.root + uri.path, 'count': 2, 'parent': server.root + '/reg/demo/index.json',
                     'lower': server.versions[0], 'upper': server.versions[1], 'items': leaves}
         elif uri.path.endswith('.nupkg') and uri.path.split('/')[3] in server.versions:
-            expected_query = {} if uri.path.split('/')[3] == '1.9.0' else {'sig': [server.feed]}
-            if urllib.parse.parse_qs(uri.query) != expected_query:
+            expected_query = server.resource_query.lstrip('?') if uri.path.split('/')[3] == '1.9.0' else server.signed_query
+            if uri.query != expected_query:
                 self.send_response(403)
                 self.end_headers()
                 return
@@ -77,7 +79,7 @@ class Upstream(http.server.BaseHTTPRequestHandler):
             self.wfile.write(data)
 
 
-def exercise(base, credentials, nexus, host):
+def exercise(base, credentials, nexus, host, ordered_query=False):
     servers, repositories = [], []
     added = False
     ssrf = '/service/rest/v1/security/ssrf-protection'
@@ -100,6 +102,9 @@ def exercise(base, credentials, nexus, host):
             server = http.server.ThreadingHTTPServer(('0.0.0.0', 0), Upstream)
             server.root = 'http://' + host + ':' + str(server.server_port)
             server.feed, server.versions, server.requests = feed, versions, []
+            server.resource_query = '?key=private' if ordered_query else ''
+            server.page_query = 'api=one' + ('&key=private' if ordered_query else '')
+            server.signed_query = 'sig=' + feed + ('&key=private&cursor=1' if ordered_query else '')
             server.packages = {}
             for version in versions:
                 archive = io.BytesIO()
@@ -120,8 +125,8 @@ def exercise(base, credentials, nexus, host):
                     httpClient={'blocked': False, 'autoBlock': False})
             else:
                 payload.update(recipe='nuget-proxy', blobStoreName='default', strictContentTypeValidation=False,
-                    proxy={'remoteUrl': server.root + '/index.json', 'contentMaxAgeMinutes': 0,
-                           'metadataMaxAgeMinutes': 60, 'autoBlock': False})
+                    proxy={'remoteUrl': server.root + ('/feed' if ordered_query else '/index.json'), 'contentMaxAgeMinutes': 0,
+                           'metadataMaxAgeMinutes': 60, 'autoBlock': ordered_query})
             status, body, _ = request(base, catalog + ('/nuget/proxy' if nexus else ''), credentials, 'POST', payload)
             assert status == 201, (status, body)
             repositories.append(name)
@@ -145,13 +150,14 @@ def exercise(base, credentials, nexus, host):
         assert (page['count'], page['lower'], page['upper']) == (3, '1.0.0', '1.10.0'), page
         assert [leaf['catalogEntry']['version'] for leaf in page['items']] == ['1.0.0', '1.9.0', '1.10.0']
         if not nexus:
-            assert all(any(path.endswith('/page.json?api=one') for path in server.requests) for server in servers)
+            assert all(any(path.endswith('/page.json?' + server.page_query) for path in server.requests) for server in servers)
         for leaf in page['items']:
             version = leaf['catalogEntry']['version']
             source = 'b' if version == '1.9.0' else 'a'
             assert leaf['catalogEntry']['description'] == source, leaf
             assert leaf['catalogEntry']['dependencyGroups'][0]['dependencies'][0]['id'] == 'dep-' + source, leaf
             link = urllib.parse.urlsplit(leaf['packageContent'])
+            assert 'private' not in link.query, link
             assert link.netloc == urllib.parse.urlsplit(base).netloc, link
             assert urllib.parse.parse_qs(link.query).get('sig', []) == ([] if version == '1.9.0' else [source]), link
             if not nexus:
@@ -167,6 +173,20 @@ def exercise(base, credentials, nexus, host):
                 assert not other.requests, other.requests
                 selected = servers[0 if source == 'a' else 1]
                 assert all('_kkrepoNugetSource' not in path for path in selected.requests), selected.requests
+                assert all('_kkrepoNugetQuery' not in path for path in selected.requests), selected.requests
+        if ordered_query:
+            # Follow the direct proxy's external page and package links as well.
+            prefix = '/repository/' + repositories[0] + '/v3/registration5-semver2/demo/'
+            status, body, _ = request(base, prefix + 'index.json', credentials)
+            assert status == 200, (status, body)
+            page_url = urllib.parse.urlsplit(json.loads(body)['items'][0]['@id'])
+            status, body, _ = request(base, page_url.path + '?' + page_url.query, credentials)
+            assert status == 200, (status, body)
+            link = urllib.parse.urlsplit(json.loads(body)['items'][0]['packageContent'])
+            assert 'private' not in link.query
+            status, body, _ = request(base, link.path + '?' + link.query, credentials)
+            assert status == 200 and body == servers[0].packages['1.0.0'], (status, body)
+            print('kkRepo exact query ordering, hidden credentials, direct/group links and root fallback with autoBlock: PASS')
         print(('Nexus' if nexus else 'kkRepo') + ' paginated group merge, member precedence, numeric ordering, signed/plain links and dependency metadata: PASS')
     finally:
         for name in reversed(repositories):
@@ -196,6 +216,7 @@ def main():
         exercise(args.nexus, os.environ.get('NEXUS_COMPAT_AUTH', 'admin:Admin1234'), True, args.upstream_host)
     if args.kkrepo:
         exercise(args.kkrepo, os.environ.get('KKREPO_COMPAT_AUTH', 'admin:123456'), False, args.upstream_host)
+        exercise(args.kkrepo, os.environ.get('KKREPO_COMPAT_AUTH', 'admin:123456'), False, args.upstream_host, True)
 
 
 if __name__ == '__main__':

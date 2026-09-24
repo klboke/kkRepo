@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.nuget;
 
 import com.github.klboke.kkrepo.core.security.EncryptionSecrets;
+import com.github.klboke.kkrepo.core.security.SecretCipher;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
@@ -42,6 +43,38 @@ final class NugetResourceLinkToken {
     if (token != null && !token.split("\\.", -1)[1].equals(resourceIdentity)) {
       throw new MavenExceptions.MavenNotFoundException("NuGet resource source changed");
     }
+  }
+
+  // Preserve opaque queries containing resource credentials without exposing those
+  // credentials to readers. The authenticated ciphertext is portable across replicas.
+  static String sealQuery(long repositoryId, String resourceIdentity, String publicPath, String rawQuery) {
+    String payload = queryBinding(repositoryId, resourceIdentity, publicPath) + "\n" + rawQuery;
+    return "v1." + Base64.getUrlEncoder().withoutPadding().encodeToString(
+        queryCipher().encrypt(payload).getBytes(StandardCharsets.UTF_8));
+  }
+
+  static String openQuery(long repositoryId, String resourceIdentity, String publicPath, String token) {
+    if (!token.startsWith("v1.")) return null;
+    String payload;
+    try {
+      String ciphertext = new String(Base64.getUrlDecoder().decode(token.substring(3)), StandardCharsets.UTF_8);
+      if (!SecretCipher.isEncrypted(ciphertext)) return null;
+      payload = queryCipher().decrypt(ciphertext);
+    } catch (IllegalArgumentException | IllegalStateException invalid) {
+      // A same-named upstream parameter remains opaque unless we authenticated it.
+      return null;
+    }
+    String binding = queryBinding(repositoryId, resourceIdentity, publicPath) + "\n";
+    if (!payload.startsWith(binding)) throw new MavenExceptions.MavenNotFoundException("NuGet resource query changed");
+    return payload.substring(binding.length());
+  }
+
+  private static String queryBinding(long repositoryId, String resourceIdentity, String path) {
+    return HexFormat.of().formatHex(hmac("kkrepo-nuget-query-context-v1\0" + repositoryId + "\0" + resourceIdentity + "\0" + path));
+  }
+
+  private static SecretCipher queryCipher() {
+    return new SecretCipher(HexFormat.of().formatHex(hmac("kkrepo-nuget-query-cipher-v1")));
   }
 
   private static byte[] mac(long groupId, long memberId, String pathAndQuery, String resourceIdentity) {

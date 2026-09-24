@@ -280,7 +280,7 @@ public class RawProxyService {
     try (InputStream body = reader.serveSnapshot(snapshot, false, path, runtime.rawContentDispositionOrDefault()).body();
          InputStream checked = validation.validator().apply(body)) {
       return true;
-    } catch (MavenExceptions.BadUpstreamException | IOException invalid) {
+    } catch (MavenExceptions.BadUpstreamException | MavenExceptions.MavenNotFoundException | IOException invalid) {
       return false;
     }
   }
@@ -381,8 +381,9 @@ public class RawProxyService {
           try {
             stored = persist(runtime, path, result, sourceFingerprint, componentBinding, browsePath);
           } catch (MavenExceptions.BadUpstreamException invalid) {
-            if (componentBinding.validation() != null && cached.isPresent()) {
-              return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
+            if (componentBinding.validation() != null) {
+              return handleUpstreamFailure(runtime, path, cached, headOnly,
+                  "Invalid upstream metadata", now);
             }
             throw invalid;
           }

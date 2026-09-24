@@ -30,6 +30,7 @@ import java.util.zip.GZIPInputStream;
 /** NuGet V3 resources are absolute URLs, not paths relative to the service index. */
 final class NugetUpstreamResources {
   static final String SOURCE_MEMBER_QUERY = "_kkrepoNugetSource";
+  private static final String RESOURCE_QUERY = "_kkrepoNugetQuery";
   private static final int MAX_INDEX_BYTES = 1024 * 1024;
   private static final int MAX_REGISTRATION_BYTES = 32 * 1024 * 1024;
   private static final String FLAT = "v3-flatcontainer/";
@@ -88,7 +89,7 @@ final class NugetUpstreamResources {
     if (path.startsWith(FLAT)) {
       String endpoint = resourceUrl(resources, "PackageBaseAddress", List.of("/3.0.0"));
       NugetResourceLinkToken.requireResource(sourceToken, NugetResourceLinkToken.identity(runtime.proxyRemoteUrl(), endpoint));
-      String remoteUrl = appendPath(endpoint, path.substring(FLAT.length()));
+      String remoteUrl = packageUrl(endpoint, path, FLAT, runtime);
       int query = path.indexOf('?');
       String assetPath = query < 0 ? path : path.substring(0, query);
       if (assetPath.endsWith("/index.json")) {
@@ -111,7 +112,7 @@ final class NugetUpstreamResources {
         REGISTRATION.equals(registrationPrefix) ? LEGACY_REGISTRATION_VERSIONS : REGISTRATION_VERSIONS);
     String flatEndpoint = resourceUrl(resources, "PackageBaseAddress", List.of("/3.0.0"));
     NugetResourceLinkToken.requireResource(sourceToken, NugetResourceLinkToken.identity(runtime.proxyRemoteUrl(), endpoint));
-    String remoteUrl = appendPath(endpoint, path.substring(registrationPrefix.length()));
+    String remoteUrl = packageUrl(endpoint, path, registrationPrefix, runtime);
     // Registration bodies contain package links. Refresh them when either resource moves,
     // even when discovery expires before an otherwise fresh registration cache entry.
     JsonNode document = registrationDocument(proxy, mapper, runtime, remoteUrl, endpoint, flatEndpoint, "document");
@@ -168,7 +169,7 @@ final class NugetUpstreamResources {
         String url = requireHttpUrl(page.path("@id").asText().split("#", 2)[0]);
         // Apply resource-owned query parameters through the same path as a direct request.
         String local = localLink(url, endpoint, "", prefix, null, runtime);
-        if (local.startsWith(prefix)) url = appendPath(endpoint, local.substring(prefix.length()).split("#", 2)[0]);
+        if (local.startsWith(prefix)) url = packageUrl(endpoint, local.split("#", 2)[0], prefix, runtime);
         if (!pages.add(url)) continue;
         budget.next();
         document = registrationDocument(proxy, mapper, runtime, url, endpoint, flat, "page");
@@ -223,6 +224,27 @@ final class NugetUpstreamResources {
     if (path.startsWith(REGISTRATION)) return REGISTRATION;
     String semver2 = "v3/registration5-semver2/";
     return path.startsWith(semver2) ? semver2 : null;
+  }
+
+  private static String packageUrl(String endpoint, String path, String prefix, RepositoryRuntime runtime) {
+    int separator = path.indexOf('?');
+    if (separator >= 0) {
+      List<String> pairs = new ArrayList<>(Arrays.asList(path.substring(separator + 1).split("&", -1)));
+      for (int i = pairs.size() - 1; i >= 0; i--) {
+        String[] pair = pairs.get(i).split("=", 2);
+        if (!pair[0].equals(RESOURCE_QUERY) || pair.length != 2) continue;
+        pairs.remove(i);
+        String publicPath = NugetPathParser.normalize(path.substring(0, separator))
+            + (pairs.isEmpty() ? "" : "?" + String.join("&", pairs));
+        String restored = NugetResourceLinkToken.openQuery(runtime.id(),
+            NugetResourceLinkToken.identity(runtime.proxyRemoteUrl(), endpoint), publicPath, pair[1]);
+        if (restored != null) {
+          return appendPath(endpoint.split("\\?", 2)[0], path.substring(prefix.length(), separator)) + "?" + restored;
+        }
+        break; // An unrecognized same-named parameter is ordinary upstream data.
+      }
+    }
+    return appendPath(endpoint, path.substring(prefix.length()));
   }
 
   private static String appendPath(String endpoint, String suffix) {
@@ -292,14 +314,29 @@ final class NugetUpstreamResources {
     if (!linkPath.startsWith(root)) return value;
     String suffix = linkPath.substring(root.length());
     String query = link.getRawQuery();
+    String restoredQuery = null;
     // Resource query credentials are applied server-side, never copied into client-facing links.
     if (query != null && source.getRawQuery() != null) {
+      String originalQuery = query;
       var resourceKeys = Arrays.stream(source.getRawQuery().split("&", -1))
           .map(NugetUpstreamResources::queryName).collect(Collectors.toSet());
+      var linkKeys = Arrays.stream(query.split("&", -1)).map(NugetUpstreamResources::queryName).collect(Collectors.toSet());
       query = Arrays.stream(query.split("&", -1))
           .filter(pair -> !resourceKeys.contains(queryName(pair))).collect(Collectors.joining("&"));
+      String missing = Arrays.stream(source.getRawQuery().split("&", -1))
+          .filter(pair -> !linkKeys.contains(queryName(pair))).collect(Collectors.joining("&"));
+      String desired = (missing.isEmpty() ? "" : missing + "&") + originalQuery;
+      String reconstructed = source.getRawQuery() + (query.isEmpty() ? "" : "&" + query);
+      if (!desired.equals(reconstructed)) restoredQuery = desired;
     }
     String target = prefix + suffix + (query == null || query.isEmpty() ? "" : "?" + query);
+    if (restoredQuery != null) {
+      String publicPath = NugetPathParser.normalize(prefix + suffix) + (query.isEmpty() ? "" : "?" + query);
+      target += (query.isEmpty() ? "?" : "&") + RESOURCE_QUERY + "="
+          + NugetResourceLinkToken.sealQuery(runtime.id(), NugetResourceLinkToken.identity(runtime.proxyRemoteUrl(), endpoint),
+              publicPath, restoredQuery);
+      query = target.substring(target.indexOf('?') + 1);
+    }
     boolean hasQuery = query != null && !query.isEmpty();
     if (groupId != null && (hasQuery || prefix.equals(FLAT))) {
       // Package links retain their selected member even without a query. A different
@@ -417,12 +454,15 @@ final class NugetUpstreamResources {
     }
   }
 
-  private static InputStream validateServiceIndex(ObjectMapper mapper, InputStream body) {
+  private static InputStream validateServiceIndex(ObjectMapper mapper, InputStream body, boolean rootFallback) {
     try {
       ValidatedJson validated = validatedJson(mapper, body, MAX_INDEX_BYTES, "service index");
       if (!validated.document().path("resources").isArray()) throw new InvalidServiceIndex();
       return new ByteArrayInputStream(validated.bytes());
     } catch (MavenExceptions.BadUpstreamException invalid) {
+      // A repository root may legitimately serve HTML. This is a discovery miss,
+      // not a broken resource: do not auto-block before trying its index.json.
+      if (rootFallback) throw new MavenExceptions.MavenNotFoundException("No service index at repository root");
       throw new InvalidServiceIndex();
     }
   }
@@ -442,7 +482,7 @@ final class NugetUpstreamResources {
     MavenResponse response;
     try {
       response = proxy.getMetadataFromUrlHidden(runtime, cacheKey("index", indexUrl), indexUrl, false,
-          "nuget-service-index-v1", body -> validateServiceIndex(mapper, body));
+          "nuget-service-index-v1", body -> validateServiceIndex(mapper, body, rootFallback));
     } catch (MavenExceptions.MavenNotFoundException | InvalidServiceIndex failure) {
       if (!rootFallback) throw failure;
       return resources(proxy, mapper, runtime, repositoryRootIndexUrl(indexUrl), false);

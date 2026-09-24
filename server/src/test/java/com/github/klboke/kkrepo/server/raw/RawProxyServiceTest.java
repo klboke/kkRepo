@@ -744,6 +744,43 @@ class RawProxyServiceTest {
   }
 
   @Test
+  void malformedRefreshBackoffIsSharedWithOtherReadersAndRetainsStaleData() throws Exception {
+    for (boolean hasCache : List.of(false, true)) {
+      Fixture fixture = fixture();
+      RepositoryRuntime runtime = nugetRuntime();
+      String path = "_nuget/index/test";
+      CachedAssetMetadata cached = snapshot(Instant.EPOCH, Map.of(
+          RawProxyService.REMOTE_SOURCE_FINGERPRINT, RawProxyService.remoteSourceFingerprint(runtime, runtime.proxyRemoteUrl()),
+          "metadataValidation", "test-index-v1"));
+      when(fixture.cache.find(eq(runtime.id()), eq(path), any())).thenReturn(hasCache ? Optional.of(cached) : Optional.empty());
+      MavenResponse stale = MavenResponse.noBody(200);
+      when(fixture.reader.serveSnapshot(cached, true, path, "ATTACHMENT")).thenReturn(stale);
+      var blocked = new java.util.concurrent.atomic.AtomicBoolean();
+      when(fixture.proxyStateDao.isBlocked(eq(runtime.id()), any())).thenAnswer(call -> blocked.get());
+      doAnswer(call -> { blocked.set(true); return null; }).when(fixture.proxyStateDao)
+          .recordFailure(eq(runtime.id()), eq(30L), eq("Invalid upstream metadata"), any());
+      doAnswer(call -> ((HttpRemoteFetcher.ResultHandler<?>) call.getArgument(2)).handle(
+          new HttpRemoteFetcher.Result(200, Map.of(), InputStream.nullInputStream())))
+          .when(fixture.fetcher).fetchWithBodyRetry(any(), eq(path), any());
+      // A second service instance represents another replica using the same DAO state.
+      RawProxyService replica = new RawProxyService(fixture.assetDao, fixture.registry, fixture.writer,
+          fixture.reader, fixture.proxyStateDao, fixture.fetcher, fixture.negativeCache, fixture.cache);
+      for (RawProxyService service : List.of(fixture.service, replica)) {
+        java.util.function.Supplier<MavenResponse> read = () -> service.getMetadataFromUrlHidden(runtime, path,
+            runtime.proxyRemoteUrl(), true, "test-index-v1", body -> {
+              throw new MavenExceptions.BadUpstreamException("malformed response containing private URL");
+            });
+        if (hasCache) assertSame(stale, read.get());
+        else assertThrows(MavenExceptions.BadUpstreamException.class, read::get);
+      }
+      verify(fixture.fetcher, times(1)).fetchWithBodyRetry(any(), eq(path), any());
+      verify(fixture.proxyStateDao).recordFailure(eq(runtime.id()), eq(30L), eq("Invalid upstream metadata"), any());
+      verify(fixture.proxyStateDao, never()).recordSuccess(eq(runtime.id()), any());
+      verify(fixture.assetDao, never()).touchAssetLastUpdated(eq(cached.assetId()), any());
+    }
+  }
+
+  @Test
   void rejectsNonProxyRepositories() {
     Fixture fixture = fixture();
 

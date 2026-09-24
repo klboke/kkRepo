@@ -557,7 +557,9 @@ mvn -pl compat-test -am \
 The isolated NuGet V3 fixtures exercise NTLM resource discovery and paginated group registration
 merging against disposable repositories. The group fixture compares member precedence, numeric
 version ordering, signed package links, and dependency metadata with Nexus; kkRepo also verifies
-that signed downloads reach only the selected member. Both scripts run in NuGet client E2E.
+that signed downloads reach only the selected member. An additional kkRepo case requires exact
+raw query ordering while hiding resource credentials, follows direct/group links, and checks
+repository-root discovery with automatic blocking enabled. Both scripts run in NuGet client E2E.
 
 ```bash
 python3 compat-test/scripts/ntlm-upstream.py --nexus http://localhost:28090 --dotnet
