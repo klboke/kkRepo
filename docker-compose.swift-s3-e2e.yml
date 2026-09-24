@@ -37,7 +37,9 @@ services:
       - ./scripts/docker-compat/nexus-postgres-init.sql:/docker-entrypoint-initdb.d/01-nexus.sql:ro
 
   minio:
-    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
+    build:
+      context: scripts/ci/minio-e2e-images
+      target: minio
     command: ["server", "/data", "--console-address", ":9001"]
     environment:
       MINIO_ROOT_USER: minioadmin
@@ -52,7 +54,9 @@ services:
       - minio-data:/data
 
   minio-init:
-    image: quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z
+    build:
+      context: scripts/ci/minio-e2e-images
+      target: mc
     depends_on:
       minio:
         condition: service_healthy

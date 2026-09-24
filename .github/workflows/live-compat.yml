@@ -755,6 +755,11 @@ jobs:
           java-version: "25"
           cache: maven
 
+      - name: Build pinned MinIO source fixtures
+        run: |
+          docker compose -f "$COMPOSE_FILE" build minio minio-init
+          docker builder prune --all --force
+
       - name: Set up cached Swift 6 client wrapper
         uses: ./.github/actions/setup-swift-e2e
         with:
