@@ -4,6 +4,36 @@ All notable public changes to kkrepo are documented in this file.
 
 This project follows a pragmatic release process. Stable releases call out migration impact, compatibility changes, operational notes, and any known behavior changes in their release section.
 
+## 1.1.0 - 2026-09-24
+
+### Added
+
+- AWS RDS / Aurora IAM database authentication for MySQL and PostgreSQL, with fresh signed tokens for new physical connections, verified TLS, workload credential refresh, Native runtime selection, and Helm configuration. Password authentication remains the default. (#340)
+- IPv4 and IPv6 CIDR ranges in trusted-proxy configuration, matched against the immediate peer address with startup validation and consistent forwarded-header handling. (#341)
+- Opt-in NTLM upstream authentication for NuGet proxy repositories, including encrypted credentials, domain/workstation settings, repository-isolated connections, and Nexus migration support. (#322)
+- Operational storage usage in Admin: blob and asset counts, registered and logical sizes, pending-cleanup totals, numeric sorting, filtered summaries, and blob-store-to-repository drill-down. Large counts and byte totals retain exact integer precision. (#307)
+- Security findings show affected artifacts; scan tasks expose asset paths and Browse links; repository views expose effective scan settings and policy sources; tasks and runs support completion-time sorting with cursor pagination. (#334, #335, #336, #337)
+
+### Fixed
+
+- Enabling group scanning reuses eligible member scan results and backfills group policy state instead of unnecessarily rescanning existing artifacts. (#333)
+- Native images honor the security-scanning runtime toggle instead of omitting required beans during AOT compilation. Missing scan-result ages no longer break management views. (#315, #325)
+- Anonymous repository authentication challenges preserve client login behavior, including NuGet clients using LDAP credentials. (#314)
+- Nexus migration accepts null-valued security documents and preserves useful diagnostics for exceptions with empty messages. (#332, #313)
+- Cleanup scheduling safely handles missing Quartz fire times. (#312)
+
+### Changed
+
+- Quickstart defaults, Dockerfile packaging, deployment documentation, Helm application version, runtime checks, and the optional scanner profile now use `1.1.0`.
+- S3 credential guidance is available in a field tooltip; Bouncy Castle, AWS SDK, GraalVM Native Build Tools, zstd-jni, Maven Exec Plugin, and Swift setup dependencies were refreshed. (#304, #316, #317, #318, #319, #320, #321)
+
+### Upgrade Notes
+
+- Existing `1.0.2` MySQL and PostgreSQL deployments upgrade through Flyway V54-V55. Back up the relational database and blob store together, and allow index migrations to complete before serving traffic. V54 adds a repository-usage covering index; V55 adds scan-completion indexes. MySQL uses online index creation and PostgreSQL uses non-transactional concurrent index creation; allow additional time and disk capacity for large installations.
+- IAM database authentication and NuGet NTLM are opt-in. Existing database passwords and Basic/Bearer upstream authentication remain unchanged. IAM requires deployment-specific AWS permissions, database-user grants, and CA trust; automated signing/TLS fixtures do not verify a live AWS account.
+- Trust only dedicated proxy addresses or subnets and apply the same settings to every replica. Invalid CIDR entries prevent startup. NTLM support does not add Kerberos/SPNEGO or Windows login to kkRepo.
+- Storage usage is a cached operational snapshot, not a quota or physical bucket-size measurement; group repository logical usage is not applicable.
+
 ## 1.0.2 - 2026-09-18
 
 ### Added
