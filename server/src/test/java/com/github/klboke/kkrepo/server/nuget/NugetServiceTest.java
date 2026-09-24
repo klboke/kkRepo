@@ -122,7 +122,7 @@ class NugetServiceTest {
 
     assertEquals("http://localhost:28090/repository/nuget-hosted/v3/registration5-semver1/newtonsoft.json/index.json",
         registration.get("@id").asText());
-    assertEquals(2, registration.get("count").asInt());
+    assertEquals(1, registration.get("count").asInt());
     JsonNode page = registration.get("items").get(0);
     assertEquals(2, page.get("count").asInt());
     JsonNode item = page.get("items").get(1);
@@ -131,6 +131,23 @@ class NugetServiceTest {
     assertEquals(
         "http://localhost:28090/repository/nuget-hosted/v3-flatcontainer/newtonsoft.json/13.0.3/newtonsoft.json.13.0.3.nupkg",
         item.get("packageContent").asText());
+  }
+
+  @Test
+  void generatedRegistrationsExcludeSemVer2OnlyVersionsFromLegacyHives() throws Exception {
+    List<String> versions = List.of("1.0.0", "1.0.1-beta", "1.0.2-beta.1", "1.0.3+build", "1.0.4.0");
+    NugetService service = new NugetService(null, null, new FakeAssetDao(versions.stream()
+        .map(v -> asset("v3-flatcontainer/demo/" + v + "/demo." + v + ".nupkg")).toList()), MAPPER);
+    for (RepositoryRuntime runtime : List.of(hosted(), group(hosted()))) {
+      for (String flavor : List.of("semver1", "semver2")) {
+        JsonNode registration = MAPPER.readTree(body(service.get(runtime,
+            "v3/registration5-" + flavor + "/demo/index.json", "https://kkrepo.example/repository/nuget/", null, false)));
+        List<String> actual = new ArrayList<>();
+        registration.path("items").forEach(page -> page.path("items").forEach(item ->
+            actual.add(item.path("catalogEntry").path("version").asText())));
+        assertEquals(flavor.equals("semver1") ? List.of("1.0.0", "1.0.1-beta", "1.0.4.0") : versions, actual);
+      }
+    }
   }
 
   @Test
@@ -402,6 +419,14 @@ class NugetServiceTest {
     private final String json;
     private final RuntimeException failure;
     private String lastRemoteUrl;
+
+    @Override
+    public MavenResponse getMetadataFromUrlHidden(
+        RepositoryRuntime runtime, String path, String url, boolean head,
+        String validationId, java.util.function.UnaryOperator<java.io.InputStream> validator) {
+      MavenResponse response = getMetadataFromUrlHidden(runtime, path, url, false);
+      return MavenResponse.ok(validator.apply(response.body()), response.contentLength(), "application/json", null, null);
+    }
 
     @Override
     public MavenResponse getMetadataFromUrlHidden(

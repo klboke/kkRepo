@@ -6,7 +6,7 @@ import java.util.Locale;
  * Object-storage access engine for an S3-type blob store. Each engine maps to a distinct
  * {@link com.github.klboke.kkrepo.core.BlobStorage} implementation:
  * <ul>
- *   <li>{@link #AWS_S3} — AWS S3 SDK (works against AWS S3, MinIO, and S3-compatible stores)</li>
+ *   <li>{@link #AWS_S3} — AWS S3 SDK (works against AWS S3, RustFS, and S3-compatible stores)</li>
  *   <li>{@link #OSS_NATIVE} — Aliyun native OSS SDK v2</li>
  * </ul>
  *

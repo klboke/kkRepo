@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.raw;
 
 import com.github.klboke.kkrepo.core.BlobStorage;
+import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
@@ -16,12 +17,14 @@ import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import java.io.IOException;
+import java.io.InputStream;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.UnaryOperator;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -90,19 +93,20 @@ public class RawProxyService {
     String remoteUrl = buildRemoteUrl(runtime.proxyRemoteUrl(), remotePath);
     String sourceFingerprint = remoteSourceFingerprint(runtime, remoteUrl);
     Optional<CachedAssetMetadata> cached = sourceCompatible(
-        lookupCached(runtime, path), sourceFingerprint);
+        lookupCached(runtime, path), sourceFingerprint, runtime, remoteUrl);
     Instant now = Instant.now();
-    if (cached.isPresent() && isFresh(cached.get(), runtime.contentMaxAgeMinutesOrDefault(), now)) {
+    if (cached.isPresent() && isFresh(cached.get(), runtime.contentMaxAgeMinutesOrDefault(), now)
+        && (runtime.format() != RepositoryFormat.NUGET || canRevalidate(runtime, cached, sourceFingerprint))) {
       return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
     }
-    if (negativeCache.isNotFoundCached(runtime, path)) {
+    if (negativeCache.isNotFoundCached(runtime, negativeCachePath(runtime, path, sourceFingerprint))) {
       throw new MavenExceptions.MavenNotFoundException(path);
     }
     if (proxyStateDao.isBlocked(runtime.id(), now)) {
       if (cached.isPresent()) {
         return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
       }
-      throw new MavenExceptions.BadUpstreamException("Upstream temporarily blocked: " + runtime.proxyRemoteUrl());
+      throw new MavenExceptions.BadUpstreamException("Upstream temporarily blocked");
     }
     return fetchAndCache(
         runtime, path, remoteUrl, sourceFingerprint, cached, headOnly, now);
@@ -112,6 +116,15 @@ public class RawProxyService {
     return getAssetFromUrl(
         runtime, path, remoteUrl, runtime.contentMaxAgeMinutesOrDefault(),
         HttpRemoteFetcher.TimeoutProfile.CONTENT, ComponentBinding.perAsset(), headOnly);
+  }
+
+  /** Offline upgrade fallback before any service index was cached; still applies download policy. */
+  public Optional<MavenResponse> getLegacyNugetAsset(RepositoryRuntime runtime, String path, boolean headOnly) {
+    if (runtime.format() != RepositoryFormat.NUGET) return Optional.empty();
+    return lookupCached(runtime, path)
+        .filter(cached -> cached.blob() != null && isLegacyNugetSource(runtime,
+            stringAttr(cached.blob().attributes(), REMOTE_SOURCE_FINGERPRINT)))
+        .map(cached -> reader.serveSnapshot(cached, headOnly, path, runtime.rawContentDispositionOrDefault()));
   }
 
   public MavenResponse getAssetFromUrlWithComponent(
@@ -200,6 +213,27 @@ public class RawProxyService {
         HttpRemoteFetcher.TimeoutProfile.METADATA, ComponentBinding.hidden(), "", headOnly);
   }
 
+  /** Validates bounded protocol metadata before publishing it to the durable cache. */
+  public MavenResponse getMetadataFromUrlHidden(
+      RepositoryRuntime runtime, String path, String remoteUrl, boolean headOnly,
+      String validationId, UnaryOperator<InputStream> validator) {
+    return getAssetFromUrl(runtime, path, remoteUrl, runtime.metadataMaxAgeMinutesOrDefault(),
+        HttpRemoteFetcher.TimeoutProfile.METADATA,
+        new ComponentBinding(ComponentMode.HIDDEN, null, new MetadataValidation(validationId, validator)), "", headOnly);
+  }
+
+  /** A durable discovery hint, rebuilt through the watermark-coordinated metadata cache. */
+  public boolean hasValidatedMetadataFromUrlHidden(
+      RepositoryRuntime runtime, String path, String remoteUrl, String validationId) {
+    String fingerprint = remoteSourceFingerprint(runtime, remoteUrl);
+    // Even a stale validated document proves successful discovery. The subsequent
+    // ordinary metadata read still applies its TTL, refresh and outage fallback.
+    // Legacy or unvalidated bytes must never establish a discovery-mode decision.
+    return lookupCached(runtime, path).filter(snapshot -> snapshot.blob() != null
+        && validationId.equals(stringAttr(snapshot.blob().attributes(), "metadataValidation"))
+        && fingerprint.equals(stringAttr(snapshot.blob().attributes(), REMOTE_SOURCE_FINGERPRINT))).isPresent();
+  }
+
   public MavenResponse getMetadataFromUrlWithComponent(
       RepositoryRuntime runtime,
       String path,
@@ -228,23 +262,39 @@ public class RawProxyService {
       boolean headOnly) {
     String sourceFingerprint = remoteSourceFingerprint(runtime, remoteUrl);
     Optional<CachedAssetMetadata> cached = sourceCompatible(
-        lookupCached(runtime, path), sourceFingerprint);
+        lookupCached(runtime, path), sourceFingerprint, runtime, remoteUrl)
+        .filter(snapshot -> validCachedMetadata(runtime, path, snapshot, componentBinding.validation()));
     Instant now = Instant.now();
-    if (cached.isPresent() && isFresh(cached.get(), maxAgeMinutes, now)) {
+    if (cached.isPresent() && isFresh(cached.get(), maxAgeMinutes, now)
+        && (runtime.format() != RepositoryFormat.NUGET || canRevalidate(runtime, cached, sourceFingerprint))) {
       return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
     }
-    if (negativeCache.isNotFoundCached(runtime, path)) {
+    if (negativeCache.isNotFoundCached(runtime, negativeCachePath(runtime, path, sourceFingerprint))) {
       throw new MavenExceptions.MavenNotFoundException(path);
     }
     if (proxyStateDao.isBlocked(runtime.id(), now)) {
       if (cached.isPresent()) {
         return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
       }
-      throw new MavenExceptions.BadUpstreamException("Upstream temporarily blocked: " + remoteUrl);
+      throw new MavenExceptions.BadUpstreamException("Upstream temporarily blocked");
     }
     return fetchAndCacheUrl(
         runtime, path, remoteUrl, sourceFingerprint, cached, headOnly, now, timeoutProfile,
         componentBinding, browsePath);
+  }
+
+  private boolean validCachedMetadata(
+      RepositoryRuntime runtime, String path, CachedAssetMetadata snapshot, MetadataValidation validation) {
+    if (validation == null || (snapshot.blob() != null
+        && validation.id().equals(stringAttr(snapshot.blob().attributes(), "metadataValidation")))) return true;
+    // Old unvalidated entries may be malformed. Treat them as misses, without deleting a
+    // concurrent replica's replacement. A successful write uses the normal shared invalidation.
+    try (InputStream body = reader.serveSnapshot(snapshot, false, path, runtime.rawContentDispositionOrDefault()).body();
+         InputStream checked = validation.validator().apply(body)) {
+      return true;
+    } catch (MavenExceptions.BadUpstreamException | MavenExceptions.MavenNotFoundException | IOException invalid) {
+      return false;
+    }
   }
 
   private Optional<CachedAssetMetadata> lookupCached(RepositoryRuntime runtime, String path) {
@@ -263,7 +313,7 @@ public class RawProxyService {
       Instant now) {
     String etag = null;
     Instant lastModified = null;
-    if (cached.isPresent() && cached.get().blob() != null) {
+    if (canRevalidate(runtime, cached, sourceFingerprint)) {
       Map<String, Object> attrs = cached.get().blob().attributes();
       etag = stringAttr(attrs, "remoteEtag");
       lastModified = instantAttr(attrs, "remoteLastModified");
@@ -290,7 +340,7 @@ public class RawProxyService {
       String browsePath) {
     String etag = null;
     Instant lastModified = null;
-    if (cached.isPresent() && cached.get().blob() != null) {
+    if (canRevalidate(runtime, cached, sourceFingerprint)) {
       Map<String, Object> attrs = cached.get().blob().attributes();
       etag = stringAttr(attrs, "remoteEtag");
       lastModified = instantAttr(attrs, "remoteLastModified");
@@ -329,17 +379,26 @@ public class RawProxyService {
     try {
       return fetcher.fetchWithBodyRetry(req, path, result -> {
         int status = result.status();
-        if (status == 304 && cached.isPresent()) {
+        if (status == 304 && cached.isPresent()
+            && (runtime.format() != RepositoryFormat.NUGET || canRevalidate(runtime, cached, sourceFingerprint))) {
           assetDao.touchAssetLastUpdated(cached.get().assetId(), now);
           assetMetadataCache.touchVerified(runtime.id(), path, now);
           proxyStateDao.recordSuccess(runtime.id(), now);
-          negativeCache.invalidate(runtime, path);
+          negativeCache.invalidate(runtime, negativeCachePath(runtime, path, sourceFingerprint));
           return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
         }
         if (status >= 200 && status < 300) {
-          negativeCache.invalidate(runtime, path);
-          RawAssetWriter.Stored stored = persist(
-              runtime, path, result, sourceFingerprint, componentBinding, browsePath);
+          negativeCache.invalidate(runtime, negativeCachePath(runtime, path, sourceFingerprint));
+          RawAssetWriter.Stored stored;
+          try {
+            stored = persist(runtime, path, result, sourceFingerprint, componentBinding, browsePath);
+          } catch (MavenExceptions.BadUpstreamException invalid) {
+            if (componentBinding.validation() != null) {
+              return handleUpstreamFailure(runtime, path, cached, headOnly,
+                  "Invalid upstream metadata", now);
+            }
+            throw invalid;
+          }
           try {
             proxyStateDao.recordSuccess(runtime.id(), now);
             if (headOnly) {
@@ -359,18 +418,23 @@ public class RawProxyService {
         }
         if (status == 404 || status == 410) {
           proxyStateDao.recordSuccess(runtime.id(), now);
-          if (cached.isPresent()) {
+          // A definitive miss is not an outage. Legacy bytes do not prove that this
+          // newly discovered source ever contained the package.
+          if (cached.isPresent()
+              && (runtime.format() != RepositoryFormat.NUGET || canRevalidate(runtime, cached, sourceFingerprint))) {
             return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
           }
-          if (status == 404) negativeCache.rememberNotFound(runtime, path);
+          if (status == 404) negativeCache.rememberNotFound(runtime, negativeCachePath(runtime, path, sourceFingerprint));
           throw new MavenExceptions.MavenNotFoundException(path);
         }
         return handleUpstreamFailure(runtime, path, cached, headOnly,
             "Upstream returned " + status, now);
       });
     } catch (IOException e) {
+      // Transport exception messages can contain signed upstream URLs. Keep their
+      // diagnostic category, but never return the message to repository readers.
       return handleUpstreamFailure(runtime, path, cached, headOnly,
-          "Upstream IO error: " + e.getMessage(), now);
+          "Upstream IO error: " + e.getClass().getSimpleName(), now);
     }
   }
 
@@ -383,21 +447,26 @@ public class RawProxyService {
       String browsePath) {
     Map<String, String> extras = new HashMap<>();
     extras.put(REMOTE_SOURCE_FINGERPRINT, sourceFingerprint);
+    InputStream body = result.body();
+    if (componentBinding.validation() != null) {
+      body = componentBinding.validation().validator().apply(body);
+      extras.put("metadataValidation", componentBinding.validation().id());
+    }
     if (result.etag() != null) extras.put("remoteEtag", result.etag());
     if (result.lastModified() != null) extras.put("remoteLastModified", result.lastModified().toString());
     String clientIp = ProxyRequestAudit.currentClientIp();
     return switch (componentBinding.mode()) {
       case PER_ASSET -> writer.write(
-          runtime, blobStorage(runtime), requireBlobStore(runtime), path, result.body(),
+          runtime, blobStorage(runtime), requireBlobStore(runtime), path, body,
           result.contentType(), extras, "proxy", clientIp, true);
       case NONE -> writer.writeUnindexed(
-          runtime, blobStorage(runtime), requireBlobStore(runtime), path, result.body(),
+          runtime, blobStorage(runtime), requireBlobStore(runtime), path, body,
           result.contentType(), extras, "proxy", clientIp, true);
       case HIDDEN -> writer.writeHidden(
-          runtime, blobStorage(runtime), requireBlobStore(runtime), path, result.body(),
+          runtime, blobStorage(runtime), requireBlobStore(runtime), path, body,
           result.contentType(), extras, "proxy", clientIp, true);
       case EXPLICIT -> writer.writeWithComponentAtBrowsePath(
-          runtime, blobStorage(runtime), requireBlobStore(runtime), path, result.body(),
+          runtime, blobStorage(runtime), requireBlobStore(runtime), path, body,
           result.contentType(), extras, "proxy", clientIp,
           componentBinding.component(), browsePath, true);
     };
@@ -428,6 +497,15 @@ public class RawProxyService {
     return snapshot.lastUpdatedAt().plusSeconds(ttlMinutes * 60L).isAfter(now);
   }
 
+  private static boolean canRevalidate(
+      RepositoryRuntime runtime, Optional<CachedAssetMetadata> cached, String expectedFingerprint) {
+    // Legacy NuGet entries remain an offline fallback, but their validators belong to
+    // the previously guessed URL. Only a full response can establish the discovered source.
+    return cached.isPresent() && cached.get().blob() != null
+        && (runtime.format() != RepositoryFormat.NUGET || expectedFingerprint.equals(
+            stringAttr(cached.get().blob().attributes(), REMOTE_SOURCE_FINGERPRINT)));
+  }
+
   /**
    * Rejects a cache entry written for another configured upstream. Entries created before source
    * fingerprints were introduced remain usable and acquire a fingerprint on their next 200
@@ -435,13 +513,31 @@ public class RawProxyService {
    */
   private static Optional<CachedAssetMetadata> sourceCompatible(
       Optional<CachedAssetMetadata> cached,
-      String expectedFingerprint) {
+      String expectedFingerprint,
+      RepositoryRuntime runtime, String remoteUrl) {
     if (cached.isEmpty() || cached.get().blob() == null) {
       return cached;
     }
     String actual = stringAttr(
         cached.get().blob().attributes(), REMOTE_SOURCE_FINGERPRINT);
-    return actual == null || actual.equals(expectedFingerprint) ? cached : Optional.empty();
+    if (expectedFingerprint.equals(actual)) return cached;
+    // An old canonical entry cannot prove which opaque query representation it held.
+    // Require the complete source identity even for stale fallback on query-bearing URLs.
+    if (runtime.format() == RepositoryFormat.NUGET && remoteUrl.contains("?")) return Optional.empty();
+    if (actual == null) return cached;
+    // Before resource discovery, NuGet used the configured index alone as its identity.
+    // Keep those entries usable during an offline upgrade; a later 200 refresh records
+    // the discovered resource. Reconfigured indexes must still reject the old entry.
+    if (isLegacyNugetSource(runtime, actual)) {
+      return cached;
+    }
+    return Optional.empty();
+  }
+
+  private static boolean isLegacyNugetSource(RepositoryRuntime runtime, String actual) {
+    return runtime.format() == RepositoryFormat.NUGET && (actual == null || (runtime.proxyRemoteUrl() != null
+        && actual.equals(HexFormat.of().formatHex(
+            PersistenceHashes.sha256("raw-proxy-source-v1", runtime.proxyRemoteUrl())))));
   }
 
   static String remoteSourceFingerprint(RepositoryRuntime runtime, String remoteUrl) {
@@ -449,8 +545,18 @@ public class RawProxyService {
     String source = configuredSource == null || configuredSource.isBlank()
         ? remoteUrl
         : configuredSource;
+    if (runtime != null && runtime.format() == RepositoryFormat.NUGET) {
+      // Both resource moves and opaque queries can change content. Keep the complete
+      // request URL; do not guess which query parameters are only rotating credentials.
+      return HexFormat.of().formatHex(PersistenceHashes.sha256("nuget-resource-v1", source + "\n" + remoteUrl));
+    }
     return HexFormat.of().formatHex(
         PersistenceHashes.sha256("raw-proxy-source-v1", source));
+  }
+
+  private static String negativeCachePath(RepositoryRuntime runtime, String path, String sourceFingerprint) {
+    // Discovered NuGet URLs must not inherit misses for the old guessed URL or a replaced endpoint.
+    return runtime.format() == RepositoryFormat.NUGET ? path + "@source:" + sourceFingerprint : path;
   }
 
   private void ensureProxy(RepositoryRuntime runtime) {
@@ -498,24 +604,26 @@ public class RawProxyService {
     EXPLICIT
   }
 
-  private record ComponentBinding(ComponentMode mode, ComponentRecord component) {
+  private record MetadataValidation(String id, UnaryOperator<InputStream> validator) {}
+
+  private record ComponentBinding(ComponentMode mode, ComponentRecord component, MetadataValidation validation) {
     private static ComponentBinding perAsset() {
-      return new ComponentBinding(ComponentMode.PER_ASSET, null);
+      return new ComponentBinding(ComponentMode.PER_ASSET, null, null);
     }
 
     private static ComponentBinding none() {
-      return new ComponentBinding(ComponentMode.NONE, null);
+      return new ComponentBinding(ComponentMode.NONE, null, null);
     }
 
     private static ComponentBinding hidden() {
-      return new ComponentBinding(ComponentMode.HIDDEN, null);
+      return new ComponentBinding(ComponentMode.HIDDEN, null, null);
     }
 
     private static ComponentBinding explicit(ComponentRecord component) {
       if (component == null) {
         throw new IllegalArgumentException("Explicit component is required");
       }
-      return new ComponentBinding(ComponentMode.EXPLICIT, component);
+      return new ComponentBinding(ComponentMode.EXPLICIT, component, null);
     }
   }
 }

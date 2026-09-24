@@ -461,10 +461,12 @@ The registry specification makes `POST /login` optional and allows `501 Not Impl
 server omits it. kkRepo implements this endpoint, so candidate assertions expect `200` for valid
 credentials and `401` for invalid credentials; `501` is a reference-only/N-A branch for kkrepo.
 
-The scheduled S3-compatible resilience lane runs two kkrepo replicas with PostgreSQL and MinIO
+The scheduled S3-compatible resilience lane runs two kkrepo replicas with PostgreSQL and RustFS
 through the AWS S3 adapter. It covers a multi-megabyte package, shared 429/5xx waterlines and stale
 fallback, expired-lease takeover, restart, and destructive database/object backup-restore. Alibaba
 OSS Native is covered by adapter contracts; this suite does not claim a live OSS Native endpoint.
+The fixture pins RustFS 1.0.0 and AWS CLI 2.37.1. Bucket initialization and object backup/restore
+use the standard S3 API and `aws s3 sync`; the RustFS data volume is private to the Compose project.
 
 Swift migration is `FULL` only for Nexus 3.92.x-3.94.x sources whose datastore asset shape is
 verified. The live Nexus 3.94 matrix covers H2 to MySQL and PostgreSQL source to MySQL/PostgreSQL
@@ -551,6 +553,29 @@ mvn -pl compat-test -am \
   -Dtest=NugetRubygemsYumRepositoryBlackBoxCompatibilityTest \
   test
 ```
+
+The isolated NuGet V3 fixtures exercise NTLM resource discovery and paginated group registration
+merging against disposable repositories. The group fixture compares member precedence, numeric
+version ordering, signed package links, and dependency metadata with Nexus; kkRepo also verifies
+that signed downloads and plain registration leaf, parent and index links reach only the selected member. An additional kkRepo case requires exact
+raw query ordering while hiding resource credentials, follows direct/group links, and checks
+that a proven repository-root fallback survives a root-page outage with automatic blocking enabled.
+Pass `--kkrepo-secondary URL` to run the outage phase through a second replica sharing the same
+database and blob store. Both scripts run in NuGet client E2E.
+
+The kkRepo variants also cover array-valued resource `@type` entries accepted by NuGet.Client
+and textual `catalogEntry` links. Nexus 3.94 returns 404 for the isolated array-type variant;
+the scalar-type reference fixture passes.
+
+```bash
+python3 compat-test/scripts/ntlm-upstream.py --nexus http://localhost:28090 --dotnet
+python3 compat-test/scripts/nuget-group-registration-upstream.py --nexus http://localhost:28090
+KKREPO_COMPAT_AUTH=admin:123456 python3 compat-test/scripts/nuget-group-registration-upstream.py \
+  --kkrepo http://localhost:8080 --upstream-host 127.0.0.1
+```
+
+Use `--upstream-host host.docker.internal` when the target server runs in Docker. Each script
+removes its own repositories and temporary Nexus SSRF exception after the check.
 
 Hosted NuGet multipart push and Yum RPM PUT are opt-in because they write packages into the
 comparison repositories. To target the Browse repository from local dev, set

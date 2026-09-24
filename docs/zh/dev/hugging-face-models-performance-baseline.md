@@ -56,18 +56,6 @@ Metadata 门禁为吞吐不低于 Nexus `0.80x`、p95 不高于 `1.25x`；file G
 kkRepo/Nexus 冷填充吞吐比为 `1.009x`，超过 `0.90x` 门禁；10 个响应均为 200，且 4 MiB
 SHA-256 完全一致。
 
-### S3-Compatible 与多副本证据
-
-同一 candidate 镜像还使用 PostgreSQL 17.10 与通过 AWS S3-compatible adapter 访问的 MinIO
-`RELEASE.2025-04-22T22-12-26Z` 运行：
-
-- 单副本冷填充 `313.645 ms`，TTFB `302.145 ms`，`13.370 MiB/s`；
-- 后续热 GET `29.051 ms`；
-- 两副本同时 miss 同一 4 MiB 文件：两端均返回 200 与精确 SHA-256，fixture 只收到一次
-  resolve 和一次完整 body；持久行以 fencing token `1` 发布为 `READY`。
-
-这验证了生产存储路径和数据库 singleflight 语义；S3 数据是本地 MinIO 绝对值，不是 Nexus 对比。
-
 ## 真实客户端确认
 
 Candidate 还通过以下非计时验证：
@@ -90,9 +78,9 @@ Candidate 还通过以下非计时验证：
 包含 50 组逐轮测量与正确性 preflight 的完整热路径结果见
 [`huggingface-models-nexus-warm-2026-08-17.json`](../../perf-data/huggingface-models-nexus-warm-2026-08-17.json)，
 SHA-256 为 `b271d188dfb57b4ba3483e20e49dcfd96cb1e88f6db8b2d76fe75ece6941cd93`。
-冷填充、S3 与多副本样本见
-[`huggingface-models-cold-s3-2026-08-17.json`](../../perf-data/huggingface-models-cold-s3-2026-08-17.json)，
-SHA-256 为 `74389375dc1f2b8192971b164077974044dd74789da5d72610c799bbaf93aa6f`。
+File 存储冷填充样本见
+[`huggingface-models-cold-2026-08-17.json`](../../perf-data/huggingface-models-cold-2026-08-17.json)，
+SHA-256 为 `2b2b1c33a79a19ecaba6eae714a23f0f9f4607627010d8ec0014b26d814ee816`。
 
 这些数据用于协议回归门禁，不是生产 SLA。TLS、反向代理、远端云对象存储、跨可用区数据库、
 Cleanup/扫描混合负载、256 MiB/5 GiB 文件与百万行容量，需要在目标部署环境中另行测试后再

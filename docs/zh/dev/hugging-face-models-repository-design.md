@@ -10,7 +10,6 @@
 
 - `huggingface_hub` 0.34.6 与 1.27.0 的 `hf_hub_download`、`snapshot_download`，以及 `hf` CLI 单文件/过滤 snapshot 均通过；kkrepo 补齐了 Nexus 3.94 在当前客户端 tree/paths-info 流程上的 `400` 缺口。
 - 公网模型验证覆盖 Transformers `AutoConfig`/`AutoTokenizer`/`AutoModel.from_pretrained` 与 Diffusers `DiffusionPipeline.from_pretrained`；安装 Xet 且未禁用时，客户端仍不请求本地 Xet token/CAS，也不绕过 kkRepo。
-- PostgreSQL + MinIO 双副本同时 cold miss 同一模型文件时，两端返回相同完整 SHA-256，fixture 仅收到一次 resolve 与一次完整 body，持久化 `READY` 状态由 fencing token 发布。
 - Nexus 3.94 同机 4 MiB 基线中，5 组全新仓库的冷填充中位吞吐比为 `1.009x`；并发 16、每轮 500 请求、5 轮的全部 warm metadata/file 门禁通过。原始结果与复现方法见[性能基线](hugging-face-models-performance-baseline.md)。
 - 运维与客户端配置见[Hugging Face Models 仓库使用指南](../repository-guides/hugging-face-models.md)，公开兼容边界见[兼容性矩阵](../compatibility-matrix.md)。
 

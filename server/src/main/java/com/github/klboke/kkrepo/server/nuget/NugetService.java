@@ -8,6 +8,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.protocol.nuget.NugetPath;
 import com.github.klboke.kkrepo.protocol.nuget.NugetPathParser;
 import com.github.klboke.kkrepo.protocol.nuget.NugetPaths;
+import com.github.klboke.kkrepo.protocol.nuget.NugetVersions;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
@@ -19,6 +20,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -29,6 +31,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TreeSet;
+import java.util.TreeMap;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import javax.xml.XMLConstants;
@@ -66,14 +69,28 @@ public class NugetService {
       HttpServletRequest request,
       boolean headOnly) {
     NugetPath path = parser.parse(rawPath);
+    if (runtime.type() == RepositoryType.GROUP && NugetUpstreamResources.isPackagePath(path.rawPath())) {
+      PackageRequest packageRequest = packageRequest(path.rawPath(), request);
+      if (packageRequest.sourceToken() != null) {
+        long memberId = NugetResourceLinkToken.verify(runtime.id(), packageRequest.path(), packageRequest.sourceToken());
+        RepositoryRuntime member = findProxyMember(runtime, memberId);
+        if (member == null) throw new MavenExceptions.MavenNotFoundException(path.rawPath());
+        // A signed link belongs to this member. Never retry it against another upstream.
+        return NugetUpstreamResources.getPackage(proxy, objectMapper, member, packageRequest.path(),
+            repositoryBaseUrl, runtime.id(), headOnly, packageRequest.sourceToken());
+      }
+      if (packageRequest.path().contains("?")) {
+        throw new MavenExceptions.MavenNotFoundException("NuGet group resource query has no source");
+      }
+    }
     return switch (path.kind()) {
       case SERVICE_INDEX -> serviceIndex(repositoryBaseUrl, headOnly);
       case QUERY -> query(runtime, request, repositoryBaseUrl, headOnly);
       case AUTOCOMPLETE -> autocomplete(runtime, request, headOnly);
-      case FLAT_CONTAINER_VERSION_INDEX -> versionIndex(runtime, path.packageId(), headOnly);
-      case REGISTRATION_INDEX -> registrationIndex(runtime, path.packageId(), repositoryBaseUrl, headOnly);
+      case FLAT_CONTAINER_VERSION_INDEX -> versionIndex(runtime, path.packageId(), request, headOnly);
+      case REGISTRATION_INDEX -> registrationIndex(runtime, path.packageId(), path.rawPath(), repositoryBaseUrl, request, headOnly);
       case FLAT_CONTAINER_PACKAGE, FLAT_CONTAINER_NUSPEC, RAW ->
-          dispatchRawGet(runtime, path.rawPath(), headOnly);
+          dispatchRawGet(runtime, path.rawPath(), repositoryBaseUrl, request, headOnly);
       case PACKAGE_PUBLISH, PACKAGE_DELETE -> throw new MavenExceptions.MethodNotAllowed(
           "NuGet package publish requires PUT/DELETE");
     };
@@ -137,25 +154,41 @@ public class NugetService {
     throw new MavenExceptions.MethodNotAllowed("Unsupported NuGet DELETE path: " + rawPath);
   }
 
-  private MavenResponse dispatchRawGet(RepositoryRuntime runtime, String rawPath, boolean headOnly) {
+  private MavenResponse dispatchRawGet(
+      RepositoryRuntime runtime, String rawPath, String repositoryBaseUrl, HttpServletRequest request, boolean headOnly) {
     // Package bodies remain on RawAssetReader: it resolves the concrete asset, applies
     // ArtifactDownloadPolicy with the request's entry-repository context, then opens the blob.
     return switch (runtime.type()) {
       case HOSTED -> hosted.get(runtime, rawPath, headOnly);
-      case PROXY -> proxyGet(runtime, rawPath, headOnly);
-      case GROUP -> firstWin(runtime, rawPath, headOnly);
+      case PROXY -> proxyGet(runtime, packageRequestPath(rawPath, request), repositoryBaseUrl, headOnly);
+      case GROUP -> firstWin(runtime, rawPath, repositoryBaseUrl, runtime.id(), headOnly);
     };
   }
 
   private MavenResponse proxyGet(RepositoryRuntime runtime, String rawPath, boolean headOnly) {
+    return proxyGet(runtime, rawPath, null, headOnly);
+  }
+
+  private MavenResponse proxyGet(
+      RepositoryRuntime runtime, String rawPath, String repositoryBaseUrl, boolean headOnly) {
+    return proxyGet(runtime, rawPath, repositoryBaseUrl, null, headOnly);
+  }
+
+  private MavenResponse proxyGet(
+      RepositoryRuntime runtime, String rawPath, String repositoryBaseUrl, Long groupId, boolean headOnly) {
+    if (NugetUpstreamResources.isPackagePath(rawPath)) {
+      return NugetUpstreamResources.getPackage(
+          proxy, objectMapper, runtime, rawPath, repositoryBaseUrl, groupId, headOnly);
+    }
     if (rawPath.equals("query") || rawPath.startsWith("query?")
         || rawPath.equals("autocomplete") || rawPath.startsWith("autocomplete?")) {
-      return NugetSearchResources.get(proxy, objectMapper, runtime, rawPath, headOnly);
+      return NugetUpstreamResources.get(proxy, objectMapper, runtime, rawPath, headOnly);
     }
     return proxy.getAssetFromUrl(runtime, rawPath, remoteUrlForPath(runtime, rawPath), headOnly);
   }
 
-  private MavenResponse firstWin(RepositoryRuntime group, String rawPath, boolean headOnly) {
+  private MavenResponse firstWin(
+      RepositoryRuntime group, String rawPath, String repositoryBaseUrl, long entryGroupId, boolean headOnly) {
     if (group.members().isEmpty()) {
       throw new MavenExceptions.MavenNotFoundException(rawPath);
     }
@@ -163,8 +196,9 @@ public class NugetService {
       try {
         return switch (member.type()) {
           case HOSTED -> hosted.get(member, rawPath, headOnly);
-          case PROXY -> proxyGet(member, rawPath, headOnly);
-          case GROUP -> firstWin(member, rawPath, headOnly);
+          // Unscoped queries must not be broadcast to unrelated feeds while probing.
+          case PROXY -> proxyGet(member, rawPath, repositoryBaseUrl, entryGroupId, headOnly);
+          case GROUP -> firstWin(member, rawPath, repositoryBaseUrl, entryGroupId, headOnly);
         };
       } catch (MavenExceptions.MavenNotFoundException ignored) {
         // try next member
@@ -189,7 +223,7 @@ public class NugetService {
         resource(base + "autocomplete", "SearchAutocompleteService/3.0.0"),
         resource(base + "v3/registration5-semver1/", "RegistrationsBaseUrl/3.0.0"),
         resource(base + "v3/registration5-semver1/", "RegistrationsBaseUrl/3.4.0"),
-        resource(base + "v3/registration5-semver1/", "RegistrationsBaseUrl/3.6.0"),
+        resource(base + "v3/registration5-semver2/", "RegistrationsBaseUrl/3.6.0"),
         resource(base + NugetPaths.PACKAGE_PUBLISH, "PackagePublish/2.0.0"));
     Map<String, Object> body = new LinkedHashMap<>();
     body.put("version", "3.0.0");
@@ -239,9 +273,10 @@ public class NugetService {
     return json(Map.of("totalHits", ids.size(), "data", ids.subList(from, to)), headOnly);
   }
 
-  private MavenResponse versionIndex(RepositoryRuntime runtime, String packageId, boolean headOnly) {
+  private MavenResponse versionIndex(
+      RepositoryRuntime runtime, String packageId, HttpServletRequest request, boolean headOnly) {
     if (runtime.type() == RepositoryType.PROXY) {
-      return proxyGet(runtime, NugetPaths.flatContainerVersionIndex(packageId), headOnly);
+      return proxyGet(runtime, packageRequestPath(NugetPaths.flatContainerVersionIndex(packageId), request), headOnly);
     }
     List<String> versions = versions(runtime, packageId);
     return json(Map.of("versions", versions), headOnly);
@@ -250,31 +285,77 @@ public class NugetService {
   private MavenResponse registrationIndex(
       RepositoryRuntime runtime,
       String packageId,
+      String rawPath,
       String repositoryBaseUrl,
+      HttpServletRequest request,
       boolean headOnly) {
+    String registrationPrefix = NugetUpstreamResources.registrationPrefix(rawPath);
+    String indexPath = registrationPrefix + NugetPaths.normalizePackageId(packageId) + "/index.json";
     if (runtime.type() == RepositoryType.PROXY) {
-      return proxyGet(runtime, NugetPaths.registrationIndex(packageId), headOnly);
+      return proxyGet(runtime, packageRequestPath(indexPath, request),
+          repositoryBaseUrl, headOnly);
     }
-    String normalizedId = NugetPaths.normalizePackageId(packageId);
     String base = repositoryBaseUrl.endsWith("/") ? repositoryBaseUrl : repositoryBaseUrl + "/";
-    List<Map<String, Object>> items = new ArrayList<>();
-    for (String version : versions(runtime, packageId)) {
-      Map<String, Object> catalogEntry = new LinkedHashMap<>();
-      catalogEntry.put("@id", base + "v3/registration5-semver1/" + normalizedId + "/" + version + ".json");
-      catalogEntry.put("id", packageId);
-      catalogEntry.put("version", version);
-      catalogEntry.put("listed", true);
-      Map<String, Object> item = new LinkedHashMap<>();
-      item.put("@id", base + "v3/registration5-semver1/" + normalizedId + "/" + version + ".json");
-      item.put("catalogEntry", catalogEntry);
-      item.put("packageContent", base + NugetPaths.flatContainerPackage(packageId, version));
-      items.add(item);
-    }
+    Map<String, JsonNode> byVersion = new TreeMap<>(NugetVersions::compare);
+    collectRegistrationItems(runtime, packageId, indexPath, base, runtime.id(), byVersion,
+        new NugetUpstreamResources.RegistrationBudget());
+    List<JsonNode> items = List.copyOf(byVersion.values());
     Map<String, Object> body = new LinkedHashMap<>();
-    body.put("@id", base + NugetPaths.registrationIndex(packageId));
-    body.put("count", items.size());
-    body.put("items", List.of(Map.of("count", items.size(), "items", items)));
+    body.put("@id", base + indexPath);
+    body.put("count", items.isEmpty() ? 0 : 1);
+    if (items.isEmpty()) {
+      body.put("items", List.of());
+    } else {
+      String lower = NugetVersions.withoutBuild(items.getFirst().path("catalogEntry").path("version").asText());
+      String upper = NugetVersions.withoutBuild(items.getLast().path("catalogEntry").path("version").asText());
+      body.put("items", List.of(Map.of("@id", base + indexPath + "#page/" + lower + "/" + upper,
+          "parent", base + indexPath, "count", items.size(), "lower", lower, "upper", upper, "items", items)));
+    }
     return json(body, headOnly);
+  }
+
+  private void collectRegistrationItems(
+      RepositoryRuntime runtime, String packageId, String indexPath, String base, long entryGroupId,
+      Map<String, JsonNode> byVersion, NugetUpstreamResources.RegistrationBudget budget) {
+    if (runtime.type() == RepositoryType.GROUP) {
+      MavenExceptions.BadUpstreamException lastUpstream = null;
+      for (RepositoryRuntime member : runtime.members()) {
+        try {
+          collectRegistrationItems(member, packageId, indexPath, base, entryGroupId, byVersion, budget);
+        } catch (NugetUpstreamResources.RegistrationLimitException limit) {
+          throw limit;
+        } catch (MavenExceptions.MavenNotFoundException ignored) {
+          // Packages need not exist in every member.
+        } catch (MavenExceptions.BadUpstreamException failure) {
+          lastUpstream = failure;
+        }
+      }
+      if (byVersion.isEmpty() && lastUpstream != null) throw lastUpstream;
+      return;
+    }
+    String prefix = NugetUpstreamResources.registrationPrefix(indexPath);
+    List<JsonNode> items;
+    if (runtime.type() == RepositoryType.PROXY) {
+      items = NugetUpstreamResources.registrationLeaves(proxy, objectMapper, runtime, indexPath, base, entryGroupId, budget);
+    } else {
+      items = new ArrayList<>();
+      String normalizedId = NugetPaths.normalizePackageId(packageId);
+      for (String version : localVersions(runtime, packageId)) {
+        String leafUrl = base + prefix + normalizedId + "/" + version + ".json";
+        JsonNode item = objectMapper.valueToTree(Map.of("@id", leafUrl,
+            "catalogEntry", Map.of("@id", leafUrl, "id", packageId, "version", version, "listed", true),
+            "packageContent", base + NugetPaths.flatContainerPackage(packageId, version)));
+        budget.consume(item);
+        items.add(item);
+      }
+    }
+    for (JsonNode item : items) {
+      String version = item.path("catalogEntry").path("version").asText();
+      int prerelease = version.indexOf('-');
+      boolean semVer2Only = version.contains("+") || (prerelease >= 0 && version.substring(prerelease + 1).contains("."));
+      if (prefix.equals("v3/registration5-semver1/") && semVer2Only) continue;
+      byVersion.putIfAbsent(version, item);
+    }
   }
 
   private List<String> versions(RepositoryRuntime runtime, String packageId) {
@@ -539,7 +620,7 @@ public class NugetService {
   }
 
   private static int compareVersions(String left, String right) {
-    return left.compareToIgnoreCase(right);
+    return NugetVersions.compare(left, right);
   }
 
   static String remoteUrlForPath(RepositoryRuntime runtime, String path) {
@@ -611,6 +692,48 @@ public class NugetService {
       return Math.max(0, Integer.parseInt(raw));
     } catch (NumberFormatException e) {
       return fallback;
+    }
+  }
+
+  private static String packageRequestPath(String path, HttpServletRequest request) {
+    return NugetUpstreamResources.isPackagePath(path) ? queryStringPath(path, request) : path;
+  }
+
+  private static RepositoryRuntime findProxyMember(RepositoryRuntime group, long id) {
+    for (RepositoryRuntime member : group.members()) {
+      if (member.type() == RepositoryType.PROXY && member.id() == id) return member;
+      if (member.type() == RepositoryType.GROUP) {
+        RepositoryRuntime found = findProxyMember(member, id);
+        if (found != null) return found;
+      }
+    }
+    return null;
+  }
+
+  private record PackageRequest(String path, String sourceToken) {}
+
+  private static PackageRequest packageRequest(String path, HttpServletRequest request) {
+    String fullPath = queryStringPath(path, request);
+    int queryIndex = fullPath.indexOf('?');
+    if (queryIndex < 0) return new PackageRequest(path, null);
+    List<String> forwarded = new ArrayList<>(java.util.Arrays.asList(fullPath.substring(queryIndex + 1).split("&", -1)));
+    int sourceIndex = -1;
+    try {
+      for (int i = 0; i < forwarded.size(); i++) {
+        String name = forwarded.get(i).split("=", 2)[0];
+        if (URLDecoder.decode(name, StandardCharsets.UTF_8).equals(NugetUpstreamResources.SOURCE_MEMBER_QUERY)) {
+          sourceIndex = i;
+        }
+      }
+      if (sourceIndex < 0) return new PackageRequest(fullPath, null);
+      // The proof is appended last. Preserve earlier same-named parameters in their exact
+      // positions: they are opaque upstream data covered by the proof.
+      String[] source = forwarded.remove(sourceIndex).split("=", 2);
+      if (source.length != 2) throw new IllegalArgumentException();
+      return new PackageRequest(path + (forwarded.isEmpty() ? "" : "?" + String.join("&", forwarded)),
+          URLDecoder.decode(source[1], StandardCharsets.UTF_8));
+    } catch (IllegalArgumentException e) {
+      throw new MavenExceptions.MavenNotFoundException("Invalid NuGet resource source");
     }
   }
 

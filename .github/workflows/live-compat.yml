@@ -772,7 +772,7 @@ jobs:
           source_sha: ${{ inputs.candidate_source_sha || github.sha }}
           target_tag: ${{ env.KKREPO_SWIFT_S3_IMAGE }}
 
-      - name: Start PostgreSQL, MinIO, Nexus, and both replicas
+      - name: Start PostgreSQL, RustFS, Nexus, and both replicas
         run: docker compose -f "$COMPOSE_FILE" up -d
 
       - name: Run Swift S3-compatible resilience E2E

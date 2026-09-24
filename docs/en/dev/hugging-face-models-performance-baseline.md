@@ -60,20 +60,6 @@ resolve request and one full CDN-body request per repository.
 kkRepo/Nexus cold throughput was `1.009x`, above the `0.90x` gate. All ten responses were 200 with
 the exact 4 MiB SHA-256.
 
-### S3-Compatible And Multi-Replica Evidence
-
-The same candidate image was also run with PostgreSQL 17.10 and MinIO
-`RELEASE.2025-04-22T22-12-26Z` through the AWS S3-compatible adapter:
-
-- one-replica cold fill: `313.645 ms`, TTFB `302.145 ms`, `13.370 MiB/s`;
-- subsequent warm GET: `29.051 ms`;
-- two replicas concurrently missing the same 4 MiB file: both returned 200 and the exact SHA-256,
-  while the fixture recorded one resolve and one full-body transfer; the durable row was published
-  as `READY` with fencing token `1`.
-
-This confirms the production storage path and database singleflight semantics. The S3 numbers are
-absolute local-MinIO observations, not a Nexus comparison.
-
 ## Real Client Confirmation
 
 The candidate also passed these non-timed client checks:
@@ -96,9 +82,9 @@ flow but returned 400 on the current 1.27.0 tree/paths flow; kkRepo supports bot
 The complete warm result, including all 50 per-round measurements and correctness preflights, is
 [`huggingface-models-nexus-warm-2026-08-17.json`](../../perf-data/huggingface-models-nexus-warm-2026-08-17.json)
 (SHA-256 `b271d188dfb57b4ba3483e20e49dcfd96cb1e88f6db8b2d76fe75ece6941cd93`).
-Cold and S3/multi-replica samples are in
-[`huggingface-models-cold-s3-2026-08-17.json`](../../perf-data/huggingface-models-cold-s3-2026-08-17.json)
-(SHA-256 `74389375dc1f2b8192971b164077974044dd74789da5d72610c799bbaf93aa6f`).
+File-storage cold samples are in
+[`huggingface-models-cold-2026-08-17.json`](../../perf-data/huggingface-models-cold-2026-08-17.json)
+(SHA-256 `2b2b1c33a79a19ecaba6eae714a23f0f9f4607627010d8ec0014b26d814ee816`).
 
 These measurements establish protocol regression gates, not a production SLA. TLS, reverse proxy,
 remote cloud object storage, cross-zone databases, mixed cleanup/scan load, 256 MiB/5 GiB files,

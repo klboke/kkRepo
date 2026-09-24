@@ -581,9 +581,9 @@ class GoProxyBlackBoxCompatibilityTest {
           setting("compat.go.nexusPlus.blobStorePrefix", "GO_KKREPO_BLOB_PREFIX")
               .orElse(""),
           setting("compat.go.nexusPlus.blobStoreAccessKey", "GO_KKREPO_BLOB_ACCESS_KEY")
-              .orElse("minioadmin"),
+              .orElse("rustfsadmin"),
           setting("compat.go.nexusPlus.blobStoreSecretKey", "GO_KKREPO_BLOB_SECRET_KEY")
-              .orElse("minioadmin"));
+              .orElse("rustfsadmin"));
     }
 
     Endpoint referenceEndpoint() {

@@ -204,7 +204,7 @@ payload = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
 store = next(item for item in payload.get("stores", []) if item.get("name") == "default")
 assert store.get("type") == "s3", store
 assert store.get("engine") == "aws-s3", store
-assert store.get("endpoint") == "http://minio:9000", store
+assert store.get("endpoint") == "http://rustfs:9000", store
 assert store.get("bucket") == "kkrepo-swift", store
 assert store.get("prefix") == "swift-e2e", store
 assert store.get("pathStyleAccess") is True, store
@@ -573,26 +573,25 @@ resolve_proxy_after_restart() {
     "$SWIFT_PROXY_SCOPE.$SWIFT_PROXY_NAME" "$SWIFT_PROXY_VERSION"
 }
 
-verify_minio_objects() {
-  compose run --rm -T --no-deps --entrypoint /bin/sh minio-init -ec '
-    mc alias set local http://minio:9000 minioadmin minioadmin >/dev/null
-    mc ls --recursive local/kkrepo-swift/swift-e2e
-  ' >"$ARTIFACT_DIR/minio-objects.txt"
-  if [[ ! -s "$ARTIFACT_DIR/minio-objects.txt" ]]; then
-    log "MinIO bucket contains no persisted Swift objects"
+verify_s3_objects() {
+  compose run --rm -T --no-deps --entrypoint /bin/sh s3-init -ec '
+    aws s3 ls --recursive s3://kkrepo-swift/swift-e2e/
+  ' >"$ARTIFACT_DIR/s3-objects.txt"
+  if [[ ! -s "$ARTIFACT_DIR/s3-objects.txt" ]]; then
+    log "RustFS bucket contains no persisted Swift objects"
     return 1
   fi
 }
 
-start_minio_transfer_container() {
+start_s3_transfer_container() {
   local container_name="$1"
   docker rm -f "$container_name" >/dev/null 2>&1 || true
   compose run -d --no-deps \
     --name "$container_name" \
-    --entrypoint /bin/sh minio-init -ec 'sleep 600' >/dev/null
+    --entrypoint /bin/sh s3-init -ec 'sleep 600' >/dev/null
 }
 
-stop_minio_transfer_container() {
+stop_s3_transfer_container() {
   docker rm -f "$1" >/dev/null 2>&1 || true
 }
 
@@ -609,15 +608,14 @@ backup_and_restore_state() {
   compose exec -T postgresql \
     pg_dump -U kkrepo -d kkrepo --format=custom --no-owner --no-acl \
     >"$database_backup"
-  start_minio_transfer_container "$transfer_container"
+  start_s3_transfer_container "$transfer_container"
   docker exec "$transfer_container" /bin/sh -ec '
     rm -rf /tmp/kkrepo-swift-backup
     mkdir -p /tmp/kkrepo-swift-backup
-    mc alias set local http://minio:9000 minioadmin minioadmin >/dev/null
-    mc mirror --quiet local/kkrepo-swift /tmp/kkrepo-swift-backup
+    aws s3 sync --only-show-errors s3://kkrepo-swift /tmp/kkrepo-swift-backup
   ' >/dev/null
   docker cp "$transfer_container:/tmp/kkrepo-swift-backup/." "$object_stage/"
-  stop_minio_transfer_container "$transfer_container"
+  stop_s3_transfer_container "$transfer_container"
   tar -C "$object_stage" -cf "$object_backup" .
   if [[ ! -s "$database_backup" || ! -s "$object_backup" ]]; then
     log "backup artifacts are empty"
@@ -633,11 +631,10 @@ WHERE datname = 'kkrepo' AND pid <> pg_backend_pid();
 DROP DATABASE kkrepo;
 CREATE DATABASE kkrepo OWNER kkrepo;
 SQL
-  compose run --rm -T --no-deps --entrypoint /bin/sh minio-init -ec '
-    mc alias set local http://minio:9000 minioadmin minioadmin >/dev/null
-    mc rm --recursive --force local/kkrepo-swift >/dev/null 2>&1 || true
-    mc mb --ignore-existing local/kkrepo-swift >/dev/null
-    mc anonymous set private local/kkrepo-swift >/dev/null
+  compose run --rm -T --no-deps --entrypoint /bin/sh s3-init -ec '
+    aws s3 rb --force s3://kkrepo-swift
+    aws s3api create-bucket --bucket kkrepo-swift
+    aws s3api head-bucket --bucket kkrepo-swift
   '
 
   log "restoring PostgreSQL and S3-compatible backups into empty stores"
@@ -647,23 +644,22 @@ SQL
   rm -rf "$object_stage"
   mkdir -p "$object_stage"
   tar -C "$object_stage" -xf "$object_backup"
-  start_minio_transfer_container "$transfer_container"
+  start_s3_transfer_container "$transfer_container"
   docker exec "$transfer_container" /bin/sh -ec '
     mkdir -p /tmp/kkrepo-swift-restore
   '
   docker cp "$object_stage/." "$transfer_container:/tmp/kkrepo-swift-restore/"
   docker exec "$transfer_container" /bin/sh -ec '
-    mc alias set local http://minio:9000 minioadmin minioadmin >/dev/null
-    mc mirror --quiet --overwrite /tmp/kkrepo-swift-restore local/kkrepo-swift
+    aws s3 sync --only-show-errors /tmp/kkrepo-swift-restore s3://kkrepo-swift
   ' >/dev/null
-  stop_minio_transfer_container "$transfer_container"
+  stop_s3_transfer_container "$transfer_container"
   rm -rf "$object_stage"
 
   compose start primary secondary
   wait_for_http "restored primary management health" "$PRIMARY_MANAGEMENT_URL/actuator/health"
   wait_for_http "restored secondary management health" "$SECONDARY_MANAGEMENT_URL/actuator/health"
   verify_s3_blob_store
-  verify_minio_objects
+  verify_s3_objects
   printf 'database=%s\nobjects=%s\n' \
     "$(sha256_file "$database_backup")" "$(sha256_file "$object_backup")" \
     >"$ARTIFACT_DIR/backup/backup.sha256"
@@ -690,9 +686,9 @@ export KKREPO_COMPAT_USERNAME="$KKREPO_USER"
 export KKREPO_COMPAT_PASSWORD="$KKREPO_PASSWORD"
 export SWIFT_E2E_BLOB_STORE_PAYLOAD='{
   "name":"default","type":"s3","engine":"aws-s3",
-  "endpoint":"http://minio:9000","region":"us-east-1",
+  "endpoint":"http://rustfs:9000","region":"us-east-1",
   "bucket":"kkrepo-swift","prefix":"swift-e2e",
-  "accessKey":"minioadmin","secretKey":"minioadmin",
+  "accessKey":"RUSTFSE2E","secretKey":"rustfs-e2e-secret",
   "pathStyleAccess":true,"multipartThresholdBytes":1,
   "multipartPartSizeBytes":5242880,"multipartConcurrency":2
 }'
@@ -744,7 +740,7 @@ export SWIFT_KKREPO_SECONDARY_BASE_URL="$SECONDARY_URL"
 CLIENT_E2E_CLEANUP_ENABLED=false "$SCRIPT_DIR/run-client-e2e.sh"
 
 assert_lease_takeover "$lease_key" hosted
-verify_minio_objects
+verify_s3_objects
 
 archive_path="repository/swift-group/kkrepo/$package_name/$package_version.zip"
 proxy_archive_path="repository/swift-group/$SWIFT_PROXY_SCOPE/$SWIFT_PROXY_NAME/$SWIFT_PROXY_VERSION.zip"
