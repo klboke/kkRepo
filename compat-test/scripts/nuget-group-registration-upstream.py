@@ -35,6 +35,11 @@ class Upstream(http.server.BaseHTTPRequestHandler):
         server.requests.append(self.path)
         uri = urllib.parse.urlsplit(self.path)
         if uri.path == '/feed':
+            server.root_probes += 1
+            if server.fail_root:
+                self.send_response(503)
+                self.end_headers()
+                return
             body = b'<html>Repository root</html>'
         elif uri.path in ['/index.json', '/feed/index.json']:
             body = {'version': '3.0.0', 'resources': [
@@ -79,7 +84,7 @@ class Upstream(http.server.BaseHTTPRequestHandler):
             self.wfile.write(data)
 
 
-def exercise(base, credentials, nexus, host, ordered_query=False):
+def exercise(base, credentials, nexus, host, ordered_query=False, secondary=None):
     servers, repositories = [], []
     added = False
     ssrf = '/service/rest/v1/security/ssrf-protection'
@@ -103,6 +108,7 @@ def exercise(base, credentials, nexus, host, ordered_query=False):
             server.root = 'http://' + host + ':' + str(server.server_port)
             server.feed, server.versions, server.requests = feed, versions, []
             server.resource_query = '?key=private' if ordered_query else ''
+            server.root_probes, server.fail_root = 0, False
             server.page_query = 'api=one' + ('&key=private' if ordered_query else '')
             server.signed_query = 'sig=' + feed + ('&key=private&cursor=1' if ordered_query else '')
             server.packages = {}
@@ -145,6 +151,15 @@ def exercise(base, credentials, nexus, host, ordered_query=False):
         status, body, _ = request(base, urllib.parse.urlsplit(registration).path + 'demo/index.json', credentials)
         assert status == 200, (status, body)
         index = json.loads(body)
+        if ordered_query:
+            for server in servers:
+                assert server.root_probes == 1, server.root_probes
+                server.fail_root = True
+            if secondary:
+                base = secondary
+                status, body, _ = request(base, urllib.parse.urlsplit(registration).path + 'demo/index.json', credentials)
+                assert status == 200, (status, body)
+                index = json.loads(body)
         assert index['count'] == 1, index
         page = index['items'][0]
         assert (page['count'], page['lower'], page['upper']) == (3, '1.0.0', '1.10.0'), page
@@ -186,7 +201,8 @@ def exercise(base, credentials, nexus, host, ordered_query=False):
             assert 'private' not in link.query
             status, body, _ = request(base, link.path + '?' + link.query, credentials)
             assert status == 200 and body == servers[0].packages['1.0.0'], (status, body)
-            print('kkRepo exact query ordering, hidden credentials, direct/group links and root fallback with autoBlock: PASS')
+            assert all(server.root_probes == 1 for server in servers)
+            print('kkRepo exact query ordering, hidden credentials, direct/group links and durable root fallback despite root outage: PASS')
         print(('Nexus' if nexus else 'kkRepo') + ' paginated group merge, member precedence, numeric ordering, signed/plain links and dependency metadata: PASS')
     finally:
         for name in reversed(repositories):
@@ -209,6 +225,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--nexus')
     parser.add_argument('--kkrepo')
+    parser.add_argument('--kkrepo-secondary', help='Optional second replica using the same database and blob store')
     parser.add_argument('--upstream-host', default='host.docker.internal')
     args = parser.parse_args()
     assert args.nexus or args.kkrepo, 'Specify --nexus and/or --kkrepo'
@@ -216,7 +233,7 @@ def main():
         exercise(args.nexus, os.environ.get('NEXUS_COMPAT_AUTH', 'admin:Admin1234'), True, args.upstream_host)
     if args.kkrepo:
         exercise(args.kkrepo, os.environ.get('KKREPO_COMPAT_AUTH', 'admin:123456'), False, args.upstream_host)
-        exercise(args.kkrepo, os.environ.get('KKREPO_COMPAT_AUTH', 'admin:123456'), False, args.upstream_host, True)
+        exercise(args.kkrepo, os.environ.get('KKREPO_COMPAT_AUTH', 'admin:123456'), False, args.upstream_host, True, args.kkrepo_secondary)
 
 
 if __name__ == '__main__':

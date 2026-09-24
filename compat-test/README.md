@@ -559,7 +559,9 @@ merging against disposable repositories. The group fixture compares member prece
 version ordering, signed package links, and dependency metadata with Nexus; kkRepo also verifies
 that signed downloads reach only the selected member. An additional kkRepo case requires exact
 raw query ordering while hiding resource credentials, follows direct/group links, and checks
-repository-root discovery with automatic blocking enabled. Both scripts run in NuGet client E2E.
+that a proven repository-root fallback survives a root-page outage with automatic blocking enabled.
+Pass `--kkrepo-secondary URL` to run the outage phase through a second replica sharing the same
+database and blob store. Both scripts run in NuGet client E2E.
 
 ```bash
 python3 compat-test/scripts/ntlm-upstream.py --nexus http://localhost:28090 --dotnet

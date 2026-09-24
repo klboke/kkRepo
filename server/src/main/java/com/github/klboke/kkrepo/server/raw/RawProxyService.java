@@ -222,6 +222,18 @@ public class RawProxyService {
         new ComponentBinding(ComponentMode.HIDDEN, null, new MetadataValidation(validationId, validator)), "", headOnly);
   }
 
+  /** A durable discovery hint, rebuilt through the watermark-coordinated metadata cache. */
+  public boolean hasValidatedMetadataFromUrlHidden(
+      RepositoryRuntime runtime, String path, String remoteUrl, String validationId) {
+    String fingerprint = remoteSourceFingerprint(runtime, remoteUrl);
+    // Even a stale validated document proves successful discovery. The subsequent
+    // ordinary metadata read still applies its TTL, refresh and outage fallback.
+    // Legacy or unvalidated bytes must never establish a discovery-mode decision.
+    return lookupCached(runtime, path).filter(snapshot -> snapshot.blob() != null
+        && validationId.equals(stringAttr(snapshot.blob().attributes(), "metadataValidation"))
+        && fingerprint.equals(stringAttr(snapshot.blob().attributes(), REMOTE_SOURCE_FINGERPRINT))).isPresent();
+  }
+
   public MavenResponse getMetadataFromUrlWithComponent(
       RepositoryRuntime runtime,
       String path,

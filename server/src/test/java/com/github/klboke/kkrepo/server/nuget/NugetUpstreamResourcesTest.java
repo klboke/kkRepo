@@ -79,9 +79,29 @@ class NugetUpstreamResourcesTest {
     get(proxy, proxy.rootUrl, "query", true);
     assertEquals(List.of(proxy.rootUrl, proxy.rootUrl + "/index.json", "https://search.example/query"), proxy.urls);
     proxy.urls.clear();
+    proxy.validated.clear(); // An unproven extensionless URL must still be tried verbatim.
     proxy.rootFailure = new MavenExceptions.BadUpstreamException("Upstream returned 401");
     assertThrows(MavenExceptions.BadUpstreamException.class, () -> get(proxy, proxy.rootUrl, "query", true));
     assertEquals(List.of(proxy.rootUrl), proxy.urls);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"Upstream returned 503", "Upstream IO error"})
+  void provenRootFallbackSurvivesRootFailureOnAnotherReplica(String failure) {
+    String configured = "https://feed.example/root?token=private";
+    RecordingProxy first = new RecordingProxy(index("SearchQueryService", "https://search.example/query"));
+    first.rootUrl = configured;
+    get(first, configured, "query", true);
+    RecordingProxy replica = new RecordingProxy(first.index);
+    replica.validated.addAll(first.validated);
+    replica.rootUrl = configured;
+    replica.rootFailure = new MavenExceptions.BadUpstreamException(failure);
+    get(replica, configured, "query", true);
+    assertEquals(List.of("https://feed.example/root/index.json?token=private", "https://search.example/query"), replica.urls);
+    replica.urls.clear();
+    replica.rootUrl = "https://feed.example/different?token=private";
+    assertThrows(MavenExceptions.BadUpstreamException.class, () -> get(replica, replica.rootUrl, "query", true));
+    assertEquals(List.of(replica.rootUrl), replica.urls);
   }
 
   @Test
@@ -146,6 +166,7 @@ class NugetUpstreamResourcesTest {
     private final List<String> urls = new ArrayList<>();
     private final List<String> paths = new ArrayList<>();
     private final List<Boolean> head = new ArrayList<>();
+    private final java.util.Set<String> validated = new java.util.HashSet<>();
 
     RecordingProxy(String index) {
       super(null, null, null, null, null, null, null, null);
@@ -153,11 +174,18 @@ class NugetUpstreamResourcesTest {
     }
 
     @Override
+    public boolean hasValidatedMetadataFromUrlHidden(RepositoryRuntime runtime, String path, String url, String validationId) {
+      return validated.contains(runtime.proxyRemoteUrl() + "\n" + url);
+    }
+
+    @Override
     public MavenResponse getMetadataFromUrlHidden(
         RepositoryRuntime runtime, String path, String url, boolean head,
         String validationId, java.util.function.UnaryOperator<java.io.InputStream> validator) {
       MavenResponse response = getMetadataFromUrlHidden(runtime, path, url, false);
-      return MavenResponse.ok(validator.apply(response.body()), response.contentLength(), "application/json", null, null);
+      var checked = validator.apply(response.body());
+      validated.add(runtime.proxyRemoteUrl() + "\n" + url);
+      return MavenResponse.ok(checked, response.contentLength(), "application/json", null, null);
     }
 
     @Override

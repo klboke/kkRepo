@@ -479,6 +479,12 @@ final class NugetUpstreamResources {
     // Each replica can rebuild discovery, metadata TTL controls refresh, and URL-derived keys
     // isolate repository reconfiguration and obsolete negative entries from guessed /query URLs.
     boolean rootFallback = allowRootFallback && !URI.create(indexUrl).getPath().toLowerCase(java.util.Locale.ROOT).endsWith(".json");
+    if (rootFallback) {
+      String fallback = repositoryRootIndexUrl(indexUrl);
+      if (proxy.hasValidatedMetadataFromUrlHidden(runtime, cacheKey("index", fallback), fallback, "nuget-service-index-v1")) {
+        return resources(proxy, mapper, runtime, fallback, false);
+      }
+    }
     MavenResponse response;
     try {
       response = proxy.getMetadataFromUrlHidden(runtime, cacheKey("index", indexUrl), indexUrl, false,

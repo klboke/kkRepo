@@ -781,6 +781,35 @@ class RawProxyServiceTest {
   }
 
   @Test
+  void discoveryHintsRequireValidatedMetadataFromTheExactConfiguredSource() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = nugetRuntime();
+    String path = "_nuget/index/fallback";
+    String url = runtime.proxyRemoteUrl() + "/index.json";
+    String fingerprint = RawProxyService.remoteSourceFingerprint(runtime, url);
+    for (Map<String, Object> attributes : List.<Map<String, Object>>of(Map.of(),
+        Map.of("metadataValidation", "index-v1"),
+        Map.of(RawProxyService.REMOTE_SOURCE_FINGERPRINT, fingerprint),
+        Map.of("metadataValidation", "different-validator", RawProxyService.REMOTE_SOURCE_FINGERPRINT, fingerprint),
+        Map.of("metadataValidation", "index-v1", RawProxyService.REMOTE_SOURCE_FINGERPRINT,
+            HexFormat.of().formatHex(PersistenceHashes.sha256("raw-proxy-source-v1", runtime.proxyRemoteUrl()))),
+        Map.of("metadataValidation", "index-v1", RawProxyService.REMOTE_SOURCE_FINGERPRINT,
+            RawProxyService.remoteSourceFingerprint(runtime, url + "?key=different")))) {
+      when(fixture.cache.find(eq(runtime.id()), eq(path), any())).thenReturn(Optional.of(snapshot(Instant.EPOCH, attributes)));
+      assertFalse(fixture.service.hasValidatedMetadataFromUrlHidden(runtime, path, url, "index-v1"));
+    }
+    when(fixture.cache.find(eq(runtime.id()), eq(path), any())).thenReturn(Optional.of(snapshot(Instant.EPOCH,
+        Map.of("metadataValidation", "index-v1", RawProxyService.REMOTE_SOURCE_FINGERPRINT, fingerprint))));
+    assertEquals(true, fixture.service.hasValidatedMetadataFromUrlHidden(runtime, path, url, "index-v1"));
+    assertFalse(fixture.service.hasValidatedMetadataFromUrlHidden(runtime, path, url + "?key=different", "index-v1"));
+    when(fixture.cache.find(eq(runtime.id()), eq(path), any())).thenReturn(Optional.empty());
+    assertFalse(fixture.service.hasValidatedMetadataFromUrlHidden(runtime, path, url, "index-v1"));
+    when(fixture.cache.find(eq(runtime.id()), eq(path), any())).thenReturn(Optional.of(mock(CachedAssetMetadata.class)));
+    assertFalse(fixture.service.hasValidatedMetadataFromUrlHidden(runtime, path, url, "index-v1"));
+    verify(fixture.fetcher, never()).fetchWithBodyRetry(any(), any(), any());
+  }
+
+  @Test
   void rejectsNonProxyRepositories() {
     Fixture fixture = fixture();
 
