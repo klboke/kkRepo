@@ -81,7 +81,6 @@ class NugetPackageResourcesTest {
         assertEquals(FLAT + "arp.projects/1.10.21/" + file + "?tenant=feed&sig=a%2Bb%2Fc&expires=123",
             proxy.urls.getLast());
         assertEquals(path, proxy.paths.getLast());
-        assertEquals(FLAT + "arp.projects/1.10.21/" + file + "?tenant=feed", proxy.cacheSources.getLast());
         assertEquals(head, proxy.lastHead);
       }
     }
@@ -209,6 +208,24 @@ class NugetPackageResourcesTest {
     assertTrue(result.toString().contains("https://project.example/"));
     assertEquals(REG + "arp.projects/index.json", proxy.urls.getLast());
     assertTrue(proxy.closed);
+  }
+
+  @Test
+  void overlappingResourceBasesAreRewrittenByLinkKind() throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    proxy.registration = "https://feed.example/api/";
+    proxy.flat = proxy.registration + "flat/";
+    proxy.metadata = """
+        {"@id":"https://feed.example/api/demo/index.json",
+         "parent":"https://feed.example/api/demo/index.json",
+         "registration":"https://feed.example/api/dependency/index.json",
+         "packageContent":"https://feed.example/api/flat/demo/1.0.0/demo.1.0.0.nupkg"}
+        """;
+    JsonNode result = json(get(proxy, "v3/registration5-semver1/demo/index.json", false));
+    assertEquals(BASE + "v3-flatcontainer/demo/1.0.0/demo.1.0.0.nupkg", result.path("packageContent").asText());
+    assertEquals(BASE + "v3/registration5-semver1/demo/index.json", result.path("@id").asText());
+    assertEquals(BASE + "v3/registration5-semver1/demo/index.json", result.path("parent").asText());
+    assertEquals(BASE + "v3/registration5-semver1/dependency/index.json", result.path("registration").asText());
   }
 
   @ParameterizedTest
@@ -447,7 +464,6 @@ class NugetPackageResourcesTest {
   private static final class RecordingProxy extends RawProxyService {
     private final List<String> urls = new ArrayList<>();
     private final List<String> paths = new ArrayList<>();
-    private final List<String> cacheSources = new ArrayList<>();
     private final List<Long> repositories = new ArrayList<>();
     private Long missingRepository;
     private MavenExceptions.BadUpstreamException discoveryFailure;
@@ -489,9 +505,8 @@ class NugetPackageResourcesTest {
 
     @Override
     public MavenResponse getAssetFromUrl(
-        RepositoryRuntime runtime, String path, String url, String cacheSource, boolean head) {
+        RepositoryRuntime runtime, String path, String url, boolean head) {
       repositories.add(runtime.id());
-      cacheSources.add(cacheSource);
       contentRequests++;
       return record(path, url, head, "package");
     }

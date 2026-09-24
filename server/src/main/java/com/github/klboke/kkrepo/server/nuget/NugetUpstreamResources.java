@@ -83,10 +83,8 @@ final class NugetUpstreamResources {
         return proxy.getMetadataFromUrlHidden(runtime, cacheKey("versions", remoteUrl), remoteUrl, headOnly);
       }
       // Preserve canonical asset paths, Browse visibility and download-policy checks for package bodies.
-      // Resource queries can select a different tenant/feed. Keep their opaque identity;
-      // only client-supplied download queries are excluded from the package fingerprint.
-      String cacheSourceUrl = appendPath(endpoint, assetPath.substring(FLAT.length()));
-      return proxy.getAssetFromUrl(runtime, assetPath, remoteUrl, cacheSourceUrl, headOnly);
+      // RawProxyService binds cache content to the complete URL, including opaque queries.
+      return proxy.getAssetFromUrl(runtime, assetPath, remoteUrl, headOnly);
     }
     String registrationPrefix = registrationPrefix(path);
     String endpoint = resourceUrl(resources, "RegistrationsBaseUrl",
@@ -142,9 +140,9 @@ final class NugetUpstreamResources {
       for (String field : List.of("@id", "parent", "registration", "packageContent")) {
         JsonNode value = object.get(field);
         if (value != null && value.isTextual()) {
-          String rewritten = localLink(value.asText(), registration, base, registrationPrefix, groupId, sourceMember);
-          rewritten = localLink(rewritten, flat, base, FLAT, groupId, sourceMember);
-          object.put(field, rewritten);
+          boolean packageContent = field.equals("packageContent");
+          object.put(field, localLink(value.asText(), packageContent ? flat : registration,
+              base, packageContent ? FLAT : registrationPrefix, groupId, sourceMember));
         }
       }
     }
@@ -254,17 +252,37 @@ final class NugetUpstreamResources {
   }
 
   private static JsonNode resources(RawProxyService proxy, ObjectMapper mapper, RepositoryRuntime runtime) {
-    String indexUrl = serviceIndexUrl(runtime.proxyRemoteUrl());
+    String configured = runtime.proxyRemoteUrl();
+    String indexUrl = requireHttpUrl(configured == null ? "" : configured.trim());
+    return resources(proxy, mapper, runtime, indexUrl, true);
+  }
+
+  private static JsonNode resources(
+      RawProxyService proxy, ObjectMapper mapper, RepositoryRuntime runtime, String indexUrl, boolean allowRootFallback) {
     // Discovery and protocol metadata use the existing durable cache (DB + blob store).
     // Each replica can rebuild discovery, metadata TTL controls refresh, and URL-derived keys
     // isolate repository reconfiguration and obsolete negative entries from guessed /query URLs.
-    MavenResponse response = proxy.getMetadataFromUrlHidden(
-        runtime, cacheKey("index", indexUrl), indexUrl, false);
-    JsonNode index = readJson(mapper, response, MAX_INDEX_BYTES, "service index");
-    if (!index.path("resources").isArray()) {
-      throw new MavenExceptions.BadUpstreamException("NuGet service index has no resources array");
+    boolean rootFallback = allowRootFallback && !URI.create(indexUrl).getPath().toLowerCase(java.util.Locale.ROOT).endsWith(".json");
+    MavenResponse response;
+    try {
+      response = proxy.getMetadataFromUrlHidden(runtime, cacheKey("index", indexUrl), indexUrl, false);
+    } catch (MavenExceptions.MavenNotFoundException failure) {
+      if (!rootFallback) throw failure;
+      return resources(proxy, mapper, runtime, repositoryRootIndexUrl(indexUrl), false);
     }
-    return index.path("resources");
+    try {
+      JsonNode index = readJson(mapper, response, MAX_INDEX_BYTES, "service index");
+      if (!index.path("resources").isArray()) {
+        throw new MavenExceptions.BadUpstreamException("NuGet service index has no resources array");
+      }
+      return index.path("resources");
+    } catch (MavenExceptions.BadUpstreamException failure) {
+      // Try the configured URL verbatim first, including extensionless service indexes.
+      // Retain legacy repository-root configuration only after a 404 or non-index body;
+      // authentication, policy and transport failures from the fetcher are not retried here.
+      if (!rootFallback) throw failure;
+      return resources(proxy, mapper, runtime, repositoryRootIndexUrl(indexUrl), false);
+    }
   }
 
   private static String resourceUrl(JsonNode resources, String type, List<String> versions) {
@@ -278,12 +296,7 @@ final class NugetUpstreamResources {
     throw new MavenExceptions.BadUpstreamException("NuGet upstream does not advertise " + type);
   }
 
-  private static String serviceIndexUrl(String remoteUrl) {
-    String url = requireHttpUrl(remoteUrl == null ? "" : remoteUrl.trim());
-    URI uri = URI.create(url);
-    String path = uri.getPath();
-    if (path != null && path.endsWith(".json")) return url;
-    // Preserve Nexus-style repository-root configuration as well as explicit index URLs.
+  private static String repositoryRootIndexUrl(String url) {
     int queryIndex = url.indexOf('?');
     String base = queryIndex < 0 ? url : url.substring(0, queryIndex);
     return base + (base.endsWith("/") ? "" : "/") + "index.json"

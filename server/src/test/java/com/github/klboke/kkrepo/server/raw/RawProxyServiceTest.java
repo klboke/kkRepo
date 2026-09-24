@@ -389,55 +389,93 @@ class RawProxyServiceTest {
   }
 
   @Test
-  void rotatingNugetSignaturesReuseFreshContentWhileResourceMovesInvalidateIt() throws Exception {
+  void nugetQueriesAndResourceMovesNeverReuseContentFromADifferentUrl() throws Exception {
     Fixture fixture = fixture();
     RepositoryRuntime runtime = nugetRuntime();
     String path = "v3-flatcontainer/demo/1.0.0/demo.1.0.0.nupkg";
-    String stable = "https://upstream.example.test/flat2/demo/1.0.0/demo.1.0.0.nupkg?tenant=feed";
+    String url = "https://upstream.example.test/flat2/demo.nupkg?tenant=feed&variant=fips&sig=first";
     CachedAssetMetadata cached = snapshot(Instant.now(), Map.of(
-        RawProxyService.REMOTE_SOURCE_FINGERPRINT, RawProxyService.remoteSourceFingerprint(runtime, stable)));
+        RawProxyService.REMOTE_SOURCE_FINGERPRINT, RawProxyService.remoteSourceFingerprint(runtime, url)));
     when(fixture.cache.find(eq(runtime.id()), eq(path), any())).thenReturn(Optional.of(cached));
     MavenResponse expected = MavenResponse.noBody(200);
     when(fixture.reader.serveSnapshot(cached, true, path, "ATTACHMENT")).thenReturn(expected);
-    for (String signature : List.of("first", "rotated", "a%2Bb%2Fc")) {
-      assertSame(expected, fixture.service.getAssetFromUrl(runtime, path, stable + "&sig=" + signature, stable, true));
+    assertSame(expected, fixture.service.getAssetFromUrl(runtime, path, url, true));
+    when(fixture.proxyStateDao.isBlocked(eq(runtime.id()), any())).thenReturn(true);
+    for (String changed : List.of(url.replace("variant=fips", "variant=standard"),
+        url.replace("sig=first", "sig=rotated"), url.replace("/flat2/", "/new-flat2/"),
+        url.replace("tenant=feed", "tenant=other"))) {
+      assertThrows(MavenExceptions.BadUpstreamException.class,
+          () -> fixture.service.getAssetFromUrl(runtime, path, changed, true));
     }
     verify(fixture.fetcher, never()).fetchWithBodyRetry(any(), any(), any());
-    when(fixture.proxyStateDao.isBlocked(eq(runtime.id()), any())).thenReturn(true);
-    String moved = stable.replace("/flat2/", "/new-flat2/");
-    assertThrows(MavenExceptions.BadUpstreamException.class,
-        () -> fixture.service.getAssetFromUrl(runtime, path, moved + "&sig=rotated", moved, true));
-    String differentFeed = stable.replace("tenant=feed", "tenant=other");
-    assertThrows(MavenExceptions.BadUpstreamException.class,
-        () -> fixture.service.getAssetFromUrl(runtime, path, differentFeed, differentFeed, true));
+    verify(fixture.reader).serveSnapshot(cached, true, path, "ATTACHMENT");
   }
 
   @Test
-  void legacy304PersistsTheDiscoveredSourceAndInvalidatesOtherReplicas() throws Exception {
-    Fixture fixture = fixture();
+  void legacyNugetRefreshDropsValidatorsAndEstablishesSourceOnlyFromAFullResponse() throws Exception {
+    RepositoryRuntime runtime = nugetRuntime();
+    String path = "v3-flatcontainer/demo/1.0.0/demo.1.0.0.nupkg";
+    String legacy = HexFormat.of().formatHex(PersistenceHashes.sha256("raw-proxy-source-v1", runtime.proxyRemoteUrl()));
+    for (boolean discovered : List.of(true, false)) {
+      for (boolean fingerprinted : List.of(true, false)) {
+        Fixture fixture = fixture();
+        String url = discovered ? "https://upstream.example.test/flat2/demo.nupkg" : runtime.proxyRemoteUrl() + "/" + path;
+        Map<String, Object> attributes = new java.util.HashMap<>(Map.of("remoteEtag", "same-etag",
+            "remoteLastModified", "2026-07-12T00:00:00Z"));
+        if (fingerprinted) attributes.put(RawProxyService.REMOTE_SOURCE_FINGERPRINT, legacy);
+        CachedAssetMetadata cached = snapshot(Instant.EPOCH, attributes);
+        when(fixture.cache.find(eq(runtime.id()), eq(path), any())).thenReturn(Optional.of(cached));
+        BlobStorage storage = mock(BlobStorage.class);
+        when(fixture.registry.forBlobStoreId(1L)).thenReturn(storage);
+        CachedAssetMetadata content = snapshot(Instant.now());
+        RawAssetWriter.Stored stored = new RawAssetWriter.Stored(content.toAssetRecord(), content.toBlobRecord(), null, true, null);
+        when(fixture.writer.write(eq(runtime), eq(storage), eq(1L), eq(path), any(), any(), any(), eq("proxy"), isNull(), eq(true)))
+            .thenReturn(stored);
+        when(fixture.reader.serve(stored.asset(), true, path, "ATTACHMENT")).thenReturn(MavenResponse.noBody(200));
+        doAnswer(invocation -> {
+          HttpRemoteFetcher.Request request = invocation.getArgument(0);
+          assertEquals(null, request.etag());
+          assertEquals(null, request.lastModified());
+          HttpRemoteFetcher.ResultHandler<?> handler = invocation.getArgument(2);
+          // The different URL may legitimately use the same opaque ETag.
+          return handler.handle(new HttpRemoteFetcher.Result(200,
+              Map.of("Content-Type", "application/zip", "ETag", "same-etag"),
+              new ByteArrayInputStream(new byte[] {4, 3, 2, 1})));
+        }).when(fixture.fetcher).fetchWithBodyRetry(any(), eq(path), any());
+        MavenResponse response = discovered ? fixture.service.getAssetFromUrl(runtime, path, url, true)
+            : fixture.service.getAsset(runtime, path, true);
+        assertEquals(200, response.status());
+        verify(fixture.writer).write(eq(runtime), eq(storage), eq(1L), eq(path), any(), eq("application/zip"),
+            eq(Map.of(RawProxyService.REMOTE_SOURCE_FINGERPRINT, RawProxyService.remoteSourceFingerprint(runtime, url),
+                "remoteEtag", "same-etag")), eq("proxy"), isNull(), eq(true));
+        verify(fixture.assetDao, never()).updateBlobAttributes(eq(cached.blob().id()), any());
+        verify(fixture.cache, never()).touchVerified(eq(runtime.id()), eq(path), any());
+      }
+    }
+  }
+
+  @Test
+  void nuget304OnlyRefreshesAnAlreadyMatchingSource() throws Exception {
     RepositoryRuntime runtime = nugetRuntime();
     String path = "v3-flatcontainer/demo/1.0.0/demo.1.0.0.nupkg";
     String url = "https://upstream.example.test/flat2/demo.nupkg";
-    String legacy = HexFormat.of().formatHex(PersistenceHashes.sha256("raw-proxy-source-v1", runtime.proxyRemoteUrl()));
-    Map<String, Object> attributes = Map.of(RawProxyService.REMOTE_SOURCE_FINGERPRINT, legacy, "remoteEtag", "etag");
-    CachedAssetMetadata cached = snapshot(Instant.EPOCH, attributes);
-    when(fixture.cache.find(eq(runtime.id()), eq(path), any())).thenReturn(Optional.of(cached));
-    doAnswer(invocation -> {
-      HttpRemoteFetcher.Request request = invocation.getArgument(0);
-      assertEquals("etag", request.etag());
-      HttpRemoteFetcher.ResultHandler<?> handler = invocation.getArgument(2);
-      return handler.handle(new HttpRemoteFetcher.Result(304, Map.of(), InputStream.nullInputStream()));
-    }).when(fixture.fetcher).fetchWithBodyRetry(any(), eq(path), any());
-    fixture.service.getAssetFromUrl(runtime, path, url, false);
-    Map<String, Object> migrated = Map.of(RawProxyService.REMOTE_SOURCE_FINGERPRINT,
-        RawProxyService.remoteSourceFingerprint(runtime, url), "remoteEtag", "etag");
-    verify(fixture.assetDao).updateBlobAttributes(cached.blob().id(), migrated);
-    verify(fixture.cache).evict(runtime.id(), path);
-    verify(fixture.cache, never()).touchVerified(eq(runtime.id()), eq(path), any());
-    when(fixture.cache.find(eq(runtime.id()), eq(path), any())).thenReturn(Optional.of(snapshot(Instant.now(), migrated)));
-    when(fixture.proxyStateDao.isBlocked(eq(runtime.id()), any())).thenReturn(true);
-    assertThrows(MavenExceptions.BadUpstreamException.class,
-        () -> fixture.service.getAssetFromUrl(runtime, path, url.replace("flat2", "moved"), false));
+    for (boolean sameSource : List.of(true, false)) {
+      Fixture fixture = fixture();
+      String fingerprint = sameSource ? RawProxyService.remoteSourceFingerprint(runtime, url)
+          : HexFormat.of().formatHex(PersistenceHashes.sha256("raw-proxy-source-v1", runtime.proxyRemoteUrl()));
+      CachedAssetMetadata cached = snapshot(Instant.EPOCH, Map.of(
+          RawProxyService.REMOTE_SOURCE_FINGERPRINT, fingerprint, "remoteEtag", "etag"));
+      when(fixture.cache.find(eq(runtime.id()), eq(path), any())).thenReturn(Optional.of(cached));
+      doAnswer(invocation -> {
+        HttpRemoteFetcher.Request request = invocation.getArgument(0);
+        assertEquals(sameSource ? "etag" : null, request.etag());
+        HttpRemoteFetcher.ResultHandler<?> handler = invocation.getArgument(2);
+        return handler.handle(new HttpRemoteFetcher.Result(304, Map.of(), InputStream.nullInputStream()));
+      }).when(fixture.fetcher).fetchWithBodyRetry(any(), eq(path), any());
+      fixture.service.getAssetFromUrl(runtime, path, url, false);
+      verify(fixture.cache, times(sameSource ? 1 : 0)).touchVerified(eq(runtime.id()), eq(path), any());
+      verify(fixture.assetDao, never()).updateBlobAttributes(eq(cached.blob().id()), any());
+    }
   }
 
   @Test
@@ -459,7 +497,7 @@ class RawProxyServiceTest {
   }
 
   @Test
-  void signedMissesDoNotPoisonOrConsultTheCanonicalNegativeCache() throws Exception {
+  void signedMissesAreIsolatedByTheirCompleteUrl() throws Exception {
     Fixture fixture = fixture();
     RepositoryRuntime runtime = nugetRuntime();
     String path = "v3-flatcontainer/demo/1.0.0/demo.1.0.0.nupkg";
@@ -471,7 +509,11 @@ class RawProxyServiceTest {
     when(fixture.writer.write(eq(runtime), eq(storage), eq(1L), eq(path), any(), any(), any(), eq("proxy"), isNull(), eq(true)))
         .thenReturn(stored);
     when(fixture.reader.serve(stored.asset(), true, path, "ATTACHMENT")).thenReturn(MavenResponse.noBody(200));
-    when(fixture.negativeCache.isNotFoundCached(eq(runtime), any(String.class))).thenReturn(true);
+    var misses = new HashSet<String>();
+    when(fixture.negativeCache.isNotFoundCached(eq(runtime), any(String.class)))
+        .thenAnswer(invocation -> misses.contains(invocation.getArgument(1)));
+    doAnswer(invocation -> { misses.add(invocation.getArgument(1)); return null; })
+        .when(fixture.negativeCache).rememberNotFound(eq(runtime), any(String.class));
     doAnswer(invocation -> {
       HttpRemoteFetcher.Request request = invocation.getArgument(0);
       HttpRemoteFetcher.ResultHandler<?> handler = invocation.getArgument(2);
@@ -479,11 +521,13 @@ class RawProxyServiceTest {
           Map.of("Content-Type", "application/zip"), InputStream.nullInputStream()));
     }).when(fixture.fetcher).fetchWithBodyRetry(any(), eq(path), any());
     assertThrows(MavenExceptions.MavenNotFoundException.class,
-        () -> fixture.service.getAssetFromUrl(runtime, path, stable + "?sig=expired", stable, true));
-    assertEquals(200, fixture.service.getAssetFromUrl(runtime, path, stable + "?sig=valid", stable, true).status());
+        () -> fixture.service.getAssetFromUrl(runtime, path, stable + "?sig=expired", true));
+    assertEquals(200, fixture.service.getAssetFromUrl(runtime, path, stable + "?sig=valid", true).status());
     verify(fixture.fetcher, times(2)).fetchWithBodyRetry(any(), eq(path), any());
-    verify(fixture.negativeCache, never()).isNotFoundCached(eq(runtime), any(String.class));
-    verify(fixture.negativeCache, never()).rememberNotFound(eq(runtime), any(String.class));
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> fixture.service.getAssetFromUrl(runtime, path, stable + "?sig=expired", true));
+    verify(fixture.fetcher, times(2)).fetchWithBodyRetry(any(), eq(path), any());
+    assertEquals(1, misses.size());
   }
 
   @Test

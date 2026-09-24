@@ -124,14 +124,6 @@ public class RawProxyService {
         .map(cached -> reader.serveSnapshot(cached, headOnly, path, runtime.rawContentDispositionOrDefault()));
   }
 
-  /** Separates a stable discovered content URL from per-request download signatures. */
-  public MavenResponse getAssetFromUrl(
-      RepositoryRuntime runtime, String path, String remoteUrl, String cacheSourceUrl, boolean headOnly) {
-    return getAssetFromUrl(
-        runtime, path, remoteUrl, runtime.contentMaxAgeMinutesOrDefault(),
-        HttpRemoteFetcher.TimeoutProfile.CONTENT, ComponentBinding.perAsset(), path, cacheSourceUrl, headOnly);
-  }
-
   public MavenResponse getAssetFromUrlWithComponent(
       RepositoryRuntime runtime,
       String path,
@@ -244,27 +236,14 @@ public class RawProxyService {
       ComponentBinding componentBinding,
       String browsePath,
       boolean headOnly) {
-    return getAssetFromUrl(
-        runtime, path, remoteUrl, maxAgeMinutes, timeoutProfile, componentBinding, browsePath, remoteUrl, headOnly);
-  }
-
-  private MavenResponse getAssetFromUrl(
-      RepositoryRuntime runtime, String path, String remoteUrl, int maxAgeMinutes,
-      HttpRemoteFetcher.TimeoutProfile timeoutProfile,
-      ComponentBinding componentBinding,
-      String browsePath,
-      String cacheSourceUrl,
-      boolean headOnly) {
-    String sourceFingerprint = remoteSourceFingerprint(runtime, cacheSourceUrl);
-    // An expired/forged request signature must not poison the canonical package miss cache.
-    boolean cacheMisses = remoteUrl.equals(cacheSourceUrl);
+    String sourceFingerprint = remoteSourceFingerprint(runtime, remoteUrl);
     Optional<CachedAssetMetadata> cached = sourceCompatible(
         lookupCached(runtime, path), sourceFingerprint, runtime);
     Instant now = Instant.now();
     if (cached.isPresent() && isFresh(cached.get(), maxAgeMinutes, now)) {
       return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
     }
-    if (cacheMisses && negativeCache.isNotFoundCached(runtime, negativeCachePath(runtime, path, sourceFingerprint))) {
+    if (negativeCache.isNotFoundCached(runtime, negativeCachePath(runtime, path, sourceFingerprint))) {
       throw new MavenExceptions.MavenNotFoundException(path);
     }
     if (proxyStateDao.isBlocked(runtime.id(), now)) {
@@ -275,7 +254,7 @@ public class RawProxyService {
     }
     return fetchAndCacheUrl(
         runtime, path, remoteUrl, sourceFingerprint, cached, headOnly, now, timeoutProfile,
-        componentBinding, browsePath, cacheMisses);
+        componentBinding, browsePath);
   }
 
   private Optional<CachedAssetMetadata> lookupCached(RepositoryRuntime runtime, String path) {
@@ -294,7 +273,7 @@ public class RawProxyService {
       Instant now) {
     String etag = null;
     Instant lastModified = null;
-    if (cached.isPresent() && cached.get().blob() != null) {
+    if (canRevalidate(runtime, cached, sourceFingerprint)) {
       Map<String, Object> attrs = cached.get().blob().attributes();
       etag = stringAttr(attrs, "remoteEtag");
       lastModified = instantAttr(attrs, "remoteLastModified");
@@ -305,7 +284,7 @@ public class RawProxyService {
         .withRepository(runtime);
     return fetchAndCache(
         runtime, path, sourceFingerprint, cached, headOnly, now, req,
-        ComponentBinding.perAsset(), path, true);
+        ComponentBinding.perAsset(), path);
   }
 
   private MavenResponse fetchAndCacheUrl(
@@ -318,10 +297,10 @@ public class RawProxyService {
       Instant now,
       HttpRemoteFetcher.TimeoutProfile timeoutProfile,
       ComponentBinding componentBinding,
-      String browsePath, boolean cacheMisses) {
+      String browsePath) {
     String etag = null;
     Instant lastModified = null;
-    if (cached.isPresent() && cached.get().blob() != null) {
+    if (canRevalidate(runtime, cached, sourceFingerprint)) {
       Map<String, Object> attrs = cached.get().blob().attributes();
       etag = stringAttr(attrs, "remoteEtag");
       lastModified = instantAttr(attrs, "remoteLastModified");
@@ -330,7 +309,7 @@ public class RawProxyService {
         runtime, remoteUrl, etag, lastModified).withTimeoutProfile(timeoutProfile);
     return fetchAndCache(
         runtime, path, sourceFingerprint, cached, headOnly, now, req, componentBinding,
-        browsePath, cacheMisses);
+        browsePath);
   }
 
   static HttpRemoteFetcher.Request cachePopulationRequest(
@@ -356,23 +335,14 @@ public class RawProxyService {
       Instant now,
       HttpRemoteFetcher.Request req,
       ComponentBinding componentBinding,
-      String browsePath, boolean cacheMisses) {
+      String browsePath) {
     try {
       return fetcher.fetchWithBodyRetry(req, path, result -> {
         int status = result.status();
-        if (status == 304 && cached.isPresent()) {
+        if (status == 304 && cached.isPresent()
+            && (runtime.format() != RepositoryFormat.NUGET || canRevalidate(runtime, cached, sourceFingerprint))) {
           assetDao.touchAssetLastUpdated(cached.get().assetId(), now);
-          if (runtime.format() == RepositoryFormat.NUGET && cached.get().blob() != null
-              && !sourceFingerprint.equals(stringAttr(cached.get().blob().attributes(), REMOTE_SOURCE_FINGERPRINT))) {
-            Map<String, Object> attributes = new HashMap<>();
-            if (cached.get().blob().attributes() != null) attributes.putAll(cached.get().blob().attributes());
-            attributes.put(REMOTE_SOURCE_FINGERPRINT, sourceFingerprint);
-            assetDao.updateBlobAttributes(cached.get().blob().id(), attributes);
-            // Persist first, then invalidate the shared repository watermark for other replicas.
-            assetMetadataCache.evict(runtime.id(), path);
-          } else {
-            assetMetadataCache.touchVerified(runtime.id(), path, now);
-          }
+          assetMetadataCache.touchVerified(runtime.id(), path, now);
           proxyStateDao.recordSuccess(runtime.id(), now);
           negativeCache.invalidate(runtime, negativeCachePath(runtime, path, sourceFingerprint));
           return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
@@ -403,7 +373,7 @@ public class RawProxyService {
           if (cached.isPresent()) {
             return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
           }
-          if (status == 404 && cacheMisses) negativeCache.rememberNotFound(runtime, negativeCachePath(runtime, path, sourceFingerprint));
+          if (status == 404) negativeCache.rememberNotFound(runtime, negativeCachePath(runtime, path, sourceFingerprint));
           throw new MavenExceptions.MavenNotFoundException(path);
         }
         return handleUpstreamFailure(runtime, path, cached, headOnly,
@@ -471,6 +441,15 @@ public class RawProxyService {
     return snapshot.lastUpdatedAt().plusSeconds(ttlMinutes * 60L).isAfter(now);
   }
 
+  private static boolean canRevalidate(
+      RepositoryRuntime runtime, Optional<CachedAssetMetadata> cached, String expectedFingerprint) {
+    // Legacy NuGet entries remain an offline fallback, but their validators belong to
+    // the previously guessed URL. Only a full response can establish the discovered source.
+    return cached.isPresent() && cached.get().blob() != null
+        && (runtime.format() != RepositoryFormat.NUGET || expectedFingerprint.equals(
+            stringAttr(cached.get().blob().attributes(), REMOTE_SOURCE_FINGERPRINT)));
+  }
+
   /**
    * Rejects a cache entry written for another configured upstream. Entries created before source
    * fingerprints were introduced remain usable and acquire a fingerprint on their next 200
@@ -507,7 +486,8 @@ public class RawProxyService {
         ? remoteUrl
         : configuredSource;
     if (runtime != null && runtime.format() == RepositoryFormat.NUGET) {
-      // A service index can move a resource without changing the configured index URL.
+      // Both resource moves and opaque queries can change content. Keep the complete
+      // request URL; do not guess which query parameters are only rotating credentials.
       return HexFormat.of().formatHex(PersistenceHashes.sha256("nuget-resource-v1", source + "\n" + remoteUrl));
     }
     return HexFormat.of().formatHex(
