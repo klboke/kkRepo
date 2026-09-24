@@ -38,6 +38,18 @@ for backend in mysql postgresql; do
     echo 'IAM deployment must not reference a database password Secret' >&2
     exit 1
   fi
+  # Legacy releases can enable IAM while relying on the AWS SDK region chain.
+  for region_override in database.iam=null database.iam.region=null; do
+    helm template auth-check "$repository_root/deploy/helm/kkrepo" \
+      --set database.type="$backend" --set database.auth=iam \
+      --set "$region_override" --set database.existingSecret= > "$work_dir/iam-default-region.yaml"
+    grep -A1 'name: KKREPO_DATABASE_AUTH' "$work_dir/iam-default-region.yaml" | grep -q 'value: "iam"'
+    grep -A1 'name: KKREPO_DATABASE_IAM_REGION' "$work_dir/iam-default-region.yaml" | grep -q 'value: ""'
+    if grep -q 'SPRING_DATASOURCE_PASSWORD\|kkrepo-database' "$work_dir/iam-default-region.yaml"; then
+      echo 'IAM with the SDK region chain must not reference a database password Secret' >&2
+      exit 1
+    fi
+  done
 done
 if helm template auth-check "$repository_root/deploy/helm/kkrepo" \
     --set database.auth=invalid > "$work_dir/invalid.log" 2>&1; then

@@ -53,8 +53,9 @@ spec:
             - name: KKREPO_DATABASE_AUTH
               value: {{ $databaseAuth | quote }}
             {{- if eq $databaseAuth "iam" }}
+            {{- $iam := .Values.database.iam | default dict }}
             - name: KKREPO_DATABASE_IAM_REGION
-              value: {{ .Values.database.iam.region | quote }}
+              value: {{ $iam.region | default "" | quote }}
             {{- end }}
             - name: SPRING_DATASOURCE_URL
               value: {{ required "database.url is required" .Values.database.url | quote }}
