@@ -66,12 +66,17 @@ record RdsIamConnectionSettings(String hostname, int port, String username) {
           + tlsProperty + "=" + tlsMode
           + " and a trusted RDS CA certificate");
     }
-    if (Boolean.parseBoolean(properties.get("autoReconnect"))
-        || Boolean.parseBoolean(properties.get("autoReconnectForPools"))) {
+    if (enabled(properties.get("autoReconnect"))
+        || enabled(properties.get("autoReconnectForPools"))) {
       throw new IllegalArgumentException("Disable JDBC autoReconnect for IAM; Hikari must create replacement connections");
     }
     int port = endpoint.getPort() == -1 ? (mysql ? 3306 : 5432) : endpoint.getPort();
     return new RdsIamConnectionSettings(endpoint.getHost(), port, pool.getUsername());
+  }
+
+  private static boolean enabled(String value) {
+    // Connector/J accepts both true and yes (case-insensitively) for boolean properties.
+    return Boolean.parseBoolean(value) || "yes".equalsIgnoreCase(value);
   }
 
   private static String decode(String value) {

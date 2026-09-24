@@ -48,6 +48,26 @@ class RdsIamConnectionSettingsTest {
   }
 
   @Test
+  void rejectsAllEnabledMysqlReconnectValuesInUrlsAndDriverProperties() {
+    for (String property : new String[] {"autoReconnect", "autoReconnectForPools"}) {
+      for (String value : new String[] {"true", "TRUE", "yes", "YeS"}) {
+        assertThrows(IllegalArgumentException.class, () -> settings("mysql",
+            "jdbc:mysql://db.example/kkrepo?sslMode=VERIFY_IDENTITY&" + property + "=" + value));
+        try (var pool = new HikariDataSource()) {
+          pool.setJdbcUrl("jdbc:mysql://db.example/kkrepo?sslMode=VERIFY_IDENTITY");
+          pool.setUsername("db_user");
+          pool.addDataSourceProperty(property, value);
+          assertThrows(IllegalArgumentException.class, () -> RdsIamConnectionSettings.from(pool, "mysql"));
+        }
+      }
+      for (String value : new String[] {"false", "FALSE", "no", "No"}) {
+        assertEquals(3306, settings("mysql",
+            "jdbc:mysql://db.example/kkrepo?sslMode=VERIFY_IDENTITY&" + property + "=" + value).port());
+      }
+    }
+  }
+
+  @Test
   void validatesDriverPropertiesAndRejectsAlternateDataSources() {
     try (var pool = new HikariDataSource()) {
       pool.setJdbcUrl("jdbc:mysql://db.example/kkrepo");
