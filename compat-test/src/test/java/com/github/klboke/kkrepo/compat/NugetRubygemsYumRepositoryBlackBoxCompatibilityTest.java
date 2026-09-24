@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -67,6 +68,33 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
         true);
     assertNugetProxyRead(config, config.nugetProxyRepository(), config.nugetProxyRepository());
     assertNugetProxyRead(config, config.nugetGroupRepository(), config.nugetGroupRepository());
+    // Discover the advertised resource and exercise the actual Visual Studio Browse request.
+    // Checking the service-index shape alone cannot detect a broken upstream search URL.
+    for (String repository : List.of(config.nugetProxyRepository(), config.nugetGroupRepository())) {
+      String query = "?q=&skip=0&take=26&prerelease=false&supportedFramework=net10.0&semVerLevel=2.0.0";
+      for (Endpoint endpoint : List.of(config.nexus, config.nexusPlus)) {
+        Map<String, Object> index = getJson(endpoint.repository(repository, "index.json"));
+        String search = nugetResourceBase(index, "SearchQueryService");
+        Exchange response = get(endpoint.absolute(search + query));
+        assertEquals(200, response.status(), repository + " search status");
+        assertEquals("application/json", normalizedContentType(response));
+        JsonNode body = MAPPER.readTree(response.body());
+        assertTrue(body.path("totalHits").asLong() > 0, repository + " search totalHits");
+        assertTrue(body.path("data").isArray());
+        assertTrue(body.path("data").size() > 0 && body.path("data").size() <= 26);
+        assertTrue(body.path("data").get(0).path("id").isTextual());
+        // Autocomplete is optional in V3; Nexus 3.94 does not advertise it.
+        if (nugetResourceTypes(index).stream().anyMatch(type -> type.startsWith("SearchAutocompleteService"))) {
+          String autocomplete = nugetResourceBase(index, "SearchAutocompleteService");
+          Exchange suggestionResponse = get(endpoint.absolute(autocomplete
+              + "?q=newtonsoft&take=10&prerelease=false&semVerLevel=2.0.0"));
+          assertEquals(200, suggestionResponse.status(), repository + " autocomplete status");
+          JsonNode suggestions = MAPPER.readTree(suggestionResponse.body());
+          assertTrue(suggestions.path("data").isArray());
+          assertTrue(suggestions.path("data").size() > 0, repository + " autocomplete results");
+        }
+      }
+    }
   }
 
   @Test

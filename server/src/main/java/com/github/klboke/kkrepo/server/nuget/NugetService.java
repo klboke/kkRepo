@@ -148,6 +148,10 @@ public class NugetService {
   }
 
   private MavenResponse proxyGet(RepositoryRuntime runtime, String rawPath, boolean headOnly) {
+    if (rawPath.equals("query") || rawPath.startsWith("query?")
+        || rawPath.equals("autocomplete") || rawPath.startsWith("autocomplete?")) {
+      return NugetSearchResources.get(proxy, objectMapper, runtime, rawPath, headOnly);
+    }
     return proxy.getAssetFromUrl(runtime, rawPath, remoteUrlForPath(runtime, rawPath), headOnly);
   }
 
