@@ -1353,6 +1353,23 @@ test_nuget() {
     --configfile "$restore_dir/NuGet.Config" \
     --packages "$packages_dir"
   test -f "$packages_dir/$(printf '%s' "$package" | tr '[:upper:]' '[:lower:]')/1.0.0/$(printf '%s' "$package" | tr '[:upper:]' '[:lower:]').1.0.0.nupkg"
+  # Restore alone does not exercise SearchQueryService (Visual Studio Browse/search).
+  local repository
+  for repository in nuget-proxy nuget-group; do
+    write_nuget_config "$dir/NuGet.Search.Config" "kkrepoSearch" "$KKREPO_URL/repository/$repository/index.json"
+    run_logged "nuget-search-$repository" dotnet package search Newtonsoft.Json \
+      --configfile "$dir/NuGet.Search.Config" --format json --take 10
+    python3 - "$ARTIFACT_DIR/nuget-search-$repository.log" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as stream:
+    output = stream.read()
+result = json.loads(output[output.index("{"):])
+assert not result.get("problems"), result.get("problems")
+assert any(package["id"].lower() == "newtonsoft.json"
+           for source in result["searchResult"] for package in source["packages"]), result
+PY
+  done
 }
 
 test_rubygems() {
