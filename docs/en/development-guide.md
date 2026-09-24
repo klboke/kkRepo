@@ -9,7 +9,7 @@ This document is for local development, testing, and debugging. Project overview
 - MySQL 8.0 or PostgreSQL 12+
 - Optional: Docker, for building images or starting local dependencies
 
-The service requires MySQL or PostgreSQL and blob storage at runtime. During development, you can use the local File blob store. Use S3-compatible object storage such as MinIO, RustFS, Aliyun OSS, or AWS S3 only when validating object storage behavior.
+The service requires MySQL or PostgreSQL and blob storage at runtime. During development, you can use the local File blob store. Use S3-compatible object storage such as RustFS, Aliyun OSS, or AWS S3 only when validating object storage behavior.
 
 Short-TTL performance cache uses in-process memory by default. HTTP sessions, authentication tickets, catalog broadcast, and cross-replica cache tokens use the shared database.
 
@@ -25,8 +25,10 @@ Local runtime requires either MySQL or PostgreSQL. MySQL remains the default Com
 | File blob store base directory | `blobs` |
 | S3 endpoint | `http://127.0.0.1:9000` |
 | S3 console | `http://127.0.0.1:9001` |
-| S3 access key / secret key | `minioadmin` / `minioadmin` |
+| S3 access key / secret key | `rustfsadmin` / `rustfsadmin` |
 | Development bucket | `kkrepo` |
+
+Existing development blob stores must update their saved access key and secret key to these defaults when switching the Compose credentials.
 
 ### One-Command Docker Dependencies
 
@@ -51,7 +53,7 @@ This starts:
 | --- | --- | --- | --- |
 | MySQL | `mysql:8.0` | `127.0.0.1:13306` | Creates the `kkrepo` database and `kkrepo` user automatically |
 | PostgreSQL | `postgres:16` (default development image; runtime minimum is 12) | `127.0.0.1:15432` | Optional `postgresql` profile; creates the same database and user |
-| RustFS | `rustfs/rustfs:latest` | S3 API: `http://127.0.0.1:9000`; Console: `http://127.0.0.1:9001` | S3-compatible object storage for validating OSS/S3 blob store behavior |
+| RustFS | `rustfs/rustfs:1.0.0` | S3 API: `http://127.0.0.1:9000`; Console: `http://127.0.0.1:9001` | S3-compatible object storage for validating OSS/S3 blob store behavior |
 
 Local data directories:
 
@@ -174,7 +176,7 @@ This suite publishes/uploads and then downloads/resolves through Maven, npm, PyP
 
 On pull requests, `run-client-e2e` validates the default JVM candidate. Use the independent `run-native-client-e2e` label for Spring AOT, runtime-hint, or Native packaging changes; that workflow builds a Native candidate and runs the Linux real-client matrix against both MySQL and PostgreSQL.
 
-Swift production-hardening evidence is split into separate lanes: the scheduled S3-compatible resilience job uses two replicas, PostgreSQL, and MinIO through the AWS S3 adapter for lease takeover, 429/5xx stale behavior, restart, large-package, and destructive backup/restore checks; Alibaba OSS Native remains adapter-contract coverage rather than a live endpoint run. The migration workflow uses Nexus 3.94 H2 to MySQL and PostgreSQL source to MySQL/PostgreSQL target lanes, and verifies fail-closed source profiles and proxy credentials, restart/resume, checksums, and idempotency.
+Swift production-hardening evidence is split into separate lanes: the scheduled S3-compatible resilience job uses two replicas, PostgreSQL, and RustFS through the AWS S3 adapter for lease takeover, 429/5xx stale behavior, restart, large-package, and destructive backup/restore checks; Alibaba OSS Native remains adapter-contract coverage rather than a live endpoint run. The migration workflow uses Nexus 3.94 H2 to MySQL and PostgreSQL source to MySQL/PostgreSQL target lanes, and verifies fail-closed source profiles and proxy credentials, restart/resume, checksums, and idempotency.
 
 ## Development Design Documents
 

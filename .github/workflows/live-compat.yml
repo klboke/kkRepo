@@ -755,11 +755,6 @@ jobs:
           java-version: "25"
           cache: maven
 
-      - name: Build pinned MinIO source fixtures
-        run: |
-          docker compose -f "$COMPOSE_FILE" build minio minio-init
-          docker builder prune --all --force
-
       - name: Set up cached Swift 6 client wrapper
         uses: ./.github/actions/setup-swift-e2e
         with:
@@ -777,7 +772,7 @@ jobs:
           source_sha: ${{ inputs.candidate_source_sha || github.sha }}
           target_tag: ${{ env.KKREPO_SWIFT_S3_IMAGE }}
 
-      - name: Start PostgreSQL, MinIO, Nexus, and both replicas
+      - name: Start PostgreSQL, RustFS, Nexus, and both replicas
         run: docker compose -f "$COMPOSE_FILE" up -d
 
       - name: Run Swift S3-compatible resilience E2E

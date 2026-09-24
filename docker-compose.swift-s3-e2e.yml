@@ -36,38 +36,41 @@ services:
       - nexus-postgresql-data:/var/lib/postgresql/data
       - ./scripts/docker-compat/nexus-postgres-init.sql:/docker-entrypoint-initdb.d/01-nexus.sql:ro
 
-  minio:
-    build:
-      context: scripts/ci/minio-e2e-images
-      target: minio
-    command: ["server", "/data", "--console-address", ":9001"]
+  rustfs:
+    image: rustfs/rustfs:1.0.0
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ENABLE: "false"
+      RUSTFS_ACCESS_KEY: RUSTFSE2E
+      RUSTFS_SECRET_KEY: rustfs-e2e-secret
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/minio/health/live"]
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9000/health/ready"]
       interval: 5s
       timeout: 5s
       retries: 24
       start_period: 10s
     volumes:
-      - minio-data:/data
+      - rustfs-data:/data
 
-  minio-init:
-    build:
-      context: scripts/ci/minio-e2e-images
-      target: mc
+  s3-init:
+    image: amazon/aws-cli:2.37.1
     depends_on:
-      minio:
+      rustfs:
         condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: RUSTFSE2E
+      AWS_SECRET_ACCESS_KEY: rustfs-e2e-secret
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ENDPOINT_URL: http://rustfs:9000
+      AWS_EC2_METADATA_DISABLED: "true"
     entrypoint:
       - /bin/sh
       - -ec
       - |
-        mc alias set local http://minio:9000 minioadmin minioadmin
-        mc mb --ignore-existing local/kkrepo-swift
-        mc anonymous set private local/kkrepo-swift
-        mc stat local/kkrepo-swift
+        aws s3api head-bucket --bucket kkrepo-swift 2>/dev/null || aws s3api create-bucket --bucket kkrepo-swift
+        aws s3api delete-bucket-policy --bucket kkrepo-swift
+        aws s3api head-bucket --bucket kkrepo-swift
 
   nexus:
     image: ${NEXUS_COMPAT_IMAGE:-sonatype/nexus3:3.94.0}
@@ -92,7 +95,7 @@ services:
     depends_on:
       postgresql:
         condition: service_healthy
-      minio-init:
+      s3-init:
         condition: service_completed_successfully
     environment: &kkrepo-environment
       KKREPO_DATABASE_TYPE: postgresql
@@ -120,7 +123,7 @@ services:
     depends_on:
       postgresql:
         condition: service_healthy
-      minio-init:
+      s3-init:
         condition: service_completed_successfully
     environment: *kkrepo-environment
     ports:
@@ -130,5 +133,5 @@ services:
 volumes:
   postgresql-data:
   nexus-postgresql-data:
-  minio-data:
+  rustfs-data:
   nexus-data:

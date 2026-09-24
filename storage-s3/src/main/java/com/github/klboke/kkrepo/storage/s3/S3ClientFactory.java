@@ -63,7 +63,7 @@ public class S3ClientFactory {
             // Disable aws-chunked streaming upload encoding: S3-compatible stores like Aliyun OSS
             // reject it ("aws-chunked encoding is not supported with the specified
             // x-amz-content-sha256 value", HTTP 400). With it off the SDK sends a plain body with a
-            // precomputed content length, which AWS S3, MinIO, OSS, COS, OBS all accept.
+            // precomputed content length, which AWS S3, RustFS, OSS, COS, OBS all accept.
             .chunkedEncodingEnabled(false)
             .pathStyleAccessEnabled(config.pathStyleAccess())
             .build());

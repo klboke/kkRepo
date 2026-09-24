@@ -9,7 +9,7 @@
 - MySQL 8.0 或 PostgreSQL 12+
 - 可选：Docker，用于构建镜像或启动本地依赖
 
-服务运行时依赖 MySQL 或 PostgreSQL 和 blob 存储。开发时可以使用本地 File blob store；需要验证对象存储行为时再使用 S3 兼容对象存储，例如 MinIO、RustFS、阿里云 OSS 或 AWS S3。
+服务运行时依赖 MySQL 或 PostgreSQL 和 blob 存储。开发时可以使用本地 File blob store；需要验证对象存储行为时再使用 S3 兼容对象存储，例如 RustFS、RustFS、阿里云 OSS 或 AWS S3。
 
 短 TTL 性能缓存默认使用进程内存；HTTP session、认证 ticket、catalog 广播和跨副本 cache token 使用共享数据库。
 
@@ -25,8 +25,10 @@
 | File blob store 基准目录 | `blobs` |
 | S3 endpoint | `http://127.0.0.1:9000` |
 | S3 控制台 | `http://127.0.0.1:9001` |
-| S3 access key / secret key | `minioadmin` / `minioadmin` |
+| S3 access key / secret key | `rustfsadmin` / `rustfsadmin` |
 | 开发 bucket | `kkrepo` |
+
+现有开发 blob store 在切换 Compose 凭据后，需要同步更新已保存的 access key 和 secret key 为上述默认值。
 
 ### Docker 一键启动依赖
 
@@ -51,7 +53,7 @@ export SPRING_DATASOURCE_URL='jdbc:postgresql://127.0.0.1:15432/kkrepo'
 | --- | --- | --- | --- |
 | MySQL | `mysql:8.0` | `127.0.0.1:13306` | 自动创建 `kkrepo` 数据库和 `kkrepo` 用户 |
 | PostgreSQL | `postgres:16`（默认开发镜像；运行时最低版本为 12） | `127.0.0.1:15432` | 可选 `postgresql` profile；创建相同数据库和用户 |
-| RustFS | `rustfs/rustfs:latest` | S3 API: `http://127.0.0.1:9000`；Console: `http://127.0.0.1:9001` | S3 兼容对象存储，用于验证 OSS/S3 blob store 行为 |
+| RustFS | `rustfs/rustfs:1.0.0` | S3 API: `http://127.0.0.1:9000`；Console: `http://127.0.0.1:9001` | S3 兼容对象存储，用于验证 OSS/S3 blob store 行为 |
 
 本地数据目录：
 
@@ -174,7 +176,7 @@ scripts/ci/run-live-compat.sh client-e2e
 
 Pull Request 上的 `run-client-e2e` 用于验证默认 JVM 候选镜像。Spring AOT、runtime hint 或 Native 打包变更应使用独立的 `run-native-client-e2e` 标签；该 workflow 会构建 Native 候选镜像，并分别针对 MySQL 和 PostgreSQL 运行 Linux 真实客户端矩阵。
 
-Swift 的生产加固证据拆分为独立 lane：定时 S3-compatible resilience job 使用双副本、PostgreSQL 和通过 AWS S3 adapter 访问的 MinIO，验证 lease takeover、429/5xx stale 行为、restart、大 package 和破坏式备份恢复；阿里云 OSS Native 仍是 adapter contract 覆盖，不声称真实 endpoint E2E。迁移 workflow 使用 Nexus 3.94 H2 源到 MySQL，以及 PostgreSQL 源到 MySQL/PostgreSQL 目标的 lane，并验证 source profile/proxy credential fail closed、restart/resume、checksum 和幂等性。
+Swift 的生产加固证据拆分为独立 lane：定时 S3-compatible resilience job 使用双副本、PostgreSQL 和通过 AWS S3 adapter 访问的 RustFS，验证 lease takeover、429/5xx stale 行为、restart、大 package 和破坏式备份恢复；阿里云 OSS Native 仍是 adapter contract 覆盖，不声称真实 endpoint E2E。迁移 workflow 使用 Nexus 3.94 H2 源到 MySQL，以及 PostgreSQL 源到 MySQL/PostgreSQL 目标的 lane，并验证 source profile/proxy credential fail closed、restart/resume、checksum 和幂等性。
 
 ## 开发设计文档
 

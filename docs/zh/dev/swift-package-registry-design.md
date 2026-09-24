@@ -18,7 +18,7 @@
 
 实现以共享数据库和 blob store 为正确性边界：发布 lease/fencing、release revision、GitHub tag/commit binding、group source binding、negative cache、rate-limit 水位和 tombstone 均持久化；进程内状态只用于可重建热路径。CI 同时运行 MySQL/PostgreSQL contract test、Nexus 3.94.x 黑盒矩阵、SwiftPM 5.7/5.10/6.x、macOS Xcode、Windows proxy resolve/build、双副本 S3-compatible resilience 和 Nexus 迁移场景。
 
-存储验证边界需要明确：定时 resilience E2E 使用 PostgreSQL 双副本，通过 AWS S3-compatible adapter 访问 MinIO，并执行破坏式数据库/object 备份恢复。阿里云 OSS Native 引擎有 adapter contract 测试，但本分支不声称已运行真实 OSS Native endpoint E2E。
+存储验证边界需要明确：定时 resilience E2E 使用 PostgreSQL 双副本，通过 AWS S3-compatible adapter 访问 RustFS，并执行破坏式数据库/object 备份恢复。阿里云 OSS Native 引擎有 adapter contract 测试，但本分支不声称已运行真实 OSS Native endpoint E2E。
 
 ## 调研基线
 
@@ -346,7 +346,7 @@ Nexus 3.92+ Instance Migrator 对 Swift hosted 迁移 archive 和 manifest，自
 - Group 同 version 不同 archive/checksum 时，metadata、manifest、archive 和 signature 始终来自同一优先成员。
 - `Package.resolved` 首次生成、重复构建、切换副本、重启和 cache 过期后 checksum 保持稳定。
 - SwiftPM 5.7 registry/proxy resolve/build、5.9+/Swift 6.x 的 HTTPS login/publish/resolve/build，以及 Xcode registry dependency 的 E2E。
-- S3-compatible live：多 MiB hosted package、共享 429/5xx 水位与 stale fallback、lease 过期接管、双副本 restart，以及 PostgreSQL/MinIO 的破坏式备份恢复。OSS Native 仅计入 adapter contract，不计为 live endpoint E2E。
+- S3-compatible live：多 MiB hosted package、共享 429/5xx 水位与 stale fallback、lease 过期接管、双副本 restart，以及 PostgreSQL/RustFS 的破坏式备份恢复。OSS Native 仅计入 adapter contract，不计为 live endpoint E2E。
 
 ## 实施记录
 
@@ -380,7 +380,7 @@ Nexus 3.92+ Instance Migrator 对 Swift hosted 迁移 archive 和 manifest，自
 ### ✅ 迁移与生产加固
 
 - Nexus 3.92.x-3.94.x verified-shape definition/hosted data migration、dry-run/resume/checksum/report，以及版本/shape 漂移 fail-closed。
-- Data repair/rebuild、cleanup/tombstone contract、多 MiB package live E2E、1,200 tag 有界单测，以及 PostgreSQL/MinIO 双副本破坏式备份恢复。
+- Data repair/rebuild、cleanup/tombstone contract、多 MiB package live E2E、1,200 tag 有界单测，以及 PostgreSQL/RustFS 双副本破坏式备份恢复。
 - Nexus 3.94.x reference matrix、H2 源到 MySQL 与 PostgreSQL 源到 MySQL/PostgreSQL 目标的 migration E2E，以及运维文档。
 
 验收：Nexus hosted fixture 迁移后 component/release/archive/manifest/checksum 对账通过，重复迁移行数精确幂等，三个源/目标数据库 lane 和跨副本恢复通过；无法恢复的 proxy secret 必须留在 manual/offline 状态。
@@ -392,6 +392,6 @@ Swift Package Registry 不能仅以“接口能返回 ZIP”视为完成。完�
 - [x] Hosted、GitHub-backed proxy 和 group recipe 均可从 Admin/API 创建并由真实客户端使用。
 - [x] Registry v1 endpoint、media negotiation、problem details、headers、checksum、signature 和 immutable release 语义与官方协议/Nexus reference 对齐。
 - [x] `swift package-registry login/publish`、registry identity dependency、SCM replacement、resolve/build 和 Xcode 场景进入 E2E。
-- [x] MySQL/PostgreSQL 的 schema/persistence contract、PostgreSQL + MinIO S3-compatible 双副本 live E2E 与 OSS Native adapter contract 分层验证；不声称真实 OSS Native endpoint E2E。
+- [x] MySQL/PostgreSQL 的 schema/persistence contract、PostgreSQL + RustFS S3-compatible 双副本 live E2E 与 OSS Native adapter contract 分层验证；不声称真实 OSS Native endpoint E2E。
 - [x] Nexus 迁移支持 dry-run、resume、checksum 和报告；只有 3.92.x-3.94.x verified shape 是 `FULL`，版本/shape/secret 无法识别时 fail closed。
 - [x] Compat test、模块测试、server 集成测试、真实 SwiftPM E2E 和文档全部进入 CI。

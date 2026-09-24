@@ -49,7 +49,7 @@
 | Raw | hosted / proxy / group | PUT 上传、GET/HEAD 读取、group/proxy fallback、管理台上传 | 支持 | 默认迁移 hosted；proxy 可选 | `RawRepositoryBlackBoxCompatibilityTest`、`ComponentUploadBlackBoxCompatibilityTest` |
 | Docker / OCI | hosted / proxy / group | Registry V2 login、hosted push/pull、proxy pull、group pull、manifest、blob、tag、upload session、cross-repo mount、referrers、content cleanup、Docker Hub `library` namespace 补偿 | 支持 manifest/tag/blob metadata | Docker hosted 仓库数据迁移走 Nexus Repository Data | `DockerRegistryBlackBoxCompatibilityTest`、Docker server/protocol 测试、OCI conformance workflow、[Docker / OCI 实现说明](dev/docker-repository-implementation-plan.md) |
 
-Swift 验证证据按层级区分。Nexus 3.94.x 对比覆盖 canonical JSON/`Link`、`v`/`V` tag、renamed GitHub repository、不可变发布、group 重排/nested 与跨副本并发读；candidate black-box check 覆盖 active/revoked/expired `GenericToken` 和真实 5 MiB 限制拒绝。Server 和 persistence contract 覆盖 moving tag 不可变性、1,200 tag 分页上界、cleanup 和失败传播。真实客户端/存储 lane 覆盖 SwiftPM 5.7/5.10/6.x、macOS Xcode、Windows proxy resolve、多 MiB package、共享 429/5xx 水位与 stale fallback、通过 AWS S3-compatible adapter 访问 MinIO，以及双副本下破坏式数据库/object 备份恢复。阿里云 OSS Native 引擎当前由 adapter contract 验证，本矩阵不声称已运行真实 OSS Native endpoint E2E。
+Swift 验证证据按层级区分。Nexus 3.94.x 对比覆盖 canonical JSON/`Link`、`v`/`V` tag、renamed GitHub repository、不可变发布、group 重排/nested 与跨副本并发读；candidate black-box check 覆盖 active/revoked/expired `GenericToken` 和真实 5 MiB 限制拒绝。Server 和 persistence contract 覆盖 moving tag 不可变性、1,200 tag 分页上界、cleanup 和失败传播。真实客户端/存储 lane 覆盖 SwiftPM 5.7/5.10/6.x、macOS Xcode、Windows proxy resolve、多 MiB package、共享 429/5xx 水位与 stale fallback、通过 AWS S3-compatible adapter 访问 RustFS，以及双副本下破坏式数据库/object 备份恢复。阿里云 OSS Native 引擎当前由 adapter contract 验证，本矩阵不声称已运行真实 OSS Native endpoint E2E。
 
 ## 管理和安全兼容
 

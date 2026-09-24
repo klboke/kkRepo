@@ -461,10 +461,12 @@ The registry specification makes `POST /login` optional and allows `501 Not Impl
 server omits it. kkRepo implements this endpoint, so candidate assertions expect `200` for valid
 credentials and `401` for invalid credentials; `501` is a reference-only/N-A branch for kkrepo.
 
-The scheduled S3-compatible resilience lane runs two kkrepo replicas with PostgreSQL and MinIO
+The scheduled S3-compatible resilience lane runs two kkrepo replicas with PostgreSQL and RustFS
 through the AWS S3 adapter. It covers a multi-megabyte package, shared 429/5xx waterlines and stale
 fallback, expired-lease takeover, restart, and destructive database/object backup-restore. Alibaba
 OSS Native is covered by adapter contracts; this suite does not claim a live OSS Native endpoint.
+The fixture pins RustFS 1.0.0 and AWS CLI 2.37.1. Bucket initialization and object backup/restore
+use the standard S3 API and `aws s3 sync`; the RustFS data volume is private to the Compose project.
 
 Swift migration is `FULL` only for Nexus 3.92.x-3.94.x sources whose datastore asset shape is
 verified. The live Nexus 3.94 matrix covers H2 to MySQL and PostgreSQL source to MySQL/PostgreSQL

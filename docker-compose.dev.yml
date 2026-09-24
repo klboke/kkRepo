@@ -52,15 +52,15 @@ services:
     command: ["sh", "-c", "chown -R 10001:10001 /data"]
 
   rustfs:
-    image: rustfs/rustfs:latest
+    image: rustfs/rustfs:1.0.0
     container_name: kkrepo-rustfs
     depends_on:
       rustfs-perms:
         condition: service_completed_successfully
     environment:
       RUSTFS_ADDRESS: ":9000"
-      RUSTFS_ACCESS_KEY: minioadmin
-      RUSTFS_SECRET_KEY: minioadmin
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
       RUSTFS_CONSOLE_ENABLE: "true"
     ports:
       - "9000:9000"

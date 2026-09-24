@@ -51,7 +51,7 @@ This project follows a pragmatic release process. Stable releases call out migra
 ### Changed
 
 - Quickstart defaults, Dockerfile packaging, deployment documentation, Helm application version, runtime checks, and the optional scanner profile now use `1.0.2`.
-- The AWS SDK and GraalVM Native Build Tools were refreshed; MinIO E2E fixtures now pull from Quay. (#292, #293, #294)
+- The AWS SDK and GraalVM Native Build Tools were refreshed. (#292, #293)
 
 ### Compatibility And Validation
 
