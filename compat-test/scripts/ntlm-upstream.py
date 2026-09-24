@@ -103,6 +103,9 @@ class Upstream(http.server.BaseHTTPRequestHandler):
                                  'description': 'NTLM fixture', 'dependencyGroups': []},
                 'packageContent': flat + 'ntlm.fixture/1.0.0/ntlm.fixture.1.0.0.nupkg'}
         if path == root + 'index.json':
+            if getattr(self.server, 'invalid_index', False):
+                self.send(200, b'{"version":"3.0.0"}', {'Content-Type': 'application/json'})
+                return
             body = {'version': '3.0.0', 'resources': [
                 {'@id': flat, '@type': 'PackageBaseAddress/3.0.0'},
                 {'@id': registration, '@type': 'RegistrationsBaseUrl/3.4.0'},
@@ -170,7 +173,7 @@ def exercise(base, credentials, nexus, fixture, dotnet=False):
     else:
         payload.update(recipe='nuget-proxy', blobStoreName='default', strictContentTypeValidation=False,
                        proxy={'remoteUrl': fixture.remote + 'index.json', 'contentMaxAgeMinutes': 0,
-                              'metadataMaxAgeMinutes': 0, 'autoBlock': False, 'remoteUsername': USER,
+                              'metadataMaxAgeMinutes': 60, 'autoBlock': False, 'remoteUsername': USER,
                               'remotePassword': PASSWORD, 'remoteAuthenticationType': 'ntlm',
                               'remoteNtlmDomain': DOMAIN, 'remoteNtlmHost': 'KKREPO'})
     path = catalog + ('/nuget/proxy' if nexus else '')
@@ -183,6 +186,14 @@ def exercise(base, credentials, nexus, fixture, dotnet=False):
         flat = next(r['@id'] for r in json.loads(index)['resources'] if r['@type'] == 'PackageBaseAddress/3.0.0')
         flat_path = urllib.parse.urlsplit(flat).path.rstrip('/') + '/'
         print(('Nexus' if nexus else 'kkRepo'), 'advertised flat resource:', flat, flush=True)
+        if not nexus:
+            # A transient HTTP 200 with an invalid index must not poison the one-hour cache.
+            fixture.invalid_index = True
+            try:
+                status, _, _ = request(base, flat_path + 'ntlm.fixture/index.json', credentials)
+                assert status == 502, ('invalid service index', status)
+            finally:
+                fixture.invalid_index = False
         status, versions, _ = request(base, flat_path + 'ntlm.fixture/index.json', credentials)
         assert status == 200 and json.loads(versions)['versions'] == ['1.0.0'], (status, versions)
         resources = json.loads(index)['resources']

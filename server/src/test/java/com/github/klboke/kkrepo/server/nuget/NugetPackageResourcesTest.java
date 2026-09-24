@@ -74,7 +74,7 @@ class NugetPackageResourcesTest {
     for (RepositoryRuntime repository : List.of(runtime(), group)) {
       request.setQueryString("sig=a%2Bb%2Fc&expires=123"
           + (repository.type() == RepositoryType.GROUP ? "&_kkrepoNugetSource="
-              + NugetResourceLinkToken.issue(group.id(), runtime().id(), path + "?sig=a%2Bb%2Fc&expires=123") : ""));
+              + NugetResourceLinkToken.issue(group.id(), runtime().id(), path + "?sig=a%2Bb%2Fc&expires=123", NugetResourceLinkToken.identity(INDEX, proxy.flat)) : ""));
       for (boolean head : List.of(false, true)) {
         MavenResponse response = service.get(repository, path, BASE, request, head);
         if (response.body() != null) response.body().close();
@@ -84,6 +84,46 @@ class NugetPackageResourcesTest {
         assertEquals(head, proxy.lastHead);
       }
     }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"_kkrepoNugetSource=upstream%2Bsignature", "a=1&%5FkkrepoNugetSource=opaque&&b=2&_kkrepoNugetSource=second"})
+  void sourceNamedQueriesRemainOpaqueThroughProxyAndGroupLinks(String query) throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    String suffix = "arp.projects/1.10.21/arp.projects.1.10.21.nupkg";
+    proxy.metadata = "{\"packageContent\":\"" + FLAT + suffix + "?" + query + "\"}";
+    NugetService service = new NugetService(null, proxy, null, MAPPER);
+    for (RepositoryRuntime entry : List.of(runtime(), group(2L, runtime()))) {
+      URI link = URI.create(json(service.get(entry, "v3/registration5-semver1/arp.projects/1.10.21.json",
+          BASE, null, false)).path("packageContent").asText());
+      MockHttpServletRequest request = new MockHttpServletRequest();
+      request.setQueryString(link.getRawQuery());
+      service.get(entry, "v3-flatcontainer/" + suffix, BASE, request, false).body().close();
+      assertEquals(FLAT + suffix + "?" + query, proxy.urls.getLast());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"configured", "flat", "registration"})
+  void oldGroupProofCannotSendQueriesToAReconfiguredResource(String changed) throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    String registrationPath = "v3/registration5-semver1/arp.projects/1.10.21.json";
+    proxy.metadata = "{\"@id\":\"" + REG + "arp.projects/1.10.21.json?sig=secret\","
+        + "\"packageContent\":\"" + FLAT + "arp.projects/1.10.21/arp.projects.1.10.21.nupkg?sig=secret\"}";
+    NugetService service = new NugetService(null, proxy, null, MAPPER);
+    JsonNode document = json(service.get(group(2L, runtime()), registrationPath, BASE, null, false));
+    URI link = URI.create(document.path(changed.equals("registration") ? "@id" : "packageContent").asText());
+    if (changed.equals("flat")) proxy.flat = "https://different.example/flat/";
+    if (changed.equals("registration")) proxy.registration = "https://different.example/registration/";
+    RepositoryRuntime current = changed.equals("configured") ? runtime(1L, "https://different.example/index.json") : runtime();
+    proxy.urls.clear();
+    MockHttpServletRequest request = new MockHttpServletRequest();
+    request.setQueryString(link.getRawQuery());
+    String path = link.getRawPath().substring(URI.create(BASE).getRawPath().length());
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(group(2L, current), path, BASE, request, false));
+    assertEquals(List.of(current.proxyRemoteUrl()), proxy.urls);
+    assertEquals(0, proxy.contentRequests);
   }
 
   @Test
@@ -120,7 +160,7 @@ class NugetPackageResourcesTest {
     JsonNode leaf = json(service.get(group, leafPath, BASE, null, false));
     assertEquals(List.of(4L, 1L, 1L), proxy.repositories);
     assertEquals(BASE + leafPath + "?api-version=7&_kkrepoNugetSource="
-        + NugetResourceLinkToken.issue(group.id(), runtime().id(), leafPath + "?api-version=7") + "#leaf",
+        + NugetResourceLinkToken.issue(group.id(), runtime().id(), leafPath + "?api-version=7", NugetResourceLinkToken.identity(INDEX, REG)) + "#leaf",
         leaf.path("@id").asText());
     URI link = URI.create(leaf.path("packageContent").asText());
     assertEquals(URI.create(BASE + packagePath).getPath(), link.getPath());
@@ -160,7 +200,7 @@ class NugetPackageResourcesTest {
     RecordingProxy proxy = new RecordingProxy();
     MockHttpServletRequest request = new MockHttpServletRequest();
     request.setQueryString("sig=a%2Bb&&%5FkkrepoNugetSource=" + NugetResourceLinkToken.issue(2L, 1L,
-        "v3/registration5-semver1/arp.projects/index.json?sig=a%2Bb&&") + "&");
+        "v3/registration5-semver1/arp.projects/index.json?sig=a%2Bb&&", NugetResourceLinkToken.identity(INDEX, REG)) + "&");
     new NugetService(null, proxy, null, MAPPER).get(group(2L, runtime()),
         "v3/registration5-semver1/arp.projects/index.json", BASE, request, false).body().close();
     assertEquals(REG + "arp.projects/index.json?sig=a%2Bb&&", proxy.urls.getLast());
@@ -411,7 +451,7 @@ class NugetPackageResourcesTest {
     RecordingProxy proxy = new RecordingProxy();
     NugetService service = new NugetService(null, proxy, null, MAPPER);
     String path = "v3-flatcontainer/arp.projects/1.10.21/arp.projects.1.10.21.nupkg";
-    String token = NugetResourceLinkToken.issue(2L, 1L, path + "?sig=secret");
+    String token = NugetResourceLinkToken.issue(2L, 1L, path + "?sig=secret", NugetResourceLinkToken.identity(INDEX, FLAT));
     for (String query : List.of("sig=secret&_kkrepoNugetSource=" + token.replaceFirst("1\\.", "4."),
         "sig=changed&_kkrepoNugetSource=" + token, "sig=secret&_kkrepoNugetSource=" + token + "x")) {
       MockHttpServletRequest request = new MockHttpServletRequest();
@@ -531,8 +571,12 @@ class NugetPackageResourcesTest {
   }
 
   private static RepositoryRuntime runtime(long id) {
+    return runtime(id, INDEX);
+  }
+
+  private static RepositoryRuntime runtime(long id, String configuredIndex) {
     return new RepositoryRuntime(id, "nuget-" + id, RepositoryFormat.NUGET, RepositoryType.PROXY,
-        "nuget-proxy", true, 1L, null, null, null, true, INDEX, 1440, 5, true, null, List.of());
+        "nuget-proxy", true, 1L, null, null, null, true, configuredIndex, 1440, 5, true, null, List.of());
   }
 
   private static JsonNode json(MavenResponse response) throws IOException {
@@ -559,6 +603,14 @@ class NugetPackageResourcesTest {
     private final Map<String, String> registrationCache = new HashMap<>();
     private int contentRequests;
     RecordingProxy() { super(null, null, null, null, null, null, null, null); }
+
+    @Override
+    public MavenResponse getMetadataFromUrlHidden(
+        RepositoryRuntime runtime, String path, String url, boolean head,
+        String validationId, java.util.function.UnaryOperator<java.io.InputStream> validator) {
+      MavenResponse response = getMetadataFromUrlHidden(runtime, path, url, false);
+      return MavenResponse.ok(validator.apply(response.body()), response.contentLength(), "application/json", null, null);
+    }
 
     @Override
     public MavenResponse getMetadataFromUrlHidden(RepositoryRuntime runtime, String path, String url, boolean head) {

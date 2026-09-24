@@ -74,7 +74,8 @@ public class NugetService {
         RepositoryRuntime member = findProxyMember(runtime, memberId);
         if (member == null) throw new MavenExceptions.MavenNotFoundException(path.rawPath());
         // A signed link belongs to this member. Never retry it against another upstream.
-        return proxyGet(member, packageRequest.path(), repositoryBaseUrl, runtime.id(), headOnly);
+        return NugetUpstreamResources.getPackage(proxy, objectMapper, member, packageRequest.path(),
+            repositoryBaseUrl, runtime.id(), headOnly, packageRequest.sourceToken());
       }
     }
     return switch (path.kind()) {
@@ -292,6 +293,9 @@ public class NugetService {
     String base = repositoryBaseUrl.endsWith("/") ? repositoryBaseUrl : repositoryBaseUrl + "/";
     List<Map<String, Object>> items = new ArrayList<>();
     for (String version : versions(runtime, packageId)) {
+      int prerelease = version.indexOf('-');
+      boolean semVer2Only = version.contains("+") || (prerelease >= 0 && version.substring(prerelease + 1).contains("."));
+      if (registrationPrefix.equals("v3/registration5-semver1/") && semVer2Only) continue;
       Map<String, Object> catalogEntry = new LinkedHashMap<>();
       catalogEntry.put("@id", base + registrationPrefix + normalizedId + "/" + version + ".json");
       catalogEntry.put("id", packageId);
@@ -648,7 +652,7 @@ public class NugetService {
   }
 
   private static String packageRequestPath(String path, HttpServletRequest request) {
-    return NugetUpstreamResources.isPackagePath(path) ? packageRequest(path, request).path() : path;
+    return NugetUpstreamResources.isPackagePath(path) ? queryStringPath(path, request) : path;
   }
 
   private static RepositoryRuntime findProxyMember(RepositoryRuntime group, long id) {
@@ -668,22 +672,25 @@ public class NugetService {
     String fullPath = queryStringPath(path, request);
     int queryIndex = fullPath.indexOf('?');
     if (queryIndex < 0) return new PackageRequest(path, null);
-    List<String> forwarded = new ArrayList<>();
-    String sourceToken = null;
-    for (String pair : fullPath.substring(queryIndex + 1).split("&", -1)) {
-      String[] parts = pair.split("=", 2);
-      try {
-        if (URLDecoder.decode(parts[0], StandardCharsets.UTF_8).equals(NugetUpstreamResources.SOURCE_MEMBER_QUERY)) {
-          if (sourceToken != null || parts.length != 2) throw new IllegalArgumentException();
-          sourceToken = URLDecoder.decode(parts[1], StandardCharsets.UTF_8);
-        } else {
-          forwarded.add(pair); // Preserve the exact encoding of opaque signatures.
+    List<String> forwarded = new ArrayList<>(java.util.Arrays.asList(fullPath.substring(queryIndex + 1).split("&", -1)));
+    int sourceIndex = -1;
+    try {
+      for (int i = 0; i < forwarded.size(); i++) {
+        String name = forwarded.get(i).split("=", 2)[0];
+        if (URLDecoder.decode(name, StandardCharsets.UTF_8).equals(NugetUpstreamResources.SOURCE_MEMBER_QUERY)) {
+          sourceIndex = i;
         }
-      } catch (IllegalArgumentException e) {
-        throw new MavenExceptions.MavenNotFoundException("Invalid NuGet resource source");
       }
+      if (sourceIndex < 0) return new PackageRequest(fullPath, null);
+      // The proof is appended last. Preserve earlier same-named parameters in their exact
+      // positions: they are opaque upstream data covered by the proof.
+      String[] source = forwarded.remove(sourceIndex).split("=", 2);
+      if (source.length != 2) throw new IllegalArgumentException();
+      return new PackageRequest(path + (forwarded.isEmpty() ? "" : "?" + String.join("&", forwarded)),
+          URLDecoder.decode(source[1], StandardCharsets.UTF_8));
+    } catch (IllegalArgumentException e) {
+      throw new MavenExceptions.MavenNotFoundException("Invalid NuGet resource source");
     }
-    return new PackageRequest(path + (forwarded.isEmpty() ? "" : "?" + String.join("&", forwarded)), sourceToken);
   }
 
   private static String queryStringPath(String path, HttpServletRequest request) {

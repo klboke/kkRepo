@@ -615,6 +615,80 @@ class RawProxyServiceTest {
   }
 
   @Test
+  void invalidMetadataNeverReplacesCacheAndUnvalidatedBadEntriesRecoverImmediately() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = nugetRuntime();
+    String path = "_nuget/index/test";
+    String url = runtime.proxyRemoteUrl();
+    String fingerprint = RawProxyService.remoteSourceFingerprint(runtime, url);
+    CachedAssetMetadata bad = snapshot(Instant.now(), Map.of(RawProxyService.REMOTE_SOURCE_FINGERPRINT, fingerprint));
+    var current = new java.util.concurrent.atomic.AtomicReference<>(bad);
+    when(fixture.cache.find(eq(runtime.id()), eq(path), any())).thenAnswer(call -> Optional.of(current.get()));
+    when(fixture.reader.serveSnapshot(eq(bad), eq(false), eq(path), any())).thenAnswer(call ->
+        MavenResponse.ok(new ByteArrayInputStream("broken".getBytes()), 6, "application/json", null, null));
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.reader.serveSnapshot(any(), eq(true), eq(path), any())).thenReturn(expected);
+    BlobStorage storage = mock(BlobStorage.class);
+    when(fixture.registry.forBlobStoreId(1L)).thenReturn(storage);
+    AssetRecord asset = bad.toAssetRecord();
+    RawAssetWriter.Stored stored = new RawAssetWriter.Stored(asset, bad.toBlobRecord(), null, true, null);
+    when(fixture.reader.serve(asset, true, path, "ATTACHMENT")).thenReturn(expected);
+    when(fixture.writer.writeHidden(eq(runtime), eq(storage), eq(1L), eq(path), any(),
+        eq("application/json"), any(), eq("proxy"), isNull(), eq(true))).thenAnswer(call -> {
+          assertEquals("valid", new String(((InputStream) call.getArgument(4)).readAllBytes()));
+          Map<String, String> extras = call.getArgument(6);
+          assertEquals("test-index-v1", extras.get("metadataValidation"));
+          current.set(snapshot(Instant.now(), Map.of(RawProxyService.REMOTE_SOURCE_FINGERPRINT, fingerprint,
+              "metadataValidation", "test-index-v1")));
+          return stored;
+        });
+    var fetches = new java.util.concurrent.atomic.AtomicInteger();
+    doAnswer(call -> {
+      HttpRemoteFetcher.Request request = call.getArgument(0);
+      assertEquals(null, request.etag());
+      HttpRemoteFetcher.ResultHandler<?> handler = call.getArgument(2);
+      return handler.handle(new HttpRemoteFetcher.Result(200, Map.of("Content-Type", "application/json"),
+          new ByteArrayInputStream((fetches.getAndIncrement() == 0 ? "broken" : "valid").getBytes())));
+    }).when(fixture.fetcher).fetchWithBodyRetry(any(), eq(path), any());
+    java.util.function.UnaryOperator<InputStream> validator = body -> {
+      try (body) {
+        byte[] bytes = body.readAllBytes();
+        if (!new String(bytes).equals("valid")) throw new MavenExceptions.BadUpstreamException("Invalid metadata");
+        return new ByteArrayInputStream(bytes);
+      } catch (IOException e) { throw new MavenExceptions.BadUpstreamException("Invalid metadata"); }
+    };
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> fixture.service.getMetadataFromUrlHidden(runtime, path, url, true, "test-index-v1", validator));
+    verify(fixture.writer, never()).writeHidden(any(), any(), eq(1L), any(), any(), any(), any(), any(), any(), eq(true));
+    assertSame(expected, fixture.service.getMetadataFromUrlHidden(runtime, path, url, true, "test-index-v1", validator));
+    assertSame(expected, fixture.service.getMetadataFromUrlHidden(runtime, path, url, true, "test-index-v1", validator));
+    assertEquals(2, fetches.get());
+    verify(fixture.writer, times(1)).writeHidden(any(), any(), eq(1L), any(), any(), any(), any(), any(), any(), eq(true));
+  }
+
+  @Test
+  void invalidRefreshKeepsLastValidatedMetadataWithoutExtendingItsTtl() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = nugetRuntime();
+    String path = "_nuget/index/test";
+    CachedAssetMetadata cached = snapshot(Instant.EPOCH, Map.of(
+        RawProxyService.REMOTE_SOURCE_FINGERPRINT, RawProxyService.remoteSourceFingerprint(runtime, runtime.proxyRemoteUrl()),
+        "metadataValidation", "test-index-v1"));
+    when(fixture.cache.find(eq(runtime.id()), eq(path), any())).thenReturn(Optional.of(cached));
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.reader.serveSnapshot(cached, true, path, "ATTACHMENT")).thenReturn(expected);
+    doAnswer(call -> {
+      HttpRemoteFetcher.ResultHandler<?> handler = call.getArgument(2);
+      return handler.handle(new HttpRemoteFetcher.Result(200, Map.of(), InputStream.nullInputStream()));
+    }).when(fixture.fetcher).fetchWithBodyRetry(any(), eq(path), any());
+    assertSame(expected, fixture.service.getMetadataFromUrlHidden(runtime, path, runtime.proxyRemoteUrl(), true,
+        "test-index-v1", body -> { throw new MavenExceptions.BadUpstreamException("Invalid metadata"); }));
+    verify(fixture.writer, never()).writeHidden(any(), any(), eq(1L), any(), any(), any(), any(), any(), any(), eq(true));
+    verify(fixture.assetDao, never()).touchAssetLastUpdated(eq(cached.assetId()), any());
+    verify(fixture.proxyStateDao, never()).recordSuccess(eq(runtime.id()), any());
+  }
+
+  @Test
   void rejectsNonProxyRepositories() {
     Fixture fixture = fixture();
 

@@ -153,6 +153,14 @@ class NugetUpstreamResourcesTest {
     }
 
     @Override
+    public MavenResponse getMetadataFromUrlHidden(
+        RepositoryRuntime runtime, String path, String url, boolean head,
+        String validationId, java.util.function.UnaryOperator<java.io.InputStream> validator) {
+      MavenResponse response = getMetadataFromUrlHidden(runtime, path, url, false);
+      return MavenResponse.ok(validator.apply(response.body()), response.contentLength(), "application/json", null, null);
+    }
+
+    @Override
     public MavenResponse getMetadataFromUrlHidden(RepositoryRuntime runtime, String path, String url, boolean headOnly) {
       urls.add(url);
       paths.add(path);

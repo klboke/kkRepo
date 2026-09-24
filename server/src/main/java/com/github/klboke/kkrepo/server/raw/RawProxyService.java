@@ -17,12 +17,14 @@ import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import java.io.IOException;
+import java.io.InputStream;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.UnaryOperator;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -211,6 +213,15 @@ public class RawProxyService {
         HttpRemoteFetcher.TimeoutProfile.METADATA, ComponentBinding.hidden(), "", headOnly);
   }
 
+  /** Validates bounded protocol metadata before publishing it to the durable cache. */
+  public MavenResponse getMetadataFromUrlHidden(
+      RepositoryRuntime runtime, String path, String remoteUrl, boolean headOnly,
+      String validationId, UnaryOperator<InputStream> validator) {
+    return getAssetFromUrl(runtime, path, remoteUrl, runtime.metadataMaxAgeMinutesOrDefault(),
+        HttpRemoteFetcher.TimeoutProfile.METADATA,
+        new ComponentBinding(ComponentMode.HIDDEN, null, new MetadataValidation(validationId, validator)), "", headOnly);
+  }
+
   public MavenResponse getMetadataFromUrlWithComponent(
       RepositoryRuntime runtime,
       String path,
@@ -239,7 +250,8 @@ public class RawProxyService {
       boolean headOnly) {
     String sourceFingerprint = remoteSourceFingerprint(runtime, remoteUrl);
     Optional<CachedAssetMetadata> cached = sourceCompatible(
-        lookupCached(runtime, path), sourceFingerprint, runtime);
+        lookupCached(runtime, path), sourceFingerprint, runtime)
+        .filter(snapshot -> validCachedMetadata(runtime, path, snapshot, componentBinding.validation()));
     Instant now = Instant.now();
     if (cached.isPresent() && isFresh(cached.get(), maxAgeMinutes, now)
         && (runtime.format() != RepositoryFormat.NUGET || canRevalidate(runtime, cached, sourceFingerprint))) {
@@ -257,6 +269,20 @@ public class RawProxyService {
     return fetchAndCacheUrl(
         runtime, path, remoteUrl, sourceFingerprint, cached, headOnly, now, timeoutProfile,
         componentBinding, browsePath);
+  }
+
+  private boolean validCachedMetadata(
+      RepositoryRuntime runtime, String path, CachedAssetMetadata snapshot, MetadataValidation validation) {
+    if (validation == null || (snapshot.blob() != null
+        && validation.id().equals(stringAttr(snapshot.blob().attributes(), "metadataValidation")))) return true;
+    // Old unvalidated entries may be malformed. Treat them as misses, without deleting a
+    // concurrent replica's replacement. A successful write uses the normal shared invalidation.
+    try (InputStream body = reader.serveSnapshot(snapshot, false, path, runtime.rawContentDispositionOrDefault()).body();
+         InputStream checked = validation.validator().apply(body)) {
+      return true;
+    } catch (MavenExceptions.BadUpstreamException | IOException invalid) {
+      return false;
+    }
   }
 
   private Optional<CachedAssetMetadata> lookupCached(RepositoryRuntime runtime, String path) {
@@ -351,8 +377,15 @@ public class RawProxyService {
         }
         if (status >= 200 && status < 300) {
           negativeCache.invalidate(runtime, negativeCachePath(runtime, path, sourceFingerprint));
-          RawAssetWriter.Stored stored = persist(
-              runtime, path, result, sourceFingerprint, componentBinding, browsePath);
+          RawAssetWriter.Stored stored;
+          try {
+            stored = persist(runtime, path, result, sourceFingerprint, componentBinding, browsePath);
+          } catch (MavenExceptions.BadUpstreamException invalid) {
+            if (componentBinding.validation() != null && cached.isPresent()) {
+              return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
+            }
+            throw invalid;
+          }
           try {
             proxyStateDao.recordSuccess(runtime.id(), now);
             if (headOnly) {
@@ -401,21 +434,26 @@ public class RawProxyService {
       String browsePath) {
     Map<String, String> extras = new HashMap<>();
     extras.put(REMOTE_SOURCE_FINGERPRINT, sourceFingerprint);
+    InputStream body = result.body();
+    if (componentBinding.validation() != null) {
+      body = componentBinding.validation().validator().apply(body);
+      extras.put("metadataValidation", componentBinding.validation().id());
+    }
     if (result.etag() != null) extras.put("remoteEtag", result.etag());
     if (result.lastModified() != null) extras.put("remoteLastModified", result.lastModified().toString());
     String clientIp = ProxyRequestAudit.currentClientIp();
     return switch (componentBinding.mode()) {
       case PER_ASSET -> writer.write(
-          runtime, blobStorage(runtime), requireBlobStore(runtime), path, result.body(),
+          runtime, blobStorage(runtime), requireBlobStore(runtime), path, body,
           result.contentType(), extras, "proxy", clientIp, true);
       case NONE -> writer.writeUnindexed(
-          runtime, blobStorage(runtime), requireBlobStore(runtime), path, result.body(),
+          runtime, blobStorage(runtime), requireBlobStore(runtime), path, body,
           result.contentType(), extras, "proxy", clientIp, true);
       case HIDDEN -> writer.writeHidden(
-          runtime, blobStorage(runtime), requireBlobStore(runtime), path, result.body(),
+          runtime, blobStorage(runtime), requireBlobStore(runtime), path, body,
           result.contentType(), extras, "proxy", clientIp, true);
       case EXPLICIT -> writer.writeWithComponentAtBrowsePath(
-          runtime, blobStorage(runtime), requireBlobStore(runtime), path, result.body(),
+          runtime, blobStorage(runtime), requireBlobStore(runtime), path, body,
           result.contentType(), extras, "proxy", clientIp,
           componentBinding.component(), browsePath, true);
     };
@@ -549,24 +587,26 @@ public class RawProxyService {
     EXPLICIT
   }
 
-  private record ComponentBinding(ComponentMode mode, ComponentRecord component) {
+  private record MetadataValidation(String id, UnaryOperator<InputStream> validator) {}
+
+  private record ComponentBinding(ComponentMode mode, ComponentRecord component, MetadataValidation validation) {
     private static ComponentBinding perAsset() {
-      return new ComponentBinding(ComponentMode.PER_ASSET, null);
+      return new ComponentBinding(ComponentMode.PER_ASSET, null, null);
     }
 
     private static ComponentBinding none() {
-      return new ComponentBinding(ComponentMode.NONE, null);
+      return new ComponentBinding(ComponentMode.NONE, null, null);
     }
 
     private static ComponentBinding hidden() {
-      return new ComponentBinding(ComponentMode.HIDDEN, null);
+      return new ComponentBinding(ComponentMode.HIDDEN, null, null);
     }
 
     private static ComponentBinding explicit(ComponentRecord component) {
       if (component == null) {
         throw new IllegalArgumentException("Explicit component is required");
       }
-      return new ComponentBinding(ComponentMode.EXPLICIT, component);
+      return new ComponentBinding(ComponentMode.EXPLICIT, component, null);
     }
   }
 }

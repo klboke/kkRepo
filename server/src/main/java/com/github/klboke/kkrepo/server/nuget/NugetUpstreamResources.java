@@ -65,10 +65,17 @@ final class NugetUpstreamResources {
   static MavenResponse getPackage(
       RawProxyService proxy, ObjectMapper mapper, RepositoryRuntime runtime,
       String path, String repositoryBaseUrl, Long groupId, boolean headOnly) {
+    return getPackage(proxy, mapper, runtime, path, repositoryBaseUrl, groupId, headOnly, null);
+  }
+
+  static MavenResponse getPackage(
+      RawProxyService proxy, ObjectMapper mapper, RepositoryRuntime runtime,
+      String path, String repositoryBaseUrl, Long groupId, boolean headOnly, String sourceToken) {
     JsonNode resources;
     try {
       resources = resources(proxy, mapper, runtime);
     } catch (MavenExceptions.BadUpstreamException failure) {
+      if (sourceToken != null) throw failure;
       String canonical = path.split("\\?", 2)[0];
       if (canonical.startsWith(FLAT)
           && (canonical.endsWith(".nupkg") || canonical.endsWith(".nuspec") || canonical.endsWith("/index.json"))) {
@@ -78,6 +85,7 @@ final class NugetUpstreamResources {
     }
     if (path.startsWith(FLAT)) {
       String endpoint = resourceUrl(resources, "PackageBaseAddress", List.of("/3.0.0"));
+      NugetResourceLinkToken.requireResource(sourceToken, NugetResourceLinkToken.identity(runtime.proxyRemoteUrl(), endpoint));
       String remoteUrl = appendPath(endpoint, path.substring(FLAT.length()));
       int query = path.indexOf('?');
       String assetPath = query < 0 ? path : path.substring(0, query);
@@ -92,6 +100,7 @@ final class NugetUpstreamResources {
     String endpoint = resourceUrl(resources, "RegistrationsBaseUrl",
         REGISTRATION.equals(registrationPrefix) ? LEGACY_REGISTRATION_VERSIONS : REGISTRATION_VERSIONS);
     String flatEndpoint = resourceUrl(resources, "PackageBaseAddress", List.of("/3.0.0"));
+    NugetResourceLinkToken.requireResource(sourceToken, NugetResourceLinkToken.identity(runtime.proxyRemoteUrl(), endpoint));
     String remoteUrl = appendPath(endpoint, path.substring(registrationPrefix.length()));
     // Registration bodies contain package links. Refresh them when either resource moves,
     // even when discovery expires before an otherwise fresh registration cache entry.
@@ -99,7 +108,7 @@ final class NugetUpstreamResources {
         runtime, cacheKey("registration", remoteUrl + "\n" + flatEndpoint), remoteUrl, false);
     JsonNode document = readJson(mapper, response, MAX_REGISTRATION_BYTES, "registration");
     String base = repositoryBaseUrl.endsWith("/") ? repositoryBaseUrl : repositoryBaseUrl + "/";
-    rewriteLinks(document, endpoint, flatEndpoint, base, registrationPrefix, groupId, runtime.id());
+    rewriteLinks(document, endpoint, flatEndpoint, base, registrationPrefix, groupId, runtime);
     try {
       byte[] bytes = mapper.writeValueAsBytes(document);
       return headOnly ? MavenResponse.noBody(200, bytes.length, "application/json", null, null)
@@ -147,7 +156,7 @@ final class NugetUpstreamResources {
             : "?" + uri.getRawQuery() + (extraQuery.isEmpty() ? "" : "&" + extraQuery));
   }
 
-  private static void rewriteLinks(JsonNode node, String registration, String flat, String base, String registrationPrefix, Long groupId, long sourceMember) {
+  private static void rewriteLinks(JsonNode node, String registration, String flat, String base, String registrationPrefix, Long groupId, RepositoryRuntime runtime) {
     if (node.isObject()) {
       ObjectNode object = (ObjectNode) node;
       for (String field : List.of("@id", "parent", "registration", "packageContent")) {
@@ -155,17 +164,17 @@ final class NugetUpstreamResources {
         if (value != null && value.isTextual()) {
           boolean packageContent = field.equals("packageContent");
           object.put(field, localLink(value.asText(), packageContent ? flat : registration,
-              base, packageContent ? FLAT : registrationPrefix, groupId, sourceMember));
+              base, packageContent ? FLAT : registrationPrefix, groupId, runtime));
         }
       }
     }
     if (node.isContainerNode()) {
-      for (JsonNode child : node) rewriteLinks(child, registration, flat, base, registrationPrefix, groupId, sourceMember);
+      for (JsonNode child : node) rewriteLinks(child, registration, flat, base, registrationPrefix, groupId, runtime);
     }
   }
 
   private static String localLink(
-      String value, String endpoint, String base, String prefix, Long groupId, long sourceMember) {
+      String value, String endpoint, String base, String prefix, Long groupId, RepositoryRuntime runtime) {
     URI source = URI.create(endpoint);
     URI link;
     try {
@@ -193,7 +202,8 @@ final class NugetUpstreamResources {
     if (groupId != null && query != null && !query.isEmpty()) {
       // Bind to the same raw path representation supplied by the NuGet servlet boundary.
       String requestPath = NugetPathParser.normalize(prefix + suffix) + "?" + query;
-      target += "&" + SOURCE_MEMBER_QUERY + "=" + NugetResourceLinkToken.issue(groupId, sourceMember, requestPath);
+      target += "&" + SOURCE_MEMBER_QUERY + "=" + NugetResourceLinkToken.issue(groupId, runtime.id(), requestPath,
+          NugetResourceLinkToken.identity(runtime.proxyRemoteUrl(), endpoint));
     }
     return base + target + (link.getRawFragment() == null ? "" : "#" + link.getRawFragment());
   }
@@ -286,6 +296,24 @@ final class NugetUpstreamResources {
     }
   }
 
+  private static final class InvalidServiceIndex extends MavenExceptions.BadUpstreamException {
+    InvalidServiceIndex() { super("Invalid NuGet service index"); }
+  }
+
+  private static InputStream validateServiceIndex(ObjectMapper mapper, InputStream body) {
+    try (body) {
+      if (body == null) throw new InvalidServiceIndex();
+      byte[] bytes = body.readNBytes(MAX_INDEX_BYTES + 1);
+      if (bytes.length > MAX_INDEX_BYTES) throw new InvalidServiceIndex();
+      JsonNode index = readJson(mapper, MavenResponse.ok(new ByteArrayInputStream(bytes), bytes.length,
+          "application/json", null, null), MAX_INDEX_BYTES, "service index");
+      if (!index.path("resources").isArray()) throw new InvalidServiceIndex();
+      return new ByteArrayInputStream(bytes);
+    } catch (IOException | MavenExceptions.BadUpstreamException invalid) {
+      throw new InvalidServiceIndex();
+    }
+  }
+
   private static JsonNode resources(RawProxyService proxy, ObjectMapper mapper, RepositoryRuntime runtime) {
     String configured = runtime.proxyRemoteUrl();
     String indexUrl = requireHttpUrl(configured == null ? "" : configured.trim());
@@ -300,8 +328,9 @@ final class NugetUpstreamResources {
     boolean rootFallback = allowRootFallback && !URI.create(indexUrl).getPath().toLowerCase(java.util.Locale.ROOT).endsWith(".json");
     MavenResponse response;
     try {
-      response = proxy.getMetadataFromUrlHidden(runtime, cacheKey("index", indexUrl), indexUrl, false);
-    } catch (MavenExceptions.MavenNotFoundException failure) {
+      response = proxy.getMetadataFromUrlHidden(runtime, cacheKey("index", indexUrl), indexUrl, false,
+          "nuget-service-index-v1", body -> validateServiceIndex(mapper, body));
+    } catch (MavenExceptions.MavenNotFoundException | InvalidServiceIndex failure) {
       if (!rootFallback) throw failure;
       return resources(proxy, mapper, runtime, repositoryRootIndexUrl(indexUrl), false);
     }
