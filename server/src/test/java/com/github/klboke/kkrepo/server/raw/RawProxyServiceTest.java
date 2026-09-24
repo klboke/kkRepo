@@ -18,6 +18,7 @@ import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
@@ -36,6 +37,7 @@ import java.io.InputStream;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.List;
+import java.util.HexFormat;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
@@ -348,6 +350,63 @@ class RawProxyServiceTest {
     var response = new MavenErrorAdvice().upstream(error);
     assertEquals(502, response.getStatusCode().value());
     assertEquals("Upstream IO error: IOException", response.getBody().get("message"));
+  }
+
+  @Test
+  void nugetUpgradeKeepsLegacyMetadataAndContentUsableEvenWhenBlocked() throws Exception {
+    RepositoryRuntime runtime = nugetRuntime();
+    String legacy = HexFormat.of().formatHex(PersistenceHashes.sha256("raw-proxy-source-v1", runtime.proxyRemoteUrl()));
+    for (String path : List.of("_nuget/index/abc", "v3-flatcontainer/demo/1.0.0/demo.1.0.0.nupkg")) {
+      for (Instant updatedAt : List.of(Instant.now(), Instant.EPOCH)) {
+        Fixture fixture = fixture();
+        CachedAssetMetadata cached = snapshot(updatedAt, Map.of(RawProxyService.REMOTE_SOURCE_FINGERPRINT, legacy));
+        when(fixture.cache.find(eq(runtime.id()), eq(path), any())).thenReturn(Optional.of(cached));
+        when(fixture.proxyStateDao.isBlocked(eq(runtime.id()), any())).thenReturn(true);
+        MavenResponse expected = MavenResponse.noBody(200);
+        when(fixture.reader.serveSnapshot(cached, true, path, "ATTACHMENT")).thenReturn(expected);
+        MavenResponse actual = path.startsWith("_nuget/")
+            ? fixture.service.getMetadataFromUrlHidden(runtime, path, runtime.proxyRemoteUrl(), true)
+            : fixture.service.getAssetFromUrl(runtime, path, "https://upstream.example.test/flat2/demo.nupkg", true);
+        assertSame(expected, actual);
+        verify(fixture.fetcher, never()).fetchWithBodyRetry(any(), any(), any());
+      }
+    }
+  }
+
+  @Test
+  void nugetUpgradeRejectsLegacyCacheFromADifferentConfiguredIndex() {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = nugetRuntime();
+    String legacy = HexFormat.of().formatHex(PersistenceHashes.sha256(
+        "raw-proxy-source-v1", "https://previous.example.test/v3/index.json"));
+    String path = "v3-flatcontainer/demo/1.0.0/demo.1.0.0.nupkg";
+    CachedAssetMetadata cached = snapshot(Instant.now(), Map.of(RawProxyService.REMOTE_SOURCE_FINGERPRINT, legacy));
+    when(fixture.cache.find(eq(runtime.id()), eq(path), any())).thenReturn(Optional.of(cached));
+    when(fixture.proxyStateDao.isBlocked(eq(runtime.id()), any())).thenReturn(true);
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> fixture.service.getAssetFromUrl(runtime, path, "https://upstream.example.test/flat2/demo.nupkg", false));
+    verify(fixture.reader, never()).serveSnapshot(cached, false, path, "ATTACHMENT");
+  }
+
+  @Test
+  void rotatingNugetSignaturesReuseFreshContentWhileResourceMovesInvalidateIt() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = nugetRuntime();
+    String path = "v3-flatcontainer/demo/1.0.0/demo.1.0.0.nupkg";
+    String stable = "https://upstream.example.test/flat2/demo/1.0.0/demo.1.0.0.nupkg?tenant=feed";
+    CachedAssetMetadata cached = snapshot(Instant.now(), Map.of(
+        RawProxyService.REMOTE_SOURCE_FINGERPRINT, RawProxyService.remoteSourceFingerprint(runtime, stable)));
+    when(fixture.cache.find(eq(runtime.id()), eq(path), any())).thenReturn(Optional.of(cached));
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.reader.serveSnapshot(cached, true, path, "ATTACHMENT")).thenReturn(expected);
+    for (String signature : List.of("first", "rotated", "a%2Bb%2Fc")) {
+      assertSame(expected, fixture.service.getAssetFromUrl(runtime, path, stable + "&sig=" + signature, stable, true));
+    }
+    verify(fixture.fetcher, never()).fetchWithBodyRetry(any(), any(), any());
+    when(fixture.proxyStateDao.isBlocked(eq(runtime.id()), any())).thenReturn(true);
+    String moved = stable.replace("/flat2/", "/new-flat2/");
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> fixture.service.getAssetFromUrl(runtime, path, moved + "&sig=rotated", moved, true));
   }
 
   @Test

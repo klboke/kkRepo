@@ -23,6 +23,7 @@ import java.util.zip.GZIPInputStream;
 
 /** NuGet V3 resources are absolute URLs, not paths relative to the service index. */
 final class NugetUpstreamResources {
+  static final String SOURCE_MEMBER_QUERY = "_kkrepoNugetSource";
   private static final int MAX_INDEX_BYTES = 1024 * 1024;
   private static final int MAX_REGISTRATION_BYTES = 32 * 1024 * 1024;
   private static final String FLAT = "v3-flatcontainer/";
@@ -56,7 +57,7 @@ final class NugetUpstreamResources {
 
   static MavenResponse getPackage(
       RawProxyService proxy, ObjectMapper mapper, RepositoryRuntime runtime,
-      String path, String repositoryBaseUrl, boolean headOnly) {
+      String path, String repositoryBaseUrl, boolean groupRequest, boolean headOnly) {
     JsonNode resources = resources(proxy, mapper, runtime);
     if (path.startsWith(FLAT)) {
       String endpoint = resourceUrl(resources, "PackageBaseAddress", List.of("/3.0.0"));
@@ -67,7 +68,8 @@ final class NugetUpstreamResources {
         return proxy.getMetadataFromUrlHidden(runtime, cacheKey("versions", remoteUrl), remoteUrl, headOnly);
       }
       // Preserve canonical asset paths, Browse visibility and download-policy checks for package bodies.
-      return proxy.getAssetFromUrl(runtime, assetPath, remoteUrl, headOnly);
+      String cacheSourceUrl = appendPath(endpoint, assetPath.substring(FLAT.length()));
+      return proxy.getAssetFromUrl(runtime, assetPath, remoteUrl, cacheSourceUrl, headOnly);
     }
     String endpoint = resourceUrl(resources, "RegistrationsBaseUrl", REGISTRATION_VERSIONS);
     String flatEndpoint = resourceUrl(resources, "PackageBaseAddress", List.of("/3.0.0"));
@@ -78,7 +80,7 @@ final class NugetUpstreamResources {
         runtime, cacheKey("registration", remoteUrl + "\n" + flatEndpoint), remoteUrl, false);
     JsonNode document = readJson(mapper, response, MAX_REGISTRATION_BYTES, "registration");
     String base = repositoryBaseUrl.endsWith("/") ? repositoryBaseUrl : repositoryBaseUrl + "/";
-    rewriteLinks(document, endpoint, flatEndpoint, base);
+    rewriteLinks(document, endpoint, flatEndpoint, base, groupRequest ? runtime.id() : null);
     try {
       byte[] bytes = mapper.writeValueAsBytes(document);
       return headOnly ? MavenResponse.noBody(200, bytes.length, "application/json", null, null)
@@ -114,24 +116,24 @@ final class NugetUpstreamResources {
             : "?" + uri.getRawQuery() + (extraQuery.isEmpty() ? "" : "&" + extraQuery));
   }
 
-  private static void rewriteLinks(JsonNode node, String registration, String flat, String base) {
+  private static void rewriteLinks(JsonNode node, String registration, String flat, String base, Long sourceMember) {
     if (node.isObject()) {
       ObjectNode object = (ObjectNode) node;
       for (String field : List.of("@id", "parent", "registration", "packageContent")) {
         JsonNode value = object.get(field);
         if (value != null && value.isTextual()) {
-          String rewritten = localLink(value.asText(), registration, base + REGISTRATION);
-          rewritten = localLink(rewritten, flat, base + FLAT);
+          String rewritten = localLink(value.asText(), registration, base + REGISTRATION, sourceMember);
+          rewritten = localLink(rewritten, flat, base + FLAT, sourceMember);
           object.put(field, rewritten);
         }
       }
     }
     if (node.isContainerNode()) {
-      for (JsonNode child : node) rewriteLinks(child, registration, flat, base);
+      for (JsonNode child : node) rewriteLinks(child, registration, flat, base, sourceMember);
     }
   }
 
-  private static String localLink(String value, String endpoint, String localBase) {
+  private static String localLink(String value, String endpoint, String localBase, Long sourceMember) {
     URI source = URI.create(endpoint);
     int query = endpoint.indexOf('?');
     String root = query < 0 ? endpoint : endpoint.substring(0, query);
@@ -150,7 +152,16 @@ final class NugetUpstreamResources {
           .filter(pair -> !resourceKeys.contains(pair.split("=", 2)[0])).collect(Collectors.joining("&"));
       suffix = suffix.substring(0, suffixQuery) + (remaining.isEmpty() ? "" : "?" + remaining) + fragment;
     }
-    return localBase + suffix;
+    // Query-bearing links can carry feed-specific credentials. Keep the group URL for
+    // authorization, but route them only to their originating member on every replica.
+    // Ordinary links retain normal group lookup/merge behavior.
+    int fragmentIndex = suffix.indexOf('#');
+    String fragment = fragmentIndex < 0 ? "" : suffix.substring(fragmentIndex);
+    String target = fragmentIndex < 0 ? suffix : suffix.substring(0, fragmentIndex);
+    if (sourceMember != null && target.contains("?")) {
+      target += "&" + SOURCE_MEMBER_QUERY + "=" + sourceMember;
+    }
+    return localBase + target + fragment;
   }
 
   private static JsonNode readJson(ObjectMapper mapper, MavenResponse response, int maxBytes, String kind) {

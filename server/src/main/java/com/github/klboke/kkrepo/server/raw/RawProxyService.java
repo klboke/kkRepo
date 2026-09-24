@@ -91,7 +91,7 @@ public class RawProxyService {
     String remoteUrl = buildRemoteUrl(runtime.proxyRemoteUrl(), remotePath);
     String sourceFingerprint = remoteSourceFingerprint(runtime, remoteUrl);
     Optional<CachedAssetMetadata> cached = sourceCompatible(
-        lookupCached(runtime, path), sourceFingerprint);
+        lookupCached(runtime, path), sourceFingerprint, runtime);
     Instant now = Instant.now();
     if (cached.isPresent() && isFresh(cached.get(), runtime.contentMaxAgeMinutesOrDefault(), now)) {
       return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
@@ -113,6 +113,14 @@ public class RawProxyService {
     return getAssetFromUrl(
         runtime, path, remoteUrl, runtime.contentMaxAgeMinutesOrDefault(),
         HttpRemoteFetcher.TimeoutProfile.CONTENT, ComponentBinding.perAsset(), headOnly);
+  }
+
+  /** Separates a stable discovered content URL from per-request download signatures. */
+  public MavenResponse getAssetFromUrl(
+      RepositoryRuntime runtime, String path, String remoteUrl, String cacheSourceUrl, boolean headOnly) {
+    return getAssetFromUrl(
+        runtime, path, remoteUrl, runtime.contentMaxAgeMinutesOrDefault(),
+        HttpRemoteFetcher.TimeoutProfile.CONTENT, ComponentBinding.perAsset(), path, cacheSourceUrl, headOnly);
   }
 
   public MavenResponse getAssetFromUrlWithComponent(
@@ -227,9 +235,20 @@ public class RawProxyService {
       ComponentBinding componentBinding,
       String browsePath,
       boolean headOnly) {
-    String sourceFingerprint = remoteSourceFingerprint(runtime, remoteUrl);
+    return getAssetFromUrl(
+        runtime, path, remoteUrl, maxAgeMinutes, timeoutProfile, componentBinding, browsePath, remoteUrl, headOnly);
+  }
+
+  private MavenResponse getAssetFromUrl(
+      RepositoryRuntime runtime, String path, String remoteUrl, int maxAgeMinutes,
+      HttpRemoteFetcher.TimeoutProfile timeoutProfile,
+      ComponentBinding componentBinding,
+      String browsePath,
+      String cacheSourceUrl,
+      boolean headOnly) {
+    String sourceFingerprint = remoteSourceFingerprint(runtime, cacheSourceUrl);
     Optional<CachedAssetMetadata> cached = sourceCompatible(
-        lookupCached(runtime, path), sourceFingerprint);
+        lookupCached(runtime, path), sourceFingerprint, runtime);
     Instant now = Instant.now();
     if (cached.isPresent() && isFresh(cached.get(), maxAgeMinutes, now)) {
       return reader.serveSnapshot(cached.get(), headOnly, path, runtime.rawContentDispositionOrDefault());
@@ -438,13 +457,23 @@ public class RawProxyService {
    */
   private static Optional<CachedAssetMetadata> sourceCompatible(
       Optional<CachedAssetMetadata> cached,
-      String expectedFingerprint) {
+      String expectedFingerprint,
+      RepositoryRuntime runtime) {
     if (cached.isEmpty() || cached.get().blob() == null) {
       return cached;
     }
     String actual = stringAttr(
         cached.get().blob().attributes(), REMOTE_SOURCE_FINGERPRINT);
-    return actual == null || actual.equals(expectedFingerprint) ? cached : Optional.empty();
+    if (actual == null || actual.equals(expectedFingerprint)) return cached;
+    // Before resource discovery, NuGet used the configured index alone as its identity.
+    // Keep those entries usable during an offline upgrade; a later 200 refresh records
+    // the discovered resource. Reconfigured indexes must still reject the old entry.
+    if (runtime.format() == RepositoryFormat.NUGET && runtime.proxyRemoteUrl() != null
+        && actual.equals(HexFormat.of().formatHex(
+            PersistenceHashes.sha256("raw-proxy-source-v1", runtime.proxyRemoteUrl())))) {
+      return cached;
+    }
+    return Optional.empty();
   }
 
   static String remoteSourceFingerprint(RepositoryRuntime runtime, String remoteUrl) {

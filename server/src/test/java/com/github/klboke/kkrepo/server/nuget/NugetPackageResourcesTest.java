@@ -18,6 +18,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -71,19 +72,22 @@ class NugetPackageResourcesTest {
     RepositoryRuntime group = new RepositoryRuntime(2L, "group", RepositoryFormat.NUGET, RepositoryType.GROUP,
         "nuget-group", true, 1L, null, null, null, true, null, null, null, null, null, List.of(runtime()));
     for (RepositoryRuntime repository : List.of(runtime(), group)) {
+      request.setQueryString("sig=a%2Bb%2Fc&expires=123"
+          + (repository.type() == RepositoryType.GROUP ? "&_kkrepoNugetSource=1" : ""));
       for (boolean head : List.of(false, true)) {
         MavenResponse response = service.get(repository, path, BASE, request, head);
         if (response.body() != null) response.body().close();
         assertEquals(FLAT + "arp.projects/1.10.21/" + file + "?tenant=feed&sig=a%2Bb%2Fc&expires=123",
             proxy.urls.getLast());
         assertEquals(path, proxy.paths.getLast());
+        assertEquals(FLAT + "arp.projects/1.10.21/" + file + "?tenant=feed", proxy.cacheSources.getLast());
         assertEquals(head, proxy.lastHead);
       }
     }
   }
 
   @Test
-  void groupKeepsHostedPathsCanonicalWhenFollowingASignedPackageLink() throws Exception {
+  void groupKeepsHostedPathsCanonicalAndDoesNotBroadcastUnscopedQueries() throws Exception {
     RecordingProxy proxy = new RecordingProxy();
     RawHostedService hosted = mock(RawHostedService.class);
     RepositoryRuntime hostedRepository = new RepositoryRuntime(3L, "hosted", RepositoryFormat.NUGET, RepositoryType.HOSTED,
@@ -99,7 +103,69 @@ class NugetPackageResourcesTest {
     assertEquals(200, response.status());
     verify(hosted).get(hostedRepository, path, true);
     assertEquals(path, proxy.paths.getLast());
-    assertEquals(FLAT + "arp.projects/1.10.21/arp.projects.1.10.21.nupkg?sig=signature", proxy.urls.getLast());
+    assertEquals(FLAT + "arp.projects/1.10.21/arp.projects.1.10.21.nupkg", proxy.urls.getLast());
+  }
+
+  @Test
+  void signedLinksStayWithinTheOriginatingNestedGroupMember() throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    RepositoryRuntime first = runtime(4L);
+    proxy.missingRepository = first.id();
+    RepositoryRuntime group = group(2L, first, group(3L, runtime()));
+    NugetService service = new NugetService(null, proxy, null, MAPPER);
+    String leafPath = "v3/registration5-semver1/arp.projects/1.10.21.json";
+    String packagePath = "v3-flatcontainer/arp.projects/1.10.21/arp.projects.1.10.21.nupkg";
+    proxy.metadata = "{\"@id\":\"" + REG + "arp.projects/1.10.21.json?api-version=7#leaf\","
+        + "\"packageContent\":\"" + FLAT + "arp.projects/1.10.21/arp.projects.1.10.21.nupkg?sig=a%2Bb%2Fc&expires=123\"}";
+    JsonNode leaf = json(service.get(group, leafPath, BASE, null, false));
+    assertEquals(List.of(4L, 1L, 1L), proxy.repositories);
+    assertEquals(BASE + leafPath + "?api-version=7&_kkrepoNugetSource=1#leaf", leaf.path("@id").asText());
+    URI link = URI.create(leaf.path("packageContent").asText());
+    assertEquals(URI.create(BASE + packagePath).getPath(), link.getPath());
+    MockHttpServletRequest request = new MockHttpServletRequest();
+    request.setQueryString(link.getRawQuery());
+    for (boolean head : List.of(false, true)) {
+      proxy.repositories.clear();
+      MavenResponse response = service.get(group, packagePath, BASE, request, head);
+      if (response.body() != null) response.body().close();
+      assertEquals(List.of(1L, 1L), proxy.repositories);
+      assertEquals(FLAT + "arp.projects/1.10.21/arp.projects.1.10.21.nupkg?sig=a%2Bb%2Fc&expires=123",
+          proxy.urls.getLast());
+    }
+    // A failed origin must not send its signature to a different group member.
+    proxy.repositories.clear();
+    proxy.missingRepository = 1L;
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(group, packagePath, BASE, request, false));
+    assertEquals(List.of(1L), proxy.repositories);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"99", "invalid", "0", "-1", "1&_kkrepoNugetSource=4", "1&%5FkkrepoNugetSource=1"})
+  void invalidOrNonMemberSourcesNeverFetchAnUpstream(String source) {
+    RecordingProxy proxy = new RecordingProxy();
+    MockHttpServletRequest request = new MockHttpServletRequest();
+    request.setQueryString("sig=secret&_kkrepoNugetSource=" + source);
+    NugetService service = new NugetService(null, proxy, null, MAPPER);
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> service.get(group(2L, runtime()), "v3-flatcontainer/arp.projects/1.10.21/arp.projects.nuspec",
+            BASE, request, false));
+    assertTrue(proxy.repositories.isEmpty());
+  }
+
+  @Test
+  void encodedSourceSelectorIsConsumedBeforeUpstreamFetch() throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    MockHttpServletRequest request = new MockHttpServletRequest();
+    request.setQueryString("sig=a%2Bb&%5FkkrepoNugetSource=%31");
+    new NugetService(null, proxy, null, MAPPER).get(group(2L, runtime()),
+        "v3/registration5-semver1/arp.projects/index.json", BASE, request, false).body().close();
+    assertEquals(REG + "arp.projects/index.json?sig=a%2Bb", proxy.urls.getLast());
+  }
+
+  private static RepositoryRuntime group(long id, RepositoryRuntime... members) {
+    return new RepositoryRuntime(id, "group-" + id, RepositoryFormat.NUGET, RepositoryType.GROUP,
+        "nuget-group", true, 1L, null, null, null, true, null, null, null, null, null, List.of(members));
   }
 
   @Test
@@ -255,7 +321,11 @@ class NugetPackageResourcesTest {
   }
 
   private static RepositoryRuntime runtime() {
-    return new RepositoryRuntime(1L, "nuget", RepositoryFormat.NUGET, RepositoryType.PROXY,
+    return runtime(1L);
+  }
+
+  private static RepositoryRuntime runtime(long id) {
+    return new RepositoryRuntime(id, "nuget-" + id, RepositoryFormat.NUGET, RepositoryType.PROXY,
         "nuget-proxy", true, 1L, null, null, null, true, INDEX, 1440, 5, true, null, List.of());
   }
 
@@ -266,6 +336,9 @@ class NugetPackageResourcesTest {
   private static final class RecordingProxy extends RawProxyService {
     private final List<String> urls = new ArrayList<>();
     private final List<String> paths = new ArrayList<>();
+    private final List<String> cacheSources = new ArrayList<>();
+    private final List<Long> repositories = new ArrayList<>();
+    private Long missingRepository;
     private String flat = FLAT;
     private String registration = REG;
     private String registrationType = "RegistrationsBaseUrl/3.6.0";
@@ -281,6 +354,8 @@ class NugetPackageResourcesTest {
 
     @Override
     public MavenResponse getMetadataFromUrlHidden(RepositoryRuntime runtime, String path, String url, boolean head) {
+      repositories.add(runtime.id());
+      if (missingRepository != null && runtime.id() == missingRepository) throw new MavenExceptions.MavenNotFoundException(path);
       String data = path.startsWith("_nuget/index/") ? index == null
           ? "{\"resources\":[{\"@type\":\"PackageBaseAddress/3.0.0\",\"@id\":\"" + flat
               + "\"},{\"@type\":\"" + registrationType + "\",\"@id\":\"" + registration + "\"}]}" : index : metadata;
@@ -291,7 +366,10 @@ class NugetPackageResourcesTest {
     }
 
     @Override
-    public MavenResponse getAssetFromUrl(RepositoryRuntime runtime, String path, String url, boolean head) {
+    public MavenResponse getAssetFromUrl(
+        RepositoryRuntime runtime, String path, String url, String cacheSource, boolean head) {
+      repositories.add(runtime.id());
+      cacheSources.add(cacheSource);
       contentRequests++;
       return record(path, url, head, "package");
     }
