@@ -26,6 +26,83 @@ export SPRING_DATASOURCE_PASSWORD='<password>'
 
 不要仅通过修改 URL 把一个已有安装从一种数据库切换到另一种数据库。应创建新库，用经过验证的数据库迁移流程复制数据，校验行数、checksum 和应用行为后再切流。
 
+## AWS RDS / Aurora IAM 认证
+
+设置 `kkrepo.database.auth=iam`（`KKREPO_DATABASE_AUTH=iam`），即可为 RDS/Aurora
+MySQL 或 PostgreSQL 后端启用 IAM 认证。默认值为 `password`。服务端通过现有 HikariCP
+动态凭证接口与 AWS SDK v2 `RdsUtilities` 签发 token，无需 AWS JDBC Wrapper、替换
+JDBC URL scheme 或额外挂载 jar。
+
+```bash
+export KKREPO_DATABASE_AUTH=iam
+export KKREPO_DATABASE_IAM_REGION=us-east-1
+export SPRING_DATASOURCE_USERNAME=kkrepo
+unset SPRING_DATASOURCE_PASSWORD
+
+# PostgreSQL / Aurora PostgreSQL；将 RDS CA bundle 挂载到下列路径。
+export KKREPO_DATABASE_TYPE=postgresql
+export SPRING_DATASOURCE_URL='jdbc:postgresql://mydb.abcdefghijkl.us-east-1.rds.amazonaws.com:5432/kkrepo?sslmode=verify-full&sslrootcert=/etc/rds/global-bundle.pem'
+
+# MySQL / Aurora MySQL 替代配置；将 RDS CA 导入运行时 truststore。
+# 若单独挂载 truststore，可在 URL 中配置 Connector/J 的
+# trustCertificateKeyStoreUrl 和 trustCertificateKeyStorePassword。
+# export KKREPO_DATABASE_TYPE=mysql
+# export SPRING_DATASOURCE_URL='jdbc:mysql://mydb.abcdefghijkl.us-east-1.rds.amazonaws.com:3306/kkrepo?sslMode=VERIFY_IDENTITY&serverTimezone=UTC'
+```
+
+`kkrepo.database.iam.region` 可留空，此时使用 AWS SDK 默认 region provider chain
+（例如 `AWS_REGION`）。Region 必须与数据库所在区域一致。AWS 凭证由 SDK 默认凭证链
+提供，支持 EC2 instance role、ECS task role、EKS Pod Identity、web identity/IRSA。
+应为工作负载角色授予 `rds-db:connect`，已有角色时无需再配置长期 AWS access key。
+数据库 IAM 认证不使用 S3 blob store 的 access-key 配置。
+
+在 RDS 实例或 Aurora 集群启用 IAM 数据库认证，并为数据库用户授予 kkRepo 正常运行
+及执行 schema migration 所需权限。MySQL 用户使用 `AWSAuthenticationPlugin`；
+PostgreSQL 用户授予 `rds_iam`。角色策略中的用户名必须与数据库用户完全一致，且区分大小写，例如：
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": "rds-db:connect",
+    "Resource": "arn:aws:rds-db:us-east-1:123456789012:dbuser:db-RESOURCE_ID/kkrepo"
+  }]
+}
+```
+
+ARN 使用数据库 **resource ID**，不是实例名称；Aurora 使用 `cluster-...` 形式的集群
+resource ID。参阅 AWS [IAM 数据库认证指南](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.IAMDBAuth.html)、
+[数据库用户配置](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.IAMDBAuth.DBAccounts.html)、
+[策略示例](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.IAMDBAuth.IAMPolicy.html)
+和 [SDK 凭证链](https://docs.aws.amazon.com/sdk-for-java/latest/developer-guide/credentials-chain.html)。
+
+连接与生命周期语义：
+
+- 每次新建**物理连接**时签发 token，包括连接淘汰或故障后的重建；从池中借用已有连接
+  不重复签发。Token 的 15 分钟有效期只限制认证，已建立会话不受影响，无需仅为 token
+  过期而缩短 Hikari `max-lifetime`。
+- AWS provider 自动刷新临时工作负载凭证，各副本独立签名。kkRepo 不把 IAM token 存入
+  数据库、S3、本地缓存或后台刷新任务。凭证获取或签名失败时，新连接失败，不回退到
+  `spring.datasource.password`。
+- Flyway、JDBC session 和 Quartz 共用应用的 Hikari 连接池。IAM 模式下不要设置
+  `spring.flyway.url`、`spring.flyway.user`、`spring.flyway.password`。本配置针对服务端，
+  独立迁移工具的连接参数仍单独管理。
+- 普通 JDBC URL 必须使用一个真实的 RDS/Aurora endpoint。本集成不支持自定义 DNS 别名、
+  多主机/load-balancing URL 或 URL 内嵌凭据。签名 host/port 从 JDBC URL 读取，默认
+  端口分别为 3306/5432。
+- 必须启用证书和主机名校验：MySQL 使用 `sslMode=VERIFY_IDENTITY`，PostgreSQL 使用
+  `sslmode=verify-full`，并配置信任 RDS CA。保持 JDBC `autoReconnect` 和
+  `autoReconnectForPools` 关闭，让 Hikari 在重建连接时获取新 token。避免重复 URL/driver
+  参数，以及覆盖凭据或 endpoint 的 driver 参数。
+- JVM 与 Native 包都可在运行时启用同一开关。CI 覆盖签名、凭证轮换、Hikari 连接重建，
+  并使用模拟 AWS 凭证对打包产物执行 PostgreSQL TLS 协议测试。这些测试不验证真实 AWS
+  角色策略或 RDS 用户权限；生产切换前仍需在自己的 AWS 环境验收。
+
+Helm 设置 `database.auth: iam`，可选设置 `database.iam.region`，即可省去数据库密码
+Secret 引用。[Helm IAM 示例](../../deploy/helm/kkrepo/README.md#aws-rds--aurora-iam-authentication)
+包含 IRSA 和 CA 挂载配置。应用自身的加密 Secret 仍需保留。
+
 ## Quickstart
 
 默认启动 MySQL：
@@ -75,7 +152,7 @@ CI 会校验 MySQL V1-V29 文件哈希、重复启动和 validate、PostgreSQL 1
 
 打包后的 jar 和容器镜像不需要针对后端重新构建。在 VM、Compose、Kubernetes 或 Helm 中设置上述三个数据库变量即可。
 
-`deploy/helm/kkrepo` 下的 Helm chart 要求使用外部数据库 secret，values 会校验数据库类型，并支持直接凭据或已有 Kubernetes Secret。生产环境应至少部署两个应用副本，使用滚动更新和 OSS/S3 blob 存储。
+`deploy/helm/kkrepo` 下的 Helm chart 在 `password` 模式使用外部数据库密码 Secret，`iam` 模式省去该 Secret。values 会校验数据库类型与认证模式。生产环境应至少部署两个应用副本，使用滚动更新和 OSS/S3 blob 存储。
 
 ## 备份与恢复
 

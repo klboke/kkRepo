@@ -88,6 +88,9 @@ http://{{ $scannerName }}-{{ $index }}.{{ $headlessName }}:{{ $root.Values.secur
 {{- end }}
 
 {{- define "kkrepo.validate" -}}
+{{- if not (has .Values.database.auth (list "password" "iam")) }}
+{{- fail "database.auth must be password or iam" }}
+{{- end }}
 {{- if not (has .Values.database.type (list "mysql" "postgresql")) }}
 {{- fail "database.type must be mysql or postgresql" }}
 {{- end }}

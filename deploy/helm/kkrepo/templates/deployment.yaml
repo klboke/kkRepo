@@ -49,15 +49,23 @@ spec:
           env:
             - name: KKREPO_DATABASE_TYPE
               value: {{ .Values.database.type | quote }}
+            - name: KKREPO_DATABASE_AUTH
+              value: {{ .Values.database.auth | quote }}
+            {{- if eq .Values.database.auth "iam" }}
+            - name: KKREPO_DATABASE_IAM_REGION
+              value: {{ .Values.database.iam.region | quote }}
+            {{- end }}
             - name: SPRING_DATASOURCE_URL
               value: {{ required "database.url is required" .Values.database.url | quote }}
             - name: SPRING_DATASOURCE_USERNAME
               value: {{ required "database.username is required" .Values.database.username | quote }}
+            {{- if eq .Values.database.auth "password" }}
             - name: SPRING_DATASOURCE_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ required "database.existingSecret is required" .Values.database.existingSecret }}
                   key: {{ .Values.database.passwordKey }}
+            {{- end }}
             - name: KKREPO_CREDENTIAL_SECRET
               valueFrom:
                 secretKeyRef:
@@ -172,6 +180,9 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
             - name: tmp
               mountPath: /tmp
             {{- if .Values.blobStorage.file.enabled }}
@@ -179,6 +190,9 @@ spec:
               mountPath: {{ .Values.blobStorage.file.mountPath }}
             {{- end }}
       volumes:
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         - name: tmp
           emptyDir: {}
         {{- if .Values.blobStorage.file.enabled }}

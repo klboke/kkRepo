@@ -18,6 +18,45 @@ helm upgrade --install kkrepo deploy/helm/kkrepo \
 
 For production, supply S3/OSS credentials through `extraEnvFrom`. File blob storage is disabled by default; with multiple replicas it requires a strong-consistency `ReadWriteMany` PVC.
 
+## AWS RDS / Aurora IAM authentication
+
+Set `database.auth: iam` to omit `SPRING_DATASOURCE_PASSWORD` and the database password
+Secret reference. The application encryption Secret remains required. Enable IAM on the
+database, grant the workload role `rds-db:connect`, and configure the database user as
+described in the [database guide](../../../docs/en/database-backends.md#aws-rds--aurora-iam-authentication).
+
+For EKS with IRSA and PostgreSQL, create a ConfigMap from the AWS RDS CA bundle and use:
+
+```yaml
+database:
+  type: postgresql
+  auth: iam
+  iam:
+    region: us-east-1
+  url: jdbc:postgresql://mydb.abcdefghijkl.us-east-1.rds.amazonaws.com:5432/kkrepo?sslmode=verify-full&sslrootcert=/etc/rds/global-bundle.pem
+  username: kkrepo
+  existingSecret: ""
+serviceAccount:
+  create: true
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/kkrepo
+extraVolumes:
+  - name: rds-ca
+    configMap:
+      name: rds-ca
+extraVolumeMounts:
+  - name: rds-ca
+    mountPath: /etc/rds
+    readOnly: true
+```
+
+Create `rds-ca` with `kubectl create configmap rds-ca --from-file=global-bundle.pem=/path/to/global-bundle.pem`,
+then install with `helm upgrade --install kkrepo deploy/helm/kkrepo -f iam-values.yaml`.
+IRSA uses the EKS webhook's projected web identity token; the chart keeps ordinary Kubernetes
+API token automount disabled. EKS Pod Identity can instead supply credentials through the
+SDK container credential provider. Allow the workload to reach the relevant AWS credential
+endpoint. For MySQL, use `sslMode=VERIFY_IDENTITY` and a truststore containing the RDS CA.
+
 ## Artifact security scanning
 
 Scanning capability is disabled by default. To deploy the isolated Syft/Grype adapter and start

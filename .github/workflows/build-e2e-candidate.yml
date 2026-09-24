@@ -90,6 +90,9 @@ jobs:
         if: inputs.runtime == 'native'
         run: scripts/build-docker-image.sh --native kkrepo:compat
 
+      - name: Verify runtime IAM signing over JDBC TLS
+        run: python3 scripts/ci/check-database-iam.py --image kkrepo:compat
+
       - name: Package candidate image
         shell: bash
         env:
