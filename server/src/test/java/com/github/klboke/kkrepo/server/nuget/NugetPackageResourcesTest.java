@@ -87,6 +87,29 @@ class NugetPackageResourcesTest {
   }
 
   @ParameterizedTest
+  @ValueSource(strings = {"v3-flatcontainer/arp.projects/index.json",
+      "v3-flatcontainer/arp.projects/1.10.21/arp.projects.1.10.21.nupkg",
+      "v3-flatcontainer/arp.projects/1.10.21/arp.projects.nuspec",
+      "v3/registration5-semver1/arp.projects/index.json",
+      "v3/registration5-semver1/arp.projects/page.json",
+      "v3/registration5-semver2/arp.projects/1.10.21.json"})
+  void everyDirectResourceEntryPointPreservesOpaqueQueries(String path) throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    NugetService service = new NugetService(null, proxy, null, MAPPER);
+    MockHttpServletRequest request = new MockHttpServletRequest();
+    String query = "variant=fips&_kkrepoNugetSource=upstream%2Bvalue";
+    request.setQueryString(query);
+    String prefix = path.startsWith("v3-flatcontainer/") ? "v3-flatcontainer/"
+        : NugetUpstreamResources.registrationPrefix(path);
+    String endpoint = path.startsWith("v3-flatcontainer/") ? FLAT : REG;
+    for (boolean head : List.of(false, true)) {
+      MavenResponse response = service.get(runtime(), path, BASE, request, head);
+      if (response.body() != null) response.body().close();
+      assertEquals(endpoint + path.substring(prefix.length()) + "?" + query, proxy.urls.getLast());
+    }
+  }
+
+  @ParameterizedTest
   @ValueSource(strings = {"_kkrepoNugetSource=upstream%2Bsignature", "a=1&%5FkkrepoNugetSource=opaque&&b=2&_kkrepoNugetSource=second"})
   void sourceNamedQueriesRemainOpaqueThroughProxyAndGroupLinks(String query) throws Exception {
     RecordingProxy proxy = new RecordingProxy();

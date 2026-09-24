@@ -85,7 +85,7 @@ public class NugetService {
       case SERVICE_INDEX -> serviceIndex(repositoryBaseUrl, headOnly);
       case QUERY -> query(runtime, request, repositoryBaseUrl, headOnly);
       case AUTOCOMPLETE -> autocomplete(runtime, request, headOnly);
-      case FLAT_CONTAINER_VERSION_INDEX -> versionIndex(runtime, path.packageId(), headOnly);
+      case FLAT_CONTAINER_VERSION_INDEX -> versionIndex(runtime, path.packageId(), request, headOnly);
       case REGISTRATION_INDEX -> registrationIndex(runtime, path.packageId(), path.rawPath(), repositoryBaseUrl, request, headOnly);
       case FLAT_CONTAINER_PACKAGE, FLAT_CONTAINER_NUSPEC, RAW ->
           dispatchRawGet(runtime, path.rawPath(), repositoryBaseUrl, request, headOnly);
@@ -271,9 +271,10 @@ public class NugetService {
     return json(Map.of("totalHits", ids.size(), "data", ids.subList(from, to)), headOnly);
   }
 
-  private MavenResponse versionIndex(RepositoryRuntime runtime, String packageId, boolean headOnly) {
+  private MavenResponse versionIndex(
+      RepositoryRuntime runtime, String packageId, HttpServletRequest request, boolean headOnly) {
     if (runtime.type() == RepositoryType.PROXY) {
-      return proxyGet(runtime, NugetPaths.flatContainerVersionIndex(packageId), headOnly);
+      return proxyGet(runtime, packageRequestPath(NugetPaths.flatContainerVersionIndex(packageId), request), headOnly);
     }
     List<String> versions = versions(runtime, packageId);
     return json(Map.of("versions", versions), headOnly);
