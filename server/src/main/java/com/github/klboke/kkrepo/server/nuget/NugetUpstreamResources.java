@@ -21,6 +21,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HexFormat;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.List;
 import java.util.stream.Collectors;
 import java.util.zip.GZIPInputStream;
@@ -112,9 +114,7 @@ final class NugetUpstreamResources {
     String remoteUrl = appendPath(endpoint, path.substring(registrationPrefix.length()));
     // Registration bodies contain package links. Refresh them when either resource moves,
     // even when discovery expires before an otherwise fresh registration cache entry.
-    MavenResponse response = proxy.getMetadataFromUrlHidden(
-        runtime, cacheKey("registration", remoteUrl + "\n" + flatEndpoint), remoteUrl, false);
-    JsonNode document = readJson(mapper, response, MAX_REGISTRATION_BYTES, "registration");
+    JsonNode document = registrationDocument(proxy, mapper, runtime, remoteUrl, endpoint, flatEndpoint, "document");
     String base = repositoryBaseUrl.endsWith("/") ? repositoryBaseUrl : repositoryBaseUrl + "/";
     rewriteLinks(document, endpoint, flatEndpoint, base, registrationPrefix, groupId, runtime);
     try {
@@ -123,6 +123,99 @@ final class NugetUpstreamResources {
           : MavenResponse.ok(new ByteArrayInputStream(bytes), bytes.length, "application/json", null, null);
     } catch (IOException e) {
       throw new MavenExceptions.BadUpstreamException("Invalid NuGet registration");
+    }
+  }
+
+  /** Request-local limits; all reusable metadata still lives in the shared database/blob cache. */
+  static final class RegistrationBudget {
+    private int documents;
+    private long bytes;
+    private final int maxDocuments;
+    private final long maxBytes;
+    RegistrationBudget() { this(512, MAX_REGISTRATION_BYTES); }
+    RegistrationBudget(int maxDocuments, long maxBytes) { this.maxDocuments = maxDocuments; this.maxBytes = maxBytes; }
+    void next() {
+      if (++documents > maxDocuments) throw new RegistrationLimitException();
+    }
+    void consume(JsonNode document) {
+      bytes += document.toString().getBytes(StandardCharsets.UTF_8).length;
+      if (bytes > maxBytes) throw new RegistrationLimitException();
+    }
+  }
+
+  static final class RegistrationLimitException extends MavenExceptions.BadUpstreamException {
+    RegistrationLimitException() { super("NuGet group registration exceeds metadata limits"); }
+  }
+
+  static List<JsonNode> registrationLeaves(
+      RawProxyService proxy, ObjectMapper mapper, RepositoryRuntime runtime, String indexPath,
+      String repositoryBaseUrl, long groupId, RegistrationBudget budget) {
+    budget.next();
+    JsonNode resources = resources(proxy, mapper, runtime);
+    String prefix = registrationPrefix(indexPath);
+    String endpoint = resourceUrl(resources, "RegistrationsBaseUrl",
+        REGISTRATION.equals(prefix) ? LEGACY_REGISTRATION_VERSIONS : REGISTRATION_VERSIONS);
+    String flat = resourceUrl(resources, "PackageBaseAddress", List.of("/3.0.0"));
+    JsonNode index = registrationDocument(proxy, mapper, runtime, appendPath(endpoint, indexPath.substring(prefix.length())), endpoint, flat, "index");
+    budget.consume(index);
+    if (!index.path("items").isArray()) throw new MavenExceptions.BadUpstreamException("Invalid NuGet registration index");
+    List<JsonNode> leaves = new ArrayList<>();
+    Set<String> pages = new HashSet<>();
+    String base = repositoryBaseUrl.endsWith("/") ? repositoryBaseUrl : repositoryBaseUrl + "/";
+    for (JsonNode page : index.path("items")) {
+      JsonNode document = page;
+      if (!page.hasNonNull("items")) {
+        String url = requireHttpUrl(page.path("@id").asText().split("#", 2)[0]);
+        // Apply resource-owned query parameters through the same path as a direct request.
+        String local = localLink(url, endpoint, "", prefix, null, runtime);
+        if (local.startsWith(prefix)) url = appendPath(endpoint, local.substring(prefix.length()).split("#", 2)[0]);
+        if (!pages.add(url)) continue;
+        budget.next();
+        document = registrationDocument(proxy, mapper, runtime, url, endpoint, flat, "page");
+        budget.consume(document);
+      }
+      if (!document.path("items").isArray()) throw new MavenExceptions.BadUpstreamException("Invalid NuGet registration page");
+      for (JsonNode leaf : document.path("items")) {
+        JsonNode rewritten = leaf.deepCopy();
+        rewriteLinks(rewritten, endpoint, flat, base, prefix, groupId, runtime);
+        budget.consume(rewritten);
+        leaves.add(rewritten);
+      }
+    }
+    return leaves;
+  }
+
+  private static JsonNode registrationDocument(
+      RawProxyService proxy, ObjectMapper mapper, RepositoryRuntime runtime,
+      String url, String registration, String flat, String kind) {
+    MavenResponse response = proxy.getMetadataFromUrlHidden(runtime,
+        cacheKey("registration", url + "\n" + registration + "\n" + flat), url, false,
+        "nuget-registration-" + kind + "-v2", body -> {
+          ValidatedJson validated = validatedJson(mapper, body, MAX_REGISTRATION_BYTES, "registration");
+          JsonNode document = validated.document();
+          if (!kind.equals("document")) {
+            if (!document.path("items").isArray()) throw new MavenExceptions.BadUpstreamException("Invalid NuGet registration " + kind);
+            for (JsonNode item : document.path("items")) {
+              if (kind.equals("page")) requireRegistrationLeaf(item);
+              else if (item.path("items").isArray()) item.path("items").forEach(NugetUpstreamResources::requireRegistrationLeaf);
+              else if (item.hasNonNull("items")) throw new MavenExceptions.BadUpstreamException("Invalid NuGet registration page");
+              else requireHttpUrl(item.path("@id").asText().split("#", 2)[0]);
+            }
+          }
+          // Exercise link validation before cache publication too. Only the original bytes
+          // are stored; per-request group URLs and routing proofs are generated when served.
+          rewriteLinks(document, registration, flat, "", REGISTRATION, null, runtime);
+          return new ByteArrayInputStream(validated.bytes());
+        });
+    return readJson(mapper, response, MAX_REGISTRATION_BYTES, "registration");
+  }
+
+  private static void requireRegistrationLeaf(JsonNode leaf) {
+    if (!leaf.isObject() || !leaf.path("catalogEntry").isObject()
+        || !leaf.path("catalogEntry").path("version").isTextual()
+        || leaf.path("catalogEntry").path("version").asText().isBlank()
+        || !leaf.path("packageContent").isTextual()) {
+      throw new MavenExceptions.BadUpstreamException("Invalid NuGet registration leaf");
     }
   }
 
@@ -207,10 +300,12 @@ final class NugetUpstreamResources {
           .filter(pair -> !resourceKeys.contains(queryName(pair))).collect(Collectors.joining("&"));
     }
     String target = prefix + suffix + (query == null || query.isEmpty() ? "" : "?" + query);
-    if (groupId != null && query != null && !query.isEmpty()) {
-      // Bind to the same raw path representation supplied by the NuGet servlet boundary.
-      String requestPath = NugetPathParser.normalize(prefix + suffix) + "?" + query;
-      target += "&" + SOURCE_MEMBER_QUERY + "=" + NugetResourceLinkToken.issue(groupId, runtime.id(), requestPath,
+    boolean hasQuery = query != null && !query.isEmpty();
+    if (groupId != null && (hasQuery || prefix.equals(FLAT))) {
+      // Package links retain their selected member even without a query. A different
+      // member may serve bytes despite having no usable registration for that version.
+      String requestPath = NugetPathParser.normalize(prefix + suffix) + (hasQuery ? "?" + query : "");
+      target += (hasQuery ? "&" : "?") + SOURCE_MEMBER_QUERY + "=" + NugetResourceLinkToken.issue(groupId, runtime.id(), requestPath,
           NugetResourceLinkToken.identity(runtime.proxyRemoteUrl(), endpoint));
     }
     return base + target + (link.getRawFragment() == null ? "" : "#" + link.getRawFragment());
@@ -308,16 +403,26 @@ final class NugetUpstreamResources {
     InvalidServiceIndex() { super("Invalid NuGet service index"); }
   }
 
-  private static InputStream validateServiceIndex(ObjectMapper mapper, InputStream body) {
+  private record ValidatedJson(JsonNode document, byte[] bytes) {}
+
+  private static ValidatedJson validatedJson(ObjectMapper mapper, InputStream body, int limit, String kind) {
     try (body) {
-      if (body == null) throw new InvalidServiceIndex();
-      byte[] bytes = body.readNBytes(MAX_INDEX_BYTES + 1);
-      if (bytes.length > MAX_INDEX_BYTES) throw new InvalidServiceIndex();
-      JsonNode index = readJson(mapper, MavenResponse.ok(new ByteArrayInputStream(bytes), bytes.length,
-          "application/json", null, null), MAX_INDEX_BYTES, "service index");
-      if (!index.path("resources").isArray()) throw new InvalidServiceIndex();
-      return new ByteArrayInputStream(bytes);
-    } catch (IOException | MavenExceptions.BadUpstreamException invalid) {
+      if (body == null) throw new MavenExceptions.BadUpstreamException("Invalid NuGet " + kind);
+      byte[] bytes = body.readNBytes(limit + 1);
+      if (bytes.length > limit) throw new MavenExceptions.BadUpstreamException("NuGet " + kind + " is too large");
+      return new ValidatedJson(readJson(mapper, MavenResponse.ok(new ByteArrayInputStream(bytes), bytes.length,
+          "application/json", null, null), limit, kind), bytes);
+    } catch (IOException e) {
+      throw new MavenExceptions.BadUpstreamException("Invalid NuGet " + kind);
+    }
+  }
+
+  private static InputStream validateServiceIndex(ObjectMapper mapper, InputStream body) {
+    try {
+      ValidatedJson validated = validatedJson(mapper, body, MAX_INDEX_BYTES, "service index");
+      if (!validated.document().path("resources").isArray()) throw new InvalidServiceIndex();
+      return new ByteArrayInputStream(validated.bytes());
+    } catch (MavenExceptions.BadUpstreamException invalid) {
       throw new InvalidServiceIndex();
     }
   }

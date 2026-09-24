@@ -122,7 +122,7 @@ class NugetServiceTest {
 
     assertEquals("http://localhost:28090/repository/nuget-hosted/v3/registration5-semver1/newtonsoft.json/index.json",
         registration.get("@id").asText());
-    assertEquals(2, registration.get("count").asInt());
+    assertEquals(1, registration.get("count").asInt());
     JsonNode page = registration.get("items").get(0);
     assertEquals(2, page.get("count").asInt());
     JsonNode item = page.get("items").get(1);

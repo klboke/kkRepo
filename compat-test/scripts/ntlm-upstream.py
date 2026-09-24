@@ -119,6 +119,9 @@ class Upstream(http.server.BaseHTTPRequestHandler):
             with zipfile.ZipFile(io.BytesIO(self.server.package)) as package:
                 self.send(200, package.read('ntlm.fixture.nuspec'), {'Content-Type': 'application/xml'})
             return
+        elif path.startswith(root + 'metadata/registrations2/') and getattr(self.server, 'invalid_registration', False):
+            self.send(200, b'[]', {'Content-Type': 'application/json'})
+            return
         elif path == root + 'metadata/registrations2/ntlm.fixture/index.json':
             body = {'@id': registration + 'ntlm.fixture/index.json', 'count': 1, 'items': [
                 {'@id': registration + registration_page,
@@ -198,6 +201,13 @@ def exercise(base, credentials, nexus, fixture, dotnet=False):
         assert status == 200 and json.loads(versions)['versions'] == ['1.0.0'], (status, versions)
         resources = json.loads(index)['resources']
         registration = next(r['@id'] for r in resources if r['@type'] == 'RegistrationsBaseUrl/3.6.0')
+        if not nexus:
+            fixture.invalid_registration = True
+            try:
+                status, _, _ = request(base, urllib.parse.urlsplit(registration).path.rstrip('/') + '/ntlm.fixture/index.json', credentials)
+                assert status == 502, ('invalid registration', status)
+            finally:
+                fixture.invalid_registration = False
         status, registration_body, _ = request(base,
             urllib.parse.urlsplit(registration).path.rstrip('/') + '/ntlm.fixture/index.json', credentials)
         assert status == 200, (status, registration_body)

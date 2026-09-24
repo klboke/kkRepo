@@ -422,6 +422,142 @@ class NugetPackageResourcesTest {
     assertEquals(BASE + "v3/registration5-semver1/arp.projects/index.json?api-version=7", result.path("@id").asText());
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"{", "[]", "null"})
+  void registrationValidationRejectsBadJsonBeforeCachePublication(String malformed) {
+    RecordingProxy proxy = new RecordingProxy();
+    proxy.metadata = malformed;
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> get(proxy, "v3/registration5-semver1/demo/index.json", false));
+    assertTrue(proxy.closed);
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void registrationValidationBoundsBothStoredAndDecompressedBodies(boolean gzip) {
+    RecordingProxy proxy = new RecordingProxy();
+    proxy.gzipMetadata = gzip;
+    proxy.metadata = "{\"description\":\"" + "x".repeat(32 * 1024 * 1024) + "\"}";
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> get(proxy, "v3/registration5-semver1/demo/index.json", false));
+    assertTrue(proxy.closed);
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void groupRegistrationMergesPagesInMemberOrderAndPreservesSignedPackageMetadata(boolean withQuery) throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    String index = REG + "demo/index.json";
+    String page = REG + "demo/page.json?api=one";
+    proxy.responses.put("1 " + index, "{\"items\":[{\"@id\":\"" + page + "\"}]}");
+    proxy.responses.put("1 " + page, "{\"items\":[" + registrationLeaf("1.0.0", "a") + "," + registrationLeaf("1.10.0", "a") + "]}");
+    proxy.responses.put("5 " + index, "{\"items\":[{\"items\":[" + registrationLeaf("1.0.0", "b") + "," + registrationLeaf("1.9.0", "b") + "]}]}");
+    if (!withQuery) proxy.responses.replaceAll((key, value) -> value.replace("?sig=a", "").replace("?sig=b", ""));
+    RepositoryRuntime group = group(2L, group(3L, runtime()), runtime(5L));
+    NugetService service = new NugetService(null, proxy, null, MAPPER);
+    JsonNode document = json(service.get(group, "v3/registration5-semver2/demo/index.json", BASE, null, false));
+    JsonNode merged = document.path("items").get(0);
+    assertEquals(1, document.path("count").asInt());
+    assertEquals(3, merged.path("count").asInt());
+    assertEquals("1.0.0", merged.path("lower").asText());
+    assertEquals("1.10.0", merged.path("upper").asText());
+    List<String> versions = new ArrayList<>();
+    for (JsonNode leaf : merged.path("items")) {
+      String version = leaf.path("catalogEntry").path("version").asText();
+      versions.add(version);
+      String source = version.equals("1.9.0") ? "b" : "a";
+      assertEquals(source, leaf.path("catalogEntry").path("description").asText());
+      assertEquals("dep-" + source, leaf.path("catalogEntry").path("dependencyGroups").get(0)
+          .path("dependencies").get(0).path("id").asText());
+      URI link = URI.create(leaf.path("packageContent").asText());
+      assertTrue(link.toString().startsWith(BASE));
+      MockHttpServletRequest request = new MockHttpServletRequest();
+      request.setQueryString(link.getRawQuery());
+      proxy.repositories.clear();
+      String path = link.getRawPath().substring(URI.create(BASE).getRawPath().length());
+      service.get(group, path, BASE, request, true);
+      long member = source.equals("a") ? 1L : 5L;
+      assertEquals(List.of(member, member), proxy.repositories);
+      assertEquals(FLAT + "demo/" + version + "/demo." + version + ".nupkg" + (withQuery ? "?sig=" + source : ""), proxy.urls.getLast());
+    }
+    assertEquals(List.of("1.0.0", "1.9.0", "1.10.0"), versions);
+    assertTrue(proxy.urls.contains(page));
+  }
+
+  @Test
+  void groupRegistrationDropsIncompleteMembersAndEnforcesSharedMetadataLimits() throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    String index = REG + "demo/index.json", page = REG + "demo/page.json";
+    proxy.responses.put("1 " + index, "{\"items\":[{\"items\":[" + registrationLeaf("1.0.0", "a")
+        + "]},{\"@id\":\"" + page + "\"}]}");
+    proxy.responses.put("1 " + page, "{}");
+    proxy.responses.put("5 " + index, "{\"items\":[{\"items\":[" + registrationLeaf("1.9.0", "b") + "]}]}");
+    NugetService service = new NugetService(null, proxy, null, MAPPER);
+    JsonNode result = json(service.get(group(2L, runtime(), runtime(5L)),
+        "v3/registration5-semver2/demo/index.json", BASE, null, false));
+    assertEquals(1, result.path("items").get(0).path("items").size());
+    assertEquals("1.9.0", result.path("items").get(0).path("items").get(0).path("catalogEntry").path("version").asText());
+    for (var budget : List.of(new NugetUpstreamResources.RegistrationBudget(1, 4096),
+        new NugetUpstreamResources.RegistrationBudget(10, 1))) {
+      proxy.urls.clear();
+      assertThrows(NugetUpstreamResources.RegistrationLimitException.class, () -> NugetUpstreamResources.registrationLeaves(
+          proxy, MAPPER, runtime(), "v3/registration5-semver2/demo/index.json", BASE, 2L, budget));
+      assertEquals(List.of(INDEX, index), proxy.urls);
+    }
+  }
+
+  @Test
+  void groupRegistrationHandlesEmptyMissingAndUnavailableMembers() throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    NugetService service = new NugetService(null, proxy, null, MAPPER);
+    String path = "v3/registration5-semver2/demo/index.json";
+    JsonNode empty = json(service.get(group(2L), path, BASE, null, false));
+    assertEquals(0, empty.path("count").asInt());
+    assertTrue(empty.path("items").isEmpty());
+    proxy.missingRepository = 1L;
+    assertTrue(json(service.get(group(2L, runtime()), path, BASE, null, false)).path("items").isEmpty());
+    proxy.missingRepository = null;
+    proxy.resourceFailure = new MavenExceptions.BadUpstreamException("temporarily unavailable");
+    assertSame(proxy.resourceFailure, assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> service.get(group(2L, runtime()), path, BASE, null, false)));
+  }
+
+  @Test
+  void groupRegistrationCannotReturnPartialResultsAfterExhaustingThePageBudget() {
+    RecordingProxy proxy = new RecordingProxy();
+    String index = REG + "demo/index.json";
+    proxy.responses.put("1 " + index, "{\"items\":[{\"items\":[" + registrationLeaf("1.0.0", "a") + "]}]}");
+    List<String> pages = new ArrayList<>();
+    for (int i = 0; i < 512; i++) {
+      String url = REG + "demo/page" + i + ".json";
+      pages.add("{\"@id\":\"" + url + "\"}");
+      proxy.responses.put("5 " + url, "{\"items\":[]}");
+    }
+    proxy.responses.put("5 " + index, "{\"items\":[" + String.join(",", pages) + "]}");
+    NugetService service = new NugetService(null, proxy, null, MAPPER);
+    assertThrows(NugetUpstreamResources.RegistrationLimitException.class,
+        () -> service.get(group(2L, runtime(), runtime(5L)), "v3/registration5-semver2/demo/index.json", BASE, null, false));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"{}", "{\"items\":{}}", "{\"items\":[{}]}",
+      "{\"items\":[{\"items\":[{}]}]}", "{\"items\":[{\"@id\":\"https://upstream.example/page\",\"items\":{}}]}"})
+  void groupRegistrationRejectsMalformedStructuresBeforePublishingThem(String document) {
+    RecordingProxy proxy = new RecordingProxy();
+    proxy.metadata = document;
+    NugetService service = new NugetService(null, proxy, null, MAPPER);
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> service.get(group(2L, runtime()), "v3/registration5-semver2/demo/index.json", BASE, null, false));
+    assertTrue(proxy.closed);
+  }
+
+  private static String registrationLeaf(String version, String source) {
+    return "{\"@id\":\"" + REG + "demo/" + version + ".json\",\"catalogEntry\":{\"id\":\"demo\",\"version\":\""
+        + version + "\",\"description\":\"" + source
+        + "\",\"dependencyGroups\":[{\"dependencies\":[{\"id\":\"dep-" + source + "\",\"range\":\"[1.0.0,)\"}]}]},"
+        + "\"packageContent\":\"" + FLAT + "demo/" + version + "/demo." + version + ".nupkg?sig=" + source + "\"}";
+  }
+
   @Test
   void packageCacheRemainsReachableWhenDiscoveryWasNeverCached() throws Exception {
     RecordingProxy proxy = new RecordingProxy();
@@ -685,6 +821,7 @@ class NugetPackageResourcesTest {
     private String registrationType = "RegistrationsBaseUrl/3.4.0";
     private String index;
     private String metadata = "{\"versions\":[\"1.10.21\"]}";
+    private final Map<String, String> responses = new HashMap<>();
     private boolean closed;
     private boolean lastHead;
     private boolean gzipMetadata;
@@ -710,8 +847,10 @@ class NugetPackageResourcesTest {
       String data = path.startsWith("_nuget/index/") ? index == null
           ? "{\"resources\":[{\"@type\":\"PackageBaseAddress/3.0.0\",\"@id\":\"" + flat
               + "\"},{\"@type\":\"" + registrationType + "\",\"@id\":\"" + registration + "\"}]}" : index : metadata;
+      data = responses.getOrDefault(runtime.id() + " " + url, data);
       if (cacheRegistration && path.startsWith("_nuget/registration/")) {
-        data = registrationCache.computeIfAbsent(path, ignored -> metadata);
+        String current = data;
+        data = registrationCache.computeIfAbsent(path, ignored -> current);
       }
       return record(path, url, head, data);
     }

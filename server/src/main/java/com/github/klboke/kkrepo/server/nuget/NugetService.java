@@ -8,6 +8,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.protocol.nuget.NugetPath;
 import com.github.klboke.kkrepo.protocol.nuget.NugetPathParser;
 import com.github.klboke.kkrepo.protocol.nuget.NugetPaths;
+import com.github.klboke.kkrepo.protocol.nuget.NugetVersions;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
@@ -30,6 +31,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TreeSet;
+import java.util.TreeMap;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import javax.xml.XMLConstants;
@@ -293,29 +295,67 @@ public class NugetService {
       return proxyGet(runtime, packageRequestPath(indexPath, request),
           repositoryBaseUrl, headOnly);
     }
-    String normalizedId = NugetPaths.normalizePackageId(packageId);
     String base = repositoryBaseUrl.endsWith("/") ? repositoryBaseUrl : repositoryBaseUrl + "/";
-    List<Map<String, Object>> items = new ArrayList<>();
-    for (String version : versions(runtime, packageId)) {
-      int prerelease = version.indexOf('-');
-      boolean semVer2Only = version.contains("+") || (prerelease >= 0 && version.substring(prerelease + 1).contains("."));
-      if (registrationPrefix.equals("v3/registration5-semver1/") && semVer2Only) continue;
-      Map<String, Object> catalogEntry = new LinkedHashMap<>();
-      catalogEntry.put("@id", base + registrationPrefix + normalizedId + "/" + version + ".json");
-      catalogEntry.put("id", packageId);
-      catalogEntry.put("version", version);
-      catalogEntry.put("listed", true);
-      Map<String, Object> item = new LinkedHashMap<>();
-      item.put("@id", base + registrationPrefix + normalizedId + "/" + version + ".json");
-      item.put("catalogEntry", catalogEntry);
-      item.put("packageContent", base + NugetPaths.flatContainerPackage(packageId, version));
-      items.add(item);
-    }
+    Map<String, JsonNode> byVersion = new TreeMap<>(NugetVersions::compare);
+    collectRegistrationItems(runtime, packageId, indexPath, base, runtime.id(), byVersion,
+        new NugetUpstreamResources.RegistrationBudget());
+    List<JsonNode> items = List.copyOf(byVersion.values());
     Map<String, Object> body = new LinkedHashMap<>();
     body.put("@id", base + indexPath);
-    body.put("count", items.size());
-    body.put("items", List.of(Map.of("count", items.size(), "items", items)));
+    body.put("count", items.isEmpty() ? 0 : 1);
+    if (items.isEmpty()) {
+      body.put("items", List.of());
+    } else {
+      String lower = NugetVersions.withoutBuild(items.getFirst().path("catalogEntry").path("version").asText());
+      String upper = NugetVersions.withoutBuild(items.getLast().path("catalogEntry").path("version").asText());
+      body.put("items", List.of(Map.of("@id", base + indexPath + "#page/" + lower + "/" + upper,
+          "parent", base + indexPath, "count", items.size(), "lower", lower, "upper", upper, "items", items)));
+    }
     return json(body, headOnly);
+  }
+
+  private void collectRegistrationItems(
+      RepositoryRuntime runtime, String packageId, String indexPath, String base, long entryGroupId,
+      Map<String, JsonNode> byVersion, NugetUpstreamResources.RegistrationBudget budget) {
+    if (runtime.type() == RepositoryType.GROUP) {
+      MavenExceptions.BadUpstreamException lastUpstream = null;
+      for (RepositoryRuntime member : runtime.members()) {
+        try {
+          collectRegistrationItems(member, packageId, indexPath, base, entryGroupId, byVersion, budget);
+        } catch (NugetUpstreamResources.RegistrationLimitException limit) {
+          throw limit;
+        } catch (MavenExceptions.MavenNotFoundException ignored) {
+          // Packages need not exist in every member.
+        } catch (MavenExceptions.BadUpstreamException failure) {
+          lastUpstream = failure;
+        }
+      }
+      if (byVersion.isEmpty() && lastUpstream != null) throw lastUpstream;
+      return;
+    }
+    String prefix = NugetUpstreamResources.registrationPrefix(indexPath);
+    List<JsonNode> items;
+    if (runtime.type() == RepositoryType.PROXY) {
+      items = NugetUpstreamResources.registrationLeaves(proxy, objectMapper, runtime, indexPath, base, entryGroupId, budget);
+    } else {
+      items = new ArrayList<>();
+      String normalizedId = NugetPaths.normalizePackageId(packageId);
+      for (String version : localVersions(runtime, packageId)) {
+        String leafUrl = base + prefix + normalizedId + "/" + version + ".json";
+        JsonNode item = objectMapper.valueToTree(Map.of("@id", leafUrl,
+            "catalogEntry", Map.of("@id", leafUrl, "id", packageId, "version", version, "listed", true),
+            "packageContent", base + NugetPaths.flatContainerPackage(packageId, version)));
+        budget.consume(item);
+        items.add(item);
+      }
+    }
+    for (JsonNode item : items) {
+      String version = item.path("catalogEntry").path("version").asText();
+      int prerelease = version.indexOf('-');
+      boolean semVer2Only = version.contains("+") || (prerelease >= 0 && version.substring(prerelease + 1).contains("."));
+      if (prefix.equals("v3/registration5-semver1/") && semVer2Only) continue;
+      byVersion.putIfAbsent(version, item);
+    }
   }
 
   private List<String> versions(RepositoryRuntime runtime, String packageId) {
@@ -580,7 +620,7 @@ public class NugetService {
   }
 
   private static int compareVersions(String left, String right) {
-    return left.compareToIgnoreCase(right);
+    return NugetVersions.compare(left, right);
   }
 
   static String remoteUrlForPath(RepositoryRuntime runtime, String path) {

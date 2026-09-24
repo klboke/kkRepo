@@ -554,6 +554,21 @@ mvn -pl compat-test -am \
   test
 ```
 
+The isolated NuGet V3 fixtures exercise NTLM resource discovery and paginated group registration
+merging against disposable repositories. The group fixture compares member precedence, numeric
+version ordering, signed package links, and dependency metadata with Nexus; kkRepo also verifies
+that signed downloads reach only the selected member. Both scripts run in NuGet client E2E.
+
+```bash
+python3 compat-test/scripts/ntlm-upstream.py --nexus http://localhost:28090 --dotnet
+python3 compat-test/scripts/nuget-group-registration-upstream.py --nexus http://localhost:28090
+KKREPO_COMPAT_AUTH=admin:123456 python3 compat-test/scripts/nuget-group-registration-upstream.py \
+  --kkrepo http://localhost:8080 --upstream-host 127.0.0.1
+```
+
+Use `--upstream-host host.docker.internal` when the target server runs in Docker. Each script
+removes its own repositories and temporary Nexus SSRF exception after the check.
+
 Hosted NuGet multipart push and Yum RPM PUT are opt-in because they write packages into the
 comparison repositories. To target the Browse repository from local dev, set
 `COMPAT_YUM_HOSTED_REPOSITORY=yum-compat-hosted`; the Yum test uploads under
