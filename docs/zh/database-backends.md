@@ -95,6 +95,10 @@ resource ID。参阅 AWS [IAM 数据库认证指南](https://docs.aws.amazon.com
   `sslmode=verify-full`，并配置信任 RDS CA。保持 JDBC `autoReconnect` 和
   `autoReconnectForPools` 关闭，让 Hikari 在重建连接时获取新 token。避免重复 URL/driver
   参数，以及覆盖凭据或 endpoint 的 driver 参数。
+- IAM 模式拒绝自定义 socket factory、PostgreSQL 的 `sslfactory`/`sslhostnameverifier`
+  和 `service`、MySQL 的 `useConfigs`/`propertiesTransform`，也不允许开启 MySQL `dnsSrv`。
+  这些选项可能覆盖已校验的 TLS 或连接设置。请使用 PostgreSQL `sslrootcert` 或 MySQL 的
+  truststore 选项配置信任的 CA。
 - JVM 与 Native 包都可在运行时启用同一开关。CI 覆盖签名、凭证轮换、Hikari 连接重建，
   并使用模拟 AWS 凭证对打包产物执行 PostgreSQL TLS 协议测试。这些测试不验证真实 AWS
   角色策略或 RDS 用户权限；生产切换前仍需在自己的 AWS 环境验收。

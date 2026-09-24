@@ -100,6 +100,10 @@ Connection and lifecycle behavior:
   `sslmode=verify-full`, with the RDS CA trusted by the driver. Keep JDBC `autoReconnect`
   and `autoReconnectForPools` disabled so Hikari can obtain a fresh token for replacement
   connections. Avoid duplicate URL/driver options and credential/endpoint overrides.
+- IAM mode rejects custom socket factories, PostgreSQL `sslfactory`/`sslhostnameverifier`
+  and `service`, MySQL `useConfigs`/`propertiesTransform`, and enabled MySQL `dnsSrv`.
+  These options can override the validated TLS or connection settings. Configure CA trust
+  with PostgreSQL `sslrootcert` or MySQL's truststore options instead.
 - The same runtime switch is available in JVM and Native packages. CI checks signing,
   credential rotation, Hikari replacement and a packaged-runtime PostgreSQL TLS wire probe
   with synthetic AWS credentials. These tests do not validate an actual AWS role policy or

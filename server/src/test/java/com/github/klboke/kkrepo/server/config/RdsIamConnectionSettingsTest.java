@@ -68,6 +68,23 @@ class RdsIamConnectionSettingsTest {
   }
 
   @Test
+  void rejectsPostgresqlTlsOverridesAndIndirectDriverConfiguration() {
+    assertRejectedDriverOption("postgresql", "sslfactory", "org.postgresql.ssl.NonValidatingFactory");
+    assertRejectedDriverOption("postgresql", "sslhostnameverifier", "example.NonValidatingHostnameVerifier");
+    assertRejectedDriverOption("postgresql", "socketFactory", "example.CustomSocketFactory");
+    assertRejectedDriverOption("postgresql", "service", "legacy");
+  }
+
+  @Test
+  void rejectsMysqlProfilesAndConnectionOverrides() {
+    assertRejectedDriverOption("mysql", "useConfigs", "clusterBase");
+    assertRejectedDriverOption("mysql", "useConfigs", "maxPerformance,clusterBase");
+    assertRejectedDriverOption("mysql", "propertiesTransform", "example.CustomPropertiesTransform");
+    assertRejectedDriverOption("mysql", "socketFactory", "example.CustomSocketFactory");
+    assertRejectedDriverOption("mysql", "dnsSrv", "true");
+  }
+
+  @Test
   void validatesDriverPropertiesAndRejectsAlternateDataSources() {
     try (var pool = new HikariDataSource()) {
       pool.setJdbcUrl("jdbc:mysql://db.example/kkrepo");
@@ -82,6 +99,18 @@ class RdsIamConnectionSettingsTest {
       pool.setDataSourceClassName(null);
       pool.setUsername(" ");
       assertThrows(IllegalArgumentException.class, () -> RdsIamConnectionSettings.from(pool, "mysql"));
+    }
+  }
+
+  private static void assertRejectedDriverOption(String type, String name, String value) {
+    String tls = type.equals("mysql") ? "sslMode=VERIFY_IDENTITY" : "sslmode=verify-full";
+    String url = "jdbc:" + type + "://db.example/kkrepo?" + tls;
+    assertThrows(IllegalArgumentException.class, () -> settings(type, url + "&" + name + "=" + value));
+    try (var pool = new HikariDataSource()) {
+      pool.setJdbcUrl(url);
+      pool.setUsername("db_user");
+      pool.addDataSourceProperty(name, value);
+      assertThrows(IllegalArgumentException.class, () -> RdsIamConnectionSettings.from(pool, type));
     }
   }
 

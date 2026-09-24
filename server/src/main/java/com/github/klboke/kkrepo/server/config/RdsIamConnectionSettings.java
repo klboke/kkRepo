@@ -53,11 +53,21 @@ record RdsIamConnectionSettings(String hostname, int port, String username) {
         }
       }
     }
+    // These hooks can change the effective TLS, credentials or endpoint after validation.
+    Set<String> indirectOptions = mysql
+        ? Set.of("useconfigs", "propertiestransform", "socketfactory")
+        : Set.of("sslfactory", "sslhostnameverifier", "socketfactory", "service");
     for (String key : properties.keySet()) {
       if (Set.of("user", "username", "password", "host", "port", "pghost", "pgport")
           .contains(key.toLowerCase(Locale.ROOT))) {
         throw new IllegalArgumentException("IAM JDBC properties must not override credentials or the endpoint");
       }
+      if (indirectOptions.contains(key.toLowerCase(Locale.ROOT))) {
+        throw new IllegalArgumentException("Custom JDBC factories and indirect connection settings are not supported with IAM");
+      }
+    }
+    if (mysql && enabled(properties.get("dnsSrv"))) {
+      throw new IllegalArgumentException("IAM requires a direct database endpoint without DNS SRV discovery");
     }
     String tlsMode = mysql ? "VERIFY_IDENTITY" : "verify-full";
     String tlsProperty = mysql ? "sslMode" : "sslmode";
