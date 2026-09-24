@@ -8,10 +8,37 @@ import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.servlet.FilterChain;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
 class SecurityRateLimitFilterTest {
+
+  @ParameterizedTest
+  @CsvSource({
+      "10.0.0.0/16, 10.0.12.34, 10.0.200.99",
+      "2001:db8::/32, 2001:db8::1, 2001:db8:1234::2"
+  })
+  void rotatingTrustedProxiesPreservePerClientRateLimits(String trustedProxies, String firstProxy, String secondProxy)
+      throws Exception {
+    SecurityRateLimitFilter filter = filter(
+        1, 1, new InMemorySharedCache(), new ForwardedHeaderPolicy(trustedProxies),
+        new SimpleMeterRegistry(), false);
+    CountingChain chain = new CountingChain();
+    MockHttpServletRequest first = request("POST", "/internal/security/login", firstProxy);
+    first.addHeader("X-Forwarded-For", "203.0.113.9");
+    MockHttpServletRequest second = request("POST", "/internal/security/login", secondProxy);
+    second.addHeader("X-Forwarded-For", "203.0.113.9");
+    MockHttpServletRequest anotherClient = request("POST", "/internal/security/login", secondProxy);
+    anotherClient.addHeader("X-Forwarded-For", "203.0.113.10");
+
+    assertEquals(200, invoke(filter, first, chain).getStatus());
+    assertEquals(429, invoke(filter, second, chain).getStatus());
+    assertEquals(200, invoke(filter, anotherClient, chain).getStatus());
+    assertEquals(2, chain.calls);
+  }
 
   @Test
   void repeatedLoginIsBlockedWithRetryHeaderAndMetric() throws Exception {
@@ -78,10 +105,11 @@ class SecurityRateLimitFilterTest {
     assertEquals(2, chain.calls);
   }
 
-  @Test
-  void untrustedForwardedHeaderDoesNotMergeDifferentRemoteClients() throws Exception {
+  @ParameterizedTest
+  @ValueSource(strings = {"127.0.0.1", "10.0.0.0/16", "2001:db8::/32"})
+  void untrustedForwardedHeaderDoesNotMergeDifferentRemoteClients(String trustedProxies) throws Exception {
     SecurityRateLimitFilter filter = filter(
-        1, 1, new InMemorySharedCache(), new ForwardedHeaderPolicy("127.0.0.1"),
+        1, 1, new InMemorySharedCache(), new ForwardedHeaderPolicy(trustedProxies),
         new SimpleMeterRegistry(), false);
     CountingChain chain = new CountingChain();
     MockHttpServletRequest first = request("POST", "/internal/security/login", "198.51.100.30");

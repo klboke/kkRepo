@@ -17,11 +17,33 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
 class ManagementAuditFilterTest {
+
+  @ParameterizedTest
+  @CsvSource({
+      "10.0.0.0/16, 10.0.12.34, 203.0.113.7",
+      "10.0.0.0/16, 10.1.0.1, 10.1.0.1",
+      "2001:db8::/32, 2001:db8::1, 203.0.113.7",
+      "2001:db8::/32, 2001:db9::1, 2001:db9::1"
+  })
+  void cidrTrustControlsAuditedClientAddress(String trustedProxies, String remote, String expected) throws Exception {
+    SecurityAuditDao auditDao = mock(SecurityAuditDao.class);
+    MockHttpServletRequest request = new MockHttpServletRequest("POST", "/internal/security/users");
+    request.setRemoteAddr(remote);
+    request.addHeader("X-Forwarded-For", "203.0.113.7, 10.0.0.1");
+
+    filter(auditDao, trustedProxies, false).doFilter(request, new MockHttpServletResponse(), (req, resp) -> {});
+
+    ArgumentCaptor<AuditLogRecord> record = ArgumentCaptor.forClass(AuditLogRecord.class);
+    verify(auditDao).insert(record.capture());
+    assertEquals(expected, record.getValue().remoteAddr());
+  }
 
   @Test
   void successfulMutationRecordsActorPermissionContextPathAndTrustedClientAddress() throws Exception {

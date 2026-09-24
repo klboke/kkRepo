@@ -103,6 +103,8 @@ KKREPO_EXTERNAL_BASE_URL=https://nexus.example.com
 KKREPO_TRUSTED_PROXIES=10.0.12.34,10.0.12.35
 ```
 
+对于节点 IP 在固定专用代理网段内轮换的负载均衡器，该列表也支持 IPv4/IPv6 CIDR，例如 `10.0.12.0/24,2001:db8:1234::/48`。仅信任直接连接 kkRepo 的代理来源，限制后端访问，并为所有副本设置相同配置。校验规则及重启行为参见[可信代理配置](nginx-reverse-proxy.md#kkrepo-配置)。
+
 ## Session 和 Cookie 安全
 
 生产环境使用 HTTPS，并启用 secure cookie：

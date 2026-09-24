@@ -50,7 +50,7 @@ Keep the management port, usually `8081`, private. The public reverse proxy shou
 
 ## kkRepo Settings
 
-Set `KKREPO_TRUSTED_PROXIES` to the Nginx address as seen by kkRepo. The value must match `request.getRemoteAddr()` for the proxy connection. Use exact IP addresses or names that resolve to the actual proxy address; CIDR ranges and client IP ranges are not matched by this setting.
+Set `KKREPO_TRUSTED_PROXIES` to a comma-separated list of exact proxy IP addresses or IPv4/IPv6 CIDR ranges. Entries match the immediate proxy connection's `request.getRemoteAddr()`, not addresses supplied in `X-Forwarded-For`. Existing hostname entries remain supported and resolve to one address at startup.
 
 Examples:
 
@@ -63,7 +63,16 @@ KKREPO_TRUSTED_PROXIES=::1
 
 # Two proxy instances in front of kkRepo.
 KKREPO_TRUSTED_PROXIES=10.0.12.34,10.0.12.35
+
+# Rotating load-balancer nodes in dedicated proxy subnets, mixed with an exact IP.
+KKREPO_TRUSTED_PROXIES=127.0.0.1,10.0.0.0/16,2001:db8:1234::/48
 ```
+
+Use the narrowest subnets dedicated to trusted proxies, and restrict direct access to kkRepo's backend port. Every address in a configured range can supply trusted `X-Forwarded-*` headers, affecting generated URLs, audit client addresses, and rate-limit client identities. An empty list trusts no proxy; requests from outside the configured addresses/ranges ignore these headers. Avoid `0.0.0.0/0` and `::/0`, which trust every address in their respective address family.
+
+CIDR prefixes must be decimal lengths from `0` to `32` for IPv4 or `0` to `128` for IPv6. Host bits are ignored (for example, `10.0.12.34/16` matches `10.0.0.0/16`). Use literal, unscoped addresses in CIDR entries; hostnames, zone IDs, and IPv4-mapped IPv6 CIDRs are rejected. For IPv4-mapped peers such as `::ffff:10.0.12.34`, configure the corresponding IPv4 range (`10.0.0.0/16`). Invalid CIDR entries prevent startup with a configuration error.
+
+Apply the same configuration to every kkRepo replica and restart each replica after changes. Address/range matching uses immutable startup configuration and requires no shared runtime state or per-request DNS lookup.
 
 For HTTPS deployments, also enable secure browser cookies and HSTS when appropriate:
 
