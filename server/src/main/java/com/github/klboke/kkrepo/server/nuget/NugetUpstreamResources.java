@@ -16,6 +16,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.PushbackInputStream;
 import java.net.URI;
+import java.net.InetAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -332,7 +333,7 @@ final class NugetUpstreamResources {
   private static void rewriteLinks(JsonNode node, String registration, String flat, String base, String registrationPrefix, Long groupId, RepositoryRuntime runtime) {
     if (node.isObject()) {
       ObjectNode object = (ObjectNode) node;
-      for (String field : List.of("@id", "parent", "registration", "packageContent")) {
+      for (String field : List.of("@id", "parent", "registration", "catalogEntry", "packageContent")) {
         JsonNode value = object.get(field);
         if (value != null && value.isTextual()) {
           boolean packageContent = field.equals("packageContent");
@@ -355,7 +356,7 @@ final class NugetUpstreamResources {
     } catch (IllegalArgumentException e) {
       throw new MavenExceptions.BadUpstreamException("Invalid NuGet registration link");
     }
-    if (link.getHost() == null || !dnsHost(source).equalsIgnoreCase(dnsHost(link))
+    if (link.getHost() == null || !hostIdentity(source).equals(hostIdentity(link))
         || !source.getScheme().equalsIgnoreCase(link.getScheme()) || effectivePort(source) != effectivePort(link)) return value;
     if (link.getRawUserInfo() != null) throw new MavenExceptions.BadUpstreamException("Invalid NuGet registration link");
     String root = normalizedPath(source);
@@ -398,10 +399,31 @@ final class NugetUpstreamResources {
     return base + target + (link.getRawFragment() == null ? "" : "#" + link.getRawFragment());
   }
 
-  private static String dnsHost(URI uri) {
+  private static String hostIdentity(URI uri) {
     String host = uri.getHost();
+    if (host.startsWith("[") && host.endsWith("]")) {
+      String literal = host.substring(1, host.length() - 1);
+      String scope = "";
+      int zone = literal.indexOf('%');
+      if (zone >= 0) {
+        int prefix = literal.startsWith("%25", zone) ? 3 : 1;
+        scope = UriPathDecoder.decodeComponent(literal.substring(zone + prefix));
+        literal = literal.substring(0, zone);
+      }
+      // Literal-only parsing performs neither DNS nor interface lookup. Keep scope
+      // identifiers distinct while comparing compressed/expanded address bytes.
+      return "ipv6:" + HexFormat.of().formatHex(InetAddress.ofLiteral(literal).getAddress()) + "%" + scope;
+    }
     // A terminal root label is the absolute spelling of the same DNS name (RFC 1034).
-    return host.endsWith(".") ? host.substring(0, host.length() - 1) : host;
+    if (host.endsWith(".")) host = host.substring(0, host.length() - 1);
+    if (host.chars().allMatch(ch -> (ch >= '0' && ch <= '9') || ch == '.')) {
+      try {
+        return "ipv4:" + HexFormat.of().formatHex(InetAddress.ofLiteral(host).getAddress());
+      } catch (IllegalArgumentException ignored) {
+        // A numeric DNS name that is not an IP literal remains a DNS name.
+      }
+    }
+    return "dns:" + host.toLowerCase(java.util.Locale.ROOT);
   }
 
   private static int effectivePort(URI uri) {
@@ -561,12 +583,22 @@ final class NugetUpstreamResources {
   private static String resourceUrl(JsonNode resources, String type, List<String> versions) {
     for (String version : versions) {
       for (JsonNode resource : resources) {
-        if ((type + version).equals(resource.path("@type").asText())) {
+        if (hasResourceType(resource.path("@type"), type + version)) {
           return requireHttpUrl(resource.path("@id").asText());
         }
       }
     }
     throw new MavenExceptions.BadUpstreamException("NuGet upstream does not advertise " + type);
+  }
+
+  private static boolean hasResourceType(JsonNode value, String expected) {
+    if (value.isTextual()) return expected.equals(value.asText());
+    if (value.isArray()) {
+      for (JsonNode element : value) {
+        if (element.isTextual() && expected.equals(element.asText())) return true;
+      }
+    }
+    return false;
   }
 
   private static String repositoryRootIndexUrl(String url) {

@@ -71,6 +71,16 @@ class NugetUpstreamResourcesTest {
     assertEquals(List.of(configured + "?token=private", "https://search.example/query"), proxy.urls);
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"query", "autocomplete"})
+  void arrayResourceTypesKeepVersionPreferenceForSearchAndAutocomplete(String operation) {
+    String type = operation.equals("query") ? "SearchQueryService" : "SearchAutocompleteService";
+    RecordingProxy proxy = new RecordingProxy("{\"resources\":[{\"@id\":\"https://old.example/search\",\"@type\":[\"" + type
+        + "/3.0.0\"]},{\"@id\":\"https://current.example/search\",\"@type\":[null,17,\"Other\",\"" + type + "/3.5.0\"]}]}" );
+    get(proxy, "https://feed.example/index.json", operation, true);
+    assertEquals("https://current.example/search", proxy.urls.getLast());
+  }
+
   @Test
   void root404FallsBackButTransportAndAuthenticationFailuresDoNot() {
     RecordingProxy proxy = new RecordingProxy(index("SearchQueryService", "https://search.example/query"));

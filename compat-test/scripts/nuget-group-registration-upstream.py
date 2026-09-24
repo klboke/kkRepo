@@ -69,6 +69,8 @@ class Upstream(http.server.BaseHTTPRequestHandler):
             # The earlier member can serve a leaf omitted from its registration index.
             # A merged link must still reach the member selected by that index.
             body = {'@id': server.root + uri.path, 'source': server.feed}
+            if uri.path != '/reg/demo/catalog.json':
+                body['catalogEntry'] = server.root + '/reg/demo/catalog.json' + server.resource_query
         elif uri.path.endswith('.nupkg') and uri.path.split('/')[3] in server.versions:
             expected_query = server.resource_query.lstrip('?') if uri.path.split('/')[3] == '1.9.0' else server.signed_query
             if uri.query != expected_query:
@@ -80,6 +82,9 @@ class Upstream(http.server.BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
             return
+        if isinstance(body, dict) and 'resources' in body and server.array_types:
+            for resource in body['resources']:
+                resource['@type'] = ['Unsupported/99.0.0', resource['@type']]
         data = body if isinstance(body, bytes) else json.dumps(body).encode()
         self.send_response(200)
         self.send_header('Content-Type', 'application/octet-stream' if isinstance(body, bytes) else 'application/json')
@@ -113,6 +118,7 @@ def exercise(base, credentials, nexus, host, ordered_query=False, secondary=None
             server.root = 'http://' + host + ':' + str(server.server_port)
             server.feed, server.versions, server.requests = feed, versions, []
             server.resource_query = '?key=private' if ordered_query else ''
+            server.array_types = ordered_query
             server.root_probes, server.fail_root = 0, False
             server.page_query = 'api=one' + ('&key=private' if ordered_query else '')
             server.signed_query = 'sig=' + feed + ('&key=private&cursor=1' if ordered_query else '')
@@ -185,6 +191,11 @@ def exercise(base, credentials, nexus, host, ordered_query=False, secondary=None
                     metadata_link = urllib.parse.urlsplit(leaf[field])
                     status, metadata, _ = request(base, metadata_link.path + '?' + metadata_link.query, credentials)
                     assert status == 200 and json.loads(metadata)['source'] == source, (field, status, metadata)
+                    if field == '@id':
+                        catalog_link = urllib.parse.urlsplit(json.loads(metadata)['catalogEntry'])
+                        assert catalog_link.netloc == urllib.parse.urlsplit(base).netloc and 'private' not in catalog_link.query
+                        status, catalog_body, _ = request(base, catalog_link.path + '?' + catalog_link.query, credentials)
+                        assert status == 200 and json.loads(catalog_body)['source'] == source, (status, catalog_body)
                 for server in servers:
                     server.requests.clear()
                 for method in ['GET', 'HEAD']:

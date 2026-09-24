@@ -563,6 +563,10 @@ that a proven repository-root fallback survives a root-page outage with automati
 Pass `--kkrepo-secondary URL` to run the outage phase through a second replica sharing the same
 database and blob store. Both scripts run in NuGet client E2E.
 
+The kkRepo variants also cover array-valued resource `@type` entries accepted by NuGet.Client
+and textual `catalogEntry` links. Nexus 3.94 returns 404 for the isolated array-type variant;
+the scalar-type reference fixture passes.
+
 ```bash
 python3 compat-test/scripts/ntlm-upstream.py --nexus http://localhost:28090 --dotnet
 python3 compat-test/scripts/nuget-group-registration-upstream.py --nexus http://localhost:28090

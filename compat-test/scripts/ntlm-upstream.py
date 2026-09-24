@@ -110,6 +110,9 @@ class Upstream(http.server.BaseHTTPRequestHandler):
                 {'@id': flat, '@type': 'PackageBaseAddress/3.0.0'},
                 {'@id': registration, '@type': 'RegistrationsBaseUrl/3.4.0'},
                 {'@id': registration, '@type': 'RegistrationsBaseUrl/3.6.0'}]}
+            if getattr(self.server, 'array_types', False):
+                for resource in body['resources']:
+                    resource['@type'] = ['Unsupported/99.0.0', resource['@type']]
         elif path == root + 'content/flat2/ntlm.fixture/index.json':
             body = {'versions': ['1.0.0']}
         elif path == root + 'content/flat2/ntlm.fixture/1.0.0/ntlm.fixture.1.0.0.nupkg':
@@ -162,6 +165,7 @@ def request(base, path, credentials, method='GET', data=None):
 
 
 def exercise(base, credentials, nexus, fixture, dotnet=False):
+    fixture.array_types = not nexus
     name = 'compat-ntlm-' + uuid.uuid4().hex[:10]
     catalog = '/service/rest/v1/repositories' if nexus else '/internal/repositories'
     payload = {'name': name, 'online': True}

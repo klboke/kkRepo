@@ -887,6 +887,91 @@ class NugetPackageResourcesTest {
   }
 
   @ParameterizedTest
+  @org.junit.jupiter.params.provider.CsvSource({
+      "2001:db8::1,2001:0DB8:0:0:0:0:0:1", "::ffff:192.0.2.1,0:0:0:0:0:ffff:c000:201",
+      "fe80::1%25eth0,fe80:0:0:0:0:0:0:1%25eth0"})
+  void equivalentIpv6LiteralsKeepEveryRegistrationLinkAndCredentialLocal(String source, String equivalent) throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    String sourceRoot = "https://[" + source + "]/";
+    String linkRoot = "https://[" + equivalent + "]/";
+    proxy.registration = sourceRoot + "reg/?key=private";
+    proxy.flat = sourceRoot + "flat/?key=private";
+    proxy.metadata = MAPPER.writeValueAsString(Map.of("@id", linkRoot + "reg/demo/leaf?key=private",
+        "catalogEntry", linkRoot + "reg/demo/catalog?key=private",
+        "packageContent", linkRoot + "flat/demo/1.0.0/demo.1.0.0.nupkg?key=private"));
+    for (RepositoryRuntime entry : List.of(runtime(), group(2L, runtime()))) {
+      NugetService service = new NugetService(null, proxy, null, MAPPER);
+      JsonNode document = json(service.get(entry, "v3/registration5-semver1/demo/leaf", BASE, null, false));
+      assertFalse(document.toString().contains("key=private"));
+      for (String field : List.of("@id", "catalogEntry", "packageContent")) {
+        URI link = URI.create(document.path(field).asText());
+        assertEquals(URI.create(BASE).getHost(), link.getHost());
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setQueryString(link.getRawQuery());
+        String path = link.getRawPath().substring(URI.create(BASE).getRawPath().length());
+        service.get(entry, path, BASE, request, false).body().close();
+        assertTrue(proxy.urls.getLast().startsWith(sourceRoot));
+        assertTrue(proxy.urls.getLast().endsWith("?key=private"));
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @org.junit.jupiter.params.provider.CsvSource({
+      "127.0.0.1,127.000.000.001", "127.0.0.1,2130706433",
+      "999999999999,999999999999"})
+  void numericHostIdentitiesRetainEquivalentIpv4AndNonLiteralDnsNames(String source, String equivalent) throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    proxy.registration = "https://" + source + "/reg/?key=private";
+    proxy.metadata = "{\"@id\":\"https://" + equivalent + "/reg/demo/leaf?key=private\"}";
+    JsonNode document = json(get(proxy, "v3/registration5-semver1/demo/leaf", false));
+    assertEquals(BASE + "v3/registration5-semver1/demo/leaf", document.path("@id").asText());
+    assertFalse(document.toString().contains("key=private"));
+  }
+
+  @ParameterizedTest
+  @org.junit.jupiter.params.provider.CsvSource({
+      "[2001:db8::1],[2001:db8::2]", "[fe80::1%25eth0],[fe80::1%25eth1]",
+      "[fe80::1%25eth0],[fe80::1%25ETH0]", "127.0.0.1,localhost", "127.0.0.1,[::ffff:127.0.0.1]"})
+  void differentIpAddressesScopesAndDnsNamesRemainDistinct(String source, String different) throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    proxy.registration = "https://" + source + "/reg/";
+    String link = "https://" + different + "/reg/demo/leaf";
+    proxy.metadata = MAPPER.writeValueAsString(Map.of("@id", link));
+    assertEquals(link, json(get(proxy, "v3/registration5-semver1/demo/leaf", false)).path("@id").asText());
+  }
+
+  @Test
+  void textualCatalogLinksUseRegistrationRoutingAndHideItsCredentials() throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    proxy.registration = REG + "?key=private";
+    proxy.metadata = "{\"@id\":\"" + REG + "demo/leaf\",\"catalogEntry\":\"" + REG + "demo/catalog?key=private\"}";
+    for (RepositoryRuntime entry : List.of(runtime(), group(2L, runtime()))) {
+      NugetService service = new NugetService(null, proxy, null, MAPPER);
+      JsonNode document = json(service.get(entry, "v3/registration5-semver1/demo/leaf", BASE, null, false));
+      assertFalse(document.toString().contains("key=private"));
+      URI link = URI.create(document.path("catalogEntry").asText());
+      assertEquals(URI.create(BASE).getHost(), link.getHost());
+      MockHttpServletRequest request = new MockHttpServletRequest();
+      request.setQueryString(link.getRawQuery());
+      service.get(entry, link.getRawPath().substring(URI.create(BASE).getRawPath().length()), BASE, request, false).body().close();
+      assertEquals(REG + "demo/catalog?key=private", proxy.urls.getLast());
+    }
+  }
+
+  @Test
+  void arrayResourceTypesSupportPackageAndBothRegistrationFlavors() throws Exception {
+    RecordingProxy proxy = new RecordingProxy();
+    proxy.index = "{\"resources\":[{\"@id\":\"" + FLAT + "\",\"@type\":[null,17,\"Other\",\"PackageBaseAddress/3.0.0\"]},"
+        + "{\"@id\":\"" + REG + "\",\"@type\":[\"RegistrationsBaseUrl/3.4.0\",\"RegistrationsBaseUrl/3.6.0\"]}]}";
+    for (String path : List.of("v3-flatcontainer/demo/index.json", "v3/registration5-semver1/demo/index.json",
+        "v3/registration5-semver2/demo/index.json")) {
+      assertEquals(200, get(proxy, path, true).status());
+      assertEquals((path.startsWith("v3-flatcontainer/") ? FLAT : REG) + "demo/index.json", proxy.urls.getLast());
+    }
+  }
+
+  @ParameterizedTest
   @ValueSource(strings = {"page//./one.json", "page/unused/..//one.json", "page//unused/../one.json", "page//%2E/one.json"})
   void removingDotSegmentsRetainsAdjacentEmptySegments(String file) throws Exception {
     RecordingProxy proxy = new RecordingProxy();
