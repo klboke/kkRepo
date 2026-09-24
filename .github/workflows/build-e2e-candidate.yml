@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       source_sha:
-        description: Exact source commit to build
+        description: Exact event commit to build (must match github.sha)
         required: true
         type: string
       artifact_key:
@@ -46,6 +46,7 @@ jobs:
         env:
           CANDIDATE_RUNTIME: ${{ inputs.runtime }}
           CANDIDATE_SOURCE_SHA: ${{ inputs.source_sha }}
+          CANDIDATE_EVENT_SHA: ${{ github.sha }}
           CANDIDATE_ARTIFACT_KEY: ${{ inputs.artifact_key }}
           INCLUDE_SERVER_ARTIFACT: ${{ inputs.include_server_artifact }}
         run: |
@@ -56,6 +57,10 @@ jobs:
           fi
           if [[ ! "$CANDIDATE_SOURCE_SHA" =~ ^[0-9a-fA-F]{40,64}$ ]]; then
             echo "source_sha must be a full Git object ID" >&2
+            exit 2
+          fi
+          if [[ "${CANDIDATE_SOURCE_SHA,,}" != "${CANDIDATE_EVENT_SHA,,}" ]]; then
+            echo "source_sha must match the triggering event commit" >&2
             exit 2
           fi
           if [[ ! "$CANDIDATE_ARTIFACT_KEY" =~ ^[0-9a-fA-F]{40,64}$ ]]; then
@@ -72,7 +77,9 @@ jobs:
       - name: Check out exact source
         uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.source_sha }}
+          # All callers build their event commit. Keep checkout tied to its trust/cache
+          # context instead of allowing a dispatch input to select unrelated code.
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Set up JDK 25
@@ -80,8 +87,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "25"
-          # source_sha can select code outside a privileged caller's branch. Do not let
-          # executing that code populate a cache that trusted default-branch jobs restore.
+          cache: maven
 
       - name: Build JVM candidate image
         if: inputs.runtime == 'jvm'
