@@ -5957,19 +5957,28 @@ function applySecurityScanRepositoryScope(repository, config) {
 }
 
 async function loadSecurityScanPolicyOptions(assignedId) {
-  // Fetch independently of the Policies tab's filter and cursor. Policy revisions are
-  // immutable; offer the latest revision of each name and preserve an older assignment.
+  // Page policy heads, not their immutable revision history. The server also
+  // includes an older assigned revision so opening the form preserves its binding.
   const policies = [];
   let after = 0;
   do {
-    const page = await fetchJson(`/internal/security/scanning/policies?limit=100&after=${after}`,
-      null, "Failed to load scan policies");
+    const params = new URLSearchParams({ limit: "100", after: String(after) });
+    if (assignedId != null) params.set("assignedPolicyId", String(assignedId));
+    const response = await fetch(`/internal/security/scanning/policies/options?${params}`, { cache: "no-store" });
+    if (!response.ok) {
+      const error = new Error(`HTTP ${response.status}`);
+      error.response = response;
+      throw error;
+    }
+    const page = await response.json();
     if (!Array.isArray(page?.items)) throw new Error("Invalid scan policy response");
     policies.push(...page.items);
     const next = page.nextAfter;
     if (next != null && (!Number.isFinite(Number(next)) || Number(next) <= after)) throw new Error("Invalid scan policy cursor");
     after = next == null ? null : Number(next);
   } while (after != null);
+  // A policy may be revised between option pages. Discard a superseded head,
+  // while keeping the revision this repository already uses.
   const latest = new Map();
   for (const policy of policies) {
     const name = policy.name.toLowerCase();
@@ -6012,8 +6021,11 @@ async function editSecurityScanRepository(repositoryId) {
   try {
     policies = await loadSecurityScanPolicyOptions(repository.config?.policyId);
   } catch (error) {
+    if (request !== securityScanState.repositoryEditRequest) return;
+    // Error reporting and authentication redirects belong only to the current editor.
+    const message = error.response ? await responseErrorMessage(error.response) : error.message;
     if (request === securityScanState.repositoryEditRequest) {
-      showToast(`Failed to load scan policies: ${error.message}`, "error");
+      showToast(`Failed to load scan policies: ${message}`, "error");
     }
     return;
   }

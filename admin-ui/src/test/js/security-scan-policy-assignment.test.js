@@ -5,6 +5,7 @@ const test = require('node:test');
 const vm = require('node:vm');
 const source = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/assets/admin.js'), 'utf8');
 
+const okPage = page => ({ ok: true, status: 200, json: async () => page });
 const policy = (id, revision, overrides = {}) => ({
   id, revision, name: 'default-audit', enabled: true, maxResultAgeSeconds: 604800, ...overrides,
 });
@@ -34,14 +35,25 @@ function setup(repositories = [repository()]) {
     securityScanListEndpoints: { repositories: 'repositories' },
     securityScanPageParams: () => new URLSearchParams(),
     document: { querySelectorAll: () => [], getElementById: element, createElement: () => ({ dataset: {} }) },
-    fetchJson: async url => { requests.push(url); return { items: [policy(4, 4)] }; },
-    fetch: async (url, options) => { saves.push({ url, payload: JSON.parse(options.body) }); return { ok: true }; },
+    URLSearchParams, window: { location: { href: '' } },
+    authRequiredWelcome: () => '/login', updateSessionControls() {},
+    policyResponse: async () => okPage({ items: [policy(4, 4)] }),
+    fetch: async (url, options = {}) => {
+      if (options.method === 'PUT') {
+        saves.push({ url, payload: JSON.parse(options.body) });
+        return { ok: true };
+      }
+      requests.push(url);
+      return context.policyResponse(url);
+    },
     showToast: (...args) => toasts.push(args),
     openFormModal: (...args) => opened.push(args), closeFormModal() {}, loadSecurityScanning: async () => {},
   };
   vm.createContext(context);
   for (const [start, end] of [
     ['function escapeHtml(', 'function '],
+    ['async function fetchJson(', 'function uiThemeLabel('],
+    ['async function responseErrorMessage(', 'async function saveBlobStore('],
     ['async function fetchSecurityScanPage(', 'function resetSecurityScanPage('],
     ['function switchView(', 'function applyHashRoute('],
     ['function selectSecurityScanTab(', 'function handleSecurityScanTabKeydown('],
@@ -54,20 +66,19 @@ function setup(repositories = [repository()]) {
   return { context, element, requests, saves, toasts, opened };
 }
 
-test('options read every page independently of the policy tab and preserve assigned older revisions', async () => {
+test('options page policy heads, discard superseded heads across pages and preserve the assigned older revision', async () => {
   const { context, requests } = setup();
   context.securityScanState.policies = [policy(999, 1, { name: 'filtered-tab' })];
-  context.fetchJson = async url => {
-    requests.push(url);
-    return requests.length === 1
-      ? { items: [policy(1, 1), policy(2, 2)], nextAfter: 2 }
-      : { items: [policy(3, 3), policy(4, 4, { enabled: false }), policy(5, 1, { name: 'other' })] };
+  context.policyResponse = async url => {
+    return okPage(requests.length === 1
+      ? { items: [policy(1, 1), policy(4, 4, { enabled: false })], nextAfter: 4 }
+      : { items: [policy(5, 1, { name: 'other' }), policy(6, 5, { enabled: false })] });
   };
   const options = await context.loadSecurityScanPolicyOptions(1);
-  assert.deepEqual(Array.from(options, item => item.id), [4, 1, 5]);
+  assert.deepEqual(Array.from(options, item => item.id), [6, 1, 5]);
   assert.deepEqual(requests, [
-    '/internal/security/scanning/policies?limit=100&after=0',
-    '/internal/security/scanning/policies?limit=100&after=2',
+    '/internal/security/scanning/policies/options?limit=100&after=0&assignedPolicyId=1',
+    '/internal/security/scanning/policies/options?limit=100&after=4&assignedPolicyId=1',
   ]);
 });
 
@@ -107,7 +118,7 @@ test('validity preview takes the shorter limit and ignores disabled policy age; 
 
 test('unknown current assignment is retained, and names are escaped in option markup', async () => {
   const { context, element, saves } = setup([repository(5, { policyId: 99 })]);
-  context.fetchJson = async () => ({ items: [policy(4, 4, { name: '<img src=x onerror="alert(1)">' })] });
+  context.policyResponse = async () => okPage({ items: [policy(4, 4, { name: '<img src=x onerror="alert(1)">' })] });
   await context.editSecurityScanRepository(5);
   assert.equal(element('security-scan-policy-id').value, '99');
   assert.match(element('security-scan-policy-id').innerHTML, /&lt;img/);
@@ -119,7 +130,7 @@ test('unknown current assignment is retained, and names are escaped in option ma
 
 test('policy load failure does not open a partially populated form', async () => {
   const { context, opened, toasts } = setup();
-  context.fetchJson = async () => { throw new Error('Access denied'); };
+  context.policyResponse = async () => { throw new Error('Access denied'); };
   await context.editSecurityScanRepository(5);
   assert.equal(opened.length, 0);
   assert.match(toasts[0][0], /Access denied/);
@@ -128,11 +139,11 @@ test('policy load failure does not open a partially populated form', async () =>
 test('a slower earlier load cannot reopen or overwrite the latest repository editor', async () => {
   const { context, element, opened } = setup([repository(5), repository(6)]);
   let resolveFirst;
-  context.fetchJson = () => new Promise(resolve => { resolveFirst = resolve; });
+  context.policyResponse = () => new Promise(resolve => { resolveFirst = resolve; });
   const first = context.editSecurityScanRepository(5);
-  context.fetchJson = async () => ({ items: [] });
+  context.policyResponse = async () => okPage({ items: [] });
   await context.editSecurityScanRepository(6);
-  resolveFirst({ items: [policy(4, 4)] });
+  resolveFirst(okPage({ items: [policy(4, 4)] }));
   await first;
   assert.equal(element('security-scan-repository-id').value, 6);
   assert.equal(opened.length, 1);
@@ -147,10 +158,10 @@ test('policy loading cannot open a modal after navigation or deployment disablem
   ]) {
     const state = setup();
     let resolve;
-    state.context.fetchJson = () => new Promise(done => { resolve = done; });
+    state.context.policyResponse = () => new Promise(done => { resolve = done; });
     const pending = state.context.editSecurityScanRepository(5);
     change(state);
-    resolve({ items: [] });
+    resolve(okPage({ items: [] }));
     await pending;
     assert.equal(state.opened.length, 0);
   }
@@ -161,11 +172,11 @@ test('leaving the repository tab cancels pending loads even if the user returns 
   for (const returnToRepositories of [false, true]) {
     const { context, opened } = setup();
     let resolve;
-    context.fetchJson = () => new Promise(done => { resolve = done; });
+    context.policyResponse = () => new Promise(done => { resolve = done; });
     const pending = context.editSecurityScanRepository(5);
     context.selectSecurityScanTab('policies', { updateHash: false });
     if (returnToRepositories) context.selectSecurityScanTab('repositories', { updateHash: false });
-    resolve({ items: [] });
+    resolve(okPage({ items: [] }));
     await pending;
     assert.equal(opened.length, 0, 'must not open a hidden or previously abandoned editor');
   }
@@ -175,11 +186,11 @@ test('leaving the repository tab cancels pending loads even if the user returns 
 test('leaving the scanning view cancels a pending editor even when browser history returns directly to repositories', async () => {
   const { context, opened } = setup();
   let resolve;
-  context.fetchJson = () => new Promise(done => { resolve = done; });
+  context.policyResponse = () => new Promise(done => { resolve = done; });
   const pending = context.editSecurityScanRepository(5);
   context.switchView('ui-settings', { updateHash: false });
   context.switchView('security-scanning', { updateHash: false });
-  resolve({ items: [] });
+  resolve(okPage({ items: [] }));
   await pending;
   assert.equal(opened.length, 0);
 });
@@ -187,11 +198,11 @@ test('leaving the scanning view cancels a pending editor even when browser histo
 test('refreshing or paging the repository list cancels an editor based on the previous list', async () => {
   const { context, opened } = setup();
   let resolve;
-  context.fetchJson = () => new Promise(done => { resolve = done; });
+  context.policyResponse = () => new Promise(done => { resolve = done; });
   const pending = context.editSecurityScanRepository(5);
-  context.fetchJson = async () => ({ items: [] });
+  context.policyResponse = async () => okPage({ items: [] });
   await context.fetchSecurityScanPage('repositories');
-  resolve({ items: [] });
+  resolve(okPage({ items: [] }));
   await pending;
   assert.equal(opened.length, 0);
 });
@@ -199,11 +210,58 @@ test('refreshing or paging the repository list cancels an editor based on the pr
 test('closing the editor cancels a pending load and suppresses an abandoned request error', async () => {
   const { context, opened, toasts } = setup();
   let reject;
-  context.fetchJson = () => new Promise((_, fail) => { reject = fail; });
+  context.policyResponse = () => new Promise((_, fail) => { reject = fail; });
   const pending = context.editSecurityScanRepository(5);
   context.hideSecurityScanRepositoryForm();
   reject(new Error('delayed request failure'));
   await pending;
   assert.equal(opened.length, 0);
+  assert.equal(toasts.length, 0);
+});
+
+
+test('cancelled HTTP failures produce neither stale toasts nor authentication redirects', async () => {
+  for (const status of [500, 401, 403]) {
+    const { context, toasts } = setup();
+    let resolve;
+    context.policyResponse = () => new Promise(done => { resolve = done; });
+    const pending = context.editSecurityScanRepository(5);
+    context.hideSecurityScanRepositoryForm();
+    resolve({ ok: false, status, text: async () => '{"message":"backend error"}' });
+    await pending;
+    assert.equal(toasts.length, 0);
+    assert.equal(context.window.location.href, '');
+  }
+});
+
+test('current HTTP failure reports the backend message once', async () => {
+  const { context, toasts } = setup();
+  context.policyResponse = async () => ({ ok: false, status: 500, text: async () => '{"message":"backend error"}' });
+  await context.editSecurityScanRepository(5);
+  assert.equal(toasts.length, 1);
+  assert.match(toasts[0][0], /backend error/);
+});
+
+
+test('authentication failure redirects only while the editor request is current', async () => {
+  const { context } = setup();
+  context.policyResponse = async () => ({ ok: false, status: 401 });
+  await context.editSecurityScanRepository(5);
+  assert.equal(context.window.location.href, '/login');
+});
+
+test('cancelling during error-body parsing suppresses the delayed toast', async () => {
+  const { context, toasts } = setup();
+  let releaseBody, bodyStarted;
+  const started = new Promise(resolve => { bodyStarted = resolve; });
+  context.policyResponse = async () => ({ ok: false, status: 500, text: () => {
+    bodyStarted();
+    return new Promise(resolve => { releaseBody = resolve; });
+  } });
+  const pending = context.editSecurityScanRepository(5);
+  await started;
+  context.hideSecurityScanRepositoryForm();
+  releaseBody('{"message":"late backend error"}');
+  await pending;
   assert.equal(toasts.length, 0);
 });

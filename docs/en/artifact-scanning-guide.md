@@ -294,6 +294,7 @@ it does not scan an additional synthetic group-file copy.
 The scan profile remains read-only. Repository administrators with security-scanning update
 permission can choose a named policy in the repository dialog. The selector offers each policy's
 latest revision and retains an older current assignment; disabled policies are marked explicitly.
+Policy assignments and unassignments are recorded in the security audit log.
 Creating a policy does not assign it automatically. Editing an assigned policy creates a revision
 and moves its bound repositories to that revision, while historical decisions retain the old one.
 

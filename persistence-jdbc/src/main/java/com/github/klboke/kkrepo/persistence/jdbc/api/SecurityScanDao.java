@@ -405,6 +405,9 @@ public interface SecurityScanDao {
 
   List<ScanPolicy> listPolicies(String query, long afterId, int maxItems);
 
+  /** Latest revision of each policy plus an optional existing assignment, paginated by ID. */
+  List<ScanPolicy> listPolicyOptions(Long assignedPolicyId, long afterId, int maxItems);
+
   Optional<ScanPolicy> findPolicy(long policyId);
 
   ScanPolicy createPolicy(ScanPolicy policy);

@@ -192,6 +192,15 @@ public class SecurityScanManagementController {
     return service.policyPage(actor(request), query, after, limit);
   }
 
+  @GetMapping("/policies/options")
+  public CursorPage<ScanPolicy> policyOptions(
+      @RequestParam(name = "assignedPolicyId", required = false) Long assignedPolicyId,
+      @RequestParam(name = "after", defaultValue = "0") long after,
+      @RequestParam(name = "limit", defaultValue = "25") int limit,
+      HttpServletRequest request) {
+    return service.policyOptionPage(actor(request), assignedPolicyId, after, limit);
+  }
+
   @PostMapping("/policies")
   public ScanPolicy createPolicy(
       @RequestBody PolicyCommand command, HttpServletRequest request) {
