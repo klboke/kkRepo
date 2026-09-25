@@ -1629,10 +1629,9 @@
                       <small class="form-note">Assigned by the scanner deployment.</small>
                     </label>
                     <label>
-                      <span>Vulnerability policy</span>
-                      <input id="security-scan-repository-policy-name" type="text" disabled>
-                      <input id="security-scan-policy-id" type="hidden">
-                      <small class="form-note">Resolved from the centrally managed policy.</small>
+                      <span>Scan policy</span>
+                      <select id="security-scan-policy-id" aria-describedby="security-scan-policy-help"></select>
+                      <small class="form-note" id="security-scan-policy-help"></small>
                     </label>
                     <label>
                       <span>Mode</span>
@@ -1644,13 +1643,13 @@
                     </label>
                     <label>
                       <span>Result validity</span>
-                      <select id="security-scan-max-age">
-                        <option value="">Use policy default</option>
+                      <select id="security-scan-max-age" aria-describedby="security-scan-validity-help">
+                        <option value="">Use assigned policy (no repository limit)</option>
                         <option value="86400">1 day</option>
                         <option value="604800">7 days</option>
                         <option value="2592000">30 days</option>
                       </select>
-                      <small class="form-note">Results older than this are treated as stale.</small>
+                      <small class="form-note" id="security-scan-validity-help" aria-live="polite"></small>
                     </label>
                     <label class="checkbox-field security-scan-enabled-field"><input id="security-scan-enabled" type="checkbox"><span>Enable scanning for this repository</span></label>
                   </div>
@@ -1959,6 +1958,6 @@
     <script src="./assets/admin-filter.js?v=20260706-wildcard-filter-1"></script>
     <script src="/browse/assets/global-component-search.js?v=20260817-global-search-2"></script>
     <script src="./assets/content-selectors.js?v=20260908-content-selectors-1"></script>
-    <script src="./assets/admin.js?v=20260923-scan-completion-sort-4"></script>
+    <script src="./assets/admin.js?v=20260925-scan-policy-assignment-1"></script>
   </body>
 </html>

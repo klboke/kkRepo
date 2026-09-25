@@ -70,6 +70,8 @@ let securityScanState = {
   findings: [],
   repositories: [],
   policies: [],
+  repositoryPolicyOptions: [],
+  repositoryEditRequest: 0,
   waivers: []
 };
 const SECURITY_SCAN_DEFAULT_PAGE_SIZE = 10;
@@ -5589,12 +5591,15 @@ function renderSecurityScanResultValidity(repository) {
   if (!validity) return renderSecurityScanSetting("Unavailable", "Effective result validity is unavailable. Refresh after the server update completes.");
   const label = formatSecurityScanValidity(validity.maxResultAgeSeconds) || "No expiry";
   const sources = {
-    POLICY: "Inherited from the active scan policy.",
-    REPOSITORY: "Set by the repository; the active policy adds no expiry limit.",
-    BOTH: "The shorter of the repository and active policy validity periods applies.",
-    NO_EXPIRY: "Neither the repository nor the active policy sets an age limit. This does not mean the artifact is safe or its scan is current."
+    POLICY: "Inherited from the assigned scan policy.",
+    REPOSITORY: "Set by the repository; no enabled assigned policy adds an expiry limit.",
+    BOTH: "The shorter of the repository and assigned policy validity periods applies.",
+    NO_EXPIRY: "Neither the repository nor an enabled assigned policy imposes an age limit. This does not mean the artifact is safe or its scan is current."
   };
-  return renderSecurityScanSetting(label, `${sources[validity.source] || ""} Age is measured from scan completion. Expired results use pending handling; policy or scanner changes can also require reevaluation.`);
+  const context = repository.config?.policyId == null
+    ? "No policy is assigned; the built-in rules have no age limit. "
+    : repository.policyEnabled === false ? "The assigned policy is disabled and contributes no age limit. " : "";
+  return renderSecurityScanSetting(label, `${context}${sources[validity.source] || ""} Age is measured from scan completion. Expired results use pending handling; policy or scanner changes can also require reevaluation.`);
 }
 
 function renderSecurityScanExceptionHandling(repository) {
@@ -5626,13 +5631,15 @@ function renderSecurityScanRepositories() {
   table.innerHTML =
     securityScanState.repositories.map((repository) => {
       const config = repository.config;
-      const policy = repository.policyName || "Built-in critical baseline";
+      const policy = repository.config?.policyId == null
+        ? renderSecurityScanSetting("Built-in rules (unassigned)", "No policy is assigned. The built-in Critical severity rules are not a policy record in the Policies tab. Configure this repository to assign a named policy.")
+        : escapeHtml(repository.policyName || "Unavailable assigned policy");
       return `
         <tr>
           <td>${renderSecurityScanRepositoryStatus(config?.enabled === true)}</td>
           <td>${renderSecurityScanSetting(repository.name, `Format: ${repository.format}. Type: ${repository.type}.`)}</td>
           <td>${escapeHtml(repository.profileName || "Unavailable profile")}</td>
-          <td>${escapeHtml(policy)}${repository.policyEnabled === false ? " (disabled)" : ""}</td>
+          <td>${policy}${repository.policyEnabled === false ? " (disabled)" : ""}</td>
           <td>${escapeHtml(config?.enforcementMode || "AUDIT")}</td>
           <td>${renderSecurityScanResultValidity(repository)}</td>
           <td>${renderSecurityScanExceptionHandling(repository)}</td>
@@ -5946,22 +5953,89 @@ function applySecurityScanRepositoryScope(repository, config) {
   }
 }
 
-function editSecurityScanRepository(repositoryId) {
+async function loadSecurityScanPolicyOptions(assignedId) {
+  // Fetch independently of the Policies tab's filter and cursor. Policy revisions are
+  // immutable; offer the latest revision of each name and preserve an older assignment.
+  const policies = [];
+  let after = 0;
+  do {
+    const page = await fetchJson(`/internal/security/scanning/policies?limit=100&after=${after}`,
+      null, "Failed to load scan policies");
+    if (!Array.isArray(page?.items)) throw new Error("Invalid scan policy response");
+    policies.push(...page.items);
+    const next = page.nextAfter;
+    if (next != null && (!Number.isFinite(Number(next)) || Number(next) <= after)) throw new Error("Invalid scan policy cursor");
+    after = next == null ? null : Number(next);
+  } while (after != null);
+  const latest = new Map();
+  for (const policy of policies) {
+    const name = policy.name.toLowerCase();
+    if (!latest.has(name) || Number(policy.revision) > Number(latest.get(name).revision)) {
+      latest.set(name, policy);
+    }
+  }
+  return policies.filter((policy) => latest.get(policy.name.toLowerCase()) === policy
+    || Number(policy.id) === Number(assignedId))
+    .sort((left, right) => left.name.localeCompare(right.name) || right.revision - left.revision);
+}
+
+function updateSecurityScanRepositoryPolicyHelp() {
+  const policyId = optionalNumber("security-scan-policy-id");
+  const policy = securityScanState.repositoryPolicyOptions.find((item) => Number(item.id) === policyId);
+  const policyHelp = document.getElementById("security-scan-policy-help");
+  if (policyId == null) {
+    policyHelp.textContent = "No policy is assigned. Built-in rules flag Critical vulnerabilities and have no age limit. They are not listed in Policies. Mode and exception handling still apply.";
+  } else if (!policy) {
+    policyHelp.textContent = "The assigned policy is unavailable. The current assignment is preserved; select a policy to replace it.";
+  } else {
+    policyHelp.textContent = policy.enabled
+      ? "Rules come from this policy in Security Scanning → Policies. Creating or editing another policy does not assign it here."
+      : "This policy is disabled: vulnerability and partial-result checks are bypassed, and its age limit is ignored. Pending and failure handling still apply.";
+  }
+  const repositoryAge = optionalNumber("security-scan-max-age");
+  const policyAge = policy?.enabled ? policy.maxResultAgeSeconds : null;
+  const limits = [repositoryAge, policyAge].filter((age) => Number(age) > 0).map(Number);
+  const validity = limits.length ? formatSecurityScanValidity(Math.min(...limits)) : "No expiry";
+  document.getElementById("security-scan-validity-help").textContent = policyId != null && !policy
+    ? "Effective validity is unavailable until the assigned policy can be loaded."
+    : `Effective validity: ${validity}. Uses the shorter repository/policy limit, measured from scan completion. Expired results use pending handling. With no limit, results do not expire by age; policy or scanner changes can still require reevaluation.`;
+}
+
+async function editSecurityScanRepository(repositoryId) {
   const repository = securityScanState.repositories.find((item) => Number(item.id) === Number(repositoryId));
   if (!repository) return;
+  const request = ++securityScanState.repositoryEditRequest;
+  let policies;
+  try {
+    policies = await loadSecurityScanPolicyOptions(repository.config?.policyId);
+  } catch (error) {
+    if (request === securityScanState.repositoryEditRequest) {
+      showToast(`Failed to load scan policies: ${error.message}`, "error");
+    }
+    return;
+  }
+  if (request !== securityScanState.repositoryEditRequest
+      || securityScanState.summary?.deploymentEnabled !== true
+      || !document.getElementById("security-scanning-view").classList.contains("is-active")) return;
+  securityScanState.repositoryPolicyOptions = policies;
   const config = repository.config || {};
   document.getElementById("security-scan-repository-id").value = repository.id;
   document.getElementById("security-scan-repository-name").value = repository.name;
   document.getElementById("security-scan-profile-name").value = repository.profileName || "Unavailable profile";
   document.getElementById("security-scan-profile-id").value = config.profileId || "";
-  document.getElementById("security-scan-repository-policy-name").value =
-    repository.policyName || "Built-in critical baseline";
-  document.getElementById("security-scan-policy-id").value = config.policyId || "";
+  const policySelect = document.getElementById("security-scan-policy-id");
+  policySelect.innerHTML = '<option value="">Built-in rules (no assigned policy)</option>'
+    + policies.map((policy) => `<option value="${escapeHtml(policy.id)}">${escapeHtml(policy.name)} (revision ${escapeHtml(policy.revision)})${policy.enabled ? "" : " (disabled)"}</option>`).join("");
+  if (config.policyId != null && !policies.some((policy) => Number(policy.id) === Number(config.policyId))) {
+    policySelect.innerHTML += `<option value="${escapeHtml(config.policyId)}">${escapeHtml(repository.policyName || "Unavailable assigned policy")} (current assignment)</option>`;
+  }
+  policySelect.value = config.policyId == null ? "" : String(config.policyId);
   document.getElementById("security-scan-enforcement-mode").value = config.enforcementMode || "AUDIT";
   document.getElementById("security-scan-pending-action").value = config.pendingAction || "ALLOW";
   document.getElementById("security-scan-failure-action").value = config.failureAction || "ALLOW";
   document.getElementById("security-scan-partial-action").value = config.partialAction || "ALLOW";
   setSecurityScanResultValidity(config.maxResultAgeSeconds);
+  updateSecurityScanRepositoryPolicyHelp();
   document.getElementById("security-scan-enabled").checked = Boolean(config.enabled);
   applySecurityScanRepositoryScope(repository, config);
   document.getElementById("security-scan-advanced").open =
@@ -5970,6 +6044,7 @@ function editSecurityScanRepository(repositoryId) {
 }
 
 function hideSecurityScanRepositoryForm() {
+  ++securityScanState.repositoryEditRequest;
   document.getElementById("security-scan-repository-id").value = "";
   closeFormModal("security-scan-repository-form");
 }
@@ -8183,6 +8258,9 @@ document.getElementById("security-scan-repository-table").addEventListener("clic
   if (editButton) editSecurityScanRepository(editButton.dataset.id);
 });
 document.getElementById("security-scan-repository-form").addEventListener("submit", saveSecurityScanRepository);
+["security-scan-policy-id", "security-scan-max-age"].forEach((id) => {
+  document.getElementById(id).addEventListener("change", updateSecurityScanRepositoryPolicyHelp);
+});
 document.getElementById("security-scan-cancel-repository-button").addEventListener(
   "click", hideSecurityScanRepositoryForm);
 document.getElementById("security-scan-create-policy-button").addEventListener(

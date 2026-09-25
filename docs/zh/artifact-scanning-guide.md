@@ -247,7 +247,7 @@ kubectl logs statefulset/kkrepo-scanner
 2. 搜索目标仓库并点击 **configure**。
 3. 勾选 **Enable scanning for this repository**。
 4. 保持 **Mode = Audit only** 进行首次验证。
-5. 选择结果有效期和适用的内容范围。
+5. 选择 **Scan policy**（或保留明确未绑定策略的内置规则）、结果有效期和适用的内容范围。
 6. 检查 **Advanced exception handling**，首次启用建议全部保持
    **Allow download**。
 7. 保存配置。
@@ -258,9 +258,9 @@ kubectl logs statefulset/kkrepo-scanner
 | --- | --- |
 | Repository | 当前仓库，只读 |
 | Scan profile | scanner 能力绑定，当前内置值为 `syft-grype-v1`，只读 |
-| Vulnerability policy | 当前集中绑定的策略或内置 critical baseline，只读 |
+| Scan policy | 绑定命名策略的修订，或选择未绑定策略的内置规则 |
 | Mode | `AUDIT` 只记录；`ENFORCE` 才真正阻断 |
-| Result validity | 使用策略默认值，或设置 1/7/30 天；过期结果按 pending 处理 |
+| Result validity | 继承已绑定且启用的策略有效期，或设置 1/7/30 天；两者取较短值，过期结果按 pending 处理 |
 | Enable scanning | 当前仓库的实际业务开关 |
 | Scan hosted content | 扫描 hosted 内容 |
 | Scan proxy content | 扫描 proxy 缓存内容 |
@@ -268,9 +268,16 @@ kubectl logs statefulset/kkrepo-scanner
 hosted 仓库只显示 hosted 开关，proxy 仓库只显示 proxy 开关，group 仓库同时显示两者。
 group 配置作用于其可解析的 hosted/proxy 成员内容，不扫描一个额外的“group 文件副本”。
 
-Scan profile 和 Vulnerability policy 不允许仓库管理员手填 ID 或任意切换。创建一个新
-policy 不会自动修改任何仓库；编辑已经被仓库使用的 policy 会创建新 revision，并把
-这些仓库迁移到新 revision，同时保留历史判定所引用的旧 revision。
+Scan profile 保持只读。拥有 security-scanning update 权限的仓库管理员可以在仓库配置
+对话框中选择命名策略。下拉框提供每个策略的最新修订，并保留当前已绑定的旧修订；
+禁用的策略会明确标注。创建新策略不会自动绑定仓库；修订已绑定的策略会把使用它的
+仓库迁移到新修订，历史判定仍保留原修订引用。
+
+**Built-in rules (no assigned policy)** 是 Critical 严重级别的回退规则，不是 Policies
+页中的策略记录，也没有结果有效期上限。**Use assigned policy (no repository limit)**
+只继承已绑定且启用的策略有效期；没有这类策略时，除非显式设置仓库有效期，否则结果
+不会因年龄过期。禁用策略的有效期不参与计算。对话框预览实际有效期，保存并刷新后，
+仓库表格显示服务端解析的值。
 
 ### 高级异常处理
 
