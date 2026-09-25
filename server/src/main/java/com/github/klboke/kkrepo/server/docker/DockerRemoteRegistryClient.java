@@ -60,7 +60,12 @@ public class DockerRemoteRegistryClient {
   }
 
   public HttpRemoteFetcher.Result get(RepositoryRuntime runtime, String remotePath, String accept) throws IOException {
-    String url = remoteUrl(runtime, remotePath);
+    return get(runtime, remotePath, null, accept);
+  }
+
+  public HttpRemoteFetcher.Result get(
+      RepositoryRuntime runtime, String remotePath, String query, String accept) throws IOException {
+    String url = remoteUrl(runtime, remotePath, query);
     RemoteFetch fetched = fetch(url, runtime, null, accept);
     HttpRemoteFetcher.Result result = fetched.result();
     if (result.status() == 401 && fetched.credentialsAllowed()) {
@@ -263,7 +268,7 @@ public class DockerRemoteRegistryClient {
     };
   }
 
-  private static String remoteUrl(RepositoryRuntime runtime, String remotePath) {
+  private static String remoteUrl(RepositoryRuntime runtime, String remotePath, String query) {
     String base = runtime.proxyRemoteUrl();
     if (base == null || base.isBlank()) {
       throw new DockerProtocolException(DockerErrorCode.NAME_UNKNOWN, "Docker proxy remote URL is not configured");
@@ -272,12 +277,12 @@ public class DockerRemoteRegistryClient {
     String path = remotePath == null ? "" : remotePath;
     while (path.startsWith("/")) path = path.substring(1);
     if (base.endsWith("/v2")) {
-      return RemoteUrlBuilder.repositoryPathString(base, path);
+      return RemoteUrlBuilder.repositoryPathWithQueryString(base, path, query);
     }
     if (base.contains("/v2/")) {
-      return RemoteUrlBuilder.repositoryPathString(base, path);
+      return RemoteUrlBuilder.repositoryPathWithQueryString(base, path, query);
     }
-    return RemoteUrlBuilder.repositoryPathString(base + "/v2", path);
+    return RemoteUrlBuilder.repositoryPathWithQueryString(base + "/v2", path, query);
   }
 
   private static String encode(String value) {

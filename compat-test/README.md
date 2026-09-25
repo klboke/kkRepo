@@ -799,6 +799,20 @@ with `COMPAT_RAW_REMOTE_URL` and `COMPAT_RAW_PROXY_PROBE_PATH`; defaults are
 
 ## Docker Registry V2 Compatibility
 
+`scripts/docker-pagination-upstream.py` creates an isolated registry fixture and temporary
+proxy/group repositories. It verifies tag pagination against Nexus and kkRepo, and additionally
+checks kkRepo catalog pagination, encoded cursors, Link headers and the actual upstream query
+separator. It runs in the Docker client E2E suite. The Nexus comparison covers tag listing;
+catalog assertions run against kkRepo.
+
+```bash
+python3 compat-test/scripts/docker-pagination-upstream.py --nexus http://localhost:28090
+KKREPO_COMPAT_AUTH=admin:12345678 python3 compat-test/scripts/docker-pagination-upstream.py \
+  --kkrepo http://localhost:18090 --upstream-host 127.0.0.1
+```
+
+Use `--upstream-host host.docker.internal` when the target runs in Docker.
+
 The Docker Registry V2 checks are disabled by default. They compare a Nexus Docker
 connector with a kkrepo Docker connector and can optionally cover path-based routing,
 proxy, group, and hosted write-policy repositories.
