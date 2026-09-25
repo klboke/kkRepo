@@ -47,7 +47,8 @@ class Registry(http.server.BaseHTTPRequestHandler):
             body = {'repositories': values[:limit]} if catalog else {'name': 'team/app', 'tags': values[:limit]}
             if len(values) > limit:
                 next_query = urllib.parse.urlencode({'n': limit, 'last': values[limit - 1]})
-                self.next_link = '<' + uri.path + '?' + next_query + '>; rel="next"'
+                resource_path = '/v2/_catalog' if catalog else '/v2/team/app/tags/list'
+                self.next_link = '<' + resource_path + '?' + next_query + '>; rel="next"'
         else:
             self.send_response(404)
             self.end_headers()
