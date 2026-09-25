@@ -5694,6 +5694,7 @@ function securityScanPageParams(key) {
 }
 
 async function fetchSecurityScanPage(key) {
+  if (key === "repositories") ++securityScanState.repositoryEditRequest;
   const endpoint = securityScanListEndpoints[key];
   const requestVersion = ++securityScanPages[key].requestVersion;
   const payload = await fetchJson(
@@ -7913,6 +7914,7 @@ async function deleteCleanupPolicy(policyId) {
 function switchView(view, options = {}) {
   if (!currentAdminPermissions.includes("nexus:*") && view !== "content-selectors") return false;
   if (!document.getElementById(`${view}-view`)) return false;
+  if (view !== "security-scanning") ++securityScanState.repositoryEditRequest;
   if (options.updateHash !== false) {
     updateHashForView(view, Boolean(options.replaceHash));
   }

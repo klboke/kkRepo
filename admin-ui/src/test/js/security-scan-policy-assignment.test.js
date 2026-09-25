@@ -28,6 +28,11 @@ function setup(repositories = [repository()]) {
   const context = {
     securityScanState: { summary: { deploymentEnabled: true }, repositories, policies: [], repositoryPolicyOptions: [], repositoryEditRequest: 0 },
     SECURITY_SCAN_TABS: new Set(['overview', 'repositories', 'policies']),
+    currentAdminPermissions: ['nexus:*'], updateCurrentSideGroup() {}, loadUiSettings() {},
+    securityScanTabFromHash: () => 'repositories',
+    securityScanPages: { repositories: { requestVersion: 0 } },
+    securityScanListEndpoints: { repositories: 'repositories' },
+    securityScanPageParams: () => new URLSearchParams(),
     document: { querySelectorAll: () => [], getElementById: element, createElement: () => ({ dataset: {} }) },
     fetchJson: async url => { requests.push(url); return { items: [policy(4, 4)] }; },
     fetch: async (url, options) => { saves.push({ url, payload: JSON.parse(options.body) }); return { ok: true }; },
@@ -37,6 +42,8 @@ function setup(repositories = [repository()]) {
   vm.createContext(context);
   for (const [start, end] of [
     ['function escapeHtml(', 'function '],
+    ['async function fetchSecurityScanPage(', 'function resetSecurityScanPage('],
+    ['function switchView(', 'function applyHashRoute('],
     ['function selectSecurityScanTab(', 'function handleSecurityScanTabKeydown('],
     ['function formatSecurityScanValidity(', 'function showCreateSecurityScanPolicyForm('],
   ]) {
@@ -162,4 +169,41 @@ test('leaving the repository tab cancels pending loads even if the user returns 
     await pending;
     assert.equal(opened.length, 0, 'must not open a hidden or previously abandoned editor');
   }
+});
+
+
+test('leaving the scanning view cancels a pending editor even when browser history returns directly to repositories', async () => {
+  const { context, opened } = setup();
+  let resolve;
+  context.fetchJson = () => new Promise(done => { resolve = done; });
+  const pending = context.editSecurityScanRepository(5);
+  context.switchView('ui-settings', { updateHash: false });
+  context.switchView('security-scanning', { updateHash: false });
+  resolve({ items: [] });
+  await pending;
+  assert.equal(opened.length, 0);
+});
+
+test('refreshing or paging the repository list cancels an editor based on the previous list', async () => {
+  const { context, opened } = setup();
+  let resolve;
+  context.fetchJson = () => new Promise(done => { resolve = done; });
+  const pending = context.editSecurityScanRepository(5);
+  context.fetchJson = async () => ({ items: [] });
+  await context.fetchSecurityScanPage('repositories');
+  resolve({ items: [] });
+  await pending;
+  assert.equal(opened.length, 0);
+});
+
+test('closing the editor cancels a pending load and suppresses an abandoned request error', async () => {
+  const { context, opened, toasts } = setup();
+  let reject;
+  context.fetchJson = () => new Promise((_, fail) => { reject = fail; });
+  const pending = context.editSecurityScanRepository(5);
+  context.hideSecurityScanRepositoryForm();
+  reject(new Error('delayed request failure'));
+  await pending;
+  assert.equal(opened.length, 0);
+  assert.equal(toasts.length, 0);
 });
