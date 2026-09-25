@@ -268,7 +268,8 @@ repository-visibility check.
 2. Search for the repository and click **configure**.
 3. Select **Enable scanning for this repository**.
 4. Keep **Mode = Audit only** for the first validation period.
-5. Choose result validity and the applicable content scope.
+5. Select a **Scan policy** (or keep the explicitly unassigned built-in rules), result validity,
+   and the applicable content scope.
 6. Review **Advanced exception handling**. Keep every option at **Allow download** for the first
    rollout.
 7. Save the configuration.
@@ -279,9 +280,9 @@ Configuration fields:
 | --- | --- |
 | Repository | Current repository; read-only |
 | Scan profile | Scanner capability binding; built-in value is `syft-grype-v1`; read-only |
-| Vulnerability policy | Centrally assigned policy or built-in critical baseline; read-only |
+| Scan policy | Assign a named policy revision or select built-in rules with no assigned policy |
 | Mode | `AUDIT` records decisions; `ENFORCE` applies blocking |
-| Result validity | Use the policy default or select 1/7/30 days; expired results are pending |
+| Result validity | Inherit the enabled assigned policy limit or select 1/7/30 days; the shorter limit applies and expired results are pending |
 | Enable scanning | Business activation for this repository |
 | Scan hosted content | Scan hosted artifacts |
 | Scan proxy content | Scan cached proxy artifacts |
@@ -290,10 +291,18 @@ A hosted repository shows only the hosted switch, a proxy shows only the proxy s
 group shows both. A group configuration applies to content resolved from its hosted/proxy members;
 it does not scan an additional synthetic group-file copy.
 
-Repository administrators cannot type IDs or arbitrarily switch the scan profile and policy
-binding. Creating a new policy does not change a repository automatically. Editing a policy that
-is already assigned creates a revision and moves those repositories to the new revision while
-historical decisions retain the old revision.
+The scan profile remains read-only. Repository administrators with security-scanning update
+permission can choose a named policy in the repository dialog. The selector offers each policy's
+latest revision and retains an older current assignment; disabled policies are marked explicitly.
+Policy assignments and unassignments are recorded in the security audit log.
+Creating a policy does not assign it automatically. Editing an assigned policy creates a revision
+and moves its bound repositories to that revision, while historical decisions retain the old one.
+
+**Built-in rules (no assigned policy)** is the Critical severity fallback, not a stored policy in
+the Policies tab. It has no age limit. **Use assigned policy (no repository limit)** inherits only
+from an enabled assigned policy; without one, results have no age expiry unless a repository limit
+is selected. Disabled policies contribute no age limit. The dialog previews the effective validity;
+saving and refreshing the repository table shows the server-resolved value.
 
 ### Advanced Exception Handling
 

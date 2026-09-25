@@ -100,6 +100,8 @@ class SecurityScanManagementControllerTest {
         .thenReturn(new CursorPage<>(List.of(), null));
     when(service.findingArtifacts(actor, 24L, 25L, 26L, 27))
         .thenReturn(new FindingArtifactPage(List.of(), null, null));
+    when(service.policyOptionPage(actor, 12L, 13L, 14))
+        .thenReturn(new CursorPage<>(List.of(), null));
     when(service.policyPage(actor, "policy", 13L, 14))
         .thenReturn(new CursorPage<>(List.of(), null));
     when(service.waiverPage(actor, 15L, "waiver", 16L, 17))
@@ -153,6 +155,7 @@ class SecurityScanManagementControllerTest {
     controller.repositoryConfig(19L, request);
     assertEquals(config, controller.updateRepositoryConfig(19L, configCommand, request));
     assertEquals(List.of(), controller.policies("policy", 13L, 14, request).items());
+    assertEquals(List.of(), controller.policyOptions(12L, 13L, 14, request).items());
     assertEquals(policy, controller.createPolicy(policyCommand, request));
     assertEquals(policy, controller.revisePolicy(21L, policyCommand, request));
     assertEquals(List.of(), controller.waivers(15L, "waiver", 16L, 17, request).items());

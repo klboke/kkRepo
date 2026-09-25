@@ -3339,6 +3339,28 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   @Override
+  public List<ScanPolicy> listPolicyOptions(Long assignedPolicyId, long afterId, int maxItems) {
+    // Group the indexed policy names/revisions before loading rows. Historical
+    // revisions never consume option pages unless they are currently assigned.
+    return jdbc.query("""
+        SELECT policy.* FROM security_scan_policy policy
+        JOIN (
+          SELECT candidate.id FROM security_scan_policy candidate
+          JOIN (
+            SELECT name_normalized, MAX(revision) AS revision
+            FROM security_scan_policy GROUP BY name_normalized
+          ) heads ON heads.name_normalized = candidate.name_normalized
+                 AND heads.revision = candidate.revision
+          WHERE candidate.id > ?
+          UNION
+          SELECT id FROM security_scan_policy WHERE id = ? AND id > ?
+        ) selected ON selected.id = policy.id
+        ORDER BY policy.id LIMIT ?
+        """, policyMapper, Math.max(0, afterId),
+        assignedPolicyId == null ? 0L : assignedPolicyId, Math.max(0, afterId), safeLimit(maxItems));
+  }
+
+  @Override
   public Optional<ScanPolicy> findPolicy(long policyId) {
     return jdbc.query(
         "SELECT * FROM security_scan_policy WHERE id = ?",

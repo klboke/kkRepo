@@ -437,6 +437,32 @@ public abstract class PersistenceApiContract {
   }
 
   @Test
+  void scanPolicyOptionsPageHeadsWithoutWalkingHistoricalRevisions() {
+    SecurityScanDao scans = stores().securityScanning();
+    Instant now = Instant.parse("2026-09-25T00:00:00Z");
+    SecurityScanDao.ScanPolicy first = null;
+    SecurityScanDao.ScanPolicy latest = null;
+    for (int revision = 1; revision <= 125; revision++) {
+      latest = scans.createPolicy(new SecurityScanDao.ScanPolicy(
+          null, revision % 2 == 0 ? "option-history" : "OPTION-HISTORY", revision < 125,
+          Severity.CRITICAL, false, false, false, 604800L, List.of(), revision, "contract", now, now));
+      if (first == null) first = latest;
+    }
+    SecurityScanDao.ScanPolicy other = scans.createPolicy(new SecurityScanDao.ScanPolicy(
+        null, "other-option", true, Severity.HIGH, false, false, false,
+        null, List.of(), 1, "contract", now, now));
+    long before = first.id() - 1;
+    assertEquals(List.of(latest.id(), other.id()), scans.listPolicyOptions(null, before, 100)
+        .stream().map(SecurityScanDao.ScanPolicy::id).toList());
+    assertFalse(scans.listPolicyOptions(null, before, 1).getFirst().enabled(),
+        "a disabled latest revision must not fall back to an enabled historical revision");
+    assertEquals(List.of(first.id(), latest.id()), scans.listPolicyOptions(first.id(), before, 2)
+        .stream().map(SecurityScanDao.ScanPolicy::id).toList());
+    assertEquals(List.of(other.id()), scans.listPolicyOptions(first.id(), latest.id(), 2)
+        .stream().map(SecurityScanDao.ScanPolicy::id).toList());
+  }
+
+  @Test
   void cleanupPoliciesPersistTargetsSchedulesAndBoundedRunResults() {
     CleanupPolicyDao cleanup = stores().cleanupPolicies();
     Instant now = Instant.parse("2026-08-01T00:00:00Z");

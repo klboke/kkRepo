@@ -1014,6 +1014,14 @@ public class SecurityScanManagementService {
     return cursorPage(candidates, safeLimit, ScanPolicy::id);
   }
 
+  public CursorPage<ScanPolicy> policyOptionPage(
+      AuthenticatedSubject actor, Long assignedPolicyId, long afterId, int requestedLimit) {
+    requireGlobalRead(actor);
+    int safeLimit = limit(requestedLimit);
+    return cursorPage(scans.listPolicyOptions(assignedPolicyId, afterId, safeLimit + 1),
+        safeLimit, ScanPolicy::id);
+  }
+
   @Transactional
   public ScanPolicy createPolicy(AuthenticatedSubject actor, PolicyCommand command) {
     requireGlobalWrite(actor);

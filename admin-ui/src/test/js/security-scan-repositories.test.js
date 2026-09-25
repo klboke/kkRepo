@@ -33,7 +33,7 @@ const repository = overrides => ({
   id: 1, name: 'maven-group', format: 'MAVEN2', type: 'GROUP',
   profileName: 'default', policyName: 'critical', policyEnabled: true,
   resultValidity: { maxResultAgeSeconds: 86400, source: 'POLICY' },
-  config: { enabled: true, enforcementMode: 'ENFORCE', pendingAction: 'BLOCK', failureAction: 'ALLOW', partialAction: 'BLOCK' },
+  config: { policyId: 1, enabled: true, enforcementMode: 'ENFORCE', pendingAction: 'BLOCK', failureAction: 'ALLOW', partialAction: 'BLOCK' },
   ...overrides,
 });
 
@@ -42,7 +42,7 @@ test('repository rows display resolved validity without requiring the policy lis
   context.renderSecurityScanRepositories();
   assert.equal((table.innerHTML.match(/<td[ >]/g) || []).length, 8);
   assert.match(table.innerHTML, />1 day</);
-  assert.match(table.innerHTML, /Inherited from the active scan policy/);
+  assert.match(table.innerHTML, /Inherited from the assigned scan policy/);
   assert.match(table.innerHTML, /Format: MAVEN2. Type: GROUP/);
   assert.doesNotMatch(table.innerHTML, /<td>MAVEN2<\/td>/);
   assert.match(table.innerHTML, /Pending: Block/);
@@ -122,4 +122,13 @@ test('newly rendered tooltips bind hover, focus and Escape dismissal on every pa
     assert.equal(prevented, true);
     assert.equal(stopped, true);
   }
+});
+
+test('an unassigned repository explains the built-in fallback instead of implying a named policy', () => {
+  const row = repository({ policyName: null, config: { enabled: true }, resultValidity: { source: 'NO_EXPIRY' } });
+  const { context, table } = setup(row);
+  context.renderSecurityScanRepositories();
+  assert.match(table.innerHTML, /Built-in rules \(unassigned\)/);
+  assert.match(table.innerHTML, /not a policy record in the Policies tab/);
+  assert.match(table.innerHTML, /No policy is assigned; the built-in rules have no age limit/);
 });

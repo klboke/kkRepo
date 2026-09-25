@@ -18,7 +18,8 @@ class SecurityScanRepositoriesJavascriptTest {
     Process process = new ProcessBuilder(
         "node",
         "--test",
-        Path.of("src/test/js/security-scan-repositories.test.js").toString())
+        Path.of("src/test/js/security-scan-repositories.test.js").toString(),
+        Path.of("src/test/js/security-scan-policy-assignment.test.js").toString())
         .redirectErrorStream(true)
         .start();
 

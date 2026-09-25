@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -159,6 +160,24 @@ class SecurityScanManagementServiceCoreTest {
     assertEquals(repositoryAge, view.config().maxResultAgeSeconds());
     assertEquals(PolicyAction.BLOCK, view.config().partialAction());
     verify(scans, never()).findPolicy(anyLong());
+  }
+
+  @Test
+  void policyOptionsUseBoundedHeadQueryAndRetainAssignedRevision() {
+    when(scans.listPolicyOptions(10L, 0L, 2)).thenReturn(
+        List.of(policy(10L, "critical", 1L), policy(20L, "critical", 2L)));
+    var page = service.policyOptionPage(actor, 10L, 0L, 1);
+    assertEquals(List.of(10L), page.items().stream().map(ScanPolicy::id).toList());
+    assertEquals(10L, page.nextAfter());
+    verify(scans, never()).listPolicies();
+  }
+
+  @Test
+  void policyOptionsRequireGlobalScanReadPermission() {
+    when(security.decide(actor.permissionSubject(), "nexus:security-scanning:read"))
+        .thenReturn(AccessDecision.deny("denied"));
+    assertStatus(HttpStatus.FORBIDDEN, () -> service.policyOptionPage(actor, null, 0, 100));
+    verify(scans, never()).listPolicyOptions(any(), anyLong(), anyInt());
   }
 
   @Test
