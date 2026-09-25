@@ -360,7 +360,7 @@ class DockerProxyServiceTest {
     RepositoryRuntime runtime = proxyRuntime(1);
     byte[] body = "{\"repositories\":[\"library/alpine\",\"team/app\",\"z/late\"]}"
         .getBytes(StandardCharsets.UTF_8);
-    when(remoteClient.get(eq(runtime), eq("_catalog?n=3&last=library%2Falpine"),
+    when(remoteClient.get(eq(runtime), eq("_catalog"), eq("n=3&last=library%2Falpine"),
         eq(DockerConstants.MEDIA_TYPE_JSON)))
         .thenReturn(new HttpRemoteFetcher.Result(
             200,
@@ -380,7 +380,7 @@ class DockerProxyServiceTest {
     DockerRemoteRegistryClient remoteClient = mock(DockerRemoteRegistryClient.class);
     DockerProxyService service = new DockerProxyService(mock(DockerBlobStore.class), manifestStore, remoteClient);
     RepositoryRuntime runtime = proxyRuntime(1);
-    when(remoteClient.get(eq(runtime), eq("_catalog?n=3"), eq(DockerConstants.MEDIA_TYPE_JSON)))
+    when(remoteClient.get(eq(runtime), eq("_catalog"), eq("n=3"), eq(DockerConstants.MEDIA_TYPE_JSON)))
         .thenReturn(new HttpRemoteFetcher.Result(
             404,
             Map.of(),
