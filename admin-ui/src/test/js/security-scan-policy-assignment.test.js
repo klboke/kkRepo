@@ -27,7 +27,8 @@ function setup(repositories = [repository()]) {
   const requests = [], saves = [], toasts = [], opened = [];
   const context = {
     securityScanState: { summary: { deploymentEnabled: true }, repositories, policies: [], repositoryPolicyOptions: [], repositoryEditRequest: 0 },
-    document: { getElementById: element, createElement: () => ({ dataset: {} }) },
+    SECURITY_SCAN_TABS: new Set(['overview', 'repositories', 'policies']),
+    document: { querySelectorAll: () => [], getElementById: element, createElement: () => ({ dataset: {} }) },
     fetchJson: async url => { requests.push(url); return { items: [policy(4, 4)] }; },
     fetch: async (url, options) => { saves.push({ url, payload: JSON.parse(options.body) }); return { ok: true }; },
     showToast: (...args) => toasts.push(args),
@@ -36,6 +37,7 @@ function setup(repositories = [repository()]) {
   vm.createContext(context);
   for (const [start, end] of [
     ['function escapeHtml(', 'function '],
+    ['function selectSecurityScanTab(', 'function handleSecurityScanTabKeydown('],
     ['function formatSecurityScanValidity(', 'function showCreateSecurityScanPolicyForm('],
   ]) {
     const begin = source.indexOf(start), finish = source.indexOf(end, begin + start.length);
@@ -144,5 +146,20 @@ test('policy loading cannot open a modal after navigation or deployment disablem
     resolve({ items: [] });
     await pending;
     assert.equal(state.opened.length, 0);
+  }
+});
+
+
+test('leaving the repository tab cancels pending loads even if the user returns before completion', async () => {
+  for (const returnToRepositories of [false, true]) {
+    const { context, opened } = setup();
+    let resolve;
+    context.fetchJson = () => new Promise(done => { resolve = done; });
+    const pending = context.editSecurityScanRepository(5);
+    context.selectSecurityScanTab('policies', { updateHash: false });
+    if (returnToRepositories) context.selectSecurityScanTab('repositories', { updateHash: false });
+    resolve({ items: [] });
+    await pending;
+    assert.equal(opened.length, 0, 'must not open a hidden or previously abandoned editor');
   }
 });

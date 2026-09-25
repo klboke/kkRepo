@@ -754,6 +754,7 @@ function updateHashForView(view, replace = false) {
 
 function updateHashForSecurityScanTab(tab, replace = false) {
   const selected = SECURITY_SCAN_TABS.has(tab) ? tab : "overview";
+  if (selected !== "repositories") ++securityScanState.repositoryEditRequest;
   const hash = selected === "overview"
     ? SECURITY_SCAN_ROUTE_BASE
     : `${SECURITY_SCAN_ROUTE_BASE}/${selected}`;
@@ -5855,6 +5856,7 @@ async function loadSecurityScanning() {
 
 function selectSecurityScanTab(tab, options = {}) {
   const selected = SECURITY_SCAN_TABS.has(tab) ? tab : "overview";
+  if (selected !== "repositories") ++securityScanState.repositoryEditRequest;
   if (options.updateHash !== false) {
     updateHashForSecurityScanTab(selected, Boolean(options.replaceHash));
   }
