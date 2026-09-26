@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.BlobReferenceDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.InvalidScanCompletionCursorException;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ScanPolicyReferenceConflictException;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.EnumColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcInserts;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
@@ -854,6 +855,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Override
   @Transactional
   public RepositoryScanConfig upsertRepositoryConfig(RepositoryScanConfig config) {
+    lockPolicyReference(config.policyId());
     Instant now = requiredNow(config.updatedAt());
     if (!insertRepositoryConfig(config, now)) {
       int updated = updateRepositoryConfig(config, now);
@@ -2945,6 +2947,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Override
   @Transactional
   public AssetSecurityState upsertAssetStateIfCurrent(AssetSecurityState state) {
+    lockPolicyReference(state.policyId());
     lockScanCandidate(state.assetId());
     int updated = updateAssetState(state);
     if (updated == 0 && candidateGenerationMatches(state.assetId(), state.contentGeneration())) {
@@ -3050,6 +3053,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Override
   @Transactional
   public AssetPolicyState upsertAssetPolicyStateIfCurrent(AssetPolicyState state) {
+    lockPolicyReference(state.policyId());
     if (!lockWaiverRevision(state.waiverRevision())) {
       throw new IllegalStateException(
           "Waiver revision changed before policy evaluation was materialized");
@@ -3338,6 +3342,17 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     return jdbc.query(sql.toString(), policyMapper, args.toArray());
   }
 
+  private void lockPolicyReference(Long policyId) {
+    if (policyId == null) return;
+    // Share the parent lock before touching child rows. This permits parallel writers but
+    // fences deletion until their transaction commits. A current read also detects deletion
+    // committed after an earlier MySQL REPEATABLE READ validation snapshot.
+    List<Long> existing = jdbc.query(
+        "SELECT id FROM security_scan_policy WHERE id = ? FOR SHARE",
+        (rs, rowNum) -> rs.getLong("id"), policyId);
+    if (existing.isEmpty()) throw new ScanPolicyReferenceConflictException(policyId);
+  }
+
   @Override
   public Optional<ScanPolicy> findPolicy(long policyId) {
     return jdbc.query(
@@ -3494,8 +3509,10 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   @Override
+  @Transactional
   public int replaceRepositoryPolicy(
       long currentPolicyId, long replacementPolicyId, Instant updatedAt) {
+    lockPolicyReference(replacementPolicyId);
     return jdbc.update("""
         UPDATE repository_security_scan_config
         SET policy_id = ?, config_revision = config_revision + 1, updated_at = ?
@@ -3507,7 +3524,9 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   @Override
+  @Transactional
   public ScanWaiver createWaiver(ScanWaiver waiver) {
+    lockPolicyReference(waiver.policyId());
     long id = JdbcInserts.insert(jdbc, """
         INSERT INTO security_scan_waiver
           (scope_type, repository_id, asset_id, finding_id, advisory_selector,

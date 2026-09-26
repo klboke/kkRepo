@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.InvalidScanCompletionCursorException;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ScanPolicyReferenceConflictException;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.RepositoryScanConfig;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanPolicy;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanWaiver;
@@ -58,6 +59,12 @@ public class SecurityScanManagementController {
   @ExceptionHandler(InvalidScanCompletionCursorException.class)
   public ResponseEntity<Map<String, String>> invalidCompletionCursor() {
     return ResponseEntity.badRequest().body(Map.of("message", "Invalid completion cursor timestamp"));
+  }
+
+  @ExceptionHandler(ScanPolicyReferenceConflictException.class)
+  public ResponseEntity<Map<String, String>> deletedPolicyReference(
+      ScanPolicyReferenceConflictException conflict) {
+    return ResponseEntity.status(409).body(Map.of("message", conflict.getMessage()));
   }
 
   @GetMapping("/summary")

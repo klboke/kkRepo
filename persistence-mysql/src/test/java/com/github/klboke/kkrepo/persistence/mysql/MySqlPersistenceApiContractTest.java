@@ -16,6 +16,7 @@ class MySqlPersistenceApiContractTest extends PersistenceApiContract {
       "securityScanPolicyDeletionRemovesOnlyUnusedFamiliesAndFencesRevisions",
       "securityScanPolicyDeletionProtectsEveryReferenceIncludingOlderRevisions",
       "securityScanPolicyDeletionSeesAssignmentsCommittedAfterItsSnapshot",
+      "securityScanPolicyDeletionRejectsWritersThatLoseTheRace",
       "markerClaimsPartitionConcurrentWorkersAndFailuresReenqueue",
       "securityScanningIsIdempotentFencedAndProtectsImmutableDocuments",
       "securityScanningKeepsNewestScannerSnapshotWhenRematchesCompleteOutOfOrder",

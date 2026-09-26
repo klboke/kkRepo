@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
 
 /** Guards the frozen V1-V29 chain and validates repeat startup after newer migrations. */
 class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
-  private static final int LATEST_MIGRATION = 55;
+  private static final int LATEST_MIGRATION = 56;
   private static final Map<String, String> V29_SHA256 = checksums();
 
   @Test
@@ -40,6 +40,16 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
     assertEquals(
         Integer.toString(LATEST_MIGRATION),
         flyway().info().current().getVersion().getVersion());
+  }
+
+  @Test
+  void policyReferencesAlreadyHaveLeadingForeignKeyIndexes() {
+    assertEquals(4, jdbc().queryForObject("""
+        SELECT COUNT(DISTINCT table_name) FROM information_schema.statistics
+        WHERE table_schema = DATABASE() AND column_name = 'policy_id' AND seq_in_index = 1
+          AND table_name IN ('repository_security_scan_config', 'asset_security_state',
+            'asset_security_policy_state', 'security_scan_waiver')
+        """, Integer.class));
   }
 
   @Test

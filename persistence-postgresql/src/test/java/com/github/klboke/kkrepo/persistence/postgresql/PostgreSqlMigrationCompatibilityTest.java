@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 
 /** Proves the PostgreSQL baseline validates and remains idempotent on repeated startup. */
 class PostgreSqlMigrationCompatibilityTest extends PostgreSqlIntegrationTestSupport {
-  private static final int LATEST_MIGRATION = 55;
+  private static final int LATEST_MIGRATION = 56;
 
   @Test
   void completionIndexesCanResumeAnInterruptedConcurrentBuild() throws Exception {
@@ -34,6 +34,27 @@ class PostgreSqlMigrationCompatibilityTest extends PostgreSqlIntegrationTestSupp
           'idx_security_scan_task_repo_completion', 'idx_security_scan_run_completion',
           'idx_security_scan_task_status_completion', 'idx_security_scan_task_repo_status_completion')
           AND i.indisvalid
+        """, Integer.class));
+  }
+
+  @Test
+  void policyReferenceIndexesCanResumeAnInterruptedConcurrentBuild() throws Exception {
+    String path = "db/migration/postgresql/V56__security_scan_policy_reference_indexes.sql";
+    try (InputStream stream = getClass().getResourceAsStream("/" + path + ".conf")) {
+      assertNotNull(stream);
+      assertEquals("executeInTransaction=false", new String(stream.readAllBytes(), StandardCharsets.UTF_8).trim());
+    }
+    jdbc().execute("DROP INDEX idx_asset_scan_policy_ref");
+    jdbc().execute((org.springframework.jdbc.core.ConnectionCallback<Void>) connection -> {
+      org.springframework.jdbc.datasource.init.ScriptUtils.executeSqlScript(connection,
+          new org.springframework.core.io.support.EncodedResource(
+              new org.springframework.core.io.ClassPathResource(path), StandardCharsets.UTF_8));
+      return null;
+    });
+    assertEquals(4, jdbc().queryForObject("""
+        SELECT COUNT(*) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+        WHERE c.relname IN ('idx_repository_scan_policy_ref', 'idx_asset_scan_policy_ref',
+          'idx_asset_context_policy_ref', 'idx_scan_waiver_policy_ref') AND i.indisvalid
         """, Integer.class));
   }
 

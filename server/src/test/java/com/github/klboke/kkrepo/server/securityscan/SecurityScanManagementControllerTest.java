@@ -169,6 +169,34 @@ class SecurityScanManagementControllerTest {
   }
 
   @Test
+  void repositoryAndWaiverAssignmentsReturn409WhenPolicyDeletionWins() throws Exception {
+    var mutations = mock(SecurityScanMutationService.class);
+    var conflict = new com.github.klboke.kkrepo.persistence.jdbc.api.ScanPolicyReferenceConflictException(42);
+    when(mutations.updateRepositoryConfig(org.mockito.ArgumentMatchers.any(),
+        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq(3L),
+        org.mockito.ArgumentMatchers.any())).thenThrow(conflict);
+    when(mutations.createWaiver(org.mockito.ArgumentMatchers.any(),
+        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any())).thenThrow(conflict);
+    var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(
+        new SecurityScanManagementController(mock(SecurityScanManagementService.class), mutations)).build();
+    var actor = mock(AuthenticatedSubject.class);
+    for (var request : List.of(
+        org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+            .put("/internal/security/scanning/repositories/3/config").content("""
+                {"enabled":true,"profileId":1,"scanHostedContent":true,"scanProxyContent":true,"policyId":42}
+                """),
+        org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+            .post("/internal/security/scanning/waivers").content("{\"policyId\":42}"))) {
+      var result = mvc.perform(request.contentType("application/json")
+              .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE, actor))
+          .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isConflict())
+          .andReturn();
+      assertEquals("{\"message\":\"Scan policy 42 no longer exists; refresh and select an existing policy\"}",
+          result.getResponse().getContentAsString());
+    }
+  }
+
+  @Test
   void rejectsRequestsWithoutAnAuthenticatedSubject() {
     SecurityScanManagementController controller = new SecurityScanManagementController(
         mock(SecurityScanManagementService.class), mock(SecurityScanMutationService.class));

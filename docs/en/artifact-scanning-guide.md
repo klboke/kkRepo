@@ -499,7 +499,9 @@ The API is `DELETE /internal/security/scanning/policies/{latestPolicyId}` and re
 204 on success, 404 for a missing policy, and 409 for an older revision or a referenced policy.
 Deletion and its `POLICY_DELETE` audit event commit together; the event records the policy name,
 latest ID/revision, and `ALL_REVISIONS` scope. Database locks serialize deletion with revision
-creation and reference writes across replicas. This operation does not archive policies or delete
+creation and reference writes across replicas. If deletion commits before a concurrent repository
+assignment or waiver creation, that request returns `409` and must select an existing policy.
+This operation does not archive policies or delete
 scan history, findings, or waivers.
 
 ### Waivers

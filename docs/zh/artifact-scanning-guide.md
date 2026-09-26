@@ -449,7 +449,8 @@ Policies 用于新建和修订集中管理的漏洞策略：
 接口为 `DELETE /internal/security/scanning/policies/{latestPolicyId}`，需要与新建、修订策略相同的
 `nexus:security-scanning:update` 权限。成功返回 204，不存在返回 404，旧修订或仍被引用返回 409。
 删除与 `POLICY_DELETE` 审计事件在同一事务提交，审计保留策略名称、最新 ID/修订及 `ALL_REVISIONS`
-删除范围。数据库锁协调多副本下的修订创建、引用写入和删除。此操作不归档策略，也不删除扫描历史、
+删除范围。数据库锁协调多副本下的修订创建、引用写入和删除。若删除先于并发的仓库绑定或 waiver
+创建提交，后者返回 `409`，需要刷新并选择仍然存在的策略。此操作不归档策略，也不删除扫描历史、
 finding 或 waiver。
 
 ### Waivers
