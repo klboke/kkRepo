@@ -13,6 +13,8 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -616,6 +618,27 @@ class SecurityScanManagementServiceCoreTest {
     ScanPolicy replacement = service.revisePolicy(actor, 10L, revise);
     assertEquals(2L, replacement.revision());
     verify(scans).replaceRepositoryPolicy(eq(10L), eq(replacement.id()), any());
+  }
+
+  @Test
+  void deletesOnlyUnusedLatestPoliciesWithGlobalWritePermission() {
+    ScanPolicy policy = policy(10L, "unused", 4L);
+    when(scans.findPolicy(10L)).thenReturn(Optional.of(policy));
+    when(scans.deletePolicyIfUnused(10L)).thenReturn(SecurityScanDao.PolicyDeletion.DELETED);
+    assertEquals(policy, service.deletePolicy(actor, 10L));
+    for (var outcome : List.of(SecurityScanDao.PolicyDeletion.IN_USE,
+        SecurityScanDao.PolicyDeletion.STALE_REVISION)) {
+      when(scans.deletePolicyIfUnused(10L)).thenReturn(outcome);
+      assertStatus(HttpStatus.CONFLICT, () -> service.deletePolicy(actor, 10L));
+    }
+    when(scans.deletePolicyIfUnused(10L)).thenReturn(SecurityScanDao.PolicyDeletion.NOT_FOUND);
+    assertStatus(HttpStatus.NOT_FOUND, () -> service.deletePolicy(actor, 10L));
+    assertStatus(HttpStatus.NOT_FOUND, () -> service.deletePolicy(actor, 404L));
+    clearInvocations(scans);
+    when(security.decide(eq(actor.permissionSubject()), anyString()))
+        .thenReturn(AccessDecision.deny("read only"));
+    assertStatus(HttpStatus.FORBIDDEN, () -> service.deletePolicy(actor, 10L));
+    verifyNoInteractions(scans);
   }
 
   @Test

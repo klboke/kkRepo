@@ -155,6 +155,8 @@ class SecurityScanManagementControllerTest {
     assertEquals(List.of(), controller.policies("policy", 13L, 14, request).items());
     assertEquals(policy, controller.createPolicy(policyCommand, request));
     assertEquals(policy, controller.revisePolicy(21L, policyCommand, request));
+    assertEquals(HttpStatus.NO_CONTENT, controller.deletePolicy(21L, request).getStatusCode());
+    verify(mutations).deletePolicy(request, actor, 21L);
     assertEquals(List.of(), controller.waivers(15L, "waiver", 16L, 17, request).items());
     assertEquals(waiver, controller.createWaiver(waiverCommand, request));
     assertEquals(HttpStatus.NO_CONTENT, controller.deleteWaiver(22L, request).getStatusCode());

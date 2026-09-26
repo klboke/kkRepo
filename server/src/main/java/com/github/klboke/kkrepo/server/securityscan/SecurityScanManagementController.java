@@ -208,6 +208,13 @@ public class SecurityScanManagementController {
     return mutations.revisePolicy(request, actor, policyId, command);
   }
 
+  @DeleteMapping("/policies/{policyId}")
+  public ResponseEntity<Void> deletePolicy(
+      @PathVariable("policyId") long policyId, HttpServletRequest request) {
+    mutations.deletePolicy(request, actor(request), policyId);
+    return ResponseEntity.noContent().build();
+  }
+
   @GetMapping("/waivers")
   public CursorPage<WaiverView> waivers(
       @RequestParam(name = "repositoryId", required = false) Long repositoryId,

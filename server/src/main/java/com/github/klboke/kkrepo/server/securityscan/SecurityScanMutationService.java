@@ -134,6 +134,15 @@ public class SecurityScanMutationService {
     return policy;
   }
 
+  public ScanPolicy deletePolicy(
+      HttpServletRequest request, AuthenticatedSubject actor, long policyId) {
+    ScanPolicy policy = management.deletePolicy(actor, policyId);
+    audit.record(request, actor, "POLICY_DELETE", null,
+        Map.of("policyId", policy.id(), "policyName", policy.name(),
+            "policyRevision", policy.revision(), "scope", "ALL_REVISIONS"));
+    return policy;
+  }
+
   public ScanWaiver createWaiver(
       HttpServletRequest request,
       AuthenticatedSubject actor,
