@@ -133,6 +133,28 @@ class SecurityScanMutationServiceTest {
   }
 
   @Test
+  void auditsWholePolicyDeletionAndDoesNotAuditRejectedDeletes() {
+    SecurityScanManagementService management = mock(SecurityScanManagementService.class);
+    SecurityScanAuditService audit = mock(SecurityScanAuditService.class);
+    SecurityScanMutationService mutations = new SecurityScanMutationService(management, audit, mock(Adapter.class));
+    HttpServletRequest request = mock(HttpServletRequest.class);
+    AuthenticatedSubject actor = mock(AuthenticatedSubject.class);
+    ScanPolicy policy = mock(ScanPolicy.class);
+    when(policy.id()).thenReturn(9L);
+    when(policy.name()).thenReturn("unused");
+    when(policy.revision()).thenReturn(4L);
+    when(management.deletePolicy(actor, 9L)).thenReturn(policy);
+    assertEquals(policy, mutations.deletePolicy(request, actor, 9L));
+    verify(audit).record(request, actor, "POLICY_DELETE", null,
+        Map.of("policyId", 9L, "policyName", "unused", "policyRevision", 4L, "scope", "ALL_REVISIONS"));
+    org.mockito.Mockito.clearInvocations(audit);
+    when(management.deletePolicy(actor, 9L)).thenThrow(new IllegalStateException("in use"));
+    org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+        () -> mutations.deletePolicy(request, actor, 9L));
+    verifyNoInteractions(audit);
+  }
+
+  @Test
   void broadcastsRunningWorkCancellationOnlyAfterTheDurableCommit() {
     SecurityScanManagementService management = mock(SecurityScanManagementService.class);
     SecurityScanAuditService audit = mock(SecurityScanAuditService.class);

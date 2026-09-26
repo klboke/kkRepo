@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.BlobReferenceDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.InvalidScanCompletionCursorException;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ScanPolicyReferenceConflictException;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.EnumColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcInserts;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
@@ -854,6 +855,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Override
   @Transactional
   public RepositoryScanConfig upsertRepositoryConfig(RepositoryScanConfig config) {
+    lockPolicyReference(config.policyId());
     Instant now = requiredNow(config.updatedAt());
     if (!insertRepositoryConfig(config, now)) {
       int updated = updateRepositoryConfig(config, now);
@@ -2945,6 +2947,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Override
   @Transactional
   public AssetSecurityState upsertAssetStateIfCurrent(AssetSecurityState state) {
+    lockPolicyReference(state.policyId());
     lockScanCandidate(state.assetId());
     int updated = updateAssetState(state);
     if (updated == 0 && candidateGenerationMatches(state.assetId(), state.contentGeneration())) {
@@ -3050,6 +3053,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Override
   @Transactional
   public AssetPolicyState upsertAssetPolicyStateIfCurrent(AssetPolicyState state) {
+    lockPolicyReference(state.policyId());
     if (!lockWaiverRevision(state.waiverRevision())) {
       throw new IllegalStateException(
           "Waiver revision changed before policy evaluation was materialized");
@@ -3338,6 +3342,17 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     return jdbc.query(sql.toString(), policyMapper, args.toArray());
   }
 
+  private void lockPolicyReference(Long policyId) {
+    if (policyId == null) return;
+    // Share the parent lock before touching child rows. This permits parallel writers but
+    // fences deletion until their transaction commits. A current read also detects deletion
+    // committed after an earlier MySQL REPEATABLE READ validation snapshot.
+    List<Long> existing = jdbc.query(
+        "SELECT id FROM security_scan_policy WHERE id = ? FOR SHARE",
+        (rs, rowNum) -> rs.getLong("id"), policyId);
+    if (existing.isEmpty()) throw new ScanPolicyReferenceConflictException(policyId);
+  }
+
   @Override
   public Optional<ScanPolicy> findPolicy(long policyId) {
     return jdbc.query(
@@ -3399,7 +3414,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   public Optional<ScanPolicy> createNextPolicyRevision(
       long expectedHeadPolicyId, ScanPolicy policy) {
     String normalizedName = normalizedPolicyName(policy.name());
-    jdbc.query("""
+    Optional<Long> root = jdbc.query("""
         SELECT id
         FROM security_scan_policy
         WHERE name_normalized = ?
@@ -3408,9 +3423,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         FOR UPDATE
         """, (rs, rowNum) -> rs.getLong("id"), normalizedName)
         .stream()
-        .findFirst()
-        .orElseThrow(() ->
-            new IllegalStateException("Security scan policy root no longer exists"));
+        .findFirst();
+    if (root.isEmpty()) return Optional.empty();
     PolicyHead head = jdbc.query("""
         SELECT id, revision
         FROM security_scan_policy
@@ -3454,8 +3468,51 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   private record PolicyHead(long id, long revision) {}
 
   @Override
+  @Transactional
+  public PolicyDeletion deletePolicyIfUnused(long expectedHeadPolicyId) {
+    Optional<ScanPolicy> requested = findPolicy(expectedHeadPolicyId);
+    if (requested.isEmpty()) return PolicyDeletion.NOT_FOUND;
+    String name = normalizedPolicyName(requested.get().name());
+    // Revision creation locks the same durable root first. No JVM-local lock is involved.
+    List<Long> root = jdbc.query("""
+        SELECT id FROM security_scan_policy
+        WHERE name_normalized = ? ORDER BY id LIMIT 1 FOR UPDATE
+        """, (rs, rowNum) -> rs.getLong("id"), name);
+    if (root.isEmpty()) return PolicyDeletion.NOT_FOUND;
+    long[] head = {0, 0};
+    // Lock older revisions too: FK writers referencing any revision must finish before the
+    // reference checks, or wait until deletion commits. Do not materialize the revision history.
+    jdbc.query("""
+        SELECT id, revision FROM security_scan_policy
+        WHERE name_normalized = ? ORDER BY id FOR UPDATE
+        """, (org.springframework.jdbc.core.RowCallbackHandler) rs -> {
+          if (rs.getLong("revision") > head[1]) {
+            head[0] = rs.getLong("id");
+            head[1] = rs.getLong("revision");
+          }
+        }, name);
+    if (head[0] != expectedHeadPolicyId) return PolicyDeletion.STALE_REVISION;
+    for (String table : List.of(
+        "repository_security_scan_config", "asset_security_state",
+        "asset_security_policy_state", "security_scan_waiver")) {
+      // Locking reads see committed references even if MySQL's transaction snapshot predates
+      // an assignment. Plain SELECT would miss a writer that committed while we waited above.
+      List<Long> references = jdbc.query("""
+          SELECT r.policy_id FROM %s r
+          JOIN security_scan_policy p ON p.id = r.policy_id
+          WHERE p.name_normalized = ? LIMIT 1 FOR UPDATE
+          """.formatted(table), (rs, rowNum) -> rs.getLong("policy_id"), name);
+      if (!references.isEmpty()) return PolicyDeletion.IN_USE;
+    }
+    jdbc.update("DELETE FROM security_scan_policy WHERE name_normalized = ?", name);
+    return PolicyDeletion.DELETED;
+  }
+
+  @Override
+  @Transactional
   public int replaceRepositoryPolicy(
       long currentPolicyId, long replacementPolicyId, Instant updatedAt) {
+    lockPolicyReference(replacementPolicyId);
     return jdbc.update("""
         UPDATE repository_security_scan_config
         SET policy_id = ?, config_revision = config_revision + 1, updated_at = ?
@@ -3467,7 +3524,9 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   @Override
+  @Transactional
   public ScanWaiver createWaiver(ScanWaiver waiver) {
+    lockPolicyReference(waiver.policyId());
     long id = JdbcInserts.insert(jdbc, """
         INSERT INTO security_scan_waiver
           (scope_type, repository_id, asset_id, finding_id, advisory_selector,

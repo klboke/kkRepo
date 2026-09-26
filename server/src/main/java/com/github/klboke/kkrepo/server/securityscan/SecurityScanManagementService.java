@@ -1046,6 +1046,21 @@ public class SecurityScanManagementService {
     return replacement;
   }
 
+  @Transactional
+  public ScanPolicy deletePolicy(AuthenticatedSubject actor, long policyId) {
+    requireGlobalWrite(actor);
+    ScanPolicy policy = scans.findPolicy(policyId)
+        .orElseThrow(() -> notFound("Policy not found"));
+    return switch (scans.deletePolicyIfUnused(policyId)) {
+      case NOT_FOUND -> throw notFound("Policy not found");
+      case STALE_REVISION -> throw conflict(
+          "Policy has changed; refresh and delete its latest revision");
+      case IN_USE -> throw conflict(
+          "Policy cannot be deleted: a revision is referenced by a repository, scan state, or waiver");
+      case DELETED -> policy;
+    };
+  }
+
   private ScanPolicy policyDraft(
       AuthenticatedSubject actor,
       String name,

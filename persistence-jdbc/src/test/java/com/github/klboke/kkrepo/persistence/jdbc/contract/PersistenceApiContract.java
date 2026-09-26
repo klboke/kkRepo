@@ -1189,6 +1189,250 @@ public abstract class PersistenceApiContract {
   }
 
   @Test
+  void securityScanPolicyDeletionRemovesOnlyUnusedFamiliesAndFencesRevisions() {
+    var scans = stores().securityScanning();
+    var first = deletionPolicy("unused-delete");
+    var second = inTransaction(() -> scans.createNextPolicyRevision(first.id(), first).orElseThrow());
+    var unrelated = deletionPolicy("other-delete");
+    assertEquals(SecurityScanDao.PolicyDeletion.STALE_REVISION,
+        inTransaction(() -> scans.deletePolicyIfUnused(first.id())));
+    assertTrue(scans.findPolicy(first.id()).isPresent());
+    assertTrue(scans.findPolicy(second.id()).isPresent());
+    assertThrows(IllegalStateException.class, () -> inTransaction(() -> {
+      assertEquals(SecurityScanDao.PolicyDeletion.DELETED, scans.deletePolicyIfUnused(second.id()));
+      throw new IllegalStateException("audit insert failed");
+    }));
+    assertTrue(scans.findPolicy(first.id()).isPresent(), "failed outer mutation must restore all revisions");
+    assertEquals(SecurityScanDao.PolicyDeletion.DELETED,
+        inTransaction(() -> scans.deletePolicyIfUnused(second.id())));
+    assertTrue(scans.findPolicy(first.id()).isEmpty());
+    assertTrue(scans.findPolicy(second.id()).isEmpty());
+    assertTrue(scans.findPolicy(unrelated.id()).isPresent());
+    assertEquals(SecurityScanDao.PolicyDeletion.NOT_FOUND,
+        inTransaction(() -> scans.deletePolicyIfUnused(second.id())));
+    assertTrue(inTransaction(() -> scans.createNextPolicyRevision(second.id(), second)).isEmpty());
+    assertTrue(scans.createPolicyIfAbsent(first).isPresent(), "an unused deleted name can be reused");
+  }
+
+  @Test
+  void securityScanPolicyDeletionProtectsEveryReferenceIncludingOlderRevisions() {
+    var scans = stores().securityScanning();
+    Instant now = Instant.now();
+    var profile = scans.createProfile(new SecurityScanDao.ScanProfile(
+        null, "delete-profile", true, "syft", "grype", List.of("vuln"), Map.of(),
+        1024, 100, 4096, 1024, 2, 60, OciPlatformPolicy.REQUIRED_SET,
+        List.of(), "e".repeat(64), 1, now, now));
+    for (String kind : List.of("repository", "asset", "context", "waiver")) {
+      var first = deletionPolicy("delete-reference-" + kind);
+      var head = inTransaction(() -> scans.createNextPolicyRevision(first.id(), first).orElseThrow());
+      long repo = createRepository("delete-reference-" + kind, RepositoryFormat.MAVEN2);
+      if (kind.equals("repository")) {
+        // A disabled repository still owns its policy binding.
+        scans.upsertRepositoryConfig(new SecurityScanDao.RepositoryScanConfig(
+            repo, false, profile.id(), true, true, EnforcementMode.AUDIT,
+            PolicyAction.ALLOW, PolicyAction.ALLOW, PolicyAction.ALLOW, null,
+            first.id(), 1, now, now));
+      } else if (kind.equals("waiver")) {
+        // Expired waivers still retain their original policy scope.
+        scans.createWaiver(new SecurityScanDao.ScanWaiver(null, "GLOBAL", null, null, null,
+            "CVE-delete", null, Map.of(), "retained expired waiver", first.id(), 1L,
+            "test", "test", now.minusSeconds(1), now, now));
+      } else {
+        long blobStore = stores().repositories().findById(repo).orElseThrow().blobStoreId();
+        long blobId = stores().assets().insertBlob(blob(blobStore, kind, kind));
+        String path = "test.jar";
+        long asset = stores().assets().insertAsset(new AssetRecord(null, repo, null, blobId,
+            RepositoryFormat.MAVEN2, path, PersistenceHashes.pathHash(path), path,
+            "ARTIFACT", "application/java-archive", 42L, null, now, Map.of()));
+        foldArtifactChanges("delete-reference-" + kind);
+        if (kind.equals("asset")) {
+          scans.upsertAssetStateIfCurrent(new SecurityScanDao.AssetSecurityState(
+              asset, profile.id(), 1, new byte[32], null, ScanState.COMPLETE,
+              ScanCompleteness.COMPLETE, true, Severity.UNKNOWN, Map.of(), first.id(), 1L,
+              PolicyDecision.ALLOW, "TEST", null, now, 0));
+          assertEquals(first.id(), scans.findAssetState(asset, profile.id()).orElseThrow().policyId());
+        } else {
+          scans.upsertAssetPolicyStateIfCurrent(new SecurityScanDao.AssetPolicyState(
+              asset, profile.id(), repo, 1, null, first.id(), 1L, 1,
+              PolicyDecision.ALLOW, "TEST", 0, null, null, now, 0));
+          assertEquals(first.id(), scans.findAssetPolicyState(asset, profile.id(), repo).orElseThrow().policyId());
+        }
+      }
+      assertEquals(SecurityScanDao.PolicyDeletion.IN_USE,
+          inTransaction(() -> scans.deletePolicyIfUnused(head.id())), kind);
+      assertTrue(scans.findPolicy(first.id()).isPresent(), kind);
+      assertTrue(scans.findPolicy(head.id()).isPresent(), kind);
+    }
+  }
+
+  @Test
+  void securityScanPolicyDeletionSeesAssignmentsCommittedAfterItsSnapshot() throws Exception {
+    var scans = stores().securityScanning();
+    var policy = deletionPolicy("delete-concurrent-assignment");
+    Instant now = Instant.now();
+    var profile = scans.createProfile(new SecurityScanDao.ScanProfile(
+        null, "delete-concurrent-profile", true, "syft", "grype", List.of("vuln"), Map.of(),
+        1024, 100, 4096, 1024, 2, 60, OciPlatformPolicy.REQUIRED_SET,
+        List.of(), "f".repeat(64), 1, now, now));
+    long repo = createRepository("delete-concurrent-assignment", RepositoryFormat.MAVEN2);
+    CountDownLatch assigned = new CountDownLatch(1);
+    CountDownLatch snapshot = new CountDownLatch(1);
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var writer = executor.submit(() -> inTransaction(() -> {
+        var config = scans.upsertRepositoryConfig(new SecurityScanDao.RepositoryScanConfig(
+            repo, true, profile.id(), true, true, EnforcementMode.AUDIT,
+            PolicyAction.ALLOW, PolicyAction.ALLOW, PolicyAction.ALLOW, null,
+            policy.id(), 1, now, now));
+        assigned.countDown();
+        awaitPolicyDeletionLatch(snapshot);
+        return config;
+      }));
+      assertTrue(assigned.await(10, java.util.concurrent.TimeUnit.SECONDS));
+      var deleter = executor.submit(() -> inTransaction(() -> {
+        assertTrue(scans.findPolicy(policy.id()).isPresent()); // Establish MySQL RR snapshot.
+        snapshot.countDown();
+        return scans.deletePolicyIfUnused(policy.id());
+      }));
+      assertEquals(policy.id(), writer.get(10, java.util.concurrent.TimeUnit.SECONDS).policyId());
+      assertEquals(SecurityScanDao.PolicyDeletion.IN_USE,
+          deleter.get(10, java.util.concurrent.TimeUnit.SECONDS));
+      assertEquals(policy.id(), scans.findRepositoryConfig(repo).orElseThrow().policyId());
+    } finally {
+      snapshot.countDown();
+    }
+  }
+
+  @Test
+  void securityScanPolicyDeletionRejectsWritersThatLoseTheRace() throws Exception {
+    var scans = stores().securityScanning();
+    Instant now = Instant.now();
+    var profile = scans.createProfile(new SecurityScanDao.ScanProfile(
+        null, "delete-first-profile", true, "syft", "grype", List.of("vuln"), Map.of(),
+        1024, 100, 4096, 1024, 2, 60, OciPlatformPolicy.REQUIRED_SET,
+        List.of(), "a".repeat(64), 1, now, now));
+    for (String kind : List.of("repository", "asset", "context", "waiver", "replacement")) {
+      var policy = deletionPolicy("delete-first-" + kind);
+      long repo = createRepository("delete-first-" + kind, RepositoryFormat.MAVEN2);
+      long blobStore = stores().repositories().findById(repo).orElseThrow().blobStoreId();
+      long blobId = stores().assets().insertBlob(blob(blobStore, kind, kind));
+      String path = "test.jar";
+      long asset = stores().assets().insertAsset(new AssetRecord(null, repo, null, blobId,
+          RepositoryFormat.MAVEN2, path, PersistenceHashes.pathHash(path), path,
+          "ARTIFACT", "application/java-archive", 42L, null, now, Map.of()));
+      foldArtifactChanges("delete-first-" + kind);
+      var retained = deletionPolicy("retained-" + kind);
+      // The repository write exercises UPDATE as well as guarding INSERT paths below.
+      scans.upsertRepositoryConfig(new SecurityScanDao.RepositoryScanConfig(
+          repo, false, profile.id(), true, true, EnforcementMode.AUDIT,
+          PolicyAction.ALLOW, PolicyAction.ALLOW, PolicyAction.ALLOW, null,
+          retained.id(), 1, now, now));
+      Runnable write = switch (kind) {
+        case "repository" -> () -> scans.upsertRepositoryConfig(new SecurityScanDao.RepositoryScanConfig(
+            repo, true, profile.id(), true, true, EnforcementMode.AUDIT,
+            PolicyAction.ALLOW, PolicyAction.ALLOW, PolicyAction.ALLOW, null,
+            policy.id(), 2, now, now));
+        case "asset" -> () -> scans.upsertAssetStateIfCurrent(new SecurityScanDao.AssetSecurityState(
+            asset, profile.id(), 1, new byte[32], null, ScanState.COMPLETE,
+            ScanCompleteness.COMPLETE, true, Severity.UNKNOWN, Map.of(), policy.id(), 1L,
+            PolicyDecision.ALLOW, "TEST", null, now, 0));
+        case "context" -> () -> scans.upsertAssetPolicyStateIfCurrent(new SecurityScanDao.AssetPolicyState(
+            asset, profile.id(), repo, 1, null, policy.id(), 1L, 1,
+            PolicyDecision.ALLOW, "TEST", 0, null, null, now, 0));
+        case "waiver" -> () -> scans.createWaiver(new SecurityScanDao.ScanWaiver(
+            null, "GLOBAL", null, null, null, "CVE-delete-first", null, Map.of(),
+            "race", policy.id(), 1L, "test", "test", null, now, now));
+        default -> () -> scans.replaceRepositoryPolicy(retained.id(), policy.id(), now);
+      };
+      CountDownLatch deleted = new CountDownLatch(1);
+      CountDownLatch attempted = new CountDownLatch(1);
+      CountDownLatch commitDeletion = new CountDownLatch(1);
+      try (var executor = Executors.newFixedThreadPool(2)) {
+        var deleter = executor.submit(() -> inTransaction(() -> {
+          var result = scans.deletePolicyIfUnused(policy.id());
+          deleted.countDown();
+          awaitPolicyDeletionLatch(commitDeletion);
+          return result;
+        }));
+        assertTrue(deleted.await(10, java.util.concurrent.TimeUnit.SECONDS));
+        var writer = executor.submit(() -> assertThrows(
+            com.github.klboke.kkrepo.persistence.jdbc.api.ScanPolicyReferenceConflictException.class,
+            () -> inTransaction(() -> {
+              // The same successful validation performed by the management service. This
+              // establishes a snapshot before deletion commits on MySQL REPEATABLE READ.
+              assertTrue(scans.findPolicy(policy.id()).isPresent());
+              attempted.countDown();
+              write.run();
+              return null;
+            })));
+        try {
+          assertTrue(attempted.await(10, java.util.concurrent.TimeUnit.SECONDS));
+          assertThrows(java.util.concurrent.TimeoutException.class,
+              () -> writer.get(100, java.util.concurrent.TimeUnit.MILLISECONDS));
+        } finally {
+          commitDeletion.countDown();
+        }
+        assertEquals(SecurityScanDao.PolicyDeletion.DELETED,
+            deleter.get(10, java.util.concurrent.TimeUnit.SECONDS));
+        assertTrue(writer.get(10, java.util.concurrent.TimeUnit.SECONDS).getMessage()
+            .contains("no longer exists"), kind);
+      } finally {
+        commitDeletion.countDown();
+      }
+      assertTrue(scans.findPolicy(policy.id()).isEmpty(), kind);
+      assertEquals(retained.id(), scans.findRepositoryConfig(repo).orElseThrow().policyId(), kind);
+      assertTrue(scans.findAssetState(asset, profile.id()).isEmpty(), kind);
+      assertTrue(scans.findAssetPolicyState(asset, profile.id(), repo).isEmpty(), kind);
+      assertTrue(scans.listWaivers(null, 0, 10).isEmpty(), kind);
+    }
+  }
+
+  @Test
+  void securityScanPolicyDeletionSerializesWithConcurrentRevisions() throws Exception {
+    var scans = stores().securityScanning();
+    var policy = deletionPolicy("delete-concurrent-revision");
+    CountDownLatch revised = new CountDownLatch(1);
+    CountDownLatch snapshot = new CountDownLatch(1);
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var writer = executor.submit(() -> inTransaction(() -> {
+        var next = scans.createNextPolicyRevision(policy.id(), policy).orElseThrow();
+        revised.countDown();
+        awaitPolicyDeletionLatch(snapshot);
+        return next;
+      }));
+      assertTrue(revised.await(10, java.util.concurrent.TimeUnit.SECONDS));
+      var deleter = executor.submit(() -> inTransaction(() -> {
+        assertTrue(scans.findPolicy(policy.id()).isPresent());
+        snapshot.countDown();
+        return scans.deletePolicyIfUnused(policy.id());
+      }));
+      var next = writer.get(10, java.util.concurrent.TimeUnit.SECONDS);
+      assertEquals(SecurityScanDao.PolicyDeletion.STALE_REVISION,
+          deleter.get(10, java.util.concurrent.TimeUnit.SECONDS));
+      assertTrue(scans.findPolicy(next.id()).isPresent());
+      assertEquals(SecurityScanDao.PolicyDeletion.DELETED,
+          inTransaction(() -> scans.deletePolicyIfUnused(next.id())));
+    } finally {
+      snapshot.countDown();
+    }
+  }
+
+  private SecurityScanDao.ScanPolicy deletionPolicy(String name) {
+    Instant now = Instant.now();
+    return stores().securityScanning().createPolicy(new SecurityScanDao.ScanPolicy(
+        null, name, true, Severity.CRITICAL, false, false, false,
+        604800L, List.of(), 1, "contract", now, now));
+  }
+
+  private static void awaitPolicyDeletionLatch(CountDownLatch latch) {
+    try {
+      assertTrue(latch.await(10, java.util.concurrent.TimeUnit.SECONDS));
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException(interrupted);
+    }
+  }
+
+  @Test
   void securityScanningIsIdempotentFencedAndProtectsImmutableDocuments() throws Exception {
     SecurityScanDao scans = stores().securityScanning();
     long repositoryId = createRepository("scan-contract", RepositoryFormat.MAVEN2);

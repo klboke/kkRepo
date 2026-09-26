@@ -5650,7 +5650,8 @@ function renderSecurityScanPolicies() {
       <td>${escapeHtml(policy.revision)}</td><td>${escapeHtml(policy.blockSeverity)}</td>
       <td>${policy.requireCompleteInventory ? "yes" : "no"}</td>
       <td>${escapeHtml(formatSecurityScanValidity(policy.maxResultAgeSeconds) || "No expiry")}</td>
-      <td class="actions-column"><button class="row-action security-scan-policy-edit" data-id="${escapeHtml(policy.id)}" type="button">edit</button></td></tr>`).join("")
+      <td class="actions-column"><button class="row-action security-scan-policy-edit" data-id="${escapeHtml(policy.id)}" type="button">edit</button>
+      <button class="row-action security-scan-policy-delete" data-id="${escapeHtml(policy.id)}" title="Delete this policy and all revisions. Use its latest revision." type="button">delete</button></td></tr>`).join("")
       || '<tr><td colspan="6" class="placeholder">No policies are visible.</td></tr>';
 }
 
@@ -6109,6 +6110,27 @@ async function saveSecurityScanPolicy(event) {
     selectSecurityScanTab("policies");
   } catch (error) {
     showToast(`Policy save failed: ${error.message}`, "error");
+  }
+}
+
+async function deleteSecurityScanPolicy(policyId, button) {
+  if (button?.disabled) return;
+  const policy = securityScanState.policies.find((item) => String(item.id) === String(policyId));
+  if (!policy || !window.confirm(
+    `Delete scan policy "${policy.name}" and ALL its revisions? This cannot be undone. `
+    + "Use the latest revision. Referenced policies cannot be deleted.")) return;
+  if (button) button.disabled = true;
+  try {
+    const response = await fetch(
+      `/internal/security/scanning/policies/${encodeURIComponent(policy.id)}`, { method: "DELETE" });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    showToast("Security scan policy and all revisions deleted.", "ok");
+    resetSecurityScanPage("policies");
+    await loadSecurityScanList("policies");
+  } catch (error) {
+    showToast(`Policy deletion failed: ${error.message}`, "error");
+  } finally {
+    if (button) button.disabled = false;
   }
 }
 
@@ -8194,7 +8216,12 @@ document.getElementById("security-scan-policy-form").addEventListener(
 bindRequiredFieldErrors(securityScanPolicyRequiredFields);
 document.getElementById("security-scan-policy-table").addEventListener("click", (event) => {
   const editButton = event.target.closest(".security-scan-policy-edit");
-  if (editButton) showEditSecurityScanPolicyForm(editButton.dataset.id);
+  if (editButton) {
+    showEditSecurityScanPolicyForm(editButton.dataset.id);
+    return;
+  }
+  const deleteButton = event.target.closest(".security-scan-policy-delete");
+  if (deleteButton) deleteSecurityScanPolicy(deleteButton.dataset.id, deleteButton);
 });
 document.getElementById("security-scan-cancel-waiver-button").addEventListener(
   "click", hideSecurityScanWaiverForm);

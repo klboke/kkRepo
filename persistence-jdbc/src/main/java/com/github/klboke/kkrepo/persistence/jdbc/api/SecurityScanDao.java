@@ -424,6 +424,15 @@ public interface SecurityScanDao {
       long expectedHeadPolicyId, ScanPolicy policy);
 
   /**
+   * Deletes every revision of an unused policy, fenced by its expected latest revision ID.
+   * The database serializes this with revision creation and locks all revision rows before
+   * checking references, including disabled configurations and expired waivers.
+   */
+  PolicyDeletion deletePolicyIfUnused(long expectedHeadPolicyId);
+
+  enum PolicyDeletion { DELETED, NOT_FOUND, STALE_REVISION, IN_USE }
+
+  /**
    * Moves repository configurations pinned to one immutable policy revision to its replacement.
    * Historical scan results and waivers keep their original policy identity.
    */

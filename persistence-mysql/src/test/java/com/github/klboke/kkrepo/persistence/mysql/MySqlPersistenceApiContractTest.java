@@ -13,6 +13,10 @@ import org.junit.jupiter.api.TestInfo;
 class MySqlPersistenceApiContractTest extends PersistenceApiContract {
   private static final Set<String> STATE_SENSITIVE_CONTRACTS = Set.of(
       "cleanupPoliciesPersistTargetsSchedulesAndBoundedRunResults",
+      "securityScanPolicyDeletionRemovesOnlyUnusedFamiliesAndFencesRevisions",
+      "securityScanPolicyDeletionProtectsEveryReferenceIncludingOlderRevisions",
+      "securityScanPolicyDeletionSeesAssignmentsCommittedAfterItsSnapshot",
+      "securityScanPolicyDeletionRejectsWritersThatLoseTheRace",
       "markerClaimsPartitionConcurrentWorkersAndFailuresReenqueue",
       "securityScanningIsIdempotentFencedAndProtectsImmutableDocuments",
       "securityScanningKeepsNewestScannerSnapshotWhenRematchesCompleteOutOfOrder",

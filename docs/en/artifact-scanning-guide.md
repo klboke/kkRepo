@@ -254,7 +254,7 @@ Grant custom roles according to responsibility:
 | Operation | Permission |
 | --- | --- |
 | View scan pages, tasks, results, and SBOMs | `nexus:security-scanning:read` plus browse permission for the target repository |
-| Create or revise global policies | `nexus:security-scanning:update` |
+| Create, revise, or delete global policies | `nexus:security-scanning:update` |
 | Configure a repository, rescan, retry, or cancel | `nexus:security-scanning:update` plus repository administration for the target repository |
 | Create a waiver | `nexus:security-scanning-waivers:create` plus repository administration |
 | Delete a waiver | `nexus:security-scanning-waivers:delete` plus repository administration |
@@ -486,6 +486,23 @@ Policies creates and revises centrally managed vulnerability policies:
 Editing does not overwrite the existing row; it creates a new revision. Historical runs and
 decisions keep the old revision, while repositories already assigned to that policy move to the
 new revision.
+
+Use **delete** on the latest revision to remove an unused policy and **all of its revisions**.
+The confirmation names the policy and makes this scope explicit. Older revision IDs return a
+conflict, so an outdated page cannot delete a concurrently revised policy. Deletion is rejected
+if any revision is referenced by a repository configuration (including disabled scanning), an
+asset scan/policy state, or a waiver (including expired waivers). It never clears those references.
+The seeded `default-audit` policy follows the same rules; its name does not make it a global default.
+
+The API is `DELETE /internal/security/scanning/policies/{latestPolicyId}` and requires
+`nexus:security-scanning:update`, the same permission as creating and revising policies. It returns
+204 on success, 404 for a missing policy, and 409 for an older revision or a referenced policy.
+Deletion and its `POLICY_DELETE` audit event commit together; the event records the policy name,
+latest ID/revision, and `ALL_REVISIONS` scope. Database locks serialize deletion with revision
+creation and reference writes across replicas. If deletion commits before a concurrent repository
+assignment or waiver creation, that request returns `409` and must select an existing policy.
+This operation does not archive policies or delete
+scan history, findings, or waivers.
 
 ### Waivers
 

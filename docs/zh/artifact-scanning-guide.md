@@ -234,7 +234,7 @@ kubectl logs statefulset/kkrepo-scanner
 | 操作 | 权限 |
 | --- | --- |
 | 查看扫描页面、任务、结果和 SBOM | `nexus:security-scanning:read`，以及目标仓库的 browse 权限 |
-| 新建或修订全局策略 | `nexus:security-scanning:update` |
+| 新建、修订或删除全局策略 | `nexus:security-scanning:update` |
 | 配置仓库、rescan、retry、cancel | `nexus:security-scanning:update`，以及目标仓库的 repository administration 权限 |
 | 创建豁免 | `nexus:security-scanning-waivers:create`，以及目标仓库的 administration 权限 |
 | 删除豁免 | `nexus:security-scanning-waivers:delete`，以及目标仓库的 administration 权限 |
@@ -440,6 +440,18 @@ Policies 用于新建和修订集中管理的漏洞策略：
 
 编辑 policy 不会覆盖旧行，而是创建新 revision。历史 run 和判定继续引用原 revision，
 已经绑定该 policy 的仓库迁移到新 revision。
+
+在最新 revision 上点击 **delete**，可以删除未使用的策略及其**全部修订**；确认框会显示策略名称和删除范围。
+使用旧 revision ID 会返回冲突，避免旧页面误删其他副本刚更新的策略。只要任一修订仍被仓库配置
+（包括停用扫描的仓库）、制品扫描/策略状态或 waiver（包括已过期 waiver）引用，删除就会被拒绝，
+不会自动清空引用。预置的 `default-audit` 同样遵守这些规则，它的名称不代表全局默认绑定。
+
+接口为 `DELETE /internal/security/scanning/policies/{latestPolicyId}`，需要与新建、修订策略相同的
+`nexus:security-scanning:update` 权限。成功返回 204，不存在返回 404，旧修订或仍被引用返回 409。
+删除与 `POLICY_DELETE` 审计事件在同一事务提交，审计保留策略名称、最新 ID/修订及 `ALL_REVISIONS`
+删除范围。数据库锁协调多副本下的修订创建、引用写入和删除。若删除先于并发的仓库绑定或 waiver
+创建提交，后者返回 `409`，需要刷新并选择仍然存在的策略。此操作不归档策略，也不删除扫描历史、
+finding 或 waiver。
 
 ### Waivers
 
