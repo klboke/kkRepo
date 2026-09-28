@@ -1,0 +1,91 @@
+{
+  "foreign": {
+    "downcalls": [
+      {
+        "returnType": "size_t",
+        "parameterTypes": []
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": []
+      },
+      {
+        "returnType": "size_t",
+        "parameterTypes": ["void*"]
+      },
+      {
+        "returnType": "size_t",
+        "parameterTypes": ["void*", "int"]
+      },
+      {
+        "returnType": "size_t",
+        "parameterTypes": ["void*", "int", "int"]
+      },
+      {
+        "returnType": "size_t",
+        "parameterTypes": ["void*", "void*"]
+      },
+      {
+        "returnType": "size_t",
+        "parameterTypes": ["void*", "long long"]
+      },
+      {
+        "returnType": "struct(long long,long long,long long,long long,int,int)",
+        "parameterTypes": ["void*"]
+      },
+      {
+        "returnType": "size_t",
+        "parameterTypes": ["void*", "void*", "size_t"],
+        "options": {
+          "critical": {
+            "allowHeapAccess": true
+          }
+        }
+      },
+      {
+        "returnType": "size_t",
+        "parameterTypes": ["void*", "void*", "size_t", "void*", "size_t"],
+        "options": {
+          "critical": {
+            "allowHeapAccess": true
+          }
+        }
+      },
+      {
+        "returnType": "size_t",
+        "parameterTypes": [
+          "void*",
+          "void*",
+          "size_t",
+          "void*",
+          "void*",
+          "size_t",
+          "void*",
+          "int"
+        ],
+        "options": {
+          "critical": {
+            "allowHeapAccess": true
+          }
+        }
+      },
+      {
+        "returnType": "size_t",
+        "parameterTypes": [
+          "void*",
+          "void*",
+          "size_t",
+          "void*",
+          "void*",
+          "size_t",
+          "void*"
+        ],
+        "options": {
+          "critical": {
+            "allowHeapAccess": true
+          }
+        }
+      }
+    ]
+  }
+}
