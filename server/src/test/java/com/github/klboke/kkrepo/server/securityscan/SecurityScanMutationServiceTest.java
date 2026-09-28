@@ -9,6 +9,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao.AuditLogRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.RepositoryScanConfig;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanPolicy;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanWaiver;
@@ -21,11 +23,36 @@ import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementServic
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 class SecurityScanMutationServiceTest {
+  @ParameterizedTest
+  @NullSource
+  @ValueSource(longs = {1L, 9L})
+  void repositoryConfigurationAuditRecordsSavedPolicyIncludingUnassignment(Long policyId) {
+    SecurityScanManagementService management = mock(SecurityScanManagementService.class);
+    SecurityAuditDao auditDao = mock(SecurityAuditDao.class);
+    SecurityScanMutationService mutations = new SecurityScanMutationService(
+        management, new SecurityScanAuditService(auditDao), mock(Adapter.class));
+    AuthenticatedSubject actor = mock(AuthenticatedSubject.class);
+    ConfigCommand command = mock(ConfigCommand.class);
+    RepositoryScanConfig saved = mock(RepositoryScanConfig.class);
+    when(saved.policyId()).thenReturn(policyId);
+    when(saved.enforcementMode()).thenReturn(EnforcementMode.AUDIT);
+    when(management.updateRepositoryConfig(actor, 8L, command)).thenReturn(saved);
+    mutations.updateRepositoryConfig(null, actor, 8L, command);
+    var capture = ArgumentCaptor.forClass(AuditLogRecord.class);
+    verify(auditDao).insert(capture.capture());
+    assertEquals(policyId == null ? "none" : policyId, capture.getValue().details().get("policyId"));
+    assertEquals("REPOSITORY_CONFIG", capture.getValue().details().get("action"));
+  }
+
   @Test
   void wrapsEveryMutationAndItsAuditRecordInOneTransactionBoundary() throws Exception {
     assertNotNull(
@@ -61,6 +88,7 @@ class SecurityScanMutationServiceTest {
     when(config.profileId()).thenReturn(3L);
     when(config.enforcementMode()).thenReturn(EnforcementMode.ENFORCE);
     when(config.configRevision()).thenReturn(4L);
+    when(config.policyId()).thenReturn(null);
     ScanPolicy policy = mock(ScanPolicy.class);
     when(policy.id()).thenReturn(5L);
     when(policy.revision()).thenReturn(6L);
@@ -105,6 +133,7 @@ class SecurityScanMutationServiceTest {
         Map.of(
             "enabled", true,
             "profileId", 3L,
+            "policyId", "none",
             "enforcementMode", "ENFORCE",
             "configRevision", 4L));
     verify(audit).record(

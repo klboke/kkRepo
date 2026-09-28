@@ -229,14 +229,14 @@ public class DockerProxyService {
     ensureProxy(runtime);
     String remoteImage = remoteImageName(runtime, imageName);
     int pageSize = Math.max(1, Math.min(limit, 1000));
-    String remotePath = remoteImage + "/tags/list?n=" + (pageSize + 1)
+    String query = "n=" + (pageSize + 1)
         + (last == null || last.isBlank() ? "" : "&last=" + java.net.URLEncoder.encode(last, java.nio.charset.StandardCharsets.UTF_8));
     String namePath = remoteImage + "/tags/list";
     if (isNotFoundCached(runtime, namePath)) {
       recordCache(runtime, "negative", "hit");
       throw new DockerProtocolException(DockerErrorCode.NAME_UNKNOWN, imageName);
     }
-    try (HttpRemoteFetcher.Result result = remoteClient.get(runtime, remotePath, DockerConstants.MEDIA_TYPE_JSON)) {
+    try (HttpRemoteFetcher.Result result = remoteClient.get(runtime, namePath, query, DockerConstants.MEDIA_TYPE_JSON)) {
       if (result.status() == 404) {
         rememberNotFound(runtime, namePath);
         recordCache(runtime, "negative", "store_tags");
@@ -265,11 +265,11 @@ public class DockerProxyService {
   public DockerCatalogList catalog(RepositoryRuntime runtime, String last, int limit) {
     ensureProxy(runtime);
     int pageSize = Math.max(1, Math.min(limit, 1000));
-    String remotePath = "_catalog?n=" + (pageSize + 1)
+    String query = "n=" + (pageSize + 1)
         + (last == null || last.isBlank()
             ? ""
             : "&last=" + java.net.URLEncoder.encode(last, java.nio.charset.StandardCharsets.UTF_8));
-    try (HttpRemoteFetcher.Result result = remoteClient.get(runtime, remotePath, DockerConstants.MEDIA_TYPE_JSON)) {
+    try (HttpRemoteFetcher.Result result = remoteClient.get(runtime, "_catalog", query, DockerConstants.MEDIA_TYPE_JSON)) {
       if (result.status() >= 200 && result.status() < 300) {
         Map<String, Object> body = new com.fasterxml.jackson.databind.ObjectMapper().readValue(result.body(), Map.class);
         Object rawRepositories = body.get("repositories");

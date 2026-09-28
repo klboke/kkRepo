@@ -53,9 +53,8 @@ class AdminSecurityScanningCapabilityContractTest {
             + "id=\"security-scan-repository-form\" hidden"));
     assertTrue(index.contains("id=\"security-scan-profile-name\" type=\"text\" disabled"));
     assertTrue(index.contains("id=\"security-scan-profile-id\" type=\"hidden\""));
-    assertTrue(index.contains(
-        "id=\"security-scan-repository-policy-name\" type=\"text\" disabled"));
-    assertTrue(index.contains("id=\"security-scan-policy-id\" type=\"hidden\""));
+    assertTrue(index.contains("<select id=\"security-scan-policy-id\""));
+    assertTrue(index.contains("id=\"security-scan-policy-help\""));
     assertFalse(index.contains("<span>Profile ID</span>"));
     assertFalse(index.contains("<span>Policy ID</span>"));
 
@@ -68,7 +67,7 @@ class AdminSecurityScanningCapabilityContractTest {
 
     assertTrue(javascript.contains("repository.profileName || \"Unavailable profile\""));
     assertTrue(javascript.contains(
-        "repository.policyName || \"Built-in critical baseline\""));
+        "repository.policyName || \"Unavailable assigned policy\""));
     assertTrue(javascript.contains("hostedField.hidden = !showHosted"));
     assertTrue(javascript.contains("proxyField.hidden = !showProxy"));
     assertTrue(javascript.contains("repositoryType === \"PROXY\""));

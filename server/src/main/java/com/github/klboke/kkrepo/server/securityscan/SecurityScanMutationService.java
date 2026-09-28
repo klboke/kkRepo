@@ -97,6 +97,7 @@ public class SecurityScanMutationService {
         Map.of(
             "enabled", result.enabled(),
             "profileId", result.profileId(),
+            "policyId", result.policyId() == null ? "none" : result.policyId(),
             "enforcementMode", result.enforcementMode().name(),
             "configRevision", result.configRevision()));
     return result;
