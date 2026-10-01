@@ -44,6 +44,32 @@ import org.springframework.web.server.ResponseStatusException;
 class BrowseControllerSecurityTest {
 
   @Test
+  void npmTarballSubdirectoriesRemainNavigableWhenTheInternalDashIsHidden() {
+    RepositoryRecord repository = repo(1L, "npm-proxy", RepositoryFormat.NPM, RepositoryType.PROXY);
+    StubRepositoryDao repositories = new StubRepositoryDao(Map.of(repository.name(), repository));
+    StubBrowseNodeDao nodes = new StubBrowseNodeDao();
+    String pkg = "@scope/demo";
+    nodes.children.put(key(1L, pkg), List.of(child(pkg + "/-", "-", false)));
+    nodes.children.put(key(1L, pkg + "/-"), List.of(
+        child(pkg + "/-/demo-1.tgz", "demo-1.tgz", true),
+        child(pkg + "/-/@scope", "@scope", false)));
+    nodes.children.put(key(1L, pkg + "/-/@scope"), List.of(
+        child(pkg + "/-/@scope/demo-2.tgz", "demo-2.tgz", true)));
+    RecordingSecurityService security = new RecordingSecurityService(permission -> AccessDecision.allow());
+    BrowseController controller = controller(repositories, nodes, subject("alice"), null, security);
+    var request = request("GET", "/internal/browse/npm-proxy");
+
+    var listing = controller.list("npm-proxy", pkg, request);
+    assertEquals(List.of("@scope", "demo-1.tgz"), listing.entries().stream()
+        .map(BrowseController.BrowseEntry::name).toList());
+    var folder = listing.entries().getFirst();
+    assertEquals(pkg + "/-/@scope", folder.path());
+    var nested = controller.list("npm-proxy", folder.path(), request).entries().getFirst();
+    assertEquals(pkg + "/-/@scope/demo-2.tgz", nested.path());
+    assertEquals("/repository/npm-proxy/" + nested.path(), nested.downloadUrl());
+  }
+
+  @Test
   void listRequiresRepositoryBrowsePermissionForRequestedPath() {
     RepositoryRecord repository = repo(1L, "maven-public", RepositoryFormat.MAVEN2, RepositoryType.GROUP);
     RepositoryRecord member = repo(2L, "maven-central", RepositoryFormat.MAVEN2, RepositoryType.PROXY);

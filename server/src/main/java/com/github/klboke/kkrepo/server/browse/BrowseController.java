@@ -143,7 +143,9 @@ public class BrowseController {
         }
         if (isNpmInternalTarballDirectory(repo, browsePath.storageParent(), row)) {
           for (BrowseNodeDao.BrowseChild tarball : browseNodeDao.listChildren(source.id(), row.path())) {
-            if (tarball.leaf()) {
+            // Scoped and custom tarball suffixes may contain directories. Hide only the
+            // protocol's dash level, retaining navigable subtrees and their canonical paths.
+            if (tarball.hasAssetSubtree() && !BrowseAssetVisibility.hidden(repo.format(), tarball.path())) {
               mergeEntry(merged, toEntry(repo, source, tarball, browsePath));
             }
           }
