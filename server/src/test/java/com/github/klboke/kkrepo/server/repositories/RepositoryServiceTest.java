@@ -908,6 +908,7 @@ class RepositoryServiceTest {
             List.of(
                 " Plugins-Artifacts.Gradle.org. ",
                 "cdn.example.org",
+                " *.Quay.IO. ",
                 "plugins-artifacts.gradle.org")),
         null,
         null,
@@ -915,12 +916,12 @@ class RepositoryServiceTest {
         null));
 
     assertEquals(
-        List.of("plugins-artifacts.gradle.org", "cdn.example.org"),
+        List.of("plugins-artifacts.gradle.org", "cdn.example.org", "*.quay.io"),
         created.proxy().allowedRedirectHosts());
     Map<?, ?> storedProxy = (Map<?, ?>) repositories.repository.attributes().get("proxy");
     assertEquals(created.proxy().allowedRedirectHosts(), storedProxy.get("allowedRedirectHosts"));
     assertEquals(
-        Set.of("plugins-artifacts.gradle.org", "cdn.example.org"),
+        Set.of("plugins-artifacts.gradle.org", "cdn.example.org", "*.quay.io"),
         new RepositoryRuntimeRegistry(repositories, 0)
             .resolve("gradle-plugins")
             .orElseThrow()
@@ -958,14 +959,14 @@ class RepositoryServiceTest {
   }
 
   @Test
-  void proxyRedirectHostsRejectUrlsPortsPathsAndWildcards() {
+  void proxyRedirectHostsRejectUrlsPortsPathsAndUnboundedWildcards() {
     RepositoryService service = service(new StubRepositoryDao(repository(1L)));
 
     for (String invalid : List.of(
         "https://plugins-artifacts.gradle.org",
         "plugins-artifacts.gradle.org:443",
         "plugins-artifacts.gradle.org/files",
-        "*.gradle.org")) {
+        "*", "cdn*.quay.io", "*.*.quay.io", "*.io", "*.127.0.0.1")) {
       RepositoryValidationException error = assertThrows(
           RepositoryValidationException.class,
           () -> service.create(new CreateCommand(
@@ -981,7 +982,7 @@ class RepositoryServiceTest {
               null,
               null)));
       assertEquals(
-          "proxy.allowedRedirectHosts entries must be exact host names without a scheme, port, path, or wildcard",
+          "proxy.allowedRedirectHosts entries must be exact host names or *.example.com patterns without a scheme, port, or path",
           error.getMessage());
     }
   }
@@ -1008,7 +1009,7 @@ class RepositoryServiceTest {
               null,
               null)));
       assertEquals(
-          "proxy.allowedRedirectHosts entries must be exact host names without a scheme, port, path, or wildcard",
+          "proxy.allowedRedirectHosts entries must be exact host names or *.example.com patterns without a scheme, port, or path",
           error.getMessage());
     }
 

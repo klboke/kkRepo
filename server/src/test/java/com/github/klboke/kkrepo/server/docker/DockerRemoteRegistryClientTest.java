@@ -807,6 +807,39 @@ class DockerRemoteRegistryClientTest {
   }
 
   @Test
+  void proxiedWildcardRedirectStripsRegistryCredentials() throws Exception {
+    try (FakeHttpProxyServer proxy = FakeHttpProxyServer.start(request -> {
+          if (request.target().endsWith("/v2/library/nginx/blobs/sha256:abc")) {
+            return FakeHttpProxyServer.FakeResponse.status(307,
+                Map.of("Location", "http://cdn01.quay.io/layers/abc"));
+          }
+          return FakeHttpProxyServer.FakeResponse.bytes(200,
+              Map.of("Content-Type", "application/octet-stream"),
+              "layer".getBytes(StandardCharsets.UTF_8));
+        });
+        ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      DockerRemoteRegistryClient client = proxiedClient(factory);
+
+      try (HttpRemoteFetcher.Result result = client.get(
+          proxiedRuntime("http://localhost", "robot", "secret",
+              outboundProxy(proxy.port()), Set.of("*.quay.io")),
+          "library/nginx/blobs/sha256:abc",
+          "application/octet-stream")) {
+        assertEquals(200, result.status());
+        assertEquals("layer", new String(result.body().readAllBytes(), StandardCharsets.UTF_8));
+      }
+
+      assertEquals(2, proxy.requests().size());
+      assertEquals(basic("robot", "secret"), proxy.requests().get(0).header("Authorization"));
+      URI redirected = URI.create(proxy.requests().get(1).target());
+      assertEquals("cdn01.quay.io", redirected.getHost());
+      assertEquals("/layers/abc", redirected.getRawPath());
+      assertNull(proxy.requests().get(1).header("Authorization"),
+          "registry credentials must not leak to the cross-origin storage URL");
+    }
+  }
+
+  @Test
   void proxiedSameOriginRedirectPreservesRegistryCredentials() throws Exception {
     try (FakeHttpProxyServer proxy = FakeHttpProxyServer.start(request -> {
           if (request.target().endsWith("/v2/library/nginx/blobs/sha256:abc")) {

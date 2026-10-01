@@ -302,3 +302,16 @@ Completion sorting defaults to `direction=desc` when direction is omitted. Pass 
 The cursor carries the completion timestamp and ID, so any replica can continue the page without looking up the previous boundary row. Pages reflect live data rather than a frozen snapshot: retries, newly completed tasks, or retention deletions can change the list while browsing. Refresh from the first page for the latest activity.
 
 Completion pages use timestamp/ID indexes added by migration V55, with status-leading variants for filtered task lists (including repository-scoped lists). Tasks read completed and unfinished ranges separately, with at most the remaining page size fetched from each range; the server reads both in one read-only transaction. This avoids a history-wide null-rank sort while keeping unfinished tasks last. MySQL builds the indexes online; PostgreSQL builds them concurrently. The migrations support retry after interruption.
+
+### Proxy redirect host patterns
+
+`proxy.allowedRedirectHosts` accepts exact hosts and leading `*.` patterns, for example
+`["*.quay.io", "quay.io"]`. `*.quay.io` matches `cdn01.quay.io` and deeper subdomains,
+but not `quay.io`, `evilquay.io`, or `quay.io.example.com`. Exact entries keep their existing
+behavior. Rules are case-insensitive, trailing dots are normalized, and IDNs are stored as ASCII.
+Bare `*`, partial wildcards, single-label wildcard suffixes, IP wildcard patterns, schemes,
+ports and paths are rejected. There are at most 64 rules per repository.
+
+These database-backed rules are applied by every replica to both ordinary proxy and Docker
+redirects. They do not allow private addresses or forward Basic/Bearer/NTLM credentials across
+origins: the outbound address policy and DNS pinning still apply to every hop.

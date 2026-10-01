@@ -91,6 +91,62 @@ class MavenGroupFailureCompatibilityTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(ints = {302, 307})
+  void configuredSubdomainRedirectDownloadsTheSameBytesAsNexus(int redirectStatus) throws Exception {
+    assumeTrue(Boolean.parseBoolean(CompatDefaults.setting("compat.write.enabled", "COMPAT_WRITE_ENABLED")
+        .orElse("false")), "Set COMPAT_WRITE_ENABLED=true on disposable compatibility instances");
+    String host = CompatDefaults.setting("compat.mavenGroup.upstreamHost", "MAVEN_GROUP_COMPAT_UPSTREAM_HOST")
+        .orElse("host.docker.internal");
+    assumeTrue(host.contains(".") && !host.matches("[0-9.]+"), "Use a hostname for wildcard comparison");
+    String wildcard = "*" + host.substring(host.indexOf('.'));
+    HttpServer upstream = HttpServer.create(new InetSocketAddress("0.0.0.0", 0), 0);
+    HttpServer target = HttpServer.create(new InetSocketAddress("0.0.0.0", 0), 0);
+    AtomicInteger downloads = new AtomicInteger();
+    target.createContext("/", exchange -> {
+      downloads.incrementAndGet();
+      exchange.getResponseHeaders().set("Content-Type", "application/xml");
+      exchange.getResponseHeaders().set("Content-Length", Integer.toString(POM.length));
+      boolean head = exchange.getRequestMethod().equals("HEAD");
+      exchange.sendResponseHeaders(200, head ? -1 : POM.length);
+      if (!head) exchange.getResponseBody().write(POM);
+      exchange.close();
+    });
+    upstream.createContext("/", exchange -> {
+      exchange.getResponseHeaders().set("Location", "http://" + host + ":"
+          + target.getAddress().getPort() + exchange.getRequestURI().getRawPath());
+      exchange.sendResponseHeaders(redirectStatus, -1);
+      exchange.close();
+    });
+    upstream.start();
+    target.start();
+    try {
+      String remote = "http://" + host + ":" + upstream.getAddress().getPort() + "/";
+      Endpoint nexus = new Endpoint(CompatDefaults.nexusBaseUrl().orElseThrow(),
+          CompatDefaults.nexusUsername().orElseThrow(), CompatDefaults.nexusPassword().orElseThrow(), true);
+      Endpoint candidate = new Endpoint(CompatDefaults.nexusPlusBaseUrl().orElseThrow(),
+          CompatDefaults.nexusPlusUsername().orElseThrow(), CompatDefaults.nexusPlusPassword().orElseThrow(), false);
+      try (var fixtureAccess = nexus.allowFixtureHost(host)) {
+        for (Endpoint endpoint : List.of(nexus, candidate)) {
+          String name = "compat-redirect-" + UUID.randomUUID().toString().substring(0, 8);
+          endpoint.create(name, "proxy", remote, List.of(), List.of(wildcard));
+          try {
+            var response = endpoint.content(name, POM_PATH, "GET", null);
+            assertEquals(200, response.statusCode());
+            assertArrayEquals(POM, response.body());
+            assertEquals(200, endpoint.content(name, POM_PATH, "HEAD", null).statusCode());
+          } finally {
+            endpoint.delete(name);
+          }
+        }
+      }
+      assertTrue(downloads.get() >= 2, "Both Nexus and kkRepo must follow the redirect");
+    } finally {
+      upstream.stop(0);
+      target.stop(0);
+    }
+  }
+
   private static void exercise(Endpoint endpoint, String remote, int upstreamStatus) throws Exception {
     String prefix = "compat-fallback-" + UUID.randomUUID().toString().substring(0, 8);
     String hosted = prefix + "-hosted";
@@ -192,6 +248,11 @@ class MavenGroupFailureCompatibilityTest {
     }
 
     void create(String name, String type, String remote, List<String> members) throws Exception {
+      create(name, type, remote, members, List.of());
+    }
+
+    void create(String name, String type, String remote, List<String> members, List<String> redirectHosts)
+        throws Exception {
       var payload = new java.util.LinkedHashMap<String, Object>();
       payload.put("name", name);
       payload.put("online", true);
@@ -209,7 +270,7 @@ class MavenGroupFailureCompatibilityTest {
         }
       }
       if (type.equals("proxy")) {
-        payload.put("proxy", Map.of("remoteUrl", remote, "autoBlock", false));
+        payload.put("proxy", Map.of("remoteUrl", remote, "autoBlock", false, "allowedRedirectHosts", redirectHosts));
         if (nexus) {
           payload.put("proxy", Map.of("remoteUrl", remote, "contentMaxAge", 0, "metadataMaxAge", 0));
           payload.put("negativeCache", Map.of("enabled", false, "timeToLive", 1));

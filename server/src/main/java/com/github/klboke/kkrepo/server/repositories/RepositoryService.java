@@ -47,7 +47,7 @@ import com.github.klboke.kkrepo.server.security.SecurityCatalogCache;
 import com.github.klboke.kkrepo.server.security.SecurityValidationException;
 import com.github.klboke.kkrepo.protocol.alpine.AlpinePathParser;
 import com.github.klboke.kkrepo.protocol.alpine.AlpineSignature;
-import java.net.IDN;
+import com.github.klboke.kkrepo.server.security.RedirectHosts;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
@@ -75,8 +75,6 @@ public class RepositoryService {
   private static final Set<String> MAVEN_LAYOUT_POLICIES = Set.of("STRICT", "PERMISSIVE");
   private static final Set<String> RAW_CONTENT_DISPOSITIONS = Set.of("INLINE", "ATTACHMENT");
   private static final int MAX_PROXY_REDIRECT_HOSTS = 64;
-  private static final Pattern REDIRECT_HOST_LABEL_PATTERN =
-      Pattern.compile("^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$");
 
   private final RepositoryDao repositoryDao;
   private final BlobStoreDao blobStoreDao;
@@ -1433,27 +1431,11 @@ public class RepositoryService {
     if (hosts == null || hosts.isEmpty()) return List.of();
     LinkedHashSet<String> normalized = new LinkedHashSet<>();
     for (String host : hosts) {
-      if (host == null || host.isBlank()) {
-        throw invalidRedirectHost();
-      }
-      String candidate = host.trim();
-      while (candidate.endsWith(".")) {
-        candidate = candidate.substring(0, candidate.length() - 1);
-      }
-      final String ascii;
       try {
-        ascii = IDN.toASCII(candidate, IDN.USE_STD3_ASCII_RULES)
-            .toLowerCase(Locale.ROOT);
+        normalized.add(RedirectHosts.normalizeRule(host));
       } catch (IllegalArgumentException e) {
         throw invalidRedirectHost();
       }
-      if (ascii.isBlank() || ascii.length() > 253) throw invalidRedirectHost();
-      for (String label : ascii.split("\\.", -1)) {
-        if (!REDIRECT_HOST_LABEL_PATTERN.matcher(label).matches()) {
-          throw invalidRedirectHost();
-        }
-      }
-      normalized.add(ascii);
       if (normalized.size() > MAX_PROXY_REDIRECT_HOSTS) {
         throw new RepositoryValidationException(
             "proxy.allowedRedirectHosts supports at most " + MAX_PROXY_REDIRECT_HOSTS + " hosts");
@@ -1464,7 +1446,7 @@ public class RepositoryService {
 
   private static RepositoryValidationException invalidRedirectHost() {
     return new RepositoryValidationException(
-        "proxy.allowedRedirectHosts entries must be exact host names without a scheme, port, path, or wildcard");
+        "proxy.allowedRedirectHosts entries must be exact host names or *.example.com patterns without a scheme, port, or path");
   }
 
   private OutboundProxyConfig validateOutboundProxy(ProxySettings settings) {
