@@ -75,13 +75,6 @@ kkrepo 兼容 Nexus 的 `/repository/<repo>/...` URL 布局、客户端协议行
 
 `Sync metadata` 只发现和记录待迁移资产，不会下载真实 blob。真实包文件由 `Sync packages` 迁移。
 
-如果在元数据扫描尚未结束时点击 `Sync packages`，系统会在后续每页扫描结果提交后继续唤醒包迁移，
-无需再次点击。该开关和任务领取状态存储在共享数据库中，扫描和同步请求可以由不同副本处理。
-各副本也会每五秒轮询这份持久状态，恢复因进程退出而中断的任务唤醒。
-包迁移并发上限由所有副本共享；下载或写入大 blob 时会持续续租，避免活跃任务被重复领取。
-租约过期且重试次数耗尽的资产会转为失败状态，可通过 **Retry failed** 恢复。
-请结合 migrated/pending/failed 资产计数以及目标仓库的实际下载结果确认进度。
-
 ### Docker 仓库端到端验证
 
 Docker / OCI 仓库迁移也走 `Nexus Repository Data` 两步流程。为了避免本地验证误扫所有 hosted 仓库，可以在请求中指定 `repositories` 或 `repositoryNames`，只迁移目标 Docker hosted 仓库。

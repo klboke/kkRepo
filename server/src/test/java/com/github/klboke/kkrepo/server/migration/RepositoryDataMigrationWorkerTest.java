@@ -6,7 +6,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -41,83 +40,6 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionStatus;
 
 class RepositoryDataMigrationWorkerTest {
-  @Test
-  void discoveryWakesPackageSyncAlreadyEnabledOnAnotherReplica() throws Exception {
-    Fixture fixture = fixture();
-    try {
-      when(fixture.migrationJobDao.findById(100L)).thenReturn(Optional.of(new MigrationJobRecord(
-          100L, "3.68.1-02", "", "running", Map.of("packageMigrationEnabled", true), Map.of(), Instant.now(), null)));
-      when(fixture.migrationDao.findTargetAssetsByPathHash(eq(9L), any())).thenReturn(Map.of());
-      when(fixture.migrationDao.claimAssetsForMigration(eq(100L), anyInt(), anyInt(), any())).thenReturn(List.of());
-      fixture.worker.triggerPackages(100L);
-      verify(fixture.migrationDao, org.mockito.Mockito.timeout(2000)).claimAssetsForMigration(
-          eq(100L), anyInt(), anyInt(), any());
-      RepositoryAssetPage page = new RepositoryAssetPage("source", null, "a.jar", true,
-          List.of(metadata("a.jar", "2026-01-03T00:00:00Z")), List.of());
-      invoke(fixture.worker, "processDiscoveryPage", new Class<?>[] {
-          RepositoryDataMigrationRepositoryRecord.class, RepositoryAssetPage.class, Instant.class},
-          repositoryJob(RepositoryFormat.MAVEN2, Map.of()), page, null);
-      verify(fixture.migrationDao, org.mockito.Mockito.timeout(2000).atLeast(2)).claimAssetsForMigration(
-          eq(100L), anyInt(), anyInt(), any());
-    } finally { fixture.worker.shutdown(); }
-  }
-
-  @Test
-  void wakeupWhileTriggerIsRunningIsReplayedInsteadOfDropped() throws Exception {
-    Fixture fixture = fixture();
-    var started = new java.util.concurrent.CountDownLatch(1);
-    var release = new java.util.concurrent.CountDownLatch(1);
-    var replayed = new java.util.concurrent.CountDownLatch(1);
-    var calls = new java.util.concurrent.atomic.AtomicInteger();
-    Runnable work = () -> {
-      if (calls.incrementAndGet() == 1) {
-        started.countDown();
-        try { release.await(2, java.util.concurrent.TimeUnit.SECONDS); }
-        catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-      } else { replayed.countDown(); }
-    };
-    try {
-      invoke(fixture.worker, "trigger", new Class<?>[] {String.class, Runnable.class}, "packages:100", work);
-      assertTrue(started.await(2, java.util.concurrent.TimeUnit.SECONDS));
-      invoke(fixture.worker, "trigger", new Class<?>[] {String.class, Runnable.class}, "packages:100", work);
-      release.countDown();
-      assertTrue(replayed.await(2, java.util.concurrent.TimeUnit.SECONDS));
-      assertEquals(2, calls.get());
-    } finally { release.countDown(); fixture.worker.shutdown(); }
-  }
-
-  @Test
-  void freshReplicaRecoversDurablePendingJobsWithoutAPerPageTrigger() {
-    Fixture replica = fixture();
-    when(replica.migrationDao.findPackageMigrationJobsToWake(any(), anyInt(), eq(16)))
-        .thenReturn(List.of(100L));
-    when(replica.migrationDao.claimAssetsForMigration(eq(100L), anyInt(), anyInt(), any())).thenReturn(List.of());
-    try {
-      replica.worker.recoverPackageMigrations();
-      verify(replica.migrationDao, org.mockito.Mockito.timeout(2000)).claimAssetsForMigration(
-          eq(100L), anyInt(), anyInt(), any());
-    } finally { replica.worker.shutdown(); }
-  }
-
-  @Test
-  void failedTriggerCanBeStartedAgain() throws Exception {
-    Fixture fixture = fixture();
-    var recovered = new java.util.concurrent.CountDownLatch(1);
-    when(fixture.migrationDao.claimAssetsForMigration(eq(100L), anyInt(), anyInt(), any()))
-        .thenThrow(new IllegalStateException("temporary database failure"))
-        .thenAnswer(invocation -> { recovered.countDown(); return List.of(); });
-    try {
-      fixture.worker.triggerPackages(100L);
-      verify(fixture.migrationDao, org.mockito.Mockito.timeout(2000)).claimAssetsForMigration(
-          eq(100L), anyInt(), anyInt(), any());
-      long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
-      do {
-        fixture.worker.triggerPackages(100L);
-      } while (!recovered.await(20, java.util.concurrent.TimeUnit.MILLISECONDS) && System.nanoTime() < deadline);
-      assertEquals(0, recovered.getCount(), "A failed task must not permanently suppress later triggers");
-    } finally { fixture.worker.shutdown(); }
-  }
-
   @Test
   void batchProgressTargetsIncludeRepositoryAndJobRows() {
     RepositoryDataMigrationWorker.BatchProgressTargets targets =
@@ -255,56 +177,6 @@ class RepositoryDataMigrationWorkerTest {
   }
 
   @Test
-  void batchRenewsQueuedClaimsAndCompletesWithSharedProgress() throws Exception {
-    Fixture fixture = fixture();
-    var claim = claim(10L, 100L, RepositoryFormat.CARGO, "config.json");
-    when(fixture.migrationDao.claimAssetsForMigration(eq(100L), anyInt(), anyInt(), any()))
-        .thenReturn(List.of(claim));
-    try {
-      assertEquals(true, invoke(fixture.worker, "migrateAssetBatch", new Class<?>[] {Long.class}, 100L));
-      var order = org.mockito.Mockito.inOrder(fixture.migrationDao);
-      order.verify(fixture.migrationDao).renewAssetClaim(eq(claim.asset().id()), eq(1), any());
-      order.verify(fixture.migrationDao).markAssetMigrated(claim.asset().id(), 10L, 1, null, null, null);
-      order.verify(fixture.migrationDao).refreshRepositoryProgress(10L);
-    } finally { fixture.worker.shutdown(); }
-  }
-
-  @Test
-  void databaseFailureDuringRenewalClosesTheUnownedBodyAndDoesNotPublish() throws Exception {
-    Fixture fixture = fixture();
-    var claim = claim(10L, 100L, RepositoryFormat.MAVEN2, "large.jar");
-    when(fixture.migrationDao.renewAssetClaim(anyLong(), anyInt(), any()))
-        .thenThrow(new IllegalStateException("database unavailable"));
-    try (var lease = fixture.worker.new ClaimLease(claim)) {
-      InputStream body = mock(InputStream.class);
-      org.junit.jupiter.api.Assertions.assertThrows(java.io.IOException.class, () -> lease.guard(body));
-      verify(body).close();
-      NexusRestClient client = mock(NexusRestClient.class);
-      invoke(fixture.worker, "migrateOne",
-          new Class<?>[] {AssetClaim.class, NexusRestClient.class, boolean.class}, claim, client, true);
-      verify(client, never()).getRepositoryAsset(anyString(), anyString());
-      verify(fixture.migrationDao, never()).markAssetFailed(anyLong(), anyLong(), anyInt(), anyInt(), any());
-    } finally { fixture.worker.shutdown(); }
-  }
-
-  @Test
-  void lostHeartbeatStopsTheDownloadStreamAndCannotRenewAgain() throws Exception {
-    Fixture fixture = fixture();
-    AssetClaim claim = claim(10L, 100L, RepositoryFormat.MAVEN2, "large.jar");
-    when(fixture.migrationDao.renewAssetClaim(anyLong(), anyInt(), any())).thenReturn(true, true, false);
-    try (var lease = fixture.worker.new ClaimLease(claim)) {
-      InputStream stream = lease.guard(new ByteArrayInputStream(new byte[] {1, 2, 3}));
-      assertEquals(1, stream.read());
-      lease.renew();
-      assertEquals(1, stream.read(new byte[1], 0, 1));
-      lease.renew();
-      org.junit.jupiter.api.Assertions.assertThrows(java.io.IOException.class, stream::read);
-      lease.renew();
-      verify(fixture.migrationDao, org.mockito.Mockito.times(3)).renewAssetClaim(anyLong(), eq(1), any());
-    } finally { fixture.worker.shutdown(); }
-  }
-
-  @Test
   void migrateOneMarksSuccessfulDownloadAndTargetIds() throws Exception {
     Fixture fixture = fixture();
     try {
@@ -327,8 +199,8 @@ class RepositoryDataMigrationWorkerTest {
           claim, client, true);
 
       verify(fixture.migrationDao).markAssetMigrated(
-          claim.asset().id(), claim.asset().repositoryJobId(), 1, 20L, 30L, 40L);
-      verify(fixture.migrationDao, never()).markAssetFailed(anyLong(), anyLong(), anyInt(), anyInt(), any());
+          claim.asset().id(), claim.asset().repositoryJobId(), 20L, 30L, 40L);
+      verify(fixture.migrationDao, never()).markAssetFailed(anyLong(), anyLong(), anyInt(), any());
     } finally {
       fixture.worker.shutdown();
     }
@@ -354,7 +226,7 @@ class RepositoryDataMigrationWorkerTest {
 
       verify(body).close();
       verify(fixture.migrationDao).markAssetFailed(
-          eq(failed.asset().id()), eq(failed.asset().repositoryJobId()), eq(1), eq(5),
+          eq(failed.asset().id()), eq(failed.asset().repositoryJobId()), eq(5),
           org.mockito.ArgumentMatchers.contains("HTTP 404"));
 
       AssetClaim skipped = claim(11L, 100L, RepositoryFormat.CARGO, "/config.json");
@@ -363,7 +235,7 @@ class RepositoryDataMigrationWorkerTest {
           new Class<?>[] {AssetClaim.class, NexusRestClient.class, boolean.class},
           skipped, client, true);
       verify(fixture.migrationDao).markAssetMigrated(
-          skipped.asset().id(), skipped.asset().repositoryJobId(), 1, null, null, null);
+          skipped.asset().id(), skipped.asset().repositoryJobId(), null, null, null);
       verify(client, never()).getRepositoryAsset("source", "/config.json");
     } finally {
       fixture.worker.shutdown();
@@ -391,7 +263,6 @@ class RepositoryDataMigrationWorkerTest {
   private static Fixture fixture() {
     MigrationJobDao migrationJobDao = mock(MigrationJobDao.class);
     RepositoryDataMigrationDao migrationDao = mock(RepositoryDataMigrationDao.class);
-    when(migrationDao.renewAssetClaim(anyLong(), anyInt(), any())).thenReturn(true);
     RepositoryDataMigrationService migrationService = mock(RepositoryDataMigrationService.class);
     RepositoryDataMigrationWriter writer = mock(RepositoryDataMigrationWriter.class);
     PlatformTransactionManager transactions = mock(PlatformTransactionManager.class);
@@ -507,6 +378,6 @@ class RepositoryDataMigrationWorkerTest {
         1L,
         format,
         "http://nexus.example",
-        Map.of("sourceUsername", "admin", "sourcePassword", "test-password"));
+        Map.of());
   }
 }

@@ -5766,13 +5766,6 @@ if [[ -z "$job_id" ]]; then
   exit 1
 fi
 
-# Reproduce clicking Sync packages immediately after creating the asynchronous metadata task.
-# Swift keeps its separate restart-at-stage-boundary check below.
-if ! swift_migration_enabled; then
-  log "enabling package sync before metadata discovery completes for job $job_id"
-  curl -m 30 -fsS -u "$(auth)" -X POST \
-    "$KKREPO_URL/internal/migration/nexus/repository-data/jobs/$job_id/packages/start" >/dev/null
-fi
 wait_for_discovery_ready "$job_id"
 
 package_migration_url="$KKREPO_URL"
@@ -5784,10 +5777,10 @@ if swift_migration_enabled; then
 fi
 
 log "starting package/blob migration for job $job_id through $package_migration_label"
-if swift_migration_enabled; then
-  curl -m 30 -fsS -u "$(auth)" -X POST \
-    "$package_migration_url/internal/migration/nexus/repository-data/jobs/$job_id/packages/start" >/dev/null
-fi
+curl -m 30 -fsS \
+  -u "$(auth)" \
+  -X POST \
+  "$package_migration_url/internal/migration/nexus/repository-data/jobs/$job_id/packages/start" >/dev/null
 wait_for_migration_idle "$job_id" "$package_migration_url" "$package_migration_label"
 if swift_migration_enabled; then
   verify_migration_job_visible "$job_id" "$KKREPO_URL" "primary after secondary completion"
