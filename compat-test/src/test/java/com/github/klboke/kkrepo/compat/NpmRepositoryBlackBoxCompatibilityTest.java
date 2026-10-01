@@ -70,18 +70,28 @@ class NpmRepositoryBlackBoxCompatibilityTest {
     verifyScopedUpstream(null, true);
   }
 
+  @Test
+  void nestedTarballUrlsRemainRoutableWithoutPriorMetadata() throws Exception {
+    verifyScopedUpstream(null, true, true);
+  }
+
   private void verifyScopedUpstream(Path installRoot) throws Exception {
     verifyScopedUpstream(installRoot, false);
   }
 
   @SuppressWarnings("unchecked")
   private void verifyScopedUpstream(Path installRoot, boolean coldLockfile) throws Exception {
+    verifyScopedUpstream(installRoot, coldLockfile, false);
+  }
+
+  @SuppressWarnings("unchecked")
+  private void verifyScopedUpstream(Path installRoot, boolean coldLockfile, boolean nested) throws Exception {
     CompatConfig config = CompatConfig.load();
     assumeTrue(config.configured() && config.writeEnabled(), "Requires disposable Nexus and kkRepo instances");
     String host = setting("compat.npm.upstreamHost", "NPM_COMPAT_UPSTREAM_HOST").orElse("host.docker.internal");
     NpmFixture fixture = NpmFixture.create("@compat/scoped-" + System.nanoTime(), "0.1.1-beta.1");
     String tarballPath = fixture.packageName() + "/-/" + fixture.packageName() + "-" + fixture.version() + ".tgz";
-    String encodedName = fixture.packageName().replace("/", "%2F") + "-" + fixture.version() + ".tgz";
+    String encodedName = (nested ? "signed/" : "") + fixture.packageName().replace("/", "%2F") + "-" + fixture.version() + ".tgz";
     String advertisedPath = coldLockfile ? "downloads/" + fixture.packageName() + "/-/" + encodedName : tarballPath;
     var upstream = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("0.0.0.0", 0), 0);
     String remote = "http://" + host + ":" + upstream.getAddress().getPort() + "/artgalaxy/test/";

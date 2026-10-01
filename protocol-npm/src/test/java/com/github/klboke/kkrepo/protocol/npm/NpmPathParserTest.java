@@ -18,9 +18,23 @@ class NpmPathParserTest {
       assertEquals("123", parser.parse(path + "/-rev/123").revision());
     }
     for (String path : new String[] {"@abc/abc-ui/-/@other/abc-ui-1.tgz",
-        "demo/-/@abc/demo-1.tgz", "@abc/abc-ui/-/@abc/../secret", "@abc/abc-ui/-/@abc/a/b.tgz"}) {
+        "demo/-/@abc/demo-1.tgz", "@abc/abc-ui/-/@abc/../secret", "demo/-/signed/../secret"}) {
       assertEquals(NpmPath.Kind.UNKNOWN, parser.parse(path).kind(), path);
     }
+  }
+
+  @Test
+  void rewrittenSubdirectoryTarballsRemainRoutableWithTheirFullIdentity() {
+    for (String suffix : new String[] {"signed/demo.tgz", "signed%2Fdemo.tgz", "@abc/a/b.tgz"}) {
+      String url = "https://upstream/download/-/" + suffix;
+      var pkg = NpmPackageId.parse("@abc/demo");
+      var parsed = parser.parse(pkg.tarballPath(NpmMetadata.tarballFilename(url)));
+      assertEquals(NpmPath.Kind.TARBALL, parsed.kind());
+      assertEquals(NpmMetadata.canonicalTarballName(url), parsed.tarballName());
+      assertEquals("@abc/demo", parsed.packageId().id());
+      assertEquals("rev", parser.parse(pkg.tarballPath(suffix) + "/-rev/rev").revision());
+    }
+    assertEquals(NpmPath.Kind.TARBALL, parser.parse("demo/-/signed/demo.tgz").kind());
   }
 
   @Test

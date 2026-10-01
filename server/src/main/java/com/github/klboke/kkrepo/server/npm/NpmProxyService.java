@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.NpmReleaseIndexDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.protocol.npm.NpmMinimumReleaseAge;
@@ -905,7 +906,7 @@ public class NpmProxyService {
       // Lockfile-only installs must discover custom/encoded URLs even on a completely cold proxy.
       try {
         getPackage(runtime, packageId, runtime.name(), true);
-      } catch (NpmExceptions.NpmNotFoundException missingMetadata) {
+      } catch (NpmExceptions.NpmNotFoundException | NpmExceptions.BadUpstreamException unavailableMetadata) {
         return fallback;
       }
     }
@@ -957,7 +958,12 @@ public class NpmProxyService {
       boolean headOnly,
       Instant now) {
     String url = remoteTarballUrl(runtime, packageId, tarballName);
-    Conditional conditional = conditional(cached);
+    String sourceHash = java.util.HexFormat.of().formatHex(PersistenceHashes.sha256(url));
+    boolean sameSource = cached.filter(asset -> asset.blob() != null)
+        .map(asset -> sourceHash.equals(stringAttr(asset.blob().attributes(), "npmTarballSourceUrlHash")))
+        .orElse(false);
+    Conditional conditional = sameSource ? conditional(cached) : new Conditional(null, null);
+    boolean conditionalRequest = conditional.etag() != null || conditional.lastModified() != null;
     HttpRemoteFetcher.Request req = new HttpRemoteFetcher.Request(
         url, conditional.etag(), conditional.lastModified(), null, false)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
@@ -966,6 +972,9 @@ public class NpmProxyService {
     try {
       return fetcher.fetchWithBodyRetry(req, packageId.tarballPath(tarballName), result -> {
         int status = result.status();
+        if (status == 304 && !conditionalRequest) {
+          throw new NpmExceptions.BadUpstreamException("Unsolicited tarball not-modified response");
+        }
         if (status == 304 && cached.isPresent()) {
           Map<String, Object> attributes = refreshedAttributes(runtime, cached.get(), NexusCacheType.CONTENT, now);
           if (attributes == null) {
@@ -980,7 +989,7 @@ public class NpmProxyService {
         }
         if (status >= 200 && status < 300) {
           negativeCache.invalidate(runtime, packageId.tarballPath(tarballName));
-          return persistTarball(runtime, packageId, tarballName, result, !headOnly, now);
+          return persistTarball(runtime, packageId, tarballName, result, sourceHash, !headOnly, now);
         }
         if (status == 404 || status == 410) {
           proxyStateDao.recordSuccess(runtime.id(), now);
@@ -1005,6 +1014,7 @@ public class NpmProxyService {
       NpmPackageId packageId,
       String tarballName,
       HttpRemoteFetcher.Result result,
+      String sourceHash,
       boolean keepResponseFile,
       Instant now) {
     String contentType = result.contentType();
@@ -1014,9 +1024,12 @@ public class NpmProxyService {
     }
     long blobStoreId = requireBlobStore(runtime);
     BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);
+    Map<String, String> attributes = remoteAttributes(result);
+    // Bind validators without storing signed query tokens or disabling normal blob deduplication.
+    if (!attributes.isEmpty()) attributes.put("npmTarballSourceUrlHash", sourceHash);
     NpmAssetWriter.Stored stored = writer.writeTarball(runtime, storage, blobStoreId, packageId,
         inferVersion(packageId, tarballName), tarballName, result.body(),
-        contentType, "proxy", ProxyRequestAudit.currentClientIp(), remoteAttributes(result), keepResponseFile);
+        contentType, "proxy", ProxyRequestAudit.currentClientIp(), attributes, keepResponseFile);
     updateCacheInfo(runtime, stored.asset(), NexusCacheType.CONTENT, now);
     proxyStateDao.recordSuccess(runtime.id(), now);
     return stored;

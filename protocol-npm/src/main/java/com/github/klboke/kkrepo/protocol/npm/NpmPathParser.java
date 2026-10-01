@@ -100,20 +100,24 @@ public final class NpmPathParser {
       return new NpmPath(NpmPath.Kind.PACKAGE_ROOT, raw, packageId, null, null, null, parts[index + 1]);
     }
     if (parts[index].equals("-") && parts.length >= index + 2) {
-      String tarballName = parts[index + 1];
-      int end = index + 2;
-      // CodeArts and other registries retain the package scope in the tarball filename.
-      // Accept only this package's scope, preserving its canonical authorization identity.
-      if (packageId.scope() != null && tarballName.equals("@" + packageId.scope())
-          && parts.length > end && !parts[end].equals(".") && !parts[end].equals("..")) {
-        tarballName += "/" + parts[end++];
-      }
+      int end = parts.length;
       String revision = null;
-      if (parts.length == end + 2 && parts[end].equals("-rev")) {
-        revision = parts[end + 1];
-      } else if (parts.length != end) {
+      if (end >= index + 4 && parts[end - 2].equals("-rev")) {
+        revision = parts[end - 1];
+        end -= 2;
+      }
+      // Upstream tarball URLs may contain ordinary subdirectories or this package's scope.
+      // Keep the full suffix so distinct URLs do not share a release-age identity.
+      if (end > index + 2 && parts[index + 1].startsWith("@")
+          && (packageId.scope() == null || !parts[index + 1].equals("@" + packageId.scope()))) {
         return simple(NpmPath.Kind.UNKNOWN, raw);
       }
+      for (int i = index + 1; i < end; i++) {
+        if (parts[i].isEmpty() || parts[i].equals(".") || parts[i].equals("..")) {
+          return simple(NpmPath.Kind.UNKNOWN, raw);
+        }
+      }
+      String tarballName = String.join("/", java.util.Arrays.copyOfRange(parts, index + 1, end));
       return new NpmPath(NpmPath.Kind.TARBALL, raw, packageId, null, tarballName, null, revision);
     }
     if (parts.length == index + 1) {

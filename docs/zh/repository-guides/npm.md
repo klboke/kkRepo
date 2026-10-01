@@ -80,3 +80,6 @@ pnpm login --registry=https://nexus.example.com/repository/npm-hosted/
 直接使用 lockfile 下载时，也会先获取缺失或过期的包元数据，再选择上游 tarball 地址。
 包含 scope 的文件路径与普通文件名保持独立，最小发布年龄检查也使用相同的路径标识。
 升级后的旧发布年龄索引会从已存储的原始元数据自动重建，无需手动回填。
+
+tarball 后缀中的子目录会保留。元数据暂时不可用时，直接下载仍可尝试标准仓库路径。
+缓存的 HTTP 校验头只会用于原始上游 URL，查询参数变化时也会重新下载。

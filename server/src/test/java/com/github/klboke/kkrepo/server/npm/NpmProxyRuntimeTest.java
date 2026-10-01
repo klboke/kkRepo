@@ -396,7 +396,8 @@ class NpmProxyRuntimeTest {
     when(fixture.writer.writeTarball(
         eq(runtime), eq(fixture.storage), eq(7L), eq(PACKAGE), eq("1.0.0"), eq(TARBALL),
         any(), eq("application/octet-stream"), eq("proxy"), isNull(),
-        eq(Map.of("remoteEtag", "tar")), eq(false)))
+        eq(Map.of("remoteEtag", "tar", "npmTarballSourceUrlHash",
+            sourceHash("https://registry.npmjs.org/" + TARBALL_PATH))), eq(false)))
         .thenReturn(stored(TARBALL_PATH, "tarball", "application/octet-stream"));
 
     MavenResponse response = fixture.service.getTarball(runtime, PACKAGE, TARBALL, true);
@@ -601,6 +602,68 @@ class NpmProxyRuntimeTest {
     assertThrows(NpmExceptions.NpmNotFoundException.class,
         () -> fixture.service.getTarball(runtime, PACKAGE, TARBALL, false));
     verify(fixture.fetcher, org.mockito.Mockito.times(2)).fetchWithBodyRetry(any(), anyString(), any());
+  }
+
+  @Test
+  void coldStandardTarballFallsBackWhenMetadataIsTemporarilyUnavailable() throws Exception {
+    for (boolean ioFailure : List.of(false, true)) {
+      Fixture fixture = fixture();
+      var runtime = runtime(1, 7L);
+      when(fixture.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.empty());
+      when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
+      when(fixture.writer.writeTarball(eq(runtime), any(), eq(7L), eq(PACKAGE), anyString(), eq(TARBALL),
+          any(), any(), eq("proxy"), isNull(), any(), eq(false)))
+          .thenReturn(stored(TARBALL_PATH, "tarball", "application/octet-stream"));
+      doAnswer(invocation -> {
+        HttpRemoteFetcher.Request request = invocation.getArgument(0);
+        HttpRemoteFetcher.ResultHandler<?> handler = invocation.getArgument(2);
+        if (request.url().endsWith("/demo")) {
+          if (ioFailure) throw new java.io.IOException("metadata temporarily unavailable");
+          return handler.handle(new HttpRemoteFetcher.Result(503, Map.of(), InputStream.nullInputStream()));
+        }
+        assertEquals("https://registry.npmjs.org/" + TARBALL_PATH, request.url());
+        return handler.handle(new HttpRemoteFetcher.Result(200, Map.of("Content-Type", "application/octet-stream"),
+            new ByteArrayInputStream("tarball".getBytes(StandardCharsets.UTF_8))));
+      }).when(fixture.fetcher).fetchWithBodyRetry(any(), anyString(), any());
+      assertEquals(200, fixture.service.getTarball(runtime, PACKAGE, TARBALL, true).status());
+      verify(fixture.fetcher, org.mockito.Mockito.times(2)).fetchWithBodyRetry(any(), anyString(), any());
+    }
+  }
+
+  @Test
+  void tarballValidatorsAreBoundToTheExactPersistedSourceUrl() throws Exception {
+    String original = "https://registry.npmjs.org/download/" + TARBALL + "?token=old";
+    for (String selected : List.of(original, original.replace("old", "new"), original.replace("download/", "other/"))) {
+      Fixture fixture = fixture();
+      var runtime = runtime(1, 7L);
+      when(fixture.hosted.packageRoot(runtime, PACKAGE)).thenReturn(Optional.of(Map.of("versions", Map.of(
+          "1.0.0", Map.of("dist", Map.of("tarball", selected))))));
+      when(fixture.cache.find(eq(10L), eq(TARBALL_PATH), any())).thenReturn(Optional.of(snapshot(
+          TARBALL_PATH, Instant.EPOCH, "tarball", Map.of("remoteEtag", "old-etag",
+              "remoteLastModified", Instant.EPOCH.toString(), "npmTarballSourceUrlHash", sourceHash(original)))));
+      MavenResponse cached = MavenResponse.noBody(200);
+      when(fixture.hosted.getTarball(runtime, PACKAGE, TARBALL, true)).thenReturn(cached);
+      doAnswer(invocation -> {
+        HttpRemoteFetcher.Request request = invocation.getArgument(0);
+        assertEquals(selected, request.url());
+        assertEquals(selected.equals(original) ? "old-etag" : null, request.etag());
+        assertEquals(selected.equals(original) ? Instant.EPOCH : null, request.lastModified());
+        HttpRemoteFetcher.ResultHandler<?> handler = invocation.getArgument(2);
+        return handler.handle(new HttpRemoteFetcher.Result(304, Map.of(), InputStream.nullInputStream()));
+      }).when(fixture.fetcher).fetchWithBodyRetry(any(), anyString(), any());
+      if (selected.equals(original)) {
+        assertSame(cached, fixture.service.getTarball(runtime, PACKAGE, TARBALL, true));
+      } else {
+        assertThrows(NpmExceptions.BadUpstreamException.class,
+            () -> fixture.service.getTarball(runtime, PACKAGE, TARBALL, true));
+        verify(fixture.hosted, never()).getTarball(runtime, PACKAGE, TARBALL, true);
+      }
+    }
+  }
+
+  private static String sourceHash(String url) {
+    return java.util.HexFormat.of().formatHex(
+        com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes.sha256(url));
   }
 
   @Test

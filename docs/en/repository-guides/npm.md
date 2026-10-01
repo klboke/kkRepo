@@ -88,3 +88,7 @@ A direct lockfile download also fetches missing or expired package metadata befo
 upstream tarball URL. Scoped filename paths remain distinct from plain filenames, including in
 minimum-release-age checks. Older release-age indexes are rebuilt lazily from the stored raw
 metadata after upgrade; normal downloads do not require an operator backfill.
+
+Tarball suffix subdirectories are preserved. If metadata is unavailable, a direct download can
+still try the conventional registry path. Cached HTTP validators are reused only for the exact
+upstream URL they came from, including its query string.
