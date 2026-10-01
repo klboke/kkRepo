@@ -345,13 +345,13 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
         JOIN repository_data_migration_repository r ON r.id = a.repository_job_id
         JOIN migration_job mj ON mj.id = r.migration_job_id
         WHERE r.status IN (?, ?) AND %s = 'true'
-          AND a.status IN (?, ?) AND a.attempts < ?
+          AND (a.status = ? AND a.attempts < ? OR a.status = ?)
           AND (a.claimed_at IS NULL OR a.claimed_at < ?)
         GROUP BY r.migration_job_id
         ORDER BY MIN(a.id)
         LIMIT ?
         """.formatted(enabled), Long.class, REPOSITORY_READY, REPOSITORY_MIGRATING,
-        ASSET_PENDING, ASSET_MIGRATING, maxAttempts, nullableTimestamp(retryBefore),
+        ASSET_PENDING, maxAttempts, ASSET_MIGRATING, nullableTimestamp(retryBefore),
         Math.max(1, Math.min(limit, 64)));
   }
 
@@ -362,26 +362,58 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
 
   @Transactional(propagation = Propagation.MANDATORY)
   public List<AssetClaim> claimAssetsForMigration(Long migrationJobId, int limit, int maxAttempts, Instant retryBefore) {
-    if (migrationJobId != null && Boolean.TRUE.equals(jdbcTemplate.queryForObject("""
+    int safeLimit = Math.max(1, limit);
+    if (migrationJobId == null) {
+      List<AssetClaim> all = new ArrayList<>();
+      for (Long jobId : findPackageMigrationJobsToWake(retryBefore, maxAttempts, 64)) {
+        all.addAll(claimAssetsForMigration(jobId, safeLimit - all.size(), maxAttempts, retryBefore));
+        if (all.size() >= safeLimit) break;
+      }
+      return all;
+    }
+    // Serialize capacity allocation, not downloads. Each replica consumes the same job budget.
+    List<String> options = jdbcTemplate.queryForList(
+        "SELECT options_json FROM migration_job WHERE id = ? FOR UPDATE SKIP LOCKED", String.class, migrationJobId);
+    if (options.isEmpty()) return List.of();
+    Map<String, Object> jobOptions = jsonColumns.read(options.getFirst());
+    int capacity = 8;
+    try {
+      capacity = Math.max(1, Math.min(64, Integer.parseInt(String.valueOf(jobOptions.getOrDefault("concurrency", 8)))));
+    } catch (NumberFormatException ignored) { }
+    if (Boolean.TRUE.equals(jdbcTemplate.queryForObject("""
         SELECT EXISTS (SELECT 1 FROM repository_data_migration_repository
         WHERE migration_job_id = ? AND format = ?)
         """, Boolean.class, migrationJobId, EnumColumns.write(RepositoryFormat.CONAN)))) {
-      // Conan's worker deliberately uses one asset per batch to preserve publication order.
-      // Keep that order across replicas, without restricting parallel claims for other formats.
-      if (jdbcTemplate.queryForList(
-          "SELECT id FROM migration_job WHERE id = ? FOR UPDATE SKIP LOCKED", Long.class, migrationJobId).isEmpty()) {
-        return List.of();
-      }
-      if (!jdbcTemplate.queryForList("""
-          SELECT a.id FROM repository_data_migration_asset a
-          JOIN repository_data_migration_repository r ON r.id = a.repository_job_id
-          WHERE r.migration_job_id = ? AND a.status = ? AND a.claimed_at >= ?
-          LIMIT 1
-          """, Long.class, migrationJobId, ASSET_MIGRATING, nullableTimestamp(retryBefore)).isEmpty()) {
-        return List.of();
+      capacity = 1;
+    }
+    List<Long> exhausted = jdbcTemplate.queryForList("""
+        SELECT a.id FROM repository_data_migration_asset a
+        JOIN repository_data_migration_repository r ON r.id = a.repository_job_id
+        WHERE r.migration_job_id = ? AND a.status = ? AND a.attempts >= ?
+          AND (a.claimed_at IS NULL OR a.claimed_at < ?)
+        FOR UPDATE SKIP LOCKED
+        """, Long.class, migrationJobId, ASSET_MIGRATING, maxAttempts, nullableTimestamp(retryBefore));
+    for (Long assetId : exhausted) {
+      jdbcTemplate.update("""
+          UPDATE repository_data_migration_asset SET status = ?, claimed_at = NULL,
+            last_error = ? WHERE id = ?
+          """, ASSET_FAILED, "Migration claim expired after the final allowed attempt", assetId);
+    }
+    if (!exhausted.isEmpty()) {
+      for (Long repositoryId : jdbcTemplate.queryForList(
+          "SELECT id FROM repository_data_migration_repository WHERE migration_job_id = ?", Long.class, migrationJobId)) {
+        refreshRepositoryProgress(repositoryId);
       }
     }
-    int safeLimit = Math.max(1, limit);
+    // A locking read sees the latest committed claims even under MySQL REPEATABLE READ.
+    int active = jdbcTemplate.queryForList("""
+        SELECT a.id FROM repository_data_migration_asset a
+        JOIN repository_data_migration_repository r ON r.id = a.repository_job_id
+        WHERE r.migration_job_id = ? AND a.status = ? AND a.claimed_at >= ?
+        FOR UPDATE
+        """, Long.class, migrationJobId, ASSET_MIGRATING, nullableTimestamp(retryBefore)).size();
+    safeLimit = Math.min(safeLimit, capacity - active);
+    if (safeLimit <= 0) return List.of();
     List<Object> args = new ArrayList<>();
     args.add(REPOSITORY_READY);
     args.add(REPOSITORY_MIGRATING);
@@ -441,13 +473,28 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
 
   public void markAssetMigrated(long assetId, long repositoryJobId,
       Long targetComponentId, Long targetAssetId, Long targetAssetBlobId) {
+    markAssetMigrated(assetId, repositoryJobId, -1, targetComponentId, targetAssetId, targetAssetBlobId);
+  }
+
+  @Override
+  public boolean renewAssetClaim(long assetId, int attempt, Instant retryBefore) {
+    return jdbcTemplate.update("""
+        UPDATE repository_data_migration_asset SET claimed_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND status = ? AND attempts = ? AND claimed_at >= ?
+        """, assetId, ASSET_MIGRATING, attempt, nullableTimestamp(retryBefore)) == 1;
+  }
+
+  @Override
+  public void markAssetMigrated(long assetId, long repositoryJobId, int attempt,
+      Long targetComponentId, Long targetAssetId, Long targetAssetBlobId) {
     jdbcTemplate.update("""
         UPDATE repository_data_migration_asset
         SET status = ?, claimed_at = NULL, migrated_at = CURRENT_TIMESTAMP,
             target_component_id = ?, target_asset_id = ?, target_asset_blob_id = ?,
             last_error = NULL
-        WHERE id = ?
-        """, ASSET_MIGRATED, targetComponentId, targetAssetId, targetAssetBlobId, assetId);
+        WHERE id = ? AND (? < 0 OR (status = ? AND attempts = ?))
+        """, ASSET_MIGRATED, targetComponentId, targetAssetId, targetAssetBlobId, assetId,
+        attempt, ASSET_MIGRATING, attempt);
   }
 
   @Override
@@ -468,13 +515,19 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
   }
 
   public void markAssetFailed(long assetId, long repositoryJobId, int maxAttempts, String error) {
+    markAssetFailed(assetId, repositoryJobId, -1, maxAttempts, error);
+  }
+
+  @Override
+  public void markAssetFailed(long assetId, long repositoryJobId, int attempt, int maxAttempts, String error) {
     jdbcTemplate.update("""
         UPDATE repository_data_migration_asset
         SET status = CASE WHEN attempts >= ? THEN ? ELSE ? END,
             claimed_at = CASE WHEN attempts >= ? THEN NULL ELSE CURRENT_TIMESTAMP END,
             last_error = ?
-        WHERE id = ?
-        """, maxAttempts, ASSET_FAILED, ASSET_PENDING, maxAttempts, truncate(error), assetId);
+        WHERE id = ? AND (? < 0 OR (status = ? AND attempts = ?))
+        """, maxAttempts, ASSET_FAILED, ASSET_PENDING, maxAttempts, truncate(error), assetId,
+        attempt, ASSET_MIGRATING, attempt);
   }
 
   public int retryFailedAssets(long migrationJobId) {

@@ -56,6 +56,8 @@ class RepositoryDataMigrationWorker {
   private final TransactionTemplate transactionTemplate;
   private final ExecutorService executor;
   private final ExecutorService triggerExecutor;
+  private final java.util.concurrent.ScheduledExecutorService leaseExecutor =
+      Executors.newScheduledThreadPool(2, threadFactory("repository-data-migration-lease-"));
   // These sets only coalesce local wakeups. Shared job options and transactional DB claims
   // remain authoritative, including when metadata and package requests hit different replicas.
   private final Object triggerLock = new Object();
@@ -224,11 +226,20 @@ class RepositoryDataMigrationWorker {
     Map<Long, NexusRestClient> clients = new ConcurrentHashMap<>();
     List<Future<?>> futures = new ArrayList<>(claims.size());
     for (AssetClaim claim : claims) {
-      futures.add(executor.submit(() -> {
-        SourceAccess source = sourceAccess(claim);
-        NexusRestClient client = clients.computeIfAbsent(claim.migrationJobId(), ignored -> source.client());
-        migrateOne(claim, client, source.checksumValidation());
-      }));
+      // Begin renewal before queueing: a batch can wait behind another job's large downloads.
+      ClaimLease lease = new ClaimLease(claim);
+      try {
+        futures.add(executor.submit(() -> {
+          try (lease) {
+            SourceAccess source = sourceAccess(claim);
+            NexusRestClient client = clients.computeIfAbsent(claim.migrationJobId(), ignored -> source.client());
+            migrateOne(claim, client, source.checksumValidation(), lease);
+          }
+        }));
+      } catch (RuntimeException e) {
+        lease.close();
+        throw e;
+      }
     }
     boolean interrupted = false;
     for (Future<?> future : futures) {
@@ -263,11 +274,19 @@ class RepositoryDataMigrationWorker {
   }
 
   private void migrateOne(AssetClaim claim, NexusRestClient client, boolean checksumValidation) {
+    try (ClaimLease lease = new ClaimLease(claim)) {
+      migrateOne(claim, client, checksumValidation, lease);
+    }
+  }
+
+  private void migrateOne(AssetClaim claim, NexusRestClient client, boolean checksumValidation, ClaimLease lease) {
     try {
+      lease.check();
       if (!shouldMigrateSourceAsset(claim.repositoryFormat(), claim.asset().sourcePath())) {
         migrationDao.markAssetMigrated(
             claim.asset().id(),
             claim.asset().repositoryJobId(),
+            claim.asset().attempts() + 1,
             null,
             null,
             null);
@@ -285,24 +304,87 @@ class RepositoryDataMigrationWorker {
       RepositoryDataMigrationWriter.WriteResult result = writer.write(
           claim.targetRepositoryId(),
           claim.asset(),
-          response.body(),
+          lease.guard(response.body()),
           contentType,
           checksumValidation && shouldValidateDownloadedSize(claim));
+      lease.check();
       migrationDao.markAssetMigrated(
           claim.asset().id(),
           claim.asset().repositoryJobId(),
+          claim.asset().attempts() + 1,
           result.componentId(),
           result.assetId(),
           result.assetBlobId());
     } catch (Exception e) {
       log.warn("repository data asset migration failed for repo={} path={}",
           claim.sourceRepositoryName(), claim.asset().sourcePath(), e);
-      migrationDao.markAssetFailed(
-          claim.asset().id(),
-          claim.asset().repositoryJobId(),
-          MAX_ATTEMPTS,
-          errorSummary(e));
+      if (lease.owned()) {
+        migrationDao.markAssetFailed(
+            claim.asset().id(),
+            claim.asset().repositoryJobId(),
+            claim.asset().attempts() + 1,
+            MAX_ATTEMPTS,
+            errorSummary(e));
+      }
     }
+  }
+
+  final class ClaimLease implements AutoCloseable {
+    private final AssetClaim claim;
+    private final java.util.concurrent.ScheduledFuture<?> heartbeat;
+    private volatile boolean lost;
+    private volatile Instant renewedAt = Instant.now();
+
+    ClaimLease(AssetClaim claim) {
+      this.claim = claim;
+      renew();
+      heartbeat = leaseExecutor.scheduleWithFixedDelay(this::renew, 30, 30, TimeUnit.SECONDS);
+    }
+
+    void renew() {
+      if (lost) return;
+      try {
+        if (migrationDao.renewAssetClaim(claim.asset().id(), claim.asset().attempts() + 1,
+            Instant.now().minusSeconds(CLAIM_RETRY_SECONDS))) {
+          renewedAt = Instant.now();
+        } else {
+          lost = true;
+        }
+      } catch (RuntimeException e) {
+        lost = true;
+        log.warn("Could not renew migration asset claim {}", claim.asset().id(), e);
+      }
+    }
+
+    boolean owned() {
+      return !lost && renewedAt.plusSeconds(CLAIM_RETRY_SECONDS).isAfter(Instant.now());
+    }
+
+    void check() throws IOException {
+      if (!owned()) {
+        throw new IOException("Migration asset claim lease lost");
+      }
+    }
+
+    InputStream guard(InputStream input) throws IOException {
+      try { check(); } catch (IOException e) { closeQuietly(input); throw e; }
+      return new java.io.FilterInputStream(input) {
+        @Override public int read() throws IOException {
+          check();
+          int value = in.read();
+          check();
+          return value;
+        }
+        @Override public int read(byte[] bytes, int offset, int length) throws IOException {
+          check();
+          int count = in.read(bytes, offset, length);
+          check();
+          return count;
+        }
+      };
+    }
+
+    @Override public void close() { heartbeat.cancel(false); }
   }
 
   private int packageConcurrency(Long migrationJobId) {
@@ -571,6 +653,8 @@ class RepositoryDataMigrationWorker {
       Thread.currentThread().interrupt();
       triggerExecutor.shutdownNow();
       executor.shutdownNow();
+    } finally {
+      leaseExecutor.shutdownNow();
     }
   }
 

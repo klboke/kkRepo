@@ -79,6 +79,9 @@ If `Sync packages` is enabled while metadata discovery is still running, each su
 discovery page wakes package migration automatically. The enabled flag and task claims are stored
 in the shared database, so discovery and package-sync requests may run on different replicas.
 Each replica also polls that durable state every five seconds to recover interrupted wakeups.
+The configured package concurrency is shared across replicas. Active transfers renew their claims
+while downloading or writing large blobs; expired claims at the retry limit become failed assets
+that can be recovered with **Retry failed**.
 Check migrated/pending/failed asset counts and download the target artifacts to confirm progress.
 
 ### Docker End-To-End Validation

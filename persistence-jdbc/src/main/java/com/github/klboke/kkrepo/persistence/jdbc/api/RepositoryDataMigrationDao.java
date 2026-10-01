@@ -64,6 +64,13 @@ public interface RepositoryDataMigrationDao {
 
   List<AssetClaim> claimAssetsForMigration(Long migrationJobId, int limit, int maxAttempts, Instant retryBefore);
 
+  boolean renewAssetClaim(long assetId, int attempt, Instant retryBefore);
+
+  void markAssetMigrated(long assetId, long repositoryJobId, int attempt,
+      Long targetComponentId, Long targetAssetId, Long targetAssetBlobId);
+
+  void markAssetFailed(long assetId, long repositoryJobId, int attempt, int maxAttempts, String error);
+
   void markAssetMigrated(long assetId, long repositoryJobId,
       Long targetComponentId, Long targetAssetId, Long targetAssetBlobId);
 
