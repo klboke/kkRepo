@@ -1305,7 +1305,7 @@ function showSearch(
 
 function openSearchResult(component) {
   if (!component || !component.repository) return;
-  showRepositoryTree(component.repository, true, componentBrowsePath(component));
+  showRepositoryTree(component.repository, true, componentBrowsePath(component), component.details?.sourceRepository || "");
 }
 
 function renderRepoList() {
@@ -4178,7 +4178,8 @@ async function renderSearch(
         <td>${component.group ? escapeHtml(component.group) : lucideIcon("circle-slash", "health-muted")}</td>
         <td>${escapeHtml(component.version)}</td>
         <td>${escapeHtml(component.format)}</td>
-        <td>${escapeHtml(component.repository)}</td>
+        <td>${escapeHtml(component.repository)}${component.details?.sourceRepository && component.details.sourceRepository !== component.repository
+          ? ` <span class="health-muted">(${escapeHtml(component.details.sourceRepository)})</span>` : ""}</td>
         <td class="expand-column">${lucideIcon("chevron-right")}</td>
       </tr>
     `;

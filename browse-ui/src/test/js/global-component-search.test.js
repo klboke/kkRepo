@@ -205,6 +205,18 @@ test("opens a Hugging Face search result at its immutable revision path", () => 
 });
 
 
+test("Docker group search preserves the selected member for identical tags", () => {
+  const helpers = loadBrowseSearchHelpers();
+  for (const sourceRepository of ["docker-first", "docker-second"]) {
+    helpers.openSearchResult({repository: "docker-public", format: "docker", name: "team/app",
+      version: "latest", path: "v2/team/app/manifests/latest", details: {sourceRepository}});
+  }
+  assert.equal(helpers.openedSearchResults[0][3], "docker-first");
+  assert.equal(helpers.openedSearchResults[1][3], "docker-second");
+  assert.match(helpers.repositoryBrowseHash(...[helpers.openedSearchResults[1][0],
+    helpers.openedSearchResults[1][2], helpers.openedSearchResults[1][3]]), /source=docker-second/);
+});
+
 test("Docker usage snippets use image references for path and connector routing", () => {
   const source = readFileSync(resolve(__dirname, "../../main/resources/META-INF/resources/browse/assets/browse.js"), "utf8");
   const start = source.indexOf("function dockerImageReferenceBase(");
