@@ -1006,6 +1006,26 @@ class NpmProxyRuntimeTest {
   }
 
   @Test
+  void unscopedLegacyLockfileResolvesUniqueNestedReleaseIndexIdentity() throws Exception {
+    Instant now = Instant.parse("2026-07-19T12:00:00Z");
+    Fixture fixture = fixture(Clock.fixed(now, ZoneOffset.UTC));
+    var runtime = runtime(60, 7L, 60);
+    var metadata = snapshot(PACKAGE.id(), now, "package-root", Map.of("npmFullMetadata", "true"));
+    var tarball = snapshot(TARBALL_PATH, now, "tarball", Map.of());
+    when(fixture.cache.find(eq(10L), anyString(), any())).thenAnswer(invocation ->
+        Optional.of(PACKAGE.id().equals(invocation.getArgument(1)) ? metadata : tarball));
+    var status = new NpmReleaseIndexDao.Status(1L, 2L, true, 1, now);
+    when(fixture.releaseIndexDao.findTarballPolicy(1L, 2L, TARBALL, null, null))
+        .thenReturn(Optional.of(new NpmReleaseIndexDao.TarballPolicy(status, false, List.of())));
+    when(fixture.releaseIndexDao.findSnapshot(1L, 2L)).thenReturn(Optional.of(new NpmReleaseIndexDao.Snapshot(
+        status, List.of(new NpmReleaseIndexDao.Release(0, "1.0.0", now.minusSeconds(7200), null, "signed/" + TARBALL)))));
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.hosted.getTarball(runtime, PACKAGE, TARBALL, false)).thenReturn(expected);
+    assertSame(expected, fixture.service.getTarball(runtime, PACKAGE, TARBALL, false));
+    verify(fixture.fetcher, never()).fetchWithBodyRetry(any(), anyString(), any());
+  }
+
+  @Test
   void indexedSnapshotAvoidsRebuildingAnalysisButStillWritesPackumentBody() throws Exception {
     Instant now = Instant.parse("2026-07-19T12:00:00Z");
     Fixture fixture = fixture(Clock.fixed(now, ZoneOffset.UTC));

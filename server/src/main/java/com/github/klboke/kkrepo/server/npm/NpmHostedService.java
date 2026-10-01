@@ -110,7 +110,8 @@ public class NpmHostedService {
       return getPackage(runtime, path.packageId(), repositoryBaseUrl, headOnly, variant);
     }
     if (path.isTarball()) {
-      return getTarball(runtime, path.packageId(), path.tarballName(), headOnly);
+      return getTarball(runtime, path.packageId(), path.revision() == null
+          ? path.tarballName() : path.tarballName() + "/-rev/" + path.revision(), headOnly);
     }
     if (path.kind() == NpmPath.Kind.DIST_TAGS) {
       return getDistTags(runtime, path.packageId(), headOnly);
@@ -406,6 +407,11 @@ public class NpmHostedService {
             "Package '" + packageId.id() + "' not found"));
     Map<String, Object> packageRoot = packageRoot(metadata)
         .orElseThrow(() -> new NpmExceptions.NpmNotFoundException("Package '" + packageId.id() + "' not found"));
+    if (runtime.isHosted()) {
+      // Publish attachments are stored by their basename, including existing hosted metadata.
+      // Proxy caches use this reader too, and must retain the upstream suffix instead.
+      NpmMetadata.rewriteTarballUrls(packageRoot, packageId, repositoryBaseUrl, false);
+    }
     byte[] bytes = NpmPackumentResponseWriter.write(
         mapper, packageRoot, null, null, variant, packageId, repositoryBaseUrl);
     AssetBlobRecord blob = metadata.toBlobRecord();
@@ -501,6 +507,7 @@ public class NpmHostedService {
     return contentType;
   }
 
+  @SuppressWarnings("unchecked")
   private void writeAttachments(
       RepositoryRuntime runtime,
       BlobStorage storage,
@@ -521,6 +528,10 @@ public class NpmHostedService {
       try (InputStream tarball = attachment.openStream()) {
         writer.writeTarball(runtime, storage, blobStoreId, packageId, version, tarballName,
             tarball, attachment.contentType(), createdBy, createdByIp, Map.of());
+        Object versionMetadata = NpmMetadata.versions(packageRoot).get(version);
+        if (versionMetadata instanceof Map<?, ?> fields && fields.get(NpmMetadata.DIST) instanceof Map<?, ?> dist) {
+          ((Map<String, Object>) dist).put(NpmMetadata.TARBALL, tarballName);
+        }
       } catch (IOException e) {
         throw new IllegalStateException("Failed to read staged npm attachment " + tarballName, e);
       }

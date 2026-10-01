@@ -72,7 +72,56 @@ class NpmRepositoryBlackBoxCompatibilityTest {
 
   @Test
   void nestedTarballUrlsRemainRoutableWithoutPriorMetadata() throws Exception {
-    verifyScopedUpstream(null, true, true);
+    verifyScopedUpstream(null, true, "signed/");
+  }
+
+  @Test
+  void revisionLikeTarballSubdirectoriesRemainRoutable() throws Exception {
+    verifyScopedUpstream(null, true, "signed/-rev/");
+  }
+
+  @Test
+  @SuppressWarnings("unchecked")
+  void hostedNestedPublishMetadataUsesStoredAttachmentPath() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeTrue(config.configured() && config.writeEnabled(), "Requires disposable Nexus and kkRepo instances");
+    NpmFixture fixture = NpmFixture.create("@compat/hosted-" + System.nanoTime(), "1.0.0");
+    Map<String, Object> publish = MAPPER.readValue(fixture.publishJson(), MAP_TYPE);
+    ((Map<String, Object>) version(publish, fixture.version()).get("dist")).put("tarball",
+        "https://upstream.example/download/-/" + fixture.packageName() + "-1.0.0.tgz");
+    for (Endpoint endpoint : List.of(config.nexusHosted(), config.nexusPlusHosted())) {
+      boolean nexus = endpoint.baseUrl().equals(config.nexusHosted().baseUrl());
+      String name = "compat-hosted-path-" + System.nanoTime();
+      Map<String, Object> payload = new LinkedHashMap<>(Map.of("name", name, "online", true));
+      if (nexus) {
+        payload.put("storage", Map.of("blobStoreName", "default", "strictContentTypeValidation", false,
+            "writePolicy", "ALLOW"));
+      } else {
+        payload.put("recipe", "npm-hosted");
+        payload.put("blobStoreName", "default");
+        payload.put("hosted", Map.of("writePolicy", "ALLOW"));
+      }
+      String catalog = nexus ? "/service/rest/v1/repositories" : "/internal/repositories";
+      Exchange created = adminRequest(endpoint,
+          catalog + (nexus ? "/npm/hosted" : ""), "POST", MAPPER.writeValueAsBytes(payload));
+      assert2xx(endpoint.name() + " create hosted path fixture: " + new String(created.body(), StandardCharsets.UTF_8), created);
+      Endpoint hosted = endpoint.withRepository(name);
+      try {
+        assert2xx("publish nested metadata", putJson(hosted, fixture.packageName(), MAPPER.writeValueAsBytes(publish)));
+        Map<String, Object> rewritten = getJson(hosted, fixture.packageName().replace("/", "%2f"));
+        String path = tarballPath(hosted, rewritten, fixture.version());
+        assertEquals(fixture.packageName() + "/-/"
+            + fixture.packageName().substring(fixture.packageName().indexOf('/') + 1) + "-1.0.0.tgz", path);
+        Exchange download = get(hosted, path);
+        assertEquals(200, download.status());
+        assertArrayEquals(fixture.tarball(), download.body());
+        assertEquals(200, head(hosted, path).status());
+      } finally {
+        if (!nexus) adminRequest(endpoint, "/internal/browse/" + name + "?path="
+            + URLEncoder.encode(fixture.packageName(), StandardCharsets.UTF_8) + "&source=" + name, "DELETE", null);
+        assertEquals(204, adminRequest(endpoint, catalog + "/" + name, "DELETE", null).status());
+      }
+    }
   }
 
   private void verifyScopedUpstream(Path installRoot) throws Exception {
@@ -81,17 +130,19 @@ class NpmRepositoryBlackBoxCompatibilityTest {
 
   @SuppressWarnings("unchecked")
   private void verifyScopedUpstream(Path installRoot, boolean coldLockfile) throws Exception {
-    verifyScopedUpstream(installRoot, coldLockfile, false);
+    verifyScopedUpstream(installRoot, coldLockfile, "");
   }
 
   @SuppressWarnings("unchecked")
-  private void verifyScopedUpstream(Path installRoot, boolean coldLockfile, boolean nested) throws Exception {
+  private void verifyScopedUpstream(Path installRoot, boolean coldLockfile, String prefix) throws Exception {
     CompatConfig config = CompatConfig.load();
     assumeTrue(config.configured() && config.writeEnabled(), "Requires disposable Nexus and kkRepo instances");
     String host = setting("compat.npm.upstreamHost", "NPM_COMPAT_UPSTREAM_HOST").orElse("host.docker.internal");
     NpmFixture fixture = NpmFixture.create("@compat/scoped-" + System.nanoTime(), "0.1.1-beta.1");
     String tarballPath = fixture.packageName() + "/-/" + fixture.packageName() + "-" + fixture.version() + ".tgz";
-    String encodedName = (nested ? "signed/" : "") + fixture.packageName().replace("/", "%2F") + "-" + fixture.version() + ".tgz";
+    String encodedName = (prefix.isEmpty() ? fixture.packageName().replace("/", "%2F")
+        : prefix + fixture.packageName().substring(fixture.packageName().indexOf('/') + 1))
+        + "-" + fixture.version() + ".tgz";
     String advertisedPath = coldLockfile ? "downloads/" + fixture.packageName() + "/-/" + encodedName : tarballPath;
     var upstream = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("0.0.0.0", 0), 0);
     String remote = "http://" + host + ":" + upstream.getAddress().getPort() + "/artgalaxy/test/";

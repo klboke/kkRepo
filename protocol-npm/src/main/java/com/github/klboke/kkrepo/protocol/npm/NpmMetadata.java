@@ -171,11 +171,19 @@ public final class NpmMetadata {
     return identity == null ? null : identities.get(identity);
   }
 
-  @SuppressWarnings("unchecked")
   public static void rewriteTarballUrls(
       Map<String, Object> packageRoot,
       NpmPackageId packageId,
       String repositoryBaseUrl) {
+    rewriteTarballUrls(packageRoot, packageId, repositoryBaseUrl, true);
+  }
+
+  @SuppressWarnings("unchecked")
+  public static void rewriteTarballUrls(
+      Map<String, Object> packageRoot,
+      NpmPackageId packageId,
+      String repositoryBaseUrl,
+      boolean preserveTarballPaths) {
     if (repositoryBaseUrl == null || repositoryBaseUrl.isBlank()) return;
     String base = repositoryBaseUrl.endsWith("/")
         ? repositoryBaseUrl.substring(0, repositoryBaseUrl.length() - 1)
@@ -186,7 +194,8 @@ public final class NpmMetadata {
       Object distRaw = version.get(DIST);
       if (!(distRaw instanceof Map<?, ?> rawDist)) continue;
       Map<String, Object> dist = (Map<String, Object>) rawDist;
-      String tarballName = tarballFilename(stringValue(dist.get(TARBALL), null));
+      String rawTarball = stringValue(dist.get(TARBALL), null);
+      String tarballName = preserveTarballPaths ? tarballFilename(rawTarball) : extractTarballName(rawTarball);
       if (tarballName != null && !tarballName.isBlank()) {
         dist.put(TARBALL, base + "/" + packageId.tarballPath(tarballName));
       }
