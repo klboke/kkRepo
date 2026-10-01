@@ -487,10 +487,10 @@ class NpmHostedServiceTest {
     when(fixture.cache.find(eq(10L), eq("demo"), any()))
         .thenReturn(Optional.of(snapshot));
     String served = new String(fixture.service.getPackage(
-        runtime("ALLOW", 7L), PACKAGE, "https://packages.example/npm", false)
+        runtime("ALLOW", 7L), PACKAGE, "https://packages.example/edge/-/prod/repository/npm", false)
         .body().readAllBytes(), StandardCharsets.UTF_8);
     assertEquals(true, served.contains(
-        "https://packages.example/npm/demo/-/demo-1.0.0.tgz"));
+        "https://packages.example/edge/-/prod/repository/npm/demo/-/demo-1.0.0.tgz"));
     verify(fixture.downloadPolicy).beforeReadFromRepository(
         snapshot.assetId(), snapshot.blob().id(), snapshot.repositoryId());
   }

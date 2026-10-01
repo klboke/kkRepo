@@ -412,7 +412,8 @@ public class NpmHostedService {
       NpmMetadata.rewriteTarballUrls(packageRoot, packageId, repositoryBaseUrl, false);
     }
     byte[] bytes = NpmPackumentResponseWriter.write(
-        mapper, packageRoot, null, null, variant, packageId, repositoryBaseUrl);
+        mapper, packageRoot, null, null, variant, packageId,
+        runtime.isHosted() ? null : repositoryBaseUrl);
     AssetBlobRecord blob = metadata.toBlobRecord();
     if (downloadPolicy != null) {
       downloadPolicy.beforeReadFromRepository(

@@ -46,6 +46,17 @@ class NpmGroupPackumentCacheTest {
   }
 
   @Test
+  void oldExternalUrlProjectionIsRebuiltEvenWhileItsTtlIsFresh() {
+    Fixture fixture = fixture(true);
+    RepositoryRuntime group = runtime(99L, "npm-group", 60);
+    Map<String, Object> attributes = new HashMap<>(fixture.cache.freshAttributes(group, NOW));
+    attributes.remove("npmTarballProjection");
+    fixture.assets.putAsset(group.id(), PACKAGE_ID.id(), attributes, NOW);
+
+    assertTrue(fixture.cache.findFresh(group, PACKAGE_ID, NOW.plusSeconds(30)).isEmpty());
+  }
+
+  @Test
   void freshInstallV1PackageRootAssetIsReusableSeparately() {
     Fixture fixture = fixture(true);
     RepositoryRuntime group = runtime(99L, "npm-group", 60);

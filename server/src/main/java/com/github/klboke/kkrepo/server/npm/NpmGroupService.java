@@ -84,7 +84,7 @@ public class NpmGroupService {
       String repositoryBaseUrl,
       boolean headOnly,
       NpmPackumentVariant variant) {
-    PackageRootContent content = getOrBuildPackageRoot(group, packageId, repositoryBaseUrl, variant, Instant.now());
+    PackageRootContent content = getOrBuildPackageRoot(group, packageId, variant, Instant.now());
     return packageRootResponse(
         packageId, repositoryBaseUrl, content.packageRoot(), content.lastModified(), headOnly,
         variant, content.minimumReleaseAgeValidUntil());
@@ -93,7 +93,6 @@ public class NpmGroupService {
   private PackageRootContent getOrBuildPackageRoot(
       RepositoryRuntime group,
       NpmPackageId packageId,
-      String repositoryBaseUrl,
       NpmPackumentVariant variant,
       Instant now) {
     if (packumentCache != null) {
@@ -109,7 +108,6 @@ public class NpmGroupService {
     MergedPackageRoot merged = mergePackageRoot(
         group,
         packageId,
-        repositoryBaseUrl,
         containsMinimumReleaseAgeProxy(group),
         variant);
     Instant lastModified = now;
@@ -175,7 +173,6 @@ public class NpmGroupService {
   private MergedPackageRoot mergePackageRoot(
       RepositoryRuntime group,
       NpmPackageId packageId,
-      String repositoryBaseUrl,
       boolean policyAware,
       NpmPackumentVariant variant) {
     List<Map<String, Object>> roots = new ArrayList<>();
@@ -184,7 +181,9 @@ public class NpmGroupService {
       try {
         MavenResponse response = dispatch(member,
             new NpmPath(NpmPath.Kind.PACKAGE_ROOT, packageId.id(), packageId, null, null, null, null),
-            repositoryBaseUrl, false, variant);
+            // Cache a neutral projection. External context paths may themselves contain /-/;
+            // only the final response writer should introduce the request's base URL.
+            "npm", false, variant);
         try (InputStream body = response.body()) {
           if (body != null) {
             roots.add(mapper.readValue(body, MAP_TYPE));
@@ -237,7 +236,7 @@ public class NpmGroupService {
 
   private MavenResponse getMergedDistTags(RepositoryRuntime group, NpmPackageId packageId, boolean headOnly) {
     PackageRootContent packageRoot = getOrBuildPackageRoot(
-        group, packageId, group.name(), NpmPackumentVariant.FULL, Instant.now());
+        group, packageId, NpmPackumentVariant.FULL, Instant.now());
     byte[] bytes = NpmResponseSupport.write(mapper, NpmMetadata.distTags(packageRoot.packageRoot()));
     if (headOnly) {
       return MavenResponse.noBody(200, bytes.length, NpmResponseSupport.JSON, null, packageRoot.lastModified());

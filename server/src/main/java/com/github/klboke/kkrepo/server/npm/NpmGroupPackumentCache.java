@@ -41,6 +41,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 public class NpmGroupPackumentCache {
   private static final Logger log = LoggerFactory.getLogger(NpmGroupPackumentCache.class);
   private static final String VARIANT_ATTRIBUTE = "packumentVariant";
+  private static final String TARBALL_PROJECTION_ATTRIBUTE = "npmTarballProjection";
+  private static final String TARBALL_PROJECTION = "relative-v1";
   private static final String POLICY_VALID_UNTIL_ATTRIBUTE = "minimumReleaseAgeValidUntil";
   private static final Object PENDING_MEMBERS_KEY =
       NpmGroupPackumentCache.class.getName() + ".PENDING_MEMBERS";
@@ -100,6 +102,12 @@ public class NpmGroupPackumentCache {
     if (!variant.assetKind().equals(snapshot.kind())) {
       return Optional.empty();
     }
+    // Older replicas stored external context paths in the shared blob. Rebuild those snapshots
+    // before extracting suffixes, including when an older writer replaces a blob during rollout.
+    if (snapshot.attributes() == null
+        || !TARBALL_PROJECTION.equals(snapshot.attributes().get(TARBALL_PROJECTION_ATTRIBUTE))) {
+      return Optional.empty();
+    }
     Instant policyValidUntil = instantAttribute(
         snapshot.attributes(), POLICY_VALID_UNTIL_ATTRIBUTE);
     if (policyValidUntil != null && !now.isBefore(policyValidUntil)) {
@@ -138,6 +146,7 @@ public class NpmGroupPackumentCache {
     }
     Map<String, Object> base = new LinkedHashMap<>();
     base.put(VARIANT_ATTRIBUTE, variant.name());
+    base.put(TARBALL_PROJECTION_ATTRIBUTE, TARBALL_PROJECTION);
     if (minimumReleaseAgeValidUntil != null) {
       base.put(POLICY_VALID_UNTIL_ATTRIBUTE, minimumReleaseAgeValidUntil.toString());
     }

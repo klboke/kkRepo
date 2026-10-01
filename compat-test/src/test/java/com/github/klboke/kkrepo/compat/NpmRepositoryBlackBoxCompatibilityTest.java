@@ -118,6 +118,30 @@ class NpmRepositoryBlackBoxCompatibilityTest {
         assertEquals(200, download.status());
         assertArrayEquals(fixture.tarball(), download.body());
         assertEquals(200, head(hosted, path).status());
+        String groupName = name + "-group";
+        Map<String, Object> groupPayload = new LinkedHashMap<>(Map.of(
+            "name", groupName, "online", true, "group", Map.of("memberNames", List.of(name))));
+        if (nexus) {
+          groupPayload.put("storage", Map.of("blobStoreName", "default", "strictContentTypeValidation", false));
+        } else {
+          groupPayload.put("recipe", "npm-group");
+          groupPayload.put("blobStoreName", "default");
+        }
+        assert2xx("create hosted group path fixture", adminRequest(endpoint,
+            catalog + (nexus ? "/npm/group" : ""), "POST", MAPPER.writeValueAsBytes(groupPayload)));
+        Endpoint group = endpoint.withRepository(groupName);
+        try {
+          for (int read = 0; read < 2; read++) {
+            Map<String, Object> groupRoot = getJson(group, fixture.packageName().replace("/", "%2f"));
+            String groupPath = tarballPath(group, groupRoot, fixture.version());
+            assertEquals(path, groupPath, "fresh and cached group metadata must retain the attachment path");
+            Exchange groupDownload = get(group, groupPath);
+            assertEquals(200, groupDownload.status());
+            assertArrayEquals(fixture.tarball(), groupDownload.body());
+          }
+        } finally {
+          assertEquals(204, adminRequest(endpoint, catalog + "/" + groupName, "DELETE", null).status());
+        }
       } finally {
         if (!nexus) adminRequest(endpoint, "/internal/browse/" + name + "?path="
             + URLEncoder.encode(fixture.packageName(), StandardCharsets.UTF_8) + "&source=" + name, "DELETE", null);

@@ -92,14 +92,14 @@ class NpmGroupServiceCacheTest {
     NpmPath path = new NpmPath(NpmPath.Kind.PACKAGE_ROOT, packageId.id(), packageId,
         null, null, null, null);
 
-    String internal = body(groupService.get(group, path, "http://internal/group", false));
-    String external = body(groupService.get(group, path, "http://external/group", false));
-    groupService.get(group, path, "http://internal/group", false);
+    String internal = body(groupService.get(group, path, "http://internal/edge/-/prod/group", false));
+    String external = body(groupService.get(group, path, "http://external/edge/-/public/group", false));
+    groupService.get(group, path, "http://internal/edge/-/prod/group", false);
 
     assertEquals(1, fixture.hosted.calls.get(),
         "base URL changes must not create separate packument cache entries");
-    assertTrue(internal.contains("\"http://internal/group/" + packageId.tarballPath("demo-1.0.0.tgz") + "\""));
-    assertTrue(external.contains("\"http://external/group/" + packageId.tarballPath("demo-1.0.0.tgz") + "\""));
+    assertTrue(internal.contains("\"http://internal/edge/-/prod/group/" + packageId.tarballPath("demo-1.0.0.tgz") + "\""));
+    assertTrue(external.contains("\"http://external/edge/-/public/group/" + packageId.tarballPath("demo-1.0.0.tgz") + "\""));
   }
 
   @Test
@@ -467,7 +467,14 @@ class NpmGroupServiceCacheTest {
               }
             }
           }""";
-      byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+      byte[] bytes;
+      try {
+        ObjectMapper mapper = new ObjectMapper();
+        bytes = NpmPackumentResponseWriter.write(mapper, mapper.readValue(body, Map.class),
+            null, null, variant, path.packageId(), repositoryBaseUrl);
+      } catch (IOException error) {
+        throw new IllegalStateException(error);
+      }
       return MavenResponse.ok(new ByteArrayInputStream(bytes), bytes.length,
           NpmResponseSupport.JSON, null, Instant.now());
     }
