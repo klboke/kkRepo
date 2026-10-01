@@ -223,6 +223,9 @@ test("Docker usage snippets use image references for path and connector routing"
     [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPublicUrl: "registry.example:5000"}}, "registry.example:5000"],
     [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPublicUrl: "registry.example:5000/v2"}}, "registry.example:5000"],
     [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPublicUrl: "registry.example"}}, "registry.example"],
+    [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPublicUrl: "https://", connectorPort: 5000}}, "repo.example:5000"],
+    [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPublicUrl: ":"}}, "repo.example:8080/docker-hosted"],
+    [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPublicUrl: "https://user:secret@registry.example", connectorPort: 5000}}, "repo.example:5000"],
   ]) {
     context.repo = repo;
     const detail = context.dockerUsageDetail({path: "adoptopenjdk/openjdk8/manifests/latest"});
@@ -230,4 +233,38 @@ test("Docker usage snippets use image references for path and connector routing"
     assert.equal(detail.snippets[2].command, `docker push ${base}/adoptopenjdk/openjdk8:latest`);
     assert.equal(detail.snippets[3].command, `docker pull ${base}/adoptopenjdk/openjdk8@sha256:abc`);
   }
+});
+
+
+test("an empty Docker selector page offers continuation and renders older permitted images", async () => {
+  const source = readFileSync(resolve(__dirname, "../../main/resources/META-INF/resources/browse/assets/browse.js"), "utf8");
+  const start = source.indexOf("async function renderSearch(");
+  const end = source.indexOf("function switchView(", start);
+  let continueSearch;
+  const calls = [];
+  const elements = {
+    "component-keyword": {value: ""}, "component-total": {},
+    "component-table": {innerHTML: "", insertAdjacentHTML(_, html) { this.innerHTML += html; }},
+    "continue-docker-search": {addEventListener(_, fn) { continueSearch = fn; }},
+  };
+  const context = vm.createContext({
+    searchRequestSeq: 0, activeCustomSearchFormat: "docker", componentsCache: [],
+    DEFAULT_SEARCH_FORMAT: "all", normalizeSearchFormat: value => value,
+    normalizeCustomSearchFormat: value => value, searchHash: () => "#browse/search/docker",
+    window: {location: {pathname: "/browse/", search: "", hash: "#browse/search/docker"}},
+    document: {getElementById: id => elements[id], querySelectorAll: () => []},
+    fetchSearchComponents: async (...args) => {
+      calls.push(args);
+      return calls.length === 1 ? {items: [], dockerCursor: "next-page"}
+        : {items: [{name: "public/older", repository: "docker", format: "docker", version: "latest"}]};
+    },
+    escapeHtml: String, lucideIcon: () => "", componentBrowsePath: () => "path",
+  });
+  vm.runInContext(source.slice(start, end), context);
+  await context.renderSearch("docker");
+  assert.match(elements["component-table"].innerHTML, /Continue Docker search/);
+  await continueSearch();
+  assert.equal(calls[1][3], "next-page");
+  assert.match(elements["component-table"].innerHTML, /public\/older/);
+  assert.equal(elements["component-total"].textContent, "1");
 });

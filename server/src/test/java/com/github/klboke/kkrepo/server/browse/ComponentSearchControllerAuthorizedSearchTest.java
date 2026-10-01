@@ -108,6 +108,36 @@ class ComponentSearchControllerAuthorizedSearchTest {
         org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq(200), org.mockito.ArgumentMatchers.anyMap());
   }
 
+  @Test
+  void residualDockerSelectorsCanContinueBeyondTheCandidateCap() {
+    var security = new RecordingSecurityService(Map.of("docker-hosted", RepositoryAccessMode.CONTENT_SELECTOR),
+        permission -> permission.pathPattern().matches("public/.*"));
+    var controller = controller(new StubComponentDao(List.of()), new StubAssetDao(Map.of()), security,
+        catalog(List.of(dockerRepository(10L, "docker-hosted", RepositoryType.HOSTED)), Map.of()));
+    var docker = mock(com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao.class);
+    controller.setDockerRegistry(docker);
+    var denied = java.util.stream.LongStream.range(1, 201).mapToObj(id -> dockerRow(id, "private/app")).toList();
+    when(docker.searchTagsByRepositoryIds(org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.isNull(),
+        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq(200), org.mockito.ArgumentMatchers.anyMap()))
+        .thenReturn(denied, denied, denied, denied, denied, List.of(dockerRow(0L, "public/older")));
+    var first = controller.search(null, "docker", 1, request());
+    assertTrue(first.items().isEmpty());
+    assertTrue(first.dockerCursor() != null);
+    var nextRequest = request(Map.of("dockerCursor", first.dockerCursor()));
+    var next = controller.search(null, null, 1, nextRequest);
+    assertEquals(List.of("public/older"), next.items().stream().map(ComponentSearchController.ComponentSearchItem::name).toList());
+    assertEquals(null, next.dockerCursor());
+    org.mockito.Mockito.verify(docker, org.mockito.Mockito.atLeastOnce()).searchTagsByRepositoryIds(
+        org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.isNull(),
+        org.mockito.ArgumentMatchers.eq(new ComponentSearchCursor(Instant.EPOCH, 200L)),
+        org.mockito.ArgumentMatchers.eq(200), org.mockito.ArgumentMatchers.anyMap());
+    var invalid = request(Map.of("dockerCursor", "invalid!"));
+    org.junit.jupiter.api.Assertions.assertThrows(org.springframework.web.server.ResponseStatusException.class,
+        () -> controller.search(null, "docker", 1, invalid));
+    org.junit.jupiter.api.Assertions.assertThrows(org.springframework.web.server.ResponseStatusException.class,
+        () -> controller.search(null, "maven2", 1, nextRequest));
+  }
+
   private static RepositoryRecord dockerRepository(long id, String name, RepositoryType type) {
     return new RepositoryRecord(id, name, RepositoryFormat.DOCKER, type,
         "docker-" + type.name().toLowerCase(java.util.Locale.ROOT), true, 1L,
@@ -494,11 +524,16 @@ class ComponentSearchControllerAuthorizedSearchTest {
   }
 
   private static HttpServletRequest request() {
+    return request(Map.of());
+  }
+
+  private static HttpServletRequest request(Map<String, String> parameters) {
     Map<String, Object> attributes = new LinkedHashMap<>();
     return (HttpServletRequest) Proxy.newProxyInstance(
         ComponentSearchControllerAuthorizedSearchTest.class.getClassLoader(),
         new Class<?>[] {HttpServletRequest.class},
         (proxy, invoked, args) -> switch (invoked.getName()) {
+          case "getParameter" -> parameters.get(String.valueOf(args[0]));
           case "getMethod" -> "GET";
           case "getRequestURI" -> "/internal/search/components";
           case "getContextPath" -> "";

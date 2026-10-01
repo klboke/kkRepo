@@ -770,8 +770,9 @@ function componentSearchParams(format, keyword, customFormat = DEFAULT_SEARCH_FO
   return params;
 }
 
-async function fetchSearchComponents(format, keyword, customFormat = DEFAULT_SEARCH_FORMAT) {
+async function fetchSearchComponents(format, keyword, customFormat = DEFAULT_SEARCH_FORMAT, dockerCursor = null) {
   const params = componentSearchParams(format, keyword, customFormat);
+  if (dockerCursor) params.set("dockerCursor", dockerCursor);
   const res = await fetch(`/internal/search/components?${params.toString()}`, {
     headers: { Accept: "application/json" },
     cache: "no-store",
@@ -2453,9 +2454,15 @@ function dockerImageReferenceBase(repo = currentRepository()) {
   const docker = repo.docker || {};
   if (docker.connectorEnabled && docker.connectorPublicUrl) {
     const value = docker.connectorPublicUrl.trim();
-    const url = new URL(/^https?:\/\//i.test(value) ? value
-      : value.startsWith("//") ? `${window.location.protocol}${value}` : `https://${value}`);
-    return `${url.host}${url.pathname.replace(/\/+$/, "").replace(/\/v2$/, "")}`;
+    try {
+      const url = new URL(/^https?:\/\//i.test(value) ? value
+        : value.startsWith("//") ? `${window.location.protocol}${value}` : `https://${value}`);
+      if (url.host && !url.username && !url.password) {
+        return `${url.host}${url.pathname.replace(/\/+$/, "").replace(/\/v2$/, "")}`;
+      }
+    } catch (_) {
+      // Old saved configurations may contain an invalid public URL; retain usable routing below.
+    }
   }
   if (docker.connectorEnabled && docker.connectorPort) {
     return `${window.location.hostname}:${docker.connectorPort}`;
@@ -4124,7 +4131,9 @@ async function uploadError(response) {
 
 async function renderSearch(
     format = DEFAULT_SEARCH_FORMAT,
-    customFormat = activeCustomSearchFormat) {
+    customFormat = activeCustomSearchFormat,
+    dockerCursor = null,
+    previousRows = []) {
   const seq = ++searchRequestSeq;
   const normalizedFormat = normalizeSearchFormat(format);
   activeCustomSearchFormat = normalizeCustomSearchFormat(customFormat);
@@ -4140,7 +4149,8 @@ async function renderSearch(
     payload = await fetchSearchComponents(
         normalizedFormat,
         keyword,
-        activeCustomSearchFormat);
+        activeCustomSearchFormat,
+        dockerCursor);
   } catch (error) {
     if (seq !== searchRequestSeq) return;
     document.getElementById("component-total").textContent = "0";
@@ -4149,31 +4159,40 @@ async function renderSearch(
     return;
   }
   if (seq !== searchRequestSeq) return;
-  const rows = payload.items || [];
+  const rows = [...previousRows, ...(payload.items || [])];
   componentsCache = rows;
   document.getElementById("component-total").textContent = rows.length.toLocaleString("en-US");
   if (!rows.length) {
     document.getElementById("component-table").innerHTML =
-      '<tr><td colspan="7" class="muted-row">No components found.</td></tr>';
-    return;
+      `<tr><td colspan="7" class="muted-row">${payload.dockerCursor ? "No matching components in this page." : "No components found."}</td></tr>`;
+  } else {
+    document.getElementById("component-table").innerHTML = rows.map((component, index) => {
+      const browsePath = componentBrowsePath(component);
+      const title = browsePath
+        ? `Open ${component.repository}/${browsePath} in Browse`
+        : `Open ${component.repository} in Browse`;
+      return `
+      <tr class="component-result-row" data-component-result-index="${index}" tabindex="0" title="${escapeHtml(title)}">
+        <td class="icon-column">${lucideIcon("package-search", "component-icon")}</td>
+        <td>${escapeHtml(component.name)}</td>
+        <td>${component.group ? escapeHtml(component.group) : lucideIcon("circle-slash", "health-muted")}</td>
+        <td>${escapeHtml(component.version)}</td>
+        <td>${escapeHtml(component.format)}</td>
+        <td>${escapeHtml(component.repository)}</td>
+        <td class="expand-column">${lucideIcon("chevron-right")}</td>
+      </tr>
+    `;
+    }).join("");
   }
-  document.getElementById("component-table").innerHTML = rows.map((component, index) => {
-    const browsePath = componentBrowsePath(component);
-    const title = browsePath
-      ? `Open ${component.repository}/${browsePath} in Browse`
-      : `Open ${component.repository} in Browse`;
-    return `
-    <tr class="component-result-row" data-component-result-index="${index}" tabindex="0" title="${escapeHtml(title)}">
-      <td class="icon-column">${lucideIcon("package-search", "component-icon")}</td>
-      <td>${escapeHtml(component.name)}</td>
-      <td>${component.group ? escapeHtml(component.group) : lucideIcon("circle-slash", "health-muted")}</td>
-      <td>${escapeHtml(component.version)}</td>
-      <td>${escapeHtml(component.format)}</td>
-      <td>${escapeHtml(component.repository)}</td>
-      <td class="expand-column">${lucideIcon("chevron-right")}</td>
-    </tr>
-  `;
-  }).join("");
+  if (payload.dockerCursor) {
+    const table = document.getElementById("component-table");
+    table.insertAdjacentHTML("beforeend", '<tr><td colspan="7"><button type="button" id="continue-docker-search">Continue Docker search</button></td></tr>');
+    document.getElementById("continue-docker-search").addEventListener("click", () => {
+      const unchanged = document.getElementById("component-keyword").value.trim().toLowerCase() === keyword;
+      return renderSearch(normalizedFormat, activeCustomSearchFormat,
+          unchanged ? payload.dockerCursor : null, unchanged ? rows : []);
+    });
+  }
   document.querySelectorAll("#component-table .component-result-row").forEach((tr) => {
     const result = rows[Number(tr.dataset.componentResultIndex)];
     tr.addEventListener("click", () => openSearchResult(result));

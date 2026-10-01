@@ -28,6 +28,8 @@ import com.github.klboke.kkrepo.server.security.SecurityManagementService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService.RepositoryAccessMode;
 import jakarta.servlet.http.HttpServletRequest;
 import java.time.Instant;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -157,8 +159,15 @@ public class ComponentSearchController {
       throw new ResponseStatusException(
           HttpStatus.BAD_REQUEST, "APT coordinate filters require format=apt");
     }
+    ComponentSearchCursor dockerCursor = decodeDockerCursor(request.getParameter("dockerCursor"));
+    if (dockerCursor != null) {
+      if (repositoryFormat != null && repositoryFormat != RepositoryFormat.DOCKER) {
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Docker cursor requires Docker search");
+      }
+      repositoryFormat = RepositoryFormat.DOCKER;
+    }
     return searchAuthorized(
-        subject, keyword, repositoryFormat, effectiveLimit, normalizedFilters);
+        subject, keyword, repositoryFormat, effectiveLimit, normalizedFilters, dockerCursor);
   }
 
   private ComponentSearchResponse searchAuthorized(
@@ -166,7 +175,8 @@ public class ComponentSearchController {
       String keyword,
       RepositoryFormat repositoryFormat,
       int effectiveLimit,
-      AptSearchFilters filters) {
+      AptSearchFilters filters,
+      ComponentSearchCursor dockerCursor) {
     RepositoryCatalogCache.RepositoryCatalog catalog = repositoryCatalogCache.snapshot();
     List<RepositoryRecord> searchableRepositories = catalog.records().stream()
         .filter(record -> record.id() != null && record.name() != null && record.format() != null)
@@ -208,7 +218,7 @@ public class ComponentSearchController {
       truncated = selectorResult.truncated();
     }
 
-    SelectorSearchResult dockerResults = searchDockerRows(subject, dockerScope, keyword, candidateLimit);
+    DockerSearchResult dockerResults = searchDockerRows(subject, dockerScope, keyword, candidateLimit, dockerCursor);
     visible.addAll(dockerResults.rows());
     truncated |= dockerResults.truncated();
 
@@ -223,12 +233,14 @@ public class ComponentSearchController {
         .filter(filters::matches)
         .limit(effectiveLimit)
         .toList();
-    return new ComponentSearchResponse(effectiveLimit, items.size(), items, truncated);
+    return new ComponentSearchResponse(effectiveLimit, items.size(), items, truncated,
+        encodeDockerCursor(dockerResults.continuation()));
   }
 
-  private SelectorSearchResult searchDockerRows(
-      AuthenticatedSubject subject, SearchAccessScope scope, String keyword, int limit) {
-    if (dockerRegistry == null || scope.empty()) return new SelectorSearchResult(List.of(), false);
+  private DockerSearchResult searchDockerRows(
+      AuthenticatedSubject subject, SearchAccessScope scope, String keyword, int limit,
+      ComponentSearchCursor startCursor) {
+    if (dockerRegistry == null || scope.empty()) return new DockerSearchResult(List.of(), false, null);
     Set<Long> repositoryIds = new LinkedHashSet<>(scope.fullRepositoryIds());
     repositoryIds.addAll(scope.selectorRepositoryIds());
     Map<Long, AssetPathFilter> filters = new LinkedHashMap<>();
@@ -242,7 +254,7 @@ public class ComponentSearchController {
       filters.merge(id, filter, AssetPathFilter::or);
     }
     List<ComponentSearchRow> visible = new ArrayList<>();
-    ComponentSearchCursor cursor = null;
+    ComponentSearchCursor cursor = startCursor;
     int scanned = 0;
     boolean reachedEnd = false;
     while (scanned < MAX_SELECTOR_CANDIDATES && visible.size() < limit) {
@@ -272,9 +284,32 @@ public class ComponentSearchController {
       cursor = ComponentSearchCursor.after(page.getLast());
       if (page.size() < pageLimit) { reachedEnd = true; break; }
     }
-    return new SelectorSearchResult(List.copyOf(visible),
-        !reachedEnd && scanned >= MAX_SELECTOR_CANDIDATES && visible.size() < limit);
+    boolean truncated = !reachedEnd && scanned >= MAX_SELECTOR_CANDIDATES && visible.size() < limit;
+    return new DockerSearchResult(List.copyOf(visible), truncated, truncated ? cursor : null);
   }
+
+  private static String encodeDockerCursor(ComponentSearchCursor cursor) {
+    if (cursor == null) return null;
+    String value = cursor.id() + "|" + cursor.lastUpdatedAt();
+    return Base64.getUrlEncoder().withoutPadding().encodeToString(value.getBytes(StandardCharsets.UTF_8));
+  }
+
+  private static ComponentSearchCursor decodeDockerCursor(String token) {
+    if (token == null || token.isBlank()) return null;
+    try {
+      if (token.length() > 128) throw new IllegalArgumentException();
+      String[] parts = new String(Base64.getUrlDecoder().decode(token), StandardCharsets.UTF_8).split("\\|", -1);
+      if (parts.length != 2) throw new IllegalArgumentException();
+      long id = Long.parseLong(parts[0]);
+      if (id < 0) throw new IllegalArgumentException();
+      return new ComponentSearchCursor(Instant.parse(parts[1]), id);
+    } catch (RuntimeException invalid) {
+      throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid Docker search cursor");
+    }
+  }
+
+  private record DockerSearchResult(
+      List<ComponentSearchRow> rows, boolean truncated, ComponentSearchCursor continuation) { }
 
   private SelectorSearchResult searchSelectorRows(
       AuthenticatedSubject subject,
@@ -880,9 +915,10 @@ public class ComponentSearchController {
       int limit,
       int count,
       List<ComponentSearchItem> items,
-      boolean truncated) {
+      boolean truncated,
+      String dockerCursor) {
     public ComponentSearchResponse(int limit, int count, List<ComponentSearchItem> items) {
-      this(limit, count, items, false);
+      this(limit, count, items, false, null);
     }
   }
 

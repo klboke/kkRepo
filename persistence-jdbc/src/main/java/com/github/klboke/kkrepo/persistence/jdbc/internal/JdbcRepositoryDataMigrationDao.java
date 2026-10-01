@@ -339,6 +339,7 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
   @Override
   public List<Long> findPackageMigrationJobsToWake(Instant retryBefore, int maxAttempts, int limit) {
     String enabled = jsonColumns.extractText("mj.options_json", "packageMigrationEnabled");
+    String concurrency = jsonColumns.extractText("mj.options_json", "concurrency");
     return jdbcTemplate.queryForList("""
         SELECT r.migration_job_id
         FROM repository_data_migration_asset a
@@ -347,12 +348,22 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
         WHERE r.status IN (?, ?) AND %s = 'true'
           AND (a.status = ? AND a.attempts < ? OR a.status = ?)
           AND (a.claimed_at IS NULL OR a.claimed_at < ?)
+          AND ((a.status = ? AND a.attempts >= ?) OR (
+            SELECT COUNT(*) FROM repository_data_migration_asset active_asset
+            JOIN repository_data_migration_repository active_repo ON active_repo.id = active_asset.repository_job_id
+            WHERE active_repo.migration_job_id = r.migration_job_id
+              AND active_asset.status = ? AND active_asset.claimed_at >= ?
+          ) < CASE WHEN EXISTS (
+            SELECT 1 FROM repository_data_migration_repository conan_repo
+            WHERE conan_repo.migration_job_id = r.migration_job_id AND conan_repo.format = ?
+          ) THEN 1 ELSE GREATEST(1, LEAST(64, COALESCE(CAST(%s AS DECIMAL(10,0)), 8))) END)
         GROUP BY r.migration_job_id
         ORDER BY MIN(a.id)
         LIMIT ?
-        """.formatted(enabled), Long.class, REPOSITORY_READY, REPOSITORY_MIGRATING,
+        """.formatted(enabled, concurrency), Long.class, REPOSITORY_READY, REPOSITORY_MIGRATING,
         ASSET_PENDING, maxAttempts, ASSET_MIGRATING, nullableTimestamp(retryBefore),
-        Math.max(1, Math.min(limit, 64)));
+        ASSET_MIGRATING, maxAttempts, ASSET_MIGRATING, nullableTimestamp(retryBefore),
+        EnumColumns.write(RepositoryFormat.CONAN), Math.max(1, Math.min(limit, 64)));
   }
 
   @Transactional(propagation = Propagation.MANDATORY)

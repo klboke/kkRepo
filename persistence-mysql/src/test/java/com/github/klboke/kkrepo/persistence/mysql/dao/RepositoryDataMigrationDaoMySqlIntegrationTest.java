@@ -150,6 +150,27 @@ class RepositoryDataMigrationDaoMySqlIntegrationTest extends MySqlIntegrationTes
   }
 
   @Test
+  void saturatedOlderJobsDoNotStarveTheRecoveryWindow() {
+    long repositoryId = insertRepository("migration-recovery-fairness", "maven2");
+    RepositoryDataMigrationDao dao = new JdbcRepositoryDataMigrationDao(jdbc(), jsonColumns(), new com.github.klboke.kkrepo.persistence.mysql.MySqlDatabaseDialect());
+    var jobs = new java.util.ArrayList<Long>();
+    Instant cutoff = Instant.now().minusSeconds(300);
+    for (int index = 0; index < 17; index++) {
+      long job = insertMigrationJob(true);
+      jobs.add(job);
+      jdbc().update("UPDATE migration_job SET options_json = ? WHERE id = ?",
+          jsonColumns().write(Map.of("packageMigrationEnabled", true, "concurrency", 1)), job);
+      long repo = dao.createRepositoryJob(job, "source", "migration-recovery-fairness", repositoryId,
+          RepositoryFormat.MAVEN2, 100, Map.of());
+      dao.upsertDiscoveredAssets(repo, List.of(asset("a.jar"), asset("b.jar")), Map.of());
+      dao.finishDiscoveryPage(repo, null, true);
+      if (index < 16) assertEquals(1, inTransaction(() -> dao.claimAssetsForMigration(job, 1, 5, cutoff)).size());
+    }
+    assertEquals(List.of(jobs.getLast()), dao.findPackageMigrationJobsToWake(cutoff, 5, 16));
+    jobs.forEach(job -> dao.setPackageMigrationEnabled(job, false));
+  }
+
+  @Test
   void discoveryClaimHonorsJobFilterAndRetryCutoff() {
     long firstRepositoryId = insertRepository("target-one", "maven2");
     long secondRepositoryId = insertRepository("target-two", "maven2");
