@@ -50,6 +50,16 @@ class DockerRegistryDaoPostgreSqlIntegrationTest extends PostgreSqlIntegrationTe
     assertEquals(CONCURRENT_WRITERS, manifestIds.size());
     assertEquals(1, manifestIds.stream().distinct().count());
     assertEquals(1, jdbc().queryForObject("SELECT COUNT(*) FROM docker_manifest", Integer.class));
+    var search = new JdbcDockerRegistryDao(jdbc(), jsonColumns());
+    var rows = search.searchTagsByRepositoryIds(List.of(repositoryId), "ACME", null, 10);
+    assertEquals(1, rows.size());
+    assertEquals("latest", rows.getFirst().version());
+    assertEquals("v2/acme/app/manifests/latest", rows.getFirst().storagePath());
+    assertTrue(search.searchTagsByRepositoryIds(List.of(repositoryId), "%", null, 10).isEmpty());
+    assertTrue(search.searchTagsByRepositoryIds(List.of(repositoryId), "_", null, 10).isEmpty());
+    assertTrue(search.searchTagsByRepositoryIds(List.of(repositoryId + 999), null, null, 10).isEmpty());
+    assertTrue(search.searchTagsByRepositoryIds(List.of(repositoryId), null,
+        com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.ComponentSearchCursor.after(rows.getFirst()), 10).isEmpty());
 
     DockerRegistryDao dao = new JdbcDockerRegistryDao(jdbc(), jsonColumns());
     DockerManifestRecord manifest = dao.findManifestByDigest(

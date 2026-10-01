@@ -46,6 +46,12 @@ docker pull nexus.example.com/docker-group/team/alpine:3.20
 
 只向 hosted push；即使调用者已认证，proxy 和 group 仍是读取入口。
 
+
+Browse 中复制的镜像引用只包含 registry 主机、可选端口、仓库路由路径、镜像名以及 tag 或 digest。
+`docker pull`、`docker tag` 和 `docker push` 参数不应包含 `http://`、`https://` 或 Registry API
+前缀 `/v2/`。全局搜索从共享数据库读取当前 Docker tag，已有镜像无需重新推送；仓库权限和
+内容选择器权限仍然生效。支持按镜像名、tag 或 manifest digest 搜索，删除 tag 后搜索结果同步更新。
+
 ## 仓库行为
 
 - Hosted 支持 blob upload session、manifest、tag、cross-repository blob mount 和 OCI referrer。

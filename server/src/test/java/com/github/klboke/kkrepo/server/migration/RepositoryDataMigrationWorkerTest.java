@@ -41,6 +41,70 @@ import org.springframework.transaction.TransactionStatus;
 
 class RepositoryDataMigrationWorkerTest {
   @Test
+  void discoveryWakesPackageSyncAlreadyEnabledOnAnotherReplica() throws Exception {
+    Fixture fixture = fixture();
+    try {
+      when(fixture.migrationJobDao.findById(100L)).thenReturn(Optional.of(new MigrationJobRecord(
+          100L, "3.68.1-02", "", "running", Map.of("packageMigrationEnabled", true), Map.of(), Instant.now(), null)));
+      when(fixture.migrationDao.findTargetAssetsByPathHash(eq(9L), any())).thenReturn(Map.of());
+      when(fixture.migrationDao.claimAssetsForMigration(eq(100L), anyInt(), anyInt(), any())).thenReturn(List.of());
+      fixture.worker.triggerPackages(100L);
+      verify(fixture.migrationDao, org.mockito.Mockito.timeout(2000)).claimAssetsForMigration(
+          eq(100L), anyInt(), anyInt(), any());
+      RepositoryAssetPage page = new RepositoryAssetPage("source", null, "a.jar", true,
+          List.of(metadata("a.jar", "2026-01-03T00:00:00Z")), List.of());
+      invoke(fixture.worker, "processDiscoveryPage", new Class<?>[] {
+          RepositoryDataMigrationRepositoryRecord.class, RepositoryAssetPage.class, Instant.class},
+          repositoryJob(RepositoryFormat.MAVEN2, Map.of()), page, null);
+      verify(fixture.migrationDao, org.mockito.Mockito.timeout(2000).atLeast(2)).claimAssetsForMigration(
+          eq(100L), anyInt(), anyInt(), any());
+    } finally { fixture.worker.shutdown(); }
+  }
+
+  @Test
+  void wakeupWhileTriggerIsRunningIsReplayedInsteadOfDropped() throws Exception {
+    Fixture fixture = fixture();
+    var started = new java.util.concurrent.CountDownLatch(1);
+    var release = new java.util.concurrent.CountDownLatch(1);
+    var replayed = new java.util.concurrent.CountDownLatch(1);
+    var calls = new java.util.concurrent.atomic.AtomicInteger();
+    Runnable work = () -> {
+      if (calls.incrementAndGet() == 1) {
+        started.countDown();
+        try { release.await(2, java.util.concurrent.TimeUnit.SECONDS); }
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+      } else { replayed.countDown(); }
+    };
+    try {
+      invoke(fixture.worker, "trigger", new Class<?>[] {String.class, Runnable.class}, "packages:100", work);
+      assertTrue(started.await(2, java.util.concurrent.TimeUnit.SECONDS));
+      invoke(fixture.worker, "trigger", new Class<?>[] {String.class, Runnable.class}, "packages:100", work);
+      release.countDown();
+      assertTrue(replayed.await(2, java.util.concurrent.TimeUnit.SECONDS));
+      assertEquals(2, calls.get());
+    } finally { release.countDown(); fixture.worker.shutdown(); }
+  }
+
+  @Test
+  void failedTriggerCanBeStartedAgain() throws Exception {
+    Fixture fixture = fixture();
+    var recovered = new java.util.concurrent.CountDownLatch(1);
+    when(fixture.migrationDao.claimAssetsForMigration(eq(100L), anyInt(), anyInt(), any()))
+        .thenThrow(new IllegalStateException("temporary database failure"))
+        .thenAnswer(invocation -> { recovered.countDown(); return List.of(); });
+    try {
+      fixture.worker.triggerPackages(100L);
+      verify(fixture.migrationDao, org.mockito.Mockito.timeout(2000)).claimAssetsForMigration(
+          eq(100L), anyInt(), anyInt(), any());
+      long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
+      do {
+        fixture.worker.triggerPackages(100L);
+      } while (!recovered.await(20, java.util.concurrent.TimeUnit.MILLISECONDS) && System.nanoTime() < deadline);
+      assertEquals(0, recovered.getCount(), "A failed task must not permanently suppress later triggers");
+    } finally { fixture.worker.shutdown(); }
+  }
+
+  @Test
   void batchProgressTargetsIncludeRepositoryAndJobRows() {
     RepositoryDataMigrationWorker.BatchProgressTargets targets =
         RepositoryDataMigrationWorker.batchProgressTargets(List.of(

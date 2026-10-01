@@ -43,6 +43,79 @@ import org.junit.jupiter.api.Test;
 class ComponentSearchControllerAuthorizedSearchTest {
 
   @Test
+  void dockerTagsAreSearchableThroughAuthorizedGroupWithoutGenericComponents() {
+    var components = new StubComponentDao(List.of());
+    var security = new RecordingSecurityService(Map.of("docker-public", RepositoryAccessMode.FULL), permission -> true);
+    var controller = controller(components, new StubAssetDao(Map.of()), security,
+        catalog(List.of(dockerRepository(10L, "docker-hosted", RepositoryType.HOSTED),
+            dockerRepository(20L, "docker-public", RepositoryType.GROUP)), Map.of(20L, List.of("docker-hosted"))));
+    var docker = mock(com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao.class);
+    controller.setDockerRegistry(docker);
+    when(docker.searchTagsByRepositoryIds(org.mockito.ArgumentMatchers.anyList(),
+        org.mockito.ArgumentMatchers.eq("app"), org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.eq(200)))
+        .thenReturn(List.of(dockerRow(1L, "team/app")));
+    var response = controller.search("app", "docker", 10, request());
+    assertEquals(1, response.items().size());
+    var item = response.items().getFirst();
+    assertEquals("docker-public", item.repository());
+    assertEquals("team/app", item.name());
+    assertEquals("latest", item.version());
+    assertEquals("team/app/manifests/latest", item.browsePath());
+    assertEquals("docker-hosted", item.details().get("sourceRepository"));
+    assertTrue(components.calls.isEmpty());
+  }
+
+  @Test
+  void dockerSelectorSearchChecksManifestPathsAndPaginatesDeniedResults() {
+    var security = new RecordingSecurityService(Map.of("docker-hosted", RepositoryAccessMode.CONTENT_SELECTOR),
+        permission -> permission.pathPattern().startsWith("v2/public/"));
+    var controller = controller(new StubComponentDao(List.of()), new StubAssetDao(Map.of()), security,
+        catalog(List.of(dockerRepository(10L, "docker-hosted", RepositoryType.HOSTED)), Map.of()));
+    var docker = mock(com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao.class);
+    controller.setDockerRegistry(docker);
+    List<ComponentSearchRow> denied = java.util.stream.LongStream.range(1, 201)
+        .mapToObj(id -> dockerRow(id, "private/app")).toList();
+    when(docker.searchTagsByRepositoryIds(org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.isNull(),
+        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq(200)))
+        .thenReturn(denied, List.of(dockerRow(201L, "public/app")));
+    var response = controller.search(null, "docker", 1, request());
+    assertEquals(List.of("public/app"), response.items().stream().map(ComponentSearchController.ComponentSearchItem::name).toList());
+    assertFalse(response.truncated());
+    assertTrue(security.pathPermissions.stream().allMatch(permission -> permission.pathPattern().startsWith("v2/")));
+  }
+
+  @Test
+  void dockerSelectorScanIsBoundedAndReportsTruncationWithoutLeakingTags() {
+    var security = new RecordingSecurityService(Map.of("docker-hosted", RepositoryAccessMode.CONTENT_SELECTOR),
+        permission -> false);
+    var controller = controller(new StubComponentDao(List.of()), new StubAssetDao(Map.of()), security,
+        catalog(List.of(dockerRepository(10L, "docker-hosted", RepositoryType.HOSTED)), Map.of()));
+    var docker = mock(com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao.class);
+    controller.setDockerRegistry(docker);
+    List<ComponentSearchRow> denied = java.util.stream.LongStream.range(1, 201)
+        .mapToObj(id -> dockerRow(id, "private/app")).toList();
+    when(docker.searchTagsByRepositoryIds(org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.isNull(),
+        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq(200))).thenReturn(denied);
+    var response = controller.search(null, "docker", 1, request());
+    assertTrue(response.items().isEmpty());
+    assertTrue(response.truncated());
+    org.mockito.Mockito.verify(docker, org.mockito.Mockito.times(5)).searchTagsByRepositoryIds(
+        org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.isNull(),
+        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq(200));
+  }
+
+  private static RepositoryRecord dockerRepository(long id, String name, RepositoryType type) {
+    return new RepositoryRecord(id, name, RepositoryFormat.DOCKER, type,
+        "docker-" + type.name().toLowerCase(java.util.Locale.ROOT), true, 1L,
+        null, null, null, null, "ALLOW", true, Map.of());
+  }
+
+  private static ComponentSearchRow dockerRow(long id, String image) {
+    return new ComponentSearchRow(id, 10L, "docker-hosted", RepositoryFormat.DOCKER, "", image,
+        "latest", "docker-tag", Instant.EPOCH, "v2/" + image + "/manifests/latest");
+  }
+
+  @Test
   void selectorOnlySearchAuthorizesRealAssetPathsWithoutLeakingSiblingComponents() {
     StubComponentDao components = new StubComponentDao(List.of(
         row(2L, 10L, "releases", "secret", 2),

@@ -117,6 +117,12 @@ public interface DockerRegistryDao {
         .toList();
   }
 
+  /** Search live tags directly, including images pushed before search support was enabled. */
+  default List<ComponentDao.ComponentSearchRow> searchTagsByRepositoryIds(
+      List<Long> repositoryIds, String keyword, ComponentDao.ComponentSearchCursor after, int limit) {
+    return List.of();
+  }
+
   List<String> listCatalog(long repositoryId, String last, int limit);
 
   List<BrowseImageRow> listBrowseImages(long repositoryId, String parentPath);

@@ -8,6 +8,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.ComponentSearchCursor;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.ComponentSearchRow;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
@@ -63,6 +64,12 @@ public class ComponentSearchController {
   private AlpineRegistryDao alpineRegistry;
   private RRegistryDao rRegistry;
   private CondaRegistryDao condaRegistry;
+  private DockerRegistryDao dockerRegistry;
+
+  @Autowired
+  void setDockerRegistry(DockerRegistryDao dockerRegistry) {
+    this.dockerRegistry = dockerRegistry;
+  }
 
   @Autowired
   public ComponentSearchController(
@@ -173,8 +180,12 @@ public class ComponentSearchController {
     Map<RepositoryPermission, RepositoryAccessMode> accessModes =
         securityService.repositoryAccessModes(subject.permissionSubject(), requestedScopes);
     SearchAccessScope scope = buildSearchAccessScope(
-        searchableRepositories, catalog, accessModes);
-    if (scope.empty()) {
+        searchableRepositories.stream().filter(record -> record.format() != RepositoryFormat.DOCKER).toList(),
+        catalog, accessModes);
+    SearchAccessScope dockerScope = buildSearchAccessScope(
+        searchableRepositories.stream().filter(record -> record.format() == RepositoryFormat.DOCKER).toList(),
+        catalog, accessModes);
+    if (scope.empty() && dockerScope.empty()) {
       return new ComponentSearchResponse(effectiveLimit, 0, List.of());
     }
 
@@ -197,6 +208,10 @@ public class ComponentSearchController {
       truncated = selectorResult.truncated();
     }
 
+    SelectorSearchResult dockerResults = searchDockerRows(subject, dockerScope, keyword, candidateLimit);
+    visible.addAll(dockerResults.rows());
+    truncated |= dockerResults.truncated();
+
     Comparator<ComponentSearchRow> newestFirst = Comparator
         .comparing(
             ComponentSearchRow::lastUpdatedAt,
@@ -209,6 +224,46 @@ public class ComponentSearchController {
         .limit(effectiveLimit)
         .toList();
     return new ComponentSearchResponse(effectiveLimit, items.size(), items, truncated);
+  }
+
+  private SelectorSearchResult searchDockerRows(
+      AuthenticatedSubject subject, SearchAccessScope scope, String keyword, int limit) {
+    if (dockerRegistry == null || scope.empty()) return new SelectorSearchResult(List.of(), false);
+    Set<Long> repositoryIds = new LinkedHashSet<>(scope.fullRepositoryIds());
+    repositoryIds.addAll(scope.selectorRepositoryIds());
+    List<ComponentSearchRow> visible = new ArrayList<>();
+    ComponentSearchCursor cursor = null;
+    int scanned = 0;
+    boolean reachedEnd = false;
+    while (scanned < MAX_SELECTOR_CANDIDATES && visible.size() < limit) {
+      int pageLimit = Math.min(SELECTOR_PAGE_SIZE, MAX_SELECTOR_CANDIDATES - scanned);
+      List<ComponentSearchRow> page = dockerRegistry.searchTagsByRepositoryIds(
+          List.copyOf(repositoryIds), keyword, cursor, pageLimit);
+      if (page.isEmpty()) { reachedEnd = true; break; }
+      scanned += page.size();
+      List<RepositoryPermission> permissions = new ArrayList<>();
+      for (ComponentSearchRow row : page) {
+        for (BrowseContext context : scope.selectorContexts(row.repositoryId())) {
+          permissions.add(pathPermission(context, RepositoryFormat.DOCKER, row.storagePath()));
+        }
+      }
+      Map<RepositoryPermission, AccessDecision> decisions = permissions.isEmpty() ? Map.of()
+          : securityService.decideAll(subject.permissionSubject(), permissions);
+      for (ComponentSearchRow row : page) {
+        BrowseContext context = scope.fullContext(row.repositoryId());
+        if (context == null) {
+          for (BrowseContext candidate : scope.selectorContexts(row.repositoryId())) {
+            AccessDecision decision = decisions.get(pathPermission(candidate, RepositoryFormat.DOCKER, row.storagePath()));
+            if (decision != null && decision.allowed()) { context = candidate; break; }
+          }
+        }
+        if (context != null) visible.add(withBrowseContext(row, context, row.storagePath()));
+      }
+      cursor = ComponentSearchCursor.after(page.getLast());
+      if (page.size() < pageLimit) { reachedEnd = true; break; }
+    }
+    return new SelectorSearchResult(List.copyOf(visible),
+        !reachedEnd && scanned >= MAX_SELECTOR_CANDIDATES && visible.size() < limit);
   }
 
   private SelectorSearchResult searchSelectorRows(
@@ -430,6 +485,12 @@ public class ComponentSearchController {
   }
 
   private Map<String, Object> componentDetails(ComponentSearchRow row) {
+    if (row.format() == RepositoryFormat.DOCKER) {
+      String source = repositoryCatalogCache.snapshot().records().stream()
+          .filter(record -> record.id() != null && record.id().equals(row.repositoryId()))
+          .map(RepositoryRecord::name).findFirst().orElse(row.repositoryName());
+      return Map.of("sourceRepository", source);
+    }
     if (row.format() == RepositoryFormat.ANSIBLEGALAXY) {
       return ansibleDetails(row);
     }
@@ -649,6 +710,9 @@ public class ComponentSearchController {
   private static String browsePath(ComponentSearchRow row) {
     if (row.storagePath() == null || row.storagePath().isBlank()) {
       return null;
+    }
+    if (row.format() == RepositoryFormat.DOCKER && row.storagePath().startsWith("v2/")) {
+      return row.storagePath().substring(3);
     }
     return row.storagePath();
   }

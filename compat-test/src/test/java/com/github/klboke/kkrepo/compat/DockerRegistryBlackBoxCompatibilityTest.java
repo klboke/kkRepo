@@ -164,6 +164,8 @@ class DockerRegistryBlackBoxCompatibilityTest {
       }
     }
 
+    assertSearchableTags(nexusUi, browse, config.repository(), image, List.of("1.0.0", "latest"));
+
     // Follow Nexus Browse's node -> readAsset -> deleteAsset mapping, not Registry V2 DELETE.
     deleteNexusBrowseAsset(nexusUi, config.repository(), imagePath, "latest", false);
     String browseUrl = "/internal/browse/" + encode(config.repository()) + "?path=";
@@ -183,6 +185,8 @@ class DockerRegistryBlackBoxCompatibilityTest {
       assertEquals(reference.equals("latest") ? 404 : 200, expected.status());
       assertEquals(expected.status(), actual.status(), "reference after tag deletion " + reference);
     }
+
+    assertSearchableTags(nexusUi, browse, config.repository(), image, List.of("1.0.0"));
 
     // Both administrative APIs delete the selected digest entry while preserving tag assets.
     deleteNexusBrowseAsset(nexusUi, config.repository(), imagePath, digest, true);
@@ -250,6 +254,29 @@ class DockerRegistryBlackBoxCompatibilityTest {
         List.of(asset.path("id").asText(), repository), false);
     assertEquals("HTTP 404 Not Found", missing.path("message").asText(),
         "The selected Nexus asset must be absent after administrative deletion");
+  }
+
+  private static void assertSearchableTags(
+      Endpoint nexus, Endpoint candidate, String repository, String image, List<String> tags) throws Exception {
+    List<String> actualNexus = List.of();
+    for (int attempt = 0; attempt < 20; attempt++) {
+      Exchange response = get(nexus, nexus.resolve("/service/rest/v1/search?repository=" + encode(repository)
+          + "&format=docker&docker.imageName=" + encode(image)), "application/json", true);
+      assertEquals(200, response.status());
+      actualNexus = java.util.stream.StreamSupport.stream(JSON.readTree(response.body()).path("items").spliterator(), false)
+          .filter(item -> image.equals(item.path("name").asText()))
+          .map(item -> item.path("version").asText()).sorted().toList();
+      if (tags.equals(actualNexus)) break;
+      Thread.sleep(250);
+    }
+    assertEquals(tags, actualNexus, "Nexus search image tags");
+    Exchange response = get(candidate, candidate.resolve("/internal/search/components?format=docker&q=" + encode(image)),
+        "application/json", true);
+    assertEquals(200, response.status());
+    List<String> actualCandidate = java.util.stream.StreamSupport.stream(JSON.readTree(response.body()).path("items").spliterator(), false)
+        .filter(item -> repository.equals(item.path("repository").asText()) && image.equals(item.path("name").asText()))
+        .map(item -> item.path("version").asText()).sorted().toList();
+    assertEquals(actualNexus, actualCandidate, "kkRepo search must follow live Docker tag state");
   }
 
   private static JsonNode nexusUi(Endpoint endpoint, String action, String method, List<?> data)

@@ -203,3 +203,28 @@ test("opens a Hugging Face search result at its immutable revision path", () => 
     `#browse/browse:huggingface-models?path=hf-internal-testing%2Ftiny-random-bart%2F${commit}`,
   );
 });
+
+
+test("Docker usage snippets use image references for path and connector routing", () => {
+  const source = readFileSync(resolve(__dirname, "../../main/resources/META-INF/resources/browse/assets/browse.js"), "utf8");
+  const start = source.indexOf("function dockerImageReferenceBase(");
+  const end = source.indexOf("function dockerKindLabel(", start);
+  const context = vm.createContext({URL,
+    window: {location: {origin: "http://repo.example:8080", host: "repo.example:8080", hostname: "repo.example"}},
+    currentRepository: () => context.repo,
+    dockerCoordinates: () => ({image: "adoptopenjdk/openjdk8", reference: "latest", digest: "sha256:abc"}),
+    usageSnippet: (label, command) => ({label, command}), state: {repo: "docker-hosted"},
+  });
+  vm.runInContext(source.slice(start, end), context);
+  for (const [repo, base] of [
+    [{name: "docker-hosted", docker: {}}, "repo.example:8080/docker-hosted"],
+    [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPort: 5000}}, "repo.example:5000"],
+    [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPublicUrl: "https://registry.example/v2/"}}, "registry.example"],
+  ]) {
+    context.repo = repo;
+    const detail = context.dockerUsageDetail({path: "adoptopenjdk/openjdk8/manifests/latest"});
+    assert.equal(detail.snippets[0].command, `docker pull ${base}/adoptopenjdk/openjdk8:latest`);
+    assert.equal(detail.snippets[2].command, `docker push ${base}/adoptopenjdk/openjdk8:latest`);
+    assert.equal(detail.snippets[3].command, `docker pull ${base}/adoptopenjdk/openjdk8@sha256:abc`);
+  }
+});

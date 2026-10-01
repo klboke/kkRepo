@@ -46,6 +46,13 @@ docker pull nexus.example.com/docker-group/team/alpine:3.20
 
 Push only to hosted. Proxy and group are read endpoints even when the caller is authenticated.
 
+
+Image references copied from Browse contain only the registry host, optional port, repository
+routing path, image, and tag or digest. Do not include `http://`, `https://`, or the Registry API
+prefix `/v2/` in `docker pull`, `docker tag`, or `docker push` arguments. Global Search reads live
+Docker tags from the shared database, including existing tags, with repository and content-selector
+permissions applied. Search by image name, tag, or manifest digest; deleted tags disappear.
+
 ## Repository Behavior
 
 - Hosted supports blob upload sessions, manifests, tags, cross-repository blob mounts, and OCI

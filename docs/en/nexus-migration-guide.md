@@ -75,6 +75,11 @@ Steps:
 
 `Sync metadata` only discovers and records assets to migrate. It does not download real blobs. Real package files are migrated by `Sync packages`.
 
+If `Sync packages` is enabled while metadata discovery is still running, each subsequent committed
+discovery page wakes package migration automatically. The enabled flag and task claims are stored
+in the shared database, so discovery and package-sync requests may run on different replicas.
+Check migrated/pending/failed asset counts and download the target artifacts to confirm progress.
+
 ### Docker End-To-End Validation
 
 Docker / OCI repository migration uses the same two-step `Nexus Repository Data` flow. For local validation, pass `repositories` or `repositoryNames` so the job only scans the Docker hosted repository under test instead of every hosted repository.

@@ -55,7 +55,11 @@ class RepositoryDataMigrationWorker {
   private final TransactionTemplate transactionTemplate;
   private final ExecutorService executor;
   private final ExecutorService triggerExecutor;
-  private final Set<String> runningTriggers = ConcurrentHashMap.newKeySet();
+  // These sets only coalesce local wakeups. Shared job options and transactional DB claims
+  // remain authoritative, including when metadata and package requests hit different replicas.
+  private final Object triggerLock = new Object();
+  private final Set<String> runningTriggers = new java.util.HashSet<>();
+  private final Set<String> pendingTriggers = new java.util.HashSet<>();
 
   RepositoryDataMigrationWorker(
       ObjectMapper objectMapper,
@@ -97,15 +101,31 @@ class RepositoryDataMigrationWorker {
   }
 
   private void trigger(String key, Runnable task) {
-    if (!runningTriggers.add(key)) {
-      log.info("repository data migration trigger already running: {}", key);
-      return;
+    synchronized (triggerLock) {
+      pendingTriggers.add(key);
+      if (!runningTriggers.add(key)) return;
     }
     triggerExecutor.submit(() -> {
       try {
-        task.run();
-      } finally {
-        runningTriggers.remove(key);
+        while (true) {
+          synchronized (triggerLock) {
+            pendingTriggers.remove(key);
+          }
+          task.run();
+          synchronized (triggerLock) {
+            if (!pendingTriggers.contains(key)) {
+              runningTriggers.remove(key);
+              return;
+            }
+          }
+        }
+      } catch (RuntimeException | Error e) {
+        synchronized (triggerLock) {
+          runningTriggers.remove(key);
+          pendingTriggers.remove(key);
+        }
+        log.warn("repository data migration trigger failed: {}", key, e);
+        throw e;
       }
     });
   }
@@ -168,6 +188,13 @@ class RepositoryDataMigrationWorker {
       migrationDao.upsertDiscoveredAssets(repositoryJob.id(), records, existingTargets);
       migrationDao.finishDiscoveryPage(repositoryJob.id(), nextCursor, complete);
     });
+    // A user may enable package sync while discovery is still running. Wake it after each
+    // committed page; otherwise its initial empty claim can strand all subsequently found blobs.
+    if (migrationJobDao.findById(repositoryJob.migrationJobId())
+        .map(job -> job.options() != null && Boolean.TRUE.equals(job.options().get("packageMigrationEnabled")))
+        .orElse(false)) {
+      triggerPackages(repositoryJob.migrationJobId());
+    }
     if (!page.warnings().isEmpty()) {
       log.warn("repository data discovery warnings for repo={}: {}",
           repositoryJob.sourceRepositoryName(), page.warnings());

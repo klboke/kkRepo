@@ -4,6 +4,9 @@ import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRow
 import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRows.nullableLong;
 import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRows.nullableTimestamp;
 
+import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.ComponentSearchCursor;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.ComponentSearchRow;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao.BrowseImageRow;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao.BrowseReferenceRow;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao.CleanupManifestCandidate;
@@ -740,6 +743,45 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
         ORDER BY image_name
         LIMIT ?
         """, String.class, args.toArray());
+  }
+
+  @Override
+  public List<ComponentSearchRow> searchTagsByRepositoryIds(
+      List<Long> repositoryIds, String keyword,
+      ComponentSearchCursor after, int limit) {
+    if (repositoryIds == null || repositoryIds.isEmpty()) return List.of();
+    List<Object> args = new ArrayList<>(repositoryIds);
+    String placeholders = String.join(",", java.util.Collections.nCopies(repositoryIds.size(), "?"));
+    StringBuilder sql = new StringBuilder("""
+        SELECT t.id, t.repository_id, r.name AS repository_name, t.image_name, t.tag, t.updated_at
+        FROM docker_tag t
+        JOIN docker_manifest m ON m.id = t.manifest_id AND m.repository_id = t.repository_id
+        JOIN repository r ON r.id = t.repository_id
+        WHERE m.deleted_at IS NULL AND t.repository_id IN (
+        """).append(placeholders).append(")");
+    if (keyword != null && !keyword.isBlank()) {
+      String pattern = "%" + keyword.trim().toLowerCase(Locale.ROOT)
+          .replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";
+      sql.append(" AND (LOWER(t.image_name) LIKE ? ESCAPE '!' OR LOWER(t.tag) LIKE ? ESCAPE '!'"
+          + " OR LOWER(m.digest) LIKE ? ESCAPE '!')");
+      args.add(pattern);
+      args.add(pattern);
+      args.add(pattern);
+    }
+    if (after != null) {
+      sql.append(" AND (t.updated_at < ? OR (t.updated_at = ? AND t.id < ?))");
+      args.add(java.sql.Timestamp.from(after.lastUpdatedAt()));
+      args.add(java.sql.Timestamp.from(after.lastUpdatedAt()));
+      args.add(after.id());
+    }
+    sql.append(" ORDER BY t.updated_at DESC, t.id DESC LIMIT ?");
+    args.add(Math.max(1, Math.min(limit, 1000)));
+    return jdbcTemplate.query(sql.toString(), (rs, rowNum) ->
+        new ComponentSearchRow(
+            rs.getLong("id"), rs.getLong("repository_id"), rs.getString("repository_name"),
+            RepositoryFormat.DOCKER, "", rs.getString("image_name"),
+            rs.getString("tag"), "docker-tag", nullableInstant(rs, "updated_at"),
+            "v2/" + rs.getString("image_name") + "/manifests/" + rs.getString("tag")), args.toArray());
   }
 
   public List<BrowseImageRow> listBrowseImages(long repositoryId, String parentPath) {

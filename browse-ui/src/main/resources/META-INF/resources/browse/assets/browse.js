@@ -2448,10 +2448,23 @@ function dockerTagFromDockerPath(path) {
   return "";
 }
 
+function dockerImageReferenceBase(repo = currentRepository()) {
+  if (!repo) return "";
+  const docker = repo.docker || {};
+  if (docker.connectorEnabled && docker.connectorPublicUrl) {
+    const url = new URL(docker.connectorPublicUrl, window.location.origin);
+    return `${url.host}${url.pathname.replace(/\/+$/, "").replace(/\/v2$/, "")}`;
+  }
+  if (docker.connectorEnabled && docker.connectorPort) {
+    return `${window.location.hostname}:${docker.connectorPort}`;
+  }
+  return `${window.location.host}/${repo.name}`;
+}
+
 function dockerUsageDetail(entry, detail = null) {
   const { image, reference, digest } = dockerCoordinates(entry, detail);
   if (!image) return null;
-  const base = dockerRepositoryBaseUrl();
+  const base = dockerImageReferenceBase();
   const byTag = `${base}/${image}:${reference || "latest"}`;
   const snippets = [
     usageSnippet("docker pull", `docker pull ${byTag}`),
