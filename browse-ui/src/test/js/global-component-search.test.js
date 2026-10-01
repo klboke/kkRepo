@@ -220,6 +220,9 @@ test("Docker usage snippets use image references for path and connector routing"
     [{name: "docker-hosted", docker: {}}, "repo.example:8080/docker-hosted"],
     [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPort: 5000}}, "repo.example:5000"],
     [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPublicUrl: "https://registry.example/v2/"}}, "registry.example"],
+    [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPublicUrl: "registry.example:5000"}}, "registry.example:5000"],
+    [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPublicUrl: "registry.example:5000/v2"}}, "registry.example:5000"],
+    [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPublicUrl: "registry.example"}}, "registry.example"],
   ]) {
     context.repo = repo;
     const detail = context.dockerUsageDetail({path: "adoptopenjdk/openjdk8/manifests/latest"});

@@ -52,7 +52,7 @@ class ComponentSearchControllerAuthorizedSearchTest {
     var docker = mock(com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao.class);
     controller.setDockerRegistry(docker);
     when(docker.searchTagsByRepositoryIds(org.mockito.ArgumentMatchers.anyList(),
-        org.mockito.ArgumentMatchers.eq("app"), org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.eq(200)))
+        org.mockito.ArgumentMatchers.eq("app"), org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.eq(200), org.mockito.ArgumentMatchers.anyMap()))
         .thenReturn(List.of(dockerRow(1L, "team/app")));
     var response = controller.search("app", "docker", 10, request());
     assertEquals(1, response.items().size());
@@ -66,9 +66,10 @@ class ComponentSearchControllerAuthorizedSearchTest {
   }
 
   @Test
-  void dockerSelectorSearchChecksManifestPathsAndPaginatesDeniedResults() {
+  void dockerSelectorSearchUsesPullImageIdentityAndPaginatesDeniedResults() {
     var security = new RecordingSecurityService(Map.of("docker-hosted", RepositoryAccessMode.CONTENT_SELECTOR),
-        permission -> permission.pathPattern().startsWith("v2/public/"));
+        permission -> permission.pathPattern().startsWith("public/"));
+    security.candidateFilter = com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter.prefix("public/");
     var controller = controller(new StubComponentDao(List.of()), new StubAssetDao(Map.of()), security,
         catalog(List.of(dockerRepository(10L, "docker-hosted", RepositoryType.HOSTED)), Map.of()));
     var docker = mock(com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao.class);
@@ -76,12 +77,15 @@ class ComponentSearchControllerAuthorizedSearchTest {
     List<ComponentSearchRow> denied = java.util.stream.LongStream.range(1, 201)
         .mapToObj(id -> dockerRow(id, "private/app")).toList();
     when(docker.searchTagsByRepositoryIds(org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.isNull(),
-        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq(200)))
+        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq(200), org.mockito.ArgumentMatchers.anyMap()))
         .thenReturn(denied, List.of(dockerRow(201L, "public/app")));
     var response = controller.search(null, "docker", 1, request());
     assertEquals(List.of("public/app"), response.items().stream().map(ComponentSearchController.ComponentSearchItem::name).toList());
     assertFalse(response.truncated());
-    assertTrue(security.pathPermissions.stream().allMatch(permission -> permission.pathPattern().startsWith("v2/")));
+    org.mockito.Mockito.verify(docker, org.mockito.Mockito.atLeastOnce()).searchTagsByRepositoryIds(
+        org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.any(),
+        org.mockito.ArgumentMatchers.eq(200), org.mockito.ArgumentMatchers.eq(Map.of(10L, security.candidateFilter)));
+    assertTrue(security.pathPermissions.stream().allMatch(permission -> !permission.pathPattern().startsWith("v2/")));
   }
 
   @Test
@@ -95,13 +99,13 @@ class ComponentSearchControllerAuthorizedSearchTest {
     List<ComponentSearchRow> denied = java.util.stream.LongStream.range(1, 201)
         .mapToObj(id -> dockerRow(id, "private/app")).toList();
     when(docker.searchTagsByRepositoryIds(org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.isNull(),
-        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq(200))).thenReturn(denied);
+        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq(200), org.mockito.ArgumentMatchers.anyMap())).thenReturn(denied);
     var response = controller.search(null, "docker", 1, request());
     assertTrue(response.items().isEmpty());
     assertTrue(response.truncated());
     org.mockito.Mockito.verify(docker, org.mockito.Mockito.times(5)).searchTagsByRepositoryIds(
         org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.isNull(),
-        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq(200));
+        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq(200), org.mockito.ArgumentMatchers.anyMap());
   }
 
   private static RepositoryRecord dockerRepository(long id, String name, RepositoryType type) {
@@ -161,6 +165,7 @@ class ComponentSearchControllerAuthorizedSearchTest {
     RecordingSecurityService security = new RecordingSecurityService(
         Map.of("releases", RepositoryAccessMode.CONTENT_SELECTOR),
         permission -> permission.pathPattern().startsWith("public/"));
+    security.candidateFilter = com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter.prefix("public/");
     ComponentSearchController controller = controller(
         components, assets, security, catalog(List.of(hosted(10L, "releases")), Map.of()));
 
@@ -584,11 +589,14 @@ class ComponentSearchControllerAuthorizedSearchTest {
       return AccessDecision.allow();
     }
 
+    private com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter candidateFilter =
+        com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter.ALL;
+
     @Override
     public com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter selectorCandidateFilter(
         PermissionSubject subject, RepositoryPermission permission) {
       // Keep these tests exercising the bounded residual path when SQL cannot narrow candidates.
-      return com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter.ALL;
+      return candidateFilter;
     }
 
     @Override

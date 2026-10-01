@@ -54,6 +54,10 @@ class DockerRegistryDaoPostgreSqlIntegrationTest extends PostgreSqlIntegrationTe
     var rows = search.searchTagsByRepositoryIds(List.of(repositoryId), "ACME", null, 10);
     assertEquals(1, rows.size());
     assertEquals("latest", rows.getFirst().version());
+    assertEquals(1, search.searchTagsByRepositoryIds(List.of(repositoryId), null, null, 1,
+        Map.of(repositoryId, com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter.prefix("acme/"))).size());
+    assertTrue(search.searchTagsByRepositoryIds(List.of(repositoryId), null, null, 1,
+        Map.of(repositoryId, com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter.prefix("v2/acme/"))).isEmpty());
     assertEquals("v2/acme/app/manifests/latest", rows.getFirst().storagePath());
     assertTrue(search.searchTagsByRepositoryIds(List.of(repositoryId), "%", null, 10).isEmpty());
     assertTrue(search.searchTagsByRepositoryIds(List.of(repositoryId), "_", null, 10).isEmpty());

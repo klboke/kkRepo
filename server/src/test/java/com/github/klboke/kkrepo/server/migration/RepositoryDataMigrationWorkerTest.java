@@ -86,6 +86,19 @@ class RepositoryDataMigrationWorkerTest {
   }
 
   @Test
+  void freshReplicaRecoversDurablePendingJobsWithoutAPerPageTrigger() {
+    Fixture replica = fixture();
+    when(replica.migrationDao.findPackageMigrationJobsToWake(any(), anyInt(), eq(16)))
+        .thenReturn(List.of(100L));
+    when(replica.migrationDao.claimAssetsForMigration(eq(100L), anyInt(), anyInt(), any())).thenReturn(List.of());
+    try {
+      replica.worker.recoverPackageMigrations();
+      verify(replica.migrationDao, org.mockito.Mockito.timeout(2000)).claimAssetsForMigration(
+          eq(100L), anyInt(), anyInt(), any());
+    } finally { replica.worker.shutdown(); }
+  }
+
+  @Test
   void failedTriggerCanBeStartedAgain() throws Exception {
     Fixture fixture = fixture();
     var recovered = new java.util.concurrent.CountDownLatch(1);

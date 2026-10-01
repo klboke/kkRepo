@@ -231,6 +231,16 @@ public class ComponentSearchController {
     if (dockerRegistry == null || scope.empty()) return new SelectorSearchResult(List.of(), false);
     Set<Long> repositoryIds = new LinkedHashSet<>(scope.fullRepositoryIds());
     repositoryIds.addAll(scope.selectorRepositoryIds());
+    Map<Long, AssetPathFilter> filters = new LinkedHashMap<>();
+    for (Long id : scope.fullRepositoryIds()) filters.put(id, AssetPathFilter.ALL);
+    for (Long id : scope.selectorRepositoryIds()) {
+      AssetPathFilter filter = AssetPathFilter.NONE;
+      for (BrowseContext context : scope.selectorContexts(id)) {
+        filter = AssetPathFilter.or(filter, securityService.selectorCandidateFilter(subject.permissionSubject(),
+            new RepositoryPermission(context.repositoryName(), RepositoryFormat.DOCKER, "", PermissionAction.BROWSE)));
+      }
+      filters.merge(id, filter, AssetPathFilter::or);
+    }
     List<ComponentSearchRow> visible = new ArrayList<>();
     ComponentSearchCursor cursor = null;
     int scanned = 0;
@@ -238,13 +248,13 @@ public class ComponentSearchController {
     while (scanned < MAX_SELECTOR_CANDIDATES && visible.size() < limit) {
       int pageLimit = Math.min(SELECTOR_PAGE_SIZE, MAX_SELECTOR_CANDIDATES - scanned);
       List<ComponentSearchRow> page = dockerRegistry.searchTagsByRepositoryIds(
-          List.copyOf(repositoryIds), keyword, cursor, pageLimit);
+          List.copyOf(repositoryIds), keyword, cursor, pageLimit, filters);
       if (page.isEmpty()) { reachedEnd = true; break; }
       scanned += page.size();
       List<RepositoryPermission> permissions = new ArrayList<>();
       for (ComponentSearchRow row : page) {
         for (BrowseContext context : scope.selectorContexts(row.repositoryId())) {
-          permissions.add(pathPermission(context, RepositoryFormat.DOCKER, row.storagePath()));
+          permissions.add(pathPermission(context, RepositoryFormat.DOCKER, row.name()));
         }
       }
       Map<RepositoryPermission, AccessDecision> decisions = permissions.isEmpty() ? Map.of()
@@ -253,7 +263,7 @@ public class ComponentSearchController {
         BrowseContext context = scope.fullContext(row.repositoryId());
         if (context == null) {
           for (BrowseContext candidate : scope.selectorContexts(row.repositoryId())) {
-            AccessDecision decision = decisions.get(pathPermission(candidate, RepositoryFormat.DOCKER, row.storagePath()));
+            AccessDecision decision = decisions.get(pathPermission(candidate, RepositoryFormat.DOCKER, row.name()));
             if (decision != null && decision.allowed()) { context = candidate; break; }
           }
         }

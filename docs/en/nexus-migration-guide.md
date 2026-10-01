@@ -78,6 +78,7 @@ Steps:
 If `Sync packages` is enabled while metadata discovery is still running, each subsequent committed
 discovery page wakes package migration automatically. The enabled flag and task claims are stored
 in the shared database, so discovery and package-sync requests may run on different replicas.
+Each replica also polls that durable state every five seconds to recover interrupted wakeups.
 Check migrated/pending/failed asset counts and download the target artifacts to confirm progress.
 
 ### Docker End-To-End Validation

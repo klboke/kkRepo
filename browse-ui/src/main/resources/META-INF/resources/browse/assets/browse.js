@@ -2452,7 +2452,9 @@ function dockerImageReferenceBase(repo = currentRepository()) {
   if (!repo) return "";
   const docker = repo.docker || {};
   if (docker.connectorEnabled && docker.connectorPublicUrl) {
-    const url = new URL(docker.connectorPublicUrl, window.location.origin);
+    const value = docker.connectorPublicUrl.trim();
+    const url = new URL(/^https?:\/\//i.test(value) ? value
+      : value.startsWith("//") ? `${window.location.protocol}${value}` : `https://${value}`);
     return `${url.host}${url.pathname.replace(/\/+$/, "").replace(/\/v2$/, "")}`;
   }
   if (docker.connectorEnabled && docker.connectorPort) {

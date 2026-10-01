@@ -336,6 +336,25 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
         """, truncate(error), repositoryJobId);
   }
 
+  @Override
+  public List<Long> findPackageMigrationJobsToWake(Instant retryBefore, int maxAttempts, int limit) {
+    String enabled = jsonColumns.extractText("mj.options_json", "packageMigrationEnabled");
+    return jdbcTemplate.queryForList("""
+        SELECT r.migration_job_id
+        FROM repository_data_migration_asset a
+        JOIN repository_data_migration_repository r ON r.id = a.repository_job_id
+        JOIN migration_job mj ON mj.id = r.migration_job_id
+        WHERE r.status IN (?, ?) AND %s = 'true'
+          AND a.status IN (?, ?) AND a.attempts < ?
+          AND (a.claimed_at IS NULL OR a.claimed_at < ?)
+        GROUP BY r.migration_job_id
+        ORDER BY MIN(a.id)
+        LIMIT ?
+        """.formatted(enabled), Long.class, REPOSITORY_READY, REPOSITORY_MIGRATING,
+        ASSET_PENDING, ASSET_MIGRATING, maxAttempts, nullableTimestamp(retryBefore),
+        Math.max(1, Math.min(limit, 64)));
+  }
+
   @Transactional(propagation = Propagation.MANDATORY)
   public List<AssetClaim> claimAssetsForMigration(int limit, int maxAttempts, Instant retryBefore) {
     return claimAssetsForMigration(null, limit, maxAttempts, retryBefore);
@@ -343,6 +362,22 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
 
   @Transactional(propagation = Propagation.MANDATORY)
   public List<AssetClaim> claimAssetsForMigration(Long migrationJobId, int limit, int maxAttempts, Instant retryBefore) {
+    if (migrationJobId != null) {
+      // One active batch per job preserves its configured concurrency (including Conan's
+      // files-before-manifest ordering) when independent replicas perform recovery polling.
+      if (jdbcTemplate.queryForList(
+          "SELECT id FROM migration_job WHERE id = ? FOR UPDATE SKIP LOCKED", Long.class, migrationJobId).isEmpty()) {
+        return List.of();
+      }
+      if (!jdbcTemplate.queryForList("""
+          SELECT a.id FROM repository_data_migration_asset a
+          JOIN repository_data_migration_repository r ON r.id = a.repository_job_id
+          WHERE r.migration_job_id = ? AND a.status = ? AND a.claimed_at >= ?
+          LIMIT 1
+          """, Long.class, migrationJobId, ASSET_MIGRATING, nullableTimestamp(retryBefore)).isEmpty()) {
+        return List.of();
+      }
+    }
     int safeLimit = Math.max(1, limit);
     List<Object> args = new ArrayList<>();
     args.add(REPOSITORY_READY);

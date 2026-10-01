@@ -34,6 +34,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -76,6 +77,16 @@ class RepositoryDataMigrationWorker {
     this.transactionTemplate = new TransactionTemplate(transactionManager);
     this.executor = Executors.newFixedThreadPool(MAX_CONCURRENCY, threadFactory("repository-data-migration-"));
     this.triggerExecutor = Executors.newCachedThreadPool(threadFactory("repository-data-migration-trigger-"));
+  }
+
+  // The shared enabled/pending state is the durable wakeup. Per-page triggers only reduce latency;
+  // every replica can recover an interrupted handoff without relying on another process's memory.
+  @Scheduled(fixedDelayString = "${kkrepo.migration.package-recovery-delay-ms:5000}")
+  void recoverPackageMigrations() {
+    for (Long jobId : migrationDao.findPackageMigrationJobsToWake(
+        Instant.now().minusSeconds(CLAIM_RETRY_SECONDS), MAX_ATTEMPTS, 16)) {
+      triggerPackages(jobId);
+    }
   }
 
   void triggerMetadata(long migrationJobId) {

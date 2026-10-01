@@ -55,6 +55,11 @@ public interface RepositoryDataMigrationDao {
 
   void markDiscoveryFailure(long repositoryJobId, String error);
 
+  /** Durable enabled jobs with pending or expired claims, for recovery after a replica exits. */
+  default List<Long> findPackageMigrationJobsToWake(Instant retryBefore, int maxAttempts, int limit) {
+    return List.of();
+  }
+
   List<AssetClaim> claimAssetsForMigration(int limit, int maxAttempts, Instant retryBefore);
 
   List<AssetClaim> claimAssetsForMigration(Long migrationJobId, int limit, int maxAttempts, Instant retryBefore);

@@ -113,6 +113,13 @@ class DockerRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
     assertTrue(dao.findBrowseManifestByReferencePath(
         repositoryId, "acme/alpha/manifests/stable").isPresent());
     assertTrue(dao.findBrowseManifestByReferencePath(repositoryId, "invalid").isEmpty());
+    inTransaction(() -> {
+      for (int i = 0; i < 1005; i++) dao.upsertTag(tag(repositoryId, beta, "private-" + i));
+    });
+    assertEquals(List.of("acme/alpha"), dao.searchTagsByRepositoryIds(List.of(repositoryId), null, null, 1,
+        Map.of(repositoryId, AssetPathFilter.prefix("acme/al"))).stream().map(ComponentDao.ComponentSearchRow::name).toList());
+    assertTrue(dao.searchTagsByRepositoryIds(List.of(repositoryId), null, null, 10,
+        Map.of(repositoryId, AssetPathFilter.prefix("v2/acme/"))).isEmpty());
     inTransaction(() -> dao.deleteManifest(repositoryId, "acme/beta", beta.digest()));
     assertEquals(List.of("acme/alpha"), dao.searchTagsByRepositoryIds(List.of(repositoryId), "acme", null, 10)
         .stream().map(ComponentDao.ComponentSearchRow::name).toList());

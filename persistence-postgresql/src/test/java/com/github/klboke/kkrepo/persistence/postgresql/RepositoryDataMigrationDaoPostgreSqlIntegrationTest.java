@@ -1,4 +1,6 @@
-package com.github.klboke.kkrepo.persistence.jdbc.internal;
+package com.github.klboke.kkrepo.persistence.postgresql;
+
+import com.github.klboke.kkrepo.persistence.jdbc.internal.JdbcRepositoryDataMigrationDao;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -8,19 +10,19 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.*;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryDataMigrationAssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.HashColumns;
-import com.github.klboke.kkrepo.persistence.mysql.support.MySqlIntegrationTestSupport;
+import com.github.klboke.kkrepo.persistence.postgresql.support.PostgreSqlIntegrationTestSupport;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
-class RepositoryDataMigrationDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
+class RepositoryDataMigrationDaoPostgreSqlIntegrationTest extends PostgreSqlIntegrationTestSupport {
   @Test
   void failedAssetCanBeRetriedAndClaimedAgainWithRealJsonAndLockingSql() {
     long repositoryId = insertRepository("migration-target", "maven2");
     long migrationJobId = insertMigrationJob(true);
     RepositoryDataMigrationDao dao = new JdbcRepositoryDataMigrationDao(
-        jdbc(), jsonColumns(), new com.github.klboke.kkrepo.persistence.mysql.MySqlDatabaseDialect());
+        jdbc(), jsonColumns(), dialect());
     long repositoryJobId = dao.createRepositoryJob(
         migrationJobId,
         "maven-releases",
@@ -79,8 +81,8 @@ class RepositoryDataMigrationDaoMySqlIntegrationTest extends MySqlIntegrationTes
   void recoveryOnAnotherReplicaCannotExceedAnActiveJobsBatchConcurrency() {
     long repositoryId = insertRepository("migration-serial", "maven2");
     long jobId = insertMigrationJob(true);
-    RepositoryDataMigrationDao first = new JdbcRepositoryDataMigrationDao(jdbc(), jsonColumns(), new com.github.klboke.kkrepo.persistence.mysql.MySqlDatabaseDialect());
-    RepositoryDataMigrationDao second = new JdbcRepositoryDataMigrationDao(jdbc(), jsonColumns(), new com.github.klboke.kkrepo.persistence.mysql.MySqlDatabaseDialect());
+    RepositoryDataMigrationDao first = new JdbcRepositoryDataMigrationDao(jdbc(), jsonColumns(), dialect());
+    RepositoryDataMigrationDao second = new JdbcRepositoryDataMigrationDao(jdbc(), jsonColumns(), dialect());
     long repositoryJobId = first.createRepositoryJob(jobId, "source", "migration-serial", repositoryId,
         RepositoryFormat.MAVEN2, 100, Map.of());
     first.upsertDiscoveredAssets(repositoryJobId,
@@ -105,7 +107,7 @@ class RepositoryDataMigrationDaoMySqlIntegrationTest extends MySqlIntegrationTes
     long firstJobId = insertMigrationJob(true);
     long secondJobId = insertMigrationJob(true);
     RepositoryDataMigrationDao dao = new JdbcRepositoryDataMigrationDao(
-        jdbc(), jsonColumns(), new com.github.klboke.kkrepo.persistence.mysql.MySqlDatabaseDialect());
+        jdbc(), jsonColumns(), dialect());
     long firstRepositoryJobId = dao.createRepositoryJob(
         firstJobId, "source-one", "target-one", firstRepositoryId,
         RepositoryFormat.MAVEN2, 50, Map.of());
@@ -121,11 +123,27 @@ class RepositoryDataMigrationDaoMySqlIntegrationTest extends MySqlIntegrationTes
         firstJobId, Instant.now())).orElseThrow().id());
   }
 
+  private long insertRepository(String name, String format) {
+    jdbc().update("""
+        INSERT INTO blob_store (name, type, attributes_json)
+        VALUES (?, 'S3', CAST('{}' AS jsonb))
+        """, name + "-store");
+    long blobStoreId = jdbc().queryForObject(
+        "SELECT id FROM blob_store WHERE name = ?", Long.class, name + "-store");
+    jdbc().update("""
+        INSERT INTO repository
+          (name, format, type, recipe_name, blob_store_id, attributes_json)
+        VALUES (?, ?, 'proxy', ?, ?, CAST('{}' AS jsonb))
+        """, name, format, format + "-proxy", blobStoreId);
+    return jdbc().queryForObject(
+        "SELECT id FROM repository WHERE name = ?", Long.class, name);
+  }
+
   private long insertMigrationJob(boolean packageMigrationEnabled) {
     jdbc().update("""
         INSERT INTO migration_job
           (source_nexus_version, source_data_path, status, options_json, summary_json)
-        VALUES ('3.70.0', '/nexus-data', 'running', ?, JSON_OBJECT())
+        VALUES ('3.70.0', '/nexus-data', 'running', CAST(? AS jsonb), CAST('{}' AS jsonb))
         """, jsonColumns().write(Map.of(
             "scope", "repository-data",
             "packageMigrationEnabled", packageMigrationEnabled)));

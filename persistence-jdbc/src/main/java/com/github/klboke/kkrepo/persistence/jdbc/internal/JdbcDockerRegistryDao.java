@@ -5,6 +5,7 @@ import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRow
 import static com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcRows.nullableTimestamp;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetPathFilter;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.ComponentSearchCursor;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.ComponentSearchRow;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao.BrowseImageRow;
@@ -748,7 +749,7 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
   @Override
   public List<ComponentSearchRow> searchTagsByRepositoryIds(
       List<Long> repositoryIds, String keyword,
-      ComponentSearchCursor after, int limit) {
+      ComponentSearchCursor after, int limit, Map<Long, AssetPathFilter> imageFilters) {
     if (repositoryIds == null || repositoryIds.isEmpty()) return List.of();
     List<Object> args = new ArrayList<>(repositoryIds);
     String placeholders = String.join(",", java.util.Collections.nCopies(repositoryIds.size(), "?"));
@@ -759,6 +760,9 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
         JOIN repository r ON r.id = t.repository_id
         WHERE m.deleted_at IS NULL AND t.repository_id IN (
         """).append(placeholders).append(")");
+    if (!imageFilters.isEmpty()) {
+      sql.append(" AND ").append(SelectorCandidateSql.repositories("t", "image_name", imageFilters, args));
+    }
     if (keyword != null && !keyword.isBlank()) {
       String pattern = "%" + keyword.trim().toLowerCase(Locale.ROOT)
           .replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%";
