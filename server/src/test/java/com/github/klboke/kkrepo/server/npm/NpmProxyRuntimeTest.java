@@ -752,6 +752,18 @@ class NpmProxyRuntimeTest {
   }
 
   @Test
+  void tarballDoesNotAliasUnadvertisedDirectoriesToADeclaredDownload() throws Exception {
+    Fixture fixture = fixture();
+    var runtime = runtime(60, 7L);
+    when(fixture.hosted.packageRoot(runtime, PACKAGE)).thenReturn(Optional.of(Map.of("versions", Map.of(
+        "1.0.0", Map.of("dist", Map.of("tarball", "https://registry.npmjs.org/demo/-/signed/demo.tgz"))))));
+    assertThrows(NpmExceptions.BadUpstreamException.class,
+        () -> fixture.service.getTarball(runtime, PACKAGE, "attacker/demo.tgz", false));
+    verify(fixture.fetcher, never()).fetchWithBodyRetry(any(), anyString(), any());
+    org.mockito.Mockito.verifyNoInteractions(fixture.writer);
+  }
+
+  @Test
   void tarballRejectsUntrustedOrAmbiguousPackumentDestinationsBeforeFetching() throws Exception {
     var runtime = runtime(60, 7L);
     for (String url : List.of("https://other.example/demo-1.0.0.tgz", "http://registry.npmjs.org/demo-1.0.0.tgz",

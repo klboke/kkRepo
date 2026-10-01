@@ -57,6 +57,64 @@ class HttpRemoteFetcherTest {
   }
 
   @Test
+  void metadataRedirectsTrustOnlyTheConfiguredOriginAndApprovedCdnHosts() {
+    var runtime = runtime("https://repo.example.com/npm", "robot", "secret", null, Set.of("cdn.example.org"));
+    var request = HttpRemoteFetcher.Request.get("https://cdn.example.org/demo.tgz")
+        .withRepositoryRedirectBoundary(runtime);
+    URI cdn = URI.create(request.url());
+    URI origin = URI.create("https://repo.example.com/npm/demo.tgz");
+    assertNull(request.authorizationHeader());
+    assertEquals("Basic cm9ib3Q6c2VjcmV0", request.authorizationHeaderForRedirect(cdn, origin));
+    assertEquals("repo.example.com", request.trustedHostForRedirect(cdn, origin));
+    assertNull(request.authorizationHeaderForRedirect(cdn, cdn.resolve("/next.tgz")));
+    for (String unsafe : List.of("http://repo.example.com/demo.tgz", "https://repo.example.com:8443/demo.tgz",
+        "https://other.example.org/demo.tgz")) {
+      assertThrows(SecurityValidationException.class,
+          () -> request.authorizationHeaderForRedirect(cdn, URI.create(unsafe)));
+      assertThrows(SecurityValidationException.class,
+          () -> request.trustedHostForRedirect(cdn, URI.create(unsafe)));
+    }
+    assertThrows(SecurityValidationException.class,
+        () -> HttpRemoteFetcher.Request.get("https://other.example.org/demo.tgz").withRepositoryRedirectBoundary(runtime));
+    var ntlmRuntime = org.mockito.Mockito.spy(runtime);
+    var ntlm = new com.github.klboke.kkrepo.server.proxy.NtlmCredentials("robot", "secret", "domain", "host");
+    when(ntlmRuntime.ntlmCredentials()).thenReturn(ntlm);
+    var ntlmRequest = HttpRemoteFetcher.Request.get(cdn.toString()).withRepositoryRedirectBoundary(ntlmRuntime);
+    assertNull(ntlmRequest.ntlmCredentials());
+    assertSame(ntlm, ntlmRequest.ntlmCredentialsForRedirect(cdn, origin));
+    assertNull(ntlmRequest.ntlmCredentialsForRedirect(origin, cdn));
+  }
+
+  @Test
+  void fetchRestoresOriginAuthorizationAfterMultipleCdnHops() throws Exception {
+    ProxiedHttpClientFactory transport = mock(ProxiedHttpClientFactory.class);
+    List<String> authorizations = new ArrayList<>();
+    List<String> targets = List.of("http://127.0.0.1:8082/start", "http://localhost:8081/first",
+        "http://127.0.0.1:8082/again", "http://localhost:8081/final");
+    when(transport.execute(anyString(), nullable(OutboundProxyConfig.class), eq("GET"),
+        any(OutboundRequestPolicy.ResolvedHttpTarget.class), anyMap(), nullable(byte[].class), anyLong()))
+        .thenAnswer(invocation -> {
+          OutboundRequestPolicy.ResolvedHttpTarget target = invocation.getArgument(3);
+          Map<String, String> headers = invocation.getArgument(4);
+          int index = authorizations.size();
+          assertEquals(targets.get(index), target.uri().toString());
+          authorizations.add(headers.get("Authorization"));
+          return index + 1 < targets.size()
+              ? response(302, Map.of("Location", targets.get(index + 1)), "")
+              : response(200, Map.of(), "tarball");
+        });
+    var fetcher = new HttpRemoteFetcher(OutboundRequestPolicy.allowPrivateForTests(), null, transport,
+        "HTTP_1_1", 30, 60, 300, 2, 1);
+    var request = HttpRemoteFetcher.Request.get(targets.getFirst())
+        .withRepositoryRedirectBoundary(runtime("http://localhost:8081/npm", null, null, "secret", Set.of("127.0.0.1")))
+        .withAccept("application/octet-stream").withConditional(null, null).withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT);
+    try (var result = fetcher.fetch(request)) {
+      assertEquals("tarball", new String(result.body().readAllBytes(), StandardCharsets.UTF_8));
+    }
+    assertEquals(java.util.Arrays.asList(null, "Bearer secret", null, "Bearer secret"), authorizations);
+  }
+
+  @Test
   void resultParsesContentLengthDefensively() {
     assertEquals(
         42L,

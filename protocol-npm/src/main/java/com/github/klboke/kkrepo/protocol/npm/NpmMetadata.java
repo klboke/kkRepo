@@ -96,7 +96,7 @@ public final class NpmMetadata {
     if (tarballUrl == null) return null;
     int query = tarballUrl.indexOf('?');
     String path = query < 0 ? tarballUrl : tarballUrl.substring(0, query);
-    int separator = path.lastIndexOf("/-/");
+    int separator = path.indexOf("/-/");
     if (separator >= 0) return path.substring(separator + 3);
     if (path.startsWith("@")) return path;
     return extractTarballName(path);
@@ -112,13 +112,14 @@ public final class NpmMetadata {
     }
   }
 
-  /** Prefer the exact path. A basename alias is safe only when it identifies one path. */
+  /** Only basename-only legacy requests may alias a unique complete path. */
   public static String matchingTarballIdentity(java.util.Collection<String> identities, String requested) {
     // Request paths were already decoded by NpmPathParser. Decoding again would merge literal
     // percent sequences with different paths (for example %252F and %2F).
     String expected = requested;
     if (expected == null) return null;
     if (identities.contains(expected)) return expected;
+    if (expected.contains("/")) return null;
     String basename = extractTarballName(expected);
     List<String> matches = identities.stream()
         .filter(java.util.Objects::nonNull)

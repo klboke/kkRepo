@@ -980,8 +980,7 @@ public class NpmProxyService {
     HttpRemoteFetcher.Request req = new HttpRemoteFetcher.Request(
         url, conditional.etag(), conditional.lastModified(), null, false)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
-        .withRepository(runtime)
-        .withRedirectBoundary();
+        .withRepositoryRedirectBoundary(runtime);
     try {
       return fetcher.fetchWithBodyRetry(req, packageId.tarballPath(tarballName), result -> {
         int status = result.status();

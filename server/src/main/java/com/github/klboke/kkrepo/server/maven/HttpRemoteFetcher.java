@@ -226,7 +226,8 @@ public class HttpRemoteFetcher {
             req.accept(),
             preserveBody ? req.requestBody() : null,
             preserveBody ? req.requestContentType() : null,
-            Request.sameOrigin(uri, redirected) ? req.ntlmCredentials() : null);
+            req.ntlmCredentialsForRedirect(uri, redirected),
+            req.repositoryOrigin());
         Result redirectedResult = fetchInternal(
             redirectedRequest,
             redirects + 1,
@@ -356,7 +357,19 @@ public class HttpRemoteFetcher {
       String accept,
       byte[] requestBody,
       String requestContentType,
-      NtlmCredentials ntlmCredentials) {
+      NtlmCredentials ntlmCredentials,
+      RepositoryOrigin repositoryOrigin) {
+    /** Compatibility constructor for requests without return-to-origin credentials. */
+    public Request(
+        String url, String etag, Instant lastModified, Duration timeout, TimeoutProfile timeoutProfile,
+        boolean headOnly, String repository, String format, String trustedHost, String authorizationHeader,
+        Set<String> allowedUnsignedRedirectHosts, OutboundProxyConfig outboundProxy, String accept,
+        byte[] requestBody, String requestContentType, NtlmCredentials ntlmCredentials) {
+      this(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format, trustedHost,
+          authorizationHeader, allowedUnsignedRedirectHosts, outboundProxy, accept, requestBody,
+          requestContentType, ntlmCredentials, null);
+    }
+
     /** Compatibility constructor for callers that predate upstream NTLM authentication. */
     public Request(
         String url,
@@ -471,25 +484,40 @@ public class HttpRemoteFetcher {
     public Request withRedirectBoundary() {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
           repository, format, URI.create(url).getHost(), authorizationHeader, allowedUnsignedRedirectHosts,
-          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials);
+          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin);
+    }
+
+    /** Authorizes a metadata-selected URL while retaining credentials only for the configured origin. */
+    public Request withRepositoryRedirectBoundary(RepositoryRuntime runtime) {
+      Request configured = withRepository(runtime);
+      URI target = URI.create(url);
+      if (configured.trustedHost() == null && !runtime.allowsRedirectHost(target.getHost())) {
+        throw new SecurityValidationException("remote URL host is not allowed: " + target.getHost());
+      }
+      RepositoryOrigin origin = new RepositoryOrigin(URI.create(runtime.proxyRemoteUrl()),
+          remoteAuthorizationHeader(runtime), runtime.ntlmCredentials());
+      return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
+          configured.repository(), configured.format(), target.getHost(), configured.authorizationHeader(),
+          configured.allowedUnsignedRedirectHosts(), configured.outboundProxy(), accept, requestBody,
+          requestContentType, configured.ntlmCredentials(), origin);
     }
 
     public Request withConditional(String etag, Instant lastModified) {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
           repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts,
-          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials);
+          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin);
     }
 
     public Request withTimeoutProfile(TimeoutProfile timeoutProfile) {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
           repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts,
-          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials);
+          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin);
     }
 
     public Request withAccept(String accept) {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
           repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts,
-          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials);
+          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin);
     }
 
     /** Creates a read-only POST request, used by Hub paths-info. */
@@ -497,7 +525,7 @@ public class HttpRemoteFetcher {
       if (body == null) throw new IllegalArgumentException("Request body is required");
       return new Request(url, etag, lastModified, timeout, timeoutProfile, false,
           repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts,
-          outboundProxy, accept, body, contentType, ntlmCredentials);
+          outboundProxy, accept, body, contentType, ntlmCredentials, repositoryOrigin);
     }
 
     public Request withRepository(RepositoryRuntime runtime) {
@@ -577,6 +605,7 @@ public class HttpRemoteFetcher {
     }
 
     String authorizationHeaderForRedirect(URI current, URI redirected) {
+      if (isRepositoryOrigin(redirected)) return repositoryOrigin.authorizationHeader();
       if (sameOrigin(current, redirected)) {
         return authorizationHeader;
       }
@@ -587,6 +616,7 @@ public class HttpRemoteFetcher {
     }
 
     String trustedHostForRedirect(URI current, URI redirected) {
+      if (isRepositoryOrigin(redirected)) return normalizeHost(redirected.getHost());
       if (sameOrigin(current, redirected)) {
         return trustedHost;
       }
@@ -595,6 +625,20 @@ public class HttpRemoteFetcher {
       }
       ensureUnsignedRedirectAllowed(redirected);
       return normalizeHost(redirected.getHost());
+    }
+
+    NtlmCredentials ntlmCredentialsForRedirect(URI current, URI redirected) {
+      if (isRepositoryOrigin(redirected)) return repositoryOrigin.ntlmCredentials();
+      return sameOrigin(current, redirected) ? ntlmCredentials : null;
+    }
+
+    private boolean isRepositoryOrigin(URI target) {
+      // Reuse the configured origin policy, including only its existing safe HTTP-to-HTTPS upgrade.
+      return repositoryOrigin != null && sameOrigin(repositoryOrigin.uri(), target);
+    }
+
+    public record RepositoryOrigin(URI uri, String authorizationHeader, NtlmCredentials ntlmCredentials) {
+      @Override public String toString() { return "RepositoryOrigin[redacted]"; }
     }
 
     private void ensureUnsignedRedirectAllowed(URI redirected) {

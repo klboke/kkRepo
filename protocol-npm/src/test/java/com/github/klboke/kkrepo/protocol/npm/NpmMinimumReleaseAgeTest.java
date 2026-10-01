@@ -292,6 +292,24 @@ class NpmMinimumReleaseAgeTest {
   }
 
   @Test
+  void nestedTarballDelimitersAndAliasesPreserveExactReleaseIdentity() {
+    String oldUrl = "https://registry.example/demo/-/old/-/demo.tgz";
+    String youngUrl = "https://registry.example/demo/-/young/-/demo.tgz";
+    Map<String, Object> root = Map.of("versions", Map.of(
+        "1.0.0", Map.of("dist", Map.of("tarball", oldUrl)),
+        "2.0.0", Map.of("dist", Map.of("tarball", youngUrl))),
+        "time", Map.of("1.0.0", NOW.minusSeconds(7200).toString(), "2.0.0", NOW.toString()));
+    var analysis = NpmMinimumReleaseAge.analyze(root, 60);
+    assertEquals("old/-/demo.tgz", NpmMetadata.tarballFilename(oldUrl));
+    assertEquals(List.of("1.0.0"), analysis.versionsForTarball("old/-/demo.tgz"));
+    assertEquals(List.of("2.0.0"), analysis.versionsForTarball("young/-/demo.tgz"));
+    assertTrue(analysis.versionsForTarball("demo.tgz").isEmpty());
+    assertEquals("1.0.0", NpmMetadata.findVersionForTarball(root, "old/-/demo.tgz"));
+    assertNull(NpmMetadata.matchingTarballIdentity(List.of("signed/demo.tgz"), "attacker/demo.tgz"));
+    assertEquals("signed/demo.tgz", NpmMetadata.matchingTarballIdentity(List.of("signed/demo.tgz"), "demo.tgz"));
+  }
+
+  @Test
   void scopedEncodedTarballsUseTheSameIdentityInFreshAndPersistedIndexes() {
     Instant published = Instant.parse("2026-01-01T00:00:00Z");
     String url = "https://registry.example/@abc/abc-ui/-/@abc%2Fabc-ui-1.0.0.tgz?token=1";
