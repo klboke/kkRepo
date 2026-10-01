@@ -93,6 +93,19 @@ class DockerRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
       dao.upsertTag(tag(repositoryId, beta, "latest"));
     });
 
+    var all = dao.searchTagsByRepositoryIds(List.of(repositoryId), "ACME", null, 10);
+    assertEquals(2, all.size());
+    var first = dao.searchTagsByRepositoryIds(List.of(repositoryId), "acme", null, 1);
+    var second = dao.searchTagsByRepositoryIds(List.of(repositoryId), "acme",
+        ComponentDao.ComponentSearchCursor.after(first.getFirst()), 1);
+    assertEquals(1, second.size());
+    assertFalse(first.getFirst().id() == second.getFirst().id());
+    assertEquals("stable", dao.searchTagsByRepositoryIds(List.of(repositoryId), "stable", null, 10).getFirst().version());
+    assertEquals("acme/beta", dao.searchTagsByRepositoryIds(List.of(repositoryId), beta.digest(), null, 10).getFirst().name());
+    assertTrue(dao.searchTagsByRepositoryIds(List.of(repositoryId), "%", null, 10).isEmpty());
+    assertTrue(dao.searchTagsByRepositoryIds(List.of(repositoryId), "_", null, 10).isEmpty());
+    assertTrue(dao.searchTagsByRepositoryIds(List.of(repositoryId + 999), null, null, 10).isEmpty());
+    assertTrue(dao.searchTagsByRepositoryIds(List.of(), null, null, 10).isEmpty());
     assertEquals(List.of("acme/alpha"), dao.listCatalog(repositoryId, null, 1));
     assertEquals(List.of("acme/beta"), dao.listCatalog(repositoryId, "acme/alpha", 10));
     assertEquals(2, dao.listBrowseImages(repositoryId, "acme").size());
@@ -100,6 +113,16 @@ class DockerRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport 
     assertTrue(dao.findBrowseManifestByReferencePath(
         repositoryId, "acme/alpha/manifests/stable").isPresent());
     assertTrue(dao.findBrowseManifestByReferencePath(repositoryId, "invalid").isEmpty());
+    inTransaction(() -> {
+      for (int i = 0; i < 1005; i++) dao.upsertTag(tag(repositoryId, beta, "private-" + i));
+    });
+    assertEquals(List.of("acme/alpha"), dao.searchTagsByRepositoryIds(List.of(repositoryId), null, null, 1,
+        Map.of(repositoryId, AssetPathFilter.prefix("acme/al"))).stream().map(ComponentDao.ComponentSearchRow::name).toList());
+    assertTrue(dao.searchTagsByRepositoryIds(List.of(repositoryId), null, null, 10,
+        Map.of(repositoryId, AssetPathFilter.prefix("v2/acme/"))).isEmpty());
+    inTransaction(() -> dao.deleteManifest(repositoryId, "acme/beta", beta.digest()));
+    assertEquals(List.of("acme/alpha"), dao.searchTagsByRepositoryIds(List.of(repositoryId), "acme", null, 10)
+        .stream().map(ComponentDao.ComponentSearchRow::name).toList());
   }
 
   private static AssetRecord asset(long repositoryId, String path) {

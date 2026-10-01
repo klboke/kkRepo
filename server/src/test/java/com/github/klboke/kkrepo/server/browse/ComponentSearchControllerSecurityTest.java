@@ -184,7 +184,8 @@ class ComponentSearchControllerSecurityTest {
     List<String> expectedCalls = new ArrayList<>();
     for (RepositoryFormat format : RepositoryFormat.values()) {
       controller.search(null, format.id(), null, request("GET", "/internal/search/components"));
-      expectedCalls.add("|" + format.id() + "|300");
+      // Docker uses its tag catalog instead of the generic component index.
+      if (format != RepositoryFormat.DOCKER) expectedCalls.add("|" + format.id() + "|300");
     }
     controller.search(null, "ansible", null, request("GET", "/internal/search/components"));
     expectedCalls.add("|ansiblegalaxy|300");

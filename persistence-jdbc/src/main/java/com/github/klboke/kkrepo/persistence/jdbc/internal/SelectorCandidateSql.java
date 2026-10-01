@@ -9,10 +9,13 @@ import java.util.StringJoiner;
 final class SelectorCandidateSql {
   private SelectorCandidateSql() {}
   static String repositories(String alias, Map<Long, AssetPathFilter> filters, List<Object> args) {
+    return repositories(alias, "path", filters, args);
+  }
+  static String repositories(String alias, String pathColumn, Map<Long, AssetPathFilter> filters, List<Object> args) {
     StringJoiner clauses = new StringJoiner(" OR ", "(", ")");
     filters.forEach((id, filter) -> {
       args.add(id);
-      clauses.add("(" + alias + ".repository_id = ? AND " + path(alias + ".path", filter, args) + ")");
+      clauses.add("(" + alias + ".repository_id = ? AND " + path(alias + "." + pathColumn, filter, args) + ")");
     });
     return filters.isEmpty() ? "1 = 0" : clauses.toString();
   }

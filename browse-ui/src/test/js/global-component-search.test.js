@@ -203,3 +203,80 @@ test("opens a Hugging Face search result at its immutable revision path", () => 
     `#browse/browse:huggingface-models?path=hf-internal-testing%2Ftiny-random-bart%2F${commit}`,
   );
 });
+
+
+test("Docker group search preserves the selected member for identical tags", () => {
+  const helpers = loadBrowseSearchHelpers();
+  for (const sourceRepository of ["docker-first", "docker-second"]) {
+    helpers.openSearchResult({repository: "docker-public", format: "docker", name: "team/app",
+      version: "latest", path: "v2/team/app/manifests/latest", details: {sourceRepository}});
+  }
+  assert.equal(helpers.openedSearchResults[0][3], "docker-first");
+  assert.equal(helpers.openedSearchResults[1][3], "docker-second");
+  assert.match(helpers.repositoryBrowseHash(...[helpers.openedSearchResults[1][0],
+    helpers.openedSearchResults[1][2], helpers.openedSearchResults[1][3]]), /source=docker-second/);
+});
+
+test("Docker usage snippets use image references for path and connector routing", () => {
+  const source = readFileSync(resolve(__dirname, "../../main/resources/META-INF/resources/browse/assets/browse.js"), "utf8");
+  const start = source.indexOf("function dockerImageReferenceBase(");
+  const end = source.indexOf("function dockerKindLabel(", start);
+  const context = vm.createContext({URL,
+    window: {location: {origin: "http://repo.example:8080", host: "repo.example:8080", hostname: "repo.example"}},
+    currentRepository: () => context.repo,
+    dockerCoordinates: () => ({image: "adoptopenjdk/openjdk8", reference: "latest", digest: "sha256:abc"}),
+    usageSnippet: (label, command) => ({label, command}), state: {repo: "docker-hosted"},
+  });
+  vm.runInContext(source.slice(start, end), context);
+  for (const [repo, base] of [
+    [{name: "docker-hosted", docker: {}}, "repo.example:8080/docker-hosted"],
+    [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPort: 5000}}, "repo.example:5000"],
+    [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPublicUrl: "https://registry.example/v2/"}}, "registry.example"],
+    [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPublicUrl: "registry.example:5000"}}, "registry.example:5000"],
+    [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPublicUrl: "registry.example:5000/v2"}}, "registry.example:5000"],
+    [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPublicUrl: "registry.example"}}, "registry.example"],
+    [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPublicUrl: "https://", connectorPort: 5000}}, "repo.example:5000"],
+    [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPublicUrl: ":"}}, "repo.example:8080/docker-hosted"],
+    [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPublicUrl: "https://user:secret@registry.example", connectorPort: 5000}}, "repo.example:5000"],
+  ]) {
+    context.repo = repo;
+    const detail = context.dockerUsageDetail({path: "adoptopenjdk/openjdk8/manifests/latest"});
+    assert.equal(detail.snippets[0].command, `docker pull ${base}/adoptopenjdk/openjdk8:latest`);
+    assert.equal(detail.snippets[2].command, `docker push ${base}/adoptopenjdk/openjdk8:latest`);
+    assert.equal(detail.snippets[3].command, `docker pull ${base}/adoptopenjdk/openjdk8@sha256:abc`);
+  }
+});
+
+
+test("an empty Docker selector page offers continuation and renders older permitted images", async () => {
+  const source = readFileSync(resolve(__dirname, "../../main/resources/META-INF/resources/browse/assets/browse.js"), "utf8");
+  const start = source.indexOf("async function renderSearch(");
+  const end = source.indexOf("function switchView(", start);
+  let continueSearch;
+  const calls = [];
+  const elements = {
+    "component-keyword": {value: ""}, "component-total": {},
+    "component-table": {innerHTML: "", insertAdjacentHTML(_, html) { this.innerHTML += html; }},
+    "continue-docker-search": {addEventListener(_, fn) { continueSearch = fn; }},
+  };
+  const context = vm.createContext({
+    searchRequestSeq: 0, activeCustomSearchFormat: "docker", componentsCache: [],
+    DEFAULT_SEARCH_FORMAT: "all", normalizeSearchFormat: value => value,
+    normalizeCustomSearchFormat: value => value, searchHash: () => "#browse/search/docker",
+    window: {location: {pathname: "/browse/", search: "", hash: "#browse/search/docker"}},
+    document: {getElementById: id => elements[id], querySelectorAll: () => []},
+    fetchSearchComponents: async (...args) => {
+      calls.push(args);
+      return calls.length === 1 ? {items: [], dockerCursor: "next-page"}
+        : {items: [{name: "public/older", repository: "docker", format: "docker", version: "latest"}]};
+    },
+    escapeHtml: String, lucideIcon: () => "", componentBrowsePath: () => "path",
+  });
+  vm.runInContext(source.slice(start, end), context);
+  await context.renderSearch("docker");
+  assert.match(elements["component-table"].innerHTML, /Continue Docker search/);
+  await continueSearch();
+  assert.equal(calls[1][3], "next-page");
+  assert.match(elements["component-table"].innerHTML, /public\/older/);
+  assert.equal(elements["component-total"].textContent, "1");
+});
