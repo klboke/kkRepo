@@ -18,6 +18,7 @@ import com.github.klboke.kkrepo.server.proxy.NtlmCredentials;
 import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
+import com.github.klboke.kkrepo.server.security.RedirectHosts;
 import com.github.klboke.kkrepo.server.security.SecurityValidationException;
 import com.github.klboke.kkrepo.server.metrics.KkRepoMetrics;
 import io.micrometer.core.instrument.Timer;
@@ -592,7 +593,7 @@ public class HttpRemoteFetcher {
     private void ensureUnsignedRedirectAllowed(URI redirected) {
       String host = normalizeHost(redirected == null ? null : redirected.getHost());
       if (!host.isBlank()
-          && (allowedUnsignedRedirectHosts.contains(host)
+          && (RedirectHosts.matches(allowedUnsignedRedirectHosts, host)
               || allowedUnsignedRedirectHosts.contains("*"))) {
         return;
       }

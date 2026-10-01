@@ -4,6 +4,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.server.proxy.NtlmCredentials;
 import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
+import com.github.klboke.kkrepo.server.security.RedirectHosts;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -86,11 +87,11 @@ public record RepositoryRuntime(
     } else {
       LinkedHashSet<String> normalized = new LinkedHashSet<>();
       for (String host : allowedRedirectHosts) {
-        String value = normalizeRedirectHost(host);
-        // Operator configuration is exact-host only. The wildcard is reserved for explicit,
-        // protocol-owned integrity-pinned download flows and must never be activated from stored
-        // repository attributes, even if those attributes bypass RepositoryService validation.
-        if (!value.isBlank() && !"*".equals(value)) normalized.add(value);
+        try {
+          normalized.add(RedirectHosts.normalizeRule(host));
+        } catch (IllegalArgumentException ignored) {
+          // Invalid persisted rules fail closed, including the protocol-only unrestricted "*".
+        }
       }
       allowedRedirectHosts = Set.copyOf(normalized);
     }
@@ -498,7 +499,7 @@ public record RepositoryRuntime(
   }
 
   public boolean allowsRedirectHost(String host) {
-    return allowedRedirectHosts.contains(normalizeRedirectHost(host));
+    return RedirectHosts.matches(allowedRedirectHosts, host);
   }
 
   private static String normalizeRedirectHost(String host) {

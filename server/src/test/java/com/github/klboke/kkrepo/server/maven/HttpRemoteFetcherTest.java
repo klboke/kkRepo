@@ -504,6 +504,23 @@ class HttpRemoteFetcherTest {
   }
 
   @Test
+  void wildcardRedirectsMatchOnlySubdomainsAndDropCredentials() {
+    var runtime = runtime("https://quay.io/", "robot", "secret", null, Set.of("*.QUAY.IO."));
+    var request = HttpRemoteFetcher.Request.get("https://quay.io/image").withRepository(runtime);
+    URI origin = URI.create("https://quay.io/image");
+    for (String host : List.of("cdn01.quay.io", "cdn02.quay.io", "nested.cdn.quay.io.")) {
+      URI target = URI.create("https://" + host + "/layer");
+      assertNull(request.authorizationHeaderForRedirect(origin, target));
+      assertEquals(host.replaceAll("\\.$", ""), request.trustedHostForRedirect(origin, target));
+    }
+    for (String host : List.of("evilquay.io", "quay.io.evil.test", "quay.io")) {
+      URI current = URI.create("https://cdn01.quay.io/layer");
+      assertThrows(SecurityValidationException.class,
+          () -> request.trustedHostForRedirect(current, URI.create("https://" + host + "/layer")));
+    }
+  }
+
+  @Test
   void explicitRedirectAllowlistDoesNotEstablishTrustWithoutRepositoryRuntime() {
     HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request
         .get("https://repo.example.com/maven2/com/example/app.jar")
