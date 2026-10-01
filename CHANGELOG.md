@@ -4,6 +4,33 @@ All notable public changes to kkrepo are documented in this file.
 
 This project follows a pragmatic release process. Stable releases call out migration impact, compatibility changes, operational notes, and any known behavior changes in their release section.
 
+## 1.1.1 - 2026-10-01
+
+### Fixed
+
+- npm proxy downloads resolve the original upstream `dist.tarball` URL, including scoped filenames, separate metadata/download prefixes, nested paths, encoded paths, and query strings. Existing lockfiles, minimum-release-age checks, offline cache reads, group URL projection, and Browse navigation retain the full tarball identity. (#359)
+- NuGet proxies discover search, autocomplete, package, and registration resources from the upstream V3 service index. Group registration links retain their source member and query identity, paginated metadata is expanded within bounded limits, and resource credentials remain protected by existing origin rules and shared-secret routing proofs. (#344, #345)
+- Docker proxy and group tag/catalog pagination preserve query parameters through upstream requests and authentication retries. Browse generates valid Docker pull/tag/push references, and global search finds existing Docker tags by image, tag, or digest with permission-aware pagination. (#348, #360)
+- Native images register the zstd FFM downcalls required by JDK 25 and GraalVM, fixing Conda `repodata.json.zst` decoding with the updated zstd binding. (#354)
+- Repository scan settings allow explicit policy assignment or unassignment and show effective validity, including built-in rules, disabled policies, and combined age limits. (#349)
+
+### Added
+
+- Administrators can delete unused security scan policies and all their revisions. Referenced policies return a conflict; database locking coordinates deletion with assignments, waivers, and scan-state writes across replicas. (#350)
+- Proxy redirect allowlists support leading subdomain patterns such as `*.quay.io`, including deeper subdomains while excluding the apex. Existing outbound address validation and cross-origin credential isolation apply to every redirect. (#358)
+
+### Changed
+
+- Quickstart defaults, Dockerfile packaging, deployment documentation, Helm application version, runtime checks, and the optional scanner profile now use `1.1.1`.
+- Development and acceptance-test S3 fixtures use pinned RustFS and AWS CLI images. The AWS SDK, GraalVM Native Build Tools, and zstd-jni dependencies were refreshed. (#345, #351, #352, #354)
+
+### Upgrade Notes
+
+- Existing `1.1.0` MySQL and PostgreSQL deployments upgrade through Flyway V56-V58. Back up the relational database and blob store together and allow migrations to complete before serving traffic. V56 adds PostgreSQL policy-reference indexes; V57 adds Docker tag ordering indexes; V58 adds separate rebuildable npm full-path release-index tables.
+- PostgreSQL V56/V57 indexes are built concurrently outside a transaction; MySQL V57 uses online index creation. Allow time and disk capacity for large tables. The npm index rebuilds lazily from shared raw metadata, and existing Docker tags become searchable without a backfill or repush.
+- Keep the same deployment credential secret on every replica so NuGet group routing proofs and encrypted queries can be verified consistently. Upstream credentials remain limited to the configured origin.
+- Scan policy deletion applies to an unused policy's complete revision history; repository, scan-state, and waiver references must be removed before deletion is allowed.
+
 ## 1.1.0 - 2026-09-24
 
 ### Added
