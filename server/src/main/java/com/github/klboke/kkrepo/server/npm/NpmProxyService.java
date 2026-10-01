@@ -26,6 +26,7 @@ import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
 import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
@@ -33,11 +34,13 @@ import java.time.DateTimeException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Supplier;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -885,6 +888,45 @@ public class NpmProxyService {
     }
   }
 
+  /**
+   * Resolve from the original packument persisted in shared blob storage, so cold downloads on
+   * another replica use the same upstream URL. Cached tarball reads do not load the packument.
+   */
+  private String remoteTarballUrl(RepositoryRuntime runtime, NpmPackageId packageId, String tarballName) {
+    String fallback = buildRemoteUrl(runtime.proxyRemoteUrl(), packageId.tarballPath(tarballName));
+    Optional<Map<String, Object>> root = hosted.packageRoot(runtime, packageId);
+    if (root.isEmpty()) return fallback;
+    String expected = NpmMetadata.extractTarballName(tarballName);
+    Set<String> urls = new LinkedHashSet<>();
+    for (Object version : NpmMetadata.versions(root.get()).values()) {
+      if (!(version instanceof Map<?, ?> metadata)
+          || !(metadata.get("dist") instanceof Map<?, ?> dist)
+          || !(dist.get("tarball") instanceof String url)
+          || !Objects.equals(expected, NpmMetadata.extractTarballName(url))) continue;
+      urls.add(url);
+    }
+    if (urls.isEmpty()) return fallback;
+    if (urls.size() != 1) {
+      throw new NpmExceptions.BadUpstreamException("Ambiguous upstream tarball URL for " + packageId.id());
+    }
+    try {
+      URI base = URI.create(runtime.proxyRemoteUrl().replaceAll("/+$", "") + "/");
+      URI target = base.resolve(urls.iterator().next());
+      if (target.getHost() == null || target.getUserInfo() != null || target.getFragment() != null
+          || !("https".equalsIgnoreCase(target.getScheme()) || "http".equalsIgnoreCase(target.getScheme()))) {
+        throw new IllegalArgumentException("Invalid upstream tarball URL");
+      }
+      // Merely advertising a URL never authorizes credential delegation or bypasses the outbound policy.
+      if (HttpRemoteFetcher.Request.get(target.toString()).withRepository(runtime, false).trustedHost() == null
+          && !runtime.allowsRedirectHost(target.getHost())) {
+        throw new NpmExceptions.BadUpstreamException("Upstream tarball URL host is not allowed: " + target.getHost());
+      }
+      return target.toString();
+    } catch (IllegalArgumentException e) {
+      throw new NpmExceptions.BadUpstreamException("Invalid upstream tarball URL for " + packageId.id());
+    }
+  }
+
   private NpmAssetWriter.Stored fetchAndCacheTarball(
       RepositoryRuntime runtime,
       NpmPackageId packageId,
@@ -892,7 +934,7 @@ public class NpmProxyService {
       Optional<CachedAssetMetadata> cached,
       boolean headOnly,
       Instant now) {
-    String url = buildRemoteUrl(runtime.proxyRemoteUrl(), packageId.tarballPath(tarballName));
+    String url = remoteTarballUrl(runtime, packageId, tarballName);
     Conditional conditional = conditional(cached);
     HttpRemoteFetcher.Request req = new HttpRemoteFetcher.Request(
         url, conditional.etag(), conditional.lastModified(), null, false)
@@ -1038,6 +1080,7 @@ public class NpmProxyService {
   }
 
   private String inferVersion(NpmPackageId packageId, String tarballName) {
+    tarballName = NpmMetadata.extractTarballName(tarballName);
     String prefix = packageId.name() + "-";
     if (tarballName.startsWith(prefix) && tarballName.endsWith(".tgz")) {
       return tarballName.substring(prefix.length(), tarballName.length() - ".tgz".length());

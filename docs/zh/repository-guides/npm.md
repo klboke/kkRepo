@@ -69,3 +69,10 @@ pnpm login --registry=https://nexus.example.com/repository/npm-hosted/
 - [兼容性矩阵](../compatibility-matrix.md#仓库格式矩阵)
 - [npm registry 配置](https://docs.npmjs.com/misc/registry/)
 - [`npm publish` 参考](https://docs.npmjs.com/cli/publish/)
+
+## Proxy tarball 地址
+
+代理下载遵循上游包元数据中的 `dist.tarball` 地址，支持华为 CodeArts 的
+`@scope/package/-/@scope/package-1.0.0.tgz` 路径，也兼容已有 lockfile 中的此类地址。
+原始元数据保存在共享 blob 存储中，不同副本能解析到同一上游地址。跨主机下载需要将目标
+加入代理仓库的 redirect hosts 白名单；上游凭据仍限定在受信任的源站。

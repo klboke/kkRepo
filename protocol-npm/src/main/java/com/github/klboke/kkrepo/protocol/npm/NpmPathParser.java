@@ -101,10 +101,17 @@ public final class NpmPathParser {
     }
     if (parts[index].equals("-") && parts.length >= index + 2) {
       String tarballName = parts[index + 1];
+      int end = index + 2;
+      // CodeArts and other registries retain the package scope in the tarball filename.
+      // Accept only this package's scope, preserving its canonical authorization identity.
+      if (packageId.scope() != null && tarballName.equals("@" + packageId.scope())
+          && parts.length > end && !parts[end].equals(".") && !parts[end].equals("..")) {
+        tarballName += "/" + parts[end++];
+      }
       String revision = null;
-      if (parts.length == index + 4 && parts[index + 2].equals("-rev")) {
-        revision = parts[index + 3];
-      } else if (parts.length != index + 2) {
+      if (parts.length == end + 2 && parts[end].equals("-rev")) {
+        revision = parts[end + 1];
+      } else if (parts.length != end) {
         return simple(NpmPath.Kind.UNKNOWN, raw);
       }
       return new NpmPath(NpmPath.Kind.TARBALL, raw, packageId, null, tarballName, null, revision);

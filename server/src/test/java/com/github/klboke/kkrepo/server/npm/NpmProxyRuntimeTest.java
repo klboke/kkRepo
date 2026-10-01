@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.npm;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -35,6 +36,7 @@ import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
@@ -520,6 +522,101 @@ class NpmProxyRuntimeTest {
         path(NpmPath.Kind.DIST_TAGS, null), "base", false));
     assertThrows(NpmExceptions.NpmNotFoundException.class, () -> fixture.service.get(
         runtime, path(NpmPath.Kind.UNKNOWN, null), "base", false));
+  }
+
+  @Test
+  void tarballUsesPersistedPackumentUrlIncludingScopePrefixEncodingAndQuery() throws Exception {
+    var runtime = runtime(60, 7L);
+    var pkg = NpmPackageId.parse("@abc/abc-ui");
+    String original = "https://registry.npmjs.org/artgalaxy/repo/@abc%2fabc-ui/-/@abc/abc-ui-0.1.1-beta.1.tgz?download=1";
+    for (String name : List.of("abc-ui-0.1.1-beta.1.tgz", "@abc/abc-ui-0.1.1-beta.1.tgz")) {
+      Fixture fixture = fixture();
+      when(fixture.hosted.packageRoot(runtime, pkg)).thenReturn(Optional.of(Map.of("versions", Map.of(
+          "0.1.1-beta.1", Map.of("dist", Map.of("tarball", original))))));
+      respond(fixture.fetcher, new HttpRemoteFetcher.Result(404, Map.of(), InputStream.nullInputStream()));
+      assertThrows(NpmExceptions.NpmNotFoundException.class,
+          () -> fixture.service.getTarball(runtime, pkg, name, false));
+      var request = ArgumentCaptor.forClass(HttpRemoteFetcher.Request.class);
+      verify(fixture.fetcher).fetchWithBodyRetry(request.capture(), eq(pkg.tarballPath(name)), any());
+      assertEquals(original, request.getValue().url());
+      assertEquals("registry.npmjs.org", request.getValue().trustedHost());
+    }
+  }
+
+  @Test
+  void resolvesRelativeTarballAndIgnoresUnrelatedOrIncompleteVersionMetadata() throws Exception {
+    var runtime = org.mockito.Mockito.spy(runtime(60, 7L));
+    when(runtime.proxyRemoteUrl()).thenReturn("https://registry.npmjs.org/artgalaxy/repo");
+    for (boolean matching : List.of(false, true)) {
+      Fixture fixture = fixture();
+      Map<String, Object> versions = new LinkedHashMap<>();
+      versions.put("invalid", "not-an-object");
+      versions.put("missing-dist", Map.of("name", "demo"));
+      versions.put("missing-url", Map.of("dist", Map.of("shasum", "abc")));
+      versions.put("another", Map.of("dist", Map.of("tarball", "other-2.0.0.tgz")));
+      if (matching) versions.put("1.0.0", Map.of("dist", Map.of("tarball", "downloads/demo-1.0.0.tgz?download=1")));
+      when(fixture.hosted.packageRoot(runtime, PACKAGE)).thenReturn(Optional.of(Map.of("versions", versions)));
+      respond(fixture.fetcher, new HttpRemoteFetcher.Result(404, Map.of(), InputStream.nullInputStream()));
+      assertThrows(NpmExceptions.NpmNotFoundException.class,
+          () -> fixture.service.getTarball(runtime, PACKAGE, TARBALL, false));
+      var request = ArgumentCaptor.forClass(HttpRemoteFetcher.Request.class);
+      verify(fixture.fetcher).fetchWithBodyRetry(request.capture(), eq(TARBALL_PATH), any());
+      assertEquals("https://registry.npmjs.org/artgalaxy/repo/" +
+          (matching ? "downloads/demo-1.0.0.tgz?download=1" : TARBALL_PATH), request.getValue().url());
+    }
+  }
+
+  @Test
+  void declaredTarballUsesExistingCredentialAndUpgradePolicy() throws Exception {
+    for (String remote : List.of("https://registry.npmjs.org/", "http://registry.npmjs.org/")) {
+      var runtime = org.mockito.Mockito.spy(runtime(60, 7L));
+      when(runtime.proxyRemoteUrl()).thenReturn(remote);
+      when(runtime.proxyRemoteUsername()).thenReturn("robot");
+      when(runtime.proxyRemotePassword()).thenReturn("secret");
+      Fixture fixture = fixture();
+      when(fixture.hosted.packageRoot(runtime, PACKAGE)).thenReturn(Optional.of(Map.of("versions", Map.of(
+          "1.0.0", Map.of("dist", Map.of("tarball", "https://registry.npmjs.org/artgalaxy/demo-1.0.0.tgz"))))));
+      respond(fixture.fetcher, new HttpRemoteFetcher.Result(404, Map.of(), InputStream.nullInputStream()));
+      assertThrows(NpmExceptions.NpmNotFoundException.class,
+          () -> fixture.service.getTarball(runtime, PACKAGE, TARBALL, true));
+      var request = ArgumentCaptor.forClass(HttpRemoteFetcher.Request.class);
+      verify(fixture.fetcher).fetchWithBodyRetry(request.capture(), eq(TARBALL_PATH), any());
+      assertEquals("Basic cm9ib3Q6c2VjcmV0", request.getValue().authorizationHeader());
+    }
+    var runtime = org.mockito.Mockito.spy(runtime(60, 7L));
+    when(runtime.allowsRedirectHost("cdn.example.org")).thenReturn(true);
+    when(runtime.proxyRemoteBearerToken()).thenReturn("secret-token");
+    Fixture fixture = fixture();
+    when(fixture.hosted.packageRoot(runtime, PACKAGE)).thenReturn(Optional.of(Map.of("versions", Map.of(
+        "1.0.0", Map.of("dist", Map.of("tarball", "https://cdn.example.org/demo-1.0.0.tgz"))))));
+    respond(fixture.fetcher, new HttpRemoteFetcher.Result(404, Map.of(), InputStream.nullInputStream()));
+    assertThrows(NpmExceptions.NpmNotFoundException.class,
+        () -> fixture.service.getTarball(runtime, PACKAGE, TARBALL, false));
+    var request = ArgumentCaptor.forClass(HttpRemoteFetcher.Request.class);
+    verify(fixture.fetcher).fetchWithBodyRetry(request.capture(), eq(TARBALL_PATH), any());
+    assertNull(request.getValue().authorizationHeader());
+  }
+
+  @Test
+  void tarballRejectsUntrustedOrAmbiguousPackumentDestinationsBeforeFetching() throws Exception {
+    var runtime = runtime(60, 7L);
+    for (String url : List.of("https://other.example/demo-1.0.0.tgz", "http://registry.npmjs.org/demo-1.0.0.tgz",
+        "https://registry.npmjs.org:8443/demo-1.0.0.tgz", "file:///demo-1.0.0.tgz",
+        "https://user:secret@registry.npmjs.org/demo-1.0.0.tgz")) {
+      Fixture fixture = fixture();
+      when(fixture.hosted.packageRoot(runtime, PACKAGE)).thenReturn(Optional.of(Map.of("versions", Map.of(
+          "1.0.0", Map.of("dist", Map.of("tarball", url))))));
+      assertThrows(NpmExceptions.BadUpstreamException.class,
+          () -> fixture.service.getTarball(runtime, PACKAGE, TARBALL, false));
+      verify(fixture.fetcher, never()).fetchWithBodyRetry(any(), anyString(), any());
+    }
+    Fixture ambiguous = fixture();
+    when(ambiguous.hosted.packageRoot(runtime, PACKAGE)).thenReturn(Optional.of(Map.of("versions", Map.of(
+        "1.0.0", Map.of("dist", Map.of("tarball", "https://registry.npmjs.org/a/demo-1.0.0.tgz")),
+        "2.0.0", Map.of("dist", Map.of("tarball", "https://registry.npmjs.org/b/demo-1.0.0.tgz"))))));
+    assertThrows(NpmExceptions.BadUpstreamException.class,
+        () -> ambiguous.service.getTarball(runtime, PACKAGE, TARBALL, false));
+    verify(ambiguous.fetcher, never()).fetchWithBodyRetry(any(), anyString(), any());
   }
 
   @Test

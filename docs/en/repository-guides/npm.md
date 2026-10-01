@@ -75,3 +75,11 @@ resolve the problem.
 - [Compatibility matrix](../compatibility-matrix.md#repository-format-matrix)
 - [npm registry configuration](https://docs.npmjs.com/misc/registry/)
 - [`npm publish` reference](https://docs.npmjs.com/cli/publish/)
+
+## Proxy Tarball URLs
+
+Proxy downloads follow the `dist.tarball` URL in the upstream package metadata. This includes
+Huawei CodeArts paths such as `@scope/package/-/@scope/package-1.0.0.tgz`; existing lockfiles
+using that scoped path are also accepted. The original metadata is persisted in shared blob
+storage, so another replica can resolve the same URL. A different download host must be listed
+in the proxy redirect-host allowlist; upstream credentials remain scoped to the trusted origin.

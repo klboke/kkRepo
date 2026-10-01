@@ -8,6 +8,22 @@ class NpmPathParserTest {
   private final NpmPathParser parser = new NpmPathParser();
 
   @Test
+  void acceptsScopedTarballSuffixAndRevisionWithoutChangingPackageIdentity() {
+    for (String path : new String[] {"@abc/abc-ui/-/@abc/abc-ui-0.1.1-beta.1.tgz",
+        "@abc%2fabc-ui/-/@abc%2fabc-ui-0.1.1-beta.1.tgz"}) {
+      NpmPath parsed = parser.parse(path);
+      assertEquals(NpmPath.Kind.TARBALL, parsed.kind());
+      assertEquals("@abc/abc-ui", parsed.packageId().id());
+      assertEquals("@abc/abc-ui-0.1.1-beta.1.tgz", parsed.tarballName());
+      assertEquals("123", parser.parse(path + "/-rev/123").revision());
+    }
+    for (String path : new String[] {"@abc/abc-ui/-/@other/abc-ui-1.tgz",
+        "demo/-/@abc/demo-1.tgz", "@abc/abc-ui/-/@abc/../secret", "@abc/abc-ui/-/@abc/a/b.tgz"}) {
+      assertEquals(NpmPath.Kind.UNKNOWN, parser.parse(path).kind(), path);
+    }
+  }
+
+  @Test
   void scopedPackagesKeepTheirSeparatorAndAreDecodedOnlyOnce() {
     assertEquals("@scope/name", parser.parse("@scope%2fname").packageId().id());
     assertEquals("%61bc", parser.parse("%2561bc").packageId().id());
