@@ -937,6 +937,9 @@ public class NpmProxyService {
     if (urls.isEmpty()) {
       if (identities.keySet().stream().anyMatch(candidate -> Objects.equals(
           NpmMetadata.extractTarballName(candidate), NpmMetadata.extractTarballName(tarballName)))) {
+        if (tarballName.contains("/")) {
+          throw new NpmExceptions.NpmNotFoundException("Tarball path is not declared for " + packageId.id());
+        }
         throw new NpmExceptions.BadUpstreamException("Ambiguous upstream tarball URL for " + packageId.id());
       }
       return fallback;

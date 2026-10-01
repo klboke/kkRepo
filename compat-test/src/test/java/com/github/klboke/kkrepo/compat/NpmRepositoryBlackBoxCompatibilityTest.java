@@ -217,7 +217,18 @@ class NpmRepositoryBlackBoxCompatibilityTest {
           if (expectedStatus == 200) assertArrayEquals(fixture.tarball(), result.body());
           assertEquals(expectedStatus, head(proxy, tarballPath(proxy, rewritten, fixture.version())).status());
           if (!nexus) {
-            assertArrayEquals(fixture.tarball(), get(proxy, tarballPath).body(), "scoped URL from a lockfile");
+            Exchange scopedLockfile = get(proxy, tarballPath);
+            if (prefix.isEmpty()) {
+              assertEquals(200, scopedLockfile.status());
+              assertArrayEquals(fixture.tarball(), scopedLockfile.body(), "scoped URL from a lockfile");
+            } else {
+              assertEquals(404, scopedLockfile.status(), "unadvertised scoped directory must not alias the declared path");
+            }
+            String basename = fixture.packageName().substring(fixture.packageName().indexOf('/') + 1)
+                + "-" + fixture.version() + ".tgz";
+            Exchange legacyBasename = get(proxy, fixture.packageName() + "/-/" + basename);
+            assertEquals(200, legacyBasename.status());
+            assertArrayEquals(fixture.tarball(), legacyBasename.body(), "legacy basename-only lockfile alias");
           }
         } finally {
           if (!nexus) adminRequest(endpoint, "/internal/browse/" + name + "?path="
