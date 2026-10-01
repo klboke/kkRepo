@@ -74,6 +74,7 @@ class NpmRepositoryBlackBoxCompatibilityTest {
   void nestedTarballUrlsRemainRoutableWithoutPriorMetadata() throws Exception {
     verifyScopedUpstream(null, true, "signed/");
     verifyScopedUpstream(null, true, "signed/-/");
+    verifyScopedUpstream(null, true, "@cdn/");
   }
 
   @Test

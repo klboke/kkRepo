@@ -252,8 +252,9 @@ public class NpmProxyService {
       if (cached.isPresent()) return hosted.getPackage(runtime, packageId, repositoryBaseUrl, headOnly, variant);
       throw new NpmExceptions.BadUpstreamException("Upstream temporarily blocked: " + runtime.proxyRemoteUrl());
     }
-    MavenResponse response = fetchAndCachePackage(runtime, packageId, repositoryBaseUrl, cached, headOnly, variant, now);
-    return response == null ? hosted.getPackage(runtime, packageId, repositoryBaseUrl, headOnly, variant) : response;
+    PackageFetch fetched = fetchAndCachePackage(runtime, packageId, repositoryBaseUrl, cached, headOnly, variant, now);
+    return fetched.response() == null
+        ? hosted.getPackage(runtime, packageId, repositoryBaseUrl, headOnly, variant) : fetched.response();
   }
 
   public MavenResponse getDistTags(RepositoryRuntime runtime, NpmPackageId packageId, boolean headOnly) {
@@ -401,7 +402,7 @@ public class NpmProxyService {
               ? cached.get().withLastUpdatedAt(now)
               : cached.get().withLastUpdatedAtAndAttributes(now, attributes);
           return new PolicyPackage(
-              refreshed, policy.root(), policy.analysis(), now, now);
+              refreshed, policy.root(), policy.analysis(), now, now, true);
         }
         if (status >= 200 && status < 300) {
           negativeCache.invalidate(runtime, packageId.id());
@@ -411,7 +412,7 @@ public class NpmProxyService {
               PackageRootHolder.loaded(stored.packageRoot()),
               stored.analysis(),
               stored.lastModified(),
-              now);
+              now, true);
         }
         if (status == 404 || status == 410) {
           proxyStateDao.recordSuccess(runtime.id(), now);
@@ -652,7 +653,7 @@ public class NpmProxyService {
             "Cached npm package root blob is missing for " + metadata.path())));
     NpmMinimumReleaseAge.Analysis analysis = releaseAgeCache.analysis(
         metadata, minimumAge, () -> loadIndexedAnalysis(metadata, minimumAge, root));
-    return new PolicyPackage(metadata, root, analysis, metadata.lastUpdatedAt(), evaluatedAt);
+    return new PolicyPackage(metadata, root, analysis, metadata.lastUpdatedAt(), evaluatedAt, false);
   }
 
   private NpmMinimumReleaseAge.Analysis loadIndexedAnalysis(
@@ -727,7 +728,8 @@ public class NpmProxyService {
       PackageRootHolder root,
       NpmMinimumReleaseAge.Analysis analysis,
       Instant lastModified,
-      Instant evaluatedAt) {
+      Instant evaluatedAt,
+      boolean revalidated) {
   }
 
   private static final class PackageRootHolder {
@@ -770,7 +772,10 @@ public class NpmProxyService {
     }
   }
 
-  private MavenResponse fetchAndCachePackage(
+  /** A successful cached response does not imply that upstream metadata was revalidated. */
+  private record PackageFetch(MavenResponse response, boolean revalidated) {}
+
+  private PackageFetch fetchAndCachePackage(
       RepositoryRuntime runtime,
       NpmPackageId packageId,
       String repositoryBaseUrl,
@@ -797,27 +802,27 @@ public class NpmProxyService {
           assetMetadataCache.touchVerified(runtime.id(), packageId.id(), now, attributes);
           proxyStateDao.recordSuccess(runtime.id(), now);
           negativeCache.invalidate(runtime, packageId.id());
-          return null;
+          return new PackageFetch(null, true);
         }
         if (status >= 200 && status < 300) {
           negativeCache.invalidate(runtime, packageId.id());
           CachedPackage stored = persistPackage(runtime, packageId, result, now);
-          return packageResponse(packageId, repositoryBaseUrl, stored, headOnly, variant);
+          return new PackageFetch(packageResponse(packageId, repositoryBaseUrl, stored, headOnly, variant), true);
         }
         if (status == 404 || status == 410) {
           proxyStateDao.recordSuccess(runtime.id(), now);
           if (cached.isPresent()) {
-            return hosted.getPackage(runtime, packageId, repositoryBaseUrl, headOnly, variant);
+            return new PackageFetch(hosted.getPackage(runtime, packageId, repositoryBaseUrl, headOnly, variant), false);
           }
           if (status == 404) negativeCache.rememberNotFound(runtime, packageId.id());
           throw new NpmExceptions.NpmNotFoundException("Package '" + packageId.id() + "' not found");
         }
         handleFailure(runtime, cached, "Upstream returned " + status, now);
-        return null;
+        return new PackageFetch(null, false);
       });
     } catch (IOException e) {
       handleFailure(runtime, cached, "Upstream IO error: " + e.getMessage(), now);
-      return null;
+      return new PackageFetch(null, false);
     }
   }
 
@@ -901,16 +906,29 @@ public class NpmProxyService {
     }
   }
 
-  /** Load shared metadata for the stateless resolver; fresh tarballs bypass this work entirely. */
+  /** Load shared metadata for the stateless resolver; stale responses are not URL revalidation. */
   private Optional<Map<String, Object>> tarballMetadata(RepositoryRuntime runtime, NpmPackageId packageId) {
     Optional<CachedAssetMetadata> metadata = lookupCached(runtime, packageId.id());
-    if (metadata.isEmpty() || !isFresh(runtime, metadata.get(),
-        runtime.metadataMaxAgeMinutesOrDefault(), clock.instant(), NexusCacheType.METADATA)) {
-      try {
-        getPackage(runtime, packageId, runtime.name(), true);
-      } catch (NpmExceptions.NpmNotFoundException | NpmExceptions.BadUpstreamException unavailableMetadata) {
+    Instant now = clock.instant();
+    if (metadata.isPresent() && isFresh(runtime, metadata.get(),
+        runtime.metadataMaxAgeMinutesOrDefault(), now, NexusCacheType.METADATA)) {
+      return hosted.packageRoot(runtime, packageId);
+    }
+    try {
+      if (runtime.minimumReleaseAgeEnabled()) {
+        PolicyPackage resolved = resolvePolicyPackage(runtime, packageId, now);
+        return resolved.revalidated() || isFresh(runtime, resolved.metadata(),
+            runtime.metadataMaxAgeMinutesOrDefault(), now, NexusCacheType.METADATA)
+            ? Optional.of(resolved.root().get()) : Optional.empty();
+      }
+      if (negativeCache.isNotFoundCached(runtime, packageId.id()) || proxyStateDao.isBlocked(runtime.id(), now)) {
         return Optional.empty();
       }
+      PackageFetch fetched = fetchAndCachePackage(runtime, packageId, runtime.name(), metadata,
+          true, NpmPackumentVariant.FULL, now);
+      if (!fetched.revalidated()) return Optional.empty();
+    } catch (NpmExceptions.NpmNotFoundException | NpmExceptions.BadUpstreamException unavailableMetadata) {
+      return Optional.empty();
     }
     return hosted.packageRoot(runtime, packageId);
   }

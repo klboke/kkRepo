@@ -605,6 +605,68 @@ class NpmProxyRuntimeTest {
   }
 
   @Test
+  void staleMetadataFailureFallsBackInsteadOfReusingAnExpiredSignedUrl() throws Exception {
+    for (int status : List.of(404, 410, 503, 0, -1, 304)) {
+      Fixture fixture = fixture();
+      var runtime = runtime(1, 7L);
+      when(fixture.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.of(
+          snapshot("demo", Instant.EPOCH, "package-root", Map.of())));
+      String expired = "https://registry.npmjs.org/download/" + TARBALL + "?token=expired";
+      when(fixture.hosted.packageRoot(runtime, PACKAGE)).thenReturn(Optional.of(Map.of("versions", Map.of(
+          "1.0.0", Map.of("dist", Map.of("tarball", expired))))));
+      when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
+      when(fixture.writer.writeTarball(eq(runtime), any(), eq(7L), eq(PACKAGE), anyString(), eq(TARBALL),
+          any(), any(), eq("proxy"), isNull(), any(), eq(false)))
+          .thenReturn(stored(TARBALL_PATH, "tarball", "application/octet-stream"));
+      if (status == -1) when(fixture.proxyStateDao.isBlocked(eq(10L), any())).thenReturn(false, true);
+      doAnswer(invocation -> {
+        HttpRemoteFetcher.Request request = invocation.getArgument(0);
+        HttpRemoteFetcher.ResultHandler<?> handler = invocation.getArgument(2);
+        if (request.url().endsWith("/demo")) {
+          if (status == 0) throw new java.io.IOException("metadata unavailable");
+          return handler.handle(new HttpRemoteFetcher.Result(status, Map.of(), InputStream.nullInputStream()));
+        }
+        assertEquals(status == 304 ? expired : "https://registry.npmjs.org/" + TARBALL_PATH, request.url());
+        return handler.handle(new HttpRemoteFetcher.Result(200, Map.of(),
+            new ByteArrayInputStream("tarball".getBytes(StandardCharsets.UTF_8))));
+      }).when(fixture.fetcher).fetchWithBodyRetry(any(), anyString(), any());
+      assertEquals(200, fixture.service.getTarball(runtime, PACKAGE, TARBALL, true).status());
+      verify(fixture.fetcher, org.mockito.Mockito.times(status == -1 ? 1 : 2)).fetchWithBodyRetry(any(), anyString(), any());
+    }
+  }
+
+  @Test
+  void releaseAgePolicyDoesNotTreatStaleMetadataFallbackAsUrlRevalidation() throws Exception {
+    Instant now = Instant.parse("2026-07-19T12:00:00Z");
+    for (int status : List.of(503, 304)) {
+      Fixture fixture = fixtureWithoutReleaseIndex(Clock.fixed(now, ZoneOffset.UTC));
+      var runtime = runtime(1, 7L, 60);
+      var metadata = snapshot("demo", now.minusSeconds(7200), "package-root", Map.of("npmFullMetadata", "true"));
+      when(fixture.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.of(metadata));
+      String expired = "https://registry.npmjs.org/download/" + TARBALL + "?token=expired";
+      when(fixture.hosted.packageRoot(metadata)).thenReturn(Optional.of(Map.of(
+          "time", Map.of("1.0.0", "2026-07-18T12:00:00Z"),
+          "versions", Map.of("1.0.0", Map.of("dist", Map.of("tarball", expired))))));
+      when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
+      when(fixture.writer.writeTarball(eq(runtime), any(), eq(7L), eq(PACKAGE), anyString(), eq(TARBALL),
+          any(), any(), eq("proxy"), isNull(), any(), eq(false)))
+          .thenReturn(stored(TARBALL_PATH, "tarball", "application/octet-stream"));
+      doAnswer(invocation -> {
+        HttpRemoteFetcher.Request request = invocation.getArgument(0);
+        HttpRemoteFetcher.ResultHandler<?> handler = invocation.getArgument(2);
+        if (request.url().endsWith("/demo")) {
+          return handler.handle(new HttpRemoteFetcher.Result(status, Map.of(), InputStream.nullInputStream()));
+        }
+        assertEquals(status == 304 ? expired : "https://registry.npmjs.org/" + TARBALL_PATH, request.url());
+        return handler.handle(new HttpRemoteFetcher.Result(200, Map.of(),
+            new ByteArrayInputStream("tarball".getBytes(StandardCharsets.UTF_8))));
+      }).when(fixture.fetcher).fetchWithBodyRetry(any(), anyString(), any());
+      assertEquals(200, fixture.service.getTarball(runtime, PACKAGE, TARBALL, true).status());
+      verify(fixture.fetcher, org.mockito.Mockito.times(3)).fetchWithBodyRetry(any(), anyString(), any());
+    }
+  }
+
+  @Test
   void coldStandardTarballFallsBackWhenMetadataIsTemporarilyUnavailable() throws Exception {
     for (boolean ioFailure : List.of(false, true)) {
       Fixture fixture = fixture();

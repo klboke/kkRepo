@@ -106,12 +106,8 @@ public final class NpmPathParser {
         revision = parts[end - 1];
         end -= 2;
       }
-      // Upstream tarball URLs may contain ordinary subdirectories or this package's scope.
-      // Keep the full suffix so distinct URLs do not share a release-age identity.
-      if (end > index + 2 && parts[index + 1].startsWith("@")
-          && (packageId.scope() == null || !parts[index + 1].equals("@" + packageId.scope()))) {
-        return simple(NpmPath.Kind.UNKNOWN, raw);
-      }
+      // Everything after /-/ is a tarball path, including @-prefixed directories.
+      // The package identity comes only from the prefix; keep the full suffix distinct.
       for (int i = index + 1; i < parts.length; i++) {
         if (parts[i].isEmpty() || parts[i].equals(".") || parts[i].equals("..")) {
           return simple(NpmPath.Kind.UNKNOWN, raw);

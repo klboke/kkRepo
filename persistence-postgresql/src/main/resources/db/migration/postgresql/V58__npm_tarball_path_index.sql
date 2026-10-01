@@ -20,7 +20,7 @@ CREATE TABLE npm_release_index_v2_entry (
   version_hash BYTEA NOT NULL,
   published_at TIMESTAMPTZ(3) NULL,
   invalid_reason VARCHAR(128) NULL,
-  tarball_name VARCHAR(1024) NULL,
+  tarball_name VARCHAR(2048) NULL,
   tarball_name_hash BYTEA NULL,
   PRIMARY KEY (package_root_asset_id, version_hash)
 );

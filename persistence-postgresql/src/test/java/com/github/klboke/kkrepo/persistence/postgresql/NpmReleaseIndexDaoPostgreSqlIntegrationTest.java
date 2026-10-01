@@ -68,6 +68,20 @@ class NpmReleaseIndexDaoPostgreSqlIntegrationTest extends PostgreSqlIntegrationT
   }
 
   @Test
+  void fullPathIndexAcceptsIdentitiesAsLongAsExistingAssetPaths() {
+    long repositoryId = insertRepository("npm-long-path", "npm");
+    long blobId = insertBlob(repositoryId, "npm/demo/packument.json");
+    long assetId = insertPackageRootAsset(repositoryId, blobId);
+    String tarball = "nested/" + "a".repeat(2013) + "/demo.tgz";
+    assertTrue(("demo/-/" + tarball).length() <= 2048);
+    var releases = List.of(new Release(0, "1.0.0", FIRST_PUBLISHED, null, tarball));
+    var dao = stores().npmReleaseIndexes();
+    assertTrue(inTransaction(() -> dao.replaceIfCurrent(assetId, blobId, true, releases, INDEXED_AT)));
+    assertEquals(releases, dao.findSnapshot(assetId, blobId).orElseThrow().releases());
+    assertEquals(releases, dao.findByTarball(assetId, blobId, tarball).orElseThrow());
+  }
+
+  @Test
   void oldAndNewReplicasKeepTheirTarballIdentityIndexesIsolated() {
     long repositoryId = insertRepository("npm-rolling", "npm");
     long blobId = insertBlob(repositoryId, "npm/demo/packument.json");

@@ -22,7 +22,7 @@ CREATE TABLE npm_release_index_v2_entry (
   version_hash BINARY(32) NOT NULL,
   published_at DATETIME(3) NULL,
   invalid_reason VARCHAR(128) NULL,
-  tarball_name VARCHAR(1024) NULL,
+  tarball_name VARCHAR(2048) NULL,
   tarball_name_hash BINARY(32) NULL,
   PRIMARY KEY (package_root_asset_id, version_hash),
   KEY idx_npm_release_v2_tarball
