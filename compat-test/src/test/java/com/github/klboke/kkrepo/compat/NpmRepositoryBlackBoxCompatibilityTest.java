@@ -65,22 +65,37 @@ class NpmRepositoryBlackBoxCompatibilityTest {
     verifyScopedUpstream(tempDir);
   }
 
-  @SuppressWarnings("unchecked")
+  @Test
+  void coldLockfileDownloadsEncodedScopedTarballWithoutPriorMetadata() throws Exception {
+    verifyScopedUpstream(null, true);
+  }
+
   private void verifyScopedUpstream(Path installRoot) throws Exception {
+    verifyScopedUpstream(installRoot, false);
+  }
+
+  @SuppressWarnings("unchecked")
+  private void verifyScopedUpstream(Path installRoot, boolean coldLockfile) throws Exception {
     CompatConfig config = CompatConfig.load();
     assumeTrue(config.configured() && config.writeEnabled(), "Requires disposable Nexus and kkRepo instances");
     String host = setting("compat.npm.upstreamHost", "NPM_COMPAT_UPSTREAM_HOST").orElse("host.docker.internal");
     NpmFixture fixture = NpmFixture.create("@compat/scoped-" + System.nanoTime(), "0.1.1-beta.1");
     String tarballPath = fixture.packageName() + "/-/" + fixture.packageName() + "-" + fixture.version() + ".tgz";
+    String encodedName = fixture.packageName().replace("/", "%2F") + "-" + fixture.version() + ".tgz";
+    String advertisedPath = coldLockfile ? "downloads/" + fixture.packageName() + "/-/" + encodedName : tarballPath;
     var upstream = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("0.0.0.0", 0), 0);
     String remote = "http://" + host + ":" + upstream.getAddress().getPort() + "/artgalaxy/test/";
     Map<String, Object> root = MAPPER.readValue(fixture.publishJson(), MAP_TYPE);
     root.remove("_attachments");
-    ((Map<String, Object>) version(root, fixture.version()).get("dist")).put("tarball", remote + tarballPath);
+    ((Map<String, Object>) version(root, fixture.version()).get("dist")).put("tarball", remote + advertisedPath + (coldLockfile ? "?token=signed" : ""));
     byte[] metadata = MAPPER.writeValueAsBytes(root);
     upstream.createContext("/artgalaxy/test/", exchange -> {
       String path = exchange.getRequestURI().getPath().substring("/artgalaxy/test/".length());
-      byte[] body = path.equals(fixture.packageName()) ? metadata : path.equals(tarballPath) ? fixture.tarball() : null;
+      String rawPath = exchange.getRequestURI().getRawPath().substring("/artgalaxy/test/".length());
+      boolean correctTarball = coldLockfile
+          ? rawPath.equals(advertisedPath) && "token=signed".equals(exchange.getRequestURI().getRawQuery())
+          : path.equals(tarballPath);
+      byte[] body = path.equals(fixture.packageName()) ? metadata : correctTarball ? fixture.tarball() : null;
       if (body == null) { exchange.sendResponseHeaders(404, -1); }
       else {
         exchange.getResponseHeaders().set("Content-Type", path.endsWith(".tgz") ? "application/octet-stream" : "application/json");
@@ -113,6 +128,13 @@ class NpmRepositoryBlackBoxCompatibilityTest {
             catalog + (nexus ? "/npm/proxy" : ""), "POST", MAPPER.writeValueAsBytes(payload)));
         Endpoint proxy = endpoint.withRepository(name);
         try {
+          if (coldLockfile) {
+            Exchange firstDownload = get(proxy, fixture.packageName() + "/-/" + encodedName);
+            // Nexus 3.94 returns 404 for this custom encoded/signed URL, even after metadata.
+            // kkRepo additionally supports it in direct lockfile downloads against a cold proxy.
+            assertEquals(nexus ? 404 : 200, firstDownload.status(), endpoint.name() + " cold lockfile download");
+            if (!nexus) assertArrayEquals(fixture.tarball(), firstDownload.body());
+          }
           if (installRoot != null) {
             Path project = Files.createDirectories(installRoot.resolve(name));
             Path npmrc = project.resolve(".npmrc");
@@ -128,9 +150,10 @@ class NpmRepositoryBlackBoxCompatibilityTest {
           }
           Map<String, Object> rewritten = getJson(proxy, fixture.packageName().replace("/", "%2f"));
           Exchange result = get(proxy, tarballPath(proxy, rewritten, fixture.version()));
-          assertEquals(200, result.status(), endpoint.name() + " declared tarball");
-          assertArrayEquals(fixture.tarball(), result.body());
-          assertEquals(200, head(proxy, tarballPath(proxy, rewritten, fixture.version())).status());
+          int expectedStatus = nexus && coldLockfile ? 404 : 200;
+          assertEquals(expectedStatus, result.status(), endpoint.name() + " declared tarball");
+          if (expectedStatus == 200) assertArrayEquals(fixture.tarball(), result.body());
+          assertEquals(expectedStatus, head(proxy, tarballPath(proxy, rewritten, fixture.version())).status());
           if (!nexus) {
             assertArrayEquals(fixture.tarball(), get(proxy, tarballPath).body(), "scoped URL from a lockfile");
           }

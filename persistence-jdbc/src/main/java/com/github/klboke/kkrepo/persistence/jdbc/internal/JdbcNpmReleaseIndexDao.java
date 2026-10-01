@@ -37,7 +37,7 @@ public class JdbcNpmReleaseIndexDao implements NpmReleaseIndexDao {
         SELECT package_root_asset_id, source_blob_id, complete_publish_times,
                release_count, indexed_at
         FROM npm_release_index_revision
-        WHERE package_root_asset_id = ? AND source_blob_id = ?
+        WHERE package_root_asset_id = ? AND source_blob_id = ? AND identity_version = 2
         """, (rs, row) -> new Status(
         rs.getLong("package_root_asset_id"),
         rs.getLong("source_blob_id"),
@@ -55,10 +55,12 @@ public class JdbcNpmReleaseIndexDao implements NpmReleaseIndexDao {
       return Optional.empty();
     }
     List<Release> releases = jdbc.query("""
-        SELECT ordinal, version, published_at, invalid_reason, tarball_name
-        FROM npm_release_index_entry
-        WHERE package_root_asset_id = ? AND source_blob_id = ?
-        ORDER BY ordinal
+        SELECT e.ordinal, e.version, e.published_at, e.invalid_reason, e.tarball_name
+        FROM npm_release_index_entry e
+        JOIN npm_release_index_revision r ON r.package_root_asset_id = e.package_root_asset_id
+          AND r.source_blob_id = e.source_blob_id AND r.identity_version = 2
+        WHERE e.package_root_asset_id = ? AND e.source_blob_id = ?
+        ORDER BY e.ordinal
         """, (rs, row) -> mapRelease(rs), packageRootAssetId, sourceBlobId);
     if (releases.size() != status.get().releaseCount()) {
       return Optional.empty();
@@ -105,7 +107,7 @@ public class JdbcNpmReleaseIndexDao implements NpmReleaseIndexDao {
           ON e.package_root_asset_id = r.package_root_asset_id
          AND e.source_blob_id = r.source_blob_id
          AND e.tarball_name_hash = ?
-        WHERE r.package_root_asset_id = ? AND r.source_blob_id = ?
+        WHERE r.package_root_asset_id = ? AND r.source_blob_id = ? AND r.identity_version = 2
         ORDER BY e.ordinal
         """, rs -> {
       if (!rs.next()) {
@@ -149,7 +151,7 @@ public class JdbcNpmReleaseIndexDao implements NpmReleaseIndexDao {
         JOIN npm_release_index_entry e
           ON e.package_root_asset_id = r.package_root_asset_id
          AND e.source_blob_id = r.source_blob_id
-        WHERE r.package_root_asset_id = ? AND r.source_blob_id = ?
+        WHERE r.package_root_asset_id = ? AND r.source_blob_id = ? AND r.identity_version = 2
           AND e.invalid_reason IS NULL
           AND e.published_at > ? AND e.published_at <= ?
         """, Integer.class, packageRootAssetId, sourceBlobId,
@@ -171,7 +173,7 @@ public class JdbcNpmReleaseIndexDao implements NpmReleaseIndexDao {
         JOIN npm_release_index_entry e
           ON e.package_root_asset_id = r.package_root_asset_id
          AND e.source_blob_id = r.source_blob_id
-        WHERE r.package_root_asset_id = ? AND r.source_blob_id = ?
+        WHERE r.package_root_asset_id = ? AND r.source_blob_id = ? AND r.identity_version = 2
           AND e.invalid_reason IS NULL AND e.published_at > ?
         """, rs -> {
       if (!rs.next()) {
@@ -210,8 +212,8 @@ public class JdbcNpmReleaseIndexDao implements NpmReleaseIndexDao {
     jdbc.update("""
         INSERT INTO npm_release_index_revision
           (package_root_asset_id, source_blob_id, complete_publish_times,
-           release_count, indexed_at)
-        VALUES (?, ?, ?, ?, ?)
+           release_count, indexed_at, identity_version)
+        VALUES (?, ?, ?, ?, ?, 2)
         """, packageRootAssetId, sourceBlobId, completePublishTimes,
         safeReleases.size(), nullableTimestamp(indexedAt == null ? Instant.now() : indexedAt));
     insertReleases(packageRootAssetId, sourceBlobId, safeReleases);

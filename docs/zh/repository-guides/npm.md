@@ -76,3 +76,7 @@ pnpm login --registry=https://nexus.example.com/repository/npm-hosted/
 `@scope/package/-/@scope/package-1.0.0.tgz` 路径，也兼容已有 lockfile 中的此类地址。
 原始元数据保存在共享 blob 存储中，不同副本能解析到同一上游地址。跨主机下载需要将目标
 加入代理仓库的 redirect hosts 白名单；上游凭据仍限定在受信任的源站。
+
+直接使用 lockfile 下载时，也会先获取缺失或过期的包元数据，再选择上游 tarball 地址。
+包含 scope 的文件路径与普通文件名保持独立，最小发布年龄检查也使用相同的路径标识。
+升级后的旧发布年龄索引会从已存储的原始元数据自动重建，无需手动回填。

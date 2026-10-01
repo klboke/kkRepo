@@ -91,16 +91,40 @@ public final class NpmMetadata {
   private NpmMetadata() {
   }
 
-  /** A shared comparison identity for encoded upstream URLs and scoped lockfile names. */
-  public static String canonicalTarballName(String tarballUrl) {
+  /** The local tarball suffix preserves a scope prefix rather than merging distinct paths. */
+  public static String tarballFilename(String tarballUrl) {
     if (tarballUrl == null) return null;
     int query = tarballUrl.indexOf('?');
     String path = query < 0 ? tarballUrl : tarballUrl.substring(0, query);
+    int separator = path.lastIndexOf("/-/");
+    if (separator >= 0) return path.substring(separator + 3);
+    if (path.startsWith("@")) return path;
+    return extractTarballName(path);
+  }
+
+  public static String canonicalTarballName(String tarballUrl) {
+    String name = tarballFilename(tarballUrl);
+    if (name == null) return null;
     try {
-      return extractTarballName(URLDecoder.decode(path.replace("+", "%2B"), StandardCharsets.UTF_8));
+      return URLDecoder.decode(name.replace("+", "%2B"), StandardCharsets.UTF_8);
     } catch (IllegalArgumentException invalidEncoding) {
       return null;
     }
+  }
+
+  /** Prefer the exact path. A basename alias is safe only when it identifies one path. */
+  public static String matchingTarballIdentity(java.util.Collection<String> identities, String requested) {
+    // Request paths were already decoded by NpmPathParser. Decoding again would merge literal
+    // percent sequences with different paths (for example %252F and %2F).
+    String expected = requested;
+    if (expected == null) return null;
+    if (identities.contains(expected)) return expected;
+    String basename = extractTarballName(expected);
+    List<String> matches = identities.stream()
+        .filter(java.util.Objects::nonNull)
+        .filter(identity -> basename.equals(extractTarballName(identity)))
+        .distinct().toList();
+    return matches.size() == 1 ? matches.getFirst() : null;
   }
 
   public static String extractTarballName(String tarballUrl) {
@@ -135,19 +159,16 @@ public final class NpmMetadata {
 
   @SuppressWarnings("unchecked")
   public static String findVersionForTarball(Map<String, Object> packageRoot, String tarballName) {
-    String expected = extractTarballName(tarballName);
+    Map<String, String> identities = new LinkedHashMap<>();
     for (Map.Entry<String, Object> entry : versions(packageRoot).entrySet()) {
-      if (entry.getValue() instanceof Map<?, ?> versionMap) {
-        Object dist = ((Map<String, Object>) versionMap).get(DIST);
-        if (dist instanceof Map<?, ?> distMap) {
-          Object tarball = ((Map<String, Object>) distMap).get(TARBALL);
-          if (expected != null && expected.equals(extractTarballName(String.valueOf(tarball)))) {
-            return stringValue(((Map<String, Object>) versionMap).get(VERSION), entry.getKey());
-          }
-        }
+      if (entry.getValue() instanceof Map<?, ?> versionMap
+          && versionMap.get(DIST) instanceof Map<?, ?> distMap) {
+        String identity = canonicalTarballName(stringValue(distMap.get(TARBALL), null));
+        if (identity != null) identities.putIfAbsent(identity, stringValue(versionMap.get(VERSION), entry.getKey()));
       }
     }
-    return null;
+    String identity = matchingTarballIdentity(identities.keySet(), tarballName);
+    return identity == null ? null : identities.get(identity);
   }
 
   @SuppressWarnings("unchecked")
@@ -165,7 +186,7 @@ public final class NpmMetadata {
       Object distRaw = version.get(DIST);
       if (!(distRaw instanceof Map<?, ?> rawDist)) continue;
       Map<String, Object> dist = (Map<String, Object>) rawDist;
-      String tarballName = extractTarballName(stringValue(dist.get(TARBALL), null));
+      String tarballName = tarballFilename(stringValue(dist.get(TARBALL), null));
       if (tarballName != null && !tarballName.isBlank()) {
         dist.put(TARBALL, base + "/" + packageId.tarballPath(tarballName));
       }

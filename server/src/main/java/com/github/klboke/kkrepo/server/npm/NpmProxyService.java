@@ -559,7 +559,7 @@ public class NpmProxyService {
     Optional<NpmReleaseIndexDao.TarballPolicy> indexed = releaseIndexDao.findTarballPolicy(
         metadata.assetId(),
         metadata.blob().id(),
-        NpmMetadata.canonicalTarballName(tarballName),
+        tarballName,
         publishedAfterExclusive,
         publishedAtOrBefore);
     if (indexed.isEmpty()) {
@@ -568,7 +568,7 @@ public class NpmProxyService {
       indexed = releaseIndexDao.findTarballPolicy(
           metadata.assetId(),
           metadata.blob().id(),
-          NpmMetadata.canonicalTarballName(tarballName),
+          tarballName,
           publishedAfterExclusive,
           publishedAtOrBefore);
     }
@@ -580,8 +580,8 @@ public class NpmProxyService {
       return false;
     }
     if (packageId.scope() != null && indexed.get().releases().isEmpty()) {
-      // Older durable indexes may contain an encoded scope prefix. The cached snapshot analysis
-      // canonicalizes those rows too, so upgrades do not require another metadata download.
+      // A legacy basename lockfile can alias a scoped filename only when no other path competes.
+      // Full snapshot analysis retains separate identities and resolves that alias unambiguously.
       return false;
     }
     enforceIndexedTarballRows(
@@ -900,23 +900,34 @@ public class NpmProxyService {
   private String remoteTarballUrl(RepositoryRuntime runtime, NpmPackageId packageId, String tarballName) {
     String fallback = buildRemoteUrl(runtime.proxyRemoteUrl(), packageId.tarballPath(tarballName));
     Optional<CachedAssetMetadata> packageMetadata = lookupCached(runtime, packageId.id());
-    if (packageMetadata.isPresent() && !isFresh(runtime, packageMetadata.get(),
+    if (packageMetadata.isEmpty() || !isFresh(runtime, packageMetadata.get(),
         runtime.metadataMaxAgeMinutesOrDefault(), clock.instant(), NexusCacheType.METADATA)) {
-      // Lockfile downloads need to refresh expired signed URLs even without a packument request.
-      getPackage(runtime, packageId, runtime.name(), true);
+      // Lockfile-only installs must discover custom/encoded URLs even on a completely cold proxy.
+      try {
+        getPackage(runtime, packageId, runtime.name(), true);
+      } catch (NpmExceptions.NpmNotFoundException missingMetadata) {
+        return fallback;
+      }
     }
     Optional<Map<String, Object>> root = hosted.packageRoot(runtime, packageId);
     if (root.isEmpty()) return fallback;
-    String expected = NpmMetadata.canonicalTarballName(tarballName);
-    Set<String> urls = new LinkedHashSet<>();
+    Map<String, Set<String>> identities = new java.util.LinkedHashMap<>();
     for (Object version : NpmMetadata.versions(root.get()).values()) {
       if (!(version instanceof Map<?, ?> metadata)
           || !(metadata.get("dist") instanceof Map<?, ?> dist)
-          || !(dist.get("tarball") instanceof String url)
-          || !Objects.equals(expected, NpmMetadata.canonicalTarballName(url))) continue;
-      urls.add(url);
+          || !(dist.get("tarball") instanceof String url)) continue;
+      String identity = NpmMetadata.canonicalTarballName(url);
+      if (identity != null) identities.computeIfAbsent(identity, ignored -> new LinkedHashSet<>()).add(url);
     }
-    if (urls.isEmpty()) return fallback;
+    String identity = NpmMetadata.matchingTarballIdentity(identities.keySet(), tarballName);
+    Set<String> urls = identity == null ? Set.of() : identities.get(identity);
+    if (urls.isEmpty()) {
+      if (identities.keySet().stream().anyMatch(candidate -> Objects.equals(
+          NpmMetadata.extractTarballName(candidate), NpmMetadata.extractTarballName(tarballName)))) {
+        throw new NpmExceptions.BadUpstreamException("Ambiguous upstream tarball URL for " + packageId.id());
+      }
+      return fallback;
+    }
     if (urls.size() != 1) {
       throw new NpmExceptions.BadUpstreamException("Ambiguous upstream tarball URL for " + packageId.id());
     }

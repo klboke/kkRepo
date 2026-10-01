@@ -576,6 +576,34 @@ class NpmProxyRuntimeTest {
   }
 
   @Test
+  void fetchesAbsentPackumentBeforeColdLockfileDownload() throws Exception {
+    Fixture fixture = fixture();
+    var runtime = runtime(1, 7L);
+    when(fixture.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.empty());
+    when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
+    String refreshed = "https://registry.npmjs.org/custom/demo-1.0.0.tgz?token=fresh";
+    Map<String, Object> root = Map.of("versions", Map.of("1.0.0", Map.of("dist", Map.of("tarball", refreshed))));
+    when(fixture.writer.writePackageRoot(eq(runtime), eq(fixture.storage), eq(7L), eq(PACKAGE),
+        any(), eq("proxy"), isNull(), any())).thenAnswer(invocation -> {
+          when(fixture.hosted.packageRoot(runtime, PACKAGE)).thenReturn(Optional.of(root));
+          return stored("demo", "package-root", "application/json");
+        });
+    doAnswer(invocation -> {
+      HttpRemoteFetcher.Request request = invocation.getArgument(0);
+      HttpRemoteFetcher.ResultHandler<?> handler = invocation.getArgument(2);
+      if (request.url().endsWith("/demo")) {
+        return handler.handle(new HttpRemoteFetcher.Result(200, Map.of(),
+            new ByteArrayInputStream(new ObjectMapper().writeValueAsBytes(root))));
+      }
+      assertEquals(refreshed, request.url());
+      return handler.handle(new HttpRemoteFetcher.Result(404, Map.of(), InputStream.nullInputStream()));
+    }).when(fixture.fetcher).fetchWithBodyRetry(any(), anyString(), any());
+    assertThrows(NpmExceptions.NpmNotFoundException.class,
+        () -> fixture.service.getTarball(runtime, PACKAGE, TARBALL, false));
+    verify(fixture.fetcher, org.mockito.Mockito.times(2)).fetchWithBodyRetry(any(), anyString(), any());
+  }
+
+  @Test
   void resolvesRelativeTarballAndIgnoresUnrelatedOrIncompleteVersionMetadata() throws Exception {
     var runtime = org.mockito.Mockito.spy(runtime(60, 7L));
     when(runtime.proxyRemoteUrl()).thenReturn("https://registry.npmjs.org/artgalaxy/repo");
@@ -859,11 +887,34 @@ class NpmProxyRuntimeTest {
   }
 
   @Test
-  void scopedLockfileUsesCanonicalPolicyLookupAndReadsLegacyEncodedIndex() throws Exception {
+  void cachedNewScopedTarballCannotBorrowAnOldUnscopedVersionsReleaseAge() throws Exception {
+    Instant now = Instant.parse("2026-07-19T12:00:00Z");
+    Fixture fixture = fixtureWithoutReleaseIndex(Clock.fixed(now, ZoneOffset.UTC));
+    var pkg = NpmPackageId.parse("@abc/demo");
+    var runtime = runtime(60, 7L, 60);
+    var metadata = snapshot(pkg.id(), now, "package-root", Map.of("npmFullMetadata", "true"));
+    var tarball = snapshot(pkg.tarballPath("@abc/pkg.tgz"), now, "tarball", Map.of());
+    when(fixture.cache.find(eq(10L), anyString(), any())).thenAnswer(invocation ->
+        Optional.of(pkg.id().equals(invocation.getArgument(1)) ? metadata : tarball));
+    Map<String, Object> root = Map.of("versions", Map.of(
+        "1.0.0", Map.of("dist", Map.of("tarball", "https://registry.npmjs.org/pkg.tgz")),
+        "2.0.0", Map.of("dist", Map.of("tarball", "https://registry.npmjs.org/@abc%2Fpkg.tgz"))),
+        "time", Map.of("1.0.0", now.minusSeconds(7200).toString(), "2.0.0", now.minusSeconds(10).toString()));
+    when(fixture.hosted.packageRoot(metadata)).thenReturn(Optional.of(root));
+    assertThrows(NpmExceptions.ReleaseAgeDenied.class,
+        () -> fixture.service.getTarball(runtime, pkg, "@abc/pkg.tgz", false));
+    MavenResponse old = MavenResponse.noBody(200);
+    when(fixture.hosted.getTarball(runtime, pkg, "pkg.tgz", false)).thenReturn(old);
+    assertSame(old, fixture.service.getTarball(runtime, pkg, "pkg.tgz", false));
+    verify(fixture.hosted, never()).getTarball(runtime, pkg, "@abc/pkg.tgz", false);
+  }
+
+  @Test
+  void scopedLockfileUsesCanonicalPolicyLookupAndRebuildsLegacyIndex() throws Exception {
     Instant now = Instant.parse("2026-07-19T12:00:00Z");
     var pkg = NpmPackageId.parse("@abc/abc-ui");
     String name = "@abc/abc-ui-1.0.0.tgz";
-    String canonical = "abc-ui-1.0.0.tgz";
+    String canonical = "@abc/abc-ui-1.0.0.tgz";
     var runtime = runtime(60, 7L, 60);
     for (boolean legacy : List.of(false, true)) {
       Fixture fixture = fixture(Clock.fixed(now, ZoneOffset.UTC));
@@ -872,18 +923,21 @@ class NpmProxyRuntimeTest {
       when(fixture.cache.find(eq(10L), anyString(), any())).thenAnswer(invocation ->
           Optional.of(pkg.id().equals(invocation.getArgument(1)) ? metadata : tarball));
       var status = new NpmReleaseIndexDao.Status(1L, 2L, true, 1, now);
-      var release = new NpmReleaseIndexDao.Release(0, "1.0.0", now.minusSeconds(7200), null,
-          legacy ? "@abc%2Fabc-ui-1.0.0.tgz" : canonical);
+      var release = new NpmReleaseIndexDao.Release(0, "1.0.0", now.minusSeconds(7200), null, canonical);
+      var policy = new NpmReleaseIndexDao.TarballPolicy(status, false, List.of(release));
       when(fixture.releaseIndexDao.findTarballPolicy(1L, 2L, canonical, null, null))
-          .thenReturn(Optional.of(new NpmReleaseIndexDao.TarballPolicy(status, false,
-              legacy ? List.of() : List.of(release))));
+          .thenReturn(legacy ? Optional.empty() : Optional.of(policy), Optional.of(policy));
+      when(fixture.hosted.packageRoot(metadata)).thenReturn(Optional.of(Map.of(
+          "versions", Map.of("1.0.0", Map.of("dist", Map.of("tarball", "https://registry.npmjs.org/@abc%2Fabc-ui-1.0.0.tgz"))),
+          "time", Map.of("1.0.0", now.minusSeconds(7200).toString()))));
       when(fixture.releaseIndexDao.findSnapshot(1L, 2L))
           .thenReturn(Optional.of(new NpmReleaseIndexDao.Snapshot(status, List.of(release))));
       MavenResponse expected = MavenResponse.noBody(200);
       when(fixture.hosted.getTarball(runtime, pkg, name, false)).thenReturn(expected);
       assertSame(expected, fixture.service.getTarball(runtime, pkg, name, false));
-      verify(fixture.releaseIndexDao).findTarballPolicy(1L, 2L, canonical, null, null);
-      verify(fixture.hosted, never()).packageRoot(any(CachedAssetMetadata.class));
+      verify(fixture.releaseIndexDao, org.mockito.Mockito.times(legacy ? 2 : 1))
+          .findTarballPolicy(1L, 2L, canonical, null, null);
+      verify(fixture.hosted, org.mockito.Mockito.times(legacy ? 1 : 0)).packageRoot(any(CachedAssetMetadata.class));
       verify(fixture.fetcher, never()).fetchWithBodyRetry(any(), anyString(), any());
     }
   }
@@ -1017,6 +1071,8 @@ class NpmProxyRuntimeTest {
     NpmHostedService hosted = mock(NpmHostedService.class);
     ProxyNegativeCache negativeCache = mock(ProxyNegativeCache.class);
     AssetMetadataCache cache = mock(AssetMetadataCache.class);
+    when(cache.find(eq(10L), org.mockito.ArgumentMatchers.argThat(path -> path != null && !path.contains("/-/")), any()))
+        .thenAnswer(invocation -> Optional.of(snapshot(invocation.getArgument(1), clock.instant(), "package-root", Map.of())));
     NpmReleaseIndexDao releaseIndexDao = releaseIndexEnabled
         ? mock(NpmReleaseIndexDao.class)
         : null;

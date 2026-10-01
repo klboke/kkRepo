@@ -159,7 +159,7 @@ final class NpmPackumentResponseWriter {
     if (rawTarball == null || repositoryBaseUrl == null || repositoryBaseUrl.isBlank()) {
       return null;
     }
-    String tarballName = NpmMetadata.extractTarballName(rawTarball.toString());
+    String tarballName = NpmMetadata.tarballFilename(rawTarball.toString());
     if (tarballName == null || tarballName.isBlank()) {
       return null;
     }

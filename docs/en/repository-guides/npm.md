@@ -83,3 +83,8 @@ Huawei CodeArts paths such as `@scope/package/-/@scope/package-1.0.0.tgz`; exist
 using that scoped path are also accepted. The original metadata is persisted in shared blob
 storage, so another replica can resolve the same URL. A different download host must be listed
 in the proxy redirect-host allowlist; upstream credentials remain scoped to the trusted origin.
+
+A direct lockfile download also fetches missing or expired package metadata before selecting the
+upstream tarball URL. Scoped filename paths remain distinct from plain filenames, including in
+minimum-release-age checks. Older release-age indexes are rebuilt lazily from the stored raw
+metadata after upgrade; normal downloads do not require an operator backfill.

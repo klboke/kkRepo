@@ -139,7 +139,7 @@ public final class NpmMinimumReleaseAge {
       }
       releases.put(version, new Release(publishedAt, availableAt, invalidReason));
 
-      String tarball = NpmMetadata.canonicalTarballName(indexed.tarballName());
+      String tarball = indexed.tarballName();
       if (tarball != null) {
         tarballVersions.computeIfAbsent(tarball, ignored -> new ArrayList<>()).add(version);
       }
@@ -439,7 +439,7 @@ public final class NpmMinimumReleaseAge {
     }
 
     public List<String> versionsForTarball(String tarballName) {
-      String expected = NpmMetadata.canonicalTarballName(tarballName);
+      String expected = NpmMetadata.matchingTarballIdentity(tarballVersions.keySet(), tarballName);
       if (expected == null) {
         return List.of();
       }

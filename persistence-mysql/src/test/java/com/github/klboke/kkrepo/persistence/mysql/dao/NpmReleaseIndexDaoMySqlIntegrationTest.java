@@ -41,6 +41,13 @@ class NpmReleaseIndexDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport
 
     assertTrue(inTransaction(() -> dao.replaceIfCurrent(
         assetId, firstBlobId, false, firstRevision, INDEXED_AT)));
+    jdbc().update("UPDATE npm_release_index_revision SET identity_version = 1 WHERE package_root_asset_id = ?", assetId);
+    assertTrue(dao.findStatus(assetId, firstBlobId).isEmpty());
+    assertTrue(dao.findSnapshot(assetId, firstBlobId).isEmpty());
+    assertTrue(dao.findTarballPolicy(assetId, firstBlobId, "demo-2.0.0.tgz", null, null).isEmpty());
+    assertFalse(dao.hasMaturityBoundary(assetId, firstBlobId, FIRST_PUBLISHED, SECOND_PUBLISHED));
+    assertTrue(dao.findNextPublishedAfter(assetId, firstBlobId, FIRST_PUBLISHED).isEmpty());
+    assertTrue(inTransaction(() -> dao.replaceIfCurrent(assetId, firstBlobId, false, firstRevision, INDEXED_AT)));
     var snapshot = dao.findSnapshot(assetId, firstBlobId).orElseThrow();
     assertFalse(snapshot.status().completePublishTimes());
     assertEquals(firstRevision, snapshot.releases());
