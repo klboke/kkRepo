@@ -276,6 +276,27 @@ class NpmMinimumReleaseAgeTest {
   }
 
   @Test
+  void scopedEncodedTarballsUseTheSameIdentityInNewAndLegacyIndexes() {
+    Instant published = Instant.parse("2026-01-01T00:00:00Z");
+    String url = "https://registry.example/@abc/abc-ui/-/@abc%2Fabc-ui-1.0.0.tgz?token=1";
+    Map<String, Object> root = Map.of(
+        "versions", Map.of("1.0.0", Map.of("dist", Map.of("tarball", url))),
+        "time", Map.of("1.0.0", published.toString()));
+    var index = NpmMinimumReleaseAge.index(root);
+    assertEquals("abc-ui-1.0.0.tgz", index.releases().getFirst().tarballName());
+    var legacy = new NpmMinimumReleaseAge.ReleaseIndex(List.of(
+        new NpmMinimumReleaseAge.IndexedRelease("1.0.0", published, null, "@abc%2Fabc-ui-1.0.0.tgz")));
+    for (var candidate : List.of(index, legacy)) {
+      var analysis = NpmMinimumReleaseAge.analyze(candidate, 60);
+      for (String name : List.of("abc-ui-1.0.0.tgz", "@abc/abc-ui-1.0.0.tgz", "@abc%2Fabc-ui-1.0.0.tgz")) {
+        assertEquals(List.of("1.0.0"), analysis.versionsForTarball(name));
+      }
+    }
+    assertEquals("demo-1.0.0+build.tgz", NpmMetadata.canonicalTarballName("demo-1.0.0+build.tgz"));
+    assertEquals(null, NpmMetadata.canonicalTarballName("bad%XX.tgz"));
+  }
+
+  @Test
   @SuppressWarnings("unchecked")
   void findsEveryVersionThatSharesATarballFilename() {
     Map<String, Object> root = packument(
