@@ -1,7 +1,5 @@
 package com.github.klboke.kkrepo.protocol.npm;
 
-import java.util.Arrays;
-
 public final class NpmPathParser {
   public NpmPath parse(String rawPath) {
     String raw = rawPath == null ? "" : rawPath;
@@ -13,6 +11,10 @@ public final class NpmPathParser {
       return simple(NpmPath.Kind.UNKNOWN, raw);
     }
     while (decoded.startsWith("/")) decoded = decoded.substring(1);
+    // Empty tarball segments are URL data; never collapse them into another asset identity.
+    if (decoded.contains("/-/") && (decoded.contains("//") || decoded.endsWith("/"))) {
+      return simple(NpmPath.Kind.UNKNOWN, raw);
+    }
     while (decoded.endsWith("/") && decoded.length() > 1) {
       decoded = decoded.substring(0, decoded.length() - 1);
     }
@@ -74,9 +76,7 @@ public final class NpmPathParser {
     if (decoded.isBlank()) {
       return simple(NpmPath.Kind.REPOSITORY_ROOT, raw);
     }
-    String[] parts = Arrays.stream(decoded.split("/"))
-        .filter(s -> !s.isEmpty())
-        .toArray(String[]::new);
+    String[] parts = decoded.split("/", -1);
     if (parts.length == 0) {
       return simple(NpmPath.Kind.UNKNOWN, raw);
     }
@@ -112,7 +112,7 @@ public final class NpmPathParser {
           && (packageId.scope() == null || !parts[index + 1].equals("@" + packageId.scope()))) {
         return simple(NpmPath.Kind.UNKNOWN, raw);
       }
-      for (int i = index + 1; i < end; i++) {
+      for (int i = index + 1; i < parts.length; i++) {
         if (parts[i].isEmpty() || parts[i].equals(".") || parts[i].equals("..")) {
           return simple(NpmPath.Kind.UNKNOWN, raw);
         }

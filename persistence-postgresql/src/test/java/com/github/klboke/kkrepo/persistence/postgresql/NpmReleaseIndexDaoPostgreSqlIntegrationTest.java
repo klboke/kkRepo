@@ -31,13 +31,6 @@ class NpmReleaseIndexDaoPostgreSqlIntegrationTest extends PostgreSqlIntegrationT
 
     assertTrue(inTransaction(() -> dao.replaceIfCurrent(
         assetId, firstBlobId, false, firstRevision, INDEXED_AT)));
-    jdbc().update("UPDATE npm_release_index_revision SET identity_version = 1 WHERE package_root_asset_id = ?", assetId);
-    assertTrue(dao.findStatus(assetId, firstBlobId).isEmpty());
-    assertTrue(dao.findSnapshot(assetId, firstBlobId).isEmpty());
-    assertTrue(dao.findTarballPolicy(assetId, firstBlobId, "demo-2.0.0.tgz", null, null).isEmpty());
-    assertFalse(dao.hasMaturityBoundary(assetId, firstBlobId, FIRST_PUBLISHED, SECOND_PUBLISHED));
-    assertTrue(dao.findNextPublishedAfter(assetId, firstBlobId, FIRST_PUBLISHED).isEmpty());
-    assertTrue(inTransaction(() -> dao.replaceIfCurrent(assetId, firstBlobId, false, firstRevision, INDEXED_AT)));
     var snapshot = dao.findSnapshot(assetId, firstBlobId).orElseThrow();
     assertFalse(snapshot.status().completePublishTimes());
     assertEquals(firstRevision, snapshot.releases());
@@ -72,6 +65,51 @@ class NpmReleaseIndexDaoPostgreSqlIntegrationTest extends PostgreSqlIntegrationT
     assertTrue(dao.findStatus(assetId, firstBlobId).isEmpty());
     assertTrue(dao.findByTarball(assetId, firstBlobId, "demo-2.0.0.tgz").isEmpty());
     assertEquals(secondRevision, dao.findSnapshot(assetId, secondBlobId).orElseThrow().releases());
+  }
+
+  @Test
+  void oldAndNewReplicasKeepTheirTarballIdentityIndexesIsolated() {
+    long repositoryId = insertRepository("npm-rolling", "npm");
+    long blobId = insertBlob(repositoryId, "npm/demo/packument.json");
+    long assetId = insertPackageRootAsset(repositoryId, blobId);
+    NpmReleaseIndexDao dao = stores().npmReleaseIndexes();
+    jdbc().update("""
+        INSERT INTO npm_release_index_revision
+          (package_root_asset_id, source_blob_id, complete_publish_times, release_count, indexed_at)
+        VALUES (?, ?, TRUE, 1, ?)
+        """, assetId, blobId, java.sql.Timestamp.from(INDEXED_AT));
+    jdbc().update("""
+        INSERT INTO npm_release_index_entry
+          (package_root_asset_id, source_blob_id, ordinal, version, version_hash,
+           published_at, tarball_name, tarball_name_hash)
+        VALUES (?, ?, 0, '1.0.0', ?, ?, 'demo.tgz', ?)
+        """, assetId, blobId,
+        com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes.sha256("1.0.0"),
+        java.sql.Timestamp.from(FIRST_PUBLISHED),
+        com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes.sha256("demo.tgz"));
+    assertTrue(dao.findStatus(assetId, blobId).isEmpty());
+    assertTrue(dao.findSnapshot(assetId, blobId).isEmpty());
+    assertTrue(dao.findTarballPolicy(assetId, blobId, "demo.tgz", null, null).isEmpty());
+    assertFalse(dao.hasMaturityBoundary(assetId, blobId, FIRST_PUBLISHED, SECOND_PUBLISHED));
+    assertTrue(dao.findNextPublishedAfter(assetId, blobId, Instant.EPOCH).isEmpty());
+
+    var fullPath = List.of(new Release(0, "1.0.0", FIRST_PUBLISHED, null, "signed/demo.tgz"));
+    assertTrue(inTransaction(() -> dao.replaceIfCurrent(assetId, blobId, true, fullPath, INDEXED_AT)));
+    // An old binary still reads its original basename and never sees full-path entries.
+    assertEquals("demo.tgz", jdbc().queryForObject(
+        "SELECT tarball_name FROM npm_release_index_entry WHERE package_root_asset_id = ?",
+        String.class, assetId));
+    assertEquals(fullPath, dao.findByTarball(assetId, blobId, "signed/demo.tgz").orElseThrow());
+    // Old writers delete/rebuild their revision, without deleting a new replica's snapshot.
+    jdbc().update("DELETE FROM npm_release_index_revision WHERE package_root_asset_id = ?", assetId);
+    assertEquals(fullPath, dao.findSnapshot(assetId, blobId).orElseThrow().releases());
+    assertTrue(inTransaction(() -> dao.replaceIfCurrent(assetId, blobId, true, fullPath, INDEXED_AT)));
+    assertEquals(0, jdbc().queryForObject(
+        "SELECT COUNT(*) FROM npm_release_index_revision WHERE package_root_asset_id = ?", Integer.class, assetId));
+    jdbc().update("DELETE FROM asset WHERE id = ?", assetId);
+    assertTrue(dao.findSnapshot(assetId, blobId).isEmpty());
+    assertEquals(0, jdbc().queryForObject(
+        "SELECT COUNT(*) FROM npm_release_index_v2_entry WHERE package_root_asset_id = ?", Integer.class, assetId));
   }
 
   private long insertRepository(String name, String format) {

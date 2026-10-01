@@ -186,7 +186,7 @@ public class NpmProxyService {
     return switch (path.kind()) {
       case PACKAGE_ROOT, PACKAGE_VERSION -> getPackage(runtime, path.packageId(), repositoryBaseUrl, headOnly, variant);
       // Revision suffixes belong to hosted DELETE routes; in proxy GET/HEAD they are URL data.
-      case TARBALL -> getTarball(runtime, path.packageId(), path.readTarballName(), headOnly);
+      case TARBALL -> getTarball(runtime, path.packageId(), path.readTarballName(), path.rawPath(), headOnly);
       case DIST_TAGS -> getDistTags(runtime, path.packageId(), headOnly);
       default -> throw new NpmExceptions.NpmNotFoundException(path.rawPath());
     };
@@ -289,6 +289,15 @@ public class NpmProxyService {
       NpmPackageId packageId,
       String tarballName,
       boolean headOnly) {
+    return getTarball(runtime, packageId, tarballName, packageId.tarballPath(tarballName), headOnly);
+  }
+
+  private MavenResponse getTarball(
+      RepositoryRuntime runtime,
+      NpmPackageId packageId,
+      String tarballName,
+      String rawPath,
+      boolean headOnly) {
     if (runtime.minimumReleaseAgeEnabled()) {
       enforceTarballReleaseAge(runtime, packageId, tarballName, clock.instant());
     }
@@ -307,7 +316,7 @@ public class NpmProxyService {
       if (cached.isPresent()) return hosted.getTarball(runtime, packageId, tarballName, headOnly);
       throw new NpmExceptions.BadUpstreamException("Upstream temporarily blocked: " + runtime.proxyRemoteUrl());
     }
-    NpmAssetWriter.Stored stored = fetchAndCacheTarball(runtime, packageId, tarballName, cached, headOnly, now);
+    NpmAssetWriter.Stored stored = fetchAndCacheTarball(runtime, packageId, tarballName, rawPath, cached, headOnly, now);
     if (stored != null) {
       return tarballResponseFromStored(stored, headOnly);
     }
@@ -899,8 +908,10 @@ public class NpmProxyService {
    * Resolve from the original packument persisted in shared blob storage, so cold downloads on
    * another replica use the same upstream URL. Cached tarball reads do not load the packument.
    */
-  private String remoteTarballUrl(RepositoryRuntime runtime, NpmPackageId packageId, String tarballName) {
-    String fallback = buildRemoteUrl(runtime.proxyRemoteUrl(), packageId.tarballPath(tarballName));
+  private String remoteTarballUrl(
+      RepositoryRuntime runtime, NpmPackageId packageId, String tarballName, String rawPath) {
+    // Preserve the incoming encoding if packument discovery is unavailable.
+    String fallback = buildRemoteUrl(runtime.proxyRemoteUrl(), rawPath);
     Optional<CachedAssetMetadata> packageMetadata = lookupCached(runtime, packageId.id());
     if (packageMetadata.isEmpty() || !isFresh(runtime, packageMetadata.get(),
         runtime.metadataMaxAgeMinutesOrDefault(), clock.instant(), NexusCacheType.METADATA)) {
@@ -955,10 +966,11 @@ public class NpmProxyService {
       RepositoryRuntime runtime,
       NpmPackageId packageId,
       String tarballName,
+      String rawPath,
       Optional<CachedAssetMetadata> cached,
       boolean headOnly,
       Instant now) {
-    String url = remoteTarballUrl(runtime, packageId, tarballName);
+    String url = remoteTarballUrl(runtime, packageId, tarballName, rawPath);
     String sourceHash = java.util.HexFormat.of().formatHex(PersistenceHashes.sha256(url));
     boolean sameSource = cached.filter(asset -> asset.blob() != null)
         .map(asset -> sourceHash.equals(stringAttr(asset.blob().attributes(), "npmTarballSourceUrlHash")))

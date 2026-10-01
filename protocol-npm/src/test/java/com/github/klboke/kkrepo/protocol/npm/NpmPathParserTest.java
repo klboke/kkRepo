@@ -38,6 +38,15 @@ class NpmPathParserTest {
   }
 
   @Test
+  void doesNotCollapseEmptyTarballSegmentsIntoOtherAssets() {
+    for (String path : new String[] {"demo/-/signed//demo.tgz", "demo/-/signed%2F%2Fdemo.tgz",
+        "@abc/demo/-/@abc//demo.tgz", "demo//-/demo.tgz", "demo/-/demo.tgz/",
+        "demo/-/demo.tgz/-rev//123", "demo/-/demo.tgz/-rev/", "demo/-/demo.tgz/-rev/.."}) {
+      assertEquals(NpmPath.Kind.UNKNOWN, parser.parse(path).kind(), path);
+    }
+  }
+
+  @Test
   void scopedPackagesKeepTheirSeparatorAndAreDecodedOnlyOnce() {
     assertEquals("@scope/name", parser.parse("@scope%2fname").packageId().id());
     assertEquals("%61bc", parser.parse("%2561bc").packageId().id());

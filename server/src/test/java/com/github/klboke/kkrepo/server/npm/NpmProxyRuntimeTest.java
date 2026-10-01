@@ -631,6 +631,36 @@ class NpmProxyRuntimeTest {
   }
 
   @Test
+  void metadataFailureFallbackPreservesIncomingScopedPathEncoding() throws Exception {
+    for (int status : List.of(404, 503, 0)) {
+      for (boolean headOnly : List.of(false, true)) {
+        Fixture fixture = fixture();
+        var runtime = runtime(1, 7L);
+        String rawPath = "@abc%2Fdemo/-/@abc%2Fdemo-1.0.0.tgz";
+        var path = new com.github.klboke.kkrepo.protocol.npm.NpmPathParser().parse(rawPath);
+        when(fixture.cache.find(eq(10L), anyString(), any())).thenReturn(Optional.empty());
+        when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
+        when(fixture.writer.writeTarball(eq(runtime), any(), eq(7L), eq(path.packageId()),
+            anyString(), eq(path.readTarballName()), any(), any(), eq("proxy"), isNull(), any(), eq(!headOnly)))
+            .thenReturn(stored(path.assetPath(), "tarball", "application/octet-stream"));
+        doAnswer(invocation -> {
+          HttpRemoteFetcher.Request request = invocation.getArgument(0);
+          HttpRemoteFetcher.ResultHandler<?> handler = invocation.getArgument(2);
+          if (request.url().endsWith("/@abc%2Fdemo")) {
+            if (status == 0) throw new java.io.IOException("metadata unavailable");
+            return handler.handle(new HttpRemoteFetcher.Result(status, Map.of(), InputStream.nullInputStream()));
+          }
+          assertEquals("https://registry.npmjs.org/" + rawPath, request.url());
+          return handler.handle(new HttpRemoteFetcher.Result(200, Map.of(),
+              new ByteArrayInputStream("tarball".getBytes(StandardCharsets.UTF_8))));
+        }).when(fixture.fetcher).fetchWithBodyRetry(any(), anyString(), any());
+        assertEquals(200, fixture.service.get(runtime, path, "http://local/repository/npm", headOnly).status());
+        verify(fixture.fetcher, org.mockito.Mockito.times(2)).fetchWithBodyRetry(any(), anyString(), any());
+      }
+    }
+  }
+
+  @Test
   void tarballValidatorsAreBoundToTheExactPersistedSourceUrl() throws Exception {
     String original = "https://registry.npmjs.org/download/" + TARBALL + "?token=old";
     for (String selected : List.of(original, original.replace("old", "new"), original.replace("download/", "other/"))) {

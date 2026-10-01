@@ -360,6 +360,8 @@ public abstract class PersistenceApiContract {
         "migration_checkpoint",
         "migration_job",
         "migration_validation_result",
+        "npm_release_index_v2_entry",
+        "npm_release_index_v2_revision",
         "npm_release_index_entry",
         "npm_release_index_revision",
         "proxy_fetch_lease",
