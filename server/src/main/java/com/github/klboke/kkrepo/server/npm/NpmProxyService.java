@@ -27,7 +27,6 @@ import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.URI;
-import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
@@ -560,7 +559,7 @@ public class NpmProxyService {
     Optional<NpmReleaseIndexDao.TarballPolicy> indexed = releaseIndexDao.findTarballPolicy(
         metadata.assetId(),
         metadata.blob().id(),
-        tarballName,
+        NpmMetadata.canonicalTarballName(tarballName),
         publishedAfterExclusive,
         publishedAtOrBefore);
     if (indexed.isEmpty()) {
@@ -569,7 +568,7 @@ public class NpmProxyService {
       indexed = releaseIndexDao.findTarballPolicy(
           metadata.assetId(),
           metadata.blob().id(),
-          tarballName,
+          NpmMetadata.canonicalTarballName(tarballName),
           publishedAfterExclusive,
           publishedAtOrBefore);
     }
@@ -578,6 +577,11 @@ public class NpmProxyService {
       return false;
     }
     if (indexed.get().maturityBoundaryCrossed()) {
+      return false;
+    }
+    if (packageId.scope() != null && indexed.get().releases().isEmpty()) {
+      // Older durable indexes may contain an encoded scope prefix. The cached snapshot analysis
+      // canonicalizes those rows too, so upgrades do not require another metadata download.
       return false;
     }
     enforceIndexedTarballRows(
@@ -903,13 +907,13 @@ public class NpmProxyService {
     }
     Optional<Map<String, Object>> root = hosted.packageRoot(runtime, packageId);
     if (root.isEmpty()) return fallback;
-    String expected = NpmMetadata.extractTarballName(tarballName);
+    String expected = NpmMetadata.canonicalTarballName(tarballName);
     Set<String> urls = new LinkedHashSet<>();
     for (Object version : NpmMetadata.versions(root.get()).values()) {
       if (!(version instanceof Map<?, ?> metadata)
           || !(metadata.get("dist") instanceof Map<?, ?> dist)
           || !(dist.get("tarball") instanceof String url)
-          || !Objects.equals(expected, decodedTarballName(url))) continue;
+          || !Objects.equals(expected, NpmMetadata.canonicalTarballName(url))) continue;
       urls.add(url);
     }
     if (urls.isEmpty()) return fallback;
@@ -931,17 +935,6 @@ public class NpmProxyService {
       return target.toString();
     } catch (IllegalArgumentException e) {
       throw new NpmExceptions.BadUpstreamException("Invalid upstream tarball URL for " + packageId.id());
-    }
-  }
-
-  private static String decodedTarballName(String url) {
-    int query = url.indexOf('?');
-    String path = query < 0 ? url : url.substring(0, query);
-    try {
-      return NpmMetadata.extractTarballName(
-          URLDecoder.decode(path.replace("+", "%2B"), StandardCharsets.UTF_8));
-    } catch (IllegalArgumentException e) {
-      throw new NpmExceptions.BadUpstreamException("Invalid upstream tarball URL encoding");
     }
   }
 

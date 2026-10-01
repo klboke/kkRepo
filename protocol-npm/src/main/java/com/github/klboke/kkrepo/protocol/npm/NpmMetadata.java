@@ -1,5 +1,7 @@
 package com.github.klboke.kkrepo.protocol.npm;
 
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -87,6 +89,18 @@ public final class NpmMetadata {
       "readmeFilename");
 
   private NpmMetadata() {
+  }
+
+  /** A shared comparison identity for encoded upstream URLs and scoped lockfile names. */
+  public static String canonicalTarballName(String tarballUrl) {
+    if (tarballUrl == null) return null;
+    int query = tarballUrl.indexOf('?');
+    String path = query < 0 ? tarballUrl : tarballUrl.substring(0, query);
+    try {
+      return extractTarballName(URLDecoder.decode(path.replace("+", "%2B"), StandardCharsets.UTF_8));
+    } catch (IllegalArgumentException invalidEncoding) {
+      return null;
+    }
   }
 
   public static String extractTarballName(String tarballUrl) {

@@ -859,6 +859,36 @@ class NpmProxyRuntimeTest {
   }
 
   @Test
+  void scopedLockfileUsesCanonicalPolicyLookupAndReadsLegacyEncodedIndex() throws Exception {
+    Instant now = Instant.parse("2026-07-19T12:00:00Z");
+    var pkg = NpmPackageId.parse("@abc/abc-ui");
+    String name = "@abc/abc-ui-1.0.0.tgz";
+    String canonical = "abc-ui-1.0.0.tgz";
+    var runtime = runtime(60, 7L, 60);
+    for (boolean legacy : List.of(false, true)) {
+      Fixture fixture = fixture(Clock.fixed(now, ZoneOffset.UTC));
+      var metadata = snapshot(pkg.id(), now, "package-root", Map.of("npmFullMetadata", "true"));
+      var tarball = snapshot(pkg.tarballPath(name), now, "tarball", Map.of());
+      when(fixture.cache.find(eq(10L), anyString(), any())).thenAnswer(invocation ->
+          Optional.of(pkg.id().equals(invocation.getArgument(1)) ? metadata : tarball));
+      var status = new NpmReleaseIndexDao.Status(1L, 2L, true, 1, now);
+      var release = new NpmReleaseIndexDao.Release(0, "1.0.0", now.minusSeconds(7200), null,
+          legacy ? "@abc%2Fabc-ui-1.0.0.tgz" : canonical);
+      when(fixture.releaseIndexDao.findTarballPolicy(1L, 2L, canonical, null, null))
+          .thenReturn(Optional.of(new NpmReleaseIndexDao.TarballPolicy(status, false,
+              legacy ? List.of() : List.of(release))));
+      when(fixture.releaseIndexDao.findSnapshot(1L, 2L))
+          .thenReturn(Optional.of(new NpmReleaseIndexDao.Snapshot(status, List.of(release))));
+      MavenResponse expected = MavenResponse.noBody(200);
+      when(fixture.hosted.getTarball(runtime, pkg, name, false)).thenReturn(expected);
+      assertSame(expected, fixture.service.getTarball(runtime, pkg, name, false));
+      verify(fixture.releaseIndexDao).findTarballPolicy(1L, 2L, canonical, null, null);
+      verify(fixture.hosted, never()).packageRoot(any(CachedAssetMetadata.class));
+      verify(fixture.fetcher, never()).fetchWithBodyRetry(any(), anyString(), any());
+    }
+  }
+
+  @Test
   void indexedSnapshotAvoidsRebuildingAnalysisButStillWritesPackumentBody() throws Exception {
     Instant now = Instant.parse("2026-07-19T12:00:00Z");
     Fixture fixture = fixture(Clock.fixed(now, ZoneOffset.UTC));

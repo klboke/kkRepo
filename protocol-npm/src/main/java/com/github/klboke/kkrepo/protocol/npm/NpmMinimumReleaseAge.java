@@ -139,7 +139,7 @@ public final class NpmMinimumReleaseAge {
       }
       releases.put(version, new Release(publishedAt, availableAt, invalidReason));
 
-      String tarball = indexed.tarballName();
+      String tarball = NpmMetadata.canonicalTarballName(indexed.tarballName());
       if (tarball != null) {
         tarballVersions.computeIfAbsent(tarball, ignored -> new ArrayList<>()).add(version);
       }
@@ -171,7 +171,7 @@ public final class NpmMinimumReleaseAge {
       return null;
     }
     Object rawTarball = dist.get(NpmMetadata.TARBALL);
-    return rawTarball == null ? null : NpmMetadata.extractTarballName(rawTarball.toString());
+    return rawTarball == null ? null : NpmMetadata.canonicalTarballName(rawTarball.toString());
   }
 
   @SuppressWarnings("unchecked")
@@ -439,7 +439,7 @@ public final class NpmMinimumReleaseAge {
     }
 
     public List<String> versionsForTarball(String tarballName) {
-      String expected = NpmMetadata.extractTarballName(tarballName);
+      String expected = NpmMetadata.canonicalTarballName(tarballName);
       if (expected == null) {
         return List.of();
       }
