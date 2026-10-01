@@ -44,6 +44,19 @@ import org.junit.jupiter.params.provider.ValueSource;
 class HttpRemoteFetcherTest {
 
   @Test
+  void pinnedAlternateHostEnforcesEveryRedirectWithoutCredentials() {
+    var request = HttpRemoteFetcher.Request.get("https://cdn.example.org/demo.tgz")
+        .withRedirectBoundary();
+    URI current = URI.create(request.url());
+    assertEquals("cdn.example.org", request.trustedHostForRedirect(current, current.resolve("/next.tgz")));
+    assertNull(request.authorizationHeaderForRedirect(current, current.resolve("/next.tgz")));
+    assertThrows(SecurityValidationException.class, () -> request.trustedHostForRedirect(
+        current, URI.create("https://unapproved.example/demo.tgz")));
+    assertThrows(SecurityValidationException.class, () -> request.authorizationHeaderForRedirect(
+        current, URI.create("https://unapproved.example/demo.tgz")));
+  }
+
+  @Test
   void resultParsesContentLengthDefensively() {
     assertEquals(
         42L,

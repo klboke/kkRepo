@@ -528,19 +528,51 @@ class NpmProxyRuntimeTest {
   void tarballUsesPersistedPackumentUrlIncludingScopePrefixEncodingAndQuery() throws Exception {
     var runtime = runtime(60, 7L);
     var pkg = NpmPackageId.parse("@abc/abc-ui");
-    String original = "https://registry.npmjs.org/artgalaxy/repo/@abc%2fabc-ui/-/@abc/abc-ui-0.1.1-beta.1.tgz?download=1";
-    for (String name : List.of("abc-ui-0.1.1-beta.1.tgz", "@abc/abc-ui-0.1.1-beta.1.tgz")) {
-      Fixture fixture = fixture();
-      when(fixture.hosted.packageRoot(runtime, pkg)).thenReturn(Optional.of(Map.of("versions", Map.of(
-          "0.1.1-beta.1", Map.of("dist", Map.of("tarball", original))))));
-      respond(fixture.fetcher, new HttpRemoteFetcher.Result(404, Map.of(), InputStream.nullInputStream()));
-      assertThrows(NpmExceptions.NpmNotFoundException.class,
-          () -> fixture.service.getTarball(runtime, pkg, name, false));
-      var request = ArgumentCaptor.forClass(HttpRemoteFetcher.Request.class);
-      verify(fixture.fetcher).fetchWithBodyRetry(request.capture(), eq(pkg.tarballPath(name)), any());
-      assertEquals(original, request.getValue().url());
-      assertEquals("registry.npmjs.org", request.getValue().trustedHost());
+    for (String scopedFilename : List.of("@abc/", "@abc%2F", "%40abc%2f")) {
+      String original = "https://registry.npmjs.org/artgalaxy/repo/@abc%2fabc-ui/-/"
+          + scopedFilename + "abc-ui-0.1.1-beta.1.tgz?download=1";
+      for (String name : List.of("abc-ui-0.1.1-beta.1.tgz", "@abc/abc-ui-0.1.1-beta.1.tgz")) {
+        Fixture fixture = fixture();
+        when(fixture.hosted.packageRoot(runtime, pkg)).thenReturn(Optional.of(Map.of("versions", Map.of(
+            "0.1.1-beta.1", Map.of("dist", Map.of("tarball", original))))));
+        respond(fixture.fetcher, new HttpRemoteFetcher.Result(404, Map.of(), InputStream.nullInputStream()));
+        assertThrows(NpmExceptions.NpmNotFoundException.class,
+            () -> fixture.service.getTarball(runtime, pkg, name, false));
+        var request = ArgumentCaptor.forClass(HttpRemoteFetcher.Request.class);
+        verify(fixture.fetcher).fetchWithBodyRetry(request.capture(), eq(pkg.tarballPath(name)), any());
+        assertEquals(original, request.getValue().url());
+        assertEquals("registry.npmjs.org", request.getValue().trustedHost());
+      }
     }
+  }
+
+  @Test
+  void refreshesStalePackumentBeforeLockfileDownload() throws Exception {
+    Fixture fixture = fixture();
+    var runtime = runtime(1, 7L);
+    when(fixture.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.of(
+        snapshot("demo", Instant.EPOCH, "package-root", Map.of())));
+    when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
+    String refreshed = "https://registry.npmjs.org/custom/demo-1.0.0.tgz?token=fresh";
+    Map<String, Object> root = Map.of("versions", Map.of("1.0.0", Map.of("dist", Map.of("tarball", refreshed))));
+    when(fixture.writer.writePackageRoot(eq(runtime), eq(fixture.storage), eq(7L), eq(PACKAGE),
+        any(), eq("proxy"), isNull(), any())).thenAnswer(invocation -> {
+          when(fixture.hosted.packageRoot(runtime, PACKAGE)).thenReturn(Optional.of(root));
+          return stored("demo", "package-root", "application/json");
+        });
+    doAnswer(invocation -> {
+      HttpRemoteFetcher.Request request = invocation.getArgument(0);
+      HttpRemoteFetcher.ResultHandler<?> handler = invocation.getArgument(2);
+      if (request.url().endsWith("/demo")) {
+        return handler.handle(new HttpRemoteFetcher.Result(200, Map.of(),
+            new ByteArrayInputStream(new ObjectMapper().writeValueAsBytes(root))));
+      }
+      assertEquals(refreshed, request.url());
+      return handler.handle(new HttpRemoteFetcher.Result(404, Map.of(), InputStream.nullInputStream()));
+    }).when(fixture.fetcher).fetchWithBodyRetry(any(), anyString(), any());
+    assertThrows(NpmExceptions.NpmNotFoundException.class,
+        () -> fixture.service.getTarball(runtime, PACKAGE, TARBALL, false));
+    verify(fixture.fetcher, org.mockito.Mockito.times(2)).fetchWithBodyRetry(any(), anyString(), any());
   }
 
   @Test
@@ -595,6 +627,7 @@ class NpmProxyRuntimeTest {
     var request = ArgumentCaptor.forClass(HttpRemoteFetcher.Request.class);
     verify(fixture.fetcher).fetchWithBodyRetry(request.capture(), eq(TARBALL_PATH), any());
     assertNull(request.getValue().authorizationHeader());
+    assertEquals("cdn.example.org", request.getValue().trustedHost());
   }
 
   @Test

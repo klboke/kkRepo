@@ -27,6 +27,7 @@ import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.URI;
+import java.net.URLDecoder;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
@@ -894,6 +895,12 @@ public class NpmProxyService {
    */
   private String remoteTarballUrl(RepositoryRuntime runtime, NpmPackageId packageId, String tarballName) {
     String fallback = buildRemoteUrl(runtime.proxyRemoteUrl(), packageId.tarballPath(tarballName));
+    Optional<CachedAssetMetadata> packageMetadata = lookupCached(runtime, packageId.id());
+    if (packageMetadata.isPresent() && !isFresh(runtime, packageMetadata.get(),
+        runtime.metadataMaxAgeMinutesOrDefault(), clock.instant(), NexusCacheType.METADATA)) {
+      // Lockfile downloads need to refresh expired signed URLs even without a packument request.
+      getPackage(runtime, packageId, runtime.name(), true);
+    }
     Optional<Map<String, Object>> root = hosted.packageRoot(runtime, packageId);
     if (root.isEmpty()) return fallback;
     String expected = NpmMetadata.extractTarballName(tarballName);
@@ -902,7 +909,7 @@ public class NpmProxyService {
       if (!(version instanceof Map<?, ?> metadata)
           || !(metadata.get("dist") instanceof Map<?, ?> dist)
           || !(dist.get("tarball") instanceof String url)
-          || !Objects.equals(expected, NpmMetadata.extractTarballName(url))) continue;
+          || !Objects.equals(expected, decodedTarballName(url))) continue;
       urls.add(url);
     }
     if (urls.isEmpty()) return fallback;
@@ -927,6 +934,17 @@ public class NpmProxyService {
     }
   }
 
+  private static String decodedTarballName(String url) {
+    int query = url.indexOf('?');
+    String path = query < 0 ? url : url.substring(0, query);
+    try {
+      return NpmMetadata.extractTarballName(
+          URLDecoder.decode(path.replace("+", "%2B"), StandardCharsets.UTF_8));
+    } catch (IllegalArgumentException e) {
+      throw new NpmExceptions.BadUpstreamException("Invalid upstream tarball URL encoding");
+    }
+  }
+
   private NpmAssetWriter.Stored fetchAndCacheTarball(
       RepositoryRuntime runtime,
       NpmPackageId packageId,
@@ -939,7 +957,8 @@ public class NpmProxyService {
     HttpRemoteFetcher.Request req = new HttpRemoteFetcher.Request(
         url, conditional.etag(), conditional.lastModified(), null, false)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
-        .withRepository(runtime);
+        .withRepository(runtime)
+        .withRedirectBoundary();
     try {
       return fetcher.fetchWithBodyRetry(req, packageId.tarballPath(tarballName), result -> {
         int status = result.status();

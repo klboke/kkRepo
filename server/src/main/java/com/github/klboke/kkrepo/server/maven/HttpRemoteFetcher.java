@@ -466,6 +466,13 @@ public class HttpRemoteFetcher {
       return new Request(url, null, null, null, false);
     }
 
+    /** Pins an already authorized URL so every subsequent redirect obeys the allowlist. */
+    public Request withRedirectBoundary() {
+      return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
+          repository, format, URI.create(url).getHost(), authorizationHeader, allowedUnsignedRedirectHosts,
+          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials);
+    }
+
     public Request withConditional(String etag, Instant lastModified) {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
           repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts,
