@@ -186,8 +186,7 @@ public class NpmProxyService {
     return switch (path.kind()) {
       case PACKAGE_ROOT, PACKAGE_VERSION -> getPackage(runtime, path.packageId(), repositoryBaseUrl, headOnly, variant);
       // Revision suffixes belong to hosted DELETE routes; in proxy GET/HEAD they are URL data.
-      case TARBALL -> getTarball(runtime, path.packageId(), path.revision() == null
-          ? path.tarballName() : path.tarballName() + "/-rev/" + path.revision(), headOnly);
+      case TARBALL -> getTarball(runtime, path.packageId(), path.readTarballName(), headOnly);
       case DIST_TAGS -> getDistTags(runtime, path.packageId(), headOnly);
       default -> throw new NpmExceptions.NpmNotFoundException(path.rawPath());
     };

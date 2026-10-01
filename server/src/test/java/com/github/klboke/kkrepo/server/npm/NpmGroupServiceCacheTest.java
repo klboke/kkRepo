@@ -282,6 +282,31 @@ class NpmGroupServiceCacheTest {
   }
 
   @Test
+  void revisionLikeSuffixDoesNotChangeTheBaseTarballsWinningMember() throws Exception {
+    Fixture fixture = fixture();
+    GroupMemberAssetCache memberCache = new GroupMemberAssetCache(new InMemorySharedCache(),
+        fixture.repositories, new NexusLikeCacheController(new InMemoryVersionWatermark(), 60), true, 60);
+    NpmProxyService proxy = mock(NpmProxyService.class);
+    NpmGroupService service = new NpmGroupService(fixture.hosted, proxy, fixture.mapper,
+        fixture.packumentCache, memberCache, fixture.registry, fixture.writer);
+    RepositoryRuntime first = runtime(101L, "first", RepositoryType.PROXY, List.of());
+    RepositoryRuntime second = runtime(102L, "second", RepositoryType.PROXY, List.of());
+    RepositoryRuntime group = runtime(999L, "group", RepositoryType.GROUP, List.of(first, second));
+    var parser = new com.github.klboke.kkrepo.protocol.npm.NpmPathParser();
+    NpmPath base = parser.parse("demo/-/signed");
+    NpmPath nested = parser.parse("demo/-/signed/-rev/demo-1.0.0.tgz");
+    when(proxy.get(first, nested, "base", false)).thenThrow(new NpmExceptions.NpmNotFoundException("missing"));
+    when(proxy.get(second, nested, "base", false)).thenReturn(MavenResponse.noBody(202));
+    when(proxy.get(first, base, "base", false)).thenReturn(MavenResponse.noBody(201));
+    when(proxy.get(second, base, "base", false)).thenReturn(MavenResponse.noBody(203));
+    assertEquals(202, service.get(group, nested, "base", false).status());
+    assertEquals(Optional.of(second.id()), memberCache.get(group, nested.assetPath(), NexusCacheType.CONTENT));
+    assertEquals(201, service.get(group, base, "base", false).status());
+    assertEquals(Optional.of(first.id()), memberCache.get(group, base.assetPath(), NexusCacheType.CONTENT));
+    assertEquals(202, service.get(group, nested, "base", false).status());
+  }
+
+  @Test
   void nestedGroupsAndProxyInstallVariantUseVariantAwareDispatch() throws Exception {
     Fixture fixture = fixture();
     RecordingNpmProxyService proxyService = new RecordingNpmProxyService();

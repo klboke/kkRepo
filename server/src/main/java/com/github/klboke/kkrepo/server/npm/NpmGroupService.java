@@ -314,7 +314,7 @@ public class NpmGroupService {
 
   private static String groupMemberCachePath(NpmPath path) {
     if (path.kind() == NpmPath.Kind.TARBALL && path.packageId() != null && path.tarballName() != null) {
-      return path.packageId().tarballPath(path.tarballName());
+      return path.assetPath();
     }
     return path.rawPath();
   }

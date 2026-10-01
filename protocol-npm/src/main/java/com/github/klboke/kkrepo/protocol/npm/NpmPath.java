@@ -34,9 +34,14 @@ public record NpmPath(
     return kind == Kind.TARBALL;
   }
 
+  /** GET/HEAD and stored asset identities preserve suffixes that DELETE treats as a revision. */
+  public String readTarballName() {
+    return revision == null ? tarballName : tarballName + "/-rev/" + revision;
+  }
+
   public String assetPath() {
     if (kind == Kind.TARBALL) {
-      return packageId.tarballPath(tarballName);
+      return packageId.tarballPath(readTarballName());
     }
     if (packageId != null) {
       return packageId.id();

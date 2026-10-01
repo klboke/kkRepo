@@ -110,8 +110,7 @@ public class NpmHostedService {
       return getPackage(runtime, path.packageId(), repositoryBaseUrl, headOnly, variant);
     }
     if (path.isTarball()) {
-      return getTarball(runtime, path.packageId(), path.revision() == null
-          ? path.tarballName() : path.tarballName() + "/-rev/" + path.revision(), headOnly);
+      return getTarball(runtime, path.packageId(), path.readTarballName(), headOnly);
     }
     if (path.kind() == NpmPath.Kind.DIST_TAGS) {
       return getDistTags(runtime, path.packageId(), headOnly);
@@ -300,7 +299,7 @@ public class NpmHostedService {
     for (NpmPath path : paths) {
       int count = writer.deletePath(runtime, storage, path.assetPath());
       deleted.add(count);
-      if (count > 0) deletedTarballs.add(path.tarballName());
+      if (count > 0) deletedTarballs.add(path.readTarballName());
     }
     if (packageRoot != null && removeVersionsForTarballs(packageRoot, deletedTarballs)) {
       savePackageRoot(
