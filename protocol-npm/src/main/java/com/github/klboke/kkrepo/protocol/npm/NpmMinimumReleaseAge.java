@@ -439,7 +439,8 @@ public final class NpmMinimumReleaseAge {
     }
 
     public List<String> versionsForTarball(String tarballName) {
-      String expected = NpmMetadata.matchingTarballIdentity(tarballVersions.keySet(), tarballName);
+      String expected = tarballVersions.containsKey(tarballName) ? tarballName
+          : NpmTarballCompatibility.legacyBasenameAlias(tarballVersions.keySet(), tarballName);
       if (expected == null) {
         return List.of();
       }

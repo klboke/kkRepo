@@ -288,7 +288,7 @@ class NpmMinimumReleaseAgeTest {
     assertEquals("2.0.0", NpmMetadata.findVersionForTarball(root, "@abc/pkg.tgz"));
     assertEquals(List.of("2.0.0"), analysis.versionsForTarball("@abc/pkg.tgz"));
     assertEquals(List.of("2.0.0"), analysis.versionsForTarball(new NpmPathParser().parse("@abc/demo/-/@abc%2Fpkg.tgz").tarballName()));
-    assertEquals(null, NpmMetadata.matchingTarballIdentity(List.of("@a/pkg.tgz", "@b/pkg.tgz"), "pkg.tgz"));
+    assertEquals(null, NpmTarballCompatibility.legacyBasenameAlias(List.of("@a/pkg.tgz", "@b/pkg.tgz"), "pkg.tgz"));
   }
 
   @Test
@@ -305,8 +305,8 @@ class NpmMinimumReleaseAgeTest {
     assertEquals(List.of("2.0.0"), analysis.versionsForTarball("young/-/demo.tgz"));
     assertTrue(analysis.versionsForTarball("demo.tgz").isEmpty());
     assertEquals("1.0.0", NpmMetadata.findVersionForTarball(root, "old/-/demo.tgz"));
-    assertNull(NpmMetadata.matchingTarballIdentity(List.of("signed/demo.tgz"), "attacker/demo.tgz"));
-    assertEquals("signed/demo.tgz", NpmMetadata.matchingTarballIdentity(List.of("signed/demo.tgz"), "demo.tgz"));
+    assertNull(NpmTarballCompatibility.legacyBasenameAlias(List.of("signed/demo.tgz"), "attacker/demo.tgz"));
+    assertEquals("signed/demo.tgz", NpmTarballCompatibility.legacyBasenameAlias(List.of("signed/demo.tgz"), "demo.tgz"));
   }
 
   @Test
@@ -331,8 +331,8 @@ class NpmMinimumReleaseAgeTest {
     assertEquals(null, NpmMetadata.canonicalTarballName("bad%XX.tgz"));
     String literal = NpmMetadata.canonicalTarballName("https://registry.example/%2541.tgz");
     assertEquals("%41.tgz", literal);
-    assertEquals(literal, NpmMetadata.matchingTarballIdentity(List.of(literal), "%41.tgz"));
-    assertEquals(null, NpmMetadata.matchingTarballIdentity(List.of(literal), "A.tgz"));
+    assertEquals(literal, NpmTarballCompatibility.legacyBasenameAlias(List.of(literal), "%41.tgz"));
+    assertEquals(null, NpmTarballCompatibility.legacyBasenameAlias(List.of(literal), "A.tgz"));
   }
 
   @Test

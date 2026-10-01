@@ -27,7 +27,6 @@ import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
 import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
@@ -35,13 +34,11 @@ import java.time.DateTimeException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.Set;
 import java.util.function.Supplier;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -904,65 +901,18 @@ public class NpmProxyService {
     }
   }
 
-  /**
-   * Resolve from the original packument persisted in shared blob storage, so cold downloads on
-   * another replica use the same upstream URL. Cached tarball reads do not load the packument.
-   */
-  private String remoteTarballUrl(
-      RepositoryRuntime runtime, NpmPackageId packageId, String tarballName, String rawPath) {
-    // Preserve the incoming encoding if packument discovery is unavailable.
-    String fallback = buildRemoteUrl(runtime.proxyRemoteUrl(), rawPath);
-    Optional<CachedAssetMetadata> packageMetadata = lookupCached(runtime, packageId.id());
-    if (packageMetadata.isEmpty() || !isFresh(runtime, packageMetadata.get(),
+  /** Load shared metadata for the stateless resolver; fresh tarballs bypass this work entirely. */
+  private Optional<Map<String, Object>> tarballMetadata(RepositoryRuntime runtime, NpmPackageId packageId) {
+    Optional<CachedAssetMetadata> metadata = lookupCached(runtime, packageId.id());
+    if (metadata.isEmpty() || !isFresh(runtime, metadata.get(),
         runtime.metadataMaxAgeMinutesOrDefault(), clock.instant(), NexusCacheType.METADATA)) {
-      // Lockfile-only installs must discover custom/encoded URLs even on a completely cold proxy.
       try {
         getPackage(runtime, packageId, runtime.name(), true);
       } catch (NpmExceptions.NpmNotFoundException | NpmExceptions.BadUpstreamException unavailableMetadata) {
-        return fallback;
+        return Optional.empty();
       }
     }
-    Optional<Map<String, Object>> root = hosted.packageRoot(runtime, packageId);
-    if (root.isEmpty()) return fallback;
-    Map<String, Set<String>> identities = new java.util.LinkedHashMap<>();
-    for (Object version : NpmMetadata.versions(root.get()).values()) {
-      if (!(version instanceof Map<?, ?> metadata)
-          || !(metadata.get("dist") instanceof Map<?, ?> dist)
-          || !(dist.get("tarball") instanceof String url)) continue;
-      String identity = NpmMetadata.canonicalTarballName(url);
-      if (identity != null) identities.computeIfAbsent(identity, ignored -> new LinkedHashSet<>()).add(url);
-    }
-    String identity = NpmMetadata.matchingTarballIdentity(identities.keySet(), tarballName);
-    Set<String> urls = identity == null ? Set.of() : identities.get(identity);
-    if (urls.isEmpty()) {
-      if (identities.keySet().stream().anyMatch(candidate -> Objects.equals(
-          NpmMetadata.extractTarballName(candidate), NpmMetadata.extractTarballName(tarballName)))) {
-        if (tarballName.contains("/")) {
-          throw new NpmExceptions.NpmNotFoundException("Tarball path is not declared for " + packageId.id());
-        }
-        throw new NpmExceptions.BadUpstreamException("Ambiguous upstream tarball URL for " + packageId.id());
-      }
-      return fallback;
-    }
-    if (urls.size() != 1) {
-      throw new NpmExceptions.BadUpstreamException("Ambiguous upstream tarball URL for " + packageId.id());
-    }
-    try {
-      URI base = URI.create(runtime.proxyRemoteUrl().replaceAll("/+$", "") + "/");
-      URI target = base.resolve(urls.iterator().next());
-      if (target.getHost() == null || target.getUserInfo() != null || target.getFragment() != null
-          || !("https".equalsIgnoreCase(target.getScheme()) || "http".equalsIgnoreCase(target.getScheme()))) {
-        throw new IllegalArgumentException("Invalid upstream tarball URL");
-      }
-      // Merely advertising a URL never authorizes credential delegation or bypasses the outbound policy.
-      if (HttpRemoteFetcher.Request.get(target.toString()).withRepository(runtime, false).trustedHost() == null
-          && !runtime.allowsRedirectHost(target.getHost())) {
-        throw new NpmExceptions.BadUpstreamException("Upstream tarball URL host is not allowed: " + target.getHost());
-      }
-      return target.toString();
-    } catch (IllegalArgumentException e) {
-      throw new NpmExceptions.BadUpstreamException("Invalid upstream tarball URL for " + packageId.id());
-    }
+    return hosted.packageRoot(runtime, packageId);
   }
 
   private NpmAssetWriter.Stored fetchAndCacheTarball(
@@ -973,19 +923,26 @@ public class NpmProxyService {
       Optional<CachedAssetMetadata> cached,
       boolean headOnly,
       Instant now) {
-    String url = remoteTarballUrl(runtime, packageId, tarballName, rawPath);
+    NpmTarballResolver.Download download = NpmTarballResolver.resolve(
+        runtime.proxyRemoteUrl(), packageId, tarballName, rawPath,
+        tarballMetadata(runtime, packageId).orElse(null));
+    String url = download.upstreamUrl();
     String sourceHash = java.util.HexFormat.of().formatHex(PersistenceHashes.sha256(url));
     boolean sameSource = cached.filter(asset -> asset.blob() != null)
         .map(asset -> sourceHash.equals(stringAttr(asset.blob().attributes(), "npmTarballSourceUrlHash")))
         .orElse(false);
     Conditional conditional = sameSource ? conditional(cached) : new Conditional(null, null);
     boolean conditionalRequest = conditional.etag() != null || conditional.lastModified() != null;
-    HttpRemoteFetcher.Request req = new HttpRemoteFetcher.Request(
-        url, conditional.etag(), conditional.lastModified(), null, false)
-        .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
-        .withRepositoryRedirectBoundary(runtime);
+    HttpRemoteFetcher.Request req;
     try {
-      return fetcher.fetchWithBodyRetry(req, packageId.tarballPath(tarballName), result -> {
+      req = new HttpRemoteFetcher.Request(url, conditional.etag(), conditional.lastModified(), null, false)
+          .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
+          .withRepositoryRedirectBoundary(runtime);
+    } catch (com.github.klboke.kkrepo.server.security.SecurityValidationException denied) {
+      throw new NpmExceptions.BadUpstreamException(denied.getMessage());
+    }
+    try {
+      return fetcher.fetchWithBodyRetry(req, download.assetPath(), result -> {
         int status = result.status();
         if (status == 304 && !conditionalRequest) {
           throw new NpmExceptions.BadUpstreamException("Unsolicited tarball not-modified response");

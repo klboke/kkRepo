@@ -112,22 +112,6 @@ public final class NpmMetadata {
     }
   }
 
-  /** Only basename-only legacy requests may alias a unique complete path. */
-  public static String matchingTarballIdentity(java.util.Collection<String> identities, String requested) {
-    // Request paths were already decoded by NpmPathParser. Decoding again would merge literal
-    // percent sequences with different paths (for example %252F and %2F).
-    String expected = requested;
-    if (expected == null) return null;
-    if (identities.contains(expected)) return expected;
-    if (expected.contains("/")) return null;
-    String basename = extractTarballName(expected);
-    List<String> matches = identities.stream()
-        .filter(java.util.Objects::nonNull)
-        .filter(identity -> basename.equals(extractTarballName(identity)))
-        .distinct().toList();
-    return matches.size() == 1 ? matches.getFirst() : null;
-  }
-
   public static String extractTarballName(String tarballUrl) {
     if (tarballUrl == null) return null;
     int question = tarballUrl.indexOf('?');
@@ -168,7 +152,8 @@ public final class NpmMetadata {
         if (identity != null) identities.putIfAbsent(identity, stringValue(versionMap.get(VERSION), entry.getKey()));
       }
     }
-    String identity = matchingTarballIdentity(identities.keySet(), tarballName);
+    String identity = identities.containsKey(tarballName) ? tarballName
+        : NpmTarballCompatibility.legacyBasenameAlias(identities.keySet(), tarballName);
     return identity == null ? null : identities.get(identity);
   }
 
