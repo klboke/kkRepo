@@ -362,9 +362,12 @@ public class JdbcRepositoryDataMigrationDao implements com.github.klboke.kkrepo.
 
   @Transactional(propagation = Propagation.MANDATORY)
   public List<AssetClaim> claimAssetsForMigration(Long migrationJobId, int limit, int maxAttempts, Instant retryBefore) {
-    if (migrationJobId != null) {
-      // One active batch per job preserves its configured concurrency (including Conan's
-      // files-before-manifest ordering) when independent replicas perform recovery polling.
+    if (migrationJobId != null && Boolean.TRUE.equals(jdbcTemplate.queryForObject("""
+        SELECT EXISTS (SELECT 1 FROM repository_data_migration_repository
+        WHERE migration_job_id = ? AND format = ?)
+        """, Boolean.class, migrationJobId, EnumColumns.write(RepositoryFormat.CONAN)))) {
+      // Conan's worker deliberately uses one asset per batch to preserve publication order.
+      // Keep that order across replicas, without restricting parallel claims for other formats.
       if (jdbcTemplate.queryForList(
           "SELECT id FROM migration_job WHERE id = ? FOR UPDATE SKIP LOCKED", Long.class, migrationJobId).isEmpty()) {
         return List.of();

@@ -78,15 +78,16 @@ class RepositoryDataMigrationDaoPostgreSqlIntegrationTest extends PostgreSqlInte
   }
 
   @Test
-  void recoveryOnAnotherReplicaCannotExceedAnActiveJobsBatchConcurrency() {
-    long repositoryId = insertRepository("migration-serial", "maven2");
+  void conanRecoveryOnAnotherReplicaPreservesSerialPublication() {
+    long repositoryId = insertRepository("migration-serial", "conan");
     long jobId = insertMigrationJob(true);
     RepositoryDataMigrationDao first = new JdbcRepositoryDataMigrationDao(jdbc(), jsonColumns(), dialect());
     RepositoryDataMigrationDao second = new JdbcRepositoryDataMigrationDao(jdbc(), jsonColumns(), dialect());
     long repositoryJobId = first.createRepositoryJob(jobId, "source", "migration-serial", repositoryId,
-        RepositoryFormat.MAVEN2, 100, Map.of());
+        RepositoryFormat.CONAN, 100, Map.of());
     first.upsertDiscoveredAssets(repositoryJobId,
-        List.of(asset(), asset("com/acme/lib/1.0/lib-1.0.jar")), Map.of());
+        List.of(asset("demo/export.tgz", RepositoryFormat.CONAN),
+            asset("demo/conanmanifest.txt", RepositoryFormat.CONAN)), Map.of());
     first.finishDiscoveryPage(repositoryJobId, null, true);
     Instant cutoff = Instant.now().minusSeconds(60);
     assertTrue(inTransaction(() -> first.claimAssetsForMigration(-1L, 1, 3, cutoff)).isEmpty());
@@ -155,6 +156,10 @@ class RepositoryDataMigrationDaoPostgreSqlIntegrationTest extends PostgreSqlInte
   }
 
   private static RepositoryDataMigrationAssetRecord asset(String path) {
+    return asset(path, RepositoryFormat.MAVEN2);
+  }
+
+  private static RepositoryDataMigrationAssetRecord asset(String path, RepositoryFormat format) {
     Instant updated = Instant.parse("2026-01-01T00:00:00Z");
     return new RepositoryDataMigrationAssetRecord(
         null,
@@ -163,7 +168,7 @@ class RepositoryDataMigrationDaoPostgreSqlIntegrationTest extends PostgreSqlInte
         "#11:0",
         path,
         HashColumns.pathHash(path),
-        RepositoryFormat.MAVEN2,
+        format,
         "com.acme",
         "app",
         "1.0",
