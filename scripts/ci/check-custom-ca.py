@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise a packaged JVM/Native runtime against HTTPS MinIO and a private-CA upstream.
+"""Exercise a packaged JVM/Native runtime against HTTPS S3 storage and a private-CA upstream.
 
 Requires Docker, OpenSSL and curl. --image uses host networking on Linux CI runners.
 All containers, certificates and data belong to this probe and are removed on exit.
@@ -22,11 +22,14 @@ import uuid
 
 CONTENT = b"kkrepo custom CA runtime fixture\n"
 PASSWORD = "CustomCaProbe-password-123!"
-MINIO_IMAGE = "quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z"
+S3_IMAGE = "rustfs/rustfs:1.0.0"
 
 
 def run(*args):
-    return subprocess.check_output(args, text=True, stderr=subprocess.STDOUT).strip()
+    try:
+        return subprocess.check_output(args, text=True, stderr=subprocess.STDOUT).strip()
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(f"{args[0]} failed: {error.output}") from error
 
 
 def certificate(directory, name):
@@ -110,22 +113,27 @@ def main():
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument("--jar")
     target.add_argument("--image")
+    parser.add_argument("--minio-image", help="Use an available MinIO image instead of the default RustFS fixture")
     args = parser.parse_args()
+    storage_label = "MinIO" if args.minio_image else "RustFS"
     prefix = "kkrepo-custom-ca-" + uuid.uuid4().hex[:10]
     containers = []
     with tempfile.TemporaryDirectory(prefix=prefix) as temporary:
         work = Path(temporary)
         work.chmod(0o755)
-        ca, key, cert = certificate(work, "minio")
+        ca, key, cert = certificate(work, "s3")
         upstream_ca, upstream_key, upstream_cert = certificate(work, "upstream")
         bundle = work / "bundle.pem"
         bundle.write_bytes(ca.read_bytes() + upstream_ca.read_bytes())
-        minio_certs = work / "minio"
-        minio_certs.mkdir()
-        (minio_certs / "public.crt").write_bytes(cert.read_bytes())
-        (minio_certs / "private.key").write_bytes(key.read_bytes())
+        s3_certs = work / "s3"
+        s3_certs.mkdir()
+        (s3_certs / "public.crt").write_bytes(cert.read_bytes())
+        (s3_certs / "private.key").write_bytes(key.read_bytes())
+        (s3_certs / "rustfs_cert.pem").write_bytes(cert.read_bytes())
+        (s3_certs / "rustfs_key.pem").write_bytes(key.read_bytes())
         upstream = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
         tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        tls.minimum_version = ssl.TLSVersion.TLSv1_2
         tls.load_cert_chain(upstream_cert, upstream_key)
         upstream.socket = tls.wrap_socket(upstream.socket, server_side=True)
         threading.Thread(target=upstream.serve_forever, daemon=True).start()
@@ -136,22 +144,40 @@ def main():
                 "-e", "POSTGRES_DB=kkrepo", "-e", "POSTGRES_USER=kkrepo",
                 "-e", "POSTGRES_PASSWORD=kkrepo", "postgres:17-alpine")
             db_port = run("docker", "port", postgres, "5432").rsplit(":", 1)[1]
-            minio = prefix + "-minio"
-            containers.append(minio)
-            run("docker", "run", "-d", "--name", minio, "-p", "127.0.0.1::9000",
-                "-v", str(minio_certs) + ":/certs:ro", "-e", "MINIO_ROOT_USER=probe-access",
-                "-e", "MINIO_ROOT_PASSWORD=probe-secret", MINIO_IMAGE,
-                "server", "/data", "--certs-dir", "/certs")
-            minio_port = run("docker", "port", minio, "9000").rsplit(":", 1)[1]
-            endpoint = "https://localhost:" + minio_port
-            wait_ready(endpoint + "/minio/health/ready", tls=ssl.create_default_context(cafile=str(ca)))
+            # Wait for the final TCP listener, not the temporary initdb Unix-socket server.
+            for _ in range(180):
+                ready = subprocess.run(
+                    ["docker", "exec", postgres, "pg_isready", "-h", "127.0.0.1", "-U", "kkrepo", "-d", "kkrepo"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                if ready.returncode == 0:
+                    break
+                time.sleep(0.5)
+            else:
+                raise RuntimeError("PostgreSQL readiness timeout")
+            storage = prefix + "-s3"
+            containers.append(storage)
+            command = ["docker", "run", "-d", "--name", storage, "-p", "127.0.0.1::9000",
+                       "-v", str(s3_certs) + ":/certs:ro"]
+            if args.minio_image:
+                command += ["-e", "MINIO_ROOT_USER=probe-access", "-e", "MINIO_ROOT_PASSWORD=probe-secret",
+                            args.minio_image, "server", "/data", "--certs-dir", "/certs"]
+                health_path = "/minio/health/ready"
+            else:
+                command += ["-e", "RUSTFS_ACCESS_KEY=probe-access", "-e", "RUSTFS_SECRET_KEY=probe-secret",
+                            "-e", "RUSTFS_VOLUMES=/data", "-e", "RUSTFS_ADDRESS=0.0.0.0:9000",
+                            "-e", "RUSTFS_CONSOLE_ENABLE=false", "-e", "RUSTFS_TLS_PATH=/certs", S3_IMAGE]
+                health_path = "/health/ready"
+            run(*command)
+            storage_port = run("docker", "port", storage, "9000").rsplit(":", 1)[1]
+            endpoint = "https://localhost:" + storage_port
+            wait_ready(endpoint + health_path, tls=ssl.create_default_context(cafile=str(ca)))
             run("curl", "--fail", "--silent", "--show-error", "--cacert", str(ca),
                 "--aws-sigv4", "aws:amz:us-east-1:s3", "--user", "probe-access:probe-secret",
                 "-X", "PUT", endpoint + "/ca-bucket")
             port = free_port()
             base = "http://127.0.0.1:" + str(port)
             environment = {
-                "SERVER_PORT": str(port), "KKREPO_MANAGEMENT_PORT": str(free_port()),
+                "SERVER_PORT": str(port), "KKREPO_MANAGEMENT_PORT": "0",
                 "KKREPO_DATABASE_TYPE": "postgresql",
                 "SPRING_DATASOURCE_URL": f"jdbc:postgresql://127.0.0.1:{db_port}/kkrepo",
                 "SPRING_DATASOURCE_USERNAME": "kkrepo", "SPRING_DATASOURCE_PASSWORD": "kkrepo",
@@ -188,17 +214,17 @@ def main():
                                 "password": PASSWORD, "passwordConfirm": PASSWORD,
                                 "anonymousAccessEnabled": False})
                             store = api(base, "/internal/blob-stores", "POST", {
-                                "name": "ca-minio", "type": "s3", "engine": "aws-s3",
+                                "name": "ca-s3", "type": "s3", "engine": "aws-s3",
                                 "endpoint": endpoint, "region": "us-east-1", "bucket": "ca-bucket",
                                 "accessKey": "probe-access", "secretKey": "probe-secret",
                                 "pathStyleAccess": True})
                             store_id = store["id"]
                             api(base, "/internal/repositories", "POST", {
                                 "name": "ca-hosted", "recipe": "raw-hosted", "online": True,
-                                "blobStoreName": "ca-minio", "hosted": {"writePolicy": "ALLOW"}})
+                                "blobStoreName": "ca-s3", "hosted": {"writePolicy": "ALLOW"}})
                             api(base, "/internal/repositories", "POST", {
                                 "name": "ca-proxy", "recipe": "raw-proxy", "online": True,
-                                "blobStoreName": "ca-minio", "proxy": {
+                                "blobStoreName": "ca-s3", "proxy": {
                                     "remoteUrl": "https://localhost:" + str(upstream.server_port),
                                     "contentMaxAgeMinutes": 1440, "metadataMaxAgeMinutes": 1440,
                                     "autoBlock": False}})
@@ -216,7 +242,7 @@ def main():
                         else:
                             assert status >= 400, (status, body)
                         print(f"Packaged runtime: custom CA {'accepted' if trusted else 'absent and rejected'} "
-                              "for MinIO and upstream HTTPS", flush=True)
+                              f"for {storage_label} and upstream HTTPS", flush=True)
                     except Exception:
                         print(log.read_text()[-15000:])
                         raise
