@@ -137,6 +137,54 @@ esac
         self.env["IMAGE_ID"] = "sha256:" + "b" * 64
         self.assertNotEqual(self.run_script("swift-e2e-image-cache.sh", "load", "5.7", str(self.root)).returncode, 0)
 
+    def test_sdk_image_identity_is_checked_before_execution(self):
+        (self.root / "image.id").write_text("sha256:" + "a" * 64)
+        (self.root / "image.tar").touch()
+        self.stub("docker", '''case "$1" in
+load) : ;;
+image) printf 'sha256:%064d\\n' 0 ;;
+run) touch "$TEST_ROOT/executed-unverified-image" ;;
+*) exit 99 ;;
+esac
+''')
+        result = self.run_script("client-e2e-image-cache.sh", "load", "core", str(self.root))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.root / "executed-unverified-image").exists())
+
+    def test_sdk_container_preserves_host_paths_and_test_environment(self):
+        project = self.root / "project with spaces"
+        script = project / "scripts/ci/run-client-e2e-container.sh"
+        script.parent.mkdir(parents=True)
+        script.write_text((SCRIPTS / script.name).read_text())
+        runner = self.root / "runner with spaces"
+        self.env.update(RUNNER_TEMP=str(runner), CLIENT_E2E_IMAGE="kkrepo/client-e2e:swift-v1",
+                        SWIFT_E2E_REQUIRE_5_7_5_9_6="true", SWIFT_E2E_BINS="fixture",
+                        GITHUB_TOKEN="must-not-be-forwarded")
+        self.stub("docker", '''if [[ "$1" == image ]]; then
+  printf 'sha256:%064d\\n' 0
+else
+  python3 - "$@" <<'PY'
+import json, os, pathlib, sys
+pathlib.Path(os.environ["TEST_ROOT"], "docker-args.json").write_text(json.dumps(sys.argv[1:]))
+PY
+fi
+''')
+        result = subprocess.run(["bash", str(script), "scripts/ci/run-live-compat.sh", "swift"],
+                                env=self.env, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        args = json.loads((self.root / "docker-args.json").read_text())
+        self.assertIn(f"type=bind,source={project},target={project}", args)
+        self.assertIn(f"type=bind,source={runner},target={runner}", args)
+        self.assertIn("type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock", args)
+        self.assertIn("host", args)
+        self.assertIn("SWIFT_E2E_BINS", args)
+        self.assertIn("SWIFT_E2E_REQUIRE_5_7_5_9_6", args)
+        self.assertIn(f"CLIENT_E2E_WORK_DIR={runner}/client-e2e-runtime/work", args)
+        self.assertNotIn("GITHUB_TOKEN", args)
+        self.assertNotIn("must-not-be-forwarded", args)
+        self.assertNotIn("PATH", args)
+        self.assertEqual(args[-2:], ["scripts/ci/run-live-compat.sh", "swift"])
+
     def test_coverage_gate_rejects_missing_protocols_and_failed_cleanup(self):
         verifier = load("verify-client-e2e-coverage")
         for runtime in ("jvm", "native"):

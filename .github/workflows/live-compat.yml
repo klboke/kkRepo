@@ -32,6 +32,11 @@ on:
         required: false
         default: false
         type: boolean
+      client_toolchain_epoch:
+        description: Shared SDK image cache date from the preparing workflow
+        required: false
+        default: ""
+        type: string
       artifact_prefix:
         description: Prefix used to keep artifacts unique across reusable workflow calls
         required: false
@@ -112,9 +117,9 @@ jobs:
       include_server_artifact: ${{ inputs.suite == 'client-e2e' || inputs.suite == 'swift' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e')) }}
 
   prepare-swift-images:
-    name: Warm versioned Swift E2E image caches
+    name: Prepare SDK and Swift client images
     if: >-
-      inputs.swift_images_prepared != true &&
+      (inputs.swift_images_prepared != true || inputs.client_toolchain_epoch == '') &&
       (
         github.event_name == 'schedule' ||
         inputs.suite == 'client-e2e' ||
@@ -128,9 +133,9 @@ jobs:
           )
         )
       )
-    uses: ./.github/workflows/prepare-swift-e2e.yml
+    uses: ./.github/workflows/prepare-client-e2e.yml
     with:
-      include_legacy: ${{ github.event_name != 'schedule' }}
+      shards: ${{ (inputs.suite == 'swift' || github.event_name == 'schedule') && '["swift"]' || '["core","system","swift"]' }}
 
   live-compat:
     name: ${{ (inputs.runtime == 'native' && 'Native Client E2E compatibility') || ((inputs.suite == 'client-e2e' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && 'Client E2E compatibility') || 'Live compatibility' }} (${{ matrix.database }}, ${{ matrix.shard }})
@@ -208,117 +213,30 @@ jobs:
           persist-credentials: false
 
       - name: Set up JDK 25
+        if: env.LIVE_COMPAT_SUITE != 'client-e2e'
         uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "25"
           cache: maven
 
-      - name: Set up Node.js
-        if: env.LIVE_COMPAT_SUITE == 'client-e2e' && (matrix.shard == 'core' || matrix.shard == 'all')
-        uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-
-      - name: Set up Python
-        if: env.LIVE_COMPAT_SUITE == 'client-e2e'
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.13"
-
-      - name: Set up Conda client
-        if: env.LIVE_COMPAT_SUITE == 'client-e2e' && (matrix.shard == 'system' || matrix.shard == 'all')
-        uses: conda-incubator/setup-miniconda@v4
-        with:
-          miniforge-version: "26.3.2-3"
-          activate-environment: conda-client-e2e
-          auto-activate-base: false
-          conda-remove-defaults: true
-
-      - name: Export Conda client executable
-        if: env.LIVE_COMPAT_SUITE == 'client-e2e' && (matrix.shard == 'system' || matrix.shard == 'all')
-        shell: bash -el {0}
-        run: |
-          set -euo pipefail
-          conda_bin="$(command -v conda)"
-          "$conda_bin" --version
-          echo "CONDA_BIN=$conda_bin" >> "$GITHUB_ENV"
-
-      - name: Set up Python 3.9 for Ansible 2.9
-        id: ansible-python29
-        if: env.LIVE_COMPAT_SUITE == 'client-e2e' && (matrix.shard == 'system' || matrix.shard == 'all')
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.9"
-          update-environment: false
-
-      - name: Set up PHP and Composer
-        if: env.LIVE_COMPAT_SUITE == 'client-e2e' && (matrix.shard == 'core' || matrix.shard == 'all')
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: "8.4"
-          tools: composer:v2
-
-      - name: Set up Go
-        if: env.LIVE_COMPAT_SUITE == 'client-e2e' && (matrix.shard == 'core' || matrix.shard == 'all')
-        uses: actions/setup-go@v7
-        with:
-          go-version: "1.25.x"
-
-      - name: Set up .NET
-        if: env.LIVE_COMPAT_SUITE == 'client-e2e' && (matrix.shard == 'core' || matrix.shard == 'all')
-        uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: "8.0.x"
-
-      - name: Set up Ruby
-        if: env.LIVE_COMPAT_SUITE == 'client-e2e' && (matrix.shard == 'core' || matrix.shard == 'all')
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: "3.4"
-
-      - name: Set up Rust
-        if: env.LIVE_COMPAT_SUITE == 'client-e2e' && (matrix.shard == 'core' || matrix.shard == 'all')
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Set up Helm
-        if: env.LIVE_COMPAT_SUITE == 'client-e2e' && (matrix.shard == 'core' || matrix.shard == 'all')
-        uses: azure/setup-helm@v5
-
-      - name: Set up Dart
-        if: env.LIVE_COMPAT_SUITE == 'client-e2e' && (matrix.shard == 'core' || matrix.shard == 'all')
-        uses: dart-lang/setup-dart@v1
-
-      - name: Set up Flutter
-        if: env.LIVE_COMPAT_SUITE == 'client-e2e' && (matrix.shard == 'core' || matrix.shard == 'all')
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-
-      - name: Set up ORAS
-        if: env.LIVE_COMPAT_SUITE == 'client-e2e' && (matrix.shard == 'core' || matrix.shard == 'all')
-        uses: oras-project/setup-oras@v2
-
-      - name: Set up Terraform 0.13 and current stable
-        if: env.LIVE_COMPAT_SUITE == 'client-e2e' && (matrix.shard == 'system' || matrix.shard == 'all')
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/terraform/0.13.7" "$RUNNER_TEMP/terraform/1.15.8"
-          for version in 0.13.7 1.15.8; do
-            archive="terraform_${version}_linux_amd64.zip"
-            curl -fsSLO "https://releases.hashicorp.com/terraform/${version}/${archive}"
-            curl -fsSLO "https://releases.hashicorp.com/terraform/${version}/terraform_${version}_SHA256SUMS"
-            grep " ${archive}$" "terraform_${version}_SHA256SUMS" | sha256sum -c -
-            unzip -q "$archive" -d "$RUNNER_TEMP/terraform/$version"
-          done
-          echo "TERRAFORM_013_BIN=$RUNNER_TEMP/terraform/0.13.7/terraform" >> "$GITHUB_ENV"
-          echo "TERRAFORM_CURRENT_BIN=$RUNNER_TEMP/terraform/1.15.8/terraform" >> "$GITHUB_ENV"
-
       - name: Check disk budget before loading client images
         if: env.LIVE_COMPAT_SUITE == 'client-e2e' || env.LIVE_COMPAT_SUITE == 'swift'
         run: scripts/ci/prepare-e2e-disk.sh
+
+      - name: Load prebuilt client SDK image
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e' || env.LIVE_COMPAT_SUITE == 'swift'
+        uses: ./.github/actions/setup-client-e2e
+        with:
+          shard: ${{ matrix.shard == 'all' && 'swift' || matrix.shard }}
+          cache_epoch: ${{ inputs.client_toolchain_epoch || needs.prepare-swift-images.outputs.cache_epoch }}
+
+      - name: Cache Maven dependencies for Swift HTTP compatibility
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e' && matrix.shard == 'swift'
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/client-m2
+          key: ${{ runner.os }}-client-e2e-maven-${{ hashFiles('**/pom.xml') }}
 
       - name: Prepare run-specific Swift HTTPS fixtures
         if: env.LIVE_COMPAT_SUITE == 'swift' || (env.LIVE_COMPAT_SUITE == 'client-e2e' && (matrix.shard == 'swift' || matrix.shard == 'all'))
@@ -369,31 +287,6 @@ jobs:
           }
           verify_tag MaestriHub/shared-modules v0.3.8 d8f866b8e79bdbd364239512903cef3a70bf2e7e
           verify_tag MaestriHub/shared-modules V0.3.7 ac363c90c494ac34ae9532dc9c3acc316f167f83
-
-      - name: Install Python package clients
-        if: env.LIVE_COMPAT_SUITE == 'client-e2e' && (matrix.shard == 'core' || matrix.shard == 'all')
-        run: python -m pip install --upgrade build twine
-
-      - name: Install Conan client
-        if: env.LIVE_COMPAT_SUITE == 'client-e2e' && (matrix.shard == 'system' || matrix.shard == 'all')
-        run: python -m pip install 'conan==2.31.2'
-
-      - name: Set up Ansible Galaxy 2.9 and current clients
-        if: env.LIVE_COMPAT_SUITE == 'client-e2e' && (matrix.shard == 'system' || matrix.shard == 'all')
-        env:
-          ANSIBLE_PYTHON_29: ${{ steps.ansible-python29.outputs.python-path }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/ansible"
-          "$ANSIBLE_PYTHON_29" -m venv "$RUNNER_TEMP/ansible/2.9"
-          python -m venv "$RUNNER_TEMP/ansible/current"
-          "$RUNNER_TEMP/ansible/2.9/bin/python" -m pip install --upgrade pip
-          "$RUNNER_TEMP/ansible/2.9/bin/python" -m pip install \
-            'ansible==2.9.27' 'jinja2<3.1' 'MarkupSafe<2.1'
-          "$RUNNER_TEMP/ansible/current/bin/python" -m pip install --upgrade pip ansible-core
-          echo "ANSIBLE_GALAXY_BINS=2.9=$RUNNER_TEMP/ansible/2.9/bin/ansible-galaxy,current=$RUNNER_TEMP/ansible/current/bin/ansible-galaxy" >> "$GITHUB_ENV"
-          echo "ANSIBLE_E2E_REQUIRE_2_9_CURRENT=true" >> "$GITHUB_ENV"
 
       - name: Validate live compatibility compose file
         run: docker compose -f "$COMPOSE_FILE" config
@@ -464,7 +357,7 @@ jobs:
           SWIFT_KKREPO_SECONDARY_BASE_URL: https://127.0.0.1:18444
           SWIFT_E2E_REQUIRE_REGISTRY_LOGIN_LABELS: 5.9+,6.x
           CURL_CA_BUNDLE: ${{ (matrix.shard == 'swift' || matrix.shard == 'all') && format('{0}/swift-e2e-tls/ca-bundle.pem', runner.temp) || '' }}
-        run: scripts/ci/run-live-compat.sh "$LIVE_COMPAT_SUITE"
+        run: scripts/ci/run-client-e2e-container.sh scripts/ci/run-live-compat.sh "$LIVE_COMPAT_SUITE"
 
       - name: Run Swift HTTP and Nexus compatibility suite
         if: env.LIVE_COMPAT_SUITE == 'client-e2e' && (matrix.shard == 'swift' || matrix.shard == 'all')
@@ -473,7 +366,7 @@ jobs:
           SWIFT_COMPAT_PROXY_ENABLED: "true"
           SWIFT_COMPAT_PROXY_VERSION: "1.5.4"
           SWIFT_KKREPO_SECONDARY_BASE_URL: http://127.0.0.1:18094
-        run: scripts/ci/run-live-compat.sh swift
+        run: scripts/ci/run-client-e2e-container.sh scripts/ci/run-live-compat.sh swift
 
       - name: Run SwiftPM client matrix
         if: env.LIVE_COMPAT_SUITE == 'swift'
@@ -483,7 +376,7 @@ jobs:
           SWIFT_KKREPO_SECONDARY_BASE_URL: https://127.0.0.1:18444
           SWIFT_E2E_REQUIRE_REGISTRY_LOGIN_LABELS: 5.9+,6.x
           CURL_CA_BUNDLE: ${{ runner.temp }}/swift-e2e-tls/ca-bundle.pem
-        run: scripts/ci/run-client-e2e.sh
+        run: scripts/ci/run-client-e2e-container.sh scripts/ci/run-client-e2e.sh
 
       - name: Run non-client live compatibility suite
         if: env.LIVE_COMPAT_SUITE != 'client-e2e'

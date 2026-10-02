@@ -1,0 +1,52 @@
+name: Set up prebuilt client E2E toolchain
+description: Build once per recipe/day and directly load a verified SDK image on consumers
+inputs:
+  shard:
+    required: true
+    description: core, system, or swift
+  cache_epoch:
+    required: true
+    description: UTC date selected once by the preparing workflow
+  prepare_only:
+    required: false
+    default: "false"
+    description: Warm the image cache without loading a cache hit
+runs:
+  using: composite
+  steps:
+    - name: Validate image cache inputs
+      shell: bash
+      env:
+        SHARD: ${{ inputs.shard }}
+        EPOCH: ${{ inputs.cache_epoch }}
+      run: |
+        case "$SHARD" in core|system|swift) ;; *) exit 2 ;; esac
+        [[ "$EPOCH" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]
+    - name: Restore complete SDK image
+      id: cache
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ runner.temp }}/client-e2e-images/${{ inputs.shard }}
+        key: ${{ runner.os }}-${{ runner.arch }}-client-image-v1-${{ inputs.shard }}-${{ hashFiles('scripts/ci/client-e2e-image/**', 'scripts/ci/client-e2e-image-cache.sh') }}-${{ inputs.cache_epoch }}
+        lookup-only: ${{ inputs.prepare_only == 'true' }}
+    - name: Build or load SDK image
+      if: steps.cache.outputs.cache-hit != 'true' || inputs.prepare_only != 'true'
+      shell: bash
+      env:
+        SHARD: ${{ inputs.shard }}
+        CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+      run: |
+        mode=build
+        [[ "$CACHE_HIT" != true ]] || mode=load
+        scripts/ci/client-e2e-image-cache.sh "$mode" "$SHARD" "$RUNNER_TEMP/client-e2e-images/$SHARD"
+        echo "CLIENT_E2E_IMAGE=kkrepo/client-e2e:$SHARD-v1" >> "$GITHUB_ENV"
+    - name: Save complete SDK image
+      if: inputs.prepare_only == 'true' && steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ runner.temp }}/client-e2e-images/${{ inputs.shard }}
+        key: ${{ steps.cache.outputs.cache-primary-key }}
+    - name: Release loaded archive
+      if: inputs.prepare_only != 'true'
+      shell: bash
+      run: rm -rf "$RUNNER_TEMP/client-e2e-images"

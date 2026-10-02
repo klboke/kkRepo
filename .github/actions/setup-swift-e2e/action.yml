@@ -43,6 +43,7 @@ runs:
       id: swift57
       uses: actions/cache/restore@v5
       with:
+        lookup-only: ${{ inputs.wrapper_mode == 'none' }}
         path: ${{ runner.temp }}/swift-e2e-images/5.7
         key: ${{ runner.os }}-${{ runner.arch }}-swift-image-v2-5.7-${{ hashFiles('scripts/ci/swift-e2e-image/Dockerfile', 'scripts/ci/swift-e2e-image-cache.sh') }}
 
@@ -73,6 +74,7 @@ runs:
       id: swift510
       uses: actions/cache/restore@v5
       with:
+        lookup-only: ${{ inputs.wrapper_mode == 'none' }}
         path: ${{ runner.temp }}/swift-e2e-images/5.10
         key: ${{ runner.os }}-${{ runner.arch }}-swift-image-v2-5.10-${{ hashFiles('scripts/ci/swift-e2e-image/Dockerfile', 'scripts/ci/swift-e2e-image-cache.sh') }}
 
@@ -103,6 +105,7 @@ runs:
       id: swift6
       uses: actions/cache/restore@v5
       with:
+        lookup-only: ${{ inputs.wrapper_mode == 'none' }}
         path: ${{ runner.temp }}/swift-e2e-images/6
         key: ${{ runner.os }}-${{ runner.arch }}-swift-image-v2-6-${{ hashFiles('scripts/ci/swift-e2e-image/Dockerfile', 'scripts/ci/swift-e2e-image-cache.sh') }}
 

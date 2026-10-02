@@ -93,7 +93,11 @@ hosted/group `available.packages()`、依赖安装、更新、proxy `PACKAGES.gz
 
 Linux 真实客户端任务把全部 21 组协议分成 `core`、`system` 和 `swift` 三个分片，每片使用独立数据库和候选双副本。JVM/Native 与 MySQL/PostgreSQL 的每个组合仍覆盖全部协议、对应客户端版本矩阵和 Cleanup Try Run/Execute。最终覆盖核验任务读取上传报告，检查全部 84 个协议/运行时/数据库组合，缺少协议或清理断言失败都会阻止通过。Nexus、迁移、OCI、平台与 S3 专项任务保持不变。本地可用 `CLIENT_E2E_SHARD=core|system|swift` 选择分片；默认仍按原顺序跑完整套件，`CLIENT_E2E_TESTS` 仍可覆盖协议选择。
 
-各分片只安装需要的 SDK。Swift 完整客户端镜像归档按操作系统、架构、版本和构建配方缓存；消费端核对加载后的镜像 identity，并注入每次运行新生成的 TLS CA。Native CI 使用可选的 `KKREPO_NATIVE_BUILD_CACHE` bind mount 保留 buildpack 缓存层，仍构建并测试当前事件提交。runner 仅在可用磁盘低于 `E2E_MIN_FREE_DISK_GIB`（默认 30）时删除不用的预装 SDK，不再 prune Docker 镜像。客户端产物保留各协议耗时（包含清理验证）和磁盘采样。对比性能时应分别记录首次耗时、重跑延迟、排队、缓存未命中和 runner 总分钟数；分片可能降低等待时间但增加 runner 用量。
+客户端 SDK 预装在 `core`、`system` 和 `swift` 三类执行镜像中。`prepare-client-e2e.yml` 在镜像配方变更和每天 UTC 00:10 时，统一提前准备 SDK 镜像与现有 Swift 5.7/5.10/6 三个客户端镜像；Full E2E 的两种运行时共用这次准备。完整镜像通过 Actions Cache 分发并核验 identity，fork 也可读取默认分支缓存，无需镜像仓库写凭证。SDK 缓存键包含配方和统一的 UTC 日期，每天更新 stable 客户端版本，同一轮运行跨越午夜时仍使用相同镜像。首次或缓存缺失时，由准备矩阵先构建一次；消费端遇到缓存淘汰也能重新构建。准备任务命中缓存后仅查询存在性。
+
+客户端套件在对应镜像内执行，使用 host 网络及 runner 的 Docker socket。源码和临时目录在容器内外保持相同绝对路径，让后续启动的客户端容器访问同一份测试文件、TLS 证书和隔离的 home。候选服务、Nexus 和数据库仍由 runner 启动。镜像在执行前检查所有必需 SDK，产物包含 `toolchain-image.txt` 与 `toolchain-versions.txt`。Swift HTTP 套件也使用预装的 JDK/Maven/Python 环境；macOS 和 Windows 继续使用原生工具链。
+
+各分片镜像只包含需要的 SDK。Swift 完整客户端镜像归档按操作系统、架构、版本和构建配方缓存；消费端核对加载后的镜像 identity，并注入每次运行新生成的 TLS CA。Native CI 使用可选的 `KKREPO_NATIVE_BUILD_CACHE` bind mount 保留 buildpack 缓存层，仍构建并测试当前事件提交。runner 仅在可用磁盘低于 `E2E_MIN_FREE_DISK_GIB`（默认 30）时删除不用的预装 SDK，不再 prune Docker 镜像。客户端产物保留各协议耗时（包含清理验证）和磁盘采样。对比性能时应分别记录首次耗时、重跑延迟、排队、缓存未命中和 runner 总分钟数；分片可能降低等待时间但增加 runner 用量。
 
 ## 真实客户端 E2E
 

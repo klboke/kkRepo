@@ -1,0 +1,59 @@
+name: Prepare Client E2E Images
+on:
+  workflow_call:
+    inputs:
+      shards:
+        description: SDK image targets to warm
+        type: string
+        default: '["core","system","swift"]'
+    outputs:
+      cache_epoch:
+        description: Shared UTC date for producers and consumers, including runs crossing midnight
+        value: ${{ jobs.identity.outputs.epoch }}
+  workflow_dispatch:
+  schedule:
+    - cron: "10 0 * * *"
+  push:
+    branches: [main]
+    paths:
+      - scripts/ci/client-e2e-image/**
+      - scripts/ci/client-e2e-image-cache.sh
+      - .github/actions/setup-client-e2e/**
+      - .github/workflows/prepare-client-e2e.yml
+      - scripts/ci/swift-e2e-image/**
+      - scripts/ci/swift-e2e-image-cache.sh
+      - .github/actions/setup-swift-e2e/**
+      - .github/workflows/prepare-swift-e2e.yml
+permissions:
+  contents: read
+jobs:
+  swift-clients:
+    name: Prepare Swift 5.7, 5.10, and 6 clients
+    uses: ./.github/workflows/prepare-swift-e2e.yml
+    with:
+      include_legacy: true
+  identity:
+    runs-on: ubuntu-latest
+    outputs:
+      epoch: ${{ steps.date.outputs.epoch }}
+    steps:
+      - id: date
+        run: echo "epoch=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+  images:
+    name: Prepare ${{ matrix.shard }} SDK image
+    needs: identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(inputs.shards || '["core","system","swift"]') }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-client-e2e
+        with:
+          shard: ${{ matrix.shard }}
+          cache_epoch: ${{ needs.identity.outputs.epoch }}
+          prepare_only: "true"

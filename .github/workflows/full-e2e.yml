@@ -51,7 +51,7 @@ jobs:
       artifact_key: ${{ github.event.pull_request.head.sha || github.sha }}
 
   prepare-swift-images:
-    name: Warm shared versioned Swift E2E image caches
+    name: Prepare shared SDK and Swift client images
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (
@@ -59,9 +59,7 @@ jobs:
         contains(github.event.pull_request.labels.*.name, 'run-full-e2e') &&
         (github.event.action != 'labeled' || github.event.label.name == 'run-full-e2e')
       )
-    uses: ./.github/workflows/prepare-swift-e2e.yml
-    with:
-      include_legacy: true
+    uses: ./.github/workflows/prepare-client-e2e.yml
 
   jvm-client-e2e:
     name: JVM real-client E2E
@@ -81,6 +79,7 @@ jobs:
       candidate_server_artifact: ${{ needs.build-jvm.outputs.server_artifact }}
       candidate_source_sha: ${{ github.sha }}
       swift_images_prepared: true
+      client_toolchain_epoch: ${{ needs.prepare-swift-images.outputs.cache_epoch }}
       artifact_prefix: full-jvm-client
 
   native-client-e2e:
@@ -100,6 +99,7 @@ jobs:
       candidate_image_artifact: ${{ needs.build-native.outputs.image_artifact }}
       candidate_source_sha: ${{ github.sha }}
       swift_images_prepared: true
+      client_toolchain_epoch: ${{ needs.prepare-swift-images.outputs.cache_epoch }}
       artifact_prefix: full-native-client
 
   verify-client-coverage:

@@ -38,7 +38,7 @@ jobs:
       artifact_key: ${{ github.event.pull_request.head.sha || github.sha }}
 
   prepare-swift-images:
-    name: Warm versioned Swift E2E image caches
+    name: Prepare shared SDK and Swift client images
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (
@@ -49,9 +49,7 @@ jobs:
           (github.event.action == 'labeled' && github.event.label.name == 'run-native-client-e2e')
         )
       )
-    uses: ./.github/workflows/prepare-swift-e2e.yml
-    with:
-      include_legacy: true
+    uses: ./.github/workflows/prepare-client-e2e.yml
 
   native-client-e2e:
     name: Native client E2E
@@ -70,4 +68,5 @@ jobs:
       candidate_image_artifact: ${{ needs.build-native.outputs.image_artifact }}
       candidate_source_sha: ${{ github.sha }}
       swift_images_prepared: true
+      client_toolchain_epoch: ${{ needs.prepare-swift-images.outputs.cache_epoch }}
       artifact_prefix: native-client
