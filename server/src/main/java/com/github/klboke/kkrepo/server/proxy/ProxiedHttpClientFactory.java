@@ -45,6 +45,7 @@ import org.apache.hc.core5.net.URIAuthority;
 import org.apache.hc.core5.util.Timeout;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -96,18 +97,26 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
   private final CloseableHttpClient directClient;
   private final Duration idleTtl;
   private final Duration connectTimeout;
+  private final Duration connectionRequestTimeout;
 
+  @Autowired
   public ProxiedHttpClientFactory(
       @Value("${kkrepo.outbound-proxy.idle-ttl-ms:3600000}") long idleTtlMillis,
-      @Value("${kkrepo.outbound-proxy.connect-timeout-ms:10000}") long connectTimeoutMillis) {
+      @Value("${kkrepo.outbound-proxy.connect-timeout-ms:10000}") long connectTimeoutMillis,
+      @Value("${kkrepo.outbound-proxy.connection-request-timeout-ms:10000}") long connectionRequestTimeoutMillis) {
     this.idleTtl = Duration.ofMillis(Math.max(1L, idleTtlMillis));
     this.connectTimeout = Duration.ofMillis(Math.max(1L, connectTimeoutMillis));
+    this.connectionRequestTimeout = Duration.ofMillis(Math.max(1L, connectionRequestTimeoutMillis));
     this.cache = LocalCacheFactory.standard()
         .<String, CloseableHttpClient>builder("outbound-proxy-clients")
         .expireAfterAccess(this.idleTtl)
         .removalListener((key, client, cause) -> closeQuietly(client))
         .build();
     this.directClient = buildDirect();
+  }
+
+  public ProxiedHttpClientFactory(long idleTtlMillis, long connectTimeoutMillis) {
+    this(idleTtlMillis, connectTimeoutMillis, 10000);
   }
 
   /**
@@ -187,7 +196,9 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
    * <p>The connect timeout is configured once per cached client on its connection manager
    * ({@code kkrepo.outbound-proxy.connect-timeout-ms}), because HttpClient 5.4+ removed per-request
    * connect timeouts ({@code RequestConfig.setConnectTimeout} is deprecated). The response timeout
-   * stays per-request in {@link RequestConfig}.
+   * stays per-request in {@link RequestConfig}. Waiting to lease a pooled connection has its own
+   * timeout ({@code kkrepo.outbound-proxy.connection-request-timeout-ms}, default 10s), independent
+   * of connect and response timeouts.
    */
   @SuppressWarnings("resource") // the shared client is closed by this factory, not per request
   public ProxiedResponse execute(
@@ -243,6 +254,7 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
     }
     boolean proxyEnabled = config != null && config.enabled();
     RequestConfig requestConfig = RequestConfig.custom()
+        .setConnectionRequestTimeout(Timeout.of(connectionRequestTimeout))
         .setResponseTimeout(Timeout.ofMilliseconds(Math.max(1L, responseTimeoutMillis)))
         .setTargetPreferredAuthSchemes(ntlm == null ? null : java.util.List.of("NTLM"))
         .setProxyPreferredAuthSchemes(ntlm == null ? null : java.util.List.of("Basic", "Digest"))

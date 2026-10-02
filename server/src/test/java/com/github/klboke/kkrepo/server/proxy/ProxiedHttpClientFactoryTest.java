@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -21,6 +22,8 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
@@ -30,10 +33,43 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.core5.http.HttpHost;
+import org.apache.hc.core5.http.ConnectionRequestTimeoutException;
 import org.apache.hc.core5.http.message.BasicClassicHttpRequest;
 import org.junit.jupiter.api.Test;
 
 class ProxiedHttpClientFactoryTest {
+
+  @Test
+  void saturatedRouteUsesLeaseTimeoutAndRecoversWhenResponsesClose() throws Exception {
+    HttpServer upstream = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    upstream.createContext("/", exchange -> {
+      byte[] body = "leased".getBytes(StandardCharsets.UTF_8);
+      exchange.sendResponseHeaders(200, body.length);
+      exchange.getResponseBody().write(body);
+      exchange.close();
+    });
+    upstream.start();
+    List<ProxiedHttpClientFactory.ProxiedResponse> held = new ArrayList<>();
+    try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 5000, 100)) {
+      ResolvedHttpTarget target = target("http://127.0.0.1:" + upstream.getAddress().getPort() + "/");
+      try {
+        for (int i = 0; i < 20; i++) {
+          held.add(factory.execute("pool-test", null, "GET", target, Map.of(), 30000));
+        }
+        assertTimeoutPreemptively(Duration.ofSeconds(3), () -> assertThrows(
+            ConnectionRequestTimeoutException.class,
+            () -> factory.execute("pool-test", null, "GET", target, Map.of(), 30000)));
+      } finally {
+        held.forEach(ProxiedHttpClientFactory.ProxiedResponse::close);
+      }
+      try (var response = factory.execute("pool-test", null, "GET", target, Map.of(), 30000)) {
+        assertEquals(200, response.status());
+        assertEquals("leased", new String(response.body().readAllBytes(), StandardCharsets.UTF_8));
+      }
+    } finally {
+      upstream.stop(0);
+    }
+  }
 
   @Test
   void ipv6LiteralUsesUnbracketedApacheEndpointHost() {

@@ -799,6 +799,21 @@ with `COMPAT_RAW_REMOTE_URL` and `COMPAT_RAW_PROXY_PROBE_PATH`; defaults are
 
 ## Docker Registry V2 Compatibility
 
+`scripts/docker-auth-pool-upstream.py` compares same-host bearer authentication against Nexus
+and kkRepo using temporary proxy/group repositories. For both GET and HEAD, 25 concurrent misses
+must return 404, followed by a cold manifest returning 200 with the expected digest and body.
+The upstream sends non-empty 401 responses and synchronizes the first 20 challenges to exercise
+the connection-pool boundary. The kkRepo comparison runs in the Docker client E2E suite.
+Use `--concurrency 1` to establish the Nexus protocol baseline separately from the overload test:
+Nexus 3.94.0 also returned some transient 502s at the synchronized 25-request boundary locally.
+The kkRepo regression always requires all 25 misses and the following cold pull to succeed.
+
+```bash
+python3 compat-test/scripts/docker-auth-pool-upstream.py --nexus http://localhost:28090 --concurrency 1
+KKREPO_COMPAT_AUTH=admin:12345678 python3 compat-test/scripts/docker-auth-pool-upstream.py \
+  --kkrepo http://localhost:18090 --upstream-host 127.0.0.1
+```
+
 `scripts/docker-pagination-upstream.py` creates an isolated registry fixture and temporary
 proxy/group repositories. It verifies tag pagination against Nexus and kkRepo, and additionally
 checks kkRepo catalog pagination, encoded cursors, Link headers and the actual upstream query
