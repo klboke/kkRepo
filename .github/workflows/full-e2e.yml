@@ -102,6 +102,25 @@ jobs:
       swift_images_prepared: true
       artifact_prefix: full-native-client
 
+  verify-client-coverage:
+    name: Verify complete real-client and cleanup coverage
+    needs: [jvm-client-e2e, native-client-e2e]
+    if: >-
+      always() && !cancelled() &&
+      needs.jvm-client-e2e.result != 'skipped' &&
+      needs.native-client-e2e.result != 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: full-*-client-live-compat-*-*-logs
+          path: artifacts/client-coverage
+      - name: Verify every protocol on JVM and Native with both databases
+        run: python3 scripts/ci/verify-client-e2e-coverage.py artifacts/client-coverage >> "$GITHUB_STEP_SUMMARY"
+
   nexus-compatibility:
     name: Nexus compatibility
     needs: build-jvm

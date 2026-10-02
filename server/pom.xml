@@ -326,4 +326,31 @@
       </plugin>
     </plugins>
   </build>
+  <profiles>
+    <profile>
+      <id>native-ci-cache</id>
+      <activation>
+        <property>
+          <name>env.KKREPO_NATIVE_BUILD_CACHE</name>
+        </property>
+      </activation>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-maven-plugin</artifactId>
+            <configuration>
+              <image>
+                <buildCache>
+                  <bind>
+                    <source>${env.KKREPO_NATIVE_BUILD_CACHE}</source>
+                  </bind>
+                </buildCache>
+              </image>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>

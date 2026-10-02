@@ -171,6 +171,8 @@ jobs:
           bash -n scripts/ci/load-e2e-candidate-image.sh
           bash -n scripts/ci/prepare-swift-e2e-tls.sh
           bash -n scripts/ci/setup-swift-e2e-wrappers.sh
+          bash -n scripts/ci/swift-e2e-image-cache.sh
+          bash -n scripts/ci/prepare-e2e-disk.sh
           bash -n scripts/ci/test-e2e-image-artifact.sh
           bash -n scripts/ci/test-quickstart-data-permissions.sh
           bash -n scripts/ci/test-quickstart-runtime.sh
@@ -187,6 +189,7 @@ jobs:
           scripts/ci/test-quickstart-data-permissions.sh
           scripts/ci/test-quickstart-runtime.sh
           scripts/ci/test-swift-e2e-wrappers.sh
+          python3 -m unittest discover -s scripts/ci -p 'test_e2e_orchestration.py'
           scripts/ci/test-dist-launcher.sh
           test -f .github/deploy/dev/systemd/kkrepo.service
           test -f .github/deploy/dev/systemd/kkrepo-native.service

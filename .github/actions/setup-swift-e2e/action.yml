@@ -1,5 +1,5 @@
 name: Set up cached Swift E2E clients
-description: Build fixed Swift client images from reusable BuildKit caches and optionally install wrappers
+description: Restore complete versioned Swift client images and optionally install wrappers
 
 inputs:
   versions:
@@ -7,7 +7,7 @@ inputs:
     required: false
     default: all
   cache_write:
-    description: Export refreshed layers to the GitHub Actions cache
+    description: Save complete client images to the GitHub Actions cache
     required: false
     default: "false"
   wrapper_mode:
@@ -38,50 +38,100 @@ runs:
           *) echo "invalid Swift E2E wrapper mode: $SWIFT_E2E_WRAPPER_MODE" >&2; exit 2 ;;
         esac
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v4
-
-    - name: Build Swift 5.7 E2E image
+    - name: Restore Swift 5.7 image archive
       if: inputs.versions == 'all' || inputs.versions == '5.7'
-      uses: docker/build-push-action@v7
-      env:
-        DOCKER_BUILD_RECORD_UPLOAD: "false"
+      id: swift57
+      uses: actions/cache/restore@v5
       with:
-        context: ${{ github.action_path }}/../../../scripts/ci/swift-e2e-image
-        build-args: BASE_IMAGE=swift:5.7.3-jammy
-        tags: kkrepo/swift-e2e:5.7.3-jammy-v1
-        load: true
-        pull: true
-        cache-from: type=gha,scope=kkrepo-swift-e2e-5.7.3-jammy-v1
-        cache-to: ${{ inputs.cache_write == 'true' && 'type=gha,scope=kkrepo-swift-e2e-5.7.3-jammy-v1,mode=min,ignore-error=true,timeout=20m' || '' }}
+        path: ${{ runner.temp }}/swift-e2e-images/5.7
+        key: ${{ runner.os }}-${{ runner.arch }}-swift-image-v2-5.7-${{ hashFiles('scripts/ci/swift-e2e-image/Dockerfile', 'scripts/ci/swift-e2e-image-cache.sh') }}
 
-    - name: Build Swift 5.10 E2E image
+    - name: Prepare Swift 5.7 image
+      if: inputs.versions == 'all' || inputs.versions == '5.7'
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.swift57.outputs.cache-hit }}
+        WRAPPER_MODE: ${{ inputs.wrapper_mode }}
+      run: |
+        set -euo pipefail
+        cache_dir="$RUNNER_TEMP/swift-e2e-images/5.7"
+        if [[ "$CACHE_HIT" != "true" ]]; then
+          "$GITHUB_ACTION_PATH/../../../scripts/ci/swift-e2e-image-cache.sh" build 5.7 "$cache_dir"
+        elif [[ "$WRAPPER_MODE" != "none" ]]; then
+          "$GITHUB_ACTION_PATH/../../../scripts/ci/swift-e2e-image-cache.sh" load 5.7 "$cache_dir"
+        fi
+
+    - name: Save Swift 5.7 image archive
+      if: (inputs.versions == 'all' || inputs.versions == '5.7') && inputs.cache_write == 'true' && steps.swift57.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ runner.temp }}/swift-e2e-images/5.7
+        key: ${{ runner.os }}-${{ runner.arch }}-swift-image-v2-5.7-${{ hashFiles('scripts/ci/swift-e2e-image/Dockerfile', 'scripts/ci/swift-e2e-image-cache.sh') }}
+
+    - name: Restore Swift 5.10 image archive
       if: inputs.versions == 'all' || inputs.versions == '5.10'
-      uses: docker/build-push-action@v7
-      env:
-        DOCKER_BUILD_RECORD_UPLOAD: "false"
+      id: swift510
+      uses: actions/cache/restore@v5
       with:
-        context: ${{ github.action_path }}/../../../scripts/ci/swift-e2e-image
-        build-args: BASE_IMAGE=swift:5.10.1-jammy
-        tags: kkrepo/swift-e2e:5.10.1-jammy-v1
-        load: true
-        pull: true
-        cache-from: type=gha,scope=kkrepo-swift-e2e-5.10.1-jammy-v1
-        cache-to: ${{ inputs.cache_write == 'true' && 'type=gha,scope=kkrepo-swift-e2e-5.10.1-jammy-v1,mode=min,ignore-error=true,timeout=20m' || '' }}
+        path: ${{ runner.temp }}/swift-e2e-images/5.10
+        key: ${{ runner.os }}-${{ runner.arch }}-swift-image-v2-5.10-${{ hashFiles('scripts/ci/swift-e2e-image/Dockerfile', 'scripts/ci/swift-e2e-image-cache.sh') }}
 
-    - name: Build Swift 6 E2E image
-      if: inputs.versions == 'all' || inputs.versions == 'current' || inputs.versions == '6'
-      uses: docker/build-push-action@v7
+    - name: Prepare Swift 5.10 image
+      if: inputs.versions == 'all' || inputs.versions == '5.10'
+      shell: bash
       env:
-        DOCKER_BUILD_RECORD_UPLOAD: "false"
+        CACHE_HIT: ${{ steps.swift510.outputs.cache-hit }}
+        WRAPPER_MODE: ${{ inputs.wrapper_mode }}
+      run: |
+        set -euo pipefail
+        cache_dir="$RUNNER_TEMP/swift-e2e-images/5.10"
+        if [[ "$CACHE_HIT" != "true" ]]; then
+          "$GITHUB_ACTION_PATH/../../../scripts/ci/swift-e2e-image-cache.sh" build 5.10 "$cache_dir"
+        elif [[ "$WRAPPER_MODE" != "none" ]]; then
+          "$GITHUB_ACTION_PATH/../../../scripts/ci/swift-e2e-image-cache.sh" load 5.10 "$cache_dir"
+        fi
+
+    - name: Save Swift 5.10 image archive
+      if: (inputs.versions == 'all' || inputs.versions == '5.10') && inputs.cache_write == 'true' && steps.swift510.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
       with:
-        context: ${{ github.action_path }}/../../../scripts/ci/swift-e2e-image
-        build-args: BASE_IMAGE=swift:6.3.3-jammy
-        tags: kkrepo/swift-e2e:6.3.3-jammy-v1
-        load: true
-        pull: true
-        cache-from: type=gha,scope=kkrepo-swift-e2e-6.3.3-jammy-v1
-        cache-to: ${{ inputs.cache_write == 'true' && 'type=gha,scope=kkrepo-swift-e2e-6.3.3-jammy-v1,mode=min,ignore-error=true,timeout=20m' || '' }}
+        path: ${{ runner.temp }}/swift-e2e-images/5.10
+        key: ${{ runner.os }}-${{ runner.arch }}-swift-image-v2-5.10-${{ hashFiles('scripts/ci/swift-e2e-image/Dockerfile', 'scripts/ci/swift-e2e-image-cache.sh') }}
+
+    - name: Restore Swift 6 image archive
+      if: inputs.versions == 'all' || inputs.versions == 'current' || inputs.versions == '6'
+      id: swift6
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ runner.temp }}/swift-e2e-images/6
+        key: ${{ runner.os }}-${{ runner.arch }}-swift-image-v2-6-${{ hashFiles('scripts/ci/swift-e2e-image/Dockerfile', 'scripts/ci/swift-e2e-image-cache.sh') }}
+
+    - name: Prepare Swift 6 image
+      if: inputs.versions == 'all' || inputs.versions == 'current' || inputs.versions == '6'
+      shell: bash
+      env:
+        CACHE_HIT: ${{ steps.swift6.outputs.cache-hit }}
+        WRAPPER_MODE: ${{ inputs.wrapper_mode }}
+      run: |
+        set -euo pipefail
+        cache_dir="$RUNNER_TEMP/swift-e2e-images/6"
+        if [[ "$CACHE_HIT" != "true" ]]; then
+          "$GITHUB_ACTION_PATH/../../../scripts/ci/swift-e2e-image-cache.sh" build 6 "$cache_dir"
+        elif [[ "$WRAPPER_MODE" != "none" ]]; then
+          "$GITHUB_ACTION_PATH/../../../scripts/ci/swift-e2e-image-cache.sh" load 6 "$cache_dir"
+        fi
+
+    - name: Save Swift 6 image archive
+      if: (inputs.versions == 'all' || inputs.versions == 'current' || inputs.versions == '6') && inputs.cache_write == 'true' && steps.swift6.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ runner.temp }}/swift-e2e-images/6
+        key: ${{ runner.os }}-${{ runner.arch }}-swift-image-v2-6-${{ hashFiles('scripts/ci/swift-e2e-image/Dockerfile', 'scripts/ci/swift-e2e-image-cache.sh') }}
+
+    - name: Release restored image archives after loading
+      if: inputs.cache_write != 'true'
+      shell: bash
+      run: rm -rf "$RUNNER_TEMP/swift-e2e-images"
 
     - name: Install Swift E2E wrappers
       if: inputs.wrapper_mode != 'none'

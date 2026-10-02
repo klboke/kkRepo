@@ -93,9 +93,35 @@ jobs:
         if: inputs.runtime == 'jvm'
         run: scripts/build-docker-image.sh kkrepo:compat
 
+      - name: Restore Native buildpack layers
+        if: inputs.runtime == 'native'
+        id: native-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ runner.temp }}/native-build-cache
+          key: ${{ runner.os }}-${{ runner.arch }}-native-buildpack-v1-${{ hashFiles('**/pom.xml') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-native-buildpack-v1-${{ hashFiles('**/pom.xml') }}-
+
       - name: Build Native candidate image
         if: inputs.runtime == 'native'
-        run: scripts/build-docker-image.sh --native kkrepo:compat
+        env:
+          KKREPO_NATIVE_BUILD_CACHE: ${{ runner.temp }}/native-build-cache
+        run: |
+          mkdir -p "$KKREPO_NATIVE_BUILD_CACHE"
+          scripts/build-docker-image.sh --native kkrepo:compat
+
+      - name: Save Native buildpack layers
+        if: inputs.runtime == 'native' && steps.native-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/native-build-cache"
+
+      - name: Cache Native buildpack layers
+        if: inputs.runtime == 'native' && steps.native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/native-build-cache
+          key: ${{ steps.native-cache.outputs.cache-primary-key }}
 
       - name: Verify runtime IAM signing over JDBC TLS
         run: python3 scripts/ci/check-database-iam.py --image kkrepo:compat

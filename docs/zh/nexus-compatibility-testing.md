@@ -91,6 +91,10 @@ hosted/group `available.packages()`、依赖安装、更新、proxy `PACKAGES.gz
 
 当 Pull Request 需要覆盖全部 E2E 维度时，添加 `run-full-e2e` 标签。`Full E2E` 编排器会针对实际被测 commit 仅构建一份 JVM 候选镜像和一份 Native 候选镜像，在每个消费任务中校验共享镜像产物的 checksum 与 identity，预热固定版本的 Swift 客户端镜像缓存，然后并行展开到保持不变的 JVM/Native MySQL/PostgreSQL 客户端矩阵、Nexus 兼容性、迁移矩阵、OCI conformance，以及 Swift 平台/S3 lane。原有的 `run-client-e2e`、`run-native-client-e2e`、`run-live-compat`、`run-migration-e2e` 和 `run-docker-oci-conformance` 标签继续用于定向重跑。存在 `run-full-e2e` 标签时，普通 PR 更新只运行统一编排器；显式新增某个定向标签仍只触发对应工作流，不会重启整套矩阵。
 
+Linux 真实客户端任务把全部 21 组协议分成 `core`、`system` 和 `swift` 三个分片，每片使用独立数据库和候选双副本。JVM/Native 与 MySQL/PostgreSQL 的每个组合仍覆盖全部协议、对应客户端版本矩阵和 Cleanup Try Run/Execute。最终覆盖核验任务读取上传报告，检查全部 84 个协议/运行时/数据库组合，缺少协议或清理断言失败都会阻止通过。Nexus、迁移、OCI、平台与 S3 专项任务保持不变。本地可用 `CLIENT_E2E_SHARD=core|system|swift` 选择分片；默认仍按原顺序跑完整套件，`CLIENT_E2E_TESTS` 仍可覆盖协议选择。
+
+各分片只安装需要的 SDK。Swift 完整客户端镜像归档按操作系统、架构、版本和构建配方缓存；消费端核对加载后的镜像 identity，并注入每次运行新生成的 TLS CA。Native CI 使用可选的 `KKREPO_NATIVE_BUILD_CACHE` bind mount 保留 buildpack 缓存层，仍构建并测试当前事件提交。runner 仅在可用磁盘低于 `E2E_MIN_FREE_DISK_GIB`（默认 30）时删除不用的预装 SDK，不再 prune Docker 镜像。客户端产物保留各协议耗时（包含清理验证）和磁盘采样。对比性能时应分别记录首次耗时、重跑延迟、排队、缓存未命中和 runner 总分钟数；分片可能降低等待时间但增加 runner 用量。
+
 ## 真实客户端 E2E
 
 `client-e2e` suite 会用真实包管理器客户端验证一次性 kkrepo 候选实例的行为：

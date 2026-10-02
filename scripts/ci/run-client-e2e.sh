@@ -1422,7 +1422,7 @@ EOF
 test_yum() {
   need docker
   local dir="$WORK_DIR/yum"
-  local rpm_url="${CLIENT_E2E_YUM_FIXTURE_URL:-https://dl.fedoraproject.org/pub/epel/9/Everything/x86_64/Packages/6/6tunnel-0.13-1.el9.x86_64.rpm}"
+  local rpm_url="${CLIENT_E2E_YUM_FIXTURE_URL:-https://kojipkgs.fedoraproject.org/packages/6tunnel/0.13/1.el9/x86_64/6tunnel-0.13-1.el9.x86_64.rpm}"
   local rpm="$dir/$(basename "$rpm_url")"
   local upload_path="Packages/client-e2e-$STAMP/$(basename "$rpm_url")"
   mkdir -p "$dir"
@@ -4050,16 +4050,17 @@ test_ansible() {
 run_selected_tests() {
   local selection="${CLIENT_E2E_TESTS:-all}"
   local -a tests=()
-  local test
+  local test test_started
 
   if [[ -z "$selection" || "$selection" == "all" ]]; then
-    tests=(raw maven npm pypi go helm cargo pub composer nuget rubygems yum apt alpine r conda conan terraform swift ansible docker-oci)
-  else
-    IFS=',' read -r -a tests <<<"$selection"
+    selection="$(python3 "$SCRIPT_DIR/client-e2e-plan.py" "${CLIENT_E2E_SHARD:-all}")"
   fi
+  IFS=',' read -r -a tests <<<"$selection"
 
   for test in "${tests[@]}"; do
     test="${test//[[:space:]]/}"
+    test_started=$SECONDS
+    log "starting protocol $test"
     CLEANUP_FIXTURE_FORMAT=""
     CLEANUP_FIXTURE_REPOSITORY=""
     CLEANUP_FIXTURE_PATTERN=""
@@ -4167,6 +4168,9 @@ run_selected_tests() {
         ;;
     esac
     run_registered_cleanup
+    # Includes Cleanup Try Run/Execute: these are coverage, not housekeeping.
+    printf '%s\t%s\n' "$test" "$((SECONDS - test_started))" >> "$ARTIFACT_DIR/protocol-durations.tsv"
+    df -Pk / >> "$ARTIFACT_DIR/disk-usage.txt"
   done
 }
 
