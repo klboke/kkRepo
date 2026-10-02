@@ -1765,6 +1765,9 @@ test_docker_oci() {
   run_logged docker-proxy-pagination env KKREPO_COMPAT_AUTH="$KKREPO_USER:$KKREPO_PASSWORD" \
     python3 compat-test/scripts/docker-pagination-upstream.py --kkrepo "$KKREPO_URL" \
     --upstream-host "${DOCKER_PAGINATION_UPSTREAM_HOST:-host.docker.internal}"
+  run_logged docker-proxy-auth-pool env KKREPO_COMPAT_AUTH="$KKREPO_USER:$KKREPO_PASSWORD" \
+    python3 compat-test/scripts/docker-auth-pool-upstream.py --kkrepo "$KKREPO_URL" \
+    --upstream-host "${DOCKER_AUTH_POOL_UPSTREAM_HOST:-host.docker.internal}"
   local image="kkrepo-client-e2e/docker-oci"
   local ref="$KKREPO_DOCKER_HOSTED_REGISTRY/$image:$STAMP"
   run_logged docker-login bash -lc "printf '%s\n' \"$KKREPO_PASSWORD\" | docker login '$KKREPO_DOCKER_HOSTED_REGISTRY' --username '$KKREPO_USER' --password-stdin"

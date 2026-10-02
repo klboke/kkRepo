@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
 import com.github.klboke.kkrepo.server.security.SecurityValidationException;
 import io.micrometer.core.instrument.Timer;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -32,6 +33,7 @@ import org.springframework.stereotype.Component;
 public class DockerRemoteRegistryClient {
   private static final String TOKEN_CACHE_NAMESPACE = "docker-remote-token";
   private static final int MAX_REDIRECTS = 5;
+  private static final int MAX_CHALLENGE_BODY_BYTES = 64 * 1024;
 
   private final HttpRemoteFetcher fetcher;
   private final OutboundRequestPolicy outboundPolicy;
@@ -69,24 +71,38 @@ public class DockerRemoteRegistryClient {
     RemoteFetch fetched = fetch(url, runtime, null, accept);
     HttpRemoteFetcher.Result result = fetched.result();
     if (result.status() == 401 && fetched.credentialsAllowed()) {
+      result = releaseChallenge(result);
       String challenge = result.header("WWW-Authenticate");
       RemoteToken token = token(runtime, challenge).orElse(null);
       if (token != null) {
-        result.close();
         fetched = fetch(fetched.effectiveUri().toString(), runtime, token.value(), accept);
         result = fetched.result();
         if (result.status() == 401 && token.cached() && fetched.credentialsAllowed()) {
+          result = releaseChallenge(result);
           evictToken(token.cacheKey());
           challenge = result.header("WWW-Authenticate");
           token = fetchToken(runtime, BearerChallenge.parse(challenge).orElse(null), true).orElse(null);
           if (token != null) {
-            result.close();
             result = fetch(fetched.effectiveUri().toString(), runtime, token.value(), accept).result();
           }
         }
       }
     }
     return result;
+  }
+
+  private static HttpRemoteFetcher.Result releaseChallenge(HttpRemoteFetcher.Result result) throws IOException {
+    // The token realm may share the registry's route. Release that lease before any token/cache
+    // operation, including refresh failures. Keep the error body readable if no token is available;
+    // successful manifests and blobs continue to stream without buffering here.
+    try (result) {
+      byte[] body = result.body().readNBytes(MAX_CHALLENGE_BODY_BYTES + 1);
+      if (body.length > MAX_CHALLENGE_BODY_BYTES) {
+        throw new IOException("Docker authentication challenge body exceeds 64 KiB");
+      }
+      return new HttpRemoteFetcher.Result(result.status(), result.headers(),
+          new ByteArrayInputStream(body));
+    }
   }
 
   private RemoteFetch fetch(

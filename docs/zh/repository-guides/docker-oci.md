@@ -81,6 +81,11 @@ manifest 与 layer 集合，而不是未完成的 upload session。
 是正常行为；登录后持续 `401` 通常表示广告的 realm/service 与客户端可见 host 不一致。
 反向代理后的 push 失败常见于 request body 限制、timeout 或 upload-session location 转发错误。
 
+Docker proxy 会在获取或刷新 bearer token 前释放上游 401 challenge 占用的连接，token realm
+与 registry 同主机时也适用。每个副本独立维护可重建的出站连接池。等待连接池分配连接的默认
+超时为 10 秒，可通过 `KKREPO_OUTBOUND_PROXY_CONNECTION_REQUEST_TIMEOUT_MS`（毫秒）调整。
+该配置适用于所有直连和经过出站代理的 HTTP 请求，与 TCP 建连超时及响应/下载超时相互独立。
+
 ## 相关文档
 
 - [Docker / OCI 客户端配置示例](../client-recipes.md#docker--oci)

@@ -88,6 +88,13 @@ is normal for a private registry; repeated `401` after login usually means the a
 service does not match the client-visible host. Push failures behind a reverse proxy commonly involve
 request-body limits, timeouts, or incorrect forwarding of upload-session locations.
 
+Docker proxies release upstream 401 challenge connections before requesting or refreshing a bearer
+token, including when the token realm shares the registry host. Each replica manages its own
+rebuildable outbound connection pools. Waiting for a pool connection defaults to 10 seconds;
+configure `KKREPO_OUTBOUND_PROXY_CONNECTION_REQUEST_TIMEOUT_MS` (milliseconds) to change it.
+This setting applies to all direct and proxied outbound HTTP requests and is independent of the
+TCP connect timeout and response/download timeout.
+
 ## Related Documentation
 
 - [Docker / OCI client recipe](../client-recipes.md#docker--oci)
