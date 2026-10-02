@@ -9,6 +9,16 @@
 It also contains unit-level and diagnostic compatibility checks that run during normal `mvn test`
 or when explicitly enabled.
 
+## Custom CA runtime checks
+
+`scripts/ci/check-custom-ca.py --jar server/target/kkrepo-server-1.1.1.jar` starts disposable
+PostgreSQL and HTTPS MinIO containers plus an HTTPS upstream signed by a second private CA.
+It verifies blob-store read/write/delete, hosted artifact upload/download, and an uncached proxy
+download with a combined PEM bundle, then restarts without the bundle and checks TLS rejection.
+Use the jar version produced by your checkout. `--image kkrepo:compat` runs the same checks on
+Linux with Docker host networking; the shared JVM and Native candidate builds both run it.
+Docker, OpenSSL and curl are required. The probe removes its own containers and data on exit.
+
 ## Reference Nexus Endpoint
 
 Use the Docker-resident Nexus service as the fixed reference endpoint:

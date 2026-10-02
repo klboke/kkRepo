@@ -2,9 +2,11 @@ package com.github.klboke.kkrepo.storage.s3;
 
 import com.github.klboke.kkrepo.cache.LocalCache;
 import com.github.klboke.kkrepo.cache.LocalCacheFactory;
+import com.github.klboke.kkrepo.core.http.OutboundTlsTrust;
 import jakarta.annotation.PreDestroy;
 import java.net.URI;
 import java.time.Duration;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
@@ -15,9 +17,19 @@ import software.amazon.awssdk.services.s3.S3Configuration;
 
 @Component
 public class S3ClientFactory {
+  private final OutboundTlsTrust tlsTrust;
   private final LocalCache<Long, CachedClient> cache = LocalCacheFactory.standard()
       .<Long, CachedClient>builder("s3-clients")
       .build();
+
+  public S3ClientFactory() {
+    this(OutboundTlsTrust.defaults());
+  }
+
+  @Autowired
+  public S3ClientFactory(OutboundTlsTrust tlsTrust) {
+    this.tlsTrust = tlsTrust;
+  }
 
   public S3Client client(S3BlobStoreConfig config) {
     String signature = config.signature();
@@ -49,16 +61,20 @@ public class S3ClientFactory {
     cache.invalidateAll();
   }
 
-  private static S3Client build(S3BlobStoreConfig config) {
+  private S3Client build(S3BlobStoreConfig config) {
+    var http = ApacheHttpClient.builder()
+        .maxConnections(config.maxConnections())
+        .connectionTimeout(Duration.ofMillis(config.connectionTimeoutMs()))
+        .socketTimeout(Duration.ofMillis(config.socketTimeoutMs()))
+        .connectionAcquisitionTimeout(Duration.ofMillis(config.connectionAcquisitionTimeoutMs()))
+        .tcpKeepAlive(config.tcpKeepAlive());
+    if (tlsTrust.configured()) {
+      http.tlsTrustManagersProvider(tlsTrust::trustManagers);
+    }
     var builder = S3Client.builder()
         .endpointOverride(URI.create(config.endpoint()))
         .region(Region.of(config.region()))
-        .httpClientBuilder(ApacheHttpClient.builder()
-            .maxConnections(config.maxConnections())
-            .connectionTimeout(Duration.ofMillis(config.connectionTimeoutMs()))
-            .socketTimeout(Duration.ofMillis(config.socketTimeoutMs()))
-            .connectionAcquisitionTimeout(Duration.ofMillis(config.connectionAcquisitionTimeoutMs()))
-            .tcpKeepAlive(config.tcpKeepAlive()))
+        .httpClientBuilder(http)
         .serviceConfiguration(S3Configuration.builder()
             // Disable aws-chunked streaming upload encoding: S3-compatible stores like Aliyun OSS
             // reject it ("aws-chunked encoding is not supported with the specified

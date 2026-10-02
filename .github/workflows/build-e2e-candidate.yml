@@ -126,6 +126,9 @@ jobs:
       - name: Verify runtime IAM signing over JDBC TLS
         run: python3 scripts/ci/check-database-iam.py --image kkrepo:compat
 
+      - name: Verify custom CA trust against HTTPS MinIO and an upstream repository
+        run: python3 scripts/ci/check-custom-ca.py --image kkrepo:compat
+
       - name: Package candidate image
         shell: bash
         env:

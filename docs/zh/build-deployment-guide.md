@@ -386,6 +386,8 @@ WantedBy=multi-user.target
 
 ## S3 认证
 
+HTTPS S3/MinIO 或上游仓库使用内部 CA 时，请参考[自定义 CA 证书](outbound-tls.md)。JVM 和 Native 均可通过 `KKREPO_TLS_CA_CERTIFICATES` 指定 PEM 证书包。
+
 如需使用 EC2 实例角色、EKS Pod Identity 或 IRSA，而不配置静态密钥，请参阅 [S3 凭据与 IAM 角色](s3-credentials.md)。该指南包含 IAM 权限、信任策略、ServiceAccount 配置，以及将已有 Blob Store 切换到 AWS 默认凭据链的方法。
 
 ## 生产部署架构

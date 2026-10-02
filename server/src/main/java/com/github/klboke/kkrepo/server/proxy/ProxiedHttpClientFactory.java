@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.proxy;
 
 import com.github.klboke.kkrepo.cache.LocalCache;
 import com.github.klboke.kkrepo.cache.LocalCacheFactory;
+import com.github.klboke.kkrepo.core.http.OutboundTlsTrust;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy.ResolvedHttpTarget;
 import jakarta.annotation.PreDestroy;
 import java.io.IOException;
@@ -23,6 +24,7 @@ import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.impl.classic.HttpClients;
 import org.apache.hc.client5.http.impl.io.DefaultHttpClientConnectionOperator;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
+import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
 import org.apache.hc.client5.http.io.DetachedSocketFactory;
 import org.apache.hc.client5.http.io.HttpClientConnectionOperator;
 import org.apache.hc.client5.http.protocol.HttpClientContext;
@@ -45,6 +47,7 @@ import org.apache.hc.core5.net.URIAuthority;
 import org.apache.hc.core5.util.Timeout;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -96,10 +99,18 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
   private final CloseableHttpClient directClient;
   private final Duration idleTtl;
   private final Duration connectTimeout;
+  private final OutboundTlsTrust tlsTrust;
 
+  public ProxiedHttpClientFactory(long idleTtlMillis, long connectTimeoutMillis) {
+    this(idleTtlMillis, connectTimeoutMillis, OutboundTlsTrust.defaults());
+  }
+
+  @Autowired
   public ProxiedHttpClientFactory(
       @Value("${kkrepo.outbound-proxy.idle-ttl-ms:3600000}") long idleTtlMillis,
-      @Value("${kkrepo.outbound-proxy.connect-timeout-ms:10000}") long connectTimeoutMillis) {
+      @Value("${kkrepo.outbound-proxy.connect-timeout-ms:10000}") long connectTimeoutMillis,
+      OutboundTlsTrust tlsTrust) {
+    this.tlsTrust = tlsTrust;
     this.idleTtl = Duration.ofMillis(Math.max(1L, idleTtlMillis));
     this.connectTimeout = Duration.ofMillis(Math.max(1L, connectTimeoutMillis));
     this.cache = LocalCacheFactory.standard()
@@ -397,9 +408,21 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
     return buildHttp(config);
   }
 
+  private TlsSocketStrategy tlsStrategy() {
+    return tlsTrust.configured()
+        ? new DefaultClientTlsStrategy(tlsTrust.sslContext())
+        : DefaultClientTlsStrategy.createDefault();
+  }
+
+  private PoolingHttpClientConnectionManager connectionManager() {
+    return PoolingHttpClientConnectionManagerBuilder.create()
+        .setTlsSocketStrategy(tlsStrategy())
+        .build();
+  }
+
   private CloseableHttpClient buildDirect() {
     PoolingHttpClientConnectionManager connectionManager =
-        new PoolingHttpClientConnectionManager();
+        connectionManager();
     configureConnectionManager(connectionManager);
     return HttpClients.custom()
         .setConnectionManager(connectionManager)
@@ -411,7 +434,7 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
 
   private CloseableHttpClient buildHttp(OutboundProxyConfig config) {
     HttpHost proxy = new HttpHost(URIScheme.HTTP.getId(), config.host(), config.port());
-    PoolingHttpClientConnectionManager connectionManager = new PoolingHttpClientConnectionManager();
+    PoolingHttpClientConnectionManager connectionManager = connectionManager();
     configureConnectionManager(connectionManager);
     var builder = HttpClients.custom()
         .setConnectionManager(connectionManager)
@@ -444,7 +467,7 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
     DetachedSocketFactory socketFactory = proxy ->
         new Socks5TunnelSocket(proxyAddress, username, password);
     Lookup<TlsSocketStrategy> tlsStrategies = RegistryBuilder.<TlsSocketStrategy>create()
-        .register(URIScheme.HTTPS.getId(), DefaultClientTlsStrategy.createDefault())
+        .register(URIScheme.HTTPS.getId(), tlsStrategy())
         .build();
     HttpClientConnectionOperator operator =
         new DefaultHttpClientConnectionOperator(

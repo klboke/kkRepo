@@ -386,6 +386,8 @@ WantedBy=multi-user.target
 
 ## S3 authentication
 
+For internal CA certificates on HTTPS S3/MinIO or upstream repositories, see [Custom CA certificates](outbound-tls.md). Set `KKREPO_TLS_CA_CERTIFICATES` to a PEM bundle in either JVM or Native deployments.
+
 For EC2 instance profiles, EKS Pod Identity, and IRSA without static access keys, see [S3 credentials and IAM roles](s3-credentials.md). The guide includes IAM permissions, trust policies, ServiceAccount configuration, and switching existing blob stores to the default AWS credentials chain.
 
 ## Production Deployment Architecture
