@@ -1422,7 +1422,7 @@ EOF
 test_yum() {
   need docker
   local dir="$WORK_DIR/yum"
-  local rpm_url="${CLIENT_E2E_YUM_FIXTURE_URL:-https://dl.fedoraproject.org/pub/epel/9/Everything/x86_64/Packages/6/6tunnel-0.13-1.el9.x86_64.rpm}"
+  local rpm_url="${CLIENT_E2E_YUM_FIXTURE_URL:-https://kojipkgs.fedoraproject.org/packages/6tunnel/0.13/1.el9/x86_64/6tunnel-0.13-1.el9.x86_64.rpm}"
   local rpm="$dir/$(basename "$rpm_url")"
   local upload_path="Packages/client-e2e-$STAMP/$(basename "$rpm_url")"
   mkdir -p "$dir"
