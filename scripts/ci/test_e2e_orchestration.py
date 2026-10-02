@@ -161,6 +161,7 @@ esac
                         SWIFT_E2E_REQUIRE_5_7_5_9_6="true", SWIFT_E2E_BINS="fixture",
                         LIVE_COMPAT_START_TIMEOUT_SECONDS="360",
                         GITHUB_TOKEN="must-not-be-forwarded")
+        self.stub("stat", "printf '127\\n'\n")
         self.stub("docker", '''if [[ "$1" == image ]]; then
   printf 'sha256:%064d\\n' 0
 else
@@ -178,6 +179,10 @@ fi
         self.assertIn(f"type=bind,source={runner},target={runner}", args)
         self.assertIn("type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock", args)
         self.assertIn("host", args)
+        self.assertIn("--user", args)
+        self.assertIn(f"{os.getuid()}:{os.getgid()}", args)
+        self.assertIn("--group-add", args)
+        self.assertEqual(args[args.index("--group-add") + 1], "127")
         self.assertIn("LIVE_COMPAT_START_TIMEOUT_SECONDS", args)
         self.assertIn("SWIFT_E2E_BINS", args)
         self.assertIn("SWIFT_E2E_REQUIRE_5_7_5_9_6", args)

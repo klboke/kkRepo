@@ -11,6 +11,13 @@ args=(--rm --network host
   --mount "type=bind,source=$runner_temp,target=$runner_temp"
   --mount "type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock"
   --workdir "$project_root")
+# SwiftPM resolves root's home through passwd, ignoring HOME. Retain the host
+# runner identity so its login configuration survives across Swift containers.
+# The supplementary socket group permits invoking those sibling containers.
+if [[ "$image" == kkrepo/client-e2e:swift-v1 ]]; then
+  socket_gid="$(stat -c '%g' /var/run/docker.sock)"
+  args+=(--user "$(id -u):$(id -g)" --group-add "$socket_gid")
+fi
 # Forward test configuration by name, never runner credentials or its PATH.
 # Matching host/container paths are required by the sibling Docker clients.
 while IFS= read -r name; do
