@@ -40,7 +40,7 @@ COPY --from=php /usr/local/bin/php /usr/local/bin/php
 COPY --from=php /usr/local/lib/php /usr/local/lib/php
 COPY --from=php /usr/local/etc/php /usr/local/etc/php
 COPY --from=composer /usr/bin/composer /usr/local/bin/composer
-ENV PATH=/opt/java/openjdk/bin:/opt/python-env/bin:/opt/maven/bin:/opt/flutter/bin:/opt/dart/dart-sdk/bin:/opt/cargo/bin:/usr/local/go/bin:/usr/share/dotnet:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+ENV PATH=/opt/java/openjdk/bin:/opt/python-env/bin:/opt/maven/bin:/opt/flutter/bin:/opt/cargo/bin:/usr/local/go/bin:/usr/share/dotnet:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     CARGO_HOME=/opt/cargo RUSTUP_HOME=/opt/rustup DOTNET_ROOT=/usr/share/dotnet \
     COMPOSER_ALLOW_SUPERUSER=1
 RUN ldconfig && bash /opt/e2e/install.sh core && bash /opt/e2e/verify.sh core > /opt/e2e/versions.txt

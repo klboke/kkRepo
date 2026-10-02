@@ -30,11 +30,11 @@ case "${1:-}" in
     grep " ${oras_archive}$" oras.sha256 | sha256sum --check -
     tar -xzf "$oras_archive" oras
     install oras /usr/local/bin/oras
-    download https://storage.googleapis.com/dart-archive/channels/stable/release/latest/sdk/dartsdk-linux-x64-release.zip -o dart.zip
-    unzip -q dart.zip -d /opt/dart
+    # Flutter supplies the Dart executable used by both Pub flows. Keep only
+    # their universal artifacts; these tests do not build desktop applications.
     git clone --depth 1 --branch stable https://github.com/flutter/flutter.git /opt/flutter
     flutter config --no-analytics
-    flutter precache --linux
+    flutter precache --universal
     ;;
   system)
     python -m pip install --no-cache-dir 'conan==2.31.2'

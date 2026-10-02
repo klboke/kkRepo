@@ -159,6 +159,7 @@ esac
         runner = self.root / "runner with spaces"
         self.env.update(RUNNER_TEMP=str(runner), CLIENT_E2E_IMAGE="kkrepo/client-e2e:swift-v1",
                         SWIFT_E2E_REQUIRE_5_7_5_9_6="true", SWIFT_E2E_BINS="fixture",
+                        LIVE_COMPAT_START_TIMEOUT_SECONDS="360",
                         GITHUB_TOKEN="must-not-be-forwarded")
         self.stub("docker", '''if [[ "$1" == image ]]; then
   printf 'sha256:%064d\\n' 0
@@ -177,6 +178,7 @@ fi
         self.assertIn(f"type=bind,source={runner},target={runner}", args)
         self.assertIn("type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock", args)
         self.assertIn("host", args)
+        self.assertIn("LIVE_COMPAT_START_TIMEOUT_SECONDS", args)
         self.assertIn("SWIFT_E2E_BINS", args)
         self.assertIn("SWIFT_E2E_REQUIRE_5_7_5_9_6", args)
         self.assertIn(f"CLIENT_E2E_WORK_DIR={runner}/client-e2e-runtime/work", args)

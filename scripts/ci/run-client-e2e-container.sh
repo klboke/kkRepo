@@ -15,7 +15,7 @@ args=(--rm --network host
 # Matching host/container paths are required by the sibling Docker clients.
 while IFS= read -r name; do
   case "$name" in
-    KKREPO_*|CLIENT_E2E_*|SWIFT_*|COMPAT_*|NEXUS_*|APT_*|ALPINE_*|R_*|ANSIBLE_*|CONAN_*|CONDA_*|TERRAFORM_*|PUB_*|COMPOSER_*|GO_*|HELM_*|PNPM_*|CURL_CA_BUNDLE)
+    KKREPO_*|CLIENT_E2E_*|LIVE_COMPAT_*|DOCKER_PAGINATION_*|SWIFT_*|COMPAT_*|NEXUS_*|APT_*|ALPINE_*|R_*|ANSIBLE_*|CONAN_*|CONDA_*|TERRAFORM_*|PUB_*|COMPOSER_*|GO_*|HELM_*|PNPM_*|CURL_CA_BUNDLE)
       args+=(--env "$name") ;;
   esac
 done < <(compgen -e)
