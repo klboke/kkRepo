@@ -65,6 +65,24 @@ class GitLfsHostedServiceTest {
     assertEquals(401, error.status());
     verifyNoInteractions(uploads);
   }
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.EnumSource(GitLfsRepositoryStateException.Reason.class)
+  void batchReportsDurableRepositoryChangesAsLfsErrors(GitLfsRepositoryStateException.Reason reason) {
+    String oid = "a".repeat(64);
+    when(access.allowedObjects(any(), eq("lfs"), any(), eq(PermissionAction.ADD))).thenReturn(Set.of(oid));
+    when(assets.findAssetsByPaths(anyLong(), any())).thenReturn(Map.of());
+    when(uploads.create(anyLong(), anyString(), anyLong(), anyString(), anyLong()))
+        .thenThrow(new GitLfsRepositoryStateException(reason));
+    var error = assertThrows(GitLfsException.class, () -> service.batch(repository(),
+        new GitLfsProtocol.Batch("upload", List.of(new GitLfsProtocol.ObjectRequest(oid, 3, null))), request()));
+    assertEquals(switch (reason) {
+      case MISSING -> 404;
+      case OFFLINE -> 503;
+      case READ_ONLY -> 403;
+      case CONFIGURATION_CHANGED -> 409;
+    }, error.status());
+    verifyNoInteractions(stores);
+  }
   @Test void lostSuccessResponseCanReplayOnlyTheOriginalBytesWithoutRewritingStorage() throws Exception {
     byte[] body = "abc".getBytes(java.nio.charset.StandardCharsets.UTF_8);
     String oid = HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(body));

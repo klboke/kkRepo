@@ -98,7 +98,9 @@ public class GitLfsAccess {
         response.setHeader("WWW-Authenticate", "Basic realm=\"Git LFS\"");
         response.setHeader("LFS-Authenticate", "Basic realm=\"Git LFS\"");
       }
-      json.writeValue(response.getOutputStream(), Map.of("message", error.getMessage()));
+      if (!"HEAD".equals(request.getMethod())) {
+        json.writeValue(response.getOutputStream(), Map.of("message", error.getMessage()));
+      }
       return false;
     }
   }

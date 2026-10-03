@@ -64,8 +64,11 @@ Batch 按 operation 判断 READ/ADD，并对每个真实 OID 授权，而不是�
 
 写入和 verify 要求显式凭据，单独浏览器 cookie 不能授权。显式无效凭据不会回退到 cookie/匿名。
 匿名只读遵循现有匿名配置和角色。默认 authenticated role 的额外 READ 授权仍生效，selector 不覆盖其它有效授权。
-401 带 LFS JSON、WWW-Authenticate 和 LFS-Authenticate；混合 Batch 的权限失败为对象级 403。
+401 带 LFS JSON、WWW-Authenticate 和 LFS-Authenticate；HEAD 的所有响应（包括 filter 拒绝）均无 body。
+混合 Batch 的权限失败为对象级 403。405 返回目标路径的 Allow：对象为 GET/HEAD/PUT，verify 为 POST。
 操作容量不足为 429/Retry-After；旧 context/租约冲突为 409，客户端重新 Batch；过期已回收 context 为 410。
+Batch 创建 context 前会再次在数据库事务中检查仓库。并发删除、下线、只读或存储配置变化，
+分别返回请求级 404、503、403 或 409，不将这些状态变化作为内部错误处理。
 
 绝对 action URL 通过 `ForwardedHeaderPolicy` 构造，路径留在当前仓库公开入口下，
 不暴露 bucket/key。上传 ID 只关联持久上下文，不是免认证凭据；所有 action 重新鉴权。
@@ -95,6 +98,9 @@ V59 在两个数据库中新增：
 4. 完整性通过后重新鉴权，在短事务内锁定仓库/对象/context，检查 generation、fence、租约、仓库版本/online/write policy。
 5. 一次提交 blob、component、asset、Browse 节点、通用 asset-change outbox 和 PUBLISHED 状态。提交前对象不可下载。
 6. 若同一 OID 已由其它 context 发布，保留既有 asset，将本 attempt 留给清理；同 OID 不做覆盖更新。
+
+续租与发布保持 object → upload 的加锁顺序，确认两行的 fence、期限和状态后才更新两个期限。
+如果清理已将 context 改为 REAPING，续租返回失败且不改变对象租约，避免延迟下一次上传接管。
 
 重试 Batch 可见已发布对象；丢失成功响应后的相同 PUT 会重新验证 body，不覆盖内容。
 删除 asset 时 FK 原子置空并保留 published tombstone，旧 context 无法复活对象。

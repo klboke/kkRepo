@@ -34,9 +34,14 @@ class GitLfsProtocolHandlerTest {
   @BeforeEach void setup() throws Exception {
     var handler = new GitLfsProtocolHandler(service, stores, policy, new ObjectMapper());
     var dispatcher = mock(RepositoryProtocolDispatcher.class);
-    when(dispatcher.dispatchRead(eq("lfs"), any(), any())).thenAnswer(call -> handler.handle(
-        new RepositoryProtocolRequest(GitLfsHostedServiceTest.repository(), "lfs", OID,
-            call.getArgument(2), call.getArgument(1), null, null)));
+    org.mockito.stubbing.Answer<org.springframework.http.ResponseEntity<?>> dispatch = call -> {
+      jakarta.servlet.http.HttpServletRequest request = call.getArgument(1);
+      return handler.handle(new RepositoryProtocolRequest(GitLfsHostedServiceTest.repository(), "lfs",
+          request.getRequestURI().substring("/repository/lfs/".length()),
+          call.getArgument(2), request, null, null));
+    };
+    when(dispatcher.dispatchRead(eq("lfs"), any(), any())).thenAnswer(dispatch);
+    when(dispatcher.dispatch(eq("lfs"), any(), any(), isNull())).thenAnswer(dispatch);
     mvc = MockMvcBuilders.standaloneSetup(new RepositoryProtocolController(dispatcher)).build();
     Instant time = Instant.parse("2026-01-01T00:00:00Z");
     var asset = new AssetRecord(3L, 1, 1L, 2L, RepositoryFormat.GITLFS, OID, new byte[32],
@@ -89,5 +94,17 @@ class GitLfsProtocolHandlerTest {
     var result = perform(get(URL).header("Range", "bytes=1-3").header("If-Range", "\"old\""));
     assertEquals(200, result.getStatus());
     assertEquals("abcdef", result.getContentAsString());
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.CsvSource({"GET, /verify", "HEAD, /verify", "PUT, /verify",
+      "DELETE, /verify", "POST, ''", "DELETE, ''"})
+  void unsupportedMethodsAdvertiseTheMethodsOfTheTargetRoute(String method, String suffix) throws Exception {
+    var response = perform(request(HttpMethod.valueOf(method), URL + suffix));
+    assertEquals(405, response.getStatus());
+    assertEquals(suffix.isEmpty() ? "GET,HEAD,PUT" : "POST", response.getHeader("Allow"));
+    if (method.equals("HEAD")) assertEquals(0, response.getContentAsByteArray().length);
+    else assertTrue(response.getContentAsString().contains("message"));
+    verifyNoInteractions(service, storage, policy);
   }
 }

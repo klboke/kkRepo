@@ -115,6 +115,11 @@ public class GitLfsProtocolHandler implements RepositoryProtocolHandler {
       if (error.status() == 401) builder.header("LFS-Authenticate", "Basic realm=\"Git LFS\"")
           .header(HttpHeaders.WWW_AUTHENTICATE, "Basic realm=\"Git LFS\"");
       if (error.status() == 429 || error.status() == 503) builder.header(HttpHeaders.RETRY_AFTER, "5");
+      if (error.status() == 405) {
+        builder.allow(context.path().endsWith("/verify")
+            ? new HttpMethod[] {HttpMethod.POST}
+            : new HttpMethod[] {HttpMethod.GET, HttpMethod.HEAD, HttpMethod.PUT});
+      }
       Map<String, Object> body = Map.of("message", error.getMessage());
       if (context.method() == HttpMethod.HEAD) return builder.build();
       if (context.method() == HttpMethod.GET) {

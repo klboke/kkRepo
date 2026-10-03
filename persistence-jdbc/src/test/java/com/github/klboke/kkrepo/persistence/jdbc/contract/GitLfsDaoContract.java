@@ -26,8 +26,14 @@ public final class GitLfsDaoContract {
     GitLfsDao dao = stores.gitLfs();
     String oid = "b".repeat(64);
     String subject = "a".repeat(64);
-    assertThrows(IllegalStateException.class,
-        () -> tx.execute(s -> dao.create(repository, oid, 5, subject, store + 100)));
+    assertEquals(GitLfsRepositoryStateException.Reason.CONFIGURATION_CHANGED,
+        assertThrows(GitLfsRepositoryStateException.class,
+            () -> tx.execute(s -> dao.create(repository, oid, 5, subject, store + 100))).reason());
+    jdbc.update("UPDATE repository SET online = FALSE WHERE id = ?", repository);
+    assertEquals(GitLfsRepositoryStateException.Reason.OFFLINE,
+        assertThrows(GitLfsRepositoryStateException.class,
+            () -> tx.execute(s -> dao.create(repository, oid, 5, subject, store))).reason());
+    jdbc.update("UPDATE repository SET online = TRUE WHERE id = ?", repository);
     var first = tx.execute(s -> dao.create(repository, oid, 5, subject, store));
     var second = tx.execute(s -> dao.create(repository, oid, 5, subject, store));
     assertTrue(tx.execute(s -> dao.claim(first.id(), "wrong-owner", "blob://bucket/one", "one")).isEmpty());
@@ -38,6 +44,20 @@ public final class GitLfsDaoContract {
     dao.multipartStarted(first.id(), claimed.fence(), "provider-upload-id");
     assertEquals("provider-upload-id", dao.find(first.id()).orElseThrow().multipartId());
     Timestamp past = Timestamp.from(Instant.parse("2000-01-01T00:00:00Z"));
+    // A collector can own the upload while an old heartbeat still believes its object lease is
+    // valid. A failed renewal must leave both deadlines unchanged, including on normal commit.
+    Timestamp deadline = Timestamp.from(jdbc.queryForObject("SELECT CURRENT_TIMESTAMP", Timestamp.class)
+        .toInstant().plusSeconds(60));
+    jdbc.update("UPDATE gitlfs_object SET lease_until = ? WHERE repository_id = ?", deadline, repository);
+    String leaseQuery = "SELECT lease_until FROM gitlfs_object WHERE repository_id = ? AND oid = ?";
+    Timestamp storedDeadline = jdbc.queryForObject(leaseQuery, Timestamp.class, repository, oid);
+    jdbc.update("UPDATE gitlfs_upload SET expires_at = ? WHERE upload_id = ?", past, first.id());
+    tx.execute(s -> dao.claimExpired(100));
+    var reaping = dao.find(first.id()).orElseThrow();
+    assertEquals("REAPING", reaping.state());
+    assertFalse(tx.<Boolean>execute(s -> dao.renew(first.id(), claimed.fence())));
+    assertEquals(storedDeadline, jdbc.queryForObject(leaseQuery, Timestamp.class, repository, oid));
+    assertEquals(reaping.expiresAt(), dao.find(first.id()).orElseThrow().expiresAt());
     jdbc.update("UPDATE gitlfs_object SET lease_until = ? WHERE repository_id = ?", past, repository);
     var takeover = tx.execute(s -> dao.claim(second.id(), subject, "blob://bucket/two", "two")).orElseThrow();
     assertTrue(takeover.fence() > claimed.fence());
@@ -88,9 +108,14 @@ public final class GitLfsDaoContract {
       assertEquals(1, winners);
     }
     jdbc.update("UPDATE repository SET write_policy = 'DENY' WHERE id = ?", repository);
-    assertThrows(IllegalStateException.class, () -> tx.execute(s -> dao.create(repository, "d".repeat(64), 1, subject, store)));
+    assertEquals(GitLfsRepositoryStateException.Reason.READ_ONLY,
+        assertThrows(GitLfsRepositoryStateException.class,
+            () -> tx.execute(s -> dao.create(repository, "d".repeat(64), 1, subject, store))).reason());
     // Repository deletion retains physical cleanup context while removing logical object state.
     stores.repositories().deleteById(repository);
+    assertEquals(GitLfsRepositoryStateException.Reason.MISSING,
+        assertThrows(GitLfsRepositoryStateException.class,
+            () -> tx.execute(s -> dao.create(repository, oid, 5, subject, store))).reason());
     assertTrue(dao.find(first.id()).isPresent());
     assertFalse(tx.<Boolean>execute(s -> dao.lockForPublication(first.id(), claimed.fence())));
   }

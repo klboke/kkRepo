@@ -39,6 +39,12 @@ class FileBlobStorageTest {
     assertArrayEquals(bytes, storage.get(target).orElseThrow().readAllBytes());
     assertThrows(RuntimeException.class, () -> storage.uploadVerified(target, new ByteArrayInputStream(bytes), id -> {}));
     assertArrayEquals(bytes, storage.get(target).orElseThrow().readAllBytes());
+    var duplicate = storage.prepareVerifiedUpload("lfs", sha, bytes.length);
+    assertFalse(target.objectKey().equals(duplicate.objectKey()));
+    storage.uploadVerified(duplicate, new ByteArrayInputStream(bytes), id -> {});
+    storage.discardVerifiedUpload(duplicate, null);
+    assertFalse(storage.exists(duplicate));
+    assertArrayEquals(bytes, storage.get(target).orElseThrow().readAllBytes());
     var bad = storage.prepareVerifiedUpload("lfs", "f".repeat(64), bytes.length);
     assertThrows(com.github.klboke.kkrepo.core.BlobIntegrityException.class,
         () -> storage.uploadVerified(bad, new ByteArrayInputStream(bytes), id -> {}));

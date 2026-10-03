@@ -65,6 +65,7 @@ class OssNativeBlobStorageTest {
       verify(client, never()).uploadPart(any(UploadPartRequest.class));
     });
     assertEquals(sha, result.sha256());
+    assertFalse(target.objectKey().equals(storage.prepareVerifiedUpload("lfs", sha, bytes.length).objectKey()));
     verify(client, org.mockito.Mockito.times(2)).uploadPart(any(UploadPartRequest.class));
     verify(client).completeMultipartUpload(any(CompleteMultipartUploadRequest.class));
     org.mockito.Mockito.clearInvocations(client);

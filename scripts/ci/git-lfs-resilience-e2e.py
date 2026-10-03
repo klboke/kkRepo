@@ -104,7 +104,14 @@ head = send('HEAD', ROOT + sha)
 require(200, head)
 require(304, send('GET', ROOT + sha, headers={'If-None-Match': head[2]['ETag']}))
 require(501, send('POST', ROOT + 'info/lfs/locks/verify', {}))
-CHECKS.append('Range, suffix Range, 416, HEAD, 304 and unsupported locks')
+for method, path, allowed in [('POST', ROOT + sha, {'GET', 'HEAD', 'PUT'}),
+                              ('DELETE', ROOT + sha, {'GET', 'HEAD', 'PUT'}),
+                              ('GET', ROOT + sha + '/verify', {'POST'}),
+                              ('HEAD', ROOT + sha + '/verify', {'POST'})]:
+    rejected = send(method, path)
+    require(405, rejected)
+    assert {value.strip() for value in rejected[2]['Allow'].split(',')} == allowed
+CHECKS.append('Range, HEAD, 304, 405 with Allow, and unsupported locks')
 
 other = 'gitlfs-other-' + STAMP
 create_repository(other)
@@ -180,6 +187,7 @@ try:
     require(200, send('GET', ROOT + sha, base=SECONDARY, auth=None))
     require(200, send('PUT', '/internal/security/anonymous', {**anonymous, 'enabled': False}))
     require(401, send('GET', ROOT + sha, base=SECONDARY, auth=None))
+    assert require(401, send('HEAD', ROOT + sha, base=SECONDARY, auth=None)) == b''
     require(401, send('POST', ROOT + 'info/lfs/objects/batch',
         {'operation': 'download', 'objects': [{'oid': sha, 'size': len(data)}]}, base=SECONDARY, auth=None))
 finally:
@@ -190,6 +198,7 @@ CHECKS.append('Disabling anonymous access on A immediately blocks public reads o
 require(200, send('GET', ROOT + sha, base=SECONDARY))
 require(200, send('PUT', '/internal/repositories/' + REPO, {'online': False}))
 require(503, send('GET', ROOT + sha, base=SECONDARY))
+assert require(503, send('HEAD', ROOT + sha, base=SECONDARY)) == b''
 require(200, send('PUT', '/internal/repositories/' + REPO,
     {'online': True, 'hosted': {'writePolicy': 'DENY'}}))
 readonly = batch(hashlib.sha256(b'read only').hexdigest(), 9, base=SECONDARY)

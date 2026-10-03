@@ -27,6 +27,9 @@
 - `GitLfsRuntimeIntegrationTest` 在同一真实 PostgreSQL 上启动两个完整应用，重放双副本 HTTP 故障脚本，
   验证真实迁移入口的幂等性，并确认过期上传回收保留已发布资产。S3/OSS adapter 回归覆盖空对象、
   未持久化 multipart handle 的恢复、精确 attempt key 隔离和存储错误后的重试。
+- 评审回归覆盖 HEAD 错误响应无 body、405 的 Allow、Batch 创建时仓库状态变化的错误映射，
+  以及双数据库上清理接管后续租失败不改变原租约。运行中的双副本还验证了：两个 Batch 先取得同一 OID 的
+  action，先后上传，回收第二个临时对象后，第一个已发布对象的实际下载字节保持完整。
 - 原生 Git LFS 3.8.0：两个历史大对象（跨 8 MiB part）、三个并发小对象，Basic push、重复 push、
   独立空缓存 clone/pull、fetch --all、历史 checkout 字节比较、fsck；URL-scoped GenericToken push/fetch。
   MySQL 和 PostgreSQL 应用均完成客户端闭环。

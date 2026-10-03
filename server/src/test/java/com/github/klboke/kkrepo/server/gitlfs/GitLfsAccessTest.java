@@ -104,4 +104,26 @@ class GitLfsAccessTest {
           () -> GitLfsAccess.requireJson(type)).status());
     }
   }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(ints = {401, 403, 404, 503})
+  void rejectedHeadRequestsHaveNoBody(int status) throws Exception {
+    String path = status == 404 ? "invalid-oid" : "a".repeat(64);
+    var request = new MockHttpServletRequest("HEAD", "/repository/lfs/" + path);
+    when(authentication.hasPresentedCredentials(any())).thenReturn(true);
+    when(authentication.authenticateFresh(any())).thenReturn(status == 401
+        ? Optional.empty() : Optional.of(subject()));
+    if (status == 503) {
+      when(repositories.findById(1L)).thenReturn(Optional.of(new RepositoryRecord(1L, "lfs",
+          RepositoryFormat.GITLFS, RepositoryType.HOSTED, "gitlfs-hosted", false,
+          1L, null, null, null, null, "ALLOW", false, Map.of())));
+    }
+    var response = new MockHttpServletResponse();
+    assertFalse(access.authorize(request, response, repository, path));
+    assertEquals(status, response.getStatus());
+    assertEquals(GitLfsProtocol.MEDIA_TYPE, response.getContentType());
+    assertEquals("no-store", response.getHeader("Cache-Control"));
+    assertEquals(0, response.getContentAsByteArray().length);
+    if (status == 401) assertNotNull(response.getHeader("WWW-Authenticate"));
+  }
 }

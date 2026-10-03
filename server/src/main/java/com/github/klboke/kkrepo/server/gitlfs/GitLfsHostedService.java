@@ -94,8 +94,7 @@ public class GitLfsHostedService {
       }
       if (batch.upload()) {
         if (asset != null) continue;
-        var upload = uploads.create(repository.id(), object.oid(), object.size(),
-            GitLfsAccess.subjectKey(subject), repository.blobStoreId());
+        var upload = createUpload(repository, object.oid(), object.size(), GitLfsAccess.subjectKey(subject));
         item.put("actions", Map.of(
             "upload", Map.of("href", base + object.oid(), "header", Map.of("X-KkRepo-Lfs-Upload", upload.id()), "expires_in", 900),
             "verify", Map.of("href", base + object.oid() + "/verify", "expires_in", 900)));
@@ -171,7 +170,7 @@ public class GitLfsHostedService {
       BlobStorage storage = storages.forBlobStoreId(repository.blobStoreId());
       BlobReference target = storage.prepareVerifiedUpload(repository.name(), oid, size);
       String owner = "privileged-nexus-migration";
-      var ready = uploads.create(repository.id(), oid, size, owner, repository.blobStoreId());
+      var ready = createUpload(repository, oid, size, owner);
       var upload = uploads.claim(ready.id(), owner, BlobReferenceCodec.format(target), target.objectKey())
           .orElseThrow(() -> new GitLfsException(409, "Another LFS upload is active"));
       transfer(repository, upload, target, storage, body, user, ip, () -> {});
@@ -209,6 +208,19 @@ public class GitLfsHostedService {
       throw error;
     } finally {
       renewal.cancel(false);
+    }
+  }
+
+  private GitLfsDao.Upload createUpload(RepositoryRuntime repository, String oid, long size, String owner) {
+    try {
+      return uploads.create(repository.id(), oid, size, owner, repository.blobStoreId());
+    } catch (GitLfsRepositoryStateException changed) {
+      throw switch (changed.reason()) {
+        case MISSING -> new GitLfsException(404, "Repository does not exist");
+        case OFFLINE -> new GitLfsException(503, "Repository is offline");
+        case READ_ONLY -> new GitLfsException(403, "Repository is read only");
+        case CONFIGURATION_CHANGED -> new GitLfsException(409, "Repository configuration changed; repeat Batch");
+      };
     }
   }
 

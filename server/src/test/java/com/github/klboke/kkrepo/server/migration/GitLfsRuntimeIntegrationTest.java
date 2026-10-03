@@ -98,6 +98,7 @@ class GitLfsRuntimeIntegrationTest {
         assertThrows(IllegalArgumentException.class, () -> writer.write(target.id(), source("/" + oid, 1),
             new ByteArrayInputStream(new byte[1]), "application/octet-stream", true));
 
+        duplicateUploadCleanupPreservesPublishedObject(first, second);
         second.getBean(GitLfsUploadCleanupWorker.class).cleanup();
         assertTrue(first.getBean(com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao.class)
             .findAssetById(imported.assetId()).isPresent());
@@ -107,6 +108,53 @@ class GitLfsRuntimeIntegrationTest {
                 .scan(repository, Map.of(), 100, Instant.now()));
       }
     }
+  }
+
+  private static void duplicateUploadCleanupPreservesPublishedObject(
+      ConfigurableApplicationContext first, ConfigurableApplicationContext second) throws Exception {
+    var http = java.net.http.HttpClient.newHttpClient();
+    var json = new com.fasterxml.jackson.databind.ObjectMapper();
+    String auth = "Basic " + java.util.Base64.getEncoder().encodeToString("admin:12345678".getBytes());
+    byte[] bytes = "duplicate upload must not delete published bytes".getBytes();
+    String oid = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+    String root = "/repository/lfs-import/";
+    var actions = new java.util.ArrayList<com.fasterxml.jackson.databind.JsonNode>();
+    // Obtain both actions before either transfer, then let the second finish after publication.
+    for (int i = 0; i < 2; i++) {
+      var request = java.net.http.HttpRequest.newBuilder(java.net.URI.create(url(first) + root + "info/lfs/objects/batch"))
+          .header("Authorization", auth).header("Content-Type", "application/vnd.git-lfs+json")
+          .POST(java.net.http.HttpRequest.BodyPublishers.ofByteArray(json.writeValueAsBytes(Map.of(
+              "operation", "upload", "objects", java.util.List.of(Map.of("oid", oid, "size", bytes.length)))))).build();
+      var response = http.send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
+      assertEquals(200, response.statusCode(), response.body());
+      actions.add(json.readTree(response.body()).path("objects").get(0).path("actions").path("upload"));
+    }
+    for (var action : actions) {
+      var request = java.net.http.HttpRequest.newBuilder(java.net.URI.create(url(second) + root + oid))
+          .header("Authorization", auth)
+          .header("X-KkRepo-Lfs-Upload", action.path("header").path("X-KkRepo-Lfs-Upload").asText())
+          .PUT(java.net.http.HttpRequest.BodyPublishers.ofByteArray(bytes)).build();
+      var response = http.send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
+      assertEquals(200, response.statusCode(), response.body());
+    }
+    var dao = first.getBean(com.github.klboke.kkrepo.persistence.jdbc.api.GitLfsDao.class);
+    var published = dao.find(actions.get(0).path("header").path("X-KkRepo-Lfs-Upload").asText()).orElseThrow();
+    var garbage = dao.find(actions.get(1).path("header").path("X-KkRepo-Lfs-Upload").asText()).orElseThrow();
+    assertEquals("PUBLISHED", published.state());
+    assertEquals("GARBAGE", garbage.state());
+    assertNotEquals(published.objectKey(), garbage.objectKey());
+    first.getBean(org.springframework.jdbc.core.JdbcTemplate.class).update(
+        "UPDATE gitlfs_upload SET expires_at = ? WHERE upload_id = ?",
+        java.sql.Timestamp.from(Instant.parse("2000-01-01T00:00:00Z")), garbage.id());
+    second.getBean(GitLfsUploadCleanupWorker.class).cleanup();
+    var storage = first.getBean(com.github.klboke.kkrepo.server.maven.BlobStorageRegistry.class)
+        .forBlobStoreId(garbage.blobStoreId());
+    assertFalse(storage.exists(com.github.klboke.kkrepo.server.blob.BlobReferenceCodec.reference(
+        garbage.blobRef(), garbage.objectKey(), garbage.oid(), garbage.size())));
+    var download = http.send(java.net.http.HttpRequest.newBuilder(java.net.URI.create(url(first) + root + oid))
+        .header("Authorization", auth).GET().build(), java.net.http.HttpResponse.BodyHandlers.ofByteArray());
+    assertEquals(200, download.statusCode());
+    assertArrayEquals(bytes, download.body());
   }
 
   private static RepositoryDataMigrationAssetRecord source(String path, long size) {

@@ -109,6 +109,16 @@ class GitLfsRepositoryBlackBoxCompatibilityTest {
     assertEquals(206, range.statusCode());
     assertEquals("bytes 1-4/" + content.length, range.headers().firstValue("content-range").orElseThrow());
     assertArrayEquals(java.util.Arrays.copyOfRange(content, 1, 5), range.body());
+    if (endpoint.candidate()) {
+      // RFC 9110 requirements also apply to the LFS error paths.
+      var methodError = endpoint.send("POST", download.toString(), null, LFS, Map.of());
+      assertEquals(405, methodError.statusCode());
+      assertEquals("GET,HEAD,PUT", methodError.headers().firstValue("allow").orElseThrow());
+      var verifyError = endpoint.send("HEAD", verify.toString(), null, LFS, Map.of());
+      assertEquals(405, verifyError.statusCode());
+      assertEquals("POST", verifyError.headers().firstValue("allow").orElseThrow());
+      assertEquals(0, verifyError.body().length);
+    }
     var repeated = endpoint.batch("upload", request);
     assertEquals(200, repeated.statusCode());
     JsonNode result = JSON.readTree(repeated.body());

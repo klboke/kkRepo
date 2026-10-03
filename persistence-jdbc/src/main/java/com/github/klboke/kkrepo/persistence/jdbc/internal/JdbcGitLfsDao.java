@@ -1,6 +1,8 @@
 package com.github.klboke.kkrepo.persistence.jdbc.internal;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.GitLfsDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.GitLfsRepositoryStateException;
+import com.github.klboke.kkrepo.persistence.jdbc.api.GitLfsRepositoryStateException.Reason;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JdbcUpserts;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -22,7 +24,7 @@ public class JdbcGitLfsDao implements GitLfsDao {
   @Override
   @Transactional
   public Upload create(long repositoryId, String oid, long size, String subjectKey, long blobStoreId) {
-    Instant version = lockRepository(repositoryId, blobStoreId).orElseThrow(() -> new IllegalStateException("Repository is not writable"));
+    Instant version = requireWritableRepository(repositoryId, blobStoreId);
     JdbcUpserts.updateThenInsert(jdbc,
         "UPDATE gitlfs_object SET oid = oid WHERE repository_id = ? AND oid = ?", new Object[] {repositoryId, oid},
         "INSERT INTO gitlfs_object(repository_id, oid, generation, fencing_token, published) VALUES (?, ?, 1, 0, FALSE)",
@@ -85,18 +87,26 @@ public class JdbcGitLfsDao implements GitLfsDao {
   @Override
   @Transactional
   public boolean renew(String id, long fence) {
-    Timestamp now = Timestamp.from(now());
-    Timestamp expiry = Timestamp.from(now.toInstant().plusSeconds(300));
-    int updated = jdbc.update("""
-        UPDATE gitlfs_object SET lease_until = ?
-        WHERE owner_id = ? AND fencing_token = ? AND lease_until > ?
-          AND (published = FALSE OR asset_id IS NOT NULL)
-        """, expiry, id, fence, now);
-    if (updated == 0) return false;
-    return jdbc.update("""
-        UPDATE gitlfs_upload SET expires_at = ?
-        WHERE upload_id = ? AND fencing_token = ? AND state = 'UPLOADING'
-        """, expiry, id, fence) == 1;
+    Upload initial = find(id).orElse(null);
+    if (initial == null) return false;
+    // Match publication's object -> upload lock order. Validate both rows before changing either
+    // deadline, so a collector that already claimed the upload cannot leave an orphaned lease.
+    ObjectState object = lockObject(initial.repositoryId(), initial.oid()).orElse(null);
+    Upload upload = lockedUpload(id).orElse(null);
+    Instant now = now();
+    if (upload == null || !"UPLOADING".equals(upload.state()) || upload.fence() != fence
+        || !upload.expiresAt().isAfter(now) || object == null || object.deleted()
+        || object.generation() != upload.generation() || !id.equals(object.owner()) || object.fence() != fence
+        || object.leaseUntil() == null || !object.leaseUntil().isAfter(now)) return false;
+    Timestamp expiry = Timestamp.from(now.plusSeconds(300));
+    if (jdbc.update("UPDATE gitlfs_object SET lease_until = ? WHERE owner_id = ? AND fencing_token = ?",
+        expiry, id, fence) != 1 || jdbc.update("""
+            UPDATE gitlfs_upload SET expires_at = ?
+            WHERE upload_id = ? AND fencing_token = ? AND state = 'UPLOADING'
+            """, expiry, id, fence) != 1) {
+      throw new IllegalStateException("LFS renewal fence lost");
+    }
+    return true;
   }
 
   @Override
@@ -193,10 +203,28 @@ public class JdbcGitLfsDao implements GitLfsDao {
   }
 
   private Optional<Instant> lockRepository(long id, long blobStoreId) {
+    try {
+      return Optional.of(requireWritableRepository(id, blobStoreId));
+    } catch (GitLfsRepositoryStateException changed) {
+      return Optional.empty();
+    }
+  }
+
+  private Instant requireWritableRepository(long id, long blobStoreId) {
     return jdbc.query("""
-        SELECT updated_at FROM repository WHERE id = ? AND online = TRUE AND format = 'gitlfs'
-          AND blob_store_id = ? AND type = 'hosted' AND UPPER(COALESCE(write_policy, 'ALLOW_ONCE')) <> 'DENY' FOR UPDATE
-        """, (rs, n) -> rs.getTimestamp(1).toInstant(), id, blobStoreId).stream().findFirst();
+        SELECT updated_at, online, format, type, blob_store_id, write_policy
+        FROM repository WHERE id = ? FOR UPDATE
+        """, (rs, n) -> {
+          if (!rs.getBoolean("online")) throw new GitLfsRepositoryStateException(Reason.OFFLINE);
+          if (!"gitlfs".equals(rs.getString("format")) || !"hosted".equals(rs.getString("type"))
+              || rs.getLong("blob_store_id") != blobStoreId) {
+            throw new GitLfsRepositoryStateException(Reason.CONFIGURATION_CHANGED);
+          }
+          if ("DENY".equalsIgnoreCase(rs.getString("write_policy"))) {
+            throw new GitLfsRepositoryStateException(Reason.READ_ONLY);
+          }
+          return rs.getTimestamp("updated_at").toInstant();
+        }, id).stream().findFirst().orElseThrow(() -> new GitLfsRepositoryStateException(Reason.MISSING));
   }
 
   private Optional<ObjectState> lockObject(long repositoryId, String oid) {
