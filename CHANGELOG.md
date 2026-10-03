@@ -4,6 +4,29 @@ All notable public changes to kkrepo are documented in this file.
 
 This project follows a pragmatic release process. Stable releases call out migration impact, compatibility changes, operational notes, and any known behavior changes in their release section.
 
+## 1.2.1 - 2026-10-04
+
+### Added
+
+- Git LFS hosted repositories support Batch upload/download, basic transfers, verify, HEAD, byte ranges, conditional reads, Basic authentication, and GenericToken authentication at `/repository/<repo>/info/lfs`. Objects are verified for SHA-256 and exact length before publication; database-backed upload contexts, leases, fencing, and recovery coordinate replicas. Admin, Browse, Search, content selectors, manual deletion, and shape-verified Nexus 3.94.x hosted migration are included. Git commits and refs remain on the existing Git server. (#367, #368)
+- JVM and Native deployments can trust private certificate authorities through a multi-certificate PEM bundle using `KKREPO_TLS_CA_CERTIFICATES` / `kkrepo.tls.ca-certificates`. The bundle augments the active Java truststore for S3, OSS Native, and upstream HTTPS clients, including HTTP CONNECT and SOCKS routes, while retaining certificate-chain and hostname verification. (#366)
+
+### Fixed
+
+- Docker proxy and group requests release upstream 401 challenge connections before acquiring or refreshing bearer tokens. Concurrent cold pulls and token failures no longer exhaust the registry connection pool; successful manifest and blob responses remain streamed. (#365)
+
+### Changed
+
+- Outbound HTTP connection-pool acquisition has an independent, configurable 10-second default timeout through `KKREPO_OUTBOUND_PROXY_CONNECTION_REQUEST_TIMEOUT_MS`. TCP connection and response timeouts remain separate. (#365)
+- Full E2E splits real-client tests into core, system, and Swift shards, reuses prepared SDK/Swift environments, and verifies complete protocol/runtime/database and cleanup coverage. Nexus, migration, OCI, and platform-specific checks remain enabled. (#364)
+- Quickstart defaults, Dockerfile packaging, deployment documentation, Helm application version, runtime checks, and the optional scanner profile now use `1.2.1`.
+
+### Upgrade Notes
+
+- Existing `1.1.1` MySQL and PostgreSQL deployments upgrade through Flyway V59, which adds Git LFS object coordination and upload-recovery tables. Back up the relational database and blob store together before upgrading.
+- Git LFS is hosted-only: proxy/group repositories, Git hosting, file locks, tus, direct-to-S3 transfers, generic component uploads, and automatic Cleanup are not supported. Opaque LFS objects have `NOT_APPLICABLE` scan coverage, not a clean vulnerability verdict; manual deletion may break historical Git checkouts.
+- PEM CA bundles are optional and loaded at startup. Mount the same readable bundle on every replica and restart after certificate updates. A missing, empty, or malformed configured bundle prevents startup.
+
 ## 1.1.1 - 2026-10-01
 
 ### Fixed

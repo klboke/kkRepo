@@ -11,7 +11,7 @@ or when explicitly enabled.
 
 ## Custom CA runtime checks
 
-`scripts/ci/check-custom-ca.py --jar server/target/kkrepo-server-1.1.1.jar` starts disposable
+`scripts/ci/check-custom-ca.py --jar server/target/kkrepo-server-1.2.1.jar` starts disposable
 PostgreSQL and HTTPS RustFS containers plus an HTTPS upstream signed by a second private CA.
 It verifies blob-store read/write/delete, hosted artifact upload/download, and an uncached proxy
 download with a combined PEM bundle, then restarts without the bundle and checks TLS rejection.
