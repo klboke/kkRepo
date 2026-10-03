@@ -22,7 +22,7 @@ class BrowseWelcomeFormatsContractTest {
     String stylesheet = resource("/META-INF/resources/browse/assets/browse.css");
 
     assertTrue(index.contains("id=\"supported-formats-title\""));
-    assertTrue(index.contains("class=\"format-showcase-count\">22 formats"));
+    assertTrue(index.contains("class=\"format-showcase-count\">23 formats"));
     assertTrue(stylesheet.contains(".format-grid {"));
     assertTrue(stylesheet.contains("gap: 0;"));
     assertTrue(stylesheet.contains("overflow: hidden;"));

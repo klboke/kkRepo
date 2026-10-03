@@ -16,8 +16,28 @@ import org.junit.jupiter.api.Test;
 
 /** Guards the frozen V1-V29 chain and validates repeat startup after newer migrations. */
 class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
-  private static final int LATEST_MIGRATION = 58;
+  private static final int LATEST_MIGRATION = 59;
   private static final Map<String, String> V29_SHA256 = checksums();
+
+  @Test
+  void lfsMigrationResumesAfterItsFirstAutocommittedTable() throws Exception {
+    Flyway throughV58 = migration("58");
+    throughV58.clean();
+    assertEquals(58, throughV58.migrate().migrationsExecuted);
+    try (InputStream stream = getClass().getResourceAsStream("/db/migration/mysql/V59__git_lfs_hosted.sql")) {
+      assertNotNull(stream);
+      String sql = new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+      jdbc().execute(sql.substring(0, sql.indexOf(';')));
+    }
+    Flyway resumed = migration(null);
+    assertEquals(1, resumed.migrate().migrationsExecuted);
+    assertTrue(resumed.validateWithResult().validationSuccessful);
+    assertEquals(0, resumed.migrate().migrationsExecuted);
+    assertEquals(2, jdbc().queryForObject("""
+        SELECT COUNT(*) FROM information_schema.tables
+        WHERE table_schema = DATABASE() AND table_name IN ('gitlfs_object', 'gitlfs_upload')
+        """, Integer.class));
+  }
 
   @Test
   void relocatedV1ThroughV29RemainByteForByteFrozen() throws Exception {

@@ -1,10 +1,12 @@
-package com.github.klboke.kkrepo.server.gitlfs;
+package com.github.klboke.kkrepo.server.routing.gitlfs;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.protocol.gitlfs.GitLfsException;
 import com.github.klboke.kkrepo.protocol.gitlfs.GitLfsProtocol;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
+import com.github.klboke.kkrepo.server.gitlfs.GitLfsAccess;
+import com.github.klboke.kkrepo.server.gitlfs.GitLfsHostedService;
 import com.github.klboke.kkrepo.server.http.ConditionalResponses;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.routing.*;

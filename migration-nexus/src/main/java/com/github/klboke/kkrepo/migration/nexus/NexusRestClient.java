@@ -1612,12 +1612,12 @@ public class NexusRestClient {
                   def sums = new groovy.json.JsonSlurper().parseText(rawSums instanceof byte[]
                       ? new String(rawSums, 'UTF-8') : String.valueOf(rawSums))
                   def oid = path != null && path.startsWith('/') ? path.substring(1) : path
-                  valid = valid && oid != null && (oid ==~ /[a-f0-9]{64}/)
-                      && size instanceof Number && size.longValue() >= 0
-                      && sums instanceof Map && String.valueOf(sums.sha256) == oid
+                  valid = (valid && oid != null && (oid ==~ /[a-f0-9]{64}/)
+                      && jdkClass('java.lang.Number').isInstance(size) && size.longValue() >= 0
+                      && sums instanceof Map && String.valueOf(sums.sha256) == oid)
                 }
               } finally { rows.close() }
-            } catch (Exception error) {
+            } catch (error) {
               valid = false
               out.warnings << 'Git LFS content shape probe failed: ' + errorText(error)
             } finally { statement.close() }

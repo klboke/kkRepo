@@ -29,6 +29,13 @@ import org.junit.jupiter.params.provider.ValueSource;
 class SecurityScanCandidateClassifierTest {
   private final SecurityScanCandidateClassifier classifier = new SecurityScanCandidateClassifier();
 
+  @Test
+  void opaqueLfsObjectsAreNotReportedAsScannedPackages() {
+    assertEquals(CandidateDisposition.NOT_APPLICABLE,
+        classifier.classify(asset(RepositoryFormat.GITLFS, "a".repeat(64), "gitlfs"),
+            blob(42), profile(1024)).disposition());
+  }
+
   @ParameterizedTest
   @MethodSource("packages")
   void classifiesProtocolPackages(RepositoryFormat format, String path, String kind) {

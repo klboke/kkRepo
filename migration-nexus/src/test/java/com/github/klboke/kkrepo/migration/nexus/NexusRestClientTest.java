@@ -281,7 +281,7 @@ class NexusRestClientTest {
   }
 
   @Test
-  void sourceProfileScriptUsesGroovy24CompatibleConanBooleanContinuations() throws Exception {
+  void sourceProfileScriptKeepsLegacyGroovyCompatibleBooleanContinuations() throws Exception {
     var field = NexusRestClient.class.getDeclaredField("SOURCE_PROFILE_PROBE_SCRIPT");
     field.setAccessible(true);
     String script = (String) field.get(null);
@@ -292,6 +292,11 @@ class NexusRestClientTest {
     assertTrue(script.contains("&& parts[11] == 'files')"));
     assertFalse(script.contains("def recipeFile = parts.length >= 9\n"));
     assertFalse(script.contains("def packageFile = parts.length >= 13\n"));
+    assertTrue(script.contains("valid = (valid && oid != null"));
+    assertTrue(script.contains("&& sums instanceof Map && String.valueOf(sums.sha256) == oid)"));
+    // Older Nexus Groovy/ASM versions cannot decompile JDK 25 Exception/Number classes.
+    assertFalse(script.contains("catch (Exception "));
+    assertTrue(script.contains("jdkClass('java.lang.Number').isInstance(size)"));
   }
 
   @Test

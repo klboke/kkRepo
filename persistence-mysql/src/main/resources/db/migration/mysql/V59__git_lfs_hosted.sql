@@ -1,4 +1,4 @@
-CREATE TABLE gitlfs_object (
+CREATE TABLE IF NOT EXISTS gitlfs_object (
   repository_id BIGINT UNSIGNED NOT NULL,
   oid CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
   generation BIGINT NOT NULL,
@@ -16,7 +16,7 @@ CREATE TABLE gitlfs_object (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Keep recovery records after repository deletion so cloud objects and multipart state are reaped.
-CREATE TABLE gitlfs_upload (
+CREATE TABLE IF NOT EXISTS gitlfs_upload (
   upload_id VARCHAR(36) NOT NULL,
   repository_id BIGINT UNSIGNED NOT NULL,
   oid CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,

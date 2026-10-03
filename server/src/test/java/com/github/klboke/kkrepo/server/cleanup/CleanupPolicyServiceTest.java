@@ -30,6 +30,17 @@ import org.mockito.ArgumentCaptor;
 
 class CleanupPolicyServiceTest {
   @Test
+  void rejectsLfsPoliciesBecauseDownloadAgeCannotProveGitReachability() {
+    CleanupPolicyDao cleanupDao = mock(CleanupPolicyDao.class);
+    RepositoryDao repositoryDao = mock(RepositoryDao.class);
+    CleanupPolicyService service = new CleanupPolicyService(cleanupDao, repositoryDao,
+        new CleanupPolicyCapabilities(), Clock.systemUTC());
+    assertThrows(CleanupValidationException.class, () -> service.create(new PolicyCommand(
+        "lfs cleanup", RepositoryFormat.GITLFS, null, Map.of("lastDownloadedOlderThanDays", 30),
+        List.of(1L), 100, 10, null, null)));
+    verifyNoInteractions(cleanupDao, repositoryDao);
+  }
+  @Test
   void rejectsPatternOnlyPolicyWithoutADeletionCriterion() {
     CleanupPolicyDao cleanupDao = mock(CleanupPolicyDao.class);
     RepositoryDao repositoryDao = mock(RepositoryDao.class);

@@ -8,6 +8,15 @@ import java.util.HexFormat;
 import org.junit.jupiter.api.Test;
 
 class VerifiedBlobReaderTest {
+  @Test void interruptedStreamsNeverReturnVerifiedDigests() {
+    InputStream interrupted = new InputStream() {
+      @Override public int read() throws java.io.IOException { throw new java.io.IOException("disconnected"); }
+    };
+    var body = new VerifiedBlobReader(new BlobReference("bucket", "attempt", "a".repeat(64), 1), interrupted);
+    assertThrows(java.io.UncheckedIOException.class, body::nextPart);
+    var trailer = new VerifiedBlobReader(new BlobReference("bucket", "attempt", "a".repeat(64), 0), interrupted);
+    assertThrows(java.io.UncheckedIOException.class, trailer::finish);
+  }
   @Test void streamsAcrossPartBoundaryAndComputesDigests() throws Exception {
     byte[] bytes = new byte[VerifiedBlobReader.PART_BYTES + 31];
     new java.util.Random(42).nextBytes(bytes);

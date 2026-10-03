@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.protocol.gitlfs.GitLfsException;
 import com.github.klboke.kkrepo.server.RepositoryProtocolController;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.routing.*;
+import com.github.klboke.kkrepo.server.routing.gitlfs.GitLfsProtocolHandler;
 import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.ByteArrayInputStream;
 import java.time.Instant;

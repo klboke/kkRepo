@@ -43,6 +43,7 @@ class RepositoryRoutingArchitectureTest {
             "..server.conda..",
             "..server.conan..",
             "..server.docker..",
+            "..server.gitlfs..",
             "..server.goartifact..",
             "..server.helm..",
             "..server.huggingface..",

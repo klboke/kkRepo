@@ -27,6 +27,8 @@ class GitLfsProtocolTest {
           () -> parse(batch("").replace("\"size\":0", "\"size\":" + size))).status());
     }
     assertThrows(GitLfsException.class, () -> parse(batch("") + "{}"));
+    assertEquals(422, assertThrows(GitLfsException.class, () -> parse(batch(",\"transfers\":\"basic\""))).status());
+    assertEquals(422, assertThrows(GitLfsException.class, () -> parse("{broken")).status());
     assertThrows(GitLfsException.class, () -> parse(batch("").replace(OID, OID.toUpperCase())));
     assertThrows(GitLfsException.class, () -> GitLfsProtocol.objectOid("../" + OID));
     assertThrows(GitLfsException.class, () -> GitLfsProtocol.objectOid(OID + "/"));

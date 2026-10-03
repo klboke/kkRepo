@@ -50,6 +50,10 @@ public final class GitLfsDaoContract {
       return id;
     });
     assertEquals("PUBLISHED", dao.find(second.id()).orElseThrow().state());
+    jdbc.update("UPDATE gitlfs_upload SET expires_at = ? WHERE upload_id = ?", past, second.id());
+    assertEquals(1, tx.<Integer>execute(s -> dao.prunePublished(100)));
+    assertTrue(dao.find(second.id()).isEmpty());
+    assertTrue(stores.assets().findAssetById(asset).isPresent(), "Expired replay context must not delete a published object");
     var beforeDelete = tx.execute(s -> dao.create(repository, oid, 5, subject, store));
     stores.assets().deleteAssetById(asset);
     assertTrue(tx.execute(s -> dao.claim(beforeDelete.id(), subject, "blob://bucket/stale", "stale")).isEmpty());

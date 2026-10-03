@@ -65,6 +65,7 @@ class GitLfsAccessTest {
     when(authentication.authenticateFresh(any())).thenAnswer(call -> {
       jakarta.servlet.http.HttpServletRequest presented = call.getArgument(0);
       assertNull(presented.getSession(false));
+      assertNull(presented.getSession());
       return Optional.empty();
     });
     var response = new MockHttpServletResponse();
@@ -83,5 +84,24 @@ class GitLfsAccessTest {
     when(permissions.decideAllFresh(any(), any())).thenReturn(Map.of(permission, AccessDecision.allow()));
     assertTrue(access.authorize(request, new MockHttpServletResponse(), repository, oid));
     verify(permissions).decideAllFresh(subject().permissionSubject(), List.of(permission));
+  }
+  @Test void uploadReauthorizationRejectsExpiredAndChangedIdentities() {
+    var request = batch("upload");
+    assertEquals(401, assertThrows(com.github.klboke.kkrepo.protocol.gitlfs.GitLfsException.class,
+        () -> access.requireUpload(request, "lfs", "a".repeat(64), "old-owner")).status());
+    when(authentication.authenticateFresh(any())).thenReturn(Optional.of(subject()));
+    assertEquals(403, assertThrows(com.github.klboke.kkrepo.protocol.gitlfs.GitLfsException.class,
+        () -> access.requireUpload(request, "lfs", "a".repeat(64), "old-owner")).status());
+    assertEquals(401, assertThrows(com.github.klboke.kkrepo.protocol.gitlfs.GitLfsException.class,
+        () -> GitLfsAccess.subject(request)).status());
+    verifyNoInteractions(permissions);
+  }
+  @Test void invalidLimitsAndMalformedContentTypesFailBeforeBodyProcessing() {
+    assertThrows(IllegalArgumentException.class, () -> new GitLfsAccess(authentication, permissions,
+        repositories, new ObjectMapper(), VerifiedBlobReader.MAX_BYTES + 1));
+    for (String type : new String[] {null, "broken;", "text/plain"}) {
+      assertEquals(415, assertThrows(com.github.klboke.kkrepo.protocol.gitlfs.GitLfsException.class,
+          () -> GitLfsAccess.requireJson(type)).status());
+    }
   }
 }

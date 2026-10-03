@@ -55,6 +55,15 @@ import org.springframework.web.multipart.MultipartFile;
 class ComponentUploadServiceTest {
 
   @Test
+  void gitLfsCannotBypassTheVerifiedProtocolUsingGenericUploads() {
+    RepositoryRuntime runtime = runtime("lfs-hosted", RepositoryFormat.GITLFS);
+    ComponentUploadService service = service(runtime, mock(CargoHostedService.class), mock(PubHostedService.class));
+    assertThrows(UploadValidationException.class, () -> service.definition("gitlfs"));
+    assertThrows(UploadValidationException.class, () -> service.upload(runtime.name(), Map.of(),
+        files("gitlfs.asset", "large.bin"), "alice", "127.0.0.1"));
+  }
+
+  @Test
   void alpineDefinitionAndDelegationPreserveRepositoryNamespace() throws Exception {
     AlpineService alpine = mock(AlpineService.class);
     ComponentUploadService service = service(alpine);

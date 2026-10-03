@@ -276,6 +276,8 @@ public abstract class PersistenceApiContract {
   @Test
   void baselineContainsTheCompleteSharedLogicalSchema() {
     assertEquals(Set.of(
+        "gitlfs_object",
+        "gitlfs_upload",
         "api_key",
         "ansible_collection_signature",
         "ansible_collection_version",

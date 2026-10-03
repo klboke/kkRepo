@@ -24,6 +24,9 @@
 - 116 项针对性 Java 测试通过，无失败/跳过，覆盖 parser、长度/摘要 verifier、S3/OSS Native/File provider、
   双库真实事务/并发/租约/删除/恢复、身份缓存撤销、selector、发布失败、管理删除、HTTP 流式响应、Cleanup 和迁移 shape。
   另执行 RepositorySecurityFilter 和 cache/persistence 边界回归。
+- `GitLfsRuntimeIntegrationTest` 在同一真实 PostgreSQL 上启动两个完整应用，重放双副本 HTTP 故障脚本，
+  验证真实迁移入口的幂等性，并确认过期上传回收保留已发布资产。S3/OSS adapter 回归覆盖空对象、
+  未持久化 multipart handle 的恢复、精确 attempt key 隔离和存储错误后的重试。
 - 原生 Git LFS 3.8.0：两个历史大对象（跨 8 MiB part）、三个并发小对象，Basic push、重复 push、
   独立空缓存 clone/pull、fetch --all、历史 checkout 字节比较、fsck；URL-scoped GenericToken push/fetch。
   MySQL 和 PostgreSQL 应用均完成客户端闭环。
@@ -61,7 +64,7 @@ Java 回归可运行：
 
 ```sh
 mvn -pl server,persistence-mysql,persistence-postgresql -am \
-  -Dtest=GitLfsDaoMySqlIntegrationTest,GitLfsDaoPostgreSqlIntegrationTest,GitLfsAccessTest,GitLfsHostedServiceTest,GitLfsProtocolHandlerTest,NexusAssetManagementServiceTest,NexusSourceProfileTest,GitLfsProtocolTest,VerifiedBlobReaderTest,S3BlobStorageTest,OssNativeBlobStorageTest,FileBlobStorageTest,SecurityAuthenticationServiceTest,CleanupPolicyCapabilitiesTest \
+  -Dtest=GitLfsDaoMySqlIntegrationTest,GitLfsDaoPostgreSqlIntegrationTest,GitLfsRuntimeIntegrationTest,GitLfsUploadCleanupWorkerTest,GitLfsAccessTest,GitLfsHostedServiceTest,GitLfsProtocolHandlerTest,NexusAssetManagementServiceTest,NexusSourceProfileTest,GitLfsProtocolTest,VerifiedBlobReaderTest,S3BlobStorageTest,OssNativeBlobStorageTest,FileBlobStorageTest,SecurityAuthenticationServiceTest,CleanupPolicyCapabilitiesTest \
   -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 

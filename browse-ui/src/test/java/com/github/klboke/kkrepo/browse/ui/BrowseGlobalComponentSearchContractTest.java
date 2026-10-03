@@ -44,13 +44,15 @@ class BrowseGlobalComponentSearchContractTest {
     assertTrue(index.contains("id=\"component-custom-format-options\""));
     assertTrue(index.indexOf("id=\"component-custom-format-filter\"")
         < index.indexOf("id=\"component-custom-format-options\""));
-    assertEquals(22L, index.lines()
+    assertEquals(23L, index.lines()
         .filter(line -> line.contains("class=\"search-format-option\""))
         .count());
     assertTrue(index.contains(
         "data-custom-search-format=\"docker\"><span class=\"format-logo format-logo-docker\""));
     assertTrue(index.contains(
         "data-custom-search-format=\"huggingface\"><span class=\"format-logo format-logo-huggingface\""));
+    assertTrue(index.contains(
+        "data-custom-search-format=\"gitlfs\"><span class=\"format-logo format-logo-gitlfs\""));
     assertTrue(index.contains("<h1 id=\"component-search-title\">Search Maven</h1>"));
     assertTrue(index.contains(
         "/browse/assets/global-component-search.css?v=20260819-topbar-control-height-1"));
