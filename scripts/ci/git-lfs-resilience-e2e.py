@@ -26,7 +26,9 @@ CHECKS = []
 
 def send(method, path, payload=None, base=PRIMARY, auth=AUTH, headers=None):
     body = json.dumps(payload).encode() if isinstance(payload, (dict, list)) else payload
-    fields = {'Authorization': auth, 'Content-Type': LFS if path.startswith('/repository/') else 'application/json'}
+    fields = {'Content-Type': LFS if path.startswith('/repository/') else 'application/json'}
+    if auth is not None:
+        fields['Authorization'] = auth
     fields.update(headers or {})
     request = urllib.request.Request(base + path, body, fields, method=method)
     try:
@@ -170,6 +172,19 @@ assert any(result[0] == 200 for result in results)
 assert all(result[0] in (200, 409) for result in results)
 assert require(200, send('GET', ROOT + concurrent_oid)) == concurrent_data
 CHECKS.append('Competing uploads publish one immutable OID with intact bytes')
+
+# A warm anonymous catalog must not outlive an administrator disabling public reads.
+anonymous = require(200, send('GET', '/internal/security/anonymous'))
+try:
+    require(200, send('PUT', '/internal/security/anonymous', {**anonymous, 'enabled': True}))
+    require(200, send('GET', ROOT + sha, base=SECONDARY, auth=None))
+    require(200, send('PUT', '/internal/security/anonymous', {**anonymous, 'enabled': False}))
+    require(401, send('GET', ROOT + sha, base=SECONDARY, auth=None))
+    require(401, send('POST', ROOT + 'info/lfs/objects/batch',
+        {'operation': 'download', 'objects': [{'oid': sha, 'size': len(data)}]}, base=SECONDARY, auth=None))
+finally:
+    require(200, send('PUT', '/internal/security/anonymous', anonymous))
+CHECKS.append('Disabling anonymous access on A immediately blocks public reads on B')
 
 # Repository changes must invalidate old actions on a pod with a warm catalog.
 require(200, send('GET', ROOT + sha, base=SECONDARY))

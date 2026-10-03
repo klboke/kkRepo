@@ -73,7 +73,7 @@ public class GitLfsAccess {
       if (!read && !explicit) throw new GitLfsException(401, "Authentication required");
       Optional<AuthenticatedSubject> subject = authenticate(request);
       if (subject.isEmpty() && read && !explicit) {
-        subject = authentication.authenticateAnonymous();
+        subject = authentication.authenticateAnonymousFresh();
         request.setAttribute(ANONYMOUS_ATTRIBUTE, true);
       }
       if (subject.isEmpty()) throw new GitLfsException(401, "Authentication required");

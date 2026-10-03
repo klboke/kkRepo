@@ -392,6 +392,11 @@ public class SecurityAuthenticationService {
     return authenticateAnonymousFromDatabase();
   }
 
+  /** Public actions must observe disabled anonymous access and revoked memberships on any replica. */
+  public Optional<AuthenticatedSubject> authenticateAnonymousFresh() {
+    return inAuthenticationTransaction(this::authenticateAnonymousFromDatabase);
+  }
+
   private Optional<AuthenticatedSubject> authenticateAnonymous(
       SecurityCatalogCache.SecurityCatalog catalog) {
     SecurityAnonymousConfigRecord config = catalog.anonymousConfig();

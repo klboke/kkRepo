@@ -31,7 +31,8 @@
   独立空缓存 clone/pull、fetch --all、历史 checkout 字节比较、fsck；URL-scoped GenericToken push/fetch。
   MySQL 和 PostgreSQL 应用均完成客户端闭环。
 - 双副本：A Batch/B PUT/B verify/A GET；错误摘要、短 chunked body 和缺失 context 不发布；Range/suffix/416/HEAD/304；
-  跨仓库 context 拒绝；token 和角色权限撤销；逐 OID selector；人工删除阻止旧 context 复活；同 OID 并发只保留完整对象。
+  跨仓库 context 拒绝；token 和角色权限撤销；关闭匿名访问后立即拒绝另一副本的 GET/下载 Batch；
+  逐 OID selector；人工删除阻止旧 context 复活；同 OID 并发只保留完整对象。
 - Nexus hosted 迁移到 PostgreSQL/S3 和 MySQL/S3：两个多 part 对象和一个空对象，预检、持久任务、
   checksum/字节比较、verify、metadata/package 重跑（resume），3/3 成功且无重复/失败。
 - Admin/Browse JavaScript 语法、shell/Python 语法和 `git diff --check`。

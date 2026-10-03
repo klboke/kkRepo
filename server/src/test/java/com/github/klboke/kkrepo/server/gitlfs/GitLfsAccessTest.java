@@ -44,7 +44,7 @@ class GitLfsAccessTest {
   }
   @Test void downloadBatchCanUseAnonymousButUploadCannotUseCookieOnly() throws Exception {
     when(authentication.authenticateFresh(any())).thenReturn(Optional.empty());
-    when(authentication.authenticateAnonymous()).thenReturn(Optional.of(subject()));
+    when(authentication.authenticateAnonymousFresh()).thenReturn(Optional.of(subject()));
     var download = batch("download");
     assertTrue(access.authorize(download, new MockHttpServletResponse(), repository, GitLfsProtocol.BATCH_PATH));
     assertInstanceOf(GitLfsProtocol.Batch.class, download.getAttribute(GitLfsAccess.BATCH_ATTRIBUTE));
@@ -71,7 +71,7 @@ class GitLfsAccessTest {
     var response = new MockHttpServletResponse();
     assertFalse(access.authorize(request, response, repository, GitLfsProtocol.BATCH_PATH));
     assertEquals(401, response.getStatus());
-    verify(authentication, never()).authenticateAnonymous();
+    verify(authentication, never()).authenticateAnonymousFresh();
   }
   @Test void putAuthorizesCanonicalOidWithoutReadingBinaryBody() throws Exception {
     String oid = "a".repeat(64);

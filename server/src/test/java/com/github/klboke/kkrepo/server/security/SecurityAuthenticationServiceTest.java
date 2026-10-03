@@ -991,6 +991,32 @@ class SecurityAuthenticationServiceTest {
   }
 
   @Test
+  void freshAnonymousReadsObserveDisabledAccessAndRoleRevocationDespiteAWarmCatalog() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    var enabled = new SecurityAnonymousConfigRecord(true, "Local", "anonymous", "NexusAuthorizingRealm");
+    var user = user(3L, "Local", "anonymous", null);
+    dao.anonymous(enabled);
+    dao.user(user);
+    dao.roles(3L, "nx-anonymous");
+    var catalog = mock(SecurityCatalogCache.SecurityCatalog.class);
+    org.mockito.Mockito.when(catalog.anonymousConfig()).thenReturn(enabled);
+    org.mockito.Mockito.when(catalog.anonymousUser()).thenReturn(user);
+    org.mockito.Mockito.when(catalog.userRoleIds("Local", "anonymous")).thenReturn(List.of("nx-anonymous"));
+    var cache = mock(SecurityCatalogCache.class);
+    org.mockito.Mockito.when(cache.current()).thenReturn(Optional.of(catalog));
+    var service = new SecurityAuthenticationService(dao, OBJECT_MAPPER,
+        "X-Nexus-Plus-Token", "nx-anonymous", cache);
+    assertTrue(service.authenticateAnonymous().isPresent());
+    assertTrue(service.authenticateAnonymousFresh().isPresent());
+    dao.anonymous(new SecurityAnonymousConfigRecord(false, "Local", "anonymous", "NexusAuthorizingRealm"));
+    assertTrue(service.authenticateAnonymous().isPresent(), "Cached replica still has its previous public settings");
+    assertTrue(service.authenticateAnonymousFresh().isEmpty());
+    dao.anonymous(enabled);
+    dao.roles(3L);
+    assertFalse(service.authenticateAnonymousFresh().orElseThrow().permissionSubject().groupIds().contains("nx-anonymous"));
+  }
+
+  @Test
   void anonymousUsersDoNotReceiveAuthenticatedDefaultRole() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.anonymous(new SecurityAnonymousConfigRecord(
