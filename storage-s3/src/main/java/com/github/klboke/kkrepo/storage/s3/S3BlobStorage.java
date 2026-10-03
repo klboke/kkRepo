@@ -58,6 +58,76 @@ public final class S3BlobStorage implements BlobStorage {
   }
 
   @Override
+  public BlobReference prepareVerifiedUpload(String repository, String sha256, long size) {
+    return new BlobReference(config.bucket(),
+        BlobObjectKeys.immutableObjectKey(config.prefix(), repository, sha256), sha256, size);
+  }
+
+  @Override
+  public com.github.klboke.kkrepo.core.VerifiedBlobDigests uploadVerified(
+      BlobReference target, InputStream content, java.util.function.Consumer<String> multipartStarted) {
+    var reader = new com.github.klboke.kkrepo.core.VerifiedBlobReader(target, content);
+    if (target.size() == 0) {
+      var digests = reader.finish();
+      s3Client.putObject(PutObjectRequest.builder().bucket(target.bucket()).key(target.objectKey())
+          .contentType("application/octet-stream").metadata(Map.of("sha256", target.sha256())).build(),
+          RequestBody.empty());
+      return digests;
+    }
+    String uploadId = s3Client.createMultipartUpload(
+        software.amazon.awssdk.services.s3.model.CreateMultipartUploadRequest.builder()
+            .bucket(target.bucket()).key(target.objectKey()).contentType("application/octet-stream")
+            .metadata(Map.of("sha256", target.sha256())).build()).uploadId();
+    try {
+      multipartStarted.accept(uploadId);
+      var parts = new java.util.ArrayList<software.amazon.awssdk.services.s3.model.CompletedPart>();
+      byte[] part;
+      while ((part = reader.nextPart()).length > 0) {
+        int number = parts.size() + 1;
+        var uploaded = s3Client.uploadPart(software.amazon.awssdk.services.s3.model.UploadPartRequest.builder()
+            .bucket(target.bucket()).key(target.objectKey()).uploadId(uploadId).partNumber(number)
+            .contentLength((long) part.length).build(), RequestBody.fromBytes(part));
+        parts.add(software.amazon.awssdk.services.s3.model.CompletedPart.builder()
+            .partNumber(number).eTag(uploaded.eTag()).build());
+      }
+      var digests = reader.finish();
+      s3Client.completeMultipartUpload(software.amazon.awssdk.services.s3.model.CompleteMultipartUploadRequest.builder()
+          .bucket(target.bucket()).key(target.objectKey()).uploadId(uploadId)
+          .multipartUpload(software.amazon.awssdk.services.s3.model.CompletedMultipartUpload.builder().parts(parts).build())
+          .build());
+      return digests;
+    } catch (RuntimeException failure) {
+      try { abortVerifiedMultipart(target, uploadId); }
+      catch (RuntimeException cleanup) { failure.addSuppressed(cleanup); }
+      throw failure;
+    }
+  }
+
+  @Override
+  public void discardVerifiedUpload(BlobReference target, String multipartId) {
+    if (multipartId != null) {
+      abortVerifiedMultipart(target, multipartId);
+    } else {
+      // Recover the crash window between provider initiation and persisting its handle.
+      var uploads = s3Client.listMultipartUploads(software.amazon.awssdk.services.s3.model.ListMultipartUploadsRequest.builder()
+          .bucket(target.bucket()).prefix(target.objectKey()).maxUploads(10).build());
+      for (var upload : uploads.uploads()) {
+        if (target.objectKey().equals(upload.key())) abortVerifiedMultipart(target, upload.uploadId());
+      }
+    }
+    delete(target);
+  }
+
+  private void abortVerifiedMultipart(BlobReference target, String uploadId) {
+    try {
+      s3Client.abortMultipartUpload(software.amazon.awssdk.services.s3.model.AbortMultipartUploadRequest.builder()
+          .bucket(target.bucket()).key(target.objectKey()).uploadId(uploadId).build());
+    } catch (software.amazon.awssdk.services.s3.model.S3Exception error) {
+      if (error.statusCode() != 404) throw error;
+    }
+  }
+
+  @Override
   public BlobReference put(String repository, String logicalPath, InputStream content, long size, String sha256) {
     String objectKey = BlobObjectKeys.immutableObjectKey(config.prefix(), repository, sha256);
     PutObjectRequest request = PutObjectRequest.builder()

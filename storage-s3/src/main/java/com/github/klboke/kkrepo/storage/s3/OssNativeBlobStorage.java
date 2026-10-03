@@ -60,6 +60,73 @@ public final class OssNativeBlobStorage implements BlobStorage {
   }
 
   @Override
+  public BlobReference prepareVerifiedUpload(String repository, String sha256, long size) {
+    return new BlobReference(config.bucket(),
+        BlobObjectKeys.immutableObjectKey(config.prefix(), repository, sha256), sha256, size);
+  }
+
+  @Override
+  public com.github.klboke.kkrepo.core.VerifiedBlobDigests uploadVerified(
+      BlobReference target, InputStream content, java.util.function.Consumer<String> multipartStarted) {
+    var reader = new com.github.klboke.kkrepo.core.VerifiedBlobReader(target, content);
+    if (target.size() == 0) {
+      var digests = reader.finish();
+      client.putObject(PutObjectRequest.newBuilder().bucket(target.bucket()).key(target.objectKey())
+          .metadata(Map.of("sha256", target.sha256())).body(BinaryData.fromBytes(new byte[0])).build());
+      return digests;
+    }
+    String uploadId = client.initiateMultipartUpload(InitiateMultipartUploadRequest.newBuilder()
+        .bucket(target.bucket()).key(target.objectKey()).metadata(Map.of("sha256", target.sha256()))
+        .build()).initiateMultipartUpload().uploadId();
+    try {
+      multipartStarted.accept(uploadId);
+      List<Part> parts = new ArrayList<>();
+      byte[] part;
+      while ((part = reader.nextPart()).length > 0) {
+        long number = parts.size() + 1L;
+        var uploaded = client.uploadPart(UploadPartRequest.newBuilder().bucket(target.bucket())
+            .key(target.objectKey()).uploadId(uploadId).partNumber(number).contentLength((long) part.length)
+            .body(BinaryData.fromBytes(part)).build());
+        parts.add(Part.newBuilder().partNumber(number).eTag(uploaded.eTag()).build());
+      }
+      var digests = reader.finish();
+      client.completeMultipartUpload(CompleteMultipartUploadRequest.newBuilder().bucket(target.bucket())
+          .key(target.objectKey()).uploadId(uploadId)
+          .completeMultipartUpload(CompleteMultipartUpload.newBuilder().parts(parts).build()).build());
+      return digests;
+    } catch (RuntimeException failure) {
+      try { abortVerifiedMultipart(target, uploadId); }
+      catch (RuntimeException cleanup) { failure.addSuppressed(cleanup); }
+      throw failure;
+    }
+  }
+
+  @Override
+  public void discardVerifiedUpload(BlobReference target, String multipartId) {
+    if (multipartId != null) {
+      abortVerifiedMultipart(target, multipartId);
+    } else {
+      var uploads = client.listMultipartUploads(com.aliyun.sdk.service.oss2.models.ListMultipartUploadsRequest.newBuilder()
+          .bucket(target.bucket()).prefix(target.objectKey()).maxUploads(10L).build());
+      if (uploads.uploads() != null) {
+        for (var upload : uploads.uploads()) {
+          if (target.objectKey().equals(upload.key())) abortVerifiedMultipart(target, upload.uploadId());
+        }
+      }
+    }
+    delete(target);
+  }
+
+  private void abortVerifiedMultipart(BlobReference target, String uploadId) {
+    try {
+      client.abortMultipartUpload(AbortMultipartUploadRequest.newBuilder().bucket(target.bucket())
+          .key(target.objectKey()).uploadId(uploadId).build());
+    } catch (ServiceException error) {
+      if (error.statusCode() != 404) throw error;
+    }
+  }
+
+  @Override
   public BlobReference put(String repository, String logicalPath, InputStream content, long size, String sha256) {
     String objectKey = BlobObjectKeys.immutableObjectKey(config.prefix(), repository, sha256);
     client.putObject(PutObjectRequest.newBuilder()

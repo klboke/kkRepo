@@ -132,7 +132,8 @@ public class RepositoriesController {
   public List<RepositoryView> uploadable(HttpServletRequest request) {
     AuthenticatedSubject subject = requireAuthenticated(request);
     List<RepositoryView> candidates = service.list().stream()
-        .filter(repository -> repository.online() && repository.type() == RepositoryType.HOSTED)
+        .filter(repository -> repository.online() && repository.type() == RepositoryType.HOSTED
+            && repository.format() != RepositoryFormat.GITLFS)
         .toList();
     if (allRepositoryActionAllowed(subject, PermissionAction.EDIT)) {
       return candidates;

@@ -60,6 +60,34 @@ public final class FileBlobStorage implements BlobStorage {
   }
 
   @Override
+  public BlobReference prepareVerifiedUpload(String repository, String sha256, long size) {
+    return new BlobReference(config.name(), FileBlobObjectKeys.immutableObjectKey(repository, sha256), sha256, size);
+  }
+
+  @Override
+  public com.github.klboke.kkrepo.core.VerifiedBlobDigests uploadVerified(
+      BlobReference target, InputStream content, java.util.function.Consumer<String> multipartStarted) {
+    var reader = new com.github.klboke.kkrepo.core.VerifiedBlobReader(target, content);
+    Path path = resolveObjectKey(target.objectKey());
+    boolean created = false;
+    try {
+      directoryCache.ensureExists(path.getParent());
+      try (OutputStream output = Files.newOutputStream(path, StandardOpenOption.CREATE_NEW)) {
+        created = true;
+        byte[] part;
+        while ((part = reader.nextPart()).length > 0) output.write(part);
+        return reader.finish();
+      }
+    } catch (IOException error) {
+      if (created) deleteQuietly(path);
+      throw new UncheckedIOException(error);
+    } catch (RuntimeException error) {
+      if (created) deleteQuietly(path);
+      throw error;
+    }
+  }
+
+  @Override
   public BlobReference put(String repository, String logicalPath, InputStream content, long size, String sha256) {
     Path temp = null;
     try {

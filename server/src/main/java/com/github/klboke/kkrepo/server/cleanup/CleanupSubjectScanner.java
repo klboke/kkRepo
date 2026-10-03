@@ -95,6 +95,9 @@ public class CleanupSubjectScanner {
       int scanLimit,
       Instant cutoff,
       CleanupScanCursor requestedCursor) {
+    if (!capabilities.supportsExecute(repository.format())) {
+      throw new CleanupValidationException("Automatic cleanup is not supported for this format");
+    }
     CleanupTargetRepositories.requireSupported(repository.type());
     CleanupCriteria criteria = CleanupCriteria.parse(rawCriteria);
     int effectiveLimit = Math.max(1, scanLimit);

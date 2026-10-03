@@ -324,6 +324,25 @@ class NexusAssetManagementServiceTest {
   }
 
   @Test
+  void gitLfsDeletionRequiresDeletePermissionAndUsesTheFencedMetadataPath() {
+    RepositoryRecord repository = repository(RepositoryFormat.GITLFS, RepositoryType.HOSTED);
+    String oid = "a".repeat(64);
+    var gitLfs = mock(com.github.klboke.kkrepo.server.gitlfs.GitLfsHostedService.class);
+    service.setGitLfsHostedService(gitLfs);
+    when(repositoryDao.findByName(repository.name())).thenReturn(Optional.of(repository));
+    when(assetDao.findAssetById(12L)).thenReturn(Optional.of(stored(12L, repository, null, oid).asset()));
+    when(gitLfs.deleteById(repository.id(), 12L)).thenReturn(204);
+    assertEquals(204, service.delete(codec.encodeAssetId(repository.name(), 12L), request));
+    verify(authorizer).requireRepositoryAction(request, repository, oid, PermissionAction.DELETE);
+    verifyNoInteractions(rawHostedService);
+    doThrow(new ResponseStatusException(HttpStatus.FORBIDDEN)).when(authorizer)
+        .requireRepositoryAction(request, repository, oid, PermissionAction.DELETE);
+    assertThrows(ResponseStatusException.class,
+        () -> service.delete(codec.encodeAssetId(repository.name(), 12L), request));
+    verify(gitLfs).deleteById(repository.id(), 12L);
+  }
+
+  @Test
   void validIdCannotCrossRepositoryBoundary() {
     RepositoryRecord repository = repository(RepositoryFormat.RAW, RepositoryType.HOSTED);
     RepositoryRecord other = new RepositoryRecord(

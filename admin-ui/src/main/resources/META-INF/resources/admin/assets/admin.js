@@ -529,6 +529,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   alpine: "alpine",
   r: "r",
   huggingface: "huggingface",
+  gitlfs: "gitlfs",
   raw: "raw",
 });
 
@@ -554,6 +555,7 @@ const FORMAT_DISPLAY_NAMES = Object.freeze({
   alpine: "Alpine / APK",
   r: "R / CRAN",
   huggingface: "Hugging Face Models",
+  gitlfs: "Git LFS",
   raw: "Raw",
 });
 
@@ -2644,6 +2646,9 @@ function refreshRepositoryRecipeControls() {
   const recipe = currentRecipe();
   const type = recipe ? recipe.type : null;
   const format = recipe ? recipe.format : null;
+  const strict = document.getElementById("repository-strict");
+  strict.disabled = format === "gitlfs";
+  if (format === "gitlfs") strict.checked = false;
   document.getElementById("repository-hosted-fields").hidden = type !== "HOSTED";
   document.getElementById("repository-proxy-fields").hidden = type !== "PROXY";
   const ntlmAvailable = type === "PROXY" && format === "nuget";

@@ -4050,6 +4050,15 @@ test_ansible() {
   fi
 }
 
+test_gitlfs() {
+  KKREPO_COMPAT_BASE_URL="$KKREPO_URL" KKREPO_COMPAT_USERNAME="$KKREPO_USER" \
+    KKREPO_COMPAT_PASSWORD="$KKREPO_PASSWORD" CLIENT_E2E_ARTIFACT_DIR="$ARTIFACT_DIR" \
+    bash "$SCRIPT_DIR/git-lfs-client-e2e.sh"
+  KKREPO_COMPAT_BASE_URL="$KKREPO_URL" KKREPO_COMPAT_USERNAME="$KKREPO_USER" \
+    KKREPO_COMPAT_PASSWORD="$KKREPO_PASSWORD" CLIENT_E2E_ARTIFACT_DIR="$ARTIFACT_DIR" \
+    python3 "$SCRIPT_DIR/git-lfs-resilience-e2e.py"
+}
+
 run_selected_tests() {
   local selection="${CLIENT_E2E_TESTS:-all}"
   local -a tests=()
@@ -4069,6 +4078,9 @@ run_selected_tests() {
     CLEANUP_FIXTURE_PATTERN=""
     CLEANUP_FIXTURE_LABEL=""
     case "$test" in
+      gitlfs)
+        test_gitlfs
+        ;;
       raw)
         test_raw
         register_cleanup_fixture raw asset-api-raw-hosted "*$STAMP*" raw

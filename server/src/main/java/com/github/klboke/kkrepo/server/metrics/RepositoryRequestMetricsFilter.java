@@ -312,6 +312,9 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
       case ALPINE -> alpineOperation(path, normalizedMethod);
       case R -> rOperation(path, normalizedMethod);
       case HUGGINGFACE -> huggingFaceOperation(path, normalizedMethod);
+      case GITLFS -> path.equals("info/lfs/objects/batch") ? "gitlfs_batch"
+          : path.endsWith("/verify") ? "gitlfs_verify"
+          : "PUT".equals(normalizedMethod) ? "gitlfs_upload" : "gitlfs_download";
       case RAW -> rawOperation(normalizedMethod);
     };
   }

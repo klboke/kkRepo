@@ -46,6 +46,37 @@ class OssNativeBlobStorageTest {
   Path tempDir;
 
   @Test
+  void verifiedStreamingChecksOidBeforeCompleteAndPersistsHandleBeforeParts() throws Exception {
+    OSSClient client = mock(OSSClient.class);
+    var initiated = mock(InitiateMultipartUploadResult.class);
+    var handle = mock(InitiateMultipartUpload.class);
+    when(handle.uploadId()).thenReturn("durable-handle");
+    when(initiated.initiateMultipartUpload()).thenReturn(handle);
+    when(client.initiateMultipartUpload(any(InitiateMultipartUploadRequest.class))).thenReturn(initiated);
+    var partResult = mock(UploadPartResult.class);
+    when(partResult.eTag()).thenReturn("part");
+    when(client.uploadPart(any(UploadPartRequest.class))).thenReturn(partResult);
+    OssNativeBlobStorage storage = new OssNativeBlobStorage(client, config(1));
+    byte[] bytes = new byte[com.github.klboke.kkrepo.core.VerifiedBlobReader.PART_BYTES + 1];
+    String sha = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+    var target = storage.prepareVerifiedUpload("lfs", sha, bytes.length);
+    var result = storage.uploadVerified(target, new ByteArrayInputStream(bytes), id -> {
+      assertEquals("durable-handle", id);
+      verify(client, never()).uploadPart(any(UploadPartRequest.class));
+    });
+    assertEquals(sha, result.sha256());
+    verify(client, org.mockito.Mockito.times(2)).uploadPart(any(UploadPartRequest.class));
+    verify(client).completeMultipartUpload(any(CompleteMultipartUploadRequest.class));
+    org.mockito.Mockito.clearInvocations(client);
+    var invalid = storage.prepareVerifiedUpload("lfs", "f".repeat(64), bytes.length);
+    assertThrows(com.github.klboke.kkrepo.core.BlobIntegrityException.class,
+        () -> storage.uploadVerified(invalid, new ByteArrayInputStream(bytes), id -> {}));
+    verify(client, never()).completeMultipartUpload(any(CompleteMultipartUploadRequest.class));
+    verify(client).abortMultipartUpload(any(AbortMultipartUploadRequest.class));
+    storage.close();
+  }
+
+  @Test
   void putOmitsBlankMetadataAndUploadsOriginalBytes() {
     OSSClient client = mock(OSSClient.class);
     OssNativeBlobStorage storage = new OssNativeBlobStorage(client, config(64 * 1024 * 1024L));

@@ -38,6 +38,8 @@ public interface PersistenceStores extends AutoCloseable {
 
   HuggingFaceRegistryDao huggingFaceRegistry();
 
+  GitLfsDao gitLfs();
+
   MaintenanceCursorDao maintenanceCursors();
 
   MetadataRebuildDao metadataRebuild();

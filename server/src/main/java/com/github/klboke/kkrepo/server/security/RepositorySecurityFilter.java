@@ -74,6 +74,12 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   private final ForwardedHeaderPolicy forwardedHeaderPolicy;
   private final NexusLegacyUiCompatibility legacyUi;
   private ConanAuthService conanAuth;
+  private com.github.klboke.kkrepo.server.gitlfs.GitLfsAccess gitLfsAccess;
+
+  @Autowired
+  void setGitLfsAccess(com.github.klboke.kkrepo.server.gitlfs.GitLfsAccess access) {
+    this.gitLfsAccess = access;
+  }
 
   @Autowired(required = false)
   void setConanAuthService(ConanAuthService conanAuth) {
@@ -145,6 +151,15 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       }
     } catch (PypiExceptions.BadRequestException | IllegalArgumentException e) {
       response.sendError(HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+      return;
+    }
+    if (repository.get().format() == RepositoryFormat.GITLFS
+        && !target.repositoryBrowseRoute() && !target.componentUploadRoute()) {
+      if (gitLfsAccess == null) {
+        response.sendError(503, "Git LFS authentication unavailable");
+      } else if (gitLfsAccess.authorize(request, response, repository.get(), target.path())) {
+        filterChain.doFilter(request, response);
+      }
       return;
     }
     String terraformUrlToken = null;

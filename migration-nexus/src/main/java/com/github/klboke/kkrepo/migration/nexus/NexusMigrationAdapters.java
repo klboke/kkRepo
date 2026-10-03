@@ -81,6 +81,7 @@ final class NexusMigrationAdapters {
           || ("apt".equals(normalizedFormat) && "hosted".equals(normalizedType))
           || ("alpine".equals(normalizedFormat) && "hosted".equals(normalizedType))
           || ("r".equals(normalizedFormat) && "hosted".equals(normalizedType))
+          || ("gitlfs".equals(normalizedFormat) && "hosted".equals(normalizedType))
           || ("huggingface".equals(normalizedFormat) && "proxy".equals(normalizedType));
     }
 
@@ -150,7 +151,7 @@ final class NexusMigrationAdapters {
           && !"swift".equals(normalized) && !"ansiblegalaxy".equals(normalized)
           && !"conda".equals(normalized) && !"conan".equals(normalized)
           && !"alpine".equals(normalized) && !"r".equals(normalized)
-          && !"huggingface".equals(normalized);
+          && !"huggingface".equals(normalized) && !"gitlfs".equals(normalized);
     }
 
     @Override
@@ -178,7 +179,8 @@ final class NexusMigrationAdapters {
           && (!"conda".equals(lower(format)) || "hosted".equals(lower(type)))
           && (!"conan".equals(lower(format)) || !"group".equals(lower(type)))
           && (!"alpine".equals(lower(format)) || "hosted".equals(lower(type)))
-          && (!"r".equals(lower(format)) || "hosted".equals(lower(type)));
+          && (!"r".equals(lower(format)) || "hosted".equals(lower(type)))
+          && (!"gitlfs".equals(lower(format)) || "hosted".equals(lower(type)));
     }
 
     @Override
@@ -206,7 +208,8 @@ final class NexusMigrationAdapters {
           && (!"conda".equals(lower(format)) || "hosted".equals(lower(type)))
           && (!"conan".equals(lower(format)) || !"group".equals(lower(type)))
           && (!"alpine".equals(lower(format)) || "hosted".equals(lower(type)))
-          && (!"r".equals(lower(format)) || "hosted".equals(lower(type)));
+          && (!"r".equals(lower(format)) || "hosted".equals(lower(type)))
+          && (!"gitlfs".equals(lower(format)) || "hosted".equals(lower(type)));
     }
 
     @Override

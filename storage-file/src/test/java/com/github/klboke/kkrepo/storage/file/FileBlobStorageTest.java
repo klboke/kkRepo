@@ -30,6 +30,24 @@ class FileBlobStorageTest {
   Path tempDir;
 
   @Test
+  void verifiedUploadsPreserveExistingObjectsAndRemoveFailedAttempts() throws Exception {
+    FileBlobStorage storage = new FileBlobStorage(new FileBlobStoreConfig(1, "disk", "default", tempDir));
+    byte[] bytes = "verified".getBytes(StandardCharsets.UTF_8);
+    String sha = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+    var target = storage.prepareVerifiedUpload("lfs", sha, bytes.length);
+    storage.uploadVerified(target, new ByteArrayInputStream(bytes), id -> {});
+    assertArrayEquals(bytes, storage.get(target).orElseThrow().readAllBytes());
+    assertThrows(RuntimeException.class, () -> storage.uploadVerified(target, new ByteArrayInputStream(bytes), id -> {}));
+    assertArrayEquals(bytes, storage.get(target).orElseThrow().readAllBytes());
+    var bad = storage.prepareVerifiedUpload("lfs", "f".repeat(64), bytes.length);
+    assertThrows(com.github.klboke.kkrepo.core.BlobIntegrityException.class,
+        () -> storage.uploadVerified(bad, new ByteArrayInputStream(bytes), id -> {}));
+    assertFalse(storage.exists(bad));
+    storage.discardVerifiedUpload(target, null);
+    assertFalse(storage.exists(target));
+  }
+
+  @Test
   void storesReadsStatsAndDeletesBlobsFromDisk() throws Exception {
     FileBlobStorage storage = new FileBlobStorage(new FileBlobStoreConfig(1, "disk", "default", tempDir));
     byte[] bytes = "hello file blob".getBytes(StandardCharsets.UTF_8);

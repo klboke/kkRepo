@@ -68,6 +68,22 @@ class NexusSourceProfileTest {
       "resolveAssetCount", 2);
 
   @Test
+  void gitLfsMigrationRequiresKnownVersionAndVerifiedOidSizeChecksumShape() {
+    var verified = gitLfsProfile("3.94.0-12", Map.of("oidSizeChecksumShape", true));
+    assertTrue(verified.formatCapabilities().get("gitlfs").contentMigration());
+    assertEquals(SupportStatus.FULL, NexusMigrationAdapters.select(verified)
+        .repositoryStatus(verified, "gitlfs", "hosted", false));
+    for (String version : List.of("unknown", "3.93.0-01", "3.95.0-01")) {
+      var unverified = gitLfsProfile(version, Map.of("oidSizeChecksumShape", true));
+      assertFalse(unverified.formatCapabilities().get("gitlfs").contentMigration());
+      assertEquals(SupportStatus.NEEDS_MANUAL_ACTION, NexusMigrationAdapters.select(unverified)
+          .repositoryStatus(unverified, "gitlfs", "hosted", false));
+    }
+    assertFalse(gitLfsProfile("3.94.0-12", Map.of()).formatCapabilities().get("gitlfs").contentMigration());
+    assertFalse(gitLfsProfile("3.94.0-12", Map.of("oidSizeChecksumShape", false)).formatCapabilities().get("gitlfs").contentMigration());
+  }
+
+  @Test
   void enablesSwiftHostedContentOnlyForKnownNexusVersionsAndVerifiedShape() {
     for (String version : List.of("3.92.0-03", "3.93.1-01", "3.94.0-01")) {
       NexusSourceProfile profile = profile(version, VERIFIED_SWIFT_SHAPE);
@@ -471,6 +487,48 @@ class NexusSourceProfileTest {
         Map.of(
             "name", "alpine-hosted",
             "format", "alpine",
+            "type", "hosted",
+            "online", true),
+        Map.of("storage", Map.of("blobStoreName", "default")));
+    return NexusSourceProfile.fromInventory(
+        new NexusInventory(
+            List.of(Map.of("name", "default", "type", "File")),
+            List.of(repository),
+            NexusSecurityExport.empty(),
+            List.of(),
+            probe),
+        null);
+  }
+
+  private static NexusSourceProfile gitLfsProfile(
+      String probedVersion,
+      Map<String, Object> formatShape) {
+    SourceProbe probe = new SourceProbe(
+        probedVersion,
+        true,
+        true,
+        true,
+        "text/plain",
+        "ok",
+        "DATASTORE_POSTGRESQL",
+        "PostgreSQL",
+        "jdbc:postgresql://nexus/nexus",
+        Map.of("datastoreContentModels", Map.of("gitlfs", Map.of(
+            "prefix", "GITLFS",
+            "tablesPresent", true,
+            "requiredColumnsPresent", true,
+            "tables", Map.of(
+                "contentRepository", "GITLFS_CONTENT_REPOSITORY",
+                "asset", "GITLFS_ASSET",
+                "assetBlob", "GITLFS_ASSET_BLOB",
+                "component", "GITLFS_COMPONENT"),
+            "columns", Map.of(),
+            "formatShape", formatShape))),
+        List.of());
+    RepositoryDocument repository = new RepositoryDocument(
+        Map.of(
+            "name", "gitlfs-hosted",
+            "format", "gitlfs",
             "type", "hosted",
             "online", true),
         Map.of("storage", Map.of("blobStoreName", "default")));

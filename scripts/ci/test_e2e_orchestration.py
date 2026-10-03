@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 SCRIPTS = Path(__file__).resolve().parent
-EXPECTED = "raw maven npm pypi go helm cargo pub composer nuget rubygems yum apt alpine r conda conan terraform swift ansible docker-oci".split()
+EXPECTED = "raw maven npm pypi go helm cargo pub composer nuget rubygems yum apt alpine r conda conan gitlfs terraform swift ansible docker-oci".split()
 
 
 def load(name):
@@ -64,7 +64,7 @@ run_registered_cleanup() { echo cleanup; }
         self.assertEqual(result.returncode, 0, result.stderr)
         lines = result.stdout.splitlines()
         self.assertEqual([x[5:] for x in lines if x.startswith("test:")], EXPECTED)
-        self.assertEqual([x[9:] for x in lines if x.startswith("register:")], EXPECTED)
+        self.assertEqual([x[9:] for x in lines if x.startswith("register:")], [x for x in EXPECTED if x != "gitlfs"])
         self.assertEqual(lines.count("cleanup"), len(EXPECTED))
 
     def test_shards_execute_every_original_protocol_and_cleanup_once(self):
@@ -74,7 +74,7 @@ run_registered_cleanup() { echo cleanup; }
             self.assertEqual(result.returncode, 0, result.stderr)
             lines = result.stdout.splitlines()
             protocols = [x[5:] for x in lines if x.startswith("test:")]
-            self.assertEqual([x[9:] for x in lines if x.startswith("register:")], protocols)
+            self.assertEqual([x[9:] for x in lines if x.startswith("register:")], [x for x in protocols if x != "gitlfs"])
             self.assertEqual(lines.count("cleanup"), len(protocols))
             collected.extend(protocols)
         self.assertCountEqual(collected, EXPECTED)
@@ -201,11 +201,16 @@ fi
                     directory.mkdir(parents=True)
                     (directory / "protocol-durations.tsv").write_text("".join(f"{test}\t1\n" for test in tests))
                     for test in tests:
-                        (directory / f"cleanup-{test}.json").write_text(json.dumps({
+                        (directory / f"cleanup-{test}.json").write_text(json.dumps({"automaticCleanupRejected": True} if test == "gitlfs" else {
                             "tryRun": {"run": {"state": "SUCCEEDED", "matchedSubjects": 1}},
                             "executeRun": {"run": {"state": "SUCCEEDED", "deletedSubjects": 1, "failedSubjects": 0}},
                         }))
-        self.assertIn("Verified 84", verifier.verify(self.root))
+        self.assertIn("Verified 88", verifier.verify(self.root))
+        lfs = self.root / "full-native-client-live-compat-postgresql-system-logs" / "client-e2e" / "cleanup-gitlfs.json"
+        lfs.write_text('{"automaticCleanupRejected": false}')
+        with self.assertRaises(ValueError):
+            verifier.verify(self.root)
+        lfs.write_text('{"automaticCleanupRejected": true}')
         missing = self.root / "full-native-client-live-compat-postgresql-swift-logs" / "client-e2e" / "protocol-durations.tsv"
         missing.write_text("")
         with self.assertRaises(ValueError):

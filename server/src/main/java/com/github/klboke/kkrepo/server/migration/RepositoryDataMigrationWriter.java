@@ -90,6 +90,12 @@ class RepositoryDataMigrationWriter {
   private AptRepositoryDataMigrationWriter aptMigrationWriter;
   private AlpineRepositoryDataMigrationWriter alpineMigrationWriter;
   private RRepositoryDataMigrationWriter rMigrationWriter;
+  private com.github.klboke.kkrepo.server.gitlfs.GitLfsMigrationWriter gitLfsMigrationWriter;
+
+  @Autowired
+  void setGitLfsMigrationWriter(com.github.klboke.kkrepo.server.gitlfs.GitLfsMigrationWriter writer) {
+    this.gitLfsMigrationWriter = writer;
+  }
   private ConanRepositoryDataMigrationWriter conanMigrationWriter;
   private HuggingFaceRegistryDao huggingFaceRegistry;
   private final TransientTransactionRetry transactionRetry;
@@ -247,6 +253,10 @@ class RepositoryDataMigrationWriter {
       throw new IllegalArgumentException("target repository has no blob store: " + repository.name());
     }
     BlobStorage storage = blobStorageRegistry.forBlobStoreId(repository.blobStoreId());
+    if (repository.format() == RepositoryFormat.GITLFS) {
+      var migrated = gitLfsMigrationWriter.write(repository, source, body);
+      return new WriteResult(migrated.componentId(), migrated.assetId(), migrated.assetBlobId(), migrated.objectKey());
+    }
     if (repository.format() == RepositoryFormat.PUB) {
       if (pubMigrationWriter == null) {
         throw new IllegalStateException("Pub migration writer is not configured");
@@ -1132,6 +1142,7 @@ class RepositoryDataMigrationWriter {
       case R -> source.sourcePath().endsWith(".tar.gz")
           && source.sourcePath().startsWith("src/contrib/")
           ? "r-source-package" : "r-metadata";
+      case GITLFS -> "gitlfs";
       case HUGGINGFACE -> "huggingface-model-file";
       case RAW -> "asset";
     };

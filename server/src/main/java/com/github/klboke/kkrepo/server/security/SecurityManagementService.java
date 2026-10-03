@@ -997,7 +997,18 @@ public class SecurityManagementService implements AccessDecisionService {
     if (subject == null || permissions == null || permissions.isEmpty()) {
       return Map.of();
     }
-    AuthorizationSnapshot snapshot = authorizationSnapshot(subject);
+    return decideAll(authorizationSnapshot(subject), permissions);
+  }
+
+  @Override
+  public Map<RepositoryPermission, AccessDecision> decideAllFresh(
+      PermissionSubject subject, Collection<RepositoryPermission> permissions) {
+    if (subject == null || permissions == null || permissions.isEmpty()) return Map.of();
+    return decideAll(loadAuthorizationSnapshot(subject), permissions);
+  }
+
+  private Map<RepositoryPermission, AccessDecision> decideAll(
+      AuthorizationSnapshot snapshot, Collection<RepositoryPermission> permissions) {
     Map<RepositoryPermission, AccessDecision> result = new LinkedHashMap<>();
     permissions.stream()
         .filter(java.util.Objects::nonNull)

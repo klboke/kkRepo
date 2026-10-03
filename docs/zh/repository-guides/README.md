@@ -31,6 +31,7 @@
 | NuGet | hosted / proxy / group | [NuGet 使用示例](../client-recipes.md#nuget) | [NuGet 仓库使用指南](nuget.md) |
 | RubyGems | hosted / proxy / group | [RubyGems 使用示例](../client-recipes.md#rubygems) | [RubyGems 仓库使用指南](rubygems.md) |
 | Yum | hosted / proxy / group | [Yum 使用示例](../client-recipes.md#yum) | [Yum 仓库使用指南](yum.md) |
+| Git LFS | hosted | [Git LFS 客户端配置](git-lfs.md#配置与上传) | [Git LFS 仓库使用指南](git-lfs.md) |
 | Raw | hosted / proxy / group | [Raw 使用示例](../client-recipes.md#raw) | [Raw 仓库使用指南](raw.md) |
 | Docker / OCI | hosted / proxy / group | [Docker / OCI 使用示例](../client-recipes.md#docker--oci) | [Docker / OCI 仓库使用指南](docker-oci.md) |
 

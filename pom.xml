@@ -32,6 +32,7 @@
     <module>protocol-alpine</module>
     <module>protocol-r</module>
     <module>protocol-huggingface</module>
+    <module>protocol-gitlfs</module>
     <module>protocol-go</module>
     <module>protocol-helm</module>
     <module>protocol-docker</module>
@@ -262,6 +263,11 @@
       <dependency>
         <groupId>com.github.klboke</groupId>
         <artifactId>kkrepo-protocol-huggingface</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.github.klboke</groupId>
+        <artifactId>kkrepo-protocol-gitlfs</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>

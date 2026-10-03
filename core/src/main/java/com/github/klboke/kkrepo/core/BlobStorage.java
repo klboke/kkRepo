@@ -8,6 +8,26 @@ import java.nio.file.Path;
 import java.util.Optional;
 
 public interface BlobStorage extends AutoCloseable {
+  /** Allocates an attempt-unique, unpublished key without performing remote I/O. */
+  default BlobReference prepareVerifiedUpload(String repository, String sha256, long size) {
+    throw new UnsupportedOperationException("Verified streaming uploads are not supported");
+  }
+
+  /**
+   * Writes to a previously persisted attempt key using bounded memory. The observer must persist
+   * the multipart handle before any part is sent. Returns only after length and SHA-256 pass;
+   * callers still own transactional publication and recovery of an interrupted attempt.
+   */
+  default VerifiedBlobDigests uploadVerified(
+      BlobReference target, InputStream content, java.util.function.Consumer<String> multipartStarted) {
+    throw new UnsupportedOperationException("Verified streaming uploads are not supported");
+  }
+
+  /** Aborts incomplete multipart state and removes only this unpublished attempt's object. */
+  default void discardVerifiedUpload(BlobReference target, String multipartId) {
+    delete(target);
+  }
+
   BlobReference put(String repository, String logicalPath, InputStream content, long size, String sha256);
 
   default BlobReference putFile(String repository, String logicalPath, Path file, String sha256) {

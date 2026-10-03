@@ -26,6 +26,7 @@ case "${1:-}" in
     python -c 'import build, twine'
     ;;
   system)
+    git lfs version | grep '^git-lfs/3\.8\.0 '
     "$CONDA_BIN" --version
     conan --version | grep '2\.31\.2'
     "$TERRAFORM_013_BIN" version | grep '^Terraform v0\.13\.7$'

@@ -413,6 +413,7 @@ public class NexusRestClient {
           apt: 'APT',
           alpine: 'ALPINE',
           r: 'R',
+          gitlfs: 'GITLFS',
           huggingface: 'HUGGINGFACE'
         ]
         return prefixes[format]
@@ -829,6 +830,7 @@ public class NexusRestClient {
           apt: 'APT',
           alpine: 'ALPINE',
           r: 'R',
+          gitlfs: 'GITLFS',
           huggingface: 'HUGGINGFACE'
         ]
         def upperTables = []
@@ -1592,6 +1594,34 @@ public class NexusRestClient {
           }
           if (format == 'r' && requiredColumnsPresent) {
             contentModel.formatShape = inspectRShape(tableNames)
+          }
+          if (format == 'gitlfs' && requiredColumnsPresent) {
+            def valid = true
+            def count = 0
+            def statement = connection.prepareStatement('select a.path, b.blob_size, b.checksums from '
+                + tableNames.asset + ' a left join ' + tableNames.assetBlob
+                + ' b on a.asset_blob_id = b.asset_blob_id order by a.path limit 2048')
+            try {
+              def rows = statement.executeQuery()
+              try {
+                while (rows.next()) {
+                  count++
+                  def path = rows.getString(1)
+                  def size = rows.getObject(2)
+                  def rawSums = rows.getObject(3)
+                  def sums = new groovy.json.JsonSlurper().parseText(rawSums instanceof byte[]
+                      ? new String(rawSums, 'UTF-8') : String.valueOf(rawSums))
+                  def oid = path != null && path.startsWith('/') ? path.substring(1) : path
+                  valid = valid && oid != null && (oid ==~ /[a-f0-9]{64}/)
+                      && size instanceof Number && size.longValue() >= 0
+                      && sums instanceof Map && String.valueOf(sums.sha256) == oid
+                }
+              } finally { rows.close() }
+            } catch (Exception error) {
+              valid = false
+              out.warnings << 'Git LFS content shape probe failed: ' + errorText(error)
+            } finally { statement.close() }
+            contentModel.formatShape = [oidSizeChecksumShape: valid, sampledAssets: count]
           }
           if (format == 'huggingface' && requiredColumnsPresent) {
             contentModel.formatShape = inspectHuggingFaceShape(tableNames)

@@ -8,13 +8,17 @@ import org.junit.jupiter.api.Test;
 
 class CleanupPolicyCapabilitiesTest {
   @Test
-  void allRepositoryFormatsExposeTryRunLastDownloadAndExecution() {
+  void supportedFormatsExposeCleanupAndGitLfsExplicitlyRejectsIt() {
     var capabilities = new CleanupPolicyCapabilities().all();
 
     assertEquals(RepositoryFormat.values().length, capabilities.size());
-    assertTrue(capabilities.stream().allMatch(item -> item.tryRunSupported()
+    assertTrue(capabilities.stream().filter(item -> item.format() != RepositoryFormat.GITLFS).allMatch(item -> item.tryRunSupported()
         && item.lastDownloadedSupported()
         && item.executeSupported()));
+    var lfs = capabilities.stream().filter(item -> item.format() == RepositoryFormat.GITLFS).findFirst().orElseThrow();
+    org.junit.jupiter.api.Assertions.assertFalse(lfs.tryRunSupported());
+    org.junit.jupiter.api.Assertions.assertFalse(lfs.executeSupported());
+    org.junit.jupiter.api.Assertions.assertFalse(lfs.lastDownloadedSupported());
   }
 
   @Test

@@ -26,6 +26,7 @@ public enum RepositoryFormat {
   ALPINE,
   R,
   HUGGINGFACE,
+  GITLFS,
   RAW;
 
   @JsonCreator

@@ -179,11 +179,19 @@ public class SecurityAuthenticationService {
     if (!hasPresentedCredentials(request) && request.getSession(false) == null) {
       return Optional.empty();
     }
-    return inAuthenticationTransaction(() -> authenticatePresented(request));
+    return inAuthenticationTransaction(() -> authenticatePresented(request, false));
   }
 
-  private Optional<AuthenticatedSubject> authenticatePresented(HttpServletRequest request) {
-    Optional<AuthenticatedSubject> apiKey = authenticateApiKey(request);
+  /** Reload credentials and assigned roles for operations that must observe cross-replica revocation. */
+  public Optional<AuthenticatedSubject> authenticateFresh(HttpServletRequest request) {
+    if (!hasPresentedCredentials(request) && request.getSession(false) == null) {
+      return Optional.empty();
+    }
+    return inAuthenticationTransaction(() -> authenticatePresented(request, true));
+  }
+
+  private Optional<AuthenticatedSubject> authenticatePresented(HttpServletRequest request, boolean fresh) {
+    Optional<AuthenticatedSubject> apiKey = authenticateApiKey(request, fresh);
     if (apiKey.isPresent()) {
       return apiKey;
     }
@@ -199,7 +207,8 @@ public class SecurityAuthenticationService {
       return Optional.empty();
     }
     return basicCredentials(request).flatMap(credentials ->
-        authenticateBasic(credentials.username(), credentials.password()));
+        fresh ? authenticateBasicUncached(credentials.username(), credentials.password())
+            : authenticateBasic(credentials.username(), credentials.password()));
   }
 
   private <T> T inAuthenticationTransaction(Supplier<T> callback) {
@@ -476,12 +485,12 @@ public class SecurityAuthenticationService {
     return "/internal/security/basic/login".equals(uri);
   }
 
-  private Optional<AuthenticatedSubject> authenticateApiKey(HttpServletRequest request) {
+  private Optional<AuthenticatedSubject> authenticateApiKey(HttpServletRequest request, boolean fresh) {
     String token = apiKeyToken(request);
     if (token == null) {
       return Optional.empty();
     }
-    if (apiKeyAuthCache == null) {
+    if (fresh || apiKeyAuthCache == null) {
       return resolveApiKey(ApiKeyTokenCandidate.fromPresentedToken(token));
     }
     return apiKeyAuthCache.find(token, () -> resolveApiKey(ApiKeyTokenCandidate.fromPresentedToken(token)));

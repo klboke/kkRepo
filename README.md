@@ -200,7 +200,7 @@ Repository format roadmap:
 14. ✅ Go - Hosted/proxy/group recipes, Nexus-compatible module ZIP publication, official path/version/archive validation, ordered group aggregation, Cleanup, artifact scanning, UI/API upload, migration, real Go client E2E, Nexus 3.94 black-box comparison, and a reproducible performance baseline are implemented ([usage guide](docs/en/repository-guides/go.md), [performance baseline](docs/en/dev/go-hosted-performance-baseline.md)).
 15. ohpm / HarmonyOS - Planned with hosted, proxy, group, import, and admin capabilities ([Chinese design notes](docs/zh/dev/ohpm-repository-design.md))
 16. ✅ Helm group repositories - Hosted, proxy, and nested group members are aggregated in configured order with first-member precedence, durable index caching, real Helm client coverage, and Nexus definition migration ([usage guide](docs/en/repository-guides/helm.md)).
-17. Git Large File Storage (LFS) - Planned with Nexus-compatible hosted storage for large Git-managed assets ([Chinese design notes](docs/zh/dev/git-lfs-repository-design.md)).
+17. ✅ Git Large File Storage (LFS) - Hosted Batch/basic/verify, verified OSS/S3 streaming uploads, multi-replica publication, repository permissions, and shape-gated Nexus 3.94 migration are implemented; Git hosting, file locks, and automatic Cleanup are excluded ([usage guide](docs/en/repository-guides/git-lfs.md), [implementation design](docs/zh/dev/git-lfs-repository-design.md)).
 18. Eclipse p2 - Planned with Nexus-compatible proxy repositories for Eclipse and Equinox update sites.
 19. CocoaPods - Planned with Nexus-compatible proxy repositories for CocoaPods dependencies.
 

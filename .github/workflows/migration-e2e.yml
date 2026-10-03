@@ -360,6 +360,17 @@ jobs:
       - name: Run Nexus metadata and repository-data migration E2E
         run: scripts/docker-compat/migration-e2e.sh
 
+      - name: Verify Git LFS hosted migration and resume
+        if: matrix.nexus-version == '3.94.0'
+        env:
+          CLIENT_E2E_ARTIFACT_DIR: artifacts/git-lfs-migration
+        run: |
+          if curl -m 10 -fsS -u "$KKREPO_COMPAT_USERNAME:$NEXUS_COMPAT_PASSWORD" \
+              "$KKREPO_COMPAT_BASE_URL/internal/security/session" >/dev/null 2>&1; then
+            export KKREPO_COMPAT_PASSWORD="$NEXUS_COMPAT_PASSWORD"
+          fi
+          python3 scripts/ci/git-lfs-migration-e2e.py
+
       - name: Collect migration logs
         if: always()
         run: |

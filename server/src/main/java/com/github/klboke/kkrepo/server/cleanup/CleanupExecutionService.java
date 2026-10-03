@@ -97,7 +97,8 @@ public class CleanupExecutionService {
     }
 
     RepositoryRecord repository = repositoryDao.findById(claim.repositoryId()).orElse(null);
-    if (repository == null || !repository.online() || repository.format() != claim.format()) {
+    if (repository == null || !repository.online() || repository.format() != claim.format()
+        || repository.format() == com.github.klboke.kkrepo.core.RepositoryFormat.GITLFS) {
       return persistRunItems(
           claim.id(), candidates,
           repeated(candidates.size(), stale("repository state changed")), now);

@@ -142,3 +142,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+.format-logo-gitlfs {
+  --format-logo: url("/browse/assets/formats/gitlfs.svg");
+}

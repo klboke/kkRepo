@@ -73,6 +73,7 @@ public final class RepositoryRecipes {
       new RepositoryRecipe("r-proxy", RepositoryFormat.R, RepositoryType.PROXY),
       new RepositoryRecipe("r-group", RepositoryFormat.R, RepositoryType.GROUP),
       new RepositoryRecipe("huggingface-proxy", RepositoryFormat.HUGGINGFACE, RepositoryType.PROXY),
+      new RepositoryRecipe("gitlfs-hosted", RepositoryFormat.GITLFS, RepositoryType.HOSTED),
       new RepositoryRecipe("raw-hosted", RepositoryFormat.RAW, RepositoryType.HOSTED),
       new RepositoryRecipe("raw-proxy", RepositoryFormat.RAW, RepositoryType.PROXY),
       new RepositoryRecipe("raw-group", RepositoryFormat.RAW, RepositoryType.GROUP));

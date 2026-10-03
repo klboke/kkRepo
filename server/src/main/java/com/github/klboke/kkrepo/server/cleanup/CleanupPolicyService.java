@@ -298,6 +298,9 @@ public class CleanupPolicyService {
     if (command.format() == null) {
       throw new CleanupValidationException("format is required");
     }
+    if (!capabilities.supportsExecute(command.format())) {
+      throw new CleanupValidationException("Automatic cleanup is not supported for format " + command.format());
+    }
     Map<String, Object> criteria = command.criteria() == null
         ? Map.of()
         : Collections.unmodifiableMap(new java.util.LinkedHashMap<>(command.criteria()));

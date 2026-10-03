@@ -234,6 +234,8 @@ public record NexusSourceProfile(
               || alpineContentModelSupported(probedNexusVersion, contentModel))
           && (!"r".equals(format)
               || rContentModelSupported(probedNexusVersion, contentModel))
+          && (!"gitlfs".equals(format) || (knownMigrationVersion(probedNexusVersion, 94, 94)
+              && Boolean.TRUE.equals(contentModel.formatShape().get("oidSizeChecksumShape"))))
           && (!"huggingface".equals(format)
               || huggingFaceContentModelSupported(probedNexusVersion, contentModel));
       boolean content = config
@@ -242,7 +244,7 @@ public record NexusSourceProfile(
                   && !"swift".equals(format) && !"ansiblegalaxy".equals(format)
                   && !"conda".equals(format) && !"conan".equals(format)
                   && !"alpine".equals(format) && !"r".equals(format)
-                  && !"huggingface".equals(format))
+                  && !"huggingface".equals(format) && !"gitlfs".equals(format))
               || ((metadataEngine == MetadataEngine.DATASTORE_H2
                   || metadataEngine == MetadataEngine.DATASTORE_POSTGRESQL)
                   && datastoreContent));
@@ -344,6 +346,7 @@ public record NexusSourceProfile(
           && !rFormatShapeSupported(contentModel.formatShape())) {
         return "r-content-shape-incomplete";
       }
+      if ("gitlfs".equals(format)) return "gitlfs-source-version-or-content-shape-unverified";
       if ("huggingface".equals(format)
           && !knownHuggingFaceMigrationVersion(probedNexusVersion)) {
         return "huggingface-source-version-unverified";

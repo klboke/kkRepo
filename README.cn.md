@@ -200,7 +200,7 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 14. ✅ Go - 已实现 hosted/proxy/group recipe、Nexus 兼容 module ZIP 发布、官方 path/version/archive 校验、有序 group 聚合、Cleanup、安全扫描、UI/API 上传、迁移、真实 Go 客户端 E2E、Nexus 3.94 黑盒对比和可复现性能基线（[使用指南](docs/zh/repository-guides/go.md)、[性能基线](docs/zh/dev/go-hosted-performance-baseline.md)）。
 15. ohpm / HarmonyOS - 规划中，覆盖 hosted、proxy、group、导入和管理端能力（[设计说明](docs/zh/dev/ohpm-repository-design.md)）
 16. ✅ Helm group 仓库 - 已实现 hosted、proxy 与嵌套 group member 的配置顺序聚合、首成员优先、持久化 index 缓存、真实 Helm 客户端验证和 Nexus definition 迁移（[使用指南](docs/zh/repository-guides/helm.md)）。
-17. Git Large File Storage (LFS) - 规划 Nexus 兼容的 hosted 仓库，用于 Git 大文件制品存储（[设计说明](docs/zh/dev/git-lfs-repository-design.md)）。
+17. ✅ Git Large File Storage (LFS) - 已实现 hosted、Batch/basic/verify、完整性校验、OSS/S3 流式上传、多副本发布、权限及 Nexus 3.94 shape-gated 迁移；不提供 Git 服务、文件锁或自动 Cleanup（[使用指南](docs/zh/repository-guides/git-lfs.md)、[实现设计](docs/zh/dev/git-lfs-repository-design.md)）。
 18. Eclipse p2 - 规划 Nexus 兼容的 proxy 仓库，覆盖 Eclipse 与 Equinox update site。
 19. CocoaPods - 规划 Nexus 兼容的 proxy 仓库，用于代理 CocoaPods 依赖。
 

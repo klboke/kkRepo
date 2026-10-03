@@ -37,6 +37,10 @@ case "${1:-}" in
     flutter precache --universal
     ;;
   system)
+    download https://github.com/git-lfs/git-lfs/releases/download/v3.8.0/git-lfs-linux-amd64-v3.8.0.tar.gz -o git-lfs.tar.gz
+    echo 'e455e00f15d9b95661b8d53498ffb0c3367962cf1ec73c31ab7369516cd6ab8d  git-lfs.tar.gz' | sha256sum --check -
+    tar -xzf git-lfs.tar.gz
+    install git-lfs-3.8.0/git-lfs /usr/local/bin/git-lfs
     python -m pip install --no-cache-dir 'conan==2.31.2'
     uv python install 3.9
     uv venv --python 3.9 --seed /opt/ansible/2.9

@@ -30,6 +30,31 @@ public final class InstrumentedBlobStorage implements BlobStorage {
   }
 
   @Override
+  public BlobReference prepareVerifiedUpload(String repository, String sha256, long size) {
+    return delegate.prepareVerifiedUpload(repository, sha256, size);
+  }
+
+  @Override
+  public com.github.klboke.kkrepo.core.VerifiedBlobDigests uploadVerified(
+      BlobReference target, InputStream content, java.util.function.Consumer<String> multipartStarted) {
+    Timer.Sample sample = metrics.startTimer();
+    try {
+      var result = delegate.uploadVerified(target, content, multipartStarted);
+      metrics.recordBlobOperation(store, type, engine, "put_verified", "success", sample);
+      metrics.recordBlobBytes(store, type, engine, "put_verified", result.size());
+      return result;
+    } catch (RuntimeException error) {
+      metrics.recordBlobOperation(store, type, engine, "put_verified", "error", sample);
+      throw error;
+    }
+  }
+
+  @Override
+  public void discardVerifiedUpload(BlobReference target, String multipartId) {
+    delegate.discardVerifiedUpload(target, multipartId);
+  }
+
+  @Override
   public BlobReference put(String repository, String logicalPath, InputStream content, long size, String sha256) {
     Timer.Sample sample = metrics.startTimer();
     try {

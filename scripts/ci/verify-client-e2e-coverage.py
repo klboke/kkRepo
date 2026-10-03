@@ -27,6 +27,11 @@ def verify(root):
                         raise ValueError(f"Duplicate coverage: {runtime}/{database}/{test}")
                     seen.add(test)
                     cleanup = json.loads((directory / f"cleanup-{test}.json").read_text())
+                    if test == "gitlfs":
+                        if cleanup.get("automaticCleanupRejected") is not True:
+                            raise ValueError(f"LFS cleanup must be disabled: {runtime}/{database}")
+                        rows.append(f"| {runtime} | {database} | {test} | {int(duration)} |")
+                        continue
                     dry_run = cleanup["tryRun"]["run"]
                     execute = cleanup["executeRun"]["run"]
                     if (dry_run["state"] != "SUCCEEDED" or dry_run["matchedSubjects"] < 1
@@ -38,7 +43,7 @@ def verify(root):
                 raise ValueError(f"Incomplete client coverage: {runtime}/{database}")
     return "\n".join([
         "### Real-client coverage", "",
-        f"Verified {len(rows)} protocol/runtime/database combinations including Cleanup Try Run and Execute.", "",
+        f"Verified {len(rows)} protocol/runtime/database combinations including Cleanup Try Run/Execute, or explicit rejection for Git LFS.", "",
         "| Runtime | Database | Protocol | Seconds (including cleanup) |", "| --- | --- | --- | ---: |", *rows, "",
     ])
 

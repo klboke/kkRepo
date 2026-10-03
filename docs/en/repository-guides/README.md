@@ -33,6 +33,7 @@ the recipe combinations and protocol boundaries supported by each format.
 | NuGet | hosted / proxy / group | [NuGet recipe](../client-recipes.md#nuget) | [NuGet Repository Guide](nuget.md) |
 | RubyGems | hosted / proxy / group | [RubyGems recipe](../client-recipes.md#rubygems) | [RubyGems Repository Guide](rubygems.md) |
 | Yum | hosted / proxy / group | [Yum recipe](../client-recipes.md#yum) | [Yum Repository Guide](yum.md) |
+| Git LFS | hosted | [Git LFS client setup](git-lfs.md#configure-git) | [Git LFS Repository Guide](git-lfs.md) |
 | Raw | hosted / proxy / group | [Raw recipe](../client-recipes.md#raw) | [Raw Repository Guide](raw.md) |
 | Docker / OCI | hosted / proxy / group | [Docker / OCI recipe](../client-recipes.md#docker--oci) | [Docker / OCI Repository Guide](docker-oci.md) |
 

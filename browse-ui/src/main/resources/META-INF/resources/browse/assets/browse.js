@@ -59,6 +59,7 @@ const SEARCH_ROUTE_FORMAT = {
   alpine: "alpine",
   r: "r",
   huggingface: "huggingface",
+  gitlfs: "gitlfs",
   pypi: "pypi",
   rubygems: "rubygems",
   yum: "yum",
@@ -85,6 +86,7 @@ const FORMAT_ROUTE_SEGMENT = {
   alpine: "alpine",
   r: "r",
   huggingface: "huggingface",
+  gitlfs: "gitlfs",
   pypi: "pypi",
   rubygems: "rubygems",
   yum: "yum",
@@ -111,6 +113,7 @@ const SEARCH_FORMAT_LABEL = {
   alpine: "Alpine / APK",
   r: "R / CRAN",
   huggingface: "Hugging Face Models",
+  gitlfs: "Git LFS",
   pypi: "PyPI",
   rubygems: "RubyGems",
   yum: "Yum",
@@ -807,6 +810,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   alpine: "alpine",
   r: "r",
   huggingface: "huggingface",
+  gitlfs: "gitlfs",
   go: "go",
   helm: "helm",
   docker: "docker",
@@ -1859,7 +1863,9 @@ function bindDeleteControl(mount, entry) {
 async function deleteBrowseEntry(entry, button) {
   if (!entry || !entry.path || !state.repo) return;
   const label = entry.leaf ? entry.name : entry.path;
-  if (!window.confirm(`Delete ${label}?`)) return;
+  const historyWarning = currentRepository()?.format === "gitlfs"
+    ? "\nThis may break checkouts of Git commits that reference this LFS object." : "";
+  if (!window.confirm(`Delete ${label}?${historyWarning}`)) return;
   button.disabled = true;
   const originalText = button.textContent;
   button.textContent = "Deleting";
@@ -3125,6 +3131,14 @@ async function usageDetailForEntry(entry, detail = null) {
   if (repo.format === "apt") return aptUsageDetail(entry, detail);
   if (repo.format === "alpine") return alpineUsageDetail(entry, detail);
   if (repo.format === "r") return rUsageDetail(entry, detail);
+  if (repo.format === "gitlfs") return {
+    crumbText: entry.path,
+    summaryRows: [["Repository", state.repo], ["Format", "Git LFS"], ["OID (SHA-256)", entry.path]],
+    snippets: [
+      usageSnippet("Configure", `git config -f .lfsconfig lfs.url '${repositoryBaseUrl().replace(/\/+$/, "")}/info/lfs'`, "Keep the Git remote on your Git server; use a credential helper for kkRepo access"),
+      usageSnippet("Verify", "git lfs fetch --all\ngit lfs fsck", "Deleting an LFS object can break checkout of historical commits. Automatic cleanup is disabled."),
+    ],
+  };
   if (repo.format === "huggingface") return huggingFaceUsageDetail(entry, detail);
   if (repo.format === "docker") return dockerUsageDetail(entry);
   return null;
