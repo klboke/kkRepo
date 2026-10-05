@@ -96,7 +96,7 @@ jobs:
       - name: Restore Native buildpack layers
         if: inputs.runtime == 'native'
         id: native-cache
-        uses: actions/cache/restore@v5
+        uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/native-build-cache
           key: ${{ runner.os }}-${{ runner.arch }}-native-buildpack-v1-${{ hashFiles('**/pom.xml') }}-${{ github.sha }}
@@ -118,7 +118,7 @@ jobs:
 
       - name: Cache Native buildpack layers
         if: inputs.runtime == 'native' && steps.native-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
+        uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/native-build-cache
           key: ${{ steps.native-cache.outputs.cache-primary-key }}

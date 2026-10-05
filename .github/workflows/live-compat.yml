@@ -233,7 +233,7 @@ jobs:
 
       - name: Cache Maven dependencies for Swift HTTP compatibility
         if: env.LIVE_COMPAT_SUITE == 'client-e2e' && matrix.shard == 'swift'
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/client-m2
           key: ${{ runner.os }}-client-e2e-maven-${{ hashFiles('**/pom.xml') }}
