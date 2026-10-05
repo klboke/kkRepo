@@ -52,6 +52,7 @@ jobs:
         uses: codecov/codecov-action@v7
         with:
           directory: .
+          use_pypi: true
           fail_ci_if_error: true
           token: ${{ secrets.CODECOV_TOKEN }}
 
@@ -112,6 +113,7 @@ jobs:
         uses: codecov/codecov-action@v7
         with:
           directory: .
+          use_pypi: true
           fail_ci_if_error: true
           flags: server-smoke-${{ matrix.database }}
           token: ${{ secrets.CODECOV_TOKEN }}
