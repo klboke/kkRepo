@@ -1468,36 +1468,60 @@ function renderTree() {
 
 // Drag (or arrow-key) the handle between tree and detail panes. The width is a per-browser
 // preference only, so localStorage failures are ignored and the default 60% is used.
+// The preferred percentage is kept separately from the effective (clamped) one so that the
+// panes honour their minimum width again after the container shrinks or grows back.
 const SPLIT_WIDTH_KEY = "kkrepo.browse.treePaneWidthPct";
 const SPLIT_DEFAULT_PCT = 60;
 const SPLIT_MIN_PANE_PX = 220;
+
+function clampSplitPct(pct, totalPx) {
+  const total = totalPx > 0 ? totalPx : 1;
+  const min = Math.min(45, (SPLIT_MIN_PANE_PX / total) * 100);
+  return Math.max(min, Math.min(100 - min, pct));
+}
 
 function initSplitResizer(split) {
   const handle = split?.querySelector(".split-handle");
   const tree = split?.querySelector(".tree-left");
   if (!handle || !tree) return;
 
-  const clamp = (pct) => {
-    const total = split.getBoundingClientRect().width || 1;
-    const min = Math.min(45, (SPLIT_MIN_PANE_PX / total) * 100);
-    return Math.max(min, Math.min(100 - min, pct));
-  };
-  const apply = (pct, persist) => {
-    const value = clamp(pct);
-    split.style.setProperty("--tree-pane-width", `${value}%`);
-    handle.setAttribute("aria-valuenow", String(Math.round(value)));
-    if (persist) {
-      try { localStorage.setItem(SPLIT_WIDTH_KEY, String(value)); } catch { /* ignore */ }
-    }
-    return value;
-  };
+  const splitWidth = () => split.getBoundingClientRect().width;
+  const currentPct = () => (tree.getBoundingClientRect().width / (splitWidth() || 1)) * 100;
 
-  let saved = SPLIT_DEFAULT_PCT;
+  let preferredPct = SPLIT_DEFAULT_PCT;
   try {
     const stored = parseFloat(localStorage.getItem(SPLIT_WIDTH_KEY));
-    if (Number.isFinite(stored)) saved = stored;
+    if (Number.isFinite(stored)) preferredPct = stored;
   } catch { /* ignore */ }
-  apply(saved, false);
+
+  // Renders the effective width for the current container size without touching the preference.
+  const render = () => {
+    const value = clampSplitPct(preferredPct, splitWidth());
+    split.style.setProperty("--tree-pane-width", `${value}%`);
+    handle.setAttribute("aria-valuenow", String(Math.round(value)));
+    return value;
+  };
+  // Records a user-chosen width as the new preference, optionally persisting it.
+  const setPreferred = (pct, persist) => {
+    preferredPct = clampSplitPct(pct, splitWidth());
+    render();
+    if (persist) {
+      try { localStorage.setItem(SPLIT_WIDTH_KEY, String(preferredPct)); } catch { /* ignore */ }
+    }
+  };
+  render();
+
+  // The tree is rebuilt on every repository render, so stop observing once this split is detached.
+  if (typeof ResizeObserver === "function") {
+    const observer = new ResizeObserver(() => {
+      if (!split.isConnected) {
+        observer.disconnect();
+        return;
+      }
+      render();
+    });
+    observer.observe(split);
+  }
 
   handle.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
@@ -1506,7 +1530,7 @@ function initSplitResizer(split) {
     split.classList.add("is-resizing");
     const onMove = (e) => {
       const rect = split.getBoundingClientRect();
-      apply(((e.clientX - rect.left) / rect.width) * 100, false);
+      setPreferred(((e.clientX - rect.left) / rect.width) * 100, false);
     };
     const onEnd = (e) => {
       handle.removeEventListener("pointermove", onMove);
@@ -1514,8 +1538,7 @@ function initSplitResizer(split) {
       handle.removeEventListener("pointercancel", onEnd);
       try { handle.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
       split.classList.remove("is-resizing");
-      const pct = (tree.getBoundingClientRect().width / split.getBoundingClientRect().width) * 100;
-      apply(pct, true);
+      setPreferred(preferredPct, true);
     };
     handle.addEventListener("pointermove", onMove);
     handle.addEventListener("pointerup", onEnd);
@@ -1523,14 +1546,13 @@ function initSplitResizer(split) {
   });
 
   handle.addEventListener("keydown", (event) => {
-    const current = (tree.getBoundingClientRect().width / split.getBoundingClientRect().width) * 100;
-    if (event.key === "ArrowLeft") apply(current - 2, true);
-    else if (event.key === "ArrowRight") apply(current + 2, true);
-    else if (event.key === "Home" || event.key === "Enter") apply(SPLIT_DEFAULT_PCT, true);
+    if (event.key === "ArrowLeft") setPreferred(currentPct() - 2, true);
+    else if (event.key === "ArrowRight") setPreferred(currentPct() + 2, true);
+    else if (event.key === "Home" || event.key === "Enter") setPreferred(SPLIT_DEFAULT_PCT, true);
     else return;
     event.preventDefault();
   });
-  handle.addEventListener("dblclick", () => apply(SPLIT_DEFAULT_PCT, true));
+  handle.addEventListener("dblclick", () => setPreferred(SPLIT_DEFAULT_PCT, true));
 }
 
 async function loadAndRenderTreeLevel(path, mountEl, depth) {
