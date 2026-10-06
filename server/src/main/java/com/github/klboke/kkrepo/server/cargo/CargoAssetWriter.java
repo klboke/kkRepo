@@ -14,6 +14,7 @@ import com.github.klboke.kkrepo.protocol.cargo.CargoCrateName;
 import com.github.klboke.kkrepo.protocol.cargo.CargoVersions;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.blob.BlobTransactionCleanup;
+import com.github.klboke.kkrepo.server.blob.BufferedUpload;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
@@ -23,14 +24,9 @@ import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
-import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -380,18 +376,15 @@ class CargoAssetWriter {
       Map<String, String> remoteAttributes) {
     Path tmp = null;
     try {
-      tmp = Files.createTempFile("kkrepo-cargo-", ".tmp");
-      MessageDigest md5 = digest("MD5");
-      MessageDigest sha1 = digest("SHA-1");
-      MessageDigest sha256 = digest("SHA-256");
-      MessageDigest sha512 = digest("SHA-512");
-      long size;
-      try (InputStream in = UpstreamBodyReadException.wrap(body);
-          OutputStream out = Files.newOutputStream(tmp, StandardOpenOption.TRUNCATE_EXISTING)) {
-        size = streamWithDigests(in, out, md5, sha1, sha256, sha512);
+      BufferedUpload buffered;
+      try (InputStream in = UpstreamBodyReadException.wrap(body)) {
+        buffered = BufferedUpload.create(in, null, "kkrepo-cargo-", BufferedUpload.Checksums.WITH_SHA512);
+        tmp = buffered.file();
       }
-      Digests digests = new Digests(hex(md5.digest()), hex(sha1.digest()),
-          hex(sha256.digest()), hex(sha512.digest()), size);
+      BufferedUpload.Digests computed = buffered.digests();
+      Digests digests = new Digests(computed.md5(), computed.sha1(), computed.sha256(),
+          computed.sha512(), computed.size());
+      long size = digests.size();
       Optional<AssetBlobRecord> reusable = reusableBlob(blobStoreId, digests.sha256(), size, remoteAttributes);
       if (reusable.isPresent()) {
         AssetBlobRecord blob = reusable.get();
@@ -439,20 +432,6 @@ class CargoAssetWriter {
       return Optional.empty();
     }
     return assetDao.findReusableBlobBySha256(blobStoreId, sha256, size);
-  }
-
-  private long streamWithDigests(InputStream in, OutputStream out, MessageDigest... digests) throws IOException {
-    byte[] buf = new byte[TempBlobFiles.responseBufferSize()];
-    long total = 0;
-    int n;
-    while ((n = in.read(buf)) > 0) {
-      for (MessageDigest d : digests) {
-        d.update(buf, 0, n);
-      }
-      out.write(buf, 0, n);
-      total += n;
-    }
-    return total;
   }
 
   private static InputStream fileInput(Path file) {
@@ -507,18 +486,6 @@ class CargoAssetWriter {
   private static String fileName(String path) {
     int slash = path == null ? -1 : path.lastIndexOf('/');
     return slash < 0 ? path : path.substring(slash + 1);
-  }
-
-  private static MessageDigest digest(String algorithm) {
-    try {
-      return MessageDigest.getInstance(algorithm);
-    } catch (NoSuchAlgorithmException e) {
-      throw new IllegalStateException(algorithm + " digest is not available", e);
-    }
-  }
-
-  private static String hex(byte[] bytes) {
-    return HexFormat.of().formatHex(bytes);
   }
 
   private record DigestedUpload(BlobReference reference, Digests digests, Path tempFile, boolean uploaded) {

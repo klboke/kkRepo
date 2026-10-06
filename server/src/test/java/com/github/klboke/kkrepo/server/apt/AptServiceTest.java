@@ -22,6 +22,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.protocol.apt.AptPath;
 import com.github.klboke.kkrepo.protocol.apt.AptPathParser;
+import com.github.klboke.kkrepo.server.coordination.FencedLeaseManager;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
@@ -562,7 +563,7 @@ class AptServiceTest {
     final AptMetadataBuilder metadataBuilder = mock(AptMetadataBuilder.class);
     final AptSigningService signing = mock(AptSigningService.class);
     final AptLeaseManager leases = mock(AptLeaseManager.class);
-    final AptLeaseManager.Lease lease = mock(AptLeaseManager.Lease.class);
+    final FencedLeaseManager.Lease lease = mock(FencedLeaseManager.Lease.class);
     final RawProxyService proxy = mock(RawProxyService.class);
     final AptProxyProjectionService proxyProjection = mock(AptProxyProjectionService.class);
     final AptRepositorySettings.Settings hostedSettings = new AptRepositorySettings.Settings(

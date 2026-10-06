@@ -10,6 +10,7 @@ import java.lang.reflect.Field;
 import java.time.Duration;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentMap;
 import java.util.stream.Collectors;
@@ -23,8 +24,16 @@ class CaffeineRuntimeHintsTest {
 
   @Test
   void registersImplementationsSelectedByKkRepoCacheConfigurations() throws Exception {
+    VersionedSnapshotCache<Object, Object> snapshots = new VersionedSnapshotCache<>(
+        "native-snapshots", Duration.ofMinutes(1), 100_000,
+        new VersionedSnapshotCache.Versions<>() {
+          @Override public long current(Object key) { return 0; }
+          @Override public long bump(Object key) { return 1; }
+        }, key -> Optional.empty(), value -> value, (key, error) -> {});
     List<ConcurrentMap<Object, Object>> cacheMaps =
         List.of(
+            snapshotMap(snapshots, "snapshots"),
+            snapshotMap(snapshots, "observedVersions"),
             Caffeine.newBuilder()
                 .maximumSize(100_000)
                 .build()
@@ -85,6 +94,14 @@ class CaffeineRuntimeHintsTest {
               .test(hints),
           () -> "Missing native constructor hints for Caffeine cache " + typeName);
     }
+  }
+
+  @SuppressWarnings("unchecked")
+  private static ConcurrentMap<Object, Object> snapshotMap(Object cache, String fieldName)
+      throws Exception {
+    Field field = VersionedSnapshotCache.class.getDeclaredField(fieldName);
+    field.setAccessible(true);
+    return ((LocalCache<Object, Object>) field.get(cache)).asMap();
   }
 
   private static String nodeFactoryType(ConcurrentMap<?, ?> map) throws Exception {

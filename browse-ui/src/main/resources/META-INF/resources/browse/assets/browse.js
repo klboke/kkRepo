@@ -1,16 +1,20 @@
+const {
+  close: closeUserMenu,
+  open: openUserMenu,
+  scheduleClose: scheduleCloseUserMenu,
+  toggle: toggleUserMenu,
+} = window.nexusPlusAccountMenu;
+
 // Live data backing the /browse UI.
 //   state.mode = "repos" → repo list
 //   state.mode = "tree" → Nexus-style expandable tree for state.repo (root = "")
 // Children of each path are fetched lazily on first expand and cached in `treeCache`.
-
-installCsrfFetch();
 
 const state = { mode: "repos", repo: null, path: "", source: "" };
 const treeCache = new Map(); // key = `${repo}::${source}::${path}`, value = entries[]
 const expanded = new Set();   // keys (same shape as treeCache) currently expanded
 const treeMountLoads = new WeakMap();
 const treeNodeEntries = new WeakMap();
-let userMenuCloseTimer = null;
 
 let repositoriesCache = [];
 let uploadRepositoriesCache = [];
@@ -121,37 +125,6 @@ const SEARCH_FORMAT_LABEL = {
   docker: "Docker / OCI",
   raw: "Raw",
 };
-
-function installCsrfFetch() {
-  if (window.__nexusPlusCsrfFetchInstalled) return;
-  window.__nexusPlusCsrfFetchInstalled = true;
-  const nativeFetch = window.fetch.bind(window);
-  window.fetch = (input, init = {}) => {
-    const method = String(init.method || "GET").toUpperCase();
-    if (["POST", "PUT", "PATCH", "DELETE", "MKCOL"].includes(method) && sameOrigin(input)) {
-      const token = csrfToken();
-      if (token) {
-        const headers = new Headers(init.headers || {});
-        headers.set("X-Nexus-Plus-CSRF-Token", token);
-        init = { ...init, headers };
-      }
-    }
-    return nativeFetch(input, init);
-  };
-}
-
-function sameOrigin(input) {
-  const url = typeof input === "string" ? input : input.url;
-  return new URL(url, window.location.origin).origin === window.location.origin;
-}
-
-function csrfToken() {
-  return document.cookie
-    .split(";")
-    .map((part) => part.trim())
-    .find((part) => part.startsWith("KKREPO_CSRF="))
-    ?.substring("KKREPO_CSRF=".length) || "";
-}
 
 function browseListHash() {
   return `#${BROWSE_HASH}`;
@@ -645,48 +618,6 @@ function login() {
 function logout() {
   sessionStorage.removeItem(AUTH_SNAPSHOT_KEY);
   window.location.href = `/internal/security/logout?returnTo=${encodeURIComponent("/browse/#browse/welcome")}`;
-}
-
-function closeUserMenu() {
-  if (userMenuCloseTimer) {
-    clearTimeout(userMenuCloseTimer);
-    userMenuCloseTimer = null;
-  }
-  const trigger = document.getElementById("user-menu-trigger");
-  const popover = document.getElementById("user-menu-popover");
-  if (!trigger || !popover) return;
-  trigger.setAttribute("aria-expanded", "false");
-  popover.classList.remove("is-open");
-  popover.setAttribute("aria-hidden", "true");
-}
-
-function openUserMenu() {
-  if (userMenuCloseTimer) {
-    clearTimeout(userMenuCloseTimer);
-    userMenuCloseTimer = null;
-  }
-  const menu = document.getElementById("user-menu");
-  const trigger = document.getElementById("user-menu-trigger");
-  const popover = document.getElementById("user-menu-popover");
-  if (!menu || !trigger || !popover || menu.hidden) return;
-  trigger.setAttribute("aria-expanded", "true");
-  popover.classList.add("is-open");
-  popover.setAttribute("aria-hidden", "false");
-}
-
-function scheduleCloseUserMenu() {
-  if (userMenuCloseTimer) clearTimeout(userMenuCloseTimer);
-  userMenuCloseTimer = setTimeout(() => {
-    userMenuCloseTimer = null;
-    closeUserMenu();
-  }, 120);
-}
-
-function toggleUserMenu() {
-  const popover = document.getElementById("user-menu-popover");
-  if (!popover) return;
-  if (!popover.classList.contains("is-open")) openUserMenu();
-  else closeUserMenu();
 }
 
 function repositoryBaseUrl(repoName = state.repo) {

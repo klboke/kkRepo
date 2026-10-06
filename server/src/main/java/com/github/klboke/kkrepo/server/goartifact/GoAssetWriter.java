@@ -12,6 +12,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.server.blob.BlobTransactionCleanup;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
+import com.github.klboke.kkrepo.server.blob.BufferedUpload;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
@@ -22,14 +23,8 @@ import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
-import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -194,18 +189,15 @@ public class GoAssetWriter {
       Map<String, String> extraBlobAttributes) {
     Path tmp = null;
     try {
-      tmp = Files.createTempFile("kkrepo-go-", ".tmp");
-      MessageDigest md5 = digest("MD5");
-      MessageDigest sha1 = digest("SHA-1");
-      MessageDigest sha256 = digest("SHA-256");
-      long size;
-      try (OutputStream out = Files.newOutputStream(tmp, StandardOpenOption.TRUNCATE_EXISTING)) {
-        size = streamWithDigests(UpstreamBodyReadException.wrap(body), out, md5, sha1, sha256);
-      }
-      String md5Hex = hex(md5.digest());
-      String sha1Hex = hex(sha1.digest());
-      String sha256Hex = hex(sha256.digest());
-      Digests digests = new Digests(md5Hex, sha1Hex, sha256Hex, size);
+      BufferedUpload buffered = BufferedUpload.create(
+          UpstreamBodyReadException.wrap(body), null, "kkrepo-go-",
+          BufferedUpload.Checksums.STANDARD);
+      tmp = buffered.file();
+      BufferedUpload.Digests computed = buffered.digests();
+      Digests digests = new Digests(computed.md5(), computed.sha1(), computed.sha256(),
+          computed.size());
+      String sha256Hex = digests.sha256();
+      long size = digests.size();
       Optional<AssetBlobRecord> reusable = precheckedReusableBlob(blobStoreId, sha256Hex, size, extraBlobAttributes);
       if (reusable.isPresent()) {
         AssetBlobRecord blob = reusable.get();
@@ -231,22 +223,11 @@ public class GoAssetWriter {
       Path file,
       Map<String, String> extraBlobAttributes) {
     try {
-      MessageDigest md5 = digest("MD5");
-      MessageDigest sha1 = digest("SHA-1");
-      MessageDigest sha256 = digest("SHA-256");
-      long size = 0;
-      try (InputStream input = Files.newInputStream(file)) {
-        byte[] buffer = new byte[TempBlobFiles.responseBufferSize()];
-        for (int read; (read = input.read(buffer)) >= 0;) {
-          if (read == 0) continue;
-          size += read;
-          md5.update(buffer, 0, read);
-          sha1.update(buffer, 0, read);
-          sha256.update(buffer, 0, read);
-        }
-      }
-      String sha256Hex = hex(sha256.digest());
-      Digests digests = new Digests(hex(md5.digest()), hex(sha1.digest()), sha256Hex, size);
+      BufferedUpload.Digests computed = BufferedUpload.inspect(file, BufferedUpload.Checksums.STANDARD);
+      Digests digests = new Digests(computed.md5(), computed.sha1(), computed.sha256(),
+          computed.size());
+      String sha256Hex = digests.sha256();
+      long size = digests.size();
       Optional<AssetBlobRecord> reusable = precheckedReusableBlob(
           blobStoreId, sha256Hex, size, extraBlobAttributes);
       if (reusable.isPresent()) {
@@ -499,30 +480,4 @@ public class GoAssetWriter {
   private static String contentType(RepositoryRuntime runtime, GoPath path) {
     return runtime.isProxy() ? path.proxyContentType() : path.contentType();
   }
-
-  private static long streamWithDigests(InputStream in, OutputStream out, MessageDigest... digests)
-      throws IOException {
-    byte[] buf = new byte[TempBlobFiles.responseBufferSize()];
-    long total = 0;
-    int n;
-    while ((n = in.read(buf)) > 0) {
-      for (MessageDigest d : digests) d.update(buf, 0, n);
-      out.write(buf, 0, n);
-      total += n;
-    }
-    return total;
-  }
-
-  private static MessageDigest digest(String algorithm) {
-    try {
-      return MessageDigest.getInstance(algorithm);
-    } catch (NoSuchAlgorithmException e) {
-      throw new IllegalStateException("Missing digest algorithm: " + algorithm, e);
-    }
-  }
-
-  private static String hex(byte[] bytes) {
-    return HexFormat.of().formatHex(bytes);
-  }
-
 }

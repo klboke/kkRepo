@@ -10,6 +10,7 @@ import com.github.klboke.kkrepo.protocol.r.RPath;
 import com.github.klboke.kkrepo.protocol.r.RPathParser;
 import com.github.klboke.kkrepo.protocol.r.RVersions;
 import com.github.klboke.kkrepo.protocol.maven.policy.WritePolicy;
+import com.github.klboke.kkrepo.server.coordination.FencedLeaseManager;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
@@ -142,7 +143,7 @@ public class RService {
       String ip) {
     RPackageMetadata metadata = inspected.metadata();
     String leaseKey = coordinateLease(runtime, metadata.packageName(), metadata.version());
-    try (RLeaseManager.Lease lease = leases.acquire(leaseKey)) {
+    try (FencedLeaseManager.Lease lease = leases.acquire(leaseKey)) {
       lease.assertHeld();
       Optional<RRegistryDao.PackageRecord> existing = registry.findPackage(
           runtime.id(), SOURCE_NAMESPACE, COMPONENT, metadata.packageName(),
@@ -225,7 +226,7 @@ public class RService {
     RRegistryDao.PackageRecord existing = registry.findPackageByPath(
         runtime.id(), path.normalized()).orElseThrow(
             () -> new MavenExceptions.MavenNotFoundException(path.normalized()));
-    try (RLeaseManager.Lease lease = leases.acquire(
+    try (FencedLeaseManager.Lease lease = leases.acquire(
         coordinateLease(runtime, existing.packageName(), existing.version()))) {
       lease.assertHeld();
       RRegistryDao.PackageRecord removed = registry.deletePackage(
@@ -380,11 +381,11 @@ public class RService {
         .orElseGet(() -> registry.ensureSuite(runtime.id(), namespace, Instant.now()));
     if (before.desiredRevision() == before.publishedRevision()
         && publishedSnapshots.find(runtime.id(), namespace).isPresent()) return true;
-    Optional<RLeaseManager.Lease> acquired = waitForLease
+    Optional<FencedLeaseManager.Lease> acquired = waitForLease
         ? Optional.of(leases.acquire("r:publish:" + runtime.id() + ":" + namespace))
         : leases.tryAcquire("r:publish:" + runtime.id() + ":" + namespace);
     if (acquired.isEmpty()) return false;
-    try (RLeaseManager.Lease lease = acquired.orElseThrow()) {
+    try (FencedLeaseManager.Lease lease = acquired.orElseThrow()) {
       for (int attempt = 0; attempt < 4; attempt++) {
         lease.assertHeld();
         RRegistryDao.SuiteState state = registry.findSuite(runtime.id(), namespace).orElseThrow();
@@ -484,7 +485,7 @@ public class RService {
       long snapshotRevision,
       long token,
       GroupProjection projection,
-      RLeaseManager.Lease lease,
+      FencedLeaseManager.Lease lease,
       Consumer<RRegistryDao.PackageRecord> visitor) {
     ArrayList<MemberPackageCursor> cursors = new ArrayList<>();
     projection.members().forEach(member -> cursors.add(new MemberPackageCursor(member, namespace)));
@@ -526,7 +527,7 @@ public class RService {
   }
 
   private void flushBindings(
-      RLeaseManager.Lease lease,
+      FencedLeaseManager.Lease lease,
       long token,
       List<RRegistryDao.GroupBinding> bindings) {
     if (bindings.isEmpty()) return;

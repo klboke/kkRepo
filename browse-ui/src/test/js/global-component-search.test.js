@@ -15,7 +15,7 @@ function loadBrowseSearchHelpers() {
     "../../main/resources/META-INF/resources/browse/assets/browse.js",
   ), "utf8");
   const constantsStart = source.indexOf("const APP_HASH_PREFIX");
-  const constantsEnd = source.indexOf("function installCsrfFetch", constantsStart);
+  const constantsEnd = source.indexOf("function browseListHash", constantsStart);
   const routeStart = source.indexOf("function normalizeSearchFormat");
   const routeEnd = source.indexOf("function repositoryBrowseHash", routeStart);
   const browseTargetStart = routeEnd;

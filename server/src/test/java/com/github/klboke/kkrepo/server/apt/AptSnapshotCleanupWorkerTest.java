@@ -15,6 +15,7 @@ import static org.mockito.Mockito.when;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
+import com.github.klboke.kkrepo.server.coordination.FencedLeaseManager;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import java.time.Instant;
@@ -34,7 +35,7 @@ class AptSnapshotCleanupWorkerTest {
     RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
     AptAssetSupport assets = mock(AptAssetSupport.class);
     AptLeaseManager leases = mock(AptLeaseManager.class);
-    AptLeaseManager.Lease lease = mock(AptLeaseManager.Lease.class);
+    FencedLeaseManager.Lease lease = mock(FencedLeaseManager.Lease.class);
     PlatformTransactionManager transactions = mock(PlatformTransactionManager.class);
     RepositoryRuntime runtime = runtime();
     AptRegistryDao.Snapshot expired = snapshot(
@@ -72,7 +73,7 @@ class AptSnapshotCleanupWorkerTest {
     RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
     AptAssetSupport assets = mock(AptAssetSupport.class);
     AptLeaseManager leases = mock(AptLeaseManager.class);
-    AptLeaseManager.Lease lease = mock(AptLeaseManager.Lease.class);
+    FencedLeaseManager.Lease lease = mock(FencedLeaseManager.Lease.class);
     PlatformTransactionManager transactions = mock(PlatformTransactionManager.class);
     AptRegistryDao.Snapshot candidate = snapshot(
         2, Map.of("Release", ".apt/snapshots/stable/2/Release"), Instant.EPOCH);
@@ -96,7 +97,7 @@ class AptSnapshotCleanupWorkerTest {
     RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
     AptAssetSupport assets = mock(AptAssetSupport.class);
     AptLeaseManager leases = mock(AptLeaseManager.class);
-    AptLeaseManager.Lease lease = mock(AptLeaseManager.Lease.class);
+    FencedLeaseManager.Lease lease = mock(FencedLeaseManager.Lease.class);
     PlatformTransactionManager transactions = mock(PlatformTransactionManager.class);
     RepositoryRuntime runtime = runtime();
     AptRegistryDao.PackageTombstone tombstone = new AptRegistryDao.PackageTombstone(
@@ -131,7 +132,7 @@ class AptSnapshotCleanupWorkerTest {
     RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
     AptAssetSupport assets = mock(AptAssetSupport.class);
     AptLeaseManager leases = mock(AptLeaseManager.class);
-    AptLeaseManager.Lease lease = mock(AptLeaseManager.Lease.class);
+    FencedLeaseManager.Lease lease = mock(FencedLeaseManager.Lease.class);
     PlatformTransactionManager transactions = mock(PlatformTransactionManager.class);
     RepositoryRuntime runtime = runtime();
     AptRegistryDao.Snapshot expired = snapshot(
@@ -167,7 +168,7 @@ class AptSnapshotCleanupWorkerTest {
     RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
     AptAssetSupport assets = mock(AptAssetSupport.class);
     AptLeaseManager leases = mock(AptLeaseManager.class);
-    AptLeaseManager.Lease lease = mock(AptLeaseManager.Lease.class);
+    FencedLeaseManager.Lease lease = mock(FencedLeaseManager.Lease.class);
     PlatformTransactionManager transactions = mock(PlatformTransactionManager.class);
     RepositoryRuntime runtime = runtime();
     AptRegistryDao.Snapshot expired = snapshot(

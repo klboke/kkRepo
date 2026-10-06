@@ -1,7 +1,6 @@
 package com.github.klboke.kkrepo.server.apt;
 
-import com.github.klboke.kkrepo.cache.LocalCache;
-import com.github.klboke.kkrepo.cache.LocalCacheFactory;
+import com.github.klboke.kkrepo.cache.VersionedSnapshotCache;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
 import com.github.klboke.kkrepo.server.cache.VersionWatermark;
 import java.time.Duration;
@@ -27,10 +26,7 @@ final class AptPublishedSnapshotCache {
   private static final String VERSION_PREFIX = "apt-published-snapshot:repo:";
 
   private final AptRegistryDao registry;
-  private final VersionWatermark watermark;
-  private final LocalCache<SuiteKey, AptRegistryDao.Snapshot> snapshots;
-  private final LocalCache<SuiteKey, Long> observedVersions;
-  private final boolean enabled;
+  private final VersionedSnapshotCache<SuiteKey, AptRegistryDao.Snapshot> cache;
 
   @Autowired
   AptPublishedSnapshotCache(
@@ -39,18 +35,26 @@ final class AptPublishedSnapshotCache {
       @Value("${kkrepo.cache.apt-published-snapshot.enabled:true}") boolean enabled,
       @Value("${kkrepo.cache.apt-published-snapshot.ttl-seconds:60}") long ttlSeconds) {
     this.registry = registry;
-    this.watermark = watermark;
-    this.enabled = enabled && ttlSeconds > 0;
-    Duration ttl = Duration.ofSeconds(Math.max(1, ttlSeconds));
-    this.snapshots = LocalCacheFactory.standard()
-        .<SuiteKey, AptRegistryDao.Snapshot>builder("apt-published-snapshots")
-        .expireAfterWrite(ttl)
-        .maximumSize(100_000)
-        .build();
-    this.observedVersions = LocalCacheFactory.standard()
-        .<SuiteKey, Long>builder("apt-published-snapshot-versions")
-        .maximumSize(100_000)
-        .build();
+    this.cache = !enabled || ttlSeconds <= 0 || watermark == null ? null
+        : new VersionedSnapshotCache<>(
+            "apt-published-snapshots", Duration.ofSeconds(ttlSeconds), 100_000,
+            new VersionedSnapshotCache.Versions<SuiteKey>() {
+              @Override
+              public long current(SuiteKey key) {
+                return watermark.current(versionName(key));
+              }
+
+              @Override
+              public long bump(SuiteKey key) {
+                return watermark.bump(versionName(key));
+              }
+            },
+            key -> registry.findPublishedSnapshot(key.repositoryId(), key.distribution()),
+            AptPublishedSnapshotCache::copy,
+            (key, error) -> log.warn(
+                "Failed synchronizing APT snapshot cache for repo {} distribution {}; "
+                    + "discarding local state",
+                key.repositoryId(), key.distribution(), error));
   }
 
   /** Direct DAO behavior for focused service tests that do not exercise cache invalidation. */
@@ -59,50 +63,14 @@ final class AptPublishedSnapshotCache {
   }
 
   Optional<AptRegistryDao.Snapshot> find(long repositoryId, String distribution) {
-    SuiteKey key = new SuiteKey(repositoryId, distribution);
-    if (!enabled || watermark == null || !synchronizeVersion(key)) {
-      return registry.findPublishedSnapshot(repositoryId, distribution);
-    }
-    AptRegistryDao.Snapshot cached = snapshots.getIfPresent(key);
-    if (cached != null) return Optional.of(cached);
-    Optional<AptRegistryDao.Snapshot> loaded =
-        registry.findPublishedSnapshot(repositoryId, distribution).map(AptPublishedSnapshotCache::copy);
-    loaded.ifPresent(snapshot -> snapshots.put(key, snapshot));
-    return loaded;
+    return cache == null ? registry.findPublishedSnapshot(repositoryId, distribution)
+        : cache.find(new SuiteKey(repositoryId, distribution));
   }
 
   /** Record a snapshot only after the durable fenced publish has succeeded. */
   void published(AptRegistryDao.Snapshot snapshot) {
-    if (!enabled || watermark == null || snapshot == null) return;
-    SuiteKey key = new SuiteKey(snapshot.repositoryId(), snapshot.distribution());
-    snapshots.invalidate(key);
-    try {
-      long version = watermark.bump(versionName(key));
-      observedVersions.put(key, version);
-      snapshots.put(key, copy(snapshot));
-    } catch (RuntimeException error) {
-      observedVersions.invalidate(key);
-      log.warn("Failed invalidating APT snapshot cache for repo {} distribution {}",
-          snapshot.repositoryId(), snapshot.distribution(), error);
-    }
-  }
-
-  private boolean synchronizeVersion(SuiteKey key) {
-    try {
-      long current = watermark.current(versionName(key));
-      Long observed = observedVersions.getIfPresent(key);
-      if (observed != null && observed.longValue() != current) {
-        snapshots.invalidate(key);
-      }
-      observedVersions.put(key, current);
-      return true;
-    } catch (RuntimeException error) {
-      snapshots.invalidate(key);
-      observedVersions.invalidate(key);
-      log.warn("Failed reading APT snapshot cache version for repo {} distribution {}; "
-              + "bypassing cache",
-          key.repositoryId(), key.distribution(), error);
-      return false;
+    if (cache != null && snapshot != null) {
+      cache.published(new SuiteKey(snapshot.repositoryId(), snapshot.distribution()), snapshot);
     }
   }
 

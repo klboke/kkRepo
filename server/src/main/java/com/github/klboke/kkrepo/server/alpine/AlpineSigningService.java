@@ -4,6 +4,7 @@ import com.github.klboke.kkrepo.core.security.EncryptionSecrets;
 import com.github.klboke.kkrepo.core.security.SecretCipher;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AlpineRegistryDao;
 import com.github.klboke.kkrepo.protocol.alpine.AlpineSignature;
+import com.github.klboke.kkrepo.server.coordination.FencedLeaseManager;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -45,7 +46,7 @@ final class AlpineSigningService {
   SigningMaterial active(RepositoryRuntime runtime) {
     AlpineRegistryDao.SigningKey row = registry.findActiveSigningKey(runtime.id()).orElse(null);
     if (row == null) {
-      try (AlpineLeaseManager.Lease lease = leases.acquire("alpine:key:" + runtime.id())) {
+      try (FencedLeaseManager.Lease lease = leases.acquire("alpine:key:" + runtime.id())) {
         lease.assertHeld();
         row = registry.findActiveSigningKey(runtime.id()).orElseGet(() -> create(runtime));
       }
@@ -61,7 +62,7 @@ final class AlpineSigningService {
     if (privateKeyPem == null || privateKeyPem.isBlank()) {
       throw new IllegalArgumentException("Alpine PKCS#8 private key is required");
     }
-    try (AlpineLeaseManager.Lease lease = leases.acquire("alpine:key:" + runtime.id())) {
+    try (FencedLeaseManager.Lease lease = leases.acquire("alpine:key:" + runtime.id())) {
       lease.assertHeld();
       PrivateKey privateKey = parsePrivate(privateKeyPem);
       PublicKey publicKey = derivePublic(privateKey);
@@ -78,7 +79,7 @@ final class AlpineSigningService {
 
   AlpineRegistryDao.SigningKey rotateGenerated(
       RepositoryRuntime runtime, String keyFilename, String signatureType) {
-    try (AlpineLeaseManager.Lease lease = leases.acquire("alpine:key:" + runtime.id())) {
+    try (FencedLeaseManager.Lease lease = leases.acquire("alpine:key:" + runtime.id())) {
       lease.assertHeld();
       KeyPair pair = generate();
       AlpineSignature.Type type = localSignatureType(signatureType);

@@ -1,8 +1,13 @@
+const {
+  close: closeUserMenu,
+  open: openUserMenu,
+  scheduleClose: scheduleCloseUserMenu,
+  toggle: toggleUserMenu,
+} = window.nexusPlusAccountMenu;
+
 if (window.location.hash === "#browse" || window.location.hash.startsWith("#browse/")) {
   window.location.replace(`/browse/${window.location.hash}`);
 }
-
-installCsrfFetch();
 
 let repositories = [];
 let repositoryUsage;
@@ -131,37 +136,6 @@ const securityScanWaiverRequiredFields = [
   { id: "security-scan-waiver-duration", label: "Expiration" },
   { id: "security-scan-waiver-reason", label: "Reason" }
 ];
-
-function installCsrfFetch() {
-  if (window.__nexusPlusCsrfFetchInstalled) return;
-  window.__nexusPlusCsrfFetchInstalled = true;
-  const nativeFetch = window.fetch.bind(window);
-  window.fetch = (input, init = {}) => {
-    const method = String(init.method || "GET").toUpperCase();
-    if (["POST", "PUT", "PATCH", "DELETE", "MKCOL"].includes(method) && sameOrigin(input)) {
-      const token = csrfToken();
-      if (token) {
-        const headers = new Headers(init.headers || {});
-        headers.set("X-Nexus-Plus-CSRF-Token", token);
-        init = { ...init, headers };
-      }
-    }
-    return nativeFetch(input, init);
-  };
-}
-
-function sameOrigin(input) {
-  const url = typeof input === "string" ? input : input.url;
-  return new URL(url, window.location.origin).origin === window.location.origin;
-}
-
-function csrfToken() {
-  return document.cookie
-    .split(";")
-    .map((part) => part.trim())
-    .find((part) => part.startsWith("KKREPO_CSRF="))
-    ?.substring("KKREPO_CSRF=".length) || "";
-}
 
 const SECURITY_SCAN_ROUTE_BASE = "#admin/security/artifact-scanning";
 const SECURITY_SCAN_ROUTE_ALIASES =
@@ -826,50 +800,6 @@ function hydrateSessionControls() {
   } catch {
     sessionStorage.removeItem(AUTH_SNAPSHOT_KEY);
   }
-}
-
-let userMenuCloseTimer = null;
-
-function closeUserMenu() {
-  if (userMenuCloseTimer) {
-    clearTimeout(userMenuCloseTimer);
-    userMenuCloseTimer = null;
-  }
-  const trigger = document.getElementById("user-menu-trigger");
-  const popover = document.getElementById("user-menu-popover");
-  if (!trigger || !popover) return;
-  trigger.setAttribute("aria-expanded", "false");
-  popover.classList.remove("is-open");
-  popover.setAttribute("aria-hidden", "true");
-}
-
-function openUserMenu() {
-  if (userMenuCloseTimer) {
-    clearTimeout(userMenuCloseTimer);
-    userMenuCloseTimer = null;
-  }
-  const menu = document.getElementById("user-menu");
-  const trigger = document.getElementById("user-menu-trigger");
-  const popover = document.getElementById("user-menu-popover");
-  if (!menu || !trigger || !popover || menu.hidden) return;
-  trigger.setAttribute("aria-expanded", "true");
-  popover.classList.add("is-open");
-  popover.setAttribute("aria-hidden", "false");
-}
-
-function scheduleCloseUserMenu() {
-  if (userMenuCloseTimer) clearTimeout(userMenuCloseTimer);
-  userMenuCloseTimer = setTimeout(() => {
-    userMenuCloseTimer = null;
-    closeUserMenu();
-  }, 120);
-}
-
-function toggleUserMenu() {
-  const popover = document.getElementById("user-menu-popover");
-  if (!popover) return;
-  if (!popover.classList.contains("is-open")) openUserMenu();
-  else closeUserMenu();
 }
 
 async function loadCurrentSession(options = {}) {

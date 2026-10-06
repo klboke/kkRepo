@@ -12,11 +12,10 @@ import com.github.klboke.kkrepo.protocol.conda.CondaPath;
 import com.github.klboke.kkrepo.protocol.conda.CondaPathParser;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
+import com.github.klboke.kkrepo.server.migration.MigrationSourceMetadata;
 import java.io.IOException;
 import java.io.InputStream;
 import java.time.Instant;
-import java.util.Locale;
-import java.util.Map;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -127,7 +126,7 @@ public class CondaRepositoryDataMigrationWriter {
       throw new IllegalStateException(
           "Conda migration size mismatch for " + source.sourcePath());
     }
-    String expectedSha256 = sourceSha256(source.metadata());
+    String expectedSha256 = MigrationSourceMetadata.checksum(source.metadata(), 64, "sha256", "checksum.sha256");
     if (expectedSha256 == null) {
       throw new IllegalStateException(
           "Conda migration requires a valid source SHA-256 for " + source.sourcePath());
@@ -157,38 +156,6 @@ public class CondaRepositoryDataMigrationWriter {
       throw new IllegalStateException("Restored Conda package blob checksum is invalid");
     }
     return new MigratedAsset(record.componentId(), asset.id(), blob.id(), blob.objectKey());
-  }
-
-  private static String sourceSha256(Object value) {
-    Object found = findKey(value, "sha256");
-    if (found == null) found = findKey(value, "checksum.sha256");
-    String text = found == null ? null : found.toString().trim().toLowerCase(Locale.ROOT);
-    return text != null && text.matches("[0-9a-f]{64}") ? text : null;
-  }
-
-  private static Object findKey(Object value, String wanted) {
-    if (value instanceof Map<?, ?> map) {
-      String normalizedWanted = normalizedKey(wanted);
-      for (Map.Entry<?, ?> entry : map.entrySet()) {
-        if (entry.getKey() != null && normalizedKey(entry.getKey()).equals(normalizedWanted)) {
-          return entry.getValue();
-        }
-      }
-      for (Object child : map.values()) {
-        Object found = findKey(child, wanted);
-        if (found != null) return found;
-      }
-    } else if (value instanceof Iterable<?> iterable) {
-      for (Object child : iterable) {
-        Object found = findKey(child, wanted);
-        if (found != null) return found;
-      }
-    }
-    return null;
-  }
-
-  private static String normalizedKey(Object value) {
-    return String.valueOf(value).replaceAll("[^A-Za-z0-9]", "").toLowerCase(Locale.ROOT);
   }
 
   private static Instant publishedAt(RepositoryDataMigrationAssetRecord source) {

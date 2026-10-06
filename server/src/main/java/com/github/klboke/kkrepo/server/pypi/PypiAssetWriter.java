@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
+import com.github.klboke.kkrepo.server.blob.BufferedUpload;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.blob.BlobTransactionCleanup;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
@@ -21,14 +22,8 @@ import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
-import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -423,20 +418,15 @@ class PypiAssetWriter {
       Map<String, String> extraBlobAttributes) {
     Path tmp = null;
     try {
-      tmp = Files.createTempFile("kkrepo-pypi-", ".tmp");
-      MessageDigest md5 = digest("MD5");
-      MessageDigest sha1 = digest("SHA-1");
-      MessageDigest sha256 = digest("SHA-256");
-      MessageDigest sha512 = digest("SHA-512");
-      long size;
-      try (OutputStream out = Files.newOutputStream(tmp, StandardOpenOption.TRUNCATE_EXISTING)) {
-        size = streamWithDigests(UpstreamBodyReadException.wrap(body), out, md5, sha1, sha256, sha512);
-      }
-      String md5Hex = hex(md5.digest());
-      String sha1Hex = hex(sha1.digest());
-      String sha256Hex = hex(sha256.digest());
-      String sha512Hex = hex(sha512.digest());
-      Digests digests = new Digests(md5Hex, sha1Hex, sha256Hex, sha512Hex, size);
+      BufferedUpload buffered = BufferedUpload.create(
+          UpstreamBodyReadException.wrap(body), null, "kkrepo-pypi-",
+          BufferedUpload.Checksums.WITH_SHA512);
+      tmp = buffered.file();
+      BufferedUpload.Digests computed = buffered.digests();
+      Digests digests = new Digests(computed.md5(), computed.sha1(), computed.sha256(),
+          computed.sha512(), computed.size());
+      String sha256Hex = digests.sha256();
+      long size = digests.size();
       Optional<AssetBlobRecord> reusable = precheckedReusableBlob(blobStoreId, sha256Hex, size, extraBlobAttributes);
       if (reusable.isPresent()) {
         AssetBlobRecord blob = reusable.get();
@@ -497,18 +487,6 @@ class PypiAssetWriter {
     return assetDao.findReusableBlobBySha256(blobStoreId, sha256, size);
   }
 
-  private long streamWithDigests(InputStream in, OutputStream out, MessageDigest... digests) throws IOException {
-    byte[] buf = new byte[TempBlobFiles.responseBufferSize()];
-    long total = 0;
-    int n;
-    while ((n = in.read(buf)) > 0) {
-      for (MessageDigest d : digests) d.update(buf, 0, n);
-      out.write(buf, 0, n);
-      total += n;
-    }
-    return total;
-  }
-
   static String contentTypeForPath(String path) {
     String lower = path == null ? "" : path.toLowerCase();
     if (lower.endsWith(".html") || lower.startsWith(PypiPaths.INDEX_PREFIX)) return "text/html";
@@ -517,18 +495,6 @@ class PypiAssetWriter {
     if (lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) return "application/gzip";
     if (lower.endsWith(".tar.bz2") || lower.endsWith(".tbz")) return "application/x-bzip2";
     return "application/octet-stream";
-  }
-
-  private static MessageDigest digest(String algorithm) {
-    try {
-      return MessageDigest.getInstance(algorithm);
-    } catch (NoSuchAlgorithmException e) {
-      throw new IllegalStateException("Missing digest algorithm: " + algorithm, e);
-    }
-  }
-
-  private static String hex(byte[] bytes) {
-    return HexFormat.of().formatHex(bytes);
   }
 
   record PackageCoordinate(String originalName, String normalizedName, String version, String summary) {}

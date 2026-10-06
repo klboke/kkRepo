@@ -12,10 +12,9 @@ import com.github.klboke.kkrepo.protocol.r.RPath;
 import com.github.klboke.kkrepo.protocol.r.RPathParser;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
+import com.github.klboke.kkrepo.server.migration.MigrationSourceMetadata;
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.Locale;
-import java.util.Map;
 import org.springframework.stereotype.Component;
 
 /** Replays checksum-verified Nexus hosted source packages through the normal R importer. */
@@ -143,44 +142,10 @@ public class RRepositoryDataMigrationWriter {
   }
 
   private static SourceChecksum sourceChecksum(Object value) {
-    Object found = findKey(value, "sha256");
-    if (found == null) found = findKey(value, "checksum.sha256");
-    String text = found == null ? null : found.toString().trim().toLowerCase(Locale.ROOT);
-    if (text != null && text.matches("[0-9a-f]{64}")) {
-      return new SourceChecksum("SHA-256", text);
-    }
-    found = findKey(value, "sha1");
-    if (found == null) found = findKey(value, "checksum.sha1");
-    text = found == null ? null : found.toString().trim().toLowerCase(Locale.ROOT);
-    return text != null && text.matches("[0-9a-f]{40}")
-        ? new SourceChecksum("SHA-1", text) : null;
-  }
-
-  private static Object findKey(Object value, String wanted) {
-    if (value instanceof Map<?, ?> map) {
-      String normalizedWanted = normalizedKey(wanted);
-      for (Map.Entry<?, ?> entry : map.entrySet()) {
-        if (entry.getKey() != null
-            && normalizedKey(entry.getKey()).equals(normalizedWanted)) {
-          return entry.getValue();
-        }
-      }
-      for (Object child : map.values()) {
-        Object found = findKey(child, wanted);
-        if (found != null) return found;
-      }
-    } else if (value instanceof Iterable<?> iterable) {
-      for (Object child : iterable) {
-        Object found = findKey(child, wanted);
-        if (found != null) return found;
-      }
-    }
-    return null;
-  }
-
-  private static String normalizedKey(Object value) {
-    return String.valueOf(value).replaceAll("[^A-Za-z0-9]", "")
-        .toLowerCase(Locale.ROOT);
+    String sha256 = MigrationSourceMetadata.checksum(value, 64, "sha256", "checksum.sha256");
+    if (sha256 != null) return new SourceChecksum("SHA-256", sha256);
+    String sha1 = MigrationSourceMetadata.checksum(value, 40, "sha1", "checksum.sha1");
+    return sha1 == null ? null : new SourceChecksum("SHA-1", sha1);
   }
 
   private static String normalize(String path) {

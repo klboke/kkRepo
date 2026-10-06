@@ -13,6 +13,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.RRegistryDao;
+import com.github.klboke.kkrepo.server.coordination.FencedLeaseManager;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import java.time.Duration;
 import java.time.Instant;
@@ -30,7 +31,7 @@ class RLeaseManagerTest {
     RLeaseManager manager =
         new RLeaseManager(registry, Duration.ofHours(1), Duration.ofMillis(5));
 
-    RLeaseManager.Lease lease = manager.acquire("r:test");
+    FencedLeaseManager.Lease lease = manager.acquire("r:test");
     assertEquals(7L, lease.fencingToken());
     assertFalse(lease.owner().isBlank());
     lease.assertHeld();
@@ -59,11 +60,11 @@ class RLeaseManagerTest {
         .thenAnswer(invocation -> Optional.of(new RRegistryDao.Lease(
             invocation.getArgument(0), invocation.getArgument(1), 9L, 1L,
             databaseExpiry, Instant.now())));
-    try (RLeaseManager.Lease lease = manager.tryAcquire("free").orElseThrow()) {
+    try (FencedLeaseManager.Lease lease = manager.tryAcquire("free").orElseThrow()) {
       assertEquals(9L, lease.fencingToken());
     }
 
-    try (RLeaseManager.Lease ignored = new RLeaseManager(registry).tryAcquire("default")
+    try (FencedLeaseManager.Lease ignored = new RLeaseManager(registry).tryAcquire("default")
         .orElseThrow()) {
       assertEquals(9L, ignored.fencingToken());
     }
@@ -94,7 +95,7 @@ class RLeaseManagerTest {
     RRegistryDao registry = registry();
     when(registry.renewLease(anyString(), anyString(), anyLong(), any(), any()))
         .thenReturn(false);
-    try (RLeaseManager.Lease lease =
+    try (FencedLeaseManager.Lease lease =
         new RLeaseManager(registry, Duration.ofHours(1), Duration.ZERO).acquire("lost")) {
       assertThrows(MavenExceptions.WritePolicyDenied.class, lease::assertHeld);
     }
@@ -110,7 +111,7 @@ class RLeaseManagerTest {
           renewed.countDown();
           return true;
         });
-    try (RLeaseManager.Lease lease = new RLeaseManager(
+    try (FencedLeaseManager.Lease lease = new RLeaseManager(
         registry, Duration.ofMillis(60), Duration.ZERO).acquire("background")) {
       assertTrue(renewed.await(1, TimeUnit.SECONDS));
       lease.assertHeld();

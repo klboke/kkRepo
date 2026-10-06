@@ -5,7 +5,11 @@ import org.springframework.aot.hint.MemberCategory;
 import org.springframework.aot.hint.RuntimeHints;
 import org.springframework.aot.hint.RuntimeHintsRegistrar;
 
-/** Reflection metadata for the cache module's configuration-specific Caffeine implementations. */
+/**
+ * Reflection metadata for the cache module's configuration-specific Caffeine implementations.
+ * VersionedSnapshotCache uses the existing size-bounded (SSMS/PSMS) and write-expiring
+ * (SSMSW/PSWMS) configurations; both are verified against its actual caches by the hints test.
+ */
 public final class CaffeineRuntimeHints implements RuntimeHintsRegistrar {
   static final String CACHE_PACKAGE = "com.github.benmanes.caffeine.cache.";
 

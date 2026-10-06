@@ -5,6 +5,7 @@ import com.github.klboke.kkrepo.core.security.OpenPgpKeyIds;
 import com.github.klboke.kkrepo.core.security.SecretCipher;
 import com.github.klboke.kkrepo.core.security.TerraformSigningKeyMaterial;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
+import com.github.klboke.kkrepo.server.coordination.FencedLeaseManager;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -60,7 +61,7 @@ final class AptSigningService {
   SigningMaterial active(RepositoryRuntime runtime) {
     AptRegistryDao.SigningKey row = registry.findActiveSigningKey(runtime.id()).orElse(null);
     if (row == null) {
-      try (AptLeaseManager.Lease lease = leases.acquire("apt:key:" + runtime.id())) {
+      try (FencedLeaseManager.Lease lease = leases.acquire("apt:key:" + runtime.id())) {
         lease.assertHeld();
         row = registry.findActiveSigningKey(runtime.id()).orElseGet(() -> create(runtime));
       }
@@ -73,7 +74,7 @@ final class AptSigningService {
     if (privateKeyArmor == null || privateKeyArmor.isBlank()) {
       throw new IllegalArgumentException("APT private signing key is required");
     }
-    try (AptLeaseManager.Lease lease = leases.acquire("apt:key:" + runtime.id())) {
+    try (FencedLeaseManager.Lease lease = leases.acquire("apt:key:" + runtime.id())) {
       lease.assertHeld();
       ParsedKey parsed = parse(privateKeyArmor, passphrase == null ? "" : passphrase);
       int revision = registry.findActiveSigningKey(runtime.id())
@@ -89,7 +90,7 @@ final class AptSigningService {
   }
 
   AptRegistryDao.SigningKey rotateGenerated(RepositoryRuntime runtime) {
-    try (AptLeaseManager.Lease lease = leases.acquire("apt:key:" + runtime.id())) {
+    try (FencedLeaseManager.Lease lease = leases.acquire("apt:key:" + runtime.id())) {
       lease.assertHeld();
       Generated generated = generate(runtime.name());
       int revision = registry.findActiveSigningKey(runtime.id())

@@ -13,6 +13,7 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.timeout;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
+import com.github.klboke.kkrepo.server.coordination.FencedLeaseManager;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import java.time.Instant;
 import java.time.Duration;
@@ -24,7 +25,7 @@ class AptLeaseManagerTest {
   @Test
   void acquiresRenewsAndReleasesFencedLeaseOnce() {
     AptRegistryDao registry = availableRegistry();
-    AptLeaseManager.Lease lease = new AptLeaseManager(registry).acquire("suite:1");
+    FencedLeaseManager.Lease lease = new AptLeaseManager(registry).acquire("suite:1");
     assertEquals("suite:1", leaseKey(registry));
     assertEquals(9L, lease.fencingToken());
     assertTrue(!lease.owner().isBlank());
@@ -38,7 +39,7 @@ class AptLeaseManagerTest {
   @Test
   void nonBlockingAcquisitionAttemptsOnlyOnce() {
     AptRegistryDao available = availableRegistry();
-    try (AptLeaseManager.Lease lease =
+    try (FencedLeaseManager.Lease lease =
         new AptLeaseManager(available).tryAcquire("worker").orElseThrow()) {
       assertEquals(9L, lease.fencingToken());
     }
@@ -55,7 +56,7 @@ class AptLeaseManagerTest {
   void failsClosedWhenRenewalIsLostOrAcquisitionIsInterrupted() {
     AptRegistryDao lost = availableRegistry();
     when(lost.renewLease(anyString(), anyString(), anyLong(), any(), any())).thenReturn(false);
-    try (AptLeaseManager.Lease lease = new AptLeaseManager(lost).acquire("lost")) {
+    try (FencedLeaseManager.Lease lease = new AptLeaseManager(lost).acquire("lost")) {
       assertThrows(MavenExceptions.WritePolicyDenied.class, lease::assertHeld);
       assertThrows(MavenExceptions.WritePolicyDenied.class, lease::assertHeld);
     }
@@ -85,7 +86,7 @@ class AptLeaseManagerTest {
         .tryAcquireLease(anyString(), anyString(), any(), any());
 
     AptRegistryDao renewable = availableRegistry();
-    try (AptLeaseManager.Lease ignored = new AptLeaseManager(
+    try (FencedLeaseManager.Lease ignored = new AptLeaseManager(
         renewable, Duration.ofMillis(90), Duration.ofMillis(10)).acquire("renew")) {
       verify(renewable, timeout(500).atLeastOnce())
           .renewLease(anyString(), anyString(), anyLong(), any(), any());
@@ -96,7 +97,7 @@ class AptLeaseManagerTest {
   void backgroundRenewalMarksLeaseLostAfterFalseOrExpiredFailure() throws Exception {
     AptRegistryDao rejected = availableRegistry();
     when(rejected.renewLease(anyString(), anyString(), anyLong(), any(), any())).thenReturn(false);
-    try (AptLeaseManager.Lease lease = new AptLeaseManager(
+    try (FencedLeaseManager.Lease lease = new AptLeaseManager(
         rejected, Duration.ofMillis(45), Duration.ofMillis(10)).acquire("rejected")) {
       verify(rejected, timeout(500)).renewLease(anyString(), anyString(), anyLong(), any(), any());
       assertThrows(MavenExceptions.WritePolicyDenied.class, lease::assertHeld);
@@ -105,7 +106,7 @@ class AptLeaseManagerTest {
     AptRegistryDao failing = availableRegistry();
     when(failing.renewLease(anyString(), anyString(), anyLong(), any(), any()))
         .thenThrow(new IllegalStateException("database unavailable"));
-    try (AptLeaseManager.Lease lease = new AptLeaseManager(
+    try (FencedLeaseManager.Lease lease = new AptLeaseManager(
         failing, Duration.ofMillis(30), Duration.ofMillis(10)).acquire("failing")) {
       verify(failing, timeout(500).atLeast(2))
           .renewLease(anyString(), anyString(), anyLong(), any(), any());

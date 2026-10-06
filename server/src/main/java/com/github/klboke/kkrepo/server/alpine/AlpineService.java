@@ -12,6 +12,7 @@ import com.github.klboke.kkrepo.protocol.alpine.AlpinePath;
 import com.github.klboke.kkrepo.protocol.alpine.AlpinePathParser;
 import com.github.klboke.kkrepo.protocol.alpine.AlpineVersions;
 import com.github.klboke.kkrepo.protocol.maven.policy.WritePolicy;
+import com.github.klboke.kkrepo.server.coordination.FencedLeaseManager;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
@@ -179,7 +180,7 @@ public class AlpineService {
           "APK package architecture does not match repository path: " + info.architecture());
     }
     String leaseKey = coordinateLease(runtime, path, info);
-    try (AlpineLeaseManager.Lease lease = leases.acquire(leaseKey)) {
+    try (FencedLeaseManager.Lease lease = leases.acquire(leaseKey)) {
       lease.assertHeld();
       Optional<AlpineRegistryDao.PackageRecord> existing = registry.findPackage(
           runtime.id(), path.namespace(), path.channel(), info.name(), info.version(),
@@ -271,7 +272,7 @@ public class AlpineService {
     AlpineRegistryDao.PackageRecord existing = registry.findPackageByPath(
         runtime.id(), path.normalized()).orElseThrow(
             () -> new MavenExceptions.MavenNotFoundException(path.normalized()));
-    try (AlpineLeaseManager.Lease lease = leases.acquire(
+    try (FencedLeaseManager.Lease lease = leases.acquire(
         coordinateLease(runtime, path, packageInfo(existing)))) {
       lease.assertHeld();
       AlpineRegistryDao.PackageRecord removed = registry.deletePackage(
@@ -541,11 +542,11 @@ public class AlpineService {
         .orElseGet(() -> registry.ensureSuite(runtime.id(), namespace, Instant.now()));
     if (before.desiredRevision() == before.publishedRevision()
         && publishedSnapshots.find(runtime.id(), namespace).isPresent()) return true;
-    Optional<AlpineLeaseManager.Lease> acquired = waitForLease
+    Optional<FencedLeaseManager.Lease> acquired = waitForLease
         ? Optional.of(leases.acquire("alpine:publish:" + runtime.id() + ":" + namespace))
         : leases.tryAcquire("alpine:publish:" + runtime.id() + ":" + namespace);
     if (acquired.isEmpty()) return false;
-    try (AlpineLeaseManager.Lease lease = acquired.orElseThrow()) {
+    try (FencedLeaseManager.Lease lease = acquired.orElseThrow()) {
       for (int attempt = 0; attempt < 4; attempt++) {
         lease.assertHeld();
         AlpineRegistryDao.SuiteState state = registry.findSuite(runtime.id(), namespace).orElseThrow();
@@ -658,7 +659,7 @@ public class AlpineService {
       long snapshotRevision,
       long bindingToken,
       GroupProjection projection,
-      AlpineLeaseManager.Lease lease,
+      FencedLeaseManager.Lease lease,
       Consumer<AlpineRegistryDao.PackageRecord> visitor) {
     ArrayList<MemberPackageCursor> cursors = new ArrayList<>();
     projection.members().forEach(member -> cursors.add(new MemberPackageCursor(member, namespace)));
@@ -704,7 +705,7 @@ public class AlpineService {
   }
 
   private void flushGroupBindings(
-      AlpineLeaseManager.Lease lease,
+      FencedLeaseManager.Lease lease,
       long bindingToken,
       List<AlpineRegistryDao.GroupBinding> bindings) {
     if (bindings.isEmpty()) return;

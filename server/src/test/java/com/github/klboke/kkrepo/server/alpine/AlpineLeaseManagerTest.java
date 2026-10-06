@@ -14,6 +14,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.AlpineRegistryDao;
+import com.github.klboke.kkrepo.server.coordination.FencedLeaseManager;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import java.time.Duration;
 import java.time.Instant;
@@ -29,7 +30,7 @@ class AlpineLeaseManagerTest {
     AlpineLeaseManager manager =
         new AlpineLeaseManager(registry, Duration.ofHours(1), Duration.ofMillis(5));
 
-    AlpineLeaseManager.Lease lease = manager.acquire("alpine:test");
+    FencedLeaseManager.Lease lease = manager.acquire("alpine:test");
     assertEquals(7L, lease.fencingToken());
     assertFalse(lease.owner().isBlank());
     lease.assertHeld();
@@ -58,7 +59,7 @@ class AlpineLeaseManagerTest {
         .thenAnswer(invocation -> Optional.of(new AlpineRegistryDao.Lease(
             invocation.getArgument(0), invocation.getArgument(1), 9L, 1L,
             databaseExpiry, Instant.now())));
-    try (AlpineLeaseManager.Lease lease = manager.tryAcquire("free").orElseThrow()) {
+    try (FencedLeaseManager.Lease lease = manager.tryAcquire("free").orElseThrow()) {
       assertEquals(9L, lease.fencingToken());
     }
   }
@@ -88,7 +89,7 @@ class AlpineLeaseManagerTest {
     AlpineRegistryDao registry = registry();
     when(registry.renewLease(anyString(), anyString(), anyLong(), any(), any()))
         .thenReturn(false);
-    try (AlpineLeaseManager.Lease lease =
+    try (FencedLeaseManager.Lease lease =
         new AlpineLeaseManager(registry, Duration.ofHours(1), Duration.ZERO).acquire("lost")) {
       assertThrows(MavenExceptions.WritePolicyDenied.class, lease::assertHeld);
     }

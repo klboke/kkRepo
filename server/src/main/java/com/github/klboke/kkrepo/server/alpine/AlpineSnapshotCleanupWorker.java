@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.alpine;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AlpineRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
+import com.github.klboke.kkrepo.server.coordination.FencedLeaseManager;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import java.time.Instant;
@@ -73,10 +74,10 @@ final class AlpineSnapshotCleanupWorker {
     if (runtime == null || runtime.format() != RepositoryFormat.ALPINE) {
       return;
     }
-    Optional<AlpineLeaseManager.Lease> acquired = leases.tryAcquire(
+    Optional<FencedLeaseManager.Lease> acquired = leases.tryAcquire(
         "alpine:publish:" + candidate.repositoryId() + ":" + candidate.distribution());
     if (acquired.isEmpty()) return;
-    try (AlpineLeaseManager.Lease lease = acquired.orElseThrow()) {
+    try (FencedLeaseManager.Lease lease = acquired.orElseThrow()) {
       lease.assertHeld();
       boolean retained = registry.listSnapshots(
               candidate.repositoryId(), candidate.distribution(), minSnapshots)
@@ -125,9 +126,9 @@ final class AlpineSnapshotCleanupWorker {
               tombstone.packageName(),
               tombstone.version(),
               tombstone.architecture()));
-      Optional<AlpineLeaseManager.Lease> acquired = leases.tryAcquire(leaseKey);
+      Optional<FencedLeaseManager.Lease> acquired = leases.tryAcquire(leaseKey);
       if (acquired.isEmpty()) continue;
-      try (AlpineLeaseManager.Lease lease = acquired.orElseThrow()) {
+      try (FencedLeaseManager.Lease lease = acquired.orElseThrow()) {
         lease.assertHeld();
         Boolean deleted = transactions.execute(status -> {
           assets.delete(runtime, tombstone.path());

@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RRegistryDao;
+import com.github.klboke.kkrepo.server.coordination.FencedLeaseManager;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import java.time.Instant;
@@ -43,7 +44,7 @@ class RSnapshotCleanupWorkerTest {
   void deletesExpiredUnretainedSnapshotAndGeneratedAssetsAtomically() {
     RRegistryDao.Snapshot candidate = snapshot(1L, 2L, Instant.EPOCH, Map.of(
         "src/contrib/PACKAGES.gz", ".r/2/index", "@members", "fingerprint"));
-    RLeaseManager.Lease lease = mock(RLeaseManager.Lease.class);
+    FencedLeaseManager.Lease lease = mock(FencedLeaseManager.Lease.class);
     when(registry.listSnapshotCleanupCandidates(any(), eq(3), eq(32)))
         .thenReturn(List.of(candidate));
     when(runtimes.resolveById(1L)).thenReturn(Optional.of(runtime(1L, RepositoryType.HOSTED)));
@@ -77,7 +78,7 @@ class RSnapshotCleanupWorkerTest {
         3L, "raw", RepositoryFormat.RAW, RepositoryType.HOSTED, "raw-hosted", true,
         1L, "ALLOW", null, null, true, null, 1, 1, true, null, List.of())));
     when(runtimes.resolveById(4L)).thenReturn(Optional.of(runtime(4L, RepositoryType.HOSTED)));
-    RLeaseManager.Lease lease = mock(RLeaseManager.Lease.class);
+    FencedLeaseManager.Lease lease = mock(FencedLeaseManager.Lease.class);
     when(leases.tryAcquire("r:publish:1:src/contrib")).thenReturn(Optional.of(lease));
     when(leases.tryAcquire("r:publish:4:src/contrib")).thenReturn(Optional.empty());
     when(registry.listSnapshots(1L, "src/contrib", 3))
@@ -102,7 +103,7 @@ class RSnapshotCleanupWorkerTest {
     when(runtimes.resolveById(2L)).thenReturn(Optional.of(runtime(2L, RepositoryType.PROXY)));
     when(runtimes.resolveById(3L)).thenReturn(Optional.empty());
     when(runtimes.resolveById(4L)).thenReturn(Optional.of(runtime(4L, RepositoryType.HOSTED)));
-    RLeaseManager.Lease lease = mock(RLeaseManager.Lease.class);
+    FencedLeaseManager.Lease lease = mock(FencedLeaseManager.Lease.class);
     when(leases.tryAcquire(org.mockito.ArgumentMatchers.startsWith("r:coordinate:1:")))
         .thenReturn(Optional.of(lease));
     when(leases.tryAcquire(org.mockito.ArgumentMatchers.startsWith("r:coordinate:4:")))
@@ -121,7 +122,7 @@ class RSnapshotCleanupWorkerTest {
   void transientCleanupFailuresAreContainedForTheNextCycle() {
     RRegistryDao.Snapshot candidate = snapshot(
         1L, 2L, Instant.EPOCH, Map.of("index", "hidden"));
-    RLeaseManager.Lease lease = mock(RLeaseManager.Lease.class);
+    FencedLeaseManager.Lease lease = mock(FencedLeaseManager.Lease.class);
     when(registry.listSnapshotCleanupCandidates(any(), anyInt(), anyInt()))
         .thenReturn(List.of(candidate));
     when(runtimes.resolveById(1L)).thenReturn(Optional.of(runtime(1L, RepositoryType.HOSTED)));

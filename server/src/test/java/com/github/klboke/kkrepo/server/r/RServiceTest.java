@@ -21,6 +21,7 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.protocol.r.RPathParser;
+import com.github.klboke.kkrepo.server.coordination.FencedLeaseManager;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
@@ -45,7 +46,7 @@ class RServiceTest {
   private final RAssetSupport assets = mock(RAssetSupport.class);
   private final RIndexBuilder indexBuilder = mock(RIndexBuilder.class);
   private final RLeaseManager leases = mock(RLeaseManager.class);
-  private final RLeaseManager.Lease lease = mock(RLeaseManager.Lease.class);
+  private final FencedLeaseManager.Lease lease = mock(FencedLeaseManager.Lease.class);
   private final RProxyProjectionService proxy = mock(RProxyProjectionService.class);
   private final RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
   private final RepositoryRuntime hosted = runtime(1L, RepositoryType.HOSTED, "ALLOW", List.of());

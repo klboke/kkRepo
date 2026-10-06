@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AlpineRegistryDao;
+import com.github.klboke.kkrepo.server.coordination.FencedLeaseManager;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import java.time.Instant;
@@ -43,7 +44,7 @@ class AlpineSnapshotCleanupWorkerTest {
   void deletesExpiredUnretainedSnapshotAndEveryGeneratedAssetAtomically() {
     AlpineRegistryDao.Snapshot candidate = snapshot(1L, 2L, Instant.EPOCH,
         Map.of("APKINDEX.tar.gz", ".alpine/2/index", "DESCRIPTION", ".alpine/2/desc"));
-    AlpineLeaseManager.Lease lease = mock(AlpineLeaseManager.Lease.class);
+    FencedLeaseManager.Lease lease = mock(FencedLeaseManager.Lease.class);
     when(registry.listSnapshotCleanupCandidates(any(), eq(3), eq(32)))
         .thenReturn(List.of(candidate));
     when(runtimes.resolveById(1L)).thenReturn(Optional.of(runtime(1L, RepositoryType.HOSTED)));
@@ -79,7 +80,7 @@ class AlpineSnapshotCleanupWorkerTest {
         3L, "raw", RepositoryFormat.RAW, RepositoryType.HOSTED, "raw-hosted", true,
         1L, "ALLOW", null, null, true, null, 1, 1, true, null, List.of())));
     when(runtimes.resolveById(4L)).thenReturn(Optional.of(runtime(4L, RepositoryType.HOSTED)));
-    AlpineLeaseManager.Lease lease = mock(AlpineLeaseManager.Lease.class);
+    FencedLeaseManager.Lease lease = mock(FencedLeaseManager.Lease.class);
     when(leases.tryAcquire("alpine:publish:1:v3.20/main/x86_64"))
         .thenReturn(Optional.of(lease));
     when(leases.tryAcquire("alpine:publish:4:v3.20/main/x86_64"))
@@ -107,7 +108,7 @@ class AlpineSnapshotCleanupWorkerTest {
     when(runtimes.resolveById(2L)).thenReturn(Optional.of(runtime(2L, RepositoryType.PROXY)));
     when(runtimes.resolveById(3L)).thenReturn(Optional.empty());
     when(runtimes.resolveById(4L)).thenReturn(Optional.of(runtime(4L, RepositoryType.HOSTED)));
-    AlpineLeaseManager.Lease lease = mock(AlpineLeaseManager.Lease.class);
+    FencedLeaseManager.Lease lease = mock(FencedLeaseManager.Lease.class);
     when(leases.tryAcquire(org.mockito.ArgumentMatchers.startsWith("alpine:coordinate:1:")))
         .thenReturn(Optional.of(lease));
     when(leases.tryAcquire(org.mockito.ArgumentMatchers.startsWith("alpine:coordinate:4:")))
@@ -125,7 +126,7 @@ class AlpineSnapshotCleanupWorkerTest {
   @Test
   void transientCleanupFailuresAreContainedForTheNextCycle() {
     AlpineRegistryDao.Snapshot candidate = snapshot(1L, 2L, Instant.EPOCH, Map.of("i", "hidden"));
-    AlpineLeaseManager.Lease lease = mock(AlpineLeaseManager.Lease.class);
+    FencedLeaseManager.Lease lease = mock(FencedLeaseManager.Lease.class);
     when(registry.listSnapshotCleanupCandidates(any(), anyInt(), anyInt()))
         .thenReturn(List.of(candidate));
     when(runtimes.resolveById(1L)).thenReturn(Optional.of(runtime(1L, RepositoryType.HOSTED)));

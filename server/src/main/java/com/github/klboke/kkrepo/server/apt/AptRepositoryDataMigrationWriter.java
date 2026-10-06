@@ -12,10 +12,9 @@ import com.github.klboke.kkrepo.protocol.apt.AptPath;
 import com.github.klboke.kkrepo.protocol.apt.AptPathParser;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
+import com.github.klboke.kkrepo.server.migration.MigrationSourceMetadata;
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.Locale;
-import java.util.Map;
 import org.springframework.stereotype.Component;
 
 /** Replays verified Nexus hosted Debian packages through the normal APT importer. */
@@ -117,7 +116,7 @@ public class AptRepositoryDataMigrationWriter {
       throw new IllegalStateException(
           "APT migration size mismatch for " + source.sourcePath());
     }
-    String expectedSha256 = sourceSha256(source.metadata());
+    String expectedSha256 = MigrationSourceMetadata.checksum(source.metadata(), 64, "sha256");
     if (expectedSha256 == null) {
       throw new IllegalStateException(
           "APT migration requires a valid source SHA-256 for " + source.sourcePath());
@@ -132,43 +131,6 @@ public class AptRepositoryDataMigrationWriter {
     if (source.version() != null && !source.version().equals(inspected.control().version())) {
       throw new IllegalStateException("APT migration package version disagrees with the archive");
     }
-  }
-
-  private static String sourceSha256(Object value) {
-    Object found = findKey(value, "sha256");
-    String text = found == null ? null : found.toString().trim().toLowerCase(Locale.ROOT);
-    return text != null && text.matches("[0-9a-f]{64}") ? text : null;
-  }
-
-  private static Object findKey(Object value, String wanted) {
-    if (value instanceof Map<?, ?> map) {
-      String normalizedWanted = normalizedKey(wanted);
-      for (Map.Entry<?, ?> entry : map.entrySet()) {
-        if (entry.getKey() != null
-            && normalizedKey(entry.getKey()).equals(normalizedWanted)) {
-          return entry.getValue();
-        }
-      }
-      for (Object child : map.values()) {
-        Object found = findKey(child, wanted);
-        if (found != null) {
-          return found;
-        }
-      }
-    } else if (value instanceof Iterable<?> iterable) {
-      for (Object child : iterable) {
-        Object found = findKey(child, wanted);
-        if (found != null) {
-          return found;
-        }
-      }
-    }
-    return null;
-  }
-
-  private static String normalizedKey(Object value) {
-    return String.valueOf(value).replaceAll("[^A-Za-z0-9]", "")
-        .toLowerCase(Locale.ROOT);
   }
 
   private static String migratablePath(String rawPath) {

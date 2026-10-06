@@ -22,6 +22,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.AlpineRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.protocol.alpine.AlpineMediaTypes;
 import com.github.klboke.kkrepo.protocol.alpine.AlpineSignature;
+import com.github.klboke.kkrepo.server.coordination.FencedLeaseManager;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
@@ -50,7 +51,7 @@ class AlpineServiceTest {
   private final AlpineIndexBuilder indexBuilder = mock(AlpineIndexBuilder.class);
   private final AlpineSigningService signing = mock(AlpineSigningService.class);
   private final AlpineLeaseManager leases = mock(AlpineLeaseManager.class);
-  private final AlpineLeaseManager.Lease lease = mock(AlpineLeaseManager.Lease.class);
+  private final FencedLeaseManager.Lease lease = mock(FencedLeaseManager.Lease.class);
   private final RawProxyService proxy = mock(RawProxyService.class);
   private final AlpineProxyProjectionService projection = mock(AlpineProxyProjectionService.class);
   private final RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
