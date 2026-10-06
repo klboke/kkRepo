@@ -206,7 +206,13 @@ public class HttpRemoteFetcher {
         if (redirects >= MAX_REDIRECTS) {
           throw new IOException("Too many redirects fetching " + req.url());
         }
-        URI redirected = uri.resolve(location);
+        URI redirected;
+        try {
+          redirected = uri.resolve(location);
+        } catch (IllegalArgumentException e) {
+          // A malformed upstream Location is a transport failure, so groups can try other members.
+          throw new IOException("Invalid redirect URI returned by upstream", e);
+        }
         String redirectAuthorization = req.authorizationHeaderForRedirect(uri, redirected);
         String redirectTrustedHost = req.trustedHostForRedirect(uri, redirected);
         boolean preserveBody = redirectStatus == 307 || redirectStatus == 308;

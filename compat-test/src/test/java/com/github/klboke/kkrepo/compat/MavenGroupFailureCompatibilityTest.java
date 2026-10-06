@@ -147,6 +147,44 @@ class MavenGroupFailureCompatibilityTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"/invalid/^4.2.0.pom", "/invalid/%zz.pom"})
+  void malformedRedirectDoesNotHideLaterHostedContentLikeNexus(String location) throws Exception {
+    assumeTrue(Boolean.parseBoolean(CompatDefaults.setting("compat.write.enabled", "COMPAT_WRITE_ENABLED")
+        .orElse("false")), "Set COMPAT_WRITE_ENABLED=true on disposable compatibility instances");
+    String host = CompatDefaults.setting("compat.mavenGroup.upstreamHost", "MAVEN_GROUP_COMPAT_UPSTREAM_HOST")
+        .orElse("host.docker.internal");
+    HttpServer upstream = HttpServer.create(new InetSocketAddress("0.0.0.0", 0), 0);
+    AtomicInteger requests = new AtomicInteger();
+    upstream.createContext("/", exchange -> {
+      requests.incrementAndGet();
+      if (exchange.getRequestURI().getRawPath().startsWith("/invalid/")) {
+        exchange.sendResponseHeaders(404, -1);
+      } else {
+        exchange.getResponseHeaders().set("Location", location);
+        exchange.sendResponseHeaders(302, -1);
+      }
+      exchange.close();
+    });
+    upstream.start();
+    try {
+      String remote = "http://" + host + ":" + upstream.getAddress().getPort() + "/";
+      Endpoint nexus = new Endpoint(CompatDefaults.nexusBaseUrl().orElseThrow(),
+          CompatDefaults.nexusUsername().orElseThrow(), CompatDefaults.nexusPassword().orElseThrow(), true);
+      Endpoint candidate = new Endpoint(CompatDefaults.nexusPlusBaseUrl().orElseThrow(),
+          CompatDefaults.nexusPlusUsername().orElseThrow(), CompatDefaults.nexusPlusPassword().orElseThrow(), false);
+      try (var fixtureAccess = nexus.allowFixtureHost(host)) {
+        exercise(nexus, remote, 302);
+        assertTrue(requests.get() > 0, "Nexus must contact the malformed-redirect fixture");
+      }
+      int beforeCandidate = requests.get();
+      exercise(candidate, remote, 302);
+      assertTrue(requests.get() > beforeCandidate, "kkRepo must contact the malformed-redirect fixture");
+    } finally {
+      upstream.stop(0);
+    }
+  }
+
   private static void exercise(Endpoint endpoint, String remote, int upstreamStatus) throws Exception {
     String prefix = "compat-fallback-" + UUID.randomUUID().toString().substring(0, 8);
     String hosted = prefix + "-hosted";
@@ -169,6 +207,8 @@ class MavenGroupFailureCompatibilityTest {
       if (upstreamStatus == 303 || upstreamStatus == 404) {
         assertEquals(endpoint.nexus || upstreamStatus == 404 ? 404 : 400,
             direct.statusCode(), "direct proxy diagnostic status");
+      } else if (upstreamStatus == 302) {
+        assertEquals(502, direct.statusCode(), "malformed redirect must remain an upstream diagnostic");
       } else {
         assertTrue(direct.statusCode() >= 400, "fixture proxy must fail before testing group fallback");
       }

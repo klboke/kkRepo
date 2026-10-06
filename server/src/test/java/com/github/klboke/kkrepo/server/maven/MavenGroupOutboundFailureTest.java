@@ -54,6 +54,7 @@ class MavenGroupOutboundFailureTest {
   private final AtomicInteger upstreamCalls = new AtomicInteger();
   private final AtomicInteger targetCalls = new AtomicInteger();
   private final AtomicInteger hostedCalls = new AtomicInteger();
+  private final AtomicReference<String> redirectLocation = new AtomicReference<>();
   private HttpServer upstream;
   private HttpServer target;
   private ProxiedHttpClientFactory transport;
@@ -73,10 +74,11 @@ class MavenGroupOutboundFailureTest {
       exchange.close();
     });
     target.start();
+    redirectLocation.set("http://localhost:" + target.getAddress().getPort() + "/missing");
     upstream = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     upstream.createContext("/", exchange -> {
       upstreamCalls.incrementAndGet();
-      exchange.getResponseHeaders().set("Location", "http://localhost:" + target.getAddress().getPort() + "/missing");
+      exchange.getResponseHeaders().set("Location", redirectLocation.get());
       exchange.sendResponseHeaders(303, -1);
       exchange.close();
     });
@@ -141,6 +143,71 @@ class MavenGroupOutboundFailureTest {
     assertFallback(head, metadata, nested);
     assertEquals(1, upstreamCalls.get());
     assertEquals(0, targetCalls.get(), "rejected redirect must never be followed");
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false,false,false", "true,false,false", "false,true,false", "true,true,false",
+      "false,false,true", "true,false,true", "false,true,true", "true,true,true"})
+  void malformedRedirectFallsThroughForArtifactsAndMetadata(boolean head, boolean metadata, boolean nested)
+      throws Exception {
+    redirectLocation.set("/invalid/^4.2.0.pom");
+    assertFallback(head, metadata, nested);
+    assertEquals(1, upstreamCalls.get());
+    assertEquals(0, targetCalls.get());
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false,false", "true,false", "false,true", "true,true"})
+  void aliasedVersionWithCaretSurvivesMalformedRedirect(boolean head, boolean hostedHasArtifact)
+      throws Exception {
+    String alias = "org/mvnpm/string-width-cjs/npm:string-width@%5E4.2.0/"
+        + "string-width-cjs-npm:string-width@%5E4.2.0.pom";
+    redirectLocation.set("/" + alias.replace("%5E", "^"));
+    MavenPath path = new MavenPathParser().parsePath(alias);
+    var members = hostedHasArtifact ? List.of(proxyRepo, hostedRepo) : List.of(proxyRepo);
+    var group = runtime(3, RepositoryType.GROUP, null, members);
+    if (hostedHasArtifact) {
+      MavenResponse response = groupService.get(group, path, head);
+      assertEquals(200, response.status());
+      if (!head) {
+        try (var body = response.body()) {
+          assertArrayEquals(CONTENT, body.readAllBytes());
+        }
+      }
+    } else {
+      assertThrows(MavenExceptions.MavenNotFoundException.class, () -> groupService.get(group, path, head));
+    }
+    assertEquals(hostedHasArtifact ? 1 : 0, hostedCalls.get());
+    assertEquals(1, upstreamCalls.get());
+    assertEquals(0, targetCalls.get());
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false", "true"})
+  void malformedRedirectKeepsDirectProxyBadGatewayDiagnostic(boolean head) {
+    redirectLocation.set("/invalid/^4.2.0.pom");
+    var error = assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> proxy.get(proxyRepo, path(false), head));
+    assertEquals("Upstream IO error: Invalid redirect URI returned by upstream", error.getMessage());
+    assertEquals(502, new MavenErrorAdvice().upstream(error).getStatusCode().value());
+    assertEquals(1, upstreamCalls.get());
+    assertEquals(0, targetCalls.get());
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false", "true"})
+  void encodedCaretInRedirectIsFollowedWithoutChangingThePath(boolean head) {
+    String location = "/encoded/npm:string-width@%5E4.2.0.pom";
+    redirectLocation.set(location);
+    AtomicReference<String> requestedPath = new AtomicReference<>();
+    upstream.createContext("/encoded/", exchange -> {
+      requestedPath.set(exchange.getRequestURI().getRawPath());
+      exchange.sendResponseHeaders(404, -1);
+      exchange.close();
+    });
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> proxy.get(proxyRepo, path(false), head));
+    assertEquals(location, requestedPath.get());
   }
 
   @ParameterizedTest

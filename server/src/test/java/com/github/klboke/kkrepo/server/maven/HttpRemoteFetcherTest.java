@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.maven;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -11,7 +12,9 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.ByteArrayInputStream;
@@ -42,6 +45,27 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class HttpRemoteFetcherTest {
+
+  @ParameterizedTest
+  @ValueSource(strings = {"/maven/^4.2.0.pom", "/maven/a b.pom", "/maven/%zz.pom", "http://[invalid/path"})
+  void malformedRedirectIsAnIoFailureAndReleasesResponse(String location) throws Exception {
+    ProxiedHttpClientFactory transport = mock(ProxiedHttpClientFactory.class);
+    var redirect = response(302, Map.of("Location", location), "");
+    when(transport.execute(nullable(String.class), nullable(OutboundProxyConfig.class), eq("GET"),
+        any(OutboundRequestPolicy.ResolvedHttpTarget.class), anyMap(), nullable(byte[].class), anyLong()))
+        .thenReturn(redirect);
+    var fetcher = new HttpRemoteFetcher(OutboundRequestPolicy.allowPrivateForTests(), null, transport,
+        "HTTP_1_1", 30, 60, 300, 2, 1);
+
+    IOException error = assertThrows(IOException.class, () -> fetcher.fetchWithBodyRetry(
+        HttpRemoteFetcher.Request.get("http://127.0.0.1/artifact.pom"), "artifact.pom", result -> result.status()));
+
+    assertEquals("Invalid redirect URI returned by upstream", error.getMessage());
+    assertInstanceOf(IllegalArgumentException.class, error.getCause());
+    verify(redirect, atLeastOnce()).close();
+    verify(transport).execute(nullable(String.class), nullable(OutboundProxyConfig.class), eq("GET"),
+        any(OutboundRequestPolicy.ResolvedHttpTarget.class), anyMap(), nullable(byte[].class), anyLong());
+  }
 
   @Test
   void pinnedAlternateHostEnforcesEveryRedirectWithoutCredentials() {
