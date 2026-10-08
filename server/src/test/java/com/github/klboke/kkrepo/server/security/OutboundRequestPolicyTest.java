@@ -50,6 +50,24 @@ class OutboundRequestPolicyTest {
   }
 
   @Test
+  void publicHttpsRejectsMissingAndMalformedUrlsBeforeResolvingDns() {
+    AtomicInteger lookups = new AtomicInteger();
+    var policy = new OutboundRequestPolicy(true, "cdn.example", host -> {
+      lookups.incrementAndGet();
+      return new InetAddress[] {InetAddress.getByName("8.8.8.8")};
+    });
+    for (String url : new String[] {null, "", "  "}) {
+      var error = assertThrows(SecurityValidationException.class,
+          () -> policy.resolvePublicHttpsTarget(url, "content"));
+      assertEquals("content URL is required", error.getMessage());
+    }
+    var error = assertThrows(SecurityValidationException.class,
+        () -> policy.resolvePublicHttpsTarget("https://cdn.example/bad path?signature=secret", "content"));
+    assertEquals("content URL is not valid", error.getMessage());
+    assertEquals(0, lookups.get());
+  }
+
+  @Test
   void rejectsLoopbackByDefault() {
     OutboundRequestPolicy policy = new OutboundRequestPolicy(false, "");
 

@@ -108,6 +108,35 @@ class DockerRemoteRegistryClientTest {
         any(OutboundRequestPolicy.ResolvedHttpTarget.class), anyMap(), anyLong());
   }
 
+  @Test
+  void publicHttpsRedirectCyclesAreBoundedWithoutLeakingSignedUrls() throws Exception {
+    var policy = mock(OutboundRequestPolicy.class);
+    when(policy.resolvePublicHttpsTarget(anyString(), anyString())).thenAnswer(invocation -> {
+      var target = mock(OutboundRequestPolicy.ResolvedHttpTarget.class);
+      when(target.uri()).thenReturn(URI.create(invocation.getArgument(0, String.class)));
+      return target;
+    });
+    var transport = mock(ProxiedHttpClientFactory.class);
+    var redirect = mock(ProxiedHttpClientFactory.ProxiedResponse.class);
+    when(redirect.status()).thenReturn(307);
+    when(redirect.header("Location")).thenReturn("https://cdn.example/blob?signature=secret");
+    when(transport.execute(anyString(), nullable(OutboundProxyConfig.class), eq("GET"),
+        any(OutboundRequestPolicy.ResolvedHttpTarget.class), anyMap(), anyLong())).thenReturn(redirect);
+    var runtime = mock(RepositoryRuntime.class);
+    when(runtime.name()).thenReturn("docker-proxy");
+    when(runtime.proxyRemoteUrl()).thenReturn("https://registry.example");
+    when(runtime.redirectPolicy()).thenReturn(
+        com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS);
+    var client = new DockerRemoteRegistryClient(null, policy, null, true, 300, null, transport);
+    var error = assertThrows(IOException.class,
+        () -> client.get(runtime, "library/test/blobs/sha256:abc", "application/octet-stream"));
+    assertEquals("Too many redirects fetching Docker remote from cdn.example", error.getMessage());
+    org.mockito.Mockito.verify(transport, org.mockito.Mockito.times(6)).execute(
+        anyString(), nullable(OutboundProxyConfig.class), eq("GET"),
+        any(OutboundRequestPolicy.ResolvedHttpTarget.class), anyMap(), anyLong());
+    org.mockito.Mockito.verify(redirect, org.mockito.Mockito.times(6)).close();
+  }
+
   private final ProxiedHttpClientFactory directFactory =
       new ProxiedHttpClientFactory(60000, 10000);
 

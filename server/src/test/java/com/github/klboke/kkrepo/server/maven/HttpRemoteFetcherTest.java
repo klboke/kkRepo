@@ -47,6 +47,29 @@ import org.junit.jupiter.params.provider.ValueSource;
 class HttpRemoteFetcherTest {
 
   @Test
+  void publicHttpsCanonicalRequestRejectsBodiesAndEnabledOutboundProxies() {
+    byte[] body = "{}".getBytes(StandardCharsets.UTF_8);
+    var error = assertThrows(IllegalArgumentException.class,
+        () -> publicHttpsRequest(null, body, false));
+    assertEquals("PUBLIC_HTTPS supports direct content GET/HEAD only", error.getMessage());
+    for (var type : OutboundProxyConfig.Type.values()) {
+      var proxy = new OutboundProxyConfig(type, "proxy.example", 8080, null, null);
+      assertThrows(IllegalArgumentException.class, () -> publicHttpsRequest(proxy, null, false));
+    }
+    var disabled = new OutboundProxyConfig(null, "", 0, null, null);
+    assertEquals(false, publicHttpsRequest(disabled, null, false).headOnly());
+    assertEquals(true, publicHttpsRequest(null, null, true).headOnly());
+  }
+
+  private static HttpRemoteFetcher.Request publicHttpsRequest(
+      OutboundProxyConfig proxy, byte[] body, boolean headOnly) {
+    return new HttpRemoteFetcher.Request("https://repo.example/file", null, null, null, null,
+        headOnly, "proxy", "maven2", null, null, Set.of(), proxy, null, body,
+        body == null ? null : "application/json", null, null,
+        com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS);
+  }
+
+  @Test
   void publicHttpsAllowsNewCdnButStripsCredentialsAndRejectsDowngrade() {
     var runtime = mock(RepositoryRuntime.class);
     when(runtime.name()).thenReturn("proxy");
