@@ -94,6 +94,9 @@ class PypiRepositoryBlackBoxCompatibilityTest {
           "all six projects must be migrated");
       for (WheelFixture fixture : fixtures) {
         String index = "simple/" + fixture.normalizedName() + "/";
+        // Compare distribution links; this migration fix does not add optional PEP 658
+        // advertisement attributes to the existing index builder. Sidecars must remain
+        // downloadable (checked below) without becoming distribution links.
         assertProjectIndexMatches("migrated " + fixture.normalizedName(),
             get(source, index), getEventually(target, index, fixture.filename()), fixture.filename());
         assertPackageMatches("migrated package", get(source, fixture.packagePath()),
