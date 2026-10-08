@@ -1,7 +1,10 @@
 package com.github.klboke.kkrepo.server;
 
 import static com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao.DeleteResult.DELETED;
+import static com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao.DeleteResult.BLOBS_REMAIN;
+import static com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao.DeleteResult.NOT_FOUND;
 import static com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao.DeleteResult.REPOSITORY_IN_USE;
+import static com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao.DeleteResult.UPLOADS_IN_PROGRESS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
@@ -11,8 +14,11 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao.DeleteResult;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionStatus;
@@ -42,13 +48,24 @@ class BlobStoreDeletionServiceTest {
     BlobStorageRegistry registry = mock(BlobStorageRegistry.class);
     PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
     when(transactionManager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
-    when(dao.deleteEmptyById(7)).thenReturn(REPOSITORY_IN_USE);
     BlobStoreDeletionService service = new BlobStoreDeletionService(dao, registry, transactionManager);
 
-    ResponseStatusException error = assertThrows(ResponseStatusException.class,
-        () -> service.deleteEmpty(7));
+    for (var entry : Map.<DeleteResult, HttpStatus>of(
+        NOT_FOUND, HttpStatus.NOT_FOUND,
+        REPOSITORY_IN_USE, HttpStatus.CONFLICT,
+        BLOBS_REMAIN, HttpStatus.CONFLICT,
+        UPLOADS_IN_PROGRESS, HttpStatus.CONFLICT).entrySet()) {
+      when(dao.deleteEmptyById(7)).thenReturn(entry.getKey());
+      ResponseStatusException error = assertThrows(ResponseStatusException.class,
+          () -> service.deleteEmpty(7));
+      assertEquals(entry.getValue(), error.getStatusCode());
+    }
 
-    assertEquals(HttpStatus.CONFLICT, error.getStatusCode());
+    when(dao.deleteEmptyById(7)).thenThrow(new DataIntegrityViolationException("foreign key"));
+    ResponseStatusException racedReference = assertThrows(ResponseStatusException.class,
+        () -> service.deleteEmpty(7));
+    assertEquals(HttpStatus.CONFLICT, racedReference.getStatusCode());
+
     verifyNoInteractions(registry);
   }
 }
