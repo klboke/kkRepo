@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.maven;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anySet;
@@ -35,6 +36,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -51,6 +58,81 @@ import software.amazon.awssdk.services.s3.model.UploadPartRequest;
 import software.amazon.awssdk.services.s3.model.UploadPartResponse;
 
 class BlobStorageRegistryTest {
+  @Test
+  void uncachedRefreshPreservesWrapperCreatedAfterItsDatabaseSnapshot() throws Exception {
+    BlobStoreDao dao = mock(BlobStoreDao.class);
+    AtomicReference<BlobStoreRecord> record = new AtomicReference<>(s3Store(1, "store", "old-bucket"));
+    CountDownLatch queried = new CountDownLatch(1);
+    CountDownLatch resume = new CountDownLatch(1);
+    when(dao.findById(1)).thenAnswer(invocation -> Optional.of(record.get()));
+    when(dao.list()).thenAnswer(invocation -> {
+      List<BlobStoreRecord> snapshot = List.of(record.get());
+      queried.countDown();
+      assertTrue(resume.await(5, TimeUnit.SECONDS));
+      return snapshot;
+    });
+    S3BlobStorageFactory factory = mock(S3BlobStorageFactory.class);
+    when(factory.forStore(any())).thenAnswer(invocation -> mock(BlobStorage.class));
+    BlobStorageRegistry registry = new BlobStorageRegistry(dao, factory, null,
+        new S3StorageProperties(), false);
+    registry.forBlobStoreId(1);
+    try (var executor = Executors.newSingleThreadExecutor()) {
+      var refresh = executor.submit(registry::syncDatabaseToMemory);
+      try {
+        assertTrue(queried.await(5, TimeUnit.SECONDS));
+        record.set(s3Store(1, "store", "new-bucket"));
+        BlobStorage current = registry.forBlobStoreId(1);
+        resume.countDown();
+        refresh.get(5, TimeUnit.SECONDS);
+        assertSame(current, registry.forBlobStoreId(1));
+        verify(current, never()).close();
+      } finally {
+        resume.countDown();
+      }
+    } finally {
+      registry.shutdown();
+    }
+  }
+
+  @Test
+  void uncachedScheduledAndMutationRefreshesDoNotOverlap() throws Exception {
+    BlobStoreDao dao = mock(BlobStoreDao.class);
+    CountDownLatch queried = new CountDownLatch(1);
+    CountDownLatch resume = new CountDownLatch(1);
+    CountDownLatch mutationStarted = new CountDownLatch(1);
+    AtomicInteger queries = new AtomicInteger();
+    when(dao.list()).thenAnswer(invocation -> {
+      if (queries.incrementAndGet() == 1) {
+        queried.countDown();
+        assertTrue(resume.await(5, TimeUnit.SECONDS));
+      }
+      return List.of();
+    });
+    BlobStorageRegistry registry = new BlobStorageRegistry(dao, null, null,
+        new S3StorageProperties(), false);
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var scheduled = executor.submit(registry::syncDatabaseToMemory);
+      try {
+        assertTrue(queried.await(5, TimeUnit.SECONDS));
+        var mutation = executor.submit(() -> {
+          mutationStarted.countDown();
+          registry.refreshAll();
+        });
+        assertTrue(mutationStarted.await(5, TimeUnit.SECONDS));
+        assertThrows(TimeoutException.class, () -> mutation.get(100, TimeUnit.MILLISECONDS));
+        assertEquals(1, queries.get());
+        resume.countDown();
+        scheduled.get(5, TimeUnit.SECONDS);
+        mutation.get(5, TimeUnit.SECONDS);
+        assertEquals(2, queries.get());
+      } finally {
+        resume.countDown();
+      }
+    } finally {
+      registry.shutdown();
+    }
+  }
+
   @ParameterizedTest
   @ValueSource(strings = {"writer", "subscriber", "scheduled", "uncached"})
   void deletingAnotherStorePreservesMultipartUploads(String refreshPath, @TempDir Path tempDir) throws Exception {

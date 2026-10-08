@@ -36,6 +36,18 @@ billing, bucket quota or remaining disk capacity. Repository-to-store filtering
 uses repository configuration; shared/group references can cross that boundary,
 so repository totals are never presented as a reconciliation of physical bytes.
 
+## Deleting unused configurations
+
+Use **Delete blob store** in the row's overflow menu to remove an unused
+configuration. The transaction rejects repository references, registered blobs
+(including pending cleanup), and persisted upload sessions. Inventory counts do
+not authorize deletion. Backing files, objects, and buckets are retained.
+
+Delete after uploads and **Check** have finished. Deletion does not drain
+unregistered I/O across replicas: a concurrent operation can fail and leave an
+untracked object requiring separate cleanup. This rare administration race is
+accepted to keep per-operation database coordination off normal storage I/O.
+
 ## Freshness, failures and permissions
 
 The first summary card shows the snapshot update time; its info icon explains the

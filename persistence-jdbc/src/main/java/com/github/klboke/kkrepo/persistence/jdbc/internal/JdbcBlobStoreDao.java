@@ -159,6 +159,8 @@ public class JdbcBlobStoreDao implements com.github.klboke.kkrepo.persistence.jd
   public DeleteResult deleteEmptyById(long id) {
     // The caller owns the transaction. This lock serializes deletion with FK inserts
     // from other replicas so the checks and deletion describe one database state.
+    // This is not an I/O drain barrier: unregistered writes/Check probes may race deletion.
+    // Accept that rare admin race instead of adding coordination writes to every blob I/O.
     if (jdbcTemplate.queryForList("SELECT id FROM blob_store WHERE id = ? FOR UPDATE", Long.class, id)
         .isEmpty()) {
       return DeleteResult.NOT_FOUND;

@@ -137,14 +137,6 @@ public class BlobStorageRegistry {
       fixedDelayString = "${kkrepo.catalog-cache.refresh-interval-ms:60000}",
       initialDelayString = "${kkrepo.catalog-cache.initial-delay-ms:60000}")
   public void syncDatabaseToMemory() {
-    if (!catalogCacheEnabled) {
-      try {
-        reconcileStorageEntries(blobStoreDao.list());
-      } catch (RuntimeException e) {
-        log.warn("Failed reconciling deleted blob-store clients from MySQL", e);
-      }
-      return;
-    }
     if (!refreshLock.tryLock()) {
       return;
     }
@@ -201,14 +193,6 @@ public class BlobStorageRegistry {
 
   /** Reload blob_store after an admin mutation, retaining unchanged storage wrappers. */
   public void refreshAll() {
-    if (!catalogCacheEnabled) {
-      try {
-        reconcileStorageEntries(blobStoreDao.list());
-      } catch (RuntimeException e) {
-        log.warn("Failed reconciling deleted blob-store clients after mutation", e);
-      }
-      return;
-    }
     refreshLock.lock();
     try {
       refreshLocked("mutation");
@@ -307,8 +291,11 @@ public class BlobStorageRegistry {
   }
 
   private BlobStoreCatalog refreshLocked(String reason) {
+    // Only reconcile wrappers that predate this query. An uncached lookup can create a
+    // wrapper for a newer committed configuration while this database read is in flight.
+    Set<StorageCacheKey> cachedKeys = Set.copyOf(cache.asMap().keySet());
     List<BlobStoreRecord> records = blobStoreDao.list();
-    reconcileStorageEntries(records);
+    reconcileStorageEntries(records, cachedKeys);
     Map<Long, BlobStoreRecord> byId = new LinkedHashMap<>();
     for (BlobStoreRecord record : records) {
       if (record.id() != null) {
@@ -319,17 +306,16 @@ public class BlobStorageRegistry {
         Instant.now(),
         List.copyOf(records),
         Collections.unmodifiableMap(byId));
-    catalog.set(loaded);
+    if (catalogCacheEnabled) catalog.set(loaded);
     log.debug("Refreshed blob_store catalog from MySQL by {}: stores={}", reason, loaded.records().size());
     return loaded;
   }
 
-  private void reconcileStorageEntries(List<BlobStoreRecord> records) {
+  private void reconcileStorageEntries(List<BlobStoreRecord> records, Set<StorageCacheKey> cachedKeys) {
     Map<Long, BlobStoreRecord> active = new LinkedHashMap<>();
     for (BlobStoreRecord record : records) {
       if (record.id() != null) active.put(record.id(), record);
     }
-    Set<StorageCacheKey> cachedKeys = Set.copyOf(cache.asMap().keySet());
     Set<Long> deletedIds = new HashSet<>();
     for (StorageCacheKey key : cachedKeys) {
       if (!active.containsKey(key.storeId())) deletedIds.add(key.storeId());

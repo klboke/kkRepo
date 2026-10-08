@@ -10,16 +10,25 @@ const index = readFileSync(join(__dirname, '../../main/resources/META-INF/resour
 function actionHarness() {
   const attributes = new Map();
   const tableHandlers = {};
+  const menuHandlers = {};
   const table = { addEventListener: (type, handler) => { tableHandlers[type] = handler; } };
   const menu = {
-    hidden: true, innerHTML: '', style: {},
+    hidden: true, style: {},
+    get innerHTML() { return this.html || ''; },
+    set innerHTML(value) {
+      this.html = value;
+      if (items.includes(document.activeElement)) document.activeElement = document.body;
+    },
+    addEventListener: (type, handler) => { menuHandlers[type] = handler; },
     setAttribute: (key, value) => attributes.set(key, value),
     removeAttribute: key => attributes.delete(key),
     getBoundingClientRect: () => ({ width: 190, height: 160 }),
     contains: element => items.includes(element),
   };
   const items = ['repositories', 'check', 'delete'].map(action => ({
-    action, focus() { document.activeElement = this; },
+    action, dataset: { blobstoreAction: action },
+    closest(selector) { return selector === '[data-blobstore-action]' ? this : null; },
+    focus() { document.activeElement = this; },
   }));
   const trigger = {
     id: 'blobstore-more-actions-7', isConnected: true,
@@ -30,6 +39,7 @@ function actionHarness() {
     focus() { document.activeElement = this; },
   };
   const document = {
+    body: {},
     activeElement: trigger,
     getElementById: id => id === 'blobstore-action-menu' ? menu : id === 'blobstore-table' ? table : null,
     querySelectorAll: selector => selector.startsWith('#blobstore-action-menu') ? items : [],
@@ -52,8 +62,38 @@ function actionHarness() {
   vm.runInContext(source.slice(
     source.indexOf('document.getElementById("blobstore-table").addEventListener("click", (event) => {\n  const editButton'),
     source.indexOf('document.getElementById("blobstore-action-menu").addEventListener("click"')), context);
-  return { context, menu, trigger, document, attributes, requests, toasts, tableHandlers };
+  vm.runInContext(source.slice(
+    source.indexOf('document.getElementById("blobstore-action-menu").addEventListener("click"'),
+    source.indexOf('document.getElementById("blobstore-action-menu").addEventListener("focusout"')), context);
+  return { context, menu, trigger, document, attributes, requests, toasts, tableHandlers, menuHandlers };
 }
+
+test('canceling Delete from a focused menu item restores focus to the row trigger', () => {
+  const { context, menu, trigger, document, requests, tableHandlers, menuHandlers } = actionHarness();
+  context.confirm = () => false;
+  tableHandlers.keydown({ target: trigger, key: 'ArrowUp', preventDefault() {} });
+  assert.equal(document.activeElement.action, 'delete');
+  menuHandlers.click({ target: document.activeElement });
+  assert.equal(menu.hidden, true);
+  assert.equal(document.activeElement, trigger);
+  assert.equal(requests.length, 0);
+});
+
+test('Check returns focus to its trigger and repository navigation can move it elsewhere', () => {
+  const { context, trigger, document, tableHandlers, menuHandlers } = actionHarness();
+  let checked = false;
+  context.checkBlobStore = () => { checked = true; };
+  tableHandlers.click({ target: trigger, detail: 0 });
+  context.handleBlobStoreActionMenuKeydown({ key: 'ArrowDown', target: document.activeElement, preventDefault() {} });
+  menuHandlers.click({ target: document.activeElement });
+  assert.equal(checked, true);
+  assert.equal(document.activeElement, trigger);
+  const repositoryView = {};
+  context.showBlobStoreRepositories = () => { document.activeElement = repositoryView; };
+  tableHandlers.click({ target: trigger, detail: 0 });
+  menuHandlers.click({ target: document.activeElement });
+  assert.equal(document.activeElement, repositoryView);
+});
 
 test('keyboard-generated trigger clicks focus the first item for arrow navigation and Escape', () => {
   const { context, menu, trigger, document, tableHandlers } = actionHarness();
@@ -100,9 +140,24 @@ test('the blob store action menu groups secondary actions and supports keyboard 
 });
 
 test('each store row keeps Edit visible and moves secondary actions into overflow', () => {
-  const table = { innerHTML: '' };
+  let trigger;
+  const table = {
+    get innerHTML() { return this.html || ''; },
+    set innerHTML(value) {
+      this.html = value;
+      context.document.activeElement = context.document.body;
+      trigger = {
+        id: 'blobstore-more-actions-7',
+        closest() { return this; },
+        focus() { context.document.activeElement = this; },
+      };
+    },
+  };
   const context = {
-    document: { getElementById: id => id === 'blobstore-table' ? table : null },
+    document: {
+      body: {},
+      getElementById: id => id === 'blobstore-table' ? table : id === trigger?.id ? trigger : null,
+    },
     closeBlobStoreActionMenu() {}, updateTableSortHeaders() {}, renderUsageSummary() {},
     filteredBlobStores: () => [{ id: 7, name: 'unused', type: 'file', engine: 'file', path: 'unused' }],
     sortBlobStores: rows => rows, isFileBlobStore: () => true,
@@ -117,6 +172,12 @@ test('each store row keeps Edit visible and moves secondary actions into overflo
   assert.match(table.innerHTML, /edit-blobstore-button[^>]*>Edit<\/button>/);
   assert.match(table.innerHTML, /blobstore-more-actions[^>]*aria-haspopup="menu"/);
   assert.doesNotMatch(table.innerHTML, /store-repositories-button|check-blobstore-button|Delete blob store/);
+  // Health/usage responses replace the table asynchronously after an action.
+  trigger.focus();
+  const previousTrigger = trigger;
+  context.renderBlobStores();
+  assert.notEqual(trigger, previousTrigger);
+  assert.equal(context.document.activeElement, trigger);
 });
 
 test('deletion requires confirmation and sends only the configuration DELETE request', async () => {

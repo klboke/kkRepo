@@ -1494,6 +1494,7 @@ function toggleBlobStoreSort(key) {
 }
 
 function renderBlobStores() {
+  const focusedTriggerId = document.activeElement?.closest?.(".blobstore-more-actions")?.id;
   closeBlobStoreActionMenu();
   updateTableSortHeaders("blobstore", blobStoreSort);
   const filtered = filteredBlobStores();
@@ -1525,6 +1526,7 @@ function renderBlobStores() {
       </tr>
     `;
   }).join("") || '<tr><td colspan="9" class="placeholder">No blob stores found.</td></tr>';
+  if (focusedTriggerId) document.getElementById(focusedTriggerId)?.focus();
 }
 
 function renderCopyableLocation(value, copyLabel) {
@@ -8177,7 +8179,7 @@ document.getElementById("blobstore-action-menu").addEventListener("click", (even
   const id = blobActionMenuStoreId;
   const store = blobStores.find((entry) => String(entry.id) === String(id));
   const action = item.dataset.blobstoreAction;
-  closeBlobStoreActionMenu();
+  closeBlobStoreActionMenu({ restoreFocus: true });
   if (!store) return;
   if (action === "repositories") showBlobStoreRepositories(store.name);
   if (action === "check") checkBlobStore(id, store.name);
