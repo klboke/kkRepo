@@ -1316,8 +1316,7 @@ public class RepositoryService {
         settings.outboundProxyPasswordConfigured(),
         settings.minimumReleaseAgeMinutes(),
         settings.allowedRedirectHosts(),
-        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost(),
-        settings.redirectPolicy());
+        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost());
   }
 
   private static String defaultRemoteUrl(RepositoryFormat format) {
@@ -1356,8 +1355,7 @@ public class RepositoryService {
         settings.outboundProxyPasswordConfigured(),
         settings.minimumReleaseAgeMinutes(),
         settings.allowedRedirectHosts(),
-        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost(),
-        settings.redirectPolicy());
+        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost());
   }
 
   private static ProxySettings withAllowedRedirectHosts(
@@ -1380,25 +1378,10 @@ public class RepositoryService {
         settings.outboundProxyPasswordConfigured(),
         settings.minimumReleaseAgeMinutes(),
         allowedRedirectHosts,
-        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost(),
-        settings.redirectPolicy());
+        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost());
   }
 
   private void validateProxy(ProxySettings settings, RepositoryFormat format) {
-    if (settings.redirectPolicy() != null
-        && !"ALLOWLIST".equals(settings.redirectPolicy())
-        && !"PUBLIC_HTTPS".equals(settings.redirectPolicy())) {
-      throw new RepositoryValidationException("proxy.redirectPolicy must be ALLOWLIST or PUBLIC_HTTPS");
-    }
-    if ("PUBLIC_HTTPS".equals(settings.redirectPolicy())) {
-      if (settings.remoteUrl() == null
-          || !"https".equalsIgnoreCase(java.net.URI.create(settings.remoteUrl()).getScheme())) {
-        throw new RepositoryValidationException("PUBLIC_HTTPS requires an HTTPS upstream");
-      }
-      if (settings.outboundProxyType() != null && !settings.outboundProxyType().isBlank()) {
-        throw new RepositoryValidationException("PUBLIC_HTTPS requires direct outbound transport");
-      }
-    }
     if (settings.remoteUrl() == null || settings.remoteUrl().isBlank()) {
       throw new RepositoryValidationException("proxy.remoteUrl is required");
     }
@@ -1428,6 +1411,14 @@ public class RepositoryService {
           settings.remoteUrl(), "proxy.remoteUrl", outboundProxy != null && outboundProxy.enabled());
     } catch (SecurityValidationException e) {
       throw new RepositoryValidationException(e.getMessage());
+    }
+    if (normalizeAllowedRedirectHosts(settings.allowedRedirectHosts()).contains("*")) {
+      if (!"https".equalsIgnoreCase(java.net.URI.create(settings.remoteUrl()).getScheme())) {
+        throw new RepositoryValidationException("Standalone * requires an HTTPS upstream");
+      }
+      if (outboundProxy != null && outboundProxy.enabled()) {
+        throw new RepositoryValidationException("Standalone * requires direct outbound transport");
+      }
     }
     int minimumReleaseAge = settings.minimumReleaseAgeMinutes() == null
         ? 0
@@ -1463,7 +1454,7 @@ public class RepositoryService {
 
   private static RepositoryValidationException invalidRedirectHost() {
     return new RepositoryValidationException(
-        "proxy.allowedRedirectHosts entries must be exact host names or *.example.com patterns without a scheme, port, or path");
+        "proxy.allowedRedirectHosts entries must be standalone *, exact host names or *.example.com patterns without a scheme, port, or path");
   }
 
   private OutboundProxyConfig validateOutboundProxy(ProxySettings settings) {
@@ -1587,8 +1578,7 @@ public class RepositoryService {
             : incoming.allowedRedirectHosts(),
         incoming.remoteAuthenticationType() == null ? base.remoteAuthenticationType() : incoming.remoteAuthenticationType(),
         incoming.remoteNtlmDomain() == null ? base.remoteNtlmDomain() : blankToNull(incoming.remoteNtlmDomain()),
-        incoming.remoteNtlmHost() == null ? base.remoteNtlmHost() : blankToNull(incoming.remoteNtlmHost()),
-        incoming.redirectPolicy() == null ? base.redirectPolicy() : incoming.redirectPolicy());
+        incoming.remoteNtlmHost() == null ? base.remoteNtlmHost() : blankToNull(incoming.remoteNtlmHost()));
   }
 
   private static String mergedOutboundProxyPassword(ProxySettings base, ProxySettings incoming) {
@@ -1623,7 +1613,6 @@ public class RepositoryService {
 
   private static Map<String, Object> proxyAttributes(ProxySettings proxy) {
     Map<String, Object> map = new LinkedHashMap<>();
-    if (proxy.redirectPolicy() != null) map.put("redirectPolicy", proxy.redirectPolicy());
     map.put("remoteUrl", proxy.remoteUrl());
     if (proxy.contentMaxAgeMinutes() != null) map.put("contentMaxAgeMinutes", proxy.contentMaxAgeMinutes());
     if (proxy.metadataMaxAgeMinutes() != null) map.put("metadataMaxAgeMinutes", proxy.metadataMaxAgeMinutes());
@@ -2090,8 +2079,7 @@ public class RepositoryService {
         stringList(proxyMap.get("allowedRedirectHosts")),
         stringOrNull(proxyMap.get("remoteAuthenticationType")),
         stringOrNull(proxyMap.get("remoteNtlmDomain")),
-        stringOrNull(proxyMap.get("remoteNtlmHost")),
-        stringOrNull(proxyMap.get("redirectPolicy")));
+        stringOrNull(proxyMap.get("remoteNtlmHost")));
   }
 
   private static ProxySettings readProxyAttributesOrDefaults(RepositoryRecord record) {
@@ -2118,8 +2106,7 @@ public class RepositoryService {
         outboundPassword != null && !outboundPassword.isBlank(),
         effective.minimumReleaseAgeMinutes() == null ? 0 : effective.minimumReleaseAgeMinutes(),
         effective.allowedRedirectHosts() == null ? List.of() : effective.allowedRedirectHosts(),
-        effective.remoteAuthenticationType(), effective.remoteNtlmDomain(), effective.remoteNtlmHost(),
-        effective.redirectPolicy() == null ? "ALLOWLIST" : effective.redirectPolicy());
+        effective.remoteAuthenticationType(), effective.remoteNtlmDomain(), effective.remoteNtlmHost());
   }
 
   private static String stringOrNull(Object value) {

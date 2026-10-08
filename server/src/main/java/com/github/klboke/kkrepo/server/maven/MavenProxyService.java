@@ -172,7 +172,7 @@ public class MavenProxyService {
     HttpRemoteFetcher.Request req = new HttpRemoteFetcher.Request(
         url, etag, lastModified, null, headOnly)
         .withTimeoutProfile(mavenTimeoutProfile(path))
-        .withRepository(runtime);
+        .withRepositoryForContent(runtime);
     try {
       return fetcher.fetchWithBodyRetry(req, path.path(), result -> {
         int status = result.status();

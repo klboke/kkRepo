@@ -513,7 +513,7 @@ public class HttpRemoteFetcher {
 
     /** Authorizes a metadata-selected URL while retaining credentials only for the configured origin. */
     public Request withRepositoryRedirectBoundary(RepositoryRuntime runtime) {
-      Request configured = withRepository(runtime);
+      Request configured = withRepositoryForContent(runtime);
       URI target = URI.create(url);
       if (configured.trustedHost() == null && !runtime.allowsRedirectHost(target.getHost())
           && configured.redirectPolicy() != com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS) {
@@ -548,12 +548,19 @@ public class HttpRemoteFetcher {
     /** Creates a read-only POST request, used by Hub paths-info. */
     public Request withBody(String contentType, byte[] body) {
       if (body == null) throw new IllegalArgumentException("Request body is required");
-      if (redirectPolicy == com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS) {
-        throw new IllegalArgumentException("PUBLIC_HTTPS supports content GET/HEAD only");
+      if (redirectPolicy == com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS
+          && repositoryOrigin != null && !isRepositoryOrigin(URI.create(url))
+          && !RedirectHosts.matches(allowedUnsignedRedirectHosts, URI.create(url).getHost())) {
+        throw new SecurityValidationException("POST URL is outside the strict repository redirect boundary");
       }
       return new Request(url, etag, lastModified, timeout, timeoutProfile, false,
           repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts,
           outboundProxy, accept, body, contentType, ntlmCredentials, repositoryOrigin);
+    }
+
+    /** Explicitly retains exact/domain rules for authentication and discovery GET requests. */
+    public Request withRepositoryForAuthentication(RepositoryRuntime runtime) {
+      return withRepository(runtime);
     }
 
     public Request withRepository(RepositoryRuntime runtime) {
@@ -561,6 +568,19 @@ public class HttpRemoteFetcher {
     }
 
     public Request withRepository(RepositoryRuntime runtime, boolean includeAuthorization) {
+      return configureRepository(runtime, includeAuthorization, false);
+    }
+
+    /** Only content-download call sites can opt into the standalone star transport. */
+    public Request withRepositoryForContent(RepositoryRuntime runtime) {
+      return withRepositoryForContent(runtime, true);
+    }
+
+    public Request withRepositoryForContent(RepositoryRuntime runtime, boolean includeAuthorization) {
+      return configureRepository(runtime, includeAuthorization, true);
+    }
+
+    private Request configureRepository(RepositoryRuntime runtime, boolean includeAuthorization, boolean content) {
       String trusted = trustedRemoteHost(url, runtime);
       return new Request(
           url,
@@ -573,13 +593,13 @@ public class HttpRemoteFetcher {
           runtime == null || runtime.format() == null ? null : runtime.format().name(),
           trusted,
           includeAuthorization && trusted != null ? remoteAuthorizationHeader(runtime) : null,
-          runtime == null ? Set.of() : runtime.allowedRedirectHosts(),
+          runtime == null ? Set.of() : runtime.strictRedirectHosts(),
           runtime == null ? null : runtime.outboundProxy(),
           accept,
           requestBody,
           requestContentType,
           includeAuthorization && trusted != null ? runtime.ntlmCredentials() : null, null,
-          runtime != null && requestBody == null ? runtime.redirectPolicy() : null);
+          content && runtime != null && requestBody == null ? runtime.contentRedirectPolicy() : null);
     }
 
     public Request withRepositoryAllowingUnsignedRedirects(
@@ -612,7 +632,7 @@ public class HttpRemoteFetcher {
           requestBody,
           requestContentType,
           includeAuthorization && trusted != null ? runtime.ntlmCredentials() : null, null,
-          runtime != null && requestBody == null ? runtime.redirectPolicy() : null);
+          runtime != null && requestBody == null ? runtime.contentRedirectPolicy() : null);
     }
 
     public String method() {

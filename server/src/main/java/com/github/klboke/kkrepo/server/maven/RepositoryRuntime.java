@@ -44,25 +44,7 @@ public record RepositoryRuntime(
     OutboundProxyConfig outboundProxy,
     Integer minimumReleaseAgeMinutes,
     Set<String> allowedRedirectHosts,
-    NtlmCredentials ntlmCredentials,
-    com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy redirectPolicy) {
-  /** Existing runtime snapshots retain the strict redirect default. */
-  public RepositoryRuntime(
-      long id, String name, RepositoryFormat format, RepositoryType type, String recipeName,
-      boolean online, Long blobStoreId, String writePolicy, String versionPolicy, String layoutPolicy,
-      boolean strictContentTypeValidation, String proxyRemoteUrl, Integer contentMaxAgeMinutes,
-      Integer metadataMaxAgeMinutes, Boolean autoBlock, String proxyRemoteUsername,
-      String proxyRemotePassword, String proxyRemoteBearerToken, String rawContentDisposition,
-      Boolean dockerConnectorEnabled, Integer dockerConnectorPort, String dockerConnectorPublicUrl,
-      Boolean cargoRequireAuthentication, List<RepositoryRuntime> members, OutboundProxyConfig outboundProxy,
-      Integer minimumReleaseAgeMinutes, Set<String> allowedRedirectHosts, NtlmCredentials ntlmCredentials) {
-    this(id, name, format, type, recipeName, online, blobStoreId, writePolicy, versionPolicy,
-        layoutPolicy, strictContentTypeValidation, proxyRemoteUrl, contentMaxAgeMinutes,
-        metadataMaxAgeMinutes, autoBlock, proxyRemoteUsername, proxyRemotePassword, proxyRemoteBearerToken,
-        rawContentDisposition, dockerConnectorEnabled, dockerConnectorPort, dockerConnectorPublicUrl,
-        cargoRequireAuthentication, members, outboundProxy, minimumReleaseAgeMinutes,
-        allowedRedirectHosts, ntlmCredentials, null);
-  }
+    NtlmCredentials ntlmCredentials) {
   /** Compatibility constructor for callers that predate upstream NTLM authentication. */
   public RepositoryRuntime(
       long id,
@@ -100,13 +82,6 @@ public record RepositoryRuntime(
   }
 
   public RepositoryRuntime {
-    redirectPolicy = redirectPolicy == null
-        ? com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.ALLOWLIST : redirectPolicy;
-    if (redirectPolicy == com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS
-        && (proxyRemoteUrl == null || !"https".equalsIgnoreCase(java.net.URI.create(proxyRemoteUrl).getScheme())
-            || (outboundProxy != null && outboundProxy.enabled()))) {
-      throw new IllegalArgumentException("PUBLIC_HTTPS requires an HTTPS upstream and direct outbound transport");
-    }
     if (allowedRedirectHosts == null || allowedRedirectHosts.isEmpty()) {
       allowedRedirectHosts = Set.of();
     } else {
@@ -115,10 +90,15 @@ public record RepositoryRuntime(
         try {
           normalized.add(RedirectHosts.normalizeRule(host));
         } catch (IllegalArgumentException ignored) {
-          // Invalid persisted rules fail closed, including the protocol-only unrestricted "*".
+          // Invalid persisted rules fail closed.
         }
       }
       allowedRedirectHosts = Set.copyOf(normalized);
+    }
+    if (allowedRedirectHosts.contains("*")
+        && (proxyRemoteUrl == null || !"https".equalsIgnoreCase(java.net.URI.create(proxyRemoteUrl).getScheme())
+            || (outboundProxy != null && outboundProxy.enabled()))) {
+      throw new IllegalArgumentException("Standalone * requires an HTTPS upstream and direct outbound transport");
     }
   }
 
@@ -510,12 +490,36 @@ public record RepositoryRuntime(
         && minimumReleaseAgeMinutesOrDefault() > 0;
   }
 
+  /** Derived from the existing persisted allowlist; not a separate configuration property. */
+  public com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy contentRedirectPolicy() {
+    return allowedRedirectHosts.contains("*")
+        ? com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS
+        : com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.ALLOWLIST;
+  }
+
+  public Set<String> strictRedirectHosts() {
+    return allowedRedirectHosts.stream().filter(host -> !"*".equals(host))
+        .collect(java.util.stream.Collectors.toUnmodifiableSet());
+  }
+
+  /** Authentication and discovery never inherit the content-only standalone star. */
+  public RepositoryRuntime withoutPublicContentRedirects() {
+    return new RepositoryRuntime(
+        id, name, format, type,
+        recipeName, online, blobStoreId, writePolicy,
+        versionPolicy, layoutPolicy, strictContentTypeValidation, proxyRemoteUrl,
+        contentMaxAgeMinutes, metadataMaxAgeMinutes, autoBlock, proxyRemoteUsername,
+        proxyRemotePassword, proxyRemoteBearerToken, rawContentDisposition, dockerConnectorEnabled,
+        dockerConnectorPort, dockerConnectorPublicUrl, cargoRequireAuthentication, members,
+        outboundProxy, minimumReleaseAgeMinutes, strictRedirectHosts(), ntlmCredentials);
+  }
+
   /** Combines operator-configured hosts with protocol-owned redirect destinations. */
   public Set<String> allowedRedirectHostsWith(Set<String> protocolRedirectHosts) {
     if (protocolRedirectHosts == null || protocolRedirectHosts.isEmpty()) {
-      return allowedRedirectHosts;
+      return strictRedirectHosts();
     }
-    LinkedHashSet<String> merged = new LinkedHashSet<>(allowedRedirectHosts);
+    LinkedHashSet<String> merged = new LinkedHashSet<>(strictRedirectHosts());
     for (String host : protocolRedirectHosts) {
       String value = normalizeRedirectHost(host);
       if (!value.isBlank()) merged.add(value);

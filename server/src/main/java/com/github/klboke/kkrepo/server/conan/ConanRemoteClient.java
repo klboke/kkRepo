@@ -34,7 +34,7 @@ final class ConanRemoteClient {
   }
 
   Discovery discovery(RepositoryRuntime runtime, String rawPath, String rawQuery) {
-    RepositoryRuntime authenticated = authenticatedRuntime(runtime, false);
+    RepositoryRuntime authenticated = authenticatedRuntime(runtime, false).withoutPublicContentRedirects();
     String url = RemoteUrlBuilder.repositoryPathWithQueryString(
         runtime.proxyRemoteUrl(), rawPath, rawQuery);
     String cachePath = ".conan/discovery/" + HexFormat.of().formatHex(
@@ -42,11 +42,16 @@ final class ConanRemoteClient {
     MavenResponse response;
     try {
       response = proxy.getMetadataFromUrlHidden(authenticated, cachePath, url, false);
-    } catch (RuntimeException first) {
+    } catch (com.github.klboke.kkrepo.server.maven.MavenExceptions.UpstreamUnauthorizedException first) {
       if (!hasBasicCredential(runtime)) throw first;
       invalidateToken(runtime);
-      response = proxy.getMetadataFromUrlHidden(
-          authenticatedRuntime(runtime, true), cachePath, url, false);
+      try {
+        response = proxy.getMetadataFromUrlHidden(
+            authenticatedRuntime(runtime, true).withoutPublicContentRedirects(), cachePath, url, false);
+      } catch (RuntimeException retryFailure) {
+        if (retryFailure != first) retryFailure.addSuppressed(first);
+        throw retryFailure;
+      }
     }
     try (InputStream body = response.body()) {
       if (body == null || response.contentLength() > MAX_DISCOVERY_BYTES) {
@@ -68,14 +73,14 @@ final class ConanRemoteClient {
     HttpRemoteFetcher.Result response = fetcher.fetch(
         HttpRemoteFetcher.Request.get(url)
             .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
-            .withRepository(authenticated));
+            .withRepositoryForContent(authenticated));
     if (response.status() != 401 || !hasBasicCredential(runtime)) return response;
     response.close();
     invalidateToken(runtime);
     return fetcher.fetch(
         HttpRemoteFetcher.Request.get(url)
             .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
-            .withRepository(authenticatedRuntime(runtime, true)));
+            .withRepositoryForContent(authenticatedRuntime(runtime, true)));
   }
 
   private RepositoryRuntime authenticatedRuntime(RepositoryRuntime runtime, boolean force) {
@@ -91,7 +96,7 @@ final class ConanRemoteClient {
         null, null, token, runtime.rawContentDisposition(), runtime.dockerConnectorEnabled(),
         runtime.dockerConnectorPort(), runtime.dockerConnectorPublicUrl(),
         runtime.cargoRequireAuthentication(), runtime.members(), runtime.outboundProxy(),
-        runtime.minimumReleaseAgeMinutes());
+        runtime.minimumReleaseAgeMinutes(), runtime.allowedRedirectHosts(), runtime.ntlmCredentials());
   }
 
   private String exchange(RepositoryRuntime runtime) {
@@ -100,7 +105,7 @@ final class ConanRemoteClient {
     try (HttpRemoteFetcher.Result response = fetcher.fetch(
         HttpRemoteFetcher.Request.get(url)
             .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.METADATA)
-            .withRepository(runtime))) {
+            .withRepositoryForAuthentication(runtime))) {
       if (response.status() < 200 || response.status() >= 300) {
         throw new ConanExceptions.BadUpstream(
             "Conan upstream authentication returned " + response.status());

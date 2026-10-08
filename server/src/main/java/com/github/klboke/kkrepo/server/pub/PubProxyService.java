@@ -252,7 +252,7 @@ public class PubProxyService {
         null,
         false)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.METADATA)
-        .withRepository(runtime);
+        .withRepositoryForContent(runtime);
     try {
       return fetcher.fetchWithBodyRetry(req, path, result -> {
         int status = result.status();

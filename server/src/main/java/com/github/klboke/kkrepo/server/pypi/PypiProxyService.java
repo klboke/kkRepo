@@ -143,7 +143,7 @@ public class PypiProxyService {
     HttpRemoteFetcher.Request req = new HttpRemoteFetcher.Request(
         url, etag, lastModified, null, false)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.METADATA)
-        .withRepository(runtime);
+        .withRepositoryForContent(runtime);
     try {
       return fetcher.fetchWithBodyRetry(req, path, result -> {
         int status = result.status();
@@ -212,7 +212,7 @@ public class PypiProxyService {
     HttpRemoteFetcher.Request req = new HttpRemoteFetcher.Request(
         url, etag, lastModified, null, false)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
-        .withRepository(runtime);
+        .withRepositoryForContent(runtime);
     try {
       return fetcher.fetchWithBodyRetry(req, path, result -> {
         int status = result.status();
@@ -330,7 +330,7 @@ public class PypiProxyService {
     HttpRemoteFetcher.Request req = HttpRemoteFetcher.Request.get(
         buildRemoteUrl(runtime.proxyRemoteUrl(), upstreamIndexPath))
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.METADATA)
-        .withRepository(runtime);
+        .withRepositoryForContent(runtime);
     try {
       return fetcher.fetchWithBodyRetry(req, path, result -> {
         if (result.status() == 404 || result.status() == 410) {

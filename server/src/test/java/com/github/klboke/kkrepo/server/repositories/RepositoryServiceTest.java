@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.repositories;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -55,45 +56,43 @@ import org.junit.jupiter.api.Test;
 class RepositoryServiceTest {
 
   @Test
-  void publicHttpsPolicyRoundTripsPreservesPartialUpdatesAndCanBeDisabled() throws Exception {
-    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
-    RepositoryService service = service(repositories);
+  void standaloneStarRoundTripsAcrossReplicasAndPartialUpdatesAndCanBeRemoved() throws Exception {
+    var repositories = new StubRepositoryDao(repository(1L));
+    var service = service(repositories);
     var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-    ProxySettings settings = mapper.readValue("""
-        {"remoteUrl":"https://registry.npmjs.org","redirectPolicy":"PUBLIC_HTTPS",
-         "allowedRedirectHosts":["cdn.example.org"]}
+    var settings = mapper.readValue("""
+        {"remoteUrl":"https://registry.npmjs.org","allowedRedirectHosts":["*","cdn.example.org","*.example.net"]}
         """, ProxySettings.class);
     var created = service.create(new CreateCommand("public-https", "npm-proxy", true,
         "default", true, null, settings, null, null, null, null));
-    assertEquals("PUBLIC_HTTPS", created.proxy().redirectPolicy());
-    assertEquals("PUBLIC_HTTPS", ((Map<?, ?>) repositories.repository.attributes().get("proxy")).get("redirectPolicy"));
+    assertEquals(List.of("*", "cdn.example.org", "*.example.net"), created.proxy().allowedRedirectHosts());
+    assertFalse(mapper.writeValueAsString(created.proxy()).contains("redirectPolicy"));
     var runtime = new RepositoryRuntimeRegistry(repositories, 0).resolve("public-https").orElseThrow();
-    assertEquals(com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS, runtime.redirectPolicy());
+    assertEquals(com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS, runtime.contentRedirectPolicy());
     var runtimeMapper = new com.fasterxml.jackson.databind.ObjectMapper()
         .configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
-    assertEquals(runtime.redirectPolicy(), runtimeMapper.readValue(runtimeMapper.writeValueAsString(runtime),
-        com.github.klboke.kkrepo.server.maven.RepositoryRuntime.class).redirectPolicy());
+    String snapshot = runtimeMapper.writeValueAsString(runtime);
+    assertFalse(snapshot.contains("redirectPolicy"));
+    assertEquals(runtime.contentRedirectPolicy(), runtimeMapper.readValue(snapshot,
+        com.github.klboke.kkrepo.server.maven.RepositoryRuntime.class).contentRedirectPolicy());
     var anotherReplica = new RepositoryRuntimeRegistry(repositories, 0);
-    assertEquals(runtime.redirectPolicy(), anotherReplica.resolve("public-https").orElseThrow().redirectPolicy());
+    assertEquals(runtime.contentRedirectPolicy(), anotherReplica.resolve("public-https").orElseThrow().contentRedirectPolicy());
     var preserved = service.update("public-https", new UpdateCommand(true, null, null, null,
         new ProxySettings(null, null, null, null), null, null, null, null));
-    assertEquals("PUBLIC_HTTPS", preserved.proxy().redirectPolicy());
+    assertEquals(created.proxy().allowedRedirectHosts(), preserved.proxy().allowedRedirectHosts());
     var disabled = service.update("public-https", new UpdateCommand(true, null, null, null,
-        mapper.readValue("{\"redirectPolicy\":\"ALLOWLIST\"}", ProxySettings.class),
-        null, null, null, null));
-    assertEquals("ALLOWLIST", disabled.proxy().redirectPolicy());
+        mapper.readValue("{\"allowedRedirectHosts\":[\"cdn.example.org\"]}", ProxySettings.class), null, null, null, null));
     assertEquals(List.of("cdn.example.org"), disabled.proxy().allowedRedirectHosts());
     assertEquals(com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.ALLOWLIST,
-        anotherReplica.resolve("public-https").orElseThrow().redirectPolicy());
+        anotherReplica.resolve("public-https").orElseThrow().contentRedirectPolicy());
   }
 
   @Test
-  void publicHttpsRepositoryRejectsUnknownPolicyHttpAndDnsResolvingProxy() throws Exception {
+  void standaloneStarRejectsHttpAndDnsResolvingProxies() throws Exception {
     var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
     for (String settings : List.of(
-        "{\"remoteUrl\":\"https://registry.npmjs.org\",\"redirectPolicy\":\"unknown\"}",
-        "{\"remoteUrl\":\"http://127.0.0.1\",\"redirectPolicy\":\"PUBLIC_HTTPS\"}",
-        "{\"remoteUrl\":\"https://registry.npmjs.org\",\"redirectPolicy\":\"PUBLIC_HTTPS\","
+        "{\"remoteUrl\":\"http://127.0.0.1\",\"allowedRedirectHosts\":[\"*\"]}",
+        "{\"remoteUrl\":\"https://registry.npmjs.org\",\"allowedRedirectHosts\":[\"*\"],"
             + "\"outboundProxyType\":\"HTTP\",\"outboundProxyHost\":\"proxy.example\",\"outboundProxyPort\":3128}")) {
       var service = service(new StubRepositoryDao(repository(1L)));
       var proxy = mapper.readValue(settings, ProxySettings.class);
@@ -1014,7 +1013,7 @@ class RepositoryServiceTest {
         "https://plugins-artifacts.gradle.org",
         "plugins-artifacts.gradle.org:443",
         "plugins-artifacts.gradle.org/files",
-        "*", "cdn*.quay.io", "*.*.quay.io", "*.io", "*.127.0.0.1")) {
+        "cdn*.quay.io", "*.*.quay.io", "*.io", "*.127.0.0.1")) {
       RepositoryValidationException error = assertThrows(
           RepositoryValidationException.class,
           () -> service.create(new CreateCommand(
@@ -1030,7 +1029,7 @@ class RepositoryServiceTest {
               null,
               null)));
       assertEquals(
-          "proxy.allowedRedirectHosts entries must be exact host names or *.example.com patterns without a scheme, port, or path",
+          "proxy.allowedRedirectHosts entries must be standalone *, exact host names or *.example.com patterns without a scheme, port, or path",
           error.getMessage());
     }
   }
@@ -1057,7 +1056,7 @@ class RepositoryServiceTest {
               null,
               null)));
       assertEquals(
-          "proxy.allowedRedirectHosts entries must be exact host names or *.example.com patterns without a scheme, port, or path",
+          "proxy.allowedRedirectHosts entries must be standalone *, exact host names or *.example.com patterns without a scheme, port, or path",
           error.getMessage());
     }
 

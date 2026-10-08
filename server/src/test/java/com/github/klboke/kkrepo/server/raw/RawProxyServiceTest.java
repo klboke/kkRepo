@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
@@ -335,6 +336,22 @@ class RawProxyServiceTest {
       assertEquals(502, response.getStatusCode().value());
       assertEquals("Upstream temporarily blocked", response.getBody().get("message"));
     }
+  }
+
+  @Test
+  void upstreamUnauthorizedIsExplicitlyTypedForConanRefresh() throws Exception {
+    Fixture fixture = fixture();
+    doAnswer(invocation -> {
+      HttpRemoteFetcher.ResultHandler<?> handler = invocation.getArgument(2);
+      return handler.handle(new HttpRemoteFetcher.Result(401, Map.of(), new ByteArrayInputStream(new byte[0])));
+    }).when(fixture.fetcher).fetchWithBodyRetry(any(), any(String.class), any());
+    var error = assertThrows(MavenExceptions.UpstreamUnauthorizedException.class,
+        () -> fixture.service.getMetadataFromUrlHidden(new RepositoryRuntime(
+            10L, "conan-proxy", RepositoryFormat.CONAN, RepositoryType.PROXY, "conan-proxy",
+            true, 1L, null, null, null, true, "https://repo.example", 1440, 60, true, null, List.of()),
+            ".conan/discovery/search.json", "https://repo.example/search", false));
+    assertEquals("Upstream returned 401", error.getMessage());
+    verify(fixture.proxyStateDao, never()).recordFailure(anyLong(), anyLong(), any(), any());
   }
 
   @Test

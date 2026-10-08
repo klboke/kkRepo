@@ -321,7 +321,7 @@ public class RawProxyService {
     HttpRemoteFetcher.Request req = new HttpRemoteFetcher.Request(
         remoteUrl, etag, lastModified, null, false)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
-        .withRepository(runtime);
+        .withRepositoryForContent(runtime);
     return fetchAndCache(
         runtime, path, sourceFingerprint, cached, headOnly, now, req,
         ComponentBinding.perAsset(), path);
@@ -363,7 +363,7 @@ public class RawProxyService {
     return new HttpRemoteFetcher.Request(
         remoteUrl, etag, lastModified, null, false)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
-        .withRepository(runtime);
+        .withRepositoryForContent(runtime);
   }
 
   private MavenResponse fetchAndCache(
@@ -479,6 +479,11 @@ public class RawProxyService {
       boolean headOnly,
       String error,
       Instant now) {
+    // Conan's bounded credential refresh owns an uncached 401; do not open the repository
+    // circuit breaker before that expected authentication retry can run.
+    if (runtime.format() == RepositoryFormat.CONAN && cached.isEmpty() && "Upstream returned 401".equals(error)) {
+      throw new MavenExceptions.UpstreamUnauthorizedException();
+    }
     int failCount = proxyStateDao.loadState(runtime.id())
         .map(ProxyStateDao.ProxyRemoteState::failCount).orElse(0);
     long block = runtime.autoBlockOrDefault()

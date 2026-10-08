@@ -19,20 +19,22 @@ class RepositoryRuntimeTest {
     for (String url : new String[] {null, "http://repo.example", "ftp://repo.example"}) {
       var error = assertThrows(IllegalArgumentException.class,
           () -> redirectRuntime(url, null, ProxyRedirectPolicy.PUBLIC_HTTPS));
-      assertEquals("PUBLIC_HTTPS requires an HTTPS upstream and direct outbound transport", error.getMessage());
+      assertEquals("Standalone * requires an HTTPS upstream and direct outbound transport", error.getMessage());
     }
     for (var type : OutboundProxyConfig.Type.values()) {
       var proxy = new OutboundProxyConfig(type, "proxy.example", 8080, null, null);
       assertThrows(IllegalArgumentException.class,
           () -> redirectRuntime("https://repo.example", proxy, ProxyRedirectPolicy.PUBLIC_HTTPS));
       assertEquals(ProxyRedirectPolicy.ALLOWLIST,
-          redirectRuntime("http://repo.example", proxy, null).redirectPolicy());
+          redirectRuntime("http://repo.example", proxy, null).contentRedirectPolicy());
     }
-    assertEquals(ProxyRedirectPolicy.PUBLIC_HTTPS,
-        redirectRuntime("HTTPS://repo.example", null, ProxyRedirectPolicy.PUBLIC_HTTPS).redirectPolicy());
+    var publicRuntime = redirectRuntime("HTTPS://repo.example", null, ProxyRedirectPolicy.PUBLIC_HTTPS);
+    assertEquals(ProxyRedirectPolicy.PUBLIC_HTTPS, publicRuntime.contentRedirectPolicy());
+    assertEquals(Set.of(), publicRuntime.allowedRedirectHostsWith(Set.of()));
+    assertEquals(Set.of(), publicRuntime.allowedRedirectHostsWith(null));
     var disabled = new OutboundProxyConfig(null, "", 0, null, null);
     assertEquals(ProxyRedirectPolicy.PUBLIC_HTTPS,
-        redirectRuntime("https://repo.example", disabled, ProxyRedirectPolicy.PUBLIC_HTTPS).redirectPolicy());
+        redirectRuntime("https://repo.example", disabled, ProxyRedirectPolicy.PUBLIC_HTTPS).contentRedirectPolicy());
   }
 
   private static RepositoryRuntime redirectRuntime(
@@ -40,7 +42,7 @@ class RepositoryRuntimeTest {
     return new RepositoryRuntime(1L, "proxy", RepositoryFormat.MAVEN2, RepositoryType.PROXY,
         "maven2-proxy", true, 1L, null, "MIXED", "PERMISSIVE", true, remoteUrl,
         1440, 1440, false, null, null, null, null, false, null, null, false,
-        List.of(), proxy, null, Set.of(), null, policy);
+        List.of(), proxy, null, policy == ProxyRedirectPolicy.PUBLIC_HTTPS ? Set.of("*") : Set.of(), null);
   }
 
   @Test

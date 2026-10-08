@@ -16,8 +16,6 @@ class JacksonRuntimeHintsTest {
     ClassLoader classLoader = getClass().getClassLoader();
     RuntimeHints hints = new RuntimeHints();
     new JacksonRuntimeHints().registerHints(hints, classLoader);
-    assertTrue(hints.reflection().getTypeHint(
-        com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.class) != null);
 
     for (String typeName : JacksonRuntimeHints.BINDING_TYPES) {
       Class<?> type = ClassUtils.resolveClassName(typeName, classLoader);

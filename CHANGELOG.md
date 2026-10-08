@@ -8,7 +8,7 @@ This project follows a pragmatic release process. Stable releases call out migra
 
 ### Added
 
-- Proxy repositories can opt into `proxy.redirectPolicy=PUBLIC_HTTPS` for direct public HTTPS content downloads without listing CDN hosts individually. The existing `ALLOWLIST` policy remains the default. API and admin controls retain host rules, reject downgrades and DNS-resolving outbound proxies, independently validate and pin public destinations, and isolate credentials and pooled cookies. (#384)
+- Proxy repositories can opt into public HTTPS content GET/HEAD redirects with a standalone `*` in `proxy.allowedRedirectHosts`. The existing editor, exact/domain rules and strict default remain. Public-address validation, DNS pinning, TLS, downgrade rejection and credential/cookie isolation are enforced independently; POST and authentication exchanges retain strict rules, including Hugging Face and Conan integration paths. (#384)
 
 ## 1.2.1 - 2026-10-04
 

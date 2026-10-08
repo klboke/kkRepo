@@ -69,7 +69,7 @@ class DockerRemoteRegistryClientTest {
     when(runtime.proxyRemoteUrl()).thenReturn("https://registry.example.org");
     when(runtime.proxyRemoteUsername()).thenReturn("robot");
     when(runtime.proxyRemotePassword()).thenReturn("secret");
-    when(runtime.redirectPolicy()).thenReturn(
+    when(runtime.contentRedirectPolicy()).thenReturn(
         com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS);
     var client = new DockerRemoteRegistryClient(null, policy, null, true, 300, null, transport);
     try (var result = client.get(runtime, "library/test/blobs/sha256:abc", "application/octet-stream")) {
@@ -99,7 +99,7 @@ class DockerRemoteRegistryClientTest {
     when(runtime.name()).thenReturn("docker-proxy");
     when(runtime.proxyRemoteUrl()).thenReturn("https://registry.example.org");
     when(runtime.allowedRedirectHosts()).thenReturn(Set.of("changing.example.org"));
-    when(runtime.redirectPolicy()).thenReturn(
+    when(runtime.contentRedirectPolicy()).thenReturn(
         com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS);
     var client = new DockerRemoteRegistryClient(null, policy, null, true, 300, null, transport);
     assertThrows(SecurityValidationException.class,
@@ -125,7 +125,7 @@ class DockerRemoteRegistryClientTest {
     var runtime = mock(RepositoryRuntime.class);
     when(runtime.name()).thenReturn("docker-proxy");
     when(runtime.proxyRemoteUrl()).thenReturn("https://registry.example");
-    when(runtime.redirectPolicy()).thenReturn(
+    when(runtime.contentRedirectPolicy()).thenReturn(
         com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS);
     var client = new DockerRemoteRegistryClient(null, policy, null, true, 300, null, transport);
     var error = assertThrows(IOException.class,

@@ -79,10 +79,10 @@ class HttpRemoteFetcherTest {
     var ntlm = new com.github.klboke.kkrepo.server.proxy.NtlmCredentials("robot", "secret", "domain", "host");
     when(runtime.ntlmCredentials()).thenReturn(ntlm);
     when(runtime.allowedRedirectHosts()).thenReturn(Set.of());
-    when(runtime.redirectPolicy()).thenReturn(
+    when(runtime.contentRedirectPolicy()).thenReturn(
         com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS);
     var request = HttpRemoteFetcher.Request.get("https://repo.example.com/file")
-        .withRepository(runtime).withAccept("application/octet-stream")
+        .withRepositoryForContent(runtime).withAccept("application/octet-stream")
         .withConditional("etag", null).withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.METADATA);
     URI origin = URI.create(request.url());
     URI cdn = URI.create("https://rotating.example.org/file");
@@ -95,14 +95,27 @@ class HttpRemoteFetcherTest {
     var metadata = HttpRemoteFetcher.Request.get(cdn.toString()).withRepositoryRedirectBoundary(runtime);
     assertNull(metadata.authorizationHeader());
     assertEquals(request.redirectPolicy(), metadata.redirectPolicy());
-    assertThrows(IllegalArgumentException.class,
-        () -> request.withBody("application/json", "{}".getBytes(StandardCharsets.UTF_8)));
-    assertThrows(IllegalArgumentException.class,
+    assertEquals(com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.ALLOWLIST,
+        request.withBody("application/json", "{}".getBytes(StandardCharsets.UTF_8)).redirectPolicy());
+    assertThrows(SecurityValidationException.class,
         () -> metadata.withBody("application/json", "{}".getBytes(StandardCharsets.UTF_8)));
     assertEquals(com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.ALLOWLIST,
         HttpRemoteFetcher.Request.get("https://repo.example.com/file")
             .withBody("application/json", "{}".getBytes(StandardCharsets.UTF_8))
-            .withRepository(runtime).redirectPolicy());
+            .withRepositoryForContent(runtime).redirectPolicy());
+  }
+
+  @Test
+  void repositoryConfigurationAloneDoesNotGrantContentAuthorityToUnknownGetPurpose() {
+    var runtime = mock(RepositoryRuntime.class);
+    when(runtime.proxyRemoteUrl()).thenReturn("https://repo.example");
+    when(runtime.contentRedirectPolicy()).thenReturn(com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS);
+    when(runtime.strictRedirectHosts()).thenReturn(Set.of("cdn.example"));
+    var unknown = HttpRemoteFetcher.Request.get("https://repo.example/authenticate").withRepository(runtime);
+    assertEquals(com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.ALLOWLIST, unknown.redirectPolicy());
+    assertEquals(Set.of("cdn.example"), unknown.allowedUnsignedRedirectHosts());
+    assertThrows(SecurityValidationException.class, () -> unknown.trustedHostForRedirect(
+        URI.create(unknown.url()), URI.create("https://unlisted.example/token")));
   }
 
   @Test
@@ -113,10 +126,10 @@ class HttpRemoteFetcherTest {
     when(policy.resolvePublicHttpsTarget("https://cdn.example.org/file", "content")).thenReturn(target);
     var runtime = mock(RepositoryRuntime.class);
     when(runtime.allowedRedirectHosts()).thenReturn(Set.of());
-    when(runtime.redirectPolicy()).thenReturn(
+    when(runtime.contentRedirectPolicy()).thenReturn(
         com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS);
     var request = HttpRemoteFetcher.Request.get("https://cdn.example.org/file")
-        .withRepository(runtime, false);
+        .withRepositoryForContent(runtime, false);
     assertSame(target, request.resolvedTarget(policy, "content"));
     verify(policy).resolvePublicHttpsTarget("https://cdn.example.org/file", "content");
   }
@@ -140,9 +153,9 @@ class HttpRemoteFetcherTest {
     when(runtime.proxyRemoteUrl()).thenReturn("https://repo.example.com");
     when(runtime.proxyRemoteBearerToken()).thenReturn("test-token");
     when(runtime.allowedRedirectHosts()).thenReturn(Set.of());
-    when(runtime.redirectPolicy()).thenReturn(
+    when(runtime.contentRedirectPolicy()).thenReturn(
         com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS);
-    var request = HttpRemoteFetcher.Request.get("https://repo.example.com/file").withRepository(runtime);
+    var request = HttpRemoteFetcher.Request.get("https://repo.example.com/file").withRepositoryForContent(runtime);
     var fetcher = new HttpRemoteFetcher(policy, null, transport, "HTTP_1_1", 30, 60, 300, 0, 0);
     try (var result = fetcher.fetch(request)) {
       assertEquals("artifact", new String(result.body().readAllBytes(), StandardCharsets.UTF_8));
