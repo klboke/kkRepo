@@ -11,6 +11,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.argThat;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao.BlobStoreUsage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao;
@@ -61,6 +62,7 @@ class BlobStoresControllerTest {
         "Blob store is still used by a repository")).when(service).deleteEmpty(8);
     mvc.perform(delete("/internal/blob-stores/8"))
         .andExpect(status().isConflict())
+        .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
         .andExpect(jsonField("message", "Blob store is still used by a repository"));
   }
 

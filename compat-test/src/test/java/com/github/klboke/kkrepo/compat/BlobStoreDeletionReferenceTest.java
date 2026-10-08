@@ -1,8 +1,8 @@
 package com.github.klboke.kkrepo.compat;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -25,22 +25,28 @@ class BlobStoreDeletionReferenceTest {
     boolean storeCreated = false;
     boolean repositoryCreated = false;
     try {
-      assertSuccess(send("POST", "/service/rest/v1/blobstores/file",
+      assertEmptyResponse(204, send("POST", "/service/rest/v1/blobstores/file",
           "{\"name\":\"" + name + "\",\"path\":\"" + name + "\"}"));
       storeCreated = true;
-      assertSuccess(send("POST", "/service/rest/v1/repositories/raw/hosted", """
+      assertEmptyResponse(201, send("POST", "/service/rest/v1/repositories/raw/hosted", """
           {"name":"%s","online":true,"storage":{"blobStoreName":"%s",
           "strictContentTypeValidation":false,"writePolicy":"ALLOW"}}
           """.formatted(name, name)));
       repositoryCreated = true;
 
       HttpResponse<String> inUse = send("DELETE", "/service/rest/v1/blobstores/" + name, null);
-      assertTrue(inUse.statusCode() >= 400 && inUse.statusCode() < 500,
-          () -> "Nexus unexpectedly deleted an in-use store: " + inUse.statusCode());
+      assertEquals(400, inUse.statusCode(), inUse::body);
+      assertEquals("application/json", inUse.headers().firstValue("Content-Type")
+          .orElseThrow().split(";", 2)[0].trim());
+      var error = new ObjectMapper().readTree(inUse.body());
+      assertEquals("*", error.path("id").asText());
+      assertEquals("\"BlobStore " + name + " is in use and cannot be deleted\"",
+          error.path("message").asText());
+      assertEquals(200, send("GET", "/service/rest/v1/blobstores/file/" + name, null).statusCode());
 
-      assertSuccess(send("DELETE", "/service/rest/v1/repositories/" + name, null));
+      assertEmptyResponse(204, send("DELETE", "/service/rest/v1/repositories/" + name, null));
       repositoryCreated = false;
-      assertSuccess(send("DELETE", "/service/rest/v1/blobstores/" + name, null));
+      assertEmptyResponse(204, send("DELETE", "/service/rest/v1/blobstores/" + name, null));
       storeCreated = false;
       assertEquals(404, send("GET", "/service/rest/v1/blobstores/file/" + name, null).statusCode());
     } finally {
@@ -49,9 +55,9 @@ class BlobStoreDeletionReferenceTest {
     }
   }
 
-  private static void assertSuccess(HttpResponse<String> response) {
-    assertTrue(response.statusCode() >= 200 && response.statusCode() < 300,
-        () -> response.statusCode() + " " + response.body());
+  private static void assertEmptyResponse(int status, HttpResponse<String> response) {
+    assertEquals(status, response.statusCode(), response::body);
+    assertEquals("", response.body());
   }
 
   private static HttpResponse<String> send(String method, String path, String body) throws Exception {

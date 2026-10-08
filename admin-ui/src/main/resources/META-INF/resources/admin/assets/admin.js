@@ -1494,7 +1494,10 @@ function toggleBlobStoreSort(key) {
 }
 
 function renderBlobStores() {
-  const focusedTriggerId = document.activeElement?.closest?.(".blobstore-more-actions")?.id;
+  const actionMenu = document.getElementById("blobstore-action-menu");
+  const focusedTriggerId = actionMenu?.contains(document.activeElement)
+    ? actionMenu.getAttribute("aria-labelledby")
+    : document.activeElement?.closest?.(".blobstore-more-actions")?.id;
   closeBlobStoreActionMenu();
   updateTableSortHeaders("blobstore", blobStoreSort);
   const filtered = filteredBlobStores();
@@ -2077,9 +2080,6 @@ async function responseErrorMessage(response) {
   if (response.status === 401 || response.status === 403) {
     window.location.href = authRequiredWelcome();
     return "Authentication required.";
-  }
-  if (response.status === 409) {
-    return "Name already exists.";
   }
   try {
     const text = await response.text();

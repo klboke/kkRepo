@@ -51,11 +51,12 @@ function actionHarness() {
     confirm: () => true,
     fetch: async (path, options) => { requests.push([path, options]); return { ok: true }; },
     loadBlobStores: async () => {},
-    responseErrorMessage: async () => 'in use',
     showToast: (message, type) => toasts.push([message, type]),
     closeCleanupPolicyActionMenu() {},
   };
   vm.createContext(context);
+  vm.runInContext(source.slice(source.indexOf('async function responseErrorMessage('),
+    source.indexOf('async function saveBlobStore(')), context);
   vm.runInContext(`let blobStores = [{ id: 7, name: 'unused' }];
     let blobActionMenuStoreId = null, blobActionMenuTrigger = null;
     ${source.slice(source.indexOf('async function deleteBlobStore('), source.indexOf('// ---- Repository form'))}`, context);
@@ -141,6 +142,11 @@ test('the blob store action menu groups secondary actions and supports keyboard 
 
 test('each store row keeps Edit visible and moves secondary actions into overflow', () => {
   let trigger;
+  const focusedMenuItem = {};
+  const actionMenu = {
+    contains: element => element === focusedMenuItem,
+    getAttribute: key => key === 'aria-labelledby' ? trigger.id : null,
+  };
   const table = {
     get innerHTML() { return this.html || ''; },
     set innerHTML(value) {
@@ -156,7 +162,8 @@ test('each store row keeps Edit visible and moves secondary actions into overflo
   const context = {
     document: {
       body: {},
-      getElementById: id => id === 'blobstore-table' ? table : id === trigger?.id ? trigger : null,
+      getElementById: id => id === 'blobstore-table' ? table
+        : id === 'blobstore-action-menu' ? actionMenu : id === trigger?.id ? trigger : null,
     },
     closeBlobStoreActionMenu() {}, updateTableSortHeaders() {}, renderUsageSummary() {},
     filteredBlobStores: () => [{ id: 7, name: 'unused', type: 'file', engine: 'file', path: 'unused' }],
@@ -178,6 +185,35 @@ test('each store row keeps Edit visible and moves secondary actions into overflo
   context.renderBlobStores();
   assert.notEqual(trigger, previousTrigger);
   assert.equal(context.document.activeElement, trigger);
+  // A delayed inventory/automatic Check response can also close a focused menu.
+  context.document.activeElement = focusedMenuItem;
+  context.renderBlobStores();
+  assert.equal(context.document.activeElement, trigger);
+});
+
+test('deletion reports the server conflict reason for repositories, blobs, and uploads', async () => {
+  for (const reason of [
+    'Blob store is still used by a repository',
+    'Blob store still has registered blobs, including pending deletions',
+    'Blob store still has upload sessions',
+  ]) {
+    const { context, toasts } = actionHarness();
+    context.fetch = async () => ({ ok: false, status: 409, text: async () => JSON.stringify({ message: reason }) });
+    await context.deleteBlobStore(7);
+    assert.deepEqual(toasts.at(-1), [`Delete failed: ${reason}`, 'error']);
+  }
+});
+
+test('the error parser preserves conflict bodies and uses an HTTP fallback for empty bodies', async () => {
+  const { context } = actionHarness();
+  for (const [body, expected] of [
+    ['{"message":"Name already exists."}', 'Name already exists.'],
+    ['{"error":"Conflict detail"}', 'Conflict detail'],
+    ['Plain conflict detail', 'Plain conflict detail'],
+    ['', 'HTTP 409'],
+  ]) {
+    assert.equal(await context.responseErrorMessage({ status: 409, text: async () => body }), expected);
+  }
 });
 
 test('deletion requires confirmation and sends only the configuration DELETE request', async () => {
