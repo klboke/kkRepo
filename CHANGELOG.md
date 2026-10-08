@@ -4,6 +4,12 @@ All notable public changes to kkrepo are documented in this file.
 
 This project follows a pragmatic release process. Stable releases call out migration impact, compatibility changes, operational notes, and any known behavior changes in their release section.
 
+## Unreleased
+
+### Fixed
+
+- Hosted npm `ALLOW_ONCE` rejects concurrent tarball replacement at the persistence boundary. Package publication and multipart upload roll back all attachment and metadata changes when a write fails, while new versions and proxy-cache refreshes remain supported. (#387)
+
 ## 1.2.1 - 2026-10-04
 
 ### Added

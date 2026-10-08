@@ -118,6 +118,7 @@ public class NpmHostedService {
     throw new NpmExceptions.NpmNotFoundException(path.rawPath());
   }
 
+  @Transactional
   public MavenResponse putPackage(
       RepositoryRuntime runtime,
       NpmPackageId packageId,
@@ -169,6 +170,7 @@ public class NpmHostedService {
     return NpmResponseSupport.success(mapper);
   }
 
+  @Transactional(rollbackFor = IOException.class)
   public MavenResponse uploadTarball(
       RepositoryRuntime runtime,
       MultipartFile asset,

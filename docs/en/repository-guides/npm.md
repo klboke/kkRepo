@@ -62,6 +62,20 @@ registry. Run `npm pack --dry-run` before publication to inspect the tarball con
 - npm audit compatibility is exposed for supported client workflows; policy enforcement remains a
   separate kkRepo security-scanning concern.
 
+## Hosted Write Policy
+
+With `ALLOW_ONCE` (the default), a hosted tarball cannot be overwritten, including when publishers
+race on different replicas. The database's unique asset path decides the winner; the losing
+publication receives the existing write-policy error and rolls back all its attachment and
+package-metadata changes. Refresh metadata to inspect the winner before retrying with a new version.
+Adding other versions still updates the package root normally. Multipart publication has the same
+transaction boundary. Unreferenced uploaded objects are cleaned up after a rollback.
+
+`ALLOW` retains tarball overwrite behavior. The npm publication endpoint does not provide an
+opt-in atomic create-if-absent contract for `ALLOW` repositories: a prior GET returning `404` is
+not a reservation. Use `ALLOW_ONCE` for immutable hosted publication. Proxy-cache refreshes and
+separately authorized administrative package-root cleanup retain their existing semantics.
+
 ## Operations And Troubleshooting
 
 Grant publication rights only on hosted. A `401` normally indicates invalid or missing credentials;

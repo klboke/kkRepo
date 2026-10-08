@@ -34,6 +34,8 @@ import java.util.OptionalLong;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Component
 public class NpmAssetWriter {
@@ -286,6 +288,7 @@ public class NpmAssetWriter {
       NpmMinimumReleaseAge.ReleaseIndex releaseIndex) {
     DigestedUpload upload = uploadWithDigests(runtime, storage, blobStoreId, path, body, extraBlobAttributes);
     try {
+      cleanupAfterRollback(storage, blobStoreId, upload);
       Stored stored = executePersist(
           "Persist npm asset " + runtime.name() + "/" + path,
           () -> persist(runtime, blobStoreId, path, packageId, version, contentType, kind,
@@ -333,6 +336,7 @@ public class NpmAssetWriter {
     String blobRef = BlobReferenceCodec.format(ref);
 
     Optional<AssetRecord> existing = assetDao.findAssetByPath(runtime.id(), path);
+    enforceHostedWritePolicy(runtime, kind, existing.isPresent());
     Long previousBlobId = existing.map(AssetRecord::assetBlobId).orElse(null);
 
     Map<String, Object> blobAttrs = new LinkedHashMap<>();
@@ -413,6 +417,9 @@ public class NpmAssetWriter {
             record.attributes());
         created = true;
       } else {
+        // The unique path constraint arbitrates across replicas. Reject before a snapshot read,
+        // which need not see the winner under repeatable-read isolation.
+        enforceHostedWritePolicy(runtime, kind, true);
         AssetRecord prior = assetDao.findAssetByPath(runtime.id(), path)
             .orElseThrow(() -> new IllegalStateException(
                 "Concurrent npm asset insert won but row is not visible for " + runtime.name() + "/" + path));
@@ -451,6 +458,34 @@ public class NpmAssetWriter {
       groupMemberAssetCache.invalidateMemberAfterCommit(runtime.id());
     }
     return new Stored(persistedAsset, persistedBlob, digests, created, responseFile);
+  }
+
+  private static void enforceHostedWritePolicy(RepositoryRuntime runtime, String kind, boolean existing) {
+    // Package-root rewrites also serve separately authorized administrative cleanup.
+    if (!runtime.isHosted() || !TARBALL.equals(kind)) return;
+    String policy = runtime.writePolicy() == null ? "ALLOW_ONCE" : runtime.writePolicy();
+    if ("DENY".equals(policy)) {
+      throw new NpmExceptions.WritePolicyDenied("Write policy DENY forbids writing " + kind);
+    }
+    if ("ALLOW_ONCE".equals(policy) && existing) {
+      throw new NpmExceptions.WritePolicyDenied("Write policy ALLOW_ONCE forbids overwriting " + kind);
+    }
+  }
+
+  // A later attachment/root failure can roll back a previously successful write in this publish.
+  // Defer object cleanup until that rollback; referenced/deduplicated objects are never deleted.
+  private void cleanupAfterRollback(BlobStorage storage, long blobStoreId, DigestedUpload upload) {
+    if (upload.uploaded() && TransactionSynchronizationManager.isActualTransactionActive()
+        && TransactionSynchronizationManager.isSynchronizationActive()) {
+      TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+        @Override
+        public void afterCompletion(int status) {
+          if (status == STATUS_ROLLED_BACK) {
+            cleanupUploadedBlob(storage, blobStoreId, upload);
+          }
+        }
+      });
+    }
   }
 
   private AssetRecord updateExistingAsset(

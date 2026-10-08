@@ -235,6 +235,65 @@ class NpmRepositoryBlackBoxCompatibilityTest {
   }
 
   @Test
+  void hostedAllowOnceRejectsStaleRepublishWithoutChangingTarballOrMetadata() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeTrue(config.configured() && config.writeEnabled(), "Requires disposable Nexus and kkRepo instances");
+    NpmFixture fixture = NpmFixture.create("compat-immutable-" + System.nanoTime(), "1.0.0");
+    for (Endpoint endpoint : List.of(config.nexusHosted(), config.nexusPlusHosted())) {
+      boolean nexus = endpoint.baseUrl().equals(config.nexusHosted().baseUrl());
+      String name = "compat-immutable-" + System.nanoTime();
+      Map<String, Object> payload = new LinkedHashMap<>(Map.of("name", name, "online", true));
+      if (nexus) {
+        payload.put("storage", Map.of("blobStoreName", "default", "strictContentTypeValidation", false,
+            "writePolicy", "ALLOW_ONCE"));
+      } else {
+        payload.put("recipe", "npm-hosted");
+        payload.put("blobStoreName", "default");
+        payload.put("hosted", Map.of("writePolicy", "ALLOW_ONCE"));
+      }
+      String catalog = nexus ? "/service/rest/v1/repositories" : "/internal/repositories";
+      assert2xx("create immutable hosted repository", adminRequest(endpoint,
+          catalog + (nexus ? "/npm/hosted" : ""), "POST", MAPPER.writeValueAsBytes(payload)));
+      Endpoint hosted = endpoint.withRepository(name);
+      try (AutoCloseable cleanup = () -> {
+        if (!nexus) {
+          assert2xx("empty immutable hosted fixture", adminRequest(endpoint, "/internal/browse/" + name + "?path="
+              + URLEncoder.encode(fixture.packageName(), StandardCharsets.UTF_8) + "&source=" + name, "DELETE", null));
+        }
+        assert2xx("delete immutable hosted fixture", adminRequest(endpoint, catalog + "/" + name, "DELETE", null));
+      }) {
+        assertEquals(404, get(hosted, fixture.packageName()).status());
+        assert2xx("first publish", putJson(hosted, fixture.packageName(), fixture.publishJson()));
+        Map<String, Object> before = getJson(hosted, fixture.packageName());
+        String path = tarballPath(hosted, before, fixture.version());
+        Map<String, Object> replacement = MAPPER.readValue(fixture.publishJson(), MAP_TYPE);
+        replacement.put("description", "losing publisher must not replace metadata");
+        byte[] changedTarball = tarGz("package/package.json", ("{\"name\":\"" + fixture.packageName()
+            + "\",\"version\":\"1.0.0\",\"description\":\"replacement\"}").getBytes(StandardCharsets.UTF_8));
+        Map<String, Object> changedVersion = version(replacement, fixture.version());
+        changedVersion.put("description", "replacement");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> changedDist = (Map<String, Object>) changedVersion.get("dist");
+        changedDist.put("shasum", hex(MessageDigest.getInstance("SHA-1").digest(changedTarball)));
+        changedDist.put("integrity", "sha512-" + Base64.getEncoder().encodeToString(
+            MessageDigest.getInstance("SHA-512").digest(changedTarball)));
+        replacement.put("_attachments", Map.of(fixture.packageName() + "-1.0.0.tgz", Map.of(
+            "content_type", "application/octet-stream",
+            "data", Base64.getEncoder().encodeToString(changedTarball), "length", changedTarball.length)));
+        Exchange rejected = putJson(hosted, fixture.packageName(), MAPPER.writeValueAsBytes(replacement));
+        assertTrue(rejected.status() >= 400 && rejected.status() < 500,
+            endpoint.name() + " stale publisher should receive a client write-policy error");
+        assertArrayEquals(fixture.tarball(), get(hosted, path).body());
+        assertEquals(before, getJson(hosted, fixture.packageName()));
+        NpmFixture next = NpmFixture.create(fixture.packageName(), "1.1.0");
+        assert2xx("add another immutable version", putJson(hosted, next.packageName(), next.publishJson()));
+        assertArrayEquals(fixture.tarball(), get(hosted, path).body());
+        assertTrue(getJson(hosted, fixture.packageName()).toString().contains("1.1.0"));
+      }
+    }
+  }
+
+  @Test
   @SuppressWarnings("unchecked")
   void hostedNestedPublishMetadataUsesStoredAttachmentPath() throws Exception {
     CompatConfig config = CompatConfig.load();

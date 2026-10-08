@@ -1,6 +1,8 @@
 package com.github.klboke.kkrepo.server.npm;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.core.BlobObjectMetadata;
 import com.github.klboke.kkrepo.core.BlobReference;
@@ -33,6 +35,7 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
@@ -40,6 +43,8 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -91,6 +96,53 @@ class NpmAssetWriterConcurrencyTest {
     assertEquals(3, transactionManager.begun.get());
     assertEquals(1, transactionManager.rolledBack.get());
     assertEquals(2, transactionManager.committed.get());
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void hostedAllowOnceRaceKeepsWinnerBytesAndRejectsLoser(boolean deadlock) throws Exception {
+    RaceAssetDao assetDao = deadlock ? new DeadlockRaceAssetDao() : new DuplicateRaceAssetDao();
+    var browse = new NoopBrowseNodeDao();
+    var transactions = new RecordingTransactionManager();
+    var storage = new NoopBlobStorage();
+    // Separate writer instances share only persistence, as different replicas would.
+    var firstWriter = writer(assetDao, browse, transactions);
+    var secondWriter = writer(assetDao, browse, transactions);
+    var hosted = new RepositoryRuntime(10L, "npm-hosted", RepositoryFormat.NPM, RepositoryType.HOSTED,
+        "npm-hosted", true, 1L, "ALLOW_ONCE", null, null, true, null, null, null, null, null, List.of());
+    try (ExecutorService executor = Executors.newFixedThreadPool(2)) {
+      var first = executor.submit(() -> writeTarball(firstWriter, storage, hosted, "first-publisher"));
+      var second = executor.submit(() -> writeTarball(secondWriter, storage, hosted, "second-publisher"));
+      NpmAssetWriter.Stored winner = null;
+      int rejected = 0;
+      for (var future : List.of(first, second)) {
+        try {
+          winner = get(future);
+        } catch (ExecutionException error) {
+          var conflict = assertInstanceOf(NpmExceptions.WritePolicyDenied.class, error.getCause());
+          assertEquals("Write policy ALLOW_ONCE forbids overwriting tarball", conflict.getMessage());
+          rejected++;
+        }
+      }
+      assertEquals(1, rejected);
+      assertTrue(winner.created());
+      var asset = assetDao.findAssetByPath(10L, PATH).orElseThrow();
+      var blob = assetDao.findBlobById(asset.assetBlobId()).orElseThrow();
+      assertEquals(winner.blob().id(), blob.id());
+      assertEquals(winner.digests().sha256(), blob.sha256());
+      assertEquals(0, assetDao.updateAssetCalls.get());
+      assertEquals(0, assetDao.markDeletedCalls.get());
+      assertEquals(1, browse.upsertCalls.get());
+      assertEquals(1, transactions.committed.get());
+      assertEquals(deadlock ? 2 : 1, transactions.rolledBack.get());
+    }
+  }
+
+  private static NpmAssetWriter.Stored writeTarball(
+      NpmAssetWriter writer, BlobStorage storage, RepositoryRuntime runtime, String bytes) {
+    return writer.writeTarball(runtime, storage, 1L, PACKAGE_ID, VERSION, TARBALL_NAME,
+        new ByteArrayInputStream(bytes.getBytes(StandardCharsets.UTF_8)), NpmResponseSupport.TARBALL,
+        "publisher", null, Map.of());
   }
 
   private static NpmAssetWriter writer(

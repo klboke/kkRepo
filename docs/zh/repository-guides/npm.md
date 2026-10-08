@@ -83,3 +83,16 @@ pnpm login --registry=https://nexus.example.com/repository/npm-hosted/
 
 tarball 后缀中的子目录会保留。元数据暂时不可用时，直接下载仍可尝试标准仓库路径。
 缓存的 HTTP 校验头只会用于原始上游 URL，查询参数变化时也会重新下载。
+
+
+## Hosted 写入策略
+
+`ALLOW_ONCE`（默认）禁止覆盖已存在的 hosted tarball，包括多个副本同时发布的情况。
+数据库的 asset path 唯一约束决定获胜者；失败的发布返回现有写入策略错误，并回滚本次
+发布的全部附件和 package metadata 修改。请先刷新 metadata 检查已发布版本，再使用
+新版本重试。添加其他版本仍可正常更新 package root，multipart 上传也使用同一事务边界。
+回滚后会清理没有引用的已上传对象。
+
+`ALLOW` 保留 tarball 覆盖行为。npm 发布接口目前没有针对 `ALLOW` 仓库的可选原子
+create-if-absent 契约；先前 GET 返回 `404` 不代表保留了发布位置。需要不可变发布时请使用
+`ALLOW_ONCE`。Proxy cache 刷新以及单独授权的管理员 package-root 清理保持原有语义。
