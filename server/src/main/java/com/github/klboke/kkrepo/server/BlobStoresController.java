@@ -29,6 +29,7 @@ import org.springframework.core.env.Environment;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -50,10 +51,16 @@ public class BlobStoresController {
   private final BlobStorageRegistry blobStorageRegistry;
   private final Environment environment;
   private StorageStatisticsService statistics;
+  private BlobStoreDeletionService deletionService;
 
   @Autowired
   void setStorageStatistics(StorageStatisticsService statistics) {
     this.statistics = statistics;
+  }
+
+  @Autowired
+  void setBlobStoreDeletionService(BlobStoreDeletionService deletionService) {
+    this.deletionService = deletionService;
   }
 
   @GetMapping("/statistics/usage")
@@ -144,6 +151,12 @@ public class BlobStoresController {
       return toProbeResult(fileBlobStoreAdmin.probeReadWrite(toFileConfig(record)));
     }
     return toProbeResult(s3BlobStoreAdmin.probeReadWrite(toS3Config(record)));
+  }
+
+  @DeleteMapping("/{id}")
+  public ResponseEntity<Void> delete(@PathVariable("id") long id) {
+    deletionService.deleteEmpty(id);
+    return ResponseEntity.noContent().build();
   }
 
   @ExceptionHandler(ResponseStatusException.class)

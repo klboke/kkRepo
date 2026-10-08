@@ -154,4 +154,28 @@ public class JdbcBlobStoreDao implements com.github.klboke.kkrepo.persistence.jd
   public int deleteById(long id) {
     return jdbcTemplate.update("DELETE FROM blob_store WHERE id = ?", id);
   }
+
+  @Override
+  public DeleteResult deleteEmptyById(long id) {
+    // The caller owns the transaction. This lock serializes deletion with FK inserts
+    // from other replicas so the checks and deletion describe one database state.
+    if (jdbcTemplate.queryForList("SELECT id FROM blob_store WHERE id = ? FOR UPDATE", Long.class, id)
+        .isEmpty()) {
+      return DeleteResult.NOT_FOUND;
+    }
+    if (hasReference("repository", id)) return DeleteResult.REPOSITORY_IN_USE;
+    // Include soft-deleted blobs: registered objects may still need garbage collection.
+    if (hasReference("asset_blob", id)) return DeleteResult.BLOBS_REMAIN;
+    // pub_upload_session has ON DELETE SET NULL; guard it explicitly to retain its identity.
+    if (hasReference("pub_upload_session", id) || hasReference("gitlfs_upload", id)) {
+      return DeleteResult.UPLOADS_IN_PROGRESS;
+    }
+    return deleteById(id) == 1 ? DeleteResult.DELETED : DeleteResult.NOT_FOUND;
+  }
+
+  private boolean hasReference(String table, long id) {
+    // Table names are fixed constants in this class, never request input.
+    return !jdbcTemplate.queryForList(
+        "SELECT 1 FROM " + table + " WHERE blob_store_id = ? LIMIT 1", Integer.class, id).isEmpty();
+  }
 }

@@ -7,6 +7,10 @@ import java.util.Optional;
 
 /** Test-only base class for focused BlobStoreDao fakes. */
 public class BlobStoreDaoAdapter implements BlobStoreDao {
+  @Override
+  public DeleteResult deleteEmptyById(long id) {
+    throw new UnsupportedOperationException();
+  }
   public BlobStoreDaoAdapter() {
   }
 

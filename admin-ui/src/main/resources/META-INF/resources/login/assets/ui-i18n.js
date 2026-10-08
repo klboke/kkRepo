@@ -112,6 +112,8 @@
     "Manage blob stores": "管理 Blob 存储",
     "Create blob store": "创建 Blob 存储",
     "Save blob store": "保存 Blob 存储",
+    "Delete blob store": "删除 Blob 存储",
+    "More actions": "更多操作",
     "Save this Blob Store configuration.": "保存此 Blob 存储配置。",
     "Engine": "引擎",
     "Endpoint": "端点",
@@ -489,6 +491,11 @@
     "Blob store check completed.": "Blob 存储检查完成。",
     "Blob store created.": "Blob 存储已创建。",
     "Blob store updated.": "Blob 存储已更新。",
+    "Blob store is still used by a repository": "Blob 存储仍被仓库使用",
+    "Blob store still has registered blobs, including pending deletions": "Blob 存储仍有已登记的 Blob，包括待删除的 Blob",
+    "Blob store still has upload sessions": "Blob 存储仍有上传会话",
+    "Blob store is still referenced and cannot be deleted": "Blob 存储仍被引用，无法删除",
+    "Blob store not found": "Blob 存储不存在",
     "Repository created.": "仓库已创建。",
     "Repository updated.": "仓库已更新。",
     "Repository deleted.": "仓库已删除。",
@@ -777,6 +784,9 @@
     if (!body) return body;
     if (body.startsWith("Updated: ")) return `更新于：${body.slice(9)}`;
     if (zh[body]) return zh[body];
+    if (body.startsWith("Delete failed: Blob store ")) {
+      return `删除失败：${translateBody(body.slice("Delete failed: ".length))}`;
+    }
     let match = body.match(/^([^A-Za-z0-9\u4e00-\u9fff]+)\s+(.+)$/);
     if (match) {
       const translated = translateBody(match[2]);
@@ -819,6 +829,14 @@
     if (match) return `编辑仓库：${match[1]}`;
     match = body.match(/^Edit blob store: (.+)$/);
     if (match) return `编辑 Blob 存储：${match[1]}`;
+    match = body.match(/^More actions for (.+)$/);
+    if (match) return `更多操作：${match[1]}`;
+    match = body.match(/^Delete blob store "(.+)"\? This removes the configuration only\. Storage files and buckets are not deleted\.$/);
+    if (match) return `删除 Blob 存储“${match[1]}”？只会删除配置，存储文件和存储桶不会删除。`;
+    match = body.match(/^Deleting blob store (.+)\.\.\.$/);
+    if (match) return `正在删除 Blob 存储 ${match[1]}...`;
+    match = body.match(/^Blob store (.+) deleted\.$/);
+    if (match) return `Blob 存储 ${match[1]} 已删除。`;
     match = body.match(/^Edit user: (.+)$/);
     if (match) return `编辑用户：${match[1]}`;
     match = body.match(/^Edit role: (.+)$/);

@@ -644,6 +644,21 @@ class SecurityManagementFilterTest {
   }
 
   @Test
+  void internalBlobStoreDeleteRequiresBlobStoreDeletePermission() throws Exception {
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("admin")));
+    RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("missing permission"));
+    SecurityManagementFilter filter = filter(authentication, security, false);
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(request("DELETE", "/internal/blob-stores/7"), response.proxy(), chain);
+
+    assertEquals("nexus:blobstores:delete", security.requestedPermission);
+    assertEquals(0, chain.calls);
+    assertEquals(HttpServletResponse.SC_FORBIDDEN, response.status);
+  }
+
+  @Test
   void oidcBrowserLoginEndpointsBypassManagementPermissions() throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
     RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("should not be checked"));
