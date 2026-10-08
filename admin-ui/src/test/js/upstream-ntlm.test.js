@@ -37,6 +37,22 @@ function form(repo) {
   return { context, element };
 }
 
+test('redirect policy defaults strict, round-trips opt-in and retains host rules on disable', () => {
+  const repo = {
+    name: 'cdn-proxy', recipe: 'nuget-proxy', online: true,
+    proxy: { remoteUrl: 'https://repo.example', redirectPolicy: 'PUBLIC_HTTPS',
+      allowedRedirectHosts: ['existing.example'] },
+  };
+  const { context, element } = form(repo);
+  assert.equal(element('repository-redirect-policy').value, 'ALLOWLIST');
+  context.showEditRepositoryForm('cdn-proxy');
+  assert.equal(element('repository-redirect-policy').value, 'PUBLIC_HTTPS');
+  assert.equal(context.repositoryFormPayload().proxy.redirectPolicy, 'PUBLIC_HTTPS');
+  element('repository-redirect-policy').value = 'ALLOWLIST';
+  assert.equal(context.repositoryFormPayload().proxy.redirectPolicy, 'ALLOWLIST');
+  assert.deepEqual(Array.from(context.repositoryFormPayload().proxy.allowedRedirectHosts), ['existing.example']);
+});
+
 test('NTLM repository edit/save retains mode, domain and saved password', () => {
   const { context, element } = form({ name: 'feed', recipe: 'nuget-proxy', format: 'nuget', type: 'PROXY',
     online: true, proxy: { remoteUrl: 'https://devops.example/index.json', remoteAuthenticationType: 'ntlm',

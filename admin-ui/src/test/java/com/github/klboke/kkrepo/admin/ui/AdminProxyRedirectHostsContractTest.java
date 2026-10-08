@@ -34,6 +34,12 @@ class AdminProxyRedirectHostsContractTest {
     assertTrue(javascript.contains(
         "document.getElementById(\"repository-allowed-redirect-hosts\").value = \"\";"));
     assertTrue(javascript.contains("repo.proxy.allowedRedirectHosts.join(\", \")"));
+    assertTrue(index.contains("id=\"repository-redirect-policy\""));
+    assertTrue(index.contains("value=\"ALLOWLIST\""));
+    assertTrue(index.contains("value=\"PUBLIC_HTTPS\""));
+    assertTrue(index.contains("trusts the upstream to choose any public destination"));
+    assertTrue(javascript.contains("redirectPolicy: document.getElementById(\"repository-redirect-policy\").value"));
+    assertTrue(javascript.contains("repo.proxy.redirectPolicy || \"ALLOWLIST\""));
   }
 
   private String resource(String path) throws IOException {

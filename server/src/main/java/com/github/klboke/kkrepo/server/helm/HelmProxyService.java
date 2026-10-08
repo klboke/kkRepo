@@ -566,6 +566,7 @@ public class HelmProxyService {
 
   static String configurationFingerprint(RepositoryRuntime runtime) {
     StringBuilder material = new StringBuilder();
+    appendFingerprintField(material, runtime.redirectPolicy().name());
     appendFingerprintField(material, runtime.proxyRemoteUrl());
     appendFingerprintField(material, runtime.proxyRemoteUsername());
     appendFingerprintField(material, runtime.proxyRemotePassword());

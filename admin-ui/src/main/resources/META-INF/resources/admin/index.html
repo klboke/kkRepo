@@ -257,6 +257,16 @@
                   spellcheck="false" autocomplete="off" placeholder="/simple">
               </label>
               <label>
+                <span>Content redirect policy</span>
+                <select id="repository-redirect-policy">
+                  <option value="ALLOWLIST">Allowlisted destinations (default)</option>
+                  <option value="PUBLIC_HTTPS">Any public HTTPS destination</option>
+                </select>
+                <small>Public HTTPS trusts the upstream to choose any public destination.
+                  Requires direct HTTPS GET/HEAD downloads; private addresses and
+                  cross-origin credentials remain blocked. Existing host rules are retained.</small>
+              </label>
+              <label>
                 <span class="field-label">Allowed redirect host
                   <span class="field-help" tabindex="0" role="note"
                     aria-label="Optional. Cross-host redirects are denied by default. Enter an exact host name or a subdomain pattern such as *.quay.io (does not include quay.io). To allow more than one, separate hosts with commas. Source repository credentials are never forwarded, and outbound DNS and SSRF validation still applies. Schemes, ports, paths, and unrestricted * are not allowed."

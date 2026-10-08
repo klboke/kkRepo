@@ -4,6 +4,12 @@ All notable public changes to kkrepo are documented in this file.
 
 This project follows a pragmatic release process. Stable releases call out migration impact, compatibility changes, operational notes, and any known behavior changes in their release section.
 
+## Unreleased
+
+### Added
+
+- Proxy repositories can opt into `proxy.redirectPolicy=PUBLIC_HTTPS` for direct public HTTPS content downloads without listing CDN hosts individually. The existing `ALLOWLIST` policy remains the default. API and admin controls retain host rules, reject downgrades and DNS-resolving outbound proxies, independently validate and pin public destinations, and isolate credentials and pooled cookies. (#384)
+
 ## 1.2.1 - 2026-10-04
 
 ### Added

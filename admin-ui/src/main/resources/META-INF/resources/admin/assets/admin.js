@@ -2951,6 +2951,7 @@ function repositoryFormPayload() {
     payload.proxy = {
       remoteUrl: document.getElementById("repository-remote-url").value.trim(),
       allowedRedirectHosts,
+      redirectPolicy: document.getElementById("repository-redirect-policy").value,
       contentMaxAgeMinutes: content === "" ? null : Number(content),
       metadataMaxAgeMinutes: metadata === "" ? null : Number(metadata),
       minimumReleaseAgeMinutes: recipe.format === "npm"
@@ -3049,6 +3050,7 @@ function setRepositoryFormDefaults() {
   document.getElementById("repository-remote-url").value = "";
   document.getElementById("repository-pypi-index-path").value = "/simple";
   document.getElementById("repository-allowed-redirect-hosts").value = "";
+  document.getElementById("repository-redirect-policy").value = "ALLOWLIST";
   document.getElementById("repository-remote-authentication-type").value = "auto";
   document.getElementById("repository-remote-ntlm-domain").value = "";
   document.getElementById("repository-remote-ntlm-host").value = "";
@@ -3164,6 +3166,7 @@ function showEditRepositoryForm(name) {
     if (repo.hosted.layoutPolicy) document.getElementById("repository-layout-policy").value = repo.hosted.layoutPolicy;
   }
   if (repo.proxy) {
+    document.getElementById("repository-redirect-policy").value = repo.proxy.redirectPolicy || "ALLOWLIST";
     document.getElementById("repository-remote-url").value = repo.proxy.remoteUrl || "";
     document.getElementById("repository-allowed-redirect-hosts").value =
       Array.isArray(repo.proxy.allowedRedirectHosts) ? repo.proxy.allowedRedirectHosts.join(", ") : "";

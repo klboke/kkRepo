@@ -55,6 +55,54 @@ import org.junit.jupiter.api.Test;
 class RepositoryServiceTest {
 
   @Test
+  void publicHttpsPolicyRoundTripsPreservesPartialUpdatesAndCanBeDisabled() throws Exception {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+    var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+    ProxySettings settings = mapper.readValue("""
+        {"remoteUrl":"https://registry.npmjs.org","redirectPolicy":"PUBLIC_HTTPS",
+         "allowedRedirectHosts":["cdn.example.org"]}
+        """, ProxySettings.class);
+    var created = service.create(new CreateCommand("public-https", "npm-proxy", true,
+        "default", true, null, settings, null, null, null, null));
+    assertEquals("PUBLIC_HTTPS", created.proxy().redirectPolicy());
+    assertEquals("PUBLIC_HTTPS", ((Map<?, ?>) repositories.repository.attributes().get("proxy")).get("redirectPolicy"));
+    var runtime = new RepositoryRuntimeRegistry(repositories, 0).resolve("public-https").orElseThrow();
+    assertEquals(com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS, runtime.redirectPolicy());
+    var runtimeMapper = new com.fasterxml.jackson.databind.ObjectMapper()
+        .configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+    assertEquals(runtime.redirectPolicy(), runtimeMapper.readValue(runtimeMapper.writeValueAsString(runtime),
+        com.github.klboke.kkrepo.server.maven.RepositoryRuntime.class).redirectPolicy());
+    var anotherReplica = new RepositoryRuntimeRegistry(repositories, 0);
+    assertEquals(runtime.redirectPolicy(), anotherReplica.resolve("public-https").orElseThrow().redirectPolicy());
+    var preserved = service.update("public-https", new UpdateCommand(true, null, null, null,
+        new ProxySettings(null, null, null, null), null, null, null, null));
+    assertEquals("PUBLIC_HTTPS", preserved.proxy().redirectPolicy());
+    var disabled = service.update("public-https", new UpdateCommand(true, null, null, null,
+        mapper.readValue("{\"redirectPolicy\":\"ALLOWLIST\"}", ProxySettings.class),
+        null, null, null, null));
+    assertEquals("ALLOWLIST", disabled.proxy().redirectPolicy());
+    assertEquals(List.of("cdn.example.org"), disabled.proxy().allowedRedirectHosts());
+    assertEquals(com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.ALLOWLIST,
+        anotherReplica.resolve("public-https").orElseThrow().redirectPolicy());
+  }
+
+  @Test
+  void publicHttpsRepositoryRejectsUnknownPolicyHttpAndDnsResolvingProxy() throws Exception {
+    var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+    for (String settings : List.of(
+        "{\"remoteUrl\":\"https://registry.npmjs.org\",\"redirectPolicy\":\"unknown\"}",
+        "{\"remoteUrl\":\"http://127.0.0.1\",\"redirectPolicy\":\"PUBLIC_HTTPS\"}",
+        "{\"remoteUrl\":\"https://registry.npmjs.org\",\"redirectPolicy\":\"PUBLIC_HTTPS\","
+            + "\"outboundProxyType\":\"HTTP\",\"outboundProxyHost\":\"proxy.example\",\"outboundProxyPort\":3128}")) {
+      var service = service(new StubRepositoryDao(repository(1L)));
+      var proxy = mapper.readValue(settings, ProxySettings.class);
+      assertThrows(RepositoryValidationException.class, () -> service.create(new CreateCommand(
+          "invalid", "npm-proxy", true, "default", true, null, proxy, null, null, null, null)));
+    }
+  }
+
+  @Test
   void nugetNtlmSettingsRoundTripPreservePasswordAndReachRuntime() throws Exception {
     StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
     ProxiedHttpClientFactory factory = mock(ProxiedHttpClientFactory.class);

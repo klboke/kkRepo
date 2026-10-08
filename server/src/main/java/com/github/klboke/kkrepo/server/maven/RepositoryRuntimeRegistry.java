@@ -427,7 +427,9 @@ public class RepositoryRuntimeRegistry {
         minimumReleaseAge,
         allowedRedirectHosts,
         proxyRaw instanceof Map<?, ?> proxyMap
-            ? com.github.klboke.kkrepo.server.proxy.NtlmCredentials.fromAttributes(proxyMap) : null);
+            ? com.github.klboke.kkrepo.server.proxy.NtlmCredentials.fromAttributes(proxyMap) : null,
+        com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.parse(
+            proxyRaw instanceof Map<?, ?> proxyMap ? proxyMap.get("redirectPolicy") : null));
   }
 
   private static com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig readOutboundProxy(Map<?, ?> proxyMap) {

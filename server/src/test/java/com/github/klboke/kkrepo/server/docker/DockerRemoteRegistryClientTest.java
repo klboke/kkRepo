@@ -44,6 +44,70 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 class DockerRemoteRegistryClientTest {
+  @Test
+  void publicHttpsRedirectStreamsUnlistedCdnWithoutRegistryCredentials() throws Exception {
+    var policy = mock(OutboundRequestPolicy.class);
+    when(policy.resolvePublicHttpsTarget(anyString(), anyString())).thenAnswer(invocation -> {
+      var target = mock(OutboundRequestPolicy.ResolvedHttpTarget.class);
+      when(target.uri()).thenReturn(URI.create(invocation.getArgument(0, String.class)));
+      return target;
+    });
+    var transport = mock(ProxiedHttpClientFactory.class);
+    var redirect = mock(ProxiedHttpClientFactory.ProxiedResponse.class);
+    when(redirect.status()).thenReturn(307);
+    when(redirect.header("Location")).thenReturn("https://changing.example.org/blob");
+    var blob = mock(ProxiedHttpClientFactory.ProxiedResponse.class);
+    when(blob.status()).thenReturn(200);
+    when(blob.headers()).thenReturn(Map.of());
+    when(blob.body()).thenReturn(new ByteArrayInputStream("layer".getBytes(StandardCharsets.UTF_8)));
+    var headers = org.mockito.ArgumentCaptor.forClass(Map.class);
+    when(transport.execute(anyString(), nullable(OutboundProxyConfig.class), eq("GET"),
+        any(OutboundRequestPolicy.ResolvedHttpTarget.class), headers.capture(), anyLong()))
+        .thenReturn(redirect, blob);
+    var runtime = mock(RepositoryRuntime.class);
+    when(runtime.name()).thenReturn("docker-proxy");
+    when(runtime.proxyRemoteUrl()).thenReturn("https://registry.example.org");
+    when(runtime.proxyRemoteUsername()).thenReturn("robot");
+    when(runtime.proxyRemotePassword()).thenReturn("secret");
+    when(runtime.redirectPolicy()).thenReturn(
+        com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS);
+    var client = new DockerRemoteRegistryClient(null, policy, null, true, 300, null, transport);
+    try (var result = client.get(runtime, "library/test/blobs/sha256:abc", "application/octet-stream")) {
+      assertEquals(200, result.status());
+      assertEquals("layer", new String(result.body().readAllBytes(), StandardCharsets.UTF_8));
+    }
+    assertEquals(basic("robot", "secret"), headers.getAllValues().get(0).get("Authorization"));
+    assertNull(headers.getAllValues().get(1).get("Authorization"));
+    org.mockito.Mockito.verify(policy).resolvePublicHttpsTarget("https://changing.example.org/blob", "docker remote fetch");
+  }
+
+  @Test
+  void publicHttpsDockerRedirectRejectsHttpEvenWhenAllowlisted() throws Exception {
+    var policy = mock(OutboundRequestPolicy.class);
+    when(policy.resolvePublicHttpsTarget(anyString(), anyString())).thenAnswer(invocation -> {
+      var target = mock(OutboundRequestPolicy.ResolvedHttpTarget.class);
+      when(target.uri()).thenReturn(URI.create(invocation.getArgument(0, String.class)));
+      return target;
+    });
+    var transport = mock(ProxiedHttpClientFactory.class);
+    var redirect = mock(ProxiedHttpClientFactory.ProxiedResponse.class);
+    when(redirect.status()).thenReturn(302);
+    when(redirect.header("Location")).thenReturn("http://changing.example.org/blob");
+    when(transport.execute(anyString(), nullable(OutboundProxyConfig.class), eq("GET"),
+        any(OutboundRequestPolicy.ResolvedHttpTarget.class), anyMap(), anyLong())).thenReturn(redirect);
+    var runtime = mock(RepositoryRuntime.class);
+    when(runtime.name()).thenReturn("docker-proxy");
+    when(runtime.proxyRemoteUrl()).thenReturn("https://registry.example.org");
+    when(runtime.allowedRedirectHosts()).thenReturn(Set.of("changing.example.org"));
+    when(runtime.redirectPolicy()).thenReturn(
+        com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS);
+    var client = new DockerRemoteRegistryClient(null, policy, null, true, 300, null, transport);
+    assertThrows(SecurityValidationException.class,
+        () -> client.get(runtime, "library/test/blobs/sha256:abc", "application/octet-stream"));
+    org.mockito.Mockito.verify(transport).execute(anyString(), nullable(OutboundProxyConfig.class), eq("GET"),
+        any(OutboundRequestPolicy.ResolvedHttpTarget.class), anyMap(), anyLong());
+  }
+
   private final ProxiedHttpClientFactory directFactory =
       new ProxiedHttpClientFactory(60000, 10000);
 

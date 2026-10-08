@@ -268,6 +268,8 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
     }
     boolean proxyEnabled = config != null && config.enabled();
     RequestConfig requestConfig = RequestConfig.custom()
+        .setCookieSpec(target.publicHttpsOnly()
+            ? org.apache.hc.client5.http.cookie.StandardCookieSpec.IGNORE : null)
         .setConnectionRequestTimeout(Timeout.of(connectionRequestTimeout))
         .setResponseTimeout(Timeout.ofMilliseconds(Math.max(1L, responseTimeoutMillis)))
         .setTargetPreferredAuthSchemes(ntlm == null ? null : java.util.List.of("NTLM"))
