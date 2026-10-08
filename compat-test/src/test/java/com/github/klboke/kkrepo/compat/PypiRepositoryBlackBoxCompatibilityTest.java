@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -14,6 +16,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -39,6 +42,101 @@ class PypiRepositoryBlackBoxCompatibilityTest {
       .followRedirects(HttpClient.Redirect.NORMAL)
       .build();
   private static final Duration INDEX_REBUILD_TIMEOUT = Duration.ofSeconds(20);
+
+  @Test
+  void hostedMigrationPreservesAllProjectIndexesWhenEnabled() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeTrue(config.configured() && Boolean.parseBoolean(
+        setting("compat.pypi.migration.enabled", "COMPAT_PYPI_MIGRATION_ENABLED").orElse("false")),
+        "Enable COMPAT_PYPI_MIGRATION_ENABLED with a script-enabled Nexus reference");
+    ObjectMapper json = new ObjectMapper();
+    String repository = "pypi-migration-" + Long.toUnsignedString(System.nanoTime());
+    Endpoint source = config.nexus().withRepository(repository);
+    Endpoint target = config.nexusPlus().withRepository(repository);
+    assert2xx("create migration source", send(config.nexusAdmin("/service/rest/v1/repositories/pypi/hosted")
+        .header("Content-Type", "application/json")
+        .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of(
+            "name", repository, "online", true, "storage", Map.of(
+                "blobStoreName", "default", "strictContentTypeValidation", true, "writePolicy", "ALLOW")))))));
+    assert2xx("create migration target", send(config.nexusPlusInternal("/internal/repositories")
+        .header("Content-Type", "application/json")
+        .POST(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(Map.of(
+            "name", repository, "recipe", "pypi-hosted", "online", true, "blobStoreName", "default",
+            "hosted", Map.of("writePolicy", "ALLOW")))))));
+
+    List<WheelFixture> fixtures = new ArrayList<>();
+    // Leave source indexes unread so the target must generate indexes from migrated packages.
+    for (String suffix : List.of("alpha", "bravo", "charlie", "delta", "mobile-framework", "zulu")) {
+      WheelFixture fixture = WheelFixture.create(repository + "-" + suffix, "1.0.0");
+      fixtures.add(fixture);
+      assert2xx("upload migration fixture", upload(source, fixture));
+    }
+    String request = json.writeValueAsString(Map.of(
+        "sourceBaseUrl", config.nexus().baseUrl().orElseThrow(),
+        "sourceUsername", config.nexus().username().orElseThrow(),
+        "sourcePassword", config.nexus().password().orElseThrow(),
+        "repositories", List.of(repository), "pageSize", 100, "concurrency", 2,
+        "checksumValidation", true));
+    // A second job must preserve the completed import when discovery skips existing paths.
+    for (int run = 0; run < 2; run++) {
+      Exchange started = send(config.nexusPlusInternal("/internal/migration/nexus/repository-data/start")
+          .header("Content-Type", "application/json")
+          .POST(HttpRequest.BodyPublishers.ofString(request)));
+      assert2xx("start PyPI migration", started);
+      long jobId = json.readTree(started.body()).path("jobId").asLong();
+      assertTrue(jobId > 0, "migration must return a job ID");
+      String jobPath = "/internal/migration/nexus/repository-data/jobs/" + jobId;
+      awaitMigration(config, json, jobPath, false);
+      assert2xx("start package migration", send(config.nexusPlusInternal(jobPath + "/packages/start")
+          .POST(HttpRequest.BodyPublishers.noBody())));
+      JsonNode completed = awaitMigration(config, json, jobPath, true);
+      assertTrue(completed.path("migratedAssets").asLong() >= fixtures.size(),
+          "all six projects must be migrated");
+      for (WheelFixture fixture : fixtures) {
+        String index = "simple/" + fixture.normalizedName() + "/";
+        // Compare distribution links; this migration fix does not add optional PEP 658
+        // advertisement attributes to the existing index builder. Sidecars must remain
+        // downloadable (checked below) without becoming distribution links.
+        assertProjectIndexMatches("migrated " + fixture.normalizedName(),
+            get(source, index), getEventually(target, index, fixture.filename()), fixture.filename());
+        assertPackageMatches("migrated package", get(source, fixture.packagePath()),
+            get(target, fixture.packagePath()), fixture.bytes());
+        if (run > 0) {
+          Exchange metadata = get(source, fixture.packagePath() + ".metadata");
+          if (metadata.status() == 200) {
+            assertPackageMatches("migrated PEP 658 sidecar", metadata,
+                get(target, fixture.packagePath() + ".metadata"), metadata.body());
+          }
+        }
+      }
+      assertRootContains("migrated root", get(source, "simple/"),
+          getEventually(target, "simple/", fixtures.getLast().normalizedName()),
+          fixtures.getLast().normalizedName());
+    }
+  }
+
+  private static JsonNode awaitMigration(
+      CompatConfig config, ObjectMapper json, String jobPath, boolean packages) throws Exception {
+    long deadline = System.nanoTime() + Duration.ofMinutes(2).toNanos();
+    JsonNode status;
+    do {
+      Exchange response = send(config.nexusPlusInternal(jobPath).GET());
+      assert2xx("migration status", response);
+      status = json.readTree(response.body());
+      assertFalse(status.path("failedRepositories").asBoolean(), "metadata migration failed");
+      assertEquals(0, status.path("failedAssets").asLong(), "package migration failed");
+      boolean discovering = false;
+      for (JsonNode item : status.path("repositoryJobs")) {
+        discovering |= "discovering".equals(item.path("status").asText());
+      }
+      if (packages ? !status.path("active").asBoolean(true)
+          : !discovering && status.path("discoveredAssets").asLong() > 0) {
+        return status;
+      }
+      Thread.sleep(250);
+    } while (System.nanoTime() < deadline);
+    throw new AssertionError("Timed out waiting for PyPI migration " + jobPath);
+  }
 
   @Test
   void hostedProxyAndGroupRoundTripMatchNexusWhenConfigured() throws Exception {
@@ -546,6 +644,10 @@ class PypiRepositoryBlackBoxCompatibilityTest {
 
     private static WheelFixture create(String version) throws Exception {
       String name = "kkrepo-compat-pypi-" + System.currentTimeMillis();
+      return create(name, version);
+    }
+
+    private static WheelFixture create(String name, String version) throws Exception {
       String normalized = normalizeName(name);
       String distribution = normalized.replace('-', '_');
       String filename = distribution + "-" + version + "-py3-none-any.whl";

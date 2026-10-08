@@ -309,9 +309,17 @@ Completion pages use timestamp/ID indexes added by migration V55, with status-le
 `["*.quay.io", "quay.io"]`. `*.quay.io` matches `cdn01.quay.io` and deeper subdomains,
 but not `quay.io`, `evilquay.io`, or `quay.io.example.com`. Exact entries keep their existing
 behavior. Rules are case-insensitive, trailing dots are normalized, and IDNs are stored as ASCII.
-Bare `*`, partial wildcards, single-label wildcard suffixes, IP wildcard patterns, schemes,
+Partial wildcards, single-label wildcard suffixes, IP wildcard patterns, schemes,
 ports and paths are rejected. There are at most 64 rules per repository.
 
 These database-backed rules are applied by every replica to both ordinary proxy and Docker
 redirects. They do not allow private addresses or forward Basic/Bearer/NTLM credentials across
 origins: the outbound address policy and DNS pinning still apply to every hop.
+
+
+A standalone `*` in `proxy.allowedRedirectHosts` opts into arbitrary public HTTPS content GET/HEAD
+destinations. Removing it restores the retained exact/domain rules. POST, authentication and token
+exchanges retain strict rules. Independent public-address validation, DNS pinning, TLS verification,
+downgrade rejection, credential/cookie isolation and redirect limits remain enforced. DNS-resolving
+outbound proxies cannot be combined with this option. See
+[public HTTPS content redirects](design/public-https-redirect-policy.md).

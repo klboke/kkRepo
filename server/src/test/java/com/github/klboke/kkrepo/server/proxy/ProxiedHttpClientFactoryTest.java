@@ -40,6 +40,40 @@ import org.junit.jupiter.api.Test;
 class ProxiedHttpClientFactoryTest {
 
   @Test
+  void publicHttpsCapabilityDoesNotReuseThePooledClientCookieStore() throws Exception {
+    HttpServer upstream = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    List<String> cookies = new ArrayList<>();
+    upstream.createContext("/", exchange -> {
+      cookies.add(exchange.getRequestHeaders().getFirst("Cookie"));
+      exchange.getResponseHeaders().add("Set-Cookie", "fixture-session=example; Path=/");
+      exchange.sendResponseHeaders(200, 1);
+      exchange.getResponseBody().write('x');
+      exchange.close();
+    });
+    upstream.start();
+    try (var factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      String url = "http://127.0.0.1:" + upstream.getAddress().getPort() + "/";
+      var strict = OutboundRequestPolicy.allowPrivateForTests().resolveHttpTarget(url, "test");
+      // Mock only the issued capability to exercise the cookie transport on a local server.
+      // Production PUBLIC_HTTPS issuance rejects this HTTP/private endpoint.
+      var publicTarget = org.mockito.Mockito.mock(ResolvedHttpTarget.class);
+      org.mockito.Mockito.when(publicTarget.uri()).thenReturn(URI.create(url));
+      org.mockito.Mockito.when(publicTarget.addresses()).thenReturn(strict.addresses());
+      org.mockito.Mockito.when(publicTarget.publicHttpsOnly()).thenReturn(true);
+      for (var target : List.of(strict, publicTarget, strict)) {
+        try (var result = factory.execute("test", null, "GET", target, Map.of(), 10000)) {
+          result.body().readAllBytes();
+        }
+      }
+      assertNull(cookies.get(0));
+      assertNull(cookies.get(1), "PUBLIC_HTTPS must not inherit cookies from the pooled client");
+      assertEquals("fixture-session=example", cookies.get(2));
+    } finally {
+      upstream.stop(0);
+    }
+  }
+
+  @Test
   void saturatedRouteUsesLeaseTimeoutAndRecoversWhenResponsesClose() throws Exception {
     HttpServer upstream = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
     upstream.createContext("/", exchange -> {

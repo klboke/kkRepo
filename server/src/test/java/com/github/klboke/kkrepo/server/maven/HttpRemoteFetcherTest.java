@@ -46,6 +46,130 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 class HttpRemoteFetcherTest {
 
+  @Test
+  void publicHttpsCanonicalRequestRejectsBodiesAndEnabledOutboundProxies() {
+    byte[] body = "{}".getBytes(StandardCharsets.UTF_8);
+    var error = assertThrows(IllegalArgumentException.class,
+        () -> publicHttpsRequest(null, body, false));
+    assertEquals("PUBLIC_HTTPS supports direct content GET/HEAD only", error.getMessage());
+    for (var type : OutboundProxyConfig.Type.values()) {
+      var proxy = new OutboundProxyConfig(type, "proxy.example", 8080, null, null);
+      assertThrows(IllegalArgumentException.class, () -> publicHttpsRequest(proxy, null, false));
+    }
+    var disabled = new OutboundProxyConfig(null, "", 0, null, null);
+    assertEquals(false, publicHttpsRequest(disabled, null, false).headOnly());
+    assertEquals(true, publicHttpsRequest(null, null, true).headOnly());
+  }
+
+  private static HttpRemoteFetcher.Request publicHttpsRequest(
+      OutboundProxyConfig proxy, byte[] body, boolean headOnly) {
+    return new HttpRemoteFetcher.Request("https://repo.example/file", null, null, null, null,
+        headOnly, "proxy", "maven2", null, null, Set.of(), proxy, null, body,
+        body == null ? null : "application/json", null, null,
+        com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS);
+  }
+
+  @Test
+  void publicHttpsAllowsNewCdnButStripsCredentialsAndRejectsDowngrade() {
+    var runtime = mock(RepositoryRuntime.class);
+    when(runtime.name()).thenReturn("proxy");
+    when(runtime.proxyRemoteUrl()).thenReturn("https://repo.example.com");
+    when(runtime.proxyRemoteUsername()).thenReturn("robot");
+    when(runtime.proxyRemotePassword()).thenReturn("secret");
+    var ntlm = new com.github.klboke.kkrepo.server.proxy.NtlmCredentials("robot", "secret", "domain", "host");
+    when(runtime.ntlmCredentials()).thenReturn(ntlm);
+    when(runtime.allowedRedirectHosts()).thenReturn(Set.of());
+    when(runtime.contentRedirectPolicy()).thenReturn(
+        com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS);
+    var request = HttpRemoteFetcher.Request.get("https://repo.example.com/file")
+        .withRepositoryForContent(runtime).withAccept("application/octet-stream")
+        .withConditional("etag", null).withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.METADATA);
+    URI origin = URI.create(request.url());
+    URI cdn = URI.create("https://rotating.example.org/file");
+    assertSame(ntlm, request.ntlmCredentialsForRedirect(origin, origin));
+    assertEquals("rotating.example.org", request.trustedHostForRedirect(origin, cdn));
+    assertNull(request.authorizationHeaderForRedirect(origin, cdn));
+    assertNull(request.ntlmCredentialsForRedirect(origin, cdn));
+    assertThrows(SecurityValidationException.class, () ->
+        request.trustedHostForRedirect(origin, URI.create("http://rotating.example.org/file")));
+    var metadata = HttpRemoteFetcher.Request.get(cdn.toString()).withRepositoryRedirectBoundary(runtime);
+    assertNull(metadata.authorizationHeader());
+    assertEquals(request.redirectPolicy(), metadata.redirectPolicy());
+    assertEquals(com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.ALLOWLIST,
+        request.withBody("application/json", "{}".getBytes(StandardCharsets.UTF_8)).redirectPolicy());
+    assertThrows(SecurityValidationException.class,
+        () -> metadata.withBody("application/json", "{}".getBytes(StandardCharsets.UTF_8)));
+    assertEquals(com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.ALLOWLIST,
+        HttpRemoteFetcher.Request.get("https://repo.example.com/file")
+            .withBody("application/json", "{}".getBytes(StandardCharsets.UTF_8))
+            .withRepositoryForContent(runtime).redirectPolicy());
+  }
+
+  @Test
+  void repositoryConfigurationAloneDoesNotGrantContentAuthorityToUnknownGetPurpose() {
+    var runtime = mock(RepositoryRuntime.class);
+    when(runtime.proxyRemoteUrl()).thenReturn("https://repo.example");
+    when(runtime.contentRedirectPolicy()).thenReturn(com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS);
+    when(runtime.strictRedirectHosts()).thenReturn(Set.of("cdn.example"));
+    var unknown = HttpRemoteFetcher.Request.get("https://repo.example/authenticate").withRepository(runtime);
+    assertEquals(com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.ALLOWLIST, unknown.redirectPolicy());
+    assertEquals(Set.of("cdn.example"), unknown.allowedUnsignedRedirectHosts());
+    assertThrows(SecurityValidationException.class, () -> unknown.trustedHostForRedirect(
+        URI.create(unknown.url()), URI.create("https://unlisted.example/token")));
+  }
+
+  @Test
+  void publicHttpsRequestUsesIndependentPublicAddressPolicy() {
+    var policy = mock(OutboundRequestPolicy.class);
+    var target = mock(OutboundRequestPolicy.ResolvedHttpTarget.class);
+    when(target.uri()).thenReturn(URI.create("https://cdn.example.org/file"));
+    when(policy.resolvePublicHttpsTarget("https://cdn.example.org/file", "content")).thenReturn(target);
+    var runtime = mock(RepositoryRuntime.class);
+    when(runtime.allowedRedirectHosts()).thenReturn(Set.of());
+    when(runtime.contentRedirectPolicy()).thenReturn(
+        com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS);
+    var request = HttpRemoteFetcher.Request.get("https://cdn.example.org/file")
+        .withRepositoryForContent(runtime, false);
+    assertSame(target, request.resolvedTarget(policy, "content"));
+    verify(policy).resolvePublicHttpsTarget("https://cdn.example.org/file", "content");
+  }
+
+  @Test
+  void publicHttpsTransportFollowsRedirectsWithoutCredentialsAndBoundsCycles() throws Exception {
+    var policy = mock(OutboundRequestPolicy.class);
+    when(policy.resolvePublicHttpsTarget(anyString(), anyString())).thenAnswer(invocation -> {
+      var target = mock(OutboundRequestPolicy.ResolvedHttpTarget.class);
+      when(target.uri()).thenReturn(URI.create(invocation.getArgument(0, String.class)));
+      return target;
+    });
+    var transport = mock(ProxiedHttpClientFactory.class);
+    var headers = org.mockito.ArgumentCaptor.forClass(Map.class);
+    var redirectResponse = response(307, Map.of("Location", "https://cdn.example.org/file"), "");
+    var contentResponse = response(200, Map.of(), "artifact");
+    when(transport.execute(nullable(String.class), nullable(OutboundProxyConfig.class), eq("GET"),
+        any(OutboundRequestPolicy.ResolvedHttpTarget.class), headers.capture(), nullable(byte[].class), anyLong()))
+        .thenReturn(redirectResponse, contentResponse);
+    var runtime = mock(RepositoryRuntime.class);
+    when(runtime.proxyRemoteUrl()).thenReturn("https://repo.example.com");
+    when(runtime.proxyRemoteBearerToken()).thenReturn("test-token");
+    when(runtime.allowedRedirectHosts()).thenReturn(Set.of());
+    when(runtime.contentRedirectPolicy()).thenReturn(
+        com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS);
+    var request = HttpRemoteFetcher.Request.get("https://repo.example.com/file").withRepositoryForContent(runtime);
+    var fetcher = new HttpRemoteFetcher(policy, null, transport, "HTTP_1_1", 30, 60, 300, 0, 0);
+    try (var result = fetcher.fetch(request)) {
+      assertEquals("artifact", new String(result.body().readAllBytes(), StandardCharsets.UTF_8));
+    }
+    assertEquals("Bearer test-token", headers.getAllValues().get(0).get("Authorization"));
+    assertNull(headers.getAllValues().get(1).get("Authorization"));
+    when(transport.execute(nullable(String.class), nullable(OutboundProxyConfig.class), eq("GET"),
+        any(OutboundRequestPolicy.ResolvedHttpTarget.class), anyMap(), nullable(byte[].class), anyLong()))
+        .thenAnswer(invocation -> response(307,
+            Map.of("Location", "https://cdn.example.org/loop?signature=private-fixture"), ""));
+    var error = assertThrows(IOException.class, () -> fetcher.fetch(request));
+    org.junit.jupiter.api.Assertions.assertFalse(error.getMessage().contains("private-fixture"));
+  }
+
   @ParameterizedTest
   @ValueSource(strings = {"/maven/^4.2.0.pom", "/maven/a b.pom", "/maven/%zz.pom", "http://[invalid/path"})
   void malformedRedirectIsAnIoFailureAndReleasesResponse(String location) throws Exception {

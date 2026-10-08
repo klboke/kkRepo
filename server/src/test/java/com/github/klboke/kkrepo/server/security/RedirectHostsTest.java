@@ -8,6 +8,12 @@ import org.junit.jupiter.api.Test;
 
 class RedirectHostsTest {
   @Test
+  void standaloneStarIsAContentOptInRatherThanAnUnrestrictedHostMatch() {
+    assertEquals("*", RedirectHosts.normalizeRule(" * "));
+    assertFalse(RedirectHosts.matches(List.of("*"), "cdn.example"));
+  }
+
+  @Test
   void normalizesExactAndSubdomainRules() {
     assertEquals("*.quay.io", RedirectHosts.normalizeRule(" *.QUAY.IO. "));
     assertEquals("xn--bcher-kva.example", RedirectHosts.normalizeRule("Bücher.example"));
@@ -17,8 +23,8 @@ class RedirectHostsTest {
   }
 
   @Test
-  void rejectsInvalidAndUnrestrictedRules() {
-    for (String rule : Arrays.asList(null, "", " ", "*", "*.io", "*.127.0.0.1", "*.*.quay.io",
+  void rejectsInvalidRules() {
+    for (String rule : Arrays.asList(null, "", " ", "*.io", "*.127.0.0.1", "*.*.quay.io",
         "cdn*.quay.io", "https://quay.io", "quay.io:443", "quay.io/path", ".quay.io",
         "-cdn.quay.io", "cdn-.quay.io", "a..quay.io", "a".repeat(64) + ".quay.io",
         "a.".repeat(127) + "com")) {

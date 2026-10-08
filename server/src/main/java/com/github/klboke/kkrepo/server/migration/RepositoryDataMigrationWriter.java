@@ -1112,7 +1112,7 @@ class RepositoryDataMigrationWriter {
     return switch (format) {
       case MAVEN2 -> mavenAssetKind(source.sourcePath());
       case NPM -> source.sourcePath().endsWith(".tgz") ? "tarball" : "package-root";
-      case PYPI -> "PACKAGE";
+      case PYPI -> pypiAssetKind(source.sourcePath());
       case HELM -> source.sourcePath().endsWith("index.yaml")
           ? "INDEX"
           : source.sourcePath().endsWith(".prov") ? "PROVENANCE" : "PACKAGE";
@@ -1146,6 +1146,20 @@ class RepositoryDataMigrationWriter {
       case HUGGINGFACE -> "huggingface-model-file";
       case RAW -> "asset";
     };
+  }
+
+  private static String pypiAssetKind(String path) {
+    if ("simple/".equals(path)) {
+      return "root-index";
+    }
+    if (path.startsWith("simple/")) {
+      return "index";
+    }
+    // PEP 658 sidecars remain downloadable but are not distribution links in the Simple index.
+    if (path.endsWith(".metadata")) {
+      return "package-metadata";
+    }
+    return path.endsWith(".asc") ? "package-signature" : "package";
   }
 
   private static String componentKind(RepositoryFormat format, RepositoryDataMigrationAssetRecord source) {

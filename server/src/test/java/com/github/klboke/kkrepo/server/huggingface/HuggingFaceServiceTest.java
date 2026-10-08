@@ -357,9 +357,10 @@ class HuggingFaceServiceTest {
     verify(stale.registry).upsertApiCache(any());
   }
 
-  @Test
-  void postsPathsInfoAndProjectsTreeEntriesAtThePinnedCommit() throws Exception {
-    Fixture fixture = fixture();
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+  void postsPathsInfoAndProjectsTreeEntriesAtThePinnedCommit(boolean publicContent) throws Exception {
+    Fixture fixture = fixture(1024 * 1024, publicContent);
     String tree = """
         [{"type":"directory","path":"ignored"},
          {"type":"file","path":"config.json","oid":"%s","size":12},
@@ -383,6 +384,11 @@ class HuggingFaceServiceTest {
     verify(fixture.fetcher).fetch(request.capture());
     assertTrue(request.getValue().url().contains("recursive=true"));
     assertTrue(request.getValue().requestBody() != null);
+    assertEquals("POST", request.getValue().method());
+    assertEquals(com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.ALLOWLIST,
+        request.getValue().redirectPolicy());
+    assertFalse(request.getValue().allowedUnsignedRedirectHosts().contains("*"));
+    if (publicContent) assertTrue(request.getValue().allowedUnsignedRedirectHosts().contains("cdn.example"));
     ArgumentCaptor<ModelFile> files = ArgumentCaptor.forClass(ModelFile.class);
     verify(fixture.registry, org.mockito.Mockito.times(2)).upsertFileMetadata(files.capture());
     assertTrue(files.getAllValues().stream()
@@ -879,6 +885,10 @@ class HuggingFaceServiceTest {
   }
 
   private static Fixture fixture(long maxFileBytes) {
+    return fixture(maxFileBytes, false);
+  }
+
+  private static Fixture fixture(long maxFileBytes, boolean publicContent) {
     HuggingFaceRegistryDao registry = mock(HuggingFaceRegistryDao.class);
     ComponentDao componentDao = mock(ComponentDao.class);
     HttpRemoteFetcher fetcher = mock(HttpRemoteFetcher.class);
@@ -887,7 +897,8 @@ class HuggingFaceServiceTest {
     RepositoryRuntime runtime = new RepositoryRuntime(
         42L, "hf", RepositoryFormat.HUGGINGFACE, RepositoryType.PROXY, "huggingface-proxy",
         true, 1L, null, null, null, true, "https://hub.example", 1440, 60, true,
-        null, List.of());
+        null, null, null, null, null, null, null, null, List.of(), null, null,
+        publicContent ? java.util.Set.of("*", "cdn.example") : java.util.Set.of(), null);
     HuggingFaceService service = new HuggingFaceService(
         registry, componentDao, fetcher, cache, new HuggingFaceComponentFactory(), leases,
         new ObjectMapper(), maxFileBytes);

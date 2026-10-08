@@ -13,6 +13,7 @@ public final class RedirectHosts {
 
   public static String normalizeRule(String rule) {
     if (rule == null || rule.isBlank()) throw new IllegalArgumentException("Empty redirect host");
+    if ("*".equals(rule.trim())) return "*"; // Content transport opt-in, not an unrestricted host match.
     String value = normalizeHost(rule);
     boolean wildcard = value.startsWith("*.");
     String domain = wildcard ? value.substring(2) : value;

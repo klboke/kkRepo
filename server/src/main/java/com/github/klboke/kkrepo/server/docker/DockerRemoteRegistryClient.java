@@ -159,9 +159,11 @@ public class DockerRemoteRegistryClient {
     boolean recorded = false;
     ProxiedHttpClientFactory.ProxiedResponse response = null;
     try {
-      OutboundRequestPolicy.ResolvedHttpTarget target =
-          outboundPolicy.resolveHttpTarget(
-              url, "docker remote fetch", proxyResolvesDns(runtime));
+      boolean publicHttps = runtime != null && runtime.contentRedirectPolicy()
+          == com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS;
+      OutboundRequestPolicy.ResolvedHttpTarget target = publicHttps
+          ? outboundPolicy.resolvePublicHttpsTarget(url, "docker remote fetch")
+          : outboundPolicy.resolveHttpTarget(url, "docker remote fetch", proxyResolvesDns(runtime));
       URI uri = target.uri();
       Map<String, String> headers = new LinkedHashMap<>();
       headers.put("User-Agent", "kkrepo/0.1");
@@ -186,7 +188,7 @@ public class DockerRemoteRegistryClient {
         response.close();
         response = null;
         if (redirects >= MAX_REDIRECTS) {
-          throw new IOException("Too many redirects fetching Docker remote " + url);
+          throw new IOException("Too many redirects fetching Docker remote from " + uri.getHost());
         }
         URI redirected = uri.resolve(location);
         requireAllowedRedirect(runtime, uri, redirected);
@@ -338,6 +340,14 @@ public class DockerRemoteRegistryClient {
 
   private static void requireAllowedRedirect(
       RepositoryRuntime runtime, URI current, URI redirected) {
+    if (runtime != null && runtime.contentRedirectPolicy()
+        == com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS) {
+      if (!"https".equalsIgnoreCase(current.getScheme())
+          || !"https".equalsIgnoreCase(redirected.getScheme())) {
+        throw new SecurityValidationException("PUBLIC_HTTPS redirect must remain https");
+      }
+      return; // Every destination is independently validated and pinned before connection.
+    }
     if (sameOrigin(current, redirected)) {
       return;
     }

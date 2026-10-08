@@ -228,7 +228,7 @@ class RepositoryRuntimeRegistryTest {
         "allowedRedirectHosts", List.of(
             "plugins-artifacts.gradle.org",
             "CDN.EXAMPLE.ORG.",
-            "*"))), List.of());
+            "bad*rule"))), List.of());
 
     RepositoryRuntime runtime = new RepositoryRuntimeRegistry(dao, 0)
         .resolve("gradle-plugins")

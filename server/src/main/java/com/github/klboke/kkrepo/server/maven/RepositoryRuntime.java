@@ -90,10 +90,15 @@ public record RepositoryRuntime(
         try {
           normalized.add(RedirectHosts.normalizeRule(host));
         } catch (IllegalArgumentException ignored) {
-          // Invalid persisted rules fail closed, including the protocol-only unrestricted "*".
+          // Invalid persisted rules fail closed.
         }
       }
       allowedRedirectHosts = Set.copyOf(normalized);
+    }
+    if (allowedRedirectHosts.contains("*")
+        && (proxyRemoteUrl == null || !"https".equalsIgnoreCase(java.net.URI.create(proxyRemoteUrl).getScheme())
+            || (outboundProxy != null && outboundProxy.enabled()))) {
+      throw new IllegalArgumentException("Standalone * requires an HTTPS upstream and direct outbound transport");
     }
   }
 
@@ -485,12 +490,36 @@ public record RepositoryRuntime(
         && minimumReleaseAgeMinutesOrDefault() > 0;
   }
 
+  /** Derived from the existing persisted allowlist; not a separate configuration property. */
+  public com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy contentRedirectPolicy() {
+    return allowedRedirectHosts.contains("*")
+        ? com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS
+        : com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.ALLOWLIST;
+  }
+
+  public Set<String> strictRedirectHosts() {
+    return allowedRedirectHosts.stream().filter(host -> !"*".equals(host))
+        .collect(java.util.stream.Collectors.toUnmodifiableSet());
+  }
+
+  /** Authentication and discovery never inherit the content-only standalone star. */
+  public RepositoryRuntime withoutPublicContentRedirects() {
+    return new RepositoryRuntime(
+        id, name, format, type,
+        recipeName, online, blobStoreId, writePolicy,
+        versionPolicy, layoutPolicy, strictContentTypeValidation, proxyRemoteUrl,
+        contentMaxAgeMinutes, metadataMaxAgeMinutes, autoBlock, proxyRemoteUsername,
+        proxyRemotePassword, proxyRemoteBearerToken, rawContentDisposition, dockerConnectorEnabled,
+        dockerConnectorPort, dockerConnectorPublicUrl, cargoRequireAuthentication, members,
+        outboundProxy, minimumReleaseAgeMinutes, strictRedirectHosts(), ntlmCredentials);
+  }
+
   /** Combines operator-configured hosts with protocol-owned redirect destinations. */
   public Set<String> allowedRedirectHostsWith(Set<String> protocolRedirectHosts) {
     if (protocolRedirectHosts == null || protocolRedirectHosts.isEmpty()) {
-      return allowedRedirectHosts;
+      return strictRedirectHosts();
     }
-    LinkedHashSet<String> merged = new LinkedHashSet<>(allowedRedirectHosts);
+    LinkedHashSet<String> merged = new LinkedHashSet<>(strictRedirectHosts());
     for (String host : protocolRedirectHosts) {
       String value = normalizeRedirectHost(host);
       if (!value.isBlank()) merged.add(value);

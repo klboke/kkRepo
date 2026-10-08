@@ -6,6 +6,10 @@ This project follows a pragmatic release process. Stable releases call out migra
 
 ## Unreleased
 
+### Added
+
+- Proxy repositories can opt into public HTTPS content GET/HEAD redirects with a standalone `*` in `proxy.allowedRedirectHosts`. The existing editor, exact/domain rules and strict default remain. Public-address validation, DNS pinning, TLS, downgrade rejection and credential/cookie isolation are enforced independently; POST and authentication exchanges retain strict rules, including Hugging Face and Conan integration paths. (#384)
+
 ### Fixed
 
 - Hosted npm `ALLOW_ONCE` rejects concurrent tarball replacement at the persistence boundary. Package publication and multipart upload roll back all attachment and metadata changes when a write fails, while new versions and proxy-cache refreshes remain supported. Transient contention retries the complete staged publication in a fresh transaction. (#387)

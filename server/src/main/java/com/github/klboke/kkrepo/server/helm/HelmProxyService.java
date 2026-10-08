@@ -216,7 +216,7 @@ public class HelmProxyService {
         null,
         false)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.METADATA)
-        .withRepository(runtime);
+        .withRepositoryForContent(runtime);
     try {
       return fetcher.fetchWithBodyRetry(req, HelmHostedService.INDEX_PATH, result -> {
         int status = result.status();
@@ -320,7 +320,7 @@ public class HelmProxyService {
     HttpRemoteFetcher.Request req = new HttpRemoteFetcher.Request(
         remoteUrl, etag, lastModified, null, false)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
-        .withRepository(runtime);
+        .withRepositoryForContent(runtime);
     try {
       return fetcher.fetchWithBodyRetry(req, path, result -> {
         int status = result.status();

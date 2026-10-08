@@ -67,3 +67,13 @@ test('legacy feeds stay in Basic/Bearer mode and other formats do not inherit NT
   context.setRepositoryFormDefaults();
   assert.equal(element('repository-remote-ntlm-domain').value, '');
 });
+
+
+test('existing redirect editor round-trips standalone star with exact and domain rules', () => {
+  const { context, element } = form({ name: 'feed', recipe: 'nuget-proxy', format: 'nuget', type: 'PROXY',
+    online: true, proxy: { remoteUrl: 'https://repo.example', allowedRedirectHosts: ['*', 'cdn.example', '*.example.net'] } });
+  context.showEditRepositoryForm('feed');
+  assert.equal(element('repository-allowed-redirect-hosts').value, '*, cdn.example, *.example.net');
+  assert.deepEqual(Array.from(context.repositoryFormPayload().proxy.allowedRedirectHosts), ['*', 'cdn.example', '*.example.net']);
+  assert.equal(Object.hasOwn(context.repositoryFormPayload().proxy, 'redirectPolicy'), false);
+});

@@ -29,6 +29,11 @@ public final class MavenExceptions {
     public MethodNotAllowed(String message) { super(message); }
   }
 
+  /** Expected upstream authentication rejection, distinct from transport/programming failures. */
+  public static class UpstreamUnauthorizedException extends BadUpstreamException {
+    public UpstreamUnauthorizedException() { super("Upstream returned 401"); }
+  }
+
   public static class BadUpstreamException extends RuntimeException {
     public BadUpstreamException(String message) { super(message); }
     public BadUpstreamException(String message, Throwable cause) { super(message, cause); }

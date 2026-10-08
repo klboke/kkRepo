@@ -51,6 +51,46 @@ class ConanRemoteClientTest {
   }
 
   @Test
+  void tokenExchangeStaysStrictAndCredentialCopyPreservesContentRules() throws Exception {
+    when(fetcher.fetch(any())).thenReturn(result(200, "upstream-token"), result(200, "payload"));
+    var runtime = publicContentRuntime();
+    try (var file = client.fetchFile(runtime, "v2/conans/demo/1.0/user/stable/files/archive.tgz")) {
+      assertEquals(200, file.status());
+    }
+    var requests = ArgumentCaptor.forClass(HttpRemoteFetcher.Request.class);
+    verify(fetcher, times(2)).fetch(requests.capture());
+    var authentication = requests.getAllValues().get(0);
+    var content = requests.getAllValues().get(1);
+    assertTrue(authentication.url().endsWith("v2/users/authenticate"));
+    assertEquals(com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.ALLOWLIST, authentication.redirectPolicy());
+    assertEquals(java.util.Set.of("cdn.example", "*.downloads.example"), authentication.allowedUnsignedRedirectHosts());
+    assertEquals(com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS, content.redirectPolicy());
+    assertEquals(authentication.allowedUnsignedRedirectHosts(), content.allowedUnsignedRedirectHosts());
+    assertEquals("Bearer upstream-token", content.authorizationHeader());
+  }
+
+  @Test
+  void discoveryDoesNotInheritTheStandaloneContentStar() throws Exception {
+    when(fetcher.fetch(any())).thenReturn(result(200, "upstream-token"));
+    when(proxy.getMetadataFromUrlHidden(any(), anyString(), anyString(), anyBoolean()))
+        .thenReturn(MavenResponse.ok(new ByteArrayInputStream("{}".getBytes(StandardCharsets.UTF_8)),
+            2, "application/json", null, Instant.EPOCH));
+    client.discovery(publicContentRuntime(), "v2/conans/search", null);
+    var copied = ArgumentCaptor.forClass(RepositoryRuntime.class);
+    verify(proxy).getMetadataFromUrlHidden(copied.capture(), anyString(), anyString(), anyBoolean());
+    assertEquals(java.util.Set.of("cdn.example", "*.downloads.example"), copied.getValue().allowedRedirectHosts());
+    assertEquals(com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.ALLOWLIST, copied.getValue().contentRedirectPolicy());
+    assertEquals("upstream-token", copied.getValue().proxyRemoteBearerToken());
+  }
+
+  private static RepositoryRuntime publicContentRuntime() {
+    return new RepositoryRuntime(1L, "conan-proxy", RepositoryFormat.CONAN, RepositoryType.PROXY,
+        "conan-proxy", true, 1L, null, null, null, true, "https://repo.example/conan",
+        1440, 60, true, "robot", "secret", null, null, null, null, null, null,
+        List.of(), null, null, java.util.Set.of("*", "cdn.example", "*.downloads.example"), null);
+  }
+
+  @Test
   void exchangesAndCachesBearerTokenForBasicUpstreams() throws Exception {
     when(fetcher.fetch(any())).thenReturn(result(200, "upstream-token"));
     when(proxy.getMetadataFromUrlHidden(any(), anyString(), anyString(), anyBoolean()))
@@ -76,7 +116,7 @@ class ConanRemoteClientTest {
     when(fetcher.fetch(any()))
         .thenReturn(result(200, "token-one"), result(200, "token-two"));
     when(proxy.getMetadataFromUrlHidden(any(), anyString(), anyString(), anyBoolean()))
-        .thenThrow(new IllegalStateException("stale token"))
+        .thenThrow(new com.github.klboke.kkrepo.server.maven.MavenExceptions.UpstreamUnauthorizedException())
         .thenReturn(MavenResponse.ok(
             new ByteArrayInputStream("{}".getBytes(StandardCharsets.UTF_8)),
             2, "application/json", null, Instant.EPOCH));
@@ -86,6 +126,34 @@ class ConanRemoteClientTest {
     verify(fetcher, times(2)).fetch(any());
     verify(proxy, times(2)).getMetadataFromUrlHidden(
         any(), anyString(), anyString(), anyBoolean());
+  }
+
+  @Test
+  void unexpectedDiscoveryFailureIsNotRetriedAndFailedAuthRetryRetainsEvidence() throws Exception {
+    var unexpected = new IllegalStateException("unexpected storage failure");
+    when(fetcher.fetch(any())).thenReturn(result(200, "token"));
+    when(proxy.getMetadataFromUrlHidden(any(), anyString(), anyString(), anyBoolean())).thenThrow(unexpected);
+    assertSame(unexpected, assertThrows(IllegalStateException.class,
+        () -> client.discovery(runtime("robot", "secret", null), "v2/conans/search", null)));
+    verify(proxy).getMetadataFromUrlHidden(any(), anyString(), anyString(), anyBoolean());
+    var denied = new com.github.klboke.kkrepo.server.maven.MavenExceptions.UpstreamUnauthorizedException();
+    when(fetcher.fetch(any())).thenAnswer(call -> result(200, "token"));
+    org.mockito.Mockito.doThrow(denied).doThrow(unexpected).when(proxy)
+        .getMetadataFromUrlHidden(any(), anyString(), anyString(), anyBoolean());
+    assertSame(unexpected, assertThrows(IllegalStateException.class,
+        () -> client.discovery(runtime("robot", "secret", null), "v2/conans/search", null)));
+    assertSame(denied, unexpected.getSuppressed()[0]);
+  }
+
+  @Test
+  void repeatedAuthenticationRejectionCannotReplaceTheOriginalWithSelfSuppression() throws Exception {
+    var denied = new com.github.klboke.kkrepo.server.maven.MavenExceptions.UpstreamUnauthorizedException();
+    when(fetcher.fetch(any())).thenAnswer(call -> result(200, "token"));
+    when(proxy.getMetadataFromUrlHidden(any(), anyString(), anyString(), anyBoolean())).thenThrow(denied);
+    assertSame(denied, assertThrows(com.github.klboke.kkrepo.server.maven.MavenExceptions.UpstreamUnauthorizedException.class,
+        () -> client.discovery(runtime("robot", "secret", null), "v2/conans/search", null)));
+    assertEquals(0, denied.getSuppressed().length);
+    verify(proxy, times(2)).getMetadataFromUrlHidden(any(), anyString(), anyString(), anyBoolean());
   }
 
   @Test

@@ -203,7 +203,7 @@ public class NpmProxyService {
     HttpRemoteFetcher.Request req = new HttpRemoteFetcher.Request(
         url, null, null, null, false)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.SEARCH)
-        .withRepository(runtime);
+        .withRepositoryForContent(runtime);
     try {
       return fetcher.fetchWithBodyRetry(req, "-/v1/search", result -> {
         int status = result.status();
@@ -377,7 +377,7 @@ public class NpmProxyService {
         url, conditional.etag(), conditional.lastModified(), null, false)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.METADATA)
         .withAccept("application/json")
-        .withRepository(runtime);
+        .withRepositoryForContent(runtime);
     Instant priorVerification = cached.map(CachedAssetMetadata::lastUpdatedAt).orElse(null);
     Instant priorEvaluationTime = safeEvaluationTime(priorVerification, now);
     int minimumAge = runtime.minimumReleaseAgeMinutesOrDefault();
@@ -788,7 +788,7 @@ public class NpmProxyService {
     HttpRemoteFetcher.Request req = new HttpRemoteFetcher.Request(
         url, conditional.etag(), conditional.lastModified(), null, false)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.METADATA)
-        .withRepository(runtime);
+        .withRepositoryForContent(runtime);
     try {
       return fetcher.fetchWithBodyRetry(req, packageId.id(), result -> {
         int status = result.status();

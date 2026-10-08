@@ -20,6 +20,54 @@ import org.junit.jupiter.api.Test;
 class OutboundRequestPolicyTest {
 
   @Test
+  void publicHttpsIgnoresGlobalPrivateAddressExceptionsAndPinsAllDnsAnswers() throws Exception {
+    var privatePolicy = new OutboundRequestPolicy(true, "cdn.example",
+        host -> new InetAddress[] {InetAddress.getByName("8.8.8.8"), InetAddress.getByName("127.0.0.1")});
+    assertThrows(SecurityValidationException.class,
+        () -> privatePolicy.resolvePublicHttpsTarget("https://cdn.example/blob", "content"));
+    var publicPolicy = new OutboundRequestPolicy(true, "cdn.example",
+        host -> new InetAddress[] {InetAddress.getByName("8.8.8.8")});
+    var target = publicPolicy.resolvePublicHttpsTarget("https://cdn.example/blob", "content");
+    assertEquals("8.8.8.8", target.addresses().getFirst().getHostAddress());
+    assertEquals(false, target.proxyResolvesDns());
+    assertEquals(true, target.publicHttpsOnly());
+    assertThrows(SecurityValidationException.class,
+        () -> publicPolicy.resolvePublicHttpsTarget("http://cdn.example/blob", "content"));
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings = {
+      "127.0.0.1", "10.0.0.1", "172.16.0.1", "192.168.0.1", "169.254.169.254",
+      "0.0.0.0", "224.0.0.1", "::1", "fc00::1", "fe80::1", "::ffff:127.0.0.1",
+      "100.64.0.1", "192.0.2.1", "198.18.0.1", "198.51.100.1", "203.0.113.1", "240.0.0.1",
+      "2001:db8::1", "3fff::1", "2001:2::1", "2001:10::1", "2002:7f00:1::1", "64:ff9b::7f00:1"
+  })
+  void publicHttpsRejectsForbiddenDestinationsEvenWithGlobalExceptions(String address) {
+    var policy = new OutboundRequestPolicy(true, "cdn.example",
+        host -> new InetAddress[] {InetAddress.getByName(address)});
+    assertThrows(SecurityValidationException.class,
+        () -> policy.resolvePublicHttpsTarget("https://cdn.example/blob", "content"));
+  }
+
+  @Test
+  void publicHttpsRejectsMissingAndMalformedUrlsBeforeResolvingDns() {
+    AtomicInteger lookups = new AtomicInteger();
+    var policy = new OutboundRequestPolicy(true, "cdn.example", host -> {
+      lookups.incrementAndGet();
+      return new InetAddress[] {InetAddress.getByName("8.8.8.8")};
+    });
+    for (String url : new String[] {null, "", "  "}) {
+      var error = assertThrows(SecurityValidationException.class,
+          () -> policy.resolvePublicHttpsTarget(url, "content"));
+      assertEquals("content URL is required", error.getMessage());
+    }
+    var error = assertThrows(SecurityValidationException.class,
+        () -> policy.resolvePublicHttpsTarget("https://cdn.example/bad path?signature=secret", "content"));
+    assertEquals("content URL is not valid", error.getMessage());
+    assertEquals(0, lookups.get());
+  }
+
+  @Test
   void rejectsLoopbackByDefault() {
     OutboundRequestPolicy policy = new OutboundRequestPolicy(false, "");
 

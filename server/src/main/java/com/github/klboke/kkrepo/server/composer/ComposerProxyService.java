@@ -192,7 +192,7 @@ public class ComposerProxyService {
     HttpRemoteFetcher.Request request = new HttpRemoteFetcher.Request(
         url, etag, lastModified, null, false)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.METADATA)
-        .withRepository(runtime);
+        .withRepositoryForContent(runtime);
     try {
       return fetcher.fetchWithBodyRetry(request, cachePath, result -> {
         if (result.status() == 304 && cached.isPresent()) {

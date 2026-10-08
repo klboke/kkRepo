@@ -228,7 +228,7 @@ public class CargoProxyService {
         null,
         false)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.METADATA)
-        .withRepository(runtime);
+        .withRepositoryForContent(runtime);
     try {
       return fetcher.fetchWithBodyRetry(req, path, result -> {
         int status = result.status();
@@ -328,7 +328,7 @@ public class CargoProxyService {
     HttpRemoteFetcher.Request req = new HttpRemoteFetcher.Request(
         url, remoteEtag(cached), remoteLastModified(cached), null, false)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
-        .withRepository(runtime, upstreamAuthRequired);
+        .withRepositoryForContent(runtime, upstreamAuthRequired);
     try {
       return fetcher.fetchWithBodyRetry(req, path, result -> {
         int status = result.status();

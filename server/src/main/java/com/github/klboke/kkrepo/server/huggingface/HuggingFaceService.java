@@ -169,11 +169,11 @@ public class HuggingFaceService {
     HttpRemoteFetcher.Request request = new HttpRemoteFetcher.Request(
         remoteUrl, etag, null, null, false)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.METADATA)
-        .withAccept("application/json")
-        .withRepository(runtime);
+        .withAccept("application/json");
     if (requestBody != null) {
       request = request.withBody(MediaType.APPLICATION_JSON_VALUE, requestBody);
     }
+    request = request.withRepository(runtime);
     try (HttpRemoteFetcher.Result result = fetcher.fetch(request)) {
       if (result.status() == 304 && existing.isPresent()
           && cache.find(runtime, derivedPath).isPresent()) {

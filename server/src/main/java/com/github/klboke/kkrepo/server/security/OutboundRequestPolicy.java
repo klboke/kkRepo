@@ -114,6 +114,53 @@ public class OutboundRequestPolicy {
     return resolveHttpTarget(uri, purpose, false);
   }
 
+  /** Public HTTPS mode never inherits global private-address or allowed-host exceptions. */
+  public ResolvedHttpTarget resolvePublicHttpsTarget(String rawUrl, String purpose) {
+    if (rawUrl == null || rawUrl.isBlank()) {
+      throw new SecurityValidationException(purpose + " URL is required");
+    }
+    URI uri;
+    try {
+      uri = new URI(rawUrl);
+    } catch (URISyntaxException e) {
+      // Expected validation failure: do not retain a signed URL in the diagnostic.
+      throw new SecurityValidationException(purpose + " URL is not valid");
+    }
+    if (!"https".equalsIgnoreCase(uri.getScheme())) {
+      throw new SecurityValidationException(purpose + " URL must be https");
+    }
+    ResolvedHttpTarget target = new OutboundRequestPolicy(false, Set.of(), hostResolver)
+        .resolveHttpTarget(uri, purpose, false);
+    for (InetAddress address : target.addresses()) {
+      if (nonPublicAddress(address)) {
+        throw new SecurityValidationException(purpose + " URL resolves to a non-public address");
+      }
+    }
+    return new ResolvedHttpTarget(target.uri(), target.addresses(), false, true);
+  }
+
+  private static boolean nonPublicAddress(InetAddress address) {
+    byte[] raw = address.getAddress();
+    int a = raw[0] & 0xff;
+    int b = raw[1] & 0xff;
+    if (address instanceof Inet4Address) {
+      int c = raw[2] & 0xff;
+      return a >= 240
+          || (a == 100 && b >= 64 && b <= 127)
+          || (a == 192 && b == 0 && (c == 0 || c == 2))
+          || (a == 192 && b == 88 && c == 99)
+          || (a == 198 && (b == 18 || b == 19))
+          || (a == 198 && b == 51 && c == 100)
+          || (a == 203 && b == 0 && c == 113);
+    }
+    // Public IPv6 unicast only; exclude documentation and transition ranges.
+    return (a & 0xe0) != 0x20
+        || (a == 0x3f && b == 0xff)
+        || (a == 0x20 && b == 0x02)
+        || (a == 0x20 && b == 0x01 && ((raw[2] & 0xff) & 0xfe) == 0)
+        || (a == 0x20 && b == 0x01 && (raw[2] & 0xff) == 0x0d && (raw[3] & 0xff) == 0xb8);
+  }
+
   public ResolvedHttpTarget resolveHttpTarget(
       URI uri, String purpose, boolean proxyResolvesDns) {
     String host = validatedHost(uri, purpose);
@@ -261,12 +308,19 @@ public class OutboundRequestPolicy {
     private final URI uri;
     private final List<InetAddress> addresses;
     private final boolean proxyResolvesDns;
+    private final boolean publicHttpsOnly;
 
     private ResolvedHttpTarget(
         URI uri, List<InetAddress> addresses, boolean proxyResolvesDns) {
+      this(uri, addresses, proxyResolvesDns, false);
+    }
+
+    private ResolvedHttpTarget(
+        URI uri, List<InetAddress> addresses, boolean proxyResolvesDns, boolean publicHttpsOnly) {
       this.uri = uri;
       this.addresses = List.copyOf(addresses);
       this.proxyResolvesDns = proxyResolvesDns;
+      this.publicHttpsOnly = publicHttpsOnly;
     }
 
     public URI uri() {
@@ -279,6 +333,10 @@ public class OutboundRequestPolicy {
 
     public boolean proxyResolvesDns() {
       return proxyResolvesDns;
+    }
+
+    public boolean publicHttpsOnly() {
+      return publicHttpsOnly;
     }
   }
 }

@@ -1412,6 +1412,14 @@ public class RepositoryService {
     } catch (SecurityValidationException e) {
       throw new RepositoryValidationException(e.getMessage());
     }
+    if (normalizeAllowedRedirectHosts(settings.allowedRedirectHosts()).contains("*")) {
+      if (!"https".equalsIgnoreCase(java.net.URI.create(settings.remoteUrl()).getScheme())) {
+        throw new RepositoryValidationException("Standalone * requires an HTTPS upstream");
+      }
+      if (outboundProxy != null && outboundProxy.enabled()) {
+        throw new RepositoryValidationException("Standalone * requires direct outbound transport");
+      }
+    }
     int minimumReleaseAge = settings.minimumReleaseAgeMinutes() == null
         ? 0
         : settings.minimumReleaseAgeMinutes();
@@ -1446,7 +1454,7 @@ public class RepositoryService {
 
   private static RepositoryValidationException invalidRedirectHost() {
     return new RepositoryValidationException(
-        "proxy.allowedRedirectHosts entries must be exact host names or *.example.com patterns without a scheme, port, or path");
+        "proxy.allowedRedirectHosts entries must be standalone *, exact host names or *.example.com patterns without a scheme, port, or path");
   }
 
   private OutboundProxyConfig validateOutboundProxy(ProxySettings settings) {

@@ -132,7 +132,7 @@ public class GoProxyService {
     HttpRemoteFetcher.Request req = new HttpRemoteFetcher.Request(
         url, etag, lastModified, null, false)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
-        .withRepository(runtime);
+        .withRepositoryForContent(runtime);
     try {
       return fetcher.fetchWithBodyRetry(req, path.path(), result -> {
         int status = result.status();

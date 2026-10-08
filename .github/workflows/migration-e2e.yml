@@ -262,7 +262,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up JDK 25
-        if: matrix.nexus-version == '3.92.0' || matrix.apt-migration-enabled
+        if: matrix.nexus-version == '3.92.0' || matrix.nexus-version == '3.94.0' || matrix.apt-migration-enabled
         uses: actions/setup-java@v6
         with:
           distribution: temurin
@@ -356,6 +356,17 @@ jobs:
           mvn -B -ntp -pl compat-test -am
           -Dtest=TerraformRepositoryBlackBoxCompatibilityTest#preparesNexusHostedMigrationFixtureWhenConfigured
           -Dsurefire.failIfNoSpecifiedTests=false test
+
+      - name: Verify PyPI hosted migration indexes
+        if: matrix.nexus-version == '3.94.0'
+        env:
+          COMPAT_PYPI_MIGRATION_ENABLED: "true"
+        run: |
+          mkdir -p artifacts
+          mvn -B -ntp -pl compat-test -am \
+            -Dtest=PypiRepositoryBlackBoxCompatibilityTest#hostedMigrationPreservesAllProjectIndexesWhenEnabled \
+            -Dsurefire.failIfNoSpecifiedTests=false test \
+            2>&1 | tee artifacts/pypi-migration.log
 
       - name: Run Nexus metadata and repository-data migration E2E
         run: scripts/docker-compat/migration-e2e.sh
