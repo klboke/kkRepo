@@ -29,11 +29,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.mockito.AdditionalAnswers;
-import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.context.ConfigurableApplicationContext;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
-import org.springframework.transaction.interceptor.TransactionInterceptor;
 
 /** Runs the same deterministic publication rollback against both smoke-test database engines. */
 public final class NpmHostedPublicationSmokeSupport {
@@ -72,12 +68,9 @@ public final class NpmHostedPublicationSmokeSupport {
     BlobStorageRegistry registry = mock(BlobStorageRegistry.class);
     when(registry.forBlobStoreId(runtime.blobStoreId())).thenReturn(stagedStorage);
     var target = new NpmHostedService(assets, registry, first.getBean(NpmAssetWriter.class), MAPPER,
-        first.getBean(AssetMetadataCache.class));
-    var proxy = new ProxyFactory(target);
-    proxy.setProxyTargetClass(true);
-    proxy.addAdvice(new TransactionInterceptor(first.getBean(PlatformTransactionManager.class),
-        new AnnotationTransactionAttributeSource()));
-    var losingService = (NpmHostedService) proxy.getProxy();
+        first.getBean(AssetMetadataCache.class), null,
+        first.getBean(com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry.class));
+    var losingService = target;
     var batch = new LinkedHashMap<String, String>();
     batch.put("1.0.0", "uncommitted-first-attachment");
     batch.put("2.0.0", "losing-second-attachment");
@@ -104,9 +97,7 @@ public final class NpmHostedPublicationSmokeSupport {
     when(multipart.isEmpty()).thenReturn(false);
     when(multipart.getOriginalFilename()).thenReturn("immutable-smoke-4.0.0.tgz");
     when(multipart.getContentType()).thenReturn("application/octet-stream");
-    var streams = new java.util.concurrent.atomic.AtomicInteger();
     when(multipart.getInputStream()).thenAnswer(call -> {
-      if (streams.incrementAndGet() == 1) return new ByteArrayInputStream(archive);
       return new java.io.FilterInputStream(new ByteArrayInputStream(archive)) {
         @Override public void close() throws java.io.IOException {
           super.close();
@@ -125,6 +116,66 @@ public final class NpmHostedPublicationSmokeSupport {
     assertTrue(com.github.klboke.kkrepo.protocol.npm.NpmMetadata.versions(updated).containsKey("3.0.0"));
     assertFalse(com.github.klboke.kkrepo.protocol.npm.NpmMetadata.versions(updated).containsKey("1.0.0"));
     assertEquals(winningBlob.id(), assets.findAssetByPath(runtime.id(), winner.path()).orElseThrow().assetBlobId());
+  }
+
+  public static void verifyDeadlockRetry(ConfigurableApplicationContext first,
+      ConfigurableApplicationContext second) throws Exception {
+    first.getBean(RepositoryService.class).create(new CreateCommand(
+        "smoke-npm-deadlock", "npm-hosted", true, "smoke-file", false,
+        new HostedSettings("ALLOW_ONCE", null, null), null, null, null, null, null));
+    var firstRuntime = first.getBean(RepositoryRuntimeRegistry.class).resolve("smoke-npm-deadlock").orElseThrow();
+    var secondRuntime = second.getBean(RepositoryRuntimeRegistry.class).resolve("smoke-npm-deadlock").orElseThrow();
+    var barrier = new java.util.concurrent.CyclicBarrier(2);
+    var firstService = deadlockingService(first, barrier);
+    var secondService = deadlockingService(second, barrier);
+    var firstBatch = new LinkedHashMap<String, String>();
+    firstBatch.put("1.0.0", "first-publisher-one");
+    firstBatch.put("2.0.0", "first-publisher-two");
+    var secondBatch = new LinkedHashMap<String, String>();
+    secondBatch.put("2.0.0", "second-publisher-two");
+    secondBatch.put("1.0.0", "second-publisher-one");
+    try (var executor = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+      var futures = java.util.List.of(
+          executor.submit(() -> { publish(firstService, firstRuntime, firstBatch); return true; }),
+          executor.submit(() -> { publish(secondService, secondRuntime, secondBatch); return true; }));
+      int successes = 0;
+      int denied = 0;
+      for (var future : futures) {
+        try {
+          assertTrue(future.get(30, java.util.concurrent.TimeUnit.SECONDS));
+          successes++;
+        } catch (java.util.concurrent.ExecutionException failure) {
+          org.junit.jupiter.api.Assertions.assertInstanceOf(NpmExceptions.WritePolicyDenied.class, failure.getCause());
+          denied++;
+        }
+      }
+      assertEquals(1, successes);
+      assertEquals(1, denied);
+    }
+    var root = first.getBean(NpmHostedService.class).packageRoot(firstRuntime, PACKAGE).orElseThrow();
+    assertEquals(java.util.Set.of("1.0.0", "2.0.0"),
+        com.github.klboke.kkrepo.protocol.npm.NpmMetadata.versions(root).keySet());
+  }
+
+  private static NpmHostedService deadlockingService(ConfigurableApplicationContext context,
+      java.util.concurrent.CyclicBarrier barrier) {
+    var delegate = context.getBean(com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.class);
+    var components = mock(com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.class,
+        AdditionalAnswers.delegatesTo(delegate));
+    var firstWrite = new AtomicBoolean(true);
+    doAnswer(call -> {
+      long id = delegate.upsertReturningId(call.getArgument(0));
+      if (firstWrite.compareAndSet(true, false)) {
+        barrier.await(15, java.util.concurrent.TimeUnit.SECONDS);
+      }
+      return id;
+    }).when(components).upsertReturningId(any());
+    var retry = context.getBean(com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry.class);
+    var assets = context.getBean(AssetDao.class);
+    var cache = context.getBean(AssetMetadataCache.class);
+    var writer = new NpmAssetWriter(assets, components,
+        context.getBean(com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao.class), retry, cache, null, null);
+    return new NpmHostedService(assets, context.getBean(BlobStorageRegistry.class), writer, MAPPER, cache, null, retry);
   }
 
   private static byte[] archive(String version) throws Exception {

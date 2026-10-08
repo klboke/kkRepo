@@ -69,7 +69,9 @@ race on different replicas. The database's unique asset path decides the winner;
 publication receives the existing write-policy error and rolls back all its attachment and
 package-metadata changes. Refresh metadata to inspect the winner before retrying with a new version.
 Adding other versions still updates the package root normally. Multipart publication has the same
-transaction boundary. Unreferenced uploaded objects are cleaned up after a rollback.
+transaction boundary. Unreferenced uploaded objects are cleaned up after a rollback. Transient database contention retries
+the complete publication in a fresh transaction, using the same staged attachments and revalidating
+metadata and write policy. Retries are bounded; unexpected failures retain their original cause.
 
 `ALLOW` retains tarball overwrite behavior. The npm publication endpoint does not provide an
 opt-in atomic create-if-absent contract for `ALLOW` repositories: a prior GET returning `404` is

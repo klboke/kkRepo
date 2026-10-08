@@ -115,6 +115,7 @@ class DatabaseServerSmokeTest {
 
       exerciseSharedApplicationFlows(first, second);
       com.github.klboke.kkrepo.server.npm.NpmHostedPublicationSmokeSupport.verify(first, second);
+      com.github.klboke.kkrepo.server.npm.NpmHostedPublicationSmokeSupport.verifyDeadlockRetry(first, second);
 
       @SuppressWarnings("unchecked")
       FindByIndexNameSessionRepository<Session> firstSessions =

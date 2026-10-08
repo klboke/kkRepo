@@ -8,7 +8,7 @@ This project follows a pragmatic release process. Stable releases call out migra
 
 ### Fixed
 
-- Hosted npm `ALLOW_ONCE` rejects concurrent tarball replacement at the persistence boundary. Package publication and multipart upload roll back all attachment and metadata changes when a write fails, while new versions and proxy-cache refreshes remain supported. (#387)
+- Hosted npm `ALLOW_ONCE` rejects concurrent tarball replacement at the persistence boundary. Package publication and multipart upload roll back all attachment and metadata changes when a write fails, while new versions and proxy-cache refreshes remain supported. Transient contention retries the complete staged publication in a fresh transaction. (#387)
 
 ## 1.2.1 - 2026-10-04
 

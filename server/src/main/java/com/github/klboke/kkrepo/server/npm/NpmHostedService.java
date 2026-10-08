@@ -18,9 +18,14 @@ import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
+import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -46,6 +51,7 @@ public class NpmHostedService {
   private final AssetMetadataCache assetMetadataCache;
   private final ArtifactDownloadPolicy downloadPolicy;
   private final NpmPublishParser publishParser;
+  private final TransientTransactionRetry publicationRetry;
 
   private record PublishWritePlan(Optional<Map<String, Object>> existingPackageRoot, String effectiveRevision) {}
 
@@ -58,7 +64,6 @@ public class NpmHostedService {
     this(assetDao, blobStorageRegistry, writer, mapper, assetMetadataCache, null);
   }
 
-  @org.springframework.beans.factory.annotation.Autowired
   public NpmHostedService(
       AssetDao assetDao,
       BlobStorageRegistry blobStorageRegistry,
@@ -76,6 +81,15 @@ public class NpmHostedService {
         new NpmPublishParser(mapper));
   }
 
+  @org.springframework.beans.factory.annotation.Autowired
+  public NpmHostedService(
+      AssetDao assetDao, BlobStorageRegistry blobStorageRegistry, NpmAssetWriter writer,
+      ObjectMapper mapper, AssetMetadataCache assetMetadataCache,
+      ArtifactDownloadPolicy downloadPolicy, TransientTransactionRetry publicationRetry) {
+    this(assetDao, blobStorageRegistry, writer, mapper, assetMetadataCache, downloadPolicy,
+        new NpmPublishParser(mapper), publicationRetry);
+  }
+
   NpmHostedService(
       AssetDao assetDao,
       BlobStorageRegistry blobStorageRegistry,
@@ -84,6 +98,15 @@ public class NpmHostedService {
       AssetMetadataCache assetMetadataCache,
       ArtifactDownloadPolicy downloadPolicy,
       NpmPublishParser publishParser) {
+    this(assetDao, blobStorageRegistry, writer, mapper, assetMetadataCache, downloadPolicy,
+        publishParser, null);
+  }
+
+  NpmHostedService(
+      AssetDao assetDao, BlobStorageRegistry blobStorageRegistry, NpmAssetWriter writer,
+      ObjectMapper mapper, AssetMetadataCache assetMetadataCache,
+      ArtifactDownloadPolicy downloadPolicy, NpmPublishParser publishParser,
+      TransientTransactionRetry publicationRetry) {
     this.assetDao = assetDao;
     this.blobStorageRegistry = blobStorageRegistry;
     this.writer = writer;
@@ -91,6 +114,7 @@ public class NpmHostedService {
     this.assetMetadataCache = assetMetadataCache;
     this.downloadPolicy = downloadPolicy;
     this.publishParser = publishParser;
+    this.publicationRetry = publicationRetry;
   }
 
   public MavenResponse get(RepositoryRuntime runtime, NpmPath path, String repositoryBaseUrl, boolean headOnly) {
@@ -118,7 +142,6 @@ public class NpmHostedService {
     throw new NpmExceptions.NpmNotFoundException(path.rawPath());
   }
 
-  @Transactional
   public MavenResponse putPackage(
       RepositoryRuntime runtime,
       NpmPackageId packageId,
@@ -128,30 +151,33 @@ public class NpmHostedService {
       String createdByIp) {
     enforceHosted(runtime);
     try (NpmPublishParser.PublishRequest publish = publishParser.parse(body)) {
-      Map<String, Object> incoming = publish.packageRoot();
-      String payloadName = NpmMetadata.stringValue(incoming.get(NpmMetadata.NAME), packageId.id());
-      if (!packageId.id().equals(payloadName)) {
-        throw new NpmExceptions.BadRequestException(
-            "Package name mismatch. Path is " + packageId.id() + " but payload is " + payloadName);
-      }
+      return publicationTransaction("Publish npm package " + runtime.name() + "/" + packageId.id(), () -> {
+        // Each transaction gets fresh metadata and fresh streams from the request-scoped staging files.
+        Map<String, Object> incoming = NpmMetadata.deepCopy(publish.packageRoot());
+        String payloadName = NpmMetadata.stringValue(incoming.get(NpmMetadata.NAME), packageId.id());
+        if (!packageId.id().equals(payloadName)) {
+          throw new NpmExceptions.BadRequestException(
+              "Package name mismatch. Path is " + packageId.id() + " but payload is " + payloadName);
+        }
 
-      PublishWritePlan plan = packageRootWritePlan(runtime, packageId, revision, incoming);
-      validateAttachmentsWrite(runtime, packageId, incoming, publish.attachments());
-      long blobStoreId = requireBlobStore(runtime);
-      BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);
-      writeAttachments(
-          runtime,
-          storage,
-          blobStoreId,
-          packageId,
-          incoming,
-          publish.attachments(),
-          createdBy,
-          createdByIp);
-      Map<String, Object> toStore = packageRootForStorage(packageId, incoming, plan);
-      byte[] json = NpmResponseSupport.write(mapper, toStore);
-      writer.writePackageRoot(runtime, storage, blobStoreId, packageId, json, createdBy, createdByIp);
-      return NpmResponseSupport.success(mapper);
+        PublishWritePlan plan = packageRootWritePlan(runtime, packageId, revision, incoming);
+        validateAttachmentsWrite(runtime, packageId, incoming, publish.attachments());
+        long blobStoreId = requireBlobStore(runtime);
+        BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);
+        writeAttachments(
+            runtime,
+            storage,
+            blobStoreId,
+            packageId,
+            incoming,
+            publish.attachments(),
+            createdBy,
+            createdByIp);
+        Map<String, Object> toStore = packageRootForStorage(packageId, incoming, plan);
+        byte[] json = NpmResponseSupport.write(mapper, toStore);
+        writer.writePackageRoot(runtime, storage, blobStoreId, packageId, json, createdBy, createdByIp);
+        return NpmResponseSupport.success(mapper);
+      });
     } catch (IOException e) {
       throw new NpmExceptions.BadRequestException("Invalid npm publish JSON", e);
     }
@@ -170,7 +196,6 @@ public class NpmHostedService {
     return NpmResponseSupport.success(mapper);
   }
 
-  @Transactional(rollbackFor = IOException.class)
   public MavenResponse uploadTarball(
       RepositoryRuntime runtime,
       MultipartFile asset,
@@ -185,7 +210,30 @@ public class NpmHostedService {
       throw new NpmExceptions.BadRequestException("npm upload only accepts .tgz package archives");
     }
 
-    Map<String, Object> packageJson = readPackageJson(asset);
+    try (StagedArchive archive = new StagedArchive(Files.createTempFile("kkrepo-npm-multipart-", ".tgz"))) {
+      try (InputStream input = asset.getInputStream()) {
+        Files.copy(input, archive.file(), StandardCopyOption.REPLACE_EXISTING);
+      }
+      Map<String, Object> packageJson = readPackageJson(archive.file());
+      try {
+        return publicationTransaction("Upload npm tarball " + runtime.name() + "/" + tarballName, () -> {
+          try {
+            return persistTarball(runtime, tarballName, asset.getContentType(), archive.file(),
+                packageJson, createdBy, createdByIp);
+          } catch (IOException failure) {
+            // TransactionTemplate needs a runtime failure to roll back checked I/O errors.
+            throw new UncheckedIOException(failure);
+          }
+        });
+      } catch (UncheckedIOException failure) {
+        throw failure.getCause();
+      }
+    }
+  }
+
+  private MavenResponse persistTarball(
+      RepositoryRuntime runtime, String tarballName, String contentType, Path archive,
+      Map<String, Object> packageJson, String createdBy, String createdByIp) throws IOException {
     String packageName = NpmMetadata.stringValue(packageJson.get(NpmMetadata.NAME), null);
     String version = NpmMetadata.stringValue(packageJson.get(NpmMetadata.VERSION), null);
     if (packageName == null || packageName.isBlank()) {
@@ -218,9 +266,9 @@ public class NpmHostedService {
     long blobStoreId = requireBlobStore(runtime);
     BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);
     NpmAssetWriter.Stored stored;
-    try (InputStream body = asset.getInputStream()) {
+    try (InputStream body = Files.newInputStream(archive)) {
       stored = writer.writeTarball(runtime, storage, blobStoreId, packageId, version, tarballName,
-          body, asset.getContentType(), createdBy, createdByIp, Map.of());
+          body, contentType, createdBy, createdByIp, Map.of());
     }
 
     Map<String, Object> packageRoot = existingRoot
@@ -241,6 +289,15 @@ public class NpmHostedService {
     writer.writePackageRoot(runtime, storage, blobStoreId, packageId,
         NpmResponseSupport.write(mapper, packageRoot), createdBy, createdByIp);
     return MavenResponse.created();
+  }
+
+  private <T> T publicationTransaction(String operation, java.util.function.Supplier<T> publication) {
+    // The complete publication, including policy revalidation, owns every retry transaction.
+    return publicationRetry == null ? publication.get() : publicationRetry.execute(operation, publication);
+  }
+
+  private record StagedArchive(Path file) implements java.io.Closeable {
+    @Override public void close() throws IOException { Files.deleteIfExists(file); }
   }
 
   public MavenResponse deleteTarball(
@@ -706,8 +763,8 @@ public class NpmHostedService {
     return id;
   }
 
-  private Map<String, Object> readPackageJson(MultipartFile asset) throws IOException {
-    try (InputStream raw = asset.getInputStream();
+  private Map<String, Object> readPackageJson(Path archive) throws IOException {
+    try (InputStream raw = Files.newInputStream(archive);
         GzipCompressorInputStream gzip = new GzipCompressorInputStream(raw);
         TarArchiveInputStream tar = new TarArchiveInputStream(gzip)) {
       TarArchiveEntry entry;
