@@ -16,6 +16,7 @@ import com.github.klboke.kkrepo.server.catalog.CatalogCacheBroadcaster;
 import jakarta.annotation.PreDestroy;
 import java.time.Instant;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -34,10 +35,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 /**
- * Resolves the {@link BlobStorage} bound to a repository. Caches per {@link S3BlobStoreConfig}
- * signature locally — each replica owns the SDK clients it has built. This is not state that
- * needs to be coherent across replicas (it's just connection pooling), so the cache is safe
- * within the "stateless service" constraint.
+ * Resolves the {@link BlobStorage} bound to a repository. Each replica owns wrappers cached by
+ * store ID and configuration signature. Database catalog refreshes and broadcasts evict deleted
+ * or changed entries while preserving unchanged wrappers and their in-flight multipart uploads.
  */
 @Component
 public class BlobStorageRegistry {
@@ -49,8 +49,8 @@ public class BlobStorageRegistry {
   private final FileBlobStorageFactory fileFactory;
   private final S3StorageProperties fallback;
   private final KkRepoMetrics metrics;
-  private final LocalCache<String, BlobStorage> cache = LocalCacheFactory.standard()
-      .<String, BlobStorage>builder("blob-storages")
+  private final LocalCache<StorageCacheKey, BlobStorage> cache = LocalCacheFactory.standard()
+      .<StorageCacheKey, BlobStorage>builder("blob-storages")
       .removalListener((key, storage, cause) -> closeQuietly(storage))
       .build();
   private final boolean catalogCacheEnabled;
@@ -139,7 +139,7 @@ public class BlobStorageRegistry {
   public void syncDatabaseToMemory() {
     if (!catalogCacheEnabled) {
       try {
-        evictDeletedClientEntries(blobStoreDao.list());
+        reconcileStorageEntries(blobStoreDao.list());
       } catch (RuntimeException e) {
         log.warn("Failed reconciling deleted blob-store clients from MySQL", e);
       }
@@ -199,12 +199,11 @@ public class BlobStorageRegistry {
         .orElseThrow(() -> new IllegalStateException("Blob store not found: " + blobStoreId));
   }
 
-  /** Reload blob_store after an admin create/update on this node and drop stale SDK clients. */
+  /** Reload blob_store after an admin mutation, retaining unchanged storage wrappers. */
   public void refreshAll() {
-    invalidateStorageCache();
     if (!catalogCacheEnabled) {
       try {
-        evictDeletedClientEntries(blobStoreDao.list());
+        reconcileStorageEntries(blobStoreDao.list());
       } catch (RuntimeException e) {
         log.warn("Failed reconciling deleted blob-store clients after mutation", e);
       }
@@ -234,7 +233,7 @@ public class BlobStorageRegistry {
 
   /** Drop a cached blob-store record (e.g. after an admin edits the blob store). */
   public void invalidate(long blobStoreId) {
-    invalidateStorageCache();
+    invalidateStorageCache(blobStoreId);
     if (s3Factory != null) {
       s3Factory.invalidate(blobStoreId);
     }
@@ -261,7 +260,6 @@ public class BlobStorageRegistry {
   }
 
   private void refreshFromBroadcast() {
-    invalidateStorageCache();
     refreshLock.lock();
     try {
       refreshLocked("catalog-broadcast");
@@ -310,7 +308,7 @@ public class BlobStorageRegistry {
 
   private BlobStoreCatalog refreshLocked(String reason) {
     List<BlobStoreRecord> records = blobStoreDao.list();
-    evictDeletedClientEntries(records);
+    reconcileStorageEntries(records);
     Map<Long, BlobStoreRecord> byId = new LinkedHashMap<>();
     for (BlobStoreRecord record : records) {
       if (record.id() != null) {
@@ -326,22 +324,33 @@ public class BlobStorageRegistry {
     return loaded;
   }
 
-  private void evictDeletedClientEntries(List<BlobStoreRecord> records) {
-    if (s3Factory == null) {
-      return;
+  private void reconcileStorageEntries(List<BlobStoreRecord> records) {
+    Map<Long, BlobStoreRecord> active = new LinkedHashMap<>();
+    for (BlobStoreRecord record : records) {
+      if (record.id() != null) active.put(record.id(), record);
     }
-    Set<Long> activeIds = Set.copyOf(records.stream()
-        .map(BlobStoreRecord::id).filter(id -> id != null).toList());
+    Set<StorageCacheKey> cachedKeys = Set.copyOf(cache.asMap().keySet());
+    Set<Long> deletedIds = new HashSet<>();
+    for (StorageCacheKey key : cachedKeys) {
+      if (!active.containsKey(key.storeId())) deletedIds.add(key.storeId());
+    }
+    if (s3Factory != null) {
+      deletedIds.addAll(s3Factory.cachedStoreIdsMissingFrom(active.keySet()));
+    }
     // A store may have been created after the list query. Confirm absence before closing
     // a client that another request could still be using.
-    List<Long> deletedIds = s3Factory.cachedStoreIdsMissingFrom(activeIds).stream()
-        .filter(id -> blobStoreDao.findById(id).isEmpty())
-        .toList();
-    if (deletedIds.isEmpty()) {
-      return;
+    deletedIds.removeIf(id -> blobStoreDao.findById(id).isPresent());
+    // Broadcasts and periodic refreshes must not stop multipart uploads on unchanged stores.
+    // Include store ID in the key: identical configurations still own separate SDK clients.
+    for (StorageCacheKey key : cachedKeys) {
+      BlobStoreRecord record = active.get(key.storeId());
+      if (deletedIds.contains(key.storeId())
+          || (record != null && !key.signature().equals(storageSignature(record)))) {
+        cache.invalidate(key);
+      }
     }
-    invalidateStorageCache();
-    deletedIds.forEach(s3Factory::invalidate);
+    cache.cleanUp();
+    if (s3Factory != null) deletedIds.forEach(s3Factory::invalidate);
   }
 
   private void upsertCatalogRecord(BlobStoreRecord record) {
@@ -363,14 +372,21 @@ public class BlobStorageRegistry {
       Map<Long, BlobStoreRecord> byId) {
   }
 
+  private record StorageCacheKey(long storeId, String signature) {
+  }
+
+  private String storageSignature(BlobStoreRecord record) {
+    return isFileStore(record) ? toFileConfig(record).signature() : toConfig(record).signature();
+  }
+
   public BlobStorage forRecord(BlobStoreRecord record) {
     if (isFileStore(record)) {
       FileBlobStoreConfig config = toFileConfig(record);
-      return cache.get(config.signature(),
+      return cache.get(new StorageCacheKey(config.id(), config.signature()),
           key -> instrument(fileFactory.forStore(config), record.name(), record.type(), "file"));
     }
     S3BlobStoreConfig config = toConfig(record);
-    return cache.get(config.signature(),
+    return cache.get(new StorageCacheKey(config.id(), config.signature()),
         key -> instrument(s3Factory.forStore(config), record.name(), record.type(), config.engine()));
   }
 
@@ -383,6 +399,13 @@ public class BlobStorageRegistry {
 
   private void invalidateStorageCache() {
     cache.invalidateAll();
+    cache.cleanUp();
+  }
+
+  private void invalidateStorageCache(long storeId) {
+    for (StorageCacheKey key : Set.copyOf(cache.asMap().keySet())) {
+      if (key.storeId() == storeId) cache.invalidate(key);
+    }
     cache.cleanUp();
   }
 

@@ -9,6 +9,8 @@ const index = readFileSync(join(__dirname, '../../main/resources/META-INF/resour
 
 function actionHarness() {
   const attributes = new Map();
+  const tableHandlers = {};
+  const table = { addEventListener: (type, handler) => { tableHandlers[type] = handler; } };
   const menu = {
     hidden: true, innerHTML: '', style: {},
     setAttribute: (key, value) => attributes.set(key, value),
@@ -21,13 +23,15 @@ function actionHarness() {
   }));
   const trigger = {
     id: 'blobstore-more-actions-7', isConnected: true,
+    dataset: { id: '7' },
+    closest: selector => selector === '.blobstore-more-actions' ? trigger : null,
     setAttribute: (key, value) => attributes.set(`trigger-${key}`, value),
     getBoundingClientRect: () => ({ top: 100, bottom: 130, right: 400 }),
     focus() { document.activeElement = this; },
   };
   const document = {
     activeElement: trigger,
-    getElementById: id => id === 'blobstore-action-menu' ? menu : null,
+    getElementById: id => id === 'blobstore-action-menu' ? menu : id === 'blobstore-table' ? table : null,
     querySelectorAll: selector => selector.startsWith('#blobstore-action-menu') ? items : [],
   };
   const requests = [];
@@ -45,8 +49,37 @@ function actionHarness() {
   vm.runInContext(`let blobStores = [{ id: 7, name: 'unused' }];
     let blobActionMenuStoreId = null, blobActionMenuTrigger = null;
     ${source.slice(source.indexOf('async function deleteBlobStore('), source.indexOf('// ---- Repository form'))}`, context);
-  return { context, menu, trigger, document, attributes, requests, toasts };
+  vm.runInContext(source.slice(
+    source.indexOf('document.getElementById("blobstore-table").addEventListener("click", (event) => {\n  const editButton'),
+    source.indexOf('document.getElementById("blobstore-action-menu").addEventListener("click"')), context);
+  return { context, menu, trigger, document, attributes, requests, toasts, tableHandlers };
 }
+
+test('keyboard-generated trigger clicks focus the first item for arrow navigation and Escape', () => {
+  const { context, menu, trigger, document, tableHandlers } = actionHarness();
+  // Native buttons generate detail=0 clicks for both Enter and Space activation.
+  tableHandlers.click({ target: trigger, detail: 0 });
+  assert.equal(menu.hidden, false);
+  assert.equal(document.activeElement.action, 'repositories');
+  context.handleBlobStoreActionMenuKeydown({ key: 'ArrowDown', target: document.activeElement, preventDefault() {} });
+  assert.equal(document.activeElement.action, 'check');
+  context.handleBlobStoreActionMenuKeydown({ key: 'Escape', target: document.activeElement, preventDefault() {} });
+  assert.equal(menu.hidden, true);
+  assert.equal(document.activeElement, trigger);
+});
+
+test('arrow keys on an already open trigger focus items without toggling the menu closed', () => {
+  const { menu, trigger, document, tableHandlers } = actionHarness();
+  tableHandlers.click({ target: trigger, detail: 1 });
+  for (const [key, action] of [['ArrowDown', 'repositories'], ['ArrowUp', 'delete']]) {
+    trigger.focus();
+    tableHandlers.keydown({ target: trigger, key, preventDefault() {} });
+    assert.equal(menu.hidden, false);
+    assert.equal(document.activeElement.action, action);
+  }
+  tableHandlers.click({ target: trigger, detail: 1 });
+  assert.equal(menu.hidden, true);
+});
 
 test('the blob store action menu groups secondary actions and supports keyboard dismissal', () => {
   assert.match(index, /id="blobstore-action-menu" role="menu"/);

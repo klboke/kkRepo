@@ -2194,7 +2194,9 @@ function openBlobStoreActionMenu(id, trigger, focusTarget = null) {
   if (!store) return;
   const menu = document.getElementById("blobstore-action-menu");
   if (!menu.hidden && String(blobActionMenuStoreId) === String(id)) {
-    closeBlobStoreActionMenu({ restoreFocus: true });
+    if (focusTarget === "first") blobActionMenuItems()[0]?.focus();
+    else if (focusTarget === "last") blobActionMenuItems().at(-1)?.focus();
+    else closeBlobStoreActionMenu({ restoreFocus: true });
     return;
   }
   closeBlobStoreActionMenu();
@@ -8158,7 +8160,9 @@ document.getElementById("blobstore-table").addEventListener("click", (event) => 
     return;
   }
   const moreButton = event.target.closest(".blobstore-more-actions");
-  if (moreButton) openBlobStoreActionMenu(moreButton.dataset.id, moreButton);
+  if (moreButton) {
+    openBlobStoreActionMenu(moreButton.dataset.id, moreButton, event.detail === 0 ? "first" : null);
+  }
 });
 document.getElementById("blobstore-table").addEventListener("keydown", (event) => {
   const moreButton = event.target.closest(".blobstore-more-actions");
