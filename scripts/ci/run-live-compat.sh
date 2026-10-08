@@ -33,6 +33,22 @@ run_tests() {
   mvn "${COMMON_ARGS[@]}" "-Dtest=$tests" test
 }
 
+run_public_https_tests() {
+  # These acceptance checks own disposable fixture writes; prerequisites apply only here.
+  for client in go helm docker; do
+    command -v "$client" >/dev/null || { echo "Public HTTPS acceptance requires $client" >&2; return 1; }
+  done
+  docker info >/dev/null
+  export COMPAT_WRITE_ENABLED=true
+  export PUBLIC_HTTPS_COMPAT_REQUIRED=true
+  local report="compat-test/target/surefire-reports/TEST-com.github.klboke.kkrepo.compat.PublicHttpsContentRedirectCompatibilityTest.xml"
+  rm -f "$report"
+  run_tests "PublicHttpsContentRedirectCompatibilityTest"
+  mkdir -p artifacts/public-https-redirects
+  cp "$report" artifacts/public-https-redirects/
+  python3 scripts/ci/check-public-https-report.py "$report"
+}
+
 case "$SUITE" in
   smoke)
     run_tests "KkRepoConsoleBlackBoxCompatibilityTest,MavenRepositoryBlackBoxCompatibilityTest#proxyReadRoundTripMatchesNexusWhenConfigured"
@@ -65,6 +81,7 @@ case "$SUITE" in
     export GO_KKREPO_COMPAT_USERNAME="${GO_KKREPO_COMPAT_USERNAME:-$KKREPO_COMPAT_USERNAME}"
     export GO_KKREPO_COMPAT_PASSWORD="${GO_KKREPO_COMPAT_PASSWORD:-$KKREPO_COMPAT_PASSWORD}"
     run_tests "$NEXUS_COMPAT_TESTS"
+    run_public_https_tests
     ;;
   client-e2e)
     export PUB_COMPAT_ENABLED=true
@@ -91,6 +108,9 @@ case "$SUITE" in
     export R_COMPAT_ENABLED=true
     run_tests "RRepositoryBlackBoxCompatibilityTest"
     ;;
+  public-https)
+    run_public_https_tests
+    ;;
   full)
     export CARGO_COMPAT_ENABLED=true
     export PUB_COMPAT_ENABLED=true
@@ -105,11 +125,12 @@ case "$SUITE" in
     if [[ -n "${SWIFT_COMPAT_PROXY_TAG_CASES:-}" ]]; then
       export SWIFT_COMPAT_REQUIRE_PROXY_TAG_CASES=true
     fi
-    mvn "${COMMON_ARGS[@]}" test
+    mvn "${COMMON_ARGS[@]}" "-Dtest=*,!PublicHttpsContentRedirectCompatibilityTest" test
+    run_public_https_tests
     ;;
   *)
     echo "Unknown live compatibility suite: $SUITE" >&2
-    echo "Available suites: smoke, write-smoke, extended, nexus, client-e2e, swift, ansible, apt, conan, r, full" >&2
+    echo "Available suites: smoke, write-smoke, extended, nexus, client-e2e, swift, ansible, apt, conan, r, public-https, full" >&2
     exit 2
     ;;
 esac

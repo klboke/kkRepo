@@ -117,9 +117,16 @@ class PublicHttpsContentRedirectCompatibilityTest {
   }
 
   private static void requireLive(String client) throws Exception {
-    assumeTrue(Boolean.parseBoolean(System.getenv().getOrDefault("COMPAT_WRITE_ENABLED", "false")), "Requires disposable write-enabled reference and candidate");
-    // Missing client is an explicit skip; a failed installed client is a failed test.
-    assumeTrue(new ProcessBuilder("sh", "-c", "command -v " + client).start().waitFor() == 0, "Requires " + client);
+    boolean required = Boolean.parseBoolean(System.getenv().getOrDefault("PUBLIC_HTTPS_COMPAT_REQUIRED", "false"));
+    boolean writable = Boolean.parseBoolean(System.getenv().getOrDefault("COMPAT_WRITE_ENABLED", "false"));
+    boolean installed = new ProcessBuilder("sh", "-c", "command -v " + client).start().waitFor() == 0;
+    if (required) {
+      assertTrue(writable, "Public HTTPS acceptance requires disposable write-enabled instances");
+      assertTrue(installed, "Public HTTPS acceptance requires " + client);
+    } else {
+      assumeTrue(writable, "Requires disposable write-enabled reference and candidate");
+      assumeTrue(installed, "Requires " + client);
+    }
   }
 
   private static void run(Path directory, Map<String, String> env, String input, String... command) throws Exception {

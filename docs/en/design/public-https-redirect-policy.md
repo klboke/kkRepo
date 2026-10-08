@@ -50,3 +50,13 @@ Use explicit hosts when that trust boundary is sufficient. Enable `*` only when 
 select changing public CDN hosts, and treat control of that upstream as control of its public
 content destination selection. This is a kkRepo opt-in extension, not a claim that Nexus exposes
 the same wildcard configuration.
+
+## Automated acceptance
+
+`scripts/ci/run-live-compat.sh public-https` runs the three Go, Helm and Docker real-client checks
+against disposable Nexus and kkRepo instances. The `nexus` suite (also used by Full E2E) and
+the generic `full` suite run the same acceptance step. The workflow installs Go and Helm; Docker
+is provided by the runner. Missing clients, unavailable Docker, failed tests, skipped tests and
+missing reports fail this acceptance step. It requires exactly three passing tests with zero skips
+and saves the Surefire XML under `artifacts/public-https-redirects/`. Fixture writes are enabled
+only for this disposable live-test lifecycle; source build prerequisites are unchanged.

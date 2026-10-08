@@ -223,6 +223,61 @@ fi
         with self.assertRaises(ValueError):
             verifier.verify(self.root)
 
+    def public_https_run(self, suite, skipped=0, report=True):
+        project = self.root / "fixture-project"
+        scripts = project / "scripts" / "ci"
+        scripts.mkdir(parents=True)
+        for name in ("run-live-compat.sh", "check-public-https-report.py"):
+            (scripts / name).write_bytes((SCRIPTS / name).read_bytes())
+        for client in ("go", "helm", "docker"):
+            self.stub(client, ":\n")
+        self.stub("mvn", """printf '%s\n' "$*|${COMPAT_WRITE_ENABLED:-unset}|${PUBLIC_HTTPS_COMPAT_REQUIRED:-unset}" >> "$TEST_ROOT/maven-args"
+if [[ "$*" == *'-Dtest=PublicHttpsContentRedirectCompatibilityTest'* ]]; then
+  mkdir -p compat-test/target/surefire-reports
+  if [[ "$FAKE_REPORT" == true ]]; then
+    printf '<testsuite tests="3" skipped="%s" failures="0" errors="0"/>' "$FAKE_SKIPPED" > compat-test/target/surefire-reports/TEST-com.github.klboke.kkrepo.compat.PublicHttpsContentRedirectCompatibilityTest.xml
+  fi
+fi
+""")
+        env = dict(self.env, FAKE_SKIPPED=str(skipped), FAKE_REPORT=str(report).lower(),
+                   COMPAT_WRITE_ENABLED="false")
+        return subprocess.run(["bash", str(scripts / "run-live-compat.sh"), suite], env=env,
+                              text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def test_public_https_acceptance_executes_three_cases_with_write_enabled(self):
+        result = self.public_https_run("public-https")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("three executed tests, zero skips", result.stdout)
+        args = (self.root / "maven-args").read_text()
+        self.assertIn("-Dtest=PublicHttpsContentRedirectCompatibilityTest", args)
+        self.assertIn("|true|true", args)
+
+    def test_public_https_acceptance_rejects_skipped_tests(self):
+        result = self.public_https_run("public-https", skipped=1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("requires three passing tests", result.stderr)
+
+    def test_public_https_acceptance_requires_a_fresh_report(self):
+        result = self.public_https_run("public-https", report=False)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_nexus_entry_point_includes_public_https_acceptance(self):
+        result = self.public_https_run("nexus")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = (self.root / "maven-args").read_text().splitlines()
+        self.assertEqual(len(calls), 2)
+        self.assertIn("NpmRepositoryBlackBoxCompatibilityTest", calls[0])
+        self.assertIn("-Dtest=PublicHttpsContentRedirectCompatibilityTest", calls[1])
+        self.assertTrue(calls[1].endswith("|true|true"))
+
+    def test_full_entry_point_runs_public_https_once_without_default_skips(self):
+        result = self.public_https_run("full")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = (self.root / "maven-args").read_text().splitlines()
+        self.assertEqual(len(calls), 2)
+        self.assertIn("-Dtest=*,!PublicHttpsContentRedirectCompatibilityTest", calls[0])
+        self.assertIn("-Dtest=PublicHttpsContentRedirectCompatibilityTest", calls[1])
+
 
 if __name__ == "__main__":
     unittest.main()
