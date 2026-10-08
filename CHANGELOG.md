@@ -6,13 +6,33 @@ This project follows a pragmatic release process. Stable releases call out migra
 
 ## Unreleased
 
+## 1.3.0 - 2026-10-08
+
 ### Added
 
-- Proxy repositories can opt into public HTTPS content GET/HEAD redirects with a standalone `*` in `proxy.allowedRedirectHosts`. The existing editor, exact/domain rules and strict default remain. Public-address validation, DNS pinning, TLS, downgrade rejection and credential/cookie isolation are enforced independently; POST and authentication exchanges retain strict rules, including Hugging Face and Conan integration paths. (#384)
+- Proxy repositories can opt into public HTTPS content GET/HEAD redirects with a standalone `*` in `proxy.allowedRedirectHosts`. The existing editor, exact/domain rules and strict default remain. Public-address validation, DNS pinning, TLS, downgrade rejection and credential/cookie isolation are enforced independently; POST and authentication exchanges retain strict rules, including Hugging Face and Conan integration paths. (#384, #385)
+- Administrators can delete unused, empty blob-store configurations. Database locking coordinates deletion with repository assignments and registered uploads; referenced stores, registered blobs, and persisted upload sessions prevent deletion. Backing files, objects, and buckets are retained. (#390)
+- Browse supports a resizable tree/detail split pane with keyboard controls, reset, minimum widths, and browser-local width persistence. (#379)
 
 ### Fixed
 
-- Hosted npm `ALLOW_ONCE` rejects concurrent tarball replacement at the persistence boundary. Package publication and multipart upload roll back all attachment and metadata changes when a write fails, while new versions and proxy-cache refreshes remain supported. Transient contention retries the complete staged publication in a fresh transaction. (#387)
+- Hosted npm `ALLOW_ONCE` rejects concurrent tarball replacement at the persistence boundary. Package publication and multipart upload roll back all attachment and metadata changes when a write fails, while new versions and proxy-cache refreshes remain supported. Transient contention retries the complete staged publication in a fresh transaction. (#387, #388)
+- Nexus PyPI migration preserves package, signature, index, and metadata-sidecar asset kinds so migrated packages appear in generated Simple indexes, including on PostgreSQL. (#383, #386)
+- Malformed upstream redirect locations become remote I/O failures instead of unhandled errors. Maven groups continue to later members; direct proxies return 502 when the upstream redirect is invalid. (#378, #380)
+- Browse explains an empty Upload page instead of silently redirecting users, with guidance appropriate to their repository permissions. (#382)
+
+### Changed
+
+- Shared repository upload, fenced-lease, versioned-snapshot, migration-checksum, and UI primitives reduce duplication while retaining protocol-specific behavior and distributed coordination. (#381)
+- AWS SDK, Guava, Commons Lang, Maven Artifact, ArchUnit, and the CI cache action were refreshed. (#371, #372, #373, #374, #375, #376)
+- Quickstart defaults, Dockerfile packaging, deployment documentation, Helm application version, runtime checks, and the optional scanner profile now use `1.3.0`.
+
+### Upgrade Notes
+
+- Upgrading from `1.2.1` adds no database migrations; MySQL and PostgreSQL remain at Flyway V59. Back up the relational database and blob store together before upgrading.
+- The PyPI migration fix applies to new imports and does not rewrite previously imported assets. For an affected repository, preserve target-only content, prepare an empty same-name target repository, create a new Sync metadata job with Metadata since unset, then Sync packages and verify the generated index with pip. Rerunning an old job against existing paths is insufficient; see the Nexus migration guide. (#386)
+- The standalone redirect `*` is opt-in for public HTTPS content GET/HEAD with an HTTPS upstream and direct transport. Existing exact/domain allowlists and the strict default remain unchanged; authentication and token exchanges are not widened. (#385)
+- Delete blob-store configurations only after uploads and connection checks have finished across all replicas. Deletion does not drain unregistered in-flight I/O, erase backing storage, or clean up untracked objects; a concurrent operation may fail and require external cleanup. (#390)
 
 ## 1.2.1 - 2026-10-04
 
