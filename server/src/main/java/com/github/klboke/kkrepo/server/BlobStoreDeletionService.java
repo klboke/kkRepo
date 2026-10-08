@@ -3,6 +3,8 @@ package com.github.klboke.kkrepo.server;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao.DeleteResult;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -12,6 +14,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class BlobStoreDeletionService {
+  private static final Logger log = LoggerFactory.getLogger(BlobStoreDeletionService.class);
   private final BlobStoreDao blobStoreDao;
   private final BlobStorageRegistry registry;
   private final TransactionTemplate transactions;
@@ -35,7 +38,20 @@ public class BlobStoreDeletionService {
           "Blob store is still referenced and cannot be deleted", conflict);
     }
     switch (result) {
-      case DELETED -> registry.refreshAllAndBroadcast();
+      case DELETED -> {
+        // The database commit is already final. A cache or watermark outage must not
+        // turn a successful DELETE into a 500; every replica also reconciles on schedule.
+        try {
+          registry.invalidate(id);
+        } catch (RuntimeException error) {
+          log.warn("Failed evicting deleted blob-store client {}; scheduled refresh will retry", id, error);
+        }
+        try {
+          registry.refreshAllAndBroadcast();
+        } catch (RuntimeException error) {
+          log.warn("Failed broadcasting deleted blob-store {}; scheduled refresh will retry", id, error);
+        }
+      }
       case NOT_FOUND -> throw new ResponseStatusException(HttpStatus.NOT_FOUND,
           "Blob store not found");
       case REPOSITORY_IN_USE -> throw new ResponseStatusException(HttpStatus.CONFLICT,

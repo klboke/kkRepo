@@ -10,6 +10,7 @@ import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import com.github.klboke.kkrepo.core.http.OutboundTlsTrust;
 import jakarta.annotation.PreDestroy;
 import java.time.Duration;
+import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -59,6 +60,10 @@ public class OssClientFactory {
     if (removed != null) {
       closeQuietly(removed.client);
     }
+  }
+
+  Set<Long> cachedStoreIds() {
+    return Set.copyOf(cache.asMap().keySet());
   }
 
   @PreDestroy

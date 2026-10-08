@@ -6,6 +6,7 @@ import com.github.klboke.kkrepo.core.http.OutboundTlsTrust;
 import jakarta.annotation.PreDestroy;
 import java.net.URI;
 import java.time.Duration;
+import java.util.Set;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
@@ -53,6 +54,10 @@ public class S3ClientFactory {
     if (removed != null) {
       closeQuietly(removed.client);
     }
+  }
+
+  Set<Long> cachedStoreIds() {
+    return Set.copyOf(cache.asMap().keySet());
   }
 
   @PreDestroy

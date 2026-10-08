@@ -19,6 +19,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
@@ -137,6 +138,11 @@ public class BlobStorageRegistry {
       initialDelayString = "${kkrepo.catalog-cache.initial-delay-ms:60000}")
   public void syncDatabaseToMemory() {
     if (!catalogCacheEnabled) {
+      try {
+        evictDeletedClientEntries(blobStoreDao.list());
+      } catch (RuntimeException e) {
+        log.warn("Failed reconciling deleted blob-store clients from MySQL", e);
+      }
       return;
     }
     if (!refreshLock.tryLock()) {
@@ -197,6 +203,11 @@ public class BlobStorageRegistry {
   public void refreshAll() {
     invalidateStorageCache();
     if (!catalogCacheEnabled) {
+      try {
+        evictDeletedClientEntries(blobStoreDao.list());
+      } catch (RuntimeException e) {
+        log.warn("Failed reconciling deleted blob-store clients after mutation", e);
+      }
       return;
     }
     refreshLock.lock();
@@ -224,6 +235,9 @@ public class BlobStorageRegistry {
   /** Drop a cached blob-store record (e.g. after an admin edits the blob store). */
   public void invalidate(long blobStoreId) {
     invalidateStorageCache();
+    if (s3Factory != null) {
+      s3Factory.invalidate(blobStoreId);
+    }
     if (!catalogCacheEnabled) {
       return;
     }
@@ -296,6 +310,7 @@ public class BlobStorageRegistry {
 
   private BlobStoreCatalog refreshLocked(String reason) {
     List<BlobStoreRecord> records = blobStoreDao.list();
+    evictDeletedClientEntries(records);
     Map<Long, BlobStoreRecord> byId = new LinkedHashMap<>();
     for (BlobStoreRecord record : records) {
       if (record.id() != null) {
@@ -309,6 +324,24 @@ public class BlobStorageRegistry {
     catalog.set(loaded);
     log.debug("Refreshed blob_store catalog from MySQL by {}: stores={}", reason, loaded.records().size());
     return loaded;
+  }
+
+  private void evictDeletedClientEntries(List<BlobStoreRecord> records) {
+    if (s3Factory == null) {
+      return;
+    }
+    Set<Long> activeIds = Set.copyOf(records.stream()
+        .map(BlobStoreRecord::id).filter(id -> id != null).toList());
+    // A store may have been created after the list query. Confirm absence before closing
+    // a client that another request could still be using.
+    List<Long> deletedIds = s3Factory.cachedStoreIdsMissingFrom(activeIds).stream()
+        .filter(id -> blobStoreDao.findById(id).isEmpty())
+        .toList();
+    if (deletedIds.isEmpty()) {
+      return;
+    }
+    invalidateStorageCache();
+    deletedIds.forEach(s3Factory::invalidate);
   }
 
   private void upsertCatalogRecord(BlobStoreRecord record) {

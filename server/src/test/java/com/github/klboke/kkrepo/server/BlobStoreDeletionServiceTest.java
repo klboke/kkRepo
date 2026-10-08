@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -39,6 +40,26 @@ class BlobStoreDeletionServiceTest {
     var order = inOrder(transactionManager, dao, registry);
     order.verify(dao).deleteEmptyById(7);
     order.verify(transactionManager).commit(any());
+    order.verify(registry).invalidate(7);
+    order.verify(registry).refreshAllAndBroadcast();
+  }
+
+  @Test
+  void postCommitCacheFailuresDoNotTurnSuccessfulDeleteIntoAnError() {
+    BlobStoreDao dao = mock(BlobStoreDao.class);
+    BlobStorageRegistry registry = mock(BlobStorageRegistry.class);
+    PlatformTransactionManager transactionManager = mock(PlatformTransactionManager.class);
+    when(transactionManager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
+    when(dao.deleteEmptyById(7)).thenReturn(DELETED);
+    doThrow(new IllegalStateException("local cache unavailable")).when(registry).invalidate(7);
+    doThrow(new IllegalStateException("watermark unavailable"))
+        .when(registry).refreshAllAndBroadcast();
+
+    new BlobStoreDeletionService(dao, registry, transactionManager).deleteEmpty(7);
+
+    var order = inOrder(transactionManager, registry);
+    order.verify(transactionManager).commit(any());
+    order.verify(registry).invalidate(7);
     order.verify(registry).refreshAllAndBroadcast();
   }
 

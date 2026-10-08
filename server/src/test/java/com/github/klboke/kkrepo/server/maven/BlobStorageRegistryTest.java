@@ -2,12 +2,18 @@ package com.github.klboke.kkrepo.server.maven;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anySet;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.server.catalog.CatalogCacheBroadcaster;
 import com.github.klboke.kkrepo.server.support.dao.BlobStoreDaoAdapter;
 import com.github.klboke.kkrepo.storage.s3.S3BlobStoreConfig;
+import com.github.klboke.kkrepo.storage.s3.S3BlobStorageFactory;
 import com.github.klboke.kkrepo.storage.s3.config.S3StorageProperties;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -15,9 +21,89 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class BlobStorageRegistryTest {
+  @Test
+  void deletionEvictsSdkClientsOnWriterAndBroadcastSubscriber() {
+    InMemoryBlobStoreDao dao = new InMemoryBlobStoreDao();
+    dao.put(s3Store(1, "unused", "old-bucket"));
+    S3BlobStorageFactory writerClients = clientsCaching(1);
+    S3BlobStorageFactory subscriberClients = clientsCaching(1);
+    InMemoryBroadcaster broadcaster = new InMemoryBroadcaster();
+    BlobStorageRegistry writer = new BlobStorageRegistry(dao, writerClients, null,
+        new S3StorageProperties(), true, broadcaster);
+    BlobStorageRegistry subscriber = new BlobStorageRegistry(dao, subscriberClients, null,
+        new S3StorageProperties(), true, broadcaster);
+    writer.warmUpBlobStoreCatalog();
+    subscriber.warmUpBlobStoreCatalog();
+
+    dao.remove(1);
+    writer.invalidate(1);
+    writer.refreshAllAndBroadcast();
+
+    verify(writerClients, atLeastOnce()).invalidate(1);
+    verify(subscriberClients).invalidate(1);
+    assertTrue(subscriber.records().isEmpty());
+  }
+
+  @Test
+  void scheduledRefreshPrunesDeletedClientsEvenWithoutCatalogCaching() {
+    InMemoryBlobStoreDao dao = new InMemoryBlobStoreDao();
+    dao.put(s3Store(1, "unused", "old-bucket"));
+    S3BlobStorageFactory clients = clientsCaching(1);
+    BlobStorageRegistry registry = new BlobStorageRegistry(dao, clients, null,
+        new S3StorageProperties(), false);
+
+    dao.remove(1);
+    registry.syncDatabaseToMemory();
+
+    verify(clients).invalidate(1);
+  }
+
+  @Test
+  void scheduledRefreshRecoversWhenDeletionBroadcastWasMissed() {
+    InMemoryBlobStoreDao dao = new InMemoryBlobStoreDao();
+    dao.put(s3Store(1, "unused", "old-bucket"));
+    S3BlobStorageFactory clients = clientsCaching(1);
+    BlobStorageRegistry registry = new BlobStorageRegistry(dao, clients, null,
+        new S3StorageProperties(), true);
+    registry.warmUpBlobStoreCatalog();
+
+    dao.remove(1);
+    registry.syncDatabaseToMemory();
+
+    verify(clients).invalidate(1);
+    assertTrue(registry.records().isEmpty());
+  }
+
+  @Test
+  void uncachedMutationPrunesClientsAndDatabaseOutagesDoNotBreakCacheReconciliation() {
+    InMemoryBlobStoreDao dao = new InMemoryBlobStoreDao();
+    dao.put(s3Store(1, "unused", "old-bucket"));
+    S3BlobStorageFactory clients = clientsCaching(1);
+    BlobStorageRegistry registry = new BlobStorageRegistry(dao, clients, null,
+        new S3StorageProperties(), false);
+
+    dao.remove(1);
+    registry.refreshAll();
+    verify(clients).invalidate(1);
+
+    dao.failList = true;
+    registry.refreshAll();
+    registry.syncDatabaseToMemory();
+  }
+
+  private static S3BlobStorageFactory clientsCaching(long id) {
+    S3BlobStorageFactory factory = mock(S3BlobStorageFactory.class);
+    when(factory.cachedStoreIdsMissingFrom(anySet())).thenAnswer(invocation -> {
+      Set<Long> liveIds = invocation.getArgument(0);
+      return liveIds.contains(id) ? Set.of() : Set.of(id);
+    });
+    return factory;
+  }
+
   @Test
   void configForUsesBlobStoreCatalogSnapshot() {
     InMemoryBlobStoreDao dao = new InMemoryBlobStoreDao();
@@ -137,6 +223,7 @@ class BlobStorageRegistryTest {
     private final Map<Long, BlobStoreRecord> records = new LinkedHashMap<>();
     private int listCalls;
     private int findByIdCalls;
+    private boolean failList;
 
     private InMemoryBlobStoreDao() {
       super(null, null);
@@ -144,6 +231,10 @@ class BlobStorageRegistryTest {
 
     private void put(BlobStoreRecord record) {
       records.put(record.id(), record);
+    }
+
+    private void remove(long id) {
+      records.remove(id);
     }
 
     @Override
@@ -154,6 +245,7 @@ class BlobStorageRegistryTest {
 
     @Override
     public List<BlobStoreRecord> list() {
+      if (failList) throw new IllegalStateException("database unavailable");
       listCalls++;
       return records.values().stream()
           .sorted(Comparator.comparing(BlobStoreRecord::name))
