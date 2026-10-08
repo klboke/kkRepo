@@ -132,6 +132,13 @@ Before cutover, run at least one more incremental sync:
 
 Already migrated paths are detected and skipped. Assets already existing on the target side are also marked as migrated.
 
+After upgrading to a version with a migration fix, importing affected content again requires an empty target
+repository with the same name as the source. Preserve any target-only content before replacing the
+target repository, then start a new `Sync metadata` job with `Metadata since` unset and run
+`Sync packages`. Starting a new job against an existing target still skips existing paths;
+`Retry failed` only retries failed items. For PyPI, package migration enqueues the project and root
+Simple indexes for rebuilding; verify the project index and `pip install` after the queue drains.
+
 ### Interruption And Resume
 
 Migration tasks, repository scan cursors, asset states, and failure information are stored in the shared database. If kkrepo restarts, the network is interrupted, source Nexus is temporarily unavailable, or the page is closed during migration, continue with:

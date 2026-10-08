@@ -10,6 +10,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -66,6 +67,8 @@ import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -76,6 +79,52 @@ import org.springframework.transaction.support.SimpleTransactionStatus;
 class RepositoryDataMigrationWriterTest {
   private static final byte[] SAMPLE = "kkrepo migration checksum\n".getBytes(StandardCharsets.UTF_8);
   private static final MavenPathParser MAVEN_PATH_PARSER = new MavenPathParser();
+
+  @ParameterizedTest
+  @CsvSource({
+      "packages/demo-package/1.0/demo_package-1.0-py3-none-any.whl, package, demo-package",
+      "packages/demo-package/1.0/demo_package-1.0-py3-none-any.whl.metadata, package-metadata, demo-package",
+      "packages/demo-package/1.0/demo_package-1.0.tar.gz, package, demo-package",
+      "packages/demo-package/1.0/demo_package-1.0.tar.gz.asc, package-signature, demo-package",
+      "simple/demo-package/, index, demo-package",
+      "simple/, root-index,"
+  })
+  void pypiMigrationPersistsProtocolKindsAndRebuildsIndexesOnEveryRun(
+      String path, String expectedKind, String project) {
+    RepositoryRecord repository = new RepositoryRecord(
+        16L, "pypi-hosted", RepositoryFormat.PYPI, RepositoryType.HOSTED,
+        "pypi-hosted", true, 1L, null, null, null, null, "ALLOW_ONCE", true, Map.of());
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    when(repositories.findById(repository.id())).thenReturn(Optional.of(repository));
+    ComponentDao components = mock(ComponentDao.class);
+    when(components.upsertReturningId(any())).thenReturn(501L);
+    RecordingAssetDao assets = new RecordingAssetDao();
+    RepositoryIndexRebuildDao rebuilds = mock(RepositoryIndexRebuildDao.class);
+    RepositoryDataMigrationWriter writer = new RepositoryDataMigrationWriter(
+        repositories, components, assets, mock(BrowseNodeDao.class),
+        new FixedBlobStorageRegistry(new MemoryBlobStorage()), rebuilds,
+        mock(DockerRegistryDao.class), new DockerManifestParser(new ObjectMapper()), null,
+        new TransientTransactionRetry(new RecordingTransactionManager(), 1, 0));
+    RepositoryDataMigrationAssetRecord source = new RepositoryDataMigrationAssetRecord(
+        1L, 2L, "source", project == null ? null : "component", path, PersistenceHashes.pathHash(path),
+        RepositoryFormat.PYPI, null, project, project == null ? null : "1.0", "PACKAGE",
+        "application/octet-stream", (long) SAMPLE.length, "source-blob-ref",
+        Instant.EPOCH, null, Instant.EPOCH, Instant.EPOCH, "nexus", "127.0.0.1", "PENDING", 0,
+        null, null, null, null, null, null, Map.of(), Instant.EPOCH);
+
+    for (int run = 0; run < 2; run++) {
+      var result = writer.write(repository.id(), source, new ByteArrayInputStream(SAMPLE),
+          "application/octet-stream", true);
+      assertEquals(200L, result.assetId());
+      assertEquals(expectedKind, assets.asset.kind());
+      assertEquals(path, assets.asset.path());
+      assertEquals(sha256Unchecked(SAMPLE), assets.blob.sha256());
+    }
+    verify(rebuilds, times(2)).enqueue(repository.id(), RepositoryIndexRebuildDao.PYPI_ROOT);
+    if (project != null) {
+      verify(rebuilds, times(2)).enqueue(repository.id(), RepositoryIndexRebuildDao.PYPI_PROJECT, project);
+    }
+  }
 
   @Test
   void delegatesRSourcePackagesToTheProtocolMigrationWriter() {
@@ -1012,6 +1061,18 @@ class RepositoryDataMigrationWriterTest {
           record.lastUpdatedAt(),
           record.attributes());
       return OptionalLong.of(asset.id());
+    }
+
+    @Override
+    public int updateAssetBlobBindingAndMetadata(
+        long assetId, Long componentId, long assetBlobId, String kind, String contentType,
+        long size, Instant lastUpdatedAt, Map<String, Object> attributes) {
+      assertEquals(asset.id(), assetId);
+      asset = new AssetRecord(
+          assetId, asset.repositoryId(), componentId, assetBlobId, asset.format(), asset.path(),
+          asset.pathHash(), asset.name(), kind, contentType, size, asset.lastDownloadedAt(),
+          lastUpdatedAt, attributes);
+      return 1;
     }
 
     @Override
