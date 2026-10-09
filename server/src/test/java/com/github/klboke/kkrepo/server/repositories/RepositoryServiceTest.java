@@ -207,7 +207,7 @@ class RepositoryServiceTest {
   }
 
   @Test
-  void yumDepthDefaultsRoundTripsAndSavingEnqueuesDurableRebuild() {
+  void yumDepthChangesEnqueueRebuildButOrdinarySavesDoNot() {
     StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
     RepositoryService service = service(repositories);
     RepositoryIndexRebuildDao queue = mock(RepositoryIndexRebuildDao.class);
@@ -221,15 +221,49 @@ class RepositoryServiceTest {
         new HostedSettings("ALLOW", null, null), null, null, null, null, null, null, null, null,
         new YumSettings(1)));
     assertEquals(1, nested.yum().repodataDepth());
+    service.update("yum-default", new UpdateCommand(
+        false, null, null, new HostedSettings("ALLOW_ONCE", null, null), null, null, null, null, null));
+    org.mockito.Mockito.verifyNoInteractions(queue);
     RepositoryView updated = service.update("yum-nested", new UpdateCommand(
         null, null, null, null, null, null, null, null, null, null, null, null, new YumSettings(2)));
     assertEquals(2, updated.yum().repodataDepth());
-    verify(queue).enqueue(nested.id(), RepositoryIndexRebuildDao.YUM_METADATA);
     RepositoryView preserved = service.update("yum-nested", new UpdateCommand(
         null, null, null, null, null, null, null, null, null));
     assertEquals(2, preserved.yum().repodataDepth());
+    service.update("yum-nested", new UpdateCommand(
+        false, null, null, new HostedSettings("ALLOW_ONCE", null, null), null, null, null, null,
+        null, null, null, null, new YumSettings(2)));
     assertThrows(RepositoryValidationException.class, () -> service.update("yum-nested", new UpdateCommand(
         null, null, null, null, null, null, null, null, null, null, null, null, new YumSettings(-1))));
+    verify(queue).enqueue(nested.id(), RepositoryIndexRebuildDao.YUM_METADATA);
+    org.mockito.Mockito.verifyNoMoreInteractions(queue);
+  }
+
+  @Test
+  void legacyYumSettingsAreInitializedAndRebuiltOnlyOnFirstSave() {
+    for (Map<String, Object> attributes : List.<Map<String, Object>>of(
+        Map.of(), Map.of("sourceRepository", Map.of("yum", Map.of("repodataDepth", 1))))) {
+      var legacy = new RepositoryRecord(71L, "yum-legacy", RepositoryFormat.YUM,
+          RepositoryType.HOSTED, "yum-hosted", true, 1L, null, null, null, null, "ALLOW", true,
+          attributes);
+      var repositories = new StubRepositoryDao(legacy);
+      RepositoryService service = service(repositories);
+      RepositoryIndexRebuildDao queue = mock(RepositoryIndexRebuildDao.class);
+      service.setIndexRebuildDao(queue);
+      var unchanged = new UpdateCommand(null, null, null, null, null, null, null, null, null);
+
+      int expectedDepth = attributes.isEmpty() ? 0 : 1;
+      assertEquals(expectedDepth, service.update("yum-legacy", unchanged).yum().repodataDepth());
+      assertEquals(Map.of("repodataDepth", expectedDepth),
+          repositories.findByName("yum-legacy").orElseThrow().attributes().get("yum"));
+      // A second service represents another replica reading the persisted initialization.
+      RepositoryService sibling = service(repositories);
+      sibling.setIndexRebuildDao(queue);
+      assertEquals(expectedDepth, sibling.update("yum-legacy", unchanged).yum().repodataDepth());
+      service.update("yum-legacy", unchanged);
+      verify(queue).enqueue(legacy.id(), RepositoryIndexRebuildDao.YUM_METADATA);
+      org.mockito.Mockito.verifyNoMoreInteractions(queue);
+    }
   }
 
   @Test

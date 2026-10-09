@@ -448,9 +448,14 @@ public class RepositoryService {
       attributes.put("pypi", pypiAttributes(merged));
     }
 
+    boolean rebuildYumMetadata = false;
     if (recipe.format() == RepositoryFormat.YUM && existing.type() == RepositoryType.HOSTED) {
-      attributes.put("yum", Map.of("repodataDepth", yumDepth(command.yum(),
-          YumMetadataDepth.read(existing.attributes()))));
+      int currentDepth = YumMetadataDepth.read(existing.attributes());
+      int depth = yumDepth(command.yum(), currentDepth);
+      boolean initialized = attributes.get("yum") instanceof Map<?, ?> yum
+          && yum.get("repodataDepth") != null;
+      rebuildYumMetadata = !initialized || depth != currentDepth;
+      attributes.put("yum", Map.of("repodataDepth", depth));
     }
 
     String versionPolicy = existing.versionPolicy();
@@ -485,9 +490,8 @@ public class RepositoryService {
         online, blobStoreId, existing.routingRuleId(), proxyRemoteUrl,
         versionPolicy, layoutPolicy, writePolicy, strict, attributes);
     repositoryDao.update(toUpdate);
-    if (recipe.format() == RepositoryFormat.YUM && recipe.type() == RepositoryType.HOSTED
-        && indexRebuildDao != null) {
-      // Saving also repairs repositories imported before repodataDepth was activated.
+    if (rebuildYumMetadata && indexRebuildDao != null) {
+      // First initialization repairs legacy repositories; later saves rebuild only on depth changes.
       // The durable marker commits with the settings and is claimed by one replica.
       indexRebuildDao.enqueue(existing.id(), RepositoryIndexRebuildDao.YUM_METADATA);
     }

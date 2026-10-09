@@ -5800,6 +5800,63 @@ public abstract class PersistenceApiContract {
   }
 
   @Test
+  void yumScopesCoalesceAndFullRebuildsCannotOvertakeAnotherReplica() throws Exception {
+    long first = createRepository("yum-scopes-first", RepositoryFormat.YUM);
+    long second = createRepository("yum-scopes-second", RepositoryFormat.YUM);
+    var queue = stores().repositoryIndexRebuild();
+    queue.enqueue(first, RepositoryIndexRebuildDao.YUM_METADATA, "1:fedora-45/");
+    queue.enqueue(first, RepositoryIndexRebuildDao.YUM_METADATA, "1:fedora-45/");
+    queue.enqueue(first, RepositoryIndexRebuildDao.YUM_METADATA);
+    queue.enqueue(second, RepositoryIndexRebuildDao.YUM_METADATA, "1:fedora-44/");
+    assertEquals(3, queue.countBacklog());
+    assertTrue(inTransaction(() -> queue.claim(10)).isEmpty());
+    var claimed = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    var heldScope = new java.util.concurrent.atomic.AtomicReference<String>();
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var firstWorker = executor.submit(() -> inTransaction(() -> {
+        var work = queue.claimYum(1);
+        assertEquals(first, work.getFirst().repositoryId());
+        heldScope.set(work.getFirst().scopeKey());
+        claimed.countDown();
+        try {
+          assertTrue(release.await(10, java.util.concurrent.TimeUnit.SECONDS));
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          throw new IllegalStateException(e);
+        }
+        return work;
+      }));
+      java.util.concurrent.Future<?> concurrentMutation = null;
+      try {
+        assertTrue(claimed.await(10, java.util.concurrent.TimeUnit.SECONDS));
+        var sibling = executor.submit(() -> inTransaction(() -> queue.claimYum(10)))
+            .get(10, java.util.concurrent.TimeUnit.SECONDS);
+        assertEquals(List.of(second), sibling.stream().map(RepositoryIndexRebuildDao.Claim::repositoryId).toList());
+        var mutationStarted = new CountDownLatch(1);
+        concurrentMutation = executor.submit(() -> {
+          mutationStarted.countDown();
+          queue.enqueue(first, RepositoryIndexRebuildDao.YUM_METADATA, heldScope.get());
+        });
+        assertTrue(mutationStarted.await(10, java.util.concurrent.TimeUnit.SECONDS));
+      } finally {
+        release.countDown();
+      }
+      assertEquals(1, firstWorker.get(10, java.util.concurrent.TimeUnit.SECONDS).size());
+      concurrentMutation.get(10, java.util.concurrent.TimeUnit.SECONDS);
+    }
+    // A rolled-back rebuild retains its outstanding work, including the other scope on this repo.
+    assertThrows(IllegalStateException.class, () -> inTransaction(() -> {
+      assertEquals(2, queue.claimYum(10).size());
+      throw new IllegalStateException("publication failed");
+    }));
+    assertEquals(2, queue.countBacklog());
+    queue.enqueue(first, RepositoryIndexRebuildDao.YUM_METADATA, "1:fedora-46/");
+    assertEquals(3, inTransaction(() -> queue.claimYum(10)).size());
+    assertEquals(0, queue.countBacklog());
+  }
+
+  @Test
   void repositoryIndexMarkerAcknowledgementCannotDeleteANewerRequest() {
     long repositoryId = createRepository("tracked-index-marker", RepositoryFormat.HELM);
     RepositoryIndexRebuildDao queue = stores().repositoryIndexRebuild();

@@ -48,6 +48,13 @@ public interface RepositoryIndexRebuildDao {
 
   List<Claim> claim(int maxItems);
 
+  /**
+   * Claims Yum markers while locking their repository rows first. Full and scoped rebuilds for
+   * one repository must not run concurrently. Call inside a READ_COMMITTED transaction and retain
+   * it through publication so configuration changes and sibling workers cannot overtake a rebuild.
+   */
+  List<Claim> claimYum(int maxItems);
+
   /** Claims only the dedicated Helm group queue. Must be called inside a transaction. */
   List<Claim> claimHelmGroupInvalidations(int maxItems);
 

@@ -928,7 +928,9 @@ public class BrowseContentDeleteController {
       return;
     }
     if (target.format() == RepositoryFormat.YUM) {
-      repositoryIndexRebuildDao.enqueue(target.id(), RepositoryIndexRebuildDao.YUM_METADATA);
+      repositoryIndexRebuildDao.enqueue(target.id(), RepositoryIndexRebuildDao.YUM_METADATA,
+          com.github.klboke.kkrepo.server.yum.YumMetadataDepth.rebuildScope(
+              com.github.klboke.kkrepo.server.yum.YumMetadataDepth.read(target.attributes()), storagePath));
       return;
     }
     if (target.format() == RepositoryFormat.RUBYGEMS) {

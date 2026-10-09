@@ -902,7 +902,7 @@ class BrowseContentDeleteControllerTest {
 
     verify(fixture.assetDao).deleteAssetById(rpm.id());
     verify(fixture.indexRebuildDao).enqueue(
-        repository.id(), RepositoryIndexRebuildDao.YUM_METADATA);
+        repository.id(), RepositoryIndexRebuildDao.YUM_METADATA, "0:");
   }
 
   @Test

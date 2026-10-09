@@ -323,6 +323,46 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
             assertTrue(foundPrimary, endpoint.name() + " primary metadata entry");
           }
         }
+        // Changing one metadata root must not republish an unrelated release's snapshot.
+        Exchange untouched = get(endpoint.repository(repository, "fedora-44/repodata/repomd.xml"));
+        Thread.sleep(1100); // repomd timestamps use seconds; an unrelated rebuild must be observable.
+        int deleteStatus = send(endpoint.repository(repository, "fedora-45/Packages/" + filename)
+            .DELETE()).status();
+        // Both 200 and 204 are successful synchronous HTTP DELETE responses.
+        assertTrue(deleteStatus == 200 || deleteStatus == 204, endpoint.name() + " delete last RPM: " + deleteStatus);
+        boolean removed = false;
+        for (int attempt = 0; attempt < 90; attempt++) {
+          Exchange changed = get(endpoint.repository(repository, "fedora-45/repodata/repomd.xml"));
+          if (changed.status() == 404) {
+            // Nexus removes the empty root; kkRepo retains its existing empty-index behavior.
+            removed = true;
+            break;
+          }
+          if (changed.status() == 200) {
+            var metadata = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+                .newDocumentBuilder().parse(new ByteArrayInputStream(changed.body()));
+            var entries = metadata.getElementsByTagName("data");
+            for (int i = 0; i < entries.getLength(); i++) {
+              var entry = (org.w3c.dom.Element) entries.item(i);
+              if (!"primary".equals(entry.getAttribute("type"))) continue;
+              String href = ((org.w3c.dom.Element) entry.getElementsByTagName("location").item(0))
+                  .getAttribute("href");
+              Exchange primary = get(endpoint.repository(repository, "fedora-45/" + href));
+              if (primary.status() != 200) continue;
+              try (var input = new GZIPInputStream(new ByteArrayInputStream(primary.body()))) {
+                var packages = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+                    .newDocumentBuilder().parse(input);
+                removed = packages.getElementsByTagName("package").getLength() == 0;
+              }
+            }
+          }
+          if (removed) break;
+          Thread.sleep(1000);
+        }
+        assertTrue(removed, endpoint.name() + " stops advertising deleted RPM");
+        assertArrayEquals(untouched.body(),
+            get(endpoint.repository(repository, "fedora-44/repodata/repomd.xml")).body(),
+            endpoint.name() + " preserves the untouched release index");
       }
     } finally {
       send(config.nexus.raw("/service/rest/v1/repositories/" + groupRepository).DELETE());

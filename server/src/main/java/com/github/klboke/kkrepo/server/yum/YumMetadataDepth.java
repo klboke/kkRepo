@@ -40,4 +40,20 @@ public final class YumMetadataDepth {
     int marker = path.lastIndexOf("/repodata/");
     return marker < 0 ? null : path.substring(0, marker + 1);
   }
+
+  /** Empty scope retains the existing whole-repository repair contract. */
+  public static String rebuildScope(int depth, String path) {
+    String root = path.endsWith(".rpm") ? root(path, depth) : metadataRoot(path);
+    if (root == null || !root.equals(root(root + "package.rpm", depth))) return "";
+    String scope = depth + ":" + root;
+    // The shared marker key is VARCHAR(512); unusually long roots use the full repair path.
+    return scope.length() <= 512 ? scope : "";
+  }
+
+  static String scopedRoot(int depth, String scope) {
+    String prefix = depth + ":";
+    if (scope == null || !scope.startsWith(prefix)) return null;
+    String root = scope.substring(prefix.length());
+    return root.equals(root(root + "package.rpm", depth)) ? root : null;
+  }
 }

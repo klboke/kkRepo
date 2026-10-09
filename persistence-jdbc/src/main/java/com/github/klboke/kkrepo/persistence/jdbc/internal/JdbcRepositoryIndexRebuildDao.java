@@ -140,6 +140,7 @@ public class JdbcRepositoryIndexRebuildDao implements com.github.klboke.kkrepo.p
     List<Claim> claims = jdbcTemplate.query("""
         SELECT repository_id, index_kind, scope_key, requested_at, attempts, last_error
         FROM repository_index_rebuild_marker
+        WHERE index_kind <> 'YUM_METADATA'
         ORDER BY requested_at
         LIMIT ?
         FOR UPDATE SKIP LOCKED
@@ -160,6 +161,41 @@ public class JdbcRepositoryIndexRebuildDao implements com.github.klboke.kkrepo.p
         DELETE FROM repository_index_rebuild_marker
         WHERE repository_id = ? AND index_kind = ? AND scope_key = ?
         """, args);
+    return claims;
+  }
+
+  @Transactional(propagation = Propagation.MANDATORY)
+  public List<Claim> claimYum(int maxItems) {
+    int limit = Math.max(1, maxItems);
+    // Lock in the same order as repository configuration updates: repository, then markers.
+    // SKIP LOCKED leaves a busy repository's markers intact for another polling cycle.
+    List<Long> repositories = jdbcTemplate.query("""
+        SELECT r.id FROM repository r
+        WHERE EXISTS (SELECT 1 FROM repository_index_rebuild_marker m
+          WHERE m.repository_id = r.id AND m.index_kind = 'YUM_METADATA')
+        ORDER BY r.id LIMIT ?
+        """, (rs, rowNum) -> rs.getLong(1), limit);
+    List<Claim> claims = new ArrayList<>();
+    for (long repositoryId : repositories) {
+      if (claims.size() >= limit) break;
+      if (jdbcTemplate.queryForList("SELECT id FROM repository WHERE id = ? FOR UPDATE SKIP LOCKED",
+          Long.class, repositoryId).isEmpty()) continue;
+      List<Claim> selected = jdbcTemplate.query("""
+          SELECT repository_id, index_kind, scope_key, requested_at, attempts, last_error
+          FROM repository_index_rebuild_marker
+          WHERE repository_id = ? AND index_kind = 'YUM_METADATA'
+          ORDER BY requested_at, scope_key LIMIT ? FOR UPDATE
+          """, (rs, rowNum) -> new Claim(rs.getLong("repository_id"), rs.getString("index_kind"),
+              rs.getString("scope_key"), rs.getTimestamp("requested_at").toInstant(),
+              rs.getInt("attempts"), rs.getString("last_error")), repositoryId, limit - claims.size());
+      for (Claim claim : selected) {
+        jdbcTemplate.update("""
+            DELETE FROM repository_index_rebuild_marker
+            WHERE repository_id = ? AND index_kind = 'YUM_METADATA' AND scope_key = ?
+            """, repositoryId, claim.scopeKey());
+      }
+      claims.addAll(selected);
+    }
     return claims;
   }
 

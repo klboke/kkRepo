@@ -92,8 +92,24 @@ class RepositoryIndexRebuildWorkerTest {
     verify(helm).rebuildIndex(helmRuntime, storage, 7L, "system", null);
     verify(pypi).rebuildRootIndex(pypiRuntime, storage, 7L, "system", null);
     verify(pypi).rebuildProjectIndex(pypiRuntime, storage, 7L, "demo", "system", null);
-    verify(yum).rebuildMetadata(yumRuntime, "system", null);
+    verify(yum).rebuildMetadata(yumRuntime, null, "system", null);
     verify(rubygems).rebuildGeneratedMetadata(rubygemsRuntime);
+  }
+
+  @Test
+  void fullYumRepairCoversCoClaimedDirectoryMarkers() {
+    RepositoryIndexRebuildDao queue = mock(RepositoryIndexRebuildDao.class);
+    RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
+    RepositoryRuntime runtime = runtime(11L, RepositoryFormat.YUM, 7L);
+    when(runtimes.resolveFreshById(11L)).thenReturn(Optional.of(runtime));
+    when(queue.claimYum(8)).thenReturn(List.of(
+        claim(11L, RepositoryIndexRebuildDao.YUM_METADATA, "", Instant.now()),
+        claim(11L, RepositoryIndexRebuildDao.YUM_METADATA, "1:fedora-45/", Instant.now())));
+    YumService yum = mock(YumService.class);
+    worker(queue, runtimes, mock(BlobStorageRegistry.class), mock(HelmHostedService.class),
+        mock(PypiHostedService.class), yum, mock(RubygemsService.class), true).drain();
+    verify(yum).rebuildMetadata(runtime, "", "system", null);
+    org.mockito.Mockito.verifyNoMoreInteractions(yum);
   }
 
   @Test
@@ -107,12 +123,12 @@ class RepositoryIndexRebuildWorkerTest {
     when(repositories.findById(11L)).thenReturn(Optional.of(yumRepository(1)));
     assertEquals(0, runtimes.resolveById(11L).orElseThrow().yumRepodataDepth());
     RepositoryIndexRebuildDao queue = mock(RepositoryIndexRebuildDao.class);
-    when(queue.claim(8)).thenReturn(List.of(claim(11, RepositoryIndexRebuildDao.YUM_METADATA, null, Instant.now())));
+    when(queue.claimYum(8)).thenReturn(List.of(claim(11, RepositoryIndexRebuildDao.YUM_METADATA, null, Instant.now())));
     YumService yum = mock(YumService.class);
     worker(queue, runtimes, mock(BlobStorageRegistry.class), mock(HelmHostedService.class),
         mock(PypiHostedService.class), yum, mock(RubygemsService.class), true).drain();
 
-    verify(yum).rebuildMetadata(argThat(runtime -> runtime.yumRepodataDepth() == 1), eq("system"), eq(null));
+    verify(yum).rebuildMetadata(argThat(runtime -> runtime.yumRepodataDepth() == 1), eq(null), eq("system"), eq(null));
     verify(queue, never()).reenqueueFailure(any(), any());
   }
 

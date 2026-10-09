@@ -70,11 +70,27 @@ subdirectory endpoint in its hosted members; configure their depths consistently
 
 Nexus migration preserves `yum.repodataDepth`. Existing imports also read it from the retained
 source configuration, without re-importing packages. After upgrading an affected repository,
-open its settings, confirm the depth, and save to enqueue a rebuild of existing RPMs. If the source
-export did not include this setting, enter it explicitly. Then run `dnf clean metadata` and retry.
+open its settings, confirm the depth, and save once to initialize the active Yum settings and enqueue
+a rebuild of existing RPMs. Later configuration saves enqueue a rebuild only if the depth changes;
+saving unchanged settings or editing unrelated fields does not rebuild metadata. If the source
+export did not include the depth, enter it explicitly. Then run `dnf clean metadata` and retry.
 Rebuild work uses the shared database queue and reads committed repository configuration directly,
 without waiting for sibling cache invalidation. Changing depth rewrites old metadata roots as empty
 indexes; the RPMs remain in place and are indexed under the new roots.
+
+RPM uploads and deletions enqueue maintenance only for the affected metadata root. For example,
+changing `fedora-45/Packages/demo.rpm` at depth `1` reads and regenerates `fedora-45/` only; the
+`fedora-44/` snapshot is untouched. Group reads also query only the requested root. Pending changes
+in the same root share a durable marker. Rebuild workers serialize work for a repository through
+database row locks, so directory updates cannot race with a full repair or configuration change.
+The last RPM deletion publishes an empty index at its root.
+
+Full rebuilds are reserved for first initialization of legacy settings, depth changes, legacy full
+markers, and recovery of markers queued under an outdated depth. A root exceeding the shared queue's
+512-character scope limit also uses a full rebuild. At depth `0`, all packages share a single index,
+so updating that index still processes the repository's RPMs. Stored RPM metadata is reused; missing
+metadata is read from the RPM header and persisted. Upgrade all replicas before changing depth;
+older workers do not implement directory scopes or the new rebuild coordination.
 
 This follows [Nexus Repodata Depth](https://help.sonatype.com/en/yum-repositories.html).
 

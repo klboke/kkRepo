@@ -95,7 +95,7 @@ public class YumService {
           blankToDefault(contentType, contentType(path)), createdBy, createdByIp);
     }
     if (path.endsWith(".rpm") || YumMetadataDepth.metadataRoot(path) != null) {
-      enqueueMetadataRebuild(runtime);
+      enqueueMetadataRebuild(runtime, path);
     }
     return normalizeHostedPutResponse(response);
   }
@@ -141,7 +141,7 @@ public class YumService {
     String path = normalize(rawPath);
     MavenResponse response = hosted.delete(runtime, path);
     if (response.status() == 204 && (path.endsWith(".rpm") || YumMetadataDepth.metadataRoot(path) != null)) {
-      enqueueMetadataRebuild(runtime);
+      enqueueMetadataRebuild(runtime, path);
     }
     return response;
   }
@@ -163,9 +163,10 @@ public class YumService {
     return true;
   }
 
-  private void enqueueMetadataRebuild(RepositoryRuntime runtime) {
+  private void enqueueMetadataRebuild(RepositoryRuntime runtime, String path) {
     if (indexRebuildDao != null) {
-      indexRebuildDao.enqueue(runtime.id(), RepositoryIndexRebuildDao.YUM_METADATA);
+      indexRebuildDao.enqueue(runtime.id(), RepositoryIndexRebuildDao.YUM_METADATA,
+          YumMetadataDepth.rebuildScope(runtime.yumRepodataDepth(), path));
     }
   }
 
@@ -186,6 +187,19 @@ public class YumService {
       if (root != null) roots.computeIfAbsent(root, ignored -> new ArrayList<>()).add(relative(rpm, root));
     }
     roots.forEach((root, rpms) -> writeMetadata(runtime, root, rpms, createdBy, createdByIp));
+  }
+
+  public void rebuildMetadata(RepositoryRuntime runtime, String scope, String createdBy, String createdByIp) {
+    String root = YumMetadataDepth.scopedRoot(runtime.yumRepodataDepth(), scope);
+    if (root == null) {
+      // Legacy/full markers, or mutations queued using a pre-configuration runtime snapshot.
+      rebuildMetadata(runtime, createdBy, createdByIp);
+      return;
+    }
+    List<RpmAsset> rpms = rpmAssets(assetDao.listAssetsByPrefix(runtime.id(), root)).stream()
+        .map(rpm -> relative(rpm, root)).toList();
+    // Even the last deletion must publish an empty index at this root.
+    writeMetadata(runtime, root, rpms, createdBy, createdByIp);
   }
 
   private void writeMetadata(RepositoryRuntime runtime, String root, List<RpmAsset> rpms,
@@ -241,7 +255,10 @@ public class YumService {
       assets.sort(Comparator.comparing(RpmAsset::path));
       return assets;
     }
-    List<AssetRecord> records = assetDao.listAssetsByPrefix(runtime.id(), "");
+    if (!root.equals(YumMetadataDepth.root(root + "package.rpm", runtime.yumRepodataDepth()))) {
+      return List.of();
+    }
+    List<AssetRecord> records = assetDao.listAssetsByPrefix(runtime.id(), root);
     return rpmAssets(records).stream()
         .filter(rpm -> root.equals(YumMetadataDepth.root(rpm.path(), runtime.yumRepodataDepth())))
         .map(rpm -> relative(rpm, root)).toList();
@@ -270,6 +287,7 @@ public class YumService {
 
   private Map<Long, AssetBlobRecord> blobsByAssetId(List<AssetRecord> assets) {
     List<Long> blobIds = assets.stream()
+        .filter(asset -> asset.path().endsWith(".rpm"))
         .map(AssetRecord::assetBlobId)
         .filter(id -> id != null)
         .toList();

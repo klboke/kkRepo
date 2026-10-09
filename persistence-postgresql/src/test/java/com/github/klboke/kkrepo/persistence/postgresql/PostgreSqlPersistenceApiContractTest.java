@@ -18,6 +18,7 @@ class PostgreSqlPersistenceApiContractTest extends PersistenceApiContract {
       "securityScanPolicyDeletionSeesAssignmentsCommittedAfterItsSnapshot",
       "securityScanPolicyDeletionRejectsWritersThatLoseTheRace",
       "markerClaimsPartitionConcurrentWorkersAndFailuresReenqueue",
+      "yumScopesCoalesceAndFullRebuildsCannotOvertakeAnotherReplica",
       "securityScanningIsIdempotentFencedAndProtectsImmutableDocuments",
       "securityScanningKeepsNewestScannerSnapshotWhenRematchesCompleteOutOfOrder",
       "securityScanningReconcilesWritesThatMissedAnAlreadyAdvancedEventCursor",

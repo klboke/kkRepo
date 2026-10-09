@@ -18,6 +18,8 @@ import com.github.klboke.kkrepo.server.yum.YumService;
 import io.micrometer.core.instrument.Timer;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,6 +27,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 @Component
@@ -42,6 +45,7 @@ class RepositoryIndexRebuildWorker {
   private final TerraformComponentService terraformComponentService;
   private final SwiftComponentService swiftComponentService;
   private final TransactionTemplate transactionTemplate;
+  private final TransactionTemplate yumTransactionTemplate;
   private final KkRepoMetrics metrics;
   private final int batchSize;
   private final boolean enabled;
@@ -74,6 +78,8 @@ class RepositoryIndexRebuildWorker {
     this.terraformComponentService = terraformComponentService;
     this.swiftComponentService = swiftComponentService;
     this.transactionTemplate = new TransactionTemplate(transactionManager);
+    this.yumTransactionTemplate = new TransactionTemplate(transactionManager);
+    this.yumTransactionTemplate.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
     this.metrics = metrics;
     this.batchSize = batchSize;
     this.enabled = enabled;
@@ -84,6 +90,9 @@ class RepositoryIndexRebuildWorker {
     if (!enabled) return;
     Timer.Sample batchSample = metrics.startTimer();
     try {
+      // A separate transaction reads the current catalog after taking repository locks. This
+      // prevents full and per-directory publications from racing, including on MySQL's default RR.
+      yumTransactionTemplate.executeWithoutResult(status -> runYumBatch());
       transactionTemplate.executeWithoutResult(status -> runBatch());
       metrics.recordWorkerBatch("repository_index_rebuild", "success", batchSample);
     } catch (RuntimeException e) {
@@ -103,6 +112,21 @@ class RepositoryIndexRebuildWorker {
           ? dao.claim(remaining)
           : dao.claimHelmGroupInvalidations(remaining));
     }
+    processClaims(claims);
+  }
+
+  private void runYumBatch() {
+    List<Claim> claims = dao.claimYum(batchSize);
+    Set<Long> fullRebuilds = claims.stream()
+        .filter(claim -> claim.scopeKey() == null || claim.scopeKey().isEmpty())
+        .map(Claim::repositoryId).collect(Collectors.toSet());
+    // Full repairs cover the directory markers claimed in this transaction. If publication fails,
+    // its full marker is retried; rollback restores every claimed marker.
+    processClaims(claims.stream().filter(claim -> !fullRebuilds.contains(claim.repositoryId())
+        || claim.scopeKey() == null || claim.scopeKey().isEmpty()).toList());
+  }
+
+  private void processClaims(List<Claim> claims) {
     if (claims.isEmpty()) return;
     metrics.incrementWorkerItems("repository_index_rebuild", "claim", "claimed", claims.size());
     for (Claim claim : claims) {
@@ -158,7 +182,7 @@ class RepositoryIndexRebuildWorker {
       case RepositoryIndexRebuildDao.HELM_INDEX -> rebuildHelm(runtime);
       case RepositoryIndexRebuildDao.PYPI_ROOT -> rebuildPypiRoot(runtime);
       case RepositoryIndexRebuildDao.PYPI_PROJECT -> rebuildPypiProject(runtime, claim.scopeKey());
-      case RepositoryIndexRebuildDao.YUM_METADATA -> rebuildYum(runtime);
+      case RepositoryIndexRebuildDao.YUM_METADATA -> rebuildYum(runtime, claim.scopeKey());
       case RepositoryIndexRebuildDao.RUBYGEMS_METADATA -> rebuildRubygems(runtime);
       default -> log.warn("unknown repository index kind, dropping marker: {}", claim.indexKind());
     }
@@ -182,9 +206,9 @@ class RepositoryIndexRebuildWorker {
     pypiHostedService.rebuildProjectIndex(runtime, storage, runtime.blobStoreId(), scopeKey, "system", null);
   }
 
-  private void rebuildYum(RepositoryRuntime runtime) {
+  private void rebuildYum(RepositoryRuntime runtime, String scopeKey) {
     if (runtime.format() != RepositoryFormat.YUM) return;
-    yumService.rebuildMetadata(runtime, "system", null);
+    yumService.rebuildMetadata(runtime, scopeKey, "system", null);
   }
 
   private void rebuildRubygems(RepositoryRuntime runtime) {

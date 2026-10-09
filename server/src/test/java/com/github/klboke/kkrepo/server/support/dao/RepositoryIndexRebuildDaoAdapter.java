@@ -21,6 +21,11 @@ public class RepositoryIndexRebuildDaoAdapter implements RepositoryIndexRebuildD
   }
 
   @Override
+  public List<Claim> claimYum(int arg0) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
   public long countBacklog() {
     throw new UnsupportedOperationException();
   }
