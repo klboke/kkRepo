@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
+import com.fasterxml.jackson.annotation.JsonUnwrapped;
 import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryType;
@@ -1004,14 +1005,19 @@ public class SecurityScanManagementService {
     return scans.listPolicies();
   }
 
-  public CursorPage<ScanPolicy> policyPage(
+  public CursorPage<PolicyView> policyPage(
       AuthenticatedSubject actor, String query, long afterId, int requestedLimit) {
     requireGlobalRead(actor);
     String normalizedQuery = normalizedQuery(query);
     int safeLimit = limit(requestedLimit);
     List<ScanPolicy> candidates =
         scans.listPolicies(normalizedQuery, afterId, safeLimit + 1);
-    return cursorPage(candidates, safeLimit, ScanPolicy::id);
+    CursorPage<ScanPolicy> page = cursorPage(candidates, safeLimit, ScanPolicy::id);
+    Set<Long> latestIds = Set.copyOf(scans.findLatestPolicyIds(
+        page.items().stream().map(ScanPolicy::id).toList()));
+    // This is a display hint only: mutations still fence the current revision in the database.
+    return new CursorPage<>(page.items().stream()
+        .map(policy -> new PolicyView(policy, latestIds.contains(policy.id()))).toList(), page.nextAfter());
   }
 
   public CursorPage<ScanPolicy> policyOptionPage(
@@ -1059,12 +1065,10 @@ public class SecurityScanManagementService {
     requireGlobalWrite(actor);
     ScanPolicy policy = scans.findPolicy(policyId)
         .orElseThrow(() -> notFound("Policy not found"));
-    return switch (scans.deletePolicyIfUnused(policyId)) {
+    var outcome = scans.deletePolicyIfUnused(policyId);
+    return switch (outcome) {
       case NOT_FOUND -> throw notFound("Policy not found");
-      case STALE_REVISION -> throw conflict(
-          "Policy has changed; refresh and delete its latest revision");
-      case IN_USE -> throw conflict(
-          "Policy cannot be deleted: a revision is referenced by a repository, scan state, or waiver");
+      case STALE_REVISION, IN_USE -> throw new ScanPolicyDeletionConflictException(outcome);
       case DELETED -> policy;
     };
   }
@@ -1621,6 +1625,8 @@ public class SecurityScanManagementService {
   private static ResponseStatusException notFound(String message) {
     return new ResponseStatusException(HttpStatus.NOT_FOUND, message);
   }
+
+  public record PolicyView(@JsonUnwrapped ScanPolicy policy, boolean latestRevision) {}
 
   public record CursorPage<T>(List<T> items, Long nextAfter, String nextCursor) {
     public CursorPage(List<T> items, Long nextAfter) {

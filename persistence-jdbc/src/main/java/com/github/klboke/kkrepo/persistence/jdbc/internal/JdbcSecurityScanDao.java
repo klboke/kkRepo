@@ -3376,6 +3376,20 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   @Override
+  public List<Long> findLatestPolicyIds(List<Long> policyIds) {
+    if (policyIds.isEmpty()) return List.of();
+    String placeholders = String.join(",", java.util.Collections.nCopies(policyIds.size(), "?"));
+    return jdbc.query("""
+        SELECT policy.id FROM security_scan_policy policy
+        WHERE policy.id IN (%s) AND NOT EXISTS (
+          SELECT 1 FROM security_scan_policy newer
+          WHERE newer.name_normalized = policy.name_normalized
+            AND newer.revision > policy.revision
+        ) ORDER BY policy.id
+        """.formatted(placeholders), (rs, rowNum) -> rs.getLong("id"), policyIds.toArray());
+  }
+
+  @Override
   public Optional<ScanPolicy> findPolicy(long policyId) {
     return jdbc.query(
         "SELECT * FROM security_scan_policy WHERE id = ?",

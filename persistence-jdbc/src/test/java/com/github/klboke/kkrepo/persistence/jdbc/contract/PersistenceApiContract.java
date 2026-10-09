@@ -455,6 +455,10 @@ public abstract class PersistenceApiContract {
     SecurityScanDao.ScanPolicy other = scans.createPolicy(new SecurityScanDao.ScanPolicy(
         null, "other-option", true, Severity.HIGH, false, false, false,
         null, List.of(), 1, "contract", now, now));
+    assertEquals(List.of(), scans.findLatestPolicyIds(List.of()));
+    assertEquals(List.of(), scans.findLatestPolicyIds(List.of(first.id())));
+    assertEquals(List.of(latest.id(), other.id()), scans.findLatestPolicyIds(
+        List.of(first.id(), latest.id(), other.id(), Long.MAX_VALUE)));
     long before = first.id() - 1;
     assertEquals(List.of(latest.id(), other.id()), scans.listPolicyOptions(null, before, 100)
         .stream().map(SecurityScanDao.ScanPolicy::id).toList());

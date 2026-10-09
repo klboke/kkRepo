@@ -130,5 +130,19 @@ test('an unassigned repository explains the built-in fallback instead of implyin
   context.renderSecurityScanRepositories();
   assert.match(table.innerHTML, /Built-in rules \(unassigned\)/);
   assert.match(table.innerHTML, /not a policy record in the Policies tab/);
-  assert.match(table.innerHTML, /No policy is assigned; the built-in rules have no age limit/);
+  assert.match(table.innerHTML, /No scan policy is assigned/);
+});
+
+test('repository limits take precedence in explanations for unassigned and disabled policies', () => {
+  const { context } = setup();
+  for (const policyId of [null, 1]) {
+    const row = repository({
+      config: { policyId, maxResultAgeSeconds: 604800 }, policyEnabled: policyId == null,
+      resultValidity: { source: 'REPOSITORY', maxResultAgeSeconds: 604800 },
+    });
+    const html = context.renderSecurityScanResultValidity(row);
+    assert.match(html, /Effective validity: 7 days. Set by the repository/);
+    assert.doesNotMatch(html, /no age limit|No expiry|no enabled assigned policy/);
+    assert.match(html, policyId == null ? /No scan policy is assigned/ : /assigned policy is disabled/);
+  }
 });

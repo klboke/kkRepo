@@ -165,6 +165,21 @@ class SecurityScanManagementServiceCoreTest {
   }
 
   @Test
+  void policyPageMarksHistoricalRevisionsUsingDatabaseHeadsOutsideThePage() {
+    var first = policy(10L, "critical", 1L);
+    var second = policy(20L, "other", 1L);
+    when(scans.listPolicies("critical", 0L, 2)).thenReturn(List.of(first, second));
+    when(scans.findLatestPolicyIds(List.of(10L))).thenReturn(List.of());
+    var page = service.policyPage(actor, "critical", 0L, 1);
+    assertEquals(first, page.items().getFirst().policy());
+    assertFalse(page.items().getFirst().latestRevision());
+    assertEquals(10L, page.nextAfter());
+    when(scans.findLatestPolicyIds(List.of(10L))).thenReturn(List.of(10L));
+    assertTrue(service.policyPage(actor, "critical", 0L, 1).items().getFirst().latestRevision());
+    verify(scans, never()).listPolicies();
+  }
+
+  @Test
   void policyOptionsUseBoundedHeadQueryAndRetainAssignedRevision() {
     when(scans.listPolicyOptions(10L, 0L, 2)).thenReturn(
         List.of(policy(10L, "critical", 1L), policy(20L, "critical", 2L)));

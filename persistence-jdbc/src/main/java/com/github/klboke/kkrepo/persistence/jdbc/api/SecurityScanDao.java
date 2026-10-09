@@ -408,6 +408,9 @@ public interface SecurityScanDao {
   /** Latest revision of each policy plus an optional existing assignment, paginated by ID. */
   List<ScanPolicy> listPolicyOptions(Long assignedPolicyId, long afterId, int maxItems);
 
+  /** Returns the latest revisions among these IDs, considering all stored revisions across pages. */
+  List<Long> findLatestPolicyIds(List<Long> policyIds);
+
   Optional<ScanPolicy> findPolicy(long policyId);
 
   ScanPolicy createPolicy(ScanPolicy policy);

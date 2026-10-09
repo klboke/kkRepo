@@ -28,6 +28,55 @@ import org.springframework.web.server.ResponseStatusException;
 
 class SecurityScanManagementControllerTest {
   @Test
+  void deletionConflictsExposeActionableJsonThroughHttp() throws Exception {
+    var mutations = mock(SecurityScanMutationService.class);
+    var actor = mock(AuthenticatedSubject.class);
+    var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(
+        new SecurityScanManagementController(mock(SecurityScanManagementService.class), mutations)).build();
+    for (var outcome : List.of(
+        com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.PolicyDeletion.STALE_REVISION,
+        com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.PolicyDeletion.IN_USE)) {
+      var conflict = new ScanPolicyDeletionConflictException(outcome);
+      when(mutations.deletePolicy(org.mockito.ArgumentMatchers.any(),
+          org.mockito.ArgumentMatchers.eq(actor), org.mockito.ArgumentMatchers.eq(21L)))
+          .thenThrow(conflict);
+      var result = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+              .delete("/internal/security/scanning/policies/21")
+              .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE, actor))
+          .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isConflict())
+          .andReturn();
+      var body = new com.fasterxml.jackson.databind.ObjectMapper()
+          .readTree(result.getResponse().getContentAsString());
+      assertEquals("POLICY_" + outcome.name(), body.path("code").asText());
+      assertEquals(conflict.getReason(), body.path("message").asText());
+    }
+  }
+
+  @Test
+  void policyPageKeepsExistingJsonFieldsAndAddsRevisionMetadata() throws Exception {
+    var service = mock(SecurityScanManagementService.class);
+    var actor = mock(AuthenticatedSubject.class);
+    var policy = new ScanPolicy(21L, "critical", true, Severity.CRITICAL,
+        false, false, false, 604800L, List.of(), 2, "admin", null, null);
+    when(service.policyPage(actor, null, 0L, 25)).thenReturn(new CursorPage<>(List.of(
+        new SecurityScanManagementService.PolicyView(policy, true)), null));
+    var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(
+        new SecurityScanManagementController(service, mock(SecurityScanMutationService.class))).build();
+    var result = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+            .get("/internal/security/scanning/policies")
+            .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE, actor))
+        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+        .andReturn();
+    var item = new com.fasterxml.jackson.databind.ObjectMapper()
+        .readTree(result.getResponse().getContentAsString()).path("items").get(0);
+    assertEquals(21L, item.path("id").asLong());
+    assertEquals("critical", item.path("name").asText());
+    assertEquals(2L, item.path("revision").asLong());
+    assertEquals(true, item.path("latestRevision").asBoolean());
+    assertEquals(false, item.has("policy"));
+  }
+
+  @Test
   void completionEndpointsReturn400ForOutOfRangeCursorTimestamps() throws Exception {
     var service = mock(SecurityScanManagementService.class, org.mockito.Mockito.CALLS_REAL_METHODS);
     var controller = new SecurityScanManagementController(service, mock(SecurityScanMutationService.class));

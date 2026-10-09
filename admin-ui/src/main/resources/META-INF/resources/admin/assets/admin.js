@@ -5639,14 +5639,15 @@ function renderSecurityScanResultValidity(repository) {
   const label = formatSecurityScanValidity(validity.maxResultAgeSeconds) || "No expiry";
   const sources = {
     POLICY: "Inherited from the assigned scan policy.",
-    REPOSITORY: "Set by the repository; no enabled assigned policy adds an expiry limit.",
+    REPOSITORY: "Set by the repository.",
     BOTH: "The shorter of the repository and assigned policy validity periods applies.",
     NO_EXPIRY: "Neither the repository nor an enabled assigned policy imposes an age limit. This does not mean the artifact is safe or its scan is current."
   };
   const context = repository.config?.policyId == null
-    ? "No policy is assigned; the built-in rules have no age limit. "
-    : repository.policyEnabled === false ? "The assigned policy is disabled and contributes no age limit. " : "";
-  return renderSecurityScanSetting(label, `${context}${sources[validity.source] || ""} Age is measured from scan completion. Expired results use pending handling; policy or scanner changes can also require reevaluation.`);
+    ? " No scan policy is assigned."
+    : repository.policyEnabled === false ? " The assigned policy is disabled." : "";
+  const effective = validity.source === "NO_EXPIRY" ? "No expiry." : `Effective validity: ${label}.`;
+  return renderSecurityScanSetting(label, `${effective} ${sources[validity.source] || ""}${context} Age is measured from scan completion. Expired results use pending handling; policy or scanner changes can also require reevaluation.`);
 }
 
 function renderSecurityScanExceptionHandling(repository) {
@@ -5701,11 +5702,11 @@ function renderSecurityScanPolicies() {
   document.getElementById("security-scan-policy-table").innerHTML =
     securityScanState.policies.map((policy) => `
       <tr><td>${escapeHtml(policy.name)}</td>
-      <td>${escapeHtml(policy.revision)}</td><td>${escapeHtml(policy.blockSeverity)}</td>
+      <td>${escapeHtml(policy.revision)} <span class="state-badge compact">${policy.latestRevision === true ? "Latest" : "Historical"}</span></td><td>${escapeHtml(policy.blockSeverity)}</td>
       <td>${policy.requireCompleteInventory ? "yes" : "no"}</td>
       <td>${escapeHtml(formatSecurityScanValidity(policy.maxResultAgeSeconds) || "No expiry")}</td>
       <td class="actions-column"><button class="row-action security-scan-policy-edit" data-id="${escapeHtml(policy.id)}" type="button">edit</button>
-      <button class="row-action security-scan-policy-delete" data-id="${escapeHtml(policy.id)}" title="Delete this policy and all revisions. Use its latest revision." type="button">delete</button></td></tr>`).join("")
+      <button class="row-action security-scan-policy-delete" data-id="${escapeHtml(policy.id)}" title="${policy.latestRevision === true ? "Delete this policy and all its revisions. Referenced policies cannot be deleted." : "Historical revisions cannot be deleted individually. Delete the policy and all revisions from its latest revision."}" ${policy.latestRevision === true ? "" : "disabled"} type="button">delete policy</button></td></tr>`).join("")
       || '<tr><td colspan="6" class="placeholder">No policies are visible.</td></tr>';
 }
 
@@ -6252,7 +6253,7 @@ async function saveSecurityScanPolicy(event) {
 async function deleteSecurityScanPolicy(policyId, button) {
   if (button?.disabled) return;
   const policy = securityScanState.policies.find((item) => String(item.id) === String(policyId));
-  if (!policy || !window.confirm(
+  if (!policy || policy.latestRevision !== true || !window.confirm(
     `Delete scan policy "${policy.name}" and ALL its revisions? This cannot be undone. `
     + "Use the latest revision. Referenced policies cannot be deleted.")) return;
   if (button) button.disabled = true;

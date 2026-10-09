@@ -9,11 +9,11 @@ function setup(confirm = true, response = { ok: true }) {
   const calls = [];
   const table = { innerHTML: '' };
   const context = {
-    securityScanState: { policies: [{ id: 4, name: 'default-audit', revision: 4, blockSeverity: 'HIGH' }] },
-    window: { confirm: message => { calls.push(['confirm', message]); return confirm; } },
+    securityScanState: { policies: [{ id: 4, name: 'default-audit', revision: 4, latestRevision: true, blockSeverity: 'HIGH' }] },
+    window: { location: {}, confirm: message => { calls.push(['confirm', message]); return confirm; } },
     document: { getElementById: () => table },
     fetch: async (url, options) => { calls.push(['fetch', url, options.method]); return response; },
-    responseErrorMessage: async response => response.message,
+    authRequiredWelcome: () => '/login/',
     showToast: (...args) => calls.push(['toast', ...args]),
     resetSecurityScanPage: key => calls.push(['reset', key]),
     loadSecurityScanList: async key => calls.push(['reload', key]),
@@ -22,6 +22,7 @@ function setup(confirm = true, response = { ok: true }) {
   vm.createContext(context);
   for (const [start, end] of [
     ['function escapeHtml(', 'function '],
+    ['async function responseErrorMessage(', 'async function saveBlobStore('],
     ['function renderSecurityScanPolicies(', 'function renderSecurityScanWaivers('],
     ['async function deleteSecurityScanPolicy(', 'function securityScanWaiverTargetLabel('],
   ]) {
@@ -38,7 +39,7 @@ test('policy rows expose a delete action and escape stored names', () => {
   context.securityScanState.policies[0].name = '<img onerror=alert(1)>';
   context.renderSecurityScanPolicies();
   assert.match(table.innerHTML, /security-scan-policy-delete/);
-  assert.match(table.innerHTML, /Use its latest revision/);
+  assert.match(table.innerHTML, /Delete this policy and all its revisions/);
   assert.doesNotMatch(table.innerHTML, /<img/);
   const begin = source.indexOf('document.getElementById("security-scan-policy-table").addEventListener');
   const handler = source.slice(begin, source.indexOf('\n});', begin) + 4);
@@ -67,10 +68,10 @@ test('204 success resets only the policy cursor and reloads without forcing navi
 
 for (const status of [403, 404, 409, 500]) {
   test(`HTTP ${status} preserves the list and displays the server explanation`, async () => {
-    const { context, calls } = setup(true, { ok: false, status, message: 'policy is referenced' });
+    const { context, calls } = setup(true, { ok: false, status, text: async () => JSON.stringify({ message: 'policy is referenced' }) });
     const button = { disabled: false };
     await context.deleteSecurityScanPolicy(4, button);
-    assert.deepEqual(calls.at(-1), ['toast', 'Policy deletion failed: policy is referenced', 'error']);
+    assert.deepEqual(calls.at(-1), ['toast', `Policy deletion failed: ${status === 403 ? 'Authentication required.' : 'policy is referenced'}`, 'error']);
     assert.ok(!calls.some(call => call[0] === 'reload' || call[0] === 'reset'));
     assert.equal(context.securityScanState.policies.length, 1);
     assert.equal(button.disabled, false);
@@ -90,4 +91,29 @@ test('duplicate clicks are ignored while deletion is pending and network failure
   await pending;
   assert.equal(button.disabled, false);
   assert.deepEqual(calls.at(-1), ['toast', 'Policy deletion failed: offline', 'error']);
+});
+
+// The latest revision can be on another page or excluded by the current search.
+test('historical revisions use server metadata and cannot send delete requests', async () => {
+  const { context, calls, table } = setup();
+  context.securityScanState.policies[0].latestRevision = false;
+  context.renderSecurityScanPolicies();
+  assert.match(table.innerHTML, /Historical/);
+  assert.match(table.innerHTML, /security-scan-policy-delete[^>]+disabled/);
+  assert.match(table.innerHTML, /Historical revisions cannot be deleted individually/);
+  await context.deleteSecurityScanPolicy(4);
+  assert.deepEqual(calls, []);
+});
+
+test('real response parsing preserves actionable deletion conflicts', async () => {
+  for (const [code, message] of [
+    ['POLICY_STALE_REVISION', 'Refresh the policy list and delete from the latest revision.'],
+    ['POLICY_IN_USE', 'A revision is referenced by a repository, retained scan state, or waiver.'],
+  ]) {
+    const { context, calls } = setup(true, new Response(JSON.stringify({ code, message }), {
+      status: 409, headers: { 'Content-Type': 'application/json' },
+    }));
+    await context.deleteSecurityScanPolicy(4);
+    assert.deepEqual(calls.at(-1), ['toast', `Policy deletion failed: ${message}`, 'error']);
+  }
 });

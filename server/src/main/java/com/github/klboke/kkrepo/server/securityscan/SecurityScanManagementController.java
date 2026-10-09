@@ -17,6 +17,7 @@ import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementServic
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.FindingWaiverDetail;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.Overview;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.PolicyCommand;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.PolicyView;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.RepositoryView;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.RunView;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.TaskView;
@@ -65,6 +66,13 @@ public class SecurityScanManagementController {
   public ResponseEntity<Map<String, String>> deletedPolicyReference(
       ScanPolicyReferenceConflictException conflict) {
     return ResponseEntity.status(409).body(Map.of("message", conflict.getMessage()));
+  }
+
+  @ExceptionHandler(ScanPolicyDeletionConflictException.class)
+  public ResponseEntity<Map<String, String>> policyDeletionConflict(
+      ScanPolicyDeletionConflictException conflict) {
+    return ResponseEntity.status(409).body(Map.of(
+        "code", conflict.code(), "message", conflict.getReason()));
   }
 
   @GetMapping("/summary")
@@ -191,7 +199,7 @@ public class SecurityScanManagementController {
   }
 
   @GetMapping("/policies")
-  public CursorPage<ScanPolicy> policies(
+  public CursorPage<PolicyView> policies(
       @RequestParam(name = "q", required = false) String query,
       @RequestParam(name = "after", defaultValue = "0") long after,
       @RequestParam(name = "limit", defaultValue = "25") int limit,
