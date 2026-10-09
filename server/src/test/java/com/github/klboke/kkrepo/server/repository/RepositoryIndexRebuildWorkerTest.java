@@ -104,7 +104,7 @@ class RepositoryIndexRebuildWorkerTest {
     when(runtimes.resolveFreshById(11L)).thenReturn(Optional.of(runtime));
     when(queue.claimYum(8)).thenReturn(List.of(
         claim(11L, RepositoryIndexRebuildDao.YUM_METADATA, "", Instant.now()),
-        claim(11L, RepositoryIndexRebuildDao.YUM_METADATA, "1:fedora-45/", Instant.now())));
+        claim(11L, RepositoryIndexRebuildDao.YUM_METADATA, "d1:6665646f72612d34352f", Instant.now())));
     YumService yum = mock(YumService.class);
     worker(queue, runtimes, mock(BlobStorageRegistry.class), mock(HelmHostedService.class),
         mock(PypiHostedService.class), yum, mock(RubygemsService.class), true).drain();

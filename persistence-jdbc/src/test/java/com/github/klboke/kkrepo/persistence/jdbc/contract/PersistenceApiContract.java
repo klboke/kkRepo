@@ -5854,6 +5854,17 @@ public abstract class PersistenceApiContract {
     queue.enqueue(first, RepositoryIndexRebuildDao.YUM_METADATA, "1:fedora-46/");
     assertEquals(3, inTransaction(() -> queue.claimYum(10)).size());
     assertEquals(0, queue.countBacklog());
+    // Reversible UTF-8 hex scopes preserve case/accent-distinct roots on MySQL's shared CI key.
+    var roots = List.of("Fedora-45/", "fedora-45/", "fédora-45/");
+    Set<String> scopes = new HashSet<>();
+    for (String root : roots) {
+      String scope = "d1:" + java.util.HexFormat.of().formatHex(root.getBytes(StandardCharsets.UTF_8));
+      scopes.add(scope);
+      queue.enqueue(first, RepositoryIndexRebuildDao.YUM_METADATA, scope);
+    }
+    assertEquals(roots.size(), queue.countBacklog());
+    assertEquals(scopes, new HashSet<>(inTransaction(() -> queue.claimYum(10)).stream()
+        .map(RepositoryIndexRebuildDao.Claim::scopeKey).toList()));
   }
 
   @Test

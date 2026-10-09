@@ -110,7 +110,7 @@ class YumServiceTest {
     assertEquals(200, response.status());
     verify(hosted).putWithAttributes(eq(runtime), eq(path), any(InputStream.class),
         eq("application/x-rpm"), anyMap(), eq("tester"), eq("127.0.0.1"));
-    assertEquals(List.of("1:" + RepositoryIndexRebuildDao.YUM_METADATA + ":0:"),
+    assertEquals(List.of("1:" + RepositoryIndexRebuildDao.YUM_METADATA + ":d0:"),
         indexRebuildDao.enqueues);
   }
 
@@ -281,8 +281,15 @@ class YumServiceTest {
         asset(11, 101, "fedora-44/untouched-1.0-1.noarch.rpm"),
         asset(11, 102, "fedora-45/Packages/demo-1.0-1.noarch.rpm"),
         asset(11, 103, "fedora-45/repodata/old-primary.xml.gz")))));
+    // Reproduce the broader candidate set returned by a case/accent-insensitive MySQL LIKE.
+    org.mockito.Mockito.doAnswer(call -> {
+      var records = new ArrayList<>(dao.assets);
+      records.add(asset(11, 104, "Fedora-45/other-1.0-1.noarch.rpm"));
+      records.add(asset(11, 105, "fédora-45/accent-1.0-1.noarch.rpm"));
+      return records;
+    }).when(dao).listAssetsByPrefix(11, "fedora-45/");
     YumService service = new YumService(writer, null, null, dao, null, null);
-    service.rebuildMetadata(hosted(11, 1), "1:fedora-45/", "tester", null);
+    service.rebuildMetadata(hosted(11, 1), "d1:6665646f72612d34352f", "tester", null);
     verify(dao).listAssetsByPrefix(11, "fedora-45/");
     verify(dao, org.mockito.Mockito.never()).listAssetsByPrefix(11, "");
     verify(dao).findBlobsByIds(List.of(102L));
@@ -296,7 +303,7 @@ class YumServiceTest {
     }
     dao.assets.removeIf(asset -> asset.path().endsWith("demo-1.0-1.noarch.rpm"));
     written.clear();
-    service.rebuildMetadata(hosted(11, 1), "1:fedora-45/", "tester", null);
+    service.rebuildMetadata(hosted(11, 1), "d1:6665646f72612d34352f", "tester", null);
     assertTrue(written.keySet().stream().allMatch(path -> path.startsWith("fedora-45/repodata/")));
     for (var entry : written.entrySet()) {
       if (!entry.getKey().endsWith(".gz")) continue;
@@ -312,7 +319,7 @@ class YumServiceTest {
     FakeAssetDao dao = org.mockito.Mockito.spy(new FakeAssetDao(List.of(
         asset(11, 101, "fedora-45/Packages/demo-1.0-1.noarch.rpm"))));
     YumService service = new YumService(writer, null, null, dao, null, null);
-    service.rebuildMetadata(hosted(11, 1), "0:", "tester", null);
+    service.rebuildMetadata(hosted(11, 1), "d0:", "tester", null);
     verify(dao).listAssetsByPrefix(11, "");
     verify(writer).putGenerated(any(), eq("fedora-45/repodata/repomd.xml"), any(), any(), any(), any());
   }
@@ -414,7 +421,7 @@ class YumServiceTest {
     assertEquals(204, service.delete(runtime, path).status());
     when(hosted.delete(runtime, path)).thenReturn(MavenResponse.noBody(404));
     assertEquals(404, service.delete(runtime, path).status());
-    assertEquals(List.of("11:" + RepositoryIndexRebuildDao.YUM_METADATA + ":1:fedora-45/"), queue.enqueues);
+    assertEquals(List.of("11:" + RepositoryIndexRebuildDao.YUM_METADATA + ":d1:6665646f72612d34352f"), queue.enqueues);
   }
 
   @Test

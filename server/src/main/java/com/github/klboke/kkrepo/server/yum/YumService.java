@@ -196,7 +196,7 @@ public class YumService {
       rebuildMetadata(runtime, createdBy, createdByIp);
       return;
     }
-    List<RpmAsset> rpms = rpmAssets(assetDao.listAssetsByPrefix(runtime.id(), root)).stream()
+    List<RpmAsset> rpms = rpmAssetsInRoot(runtime, root).stream()
         .map(rpm -> relative(rpm, root)).toList();
     // Even the last deletion must publish an empty index at this root.
     writeMetadata(runtime, root, rpms, createdBy, createdByIp);
@@ -258,10 +258,16 @@ public class YumService {
     if (!root.equals(YumMetadataDepth.root(root + "package.rpm", runtime.yumRepodataDepth()))) {
       return List.of();
     }
-    List<AssetRecord> records = assetDao.listAssetsByPrefix(runtime.id(), root);
-    return rpmAssets(records).stream()
+    return rpmAssetsInRoot(runtime, root).stream()
         .filter(rpm -> root.equals(YumMetadataDepth.root(rpm.path(), runtime.yumRepodataDepth())))
         .map(rpm -> relative(rpm, root)).toList();
+  }
+
+  private List<RpmAsset> rpmAssetsInRoot(RepositoryRuntime runtime, String root) {
+    // MySQL LIKE may also return case/accent-equivalent paths; preserve exact URL identity before
+    // loading blob attributes or publishing an index for this root.
+    return rpmAssets(assetDao.listAssetsByPrefix(runtime.id(), root).stream()
+        .filter(asset -> asset.path().startsWith(root)).toList());
   }
 
   private static RpmAsset relative(RpmAsset rpm, String root) {

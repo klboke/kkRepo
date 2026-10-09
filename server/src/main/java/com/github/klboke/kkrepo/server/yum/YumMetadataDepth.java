@@ -1,6 +1,8 @@
 package com.github.klboke.kkrepo.server.yum;
 
 import java.util.Map;
+import java.util.HexFormat;
+import java.nio.charset.StandardCharsets;
 
 /** Nexus-compatible metadata roots; configuration is part of the shared repository catalog. */
 public final class YumMetadataDepth {
@@ -45,15 +47,22 @@ public final class YumMetadataDepth {
   public static String rebuildScope(int depth, String path) {
     String root = path.endsWith(".rpm") ? root(path, depth) : metadataRoot(path);
     if (root == null || !root.equals(root(root + "package.rpm", depth))) return "";
-    String scope = depth + ":" + root;
+    // The existing MySQL marker key uses a case/accent-insensitive collation. Hex preserves path
+    // identity without changing that shared table or conflating Fedora/ with fedora/.
+    String scope = "d" + depth + ":" + HexFormat.of().formatHex(root.getBytes(StandardCharsets.UTF_8));
     // The shared marker key is VARCHAR(512); unusually long roots use the full repair path.
     return scope.length() <= 512 ? scope : "";
   }
 
   static String scopedRoot(int depth, String scope) {
-    String prefix = depth + ":";
+    String prefix = "d" + depth + ":";
     if (scope == null || !scope.startsWith(prefix)) return null;
-    String root = scope.substring(prefix.length());
+    String root;
+    try {
+      root = new String(HexFormat.of().parseHex(scope.substring(prefix.length())), StandardCharsets.UTF_8);
+    } catch (IllegalArgumentException e) {
+      return null;
+    }
     return root.equals(root(root + "package.rpm", depth)) ? root : null;
   }
 }

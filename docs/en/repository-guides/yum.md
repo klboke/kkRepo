@@ -81,13 +81,14 @@ indexes; the RPMs remain in place and are indexed under the new roots.
 RPM uploads and deletions enqueue maintenance only for the affected metadata root. For example,
 changing `fedora-45/Packages/demo.rpm` at depth `1` reads and regenerates `fedora-45/` only; the
 `fedora-44/` snapshot is untouched. Group reads also query only the requested root. Pending changes
-in the same root share a durable marker. Rebuild workers serialize work for a repository through
+in the same root share a durable marker. Directory keys use reversible UTF-8 hex encoding to keep
+case/accent-distinct URLs separate even under MySQL's shared case-insensitive queue collation. Rebuild workers serialize work for a repository through
 database row locks, so directory updates cannot race with a full repair or configuration change.
 The last RPM deletion publishes an empty index at its root.
 
 Full rebuilds are reserved for first initialization of legacy settings, depth changes, legacy full
 markers, and recovery of markers queued under an outdated depth. A root exceeding the shared queue's
-512-character scope limit also uses a full rebuild. At depth `0`, all packages share a single index,
+512-character encoded scope limit also uses a full rebuild. At depth `0`, all packages share a single index,
 so updating that index still processes the repository's RPMs. Stored RPM metadata is reused; missing
 metadata is read from the RPM header and persisted. Upgrade all replicas before changing depth;
 older workers do not implement directory scopes or the new rebuild coordination.
