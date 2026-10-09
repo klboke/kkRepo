@@ -49,6 +49,28 @@ curl -u alice:"$KKREPO_PASSWORD" \
 
 只有 hosted 接受发布。Package path 应保持稳定，使外部脚本和仓库 metadata 指向同一 asset。
 
+## 按发行版生成子目录元数据
+
+如果 DNF 的 baseurl 以 `/fedora-$releasever/` 结尾，请将 hosted 仓库的 **元数据目录深度
+（Repodata Depth）** 设为 `1`（API：`"yum": {"repodataDepth": 1}`）。默认值 `0` 在仓库根目录
+生成元数据；`2` 则在 `fedora-45/x86_64/` 这样的目录生成。RPM 可以放在更深的目录，但不能上传
+到比配置深度更浅的位置。
+
+```bash
+curl -u alice:"$KKREPO_PASSWORD" --upload-file demo-1.0.0-1.x86_64.rpm \
+  https://nexus.example.com/repository/yum-hosted/fedora-45/
+```
+
+元数据会异步生成在 `fedora-45/repodata/`，其中包路径相对于 `fedora-45/`。各发行版分别维护
+包索引。Group 使用 hosted 成员中相同的子目录端点，请为这些成员配置一致的深度。
+
+Nexus 迁移会保留 `yum.repodataDepth`；已迁移仓库也会从保留的源配置中读取，无需重新导入包。
+受影响仓库升级后，在设置页确认深度并保存，即可触发现有 RPM 的元数据重建。如果源导出没有
+包含该设置，请手动填写。随后执行 `dnf clean metadata` 并重试。重建沿用数据库持久化队列和
+共享仓库配置，支持多副本部署。
+
+行为参考：[Nexus Repodata Depth](https://help.sonatype.com/en/yum-repositories.html)。
+
 ## 仓库行为
 
 - Hosted 解析 RPM identity，并从已提交 package 重建 `repodata`。

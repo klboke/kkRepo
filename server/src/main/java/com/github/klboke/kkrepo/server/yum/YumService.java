@@ -68,7 +68,8 @@ public class YumService {
     if (path.isEmpty()) {
       return repositoryInfo(headOnly);
     }
-    if (runtime.type() == RepositoryType.GROUP && path.startsWith("repodata/") && canAggregateGroupMetadata(runtime)) {
+    if (runtime.type() == RepositoryType.GROUP && YumMetadataDepth.metadataRoot(path) != null
+        && canAggregateGroupMetadata(runtime)) {
       return groupMetadata(runtime, path, headOnly);
     }
     return dispatchRawGet(runtime, path, headOnly);
@@ -85,12 +86,15 @@ public class YumService {
     String path = normalize(rawPath);
     MavenResponse response;
     if (path.endsWith(".rpm")) {
+      if (YumMetadataDepth.root(path, runtime.yumRepodataDepth()) == null) {
+        throw new MavenExceptions.BadRequestException("RPM path is above the configured Yum repodata depth");
+      }
       response = putRpm(runtime, path, body, contentType, createdBy, createdByIp);
     } else {
       response = hosted.put(runtime, path, body,
           blankToDefault(contentType, contentType(path)), createdBy, createdByIp);
     }
-    if (path.endsWith(".rpm") || path.startsWith("repodata/")) {
+    if (path.endsWith(".rpm") || YumMetadataDepth.metadataRoot(path) != null) {
       enqueueMetadataRebuild(runtime);
     }
     return normalizeHostedPutResponse(response);
@@ -136,7 +140,7 @@ public class YumService {
     ensureHosted(runtime);
     String path = normalize(rawPath);
     MavenResponse response = hosted.delete(runtime, path);
-    if (response.status() == 204 && (path.endsWith(".rpm") || path.startsWith("repodata/"))) {
+    if (response.status() == 204 && (path.endsWith(".rpm") || YumMetadataDepth.metadataRoot(path) != null)) {
       enqueueMetadataRebuild(runtime);
     }
     return response;
@@ -166,7 +170,26 @@ public class YumService {
   }
 
   public void rebuildMetadata(RepositoryRuntime runtime, String createdBy, String createdByIp) {
-    List<RpmAsset> rpms = rpmAssets(runtime);
+    List<AssetRecord> records = assetDao.listAssetsByPrefix(runtime.id(), "");
+    Map<String, List<RpmAsset>> roots = new LinkedHashMap<>();
+    if (runtime.yumRepodataDepth() == 0) roots.put("", new ArrayList<>());
+    // Keep known empty roots after deleting their last RPM, so old packages disappear from indexes.
+    for (AssetRecord record : records) {
+      String root = YumMetadataDepth.metadataRoot(record.path());
+      if (root != null && record.path().equals(root + "repodata/repomd.xml")
+          && root.equals(YumMetadataDepth.root(record.path(), runtime.yumRepodataDepth()))) {
+        roots.computeIfAbsent(root, ignored -> new ArrayList<>());
+      }
+    }
+    for (RpmAsset rpm : rpmAssets(records)) {
+      String root = YumMetadataDepth.root(rpm.path(), runtime.yumRepodataDepth());
+      if (root != null) roots.computeIfAbsent(root, ignored -> new ArrayList<>()).add(relative(rpm, root));
+    }
+    roots.forEach((root, rpms) -> writeMetadata(runtime, root, rpms, createdBy, createdByIp));
+  }
+
+  private void writeMetadata(RepositoryRuntime runtime, String root, List<RpmAsset> rpms,
+      String createdBy, String createdByIp) {
     MetadataFile primary = gzipMetadata(primaryXml(rpms));
     MetadataFile filelists = gzipMetadata(filelistsXml(rpms));
     MetadataFile other = gzipMetadata(otherXml(rpms));
@@ -174,19 +197,21 @@ public class YumService {
         new RepomdEntry("primary", "repodata/" + primary.fileName(), primary),
         new RepomdEntry("filelists", "repodata/" + filelists.fileName(), filelists),
         new RepomdEntry("other", "repodata/" + other.fileName(), other)));
-    hosted.putGenerated(runtime, "repodata/" + primary.fileName(),
+    hosted.putGenerated(runtime, root + "repodata/" + primary.fileName(),
         new ByteArrayInputStream(primary.bytes()), GZIP_CONTENT_TYPE, createdBy, createdByIp);
-    hosted.putGenerated(runtime, "repodata/" + filelists.fileName(),
+    hosted.putGenerated(runtime, root + "repodata/" + filelists.fileName(),
         new ByteArrayInputStream(filelists.bytes()), GZIP_CONTENT_TYPE, createdBy, createdByIp);
-    hosted.putGenerated(runtime, "repodata/" + other.fileName(),
+    hosted.putGenerated(runtime, root + "repodata/" + other.fileName(),
         new ByteArrayInputStream(other.bytes()), GZIP_CONTENT_TYPE, createdBy, createdByIp);
-    hosted.putGenerated(runtime, "repodata/repomd.xml",
+    hosted.putGenerated(runtime, root + "repodata/repomd.xml",
         new ByteArrayInputStream(repomd.getBytes(StandardCharsets.UTF_8)),
         XML_CONTENT_TYPE, createdBy, createdByIp);
   }
 
   private MavenResponse groupMetadata(RepositoryRuntime runtime, String path, boolean headOnly) {
-    List<RpmAsset> rpms = rpmAssets(runtime);
+    String root = YumMetadataDepth.metadataRoot(path);
+    List<RpmAsset> rpms = groupRpmAssets(runtime, root);
+    path = path.substring(root.length());
     MetadataFile primary = gzipMetadata(primaryXml(rpms));
     MetadataFile filelists = gzipMetadata(filelistsXml(rpms));
     MetadataFile other = gzipMetadata(otherXml(rpms));
@@ -206,18 +231,29 @@ public class YumService {
     throw new MavenExceptions.MavenNotFoundException(path);
   }
 
-  private List<RpmAsset> rpmAssets(RepositoryRuntime runtime) {
+  private List<RpmAsset> groupRpmAssets(RepositoryRuntime runtime, String root) {
     if (runtime.type() == RepositoryType.GROUP) {
       List<RpmAsset> assets = new ArrayList<>();
       for (RepositoryRuntime member : runtime.members()) {
         if (member.type() == RepositoryType.PROXY) continue;
-        assets.addAll(rpmAssets(member));
+        assets.addAll(groupRpmAssets(member, root));
       }
       assets.sort(Comparator.comparing(RpmAsset::path));
       return assets;
     }
-    List<RpmAsset> assets = new ArrayList<>();
     List<AssetRecord> records = assetDao.listAssetsByPrefix(runtime.id(), "");
+    return rpmAssets(records).stream()
+        .filter(rpm -> root.equals(YumMetadataDepth.root(rpm.path(), runtime.yumRepodataDepth())))
+        .map(rpm -> relative(rpm, root)).toList();
+  }
+
+  private static RpmAsset relative(RpmAsset rpm, String root) {
+    return new RpmAsset(rpm.path().substring(root.length()), rpm.metadata(), rpm.sha256(),
+        rpm.size(), rpm.lastUpdated());
+  }
+
+  private List<RpmAsset> rpmAssets(List<AssetRecord> records) {
+    List<RpmAsset> assets = new ArrayList<>();
     Map<Long, AssetBlobRecord> blobs = blobsByAssetId(records);
     for (AssetRecord asset : records) {
       if (!asset.path().endsWith(".rpm") || asset.assetBlobId() == null) continue;

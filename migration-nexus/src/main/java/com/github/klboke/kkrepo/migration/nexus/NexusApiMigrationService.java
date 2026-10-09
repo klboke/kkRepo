@@ -544,6 +544,12 @@ public class NexusApiMigrationService {
     if (recipe.format() == RepositoryFormat.PYPI && recipe.type() == RepositoryType.PROXY) {
       attributes.put("pypi", pypiAttributes(document));
     }
+    if (recipe.format() == RepositoryFormat.YUM && recipe.type() == RepositoryType.HOSTED) {
+      Object yum = value(document, "yum");
+      if (!(yum instanceof Map<?, ?>)) yum = nested(value(document, "attributes"), "yum");
+      Object depth = nested(yum, "repodataDepth");
+      attributes.put("yum", Map.of("repodataDepth", depth == null ? 0 : depth));
+    }
     if (recipe.format().name().equals("RAW")) {
       attributes.put("raw", Map.of("contentDisposition", "ATTACHMENT"));
     }

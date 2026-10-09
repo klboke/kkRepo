@@ -138,6 +138,8 @@
     "Repository entrypoints": "仓库入口",
     "Use the Browse, Search, and Upload areas with Nexus-compatible repository URLs.": "通过 Nexus 兼容的仓库 URL 使用浏览、搜索和上传功能。",
     "Repository Manager": "仓库管理器",
+    "Repodata Depth": "元数据目录深度",
+    "0 generates metadata at the repository root; 1 uses folders such as fedora-45. Saving rebuilds metadata.": "0 在仓库根目录生成元数据；1 在 fedora-45 等子目录生成。保存后会重建元数据。",
     "Hosted settings": "Hosted 设置",
     "Proxy settings": "Proxy 设置",
     "Docker connector": "Docker 连接器",

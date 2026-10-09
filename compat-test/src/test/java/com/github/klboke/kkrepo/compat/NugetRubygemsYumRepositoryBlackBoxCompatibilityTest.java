@@ -257,6 +257,81 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
         rpm);
   }
 
+  @Test
+  void yumHostedSubdirectoryRepodataMatchesNexusWhenWriteEnabled() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeLiveEndpoints(config);
+    assumeTrue(config.writeEnabled() && config.setupEnabled(),
+        "Enable live writes and repository setup for Yum repodata-depth compatibility");
+    String repository = "yum-depth-" + System.currentTimeMillis();
+    String groupRepository = repository + "-group";
+    byte[] rpm = download(config.yumFixtureUrl());
+    String filename = fileName(config.yumFixtureUrl());
+    try {
+      saveNexusRepository(config, "/service/rest/v1/repositories/yum/hosted", repository, """
+          {"name":"%s","online":true,"storage":{"blobStoreName":"default","strictContentTypeValidation":true,"writePolicy":"allow"},"yum":{"repodataDepth":1}}
+          """.formatted(repository));
+      saveKkRepoRepository(config, repository, """
+          {"name":"%s","recipe":"yum-hosted","online":true,"blobStoreName":"default","hosted":{"writePolicy":"ALLOW"},"yum":{"repodataDepth":1}}
+          """.formatted(repository));
+      saveNexusRepository(config, "/service/rest/v1/repositories/yum/group", groupRepository, """
+          {"name":"%s","online":true,"storage":{"blobStoreName":"default","strictContentTypeValidation":true},"group":{"memberNames":["%s"]}}
+          """.formatted(groupRepository, repository));
+      saveKkRepoGroup(config, groupRepository, "yum-group", List.of(repository));
+      for (Endpoint endpoint : List.of(config.nexus, config.nexusPlus)) {
+        assertEquals(400, put(endpoint.repository(repository, filename), rpm,
+            "application/x-rpm").status(), endpoint.name() + " rejects shallow RPM paths");
+        // Two independent release roots, with a deeper RPM path in the second one.
+        for (String prefix : List.of("fedora-44/", "fedora-45/Packages/")) {
+          assertEquals(200, put(endpoint.repository(repository, prefix + filename), rpm,
+              "application/x-rpm").status(), endpoint.name() + " upload");
+        }
+      }
+      for (Endpoint endpoint : List.of(config.nexus, config.nexusPlus)) {
+        for (String readRepository : List.of(repository, groupRepository)) {
+          for (String release : List.of("fedora-44/", "fedora-45/")) {
+            Exchange repomd = null;
+            for (int attempt = 0; attempt < 90; attempt++) {
+              repomd = get(endpoint.repository(readRepository, release + "repodata/repomd.xml"));
+              if (repomd.status() == 200) break;
+              Thread.sleep(1000);
+            }
+            assertEquals(200, repomd.status(), endpoint.name() + " " + release + "repomd");
+            var metadata = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+                .newDocumentBuilder().parse(new ByteArrayInputStream(repomd.body()));
+            var entries = metadata.getElementsByTagName("data");
+            boolean foundPrimary = false;
+            for (int i = 0; i < entries.getLength(); i++) {
+              var entry = (org.w3c.dom.Element) entries.item(i);
+              if (!"primary".equals(entry.getAttribute("type"))) continue;
+              foundPrimary = true;
+              String href = ((org.w3c.dom.Element) entry.getElementsByTagName("location").item(0))
+                  .getAttribute("href");
+              Exchange primary = get(endpoint.repository(readRepository, release + href));
+              assertEquals(200, primary.status());
+              assertEquals(entry.getElementsByTagName("checksum").item(0).getTextContent(), sha256(primary.body()));
+              byte[] xml = new GZIPInputStream(new ByteArrayInputStream(primary.body())).readAllBytes();
+              assertEquals(entry.getElementsByTagName("open-checksum").item(0).getTextContent(), sha256(xml));
+              var packages = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+                  .newDocumentBuilder().parse(new ByteArrayInputStream(xml));
+              var locations = packages.getElementsByTagName("location");
+              assertEquals(1, locations.getLength(), endpoint.name() + " release isolation");
+              String packageHref = ((org.w3c.dom.Element) locations.item(0)).getAttribute("href");
+              assertEquals((release.equals("fedora-45/") ? "Packages/" : "") + filename, packageHref);
+              assertArrayEquals(rpm, get(endpoint.repository(readRepository, release + packageHref)).body());
+            }
+            assertTrue(foundPrimary, endpoint.name() + " primary metadata entry");
+          }
+        }
+      }
+    } finally {
+      send(config.nexus.raw("/service/rest/v1/repositories/" + groupRepository).DELETE());
+      send(config.nexusPlus.raw("/internal/repositories/" + groupRepository).DELETE());
+      send(config.nexus.raw("/service/rest/v1/repositories/" + repository).DELETE());
+      // Like the other write fixtures, retain the non-empty candidate hosted repository until instance teardown.
+    }
+  }
+
   private static void assumeLiveEndpoints(CompatConfig config) {
     assumeTrue(config.referenceReachable(),
         "Reference Nexus is not reachable; start the fixed Nexus endpoint or override NEXUS_COMPAT_BASE_URL");

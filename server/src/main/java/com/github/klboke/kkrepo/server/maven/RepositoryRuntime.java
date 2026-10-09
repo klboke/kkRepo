@@ -44,7 +44,45 @@ public record RepositoryRuntime(
     OutboundProxyConfig outboundProxy,
     Integer minimumReleaseAgeMinutes,
     Set<String> allowedRedirectHosts,
-    NtlmCredentials ntlmCredentials) {
+    NtlmCredentials ntlmCredentials,
+    int yumRepodataDepth) {
+  /** Compatibility constructor for callers that predate Yum repodata-depth settings. */
+  public RepositoryRuntime(
+      long id,
+      String name,
+      RepositoryFormat format,
+      RepositoryType type,
+      String recipeName,
+      boolean online,
+      Long blobStoreId,
+      String writePolicy,
+      String versionPolicy,
+      String layoutPolicy,
+      boolean strictContentTypeValidation,
+      String proxyRemoteUrl,
+      Integer contentMaxAgeMinutes,
+      Integer metadataMaxAgeMinutes,
+      Boolean autoBlock,
+      String proxyRemoteUsername,
+      String proxyRemotePassword,
+      String proxyRemoteBearerToken,
+      String rawContentDisposition,
+      Boolean dockerConnectorEnabled,
+      Integer dockerConnectorPort,
+      String dockerConnectorPublicUrl,
+      Boolean cargoRequireAuthentication,
+      List<RepositoryRuntime> members,
+      OutboundProxyConfig outboundProxy,
+      Integer minimumReleaseAgeMinutes,
+      Set<String> allowedRedirectHosts,
+      NtlmCredentials ntlmCredentials) {
+    this(id, name, format, type, recipeName, online, blobStoreId, writePolicy, versionPolicy, layoutPolicy,
+        strictContentTypeValidation, proxyRemoteUrl, contentMaxAgeMinutes, metadataMaxAgeMinutes,
+        autoBlock, proxyRemoteUsername, proxyRemotePassword, proxyRemoteBearerToken, rawContentDisposition,
+        dockerConnectorEnabled, dockerConnectorPort, dockerConnectorPublicUrl, cargoRequireAuthentication,
+        members, outboundProxy, minimumReleaseAgeMinutes, allowedRedirectHosts, ntlmCredentials, 0);
+  }
+
   /** Compatibility constructor for callers that predate upstream NTLM authentication. */
   public RepositoryRuntime(
       long id,

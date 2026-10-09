@@ -2711,6 +2711,7 @@ function refreshRepositoryRecipeControls() {
   document.getElementById("repository-alpine-fields").hidden = format !== "alpine";
   document.getElementById("repository-swift-proxy-note").hidden =
     !(format === "swift" && type === "PROXY");
+  document.getElementById("repository-yum-depth-field").hidden = format !== "yum" || type !== "HOSTED";
   const pypiIndexPathVisible = format === "pypi" && type === "PROXY";
   document.getElementById("repository-pypi-index-path-field").hidden =
     !pypiIndexPathVisible;
@@ -3098,6 +3099,9 @@ function repositoryFormPayload() {
       memberNames: [...memberTransfer.selected]
     };
   }
+  if (recipe?.format === "yum" && type === "HOSTED") {
+    payload.yum = { repodataDepth: Number(document.getElementById("repository-yum-depth").value) };
+  }
   if (recipe?.format === "docker") {
     const connectorPort = document.getElementById("repository-docker-connector-port").value;
     payload.docker = {
@@ -3159,6 +3163,7 @@ function setRepositoryFormDefaults() {
   document.getElementById("repository-version-policy").value = "RELEASE";
   document.getElementById("repository-layout-policy").value = "STRICT";
   document.getElementById("repository-remote-url").value = "";
+  document.getElementById("repository-yum-depth").value = "0";
   document.getElementById("repository-pypi-index-path").value = "/simple";
   document.getElementById("repository-allowed-redirect-hosts").value = "";
   document.getElementById("repository-remote-authentication-type").value = "auto";
@@ -3309,6 +3314,7 @@ function showEditRepositoryForm(name) {
       repo.proxy.minimumReleaseAgeMinutes ?? "0";
     document.getElementById("repository-auto-block").checked = repo.proxy.autoBlock !== false;
   }
+  document.getElementById("repository-yum-depth").value = repo.yum?.repodataDepth ?? 0;
   document.getElementById("repository-pypi-index-path").value =
     repo.pypi?.indexPath ?? "/simple";
   if (repo.type === "GROUP" && repo.group && Array.isArray(repo.group.memberNames)) {

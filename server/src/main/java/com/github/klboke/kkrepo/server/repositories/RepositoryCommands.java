@@ -24,7 +24,28 @@ public final class RepositoryCommands {
       GroupSettings group,
       AptSettings apt,
       AlpineSettings alpine,
-      PypiSettings pypi) {
+      PypiSettings pypi,
+      YumSettings yum) {
+    /** Compatibility constructor for callers that predate Yum repodata-depth settings. */
+    public CreateCommand(
+        String name,
+        String recipe,
+        Boolean online,
+        String blobStoreName,
+        Boolean strictContentTypeValidation,
+        HostedSettings hosted,
+        ProxySettings proxy,
+        RawSettings raw,
+        DockerSettings docker,
+        CargoSettings cargo,
+        GroupSettings group,
+        AptSettings apt,
+        AlpineSettings alpine,
+        PypiSettings pypi) {
+      this(name, recipe, online, blobStoreName, strictContentTypeValidation, hosted, proxy, raw, docker,
+          cargo, group, apt, alpine, pypi, null);
+    }
+
     public CreateCommand(
         String name,
         String recipe,
@@ -90,7 +111,26 @@ public final class RepositoryCommands {
       GroupSettings group,
       AptSettings apt,
       AlpineSettings alpine,
-      PypiSettings pypi) {
+      PypiSettings pypi,
+      YumSettings yum) {
+    /** Compatibility constructor for callers that predate Yum repodata-depth settings. */
+    public UpdateCommand(
+        Boolean online,
+        String blobStoreName,
+        Boolean strictContentTypeValidation,
+        HostedSettings hosted,
+        ProxySettings proxy,
+        RawSettings raw,
+        DockerSettings docker,
+        CargoSettings cargo,
+        GroupSettings group,
+        AptSettings apt,
+        AlpineSettings alpine,
+        PypiSettings pypi) {
+      this(online, blobStoreName, strictContentTypeValidation, hosted, proxy, raw, docker, cargo, group,
+          apt, alpine, pypi, null);
+    }
+
     public UpdateCommand(
         Boolean online,
         String blobStoreName,
@@ -329,6 +369,10 @@ public final class RepositoryCommands {
       String signatureType,
       String description,
       List<String> upstreamPublicKeys) {
+  }
+
+  /** Number of path segments before a hosted Yum metadata root. */
+  public record YumSettings(Integer repodataDepth) {
   }
 
   /** Nexus-compatible PyPI proxy settings. Empty indexPath means the upstream root index. */

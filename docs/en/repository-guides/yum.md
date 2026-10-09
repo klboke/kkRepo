@@ -52,6 +52,30 @@ curl -u alice:"$KKREPO_PASSWORD" \
 Only hosted accepts publication. Keep package paths stable so external scripts and repository
 metadata refer to the same asset.
 
+## Release Subdirectories
+
+For a DNF base URL ending in `/fedora-$releasever/`, set **Repodata Depth** to `1` in the
+hosted repository settings (API: `"yum": {"repodataDepth": 1}`). The default `0` generates
+metadata at the repository root. Depth `2` generates it under paths such as `fedora-45/x86_64/`.
+RPMs may be stored deeper than this depth, but uploads above it are rejected.
+
+```bash
+curl -u alice:"$KKREPO_PASSWORD" --upload-file demo-1.0.0-1.x86_64.rpm \
+  https://nexus.example.com/repository/yum-hosted/fedora-45/
+```
+
+Metadata is rebuilt asynchronously under `fedora-45/repodata/`; package locations are relative to
+`fedora-45/`. Each release directory has its own package index. Group metadata uses the same
+subdirectory endpoint in its hosted members; configure their depths consistently.
+
+Nexus migration preserves `yum.repodataDepth`. Existing imports also read it from the retained
+source configuration, without re-importing packages. After upgrading an affected repository,
+open its settings, confirm the depth, and save to enqueue a rebuild of existing RPMs. If the source
+export did not include this setting, enter it explicitly. Then run `dnf clean metadata` and retry.
+Rebuild work uses the shared database queue and repository configuration across replicas.
+
+This follows [Nexus Repodata Depth](https://help.sonatype.com/en/yum-repositories.html).
+
 ## Repository Behavior
 
 - Hosted parses RPM identity and rebuilds `repodata` from committed packages.

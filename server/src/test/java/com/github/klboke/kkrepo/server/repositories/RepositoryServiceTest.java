@@ -40,6 +40,8 @@ import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.HostedSet
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.GroupSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.ProxySettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.PypiSettings;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.YumSettings;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.UpdateCommand;
 import com.github.klboke.kkrepo.server.support.InMemoryVersionWatermark;
 import com.github.klboke.kkrepo.server.support.dao.BlobStoreDaoAdapter;
@@ -202,6 +204,32 @@ class RepositoryServiceTest {
 
     verify(helmGroupIndexCache).invalidateMemberAfterCommit(61L);
     verify(helmGroupIndexCache, org.mockito.Mockito.times(2)).invalidateGroupAfterCommit(62L);
+  }
+
+  @Test
+  void yumDepthDefaultsRoundTripsAndSavingEnqueuesDurableRebuild() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+    RepositoryIndexRebuildDao queue = mock(RepositoryIndexRebuildDao.class);
+    service.setIndexRebuildDao(queue);
+    RepositoryView defaulted = service.create(new CreateCommand(
+        "yum-default", "yum-hosted", true, "default", true,
+        new HostedSettings("ALLOW", null, null), null, null, null, null, null));
+    assertEquals(0, defaulted.yum().repodataDepth());
+    RepositoryView nested = service.create(new CreateCommand(
+        "yum-nested", "yum-hosted", true, "default", true,
+        new HostedSettings("ALLOW", null, null), null, null, null, null, null, null, null, null,
+        new YumSettings(1)));
+    assertEquals(1, nested.yum().repodataDepth());
+    RepositoryView updated = service.update("yum-nested", new UpdateCommand(
+        null, null, null, null, null, null, null, null, null, null, null, null, new YumSettings(2)));
+    assertEquals(2, updated.yum().repodataDepth());
+    verify(queue).enqueue(nested.id(), RepositoryIndexRebuildDao.YUM_METADATA);
+    RepositoryView preserved = service.update("yum-nested", new UpdateCommand(
+        null, null, null, null, null, null, null, null, null));
+    assertEquals(2, preserved.yum().repodataDepth());
+    assertThrows(RepositoryValidationException.class, () -> service.update("yum-nested", new UpdateCommand(
+        null, null, null, null, null, null, null, null, null, null, null, null, new YumSettings(-1))));
   }
 
   @Test

@@ -23,6 +23,20 @@ import org.junit.jupiter.api.Test;
 
 class RepositoryRuntimeRegistryTest {
   @Test
+  void resolvesYumDepthFromActiveSettingsAndAlreadyMigratedSourceSnapshots() {
+    for (Map<String, Object> attrs : List.<Map<String, Object>>of(
+        Map.of("yum", Map.of("repodataDepth", 2)),
+        Map.of("sourceRepository", Map.of("yum", Map.of("repodataDepth", 2))),
+        Map.of("sourceRepository", Map.of("attributes", Map.of("yum", Map.of("repodataDepth", "2")))))) {
+      FakeRepositoryDao dao = new FakeRepositoryDao();
+      dao.add(new RepositoryRecord(1L, "yum-import", RepositoryFormat.YUM, RepositoryType.HOSTED,
+          "yum-hosted", true, 1L, null, null, null, null, "ALLOW", true, attrs), List.of());
+      assertEquals(2, new RepositoryRuntimeRegistry(dao, 0).resolve("yum-import")
+          .orElseThrow().yumRepodataDepth());
+    }
+  }
+
+  @Test
   void resolveTruncatesRecursiveGroupMembers() {
     FakeRepositoryDao dao = new FakeRepositoryDao();
     RepositoryRecord root = repo(1, "root", RepositoryType.GROUP);

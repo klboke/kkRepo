@@ -88,6 +88,21 @@ class NexusApiMigrationServiceTest {
   }
 
   @Test
+  void preservesYumRepodataDepthFromRestAndLegacyExportConfigurations() {
+    FakeRepositoryDao repositories = new FakeRepositoryDao();
+    NexusApiMigrationService service = service(new FakeBlobStoreDao(), repositories);
+    NexusInventory inventory = new NexusInventory(List.of(Map.of("name", "default")), List.of(
+        repository("yum-rest", "yum", "hosted", Map.of("storage", storage("default"),
+            "yum", Map.of("repodataDepth", 1))),
+        repository("yum-export", "yum", "hosted", Map.of("storage", storage("default"),
+            "attributes", Map.of("yum", Map.of("repodataDepth", 2))))),
+        NexusSecurityExport.empty(), List.of());
+    service.migrateConfig(inventory, request("https://old-nexus.example"));
+    assertEquals(Map.of("repodataDepth", 1), repositories.required("yum-rest").attributes().get("yum"));
+    assertEquals(Map.of("repodataDepth", 2), repositories.required("yum-export").attributes().get("yum"));
+  }
+
+  @Test
   void migratesPypiRemoteIndexPathIncludingAnExplicitEmptyValue() {
     FakeRepositoryDao repositories = new FakeRepositoryDao();
     NexusApiMigrationService service = service(new FakeBlobStoreDao(), repositories);
