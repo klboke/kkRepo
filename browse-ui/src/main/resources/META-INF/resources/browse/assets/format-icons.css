@@ -144,5 +144,6 @@
 }
 
 .format-logo-gitlfs {
-  --format-logo: url("/browse/assets/formats/gitlfs.svg");
+  --format-color: #e55335;
+  --format-logo: url("/browse/assets/formats/gitlfs.svg?v=20261009-mask-1");
 }

@@ -7,12 +7,14 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 
 class BrowseRepositoryFormatIconsContractTest {
   private static final List<String> FORMATS = List.of(
       "maven2", "npm", "pypi", "cargo", "pub", "composer", "terraform", "swift",
-      "ansiblegalaxy", "conda", "conan", "apt", "alpine", "huggingface", "go",
+      "ansiblegalaxy", "conda", "conan", "apt", "alpine", "gitlfs", "huggingface", "go",
       "helm", "docker", "nuget", "rubygems", "yum", "r", "raw");
   private static final List<String> SEARCH_FORMATS = List.of(
       "maven2", "npm", "pypi", "docker", "nuget", "go", "helm", "cargo");
@@ -39,6 +41,11 @@ class BrowseRepositoryFormatIconsContractTest {
     for (String format : FORMATS) {
       assertTrue(index.contains("<option value=\"" + format + "\">"), format);
       assertTrue(javascript.contains(format + ": \"" + iconName(format) + "\""), format);
+      Matcher iconRule = Pattern.compile(
+          "(?s)\\.format-logo-" + iconName(format) + "\\s*\\{([^}]+)\\}").matcher(stylesheet);
+      assertTrue(iconRule.find(), format + " must have a shared icon rule");
+      assertTrue(iconRule.group(1).matches("(?s).*--format-color:\\s*#[0-9a-fA-F]{6};.*"),
+          format + " must have an opaque color so its mask is visible");
     }
   }
 

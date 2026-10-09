@@ -34,3 +34,6 @@ is not an official Alpine Linux trademark asset.
 
 The Hugging Face Models smile-and-embrace compatibility mark is an original mark drawn for kkRepo.
 It is not an official Hugging Face trademark asset.
+
+The Git LFS compatibility mark is an original branch mark drawn for kkRepo. It is not an
+official Git or Git LFS trademark asset.
