@@ -114,6 +114,7 @@ const AUDIT_LOG_DEFAULT_PAGE_SIZE = 15;
 let auditLogPage = { total: 0, page: 0, size: AUDIT_LOG_DEFAULT_PAGE_SIZE, items: [] };
 let currentSession = null;
 let currentAdminPermissions = [];
+let initialDataLoaded = false;
 let blobStoreHealth = {};
 let dockerOperations = null;
 let blobStoreFormMode = "create";
@@ -7995,6 +7996,7 @@ async function deleteCleanupPolicy(policyId) {
 }
 
 function switchView(view, options = {}) {
+  if (!initialDataLoaded) return false;
   if (!currentAdminPermissions.includes("nexus:*") && view !== "content-selectors") return false;
   if (!document.getElementById(`${view}-view`)) return false;
   if (view !== "security-scanning") ++securityScanState.repositoryEditRequest;
@@ -8043,6 +8045,7 @@ function switchView(view, options = {}) {
 }
 
 function applyHashRoute() {
+  if (!initialDataLoaded) return false;
   const view = viewFromHash();
   if (!view) return false;
   if (view === "cleanup-policies"
@@ -8595,9 +8598,13 @@ document.getElementById("repository-data-migration-packages-button").addEventLis
 document.getElementById("repository-data-migration-retry-failed-button").addEventListener("click", retryRepositoryDataFailedPackages);
 document.getElementById("repository-data-migration-refresh-button").addEventListener("click", loadRepositoryDataMigrationJobs);
 
-hydrateSessionControls();
-loadCurrentSession({ quiet: true }).then((session) => {
-  if (!session) return;
+async function bootstrap() {
+  hydrateSessionControls();
+  const session = await loadCurrentSession({ quiet: true });
+  if (!session) {
+    document.getElementById("loading-view").textContent = "Failed to load session";
+    return;
+  }
   if (!currentAdminPermissions.includes("nexus:*")) {
     document.querySelectorAll(".side-item").forEach((item) => {
       item.hidden = item.dataset.view !== "content-selectors";
@@ -8605,13 +8612,17 @@ loadCurrentSession({ quiet: true }).then((session) => {
     document.querySelectorAll(".side-group").forEach((item) => {
       item.hidden = item.dataset.sideGroup !== "repository";
     });
-    switchView("content-selectors");
+    initialDataLoaded = true;
+    switchView("content-selectors", { replaceHash: true });
     return;
   }
-  loadRepositoryRecipes().then(() => {
-    if (!applyHashRoute()) {
-      loadRepositories();
-    }
-  });
+  const recipesPromise = loadRepositoryRecipes();
   loadBlobStores();
-});
+  await recipesPromise;
+  initialDataLoaded = true;
+  // Resolve the current URL only after authorization and recipe discovery. The initial HTML
+  // stays on Loading, and navigation during startup must not restore an older/default route.
+  if (!applyHashRoute()) switchView("repositories", { updateHash: false });
+}
+
+bootstrap();

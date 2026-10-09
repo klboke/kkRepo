@@ -16,7 +16,7 @@ class AdminSessionHydrationContractTest {
     String javascript = resource("/META-INF/resources/admin/assets/admin.js");
 
     assertTrue(javascript.contains("function hydrateSessionControls()"));
-    assertTrue(javascript.contains("hydrateSessionControls();\nloadCurrentSession({ quiet: true })"));
+    assertTrue(javascript.contains("hydrateSessionControls();\n  const session = await loadCurrentSession({ quiet: true })"));
   }
 
   @Test

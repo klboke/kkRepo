@@ -83,7 +83,7 @@
             <span class="side-group-label">Repository</span>
           </button>
           <div class="side-group-items" id="side-group-repository-items" data-side-group-items="repository">
-            <button class="side-item is-active" data-view="repositories" type="button"><span class="side-item-icon lucide-icon icon-package" aria-hidden="true"></span><span>Repositories</span></button>
+            <button class="side-item" data-view="repositories" type="button"><span class="side-item-icon lucide-icon icon-package" aria-hidden="true"></span><span>Repositories</span></button>
             <button class="side-item" data-view="cleanup-policies" type="button"><span class="side-item-icon lucide-icon icon-archive" aria-hidden="true"></span><span>Cleanup Policies</span></button>
             <button class="side-item" data-view="content-selectors" type="button"><span class="side-item-icon lucide-icon icon-list-filter" aria-hidden="true"></span><span>Content Selectors</span></button>
             <button class="side-item" data-view="blobstores" type="button"><span class="side-item-icon lucide-icon icon-database" aria-hidden="true"></span><span>Blob Stores</span></button>
@@ -124,7 +124,10 @@
       </aside>
 
       <main class="nx-content">
-        <section class="view fixed-table-view is-active" id="repositories-view">
+        <section class="view is-active" id="loading-view" role="status" aria-live="polite">
+          <p>Loading…</p>
+        </section>
+        <section class="view fixed-table-view" id="repositories-view">
           <div class="page-heading">
             <span class="heading-icon"><span class="lucide-icon icon-package" aria-hidden="true"></span></span>
             <h1>Repositories</h1>
@@ -1961,6 +1964,6 @@
     <script src="./assets/admin-filter.js?v=20260706-wildcard-filter-1"></script>
     <script src="/browse/assets/global-component-search.js?v=20260817-global-search-2"></script>
     <script src="./assets/content-selectors.js?v=20260908-content-selectors-1"></script>
-    <script src="./assets/admin.js?v=20261009-scan-policy-usability-2"></script>
+    <script src="./assets/admin.js?v=20261009-initial-route-1"></script>
   </body>
 </html>

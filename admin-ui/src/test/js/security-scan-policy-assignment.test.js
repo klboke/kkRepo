@@ -29,7 +29,7 @@ function setup(repositories = [repository()]) {
   const context = {
     securityScanState: { summary: { deploymentEnabled: true }, repositories, policies: [], repositoryPolicyOptions: [], repositoryEditRequest: 0 },
     SECURITY_SCAN_TABS: new Set(['overview', 'repositories', 'policies']),
-    currentAdminPermissions: ['nexus:*'], updateCurrentSideGroup() {}, loadUiSettings() {},
+    currentAdminPermissions: ['nexus:*'], initialDataLoaded: true, updateCurrentSideGroup() {}, loadUiSettings() {},
     securityScanTabFromHash: () => 'repositories',
     securityScanPages: { repositories: { requestVersion: 0 } },
     securityScanListEndpoints: { repositories: 'repositories' },
