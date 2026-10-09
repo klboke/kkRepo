@@ -14,6 +14,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -227,6 +228,18 @@ class BoundedProcessRunnerTest {
     for (Long processId : processIds) {
       assertFalse(canExecute(processId));
     }
+  }
+
+  @Test
+  void anEmptyProcSnapshotDoesNotHideAForkedChild() throws Exception {
+    AtomicInteger inspections = new AtomicInteger();
+
+    // /proc enumeration can omit a newly forked child while its listed parent exits.
+    // The child is visible to later snapshots and remains able to execute work.
+    boolean exited = BoundedProcessRunner.ProcessGroupSupport.waitForGroupExit(
+        Duration.ofMillis(100), () -> inspections.incrementAndGet() > 1);
+
+    assertFalse(exited, "Cleanup must keep waiting for the child instead of returning early");
   }
 
   @Test

@@ -427,8 +427,21 @@ public class BoundedProcessRunner {
 
     private boolean waitForGroupExit(long groupId, Duration timeout)
         throws IOException, InterruptedException {
+      return waitForGroupExit(timeout, () -> groupAlive(groupId));
+    }
+
+    static boolean waitForGroupExit(Duration timeout, GroupLivenessProbe probe)
+        throws IOException, InterruptedException {
       long deadline = System.nanoTime() + timeout.toNanos();
-      while (groupAlive(groupId)) {
+      int quiescentPasses = 0;
+      while (true) {
+        // /proc is not an atomic snapshot: a listed parent can exit after forking a child that
+        // this enumeration missed. Confirm quiescence in another pass before skipping KILL.
+        if (probe.isAlive()) {
+          quiescentPasses = 0;
+        } else if (++quiescentPasses >= 2) {
+          return true;
+        }
         long remaining = deadline - System.nanoTime();
         if (remaining <= 0) return false;
         Thread.sleep(Math.max(
@@ -437,7 +450,11 @@ public class BoundedProcessRunner {
                 PROCESS_TERMINATION_POLL_MILLIS,
                 TimeUnit.NANOSECONDS.toMillis(remaining))));
       }
-      return true;
+    }
+
+    @FunctionalInterface
+    interface GroupLivenessProbe {
+      boolean isAlive() throws IOException, InterruptedException;
     }
 
     private boolean groupAlive(long groupId) throws IOException, InterruptedException {
