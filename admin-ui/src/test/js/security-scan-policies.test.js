@@ -117,3 +117,27 @@ test('real response parsing preserves actionable deletion conflicts', async () =
     assert.deepEqual(calls.at(-1), ['toast', `Policy deletion failed: ${message}`, 'error']);
   }
 });
+
+for (const metadata of ['absent', 'null']) {
+  test(`legacy ${metadata} revision metadata preserves server-validated deletion`, async () => {
+    for (const status of [204, 409]) {
+      const message = 'Policy has changed; refresh and delete its latest revision';
+      const response = status === 204 ? new Response(null, { status })
+        : new Response(JSON.stringify({ message }), { status });
+      const { context, calls, table } = setup(true, response);
+      if (metadata === 'absent') delete context.securityScanState.policies[0].latestRevision;
+      else context.securityScanState.policies[0].latestRevision = null;
+      context.renderSecurityScanPolicies();
+      assert.doesNotMatch(table.innerHTML, /Latest|Historical|disabled/);
+      assert.match(table.innerHTML, /server checks the latest revision and references/);
+      await context.deleteSecurityScanPolicy(4);
+      assert.ok(calls.some(call => call[0] === 'fetch' && call[2] === 'DELETE'));
+      if (status === 409) {
+        assert.deepEqual(calls.at(-1), ['toast', `Policy deletion failed: ${message}`, 'error']);
+        assert.ok(!calls.some(call => call[0] === 'reload' || call[0] === 'reset'));
+      } else {
+        assert.ok(calls.some(call => call[0] === 'reload'));
+      }
+    }
+  });
+}

@@ -5702,11 +5702,11 @@ function renderSecurityScanPolicies() {
   document.getElementById("security-scan-policy-table").innerHTML =
     securityScanState.policies.map((policy) => `
       <tr><td>${escapeHtml(policy.name)}</td>
-      <td>${escapeHtml(policy.revision)} <span class="state-badge compact">${policy.latestRevision === true ? "Latest" : "Historical"}</span></td><td>${escapeHtml(policy.blockSeverity)}</td>
+      <td>${escapeHtml(policy.revision)}${typeof policy.latestRevision === "boolean" ? ` <span class="state-badge compact">${policy.latestRevision ? "Latest" : "Historical"}</span>` : ""}</td><td>${escapeHtml(policy.blockSeverity)}</td>
       <td>${policy.requireCompleteInventory ? "yes" : "no"}</td>
       <td>${escapeHtml(formatSecurityScanValidity(policy.maxResultAgeSeconds) || "No expiry")}</td>
       <td class="actions-column"><button class="row-action security-scan-policy-edit" data-id="${escapeHtml(policy.id)}" type="button">edit</button>
-      <button class="row-action security-scan-policy-delete" data-id="${escapeHtml(policy.id)}" title="${policy.latestRevision === true ? "Delete this policy and all its revisions. Referenced policies cannot be deleted." : "Historical revisions cannot be deleted individually. Delete the policy and all revisions from its latest revision."}" ${policy.latestRevision === true ? "" : "disabled"} type="button">delete policy</button></td></tr>`).join("")
+      <button class="row-action security-scan-policy-delete" data-id="${escapeHtml(policy.id)}" title="${policy.latestRevision === false ? "Historical revisions cannot be deleted individually. Delete the policy and all revisions from its latest revision." : "Delete this policy and all its revisions. The server checks the latest revision and references."}" ${policy.latestRevision === false ? "disabled" : ""} type="button">delete policy</button></td></tr>`).join("")
       || '<tr><td colspan="6" class="placeholder">No policies are visible.</td></tr>';
 }
 
@@ -6253,7 +6253,8 @@ async function saveSecurityScanPolicy(event) {
 async function deleteSecurityScanPolicy(policyId, button) {
   if (button?.disabled) return;
   const policy = securityScanState.policies.find((item) => String(item.id) === String(policyId));
-  if (!policy || policy.latestRevision !== true || !window.confirm(
+  // Older replicas omit revision metadata during rolling upgrades; the server still fences deletion.
+  if (!policy || policy.latestRevision === false || !window.confirm(
     `Delete scan policy "${policy.name}" and ALL its revisions? This cannot be undone. `
     + "Use the latest revision. Referenced policies cannot be deleted.")) return;
   if (button) button.disabled = true;

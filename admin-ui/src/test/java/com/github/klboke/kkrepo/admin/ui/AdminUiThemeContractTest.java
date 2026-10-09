@@ -54,7 +54,7 @@ class AdminUiThemeContractTest {
     assertTrue(i18n.contains("正在预览所选主题。保存界面设置后，它才会成为默认主题。"));
     assertTrue(index.contains("./assets/admin.css?v=20260923-scan-task-assets-2"));
     assertTrue(index.contains("/login/assets/ui-i18n.js?v=20261008-blobstore-delete-1"));
-    assertTrue(index.contains("./assets/admin.js?v=20261009-scan-policy-usability-1"));
+    assertTrue(index.contains("./assets/admin.js?v=20261009-scan-policy-usability-2"));
     assertFalse(index.contains("id=\"ui-settings-status\""));
     assertFalse(javascript.contains("Default language: ${"));
     assertFalse(javascript.contains("setDefaultTheme(themeSelect.value)"));
