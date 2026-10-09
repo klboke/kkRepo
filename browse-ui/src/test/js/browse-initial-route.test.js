@@ -80,7 +80,7 @@ function start(hash) {
     } };
 }
 
-test("the HTML first paint contains a loading state, not a selected Welcome page", () => {
+test("the HTML first paint does not select Welcome before routing", () => {
   const html = readFileSync(resolve(resources, "index.html"), "utf8");
   assert.match(html, /class="view is-active" id="loading-view" role="status"/);
   assert.match(html, /class="view" id="welcome-view"/);

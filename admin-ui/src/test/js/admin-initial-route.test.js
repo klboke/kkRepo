@@ -29,7 +29,7 @@ function start(hash, permissions = ["nexus:*"]) {
   for (const view of viewNames) {
     const classes = new Set(view === "loading" ? ["is-active"] : []);
     elements.set(`${view}-view`, {
-      id: `${view}-view`, textContent: view === "loading" ? "Loading…" : "",
+      id: `${view}-view`, textContent: "",
       classList: {
         contains: (value) => classes.has(value),
         toggle: (value, active) => {
@@ -90,7 +90,7 @@ function start(hash, permissions = ["nexus:*"]) {
     } };
 }
 
-test("Admin first paint shows a loading status without selecting Repositories", () => {
+test("Admin first paint does not select Repositories before routing", () => {
   assert.match(html, /class="view is-active" id="loading-view" role="status"/);
   assert.match(html, /class="view fixed-table-view" id="repositories-view"/);
   assert.doesNotMatch(html, /class="side-item is-active" data-view="repositories"/);
