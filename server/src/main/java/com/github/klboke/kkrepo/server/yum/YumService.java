@@ -173,11 +173,11 @@ public class YumService {
     List<AssetRecord> records = assetDao.listAssetsByPrefix(runtime.id(), "");
     Map<String, List<RpmAsset>> roots = new LinkedHashMap<>();
     if (runtime.yumRepodataDepth() == 0) roots.put("", new ArrayList<>());
-    // Keep known empty roots after deleting their last RPM, so old packages disappear from indexes.
+    // Keep known roots after deleting their last RPM or changing depth. Obsolete roots receive
+    // empty indexes instead of continuing to advertise packages at an outdated base URL.
     for (AssetRecord record : records) {
       String root = YumMetadataDepth.metadataRoot(record.path());
-      if (root != null && record.path().equals(root + "repodata/repomd.xml")
-          && root.equals(YumMetadataDepth.root(record.path(), runtime.yumRepodataDepth()))) {
+      if (root != null && record.path().equals(root + "repodata/repomd.xml")) {
         roots.computeIfAbsent(root, ignored -> new ArrayList<>());
       }
     }

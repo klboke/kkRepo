@@ -133,7 +133,9 @@ class RepositoryIndexRebuildWorker {
       helmGroupIndexCache.retryInvalidation(claim.repositoryId(), claim.indexKind());
       return;
     }
-    RepositoryRuntime runtime = runtimeRegistry.resolveById(claim.repositoryId()).orElse(null);
+    // A settings transaction can publish this marker before sibling catalog caches are invalidated.
+    // Consume the durable configuration with the marker, never a node-local runtime snapshot.
+    RepositoryRuntime runtime = runtimeRegistry.resolveFreshById(claim.repositoryId()).orElse(null);
     if (runtime == null) {
       return;
     }

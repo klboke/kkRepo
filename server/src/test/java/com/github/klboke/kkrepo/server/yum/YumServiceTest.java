@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.yum;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -322,6 +323,35 @@ class YumServiceTest {
           written.get(root + metadataHref(repomd, "primary")))).readAllBytes(), StandardCharsets.UTF_8);
       assertTrue(primary.contains("href=\"" + path.substring(root.length()) + "\""));
       assertEquals(4, written.size());
+    }
+  }
+
+  @Test
+  void changingDepthRetiresOldRootIndexesInBothDirections() throws Exception {
+    for (int depth : List.of(0, 1)) {
+      String oldRoot = depth == 0 ? "fedora-45/" : "";
+      String newRoot = depth == 0 ? "" : "fedora-45/";
+      RawHostedService hosted = mock(RawHostedService.class);
+      Map<String, byte[]> written = new LinkedHashMap<>();
+      doAnswer(call -> {
+        written.put(call.getArgument(1), ((InputStream) call.getArgument(2)).readAllBytes());
+        return MavenResponse.created();
+      }).when(hosted).putGenerated(any(), any(), any(), any(), any(), any());
+      YumService service = new YumService(hosted, null, null, new FakeAssetDao(List.of(
+          asset(11, 101, "fedora-45/Packages/demo-1.0-1.noarch.rpm"),
+          asset(11, 102, oldRoot + "repodata/repomd.xml"))), null, null);
+      service.rebuildMetadata(hosted(11, depth), "tester", null);
+
+      assertNotNull(written.get(oldRoot + "repodata/repomd.xml"), "Obsolete root must be retired");
+      for (String root : List.of(oldRoot, newRoot)) {
+        String repomd = new String(written.get(root + "repodata/repomd.xml"), StandardCharsets.UTF_8);
+        for (String kind : List.of("primary", "filelists", "other")) {
+          String xml = new String(new GZIPInputStream(new ByteArrayInputStream(
+              written.get(root + metadataHref(repomd, kind)))).readAllBytes(), StandardCharsets.UTF_8);
+          assertTrue(xml.contains("packages=\"" + (root.equals(oldRoot) ? 0 : 1) + "\""));
+          if (root.equals(oldRoot)) assertFalse(xml.contains("<package "));
+        }
+      }
     }
   }
 

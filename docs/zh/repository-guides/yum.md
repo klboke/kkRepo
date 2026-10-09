@@ -66,8 +66,9 @@ curl -u alice:"$KKREPO_PASSWORD" --upload-file demo-1.0.0-1.x86_64.rpm \
 
 Nexus 迁移会保留 `yum.repodataDepth`；已迁移仓库也会从保留的源配置中读取，无需重新导入包。
 受影响仓库升级后，在设置页确认深度并保存，即可触发现有 RPM 的元数据重建。如果源导出没有
-包含该设置，请手动填写。随后执行 `dnf clean metadata` 并重试。重建沿用数据库持久化队列和
-共享仓库配置，支持多副本部署。
+包含该设置，请手动填写。随后执行 `dnf clean metadata` 并重试。重建沿用数据库持久化队列，直接读取已提交的
+仓库配置，不等待其他副本缓存失效。切换深度后，旧元数据目录会改为空索引；RPM 保留原位，
+由新目录的元数据索引。
 
 行为参考：[Nexus Repodata Depth](https://help.sonatype.com/en/yum-repositories.html)。
 

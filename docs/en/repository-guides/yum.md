@@ -72,7 +72,9 @@ Nexus migration preserves `yum.repodataDepth`. Existing imports also read it fro
 source configuration, without re-importing packages. After upgrading an affected repository,
 open its settings, confirm the depth, and save to enqueue a rebuild of existing RPMs. If the source
 export did not include this setting, enter it explicitly. Then run `dnf clean metadata` and retry.
-Rebuild work uses the shared database queue and repository configuration across replicas.
+Rebuild work uses the shared database queue and reads committed repository configuration directly,
+without waiting for sibling cache invalidation. Changing depth rewrites old metadata roots as empty
+indexes; the RPMs remain in place and are indexed under the new roots.
 
 This follows [Nexus Repodata Depth](https://help.sonatype.com/en/yum-repositories.html).
 

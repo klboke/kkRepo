@@ -1,6 +1,8 @@
 package com.github.klboke.kkrepo.server.repository;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -13,6 +15,8 @@ import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao.Claim;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
 import com.github.klboke.kkrepo.server.helm.HelmGroupIndexCache;
@@ -28,6 +32,7 @@ import com.github.klboke.kkrepo.server.yum.YumService;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -76,10 +81,10 @@ class RepositoryIndexRebuildWorkerTest {
         claim(2L, RepositoryIndexRebuildDao.PYPI_PROJECT, "demo", now),
         claim(3L, RepositoryIndexRebuildDao.YUM_METADATA, null, now),
         claim(4L, RepositoryIndexRebuildDao.RUBYGEMS_METADATA, null, now)));
-    when(runtimes.resolveById(1L)).thenReturn(Optional.of(helmRuntime));
-    when(runtimes.resolveById(2L)).thenReturn(Optional.of(pypiRuntime));
-    when(runtimes.resolveById(3L)).thenReturn(Optional.of(yumRuntime));
-    when(runtimes.resolveById(4L)).thenReturn(Optional.of(rubygemsRuntime));
+    when(runtimes.resolveFreshById(1L)).thenReturn(Optional.of(helmRuntime));
+    when(runtimes.resolveFreshById(2L)).thenReturn(Optional.of(pypiRuntime));
+    when(runtimes.resolveFreshById(3L)).thenReturn(Optional.of(yumRuntime));
+    when(runtimes.resolveFreshById(4L)).thenReturn(Optional.of(rubygemsRuntime));
     when(storages.forBlobStoreId(7L)).thenReturn(storage);
 
     worker(dao, runtimes, storages, helm, pypi, yum, rubygems, true).drain();
@@ -89,6 +94,32 @@ class RepositoryIndexRebuildWorkerTest {
     verify(pypi).rebuildProjectIndex(pypiRuntime, storage, 7L, "demo", "system", null);
     verify(yum).rebuildMetadata(yumRuntime, "system", null);
     verify(rubygems).rebuildGeneratedMetadata(rubygemsRuntime);
+  }
+
+  @Test
+  void rebuildUsesCommittedDepthBeforeSiblingCatalogInvalidationArrives() {
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    RepositoryRuntimeRegistry runtimes = new RepositoryRuntimeRegistry(repositories, 300);
+    when(repositories.findById(11L)).thenReturn(Optional.of(yumRepository(0)));
+    assertEquals(0, runtimes.resolveById(11L).orElseThrow().yumRepodataDepth());
+
+    // Another replica commits the settings and marker. This replica has not polled invalidation yet.
+    when(repositories.findById(11L)).thenReturn(Optional.of(yumRepository(1)));
+    assertEquals(0, runtimes.resolveById(11L).orElseThrow().yumRepodataDepth());
+    RepositoryIndexRebuildDao queue = mock(RepositoryIndexRebuildDao.class);
+    when(queue.claim(8)).thenReturn(List.of(claim(11, RepositoryIndexRebuildDao.YUM_METADATA, null, Instant.now())));
+    YumService yum = mock(YumService.class);
+    worker(queue, runtimes, mock(BlobStorageRegistry.class), mock(HelmHostedService.class),
+        mock(PypiHostedService.class), yum, mock(RubygemsService.class), true).drain();
+
+    verify(yum).rebuildMetadata(argThat(runtime -> runtime.yumRepodataDepth() == 1), eq("system"), eq(null));
+    verify(queue, never()).reenqueueFailure(any(), any());
+  }
+
+  private static RepositoryRecord yumRepository(int depth) {
+    return new RepositoryRecord(11L, "yum-depth", RepositoryFormat.YUM, RepositoryType.HOSTED,
+        "yum-hosted", true, 7L, null, null, null, null, "ALLOW", true,
+        Map.of("yum", Map.of("repodataDepth", depth)));
   }
 
   @Test
@@ -174,7 +205,7 @@ class RepositoryIndexRebuildWorkerTest {
         pypiRuntime.id(), RepositoryIndexRebuildDao.PYPI_ROOT, null, Instant.now());
     when(dao.claimHelmGroupInvalidations(1)).thenReturn(List.of(helmClaim));
     when(dao.claim(1)).thenReturn(List.of(genericClaim));
-    when(runtimes.resolveById(pypiRuntime.id())).thenReturn(Optional.of(pypiRuntime));
+    when(runtimes.resolveFreshById(pypiRuntime.id())).thenReturn(Optional.of(pypiRuntime));
     when(storages.forBlobStoreId(7L)).thenReturn(storage);
     RepositoryIndexRebuildWorker worker = new RepositoryIndexRebuildWorker(
         dao,
@@ -218,12 +249,12 @@ class RepositoryIndexRebuildWorkerTest {
         claim(3L, RepositoryIndexRebuildDao.HELM_INDEX, null, now),
         claim(4L, RepositoryIndexRebuildDao.PYPI_PROJECT, " ", now),
         claim(5L, "unknown", null, now)));
-    when(runtimes.resolveById(1L)).thenReturn(Optional.empty());
-    when(runtimes.resolveById(2L)).thenReturn(Optional.of(
+    when(runtimes.resolveFreshById(1L)).thenReturn(Optional.empty());
+    when(runtimes.resolveFreshById(2L)).thenReturn(Optional.of(
         runtime(2L, RepositoryFormat.HELM, RepositoryType.PROXY, 7L)));
-    when(runtimes.resolveById(3L)).thenReturn(Optional.of(runtime(3L, RepositoryFormat.PYPI, 7L)));
-    when(runtimes.resolveById(4L)).thenReturn(Optional.of(runtime(4L, RepositoryFormat.PYPI, 7L)));
-    when(runtimes.resolveById(5L)).thenReturn(Optional.of(runtime(5L, RepositoryFormat.HELM, 7L)));
+    when(runtimes.resolveFreshById(3L)).thenReturn(Optional.of(runtime(3L, RepositoryFormat.PYPI, 7L)));
+    when(runtimes.resolveFreshById(4L)).thenReturn(Optional.of(runtime(4L, RepositoryFormat.PYPI, 7L)));
+    when(runtimes.resolveFreshById(5L)).thenReturn(Optional.of(runtime(5L, RepositoryFormat.HELM, 7L)));
 
     worker(dao, runtimes, storages, helm, pypi, yum, rubygems, true).drain();
 
@@ -246,8 +277,8 @@ class RepositoryIndexRebuildWorkerTest {
     Claim failing = claim(1L, RepositoryIndexRebuildDao.HELM_INDEX, null, now);
     Claim succeeding = claim(2L, RepositoryIndexRebuildDao.PYPI_ROOT, null, now);
     when(dao.claim(8)).thenReturn(List.of(failing, succeeding));
-    when(runtimes.resolveById(1L)).thenReturn(Optional.of(helmRuntime));
-    when(runtimes.resolveById(2L)).thenReturn(Optional.of(pypiRuntime));
+    when(runtimes.resolveFreshById(1L)).thenReturn(Optional.of(helmRuntime));
+    when(runtimes.resolveFreshById(2L)).thenReturn(Optional.of(pypiRuntime));
     when(storages.forBlobStoreId(7L)).thenReturn(storage);
     IllegalStateException failure = new IllegalStateException("index write failed");
     doThrow(failure).when(helm).rebuildIndex(helmRuntime, storage, 7L, "system", null);
@@ -267,7 +298,7 @@ class RepositoryIndexRebuildWorkerTest {
         6L, RepositoryFormat.TERRAFORM, RepositoryType.PROXY, 7L);
     when(dao.claim(8)).thenReturn(List.of(claim(
         proxy.id(), RepositoryIndexRebuildDao.TERRAFORM_COMPONENTS, null, Instant.now())));
-    when(runtimes.resolveById(proxy.id())).thenReturn(Optional.of(proxy));
+    when(runtimes.resolveFreshById(proxy.id())).thenReturn(Optional.of(proxy));
 
     worker(
         dao,
@@ -295,8 +326,8 @@ class RepositoryIndexRebuildWorkerTest {
     when(dao.claim(8)).thenReturn(List.of(
         claim(hosted.id(), RepositoryIndexRebuildDao.SWIFT_COMPONENTS, null, Instant.now()),
         claim(proxy.id(), RepositoryIndexRebuildDao.SWIFT_COMPONENTS, null, Instant.now())));
-    when(runtimes.resolveById(hosted.id())).thenReturn(Optional.of(hosted));
-    when(runtimes.resolveById(proxy.id())).thenReturn(Optional.of(proxy));
+    when(runtimes.resolveFreshById(hosted.id())).thenReturn(Optional.of(hosted));
+    when(runtimes.resolveFreshById(proxy.id())).thenReturn(Optional.of(proxy));
 
     worker(
         dao,
