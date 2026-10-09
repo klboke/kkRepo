@@ -17,6 +17,7 @@ const treeMountLoads = new WeakMap();
 const treeNodeEntries = new WeakMap();
 
 let repositoriesCache = [];
+let initialDataLoaded = false;
 let uploadRepositoriesCache = [];
 let uploadRepositoriesLoaded = false;
 let uploadRepositoriesPromise = null;
@@ -4487,6 +4488,12 @@ function selectSearchFormat(format, customFormat = activeCustomSearchFormat) {
 
 function applyHashRoute() {
   const route = parseBrowseHash();
+  // Resolve data-dependent routes only after session and repository discovery. In particular,
+  // an empty startup cache must not redirect signed-in users or discard repository deep links.
+  if (!initialDataLoaded) {
+    switchView(!route || route.view === "welcome" ? "welcome" : "loading");
+    return Boolean(route);
+  }
   if (!route) return false;
   if (route.view === "welcome") {
     showWelcome(false);
@@ -4517,9 +4524,8 @@ function applyHashRoute() {
 }
 
 async function bootstrap() {
+  applyHashRoute();
   hydrateAuthSnapshot();
-  const initialRoute = parseBrowseHash();
-  if (initialRoute?.view === "welcome") showWelcome(false);
 
   const contextPromise = fetchUiContext()
     .then((context) => {
@@ -4545,7 +4551,9 @@ async function bootstrap() {
     });
 
   await Promise.all([contextPromise, repositoriesPromise]);
-  if (!applyHashRoute()) renderRepoList();
+  initialDataLoaded = true;
+  // Re-read the current hash: the user may have navigated while the requests were pending.
+  if (!applyHashRoute()) showWelcome(false);
   openPendingLoginIfRequested();
 }
 

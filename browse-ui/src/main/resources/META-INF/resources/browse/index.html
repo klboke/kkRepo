@@ -79,7 +79,7 @@
 
       <aside class="nx-sidebar">
         <nav class="side-nav" aria-label="Browse navigation">
-          <button class="side-item is-active" data-view="welcome" type="button">
+          <button class="side-item" data-view="welcome" type="button">
             <span class="side-icon lucide-icon icon-home" aria-hidden="true"></span>
             <span>Welcome</span>
           </button>
@@ -112,7 +112,10 @@
       </aside>
 
       <main class="nx-content">
-        <section class="view is-active" id="welcome-view">
+        <section class="view is-active" id="loading-view" role="status" aria-live="polite">
+          <p>Loading…</p>
+        </section>
+        <section class="view" id="welcome-view">
           <div class="page-heading">
             <span class="heading-icon"><span class="lucide-icon icon-home" aria-hidden="true"></span></span>
             <h1>Welcome</h1>
@@ -572,6 +575,6 @@
     <script src="/login/assets/product-update.js?v=20260819-version-update-1"></script>
     <script src="/login/assets/login-modal.js?v=20261006-shared-primitives-1"></script>
     <script src="/browse/assets/global-component-search.js?v=20260826-search-menu-3"></script>
-    <script src="/browse/assets/browse.js?v=20261006-shared-primitives-1"></script>
+    <script src="/browse/assets/browse.js?v=20261009-initial-route-1"></script>
   </body>
 </html>
