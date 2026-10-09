@@ -18,6 +18,7 @@ const treeNodeEntries = new WeakMap();
 
 let repositoriesCache = [];
 let initialDataLoaded = false;
+let discoveryVersion = 0;
 let uploadRepositoriesCache = [];
 let uploadRepositoriesLoaded = false;
 let uploadRepositoriesPromise = null;
@@ -4524,11 +4525,13 @@ function applyHashRoute() {
 }
 
 async function bootstrap() {
+  const version = ++discoveryVersion;
   applyHashRoute();
   hydrateAuthSnapshot();
 
   const contextPromise = fetchUiContext()
     .then((context) => {
+      if (version !== discoveryVersion) return false;
       applyUiContext(context);
       return true;
     })
@@ -4538,11 +4541,13 @@ async function bootstrap() {
       fetchUploadSpecs(),
     ])
     .then(([repositories, uploadSpecs]) => {
+      if (version !== discoveryVersion) return false;
       repositoriesCache = repositories;
       uploadSpecsCache = uploadSpecs;
       return true;
     })
     .catch((error) => {
+      if (version !== discoveryVersion) return false;
       repositoriesCache = [];
       uploadSpecsCache = new Map();
       document.getElementById("repository-table").innerHTML =
@@ -4551,6 +4556,7 @@ async function bootstrap() {
     });
 
   await Promise.all([contextPromise, repositoriesPromise]);
+  if (version !== discoveryVersion) return;
   initialDataLoaded = true;
   // Re-read the current hash: the user may have navigated while the requests were pending.
   if (!applyHashRoute()) showWelcome(false);
@@ -4586,6 +4592,9 @@ function ensureUploadableRepositories(force = false) {
 }
 
 async function handleLoginSuccess(event) {
+  // A successful login starts a newer discovery. Its data and route must not wait for,
+  // or be overwritten by, an earlier anonymous bootstrap or login refresh.
+  const version = ++discoveryVersion;
   const target = safeLocalReturnTo(event.detail?.returnTo) || currentReturnTo();
   try {
     const [context, repositories, uploadSpecs] = await Promise.all([
@@ -4593,13 +4602,16 @@ async function handleLoginSuccess(event) {
       fetchRepositories(),
       fetchUploadSpecs(),
     ]);
+    if (version !== discoveryVersion) return;
     applyUiContext(context);
     repositoriesCache = repositories;
     uploadSpecsCache = uploadSpecs;
     uploadRepositoriesLoaded = false;
     uploadRepositoriesCache = [];
-    if (!applyHashRoute()) renderRepoList();
+    initialDataLoaded = true;
+    if (!applyHashRoute()) showWelcome(false);
   } catch (error) {
+    if (version !== discoveryVersion) return;
     window.location.href = target;
     return;
   }

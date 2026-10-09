@@ -7996,9 +7996,14 @@ async function deleteCleanupPolicy(policyId) {
 }
 
 function switchView(view, options = {}) {
-  if (!initialDataLoaded) return false;
-  if (!currentAdminPermissions.includes("nexus:*") && view !== "content-selectors") return false;
   if (!document.getElementById(`${view}-view`)) return false;
+  if (!initialDataLoaded) {
+    // Keep the URL as the pending selection; bootstrap will apply it after authorization.
+    // This also lets Back/Forward supersede a click made while discovery was pending.
+    if (options.updateHash !== false) updateHashForView(view, Boolean(options.replaceHash));
+    return false;
+  }
+  if (!currentAdminPermissions.includes("nexus:*") && view !== "content-selectors") return false;
   if (view !== "security-scanning") ++securityScanState.repositoryEditRequest;
   if (options.updateHash !== false) {
     updateHashForView(view, Boolean(options.replaceHash));

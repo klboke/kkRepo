@@ -134,6 +134,34 @@ test("navigation while recipes are pending selects the latest URL", async () => 
   assert.deepEqual(app.tabs, [["scan", "policies"]]);
 });
 
+for (const phase of ["session", "recipes"]) {
+  test(`sidebar clicks while ${phase} discovery is pending preserve the latest selection`, async () => {
+    const app = start("#admin/security/users");
+    if (phase === "recipes") {
+      app.sessionResponse.resolve({ userId: "admin" });
+      await new Promise(setImmediate);
+    }
+    app.context.switchView("blobstores");
+    app.context.switchView("security-scanning");
+    assert.equal(app.location.hash, "#admin/security/artifact-scanning");
+    assert.deepEqual(app.views, []);
+    assert.ok(!app.loads.includes("loadSecurityScanning"));
+    await app.finish();
+    assert.deepEqual(app.views, ["security-scanning"]);
+    assert.deepEqual(app.tabs, [["scan", "overview"]]);
+  });
+}
+
+test("Back during discovery supersedes a queued sidebar selection", async () => {
+  const app = start("#admin/security/users");
+  app.context.switchView("blobstores");
+  assert.equal(app.location.hash, "#admin/repository/blobstores");
+  app.location.hash = "#admin/security/users";
+  app.context.applyHashRoute();
+  await app.finish();
+  assert.deepEqual(app.views, ["security-users"]);
+});
+
 for (const hash of ["", "#unknown", "#admin"]) {
   test(`default route ${hash} opens Repositories after discovery`, async () => {
     const app = start(hash);
@@ -146,7 +174,6 @@ for (const hash of ["", "#unknown", "#admin"]) {
 
 test("selector-only accounts retain their authorized landing page without a history detour", async () => {
   const app = start("#admin/security/users", ["nexus:selectors:read"]);
-  assert.equal(app.context.switchView("content-selectors"), false);
   assert.deepEqual(app.views, []);
   await app.finish({ userId: "selector-reader" });
   assert.deepEqual(app.views, ["content-selectors"]);
@@ -154,6 +181,17 @@ test("selector-only accounts retain their authorized landing page without a hist
   assert.ok(app.items.every((item) => item.hidden === (item.dataset.view !== "content-selectors")));
   assert.ok(!app.loads.includes("recipes"));
   assert.equal(app.context.switchView("security-users"), false);
+});
+
+test("a queued sidebar click cannot bypass the resolved selector-only permissions", async () => {
+  const app = start("#admin/security/users", ["nexus:selectors:read"]);
+  app.context.switchView("security-roles");
+  assert.equal(app.location.hash, "#admin/security/roles");
+  assert.deepEqual(app.views, []);
+  await app.finish({ userId: "selector-reader" });
+  assert.deepEqual(app.views, ["content-selectors"]);
+  assert.ok(!app.loads.includes("loadSecurityRoles"));
+  assert.equal(app.location.hash, "#admin/repository/content-selectors");
 });
 
 test("session failure leaves a visible error without rendering a protected page", async () => {

@@ -40,6 +40,7 @@ function start(hash) {
     normalizeSearchFormat: (format) => format,
     normalizeCustomSearchFormat: (format) => format,
     initialDataLoaded: false,
+    discoveryVersion: 0,
     repositoriesCache: [], uploadSpecsCache: new Map(), currentSession: null,
     currentApiKeysLoaded: true,
     window: { location, history: {
@@ -66,6 +67,7 @@ function start(hash) {
   vm.runInContext([
     "parseBrowseHash", "pushBrowseRoute", "canonicalizeBrowseRoute", "repositoryExists",
     "showWelcome", "showUpload", "showMyToken", "applyHashRoute", "bootstrap",
+    "safeLocalReturnTo", "currentReturnTo", "handleLoginSuccess",
   ].map(extractFunction).join("\n"), context);
   const completion = context.bootstrap();
   return { context, views, history, trees, searches, location, completion,
@@ -156,3 +158,71 @@ test("failed discovery releases the loading state", async () => {
   assert.equal(app.views.at(-1), "browse");
   assert.equal(app.location.hash, "#browse/browse");
 });
+
+for (const staleOutcome of ["success", "failure"]) {
+  test(`login refresh unblocks a deep link and ignores a late bootstrap ${staleOutcome}`, async () => {
+    const hash = "#browse/browse:private?path=folder&source=hosted";
+    const app = start(hash);
+    const freshSession = { userId: "signed-in" };
+    const freshRepositories = [{ name: "private" }];
+    const freshSpecs = new Map([["raw", { format: "raw" }]]);
+    app.context.fetchUiContext = async () => ({ session: freshSession });
+    app.context.fetchRepositories = async () => freshRepositories;
+    app.context.fetchUploadSpecs = async () => freshSpecs;
+
+    await app.context.handleLoginSuccess({ detail: {} });
+    // The original bootstrap requests are deliberately still unresolved.
+    assert.equal(app.views.at(-1), "browse");
+    assert.deepEqual(app.trees, [["private", false, "folder", "hosted"]]);
+    const renderedViews = [...app.views];
+
+    app.contextResponse.resolve({ session: null });
+    if (staleOutcome === "success") app.repositoriesResponse.resolve([]);
+    else app.repositoriesResponse.reject(new Error("old request failed"));
+    app.uploadSpecsResponse.resolve(new Map());
+    await app.completion;
+    assert.equal(app.context.currentSession, freshSession);
+    assert.equal(app.context.repositoriesCache, freshRepositories);
+    assert.equal(app.context.uploadSpecsCache, freshSpecs);
+    assert.deepEqual(app.views, renderedViews);
+    assert.equal(app.location.hash, hash);
+  });
+}
+
+test("bootstrap completion during login refresh cannot apply the anonymous fallback", async () => {
+  const app = start("#browse/my-token");
+  const loginContext = deferred();
+  app.context.fetchUiContext = () => loginContext.promise;
+  app.context.fetchRepositories = async () => [];
+  app.context.fetchUploadSpecs = async () => new Map();
+  const login = app.context.handleLoginSuccess({ detail: {} });
+  await app.finish(null);
+  assert.equal(app.location.hash, "#browse/my-token");
+  assert.ok(!app.views.includes("welcome"));
+  loginContext.resolve({ session: { userId: "signed-in" } });
+  await login;
+  assert.equal(app.views.at(-1), "my-token");
+  assert.equal(app.location.hash, "#browse/my-token");
+});
+
+for (const staleOutcome of ["success", "failure"]) {
+  test(`a superseded login ${staleOutcome} cannot replace newer data or navigate away`, async () => {
+    const app = start("#browse/my-token");
+    await app.finish();
+    const olderContext = deferred();
+    app.context.fetchUiContext = () => olderContext.promise;
+    app.context.fetchRepositories = async () => [];
+    app.context.fetchUploadSpecs = async () => new Map();
+    const olderLogin = app.context.handleLoginSuccess({ detail: { returnTo: "/old-target" } });
+    const latestSession = { userId: "latest-login" };
+    app.context.fetchUiContext = async () => ({ session: latestSession });
+    await app.context.handleLoginSuccess({ detail: {} });
+    const renderedViews = [...app.views];
+    if (staleOutcome === "success") olderContext.resolve({ session: { userId: "older-login" } });
+    else olderContext.reject(new Error("old login request failed"));
+    await olderLogin;
+    assert.equal(app.context.currentSession, latestSession);
+    assert.equal(app.location.hash, "#browse/my-token");
+    assert.deepEqual(app.views, renderedViews);
+  });
+}
