@@ -6,6 +6,10 @@ This project follows a pragmatic release process. Stable releases call out migra
 
 ## Unreleased
 
+### Fixed
+
+- Native images retain JSON binding metadata for scanner requests, responses, and error payloads. Enabled security scanning can observe a healthy adapter and recover from adapter failures instead of reporting `SCANNER_INVALID_JSON` and remaining degraded. ([Discussion #308](https://github.com/klboke/kkRepo/discussions/308))
+
 ## 1.3.0 - 2026-10-08
 
 ### Added

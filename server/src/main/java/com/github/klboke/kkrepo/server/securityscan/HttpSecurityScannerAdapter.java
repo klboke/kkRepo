@@ -46,10 +46,15 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.LongSupplier;
 import java.util.regex.Pattern;
+import org.springframework.aot.hint.BindingReflectionHintsRegistrar;
+import org.springframework.aot.hint.RuntimeHints;
+import org.springframework.aot.hint.RuntimeHintsRegistrar;
+import org.springframework.context.annotation.ImportRuntimeHints;
 import org.springframework.stereotype.Component;
 
 /** Streaming HTTP implementation of the versioned scanner contract. */
 @Component
+@ImportRuntimeHints(HttpSecurityScannerAdapter.ScannerRuntimeHints.class)
 public class HttpSecurityScannerAdapter implements Adapter {
   private static final long TRANSPORT_GRACE_SECONDS = 5;
   private static final Duration OBSERVATION_TIMEOUT = Duration.ofSeconds(15);
@@ -1199,4 +1204,24 @@ public class HttpSecurityScannerAdapter implements Adapter {
   private abstract static class IgnoreSummaryMixin {}
 
   private record ScannerErrorPayload(String code, String message, boolean retryable) {}
+
+  /** These HTTP client DTOs are not discovered through Spring MVC controller signatures. */
+  public static final class ScannerRuntimeHints implements RuntimeHintsRegistrar {
+    @Override
+    public void registerHints(RuntimeHints hints, ClassLoader classLoader) {
+      new BindingReflectionHintsRegistrar().registerReflectionHints(
+          hints.reflection(),
+          Observation.class,
+          CatalogRequest.class,
+          ConanCatalogRequest.class,
+          CatalogResponse.class,
+          MatchRequest.class,
+          MatchResponse.class,
+          OciScanRequest.class,
+          OciScanResponse.class,
+          CancellationResponse.class,
+          ScannerErrorPayload.class);
+      hints.reflection().registerType(IgnoreSummaryMixin.class);
+    }
+  }
 }
