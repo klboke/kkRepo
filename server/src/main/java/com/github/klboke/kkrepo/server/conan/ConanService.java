@@ -10,6 +10,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.protocol.conan.ConanInfo;
 import com.github.klboke.kkrepo.protocol.conan.ConanManifest;
+import com.github.klboke.kkrepo.protocol.conan.ConanManifestLimits;
 import com.github.klboke.kkrepo.protocol.conan.ConanMediaTypes;
 import com.github.klboke.kkrepo.protocol.conan.ConanPath;
 import com.github.klboke.kkrepo.protocol.conan.ConanPathParser;
@@ -60,6 +61,7 @@ public class ConanService {
   private final ConanAssetSupport assets;
   private final ConanComponentService components;
   private final ConanArchiveInspector archives;
+  private final ConanManifestPolicy manifestPolicy;
   private final ConanLeaseManager leases;
   private final ConanAuthService auth;
   private final ConanRemoteClient remote;
@@ -77,11 +79,13 @@ public class ConanService {
       ConanAuthService auth,
       ConanRemoteClient remote,
       ObjectMapper mapper,
-      PlatformTransactionManager transactionManager) {
+      PlatformTransactionManager transactionManager,
+      ConanManifestPolicy manifestPolicy) {
     this.registry = registry;
     this.assets = assets;
     this.components = components;
     this.archives = archives;
+    this.manifestPolicy = manifestPolicy;
     this.leases = leases;
     this.auth = auth;
     this.remote = remote;
@@ -530,8 +534,9 @@ public class ConanService {
         .filter(file -> ConanManifest.FILE_NAME.equals(file.path()))
         .findFirst().orElse(null);
     if (manifestFile == null) return false;
+    ConanManifestLimits limits = manifestPolicy.forRepository(runtime);
     ValidatedUpload validated = validateUpload(runtime, reference, snapshot, manifestFile,
-        failIfIncomplete);
+        failIfIncomplete, limits);
     if (validated == null) return false;
     try (ConanLeaseManager.Lease lease = leases.acquire(runtime.id(), ownerCoordinate(reference))) {
       List<Long> stagingAssetIds = new ArrayList<>();
@@ -543,7 +548,7 @@ public class ConanService {
             .findFirst().orElseThrow(() -> new ConanExceptions.Conflict(
                 "Conan upload session changed before commit"));
         ValidatedUpload finalValidation = validateUpload(
-            runtime, reference, current, currentManifest, true);
+            runtime, reference, current, currentManifest, true, limits);
         if (!registry.beginSessionCommit(sessionId, lease.fencingToken(), lease.expiresAt())) {
           throw new ConanExceptions.Busy("Conan upload session is already being committed");
         }
@@ -605,21 +610,22 @@ public class ConanService {
       ConanReference reference,
       List<ConanRegistryDao.UploadFile> files,
       ConanRegistryDao.UploadFile manifestFile,
-      boolean failIfIncomplete) {
-    byte[] manifestBytes = assets.readStaged(
+      boolean failIfIncomplete,
+      ConanManifestLimits limits) {
+    byte[] manifestBytes = assets.readManifest(
         runtime,
         com.github.klboke.kkrepo.protocol.conan.ConanPaths.stagingPath(
             manifestFile.sessionId(), manifestFile.path()),
-        ConanManifest.MAX_BYTES);
+        limits);
     ConanManifest manifest;
     try {
-      manifest = ConanManifest.parse(manifestBytes);
+      manifest = ConanManifest.parse(manifestBytes, limits);
     } catch (IllegalArgumentException invalid) {
       throw new ConanExceptions.BadRequest(invalid.getMessage(), invalid);
     }
     Map<String, ConanRegistryDao.UploadFile> byPath = new LinkedHashMap<>();
     files.forEach(file -> byPath.put(file.path(), file));
-    Map<String, String> actualManifest = manifestEntries(runtime, files);
+    Map<String, String> actualManifest = manifestEntries(runtime, files, limits);
     if (!actualManifest.equals(manifest.md5ByPath())) {
       if (!failIfIncomplete && !actualManifest.keySet().containsAll(manifest.md5ByPath().keySet())) {
         return null;
@@ -669,12 +675,12 @@ public class ConanService {
   }
 
   private Map<String, String> manifestEntries(
-      RepositoryRuntime runtime, List<ConanRegistryDao.UploadFile> files) {
+      RepositoryRuntime runtime, List<ConanRegistryDao.UploadFile> files, ConanManifestLimits limits) {
     LinkedHashMap<String, String> result = new LinkedHashMap<>();
     for (ConanRegistryDao.UploadFile file : files) {
       if (ConanManifest.FILE_NAME.equals(file.path()) || metadataPath(file.path())) continue;
       if (!archives.archive(file.path())) {
-        putManifestEntry(result, file.path(), file.md5());
+        putManifestEntry(result, file.path(), file.md5(), limits);
         continue;
       }
       String prefix = file.path().startsWith("conan_sources.") ? "export_source/" : "";
@@ -688,8 +694,8 @@ public class ConanService {
             file.size(),
             file.path(),
             prefix,
-            ConanManifest.MAX_ENTRIES - result.size());
-        archived.forEach((path, checksum) -> putManifestEntry(result, path, checksum));
+            limits, result.size());
+        archived.forEach((path, checksum) -> putManifestEntry(result, path, checksum, limits));
       } catch (IOException failure) {
         throw new ConanExceptions.BadRequest(
             "Unable to validate Conan manifest archive " + file.path(), failure);
@@ -699,11 +705,14 @@ public class ConanService {
   }
 
   private static void putManifestEntry(
-      Map<String, String> entries, String path, String checksum) {
-    if (entries.size() >= ConanManifest.MAX_ENTRIES
-        || entries.putIfAbsent(path, checksum.toLowerCase(Locale.ROOT)) != null) {
-      throw new ConanExceptions.BadRequest("Duplicate or excessive Conan manifest entry: " + path);
+      Map<String, String> entries, String path, String checksum, ConanManifestLimits limits) {
+    if (entries.containsKey(path)) {
+      throw new ConanExceptions.BadRequest("Duplicate Conan manifest entry: " + path);
     }
+    if (entries.size() >= limits.maxEntries()) {
+      throw new ConanExceptions.ContentTooLarge(limits.entryLimitMessage((long) entries.size() + 1));
+    }
+    entries.put(path, checksum.toLowerCase(Locale.ROOT));
   }
 
   private MavenResponse proxyFile(

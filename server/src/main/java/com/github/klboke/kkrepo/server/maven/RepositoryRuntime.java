@@ -12,9 +12,9 @@ import java.util.Locale;
 import java.util.Set;
 
 /**
- * Immutable per-request snapshot of a repository's configuration relevant to serving Maven
- * traffic. Built fresh for each request by {@link RepositoryRuntimeRegistry} — no in-process
- * cache yet because round 1 must remain stateless across replicas.
+ * Immutable repository configuration snapshot shared by protocol request paths.
+ * {@link RepositoryRuntimeRegistry} caches snapshots with a bounded TTL and invalidates them
+ * locally and through catalog broadcasts when repository settings change.
  */
 public record RepositoryRuntime(
     long id,
@@ -45,7 +45,48 @@ public record RepositoryRuntime(
     Integer minimumReleaseAgeMinutes,
     Set<String> allowedRedirectHosts,
     NtlmCredentials ntlmCredentials,
-    int yumRepodataDepth) {
+    int yumRepodataDepth,
+    Integer conanManifestMaxEntries,
+    Integer conanManifestMaxBytes) {
+  /** Compatibility constructor for snapshots without Conan manifest overrides. */
+  public RepositoryRuntime(
+      long id,
+      String name,
+      RepositoryFormat format,
+      RepositoryType type,
+      String recipeName,
+      boolean online,
+      Long blobStoreId,
+      String writePolicy,
+      String versionPolicy,
+      String layoutPolicy,
+      boolean strictContentTypeValidation,
+      String proxyRemoteUrl,
+      Integer contentMaxAgeMinutes,
+      Integer metadataMaxAgeMinutes,
+      Boolean autoBlock,
+      String proxyRemoteUsername,
+      String proxyRemotePassword,
+      String proxyRemoteBearerToken,
+      String rawContentDisposition,
+      Boolean dockerConnectorEnabled,
+      Integer dockerConnectorPort,
+      String dockerConnectorPublicUrl,
+      Boolean cargoRequireAuthentication,
+      List<RepositoryRuntime> members,
+      OutboundProxyConfig outboundProxy,
+      Integer minimumReleaseAgeMinutes,
+      Set<String> allowedRedirectHosts,
+      NtlmCredentials ntlmCredentials,
+      int yumRepodataDepth) {
+    this(id, name, format, type, recipeName, online, blobStoreId, writePolicy, versionPolicy,
+        layoutPolicy, strictContentTypeValidation, proxyRemoteUrl, contentMaxAgeMinutes,
+        metadataMaxAgeMinutes, autoBlock, proxyRemoteUsername, proxyRemotePassword,
+        proxyRemoteBearerToken, rawContentDisposition, dockerConnectorEnabled, dockerConnectorPort,
+        dockerConnectorPublicUrl, cargoRequireAuthentication, members, outboundProxy,
+        minimumReleaseAgeMinutes, allowedRedirectHosts, ntlmCredentials, yumRepodataDepth, null, null);
+  }
+
   /** Compatibility constructor for callers that predate Yum repodata-depth settings. */
   public RepositoryRuntime(
       long id,

@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.protocol.conan.ConanManifest;
+import com.github.klboke.kkrepo.protocol.conan.ConanManifestLimits;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -59,8 +60,27 @@ class ConanRepositoryBlackBoxCompatibilityTest {
   @Test
   void hostedWireBehaviorAndWriteTimeBrowseProjectionMatchNexusWhenConfigured()
       throws Exception {
+    assertHostedCompatibility(Fixture.create());
+  }
+
+  @Test
+  void largeSdkManifestMatchesNexusWhenCandidateLimitsAreRaised() throws Exception {
+    assumeTrue(CompatDefaults.setting("compat.conan.manifestLimits.enabled",
+        "CONAN_MANIFEST_LIMITS_COMPAT_ENABLED").map(Boolean::parseBoolean).orElse(false));
+    assertHostedCompatibility(Fixture.largeSdk());
+  }
+
+  @Test
+  void largeSdkFixtureExceedsBothDefaultManifestLimits() throws Exception {
+    Fixture sdk = Fixture.largeSdk();
+    assertTrue(sdk.packageManifest().length > ConanManifest.MAX_BYTES);
+    assertEquals(7922, ConanManifest.parse(sdk.packageManifest(),
+        new ConanManifestLimits(7922, 16777216)).md5ByPath().size());
+    assertEquals(7921, archiveFiles(sdk.packageArchive()).size());
+  }
+
+  private static void assertHostedCompatibility(Fixture fixture) throws Exception {
     Config config = configured();
-    Fixture fixture = Fixture.create();
     String name = "kkrepo_conan_"
         + UUID.randomUUID().toString().replace("-", "").substring(0, 10);
     Reference reference = new Reference(
@@ -281,17 +301,24 @@ class ConanRepositoryBlackBoxCompatibilityTest {
   }
 
   private static byte[] tarGzip(String path, byte[] contents) throws Exception {
+    return tarGzip(Map.of(path, contents));
+  }
+
+  private static byte[] tarGzip(Map<String, byte[]> files) throws Exception {
     ByteArrayOutputStream bytes = new ByteArrayOutputStream();
     try (GzipCompressorOutputStream gzip = new GzipCompressorOutputStream(bytes);
          TarArchiveOutputStream tar = new TarArchiveOutputStream(gzip)) {
-      TarArchiveEntry entry = new TarArchiveEntry(path);
-      entry.setSize(contents.length);
-      entry.setModTime(0);
-      entry.setUserId(0);
-      entry.setGroupId(0);
-      tar.putArchiveEntry(entry);
-      tar.write(contents);
-      tar.closeArchiveEntry();
+      tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX);
+      for (var file : files.entrySet()) {
+        TarArchiveEntry entry = new TarArchiveEntry(file.getKey());
+        entry.setSize(file.getValue().length);
+        entry.setModTime(0);
+        entry.setUserId(0);
+        entry.setGroupId(0);
+        tar.putArchiveEntry(entry);
+        tar.write(file.getValue());
+        tar.closeArchiveEntry();
+      }
       tar.finish();
     }
     return bytes.toByteArray();
@@ -487,6 +514,23 @@ class ConanRepositoryBlackBoxCompatibilityTest {
           ConanManifest.parse(recipeManifest).summaryHash(),
           sha1(new byte[0]),
           ConanManifest.parse(packageManifest).summaryHash());
+    }
+
+    static Fixture largeSdk() throws Exception {
+      Fixture base = create();
+      Map<String, byte[]> files = new LinkedHashMap<>();
+      StringBuilder manifest = new StringBuilder("0\nconaninfo.txt: ")
+          .append(md5(base.conanInfo())).append('\n');
+      for (int i = 0; i < 7921; i++) {
+        String path = "include/" + "sdk_".repeat(32) + "/header-" + i + ".h";
+        byte[] content = ("// SDK header " + i + "\n").getBytes(StandardCharsets.UTF_8);
+        files.put(path, content);
+        manifest.append(path).append(": ").append(md5(content)).append('\n');
+      }
+      byte[] bytes = manifest.toString().getBytes(StandardCharsets.UTF_8);
+      return new Fixture(base.recipeArchive(), base.recipeManifest(), tarGzip(files),
+          base.conanInfo(), bytes, base.rrev(), base.packageId(),
+          ConanManifest.parse(bytes, new ConanManifestLimits(7922, 16777216)).summaryHash());
     }
 
     @Override

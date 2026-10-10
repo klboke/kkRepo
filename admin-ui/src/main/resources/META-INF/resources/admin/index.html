@@ -402,13 +402,27 @@
               </label>
             </fieldset>
             <fieldset class="form-grid" id="repository-conan-fields" hidden>
-              <legend>Conan 2 status</legend>
+              <legend>Conan 2 settings</legend>
               <p class="form-note full-width">
                 Conan 2 revisions are committed when <code>conanmanifest.txt</code> arrives.
                 Recipe/package identities, latest pointers, Browse nodes, and the change outbox
                 are published in one database transaction. Enable the Conan bearer token realm
                 for authenticated Conan CLI login.
               </p>
+              <div class="form-grid full-width" id="repository-conan-limits">
+                <label>
+                  <span>Manifest entry limit</span>
+                  <input id="repository-conan-manifest-max-entries" type="number" min="1" max="2147483647" step="1" placeholder="Inherit server default">
+                </label>
+                <label>
+                  <span>Manifest size limit (bytes)</span>
+                  <input id="repository-conan-manifest-max-bytes" type="number" min="1" max="2147483646" step="1" placeholder="Inherit server default">
+                </label>
+                <p class="form-note full-width">
+                  Leave either field blank to inherit its server default. Saving applies to subsequent
+                  manifest validations without a restart. Size refers to the manifest text, not the package archive.
+                </p>
+              </div>
               <div class="full-width" id="repository-conan-operations" hidden>
                 <div class="muted-row" id="repository-conan-status">Conan status not loaded.</div>
                 <div class="form-actions">
@@ -1962,11 +1976,11 @@
 
     <script src="/login/assets/csrf-fetch.js?v=20261006-shared-primitives-1"></script>
     <script src="/login/assets/account-menu.js?v=20261006-shared-primitives-1"></script>
-    <script src="/login/assets/ui-i18n.js?v=20261009-yum-depth"></script>
+    <script src="/login/assets/ui-i18n.js?v=20261010-conan-manifest-limits"></script>
     <script src="/login/assets/product-update.js?v=20260819-version-update-1"></script>
     <script src="./assets/admin-filter.js?v=20260706-wildcard-filter-1"></script>
     <script src="/browse/assets/global-component-search.js?v=20260817-global-search-2"></script>
     <script src="./assets/content-selectors.js?v=20260908-content-selectors-1"></script>
-    <script src="./assets/admin.js?v=20261009-yum-depth"></script>
+    <script src="./assets/admin.js?v=20261010-conan-manifest-limits"></script>
   </body>
 </html>

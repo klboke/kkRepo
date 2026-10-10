@@ -53,6 +53,52 @@ conan upload 'acme-lib/1.0.0@acme/stable:*' \
 
 Conan 会把每个 recipe/package revision 拆成多个文件上传。kkRepo 先把文件写入持久 staging，只有最后到达的 `conanmanifest.txt` 能校验全部文件 checksum 时，RREV/PREV 才整体可见。重试可以续传同一 upload；相同 identity 对应不同内容会失败关闭。UI 和 Components API 上传也进入同一 manifest-gated 发布路径。
 
+## Manifest 限制
+
+Conan hosted 和 proxy 仓库的配置窗口提供 **Manifest entry limit**（清单条目数上限）和
+**Manifest size limit (bytes)**（清单字节数上限）。例如，大型 SDK 可按需设置为 `50000` 条和
+`16777216` 字节（16 MiB）。两个字段分别留空即可继承服务端默认值。限制作用于
+`conanmanifest.txt` 及归档与散文件合并后的文件清单，不是压缩包体积。Proxy 仓库的设置也用于
+通过 manifest 校验写入器迁移缓存内容；group 使用成员仓库的设置，不提供独立覆盖项。
+
+保存仓库设置无需重启。本节点会失效已有运行配置缓存，其他副本通过数据库目录变更通知刷新
+（默认轮询间隔 500 ms）；遗漏通知时由运行配置缓存 TTL（默认 30 秒）兜底。
+正在处理的请求继续使用原配置快照；待新配置传播到接收请求的副本后，重试之前失败的上传即可。
+Manifest 校验不会为读取配置额外查询数据库。
+
+创建或更新仓库的 API 使用相同字段：
+
+```json
+{
+  "conan": {
+    "manifestMaxEntries": 50000,
+    "manifestMaxBytes": 16777216
+  }
+}
+```
+
+更新时省略整个 `conan` 对象会保留原设置；提供该对象则替换两个覆盖值，对象内为 null 或省略的
+字段恢复继承服务端默认值。使用 `"conan": {}` 可同时清除两个覆盖值。
+
+JVM 和 Native 部署均支持以下服务端默认配置：
+
+| 配置项 | 环境变量 | 默认值 | 单位 |
+| --- | --- | --- | --- |
+| `kkrepo.conan.manifest.max-entries` | `KKREPO_CONAN_MANIFEST_MAX_ENTRIES` | `4096` | 每份清单的文件条目数 |
+| `kkrepo.conan.manifest.max-bytes` | `KKREPO_CONAN_MANIFEST_MAX_BYTES` | `1048576` | 清单 UTF-8 字节数（1 MiB） |
+
+```yaml
+environment:
+  KKREPO_CONAN_MANIFEST_MAX_ENTRIES: "50000"
+  KKREPO_CONAN_MANIFEST_MAX_BYTES: "16777216"
+```
+
+修改服务端默认值需要重启进程或容器，并确保所有副本配置一致；仓库覆盖值优先生效。
+条目数必须为 `1` 到 `2147483647` 的整数，字节数必须为 `1` 到 `2147483646` 的整数，
+不支持用零或负数关闭校验。清单及 checksum 映射保存在内存中，应按资源和业务需求设置合理值。
+每个归档 200,000 个 tar 条目的限制、解压体积与压缩比、路径安全、检查时限和 checksum 校验
+仍然有效。超限错误包含有效上限和已观察到的数量；提前终止读取时，观察值是下界，不代表完整输入大小。
+
 ## 列出、下载、安装与删除
 
 读取使用 group：

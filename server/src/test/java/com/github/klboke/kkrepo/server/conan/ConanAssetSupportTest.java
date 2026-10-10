@@ -172,6 +172,24 @@ class ConanAssetSupportTest {
   }
 
   @Test
+  void readsManifestWithConfiguredInclusiveByteLimitAndReportsKnownOrObservedSize() {
+    var limits = new com.github.klboke.kkrepo.protocol.conan.ConanManifestLimits(100, 3);
+    when(hosted.getInternal(runtime, "manifest", false)).thenAnswer(ignored -> MavenResponse.ok(
+        new ByteArrayInputStream(new byte[] {1, 2, 3}), 3, "text/plain", null, null));
+    assertArrayEquals(new byte[] {1, 2, 3}, support.readManifest(runtime, "manifest", limits));
+    when(hosted.getInternal(runtime, "manifest", false)).thenReturn(MavenResponse.ok(
+        InputStream.nullInputStream(), 10, "text/plain", null, null));
+    assertEquals("Conan manifest size limit exceeded: limit=3 bytes, observed=10 bytes",
+        assertThrows(ConanExceptions.ContentTooLarge.class,
+            () -> support.readManifest(runtime, "manifest", limits)).getMessage());
+    when(hosted.getInternal(runtime, "manifest", false)).thenReturn(MavenResponse.ok(
+        new ByteArrayInputStream(new byte[10]), -1, "text/plain", null, null));
+    assertEquals("Conan manifest size limit exceeded: limit=3 bytes, observed=4 bytes",
+        assertThrows(ConanExceptions.ContentTooLarge.class,
+            () -> support.readManifest(runtime, "manifest", limits)).getMessage());
+  }
+
+  @Test
   void resolvesBlobsAndDeletesOnlyAssetsOwnedByTheRepository() {
     AssetRecord owned = asset(1L, 20L, "owned", null);
     AssetRecord foreign = new AssetRecord(

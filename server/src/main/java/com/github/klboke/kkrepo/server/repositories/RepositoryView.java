@@ -12,6 +12,7 @@ import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.AptSettin
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.AlpineSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.PypiSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.YumSettings;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.ConanSettings;
 
 public record RepositoryView(
     Long id,
@@ -32,7 +33,33 @@ public record RepositoryView(
     AptSettings apt,
     AlpineSettings alpine,
     PypiSettings pypi,
-    YumSettings yum) {
+    YumSettings yum,
+    ConanSettings conan) {
+  /** Compatibility constructor for callers without Conan manifest overrides. */
+  public RepositoryView(
+      Long id,
+      String name,
+      String recipe,
+      RepositoryFormat format,
+      RepositoryType type,
+      boolean online,
+      String blobStoreName,
+      boolean strictContentTypeValidation,
+      String url,
+      HostedSettings hosted,
+      ProxySettings proxy,
+      RawSettings raw,
+      DockerSettings docker,
+      CargoSettings cargo,
+      GroupSettings group,
+      AptSettings apt,
+      AlpineSettings alpine,
+      PypiSettings pypi,
+      YumSettings yum) {
+    this(id, name, recipe, format, type, online, blobStoreName, strictContentTypeValidation, url,
+        hosted, proxy, raw, docker, cargo, group, apt, alpine, pypi, yum, null);
+  }
+
   /** Compatibility constructor for callers that predate Yum repodata-depth settings. */
   public RepositoryView(
       Long id,

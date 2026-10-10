@@ -296,6 +296,14 @@ pre-issued Bearer token can also be supplied with `CONAN_NEXUS_COMPAT_TOKEN` or
 `CONAN_KKREPO_COMPAT_TOKEN`; this is useful when the candidate Browse endpoint is
 anonymous but Conan package writes still require authentication.
 
+To include the 7,922-entry SDK fixture whose manifest also exceeds 1 MiB, set
+`CONAN_MANIFEST_LIMITS_COMPAT_ENABLED=true` alongside the settings above. First configure the
+candidate repository with `conan.manifestMaxEntries=7922` and
+`conan.manifestMaxBytes=16777216` through the repository API/UI (or raise the server defaults).
+The opt-in case publishes the same archive/manifest to Nexus and kkRepo and checks download,
+revision identity, checksums, Range responses, and Browse projection. Normal runs retain the
+small fixture so existing default-limit deployments can still run the baseline matrix.
+
 Run the real Conan 2 client flow with:
 
 ```bash

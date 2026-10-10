@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.conan;
 
+import com.github.klboke.kkrepo.protocol.conan.ConanManifestLimits;
 import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -110,9 +111,10 @@ final class ConanArchiveInspector {
    * {@code export_source/} logical prefix even though the archive itself stores relative paths.
    */
   Map<String, String> manifestEntries(
-      InputStream source, long compressedBytes, String path, String logicalPrefix, int maxEntries) {
+      InputStream source, long compressedBytes, String path, String logicalPrefix,
+      ConanManifestLimits limits, int existingEntries) {
     if (!archive(path)) return Map.of();
-    if (maxEntries <= 0 || !INSPECTION_SLOTS.tryAcquire()) {
+    if (!INSPECTION_SLOTS.tryAcquire()) {
       throw new ConanExceptions.Busy("Conan archive inspection capacity is exhausted");
     }
     long deadline = System.nanoTime() + MAX_INSPECTION_NANOS;
@@ -127,8 +129,9 @@ final class ConanArchiveInspector {
         }
         String name = normalizedEntry(entry.getName());
         if (entry.isDirectory()) continue;
-        if (result.size() >= maxEntries) {
-          throw new ConanExceptions.ContentTooLarge("Conan manifest entry limit exceeded");
+        long observedEntries = (long) existingEntries + result.size() + 1;
+        if (observedEntries > limits.maxEntries()) {
+          throw new ConanExceptions.ContentTooLarge(limits.entryLimitMessage(observedEntries));
         }
         String digest;
         if (entry.isSymbolicLink() || entry.isLink()) {

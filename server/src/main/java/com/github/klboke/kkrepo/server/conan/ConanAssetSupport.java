@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.conan;
 
+import com.github.klboke.kkrepo.protocol.conan.ConanManifestLimits;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
@@ -114,15 +115,25 @@ final class ConanAssetSupport {
   }
 
   byte[] readStaged(RepositoryRuntime runtime, String stagingPath, int limit) {
+    return readStaged(runtime, stagingPath, limit,
+        size -> "Conan metadata exceeds " + limit + " bytes; observed=" + size + " bytes");
+  }
+
+  byte[] readManifest(RepositoryRuntime runtime, String stagingPath, ConanManifestLimits limits) {
+    return readStaged(runtime, stagingPath, limits.maxBytes(), limits::byteLimitMessage);
+  }
+
+  private byte[] readStaged(RepositoryRuntime runtime, String stagingPath, int limit,
+      java.util.function.LongFunction<String> limitMessage) {
     MavenResponse response = hosted.getInternal(runtime, stagingPath, false);
     if (response.contentLength() > limit) {
       response.closeBodyIfOpen();
-      throw new ConanExceptions.ContentTooLarge("Conan metadata exceeds " + limit + " bytes");
+      throw new ConanExceptions.ContentTooLarge(limitMessage.apply(response.contentLength()));
     }
     try (InputStream body = response.body()) {
       byte[] value = body.readNBytes(limit + 1);
       if (value.length > limit) {
-        throw new ConanExceptions.ContentTooLarge("Conan metadata exceeds " + limit + " bytes");
+        throw new ConanExceptions.ContentTooLarge(limitMessage.apply(value.length));
       }
       return value;
     } catch (IOException e) {

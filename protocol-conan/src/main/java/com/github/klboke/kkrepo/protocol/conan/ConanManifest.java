@@ -14,14 +14,17 @@ import java.util.regex.Pattern;
 /** Bounded parser for the official {@code FileTreeManifest} wire representation. */
 public record ConanManifest(long timestamp, Map<String, String> md5ByPath) {
   public static final String FILE_NAME = "conanmanifest.txt";
+  /** Defaults for callers without an operator-supplied policy. */
   public static final int MAX_BYTES = 1024 * 1024;
   public static final int MAX_ENTRIES = 4096;
   private static final Pattern MD5 = Pattern.compile("[0-9a-fA-F]{32}");
 
   public ConanManifest {
     if (timestamp < 0) throw new IllegalArgumentException("Invalid Conan manifest timestamp");
-    if (md5ByPath == null || md5ByPath.size() > MAX_ENTRIES) {
-      throw new IllegalArgumentException("Conan manifest entry limit exceeded");
+    // This value validates the wire semantics. Resource quotas are enforced by parse(),
+    // before construction, so a configured limit is not capped again by the default.
+    if (md5ByPath == null) {
+      throw new IllegalArgumentException("Invalid Conan manifest entries");
     }
     LinkedHashMap<String, String> copy = new LinkedHashMap<>();
     md5ByPath.forEach((path, checksum) -> {
@@ -35,8 +38,15 @@ public record ConanManifest(long timestamp, Map<String, String> md5ByPath) {
   }
 
   public static ConanManifest parse(byte[] bytes) {
-    if (bytes == null || bytes.length == 0 || bytes.length > MAX_BYTES) {
+    return parse(bytes, ConanManifestLimits.DEFAULTS);
+  }
+
+  public static ConanManifest parse(byte[] bytes, ConanManifestLimits limits) {
+    if (bytes == null || bytes.length == 0) {
       throw new IllegalArgumentException("Invalid Conan manifest size");
+    }
+    if (bytes.length > limits.maxBytes()) {
+      throw new IllegalArgumentException(limits.byteLimitMessage(bytes.length));
     }
     String text = new String(bytes, StandardCharsets.UTF_8);
     if (text.indexOf('\u0000') >= 0 || text.indexOf('\r') >= 0) {
@@ -61,8 +71,8 @@ public record ConanManifest(long timestamp, Map<String, String> md5ByPath) {
       if (files.putIfAbsent(path, digest) != null) {
         throw new IllegalArgumentException("Duplicate Conan manifest path: " + path);
       }
-      if (files.size() > MAX_ENTRIES) {
-        throw new IllegalArgumentException("Conan manifest entry limit exceeded");
+      if (files.size() > limits.maxEntries()) {
+        throw new IllegalArgumentException(limits.entryLimitMessage(files.size()));
       }
     }
     return new ConanManifest(timestamp, files);
