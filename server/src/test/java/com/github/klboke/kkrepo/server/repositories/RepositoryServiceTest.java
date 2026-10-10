@@ -207,6 +207,45 @@ class RepositoryServiceTest {
   }
 
   @Test
+  void conanManifestOverridesPersistRoundTripPreserveAndResetWithoutRestart() throws Exception {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+    var json = new com.fasterxml.jackson.databind.ObjectMapper();
+    RepositoryView created = service.create(json.readValue("""
+        {"name":"conan-sdk","recipe":"conan-hosted","blobStoreName":"default",
+         "hosted":{"writePolicy":"ALLOW"},
+         "conan":{"manifestMaxEntries":7922,"manifestMaxBytes":16777216}}
+        """, CreateCommand.class));
+    assertEquals(7922, created.conan().manifestMaxEntries());
+    assertEquals(16777216, created.conan().manifestMaxBytes());
+    assertEquals(created.conan(), service.update("conan-sdk",
+        json.readValue("{\"online\":false}", UpdateCommand.class)).conan());
+    RepositoryView inheritedBytes = service.update("conan-sdk", json.readValue("""
+        {"conan":{"manifestMaxEntries":9000,"manifestMaxBytes":null}}
+        """, UpdateCommand.class));
+    assertEquals(9000, inheritedBytes.conan().manifestMaxEntries());
+    assertNull(inheritedBytes.conan().manifestMaxBytes());
+    RepositoryView cleared = service.update("conan-sdk",
+        json.readValue("{\"conan\":{}}", UpdateCommand.class));
+    assertNull(cleared.conan().manifestMaxEntries());
+    assertNull(cleared.conan().manifestMaxBytes());
+    // Another service sees the persisted reset, rather than a process-local settings map.
+    assertEquals(cleared.conan(), service(repositories).get("conan-sdk").conan());
+    for (String invalid : List.of(
+        "{\"conan\":{\"manifestMaxEntries\":0}}",
+        "{\"conan\":{\"manifestMaxEntries\":-1}}",
+        "{\"conan\":{\"manifestMaxBytes\":0}}",
+        "{\"conan\":{\"manifestMaxBytes\":2147483647}}")) {
+      UpdateCommand command = json.readValue(invalid, UpdateCommand.class);
+      assertThrows(RepositoryValidationException.class, () -> service.update("conan-sdk", command));
+    }
+    assertThrows(RepositoryValidationException.class, () -> service.create(json.readValue("""
+        {"name":"conan-all","recipe":"conan-group","blobStoreName":"default",
+         "conan":{"manifestMaxEntries":9000}}
+        """, CreateCommand.class)));
+  }
+
+  @Test
   void yumDepthChangesEnqueueRebuildButOrdinarySavesDoNot() {
     StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
     RepositoryService service = service(repositories);

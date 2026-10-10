@@ -25,7 +25,29 @@ public final class RepositoryCommands {
       AptSettings apt,
       AlpineSettings alpine,
       PypiSettings pypi,
-      YumSettings yum) {
+      YumSettings yum,
+      ConanSettings conan) {
+    /** Compatibility constructor for callers without Conan manifest overrides. */
+    public CreateCommand(
+        String name,
+        String recipe,
+        Boolean online,
+        String blobStoreName,
+        Boolean strictContentTypeValidation,
+        HostedSettings hosted,
+        ProxySettings proxy,
+        RawSettings raw,
+        DockerSettings docker,
+        CargoSettings cargo,
+        GroupSettings group,
+        AptSettings apt,
+        AlpineSettings alpine,
+        PypiSettings pypi,
+        YumSettings yum) {
+      this(name, recipe, online, blobStoreName, strictContentTypeValidation, hosted, proxy, raw, docker,
+          cargo, group, apt, alpine, pypi, yum, null);
+    }
+
     /** Compatibility constructor for callers that predate Yum repodata-depth settings. */
     public CreateCommand(
         String name,
@@ -112,7 +134,27 @@ public final class RepositoryCommands {
       AptSettings apt,
       AlpineSettings alpine,
       PypiSettings pypi,
-      YumSettings yum) {
+      YumSettings yum,
+      ConanSettings conan) {
+    /** Compatibility constructor for callers without Conan manifest overrides. */
+    public UpdateCommand(
+        Boolean online,
+        String blobStoreName,
+        Boolean strictContentTypeValidation,
+        HostedSettings hosted,
+        ProxySettings proxy,
+        RawSettings raw,
+        DockerSettings docker,
+        CargoSettings cargo,
+        GroupSettings group,
+        AptSettings apt,
+        AlpineSettings alpine,
+        PypiSettings pypi,
+        YumSettings yum) {
+      this(online, blobStoreName, strictContentTypeValidation, hosted, proxy, raw, docker, cargo, group,
+          apt, alpine, pypi, yum, null);
+    }
+
     /** Compatibility constructor for callers that predate Yum repodata-depth settings. */
     public UpdateCommand(
         Boolean online,
@@ -177,6 +219,9 @@ public final class RepositoryCommands {
           cargo, group, apt, alpine, null);
     }
   }
+
+  /** When supplied, replaces both overrides; null fields inherit the server defaults. */
+  public record ConanSettings(Integer manifestMaxEntries, Integer manifestMaxBytes) {}
 
   public record HostedSettings(
       String writePolicy,

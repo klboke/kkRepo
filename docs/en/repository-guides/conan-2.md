@@ -61,6 +61,59 @@ staging and makes the RREV or PREV visible only when the final `conanmanifest.tx
 file checksums. A retry can resume the same upload; an identity collision with different bytes
 fails closed. UI and Components API uploads use the same manifest-gated publication path.
 
+## Manifest Limits
+
+Conan hosted and proxy repositories expose **Manifest entry limit** and **Manifest size limit
+(bytes)** in the repository configuration dialog. For a large SDK, set the entry limit to
+`50000` and the size limit to `16777216` (16 MiB), for example. Each blank field independently
+inherits the server default. These limits bound `conanmanifest.txt` and the combined file tree
+reconstructed from archives and loose files; they do not describe the compressed archive size.
+Proxy settings also apply when importing cached content through the manifest-gated migration writer.
+Groups use their members' settings and have no override of their own.
+
+Saving repository settings requires no restart. Existing runtime caches are invalidated on the
+saving node, and database-backed catalog notifications refresh sibling replicas (default poll
+interval: 500 ms). The runtime cache TTL (default: 30 seconds) is the fallback for missed
+notifications. An in-flight request retains its configuration snapshot; retry a rejected upload
+after the new settings reach its serving replica. No extra database query is added to manifest validation.
+
+The repository API accepts the same settings when creating or updating a repository:
+
+```json
+{
+  "conan": {
+    "manifestMaxEntries": 50000,
+    "manifestMaxBytes": 16777216
+  }
+}
+```
+
+Omitting `conan` on an update preserves existing overrides. Supplying it replaces both overrides;
+a null or omitted field inside that object inherits its server default. Send `"conan": {}` to
+restore inheritance for both fields.
+
+Server defaults are configurable in both JVM and Native deployments:
+
+| Property | Environment variable | Default | Unit |
+| --- | --- | --- | --- |
+| `kkrepo.conan.manifest.max-entries` | `KKREPO_CONAN_MANIFEST_MAX_ENTRIES` | `4096` | File entries per manifest |
+| `kkrepo.conan.manifest.max-bytes` | `KKREPO_CONAN_MANIFEST_MAX_BYTES` | `1048576` | UTF-8 manifest bytes (1 MiB) |
+
+```yaml
+environment:
+  KKREPO_CONAN_MANIFEST_MAX_ENTRIES: "50000"
+  KKREPO_CONAN_MANIFEST_MAX_BYTES: "16777216"
+```
+
+Changing these server defaults requires restarting the processes/containers; keep defaults
+consistent across replicas. Repository overrides take precedence. Entry limits must be positive
+integers up to `2147483647`; byte limits must be between `1` and `2147483646`. Zero and negative
+values do not disable validation. Choose practical values for the available memory and workload:
+manifests and their checksum maps are held in memory. Other archive protections (200,000 tar
+entries per archive, expansion size/ratio, path safety, inspection time, and checksum matching)
+remain in force. Limit errors report the effective limit and observed count or size; when reading
+stops early, the observed value is a lower bound rather than the total input size.
+
 ## List, Download, Install, And Remove
 
 Use the group for reads:

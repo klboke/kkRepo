@@ -41,6 +41,8 @@ import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.ProxySett
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.PypiSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.YumSettings;
 import com.github.klboke.kkrepo.server.yum.YumMetadataDepth;
+import com.github.klboke.kkrepo.server.conan.ConanManifestPolicy;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.ConanSettings;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.RawSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.UpdateCommand;
@@ -329,6 +331,8 @@ public class RepositoryService {
       attributes.put("yum", Map.of("repodataDepth", yumDepth(command.yum(), 0)));
     }
 
+    putConanSettings(attributes, recipe.format(), recipe.type(), command.conan());
+
     String versionPolicy = null;
     String layoutPolicy = null;
     String writePolicy = null;
@@ -447,6 +451,8 @@ public class RepositoryService {
       PypiSettings merged = mergePypi(readPypiAttributes(existing), command.pypi());
       attributes.put("pypi", pypiAttributes(merged));
     }
+
+    putConanSettings(attributes, recipe.format(), recipe.type(), command.conan());
 
     boolean rebuildYumMetadata = false;
     if (recipe.format() == RepositoryFormat.YUM && existing.type() == RepositoryType.HOSTED) {
@@ -1205,7 +1211,9 @@ public class RepositoryService {
         blobStoreName, record.strictContentTypeValidation(), url,
         hosted, proxy, raw, docker, cargo, group, apt, alpine, pypi,
         record.format() == RepositoryFormat.YUM && record.type() == RepositoryType.HOSTED
-            ? new YumSettings(YumMetadataDepth.read(record.attributes())) : null);
+            ? new YumSettings(YumMetadataDepth.read(record.attributes())) : null,
+        record.format() == RepositoryFormat.CONAN && record.type() != RepositoryType.GROUP
+            ? ConanManifestPolicy.read(record.attributes()) : null);
   }
 
   private Map<Long, String> blobStoreNameIndex() {
@@ -1216,6 +1224,21 @@ public class RepositoryService {
       }
     }
     return index;
+  }
+
+  private static void putConanSettings(Map<String, Object> attributes, RepositoryFormat format,
+      RepositoryType type, ConanSettings settings) {
+    // Older clients omit this section; preserve any existing overrides on unrelated updates.
+    if (settings == null) return;
+    if (format != RepositoryFormat.CONAN || type == RepositoryType.GROUP) {
+      throw new RepositoryValidationException(
+          "Conan manifest limits require a Conan hosted or proxy repository");
+    }
+    try {
+      attributes.put("conan", ConanManifestPolicy.attributes(settings));
+    } catch (IllegalArgumentException invalid) {
+      throw new RepositoryValidationException(invalid.getMessage());
+    }
   }
 
   // ---- validation -----------------------------------------------------------

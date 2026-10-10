@@ -31,6 +31,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.protocol.conan.ConanManifest;
+import com.github.klboke.kkrepo.protocol.conan.ConanManifestLimits;
 import com.github.klboke.kkrepo.protocol.conan.ConanMediaTypes;
 import com.github.klboke.kkrepo.protocol.conan.ConanReference;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
@@ -501,8 +502,8 @@ class ConanServiceTest {
 
     Fixture malformed = new Fixture();
     malformed.configureCompleteRecipeUpload(hosted);
-    when(malformed.assets.readStaged(
-        eq(hosted), eq(".conan/staging/77/" + ConanManifest.FILE_NAME), anyInt()))
+    when(malformed.assets.readManifest(
+        eq(hosted), eq(".conan/staging/77/" + ConanManifest.FILE_NAME), any(ConanManifestLimits.class)))
         .thenReturn("broken".getBytes(StandardCharsets.UTF_8));
     assertThrows(ConanExceptions.BadRequest.class, () -> malformed.service.put(
         hosted, RREV + "/files/" + ConanManifest.FILE_NAME, InputStream.nullInputStream(), 0,
@@ -510,8 +511,8 @@ class ConanServiceTest {
 
     Fixture mismatch = new Fixture();
     mismatch.configureCompleteRecipeUpload(hosted);
-    when(mismatch.assets.readStaged(
-        eq(hosted), eq(".conan/staging/77/" + ConanManifest.FILE_NAME), anyInt()))
+    when(mismatch.assets.readManifest(
+        eq(hosted), eq(".conan/staging/77/" + ConanManifest.FILE_NAME), any(ConanManifestLimits.class)))
         .thenReturn(("1\nmissing.txt: " + "d".repeat(32) + "\n")
             .getBytes(StandardCharsets.UTF_8));
     ConanExceptions.BadRequest mismatchFailure = assertThrows(
@@ -526,8 +527,8 @@ class ConanServiceTest {
     when(incomplete.assets.stage(
         eq(hosted), eq(77L), eq("conanfile.py"), any(), anyString(), anyString(), anyString()))
         .thenReturn(incomplete.staged(73L, "incoming-conanfile", SHA1));
-    when(incomplete.assets.readStaged(
-        eq(hosted), eq(".conan/staging/77/" + ConanManifest.FILE_NAME), anyInt()))
+    when(incomplete.assets.readManifest(
+        eq(hosted), eq(".conan/staging/77/" + ConanManifest.FILE_NAME), any(ConanManifestLimits.class)))
         .thenReturn(("1\nmissing.txt: " + MD5 + "\n").getBytes(StandardCharsets.UTF_8));
     assertEquals(200, incomplete.service.put(
         hosted, RREV + "/files/conanfile.py", InputStream.nullInputStream(), 0,
@@ -672,7 +673,45 @@ class ConanServiceTest {
     assertEquals("True", commit.getValue().options().get("shared"));
     assertEquals(3, commit.getValue().files().size());
     verify(fixture.archives, times(2)).manifestEntries(
-        any(), eq(3L), eq("conan_package.tgz"), eq(""), anyInt());
+        any(), eq(3L), eq("conan_package.tgz"), eq(""), any(ConanManifestLimits.class), anyInt());
+  }
+
+  @Test
+  void commits7922EntryPackageWithRaisedPolicyAndRejectsItUnderDefaults() {
+    RepositoryRuntime hosted = runtime(1L, RepositoryType.HOSTED, List.of());
+    Map<String, String> files = new java.util.LinkedHashMap<>();
+    for (int i = 0; i < 7921; i++) files.put("include/qt-" + i + ".h", MD5);
+    Fixture fixture = new Fixture();
+    fixture.configureCompletePackageUpload(hosted, new byte[0], files);
+    assertEquals("Conan manifest entry limit exceeded: limit=4096, observed=4097",
+        assertThrows(ConanExceptions.BadRequest.class, () -> fixture.service.put(hosted,
+            PREV + "/files/" + ConanManifest.FILE_NAME, InputStream.nullInputStream(), 0,
+            null, SHA1, false, ALICE, "ip")).getMessage());
+    verify(fixture.registry, never()).commitRevision(any());
+    var raised = new ConanManifestLimits(7922, 16777216);
+    when(fixture.manifestPolicy.forRepository(hosted)).thenReturn(raised);
+    assertEquals(200, fixture.service.put(hosted, PREV + "/files/" + ConanManifest.FILE_NAME,
+        InputStream.nullInputStream(), 0, null, SHA1, false, ALICE, "ip").status());
+    verify(fixture.registry).commitRevision(any());
+    verify(fixture.archives, times(2)).manifestEntries(any(), eq(3L), eq("conan_package.tgz"),
+        eq(""), eq(raised), eq(1));
+    verify(fixture.assets, times(2)).readManifest(eq(hosted), anyString(), eq(raised));
+  }
+
+  @Test
+  void aggregateLimitAlsoRejectsUndeclaredArchiveEntriesAndPreservesChecksumValidation() {
+    RepositoryRuntime hosted = runtime(1L, RepositoryType.HOSTED, List.of());
+    Fixture fixture = new Fixture();
+    fixture.configureCompletePackageUpload(hosted, new byte[0], Map.of("include/a", MD5));
+    var limit = new ConanManifestLimits(2, 1048576);
+    when(fixture.manifestPolicy.forRepository(hosted)).thenReturn(limit);
+    when(fixture.archives.manifestEntries(any(), anyLong(), anyString(), anyString(), eq(limit), anyInt()))
+        .thenReturn(Map.of("include/a", MD5, "include/undeclared", MD5));
+    assertEquals("Conan manifest entry limit exceeded: limit=2, observed=3",
+        assertThrows(ConanExceptions.ContentTooLarge.class, () -> fixture.service.put(hosted,
+            PREV + "/files/" + ConanManifest.FILE_NAME, InputStream.nullInputStream(), 0,
+            null, SHA1, false, ALICE, "ip")).getMessage());
+    verify(fixture.registry, never()).commitRevision(any());
   }
 
   @Test
@@ -709,8 +748,8 @@ class ConanServiceTest {
 
     Fixture checksumMismatch = new Fixture();
     checksumMismatch.configureCompleteRecipeUpload(hosted);
-    when(checksumMismatch.assets.readStaged(
-        hosted, ".conan/staging/77/" + ConanManifest.FILE_NAME, ConanManifest.MAX_BYTES))
+    when(checksumMismatch.assets.readManifest(
+        hosted, ".conan/staging/77/" + ConanManifest.FILE_NAME, ConanManifestLimits.DEFAULTS))
         .thenReturn(("1\nconanfile.py: " + "d".repeat(32) + "\n")
             .getBytes(StandardCharsets.UTF_8));
     ConanExceptions.BadRequest checksum = assertThrows(
@@ -1010,15 +1049,17 @@ class ConanServiceTest {
     final ConanAuthService auth = mock(ConanAuthService.class);
     final ConanRemoteClient remote = mock(ConanRemoteClient.class);
     final ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+    final ConanManifestPolicy manifestPolicy = mock(ConanManifestPolicy.class);
     final ConanService service = new ConanService(
         registry, assets, components, archives, leases, auth, remote, mapper,
-        new ImmediateTransactionManager());
+        new ImmediateTransactionManager(), manifestPolicy);
 
     Fixture() {
       configureDefaults();
     }
 
     void configureDefaults() {
+      when(manifestPolicy.forRepository(any())).thenReturn(ConanManifestLimits.DEFAULTS);
       when(leases.acquire(anyLong(), anyString())).thenReturn(lease);
       when(lease.fencingToken()).thenReturn(11L);
       when(lease.expiresAt()).thenReturn(PUBLISHED.plusSeconds(300));
@@ -1106,8 +1147,8 @@ class ConanServiceTest {
           "text/plain", PUBLISHED, PUBLISHED);
       List<ConanRegistryDao.UploadFile> files = List.of(conanfile, manifest);
       when(registry.listUploadFiles(77L)).thenReturn(files);
-      when(assets.readStaged(
-          eq(runtime), eq(".conan/staging/77/" + ConanManifest.FILE_NAME), anyInt()))
+      when(assets.readManifest(
+          eq(runtime), eq(".conan/staging/77/" + ConanManifest.FILE_NAME), any(ConanManifestLimits.class)))
           .thenReturn(("1\nconanfile.py: " + MD5 + "\n")
               .getBytes(StandardCharsets.UTF_8));
       AssetRecord conanfileAsset = asset(70L, 1070L, ".conan/staging/77/conanfile.py", null);
@@ -1154,8 +1195,8 @@ class ConanServiceTest {
           manifestText.append(path).append(": ").append(checksum).append('\n');
         }
       });
-      when(assets.readStaged(
-          runtime, ".conan/staging/88/" + ConanManifest.FILE_NAME, ConanManifest.MAX_BYTES))
+      when(assets.readManifest(
+          eq(runtime), eq(".conan/staging/88/" + ConanManifest.FILE_NAME), any(ConanManifestLimits.class)))
           .thenReturn(manifestText.toString().getBytes(StandardCharsets.UTF_8));
       when(assets.readStaged(
           runtime, ".conan/staging/88/conaninfo.txt",
@@ -1168,7 +1209,7 @@ class ConanServiceTest {
               new ByteArrayInputStream(new byte[] {1, 2, 3}), 3,
               "application/gzip", null, PUBLISHED));
       when(archives.manifestEntries(
-          any(), eq(3L), eq("conan_package.tgz"), eq(""), anyInt()))
+          any(), eq(3L), eq("conan_package.tgz"), eq(""), any(ConanManifestLimits.class), anyInt()))
           .thenReturn(archivedEntries);
       for (long assetId : new long[] {90L, 91L, 92L}) {
         String path = switch ((int) assetId) {

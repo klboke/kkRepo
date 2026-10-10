@@ -398,6 +398,9 @@ public class RepositoryRuntimeRegistry {
       }
     }
 
+    var conan = record.format() == com.github.klboke.kkrepo.core.RepositoryFormat.CONAN
+        && record.type() != RepositoryType.GROUP
+        ? com.github.klboke.kkrepo.server.conan.ConanManifestPolicy.read(record.attributes()) : null;
     return new RepositoryRuntime(
         record.id(),
         record.name(),
@@ -429,7 +432,9 @@ public class RepositoryRuntimeRegistry {
         proxyRaw instanceof Map<?, ?> proxyMap
             ? com.github.klboke.kkrepo.server.proxy.NtlmCredentials.fromAttributes(proxyMap) : null,
         record.format() == com.github.klboke.kkrepo.core.RepositoryFormat.YUM
-            ? com.github.klboke.kkrepo.server.yum.YumMetadataDepth.read(record.attributes()) : 0);
+            ? com.github.klboke.kkrepo.server.yum.YumMetadataDepth.read(record.attributes()) : 0,
+        conan == null ? null : conan.manifestMaxEntries(),
+        conan == null ? null : conan.manifestMaxBytes());
   }
 
   private static com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig readOutboundProxy(Map<?, ?> proxyMap) {

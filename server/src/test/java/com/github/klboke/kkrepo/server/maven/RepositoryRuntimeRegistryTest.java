@@ -23,6 +23,51 @@ import org.junit.jupiter.api.Test;
 
 class RepositoryRuntimeRegistryTest {
   @Test
+  void conanOverridesUseCachedSnapshotsAndRefreshOnBothReplicas() throws Exception {
+    FakeRepositoryDao dao = new FakeRepositoryDao();
+    var broadcaster = new InMemoryBroadcaster();
+    var mapper = new ObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+    var first = new RepositoryRuntimeRegistry(dao, new InMemorySharedCache(mapper, 1000, null),
+        mapper, broadcaster, 300);
+    var second = new RepositoryRuntimeRegistry(dao, new InMemorySharedCache(mapper, 1000, null),
+        mapper, broadcaster, 300);
+    first.subscribeToCatalogBroadcast();
+    second.subscribeToCatalogBroadcast();
+    var policy = new com.github.klboke.kkrepo.server.conan.ConanManifestPolicy(4096, 1048576);
+    dao.add(conanRepo(Map.of()), List.of());
+    RepositoryRuntime initial = first.resolve("conan-sdk").orElseThrow();
+    assertNull(initial.conanManifestMaxEntries());
+    second.resolve("conan-sdk").orElseThrow();
+    int queries = dao.findByNameCalls;
+    dao.add(conanRepo(Map.of("conan", Map.of("manifestMaxEntries", 7922))), List.of());
+    assertEquals(4096, policy.forRepository(first.resolve("conan-sdk").orElseThrow()).maxEntries());
+    assertEquals(4096, policy.forRepository(second.resolve("conan-sdk").orElseThrow()).maxEntries());
+    assertEquals(queries, dao.findByNameCalls);
+    first.invalidate("conan-sdk");
+    assertEquals(7922, policy.forRepository(first.resolve("conan-sdk").orElseThrow()).maxEntries());
+    broadcaster.publishRefresh("repository");
+    RepositoryRuntime updated = second.resolve("conan-sdk").orElseThrow();
+    assertEquals(7922, policy.forRepository(updated).maxEntries());
+    assertEquals(1048576, policy.forRepository(updated).maxBytes());
+    RepositoryRuntime restored = mapper.readValue(mapper.writeValueAsBytes(updated), RepositoryRuntime.class);
+    assertEquals(updated.conanManifestMaxEntries(), restored.conanManifestMaxEntries());
+    // Older cached snapshots have no additive Conan fields and inherit the server defaults.
+    var legacy = mapper.valueToTree(updated);
+    ((com.fasterxml.jackson.databind.node.ObjectNode) legacy).remove(
+        List.of("conanManifestMaxEntries", "conanManifestMaxBytes"));
+    assertEquals(4096, policy.forRepository(mapper.treeToValue(legacy, RepositoryRuntime.class)).maxEntries());
+    dao.add(conanRepo(Map.of("conan", Map.of())), List.of());
+    broadcaster.publishRefresh("repository");
+    assertEquals(4096, policy.forRepository(first.resolve("conan-sdk").orElseThrow()).maxEntries());
+    assertEquals(4096, policy.forRepository(second.resolve("conan-sdk").orElseThrow()).maxEntries());
+  }
+
+  private static RepositoryRecord conanRepo(Map<String, Object> attributes) {
+    return new RepositoryRecord(8L, "conan-sdk", RepositoryFormat.CONAN, RepositoryType.HOSTED,
+        "conan-hosted", true, 1L, null, null, null, null, "ALLOW", true, attributes);
+  }
+
+  @Test
   void resolvesYumDepthFromActiveSettingsAndAlreadyMigratedSourceSnapshots() {
     for (Map<String, Object> attrs : List.<Map<String, Object>>of(
         Map.of("yum", Map.of("repodataDepth", 2)),

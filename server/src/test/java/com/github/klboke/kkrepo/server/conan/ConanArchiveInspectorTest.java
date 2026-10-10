@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.github.klboke.kkrepo.protocol.conan.ConanManifestLimits;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -33,7 +34,7 @@ class ConanArchiveInspectorTest {
       inspector.inspect(new ByteArrayInputStream(archive), archive.length, "conan_sources." + kind.extension);
       Map<String, String> projected = inspector.manifestEntries(
           new ByteArrayInputStream(archive), archive.length, "conan_sources." + kind.extension,
-          "export_source/", 16);
+          "export_source/", new ConanManifestLimits(16, 1048576), 0);
 
       assertEquals(
           "509f9c8d4b07d6eafa41670712365089",
@@ -47,7 +48,7 @@ class ConanArchiveInspectorTest {
 
     inspector.inspect(new ByteArrayInputStream(archive), archive.length, "conan_package.tgz");
     assertEquals(Map.of(), inspector.manifestEntries(
-        new ByteArrayInputStream(archive), archive.length, "conan_package.tgz", "", 1));
+        new ByteArrayInputStream(archive), archive.length, "conan_package.tgz", "", new ConanManifestLimits(1, 1048576), 0));
     assertThrows(ConanExceptions.BadRequest.class, () -> inspector.inspect(
         new ByteArrayInputStream(archive), archive.length, "conan_export.tgz"));
   }
@@ -68,7 +69,7 @@ class ConanArchiveInspectorTest {
     assertThrows(ConanExceptions.BadRequest.class, () -> inspector.inspect(
         new ByteArrayInputStream(duplicate), duplicate.length, "conan_package.tgz"));
     assertThrows(ConanExceptions.BadRequest.class, () -> inspector.manifestEntries(
-        new ByteArrayInputStream(duplicate), duplicate.length, "conan_package.tgz", "", 3));
+        new ByteArrayInputStream(duplicate), duplicate.length, "conan_package.tgz", "", new ConanManifestLimits(3, 1048576), 0));
 
     byte[] link = archive(
         CompressorStreamFactory.GZIP, List.of(Item.symlink("bin/tool", "../../outside")));
@@ -87,7 +88,7 @@ class ConanArchiveInspectorTest {
     assertFalse(inspector.packageArchive("nested/conan_export.tzst"));
     inspector.inspect(InputStream.nullInputStream(), 0, "ordinary.txt");
     assertEquals(Map.of(), inspector.manifestEntries(
-        InputStream.nullInputStream(), 0, "ordinary.txt", null, 0));
+        InputStream.nullInputStream(), 0, "ordinary.txt", null, new ConanManifestLimits(1, 1048576), 1));
   }
 
   @Test
@@ -99,13 +100,13 @@ class ConanArchiveInspectorTest {
 
     inspector.inspect(new ByteArrayInputStream(archive), archive.length, "conan_package.tgz");
     Map<String, String> entries = inspector.manifestEntries(
-        new ByteArrayInputStream(archive), archive.length, "conan_package.tgz", null, 3);
+        new ByteArrayInputStream(archive), archive.length, "conan_package.tgz", null, new ConanManifestLimits(3, 1048576), 0);
     assertEquals(2, entries.size());
     assertEquals("d90eefbd443621dcbe2063b2d551074a", entries.get("current"));
     assertThrows(ConanExceptions.ContentTooLarge.class, () -> inspector.manifestEntries(
-        new ByteArrayInputStream(archive), archive.length, "conan_package.tgz", "", 1));
-    assertThrows(ConanExceptions.Busy.class, () -> inspector.manifestEntries(
-        new ByteArrayInputStream(archive), archive.length, "conan_package.tgz", "", 0));
+        new ByteArrayInputStream(archive), archive.length, "conan_package.tgz", "", new ConanManifestLimits(1, 1048576), 0));
+    assertThrows(ConanExceptions.ContentTooLarge.class, () -> inspector.manifestEntries(
+        new ByteArrayInputStream(archive), archive.length, "conan_package.tgz", "", new ConanManifestLimits(1, 1048576), 1));
   }
 
   @Test
@@ -126,12 +127,12 @@ class ConanArchiveInspectorTest {
     assertThrows(ConanExceptions.ContentTooLarge.class, () -> inspector.inspect(
         new ByteArrayInputStream(expanded), 1, "conan_package.tgz"));
     assertThrows(ConanExceptions.ContentTooLarge.class, () -> inspector.manifestEntries(
-        new ByteArrayInputStream(expanded), 1, "conan_package.tgz", "", 2));
+        new ByteArrayInputStream(expanded), 1, "conan_package.tgz", "", new ConanManifestLimits(2, 1048576), 0));
 
     assertThrows(ConanExceptions.BadRequest.class, () -> inspector.inspect(
         new ByteArrayInputStream(new byte[] {1, 2, 3}), 3, "conan_package.tgz"));
     assertThrows(ConanExceptions.BadRequest.class, () -> inspector.manifestEntries(
-        new ByteArrayInputStream(new byte[] {1, 2, 3}), 3, "conan_package.tgz", "", 2));
+        new ByteArrayInputStream(new byte[] {1, 2, 3}), 3, "conan_package.tgz", "", new ConanManifestLimits(2, 1048576), 0));
   }
 
   @Test
@@ -155,6 +156,22 @@ class ConanArchiveInspectorTest {
     } finally {
       slots.release(permits);
     }
+  }
+
+  @Test
+  void handlesLargeSdkCountsCombinedBudgetsAndAnEmptyArchiveAtTheLimit() throws Exception {
+    List<Item> files = new java.util.ArrayList<>();
+    for (int i = 0; i < 7921; i++) files.add(Item.file("include/header-" + i + ".h", new byte[0]));
+    byte[] sdk = archive(CompressorStreamFactory.GZIP, files);
+    var limits = new ConanManifestLimits(7922, 1048576);
+    assertEquals(7921, inspector.manifestEntries(new ByteArrayInputStream(sdk), sdk.length,
+        "conan_package.tgz", "", limits, 1).size());
+    assertEquals("Conan manifest entry limit exceeded: limit=7922, observed=7923",
+        assertThrows(ConanExceptions.ContentTooLarge.class, () -> inspector.manifestEntries(
+            new ByteArrayInputStream(sdk), sdk.length, "conan_package.tgz", "", limits, 2)).getMessage());
+    byte[] empty = archive(CompressorStreamFactory.GZIP, List.of(Item.directory("include/")));
+    assertEquals(Map.of(), inspector.manifestEntries(new ByteArrayInputStream(empty), empty.length,
+        "conan_package.tgz", "", limits, 7922));
   }
 
   private static byte[] archive(String compressor, List<Item> items) throws Exception {

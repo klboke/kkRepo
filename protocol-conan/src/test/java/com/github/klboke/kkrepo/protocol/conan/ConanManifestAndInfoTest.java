@@ -51,7 +51,8 @@ class ConanManifestAndInfoTest {
     for (int index = 0; index <= ConanManifest.MAX_ENTRIES; index++) {
       tooMany.put("file-" + index, checksum);
     }
-    assertThrows(IllegalArgumentException.class, () -> new ConanManifest(1, tooMany));
+    // The value type validates structure; input quotas belong to the bounded parser.
+    assertEquals(tooMany.size(), new ConanManifest(1, tooMany).md5ByPath().size());
 
     for (byte[] invalid : new byte[][] {
         null,
