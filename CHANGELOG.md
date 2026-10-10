@@ -4,6 +4,27 @@ All notable public changes to kkrepo are documented in this file.
 
 This project follows a pragmatic release process. Stable releases call out migration impact, compatibility changes, operational notes, and any known behavior changes in their release section.
 
+## 1.3.1 - 2026-10-10
+
+### Fixed
+
+- Hosted Yum repositories honor Repodata Depth, generate directory-scoped metadata with relative RPM locations, and preserve the setting during Nexus migration. Routine uploads and deletions rebuild only the affected metadata root through the shared database queue; hosted-only groups support the matching subdirectory endpoints. (#396, #397)
+- Native security scanning retains Jackson bindings for scanner requests, capabilities, readiness, and structured errors, fixing `SCANNER_INVALID_JSON` with a healthy scanner adapter. Packaged JVM and Native runtime checks now cover disabled scanning, error propagation, and recovery. (#392)
+- Scan validity tooltips explain the effective limit and its source. Policy deletion distinguishes historical revisions and reports actionable conflicts while preserving server-side reference and revision checks. (#393)
+- Browse and Admin deep links no longer flash an unrelated default page during initialization. Startup navigation and overlapping login/discovery requests retain the requested destination and current session data. (#394)
+- Git LFS format icons render correctly throughout Browse and Admin. Scanner process-group cleanup waits for consecutive quiescent inspections so newly forked children are not missed when their parents exit. (#395)
+- Browse Welcome correctly lists Hosted and Group modes for Go and Helm. (#398)
+
+### Changed
+
+- Quickstart defaults, Dockerfile packaging, deployment documentation, Helm application version, runtime checks, and the optional scanner profile now use `1.3.1`.
+
+### Upgrade Notes
+
+- Upgrading from `1.3.0` adds no database migrations; MySQL and PostgreSQL remain at Flyway V59. Back up the relational database and blob store together before upgrading.
+- Upgrade all replicas before changing Yum Repodata Depth; older workers do not implement scoped rebuild coordination. For an affected Nexus import, confirm the depth in repository settings and save once to initialize the active settings and enqueue a metadata rebuild; no package re-import is required. A `/fedora-$releasever/` base URL requires depth `1`. If the source export omitted the setting, enter it explicitly, then run `dnf clean metadata` before retrying. (#397)
+- Native deployments affected by `SCANNER_INVALID_JSON` should upgrade the server image. No scanner API or database migration is required. (#392)
+
 ## 1.3.0 - 2026-10-08
 
 ### Added
