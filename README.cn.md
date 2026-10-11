@@ -224,11 +224,13 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 
 感谢所有支持 kkRepo 持续开发和维护的赞助者。你可以通过 [GitHub Sponsors](https://github.com/sponsors/klboke) 支持本项目。
 
-你也可以通过支付宝或微信支付赞助 kkRepo。请使用对应的支付应用扫描下方二维码，或点击图片查看原图。
+你也可以通过支付宝或微信支付赞助 kkRepo。
 
-| 支付宝 | 微信支付 |
-| :---: | :---: |
-| [<img src="docs/img/sponsors/alipay.jpg" alt="支付宝赞助收款码" width="280">](docs/img/sponsors/alipay.jpg) | [<img src="docs/img/sponsors/wechat-pay.jpg" alt="微信支付赞助收款码" width="280">](docs/img/sponsors/wechat-pay.jpg) |
+<p>
+  <a href="docs/img/sponsors/alipay.jpg"><img src="docs/img/sponsors/alipay-card.svg" alt="支付宝赞助收款码" width="280"></a>
+  &nbsp;&nbsp;
+  <a href="docs/img/sponsors/wechat-pay.jpg"><img src="docs/img/sponsors/wechat-pay-card.svg" alt="微信支付赞助收款码" width="280"></a>
+</p>
 
 ### 企业赞助者
 
