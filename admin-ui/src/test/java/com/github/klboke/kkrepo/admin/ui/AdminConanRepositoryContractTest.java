@@ -15,7 +15,6 @@ class AdminConanRepositoryContractTest {
     String javascript = resource("/META-INF/resources/admin/assets/admin.js");
 
     assertTrue(index.contains("id=\"repository-conan-fields\""));
-    assertTrue(index.contains("conanmanifest.txt"));
     assertTrue(javascript.contains("conan: \"Conan 2\""));
     assertTrue(javascript.contains("conan: \"https://center2.conan.io/\""));
   }

@@ -2704,8 +2704,7 @@ function refreshRepositoryRecipeControls() {
   document.getElementById("repository-docker-fields").hidden = format !== "docker";
   document.getElementById("repository-cargo-fields").hidden =
     format !== "cargo";
-  document.getElementById("repository-conan-fields").hidden = format !== "conan";
-  document.getElementById("repository-conan-limits").hidden = type === "GROUP";
+  document.getElementById("repository-conan-fields").hidden = format !== "conan" || type === "GROUP";
   document.getElementById("repository-apt-fields").hidden = format !== "apt";
   document.getElementById("repository-alpine-fields").hidden = format !== "alpine";
   document.getElementById("repository-swift-proxy-note").hidden =
