@@ -6,12 +6,16 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup;
 
 import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
+import com.github.klboke.kkrepo.server.conan.ConanManifestPolicy;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
@@ -22,6 +26,23 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.server.ResponseStatusException;
 
 class RepositoriesControllerConanTest {
+  @Test
+  void exposesResolvedDefaultsWithoutRequiringAnExistingRepository() throws Exception {
+    RepositoriesController controller = controller(mock(RepositoryService.class));
+    controller.setConanManifestPolicy(new ConanManifestPolicy(
+        50000, 16777216));
+    var mvc = standaloneSetup(controller).build();
+    mvc.perform(get("/internal/repositories/conan/defaults")
+        .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE,
+            request().getAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE)))
+        .andExpect(status().isOk())
+        .andExpect(result -> assertEquals(
+            "{\"manifestMaxEntries\":50000,\"manifestMaxBytes\":16777216}",
+            result.getResponse().getContentAsString()));
+    mvc.perform(get("/internal/repositories/conan/defaults"))
+        .andExpect(status().isUnauthorized());
+  }
+
   @Test
   void exposesDurableConanRepositoryStatusToRepositoryAdministrators() {
     RepositoryService service = mock(RepositoryService.class);

@@ -13,6 +13,17 @@ let repositories = [];
 let repositoryUsage;
 let repositoryLoadVersion = 0;
 let repositoryRecipes = [];
+let conanManifestDefaults = null;
+let repositoryConanOverrides = {};
+let repositoryConanSavedOverrides = {};
+const conanManifestFields = [
+  { key: "manifestMaxEntries", id: "repository-conan-manifest-max-entries",
+    property: "kkrepo.conan.manifest.max-entries", env: "KKREPO_CONAN_MANIFEST_MAX_ENTRIES",
+    description: "Maximum entries in a manifest." },
+  { key: "manifestMaxBytes", id: "repository-conan-manifest-max-bytes",
+    property: "kkrepo.conan.manifest.max-bytes", env: "KKREPO_CONAN_MANIFEST_MAX_BYTES",
+    description: "Maximum manifest text size in bytes, not the package archive size." }
+];
 let blobStores = [];
 let blobStoreUsage;
 let blobStoreLoadVersion = 0;
@@ -2813,6 +2824,66 @@ function refreshAlpineControls() {
   updateRequiredMarkers(repositoryRequiredFields);
 }
 
+async function loadConanManifestDefaults() {
+  try {
+    const response = await fetch("/internal/repositories/conan/defaults", { cache: "no-store" });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    const defaults = await response.json();
+    if (!conanManifestFields.every(({ key, id }) => Number.isInteger(defaults[key])
+        && defaults[key] >= 1 && defaults[key] <= Number(document.getElementById(id).max))) {
+      throw new Error("Invalid Conan manifest defaults");
+    }
+    conanManifestDefaults = defaults;
+  } catch (error) {
+    // An older/unavailable server must never make the UI invent effective values or pin defaults.
+    conanManifestDefaults = null;
+  }
+}
+
+function setConanManifestSettings(settings = {}) {
+  repositoryConanOverrides = {};
+  for (const { key, id } of conanManifestFields) {
+    repositoryConanOverrides[key] = settings?.[key] ?? null;
+    const input = document.getElementById(id);
+    input.value = repositoryConanOverrides[key] ?? conanManifestDefaults?.[key] ?? "";
+    input.disabled = !conanManifestDefaults;
+  }
+  repositoryConanSavedOverrides = { ...repositoryConanOverrides };
+  updateConanManifestHelp();
+}
+
+function updateConanManifestSetting(field, restoreDefault = false) {
+  if (!conanManifestDefaults) return;
+  const input = document.getElementById(field.id);
+  const value = input.value === "" ? null : Number(input.value);
+  const originalValue = repositoryConanSavedOverrides[field.key] ?? conanManifestDefaults[field.key];
+  repositoryConanOverrides[field.key] = value === originalValue
+    ? repositoryConanSavedOverrides[field.key] : value;
+  if (restoreDefault && value === null && !input.validity.badInput) {
+    input.value = conanManifestDefaults[field.key];
+  }
+  updateConanManifestHelp();
+}
+
+function updateConanManifestHelp() {
+  const text = value => window.kkrepoI18n?.text(value) ?? value;
+  for (const field of conanManifestFields) {
+    const help = document.getElementById(`${field.id}-help`);
+    let explanation = text("Effective Conan limits unavailable. Reload the page to retry; saved overrides are unchanged.");
+    if (conanManifestDefaults) {
+      const changed = repositoryConanOverrides[field.key] !== repositoryConanSavedOverrides[field.key];
+      const source = repositoryConanOverrides[field.key] == null ? "Server default" : "Repository override";
+      explanation = [text(field.description),
+        `${text(changed ? "Source after saving" : "Current source")}: ${text(source)}.`,
+        `${text("Server default")}: ${conanManifestDefaults[field.key]} (${field.property}; ${field.env}).`,
+        text("Clear this field to inherit the server default; its value reappears when you leave the field."),
+        text("Saving applies to subsequent manifest validations without a restart.")].join(" ");
+    }
+    help.dataset.tooltip = explanation;
+    help.setAttribute("aria-label", explanation);
+  }
+}
+
 async function loadConanStatus(name = editingRepositoryName) {
   if (!name) return;
   const output = document.getElementById("repository-conan-status");
@@ -3100,12 +3171,8 @@ function repositoryFormPayload() {
     };
   }
   if (recipe?.format === "conan" && type !== "GROUP") {
-    const entries = document.getElementById("repository-conan-manifest-max-entries").value;
-    const bytes = document.getElementById("repository-conan-manifest-max-bytes").value;
-    payload.conan = {
-      manifestMaxEntries: entries === "" ? null : Number(entries),
-      manifestMaxBytes: bytes === "" ? null : Number(bytes)
-    };
+    // Display values and durable nullable overrides are deliberately separate.
+    if (conanManifestDefaults) payload.conan = { ...repositoryConanOverrides };
   }
   if (recipe?.format === "yum" && type === "HOSTED") {
     payload.yum = { repodataDepth: Number(document.getElementById("repository-yum-depth").value) };
@@ -3164,8 +3231,7 @@ function repositoryFormPayload() {
 }
 
 function setRepositoryFormDefaults() {
-  document.getElementById("repository-conan-manifest-max-entries").value = "";
-  document.getElementById("repository-conan-manifest-max-bytes").value = "";
+  setConanManifestSettings();
   document.getElementById("repository-name").value = "";
   document.getElementById("repository-online").checked = true;
   document.getElementById("repository-strict").checked = true;
@@ -3325,8 +3391,7 @@ function showEditRepositoryForm(name) {
     document.getElementById("repository-auto-block").checked = repo.proxy.autoBlock !== false;
   }
   document.getElementById("repository-yum-depth").value = repo.yum?.repodataDepth ?? 0;
-  document.getElementById("repository-conan-manifest-max-entries").value = repo.conan?.manifestMaxEntries ?? "";
-  document.getElementById("repository-conan-manifest-max-bytes").value = repo.conan?.manifestMaxBytes ?? "";
+  setConanManifestSettings(repo.conan);
   document.getElementById("repository-pypi-index-path").value =
     repo.pypi?.indexPath ?? "/simple";
   if (repo.type === "GROUP" && repo.group && Array.isArray(repo.group.memberNames)) {
@@ -3409,6 +3474,12 @@ async function saveRepository() {
   }
   if (!validateRequiredFields(repositoryRequiredFields)) {
     return;
+  }
+  if (recipe.format === "conan" && recipe.type !== "GROUP" && conanManifestDefaults) {
+    for (const field of conanManifestFields) {
+      const input = document.getElementById(field.id);
+      if (!input.reportValidity()) return;
+    }
   }
   const payload = repositoryFormPayload();
   const creating = repositoryFormMode === "create";
@@ -8237,6 +8308,15 @@ document.getElementById("repository-recipe").addEventListener("change", refreshR
 document.getElementById("repository-remote-authentication-type").addEventListener("change", refreshRepositoryRecipeControls);
 document.getElementById("repository-docker-connector-enabled").addEventListener("change", refreshDockerConnectorControls);
 document.getElementById("repository-apt-flat").addEventListener("change", refreshAptControls);
+for (const field of conanManifestFields) {
+  const input = document.getElementById(field.id);
+  input.addEventListener("input", () => updateConanManifestSetting(field));
+  input.addEventListener("blur", () => {
+    // Refill the inherited display without interpreting that number as a new override.
+    if (input.value === "") updateConanManifestSetting(field, true);
+  });
+}
+window.addEventListener("kkrepo:i18n-change", updateConanManifestHelp);
 document.getElementById("repository-conan-refresh-status").addEventListener("click", () => loadConanStatus());
 document.getElementById("repository-apt-enforce-distribution").addEventListener("change", refreshAptControls);
 document.getElementById("repository-apt-metadata-mode").addEventListener("change", refreshAptControls);
@@ -8639,7 +8719,7 @@ async function bootstrap() {
     switchView("content-selectors", { replaceHash: true });
     return;
   }
-  const recipesPromise = loadRepositoryRecipes();
+  const recipesPromise = Promise.all([loadRepositoryRecipes(), loadConanManifestDefaults()]);
   loadBlobStores();
   await recipesPromise;
   initialDataLoaded = true;

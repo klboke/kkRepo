@@ -67,6 +67,7 @@ function start(hash, permissions = ["nexus:*"]) {
       context.currentAdminPermissions = session ? permissions : [];
       return session;
     },
+    loadConanManifestDefaults: async () => {},
     loadRepositoryRecipes: () => { loads.push("recipes"); return recipesResponse.promise; },
     updateCurrentSideGroup() {},
     selectSecurityScanTab: (tab) => tabs.push(["scan", tab]),

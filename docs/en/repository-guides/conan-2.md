@@ -65,8 +65,16 @@ fails closed. UI and Components API uploads use the same manifest-gated publicat
 
 Conan hosted and proxy repositories expose **Manifest entry limit** and **Manifest size limit
 (bytes)** in the repository configuration dialog. For a large SDK, set the entry limit to
-`50000` and the size limit to `16777216` (16 MiB), for example. Each blank field independently
-inherits the server default. These limits bound `conanmanifest.txt` and the combined file tree
+`50000` and the size limit to `16777216` (16 MiB), for example.
+
+The inputs display the effective values, including inherited server defaults. Each help icon
+identifies whether the repository override or the server default is selected, and shows the server
+property/environment variable and default value. Clearing either input restores inheritance and
+redisplays its default when focus leaves the field. Saving without changing an inherited value
+preserves inheritance; it does not store an override. Unsaved source changes are labeled as applying
+after saving.
+
+These limits bound `conanmanifest.txt` and the combined file tree
 reconstructed from archives and loose files; they do not describe the compressed archive size.
 Proxy settings also apply when importing cached content through the manifest-gated migration writer.
 Groups use their members' settings and have no override of their own.

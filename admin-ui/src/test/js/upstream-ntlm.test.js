@@ -24,7 +24,7 @@ function form(repo) {
   for (const name of ['refreshDockerConnectorControls', 'refreshAptControls', 'refreshAlpineControls',
     'refreshRepositoryBlobStoreLock', 'refreshRepositoryRemoteDefaults', 'updateRequiredMarkers',
     'syncRepositoryRecipeCombobox', 'refreshRepositoryBlobStoreOptions', 'clearRequiredFieldErrors',
-    'openFormModal']) context[name] = () => {};
+    'openFormModal', 'setConanManifestSettings']) context[name] = () => {};
   vm.createContext(context);
   for (const name of ['refreshRepositoryRecipeControls', 'repositoryFormPayload',
     'setRepositoryFormDefaults', 'showEditRepositoryForm']) {

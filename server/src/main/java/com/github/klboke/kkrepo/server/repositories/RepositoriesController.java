@@ -10,6 +10,7 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
 import com.github.klboke.kkrepo.server.apt.AptService;
 import com.github.klboke.kkrepo.server.alpine.AlpineService;
+import com.github.klboke.kkrepo.server.conan.ConanManifestPolicy;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.r.RService;
@@ -52,6 +53,7 @@ public class RepositoriesController {
   private AlpineService alpineService;
   private RService rService;
   private ConanRegistryDao conanRegistry;
+  private ConanManifestPolicy conanManifestPolicy;
   private RepositoryRuntimeRegistry runtimeRegistry;
   private StorageStatisticsService statistics;
 
@@ -141,6 +143,18 @@ public class RepositoriesController {
     return candidates.stream()
         .filter(repository -> repositoryActionAllowed(subject, repository, PermissionAction.EDIT))
         .toList();
+  }
+
+  @Autowired
+  void setConanManifestPolicy(ConanManifestPolicy policy) {
+    this.conanManifestPolicy = policy;
+  }
+
+  @GetMapping("/conan/defaults")
+  public RepositoryCommands.ConanSettings conanDefaults(HttpServletRequest request) {
+    // Like recipes, these non-secret defaults are needed before a repository exists.
+    requireAuthenticated(request);
+    return conanManifestPolicy.defaults();
   }
 
   @GetMapping("/recipes")

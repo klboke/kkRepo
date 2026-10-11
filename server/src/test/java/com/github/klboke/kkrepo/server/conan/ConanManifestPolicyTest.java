@@ -6,6 +6,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.ConanSettings;
 import com.github.klboke.kkrepo.protocol.conan.ConanManifestLimits;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -27,6 +28,10 @@ class ConanManifestPolicyTest {
             new ResourcePropertySource("classpath:application.properties"));
         context.register(ConanManifestPolicy.class);
         context.refresh();
+        var policy = context.getBean(ConanManifestPolicy.class);
+        assertEquals(new ConanSettings(
+            policy.forRepository(inheritingRuntime()).maxEntries(),
+            policy.forRepository(inheritingRuntime()).maxBytes()), policy.defaults());
         assertEquals(environment.isEmpty() ? ConanManifestLimits.DEFAULTS
                 : new ConanManifestLimits(50000, 16777216),
             context.getBean(ConanManifestPolicy.class).forRepository(inheritingRuntime()));

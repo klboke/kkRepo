@@ -19,6 +19,11 @@ public final class ConanManifestPolicy {
     this.defaults = new ConanManifestLimits(maxEntries, maxBytes);
   }
 
+  /** The same resolved server defaults used by runtime validation, including property/env overrides. */
+  public ConanSettings defaults() {
+    return new ConanSettings(defaults.maxEntries(), defaults.maxBytes());
+  }
+
   public ConanManifestLimits forRepository(RepositoryRuntime runtime) {
     // The existing repository runtime cache supplies an immutable per-request snapshot.
     // RepositoryService invalidates it locally and broadcasts changes to sibling replicas;
