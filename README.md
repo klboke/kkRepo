@@ -224,6 +224,12 @@ Join the [kkRepo Telegram group](https://t.me/+UbIsTKXTzxBhYjFl) for community s
 
 Thank you to everyone supporting the ongoing development and maintenance of kkRepo. You can support the project through [GitHub Sponsors](https://github.com/sponsors/klboke).
 
+You can also sponsor kkRepo through Alipay or WeChat Pay. Scan the corresponding QR code below with the payment app, or click an image to view the full-size version.
+
+| Alipay | WeChat Pay |
+| :---: | :---: |
+| [<img src="docs/img/sponsors/alipay.jpg" alt="Alipay sponsorship QR code" width="280">](docs/img/sponsors/alipay.jpg) | [<img src="docs/img/sponsors/wechat-pay.jpg" alt="WeChat Pay sponsorship QR code" width="280">](docs/img/sponsors/wechat-pay.jpg) |
+
 ### Organization Sponsors
 
 Active organization sponsors will be featured here with their logo and link.
