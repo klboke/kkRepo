@@ -2706,8 +2706,6 @@ function refreshRepositoryRecipeControls() {
     format !== "cargo";
   document.getElementById("repository-conan-fields").hidden = format !== "conan";
   document.getElementById("repository-conan-limits").hidden = type === "GROUP";
-  document.getElementById("repository-conan-operations").hidden =
-    format !== "conan" || repositoryFormMode !== "edit";
   document.getElementById("repository-apt-fields").hidden = format !== "apt";
   document.getElementById("repository-alpine-fields").hidden = format !== "alpine";
   document.getElementById("repository-swift-proxy-note").hidden =
@@ -2812,29 +2810,6 @@ function refreshAlpineControls() {
   document.getElementById("repository-alpine-operations").hidden =
     !alpine || repositoryFormMode !== "edit";
   updateRequiredMarkers(repositoryRequiredFields);
-}
-
-async function loadConanStatus(name = editingRepositoryName) {
-  if (!name) return;
-  const output = document.getElementById("repository-conan-status");
-  output.textContent = "Loading Conan status…";
-  try {
-    const response = await fetch(
-      `/internal/repositories/${encodeURIComponent(name)}/conan/status`);
-    if (!response.ok) throw new Error(await responseErrorMessage(response));
-    const status = await response.json();
-    output.textContent = [
-      `${status.recipes ?? 0} recipes`,
-      `${status.recipeRevisions ?? 0} recipe revisions`,
-      `${status.packages ?? 0} packages`,
-      `${status.packageRevisions ?? 0} package revisions`,
-      `${status.committedFiles ?? 0} committed files`,
-      `${status.openUploadSessions ?? 0} open upload sessions`,
-      `${status.cachedProxyFiles ?? 0} cached proxy files`,
-    ].join(" · ");
-  } catch (error) {
-    output.textContent = error.message || "Conan status unavailable.";
-  }
 }
 
 async function loadAptStatus(name = editingRepositoryName) {
@@ -3382,7 +3357,6 @@ function showEditRepositoryForm(name) {
         ? (repo.alpine.upstreamPublicKeys[0] || "") : "";
   }
   refreshRepositoryRecipeControls();
-  if (repo.format === "conan") loadConanStatus(repo.name);
   if (repo.format === "apt") loadAptStatus(repo.name);
   if (repo.format === "alpine") loadAlpineStatus(repo.name);
   clearRequiredFieldErrors(repositoryRequiredFields);
@@ -8238,7 +8212,6 @@ document.getElementById("repository-recipe").addEventListener("change", refreshR
 document.getElementById("repository-remote-authentication-type").addEventListener("change", refreshRepositoryRecipeControls);
 document.getElementById("repository-docker-connector-enabled").addEventListener("change", refreshDockerConnectorControls);
 document.getElementById("repository-apt-flat").addEventListener("change", refreshAptControls);
-document.getElementById("repository-conan-refresh-status").addEventListener("click", () => loadConanStatus());
 document.getElementById("repository-apt-enforce-distribution").addEventListener("change", refreshAptControls);
 document.getElementById("repository-apt-metadata-mode").addEventListener("change", refreshAptControls);
 document.getElementById("repository-apt-refresh-status").addEventListener("click", () => loadAptStatus());
