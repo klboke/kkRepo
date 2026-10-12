@@ -22,6 +22,9 @@ import org.springframework.web.filter.OncePerRequestFilter;
 @Component
 @Order(ManagementAuditFilter.FILTER_ORDER)
 public class ManagementAuditFilter extends OncePerRequestFilter {
+  /** Trusted operation details supplied by management controllers, never request parameters. */
+  public static final String OPERATION_DETAILS_ATTRIBUTE =
+      ManagementAuditFilter.class.getName() + ".OPERATION_DETAILS";
   static final int FILTER_ORDER = SessionRepositoryFilter.DEFAULT_ORDER + 9;
   private static final Set<String> READ_METHODS = Set.of("GET", "HEAD", "OPTIONS", "TRACE");
 
@@ -123,6 +126,11 @@ public class ManagementAuditFilter extends OncePerRequestFilter {
       if (segments.length == 6 && "repository".equals(segments[1])) {
         details.put("coordinate", segments[3] + "." + segments[4] + "@" + segments[5]);
       }
+    }
+    if (request.getAttribute(OPERATION_DETAILS_ATTRIBUTE) instanceof Map<?, ?> operationDetails) {
+      operationDetails.forEach((key, detail) -> {
+        if (key instanceof String name && detail != null) details.put(name, detail);
+      });
     }
     if (failure != null) {
       details.put("error", failure.getClass().getSimpleName());

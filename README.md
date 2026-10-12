@@ -254,6 +254,7 @@ kkRepo is open sourced under the [Apache License 2.0](LICENSE).
 - [Build And Deployment Guide](docs/en/build-deployment-guide.md)
 - [Artifact Scanning Guide](docs/en/artifact-scanning-guide.md)
 - [Cleanup Policy Guide](docs/en/cleanup-policy-guide.md)
+- [Browse Directory Deletion](docs/en/browse-directory-deletion.md)
 - [Admin Storage Usage](docs/en/admin-storage-usage.md)
 - [Repository Usage Guide](docs/en/repository-guides/README.md)
 - [Native Image or JVM Selection Guide](docs/en/native-vs-jvm-guide.md)

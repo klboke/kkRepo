@@ -147,6 +147,11 @@ public interface AssetDao {
 
   List<AssetRecord> listAssetsByComponent(long componentId);
 
+  /** Checks component completeness without loading assets outside a bounded selection. */
+  default boolean hasComponentAssetsOutside(long componentId, Collection<Long> selectedIds) {
+    throw new UnsupportedOperationException("Bounded component membership checks are not implemented");
+  }
+
   /**
    * Loads assets for a bounded set of components in backend-sized batches.
    *

@@ -260,6 +260,21 @@ public class JdbcBrowseNodeDao implements com.github.klboke.kkrepo.persistence.j
     return Map.copyOf(paths);
   }
 
+  @Override
+  public List<DeletionNode> listDeletionChildren(long repositoryId, List<Long> parentIds, int limit) {
+    if (parentIds == null || parentIds.isEmpty() || limit <= 0) return List.of();
+    List<Object> args = new ArrayList<>();
+    args.add(repositoryId);
+    args.addAll(parentIds);
+    args.add(limit);
+    return jdbcTemplate.query(
+        "SELECT id, path, asset_id FROM browse_node WHERE repository_id = ? AND parent_id IN ("
+            + placeholders(parentIds.size()) + ") ORDER BY id LIMIT ?",
+        (rs, rowNum) -> new DeletionNode(
+            rs.getLong("id"), rs.getString("path"), nullableLong(rs, "asset_id")),
+        args.toArray());
+  }
+
   private Optional<NodeRef> findNodeByAssetId(long assetId) {
     List<NodeRef> rows = jdbcTemplate.query(
         "SELECT parent_id FROM browse_node WHERE asset_id = ?",

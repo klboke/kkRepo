@@ -145,10 +145,11 @@ test("renders folder details with the repository format icon", async () => {
   assert.notEqual(start, -1);
   assert.notEqual(end, -1);
 
-  const mount = { innerHTML: "" };
+  const mount = { innerHTML: "", isConnected: true };
   let rendered = null;
   const entry = { path: "v1/providers/acme/demo", leaf: false };
   const context = vm.createContext({
+    state: { repo: "terraform-hosted", path: entry.path },
     detailPaneMount: () => mount,
     renderDetailPane: (value) => { rendered = value; },
     repositoryFormatIcon: () => "<format-icon>",

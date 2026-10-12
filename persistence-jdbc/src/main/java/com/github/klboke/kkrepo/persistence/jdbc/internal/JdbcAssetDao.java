@@ -704,6 +704,17 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
   }
 
   @Override
+  public boolean hasComponentAssetsOutside(long componentId, Collection<Long> selectedIds) {
+    List<Long> ids = distinctPositiveIds(selectedIds);
+    List<Object> parameters = new ArrayList<>();
+    parameters.add(componentId);
+    parameters.addAll(ids);
+    String exclusion = ids.isEmpty() ? "" : " AND id NOT IN (" + placeholders(ids.size()) + ")";
+    return !jdbcTemplate.queryForList("SELECT id FROM asset WHERE component_id = ?"
+        + exclusion + " LIMIT 1", Long.class, parameters.toArray()).isEmpty();
+  }
+
+  @Override
   public List<AssetRecord> listAssetsByComponents(Collection<Long> componentIds) {
     List<Long> ids = distinctPositiveIds(componentIds);
     if (ids.isEmpty()) return List.of();

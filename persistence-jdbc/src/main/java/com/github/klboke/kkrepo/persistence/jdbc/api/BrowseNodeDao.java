@@ -31,6 +31,13 @@ public interface BrowseNodeDao {
     return Map.of();
   }
 
+  /** Indexed, bounded children for an administrative deletion preview. No repository-wide scan. */
+  default List<DeletionNode> listDeletionChildren(long repositoryId, List<Long> parentIds, int limit) {
+    throw new UnsupportedOperationException("Bounded Browse deletion listing is unavailable");
+  }
+
+  record DeletionNode(long id, String path, Long assetId) {}
+
   record BrowseChild(
       long id,
       String path,

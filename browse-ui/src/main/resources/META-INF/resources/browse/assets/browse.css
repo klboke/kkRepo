@@ -2937,3 +2937,25 @@ body {
     padding: 0 10px;
   }
 }
+
+/* Destructive directory actions keep the complete preview inside an accessible modal. */
+.directory-delete-dialog {
+  width: min(640px, calc(100vw - 40px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  border: 1px solid var(--border-color, #d5d9dc);
+  border-radius: 8px;
+  padding: 24px;
+  color: var(--text-color, #24282c);
+  background: var(--panel-bg, #fff);
+}
+.directory-delete-dialog::backdrop { background: rgb(0 0 0 / 40%); }
+.directory-delete-dialog h2 { margin-top: 0; }
+.directory-delete-dialog code, .directory-delete-dialog strong { overflow-wrap: anywhere; }
+.directory-delete-dialog label { display: block; margin: 18px 0 8px; }
+.directory-delete-dialog input { box-sizing: border-box; width: 100%; padding: 8px; }
+.directory-delete-dialog details { margin: 12px 0; }
+.directory-delete-paths { max-height: 220px; overflow: auto; padding-left: 24px; }
+.directory-delete-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+.directory-delete-error { color: #a61b1b; }
+.directory-delete-dialog button:disabled { opacity: .5; cursor: not-allowed; }

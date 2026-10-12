@@ -78,6 +78,20 @@ class ManagementAuditFilterTest {
   }
 
   @Test
+  void directoryMutationRecordsTrustedScopeAndCount() throws Exception {
+    SecurityAuditDao auditDao = mock(SecurityAuditDao.class);
+    var request = new MockHttpServletRequest("POST", "/internal/browse/hosted/directory-deletion");
+    filter(auditDao, "", false).doFilter(request, new MockHttpServletResponse(), (req, resp) ->
+        req.setAttribute(ManagementAuditFilter.OPERATION_DETAILS_ATTRIBUTE, java.util.Map.of(
+            "operation", "browse.directory.delete", "repository", "hosted", "path", "release", "deletedAssets", 2)));
+    var record = ArgumentCaptor.forClass(AuditLogRecord.class);
+    verify(auditDao).insert(record.capture());
+    assertEquals("SUCCESS", record.getValue().outcome());
+    assertEquals("release", record.getValue().details().get("path"));
+    assertEquals(2, record.getValue().details().get("deletedAssets"));
+  }
+
+  @Test
   void readAndNonManagementRequestsAreNotAudited() throws Exception {
     SecurityAuditDao auditDao = mock(SecurityAuditDao.class);
     ManagementAuditFilter filter = filter(auditDao, "", false);

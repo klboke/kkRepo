@@ -20,8 +20,8 @@ test("keeps the expanded navigation inside the sidebar scroll container", () => 
 test("cache-busts the current Browse assets", () => {
   const html = readFileSync(resolve(browseRoot, "index.html"), "utf8");
 
-  assert.match(html, /browse\.css\?v=20260826-nexus-a11y-1/);
-  assert.match(html, /browse\.js\?v=20261009-initial-route-2/);
+  assert.match(html, /browse\.css\?v=20261013-directory-delete-1/);
+  assert.match(html, /browse\.js\?v=20261013-directory-delete-1/);
   assert.match(html, /format-icons\.css\?v=20261009-gitlfs-2/);
 });
 

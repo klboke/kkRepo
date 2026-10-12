@@ -553,6 +553,13 @@ function canDeleteBrowseContent() {
   return Boolean(currentSession && can("nexus:*"));
 }
 
+function canDeleteBrowseDirectory(entry) {
+  const repo = currentRepository();
+  return canDeleteBrowseContent() && entry && !entry.leaf && Boolean(entry.path)
+    && String(repo?.type).toLowerCase() === "hosted"
+    && ["maven2", "npm", "pypi", "nuget", "helm", "yum", "rubygems", "raw"].includes(repo?.format);
+}
+
 function hasUploadPermission() {
   return can("nexus:component:create") || hasRepositoryUploadPermission();
 }
@@ -1539,9 +1546,7 @@ async function ensureTreeLevelLoaded(path, mountEl, depth) {
 
 async function activateTreeBranch(entry, toggleExpand) {
   const expansion = toggleExpand();
-  if (VERSION_DIR_RE.test(entry.name) || hasDirectoryUsage(entry)) {
-    await showComponentDetail(entry);
-  }
+  await showComponentDetail(entry);
   await expansion;
 }
 
@@ -1680,7 +1685,7 @@ async function selectInitialTreePath() {
   const entry = treeNodeEntries.get(node) || findCachedTreeEntry(state.path);
   if (!entry) return;
   if (entry.leaf) await showAssetDetail(entry);
-  else if (VERSION_DIR_RE.test(entry.name) || hasDirectoryUsage(entry)) await showComponentDetail(entry);
+  else await showComponentDetail(entry);
 }
 
 async function revealTreePath(path) {
@@ -1896,6 +1901,8 @@ function bindDeleteControl(mount, entry) {
 
 async function deleteBrowseEntry(entry, button) {
   if (!entry || !entry.path || !state.repo) return;
+  if (canDeleteBrowseDirectory(entry)) return previewDirectoryDeletion(entry, button);
+  const repository = state.repo;
   const label = entry.leaf ? entry.name : entry.path;
   const historyWarning = currentRepository()?.format === "gitlfs"
     ? "\nThis may break checkouts of Git commits that reference this LFS object." : "";
@@ -1919,19 +1926,173 @@ async function deleteBrowseEntry(entry, button) {
     if (!res.ok) {
       throw new Error(await deleteError(res));
     }
-    treeCache.clear();
-    const deletedKey = `${state.repo}::${entry.path}`;
-    for (const key of Array.from(expanded)) {
-      if (key === deletedKey || key.startsWith(`${deletedKey}/`)) {
-        expanded.delete(key);
-      }
-    }
-    renderTree();
+    await refreshTreeAfterDeletion(repository, entry);
   } catch (error) {
     button.disabled = false;
     button.textContent = originalText;
     window.alert(`Delete failed: ${error.message}`);
   }
+}
+
+async function previewDirectoryDeletion(entry, button) {
+  if (!canDeleteBrowseDirectory(entry)) return;
+  const repository = state.repo;
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = "Reviewing…";
+  try {
+    const params = new URLSearchParams({ path: entry.path });
+    const response = await fetch(`/internal/browse/${encodeURIComponent(repository)}/directory-deletion?${params}`, {
+      headers: { Accept: "application/json" }, cache: "no-store",
+    });
+    if (!response.ok) throw new Error(await deleteError(response));
+    const preview = await response.json();
+    if (state.repo !== repository || state.path !== entry.path) return;
+    showDirectoryDeletionDialog(repository, entry, preview, button);
+  } catch (error) {
+    window.alert(`Cannot delete directory: ${error.message}`);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
+function showDirectoryDeletionDialog(repository, entry, preview, trigger) {
+  const fileLabel = `${preview.assetCount} ${preview.assetCount === 1 ? "file" : "files"}`;
+  const componentLabel = `${preview.componentCount} ${preview.componentCount === 1 ? "component" : "components"}`;
+  const dialog = document.createElement("dialog");
+  dialog.className = "directory-delete-dialog";
+  dialog.setAttribute("aria-labelledby", "directory-delete-title");
+  dialog.innerHTML = `
+    <form>
+      <h2 id="directory-delete-title">Delete directory contents?</h2>
+      <p>Repository: <strong>${escapeHtml(repository)}</strong><br>Directory: <code>${escapeHtml(preview.path)}</code></p>
+      <p>This permanently deletes <strong>${fileLabel}</strong> across ${componentLabel}
+        (${formatBytes(preview.estimatedBytes)}), including subdirectories. This action cannot be undone.</p>
+      ${preview.metadataAssetCount ? `<p>${preview.metadataAssetCount} generated metadata files are managed by the package protocol and may remain or be regenerated.</p>` : ""}
+      <details><summary>Review all affected paths</summary>
+        <ul class="directory-delete-paths">${preview.items.map((item) => `<li><code>${escapeHtml(item.path)}</code>${item.action === "PROTOCOL_METADATA" ? " (protocol metadata)" : ""}</li>`).join("")}</ul>
+      </details>
+      <label for="directory-delete-confirmation">Type <strong>${escapeHtml(preview.path)}</strong> to confirm:</label>
+      <input id="directory-delete-confirmation" type="text" autocomplete="off" spellcheck="false" required>
+      <p class="directory-delete-error" role="alert"></p>
+      <div class="directory-delete-actions">
+        <button type="button" class="secondary-button" data-delete-cancel autofocus>Cancel</button>
+        <button type="button" class="secondary-button" data-delete-refresh hidden>Review again</button>
+        <button type="submit" class="detail-delete-button" data-delete-confirm disabled>Delete ${fileLabel}</button>
+      </div>
+    </form>`;
+  document.body.appendChild(dialog);
+  const input = dialog.querySelector("input");
+  const confirm = dialog.querySelector("[data-delete-confirm]");
+  const cancel = dialog.querySelector("[data-delete-cancel]");
+  const refresh = dialog.querySelector("[data-delete-refresh]");
+  const error = dialog.querySelector(".directory-delete-error");
+  let deleting = false;
+  let invalidated = false;
+  input.addEventListener("input", () => {
+    confirm.disabled = deleting || invalidated || input.value !== preview.path;
+  });
+  cancel.addEventListener("click", () => dialog.close());
+  dialog.addEventListener("cancel", (event) => { if (deleting) event.preventDefault(); });
+  dialog.addEventListener("close", () => {
+    dialog.remove();
+    if (trigger.isConnected) trigger.focus({ preventScroll: true });
+  });
+  refresh.addEventListener("click", () => {
+    dialog.close();
+    if (state.repo === repository && state.path === entry.path) previewDirectoryDeletion(entry, trigger);
+  });
+  dialog.querySelector("form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (deleting || invalidated || input.value !== preview.path) return;
+    // Capture the repository and path from the reviewed preview, never from changing navigation.
+    deleting = true;
+    confirm.disabled = true;
+    cancel.disabled = true;
+    input.disabled = true;
+    confirm.textContent = "Deleting…";
+    error.textContent = "";
+    try {
+      const response = await fetch(`/internal/browse/${encodeURIComponent(repository)}/directory-deletion`, {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ path: preview.path, confirmationPath: input.value, selectionToken: preview.selectionToken }),
+      });
+      if (!response.ok) throw new Error(await deleteError(response));
+      dialog.close();
+      try {
+        await refreshTreeAfterDeletion(repository, entry);
+      } catch (refreshFailure) {
+        window.alert(`Directory deleted, but Browse could not refresh: ${refreshFailure.message}. Reload the page.`);
+      }
+    } catch (failure) {
+      // An ambiguous network failure may follow a committed deletion. Always require a fresh
+      // preview before retrying, including when the server rejects a changed selection (409).
+      invalidated = true;
+      error.textContent = failure.message;
+      refresh.hidden = false;
+    } finally {
+      deleting = false;
+      cancel.disabled = false;
+      confirm.textContent = `Delete ${fileLabel}`;
+    }
+  });
+  dialog.showModal();
+}
+
+async function refreshTreeAfterDeletion(repository, entry) {
+  treeCache.clear();
+  const deletedKey = `${repository}::${entry.path}`;
+  for (const key of Array.from(expanded)) {
+    if (key === deletedKey || key.startsWith(`${deletedKey}/`)) expanded.delete(key);
+  }
+  if (state.repo !== repository) return;
+  const tree = document.querySelector(".tree-left");
+  const root = document.getElementById("tree-root");
+  if (!tree || !root) return;
+  const position = { top: tree.scrollTop, left: tree.scrollLeft };
+  const selectedPath = state.path;
+  const oldMinHeight = root.style.minHeight;
+  // Preserve the scroll extent while expanded branches are being reloaded asynchronously.
+  root.style.minHeight = `${root.scrollHeight}px`;
+  try {
+    await loadAndRenderTreeLevel("", root, 0);
+    await settleExpandedTreeLoads(root);
+    if (state.repo !== repository || !root.isConnected) return;
+    if (state.path === selectedPath) {
+      let path = selectedPath;
+      let node;
+      while (path && !(node = root.querySelector(`.tree-node[data-path="${pathSelectorValue(path)}"]`))) {
+        path = pathSegments(path).slice(0, -1).join("/");
+      }
+      if (node) {
+        const selectedEntry = treeNodeEntries.get(node);
+        selectRow(node.querySelector(":scope > .tree-row"));
+        syncTreePath(selectedEntry);
+        if (selectedEntry.leaf) await showAssetDetail(selectedEntry);
+        else await showComponentDetail(selectedEntry);
+      } else {
+        state.path = "";
+        window.history.replaceState(null, "", `/browse/${repositoryBrowseHash(repository, "", state.source)}`);
+        detailPaneMount().innerHTML = '<div class="detail-placeholder">Select a component or file in the tree to view details.</div>';
+      }
+    }
+  } finally {
+    root.style.minHeight = oldMinHeight;
+    if (state.repo === repository && root.isConnected) {
+      tree.scrollTop = position.top;
+      tree.scrollLeft = position.left;
+    }
+  }
+}
+
+async function settleExpandedTreeLoads(root) {
+  const pending = Array.from(root.querySelectorAll(".tree-children"))
+    .map((mount) => treeMountLoads.get(mount)).filter(Boolean);
+  if (!pending.length) return;
+  await Promise.all(pending);
+  await settleExpandedTreeLoads(root);
 }
 
 async function deleteError(response) {
@@ -3181,17 +3342,20 @@ async function usageDetailForEntry(entry, detail = null) {
 async function showComponentDetail(entry) {
   const mount = detailPaneMount();
   if (!mount) return;
+  const repository = state.repo;
   const detail = await usageDetailForEntry(entry);
-  if (!detail) {
-    mount.innerHTML = `<div class="detail-placeholder">No component coordinates for this path.</div>`;
-    return;
-  }
+  if (state.repo !== repository || state.path !== entry.path || !mount.isConnected) return;
   renderDetailPane({
     crumbIcon: repositoryFormatIcon(),
-    crumbText: detail.crumbText,
-    summaryRows: detail.summaryRows,
-    snippets: detail.snippets,
-    deleteEntry: entry,
+    crumbText: detail?.crumbText || entry.path,
+    summaryRows: detail?.summaryRows || [
+      ["Repository", repository],
+      ["Directory", entry.path],
+    ],
+    snippets: detail?.snippets || [],
+    // Preserve existing protocol component actions; only supported hosted formats gain a
+    // delete action for arbitrary directories without component coordinates.
+    deleteEntry: detail || canDeleteBrowseDirectory(entry) ? entry : null,
   });
 }
 
