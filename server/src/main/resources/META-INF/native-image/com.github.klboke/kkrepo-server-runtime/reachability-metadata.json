@@ -85,6 +85,107 @@
             "allowHeapAccess": true
           }
         }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": []
+      },
+      {
+        "returnType": "void",
+        "parameterTypes": ["void*", "void*", "void*"]
+      },
+      {
+        "returnType": "size_t",
+        "parameterTypes": ["size_t"]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["size_t"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["size_t"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "size_t", "int"],
+        "options": {
+          "critical": {
+            "allowHeapAccess": true
+          }
+        }
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "size_t", "int"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "size_t"],
+        "options": {
+          "critical": {
+            "allowHeapAccess": true
+          }
+        }
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "size_t"]
+      },
+      {
+        "returnType": "size_t",
+        "parameterTypes": ["void*", "void*", "size_t", "void*", "size_t"]
+      },
+      {
+        "returnType": "size_t",
+        "parameterTypes": ["void*", "size_t"],
+        "options": {
+          "critical": {
+            "allowHeapAccess": true
+          }
+        }
+      },
+      {
+        "returnType": "size_t",
+        "parameterTypes": ["void*", "size_t"]
+      },
+      {
+        "returnType": "size_t",
+        "parameterTypes": ["void*", "size_t", "int"],
+        "options": {
+          "critical": {
+            "allowHeapAccess": true
+          }
+        }
+      },
+      {
+        "returnType": "size_t",
+        "parameterTypes": ["void*", "size_t", "int"]
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["void*", "size_t"],
+        "options": {
+          "critical": {
+            "allowHeapAccess": true
+          }
+        }
+      },
+      {
+        "returnType": "int",
+        "parameterTypes": ["void*", "size_t"]
+      },
+      {
+        "returnType": "size_t",
+        "parameterTypes": ["void*", "size_t", "void*", "size_t"]
+      },
+      {
+        "returnType": "size_t",
+        "parameterTypes": ["void*", "size_t", "void*", "void*", "int", "int"]
+      },
+      {
+        "returnType": "size_t",
+        "parameterTypes": ["void*", "size_t", "void*", "void*", "int", "struct(int,struct(int,int,int))"]
       }
     ]
   }
