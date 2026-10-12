@@ -223,7 +223,7 @@ jobs:
 
       - name: Set up Go for public HTTPS acceptance
         if: env.LIVE_COMPAT_SUITE == 'full' || env.LIVE_COMPAT_SUITE == 'public-https'
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: "1.25"
           cache: false
@@ -769,7 +769,7 @@ jobs:
           cache: maven
 
       - name: Set up Go for public HTTPS acceptance
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: "1.25"
           cache: false
