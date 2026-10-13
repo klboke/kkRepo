@@ -72,8 +72,10 @@ Yank updates availability metadata; it is not a substitute for a cleanup policy.
   pre-download of upstream gems is required after upgrading.
 - Group aggregation retains at most 3,000,000 distinct rows, with a payload budget including framing
   overhead of 256 MiB for legacy/dependency indexes and 64 MiB for compact indexes. Oversized groups
-  return 502; split their members into smaller groups. A busy large-index worker returns 503 with
-  `Retry-After: 1` after waiting up to 30 seconds for capacity.
+  return 502; split their members into smaller groups. Group metadata requests, including dependency
+  queries and per-gem info, share per-process capacity and return 503 with `Retry-After: 1` after
+  waiting up to 30 seconds. Conflicting versions return 404 for client fallback if a contributing
+  member's info becomes unavailable, instead of advertising an incomplete merged index.
 
 ## Operations And Troubleshooting
 

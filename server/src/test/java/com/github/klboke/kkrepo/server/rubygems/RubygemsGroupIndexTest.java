@@ -17,6 +17,10 @@ import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.zip.GZIPInputStream;
 import org.junit.jupiter.api.Test;
 
@@ -102,6 +106,35 @@ class RubygemsGroupIndexTest {
   }
 
   @Test
+  void gemNamesEndingInLegacyIndexNamesKeepTheirEndpointRouting() throws Exception {
+    String name = "demo-specs.4.8.gz";
+    String info = "---\n1.0\n";
+    put(hosted, "info/" + name, info);
+    assertEquals(info, text(index().get("info/" + name, false)));
+    String path = "api/v1/dependencies?gems=" + name;
+    var row = dependency(name, "1.0", "rack", ">= 0");
+    responses.put("1/" + path, RubygemsIndexMarshal.dependencies(List.of(row)));
+    responses.put("2/" + path, RubygemsIndexMarshal.dependencies(List.of()));
+    List<Map<String, Object>> rows = new ArrayList<>();
+    try (InputStream input = index().get(path, false).body()) {
+      RubygemsIndexMarshal.readDependencies(input, rows::add);
+    }
+    assertEquals(List.of(row), rows);
+  }
+
+  @Test
+  void conflictingVersionsFallBackWhenAContributingInfoBecomesUnavailable() throws Exception {
+    put(hosted, "versions", "---\ndemo 1.0 " + "a".repeat(32) + "\n");
+    put(proxy, "versions", "---\ndemo 2.0 " + "b".repeat(32) + "\n");
+    put(hosted, "info/demo", "---\n1.0 |checksum:a\n");
+    assertEquals(404, index().get("versions", false).status());
+    put(proxy, "info/demo", "---\n");
+    assertEquals(404, index().get("versions", true).status());
+    put(proxy, "info/demo", "---\n2.0 |checksum:b\n");
+    assertTrue(text(index().get("versions", false)).contains("demo 1.0,2.0 "));
+  }
+
+  @Test
   void legacyOnlyMemberDisablesPartialCompactVersions() {
     put(hosted, "versions", "---\nprivate 1.0 " + "a".repeat(32) + "\n");
     assertEquals(404, index().get("versions", false).status());
@@ -113,6 +146,8 @@ class RubygemsGroupIndexTest {
     assertTrue(RubygemsGroupIndex.compareVersions("1.0.pre.2", "1.0") < 0);
     assertTrue(RubygemsGroupIndex.compareVersions("1.0.a10", "1.0.a2") > 0);
     assertEquals(0, RubygemsGroupIndex.compareVersions("1.0.0", "1"));
+    assertEquals(0, RubygemsGroupIndex.compareVersions("1.0.0.a.0", "1.a"));
+    assertTrue(RubygemsGroupIndex.compareVersions("1.0.0.a", "1.b") < 0);
   }
 
   @Test
@@ -237,7 +272,7 @@ class RubygemsGroupIndexTest {
     put(hosted, "info/demo", "---\n1 |checksum:a\n");
     put(proxy, "info/demo", "---\n2 |checksum:b\n");
     // Initial rows fit; replacing demo's version list with "1,2" crosses the byte budget.
-    assertThrows(MavenExceptions.BadUpstreamException.class, () -> index(10, 156).get("versions", false));
+    assertThrows(MavenExceptions.BadUpstreamException.class, () -> index(10, 188).get("versions", false));
   }
 
   @Test
@@ -275,15 +310,69 @@ class RubygemsGroupIndexTest {
 
   @Test
   void interruptedLargeIndexRequestReturnsRetryableResponseAndPreservesInterrupt() {
-    Thread.currentThread().interrupt();
-    try {
-      MavenResponse response = index().get("versions", false);
-      assertEquals(503, response.status());
-      assertEquals("1", response.headers().get("Retry-After"));
-      assertTrue(Thread.currentThread().isInterrupted());
-    } finally {
-      Thread.interrupted();
+    for (String path : List.of("specs.4.8.gz", "versions", "names", "info/demo",
+        "api/v1/dependencies", "api/v1/dependencies?gems=demo")) {
+      Thread.currentThread().interrupt();
+      try {
+        MavenResponse response = index().get(path, false);
+        assertEquals(503, response.status(), path);
+        assertEquals("1", response.headers().get("Retry-After"));
+        assertTrue(Thread.currentThread().isInterrupted());
+      } finally {
+        Thread.interrupted();
+      }
     }
+  }
+
+  @Test
+  void dependencyRequestsShareCapacityBeforeReadingAnyMember() throws Exception {
+    var entered = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    var secondStarted = new CountDownLatch(1);
+    var calls = new AtomicInteger();
+    var first = new AtomicReference<MavenResponse>();
+    var second = new AtomicReference<MavenResponse>();
+    var failure = new AtomicReference<Throwable>();
+    byte[] body = RubygemsIndexMarshal.dependencies(List.of(dependency("demo", "1", "rack", ">= 0")));
+    var single = runtime(4, RepositoryType.GROUP, List.of(hosted));
+    var index = new RubygemsGroupIndex(single, (member, path) -> {
+      if (calls.incrementAndGet() == 1) {
+        entered.countDown();
+        try { if (!release.await(15, TimeUnit.SECONDS)) throw new IllegalStateException("Fixture timed out"); }
+        catch (InterruptedException e) { throw new IllegalStateException(e); }
+      }
+      return MavenResponse.ok(new ByteArrayInputStream(body), body.length, "application/octet-stream", null, null);
+    });
+    Thread owner = Thread.startVirtualThread(() -> {
+      try { first.set(index.get("api/v1/dependencies", false)); }
+      catch (Throwable e) { failure.set(e); }
+    });
+    Thread waiter = null;
+    try {
+      assertTrue(entered.await(5, TimeUnit.SECONDS));
+      waiter = Thread.startVirtualThread(() -> {
+        secondStarted.countDown();
+        try { second.set(index.get("api/v1/dependencies?gems=demo", false)); }
+        catch (Throwable e) { failure.set(e); }
+      });
+      assertTrue(secondStarted.await(5, TimeUnit.SECONDS));
+      waiter.interrupt();
+      waiter.join(5000);
+      assertFalse(waiter.isAlive());
+      assertNull(failure.get());
+      assertNotNull(second.get());
+      assertEquals(503, second.get().status());
+      assertEquals(1, calls.get(), "the waiting request must not allocate a member index");
+    } finally {
+      release.countDown();
+      owner.join(5000);
+      if (waiter != null && waiter.isAlive()) { waiter.interrupt(); waiter.join(5000); }
+      if (first.get() != null) first.get().closeBodyIfOpen();
+      if (second.get() != null) second.get().closeBodyIfOpen();
+    }
+    assertFalse(owner.isAlive());
+    assertNull(failure.get());
+    assertEquals(200, first.get().status());
   }
 
   @Test

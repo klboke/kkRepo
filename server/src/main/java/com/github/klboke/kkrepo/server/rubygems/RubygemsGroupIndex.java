@@ -10,6 +10,7 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
@@ -27,7 +28,8 @@ import java.util.zip.GZIPInputStream;
 /** Request-local aggregation. Member reads retain the shared proxy cache and outbound policy. */
 final class RubygemsGroupIndex {
   private static final int MAX_TEXT_BYTES = 64 * 1024 * 1024;
-  // A full public index is large. This is a per-process memory bulkhead, not repository state
+  // Any aggregated index, including dependency queries and per-gem info, can be large.
+  // This is a per-process memory bulkhead, not repository state
   // or a distributed lock: every replica independently derives responses from shared members.
   private static final ReentrantLock LARGE_INDEX_SLOT = new ReentrantLock(true);
   private final RepositoryRuntime group;
@@ -49,23 +51,24 @@ final class RubygemsGroupIndex {
   }
 
   static boolean handles(String path) {
-    return path.equals("specs.4.8.gz") || path.equals("latest_specs.4.8.gz")
-        || path.equals("prerelease_specs.4.8.gz") || path.equals("names")
+    return isSpecs(path) || path.equals("names")
         || path.equals("versions") || path.startsWith("info/")
         || path.equals("api/v1/dependencies") || path.startsWith("api/v1/dependencies?");
   }
 
+  private static boolean isSpecs(String path) {
+    return path.equals("specs.4.8.gz") || path.equals("latest_specs.4.8.gz")
+        || path.equals("prerelease_specs.4.8.gz");
+  }
+
   MavenResponse get(String path, boolean headOnly) {
-    boolean large = path.endsWith("specs.4.8.gz") || path.equals("versions") || path.equals("names");
     boolean acquired = false;
     try {
-      if (large) {
-        acquired = LARGE_INDEX_SLOT.tryLock(30, TimeUnit.SECONDS);
-        if (!acquired) return MavenResponse.noBody(503).withHeader("Retry-After", "1");
-      }
+      acquired = LARGE_INDEX_SLOT.tryLock(30, TimeUnit.SECONDS);
+      if (!acquired) return MavenResponse.noBody(503).withHeader("Retry-After", "1");
       byte[] body;
       String contentType;
-      if (path.endsWith("specs.4.8.gz")) {
+      if (isSpecs(path)) {
         body = specs(path); contentType = "application/octet-stream";
       } else if (path.startsWith("api/v1/dependencies")) {
         body = dependencies(path); contentType = "application/octet-stream";
@@ -165,15 +168,26 @@ final class RubygemsGroupIndex {
   }
 
   private byte[] info(String path) throws IOException {
+    return info(path, List.of());
+  }
+
+  private byte[] info(String path, List<RepositoryRuntime> required) throws IOException {
     byte[] first = null;
     boolean identical = true;
     Map<String, String> merged = new TreeMap<>();
     var budget = budget(true);
     for (RepositoryRuntime member : group.members()) {
       byte[] body = text(member, path);
-      if (body == null || Arrays.equals(first, body)) continue;
+      if (body == null) {
+        if (required.contains(member)) return null;
+        continue;
+      }
+      if (Arrays.equals(first, body)) continue;
       Map<String, String> rows = infoRows(body);
-      if (rows.isEmpty()) continue;
+      if (rows.isEmpty()) {
+        if (required.contains(member)) return null;
+        continue;
+      }
       if (first == null) first = body; else identical = false;
       rows.forEach((version, line) -> {
         if (!merged.containsKey(version)) {
@@ -199,14 +213,24 @@ final class RubygemsGroupIndex {
       if (body == null) return null;
       found = true;
       Map<String, Versions> current = versionRows(body);
+      List<RepositoryRuntime> source = List.of(member);
       current.forEach((name, row) -> {
         Versions first = merged.get(name);
         if (first == null) {
           budget.add(name, row.versions, row.checksum);
-          merged.put(name, row);
-        } else if (!first.versions.equals(row.versions) || !first.checksum.equals(row.checksum)) {
-          // Only conflicting names need per-gem reads. Keep the first row until resolution.
-          merged.put(name, new Versions(first.versions, first.checksum, true));
+          merged.put(name, new Versions(row.versions, row.checksum, row.conflict,
+              row.versions.isEmpty() ? List.of() : source));
+        } else {
+          List<RepositoryRuntime> contributors = first.contributors;
+          if (!row.versions.isEmpty()) {
+            budget.charge(32); // Account for the retained contributor list, even for mirrors.
+            var combined = new ArrayList<>(contributors);
+            combined.add(member);
+            contributors = List.copyOf(combined);
+          }
+          boolean conflict = first.conflict || row.conflict
+              || !first.versions.equals(row.versions) || !first.checksum.equals(row.checksum);
+          merged.put(name, new Versions(first.versions, first.checksum, conflict, contributors));
         }
       });
     }
@@ -215,8 +239,14 @@ final class RubygemsGroupIndex {
     for (var entry : merged.entrySet()) {
       Versions row = entry.getValue();
       if (row.conflict) {
-        byte[] info = info("info/" + entry.getKey());
-        if (info == null) continue;
+        boolean strict = row.contributors.size() > 1;
+        byte[] info = info("info/" + entry.getKey(), strict ? row.contributors : List.of());
+        if (info == null) {
+          // Do not publish a cached 200 response that silently drops a conflicting member.
+          // A stale, single-source missing-checksum entry can still be skipped as before.
+          if (strict) return null;
+          continue;
+        }
         Versions resolved = new Versions(String.join(",", infoRows(info).keySet()), md5(info), false);
         budget.replace(List.of(entry.getKey(), row.versions, row.checksum),
             List.of(entry.getKey(), resolved.versions, resolved.checksum));
@@ -324,6 +354,7 @@ final class RubygemsGroupIndex {
     }
 
     void replace(Object previous, Object replacement) { check(bytes - size(previous) + size(replacement)); }
+    void charge(long additional) { check(bytes + additional); }
 
     private void check(long next) {
       if (next > maxBytes) throw oversized();
@@ -357,8 +388,7 @@ final class RubygemsGroupIndex {
   // Gem::Version compares numeric segments numerically, strings lexically, and prerelease
   // strings below numeric segments. Numeric components may exceed a Java int or long.
   static int compareVersions(String left, String right) {
-    List<String> a = VERSION_PART.matcher(left.replace("-", ".pre.")).results().map(match -> match.group()).toList();
-    List<String> b = VERSION_PART.matcher(right.replace("-", ".pre.")).results().map(match -> match.group()).toList();
+    List<String> a = canonicalSegments(left), b = canonicalSegments(right);
     for (int i = 0; i < Math.max(a.size(), b.size()); i++) {
       String x = i < a.size() ? a.get(i) : "0", y = i < b.size() ? b.get(i) : "0";
       boolean xn = Character.isDigit(x.charAt(0)), yn = Character.isDigit(y.charAt(0));
@@ -369,5 +399,24 @@ final class RubygemsGroupIndex {
     return 0;
   }
 
-  private record Versions(String versions, String checksum, boolean conflict) { }
+  private static List<String> canonicalSegments(String version) {
+    var parts = new ArrayList<>(VERSION_PART.matcher(version.replace("-", ".pre."))
+        .results().map(match -> match.group()).toList());
+    // Gem::Version removes trailing numeric zeros from both the release and prerelease
+    // portions before comparing: 1.0.0.a.0 and 1.a denote the same version.
+    while (!parts.isEmpty() && parts.getLast().chars().allMatch(c -> c == '0')) parts.removeLast();
+    int releaseEnd = 0;
+    while (releaseEnd < parts.size() && Character.isDigit(parts.get(releaseEnd).charAt(0))) releaseEnd++;
+    while (releaseEnd > 0 && parts.get(releaseEnd - 1).chars().allMatch(c -> c == '0')) {
+      parts.remove(--releaseEnd);
+    }
+    return parts;
+  }
+
+  private record Versions(String versions, String checksum, boolean conflict,
+      List<RepositoryRuntime> contributors) {
+    private Versions(String versions, String checksum, boolean conflict) {
+      this(versions, checksum, conflict, List.of());
+    }
+  }
 }
