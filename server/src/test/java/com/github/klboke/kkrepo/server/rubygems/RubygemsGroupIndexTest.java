@@ -82,6 +82,26 @@ class RubygemsGroupIndexTest {
   }
 
   @Test
+  void missingChecksumFieldWithoutTrailingSpaceIsRecomputed() throws Exception {
+    put(hosted, "versions", "---\n");
+    put(proxy, "versions", "---\ndemo 1.0\n");
+    put(proxy, "info/demo", "---\n1.0 |checksum:abc\n");
+    String info = text(index().get("info/demo", false));
+    assertEquals("---\ndemo 1.0 " + md5(info) + "\n", text(index().get("versions", false)));
+  }
+
+  @Test
+  void compactInfoAllowsVersionOnlyAndDependencyOnlyRows() throws Exception {
+    put(hosted, "info/demo", "---\n1.0\n2.0 rack:>= 2\n");
+    put(proxy, "info/demo", "---\n1.0 ignored:>= 9\n3.0-java |ruby:>= 2.7\n");
+    put(hosted, "versions", "---\ndemo 1.0,2.0\n");
+    put(proxy, "versions", "---\ndemo 1.0,3.0-java\n");
+    String info = "---\n1.0\n2.0 rack:>= 2\n3.0-java |ruby:>= 2.7\n";
+    assertEquals(info, text(index().get("info/demo", false)));
+    assertEquals("---\ndemo 1.0,2.0,3.0-java " + md5(info) + "\n", text(index().get("versions", false)));
+  }
+
+  @Test
   void legacyOnlyMemberDisablesPartialCompactVersions() {
     put(hosted, "versions", "---\nprivate 1.0 " + "a".repeat(32) + "\n");
     assertEquals(404, index().get("versions", false).status());

@@ -133,11 +133,7 @@ final class RubygemsIndexMarshal {
       int count = size(MAX_ROWS);
       remember(null); // Root array can never be referenced as an index field.
       for (int i = 0; i < count; i++) {
-        int rowIndex = objects.size();
         consumer.accept(value(0));
-        // Tuple/hash rows are not link targets in the index contract. Release the completed
-        // row, retaining scalar links used by Ruby's deduplicated strings and Gem::Version.
-        if (objects.size() > rowIndex) objects.set(rowIndex, null);
       }
       if (input.read() != -1) throw invalid();
     }
@@ -167,13 +163,15 @@ final class RubygemsIndexMarshal {
         }
         case '[' -> {
           int count = size(10_000);
-          List<Object> values = new ArrayList<>(count); remember(values);
+          // Reserve the wire object index without retaining non-linkable collections,
+          // including every Gem::Version fields array nested inside streamed spec rows.
+          List<Object> values = new ArrayList<>(count); remember(null);
           for (int i = 0; i < count; i++) values.add(value(depth + 1));
           yield values;
         }
         case '{' -> {
           int count = size(32);
-          Map<String, Object> values = new LinkedHashMap<>(); remember(values);
+          Map<String, Object> values = new LinkedHashMap<>(); remember(null);
           for (int i = 0; i < count; i++) {
             Object key = value(depth + 1);
             if (!(key instanceof String string)) throw invalid();

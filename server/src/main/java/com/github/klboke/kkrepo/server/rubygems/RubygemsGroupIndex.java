@@ -233,8 +233,11 @@ final class RubygemsGroupIndex {
     var budget = budget(true);
     for (String line : lines(body)) {
       if (line.isBlank()) continue;
-      String[] fields = line.split(" ", 3);
-      if (fields.length != 3 || (!fields[2].isEmpty() && !fields[2].matches("[a-fA-F0-9]{32}"))) throw invalid();
+      String[] fields = line.strip().split("\\s+", 3);
+      if (fields.length < 2) throw invalid();
+      // Bundler accepts an omitted checksum as well as an explicitly empty field.
+      String checksum = fields.length == 3 ? fields[2] : "";
+      if (!checksum.isEmpty() && !checksum.matches("[a-fA-F0-9]{32}")) throw invalid();
       Versions previous = result.get(fields[0]);
       String versions = fields[1];
       if (previous != null || versions.startsWith("-") || versions.contains(",-")) {
@@ -245,10 +248,10 @@ final class RubygemsGroupIndex {
         }
         versions = String.join(",", values);
       }
-      if (previous == null) budget.add(fields[0], versions, fields[2]);
+      if (previous == null) budget.add(fields[0], versions, checksum);
       else budget.replace(List.of(fields[0], previous.versions, previous.checksum),
-          List.of(fields[0], versions, fields[2]));
-      result.put(fields[0], new Versions(versions, fields[2], fields[2].isEmpty()));
+          List.of(fields[0], versions, checksum));
+      result.put(fields[0], new Versions(versions, checksum, checksum.isEmpty()));
     }
     return result;
   }
@@ -258,9 +261,9 @@ final class RubygemsGroupIndex {
     var budget = budget(true);
     for (String line : lines(body)) {
       if (line.isBlank()) continue;
-      int space = line.indexOf(' ');
-      if (space <= 0 || !line.contains("|")) throw invalid();
-      String version = line.substring(0, space);
+      // Bundler's GemParser allows a bare version/platform token, dependencies without
+      // requirements, and requirements without dependencies. Preserve the original row.
+      String version = line.stripLeading().split("\\s+", 2)[0];
       String previous = result.get(version);
       if (previous == null) budget.add(version, line);
       else budget.replace(List.of(version, previous), List.of(version, line));
