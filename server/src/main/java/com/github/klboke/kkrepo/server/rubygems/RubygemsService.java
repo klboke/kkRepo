@@ -677,7 +677,7 @@ public class RubygemsService {
 
   static GemMetadata parseMetadataYaml(String yaml) {
     String name = null;
-    String version = null;
+    String version = parseNestedVersion(yaml);
     String platform = "ruby";
     String summary = "";
     List<String> authors = new ArrayList<>();
@@ -711,7 +711,7 @@ public class RubygemsService {
         inRequirements = false;
       }
       if (!inDependencies) {
-        if (trimmed.equals("authors:")) {
+        if (line.equals("authors:")) {
           inAuthors = true;
           continue;
         }
@@ -723,13 +723,13 @@ public class RubygemsService {
         if (!trimmed.startsWith("-") && trimmed.contains(":")) {
           inAuthors = false;
         }
-        if (trimmed.startsWith("name:")) name = cleanYaml(trimmed.substring("name:".length()));
-        if (version == null && trimmed.startsWith("version:")
-            && !trimmed.contains("!ruby/object:Gem::Version")) {
+        if (line.startsWith("name:")) name = cleanYaml(line.substring("name:".length()));
+        if (version == null && line.startsWith("version:")
+            && !line.contains("!ruby/object:Gem::Version")) {
           version = cleanYaml(trimmed.substring("version:".length()));
         }
-        if (trimmed.startsWith("platform:")) platform = cleanYaml(trimmed.substring("platform:".length()));
-        if (trimmed.startsWith("summary:")) summary = cleanYaml(trimmed.substring("summary:".length()));
+        if (line.startsWith("platform:")) platform = cleanYaml(trimmed.substring("platform:".length()));
+        if (line.startsWith("summary:")) summary = cleanYaml(trimmed.substring("summary:".length()));
         continue;
       }
       if (trimmed.startsWith("- !ruby/object:Gem::Dependency")) {
@@ -767,14 +767,8 @@ public class RubygemsService {
         String requirement = cleanYaml(trimmed.substring(1));
         if (!requirement.isBlank()) ((ArrayList<String>) dependencyRequirements).add(requirement);
       }
-      if (version == null && trimmed.startsWith("version:")) {
-        version = cleanYaml(trimmed.substring("version:".length()));
-      }
     }
     if (dependencyName != null) dependencies.add(new GemDependency(dependencyName, dependencyRequirements));
-    if (version == null) {
-      version = parseNestedVersion(yaml);
-    }
     if (name == null || version == null) {
       throw new MavenExceptions.MethodNotAllowed("Invalid RubyGems metadata");
     }
@@ -790,11 +784,11 @@ public class RubygemsService {
     boolean inVersion = false;
     for (String rawLine : yaml.split("\\R")) {
       String trimmed = rawLine.trim();
-      if (trimmed.equals("version: !ruby/object:Gem::Version")) {
+      if (rawLine.equals("version: !ruby/object:Gem::Version")) {
         inVersion = true;
         continue;
       }
-      if (inVersion && trimmed.startsWith("version:")) {
+      if (inVersion && rawLine.startsWith(" ") && trimmed.startsWith("version:")) {
         return cleanYaml(trimmed.substring("version:".length()));
       }
       if (inVersion && !trimmed.isBlank() && !trimmed.startsWith("version:")) {

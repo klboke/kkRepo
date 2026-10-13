@@ -134,6 +134,42 @@ class RubygemsServiceTest {
   }
 
   @Test
+  void multilineDescriptionCannotChangeRootFieldsAfterDependencies() {
+    RubygemsService.GemMetadata metadata = RubygemsService.parseMetadataYaml("""
+        --- !ruby/object:Gem::Specification
+        name: real-package
+        platform: ruby
+        summary: Real summary
+        authors:
+        - Real author
+        dependencies:
+        - !ruby/object:Gem::Dependency
+          name: rack
+          requirement: !ruby/object:Gem::Requirement
+            requirements:
+            - - "~>"
+              - !ruby/object:Gem::Version
+                version: 2.0
+        description: |-
+          name: fake-package
+          platform: java
+          summary: Fake summary
+          authors:
+          - Fake author
+          version: !ruby/object:Gem::Version
+            version: 9.9.9
+        version: !ruby/object:Gem::Version
+          version: 1.2.3
+        """);
+    assertEquals("real-package", metadata.name());
+    assertEquals("1.2.3", metadata.version());
+    assertEquals("ruby", metadata.platform());
+    assertEquals("Real summary", metadata.summary());
+    assertEquals(List.of("Real author"), metadata.authors());
+    assertEquals(List.of(new RubygemsService.GemDependency("rack", List.of("~> 2.0"))), metadata.dependencies());
+  }
+
+  @Test
   void buildsLegacySpecsMarshalArray() {
     byte[] marshal = RubygemsService.rubyMarshalSpecs(List.of(
         new RubygemsService.GemMetadata("demo", "1.0.0", "ruby", List.of())));
