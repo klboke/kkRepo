@@ -123,7 +123,11 @@ class DatabaseServerSmokeTest {
     put(first, runtime, firstPath);
     put(first, runtime, secondPath);
     var secondAsset = second.getBean(AssetDao.class).findAssetByPath(runtime.id(), secondPath).orElseThrow();
-    var leavesLocked = new CountDownLatch(2);
+    var branchNodes = mode.equals("directory") ? java.util.Set.of(
+        first.getBean(BrowseNodeDao.class).findNode(runtime.id(), directory + "/first").orElseThrow().id(),
+        first.getBean(BrowseNodeDao.class).findNode(runtime.id(), directory + "/second").orElseThrow().id())
+        : java.util.Set.<Long>of();
+    var branchesLocked = new CountDownLatch(2);
     var attempts = new java.util.concurrent.atomic.AtomicInteger();
     for (ConfigurableApplicationContext context : List.of(first, second)) {
       var initial = new java.util.concurrent.atomic.AtomicBoolean(true);
@@ -132,12 +136,23 @@ class DatabaseServerSmokeTest {
           List<T> result = super.queryForList(sql, type, args);
           if (sql.contains("WHERE asset_id = ? FOR UPDATE")) {
             attempts.incrementAndGet();
-            if (initial.getAndSet(false)) {
-              leavesLocked.countDown();
-              await(leavesLocked);
-            }
+            if (branchNodes.isEmpty()) synchronizeBranches();
           }
           return result;
+        }
+        @Override public <T> List<T> query(String sql, RowMapper<T> mapper, Object... args) {
+          List<T> result = super.query(sql, mapper, args);
+          if (sql.startsWith("SELECT parent_id, asset_id, has_asset_subtree")
+              && branchNodes.contains(args[0])) synchronizeBranches();
+          return result;
+        }
+        private void synchronizeBranches() {
+          // Directory leaves have different parents. Lock both branch roots before either
+          // reaches their common ancestor, otherwise READ_COMMITTED can serialize safely.
+          if (initial.getAndSet(false)) {
+            branchesLocked.countDown();
+            await(branchesLocked);
+          }
         }
       };
       for (String bean : List.of("rawAssetWriter", "browseContentDeleteController")) {
@@ -176,7 +191,7 @@ class DatabaseServerSmokeTest {
         }
       }
     }
-    assertTrue(attempts.get() >= 3, "one deadlock victim must retry the entire deletion");
+    assertTrue(attempts.get() >= 3, mode + ": one deadlock victim must retry the entire deletion");
     assertTrue(first.getBean(BrowseNodeDao.class).findNode(runtime.id(), directory).isEmpty());
     assertTrue(first.getBean(AssetDao.class).findAssetByPath(runtime.id(), firstPath).isEmpty());
     assertTrue(first.getBean(AssetDao.class).findAssetByPath(runtime.id(), secondPath).isEmpty());
