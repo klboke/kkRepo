@@ -48,6 +48,7 @@ import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
 import jakarta.servlet.http.HttpServletRequest;
+import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -71,6 +72,13 @@ import org.springframework.web.server.ResponseStatusException;
 @RestController
 @RequestMapping("/internal/browse")
 public class BrowseContentDeleteController {
+  private TransientTransactionRetry transactionRetry;
+
+  @Autowired
+  void setTransactionRetry(TransientTransactionRetry transactionRetry) {
+    this.transactionRetry = transactionRetry;
+  }
+
   private static final List<String> MAVEN_HASH_SUFFIXES = List.of(".sha1", ".sha256", ".sha512", ".md5");
   private static final SwiftPathParser SWIFT_PATHS = new SwiftPathParser();
   private static final NugetPathParser NUGET_PATHS = new NugetPathParser();
@@ -185,7 +193,6 @@ public class BrowseContentDeleteController {
   }
 
   @DeleteMapping("/{repository}")
-  @Transactional
   public BrowseDeleteResult delete(
       @PathVariable("repository") String repository,
       @RequestParam("path") String path,
@@ -199,7 +206,10 @@ public class BrowseContentDeleteController {
       throw new ResponseStatusException(HttpStatus.FORBIDDEN, decision.reason());
     }
 
-    return deleteAuthorized(repository, path, sourceRepository, subject.userId());
+    return transactionRetry == null
+        ? deleteAuthorized(repository, path, sourceRepository, subject.userId())
+        : transactionRetry.executeIfNoTransaction("browse-content-delete",
+            () -> deleteAuthorized(repository, path, sourceRepository, subject.userId()));
   }
 
   @Transactional

@@ -7,8 +7,10 @@ import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementFilter;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
 import jakarta.servlet.http.HttpServletRequest;
+import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -24,6 +26,13 @@ import org.springframework.web.server.ResponseStatusException;
 @RestController
 @RequestMapping("/internal/browse/{repository}/directory-deletion")
 public class BrowseDirectoryDeletionController {
+  private TransientTransactionRetry transactionRetry;
+
+  @Autowired
+  void setTransactionRetry(TransientTransactionRetry transactionRetry) {
+    this.transactionRetry = transactionRetry;
+  }
+
   private final BrowseDirectoryDeletionService deletion;
   private final SecurityAuthenticationService authentication;
   private final SecurityManagementService security;
@@ -54,7 +63,10 @@ public class BrowseDirectoryDeletionController {
     details.put("repository", repository);
     if (command.path() != null) details.put("path", command.path());
     request.setAttribute(ManagementAuditFilter.OPERATION_DETAILS_ATTRIBUTE, details);
-    var result = deletion.delete(repository, command, subject.userId());
+    var result = transactionRetry == null
+        ? deletion.delete(repository, command, subject.userId())
+        : transactionRetry.retryTransaction("browse-directory-delete",
+            () -> deletion.delete(repository, command, subject.userId()));
     details.put("deletedAssets", result.deletedAssets());
     return result;
   }

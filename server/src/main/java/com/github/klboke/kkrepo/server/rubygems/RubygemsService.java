@@ -312,6 +312,20 @@ public class RubygemsService {
   }
 
   private MavenResponse quickMarshal(RepositoryRuntime runtime, String path, boolean headOnly) {
+    if (runtime.type() == RepositoryType.GROUP) {
+      // A proxy can serve the quick spec before the gem itself has ever been cached.
+      for (RepositoryRuntime member : runtime.members()) {
+        try {
+          MavenResponse response = get(member, path, headOnly);
+          if (response.status() != 404) return response;
+          response.closeBodyIfOpen();
+        } catch (MavenExceptions.MavenNotFoundException | MavenExceptions.BadUpstreamException
+            | MavenExceptions.MethodNotAllowed ignored) {
+          // Follow the same member fallback policy as raw group reads.
+        }
+      }
+      return MavenResponse.noBody(404);
+    }
     String filename = path.substring("quick/Marshal.4.8/".length(),
         path.length() - ".gemspec.rz".length());
     Optional<GemMetadata> existing = gemForFullName(runtime, filename);

@@ -36,7 +36,6 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
 @Component
 class HelmAssetWriter {
@@ -189,20 +188,21 @@ class HelmAssetWriter {
     return transactionRetry.executeIfNoTransaction(operation, callback);
   }
 
-  @Transactional
   int deleteAsset(RepositoryRuntime runtime, BlobStorage storage, String path) {
-    Optional<AssetRecord> existing = assetDao.findAssetByPath(runtime.id(), path);
-    if (existing.isEmpty()) {
-      return 0;
-    }
-    AssetRecord asset = existing.get();
-    Long componentId = asset.componentId();
-    deleteOne(storage, asset);
-    if (componentId != null) {
-      componentDao.deleteIfNoAssets(componentId);
-    }
-    notifyContainingGroups(runtime, HelmAssetKind.INDEX.name().equals(asset.kind()));
-    return 1;
+    return executePersist("helm-delete", () -> {
+      Optional<AssetRecord> existing = assetDao.findAssetByPath(runtime.id(), path);
+      if (existing.isEmpty()) {
+        return 0;
+      }
+      AssetRecord asset = existing.get();
+      Long componentId = asset.componentId();
+      deleteOne(storage, asset);
+      if (componentId != null) {
+        componentDao.deleteIfNoAssets(componentId);
+      }
+      notifyContainingGroups(runtime, HelmAssetKind.INDEX.name().equals(asset.kind()));
+      return 1;
+    });
   }
 
   private Stored persist(

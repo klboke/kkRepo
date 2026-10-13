@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.maven;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.Mockito.*;
 
 import com.github.klboke.kkrepo.core.BlobObjectMetadata;
 import com.github.klboke.kkrepo.core.BlobReference;
@@ -89,6 +90,33 @@ class MavenAssetWriterConcurrencyTest {
     assertEquals(3, transactionManager.begun.get());
     assertEquals(1, transactionManager.rolledBack.get());
     assertEquals(2, transactionManager.committed.get());
+  }
+
+  @Test
+  void checksumDeadlockRetriesPrimaryAndChecksumDeletionTogether() {
+    var assets = mock(AssetDao.class);
+    var nodes = mock(BrowseNodeDao.class);
+    var components = mock(ComponentDao.class);
+    var manager = new RecordingTransactionManager();
+    var writer = new MavenAssetWriter(assets, components, nodes,
+        mock(AssetMetadataCache.class), null, new TransientTransactionRetry(manager, 3, 0));
+    var main = new AssetRecord(11L, 10L, 22L, 33L, RepositoryFormat.MAVEN2,
+        PATH.path(), null, "demo.jar", "ARTIFACT", "application/java-archive", 4L, null, Instant.EPOCH, Map.of());
+    var checksum = new AssetRecord(12L, 10L, 22L, 34L, RepositoryFormat.MAVEN2,
+        PATH.path() + ".sha1", null, "demo.jar.sha1", "CHECKSUM", "text/plain", 40L, null, Instant.EPOCH, Map.of());
+    when(assets.findAssetByPath(10L, main.path())).thenReturn(Optional.of(main));
+    when(assets.findAssetByPath(10L, checksum.path())).thenReturn(Optional.of(checksum));
+    when(nodes.deleteByAssetId(12L)).thenThrow(new CannotAcquireLockException("deadlock")).thenReturn(1);
+    assertEquals(1, writer.deleteAsset(runtime(), new NoopBlobStorage(), PATH));
+    verify(assets, times(2)).findAssetByPath(10L, main.path());
+    verify(assets, times(2)).deleteAssetById(11L);
+    verify(assets).deleteAssetById(12L);
+    verify(components).deleteIfNoAssets(22L);
+    assertEquals(2, manager.begun.get());
+    assertEquals(1, manager.rolledBack.get());
+    assertEquals(1, manager.committed.get());
+    when(assets.findAssetByPath(10L, main.path())).thenReturn(Optional.empty());
+    assertEquals(0, writer.deleteAsset(runtime(), new NoopBlobStorage(), PATH));
   }
 
   private static MavenAssetWriter writer(

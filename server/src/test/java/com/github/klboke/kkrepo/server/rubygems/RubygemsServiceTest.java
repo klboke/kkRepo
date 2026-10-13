@@ -237,6 +237,33 @@ class RubygemsServiceTest {
   }
 
   @Test
+  void coldGroupQuickSpecResolvesProxyBeforeAnyGemDownload() throws Exception {
+    RawProxyService proxy = org.mockito.Mockito.mock(RawProxyService.class);
+    String path = "quick/Marshal.4.8/demo-1.2.0.gemspec.rz";
+    byte[] expected = "upstream quick spec".getBytes(StandardCharsets.UTF_8);
+    RepositoryRuntime remote = proxy();
+    org.mockito.Mockito.when(proxy.getAssetFromUrl(remote, path,
+        "https://rubygems.org/" + path, false)).thenReturn(MavenResponse.ok(new ByteArrayInputStream(expected), expected.length,
+            "application/octet-stream", null, null));
+    org.mockito.Mockito.when(proxy.getAssetFromUrl(remote, path,
+        "https://rubygems.org/" + path, true)).thenReturn(MavenResponse.noBody(200, expected.length, "application/octet-stream", null, null));
+    // A stale hosted quick spec must not shadow the proxy after its gem was deleted.
+    RubygemsService service = new RubygemsService(new FakeRawHostedService(200), proxy,
+        null, new FakeAssetDao(List.of()));
+    RepositoryRuntime nested = runtime(3L, RepositoryType.GROUP, null, List.of(hosted(), remote));
+    RepositoryRuntime group = runtime(4L, RepositoryType.GROUP, null, List.of(nested));
+    MavenResponse response = service.get(group, path, false);
+    assertEquals(200, response.status());
+    org.junit.jupiter.api.Assertions.assertArrayEquals(expected, bytes(response));
+    MavenResponse head = service.get(group, path, true);
+    assertEquals(200, head.status());
+    assertEquals(expected.length, head.contentLength());
+    org.mockito.Mockito.verify(proxy).getAssetFromUrl(remote, path, "https://rubygems.org/" + path, false);
+    org.mockito.Mockito.verify(proxy).getAssetFromUrl(remote, path, "https://rubygems.org/" + path, true);
+    org.mockito.Mockito.verifyNoMoreInteractions(proxy);
+  }
+
+  @Test
   void deletedPackageDoesNotServeOrRegenerateCachedGemspec() {
     FakeRawHostedService hosted = new FakeRawHostedService(200);
     RubygemsService service = new RubygemsService(hosted, null, null, new FakeAssetDao(List.of()));

@@ -233,33 +233,33 @@ public class MavenAssetWriter {
   }
 
   /** Deletes an asset and soft-deletes its blob; cascades to checksum siblings and browse-node leaf rows. */
-  @Transactional
   public int deleteAsset(RepositoryRuntime runtime, BlobStorage storage, MavenPath path) {
     return deleteAsset(runtime, storage, path, true);
   }
 
-  @Transactional
   int deleteAsset(RepositoryRuntime runtime, BlobStorage storage, MavenPath path, boolean notifyGroupMetadata) {
-    Optional<AssetRecord> existing = assetDao.findAssetByPath(runtime.id(), path.path());
-    if (existing.isEmpty()) {
-      return 0;
-    }
-    AssetRecord asset = existing.get();
-    deleteOne(storage, asset);
-    if (!path.isSubordinate()) {
-      for (HashType ht : HashType.values()) {
-        MavenPath sibling = path.hash(ht);
-        assetDao.findAssetByPath(runtime.id(), sibling.path())
-            .ifPresent(a -> deleteOne(storage, a));
+    return executePersist("maven-delete", () -> {
+      Optional<AssetRecord> existing = assetDao.findAssetByPath(runtime.id(), path.path());
+      if (existing.isEmpty()) {
+        return 0;
       }
-    }
-    if (asset.componentId() != null) {
-      componentDao.deleteIfNoAssets(asset.componentId());
-    }
-    if (notifyGroupMetadata) {
-      notifyAssetDeleted(runtime, path);
-    }
-    return 1;
+      AssetRecord asset = existing.get();
+      deleteOne(storage, asset);
+      if (!path.isSubordinate()) {
+        for (HashType ht : HashType.values()) {
+          MavenPath sibling = path.hash(ht);
+          assetDao.findAssetByPath(runtime.id(), sibling.path())
+              .ifPresent(a -> deleteOne(storage, a));
+        }
+      }
+      if (asset.componentId() != null) {
+        componentDao.deleteIfNoAssets(asset.componentId());
+      }
+      if (notifyGroupMetadata) {
+        notifyAssetDeleted(runtime, path);
+      }
+      return 1;
+    });
   }
 
   @Transactional

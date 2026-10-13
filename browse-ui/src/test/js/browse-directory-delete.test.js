@@ -194,3 +194,40 @@ test("expired preview clears authentication without opening a dialog or reportin
   assert.equal(button.disabled, false);
   assert.equal(button.textContent, "Delete");
 });
+
+
+test("usage snippets for unsupported prefixes never grant a delete action", async () => {
+  let repo; let rendered; let entry;
+  const state = { repo: "repo", path: "" };
+  const context = vm.createContext({
+    state, currentRepository: () => repo, canDeleteBrowseContent: () => true,
+    pathSegments: path => path.split("/").filter(Boolean), VERSION_DIR_RE: /^\d/,
+    hasDirectoryUsage: () => false,
+    detailPaneMount: () => ({ isConnected: true }),
+    usageDetailForEntry: async () => ({ crumbText: "Has usage", snippets: [] }),
+    repositoryFormatIcon: () => "icon", renderDetailPane: data => { rendered = data; },
+    window: { kkrepoConfirmDelete: () => assert.fail("unsupported directory must not confirm deletion") },
+    fetch: () => assert.fail("unsupported directory must not call the legacy DELETE endpoint"),
+  });
+  vm.runInContext(section("function canDeleteBrowseDirectory", "function hasUploadPermission"), context);
+  vm.runInContext(section("async function showComponentDetail", "async function showAssetDetail"), context);
+  vm.runInContext(section("async function deleteBrowseEntry", "async function previewDirectoryDeletion"), context);
+  for (const format of ["huggingface", "conan", "raw", "terraform"]) {
+    for (const type of ["hosted", "proxy", "group"]) {
+      for (const path of ["", "123", "owner/model", "v1"]) {
+        repo = { format, type }; entry = { path, leaf: false }; state.path = path;
+        await context.showComponentDetail(entry);
+        const bounded = format === "raw" && type === "hosted" && path !== "";
+        assert.equal(rendered.deleteEntry, bounded ? entry : null, `${format}/${type}/${path}`);
+        if (!bounded) await context.deleteBrowseEntry(entry, { isConnected: true });
+      }
+    }
+  }
+  for (const [format, path] of [["maven2", "org/example/demo/1.0"], ["nuget", "demo/1.0"],
+      ["swift", "scope/demo/1.0"], ["terraform", "v1/modules/acme/demo/aws/1.0"],
+      ["terraform", "v1/providers/acme/demo/1.0"]]) {
+    repo = { format, type: "proxy" }; entry = { path, leaf: false }; state.path = path;
+    await context.showComponentDetail(entry);
+    assert.equal(rendered.deleteEntry, entry, `${format} component action retained`);
+  }
+});

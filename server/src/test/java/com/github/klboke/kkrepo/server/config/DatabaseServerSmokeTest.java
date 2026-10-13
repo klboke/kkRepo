@@ -113,6 +113,75 @@ class DatabaseServerSmokeTest {
         POSTGRESQL.getUsername(), POSTGRESQL.getPassword());
   }
 
+  private static void concurrentSiblingDeletion(ConfigurableApplicationContext first,
+      ConfigurableApplicationContext second, String mode) throws Exception {
+    String directory = "sibling-delete-" + mode;
+    String firstPath = directory + (mode.equals("directory") ? "/first/a.txt" : "/first.txt");
+    String secondPath = directory + (mode.equals("directory") ? "/second/a.txt" : "/second.txt");
+    var runtime = first.getBean(RepositoryRuntimeRegistry.class).resolve("directory-raw").orElseThrow();
+    var otherRuntime = second.getBean(RepositoryRuntimeRegistry.class).resolve("directory-raw").orElseThrow();
+    put(first, runtime, firstPath);
+    put(first, runtime, secondPath);
+    var secondAsset = second.getBean(AssetDao.class).findAssetByPath(runtime.id(), secondPath).orElseThrow();
+    var leavesLocked = new CountDownLatch(2);
+    var attempts = new java.util.concurrent.atomic.AtomicInteger();
+    for (ConfigurableApplicationContext context : List.of(first, second)) {
+      var initial = new java.util.concurrent.atomic.AtomicBoolean(true);
+      JdbcTemplate jdbc = new JdbcTemplate(context.getBean(JdbcTemplate.class).getDataSource()) {
+        @Override public <T> List<T> queryForList(String sql, Class<T> type, Object... args) {
+          List<T> result = super.queryForList(sql, type, args);
+          if (sql.contains("WHERE asset_id = ? FOR UPDATE")) {
+            attempts.incrementAndGet();
+            if (initial.getAndSet(false)) {
+              leavesLocked.countDown();
+              await(leavesLocked);
+            }
+          }
+          return result;
+        }
+      };
+      for (String bean : List.of("rawAssetWriter", "browseContentDeleteController")) {
+        org.springframework.test.util.ReflectionTestUtils.setField(
+            context.getBean(bean), "browseNodeDao", new JdbcBrowseNodeDao(jdbc));
+      }
+    }
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      java.util.concurrent.Callable<Integer> deleteLeft;
+      java.util.concurrent.Callable<Integer> deleteRight;
+      if (mode.equals("directory")) {
+        String route = "/internal/browse/directory-raw/directory-deletion";
+        String leftCommand = BrowseDirectoryDeletionSmokeChecks.command(
+            BrowseDirectoryDeletionSmokeChecks.preview(first, route, directory + "/first"));
+        String rightCommand = BrowseDirectoryDeletionSmokeChecks.command(
+            BrowseDirectoryDeletionSmokeChecks.preview(second, route, directory + "/second"));
+        deleteLeft = () -> BrowseDirectoryDeletionSmokeChecks.request(first, "POST", route, leftCommand, true).statusCode();
+        deleteRight = () -> BrowseDirectoryDeletionSmokeChecks.request(second, "POST", route, rightCommand, true).statusCode();
+      } else if (mode.equals("browse")) {
+        String route = "/internal/browse/directory-raw?path=";
+        deleteLeft = () -> BrowseDirectoryDeletionSmokeChecks.request(first, "DELETE", route + firstPath, null, true).statusCode();
+        deleteRight = () -> BrowseDirectoryDeletionSmokeChecks.request(second, "DELETE", route + secondPath, null, true).statusCode();
+      } else {
+        deleteLeft = () -> first.getBean(RawHostedService.class).delete(runtime, firstPath).status();
+        deleteRight = () -> second.getBean(RawHostedService.class).deleteById(otherRuntime, secondAsset.id()).status();
+      }
+      var left = executor.submit(deleteLeft);
+      var right = executor.submit(deleteRight);
+      assertEquals(mode.equals("raw") ? 204 : 200, left.get(40, TimeUnit.SECONDS));
+      assertEquals(mode.equals("raw") ? 204 : 200, right.get(40, TimeUnit.SECONDS));
+    } finally {
+      for (ConfigurableApplicationContext context : List.of(first, second)) {
+        for (String bean : List.of("rawAssetWriter", "browseContentDeleteController")) {
+          org.springframework.test.util.ReflectionTestUtils.setField(
+              context.getBean(bean), "browseNodeDao", context.getBean(BrowseNodeDao.class));
+        }
+      }
+    }
+    assertTrue(attempts.get() >= 3, "one deadlock victim must retry the entire deletion");
+    assertTrue(first.getBean(BrowseNodeDao.class).findNode(runtime.id(), directory).isEmpty());
+    assertTrue(first.getBean(AssetDao.class).findAssetByPath(runtime.id(), firstPath).isEmpty());
+    assertTrue(first.getBean(AssetDao.class).findAssetByPath(runtime.id(), secondPath).isEmpty());
+  }
+
   private static void concurrentBrowseInsertion(ConfigurableApplicationContext first,
       ConfigurableApplicationContext second, boolean assetParent) throws Exception {
     String directory = "concurrent-index-" + (assetParent ? "bound" : "folder");
@@ -210,6 +279,9 @@ class DatabaseServerSmokeTest {
 
       exerciseSharedApplicationFlows(first, second);
       BrowseDirectoryDeletionSmokeChecks.exercise(first, second);
+      for (String mode : List.of("raw", "browse", "directory")) {
+        concurrentSiblingDeletion(first, second, mode);
+      }
       concurrentBrowseInsertion(first, second, false);
       concurrentBrowseInsertion(first, second, true);
       com.github.klboke.kkrepo.server.npm.NpmHostedPublicationSmokeSupport.verify(first, second);

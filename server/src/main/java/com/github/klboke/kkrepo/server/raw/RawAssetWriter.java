@@ -418,42 +418,44 @@ class RawAssetWriter {
     return transactionRetry.executeIfNoTransaction(operation, callback);
   }
 
-  @Transactional
   int deleteAsset(RepositoryRuntime runtime, BlobStorage storage, String path) {
-    Optional<AssetRecord> existing = assetDao.findAssetByPath(runtime.id(), path);
-    if (existing.isEmpty()) {
-      return 0;
-    }
-    AssetRecord asset = existing.get();
-    Long componentId = asset.componentId();
-    int deleted = deleteOne(asset);
-    if (deleted == 0) {
-      return 0;
-    }
-    if (componentId != null) {
-      componentDao.deleteIfNoAssets(componentId);
-    }
-    return 1;
+    return executePersist("raw-delete", () -> {
+      Optional<AssetRecord> existing = assetDao.findAssetByPath(runtime.id(), path);
+      if (existing.isEmpty()) {
+        return 0;
+      }
+      AssetRecord asset = existing.get();
+      Long componentId = asset.componentId();
+      int deleted = deleteOne(asset);
+      if (deleted == 0) {
+        return 0;
+      }
+      if (componentId != null) {
+        componentDao.deleteIfNoAssets(componentId);
+      }
+      return 1;
+    });
   }
 
-  @Transactional
   int deleteAssetById(RepositoryRuntime runtime, long assetId) {
-    Optional<AssetRecord> existing = assetDao.findAssetById(assetId)
-        .filter(asset -> asset.repositoryId() == runtime.id()
-            && asset.format() == runtime.format());
-    if (existing.isEmpty()) {
-      return 0;
-    }
-    AssetRecord asset = existing.orElseThrow();
-    Long componentId = asset.componentId();
-    int deleted = deleteOne(asset);
-    if (deleted == 0) {
-      return 0;
-    }
-    if (componentId != null) {
-      componentDao.deleteIfNoAssets(componentId);
-    }
-    return 1;
+    return executePersist("raw-delete-by-id", () -> {
+      Optional<AssetRecord> existing = assetDao.findAssetById(assetId)
+          .filter(asset -> asset.repositoryId() == runtime.id()
+              && asset.format() == runtime.format());
+      if (existing.isEmpty()) {
+        return 0;
+      }
+      AssetRecord asset = existing.orElseThrow();
+      Long componentId = asset.componentId();
+      int deleted = deleteOne(asset);
+      if (deleted == 0) {
+        return 0;
+      }
+      if (componentId != null) {
+        componentDao.deleteIfNoAssets(componentId);
+      }
+      return 1;
+    });
   }
 
   private Stored persist(

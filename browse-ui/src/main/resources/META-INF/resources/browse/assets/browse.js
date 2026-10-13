@@ -560,6 +560,28 @@ function canDeleteBrowseDirectory(entry) {
     && ["maven2", "npm", "pypi", "nuget", "yum", "rubygems", "raw"].includes(repo?.format);
 }
 
+// Usage snippets can describe arbitrary prefixes; they do not establish a deletable component.
+function canDeleteBrowseComponentDirectory(entry) {
+  if (!canDeleteBrowseContent() || !entry || entry.leaf || !entry.path) return false;
+  const format = currentRepository()?.format;
+  const parts = pathSegments(entry.path);
+  if (["pypi", "npm", "cargo", "go", "pub", "composer"].includes(format)) {
+    return hasDirectoryUsage(entry);
+  }
+  if (format === "maven2") return parts.length >= 3 && VERSION_DIR_RE.test(parts.at(-1));
+  if (format === "nuget") return parts.length === 2 && VERSION_DIR_RE.test(parts.at(-1));
+  if (format === "swift") return parts.length === 3 && VERSION_DIR_RE.test(parts.at(-1));
+  if (format === "terraform") {
+    return parts[0] === "v1" && VERSION_DIR_RE.test(parts.at(-1))
+      && ((parts[1] === "modules" && parts.length === 6)
+        || (parts[1] === "providers" && parts.length === 5));
+  }
+  if (format === "docker") {
+    return Boolean(imageNameFromDockerPath(entry.path)) && parts.at(-2) === "manifests";
+  }
+  return false;
+}
+
 function hasUploadPermission() {
   return can("nexus:component:create") || hasRepositoryUploadPermission();
 }
@@ -1906,6 +1928,7 @@ function bindDeleteControl(mount, entry) {
 async function deleteBrowseEntry(entry, button) {
   if (!entry || !entry.path || !state.repo) return;
   if (canDeleteBrowseDirectory(entry)) return previewDirectoryDeletion(entry, button);
+  if (!entry.leaf && !canDeleteBrowseComponentDirectory(entry)) return;
   const repository = state.repo;
   const sourceRepository = entry.sourceRepository || repository;
   const path = entry.path;
@@ -3393,7 +3416,7 @@ async function showComponentDetail(entry) {
     snippets: detail?.snippets || [],
     // Preserve existing protocol component actions; only supported hosted formats gain a
     // delete action for arbitrary directories without component coordinates.
-    deleteEntry: detail || canDeleteBrowseDirectory(entry) ? entry : null,
+    deleteEntry: canDeleteBrowseDirectory(entry) || canDeleteBrowseComponentDirectory(entry) ? entry : null,
   });
 }
 

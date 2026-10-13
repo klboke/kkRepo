@@ -15,6 +15,7 @@ import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -25,12 +26,19 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 @Service
 public class HelmHostedService {
+  private TransientTransactionRetry transactionRetry;
+
+  @Autowired
+  void setTransactionRetry(TransientTransactionRetry transactionRetry) {
+    this.transactionRetry = transactionRetry;
+  }
+
   static final String INDEX_PATH = "index.yaml";
 
   private final AssetDao assetDao;
@@ -148,8 +156,12 @@ public class HelmHostedService {
     return MavenResponse.created();
   }
 
-  @Transactional
   public MavenResponse delete(RepositoryRuntime runtime, String rawPath) {
+    return transactionRetry == null ? deleteInTransaction(runtime, rawPath)
+        : transactionRetry.executeIfNoTransaction("helm-hosted-delete", () -> deleteInTransaction(runtime, rawPath));
+  }
+
+  private MavenResponse deleteInTransaction(RepositoryRuntime runtime, String rawPath) {
     ensureHosted(runtime);
     String path = normalizePath(rawPath);
     HelmAssetKind kind = knownKind(path);

@@ -157,6 +157,26 @@ class HelmHostedServiceTest {
   }
 
   @Test
+  void retriesDeletionAndIndexEnqueueTogetherAfterDeadlock() {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.HOSTED, 7L, "ALLOW");
+    var manager = mock(org.springframework.transaction.PlatformTransactionManager.class);
+    var failed = new org.springframework.transaction.support.SimpleTransactionStatus();
+    var committed = new org.springframework.transaction.support.SimpleTransactionStatus();
+    when(manager.getTransaction(any())).thenReturn(failed, committed);
+    fixture.service.setTransactionRetry(
+        new com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry(manager, 3, 0));
+    when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
+    when(fixture.writer.deleteAsset(runtime, fixture.storage, "demo.tgz")).thenReturn(1);
+    org.mockito.Mockito.doThrow(new org.springframework.dao.CannotAcquireLockException("deadlock"))
+        .doNothing().when(fixture.indexDao).enqueue(runtime.id(), RepositoryIndexRebuildDao.HELM_INDEX);
+    assertEquals(200, fixture.service.delete(runtime, "demo.tgz").status());
+    verify(fixture.writer, org.mockito.Mockito.times(2)).deleteAsset(runtime, fixture.storage, "demo.tgz");
+    verify(manager).rollback(failed);
+    verify(manager).commit(committed);
+  }
+
+  @Test
   void generatedIndexOmitsLegacyInvalidVersionsWithoutDroppingValidReleases() throws Exception {
     Fixture fixture = fixture();
     RepositoryRuntime runtime = runtime(RepositoryType.HOSTED, 7L, "ALLOW");
