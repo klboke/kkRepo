@@ -94,6 +94,7 @@ final class BrowseDirectoryDeletionSmokeChecks {
     assertEquals("original", request(first, "GET", content("Releases/nested/a.txt"), null, true).body());
     exerciseNpm(first, second);
     verifyMavenLockOrder(first, second);
+    BrowseDirectoryConcurrencySmokeChecks.exercise(first, second);
   }
 
   private static void exerciseNpm(ConfigurableApplicationContext first, ConfigurableApplicationContext second) throws Exception {

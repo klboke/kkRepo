@@ -850,6 +850,17 @@ public class CleanupSubjectScanner {
     return java.util.Optional.empty();
   }
 
+  /** Locks shared npm metadata before cleanup acquires any version component locks. */
+  public void lockPackageRoots(RepositoryRecord repository, List<String> paths) {
+    if (repository.format() != RepositoryFormat.NPM) return;
+    List<String> roots = paths.stream().filter(java.util.Objects::nonNull)
+        .filter(path -> path.indexOf("/-/") > 0)
+        .map(path -> path.substring(0, path.indexOf("/-/"))).distinct().toList();
+    assetDao.findAssetsByPaths(repository.id(), roots).values().stream()
+        .sorted(java.util.Comparator.comparing(AssetRecord::id))
+        .forEach(root -> assetDao.findAssetByIdForUpdate(root.id()));
+  }
+
   public java.util.Optional<Subject> resolveLocked(
       RepositoryRecord repository, String subjectKind, long identityId, String deletePath) {
     if ("COMPONENT".equals(subjectKind)) {

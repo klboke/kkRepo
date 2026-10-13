@@ -26,6 +26,13 @@ class BrowseDirectoryDeletionControllerTest {
         .get("/internal/browse/repo/directory-deletion").param("path", "folder"))
         .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
     verify(service).preview("repo", "folder");
+    mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+        .post("/internal/browse/repo/directory-deletion").contentType("application/json").content("null"))
+        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest());
+    var controller = new BrowseDirectoryDeletionController(service, authentication, security);
+    assertEquals(400, assertThrows(ResponseStatusException.class,
+        () -> controller.delete("repo", null, new MockHttpServletRequest())).getStatusCode().value());
+    verify(service, never()).delete(anyString(), isNull(), anyString());
     var command = new BrowseDirectoryDeletionService.Command("folder", "folder", "token");
     when(service.delete("repo", command, "admin")).thenThrow(new ResponseStatusException(
         org.springframework.http.HttpStatus.CONFLICT, "Review a new preview"));

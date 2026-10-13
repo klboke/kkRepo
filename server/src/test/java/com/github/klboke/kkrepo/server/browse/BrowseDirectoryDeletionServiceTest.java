@@ -309,8 +309,9 @@ class BrowseDirectoryDeletionServiceTest {
     assertTrue(preview.items().stream().anyMatch(item -> item.path().equals("@scope/pkg")
         && item.action().equals("PROTOCOL_METADATA")));
     service.delete("hosted", command(preview), "admin");
-    var order = inOrder(assets, deletion);
+    var order = inOrder(assets, scanner, deletion);
     order.verify(assets).findAssetByIdForUpdate(11);
+    order.verify(scanner).resolveLocked(repository, "COMPONENT", 50, subject.deletePath());
     order.verify(deletion).deleteBatchForCleanup(eq("hosted"), anyList(), eq("admin"));
     clearInvocations(deletion);
     var before = content.get(11L);

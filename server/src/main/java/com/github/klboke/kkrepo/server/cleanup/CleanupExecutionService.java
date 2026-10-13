@@ -103,6 +103,8 @@ public class CleanupExecutionService {
           claim.id(), candidates,
           repeated(candidates.size(), stale("repository state changed")), now);
     }
+    scanner.lockPackageRoots(repository, candidates.stream()
+        .map(candidate -> candidate.subject().deletePath()).toList());
     List<ExecutionResult> results = new ArrayList<>(
         java.util.Collections.nCopies(candidates.size(), null));
     List<CleanupDeleteSubject> deletions = new ArrayList<>();

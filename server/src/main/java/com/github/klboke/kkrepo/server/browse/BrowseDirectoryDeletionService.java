@@ -69,8 +69,11 @@ public class BrowseDirectoryDeletionService {
     }
     Plan expected = plan(repository, path);
     requireToken(expected, command.selectionToken());
-    // Component locks precede asset locks, matching publication/cleanup ordering. Whole-component
-    // adapters may only operate when ALL of their assets were included in the preview.
+    // npm publication locks its shared packument before any version components/assets.
+    boolean npm = expected.repository().format() == RepositoryFormat.NPM;
+    if (npm) lockAssets(expected.lockAssets());
+    // Component locks precede their assets. Whole-component adapters may only operate
+    // when ALL of their assets were included in the preview.
     for (long componentId : expected.directAssets().stream().map(AssetRecord::componentId)
         .filter(Objects::nonNull).distinct().sorted().toList()) {
       components.findByIdForUpdate(componentId)
@@ -83,11 +86,7 @@ public class BrowseDirectoryDeletionService {
           .orElseThrow(BrowseDirectoryDeletionService::stale);
       if (!Objects.equals(subject.contentToken(), current.contentToken())) throw stale();
     }
-    for (AssetRecord asset : expected.lockAssets()) {
-      AssetRecord current = assets.findAssetByIdForUpdate(asset.id())
-          .orElseThrow(BrowseDirectoryDeletionService::stale);
-      if (!assetFingerprint(asset).equals(assetFingerprint(current))) throw stale();
-    }
+    if (!npm) lockAssets(expected.lockAssets());
     // READ_COMMITTED avoids a stale repeatable-read snapshot following a lock wait. New members
     // added after this final check are retained: execution never issues a prefix DELETE.
     Plan current = plan(repository, path);
@@ -110,6 +109,14 @@ public class BrowseDirectoryDeletionService {
       deleted += counts.stream().mapToInt(Integer::intValue).sum();
     }
     return new Result(repository, path, deleted);
+  }
+
+  private void lockAssets(List<AssetRecord> selected) {
+    for (AssetRecord asset : selected) {
+      AssetRecord current = assets.findAssetByIdForUpdate(asset.id())
+          .orElseThrow(BrowseDirectoryDeletionService::stale);
+      if (!assetFingerprint(asset).equals(assetFingerprint(current))) throw stale();
+    }
   }
 
   private Plan plan(String repositoryName, String path) {

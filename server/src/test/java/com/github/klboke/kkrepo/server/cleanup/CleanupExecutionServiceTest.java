@@ -89,6 +89,9 @@ class CleanupExecutionServiceTest {
 
     assertEquals("SKIPPED_STALE", result.decision());
     assertEquals("usage revision changed", result.reason().get("staleReason"));
+    var order = org.mockito.Mockito.inOrder(scanner);
+    order.verify(scanner).lockPackageRoots(repository(), List.of("file.zip"));
+    order.verify(scanner).resolveLocked(repository(), "ASSET", 9, "file.zip");
     verify(deletion, never()).deleteForCleanup(any(), any(), anyLong(), any(), any());
   }
 

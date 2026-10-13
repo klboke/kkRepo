@@ -400,6 +400,64 @@ class NpmHostedServiceTest {
   }
 
   @Test
+  void packageDeletionChecksTheLockedRevisionBeforeDeleting() {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime("ALLOW", 7L);
+    stubPackageRoot(fixture, """
+        {"name":"demo","_rev":"3","versions":{},"dist-tags":{}}
+        """);
+    assertThrows(NpmExceptions.BadRequestException.class,
+        () -> fixture.service.deletePackage(runtime, PACKAGE, "2"));
+    verify(fixture.writer, never()).deletePackage(any(), any(), any());
+
+    when(fixture.writer.deletePackage(runtime, fixture.storage, PACKAGE)).thenReturn(1);
+    assertEquals(200, fixture.service.deletePackage(runtime, PACKAGE, "3").status());
+    var order = org.mockito.Mockito.inOrder(fixture.assetDao, fixture.writer);
+    order.verify(fixture.assetDao, times(2)).findAssetByIdForUpdate(1L);
+    order.verify(fixture.writer).deletePackage(runtime, fixture.storage, PACKAGE);
+
+    when(fixture.writer.deletePackage(runtime, fixture.storage, PACKAGE)).thenReturn(0);
+    assertThrows(NpmExceptions.NpmNotFoundException.class,
+        () -> fixture.service.deletePackage(runtime, PACKAGE, null));
+  }
+
+  @Test
+  void distTagMutationValidatesTheCurrentVersionsAndPreservesOtherTags() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime("ALLOW", 7L);
+    stubPackageRoot(fixture, """
+        {"name":"demo","_rev":"3","versions":{"2.0.0":{"version":"2.0.0"}},
+         "dist-tags":{"latest":"2.0.0"}}
+        """);
+    assertThrows(NpmExceptions.BadRequestException.class, () -> fixture.service.putDistTag(
+        runtime, PACKAGE, "beta", new ByteArrayInputStream("\"1.0.0\"".getBytes(StandardCharsets.UTF_8)),
+        "alice", null));
+    verify(fixture.writer, never()).writePackageRoot(any(), any(), anyLong(), any(), any(), any(), any());
+
+    assertEquals(200, fixture.service.putDistTag(runtime, PACKAGE, "beta",
+        new ByteArrayInputStream("\"2.0.0\"".getBytes(StandardCharsets.UTF_8)), "alice", null).status());
+    ArgumentCaptor<byte[]> json = ArgumentCaptor.forClass(byte[].class);
+    verify(fixture.writer).writePackageRoot(eq(runtime), eq(fixture.storage), eq(7L), eq(PACKAGE),
+        json.capture(), eq("alice"), eq(null));
+    Map<String, Object> stored = fixture.mapper.readValue(json.getValue(), MAP);
+    assertEquals(Map.of("latest", "2.0.0", "beta", "2.0.0"), stored.get("dist-tags"));
+    assertEquals("4", stored.get("_rev"));
+    assertEquals(List.of("2.0.0"), map(stored.get("versions")).keySet().stream().toList());
+  }
+
+  @Test
+  void missingPackageAndTarballMutationsDoNotCreateMetadata() {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime("ALLOW", 7L);
+    assertThrows(NpmExceptions.NpmNotFoundException.class,
+        () -> fixture.service.deletePackage(runtime, PACKAGE, "1"));
+    assertThrows(NpmExceptions.NpmNotFoundException.class,
+        () -> fixture.service.deleteTarball(runtime, PACKAGE, "demo-1.0.0.tgz", null));
+    assertEquals(200, fixture.service.deleteDistTag(runtime, PACKAGE, "beta", "alice", null).status());
+    verify(fixture.writer, never()).writePackageRoot(any(), any(), anyLong(), any(), any(), any(), any());
+  }
+
+  @Test
   void cleanupDeletionRewritesHostedPackumentEvenWhenClientWritesAreDenied() throws Exception {
     Fixture fixture = fixture();
     RepositoryRuntime runtime = runtime("DENY", 7L);
@@ -457,7 +515,7 @@ class NpmHostedServiceTest {
         "cleanup-run:7"));
 
     verify(fixture.assetDao, times(1)).findAssetByPath(10L, "demo");
-    verify(fixture.assetDao, times(1)).findBlobById(3L);
+    verify(fixture.assetDao, times(1)).lockLiveBlobById(3L);
     verify(fixture.storage, times(1)).get(any());
     ArgumentCaptor<byte[]> json = ArgumentCaptor.forClass(byte[].class);
     verify(fixture.writer, times(1)).writePackageRoot(
@@ -531,6 +589,8 @@ class NpmHostedServiceTest {
         "sha1", "sha256", "md5", (long) json.length(), "application/json",
         "alice", null, Instant.EPOCH, Instant.EPOCH, Map.of());
     when(fixture.assetDao.findAssetByPath(10L, "demo")).thenReturn(Optional.of(asset));
+    when(fixture.assetDao.findAssetByIdForUpdate(asset.id())).thenReturn(Optional.of(asset));
+    when(fixture.assetDao.lockLiveBlobById(3L)).thenReturn(Optional.of(blob));
     when(fixture.assetDao.findBlobById(3L)).thenReturn(Optional.of(blob));
     when(fixture.storage.get(any())).thenAnswer(invocation -> Optional.of(
         new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8))));

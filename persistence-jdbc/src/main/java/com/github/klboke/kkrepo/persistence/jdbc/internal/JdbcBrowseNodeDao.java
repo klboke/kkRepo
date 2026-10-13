@@ -164,12 +164,16 @@ public class JdbcBrowseNodeDao implements com.github.klboke.kkrepo.persistence.j
     return ids.isEmpty() ? null : ids.get(0);
   }
 
+  @org.springframework.transaction.annotation.Transactional
   public int deleteByAssetId(long assetId) {
-    Optional<NodeRef> leaf = findNodeByAssetId(assetId);
-    int deleted = jdbcTemplate.update("DELETE FROM browse_node WHERE asset_id = ?", assetId);
-    if (deleted > 0 && leaf.isPresent()) {
-      refreshAndPruneAncestors(leaf.get().parentId());
-    }
+    List<Long> ids = jdbcTemplate.queryForList(
+        "SELECT id FROM browse_node WHERE asset_id = ? FOR UPDATE", Long.class, assetId);
+    if (ids.isEmpty()) return 0;
+    // An asset node may also be a directory. Clear only its binding; retain children
+    // committed by another upload instead of cascading through their Browse entries.
+    int deleted = jdbcTemplate.update(
+        "UPDATE browse_node SET asset_id = NULL, component_id = NULL WHERE asset_id = ?", assetId);
+    for (long id : ids) refreshAndPruneAncestors(id);
     return deleted;
   }
 
@@ -275,112 +279,28 @@ public class JdbcBrowseNodeDao implements com.github.klboke.kkrepo.persistence.j
         args.toArray());
   }
 
-  private Optional<NodeRef> findNodeByAssetId(long assetId) {
-    List<NodeRef> rows = jdbcTemplate.query(
-        "SELECT parent_id FROM browse_node WHERE asset_id = ?",
-        (rs, rowNum) -> new NodeRef(nullableLong(rs, "parent_id")),
-        assetId);
-    return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
-  }
-
   private void refreshAndPruneAncestors(Long nodeId) {
-    if (nodeId == null) return;
-    List<AncestorNode> ancestors = listAncestorsWithChildStats(nodeId);
-    if (ancestors.isEmpty()) return;
-
-    List<Long> deleteIds = new ArrayList<>();
-    List<AncestorUpdate> updates = new ArrayList<>();
-    AncestorChange changedChild = null;
-    for (AncestorNode node : ancestors) {
-      long effectiveChildCount = node.childCount();
-      long effectiveSubtreeChildCount = node.childSubtreeCount();
-      if (changedChild != null) {
-        if (changedChild.deleted()) {
-          effectiveChildCount--;
-        }
-        if (changedChild.previousHasAssetSubtree()) {
-          effectiveSubtreeChildCount--;
-        }
-        if (!changedChild.deleted() && changedChild.hasAssetSubtree()) {
-          effectiveSubtreeChildCount++;
-        }
+    while (nodeId != null) {
+      // Lock first, then inspect children. An uploader's FK lock may make this wait;
+      // the following current read must include its newly committed child on MySQL RR too.
+      List<AncestorNode> rows = jdbcTemplate.query(
+          "SELECT parent_id, asset_id, has_asset_subtree FROM browse_node WHERE id = ? FOR UPDATE",
+          (rs, rowNum) -> new AncestorNode(nullableLong(rs, "parent_id"), nullableLong(rs, "asset_id"),
+              rs.getBoolean("has_asset_subtree")), nodeId);
+      if (rows.isEmpty()) return;
+      AncestorNode node = rows.getFirst();
+      List<Boolean> child = node.assetId() != null ? List.of(true) : jdbcTemplate.queryForList(
+          "SELECT has_asset_subtree FROM browse_node WHERE parent_id = ? "
+              + "ORDER BY has_asset_subtree DESC, id LIMIT 1 FOR UPDATE", Boolean.class, nodeId);
+      if (child.isEmpty()) {
+        jdbcTemplate.update("DELETE FROM browse_node WHERE id = ?", nodeId);
+      } else {
+        boolean hasAssetSubtree = child.getFirst();
+        if (node.hasAssetSubtree() == hasAssetSubtree) return;
+        jdbcTemplate.update("UPDATE browse_node SET has_asset_subtree = ? WHERE id = ?", hasAssetSubtree, nodeId);
       }
-      effectiveChildCount = Math.max(0, effectiveChildCount);
-      effectiveSubtreeChildCount = Math.max(0, effectiveSubtreeChildCount);
-
-      boolean hasAssetSubtree = node.assetId() != null || effectiveSubtreeChildCount > 0;
-      boolean delete = node.assetId() == null && effectiveChildCount == 0;
-      if (delete) {
-        deleteIds.add(node.id());
-      } else if (node.hasAssetSubtree() != hasAssetSubtree) {
-        updates.add(new AncestorUpdate(node.id(), hasAssetSubtree));
-      }
-      changedChild = new AncestorChange(delete, hasAssetSubtree, node.hasAssetSubtree());
+      nodeId = node.parentId();
     }
-
-    deleteAncestors(deleteIds);
-    updateAncestorSubtreeFlags(updates);
-  }
-
-  private List<AncestorNode> listAncestorsWithChildStats(long nodeId) {
-    return jdbcTemplate.query("""
-        WITH RECURSIVE ancestors AS (
-          SELECT id, parent_id, asset_id, has_asset_subtree, 0 AS distance
-          FROM browse_node
-          WHERE id = ?
-          UNION ALL
-          SELECT parent_node.id, parent_node.parent_id, parent_node.asset_id,
-                 parent_node.has_asset_subtree,
-                 ancestors.distance + 1
-          FROM browse_node parent_node
-          JOIN ancestors ON parent_node.id = ancestors.parent_id
-        ),
-        child_stats AS (
-          SELECT child_node.parent_id,
-                 COUNT(child_node.id) AS child_count,
-                 SUM(CASE WHEN child_node.has_asset_subtree THEN 1 ELSE 0 END) AS child_subtree_count
-          FROM browse_node child_node
-          JOIN ancestors ON child_node.parent_id = ancestors.id
-          GROUP BY child_node.parent_id
-        )
-        SELECT ancestors.id,
-               ancestors.asset_id,
-               ancestors.has_asset_subtree,
-               COALESCE(child_stats.child_count, 0) AS child_count,
-               COALESCE(child_stats.child_subtree_count, 0) AS child_subtree_count
-        FROM ancestors
-        LEFT JOIN child_stats ON child_stats.parent_id = ancestors.id
-        ORDER BY ancestors.distance
-        """,
-        (rs, rowNum) -> new AncestorNode(
-            rs.getLong("id"),
-            nullableLong(rs, "asset_id"),
-            rs.getBoolean("has_asset_subtree"),
-            rs.getLong("child_count"),
-            rs.getLong("child_subtree_count")),
-        nodeId);
-  }
-
-  private void deleteAncestors(List<Long> deleteIds) {
-    if (deleteIds.isEmpty()) return;
-    jdbcTemplate.update("DELETE FROM browse_node WHERE id IN (" + placeholders(deleteIds.size()) + ")",
-        deleteIds.toArray());
-  }
-
-  private void updateAncestorSubtreeFlags(List<AncestorUpdate> updates) {
-    if (updates.isEmpty()) return;
-    StringBuilder sql = new StringBuilder("UPDATE browse_node SET has_asset_subtree = CASE id ");
-    List<Object> args = new ArrayList<>(updates.size() * 3);
-    for (AncestorUpdate update : updates) {
-      sql.append("WHEN ? THEN ? ");
-      args.add(update.id());
-      args.add(update.hasAssetSubtree());
-    }
-    sql.append("END WHERE id IN (").append(placeholders(updates.size())).append(')');
-    for (AncestorUpdate update : updates) {
-      args.add(update.id());
-    }
-    jdbcTemplate.update(sql.toString(), args.toArray());
   }
 
   private String placeholders(int count) {
@@ -392,20 +312,5 @@ public class JdbcBrowseNodeDao implements com.github.klboke.kkrepo.persistence.j
     return builder.toString();
   }
 
-  private record NodeRef(Long parentId) {}
-
-  private record AncestorNode(
-      long id,
-      Long assetId,
-      boolean hasAssetSubtree,
-      long childCount,
-      long childSubtreeCount) {}
-
-  private record AncestorUpdate(long id, boolean hasAssetSubtree) {}
-
-  private record AncestorChange(
-      boolean deleted,
-      boolean hasAssetSubtree,
-      boolean previousHasAssetSubtree) {}
-
+  private record AncestorNode(Long parentId, Long assetId, boolean hasAssetSubtree) {}
 }

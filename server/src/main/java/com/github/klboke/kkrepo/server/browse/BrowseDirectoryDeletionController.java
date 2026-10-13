@@ -47,6 +47,8 @@ public class BrowseDirectoryDeletionController {
       @PathVariable("repository") String repository, @RequestBody BrowseDirectoryDeletionService.Command command,
       HttpServletRequest request) {
     AuthenticatedSubject subject = requireAdministrator(request);
+    if (command == null) throw new ResponseStatusException(
+        HttpStatus.BAD_REQUEST, "A confirmed directory preview is required");
     Map<String, Object> details = new LinkedHashMap<>();
     details.put("operation", "browse.directory.delete");
     details.put("repository", repository);

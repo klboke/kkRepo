@@ -186,14 +186,16 @@ public class NpmHostedService {
   public MavenResponse deletePackage(RepositoryRuntime runtime, NpmPackageId packageId, String revision) {
     enforceHosted(runtime);
     enforceDeletePolicy(runtime, "package");
-    assertRevisionIfPresent(runtime, packageId, revision);
-    long blobStoreId = requireBlobStore(runtime);
-    BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);
-    int deleted = writer.deletePackage(runtime, storage, packageId);
-    if (deleted == 0) {
-      throw new NpmExceptions.NpmNotFoundException("Package '" + packageId.id() + "' not found");
-    }
-    return NpmResponseSupport.success(mapper);
+    return mutatePackageRoot(runtime, packageId, existing -> {
+      assertRevisionIfPresent(packageId, revision, existing);
+      long blobStoreId = requireBlobStore(runtime);
+      BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);
+      int deleted = writer.deletePackage(runtime, storage, packageId);
+      if (deleted == 0) {
+        throw new NpmExceptions.NpmNotFoundException("Package '" + packageId.id() + "' not found");
+      }
+      return NpmResponseSupport.success(mapper);
+    });
   }
 
   public MavenResponse uploadTarball(
@@ -250,7 +252,7 @@ public class NpmHostedService {
       throw new NpmExceptions.BadRequestException(e.getMessage(), e);
     }
 
-    Optional<Map<String, Object>> existingRoot = loadPackageRootMap(runtime, packageId);
+    Optional<Map<String, Object>> existingRoot = loadPackageRootMapForUpdate(runtime, packageId);
     enforceWritePolicy(runtime, "package-root", false);
     if (existingRoot.map(root -> NpmMetadata.versions(root).containsKey(version)).orElse(false)) {
       throw new NpmExceptions.WritePolicyDenied(
@@ -307,15 +309,19 @@ public class NpmHostedService {
       String revision) {
     enforceHosted(runtime);
     enforceDeletePolicy(runtime, "tarball");
-    long blobStoreId = requireBlobStore(runtime);
-    BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);
-    int deleted = writer.deletePath(runtime, storage, packageId.tarballPath(tarballName));
-    if (deleted == 0) {
-      throw new NpmExceptions.NpmNotFoundException(
-          "Tarball '" + tarballName + "' in package '" + packageId.id() + "' not found");
-    }
-    removeVersionForTarball(runtime, packageId, tarballName, "system", null);
-    return NpmResponseSupport.success(mapper);
+    return mutatePackageRoot(runtime, packageId, existing -> {
+      long blobStoreId = requireBlobStore(runtime);
+      BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);
+      int deleted = writer.deletePath(runtime, storage, packageId.tarballPath(tarballName));
+      if (deleted == 0) {
+        throw new NpmExceptions.NpmNotFoundException(
+            "Tarball '" + tarballName + "' in package '" + packageId.id() + "' not found");
+      }
+      if (existing.isPresent() && removeVersionsForTarballs(existing.get(), List.of(tarballName))) {
+        savePackageRoot(runtime, packageId, existing.get(), "system", null);
+      }
+      return NpmResponseSupport.success(mapper);
+    });
   }
 
   /**
@@ -352,7 +358,7 @@ public class NpmHostedService {
     }
     long blobStoreId = requireBlobStore(runtime);
     BlobStorage storage = blobStorageRegistry.forBlobStoreId(blobStoreId);
-    Map<String, Object> packageRoot = loadPackageRootMap(runtime, packageId).orElse(null);
+    Map<String, Object> packageRoot = loadPackageRootMapForUpdate(runtime, packageId).orElse(null);
     List<Integer> deleted = new ArrayList<>(paths.size());
     List<String> deletedTarballs = new ArrayList<>();
     for (NpmPath path : paths) {
@@ -389,18 +395,19 @@ public class NpmHostedService {
     } catch (IOException e) {
       throw new NpmExceptions.BadRequestException("dist-tag payload must be a JSON string", e);
     }
-    Optional<Map<String, Object>> packageRootOpt = loadPackageRootMap(runtime, packageId);
-    if (packageRootOpt.isEmpty()) {
+    return mutatePackageRoot(runtime, packageId, packageRootOpt -> {
+      if (packageRootOpt.isEmpty()) {
+        return NpmResponseSupport.success(mapper);
+      }
+      Map<String, Object> packageRoot = packageRootOpt.get();
+      if (!NpmMetadata.versions(packageRoot).containsKey(version)) {
+        throw new NpmExceptions.BadRequestException(
+            "version " + version + " of package " + packageId.id() + " is not present in repository " + runtime.name());
+      }
+      NpmMetadata.distTags(packageRoot).put(tag, version);
+      savePackageRoot(runtime, packageId, packageRoot, createdBy, createdByIp);
       return NpmResponseSupport.success(mapper);
-    }
-    Map<String, Object> packageRoot = packageRootOpt.get();
-    if (!NpmMetadata.versions(packageRoot).containsKey(version)) {
-      throw new NpmExceptions.BadRequestException(
-          "version " + version + " of package " + packageId.id() + " is not present in repository " + runtime.name());
-    }
-    NpmMetadata.distTags(packageRoot).put(tag, version);
-    savePackageRoot(runtime, packageId, packageRoot, createdBy, createdByIp);
-    return NpmResponseSupport.success(mapper);
+    });
   }
 
   public MavenResponse deleteDistTag(
@@ -414,14 +421,15 @@ public class NpmHostedService {
     if ("latest".equals(tag)) {
       throw new NpmExceptions.BadRequestException("Unable to delete latest");
     }
-    Optional<Map<String, Object>> packageRootOpt = loadPackageRootMap(runtime, packageId);
-    if (packageRootOpt.isEmpty()) {
+    return mutatePackageRoot(runtime, packageId, packageRootOpt -> {
+      if (packageRootOpt.isEmpty()) {
+        return NpmResponseSupport.success(mapper);
+      }
+      Map<String, Object> packageRoot = packageRootOpt.get();
+      NpmMetadata.distTags(packageRoot).remove(tag);
+      savePackageRoot(runtime, packageId, packageRoot, createdBy, createdByIp);
       return NpmResponseSupport.success(mapper);
-    }
-    Map<String, Object> packageRoot = packageRootOpt.get();
-    NpmMetadata.distTags(packageRoot).remove(tag);
-    savePackageRoot(runtime, packageId, packageRoot, createdBy, createdByIp);
-    return NpmResponseSupport.success(mapper);
+    });
   }
 
   Optional<Map<String, Object>> packageRoot(RepositoryRuntime runtime, NpmPackageId packageId) {
@@ -618,7 +626,7 @@ public class NpmHostedService {
       NpmPackageId packageId,
       String revision,
       Map<String, Object> incoming) {
-    Optional<Map<String, Object>> existingOpt = loadPackageRootMap(runtime, packageId);
+    Optional<Map<String, Object>> existingOpt = loadPackageRootMapForUpdate(runtime, packageId);
     Optional<AssetRecord> existingAsset = assetDao.findAssetByPath(runtime.id(), packageId.id());
     enforceWritePolicy(runtime, "package-root", existingAsset.isPresent());
     String effectiveRevision = revision == null
@@ -653,22 +661,6 @@ public class NpmHostedService {
     return packageRoot;
   }
 
-  private void removeVersionForTarball(
-      RepositoryRuntime runtime,
-      NpmPackageId packageId,
-      String tarballName,
-      String createdBy,
-      String createdByIp) {
-    Optional<Map<String, Object>> packageRootOpt = loadPackageRootMap(runtime, packageId);
-    if (packageRootOpt.isEmpty()) {
-      return;
-    }
-    Map<String, Object> packageRoot = packageRootOpt.get();
-    if (removeVersionsForTarballs(packageRoot, List.of(tarballName))) {
-      savePackageRoot(runtime, packageId, packageRoot, createdBy, createdByIp);
-    }
-  }
-
   private static boolean removeVersionsForTarballs(
       Map<String, Object> packageRoot, List<String> tarballNames) {
     if (tarballNames == null || tarballNames.isEmpty()) return false;
@@ -699,12 +691,35 @@ public class NpmHostedService {
         NpmResponseSupport.write(mapper, packageRoot), createdBy, createdByIp);
   }
 
+  private <T> T mutatePackageRoot(RepositoryRuntime runtime, NpmPackageId packageId,
+      java.util.function.Function<Optional<Map<String, Object>>, T> mutation) {
+    return publicationTransaction("Modify npm package " + runtime.name() + "/" + packageId.id(),
+        () -> mutation.apply(loadPackageRootMapForUpdate(runtime, packageId)));
+  }
+
+  private Optional<Map<String, Object>> loadPackageRootMapForUpdate(RepositoryRuntime runtime, NpmPackageId packageId) {
+    // Do not gap-lock an absent package: first publication still arbitrates through unique inserts.
+    Optional<AssetRecord> existing = assetDao.findAssetByPath(runtime.id(), packageId.id());
+    if (existing.isEmpty()) return Optional.empty();
+    AssetRecord current = assetDao.findAssetByIdForUpdate(existing.get().id())
+        .orElseThrow(() -> new org.springframework.dao.CannotAcquireLockException(
+            "npm package root changed while acquiring its publication lock"));
+    return loadPackageRootMap(packageId, Optional.of(current), true);
+  }
+
   private Optional<Map<String, Object>> loadPackageRootMap(RepositoryRuntime runtime, NpmPackageId packageId) {
-    Optional<AssetRecord> asset = assetDao.findAssetByPath(runtime.id(), packageId.id());
+    return loadPackageRootMap(packageId, assetDao.findAssetByPath(runtime.id(), packageId.id()), false);
+  }
+
+  private Optional<Map<String, Object>> loadPackageRootMap(
+      NpmPackageId packageId, Optional<AssetRecord> asset, boolean locked) {
     if (asset.isEmpty() || asset.get().assetBlobId() == null) {
       return Optional.empty();
     }
-    AssetBlobRecord blob = assetDao.findBlobById(asset.get().assetBlobId()).orElse(null);
+    // A lock wait can advance the root past a MySQL repeatable-read snapshot. Use a
+    // current read for its immutable blob too, so the new root cannot appear empty.
+    AssetBlobRecord blob = (locked ? assetDao.lockLiveBlobById(asset.get().assetBlobId())
+        : assetDao.findBlobById(asset.get().assetBlobId())).orElse(null);
     if (blob == null) {
       return Optional.empty();
     }
@@ -720,11 +735,12 @@ public class NpmHostedService {
     }
   }
 
-  private void assertRevisionIfPresent(RepositoryRuntime runtime, NpmPackageId packageId, String revision) {
+  private void assertRevisionIfPresent(NpmPackageId packageId, String revision,
+      Optional<Map<String, Object>> packageRoot) {
     if (revision == null) {
       return;
     }
-    Map<String, Object> existing = loadPackageRootMap(runtime, packageId)
+    Map<String, Object> existing = packageRoot
         .orElseThrow(() -> new NpmExceptions.NpmNotFoundException("Package '" + packageId.id() + "' not found"));
     String oldRev = NpmMetadata.stringValue(existing.get(NpmMetadata.META_REV), null);
     if (!revision.equals(oldRev)) {

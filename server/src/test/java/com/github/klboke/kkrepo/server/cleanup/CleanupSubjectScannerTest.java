@@ -57,6 +57,24 @@ class CleanupSubjectScannerTest {
   }
 
   @Test
+  void locksDistinctNpmPackageRootsInIdentityOrderBeforeVersionRevalidation() {
+    for (var entry : Map.of("z", 9L, "@scope/a", 2L).entrySet()) {
+      var root = new AssetRecord(entry.getValue(), 1, null, 1L, RepositoryFormat.NPM,
+          entry.getKey(), new byte[0], entry.getKey(), "package-root", "application/json", 10L,
+          null, Instant.EPOCH, Map.of());
+      when(assetDao.findAssetByPath(1, entry.getKey())).thenReturn(java.util.Optional.of(root));
+    }
+    scanner.lockPackageRoots(repository(RepositoryFormat.NPM),
+        java.util.Arrays.asList("z/-/z-1.tgz", "@scope/a/-/a-1.tgz", "z/-/z-2.tgz", "metadata", null));
+    var order = org.mockito.Mockito.inOrder(assetDao);
+    order.verify(assetDao).findAssetByIdForUpdate(2);
+    order.verify(assetDao).findAssetByIdForUpdate(9);
+    org.mockito.Mockito.clearInvocations(assetDao);
+    scanner.lockPackageRoots(repository(), List.of("z/-/z-1.tgz"));
+    org.mockito.Mockito.verifyNoInteractions(assetDao);
+  }
+
+  @Test
   void retainsNewestMavenVersionsAndMatchesArtifactGlob() {
     List<ComponentRecord> components = List.of(
         component(1, "1.0.0"),

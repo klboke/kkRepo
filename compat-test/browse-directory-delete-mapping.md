@@ -29,13 +29,18 @@ components through the existing protocol deletion adapters; a selection crossing
 a component boundary is rejected. Generated metadata is identified separately in
 the preview and repaired by the protocol, rather than deleted as a package.
 All deletes and rebuild markers commit in one database transaction. The execution
-locks component identities before asset identities, including components behind
+locks component identities before their asset identities, including components behind
 file-level Maven deletions. npm package roots outside a selected tarball directory
-are also previewed, fingerprinted and locked before their metadata is rewritten.
+are also previewed, fingerprinted and locked before their version components, matching
+publication's lock-before-read order. Publishers use a current read for the locked
+root's blob even after waiting past a MySQL repeatable-read snapshot.
 The execution rechecks the preview fingerprint before
 any deletion. Another replica can handle execution; no local preview cache is used.
 A concurrent addition after final validation is not part of the confirmed selection
-and is retained. This operation does not provide an undo or restore feature.
+and is retained. Browse pruning locks each parent before rechecking current children;
+asset-bearing directories lose only their asset binding while children remain.
+Real two-connection tests cover uploads committed during these lock waits on both SQL
+engines. This operation does not provide an undo or restore feature.
 
 `BrowseDirectoryDeletionBlackBoxCompatibilityTest` follows the Nexus folder-delete
 mapping and kkRepo's preview/confirmation mapping, comparing nested removal and
@@ -48,7 +53,7 @@ before deleting: Nexus 3.94 builds that tree asynchronously, and an earlier
 | --- | --- |
 | Raw | Nested files removed; similarly named and unrelated siblings retain bytes |
 | Maven | Both versions and artifact metadata removed; sibling artifact retained |
-| npm | Both tarballs removed; versions/tags cleared; sibling packument and bytes retained |
+| npm | Both tarballs removed; versions/tags cleared; sibling packument and bytes retained; publishing a later version does not re-advertise the deleted versions |
 | PyPI | Both wheels removed with 404; Simple root/project indexes updated; sibling retained; projects named `simple` and `packages` remain addressable through Browse |
 | NuGet | Nexus name/version projection mapped to kkRepo flat-container folder; packages/nuspecs and version indexes checked |
 | Yum | RPM directory removed; scoped primary metadata stops advertising it; other release bytes/repomd unchanged |

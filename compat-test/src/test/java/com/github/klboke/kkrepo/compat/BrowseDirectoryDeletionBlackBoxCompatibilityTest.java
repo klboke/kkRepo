@@ -125,6 +125,11 @@ class BrowseDirectoryDeletionBlackBoxCompatibilityTest {
         assertBytes(endpoint, pair.path("deleted-old/-/deleted-old-1.0.0.tgz"), keep.tarball());
         JsonNode document = JSON.readTree(endpoint.request("GET", pair.path("deleted-old"), null).body());
         assertTrue(document.path("versions").has("1.0.0"));
+        var next = NpmRepositoryBlackBoxCompatibilityTest.NpmFixture.create("deleted", "3.0.0");
+        assertSuccess(send(endpoint, "PUT", pair.path("deleted"), next.publishJson(), "application/json"));
+        JsonNode updated = JSON.readTree(endpoint.request("GET", pair.path("deleted"), null).body());
+        assertEquals(List.of("3.0.0"), updated.path("versions").propertyStream().map(Map.Entry::getKey).toList());
+        assertBytes(endpoint, pair.path("deleted/-/deleted-3.0.0.tgz"), next.tarball());
       }
     });
   }
