@@ -47,7 +47,7 @@ function actionHarness() {
   const requests = [];
   const toasts = [];
   const context = {
-    document, window: { innerWidth: 800, innerHeight: 600 },
+    document, window: { innerWidth: 800, innerHeight: 600, kkrepoConfirmDelete: options => context.confirm(options) },
     confirm: () => true,
     fetch: async (path, options) => { requests.push([path, options]); return { ok: true }; },
     loadBlobStores: async () => {},
@@ -222,7 +222,7 @@ test('deletion requires confirmation and sends only the configuration DELETE req
   await context.deleteBlobStore(7);
   assert.equal(requests.length, 0);
   context.confirm = message => {
-    assert.match(message, /Storage files and buckets are not deleted/);
+    assert.match(message.description, /Storage files and buckets are not deleted/);
     return true;
   };
   await context.deleteBlobStore(7);

@@ -1,0 +1,78 @@
+/* Shared by Browse and Admin, including the bounded directory preview. */
+.kk-confirm-dialog {
+  box-sizing: border-box;
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  color: var(--ink-2);
+  box-shadow: var(--shadow-soft);
+  font: inherit;
+  line-height: 1.5;
+}
+.kk-confirm-dialog::backdrop { background: rgb(0 0 0 / 45%); }
+.kk-confirm-dialog form { margin: 0; }
+.kk-confirm-heading { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+.kk-confirm-heading h2 { margin: 0; color: var(--ink-1); font-size: 20px; line-height: 1.3; }
+.kk-confirm-icon { flex: 0 0 24px; width: 24px; height: 24px; color: var(--danger); }
+.kk-confirm-details {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px 16px;
+  padding: 14px 16px;
+  margin: 0 0 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-muted);
+}
+.kk-confirm-details:empty { display: none; }
+.kk-confirm-details dt { color: var(--ink-3); }
+.kk-confirm-details dd { margin: 0; }
+.kk-confirm-dialog code, .kk-confirm-dialog strong { overflow-wrap: anywhere; }
+.kk-confirm-dialog p { margin: 14px 0; }
+.kk-confirm-dialog .kk-confirm-warning {
+  padding: 12px 14px;
+  border: 1px solid var(--danger-line);
+  border-radius: var(--r-md);
+  background: var(--danger-bg);
+  color: var(--danger);
+  font-weight: 600;
+}
+.kk-confirm-dialog label { display: block; margin: 18px 0 8px; font-weight: 600; }
+.kk-confirm-dialog input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  color: var(--ink-1);
+  background: var(--surface);
+  font: inherit;
+}
+.kk-confirm-dialog :is(button, input, summary):focus-visible { outline: 2px solid var(--brand); outline-offset: 3px; }
+.kk-confirm-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+.kk-confirm-dialog button {
+  min-height: 38px;
+  padding: 8px 18px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--ink-2);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.kk-confirm-dialog button:hover { background: var(--surface-sunken); }
+.kk-confirm-dialog .kk-confirm-delete { border-color: var(--danger); background: var(--danger); color: #fff; }
+.kk-confirm-dialog .kk-confirm-delete:hover { filter: brightness(.9); }
+.kk-confirm-dialog button:disabled { opacity: .45; cursor: not-allowed; filter: none; }
+.kk-confirm-dialog [hidden] { display: none !important; }
+@media (max-width: 480px) {
+  .kk-confirm-dialog { padding: 20px 16px; }
+  .kk-confirm-details { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .kk-confirm-details dd + dt { margin-top: 8px; }
+}

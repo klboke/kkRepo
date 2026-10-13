@@ -2147,7 +2147,11 @@ async function checkBlobStore(id, name) {
 
 async function deleteBlobStore(id) {
   const store = blobStores.find((item) => String(item.id) === String(id));
-  if (!store || !confirm(`Delete blob store "${store.name}"? This removes the configuration only. Storage files and buckets are not deleted.`)) return;
+  if (!store || !await window.kkrepoConfirmDelete({
+    title: "Delete blob store?",
+    description: "This removes the configuration only. Storage files and buckets are not deleted.",
+    details: [{ label: "Blob store", value: store.name }]
+  })) return;
   showToast(`Deleting blob store ${store.name}...`);
   try {
     const response = await fetch(`/internal/blob-stores/${encodeURIComponent(id)}`, { method: "DELETE" });
@@ -3503,7 +3507,12 @@ async function saveRepository() {
 }
 
 async function deleteRepository(name) {
-  if (!confirm(`Delete repository "${name}"? This cannot be undone.`)) return;
+  if (!await window.kkrepoConfirmDelete({
+    title: "Delete repository?",
+    description: "The repository configuration and its repository-specific privileges will be removed. Repositories that still contain components cannot be deleted.",
+    details: [{ label: "Repository", value: name }],
+    confirmationText: name
+  })) return;
   showToast(`Deleting ${name}...`);
   try {
     const response = await fetch(`/internal/repositories/${encodeURIComponent(name)}`, {
@@ -4011,7 +4020,11 @@ async function saveSecurityUser() {
 }
 
 async function deleteSecurityUser(source, userId) {
-  if (!confirm(`Delete user "${displaySource(source)}/${userId}"?`)) return;
+  if (!await window.kkrepoConfirmDelete({
+    title: "Delete user?",
+    description: "This removes the user's kkRepo account and API keys. It does not delete accounts from an external identity provider.",
+    details: [{ label: "User", value: displaySource(source) + "/" + userId }]
+  })) return;
   try {
     const response = await fetch(`/internal/security/users/${encodeURIComponent(source)}/${encodeURIComponent(userId)}`, {
       method: "DELETE"
@@ -4134,7 +4147,11 @@ async function saveSecurityRole() {
 }
 
 async function deleteSecurityRole(roleId) {
-  if (!confirm(`Delete role "${roleId}"?`)) return;
+  if (!await window.kkrepoConfirmDelete({
+    title: "Delete role?",
+    description: "Users and roles that rely on this role may lose access.",
+    details: [{ label: "Role", value: roleId }]
+  })) return;
   try {
     const response = await fetch(`/internal/security/roles/${encodeURIComponent(roleId)}`, { method: "DELETE" });
     if (!response.ok) throw new Error(await responseErrorMessage(response));
@@ -4227,7 +4244,11 @@ async function saveSecurityPrivilege() {
 }
 
 async function deleteSecurityPrivilege(privilegeId) {
-  if (!confirm(`Delete privilege "${privilegeId}"?`)) return;
+  if (!await window.kkrepoConfirmDelete({
+    title: "Delete privilege?",
+    description: "Roles that rely on this privilege may lose access.",
+    details: [{ label: "Privilege", value: privilegeId }]
+  })) return;
   try {
     const response = await fetch(`/internal/security/privileges/${encodeURIComponent(privilegeId)}`, { method: "DELETE" });
     if (!response.ok) throw new Error(await responseErrorMessage(response));
@@ -4617,7 +4638,11 @@ async function saveSecurityApiKey() {
 }
 
 async function deleteSecurityApiKey(id) {
-  if (!confirm("Delete this API key?")) return;
+  if (!await window.kkrepoConfirmDelete({
+    title: "Delete API key?",
+    description: "Clients and CI jobs using this key will no longer be able to authenticate with it.",
+    details: [{ label: "API key ID", value: String(id) }]
+  })) return;
   try {
     const response = await fetch(`/internal/security/api-keys/${encodeURIComponent(id)}`, { method: "DELETE" });
     if (!response.ok) throw new Error(await responseErrorMessage(response));
@@ -6344,11 +6369,15 @@ async function deleteSecurityScanPolicy(policyId, button) {
   if (button?.disabled) return;
   const policy = securityScanState.policies.find((item) => String(item.id) === String(policyId));
   // Older replicas omit revision metadata during rolling upgrades; the server still fences deletion.
-  if (!policy || policy.latestRevision === false || !window.confirm(
-    `Delete scan policy "${policy.name}" and ALL its revisions? This cannot be undone. `
-    + "Use the latest revision. Referenced policies cannot be deleted.")) return;
+  if (!policy || policy.latestRevision === false) return;
   if (button) button.disabled = true;
   try {
+    if (!await window.kkrepoConfirmDelete({
+      title: "Delete scan policy?",
+      description: "This deletes the policy and all its revisions. Referenced policies cannot be deleted.",
+      details: [{ label: "Policy", value: policy.name }],
+      confirmationText: policy.name
+    })) return;
     const response = await fetch(
       `/internal/security/scanning/policies/${encodeURIComponent(policy.id)}`, { method: "DELETE" });
     if (!response.ok) throw new Error(await responseErrorMessage(response));
@@ -6724,7 +6753,11 @@ async function securityScanRescan(assetId) {
 }
 
 async function deleteSecurityScanWaiver(waiverId) {
-  if (!window.confirm(`Delete security scan waiver ${waiverId}?`)) return;
+  if (!await window.kkrepoConfirmDelete({
+    title: "Delete security scan waiver?",
+    description: "The waived findings will be subject to the scan policy again, which may block downloads.",
+    details: [{ label: "Waiver ID", value: String(waiverId) }]
+  })) return;
   try {
     const response = await fetch(`/internal/security/scanning/waivers/${waiverId}`, { method: "DELETE" });
     if (!response.ok) throw new Error(await responseErrorMessage(response));
@@ -7824,15 +7857,21 @@ async function submitCleanupTryRun(event) {
   }
 }
 
-function startCleanupRun(policyId, mode, trigger = null) {
+async function startCleanupRun(policyId, mode, trigger = null) {
   const view = cleanupPolicyView(policyId);
   if (!view) return;
   if (mode === "TRY_RUN") {
     showCleanupTryRunDialog(policyId, trigger);
     return;
   }
-  if (!window.confirm(`Run cleanup policy "${view.policy.name}" now? Matching artifacts can be deleted.`)) return;
-  queueCleanupRun(policyId, mode);
+  if (!await window.kkrepoConfirmDelete({
+    title: "Run cleanup policy?",
+    description: "Artifacts matching this policy may be permanently deleted. Review a Try Run before continuing.",
+    details: [{ label: "Policy", value: view.policy.name }],
+    confirmationText: view.policy.name,
+    confirmLabel: "Run cleanup"
+  })) return;
+  await queueCleanupRun(policyId, mode);
 }
 
 async function monitorCleanupRun(runId, label) {
@@ -8073,7 +8112,11 @@ async function renderCleanupRun(view, options = {}) {
 
 async function deleteCleanupPolicy(policyId) {
   const view = cleanupPolicyView(policyId);
-  if (!view || !window.confirm(`Delete cleanup policy "${view.policy.name}"? Historical runs remain available.`)) return;
+  if (!view || !await window.kkrepoConfirmDelete({
+    title: "Delete cleanup policy?",
+    description: "This removes the cleanup policy. Historical runs remain available.",
+    details: [{ label: "Policy", value: view.policy.name }]
+  })) return;
   try {
     const response = await fetch(`/internal/cleanup/policies/${policyId}?revision=${view.policy.revision}`, { method: "DELETE" });
     if (!response.ok) throw new Error(await responseErrorMessage(response));

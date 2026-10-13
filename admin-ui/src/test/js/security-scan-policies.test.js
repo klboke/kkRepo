@@ -10,7 +10,7 @@ function setup(confirm = true, response = { ok: true }) {
   const table = { innerHTML: '' };
   const context = {
     securityScanState: { policies: [{ id: 4, name: 'default-audit', revision: 4, latestRevision: true, blockSeverity: 'HIGH' }] },
-    window: { location: {}, confirm: message => { calls.push(['confirm', message]); return confirm; } },
+    window: { location: {}, kkrepoConfirmDelete: options => { calls.push(['confirm', options]); return Promise.resolve(confirm); } },
     document: { getElementById: () => table },
     fetch: async (url, options) => { calls.push(['fetch', url, options.method]); return response; },
     authRequiredWelcome: () => '/login/',
@@ -51,7 +51,8 @@ test('cancelled or unavailable policy never sends a delete request', async () =>
   await context.deleteSecurityScanPolicy(4);
   await context.deleteSecurityScanPolicy(999);
   assert.equal(calls.length, 1);
-  assert.match(calls[0][1], /default-audit.*ALL its revisions/);
+  assert.equal(calls[0][1].confirmationText, 'default-audit');
+  assert.match(calls[0][1].description, /all its revisions/);
 });
 
 test('204 success resets only the policy cursor and reloads without forcing navigation', async () => {

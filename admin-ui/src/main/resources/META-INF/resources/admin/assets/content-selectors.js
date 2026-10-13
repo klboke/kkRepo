@@ -141,7 +141,11 @@
     finally { saving = false; element("selector-save").disabled = false; }
   }
   async function remove(selector) {
-    if (!window.confirm(`Delete content selector "${selector.name}"?`)) return;
+    if (!await window.kkrepoConfirmDelete({
+      title: "Delete content selector?",
+      description: "This removes the content selector. Selectors referenced by privileges cannot be deleted.",
+      details: [{ label: "Content selector", value: selector.name }]
+    })) return;
     try { await request(`${api}/${encodeURIComponent(selector.name)}`, "DELETE"); await load(); }
     catch (error) { setMessage("selector-status", error.message); }
   }

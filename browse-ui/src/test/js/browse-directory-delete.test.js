@@ -7,6 +7,32 @@ const source = readFileSync(resolve(__dirname,
   "../../main/resources/META-INF/resources/browse/assets/browse.js"), "utf8");
 function section(start, end) { return source.slice(source.indexOf(start), source.indexOf(end, source.indexOf(start))); }
 
+test("file deletion waits for confirmation and cancels after the selection changes", async () => {
+  for (const selectionChanged of [false, true]) {
+    let answer;
+    const requests = [];
+    const state = { repo: "hosted", path: "release/a" };
+    const context = vm.createContext({
+      state, URLSearchParams, canDeleteBrowseDirectory: () => false,
+      currentRepository: () => ({ format: "raw" }),
+      window: { kkrepoConfirmDelete: () => new Promise(resolve => { answer = resolve; }) },
+      fetch: async (...args) => { requests.push(args); return { ok: true }; },
+      refreshTreeAfterDeletion: async () => {},
+    });
+    vm.runInContext(section("async function deleteBrowseEntry", "async function previewDirectoryDeletion"), context);
+    const pending = context.deleteBrowseEntry({ path: "release/a", leaf: true }, { isConnected: true });
+    assert.equal(requests.length, 0);
+    if (selectionChanged) state.path = "release/b";
+    answer(true);
+    await pending;
+    assert.equal(requests.length, selectionChanged ? 0 : 1);
+    if (!selectionChanged) {
+      assert.equal(requests[0][0], "/internal/browse/hosted?path=release%2Fa");
+      assert.equal(requests[0][1].method, "DELETE");
+    }
+  }
+});
+
 class Element {
   constructor() { this.listeners = {}; this.disabled = false; this.value = ""; this.hidden = true; this.isConnected = true; }
   addEventListener(name, fn) { this.listeners[name] = fn; }
@@ -26,6 +52,7 @@ function dialogContext(response) {
   const requests = [];
   const removed = [];
   const location = {};
+  const navigation = new Map();
   const context = vm.createContext({
     document: { createElement: () => dialog, body: { appendChild() {} } },
     state: { repo: "hosted", path: "release" },
@@ -34,15 +61,26 @@ function dialogContext(response) {
     refreshTreeAfterDeletion: async () => {},
     deleteError: async () => "Directory contents changed",
     sessionStorage: { removeItem: key => removed.push(key) }, AUTH_SNAPSHOT_KEY: "auth",
-    window: { location },
+    window: { location,
+      addEventListener: (name, listener) => navigation.set(name, listener),
+      removeEventListener: name => navigation.delete(name),
+    },
   });
   vm.runInContext(section("function showDirectoryDeletionDialog", "async function refreshTreeAfterDeletion"), context);
   context.showDirectoryDeletionDialog("hosted", { path: "release" }, {
     path: "release", assetCount: 2, componentCount: 1, estimatedBytes: 10, metadataAssetCount: 0,
     selectionToken: "reviewed-token", items: [{ path: "release/<a>", action: "DELETE" }],
   }, new Element());
-  return { context, controls, dialog, requests, removed, location };
+  return { context, controls, dialog, requests, removed, location, navigation };
 }
+
+test("navigation cancels a directory preview without deleting and releases listeners", () => {
+  const { dialog, requests, navigation } = dialogContext({ ok: true });
+  navigation.get("hashchange")();
+  assert.equal(dialog.removed, true);
+  assert.equal(requests.length, 0);
+  assert.equal(navigation.size, 0);
+});
 
 test("directory action is limited to hosted supported formats and administrators", () => {
   let repo = { type: "hosted", format: "raw" }; let authorized = true;

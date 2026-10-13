@@ -122,9 +122,11 @@ test("both UI entrypoints load shared scripts before their consumers", () => {
     const scripts = [...html.matchAll(/<script src="([^"]+)"/g)].map((match) => match[1]);
     const csrfIndex = scripts.findIndex((src) => src.startsWith("/login/assets/csrf-fetch.js?"));
     const menuIndex = scripts.findIndex((src) => src.startsWith("/login/assets/account-menu.js?"));
+    const confirmationIndex = scripts.findIndex((src) => src.startsWith("/login/assets/delete-confirmation.js?"));
     const consumerIndex = scripts.findIndex((src) => src.includes(`/assets/${page}.js?`));
     assert.ok(csrfIndex >= 0 && csrfIndex < consumerIndex);
     assert.ok(menuIndex >= 0 && menuIndex < consumerIndex);
+    assert.ok(confirmationIndex >= 0 && confirmationIndex < consumerIndex);
     const source = readFileSync(resolve(base, `assets/${page}.js`), "utf8");
     assert.ok(source.includes("window.nexusPlusAccountMenu"));
     assert.ok(!source.includes("function installCsrfFetch"));
@@ -132,4 +134,94 @@ test("both UI entrypoints load shared scripts before their consumers", () => {
       assert.ok(csrfIndex < scripts.findIndex((src) => src.includes("login-modal.js?")));
     }
   }
+});
+
+function confirmationContext() {
+  const elements = [];
+  const navigation = new Map();
+  const document = {
+    createElement(tag) {
+      const listeners = new Map();
+      const element = {
+        tag, children: [], attributes: {}, value: "", isConnected: false,
+        appendChild(child) { this.children.push(child); child.isConnected = true; },
+        setAttribute(name, value) { this.attributes[name] = value; },
+        addEventListener(name, listener) { listeners.set(name, listener); },
+        fire(name, values = {}) {
+          const event = { preventDefault() { this.prevented = true; }, ...values };
+          listeners.get(name)?.(event);
+          return event;
+        },
+        showModal() { this.open = true; },
+        close() { this.open = false; this.fire("close"); },
+        remove() { this.isConnected = false; },
+        focus() { document.activeElement = this; },
+      };
+      elements.push(element);
+      return element;
+    },
+  };
+  document.body = document.createElement("body");
+  const trigger = document.createElement("button");
+  document.body.appendChild(trigger);
+  trigger.focus();
+  const context = vm.createContext({ document, window: {
+    addEventListener: (name, listener) => navigation.set(name, listener),
+    removeEventListener: name => navigation.delete(name),
+  } });
+  vm.runInContext(readFileSync(resolve(assets, "delete-confirmation.js"), "utf8"), context);
+  return { confirm: context.window.kkrepoConfirmDelete, document, trigger, elements, navigation,
+    get: tag => elements.findLast(element => element.tag === tag),
+    button: text => elements.findLast(element => element.tag === "button" && element.textContent === text),
+  };
+}
+
+test("delete confirmation defaults to Cancel and Enter, Escape and navigation never accept", async () => {
+  for (const cancelWith of ["click", "Enter", "Escape", "hashchange", "pagehide"]) {
+    const h = confirmationContext();
+    const result = h.confirm({ title: "Delete file?" });
+    assert.equal(h.document.activeElement, h.button("Cancel"));
+    if (cancelWith === "click") h.button("Cancel").fire("click");
+    else if (cancelWith === "Enter") assert.equal(h.button("Cancel").fire("keydown", { key: "Enter" }).prevented, true);
+    else if (cancelWith === "Escape") assert.equal(h.get("dialog").fire("cancel").prevented, true);
+    else h.navigation.get(cancelWith)();
+    assert.equal(await result, false);
+    assert.equal(h.get("dialog").isConnected, false);
+    assert.equal(h.document.activeElement, h.trigger);
+    assert.equal(h.navigation.size, 0);
+  }
+});
+
+test("typed confirmation requires an exact name before submitting", async () => {
+  const h = confirmationContext();
+  const result = h.confirm({ confirmationText: "my-repo" });
+  const input = h.get("input");
+  assert.equal(h.button("Delete").disabled, true);
+  for (const wrong of ["", "MY-REPO", "my-repo "]) {
+    input.value = wrong; input.fire("input"); h.get("form").fire("submit");
+    assert.equal(h.button("Delete").disabled, true);
+    assert.equal(h.get("dialog").open, true);
+  }
+  input.value = "my-repo"; input.fire("input");
+  assert.equal(h.button("Delete").disabled, false);
+  h.get("form").fire("submit");
+  assert.equal(await result, true);
+  assert.equal(h.navigation.size, 0);
+});
+
+test("duplicate prompts cancel and names remain literal text", async () => {
+  const h = confirmationContext();
+  const name = '<img src=x onerror="alert(1)">';
+  const result = h.confirm({ details: [{ label: "Repository", value: name }], confirmLabel: "Run cleanup" });
+  assert.equal(h.get("code").textContent, name);
+  assert.equal(h.get("code").children.length, 0);
+  assert.equal(h.get("code").attributes["data-i18n-skip"], "");
+  assert.equal(await h.confirm(), false);
+  assert.equal(h.elements.filter(element => element.tag === "dialog").length, 1);
+  assert.ok(h.button("Run cleanup"));
+  h.get("form").fire("submit");
+  assert.equal(await result, true);
+  const next = h.confirm();
+  h.button("Cancel").fire("click");
+  assert.equal(await next, false);
 });
