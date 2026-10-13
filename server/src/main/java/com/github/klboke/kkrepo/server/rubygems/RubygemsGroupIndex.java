@@ -17,6 +17,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
@@ -87,6 +88,8 @@ final class RubygemsGroupIndex {
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       return MavenResponse.noBody(503).withHeader("Retry-After", "1");
+    } catch (InconsistentSnapshotException e) {
+      return MavenResponse.noBody(404);
     } catch (IOException | IllegalArgumentException e) {
       throw new MavenExceptions.BadUpstreamException("Invalid RubyGems group index: " + path, e);
     } finally {
@@ -171,21 +174,26 @@ final class RubygemsGroupIndex {
     return info(path, List.of());
   }
 
-  private byte[] info(String path, List<RepositoryRuntime> required) throws IOException {
+  private byte[] info(String path, List<Contribution> expected) throws IOException {
     byte[] first = null;
     boolean identical = true;
     Map<String, String> merged = new TreeMap<>();
     var budget = budget(true);
     for (RepositoryRuntime member : group.members()) {
+      Contribution source = expected.stream().filter(row -> row.member.equals(member)).findFirst().orElse(null);
       byte[] body = text(member, path);
       if (body == null) {
-        if (required.contains(member)) return null;
+        if (source != null && !source.versions.isEmpty()) return null;
         continue;
       }
-      if (Arrays.equals(first, body)) continue;
       Map<String, String> rows = infoRows(body);
+      if (!expected.isEmpty()) {
+        if (source == null ? !rows.isEmpty() : !matchesSource(rows.keySet(), body, source)) {
+          throw new InconsistentSnapshotException();
+        }
+      }
+      if (Arrays.equals(first, body)) continue;
       if (rows.isEmpty()) {
-        if (required.contains(member)) return null;
         continue;
       }
       if (first == null) first = body; else identical = false;
@@ -202,6 +210,24 @@ final class RubygemsGroupIndex {
     return utf8("---\n" + String.join("\n", merged.values()) + "\n");
   }
 
+  private static boolean matchesSource(Set<String> actual, byte[] body, Contribution source) {
+    Set<String> expected = source.versions.isEmpty() ? Set.of()
+        : new LinkedHashSet<>(List.of(source.versions.split(",")));
+    if (actual.equals(expected)) return true;
+    // Nexus may omit platforms in /versions while /info includes them. Accept only a
+    // checksum-verified member snapshot and only platform expansions of advertised versions.
+    if (source.checksum.isEmpty() || !source.checksum.equalsIgnoreCase(md5(body))) return false;
+    Set<String> represented = new LinkedHashSet<>();
+    for (String version : actual) {
+      if (expected.contains(version)) { represented.add(version); continue; }
+      int separator = version.indexOf('-');
+      String number = separator < 0 ? version : version.substring(0, separator);
+      if (!expected.contains(number)) return false;
+      represented.add(number);
+    }
+    return represented.equals(expected);
+  }
+
   private byte[] versions() throws IOException {
     Map<String, Versions> merged = new TreeMap<>();
     var budget = budget(true);
@@ -213,21 +239,19 @@ final class RubygemsGroupIndex {
       if (body == null) return null;
       found = true;
       Map<String, Versions> current = versionRows(body);
-      List<RepositoryRuntime> source = List.of(member);
       current.forEach((name, row) -> {
+        Contribution source = new Contribution(member, row.versions, row.checksum);
         Versions first = merged.get(name);
         if (first == null) {
           budget.add(name, row.versions, row.checksum);
+          budget.charge(32);
           merged.put(name, new Versions(row.versions, row.checksum, row.conflict,
-              row.versions.isEmpty() ? List.of() : source, false));
+              List.of(source), false));
         } else {
-          List<RepositoryRuntime> contributors = first.contributors;
-          if (!row.versions.isEmpty()) {
-            budget.charge(32); // Account for the retained contributor list, even for mirrors.
-            var combined = new ArrayList<>(contributors);
-            combined.add(member);
-            contributors = List.copyOf(combined);
-          }
+          budget.charge(32 + IndexBudget.size(List.of(row.versions, row.checksum)));
+          var combined = new ArrayList<>(first.contributors);
+          combined.add(source);
+          List<Contribution> contributors = List.copyOf(combined);
           boolean conflict = first.conflict || row.conflict
               || !first.versions.equals(row.versions) || !first.checksum.equals(row.checksum);
           String active = first.versions;
@@ -248,10 +272,10 @@ final class RubygemsGroupIndex {
       Versions row = entry.getValue();
       // Append-only histories can leave no active versions in any member. Do not let
       // stale info resurrect a fully yanked gem, or require its already removed info.
-      if (row.contributors.isEmpty()) continue;
+      if (row.versions.isEmpty()) continue;
       if (row.conflict) {
         boolean strict = row.multipleSources;
-        byte[] info = info("info/" + entry.getKey(), strict ? row.contributors : List.of());
+        byte[] info = info("info/" + entry.getKey(), row.contributors);
         if (info == null) {
           // Do not publish a cached 200 response that silently drops a conflicting member.
           // A stale, single-source missing-checksum entry can still be skipped as before.
@@ -259,10 +283,6 @@ final class RubygemsGroupIndex {
           continue;
         }
         var available = infoRows(info).keySet();
-        // Member versions and info may come from different proxy-cache snapshots. A
-        // synthesized checksum must not legitimize stale/yanked or missing releases.
-        // Fall back instead of filtering only this body: GET info must have the same MD5.
-        if (!available.equals(new LinkedHashSet<>(List.of(row.versions.split(","))))) return null;
         Versions resolved = new Versions(String.join(",", available), md5(info), false);
         budget.replace(List.of(entry.getKey(), row.versions, row.checksum),
             List.of(entry.getKey(), resolved.versions, resolved.checksum));
@@ -430,9 +450,11 @@ final class RubygemsGroupIndex {
   }
 
   private record Versions(String versions, String checksum, boolean conflict,
-      List<RepositoryRuntime> contributors, boolean multipleSources) {
+      List<Contribution> contributors, boolean multipleSources) {
     private Versions(String versions, String checksum, boolean conflict) {
       this(versions, checksum, conflict, List.of(), false);
     }
   }
+  private record Contribution(RepositoryRuntime member, String versions, String checksum) { }
+  private static final class InconsistentSnapshotException extends IOException { }
 }

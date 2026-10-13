@@ -192,6 +192,22 @@ class RubygemsGroupIndexTest {
   }
 
   @Test
+  void nexusPlatformOmissionsRequireTheMembersExactInfoChecksum() throws Exception {
+    String javaInfo = "---\n1.0-java |checksum:a\n";
+    String rubyInfo = "---\n2.0 |checksum:b\n";
+    put(hosted, "versions", "---\ndemo 2.0 " + md5(rubyInfo) + "\n");
+    put(proxy, "versions", "---\ndemo 1.0 " + md5(javaInfo) + "\n");
+    put(hosted, "info/demo", rubyInfo); put(proxy, "info/demo", javaInfo);
+    String info = text(index().get("info/demo", false));
+    assertEquals("---\ndemo 1.0-java,2.0 " + md5(info) + "\n", text(index().get("versions", false)));
+    put(proxy, "versions", "---\ndemo 1.0 " + "a".repeat(32) + "\n");
+    assertEquals(404, index().get("versions", false).status());
+    // An explicitly advertised platform must never expand to a different platform.
+    put(proxy, "versions", "---\ndemo 1.0-ruby " + md5(javaInfo) + "\n");
+    assertEquals(404, index().get("versions", false).status());
+  }
+
+  @Test
   void legacyOnlyMemberDisablesPartialCompactVersions() {
     put(hosted, "versions", "---\nprivate 1.0 " + "a".repeat(32) + "\n");
     assertEquals(404, index().get("versions", false).status());
@@ -323,13 +339,13 @@ class RubygemsGroupIndexTest {
   }
 
   @Test
-  void resolvingConflictingVersionsMustStillFitTheAggregatePayloadBudget() {
+  void mergingConflictingVersionsMustStillFitTheAggregatePayloadBudget() {
     put(hosted, "versions", "---\ndemo 1 " + "a".repeat(32) + "\nother 1 " + "b".repeat(32) + "\n");
     put(proxy, "versions", "---\ndemo 2 " + "c".repeat(32) + "\n");
     put(hosted, "info/demo", "---\n1 |checksum:a\n");
     put(proxy, "info/demo", "---\n2 |checksum:b\n");
     // Initial rows fit; replacing demo's version list with "1,2" crosses the byte budget.
-    assertThrows(MavenExceptions.BadUpstreamException.class, () -> index(10, 188).get("versions", false));
+    assertThrows(MavenExceptions.BadUpstreamException.class, () -> index(10, 316).get("versions", false));
   }
 
   @Test
