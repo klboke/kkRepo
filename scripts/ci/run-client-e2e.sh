@@ -1393,6 +1393,23 @@ test_rubygems() {
   mkdir -p "$dir/lib" "$gem_home" "$gem_user_home/.gem"
   printf -- '---\n:kkrepo: %s\n' "$token" >"$gem_credentials"
   chmod 0600 "$gem_credentials"
+  local dependency
+  for dependency in "${name}_first" "${name}_last"; do
+    cat >"$dir/$dependency.gemspec" <<EOF
+Gem::Specification.new do |spec|
+  spec.name = "$dependency"
+  spec.version = "1.1.0"
+  spec.summary = "kkrepo dependency e2e"
+  spec.authors = ["kkrepo"]
+  spec.files = []
+end
+EOF
+    run_logged_in "rubygems-build-$dependency" "$dir" gem build "$dependency.gemspec" --output "$dir/$dependency-1.1.0.gem"
+    run_logged "rubygems-push-$dependency" curl -m 60 --fail-with-body -sS \
+      -H "Authorization: $token" -H 'Content-Type: application/octet-stream' \
+      --data-binary "@$dir/$dependency-1.1.0.gem" \
+      "$KKREPO_URL/repository/rubygems-hosted/api/v1/gems"
+  done
   cat >"$dir/$name.gemspec" <<EOF
 Gem::Specification.new do |spec|
   spec.name = "$name"
@@ -1401,6 +1418,8 @@ Gem::Specification.new do |spec|
   spec.authors = ["kkrepo"]
   spec.files = ["lib/$name.rb"]
   spec.require_paths = ["lib"]
+  spec.add_runtime_dependency "${name}_first", "~> 1.0"
+  spec.add_runtime_dependency "${name}_last", ">= 1.0", "< 2.0"
 end
 EOF
   echo 'module KkRepoClientE2ERubyGems; VALUE = "kkrepo client e2e"; end' >"$dir/lib/$name.rb"
@@ -1412,6 +1431,12 @@ EOF
     "$KKREPO_URL/repository/rubygems-group/versions" \
     "$ARTIFACT_DIR/rubygems-versions"
   capture_rubygems_metadata "$name"
+  run_logged rubygems-dependency-requirements ruby -rzlib -rrubygems -e '
+    spec = Marshal.load(Zlib::Inflate.inflate(File.binread(ARGV[0])))
+    actual = spec.runtime_dependencies.to_h { |dependency| [dependency.name, dependency.requirement.to_s] }
+    expected = { "#{ARGV[1]}_first" => "~> 1.0", "#{ARGV[1]}_last" => ">= 1.0, < 2.0" }
+    abort "dependency requirements changed: #{actual.inspect}" unless actual == expected
+  ' "$ARTIFACT_DIR/rubygems-quick-spec.rz" "$name"
   run_logged rubygems-install env GEM_HOME="$gem_home" GEM_PATH="$gem_home" \
     gem install "$name" --version 1.0.0 --clear-sources \
     --source "$KKREPO_AUTH_URL/repository/rubygems-group/" \

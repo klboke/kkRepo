@@ -70,6 +70,13 @@ Yank 更新可用性 metadata，不能替代 cleanup policy。
 source 时，检查 `gem sources --list` 和 Bundler mirror 配置。Push/yank 使用 hosted，安装
 使用 group。
 
+
+依赖约束解析修复前上传的 gem，已存储的元数据可能仍有错误约束。升级或仅重建索引不会
+重新解析原始归档。可临时允许 hosted 仓库重复发布，向同一仓库重新上传**完全相同的原始
+`.gem` 文件**，随后恢复原写入策略。这会刷新依赖元数据、quick specification 和 compact
+info；后台索引重建会更新汇总索引。修复时不要从源码重新打包，也不要修改版本。检查
+`info/<gem-name>` 中的约束，并清理本地缓存后重新运行 Bundler。
+
 ## 相关文档
 
 - [RubyGems 客户端配置示例](../client-recipes.md#rubygems)

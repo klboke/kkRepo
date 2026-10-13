@@ -691,10 +691,24 @@ public class RubygemsService {
     for (String rawLine : yaml.split("\\R")) {
       String line = rawLine.stripTrailing();
       String trimmed = line.trim();
-      if (trimmed.equals("dependencies:")) {
+      if (line.equals("dependencies:")) {
         inDependencies = true;
         inAuthors = false;
         continue;
+      }
+      // RubyGems emits more root fields after the dependency sequence, including
+      // required_ruby_version and requirements: []. They must not overwrite the
+      // final dependency's requirements. Finalize before reading that root field.
+      if (inDependencies && !line.isEmpty() && !Character.isWhitespace(line.charAt(0))
+          && !trimmed.startsWith("-") && trimmed.contains(":")) {
+        if (dependencyName != null) {
+          dependencies.add(new GemDependency(dependencyName, dependencyRequirements));
+        }
+        dependencyName = null;
+        dependencyRequirements = List.of();
+        pendingRequirementOperator = null;
+        inDependencies = false;
+        inRequirements = false;
       }
       if (!inDependencies) {
         if (trimmed.equals("authors:")) {
@@ -1141,8 +1155,8 @@ public class RubygemsService {
     return out.toString();
   }
 
-  private static Map<String, Object> dependencyApiDependencies(List<GemDependency> dependencies) {
-    Map<String, Object> out = new LinkedHashMap<>();
+  private static List<List<String>> dependencyApiDependencies(List<GemDependency> dependencies) {
+    List<List<String>> out = new ArrayList<>();
     if (dependencies == null) {
       return out;
     }
@@ -1150,7 +1164,7 @@ public class RubygemsService {
       if (dep.name() == null || dep.name().isBlank()) {
         continue;
       }
-      out.put(dep.name(), dependencyApiRequirement(dep.requirements()));
+      out.add(List.of(dep.name(), dependencyApiRequirement(dep.requirements())));
     }
     return out;
   }

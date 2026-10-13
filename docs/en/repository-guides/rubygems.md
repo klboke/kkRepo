@@ -72,6 +72,15 @@ Protect `~/.gem/credentials` and rotate tokens independently from user passwords
 an old source after configuration changes, inspect `gem sources --list` and Bundler mirror settings.
 Use hosted for push/yank and group for install.
 
+
+Gems uploaded before the dependency-requirement parser fix can retain incorrect dependency
+constraints in stored metadata. Upgrading or rebuilding indexes alone does not reparse those
+archives. Re-publish the **identical original `.gem` file** to the same hosted repository with
+redeployment temporarily allowed, then restore the original write policy. This refreshes the
+stored dependency metadata, quick specification and compact info; the background index rebuild
+updates the aggregate indexes. Do not rebuild the gem from source or change its version for this
+repair. Verify the constraints at `info/<gem-name>` and retry Bundler with a fresh local cache.
+
 ## Related Documentation
 
 - [RubyGems client recipe](../client-recipes.md#rubygems)

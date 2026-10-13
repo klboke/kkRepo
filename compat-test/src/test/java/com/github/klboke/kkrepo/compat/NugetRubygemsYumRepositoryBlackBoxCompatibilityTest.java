@@ -1379,6 +1379,18 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
               - - "<"
                 - !ruby/object:Gem::Version
                   version: 3.0.0
+            type: :runtime
+          required_ruby_version: !ruby/object:Gem::Requirement
+            requirements:
+            - - ">="
+              - !ruby/object:Gem::Version
+                version: '0'
+          required_rubygems_version: !ruby/object:Gem::Requirement
+            requirements:
+            - - ">="
+              - !ruby/object:Gem::Version
+                version: '0'
+          requirements: []
           """.formatted(name, version, name.replace('-', '_'), dependencyName);
       ByteArrayOutputStream dataTarGz = new ByteArrayOutputStream();
       try (GZIPOutputStream gzip = new GZIPOutputStream(dataTarGz);
