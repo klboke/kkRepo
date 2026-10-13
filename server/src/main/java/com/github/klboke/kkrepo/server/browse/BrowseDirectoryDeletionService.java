@@ -4,6 +4,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao.DeletionNode;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
@@ -39,15 +40,17 @@ public class BrowseDirectoryDeletionService {
   private final RepositoryDao repositories;
   private final BrowseNodeDao nodes;
   private final AssetDao assets;
+  private final ComponentDao components;
   private final CleanupSubjectScanner subjects;
   private final RepositoryContentDeletionService deletion;
 
   public BrowseDirectoryDeletionService(
-      RepositoryDao repositories, BrowseNodeDao nodes, AssetDao assets,
+      RepositoryDao repositories, BrowseNodeDao nodes, AssetDao assets, ComponentDao components,
       CleanupSubjectScanner subjects, RepositoryContentDeletionService deletion) {
     this.repositories = repositories;
     this.nodes = nodes;
     this.assets = assets;
+    this.components = components;
     this.subjects = subjects;
     this.deletion = deletion;
   }
@@ -68,6 +71,12 @@ public class BrowseDirectoryDeletionService {
     requireToken(expected, command.selectionToken());
     // Component locks precede asset locks, matching publication/cleanup ordering. Whole-component
     // adapters may only operate when ALL of their assets were included in the preview.
+    for (long componentId : expected.directAssets().stream().map(AssetRecord::componentId)
+        .filter(Objects::nonNull).distinct().sorted().toList()) {
+      components.findByIdForUpdate(componentId)
+          .filter(component -> component.repositoryId() == expected.repository().id())
+          .orElseThrow(BrowseDirectoryDeletionService::stale);
+    }
     for (Subject subject : expected.subjects()) {
       Subject current = subjects.resolveLocked(
           expected.repository(), subject.kind(), subject.identityId(), subject.deletePath())
@@ -110,8 +119,7 @@ public class BrowseDirectoryDeletionService {
       throw badRequest("Directory deletion is unavailable for this repository type or format");
     }
     if (!repository.online()) throw badRequest("Bring the repository online before deleting a directory");
-    String treePath = repository.format() == RepositoryFormat.PYPI
-        && !path.equals("simple") && !path.startsWith("simple/") ? "packages/" + path : path;
+    String treePath = repository.format() == RepositoryFormat.PYPI ? "packages/" + path : path;
     var root = nodes.findNode(repository.id(), treePath)
         .filter(node -> node.hasChildren() && node.hasAssetSubtree())
         .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Directory not found"));
@@ -136,9 +144,29 @@ public class BrowseDirectoryDeletionService {
     }
     Map<Long, String> paths = new LinkedHashMap<>();
     selected.forEach(node -> paths.put(node.assetId(), node.path()));
-    Map<Long, AssetRecord> loaded = assets.findAssetsByIds(paths.keySet());
+    Map<Long, AssetRecord> loaded = new LinkedHashMap<>(assets.findAssetsByIds(paths.keySet()));
     if (loaded.size() != paths.size() || loaded.values().stream()
         .anyMatch(asset -> asset.repositoryId() != repository.id())) throw stale();
+    if (repository.format() == RepositoryFormat.NPM) {
+      // A tarball subdirectory does not contain its packument. The npm adapter rewrites
+      // that shared row, so it must participate in the token and transaction locks too.
+      Set<String> packagePaths = new HashSet<>();
+      for (AssetRecord asset : loaded.values()) {
+        int separator = asset.path().indexOf("/-/");
+        if (separator > 0) packagePaths.add(asset.path().substring(0, separator));
+      }
+      Map<String, AssetRecord> roots = assets.findAssetsByPaths(repository.id(), packagePaths);
+      for (String packagePath : packagePaths) {
+        AssetRecord rootAsset = roots.get(packagePath);
+        if (rootAsset == null || !"package-root".equals(rootAsset.kind())
+            || rootAsset.repositoryId() != repository.id() || rootAsset.componentId() != null) {
+          throw badRequest("Package metadata is unavailable; repair the npm package before deleting this directory");
+        }
+        paths.put(rootAsset.id(), packagePath);
+        loaded.put(rootAsset.id(), rootAsset);
+      }
+      if (paths.size() > MAX_ASSETS) throw tooLarge();
+    }
     List<AssetRecord> rows = loaded.values().stream().sorted(Comparator.comparing(AssetRecord::id)).toList();
     List<AssetRecord> direct = new ArrayList<>();
     List<Subject> packages = new ArrayList<>();

@@ -984,10 +984,11 @@ class BrowseAssetDetailServiceTest {
     assertEquals(List.of(key(repository.id(), tarballPath), key(repository.id(), "demo")), assets.pathLookups);
   }
 
-  @Test
-  void pypiPublicPathDownloadUrlUsesPackagesProtocolPath() {
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings = {"demo", "simple", "packages"})
+  void pypiPublicPathDownloadUrlUsesPackagesProtocolPath(String project) {
     RepositoryRecord repository = repository(1L, "pypi-hosted", RepositoryFormat.PYPI, RepositoryType.HOSTED);
-    String publicPath = "demo/1.0.0/demo-1.0.0-py3-none-any.whl";
+    String publicPath = project + "/1.0.0/demo-1.0.0-py3-none-any.whl";
     String storagePath = "packages/" + publicPath;
     AssetRecord wheel = asset(10L, repository.id(), 100L, storagePath, RepositoryFormat.PYPI);
     AssetBlobRecord blob = blob(100L, 952L);
@@ -1002,7 +1003,7 @@ class BrowseAssetDetailServiceTest {
 
     BrowseAssetDetailService.BrowseAssetDetail detail = service.detail(repository, publicPath, null);
 
-    assertEquals("/repository/pypi-hosted/packages/demo/1.0.0/demo-1.0.0-py3-none-any.whl", detail.downloadUrl());
+    assertEquals("/repository/pypi-hosted/" + storagePath, detail.downloadUrl());
     assertEquals(List.of(key(repository.id(), storagePath)), assets.pathLookups);
   }
 

@@ -358,9 +358,6 @@ public class BrowseController {
     if (parent.isEmpty()) {
       return new BrowsePath("packages", "", true);
     }
-    if (parent.equals("simple") || parent.startsWith("simple/")) {
-      return new BrowsePath(parent, parent, false);
-    }
     return new BrowsePath("packages/" + parent, parent, true);
   }
 

@@ -1945,6 +1945,11 @@ async function previewDirectoryDeletion(entry, button) {
     const response = await fetch(`/internal/browse/${encodeURIComponent(repository)}/directory-deletion?${params}`, {
       headers: { Accept: "application/json" }, cache: "no-store",
     });
+    if (response.status === 401) {
+      sessionStorage.removeItem(AUTH_SNAPSHOT_KEY);
+      window.location.href = "/browse/#browse/welcome";
+      return;
+    }
     if (!response.ok) throw new Error(await deleteError(response));
     const preview = await response.json();
     if (state.repo !== repository || state.path !== entry.path) return;
@@ -2019,6 +2024,12 @@ function showDirectoryDeletionDialog(repository, entry, preview, trigger) {
         headers: { Accept: "application/json", "Content-Type": "application/json" },
         body: JSON.stringify({ path: preview.path, confirmationPath: input.value, selectionToken: preview.selectionToken }),
       });
+      if (response.status === 401) {
+        sessionStorage.removeItem(AUTH_SNAPSHOT_KEY);
+        dialog.close();
+        window.location.href = "/browse/#browse/welcome";
+        return;
+      }
       if (!response.ok) throw new Error(await deleteError(response));
       dialog.close();
       try {

@@ -862,27 +862,28 @@ class BrowseContentDeleteControllerTest {
         repository.id(), RepositoryIndexRebuildDao.HELM_INDEX);
   }
 
-  @Test
-  void mapsPypiPublicPathAndRebuildsProjectAndRootIndexes() {
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings = {"demo-pkg", "simple", "packages"})
+  void mapsPypiPublicPathAndRebuildsProjectAndRootIndexes(String project) {
     Fixture fixture = fixture(true, AccessDecision.allow());
     RepositoryRecord repository =
         repository(1L, "pypi", RepositoryFormat.PYPI, RepositoryType.HOSTED);
-    String storagePath = "packages/demo-pkg/1.0.0/demo_pkg-1.0.0.whl";
+    String storagePath = "packages/" + project + "/1.0.0/demo_pkg-1.0.0.whl";
     AssetRecord wheel = asset(
         11L, 21L, 31L, RepositoryFormat.PYPI, storagePath, "package",
-        Map.of("normalizedName", "demo-pkg"));
+        Map.of("normalizedName", project));
     when(fixture.repositoryDao.findByName("pypi")).thenReturn(Optional.of(repository));
     when(fixture.assetDao.findAssetByPath(1L, storagePath)).thenReturn(Optional.of(wheel));
     when(fixture.assetDao.listAssetsByPrefix(1L, storagePath + "/")).thenReturn(List.of());
 
     BrowseContentDeleteController.BrowseDeleteResult result = fixture.controller.delete(
-        "pypi", "demo-pkg/1.0.0/demo_pkg-1.0.0.whl", null, new MockHttpServletRequest());
+        "pypi", project + "/1.0.0/demo_pkg-1.0.0.whl", null, new MockHttpServletRequest());
 
-    assertEquals("demo-pkg/1.0.0/demo_pkg-1.0.0.whl", result.path());
+    assertEquals(project + "/1.0.0/demo_pkg-1.0.0.whl", result.path());
     verify(fixture.indexRebuildDao).enqueue(1L, RepositoryIndexRebuildDao.PYPI_ROOT);
     verify(fixture.indexRebuildDao).enqueue(
-        1L, RepositoryIndexRebuildDao.PYPI_PROJECT, "demo-pkg");
-    verify(fixture.pypiCache).invalidateMemberProjectAfterCommit(1L, "demo-pkg");
+        1L, RepositoryIndexRebuildDao.PYPI_PROJECT, project);
+    verify(fixture.pypiCache).invalidateMemberProjectAfterCommit(1L, project);
     verify(fixture.groupMemberAssetCache).invalidateMemberAfterCommit(1L);
   }
 

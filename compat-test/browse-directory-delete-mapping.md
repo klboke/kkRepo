@@ -29,7 +29,10 @@ components through the existing protocol deletion adapters; a selection crossing
 a component boundary is rejected. Generated metadata is identified separately in
 the preview and repaired by the protocol, rather than deleted as a package.
 All deletes and rebuild markers commit in one database transaction. The execution
-locks the selected components/assets and rechecks the preview fingerprint before
+locks component identities before asset identities, including components behind
+file-level Maven deletions. npm package roots outside a selected tarball directory
+are also previewed, fingerprinted and locked before their metadata is rewritten.
+The execution rechecks the preview fingerprint before
 any deletion. Another replica can handle execution; no local preview cache is used.
 A concurrent addition after final validation is not part of the confirmed selection
 and is retained. This operation does not provide an undo or restore feature.
@@ -46,7 +49,7 @@ before deleting: Nexus 3.94 builds that tree asynchronously, and an earlier
 | Raw | Nested files removed; similarly named and unrelated siblings retain bytes |
 | Maven | Both versions and artifact metadata removed; sibling artifact retained |
 | npm | Both tarballs removed; versions/tags cleared; sibling packument and bytes retained |
-| PyPI | Both wheels removed with 404; Simple root/project indexes updated; sibling retained |
+| PyPI | Both wheels removed with 404; Simple root/project indexes updated; sibling retained; projects named `simple` and `packages` remain addressable through Browse |
 | NuGet | Nexus name/version projection mapped to kkRepo flat-container folder; packages/nuspecs and version indexes checked |
 | Yum | RPM directory removed; scoped primary metadata stops advertising it; other release bytes/repomd unchanged |
 | RubyGems | Gem files and quick gemspecs removed; compact and Marshal indexes updated |

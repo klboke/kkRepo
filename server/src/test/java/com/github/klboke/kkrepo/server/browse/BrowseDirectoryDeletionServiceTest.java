@@ -25,10 +25,11 @@ class BrowseDirectoryDeletionServiceTest {
   final RepositoryDao repositories = mock(RepositoryDao.class);
   final BrowseNodeDao nodes = mock(BrowseNodeDao.class);
   final AssetDao assets = mock(AssetDao.class);
+  final ComponentDao components = mock(ComponentDao.class);
   final CleanupSubjectScanner scanner = mock(CleanupSubjectScanner.class);
   final RepositoryContentDeletionService deletion = mock(RepositoryContentDeletionService.class);
   final BrowseDirectoryDeletionService service = new BrowseDirectoryDeletionService(
-      repositories, nodes, assets, scanner, deletion);
+      repositories, nodes, assets, components, scanner, deletion);
   RepositoryRecord repository;
   Map<Long, AssetRecord> content = new LinkedHashMap<>();
 
@@ -37,12 +38,25 @@ class BrowseDirectoryDeletionServiceTest {
         "raw-hosted", true, 1L, null, null, null, null, "ALLOW", true, Map.of());
     when(repositories.findByName("hosted")).thenAnswer(call -> Optional.of(repository));
     String stored = format == RepositoryFormat.PYPI ? "packages/" + path : path;
-    when(nodes.findNode(1, stored)).thenReturn(Optional.of(new BrowseChild(
-        1, stored, path, 0, null, null, null, null, null, null, true, true)));
+    when(nodes.findNode(1, stored)).thenAnswer(call -> Optional.of(new BrowseChild(
+        1, stored, path, 0, content.values().stream().filter(a -> a.path().equals(stored))
+            .map(AssetRecord::id).findFirst().orElse(null), null, null, null, null, null, true, true)));
     when(nodes.listDeletionChildren(eq(1L), anyList(), anyInt())).thenReturn(List.of());
     when(nodes.listDeletionChildren(eq(1L), eq(List.of(1L)), anyInt())).thenAnswer(call ->
-        content.values().stream().map(row -> new DeletionNode(row.id(), stored + "/" + row.name(), row.id())).toList());
-    when(assets.findAssetsByIds(anyCollection())).thenAnswer(call -> Map.copyOf(content));
+        content.values().stream().filter(row -> row.path().startsWith(stored + "/"))
+            .map(row -> new DeletionNode(row.id(), row.path(), row.id())).toList());
+    when(assets.findAssetsByIds(anyCollection())).thenAnswer(call -> {
+      Collection<Long> ids = call.getArgument(0);
+      var selected = new LinkedHashMap<Long, AssetRecord>();
+      content.forEach((id, row) -> { if (ids.contains(id)) selected.put(id, row); });
+      return selected;
+    });
+    when(assets.findAssetsByPaths(eq(1L), anyCollection())).thenAnswer(call -> {
+      Collection<String> paths = call.getArgument(1);
+      var selected = new LinkedHashMap<String, AssetRecord>();
+      content.values().forEach(row -> { if (paths.contains(row.path())) selected.put(row.path(), row); });
+      return selected;
+    });
     when(assets.findAssetByIdForUpdate(anyLong())).thenAnswer(call -> Optional.ofNullable(content.get(call.getArgument(0))));
     when(deletion.deleteBatchForCleanup(eq("hosted"), anyList(), eq("admin"))).thenAnswer(call ->
         ((List<?>) call.getArgument(1)).stream().map(x -> 1).toList());
@@ -52,6 +66,13 @@ class BrowseDirectoryDeletionServiceTest {
     return new AssetRecord(id, 1, component, id + 100, repository.format(), path, new byte[0],
         path.substring(path.lastIndexOf('/') + 1), path.endsWith("root.json") ? "package-root" : "artifact", "application/octet-stream", 17L,
         null, Instant.parse("2026-10-12T00:00:00Z"), Map.of());
+  }
+
+  AssetRecord npmRoot(long id, String path) {
+    var row = asset(id, path, null);
+    return new AssetRecord(row.id(), row.repositoryId(), null, row.assetBlobId(), row.format(),
+        path, row.pathHash(), row.name(), "package-root", row.contentType(), row.size(),
+        row.lastDownloadedAt(), row.lastUpdatedAt(), row.attributes());
   }
 
   Command command(Preview preview) {
@@ -120,7 +141,7 @@ class BrowseDirectoryDeletionServiceTest {
   @Test void packageDeletionUsesCompleteProtocolSubjectsAndSeparatesGeneratedMetadata() {
     setup(RepositoryFormat.NPM, "@scope/pkg");
     content.put(10L, asset(10, "@scope/pkg/-/pkg-1.tgz", 50L));
-    content.put(11L, asset(11, "@scope/pkg/root.json", null));
+    content.put(11L, npmRoot(11, "@scope/pkg"));
     Subject subject = subject(50, List.of(10L));
     when(scanner.resolve(repository, "COMPONENT", 50, content.get(10L).path())).thenReturn(Optional.of(subject));
     when(scanner.resolveLocked(repository, "COMPONENT", 50, subject.deletePath())).thenReturn(Optional.of(subject));
@@ -142,13 +163,14 @@ class BrowseDirectoryDeletionServiceTest {
     verifyNoInteractions(deletion);
   }
 
-  @Test void pypiPreviewUsesPublicPathsAndProjectedTree() {
-    setup(RepositoryFormat.PYPI, "demo");
-    content.put(10L, asset(10, "packages/demo/demo.whl", 50L));
+  @ParameterizedTest @ValueSource(strings = {"demo", "simple", "packages"})
+  void pypiPreviewUsesPublicPathsAndProjectedTree(String name) {
+    setup(RepositoryFormat.PYPI, name);
+    content.put(10L, asset(10, "packages/" + name + "/demo.whl", 50L));
     when(scanner.resolve(repository, "COMPONENT", 50, content.get(10L).path()))
         .thenReturn(Optional.of(subject(50, List.of(10L))));
-    assertEquals("demo/demo.whl", service.preview("hosted", "demo").items().getFirst().path());
-    verify(nodes).findNode(1, "packages/demo");
+    assertEquals(name + "/demo.whl", service.preview("hosted", name).items().getFirst().path());
+    verify(nodes).findNode(1, "packages/" + name);
   }
 
   @Test void truncatedPreviewAndEmptyMetadataOnlyDirectoriesCannotBeExecuted() {
@@ -273,6 +295,68 @@ class BrowseDirectoryDeletionServiceTest {
     assertStatus(409, () -> service.preview("hosted", "release"));
     verifyNoInteractions(deletion);
   }
+
+  @Test void npmTarballDirectoryFingerprintsAndLocksItsExternalPackument() {
+    setup(RepositoryFormat.NPM, "@scope/pkg/-");
+    content.put(10L, asset(10, "@scope/pkg/-/pkg-1.tgz", 50L));
+    content.put(11L, npmRoot(11, "@scope/pkg"));
+    var subject = subject(50, List.of(10L));
+    when(scanner.resolve(repository, "COMPONENT", 50, content.get(10L).path())).thenReturn(Optional.of(subject));
+    when(scanner.resolveLocked(repository, "COMPONENT", 50, subject.deletePath())).thenReturn(Optional.of(subject));
+    var preview = service.preview("hosted", "@scope/pkg/-");
+    assertEquals(1, preview.assetCount());
+    assertEquals(1, preview.metadataAssetCount());
+    assertTrue(preview.items().stream().anyMatch(item -> item.path().equals("@scope/pkg")
+        && item.action().equals("PROTOCOL_METADATA")));
+    service.delete("hosted", command(preview), "admin");
+    var order = inOrder(assets, deletion);
+    order.verify(assets).findAssetByIdForUpdate(11);
+    order.verify(deletion).deleteBatchForCleanup(eq("hosted"), anyList(), eq("admin"));
+    clearInvocations(deletion);
+    var before = content.get(11L);
+    content.put(11L, new AssetRecord(before.id(), 1, null, 999L, before.format(), before.path(),
+        before.pathHash(), before.name(), before.kind(), before.contentType(), before.size(), null,
+        before.lastUpdatedAt(), before.attributes()));
+    assertStatus(409, () -> service.delete("hosted", command(preview), "admin"));
+    verifyNoInteractions(deletion);
+  }
+
+  @Test void npmCannotDeleteWithoutValidPackumentOrExceedTheBudgetWithDependencies() {
+    setup(RepositoryFormat.NPM, "pkg/-");
+    content.put(10L, asset(10, "pkg/-/pkg-1.tgz", 50L));
+    assertStatus(400, () -> service.preview("hosted", "pkg/-"));
+    content.put(11L, asset(11, "pkg", null));
+    assertStatus(400, () -> service.preview("hosted", "pkg/-"));
+    content.clear();
+    IntStream.range(10, 510).forEach(i -> content.put((long) i, asset(i, "pkg/-/pkg-" + i + ".tgz", 50L)));
+    content.put(510L, npmRoot(510, "pkg"));
+    assertStatus(400, () -> service.preview("hosted", "pkg/-"));
+    verifyNoInteractions(scanner, deletion);
+  }
+
+  @Test void directAssetsLockTheirComponentsInOrderBeforeLockingAnyAsset() {
+    setup(RepositoryFormat.MAVEN2, "org/example");
+    content.put(10L, asset(10, "org/example/a.jar", 60L));
+    content.put(11L, asset(11, "org/example/b.jar", 50L));
+    for (long id : List.of(50L, 60L)) {
+      when(components.findByIdForUpdate(id)).thenReturn(Optional.of(new ComponentRecord(
+          id, 1, RepositoryFormat.MAVEN2, "org", "example", "1", "jar", new byte[0], Map.of(), Instant.now())));
+    }
+    var preview = service.preview("hosted", "org/example");
+    service.delete("hosted", command(preview), "admin");
+    var order = inOrder(components, assets, deletion);
+    order.verify(components).findByIdForUpdate(50);
+    order.verify(components).findByIdForUpdate(60);
+    order.verify(assets).findAssetByIdForUpdate(10);
+    order.verify(assets).findAssetByIdForUpdate(11);
+    order.verify(deletion).deleteBatchForCleanup(eq("hosted"), anyList(), eq("admin"));
+    clearInvocations(deletion, assets);
+    when(components.findByIdForUpdate(50)).thenReturn(Optional.empty());
+    assertStatus(409, () -> service.delete("hosted", command(preview), "admin"));
+    verify(assets, never()).findAssetByIdForUpdate(anyLong());
+    verifyNoInteractions(deletion);
+  }
+
 
   Subject subject(long id, List<Long> assetIds) {
     return new Subject(id, "COMPONENT", "component:" + id, new byte[0], "family", "pkg", "pkg@1", "1",

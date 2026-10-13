@@ -129,10 +129,12 @@ class BrowseDirectoryDeletionBlackBoxCompatibilityTest {
     });
   }
 
-  @Test void pypiFolderDeletionRepairsSimpleIndexAndRetainsSibling() throws Exception {
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings = {"deleted", "simple", "packages"})
+  void pypiFolderDeletionRepairsSimpleIndexAndRetainsSibling(String project) throws Exception {
     withRepositories("pypi", pair -> {
-      var first = PypiRepositoryBlackBoxCompatibilityTest.WheelFixture.create("deleted", "1.0.0");
-      var second = PypiRepositoryBlackBoxCompatibilityTest.WheelFixture.create("deleted", "2.0.0");
+      var first = PypiRepositoryBlackBoxCompatibilityTest.WheelFixture.create(project, "1.0.0");
+      var second = PypiRepositoryBlackBoxCompatibilityTest.WheelFixture.create(project, "2.0.0");
       var keep = PypiRepositoryBlackBoxCompatibilityTest.WheelFixture.create("kept", "1.0.0");
       for (Endpoint endpoint : pair.endpoints()) {
         for (var fixture : List.of(first, second, keep)) {
@@ -140,13 +142,16 @@ class BrowseDirectoryDeletionBlackBoxCompatibilityTest {
               "metadata_version", "2.1", "name", fixture.name(), "version", fixture.version()),
               "content", fixture.filename(), fixture.bytes());
         }
-        awaitText(endpoint, pair.path("simple/deleted/"), second.filename(), true);
+        awaitText(endpoint, pair.path("simple/" + project + "/"), second.filename(), true);
       }
-      deleteBoth(pair, "deleted", List.of(first.filename(), second.filename()));
+      var listing = pair.actual().request("GET", "/internal/browse/" + pair.repo() + "?path=" + project, null);
+      assertEquals(200, listing.statusCode(), listing.body());
+      assertTrue(JSON.readTree(listing.body()).path("entries").toString().contains(project + "/1.0.0"), listing.body());
+      deleteBoth(pair, project, List.of(first.filename(), second.filename()));
       for (Endpoint endpoint : pair.endpoints()) {
         awaitMissing(endpoint, pair.path(first.packagePath()));
         awaitMissing(endpoint, pair.path(second.packagePath()));
-        awaitText(endpoint, pair.path("simple/"), ">deleted<", false);
+        awaitText(endpoint, pair.path("simple/"), ">" + project + "<", false);
         awaitText(endpoint, pair.path("simple/"), "kept", true);
         assertBytes(endpoint, pair.path(keep.packagePath()), keep.bytes());
         awaitText(endpoint, pair.path("simple/kept/"), keep.filename(), true);

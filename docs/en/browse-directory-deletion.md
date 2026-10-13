@@ -18,7 +18,9 @@ rejected without deleting anything: choose a smaller directory. The server does
 not execute a truncated preview. For package-based formats, select a directory
 containing complete packages; a partial package selection cannot silently delete
 files outside that directory. Generated metadata is listed separately, managed
-by the package protocol, and may remain or be regenerated after deletion.
+by the package protocol, and may remain or be regenerated after deletion. For npm,
+the affected package-root metadata is included even when it is outside the selected
+tarball directory; it also counts toward the 500-file limit and is checked for changes.
 
 If contents change before execution, the server rejects the operation and asks
 for a new preview. The preview can be created on one replica and executed on

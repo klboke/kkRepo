@@ -93,6 +93,7 @@ final class BrowseDirectoryDeletionSmokeChecks {
     assertEquals(1, service.preview("directory-raw", "Releases").assetCount());
     assertEquals("original", request(first, "GET", content("Releases/nested/a.txt"), null, true).body());
     exerciseNpm(first, second);
+    verifyMavenLockOrder(first, second);
   }
 
   private static void exerciseNpm(ConfigurableApplicationContext first, ConfigurableApplicationContext second) throws Exception {
@@ -136,6 +137,109 @@ final class BrowseDirectoryDeletionSmokeChecks {
     var root = request(second, "GET", "/repository/directory-npm/@scope/alpha", null, true);
     assertTrue(root.statusCode() == 404 || (root.statusCode() == 200
         && JSON.readTree(root.body()).path("versions").isEmpty()), root.body());
+    verifyNpmPackumentLock(first, second, runtime.id());
+  }
+
+  private static void verifyNpmPackumentLock(ConfigurableApplicationContext first,
+      ConfigurableApplicationContext second, long repositoryId) throws Exception {
+    var assets = first.getBean(AssetDao.class);
+    var root = assets.findAssetByPath(repositoryId, "@other/keep").orElseThrow();
+    var delegate = first.getBean(com.github.klboke.kkrepo.server.browse.RepositoryContentDeletionService.class);
+    var guarded = org.mockito.Mockito.mock(com.github.klboke.kkrepo.server.browse.RepositoryContentDeletionService.class,
+        org.mockito.AdditionalAnswers.delegatesTo(delegate));
+    var reached = new java.util.concurrent.atomic.AtomicBoolean();
+    org.mockito.Mockito.doAnswer(call -> {
+      // This is after final validation, immediately before the npm adapter reads the map.
+      // A second replica cannot overwrite the packument until the deletion commits.
+      assertLockedOnReplica(second, "asset", root.id());
+      reached.set(true);
+      return delegate.deleteBatchForCleanup(call.getArgument(0), call.getArgument(1), call.getArgument(2));
+    }).when(guarded).deleteBatchForCleanup(org.mockito.ArgumentMatchers.anyString(),
+        org.mockito.ArgumentMatchers.anyList(), org.mockito.ArgumentMatchers.anyString());
+    var service = directoryService(first, assets, guarded);
+    var preview = service.preview("directory-npm", "@other/keep/-");
+    assertEquals(1, preview.metadataAssetCount());
+    assertTrue(preview.items().stream().anyMatch(item -> item.path().equals("@other/keep")
+        && item.action().equals("PROTOCOL_METADATA")));
+    deleteInTransaction(first, service, "directory-npm", preview);
+    assertTrue(reached.get());
+    var npm = second.getBean(com.github.klboke.kkrepo.server.npm.NpmHostedService.class);
+    var runtime = second.getBean(com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry.class)
+        .resolve("directory-npm").orElseThrow();
+    String name = "@other/keep";
+    byte[] payload = JSON.writeValueAsBytes(Map.of("name", name,
+        "versions", Map.of("3.0.0", Map.of("name", name, "version", "3.0.0", "dist", Map.of("tarball",
+            "http://localhost/repository/directory-npm/@other/keep/-/keep-3.0.0.tgz"))),
+        "dist-tags", Map.of("latest", "3.0.0"), "_attachments", Map.of("keep-3.0.0.tgz", Map.of(
+            "content_type", "application/octet-stream", "data", Base64.getEncoder().encodeToString("new".getBytes(StandardCharsets.UTF_8))))));
+    npm.putPackage(runtime, com.github.klboke.kkrepo.protocol.npm.NpmPackageId.parse(name), null,
+        new java.io.ByteArrayInputStream(payload), "admin", null);
+    var metadata = request(second, "GET", "/repository/directory-npm/@other/keep", null, true);
+    assertEquals(200, metadata.statusCode(), metadata.body());
+    var versions = JSON.readTree(metadata.body()).path("versions");
+    assertEquals(1, versions.size(), metadata.body());
+    assertTrue(versions.has("3.0.0"), metadata.body());
+    assertEquals("new", request(second, "GET", "/repository/directory-npm/@other/keep/-/keep-3.0.0.tgz", null, true).body());
+    assertTrue(assets.findAssetByPath(repositoryId, "@other/keep/-/keep-3.0.0.tgz").isPresent());
+  }
+
+  private static void verifyMavenLockOrder(ConfigurableApplicationContext first,
+      ConfigurableApplicationContext second) throws Exception {
+    first.getBean(RepositoryService.class).create(new CreateCommand(
+        "directory-maven", "maven2-hosted", true, "smoke-file", false,
+        new HostedSettings("ALLOW", "RELEASE", "PERMISSIVE"), null, null, null, null, null));
+    String path = "org/example/demo/1.0/demo-1.0.jar";
+    String url = "/repository/directory-maven/" + path;
+    assertEquals(201, request(first, "PUT", url, "original", true).statusCode());
+    long repositoryId = first.getBean(RepositoryDao.class).findByName("directory-maven").orElseThrow().id();
+    var assets = first.getBean(AssetDao.class);
+    var artifact = assets.findAssetByPath(repositoryId, path).orElseThrow();
+    assertNotNull(artifact.componentId());
+    var guardedAssets = org.mockito.Mockito.mock(AssetDao.class, org.mockito.AdditionalAnswers.delegatesTo(assets));
+    var reached = new java.util.concurrent.atomic.AtomicBoolean();
+    org.mockito.Mockito.doAnswer(call -> {
+      // A Maven redeploy locks this component before the existing asset. Match that order.
+      assertLockedOnReplica(second, "component", artifact.componentId());
+      reached.set(true);
+      return assets.findAssetByIdForUpdate(artifact.id());
+    }).when(guardedAssets).findAssetByIdForUpdate(artifact.id());
+    var service = directoryService(first, guardedAssets,
+        first.getBean(com.github.klboke.kkrepo.server.browse.RepositoryContentDeletionService.class));
+    var preview = service.preview("directory-maven", "org/example/demo/1.0");
+    deleteInTransaction(first, service, "directory-maven", preview);
+    assertTrue(reached.get());
+    assertEquals(201, request(second, "PUT", url, "replacement", true).statusCode());
+    assertEquals("replacement", request(second, "GET", url, null, true).body());
+  }
+
+  private static BrowseDirectoryDeletionService directoryService(ConfigurableApplicationContext context,
+      AssetDao assets, com.github.klboke.kkrepo.server.browse.RepositoryContentDeletionService deletion) {
+    return new BrowseDirectoryDeletionService(context.getBean(RepositoryDao.class),
+        context.getBean(com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao.class), assets,
+        context.getBean(com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao.class),
+        context.getBean(com.github.klboke.kkrepo.server.cleanup.CleanupSubjectScanner.class), deletion);
+  }
+
+  private static void deleteInTransaction(ConfigurableApplicationContext context,
+      BrowseDirectoryDeletionService service, String repository, BrowseDirectoryDeletionService.Preview preview) {
+    var transaction = new TransactionTemplate(context.getBean(PlatformTransactionManager.class));
+    transaction.setIsolationLevel(org.springframework.transaction.TransactionDefinition.ISOLATION_READ_COMMITTED);
+    transaction.executeWithoutResult(status -> service.delete(repository,
+        new BrowseDirectoryDeletionService.Command(preview.path(), preview.path(), preview.selectionToken()), "admin"));
+  }
+
+  private static void assertLockedOnReplica(ConfigurableApplicationContext other, String table, long id) {
+    var transaction = new TransactionTemplate(other.getBean(PlatformTransactionManager.class));
+    transaction.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+    var failure = assertThrows(org.springframework.dao.DataAccessException.class, () -> transaction.execute(status ->
+        other.getBean(org.springframework.jdbc.core.JdbcTemplate.class).queryForObject(
+            "SELECT id FROM " + table + " WHERE id = ? FOR UPDATE NOWAIT", Long.class, id)));
+    var cause = failure.getMostSpecificCause();
+    assertInstanceOf(java.sql.SQLException.class, cause);
+    var sql = (java.sql.SQLException) cause;
+    assertTrue("55P03".equals(sql.getSQLState())
+        || ("HY000".equals(sql.getSQLState()) && sql.getErrorCode() == 3572),
+        () -> "Expected NOWAIT lock rejection, got: " + failure);
   }
 
   static JsonNode preview(ConfigurableApplicationContext context, String endpoint, String path) throws Exception {

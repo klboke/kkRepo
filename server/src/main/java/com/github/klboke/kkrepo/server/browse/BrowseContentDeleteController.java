@@ -1015,9 +1015,6 @@ public class BrowseContentDeleteController {
     if (format != RepositoryFormat.PYPI) {
       return publicPath;
     }
-    if (publicPath.equals("simple") || publicPath.startsWith("simple/")) {
-      return publicPath;
-    }
     return "packages/" + publicPath;
   }
 

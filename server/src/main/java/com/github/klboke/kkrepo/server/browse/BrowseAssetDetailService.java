@@ -1039,10 +1039,7 @@ public class BrowseAssetDetailService {
       }
     }
     if (visibleRepository.format() == RepositoryFormat.PYPI
-        && !normalized.isEmpty()
-        && !normalized.equals("simple")
-        && !normalized.startsWith("simple/")
-        && !normalized.startsWith("packages/")) {
+        && !normalized.isEmpty()) {
       return new ResolvedStoragePath("packages/" + normalized, sourceRepositoryName);
     }
     if (visibleRepository.format() == RepositoryFormat.ANSIBLEGALAXY) {

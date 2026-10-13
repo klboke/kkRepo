@@ -24,6 +24,8 @@ function dialogContext(response) {
   controls["[data-delete-confirm]"].disabled = true;
   dialog.querySelector = selector => controls[selector];
   const requests = [];
+  const removed = [];
+  const location = {};
   const context = vm.createContext({
     document: { createElement: () => dialog, body: { appendChild() {} } },
     state: { repo: "hosted", path: "release" },
@@ -31,13 +33,15 @@ function dialogContext(response) {
     fetch: async (...args) => { requests.push(args); return response; },
     refreshTreeAfterDeletion: async () => {},
     deleteError: async () => "Directory contents changed",
+    sessionStorage: { removeItem: key => removed.push(key) }, AUTH_SNAPSHOT_KEY: "auth",
+    window: { location },
   });
   vm.runInContext(section("function showDirectoryDeletionDialog", "async function refreshTreeAfterDeletion"), context);
   context.showDirectoryDeletionDialog("hosted", { path: "release" }, {
     path: "release", assetCount: 2, componentCount: 1, estimatedBytes: 10, metadataAssetCount: 0,
     selectionToken: "reviewed-token", items: [{ path: "release/<a>", action: "DELETE" }],
   }, new Element());
-  return { context, controls, dialog, requests };
+  return { context, controls, dialog, requests, removed, location };
 }
 
 test("directory action is limited to hosted supported formats and administrators", () => {
@@ -122,4 +126,33 @@ test("ordinary directories without package coordinates still render their action
   assert.equal(rendered.crumbText, "releases");
   assert.equal(rendered.deleteEntry.path, "releases");
   assert.equal(rendered.summaryRows[0][1], "hosted");
+});
+
+
+test("expired session closes confirmation, clears authentication and redirects", async () => {
+  const { controls, dialog, removed, location } = dialogContext({ ok: false, status: 401 });
+  controls.input.value = "release";
+  await controls.form.fire("submit");
+  assert.equal(dialog.removed, true);
+  assert.deepEqual(removed, ["auth"]);
+  assert.equal(location.href, "/browse/#browse/welcome");
+  assert.equal(controls["[data-delete-refresh]"].hidden, true);
+});
+
+test("expired preview clears authentication without opening a dialog or reporting a delete error", async () => {
+  const removed = []; const location = {}; const button = { disabled: false, textContent: "Delete" };
+  const context = vm.createContext({
+    canDeleteBrowseDirectory: () => true, state: { repo: "hosted", path: "release" },
+    URLSearchParams, fetch: async () => ({ ok: false, status: 401 }),
+    sessionStorage: { removeItem: key => removed.push(key) }, AUTH_SNAPSHOT_KEY: "auth",
+    window: { location, alert: () => assert.fail("must redirect to reauthenticate") },
+    showDirectoryDeletionDialog: () => assert.fail("expired session must not open preview"),
+    deleteError: () => assert.fail("401 is not a deletion error"),
+  });
+  vm.runInContext(section("async function previewDirectoryDeletion", "function showDirectoryDeletionDialog"), context);
+  await context.previewDirectoryDeletion({ path: "release" }, button);
+  assert.deepEqual(removed, ["auth"]);
+  assert.equal(location.href, "/browse/#browse/welcome");
+  assert.equal(button.disabled, false);
+  assert.equal(button.textContent, "Delete");
 });
