@@ -32,6 +32,8 @@ R_MIGRATION_ENABLED="${R_MIGRATION_ENABLED:-false}"
 R_MIGRATION_UPSTREAM_CONTAINER="${R_MIGRATION_UPSTREAM_CONTAINER:-${COMPOSE_PROJECT_NAME}-r-upstream}"
 R_MIGRATION_UPSTREAM_URL="${R_MIGRATION_UPSTREAM_URL:-http://${R_MIGRATION_UPSTREAM_CONTAINER}:8080/}"
 
+ANSIBLE_UPSTREAM_JSON="$(python3 -c 'import json,os; print(json.dumps(os.environ.get("ANSIBLE_COMPAT_UPSTREAM_URL") or "https://galaxy.ansible.com/"))')"
+
 START_TIMEOUT_SECONDS="${LIVE_COMPAT_START_TIMEOUT_SECONDS:-240}"
 
 wait_for_http() {
@@ -545,7 +547,7 @@ ensure_nexus_repositories() {
     "name":"ansible-proxy",
     "online":true,
     "storage":{"blobStoreName":"default","strictContentTypeValidation":true},
-    "proxy":{"remoteUrl":"https://galaxy.ansible.com/","contentMaxAge":1440,"metadataMaxAge":1440},
+    "proxy":{"remoteUrl":'"$ANSIBLE_UPSTREAM_JSON"',"contentMaxAge":1440,"metadataMaxAge":1440},
     "negativeCache":{"enabled":true,"timeToLive":60},
     "httpClient":{"blocked":false,"autoBlock":true}
   }'
@@ -1237,7 +1239,7 @@ PY
     "online":true,
     "blobStoreName":"default",
     "strictContentTypeValidation":true,
-    "proxy":{"remoteUrl":"https://galaxy.ansible.com/","contentMaxAgeMinutes":1440,"metadataMaxAgeMinutes":1440,"negativeCacheEnabled":true,"negativeCacheTtlMinutes":1,"autoBlock":true}
+    "proxy":{"remoteUrl":'"$ANSIBLE_UPSTREAM_JSON"',"contentMaxAgeMinutes":1440,"metadataMaxAgeMinutes":1440,"negativeCacheEnabled":true,"negativeCacheTtlMinutes":1,"autoBlock":true}
   }'
 
   kkrepo_create_repo "ansible-group" '{
@@ -1467,6 +1469,9 @@ configure_nexus_anonymous_access
 configure_nexus_conan_realm
 ensure_r_migration_upstream
 configure_nexus_r_migration_ssrf_allowlist
+if [[ -n "${ANSIBLE_COMPAT_UPSTREAM_REPOSITORY:-}" ]]; then
+  NEXUS_URL="$NEXUS_URL" NEXUS_AUTH="$NEXUS_AUTH" python3 "$SCRIPT_DIR/prepare-ansible-upstream.py"
+fi
 ensure_nexus_repositories
 initialize_kkrepo_admin
 ensure_kkrepo_blob_store

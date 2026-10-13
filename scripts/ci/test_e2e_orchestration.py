@@ -1,10 +1,13 @@
 """Regression checks for coverage preservation, disk guards and image reuse."""
 
+import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
 import subprocess
+import tarfile
 import tempfile
 import unittest
 
@@ -58,6 +61,24 @@ run_registered_cleanup() { echo cleanup; }
                    CONAN_HOSTED_REPOSITORY="conan-hosted", CONAN_BIN="conan", ANSIBLE_GALAXY_BINS="fixture")
         return subprocess.run(["bash"], input=prelude + "run_selected_tests() {" + dispatcher + "\nrun_selected_tests\n",
                               env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def test_controlled_galaxy_fixture_is_installable_and_reproducible(self):
+        fixture = load("prepare-ansible-upstream")
+        archive = fixture.collection_archive("kkrepo_ci", "upstream", "1.0.0")
+        self.assertEqual(archive, fixture.collection_archive("kkrepo_ci", "upstream", "1.0.0"))
+        self.assertGreaterEqual(len(archive), 1024)  # Nexus publication minimum.
+        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
+            manifest = json.load(tar.extractfile("MANIFEST.json"))
+            inventory = tar.extractfile("FILES.json").read()
+            self.assertEqual(manifest["collection_info"]["version"], "1.0.0")
+            self.assertEqual(manifest["file_manifest_file"]["chksum_sha256"],
+                             hashlib.sha256(inventory).hexdigest())
+            for item in json.loads(inventory)["files"]:
+                if item["ftype"] == "file":
+                    self.assertEqual(item["chksum_sha256"],
+                                     hashlib.sha256(tar.extractfile(item["name"]).read()).hexdigest())
+        with self.assertRaises(ValueError):
+            fixture.collection_archive("../escape", "upstream", "1.0.0")
 
     def test_original_suite_order_and_cleanup_are_preserved(self):
         result = self.dispatch("all")

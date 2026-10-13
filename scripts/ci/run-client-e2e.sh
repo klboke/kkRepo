@@ -2791,9 +2791,9 @@ test_ansible_binary() {
   local app_dir="$dir/$app_name"
   local base_archive="$dir/dist/$namespace-$base_name-$version.tar.gz"
   local app_archive="$dir/dist/$namespace-$app_name-$version.tar.gz"
-  local hosted_url="$KKREPO_URL/repository/ansible-hosted/"
+  local hosted_url="$KKREPO_URL/repository/${ANSIBLE_E2E_HOSTED_REPOSITORY:-ansible-hosted}/"
   local hosted_api_url="${hosted_url%/}/api/v3"
-  local group_url="$KKREPO_URL/repository/ansible-group/"
+  local group_url="$KKREPO_URL/repository/${ANSIBLE_E2E_GROUP_REPOSITORY:-ansible-group}/"
   local bearer_token generic_token requirements install_dir download_dir token_option
 
   token_option="--api-key"
@@ -2887,20 +2887,23 @@ EOF
 
   if [[ "${ANSIBLE_E2E_PROXY_ENABLED:-true}" == "true" ]]; then
     local proxy_dir="$dir/proxy-install"
+    local proxy_namespace="${ANSIBLE_COMPAT_PROXY_NAMESPACE:-community}"
+    local proxy_collection="${ANSIBLE_COMPAT_PROXY_COLLECTION:-general}"
+    local proxy_version="${ANSIBLE_COMPAT_PROXY_VERSION:-10.4.0}"
     run_logged "ansible-$label_slug-install-proxy" env \
       LC_ALL="$locale_name" LANG="$locale_name" ANSIBLE_NOCOLOR=1 \
-      "$ansible_galaxy" collection install community.general:10.4.0 \
+      "$ansible_galaxy" collection install "$proxy_namespace.$proxy_collection:$proxy_version" \
       --server "$group_url" "$token_option" "$generic_token" \
       --collections-path "$proxy_dir" --force --no-deps
-    test -f "$proxy_dir/ansible_collections/community/general/MANIFEST.json"
+    test -f "$proxy_dir/ansible_collections/$proxy_namespace/$proxy_collection/MANIFEST.json"
   else
-    log "Ansible $label public Galaxy proxy flow skipped by ANSIBLE_E2E_PROXY_ENABLED=false"
+    log "Ansible $label Galaxy proxy flow skipped by ANSIBLE_E2E_PROXY_ENABLED=false"
   fi
 
   if [[ -n "${ANSIBLE_KKREPO_SECONDARY_BASE_URL:-}" ]]; then
     run_logged "ansible-$label_slug-secondary-read" curl -m 20 --fail-with-body -sS \
       -u "$KKREPO_AUTH" \
-      "${ANSIBLE_KKREPO_SECONDARY_BASE_URL%/}/repository/ansible-group/api/v3/collections/$namespace/$app_name/versions/$version/"
+      "${ANSIBLE_KKREPO_SECONDARY_BASE_URL%/}/repository/${ANSIBLE_E2E_GROUP_REPOSITORY:-ansible-group}/api/v3/collections/$namespace/$app_name/versions/$version/"
   fi
 }
 
@@ -4168,7 +4171,7 @@ run_selected_tests() {
       ansible|ansible-galaxy)
         test_ansible
         if [[ -n "${ANSIBLE_GALAXY_BINS:-}" ]] || command -v ansible-galaxy >/dev/null 2>&1; then
-          register_cleanup_fixture ansiblegalaxy ansible-hosted "*${STAMP:0:14}*" ansible
+          register_cleanup_fixture ansiblegalaxy "${ANSIBLE_E2E_HOSTED_REPOSITORY:-ansible-hosted}" "*${STAMP:0:14}*" ansible
         fi
         ;;
       docker|docker-oci|oci)
