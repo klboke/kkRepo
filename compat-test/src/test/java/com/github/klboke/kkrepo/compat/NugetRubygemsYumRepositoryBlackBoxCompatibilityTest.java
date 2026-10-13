@@ -1250,11 +1250,15 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
       List<List<String>> dependencies) {
   }
 
-  private record NugetFixture(String id, String version, String fileName, byte[] bytes) {
+  record NugetFixture(String id, String version, String fileName, byte[] bytes) {
     static NugetFixture create() throws Exception {
       String stamp = Long.toString(System.currentTimeMillis());
       String id = "KkRepo.Compat.NuGet." + stamp;
       String version = "1.0." + stamp;
+      return create(id, version);
+    }
+
+    static NugetFixture create(String id, String version) throws Exception {
       String fileName = id + "." + version + ".nupkg";
       ByteArrayOutputStream out = new ByteArrayOutputStream();
       try (ZipOutputStream zip = new ZipOutputStream(out)) {
@@ -1269,7 +1273,7 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
               </metadata>
             </package>
             """.formatted(id, version).getBytes(StandardCharsets.UTF_8));
-        putZip(zip, "content/readme.txt", ("nuget fixture " + stamp + "\n").getBytes(StandardCharsets.UTF_8));
+        putZip(zip, "content/readme.txt", ("nuget fixture " + id + "\n").getBytes(StandardCharsets.UTF_8));
       }
       return new NugetFixture(id, version, fileName, out.toByteArray());
     }
@@ -1290,7 +1294,7 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
     }
   }
 
-  private record GemFixture(
+  record GemFixture(
       String name,
       String version,
       String dependencyName,
@@ -1300,6 +1304,10 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
       String stamp = Long.toString(System.currentTimeMillis());
       String name = "kkrepo-compat-gem-" + stamp;
       String version = "0.0." + stamp;
+      return create(name, version);
+    }
+
+    static GemFixture create(String name, String version) throws Exception {
       String dependencyName = "rack";
       List<String> dependencyRequirements = List.of(">= 2.0.0", "< 3.0.0");
       String metadata = """

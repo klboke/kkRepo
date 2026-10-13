@@ -34,7 +34,7 @@ public class BrowseDirectoryDeletionService {
   static final int MAX_NODES = 1000;
   private static final Set<RepositoryFormat> SUPPORTED = Set.of(
       RepositoryFormat.MAVEN2, RepositoryFormat.RAW, RepositoryFormat.NPM,
-      RepositoryFormat.PYPI, RepositoryFormat.NUGET, RepositoryFormat.HELM,
+      RepositoryFormat.PYPI, RepositoryFormat.NUGET,
       RepositoryFormat.YUM, RepositoryFormat.RUBYGEMS);
   private final RepositoryDao repositories;
   private final BrowseNodeDao nodes;
@@ -197,7 +197,6 @@ public class BrowseDirectoryDeletionService {
     return switch (row.format()) {
       case NPM -> "package-root".equals(row.kind());
       case PYPI -> row.path().startsWith("simple/");
-      case HELM -> "index.yaml".equals(row.path());
       case NUGET -> row.path().endsWith("/index.json") || row.path().startsWith("registration/");
       case RUBYGEMS -> !row.path().endsWith(".gem");
       default -> false;

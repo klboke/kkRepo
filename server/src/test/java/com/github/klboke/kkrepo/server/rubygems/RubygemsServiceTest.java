@@ -215,7 +215,9 @@ class RubygemsServiceTest {
 
   @Test
   void quickMarshalGemspecHasStablePayloadShape() throws Exception {
-    RubygemsService service = new RubygemsService(null, null, null, new FakeAssetDao(List.of()));
+    RubygemsService service = new RubygemsService(null, null, null, new FakeAssetDao(List.of(
+        gemAsset(1L, "gems/demo-1.2.0.gem",
+            new RubygemsService.GemMetadata("demo", "1.2.0", "ruby", List.of())))));
 
     byte[] deflated = bytes(service.get(hosted(), "quick/Marshal.4.8/demo-1.2.0.gemspec.rz", false));
     byte[] inflated = inflate(deflated);
@@ -232,6 +234,30 @@ class RubygemsServiceTest {
     assertTrue(payload.contains("1.2.0"));
     assertEquals(deflated.length,
         service.get(hosted(), "quick/Marshal.4.8/demo-1.2.0.gemspec.rz", true).contentLength());
+  }
+
+  @Test
+  void deletedPackageDoesNotServeOrRegenerateCachedGemspec() {
+    FakeRawHostedService hosted = new FakeRawHostedService(200);
+    RubygemsService service = new RubygemsService(hosted, null, null, new FakeAssetDao(List.of()));
+    assertEquals(404, service.get(hosted(), "quick/Marshal.4.8/demo-1.2.0.gemspec.rz", false).status());
+    assertEquals(404, service.get(hosted(), "quick/Marshal.4.8/demo-1.2.0.gemspec.rz", true).status());
+    assertTrue(hosted.generatedPaths.isEmpty());
+  }
+
+  @Test
+  void administrativeDeleteRefreshesRemainingVersionsAndRemovesDeletedGemspec() {
+    FakeRawHostedService hosted = new FakeRawHostedService(204);
+    RecordingIndexRebuildDao rebuild = new RecordingIndexRebuildDao();
+    RubygemsService service = new RubygemsService(hosted, null, null, new FakeAssetDao(List.of(
+        gemAsset(2L, "gems/demo-2.0.0.gem",
+            new RubygemsService.GemMetadata("demo", "2.0.0", "ruby", List.of())))), rebuild);
+    service.refreshMetadataAfterAdministrativeDelete(hosted(), "gems/demo-1.2.0.gem");
+    assertTrue(hosted.deletedPaths.contains("quick/Marshal.4.8/demo-1.2.0.gemspec.rz"));
+    String info = new String(hosted.generatedBytes, StandardCharsets.UTF_8);
+    assertTrue(info.contains("2.0.0"));
+    assertFalse(info.contains("1.2.0"));
+    service.refreshMetadataAfterAdministrativeDelete(hosted(), "versions");
   }
 
   @Test

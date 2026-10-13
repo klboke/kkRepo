@@ -1016,7 +1016,7 @@ class NpmRepositoryBlackBoxCompatibilityTest {
       Optional<String> contentLength,
       Optional<String> contentType) {}
 
-  private record NpmFixture(String packageName, String version, byte[] tarball, byte[] publishJson) {
+  record NpmFixture(String packageName, String version, byte[] tarball, byte[] publishJson) {
     static NpmFixture create() throws Exception {
       long stamp = System.currentTimeMillis();
       return create("kkrepo-npm-compat-" + stamp, "1.0." + stamp);

@@ -633,7 +633,7 @@ class PypiRepositoryBlackBoxCompatibilityTest {
     }
   }
 
-  private record WheelFixture(String name, String normalizedName, String version, String filename, byte[] bytes) {
+  record WheelFixture(String name, String normalizedName, String version, String filename, byte[] bytes) {
     static WheelFixture create() throws Exception {
       return create("0.1." + System.currentTimeMillis());
     }
@@ -647,7 +647,7 @@ class PypiRepositoryBlackBoxCompatibilityTest {
       return create(name, version);
     }
 
-    private static WheelFixture create(String name, String version) throws Exception {
+    static WheelFixture create(String name, String version) throws Exception {
       String normalized = normalizeName(name);
       String distribution = normalized.replace('-', '_');
       String filename = distribution + "-" + version + "-py3-none-any.whl";

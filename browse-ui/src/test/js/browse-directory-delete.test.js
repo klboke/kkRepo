@@ -47,7 +47,9 @@ test("directory action is limited to hosted supported formats and administrators
   const entry = { path: "release", leaf: false };
   assert.equal(context.canDeleteBrowseDirectory(entry), true);
   for (const type of ["proxy", "group"]) { repo = { type, format: "raw" }; assert.equal(context.canDeleteBrowseDirectory(entry), false); }
-  repo = { type: "hosted", format: "docker" }; assert.equal(context.canDeleteBrowseDirectory(entry), false);
+  for (const format of ["docker", "helm"]) {
+    repo = { type: "hosted", format }; assert.equal(context.canDeleteBrowseDirectory(entry), false);
+  }
   repo = { type: "hosted", format: "raw" }; authorized = false; assert.equal(context.canDeleteBrowseDirectory(entry), false);
   authorized = true; assert.equal(context.canDeleteBrowseDirectory({ leaf: true, path: "file" }), false);
   assert.equal(context.canDeleteBrowseDirectory({ leaf: false, path: "" }), false);

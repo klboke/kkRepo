@@ -1,14 +1,15 @@
 # Delete a directory from Browse
 
 Administrators can delete directory contents from hosted Maven, npm, PyPI,
-NuGet, Helm, Yum, RubyGems and Raw repositories. Open a directory in Browse,
+NuGet, Yum, RubyGems and Raw repositories. Open a directory in Browse,
 select **Delete**, review the repository, full path, component/file counts and
 all affected paths, then type the exact directory path to enable confirmation.
 Cancel or Escape closes the preview without changing the repository.
 
 The action requires the existing Browse deletion permission (`nexus:*`). It is
 not available on repository roots, proxy/group repositories, or other formats.
-Their existing individual component and asset actions remain available. Directory deletion
+Helm is deferred because its Nexus virtual package folders are not yet mapped by kkRepo Browse.
+Existing individual component and asset actions remain available. Directory deletion
 is permanent; this feature does not add an undo or restore mechanism. Blob
 storage space is reclaimed separately through reference-aware garbage collection.
 

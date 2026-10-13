@@ -312,15 +312,15 @@ public class RubygemsService {
   }
 
   private MavenResponse quickMarshal(RepositoryRuntime runtime, String path, boolean headOnly) {
+    String filename = path.substring("quick/Marshal.4.8/".length(),
+        path.length() - ".gemspec.rz".length());
+    Optional<GemMetadata> existing = gemForFullName(runtime, filename);
+    if (existing.isEmpty()) return MavenResponse.noBody(404);
     if (runtime.isHosted()) {
       Optional<MavenResponse> stored = storedGenerated(runtime, path, headOnly);
       if (stored.isPresent()) return stored.get();
     }
-    String filename = path.substring("quick/Marshal.4.8/".length(),
-        path.length() - ".gemspec.rz".length());
-    GemMetadata gem = gemForFullName(runtime, filename)
-        .orElseGet(() -> gemFromPath("gems/" + filename + ".gem")
-            .orElse(new GemMetadata(filename, "0", "ruby", List.of())));
+    GemMetadata gem = existing.orElseThrow();
     byte[] response = deflateLikeRuby(rubyMarshalGemSpecification(gem));
     writeGeneratedIfHosted(runtime, path, response, GEM_CONTENT_TYPE);
     return bytes(response, GEM_CONTENT_TYPE, headOnly);
@@ -378,6 +378,12 @@ public class RubygemsService {
       writeQuickSpec(runtime, changed);
     }
     enqueueGeneratedMetadataRebuild(runtime);
+  }
+
+  /** Repairs derived metadata after the management adapter removes an exact package identity. */
+  public void refreshMetadataAfterAdministrativeDelete(RepositoryRuntime runtime, String path) {
+    gemFromPath(path).ifPresent(gem -> refreshGeneratedMetadataAfterDelete(
+        runtime, MavenResponse.noBody(204), new GemIdentity(gem.name(), gem.version(), gem.platform())));
   }
 
   private void refreshGeneratedMetadataAfterDelete(

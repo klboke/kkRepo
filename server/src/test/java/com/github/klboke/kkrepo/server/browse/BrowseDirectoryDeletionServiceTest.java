@@ -179,8 +179,10 @@ class BrowseDirectoryDeletionServiceTest {
           "raw", true, 1L, null, null, null, null, "ALLOW", true, Map.of());
       assertStatus(400, () -> service.preview("hosted", "release"));
     }
-    setup(RepositoryFormat.DOCKER, "release");
-    assertStatus(400, () -> service.preview("hosted", "release"));
+    for (RepositoryFormat format : List.of(RepositoryFormat.DOCKER, RepositoryFormat.HELM)) {
+      setup(format, "release");
+      assertStatus(400, () -> service.preview("hosted", "release"));
+    }
     repository = new RepositoryRecord(1L, "hosted", RepositoryFormat.RAW, RepositoryType.HOSTED,
         "raw", false, 1L, null, null, null, null, "ALLOW", true, Map.of());
     assertStatus(400, () -> service.preview("hosted", "release"));

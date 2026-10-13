@@ -40,6 +40,23 @@ class PypiErrorAdviceTest {
     assertEquals("", result.getResponse().getContentAsString());
   }
 
+  @Test
+  void deletedPackageReturns404ThroughTheUnifiedRepositoryRoute() throws Exception {
+    var dispatcher = org.mockito.Mockito.mock(
+        com.github.klboke.kkrepo.server.routing.RepositoryProtocolDispatcher.class);
+    org.mockito.Mockito.when(dispatcher.dispatchRead(org.mockito.ArgumentMatchers.eq("pypi"),
+        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+        .thenThrow(new PypiExceptions.PypiNotFoundException("packages/deleted.whl"));
+    MockMvc mvc = MockMvcBuilders.standaloneSetup(
+        new com.github.klboke.kkrepo.server.RepositoryProtocolController(dispatcher))
+        .setControllerAdvice(new PypiErrorAdvice()).build();
+    assertEquals(404, mvc.perform(get("/repository/pypi/packages/deleted.whl"))
+        .andReturn().getResponse().getStatus());
+    assertEquals(404, mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+        .head("/repository/pypi/packages/deleted.whl"))
+        .andReturn().getResponse().getStatus());
+  }
+
   private static final class EmptyRepositoryDao extends RepositoryDaoAdapter {
     EmptyRepositoryDao() {
       super(null, null);

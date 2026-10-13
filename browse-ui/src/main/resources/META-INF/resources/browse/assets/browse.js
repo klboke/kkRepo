@@ -557,7 +557,7 @@ function canDeleteBrowseDirectory(entry) {
   const repo = currentRepository();
   return canDeleteBrowseContent() && entry && !entry.leaf && Boolean(entry.path)
     && String(repo?.type).toLowerCase() === "hosted"
-    && ["maven2", "npm", "pypi", "nuget", "helm", "yum", "rubygems", "raw"].includes(repo?.format);
+    && ["maven2", "npm", "pypi", "nuget", "yum", "rubygems", "raw"].includes(repo?.format);
 }
 
 function hasUploadPermission() {

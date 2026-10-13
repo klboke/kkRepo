@@ -77,6 +77,31 @@ class CleanupRepositoryContentDeletionServiceTest {
   }
 
   @Test
+  void hostedRubygemsDeletionRepairsDerivedMetadataOnlyAfterRemovingThePackage() {
+    BrowseContentDeleteController browse = mock(BrowseContentDeleteController.class);
+    RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
+    RepositoryRuntime runtime = mock(RepositoryRuntime.class);
+    var rubygems = mock(com.github.klboke.kkrepo.server.rubygems.RubygemsService.class);
+    when(runtime.format()).thenReturn(RepositoryFormat.RUBYGEMS);
+    when(runtime.type()).thenReturn(RepositoryType.HOSTED);
+    when(runtimes.resolve("gems")).thenReturn(Optional.of(runtime));
+    when(browse.deleteForCleanup("gems", "ASSET", 9L, "gems/demo-1.0.0.gem", "admin"))
+        .thenReturn(1);
+    var service = new CleanupRepositoryContentDeletionService(browse, runtimes,
+        mock(DockerManifestStore.class), mock(NpmHostedService.class), mock(AptService.class));
+    service.setRubygemsService(rubygems);
+    assertEquals(List.of(1), service.deleteBatchForCleanup("gems", List.of(
+        new CleanupDeleteSubject("ASSET", 9L, "gems/demo-1.0.0.gem")), "admin"));
+    var ordered = org.mockito.Mockito.inOrder(browse, rubygems);
+    ordered.verify(browse).deleteForCleanup("gems", "ASSET", 9L, "gems/demo-1.0.0.gem", "admin");
+    ordered.verify(rubygems).refreshMetadataAfterAdministrativeDelete(runtime, "gems/demo-1.0.0.gem");
+    org.mockito.Mockito.clearInvocations(rubygems);
+    when(runtime.type()).thenReturn(RepositoryType.PROXY);
+    service.deleteForCleanup("gems", "ASSET", 9L, "gems/demo-1.0.0.gem", "admin");
+    org.mockito.Mockito.verifyNoInteractions(rubygems);
+  }
+
+  @Test
   void proxyNpmCacheStillUsesRepositoryOwnedApplicationDeletion() {
     BrowseContentDeleteController browse = mock(BrowseContentDeleteController.class);
     RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);

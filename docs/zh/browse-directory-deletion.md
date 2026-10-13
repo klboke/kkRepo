@@ -1,9 +1,11 @@
 # 在 Browse 中删除目录
 
-管理员可以删除 Maven、npm、PyPI、NuGet、Helm、Yum、RubyGems 和 Raw hosted
+管理员可以删除 Maven、npm、PyPI、NuGet、Yum、RubyGems 和 Raw hosted
 仓库中的目录内容。打开目录后点击 **Delete**，查看仓库、完整目录路径、组件和文件
 数量以及全部受影响路径，然后输入完全相同的目录路径，才能确认删除。
 点击取消或按 Escape 关闭预览，不会修改仓库。
+
+Helm 暂不开放目录批量删除，因为 kkRepo Browse 尚未映射 Nexus 的虚拟包目录；现有单个制品删除不变。
 
 该操作要求现有 Browse 删除权限（`nexus:*`）。仓库根目录、proxy/group 仓库及其他
 格式不提供此批量操作，原有单组件和单文件操作继续保留。删除不可撤销，此功能不提供回收站
