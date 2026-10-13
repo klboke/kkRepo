@@ -193,11 +193,21 @@ class PypiRepositoryBlackBoxCompatibilityTest {
     assertPypiBrowseRoot(config, config.proxyRepository(), "sampleproject");
     assertPypiBrowseRoot(config, config.groupRepository(), fixture.normalizedName());
     assertPypiBrowseHtmlRoot(config, config.groupRepository(), fixture.normalizedName());
-    Exchange groupSimpleBrowse = send(config.nexusPlusInternal(
-        "/internal/browse/" + config.groupRepository() + "?path=simple").GET());
-    assert2xx("kkrepo group simple browse", groupSimpleBrowse);
-    assertTrue(groupSimpleBrowse.bodyAsString().contains("\"entries\":[{"),
-        "group simple directory should expose project index children");
+    // Browse projects storage paths without the packages prefix. The Simple API is
+    // already checked above; "simple" here would address a project with that name.
+    String projectPath = fixture.normalizedName();
+    Exchange groupProjectBrowse = send(config.nexusPlusInternal(
+        "/internal/browse/" + config.groupRepository() + "?path=" + projectPath).GET());
+    assert2xx("kkrepo group project browse", groupProjectBrowse);
+    String versionPath = projectPath + "/" + fixture.version();
+    assertTrue(new ObjectMapper().readTree(groupProjectBrowse.body()).path("entries")
+        .findValuesAsText("path").contains(versionPath), groupProjectBrowse.bodyAsString());
+    Exchange groupVersionBrowse = send(config.nexusPlusInternal(
+        "/internal/browse/" + config.groupRepository() + "?path=" + versionPath).GET());
+    assert2xx("kkrepo group version browse", groupVersionBrowse);
+    assertTrue(new ObjectMapper().readTree(groupVersionBrowse.body()).path("entries")
+        .findValuesAsText("path").contains(versionPath + "/" + fixture.filename()),
+        groupVersionBrowse.bodyAsString());
   }
 
   @Test
