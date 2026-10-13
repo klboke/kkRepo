@@ -808,7 +808,7 @@ jobs:
       - name: Start Nexus reference and candidate services
         run: docker compose -f "$COMPOSE_FILE" up -d nexus kkrepo kkrepo-secondary
 
-      - name: Configure controlled Galaxy upstream
+      - name: Configure controlled Galaxy and RubyGems upstreams
         if: env.NEXUS_COMPAT_IMAGE == 'sonatype/nexus3:3.94.0'
         run: |
           # Nexus can return the upstream download URL unchanged. Both the
@@ -816,6 +816,7 @@ jobs:
           gateway="$(docker network inspect "${COMPOSE_PROJECT_NAME}_default" --format '{{(index .IPAM.Config 0).Gateway}}')"
           test -n "$gateway"
           cat >> "$GITHUB_ENV" <<EOF
+          COMPAT_RUBYGEMS_UPSTREAM_BASE_URL=http://$gateway:${NEXUS_COMPAT_PORT:-28090}
           ANSIBLE_COMPAT_UPSTREAM_REPOSITORY=ansible-ci-upstream
           ANSIBLE_COMPAT_UPSTREAM_URL=http://$gateway:${NEXUS_COMPAT_PORT:-28090}/repository/ansible-ci-upstream/
           ANSIBLE_COMPAT_PROXY_NAMESPACE=kkrepo_ci

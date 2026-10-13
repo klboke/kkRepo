@@ -65,6 +65,11 @@ Yank updates availability metadata; it is not a substitute for a cleanup policy.
 - Proxy caches dependency/index responses and gem downloads from the upstream.
 - Group resolves members in order and keeps index/dependency metadata aligned with downloads.
 - Browse and Search expose gem name, version, platform, and assets.
+- Group indexes include versions that have not yet been downloaded through a proxy. Same-name gems
+  are merged across members, and duplicate versions/platforms use the first member's metadata.
+- If a member does not offer the optional dependency API or compact versions index, group returns
+  404 for that API so clients can fall back to the complete legacy index. No group index rebuild or
+  pre-download of upstream gems is required after upgrading.
 
 ## Operations And Troubleshooting
 

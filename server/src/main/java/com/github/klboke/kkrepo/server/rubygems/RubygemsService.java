@@ -86,6 +86,10 @@ public class RubygemsService {
     if (runtime.type() == RepositoryType.PROXY) {
       return proxyGet(runtime, fullPath, headOnly);
     }
+    if (runtime.type() == RepositoryType.GROUP && RubygemsGroupIndex.handles(path)) {
+      return new RubygemsGroupIndex(runtime, (member, memberPath) -> get(member, memberPath, false))
+          .get(path.equals("api/v1/dependencies") ? fullPath : path, headOnly);
+    }
     return switch (path) {
       case "", SPECS_PATH -> specs(runtime, SpecMode.ALL, headOnly);
       case LATEST_SPECS_PATH -> specs(runtime, SpecMode.LATEST, headOnly);

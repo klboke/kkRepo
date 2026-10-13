@@ -64,6 +64,11 @@ Yank 更新可用性 metadata，不能替代 cleanup policy。
 - Group 按成员顺序解析，并保持 index/dependency metadata 与 download 对齐。
 - Browse 与 Search 展示 gem name、version、platform 和 asset。
 
+- Group 索引包含尚未通过 proxy 下载的版本。同名 gem 会合并各成员的版本；相同版本和
+  platform 的元数据以排在前面的成员为准。
+- 若成员不提供可选的 dependency API 或 compact versions 索引，group 对该接口返回 404，
+  让客户端回退到完整的 legacy 索引。升级后无需预先下载上游 gem，也无需重建 group 索引。
+
 ## 运维与排障
 
 保护 `~/.gem/credentials`，并让 token 与用户密码独立轮换。配置变更后客户端仍访问旧

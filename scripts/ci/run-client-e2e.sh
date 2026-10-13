@@ -663,13 +663,18 @@ capture_rubygems_metadata() {
   local specs="$ARTIFACT_DIR/rubygems-specs.4.8.gz"
   local quick="$ARTIFACT_DIR/rubygems-quick-spec.rz"
   local gem="$ARTIFACT_DIR/rubygems-package.gem"
-  run_logged_output rubygems-dependencies "$dependencies" \
-    curl -m 10 -fsS -u "$KKREPO_AUTH" \
+  local dependency_status="$ARTIFACT_DIR/rubygems-dependencies-status"
+  run_logged_output rubygems-dependencies-status "$dependency_status" \
+    curl -m 60 -sS -o "$dependencies" -w '%{http_code}' -u "$KKREPO_AUTH" \
     "$KKREPO_URL/repository/rubygems-group/api/v1/dependencies?gems=$name"
-  run_logged rubygems-dependencies-decode ruby -e \
-    'p Marshal.load(File.binread(ARGV.fetch(0)))' "$dependencies"
+  case "$(cat "$dependency_status")" in
+    200) run_logged rubygems-dependencies-decode ruby -e \
+      'p Marshal.load(File.binread(ARGV.fetch(0)))' "$dependencies" ;;
+    404) echo '[client-e2e] RubyGems member has no optional dependency API; clients use compact or legacy indexes' ;;
+    *) echo '[client-e2e] Unexpected RubyGems dependency API status' >&2; return 1 ;;
+  esac
   run_logged_output rubygems-specs "$specs" \
-    curl -m 10 -fsS -u "$KKREPO_AUTH" \
+    curl -m 120 -fsS -u "$KKREPO_AUTH" \
     "$KKREPO_URL/repository/rubygems-group/specs.4.8.gz"
   run_logged rubygems-specs-decode ruby -rzlib -e \
     'p Marshal.load(Zlib.gunzip(File.binread(ARGV.fetch(0)))).select { |row| row[0].to_s == ARGV.fetch(1) }' "$specs" "$name"
@@ -1417,6 +1422,15 @@ EOF
     --source "$KKREPO_AUTH_URL/repository/rubygems-group/" \
     --no-document --verbose
   test -f "$gem_home/gems/$name-1.0.0/lib/$name.rb"
+  # This package has not been downloaded through the proxy yet: group discovery must use
+  # the upstream index, not only the proxy's locally cached .gem assets.
+  wait_for_body_contains rubygems-cold-public-info '1.3.5 ' \
+    "$KKREPO_URL/repository/rubygems-group/info/concurrent-ruby" \
+    "$ARTIFACT_DIR/rubygems-public-info"
+  run_logged rubygems-public-install env GEM_HOME="$gem_home" GEM_PATH="$gem_home" \
+    gem install concurrent-ruby --version 1.3.5 --clear-sources \
+    --source "$KKREPO_AUTH_URL/repository/rubygems-group/" --no-document --verbose
+  test -f "$gem_home/gems/concurrent-ruby-1.3.5/lib/concurrent-ruby/concurrent.rb"
 }
 
 test_yum() {

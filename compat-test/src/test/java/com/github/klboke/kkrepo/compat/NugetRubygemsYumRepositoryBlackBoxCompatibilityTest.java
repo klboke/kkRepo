@@ -193,7 +193,7 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
   }
 
   @Test
-  void rubygemsColdProxyGroupQuickSpecMatchesNexusWhenConfigured() throws Exception {
+  void rubygemsColdProxyGroupIndexesMatchNexusWhenConfigured() throws Exception {
     CompatConfig config = CompatConfig.load();
     assumeLiveEndpoints(config);
     // Supply a Nexus base URL reachable from both servers; no public RubyGems dependency.
@@ -202,9 +202,10 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
         "Enable writes/setup and set COMPAT_RUBYGEMS_UPSTREAM_BASE_URL for cold proxy compatibility");
     String prefix = "ruby-cold-" + System.currentTimeMillis();
     String source = prefix + "-source", proxy = prefix + "-proxy", group = prefix + "-group";
+    String hosted = prefix + "-hosted";
     try {
       saveNexusRubygemsHosted(config, source);
-      GemFixture fixture = GemFixture.create();
+      GemFixture fixture = GemFixture.create(prefix + "-gem", "1.0.0");
       assertEquals(201, post(config.nexus.repository(source, "api/v1/gems"),
           fixture.bytes(), "application/octet-stream").status());
       String remote = stripTrailingSlash(upstream.orElseThrow()) + "/repository/" + source + "/";
@@ -215,9 +216,56 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
            "httpClient":{"blocked":false,"autoBlock":false}}
           """.formatted(proxy, remote);
       saveNexusRepository(config, "/service/rest/v1/repositories/rubygems/proxy", proxy, body);
-      saveNexusRubygemsGroup(config, group, List.of(proxy));
+      saveNexusRubygemsHosted(config, hosted);
+      saveKkRepoHosted(config, hosted, "rubygems-hosted");
+      GemFixture local = GemFixture.create(fixture.name(), "2.0.0");
+      for (Endpoint endpoint : List.of(config.nexus, config.nexusPlus)) {
+        assertEquals(201, post(endpoint.repository(hosted, "api/v1/gems"),
+            local.bytes(), "application/octet-stream").status());
+        waitForRubySpecs(endpoint, hosted, local);
+      }
+      // Nexus publishes /versions asynchronously. Wait before a proxy can cache an empty snapshot.
+      waitForRubyVersions(config.nexus, source, fixture);
+      waitForRubyVersions(config.nexus, hosted, local);
+      waitForRubyVersions(config.nexusPlus, hosted, local);
+      saveNexusRubygemsGroup(config, group, List.of(hosted, proxy));
       saveKkRepoProxy(config, proxy, "rubygems-proxy", remote);
-      saveKkRepoGroup(config, group, "rubygems-group", List.of(proxy));
+      saveKkRepoGroup(config, group, "rubygems-group", List.of(hosted, proxy));
+      // Discover the upstream package through every index before downloading its .gem.
+      for (String index : List.of("specs.4.8.gz", "latest_specs.4.8.gz")) {
+        assertRubySpecsContain("cold RubyGems group " + index,
+            get(config.nexus.repository(group, index)), get(config.nexusPlus.repository(group, index)),
+            index.startsWith("latest") ? local : fixture);
+      }
+      Exchange info = get(config.nexusPlus.repository(group, fixture.infoPath()));
+      assertRubyCompactInfoContainsChecksum("cold RubyGems group compact info", info, fixture);
+      assertRubyDependenciesMatch("cold RubyGems group dependency API",
+          get(config.nexus.repository(group, fixture.dependenciesPath())),
+          get(config.nexusPlus.repository(group, fixture.dependenciesPath())), fixture);
+      // Nexus 3.94 does not expose the optional /names endpoint. Verify the candidate's
+      // supported endpoint separately; compare compact versions/info against Nexus below.
+      Exchange names = get(config.nexusPlus.repository(group, "names"));
+      assert2xx("RubyGems group names", names);
+      assertTrue(names.bodyText().lines().anyMatch(fixture.name()::equals));
+      for (Endpoint endpoint : List.of(config.nexus, config.nexusPlus)) {
+        Exchange versions = get(endpoint.repository(group, "versions"));
+        Exchange memberInfo = get(endpoint.repository(group, fixture.infoPath()));
+        assert2xx("cold RubyGems versions", versions);
+        String checksum = HexFormat.of().formatHex(MessageDigest.getInstance("MD5").digest(memberInfo.body()));
+        List<String[]> rows = versions.bodyText().lines().filter(line -> line.startsWith(fixture.name() + " "))
+            .map(line -> line.split(" ", 3)).toList();
+        Set<String> published = new java.util.HashSet<>();
+        rows.forEach(fields -> published.addAll(List.of(fields[1].split(","))));
+        assertEquals(Set.of(fixture.version(), local.version()), published, endpoint.name() + " versions");
+        assertRubyCompactInfoContainsChecksum(endpoint.name() + " group upstream info", memberInfo, fixture);
+        assertRubyCompactInfoContainsChecksum(endpoint.name() + " group hosted info", memberInfo, local);
+        // Nexus 3.94 can emit duplicate same-name rows for hosted+proxy (NEXUS-39223).
+        // The candidate emits one merged row whose MD5 covers the complete group info.
+        if (endpoint == config.nexusPlus) {
+          assertEquals(1, rows.size());
+          assertEquals(checksum, rows.getFirst()[2], "group versions must hash the merged info body");
+        }
+      }
       // Real RubyGems clients fetch this metadata before downloading the .gem archive.
       assertPackageHeadMatches("cold RubyGems group quick spec HEAD",
           head(config.nexus.repository(group, fixture.quickSpecPath())),
@@ -229,7 +277,7 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
           get(config.nexus.repository(group, fixture.gemPath())),
           get(config.nexusPlus.repository(group, fixture.gemPath())), fixture.bytes());
     } finally {
-      for (String repository : List.of(group, proxy)) {
+      for (String repository : List.of(group, proxy, hosted)) {
         send(config.nexusPlus.raw("/internal/repositories/" + repository).DELETE());
         send(config.nexus.raw("/service/rest/v1/repositories/" + repository).DELETE());
       }
@@ -551,6 +599,16 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
       assertEquals(reference.contentLength().get(), candidate.contentLength().get(),
           label + " content length");
     }
+  }
+
+  private static void waitForRubyVersions(Endpoint endpoint, String repository, GemFixture fixture)
+      throws Exception {
+    for (int attempt = 0; attempt < 90; attempt++) {
+      Exchange response = get(endpoint.repository(repository, "versions"));
+      if (response.status() == 200 && response.bodyText().contains(fixture.name() + " " + fixture.version() + " ")) return;
+      Thread.sleep(1000L);
+    }
+    throw new AssertionError(endpoint.name() + " versions did not publish " + fixture.name());
   }
 
   private static Exchange waitForRubySpecs(Endpoint endpoint, String repository, GemFixture fixture)
@@ -1368,6 +1426,16 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
           - lib/%s.rb
           require_paths:
           - lib
+          required_ruby_version: !ruby/object:Gem::Requirement
+            requirements:
+            - - ">="
+              - !ruby/object:Gem::Version
+                version: '0'
+          required_rubygems_version: !ruby/object:Gem::Requirement
+            requirements:
+            - - ">="
+              - !ruby/object:Gem::Version
+                version: '0'
           dependencies:
           - !ruby/object:Gem::Dependency
             name: %s
@@ -1379,6 +1447,7 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
               - - "<"
                 - !ruby/object:Gem::Version
                   version: 3.0.0
+            type: :runtime
           """.formatted(name, version, name.replace('-', '_'), dependencyName);
       ByteArrayOutputStream dataTarGz = new ByteArrayOutputStream();
       try (GZIPOutputStream gzip = new GZIPOutputStream(dataTarGz);
