@@ -135,6 +135,34 @@ class RubygemsGroupIndexTest {
   }
 
   @Test
+  void soleActiveContributorIsRequiredWhenAnotherMemberHasYankedEveryVersion() throws Exception {
+    for (RepositoryRuntime active : List.of(hosted, proxy)) {
+      responses.clear();
+      RepositoryRuntime yanked = active == hosted ? proxy : hosted;
+      put(active, "versions", "---\ndemo 1.0 " + "a".repeat(32) + "\n");
+      put(yanked, "versions", "---\ndemo 2.0 " + "b".repeat(32)
+          + "\ndemo -2.0 " + "c".repeat(32) + "\n");
+      assertEquals(404, index().get("versions", false).status());
+      put(active, "info/demo", "---\n");
+      assertEquals(404, index().get("versions", true).status());
+      String info = "---\n1.0 |checksum:a\n";
+      put(active, "info/demo", info);
+      assertEquals("---\ndemo 1.0 " + md5(info) + "\n", text(index().get("versions", false)));
+    }
+  }
+
+  @Test
+  void allYankedMembersDoNotRequireInfoOrResurrectVersions() throws Exception {
+    put(hosted, "versions", "---\ndemo 1.0 " + "a".repeat(32)
+        + "\ndemo -1.0 " + "b".repeat(32) + "\n");
+    put(proxy, "versions", "---\ndemo 2.0 " + "c".repeat(32)
+        + "\ndemo -2.0 " + "d".repeat(32) + "\n");
+    put(hosted, "info/demo", "---\n1.0 |checksum:a\n");
+    assertEquals("---\n", text(index().get("versions", false)));
+    assertTrue(requests.stream().noneMatch(path -> path.contains("info/")));
+  }
+
+  @Test
   void legacyOnlyMemberDisablesPartialCompactVersions() {
     put(hosted, "versions", "---\nprivate 1.0 " + "a".repeat(32) + "\n");
     assertEquals(404, index().get("versions", false).status());

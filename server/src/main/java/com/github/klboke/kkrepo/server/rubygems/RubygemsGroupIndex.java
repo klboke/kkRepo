@@ -219,7 +219,7 @@ final class RubygemsGroupIndex {
         if (first == null) {
           budget.add(name, row.versions, row.checksum);
           merged.put(name, new Versions(row.versions, row.checksum, row.conflict,
-              row.versions.isEmpty() ? List.of() : source));
+              row.versions.isEmpty() ? List.of() : source, false));
         } else {
           List<RepositoryRuntime> contributors = first.contributors;
           if (!row.versions.isEmpty()) {
@@ -230,7 +230,7 @@ final class RubygemsGroupIndex {
           }
           boolean conflict = first.conflict || row.conflict
               || !first.versions.equals(row.versions) || !first.checksum.equals(row.checksum);
-          merged.put(name, new Versions(first.versions, first.checksum, conflict, contributors));
+          merged.put(name, new Versions(first.versions, first.checksum, conflict, contributors, true));
         }
       });
     }
@@ -238,8 +238,11 @@ final class RubygemsGroupIndex {
     StringBuilder result = new StringBuilder("---\n");
     for (var entry : merged.entrySet()) {
       Versions row = entry.getValue();
+      // Append-only histories can leave no active versions in any member. Do not let
+      // stale info resurrect a fully yanked gem, or require its already removed info.
+      if (row.contributors.isEmpty()) continue;
       if (row.conflict) {
-        boolean strict = row.contributors.size() > 1;
+        boolean strict = row.multipleSources;
         byte[] info = info("info/" + entry.getKey(), strict ? row.contributors : List.of());
         if (info == null) {
           // Do not publish a cached 200 response that silently drops a conflicting member.
@@ -414,9 +417,9 @@ final class RubygemsGroupIndex {
   }
 
   private record Versions(String versions, String checksum, boolean conflict,
-      List<RepositoryRuntime> contributors) {
+      List<RepositoryRuntime> contributors, boolean multipleSources) {
     private Versions(String versions, String checksum, boolean conflict) {
-      this(versions, checksum, conflict, List.of());
+      this(versions, checksum, conflict, List.of(), false);
     }
   }
 }
