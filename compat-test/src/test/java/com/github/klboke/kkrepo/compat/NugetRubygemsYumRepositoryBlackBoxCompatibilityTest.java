@@ -224,6 +224,21 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
             local.bytes(), "application/octet-stream").status());
         waitForRubySpecs(endpoint, hosted, local);
       }
+      // Nexus groups keep the latest release for each platform, including an older java
+      // release alongside a newer ruby release. Do not collapse these by gem name alone.
+      try (var javaGem = getClass().getResourceAsStream(
+          "/rubygems/platform/kkrepo-compat-platform-gem-1.0-java.gem");
+          var rubyGem = getClass().getResourceAsStream(
+              "/rubygems/platform/kkrepo-compat-platform-gem-2.0.gem")) {
+        assertEquals(201, post(config.nexus.repository(source, "api/v1/gems"),
+            javaGem.readAllBytes(), "application/octet-stream").status());
+        byte[] localPlatform = rubyGem.readAllBytes();
+        for (Endpoint endpoint : List.of(config.nexus, config.nexusPlus)) {
+          assertEquals(201, post(endpoint.repository(hosted, "api/v1/gems"),
+              localPlatform, "application/octet-stream").status());
+          waitForRubySpecs(endpoint, hosted, GemFixture.create("kkrepo-compat-platform-gem", "2.0"));
+        }
+      }
       // Nexus publishes /versions asynchronously. Wait before a proxy can cache an empty snapshot.
       waitForRubyVersions(config.nexus, source, fixture);
       waitForRubyVersions(config.nexus, hosted, local);
@@ -236,6 +251,21 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
         assertRubySpecsContain("cold RubyGems group " + index,
             get(config.nexus.repository(group, index)), get(config.nexusPlus.repository(group, index)),
             index.startsWith("latest") ? local : fixture);
+      }
+      for (Endpoint endpoint : List.of(config.nexus, config.nexusPlus)) {
+        Exchange latest = get(endpoint.repository(group, "latest_specs.4.8.gz"));
+        assert2xx("RubyGems latest platforms", latest);
+        Object decoded = normalizeRubyMarshalValue(new RubyMarshalReader(gunzip(latest.body())).read());
+        assertTrue(decoded instanceof List<?>);
+        Set<Object> platformRows = new java.util.HashSet<>();
+        for (Object row : (List<?>) decoded) {
+          if (row instanceof List<?> fields && fields.getFirst().equals("kkrepo-compat-platform-gem")) {
+            platformRows.add(row);
+          }
+        }
+        assertEquals(Set.of(List.of("kkrepo-compat-platform-gem", "1.0", "java"),
+            List.of("kkrepo-compat-platform-gem", "2.0", "ruby")), platformRows,
+            endpoint.name() + " latest index must retain releases for both platforms");
       }
       Exchange info = get(config.nexusPlus.repository(group, fixture.infoPath()));
       assertRubyCompactInfoContainsChecksum("cold RubyGems group compact info", info, fixture);

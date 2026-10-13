@@ -96,6 +96,8 @@ final class RubygemsGroupIndex {
     }
     if (!found) return null;
     if (path.equals("latest_specs.4.8.gz")) {
+      // Nexus group indexes retain each platform's latest release, even when another
+      // platform has a newer version. The live cold-proxy compatibility test covers this.
       Map<String, RubygemsIndexMarshal.Spec> latest = new LinkedHashMap<>();
       for (var spec : merged) {
         String key = spec.name() + '\n' + spec.platform();

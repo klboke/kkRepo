@@ -116,6 +116,10 @@ final class RubygemsIndexMarshal {
     // Public rubygems.org specs currently contain over 1.7 million tuples. Limit both the
     // decompressed input and allocation counts; an upstream must not control arbitrary allocation.
     private static final int MAX_ROWS = 3_000_000;
+    // Unlinked specs use six objects (including the tuple and Version fields) and four
+    // symbols per row. Include the root array so all MAX_ROWS rows fit these table budgets.
+    private static final int MAX_OBJECTS = 1 + 6 * MAX_ROWS;
+    private static final int MAX_SYMBOLS = 4 * MAX_ROWS;
     private final InputStream input;
     private final List<String> symbols = new ArrayList<>();
     private final List<Object> objects = new ArrayList<>();
@@ -148,7 +152,7 @@ final class RubygemsIndexMarshal {
         }
         case '"' -> remember(string());
         case ':' -> {
-          if (symbols.size() >= 6_000_000) throw invalid();
+          if (symbols.size() >= MAX_SYMBOLS) throw invalid();
           String symbol = string();
           symbol = switch (symbol) { case "E" -> "E"; case "Gem::Version" -> "Gem::Version"; default -> symbol; };
           symbols.add(symbol); yield symbol;
@@ -206,7 +210,7 @@ final class RubygemsIndexMarshal {
     }
 
     private <T> T remember(T value) {
-      if (objects.size() >= 12_000_000) throw invalid();
+      if (objects.size() >= MAX_OBJECTS) throw invalid();
       objects.add(value); return value;
     }
 
