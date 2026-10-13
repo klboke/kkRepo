@@ -232,11 +232,12 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
               "/rubygems/platform/kkrepo-compat-platform-gem-2.0.gem")) {
         assertEquals(201, post(config.nexus.repository(source, "api/v1/gems"),
             javaGem.readAllBytes(), "application/octet-stream").status());
+        waitForRubyLatestPlatform(config.nexus, source, "1.0", "java");
         byte[] localPlatform = rubyGem.readAllBytes();
         for (Endpoint endpoint : List.of(config.nexus, config.nexusPlus)) {
           assertEquals(201, post(endpoint.repository(hosted, "api/v1/gems"),
               localPlatform, "application/octet-stream").status());
-          waitForRubySpecs(endpoint, hosted, GemFixture.create("kkrepo-compat-platform-gem", "2.0"));
+          waitForRubyLatestPlatform(endpoint, hosted, "2.0", "ruby");
         }
       }
       // Nexus publishes /versions asynchronously. Wait before a proxy can cache an empty snapshot.
@@ -639,6 +640,20 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
       Thread.sleep(1000L);
     }
     throw new AssertionError(endpoint.name() + " versions did not publish " + fixture.name());
+  }
+
+  private static void waitForRubyLatestPlatform(Endpoint endpoint, String repository,
+      String version, String platform) throws Exception {
+    List<String> expected = List.of("kkrepo-compat-platform-gem", version, platform);
+    for (int attempt = 0; attempt < 90; attempt++) {
+      Exchange response = get(endpoint.repository(repository, "latest_specs.4.8.gz"));
+      if (response.status() == 200) {
+        Object decoded = normalizeRubyMarshalValue(new RubyMarshalReader(gunzip(response.body())).read());
+        if (decoded instanceof List<?> rows && rows.contains(expected)) return;
+      }
+      Thread.sleep(1000L);
+    }
+    throw new AssertionError(endpoint.name() + " latest index did not publish " + expected);
   }
 
   private static Exchange waitForRubySpecs(Endpoint endpoint, String repository, GemFixture fixture)

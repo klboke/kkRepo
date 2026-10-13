@@ -158,6 +158,81 @@ class RubygemsGroupIndexTest {
   }
 
   @Test
+  void disjointMemberSpecsCannotExceedTheAggregateRowBudget() throws Exception {
+    responses.put("1/specs.4.8.gz", RubygemsIndexMarshal.specs(List.of(
+        new RubygemsIndexMarshal.Spec("a", "1", "ruby"), new RubygemsIndexMarshal.Spec("b", "1", "ruby"))));
+    responses.put("2/specs.4.8.gz", RubygemsIndexMarshal.specs(List.of(
+        new RubygemsIndexMarshal.Spec("c", "1", "ruby"), new RubygemsIndexMarshal.Spec("d", "1", "ruby"))));
+    assertThrows(MavenExceptions.BadUpstreamException.class, () -> index(3, 1024).get("specs.4.8.gz", false));
+    // The failed request must release its capacity slot for subsequent requests.
+    assertEquals(4, specs(index().get("specs.4.8.gz", false)).size());
+  }
+
+  @Test
+  void identicalSpecMirrorsConsumeTheAggregateBudgetOnlyOnce() throws Exception {
+    var expected = List.of(new RubygemsIndexMarshal.Spec("a", "1", "ruby"),
+        new RubygemsIndexMarshal.Spec("b", "1", "ruby"));
+    byte[] body = RubygemsIndexMarshal.specs(expected);
+    responses.put("1/specs.4.8.gz", body); responses.put("2/specs.4.8.gz", body);
+    assertEquals(expected, specs(index(2, 100).get("specs.4.8.gz", false)));
+  }
+
+  @Test
+  void disjointMemberSpecsCannotExceedTheAggregatePayloadBudget() throws Exception {
+    responses.put("1/specs.4.8.gz", RubygemsIndexMarshal.specs(List.of(
+        new RubygemsIndexMarshal.Spec("a".repeat(100), "1", "ruby"))));
+    assertEquals(1, specs(index(10, 200).get("specs.4.8.gz", false)).size());
+    responses.put("2/specs.4.8.gz", RubygemsIndexMarshal.specs(List.of(
+        new RubygemsIndexMarshal.Spec("b".repeat(100), "1", "ruby"))));
+    assertThrows(MavenExceptions.BadUpstreamException.class, () -> index(10, 200).get("specs.4.8.gz", false));
+  }
+
+  @Test
+  void compactAndDependencyIndexesAlsoBoundRetainedAggregateRows() throws Exception {
+    put(hosted, "names", "a\n"); put(proxy, "names", "b\n");
+    put(hosted, "versions", "---\na 1 " + "a".repeat(32) + "\n");
+    put(proxy, "versions", "---\nb 1 " + "b".repeat(32) + "\n");
+    put(hosted, "info/demo", "---\n1 |checksum:a\n");
+    put(proxy, "info/demo", "---\n2 |checksum:b\n");
+    responses.put("1/api/v1/dependencies?gems=demo", RubygemsIndexMarshal.dependencies(
+        List.of(dependency("demo", "1", "a", ">= 0"))));
+    responses.put("2/api/v1/dependencies?gems=demo", RubygemsIndexMarshal.dependencies(
+        List.of(dependency("demo", "2", "b", ">= 0"))));
+    for (String path : List.of("names", "versions", "info/demo", "api/v1/dependencies?gems=demo")) {
+      assertThrows(MavenExceptions.BadUpstreamException.class, () -> index(1, 1024).get(path, false), path);
+    }
+  }
+
+  @Test
+  void identicalInfoMirrorsPreserveOriginalBytesWithinTheBudget() throws Exception {
+    String info = "created_at: opaque\n---\n1.0 |checksum:abc\n";
+    put(hosted, "info/demo", info); put(proxy, "info/demo", info);
+    assertEquals(info, text(index(1, 100).get("info/demo", false)));
+  }
+
+  @Test
+  void resolvingConflictingVersionsMustStillFitTheAggregatePayloadBudget() {
+    put(hosted, "versions", "---\ndemo 1 " + "a".repeat(32) + "\nother 1 " + "b".repeat(32) + "\n");
+    put(proxy, "versions", "---\ndemo 2 " + "c".repeat(32) + "\n");
+    put(hosted, "info/demo", "---\n1 |checksum:a\n");
+    put(proxy, "info/demo", "---\n2 |checksum:b\n");
+    // Initial rows fit; replacing demo's version list with "1,2" crosses the byte budget.
+    assertThrows(MavenExceptions.BadUpstreamException.class, () -> index(10, 156).get("versions", false));
+  }
+
+  @Test
+  void dependencyPayloadBudgetIncludesNestedRequirementStringsAndClosesInput() throws Exception {
+    byte[] body = RubygemsIndexMarshal.dependencies(
+        List.of(dependency("demo", "1", "dependency".repeat(50), ">= 0")));
+    boolean[] closed = {false};
+    var index = new RubygemsGroupIndex(group, (member, path) -> MavenResponse.ok(new ByteArrayInputStream(body) {
+      @Override public void close() { closed[0] = true; }
+    }, body.length, "application/octet-stream", null, null), 10, 200);
+    assertThrows(MavenExceptions.BadUpstreamException.class, () -> index.get("api/v1/dependencies?gems=demo", false));
+    assertTrue(closed[0]);
+  }
+
+  @Test
   void readsGenuineRubyMarshalObjectAndSymbolLinks() throws Exception {
     try (InputStream raw = getClass().getResourceAsStream("/rubygems/specs-with-links.4.8.gz");
         InputStream input = new GZIPInputStream(raw)) {
@@ -209,12 +284,15 @@ class RubygemsGroupIndexTest {
   }
 
   private RubygemsGroupIndex index() {
+    return index(RubygemsIndexMarshal.MAX_ROWS, RubygemsIndexMarshal.MAX_EXPANDED_BYTES);
+  }
+  private RubygemsGroupIndex index(int maxRows, long maxBytes) {
     return new RubygemsGroupIndex(group, (member, path) -> {
       String key = member.id() + "/" + path; requests.add(key);
       byte[] bytes = responses.get(key);
       return bytes == null ? MavenResponse.noBody(404)
           : MavenResponse.ok(new ByteArrayInputStream(bytes), bytes.length, "application/octet-stream", null, null);
-    });
+    }, maxRows, maxBytes);
   }
   private void put(RepositoryRuntime member, String path, String body) {
     responses.put(member.id() + "/" + path, body.getBytes(StandardCharsets.UTF_8));

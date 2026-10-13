@@ -10,7 +10,6 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
@@ -33,11 +32,20 @@ final class RubygemsGroupIndex {
   private static final ReentrantLock LARGE_INDEX_SLOT = new ReentrantLock(true);
   private final RepositoryRuntime group;
   private final BiFunction<RepositoryRuntime, String, MavenResponse> get;
+  private final int maxRows;
+  private final long maxBytes;
 
   RubygemsGroupIndex(RepositoryRuntime group,
       BiFunction<RepositoryRuntime, String, MavenResponse> get) {
+    this(group, get, RubygemsIndexMarshal.MAX_ROWS, RubygemsIndexMarshal.MAX_EXPANDED_BYTES);
+  }
+
+  RubygemsGroupIndex(RepositoryRuntime group,
+      BiFunction<RepositoryRuntime, String, MavenResponse> get, int maxRows, long maxBytes) {
     this.group = group;
     this.get = get;
+    this.maxRows = maxRows;
+    this.maxBytes = maxBytes;
   }
 
   static boolean handles(String path) {
@@ -85,13 +93,19 @@ final class RubygemsGroupIndex {
 
   private byte[] specs(String path) throws IOException {
     var merged = new LinkedHashSet<RubygemsIndexMarshal.Spec>();
+    var budget = budget(false);
     boolean found = false;
     for (RepositoryRuntime member : group.members()) {
       MavenResponse response = member(member, path);
       if (response == null) continue;
       found = true;
       try (InputStream body = response.body(); InputStream gzip = new GZIPInputStream(body)) {
-        RubygemsIndexMarshal.readSpecs(gzip, merged::add);
+        RubygemsIndexMarshal.readSpecs(gzip, spec -> {
+          if (!merged.contains(spec)) {
+            budget.add(spec.name(), spec.version(), spec.platform());
+            merged.add(spec);
+          }
+        });
       }
     }
     if (!found) return null;
@@ -111,6 +125,7 @@ final class RubygemsGroupIndex {
 
   private byte[] dependencies(String path) throws IOException {
     Map<String, Map<String, Object>> merged = new LinkedHashMap<>();
+    var budget = budget(false);
     boolean found = false;
     for (RepositoryRuntime member : group.members()) {
       MavenResponse response = member(member, path);
@@ -119,8 +134,13 @@ final class RubygemsGroupIndex {
       if (response == null) return null;
       found = true;
       try (InputStream body = response.body()) {
-        RubygemsIndexMarshal.readDependencies(body, row -> merged.putIfAbsent(
-            row.get("name") + "\n" + row.get("number") + "\n" + row.get("platform"), row));
+        RubygemsIndexMarshal.readDependencies(body, row -> {
+          String key = row.get("name") + "\n" + row.get("number") + "\n" + row.get("platform");
+          if (!merged.containsKey(key)) {
+            budget.add(key, row);
+            merged.put(key, row);
+          }
+        });
       }
     }
     return found ? RubygemsIndexMarshal.dependencies(merged.values()) : null;
@@ -128,33 +148,49 @@ final class RubygemsGroupIndex {
 
   private byte[] names() throws IOException {
     TreeSet<String> names = new TreeSet<>();
+    var budget = budget(true);
     boolean found = false;
     for (RepositoryRuntime member : group.members()) {
       byte[] body = text(member, "names");
       if (body == null) continue;
       found = true;
-      for (String line : lines(body)) if (!line.isBlank()) names.add(line);
+      for (String line : lines(body)) {
+        if (!line.isBlank() && !names.contains(line)) {
+          budget.add(line);
+          names.add(line);
+        }
+      }
     }
     return found ? utf8("---\n" + String.join("\n", names) + (names.isEmpty() ? "" : "\n")) : null;
   }
 
   private byte[] info(String path) throws IOException {
-    List<byte[]> bodies = new ArrayList<>();
+    byte[] first = null;
+    boolean identical = true;
+    Map<String, String> merged = new TreeMap<>();
+    var budget = budget(true);
     for (RepositoryRuntime member : group.members()) {
       byte[] body = text(member, path);
-      if (body != null && !infoRows(body).isEmpty()) bodies.add(body);
+      if (body == null || Arrays.equals(first, body)) continue;
+      Map<String, String> rows = infoRows(body);
+      if (rows.isEmpty()) continue;
+      if (first == null) first = body; else identical = false;
+      rows.forEach((version, line) -> {
+        if (!merged.containsKey(version)) {
+          budget.add(version, line);
+          merged.put(version, line);
+        }
+      });
     }
-    if (bodies.isEmpty()) return null;
-    byte[] first = bodies.getFirst();
+    if (first == null) return null;
     // Preserve original bytes/checksums when exactly one source contributes or mirrors agree.
-    if (bodies.stream().allMatch(body -> Arrays.equals(first, body))) return first;
-    Map<String, String> merged = new TreeMap<>();
-    for (byte[] body : bodies) infoRows(body).forEach(merged::putIfAbsent);
+    if (identical) return first;
     return utf8("---\n" + String.join("\n", merged.values()) + "\n");
   }
 
   private byte[] versions() throws IOException {
     Map<String, Versions> merged = new TreeMap<>();
+    var budget = budget(true);
     boolean found = false;
     for (RepositoryRuntime member : group.members()) {
       byte[] body = text(member, "versions");
@@ -163,12 +199,16 @@ final class RubygemsGroupIndex {
       if (body == null) return null;
       found = true;
       Map<String, Versions> current = versionRows(body);
-      current.forEach((name, row) -> merged.merge(name, row, (first, second) -> {
-        if (first.versions.equals(second.versions) && first.checksum.equals(second.checksum)) return first;
-        // Only conflicting gem names need per-gem reads. Identical upstream mirrors and
-        // disjoint hosted packages must not trigger a request for every public gem.
-        return new Versions(first.versions, first.checksum, true);
-      }));
+      current.forEach((name, row) -> {
+        Versions first = merged.get(name);
+        if (first == null) {
+          budget.add(name, row.versions, row.checksum);
+          merged.put(name, row);
+        } else if (!first.versions.equals(row.versions) || !first.checksum.equals(row.checksum)) {
+          // Only conflicting names need per-gem reads. Keep the first row until resolution.
+          merged.put(name, new Versions(first.versions, first.checksum, true));
+        }
+      });
     }
     if (!found) return null;
     StringBuilder result = new StringBuilder("---\n");
@@ -177,7 +217,10 @@ final class RubygemsGroupIndex {
       if (row.conflict) {
         byte[] info = info("info/" + entry.getKey());
         if (info == null) continue;
-        row = new Versions(String.join(",", infoRows(info).keySet()), md5(info), false);
+        Versions resolved = new Versions(String.join(",", infoRows(info).keySet()), md5(info), false);
+        budget.replace(List.of(entry.getKey(), row.versions, row.checksum),
+            List.of(entry.getKey(), resolved.versions, resolved.checksum));
+        row = resolved;
       }
       if (!row.versions.isEmpty()) result.append(entry.getKey()).append(' ').append(row.versions)
           .append(' ').append(row.checksum).append('\n');
@@ -185,8 +228,9 @@ final class RubygemsGroupIndex {
     return utf8(result.toString());
   }
 
-  private static Map<String, Versions> versionRows(byte[] body) {
+  private Map<String, Versions> versionRows(byte[] body) {
     Map<String, Versions> result = new LinkedHashMap<>();
+    var budget = budget(true);
     for (String line : lines(body)) {
       if (line.isBlank()) continue;
       String[] fields = line.split(" ", 3);
@@ -201,26 +245,36 @@ final class RubygemsGroupIndex {
         }
         versions = String.join(",", values);
       }
+      if (previous == null) budget.add(fields[0], versions, fields[2]);
+      else budget.replace(List.of(fields[0], previous.versions, previous.checksum),
+          List.of(fields[0], versions, fields[2]));
       result.put(fields[0], new Versions(versions, fields[2], fields[2].isEmpty()));
     }
     return result;
   }
 
-  private static Map<String, String> infoRows(byte[] body) {
+  private Map<String, String> infoRows(byte[] body) {
     Map<String, String> result = new LinkedHashMap<>();
+    var budget = budget(true);
     for (String line : lines(body)) {
       if (line.isBlank()) continue;
       int space = line.indexOf(' ');
       if (space <= 0 || !line.contains("|")) throw invalid();
-      result.put(line.substring(0, space), line);
+      String version = line.substring(0, space);
+      String previous = result.get(version);
+      if (previous == null) budget.add(version, line);
+      else budget.replace(List.of(version, previous), List.of(version, line));
+      result.put(version, line);
     }
     return result;
   }
 
-  private static List<String> lines(byte[] body) {
-    List<String> lines = new String(body, StandardCharsets.UTF_8).lines().toList();
-    int header = lines.indexOf("---");
-    return header < 0 ? lines : lines.subList(header + 1, lines.size());
+  private static Iterable<String> lines(byte[] body) {
+    String text = new String(body, StandardCharsets.UTF_8);
+    boolean header = text.lines().anyMatch("---"::equals);
+    // Do not allocate a list for every input line before the aggregate limits can run.
+    return () -> (header ? text.lines().dropWhile(line -> !line.equals("---")).skip(1)
+        : text.lines()).iterator();
   }
 
   private byte[] text(RepositoryRuntime member, String path) throws IOException {
@@ -246,6 +300,50 @@ final class RubygemsGroupIndex {
   }
 
   private static byte[] utf8(String text) { return text.getBytes(StandardCharsets.UTF_8); }
+
+  private IndexBudget budget(boolean text) {
+    return new IndexBudget(maxRows, text ? Math.min(maxBytes, MAX_TEXT_BYTES) : maxBytes);
+  }
+
+  /** Limits retained aggregate rows and payload, independently of each member's input limits. */
+  private static final class IndexBudget {
+    private final int maxRows;
+    private final long maxBytes;
+    private int rows;
+    private long bytes;
+
+    private IndexBudget(int maxRows, long maxBytes) { this.maxRows = maxRows; this.maxBytes = maxBytes; }
+
+    void add(Object... values) {
+      if (rows >= maxRows) throw oversized();
+      check(bytes + size(List.of(values)));
+      rows++;
+    }
+
+    void replace(Object previous, Object replacement) { check(bytes - size(previous) + size(replacement)); }
+
+    private void check(long next) {
+      if (next > maxBytes) throw oversized();
+      bytes = next;
+    }
+
+    private static long size(Object value) {
+      // Count UTF-8 payload plus conservative framing overhead, including nested dependencies.
+      if (value instanceof String string) return 8L + utf8(string).length;
+      if (value instanceof RubygemsIndexMarshal.Version version) return 16L + size(version.value());
+      long bytes = 16;
+      if (value instanceof Map<?, ?> map) {
+        for (var entry : map.entrySet()) bytes += size(entry.getKey()) + size(entry.getValue());
+      } else if (value instanceof Iterable<?> values) {
+        for (Object item : values) bytes += size(item);
+      }
+      return bytes;
+    }
+
+    private static IllegalArgumentException oversized() {
+      return new IllegalArgumentException("RubyGems group index exceeds aggregate limit");
+    }
+  }
   private static IllegalArgumentException invalid() { return new IllegalArgumentException("Malformed RubyGems compact index"); }
   private static String md5(byte[] bytes) {
     try { return HexFormat.of().formatHex(MessageDigest.getInstance("MD5").digest(bytes)); }

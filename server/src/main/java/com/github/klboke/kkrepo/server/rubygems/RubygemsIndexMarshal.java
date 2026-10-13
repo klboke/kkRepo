@@ -18,6 +18,8 @@ import java.util.zip.GZIPOutputStream;
 
 /** Data-only reader for RubyGems indexes. Never instantiates classes named by the wire format. */
 final class RubygemsIndexMarshal {
+  static final int MAX_ROWS = 3_000_000;
+  static final long MAX_EXPANDED_BYTES = 256L * 1024 * 1024;
   record Version(String value) { }
   record Spec(String name, String version, String platform) { }
 
@@ -115,7 +117,6 @@ final class RubygemsIndexMarshal {
   private static final class Reader {
     // Public rubygems.org specs currently contain over 1.7 million tuples. Limit both the
     // decompressed input and allocation counts; an upstream must not control arbitrary allocation.
-    private static final int MAX_ROWS = 3_000_000;
     // Unlinked specs use six objects (including the tuple and Version fields) and four
     // symbols per row. Include the root array so all MAX_ROWS rows fit these table budgets.
     private static final int MAX_OBJECTS = 1 + 6 * MAX_ROWS;
@@ -123,7 +124,7 @@ final class RubygemsIndexMarshal {
     private final InputStream input;
     private final List<String> symbols = new ArrayList<>();
     private final List<Object> objects = new ArrayList<>();
-    private long remaining = 256L * 1024 * 1024;
+    private long remaining = MAX_EXPANDED_BYTES;
 
     Reader(InputStream input) { this.input = new BufferedInputStream(input, 64 * 1024); }
 
