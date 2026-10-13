@@ -150,6 +150,10 @@ test("renders folder details with the repository format icon", async () => {
   const entry = { path: "v1/providers/acme/demo", leaf: false };
   const context = vm.createContext({
     state: { repo: "terraform-hosted", path: entry.path },
+    currentRepository: () => ({ format: "terraform", type: "hosted" }),
+    canDeleteBrowseContent: () => true,
+    pathSegments: path => path.split("/").filter(Boolean),
+    VERSION_DIR_RE: /^\d/,
     detailPaneMount: () => mount,
     renderDetailPane: (value) => { rendered = value; },
     repositoryFormatIcon: () => "<format-icon>",
@@ -160,12 +164,18 @@ test("renders folder details with the repository format icon", async () => {
     }),
   });
   vm.runInContext(
-    `${source.slice(start, end)}\nglobalThis.showComponentDetail = showComponentDetail;`,
+    source.slice(source.indexOf("function canDeleteBrowseDirectory"), source.indexOf("function hasUploadPermission"))
+      + `${source.slice(start, end)}\nglobalThis.showComponentDetail = showComponentDetail;`,
     context,
   );
   await context.showComponentDetail(entry);
   assert.equal(rendered.crumbIcon, "<format-icon>");
   assert.equal(rendered.crumbText, entry.path);
+  assert.equal(rendered.deleteEntry, null, "partial Terraform coordinates must not grant deletion");
+  entry.path += "/1.0.0";
+  context.state.path = entry.path;
+  await context.showComponentDetail(entry);
+  assert.equal(rendered.deleteEntry, entry, "complete Terraform releases retain the component action");
 });
 
 test("toggles a detail folder closed on the second click", async () => {
