@@ -213,10 +213,11 @@ final class RubygemsGroupIndex {
   private static boolean matchesSource(Set<String> actual, byte[] body, Contribution source) {
     Set<String> expected = source.versions.isEmpty() ? Set.of()
         : new LinkedHashSet<>(List.of(source.versions.split(",")));
+    if (!source.checksum.isEmpty() && !source.checksum.equalsIgnoreCase(md5(body))) return false;
     if (actual.equals(expected)) return true;
     // Nexus may omit platforms in /versions while /info includes them. Accept only a
     // checksum-verified member snapshot and only platform expansions of advertised versions.
-    if (source.checksum.isEmpty() || !source.checksum.equalsIgnoreCase(md5(body))) return false;
+    if (source.checksum.isEmpty()) return false;
     Set<String> represented = new LinkedHashSet<>();
     for (String version : actual) {
       if (expected.contains(version)) { represented.add(version); continue; }

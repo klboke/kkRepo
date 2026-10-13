@@ -124,8 +124,8 @@ class RubygemsGroupIndexTest {
 
   @Test
   void conflictingVersionsFallBackWhenAContributingInfoBecomesUnavailable() throws Exception {
-    put(hosted, "versions", "---\ndemo 1.0 " + "a".repeat(32) + "\n");
-    put(proxy, "versions", "---\ndemo 2.0 " + "b".repeat(32) + "\n");
+    put(hosted, "versions", "---\ndemo 1.0 " + md5("---\n1.0 |checksum:a\n") + "\n");
+    put(proxy, "versions", "---\ndemo 2.0 " + md5("---\n2.0 |checksum:b\n") + "\n");
     put(hosted, "info/demo", "---\n1.0 |checksum:a\n");
     assertEquals(404, index().get("versions", false).status());
     put(proxy, "info/demo", "---\n");
@@ -139,7 +139,7 @@ class RubygemsGroupIndexTest {
     for (RepositoryRuntime active : List.of(hosted, proxy)) {
       responses.clear();
       RepositoryRuntime yanked = active == hosted ? proxy : hosted;
-      put(active, "versions", "---\ndemo 1.0 " + "a".repeat(32) + "\n");
+      put(active, "versions", "---\ndemo 1.0 " + md5("---\n1.0 |checksum:a\n") + "\n");
       put(yanked, "versions", "---\ndemo 2.0 " + "b".repeat(32)
           + "\ndemo -2.0 " + "c".repeat(32) + "\n");
       assertEquals(404, index().get("versions", false).status());
@@ -167,9 +167,9 @@ class RubygemsGroupIndexTest {
     for (RepositoryRuntime active : List.of(hosted, proxy)) {
       responses.clear();
       RepositoryRuntime yanked = active == hosted ? proxy : hosted;
-      put(active, "versions", "---\ndemo 1.0 " + "a".repeat(32) + "\n");
+      put(active, "versions", "---\ndemo 1.0 " + md5("---\n1.0 |checksum:a\n") + "\n");
       put(yanked, "versions", "---\ndemo 2.0 " + "b".repeat(32)
-          + "\ndemo -2.0 " + "c".repeat(32) + "\n");
+          + "\ndemo -2.0 " + md5("---\n") + "\n");
       put(active, "info/demo", "---\n1.0 |checksum:a\n");
       put(yanked, "info/demo", "---\n2.0 |checksum:b\n");
       assertEquals(404, index().get("versions", false).status());
@@ -177,7 +177,7 @@ class RubygemsGroupIndexTest {
       String info = text(index().get("info/demo", false));
       assertEquals("---\ndemo 1.0 " + md5(info) + "\n", text(index().get("versions", false)));
       // A partially yanked member or a stale info missing an active version is unsafe too.
-      put(active, "versions", "---\ndemo 1.0,1.1 " + "a".repeat(32) + "\n");
+      put(active, "versions", "---\ndemo 1.0,1.1 " + md5("---\n1.0 |checksum:a\n1.1 |checksum:c\n") + "\n");
       assertEquals(404, index().get("versions", true).status());
       put(active, "info/demo", "---\n1.0 |checksum:a\n1.1 |checksum:c\n");
       info = text(index().get("info/demo", false));
@@ -205,6 +205,28 @@ class RubygemsGroupIndexTest {
     // An explicitly advertised platform must never expand to a different platform.
     put(proxy, "versions", "---\ndemo 1.0-ruby " + md5(javaInfo) + "\n");
     assertEquals(404, index().get("versions", false).status());
+  }
+
+  @Test
+  void equalVersionSetsStillRequireAnyAdvertisedMemberChecksum() throws Exception {
+    for (RepositoryRuntime changed : List.of(hosted, proxy)) {
+      responses.clear();
+      RepositoryRuntime stable = changed == hosted ? proxy : hosted;
+      String before = "---\n1.0 dep:>= 1|checksum:old\n";
+      String after = "---\n1.0 dep:>= 2|checksum:new\n";
+      String other = "---\n2.0 |checksum:other\n";
+      put(changed, "versions", "---\ndemo 1.0 " + md5(before) + "\n");
+      put(stable, "versions", "---\ndemo 2.0 " + md5(other) + "\n");
+      put(changed, "info/demo", after); put(stable, "info/demo", other);
+      assertEquals(404, index().get("versions", false).status());
+      assertEquals(404, index().get("versions", true).status());
+      // A genuinely omitted checksum can still be recomputed from matching version rows.
+      put(changed, "versions", "---\ndemo 1.0\n");
+      String info = text(index().get("info/demo", false));
+      assertEquals("---\ndemo 1.0,2.0 " + md5(info) + "\n", text(index().get("versions", false)));
+      put(changed, "versions", "---\ndemo 1.0 " + md5(after).toUpperCase(java.util.Locale.ROOT) + "\n");
+      assertEquals("---\ndemo 1.0,2.0 " + md5(info) + "\n", text(index().get("versions", false)));
+    }
   }
 
   @Test
