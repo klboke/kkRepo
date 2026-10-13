@@ -163,6 +163,35 @@ class RubygemsGroupIndexTest {
   }
 
   @Test
+  void conflictingInfoMustMatchActiveVersionsBeforePublishingItsChecksum() throws Exception {
+    for (RepositoryRuntime active : List.of(hosted, proxy)) {
+      responses.clear();
+      RepositoryRuntime yanked = active == hosted ? proxy : hosted;
+      put(active, "versions", "---\ndemo 1.0 " + "a".repeat(32) + "\n");
+      put(yanked, "versions", "---\ndemo 2.0 " + "b".repeat(32)
+          + "\ndemo -2.0 " + "c".repeat(32) + "\n");
+      put(active, "info/demo", "---\n1.0 |checksum:a\n");
+      put(yanked, "info/demo", "---\n2.0 |checksum:b\n");
+      assertEquals(404, index().get("versions", false).status());
+      put(yanked, "info/demo", "---\n");
+      String info = text(index().get("info/demo", false));
+      assertEquals("---\ndemo 1.0 " + md5(info) + "\n", text(index().get("versions", false)));
+      // A partially yanked member or a stale info missing an active version is unsafe too.
+      put(active, "versions", "---\ndemo 1.0,1.1 " + "a".repeat(32) + "\n");
+      assertEquals(404, index().get("versions", true).status());
+      put(active, "info/demo", "---\n1.0 |checksum:a\n1.1 |checksum:c\n");
+      info = text(index().get("info/demo", false));
+      assertEquals("---\ndemo 1.0,1.1 " + md5(info) + "\n", text(index().get("versions", false)));
+    }
+    // Recomputing a single source's missing checksum must not legitimize stale info either.
+    responses.clear();
+    put(hosted, "versions", "---\n");
+    put(proxy, "versions", "---\ndemo 1.0\n");
+    put(proxy, "info/demo", "---\n1.0 |checksum:a\n2.0 |checksum:b\n");
+    assertEquals(404, index().get("versions", false).status());
+  }
+
+  @Test
   void legacyOnlyMemberDisablesPartialCompactVersions() {
     put(hosted, "versions", "---\nprivate 1.0 " + "a".repeat(32) + "\n");
     assertEquals(404, index().get("versions", false).status());

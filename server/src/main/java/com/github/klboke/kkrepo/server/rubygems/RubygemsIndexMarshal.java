@@ -8,11 +8,13 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.Consumer;
 import java.util.zip.GZIPOutputStream;
 
@@ -117,14 +119,14 @@ final class RubygemsIndexMarshal {
   private static final class Reader {
     // Public rubygems.org specs currently contain over 1.7 million tuples. Limit both the
     // decompressed input and allocation counts; an upstream must not control arbitrary allocation.
-    // Unlinked specs use six objects (including the tuple and Version fields) and four
-    // symbols per row. Include the root array so all MAX_ROWS rows fit these table budgets.
-    private static final int MAX_OBJECTS = 1 + 6 * MAX_ROWS;
-    private static final int MAX_SYMBOLS = 4 * MAX_ROWS;
+    // Each new object/symbol requires at least a tag and length byte on the wire. Bound
+    // tables by the input budget, independently of the different specs/dependency shapes.
+    private static final int MAX_TABLE_ENTRIES = (int) (MAX_EXPANDED_BYTES / 2);
     private final InputStream input;
-    private final List<String> symbols = new ArrayList<>();
-    private final List<Object> objects = new ArrayList<>();
+    private final List<String> symbols = new PagedTable<>();
+    private final List<Object> objects = new PagedTable<>();
     private long remaining = MAX_EXPANDED_BYTES;
+    private long rowAllocation;
 
     Reader(InputStream input) { this.input = new BufferedInputStream(input, 64 * 1024); }
 
@@ -133,6 +135,7 @@ final class RubygemsIndexMarshal {
       int count = size(MAX_ROWS);
       remember(null); // Root array can never be referenced as an index field.
       for (int i = 0; i < count; i++) {
+        rowAllocation = 0;
         consumer.accept(value(0));
       }
       if (input.read() != -1) throw invalid();
@@ -149,9 +152,14 @@ final class RubygemsIndexMarshal {
         }
         case '"' -> remember(string());
         case ':' -> {
-          if (symbols.size() >= MAX_SYMBOLS) throw invalid();
+          if (symbols.size() >= MAX_TABLE_ENTRIES) throw invalid();
           String symbol = string();
-          symbol = switch (symbol) { case "E" -> "E"; case "Gem::Version" -> "Gem::Version"; default -> symbol; };
+          symbol = switch (symbol) {
+            case "E" -> "E"; case "Gem::Version" -> "Gem::Version";
+            case "name" -> "name"; case "number" -> "number";
+            case "platform" -> "platform"; case "dependencies" -> "dependencies";
+            default -> symbol;
+          };
           symbols.add(symbol); yield symbol;
         }
         case ';' -> link(symbols);
@@ -163,6 +171,7 @@ final class RubygemsIndexMarshal {
         }
         case '[' -> {
           int count = size(10_000);
+          allocate(40L + 8L * count);
           // Reserve the wire object index without retaining non-linkable collections,
           // including every Gem::Version fields array nested inside streamed spec rows.
           List<Object> values = new ArrayList<>(count); remember(null);
@@ -171,6 +180,7 @@ final class RubygemsIndexMarshal {
         }
         case '{' -> {
           int count = size(32);
+          allocate(64L + 96L * count);
           Map<String, Object> values = new LinkedHashMap<>(); remember(null);
           for (int i = 0; i < count; i++) {
             Object key = value(depth + 1);
@@ -181,6 +191,7 @@ final class RubygemsIndexMarshal {
         }
         case 'U' -> {
           if (!"Gem::Version".equals(value(depth + 1))) throw invalid();
+          allocate(24);
           int index = objects.size(); remember(null);
           Object fields = value(depth + 1);
           if (!(fields instanceof List<?> list) || list.size() != 1
@@ -196,10 +207,19 @@ final class RubygemsIndexMarshal {
 
     private String string() throws IOException {
       int length = size(64 * 1024);
+      allocate(48L + 2L * length);
       if ((remaining -= length) < 0) throw invalid();
       byte[] bytes = input.readNBytes(length);
       if (bytes.length != length) throw new EOFException("Truncated RubyGems index");
       return new String(bytes, StandardCharsets.UTF_8);
+    }
+
+    private void allocate(long bytes) {
+      // A small wire representation can expand into deeply nested arrays of nil/booleans.
+      // Bound each row's decoded allocations separately from the whole-index wire budget.
+      if ((rowAllocation += bytes) > 16L * 1024 * 1024) {
+        throw new IllegalArgumentException("RubyGems index row exceeds allocation limit");
+      }
     }
 
     private <T> T link(List<T> table) throws IOException {
@@ -209,7 +229,7 @@ final class RubygemsIndexMarshal {
     }
 
     private <T> T remember(T value) {
-      if (objects.size() >= MAX_OBJECTS) throw invalid();
+      if (objects.size() >= MAX_TABLE_ENTRIES) throw invalid();
       objects.add(value); return value;
     }
 
@@ -236,6 +256,38 @@ final class RubygemsIndexMarshal {
       int value = input.read();
       if (value < 0) throw new EOFException("Truncated RubyGems index");
       return value;
+    }
+  }
+
+  /** Request-local wire link table; null collection slots do not allocate pages. */
+  private static final class PagedTable<T> extends AbstractList<T> {
+    private static final int PAGE_SIZE = 4096;
+    private final List<Object[]> pages = new ArrayList<>();
+    private int size;
+
+    @Override public int size() { return size; }
+
+    @Override @SuppressWarnings("unchecked") public T get(int index) {
+      Objects.checkIndex(index, size);
+      int page = index / PAGE_SIZE;
+      Object[] values = page < pages.size() ? pages.get(page) : null;
+      return values == null ? null : (T) values[index % PAGE_SIZE];
+    }
+
+    @Override public boolean add(T value) {
+      int index = size++;
+      if (value != null) set(index, value);
+      return true;
+    }
+
+    @Override public T set(int index, T value) {
+      T previous = get(index);
+      int page = index / PAGE_SIZE;
+      while (pages.size() <= page) pages.add(null);
+      Object[] values = pages.get(page);
+      if (values == null) { values = new Object[PAGE_SIZE]; pages.set(page, values); }
+      values[index % PAGE_SIZE] = value;
+      return previous;
     }
   }
 }

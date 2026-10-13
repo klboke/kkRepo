@@ -75,7 +75,9 @@ Yank updates availability metadata; it is not a substitute for a cleanup policy.
   return 502; split their members into smaller groups. Group metadata requests, including dependency
   queries and per-gem info, share per-process capacity and return 503 with `Retry-After: 1` after
   waiting up to 30 seconds. Conflicting versions return 404 for client fallback if a contributing
-  member's info becomes unavailable, instead of advertising an incomplete merged index.
+  member's info becomes unavailable or disagrees with active versions, instead of advertising
+  missing or yanked releases with a synthesized checksum. Individual Marshal rows also have a
+  16 MiB decoded-allocation budget to reject excessive nested data.
 
 ## Operations And Troubleshooting
 

@@ -72,7 +72,9 @@ Yank 更新可用性 metadata，不能替代 cleanup policy。
   legacy/dependency 索引 256 MiB、compact 索引 64 MiB。超过限制返回 502，需要将成员拆成
   更小的 group。所有 group metadata 请求（包括 dependency 查询和单个 gem 的 info）共享
   进程内处理容量，繁忙时最多等待 30 秒，随后返回带 `Retry-After: 1` 的 503。合并冲突版本时，
-  若提供版本的成员 info 不可用，则返回 404 供客户端回退，避免发布不完整的合并索引。
+  若提供版本的成员 info 不可用或与有效版本清单不一致，则返回 404 供客户端回退，避免漏掉
+  有效版本或重新发布已撤回版本。单条 Marshal 记录另有 16 MiB 的解码内存分配预算，防止
+  过度嵌套的数据放大内存开销。
 
 ## 运维与排障
 

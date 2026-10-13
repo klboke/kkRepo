@@ -230,7 +230,15 @@ final class RubygemsGroupIndex {
           }
           boolean conflict = first.conflict || row.conflict
               || !first.versions.equals(row.versions) || !first.checksum.equals(row.checksum);
-          merged.put(name, new Versions(first.versions, first.checksum, conflict, contributors, true));
+          String active = first.versions;
+          if (!row.versions.isEmpty() && !active.equals(row.versions)) {
+            var versions = new LinkedHashSet<String>();
+            if (!active.isEmpty()) versions.addAll(List.of(active.split(",")));
+            versions.addAll(List.of(row.versions.split(",")));
+            active = String.join(",", versions);
+            budget.replace(List.of(name, first.versions, first.checksum), List.of(name, active, first.checksum));
+          }
+          merged.put(name, new Versions(active, first.checksum, conflict, contributors, true));
         }
       });
     }
@@ -250,7 +258,12 @@ final class RubygemsGroupIndex {
           if (strict) return null;
           continue;
         }
-        Versions resolved = new Versions(String.join(",", infoRows(info).keySet()), md5(info), false);
+        var available = infoRows(info).keySet();
+        // Member versions and info may come from different proxy-cache snapshots. A
+        // synthesized checksum must not legitimize stale/yanked or missing releases.
+        // Fall back instead of filtering only this body: GET info must have the same MD5.
+        if (!available.equals(new LinkedHashSet<>(List.of(row.versions.split(","))))) return null;
+        Versions resolved = new Versions(String.join(",", available), md5(info), false);
         budget.replace(List.of(entry.getKey(), row.versions, row.checksum),
             List.of(entry.getKey(), resolved.versions, resolved.checksum));
         row = resolved;
