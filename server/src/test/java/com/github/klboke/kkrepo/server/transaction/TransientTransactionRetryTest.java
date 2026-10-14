@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.CannotAcquireLockException;
+import org.springframework.dao.UncategorizedDataAccessException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionException;
@@ -39,8 +40,8 @@ class TransientTransactionRetryTest {
       var manager = new RecordingTransactionManager();
       var retry = new TransientTransactionRetry(manager, 2, 0);
       var attempts = new AtomicInteger();
-      var failure = new org.springframework.jdbc.UncategorizedSQLException(
-          "write", "UPDATE cache_version", new java.sql.SQLException("database error", state));
+      var failure = new UncategorizedDataAccessException(
+          "uncategorized database error", new java.sql.SQLException("database error", state)) {};
       java.util.function.Supplier<String> write = () -> {
         if (attempts.incrementAndGet() == 1) throw failure;
         return "ok";
@@ -50,7 +51,7 @@ class TransientTransactionRetryTest {
         assertEquals(2, manager.begun);
         assertEquals(1, manager.committed);
       } else {
-        assertEquals(failure, assertThrows(org.springframework.jdbc.UncategorizedSQLException.class,
+        assertEquals(failure, assertThrows(UncategorizedDataAccessException.class,
             () -> retry.execute("not retryable", write)));
         assertEquals(1, manager.begun);
         assertEquals(0, manager.committed);

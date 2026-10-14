@@ -8,6 +8,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRepositoryTar
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRoleRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
 import com.github.klboke.kkrepo.server.catalog.CatalogCacheBroadcaster;
+import com.github.klboke.kkrepo.server.cache.CacheInvalidation;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -32,8 +33,6 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 public class SecurityCatalogCache {
@@ -115,27 +114,8 @@ public class SecurityCatalogCache {
     if (!enabled) {
       return;
     }
-    if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-      refreshSafely("mutation");
-      publishRefresh();
-      return;
-    }
-    if (TransactionSynchronizationManager.hasResource(REFRESH_RESOURCE_KEY)) {
-      return;
-    }
-    TransactionSynchronizationManager.bindResource(REFRESH_RESOURCE_KEY, Boolean.TRUE);
-    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-      @Override
-      public void afterCommit() {
-        refreshSafely("mutation");
-        publishRefresh();
-      }
-
-      @Override
-      public void afterCompletion(int status) {
-        TransactionSynchronizationManager.unbindResourceIfPossible(REFRESH_RESOURCE_KEY);
-      }
-    });
+    CacheInvalidation.beforeCommit(REFRESH_RESOURCE_KEY, this::publishRefresh);
+    CacheInvalidation.afterCommit(REFRESH_RESOURCE_KEY, () -> refreshSafely("mutation"));
   }
 
   private void subscribeToBroadcast() {

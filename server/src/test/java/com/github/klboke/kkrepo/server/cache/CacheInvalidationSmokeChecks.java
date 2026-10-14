@@ -56,7 +56,10 @@ public final class CacheInvalidationSmokeChecks {
         statement.executeUpdate("INSERT INTO cache_version (name, version, updated_at) VALUES ('" + VERSION + "', 0, CURRENT_TIMESTAMP)");
       }
       try {
-        verify(pool, observer, persistenceFactory.apply(pool), mysql);
+        Persistence persistence = persistenceFactory.apply(pool);
+        verify(pool, observer, persistence, mysql);
+        com.github.klboke.kkrepo.server.catalog.CatalogInvalidationSmokeChecks.verify(
+            persistence, pool, observer);
       } finally {
         if (!observer.getAutoCommit()) observer.rollback();
         observer.setAutoCommit(true);

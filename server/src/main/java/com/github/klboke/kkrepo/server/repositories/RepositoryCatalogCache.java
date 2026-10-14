@@ -5,6 +5,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.catalog.CatalogCacheBroadcaster;
+import com.github.klboke.kkrepo.server.cache.CacheInvalidation;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -23,8 +24,6 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * In-memory snapshot of the full repository catalog (records + blob-store names + group members)
@@ -129,27 +128,8 @@ public class RepositoryCatalogCache {
     if (!enabled) {
       return;
     }
-    if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-      refreshSafely("mutation");
-      publishRefresh();
-      return;
-    }
-    if (TransactionSynchronizationManager.hasResource(REFRESH_RESOURCE_KEY)) {
-      return;
-    }
-    TransactionSynchronizationManager.bindResource(REFRESH_RESOURCE_KEY, Boolean.TRUE);
-    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-      @Override
-      public void afterCommit() {
-        refreshSafely("mutation");
-        publishRefresh();
-      }
-
-      @Override
-      public void afterCompletion(int status) {
-        TransactionSynchronizationManager.unbindResourceIfPossible(REFRESH_RESOURCE_KEY);
-      }
-    });
+    CacheInvalidation.beforeCommit(REFRESH_RESOURCE_KEY, this::publishRefresh);
+    CacheInvalidation.afterCommit(REFRESH_RESOURCE_KEY, () -> refreshSafely("mutation"));
   }
 
   private void subscribeToBroadcast() {

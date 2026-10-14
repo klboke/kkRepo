@@ -38,6 +38,8 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.AbstractPlatformTransactionManager;
+import org.springframework.transaction.support.DefaultTransactionStatus;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionStatus;
 import org.springframework.transaction.support.SimpleTransactionStatus;
@@ -658,9 +660,17 @@ class HelmGroupIndexCacheTest {
     when(rebuildQueue.acknowledgeHelmGroupInvalidationIfRequestToken(
         eq(31L), eq(RepositoryIndexRebuildDao.HELM_GROUP_INVALIDATION),
         eq("root-2"))).thenReturn(true);
+    // Exercise the production REQUIRES_NEW synchronization lifecycle. The transaction-free
+    // constructor would run its callback inside the outer synchronization and leak pending work.
+    var transactions = new AbstractPlatformTransactionManager() {
+      @Override protected Object doGetTransaction() { return new Object(); }
+      @Override protected void doBegin(Object transaction, TransactionDefinition definition) {}
+      @Override protected void doCommit(DefaultTransactionStatus status) {}
+      @Override protected void doRollback(DefaultTransactionStatus status) {}
+    };
     HelmGroupIndexCache cache = new HelmGroupIndexCache(
         repositories, mock(AssetDao.class), mock(AssetMetadataCache.class), controller,
-        rebuildQueue, true);
+        rebuildQueue, transactions, true);
     String nestedBefore = controller.currentToken(21L, NexusCacheType.METADATA);
     String rootBefore = controller.currentToken(31L, NexusCacheType.METADATA);
     String nestedContentBefore = controller.currentToken(21L, NexusCacheType.CONTENT);
@@ -691,6 +701,7 @@ class HelmGroupIndexCacheTest {
     } finally {
       TransactionSynchronizationManager.clearSynchronization();
     }
+    assertTrue(TransactionSynchronizationManager.getResourceMap().isEmpty());
   }
 
   @Test

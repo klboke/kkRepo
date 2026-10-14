@@ -6,6 +6,7 @@ import com.github.klboke.kkrepo.cache.LocalCache;
 import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import com.github.klboke.kkrepo.cache.SharedCache;
 import com.github.klboke.kkrepo.server.cache.VersionWatermark;
+import com.github.klboke.kkrepo.server.cache.CacheInvalidation;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityPrivilegeRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRepositoryTargetRecord;
 import java.time.Duration;
@@ -22,8 +23,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 public class SecurityAuthorizationCache {
@@ -96,25 +95,10 @@ public class SecurityAuthorizationCache {
     if (!enabled) {
       return;
     }
-    if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-      invalidateAll();
-      return;
-    }
-    if (TransactionSynchronizationManager.hasResource(INVALIDATION_RESOURCE_KEY)) {
-      return;
-    }
-    TransactionSynchronizationManager.bindResource(INVALIDATION_RESOURCE_KEY, Boolean.TRUE);
-    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-      @Override
-      public void afterCommit() {
-        invalidateAll();
-      }
-
-      @Override
-      public void afterCompletion(int status) {
-        TransactionSynchronizationManager.unbindResourceIfPossible(INVALIDATION_RESOURCE_KEY);
-      }
-    });
+    // Permission mutations and their shared generation must commit together. A failed bump
+    // must roll back the revocation rather than leave other replicas using old grants.
+    CacheInvalidation.watermarkBeforeCommit(VERSION_NAME, () -> watermark.bump(VERSION_NAME));
+    CacheInvalidation.afterCommit(INVALIDATION_RESOURCE_KEY, () -> versionCache.invalidate(VERSION_NAME));
   }
 
   public void invalidateAll() {

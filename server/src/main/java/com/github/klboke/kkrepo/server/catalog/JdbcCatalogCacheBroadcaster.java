@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.catalog;
 
 import com.github.klboke.kkrepo.server.cache.VersionWatermark;
+import com.github.klboke.kkrepo.server.cache.CacheInvalidation;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -65,8 +66,11 @@ class JdbcCatalogCacheBroadcaster implements CatalogCacheBroadcaster, Scheduling
   @Override
   public void publishRefresh(String catalogName) {
     String name = versionName(catalogName);
-    long version = watermark.bump(name);
-    lastSeen.put(name, version);
+    CacheInvalidation.watermarkBeforeCommit(name, () -> {
+      long version = watermark.bump(name);
+      // A rolled-back publisher must not suppress a later committed generation on this node.
+      CacheInvalidation.afterCommit(name, () -> lastSeen.merge(name, version, Math::max));
+    });
   }
 
   public void poll() {
