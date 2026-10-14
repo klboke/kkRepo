@@ -18,8 +18,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * Node-local TTL cache for {@code asset + asset_blob} hot reads on the download path.
@@ -28,8 +26,9 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
  * HEAD in every format. Both are point queries on indexed columns, but at high QPS they dominate
  * MySQL load. This cache stores a {@link CachedAssetMetadata} snapshot under a per-repository,
  * per-storage-path key so a single cache lookup replaces both. The entry is a recoverable
- * performance cache; writers evict the local copy after commit and bump a MySQL-backed repository
- * watermark so sibling replicas discard stale entries. The TTL remains a safety net.
+ * performance cache; writers commit a database-backed repository watermark with asset changes
+ * and evict the local copy after commit so sibling replicas discard stale entries. The TTL
+ * remains a safety net.
  *
  * <p>Negative hits (path that doesn't exist) are cached with a much shorter TTL to absorb
  * tight-loop misses (e.g. clients probing siblings) without inviting long-lived staleness.
@@ -43,8 +42,6 @@ public class AssetMetadataCache {
   private static final String NAMESPACE = "asset-metadata";
   private static final String VERSION_PREFIX = "asset-metadata:repo:";
   private static final String MISSING_MARKER = "\"__missing__\"";
-  private static final Object SYNC_RESOURCE_KEY =
-      AssetMetadataCache.class.getName() + ".PENDING_EVICTS";
 
   private final SharedCache sharedCache;
   private final ObjectMapper objectMapper;
@@ -230,59 +227,23 @@ public class AssetMetadataCache {
   }
 
   /**
-   * Evict the entry after the current transaction commits. If there is no active transaction the
-   * evict runs immediately. Repeated calls within the same transaction for the same key collapse
-   * into a single eviction.
+   * Commit the durable repository generation with the asset write, then evict local entries.
+   * Repeated writes in one transaction share one generation bump, performed after cascading
+   * group mutations. A failed bump aborts the write so its owner can retry safely.
    */
   public void evictAfterCommit(long repositoryId, String storagePath) {
-    if (storagePath == null) {
-      return;
+    if (storagePath == null) return;
+    if (watermark != null) {
+      CacheInvalidation.watermarkBeforeCommit(versionName(repositoryId),
+          () -> watermark.bump(versionName(repositoryId)));
     }
-    if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-      invalidateRepositoryVersion(repositoryId);
-      if (enabled) {
-        evictLocal(repositoryId, storagePath);
-      }
-      return;
+    if (enabled) {
+      CacheInvalidation.afterCommit(new EvictionKey(repositoryId, storagePath),
+          () -> evictLocal(repositoryId, storagePath));
     }
-    @SuppressWarnings("unchecked")
-    java.util.Set<String> pending =
-        (java.util.Set<String>) TransactionSynchronizationManager.getResource(SYNC_RESOURCE_KEY);
-    if (pending == null) {
-      pending = new java.util.LinkedHashSet<>();
-      TransactionSynchronizationManager.bindResource(SYNC_RESOURCE_KEY, pending);
-      java.util.Set<String> snapshot = pending;
-      TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-        @Override
-        public void afterCommit() {
-          java.util.Set<Long> invalidatedRepositories = new java.util.HashSet<>();
-          for (String key : snapshot) {
-            int slash = key.indexOf(':');
-            if (slash <= 0) continue;
-            long repoId;
-            try {
-              repoId = Long.parseLong(key.substring(0, slash));
-            } catch (NumberFormatException ignored) {
-              continue;
-            }
-            String path = key.substring(slash + 1);
-            if (invalidatedRepositories.add(repoId)) {
-              invalidateRepositoryVersion(repoId);
-            }
-            if (enabled) {
-              evictLocal(repoId, path);
-            }
-          }
-        }
-
-        @Override
-        public void afterCompletion(int status) {
-          TransactionSynchronizationManager.unbindResourceIfPossible(SYNC_RESOURCE_KEY);
-        }
-      });
-    }
-    pending.add(repositoryId + ":" + storagePath);
   }
+
+  private record EvictionKey(long repositoryId, String storagePath) {}
 
   /** Bulk-evict every entry under a repository. Use on repository delete / format wipe. */
   public void evictRepository(long repositoryId) {

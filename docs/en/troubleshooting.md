@@ -253,6 +253,20 @@ If live checks fail:
 - Verify the configured base URLs and credentials.
 - Make sure write tests are intentionally enabled before running write suites.
 
+## Hikari connection warnings and cache version lock waits
+
+`Apparent connection leak detected` means a borrowed connection exceeded the leak-detection
+threshold; its stack identifies where it was borrowed, not necessarily where the thread is now
+blocked. Check for a later `returned to the pool (unleaked)` message for the same connection before
+concluding that it was never returned.
+
+For concurrent PyPI index refreshes, correlate `cache_version` lock waits with cache invalidation
+failures and connection-pool active/pending counts. On MySQL, capture `performance_schema.data_lock_waits`
+and `information_schema.innodb_trx` while the problem is occurring to identify the blocking transaction.
+Increasing the pool does not remove a hot-row lock. Attach sanitized evidence and the image digest
+or exact commit when reporting the problem. Docker upload-stream warnings require a separate look
+at client and object-storage latency; the same Hikari warning alone does not prove the same cause.
+
 ## Logs To Attach To Issues
 
 Helpful information:

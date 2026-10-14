@@ -312,6 +312,7 @@ class GroupMemberAssetCacheTest {
       List<TransactionSynchronization> synchronizations =
           TransactionSynchronizationManager.getSynchronizations();
       assertEquals(1, synchronizations.size());
+      synchronizations.forEach(sync -> sync.beforeCommit(false));
       synchronizations.forEach(TransactionSynchronization::afterCommit);
       assertTrue(cache.get(
           group, "demo-1.0.0.tgz", NexusCacheType.CONTENT).isEmpty());

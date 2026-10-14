@@ -7,6 +7,8 @@ import java.time.Duration;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 public class JdbcVersionWatermark implements VersionWatermark {
@@ -27,12 +29,25 @@ public class JdbcVersionWatermark implements VersionWatermark {
   @Override
   public long bump(String name) {
     long version = dao.bump(name);
-    localVersions.put(name, version);
+    if (TransactionSynchronizationManager.isSynchronizationActive()) {
+      // Never expose an uncommitted generation to another thread, or retain it after rollback.
+      // Invalidate again on completion to discard reads racing the transaction's commit.
+      localVersions.invalidate(name);
+      TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+        @Override
+        public void afterCompletion(int status) {
+          localVersions.invalidate(name);
+        }
+      });
+    } else {
+      localVersions.put(name, version);
+    }
     return version;
   }
 
   @Override
   public long current(String name) {
+    if (TransactionSynchronizationManager.isActualTransactionActive()) return dao.current(name);
     return localVersions.get(name, dao::current);
   }
 
@@ -44,7 +59,9 @@ public class JdbcVersionWatermark implements VersionWatermark {
   @Override
   public Map<String, Long> currentAll() {
     Map<String, Long> versions = dao.selectAll();
-    versions.forEach(localVersions::put);
+    if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+      versions.forEach(localVersions::put);
+    }
     return versions;
   }
 }

@@ -5,6 +5,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
+import com.github.klboke.kkrepo.server.cache.CacheInvalidation;
 import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.cache.NexusCacheType;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
@@ -17,12 +18,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * Nexus-like cache metadata for PyPI group simple indexes.
@@ -37,7 +34,6 @@ public class PypiGroupSimpleIndexCache {
   static final String ROOT_INDEX = "root-index";
   static final String INDEX = "index";
 
-  private static final Logger log = LoggerFactory.getLogger(PypiGroupSimpleIndexCache.class);
   private static final String GROUP_INDEX_ATTRIBUTE = "pypiGroupSimpleIndex";
   private static final Object PENDING_MEMBERS_KEY =
       PypiGroupSimpleIndexCache.class.getName() + ".PENDING_MEMBERS";
@@ -120,14 +116,14 @@ public class PypiGroupSimpleIndexCache {
     if (!enabled) {
       return;
     }
-    deferAfterCommit(PENDING_MEMBERS_KEY, memberRepositoryId, this::invalidateMemberGroups);
+    deferInvalidation(PENDING_MEMBERS_KEY, memberRepositoryId, this::invalidateMemberGroups);
   }
 
   public void invalidateMemberRootAfterCommit(long memberRepositoryId) {
     if (!enabled) {
       return;
     }
-    deferAfterCommit(PENDING_MEMBER_ROOTS_KEY, memberRepositoryId, this::invalidateMemberRoot);
+    deferInvalidation(PENDING_MEMBER_ROOTS_KEY, memberRepositoryId, this::invalidateMemberRoot);
   }
 
   public void invalidateMemberProjectAfterCommit(long memberRepositoryId, String projectName) {
@@ -138,7 +134,7 @@ public class PypiGroupSimpleIndexCache {
       invalidateMemberAfterCommit(memberRepositoryId);
       return;
     }
-    deferAfterCommit(
+    deferInvalidation(
         PENDING_MEMBER_PROJECTS_KEY,
         new MemberProjectInvalidation(memberRepositoryId, PypiPaths.normalizeName(projectName)),
         this::invalidateMemberProject);
@@ -148,7 +144,7 @@ public class PypiGroupSimpleIndexCache {
     if (!enabled) {
       return;
     }
-    deferAfterCommit(PENDING_GROUPS_KEY, groupId, this::invalidateGroupAndAncestors);
+    deferInvalidation(PENDING_GROUPS_KEY, groupId, this::invalidateGroupAndAncestors);
   }
 
   private void invalidateMemberGroups(long memberRepositoryId) {
@@ -215,64 +211,34 @@ public class PypiGroupSimpleIndexCache {
   }
 
   private void invalidateGroupToken(long groupId) {
-    try {
-      cacheController.invalidateAfterCommit(groupId, NexusCacheType.METADATA);
-    } catch (RuntimeException e) {
-      log.warn("Failed invalidating PyPI group simple-index token for group {}", groupId, e);
-    }
+    cacheController.invalidateAfterCommit(groupId, NexusCacheType.METADATA);
   }
 
   private void invalidateGroupPath(long groupId, String path) {
-    try {
-      Optional<AssetRecord> existing = assetDao.findAssetByPath(groupId, path);
-      if (existing.isEmpty()) {
-        return;
-      }
-      AssetRecord asset = existing.get();
-      Map<String, Object> attributes = new LinkedHashMap<>();
-      if (asset.attributes() != null) {
-        attributes.putAll(asset.attributes());
-      }
-      Instant lastVerified = NexusLikeCacheInfo.fromAttributes(attributes)
-          .map(NexusLikeCacheInfo::lastVerified)
-          .orElse(Instant.now());
-      Map<String, Object> updated = NexusLikeCacheInfo.applyToAttributes(
-          attributes,
-          new NexusLikeCacheInfo(lastVerified, NexusLikeCacheInfo.INVALIDATED, NexusCacheType.METADATA));
-      assetDao.updateAssetAttributes(asset.id(), updated);
-      assetMetadataCache.evictAfterCommit(groupId, path);
-    } catch (RuntimeException e) {
-      log.warn("Failed invalidating PyPI group simple-index asset for group {} path {}", groupId, path, e);
-    }
-  }
-
-  private <T> void deferAfterCommit(Object resourceKey, T item, Consumer<T> resolver) {
-    if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-      resolver.accept(item);
+    Optional<AssetRecord> existing = assetDao.findAssetByPath(groupId, path);
+    if (existing.isEmpty()) {
       return;
     }
-    @SuppressWarnings("unchecked")
-    Set<T> pending = (Set<T>) TransactionSynchronizationManager.getResource(resourceKey);
-    if (pending == null) {
-      pending = new HashSet<>();
-      TransactionSynchronizationManager.bindResource(resourceKey, pending);
-      Set<T> snapshot = pending;
-      TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-        @Override
-        public void afterCommit() {
-          for (T pendingItem : snapshot) {
-            resolver.accept(pendingItem);
-          }
-        }
-
-        @Override
-        public void afterCompletion(int status) {
-          TransactionSynchronizationManager.unbindResourceIfPossible(resourceKey);
-        }
-      });
+    AssetRecord asset = existing.get();
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    if (asset.attributes() != null) {
+      attributes.putAll(asset.attributes());
     }
-    pending.add(item);
+    Instant lastVerified = NexusLikeCacheInfo.fromAttributes(attributes)
+        .map(NexusLikeCacheInfo::lastVerified)
+        .orElse(Instant.now());
+    Map<String, Object> updated = NexusLikeCacheInfo.applyToAttributes(
+        attributes,
+        new NexusLikeCacheInfo(lastVerified, NexusLikeCacheInfo.INVALIDATED, NexusCacheType.METADATA));
+    assetDao.updateAssetAttributes(asset.id(), updated);
+    assetMetadataCache.evictAfterCommit(groupId, path);
   }
+
+  private <T> void deferInvalidation(Object resourceKey, T item, Consumer<T> action) {
+    CacheInvalidation.beforeCommit(new InvalidationKey(resourceKey, item), () -> action.accept(item));
+  }
+
+  private record InvalidationKey(Object owner, Object item) {}
 
   private record MemberProjectInvalidation(long memberRepositoryId, String projectName) {}
 }

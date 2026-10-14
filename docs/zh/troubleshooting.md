@@ -253,6 +253,17 @@ scripts/ci/run-live-compat.sh client-e2e
 - 确认 base URL 和凭据配置正确。
 - 运行写入类 suite 前，确认确实需要启用写测试。
 
+## Hikari 连接告警与缓存版本锁等待
+
+`Apparent connection leak detected` 表示连接借出时间超过泄漏检测阈值；堆栈记录的是借出位置，
+未必是线程当前阻塞的位置。先检查同一连接后续是否出现 `returned to the pool (unleaked)`，
+再判断是否存在一直未归还的连接。
+
+PyPI 索引并发刷新时，应关联 `cache_version` 等锁、缓存失效失败和连接池 active/pending 数量。
+MySQL 可在故障发生时采集 `performance_schema.data_lock_waits` 与 `information_schema.innodb_trx`，
+确认阻塞事务。调大连接池不会消除热点行锁。报告时请附脱敏证据和镜像 digest 或准确 commit。
+Docker 上传流上的同型告警需要单独检查客户端及对象存储延迟，不能仅凭 Hikari 告警判定为同一原因。
+
 ## Issue 中适合附带的日志
 
 有用信息：

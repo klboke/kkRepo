@@ -4,13 +4,10 @@ import com.github.klboke.kkrepo.cache.LocalCache;
 import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.LinkedHashSet;
-import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
@@ -18,8 +15,6 @@ public class NexusLikeCacheController {
   private static final Logger log = LoggerFactory.getLogger(NexusLikeCacheController.class);
   private static final String TOKEN_VERSION_PREFIX = "repo:";
   private static final String DEFAULT_TOKEN = "0";
-  private static final Object PENDING_INVALIDATIONS =
-      NexusLikeCacheController.class.getName() + ".PENDING_INVALIDATIONS";
 
   private final VersionWatermark watermark;
   private final LocalCache<String, String> localTokens;
@@ -96,6 +91,7 @@ public class NexusLikeCacheController {
   public String currentToken(long repositoryId, NexusCacheType type) {
     String key = tokenKey(repositoryId, type);
     try {
+      if (TransactionSynchronizationManager.isActualTransactionActive()) return loadToken(key);
       return localTokens.get(key, ignored -> loadToken(key));
     } catch (RuntimeException e) {
       log.warn("Failed loading repository cache token {}", key, e);
@@ -133,8 +129,9 @@ public class NexusLikeCacheController {
     invalidate(repositoryId, NexusCacheType.METADATA);
   }
 
+  /** Make invalidation visible at commit; the durable bump participates in the current write. */
   public void invalidateAfterCommit(long repositoryId, NexusCacheType type) {
-    deferAfterCommit(tokenKey(repositoryId, type));
+    deferInvalidation(tokenKey(repositoryId, type));
   }
 
   public void invalidateAllAfterCommit(long repositoryId) {
@@ -150,50 +147,20 @@ public class NexusLikeCacheController {
     return Long.toString(watermark.currentDurable(versionName(key)));
   }
 
-  private void deferAfterCommit(String key) {
-    if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-      invalidateTokenKey(key);
-      return;
-    }
-    @SuppressWarnings("unchecked")
-    Set<String> pending =
-        (Set<String>) TransactionSynchronizationManager.getResource(PENDING_INVALIDATIONS);
-    if (pending == null) {
-      pending = new LinkedHashSet<>();
-      TransactionSynchronizationManager.bindResource(PENDING_INVALIDATIONS, pending);
-      Set<String> snapshot = pending;
-      TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-        @Override
-        public void afterCommit() {
-          for (String pendingKey : snapshot) {
-            invalidateTokenKey(pendingKey);
-          }
-        }
-
-        @Override
-        public void afterCompletion(int status) {
-          TransactionSynchronizationManager.unbindResourceIfPossible(PENDING_INVALIDATIONS);
-        }
-      });
-    }
-    pending.add(key);
-  }
-
-  private void invalidateTokenKey(String key) {
-    try {
-      invalidateTokenKeyOrThrow(key);
-    } catch (RuntimeException e) {
-      log.warn("Failed invalidating repository cache token {}", key, e);
-    }
+  private void deferInvalidation(String key) {
+    CacheInvalidation.watermarkBeforeCommit(versionName(key), () -> invalidateTokenKeyOrThrow(key));
   }
 
   private void invalidateTokenKeyOrThrow(String key) {
     try {
       watermark.bump(versionName(key));
+      CacheInvalidation.afterCommit(new TokenEviction(key), () -> localTokens.invalidate(key));
     } finally {
       localTokens.invalidate(key);
     }
   }
+
+  private record TokenEviction(String key) {}
 
   private static String tokenKey(long repositoryId, NexusCacheType type) {
     if (type == null) {

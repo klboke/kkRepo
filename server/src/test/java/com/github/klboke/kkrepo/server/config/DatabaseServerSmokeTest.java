@@ -293,6 +293,8 @@ class DatabaseServerSmokeTest {
       assertEquals("UP", second.getBean(HealthEndpoint.class).health().getStatus().getCode());
 
       exerciseSharedApplicationFlows(first, second);
+      com.github.klboke.kkrepo.server.cache.CacheInvalidationSmokeChecks.verify(first);
+      com.github.klboke.kkrepo.server.pypi.PypiCacheInvalidationSmokeChecks.verify(first, second);
       BrowseDirectoryDeletionSmokeChecks.exercise(first, second);
       for (String mode : List.of("raw", "browse", "directory")) {
         concurrentSiblingDeletion(first, second, mode);

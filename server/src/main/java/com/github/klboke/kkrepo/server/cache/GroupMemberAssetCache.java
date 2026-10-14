@@ -10,12 +10,11 @@ import java.util.HashSet;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
  * Shared cache for group file fan-out winners.
@@ -232,7 +231,7 @@ public class GroupMemberAssetCache {
     if (!enabled || cacheController == null) {
       return;
     }
-    deferAfterCommit(PENDING_MEMBERS, memberRepositoryId, this::invalidateContainingGroups);
+    deferInvalidation(PENDING_MEMBERS, memberRepositoryId, this::invalidateContainingGroups);
   }
 
   /** Invalidate only one winner-cache class without expiring unrelated group metadata. */
@@ -244,7 +243,7 @@ public class GroupMemberAssetCache {
     if (!enabled || cacheController == null) {
       return;
     }
-    deferAfterCommit(
+    deferInvalidation(
         PENDING_TYPED_MEMBERS,
         new MemberInvalidation(memberRepositoryId, cacheType),
         this::invalidateContainingGroups);
@@ -254,7 +253,7 @@ public class GroupMemberAssetCache {
     if (!enabled || cacheController == null) {
       return;
     }
-    deferAfterCommit(PENDING_GROUPS, groupId, this::invalidateGroupAndAncestors);
+    deferInvalidation(PENDING_GROUPS, groupId, this::invalidateGroupAndAncestors);
   }
 
   private void invalidateContainingGroups(long memberRepositoryId) {
@@ -267,7 +266,7 @@ public class GroupMemberAssetCache {
       if (groupId == null || !visited.add(groupId)) {
         continue;
       }
-      cacheController.invalidateAll(groupId);
+      cacheController.invalidateAllAfterCommit(groupId);
       invalidateContainingGroups(groupId, visited);
     }
   }
@@ -284,7 +283,7 @@ public class GroupMemberAssetCache {
       if (groupId == null || !visited.add(groupId)) {
         continue;
       }
-      cacheController.invalidate(groupId, cacheType);
+      cacheController.invalidateAfterCommit(groupId, cacheType);
       invalidateContainingGroups(groupId, cacheType, visited);
     }
   }
@@ -297,7 +296,7 @@ public class GroupMemberAssetCache {
     if (!visited.add(groupId)) {
       return;
     }
-    cacheController.invalidateAll(groupId);
+    cacheController.invalidateAllAfterCommit(groupId);
     for (RepositoryRecord parent : repositoryDao.listGroupsContaining(groupId)) {
       if (parent.id() != null) {
         invalidateGroupAndAncestors(parent.id(), visited);
@@ -305,34 +304,11 @@ public class GroupMemberAssetCache {
     }
   }
 
-  private <T> void deferAfterCommit(
-      Object resourceKey, T item, java.util.function.Consumer<T> action) {
-    if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-      action.accept(item);
-      return;
-    }
-    @SuppressWarnings("unchecked")
-    Set<T> pending = (Set<T>) TransactionSynchronizationManager.getResource(resourceKey);
-    if (pending == null) {
-      pending = new HashSet<>();
-      TransactionSynchronizationManager.bindResource(resourceKey, pending);
-      Set<T> snapshot = pending;
-      TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-        @Override
-        public void afterCommit() {
-          for (T pendingItem : snapshot) {
-            action.accept(pendingItem);
-          }
-        }
-
-        @Override
-        public void afterCompletion(int status) {
-          TransactionSynchronizationManager.unbindResourceIfPossible(resourceKey);
-        }
-      });
-    }
-    pending.add(item);
+  private <T> void deferInvalidation(Object resourceKey, T item, Consumer<T> action) {
+    CacheInvalidation.beforeCommit(new InvalidationKey(resourceKey, item), () -> action.accept(item));
   }
+
+  private record InvalidationKey(Object owner, Object item) {}
 
   private static String key(long groupId, NexusCacheType type, String path) {
     NexusCacheType cacheType = type == null ? NexusCacheType.CONTENT : type;

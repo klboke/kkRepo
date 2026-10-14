@@ -202,7 +202,8 @@ class AssetMetadataCacheTest {
       assertTrue(sharedCache.getString("asset-metadata", "7:x.jar").isPresent(),
           "entry should remain until afterCommit fires");
 
-      // Run all afterCommit callbacks.
+      // Run the commit callbacks in the same order as the transaction manager.
+      TransactionSynchronizationManager.getSynchronizations().forEach(sync -> sync.beforeCommit(false));
       for (var sync : TransactionSynchronizationManager.getSynchronizations()) {
         sync.afterCommit();
         sync.afterCompletion(0);

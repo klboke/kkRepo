@@ -211,6 +211,45 @@ class PypiRepositoryBlackBoxCompatibilityTest {
   }
 
   @Test
+  void warmedGroupIndexSeesNewHostedVersionDuringConcurrentReadsWhenConfigured() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeTrue(config.configured(),
+        "Set NEXUS_COMPAT_BASE_URL and KKREPO_COMPAT_BASE_URL to run PyPI black-box compatibility");
+    if (config.setupEnabled()) {
+      ensureNexusRepositories(config);
+      ensureKkRepoRepositories(config);
+    }
+    String project = "cache-invalidation-" + Long.toUnsignedString(System.nanoTime());
+    WheelFixture first = WheelFixture.create(project, "1.0.0");
+    WheelFixture second = WheelFixture.create(project, "2.0.0");
+    String index = "simple/" + first.normalizedName() + "/";
+    assert2xx("reference first upload", upload(config.nexusHosted(), first));
+    assert2xx("candidate first upload", upload(config.nexusPlusHosted(), first));
+    assertProjectIndexMatches("warm group index",
+        getEventually(config.nexusGroup(), index, first.filename()),
+        getEventually(config.nexusPlusGroup(), index, first.filename()), first.filename());
+
+    assert2xx("reference next upload", upload(config.nexusHosted(), second));
+    assert2xx("candidate next upload", upload(config.nexusPlusHosted(), second));
+    assertProjectIndexMatches("invalidate warm group index",
+        getEventually(config.nexusGroup(), index, second.filename()),
+        getEventually(config.nexusPlusGroup(), index, second.filename()), second.filename());
+    try (var executor = java.util.concurrent.Executors.newFixedThreadPool(4)) {
+      List<java.util.concurrent.Future<?>> reads = new ArrayList<>();
+      for (int i = 0; i < 12; i++) {
+        reads.add(executor.submit(() -> {
+          Exchange reference = get(config.nexusGroup(), index);
+          Exchange candidate = get(config.nexusPlusGroup(), index);
+          assertProjectIndexMatches("concurrent group index", reference, candidate, second.filename());
+          assertTrue(candidate.bodyAsString().contains(first.filename()));
+          return null;
+        }));
+      }
+      for (var read : reads) read.get(30, java.util.concurrent.TimeUnit.SECONDS);
+    }
+  }
+
+  @Test
   void proxyWithEmptyRemoteIndexPathMatchesNexusWhenConfigured() throws Exception {
     CompatConfig config = CompatConfig.load();
     assumeTrue(config.configured(),

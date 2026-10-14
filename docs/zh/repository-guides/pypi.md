@@ -89,3 +89,14 @@ proxy negative-cache TTL。
 - [兼容性矩阵](../compatibility-matrix.md#仓库格式矩阵)
 - [Python Packaging User Guide：`.pypirc`](https://packaging.python.org/en/latest/specifications/pypirc/)
 - [Python Packaging User Guide：搭建 index](https://packaging.python.org/en/latest/guides/hosting-your-own-index/)
+
+## 索引缓存事务
+
+索引资产、受影响的 group 索引失效标记以及仓库缓存版本在同一事务中提交。
+同一事务内的重复失效只更新一次对应版本；group 更新完成后，再按固定顺序更新版本行。
+本地缓存只在提交成功后清理，其他副本通过原有版本缓存 TTL 观察已提交的版本。
+持久化失效失败会回滚本次写入；瞬时数据库冲突在配置的重试次数内重试完整事务。
+常规 proxy/group 索引路径的上游读取、HTML 合并和对象上传仍位于 writer 数据库事务之外。
+
+该调整缩短仓库版本锁的持有时间，不改变 Simple API 链接和缓存新鲜度配置。
+并发刷新仍可能发生数据库锁竞争；此事务边界修复不需要 schema migration，也不要求调大连接池。

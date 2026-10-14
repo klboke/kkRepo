@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.transaction;
 
+import java.sql.SQLException;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
@@ -71,6 +72,11 @@ public class TransientTransactionRetry {
     Throwable current = error;
     while (current != null) {
       if (current instanceof TransientDataAccessException) {
+        return true;
+      }
+      // PostgreSQL lock_timeout/NOWAIT can reach Spring's fallback translator as an
+      // UncategorizedSQLException. Retry the whole transaction, never the aborted statement.
+      if (current instanceof SQLException sql && "55P03".equals(sql.getSQLState())) {
         return true;
       }
       current = current.getCause();

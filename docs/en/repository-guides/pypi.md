@@ -92,3 +92,17 @@ proxy negative-cache TTL before forcing a cache reset.
 - [Compatibility matrix](../compatibility-matrix.md#repository-format-matrix)
 - [Python Packaging User Guide: `.pypirc`](https://packaging.python.org/en/latest/specifications/pypirc/)
 - [Python Packaging User Guide: hosting an index](https://packaging.python.org/en/latest/guides/hosting-your-own-index/)
+
+## Index cache transactions
+
+Index assets, affected group-index invalidations, and repository cache generations commit together.
+Repeated invalidations within one transaction share one generation update; generation rows are updated
+in a consistent order after group changes. Local cache eviction happens after commit, while other
+replicas discover the committed generation through their normal version-cache TTL. A failed durable
+invalidation rolls back the write; transient database conflicts retry the complete transaction within
+the configured retry budget. Upstream fetching, HTML assembly, and object upload in the normal
+proxy/group index path remain outside the writer's database transaction.
+
+This reduces the time spent holding repository version locks without changing Simple API links or
+cache freshness settings. Concurrent refreshes can still contend on database rows; no schema
+migration or connection-pool increase is required for this transaction-boundary fix.
