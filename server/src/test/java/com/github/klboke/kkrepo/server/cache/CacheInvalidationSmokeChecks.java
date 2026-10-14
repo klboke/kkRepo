@@ -5,10 +5,12 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.klboke.kkrepo.persistence.jdbc.api.CacheVersionDao;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import javax.sql.DataSource;
+import org.springframework.transaction.PlatformTransactionManager;
 import com.github.klboke.kkrepo.cache.InMemorySharedCache;
-import com.github.klboke.kkrepo.persistence.jdbc.internal.JdbcCacheVersionDao;
-import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
-import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseType;
 import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
@@ -19,10 +21,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.dao.DataAccessException;
-import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
@@ -33,9 +32,11 @@ public final class CacheInvalidationSmokeChecks {
 
   private CacheInvalidationSmokeChecks() {}
 
-  public static void verify(ConfigurableApplicationContext context) throws Exception {
-    HikariDataSource source = context.getBean(HikariDataSource.class);
-    DatabaseDialect dialect = context.getBean(DatabaseDialect.class);
+  public record Persistence(
+      CacheVersionDao versions, PlatformTransactionManager transactions, Consumer<String> execute) {}
+
+  public static void verify(HikariDataSource source,
+      Function<DataSource, Persistence> persistenceFactory, boolean mysql) throws Exception {
     HikariConfig config = new HikariConfig();
     config.setJdbcUrl(source.getJdbcUrl());
     config.setUsername(source.getUsername());
@@ -55,7 +56,7 @@ public final class CacheInvalidationSmokeChecks {
         statement.executeUpdate("INSERT INTO cache_version (name, version, updated_at) VALUES ('" + VERSION + "', 0, CURRENT_TIMESTAMP)");
       }
       try {
-        verify(pool, observer, dialect);
+        verify(pool, observer, persistenceFactory.apply(pool), mysql);
       } finally {
         if (!observer.getAutoCommit()) observer.rollback();
         observer.setAutoCommit(true);
@@ -67,16 +68,15 @@ public final class CacheInvalidationSmokeChecks {
     }
   }
 
-  private static void verify(HikariDataSource pool, Connection observer, DatabaseDialect dialect)
+  private static void verify(HikariDataSource pool, Connection observer, Persistence persistence, boolean mysql)
       throws Exception {
-    JdbcTemplate jdbc = new JdbcTemplate(pool);
-    JdbcCacheVersionDao dao = new JdbcCacheVersionDao(jdbc, dialect);
+    CacheVersionDao dao = persistence.versions();
     JdbcVersionWatermark watermark = new JdbcVersionWatermark(dao, 60);
     var cache = cache(watermark);
-    var retry = new TransientTransactionRetry(new DataSourceTransactionManager(pool), 3, 0);
+    var retry = new TransientTransactionRetry(persistence.transactions(), 3, 0);
 
     retry.execute("atomic cache generation", () -> {
-      jdbc.update("UPDATE cache_invalidation_probe SET value = value + 1 WHERE id = 1");
+      persistence.execute().accept("UPDATE cache_invalidation_probe SET value = value + 1 WHERE id = 1");
       cache.evictAfterCommit(REPOSITORY, "simple/a/");
       cache.evictAfterCommit(REPOSITORY, "simple/b/");
       cache.evictAfterCommit(REPOSITORY, "simple/a/");
@@ -101,7 +101,7 @@ public final class CacheInvalidationSmokeChecks {
     VersionWatermark contended = new VersionWatermark() {
       @Override public long bump(String name) {
         attempts.incrementAndGet();
-        setLockTimeout(jdbc, dialect);
+        setLockTimeout(persistence, mysql);
         try {
           return watermark.bump(name);
         } catch (DataAccessException failure) {
@@ -131,7 +131,7 @@ public final class CacheInvalidationSmokeChecks {
       });
       try {
         retry.execute("retry invalidation lock timeout", () -> {
-          jdbc.update("UPDATE cache_invalidation_probe SET value = value + 1 WHERE id = 1");
+          persistence.execute().accept("UPDATE cache_invalidation_probe SET value = value + 1 WHERE id = 1");
           cache(contended).evictAfterCommit(REPOSITORY, "simple/retry/");
           return null;
         });
@@ -153,8 +153,8 @@ public final class CacheInvalidationSmokeChecks {
     }
     try {
       assertThrows(DataAccessException.class, () -> retry.execute("exhausted invalidation", () -> {
-        setLockTimeout(jdbc, dialect);
-        jdbc.update("UPDATE cache_invalidation_probe SET value = value + 1 WHERE id = 1");
+        setLockTimeout(persistence, mysql);
+        persistence.execute().accept("UPDATE cache_invalidation_probe SET value = value + 1 WHERE id = 1");
         cache.evictAfterCommit(REPOSITORY, "simple/exhausted/");
         return null;
       }));
@@ -174,8 +174,8 @@ public final class CacheInvalidationSmokeChecks {
         watermark, true, 60, 5);
   }
 
-  private static void setLockTimeout(JdbcTemplate jdbc, DatabaseDialect dialect) {
-    jdbc.execute(dialect.type() == DatabaseType.MYSQL
+  private static void setLockTimeout(Persistence persistence, boolean mysql) {
+    persistence.execute().accept(mysql
         ? "SET SESSION innodb_lock_wait_timeout = 1" : "SET LOCAL lock_timeout = '200ms'");
   }
 

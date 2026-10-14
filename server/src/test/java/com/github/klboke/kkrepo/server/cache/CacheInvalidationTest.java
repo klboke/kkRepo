@@ -3,20 +3,16 @@ package com.github.klboke.kkrepo.server.cache;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
-import java.sql.Connection;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
-import javax.sql.DataSource;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.CannotAcquireLockException;
-import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.AbstractPlatformTransactionManager;
+import org.springframework.transaction.support.DefaultTransactionStatus;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -121,15 +117,36 @@ class CacheInvalidationTest {
     }));
   }
 
-  private static DataSourceTransactionManager manager(List<String> events) throws Exception {
-    DataSource source = mock(DataSource.class);
-    when(source.getConnection()).thenAnswer(call -> {
-      Connection connection = mock(Connection.class);
-      when(connection.getAutoCommit()).thenReturn(true);
-      doAnswer(ignored -> { events.add("commit"); return null; }).when(connection).commit();
-      doAnswer(ignored -> { events.add("rollback"); return null; }).when(connection).rollback();
-      return connection;
-    });
-    return new DataSourceTransactionManager(source);
+  private static AbstractPlatformTransactionManager manager(List<String> events) {
+    return new AbstractPlatformTransactionManager() {
+      @Override protected Object doGetTransaction() {
+        return new Transaction(TransactionSynchronizationManager.getResource(this));
+      }
+      @Override protected boolean isExistingTransaction(Object transaction) {
+        return ((Transaction) transaction).resource != null;
+      }
+      @Override protected void doBegin(Object transaction, TransactionDefinition definition) {
+        ((Transaction) transaction).resource = new Object();
+        TransactionSynchronizationManager.bindResource(this, ((Transaction) transaction).resource);
+      }
+      @Override protected Object doSuspend(Object transaction) {
+        ((Transaction) transaction).resource = null;
+        return TransactionSynchronizationManager.unbindResource(this);
+      }
+      @Override protected void doResume(Object transaction, Object suspended) {
+        if (transaction != null) ((Transaction) transaction).resource = suspended;
+        TransactionSynchronizationManager.bindResource(this, suspended);
+      }
+      @Override protected void doCommit(DefaultTransactionStatus status) { events.add("commit"); }
+      @Override protected void doRollback(DefaultTransactionStatus status) { events.add("rollback"); }
+      @Override protected void doCleanupAfterCompletion(Object transaction) {
+        TransactionSynchronizationManager.unbindResource(this);
+      }
+    };
+  }
+
+  private static final class Transaction {
+    private Object resource;
+    private Transaction(Object resource) { this.resource = resource; }
   }
 }

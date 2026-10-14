@@ -293,7 +293,14 @@ class DatabaseServerSmokeTest {
       assertEquals("UP", second.getBean(HealthEndpoint.class).health().getStatus().getCode());
 
       exerciseSharedApplicationFlows(first, second);
-      com.github.klboke.kkrepo.server.cache.CacheInvalidationSmokeChecks.verify(first);
+      com.github.klboke.kkrepo.server.cache.CacheInvalidationSmokeChecks.verify(
+          first.getBean(com.zaxxer.hikari.HikariDataSource.class), source -> {
+            JdbcTemplate jdbc = new JdbcTemplate(source);
+            return new com.github.klboke.kkrepo.server.cache.CacheInvalidationSmokeChecks.Persistence(
+                new com.github.klboke.kkrepo.persistence.jdbc.internal.JdbcCacheVersionDao(
+                    jdbc, first.getBean(DatabaseDialect.class)),
+                new org.springframework.jdbc.datasource.DataSourceTransactionManager(source), jdbc::execute);
+          }, type == DatabaseType.MYSQL);
       com.github.klboke.kkrepo.server.pypi.PypiCacheInvalidationSmokeChecks.verify(first, second);
       BrowseDirectoryDeletionSmokeChecks.exercise(first, second);
       for (String mode : List.of("raw", "browse", "directory")) {
