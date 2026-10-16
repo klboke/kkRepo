@@ -103,6 +103,9 @@ class RepositoryDataMigrationWriterTest {
         RepositoryFormat.NPM, "@scope", "demo", null, "PACKAGE_ROOT", "application/json", 1L,
         "source-blob-ref", Instant.EPOCH, null, Instant.EPOCH, Instant.EPOCH, "nexus", null,
         "PENDING", 0, null, null, null, null, null, null, Map.of(), Instant.EPOCH);
+    assertThrows(IllegalArgumentException.class, () -> writer.write(repository.id(), source,
+        new ByteArrayInputStream(SAMPLE), "application/json", false));
+    assertNull(assets.asset, "npm writes without a pre-download snapshot must be rejected");
     for (int versions = 1; versions <= 2; versions++) {
       byte[] body = ("{\"name\":\"@scope/demo\",\"revision\":" + versions + "}")
           .getBytes(StandardCharsets.UTF_8);
@@ -121,6 +124,14 @@ class RepositoryDataMigrationWriterTest {
         writer.write(repository.id(), source, new ByteArrayInputStream(SAMPLE), "application/json", false,
             new RepositoryDataMigrationWriter.NpmPackumentSnapshot(null, null)));
     assertEquals(List.of(100L), assets.retiredBlobs, "stale writers must not retire the winning blob");
+    // Another replica inserts the first root after our absent-row check but before our insert.
+    assets.asset = null;
+    assets.loseNextInsert = true;
+    assertThrows(RepositoryDataMigrationWriter.StaleNpmPackumentException.class, () ->
+        writer.write(repository.id(), source, new ByteArrayInputStream(SAMPLE), "application/json", false,
+            writer.captureNpmPackument(repository.id(), path)));
+    assertEquals(900L, assets.asset.assetBlobId(), "the winning first publication must stay bound");
+    assertEquals(List.of(100L), assets.retiredBlobs, "the winner must not be retired by an insert loser");
     verify(metadataCache, times(2)).evictAfterCommit(repository.id(), path);
     verify(packumentCache, times(2)).invalidateMemberPackageAfterCommit(repository.id(), path);
     verify(memberCache, times(2)).invalidateMemberAfterCommit(repository.id());
@@ -1065,6 +1076,7 @@ class RepositoryDataMigrationWriterTest {
     private AssetRecord asset;
     private int lockedReads;
     private long nextBlobId = 100L;
+    private boolean loseNextInsert;
     private final java.util.List<Long> retiredBlobs = new java.util.ArrayList<>();
 
     private RecordingAssetDao() {
@@ -1110,7 +1122,7 @@ class RepositoryDataMigrationWriterTest {
           200L,
           record.repositoryId(),
           record.componentId(),
-          record.assetBlobId(),
+          loseNextInsert ? 900L : record.assetBlobId(),
           record.format(),
           record.path(),
           record.pathHash(),
@@ -1121,7 +1133,7 @@ class RepositoryDataMigrationWriterTest {
           record.lastDownloadedAt(),
           record.lastUpdatedAt(),
           record.attributes());
-      return OptionalLong.of(asset.id());
+      return loseNextInsert ? OptionalLong.empty() : OptionalLong.of(asset.id());
     }
 
     @Override
