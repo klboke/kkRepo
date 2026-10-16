@@ -260,8 +260,21 @@ class RepositoryDataMigrationWriter {
     this.huggingFaceRegistry = huggingFaceRegistry;
   }
 
+  NpmPackumentSnapshot captureNpmPackument(long repositoryId, String path) {
+    return NpmPackumentSnapshot.of(assetDao.findAssetByPath(repositoryId, path));
+  }
+
   WriteResult write(long targetRepositoryId, RepositoryDataMigrationAssetRecord source, InputStream body,
       String responseContentType, boolean validateSize) {
+    return write(targetRepositoryId, source, body, responseContentType, validateSize, null);
+  }
+
+  WriteResult write(long targetRepositoryId, RepositoryDataMigrationAssetRecord source, InputStream body,
+      String responseContentType, boolean validateSize, NpmPackumentSnapshot expectedPackument) {
+    if (RepositoryDataMigrationPaths.requiresRefresh(source.format(), source.sourcePath())
+        && expectedPackument == null) {
+      throw new IllegalArgumentException("Capture the npm packument before downloading its replacement");
+    }
     RepositoryRecord repository = repositoryDao.findById(targetRepositoryId)
         .orElseThrow(() -> new IllegalArgumentException("target repository not found: " + targetRepositoryId));
     if (repository.blobStoreId() == null) {
@@ -373,14 +386,14 @@ class RepositoryDataMigrationWriter {
       WriteResult result = transactionRetry.execute(
           "Persist migrated asset " + repository.name() + "/" + source.sourcePath(),
           () -> {
-            WriteResult persisted = persist(repository, source, upload, contentType, null);
+            WriteResult persisted = persist(repository, source, upload, contentType, null, expectedPackument);
             indexMigratedDockerAsset(repository, source, upload, contentType, persisted);
             projectMigratedHuggingFace(
                 repository, source, upload, contentType, persisted, huggingFaceIdentity);
             for (Map.Entry<MavenPath, ChecksumUpload> entry : checksumUploads.entrySet()) {
               ChecksumUpload checksum = entry.getValue();
               WriteResult persistedChecksum = persist(
-                  repository, checksum.source(), checksum.upload(), MavenContentType.CHECKSUM, persisted.componentId());
+                  repository, checksum.source(), checksum.upload(), MavenContentType.CHECKSUM, persisted.componentId(), null);
               checksumResults.put(entry.getKey(), persistedChecksum);
             }
             return persisted;
@@ -606,7 +619,8 @@ class RepositoryDataMigrationWriter {
       RepositoryDataMigrationAssetRecord source,
       DigestedUpload upload,
       String contentType,
-      Long componentIdOverride) {
+      Long componentIdOverride,
+      NpmPackumentSnapshot expectedPackument) {
     Instant now = Instant.now();
     Instant lastUpdatedAt = source.sourceLastUpdatedAt() == null ? now : source.sourceLastUpdatedAt();
     BlobReference ref = upload.reference();
@@ -617,13 +631,13 @@ class RepositoryDataMigrationWriter {
         : null;
 
     Optional<AssetRecord> existing = assetDao.findAssetByPath(repository.id(), source.sourcePath());
-    if (RepositoryDataMigrationPaths.requiresRefresh(repository.format(), source.sourcePath())
-        && existing.isPresent()) {
-      // Serialize replacement with normal npm publication on every replica. Use the current
-      // row after waiting so blob retirement never uses a stale repeatable-read snapshot.
-      existing = assetDao.findAssetByIdForUpdate(existing.get().id());
-      if (existing.isEmpty()) {
-        throw new org.springframework.dao.CannotAcquireLockException("Migrated npm root changed while locking");
+    if (expectedPackument != null) {
+      // Recheck the durable blob binding after the row lock. A competing replica may have
+      // committed newer metadata while this worker downloaded its response. Such a response
+      // must be fetched again, never replayed by the transaction-only retry below.
+      if (existing.isPresent()) existing = assetDao.findAssetByIdForUpdate(existing.get().id());
+      if (!expectedPackument.equals(NpmPackumentSnapshot.of(existing))) {
+        throw new StaleNpmPackumentException();
       }
     }
     Long previousBlobId = existing.map(AssetRecord::assetBlobId).orElse(null);
@@ -691,6 +705,8 @@ class RepositoryDataMigrationWriter {
             record.contentType(), record.size(), record.lastDownloadedAt(), record.lastUpdatedAt(),
             record.attributes());
       } else {
+        // Another first import may have won the unique insert after our absent-row read.
+        if (expectedPackument != null) throw new StaleNpmPackumentException();
         AssetRecord prior = assetDao.findAssetByPath(repository.id(), source.sourcePath())
             .orElseThrow(() -> new IllegalStateException("Concurrent migrated asset insert won but row is not visible for "
                 + repository.name() + "/" + source.sourcePath()));
@@ -1434,6 +1450,20 @@ class RepositoryDataMigrationWriter {
   private static void putIfPresent(Map<String, Object> attributes, String key, Object value) {
     if (value != null) {
       attributes.put(key, value);
+    }
+  }
+
+  record NpmPackumentSnapshot(Long assetId, Long assetBlobId) {
+    static NpmPackumentSnapshot of(Optional<AssetRecord> asset) {
+      return new NpmPackumentSnapshot(asset.map(AssetRecord::id).orElse(null),
+          asset.map(AssetRecord::assetBlobId).orElse(null));
+    }
+  }
+
+  // Deliberately not a TransientDataAccessException: retry must include a fresh source GET.
+  static final class StaleNpmPackumentException extends RuntimeException {
+    StaleNpmPackumentException() {
+      super("npm packument changed during download; fetch source metadata again");
     }
   }
 

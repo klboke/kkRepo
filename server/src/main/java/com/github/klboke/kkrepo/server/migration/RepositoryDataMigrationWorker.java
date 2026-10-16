@@ -238,21 +238,7 @@ class RepositoryDataMigrationWorker {
             null);
         return;
       }
-      HttpResponse<InputStream> response = client.getRepositoryAsset(
-          claim.sourceRepositoryName(),
-          claim.asset().sourcePath());
-      if (response.statusCode() < 200 || response.statusCode() >= 300) {
-        closeQuietly(response.body());
-        throw new IOException("Source asset returned HTTP " + response.statusCode()
-            + " for " + claim.sourceRepositoryName() + "/" + claim.asset().sourcePath());
-      }
-      String contentType = response.headers().firstValue("Content-Type").orElse(claim.asset().contentType());
-      RepositoryDataMigrationWriter.WriteResult result = writer.write(
-          claim.targetRepositoryId(),
-          claim.asset(),
-          response.body(),
-          contentType,
-          checksumValidation && shouldValidateDownloadedSize(claim));
+      RepositoryDataMigrationWriter.WriteResult result = downloadAndWrite(claim, client, checksumValidation);
       migrationDao.markAssetMigrated(
           claim.asset().id(),
           claim.asset().repositoryJobId(),
@@ -267,6 +253,32 @@ class RepositoryDataMigrationWorker {
           claim.asset().repositoryJobId(),
           MAX_ATTEMPTS,
           errorSummary(e));
+    }
+  }
+
+  private RepositoryDataMigrationWriter.WriteResult downloadAndWrite(
+      AssetClaim claim, NexusRestClient client, boolean checksumValidation) throws IOException, InterruptedException {
+    boolean packument = RepositoryDataMigrationPaths.requiresRefresh(
+        claim.repositoryFormat(), claim.asset().sourcePath());
+    for (int attempt = 1; ; attempt++) {
+      var expected = packument
+          ? writer.captureNpmPackument(claim.targetRepositoryId(), claim.asset().sourcePath()) : null;
+      HttpResponse<InputStream> response = client.getRepositoryAsset(
+          claim.sourceRepositoryName(), claim.asset().sourcePath());
+      try (InputStream body = response.body()) {
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+          throw new IOException("Source asset returned HTTP " + response.statusCode()
+              + " for " + claim.sourceRepositoryName() + "/" + claim.asset().sourcePath());
+        }
+        String contentType = response.headers().firstValue("Content-Type").orElse(claim.asset().contentType());
+        boolean validateSize = checksumValidation && shouldValidateDownloadedSize(claim);
+        if (packument) {
+          return writer.write(claim.targetRepositoryId(), claim.asset(), body, contentType, validateSize, expected);
+        }
+        return writer.write(claim.targetRepositoryId(), claim.asset(), body, contentType, validateSize);
+      } catch (RepositoryDataMigrationWriter.StaleNpmPackumentException stale) {
+        if (attempt >= MAX_ATTEMPTS) throw stale;
+      }
     }
   }
 
@@ -499,16 +511,6 @@ class RepositoryDataMigrationWorker {
       return Instant.parse(value);
     } catch (RuntimeException e) {
       return null;
-    }
-  }
-
-  private static void closeQuietly(InputStream input) {
-    if (input == null) {
-      return;
-    }
-    try {
-      input.close();
-    } catch (IOException ignored) {
     }
   }
 

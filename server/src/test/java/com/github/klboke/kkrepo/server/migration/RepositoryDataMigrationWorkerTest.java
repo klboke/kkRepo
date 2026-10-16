@@ -238,6 +238,42 @@ class RepositoryDataMigrationWorkerTest {
   }
 
   @Test
+  void stalePackumentRetriesSnapshotAndSourceDownloadBeforeCompleting() throws Exception {
+    Fixture fixture = fixture();
+    try {
+      AssetClaim claim = claim(10L, 100L, RepositoryFormat.NPM, "@scope/demo");
+      NexusRestClient client = mock(NexusRestClient.class);
+      @SuppressWarnings("unchecked")
+      HttpResponse<InputStream> response = mock(HttpResponse.class);
+      when(response.statusCode()).thenReturn(200);
+      when(response.headers()).thenReturn(HttpHeaders.of(Map.of(), (a, b) -> true));
+      when(response.body()).thenReturn(new ByteArrayInputStream(new byte[0]),
+          new ByteArrayInputStream(new byte[0]));
+      when(client.getRepositoryAsset("source", "@scope/demo")).thenReturn(response);
+      var first = new RepositoryDataMigrationWriter.NpmPackumentSnapshot(20L, 30L);
+      var second = new RepositoryDataMigrationWriter.NpmPackumentSnapshot(20L, 31L);
+      when(fixture.writer.captureNpmPackument(1L, "@scope/demo")).thenReturn(first, second);
+      when(fixture.writer.write(eq(1L), eq(claim.asset()), any(), any(), eq(false), eq(first)))
+          .thenThrow(new RepositoryDataMigrationWriter.StaleNpmPackumentException());
+      when(fixture.writer.write(eq(1L), eq(claim.asset()), any(), any(), eq(false), eq(second)))
+          .thenReturn(new RepositoryDataMigrationWriter.WriteResult(null, 20L, 32L, "object"));
+      invoke(fixture.worker, "migrateOne", new Class<?>[] {AssetClaim.class, NexusRestClient.class, boolean.class},
+          claim, client, true);
+      var ordered = org.mockito.Mockito.inOrder(fixture.writer, client);
+      for (var snapshot : List.of(first, second)) {
+        ordered.verify(fixture.writer).captureNpmPackument(1L, "@scope/demo");
+        ordered.verify(client).getRepositoryAsset("source", "@scope/demo");
+        ordered.verify(fixture.writer).write(eq(1L), eq(claim.asset()), any(), any(), eq(false), eq(snapshot));
+      }
+      verify(fixture.migrationDao).markAssetMigrated(claim.asset().id(), claim.asset().repositoryJobId(),
+          null, 20L, 32L);
+      verify(fixture.migrationDao, never()).markAssetFailed(anyLong(), anyLong(), anyInt(), any());
+    } finally {
+      fixture.worker.shutdown();
+    }
+  }
+
+  @Test
   void migrateOneMarksHttpFailureAndSkipsDerivedCargoConfig() throws Exception {
     Fixture fixture = fixture();
     try {

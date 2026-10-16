@@ -106,11 +106,21 @@ class RepositoryDataMigrationWriterTest {
     for (int versions = 1; versions <= 2; versions++) {
       byte[] body = ("{\"name\":\"@scope/demo\",\"revision\":" + versions + "}")
           .getBytes(StandardCharsets.UTF_8);
-      writer.write(repository.id(), source, new ByteArrayInputStream(body), "application/json", false);
+      writer.write(repository.id(), source, new ByteArrayInputStream(body), "application/json", false,
+          writer.captureNpmPackument(repository.id(), path));
       assertEquals(sha256Unchecked(body), assets.blob.sha256());
       assertEquals("package-root", assets.asset.kind());
     }
     assertEquals(1, assets.lockedReads);
+    String winnerDigest = assets.blob.sha256();
+    assertThrows(RepositoryDataMigrationWriter.StaleNpmPackumentException.class, () ->
+        writer.write(repository.id(), source, new ByteArrayInputStream(SAMPLE), "application/json", false,
+            new RepositoryDataMigrationWriter.NpmPackumentSnapshot(200L, 100L)));
+    assertEquals(winnerDigest, assets.blob.sha256(), "an older download must not replace the winner");
+    assertThrows(RepositoryDataMigrationWriter.StaleNpmPackumentException.class, () ->
+        writer.write(repository.id(), source, new ByteArrayInputStream(SAMPLE), "application/json", false,
+            new RepositoryDataMigrationWriter.NpmPackumentSnapshot(null, null)));
+    assertEquals(List.of(100L), assets.retiredBlobs, "stale writers must not retire the winning blob");
     verify(metadataCache, times(2)).evictAfterCommit(repository.id(), path);
     verify(packumentCache, times(2)).invalidateMemberPackageAfterCommit(repository.id(), path);
     verify(memberCache, times(2)).invalidateMemberAfterCommit(repository.id());
@@ -1054,9 +1064,17 @@ class RepositoryDataMigrationWriterTest {
     private AssetBlobRecord blob;
     private AssetRecord asset;
     private int lockedReads;
+    private long nextBlobId = 100L;
+    private final java.util.List<Long> retiredBlobs = new java.util.ArrayList<>();
 
     private RecordingAssetDao() {
       super(null, null);
+    }
+
+    @Override
+    public int markBlobDeletedIfUnreferenced(long id, String reason) {
+      retiredBlobs.add(id);
+      return 1;
     }
 
     @Override
@@ -1082,7 +1100,7 @@ class RepositoryDataMigrationWriterTest {
 
     @Override
     public AssetBlobRecord insertBlobOrFindExisting(AssetBlobRecord record) {
-      blob = record.withId(100L);
+      blob = record.withId(nextBlobId++);
       return blob;
     }
 
