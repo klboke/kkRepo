@@ -55,6 +55,124 @@ class NpmRepositoryBlackBoxCompatibilityTest {
       .build();
 
   @Test
+  void repeatedHostedMigrationRefreshesPackumentsWhenEnabled(@TempDir Path tempDir) throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeTrue(config.configured() && Boolean.parseBoolean(
+        setting("compat.npm.migration.enabled", "COMPAT_NPM_MIGRATION_ENABLED").orElse("false")),
+        "Enable COMPAT_NPM_MIGRATION_ENABLED with a script-enabled Nexus reference");
+    String repository = "npm-migration-" + Long.toUnsignedString(System.nanoTime());
+    Endpoint source = config.nexus().withRepository(repository);
+    Endpoint target = config.nexusPlus().withRepository(repository);
+    Endpoint group = target.withRepository(repository + "-group");
+    String packageName = "@migration/versions";
+    assert2xx("create migration source", adminRequest(source, "/service/rest/v1/repositories/npm/hosted",
+        "POST", MAPPER.writeValueAsBytes(Map.of("name", repository, "online", true, "storage", Map.of(
+            "blobStoreName", "default", "strictContentTypeValidation", true, "writePolicy", "ALLOW")))));
+    try {
+      assert2xx("create migration target", adminRequest(target, "/internal/repositories", "POST",
+          MAPPER.writeValueAsBytes(Map.of("name", repository, "recipe", "npm-hosted", "online", true,
+              "blobStoreName", "default", "hosted", Map.of("writePolicy", "ALLOW")))));
+      assert2xx("create migration group", adminRequest(target, "/internal/repositories", "POST",
+          MAPPER.writeValueAsBytes(Map.of("name", group.repository(), "recipe", "npm-group", "online", true,
+              "blobStoreName", "default", "group", Map.of("memberNames", List.of(repository))))));
+      for (int i = 0; i < 123; i++) {
+        NpmFixture fixture = NpmFixture.create(packageName, "1.0." + i);
+        assert2xx("publish source version", putJson(source, packageName, fixture.publishJson()));
+      }
+      migrateNpmRepository(source, target, null);
+      assertMigratedNpmMetadata(source, target, group, packageName, 123);
+      // The previous reads warm both hosted metadata and the persisted group packument.
+      NpmFixture added = NpmFixture.create(packageName, "1.1.0");
+      assert2xx("publish after first migration", putJson(source, packageName, added.publishJson()));
+      migrateNpmRepository(source, target, null);
+      assertMigratedNpmMetadata(source, target, group, packageName, 124);
+      String since = Instant.now().minusSeconds(5).toString();
+      added = NpmFixture.create(packageName, "1.2.0");
+      assert2xx("publish before incremental migration", putJson(source, packageName, added.publishJson()));
+      migrateNpmRepository(source, target, since);
+      assertMigratedNpmMetadata(source, target, group, packageName, 125);
+      assertArrayEquals(added.tarball(), get(target,
+          tarballPath(target, getJson(target, packageName), added.version())).body());
+      // Tag-only changes must refresh metadata too, without reimporting immutable tarballs.
+      assert2xx("add source tag", putJson(source, distTagPath(packageName, "beta"),
+          MAPPER.writeValueAsBytes("1.1.0")));
+      migrateNpmRepository(source, target, null);
+      assertMigratedNpmMetadata(source, target, group, packageName, 125);
+      if (npmAvailable()) {
+        Path npmrc = tempDir.resolve(".npmrc");
+        writeNpmConfig(target, npmrc);
+        runProcess(List.of("npm", "pack", packageName + "@1.2.0", "--ignore-scripts",
+            "--userconfig", npmrc.toString(), "--cache", tempDir.resolve("cache").toString()),
+            tempDir, Duration.ofMinutes(2));
+      }
+    } finally {
+      adminRequest(target, "/service/rest/v1/repositories/" + group.repository(), "DELETE", null);
+      adminRequest(target, "/service/rest/v1/repositories/" + repository, "DELETE", null);
+      adminRequest(source, "/service/rest/v1/repositories/" + repository, "DELETE", null);
+    }
+  }
+
+  private static void assertMigratedNpmMetadata(
+      Endpoint source, Endpoint target, Endpoint group, String packageName, int count) throws Exception {
+    var reference = MAPPER.readTree(get(source, packageName).body());
+    assertEquals(count, reference.path("versions").size());
+    for (Endpoint endpoint : List.of(target, group)) {
+      for (String accept : List.of("application/json", "application/vnd.npm.install-v1+json")) {
+        Exchange response = send(endpoint.request(packageName).header("Accept", accept).GET());
+        assertEquals(200, response.status());
+        var actual = MAPPER.readTree(response.body());
+        assertEquals(count, actual.path("versions").size(), endpoint.repository() + " " + accept);
+        assertEquals(reference.path("dist-tags"), actual.path("dist-tags"));
+        for (var versions = reference.path("versions").fieldNames(); versions.hasNext();) {
+          String version = versions.next();
+          assertTrue(actual.path("versions").has(version), "Missing " + version);
+          assertEquals(reference.path("versions").path(version).path("dist").path("shasum"),
+              actual.path("versions").path(version).path("dist").path("shasum"));
+        }
+      }
+    }
+  }
+
+  private static void migrateNpmRepository(Endpoint source, Endpoint target, String since) throws Exception {
+    Map<String, Object> request = new LinkedHashMap<>(Map.of(
+        "sourceBaseUrl", setting("compat.npm.migration.sourceUrl", "NPM_MIGRATION_SOURCE_URL")
+            .orElse(source.baseUrl().orElseThrow()),
+        "sourceUsername", source.username().orElseThrow(), "sourcePassword", source.password().orElseThrow(),
+        "repositories", List.of(source.repository()), "pageSize", 100, "concurrency", 8,
+        "checksumValidation", true));
+    if (since != null) request.put("metadataSince", since);
+    Exchange started = adminRequest(target, "/internal/migration/nexus/repository-data/start", "POST",
+        MAPPER.writeValueAsBytes(request));
+    assert2xx("start npm migration", started);
+    long jobId = MAPPER.readTree(started.body()).path("jobId").asLong();
+    assertTrue(jobId > 0);
+    String jobPath = "/internal/migration/nexus/repository-data/jobs/" + jobId;
+    awaitNpmMigration(target, jobPath, false);
+    assert2xx("start package migration", adminRequest(target, jobPath + "/packages/start", "POST", null));
+    awaitNpmMigration(target, jobPath, true);
+  }
+
+  private static void awaitNpmMigration(Endpoint target, String jobPath, boolean packages) throws Exception {
+    long deadline = System.nanoTime() + Duration.ofMinutes(2).toNanos();
+    do {
+      Exchange response = adminRequest(target, jobPath, "GET", null);
+      assert2xx("migration status", response);
+      var status = MAPPER.readTree(response.body());
+      assertEquals(0, status.path("failedAssets").asLong(), "package migration failed");
+      boolean discovering = false;
+      for (var item : status.path("repositoryJobs")) {
+        String state = item.path("status").asText();
+        assertFalse(state.equals("failed"), "metadata migration failed");
+        discovering |= state.equals("pending") || state.equals("discovering");
+      }
+      if (packages ? "finished".equals(status.path("status").asText())
+          : !discovering && status.path("discoveredAssets").asLong() > 0) return;
+      Thread.sleep(250);
+    } while (System.nanoTime() < deadline);
+    throw new AssertionError("Timed out waiting for npm migration " + jobPath);
+  }
+
+  @Test
   void proxyDownloadsScopedTarballFromDeclaredUpstreamUrlLikeNexus() throws Exception {
     verifyScopedUpstream(null);
   }

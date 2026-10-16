@@ -1,6 +1,8 @@
 package com.github.klboke.kkrepo.server.migration;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.protocol.npm.NpmPath;
+import com.github.klboke.kkrepo.protocol.npm.NpmPathParser;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.huggingface.HuggingFacePath;
 import com.github.klboke.kkrepo.protocol.huggingface.HuggingFacePathParser;
@@ -21,6 +23,13 @@ final class RepositoryDataMigrationPaths {
   };
 
   private RepositoryDataMigrationPaths() {
+  }
+
+  static boolean requiresRefresh(RepositoryFormat format, String path) {
+    // A packument has a stable path but changes whenever versions or dist-tags change.
+    // Source blob checksums/lengths cannot identify its generated HTTP representation.
+    return format == RepositoryFormat.NPM
+        && new NpmPathParser().parse(path).kind() == NpmPath.Kind.PACKAGE_ROOT;
   }
 
   static boolean shouldDiscoverAsset(RepositoryFormat format, String path) {

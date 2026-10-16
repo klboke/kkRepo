@@ -164,7 +164,10 @@ class RepositoryDataMigrationWorker {
       Map<java.nio.ByteBuffer, RepositoryDataMigrationDao.TargetAssetRef> existingTargets =
           migrationDao.findTargetAssetsByPathHash(
               repositoryJob.targetRepositoryId(),
-              records.stream().map(RepositoryDataMigrationAssetRecord::sourcePathHash).toList());
+              records.stream()
+                  .filter(record -> !RepositoryDataMigrationPaths.requiresRefresh(
+                      repositoryJob.format(), record.sourcePath()))
+                  .map(RepositoryDataMigrationAssetRecord::sourcePathHash).toList());
       migrationDao.upsertDiscoveredAssets(repositoryJob.id(), records, existingTargets);
       migrationDao.finishDiscoveryPage(repositoryJob.id(), nextCursor, complete);
     });

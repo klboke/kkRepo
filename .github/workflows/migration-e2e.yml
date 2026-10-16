@@ -368,6 +368,18 @@ jobs:
             -Dsurefire.failIfNoSpecifiedTests=false test \
             2>&1 | tee artifacts/pypi-migration.log
 
+      - name: Verify npm incremental migration metadata
+        if: matrix.nexus-version == '3.94.0'
+        env:
+          COMPAT_NPM_MIGRATION_ENABLED: "true"
+          NPM_MIGRATION_SOURCE_URL: http://nexus:8081
+        run: |
+          mkdir -p artifacts
+          mvn -B -ntp -pl compat-test -am \
+            -Dtest=NpmRepositoryBlackBoxCompatibilityTest#repeatedHostedMigrationRefreshesPackumentsWhenEnabled \
+            -Dsurefire.failIfNoSpecifiedTests=false test \
+            2>&1 | tee artifacts/npm-migration.log
+
       - name: Run Nexus metadata and repository-data migration E2E
         run: scripts/docker-compat/migration-e2e.sh
 

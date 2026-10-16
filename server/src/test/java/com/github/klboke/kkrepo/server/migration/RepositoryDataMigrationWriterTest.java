@@ -80,6 +80,42 @@ class RepositoryDataMigrationWriterTest {
   private static final byte[] SAMPLE = "kkrepo migration checksum\n".getBytes(StandardCharsets.UTF_8);
   private static final MavenPathParser MAVEN_PATH_PARSER = new MavenPathParser();
 
+  @Test
+  void npmMigrationReplacesMetadataAndInvalidatesHostedAndGroupCaches() {
+    RepositoryRecord repository = new RepositoryRecord(
+        16L, "npm-hosted", RepositoryFormat.NPM, RepositoryType.HOSTED,
+        "npm-hosted", true, 1L, null, null, null, null, "ALLOW_ONCE", true, Map.of());
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    when(repositories.findById(repository.id())).thenReturn(Optional.of(repository));
+    RecordingAssetDao assets = new RecordingAssetDao();
+    var metadataCache = mock(com.github.klboke.kkrepo.server.cache.AssetMetadataCache.class);
+    var packumentCache = mock(com.github.klboke.kkrepo.server.npm.NpmGroupPackumentCache.class);
+    var memberCache = mock(com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache.class);
+    RepositoryDataMigrationWriter writer = new RepositoryDataMigrationWriter(
+        repositories, mock(ComponentDao.class), assets, mock(BrowseNodeDao.class),
+        new FixedBlobStorageRegistry(new MemoryBlobStorage()), mock(RepositoryIndexRebuildDao.class),
+        mock(DockerRegistryDao.class), new DockerManifestParser(new ObjectMapper()), null,
+        new TransientTransactionRetry(new RecordingTransactionManager(), 1, 0));
+    writer.setNpmMigrationCaches(metadataCache, packumentCache, memberCache);
+    String path = "@scope/demo";
+    RepositoryDataMigrationAssetRecord source = new RepositoryDataMigrationAssetRecord(
+        1L, 2L, "source", null, path, PersistenceHashes.pathHash(path),
+        RepositoryFormat.NPM, "@scope", "demo", null, "PACKAGE_ROOT", "application/json", 1L,
+        "source-blob-ref", Instant.EPOCH, null, Instant.EPOCH, Instant.EPOCH, "nexus", null,
+        "PENDING", 0, null, null, null, null, null, null, Map.of(), Instant.EPOCH);
+    for (int versions = 1; versions <= 2; versions++) {
+      byte[] body = ("{\"name\":\"@scope/demo\",\"revision\":" + versions + "}")
+          .getBytes(StandardCharsets.UTF_8);
+      writer.write(repository.id(), source, new ByteArrayInputStream(body), "application/json", false);
+      assertEquals(sha256Unchecked(body), assets.blob.sha256());
+      assertEquals("package-root", assets.asset.kind());
+    }
+    assertEquals(1, assets.lockedReads);
+    verify(metadataCache, times(2)).evictAfterCommit(repository.id(), path);
+    verify(packumentCache, times(2)).invalidateMemberPackageAfterCommit(repository.id(), path);
+    verify(memberCache, times(2)).invalidateMemberAfterCommit(repository.id());
+  }
+
   @ParameterizedTest
   @CsvSource({
       "packages/demo-package/1.0/demo_package-1.0-py3-none-any.whl, package, demo-package",
@@ -1017,9 +1053,16 @@ class RepositoryDataMigrationWriterTest {
   private static final class RecordingAssetDao extends AssetDaoAdapter {
     private AssetBlobRecord blob;
     private AssetRecord asset;
+    private int lockedReads;
 
     private RecordingAssetDao() {
       super(null, null);
+    }
+
+    @Override
+    public Optional<AssetRecord> findAssetByIdForUpdate(long id) {
+      lockedReads++;
+      return Optional.ofNullable(asset);
     }
 
     @Override

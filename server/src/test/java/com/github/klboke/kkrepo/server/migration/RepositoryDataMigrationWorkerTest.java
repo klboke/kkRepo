@@ -153,6 +153,37 @@ class RepositoryDataMigrationWorkerTest {
   }
 
   @Test
+  void discoveryDoesNotTreatExistingNpmPackumentsAsCompleted() {
+    Fixture fixture = fixture();
+    try {
+      var repository = repositoryJob(RepositoryFormat.NPM, Map.of());
+      String tarball = "@scope/demo/-/demo-1.0.0.tgz";
+      var page = new RepositoryAssetPage("npm", null, tarball, true,
+          List.of(metadata("demo", "2026-01-03T00:00:00Z"),
+              metadata("@scope/demo", "2026-01-03T00:00:00Z"),
+              metadata(tarball, "2026-01-03T00:00:00Z")), List.of());
+      var tarballHash = java.nio.ByteBuffer.wrap(
+          com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes.pathHash(tarball));
+      var existing = Map.of(tarballHash, new RepositoryDataMigrationDao.TargetAssetRef(1L, 2L, 3L));
+      when(fixture.migrationDao.findTargetAssetsByPathHash(eq(9L), any())).thenAnswer(invocation -> {
+        List<byte[]> hashes = invocation.getArgument(1);
+        assertEquals(List.of(tarballHash), hashes.stream().map(java.nio.ByteBuffer::wrap).toList());
+        return existing;
+      });
+      invoke(fixture.worker, "processDiscoveryPage", new Class<?>[] {
+          RepositoryDataMigrationRepositoryRecord.class, RepositoryAssetPage.class, Instant.class
+      }, repository, page, null);
+      @SuppressWarnings("unchecked")
+      ArgumentCaptor<List<RepositoryDataMigrationAssetRecord>> records = ArgumentCaptor.forClass(List.class);
+      verify(fixture.migrationDao).upsertDiscoveredAssets(eq(7L), records.capture(), eq(existing));
+      assertEquals(List.of("demo", "@scope/demo", tarball),
+          records.getValue().stream().map(RepositoryDataMigrationAssetRecord::sourcePath).toList());
+    } finally {
+      fixture.worker.shutdown();
+    }
+  }
+
+  @Test
   void packageConcurrencyUsesConfiguredBoundsAndFallback() {
     Fixture fixture = fixture();
     try {

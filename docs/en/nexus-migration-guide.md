@@ -130,9 +130,20 @@ Before cutover, run at least one more incremental sync:
 2. Click `Sync metadata` to scan incremental repository metadata.
 3. Click `Sync packages` to migrate incremental real blob data.
 
-Already migrated paths are detected and skipped. Assets already existing on the target side are also marked as migrated.
+Existing tarballs and other immutable asset paths are detected and skipped. npm package metadata
+(packuments) is fetched again in each new migration job that discovers it, even when its path already
+exists on the target. This refreshes the version list and dist-tags without copying existing tarballs
+again. Completed items remain completed when resuming the same job.
 
-After upgrading to a version with a migration fix, importing affected content again requires an empty target
+To repair an npm repository whose Browse tree contains versions missing from its packument, upgrade
+to a version containing the npm migration refresh fix, start a **new** `Sync metadata` job with
+`Metadata since` unset, then run `Sync packages`. There is no need to delete the target repository.
+Check the missing version in `/repository/<repo>/<package>`, its dist-tags, and `npm pack <package>@<version>`.
+Migration takes npm metadata from the source Nexus as authoritative; keep publishing to Nexus until
+cutover. Preserve any target-only package metadata before resyncing a target that has already accepted
+independent publications.
+
+For other migration fixes that require replacing existing assets, importing affected content again requires an empty target
 repository with the same name as the source. Preserve any target-only content before replacing the
 target repository, then start a new `Sync metadata` job with `Metadata since` unset and run
 `Sync packages`. Starting a new job against an existing target still skips existing paths;
@@ -147,7 +158,7 @@ Migration tasks, repository scan cursors, asset states, and failure information 
 - If real blob data migration is interrupted, click `Sync packages` again to continue unfinished items.
 - After fixing failed assets, click `Retry failed` to enqueue them again, then run `Sync packages`.
 
-Migration is designed to be interruptible and resumable. Completed data remains completed, and later migrations skip those parts.
+Migration is designed to be interruptible and resumable. Completed items remain completed when resuming a job; new jobs refresh discovered npm packuments as described above.
 
 ## Domain Cutover
 

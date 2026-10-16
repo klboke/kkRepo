@@ -34,16 +34,20 @@ import com.github.klboke.kkrepo.protocol.maven.path.ChecksumPayload;
 import com.github.klboke.kkrepo.protocol.maven.path.HashType;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
+import com.github.klboke.kkrepo.protocol.npm.NpmPathParser;
 import com.github.klboke.kkrepo.server.alpine.AlpineRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.apt.AptRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.blob.BlobTransactionCleanup;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
+import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
+import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
 import com.github.klboke.kkrepo.server.conan.ConanRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.conda.CondaRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.docker.DockerManifestParser;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
+import com.github.klboke.kkrepo.server.npm.NpmGroupPackumentCache;
 import com.github.klboke.kkrepo.server.pub.PubRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.r.RRepositoryDataMigrationWriter;
 import com.github.klboke.kkrepo.server.swift.SwiftRepositoryDataMigrationWriter;
@@ -100,6 +104,17 @@ class RepositoryDataMigrationWriter {
   private HuggingFaceRegistryDao huggingFaceRegistry;
   private final TransientTransactionRetry transactionRetry;
   private final MavenPathParser mavenPathParser = new MavenPathParser();
+  private AssetMetadataCache assetMetadataCache;
+  private NpmGroupPackumentCache npmGroupPackumentCache;
+  private GroupMemberAssetCache groupMemberAssetCache;
+
+  @Autowired
+  void setNpmMigrationCaches(AssetMetadataCache assetMetadataCache,
+      NpmGroupPackumentCache npmGroupPackumentCache, GroupMemberAssetCache groupMemberAssetCache) {
+    this.assetMetadataCache = assetMetadataCache;
+    this.npmGroupPackumentCache = npmGroupPackumentCache;
+    this.groupMemberAssetCache = groupMemberAssetCache;
+  }
 
   RepositoryDataMigrationWriter(
       RepositoryDao repositoryDao,
@@ -602,6 +617,15 @@ class RepositoryDataMigrationWriter {
         : null;
 
     Optional<AssetRecord> existing = assetDao.findAssetByPath(repository.id(), source.sourcePath());
+    if (RepositoryDataMigrationPaths.requiresRefresh(repository.format(), source.sourcePath())
+        && existing.isPresent()) {
+      // Serialize replacement with normal npm publication on every replica. Use the current
+      // row after waiting so blob retirement never uses a stale repeatable-read snapshot.
+      existing = assetDao.findAssetByIdForUpdate(existing.get().id());
+      if (existing.isEmpty()) {
+        throw new org.springframework.dao.CannotAcquireLockException("Migrated npm root changed while locking");
+      }
+    }
     Long previousBlobId = existing.map(AssetRecord::assetBlobId).orElse(null);
 
     AssetBlobRecord persistedBlob = assetDao.findReusableBlobBySha256(
@@ -685,6 +709,14 @@ class RepositoryDataMigrationWriter {
     browseNodeDao.upsertPathAncestors(
         repository.id(), browsePath, persistedAsset.id(), componentId);
     enqueueDerivedIndex(repository, source);
+    if (repository.format() == RepositoryFormat.NPM && assetMetadataCache != null) {
+      assetMetadataCache.evictAfterCommit(repository.id(), source.sourcePath());
+      var packageId = new NpmPathParser().parse(source.sourcePath()).packageId();
+      if (packageId != null) {
+        npmGroupPackumentCache.invalidateMemberPackageAfterCommit(repository.id(), packageId.id());
+      }
+      groupMemberAssetCache.invalidateMemberAfterCommit(repository.id());
+    }
     return new WriteResult(componentId, persistedAsset.id(), persistedBlob.id(), persistedBlob.objectKey());
   }
 
