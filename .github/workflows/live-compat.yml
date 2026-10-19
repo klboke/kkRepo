@@ -579,7 +579,7 @@ jobs:
           python-version: "3.10"
 
       - name: Set up Swift 6.3 for Windows
-        uses: compnerd/gha-setup-swift@bbae8ce86bac5a3449f3992b3d88bc4ca25f2057
+        uses: compnerd/gha-setup-swift@9ff1ee4c44888c5817fc14d1b257ac8cabb4935f
         with:
           swift-version: swift-6.3.3-release
           swift-build: 6.3.3-RELEASE
