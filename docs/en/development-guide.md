@@ -186,6 +186,7 @@ Detailed design and implementation plans for repository formats and migration wo
 - [Cargo / Rust Repository Design Notes](dev/cargo-rust-repository-design.md)
 - [Dart / Pub Repository Design Notes](../zh/dev/dart-pub-repository-design.md) (Chinese)
 - [Composer / PHP Repository Design Notes](../zh/dev/composer-php-repository-design.md) (Chinese)
+- [Composer Proxy Metadata Performance Baseline](dev/composer-performance-baseline.md)
 - [Terraform Provider / Module Registry Design Notes](../zh/dev/terraform-repository-design.md) (Chinese)
 - [Go Repository Guide](repository-guides/go.md) and [Nexus Performance Baseline](dev/go-hosted-performance-baseline.md)
 - [Swift Package Registry Design Notes](../zh/dev/swift-package-registry-design.md) (Chinese)

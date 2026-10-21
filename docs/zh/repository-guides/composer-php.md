@@ -71,6 +71,17 @@ curl -u alice:"$KKREPO_PASSWORD" \
 Package 意外从公共源解析，通常表示没有关闭 Packagist，或 repository priority/canonical 配置
 与预期策略不一致。
 
+### Proxy 缓存元数据性能
+
+重复读取 p2 元数据（包括最终返回 `304` 的条件请求）时，会跳过未变化的私有下载路由写入，仅将
+缺失或内容变化的路由交给原来的写入流程。判定使用共享数据库，支持多副本，无需额外配置或数据库
+迁移。首次填充仍需创建路由，元数据过期后仍可能需要向上游刷新。
+
+对比耗时时，应保留客户端与服务端缓存，使用相同的依赖约束和 PHP platform 设置。
+`composer update --no-install --no-scripts --no-plugins` 可单独测量元数据获取与依赖解析，
+排除制品安装和项目代码执行。实测负载、完整命令、修复前后 SQL 次数，以及 Nexus、Packagist
+三轮对照结果见 [Composer 性能基线](../dev/composer-performance-baseline.md)。
+
 ## 相关文档
 
 - [Composer / PHP 客户端配置示例](../client-recipes.md#composer--php)

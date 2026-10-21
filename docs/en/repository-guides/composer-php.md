@@ -71,6 +71,19 @@ Publish only to hosted. Run `composer diagnose` and `composer clear-cache` when 
 state. A package unexpectedly resolved from the public source usually means Packagist was not disabled
 or repository priority/canonical settings differ from the intended policy.
 
+### Cached Proxy Metadata Performance
+
+Repeated p2 metadata reads, including conditional requests returning `304`, skip unchanged private
+download-route writes. Missing or changed routes are persisted through the existing writer. This uses
+shared database state and works across replicas without extra configuration or a schema migration.
+First-time fills still create routes, and expired metadata can still require an upstream refresh.
+
+For timing comparisons, retain client/server caches and use the same dependency constraints and PHP
+platform settings. `composer update --no-install --no-scripts --no-plugins` isolates metadata retrieval
+and dependency resolution from archive installation and project code. See the
+[Composer performance baseline](../dev/composer-performance-baseline.md) for the measured workload,
+full command, before/after SQL counts, and three-round Nexus/Packagist comparison.
+
 ## Related Documentation
 
 - [Composer / PHP client recipe](../client-recipes.md#composer--php)

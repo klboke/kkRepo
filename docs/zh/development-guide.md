@@ -186,6 +186,7 @@ Swift 的生产加固证据拆分为独立 lane：定时 S3-compatible resilienc
 - [Cargo / Rust 仓库开发设计说明](dev/cargo-rust-repository-design.md)
 - [Dart / Pub 仓库开发设计说明](dev/dart-pub-repository-design.md)
 - [Composer / PHP 仓库开发设计说明](dev/composer-php-repository-design.md)
+- [Composer Proxy 元数据性能基线](dev/composer-performance-baseline.md)
 - [Terraform Provider / Module Registry 开发设计说明](dev/terraform-repository-design.md)
 - [Go 仓库使用指南](repository-guides/go.md)与 [Nexus 性能基线](dev/go-hosted-performance-baseline.md)
 - [Swift Package Registry 开发设计说明](dev/swift-package-registry-design.md)
