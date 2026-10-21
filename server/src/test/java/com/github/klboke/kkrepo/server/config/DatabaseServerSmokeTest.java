@@ -302,6 +302,7 @@ class DatabaseServerSmokeTest {
                 new org.springframework.jdbc.datasource.DataSourceTransactionManager(source), jdbc::execute);
           }, type == DatabaseType.MYSQL);
       com.github.klboke.kkrepo.server.pypi.PypiCacheInvalidationSmokeChecks.verify(first, second);
+      com.github.klboke.kkrepo.server.composer.ComposerRouteCacheSmokeChecks.verify(first, second);
       BrowseDirectoryDeletionSmokeChecks.exercise(first, second);
       for (String mode : List.of("raw", "browse", "directory")) {
         concurrentSiblingDeletion(first, second, mode);

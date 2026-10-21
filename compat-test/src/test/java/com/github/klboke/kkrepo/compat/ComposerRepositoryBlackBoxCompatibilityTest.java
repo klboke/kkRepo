@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.compat;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -84,6 +85,17 @@ class ComposerRepositoryBlackBoxCompatibilityTest {
     String nexusPrefix = URI.create(nexus).getPath() + "/";
     assertEquals(nexusDistPath.substring(nexusPrefix.length()), relativeDistPath,
         "Nexus and kkrepo dist paths");
+
+    // Repeated metadata reads must preserve the body and validators used by Composer's
+    // conditional cache, including after the proxy has materialized its download routes.
+    for (Endpoint endpoint : List.of(nexusEndpoint, candidateEndpoint)) {
+      Exchange initial = endpoint == nexusEndpoint ? nexusPackage : candidatePackage;
+      Exchange warm = get(endpoint, "p2/" + packageName + ".json");
+      assertEquals(200, warm.status());
+      assertArrayEquals(initial.body(), warm.body(), "warm p2 metadata");
+      assertEquals(initial.header("last-modified"), warm.header("last-modified"));
+      assertEquals(initial.header("etag"), warm.header("etag"));
+    }
 
     Exchange nexusConditional = conditionalGet(nexusEndpoint, "p2/" + packageName + ".json", nexusPackage);
     Exchange candidateConditional = conditionalGet(

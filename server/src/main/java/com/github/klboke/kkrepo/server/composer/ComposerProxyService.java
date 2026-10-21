@@ -36,6 +36,7 @@ import org.springframework.stereotype.Service;
 public class ComposerProxyService {
   private static final int MAX_METADATA_BYTES = 64 * 1024 * 1024;
   private static final String ROUTE_PREFIX = "_composer/routes/";
+  private static final int ROUTE_BATCH_SIZE = 256;
 
   private final ObjectMapper objectMapper;
   private final AssetDao assetDao;
@@ -256,6 +257,7 @@ public class ComposerProxyService {
       throw new MavenExceptions.BadUpstreamException("Invalid Composer versions for " + requestedName);
     }
     List<Map<String, Object>> rewritten = new ArrayList<>(versions.size());
+    Map<String, byte[]> routes = new LinkedHashMap<>();
     for (Object item : versions) {
       if (!(item instanceof Map<?, ?> map)) continue;
       Map<String, Object> version = stringMap(map);
@@ -271,13 +273,18 @@ public class ComposerProxyService {
           String fileName = publicPath.substring(publicPath.lastIndexOf('/') + 1);
           Route route = new Route(
               remoteUrl, requestedName, packageVersion, fileName, string(dist.get("shasum")));
-          storeRoute(runtime, token, route);
+          routes.put(ROUTE_PREFIX + token + ".json", routeBytes(route));
+          if (routes.size() >= ROUTE_BATCH_SIZE) {
+            storeChangedRoutes(runtime, routes);
+            routes.clear();
+          }
           dist.put("url", baseUrl + "/" + publicPath);
           version.put("dist", dist);
         }
       }
       rewritten.add(version);
     }
+    storeChangedRoutes(runtime, routes);
     Map<String, Object> result = new LinkedHashMap<>(body);
     result.put("packages", Map.of(requestedName, rewritten));
     return result;
@@ -301,14 +308,31 @@ public class ComposerProxyService {
     return result;
   }
 
-  private void storeRoute(RepositoryRuntime runtime, String token, Route route) {
-    String path = ROUTE_PREFIX + token + ".json";
+  private byte[] routeBytes(Route route) {
     try {
-      assets.storeBytes(runtime, path, objectMapper.writeValueAsBytes(route), ComposerResponses.JSON,
-          Map.of("composerRoute", true));
+      return objectMapper.writeValueAsBytes(route);
     } catch (IOException e) {
       throw new IllegalStateException("Failed to persist Composer dist route", e);
     }
+  }
+
+  private void storeChangedRoutes(RepositoryRuntime runtime, Map<String, byte[]> routes) {
+    if (routes.isEmpty()) return;
+    // Consult shared durable state in bounded batches, including on a cold replica. A warm
+    // metadata GET/HEAD must not rewrite every historical version or bump the repository's
+    // cache watermark. Missing/changed routes still use the existing transactional writer.
+    Map<String, AssetRecord> existing = assetDao.findAssetsByPaths(runtime.id(), routes.keySet());
+    Map<Long, AssetBlobRecord> blobs = assetDao.findBlobsByIds(existing.values().stream()
+        .map(AssetRecord::assetBlobId).filter(java.util.Objects::nonNull).distinct().toList());
+    routes.forEach((path, bytes) -> {
+      AssetRecord asset = existing.get(path);
+      AssetBlobRecord blob = asset == null || asset.assetBlobId() == null
+          ? null : blobs.get(asset.assetBlobId());
+      if (blob == null || blob.size() != bytes.length
+          || !ComposerResponses.sha256(bytes).equals(blob.sha256())) {
+        assets.storeBytes(runtime, path, bytes, ComposerResponses.JSON, Map.of("composerRoute", true));
+      }
+    });
   }
 
   private Route readRoute(RepositoryRuntime runtime, String token) {
