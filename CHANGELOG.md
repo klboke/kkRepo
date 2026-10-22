@@ -4,6 +4,28 @@ All notable public changes to kkrepo are documented in this file.
 
 This project follows a pragmatic release process. Stable releases call out migration impact, compatibility changes, operational notes, and any known behavior changes in their release section.
 
+## 1.3.3 - 2026-10-22
+
+### Fixed
+
+- RubyGems ingestion preserves dependency requirements instead of allowing trailing root-level gemspec fields to erase them. The dependency API returns Bundler-compatible string tuples. (#410, #412)
+- RubyGems groups merge member compact and legacy indexes so uncached upstream gems are discoverable before download. Aggregation preserves member precedence, platform-specific releases, dependency constraints, yanks, and checksums, with bounded parsing and memory use. Unsupported optional indexes fall back to complete legacy discovery. (#411, #413)
+- Durable cache invalidations and generations commit with database writes. Invalidation failures now roll back and reach transaction retries instead of leaving sibling replicas unaware of committed changes; local eviction happens only after commit. The same boundary covers asset/group metadata, authorization, and repository/security catalogs. PostgreSQL lock-not-available errors are retried without treating cancellation or syntax errors as transient. (#414, #415)
+- New Nexus migration jobs refresh npm packuments while retaining existing-tarball shortcuts. Publication fencing prevents concurrent jobs or replicas from overwriting newer metadata with stale responses, and hosted/group caches are invalidated transactionally. (#416, #418)
+
+### Changed
+
+- Composer proxy metadata requests skip persistence for unchanged dist routes using bounded comparisons against shared asset/blob records. Warm GET, HEAD, and conditional requests avoid redundant route writes, search updates, and cache-generation bumps while preserving response bytes and validators. Missing or changed routes are still repaired through the existing writer. (#425, #426)
+- Update AWS SDK to `2.56.0`, zstd-jni to `1.5.7-23`, and the Windows Swift setup action to `0.5.1`. (#422, #423, #424)
+- Quickstart defaults, Dockerfile packaging, deployment documentation, Helm application version, runtime checks, and the optional scanner profile now use `1.3.3`.
+
+### Upgrade Notes
+
+- Upgrading from `1.3.2` adds no database migrations; MySQL and PostgreSQL remain at Flyway V59. Back up the relational database and blob store together before upgrading all replicas.
+- Previously ingested RubyGems dependency metadata is not automatically reparsed. For an affected gem, temporarily allow redeployment, re-publish the identical original archive, and restore the write policy. An index-only rebuild cannot recover lost constraints. (#412)
+- To repair an affected npm migration, create a new metadata scan with **Metadata since** unset, then sync packages. Resuming the old job does not refresh completed items. Preserve target-only metadata before resyncing independently published repositories: Nexus remains authoritative for imported packuments. Existing tarballs need not be downloaded again. (#418)
+- Composer's improvement applies to unchanged warm routes; cold fills still create route records. Existing lock-file routes remain available, and no configuration change is required. (#426)
+
 ## 1.3.2 - 2026-10-13
 
 ### Security
