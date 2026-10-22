@@ -662,7 +662,9 @@ function logout() {
 }
 
 function repositoryBaseUrl(repoName = state.repo) {
-  return new URL(`/repository/${encodeURIComponent(repoName)}/`, window.location.origin).href;
+  const repository = repositoriesCache.find(repo => repo.name === repoName);
+  const path = repository?.url || `/repository/${encodeURIComponent(repoName)}/`;
+  return new URL(path, window.location.origin).href;
 }
 
 function dockerRepositoryBaseUrl(repo = currentRepository()) {

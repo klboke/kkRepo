@@ -86,6 +86,24 @@ class RawRepositoryBlackBoxCompatibilityTest {
     }
   }
 
+  @Test
+  void proxySupportsFreeBsdAbiPathsWhenConfigured() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeTrue(config.configured() && config.proxyProbePath().startsWith("FreeBSD:"),
+        "Set COMPAT_RAW_PROXY_PROBE_PATH to a provisioned FreeBSD:14:amd64/... fixture");
+    if (config.setupEnabled()) {
+      ensureNexusRepositories(config);
+      ensureKkRepoRepositories(config);
+    }
+    Exchange reference = get(config.nexusProxy(), config.proxyProbePath());
+    Exchange candidate = get(config.nexusPlusProxy(), config.proxyProbePath());
+    assert2xx("FreeBSD reference proxy", reference);
+    assertSameStatus("FreeBSD proxy", reference, candidate);
+    assertArrayEquals(reference.body(), candidate.body());
+    assertSameStatus("FreeBSD proxy HEAD", head(config.nexusProxy(), config.proxyProbePath()),
+        head(config.nexusPlusProxy(), config.proxyProbePath()));
+  }
+
   private static Exchange get(Endpoint endpoint, String path) throws Exception {
     return send(endpoint.request(path).GET());
   }

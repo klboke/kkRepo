@@ -26,7 +26,7 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
  * SPI so format runtimes can evolve independently of the web entry point.
  */
 @RestController
-@RequestMapping("/repository/{name}")
+@RequestMapping("${kkrepo.compatibility.repository-url-prefix:/repository}/{name}")
 public class RepositoryProtocolController {
   private final RepositoryProtocolDispatcher protocols;
 

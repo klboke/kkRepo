@@ -20,7 +20,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 @RestController
-@RequestMapping("/repository/{name}")
+@RequestMapping("${kkrepo.compatibility.repository-url-prefix:/repository}/{name}")
 public class PypiRepositoryController {
   private final RepositoryRuntimeRegistry registry;
   private final PypiHostedService hosted;

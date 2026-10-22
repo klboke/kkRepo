@@ -1,10 +1,10 @@
 package com.github.klboke.kkrepo.server.blob;
 
+import com.github.klboke.kkrepo.server.routing.RepositoryUrlPrefix;
 import jakarta.servlet.RequestDispatcher;
 import jakarta.servlet.http.HttpServletRequest;
 
 final class RepositoryClientAbortSupport {
-  private static final String REPOSITORY_URI_PREFIX = "/repository/";
 
   private RepositoryClientAbortSupport() {
   }
@@ -16,7 +16,7 @@ final class RepositoryClientAbortSupport {
 
   static boolean isRepositoryRequest(HttpServletRequest request) {
     String uri = requestUri(request);
-    return uri != null && uri.startsWith(REPOSITORY_URI_PREFIX);
+    return uri != null && uri.startsWith(RepositoryUrlPrefix.path(request));
   }
 
   static String requestUri(HttpServletRequest request) {

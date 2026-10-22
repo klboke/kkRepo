@@ -1,5 +1,7 @@
 package com.github.klboke.kkrepo.server.upload;
 
+import com.github.klboke.kkrepo.server.security.ClientAddress;
+
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
@@ -39,7 +41,7 @@ public class ComponentUploadController {
       MultipartHttpServletRequest multipartRequest,
       HttpServletRequest request) throws IOException {
     uploadService.upload(repository, multipartRequest.getParameterMap(), multipartRequest.getMultiFileMap(),
-        createdBy(request), request.getRemoteAddr());
+        createdBy(request), ClientAddress.from(request));
     return ResponseEntity.noContent().build();
   }
 

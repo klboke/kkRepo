@@ -1,5 +1,7 @@
 package com.github.klboke.kkrepo.server.docker;
 
+import com.github.klboke.kkrepo.server.security.ClientAddress;
+
 import com.github.klboke.kkrepo.auth.AccessDecisionService;
 import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
@@ -137,7 +139,7 @@ public class DockerRegistryController {
     }
     var status = hosted.startUpload(
         runtime, path.imageName(), mount, source == null ? from : source.imageName(), source == null ? null : source.runtime(),
-        userId(request), request.getRemoteAddr());
+        userId(request), ClientAddress.from(request));
     if (status.mounted()) {
       return ResponseEntity.status(HttpStatus.CREATED)
           .header(DockerConstants.API_VERSION_HEADER, DockerConstants.API_VERSION)
@@ -176,7 +178,7 @@ public class DockerRegistryController {
     if (path.kind() == DockerPath.Kind.MANIFEST) {
       DockerResponse response = hosted.putManifest(
           runtime, path.imageName(), path.reference(), request.getInputStream(), contentType, tags,
-          userId(request), request.getRemoteAddr())
+          userId(request), ClientAddress.from(request))
           .withHeader(HttpHeaders.LOCATION, manifestLocation(request, runtime, target, path.imageName(), path.reference()));
       return stream(response, request, false);
     }
@@ -189,7 +191,7 @@ public class DockerRegistryController {
           contentRange,
           parseUploadDigest(digest),
           userId(request),
-          request.getRemoteAddr());
+          ClientAddress.from(request));
       return ResponseEntity.status(HttpStatus.CREATED)
           .header(DockerConstants.API_VERSION_HEADER, DockerConstants.API_VERSION)
           .header(DockerConstants.CONTENT_DIGEST_HEADER, result.digest().value())

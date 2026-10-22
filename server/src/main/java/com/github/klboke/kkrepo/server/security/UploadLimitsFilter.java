@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.security;
 
+import com.github.klboke.kkrepo.server.routing.RepositoryUrlPrefix;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import jakarta.servlet.FilterChain;
@@ -51,10 +52,10 @@ public class UploadLimitsFilter extends OncePerRequestFilter {
 
   private boolean swiftRepositoryPath(HttpServletRequest request) {
     String uri = stripContextPath(request);
-    if (!uri.startsWith("/repository/")) {
+    if (!uri.startsWith(RepositoryUrlPrefix.path(request))) {
       return false;
     }
-    String remaining = uri.substring("/repository/".length());
+    String remaining = uri.substring(RepositoryUrlPrefix.path(request).length());
     int slash = remaining.indexOf('/');
     String repositoryName = slash < 0 ? remaining : remaining.substring(0, slash);
     return !repositoryName.isBlank()
@@ -79,7 +80,7 @@ public class UploadLimitsFilter extends OncePerRequestFilter {
       return false;
     }
     String uri = stripContextPath(request);
-    return uri.startsWith("/repository/")
+    return uri.startsWith(RepositoryUrlPrefix.path(request))
         || uri.equals("/service/rest/v1/components")
         || legacyUi.internalUiUploadPath(uri);
   }

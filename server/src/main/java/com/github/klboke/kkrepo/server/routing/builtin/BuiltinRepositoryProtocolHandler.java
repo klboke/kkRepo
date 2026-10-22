@@ -1,5 +1,8 @@
 package com.github.klboke.kkrepo.server.routing.builtin;
 
+import com.github.klboke.kkrepo.server.routing.RepositoryUrlPrefix;
+import com.github.klboke.kkrepo.server.security.ClientAddress;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
@@ -539,9 +542,9 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
       try (InputStream body = request.getInputStream()) {
         resp = switch (path.kind()) {
           case PACKAGE_ROOT -> npmHosted.putPackage(runtime, path.packageId(), path.revision(),
-              body, userId, request.getRemoteAddr());
+              body, userId, ClientAddress.from(request));
           case DIST_TAG -> npmHosted.putDistTag(runtime, path.packageId(), path.tag(),
-              body, userId, request.getRemoteAddr());
+              body, userId, ClientAddress.from(request));
           default -> throw new NpmExceptions.MethodNotAllowed("Unsupported npm PUT path: " + path.rawPath());
         };
       }
@@ -551,7 +554,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
       String raw = extractRepositoryPath(name, request, true);
       MavenResponse response;
       try (InputStream body = request.getInputStream()) {
-        goHosted().publish(runtime, raw, body, userId, request.getRemoteAddr());
+        goHosted().publish(runtime, raw, body, userId, ClientAddress.from(request));
         response = MavenResponse.created();
       }
       return ResponseEntity.status(response.status()).build();
@@ -561,7 +564,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
       MavenResponse resp;
       try (InputStream body = request.getInputStream()) {
         resp = helmHosted.put(runtime, raw, body, contentType,
-            userId, request.getRemoteAddr());
+            userId, ClientAddress.from(request));
       }
       return ResponseEntity.status(resp.status()).build();
     }
@@ -570,7 +573,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
       MavenResponse resp;
       if (path.kind() == CargoPath.Kind.PUBLISH) {
         try (InputStream body = request.getInputStream()) {
-          resp = cargoHosted.publish(runtime, body, userId, request.getRemoteAddr());
+          resp = cargoHosted.publish(runtime, body, userId, ClientAddress.from(request));
         }
       } else if (path.kind() == CargoPath.Kind.UNYANK) {
         resp = cargoHosted.yank(runtime, path.crateName(), path.version(), false);
@@ -586,7 +589,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
         resp = terraform.put(runtime, path, body, contentType,
             request.getHeader(HttpHeaders.CONTENT_DISPOSITION),
             request.getHeader(TerraformService.PROVIDER_PROTOCOLS_HEADER),
-            userId, request.getRemoteAddr());
+            userId, ClientAddress.from(request));
       }
       return ResponseEntity.status(resp.status()).build();
     }
@@ -599,7 +602,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
       MavenResponse response;
       try (InputStream body = request.getInputStream()) {
         response = ansible().putArtifact(
-            runtime, raw, body, userId, request.getRemoteAddr());
+            runtime, raw, body, userId, ClientAddress.from(request));
       }
       return ResponseEntity.status(response.status()).build();
     }
@@ -608,7 +611,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
       MavenResponse response;
       try (InputStream body = request.getInputStream()) {
         response = conda().put(
-            runtime, raw, body, contentType, userId, request.getRemoteAddr());
+            runtime, raw, body, contentType, userId, ClientAddress.from(request));
       }
       return ResponseEntity.status(response.status()).build();
     }
@@ -625,7 +628,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
             request.getHeader("X-Checksum-Sha1"),
             request.getHeader("X-Checksum-Deploy") != null,
             requestAuthenticatedSubject(request),
-            request.getRemoteAddr());
+            ClientAddress.from(request));
       }
       return ResponseEntity.status(response.status()).build();
     }
@@ -633,7 +636,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
       String raw = extractRepositoryPath(name, request, true);
       MavenResponse response;
       try (InputStream body = request.getInputStream()) {
-        response = apt().put(runtime, raw, body, contentType, userId, request.getRemoteAddr());
+        response = apt().put(runtime, raw, body, contentType, userId, ClientAddress.from(request));
       }
       return ResponseEntity.status(response.status())
           .header(HttpHeaders.LOCATION, response.headers().get(HttpHeaders.LOCATION))
@@ -643,7 +646,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
       String raw = extractRepositoryPath(name, request, true);
       MavenResponse response;
       try (InputStream body = request.getInputStream()) {
-        response = alpine().put(runtime, raw, body, contentType, userId, request.getRemoteAddr());
+        response = alpine().put(runtime, raw, body, contentType, userId, ClientAddress.from(request));
       }
       return ResponseEntity.status(response.status())
           .header(HttpHeaders.LOCATION, response.headers().get(HttpHeaders.LOCATION))
@@ -653,7 +656,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
       String raw = extractRepositoryPath(name, request, true);
       MavenResponse response;
       try (InputStream body = request.getInputStream()) {
-        response = r().put(runtime, raw, body, contentType, userId, request.getRemoteAddr());
+        response = r().put(runtime, raw, body, contentType, userId, ClientAddress.from(request));
       }
       return ResponseEntity.status(response.status())
           .header(HttpHeaders.LOCATION, response.headers().get(HttpHeaders.LOCATION))
@@ -676,7 +679,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
           repositoryBaseUrl(request, runtime.name()),
           accept,
           userId,
-          request.getRemoteAddr());
+          ClientAddress.from(request));
       // This handler returns ResponseEntity<?> for all repository formats. Returning a
       // StreamingResponseBody here makes Spring treat the lambda as a regular JSON object and
       // serialize it as "{}" while preserving SwiftService's larger Content-Length. Publish
@@ -690,11 +693,11 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
         Part part = nugetPackagePart(request);
         try (InputStream body = part.getInputStream()) {
           resp = nuget.putPackage(runtime, NugetPaths.PACKAGE_PUBLISH, body,
-              part.getContentType(), userId, request.getRemoteAddr());
+              part.getContentType(), userId, ClientAddress.from(request));
         }
       } else {
         try (InputStream body = request.getInputStream()) {
-          resp = nuget.putPackage(runtime, raw, body, contentType, userId, request.getRemoteAddr());
+          resp = nuget.putPackage(runtime, raw, body, contentType, userId, ClientAddress.from(request));
         }
       }
       return ResponseEntity.status(resp.status()).build();
@@ -703,7 +706,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
       String raw = extractRepositoryPath(name, request, true);
       MavenResponse resp;
       try (InputStream body = request.getInputStream()) {
-        resp = rubygems.put(runtime, raw, body, contentType, userId, request.getRemoteAddr());
+        resp = rubygems.put(runtime, raw, body, contentType, userId, ClientAddress.from(request));
       }
       return ResponseEntity.status(resp.status()).build();
     }
@@ -711,7 +714,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
       String raw = extractRepositoryPath(name, request, true);
       MavenResponse resp;
       try (InputStream body = request.getInputStream()) {
-        resp = yum.put(runtime, raw, body, contentType, userId, request.getRemoteAddr());
+        resp = yum.put(runtime, raw, body, contentType, userId, ClientAddress.from(request));
       }
       return ResponseEntity.status(resp.status()).build();
     }
@@ -720,7 +723,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
       MavenResponse resp;
       try (InputStream body = request.getInputStream()) {
         resp = rawHosted.put(runtime, raw, body, contentType,
-            userId, request.getRemoteAddr());
+            userId, ClientAddress.from(request));
       }
       return ResponseEntity.status(resp.status()).build();
     }
@@ -731,7 +734,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
     MavenResponse resp;
     try (InputStream body = request.getInputStream()) {
       resp = hosted.put(rp.runtime(), rp.path(), body, contentType,
-          userId, request.getRemoteAddr());
+          userId, ClientAddress.from(request));
     }
     return ResponseEntity.status(resp.status()).build();
   }
@@ -748,7 +751,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
       MavenResponse resp = switch (path.kind()) {
         case PACKAGE_ROOT -> npmHosted.deletePackage(runtime, path.packageId(), path.revision());
         case TARBALL -> npmHosted.deleteTarball(runtime, path.packageId(), path.tarballName(), path.revision());
-        case DIST_TAG -> npmHosted.deleteDistTag(runtime, path.packageId(), path.tag(), userId, request.getRemoteAddr());
+        case DIST_TAG -> npmHosted.deleteDistTag(runtime, path.packageId(), path.tag(), userId, ClientAddress.from(request));
         default -> throw new NpmExceptions.MethodNotAllowed("Unsupported npm DELETE path: " + path.rawPath());
       };
       return toStreamingResponse(resp);
@@ -875,7 +878,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
             content,
             signature,
             requestUserId(request),
-            request.getRemoteAddr());
+            ClientAddress.from(request));
         return ResponseEntity.status(response.status()).build();
       } catch (IOException error) {
         throw new PypiExceptions.BadRequestException(
@@ -903,7 +906,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
                 null,
                 null,
                 requestUserId(request),
-                request.getRemoteAddr());
+                ClientAddress.from(request));
             return aptUploadResponse(published);
           }
         }
@@ -917,7 +920,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
               firstNonBlank(fields.get("apt.distribution"), fields.get("distribution")),
               firstNonBlank(fields.get("apt.component"), fields.get("component")),
               requestUserId(request),
-              request.getRemoteAddr());
+              ClientAddress.from(request));
           return aptUploadResponse(published);
         }
       } catch (IOException e) {
@@ -951,7 +954,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
               part.getSubmittedFileName(),
               body,
               requestUserId(request),
-              request.getRemoteAddr());
+              ClientAddress.from(request));
           return alpineUploadResponse(published);
         }
       } catch (IOException error) {
@@ -981,7 +984,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
             upload.filename(),
             upload.sha256(),
             requestUserId(request),
-            request.getRemoteAddr(),
+            ClientAddress.from(request),
             false);
         return toByteArrayResponse(response);
       } catch (IOException e) {
@@ -1023,7 +1026,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
       }
       try (InputStream body = request.getInputStream()) {
         MavenResponse resp = rubygems.put(runtime, raw, body,
-            request.getContentType(), userId, request.getRemoteAddr());
+            request.getContentType(), userId, ClientAddress.from(request));
         return ResponseEntity.status(resp.status()).build();
       } catch (IOException e) {
         throw new IllegalStateException("Failed reading RubyGems request body", e);
@@ -1747,7 +1750,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
 
   private String extractMavenPath(String name, HttpServletRequest request) {
     String uri = request.getRequestURI();
-    String prefix = "/repository/" + name + "/";
+    String prefix = RepositoryUrlPrefix.path(request) + name + "/";
     int idx = uri.indexOf(prefix);
     if (idx < 0) {
       throw new MavenExceptions.MavenNotFoundException("Bad maven URL: " + uri);
@@ -1763,7 +1766,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
     Object normalized = request.getAttribute(RepositorySecurityFilter.NORMALIZED_REPOSITORY_PATH_ATTRIBUTE);
     if (normalized instanceof String path) return path;
     String uri = request.getRequestURI();
-    String root = request.getContextPath() + "/repository/" + name;
+    String root = request.getContextPath() + RepositoryUrlPrefix.path(request) + name;
     if (uri.equals(root)) {
       if (allowEmpty) return "";
       throw new MavenExceptions.MavenNotFoundException("Missing path");
@@ -1783,7 +1786,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
     Object normalized = request.getAttribute(RepositorySecurityFilter.NORMALIZED_REPOSITORY_PATH_ATTRIBUTE);
     if (normalized instanceof String path) return path;
     String uri = request.getRequestURI();
-    String base = request.getContextPath() + "/repository/" + name;
+    String base = request.getContextPath() + RepositoryUrlPrefix.path(request) + name;
     if (uri.equals(base)) {
       return "";
     }
@@ -1818,7 +1821,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
   }
 
   private String repositoryBaseUrl(HttpServletRequest request, String name) {
-    return serverBaseUrl(request) + request.getContextPath() + "/repository/" + name;
+    return serverBaseUrl(request) + request.getContextPath() + RepositoryUrlPrefix.path(request) + name;
   }
 
   private static String terraformUrlTokenSegment(HttpServletRequest request) {
@@ -2115,7 +2118,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
    */
   private DirectoryRequest detectDirectory(String name, HttpServletRequest request) {
     String uri = request.getRequestURI();
-    String prefix = request.getContextPath() + "/repository/" + name;
+    String prefix = request.getContextPath() + RepositoryUrlPrefix.path(request) + name;
     if (uri.equals(prefix)) {
       return new DirectoryRequest("", true);
     }

@@ -1626,7 +1626,9 @@ public class AnsibleGalaxyService {
     copyBoundedStringOrList(source, projected, "authors", 64, 512);
     copyBoundedStringOrList(source, projected, "license", 64, 128);
     copyBoundedStringOrList(source, projected, "tags", 256, 128);
-    copyBoundedUpstreamText(source, projected, "description", 16 * 1024);
+    String description = boundedUpstreamText(source.get("description"), 16 * 1024,
+        "description", true);
+    if (description != null) projected.put("description", description);
     copyBoundedUpstreamText(source, projected, "repository", 4096);
     copyBoundedUpstreamText(source, projected, "documentation", 4096);
     copyBoundedUpstreamText(source, projected, "homepage", 4096);
@@ -1719,13 +1721,19 @@ public class AnsibleGalaxyService {
   }
 
   static String boundedUpstreamText(Object raw, int maxLength, String label) {
+    return boundedUpstreamText(raw, maxLength, label, false);
+  }
+
+  private static String boundedUpstreamText(
+      Object raw, int maxLength, String label, boolean allowTextWhitespace) {
     if (raw == null) return null;
     if (!(raw instanceof String value)) {
       throw new AnsibleGalaxyExceptions.BadUpstream(
           "Upstream Galaxy " + label + " has an invalid type");
     }
     if (value.length() > maxLength
-        || value.chars().anyMatch(ch -> ch <= 0x1f || ch == 0x7f)) {
+        || value.chars().anyMatch(ch -> (ch <= 0x1f || ch == 0x7f)
+            && !(allowTextWhitespace && (ch == '\n' || ch == '\r' || ch == '\t')))) {
       throw new AnsibleGalaxyExceptions.BadUpstream(
           "Upstream Galaxy " + label + " exceeds the safe limit");
     }

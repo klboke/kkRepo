@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.terraform;
 
+import com.github.klboke.kkrepo.server.routing.RepositoryUrlPrefix;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
@@ -1216,7 +1217,7 @@ public class TerraformService {
 
   private static String repositoryPath(String url, String repository) {
     if (url == null) return null;
-    String marker = "/repository/" + repository + "/";
+    String marker = RepositoryUrlPrefix.currentPath() + repository + "/";
     int index = url.indexOf(marker);
     return index < 0 ? null : url.substring(index + marker.length());
   }

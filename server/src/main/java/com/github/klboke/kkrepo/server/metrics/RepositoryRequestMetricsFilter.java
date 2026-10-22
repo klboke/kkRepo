@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.metrics;
 
+import com.github.klboke.kkrepo.server.routing.RepositoryUrlPrefix;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.http.UriPathDecoder;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
@@ -220,7 +221,7 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
             && !REDACTED_TERRAFORM_PATH.equals(target.path()))) {
       return stripContextPath(request);
     }
-    return "/repository/" + target.repository() + "/" + target.path();
+    return RepositoryUrlPrefix.path(request) + target.repository() + "/" + target.path();
   }
 
   private static boolean terraformShaped(String path) {
@@ -235,8 +236,8 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
   private static Target target(HttpServletRequest request) {
     String method = request.getMethod() == null ? "" : request.getMethod().toUpperCase(Locale.ROOT);
     String uri = stripContextPath(request);
-    if (uri.startsWith("/repository/")) {
-      String remaining = uri.substring("/repository/".length());
+    if (uri.startsWith(RepositoryUrlPrefix.path(request))) {
+      String remaining = uri.substring(RepositoryUrlPrefix.path(request).length());
       if (remaining.isBlank()) return null;
       int slash = remaining.indexOf('/');
       String repository = slash < 0 ? remaining : remaining.substring(0, slash);

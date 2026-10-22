@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.browse;
 
+import com.github.klboke.kkrepo.server.routing.RepositoryUrlPrefix;
 import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
@@ -236,7 +237,7 @@ public class BrowseController {
         "application/json",
         null,
         null,
-        "/repository/" + repo.name() + "/config.json"));
+        RepositoryUrlPrefix.currentPath() + repo.name() + "/config.json"));
   }
 
   @GetMapping("/{repository}/attributes")

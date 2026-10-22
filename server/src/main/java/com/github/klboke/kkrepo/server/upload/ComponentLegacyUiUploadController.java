@@ -1,5 +1,7 @@
 package com.github.klboke.kkrepo.server.upload;
 
+import com.github.klboke.kkrepo.server.security.ClientAddress;
+
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
@@ -43,7 +45,7 @@ public class ComponentLegacyUiUploadController {
           multipartRequest.getParameterMap(),
           multipartRequest.getMultiFileMap(),
           ComponentUploadController.createdBy(request),
-          request.getRemoteAddr());
+          ClientAddress.from(request));
       return htmlTextarea(Map.of("success", true, "data", result.searchTerm()));
     } catch (Exception e) {
       return htmlTextarea(Map.of("success", false, "message", message(e)));

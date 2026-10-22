@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.management;
 
+import com.github.klboke.kkrepo.server.routing.RepositoryUrlPrefix;
 import com.fasterxml.jackson.annotation.JsonAnyGetter;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
@@ -309,7 +310,7 @@ public class NexusAssetManagementService {
     String contextPath = request.getContextPath() == null ? "" : request.getContextPath();
     return forwardedHeaderPolicy.serverBaseUrl(request)
         + contextPath
-        + "/repository/"
+        + RepositoryUrlPrefix.path(request)
         + UriUtils.encodePathSegment(repositoryName, StandardCharsets.UTF_8)
         + "/"
         + encodePath(path);

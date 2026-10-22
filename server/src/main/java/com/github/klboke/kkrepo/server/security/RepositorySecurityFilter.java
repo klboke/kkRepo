@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.security;
 
+import com.github.klboke.kkrepo.server.routing.RepositoryUrlPrefix;
 import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.auth.AccessDecisionService;
 import com.github.klboke.kkrepo.auth.PermissionAction;
@@ -369,8 +370,8 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   private Optional<RepositoryRequest> resolve(HttpServletRequest request) {
     String method = request.getMethod();
     String uri = stripContextPath(request);
-    if (uri.startsWith("/repository/")) {
-      return repositoryRoute(method, uri);
+    if (uri.startsWith(RepositoryUrlPrefix.path(request))) {
+      return repositoryRoute(method, uri, RepositoryUrlPrefix.path(request));
     }
     if (uri.startsWith("/service/rest/repository/browse/")) {
       return browseRoute(method, uri);
@@ -396,8 +397,8 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     return Optional.empty();
   }
 
-  private Optional<RepositoryRequest> repositoryRoute(String method, String uri) {
-    String remaining = uri.substring("/repository/".length());
+  private Optional<RepositoryRequest> repositoryRoute(String method, String uri, String prefix) {
+    String remaining = uri.substring(prefix.length());
     if (remaining.isBlank()) {
       return Optional.empty();
     }
@@ -675,7 +676,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
 
   private String cargoLoginUrl(HttpServletRequest request, String repository) {
     String contextPath = request.getContextPath();
-    String path = (contextPath == null ? "" : contextPath) + "/repository/" + repository + "/me";
+    String path = (contextPath == null ? "" : contextPath) + RepositoryUrlPrefix.path(request) + repository + "/me";
     String baseUrl = forwardedHeaderPolicy.serverBaseUrl(request);
     return baseUrl.isBlank() ? path : baseUrl + path;
   }

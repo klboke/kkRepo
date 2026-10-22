@@ -1,5 +1,7 @@
 package com.github.klboke.kkrepo.server.routing.helm;
 
+import com.github.klboke.kkrepo.server.security.ClientAddress;
+
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
@@ -47,7 +49,7 @@ public class HelmChartUploadProtocolHandler implements RepositoryProtocolHandler
         request.runtime(),
         request.multipartFile(),
         "anonymous",
-        request.servletRequest().getRemoteAddr());
+        ClientAddress.from(request.servletRequest()));
     return ResponseEntity.status(response.status()).build();
   }
 }

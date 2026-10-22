@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.security;
 
+import com.github.klboke.kkrepo.server.routing.RepositoryUrlPrefix;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao.AuditLogRecord;
@@ -102,7 +103,7 @@ public class ManagementAuditFilter extends OncePerRequestFilter {
 
   private static boolean possibleRepositoryPublish(HttpServletRequest request) {
     return "PUT".equalsIgnoreCase(request.getMethod())
-        && stripContextPath(request).startsWith("/repository/");
+        && stripContextPath(request).startsWith(RepositoryUrlPrefix.path(request));
   }
 
   private static boolean swiftRepositoryPublish(HttpServletRequest request) {
@@ -158,11 +159,7 @@ public class ManagementAuditFilter extends OncePerRequestFilter {
   }
 
   private static String remoteAddress(HttpServletRequest request, ForwardedHeaderPolicy forwardedHeaderPolicy) {
-    String forwarded = forwardedHeaderPolicy.trusted(request) ? request.getHeader("X-Forwarded-For") : null;
-    if (forwarded != null && !forwarded.isBlank()) {
-      return forwarded.split(",", 2)[0].trim();
-    }
-    return request.getRemoteAddr();
+    return forwardedHeaderPolicy.clientAddress(request);
   }
 
   private static class StatusCaptureResponse extends HttpServletResponseWrapper {

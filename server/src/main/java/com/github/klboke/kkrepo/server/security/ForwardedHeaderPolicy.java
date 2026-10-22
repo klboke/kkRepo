@@ -57,6 +57,21 @@ public class ForwardedHeaderPolicy {
     }
   }
 
+  /** Resolve audit provenance only after the immediate peer has established proxy trust. */
+  public String clientAddress(HttpServletRequest request) {
+    String remote = request.getRemoteAddr();
+    if (!trusted(request)) return remote;
+    String forwarded = firstHeader(request, "X-Forwarded-For", null);
+    if (forwarded == null || forwarded.isBlank() || forwarded.contains("%")) return remote;
+    try {
+      // Validate literals without DNS. Keep the reported spelling for existing audit consumers.
+      InetAddress.ofLiteral(forwarded);
+      return forwarded;
+    } catch (IllegalArgumentException invalid) {
+      return remote;
+    }
+  }
+
   public String serverBaseUrl(HttpServletRequest request) {
     boolean trustedForwarded = trusted(request);
     String scheme = trustedForwarded ? firstHeader(request, "X-Forwarded-Proto", request.getScheme()) : request.getScheme();

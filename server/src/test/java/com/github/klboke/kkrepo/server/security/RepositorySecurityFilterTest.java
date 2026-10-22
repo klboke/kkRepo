@@ -57,6 +57,23 @@ import org.springframework.session.web.http.SessionRepositoryFilter;
 class RepositorySecurityFilterTest {
 
   @Test
+  void customPrefixStillRequiresReadPermission() throws Exception {
+    var authentication = new StubAuthenticationService(Optional.of(subject("alice")));
+    var decisions = new RecordingDecisionService(AccessDecision.deny("missing read"));
+    var filter = filter(authentication, decisions,
+        new FakeRepositoryDao(repository("raw", RepositoryFormat.RAW, RepositoryType.HOSTED)), true);
+    var request = new org.springframework.mock.web.MockHttpServletRequest("GET", "/r/raw/file.txt");
+    new com.github.klboke.kkrepo.server.routing.RepositoryUrlPrefix("/r")
+        .onStartup(request.getServletContext());
+    var response = new MockHttpServletResponse();
+    var chain = new ChainState();
+    filter.doFilter(request, response, chain);
+    assertEquals(403, response.getStatus());
+    assertEquals(0, chain.calls);
+    assertEquals("alice", decisions.subject.userId());
+  }
+
+  @Test
   void repositoryFilterRunsAfterSpringSessionRepositoryFilter() {
     Order order = RepositorySecurityFilter.class.getAnnotation(Order.class);
 

@@ -7,6 +7,20 @@ import org.junit.jupiter.api.Test;
 class RemoteUrlBuilderTest {
 
   @Test
+  void colonsInTheFirstSegmentRemainRepositoryRelative() {
+    for (String path : new String[] {"FreeBSD:14:amd64", "FreeBSD%3A14:amd64",
+        "FreeBSD%3A14%3Aamd64"}) {
+      assertEquals("https://pkg.example/base/FreeBSD%3A14%3Aamd64/quarterly/meta.txz",
+          RemoteUrlBuilder.repositoryPathString("https://pkg.example/base/",
+              path + "/quarterly/meta.txz"));
+    }
+    assertEquals("https://pkg.example/base/14%3Aamd64/meta.txz",
+        RemoteUrlBuilder.repositoryPathString("https://pkg.example/base/", "14:amd64/meta.txz"));
+    assertEquals("https://pkg.example/base/%3Aamd64/meta.txz",
+        RemoteUrlBuilder.repositoryPathString("https://pkg.example/base/", ":amd64/meta.txz"));
+  }
+
+  @Test
   void pathCannotOverrideConfiguredRemoteHost() {
     assertEquals(
         "https://repo.example.com/base/http%3A/evil.example/pkg.jar",

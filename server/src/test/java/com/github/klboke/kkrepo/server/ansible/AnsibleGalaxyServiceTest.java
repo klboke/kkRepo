@@ -476,6 +476,18 @@ class AnsibleGalaxyServiceTest {
   }
 
   @Test
+  void proxyDescriptionRetainsBoundsAndRejectsNonTextControls() {
+    for (String description : List.of("x".repeat(16 * 1024 + 1), "bad\u0000", "bad\u0007", "bad\u007f")) {
+      assertThrows(AnsibleGalaxyExceptions.BadUpstream.class,
+          () -> AnsibleGalaxyService.projectProxyDocument("1.2.3",
+              Map.of("metadata", Map.of("description", description))));
+    }
+    assertThrows(AnsibleGalaxyExceptions.BadUpstream.class,
+        () -> AnsibleGalaxyService.projectProxyDocument("1.2.3",
+            Map.of("download_url", "https://example.test/\nartifact")));
+  }
+
+  @Test
   void proxyVersionMetadataDoesNotMaterializeTheCollectionArchive() throws Exception {
     RepositoryRuntime proxy = runtime(
         45L, "ansible-proxy", RepositoryType.PROXY,
@@ -491,7 +503,7 @@ class AnsibleGalaxyServiceTest {
         "artifact", Map.of(
             "filename", "acme-tools-1.2.3.tar.gz", "sha256", SHA_A, "size", 123L),
         "metadata", Map.of(
-            "description", "projected metadata",
+            "description", "Ansible collection for core Windows plugins.\nSecond line\r\n\tIndented",
             "dependencies", Map.of("acme.base", ">=1.0.0")));
     Map<String, Object> projected =
         AnsibleGalaxyService.projectProxyDocument("1.2.3", upstream);
@@ -520,7 +532,7 @@ class AnsibleGalaxyServiceTest {
     assertEquals(123L, ((Number) map(detail.get("artifact")).get("size")).longValue());
     assertEquals(">=1.0.0",
         map(map(detail.get("metadata")).get("dependencies")).get("acme.base"));
-    assertEquals("projected metadata", map(detail.get("metadata")).get("description"));
+    assertEquals("Ansible collection for core Windows plugins.\nSecond line\r\n\tIndented", map(detail.get("metadata")).get("description"));
     verify(metadataOnly, never()).materializeProxy(proxy, exact);
     verify(fetcher, never()).fetch(any());
     verify(inspector, never()).inspect(any());

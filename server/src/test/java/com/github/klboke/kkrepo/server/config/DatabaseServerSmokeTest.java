@@ -327,6 +327,12 @@ class DatabaseServerSmokeTest {
       assertNotNull(loaded);
       assertEquals("node-one", loaded.getAttribute("replica"));
     }
+    Map<String, Object> custom = new LinkedHashMap<>(properties);
+    custom.put("kkrepo.compatibility.repository-url-prefix", "/r");
+    custom.put("kkrepo.security.forwarded-headers.trusted-proxies", "127.0.0.1");
+    try (ConfigurableApplicationContext application = start(custom)) {
+      RecentIssueSmokeChecks.exercise(application);
+    }
   }
 
   private static void exerciseSharedApplicationFlows(

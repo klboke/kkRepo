@@ -74,30 +74,13 @@ public final class RemoteUrlBuilder {
             .append(Character.toUpperCase(segment.charAt(i + 1)))
             .append(Character.toUpperCase(segment.charAt(i + 2)));
         i += 2;
-      } else if (isAllowedPathChar(c) && !(c == ':' && firstSegment && looksLikeScheme(segment, i))) {
+      } else if (isAllowedPathChar(c) && !(c == ':' && firstSegment)) {
         out.append(c);
       } else {
         appendUtf8Escape(out, c);
       }
     }
     return out.toString();
-  }
-
-  private static boolean looksLikeScheme(String segment, int colonIndex) {
-    if (colonIndex <= 0) {
-      return false;
-    }
-    char first = segment.charAt(0);
-    if (!isAsciiAlpha(first)) {
-      return false;
-    }
-    for (int i = 1; i < colonIndex; i++) {
-      char c = segment.charAt(i);
-      if (!isAsciiAlpha(c) && !isAsciiDigit(c) && c != '+' && c != '-' && c != '.') {
-        return false;
-      }
-    }
-    return true;
   }
 
   private static void appendUtf8Escape(StringBuilder out, char c) {

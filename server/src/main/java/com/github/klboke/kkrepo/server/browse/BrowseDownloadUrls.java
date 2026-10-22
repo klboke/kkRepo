@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.browse;
 
+import com.github.klboke.kkrepo.server.routing.RepositoryUrlPrefix;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 
 final class BrowseDownloadUrls {
@@ -7,7 +8,7 @@ final class BrowseDownloadUrls {
   }
 
   static String asset(RepositoryRecord visible, String path) {
-    String prefix = "/repository/" + visible.name() + "/";
+    String prefix = RepositoryUrlPrefix.currentPath() + visible.name() + "/";
     return prefix + path;
   }
 }

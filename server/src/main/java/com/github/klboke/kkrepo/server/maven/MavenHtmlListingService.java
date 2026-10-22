@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.maven;
 
+import com.github.klboke.kkrepo.server.routing.RepositoryUrlPrefix;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
@@ -319,7 +320,7 @@ public class MavenHtmlListingService {
     static ListingEntry fromChild(String repoName, BrowseNodeDao.BrowseChild child) {
       boolean leaf = child.leaf();
       String href = leaf
-          ? "/repository/" + repoName + "/" + child.path()
+          ? RepositoryUrlPrefix.currentPath() + repoName + "/" + child.path()
           : child.displayName() + "/";
       return new ListingEntry(child.displayName(), href, leaf, child.assetSize(), child.assetLastUpdatedAt());
     }
@@ -327,7 +328,7 @@ public class MavenHtmlListingService {
     static ListingEntry fromPypiChild(String repoName, BrowseNodeDao.BrowseChild child) {
       boolean leaf = child.leaf();
       String href = leaf
-          ? "/repository/" + repoName + "/" + child.path()
+          ? RepositoryUrlPrefix.currentPath() + repoName + "/" + child.path()
           : child.displayName() + "/";
       return new ListingEntry(child.displayName(), href, leaf, child.assetSize(), child.assetLastUpdatedAt());
     }
@@ -339,7 +340,7 @@ public class MavenHtmlListingService {
       boolean leaf = child.leaf();
       String downloadPath = leaf && asset != null ? asset.path() : child.path();
       String href = leaf
-          ? "/repository/" + repoName + "/" + downloadPath
+          ? RepositoryUrlPrefix.currentPath() + repoName + "/" + downloadPath
           : child.displayName() + "/";
       return new ListingEntry(
           child.displayName(), href, leaf, child.assetSize(), child.assetLastUpdatedAt());
@@ -352,7 +353,7 @@ public class MavenHtmlListingService {
     static ListingEntry fromAsset(String repoName, AssetRecord asset) {
       return new ListingEntry(
           leafName(asset.path()),
-          "/repository/" + repoName + "/" + asset.path(),
+          RepositoryUrlPrefix.currentPath() + repoName + "/" + asset.path(),
           true,
           asset.size(),
           asset.lastUpdatedAt());
@@ -361,7 +362,7 @@ public class MavenHtmlListingService {
     static ListingEntry fromNpmTarball(String repoName, BrowseNodeDao.BrowseChild child) {
       return new ListingEntry(
           child.displayName(),
-          "/repository/" + repoName + "/" + child.path(),
+          RepositoryUrlPrefix.currentPath() + repoName + "/" + child.path(),
           true,
           child.assetSize(),
           child.assetLastUpdatedAt());

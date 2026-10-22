@@ -1,5 +1,8 @@
 package com.github.klboke.kkrepo.server.gitlfs;
 
+import com.github.klboke.kkrepo.server.routing.RepositoryUrlPrefix;
+import com.github.klboke.kkrepo.server.security.ClientAddress;
+
 import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.core.*;
 import com.github.klboke.kkrepo.persistence.jdbc.api.*;
@@ -61,7 +64,7 @@ public class GitLfsHostedService {
       HttpServletRequest request) {
     var subject = GitLfsAccess.subject(request);
     String base = forwarded.serverBaseUrl(request) + request.getContextPath()
-        + "/repository/" + repository.name() + "/";
+        + RepositoryUrlPrefix.path(request) + repository.name() + "/";
     List<String> oids = batch.objects().stream().filter(GitLfsProtocol.ObjectRequest::valid)
         .map(GitLfsProtocol.ObjectRequest::oid).distinct().toList();
     Set<String> allowed = access.allowedObjects(subject, repository.name(), oids,
@@ -142,7 +145,7 @@ public class GitLfsHostedService {
       var upload = uploads.claim(id, owner, BlobReferenceCodec.format(target), target.objectKey())
           .orElseThrow(() -> new GitLfsException(409, "Upload action is stale or another upload is active; repeat Batch"));
       transfer(repository, upload, target, storage, request.getInputStream(),
-          GitLfsAccess.subject(request).userId(), request.getRemoteAddr(),
+          GitLfsAccess.subject(request).userId(), ClientAddress.from(request),
           () -> access.requireUpload(request, repository.name(), oid, owner));
     } catch (BlobIntegrityException invalid) {
       throw new GitLfsException(422, invalid.getMessage());

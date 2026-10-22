@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.browse;
 
+import com.github.klboke.kkrepo.server.routing.RepositoryUrlPrefix;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.BlobReference;
@@ -877,7 +878,7 @@ public class BrowseAssetDetailService {
         null,
         "application/json",
         null,
-        "/repository/" + repository.name() + "/config.json",
+        RepositoryUrlPrefix.currentPath() + repository.name() + "/config.json",
         "kkrepo",
         null,
         Map.of(),

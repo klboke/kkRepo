@@ -21,6 +21,7 @@ function loadSwiftDetails() {
   assert.notEqual(swiftStart, -1);
   assert.notEqual(swiftEnd, -1);
   const context = vm.createContext({
+    repositoriesCache: [],
     currentRepository: () => ({ format: "swift", type: "hosted" }),
     state: { repo: "swift-hosted" },
     usageSnippet: (displayName, snippetText, description = "") => ({
@@ -80,4 +81,13 @@ test("strips only the archive extension from Swift archive assets", () => {
 
   assert.equal(detailVersion(archive), "1.0.0+linux.zip");
   assert.equal(detailVersion(manifest), "1.0.0+linux.zip");
+});
+
+
+test("uses the server-advertised repository prefix in client instructions", () => {
+  const context = loadSwiftDetails();
+  context.repositoriesCache = [{ name: "swift-hosted", url: "/r/swift-hosted/" }];
+  const detail = context.swiftUsageDetail({ leaf: false, path: "acme/library/1.0.0" });
+  assert.equal(detail.snippets[1].snippetText,
+    'swift package-registry login "http://localhost:18090/r/swift-hosted/" --username <username>');
 });

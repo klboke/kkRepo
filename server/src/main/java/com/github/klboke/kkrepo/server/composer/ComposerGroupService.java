@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.composer;
 
+import com.github.klboke.kkrepo.server.routing.RepositoryUrlPrefix;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPackageName;
@@ -262,7 +263,7 @@ public class ComposerGroupService {
   private static String memberRepositoryPath(String url, String memberName) {
     try {
       String path = java.net.URI.create(url).getPath();
-      String marker = "/repository/" + memberName + "/";
+      String marker = RepositoryUrlPrefix.currentPath() + memberName + "/";
       int index = path.indexOf(marker);
       if (index < 0) throw new IllegalArgumentException();
       String sourcePath = path.substring(index + marker.length());
@@ -283,7 +284,7 @@ public class ComposerGroupService {
   }
 
   private static String memberBase(RepositoryRuntime member) {
-    return "https://kkrepo.invalid/repository/" + member.name();
+    return "https://kkrepo.invalid" + RepositoryUrlPrefix.currentPath() + member.name();
   }
 
   private static Instant latestMemberUpdate(RepositoryRuntime runtime) {

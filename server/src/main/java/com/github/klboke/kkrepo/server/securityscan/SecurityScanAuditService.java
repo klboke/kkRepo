@@ -1,5 +1,7 @@
 package com.github.klboke.kkrepo.server.securityscan;
 
+import com.github.klboke.kkrepo.server.security.ClientAddress;
+
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao.AuditLogRecord;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
@@ -36,7 +38,7 @@ public class SecurityScanAuditService {
         actor.userId(),
         actor.realmId(),
         actor.apiKeyId(),
-        request == null ? null : request.getRemoteAddr(),
+        request == null ? null : ClientAddress.from(request),
         request == null ? null : request.getMethod(),
         request == null ? "/internal/security/scanning" : request.getRequestURI(),
         "nexus:security-scanning:" + action.toLowerCase(java.util.Locale.ROOT),

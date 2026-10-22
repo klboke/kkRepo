@@ -173,6 +173,10 @@ class AnsibleGalaxyRepositoryBlackBoxCompatibilityTest {
         candidateDetail.path("artifact").path("sha256").asText(),
         "proxy artifact SHA-256");
 
+    assertEquals(nexusDetail.path("metadata").path("description"),
+        candidateDetail.path("metadata").path("description"),
+        "proxy description whitespace must be preserved");
+
     Exchange nexusArtifact = get(resolve(
         config.nexusRepository(config.proxy()), nexusDetail.path("download_url").asText()),
         config.nexusAuth());

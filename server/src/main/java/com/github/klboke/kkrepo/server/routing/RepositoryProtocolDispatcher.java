@@ -117,7 +117,7 @@ public class RepositoryProtocolDispatcher {
         RepositorySecurityFilter.NORMALIZED_REPOSITORY_PATH_ATTRIBUTE);
     if (normalized instanceof String path) return path;
     String uri = request.getRequestURI();
-    String root = request.getContextPath() + "/repository/" + name;
+    String root = request.getContextPath() + RepositoryUrlPrefix.path(request) + name;
     if (uri.equals(root)) return "";
     String prefix = root + "/";
     return uri.startsWith(prefix) ? uri.substring(prefix.length()) : "";

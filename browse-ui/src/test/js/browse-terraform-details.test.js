@@ -23,6 +23,7 @@ function loadTerraformDetails() {
   assert.notEqual(usageEnd, -1);
   assert.notEqual(terraformEnd, -1);
   const context = vm.createContext({
+    repositoriesCache: [],
     URL,
     currentRepository: () => ({ format: "terraform" }),
     state: { repo: "terraform-hosted" },

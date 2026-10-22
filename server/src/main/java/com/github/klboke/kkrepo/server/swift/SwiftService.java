@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.swift;
 
+import com.github.klboke.kkrepo.server.routing.RepositoryUrlPrefix;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -451,7 +452,7 @@ public class SwiftService {
             ip,
             lease);
         String base = repositoryBaseUrl == null || repositoryBaseUrl.isBlank()
-            ? "/repository/" + runtime.name() + "/"
+            ? RepositoryUrlPrefix.currentPath() + runtime.name() + "/"
             : repositoryBaseUrl;
         String location = releaseUrl(base, release);
         return json(
@@ -1366,7 +1367,7 @@ public class SwiftService {
           null,
           null,
           "PROXY",
-          "/repository/" + runtime.name() + "/"
+          RepositoryUrlPrefix.currentPath() + runtime.name() + "/"
               + coordinates.owner() + "/" + coordinates.repository() + "/" + observed.version(),
           null,
           409,
