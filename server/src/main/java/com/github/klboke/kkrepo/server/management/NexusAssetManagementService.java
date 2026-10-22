@@ -1,6 +1,6 @@
 package com.github.klboke.kkrepo.server.management;
 
-import com.github.klboke.kkrepo.server.routing.RepositoryUrlPrefix;
+import com.github.klboke.kkrepo.server.config.RepositoryUrlPrefix;
 import com.fasterxml.jackson.annotation.JsonAnyGetter;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;

@@ -1,6 +1,6 @@
 package com.github.klboke.kkrepo.server.metrics;
 
-import com.github.klboke.kkrepo.server.routing.RepositoryUrlPrefix;
+import com.github.klboke.kkrepo.server.config.RepositoryUrlPrefix;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.http.UriPathDecoder;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;

@@ -1,6 +1,6 @@
 package com.github.klboke.kkrepo.server.blob;
 
-import com.github.klboke.kkrepo.server.routing.RepositoryUrlPrefix;
+import com.github.klboke.kkrepo.server.config.RepositoryUrlPrefix;
 import com.github.klboke.kkrepo.core.BlobFileRegion;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import jakarta.servlet.RequestDispatcher;

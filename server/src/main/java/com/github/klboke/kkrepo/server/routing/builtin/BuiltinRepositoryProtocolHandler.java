@@ -1,6 +1,6 @@
 package com.github.klboke.kkrepo.server.routing.builtin;
 
-import com.github.klboke.kkrepo.server.routing.RepositoryUrlPrefix;
+import com.github.klboke.kkrepo.server.config.RepositoryUrlPrefix;
 import com.github.klboke.kkrepo.server.security.ClientAddress;
 
 import com.fasterxml.jackson.databind.ObjectMapper;

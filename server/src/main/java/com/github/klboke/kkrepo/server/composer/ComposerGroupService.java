@@ -1,6 +1,6 @@
 package com.github.klboke.kkrepo.server.composer;
 
-import com.github.klboke.kkrepo.server.routing.RepositoryUrlPrefix;
+import com.github.klboke.kkrepo.server.config.RepositoryUrlPrefix;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.protocol.composer.ComposerPackageName;

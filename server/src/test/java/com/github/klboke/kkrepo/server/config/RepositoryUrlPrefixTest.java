@@ -1,4 +1,4 @@
-package com.github.klboke.kkrepo.server.routing;
+package com.github.klboke.kkrepo.server.config;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -10,6 +10,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.github.klboke.kkrepo.server.RepositoryProtocolController;
+import com.github.klboke.kkrepo.server.routing.RepositoryProtocolDispatcher;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;

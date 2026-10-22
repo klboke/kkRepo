@@ -1,4 +1,4 @@
-package com.github.klboke.kkrepo.server.routing;
+package com.github.klboke.kkrepo.server.config;
 
 import jakarta.servlet.ServletContext;
 import jakarta.servlet.http.HttpServletRequest;

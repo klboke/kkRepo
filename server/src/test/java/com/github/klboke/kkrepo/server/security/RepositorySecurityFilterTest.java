@@ -63,7 +63,7 @@ class RepositorySecurityFilterTest {
     var filter = filter(authentication, decisions,
         new FakeRepositoryDao(repository("raw", RepositoryFormat.RAW, RepositoryType.HOSTED)), true);
     var request = new org.springframework.mock.web.MockHttpServletRequest("GET", "/r/raw/file.txt");
-    new com.github.klboke.kkrepo.server.routing.RepositoryUrlPrefix("/r")
+    new com.github.klboke.kkrepo.server.config.RepositoryUrlPrefix("/r")
         .onStartup(request.getServletContext());
     var response = new MockHttpServletResponse();
     var chain = new ChainState();
