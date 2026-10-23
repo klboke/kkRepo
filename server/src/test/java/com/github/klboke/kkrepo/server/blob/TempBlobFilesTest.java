@@ -14,6 +14,8 @@ import com.github.klboke.kkrepo.core.BlobFileRegion;
 import com.github.klboke.kkrepo.core.BlobObjectMetadata;
 import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
+import com.github.klboke.kkrepo.server.config.RepositoryUrlPrefix;
+import jakarta.servlet.RequestDispatcher;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -30,10 +32,58 @@ import java.util.Optional;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.slf4j.LoggerFactory;
+import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 
 class TempBlobFilesTest {
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "'' | /r | /r/r/identifiers | false",
+      "'' | /r | /r/r/identifiers | true",
+      "/app | /r | /app/r/r/identifiers | false",
+      "/app | /r | /app/r/r/identifiers | true",
+      "/r | /r | /r/r/r/identifiers | false",
+      "/app | /repo/content | /app/repo/content/repo/identifiers | true"
+  })
+  void swiftAbortRedactionStartsAtTheConfiguredContextBoundary(
+      String contextPath, String prefix, String uri, boolean errorDispatch) {
+    var request = new MockHttpServletRequest("GET", errorDispatch ? contextPath + "/error" : uri);
+    request.setContextPath(contextPath);
+    new RepositoryUrlPrefix(prefix).onStartup(request.getServletContext());
+    request.setQueryString("url=https%3A%2F%2Ftoken%40example.com%2Fprivate.git%3Faccess_token%3Dsecret");
+    if (errorDispatch) request.setAttribute(RequestDispatcher.ERROR_REQUEST_URI, uri);
+    ListAppender<ILoggingEvent> appender = attachAppender();
+    try {
+      TempBlobFiles.logClientAbort(request, new IOException("Broken pipe"));
+    } finally {
+      detachAppender(appender);
+    }
+    assertEquals(1, appender.list.size());
+    String message = appender.list.getFirst().getFormattedMessage();
+    assertTrue(message.contains("uri=" + uri + "?url=<redacted>"), message);
+    assertFalse(message.contains("token"), message);
+    assertFalse(message.contains("private.git"), message);
+    assertFalse(message.contains("secret"), message);
+  }
+
+  @Test
+  void prefixTextInsideAnUnrelatedPathDoesNotMatchTheSwiftRoute() {
+    var request = new MockHttpServletRequest("GET", "/internal/r/r/identifiers");
+    new RepositoryUrlPrefix("/r").onStartup(request.getServletContext());
+    request.setQueryString("page=2");
+    ListAppender<ILoggingEvent> appender = attachAppender();
+    try {
+      TempBlobFiles.logClientAbort(request, new IOException("Broken pipe"));
+    } finally {
+      detachAppender(appender);
+    }
+    assertTrue(appender.list.getFirst().getFormattedMessage()
+        .contains("uri=/internal/r/r/identifiers?page=2"));
+  }
+
   @AfterEach
   void resetBufferSize() {
     TempBlobFiles.configureResponseBufferSize(TempBlobFiles.DEFAULT_TRANSFER_BUFFER_SIZE);

@@ -221,11 +221,12 @@ public final class TempBlobFiles {
     if (uri == null) {
       return false;
     }
-    int repositorySegment = uri.lastIndexOf(RepositoryUrlPrefix.path(request));
-    if (repositorySegment < 0) {
+    String contextPath = request.getContextPath();
+    String prefix = (contextPath == null ? "" : contextPath) + RepositoryUrlPrefix.path(request);
+    if (!uri.startsWith(prefix)) {
       return false;
     }
-    String repositoryPath = uri.substring(repositorySegment + RepositoryUrlPrefix.path(request).length());
+    String repositoryPath = uri.substring(prefix.length());
     int pathSeparator = repositoryPath.indexOf('/');
     return pathSeparator > 0 && "identifiers".equals(repositoryPath.substring(pathSeparator + 1));
   }
