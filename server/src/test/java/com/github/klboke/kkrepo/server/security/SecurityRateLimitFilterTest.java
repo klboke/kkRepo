@@ -15,6 +15,21 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
 class SecurityRateLimitFilterTest {
+  @Test
+  void spoofedPrefixesCannotResetTheClientRateLimit() throws Exception {
+    SecurityRateLimitFilter filter = filter(
+        1, 1, new InMemorySharedCache(), new ForwardedHeaderPolicy("127.0.0.1"),
+        new SimpleMeterRegistry(), false);
+    CountingChain chain = new CountingChain();
+    MockHttpServletRequest first = request("POST", "/internal/security/login", "127.0.0.1");
+    first.addHeader("X-Forwarded-For", "198.51.100.1, 203.0.113.45");
+    MockHttpServletRequest second = request("POST", "/internal/security/login", "127.0.0.1");
+    second.addHeader("X-Forwarded-For", "198.51.100.2, 203.0.113.45");
+    assertEquals(200, invoke(filter, first, chain).getStatus());
+    assertEquals(429, invoke(filter, second, chain).getStatus());
+    assertEquals(1, chain.calls);
+  }
+
 
   @ParameterizedTest
   @ValueSource(strings = {
@@ -100,7 +115,7 @@ class SecurityRateLimitFilterTest {
   void managementAuthRequiresPresentedCredentialsAndUsesTrustedForwardedAddress() throws Exception {
     InMemorySharedCache cache = new InMemorySharedCache();
     SecurityRateLimitFilter filter = filter(
-        1, 1, cache, new ForwardedHeaderPolicy("127.0.0.1"),
+        1, 1, cache, new ForwardedHeaderPolicy("127.0.0.1,10.0.0.1"),
         new SimpleMeterRegistry(), false);
     CountingChain chain = new CountingChain();
     MockHttpServletRequest first = request(

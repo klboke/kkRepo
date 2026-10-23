@@ -15,6 +15,39 @@ import org.springframework.mock.web.MockHttpServletRequest;
 
 class ForwardedHeaderPolicyTest {
   @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "127.0.0.1 | 198.51.100.1, 203.0.113.45 | 203.0.113.45",
+      "127.0.0.1 | forged, 203.0.113.45 | 203.0.113.45",
+      "127.0.0.1 | 198.51.100.1, 203.0.113.45, 10.0.0.2 | 10.0.0.2",
+      "127.0.0.1,10.0.0.0/24 | 198.51.100.1, 203.0.113.45, 10.0.0.2 | 203.0.113.45",
+      "127.0.0.1,2001:db8:1::/48 | 198.51.100.1, 2001:db8:2::1, 2001:db8:1::9 | 2001:db8:2::1",
+      "127.0.0.1,10.0.0.0/24 | 203.0.113.45, ::ffff:10.0.0.2 | 203.0.113.45",
+      "127.0.0.1,10.0.0.0/24 | 10.0.0.1, 10.0.0.2 | 10.0.0.1",
+      "127.0.0.1 | 203.0.113.45, unknown | 127.0.0.1",
+      "127.0.0.1 | 203.0.113.45, fe80::1%1 | 127.0.0.1",
+      "127.0.0.1 | 203.0.113.45, | 127.0.0.1",
+      "127.0.0.1,10.0.0.0/24 | 203.0.113.45,,10.0.0.2 | 127.0.0.1",
+      "127.0.0.1,10.0.0.0/24 | 203.0.113.45,localhost,10.0.0.2 | 127.0.0.1"
+  })
+  void resolvesTheTrustedEndOfTheForwardedChain(String configuration, String chain, String expected) {
+    var request = request("127.0.0.1");
+    request.addHeader("X-Forwarded-For", chain);
+    assertEquals(expected, new ForwardedHeaderPolicy(configuration).clientAddress(request));
+  }
+
+  @Test
+  void combinesRepeatedHeaderLinesInWireOrder() {
+    var request = request("127.0.0.1");
+    request.addHeader("X-Forwarded-For", "forged, 198.51.100.1");
+    request.addHeader("X-Forwarded-For", "203.0.113.45, 10.0.0.2");
+    assertEquals("203.0.113.45",
+        new ForwardedHeaderPolicy("127.0.0.1,10.0.0.0/24").clientAddress(request));
+    assertEquals("127.0.0.1", new ForwardedHeaderPolicy("").clientAddress(request));
+    request.removeHeader("X-Forwarded-For");
+    assertEquals("127.0.0.1", new ForwardedHeaderPolicy("127.0.0.1").clientAddress(request));
+  }
+
+  @ParameterizedTest
   @NullAndEmptySource
   @ValueSource(strings = {" ", " , , "})
   void emptyConfigurationTrustsNoProxy(String configuration) {

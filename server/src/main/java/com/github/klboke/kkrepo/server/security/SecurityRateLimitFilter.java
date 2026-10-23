@@ -101,11 +101,7 @@ public class SecurityRateLimitFilter extends OncePerRequestFilter {
   }
 
   private static String remoteAddress(HttpServletRequest request, ForwardedHeaderPolicy forwardedHeaderPolicy) {
-    String forwarded = forwardedHeaderPolicy.trusted(request) ? request.getHeader("X-Forwarded-For") : null;
-    if (forwarded != null && !forwarded.isBlank()) {
-      return forwarded.split(",", 2)[0].trim();
-    }
-    return request.getRemoteAddr();
+    return forwardedHeaderPolicy.clientAddress(request);
   }
 
   private record Limit(String type, String key, int maxRequests) {

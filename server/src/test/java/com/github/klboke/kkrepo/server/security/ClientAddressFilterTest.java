@@ -15,8 +15,8 @@ class ClientAddressFilterTest {
   void uploadAndProxyProvenanceUseTrustedClientWithoutChangingTransportPeer() throws Exception {
     MockHttpServletRequest request = new MockHttpServletRequest();
     request.setRemoteAddr("127.0.0.1");
-    request.addHeader("X-Forwarded-For", "203.0.113.45, 10.0.0.2");
-    ForwardedHeaderPolicy policy = new ForwardedHeaderPolicy("127.0.0.1");
+    request.addHeader("X-Forwarded-For", "198.51.100.1, 203.0.113.45, 10.0.0.2");
+    ForwardedHeaderPolicy policy = new ForwardedHeaderPolicy("127.0.0.1,10.0.0.0/24");
     new ClientAddressFilter(policy).doFilter(request, new MockHttpServletResponse(), (req, res) -> {
       RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
       try {

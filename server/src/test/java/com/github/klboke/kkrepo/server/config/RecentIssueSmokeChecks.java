@@ -95,7 +95,7 @@ final class RecentIssueSmokeChecks {
   private static HttpResponse<String> request(String base, String method, String path,
       String body, boolean authenticated) throws Exception {
     var request = HttpRequest.newBuilder(URI.create(base + path)).timeout(Duration.ofSeconds(30))
-        .header("X-Forwarded-For", "203.0.113.45");
+        .header("X-Forwarded-For", "198.51.100.1, 203.0.113.45");
     if (authenticated) request.header("Authorization", "Basic " + Base64.getEncoder().encodeToString(
         "admin:SmokeAdmin1234!".getBytes(StandardCharsets.UTF_8)));
     return HTTP.send(request.method(method, body == null ? HttpRequest.BodyPublishers.noBody()

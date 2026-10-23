@@ -36,7 +36,7 @@ class ManagementAuditFilterTest {
     SecurityAuditDao auditDao = mock(SecurityAuditDao.class);
     MockHttpServletRequest request = new MockHttpServletRequest("POST", "/internal/security/users");
     request.setRemoteAddr(remote);
-    request.addHeader("X-Forwarded-For", "203.0.113.7, 10.0.0.1");
+    request.addHeader("X-Forwarded-For", "198.51.100.99, 203.0.113.7");
 
     filter(auditDao, trustedProxies, false).doFilter(request, new MockHttpServletResponse(), (req, resp) -> {});
 
@@ -53,7 +53,7 @@ class ManagementAuditFilterTest {
         new MockHttpServletRequest("POST", "/kkrepo/internal/security/users");
     request.setContextPath("/kkrepo");
     request.setRemoteAddr("127.0.0.1");
-    request.addHeader("X-Forwarded-For", "203.0.113.7, 10.0.0.1");
+    request.addHeader("X-Forwarded-For", "198.51.100.99, 203.0.113.7");
     request.setAttribute(
         AuthenticatedSubject.REQUEST_ATTRIBUTE,
         new AuthenticatedSubject("api_key", "alice", "local", 33L, null));

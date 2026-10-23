@@ -1,5 +1,7 @@
 package com.github.klboke.kkrepo.server.docker;
 
+import org.springframework.mock.web.MockHttpServletResponse;
+import com.github.klboke.kkrepo.server.security.ClientAddressFilter;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -43,6 +45,30 @@ import org.springframework.test.web.servlet.RequestBuilder;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 class DockerRegistryControllerTest {
+  @Test
+  void completedBlobUploadPersistsVerifiedClientProvenance() throws Exception {
+    RepositoryRuntime runtime = hosted("docker-hosted", null);
+    DockerHostedService hosted = mock(DockerHostedService.class);
+    DockerDigest digest = DockerDigest.parse("sha256:" + "a".repeat(64));
+    when(hosted.completeUpload(eq(runtime), eq("upload-1"), any(), eq(3L), eq(null),
+        eq(digest), anyString(), eq("203.0.113.45")))
+        .thenReturn(new DockerUploadService.CompleteResult(digest, 3L));
+    DockerRegistryController controller = controller(runtime, hosted);
+    var request = new MockHttpServletRequest(
+        "PUT", "/v2/docker-hosted/library/alpine/blobs/uploads/upload-1");
+    request.setContent(new byte[] {1, 2, 3});
+    request.setRemoteAddr("127.0.0.1");
+    request.addHeader("X-Forwarded-For", "198.51.100.1, 203.0.113.45");
+    new ClientAddressFilter(new ForwardedHeaderPolicy("127.0.0.1"))
+        .doFilter(request, new MockHttpServletResponse(), (req, res) -> {
+          var response = controller.put(request, digest.value(), null, "application/octet-stream", null);
+          assertEquals(HttpStatus.CREATED, response.getStatusCode());
+          assertEquals(digest.value(), response.getHeaders().getFirst(DockerConstants.CONTENT_DIGEST_HEADER));
+        });
+    verify(hosted).completeUpload(eq(runtime), eq("upload-1"), any(), eq(3L), eq(null),
+        eq(digest), anyString(), eq("203.0.113.45"));
+  }
+
 
   @Test
   void malformedRepositoryNameReturnsDockerProtocolError() {

@@ -47,29 +47,43 @@ public class ForwardedHeaderPolicy {
     try {
       // Only the immediate peer establishes trust; never resolve request data through DNS.
       InetAddress address = InetAddress.ofLiteral(remote.trim());
-      if (trustedProxies.contains(address.getHostAddress())) {
-        return true;
-      }
-      byte[] bytes = address.getAddress();
-      return trustedNetworks.stream().anyMatch(network -> network.matches(bytes));
+      return trusted(address);
     } catch (IllegalArgumentException ignored) {
       return false;
     }
   }
 
-  /** Resolve audit provenance only after the immediate peer has established proxy trust. */
+  private boolean trusted(InetAddress address) {
+    if (trustedProxies.contains(address.getHostAddress())) return true;
+    byte[] bytes = address.getAddress();
+    return trustedNetworks.stream().anyMatch(network -> network.matches(bytes));
+  }
+
+  /** Walk from the trusted peer to the first untrusted hop, ignoring client-supplied prefixes. */
   public String clientAddress(HttpServletRequest request) {
     String remote = request.getRemoteAddr();
     if (!trusted(request)) return remote;
-    String forwarded = firstHeader(request, "X-Forwarded-For", null);
-    if (forwarded == null || forwarded.isBlank() || forwarded.contains("%")) return remote;
-    try {
-      // Validate literals without DNS. Keep the reported spelling for existing audit consumers.
-      InetAddress.ofLiteral(forwarded);
-      return forwarded;
-    } catch (IllegalArgumentException invalid) {
-      return remote;
+    var headers = request.getHeaders("X-Forwarded-For");
+    if (headers == null) return remote;
+    List<String> chain = new ArrayList<>();
+    while (headers.hasMoreElements()) {
+      // Multiple field lines form one ordered chain. Preserve empty elements to reject broken hops.
+      chain.addAll(List.of(headers.nextElement().split(",", -1)));
     }
+    String client = remote;
+    for (int i = chain.size() - 1; i >= 0; i--) {
+      String hop = chain.get(i).trim();
+      if (hop.isEmpty() || hop.contains("%")) return remote;
+      try {
+        // Validate literals without DNS. Stop before parsing any untrusted prefix.
+        InetAddress address = InetAddress.ofLiteral(hop);
+        client = hop;
+        if (!trusted(address)) return client;
+      } catch (IllegalArgumentException invalid) {
+        return remote;
+      }
+    }
+    return client;
   }
 
   public String serverBaseUrl(HttpServletRequest request) {

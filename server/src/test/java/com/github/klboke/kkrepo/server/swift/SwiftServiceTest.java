@@ -1,5 +1,11 @@
 package com.github.klboke.kkrepo.server.swift;
 
+import org.springframework.web.context.request.ServletRequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
+import com.github.klboke.kkrepo.server.config.RepositoryUrlPrefix;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.ParameterizedTest;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -1363,8 +1369,9 @@ class SwiftServiceTest {
         false));
   }
 
-  @Test
-  void hostedPublishStoresArchiveManifestAndMetadataAsOneImmutableRelease() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void hostedPublishStoresArchiveManifestAndMetadataAsOneImmutableRelease(boolean componentUpload) throws Exception {
     Fixture fixture = fixture();
     Path source = Files.createTempFile("swift-service-test-", ".zip");
     Files.write(source, new byte[] {1, 2, 3});
@@ -1403,7 +1410,22 @@ class SwiftServiceTest {
             + "\"ssh://git@github.com/Org/Repo.git\","
             + "\"https://github.com:8443/Org/Repo.git\"]}")
             .getBytes(StandardCharsets.UTF_8));
-    MavenResponse response = fixture.service.publish(
+    MavenResponse response;
+    if (componentUpload) {
+      var request = new MockHttpServletRequest();
+      new RepositoryUrlPrefix("/r")
+          .onStartup(request.getServletContext());
+      RequestContextHolder.setRequestAttributes(
+          new ServletRequestAttributes(request));
+      try {
+        response = fixture.service.publishUpload(fixture.runtime, "Acme", "Demo", "1.2.3",
+            archive.getInputStream(), new String(metadata.getInputStream().readAllBytes(), StandardCharsets.UTF_8),
+            null, null, null, null, "alice", "192.0.2.10");
+      } finally {
+        RequestContextHolder.resetRequestAttributes();
+      }
+    } else {
+      response = fixture.service.publish(
         fixture.runtime,
         "Acme/Demo/1.2.3",
         null,
@@ -1413,10 +1435,12 @@ class SwiftServiceTest {
         SwiftMediaTypes.VENDOR_JSON,
         "alice",
         "192.0.2.10");
+    }
 
     assertEquals(201, response.status());
     assertEquals("1", response.headers().get("Content-Version"));
-    assertEquals("https://repo.example/repository/swift/Acme/Demo/1.2.3",
+    assertEquals(componentUpload ? "/r/swift/Acme/Demo/1.2.3"
+        : "https://repo.example/repository/swift/Acme/Demo/1.2.3",
         response.headers().get("Location"));
     assertFalse(Files.exists(source), "the buffered upload must be deleted after persistence");
     verify(lease).assertHeld();
