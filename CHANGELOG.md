@@ -4,6 +4,18 @@ All notable public changes to kkrepo are documented in this file.
 
 This project follows a pragmatic release process. Stable releases call out migration impact, compatibility changes, operational notes, and any known behavior changes in their release section.
 
+## 1.3.4 - 2026-10-23
+
+### Security
+
+- Harden post-login, logout, and OIDC return-target validation across the server and UI. Alternate URL separators, control characters, protocol-relative targets, and absolute URLs can no longer redirect users outside the kkRepo origin. Upgrade every JVM and Native replica to `1.3.4` to address GHSA-vvvm-fx67-445x.
+- Escape Browse asset download URLs and restrict inline scripts through Content Security Policy. Crafted raw repository paths can no longer inject executable markup when an asset detail is viewed. Upgrade every JVM and Native replica to `1.3.4` to address GHSA-fxj4-cwgv-rcqp.
+
+### Upgrade Notes
+
+- Upgrading from `1.3.3` adds no database migrations; MySQL and PostgreSQL remain at Flyway V59. Back up the relational database and blob store together before upgrading all replicas.
+- Quickstart defaults, Dockerfile packaging, deployment documentation, Helm application version, runtime checks, and the optional scanner profile now use `1.3.4`.
+
 ## 1.3.3 - 2026-10-22
 
 ### Fixed

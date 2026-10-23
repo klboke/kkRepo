@@ -186,10 +186,10 @@ fi
 KKREPO_RUNTIME="${KKREPO_RUNTIME:-jvm}"
 case "$KKREPO_RUNTIME" in
   jvm)
-    DEFAULT_IMAGE_TAG="1.3.3"
+    DEFAULT_IMAGE_TAG="1.3.4"
     ;;
   native)
-    DEFAULT_IMAGE_TAG="1.3.3-native"
+    DEFAULT_IMAGE_TAG="1.3.4-native"
     ;;
   *)
     fail "KKREPO_RUNTIME must be jvm or native, got: $KKREPO_RUNTIME"
