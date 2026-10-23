@@ -173,4 +173,18 @@ public class DockerRegistryDaoAdapter implements DockerRegistryDao {
   public void upsertTag(DockerTagRecord arg0) {
     throw new UnsupportedOperationException();
   }
+  @Override
+  public boolean lockEmptyRepositoryForMigrationCleanup(long repositoryId) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public List<Long> lockMigratedManifestAssetsForCleanup(long repositoryId, int limit) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public List<Long> lockEmptyMigratedComponentsForCleanup(long repositoryId, int limit) {
+    throw new UnsupportedOperationException();
+  }
 }

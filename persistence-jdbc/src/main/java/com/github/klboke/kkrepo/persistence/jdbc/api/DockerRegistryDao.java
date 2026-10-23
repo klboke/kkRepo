@@ -138,6 +138,15 @@ public interface DockerRegistryDao {
   Optional<DockerManifestRecord> findBrowseManifestByReferencePath(
       long repositoryId, String path);
 
+  /** Lock an empty Docker registry against concurrent manifest insertion on all replicas. */
+  boolean lockEmptyRepositoryForMigrationCleanup(long repositoryId);
+
+  /** Caller holds the empty-repository lock; returned rows are locked, busy rows are skipped. */
+  List<Long> lockMigratedManifestAssetsForCleanup(long repositoryId, int limit);
+
+  /** Caller holds the empty-repository lock; only empty, migrated Docker components are eligible. */
+  List<Long> lockEmptyMigratedComponentsForCleanup(long repositoryId, int limit);
+
   record DeletedManifest(int deleted, Long assetId, Long assetBlobId) {
     public static DeletedManifest notFound() {
       return new DeletedManifest(0, null, null);

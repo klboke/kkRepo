@@ -20,6 +20,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.docker.DockerConnectorRuntime;
+import com.github.klboke.kkrepo.server.docker.DockerMigrationMetadataCleanup;
 import com.github.klboke.kkrepo.server.helm.HelmGroupIndexCache;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
@@ -106,8 +107,15 @@ public class RepositoryService {
   private AlpineRegistryDao alpineRegistry;
   private RRegistryDao rRegistry;
   private HuggingFaceRegistryDao huggingFaceRegistry;
+  private DockerMigrationMetadataCleanup dockerMigrationCleanup;
   private CleanupPolicyDao cleanupPolicies;
   private RepositoryIndexRebuildDao indexRebuildDao;
+
+  @Autowired
+  void setDockerMigrationCleanup(
+      DockerMigrationMetadataCleanup dockerMigrationCleanup) {
+    this.dockerMigrationCleanup = dockerMigrationCleanup;
+  }
 
   @Autowired
   void setIndexRebuildDao(RepositoryIndexRebuildDao indexRebuildDao) {
@@ -577,6 +585,10 @@ public class RepositoryService {
       throw new RepositoryValidationException(
           "Repository '" + name + "' is referenced by a cleanup policy or active cleanup run. "
               + "Remove it from cleanup policies and wait for active runs to finish.");
+    }
+    if (existing.format() == RepositoryFormat.DOCKER && dockerMigrationCleanup != null
+        && repositoryDao.hasComponents(existing.id())) {
+      dockerMigrationCleanup.cleanupBeforeRepositoryDeletion(existing.id());
     }
     if (repositoryDao.hasComponents(existing.id())) {
       throw new RepositoryValidationException(

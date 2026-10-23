@@ -624,6 +624,57 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
         .orElseGet(OptionalLong::empty);
   }
 
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public boolean lockEmptyRepositoryForMigrationCleanup(long repositoryId) {
+    // Avoid taking an exclusive repository lock on the common populated-registry path.
+    if (!jdbcTemplate.queryForList(
+        "SELECT id FROM docker_manifest WHERE repository_id = ? LIMIT 1",
+        Long.class, repositoryId).isEmpty()) return false;
+    // The parent row lock conflicts with the FK locks taken by manifest inserts, including on
+    // other replicas. Skip a busy repository rather than interfering with an upload/migration.
+    if (jdbcTemplate.queryForList("""
+        SELECT id FROM repository WHERE id = ? AND format = 'docker'
+        FOR UPDATE SKIP LOCKED
+        """, Long.class, repositoryId).isEmpty()) return false;
+    // Locking reads also see current committed state under MySQL's REPEATABLE READ.
+    if (!jdbcTemplate.queryForList("""
+        SELECT id FROM docker_manifest WHERE repository_id = ? LIMIT 1 FOR UPDATE
+        """, Long.class, repositoryId).isEmpty()) return false;
+    return jdbcTemplate.queryForList("""
+        SELECT id FROM repository_data_migration_repository
+        WHERE target_repository_id = ? AND status <> 'finished'
+        LIMIT 1 FOR UPDATE
+        """, Long.class, repositoryId).isEmpty();
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public List<Long> lockMigratedManifestAssetsForCleanup(long repositoryId, int limit) {
+    return jdbcTemplate.queryForList("""
+        SELECT a.id FROM asset a
+        WHERE a.repository_id = ? AND a.format = 'docker' AND a.kind = 'MANIFEST'
+          AND %s = 'nexus-repository-data-migration'
+          AND %s IS NOT NULL
+        ORDER BY a.id LIMIT ? FOR UPDATE SKIP LOCKED
+        """.formatted(jsonColumns.extractText("a.attributes_json", "source"),
+            jsonColumns.extractText("a.attributes_json", "docker", "imageName")),
+        Long.class, repositoryId, Math.max(1, limit));
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public List<Long> lockEmptyMigratedComponentsForCleanup(long repositoryId, int limit) {
+    return jdbcTemplate.queryForList("""
+        SELECT c.id FROM component c
+        WHERE c.repository_id = ? AND c.format = 'docker'
+          AND %s = 'nexus-repository-data-migration'
+          AND NOT EXISTS (SELECT 1 FROM asset a WHERE a.component_id = c.id)
+        ORDER BY c.id LIMIT ? FOR UPDATE SKIP LOCKED
+        """.formatted(jsonColumns.extractText("c.attributes_json", "source")),
+        Long.class, repositoryId, Math.max(1, limit));
+  }
+
   public List<CleanupPolicyRecord> listCleanupPolicies(long repositoryId) {
     return jdbcTemplate.query("""
         SELECT p.id, p.name, p.criteria_json

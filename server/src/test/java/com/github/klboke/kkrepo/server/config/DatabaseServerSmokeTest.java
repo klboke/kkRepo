@@ -386,6 +386,10 @@ class DatabaseServerSmokeTest {
           new String(body.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
     }
 
+    // Artifact timestamps use the app clock; cleanup cutoffs use the database clock. Make the
+    // fixture unambiguously old instead of relying on sub-second host/container clock agreement.
+    first.getBean(JdbcTemplate.class).update("UPDATE asset SET last_updated_at = ? WHERE repository_id = ?",
+        java.sql.Timestamp.from(java.time.Instant.now().minusSeconds(3600)), hosted.id());
     CleanupPolicyService firstCleanup = first.getBean(CleanupPolicyService.class);
     var cleanupPolicy = firstCleanup.create(new PolicyCommand(
         "server-smoke-cleanup",
@@ -483,6 +487,29 @@ class DatabaseServerSmokeTest {
     assertEquals("admin", audit.items().getFirst().actorUserId());
 
     DockerBrowseDeleteSmokeChecks.exercise(first, second);
+    com.github.klboke.kkrepo.server.migration.DockerMigrationCleanupSmokeChecks.exercise(
+        first, second, dockerMigrationDatabase(first), dockerMigrationDatabase(second));
+  }
+
+  private static com.github.klboke.kkrepo.server.migration.DockerMigrationCleanupSmokeChecks.Database
+      dockerMigrationDatabase(ConfigurableApplicationContext context) {
+    JdbcTemplate jdbc = context.getBean(JdbcTemplate.class);
+    return new com.github.klboke.kkrepo.server.migration.DockerMigrationCleanupSmokeChecks.Database() {
+      @Override
+      public int update(String sql, Object... arguments) {
+        return jdbc.update(sql, arguments);
+      }
+
+      @Override
+      public <T> T queryForObject(String sql, Class<T> type, Object... arguments) {
+        return jdbc.queryForObject(sql, type, arguments);
+      }
+
+      @Override
+      public <T> List<T> queryForList(String sql, Class<T> type, Object... arguments) {
+        return jdbc.queryForList(sql, type, arguments);
+      }
+    };
   }
 
   private static CleanupRunService.RunView awaitCleanupRun(
