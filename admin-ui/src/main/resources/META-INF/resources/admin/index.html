@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-4">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20261009-gitlfs-2">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20260818-user-round-1">
-    <link rel="stylesheet" href="./assets/admin.css?v=20260923-scan-task-assets-2">
+    <link rel="stylesheet" href="./assets/admin.css?v=20261024-current-findings-1">
     <link rel="stylesheet" href="/browse/assets/account-menu.css?v=20260824-ui-themes-3">
     <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=20260819-topbar-control-height-1">
     <link rel="stylesheet" href="/login/assets/delete-confirmation.css?v=20261013-delete-confirmation-1">
@@ -1623,6 +1623,10 @@
               </label>
               <button class="create-button secondary" type="submit">Search</button>
               <button class="create-button secondary" data-security-scan-clear="findings" type="button">Clear</button>
+              <label class="security-scan-current-filter" title="Only findings from scans applicable to current artifact content. Uncheck to include historical findings.">
+                <input id="security-scan-current-findings" type="checkbox" checked>
+                <span>Current findings</span>
+              </label>
             </form>
             <div class="nx-table-frame">
               <table class="nx-table">
@@ -1984,12 +1988,12 @@
     <script src="/login/assets/csrf-fetch.js?v=20261006-shared-primitives-1"></script>
     <script src="/login/assets/account-menu.js?v=20261006-shared-primitives-1"></script>
     <script src="/login/assets/safe-return-to.js?v=20261023-safe-return-to-1"></script>
-    <script src="/login/assets/ui-i18n.js?v=20261013-delete-confirmation-1"></script>
+    <script src="/login/assets/ui-i18n.js?v=20261024-current-findings-1"></script>
     <script src="/login/assets/delete-confirmation.js?v=20261013-delete-confirmation-1"></script>
     <script src="/login/assets/product-update.js?v=20260819-version-update-1"></script>
     <script src="./assets/admin-filter.js?v=20260706-wildcard-filter-1"></script>
     <script src="/browse/assets/global-component-search.js?v=20260817-global-search-2"></script>
     <script src="./assets/content-selectors.js?v=20261013-delete-confirmation-1"></script>
-    <script src="./assets/admin.js?v=20261023-safe-return-to-1"></script>
+    <script src="./assets/admin.js?v=20261024-current-findings-1"></script>
   </body>
 </html>

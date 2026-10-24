@@ -253,19 +253,11 @@ final class JdbcSecurityScanSummaryDao {
         nullableTimestamp(summaryAt));
     Map<String, Object> findings = jdbc.queryForMap(scope.repositoryScopeCte() + """
         , current_run AS (
-          SELECT DISTINCT state.latest_scan_run_id AS scan_run_id
-          FROM asset_security_state state
-          JOIN security_scan_candidate candidate
-            ON candidate.asset_id = state.asset_id
-           AND candidate.content_generation = state.content_generation
-          JOIN security_scan_run_subject subject
-            ON subject.scan_run_id = state.latest_scan_run_id
-           AND subject.asset_id = state.asset_id
-           AND subject.profile_id = state.profile_id
-           AND subject.content_generation = state.content_generation
+          SELECT DISTINCT subject.scan_run_id
+          FROM security_scan_run_subject subject
           JOIN visible_repository visible
             ON visible.repository_id = subject.repository_id
-          WHERE state.latest_scan_run_id IS NOT NULL
+          WHERE %s
         )
         SELECT
           COALESCE(SUM(CASE WHEN finding.severity = 'CRITICAL' THEN 1 ELSE 0 END), 0)
@@ -276,7 +268,7 @@ final class JdbcSecurityScanSummaryDao {
         JOIN security_scan_finding finding
           ON finding.scan_run_id = current_run.scan_run_id
         WHERE finding.severity IN ('CRITICAL', 'HIGH')
-        """, repositoryScope);
+        """.formatted(scope.currentFindingSubjectPredicate("subject")), repositoryScope);
     return new ScanSummary(
         candidates,
         number(tasks, "pending_tasks"),

@@ -90,6 +90,46 @@ class SecurityScanManagementServiceWaiverTest {
   }
 
   @Test
+  void currentFindingsUseCurrentSubjectsForArtifactsAndWaiverCoverage() {
+    Instant now = Instant.now();
+    var subject = new ScanRunSubject(7L, 11L, 23L, 3L, 1L, now);
+    var hidden = new ScanRunSubject(7L, 12L, 24L, 3L, 1L, now);
+    when(repositories.list()).thenReturn(List.of(repository(11L, "visible")));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.allow());
+    when(scans.listFindingsByRepositories(List.of(11L), null, Severity.HIGH, "app", 0L, 2, true))
+        .thenReturn(List.of(finding(41L, 7L), finding(42L, 7L)));
+    when(scans.listRunSubjects(7L, 0L, 0L, 1000, true)).thenReturn(List.of(subject, hidden));
+    when(scans.countCurrentRunSubjects(7L, List.of(11L), true)).thenReturn(1L);
+    when(scans.listCurrentRunSubjects(7L, List.of(11L), 0L, 0L, 3, true)).thenReturn(List.of(subject));
+    when(assets.findAssetsByIds(List.of(23L))).thenReturn(Map.of(23L, asset(23L, 11L, "app.jar")));
+    when(scans.listWaiversForFindings(any(), any(), any(), any(), anyLong(), anyInt()))
+        .thenReturn(List.of());
+    var page = service.findingPage(actor, null, null, Severity.HIGH, " app ", 0L, 1, true);
+    assertEquals(41L, page.nextAfter());
+    assertEquals(1, page.items().size());
+    assertEquals(1, page.items().getFirst().waiverTargetCount());
+    assertEquals(1, page.items().getFirst().affectedArtifactCount());
+    assertEquals("visible", page.items().getFirst().affectedArtifacts().getFirst().repository());
+    verify(scans, never()).listRunSubjects(anyLong(), anyLong(), anyLong(), anyInt());
+    when(scans.findFinding(41L)).thenReturn(Optional.of(finding(41L, 7L)));
+    when(scans.listRepositoryIdsForRun(7L)).thenReturn(List.of(11L));
+    when(scans.listCurrentRunSubjects(7L, List.of(11L), 0L, 0L, 2, true)).thenReturn(List.of(subject));
+    assertEquals(23L, service.findingArtifacts(actor, 41L, 0L, 0L, 1, true).items().getFirst().assetId());
+    when(repositories.findById(11L)).thenReturn(Optional.of(repository(11L, "visible")));
+    when(assets.findAssetById(23L)).thenReturn(Optional.of(asset(23L, 11L, "app.jar")));
+    when(security.decide(actor.permissionSubject(), "nexus:security-scanning:read"))
+        .thenReturn(AccessDecision.allow());
+    assertEquals(1, service.findingWaiverContext(actor, 41L, true).targetCount());
+    assertEquals(0, service.findingWaivers(actor, 41L, true).activeWaiverCount());
+    verify(scans, never()).listRunSubjects(anyLong(), anyLong(), anyLong(), anyInt());
+    when(scans.listFindings(11L, null, Severity.HIGH, "app", 41L, 2, true)).thenReturn(List.of());
+    assertEquals(List.of(), service.findingPage(actor, 11L, null, Severity.HIGH, "app", 41L, 1, true).items());
+    assertThrows(ResponseStatusException.class,
+        () -> service.findingPage(actor, 12L, null, null, null, 0L, 1, true));
+  }
+
+  @Test
   void findingWaiverContextExposesNamedAssociatedArtifactsWithoutInternalInput() {
     ScanFinding finding = finding(41L, 7L);
     RepositoryRecord repository = repository(11L, "maven-hosted");

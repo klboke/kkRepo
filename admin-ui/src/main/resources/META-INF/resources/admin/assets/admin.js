@@ -110,6 +110,7 @@ let securityScanPages = Object.fromEntries(
       page: 0,
       size: SECURITY_SCAN_DEFAULT_PAGE_SIZE,
       query: "",
+      currentOnly: key === "findings",
       direction: "desc",
       requestVersion: 0,
       nextAfter: null
@@ -5852,6 +5853,7 @@ function securityScanPageParams(key) {
   }
   params.set("limit", String(page.size || SECURITY_SCAN_DEFAULT_PAGE_SIZE));
   if (page.query) params.set("q", page.query);
+  if (key === "findings") params.set("currentOnly", String(page.currentOnly));
   return params;
 }
 
@@ -5965,6 +5967,13 @@ async function sortSecurityScanPage(key, direction) {
   });
   resetSecurityScanPage(key);
   await loadSecurityScanList(key);
+}
+
+async function filterCurrentSecurityScanFindings(currentOnly) {
+  securityScanPages.findings.currentOnly = currentOnly;
+  hideSecurityScanFindingDetail();
+  resetSecurityScanPage("findings");
+  await loadSecurityScanList("findings");
 }
 
 async function resizeSecurityScanPage(key, size) {
@@ -6445,7 +6454,7 @@ async function showSecurityScanWaiverDetail(findingId) {
   openFormModal("security-scan-waiver-detail", "security-scan-close-waiver-detail-button");
   try {
     const response = await fetch(
-      `/internal/security/scanning/findings/${encodeURIComponent(findingId)}/waivers`,
+      `/internal/security/scanning/findings/${encodeURIComponent(findingId)}/waivers?currentOnly=${securityScanPages.findings.currentOnly}`,
       { cache: "no-store" });
     if (!response.ok) throw new Error(await responseErrorMessage(response));
     renderSecurityScanWaiverDetail(await response.json());
@@ -6528,6 +6537,7 @@ async function loadSecurityScanFindingArtifacts(findingId, reset = false) {
       || Number(securityScanFindingArtifactDetail.findingId) !== Number(findingId)) {
     securityScanFindingArtifactDetail = {
       findingId: Number(findingId),
+      currentOnly: securityScanPages.findings.currentOnly,
       items: [],
       nextRepositoryId: 0,
       nextAssetId: 0,
@@ -6539,6 +6549,7 @@ async function loadSecurityScanFindingArtifacts(findingId, reset = false) {
   state.loading = true;
   renderSecurityScanFindingArtifactItems();
   const params = new URLSearchParams({
+    currentOnly: String(state.currentOnly),
     afterRepositoryId: String(state.nextRepositoryId),
     afterAssetId: String(state.nextAssetId),
     limit: "25"
@@ -6632,7 +6643,7 @@ async function showCreateSecurityScanWaiverForm(findingId) {
   securityScanWaiverContext = null;
   try {
     const response = await fetch(
-      `/internal/security/scanning/findings/${encodeURIComponent(findingId)}/waiver-context`,
+      `/internal/security/scanning/findings/${encodeURIComponent(findingId)}/waiver-context?currentOnly=${securityScanPages.findings.currentOnly}`,
       { cache: "no-store" });
     if (!response.ok) throw new Error(await responseErrorMessage(response));
     const context = await response.json();
@@ -8507,6 +8518,11 @@ document.querySelectorAll("[data-security-scan-page-action]").forEach((button) =
       button.dataset.securityScanPageList,
       button.dataset.securityScanPageAction));
 });
+document.getElementById("security-scan-current-findings").addEventListener("change", (event) => {
+  filterCurrentSecurityScanFindings(event.target.checked)
+    .catch((error) => showToast(error.message, "error"));
+});
+
 ["tasks", "runs"].forEach((key) => {
   document.querySelectorAll(`[data-${key}-sort]`).forEach((button) => {
     button.addEventListener("click", () => sortSecurityScanPage(

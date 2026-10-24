@@ -207,6 +207,8 @@
     "Manifest size limit (bytes)": "Manifest 字节数上限",
     "Maximum entries in a manifest.": "Manifest 清单的条目数上限。",
     "Maximum manifest text size in bytes, not the package archive size.": "Manifest 清单文本的字节数上限，不是压缩包体积。",
+    "Current findings": "当前漏洞结果",
+    "Only findings from scans applicable to current artifact content. Uncheck to include historical findings.": "仅显示适用于当前制品内容的扫描结果，取消勾选可包含历史漏洞结果。",
     "Current source": "当前生效来源",
     "Source after saving": "保存后生效来源",
     "Server default": "服务端默认配置",

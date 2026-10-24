@@ -124,9 +124,10 @@ public class SecurityScanManagementController {
       @RequestParam(name = "q", required = false) String query,
       @RequestParam(name = "after", defaultValue = "0") long after,
       @RequestParam(name = "limit", defaultValue = "25") int limit,
+      @RequestParam(name = "currentOnly", defaultValue = "false") boolean currentOnly,
       HttpServletRequest request) {
     return service.findingPage(
-        actor(request), repositoryId, runId, severity, query, after, limit);
+        actor(request), repositoryId, runId, severity, query, after, limit, currentOnly);
   }
 
   @GetMapping("/findings/{findingId}/artifacts")
@@ -135,21 +136,26 @@ public class SecurityScanManagementController {
       @RequestParam(name = "afterRepositoryId", defaultValue = "0") long afterRepositoryId,
       @RequestParam(name = "afterAssetId", defaultValue = "0") long afterAssetId,
       @RequestParam(name = "limit", defaultValue = "25") int limit,
+      @RequestParam(name = "currentOnly", defaultValue = "false") boolean currentOnly,
       HttpServletRequest request) {
     return service.findingArtifacts(
-        actor(request), findingId, afterRepositoryId, afterAssetId, limit);
+        actor(request), findingId, afterRepositoryId, afterAssetId, limit, currentOnly);
   }
 
   @GetMapping("/findings/{findingId}/waiver-context")
   public FindingWaiverContext findingWaiverContext(
-      @PathVariable("findingId") long findingId, HttpServletRequest request) {
-    return service.findingWaiverContext(actor(request), findingId);
+      @PathVariable("findingId") long findingId,
+      @RequestParam(name = "currentOnly", defaultValue = "false") boolean currentOnly,
+      HttpServletRequest request) {
+    return service.findingWaiverContext(actor(request), findingId, currentOnly);
   }
 
   @GetMapping("/findings/{findingId}/waivers")
   public FindingWaiverDetail findingWaivers(
-      @PathVariable("findingId") long findingId, HttpServletRequest request) {
-    return service.findingWaivers(actor(request), findingId);
+      @PathVariable("findingId") long findingId,
+      @RequestParam(name = "currentOnly", defaultValue = "false") boolean currentOnly,
+      HttpServletRequest request) {
+    return service.findingWaivers(actor(request), findingId, currentOnly);
   }
 
   @GetMapping("/assets/{assetId}")
