@@ -279,6 +279,10 @@ public interface SecurityScanDao {
   List<ScanRunSubject> listRunSubjects(
       long scanRunId, long afterRepositoryId, long afterAssetId, int maxItems);
 
+  /** When currentOnly is true, also requires the overview current-run predicate. */
+  List<ScanRunSubject> listRunSubjects(
+      long scanRunId, long afterRepositoryId, long afterAssetId, int maxItems, boolean currentOnly);
+
   /**
    * Lists run subjects whose recorded content generation still matches the current asset
    * candidate. This prevents historical findings from being presented as remediation targets
@@ -300,8 +304,20 @@ public interface SecurityScanDao {
       long afterAssetId,
       int maxItems);
 
+  /** When currentOnly is true, also requires the overview current-run predicate. */
+  List<ScanRunSubject> listCurrentRunSubjects(
+      long scanRunId,
+      List<Long> repositoryIds,
+      long afterRepositoryId,
+      long afterAssetId,
+      int maxItems,
+      boolean currentOnly);
+
   /** Counts current run subjects within visible, currently valid repository contexts. */
   long countCurrentRunSubjects(long scanRunId, List<Long> repositoryIds);
+
+  /** When currentOnly is true, also requires the overview current-run predicate. */
+  long countCurrentRunSubjects(long scanRunId, List<Long> repositoryIds, boolean currentOnly);
 
   boolean runSubjectExists(long scanRunId, long repositoryId, long assetId);
 
@@ -330,6 +346,16 @@ public interface SecurityScanDao {
       long afterId,
       int maxItems);
 
+  /** When currentOnly is true, also requires the overview current-run predicate. */
+  List<ScanFinding> listFindings(
+      Long repositoryId,
+      Long scanRunId,
+      Severity severity,
+      String query,
+      long afterId,
+      int maxItems,
+      boolean currentOnly);
+
   List<ScanFinding> listFindingsByRepositories(
       List<Long> repositoryIds,
       Long scanRunId,
@@ -337,6 +363,16 @@ public interface SecurityScanDao {
       String query,
       long afterId,
       int maxItems);
+
+  /** When currentOnly is true, also requires the overview current-run predicate. */
+  List<ScanFinding> listFindingsByRepositories(
+      List<Long> repositoryIds,
+      Long scanRunId,
+      Severity severity,
+      String query,
+      long afterId,
+      int maxItems,
+      boolean currentOnly);
 
   Optional<AssetSecurityState> findAssetState(long assetId, long profileId);
 

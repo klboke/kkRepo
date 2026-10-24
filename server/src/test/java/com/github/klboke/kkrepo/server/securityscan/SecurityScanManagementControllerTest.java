@@ -28,6 +28,55 @@ import org.springframework.web.server.ResponseStatusException;
 
 class SecurityScanManagementControllerTest {
   @Test
+  void currentFindingsHttpDefaultsAndExplicitFilterPreserveOtherParameters() throws Exception {
+    var service = mock(SecurityScanManagementService.class);
+    var actor = mock(AuthenticatedSubject.class);
+    var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(
+        new SecurityScanManagementController(service, mock(SecurityScanMutationService.class))).build();
+    for (String value : List.of("", "false", "true")) {
+      boolean currentOnly = value.equals("true");
+      var request = org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+          .get("/internal/security/scanning/findings")
+          .param("repositoryId", "9").param("runId", "10").param("severity", "HIGH")
+          .param("q", "app").param("after", "11").param("limit", "12")
+          .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE, actor);
+      if (!value.isEmpty()) request.param("currentOnly", value);
+      when(service.findingPage(actor, 9L, 10L, Severity.HIGH, "app", 11L, 12, currentOnly))
+          .thenReturn(new CursorPage<>(List.of(), null));
+      var result = mvc.perform(request)
+          .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+          .andReturn();
+      assertEquals(true, new com.fasterxml.jackson.databind.ObjectMapper()
+          .readTree(result.getResponse().getContentAsString()).path("items").isArray());
+      verify(service, org.mockito.Mockito.atLeastOnce())
+          .findingPage(actor, 9L, 10L, Severity.HIGH, "app", 11L, 12, currentOnly);
+      var artifacts = org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+          .get("/internal/security/scanning/findings/41/artifacts")
+          .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE, actor);
+      if (!value.isEmpty()) artifacts.param("currentOnly", value);
+      when(service.findingArtifacts(actor, 41L, 0L, 0L, 25, currentOnly))
+          .thenReturn(new FindingArtifactPage(List.of(), null, null));
+      mvc.perform(artifacts)
+          .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+      verify(service, org.mockito.Mockito.atLeastOnce()).findingArtifacts(actor, 41L, 0L, 0L, 25, currentOnly);
+      for (String endpoint : List.of("waivers", "waiver-context")) {
+        var waiverRequest = org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+            .get("/internal/security/scanning/findings/41/" + endpoint)
+            .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE, actor);
+        if (!value.isEmpty()) waiverRequest.param("currentOnly", value);
+        mvc.perform(waiverRequest)
+            .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+      }
+      verify(service, org.mockito.Mockito.atLeastOnce()).findingWaivers(actor, 41L, currentOnly);
+      verify(service, org.mockito.Mockito.atLeastOnce()).findingWaiverContext(actor, 41L, currentOnly);
+    }
+    mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+            .get("/internal/security/scanning/findings").param("currentOnly", "invalid")
+            .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE, actor))
+        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest());
+  }
+
+  @Test
   void deletionConflictsExposeActionableJsonThroughHttp() throws Exception {
     var mutations = mock(SecurityScanMutationService.class);
     var actor = mock(AuthenticatedSubject.class);
@@ -145,9 +194,9 @@ class SecurityScanManagementControllerTest {
         .thenReturn(new CursorPage<>(List.of(), null));
     when(service.runPage(actor, 6L, "run", 7L, 8, null, null, null))
         .thenReturn(new CursorPage<>(List.of(), null));
-    when(service.findingPage(actor, 9L, 10L, Severity.HIGH, "finding", 11L, 12))
+    when(service.findingPage(actor, 9L, 10L, Severity.HIGH, "finding", 11L, 12, false))
         .thenReturn(new CursorPage<>(List.of(), null));
-    when(service.findingArtifacts(actor, 24L, 25L, 26L, 27))
+    when(service.findingArtifacts(actor, 24L, 25L, 26L, 27, false))
         .thenReturn(new FindingArtifactPage(List.of(), null, null));
     when(service.policyOptionPage(actor, 12L, 13L, 14))
         .thenReturn(new CursorPage<>(List.of(), null));
@@ -192,11 +241,11 @@ class SecurityScanManagementControllerTest {
     assertEquals(List.of(), controller.runs(6L, "run", 7L, 8, null, null, null, request).items());
     assertEquals(
         List.of(),
-        controller.findings(9L, 10L, Severity.HIGH, "finding", 11L, 12, request).items());
+        controller.findings(9L, 10L, Severity.HIGH, "finding", 11L, 12, false, request).items());
     assertEquals(
-        List.of(), controller.findingArtifacts(24L, 25L, 26L, 27, request).items());
-    controller.findingWaiverContext(24L, request);
-    controller.findingWaivers(24L, request);
+        List.of(), controller.findingArtifacts(24L, 25L, 26L, 27, false, request).items());
+    controller.findingWaiverContext(24L, false, request);
+    controller.findingWaivers(24L, false, request);
     controller.asset(25L, request);
     assertEquals(180L, controller.rescan(18L, request).get("taskId"));
     assertEquals("PENDING", controller.retry(26L, request).get("status"));

@@ -2463,6 +2463,12 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Override
   public List<ScanRunSubject> listRunSubjects(
       long scanRunId, long afterRepositoryId, long afterAssetId, int maxItems) {
+    return listRunSubjects(scanRunId, afterRepositoryId, afterAssetId, maxItems, false);
+  }
+
+  @Override
+  public List<ScanRunSubject> listRunSubjects(
+      long scanRunId, long afterRepositoryId, long afterAssetId, int maxItems, boolean currentOnly) {
     return jdbc.query("""
         SELECT
           scan_run_id,
@@ -2471,8 +2477,9 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
           MIN(profile_id) AS profile_id,
           MIN(content_generation) AS content_generation,
           MIN(associated_at) AS associated_at
-        FROM security_scan_run_subject
+        FROM security_scan_run_subject subject
         WHERE scan_run_id = ?
+          %s
           AND (
             repository_id > ?
             OR (repository_id = ? AND asset_id > ?)
@@ -2480,7 +2487,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         GROUP BY scan_run_id, repository_id, asset_id
         ORDER BY repository_id, asset_id
         LIMIT ?
-        """,
+        """.formatted(currentOnly
+            ? " AND " + repositoryScope.currentFindingSubjectPredicate("subject") : ""),
         (rs, rowNum) -> new ScanRunSubject(
             rs.getLong("scan_run_id"),
             rs.getLong("repository_id"),
@@ -2543,6 +2551,18 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       long afterRepositoryId,
       long afterAssetId,
       int maxItems) {
+    return listCurrentRunSubjects(
+        scanRunId, repositoryIds, afterRepositoryId, afterAssetId, maxItems, false);
+  }
+
+  @Override
+  public List<ScanRunSubject> listCurrentRunSubjects(
+      long scanRunId,
+      List<Long> repositoryIds,
+      long afterRepositoryId,
+      long afterAssetId,
+      int maxItems,
+      boolean currentOnly) {
     List<Long> ids = repositoryScope.distinctLongs(repositoryIds);
     if (ids.isEmpty()) return List.of();
     return jdbc.query(currentRunSubjectScopeCte() + """
@@ -2564,6 +2584,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
           ON scope.context_repository_id = subject.repository_id
          AND scope.source_repository_id = live_asset.repository_id
         WHERE subject.scan_run_id = ?
+          %s
           AND (
             subject.repository_id > ?
             OR (subject.repository_id = ? AND subject.asset_id > ?)
@@ -2571,7 +2592,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         GROUP BY subject.scan_run_id, subject.repository_id, subject.asset_id
         ORDER BY subject.repository_id, subject.asset_id
         LIMIT ?
-        """,
+        """.formatted(currentOnly
+            ? " AND " + repositoryScope.currentFindingSubjectPredicate("subject") : ""),
         (rs, rowNum) -> new ScanRunSubject(
             rs.getLong("scan_run_id"),
             rs.getLong("repository_id"),
@@ -2589,6 +2611,11 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
 
   @Override
   public long countCurrentRunSubjects(long scanRunId, List<Long> repositoryIds) {
+    return countCurrentRunSubjects(scanRunId, repositoryIds, false);
+  }
+
+  @Override
+  public long countCurrentRunSubjects(long scanRunId, List<Long> repositoryIds, boolean currentOnly) {
     List<Long> ids = repositoryScope.distinctLongs(repositoryIds);
     if (ids.isEmpty()) return 0;
     Long count = jdbc.queryForObject(currentRunSubjectScopeCte() + """
@@ -2606,9 +2633,12 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
             ON scope.context_repository_id = subject.repository_id
            AND scope.source_repository_id = live_asset.repository_id
           WHERE subject.scan_run_id = ?
+            %s
           GROUP BY subject.repository_id, subject.asset_id
         ) current_subject
-        """, Long.class, repositoryScope.parameter(ids), scanRunId);
+        """.formatted(currentOnly
+            ? " AND " + repositoryScope.currentFindingSubjectPredicate("subject") : ""),
+        Long.class, repositoryScope.parameter(ids), scanRunId);
     return count == null ? 0 : count;
   }
 
@@ -2726,8 +2756,20 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       String query,
       long afterId,
       int maxItems) {
+    return listFindings(repositoryId, scanRunId, severity, query, afterId, maxItems, false);
+  }
+
+  @Override
+  public List<ScanFinding> listFindings(
+      Long repositoryId,
+      Long scanRunId,
+      Severity severity,
+      String query,
+      long afterId,
+      int maxItems,
+      boolean currentOnly) {
     return listFindings(
-        repositoryId, null, scanRunId, severity, query, afterId, maxItems);
+        repositoryId, null, scanRunId, severity, query, afterId, maxItems, currentOnly);
   }
 
   @Override
@@ -2738,9 +2780,22 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       String query,
       long afterId,
       int maxItems) {
+    return listFindingsByRepositories(
+        repositoryIds, scanRunId, severity, query, afterId, maxItems, false);
+  }
+
+  @Override
+  public List<ScanFinding> listFindingsByRepositories(
+      List<Long> repositoryIds,
+      Long scanRunId,
+      Severity severity,
+      String query,
+      long afterId,
+      int maxItems,
+      boolean currentOnly) {
     List<Long> ids = repositoryScope.distinctLongs(repositoryIds);
     if (ids.isEmpty()) return List.of();
-    return listFindings(null, ids, scanRunId, severity, query, afterId, maxItems);
+    return listFindings(null, ids, scanRunId, severity, query, afterId, maxItems, currentOnly);
   }
 
   private List<ScanFinding> listFindings(
@@ -2750,7 +2805,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       Severity severity,
       String query,
       long afterId,
-      int maxItems) {
+      int maxItems,
+      boolean currentOnly) {
     StringBuilder sql = new StringBuilder();
     List<Object> args = new ArrayList<>();
     if (repositoryIds != null) {
@@ -2768,8 +2824,10 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
            AND EXISTS (
              SELECT 1 FROM security_scan_run_subject s
              WHERE s.scan_run_id = f.scan_run_id AND s.repository_id = ?
+               %s
            )
-          """);
+          """.formatted(currentOnly
+              ? " AND " + repositoryScope.currentFindingSubjectPredicate("s") : ""));
       args.add(repositoryId);
     } else if (repositoryIds != null) {
       sql.append("""
@@ -2779,8 +2837,14 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
              JOIN visible_repository visible
                ON visible.repository_id = s.repository_id
              WHERE s.scan_run_id = f.scan_run_id
+               %s
            )
-          """);
+          """.formatted(currentOnly
+              ? " AND " + repositoryScope.currentFindingSubjectPredicate("s") : ""));
+    } else if (currentOnly) {
+      sql.append(" AND EXISTS (SELECT 1 FROM security_scan_run_subject s"
+          + " WHERE s.scan_run_id = f.scan_run_id AND "
+          + repositoryScope.currentFindingSubjectPredicate("s") + ")");
     }
     if (scanRunId != null) {
       sql.append(" AND f.scan_run_id = ?");

@@ -362,6 +362,18 @@ public class SecurityScanManagementService {
       String query,
       long afterId,
       int requestedLimit) {
+    return findingPage(actor, repositoryId, runId, severity, query, afterId, requestedLimit, false);
+  }
+
+  public CursorPage<FindingView> findingPage(
+      AuthenticatedSubject actor,
+      Long repositoryId,
+      Long runId,
+      Severity severity,
+      String query,
+      long afterId,
+      int requestedLimit,
+      boolean currentOnly) {
     if (runId != null) requireVisibleRun(actor, runId);
     List<RepositoryRecord> repositoryRows = repositories.list();
     Map<Long, RepositoryRecord> repositoriesById = new LinkedHashMap<>();
@@ -376,7 +388,10 @@ public class SecurityScanManagementService {
     int safeLimit = limit(requestedLimit);
     List<ScanFinding> candidates;
     if (repositoryId == null) {
-      candidates = scans.listFindingsByRepositories(
+      candidates = currentOnly ? scans.listFindingsByRepositories(
+          visibleRepositoryNames.keySet().stream().toList(),
+          runId, severity, normalizedQuery, afterId, safeLimit + 1, true)
+          : scans.listFindingsByRepositories(
           visibleRepositoryNames.keySet().stream().toList(),
           runId,
           severity,
@@ -387,7 +402,9 @@ public class SecurityScanManagementService {
       if (!visibleRepositoryNames.containsKey(repositoryId)) {
         throw notFound("Repository not found");
       }
-      candidates = scans.listFindings(
+      candidates = currentOnly ? scans.listFindings(
+          repositoryId, runId, severity, normalizedQuery, afterId, safeLimit + 1, true)
+          : scans.listFindings(
           repositoryId, runId, severity, normalizedQuery, afterId, safeLimit + 1);
     }
     CursorPage<ScanFinding> rawPage =
@@ -405,7 +422,7 @@ public class SecurityScanManagementService {
       accumulators.put(finding.id(), new FindingAccumulator());
     }
     findingsByRun.forEach((scanRunId, runFindings) ->
-        forEachRunSubject(scanRunId, subject -> {
+        forEachRunSubject(scanRunId, currentOnly, subject -> {
           if (!visibleRepositoryIds.contains(subject.repositoryId())) {
             return;
           }
@@ -417,14 +434,14 @@ public class SecurityScanManagementService {
     Map<Long, FindingArtifactSummary> artifactSummariesByRun = new LinkedHashMap<>();
     findingsByRun.keySet().forEach(scanRunId -> artifactSummariesByRun.put(
         scanRunId,
-        findingArtifactSummary(scanRunId, visibleRepositoryNames, repositoriesById)));
+        findingArtifactSummary(scanRunId, visibleRepositoryNames, repositoriesById, currentOnly)));
     forEachWaiverPageForFindings(rawPage.items(), waiverPage -> {
       Map<Long, PageWaiverMatches> pageMatches = new LinkedHashMap<>();
       rawPage.items().forEach(
           finding -> pageMatches.put(finding.id(), new PageWaiverMatches()));
       findingsByRun.forEach((scanRunId, runFindings) -> {
         int[] visibleSubjectIndex = {0};
-        forEachRunSubject(scanRunId, subject -> {
+        forEachRunSubject(scanRunId, currentOnly, subject -> {
           if (!visibleRepositoryIds.contains(subject.repositoryId())) {
             return;
           }
@@ -460,6 +477,16 @@ public class SecurityScanManagementService {
       long afterRepositoryId,
       long afterAssetId,
       int requestedLimit) {
+    return findingArtifacts(actor, findingId, afterRepositoryId, afterAssetId, requestedLimit, false);
+  }
+
+  public FindingArtifactPage findingArtifacts(
+      AuthenticatedSubject actor,
+      long findingId,
+      long afterRepositoryId,
+      long afterAssetId,
+      int requestedLimit,
+      boolean currentOnly) {
     ScanFinding finding = scans.findFinding(findingId)
         .orElseThrow(() -> notFound("Security scan finding not found"));
     List<RepositoryRecord> repositoryRows = repositories.list();
@@ -478,7 +505,10 @@ public class SecurityScanManagementService {
     }
 
     int safeLimit = limit(requestedLimit);
-    List<ScanRunSubject> subjects = scans.listCurrentRunSubjects(
+    List<ScanRunSubject> subjects = currentOnly ? scans.listCurrentRunSubjects(
+        finding.scanRunId(), visibleRepositoryNames.keySet().stream().toList(),
+        Math.max(0, afterRepositoryId), Math.max(0, afterAssetId), safeLimit + 1, true)
+        : scans.listCurrentRunSubjects(
         finding.scanRunId(),
         visibleRepositoryNames.keySet().stream().toList(),
         Math.max(0, afterRepositoryId),
@@ -500,11 +530,16 @@ public class SecurityScanManagementService {
   private FindingArtifactSummary findingArtifactSummary(
       long scanRunId,
       Map<Long, String> visibleRepositoryNames,
-      Map<Long, RepositoryRecord> repositoriesById) {
+      Map<Long, RepositoryRecord> repositoriesById,
+      boolean currentOnly) {
     List<Long> visibleRepositoryIds = visibleRepositoryNames.keySet().stream().toList();
-    long totalCount = scans.countCurrentRunSubjects(scanRunId, visibleRepositoryIds);
+    long totalCount = currentOnly
+        ? scans.countCurrentRunSubjects(scanRunId, visibleRepositoryIds, true)
+        : scans.countCurrentRunSubjects(scanRunId, visibleRepositoryIds);
     if (totalCount == 0) return new FindingArtifactSummary(List.of(), 0);
-    List<ScanRunSubject> previewSubjects = scans.listCurrentRunSubjects(
+    List<ScanRunSubject> previewSubjects = currentOnly ? scans.listCurrentRunSubjects(
+        scanRunId, visibleRepositoryIds, 0, 0, FINDING_ARTIFACT_PREVIEW_LIMIT, true)
+        : scans.listCurrentRunSubjects(
         scanRunId, visibleRepositoryIds, 0, 0, FINDING_ARTIFACT_PREVIEW_LIMIT);
     return new FindingArtifactSummary(
         findingArtifactViews(
@@ -605,6 +640,11 @@ public class SecurityScanManagementService {
 
   public FindingWaiverContext findingWaiverContext(
       AuthenticatedSubject actor, long findingId) {
+    return findingWaiverContext(actor, findingId, false);
+  }
+
+  public FindingWaiverContext findingWaiverContext(
+      AuthenticatedSubject actor, long findingId, boolean currentOnly) {
     requireWaiverPermission(actor, "create");
     ScanFinding finding = scans.findFinding(findingId)
         .orElseThrow(() -> notFound("Security scan finding not found"));
@@ -612,7 +652,7 @@ public class SecurityScanManagementService {
     List<ScanRunSubject> targetSubjects = new ArrayList<>();
     List<WaiverTargetView> candidateTargets = new ArrayList<>();
     Set<String> seen = new LinkedHashSet<>();
-    forEachRunSubject(finding.scanRunId(), subject -> {
+    forEachRunSubject(finding.scanRunId(), currentOnly, subject -> {
       RepositoryRecord repository = repositories.findById(subject.repositoryId()).orElse(null);
       AssetRecord asset = assets.findAssetById(subject.assetId()).orElse(null);
       if (repository == null
@@ -666,12 +706,17 @@ public class SecurityScanManagementService {
 
   public FindingWaiverDetail findingWaivers(
       AuthenticatedSubject actor, long findingId) {
+    return findingWaivers(actor, findingId, false);
+  }
+
+  public FindingWaiverDetail findingWaivers(
+      AuthenticatedSubject actor, long findingId, boolean currentOnly) {
     requireGlobalRead(actor);
     ScanFinding finding = scans.findFinding(findingId)
         .orElseThrow(() -> notFound("Security scan finding not found"));
     Set<Long> visibleRepositoryIds = visibleRepositoryIds(actor);
     boolean[] visibleSubject = {false};
-    forEachRunSubject(finding.scanRunId(), subject -> {
+    forEachRunSubject(finding.scanRunId(), currentOnly, subject -> {
       if (visibleRepositoryIds.contains(subject.repositoryId())) {
         visibleSubject[0] = true;
       }
@@ -681,7 +726,7 @@ public class SecurityScanManagementService {
     List<WaiverView> waivers = new ArrayList<>();
     forEachWaiverPageForFindings(List.of(finding), waiverPage -> {
       Set<Long> matchingPageIds = new LinkedHashSet<>();
-      forEachRunSubject(finding.scanRunId(), subject -> {
+      forEachRunSubject(finding.scanRunId(), currentOnly, subject -> {
         if (!visibleRepositoryIds.contains(subject.repositoryId())) {
           return;
         }
@@ -761,12 +806,14 @@ public class SecurityScanManagementService {
         .anyMatch(waiver -> SecurityScanWaiverMatcher.matchesFinding(waiver, finding));
   }
 
-  private void forEachRunSubject(long scanRunId, Consumer<ScanRunSubject> consumer) {
+  private void forEachRunSubject(
+      long scanRunId, boolean currentOnly, Consumer<ScanRunSubject> consumer) {
     long afterRepositoryId = 0;
     long afterAssetId = 0;
     while (true) {
       List<ScanRunSubject> page =
-          scans.listRunSubjects(scanRunId, afterRepositoryId, afterAssetId, 1000);
+          currentOnly ? scans.listRunSubjects(scanRunId, afterRepositoryId, afterAssetId, 1000, true)
+              : scans.listRunSubjects(scanRunId, afterRepositoryId, afterAssetId, 1000);
       if (page.isEmpty()) {
         return;
       }

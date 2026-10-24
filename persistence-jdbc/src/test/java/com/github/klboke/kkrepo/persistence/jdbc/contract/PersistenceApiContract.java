@@ -3794,6 +3794,124 @@ public abstract class PersistenceApiContract {
   }
 
   @Test
+  void securityScanningFiltersCurrentFindingsBeforePaginationWithinVisibleSubjects() {
+    SecurityScanDao scans = stores().securityScanning();
+    long repositoryId = createRepository("current-findings", RepositoryFormat.MAVEN2);
+    long hiddenId = createRepository("current-hidden", RepositoryFormat.MAVEN2);
+    long groupId = createRepository("current-group", RepositoryFormat.MAVEN2, RepositoryType.GROUP);
+    stores().repositories().addMember(groupId, repositoryId, 0);
+    long blobStoreId = stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
+    Instant now = Instant.parse("2026-10-24T12:00:00Z");
+    long blobId = stores().assets().insertBlob(blob(blobStoreId, "current/artifact", "current-artifact"));
+    List<Long> assets = new ArrayList<>();
+    for (long repo : List.of(repositoryId, repositoryId, hiddenId)) {
+      String path = "current/artifact-" + assets.size() + ".jar";
+      long assetId = stores().assets().insertAsset(new AssetRecord(
+          null, repo, null, blobId, RepositoryFormat.MAVEN2, path,
+          PersistenceHashes.pathHash(path), "artifact.jar", "ARTIFACT",
+          "application/java-archive", 42L, null, now, Map.of()));
+      scans.recordArtifactContentChange(assetId);
+      assets.add(assetId);
+    }
+    var profile = scans.createProfile(new SecurityScanDao.ScanProfile(
+        null, "current-findings", true, "syft", "grype", List.of("vuln"), Map.of(),
+        1048576, 1000, 10485760, 1048576, 2, 60, OciPlatformPolicy.REQUIRED_SET,
+        List.of(), "438a".repeat(16), 1, now, now));
+    var snapshot = scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+        null, "contract-adapter", "v1", "grype", "1", "current-db",
+        now, "438b".repeat(16), "438c".repeat(16), now, true, Map.of()));
+    long documentId = stores().assets().insertBlob(blob(blobStoreId, "current/sbom", "current-sbom"));
+    var sbom = scans.insertSbomOrFindExisting(new SecurityScanDao.Sbom(
+        null, SubjectKind.ASSET_BLOB, "sha256:" + "438d".repeat(16), null,
+        "syft", "1", "438e".repeat(16), "438f".repeat(16), documentId,
+        "4380".repeat(16), "CycloneDX", "1.6", 1, 0, true, now));
+    List<Long> runs = new ArrayList<>();
+    List<Long> findings = new ArrayList<>();
+    for (int i = 0; i < 3; i++) {
+      long task = scans.createTask(new SecurityScanDao.TaskDraft(
+          repositoryId, null, SubjectKind.ASSET_BLOB, "current-subject-" + i, 1,
+          profile.id(), 1, snapshot.id(), ScanStage.CATALOG_AND_MATCH, RequestReason.MANUAL,
+          0, 5, "contract", null, null, now));
+      String fingerprint = String.format("%064x", 43800 + i);
+      // Deliberately reverse completion order: current is a published pointer, not MAX(time).
+      Instant completed = now.plusSeconds(3 - i);
+      var run = scans.insertRunOrFindExisting(new SecurityScanDao.ScanRun(
+          null, task, sbom.id(), snapshot.id(), fingerprint, fingerprint,
+          ScanState.COMPLETE, ScanCompleteness.COMPLETE, documentId, fingerprint,
+          1, 1, 0, 1, 0, 0, 0, Severity.HIGH, now, completed, completed));
+      runs.add(run.id());
+      scans.insertFindings(run.id(), List.of(new SecurityScanDao.ScanFinding(
+          null, run.id(), "CVE-current|app", null, "CVE-current", List.of(), "fixture",
+          "pkg:maven/app@1", "app", "1", List.of("2"), Severity.HIGH, "fixture",
+          null, null, "current fixture", null, null, List.of(), "active", now)));
+      findings.add(scans.listFindings(null, run.id(), null, 0, 10).getFirst().id());
+    }
+    long asset = assets.get(0), other = assets.get(1), hidden = assets.get(2);
+    for (long run : runs) {
+      scans.associateRun(run, repositoryId, asset, profile.id(), 1, now);
+      scans.associateRun(run, groupId, asset, profile.id(), 1, now);
+    }
+    scans.associateRun(runs.get(1), repositoryId, other, profile.id(), 1, now);
+    scans.associateRun(runs.get(0), hiddenId, hidden, profile.id(), 1, now);
+    publishCurrentFindingState(scans, asset, profile.id(), runs.get(2), ScanState.RUNNING, now);
+    publishCurrentFindingState(scans, other, profile.id(), runs.get(1), ScanState.PARTIAL, now);
+    publishCurrentFindingState(scans, hidden, profile.id(), runs.get(0), ScanState.COMPLETE, now);
+    List<Long> visible = List.of(repositoryId, groupId);
+    assertEquals(3, scans.listFindingsByRepositories(visible, null, null, null, 0, 10).size());
+    assertEquals(2, scans.summary(visible).highFindings());
+    assertEquals(List.of(findings.get(1), findings.get(2)),
+        scans.listFindingsByRepositories(visible, null, Severity.HIGH, "CVE-current", 0, 10, true)
+            .stream().map(SecurityScanDao.ScanFinding::id).toList());
+    assertEquals(findings.get(1), scans.listFindingsByRepositories(
+        visible, null, Severity.HIGH, "app", 0, 1, true).getFirst().id(),
+        "the historical first row must be excluded before LIMIT");
+    assertEquals(findings.get(2), scans.listFindingsByRepositories(
+        visible, null, Severity.HIGH, "app", findings.get(1), 1, true).getFirst().id());
+    assertTrue(scans.listFindingsByRepositories(
+        visible, null, null, null, findings.get(2), 1, true).isEmpty());
+    assertTrue(scans.listFindings(repositoryId, runs.get(0), null, null, 0, 10, true).isEmpty(),
+        "a hidden current subject must not admit a visible historical association");
+    assertEquals(1, scans.listFindings(hiddenId, runs.get(0), null, null, 0, 10, true).size());
+    assertEquals(1, scans.listFindings(groupId, null, null, "current-group", 0, 10, true).size());
+    assertEquals(1, scans.summary(List.of(groupId)).highFindings());
+    assertTrue(scans.listFindingsByRepositories(List.of(), null, null, null, 0, 10, true).isEmpty());
+    assertTrue(scans.listFindings(repositoryId, null, Severity.CRITICAL, null, 0, 10, true).isEmpty());
+    assertTrue(scans.listFindings(repositoryId, null, null, "no-match", 0, 10, true).isEmpty());
+    assertEquals(List.of(other), scans.listRunSubjects(runs.get(1), 0, 0, 10, true)
+        .stream().map(SecurityScanDao.ScanRunSubject::assetId).toList());
+    assertEquals(3, scans.countCurrentRunSubjects(runs.get(1), visible));
+    assertEquals(1, scans.countCurrentRunSubjects(runs.get(1), visible, true));
+    assertEquals(List.of(other), scans.listCurrentRunSubjects(runs.get(1), visible, 0, 0, 1, true)
+        .stream().map(SecurityScanDao.ScanRunSubject::assetId).toList());
+    assertTrue(scans.listCurrentRunSubjects(runs.get(1), visible, repositoryId, other, 1, true).isEmpty());
+
+    // Supersede the remaining visible association without changing its content generation.
+    publishCurrentFindingState(scans, other, profile.id(), runs.get(2), ScanState.COMPLETE, now.plusSeconds(10));
+    assertTrue(scans.listFindings(repositoryId, runs.get(1), null, null, 0, 10, true).isEmpty());
+    assertEquals(0, scans.countCurrentRunSubjects(runs.get(1), visible, true));
+    assertEquals(1, scans.listFindings(repositoryId, runs.get(1), null, null, 0, 10).size());
+    // A state pointer alone does not suffice: its profile/generation must match a run subject.
+    scans.associateRun(runs.get(2), repositoryId, other, profile.id(), 2, now);
+    assertEquals(1, scans.countCurrentRunSubjects(runs.get(2), List.of(repositoryId), true));
+
+    long replacement = stores().assets().insertBlob(blob(blobStoreId, "current/replaced", "current-replaced"));
+    stores().assets().updateAssetBlobBinding(asset, replacement, "application/java-archive", 42, now.plusSeconds(20));
+    scans.recordArtifactContentChange(asset);
+    assertEquals(2, scans.findCandidate(asset).orElseThrow().contentGeneration());
+    assertEquals(0, scans.summary(visible).highFindings());
+    assertTrue(scans.listFindingsByRepositories(visible, null, null, null, 0, 10, true).isEmpty());
+    assertEquals(3, scans.listFindingsByRepositories(visible, null, null, null, 0, 10).size());
+  }
+
+  private void publishCurrentFindingState(
+      SecurityScanDao scans, long assetId, long profileId, long runId, ScanState state, Instant now) {
+    scans.upsertAssetStateIfCurrent(new SecurityScanDao.AssetSecurityState(
+        assetId, profileId, 1, PersistenceHashes.sha256("current-subject"), runId,
+        state, ScanCompleteness.COMPLETE, true, Severity.HIGH, Map.of("high", 1),
+        null, null, PolicyDecision.ALLOW, "fixture", null, now, 0));
+  }
+
+  @Test
   void securityScanningSortsCompletionPagesAcrossTiesNullsAndRepositoryScopes() {
     SecurityScanDao scans = stores().securityScanning();
     long repositoryId = createRepository("scan-completion-order", RepositoryFormat.MAVEN2);

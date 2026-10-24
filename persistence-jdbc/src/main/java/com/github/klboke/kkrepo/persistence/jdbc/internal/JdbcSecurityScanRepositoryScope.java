@@ -35,6 +35,27 @@ final class JdbcSecurityScanRepositoryScope {
         """.formatted(jsonDialect.selectLongsFromArray("repository_id"));
   }
 
+  /**
+   * Shared definition of a current finding association for overview and finding queries.
+   * The alias is an internal SQL identifier, never request input. Do not restrict scan_state:
+   * the published latest run remains authoritative while a same-content rescan is pending.
+   */
+  String currentFindingSubjectPredicate(String subject) {
+    return """
+        EXISTS (
+          SELECT 1
+          FROM asset_security_state current_state
+          JOIN security_scan_candidate current_candidate
+            ON current_candidate.asset_id = current_state.asset_id
+           AND current_candidate.content_generation = current_state.content_generation
+          WHERE current_state.asset_id = %1$s.asset_id
+            AND current_state.profile_id = %1$s.profile_id
+            AND current_state.content_generation = %1$s.content_generation
+            AND current_state.latest_scan_run_id = %1$s.scan_run_id
+        )
+        """.formatted(subject);
+  }
+
   String recursiveRepositoryScopeCte() {
     return """
         WITH RECURSIVE visible_repository AS (
