@@ -44,6 +44,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class DockerAuthService {
   public static final String TOKEN_SUBJECT_ATTRIBUTE = DockerAuthService.class.getName() + ".TOKEN_SUBJECT";
   public static final String SCANNER_SUBJECT_SOURCE = "security-scanner";
+  static final String ANONYMOUS_SUBJECT_SOURCE = "docker-anonymous";
   public static final long SCANNER_PULL_TOKEN_GRACE_SECONDS = 120L;
   static final long MAX_SCANNER_PULL_TOKEN_TTL_SECONDS =
       ScannerContract.MAX_REQUEST_TIMEOUT_SECONDS + SCANNER_PULL_TOKEN_GRACE_SECONDS;
@@ -75,11 +76,20 @@ public class DockerAuthService {
 
   @Transactional
   public TokenView grant(HttpServletRequest request, String service, List<String> scopes) {
-    AuthenticatedSubject subject = authenticationService.authenticate(request)
-        .or(authenticationService::authenticateAnonymous)
+    Optional<AuthenticatedSubject> authenticated = authenticationService.authenticate(request);
+    AuthenticatedSubject subject = authenticated.or(() -> authenticationService.hasPresentedCredentials(request)
+            ? Optional.empty() : authenticationService.authenticateAnonymous())
         .orElseThrow(() -> new DockerProtocolException(DockerErrorCode.UNAUTHORIZED, "authentication required"));
     List<Scope> granted = new ArrayList<>();
     for (Scope scope : parseScopes(scopes, connectorRepositoryOrNull(request))) {
+      if (scope.repository().isEmpty() && scope.actions().equals(List.of("catalog"))) {
+        // registry:catalog:* names no kkRepo repository. It is a protocol scope, not a
+        // repository-wide permission grant: DockerAuthFilter checks current READ rights on
+        // the concrete target for every request (including old tokens after role changes).
+        // Checking a wildcard repository here would incorrectly reject single-repo readers.
+        granted.add(scope);
+        continue;
+      }
       Set<String> actions = new LinkedHashSet<>();
       for (String action : scope.actions()) {
         if (actionAllowed(subject.permissionSubject(), scope.repository(), scope.imageName(), action)) {
@@ -94,7 +104,7 @@ public class DockerAuthService {
     Instant expiresAt = Instant.now().plusSeconds(tokenTtlSeconds);
     tokenDao.insert(
         sha256(token),
-        subject.source(),
+        authenticated.isEmpty() ? ANONYMOUS_SUBJECT_SOURCE : subject.source(),
         subject.userId(),
         subject.realmId(),
         subject.apiKeyId(),
@@ -314,6 +324,14 @@ public class DockerAuthService {
   }
 
   private Optional<AuthenticatedSubject> restoreSubject(DockerAuthTokenDao.TokenRecord row) {
+    if (ANONYMOUS_SUBJECT_SOURCE.equals(row.subjectSource())) {
+      // Preserve anonymous identity: restoring it as a login would add the default
+      // authenticated role. The shared config must still enable this exact identity.
+      // Older replicas do not recognize this source and fail closed during rolling upgrades.
+      return authenticationService.authenticateAnonymousFresh()
+          .filter(subject -> subject.userId().equals(row.subjectUserId())
+              && java.util.Objects.equals(subject.realmId(), row.subjectRealmId()));
+    }
     if (row.tokenKind() == TokenKind.SECURITY_SCANNER) {
       PermissionSubject permissionSubject =
           new PermissionSubject(SCANNER_SUBJECT_SOURCE, "scanner", Set.of(), row.tokenHash());
@@ -470,7 +488,6 @@ public class DockerAuthService {
       case "pull" -> List.of(PermissionAction.READ);
       case "push" -> List.of(PermissionAction.ADD, PermissionAction.EDIT);
       case "delete" -> List.of(PermissionAction.DELETE);
-      case "catalog" -> List.of(PermissionAction.ADMIN);
       default -> List.of();
     };
   }

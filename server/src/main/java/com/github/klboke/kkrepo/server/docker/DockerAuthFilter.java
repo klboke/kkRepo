@@ -98,7 +98,9 @@ public class DockerAuthFilter extends OncePerRequestFilter {
     if (subject.isEmpty()) {
       subject = authenticationService.authenticate(request);
     }
-    if (subject.isEmpty() && "pull".equals(action)) {
+    if (subject.isEmpty()
+        && ("pull".equals(action) || "catalog".equals(action))
+        && !authenticationService.hasPresentedCredentials(request)) {
       subject = authenticationService.authenticateAnonymous();
     }
     if (subject.isEmpty()) {
@@ -145,7 +147,7 @@ public class DockerAuthFilter extends OncePerRequestFilter {
     response.setHeader(DockerConstants.API_VERSION_HEADER, DockerConstants.API_VERSION);
     response.setHeader(HttpHeaders.WWW_AUTHENTICATE,
         authService.challenge(tokenRealm(request), service(request)));
-    response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "authentication required");
+    unauthorized(response);
   }
 
   private void challenge(
@@ -164,7 +166,15 @@ public class DockerAuthFilter extends OncePerRequestFilter {
           authService.challenge(
               tokenRealm(request), service(request), challengeRepository, challengeImageName, actions));
     }
-    response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "authentication required");
+    unauthorized(response);
+  }
+
+  private static void unauthorized(HttpServletResponse response) throws IOException {
+    // Filter failures do not reach DockerErrorAdvice. Avoid container HTML error dispatches.
+    response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+    response.setContentType("application/json");
+    response.getWriter().write(
+        "{\"errors\":[{\"code\":\"UNAUTHORIZED\",\"message\":\"authentication required\"}]}");
   }
 
   private DockerTarget target(HttpServletRequest request) {
@@ -223,7 +233,7 @@ public class DockerAuthFilter extends OncePerRequestFilter {
   private static PermissionAction permissionFor(String action) {
     return switch (action) {
       case "pull" -> PermissionAction.READ;
-      case "catalog" -> PermissionAction.ADMIN;
+      case "catalog" -> PermissionAction.READ;
       case "delete" -> PermissionAction.DELETE;
       default -> null;
     };

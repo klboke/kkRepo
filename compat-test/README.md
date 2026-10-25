@@ -968,3 +968,17 @@ the Nexus 3.94 `go-hosted` repository, requires a `FULL` datastore-backed migrat
 its assets, checks the module ZIP digest, and runs `go mod download` against both kkrepo replicas.
 The migration workflow enables this fixture only for its Nexus 3.94 H2/PostgreSQL lanes because Go
 hosted repositories were introduced in Nexus 3.93.
+
+### Docker catalog read authorization
+
+`python3 compat-test/scripts/docker-catalog-auth.py --nexus http://localhost:28090 --kkrepo http://localhost:18090`
+checks administrator, repository-specific read, wildcard read, Bearer and anonymous catalog access,
+plus denial on another repository. kkRepo assertions also cover permission revocation on an issued
+catalog token, invalid credentials with anonymous access enabled, and Docker JSON authentication
+errors. It accounts for the optional default authenticated read role; anonymous checks always
+verify strict repository isolation, revocation and disabling anonymous access. Credentials come from `NEXUS_COMPAT_AUTH` and `KKREPO_COMPAT_AUTH` (the existing local
+compatibility defaults apply). Run only on isolated compatibility instances: the fixture temporarily
+changes anonymous settings and enables the Nexus Docker Token Realm, restores both, and removes
+its own repositories, users and roles. Nexus admin-port token URLs use the repository prefix,
+matching that route's reverse-proxy layout. The check runs in Nexus compatibility and every
+Docker client E2E database/runtime shard.
