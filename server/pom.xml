@@ -290,6 +290,10 @@
         <configuration>
           <mainClass>com.github.klboke.kkrepo.server.KkRepoApplication</mainClass>
           <skip>false</skip>
+          <image>
+            <!-- Pin the multi-architecture index: the moving latest tag can resolve to ARM64 only. -->
+            <builder>paketobuildpacks/builder-noble-java-tiny:0.0.200@sha256:7c62dd7e66b277ec9fa2b60d0ad74c4e9ef15db7910dcdf51126e62a02a31463</builder>
+          </image>
         </configuration>
       </plugin>
       <plugin>
