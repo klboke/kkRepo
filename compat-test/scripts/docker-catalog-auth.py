@@ -77,12 +77,15 @@ def catalog(base, path, authorization=None, nexus=False):
 def forwarded_challenges(base, path):
     # Compare origins, not implementation-specific token paths or service identifiers.
     # The candidate must trust the immediate peer running this isolated fixture.
-    for host, port, expected_port in (
-            ('registry.example.invalid', None, 443),
-            ('registry.example.invalid', '443', 443),
-            ('registry.example.invalid:8443', None, 8443)):
-        headers = {'Host': 'registry.example.invalid', 'X-Forwarded-Proto': 'https',
-                   'X-Forwarded-Host': host}
+    for original_host, host, port, expected_port in (
+            ('registry.example.invalid', 'registry.example.invalid', None, 443),
+            ('registry.example.invalid', 'registry.example.invalid', '443', 443),
+            ('registry.example.invalid', 'registry.example.invalid:8443', None, 8443),
+            ('registry.example.invalid', None, None, 443),
+            ('registry.example.invalid:8443', None, None, 8443)):
+        headers = {'Host': original_host, 'X-Forwarded-Proto': 'https'}
+        if host:
+            headers['X-Forwarded-Host'] = host
         if port:
             headers['X-Forwarded-Port'] = port
         result = expect(request(base, path, extra_headers=headers), 401)

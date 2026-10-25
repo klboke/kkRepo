@@ -183,6 +183,30 @@ class ForwardedHeaderPolicyTest {
         new ForwardedHeaderPolicy("").serverBaseUrl(request));
   }
 
+  @ParameterizedTest
+  @CsvSource({
+      "registry.example.com:8443, registry.example.com, 8443, , , https://registry.example.com:8443",
+      "[2001:db8::1]:8443, [2001:db8::1], 8443, , , https://[2001:db8::1]:8443",
+      "registry.example.com:443, registry.example.com, 443, , , https://registry.example.com",
+      "registry.example.com:8443, registry.example.com, 8443, public.example.com, , https://public.example.com",
+      "registry.example.com:8443, registry.example.com, 8443, , 9443, https://registry.example.com:9443",
+      "registry.example.com, registry.example.com, 80, , , https://registry.example.com",
+      "[2001:db8::1], [2001:db8::1], 80, , , https://[2001:db8::1]"
+  })
+  void preservesExplicitHostPortWhenOnlySchemeIsForwarded(
+      String originalHost, String serverName, int serverPort, String forwardedHost,
+      String forwardedPort, String expected) {
+    var request = request("10.0.0.1");
+    request.setServerName(serverName);
+    request.setServerPort(serverPort);
+    request.addHeader("Host", originalHost);
+    request.removeHeader("X-Forwarded-Host");
+    request.removeHeader("X-Forwarded-Port");
+    if (forwardedHost != null) request.addHeader("X-Forwarded-Host", forwardedHost);
+    if (forwardedPort != null) request.addHeader("X-Forwarded-Port", forwardedPort);
+    assertEquals(expected, new ForwardedHeaderPolicy("10.0.0.1").serverBaseUrl(request));
+  }
+
   private static MockHttpServletRequest request(String remote) {
     MockHttpServletRequest request = new MockHttpServletRequest();
     request.setRemoteAddr(remote);

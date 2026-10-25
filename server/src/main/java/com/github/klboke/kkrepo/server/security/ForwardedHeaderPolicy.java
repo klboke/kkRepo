@@ -100,9 +100,10 @@ public class ForwardedHeaderPolicy {
     boolean bracketedIpv6WithoutPort = host.startsWith("[") && host.endsWith("]");
     if (!host.contains(":") || bracketedIpv6WithoutPort) {
       // A forwarded origin must not inherit the backend HTTP connector's port.
-      // Without an explicit external port, use the scheme's default (omit the port).
+      // A preserved Host header may still explicitly carry the external port.
       // Requests without forwarded origin headers retain their direct connection port.
-      int fallbackPort = forwardedProto != null || forwardedHost != null ? -1 : request.getServerPort();
+      int fallbackPort = forwardedHost != null ? -1
+          : forwardedProto != null ? explicitHostPort(request) : request.getServerPort();
       int port = parsePort(portHeader, fallbackPort);
       boolean standard = ("http".equalsIgnoreCase(scheme) && port == 80)
           || ("https".equalsIgnoreCase(scheme) && port == 443);
@@ -111,6 +112,17 @@ public class ForwardedHeaderPolicy {
       }
     }
     return scheme + "://" + authority;
+  }
+
+  private static int explicitHostPort(HttpServletRequest request) {
+    String host = request.getHeader("Host");
+    if (host == null) return -1;
+    int colon = host.lastIndexOf(':');
+    // Only an authority port counts; an IPv6 address's own colons do not.
+    if (colon < 0 || host.indexOf(']') > colon
+        || (!host.startsWith("[") && host.indexOf(':') != colon)) return -1;
+    int port = parsePort(host.substring(colon + 1), -1);
+    return port > 0 && port <= 65535 ? port : -1;
   }
 
   private static String normalize(String value) {
