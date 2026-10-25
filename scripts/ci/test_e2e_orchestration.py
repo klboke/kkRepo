@@ -250,6 +250,11 @@ fi
         scripts.mkdir(parents=True)
         for name in ("run-live-compat.sh", "check-public-https-report.py"):
             (scripts / name).write_bytes((SCRIPTS / name).read_bytes())
+        compat_scripts = project / "compat-test" / "scripts"
+        compat_scripts.mkdir(parents=True)
+        (compat_scripts / "docker-catalog-auth.py").write_text(
+            "import json, os, sys\nfrom pathlib import Path\n"
+            "Path(os.environ['TEST_ROOT'], 'catalog-args').write_text(json.dumps(sys.argv[1:]))\n")
         for client in ("go", "helm", "docker"):
             self.stub(client, ":\n")
         self.stub("mvn", """printf '%s\n' "$*|${COMPAT_WRITE_ENABLED:-unset}|${PUBLIC_HTTPS_COMPAT_REQUIRED:-unset}" >> "$TEST_ROOT/maven-args"
@@ -290,6 +295,9 @@ fi
         self.assertIn("NpmRepositoryBlackBoxCompatibilityTest", calls[0])
         self.assertIn("-Dtest=PublicHttpsContentRedirectCompatibilityTest", calls[1])
         self.assertTrue(calls[1].endswith("|true|true"))
+        catalog_args = json.loads((self.root / "catalog-args").read_text())
+        self.assertEqual(catalog_args[::2], ["--nexus", "--kkrepo"])
+        self.assertTrue(all(value.startswith("http") for value in catalog_args[1::2]))
 
     def test_full_entry_point_runs_public_https_once_without_default_skips(self):
         result = self.public_https_run("full")
