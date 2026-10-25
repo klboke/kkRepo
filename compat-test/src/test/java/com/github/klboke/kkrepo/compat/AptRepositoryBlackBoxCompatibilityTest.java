@@ -151,6 +151,121 @@ class AptRepositoryBlackBoxCompatibilityTest {
   }
 
   @Test
+  void proxyPackagesUnderDistsMatchNexusWithEncodedTildesWhenConfigured() throws Exception {
+    Config config = configured();
+    String repository = "apt-proxy-path-" + UUID.randomUUID().toString().substring(0, 8);
+    String host = CompatDefaults.setting("compat.apt.upstreamHost", "APT_COMPAT_UPSTREAM_HOST")
+        .orElse("host.docker.internal");
+    var upstream = com.sun.net.httpserver.HttpServer.create(
+        new java.net.InetSocketAddress("0.0.0.0", 0), 0);
+    String remote = "http://" + host + ":" + upstream.getAddress().getPort() + "/linux/debian/";
+    Map<String, byte[]> packages = new LinkedHashMap<>();
+    for (int index = 0; index < 3; index++) {
+      var fixture = AptCompatibilityFixtures.deb(
+          "kkrepo-proxy-fixture", "1.0-" + index + "~debian.12~bookworm", "amd64", null, "proxy");
+      packages.put("dists/bookworm/pool/stable/amd64/" + fixture.filename(), fixture.bytes());
+    }
+    upstream.createContext("/linux/debian/", exchange -> {
+      try (exchange) {
+        byte[] body = packages.get(exchange.getRequestURI().getPath()
+            .substring("/linux/debian/".length()));
+        if (body == null) {
+          exchange.sendResponseHeaders(404, -1);
+        } else {
+          exchange.getResponseHeaders().set("Content-Type", "application/vnd.debian.binary-package");
+          exchange.getResponseHeaders().set("Content-Length", Integer.toString(body.length));
+          if (exchange.getRequestMethod().equals("HEAD")) {
+            exchange.sendResponseHeaders(200, -1);
+          } else {
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+          }
+        }
+      }
+    });
+    upstream.start();
+    try (var access = allowAptFixtureHost(config.nexusAdmin(), host)) {
+      createProxy(config.nexusAdmin(), repository, remote, config.nexusBlobStore(), true);
+      if (!config.referenceOnly()) {
+        createProxy(config.candidateAdmin(), repository, remote, config.candidateBlobStore(), false);
+      }
+      int index = 0;
+      for (var entry : packages.entrySet()) {
+        // Each spelling starts cold, with a distinct package, before checking cached aliases.
+        String spelling = List.of("~", "%7e", "%7E").get(index++);
+        String path = entry.getKey().replace("~", spelling);
+        assertPackageHttp(config.nexus(repository), path, entry.getValue());
+        if (!config.referenceOnly()) {
+          assertPackageHttp(config.candidate(repository), path, entry.getValue());
+        }
+        for (String alias : List.of("~", "%7e", "%7E")) {
+          assertPackageHttp(config.nexus(repository), entry.getKey().replace("~", alias), entry.getValue());
+          if (!config.referenceOnly()) {
+            assertPackageHttp(config.candidate(repository), entry.getKey().replace("~", alias), entry.getValue());
+          }
+        }
+      }
+    } finally {
+      upstream.stop(0);
+      if (!config.keepRepositories()) {
+        deleteRepository(config.nexusAdmin(), repository);
+        if (!config.referenceOnly()) deleteRepository(config.candidateAdmin(), repository);
+      }
+    }
+  }
+
+  private static void createProxy(
+      AdminEndpoint admin, String repository, String remote, String blobStore, boolean nexus)
+      throws Exception {
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("name", repository);
+    body.put("online", true);
+    body.put("apt", Map.of("distribution", "bookworm", "flat", false));
+    if (nexus) {
+      body.put("storage", Map.of("blobStoreName", blobStore, "strictContentTypeValidation", true));
+      body.put("proxy", Map.of("remoteUrl", remote, "contentMaxAge", 1440, "metadataMaxAge", 60));
+      body.put("negativeCache", Map.of("enabled", false, "timeToLive", 1));
+      body.put("httpClient", Map.of("blocked", false, "autoBlock", false));
+    } else {
+      body.put("recipe", "apt-proxy");
+      body.put("blobStoreName", blobStore);
+      body.put("proxy", Map.of("remoteUrl", remote, "autoBlock", false));
+      body.put("apt", Map.of("distribution", "bookworm", "flat", false,
+          "metadataMode", "PASSTHROUGH"));
+    }
+    Exchange created = send(admin.request(nexus
+            ? "/service/rest/v1/repositories/apt/proxy" : "/internal/repositories")
+        .header("Content-Type", "application/json")
+        .POST(HttpRequest.BodyPublishers.ofString(JSON.writeValueAsString(body))));
+    assertEquals(201, created.status(), () -> "APT proxy create: " + created.text());
+  }
+
+  private static AutoCloseable allowAptFixtureHost(AdminEndpoint admin, String host) throws Exception {
+    String path = "/service/rest/v1/security/ssrf-protection";
+    Exchange response = send(admin.request(path).GET());
+    if (response.status() == 404) return () -> {};
+    assertEquals(200, response.status());
+    var config = (com.fasterxml.jackson.databind.node.ObjectNode) JSON.readTree(response.body());
+    String field = host.matches("[0-9.]+") ? "allowedIPs" : "allowedDomains";
+    var allowed = config.withArray(field);
+    for (var entry : allowed) if (host.equals(entry.asText())) return () -> {};
+    allowed.add(host);
+    assertEquals(200, send(admin.request(path).header("Content-Type", "application/json")
+        .PUT(HttpRequest.BodyPublishers.ofString(JSON.writeValueAsString(config)))).status());
+    return () -> {
+      Exchange latest = send(admin.request(path).GET());
+      assertEquals(200, latest.status());
+      var restored = (com.fasterxml.jackson.databind.node.ObjectNode) JSON.readTree(latest.body());
+      var entries = restored.withArray(field);
+      for (int index = entries.size() - 1; index >= 0; index--) {
+        if (host.equals(entries.get(index).asText())) entries.remove(index);
+      }
+      assertEquals(200, send(admin.request(path).header("Content-Type", "application/json")
+          .PUT(HttpRequest.BodyPublishers.ofString(JSON.writeValueAsString(restored)))).status());
+    };
+  }
+
+  @Test
   void preparesNexusHostedMigrationFixtureWhenConfigured() throws Exception {
     assumeTrue(Boolean.parseBoolean(System.getenv().getOrDefault(
         "APT_MIGRATION_PREP_ENABLED", "false")),

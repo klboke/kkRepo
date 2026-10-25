@@ -41,7 +41,9 @@ public final class AptPathParser {
     }
     if (flat) return flat(raw, path, segments, filename);
     if (segments.length >= 3 && segments[0].equals("dists")) {
-      return structuredMetadata(raw, path, segments, filename);
+      AptPath metadata = structuredMetadata(raw, path, segments, filename);
+      if (metadata.kind() != AptPath.Kind.UNKNOWN) return metadata;
+      // Archives such as Docker's also place package payloads under dists/<suite>/pool/.
     }
     if (segments.length >= 4 && segments[0].equals("pool") && isPackageFile(filename)) {
       return path(AptPath.Kind.PACKAGE, raw, path, null, null, packageArchitecture(filename),

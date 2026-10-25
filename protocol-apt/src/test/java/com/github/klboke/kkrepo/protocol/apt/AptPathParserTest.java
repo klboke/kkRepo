@@ -36,6 +36,27 @@ class AptPathParserTest {
   }
 
   @Test
+  void parsesPackagesUnderDistsWithLiteralAndEncodedTildes() {
+    String directory = "dists/bookworm/pool/stable/amd64/";
+    for (String extension : new String[]{"deb", "udeb"}) {
+      String filename = "docker-ce_29.9.2-1~debian.12~bookworm_amd64." + extension;
+      for (String tilde : new String[]{"~", "%7e", "%7E"}) {
+        AptPath parsed = parser.parse(directory + filename.replace("~", tilde));
+        assertEquals(AptPath.Kind.PACKAGE, parsed.kind());
+        assertEquals(directory + filename, parsed.normalized());
+        assertEquals(filename, parsed.filename());
+        assertEquals("amd64", parsed.architecture());
+      }
+    }
+    assertEquals(AptPath.Kind.PACKAGE,
+        parser.parse(directory + "demo_1.0-1_amd64.deb").kind());
+    for (String unsafe : new String[]{"%2e%2e/", "%2f/", "%5c/", "%252e%252e/"}) {
+      assertEquals(AptPath.Kind.UNKNOWN,
+          parser.parse(directory + unsafe + "demo_1.0_amd64.deb").kind());
+    }
+  }
+
+  @Test
   void supportsFlatMetadataWithoutWeakeningPathValidation() {
     assertEquals(AptPath.Kind.FLAT_METADATA, parser.parse("stable/Packages.gz", true).kind());
     assertEquals(AptPath.Kind.RELEASE_SIGNATURE, parser.parse("stable/Release.gpg", true).kind());

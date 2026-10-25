@@ -542,6 +542,38 @@ class AptServiceTest {
   }
 
   @Test
+  void proxiesPackagesUnderDistsUsingTheDecodedCanonicalPath() {
+    RepositoryRuntime runtime = runtime(RepositoryType.PROXY, "ALLOW", 60);
+    String canonical = "dists/stable/pool/stable/amd64/"
+        + "docker-ce_29.9.2-1~debian.12~bookworm_amd64.deb";
+    for (String tilde : new String[]{"~", "%7e", "%7E"}) {
+      for (boolean headOnly : new boolean[]{false, true}) {
+        Fixture fixture = new Fixture();
+        when(fixture.repositorySettings.get(runtime)).thenReturn(fixture.proxySettings);
+        when(fixture.proxy.getPinnedAssetFromUrlUnindexed(
+            runtime, canonical, "https://apt.example/" + canonical, headOnly))
+            .thenReturn(MavenResponse.noBody(200));
+
+        MavenResponse response = fixture.service.get(
+            runtime, canonical.replace("~", tilde), headOnly);
+
+        assertEquals(200, response.status());
+        assertEquals("public, max-age=31536000, immutable",
+            response.headers().get("Cache-Control"));
+        verify(fixture.proxy).getPinnedAssetFromUrlUnindexed(
+            runtime, canonical, "https://apt.example/" + canonical, headOnly);
+        verify(fixture.proxy, never()).getMetadataFromUrlUnindexed(
+            any(), anyString(), anyString(), anyBoolean());
+        ArgumentCaptor<AptPath> projected = ArgumentCaptor.forClass(AptPath.class);
+        verify(fixture.proxyProjection).observePassthrough(
+            eq(runtime), eq(fixture.proxySettings), projected.capture());
+        assertEquals(AptPath.Kind.PACKAGE, projected.getValue().kind());
+        assertEquals(canonical, projected.getValue().normalized());
+      }
+    }
+  }
+
+  @Test
   void rejectsNullWrongFormatAndGroupRuntimes() {
     Fixture fixture = new Fixture();
     assertThrows(MavenExceptions.MethodNotAllowed.class,
