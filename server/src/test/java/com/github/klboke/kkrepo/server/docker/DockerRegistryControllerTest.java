@@ -36,6 +36,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -117,8 +120,10 @@ class DockerRegistryControllerTest {
         response.getHeaders().getFirst(HttpHeaders.LOCATION));
   }
 
-  @Test
-  void trustedForwardedHeadersDefinePublicUploadLocation() {
+  @ParameterizedTest
+  @NullSource
+  @ValueSource(strings = {"443"})
+  void trustedForwardedHeadersDefinePublicUploadLocation(String forwardedPort) {
     RepositoryRuntime runtime = hosted("docker-hosted", null);
     DockerHostedService hosted = mock(DockerHostedService.class);
     when(hosted.startUpload(eq(runtime), eq("library/alpine"), eq(null), eq(null), eq(null), anyString(), anyString()))
@@ -133,7 +138,7 @@ class DockerRegistryControllerTest {
     request.setRemoteAddr("10.0.0.1");
     request.addHeader("X-Forwarded-Proto", "https");
     request.addHeader("X-Forwarded-Host", "registry.example.com");
-    request.addHeader("X-Forwarded-Port", "443");
+    if (forwardedPort != null) request.addHeader("X-Forwarded-Port", forwardedPort);
 
     ResponseEntity<?> response = controller.post(request, null, null);
 

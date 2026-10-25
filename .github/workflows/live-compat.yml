@@ -805,6 +805,16 @@ jobs:
       - name: Start Nexus compatibility databases
         run: docker compose -f "$COMPOSE_FILE" up -d --wait mysql nexus-postgres
 
+      - name: Trust the local Docker forwarding compatibility peer
+        shell: bash
+        run: |
+          set -euo pipefail
+          proxy_gateway="$(docker network inspect "${COMPOSE_PROJECT_NAME}_default" \
+            --format '{{(index .IPAM.Config 0).Gateway}}')"
+          test -n "$proxy_gateway"
+          echo "KKREPO_TRUSTED_PROXIES=$proxy_gateway" >> "$GITHUB_ENV"
+          echo "DOCKER_FORWARDED_COMPAT_ENABLED=true" >> "$GITHUB_ENV"
+
       - name: Start Nexus reference and candidate services
         run: docker compose -f "$COMPOSE_FILE" up -d nexus kkrepo kkrepo-secondary
 

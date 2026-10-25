@@ -134,6 +134,34 @@ class DockerAuthFilterTest {
   }
 
   @ParameterizedTest
+  @CsvSource({"80, false", "8082, false", "80, true", "8082, true"})
+  void httpsConnectorChallengeDoesNotRequireForwardedPort(int backendPort, boolean forwardedHost)
+      throws Exception {
+    when(authService.challenge(
+        "https://registry.example.com/service/rest/v1/docker/token", "registry.example.com"))
+        .thenCallRealMethod();
+    var filter = new DockerAuthFilter(registry, authService,
+        mock(SecurityAuthenticationService.class), accessDecisionService,
+        new ForwardedHeaderPolicy("10.0.0.1"));
+    var request = new MockHttpServletRequest("GET", "/v2/");
+    request.setAttribute(DockerConnectorConfiguration.CONNECTOR_REPOSITORY_ATTRIBUTE, "docker-hosted");
+    request.setScheme("http");
+    request.setServerName("registry.example.com");
+    request.setServerPort(backendPort);
+    request.setRemoteAddr("10.0.0.1");
+    request.addHeader("X-Forwarded-Proto", "https");
+    if (forwardedHost) request.addHeader("X-Forwarded-Host", "registry.example.com");
+    var response = new MockHttpServletResponse();
+
+    filter.doFilter(request, response, new MockFilterChain());
+
+    assertEquals(401, response.getStatus());
+    assertEquals("Bearer realm=\"https://registry.example.com/service/rest/v1/docker/token\","
+        + "service=\"registry.example.com\"", response.getHeader(HttpHeaders.WWW_AUTHENTICATE));
+    assertEquals(DockerConstants.API_VERSION, response.getHeader(DockerConstants.API_VERSION_HEADER));
+  }
+
+  @ParameterizedTest
   @CsvSource({"10.0.0.1", "10.0.0.0/16", "2001:db8::/32"})
   void untrustedForwardedHeadersCannotOverrideBearerChallenge(String trustedProxies) throws Exception {
     when(authService.challenge(

@@ -20,8 +20,9 @@ def basic(credentials):
     return 'Basic ' + base64.b64encode(credentials.encode()).decode()
 
 
-def request(base, path, authorization=None, method='GET', data=None):
+def request(base, path, authorization=None, method='GET', data=None, extra_headers=None):
     headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
+    headers.update(extra_headers or {})
     if authorization:
         headers['Authorization'] = authorization
     req = urllib.request.Request(base + path, method=method, headers=headers,
@@ -73,7 +74,30 @@ def catalog(base, path, authorization=None, nexus=False):
     assert response[2].get('Docker-Distribution-API-Version') == 'registry/2.0'
 
 
-def exercise(base, credentials, nexus):
+def forwarded_challenges(base, path):
+    # Compare origins, not implementation-specific token paths or service identifiers.
+    # The candidate must trust the immediate peer running this isolated fixture.
+    for host, port, expected_port in (
+            ('registry.example.invalid', None, 443),
+            ('registry.example.invalid', '443', 443),
+            ('registry.example.invalid:8443', None, 8443)):
+        headers = {'Host': 'registry.example.invalid', 'X-Forwarded-Proto': 'https',
+                   'X-Forwarded-Host': host}
+        if port:
+            headers['X-Forwarded-Port'] = port
+        result = expect(request(base, path, extra_headers=headers), 401)
+        challenge = result[2].get('WWW-Authenticate', '')
+        fields = dict(re.findall(r'(\w+)="([^"]*)"', challenge))
+        assert challenge.lower().startswith('bearer '), challenge
+        realm = urllib.parse.urlsplit(fields['realm'])
+        assert realm.scheme == 'https' and realm.hostname == 'registry.example.invalid', challenge
+        assert (realm.port or 443) == expected_port, challenge
+        assert fields.get('service'), challenge
+        assert result[2].get('Docker-Distribution-API-Version') == 'registry/2.0'
+    print('Docker forwarded HTTPS challenge: default and explicit ports PASS')
+
+
+def exercise(base, credentials, nexus, forwarded_headers=False):
     admin = basic(credentials)
     suffix = uuid.uuid4().hex[:10]
     allowed, denied = 'catalog-read-' + suffix, 'catalog-denied-' + suffix
@@ -111,6 +135,8 @@ def exercise(base, credentials, nexus):
                                hosted={'writePolicy': 'ALLOW'})
             expect(request(base, repo_api + ('/docker/hosted' if nexus else ''), admin, 'POST', payload), 201)
             repositories.append(name)
+        if forwarded_headers:
+            forwarded_challenges(base, path)
         expect(request(base, roles_api, admin, 'POST', role_data), 200)
         role_created = True
         expect(request(base, users_api, admin, 'POST', {
@@ -183,10 +209,13 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--nexus')
     parser.add_argument('--kkrepo')
+    parser.add_argument('--forwarded-headers', action='store_true',
+                        default=os.environ.get('DOCKER_FORWARDED_COMPAT_ENABLED') == 'true',
+                        help='Check HTTPS challenges; kkRepo must trust the immediate test peer')
     args = parser.parse_args()
     if not args.nexus and not args.kkrepo:
         parser.error('Specify --nexus or --kkrepo')
     if args.nexus:
-        exercise(args.nexus, os.environ.get('NEXUS_COMPAT_AUTH', 'admin:Admin1234'), True)
+        exercise(args.nexus, os.environ.get('NEXUS_COMPAT_AUTH', 'admin:Admin1234'), True, args.forwarded_headers)
     if args.kkrepo:
-        exercise(args.kkrepo, os.environ.get('KKREPO_COMPAT_AUTH', 'admin:12345678'), False)
+        exercise(args.kkrepo, os.environ.get('KKREPO_COMPAT_AUTH', 'admin:12345678'), False, args.forwarded_headers)

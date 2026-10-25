@@ -88,8 +88,10 @@ public class ForwardedHeaderPolicy {
 
   public String serverBaseUrl(HttpServletRequest request) {
     boolean trustedForwarded = trusted(request);
-    String scheme = trustedForwarded ? firstHeader(request, "X-Forwarded-Proto", request.getScheme()) : request.getScheme();
-    String host = trustedForwarded ? firstHeader(request, "X-Forwarded-Host", request.getServerName()) : request.getServerName();
+    String forwardedProto = trustedForwarded ? firstHeader(request, "X-Forwarded-Proto", null) : null;
+    String forwardedHost = trustedForwarded ? firstHeader(request, "X-Forwarded-Host", null) : null;
+    String scheme = forwardedProto != null ? forwardedProto : request.getScheme();
+    String host = forwardedHost != null ? forwardedHost : request.getServerName();
     if (scheme == null || scheme.isBlank() || host == null || host.isBlank()) {
       return "";
     }
@@ -97,7 +99,11 @@ public class ForwardedHeaderPolicy {
     String authority = host;
     boolean bracketedIpv6WithoutPort = host.startsWith("[") && host.endsWith("]");
     if (!host.contains(":") || bracketedIpv6WithoutPort) {
-      int port = parsePort(portHeader, request.getServerPort());
+      // A forwarded origin must not inherit the backend HTTP connector's port.
+      // Without an explicit external port, use the scheme's default (omit the port).
+      // Requests without forwarded origin headers retain their direct connection port.
+      int fallbackPort = forwardedProto != null || forwardedHost != null ? -1 : request.getServerPort();
+      int port = parsePort(portHeader, fallbackPort);
       boolean standard = ("http".equalsIgnoreCase(scheme) && port == 80)
           || ("https".equalsIgnoreCase(scheme) && port == 443);
       if (port > 0 && !standard) {
