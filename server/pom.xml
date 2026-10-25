@@ -11,6 +11,10 @@
   </parent>
   <artifactId>kkrepo-server</artifactId>
   <name>kkrepo-server</name>
+  <properties>
+    <!-- The upstream latest tag currently points only to arm64; this release has both architectures. -->
+    <spring-boot.build-image.builder>paketobuildpacks/builder-noble-java-tiny:0.0.200</spring-boot.build-image.builder>
+  </properties>
   <dependencies>
     <dependency>
       <groupId>software.amazon.awssdk</groupId>
