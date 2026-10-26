@@ -188,5 +188,19 @@
         "parameterTypes": ["void*", "size_t", "void*", "void*", "int", "struct(int,struct(int,int,int))"]
       }
     ]
-  }
+  },
+  "resources": [
+    {
+      "condition": {
+        "typeReached": "com.github.luben.zstd.util.Native"
+      },
+      "glob": "linux/amd64/libzstd-jni-*.so"
+    },
+    {
+      "condition": {
+        "typeReached": "com.github.luben.zstd.util.Native"
+      },
+      "glob": "linux/aarch64/libzstd-jni-*.so"
+    }
+  ]
 }

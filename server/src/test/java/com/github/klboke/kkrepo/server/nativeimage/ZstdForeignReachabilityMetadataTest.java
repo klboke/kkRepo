@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.nativeimage;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -20,10 +21,13 @@ import java.lang.foreign.MemorySegment;
 import java.lang.foreign.ValueLayout;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.jar.JarFile;
+import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 import org.junit.jupiter.api.Test;
 
@@ -75,6 +79,37 @@ class ZstdForeignReachabilityMetadataTest {
     Set<Downcall> missing = new LinkedHashSet<>(observed);
     missing.removeAll(registered);
     assertTrue(missing.isEmpty(), () -> "Unregistered Zstd FFM downcalls: " + missing);
+  }
+
+  @Test
+  void includesVersionAgnosticLinuxNativeLibraries() throws Exception {
+    Set<String> resources;
+    try (InputStream input = getClass().getClassLoader().getResourceAsStream(METADATA_RESOURCE)) {
+      assertNotNull(input, () -> "Missing native-image metadata resource " + METADATA_RESOURCE);
+      resources = StreamSupport.stream(
+              new ObjectMapper().readTree(input).path("resources").spliterator(), false)
+          .map(resource -> resource.path("condition").path("typeReached").asText()
+              + ":" + resource.path("glob").asText())
+          .collect(Collectors.toSet());
+    }
+
+    Set<String> expectedResources = Set.of(
+        "com.github.luben.zstd.util.Native:linux/amd64/libzstd-jni-*.so",
+        "com.github.luben.zstd.util.Native:linux/aarch64/libzstd-jni-*.so");
+    assertTrue(resources.containsAll(expectedResources),
+        () -> "Missing zstd JNI resources: " + expectedResources.stream()
+            .filter(resource -> !resources.contains(resource)).collect(Collectors.toSet()));
+
+    Path dependency = Path.of(Zstd.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+    try (JarFile jar = new JarFile(dependency.toFile())) {
+      for (String architecture : List.of("amd64", "aarch64")) {
+        String prefix = "linux/" + architecture + "/libzstd-jni-";
+        long matches = jar.stream()
+            .filter(entry -> entry.getName().startsWith(prefix) && entry.getName().endsWith(".so"))
+            .count();
+        assertEquals(1, matches, () -> "Expected one zstd JNI resource for " + architecture);
+      }
+    }
   }
 
   private static MemoryLayout layout(String type, Linker linker) {
