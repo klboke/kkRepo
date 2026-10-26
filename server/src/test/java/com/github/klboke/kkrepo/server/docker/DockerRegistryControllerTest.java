@@ -58,7 +58,9 @@ class DockerRegistryControllerTest {
     when(rules.bindings()).thenReturn(List.of(new com.github.klboke.kkrepo.persistence.jdbc.api.RoutingRuleDao.Binding(1,
         new com.github.klboke.kkrepo.persistence.jdbc.api.RoutingRuleDao.Rule(1, "blocked", "", "BLOCK",
             List.of("/v2/private/pkg/blobs/" + digest, "/v2/private/pkg/tags/list")))));
-    controller.setRoutingPolicy(new com.github.klboke.kkrepo.server.routingrules.RepositoryRoutingPolicy(rules));
+    var policy = new com.github.klboke.kkrepo.server.routingrules.RepositoryRoutingPolicy(rules);
+    policy.initialize();
+    controller.setRoutingPolicy(policy);
     for (String method : List.of("GET", "HEAD")) {
       for (String path : List.of("private/pkg/blobs/" + digest + "/",
           "private/pkg/blobs/" + digest.toUpperCase(java.util.Locale.ROOT), "private/pkg/tags/list/")) {

@@ -180,6 +180,9 @@ public class ProxiedHttpClientFactory implements AutoCloseable {
   @PreDestroy
   @Override
   public void close() {
+    // Removal notifications are asynchronous; application shutdown must release owned pools
+    // before returning even when the notification executor is busy or stopping.
+    cache.asMap().values().forEach(ProxiedHttpClientFactory::closeQuietly);
     cache.invalidateAll();
     cache.cleanUp();
     closeQuietly(directClient);

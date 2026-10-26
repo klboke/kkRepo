@@ -874,6 +874,25 @@ class ProxiedHttpClientFactoryTest {
   }
 
   @Test
+  @SuppressWarnings("unchecked")
+  void shutdownDoesNotDependOnAsynchronousRemovalNotifications() throws Exception {
+    // This cache deliberately never executes removal notifications, as can happen while its
+    // executor is busy or stopping. Explicit shutdown must still close owned resources.
+    var cache = (com.github.klboke.kkrepo.cache.LocalCache<String, CloseableHttpClient>)
+        org.mockito.Mockito.mock(com.github.klboke.kkrepo.cache.LocalCache.class);
+    var clients = new java.util.concurrent.ConcurrentHashMap<String, CloseableHttpClient>();
+    var client = org.mockito.Mockito.mock(CloseableHttpClient.class);
+    clients.put("repository", client);
+    org.mockito.Mockito.when(cache.asMap()).thenReturn(clients);
+    try (var factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      org.springframework.test.util.ReflectionTestUtils.setField(factory, "cache", cache);
+      factory.close();
+      org.mockito.Mockito.verify(client).close();
+      org.mockito.Mockito.verify(cache).invalidateAll();
+    }
+  }
+
+  @Test
   void shutdownClosesCachedClients() throws Exception {
     ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000);
     OutboundProxyConfig config =
