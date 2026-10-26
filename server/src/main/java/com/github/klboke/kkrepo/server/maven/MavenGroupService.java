@@ -199,8 +199,12 @@ public class MavenGroupService {
           path.path(),
           () -> AssetMetadataCache.Loaded.from(
               assetDao.findAssetByPath(member.id(), path.path()), assetDao));
-      memberSnapshot.ifPresent(snapshot ->
-          writer.referenceCachedAsset(group, path, snapshot, "group", member.name()));
+      // Another request may replace a nested group's row after dispatch selected its response.
+      // Only promote a source snapshot valid for this request's nested-group policy generation;
+      // never stamp bytes selected under another projection with the outer group's current token.
+      memberSnapshot.filter(snapshot -> !member.isGroup()
+              || isGroupCacheFresh(member, path, snapshot, Instant.now()))
+          .ifPresent(snapshot -> writer.referenceCachedAsset(group, path, snapshot, "group", member.name()));
     } catch (RuntimeException e) {
       log.warn("Failed writing Maven group cache for group {} member {} path {}",
           group.name(), member.name(), path.path(), e);

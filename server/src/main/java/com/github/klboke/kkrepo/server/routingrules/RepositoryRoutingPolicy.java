@@ -15,6 +15,7 @@ import com.github.klboke.kkrepo.protocol.cargo.CargoPathParser;
 import com.github.klboke.kkrepo.protocol.conda.CondaPath;
 import com.github.klboke.kkrepo.protocol.conda.CondaPathParser;
 import com.github.klboke.kkrepo.protocol.npm.NpmPathParser;
+import com.github.klboke.kkrepo.protocol.helm.HelmAssetKind;
 import com.github.klboke.kkrepo.protocol.nuget.NugetPathParser;
 import com.github.klboke.kkrepo.protocol.nuget.NugetPaths;
 import com.github.klboke.kkrepo.protocol.pub.PubPackageName;
@@ -103,6 +104,11 @@ public class RepositoryRoutingPolicy {
     String matched;
     try {
       matched = switch (runtime.format()) {
+        case HELM -> {
+          String resource = path.trim().replaceAll("^/+", "");
+          yield HelmAssetKind.INDEX.fixedPath().equalsIgnoreCase(resource)
+              ? "/" + HelmAssetKind.INDEX.fixedPath() : matchingPath(path);
+        }
         case NPM -> npmMatchingPath(path);
         case SWIFT -> swiftMatchingPath(path);
         case PUB -> pubMatchingPath(path);

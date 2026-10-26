@@ -55,6 +55,8 @@ class RepositoryProtocolDispatcherTest {
         new Case(RepositoryFormat.RUBYGEMS, List.of("/gems/private-1.0.0.gem"), List.of("gems/private-1.0.0.gem/"), "gems/public-1.0.0.gem"),
         new Case(RepositoryFormat.ANSIBLEGALAXY, List.of("/api/v3/collections/private/pkg/versions"),
             List.of("api/v3/collections/private/pkg/versions/"), "api/v3/collections/public/pkg/versions/"),
+        new Case(RepositoryFormat.HELM, List.of("/index\\.yaml", "/private.tgz"),
+            List.of("INDEX.YAML", "iNdEx.YaMl"), "PRIVATE.tgz"),
         new Case(RepositoryFormat.RAW, List.of("/private/.*"), List.of("private/file"), "PRIVATE/file"));
     for (Case test : cases) {
       RepositoryRuntime proxy = runtime(test.format(), RepositoryType.PROXY);

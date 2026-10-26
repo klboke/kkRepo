@@ -24,6 +24,11 @@ class RoutingRulesBlackBoxCompatibilityTest {
   private static final HttpClient HTTP = HttpClient.newBuilder()
       .connectTimeout(Duration.ofSeconds(15)).build();
 
+  @Test
+  void helmIndexAliasesAreBlocked() throws Exception {
+    canonicalPackageAliasesAreBlockedBeforeUpstreamAccess("helm");
+  }
+
   @ParameterizedTest
   @ValueSource(strings = {"swift", "pub", "cargo", "nuget", "r", "apt", "alpine", "conda", "yum", "rubygems", "ansiblegalaxy", "docker"})
   void canonicalPackageAliasesAreBlockedBeforeUpstreamAccess(String format) throws Exception {
@@ -34,6 +39,7 @@ class RoutingRulesBlackBoxCompatibilityTest {
     String prefix = "rr452-" + UUID.randomUUID().toString().substring(0, 8);
     String rule = prefix + "-rule", proxy = prefix + "-proxy", rules = "/service/rest/v1/routing-rules";
     List<String> matchers = switch (format) {
+      case "helm" -> List.of("/index\\.yaml");
       case "swift" -> List.of("/private/.*");
       case "pub" -> List.of("/api/packages/private", "/api/packages/private/versions/1.0.0");
       case "cargo" -> List.of("/api/v1/crates/private/.*");
@@ -48,6 +54,7 @@ class RoutingRulesBlackBoxCompatibilityTest {
       default -> List.of("/v3-flatcontainer/private/.*", "/v3/registration5-semver[12]/private/.*");
     };
     List<String> aliases = switch (format) {
+      case "helm" -> List.of("INDEX.YAML", "iNdEx.YaMl");
       case "swift" -> List.of("PRIVATE/pkg/1.0.0.zip", "PRIVATE/PKG/1.0.0/Package.swift", "PRIVATE/pkg.json");
       case "pub" -> List.of("api/packages/private/", "api/packages/private/versions/1.0.0/");
       case "cargo" -> List.of("api/v1/crates/PRIVATE/1.0.0/download", "api/v1/crates/%20private/1.0.0/download");

@@ -100,7 +100,7 @@ public class RepositoryProtocolDispatcher {
         runtime = routingPolicy.prepareCanonical(runtime, path, request);
       } else {
         runtime = switch (runtime.format()) {
-          case NPM, SWIFT, PUB, CARGO, NUGET, R, APT, ALPINE, CONDA, YUM, RUBYGEMS, ANSIBLEGALAXY -> routingPolicy.prepare(runtime, path, request);
+          case HELM, NPM, SWIFT, PUB, CARGO, NUGET, R, APT, ALPINE, CONDA, YUM, RUBYGEMS, ANSIBLEGALAXY -> routingPolicy.prepare(runtime, path, request);
           default -> routingPolicy.prepareRepository(runtime, request);
         };
       }

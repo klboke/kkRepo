@@ -2,6 +2,19 @@ package com.github.klboke.kkrepo.server.maven;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.mockito.Mockito.*;
+import static org.mockito.ArgumentMatchers.*;
+import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
+import com.github.klboke.kkrepo.server.cache.NexusLikeCacheInfo;
+import com.github.klboke.kkrepo.server.cache.NexusCacheType;
+import com.github.klboke.kkrepo.server.cache.VersionWatermark;
+import com.github.klboke.kkrepo.server.routingrules.RepositoryRoutingPolicy;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RoutingRuleDao;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 import com.github.klboke.kkrepo.core.BlobObjectMetadata;
 import com.github.klboke.kkrepo.core.BlobReference;
@@ -32,6 +45,56 @@ import org.junit.jupiter.api.Test;
 
 class MavenGroupServiceTest {
   private static final MavenPathParser PARSER = new MavenPathParser();
+
+  @Test
+  void nestedCacheReplacedByAnotherRequestCannotBePromotedUnderRestrictivePolicy() throws IOException {
+    assertNestedCachePromotion(true);
+  }
+
+  @Test
+  void matchingNestedCacheGenerationCanStillBePromoted() throws IOException {
+    assertNestedCachePromotion(false);
+  }
+
+  private void assertNestedCachePromotion(boolean overwritten) throws IOException {
+    MavenPath path = markerJar();
+    var rules = mock(RoutingRuleDao.class);
+    when(rules.bindings()).thenReturn(List.of(new RoutingRuleDao.Binding(3,
+        new RoutingRuleDao.Rule(1, "private", "", "BLOCK", List.of(java.util.regex.Pattern.quote("/" + path.path()))))));
+    var routing = new RepositoryRoutingPolicy(rules);
+    var tokens = new NexusLikeCacheController(mock(VersionWatermark.class), 2);
+    RepositoryRuntime nested = group(11, "nested", List.of(proxy(), hosted()));
+    RepositoryRuntime outer = group(10, "outer", List.of(nested));
+    var restrictive = new MockHttpServletRequest("GET", "/repository/outer/" + path.path());
+    var permissive = new MockHttpServletRequest("GET", "/repository/outer/" + path.path());
+    permissive.addParameter("allow", "true");
+    try {
+      RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(permissive));
+      routing.prepare(outer, path.path(), permissive);
+      var otherGeneration = tokens.current(nested.id(), NexusCacheType.CONTENT);
+      RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(restrictive));
+      RepositoryRuntime projected = routing.prepare(outer, path.path(), restrictive);
+      var activeGeneration = tokens.current(nested.id(), NexusCacheType.CONTENT);
+      assertNotEquals(activeGeneration.cacheToken(), otherGeneration.cacheToken());
+      var safe = snapshot(100, nested.id(), path.path(), blob(900), Instant.now(),
+          NexusLikeCacheInfo.applyToAttributes(Map.of(), activeGeneration));
+      var replaced = snapshot(100, nested.id(), path.path(), blob(901), Instant.now(),
+          NexusLikeCacheInfo.applyToAttributes(Map.of(), otherGeneration));
+      var cache = mock(AssetMetadataCache.class);
+      when(cache.find(eq(outer.id()), eq(path.path()), any())).thenReturn(Optional.empty());
+      // Model B replacing the nested row after A selected its response and before outer promotion.
+      when(cache.find(eq(nested.id()), eq(path.path()), any()))
+          .thenReturn(Optional.of(safe), Optional.of(overwritten ? replaced : safe));
+      var writer = new CapturingWriter();
+      var service = new MavenGroupService(new MissingHostedService(), new FailingProxyService(),
+          new EmptyAssetDao(), new FixedBlobStorageRegistry(new BytesBlobStorage("allowed")), writer, cache, tokens);
+      try (var body = service.get(projected, path, false).body()) {
+        assertEquals("allowed", new String(body.readAllBytes(), StandardCharsets.UTF_8));
+      }
+      if (overwritten) assertNull(writer.reference, "Never stamp another request's nested cache with this request's policy");
+      else assertEquals("outer:" + path.path() + ":11", writer.reference);
+    } finally { RequestContextHolder.resetRequestAttributes(); }
+  }
 
   @Test
   void headMissStaysNotFoundWhenLaterProxyIsUnavailable() {

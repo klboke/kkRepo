@@ -31,6 +31,8 @@ R, APT, Alpine and Conda use their parser-returned resource paths; Ansible, Yum 
 
 Repository updates read the existing binding under a row lock, after acquiring any explicitly requested rule lock. This keeps the rule-before-repository order used by migration and prevents partial updates from overwriting concurrent assignments or removals. MySQL and PostgreSQL contract tests establish a stale transaction snapshot while another transaction assigns a rule, then verify that the locking read sees and preserves the committed binding.
 
+Helm index aliases match the canonical `index.yaml` resource while chart filenames retain their case. Nested Maven group cache promotion validates the source snapshot against the active nested-group cache generation before applying the outer group token; a deterministic interleaving regression verifies that a competing request cannot replace the nested row with content selected under another policy and have it accepted by the restrictive outer request.
+
 ## Cache and convergence
 
 kkRepo intentionally uses eventual consistency for routing policy. Each replica keeps one immutable snapshot in `LocalCacheFactory` with a configurable expire-after-write TTL (default 30 seconds), deduplicated compiled patterns per rule and cached empty results. Warm requests perform no routing-rule SQL; concurrent cold requests share one load. Hosted requests bypass loading. Snapshot expiry is independent of access frequency, and a request pins its snapshot until completion. A failed load propagates rather than caching an empty policy or serving expired rules.
