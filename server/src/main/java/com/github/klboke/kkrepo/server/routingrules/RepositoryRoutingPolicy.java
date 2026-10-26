@@ -1,5 +1,7 @@
 package com.github.klboke.kkrepo.server.routingrules;
 
+import com.github.klboke.kkrepo.cache.LocalCache;
+import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import com.github.klboke.kkrepo.core.http.UriPathDecoder;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RoutingRuleDao.Rule;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RoutingRuleDao;
@@ -29,12 +31,16 @@ import jakarta.servlet.http.HttpServletRequest;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.server.PathContainer;
 import org.springframework.stereotype.Service;
@@ -43,19 +49,38 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.server.ResponseStatusException;
 
 /**
- * Request-local projection of a repository tree. Durable bindings are read once per request,
- * after authentication, before any protocol cache or remote fetch. Cached runtime definitions
- * are never modified. Groups omit denied proxies and retain ordered fallback to other members.
- *
- * <p>The database is the sole rule authority: sibling replicas see committed changes on their
- * next request, independently of repository-runtime and catalog cache TTLs. Request-local maps
- * are discarded with the servlet request and are not node-local policy caches.
+ * Projects repository trees from an immutable node-local policy snapshot. The shared database
+ * remains authoritative; each replica reloads on demand after expire-after-write TTL (30s by
+ * default). Reads never extend freshness. A request pins its snapshot across group reloads.
+ * This deliberately permits old decisions until expiry, including rule/binding/migration changes.
+ * Empty snapshots are cached too; failed loads propagate instead of caching a permissive fallback.
  */
 @Service
 public class RepositoryRoutingPolicy {
   private static final String CONTEXT = RepositoryRoutingPolicy.class.getName();
+  private static final String SNAPSHOT = "bindings";
   private final RoutingRuleDao rules;
-  public RepositoryRoutingPolicy(RoutingRuleDao rules) { this.rules = rules; }
+  private final LocalCache<String, Map<Long, CompiledRule>> snapshots;
+
+  @Autowired
+  public RepositoryRoutingPolicy(RoutingRuleDao rules,
+      @Value("${kkrepo.routing-rules.cache-ttl:30s}") Duration ttl) {
+    this.rules = rules;
+    this.snapshots = LocalCacheFactory.standard().<String, Map<Long, CompiledRule>>builder("routing-rule-snapshot")
+        .maximumSize(1).expireAfterWrite(ttl).build();
+  }
+
+  public RepositoryRoutingPolicy(RoutingRuleDao rules) { this(rules, Duration.ofSeconds(30)); }
+
+  private Map<Long, CompiledRule> loadSnapshot() {
+    Map<Long, CompiledRule> byRule = new HashMap<>();
+    Map<Long, CompiledRule> bindings = new HashMap<>();
+    for (var binding : rules.bindings()) {
+      CompiledRule compiled = byRule.computeIfAbsent(binding.rule().id(), ignored -> CompiledRule.from(binding.rule()));
+      bindings.put(binding.repositoryId(), compiled);
+    }
+    return Map.copyOf(bindings);
+  }
 
   /** Manual protocol handlers retain semicolons in asset paths. */
   public RepositoryRuntime prepareRepository(RepositoryRuntime runtime, HttpServletRequest request) {
@@ -190,9 +215,10 @@ public class RepositoryRoutingPolicy {
   }
 
   private RepositoryRuntime prepareMatchedPath(RepositoryRuntime runtime, String path, HttpServletRequest request) {
+    // Hosted reads cannot be restricted by routing rules and need no policy lookup.
+    if (runtime.isHosted()) return runtime;
     if (!(request.getAttribute(CONTEXT) instanceof Context)) {
-      Map<Long, Rule> bindings = new HashMap<>();
-      rules.bindings().forEach(binding -> bindings.put(binding.repositoryId(), binding.rule()));
+      Map<Long, CompiledRule> bindings = snapshots.get(SNAPSHOT, ignored -> loadSnapshot());
       StringBuilder matchPath = new StringBuilder(path);
       StringBuilder query = new StringBuilder();
       // Nexus RoutingRuleHandler includes decoded query parameters in matcher input.
@@ -247,8 +273,8 @@ public class RepositoryRoutingPolicy {
 
   private RepositoryRuntime project(RepositoryRuntime runtime, Context context) {
     if (runtime.isProxy()) {
-      Rule rule = context.bindings.get(runtime.id());
-      if (rule != null && !allows(rule, context.path)) {
+      CompiledRule rule = context.bindings.get(runtime.id());
+      if (rule != null && !rule.allows(context.path)) {
         throw new Blocked();
       }
       return runtime;
@@ -271,10 +297,9 @@ public class RepositoryRoutingPolicy {
   }
 
   private static boolean appendRules(RepositoryRuntime runtime, Context context, StringBuilder out) {
-    Rule rule = context.bindings.get(runtime.id());
+    CompiledRule rule = context.bindings.get(runtime.id());
     if (rule != null) {
-      out.append(runtime.id()).append(':').append(rule.mode()).append(':');
-      for (String matcher : rule.matchers()) out.append(matcher.length()).append(':').append(matcher);
+      out.append(runtime.id()).append(':').append(rule.fingerprint());
       return true;
     }
     boolean affected = false;
@@ -291,13 +316,22 @@ public class RepositoryRoutingPolicy {
     out.append(']');
   }
 
-  static boolean allows(Rule rule, String path) {
-    boolean matched = rule.matchers().stream().anyMatch(path::matches);
-    return switch (rule.mode()) {
-      case "ALLOW" -> matched;
-      case "BLOCK" -> !matched;
-      default -> throw new IllegalStateException("Invalid persisted routing rule mode");
-    };
+  private record CompiledRule(boolean allowMode, List<Pattern> patterns, String fingerprint) {
+    static CompiledRule from(Rule rule) {
+      boolean allow = switch (rule.mode()) {
+        case "ALLOW" -> true;
+        case "BLOCK" -> false;
+        default -> throw new IllegalStateException("Invalid persisted routing rule mode");
+      };
+      var patterns = rule.matchers().stream().map(Pattern::compile).toList();
+      StringBuilder material = new StringBuilder(rule.mode()).append(':');
+      for (String matcher : rule.matchers()) material.append(matcher.length()).append(':').append(matcher);
+      return new CompiledRule(allow, patterns, digest(material.toString()));
+    }
+
+    boolean allows(String path) {
+      return allowMode == patterns.stream().anyMatch(pattern -> pattern.matcher(path).matches());
+    }
   }
 
   /** Namespace group cache entries by the policy snapshot that produced their content. */
@@ -323,9 +357,9 @@ public class RepositoryRoutingPolicy {
   }
   private static final class Context {
     final String path;
-    final Map<Long, Rule> bindings;
+    final Map<Long, CompiledRule> bindings;
     final Map<Long, String> groupFingerprints = new HashMap<>();
-    Context(String path, Map<Long, Rule> bindings) { this.path = path; this.bindings = Map.copyOf(bindings); }
+    Context(String path, Map<Long, CompiledRule> bindings) { this.path = path; this.bindings = bindings; }
   }
   public static final class Blocked extends ResponseStatusException {
     public Blocked() { super(HttpStatus.FORBIDDEN, "Routing rules block the requested item from this repository"); }

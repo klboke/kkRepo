@@ -26,7 +26,11 @@ The management API follows Nexus:
 
 Creation, update and deletion return 204. Invalid expressions and deletion of assigned rules return 400. Management requires the `nexus:*` administrative permission. Repository configuration uses `routingRuleName` in `/internal/repositories` (the older Nexus spelling `routingRule` is also accepted). An empty string removes the assignment; omission preserves the assignment on a partial repository update.
 
-Rules and bindings live in the shared database. Each request reads a consistent policy snapshot before serving protocol caches. Group cache generations incorporate the applicable rules and selected members, so a cache warmed under another routing decision cannot bypass a new rule. Requests already in progress retain their original snapshot.
+Rules and bindings live in the shared database. Each replica caches an immutable snapshot, including compiled regular expressions and empty results, for **30 seconds** by default. Warm requests do not query the routing-rule database; concurrent cold requests share one load. Hosted reads bypass the policy lookup. Configure `KKREPO_ROUTING_RULES_CACHE_TTL` (Spring property `kkrepo.routing-rules.cache-ttl`) with a positive duration such as `10s` or `1m`.
+
+Consistency is eventual: creating, changing, binding, unbinding or migrating a rule does not immediately invalidate replicas. Each node reloads on the first request after its snapshot expires; reads do not extend the TTL. Under healthy database/load conditions, changes become visible after at most the configured TTL plus reload time. Requests already in progress retain their original snapshot. Database failure during a required reload fails the request instead of extending an expired permissive snapshot.
+
+Group cache generations incorporate the applicable policy and selected members. Once a replica refreshes its snapshot, it cannot reuse group content selected by the old policy. The rule tester and management API read current configuration; serving nodes may still use their previous snapshot during the convergence window.
 
 See [compatibility mapping and test instructions](../../compat-test/routing-rules-mapping.md). Nexus 3 configuration migration imports routing rules and restores bindings for supported proxy repositories. Preflight lists the rules, bindings, blocking errors and a SHA-256 checksum of the source policy. Both `routingRule` and `routingRuleName` source fields are accepted.
 

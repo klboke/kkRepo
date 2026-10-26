@@ -31,6 +31,12 @@ R, APT, Alpine and Conda use their parser-returned resource paths; Ansible, Yum 
 
 Repository updates read the existing binding under a row lock, after acquiring any explicitly requested rule lock. This keeps the rule-before-repository order used by migration and prevents partial updates from overwriting concurrent assignments or removals. MySQL and PostgreSQL contract tests establish a stale transaction snapshot while another transaction assigns a rule, then verify that the locking read sees and preserves the committed binding.
 
+## Cache and convergence
+
+kkRepo intentionally uses eventual consistency for routing policy. Each replica keeps one immutable snapshot in `LocalCacheFactory` with a configurable expire-after-write TTL (default 30 seconds), deduplicated compiled patterns per rule and cached empty results. Warm requests perform no routing-rule SQL; concurrent cold requests share one load. Hosted requests bypass loading. Snapshot expiry is independent of access frequency, and a request pins its snapshot until completion. A failed load propagates rather than caching an empty policy or serving expired rules.
+
+Policy tests verify warm-load counts, concurrent single loading, empty-policy caching, expiry under traffic, independent replica convergence, binding removal, group cache-token changes and in-flight snapshot stability. Live tests poll only configuration transition boundaries (45 seconds by default, configurable with `ROUTING_RULES_CONVERGENCE_TIMEOUT_SECONDS`), then assert aliases and group results without retries. Migration verification also waits for the target replica to observe the imported binding. This is a deliberate kkRepo consistency choice, not a claim about Nexus cache timing.
+
 ## Configuration migration
 
 `NexusRestClient` reads `GET /service/rest/v1/routing-rules` together with repository details. The target `/internal/migration/nexus/preflight` exposes `routingRules.rules`, `bindings`, `errors` and `checksum`; `/run` imports rules before binding repositories inside the existing configuration transaction. An inaccessible policy API is a blocking error, never an empty rule set.

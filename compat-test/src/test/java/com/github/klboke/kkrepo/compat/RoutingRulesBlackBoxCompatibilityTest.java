@@ -65,9 +65,12 @@ class RoutingRulesBlackBoxCompatibilityTest {
     try {
       check(e, "POST", rules, rule(rule, "BLOCK", matchers), 204);
       e.create(proxy, "proxy", format.equals("swift") ? "https://github.com/" : e.upstreamBase() + "/repository/" + prefix + "-missing/", rule, List.of());
+      boolean first = true;
       for (String alias : aliases) {
         String url = (format.equals("docker") ? "/v2/" : "/repository/") + proxy + "/" + alias;
-        check(e, "GET", url, null, 403);
+        if (first) awaitCheck(e, url, 403);
+        else check(e, "GET", url, null, 403);
+        first = false;
         check(e, "HEAD", url, null, 403);
       }
     } finally {
@@ -88,6 +91,7 @@ class RoutingRulesBlackBoxCompatibilityTest {
       check(e, "POST", rules, rule(rule, "BLOCK", List.of("/simple/private/.*", "/simple/private-name/.*")), 204);
       // The missing upstream would return 404 if a request escaped the policy boundary.
       e.create(proxy, "proxy", e.upstreamBase() + "/repository/" + prefix + "-missing/", rule, List.of());
+      awaitCheck(e, "/repository/" + proxy + "/simple/private/", 403);
       for (String alias : List.of("private", "private/", "PRIVATE/", "Private__Name", "PRIVATE..NAME/", "private;x=1/")) {
         check(e, "GET", "/repository/" + proxy + "/simple/" + alias, null, 403);
         check(e, "HEAD", "/repository/" + proxy + "/simple/" + alias, null, 403);
@@ -125,7 +129,7 @@ class RoutingRulesBlackBoxCompatibilityTest {
         assertEquals("private", JSON.readTree(check(e, "GET", "/repository/" + proxy + "/private", null, 200).body()).path("name").asText());
         check(e, "GET", "/repository/" + group + "/private", null, 200);
         check(e, "PUT", rules + "/" + rule, rule(rule, "BLOCK", List.of("/private")), 204);
-        check(e, "GET", "/repository/" + proxy + "/private", null, 403);
+        awaitCheck(e, "/repository/" + proxy + "/private", 403);
         if (!e.nexus) {
           // Nexus 3.68 can retain its warmed npm group packument after a rule change.
           // kkRepo projects members before serving group metadata and excludes that cache.
@@ -191,7 +195,7 @@ class RoutingRulesBlackBoxCompatibilityTest {
       assertEquals("upstream", check(e, "GET", "/repository/" + group + "/blocked/component/1.0/component-1.0.jar", null, 200).body());
       check(e, "DELETE", rules + "/" + rule, null, 400);
       check(e, "PUT", rules + "/" + rule, rule(rule, "BLOCK", List.of("/blocked/.*", "/unused")), 204);
-      check(e, "GET", "/repository/" + proxy + "/blocked/component/1.0/component-1.0.jar", null, 403);
+      awaitCheck(e, "/repository/" + proxy + "/blocked/component/1.0/component-1.0.jar", 403);
       check(e, "HEAD", "/repository/" + proxy + "/blocked/component/1.0/component-1.0.jar", null, 403);
       check(e, "GET", "/repository/" + proxy + "/%62locked/component/1.0/component-1.0.jar", null, 403);
       for (String alternate : List.of("//blocked/component/1.0/component-1.0.jar",
@@ -205,6 +209,7 @@ class RoutingRulesBlackBoxCompatibilityTest {
       assertEquals("fallback", check(e, "GET", "/repository/" + group + "/blocked/component/1.0/component-1.0.jar", null, 200).body());
       assertEquals("allowed", check(e, "GET", "/repository/" + proxy + "/allowed/component/1.0/component-1.0.jar", null, 200).body());
       check(e, "PUT", rules + "/" + rule, rule(rule, "ALLOW", List.of("/allowed/.*\\.jar")), 204);
+      awaitCheck(e, "/repository/" + proxy + "/allowed/component/1.0/component-1.0.jar?x=1", 403);
       if (!e.nexus && e.format.equals("raw")) {
         // Raw handlers preserve semicolons as asset data, unlike MVC PyPI index paths.
         check(e, "GET", "/repository/" + proxy + "/allowed;private/item.jar", null, 403);
@@ -217,7 +222,7 @@ class RoutingRulesBlackBoxCompatibilityTest {
       check(e, "GET", "/repository/" + proxy + "/allowed/component/1.0/component-1.0.jar", null, 200);
       check(e, "PUT", rules + "/" + rule, rule(rule, "BLOCK", List.of("blocked")), 204);
       // Java matches(), not substring/find(). Previously warmed contents remain available after unblocking.
-      assertEquals("upstream", check(e, "GET", "/repository/" + proxy + "/blocked/component/1.0/component-1.0.jar", null, 200).body());
+      assertEquals("upstream", awaitCheck(e, "/repository/" + proxy + "/blocked/component/1.0/component-1.0.jar", 200).body());
       assertEquals("upstream", check(e, "GET", "/repository/" + group + "/blocked/component/1.0/component-1.0.jar", null, 200).body());
     } finally {
       for (String repository : List.of(group, proxy, fallback, upstream)) {
@@ -230,6 +235,22 @@ class RoutingRulesBlackBoxCompatibilityTest {
 
   private static Map<String, Object> rule(String name, String mode, List<String> matchers) {
     return Map.of("name", name, "description", "Routing compatibility fixture", "mode", mode, "matchers", matchers);
+  }
+
+  /** Only transition boundaries poll; subsequent alias/group assertions must pass immediately. */
+  private static HttpResponse<String> awaitCheck(Endpoint e, String path, int status) throws Exception {
+    if (e.nexus) return check(e, "GET", path, null, status);
+    long seconds = Long.parseLong(CompatDefaults.setting("compat.routingRules.convergenceTimeoutSeconds",
+        "ROUTING_RULES_CONVERGENCE_TIMEOUT_SECONDS").orElse("45"));
+    long deadline = System.nanoTime() + Duration.ofSeconds(seconds).toNanos();
+    HttpResponse<String> response;
+    do {
+      response = e.send("GET", path, null);
+      if (response.statusCode() == status) return response;
+      Thread.sleep(200);
+    } while (System.nanoTime() < deadline);
+    assertEquals(status, response.statusCode(), "Routing policy did not converge: " + path + ": " + response.body());
+    return response;
   }
 
   private static HttpResponse<String> check(Endpoint e, String method, String path, Object body, int status)

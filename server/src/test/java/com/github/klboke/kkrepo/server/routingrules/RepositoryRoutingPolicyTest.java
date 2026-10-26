@@ -12,6 +12,13 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.RoutingRuleDao.Binding;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import org.springframework.dao.DataAccessResourceFailureException;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -30,13 +37,114 @@ class RepositoryRoutingPolicyTest {
 
   @AfterEach void clearRequest() { RequestContextHolder.resetRequestAttributes(); }
 
-  @Test void blocksCachedRuntimeAndObservesChangesOnNextRequestWithoutCatalogInvalidation() {
+  @Test void warmRequestsReuseSnapshotAndRetainOldDecisionsUntilExpiry() {
     RepositoryRuntime proxy = runtime(1, RepositoryType.PROXY);
     when(rules.bindings()).thenReturn(List.of(binding("BLOCK", "/private/.*")));
     assertThrows(RepositoryRoutingPolicy.Blocked.class, () -> policy.prepare(proxy, "private/a", request()));
     when(rules.bindings()).thenReturn(List.of(binding("ALLOW", "/private/.*")));
-    assertSame(proxy, policy.prepare(proxy, "private/a", request()));
-    verify(rules, times(2)).bindings();
+    for (int i = 0; i < 1000; i++) {
+      assertThrows(RepositoryRoutingPolicy.Blocked.class, () -> policy.prepare(proxy, "private/a", request()));
+      assertSame(proxy, policy.prepare(proxy, "public/a", request()));
+    }
+    verify(rules).bindings();
+  }
+
+  @Test void replicasConvergeAfterExpiryWhileInflightRequestKeepsItsSnapshot() throws Exception {
+    var first = new RepositoryRoutingPolicy(rules, Duration.ofMillis(150));
+    var second = new RepositoryRoutingPolicy(rules, Duration.ofMillis(150));
+    RepositoryRuntime proxy = runtime(1, RepositoryType.PROXY);
+    RepositoryRuntime group = runtime(3, RepositoryType.GROUP).withMembers(List.of(proxy));
+    when(rules.bindings()).thenReturn(List.of(binding("BLOCK", "/never")));
+    var inflight = request();
+    assertEquals(List.of(proxy), first.prepare(group, "private/a", inflight).members());
+    String oldToken = RepositoryRoutingPolicy.cacheToken(group.id(), "1");
+    assertEquals(List.of(proxy), second.prepare(group, "private/a", request()).members());
+    when(rules.bindings()).thenReturn(List.of(binding("BLOCK", "/private/.*")));
+    // Continuous traffic must not extend the snapshot's expiry.
+    awaitAssertion(() -> {
+      assertTrue(first.prepare(group, "private/a", request()).members().isEmpty());
+      assertNotEquals(oldToken, RepositoryRoutingPolicy.cacheToken(group.id(), "1"));
+      assertTrue(second.prepare(group, "private/a", request()).members().isEmpty());
+    });
+    assertEquals(List.of(proxy), first.prepare(group, "private/a", inflight).members());
+    // Binding removal also converges, restoring group membership and its unfiltered cache token.
+    when(rules.bindings()).thenReturn(List.of());
+    awaitAssertion(() -> {
+      assertEquals(List.of(proxy), first.prepare(group, "private/a", request()).members());
+      assertEquals("1", RepositoryRoutingPolicy.cacheToken(group.id(), "1"));
+      assertEquals(List.of(proxy), second.prepare(group, "private/a", request()).members());
+    });
+  }
+
+  @Test void cachesEmptySnapshotsAndEventuallyObservesNewAssignments() throws Exception {
+    RepositoryRuntime proxy = runtime(1, RepositoryType.PROXY);
+    when(rules.bindings()).thenReturn(List.of());
+    for (int i = 0; i < 1000; i++) assertSame(proxy, policy.prepare(proxy, "private/a", request()));
+    verify(rules).bindings();
+    var expiring = new RepositoryRoutingPolicy(rules, Duration.ofMillis(100));
+    assertSame(proxy, expiring.prepare(proxy, "private/a", request()));
+    when(rules.bindings()).thenReturn(List.of(binding("BLOCK", "/private/.*")));
+    awaitAssertion(() -> assertThrows(RepositoryRoutingPolicy.Blocked.class,
+        () -> expiring.prepare(proxy, "private/a", request())));
+  }
+
+  @Test void hostedReadsAndWritesDoNotLoadRules() {
+    RepositoryRuntime hosted = runtime(2, RepositoryType.HOSTED);
+    for (String method : List.of("GET", "HEAD", "PUT")) {
+      var request = request(); request.setMethod(method);
+      assertSame(hosted, policy.prepare(hosted, "file", request));
+    }
+    var write = request(); write.setMethod("PUT");
+    policy.prepare(runtime(1, RepositoryType.PROXY), "file", write);
+    verifyNoInteractions(rules);
+  }
+
+  @Test void concurrentColdRequestsShareOneDatabaseLoad() throws Exception {
+    RepositoryRuntime proxy = runtime(1, RepositoryType.PROXY);
+    var entered = new CountDownLatch(1);
+    var release = new CountDownLatch(1);
+    when(rules.bindings()).thenAnswer(ignored -> {
+      entered.countDown();
+      assertTrue(release.await(5, TimeUnit.SECONDS));
+      return List.of(binding("BLOCK", "/private/.*"));
+    });
+    try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+      List<Future<?>> requests = new ArrayList<>();
+      try {
+        for (int i = 0; i < 32; i++) requests.add(executor.submit(() -> {
+          try {
+            assertThrows(RepositoryRoutingPolicy.Blocked.class,
+                () -> policy.prepare(proxy, "private/a", request()));
+          } finally { RequestContextHolder.resetRequestAttributes(); }
+        }));
+        assertTrue(entered.await(5, TimeUnit.SECONDS));
+      } finally { release.countDown(); }
+      for (Future<?> request : requests) request.get(5, TimeUnit.SECONDS);
+    }
+    verify(rules).bindings();
+  }
+
+  @Test void failedRefreshDoesNotServeExpiredAllowSnapshotAndCanRecover() throws Exception {
+    var expiring = new RepositoryRoutingPolicy(rules, Duration.ofMillis(100));
+    RepositoryRuntime proxy = runtime(1, RepositoryType.PROXY);
+    when(rules.bindings()).thenReturn(List.of());
+    assertSame(proxy, expiring.prepare(proxy, "private/a", request()));
+    when(rules.bindings()).thenThrow(new DataAccessResourceFailureException("unavailable"));
+    awaitAssertion(() -> assertThrows(DataAccessResourceFailureException.class,
+        () -> expiring.prepare(proxy, "private/a", request())));
+    doReturn(List.of(binding("BLOCK", "/private/.*"))).when(rules).bindings();
+    assertThrows(RepositoryRoutingPolicy.Blocked.class, () -> expiring.prepare(proxy, "private/a", request()));
+  }
+
+  private static void awaitAssertion(Runnable assertion) throws InterruptedException {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (true) {
+      try { assertion.run(); return; }
+      catch (AssertionError notYet) {
+        if (System.nanoTime() >= deadline) throw notYet;
+        Thread.sleep(10);
+      }
+    }
   }
 
   @Test void projectsNestedGroupsWithoutChangingCachedDefinitionsAndScopesGroupCaches() {

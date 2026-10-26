@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 
@@ -60,7 +61,16 @@ elif args.mode == 'verify':
     assert sum(r['name'] == rule for r in rules) == 1, 'Duplicate migrated rule'
     target = json.loads(call(args.kkrepo, '/internal/repositories/' + repo))
     assert target['routingRuleName'] == rule, 'Migrated proxy lost its routing rule'
-    call(args.kkrepo, '/repository/' + repo + '/private/denied.jar', expected=403)
+    # Each target replica may retain its pre-migration snapshot until its configured TTL.
+    deadline = time.monotonic() + float(os.environ.get('ROUTING_RULES_CONVERGENCE_TIMEOUT_SECONDS', '45'))
+    while True:
+        try:
+            call(args.kkrepo, '/repository/' + repo + '/private/denied.jar', expected=403)
+            break
+        except AssertionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.2)
     call(args.kkrepo, '/repository/' + repo + '/%70rivate/denied.jar', expected=403)
     source = call(args.nexus, '/repository/' + repo + artifact, nexus=True)
     migrated = call(args.kkrepo, '/repository/' + repo + artifact)
