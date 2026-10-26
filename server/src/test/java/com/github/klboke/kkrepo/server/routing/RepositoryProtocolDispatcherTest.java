@@ -69,7 +69,7 @@ class RepositoryProtocolDispatcherTest {
           RecordingHandler handler = handler(RepositoryProtocolRoute.anyPath(test.format(), RepositoryType.PROXY,
               method, 0), ResponseEntity.ok().build());
           var dispatcher = dispatcher(proxy, handler);
-          dispatcher.setRoutingPolicy(new RepositoryRoutingPolicy(rules));
+          dispatcher.setRoutingPolicy(initializedPolicy(rules));
           assertThrows(RepositoryRoutingPolicy.Blocked.class,
               () -> dispatcher.dispatchRead("repo", request(method.name(), "/repository/repo/" + alias), method),
               test.format() + " " + alias);
@@ -81,7 +81,7 @@ class RepositoryProtocolDispatcherTest {
           RecordingHandler grouped = handler(RepositoryProtocolRoute.anyPath(test.format(), RepositoryType.GROUP,
               method, 0), ResponseEntity.ok().build());
           var groupDispatcher = dispatcher(group, grouped);
-          groupDispatcher.setRoutingPolicy(new RepositoryRoutingPolicy(rules));
+          groupDispatcher.setRoutingPolicy(initializedPolicy(rules));
           groupDispatcher.dispatchRead("repo", request(method.name(), "/repository/repo/" + alias), method);
           assertTrue(grouped.lastRequest.runtime().members().isEmpty(), test.format() + " " + alias);
         }
@@ -101,7 +101,7 @@ class RepositoryProtocolDispatcherTest {
         RecordingHandler handler = handler(RepositoryProtocolRoute.anyPath(
             RepositoryFormat.TERRAFORM, target.type(), method, 0), ResponseEntity.ok().build());
         var dispatcher = dispatcher(target, handler);
-        dispatcher.setRoutingPolicy(new RepositoryRoutingPolicy(rules));
+        dispatcher.setRoutingPolicy(initializedPolicy(rules));
         var request = request(method.name(), "/repository/repo/v1/modules/url-token/private/m/aws/versions");
         request.setAttribute(RepositorySecurityFilter.NORMALIZED_REPOSITORY_PATH_ATTRIBUTE,
             "v1/modules/private/m/aws/versions");
@@ -133,7 +133,7 @@ class RepositoryProtocolDispatcherTest {
         RecordingHandler denied = handler(RepositoryProtocolRoute.anyPath(
             RepositoryFormat.NPM, RepositoryType.PROXY, method, 0), ResponseEntity.ok().build());
         var direct = dispatcher(proxy, denied);
-        direct.setRoutingPolicy(new RepositoryRoutingPolicy(rules));
+        direct.setRoutingPolicy(initializedPolicy(rules));
         assertThrows(RepositoryRoutingPolicy.Blocked.class,
             () -> direct.dispatchRead("repo", request(method.name(), "/repository/repo/" + path), method), path);
         assertEquals(0, denied.invocations);
@@ -146,7 +146,7 @@ class RepositoryProtocolDispatcherTest {
         RecordingHandler filtered = handler(RepositoryProtocolRoute.anyPath(
             RepositoryFormat.NPM, RepositoryType.GROUP, method, 0), ResponseEntity.ok().build());
         var grouped = dispatcher(group, filtered);
-        grouped.setRoutingPolicy(new RepositoryRoutingPolicy(rules));
+        grouped.setRoutingPolicy(initializedPolicy(rules));
         grouped.dispatchRead("repo", request(method.name(), "/repository/repo/" + path), method);
         assertTrue(filtered.lastRequest.runtime().members().isEmpty(), path);
       }
@@ -165,7 +165,7 @@ class RepositoryProtocolDispatcherTest {
       RecordingHandler raw = handler(RepositoryProtocolRoute.anyPath(
           RepositoryFormat.RAW, RepositoryType.PROXY, method, 0), ResponseEntity.ok().build());
       var dispatcher = dispatcher(runtime, raw);
-      dispatcher.setRoutingPolicy(new RepositoryRoutingPolicy(rules));
+      dispatcher.setRoutingPolicy(initializedPolicy(rules));
       assertThrows(RepositoryRoutingPolicy.Blocked.class,
           () -> dispatcher.dispatchRead("repo",
               request(method.name(), "/repository/repo/public;private/a"), method));
@@ -455,5 +455,10 @@ class RepositoryProtocolDispatcherTest {
       lastRequest = request;
       return response;
     }
+  }
+  private static RepositoryRoutingPolicy initializedPolicy(RoutingRuleDao rules) {
+    var policy = new RepositoryRoutingPolicy(rules);
+    policy.initialize();
+    return policy;
   }
 }

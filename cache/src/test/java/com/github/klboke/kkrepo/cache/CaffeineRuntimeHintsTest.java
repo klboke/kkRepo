@@ -32,6 +32,7 @@ class CaffeineRuntimeHintsTest {
         }, key -> Optional.empty(), value -> value, (key, error) -> {});
     List<ConcurrentMap<Object, Object>> cacheMaps =
         List.of(
+            snapshotMap(new RefreshingSnapshotCache<>("native-refreshing-snapshot", Object::new), "snapshots"),
             snapshotMap(snapshots, "snapshots"),
             snapshotMap(snapshots, "observedVersions"),
             Caffeine.newBuilder()
@@ -99,7 +100,7 @@ class CaffeineRuntimeHintsTest {
   @SuppressWarnings("unchecked")
   private static ConcurrentMap<Object, Object> snapshotMap(Object cache, String fieldName)
       throws Exception {
-    Field field = VersionedSnapshotCache.class.getDeclaredField(fieldName);
+    Field field = cache.getClass().getDeclaredField(fieldName);
     field.setAccessible(true);
     return ((LocalCache<Object, Object>) field.get(cache)).asMap();
   }

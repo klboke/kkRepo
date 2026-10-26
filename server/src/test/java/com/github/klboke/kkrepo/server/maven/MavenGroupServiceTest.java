@@ -61,7 +61,7 @@ class MavenGroupServiceTest {
     var rules = mock(RoutingRuleDao.class);
     when(rules.bindings()).thenReturn(List.of(new RoutingRuleDao.Binding(3,
         new RoutingRuleDao.Rule(1, "private", "", "BLOCK", List.of(java.util.regex.Pattern.quote("/" + path.path()))))));
-    var routing = new RepositoryRoutingPolicy(rules);
+    var routing = initializedPolicy(rules);
     var tokens = new NexusLikeCacheController(mock(VersionWatermark.class), 2);
     RepositoryRuntime nested = group(11, "nested", List.of(proxy(), hosted()));
     RepositoryRuntime outer = group(10, "outer", List.of(nested));
@@ -623,5 +623,10 @@ class MavenGroupServiceTest {
           "etag",
           Instant.EPOCH);
     }
+  }
+  private static RepositoryRoutingPolicy initializedPolicy(RoutingRuleDao rules) {
+    var policy = new RepositoryRoutingPolicy(rules);
+    policy.initialize();
+    return policy;
   }
 }

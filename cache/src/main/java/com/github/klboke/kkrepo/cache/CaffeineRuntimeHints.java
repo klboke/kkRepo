@@ -7,6 +7,7 @@ import org.springframework.aot.hint.RuntimeHintsRegistrar;
 
 /**
  * Reflection metadata for the cache module's configuration-specific Caffeine implementations.
+ * RefreshingSnapshotCache uses the size-bounded SSMS/PSMS configuration without expiration.
  * VersionedSnapshotCache uses the existing size-bounded (SSMS/PSMS) and write-expiring
  * (SSMSW/PSWMS) configurations; both are verified against its actual caches by the hints test.
  */

@@ -12,7 +12,6 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.RoutingRuleDao.Binding;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -37,55 +36,55 @@ class RepositoryRoutingPolicyTest {
 
   @AfterEach void clearRequest() { RequestContextHolder.resetRequestAttributes(); }
 
-  @Test void warmRequestsReuseSnapshotAndRetainOldDecisionsUntilExpiry() {
+  @Test void requestsOnlyReadSnapshotUntilExplicitRefresh() {
     RepositoryRuntime proxy = runtime(1, RepositoryType.PROXY);
     when(rules.bindings()).thenReturn(List.of(binding("BLOCK", "/private/.*")));
-    assertThrows(RepositoryRoutingPolicy.Blocked.class, () -> policy.prepare(proxy, "private/a", request()));
+    policy.initialize();
     when(rules.bindings()).thenReturn(List.of(binding("ALLOW", "/private/.*")));
     for (int i = 0; i < 1000; i++) {
       assertThrows(RepositoryRoutingPolicy.Blocked.class, () -> policy.prepare(proxy, "private/a", request()));
       assertSame(proxy, policy.prepare(proxy, "public/a", request()));
     }
     verify(rules).bindings();
+    policy.syncDatabaseToMemory();
+    assertSame(proxy, policy.prepare(proxy, "private/a", request()));
+    verify(rules, times(2)).bindings();
   }
 
-  @Test void replicasConvergeAfterExpiryWhileInflightRequestKeepsItsSnapshot() throws Exception {
-    var first = new RepositoryRoutingPolicy(rules, Duration.ofMillis(150));
-    var second = new RepositoryRoutingPolicy(rules, Duration.ofMillis(150));
+  @Test void replicasConvergeOnRefreshWhileInflightRequestKeepsItsSnapshot() {
+    var first = new RepositoryRoutingPolicy(rules);
+    var second = new RepositoryRoutingPolicy(rules);
     RepositoryRuntime proxy = runtime(1, RepositoryType.PROXY);
     RepositoryRuntime group = runtime(3, RepositoryType.GROUP).withMembers(List.of(proxy));
     when(rules.bindings()).thenReturn(List.of(binding("BLOCK", "/never")));
+    first.initialize(); second.initialize();
     var inflight = request();
     assertEquals(List.of(proxy), first.prepare(group, "private/a", inflight).members());
     String oldToken = RepositoryRoutingPolicy.cacheToken(group.id(), "1");
-    assertEquals(List.of(proxy), second.prepare(group, "private/a", request()).members());
     when(rules.bindings()).thenReturn(List.of(binding("BLOCK", "/private/.*")));
-    // Continuous traffic must not extend the snapshot's expiry.
-    awaitAssertion(() -> {
-      assertTrue(first.prepare(group, "private/a", request()).members().isEmpty());
-      assertNotEquals(oldToken, RepositoryRoutingPolicy.cacheToken(group.id(), "1"));
-      assertTrue(second.prepare(group, "private/a", request()).members().isEmpty());
-    });
+    first.syncDatabaseToMemory();
+    assertTrue(first.prepare(group, "private/a", request()).members().isEmpty());
+    assertNotEquals(oldToken, RepositoryRoutingPolicy.cacheToken(group.id(), "1"));
+    assertEquals(List.of(proxy), second.prepare(group, "private/a", request()).members());
+    second.syncDatabaseToMemory();
+    assertTrue(second.prepare(group, "private/a", request()).members().isEmpty());
     assertEquals(List.of(proxy), first.prepare(group, "private/a", inflight).members());
-    // Binding removal also converges, restoring group membership and its unfiltered cache token.
     when(rules.bindings()).thenReturn(List.of());
-    awaitAssertion(() -> {
-      assertEquals(List.of(proxy), first.prepare(group, "private/a", request()).members());
-      assertEquals("1", RepositoryRoutingPolicy.cacheToken(group.id(), "1"));
-      assertEquals(List.of(proxy), second.prepare(group, "private/a", request()).members());
-    });
+    first.syncDatabaseToMemory(); second.syncDatabaseToMemory();
+    assertEquals(List.of(proxy), first.prepare(group, "private/a", request()).members());
+    assertEquals("1", RepositoryRoutingPolicy.cacheToken(group.id(), "1"));
+    assertEquals(List.of(proxy), second.prepare(group, "private/a", request()).members());
   }
 
-  @Test void cachesEmptySnapshotsAndEventuallyObservesNewAssignments() throws Exception {
+  @Test void emptySnapshotAndMissingBindingsNeverTriggerDatabaseLoads() {
     RepositoryRuntime proxy = runtime(1, RepositoryType.PROXY);
     when(rules.bindings()).thenReturn(List.of());
+    policy.initialize();
+    when(rules.bindings()).thenReturn(List.of(binding("BLOCK", "/private/.*")));
     for (int i = 0; i < 1000; i++) assertSame(proxy, policy.prepare(proxy, "private/a", request()));
     verify(rules).bindings();
-    var expiring = new RepositoryRoutingPolicy(rules, Duration.ofMillis(100));
-    assertSame(proxy, expiring.prepare(proxy, "private/a", request()));
-    when(rules.bindings()).thenReturn(List.of(binding("BLOCK", "/private/.*")));
-    awaitAssertion(() -> assertThrows(RepositoryRoutingPolicy.Blocked.class,
-        () -> expiring.prepare(proxy, "private/a", request())));
+    policy.syncDatabaseToMemory();
+    assertThrows(RepositoryRoutingPolicy.Blocked.class, () -> policy.prepare(proxy, "private/a", request()));
   }
 
   @Test void hostedReadsAndWritesDoNotLoadRules() {
@@ -99,52 +98,68 @@ class RepositoryRoutingPolicyTest {
     verifyNoInteractions(rules);
   }
 
-  @Test void concurrentColdRequestsShareOneDatabaseLoad() throws Exception {
+  @Test void concurrentRequestsKeepReadingOldSnapshotDuringSlowRefresh() throws Exception {
     RepositoryRuntime proxy = runtime(1, RepositoryType.PROXY);
+    when(rules.bindings()).thenReturn(List.of(binding("BLOCK", "/private/.*")));
+    policy.initialize();
     var entered = new CountDownLatch(1);
     var release = new CountDownLatch(1);
     when(rules.bindings()).thenAnswer(ignored -> {
       entered.countDown();
       assertTrue(release.await(5, TimeUnit.SECONDS));
-      return List.of(binding("BLOCK", "/private/.*"));
+      return List.of();
     });
     try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-      List<Future<?>> requests = new ArrayList<>();
+      Future<?> refresh = executor.submit(policy::syncDatabaseToMemory);
       try {
+        assertTrue(entered.await(5, TimeUnit.SECONDS));
+        List<Future<?>> requests = new ArrayList<>();
         for (int i = 0; i < 32; i++) requests.add(executor.submit(() -> {
           try {
             assertThrows(RepositoryRoutingPolicy.Blocked.class,
                 () -> policy.prepare(proxy, "private/a", request()));
           } finally { RequestContextHolder.resetRequestAttributes(); }
         }));
-        assertTrue(entered.await(5, TimeUnit.SECONDS));
+        for (Future<?> request : requests) request.get(2, TimeUnit.SECONDS);
+        policy.syncDatabaseToMemory(); // overlapping refresh must skip, not query or wait
+        verify(rules, times(2)).bindings();
       } finally { release.countDown(); }
-      for (Future<?> request : requests) request.get(5, TimeUnit.SECONDS);
+      refresh.get(5, TimeUnit.SECONDS);
     }
-    verify(rules).bindings();
+    assertSame(proxy, policy.prepare(proxy, "private/a", request()));
   }
 
-  @Test void failedRefreshDoesNotServeExpiredAllowSnapshotAndCanRecover() throws Exception {
-    var expiring = new RepositoryRoutingPolicy(rules, Duration.ofMillis(100));
+  @Test void failedRefreshRetainsLastGoodSnapshotAndRecovers() {
     RepositoryRuntime proxy = runtime(1, RepositoryType.PROXY);
-    when(rules.bindings()).thenReturn(List.of());
-    assertSame(proxy, expiring.prepare(proxy, "private/a", request()));
+    when(rules.bindings()).thenReturn(List.of(binding("BLOCK", "/private/.*")));
+    policy.initialize();
     when(rules.bindings()).thenThrow(new DataAccessResourceFailureException("unavailable"));
-    awaitAssertion(() -> assertThrows(DataAccessResourceFailureException.class,
-        () -> expiring.prepare(proxy, "private/a", request())));
-    doReturn(List.of(binding("BLOCK", "/private/.*"))).when(rules).bindings();
-    assertThrows(RepositoryRoutingPolicy.Blocked.class, () -> expiring.prepare(proxy, "private/a", request()));
+    policy.syncDatabaseToMemory();
+    assertThrows(RepositoryRoutingPolicy.Blocked.class, () -> policy.prepare(proxy, "private/a", request()));
+    assertSame(proxy, policy.prepare(proxy, "public/a", request()));
+    doReturn(List.of(binding("ALLOW", "/private/.*"))).when(rules).bindings();
+    policy.syncDatabaseToMemory();
+    assertSame(proxy, policy.prepare(proxy, "private/a", request()));
+    assertThrows(RepositoryRoutingPolicy.Blocked.class, () -> policy.prepare(proxy, "public/a", request()));
   }
 
-  private static void awaitAssertion(Runnable assertion) throws InterruptedException {
-    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-    while (true) {
-      try { assertion.run(); return; }
-      catch (AssertionError notYet) {
-        if (System.nanoTime() >= deadline) throw notYet;
-        Thread.sleep(10);
-      }
-    }
+  @Test void invalidRuleDuringRefreshCannotPublishAPartialSnapshot() {
+    RepositoryRuntime proxy = runtime(1, RepositoryType.PROXY);
+    when(rules.bindings()).thenReturn(List.of(binding("BLOCK", "/private/.*")));
+    policy.initialize();
+    when(rules.bindings()).thenReturn(List.of(binding("ALLOW", "/private/.*"),
+        new Binding(2, new Rule(20, "invalid", "", "BLOCK", List.of("[")))));
+    policy.syncDatabaseToMemory();
+    assertThrows(RepositoryRoutingPolicy.Blocked.class, () -> policy.prepare(proxy, "private/a", request()));
+    assertSame(proxy, policy.prepare(proxy, "public/a", request()));
+  }
+
+  @Test void failedStartupCannotPublishAnEmptyPolicyOrLoadFromRequests() {
+    when(rules.bindings()).thenThrow(new DataAccessResourceFailureException("unavailable"));
+    assertThrows(DataAccessResourceFailureException.class, policy::initialize);
+    assertThrows(IllegalStateException.class,
+        () -> policy.prepare(runtime(1, RepositoryType.PROXY), "public/a", request()));
+    verify(rules).bindings();
   }
 
   @Test void projectsNestedGroupsWithoutChangingCachedDefinitionsAndScopesGroupCaches() {
@@ -153,6 +168,7 @@ class RepositoryRoutingPolicyTest {
     RepositoryRuntime nested = runtime(3, RepositoryType.GROUP).withMembers(List.of(proxy, hosted));
     RepositoryRuntime group = runtime(4, RepositoryType.GROUP).withMembers(List.of(nested));
     when(rules.bindings()).thenReturn(List.of(binding("BLOCK", "/private/.*")));
+    policy.initialize();
     RepositoryRuntime filtered = policy.prepare(group, "private/a", request());
     assertEquals(List.of(hosted), filtered.members().getFirst().members());
     assertEquals(List.of(proxy, hosted), group.members().getFirst().members());
@@ -174,6 +190,7 @@ class RepositoryRoutingPolicyTest {
     RepositoryRuntime unfiltered = registry.resolveFreshById(3).orElseThrow();
     ReflectionTestUtils.setField(registry, "routingPolicy", policy);
     when(rules.bindings()).thenReturn(List.of(binding("BLOCK", "/.*")));
+    policy.initialize();
     policy.prepare(unfiltered, "item", request());
     assertEquals(List.of(2L), registry.resolveFreshById(3).orElseThrow().members().stream()
         .map(RepositoryRuntime::id).toList());
@@ -182,6 +199,7 @@ class RepositoryRoutingPolicyTest {
   @Test void includesQueriesUsesWholePathAnyMatchAndDoesNotApplyToHostedOrWrites() {
     RepositoryRuntime proxy = runtime(1, RepositoryType.PROXY);
     when(rules.bindings()).thenReturn(List.of(binding("ALLOW", "/a", "/b\\?x=1")));
+    policy.initialize();
     var request = request(); request.addParameter("x", "1");
     assertSame(proxy, policy.prepare(proxy, "b", request));
     assertThrows(RepositoryRoutingPolicy.Blocked.class, () -> policy.prepare(proxy, "aa", request()));
@@ -194,6 +212,7 @@ class RepositoryRoutingPolicyTest {
   @Test void decodesRawPathsOnceAndSeparatesDecodedQuestionMarksFromQueries() {
     RepositoryRuntime proxy = runtime(1, RepositoryType.PROXY);
     when(rules.bindings()).thenReturn(List.of(binding("BLOCK", "/private/.*", "/a\\?b\\?x=1")));
+    policy.initialize();
     var encoded = request(); encoded.setRequestURI("/repository/%74est/%70rivate/file");
     assertThrows(RepositoryRoutingPolicy.Blocked.class, () -> policy.prepareRepository(proxy, encoded));
     assertSame(proxy, policy.prepare(proxy, "/%2570rivate/file", request()));
@@ -207,6 +226,7 @@ class RepositoryRoutingPolicyTest {
     RepositoryRuntime hosted = runtime(2, RepositoryType.HOSTED);
     RepositoryRuntime group = runtime(3, RepositoryType.GROUP).withMembers(List.of(proxy, hosted));
     when(rules.bindings()).thenReturn(List.of(binding("BLOCK", "/private/.*")));
+    policy.initialize();
     for (String path : List.of("//private/file", "/public/../private/file", "/public/%2e%2e/private/file", "/./private/file")) {
       assertThrows(RepositoryRoutingPolicy.Blocked.class, () -> policy.prepare(proxy, path, request()), path);
       assertEquals(List.of(hosted), policy.prepare(group, path, request()).members(), path);
@@ -219,11 +239,12 @@ class RepositoryRoutingPolicyTest {
   @Test void malformedEncodingAndCorruptPersistedModesNeverAllowDownloads() {
     RepositoryRuntime proxy = runtime(1, RepositoryType.PROXY);
     when(rules.bindings()).thenReturn(List.of(binding("BLOCK", "/private/.*")));
+    policy.initialize();
     var failure = assertThrows(org.springframework.web.server.ResponseStatusException.class,
         () -> policy.prepare(proxy, "/%GG", request()));
     assertEquals(400, failure.getStatusCode().value());
     when(rules.bindings()).thenReturn(List.of(binding("unknown", "/private/.*")));
-    assertThrows(IllegalStateException.class, () -> policy.prepare(proxy, "/public/file", request()));
+    assertThrows(IllegalStateException.class, policy::initialize);
   }
 
   @Test void canonicalIdentitiesAreNotDecodedAgainAndStillFilterGroups() {
@@ -231,6 +252,7 @@ class RepositoryRoutingPolicyTest {
     RepositoryRuntime hosted = runtime(2, RepositoryType.HOSTED);
     RepositoryRuntime group = runtime(3, RepositoryType.GROUP).withMembers(List.of(proxy, hosted));
     when(rules.bindings()).thenReturn(List.of(binding("BLOCK", "/simple/private/.*")));
+    policy.initialize();
     assertThrows(RepositoryRoutingPolicy.Blocked.class,
         () -> policy.prepareCanonical(proxy, "simple/private/", request()));
     assertEquals(List.of(hosted), policy.prepareCanonical(group, "simple/private/", request()).members());
@@ -243,6 +265,7 @@ class RepositoryRoutingPolicyTest {
   @Test void repositoryBoundarySupportsEncodedSegmentsCustomPrefixAndContext() {
     RepositoryRuntime proxy = runtime(1, RepositoryType.PROXY);
     when(rules.bindings()).thenReturn(List.of(binding("BLOCK", "/private/.*")));
+    policy.initialize();
     var request = request();
     request.setContextPath("/ctx");
     new com.github.klboke.kkrepo.server.config.RepositoryUrlPrefix("/custom/repos")

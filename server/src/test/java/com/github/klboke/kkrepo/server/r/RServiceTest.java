@@ -70,7 +70,7 @@ class RServiceTest {
         new RoutingRuleDao.Rule(1, "rule", "", "BLOCK", List.of("/never")))));
     var request = new MockHttpServletRequest("GET", "/repository/group/" + PATH);
     RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
-    RepositoryRuntime projected = new RepositoryRoutingPolicy(rules).prepare(group, PATH, request);
+    RepositoryRuntime projected = initializedPolicy(rules).prepare(group, PATH, request);
     when(published.find(group.id(), "src/contrib")).thenReturn(Optional.of(snapshot(group.id(), 9L, Map.of())));
     var binding = new RRegistryDao.GroupBinding(1L, group.id(), "src/contrib", 9L, PATH,
         hosted.id(), 4L, PATH, "a".repeat(32), "b".repeat(64), 12L, Instant.EPOCH);
@@ -92,7 +92,7 @@ class RServiceTest {
         new RoutingRuleDao.Rule(1, "rule", "", "BLOCK", List.of("/src/.*")))));
     var request = new MockHttpServletRequest("GET", "/repository/group/" + PATH);
     RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
-    RepositoryRuntime projected = new RepositoryRoutingPolicy(rules).prepare(group, PATH, request);
+    RepositoryRuntime projected = initializedPolicy(rules).prepare(group, PATH, request);
     when(published.find(group.id(), "src/contrib")).thenReturn(Optional.of(snapshot(group.id(), 9L,
         Map.of("@members", RService.fingerprint(Map.of())))));
     var binding = new RRegistryDao.GroupBinding(1L, group.id(), "src/contrib", 9L, PATH,
@@ -646,5 +646,10 @@ class RServiceTest {
         1L, writePolicy, null, null, true,
         type == RepositoryType.PROXY ? "https://example.invalid/" : null,
         60, 60, true, null, members);
+  }
+  private static RepositoryRoutingPolicy initializedPolicy(RoutingRuleDao rules) {
+    var policy = new RepositoryRoutingPolicy(rules);
+    policy.initialize();
+    return policy;
   }
 }

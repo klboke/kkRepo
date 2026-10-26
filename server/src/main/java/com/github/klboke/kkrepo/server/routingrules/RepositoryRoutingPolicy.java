@@ -1,7 +1,6 @@
 package com.github.klboke.kkrepo.server.routingrules;
 
-import com.github.klboke.kkrepo.cache.LocalCache;
-import com.github.klboke.kkrepo.cache.LocalCacheFactory;
+import com.github.klboke.kkrepo.cache.RefreshingSnapshotCache;
 import com.github.klboke.kkrepo.core.http.UriPathDecoder;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RoutingRuleDao.Rule;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RoutingRuleDao;
@@ -28,11 +27,11 @@ import com.github.klboke.kkrepo.protocol.swift.SwiftPathParser;
 import com.github.klboke.kkrepo.protocol.swift.SwiftScope;
 import com.github.klboke.kkrepo.server.config.RepositoryUrlPrefix;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import jakarta.annotation.PostConstruct;
 import jakarta.servlet.http.HttpServletRequest;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -40,8 +39,10 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.sql.init.dependency.DependsOnDatabaseInitialization;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.server.PathContainer;
 import org.springframework.stereotype.Service;
@@ -51,27 +52,37 @@ import org.springframework.web.server.ResponseStatusException;
 
 /**
  * Projects repository trees from an immutable node-local policy snapshot. The shared database
- * remains authoritative; each replica reloads on demand after expire-after-write TTL (30s by
- * default). Reads never extend freshness. A request pins its snapshot across group reloads.
- * This deliberately permits old decisions until expiry, including rule/binding/migration changes.
- * Empty snapshots are cached too; failed loads propagate instead of caching a permissive fallback.
+ * remains authoritative. Every replica loads before startup and refreshes in the background;
+ * requests only read memory and pin one snapshot across group reloads. Edits and migration converge
+ * after a successful refresh. Refresh failures preserve the last successful policy.
  */
 @Service
+@DependsOnDatabaseInitialization
 public class RepositoryRoutingPolicy {
+  private static final Logger log = LoggerFactory.getLogger(RepositoryRoutingPolicy.class);
   private static final String CONTEXT = RepositoryRoutingPolicy.class.getName();
-  private static final String SNAPSHOT = "bindings";
   private final RoutingRuleDao rules;
-  private final LocalCache<String, Map<Long, CompiledRule>> snapshots;
+  private final RefreshingSnapshotCache<Map<Long, CompiledRule>> snapshots;
 
-  @Autowired
-  public RepositoryRoutingPolicy(RoutingRuleDao rules,
-      @Value("${kkrepo.routing-rules.cache-ttl:30s}") Duration ttl) {
+  public RepositoryRoutingPolicy(RoutingRuleDao rules) {
     this.rules = rules;
-    this.snapshots = LocalCacheFactory.standard().<String, Map<Long, CompiledRule>>builder("routing-rule-snapshot")
-        .maximumSize(1).expireAfterWrite(ttl).build();
+    this.snapshots = new RefreshingSnapshotCache<>("routing-rule-snapshot", this::loadSnapshot);
   }
 
-  public RepositoryRoutingPolicy(RoutingRuleDao rules) { this(rules, Duration.ofSeconds(30)); }
+  @PostConstruct
+  public void initialize() {
+    snapshots.initialize();
+  }
+
+  @Scheduled(fixedDelayString = "${kkrepo.routing-rules.refresh-interval:30s}",
+      initialDelayString = "${kkrepo.routing-rules.refresh-interval:30s}")
+  public void syncDatabaseToMemory() {
+    try {
+      snapshots.refresh();
+    } catch (RuntimeException failure) {
+      log.warn("Failed refreshing routing rules; keeping previous in-memory snapshot", failure);
+    }
+  }
 
   private Map<Long, CompiledRule> loadSnapshot() {
     Map<Long, CompiledRule> byRule = new HashMap<>();
@@ -224,7 +235,7 @@ public class RepositoryRoutingPolicy {
     // Hosted reads cannot be restricted by routing rules and need no policy lookup.
     if (runtime.isHosted()) return runtime;
     if (!(request.getAttribute(CONTEXT) instanceof Context)) {
-      Map<Long, CompiledRule> bindings = snapshots.get(SNAPSHOT, ignored -> loadSnapshot());
+      Map<Long, CompiledRule> bindings = snapshots.current();
       StringBuilder matchPath = new StringBuilder(path);
       StringBuilder query = new StringBuilder();
       // Nexus RoutingRuleHandler includes decoded query parameters in matcher input.

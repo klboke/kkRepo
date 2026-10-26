@@ -32,7 +32,7 @@ class PypiRoutingRuleTest {
     var proxy = mock(PypiProxyService.class);
     when(proxy.getIndex(eq(runtime), anyString(), anyBoolean())).thenReturn(PypiResponse.noBody(200));
     var controller = new PypiRepositoryController(registry, null, proxy, null, null);
-    controller.setRoutingPolicy(new RepositoryRoutingPolicy(rules));
+    controller.setRoutingPolicy(initializedPolicy(rules));
     var mvc = MockMvcBuilders.standaloneSetup(controller)
         .addPlaceholderValue("kkrepo.compatibility.repository-url-prefix", "/repository")
         .setControllerAdvice(new RoutingRuleErrorAdvice()).build();
@@ -45,5 +45,10 @@ class PypiRoutingRuleTest {
       assertEquals(403, mvc.perform(head(URI.create(path))).andReturn().getResponse().getStatus(), path);
     }
     verifyNoInteractions(proxy);
+  }
+  private static RepositoryRoutingPolicy initializedPolicy(RoutingRuleDao rules) {
+    var policy = new RepositoryRoutingPolicy(rules);
+    policy.initialize();
+    return policy;
   }
 }
