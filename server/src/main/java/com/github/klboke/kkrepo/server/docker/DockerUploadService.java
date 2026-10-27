@@ -13,6 +13,7 @@ import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
@@ -21,18 +22,24 @@ import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 public class DockerUploadService {
+  private static final Logger log = LoggerFactory.getLogger(DockerUploadService.class);
+  private final TransientTransactionRetry transactions;
   private final DockerUploadDao uploadDao;
   private final DockerBlobStore blobStore;
   private final DockerManifestStore manifestStore;
@@ -45,20 +52,14 @@ public class DockerUploadService {
       DockerBlobStore blobStore,
       DockerManifestStore manifestStore,
       @Value("${kkrepo.docker.upload-session-ttl-seconds:86400}") long uploadTtlSeconds,
-      @Autowired(required = false) DockerMetrics metrics) {
+      @Autowired(required = false) DockerMetrics metrics,
+      TransientTransactionRetry transactions) {
+    this.transactions = Objects.requireNonNull(transactions, "transactions");
     this.uploadDao = uploadDao;
     this.blobStore = blobStore;
     this.manifestStore = manifestStore;
     this.uploadTtlSeconds = Math.max(300, uploadTtlSeconds);
     this.metrics = metrics;
-  }
-
-  public DockerUploadService(
-      DockerUploadDao uploadDao,
-      DockerBlobStore blobStore,
-      DockerManifestStore manifestStore,
-      long uploadTtlSeconds) {
-    this(uploadDao, blobStore, manifestStore, uploadTtlSeconds, null);
   }
 
   public UploadStatus start(
@@ -130,78 +131,123 @@ public class DockerUploadService {
     return new UploadStatus(uuid, startOffset(session), session.nextOffset(), false, null);
   }
 
-  @Transactional
+  /** Network I/O runs without a transaction; the shared session is revalidated at publication. */
   public UploadStatus append(
-      RepositoryRuntime runtime,
-      String uuid,
-      InputStream body,
-      Long contentLength,
-      String contentRange) {
-    DockerUploadSessionRecord session = lockedSession(uuid, runtime);
-    ensureActive(session);
-    ContentRange range = parseContentRange(contentRange, session.nextOffset(), contentLength);
-    long start = range.start();
-    if (start != session.nextOffset()) {
-      throw new DockerProtocolException(
-          DockerErrorCode.BLOB_UPLOAD_INVALID,
-          "unexpected upload offset " + start + ", expected " + session.nextOffset(),
-          416);
+      RepositoryRuntime runtime, String uuid, InputStream body, Long contentLength, String contentRange) {
+    requireNoTransaction();
+    UploadSnapshot snapshot = snapshot(runtime, uuid, false);
+    validateRange(snapshot, contentLength, contentRange);
+    ChunkUpload chunk = uploadChunk(runtime, uuid, snapshot.chunkIndex(), body,
+        contentLength == null ? -1 : contentLength);
+    try {
+      transactions.execute("Append Docker upload", () -> {
+        ensureUnchanged(runtime, uuid, snapshot);
+        appendChunk(uuid, snapshot, chunk);
+        return null;
+      });
+    } catch (RuntimeException failure) {
+      discardUnpublishedChunk(runtime, uuid, chunk);
+      throw failure;
     }
-    int chunkIndex = uploadDao.nextChunkIndex(uuid);
-    ChunkUpload chunk = uploadChunk(runtime, uuid, chunkIndex, body, contentLength == null ? -1 : contentLength);
-    long end = start + chunk.size() - 1;
-    uploadDao.appendChunk(uuid, chunkIndex, start, Math.max(start, end), chunk.blobRef(),
-        chunk.objectKey(), chunk.sha256(), chunk.size(),
-        start + chunk.size());
     recordUpload(runtime, "append", "stored");
-    return new UploadStatus(uuid, 0, start + chunk.size(), false, null);
+    return new UploadStatus(uuid, 0, snapshot.offset() + chunk.size(), false, null);
   }
 
-  @Transactional
   public CompleteResult complete(
-      RepositoryRuntime runtime,
-      String uuid,
-      InputStream finalChunk,
-      Long finalChunkLength,
-      String contentRange,
-      DockerDigest expectedDigest,
-      String createdBy,
-      String createdByIp) {
+      RepositoryRuntime runtime, String uuid, InputStream finalChunk, Long finalChunkLength,
+      String contentRange, DockerDigest expectedDigest, String createdBy, String createdByIp) {
+    requireNoTransaction();
     if (expectedDigest == null) {
       throw new DockerProtocolException(DockerErrorCode.DIGEST_INVALID, "digest query parameter is required", 400);
     }
-    DockerUploadSessionRecord session = lockedSession(uuid, runtime);
-    ensureActive(session);
+    UploadSnapshot snapshot = snapshot(runtime, uuid, true);
+    ChunkUpload extra = null;
     if (finalChunkLength == null || finalChunkLength != 0) {
-      append(runtime, uuid, finalChunk, finalChunkLength, contentRange);
-      session = lockedSession(uuid, runtime);
+      validateRange(snapshot, finalChunkLength, contentRange);
+      extra = uploadChunk(runtime, uuid, snapshot.chunkIndex(), finalChunk,
+          finalChunkLength == null ? -1 : finalChunkLength);
     }
-    List<DockerUploadChunkRecord> chunks = uploadDao.listChunks(uuid);
-    long totalSize = totalChunkSize(chunks);
+    ChunkUpload finalUpload = extra;
+    List<DockerUploadChunkRecord> chunks = new ArrayList<>(snapshot.chunks());
+    if (extra != null) {
+      chunks.add(new DockerUploadChunkRecord(0L, uuid, snapshot.chunkIndex(), snapshot.offset(),
+          snapshot.offset() + Math.max(0, extra.size() - 1), extra.blobRef(), extra.objectKey(),
+          extra.sha256(), extra.size(), Instant.now()));
+    }
     try (InputStream in = chunkStream(runtime, chunks)) {
-      var stored = blobStore.putVerifiedBlob(
-          runtime,
-          expectedDigest,
-          in,
-          totalSize,
-          "application/octet-stream",
-          createdBy,
-          createdByIp);
-      uploadDao.completeSession(uuid, expectedDigest.value(), expectedDigest.algorithm());
+      var stored = blobStore.putVerifiedBlob(runtime, expectedDigest, in, totalChunkSize(chunks),
+          "application/octet-stream", createdBy, createdByIp,
+          persist -> transactions.execute("Complete Docker upload", () -> {
+            ensureUnchanged(runtime, uuid, snapshot);
+            if (finalUpload != null) appendChunk(uuid, snapshot, finalUpload);
+            var result = persist.get();
+            uploadDao.completeSession(uuid, expectedDigest.value(), expectedDigest.algorithm());
+            return result;
+          }));
       recordUpload(runtime, "complete", "stored");
       recordDigest(runtime, "upload_blob", "success");
       return new CompleteResult(expectedDigest, stored.blob().size());
-    } catch (DockerProtocolException e) {
+    } catch (RuntimeException | IOException failure) {
+      if (extra != null) discardUnpublishedChunk(runtime, uuid, extra);
       recordUpload(runtime, "complete", "error");
-      if (e.code() == DockerErrorCode.DIGEST_INVALID) {
+      if (failure instanceof DockerProtocolException protocol && protocol.code() == DockerErrorCode.DIGEST_INVALID) {
         recordDigest(runtime, "upload_blob", "failure");
       }
-      throw e;
-    } catch (IOException e) {
-      recordUpload(runtime, "complete", "error");
-      throw new UncheckedIOException(e);
+      if (failure instanceof IOException io) throw new UncheckedIOException(io);
+      throw (RuntimeException) failure;
     }
   }
+
+  private UploadSnapshot snapshot(RepositoryRuntime runtime, String uuid, boolean includeChunks) {
+    return transactions.execute("Read Docker upload", () -> {
+      var session = lockedSession(uuid, runtime);
+      ensureActive(session);
+      return new UploadSnapshot(session.nextOffset(), uploadDao.nextChunkIndex(uuid),
+          includeChunks ? List.copyOf(uploadDao.listChunks(uuid)) : List.of());
+    });
+  }
+
+  private void ensureUnchanged(RepositoryRuntime runtime, String uuid, UploadSnapshot snapshot) {
+    var session = lockedSession(uuid, runtime);
+    ensureActive(session);
+    // Checking the chunk sequence also fences zero-byte appends, which leave the offset unchanged.
+    if (session.nextOffset() != snapshot.offset() || uploadDao.nextChunkIndex(uuid) != snapshot.chunkIndex()) {
+      throw new DockerProtocolException(DockerErrorCode.BLOB_UPLOAD_INVALID,
+          "upload changed while content was being stored; resume from the current upload offset", 416);
+    }
+  }
+
+  private void validateRange(UploadSnapshot snapshot, Long length, String range) {
+    if (parseContentRange(range, snapshot.offset(), length).start() != snapshot.offset()) {
+      throw new DockerProtocolException(DockerErrorCode.BLOB_UPLOAD_INVALID,
+          "unexpected upload offset, expected " + snapshot.offset(), 416);
+    }
+  }
+
+  private void appendChunk(String uuid, UploadSnapshot snapshot, ChunkUpload chunk) {
+    long start = snapshot.offset();
+    uploadDao.appendChunk(uuid, snapshot.chunkIndex(), start, start + Math.max(0, chunk.size() - 1),
+        chunk.blobRef(), chunk.objectKey(), chunk.sha256(), chunk.size(), start + chunk.size());
+  }
+
+  private void discardUnpublishedChunk(RepositoryRuntime runtime, String uuid, ChunkUpload chunk) {
+    try {
+      // A commit acknowledgement may have been lost; never delete a durably registered chunk.
+      if (uploadDao.listChunks(uuid).stream().anyMatch(row -> chunk.objectKey().equals(row.objectKey()))) return;
+      blobStore.storage(runtime).delete(BlobReferenceCodec.reference(
+          chunk.blobRef(), chunk.objectKey(), chunk.sha256(), chunk.size()));
+    } catch (RuntimeException cleanup) {
+      log.warn("Failed cleaning unpublished Docker chunk uuid={} objectKey={}", uuid, chunk.objectKey(), cleanup);
+    }
+  }
+
+  private static void requireNoTransaction() {
+    if (TransactionSynchronizationManager.isActualTransactionActive()) {
+      throw new IllegalStateException("Docker upload I/O must not run inside a database transaction");
+    }
+  }
+
+  private record UploadSnapshot(long offset, int chunkIndex, List<DockerUploadChunkRecord> chunks) {}
 
   @Transactional
   public void cancel(RepositoryRuntime runtime, String uuid) {

@@ -95,6 +95,12 @@ configure `KKREPO_OUTBOUND_PROXY_CONNECTION_REQUEST_TIMEOUT_MS` (milliseconds) t
 This setting applies to all direct and proxied outbound HTTP requests and is independent of the
 TCP connect timeout and response/download timeout.
 
+### Slow object storage and upload transactions
+
+Docker chunk reception, object-store reads/writes and digest verification run outside database transactions. Short transactions capture the shared upload offset/chunk sequence and recheck both under a session row lock before publication. Blob metadata, an optional final chunk and session completion commit atomically. This prevents slow S3/OSS transfers from occupying a database connection for the entire transfer.
+
+Replicas coordinate through the shared session and immutable chunk objects. A concurrent append invalidates an older operation's captured offset/sequence; cancellation or expiry prevents late publication. Requests that lose an append race receive `BLOB_UPLOAD_INVALID` (416) and can resume from the current upload status. Transaction retries reuse verified bytes instead of repeating the transfer. Failed operations attempt to remove their unpublished objects, checking durable references first if commit acknowledgement was lost. This does not change Hikari's leak-detection threshold or remove the existing need to reconcile orphan objects after a process/storage failure.
+
 ## Related Documentation
 
 - [Docker / OCI client recipe](../client-recipes.md#docker--oci)

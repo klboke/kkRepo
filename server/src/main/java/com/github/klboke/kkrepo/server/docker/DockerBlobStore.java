@@ -152,6 +152,14 @@ public class DockerBlobStore {
       String contentType,
       String createdBy,
       String createdByIp) {
+    return putVerifiedBlob(runtime, digest, body, size, contentType, createdBy, createdByIp, this::executePersist);
+  }
+
+  /** Verifies/stores bytes first, then lets the upload owner atomically publish metadata and session state. */
+  StoredBlob putVerifiedBlob(
+      RepositoryRuntime runtime, DockerDigest digest, InputStream body, long size, String contentType,
+      String createdBy, String createdByIp,
+      java.util.function.Function<java.util.function.Supplier<StoredBlob>, StoredBlob> publication) {
     if (!digest.isSha256()) {
       throw new DockerProtocolException(DockerErrorCode.DIGEST_INVALID, "only sha256 blobs are supported", 400);
     }
@@ -161,7 +169,8 @@ public class DockerBlobStore {
       if (reusable.isPresent()) {
         try {
           verified.transferTo(java.io.OutputStream.nullOutputStream());
-          StoredBlob stored = persistBlobRecordReuse(runtime, digest, reusable.get(), null, createdBy, createdByIp);
+          StoredBlob stored = publication.apply(() -> persistBlobRecordReuse(
+              runtime, digest, reusable.get(), null, createdBy, createdByIp));
           recordDigest(runtime, "verified_blob", "success");
           return stored;
         } catch (DockerProtocolException e) {
@@ -180,7 +189,7 @@ public class DockerBlobStore {
             digest.hex());
         verified.verifyDigest();
         BlobReference uploadedReference = reference;
-        StoredBlob stored = executePersist(() -> persistBlob(
+        StoredBlob stored = publication.apply(() -> persistBlob(
             runtime, digest, uploadedReference, size, contentType, createdBy, createdByIp));
         recordDigest(runtime, "verified_blob", "success");
         return stored;

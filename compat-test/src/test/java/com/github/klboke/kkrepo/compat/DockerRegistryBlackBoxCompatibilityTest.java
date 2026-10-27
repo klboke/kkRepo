@@ -34,6 +34,47 @@ class DockerRegistryBlackBoxCompatibilityTest {
       .build();
 
   @Test
+  void chunkedUploadsPreserveOffsetsAndSupportCancellation() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeTrue(config.enabled() && config.configured() && config.writeEnabled(),
+        "Docker write compatibility is not configured");
+    String image = config.repositoryPath(config.uploadImage() + "/transactions-" + System.nanoTime());
+    byte[] first = "chunk-one".getBytes(StandardCharsets.UTF_8);
+    byte[] second = "-chunk-two".getBytes(StandardCharsets.UTF_8);
+    byte[] all = "chunk-one-chunk-two".getBytes(StandardCharsets.UTF_8);
+    String digest = "sha256:" + sha256(all);
+    for (Endpoint endpoint : List.of(config.nexus(), config.nexusPlus())) {
+      Exchange started = post(endpoint, endpoint.v2(image + "/blobs/uploads/"), true);
+      assertEquals(202, started.status());
+      Exchange one = patch(endpoint, endpoint.resolve(started.header("Location").orElseThrow()),
+          "application/octet-stream", first, true);
+      assertEquals(202, one.status());
+      Exchange two = patch(endpoint, endpoint.resolve(one.header("Location").orElseThrow()),
+          "application/octet-stream", second, true);
+      assertEquals(202, two.status());
+      assertEquals("0-" + (all.length - 1), two.header("Range").orElseThrow());
+      String location = two.header("Location").orElseThrow();
+      Exchange completed = put(endpoint, endpoint.resolve(location + (location.contains("?") ? "&" : "?")
+          + "digest=" + encode(digest)), "application/octet-stream", new byte[0], true);
+      assertEquals(201, completed.status());
+      assertEquals(digest, completed.header(DockerConstants.CONTENT_DIGEST_HEADER).orElseThrow());
+      Exchange downloaded = get(endpoint, endpoint.v2(image + "/blobs/" + digest), "*/*", true);
+      assertEquals(200, downloaded.status());
+      assertArrayEquals(all, downloaded.body());
+      Exchange cancelled = post(endpoint, endpoint.v2(image + "/blobs/uploads/"), true);
+      URI cancelUri = endpoint.resolve(cancelled.header("Location").orElseThrow());
+      assertEquals(204, delete(endpoint, cancelUri, true).status());
+      Exchange cancelledStatus = get(endpoint, cancelUri, "*/*", true);
+      assertEquals(404, cancelledStatus.status());
+      assertEquals("BLOB_UPLOAD_UNKNOWN", JSON.readTree(cancelledStatus.body()).path("errors").path(0).path("code").asText());
+      // Nexus 3.68 returns UNKNOWN/500 for PATCH after cancellation; keep the protocol-correct kkRepo response.
+      if (endpoint == config.nexusPlus()) {
+        assertEquals(404, patch(endpoint, cancelUri, "application/octet-stream", first, true).status());
+      }
+    }
+  }
+
+  @Test
   void registryV2EndpointsMatchNexusWhenConfigured() throws Exception {
     CompatConfig config = CompatConfig.load();
     assumeTrue(config.enabled(),

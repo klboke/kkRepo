@@ -47,7 +47,7 @@ class DockerUploadServiceTest {
     DockerUploadDao uploadDao = mock(DockerUploadDao.class);
     DockerBlobStore blobStore = mock(DockerBlobStore.class);
     DockerManifestStore manifestStore = mock(DockerManifestStore.class);
-    DockerUploadService service = new DockerUploadService(uploadDao, blobStore, manifestStore, 3600);
+    DockerUploadService service = service(uploadDao, blobStore, manifestStore, 3600);
     RepositoryRuntime runtime = hostedRuntime();
     DockerDigest digest = DockerDigest.parse("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     DockerBlobStore.StoredBlob sourceBlob = storedBlob(runtime, digest);
@@ -69,7 +69,7 @@ class DockerUploadServiceTest {
     DockerUploadDao uploadDao = mock(DockerUploadDao.class);
     DockerBlobStore blobStore = mock(DockerBlobStore.class);
     DockerManifestStore manifestStore = mock(DockerManifestStore.class);
-    DockerUploadService service = new DockerUploadService(uploadDao, blobStore, manifestStore, 3600);
+    DockerUploadService service = service(uploadDao, blobStore, manifestStore, 3600);
     RepositoryRuntime runtime = hostedRuntime();
     DockerDigest digest = DockerDigest.parse("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
     when(manifestStore.referencesBlob(runtime, "library/base", digest)).thenReturn(false);
@@ -86,7 +86,7 @@ class DockerUploadServiceTest {
   void completeReadsFinalChunkWhenContentLengthIsUnknown() {
     DockerUploadDao uploadDao = mock(DockerUploadDao.class);
     DockerBlobStore blobStore = mock(DockerBlobStore.class);
-    DockerUploadService service = new DockerUploadService(uploadDao, blobStore, null, 3600);
+    DockerUploadService service = service(uploadDao, blobStore, null, 3600);
     RepositoryRuntime runtime = hostedRuntime();
     InMemoryBlobStorage storage = new InMemoryBlobStorage();
     List<DockerUploadChunkRecord> chunks = new ArrayList<>();
@@ -95,9 +95,7 @@ class DockerUploadServiceTest {
         "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     when(blobStore.storage(runtime)).thenReturn(storage);
     when(uploadDao.lockSession("upload-1"))
-        .thenReturn(Optional.of(session("upload-1", runtime, 0)))
-        .thenReturn(Optional.of(session("upload-1", runtime, 0)))
-        .thenReturn(Optional.of(session("upload-1", runtime, 3)));
+        .thenReturn(Optional.of(session("upload-1", runtime, 0)));
     when(uploadDao.nextChunkIndex("upload-1")).thenReturn(0);
     when(uploadDao.listChunks("upload-1")).thenAnswer(invocation -> List.copyOf(chunks));
     org.mockito.Mockito.doAnswer(invocation -> {
@@ -122,12 +120,13 @@ class DockerUploadServiceTest {
         eq(3L),
         eq("application/octet-stream"),
         eq("user"),
-        eq("127.0.0.1")))
+        eq("127.0.0.1"), any()))
         .thenAnswer(invocation -> {
           try (InputStream in = invocation.getArgument(2)) {
             storedBody.set(in.readAllBytes());
           }
-          return storedBlob(runtime, digest);
+          java.util.function.Function<java.util.function.Supplier<DockerBlobStore.StoredBlob>, DockerBlobStore.StoredBlob> publish = invocation.getArgument(7);
+          return publish.apply(() -> storedBlob(runtime, digest));
         });
 
     DockerUploadService.CompleteResult result = service.complete(
@@ -150,7 +149,7 @@ class DockerUploadServiceTest {
   void completeMergesMultipleStoredChunksInOrder() {
     DockerUploadDao uploadDao = mock(DockerUploadDao.class);
     DockerBlobStore blobStore = mock(DockerBlobStore.class);
-    DockerUploadService service = new DockerUploadService(uploadDao, blobStore, null, 3600);
+    DockerUploadService service = service(uploadDao, blobStore, null, 3600);
     RepositoryRuntime runtime = hostedRuntime();
     InMemoryBlobStorage storage = new InMemoryBlobStorage();
     List<DockerUploadChunkRecord> chunks = new ArrayList<>();
@@ -160,10 +159,9 @@ class DockerUploadServiceTest {
     when(blobStore.storage(runtime)).thenReturn(storage);
     when(uploadDao.lockSession("upload-2"))
         .thenReturn(Optional.of(session("upload-2", runtime, 0)))
-        .thenReturn(Optional.of(session("upload-2", runtime, 3)))
-        .thenReturn(Optional.of(session("upload-2", runtime, 3)))
-        .thenReturn(Optional.of(session("upload-2", runtime, 6)));
-    when(uploadDao.nextChunkIndex("upload-2")).thenReturn(0, 1);
+        .thenReturn(Optional.of(session("upload-2", runtime, 0)))
+        .thenReturn(Optional.of(session("upload-2", runtime, 3)));
+    when(uploadDao.nextChunkIndex("upload-2")).thenReturn(0, 0, 1, 1);
     when(uploadDao.listChunks("upload-2")).thenAnswer(invocation -> List.copyOf(chunks));
     org.mockito.Mockito.doAnswer(invocation -> {
       chunks.add(new DockerUploadChunkRecord(
@@ -188,14 +186,15 @@ class DockerUploadServiceTest {
         eq(6L),
         eq("application/octet-stream"),
         eq("user"),
-        eq("127.0.0.1")))
+        eq("127.0.0.1"), any()))
         .thenAnswer(invocation -> {
           try (InputStream in = invocation.getArgument(2)) {
             storedBody.set(in.readAllBytes());
           } catch (IOException e) {
             throw new UncheckedIOException(e);
           }
-          return storedBlob(runtime, digest, 6);
+          java.util.function.Function<java.util.function.Supplier<DockerBlobStore.StoredBlob>, DockerBlobStore.StoredBlob> publish = invocation.getArgument(7);
+          return publish.apply(() -> storedBlob(runtime, digest, 6));
         });
 
     service.append(runtime, "upload-2",
@@ -223,7 +222,7 @@ class DockerUploadServiceTest {
   @Test
   void statusRejectsUploadSessionFromAnotherRepository() {
     DockerUploadDao uploadDao = mock(DockerUploadDao.class);
-    DockerUploadService service = new DockerUploadService(
+    DockerUploadService service = service(
         uploadDao, mock(DockerBlobStore.class), null, 3600);
     RepositoryRuntime runtime = hostedRuntime();
     RepositoryRuntime otherRuntime = dockerRuntime(99L, "other-docker-hosted");
@@ -239,7 +238,7 @@ class DockerUploadServiceTest {
   @Test
   void cancelRejectsUploadSessionFromAnotherRepository() {
     DockerUploadDao uploadDao = mock(DockerUploadDao.class);
-    DockerUploadService service = new DockerUploadService(
+    DockerUploadService service = service(
         uploadDao, mock(DockerBlobStore.class), null, 3600);
     RepositoryRuntime runtime = hostedRuntime();
     RepositoryRuntime otherRuntime = dockerRuntime(99L, "other-docker-hosted");
@@ -256,7 +255,7 @@ class DockerUploadServiceTest {
   @Test
   void appendRejectsOutOfOrderContentRangeStart() {
     DockerUploadDao uploadDao = mock(DockerUploadDao.class);
-    DockerUploadService service = new DockerUploadService(
+    DockerUploadService service = service(
         uploadDao, mock(DockerBlobStore.class), null, 3600);
     RepositoryRuntime runtime = hostedRuntime();
     when(uploadDao.lockSession("upload-1"))
@@ -278,7 +277,7 @@ class DockerUploadServiceTest {
   @Test
   void appendRejectsContentRangeThatDoesNotMatchLength() {
     DockerUploadDao uploadDao = mock(DockerUploadDao.class);
-    DockerUploadService service = new DockerUploadService(
+    DockerUploadService service = service(
         uploadDao, mock(DockerBlobStore.class), null, 3600);
     RepositoryRuntime runtime = hostedRuntime();
     when(uploadDao.lockSession("upload-1"))
@@ -302,6 +301,14 @@ class DockerUploadServiceTest {
         new DockerUploadService.UploadStatus("upload-1", 0, 0, false, null).rangeHeader());
     assertEquals("0-41",
         new DockerUploadService.UploadStatus("upload-1", 0, 42, false, null).rangeHeader());
+  }
+
+  private static DockerUploadService service(DockerUploadDao dao, DockerBlobStore blobs,
+      DockerManifestStore manifests, long ttl) {
+    var transactions = mock(com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry.class);
+    when(transactions.execute(any(), any())).thenAnswer(call ->
+        ((java.util.function.Supplier<?>) call.getArgument(1)).get());
+    return new DockerUploadService(dao, blobs, manifests, ttl, null, transactions);
   }
 
   private static RepositoryRuntime hostedRuntime() {

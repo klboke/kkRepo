@@ -301,6 +301,12 @@ class DatabaseServerSmokeTest {
                     jdbc, first.getBean(DatabaseDialect.class)),
                 new org.springframework.jdbc.datasource.DataSourceTransactionManager(source), jdbc::execute);
           }, type == DatabaseType.MYSQL);
+      com.github.klboke.kkrepo.server.docker.DockerUploadTransactionSmokeChecks.verify(
+          first.getBean(com.zaxxer.hikari.HikariDataSource.class), source ->
+              new com.github.klboke.kkrepo.server.docker.DockerUploadTransactionSmokeChecks.Persistence(
+                  com.github.klboke.kkrepo.persistence.jdbc.internal.JdbcPersistenceStoreFactory.createStores(
+                      new JdbcTemplate(source), first.getBean(DatabaseDialect.class)),
+                  new org.springframework.jdbc.datasource.DataSourceTransactionManager(source)));
       com.github.klboke.kkrepo.server.pypi.PypiCacheInvalidationSmokeChecks.verify(first, second);
       com.github.klboke.kkrepo.server.composer.ComposerRouteCacheSmokeChecks.verify(first, second);
       BrowseDirectoryDeletionSmokeChecks.exercise(first, second);
