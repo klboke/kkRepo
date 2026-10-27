@@ -43,6 +43,7 @@ import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.ProxySett
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.PypiSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.YumSettings;
 import com.github.klboke.kkrepo.server.yum.YumMetadataDepth;
+import com.github.klboke.kkrepo.server.yum.YumMetadataCleanup;
 import com.github.klboke.kkrepo.server.conan.ConanManifestPolicy;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.ConanSettings;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
@@ -70,6 +71,7 @@ import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -116,6 +118,7 @@ public class RepositoryService {
   private RRegistryDao rRegistry;
   private HuggingFaceRegistryDao huggingFaceRegistry;
   private DockerMigrationMetadataCleanup dockerMigrationCleanup;
+  private YumMetadataCleanup yumMetadataCleanup;
   private CleanupPolicyDao cleanupPolicies;
   private RepositoryIndexRebuildDao indexRebuildDao;
 
@@ -123,6 +126,11 @@ public class RepositoryService {
   void setDockerMigrationCleanup(
       DockerMigrationMetadataCleanup dockerMigrationCleanup) {
     this.dockerMigrationCleanup = dockerMigrationCleanup;
+  }
+
+  @Autowired
+  void setYumMetadataCleanup(YumMetadataCleanup yumMetadataCleanup) {
+    this.yumMetadataCleanup = yumMetadataCleanup;
   }
 
   @Autowired
@@ -589,7 +597,7 @@ public class RepositoryService {
     return get(name);
   }
 
-  @Transactional
+  @Transactional(isolation = Isolation.READ_COMMITTED)
   public void delete(String name) {
     RepositoryRecord existing = repositoryDao.findByName(name)
         .orElseThrow(() -> new RepositoryNotFoundException(name));
@@ -607,6 +615,10 @@ public class RepositoryService {
     if (existing.format() == RepositoryFormat.DOCKER && dockerMigrationCleanup != null
         && repositoryDao.hasComponents(existing.id())) {
       dockerMigrationCleanup.cleanupBeforeRepositoryDeletion(existing.id());
+    }
+    if (existing.format() == RepositoryFormat.YUM && existing.type() == RepositoryType.HOSTED
+        && yumMetadataCleanup != null) {
+      yumMetadataCleanup.cleanupBeforeRepositoryDeletion(existing.id());
     }
     if (repositoryDao.hasComponents(existing.id())) {
       throw new RepositoryValidationException(

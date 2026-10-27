@@ -83,7 +83,9 @@ class DatabaseServerSmokeTest {
       .withDatabaseName("kkrepo")
       .withUsername("kkrepo")
       .withPassword("kkrepo")
-      .withTmpFs(Map.of("/var/lib/postgresql/data", "rw"));
+      // An explicit test data path works across PostgreSQL 12 and the new 18+ image layout.
+      .withEnv("PGDATA", "/var/lib/postgresql/kkrepo-test-data")
+      .withTmpFs(Map.of("/var/lib/postgresql", "rw"));
 
   @AfterAll
   static void stopDatabases() {
@@ -293,6 +295,7 @@ class DatabaseServerSmokeTest {
       assertEquals("UP", second.getBean(HealthEndpoint.class).health().getStatus().getCode());
 
       exerciseSharedApplicationFlows(first, second);
+      YumRepositoryDeletionSmokeChecks.exercise(first, second);
       com.github.klboke.kkrepo.server.cache.CacheInvalidationSmokeChecks.verify(
           first.getBean(com.zaxxer.hikari.HikariDataSource.class), source -> {
             JdbcTemplate jdbc = new JdbcTemplate(source);

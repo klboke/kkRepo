@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.yum.YumMetadataCleanup;
 import java.io.InputStream;
 import java.nio.file.Path;
 import java.util.Map;
@@ -275,16 +276,15 @@ public class RawHostedService {
       enforceWritePolicy(runtime, path);
     }
     BlobStorage storage = blobStorage(runtime);
-    writer.write(
-        runtime,
-        storage,
-        requireBlobStore(runtime),
-        path,
-        body,
-        contentType,
-        blobAttributes == null ? Map.of() : blobAttributes,
-        createdBy,
-        createdByIp);
+    if (runtime.format() == RepositoryFormat.YUM) {
+      // Provenance belongs to the asset binding: blob deduplication can cross users/repositories.
+      writer.write(runtime, storage, requireBlobStore(runtime), path, body, contentType,
+          blobAttributes == null ? Map.of() : blobAttributes, createdBy, createdByIp,
+          Map.of(YumMetadataCleanup.GENERATED_ATTRIBUTE, !enforcePolicy));
+    } else {
+      writer.write(runtime, storage, requireBlobStore(runtime), path, body, contentType,
+          blobAttributes == null ? Map.of() : blobAttributes, createdBy, createdByIp);
+    }
     return MavenResponse.created();
   }
 

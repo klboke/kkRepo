@@ -496,6 +496,55 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
     }
   }
 
+  @Test
+  void emptyYumHostedRepositoryCanBeDeletedWithoutDeletingRepodata() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeLiveEndpoints(config);
+    assumeTrue(config.writeEnabled() && config.setupEnabled(),
+        "Enable live writes and repository setup for Yum deletion compatibility");
+    byte[] rpm = download(config.yumFixtureUrl());
+    for (int depth : List.of(0, 1)) {
+      String repository = "yum-delete-" + depth + "-" + System.currentTimeMillis();
+      String root = depth == 0 ? "" : "release/";
+      String path = root + "Packages/" + fileName(config.yumFixtureUrl());
+      try {
+        saveNexusRepository(config, "/service/rest/v1/repositories/yum/hosted", repository, """
+            {"name":"%s","online":true,"storage":{"blobStoreName":"default","strictContentTypeValidation":true,"writePolicy":"allow"},"yum":{"repodataDepth":%d}}
+            """.formatted(repository, depth));
+        saveKkRepoRepository(config, repository, """
+            {"name":"%s","recipe":"yum-hosted","online":true,"blobStoreName":"default","hosted":{"writePolicy":"ALLOW"},"yum":{"repodataDepth":%d}}
+            """.formatted(repository, depth));
+        for (Endpoint endpoint : List.of(config.nexus, config.nexusPlus)) {
+          assertEquals(200, put(endpoint.repository(repository, path), rpm, "application/x-rpm").status());
+          Exchange repomd = null;
+          for (int attempt = 0; attempt < 90; attempt++) {
+            repomd = get(endpoint.repository(repository, root + "repodata/repomd.xml"));
+            if (repomd.status() == 200) break;
+            Thread.sleep(1000);
+          }
+          assertEquals(200, repomd.status(), endpoint.name() + " must have generated metadata");
+          int status = send(endpoint.repository(repository, path).DELETE()).status();
+          assertTrue(status == 200 || status == 204, endpoint.name() + " RPM deletion");
+          assertEquals(404, head(endpoint.repository(repository, path)).status());
+        }
+        Exchange reference = send(config.nexus.raw("/service/rest/v1/repositories/" + repository).DELETE());
+        Exchange candidate = null;
+        // A live worker may hold the repository lock; deletion must succeed once it finishes.
+        for (int attempt = 0; attempt < 30; attempt++) {
+          candidate = send(config.nexusPlus.raw("/internal/repositories/" + repository).DELETE());
+          if (candidate.status() != 400) break;
+          Thread.sleep(1000);
+        }
+        assertEquals(204, reference.status());
+        assertSameStatus("delete empty Yum hosted repository with managed metadata", reference, candidate);
+        assertEquals(404, get(config.nexusPlus.raw("/internal/repositories/" + repository)).status());
+      } finally {
+        send(config.nexus.raw("/service/rest/v1/repositories/" + repository).DELETE());
+        send(config.nexusPlus.raw("/internal/repositories/" + repository).DELETE());
+      }
+    }
+  }
+
   private static void assumeLiveEndpoints(CompatConfig config) {
     assumeTrue(config.referenceReachable(),
         "Reference Nexus is not reachable; start the fixed Nexus endpoint or override NEXUS_COMPAT_BASE_URL");

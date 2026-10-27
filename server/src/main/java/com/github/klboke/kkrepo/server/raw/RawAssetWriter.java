@@ -108,6 +108,14 @@ class RawAssetWriter {
         extraBlobAttributes, createdBy, createdByIp, ComponentBinding.none(), keepResponseFile);
   }
 
+  Stored write(
+      RepositoryRuntime runtime, BlobStorage storage, long blobStoreId, String path,
+      InputStream body, String contentTypeHint, Map<String, ?> extraBlobAttributes,
+      String createdBy, String createdByIp, Map<String, ?> assetAttributes) {
+    return write(runtime, storage, blobStoreId, path, body, contentTypeHint, extraBlobAttributes,
+        createdBy, createdByIp, ComponentBinding.perAsset(), false, path, assetAttributes);
+  }
+
   /** Stores a protocol-owned asset without a component or any Browse node. */
   Stored writeHidden(
       RepositoryRuntime runtime,
@@ -392,13 +400,22 @@ class RawAssetWriter {
       ComponentBinding componentBinding,
       boolean keepResponseFile,
       String browsePath) {
+    return write(runtime, storage, blobStoreId, path, body, contentTypeHint, extraBlobAttributes,
+        createdBy, createdByIp, componentBinding, keepResponseFile, browsePath, Map.of());
+  }
+
+  private Stored write(
+      RepositoryRuntime runtime, BlobStorage storage, long blobStoreId, String path,
+      InputStream body, String contentTypeHint, Map<String, ?> extraBlobAttributes,
+      String createdBy, String createdByIp, ComponentBinding componentBinding,
+      boolean keepResponseFile, String browsePath, Map<String, ?> assetAttributes) {
     DigestedUpload upload = uploadWithDigests(runtime, storage, blobStoreId, path, body, extraBlobAttributes);
     try {
       Stored stored = executePersist(
           "Persist raw asset " + runtime.name() + "/" + path,
           () -> persist(runtime, storage, blobStoreId, path, upload, contentTypeHint,
               extraBlobAttributes, createdBy, createdByIp, componentBinding,
-              Map.of(), keepResponseFile ? upload.tempFile() : null, browsePath, true));
+              assetAttributes, keepResponseFile ? upload.tempFile() : null, browsePath, true));
       cleanupUnusedUploadedBlob(storage, blobStoreId, upload, stored.blob());
       if (!keepResponseFile) {
         TempBlobFiles.deleteQuietly(upload.tempFile());
