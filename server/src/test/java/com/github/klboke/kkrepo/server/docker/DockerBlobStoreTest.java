@@ -180,6 +180,32 @@ class DockerBlobStoreTest {
     assertEquals("docker/blobs/sha256/dd/" + expected.hex(), storage.deleted.get(0).objectKey());
   }
 
+  @Test
+  void interruptedReuseVerificationRemovesStagingWithoutPublishing(
+      @org.junit.jupiter.api.io.TempDir java.nio.file.Path staging) throws Exception {
+    DockerDigest digest = DockerDigest.parse("sha256:" + "a".repeat(64));
+    RecordingAssetDao assetDao = new RecordingAssetDao(existingBlob(digest, "existing-object"));
+    BlobStorage storage = mock(BlobStorage.class);
+    when(storage.stagingDirectory()).thenReturn(Optional.of(staging));
+    DockerBlobStore blobStore = new DockerBlobStore(assetDao,
+        new FixedBlobStorageRegistry(storage), mock(AssetMetadataCache.class), null);
+    InputStream interrupted = new java.io.SequenceInputStream(new ByteArrayInputStream(new byte[] {1, 2, 3}),
+        new InputStream() {
+          @Override public int read() throws java.io.IOException { throw new java.io.IOException("interrupted verification"); }
+        });
+
+    var failure = org.junit.jupiter.api.Assertions.assertThrows(java.io.UncheckedIOException.class,
+        () -> blobStore.putVerifiedBlob(runtime(), digest, interrupted, 7,
+            "application/octet-stream", "alice", "127.0.0.1"));
+    assertEquals("interrupted verification", failure.getCause().getMessage());
+    assertTrue(assetDao.reusedAssetPaths.isEmpty());
+    verify(storage, never()).put(any(), any(), any(), org.mockito.ArgumentMatchers.anyLong(), any());
+    verify(storage, never()).delete(any());
+    try (var files = java.nio.file.Files.list(staging)) {
+      assertEquals(0, files.count(), "partially staged verified bytes must be removed after an I/O failure");
+    }
+  }
+
   private static RepositoryRuntime runtime() {
     return new RepositoryRuntime(
         10L,
