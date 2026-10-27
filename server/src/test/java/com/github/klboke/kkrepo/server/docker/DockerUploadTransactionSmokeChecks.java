@@ -50,6 +50,7 @@ public final class DockerUploadTransactionSmokeChecks {
       fixture.verifyCancelledCompletion();
       fixture.verifyChangedCompletion();
       fixture.verifyConcurrentCompletion();
+      fixture.verifyReusableBlobCompletion();
       fixture.verifyRollbackAndRetry();
       fixture.verifyInvalidDigest();
       fixture.verifyOuterTransactionRejected();
@@ -187,6 +188,36 @@ public final class DockerUploadTransactionSmokeChecks {
       blocked("blob", () -> complete(first, id, "race-final"), () -> complete(second, id, "race-final"), DockerErrorCode.BLOB_UPLOAD_UNKNOWN);
       assertTrue(blobs.findBlob(runtime, digest("race-final")).isPresent());
       assertEquals(before + 1, objects.size(), "cleanup must preserve the winner's object");
+    }
+
+    void verifyReusableBlobCompletion() throws Exception {
+      String original = start(); append(first, original, "reusable");
+      complete(first, original, "reusable");
+      var originalBlob = blobs.findBlob(runtime, digest("reusable")).orElseThrow().blob();
+      int priorPuts = puts.get();
+
+      String reused = start(); append(second, reused, "reusable");
+      complete(second, reused, "reusable");
+      assertEquals("COMPLETED", stores.dockerUploads().findSession(reused).orElseThrow().status());
+      assertEquals(originalBlob.id(), blobs.findBlob(runtime, digest("reusable")).orElseThrow().blob().id());
+      assertEquals(priorPuts, puts.get(), "reuse must verify uploaded chunks without writing another final blob");
+
+      String cancelled = start(); append(first, cancelled, "reusable");
+      int before = objects.size();
+      // Even without a final storage PUT, reuse must revalidate the session after reading/verifying bytes.
+      blocked("read-body", () -> complete(first, cancelled, "reusable"),
+          () -> second.cancel(runtime, cancelled), DockerErrorCode.BLOB_UPLOAD_UNKNOWN);
+      assertEquals("CANCELLED", stores.dockerUploads().findSession(cancelled).orElseThrow().status());
+      assertEquals(priorPuts, puts.get());
+      assertEquals(before, objects.size(), "a rejected reuse must preserve the published blob and its chunks");
+      assertTrue(objects.containsKey(originalBlob.objectKey()));
+
+      String invalid = start(); append(first, invalid, "tampered");
+      var failure = assertThrows(DockerProtocolException.class, () -> complete(first, invalid, "reusable"));
+      assertEquals(DockerErrorCode.DIGEST_INVALID, failure.code());
+      assertEquals("STARTED", stores.dockerUploads().findSession(invalid).orElseThrow().status());
+      assertEquals(originalBlob.id(), blobs.findBlob(runtime, digest("reusable")).orElseThrow().blob().id());
+      assertEquals(priorPuts, puts.get(), "reuse must reject invalid bytes before publishing metadata");
     }
 
     void verifyRollbackAndRetry() {
