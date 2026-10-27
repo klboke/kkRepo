@@ -190,8 +190,18 @@ class RawRepositoryBlackBoxCompatibilityTest {
         assertEquals(404, get(endpoint, "missing/").status());
         assertEquals(400, send(endpoint.raw("/repository/" + endpoint.repository()).GET()).status());
       }
-      assertBodyMatches("group root proxy directory", get(config.nexusGroup(), ""),
-          get(config.nexusPlusGroup(), ""), listing);
+      Exchange referenceGroupRoot = get(config.nexusGroup(), "");
+      Exchange candidateGroupRoot = get(config.nexusPlusGroup(), "");
+      assertEquals(200, candidateGroupRoot.status(), "kkRepo group root directory");
+      assertArrayEquals(listing, candidateGroupRoot.body(), "kkRepo group root directory body");
+      // Nexus 3.68 forwards group roots, but 3.94 rejects them with 400 even for
+      // a proxy-only group. Keep kkRepo's useful root forwarding and compare
+      // nested group directories on both reference versions below.
+      if (referenceGroupRoot.status() == 200) {
+        assertBodyMatches("group root proxy directory", referenceGroupRoot, candidateGroupRoot, listing);
+      } else {
+        assertEquals(400, referenceGroupRoot.status(), "Nexus group root version difference");
+      }
       assertBodyMatches("group nested proxy directory", get(config.nexusGroup(), "sub/"),
           get(config.nexusPlusGroup(), "sub/"), listing);
     } finally {
