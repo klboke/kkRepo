@@ -13,6 +13,11 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.Optional;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 class RawRepositoryBlackBoxCompatibilityTest {
@@ -102,6 +107,133 @@ class RawRepositoryBlackBoxCompatibilityTest {
     assertArrayEquals(reference.body(), candidate.body());
     assertSameStatus("FreeBSD proxy HEAD", head(config.nexusProxy(), config.proxyProbePath()),
         head(config.nexusPlusProxy(), config.proxyProbePath()));
+  }
+
+  @Test
+  void proxyDirectoryPagesAndIndexFallbackMatchNexusWhenConfigured() throws Exception {
+    CompatConfig configured = CompatConfig.load();
+    assumeTrue(configured.configured(),
+        "Set NEXUS_COMPAT_BASE_URL and KKREPO_COMPAT_BASE_URL for raw directory compatibility");
+    String host = setting("compat.raw.upstreamHost", "RAW_COMPAT_UPSTREAM_HOST")
+        .orElse("host.docker.internal");
+    var upstream = com.sun.net.httpserver.HttpServer.create(
+        new java.net.InetSocketAddress("0.0.0.0", 0), 0);
+    byte[] listing = "<html><a href=\"file.txt\">download</a></html>".getBytes(StandardCharsets.UTF_8);
+    byte[] index = "<html>Explicit index file</html>".getBytes(StandardCharsets.UTF_8);
+    byte[] file = "Raw proxy download\n".getBytes(StandardCharsets.UTF_8);
+    Map<String, byte[]> content = Map.of(
+        "/archive/", listing,
+        "/archive/sub/", listing,
+        "/archive/head-first/", listing,
+        "/archive/index.html", index,
+        "/archive/sub/index.html", index,
+        "/archive/static/index.html", index,
+        "/archive/legacy/index.htm", index,
+        "/archive/file.txt", file,
+        "/archive/sub/file.txt", file);
+    Map<String, AtomicInteger> requests = new ConcurrentHashMap<>();
+    upstream.createContext("/", exchange -> {
+      try (exchange) {
+        String path = exchange.getRequestURI().getPath();
+        requests.computeIfAbsent(path, ignored -> new AtomicInteger()).incrementAndGet();
+        byte[] body = content.get(path);
+        if (body == null) {
+          exchange.sendResponseHeaders(404, -1);
+        } else {
+          exchange.getResponseHeaders().set("Content-Type", path.endsWith(".txt") ? "text/plain" : "text/html");
+          exchange.getResponseHeaders().set("Content-Length", Integer.toString(body.length));
+          if (exchange.getRequestMethod().equals("HEAD")) {
+            exchange.sendResponseHeaders(200, -1);
+          } else {
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
+          }
+        }
+      }
+    });
+    upstream.start();
+    String prefix = "raw-directory-" + UUID.randomUUID().toString().substring(0, 8);
+    CompatConfig config = new CompatConfig(configured.nexus(), configured.nexusPlus(), true,
+        prefix + "-hosted", prefix + "-proxy", prefix + "-group",
+        "http://" + host + ":" + upstream.getAddress().getPort() + "/archive/", "file.txt");
+    try (var fixtureAccess = allowDirectoryFixtureHost(config.nexus(), host)) {
+      ensureNexusRepositories(config);
+      ensureKkRepoRepositories(config);
+      for (Endpoint endpoint : List.of(config.nexusProxy(), config.nexusPlusProxy())) {
+        for (String path : List.of("", "sub/")) {
+          Exchange page = get(endpoint, path);
+          assertEquals(200, page.status(), endpoint.name() + " directory " + path);
+          assertArrayEquals(listing, page.body(), endpoint.name() + " upstream directory body");
+          assertTrue(page.contentType().orElse("").startsWith("text/html"));
+          int before = requests.get("/archive/" + path).get();
+          assertArrayEquals(listing, get(endpoint, path).body());
+          assertEquals(before, requests.get("/archive/" + path).get(), "directory cache hit");
+          // Nexus 3.68 only forwards directory GETs. Preserve kkRepo's existing HEAD
+          // support while ensuring it describes the same content as GET.
+          if (endpoint.name().equals("kkrepo")) assertEquals(200, head(endpoint, path).status());
+        }
+        // Directory responses must never occupy the explicit index.html cache entry.
+        for (String path : List.of("index.html", "sub/index.html", "static/", "legacy/")) {
+          Exchange page = get(endpoint, path);
+          assertEquals(200, page.status(), endpoint.name() + " index " + path);
+          assertArrayEquals(index, page.body());
+        }
+        if (endpoint.name().equals("kkrepo")) {
+          Exchange firstHead = head(endpoint, "head-first/");
+          assertEquals(200, firstHead.status());
+          assertEquals(0, firstHead.body().length);
+          assertArrayEquals(listing, get(endpoint, "head-first/").body(), "HEAD must not cache an empty page");
+        }
+        for (String path : List.of("file.txt", "sub/file.txt")) {
+          assertArrayEquals(file, get(endpoint, path).body(), "relative directory link download");
+        }
+        assertEquals(404, get(endpoint, "missing/").status());
+        assertEquals(400, send(endpoint.raw("/repository/" + endpoint.repository()).GET()).status());
+      }
+      assertBodyMatches("group root proxy directory", get(config.nexusGroup(), ""),
+          get(config.nexusPlusGroup(), ""), listing);
+      assertBodyMatches("group nested proxy directory", get(config.nexusGroup(), "sub/"),
+          get(config.nexusPlusGroup(), "sub/"), listing);
+    } finally {
+      upstream.stop(0);
+      // kkRepo requires repositories to be empty before deletion. Directory pages use
+      // ordinary asset cleanup too, including the root '.' entry.
+      for (String path : List.of(".", "index.html", "sub", "static", "legacy", "head-first", "file.txt")) {
+        send(config.nexusPlusInternal("/internal/browse/" + config.proxyRepository() + "?path=" + path).DELETE());
+      }
+      for (String repository : List.of(config.groupRepository(), config.proxyRepository(), config.hostedRepository())) {
+        send(config.nexusAdmin("/service/rest/v1/repositories/" + repository).DELETE());
+        Exchange deleted = send(config.nexusPlusInternal("/internal/repositories/" + repository).DELETE());
+        assertTrue(deleted.status() == 204 || deleted.status() == 404,
+            "fixture repository cleanup: " + deleted.bodyAsString());
+      }
+    }
+  }
+
+  private static AutoCloseable allowDirectoryFixtureHost(Endpoint nexus, String host) throws Exception {
+    String path = "/service/rest/v1/security/ssrf-protection";
+    Exchange response = send(nexus.raw(path).GET());
+    if (response.status() == 404) return () -> {}; // Older Nexus has no outbound allowlist.
+    assertEquals(200, response.status());
+    var json = new com.fasterxml.jackson.databind.ObjectMapper();
+    var config = (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(response.body());
+    String field = host.matches("[0-9.]+") ? "allowedIPs" : "allowedDomains";
+    var allowed = config.withArray(field);
+    for (var entry : allowed) if (host.equals(entry.asText())) return () -> {};
+    allowed.add(host);
+    assertEquals(200, send(nexus.raw(path).header("Content-Type", "application/json")
+        .PUT(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(config)))).status());
+    return () -> {
+      Exchange latest = send(nexus.raw(path).GET());
+      assertEquals(200, latest.status());
+      var restored = (com.fasterxml.jackson.databind.node.ObjectNode) json.readTree(latest.body());
+      var entries = restored.withArray(field);
+      for (int index = entries.size() - 1; index >= 0; index--) {
+        if (host.equals(entries.get(index).asText())) entries.remove(index);
+      }
+      assertEquals(200, send(nexus.raw(path).header("Content-Type", "application/json")
+          .PUT(HttpRequest.BodyPublishers.ofString(json.writeValueAsString(restored)))).status());
+    };
   }
 
   private static Exchange get(Endpoint endpoint, String path) throws Exception {

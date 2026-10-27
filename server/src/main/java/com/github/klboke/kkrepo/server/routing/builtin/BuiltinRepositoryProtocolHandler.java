@@ -506,8 +506,8 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
     }
     if (isPathRepository(runtime.format())) {
       String raw = extractRepositoryPath(name, request, true);
-      MavenResponse resp = raw.isBlank()
-          ? repositoryInfo(runtime, request, runtime.format().id(), true)
+      MavenResponse resp = raw.isBlank() && !request.getRequestURI().endsWith("/")
+          ? badRepositoryPath(true)
           : dispatchRawGet(runtime, raw, true);
       return toHeadResponse(resp, request);
     }
@@ -1209,8 +1209,8 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
     }
     if (isPathRepository(runtime.format())) {
       String raw = extractRepositoryPath(name, request, true);
-      MavenResponse resp = raw.isBlank()
-          ? repositoryInfo(runtime, request, runtime.format().id(), headOnly)
+      MavenResponse resp = raw.isBlank() && !request.getRequestURI().endsWith("/")
+          ? badRepositoryPath(headOnly)
           : dispatchRawGet(runtime, raw, headOnly);
       return toStreamingResponse(resp, request, false);
     }

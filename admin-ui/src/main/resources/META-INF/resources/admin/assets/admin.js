@@ -2718,6 +2718,7 @@ function refreshRepositoryRecipeControls() {
   document.getElementById("repository-remote-ntlm-host-field").hidden = !ntlmSelected;
   document.getElementById("repository-outbound-proxy-fields").hidden = type !== "PROXY";
   document.getElementById("repository-group-fields").hidden = type !== "GROUP";
+  document.getElementById("repository-raw-fields").hidden = format !== "raw";
   document.getElementById("repository-docker-fields").hidden = format !== "docker";
   document.getElementById("repository-cargo-fields").hidden =
     format !== "cargo";
@@ -3186,6 +3187,9 @@ function repositoryFormPayload() {
   if (recipe?.format === "yum" && type === "HOSTED") {
     payload.yum = { repodataDepth: Number(document.getElementById("repository-yum-depth").value) };
   }
+  if (recipe?.format === "raw") {
+    payload.raw = { contentDisposition: document.getElementById("repository-raw-content-disposition").value };
+  }
   if (recipe?.format === "docker") {
     const connectorPort = document.getElementById("repository-docker-connector-port").value;
     payload.docker = {
@@ -3272,6 +3276,7 @@ function setRepositoryFormDefaults() {
   document.getElementById("repository-metadata-max-age").value = "1440";
   document.getElementById("repository-minimum-release-age").value = "0";
   document.getElementById("repository-auto-block").checked = true;
+  document.getElementById("repository-raw-content-disposition").value = "ATTACHMENT";
   document.getElementById("repository-docker-connector-enabled").checked = false;
   document.getElementById("repository-docker-connector-port").value = "";
   document.getElementById("repository-docker-connector-public-url").value = "";
@@ -3358,6 +3363,7 @@ function showEditRepositoryForm(name) {
   document.getElementById("repository-recipe").value = repo.recipe;
   document.getElementById("repository-online").checked = Boolean(repo.online);
   document.getElementById("repository-strict").checked = Boolean(repo.strictContentTypeValidation);
+  document.getElementById("repository-raw-content-disposition").value = repo.raw?.contentDisposition || "ATTACHMENT";
   refreshRepositoryBlobStoreOptions();
   if (repo.blobStoreName) {
     document.getElementById("repository-blobstore").value = repo.blobStoreName;

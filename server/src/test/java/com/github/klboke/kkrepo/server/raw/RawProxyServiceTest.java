@@ -43,8 +43,87 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class RawProxyServiceTest {
+  @ParameterizedTest
+  @ValueSource(strings = {"", "/", "docs/"})
+  void directoryHeadFetchesTheDirectoryUrlAndStoresItWithoutAnIndexAlias(String rawPath) throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 60);
+    String path = rawPath.isEmpty() || rawPath.equals("/") ? "." : rawPath + ".";
+    String url = runtime.proxyRemoteUrl() + (path.equals(".") ? "" : rawPath);
+    BlobStorage storage = mock(BlobStorage.class);
+    when(fixture.registry.forBlobStoreId(1L)).thenReturn(storage);
+    CachedAssetMetadata cached = snapshot(Instant.now());
+    RawAssetWriter.Stored stored = new RawAssetWriter.Stored(
+        cached.toAssetRecord(), cached.toBlobRecord(), null, true, null);
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.reader.serve(stored.asset(), true, path, "ATTACHMENT")).thenReturn(expected);
+    when(fixture.writer.write(eq(runtime), eq(storage), eq(1L), eq(path), any(),
+        eq("text/html"), any(), eq("proxy"), isNull(), eq(true))).thenReturn(stored);
+    doAnswer(call -> {
+      HttpRemoteFetcher.Request request = call.getArgument(0);
+      assertEquals(url, request.url());
+      assertFalse(request.headOnly(), "Cold HEAD must populate the complete page");
+      HttpRemoteFetcher.ResultHandler<?> handler = call.getArgument(2);
+      return handler.handle(new HttpRemoteFetcher.Result(200, Map.of("Content-Type", "text/html"),
+          new ByteArrayInputStream("directory listing".getBytes())));
+    }).when(fixture.fetcher).fetchWithBodyRetry(any(), eq(path), any());
+
+    assertSame(expected, fixture.service.get(runtime, rawPath, true));
+    verify(fixture.writer).write(eq(runtime), eq(storage), eq(1L), eq(path), any(),
+        eq("text/html"), any(), eq("proxy"), isNull(), eq(true));
+    verify(fixture.cache, never()).find(eq(runtime.id()), eq("docs/index.html"), any());
+    verify(fixture.cache, never()).find(eq(runtime.id()), eq("index.html"), any());
+  }
+
+  @Test
+  void freshDirectoryCacheRetainsContentTtlAndDownloadPolicyReader() {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 60, 1);
+    CachedAssetMetadata cached = snapshot(Instant.now().minusSeconds(300));
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.cache.find(eq(runtime.id()), eq("docs/."), any())).thenReturn(Optional.of(cached));
+    when(fixture.reader.serveSnapshot(cached, false, "docs/.", "ATTACHMENT")).thenReturn(expected);
+
+    assertSame(expected, fixture.service.get(runtime, "docs/", false));
+    org.mockito.Mockito.verifyNoInteractions(fixture.fetcher, fixture.writer);
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {404, 410})
+  void directoryMissFallsBackToExplicitIndex(int status) throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 60);
+    CachedAssetMetadata cached = snapshot(Instant.now());
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(fixture.cache.find(eq(runtime.id()), eq("docs/index.html"), any())).thenReturn(Optional.of(cached));
+    when(fixture.reader.serveSnapshot(cached, false, "docs/index.html", "ATTACHMENT")).thenReturn(expected);
+    doAnswer(call -> {
+      HttpRemoteFetcher.ResultHandler<?> handler = call.getArgument(2);
+      return handler.handle(new HttpRemoteFetcher.Result(status, Map.of(), InputStream.nullInputStream()));
+    }).when(fixture.fetcher).fetchWithBodyRetry(any(), eq("docs/."), any());
+
+    assertSame(expected, fixture.service.get(runtime, "docs/", false));
+    verify(fixture.fetcher).fetchWithBodyRetry(any(), eq("docs/."), any());
+  }
+
+  @Test
+  void directoryUpstreamFailureDoesNotFallBackToAnUnrelatedCachedIndex() throws Exception {
+    Fixture fixture = fixture();
+    RepositoryRuntime runtime = runtime(RepositoryType.PROXY, 60);
+    doAnswer(call -> {
+      HttpRemoteFetcher.ResultHandler<?> handler = call.getArgument(2);
+      return handler.handle(new HttpRemoteFetcher.Result(503, Map.of(), InputStream.nullInputStream()));
+    }).when(fixture.fetcher).fetchWithBodyRetry(any(), eq("docs/."), any());
+
+    assertThrows(MavenExceptions.BadUpstreamException.class,
+        () -> fixture.service.get(runtime, "docs/", false));
+    verify(fixture.cache, never()).find(eq(runtime.id()), eq("docs/index.html"), any());
+  }
+
   @Test
   void cachePopulationAlwaysUsesUpstreamGetForClientHeadRequests() {
     RepositoryRuntime runtime = new RepositoryRuntime(

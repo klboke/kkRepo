@@ -35,6 +35,20 @@ curl --head \
 
 操作人员不便手工构造 HTTP 请求时，可以使用 Admin UI 和 component upload。
 
+## 代理目录页面
+
+将 Raw proxy 的远程 URL 设置为需要代理的目录，例如
+`https://mirrors.tuna.tsinghua.edu.cn/anaconda/archive/`。访问仓库地址时保留末尾斜杠：
+`/repository/<name>/`。
+
+kkRepo 优先请求上游目录页面，找不到时再依次尝试 `index.html` 和 `index.htm`。
+页面中的相对文件链接仍通过代理访问；HTML 内容和绝对链接不会被改写。
+Browse 和 Search 展示已缓存内容，不会爬取上游网站。
+
+在仓库编辑表单中选择 **Raw 设置 → 内容展示方式 → 浏览器内展示（Inline）**，
+即可在浏览器中打开 HTML。默认仍为 **附件下载（Attachment）**，仅对可信上游内容启用
+Inline。对应的 API 配置为 `"raw": {"contentDisposition": "INLINE"}`。
+
 ## 仓库行为
 
 - 规范化后的仓库相对路径就是 asset identity。

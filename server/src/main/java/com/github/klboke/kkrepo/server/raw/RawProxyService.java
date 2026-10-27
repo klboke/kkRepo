@@ -71,6 +71,15 @@ public class RawProxyService {
 
   private MavenResponse getIndex(RepositoryRuntime runtime, String rawPath, boolean headOnly) {
     String base = RawHostedService.normalizeDirectoryPath(rawPath);
+    String directoryPath = base.isEmpty() ? "." : base + "/.";
+    try {
+      // Nexus represents a directory page as '.' rather than aliasing index.html.
+      // Use the normal durable asset pipeline so cache TTL, validators, deletion,
+      // download policy and shared invalidation continue to work across replicas.
+      return getAsset(runtime, directoryPath, base.isEmpty() ? "" : base + "/", headOnly);
+    } catch (MavenExceptions.MavenNotFoundException ignored) {
+      // Nexus tries explicit index files only after the directory URL is not found.
+    }
     MavenExceptions.BadUpstreamException lastUpstream = null;
     for (String candidate : RawHostedService.indexCandidates(base)) {
       try {

@@ -36,6 +36,22 @@ curl --head \
 The Admin UI and component upload flow are useful when operators need to attach a file without
 constructing an HTTP request manually.
 
+## Proxying Directory Pages
+
+Set the Raw proxy's remote URL to the directory you want to mirror, for example
+`https://mirrors.tuna.tsinghua.edu.cn/anaconda/archive/`. Open the repository URL
+with a trailing slash: `/repository/<name>/`.
+
+kkRepo requests the upstream directory page first. When it is not found, it tries
+`index.html` and then `index.htm`. Relative file links stay within the proxy;
+HTML content and absolute links are not rewritten. Browse and Search show cached
+content rather than crawling the upstream website.
+
+In the repository editor, choose **Raw settings → Content disposition → Inline**
+to display HTML in the browser. **Attachment** remains the default. Enable Inline
+only for trusted upstream content. The API equivalent is
+`"raw": {"contentDisposition": "INLINE"}`.
+
 ## Repository Behavior
 
 - The normalized repository-relative path is the asset identity.
