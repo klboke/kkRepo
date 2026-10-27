@@ -51,6 +51,8 @@ public final class DockerUploadTransactionSmokeChecks {
       fixture.verifyChangedCompletion();
       fixture.verifyConcurrentCompletion();
       fixture.verifyReusableBlobCompletion();
+      fixture.verifyDeletedReuseFallback(false);
+      fixture.verifyDeletedReuseFallback(true);
       fixture.verifyRollbackAndRetry();
       fixture.verifyInvalidDigest();
       fixture.verifyOuterTransactionRejected();
@@ -218,6 +220,42 @@ public final class DockerUploadTransactionSmokeChecks {
       assertEquals("STARTED", stores.dockerUploads().findSession(invalid).orElseThrow().status());
       assertEquals(originalBlob.id(), blobs.findBlob(runtime, digest("reusable")).orElseThrow().blob().id());
       assertEquals(priorPuts, puts.get(), "reuse must reject invalid bytes before publishing metadata");
+    }
+
+    void verifyDeletedReuseFallback(boolean collectBeforePublication) throws Exception {
+      String data = collectBeforePublication ? "collected-reuse" : "soft-deleted-reuse";
+      String original = start(); append(first, original, data); complete(first, original, data);
+      var oldBlob = blobs.findBlob(runtime, digest(data)).orElseThrow().blob();
+      String replacement = start();
+      int priorPuts = puts.get();
+      blocked("read-body", () -> first.complete(runtime, replacement, input(data), (long) data.length(),
+          null, digest(data), "test", "127.0.0.1"), () -> {
+        transactions.execute("Delete original blob during verification", () -> blobs.deleteBlob(runtime, digest(data)));
+        assertTrue(stores.assets().findReusableBlobBySha256(runtime.blobStoreId(), digest(data).hex(), data.length()).isEmpty());
+        if (collectBeforePublication) collectDeletedBlob(oldBlob);
+      }, null);
+
+      var published = blobs.findBlob(runtime, digest(data)).orElseThrow().blob();
+      assertNotEquals(oldBlob.id(), published.id(), "completion must never rebind the soft-deleted row");
+      assertNotEquals(oldBlob.objectKey(), published.objectKey());
+      assertEquals(priorPuts + 1, puts.get(), "deleted reuse must fall back to one new object write outside the transaction");
+      var session = stores.dockerUploads().findSession(replacement).orElseThrow();
+      assertEquals("COMPLETED", session.status());
+      assertEquals(data.length(), session.nextOffset());
+      assertEquals(1, stores.dockerUploads().listChunks(replacement).size(), "failed reuse must roll back the final chunk insertion");
+      if (!collectBeforePublication) collectDeletedBlob(oldBlob);
+      assertArrayEquals(data.getBytes(java.nio.charset.StandardCharsets.UTF_8), objects.get(published.objectKey()),
+          "collecting the old object must not destroy the completed upload");
+    }
+
+    void collectDeletedBlob(AssetBlobRecord blob) {
+      // Exercise GC's deleted-row lock/removal contract while simulating its physical object deletion.
+      transactions.execute("Collect original blob", () -> {
+        assertTrue(stores.assets().lockDeletedBlobById(blob.id()).isPresent());
+        objects.remove(blob.objectKey());
+        assertEquals(1, stores.assets().hardDeleteBlobByIdIfDeleted(blob.id()));
+        return null;
+      });
     }
 
     void verifyRollbackAndRetry() {

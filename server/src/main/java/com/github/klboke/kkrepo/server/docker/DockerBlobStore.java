@@ -13,6 +13,7 @@ import com.github.klboke.kkrepo.protocol.docker.DockerErrorCode;
 import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.blob.BlobTransactionCleanup;
+import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
@@ -21,6 +22,8 @@ import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import java.io.InputStream;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
@@ -29,6 +32,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.function.Function;
+import java.util.function.Supplier;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -159,53 +164,78 @@ public class DockerBlobStore {
   StoredBlob putVerifiedBlob(
       RepositoryRuntime runtime, DockerDigest digest, InputStream body, long size, String contentType,
       String createdBy, String createdByIp,
-      java.util.function.Function<java.util.function.Supplier<StoredBlob>, StoredBlob> publication) {
+      Function<Supplier<StoredBlob>, StoredBlob> publication) {
     if (!digest.isSha256()) {
       throw new DockerProtocolException(DockerErrorCode.DIGEST_INVALID, "only sha256 blobs are supported", 400);
     }
     try (VerifyingInputStream verified = new VerifyingInputStream(body, digest, size)) {
-      Optional<AssetBlobRecord> reusable = assetDao.findReusableBlobBySha256(
-          runtime.blobStoreId(), digest.hex(), size);
-      if (reusable.isPresent()) {
-        try {
-          verified.transferTo(java.io.OutputStream.nullOutputStream());
-          StoredBlob stored = publication.apply(() -> persistBlobRecordReuse(
-              runtime, digest, reusable.get(), null, createdBy, createdByIp));
-          recordDigest(runtime, "verified_blob", "success");
-          return stored;
-        } catch (DockerProtocolException e) {
-          recordDigest(runtime, "verified_blob", "failure");
-          throw e;
-        }
-      }
-      BlobStorage storage = storage(runtime);
-      BlobReference reference = null;
-      try {
-        reference = storage.put(
-            runtime.name(),
-            blobPath(digest),
-            verified,
-            size,
-            digest.hex());
-        verified.verifyDigest();
-        BlobReference uploadedReference = reference;
-        StoredBlob stored = publication.apply(() -> persistBlob(
-            runtime, digest, uploadedReference, size, contentType, createdBy, createdByIp));
-        recordDigest(runtime, "verified_blob", "success");
-        return stored;
-      } catch (RuntimeException e) {
-        recordDigest(runtime, "verified_blob", "failure");
-        if (reference != null) {
-          BlobTransactionCleanup.deleteIfUnreferenced(
-              assetDao, storage, runtime.blobStoreId(), reference, "Docker blob persist failure");
-        }
-        throw e;
-      }
+      boolean reuseCandidate = assetDao.findReusableBlobBySha256(
+          runtime.blobStoreId(), digest.hex(), size).isPresent();
+      StoredBlob stored = reuseCandidate
+          ? verifyAndReuseBlob(runtime, digest, verified, size, contentType, createdBy, createdByIp, publication)
+          : storeVerifiedBlob(runtime, digest, verified, size, contentType, createdBy, createdByIp, publication);
+      recordDigest(runtime, "verified_blob", "success");
+      return stored;
+    } catch (RuntimeException e) {
+      recordDigest(runtime, "verified_blob", "failure");
+      throw e;
     } catch (IOException e) {
       recordDigest(runtime, "verified_blob", "failure");
       throw new UncheckedIOException(e);
     }
   }
+
+  private StoredBlob verifyAndReuseBlob(
+      RepositoryRuntime runtime, DockerDigest digest, VerifyingInputStream verified, long size,
+      String contentType, String createdBy, String createdByIp,
+      Function<Supplier<StoredBlob>, StoredBlob> publication) throws IOException {
+    // Retain verified bytes for a fallback if deletion/GC wins while verification runs without a lock.
+    Path staged = TempBlobFiles.createTempFile(storage(runtime), "docker-verified-", ".blob");
+    try {
+      try (var out = Files.newOutputStream(staged)) {
+        verified.transferTo(out);
+      }
+      verified.verifyDigest();
+      try {
+        return publication.apply(() -> {
+          // This live-row lock must be held until the asset binding and upload session commit together.
+          AssetBlobRecord current = assetDao.findReusableBlobBySha256(runtime.blobStoreId(), digest.hex(), size)
+              .orElseThrow(ReusableBlobUnavailable::new);
+          return persistBlobRecordReuse(runtime, digest, current, null, createdBy, createdByIp);
+        });
+      } catch (ReusableBlobUnavailable deletedDuringVerification) {
+        // The failed publication rolled back before any fallback object-store I/O starts.
+        try (var replay = new VerifyingInputStream(Files.newInputStream(staged), digest, size)) {
+          return storeVerifiedBlob(runtime, digest, replay, size, contentType, createdBy, createdByIp, publication);
+        }
+      }
+    } finally {
+      TempBlobFiles.deleteQuietly(staged);
+    }
+  }
+
+  private StoredBlob storeVerifiedBlob(
+      RepositoryRuntime runtime, DockerDigest digest, VerifyingInputStream verified, long size,
+      String contentType, String createdBy, String createdByIp,
+      Function<Supplier<StoredBlob>, StoredBlob> publication) {
+    BlobStorage storage = storage(runtime);
+    BlobReference reference = null;
+    try {
+      reference = storage.put(runtime.name(), blobPath(digest), verified, size, digest.hex());
+      verified.verifyDigest();
+      BlobReference uploadedReference = reference;
+      return publication.apply(() -> persistBlob(
+          runtime, digest, uploadedReference, size, contentType, createdBy, createdByIp));
+    } catch (RuntimeException e) {
+      if (reference != null) {
+        BlobTransactionCleanup.deleteIfUnreferenced(
+            assetDao, storage, runtime.blobStoreId(), reference, "Docker blob persist failure");
+      }
+      throw e;
+    }
+  }
+
+  private static final class ReusableBlobUnavailable extends RuntimeException {}
 
   public Optional<StoredBlob> mountBlob(
       RepositoryRuntime target,
