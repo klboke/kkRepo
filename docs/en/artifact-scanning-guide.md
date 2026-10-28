@@ -271,6 +271,12 @@ permissions can navigate to Content Selectors. Other administration views remain
 Read-only users can inspect results, but mutation actions are hidden. Repository/task action
 availability is calculated by the server and is checked again when an action is submitted.
 
+For strict repository isolation, also review the default authenticated role: by default,
+`KKREPO_DEFAULT_AUTHENTICATED_ROLE_ID` adds `nx-anonymous`, which includes broad repository
+browse/read privileges. Disabling anonymous access alone does not remove that inherited
+access. See [Content selectors](content-selectors.md#authorization-behavior)
+for configuration and re-authentication requirements.
+
 Waiver privileges are independent: `nx-security-scanning-update` does not grant waiver
 creation or deletion. Waiver operators also need scan read access to use this UI and
 administration permission for the affected repository. Global waivers additionally require

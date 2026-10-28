@@ -247,6 +247,10 @@ kubectl logs statefulset/kkrepo-scanner
 会被保留。同时拥有选择器权限时还可进入 Content Selectors，其余管理页仍隐藏。只读用户可查看结果，
 修改操作会隐藏。仓库和任务的操作能力由后端计算，提交操作时仍会重新鉴权。
 
+如果需要严格限制到指定仓库，还应检查默认认证角色：`KKREPO_DEFAULT_AUTHENTICATED_ROLE_ID`
+默认附加 `nx-anonymous`，其中包含较宽的仓库 browse/read 权限。仅关闭匿名访问不会去掉该继承权限。
+配置及重新登录要求见[内容选择器](content-selectors.md)。
+
 豁免权限独立授权：`nx-security-scanning-update` 不包含创建或删除豁免的权限。
 豁免操作员使用此页面还需要扫描读取权限，以及受影响仓库的 administration 权限；全局豁免还需
 `nexus:security-scanning:update`。Group 管理员可以 retry/cancel 适用于该 Group 扫描配置的成员任务，
