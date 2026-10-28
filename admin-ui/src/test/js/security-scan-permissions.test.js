@@ -109,9 +109,13 @@ for (const [permissions, expected] of [
   test(`Browse Admin entry agrees with Admin routing for ${permissions}`, () => {
     const { context } = setup(permissions);
     const browseContext = vm.createContext({ currentPermissions: permissions });
-    for (const name of ['permissionPartMatches', 'permissionMatches', 'can', 'hasAdminEntryPermission'])
+    for (const name of ['permissionPartMatches', 'permissionMatches', 'can', 'hasAdminEntryPermission', 'adminEntryUrl'])
       vm.runInContext(extract(name, browse), browseContext);
     assert.equal(browseContext.hasAdminEntryPermission(), expected);
+    if (permissions.includes('nexus:*')) assert.equal(browseContext.adminEntryUrl(), '/admin/');
+    else if (context.canAccessAdminView('security-scanning'))
+      assert.equal(browseContext.adminEntryUrl(), '/admin/#admin/security/artifact-scanning');
+    else if (expected) assert.equal(browseContext.adminEntryUrl(), '/admin/#admin/repository/content-selectors');
     assert.equal(context.canAccessAdminView('security-scanning')
       || context.canAccessAdminView('content-selectors'), expected);
   });

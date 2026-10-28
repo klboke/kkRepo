@@ -612,6 +612,13 @@ function uploadEmptyStateMessage() {
     + "with \"docker push\" instead.";
 }
 
+function adminEntryUrl() {
+  if (can("nexus:*")) return "/admin/";
+  return can("nexus:security-scanning:read")
+    ? "/admin/#admin/security/artifact-scanning"
+    : "/admin/#admin/repository/content-selectors";
+}
+
 function updateTopbarAuth() {
   const adminLink = document.getElementById("admin-workspace-link");
   const loginButton = document.getElementById("login-button");
@@ -625,7 +632,7 @@ function updateTopbarAuth() {
   const signedIn = Boolean(currentSession && currentSession.userId);
   if (adminLink) {
     adminLink.hidden = !signedIn || !hasAdminEntryPermission();
-    adminLink.href = can("nexus:*") ? "/admin/" : "/admin/#admin/repository/content-selectors";
+    adminLink.href = adminEntryUrl();
   }
   loginButton.hidden = signedIn;
   userMenu.hidden = !signedIn;
