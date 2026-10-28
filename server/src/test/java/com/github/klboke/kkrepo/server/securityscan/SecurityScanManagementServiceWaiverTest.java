@@ -95,6 +95,35 @@ class SecurityScanManagementServiceWaiverTest {
   }
 
   @Test
+  void findingCapabilitiesBatchAssetsAndReuseGroupMembershipOnlyWithinTheRequest() {
+    var group = repository(12L, "group", RepositoryType.GROUP);
+    when(repositories.list()).thenReturn(List.of(group));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.allow());
+    when(scans.listFindingsByRepositories(List.of(12L), null, null, null, 0, 11))
+        .thenReturn(List.of(finding(41L, 7L)));
+    when(scans.listRunSubjects(7L, 0, 0, 1000)).thenReturn(List.of(
+        new ScanRunSubject(7L, 12L, 23L, 3L, 1L, Instant.now()),
+        new ScanRunSubject(7L, 12L, 24L, 3L, 1L, Instant.now()),
+        new ScanRunSubject(7L, 12L, 25L, 3L, 1L, Instant.now())));
+    when(assets.findAssetsByIds(List.of(23L, 24L, 25L))).thenReturn(Map.of(
+        23L, asset(23L, 11L, "one.jar"), 24L, asset(24L, 11L, "two.jar"),
+        25L, asset(25L, 11L, "three.jar")));
+    when(repositoryScope.sourceRepositoryIds(12L)).thenReturn(List.of(11L));
+
+    assertTrue(service.findingPage(actor, null, null, null, null, 0, 10)
+        .items().getFirst().canCreateWaiver());
+    verify(repositoryScope).sourceRepositoryIds(12L);
+    verify(assets).findAssetsByIds(List.of(23L, 24L, 25L));
+    verify(assets, never()).findAssetById(anyLong());
+
+    when(repositoryScope.sourceRepositoryIds(12L)).thenReturn(List.of());
+    assertFalse(service.findingPage(actor, null, null, null, null, 0, 10)
+        .items().getFirst().canCreateWaiver());
+    verify(repositoryScope, org.mockito.Mockito.times(2)).sourceRepositoryIds(12L);
+  }
+
+  @Test
   void waiverDeleteCapabilitiesMatchScopedAndGlobalAuthorization() {
     var scoped = waiver(51L, 11L, null, null, "CVE-2026-0041", null, "accepted", Instant.now().plusSeconds(60), Instant.now());
     var global = waiver(52L, null, null, null, "CVE-2026-0041", null, "accepted", Instant.now().plusSeconds(60), Instant.now());

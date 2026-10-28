@@ -52,6 +52,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Consumer;
+import java.util.function.LongFunction;
 import java.util.function.Function;
 import org.springframework.http.HttpStatus;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -429,6 +430,8 @@ public class SecurityScanManagementService {
     boolean canApproveWaiver = security.decide(
         actor.permissionSubject(), "nexus:security-scanning-waivers:create").allowed();
     Map<Long, Boolean> waiverRepositoryAdministration = new LinkedHashMap<>();
+    // Shared group membership is read once per context within this request, never cached across requests.
+    Map<Long, List<Long>> waiverGroupSources = new LinkedHashMap<>();
     Map<Long, List<ScanFinding>> findingsByRun = new LinkedHashMap<>();
     Map<Long, FindingAccumulator> accumulators = new LinkedHashMap<>();
     for (ScanFinding finding : rawPage.items()) {
@@ -451,7 +454,8 @@ public class SecurityScanManagementService {
             AssetRecord asset = waiverAssets.get(subject.assetId());
             boolean administrable = Boolean.TRUE.equals(
                 waiverRepositoryAdministration.get(subject.repositoryId())) && asset != null
-                && isAssetInRepositoryContext(repositoriesById.get(subject.repositoryId()), asset);
+                && isAssetInRepositoryContext(repositoriesById.get(subject.repositoryId()), asset,
+                    id -> waiverGroupSources.computeIfAbsent(id, repositoryScope::sourceRepositoryIds));
             for (ScanFinding finding : runFindings) {
               accumulators.get(finding.id()).acceptSubject(repositoryName, administrable);
             }
@@ -1561,10 +1565,15 @@ public class SecurityScanManagementService {
 
   private boolean isAssetInRepositoryContext(
       RepositoryRecord repository, AssetRecord asset) {
+    return isAssetInRepositoryContext(repository, asset, repositoryScope::sourceRepositoryIds);
+  }
+
+  private boolean isAssetInRepositoryContext(
+      RepositoryRecord repository, AssetRecord asset, LongFunction<List<Long>> groupSources) {
     if (repository.id() == null) return false;
     if (repository.id() == asset.repositoryId()) return true;
     return repository.type() == RepositoryType.GROUP
-        && repositoryScope.sourceRepositoryIds(repository.id()).contains(asset.repositoryId());
+        && groupSources.apply(repository.id()).contains(asset.repositoryId());
   }
 
   private boolean canAdministerRepository(
