@@ -120,3 +120,36 @@ for (const [permissions, expected] of [
       || context.canAccessAdminView('content-selectors'), expected);
   });
 }
+
+for (const text of [source, browse]) {
+  test(`action aliases match backend semantics in ${text === source ? 'Admin' : 'Browse'}`, () => {
+    const context = vm.createContext({});
+    for (const name of ['permissionPartMatches', 'permissionMatches'])
+      vm.runInContext(extract(name, text), context);
+    for (const [granted, requested, allowed] of [
+      ['nexus:security-scanning:edit,read', 'nexus:security-scanning:update', true],
+      ['nexus:security-scanning:update', 'nexus:security-scanning:edit', true],
+      ['nexus:security-scanning:all', 'nexus:security-scanning:read', true],
+      ['nexus:security-scanning:all', 'nexus:security-scanning:*', false],
+      ['nexus:security-scanning:all', 'nexus:*', false],
+      ['nexus:security-scanning-waivers:add', 'nexus:security-scanning-waivers:create', true],
+      ['nexus:security-scanning:read', 'nexus:security-scanning:update', false],
+      ['nexus:edit:read', 'nexus:update:read', false],
+      ['nexus:repository-admin:raw:edit:read', 'nexus:repository-admin:raw:update:read', false],
+      ['nexus:repository-admin:raw:releases:edit', 'nexus:repository-admin:raw:releases:update', true],
+      ['nexus:repository-content-selector:edit:raw:releases:read',
+        'nexus:repository-content-selector:update:raw:releases:read', false],
+      ['nexus:repository-content-selector:team:raw:releases:edit',
+        'nexus:repository-content-selector:team:raw:releases:update', true],
+    ]) assert.equal(context.permissionMatches(granted, requested), allowed, `${granted} -> ${requested}`);
+  });
+}
+
+test('custom edit aliases enable scan policy controls and mutation guards', () => {
+  const { context, policyButton, element } = setup(['nexus:security-scanning:read', 'nexus:security-scanning:edit']);
+  context.applySecurityScanDeploymentState(true);
+  context.renderSecurityScanPolicies();
+  assert.equal(policyButton.hidden, false);
+  assert.equal(context.securityScanCanMutate(), true);
+  assert.match(element('security-scan-policy-table').innerHTML, /policy-edit/);
+});

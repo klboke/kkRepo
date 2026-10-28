@@ -350,6 +350,30 @@ class SecurityManagementServicePermissionTest {
     assertTrue(permissions.contains("nexus:repository-admin:maven2:*:add"));
   }
 
+  @Test
+  void effectivePermissionsExposeCombinedActionsWithoutGrantingThemToReaders() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.assign("Local", "editor", "scan-editor");
+    dao.assign("Local", "reader", "scan-reader");
+    dao.grant("scan-editor", privilege("nx-security-scanning-update", "application",
+        Map.of("domain", "security-scanning", "actions", "update,read")));
+    dao.grant("scan-reader", privilege("nx-security-scanning-read", "application",
+        Map.of("domain", "security-scanning", "actions", "read")));
+    SecurityManagementService service = new SecurityManagementService(dao);
+
+    assertEquals(List.of("nexus:security-scanning:read", "nexus:security-scanning:update"),
+        service.listEffectivePermissions(subject("editor")));
+    assertEquals(List.of("nexus:security-scanning:read"),
+        service.listEffectivePermissions(subject("reader")));
+    assertTrue(service.decide(subject("editor"), "nexus:security-scanning:update").allowed());
+    assertFalse(service.decide(subject("reader"), "nexus:security-scanning:update").allowed());
+
+    dao.assign("Local", "admin", "nx-admin");
+    dao.grant("nx-admin", privilege("nx-all", "wildcard", Map.of("pattern", "nexus:*")));
+    assertTrue(service.listEffectivePermissions(subject("admin"))
+        .contains("nexus:security-scanning:update,read"));
+  }
+
   private static PermissionSubject subject(String userId) {
     return new PermissionSubject("Local", userId, Set.of(), null);
   }

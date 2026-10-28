@@ -45,6 +45,27 @@ class SecurityCatalogCacheTest {
   }
 
   @Test
+  void cachedEffectivePermissionsExposeEachCombinedActionWithScopedAuthorization() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.user(1L, "Local", "editor", List.of("scan-editor"));
+    dao.user(2L, "Local", "reader", List.of("scan-reader"));
+    dao.role("scan-editor");
+    dao.role("scan-reader");
+    dao.grant("scan-editor", privilege("nx-security-scanning-update", "application",
+        Map.of("domain", "security-scanning", "actions", "update,read")));
+    dao.grant("scan-reader", privilege("nx-security-scanning-read", "application",
+        Map.of("domain", "security-scanning", "actions", "read")));
+    SecurityCatalogCache catalogCache = new SecurityCatalogCache(dao, true);
+    SecurityManagementService service = new SecurityManagementService(dao, null, null, catalogCache);
+
+    assertEquals(List.of("nexus:security-scanning:read", "nexus:security-scanning:update"),
+        service.listEffectivePermissions(subject("editor")));
+    assertEquals(List.of("nexus:security-scanning:read"),
+        service.listEffectivePermissions(subject("reader")));
+    assertEquals(0, dao.listPrivilegesForRolesCalls);
+  }
+
+  @Test
   void permissionChecksDoNotOpenTransactionsWhenCatalogIsWarm() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.user(1L, "Local", "alice", List.of("nx-reader"));

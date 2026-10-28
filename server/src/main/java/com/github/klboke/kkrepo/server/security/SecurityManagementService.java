@@ -1050,6 +1050,7 @@ public class SecurityManagementService implements AccessDecisionService {
           .map(SecurityManagementService::blankToNull)
           .filter(permission -> permission != null)
           .map(permission -> permission.toLowerCase(Locale.ROOT))
+          .flatMap(permission -> effectivePermissionCandidates(permission).stream())
           .filter(permission -> permissionAllowed(grantedPrivileges, permission, null, repositoryTargets))
           .distinct()
           .sorted()
@@ -1060,10 +1061,29 @@ public class SecurityManagementService implements AccessDecisionService {
         .map(SecurityManagementService::blankToNull)
         .filter(permission -> permission != null)
         .map(permission -> permission.toLowerCase(Locale.ROOT))
+        .flatMap(permission -> effectivePermissionCandidates(permission).stream())
         .filter(permission -> decide(subject, permission).allowed())
         .distinct()
         .sorted()
         .toList();
+  }
+
+  private static List<String> effectivePermissionCandidates(String permission) {
+    // Keep existing catalog entries and expose each action of combined grants to UI consumers.
+    // Every candidate still passes the existing authorization decision before exposure.
+    List<String> candidates = new ArrayList<>();
+    candidates.add(permission);
+    String[] parts = permission.split(":");
+    for (int i = 0; i < parts.length; i++) {
+      if (isActionSegment(parts, parts, i) && parts[i].contains(",")) {
+        for (String action : parts[i].split(",")) {
+          String[] expanded = parts.clone();
+          expanded[i] = action.trim();
+          candidates.add(String.join(":", expanded));
+        }
+      }
+    }
+    return candidates;
   }
 
   private AccessDecision decide(
