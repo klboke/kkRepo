@@ -22,6 +22,7 @@ import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
+import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
@@ -128,6 +129,33 @@ class SecurityScanManagementServiceCoreTest {
         documentPersistence,
         properties,
         scope);
+  }
+
+  @Test
+  void readOnlyCapabilitiesNeverAuthorizeMutationEvenWithRepositoryAdministration() {
+    when(security.decide(actor.permissionSubject(), "nexus:security-scanning:update"))
+        .thenReturn(AccessDecision.deny("read only"));
+    assertFalse(service.repositoryPage(actor, null, 0, 10).items().getFirst().canConfigure());
+    var task = scanTask(7L, 20L);
+    when(scans.listTasks(1L, null, null, 0, 11, null)).thenReturn(List.of(task));
+    var view = service.taskPage(actor, 1L, null, null, 0, 10).items().getFirst();
+    assertFalse(view.canManage());
+    assertFalse(view.canRescan());
+    verify(scope, never()).effectiveConfigsForSource(anyLong());
+  }
+
+  @Test
+  void repositoryCapabilitiesRequireBothUpdateAndAdministration() {
+    assertTrue(service.repositoryViews(actor).getFirst().canConfigure());
+    when(security.decide(eq(actor.permissionSubject()),
+        argThat((RepositoryPermission permission) -> permission.action() == PermissionAction.ADMIN)))
+        .thenReturn(AccessDecision.deny("browse only"));
+    assertFalse(service.repositoryViews(actor).getFirst().canConfigure());
+    var task = scanTask(7L, 20L);
+    when(scans.listTasks(1L, null, null, 0, 11, null)).thenReturn(List.of(task));
+    var view = service.taskPage(actor, 1L, null, null, 0, 10).items().getFirst();
+    assertFalse(view.canManage());
+    assertFalse(view.canRescan());
   }
 
   @ParameterizedTest
@@ -365,6 +393,8 @@ class SecurityScanManagementServiceCoreTest {
     var page = service.taskPage(actor, null, null, null, 0, 10);
     assertEquals(1, page.items().size());
     assertEquals("maven-hosted", page.items().getFirst().repository());
+    assertTrue(page.items().getFirst().canManage());
+    assertFalse(page.items().getFirst().canRescan());
     var order = new SecurityScanDao.CompletionOrder(true, 0, null);
     when(scans.listTasksByRepositories(List.of(2L), null, null, 0, 11, order))
         .thenReturn(List.of(task));

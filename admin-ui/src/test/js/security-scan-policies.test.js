@@ -9,7 +9,7 @@ function setup(confirm = true, response = { ok: true }) {
   const calls = [];
   const table = { innerHTML: '' };
   const context = {
-    securityScanState: { policies: [{ id: 4, name: 'default-audit', revision: 4, latestRevision: true, blockSeverity: 'HIGH' }] },
+    securityScanState: { summary: { deploymentEnabled: true }, policies: [{ id: 4, name: 'default-audit', revision: 4, latestRevision: true, blockSeverity: 'HIGH' }] },
     window: { location: {}, kkrepoConfirmDelete: options => { calls.push(['confirm', options]); return Promise.resolve(confirm); } },
     document: { getElementById: () => table },
     fetch: async (url, options) => { calls.push(['fetch', url, options.method]); return response; },
@@ -20,6 +20,7 @@ function setup(confirm = true, response = { ok: true }) {
     formatSecurityScanValidity: () => '7 days',
   };
   vm.createContext(context);
+  require("./authorization-fixture")(context);
   for (const [start, end] of [
     ['function escapeHtml(', 'function '],
     ['async function responseErrorMessage(', 'async function saveBlobStore('],

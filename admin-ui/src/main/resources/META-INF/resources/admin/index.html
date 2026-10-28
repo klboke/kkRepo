@@ -1578,7 +1578,7 @@
                   <label class="full-width"><span>Reason <span class="required-mark">*</span></span><textarea id="security-scan-waiver-reason" rows="2" required></textarea></label>
                 </div>
                 <div class="form-actions">
-                  <button class="create-button" id="security-scan-save-waiver-button" type="submit">Create waiver</button>
+                  <button class="create-button" id="security-scan-save-waiver-button" data-scan-permission="nexus:security-scanning-waivers:create" hidden type="submit">Create waiver</button>
                   <button class="create-button secondary" id="security-scan-cancel-waiver-button" type="button">Cancel</button>
                 </div>
               </form>
@@ -1751,7 +1751,7 @@
                     </div>
                   </details>
                   <div class="form-actions">
-                    <button class="create-button" id="security-scan-save-repository-button" type="submit">Save configuration</button>
+                    <button class="create-button" id="security-scan-save-repository-button" data-scan-permission="nexus:security-scanning:update" hidden type="submit">Save configuration</button>
                     <button class="create-button secondary" id="security-scan-cancel-repository-button" type="button">Cancel</button>
                   </div>
                 </form>
@@ -1788,7 +1788,7 @@
               </label>
               <button class="create-button secondary" type="submit">Search</button>
               <button class="create-button secondary" data-security-scan-clear="policies" type="button">Clear</button>
-              <button class="create-button" id="security-scan-create-policy-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create policy</button>
+              <button class="create-button" id="security-scan-create-policy-button" data-scan-permission="nexus:security-scanning:update" hidden type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create policy</button>
             </form>
             <div class="form-modal" id="security-scan-policy-form-modal" data-form-id="security-scan-policy-form" role="dialog" aria-modal="true" aria-labelledby="security-scan-policy-form-title" hidden>
               <div class="form-modal-backdrop" data-modal-dismiss="security-scan-policy-form"></div>
@@ -1815,7 +1815,7 @@
                     <label class="checkbox-field"><input id="security-scan-policy-complete" type="checkbox"><span>Require complete inventory</span></label>
                   </div>
                   <div class="form-actions">
-                    <button class="create-button" id="security-scan-save-policy-button" type="submit">Create policy</button>
+                    <button class="create-button" id="security-scan-save-policy-button" data-scan-permission="nexus:security-scanning:update" hidden type="submit">Create policy</button>
                     <button class="create-button secondary" id="security-scan-cancel-policy-button" type="button">Cancel</button>
                   </div>
                 </form>
@@ -2043,6 +2043,6 @@
     <script src="/browse/assets/global-component-search.js?v=20260817-global-search-2"></script>
     <script src="./assets/routing-rules.js?v=20261026-routing-rules-2"></script>
     <script src="./assets/content-selectors.js?v=20261013-delete-confirmation-1"></script>
-    <script src="./assets/admin.js?v=20261027-raw-directory-1"></script>
+    <script src="./assets/admin.js?v=20261028-scanning-readers-1"></script>
   </body>
 </html>

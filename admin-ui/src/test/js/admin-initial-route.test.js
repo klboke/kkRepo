@@ -42,6 +42,13 @@ function start(hash, permissions = ["nexus:*"]) {
   const items = viewNames.filter((view) => view !== "loading").map((view) => ({
     dataset: { view }, hidden: false, classList: { toggle() {} },
   }));
+  const groups = ['repository', 'security', 'system'].map(sideGroup => ({ dataset: { sideGroup }, hidden: false }));
+  const groupItems = groups.map(group => ({
+    dataset: { sideGroupItems: group.dataset.sideGroup },
+    querySelectorAll: () => items.filter(item => group.dataset.sideGroup === 'security'
+      ? item.dataset.view.startsWith('security-')
+      : group.dataset.sideGroup === 'repository' ? item.dataset.view === 'content-selectors' : false),
+  }));
   const sessionResponse = deferred(), recipesResponse = deferred();
   const location = new URL(`https://example.test/admin/${hash}`);
   const navigate = (kind, target) => {
@@ -58,7 +65,8 @@ function start(hash, permissions = ["nexus:*"]) {
     document: {
       getElementById: (id) => elements.get(id),
       querySelectorAll: (selector) => selector === ".view" ? [...elements.values()]
-        : selector === ".side-item" ? items : [],
+        : selector === ".side-item" ? items : selector === ".side-group" ? groups
+        : selector === ".side-group-items[data-side-group-items]" ? groupItems : [],
     },
     hydrateSessionControls: () => loads.push("hydrate"),
     loadCurrentSession: async () => {
@@ -78,11 +86,12 @@ function start(hash, permissions = ["nexus:*"]) {
   }
   vm.runInContext(source.slice(source.indexOf("const SECURITY_SCAN_ROUTE_BASE"),
     source.indexOf("const memberTransfer")) + [
+    "sideGroupItems", "permissionPartMatches", "permissionMatches", "canAdmin", "canAccessAdminView",
     "normalizeAdminHash", "securityScanTabFromHash", "cleanupTabFromHash", "viewFromHash",
     "updateHashForView", "switchView", "applyHashRoute", "bootstrap",
   ].map(extractFunction).join("\n"), context);
   const completion = context.bootstrap();
-  return { context, location, views, history, loads, tabs, elements, items,
+  return { context, location, views, history, loads, tabs, elements, items, groups,
     completion, sessionResponse, recipesResponse,
     finish(session = { userId: "admin" }) {
       sessionResponse.resolve(session);
@@ -217,3 +226,56 @@ test("hash navigation after startup changes pages and nested tabs without pushin
   assert.deepEqual(app.tabs, [["scan", "tasks"], ["scan", "findings"]]);
   assert.deepEqual(app.history, []);
 });
+
+for (const grants of [
+  ['nexus:security-scanning:read'], ['nexus:security-scanning:read,update'],
+  ['nexus:security-scanning:*'], ['nexus:selectors,security-scanning:read'],
+]) {
+  test(`scan readers honor the nested route with ${grants}`, async () => {
+    const app = start('#admin/security/artifact-scanning/findings', grants);
+    await app.finish({ userId: 'scan-reader' });
+    assert.deepEqual(app.views, ['security-scanning']);
+    assert.deepEqual(app.tabs, [['scan', 'findings']]);
+    assert.deepEqual(app.history, []);
+    assert.ok(!app.loads.includes('recipes'));
+    assert.ok(!app.loads.includes('loadBlobStores'));
+    assert.equal(app.context.switchView('security-users'), false);
+    assert.equal(app.context.switchView('repositories'), false);
+    assert.equal(app.items.find(item => item.dataset.view === 'security-scanning').hidden, false);
+  });
+}
+
+for (const hash of ['', '#unknown', '#admin/security/users', '#admin/repository/content-selectors']) {
+  test(`scan-only fallback from ${hash} shows only the scan view`, async () => {
+    const app = start(hash, ['nexus:security-scanning:read']);
+    await app.finish();
+    assert.deepEqual(app.views, ['security-scanning']);
+    assert.equal(app.location.hash, '#admin/security/artifact-scanning');
+    assert.equal(app.groups.find(group => group.dataset.sideGroup === 'security').hidden, false);
+    assert.equal(app.groups.find(group => group.dataset.sideGroup === 'repository').hidden, true);
+    assert.ok(app.items.every(item => item.hidden === (item.dataset.view !== 'security-scanning')));
+  });
+}
+
+test('mixed reader honors selectors and browser history between both authorized views', async () => {
+  const app = start('#admin/repository/content-selectors', ['nexus:selectors:read', 'nexus:security-scanning:read']);
+  await app.finish();
+  assert.deepEqual(app.views, ['content-selectors']);
+  app.location.hash = '#admin/security/artifact-scanning/waivers';
+  app.context.applyHashRoute();
+  app.location.hash = '#admin/repository/content-selectors';
+  app.context.applyHashRoute();
+  assert.deepEqual(app.views, ['content-selectors', 'security-scanning', 'content-selectors']);
+  assert.deepEqual(app.history, []);
+});
+
+for (const grants of [[], ['nexus:security-scanning:update'], ['nexus:security-scanning-waivers:create']]) {
+  test(`no read grant renders no authorized page: ${grants}`, async () => {
+    const app = start('#admin/security/artifact-scanning', grants);
+    await app.finish();
+    assert.deepEqual(app.views, []);
+    assert.ok(app.items.every(item => item.hidden));
+    assert.equal(app.context.switchView('content-selectors'), false);
+    assert.equal(app.elements.get('loading-view').textContent, 'No administration views are available.');
+  });
+}

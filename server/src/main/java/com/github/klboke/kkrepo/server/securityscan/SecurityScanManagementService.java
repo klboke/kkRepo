@@ -133,10 +133,12 @@ public class SecurityScanManagementService {
   }
 
   public List<RepositoryView> repositoryViews(AuthenticatedSubject actor) {
-    return repositoryViews(visibleRepositories(actor));
+    return repositoryViews(actor, visibleRepositories(actor));
   }
 
-  private List<RepositoryView> repositoryViews(List<RepositoryRecord> repositoryRows) {
+  private List<RepositoryView> repositoryViews(
+      AuthenticatedSubject actor, List<RepositoryRecord> repositoryRows) {
+    boolean canUpdate = hasScanPermission(actor, "update");
     List<ScanProfile> profiles = scans.listProfiles();
     Map<Long, String> profileNames = new LinkedHashMap<>();
     for (ScanProfile profile : profiles) {
@@ -165,7 +167,8 @@ public class SecurityScanManagementService {
               policy == null ? null : policy.name(),
               config,
               SecurityScanResultValidity.resolve(config, policy),
-              policy == null || policy.enabled());
+              policy == null || policy.enabled(),
+              canUpdate && canAdministerRepository(actor, repository));
         })
         .toList();
   }
@@ -185,7 +188,7 @@ public class SecurityScanManagementService {
         offset += batchSize) {
       List<RepositoryRecord> batch = candidates.subList(
           offset, Math.min(candidates.size(), offset + batchSize));
-      for (RepositoryView view : repositoryViews(batch)) {
+      for (RepositoryView view : repositoryViews(actor, batch)) {
         if (matchesRepositoryQuery(view, normalizedQuery)) {
           matches.add(view);
           if (matches.size() > safeLimit) break;
@@ -263,6 +266,10 @@ public class SecurityScanManagementService {
     // Request-local memoization only; group membership is read from shared persistence each request.
     Map<Long, List<Long>> groupSources = new LinkedHashMap<>();
     List<TaskView> views = new ArrayList<>(rows.size());
+    boolean canUpdate = hasScanPermission(actor, "update");
+    // Authorization hints are request-local; mutation endpoints recheck permissions.
+    Map<String, Boolean> taskAdministration = new LinkedHashMap<>();
+    Map<Long, Boolean> sourceAdministration = new LinkedHashMap<>();
     for (ScanTask task : rows) {
       AssetRecord asset = task.assetId() == null ? null : assetsById.get(task.assetId());
       if (asset != null && asset.repositoryId() != task.repositoryId()) asset = null;
@@ -275,7 +282,12 @@ public class SecurityScanManagementService {
           asset == null ? null : asset.path(),
           asset == null ? null : findingBrowsePath(
               asset, browsePaths.get(asset.id()), dockerPaths.get(asset.id())),
-          browseRepository));
+          browseRepository,
+          canUpdate && taskAdministration.computeIfAbsent(
+              task.repositoryId() + ":" + task.profileId(), ignored -> canAdministerTask(actor, task)),
+          canUpdate && asset != null && sourceAdministration.computeIfAbsent(
+              task.repositoryId(), id -> repositories.findById(id)
+                  .map(source -> canAdministerRepository(actor, source)).orElse(false))));
     }
     return completion == null ? cursorPage(views, safeLimit, TaskView::id)
         : ScanCompletionPagination.page(views, safeLimit, TaskView::id,
@@ -414,6 +426,9 @@ public class SecurityScanManagementService {
     }
     Set<Long> visibleRepositoryIds = visibleRepositoryNames.keySet();
     Instant now = Instant.now();
+    boolean canApproveWaiver = security.decide(
+        actor.permissionSubject(), "nexus:security-scanning-waivers:create").allowed();
+    Map<Long, Boolean> waiverRepositoryAdministration = new LinkedHashMap<>();
     Map<Long, List<ScanFinding>> findingsByRun = new LinkedHashMap<>();
     Map<Long, FindingAccumulator> accumulators = new LinkedHashMap<>();
     for (ScanFinding finding : rawPage.items()) {
@@ -422,13 +437,24 @@ public class SecurityScanManagementService {
       accumulators.put(finding.id(), new FindingAccumulator());
     }
     findingsByRun.forEach((scanRunId, runFindings) ->
-        forEachRunSubject(scanRunId, currentOnly, subject -> {
-          if (!visibleRepositoryIds.contains(subject.repositoryId())) {
-            return;
-          }
-          String repositoryName = visibleRepositoryNames.get(subject.repositoryId());
-          for (ScanFinding finding : runFindings) {
-            accumulators.get(finding.id()).acceptSubject(repositoryName);
+        forEachRunSubjectPage(scanRunId, currentOnly, subjects -> {
+          List<Long> eligibleAssets = canApproveWaiver ? subjects.stream()
+              .filter(subject -> visibleRepositoryIds.contains(subject.repositoryId()))
+              .filter(subject -> waiverRepositoryAdministration.computeIfAbsent(subject.repositoryId(),
+                  id -> canAdministerRepository(actor, repositoriesById.get(id))))
+              .map(ScanRunSubject::assetId).distinct().toList() : List.of();
+          Map<Long, AssetRecord> waiverAssets = eligibleAssets.isEmpty()
+              ? Map.of() : assets.findAssetsByIds(eligibleAssets);
+          for (ScanRunSubject subject : subjects) {
+            if (!visibleRepositoryIds.contains(subject.repositoryId())) continue;
+            String repositoryName = visibleRepositoryNames.get(subject.repositoryId());
+            AssetRecord asset = waiverAssets.get(subject.assetId());
+            boolean administrable = Boolean.TRUE.equals(
+                waiverRepositoryAdministration.get(subject.repositoryId())) && asset != null
+                && isAssetInRepositoryContext(repositoriesById.get(subject.repositoryId()), asset);
+            for (ScanFinding finding : runFindings) {
+              accumulators.get(finding.id()).acceptSubject(repositoryName, administrable);
+            }
           }
         }));
     Map<Long, FindingArtifactSummary> artifactSummariesByRun = new LinkedHashMap<>();
@@ -739,7 +765,7 @@ public class SecurityScanManagementService {
       });
       waiverPage.stream()
           .filter(waiver -> matchingPageIds.contains(waiver.id()))
-          .map(waiver -> waiverView(waiver, now))
+          .map(waiver -> waiverView(actor, waiver, now))
           .forEach(waivers::add);
     });
     int active = (int) waivers.stream().filter(WaiverView::active).count();
@@ -753,7 +779,7 @@ public class SecurityScanManagementService {
         List.copyOf(waivers));
   }
 
-  private WaiverView waiverView(ScanWaiver waiver, Instant now) {
+  private WaiverView waiverView(AuthenticatedSubject actor, ScanWaiver waiver, Instant now) {
     AssetRecord asset = waiver.assetId() == null
         ? null
         : assets.findAssetById(waiver.assetId()).orElse(null);
@@ -791,7 +817,8 @@ public class SecurityScanManagementService {
         waiver.createdBy(),
         waiver.approvedBy(),
         waiver.expiresAt(),
-        waiver.createdAt());
+        waiver.createdAt(),
+        canDeleteWaiver(actor, waiver));
   }
 
   private static boolean isSubjectWaived(
@@ -808,6 +835,11 @@ public class SecurityScanManagementService {
 
   private void forEachRunSubject(
       long scanRunId, boolean currentOnly, Consumer<ScanRunSubject> consumer) {
+    forEachRunSubjectPage(scanRunId, currentOnly, page -> page.forEach(consumer));
+  }
+
+  private void forEachRunSubjectPage(
+      long scanRunId, boolean currentOnly, Consumer<List<ScanRunSubject>> consumer) {
     long afterRepositoryId = 0;
     long afterAssetId = 0;
     while (true) {
@@ -817,7 +849,7 @@ public class SecurityScanManagementService {
       if (page.isEmpty()) {
         return;
       }
-      page.forEach(consumer);
+      consumer.accept(page);
       ScanRunSubject last = page.getLast();
       if (last.repositoryId() < afterRepositoryId
           || (last.repositoryId() == afterRepositoryId
@@ -835,11 +867,13 @@ public class SecurityScanManagementService {
   private static final class FindingAccumulator {
     private final Set<String> repositoryNames = new LinkedHashSet<>();
     private final BitSet waivedTargets = new BitSet();
+    private final BitSet administrableTargets = new BitSet();
     private int activeWaiverCount;
     private int expiredWaiverCount;
     private int targetCount;
 
-    private void acceptSubject(String repositoryName) {
+    private void acceptSubject(String repositoryName, boolean administrable) {
+      if (administrable) administrableTargets.set(targetCount);
       targetCount++;
       if (repositoryName != null && !repositoryName.isBlank()) {
         repositoryNames.add(repositoryName);
@@ -877,6 +911,8 @@ public class SecurityScanManagementService {
         ScanFinding finding,
         List<FindingArtifactView> affectedArtifacts,
         long affectedArtifactCount) {
+      BitSet remaining = (BitSet) administrableTargets.clone();
+      remaining.andNot(waivedTargets);
       return FindingView.from(
           finding,
           repositoryNames.stream().sorted().toList(),
@@ -885,7 +921,8 @@ public class SecurityScanManagementService {
           activeWaiverCount,
           expiredWaiverCount,
           targetCount,
-          waivedTargets.cardinality());
+          waivedTargets.cardinality(),
+          !remaining.isEmpty());
     }
   }
 
@@ -1177,7 +1214,7 @@ public class SecurityScanManagementService {
     CursorPage<ScanWaiver> rawPage =
         cursorPage(waivers, safeLimit, waiver -> waiver.id());
     return new CursorPage<>(
-        rawPage.items().stream().map(waiver -> waiverView(waiver, now)).toList(),
+        rawPage.items().stream().map(waiver -> waiverView(actor, waiver, now)).toList(),
         rawPage.nextAfter());
   }
 
@@ -1267,6 +1304,16 @@ public class SecurityScanManagementService {
       cursor = nextCursor;
     }
     return List.copyOf(waivers);
+  }
+
+  private boolean canDeleteWaiver(AuthenticatedSubject actor, ScanWaiver waiver) {
+    if (!security.decide(actor.permissionSubject(), "nexus:security-scanning-waivers:delete").allowed()) {
+      return false;
+    }
+    Long repositoryId = effectiveWaiverRepositoryId(waiver);
+    return repositoryId == null ? hasScanPermission(actor, "update")
+        : repositories.findById(repositoryId)
+            .map(repository -> canAdministerRepository(actor, repository)).orElse(false);
   }
 
   private Long effectiveWaiverRepositoryId(ScanWaiver waiver) {
@@ -1490,17 +1537,26 @@ public class SecurityScanManagementService {
   private void requireTaskAdmin(AuthenticatedSubject actor, ScanTask task) {
     RepositoryRecord source = repositories.findById(task.repositoryId())
         .orElseThrow(() -> notFound("Repository not found"));
-    if (canAdministerRepository(actor, source)) return;
-    boolean contextAdmin = repositoryScope.effectiveConfigsForSource(task.repositoryId()).stream()
+    if (!canAdministerTask(actor, task, source)) {
+      throw new ResponseStatusException(
+          HttpStatus.FORBIDDEN, "Repository administration required");
+    }
+  }
+
+  private boolean canAdministerTask(AuthenticatedSubject actor, ScanTask task) {
+    return repositories.findById(task.repositoryId())
+        .map(source -> canAdministerTask(actor, task, source)).orElse(false);
+  }
+
+  private boolean canAdministerTask(
+      AuthenticatedSubject actor, ScanTask task, RepositoryRecord source) {
+    if (canAdministerRepository(actor, source)) return true;
+    return repositoryScope.effectiveConfigsForSource(task.repositoryId()).stream()
         .filter(config -> config.profileId() == task.profileId())
         .map(RepositoryScanConfig::repositoryId)
         .map(repositories::findById)
         .flatMap(Optional::stream)
         .anyMatch(context -> canAdministerRepository(actor, context));
-    if (!contextAdmin) {
-      throw new ResponseStatusException(
-          HttpStatus.FORBIDDEN, "Repository administration required");
-    }
   }
 
   private boolean isAssetInRepositoryContext(
@@ -1526,14 +1582,18 @@ public class SecurityScanManagementService {
             repository.name(), repository.format(), "*", PermissionAction.BROWSE)).allowed();
   }
 
+  private boolean hasScanPermission(AuthenticatedSubject actor, String action) {
+    return security.decide(actor.permissionSubject(), "nexus:security-scanning:" + action).allowed();
+  }
+
   private void requireGlobalRead(AuthenticatedSubject actor) {
-    if (!security.decide(actor.permissionSubject(), "nexus:security-scanning:read").allowed()) {
+    if (!hasScanPermission(actor, "read")) {
       throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Security scan view permission required");
     }
   }
 
   private void requireGlobalWrite(AuthenticatedSubject actor) {
-    if (!security.decide(actor.permissionSubject(), "nexus:security-scanning:update").allowed()) {
+    if (!hasScanPermission(actor, "update")) {
       throw new ResponseStatusException(
           HttpStatus.FORBIDDEN, "Security administration permission required");
     }
@@ -1711,7 +1771,8 @@ public class SecurityScanManagementService {
       String policyName,
       RepositoryScanConfig config,
       SecurityScanResultValidity resultValidity,
-      boolean policyEnabled) {}
+      boolean policyEnabled,
+      boolean canConfigure) {}
 
   public record TaskView(
       long id,
@@ -1736,17 +1797,19 @@ public class SecurityScanManagementService {
       String requestedBy,
       Instant requestedAt,
       Instant startedAt,
-      Instant finishedAt) {
+      Instant finishedAt,
+      boolean canManage,
+      boolean canRescan) {
     static TaskView from(
         ScanTask task, String repository, String assetPath, String browsePath,
-        String browseRepository) {
+        String browseRepository, boolean canManage, boolean canRescan) {
       return new TaskView(
           task.id(), task.repositoryId(), repository, task.assetId(),
           assetPath, browsePath, browseRepository, task.subjectKind().name(),
           task.stage().name(), task.requestReason().name(), task.priority(), task.status().name(),
           task.attempts(), task.maxAttempts(), task.nextAttemptAt(), task.claimedBy(),
           task.leaseUntil(), task.lastErrorCode(), task.lastErrorSummary(), task.requestedBy(),
-          task.requestedAt(), task.startedAt(), task.finishedAt());
+          task.requestedAt(), task.startedAt(), task.finishedAt(), canManage, canRescan);
     }
   }
 
@@ -1799,7 +1862,8 @@ public class SecurityScanManagementService {
       int activeWaiverCount,
       int expiredWaiverCount,
       int waiverTargetCount,
-      int waivedTargetCount) {
+      int waivedTargetCount,
+      boolean canCreateWaiver) {
     public FindingView {
       repositories = repositories == null ? List.of() : List.copyOf(repositories);
       affectedArtifacts = affectedArtifacts == null ? List.of() : List.copyOf(affectedArtifacts);
@@ -1813,7 +1877,8 @@ public class SecurityScanManagementService {
         int activeWaiverCount,
         int expiredWaiverCount,
         int waiverTargetCount,
-        int waivedTargetCount) {
+        int waivedTargetCount,
+        boolean canCreateWaiver) {
       return new FindingView(
           finding.id(), finding.scanRunId(), repositories, affectedArtifacts, affectedArtifactCount,
           finding.advisoryId(), finding.aliases(),
@@ -1821,7 +1886,7 @@ public class SecurityScanManagementService {
           finding.installedVersion(), finding.fixedVersions(), finding.severity().name(),
           finding.severitySource(), finding.cvssVector(), finding.cvssScore(), finding.title(),
           finding.primaryUrl(), finding.locations(), finding.sourceStatus(),
-          activeWaiverCount, expiredWaiverCount, waiverTargetCount, waivedTargetCount);
+          activeWaiverCount, expiredWaiverCount, waiverTargetCount, waivedTargetCount, canCreateWaiver);
     }
   }
 
@@ -1864,7 +1929,8 @@ public class SecurityScanManagementService {
       String createdBy,
       String approvedBy,
       Instant expiresAt,
-      Instant createdAt) {}
+      Instant createdAt,
+      boolean canDelete) {}
 
   public record FindingWaiverContext(
       long findingId,

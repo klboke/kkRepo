@@ -28,6 +28,39 @@ class SecurityManagementFilterTest {
 
   @ParameterizedTest
   @CsvSource({
+      "GET, /internal/security/scanning/summary, nexus:security-scanning:read",
+      "GET, /internal/security/scanning/findings, nexus:security-scanning:read",
+      "GET, /internal/security/scanning/sboms/1, nexus:security-scanning:read",
+      "PUT, /internal/security/scanning/repositories/1/config, nexus:security-scanning:update",
+      "POST, /internal/security/scanning/assets/1/rescan, nexus:security-scanning:update",
+      "POST, /internal/security/scanning/tasks/1/retry, nexus:security-scanning:update",
+      "POST, /internal/security/scanning/tasks/1/cancel, nexus:security-scanning:update",
+      "POST, /internal/security/scanning/policies, nexus:security-scanning:update",
+      "DELETE, /internal/security/scanning/policies/1, nexus:security-scanning:update",
+      "POST, /internal/security/scanning/waivers, nexus:security-scanning-waivers:create",
+      "DELETE, /internal/security/scanning/waivers/1, nexus:security-scanning-waivers:delete"
+  })
+  void scanReaderCanReadButCannotInvokeMutationEndpoints(
+      String method, String path, String permission) throws Exception {
+    var authentication = new StubAuthenticationService(Optional.of(subject("scan-reader")));
+    RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("read only")) {
+      @Override
+      public AccessDecision decide(PermissionSubject subject, String requested) {
+        super.decide(subject, requested);
+        return requested.equals("nexus:security-scanning:read")
+            ? AccessDecision.allow() : AccessDecision.deny("read only");
+      }
+    };
+    var response = new ResponseState();
+    var chain = new ChainState();
+    filter(authentication, security, true).doFilter(request(method, path), response.proxy(), chain);
+    assertEquals(permission, security.requestedPermission);
+    assertEquals(method.equals("GET") ? 1 : 0, chain.calls);
+    if (!method.equals("GET")) assertEquals(403, response.status);
+  }
+
+  @ParameterizedTest
+  @CsvSource({
       "/service/rest/v1/%73ecurity/users, nexus:users:read",
       "/service/rest/v1/routing-rules, nexus:*",
       "/service/rest/v1/%72outing-rules/rule, nexus:*",

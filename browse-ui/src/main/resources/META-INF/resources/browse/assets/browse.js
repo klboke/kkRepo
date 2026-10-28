@@ -544,7 +544,8 @@ function can(permission) {
 }
 
 function hasAdminEntryPermission() {
-  return can("nexus:*") || ["read", "create", "update", "delete"]
+  return can("nexus:*") || can("nexus:security-scanning:read")
+    || ["read", "create", "update", "delete"]
     .some((action) => can(`nexus:selectors:${action}`));
 }
 

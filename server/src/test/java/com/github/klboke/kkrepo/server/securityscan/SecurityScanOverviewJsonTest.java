@@ -35,7 +35,7 @@ class SecurityScanOverviewJsonTest {
             "default-audit",
             null,
             new SecurityScanResultValidity(86400L, "POLICY"),
-            true));
+            true, false));
 
     assertEquals(86400L, json.get("resultValidity").get("maxResultAgeSeconds").asLong());
     assertEquals("POLICY", json.get("resultValidity").get("source").asText());

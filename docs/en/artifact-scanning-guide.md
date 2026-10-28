@@ -251,6 +251,44 @@ capability from a repository that has not been activated.
 
 Grant custom roles according to responsibility:
 
+The following built-in application privileges are available in **Security → Privileges** and
+can be assigned through **Security → Roles**:
+
+| Built-in privilege | Domain | Actions |
+| --- | --- | --- |
+| `nx-security-scanning-read` | `security-scanning` | `read` |
+| `nx-security-scanning-update` | `security-scanning` | `update,read` |
+| `nx-security-scanning-waivers-create` | `security-scanning-waivers` | `create` |
+| `nx-security-scanning-waivers-delete` | `security-scanning-waivers` | `delete` |
+
+For a scan reader, create a role with `nx-security-scanning-read` and a repository browse
+privilege, for example `nx-repository-view-maven2-releases-browse` for a Maven repository
+named `releases`. Assign the role to the user. This exposes **Browse → Admin → Security →
+Artifact Scanning**, including results and SBOMs for the repositories they may browse,
+without granting `nexus:*`. A scan-only user lands on Artifact Scanning; authorized hash
+routes, including a specific scanning tab, are preserved. Users who also have selector
+permissions can navigate to Content Selectors. Other administration views remain hidden.
+Read-only users can inspect results, but mutation actions are hidden. Repository/task action
+availability is calculated by the server and is checked again when an action is submitted.
+
+Waiver privileges are independent: `nx-security-scanning-update` does not grant waiver
+creation or deletion. Waiver operators also need scan read access to use this UI and
+administration permission for the affected repository. Global waivers additionally require
+`nexus:security-scanning:update`. A group administrator can retry/cancel a member task when
+its scan profile applies to that group; rescan still requires administration of the source
+repository.
+
+The MySQL and PostgreSQL upgrade migration adds privilege records and links them only to
+`nx-admin` (which already has `nx-all`); it makes no table-structure or scanning-data changes
+and grants nothing to ordinary roles. Existing privileges with the same ID or name, their
+properties, and existing role assignments are preserved. If a manually created privilege
+uses a built-in name with different actions, inspect its domain/actions before assigning it;
+the migration does not overwrite it. Use a separately named application privilege if needed.
+Permission changes continue to use the existing shared authorization-version invalidation.
+During a rolling upgrade, update all server replicas before relying on the new UI entry;
+older replicas may still reject it or omit action capabilities, which the new UI treats as
+unavailable.
+
 | Operation | Permission |
 | --- | --- |
 | View scan pages, tasks, results, and SBOMs | `nexus:security-scanning:read` plus browse permission for the target repository |

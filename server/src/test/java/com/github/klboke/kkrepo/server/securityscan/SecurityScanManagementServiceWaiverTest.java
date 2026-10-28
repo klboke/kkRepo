@@ -2,6 +2,9 @@ package com.github.klboke.kkrepo.server.securityscan;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -14,6 +17,7 @@ import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
+import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
@@ -84,9 +88,38 @@ class SecurityScanManagementServiceWaiverTest {
     PermissionSubject permissions =
         new PermissionSubject("test", "security-admin", Set.of("nx-admin"), null);
     actor = new AuthenticatedSubject("test", "security-admin", "local", null, permissions);
+    when(security.decide(eq(permissions), any(String.class))).thenReturn(AccessDecision.deny("missing"));
     when(security.decide(
         eq(permissions), eq("nexus:security-scanning-waivers:create")))
         .thenReturn(AccessDecision.allow());
+  }
+
+  @Test
+  void waiverDeleteCapabilitiesMatchScopedAndGlobalAuthorization() {
+    var scoped = waiver(51L, 11L, null, null, "CVE-2026-0041", null, "accepted", Instant.now().plusSeconds(60), Instant.now());
+    var global = waiver(52L, null, null, null, "CVE-2026-0041", null, "accepted", Instant.now().plusSeconds(60), Instant.now());
+    when(repositories.list()).thenReturn(List.of(repository(11L, "visible")));
+    when(repositories.findById(11L)).thenReturn(Optional.of(repository(11L, "visible")));
+    when(security.decide(eq(actor.permissionSubject()), any(RepositoryPermission.class)))
+        .thenReturn(AccessDecision.allow());
+    when(security.decide(eq(actor.permissionSubject()), any(String.class)))
+        .thenReturn(AccessDecision.deny("missing"));
+    when(security.decide(actor.permissionSubject(), "nexus:security-scanning:read"))
+        .thenReturn(AccessDecision.allow());
+    when(scans.listWaivers(null, null, 0, 100)).thenReturn(List.of(scoped, global));
+    assertTrue(service.waivers(actor, null, 0, 10).stream().noneMatch(view -> view.canDelete()));
+    when(security.decide(actor.permissionSubject(), "nexus:security-scanning-waivers:delete"))
+        .thenReturn(AccessDecision.allow());
+    var views = service.waivers(actor, null, 0, 10);
+    assertTrue(views.get(0).canDelete());
+    assertFalse(views.get(1).canDelete());
+    when(security.decide(actor.permissionSubject(), "nexus:security-scanning:update"))
+        .thenReturn(AccessDecision.allow());
+    assertTrue(service.waivers(actor, null, 0, 10).get(1).canDelete());
+    when(security.decide(eq(actor.permissionSubject()),
+        argThat((RepositoryPermission permission) -> permission.action() == PermissionAction.ADMIN)))
+        .thenReturn(AccessDecision.deny("browse only"));
+    assertFalse(service.waivers(actor, null, 0, 10).get(0).canDelete());
   }
 
   @Test
@@ -121,6 +154,12 @@ class SecurityScanManagementServiceWaiverTest {
     when(security.decide(actor.permissionSubject(), "nexus:security-scanning:read"))
         .thenReturn(AccessDecision.allow());
     assertEquals(1, service.findingWaiverContext(actor, 41L, true).targetCount());
+    assertTrue(service.findingPage(actor, null, null, Severity.HIGH, "app", 0, 1, true)
+        .items().getFirst().canCreateWaiver());
+    when(security.decide(actor.permissionSubject(), "nexus:security-scanning-waivers:create"))
+        .thenReturn(AccessDecision.deny("read only"));
+    assertFalse(service.findingPage(actor, null, null, Severity.HIGH, "app", 0, 1, true)
+        .items().getFirst().canCreateWaiver());
     assertEquals(0, service.findingWaivers(actor, 41L, true).activeWaiverCount());
     verify(scans, never()).listRunSubjects(anyLong(), anyLong(), anyLong(), anyInt());
     when(scans.listFindings(11L, null, Severity.HIGH, "app", 41L, 2, true)).thenReturn(List.of());

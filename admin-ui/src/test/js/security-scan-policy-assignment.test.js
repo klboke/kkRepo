@@ -10,7 +10,7 @@ const policy = (id, revision, overrides = {}) => ({
   id, revision, name: 'default-audit', enabled: true, maxResultAgeSeconds: 604800, ...overrides,
 });
 const repository = (id = 5, config = {}) => ({
-  id, name: `repo-${id}`, type: 'PROXY', profileName: 'syft-grype-v1',
+  id, canConfigure: true, name: `repo-${id}`, type: 'PROXY', profileName: 'syft-grype-v1',
   config: { profileId: 1, enabled: true, enforcementMode: 'AUDIT', ...config },
 });
 
@@ -50,6 +50,7 @@ function setup(repositories = [repository()]) {
     openFormModal: (...args) => opened.push(args), closeFormModal() {}, loadSecurityScanning: async () => {},
   };
   vm.createContext(context);
+  require("./authorization-fixture")(context);
   for (const [start, end] of [
     ['function escapeHtml(', 'function '],
     ['async function fetchJson(', 'function uiThemeLabel('],

@@ -231,6 +231,34 @@ kubectl logs statefulset/kkrepo-scanner
 
 自定义角色按职责授予：
 
+以下内置 application 权限可在 **Security → Privileges** 查看，并通过 **Security → Roles** 分配：
+
+| 内置权限 | Domain | Actions |
+| --- | --- | --- |
+| `nx-security-scanning-read` | `security-scanning` | `read` |
+| `nx-security-scanning-update` | `security-scanning` | `update,read` |
+| `nx-security-scanning-waivers-create` | `security-scanning-waivers` | `create` |
+| `nx-security-scanning-waivers-delete` | `security-scanning-waivers` | `delete` |
+
+配置只读扫描角色时，添加 `nx-security-scanning-read` 和目标仓库的 browse 权限即可。例如，
+名为 `releases` 的 Maven 仓库可使用 `nx-repository-view-maven2-releases-browse`。将角色分配给用户后，
+用户可通过 **Browse → Admin → Security → Artifact Scanning** 查看其可浏览仓库的扫描结果和 SBOM，
+无需授予 `nexus:*`。仅有扫描读取权限时默认进入 Artifact Scanning；合法的 hash 路由（包括扫描子页签）
+会被保留。同时拥有选择器权限时还可进入 Content Selectors，其余管理页仍隐藏。只读用户可查看结果，
+修改操作会隐藏。仓库和任务的操作能力由后端计算，提交操作时仍会重新鉴权。
+
+豁免权限独立授权：`nx-security-scanning-update` 不包含创建或删除豁免的权限。
+豁免操作员使用此页面还需要扫描读取权限，以及受影响仓库的 administration 权限；全局豁免还需
+`nexus:security-scanning:update`。Group 管理员可以 retry/cancel 适用于该 Group 扫描配置的成员任务，
+但 rescan 仍要求源仓库的 administration 权限。
+
+MySQL 和 PostgreSQL 的升级迁移仅添加权限数据并关联到 `nx-admin`（该角色已有 `nx-all`），
+不改表结构或扫描数据，不向普通角色自动授权。已有同 ID 或同名权限的属性及角色绑定均保留。
+如果手工权限使用了内置名称但 actions 不同，分配前应核对 domain/actions，迁移不会覆盖它；
+必要时使用其他名称创建 application 权限。权限变更继续使用现有的共享授权版本失效机制。
+滚动升级时，应完成所有服务副本升级后再使用新的管理页入口；旧副本可能仍拒绝进入，或不返回操作能力，
+此时新页面会将对应操作视为不可用。
+
 | 操作 | 权限 |
 | --- | --- |
 | 查看扫描页面、任务、结果和 SBOM | `nexus:security-scanning:read`，以及目标仓库的 browse 权限 |

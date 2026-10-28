@@ -45,6 +45,7 @@ public class AdminUiController {
       return redirect(request, AUTH_REQUIRED_WELCOME);
     }
     boolean allowed = securityService.decide(subject.permissionSubject(), "nexus:*").allowed()
+        || securityService.decide(subject.permissionSubject(), "nexus:security-scanning:read").allowed()
         || java.util.List.of("read", "create", "update", "delete").stream().anyMatch(action ->
             securityService.decide(subject.permissionSubject(), "nexus:selectors:" + action).allowed());
     if (!allowed) {

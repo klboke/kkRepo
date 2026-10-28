@@ -25,7 +25,7 @@ function render(task) {
 }
 
 const task = {
-  id: 7, repositoryId: 1, repository: 'maven-hosted', assetId: 20,
+  id: 7, canManage: true, canRescan: true, repositoryId: 1, repository: 'maven-hosted', assetId: 20,
   assetPath: 'com/acme/demo/1.0/demo-1.0.jar', browsePath: 'com/acme/demo/1.0/demo-1.0.jar',
   browseRepository: 'maven-hosted', status: 'FAILED', stage: 'CATALOG_AND_MATCH',
   reason: 'MANUAL', attempts: 1, maxAttempts: 5

@@ -13,6 +13,7 @@ function setup() {
       return {items: [{id: 41}], nextAfter: 41};
     }};
   vm.createContext(c);
+  require("./authorization-fixture")(c);
   vm.runInContext(source.slice(source.indexOf('let securityScanState ='), source.indexOf('let securityScanPolicyFormMode'))
     + source.slice(source.indexOf('function securityScanPageParams('), source.indexOf('function renderSecurityScanning()')), c);
   c.renderSecurityScanList = () => {};
@@ -71,6 +72,7 @@ test('artifact details keep the selected filter throughout their pagination', as
 });
 test('waiver details and target selection carry the selected current or historical view', async () => {
   const {c, run} = setup();
+  run('securityScanState.summary = {deploymentEnabled: true}; securityScanState.findings = [{id: 41, canCreateWaiver: true}]');
   c.document.getElementById = () => ({reset: () => {}});
   c.openFormModal = c.clearRequiredFieldErrors = c.showToast = () => {};
   c.responseErrorMessage = async () => 'fixture stops before rendering';

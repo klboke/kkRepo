@@ -18,7 +18,8 @@ class AdminInitialRouteJavascriptTest {
     Process process = new ProcessBuilder(
         "node",
         "--test",
-        Path.of("src/test/js/admin-initial-route.test.js").toString())
+        Path.of("src/test/js/admin-initial-route.test.js").toString(),
+        Path.of("src/test/js/security-scan-permissions.test.js").toString())
         .redirectErrorStream(true)
         .start();
 
