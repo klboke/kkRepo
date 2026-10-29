@@ -41,6 +41,9 @@ public interface RepositoryDao {
 
   List<RepositoryRecord> listGroupsContaining(long memberRepositoryId);
 
+  /** Direct parent group IDs for the supplied members, read from shared persistence. */
+  Map<Long, List<Long>> findParentGroupIds(List<Long> memberRepositoryIds);
+
   List<String> findNamesUsingBlobStore(long blobStoreId);
 
   boolean hasComponents(long repositoryId);

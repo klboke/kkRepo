@@ -283,6 +283,10 @@ public interface SecurityScanDao {
   List<ScanRunSubject> listRunSubjects(
       long scanRunId, long afterRepositoryId, long afterAssetId, int maxItems, boolean currentOnly);
 
+  /** Same subject pagination, with only the live asset's source repository for capability checks. */
+  List<ScanRunSubjectAsset> listRunSubjectAssets(
+      long scanRunId, long afterRepositoryId, long afterAssetId, int maxItems, boolean currentOnly);
+
   /**
    * Lists run subjects whose recorded content generation still matches the current asset
    * candidate. This prevents historical findings from being presented as remediation targets
@@ -869,6 +873,9 @@ public interface SecurityScanDao {
       long profileId,
       long contentGeneration,
       Instant associatedAt) {}
+
+  /** A null sourceRepositoryId means the asset no longer exists. */
+  record ScanRunSubjectAsset(ScanRunSubject subject, Long sourceRepositoryId) {}
 
   record ScanFinding(
       Long id,

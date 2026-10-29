@@ -271,6 +271,12 @@ permissions can navigate to Content Selectors. Other administration views remain
 Read-only users can inspect results, but mutation actions are hidden. Repository/task action
 availability is calculated by the server and is checked again when an action is submitted.
 
+List capabilities reuse repository information only within a request. Task lists batch the
+relevant parent-group and scanning-configuration lookups; finding capabilities read source
+repository IDs without loading every affected artifact's metadata. Waiver lists reuse their
+repository names and administration decisions. This adds no cross-request cache: subsequent
+requests reread shared topology/configuration, and each mutation still rechecks authorization.
+
 For strict repository isolation, also review the default authenticated role: by default,
 `KKREPO_DEFAULT_AUTHENTICATED_ROLE_ID` adds `nx-anonymous`, which includes broad repository
 browse/read privileges. Disabling anonymous access alone does not remove that inherited

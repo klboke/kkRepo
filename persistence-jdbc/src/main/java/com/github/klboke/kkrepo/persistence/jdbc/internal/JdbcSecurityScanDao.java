@@ -2469,7 +2469,34 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   @Override
   public List<ScanRunSubject> listRunSubjects(
       long scanRunId, long afterRepositoryId, long afterAssetId, int maxItems, boolean currentOnly) {
+    return jdbc.query(runSubjectsSql(currentOnly), (rs, rowNum) -> runSubject(rs),
+        scanRunId, Math.max(0, afterRepositoryId), Math.max(0, afterRepositoryId),
+        Math.max(0, afterAssetId), safeLimit(maxItems));
+  }
+
+  @Override
+  public List<ScanRunSubjectAsset> listRunSubjectAssets(
+      long scanRunId, long afterRepositoryId, long afterAssetId, int maxItems, boolean currentOnly) {
+    // Paginate the distinct subjects before joining; never hydrate full asset metadata here.
     return jdbc.query("""
+        SELECT subjects.*, live_asset.repository_id AS source_repository_id
+        FROM (%s) subjects
+        LEFT JOIN asset live_asset ON live_asset.id = subjects.asset_id
+        ORDER BY subjects.repository_id, subjects.asset_id
+        """.formatted(runSubjectsSql(currentOnly)),
+        (rs, rowNum) -> new ScanRunSubjectAsset(runSubject(rs), nullableLong(rs, "source_repository_id")),
+        scanRunId, Math.max(0, afterRepositoryId), Math.max(0, afterRepositoryId),
+        Math.max(0, afterAssetId), safeLimit(maxItems));
+  }
+
+  private ScanRunSubject runSubject(ResultSet rs) throws SQLException {
+    return new ScanRunSubject(rs.getLong("scan_run_id"), rs.getLong("repository_id"),
+        rs.getLong("asset_id"), rs.getLong("profile_id"), rs.getLong("content_generation"),
+        nullableInstant(rs, "associated_at"));
+  }
+
+  private String runSubjectsSql(boolean currentOnly) {
+    return """
         SELECT
           scan_run_id,
           repository_id,
@@ -2488,19 +2515,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         ORDER BY repository_id, asset_id
         LIMIT ?
         """.formatted(currentOnly
-            ? " AND " + repositoryScope.currentFindingSubjectPredicate("subject") : ""),
-        (rs, rowNum) -> new ScanRunSubject(
-            rs.getLong("scan_run_id"),
-            rs.getLong("repository_id"),
-            rs.getLong("asset_id"),
-            rs.getLong("profile_id"),
-            rs.getLong("content_generation"),
-            nullableInstant(rs, "associated_at")),
-        scanRunId,
-        Math.max(0, afterRepositoryId),
-        Math.max(0, afterRepositoryId),
-        Math.max(0, afterAssetId),
-        safeLimit(maxItems));
+            ? " AND " + repositoryScope.currentFindingSubjectPredicate("subject") : "");
   }
 
   @Override

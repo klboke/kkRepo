@@ -386,6 +386,8 @@ class SecurityScanManagementServiceCoreTest {
     when(scans.listTasksByRepositories(List.of(2L), null, null, 0, 11, null))
         .thenReturn(List.of(task));
     when(scans.findTask(77L)).thenReturn(Optional.of(task));
+    when(scope.effectiveConfigsForSources(List.of(repository)))
+        .thenReturn(Map.of(1L, List.of(config(2L, true, 1L, null))));
     when(scope.effectiveConfigsForSource(1L))
         .thenReturn(List.of(config(2L, true, 1L, null)));
     when(scans.requeueTask(eq(77L), any(), eq("admin"))).thenReturn(true);

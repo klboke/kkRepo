@@ -22,6 +22,38 @@ import org.junit.jupiter.api.Test;
 
 class SecurityScanRepositoryScopeTest {
   @Test
+  void batchesSharedAncestorsAndCyclesWithoutRetainingTopologyBetweenRequests() {
+    SecurityScanDao scans = mock(SecurityScanDao.class);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    SecurityScanRepositoryScope scope = new SecurityScanRepositoryScope(scans, repositories);
+    var hosted = repository(1L, "hosted", RepositoryType.HOSTED);
+    var proxy = repository(2L, "proxy", RepositoryType.PROXY);
+    var group = repository(3L, "group", RepositoryType.GROUP);
+    var hostedConfig = config(3L, true);
+    var proxyConfig = config(4L, false);
+    when(repositories.findParentGroupIds(List.of(1L, 2L)))
+        .thenReturn(Map.of(1L, List.of(3L), 2L, List.of(3L)));
+    when(repositories.findParentGroupIds(List.of(3L))).thenReturn(Map.of(3L, List.of(4L)));
+    when(repositories.findParentGroupIds(List.of(4L))).thenReturn(Map.of(4L, List.of(3L)));
+    when(scans.findRepositoryConfigs(List.of(1L, 2L, 3L, 4L)))
+        .thenReturn(List.of(hostedConfig, proxyConfig));
+
+    var result = scope.effectiveConfigsForSources(List.of(hosted, proxy, group));
+    assertEquals(List.of(hostedConfig), result.get(1L));
+    assertEquals(List.of(hostedConfig, proxyConfig), result.get(2L));
+    assertFalse(result.containsKey(3L));
+    org.mockito.Mockito.verify(repositories).findParentGroupIds(List.of(3L));
+    org.mockito.Mockito.verify(repositories).findParentGroupIds(List.of(4L));
+    org.mockito.Mockito.verify(scans, org.mockito.Mockito.never()).findRepositoryConfig(org.mockito.ArgumentMatchers.anyLong());
+
+    when(repositories.findParentGroupIds(List.of(1L, 2L))).thenReturn(Map.of());
+    assertEquals(Map.of(1L, List.of(), 2L, List.of()),
+        scope.effectiveConfigsForSources(List.of(hosted, proxy)));
+    assertEquals(Map.of(), scope.effectiveConfigsForSources(List.of(group)));
+    assertEquals(Map.of(), scope.effectiveConfigsForSources(List.of()));
+  }
+
+  @Test
   void resolvesGroupOnlyScanningConfigToConcreteMemberContent() {
     SecurityScanDao scans = mock(SecurityScanDao.class);
     RepositoryDao repositories = mock(RepositoryDao.class);

@@ -2451,6 +2451,13 @@ public abstract class PersistenceApiContract {
         0,
         10).isEmpty());
     assertTrue(scans.runSubjectExists(runId, repositoryId, assetId));
+    var projected = scans.listRunSubjectAssets(runId, 0, 0, 10, false);
+    assertEquals(scans.listRunSubjects(runId, 0, 0, 10),
+        projected.stream().map(SecurityScanDao.ScanRunSubjectAsset::subject).toList());
+    assertTrue(projected.stream().allMatch(row -> row.sourceRepositoryId().equals(repositoryId)));
+    var firstProjected = scans.listRunSubjectAssets(runId, 0, 0, 1, false).getFirst();
+    assertEquals(projected.subList(1, projected.size()), scans.listRunSubjectAssets(
+        runId, firstProjected.subject().repositoryId(), firstProjected.subject().assetId(), 10, false));
     assertEquals(
         List.of(repositoryId, groupRepositoryId),
         scans.listRunSubjects(runId, 0, 0, 10).stream()
@@ -3951,11 +3958,21 @@ public abstract class PersistenceApiContract {
     assertTrue(scans.listFindings(repositoryId, null, null, "no-match", 0, 10, true).isEmpty());
     assertEquals(List.of(other), scans.listRunSubjects(runs.get(1), 0, 0, 10, true)
         .stream().map(SecurityScanDao.ScanRunSubject::assetId).toList());
+    for (long run : runs) {
+      for (boolean currentOnly : List.of(false, true)) {
+        var projected = scans.listRunSubjectAssets(run, 0, 0, 10, currentOnly);
+        assertEquals(scans.listRunSubjects(run, 0, 0, 10, currentOnly),
+            projected.stream().map(SecurityScanDao.ScanRunSubjectAsset::subject).toList());
+        assertTrue(projected.stream().allMatch(row -> row.sourceRepositoryId().equals(
+            row.subject().assetId() == hidden ? hiddenId : repositoryId)));
+      }
+    }
     assertEquals(3, scans.countCurrentRunSubjects(runs.get(1), visible));
     assertEquals(1, scans.countCurrentRunSubjects(runs.get(1), visible, true));
     assertEquals(List.of(other), scans.listCurrentRunSubjects(runs.get(1), visible, 0, 0, 1, true)
         .stream().map(SecurityScanDao.ScanRunSubject::assetId).toList());
     assertTrue(scans.listCurrentRunSubjects(runs.get(1), visible, repositoryId, other, 1, true).isEmpty());
+    assertTrue(scans.listRunSubjectAssets(runs.get(1), repositoryId, other, 1, true).isEmpty());
 
     // Supersede the remaining visible association without changing its content generation.
     publishCurrentFindingState(scans, other, profile.id(), runs.get(2), ScanState.COMPLETE, now.plusSeconds(10));
@@ -5921,6 +5938,18 @@ public abstract class PersistenceApiContract {
         stores().repositories().listMembers(group).stream().map(RepositoryRecord::name).toList());
     assertEquals(List.of("maven-public"),
         stores().repositories().listGroupsContaining(first).stream().map(RepositoryRecord::name).toList());
+    var dao = stores().repositories();
+    assertEquals(Map.of(first, List.of(group), second, List.of(group), third, List.of(group)),
+        dao.findParentGroupIds(java.util.Arrays.asList(first, second, third, first, null)));
+    assertEquals(Map.of(), dao.findParentGroupIds(List.of()));
+    assertEquals(Map.of(), dao.findParentGroupIds(null));
+    assertEquals(Map.of(), dao.findParentGroupIds(java.util.Arrays.asList((Long) null)));
+    List<Long> batch = new ArrayList<>(java.util.stream.LongStream.rangeClosed(-600, -1).boxed().toList());
+    batch.add(first);
+    assertEquals(Map.of(first, List.of(group)), dao.findParentGroupIds(batch));
+    dao.clearMembers(group);
+    assertEquals(Map.of(), dao.findParentGroupIds(List.of(first, second, third)));
+
   }
 
   @Test

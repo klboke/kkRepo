@@ -9,6 +9,11 @@ import java.util.Optional;
 
 /** Test-only base class for focused RepositoryDao fakes. */
 public class RepositoryDaoAdapter implements RepositoryDao {
+
+  @Override
+  public java.util.Map<Long, java.util.List<Long>> findParentGroupIds(java.util.List<Long> ids) {
+    throw new UnsupportedOperationException();
+  }
   @Override
   public Optional<RepositoryRecord> lockByName(String name) { return findByName(name); }
 
