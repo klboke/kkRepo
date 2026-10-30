@@ -429,6 +429,14 @@ public abstract class PersistenceApiContract {
         "huggingface_model_revision",
         "huggingface_revision_ref",
         "huggingface_route_projection",
+        "kkg_application",
+        "kkg_application_tag",
+        "kkg_organization",
+        "kkg_policy",
+        "kkg_scan",
+        "kkg_scan_component",
+        "kkg_scan_finding",
+        "kkg_violation",
         "maintenance_cursor",
         "metadata_rebuild_marker",
         "migration_checkpoint",
@@ -6644,5 +6652,133 @@ public abstract class PersistenceApiContract {
     } catch (NoSuchAlgorithmException e) {
       throw new IllegalStateException(e);
     }
+  }
+  @Test
+  void kkGuardOrganizationsApplicationsScansAndPoliciesRoundTrip() {
+    com.github.klboke.kkrepo.persistence.jdbc.api.KkGuardDao dao = stores().kkGuard();
+    String suffix = java.util.UUID.randomUUID().toString().substring(0, 8);
+    Instant now = Instant.now();
+    String organizationExternalId = java.util.UUID.randomUUID().toString();
+    long organizationId = dao.insertOrganization(
+        organizationExternalId, "Org-" + suffix, "desc", now);
+    assertEquals(organizationId,
+        dao.findOrganizationByExternalId(organizationExternalId).orElseThrow().id());
+    assertTrue(dao.updateOrganization(organizationId, "Org 2-" + suffix, "desc 2", now));
+    String applicationExternalId = java.util.UUID.randomUUID().toString();
+    long applicationId = dao.insertApplication(
+        organizationId, applicationExternalId, "app-" + suffix, "App", null, "owner", now);
+    assertEquals(applicationId,
+        dao.findApplicationByExternalId(applicationExternalId).orElseThrow().id());
+    assertEquals(applicationId,
+        dao.findApplicationByPublicId("app-" + suffix).orElseThrow().id());
+    assertEquals("owner", dao.findApplication(applicationId).orElseThrow().contactUserName());
+    dao.replaceApplicationTags(applicationId, List.of(
+        new com.github.klboke.kkrepo.persistence.jdbc.api.KkGuardDao.ApplicationTag(
+            applicationId, "payments", "payment services")));
+    assertEquals(1, dao.listApplicationTags(applicationId).size());
+    assertTrue(dao.updateApplicationDependencyTrackProject(
+        applicationId, java.util.UUID.randomUUID().toString(), "app-dt", now));
+    assertNotNull(dao.findApplication(applicationId).orElseThrow().dtProjectUuid());
+    String scanKey = "scan-" + suffix;
+    long scanId = dao.insertScan(new com.github.klboke.kkrepo.persistence.jdbc.api.KkGuardDao.Scan(
+        0L, applicationId, scanKey, "PENDING", "build", "cli", "a".repeat(64),
+        "b".repeat(64), 1, 1, null, null, null, 0, null, null, null, null, now, now, now));
+    assertEquals("PENDING", dao.findScanByScanId(scanKey).orElseThrow().status());
+    // Snapshot writes only happen while the replica holds the lease.
+    assertTrue(dao.claimScan(scanId, "replica-a", now, now.plusSeconds(60)));
+    assertTrue(dao.replaceScanComponents(scanId, "replica-a", List.of(
+        new com.github.klboke.kkrepo.persistence.jdbc.api.KkGuardDao.ScanComponent(
+            scanId, "pkg:npm/demo@1.0.0", "pkg:npm/demo@1.0.0", "demo", "1.0.0",
+            "MIT", "high"))));
+    assertTrue(dao.replaceScanFindings(scanId, "replica-a", List.of(
+        new com.github.klboke.kkrepo.persistence.jdbc.api.KkGuardDao.Finding(
+            scanId, "pkg:npm/demo@1.0.0", "CVE-2026-0001", "high",
+            new java.math.BigDecimal("8.1"), "dependency-track", "demo finding",
+            "https://example.test"))));
+    assertEquals(1, dao.listScanComponents(scanId).size());
+    assertEquals(1, dao.listScanFindings(scanId).size());
+    long policyId = dao.insertPolicy(
+        organizationId, java.util.UUID.randomUUID().toString(), "policy-" + suffix,
+        "Policy", 8, Map.of("severity", "high"), now);
+    assertTrue(dao.replaceViolations(scanId, "replica-a", List.of(
+        new com.github.klboke.kkrepo.persistence.jdbc.api.KkGuardDao.Violation(
+            scanId, policyId, "pkg:npm/demo@1.0.0", 8, Map.of("severity", "high")))));
+    assertEquals(1, dao.listViolations(scanId).size());
+    assertTrue(dao.deleteApplication(applicationId));
+    assertTrue(dao.findScan(scanId).isEmpty());
+    assertTrue(dao.deleteOrganization(organizationId));
+  }
+
+  @Test
+  void kkGuardScanLeasesFenceSubmissionPollingAndCompletion() {
+    com.github.klboke.kkrepo.persistence.jdbc.api.KkGuardDao dao = stores().kkGuard();
+    java.time.Instant now =
+        java.time.Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
+    String suffix = java.util.UUID.randomUUID().toString().substring(0, 8);
+    long organizationId = dao.insertOrganization(
+        java.util.UUID.randomUUID().toString(), "Lease Org-" + suffix, null, now);
+    long applicationId = dao.insertApplication(
+        organizationId, java.util.UUID.randomUUID().toString(), "lease-app-" + suffix,
+        "Lease App", null, null, now);
+    String sbomSha = "c".repeat(64);
+    long scanId = dao.insertScan(new com.github.klboke.kkrepo.persistence.jdbc.api.KkGuardDao.Scan(
+        0L, applicationId, "lease-scan-" + suffix, "PENDING", "build", "cli", sbomSha,
+        null, 0, 0, null, null, null, 0, null, null, null, null, now, null, null));
+    java.time.Instant leaseUntil = now.plusSeconds(60);
+
+    assertTrue(dao.listClaimableScanIds(now, 50).contains(scanId));
+    assertTrue(dao.claimScan(scanId, "replica-a", now, leaseUntil));
+    assertFalse(dao.claimScan(scanId, "replica-b", now, leaseUntil));
+    assertFalse(dao.markScanSubmitted(
+        scanId, "replica-b", "dt-project", "dt-token", now));
+    assertTrue(dao.markScanSubmitted(scanId, "replica-a", "dt-project", "dt-token", now));
+    assertEquals("SCANNING", dao.findScan(scanId).orElseThrow().status());
+    assertEquals("dt-token", dao.findScan(scanId).orElseThrow().dtBomToken());
+
+    assertTrue(dao.claimScan(scanId, "replica-b", now, leaseUntil));
+    assertFalse(dao.markScanPolled(scanId, "replica-a", 1, now));
+    assertTrue(dao.markScanPolled(scanId, "replica-b", 1, now));
+    assertEquals(1, dao.findScan(scanId).orElseThrow().attempts());
+
+    // Snapshot writes are fenced by the same lease as the state transitions: the replica that lost
+    // the lease cannot overwrite the findings of the replica that took over.
+    assertFalse(dao.replaceScanComponents(scanId, "replica-a", List.of(
+        new com.github.klboke.kkrepo.persistence.jdbc.api.KkGuardDao.ScanComponent(
+            scanId, "pkg:npm/stale@0.1.0", "pkg:npm/stale@0.1.0", "stale", "0.1.0",
+            null, "critical"))));
+    assertEquals(0, dao.listScanComponents(scanId).size());
+    assertTrue(dao.replaceScanComponents(scanId, "replica-b", List.of(
+        new com.github.klboke.kkrepo.persistence.jdbc.api.KkGuardDao.ScanComponent(
+            scanId, "pkg:npm/demo@1.0.0", "pkg:npm/demo@1.0.0", "demo", "1.0.0",
+            "MIT", "high"))));
+    assertEquals(1, dao.listScanComponents(scanId).size());
+    assertFalse(dao.replaceScanFindings(scanId, "replica-a", List.of(
+        new com.github.klboke.kkrepo.persistence.jdbc.api.KkGuardDao.Finding(
+            scanId, "pkg:npm/stale@0.1.0", "CVE-2026-9999", "critical",
+            new java.math.BigDecimal("9.9"), "dependency-track", "stale finding", null))));
+    assertEquals(0, dao.listScanFindings(scanId).size());
+    assertTrue(dao.replaceScanFindings(scanId, "replica-b", List.of(
+        new com.github.klboke.kkrepo.persistence.jdbc.api.KkGuardDao.Finding(
+            scanId, "pkg:npm/demo@1.0.0", "CVE-2026-0001", "high",
+            new java.math.BigDecimal("8.1"), "dependency-track", "demo finding", null))));
+    assertEquals(1, dao.listScanFindings(scanId).size());
+    assertFalse(dao.replaceViolations(scanId, "replica-a", List.of()));
+
+    assertFalse(dao.finishScan(scanId, "replica-a", "COMPLETE", null, 1, 0, now));
+    assertTrue(dao.finishScan(scanId, "replica-b", "COMPLETE", null, 1, 0, now));
+    assertEquals("COMPLETE", dao.findScan(scanId).orElseThrow().status());
+    // The terminal transition released the lease, so a late write cannot replace the snapshot of a
+    // finished scan.
+    assertFalse(dao.replaceScanComponents(scanId, "replica-b", List.of()));
+    assertEquals(1, dao.listScanComponents(scanId).size());
+
+    assertEquals(scanId,
+        dao.findCompletedScanBySbom(applicationId, "cli", sbomSha).orElseThrow().id());
+    assertTrue(dao.findCompletedScanBySbom(applicationId, "other", sbomSha).isEmpty());
+    assertTrue(dao.listClaimableScanIds(now, 50).stream()
+        .noneMatch(id -> id != null && id.longValue() == scanId));
+
+    assertTrue(dao.deleteApplication(applicationId));
+    assertTrue(dao.deleteOrganization(organizationId));
   }
 }

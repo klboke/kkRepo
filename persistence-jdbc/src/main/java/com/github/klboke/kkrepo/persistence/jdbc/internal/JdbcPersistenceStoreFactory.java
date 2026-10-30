@@ -20,6 +20,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.DockerAuthTokenDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.DockerUploadDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.HuggingFaceRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.KkGuardDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.GitLfsDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MaintenanceCursorDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MetadataRebuildDao;
@@ -83,6 +84,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
         new JdbcDockerRegistryDao(jdbc, json),
         new JdbcDockerUploadDao(jdbc, json),
         new JdbcHuggingFaceRegistryDao(jdbc, dialect),
+        new JdbcKkGuardDao(jdbc, json),
         new JdbcGitLfsDao(jdbc),
         new JdbcMaintenanceCursorDao(jdbc),
         new JdbcMetadataRebuildDao(jdbc, dialect),
@@ -124,6 +126,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
       DockerRegistryDao dockerRegistry,
       DockerUploadDao dockerUploads,
       HuggingFaceRegistryDao huggingFaceRegistry,
+      KkGuardDao kkGuard,
       GitLfsDao gitLfs,
       MaintenanceCursorDao maintenanceCursors,
       MetadataRebuildDao metadataRebuild,
