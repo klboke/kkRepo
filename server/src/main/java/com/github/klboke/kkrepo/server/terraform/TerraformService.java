@@ -282,9 +282,13 @@ public class TerraformService {
   }
 
   private Map<String, Object> providerVersions(RepositoryRuntime runtime, TerraformPath request) {
+    return providerVersions(runtime, request.namespace(), request.name(), request.rawPath());
+  }
+
+  private Map<String, Object> providerVersions(
+      RepositoryRuntime runtime, String namespace, String name, String rawPath) {
     List<TerraformRegistryDao.ProviderPlatform> candidates =
-        registry.listProviderPlatformsForProvider(
-            runtime.id(), request.namespace(), request.name());
+        registry.listProviderPlatformsForProvider(runtime.id(), namespace, name);
     Set<String> existingPaths = assets.findExistingPaths(
         runtime, candidates.stream()
             .map(TerraformRegistryDao.ProviderPlatform::assetPath)
@@ -309,14 +313,14 @@ public class TerraformService {
           "protocols", providerVersionProtocols(publishedPlatforms),
           "platforms", platforms));
     }
-    if (values.isEmpty()) throw notFound(request.rawPath());
-    return providerVersionsDocument(request, values);
+    if (values.isEmpty()) throw notFound(rawPath);
+    return providerVersionsDocument(namespace, name, values);
   }
 
   private static Map<String, Object> providerVersionsDocument(
-      TerraformPath request, List<Map<String, Object>> versions) {
+      String namespace, String name, List<Map<String, Object>> versions) {
     LinkedHashMap<String, Object> body = new LinkedHashMap<>();
-    body.put("id", request.namespace() + "/" + request.name());
+    body.put("id", namespace + "/" + name);
     body.put("versions", versions);
     body.put("warnings", null);
     return body;
@@ -352,6 +356,116 @@ public class TerraformService {
     body.put("signing_keys", Map.of("gpg_public_keys", List.of(Map.of(
         "key_id", key.keyId(), "ascii_armor", key.publicKey(), "trust_signature", ""))));
     return json(body, headOnly);
+  }
+
+  /** Provider versions document merging live platforms with staged platforms. */
+  MavenResponse stagedProviderVersions(
+      RepositoryRuntime runtime,
+      String namespace,
+      String name,
+      List<Map<String, Object>> stagedPlatforms,
+      boolean headOnly) {
+    Map<String, Object> live;
+    try {
+      live = providerVersions(runtime, namespace, name, namespace + "/" + name);
+    } catch (MavenExceptions.MavenNotFoundException absent) {
+      live = providerVersionsDocument(namespace, name, List.of());
+    }
+    @SuppressWarnings("unchecked")
+    List<Map<String, Object>> values =
+        new ArrayList<>((List<Map<String, Object>>) live.get("versions"));
+    Map<String, Map<String, Object>> byVersion = new LinkedHashMap<>();
+    for (Map<String, Object> value : values) {
+      byVersion.put(String.valueOf(value.get("version")), value);
+    }
+    for (Map<String, Object> staged : stagedPlatforms) {
+      String version = String.valueOf(staged.get("version"));
+      Map<String, Object> entry = byVersion.get(version);
+      if (entry == null) {
+        entry = new LinkedHashMap<>();
+        entry.put("version", version);
+        entry.put("protocols", protocolList(String.valueOf(staged.get("protocols"))));
+        entry.put("platforms", new ArrayList<Map<String, Object>>());
+        byVersion.put(version, entry);
+      }
+      @SuppressWarnings("unchecked")
+      List<Map<String, Object>> platforms =
+          (List<Map<String, Object>>) entry.get("platforms");
+      String os = String.valueOf(staged.get("os"));
+      String arch = String.valueOf(staged.get("arch"));
+      boolean present = platforms.stream().anyMatch(platform ->
+          os.equals(platform.get("os")) && arch.equals(platform.get("arch")));
+      if (!present) {
+        platforms.add(Map.of("os", os, "arch", arch));
+      }
+    }
+    List<Map<String, Object>> merged = TerraformVersions.descending(byVersion.keySet()).stream()
+        .map(byVersion::get)
+        .toList();
+    live.put("versions", merged);
+    return json(live, headOnly);
+  }
+
+  /** Download metadata for a staged provider platform, signed with the repository key. */
+  MavenResponse stagedProviderDownload(
+      RepositoryRuntime runtime,
+      String namespace,
+      String name,
+      String version,
+      String os,
+      String arch,
+      String baseUrl,
+      String filename,
+      String sha256,
+      String protocols,
+      boolean headOnly) {
+    TerraformSigningService.SigningMaterial key = signing.active(runtime);
+    String fileBase = "terraform-provider-" + name + "_" + version + "_SHA256SUMS";
+    String sumBase = "v1/providers/" + namespace + "/" + name + "/" + version
+        + "/staging/" + fileBase;
+    String archivePath = "v1/providers/" + namespace + "/" + name + "/" + version
+        + "/package/" + os + "/" + filename;
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("protocols", protocolList(protocols));
+    body.put("os", os);
+    body.put("arch", arch);
+    body.put("filename", filename);
+    body.put("download_url", publicUrl(baseUrl, null, archivePath));
+    body.put("shasums_url", publicUrl(baseUrl, null, sumBase));
+    body.put("shasums_signature_url", publicUrl(baseUrl, null, sumBase + ".sig"));
+    body.put("shasum", sha256);
+    body.put("signing_keys", Map.of("gpg_public_keys", List.of(Map.of(
+        "key_id", key.keyId(), "ascii_armor", key.publicArmor(), "trust_signature", ""))));
+    return json(body, headOnly);
+  }
+
+  /** SHA256SUMS document and its detached signature for a staged provider version. */
+  MavenResponse stagedProviderSums(
+      RepositoryRuntime runtime,
+      String namespace,
+      String name,
+      String version,
+      List<Map<String, String>> stagedArchives,
+      boolean signature,
+      boolean headOnly) {
+    List<TerraformRegistryDao.ProviderPlatform> live = publishedProviderPlatforms(
+        runtime, namespace, name, version);
+    Map<String, String> sums = new LinkedHashMap<>();
+    for (TerraformRegistryDao.ProviderPlatform platform : live) {
+      sums.put(platform.filename(), platform.sha256());
+    }
+    for (Map<String, String> archive : stagedArchives) {
+      sums.put(archive.get("filename"), archive.get("sha256"));
+    }
+    StringBuilder body = new StringBuilder();
+    sums.entrySet().stream().sorted(Map.Entry.comparingByKey())
+        .forEach(entry -> body.append(entry.getValue()).append("  ")
+            .append(entry.getKey()).append('\n'));
+    byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
+    if (signature) {
+      bytes = signing.sign(bytes, signing.active(runtime));
+    }
+    return bytes(bytes, signature ? OCTET : MediaType.TEXT_PLAIN_VALUE, headOnly);
   }
 
   private static String nexusProviderArchivePath(
@@ -834,7 +948,7 @@ public class TerraformService {
     Map<String, Object> body = path.kind() == TerraformPath.Kind.MODULE_VERSIONS
         ? Map.of("modules", List.of(Map.of(
             "source", path.namespace() + "/" + path.name() + "/" + path.system(), "versions", sorted)))
-        : providerVersionsDocument(path, sorted);
+        : providerVersionsDocument(path.namespace(), path.name(), sorted);
     if (lastUpstreamFailure == null) {
       metadataCache.putGroup(group, members, path.rawPath(), metadataMaxAge, Instant.now(), body);
     }

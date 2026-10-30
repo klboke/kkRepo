@@ -127,6 +127,33 @@ final class AlpineIndexBuilder {
     }
   }
 
+  /** Builds and signs an APKINDEX archive without publishing a snapshot. */
+  byte[] render(
+      AlpineRepositorySettings.Settings settings,
+      AlpineSigningService.SigningMaterial key,
+      Instant createdAt,
+      PackageSource source) {
+    Path indexText = temporary("APKINDEX");
+    Path unsigned = temporary("APKINDEX-unsigned.tar.gz");
+    Path signatureMember = temporary("APKINDEX-signature.tar.gz");
+    Path signed = temporary("APKINDEX-signed.tar.gz");
+    try {
+      writeIndex(indexText, source);
+      writeUnsignedArchive(unsigned, indexText, settings.description(), createdAt);
+      AlpineSignature signature = signing.sign(unsigned, key);
+      writeSignatureArchive(signatureMember, signature, createdAt);
+      concatenate(signatureMember, unsigned, signed);
+      return Files.readAllBytes(signed);
+    } catch (IOException error) {
+      throw new IllegalStateException("Failed to build Alpine APKINDEX", error);
+    } finally {
+      delete(indexText);
+      delete(unsigned);
+      delete(signatureMember);
+      delete(signed);
+    }
+  }
+
   private static void writeIndex(Path output, PackageSource source) throws IOException {
     try (BufferedWriter writer = Files.newBufferedWriter(
         output, StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING,

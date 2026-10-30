@@ -21,6 +21,7 @@ import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.core.annotation.Order;
 import org.springframework.session.web.http.SessionRepositoryFilter;
 
@@ -83,6 +84,61 @@ class SecurityManagementFilterTest {
 
     assertEquals(permission, security.requestedPermission);
     assertEquals(403, response.status);
+    assertEquals(0, chain.calls);
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+      "GET,/internal/staging/sessions,nexus:staging:read",
+      "GET,/internal/staging/metrics,nexus:staging:admin",
+      "POST,/internal/staging/sessions,nexus:staging:create",
+      "PATCH,/internal/staging/sessions/1,nexus:staging:create",
+      "POST,/internal/staging/sessions/1/preflight,nexus:staging:promote",
+      "POST,/internal/staging/sessions/1/promote,nexus:staging:promote",
+      "POST,/internal/staging/sessions/1/commit,nexus:staging:promote",
+      "POST,/internal/staging/sessions/1/approve,nexus:staging:promote",
+      "POST,/service/rest/v1/staging/sessions/1/commit,nexus:staging:promote",
+      "DELETE,/internal/staging/sessions/1/repositories/2,nexus:staging:admin"
+  })
+  void stagingPathsRequireTheirMappedPermission(
+      String method, String path, String permission) throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingSecurityService security =
+        new RecordingSecurityService(AccessDecision.deny("not permitted"));
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter(authentication, security, true).doFilter(request(method, path), response.proxy(), chain);
+
+    assertEquals(permission, security.requestedPermission);
+    assertEquals(403, response.status);
+    assertEquals(0, chain.calls);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "/internal/staging/sessions/1/commit",
+      "/service/rest/v1/staging/sessions/1/commit"})
+  void commitRequiresPromotionPermissionNotCreate(String path) throws Exception {
+    var authentication = new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingSecurityService security = new RecordingSecurityService(AccessDecision.deny("create only")) {
+      @Override
+      public AccessDecision decide(PermissionSubject subject, String requested) {
+        super.decide(subject, requested);
+        return requested.equals("nexus:staging:create")
+            ? AccessDecision.allow() : AccessDecision.deny("create only");
+      }
+    };
+    var response = new ResponseState();
+    var chain = new ChainState();
+
+    filter(authentication, security, false).doFilter(
+        request("POST", path), response.proxy(), chain);
+
+    // commit runs preflight + promotion, so create/upload rights must not publish.
+    assertEquals("nexus:staging:promote", security.requestedPermission);
+    assertEquals(HttpServletResponse.SC_FORBIDDEN, response.status);
     assertEquals(0, chain.calls);
   }
 

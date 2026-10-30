@@ -29,10 +29,12 @@ class GitLfsProtocolHandlerTest {
   private final BlobStorageRegistry stores = mock(BlobStorageRegistry.class);
   private final BlobStorage storage = mock(BlobStorage.class);
   private final ArtifactDownloadPolicy policy = mock(ArtifactDownloadPolicy.class);
+  private final GitLfsStagingService staging = mock(GitLfsStagingService.class);
   private MockMvc mvc;
 
   @BeforeEach void setup() throws Exception {
     var handler = new GitLfsProtocolHandler(service, stores, policy, new ObjectMapper());
+    handler.setStagingService(staging);
     var dispatcher = mock(RepositoryProtocolDispatcher.class);
     org.mockito.stubbing.Answer<org.springframework.http.ResponseEntity<?>> dispatch = call -> {
       jakarta.servlet.http.HttpServletRequest request = call.getArgument(1);
@@ -106,5 +108,48 @@ class GitLfsProtocolHandlerTest {
     if (method.equals("HEAD")) assertEquals(0, response.getContentAsByteArray().length);
     else assertTrue(response.getContentAsString().contains("message"));
     verifyNoInteractions(service, storage, policy);
+  }
+
+  @Test void querySelectorStagesLfsUploadsInsteadOfPublishingLive() throws Exception {
+    var subject = subject();
+    var response = perform(put(URL + "?stagingSession=7")
+        .requestAttr(com.github.klboke.kkrepo.server.security.AuthenticatedSubject.REQUEST_ATTRIBUTE, subject)
+        .content(new byte[] {1, 2, 3}));
+    assertEquals(200, response.getStatus());
+    verify(staging).put(eq(GitLfsHostedServiceTest.repository()), eq(OID), eq("7"), any(), eq(subject), any());
+    verify(service, never()).put(any(), any(), any());
+  }
+
+  @Test void boundStagingCredentialStagesLfsUploadsWithoutAnyHeader() throws Exception {
+    var subject = subject();
+    var response = perform(put(URL)
+        .requestAttr(com.github.klboke.kkrepo.server.security.AuthenticatedSubject.REQUEST_ATTRIBUTE, subject)
+        .requestAttr(com.github.klboke.kkrepo.server.staging.StagingCredentialService.SESSION_ATTRIBUTE, "7")
+        .content(new byte[] {1, 2, 3}));
+    assertEquals(200, response.getStatus());
+    verify(staging).put(eq(GitLfsHostedServiceTest.repository()), eq(OID), eq("7"), any(), eq(subject), any());
+    verify(service, never()).put(any(), any(), any());
+  }
+
+  @Test void withoutASelectorTheUploadStaysOnTheLiveService() throws Exception {
+    var response = perform(put(URL).content(new byte[] {1, 2, 3}));
+    assertEquals(200, response.getStatus());
+    verify(service).put(eq(GitLfsHostedServiceTest.repository()), eq(OID), any());
+    verifyNoInteractions(staging);
+  }
+
+  @Test void conflictingSelectorsKeepTheGitLfsErrorFormat() throws Exception {
+    var response = perform(put(URL + "?stagingSession=8")
+        .header("X-KkRepo-Staging", "7")
+        .content(new byte[] {1, 2, 3}));
+    assertEquals(400, response.getStatus());
+    assertEquals("application/vnd.git-lfs+json", response.getContentType());
+    verifyNoInteractions(staging, service);
+  }
+
+  private static com.github.klboke.kkrepo.server.security.AuthenticatedSubject subject() {
+    return new com.github.klboke.kkrepo.server.security.AuthenticatedSubject(
+        "Local", "alice", "local", null,
+        new com.github.klboke.kkrepo.auth.PermissionSubject("Local", "alice", Set.of(), null));
   }
 }

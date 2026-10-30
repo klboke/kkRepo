@@ -30,6 +30,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDataMigrationDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.StagingDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
@@ -43,6 +44,10 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryDataMigrati
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityPrivilegeRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRoleRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.StagingGroupChangeRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.StagingItemRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.StagingPromotionRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.StagingSessionRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerTagRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerUploadSessionRecord;
@@ -73,6 +78,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
@@ -495,6 +501,11 @@ public abstract class PersistenceApiContract {
         "security_user_role",
         "spring_session",
         "spring_session_attributes",
+        "staging_item",
+        "staging_group_change",
+        "staging_promotion",
+        "staging_session",
+        "staging_session_repository",
         "swift_coordinate_lease",
         "swift_group_source_binding",
         "swift_manifest",
@@ -6372,6 +6383,134 @@ public abstract class PersistenceApiContract {
         now);
   }
 
+  @Test
+  void stagingSessionsItemsAndPromotionsRoundTripWithRevisionFence() {
+    StagingDao dao = stores().staging();
+    String suffix = java.util.UUID.randomUUID().toString().substring(0, 8);
+    long repositoryId = createRepository("staging-contract-" + suffix, RepositoryFormat.RAW);
+    long blobStoreId = stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();
+    Instant now = Instant.now();
+    long sessionId = dao.insertSession(new StagingSessionRecord(
+        null,
+        "stage-" + suffix,
+        StagingDao.SESSION_OPEN,
+        0,
+        "Local",
+        "alice",
+        now,
+        now,
+        null,
+        null,
+        now.plus(Duration.ofDays(1)),
+        null,
+        Map.of("release", "r1")));
+    StagingSessionRecord session = dao.findSessionByName("stage-" + suffix).orElseThrow();
+    assertEquals(sessionId, session.id());
+    assertEquals(0, session.revision());
+    assertEquals(Map.of("release", "r1"), session.attributes());
+
+    assertFalse(dao.transitionSession(
+        sessionId, session.revision() + 1, List.of(StagingDao.SESSION_OPEN),
+        StagingDao.SESSION_FROZEN, now, null, null));
+    assertTrue(dao.transitionSession(
+        sessionId, session.revision(), List.of(StagingDao.SESSION_OPEN),
+        StagingDao.SESSION_FROZEN, now, null, null));
+    StagingSessionRecord frozen = dao.lockSession(sessionId).orElseThrow();
+    assertEquals(StagingDao.SESSION_FROZEN, frozen.state());
+    assertEquals(1, frozen.revision());
+
+    dao.addRepository(sessionId, repositoryId, RepositoryFormat.RAW.id());
+    dao.addRepository(sessionId, repositoryId, RepositoryFormat.RAW.id());
+    assertEquals(1, dao.listRepositories(sessionId).size());
+    assertTrue(dao.hasRepository(sessionId, repositoryId));
+
+    long blobId = stores().assets().insertBlob(
+        blob(blobStoreId, "staging/" + suffix, "staging-" + suffix, 7));
+    byte[] pathHash = PersistenceHashes.pathHash("docs/a.bin");
+    StagingItemRecord item = new StagingItemRecord(
+        null,
+        sessionId,
+        repositoryId,
+        RepositoryFormat.RAW,
+        "docs/a.bin",
+        pathHash,
+        StagingDao.ITEM_ADD,
+        StagingDao.ITEM_STAGED,
+        blobStoreId,
+        blobId,
+        "text/plain",
+        7L,
+        sha256Hex("staging-" + suffix),
+        "3".repeat(32),
+        "1".repeat(40),
+        "docs/a.bin",
+        null,
+        null,
+        Map.of("origin", "contract"),
+        now,
+        now);
+    OptionalLong inserted = inTransaction(() -> dao.tryInsertItem(item));
+    assertTrue(inserted.isPresent());
+    assertTrue(inTransaction(() -> dao.tryInsertItem(item)).isEmpty());
+    StagingItemRecord stored = dao.findItem(sessionId, repositoryId, pathHash).orElseThrow();
+    assertEquals(StagingDao.ITEM_ADD, stored.action());
+    assertEquals(blobId, stored.assetBlobId());
+    assertEquals(1, dao.updateItemStatus(stored.id(), StagingDao.ITEM_VALIDATED));
+    assertEquals(StagingDao.ITEM_VALIDATED,
+        dao.findItem(sessionId, repositoryId, pathHash).orElseThrow().status());
+
+    assertTrue(stores().blobReferences().retain("staging_item", stored.id(), blobId));
+    assertTrue(stores().blobReferences().isReferenced(blobId));
+    assertEquals(1, stores().blobReferences().releaseOwner("staging_item", stored.id()));
+
+    long promotionId = dao.insertPromotion(new StagingPromotionRecord(
+        null,
+        sessionId,
+        StagingDao.PROMOTION_PREFLIGHT,
+        null,
+        "a".repeat(64),
+        Map.of("promotable", true),
+        null,
+        null,
+        now));
+    StagingPromotionRecord promotion = dao.findLatestPromotion(sessionId).orElseThrow();
+    assertEquals(promotionId, promotion.id());
+    assertEquals(StagingDao.PROMOTION_PREFLIGHT, promotion.state());
+    assertEquals(1, dao.updatePromotion(
+        promotionId,
+        StagingDao.PROMOTION_SUCCEEDED,
+        "b".repeat(64),
+        Map.of("promotable", true),
+        now,
+        now));
+    StagingPromotionRecord succeeded = dao.findPromotion(promotionId).orElseThrow();
+    assertEquals(StagingDao.PROMOTION_SUCCEEDED, succeeded.state());
+    assertEquals("b".repeat(64), succeeded.manifestSha256());
+
+    assertEquals(1, dao.deleteItems(sessionId));
+    assertTrue(dao.listItems(sessionId).isEmpty());
+
+    long groupId = createRepository(
+        "staging-group-" + suffix, RepositoryFormat.RAW, RepositoryType.GROUP);
+    long memberId = createRepository(
+        "staging-member-" + suffix, RepositoryFormat.RAW, RepositoryType.HOSTED);
+    dao.upsertGroupChange(new StagingGroupChangeRecord(
+        null, sessionId, groupId, memberId, StagingDao.GROUP_ADD, 0,
+        StagingDao.GROUP_STAGED, now, now));
+    assertEquals(1, dao.listGroupChanges(sessionId).size());
+    StagingGroupChangeRecord groupChange =
+        dao.findGroupChange(sessionId, groupId, memberId).orElseThrow();
+    assertEquals(StagingDao.GROUP_ADD, groupChange.action());
+    assertEquals(1, dao.updateGroupChangeStatus(groupChange.id(), StagingDao.GROUP_VALIDATED));
+    assertEquals(StagingDao.GROUP_VALIDATED,
+        dao.findGroupChange(sessionId, groupId, memberId).orElseThrow().status());
+    assertEquals(1, dao.deleteGroupChange(sessionId, groupChange.id()));
+    assertTrue(dao.listGroupChanges(sessionId).isEmpty());
+
+    assertTrue(dao.removeRepository(sessionId, repositoryId));
+    assertFalse(dao.hasRepository(sessionId, repositoryId));
+  }
+
   private long createRepository(String name, RepositoryFormat format) {
     return createRepository(name, format, RepositoryType.HOSTED);
   }
@@ -6644,5 +6783,9 @@ public abstract class PersistenceApiContract {
     } catch (NoSuchAlgorithmException e) {
       throw new IllegalStateException(e);
     }
+  }
+
+  private static String sha256Hex(String value) {
+    return java.util.HexFormat.of().formatHex(sha256(value));
   }
 }

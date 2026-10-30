@@ -3177,7 +3177,8 @@ function repositoryFormPayload() {
     }
   } else if (type === "GROUP") {
     payload.group = {
-      memberNames: [...memberTransfer.selected]
+      memberNames: [...memberTransfer.selected],
+      writeRepository: document.getElementById("repository-group-write-target").value.trim() || null
     };
   }
   if (recipe?.format === "conan" && type !== "GROUP") {
@@ -3254,6 +3255,7 @@ function setRepositoryFormDefaults() {
   document.getElementById("repository-remote-url").value = "";
   document.getElementById("repository-yum-depth").value = "0";
   document.getElementById("repository-pypi-index-path").value = "/simple";
+  document.getElementById("repository-group-write-target").value = "";
   document.getElementById("repository-allowed-redirect-hosts").value = "";
   document.getElementById("repository-remote-authentication-type").value = "auto";
   document.getElementById("repository-remote-ntlm-domain").value = "";
@@ -3414,6 +3416,8 @@ function showEditRepositoryForm(name) {
   if (repo.type === "GROUP" && repo.group && Array.isArray(repo.group.memberNames)) {
     memberTransfer.selected = [...repo.group.memberNames];
   }
+  document.getElementById("repository-group-write-target").value =
+    repo.group?.writeRepository || "";
   if (repo.docker) {
     document.getElementById("repository-docker-connector-enabled").checked = Boolean(repo.docker.connectorEnabled);
     document.getElementById("repository-docker-connector-port").value = repo.docker.connectorPort ?? "";

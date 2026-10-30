@@ -3,8 +3,11 @@ package com.github.klboke.kkrepo.server.security;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -615,6 +618,93 @@ class SecurityAuthenticationServiceTest {
   }
 
   @Test
+  void stagingTokenCannotAuthenticateManagementEndpoints() {
+    FakeSecurityDao dao = stagingTokenDao();
+    SecurityAuthenticationService service = service(dao);
+
+    Optional<AuthenticatedSubject> authenticated = service.authenticate(request(
+        Map.of("Authorization", "Bearer StagingToken.secret"),
+        null,
+        "/internal/security/api-keys/current"));
+
+    // A staging credential must never reach an endpoint that mints an ordinary API key.
+    assertFalse(authenticated.isPresent());
+  }
+
+  @Test
+  void stagingTokenFromTheAuthCacheStillCannotReachManagementEndpoints() {
+    FakeSecurityDao dao = stagingTokenDao();
+    ApiKeyAuthCache cache = mock(ApiKeyAuthCache.class);
+    com.github.klboke.kkrepo.auth.PermissionSubject permissions =
+        new com.github.klboke.kkrepo.auth.PermissionSubject("Local", "alice", Set.of(), null);
+    when(cache.find(anyString(), any())).thenReturn(
+        Optional.of(new AuthenticatedSubject("Local", "alice", "api-key", 9L, permissions)));
+    SecurityAuthenticationService service = new SecurityAuthenticationService(
+        dao,
+        new ObjectMapper(),
+        "X-Nexus-Plus-Token",
+        null,
+        null,
+        OutboundRequestPolicy.allowPrivateForTests(),
+        transportFactory,
+        cache,
+        null,
+        null);
+
+    Optional<AuthenticatedSubject> management = service.authenticate(request(
+        Map.of("Authorization", "Bearer StagingToken.secret"),
+        null,
+        "/internal/security/api-keys/current"));
+    Optional<AuthenticatedSubject> content = service.authenticate(request(
+        Map.of("Authorization", "Bearer StagingToken.secret"),
+        null,
+        "/repository/raw-hosted/docs/a.txt"));
+
+    // The cache stores the subject, not the API-key domain: the restriction must run after a hit.
+    assertFalse(management.isPresent());
+    assertEquals(9L, content.orElseThrow().apiKeyId());
+  }
+
+  @Test
+  void stagingTokenStillAuthenticatesRepositoryContent() {
+    FakeSecurityDao dao = stagingTokenDao();
+    SecurityAuthenticationService service = service(dao);
+
+    Optional<AuthenticatedSubject> repository = service.authenticate(request(
+        Map.of("Authorization", "Bearer StagingToken.secret"),
+        null,
+        "/repository/raw-hosted/docs/a.txt"));
+    Optional<AuthenticatedSubject> docker = service.authenticate(request(
+        Map.of("Authorization", "Bearer StagingToken.secret"),
+        null,
+        "/v2/docker-hosted/library/alpine/manifests/latest"));
+    Optional<AuthenticatedSubject> dockerToken = service.authenticate(request(
+        Map.of("Authorization", "Bearer StagingToken.secret"),
+        null,
+        "/service/rest/v1/docker/token"));
+
+    assertEquals(9L, repository.orElseThrow().apiKeyId());
+    assertEquals(9L, docker.orElseThrow().apiKeyId());
+    assertEquals(9L, dockerToken.orElseThrow().apiKeyId());
+  }
+
+  @Test
+  void ordinaryApiKeysStillAuthenticateManagementEndpoints() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.realm(new SecurityRealmRecord(1L, "local", "LOCAL", "Local", true, 0, Map.of("source", "Local")));
+    dao.user(user(1L, "Local", "alice", null));
+    dao.apiKey(apiKey(9L, "GenericToken", "GenericToken.secret", "staging:session:7"));
+    SecurityAuthenticationService service = service(dao);
+
+    Optional<AuthenticatedSubject> authenticated = service.authenticate(request(
+        Map.of("Authorization", "Bearer GenericToken.secret"),
+        null,
+        "/internal/security/api-keys/current"));
+
+    assertEquals(9L, authenticated.orElseThrow().apiKeyId());
+  }
+
+  @Test
   void staleApiKeyOwnerDeletesOwnerApiKeys() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.apiKey(new ApiKeyRecord(
@@ -1201,6 +1291,32 @@ class SecurityAuthenticationServiceTest {
         null);
   }
 
+  private static FakeSecurityDao stagingTokenDao() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.realm(new SecurityRealmRecord(1L, "local", "LOCAL", "Local", true, 0, Map.of("source", "Local")));
+    dao.user(user(1L, "Local", "alice", null));
+    dao.apiKey(apiKey(9L, "StagingToken", "StagingToken.secret", "staging:session:7"));
+    return dao;
+  }
+
+  private static ApiKeyRecord apiKey(long id, String domain, String secret, String... scopes) {
+    return new ApiKeyRecord(
+        id,
+        domain,
+        "Local",
+        "alice",
+        "key " + id,
+        "ACTIVE",
+        SecurityHashing.sha256(secret),
+        secret.substring(0, 10),
+        Map.of("values", List.of(scopes)),
+        "{}",
+        LocalDateTime.now(),
+        LocalDateTime.now(),
+        LocalDateTime.now().plusDays(1),
+        null);
+  }
+
   private static SecurityUserRecord user(Long id, String source, String userId, String passwordHash) {
     return new SecurityUserRecord(
         id,
@@ -1609,6 +1725,11 @@ class SecurityAuthenticationServiceTest {
     @Override
     public Optional<ApiKeyRecord> findApiKeyByHash(String apiKeyHash) {
       return Optional.ofNullable(apiKeysByHash.get(apiKeyHash));
+    }
+
+    @Override
+    public Optional<ApiKeyRecord> findApiKey(long id) {
+      return apiKeysByHash.values().stream().filter(key -> key.id() == id).findFirst();
     }
 
     @Override

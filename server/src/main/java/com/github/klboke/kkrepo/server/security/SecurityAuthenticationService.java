@@ -9,8 +9,10 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.ApiKeyRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityAnonymousConfigRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRealmRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
+import com.github.klboke.kkrepo.server.config.RepositoryUrlPrefix;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory.ProxiedResponse;
+import com.github.klboke.kkrepo.server.staging.StagingCredentialService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
 import java.io.Serializable;
@@ -72,6 +74,8 @@ public class SecurityAuthenticationService {
   private static final String STATUS_ACTIVE = "ACTIVE";
   private static final String STATUS_CHANGE_PASSWORD = "CHANGEPASSWORD";
   private static final String JWKS_CACHE_NAMESPACE = "oidc-jwks";
+  private static final String DOCKER_API_PREFIX = "/v2/";
+  private static final String DOCKER_TOKEN_PATH = "/service/rest/v1/docker/token";
   private static final long OIDC_HTTP_TIMEOUT_MILLIS = 30_000L;
   private static final TypeReference<Map<String, Object>> JSON_MAP = new TypeReference<>() {
   };
@@ -490,10 +494,43 @@ public class SecurityAuthenticationService {
     if (token == null) {
       return Optional.empty();
     }
-    if (fresh || apiKeyAuthCache == null) {
-      return resolveApiKey(ApiKeyTokenCandidate.fromPresentedToken(token));
+    Optional<AuthenticatedSubject> subject = fresh || apiKeyAuthCache == null
+        ? resolveApiKey(ApiKeyTokenCandidate.fromPresentedToken(token))
+        : apiKeyAuthCache.find(token, () -> resolveApiKey(ApiKeyTokenCandidate.fromPresentedToken(token)));
+    return rejectStagingTokenOutsideRepositoryContent(request, subject);
+  }
+
+  /**
+   * A {@code StagingToken} only authorizes repository content. Its session scope is interpreted by
+   * the staging resolver, never by the management API, so a staging credential must not be able to
+   * create an ordinary API key (or change users, roles, settings, ...) through a management path.
+   *
+   * <p>The check runs on cache hits too: the auth cache stores the resolved subject, not the API key
+   * domain, so the domain is re-read from the shared table before a management call is authorized.
+   */
+  private Optional<AuthenticatedSubject> rejectStagingTokenOutsideRepositoryContent(
+      HttpServletRequest request, Optional<AuthenticatedSubject> subject) {
+    if (subject.isEmpty() || subject.get().apiKeyId() == null) {
+      return subject;
     }
-    return apiKeyAuthCache.find(token, () -> resolveApiKey(ApiKeyTokenCandidate.fromPresentedToken(token)));
+    if (isRepositoryContentPath(request)) {
+      return subject;
+    }
+    Optional<ApiKeyRecord> key = securityDao.findApiKey(subject.get().apiKeyId());
+    if (key.isPresent() && StagingCredentialService.DOMAIN.equals(key.get().domain())) {
+      return Optional.empty();
+    }
+    return subject;
+  }
+
+  private static boolean isRepositoryContentPath(HttpServletRequest request) {
+    String path = SecurityRequestPath.matchingPath(request);
+    if (path.startsWith(RepositoryUrlPrefix.path(request))
+        || path.startsWith(DOCKER_API_PREFIX)) {
+      return true;
+    }
+    // Docker clients authenticate once against the token endpoint before pushing content to /v2/.
+    return DOCKER_TOKEN_PATH.equals(path);
   }
 
   private Optional<AuthenticatedSubject> authenticateCargoApiKey(HttpServletRequest request) {

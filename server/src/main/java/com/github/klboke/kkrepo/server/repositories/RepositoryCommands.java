@@ -469,6 +469,11 @@ public final class RepositoryCommands {
   }
 
   public record GroupSettings(
-      List<String> memberNames) {
+      List<String> memberNames,
+      String writeRepository) {
+    /** Compatibility constructor for callers that do not configure a group write target. */
+    public GroupSettings(List<String> memberNames) {
+      this(memberNames, null);
+    }
   }
 }

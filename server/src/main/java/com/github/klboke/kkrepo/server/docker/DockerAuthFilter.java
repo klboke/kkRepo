@@ -38,6 +38,13 @@ public class DockerAuthFilter extends OncePerRequestFilter {
   private final AccessDecisionService accessDecisionService;
   private final ForwardedHeaderPolicy forwardedHeaderPolicy;
   private final DockerPathParser parser = new DockerPathParser();
+  private com.github.klboke.kkrepo.server.staging.StagingCredentialService stagingCredentials;
+
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  void setStagingCredentialService(
+      com.github.klboke.kkrepo.server.staging.StagingCredentialService stagingCredentials) {
+    this.stagingCredentials = stagingCredentials;
+  }
 
   public DockerAuthFilter(
       RepositoryRuntimeRegistry registry,
@@ -120,6 +127,11 @@ public class DockerAuthFilter extends OncePerRequestFilter {
       return;
     }
     request.setAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE, subject.get());
+    if (stagingCredentials != null) {
+      // Docker clients cannot send X-KkRepo-Staging, so a staging token must bind its session on
+      // every step of the push flow (upload start, blob upload, manifest PUT).
+      stagingCredentials.bind(request, subject.get());
+    }
     if (scannerToken) {
       request.setAttribute(ArtifactDownloadPolicy.INTERNAL_SCANNER_REQUEST_ATTRIBUTE, true);
     }
