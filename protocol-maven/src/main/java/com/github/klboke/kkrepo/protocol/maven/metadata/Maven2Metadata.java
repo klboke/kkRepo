@@ -33,7 +33,7 @@ public final class Maven2Metadata {
   private Maven2Metadata(Level level, Instant lastUpdated, String groupId, String artifactId,
       String version, List<Plugin> plugins, BaseVersions baseVersions, Snapshots snapshots) {
     this.level = Objects.requireNonNull(level);
-    this.lastUpdated = Objects.requireNonNull(lastUpdated);
+    this.lastUpdated = lastUpdated;
     this.groupId = groupId;
     this.artifactId = artifactId;
     this.version = version;
@@ -43,6 +43,7 @@ public final class Maven2Metadata {
   }
 
   public Level level() { return level; }
+  /** Null only for documents that omit the optional {@code <lastUpdated>} element. */
   public Instant lastUpdated() { return lastUpdated; }
   public String groupId() { return groupId; }
   public String artifactId() { return artifactId; }

@@ -16,6 +16,7 @@ import com.github.klboke.kkrepo.server.cache.NexusCacheType;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheInfo;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
+import com.github.klboke.kkrepo.server.releaseage.ReleaseAgeDeniedException;
 import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -44,6 +45,8 @@ import org.springframework.stereotype.Service;
 @Service
 public class MavenGroupService {
   private static final Logger log = LoggerFactory.getLogger(MavenGroupService.class);
+  /** Upper bound on merged group metadata age when a member proxy hides young versions. */
+  private static final int RELEASE_AGE_GROUP_METADATA_TTL_MINUTES = 10;
   private final MavenHostedService hosted;
   private final MavenProxyService proxy;
   private final AssetDao assetDao;
@@ -129,6 +132,7 @@ public class MavenGroupService {
       return serveGroupCached(
           dispatched.entryRepositoryId(), groupCached.get(), headOnly, path);
     }
+    ReleaseAgeDeniedException quarantined = null;
     for (RepositoryRuntime member : group.members()) {
       if (dispatched.contains(member)) {
         continue;
@@ -140,11 +144,20 @@ public class MavenGroupService {
         return response;
       } catch (MavenExceptions.MavenNotFoundException ignored) {
         // try next member
+      } catch (ReleaseAgeDeniedException denied) {
+        // A later member (for example a hosted repository) may legitimately hold this artifact, so
+        // keep probing. If nobody serves it, the quarantine is reported instead of a plain 404.
+        if (quarantined == null) {
+          quarantined = denied;
+        }
       } catch (MavenExceptions.BadUpstreamException | HttpRemoteFetcher.RemoteRequestRejectedException e) {
         // Nexus group repositories only return successful member responses; keep probing.
       } catch (MavenExceptions.MethodNotAllowed ignored) {
         // member doesn't serve this kind of read; skip
       }
+    }
+    if (quarantined != null) {
+      throw quarantined;
     }
     throw new MavenExceptions.MavenNotFoundException(path.path());
   }
@@ -224,6 +237,12 @@ public class MavenGroupService {
       RepositoryRuntime group, MavenPath path, boolean headOnly, DispatchedRepositories dispatched) {
     Instant now = Instant.now();
     int ttl = group.effectiveMetadataMaxAgeMinutesOrDefault();
+    if (containsMinimumReleaseAgeProxy(group)) {
+      // A gated proxy member hides versions until they mature. Re-merge often so a version appears
+      // in the group soon after it ages in, instead of waiting out the full metadata max age.
+      ttl = ttl < 0 ? RELEASE_AGE_GROUP_METADATA_TTL_MINUTES
+          : Math.min(ttl, RELEASE_AGE_GROUP_METADATA_TTL_MINUTES);
+    }
     Optional<CachedAssetMetadata> cached = assetMetadataCache.find(
         group.id(),
         path.path(),
@@ -260,6 +279,18 @@ public class MavenGroupService {
             BlobReferenceCodec.reference(blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size()))
             .orElseThrow(() -> new MavenExceptions.MavenNotFoundException(path.path())),
         blob.size(), asset.contentType(), blob.sha1(), asset.lastUpdatedAt());
+  }
+
+  private static boolean containsMinimumReleaseAgeProxy(RepositoryRuntime runtime) {
+    if (runtime.minimumReleaseAgeEnabled()) {
+      return true;
+    }
+    for (RepositoryRuntime member : runtime.members()) {
+      if (containsMinimumReleaseAgeProxy(member)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private boolean isGroupMetadataFresh(

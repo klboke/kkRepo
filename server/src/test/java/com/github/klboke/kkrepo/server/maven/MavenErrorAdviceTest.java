@@ -6,6 +6,8 @@ import com.github.klboke.kkrepo.server.cargo.CargoExceptions;
 import com.github.klboke.kkrepo.protocol.pub.PubContentTypes;
 import com.github.klboke.kkrepo.server.npm.NpmExceptions;
 import com.github.klboke.kkrepo.server.pub.PubExceptions;
+import com.github.klboke.kkrepo.server.releaseage.ReleaseAgeDeniedException;
+import java.time.Instant;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
@@ -25,6 +27,19 @@ class MavenErrorAdviceTest {
     assertEquals("no-store", response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL));
     assertEquals(false, response.getBody().get("success"));
     assertEquals("release is too new", response.getBody().get("error"));
+  }
+
+  @Test
+  void releaseAgeDenialIsForbiddenAndNotCacheable() {
+    MavenErrorAdvice advice = new MavenErrorAdvice();
+
+    ResponseEntity<Map<String, Object>> response = advice.releaseAgeDenied(
+        new ReleaseAgeDeniedException("Artifact is currently quarantined.", Instant.EPOCH));
+
+    assertEquals(HttpStatus.FORBIDDEN, response.getStatusCode());
+    assertEquals("no-store", response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL));
+    assertEquals(false, response.getBody().get("success"));
+    assertEquals("Artifact is currently quarantined.", response.getBody().get("error"));
   }
 
   @Test

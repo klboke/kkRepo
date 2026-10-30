@@ -1,5 +1,7 @@
 package com.github.klboke.kkrepo.server.pypi;
 
+import com.github.klboke.kkrepo.cache.LocalCache;
+import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
@@ -15,11 +17,18 @@ import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
 import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
+import com.github.klboke.kkrepo.server.releaseage.MinimumReleaseAge;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.HexFormat;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -27,12 +36,28 @@ import java.util.Map;
 import java.util.Optional;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+/**
+ * PyPI proxy.
+ *
+ * <p>Minimum release age (quarantine): when {@code proxy.minimumReleaseAgeMinutes > 0} the project
+ * index is fetched as PEP 691 JSON so each file's PEP 700 {@code upload-time} is known. The stored
+ * copy keeps every file with a {@code data-upload-time} attribute (marked by the {@code uploadTimes}
+ * asset attribute); files younger than the cooldown are removed each time the index is served, so a
+ * file appears as soon as it matures instead of when the cached page expires. Direct downloads of
+ * quarantined files, and of files whose upload time is unknown, get 403. Upstreams that do not
+ * publish upload times (Nexus, Artifactory) fail closed with 502 rather than silently serving
+ * unfiltered content. Everything is derived from shared state; the node-local {@code publishTimes}
+ * cache only avoids re-parsing the index and holds immutable timestamps, so replicas agree.
+ */
 @Service
 public class PypiProxyService {
   private static final Logger log = LoggerFactory.getLogger(PypiProxyService.class);
   private static final long[] BACKOFF_SECONDS = {30, 60, 120, 300, 600, 1800};
+  private static final String SIMPLE_JSON = "application/vnd.pypi.simple.v1+json";
+  private static final String UPLOAD_TIMES_ATTRIBUTE = "uploadTimes";
 
   private final AssetDao assetDao;
   private final BlobStorageRegistry blobStorageRegistry;
@@ -44,7 +69,14 @@ public class PypiProxyService {
   private final AssetMetadataCache assetMetadataCache;
   private final NexusLikeCacheController cacheController;
   private final PypiRepositorySettings repositorySettings;
+  private final Clock clock;
+  private final LocalCache<String, Instant> publishTimes = LocalCacheFactory.standard()
+      .<String, Instant>builder("pypi-release-age-publish-times")
+      .maximumSize(200_000)
+      .expireAfterWrite(Duration.ofHours(6))
+      .build();
 
+  @Autowired
   public PypiProxyService(
       AssetDao assetDao,
       BlobStorageRegistry blobStorageRegistry,
@@ -56,6 +88,23 @@ public class PypiProxyService {
       AssetMetadataCache assetMetadataCache,
       NexusLikeCacheController cacheController,
       PypiRepositorySettings repositorySettings) {
+    this(assetDao, blobStorageRegistry, writer, reader, proxyStateDao, fetcher, negativeCache,
+        assetMetadataCache, cacheController, repositorySettings, Clock.systemUTC());
+  }
+
+  PypiProxyService(
+      AssetDao assetDao,
+      BlobStorageRegistry blobStorageRegistry,
+      PypiAssetWriter writer,
+      PypiAssetReader reader,
+      ProxyStateDao proxyStateDao,
+      HttpRemoteFetcher fetcher,
+      ProxyNegativeCache negativeCache,
+      AssetMetadataCache assetMetadataCache,
+      NexusLikeCacheController cacheController,
+      PypiRepositorySettings repositorySettings,
+      Clock clock) {
+    this.clock = clock;
     this.assetDao = assetDao;
     this.blobStorageRegistry = blobStorageRegistry;
     this.writer = writer;
@@ -69,16 +118,24 @@ public class PypiProxyService {
   }
 
   public PypiResponse getRootIndex(RepositoryRuntime runtime, boolean headOnly) {
-    return getIndexAsset(runtime, PypiPaths.INDEX_PREFIX, null, "root-index", headOnly);
+    return getIndexAsset(runtime, PypiPaths.INDEX_PREFIX, null, "root-index", headOnly, false);
   }
 
   public PypiResponse getIndex(RepositoryRuntime runtime, String projectName, boolean headOnly) {
     String normalized = PypiPaths.normalizeName(projectName);
-    return getIndexAsset(runtime, PypiPaths.indexPath(normalized), normalized, "index", headOnly);
+    if (runtime.minimumReleaseAgeEnabled()) {
+      return filteredIndex(runtime, normalized, headOnly);
+    }
+    return getIndexAsset(
+        runtime, PypiPaths.indexPath(normalized), normalized, "index", headOnly, false);
   }
 
   public PypiResponse getPackage(RepositoryRuntime runtime, String path, boolean headOnly) {
     ensureProxy(runtime);
+    if (runtime.minimumReleaseAgeEnabled()) {
+      // Decide before the cache lookup so files cached before the policy was enabled are gated too.
+      enforcePackageAge(runtime, path);
+    }
     Optional<CachedAssetMetadata> cached = lookupCached(runtime, path);
     Instant now = Instant.now();
     NexusCacheType cacheType = cacheType(path);
@@ -116,27 +173,35 @@ public class PypiProxyService {
   }
 
   private PypiResponse getIndexAsset(
-      RepositoryRuntime runtime, String path, String projectName, String kind, boolean headOnly) {
+      RepositoryRuntime runtime, String path, String projectName, String kind, boolean headOnly,
+      boolean withUploadTimes) {
     ensureProxy(runtime);
     Optional<CachedAssetMetadata> cached = lookupCached(runtime, path);
+    if (withUploadTimes && cached.isPresent()
+        && !"true".equals(stringAttr(cached.get().attributes(), UPLOAD_TIMES_ATTRIBUTE))) {
+      // Cached before the policy was enabled: it has no upload times, so refetch instead of
+      // serving (or revalidating) it.
+      cached = Optional.empty();
+    }
+    final Optional<CachedAssetMetadata> cachedIndex = cached;
     Instant now = Instant.now();
-    if (cached.isPresent()
-        && isFresh(runtime, cached.get(), runtime.metadataMaxAgeMinutesOrDefault(), now, NexusCacheType.METADATA)) {
-      return reader.serveSnapshot(cached.get(), headOnly, path);
+    if (cachedIndex.isPresent()
+        && isFresh(runtime, cachedIndex.get(), runtime.metadataMaxAgeMinutesOrDefault(), now, NexusCacheType.METADATA)) {
+      return reader.serveSnapshot(cachedIndex.get(), headOnly, path);
     }
     if (negativeCache.isNotFoundCached(runtime, path)) {
       throw new PypiExceptions.PypiNotFoundException(path);
     }
     if (proxyStateDao.isBlocked(runtime.id(), now)) {
-      if (cached.isPresent()) return reader.serveSnapshot(cached.get(), headOnly, path);
+      if (cachedIndex.isPresent()) return reader.serveSnapshot(cachedIndex.get(), headOnly, path);
       throw temporarilyBlocked(runtime, path);
     }
 
     String url = upstreamIndexUrl(runtime, projectName);
     String etag = null;
     Instant lastModified = null;
-    if (cached.isPresent() && cached.get().blob() != null) {
-      Map<String, Object> attrs = cached.get().blob().attributes();
+    if (cachedIndex.isPresent() && cachedIndex.get().blob() != null) {
+      Map<String, Object> attrs = cachedIndex.get().blob().attributes();
       etag = stringAttr(attrs, "remoteEtag");
       lastModified = instantAttr(attrs, "remoteLastModified");
     }
@@ -144,26 +209,31 @@ public class PypiProxyService {
         url, etag, lastModified, null, false)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.METADATA)
         .withRepositoryForContent(runtime);
+    if (withUploadTimes) {
+      req = req.withAccept(SIMPLE_JSON);
+    }
     try {
       return fetcher.fetchWithBodyRetry(req, path, result -> {
         int status = result.status();
-        if (status == 304 && cached.isPresent()) {
-          Map<String, Object> attributes = refreshedAttributes(runtime, cached.get(), NexusCacheType.METADATA, now);
+        if (status == 304 && cachedIndex.isPresent()) {
+          Map<String, Object> attributes = refreshedAttributes(runtime, cachedIndex.get(), NexusCacheType.METADATA, now);
           if (attributes == null) {
-            assetDao.touchAssetLastUpdated(cached.get().assetId(), now);
+            assetDao.touchAssetLastUpdated(cachedIndex.get().assetId(), now);
           } else {
-            assetDao.touchAssetLastUpdatedAndAttributes(cached.get().assetId(), now, attributes);
+            assetDao.touchAssetLastUpdatedAndAttributes(cachedIndex.get().assetId(), now, attributes);
           }
           assetMetadataCache.touchVerified(runtime.id(), path, now, attributes);
           proxyStateDao.recordSuccess(runtime.id(), now);
           negativeCache.invalidate(runtime, path);
-          return reader.serveSnapshot(cached.get(), headOnly, path);
+          return reader.serveSnapshot(cachedIndex.get(), headOnly, path);
         }
         if (status >= 200 && status < 300) {
           negativeCache.invalidate(runtime, path);
           byte[] upstream = UpstreamBodyReadException.readAllBytes(result.body());
-          String transformed = transformIndex(kind, projectName,
-              new String(upstream, StandardCharsets.UTF_8));
+          String transformed = withUploadTimes
+              ? transformJsonIndex(projectName, result.contentType(),
+                  new String(upstream, StandardCharsets.UTF_8))
+              : transformIndex(kind, projectName, new String(upstream, StandardCharsets.UTF_8));
           PypiAssetWriter.Stored stored = writer.write(
               runtime,
               blobStorage(runtime),
@@ -173,8 +243,7 @@ public class PypiProxyService {
               "text/html",
               kind,
               null,
-              cacheAttributes(runtime, NexusCacheType.METADATA, now,
-                  projectName == null ? Map.of() : Map.of("name", projectName)),
+              cacheAttributes(runtime, NexusCacheType.METADATA, now, indexAttributes(projectName, withUploadTimes)),
               remoteAttrs(result),
               "proxy",
               ProxyRequestAudit.currentClientIp(),
@@ -184,18 +253,128 @@ public class PypiProxyService {
         }
         if (status == 404 || status == 410) {
           proxyStateDao.recordSuccess(runtime.id(), now);
-          if (cached.isPresent()) {
-            return reader.serveSnapshot(cached.get(), headOnly, path);
+          if (cachedIndex.isPresent()) {
+            return reader.serveSnapshot(cachedIndex.get(), headOnly, path);
           }
           if (status == 404) negativeCache.rememberNotFound(runtime, path);
           throw new PypiExceptions.PypiNotFoundException(path);
         }
-        return handleUpstreamFailure(runtime, path, cached, headOnly,
+        return handleUpstreamFailure(runtime, path, cachedIndex, headOnly,
             "Upstream returned " + status, now);
       });
     } catch (IOException e) {
-      return handleUpstreamFailure(runtime, path, cached, headOnly,
+      return handleUpstreamFailure(runtime, path, cachedIndex, headOnly,
           "Upstream IO error: " + e.getMessage(), now);
+    }
+  }
+
+  private static Map<String, Object> indexAttributes(String projectName, boolean withUploadTimes) {
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    if (projectName != null) attributes.put("name", projectName);
+    if (withUploadTimes) attributes.put(UPLOAD_TIMES_ATTRIBUTE, "true");
+    return attributes;
+  }
+
+  /** Project page from a PEP 691 JSON response; keeps each file's upload time for later filtering. */
+  private String transformJsonIndex(String projectName, String contentType, String body) {
+    if (contentType == null || !contentType.toLowerCase(java.util.Locale.ROOT).contains("json")) {
+      throw new PypiExceptions.BadUpstreamException(
+          "Upstream does not provide the PEP 691/700 JSON simple index, so the minimum release age "
+              + "cannot be enforced; use an upstream that publishes upload-time (for example pypi.org)");
+    }
+    List<PypiLink> links;
+    try {
+      links = PypiIndex.parseJson(body);
+    } catch (IOException e) {
+      throw new PypiExceptions.BadUpstreamException("Unreadable JSON simple index: " + e.getMessage(), e);
+    }
+    if (!PypiIndex.validatesForProject(projectName, links)) {
+      throw new PypiExceptions.PypiNotFoundException(projectName);
+    }
+    return PypiIndex.buildProject(
+        projectName,
+        PypiIndex.rewriteProjectLinks(PypiPaths.normalizeName(projectName), links),
+        true);
+  }
+
+  // ---- minimum release age -------------------------------------------------------------------
+
+  /** Serves the project page with files younger than the cooldown (or of unknown age) removed. */
+  private PypiResponse filteredIndex(RepositoryRuntime runtime, String normalized, boolean headOnly) {
+    List<PypiLink> links = indexLinksWithUploadTimes(runtime, normalized);
+    int minutes = runtime.minimumReleaseAgeMinutesOrDefault();
+    Instant now = clock.instant();
+    List<PypiLink> kept = links.stream()
+        .filter(link -> MinimumReleaseAge.eligible(link.uploadTime(), minutes, now))
+        .toList();
+    if (kept.isEmpty() && !links.isEmpty()) {
+      throw new PypiExceptions.PypiNotFoundException(normalized);
+    }
+    byte[] html = PypiIndex.buildProject(normalized, kept, false).getBytes(StandardCharsets.UTF_8);
+    String etag = sha256(html);
+    return headOnly
+        ? PypiResponse.noBody(200, html.length, "text/html", etag, now)
+        : PypiResponse.ok(new ByteArrayInputStream(html), html.length, "text/html", etag, now);
+  }
+
+  private void enforcePackageAge(RepositoryRuntime runtime, String path) {
+    String projectName = PypiPaths.packageNameFromPath(path);
+    if (projectName == null || projectName.isBlank()) {
+      return; // not a project file path; the normal flow answers 404
+    }
+    String filename = PypiPaths.fileName(path);
+    String rootFilename = filename.endsWith(".asc")
+        ? filename.substring(0, filename.length() - 4)
+        : filename;
+    String normalized = PypiPaths.normalizeName(projectName);
+    String key = publishKey(runtime, normalized, rootFilename);
+    Instant published = publishTimes.getIfPresent(key);
+    if (published == null) {
+      List<PypiLink> links = indexLinksWithUploadTimes(runtime, normalized);
+      if (links.stream().noneMatch(link -> rootFilename.equals(link.file()))) {
+        throw new PypiExceptions.PypiNotFoundException(filename);
+      }
+      published = publishTimes.getIfPresent(key);
+    }
+    MinimumReleaseAge.require(
+        "PyPI file " + rootFilename, published, runtime.minimumReleaseAgeMinutesOrDefault(),
+        clock.instant());
+  }
+
+  /** The cached project page (refetched if needed) with every file and its upload time. */
+  private List<PypiLink> indexLinksWithUploadTimes(RepositoryRuntime runtime, String normalized) {
+    PypiResponse raw = getIndexAsset(
+        runtime, PypiPaths.indexPath(normalized), normalized, "index", false, true);
+    String html;
+    try (InputStream body = raw.body()) {
+      html = new String(body == null ? new byte[0] : body.readAllBytes(), StandardCharsets.UTF_8);
+    } catch (IOException e) {
+      throw new PypiExceptions.BadUpstreamException("Failed reading cached index: " + e.getMessage(), e);
+    }
+    List<PypiLink> links = PypiIndex.parse(html);
+    for (PypiLink link : links) {
+      if (link.uploadTime() != null) {
+        publishTimes.put(publishKey(runtime, normalized, link.file()), link.uploadTime());
+      }
+    }
+    return links;
+  }
+
+  /**
+   * Cache identity of a publish time. It includes the upstream the time was read from: a proxy's
+   * remote URL can be edited without any signal reaching this node-local cache, and a timestamp
+   * learned from the former upstream must never answer for the new one (a warm node would otherwise
+   * admit what a cold node rejects).
+   */
+  private static String publishKey(RepositoryRuntime runtime, String normalized, String file) {
+    return runtime.id() + "|" + runtime.proxyRemoteUrl() + "|" + normalized + "|" + file;
+  }
+
+  private static String sha256(byte[] bytes) {
+    try {
+      return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
+    } catch (NoSuchAlgorithmException e) {
+      throw new IllegalStateException(e);
     }
   }
 

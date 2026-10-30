@@ -564,9 +564,17 @@ public record RepositoryRuntime(
   }
 
   public boolean minimumReleaseAgeEnabled() {
-    return format == RepositoryFormat.NPM
+    return supportsMinimumReleaseAge(format)
         && isProxy()
         && minimumReleaseAgeMinutesOrDefault() > 0;
+  }
+
+  /** Formats whose proxy repositories can quarantine recently published versions. */
+  public static boolean supportsMinimumReleaseAge(RepositoryFormat format) {
+    return format == RepositoryFormat.NPM
+        || format == RepositoryFormat.GO
+        || format == RepositoryFormat.MAVEN2
+        || format == RepositoryFormat.PYPI;
   }
 
   /** Derived from the existing persisted allowlist; not a separate configuration property. */

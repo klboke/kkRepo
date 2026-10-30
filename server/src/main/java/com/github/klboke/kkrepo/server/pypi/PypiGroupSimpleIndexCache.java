@@ -31,6 +31,9 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class PypiGroupSimpleIndexCache {
+  /** Upper bound on merged group index age when a member proxy hides young files. */
+  private static final int RELEASE_AGE_GROUP_INDEX_TTL_MINUTES = 10;
+
   static final String ROOT_INDEX = "root-index";
   static final String INDEX = "index";
 
@@ -87,15 +90,34 @@ public class PypiGroupSimpleIndexCache {
       return Optional.empty();
     }
     NexusLikeCacheInfo cacheInfo = NexusLikeCacheInfo.fromAttributes(snapshot.attributes()).orElse(null);
+    int ttl = group.effectiveMetadataMaxAgeMinutesOrDefault();
+    if (containsMinimumReleaseAgeProxy(group)) {
+      // A gated proxy member hides young files until they mature. Re-merge often so a file shows up
+      // in the group soon after it ages in, instead of waiting out the full metadata max age.
+      ttl = ttl < 0 ? RELEASE_AGE_GROUP_INDEX_TTL_MINUTES
+          : Math.min(ttl, RELEASE_AGE_GROUP_INDEX_TTL_MINUTES);
+    }
     if (cacheController.isStale(
         group.id(),
         NexusCacheType.METADATA,
         cacheInfo,
-        group.effectiveMetadataMaxAgeMinutesOrDefault(),
+        ttl,
         now)) {
       return Optional.empty();
     }
     return cached;
+  }
+
+  private static boolean containsMinimumReleaseAgeProxy(RepositoryRuntime runtime) {
+    if (runtime.minimumReleaseAgeEnabled()) {
+      return true;
+    }
+    for (RepositoryRuntime member : runtime.members()) {
+      if (containsMinimumReleaseAgeProxy(member)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   public Map<String, Object> freshAttributes(RepositoryRuntime group, String projectName, Instant now) {

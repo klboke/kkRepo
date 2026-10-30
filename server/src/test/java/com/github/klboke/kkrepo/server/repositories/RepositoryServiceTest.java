@@ -1243,11 +1243,11 @@ class RepositoryServiceTest {
     RepositoryValidationException wrongFormat = assertThrows(
         RepositoryValidationException.class,
         () -> service.create(new CreateCommand(
-            "maven-proxy", "maven2-proxy", true, "default", true, null,
-            new ProxySettings("https://repo.maven.apache.org/maven2/", 1440, 1440, true, 60),
+            "nuget-feed", "nuget-proxy", true, "default", true, null,
+            new ProxySettings("https://api.nuget.org/v3/index.json", 1440, 1440, true, 60),
             null, null, null, null)));
     assertEquals(
-        "proxy.minimumReleaseAgeMinutes is only supported for npm proxy repositories",
+        "proxy.minimumReleaseAgeMinutes is only supported for npm, Go, Maven and PyPI proxy repositories",
         wrongFormat.getMessage());
   }
 
