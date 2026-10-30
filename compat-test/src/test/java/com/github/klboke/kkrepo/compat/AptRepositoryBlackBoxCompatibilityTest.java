@@ -21,6 +21,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -345,6 +348,21 @@ class AptRepositoryBlackBoxCompatibilityTest {
         () -> "unexpected Nexus-compatible package path: " + snapshot.packagePath());
 
     AptRelease release = AptRelease.parse(snapshot.releaseText());
+    Instant releaseDate = ZonedDateTime.parse(
+        release.fields().get("Date"), DateTimeFormatter.RFC_1123_DATE_TIME).toInstant();
+    String validUntil = release.fields().get("Valid-Until");
+    // Debian permits archives (including Nexus versions) to omit expiration entirely.
+    // When present, it must describe a usable, signed validity window.
+    if (validUntil != null) {
+      Instant expires = ZonedDateTime.parse(
+          validUntil, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant();
+      assertTrue(expires.isAfter(releaseDate), "Valid-Until must follow Date");
+      assertTrue(expires.isAfter(Instant.now()), "newly published Release must not be expired");
+      AptRelease inlineRelease = AptRelease.parse(new String(
+          clearSignedMessage(snapshot.inRelease()).cleartext(), StandardCharsets.UTF_8));
+      assertEquals(validUntil, inlineRelease.fields().get("Valid-Until"));
+      assertEquals(release.fields().get("Date"), inlineRelease.fields().get("Date"));
+    }
     String acquireByHash = release.fields().get("Acquire-By-Hash");
     assertTrue(acquireByHash == null || "yes".equals(acquireByHash),
         "Acquire-By-Hash must either be omitted like Nexus or safely enabled");
