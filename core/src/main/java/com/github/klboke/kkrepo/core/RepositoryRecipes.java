@@ -74,6 +74,9 @@ public final class RepositoryRecipes {
       new RepositoryRecipe("r-group", RepositoryFormat.R, RepositoryType.GROUP),
       new RepositoryRecipe("huggingface-proxy", RepositoryFormat.HUGGINGFACE, RepositoryType.PROXY),
       new RepositoryRecipe("gitlfs-hosted", RepositoryFormat.GITLFS, RepositoryType.HOSTED),
+      new RepositoryRecipe("openvsx-hosted", RepositoryFormat.OPENVSX, RepositoryType.HOSTED),
+      new RepositoryRecipe("openvsx-proxy", RepositoryFormat.OPENVSX, RepositoryType.PROXY),
+      new RepositoryRecipe("openvsx-group", RepositoryFormat.OPENVSX, RepositoryType.GROUP),
       new RepositoryRecipe("raw-hosted", RepositoryFormat.RAW, RepositoryType.HOSTED),
       new RepositoryRecipe("raw-proxy", RepositoryFormat.RAW, RepositoryType.PROXY),
       new RepositoryRecipe("raw-group", RepositoryFormat.RAW, RepositoryType.GROUP));

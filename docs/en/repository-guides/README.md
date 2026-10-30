@@ -30,6 +30,7 @@ the recipe combinations and protocol boundaries supported by each format.
 | Alpine / APK | hosted / proxy / group | [Alpine / APK recipe](../client-recipes.md#alpine--apk) | [Alpine / APK Repository Guide](alpine-apk.md) |
 | R / CRAN | hosted / proxy / group | [R / CRAN recipe](../client-recipes.md#r--cran) | [R / CRAN Repository Guide](r-cran.md) |
 | Hugging Face Models | proxy | [Hugging Face Models recipe](../client-recipes.md#hugging-face-models) | [Hugging Face Models Repository Guide](hugging-face-models.md) |
+| VS Code / Open VSX | hosted / proxy / group | Open VSX and VS Code gallery endpoints | [VS Code / Open VSX Repository Guide](openvsx.md) |
 | NuGet | hosted / proxy / group | [NuGet recipe](../client-recipes.md#nuget) | [NuGet Repository Guide](nuget.md) |
 | RubyGems | hosted / proxy / group | [RubyGems recipe](../client-recipes.md#rubygems) | [RubyGems Repository Guide](rubygems.md) |
 | Yum | hosted / proxy / group | [Yum recipe](../client-recipes.md#yum) | [Yum Repository Guide](yum.md) |

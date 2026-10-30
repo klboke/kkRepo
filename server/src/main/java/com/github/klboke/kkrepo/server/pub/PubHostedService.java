@@ -305,17 +305,30 @@ public class PubHostedService {
   }
 
   Map<String, Object> packageMetadataBody(String packageName, List<ComponentRecord> components, String baseUrl) {
-    List<ComponentRecord> sorted = new ArrayList<>(components);
-    sorted.sort(Comparator.comparing(ComponentRecord::version, PubVersions.COMPARATOR));
-    List<Map<String, Object>> versions = sorted.stream()
+    return packageMetadataBodyFromEntries(packageName, components.stream()
         .map(component -> versionEntry(component, baseUrl))
-        .toList();
+        .toList());
+  }
+
+  Map<String, Object> packageMetadataBodyFromEntries(
+      String packageName, List<Map<String, Object>> entries) {
+    List<Map<String, Object>> sorted = new ArrayList<>(entries);
+    sorted.sort(Comparator.comparing(
+        entry -> String.valueOf(entry.get("version")), PubVersions.COMPARATOR));
     Map<String, Object> body = new LinkedHashMap<>();
     body.put("name", packageName);
     body.put("latest", PubMetadataSupport.latestStableFirst(
-        versions, entry -> String.valueOf(entry.get("version"))));
-    body.put("versions", versions);
+        sorted, entry -> String.valueOf(entry.get("version"))));
+    body.put("versions", sorted);
     return body;
+  }
+
+  List<Map<String, Object>> packageEntries(
+      RepositoryRuntime runtime, String packageName, String baseUrl) {
+    String normalized = PubPackageName.require(packageName);
+    return componentDao.listByName(runtime.id(), normalized).stream()
+        .map(component -> versionEntry(component, baseUrl))
+        .toList();
   }
 
   @SuppressWarnings("unchecked")
@@ -351,7 +364,7 @@ public class PubHostedService {
         () -> AssetMetadataCache.Loaded.from(assetDao.findAssetByPath(runtime.id(), path), assetDao));
   }
 
-  private MavenResponse publishSuccess(boolean headOnly) {
+  MavenResponse publishSuccess(boolean headOnly) {
     return PubResponses.json(objectMapper,
         Map.of("success", Map.of("message", "Successfully uploaded package.")),
         200,

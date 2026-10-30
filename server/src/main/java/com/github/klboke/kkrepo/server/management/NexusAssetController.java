@@ -10,6 +10,7 @@ import com.github.klboke.kkrepo.server.management.NexusAssetManagementService.Un
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.Map;
 import java.util.Set;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -19,17 +20,26 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 @RequestMapping("/service/rest/v1")
 public class NexusAssetController {
   private static final Set<String> SUPPORTED_SEARCH_PARAMETERS =
-      Set.of("repository", "name", "continuationToken");
+      Set.of("repository", "name", "continuationToken", "stagingSession");
 
   private final NexusAssetManagementService service;
+  private final NexusStagingManagementService staging;
 
   public NexusAssetController(NexusAssetManagementService service) {
+    this(service, null);
+  }
+
+  @Autowired
+  public NexusAssetController(
+      NexusAssetManagementService service, NexusStagingManagementService staging) {
     this.service = service;
+    this.staging = staging;
   }
 
   @GetMapping("/search/assets")
@@ -45,6 +55,29 @@ public class NexusAssetController {
       throw new InvalidSearchRequestException(
           "Unsupported asset search parameter: " + unsupported);
     }
+    String stagingSession = parameters.get("stagingSession");
+    if (stagingSession != null && !stagingSession.isBlank()) {
+      return requireStaging().searchAssets(
+          parameters.get("repository"), stagingSession,
+          parameters.get("continuationToken"), request);
+    }
+    return service.search(
+        parameters.get("repository"),
+        parameters.get("name"),
+        parameters.get("continuationToken"),
+        request);
+  }
+
+  @GetMapping("/assets")
+  public AssetPage assets(
+      @RequestParam Map<String, String> parameters,
+      HttpServletRequest request) {
+    String stagingSession = parameters.get("stagingSession");
+    if (stagingSession != null && !stagingSession.isBlank()) {
+      return requireStaging().searchAssets(
+          parameters.get("repository"), stagingSession,
+          parameters.get("continuationToken"), request);
+    }
     return service.search(
         parameters.get("repository"),
         parameters.get("name"),
@@ -54,17 +87,53 @@ public class NexusAssetController {
 
   @GetMapping("/assets/{id}")
   public AssetDetailView get(@PathVariable("id") String id, HttpServletRequest request) {
-    return service.get(id, request);
+    return staging != null && staging.isStagingId(id)
+        ? staging.getAsset(id, request) : service.get(id, request);
   }
 
   @DeleteMapping("/assets/{id}")
   public ResponseEntity<Void> delete(
       @PathVariable("id") String id, HttpServletRequest request) {
+    if (staging != null && staging.isStagingId(id)) {
+      return ResponseEntity.status(staging.deleteAsset(id, request) == 0 ? 404 : 204).build();
+    }
     return ResponseEntity.status(service.delete(id, request)).build();
+  }
+
+  @GetMapping("/components")
+  public Object components(
+      @RequestParam Map<String, String> parameters,
+      HttpServletRequest request) {
+    String stagingSession = parameters.get("stagingSession");
+    if (stagingSession != null && !stagingSession.isBlank()) {
+      return requireStaging().components(parameters.get("repository"), stagingSession, request);
+    }
+    return service.components(
+        parameters.get("repository"), parameters.get("continuationToken"), request);
+  }
+
+  @GetMapping("/components/{id}")
+  public Object component(@PathVariable("id") String id, HttpServletRequest request) {
+    return staging != null && staging.isStagingId(id)
+        ? staging.getComponent(id, request) : service.getComponent(id, request);
+  }
+
+  private NexusStagingManagementService requireStaging() {
+    if (staging == null) {
+      throw new ResponseStatusException(
+          HttpStatus.SERVICE_UNAVAILABLE, "Staging management is unavailable");
+    }
+    return staging;
   }
 
   @ExceptionHandler(InvalidAssetIdException.class)
   public ResponseEntity<Void> invalidAssetId(InvalidAssetIdException ignored) {
+    return ResponseEntity.unprocessableEntity().build();
+  }
+
+  @ExceptionHandler({NexusStagingIdCodec.InvalidStagingIdException.class,
+      NexusComponentIdCodec.InvalidComponentIdException.class})
+  public ResponseEntity<Void> invalidStagingId(RuntimeException ignored) {
     return ResponseEntity.unprocessableEntity().build();
   }
 

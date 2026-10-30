@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.protocol.apt.DebianVersions;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.BufferedOutputStream;
 import java.io.BufferedWriter;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -133,6 +134,89 @@ final class AptMetadataBuilder {
         signed.detachedSignature(), manifest);
     return new BuiltSnapshot(
         Map.copyOf(manifest), digests(release).sha256(), key.revision(), createdAt);
+  }
+
+  /**
+   * Builds unsigned Packages variants plus a signed Release/InRelease set in memory without
+   * publishing a snapshot. Used by the staging metadata view.
+   */
+  Map<String, byte[]> render(
+      AptRepositorySettings.Settings settings,
+      String distribution,
+      String component,
+      List<String> architectures,
+      AptSigningService.SigningMaterial key,
+      Instant createdAt,
+      Map<String, List<AptRegistryDao.PackageRecord>> recordsByArchitecture) {
+    Map<String, byte[]> files = new LinkedHashMap<>();
+    List<AptRelease.Checksum> checksums = new ArrayList<>();
+    for (String architecture : architectures) {
+      String directory = "dists/" + distribution + "/" + component
+          + "/binary-" + architecture + "/";
+      String releaseDirectory = component + "/binary-" + architecture + "/";
+      List<AptRegistryDao.PackageRecord> records =
+          new ArrayList<>(recordsByArchitecture.getOrDefault(architecture, List.of()));
+      records.sort(PACKAGE_ORDER);
+      StringBuilder text = new StringBuilder();
+      boolean first = true;
+      for (AptRegistryDao.PackageRecord record : records) {
+        if (!first) text.append('\n');
+        text.append(packagesStanza(record).render());
+        first = false;
+      }
+      byte[] plain = text.toString().getBytes(StandardCharsets.UTF_8);
+      addIndex(files, checksums, directory, releaseDirectory, "Packages",
+          "Packages", plain);
+      for (Compression compression : Compression.values()) {
+        addIndex(files, checksums, directory, releaseDirectory, compression.filename(),
+            compression.filename(), compress(plain, compression));
+      }
+    }
+    AptRelease.Builder releaseBuilder = AptRelease.builder(distribution, createdAt)
+        .field("Origin", settings.origin())
+        .field("Label", settings.label())
+        .architectures(architectures)
+        .components(List.of(component));
+    if (settings.validUntilDays() != null && settings.validUntilDays() > 0) {
+      releaseBuilder.validUntil(createdAt.plus(settings.validUntilDays(), ChronoUnit.DAYS));
+    }
+    for (AptRelease.Checksum checksum : checksums) {
+      releaseBuilder.checksum(
+          checksum.algorithm(), checksum.digest(), checksum.size(), checksum.path());
+    }
+    byte[] release = releaseBuilder.build().render().getBytes(StandardCharsets.UTF_8);
+    AptSigningService.SignedRelease signed = signing.sign(release, key, createdAt);
+    files.put("dists/" + distribution + "/Release", release);
+    files.put("dists/" + distribution + "/InRelease", signed.inRelease());
+    files.put("dists/" + distribution + "/Release.gpg", signed.detachedSignature());
+    return files;
+  }
+
+  private static void addIndex(
+      Map<String, byte[]> files,
+      List<AptRelease.Checksum> checksums,
+      String directory,
+      String releaseDirectory,
+      String filename,
+      String name,
+      byte[] bytes) {
+    files.put(directory + filename, bytes);
+    Digests digests = digests(bytes);
+    String releasePath = releaseDirectory + filename;
+    checksums.add(new AptRelease.Checksum("MD5Sum", digests.md5(), bytes.length, releasePath));
+    checksums.add(new AptRelease.Checksum("SHA1", digests.sha1(), bytes.length, releasePath));
+    checksums.add(new AptRelease.Checksum("SHA256", digests.sha256(), bytes.length, releasePath));
+  }
+
+  private static byte[] compress(byte[] input, Compression compression) {
+    try (ByteArrayOutputStream output = new ByteArrayOutputStream();
+        OutputStream compressed = compression.wrap(output)) {
+      compressed.write(input);
+      compressed.flush();
+      return output.toByteArray();
+    } catch (IOException error) {
+      throw new IllegalStateException("Failed to compress APT " + compression.filename(), error);
+    }
   }
 
   private void storeTopLevel(

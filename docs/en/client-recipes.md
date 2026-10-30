@@ -845,6 +845,29 @@ scripts/docker-compat/client-compat.sh
 
 Do not assume Docker pull/push works through `/repository/<repo>/...`.
 
+## VS Code / Open VSX
+
+Publish with an `OpenVsxToken` API key:
+
+```bash
+ovsx publish \
+  --registryUrl https://nexus.example.com/repository/openvsx-hosted \
+  --pat "$OPENVSX_TOKEN" \
+  acme-demo-1.0.0.vsix
+```
+
+Read metadata and download the VSIX:
+
+```bash
+curl https://nexus.example.com/repository/openvsx-group/api/acme/demo
+curl -O https://nexus.example.com/repository/openvsx-group/api/acme/demo/1.0.0/file/acme.demo-1.0.0.vsix
+```
+
+VS Code-compatible editors can point their gallery at
+`https://nexus.example.com/repository/openvsx-group/vscode/gallery`.
+
+See the [VS Code / Open VSX Repository Guide](repository-guides/openvsx.md).
+
 ## Troubleshooting Client Configuration
 
 - A `401` usually means missing or invalid credentials.

@@ -70,6 +70,8 @@ public interface PersistenceStores extends AutoCloseable {
 
   SecurityScanDao securityScanning();
 
+  StagingDao staging();
+
   StorageStatisticsDao storageStatistics();
 
   SwiftRegistryDao swiftRegistry();

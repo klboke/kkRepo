@@ -58,6 +58,9 @@ class RepositoryRecipesTest {
     assertRecipe(recipes, "huggingface-proxy", RepositoryFormat.HUGGINGFACE, RepositoryType.PROXY);
     assertTrue(!recipes.containsKey("huggingface-hosted"));
     assertTrue(!recipes.containsKey("huggingface-group"));
+    assertRecipe(recipes, "openvsx-hosted", RepositoryFormat.OPENVSX, RepositoryType.HOSTED);
+    assertRecipe(recipes, "openvsx-proxy", RepositoryFormat.OPENVSX, RepositoryType.PROXY);
+    assertRecipe(recipes, "openvsx-group", RepositoryFormat.OPENVSX, RepositoryType.GROUP);
   }
 
   private static void assertRecipe(
