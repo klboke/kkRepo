@@ -81,6 +81,16 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
         || uri.startsWith("/internal/routing-rules/")) {
       return Optional.of("nexus:*");
     }
+    // kkQuality enforces fine-grained project/repository permission itself (KkQualityAuthorizer),
+    // so the filter only guarantees an authenticated subject for these paths.
+    if (uri.startsWith("/api/kkquality")
+        || uri.startsWith("/api/projects/")
+        || uri.startsWith("/api/issues/")
+        || uri.startsWith("/api/measures/")
+        || uri.startsWith("/api/rules/")
+        || uri.startsWith("/api/qualitygates/")) {
+      return Optional.of(AUTHENTICATED_ONLY);
+    }
     if (uri.startsWith("/service/rest/v1/security/")) {
       return serviceRestPermission(method, uri);
     }
