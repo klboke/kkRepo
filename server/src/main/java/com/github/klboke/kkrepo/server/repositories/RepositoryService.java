@@ -374,7 +374,10 @@ public class RepositoryService {
         proxyRemoteUrl = proxy.remoteUrl();
         attributes.put("proxy", proxyAttributes(proxy));
       }
-      case GROUP -> attributes.put("group", Map.of());
+      case GROUP -> {
+        validateGroupWriteTarget(name, recipe.format(), command.group());
+        attributes.put("group", groupAttributes(command.group()));
+      }
     }
 
     RepositoryRecord toInsert = new RepositoryRecord(
@@ -558,7 +561,14 @@ public class RepositoryService {
     evictStaleOutboundProxyClient(existing.name(), existing.attributes(), attributes);
 
     if (recipe.type() == RepositoryType.GROUP && command.group() != null) {
-      List<Long> memberIds = resolveMemberIds(name, recipe.format(), command.group());
+      GroupSettings currentGroup = new GroupSettings(List.of(), readGroupWriteRepository(existing));
+      GroupSettings mergedGroup = new GroupSettings(
+          command.group().memberNames(),
+          command.group().writeRepository() == null
+              ? currentGroup.writeRepository() : command.group().writeRepository());
+      List<Long> memberIds = resolveMemberIds(name, recipe.format(), mergedGroup);
+      validateGroupWriteTarget(name, recipe.format(), mergedGroup);
+      attributes.put("group", groupAttributes(mergedGroup));
       repositoryDao.replaceMembers(existing.id(), memberIds);
       invalidateNpmGroupAfterCommit(existing.format(), existing.id());
       invalidatePypiGroupAfterCommit(existing.format(), existing.id());
@@ -668,7 +678,9 @@ public class RepositoryService {
     if (existing.type() != RepositoryType.GROUP) {
       throw new RepositoryValidationException("Repository '" + name + "' is not a group");
     }
-    List<Long> memberIds = resolveMemberIds(name, existing.format(), new GroupSettings(memberNames));
+    GroupSettings settings = new GroupSettings(memberNames, readGroupWriteRepository(existing));
+    validateGroupWriteTarget(name, existing.format(), settings);
+    List<Long> memberIds = resolveMemberIds(name, existing.format(), settings);
     repositoryDao.replaceMembers(existing.id(), memberIds);
     invalidateNpmGroupAfterCommit(existing.format(), existing.id());
     invalidatePypiGroupAfterCommit(existing.format(), existing.id());
@@ -1244,7 +1256,9 @@ public class RepositoryService {
       case HOSTED -> hosted = new HostedSettings(
           record.writePolicy(), record.versionPolicy(), record.layoutPolicy());
       case PROXY -> proxy = readProxyAttributesOrDefaults(record);
-      case GROUP -> group = new GroupSettings(groupMemberNames == null ? List.of() : groupMemberNames);
+      case GROUP -> group = new GroupSettings(
+          groupMemberNames == null ? List.of() : groupMemberNames,
+          readGroupWriteRepository(record));
     }
 
     return new RepositoryView(
@@ -1423,6 +1437,7 @@ public class RepositoryService {
       case SWIFT -> "https://github.com/";
       case ANSIBLEGALAXY -> "https://galaxy.ansible.com/";
       case CONAN -> "https://center2.conan.io/";
+      case ARCH -> "https://geo.mirror.pkgbuild.com/core/os/x86_64/";
       default -> null;
     };
   }
@@ -2215,6 +2230,49 @@ public class RepositoryService {
     return value == null ? null : value.toString();
   }
 
+  private static Map<String, Object> groupAttributes(GroupSettings group) {
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    if (group != null && group.writeRepository() != null
+        && !group.writeRepository().isBlank()) {
+      attributes.put("writeRepository", group.writeRepository().trim());
+    }
+    return Map.copyOf(attributes);
+  }
+
+  private static String readGroupWriteRepository(RepositoryRecord record) {
+    if (record.attributes() == null) return null;
+    Object raw = record.attributes().get("group");
+    if (!(raw instanceof Map<?, ?> group)) return null;
+    Object value = group.get("writeRepository");
+    return value == null || value.toString().isBlank() ? null : value.toString().trim();
+  }
+
+  private void validateGroupWriteTarget(
+      String groupName, RepositoryFormat format, GroupSettings group) {
+    String target = group == null ? null : group.writeRepository();
+    if (target == null || target.isBlank()) return;
+    final String writeTarget = target.trim();
+    if (writeTarget.equals(groupName)) {
+      throw new RepositoryValidationException("Group write target cannot be the group itself: " + groupName);
+    }
+    RepositoryRecord repository = repositoryDao.findByName(writeTarget)
+        .orElseThrow(() -> new RepositoryValidationException(
+            "Group write target is not a repository: " + writeTarget));
+    if (repository.format() != format) {
+      throw new RepositoryValidationException(
+          "Group write target has a different format: " + writeTarget);
+    }
+    if (repository.type() != RepositoryType.HOSTED) {
+      throw new RepositoryValidationException(
+          "Group write target must be a hosted repository: " + writeTarget);
+    }
+    if (group.memberNames() == null || group.memberNames().stream()
+        .noneMatch(name -> writeTarget.equals(name))) {
+      throw new RepositoryValidationException(
+          "Group write target must be a group member: " + writeTarget);
+    }
+  }
+
   private List<Long> resolveMemberIds(String groupName, RepositoryFormat format, GroupSettings group) {
     if (group == null || group.memberNames() == null) {
       return List.of();
@@ -2289,7 +2347,8 @@ public class RepositoryService {
     return format == RepositoryFormat.PUB || format == RepositoryFormat.COMPOSER
         || format == RepositoryFormat.HELM
         || format == RepositoryFormat.TERRAFORM || format == RepositoryFormat.SWIFT
-        || format == RepositoryFormat.ANSIBLEGALAXY || format == RepositoryFormat.CONDA;
+        || format == RepositoryFormat.ANSIBLEGALAXY || format == RepositoryFormat.CONDA
+        || format == RepositoryFormat.ARCH;
   }
 
   private static String normalizeAnsibleGalaxyRemoteUrl(String remoteUrl) {

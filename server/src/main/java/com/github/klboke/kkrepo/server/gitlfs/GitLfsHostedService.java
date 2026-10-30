@@ -98,8 +98,14 @@ public class GitLfsHostedService {
       if (batch.upload()) {
         if (asset != null) continue;
         var upload = createUpload(repository, object.oid(), object.size(), GitLfsAccess.subjectKey(subject));
+        Map<String, String> uploadHeaders = new LinkedHashMap<>();
+        uploadHeaders.put("X-KkRepo-Lfs-Upload", upload.id());
+        String stagingSession = request.getHeader("X-KkRepo-Staging");
+        if (stagingSession != null && !stagingSession.isBlank()) {
+          uploadHeaders.put("X-KkRepo-Staging", stagingSession.trim());
+        }
         item.put("actions", Map.of(
-            "upload", Map.of("href", base + object.oid(), "header", Map.of("X-KkRepo-Lfs-Upload", upload.id()), "expires_in", 900),
+            "upload", Map.of("href", base + object.oid(), "header", uploadHeaders, "expires_in", 900),
             "verify", Map.of("href", base + object.oid() + "/verify", "expires_in", 900)));
       } else {
         if (asset == null) { error(item, 404, "Object does not exist on the server"); continue; }

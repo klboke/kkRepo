@@ -58,6 +58,9 @@ class RepositoryRecipesTest {
     assertRecipe(recipes, "huggingface-proxy", RepositoryFormat.HUGGINGFACE, RepositoryType.PROXY);
     assertTrue(!recipes.containsKey("huggingface-hosted"));
     assertTrue(!recipes.containsKey("huggingface-group"));
+    assertRecipe(recipes, "arch-hosted", RepositoryFormat.ARCH, RepositoryType.HOSTED);
+    assertRecipe(recipes, "arch-proxy", RepositoryFormat.ARCH, RepositoryType.PROXY);
+    assertRecipe(recipes, "arch-group", RepositoryFormat.ARCH, RepositoryType.GROUP);
   }
 
   private static void assertRecipe(

@@ -270,6 +270,11 @@ public class YumService {
         .filter(asset -> asset.path().startsWith(root)).toList());
   }
 
+  /** Live RPM assets used by the staging metadata view. */
+  List<RpmAsset> liveAssets(RepositoryRuntime runtime) {
+    return rpmAssets(assetDao.listAssetsByPrefix(runtime.id(), ""));
+  }
+
   private static RpmAsset relative(RpmAsset rpm, String root) {
     return new RpmAsset(rpm.path().substring(root.length()), rpm.metadata(), rpm.sha256(),
         rpm.size(), rpm.lastUpdated());

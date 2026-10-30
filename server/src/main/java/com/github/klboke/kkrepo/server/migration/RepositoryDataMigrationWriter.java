@@ -1192,6 +1192,8 @@ class RepositoryDataMigrationWriter {
           ? "r-source-package" : "r-metadata";
       case GITLFS -> "gitlfs";
       case HUGGINGFACE -> "huggingface-model-file";
+      case ARCH -> source.sourcePath().contains(".pkg.tar.")
+          ? "arch-package" : "arch-database";
       case RAW -> "asset";
     };
   }

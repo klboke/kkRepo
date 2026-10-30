@@ -887,6 +887,25 @@ public class SecurityManagementService implements AccessDecisionService {
         null));
   }
 
+  /** Creates a new token without reusing an existing token in the same domain/owner pair. */
+  @Transactional
+  public CreatedApiKeyView createApiKeyForOwnerUncached(
+      String ownerSource, String ownerUserId, ApiKeyCommand command) {
+    ApiKeyCommand value = command == null
+        ? new ApiKeyCommand(null, null, null, null, null, null, null, null, null)
+        : command;
+    return createApiKey(new ApiKeyCommand(
+        value.domain(),
+        normalizeSource(ownerSource),
+        requireText(ownerUserId, "ownerUserId"),
+        value.displayName(),
+        "ACTIVE",
+        value.scopes(),
+        value.expiresAt(),
+        null,
+        null), false);
+  }
+
   @Transactional
   public CreatedApiKeyView resetApiKey(long id) {
     ApiKeyView existing = findApiKey(id)

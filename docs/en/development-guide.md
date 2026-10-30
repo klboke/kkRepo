@@ -197,6 +197,7 @@ Detailed design and implementation plans for repository formats and migration wo
 - [Alpine / APK Repository Design Notes](../zh/dev/alpine-apk-repository-design.md) (Chinese)
 - [Hugging Face Models Repository Design Notes](../zh/dev/hugging-face-models-repository-design.md) (Chinese) and [Nexus Performance Baseline](dev/hugging-face-models-performance-baseline.md)
 - [Git Large File Storage (LFS) Repository Design Notes](../zh/dev/git-lfs-repository-design.md) (Chinese)
+- [Arch Linux / Pacman Repository Design Notes](dev/arch-repository-design.md)
 - [Cleanup Policy Design Notes](../zh/dev/cleanup-policy-design.md) (Chinese)
 - [Cleanup Policy Guide](cleanup-policy-guide.md)
 - [Ansible Galaxy Repository Guide](repository-guides/ansible-galaxy.md)

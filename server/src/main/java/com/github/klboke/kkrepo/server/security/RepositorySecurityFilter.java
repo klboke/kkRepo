@@ -68,6 +68,8 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   private static final ComposerPathParser COMPOSER_PATH_PARSER = new ComposerPathParser();
   private static final TerraformPathParser TERRAFORM_PATH_PARSER = new TerraformPathParser();
   private final SecurityAuthenticationService authenticationService;
+  private com.github.klboke.kkrepo.server.staging.StagingCredentialService stagingCredentials;
+  private com.github.klboke.kkrepo.server.repositories.GroupWriteTargetService groupWriteTarget;
   private final AccessDecisionService accessDecisionService;
   private final RepositoryRuntimeRegistry repositoryRegistry;
   private final AssetDao assetDao;
@@ -117,6 +119,18 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     this(authenticationService, accessDecisionService,
         new RepositoryRuntimeRegistry(repositoryDao, 0), assetDao, terraformRegistryDao,
         forwardedHeaderPolicy, legacyUi);
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  void setGroupWriteTargetService(
+      com.github.klboke.kkrepo.server.repositories.GroupWriteTargetService groupWriteTarget) {
+    this.groupWriteTarget = groupWriteTarget;
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  void setStagingCredentialService(
+      com.github.klboke.kkrepo.server.staging.StagingCredentialService stagingCredentials) {
+    this.stagingCredentials = stagingCredentials;
   }
 
   @Override
@@ -233,8 +247,17 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       }
     }
     request.setAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE, authenticated.get());
+    if (stagingCredentials != null) {
+      stagingCredentials.bind(request, authenticated.get());
+    }
 
-    AccessDecision decision = decide(authenticated.get(), repository.get(), target);
+    RepositoryRecord permissionRepository = repository.get();
+    if (groupWriteTarget != null && isWriteMethod(request.getMethod())
+        && permissionRepository.type() == RepositoryType.GROUP) {
+      permissionRepository = groupWriteTarget.writeTargetRecord(permissionRepository)
+          .orElse(permissionRepository);
+    }
+    AccessDecision decision = decide(authenticated.get(), permissionRepository, target);
     if (!decision.allowed()) {
       if (authenticatedAnonymously) {
         challenge(request, response, repository.get(), target);
@@ -266,6 +289,11 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       }
     }
     filterChain.doFilter(request, response);
+  }
+
+  private static boolean isWriteMethod(String method) {
+    return "PUT".equalsIgnoreCase(method) || "POST".equalsIgnoreCase(method)
+        || "DELETE".equalsIgnoreCase(method) || "PATCH".equalsIgnoreCase(method);
   }
 
   private static String canonicalRepositoryPath(RepositoryFormat format, String path) {
@@ -309,7 +337,8 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
         || repository.format() == RepositoryFormat.ANSIBLEGALAXY
         || repository.format() == RepositoryFormat.APT
         || repository.format() == RepositoryFormat.ALPINE
-        || repository.format() == RepositoryFormat.R)
+        || repository.format() == RepositoryFormat.R
+        || repository.format() == RepositoryFormat.ARCH)
         && target.componentUploadRoute()) {
       return List.of(PermissionAction.ADD);
     }
@@ -328,17 +357,26 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       }
       if (repository.format() == RepositoryFormat.APT
           && "PUT".equalsIgnoreCase(target.method())) {
-        boolean exists = assetDao.findAssetByPath(repository.id(), target.path()).isPresent();
+        boolean exists = assetDao.findAssetByPath(repository.id(),
+            assetLookupPath(repository, target.path())).isPresent();
         return exists ? List.of(PermissionAction.EDIT) : List.of(PermissionAction.ADD);
       }
       if (repository.format() == RepositoryFormat.ALPINE
           && "PUT".equalsIgnoreCase(target.method())) {
-        boolean exists = assetDao.findAssetByPath(repository.id(), target.path()).isPresent();
+        boolean exists = assetDao.findAssetByPath(repository.id(),
+            assetLookupPath(repository, target.path())).isPresent();
         return exists ? List.of(PermissionAction.EDIT) : List.of(PermissionAction.ADD);
       }
       if (repository.format() == RepositoryFormat.R
           && "PUT".equalsIgnoreCase(target.method())) {
-        boolean exists = assetDao.findAssetByPath(repository.id(), target.path()).isPresent();
+        boolean exists = assetDao.findAssetByPath(repository.id(),
+            assetLookupPath(repository, target.path())).isPresent();
+        return exists ? List.of(PermissionAction.EDIT) : List.of(PermissionAction.ADD);
+      }
+      if (repository.format() == RepositoryFormat.ARCH
+          && "PUT".equalsIgnoreCase(target.method())) {
+        boolean exists = assetDao.findAssetByPath(repository.id(),
+            assetLookupPath(repository, target.path())).isPresent();
         return exists ? List.of(PermissionAction.EDIT) : List.of(PermissionAction.ADD);
       }
       return target.actions(repository.format());
@@ -480,6 +518,9 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     if (format == RepositoryFormat.R && "PUT".equalsIgnoreCase(method)) {
       return List.of(PermissionAction.ADD, PermissionAction.EDIT);
     }
+    if (format == RepositoryFormat.ARCH && "PUT".equalsIgnoreCase(method)) {
+      return List.of(PermissionAction.ADD, PermissionAction.EDIT);
+    }
     if (format == RepositoryFormat.HUGGINGFACE && "POST".equalsIgnoreCase(method)
         && path != null && path.startsWith("api/models/") && path.contains("/paths-info/")) {
       return List.of(PermissionAction.READ);
@@ -519,6 +560,26 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     return "GET".equalsIgnoreCase(method)
         && ANSIBLE_GALAXY_PATH_PARSER.parse(path).kind()
             == AnsibleGalaxyPath.Kind.IMPORT_TASK;
+  }
+
+  /**
+   * Asset rows are keyed by the decoded protocol path, while the servlet request URI is still
+   * percent-encoded. Using the raw path for the ADD/EDIT decision lets an encoded variant miss
+   * the existing asset and overwrite it with ADD-only permission.
+   */
+  private static String assetLookupPath(RepositoryRecord repository, String path) {
+    if (path == null) return null;
+    boolean decodedByProtocol = switch (repository.format()) {
+      case ARCH, APT, ALPINE, R -> true;
+      default -> false;
+    };
+    if (!decodedByProtocol) return path;
+    try {
+      return UriPathDecoder.decodePath(path);
+    } catch (IllegalArgumentException invalid) {
+      // The protocol handler rejects the malformed path before any write happens.
+      return path;
+    }
   }
 
   private static boolean isInvalidPubPublishRoute(RepositoryRecord repository, RepositoryRequest target) {

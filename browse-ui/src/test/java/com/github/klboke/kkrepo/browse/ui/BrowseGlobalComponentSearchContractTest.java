@@ -44,7 +44,7 @@ class BrowseGlobalComponentSearchContractTest {
     assertTrue(index.contains("id=\"component-custom-format-options\""));
     assertTrue(index.indexOf("id=\"component-custom-format-filter\"")
         < index.indexOf("id=\"component-custom-format-options\""));
-    assertEquals(23L, index.lines()
+    assertEquals(24L, index.lines()
         .filter(line -> line.contains("class=\"search-format-option\""))
         .count());
     assertTrue(index.contains(

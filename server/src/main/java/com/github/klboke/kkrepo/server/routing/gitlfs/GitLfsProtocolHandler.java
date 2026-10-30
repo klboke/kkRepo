@@ -7,15 +7,18 @@ import com.github.klboke.kkrepo.protocol.gitlfs.GitLfsProtocol;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.gitlfs.GitLfsAccess;
 import com.github.klboke.kkrepo.server.gitlfs.GitLfsHostedService;
+import com.github.klboke.kkrepo.server.gitlfs.GitLfsStagingService;
 import com.github.klboke.kkrepo.server.http.ConditionalResponses;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.routing.*;
 import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
+import com.github.klboke.kkrepo.server.staging.StagingService;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.*;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -27,6 +30,12 @@ public class GitLfsProtocolHandler implements RepositoryProtocolHandler {
   private final BlobStorageRegistry storages;
   private final ArtifactDownloadPolicy downloads;
   private final ObjectMapper json;
+  private GitLfsStagingService staging;
+
+  @Autowired(required = false)
+  public void setStagingService(GitLfsStagingService staging) {
+    this.staging = staging;
+  }
 
   public GitLfsProtocolHandler(GitLfsHostedService service, BlobStorageRegistry storages,
       ArtifactDownloadPolicy downloads, ObjectMapper json) {
@@ -58,7 +67,13 @@ public class GitLfsProtocolHandler implements RepositoryProtocolHandler {
         return json(200, service.verify(context.runtime(), oid, request));
       }
       if (context.method() == HttpMethod.PUT) {
-        service.put(context.runtime(), oid, request);
+        String stagingSession = request.getHeader(StagingService.HEADER);
+        if (staging != null && stagingSession != null && !stagingSession.isBlank()) {
+          staging.put(context.runtime(), oid, stagingSession.trim(), request,
+              GitLfsAccess.subject(request), com.github.klboke.kkrepo.server.security.ClientAddress.from(request));
+        } else {
+          service.put(context.runtime(), oid, request);
+        }
         return ResponseEntity.ok().header(HttpHeaders.CACHE_CONTROL, "no-store").build();
       }
       if (context.method() != HttpMethod.GET && context.method() != HttpMethod.HEAD) {

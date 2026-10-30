@@ -90,6 +90,7 @@
             <button class="side-item" data-view="content-selectors" type="button"><span class="side-item-icon lucide-icon icon-list-filter" aria-hidden="true"></span><span>Content Selectors</span></button>
             <button class="side-item" data-view="blobstores" type="button"><span class="side-item-icon lucide-icon icon-database" aria-hidden="true"></span><span>Blob Stores</span></button>
             <button class="side-item" data-view="docker-registry" type="button"><span class="side-item-icon lucide-icon icon-container" aria-hidden="true"></span><span>Docker Registry</span></button>
+            <a class="side-item" href="/admin/staging.html"><span class="side-item-icon lucide-icon icon-package" aria-hidden="true"></span><span>Staging</span></a>
           </div>
           <button class="side-group is-open" data-side-group="security" type="button" aria-expanded="true" aria-controls="side-group-security-items">
             <span class="side-group-caret lucide-icon icon-chevron-right" aria-hidden="true"></span>
@@ -587,8 +588,34 @@
                 </div>
               </div>
             </fieldset>
+            <fieldset class="form-grid" id="repository-arch-fields" hidden>
+              <legend>Arch Linux / Pacman signing</legend>
+              <div class="full-width">
+                <div class="muted-row" id="repository-arch-status">No signing key configured.</div>
+                <div class="form-actions">
+                  <button class="create-button secondary" id="repository-arch-refresh-status" type="button">Refresh status</button>
+                  <button class="create-button secondary" id="repository-arch-download-key" type="button">Download public key</button>
+                </div>
+                <label class="full-width">
+                  <span>OpenPGP private signing key</span>
+                  <textarea id="repository-arch-private-key" rows="5" autocomplete="off" placeholder="-----BEGIN PGP PRIVATE KEY BLOCK-----"></textarea>
+                </label>
+                <label>
+                  <span>Key passphrase</span>
+                  <input id="repository-arch-key-passphrase" type="password" autocomplete="new-password">
+                </label>
+                <div class="form-actions">
+                  <button class="create-button secondary" id="repository-arch-rotate-key" type="button">Import / rotate signing key</button>
+                  <button class="create-button secondary" id="repository-arch-generate-key" type="button">Generate / rotate signing key</button>
+                </div>
+              </div>
+            </fieldset>
             <fieldset class="form-grid" id="repository-group-fields" hidden>
               <legend>Group members</legend>
+              <label class="full-width">
+                <span>Write target (hosted member)</span>
+                <input id="repository-group-write-target" type="text" placeholder="Optional; defaults to the first hosted member" maxlength="200">
+              </label>
               <div class="full-width member-transfer" id="member-transfer">
                 <div class="member-pane" data-side="available">
                   <div class="member-pane-head">

@@ -147,3 +147,8 @@
   --format-color: #e55335;
   --format-logo: url("/browse/assets/formats/gitlfs.svg?v=20261009-mask-1");
 }
+
+.format-logo-arch {
+  --format-color: #1793d1;
+  --format-logo: url("/browse/assets/formats/arch.svg");
+}
