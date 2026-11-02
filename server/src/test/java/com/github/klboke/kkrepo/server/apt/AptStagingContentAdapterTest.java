@@ -17,6 +17,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.StagingItemRecord;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
+import com.github.klboke.kkrepo.server.support.InMemoryVersionWatermark;
 import java.io.ByteArrayInputStream;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -63,40 +64,54 @@ class AptStagingContentAdapterTest {
   @Test
   @SuppressWarnings("unchecked")
   void servesPackagesFromStagedDebs() {
-    Map<String, Object> fields = new LinkedHashMap<>();
-    fields.put("Package", "demo");
-    fields.put("Version", "1.0-1");
-    fields.put("Architecture", "amd64");
-    Map<String, Object> descriptor = new LinkedHashMap<>();
-    descriptor.put("filename", "demo_1.0-1_amd64.deb");
-    descriptor.put("packageName", "demo");
-    descriptor.put("version", "1.0-1");
-    descriptor.put("architecture", "amd64");
-    descriptor.put("sourcePackage", "demo");
-    descriptor.put("fields", fields);
-    descriptor.put("md5", "a".repeat(32));
-    descriptor.put("sha1", "b".repeat(40));
-    descriptor.put("sha256", "c".repeat(64));
-    descriptor.put("size", 10);
-    StagingItemRecord staged = new StagingItemRecord(
-        1L, 1L, 1L, RepositoryFormat.APT, path, new byte[32], "ADD", "STAGED",
-        1L, 1L, "application/vnd.debian.binary-package", 1L, "2".repeat(64),
-        "3".repeat(32), "1".repeat(40), path, null, null,
-        Map.of("aptPackage", descriptor), Instant.now(), Instant.now());
+    StagingItemRecord staged = stagedPackage();
     when(staging.listItems(7L)).thenReturn(List.of(staged));
-    when(aptHosted.stagedMetadata(any(), any(), any(), any(), anyBoolean()))
-        .thenReturn(MavenResponse.noBody(200));
+    byte[] packages = "Package: demo\nVersion: 1.0-1\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    when(aptHosted.stagedMetadataFiles(any(), any(), any(), any()))
+        .thenReturn(new AptService.StagedMetadataFiles(
+            "stable", "main",
+            Map.of("dists/stable/main/binary-amd64/Packages.gz", packages)));
 
-    assertTrue(adapter.generatedMetadata(
-        runtime, 7L, "dists/stable/main/binary-amd64/Packages.gz", false).isPresent());
+    MavenResponse response = adapter.generatedMetadata(
+        runtime, 7L, "dists/stable/main/binary-amd64/Packages.gz", false).orElseThrow();
 
+    assertEquals(packages.length, response.contentLength());
     org.mockito.ArgumentCaptor<List<AptRegistryDao.PackageRecord>> records =
         org.mockito.ArgumentCaptor.forClass(List.class);
-    verify(aptHosted).stagedMetadata(
-        eq(runtime), any(), records.capture(), eq(Set.of()), eq(false));
+    verify(aptHosted).stagedMetadataFiles(
+        eq(runtime), any(), records.capture(), eq(Set.of()));
     assertEquals("demo", records.getValue().getFirst().packageName());
     assertEquals("stable", records.getValue().getFirst().distribution());
     assertEquals("main", records.getValue().getFirst().component());
+  }
+
+  @Test
+  void servesMetadataFromOneSnapshotForAllFilesAndHeadRequests() {
+    StagingItemRecord staged = stagedPackage();
+    when(staging.listItems(7L)).thenReturn(List.of(staged));
+    byte[] packages = "Package: demo\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    byte[] release = "Origin: demo\n".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    when(aptHosted.stagedMetadataFiles(any(), any(), any(), any()))
+        .thenReturn(new AptService.StagedMetadataFiles(
+            "stable", "main",
+            Map.of(
+                "dists/stable/main/binary-amd64/Packages.gz", packages,
+                "dists/stable/Release", release)));
+    InMemoryVersionWatermark watermark = new InMemoryVersionWatermark();
+    com.github.klboke.kkrepo.server.cache.AssetMetadataCache assetMetadata = mock(
+        com.github.klboke.kkrepo.server.cache.AssetMetadataCache.class);
+    AptStagingContentAdapter cached = new AptStagingContentAdapter(
+        hosted, aptHosted, inspector, staging,
+        new com.github.klboke.kkrepo.server.staging.StagingMetadataSnapshotCache(
+            watermark, assetMetadata, true, 60, 100));
+
+    cached.generatedMetadata(runtime, 7L, "dists/stable/Release", false).orElseThrow();
+    cached.generatedMetadata(runtime, 7L, "dists/stable/Release", true).orElseThrow();
+
+    // One render per session revision: the second, HEAD request does not even list staged items.
+    verify(aptHosted, org.mockito.Mockito.times(1))
+        .stagedMetadataFiles(any(), any(), any(), any());
+    verify(staging, org.mockito.Mockito.times(1)).listItems(7L);
   }
 
   @Test
@@ -112,5 +127,28 @@ class AptStagingContentAdapterTest {
         1L, 1L, "application/vnd.debian.binary-package", 1L, "2".repeat(64),
         "3".repeat(32), "1".repeat(40), path, null, null, Map.of(),
         Instant.now(), Instant.now());
+  }
+
+  private StagingItemRecord stagedPackage() {
+    Map<String, Object> fields = new LinkedHashMap<>();
+    fields.put("Package", "demo");
+    fields.put("Version", "1.0-1");
+    fields.put("Architecture", "amd64");
+    Map<String, Object> descriptor = new LinkedHashMap<>();
+    descriptor.put("filename", "demo_1.0-1_amd64.deb");
+    descriptor.put("packageName", "demo");
+    descriptor.put("version", "1.0-1");
+    descriptor.put("architecture", "amd64");
+    descriptor.put("sourcePackage", "demo");
+    descriptor.put("fields", fields);
+    descriptor.put("md5", "a".repeat(32));
+    descriptor.put("sha1", "b".repeat(40));
+    descriptor.put("sha256", "c".repeat(64));
+    descriptor.put("size", 10);
+    return new StagingItemRecord(
+        1L, 1L, 1L, RepositoryFormat.APT, path, new byte[32], "ADD", "STAGED",
+        1L, 1L, "application/vnd.debian.binary-package", 1L, "2".repeat(64),
+        "3".repeat(32), "1".repeat(40), path, null, null,
+        Map.of("aptPackage", descriptor), Instant.now(), Instant.now());
   }
 }

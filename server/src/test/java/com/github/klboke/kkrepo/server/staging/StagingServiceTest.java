@@ -247,6 +247,31 @@ class StagingServiceTest {
   }
 
   @Test
+  void stagedItemChangesAdvanceTheSharedMetadataRevision() {
+    Fixture fixture = new Fixture();
+    com.github.klboke.kkrepo.server.support.InMemoryVersionWatermark watermark =
+        new com.github.klboke.kkrepo.server.support.InMemoryVersionWatermark();
+    fixture.service.setVersionWatermark(watermark);
+    when(fixture.staging.hasRepository(1L, 1L)).thenReturn(true);
+    when(fixture.staging.findItem(eq(1L), eq(1L), any())).thenReturn(Optional.empty());
+    when(fixture.staging.tryInsertItem(any()))
+        .thenReturn(java.util.OptionalLong.of(11L));
+    when(fixture.blobReferences.retain(any(), anyLong(), anyLong())).thenReturn(true);
+    when(fixture.rawHosted.storeStagedBlob(
+        eq(fixture.runtime), any(), any(), any(), any(), any(), any()))
+        .thenReturn(fixture.blob(11L, "a".repeat(64), 3L));
+
+    fixture.service.putRaw(
+        fixture.runtime, "1", "docs/a.bin",
+        new java.io.ByteArrayInputStream(new byte[] {1, 2, 3}),
+        "text/plain", ALICE, "127.0.0.1");
+
+    // Sibling replicas discard their rendered Yum/APT snapshots after the watermark poll TTL.
+    assertEquals(1L,
+        watermark.current(StagingMetadataSnapshotCache.versionName(1L)));
+  }
+
+  @Test
   void sessionListViewUsesGroupedQueriesInsteadOfPerSessionLookups() {
     Fixture fixture = new Fixture();
     java.util.List<StagingSessionRecord> sessions = new java.util.ArrayList<>();

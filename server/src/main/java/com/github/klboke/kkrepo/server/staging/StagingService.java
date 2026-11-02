@@ -103,6 +103,7 @@ public class StagingService {
   private final Map<RepositoryFormat, StagingContentAdapter> contentAdapters;
   private final int maxItems;
   private StagingCredentialService credentials;
+  private com.github.klboke.kkrepo.server.cache.VersionWatermark watermark;
 
   public StagingService(
       StagingDao staging,
@@ -140,6 +141,11 @@ public class StagingService {
   @org.springframework.beans.factory.annotation.Autowired(required = false)
   void setStagingCredentialService(StagingCredentialService credentials) {
     this.credentials = credentials;
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  void setVersionWatermark(com.github.klboke.kkrepo.server.cache.VersionWatermark watermark) {
+    this.watermark = watermark;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -542,6 +548,7 @@ public class StagingService {
         inverseItem(newSessionId, original, row, actor);
       }
     }
+    markMetadataChanged(newSessionId);
     StagingSessionRecord created = staging.findSessionById(newSessionId).orElseThrow();
     audit(actor, remoteAddr, "staging-compensate", original,
         "created", Map.of("compensationSessionId", newSessionId));
@@ -716,6 +723,7 @@ public class StagingService {
             HttpStatus.NOT_FOUND, "Staged item not found"));
     releaseItemBlob(item);
     staging.deleteItem(item.id());
+    markMetadataChanged(session.id());
     audit(actor, remoteAddr, "staging-delete", session,
         "unstaged", Map.of(
             "repositoryId", item.repositoryId(),
@@ -1480,6 +1488,22 @@ public class StagingService {
         "Staging session reached the configured limit of " + maxItems + " items");
   }
 
+  /**
+   * Advances the durable revision of the rendered staging metadata for this session.
+   *
+   * <p>Yum and APT serve generated metadata from a node-local snapshot; sibling replicas discard
+   * theirs after the watermark poll TTL. The bump joins the durable item mutation, so a rolled-back
+   * item write never invalidates a snapshot that is still correct.
+   */
+  private void markMetadataChanged(long sessionId) {
+    if (watermark == null) {
+      return;
+    }
+    String name = StagingMetadataSnapshotCache.versionName(sessionId);
+    com.github.klboke.kkrepo.server.cache.CacheInvalidation.watermarkBeforeCommit(
+        name, () -> watermark.bump(name));
+  }
+
   private StagingContentAdapter.StagedUpload stageRaw(
       RepositoryRuntime runtime,
       String rawPath,
@@ -1617,6 +1641,7 @@ public class StagingService {
       throw new ResponseStatusException(
           HttpStatus.CONFLICT, "Staged blob is no longer available; retry the upload");
     }
+    markMetadataChanged(session.id());
     audit(actor, remoteAddr, "staging-write", session,
         "staged", Map.of(
             "repository", runtime.name(),
@@ -1655,6 +1680,7 @@ public class StagingService {
     if (live.isEmpty() && existing.isPresent()) {
       releaseItemBlob(existing.get());
       staging.deleteItem(existing.get().id());
+      markMetadataChanged(session.id());
       audit(actor, remoteAddr, "staging-delete", session,
           "unstaged", Map.of("repository", runtime.name(), "path", path));
       return 1;
@@ -1695,6 +1721,7 @@ public class StagingService {
       releaseItemBlob(existing.get());
       staging.updateItem(withId(candidate, itemId));
     }
+    markMetadataChanged(session.id());
     audit(actor, remoteAddr, "staging-delete", session,
         "staged-delete", Map.of("repository", runtime.name(), "path", path));
     return 1;

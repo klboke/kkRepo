@@ -90,6 +90,41 @@ public class AptService {
       List<AptRegistryDao.PackageRecord> staged,
       java.util.Set<String> deletedPaths,
       boolean headOnly) {
+    StagedMetadataFiles rendered = stagedMetadataFiles(runtime, path, staged, deletedPaths);
+    String key = stagedMetadataKey(path, rendered.distribution(), rendered.component());
+    byte[] body = key == null ? null : rendered.files().get(key);
+    if (body == null) {
+      throw new MavenExceptions.MavenNotFoundException(path.normalized());
+    }
+    String contentType = AptMediaTypes.forPath(key);
+    return headOnly
+        ? MavenResponse.noBody(200, body.length, contentType, null, null)
+        : MavenResponse.ok(
+            new ByteArrayInputStream(body), body.length, contentType, null, null);
+  }
+
+  /** Repository-relative path of the metadata file a request addresses. */
+  static String stagedMetadataKey(AptPath path, String distribution, String component) {
+    return switch (path.kind()) {
+      case IN_RELEASE -> "dists/" + distribution + "/InRelease";
+      case RELEASE -> "dists/" + distribution + "/Release";
+      case RELEASE_SIGNATURE -> "dists/" + distribution + "/Release.gpg";
+      case PACKAGES -> "dists/" + distribution + "/" + component
+          + "/binary-" + path.architecture() + "/" + path.filename();
+      default -> null;
+    };
+  }
+
+  /**
+   * Renders every metadata file of one distribution/component scope: Packages (plus compression
+   * variants), Release, InRelease and Release.gpg. Staging serves them from one snapshot so a
+   * client run does not re-read the registry and re-sign the release once per file.
+   */
+  StagedMetadataFiles stagedMetadataFiles(
+      RepositoryRuntime runtime,
+      AptPath path,
+      List<AptRegistryDao.PackageRecord> staged,
+      java.util.Set<String> deletedPaths) {
     requireHosted(runtime);
     AptRepositorySettings.Settings settings = repositorySettings.get(runtime);
     String distribution = path.distribution() == null
@@ -115,23 +150,11 @@ public class AptService {
     Map<String, byte[]> files = metadataBuilder.render(
         settings, distribution, component, List.copyOf(architectures),
         signing.active(runtime), Instant.now(), byArchitecture);
-    String key = switch (path.kind()) {
-      case IN_RELEASE -> "dists/" + distribution + "/InRelease";
-      case RELEASE -> "dists/" + distribution + "/Release";
-      case RELEASE_SIGNATURE -> "dists/" + distribution + "/Release.gpg";
-      case PACKAGES -> "dists/" + distribution + "/" + component
-          + "/binary-" + path.architecture() + "/" + path.filename();
-      default -> null;
-    };
-    byte[] body = key == null ? null : files.get(key);
-    if (body == null) {
-      throw new MavenExceptions.MavenNotFoundException(path.normalized());
-    }
-    String contentType = AptMediaTypes.forPath(key);
-    return headOnly
-        ? MavenResponse.noBody(200, body.length, contentType, null, null)
-        : MavenResponse.ok(
-            new ByteArrayInputStream(body), body.length, contentType, null, null);
+    return new StagedMetadataFiles(distribution, component, files);
+  }
+
+  /** One rendered distribution/component scope; {@code files} is keyed by repository path. */
+  record StagedMetadataFiles(String distribution, String component, Map<String, byte[]> files) {
   }
 
   public MavenResponse put(
