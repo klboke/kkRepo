@@ -327,7 +327,7 @@ public class PypiProxyService {
         ? filename.substring(0, filename.length() - 4)
         : filename;
     String normalized = PypiPaths.normalizeName(projectName);
-    String key = publishKey(runtime, normalized, rootFilename);
+    String key = publishKey(indexIdentity(runtime, normalized), rootFilename);
     Instant published = publishTimes.getIfPresent(key);
     if (published == null) {
       List<PypiLink> links = indexLinksWithUploadTimes(runtime, normalized);
@@ -352,22 +352,27 @@ public class PypiProxyService {
       throw new PypiExceptions.BadUpstreamException("Failed reading cached index: " + e.getMessage(), e);
     }
     List<PypiLink> links = PypiIndex.parse(html);
+    String indexIdentity = indexIdentity(runtime, normalized);
     for (PypiLink link : links) {
       if (link.uploadTime() != null) {
-        publishTimes.put(publishKey(runtime, normalized, link.file()), link.uploadTime());
+        publishTimes.put(publishKey(indexIdentity, link.file()), link.uploadTime());
       }
     }
     return links;
   }
 
   /**
-   * Cache identity of a publish time. It includes the upstream the time was read from: a proxy's
-   * remote URL can be edited without any signal reaching this node-local cache, and a timestamp
-   * learned from the former upstream must never answer for the new one (a warm node would otherwise
-   * admit what a cold node rejects).
+   * The upstream index a project's upload times are read from: base URL <em>and</em> the separately
+   * configurable {@code pypi.indexPath}. Either can be edited without any signal reaching this
+   * node-local cache, and a timestamp learned from the former index must never answer for the new
+   * one (a warm node would otherwise admit what a cold node, which re-reads the index, rejects).
    */
-  private static String publishKey(RepositoryRuntime runtime, String normalized, String file) {
-    return runtime.id() + "|" + runtime.proxyRemoteUrl() + "|" + normalized + "|" + file;
+  private String indexIdentity(RepositoryRuntime runtime, String normalized) {
+    return runtime.id() + "|" + upstreamIndexUrl(runtime, normalized);
+  }
+
+  private static String publishKey(String indexIdentity, String file) {
+    return indexIdentity + "|" + file;
   }
 
   private static String sha256(byte[] bytes) {

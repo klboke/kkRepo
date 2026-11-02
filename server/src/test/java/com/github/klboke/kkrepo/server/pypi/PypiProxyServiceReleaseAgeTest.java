@@ -113,6 +113,30 @@ class PypiProxyServiceReleaseAgeTest {
   }
 
   @Test
+  void publishTimeFromTheFormerIndexPathDoesNotAnswerForANewIndexPath() throws Exception {
+    Fixture fixture = fixture();
+    fixture.cachedIndex(link("demo-1.2.0.whl", NOW.minus(Duration.ofDays(10))));
+    String path = "packages/demo/1.2.0/demo-1.2.0.whl";
+    CachedAssetMetadata cachedFile = snapshot(path, Instant.now(), Map.of());
+    when(fixture.cache.find(eq(10L), eq(path), any())).thenReturn(Optional.of(cachedFile));
+    when(fixture.reader.serveSnapshot(cachedFile, false, path)).thenReturn(PypiResponse.ok(
+        new ByteArrayInputStream("wheel".getBytes(StandardCharsets.UTF_8)), 5L,
+        "application/zip", "etag", NOW));
+
+    // Warm this node's publish-time cache against the original, long-published index.
+    assertEquals("wheel", body(fixture.service.getPackage(
+        runtime(FORTY_EIGHT_HOURS), path, false)));
+
+    // Only pypi.indexPath changes; the new index lists the same file as uploaded an hour ago. A cold
+    // node re-reads that index and refuses, so the warm node must not answer from its old timestamp.
+    fixture.indexPath("/other/simple");
+    fixture.cachedIndex(link("demo-1.2.0.whl", NOW.minus(Duration.ofHours(1))));
+    assertThrows(
+        ReleaseAgeDeniedException.class,
+        () -> fixture.service.getPackage(runtime(FORTY_EIGHT_HOURS), path, false));
+  }
+
+  @Test
   void packageMissingFromTheIndexIsNotFoundNotForbidden() {
     Fixture fixture = fixture();
     fixture.cachedIndex(link("demo-1.1.0.whl", NOW.minus(Duration.ofHours(49))));
@@ -276,14 +300,19 @@ class PypiProxyServiceReleaseAgeTest {
     final PypiAssetReader reader = mock(PypiAssetReader.class);
     final PypiAssetWriter writer = mock(PypiAssetWriter.class);
     final BlobStorageRegistry registry = mock(BlobStorageRegistry.class);
+    final PypiRepositorySettings settings = mock(PypiRepositorySettings.class);
     final PypiProxyService service;
 
     Fixture(Instant now) {
-      PypiRepositorySettings settings = mock(PypiRepositorySettings.class);
       when(settings.get(any())).thenReturn(new PypiRepositorySettings.Settings("/simple"));
       service = new PypiProxyService(
           mock(AssetDao.class), registry, writer, reader, mock(ProxyStateDao.class), fetcher,
           negativeCache, cache, null, settings, Clock.fixed(now, ZoneOffset.UTC));
+    }
+
+    /** Edits only the separately configurable pypi.indexPath of the repository. */
+    void indexPath(String indexPath) {
+      when(settings.get(any())).thenReturn(new PypiRepositorySettings.Settings(indexPath));
     }
 
     /** The project page as stored by a policy-enabled fetch: every file plus its upload time. */
