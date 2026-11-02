@@ -5577,6 +5577,7 @@ public abstract class PersistenceApiContract {
         "actions", List.of("pull")));
     String userHash = "a".repeat(64);
     String scannerHash = "b".repeat(64);
+    String stagingHash = "f".repeat(64);
 
     inTransaction(() -> {
       tokens.insert(
@@ -5587,6 +5588,16 @@ public abstract class PersistenceApiContract {
           null,
           TokenKind.USER,
           scopes,
+          expiresAt);
+      tokens.insert(
+          stagingHash,
+          "Local",
+          "alice",
+          "realm-1",
+          9L,
+          TokenKind.USER,
+          scopes,
+          "7",
           expiresAt);
       tokens.insert(
           scannerHash,
@@ -5613,6 +5624,11 @@ public abstract class PersistenceApiContract {
     assertEquals(TokenKind.SECURITY_SCANNER, scanner.tokenKind());
     assertEquals(scopes, user.scopes().get("scopes"));
     assertEquals(scopes, scanner.scopes().get("scopes"));
+    DockerAuthTokenDao.TokenRecord staging =
+        inTransaction(() -> tokens.findValid(stagingHash, Instant.now()).orElseThrow());
+    // The staging restriction is stored with the bearer so it survives the API-key revocation.
+    assertEquals("7", staging.stagingSession());
+    assertEquals(null, user.stagingSession());
     assertTrue(inTransaction(() -> tokens.scannerResourceAllowed(
         scannerHash, ScannerResourceKind.MANIFEST, "sha256:" + "c".repeat(64))));
     assertTrue(inTransaction(() -> tokens.scannerResourceAllowed(

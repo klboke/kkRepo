@@ -387,6 +387,33 @@ public class SecurityAuthenticationService {
         .map(user -> toSubject(user, realmId, null, apiKeyId));
   }
 
+  /**
+   * Returns the staging session a credential subject is bound to, if any.
+   *
+   * <p>Used by boundaries that persist a derived credential (Docker bearer tokens) and must freeze
+   * the restriction at issuance. The cached classification is authoritative; a subject written
+   * before that classification existed is resolved once against the shared API-key row.
+   */
+  public Optional<String> stagingSessionOf(AuthenticatedSubject subject) {
+    if (subject == null || subject.apiKeyId() == null) {
+      return Optional.empty();
+    }
+    if (subject.isStagingToken()) {
+      String session = subject.stagingSession();
+      return Optional.of(session == null || session.isBlank()
+          ? StagingCredentialService.INVALID_SESSION : session);
+    }
+    if (subject.hasStagingClassification()) {
+      return Optional.empty();
+    }
+    Optional<ApiKeyRecord> key = securityDao.findApiKey(subject.apiKeyId());
+    if (key.isEmpty() || !StagingScopes.isStagingToken(key.get())) {
+      return Optional.empty();
+    }
+    return Optional.of(StagingScopes.sessionId(key.get()).map(String::valueOf)
+        .orElse(StagingCredentialService.INVALID_SESSION));
+  }
+
   public Optional<AuthenticatedSubject> authenticateAnonymous() {
     if (securityCatalogCache != null) {
       Optional<SecurityCatalogCache.SecurityCatalog> catalog = securityCatalogCache.current();
