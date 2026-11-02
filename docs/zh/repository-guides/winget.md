@@ -74,6 +74,8 @@ curl --fail-with-body \
 ## 运维与排查
 
 - WinGet 清单是元数据而不是 Blob；Cleanup、制品扫描和 Browse 资产视图不适用于该格式。
+- Proxy 搜索只返回上游第一页。由于出站 fetcher 不支持任意请求 header，`ContinuationToken`
+  不会转发给上游；Group 搜索返回一个合并页。Hosted 搜索实现 continuation token。
 - `packageManifests` 返回 `404` 表示标识或版本不存在；发布返回 `409` 表示相同版本和通道已存在，
   应发布新版本或使用 `PUT` 替换。
 - `415` 表示请求的 `Content-Type` 不是 `application/json`。
