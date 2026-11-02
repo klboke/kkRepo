@@ -111,14 +111,21 @@ run_registered_cleanup() { echo cleanup; }
         self.assertIn("test:swift", result.stdout)
         self.assertNotIn("test:maven", result.stdout)
 
-    def disk_stubs(self, before, after):
-        self.env.update(DISK_BEFORE=str(before * 1024 * 1024), DISK_AFTER=str(after * 1024 * 1024))
+    def disk_stubs(self, before, after, fallback=None):
+        self.env.update(DISK_BEFORE=str(before * 1024 * 1024), DISK_AFTER=str(after * 1024 * 1024),
+                        DISK_FALLBACK=str((after if fallback is None else fallback) * 1024 * 1024))
         self.stub("df", '''available="$DISK_BEFORE"
 [[ ! -f "$TEST_ROOT/cleaned" ]] || available="$DISK_AFTER"
+[[ ! -f "$TEST_ROOT/dotnet-cleaned" ]] || available="$DISK_FALLBACK"
 printf 'Filesystem 1024-blocks Used Available Capacity Mounted\\n'
 printf '/dev/test 150000000 1 %s 1%% /\\n' "$available"
 ''')
-        self.stub("sudo", 'printf "%s\\n" "$*" >> "$TEST_ROOT/cleanup-commands"\ntouch "$TEST_ROOT/cleaned"\n')
+        self.stub("sudo", '''printf "%s\\n" "$*" >> "$TEST_ROOT/cleanup-commands"
+touch "$TEST_ROOT/cleaned"
+if [[ "$*" == "rm -rf /usr/share/dotnet" ]]; then
+  touch "$TEST_ROOT/dotnet-cleaned"
+fi
+''')
         self.stub("docker", 'echo "must not prune docker" >&2\nexit 99\n')
 
     def test_sufficient_disk_never_invokes_cleanup(self):
@@ -132,10 +139,29 @@ printf '/dev/test 150000000 1 %s 1%% /\\n' "$available"
         result = self.run_script("prepare-e2e-disk.sh")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("/usr/local/lib/android", (self.root / "cleanup-commands").read_text())
+        self.assertNotIn("/usr/share/dotnet", (self.root / "cleanup-commands").read_text())
+
+    def test_small_runner_reclaims_host_dotnet_when_first_cleanup_is_insufficient(self):
+        self.disk_stubs(14, 29, 38)
+        result = self.run_script("prepare-e2e-disk.sh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.root / "cleanup-commands").read_text().splitlines(), [
+            "rm -rf /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /usr/local/lib/android",
+            "apt-get clean",
+            "rm -rf /usr/share/dotnet",
+        ])
+
+    def test_fallback_respects_custom_disk_budget(self):
+        self.disk_stubs(14, 35, 45)
+        self.env["E2E_MIN_FREE_DISK_GIB"] = "40"
+        result = self.run_script("prepare-e2e-disk.sh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.root / "dotnet-cleaned").exists())
 
     def test_insufficient_disk_after_cleanup_fails_early(self):
-        self.disk_stubs(5, 23)
+        self.disk_stubs(5, 23, 29)
         self.assertNotEqual(self.run_script("prepare-e2e-disk.sh").returncode, 0)
+        self.assertTrue((self.root / "dotnet-cleaned").exists())
 
     def test_invalid_disk_budget_cannot_trigger_deletion(self):
         self.disk_stubs(80, 98)
