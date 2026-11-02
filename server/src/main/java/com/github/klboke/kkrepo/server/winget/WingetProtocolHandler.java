@@ -183,9 +183,7 @@ public class WingetProtocolHandler implements RepositoryProtocolHandler {
     for (WingetVersionSummary version : pkg.versions()) {
       ObjectNode node = versions.addObject();
       node.put("PackageVersion", version.packageVersion());
-      if (version.channel() != null && !version.channel().isBlank()) {
-        node.put("Channel", version.channel());
-      }
+      node.put("Channel", version.channel() == null ? "" : version.channel());
       addStrings(node, "PackageFamilyNames", version.packageFamilyNames());
       addStrings(node, "ProductCodes", version.productCodes());
       addStrings(node, "AppsAndFeaturesEntryVersions", version.appsAndFeaturesEntryVersions());

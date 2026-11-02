@@ -60,7 +60,7 @@ public class WingetProxyService {
             packageVersion, channel);
       }
       if (failure instanceof WingetException winget) throw winget;
-      throw WingetException.upstream("WinGet upstream is unavailable: " + failure.getMessage());
+      throw WingetException.upstream("WinGet upstream is unavailable");
     }
   }
 
@@ -92,7 +92,7 @@ public class WingetProxyService {
         return cached;
       }
       if (failure instanceof WingetException winget) throw winget;
-      throw WingetException.upstream("WinGet upstream search is unavailable: " + failure.getMessage());
+      throw WingetException.upstream("WinGet upstream search is unavailable");
     }
   }
 
