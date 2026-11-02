@@ -15,7 +15,7 @@ running Nexus. It is not a compatibility claim.
 | --- | --- | --- |
 | Nexus API surface | `sonatype-nexus-community/nexus-repo-api-client-go` README, generated from the Nexus Repository 3.97.1 swagger (declared API version 3.97.0-13) | `17645c8ed520893e2515e8bd76202b537b1acc24` (client v397.97.1) |
 | kkRepo baseline | `klboke/kkRepo` `upstream/main` | `6b72b3f12936404f26dc065965ba073d9938e1ba` |
-| kkRepo PR head (this branch) | `docs/nexus-rest-api-review` | `f1c801ba087296248309812737021875d24baaf7` |
+| kkRepo reviewed head (before this correction) | `docs/nexus-rest-api-review` | `f1c801ba087296248309812737021875d24baaf7` |
 | kkRepo staging branch, reference only | PR #455 `feat/multi-repo-staging` head | `ef7132e4874d10a731ce36e8fbbc35760ca447b4` |
 
 The endpoint list contains 459 `/v1` method/path pairs.
