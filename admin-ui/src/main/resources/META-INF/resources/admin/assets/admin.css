@@ -4690,3 +4690,125 @@ code {
 }
 
 .routing-rule-matchers { white-space: pre-wrap; overflow-wrap: anywhere; font-family: monospace; }
+
+/* Staging view: structured session, item and promotion views inside the admin shell. */
+.staging-state-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.staging-state-filter select {
+  height: 30px;
+  border: 1px solid #c5c5c5;
+  border-radius: 4px;
+  background: #ffffff;
+  padding: 0 6px;
+}
+
+.staging-state {
+  display: inline-block;
+  padding: 1px 8px;
+  border: 1px solid #c5c5c5;
+  border-radius: 10px;
+  background: #f2f2f2;
+  color: #3b3b3b;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.staging-state-open,
+.staging-state-promoted,
+.staging-state-add,
+.staging-state-staged {
+  border-color: #a9cfae;
+  background: #eef8f0;
+  color: #1f6b32;
+}
+
+.staging-state-preflight,
+.staging-state-preflighted,
+.staging-state-replace,
+.staging-state-validated,
+.staging-state-running {
+  border-color: #b9cbe8;
+  background: #eef4fd;
+  color: #1c4f92;
+}
+
+.staging-state-failed,
+.staging-state-conflict,
+.staging-state-delete,
+.staging-state-blocked {
+  border-color: #e3b5b5;
+  background: #fdf1f1;
+  color: #a4262c;
+}
+
+.staging-state-cancelled,
+.staging-state-promoting,
+.staging-state-frozen {
+  border-color: #d8d8d8;
+  background: #f7f7f7;
+  color: #5c5c5c;
+}
+
+.staging-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.staging-danger {
+  border-color: #e3b5b5;
+  color: #a4262c;
+}
+
+.staging-wrap {
+  max-width: 380px;
+  overflow-wrap: anywhere;
+}
+
+#staging-view tr.is-selected td {
+  background: #eef4fd;
+}
+
+.staging-detail {
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.staging-detail h3 {
+  margin: 0;
+  padding: 14px 10px 6px;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.staging-advanced {
+  margin: 12px 10px 24px;
+}
+
+.staging-advanced summary {
+  cursor: pointer;
+  color: #4a5a6a;
+}
+
+.staging-advanced pre {
+  max-height: 360px;
+  overflow: auto;
+  margin-top: 8px;
+  border: 1px solid var(--line);
+  background: #f7f8fa;
+  padding: 10px;
+  font-size: 12px;
+}
+
+.staging-error {
+  color: var(--danger, #a4262c);
+}
+
+.staging-observed {
+  font-size: 14px;
+}

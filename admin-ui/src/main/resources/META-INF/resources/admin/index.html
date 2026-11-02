@@ -90,7 +90,7 @@
             <button class="side-item" data-view="content-selectors" type="button"><span class="side-item-icon lucide-icon icon-list-filter" aria-hidden="true"></span><span>Content Selectors</span></button>
             <button class="side-item" data-view="blobstores" type="button"><span class="side-item-icon lucide-icon icon-database" aria-hidden="true"></span><span>Blob Stores</span></button>
             <button class="side-item" data-view="docker-registry" type="button"><span class="side-item-icon lucide-icon icon-container" aria-hidden="true"></span><span>Docker Registry</span></button>
-            <a class="side-item" href="/admin/staging.html"><span class="side-item-icon lucide-icon icon-package" aria-hidden="true"></span><span>Staging</span></a>
+            <button class="side-item" data-view="staging" type="button"><span class="side-item-icon lucide-icon icon-package" aria-hidden="true"></span><span>Staging</span></button>
           </div>
           <button class="side-group is-open" data-side-group="security" type="button" aria-expanded="true" aria-controls="side-group-security-items">
             <span class="side-group-caret lucide-icon icon-chevron-right" aria-hidden="true"></span>
@@ -1984,6 +1984,89 @@
           </form>
         </section>
 
+        <section class="view" id="staging-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-package" aria-hidden="true"></span></span>
+            <h1>Staging</h1>
+            <span class="heading-copy">Stage content across repositories, preflight the session, and promote one reviewed change set</span>
+          </div>
+          <div class="action-bar">
+            <button class="create-button" id="staging-create" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create session</button>
+            <button class="create-button secondary" id="staging-refresh" type="button"><span class="lucide-icon icon-refresh-cw" aria-hidden="true"></span> Refresh</button>
+            <label class="filter-box"><input id="staging-filter" type="search" placeholder="Filter sessions" aria-label="Filter staging sessions"></label>
+            <label class="staging-state-filter"><span>State</span><select id="staging-state"><option value="">All states</option><option value="OPEN">Open</option><option value="FROZEN">Frozen</option><option value="PREFLIGHTED">Preflighted</option><option value="PROMOTING">Promoting</option><option value="PROMOTED">Promoted</option><option value="FAILED">Failed</option><option value="CANCELLED">Cancelled</option></select></label>
+          </div>
+          <p class="form-note">Stage content with the <code>X-KkRepo-Staging</code> header, then preflight and promote. Nothing reaches the live repositories before promotion.</p>
+          <p id="staging-status" role="status" aria-live="polite"></p>
+          <div class="nx-table-frame fixed-table-frame">
+            <table class="nx-table">
+              <thead><tr><th>Name</th><th>State</th><th>Owner</th><th>Repositories</th><th>Items</th><th>Expires</th><th class="actions-column">Actions</th></tr></thead>
+              <tbody id="staging-session-table"></tbody>
+            </table>
+          </div>
+
+          <section class="staging-detail" id="staging-detail" hidden>
+            <div class="action-bar">
+              <h2 id="staging-detail-title">Session details</h2>
+              <button class="create-button secondary" id="staging-detail-close" type="button">Close details</button>
+            </div>
+            <div class="staging-summary" id="staging-summary"></div>
+            <h3>Repositories in this session</h3>
+            <div class="nx-table-frame">
+              <table class="nx-table">
+                <thead><tr><th>ID</th><th>Name</th><th>Format</th></tr></thead>
+                <tbody id="staging-repository-table"></tbody>
+              </table>
+            </div>
+            <h3>Staged items</h3>
+            <div class="nx-table-frame">
+              <table class="nx-table">
+                <thead><tr><th>Path</th><th>Repository</th><th>Action</th><th>Status</th><th>Size</th><th>Content type</th></tr></thead>
+                <tbody id="staging-item-table"></tbody>
+              </table>
+            </div>
+            <h3>Group membership changes</h3>
+            <div class="nx-table-frame">
+              <table class="nx-table">
+                <thead><tr><th>Group</th><th>Member</th><th>Action</th><th>Position</th><th>Status</th></tr></thead>
+                <tbody id="staging-group-table"></tbody>
+              </table>
+            </div>
+            <h3>Preflight and promotion</h3>
+            <div id="staging-report" class="staging-report"></div>
+            <details class="staging-advanced">
+              <summary>Advanced: raw API payload</summary>
+              <pre id="staging-raw"></pre>
+            </details>
+          </section>
+
+          <h3>Metrics</h3>
+          <div class="staging-metrics" id="staging-metrics"></div>
+
+          <div class="form-modal" id="staging-session-form-modal" data-form-id="staging-session-form" role="dialog" aria-modal="true" aria-labelledby="staging-session-form-title" hidden>
+            <div class="form-modal-backdrop" data-modal-dismiss="staging-session-form"></div>
+            <div class="form-modal-panel">
+              <button class="form-modal-close" data-modal-dismiss="staging-session-form" type="button" aria-label="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
+              <form class="blobstore-form modal-form" id="staging-session-form" hidden>
+                <div class="form-title" id="staging-session-form-title">Create staging session</div>
+                <div class="form-grid">
+                  <label><span>Name <span class="required-mark">*</span></span><input id="staging-session-name" required maxlength="200" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*"></label>
+                  <label><span>Retention (days)</span><input id="staging-session-retention" type="number" min="1" max="365" value="7"></label>
+                  <label class="full-width"><span>Repositories <span class="required-mark">*</span></span><input id="staging-session-repositories" required placeholder="raw-release, maven-release" aria-describedby="staging-session-repositories-help"></label>
+                  <p class="form-note full-width" id="staging-session-repositories-help">Comma-separated repository names. Content staged for these repositories stays isolated until promotion.</p>
+                  <label class="checkbox-field"><input id="staging-session-approval" type="checkbox"><span>Require approval before promotion</span></label>
+                </div>
+                <p class="form-note" id="staging-session-token" hidden></p>
+                <p class="form-note" role="alert" id="staging-session-error"></p>
+                <div class="form-actions">
+                  <button class="create-button" id="staging-session-save" type="submit">Create session</button>
+                  <button class="create-button secondary" type="button" data-modal-dismiss="staging-session-form">Cancel</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </section>
+
         <section class="view" id="nexus-migration-view">
           <div class="page-heading">
             <span class="heading-icon"><span class="lucide-icon icon-database-backup" aria-hidden="true"></span></span>
@@ -2048,6 +2131,7 @@
     <script src="/browse/assets/global-component-search.js?v=20260817-global-search-2"></script>
     <script src="./assets/routing-rules.js?v=20261026-routing-rules-2"></script>
     <script src="./assets/content-selectors.js?v=20261013-delete-confirmation-1"></script>
+    <script src="./assets/staging.js?v=20261102-admin-shell-1"></script>
     <script src="./assets/admin.js?v=20261029-scanning-readers-1"></script>
   </body>
 </html>

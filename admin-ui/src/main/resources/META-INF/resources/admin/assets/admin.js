@@ -169,6 +169,7 @@ const viewHashRoutes = {
   "routing-rules": "#admin/repository/routingrules",
   blobstores: "#admin/repository/blobstores",
   "docker-registry": "#admin/repository/docker",
+  staging: "#admin/repository/staging",
   "security-users": "#admin/security/users",
   "security-roles": "#admin/security/roles",
   "security-privileges": "#admin/security/privileges",
@@ -196,6 +197,7 @@ const hashViewRoutes = {
   "#admin/repository/blob-stores": "blobstores",
   "#admin/repository/docker": "docker-registry",
   "#admin/repository/docker-registry": "docker-registry",
+  "#admin/repository/staging": "staging",
   "#admin/security": "security-users",
   "#admin/security/users": "security-users",
   "#admin/security/roles": "security-roles",
@@ -8232,6 +8234,11 @@ function canAdmin(permission) {
 
 function canAccessAdminView(view) {
   if (canAdmin("nexus:*")) return view !== "loading";
+  // Staging sessions are owner-scoped, but the admin console only exposes the view to accounts
+  // holding a staging permission; the server still enforces ownership per session.
+  if (view === "staging") {
+    return ["admin", "read", "create"].some((action) => canAdmin(`nexus:staging:${action}`));
+  }
   if (view === "security-scanning") return canAdmin("nexus:security-scanning:read");
   return view === "content-selectors" && ["read", "create", "update", "delete"]
     .some((action) => canAdmin(`nexus:selectors:${action}`));
@@ -8272,6 +8279,7 @@ function switchView(view, options = {}) {
   if (view === "content-selectors") window.KkContentSelectors.load();
   if (view === "routing-rules") window.KkRoutingRules.load();
   if (view === "docker-registry") loadDockerOperations();
+  if (view === "staging") window.KkStaging.load();
   if (view === "security-users") loadSecurityUsers();
   if (view === "security-roles") loadSecurityRoles();
   if (view === "security-privileges") loadSecurityPrivileges();
