@@ -73,6 +73,10 @@ public class StagingService {
   public static final String HEADER = "X-KkRepo-Staging";
   public static final String TOKEN_HEADER = "X-KkRepo-Staging-Token";
   public static final String BLOB_OWNER_TYPE = "staging_item";
+  /** Temporary ownership held between storing an upload body and recording its staging item. */
+  public static final String UPLOAD_BLOB_OWNER_TYPE = "staging_upload";
+  private static final java.security.SecureRandom UPLOAD_OWNERS =
+      new java.security.SecureRandom();
   private static final Pattern SESSION_NAME =
       Pattern.compile("^[A-Za-z0-9][A-Za-z0-9_.-]{0,199}$");
   private static final Set<String> ACTIVE_FOR_READ = Set.of(
@@ -1256,7 +1260,6 @@ public class StagingService {
   public record StagedContent(StagingItemRecord item, AssetBlobRecord blob) {
   }
 
-  @Transactional
   public StagingWriteResult putRaw(
       RepositoryRuntime runtime,
       String sessionKey,
@@ -1265,7 +1268,7 @@ public class StagingService {
       String contentType,
       PermissionSubject actor,
       String remoteAddr) {
-    StagingSessionRecord session = lockSessionByKey(sessionKey);
+    StagingSessionRecord session = findSessionByKey(sessionKey, false);
     requireSessionWritable(session, runtime, actor);
     StagingContentAdapter adapter = adapterFor(runtime.format());
     if (adapter == null && runtime.format() != RepositoryFormat.RAW) {
@@ -1275,11 +1278,10 @@ public class StagingService {
     StagingContentAdapter.StagedUpload upload = adapter == null
         ? stageRaw(runtime, rawPath, body, contentType, actorUserId(actor), remoteAddr)
         : adapter.stage(runtime, rawPath, body, contentType, actorUserId(actor), remoteAddr);
-    return persistStagedUpload(session, runtime, upload, actor, remoteAddr);
+    return persistUploadedContent(sessionKey, runtime, upload, actor, remoteAddr);
   }
 
   /** Request-aware staging entry point used for multipart publication endpoints. */
-  @Transactional
   public StagingWriteResult putRequest(
       RepositoryRuntime runtime,
       String sessionKey,
@@ -1287,7 +1289,7 @@ public class StagingService {
       HttpServletRequest request,
       PermissionSubject actor,
       String remoteAddr) throws java.io.IOException {
-    StagingSessionRecord session = lockSessionByKey(sessionKey);
+    StagingSessionRecord session = findSessionByKey(sessionKey, false);
     requireSessionWritable(session, runtime, actor);
     StagingContentAdapter adapter = adapterFor(runtime.format());
     StagingContentAdapter.StagedUpload upload;
@@ -1306,7 +1308,53 @@ public class StagingService {
           .orElseGet(() -> stageAdapterStream(
               adapter, runtime, rawPath, request, actorUserId(actor), remoteAddr));
     }
-    return persistStagedUpload(session, runtime, upload, actor, remoteAddr);
+    return persistUploadedContent(sessionKey, runtime, upload, actor, remoteAddr);
+  }
+
+  /**
+   * Persists an upload whose body has already been received and stored outside any session
+   * transaction.
+   *
+   * <p>Holding the session row lock (and a pooled JDBC connection) while a slow client streams its
+   * body serializes every upload of the session and can exhaust the pool under object-store
+   * latency. The lock is therefore only taken for the row update. A temporary blob reference keeps
+   * the freshly stored blob alive between the two transactions and is handed over to the staging
+   * item inside the locked transaction: a failure leaves either a durable item reference or a blob
+   * that the normal garbage collector can reclaim.
+   */
+  private StagingWriteResult persistUploadedContent(
+      String sessionKey,
+      RepositoryRuntime runtime,
+      StagingContentAdapter.StagedUpload upload,
+      PermissionSubject actor,
+      String remoteAddr) {
+    long uploadOwner = nextUploadOwner();
+    if (upload.blob() == null || upload.blob().id() == null
+        || !blobReferences.retain(UPLOAD_BLOB_OWNER_TYPE, uploadOwner, upload.blob().id())) {
+      throw new ResponseStatusException(
+          HttpStatus.CONFLICT, "Staged blob is no longer available; retry the upload");
+    }
+    boolean handedOver = false;
+    try {
+      StagingWriteResult result = transaction.execute(status -> {
+        StagingSessionRecord locked = lockSessionByKey(sessionKey);
+        requireSessionWritable(locked, runtime, actor);
+        StagingWriteResult written = persistStagedUpload(locked, runtime, upload, actor, remoteAddr);
+        blobReferences.release(UPLOAD_BLOB_OWNER_TYPE, uploadOwner, upload.blob().id());
+        return written;
+      });
+      handedOver = true;
+      return result;
+    } finally {
+      if (!handedOver) {
+        blobReferences.release(UPLOAD_BLOB_OWNER_TYPE, uploadOwner, upload.blob().id());
+      }
+    }
+  }
+
+  private static long nextUploadOwner() {
+    // The owner id only has to be unique among concurrent uploads on all replicas.
+    return UPLOAD_OWNERS.nextLong() & Long.MAX_VALUE;
   }
 
   private StagingContentAdapter.StagedUpload stageAdapterStream(

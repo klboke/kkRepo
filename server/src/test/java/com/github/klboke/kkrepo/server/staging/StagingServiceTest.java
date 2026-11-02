@@ -285,6 +285,57 @@ class StagingServiceTest {
         5L, null, Instant.now(), Map.of());
   }
 
+  @Test
+  void anUploadBlockedOnItsBodyDoesNotHoldTheSessionLock() throws Exception {
+    Fixture fixture = new Fixture();
+    when(fixture.staging.hasRepository(1L, 1L)).thenReturn(true);
+    when(fixture.assets.findAssetByPath(eq(1L), any())).thenReturn(Optional.empty());
+    when(fixture.staging.findItem(eq(1L), eq(1L), any())).thenReturn(Optional.empty());
+    when(fixture.staging.tryInsertItem(any()))
+        .thenReturn(java.util.OptionalLong.of(11L), java.util.OptionalLong.of(12L));
+    when(fixture.blobReferences.retain(any(), anyLong(), anyLong())).thenReturn(true);
+    java.util.concurrent.CountDownLatch storeStarted = new java.util.concurrent.CountDownLatch(1);
+    java.util.concurrent.CountDownLatch releaseStore = new java.util.concurrent.CountDownLatch(1);
+    when(fixture.rawHosted.storeStagedBlob(
+        eq(fixture.runtime), any(), any(), any(), any(), any(), any()))
+        .thenAnswer(invocation -> {
+          String path = invocation.getArgument(1);
+          if ("slow.bin".equals(path)) {
+            storeStarted.countDown();
+            assertTrue(releaseStore.await(10, java.util.concurrent.TimeUnit.SECONDS));
+            return fixture.blob(11L, "a".repeat(64), 3L);
+          }
+          return fixture.blob(12L, "b".repeat(64), 3L);
+        });
+    java.util.concurrent.ExecutorService pool =
+        java.util.concurrent.Executors.newSingleThreadExecutor();
+    try {
+      java.util.concurrent.Future<StagingService.StagingWriteResult> slow = pool.submit(
+          () -> fixture.service.putRaw(
+              fixture.runtime, "1", "slow.bin",
+              new java.io.ByteArrayInputStream("abc".getBytes(StandardCharsets.UTF_8)),
+              "text/plain", ALICE, "127.0.0.1"));
+      assertTrue(storeStarted.await(10, java.util.concurrent.TimeUnit.SECONDS));
+
+      // The session row is not locked while the body is being received and stored, so another
+      // upload of the same session is not serialized behind a slow client or object-store I/O.
+      verify(fixture.staging, never()).lockSession(1L);
+      StagingService.StagingWriteResult other = fixture.service.putRaw(
+          fixture.runtime, "1", "fast.bin",
+          new java.io.ByteArrayInputStream("xyz".getBytes(StandardCharsets.UTF_8)),
+          "text/plain", ALICE, "127.0.0.1");
+      assertEquals(11L, other.itemId());
+
+      releaseStore.countDown();
+      assertEquals(12L, slow.get(10, java.util.concurrent.TimeUnit.SECONDS).itemId());
+      // The lock is only acquired for the short transaction that records the staged item.
+      verify(fixture.staging, org.mockito.Mockito.atLeastOnce()).lockSession(1L);
+    } finally {
+      releaseStore.countDown();
+      pool.shutdownNow();
+    }
+  }
+
   private static final class Fixture {
     final StagingDao staging = mock(StagingDao.class);
     final RepositoryDao repositories = mock(RepositoryDao.class);
