@@ -100,6 +100,43 @@ class StagingCredentialServiceTest {
   }
 
   @Test
+  void bindUsesTheClassificationCarriedByTheSubjectWithoutReadingTheKeyRow() {
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("PUT", "/repository/raw-hosted/a");
+
+    service.bind(request, classifiedSubject(Boolean.TRUE, "7"));
+
+    assertEquals("7", request.getAttribute(StagingCredentialService.SESSION_ATTRIBUTE));
+    verify(securityDao, never()).findApiKey(anyLong());
+  }
+
+  @Test
+  void bindFailsClosedWhenACachedSubjectReferencesADeletedKey() {
+    when(securityDao.findApiKey(9L)).thenReturn(Optional.empty());
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("PUT", "/repository/raw-hosted/a");
+
+    // A legacy cache entry (no classification) whose shared row was deleted by a cancel on
+    // another replica must never fall through to the live publication path.
+    service.bind(request, subject(9L));
+
+    assertEquals(
+        StagingCredentialService.INVALID_SESSION,
+        request.getAttribute(StagingCredentialService.SESSION_ATTRIBUTE));
+  }
+
+  @Test
+  void bindIgnoresAnOrdinaryClassifiedSubjectWithoutReadingTheKeyRow() {
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("PUT", "/repository/raw-hosted/a");
+
+    service.bind(request, classifiedSubject(Boolean.FALSE, null));
+
+    assertEquals(null, request.getAttribute(StagingCredentialService.SESSION_ATTRIBUTE));
+    verify(securityDao, never()).findApiKey(anyLong());
+  }
+
+  @Test
   void revokesTheStoredTokenOnCloseOrRollback() {
     StagingSessionRecord session = new StagingSessionRecord(
         7L, "release-1", "OPEN", 2, "LOCAL", "alice", Instant.EPOCH, Instant.EPOCH,
@@ -184,6 +221,13 @@ class StagingCredentialServiceTest {
     return new AuthenticatedSubject(
         "LOCAL", "alice", "api-key", apiKeyId,
         new PermissionSubject("LOCAL", "alice", java.util.Set.of(), null));
+  }
+
+  private static AuthenticatedSubject classifiedSubject(Boolean staging, String session) {
+    return new AuthenticatedSubject(
+        "LOCAL", "alice", "api-key", 9L,
+        new PermissionSubject("LOCAL", "alice", java.util.Set.of(), null),
+        staging, session);
   }
 
   private static ApiKeyRecord apiKey() {

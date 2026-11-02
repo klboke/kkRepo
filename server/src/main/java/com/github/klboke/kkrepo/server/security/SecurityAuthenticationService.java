@@ -13,6 +13,7 @@ import com.github.klboke.kkrepo.server.config.RepositoryUrlPrefix;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory.ProxiedResponse;
 import com.github.klboke.kkrepo.server.staging.StagingCredentialService;
+import com.github.klboke.kkrepo.server.staging.StagingScopes;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
 import java.io.Serializable;
@@ -497,7 +498,30 @@ public class SecurityAuthenticationService {
     Optional<AuthenticatedSubject> subject = fresh || apiKeyAuthCache == null
         ? resolveApiKey(ApiKeyTokenCandidate.fromPresentedToken(token))
         : apiKeyAuthCache.find(token, () -> resolveApiKey(ApiKeyTokenCandidate.fromPresentedToken(token)));
+    if (subject.isPresent() && subject.get().isStagingToken()) {
+      subject = revalidateStagingCredential(token, subject.get());
+    }
     return rejectStagingTokenOutsideRepositoryContent(request, subject);
+  }
+
+  /**
+   * A staging credential is a short-lived capability. Even when the auth cache still holds its
+   * subject, the shared {@code api_key} row is authoritative: a cancel, close or rotation on
+   * another replica deletes that row, and losing it must never widen the cached subject into an
+   * ordinary credential of the same owner.
+   */
+  private Optional<AuthenticatedSubject> revalidateStagingCredential(
+      String presentedToken, AuthenticatedSubject subject) {
+    Optional<ApiKeyRecord> key = subject.apiKeyId() == null
+        ? Optional.empty()
+        : securityDao.findApiKey(subject.apiKeyId());
+    if (key.isEmpty() || !StagingScopes.isStagingToken(key.get())) {
+      if (apiKeyAuthCache != null) {
+        apiKeyAuthCache.evict(presentedToken);
+      }
+      return Optional.empty();
+    }
+    return Optional.of(classifyApiKey(subject, key.get()));
   }
 
   /**
@@ -505,8 +529,11 @@ public class SecurityAuthenticationService {
    * the staging resolver, never by the management API, so a staging credential must not be able to
    * create an ordinary API key (or change users, roles, settings, ...) through a management path.
    *
-   * <p>The check runs on cache hits too: the auth cache stores the resolved subject, not the API key
-   * domain, so the domain is re-read from the shared table before a management call is authorized.
+   * <p>The credential class is carried by the cached subject ({@link
+   * AuthenticatedSubject#stagingToken()}), so a cache hit keeps the restriction even after the
+   * shared {@code api_key} row has been deleted by a cancel or rotation on another replica. Cached
+   * subjects written before that field existed are classified from the shared row; a subject that
+   * references a missing key fails closed instead of falling back to its owner's ordinary rights.
    */
   private Optional<AuthenticatedSubject> rejectStagingTokenOutsideRepositoryContent(
       HttpServletRequest request, Optional<AuthenticatedSubject> subject) {
@@ -516,11 +543,18 @@ public class SecurityAuthenticationService {
     if (isRepositoryContentPath(request)) {
       return subject;
     }
-    Optional<ApiKeyRecord> key = securityDao.findApiKey(subject.get().apiKeyId());
-    if (key.isPresent() && StagingCredentialService.DOMAIN.equals(key.get().domain())) {
+    if (subject.get().isStagingToken()) {
       return Optional.empty();
     }
-    return subject;
+    if (subject.get().hasStagingClassification()) {
+      return subject;
+    }
+    // Legacy cache entry: the domain was not stored with the subject, re-read it.
+    Optional<ApiKeyRecord> key = securityDao.findApiKey(subject.get().apiKeyId());
+    if (key.isEmpty() || StagingCredentialService.DOMAIN.equals(key.get().domain())) {
+      return Optional.empty();
+    }
+    return subject.map(AuthenticatedSubject::asOrdinaryApiKey);
   }
 
   private static boolean isRepositoryContentPath(HttpServletRequest request) {
@@ -584,7 +618,23 @@ public class SecurityAuthenticationService {
       return Optional.empty();
     }
     securityDao.markApiKeyUsed(apiKey.id(), LocalDateTime.now());
-    return Optional.of(toSubject(owner.get(), "api-key", null, apiKey.id()));
+    return Optional.of(classifyApiKey(
+        toSubject(owner.get(), "api-key", null, apiKey.id()), apiKey));
+  }
+
+  /**
+   * Records the credential class on the subject before it can be cached. A staging token keeps the
+   * session id it is scoped to; an unreadable scope is bound to {@value
+   * StagingCredentialService#INVALID_SESSION} so it fails closed instead of becoming live.
+   */
+  private static AuthenticatedSubject classifyApiKey(
+      AuthenticatedSubject subject, ApiKeyRecord apiKey) {
+    if (!StagingScopes.isStagingToken(apiKey)) {
+      return subject.asOrdinaryApiKey();
+    }
+    return subject.withStagingSession(
+        StagingScopes.sessionId(apiKey).map(String::valueOf)
+            .orElse(StagingCredentialService.INVALID_SESSION));
   }
 
   private Optional<ApiKeyRecord> findApiKey(List<ApiKeyTokenCandidate> candidates) {
@@ -1184,7 +1234,16 @@ public class SecurityAuthenticationService {
         user.userId(),
         roleIds,
         apiKeyId == null ? null : String.valueOf(apiKeyId));
-    return new AuthenticatedSubject(user.source(), user.userId(), realmId, apiKeyId, permissionSubject);
+    return new AuthenticatedSubject(
+        user.source(),
+        user.userId(),
+        realmId,
+        apiKeyId,
+        permissionSubject,
+        // A subject without an API key is provably not a staging credential; one that carries an
+        // id must be classified from the shared row (or from the restored bearer record).
+        apiKeyId == null ? Boolean.FALSE : null,
+        null);
   }
 
   private void addDefaultAuthenticatedRole(Set<String> roleIds) {

@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -686,6 +687,58 @@ class SecurityAuthenticationServiceTest {
     assertEquals(9L, repository.orElseThrow().apiKeyId());
     assertEquals(9L, docker.orElseThrow().apiKeyId());
     assertEquals(9L, dockerToken.orElseThrow().apiKeyId());
+    // The subject carries the session scope so a cache hit binds it even without the shared row.
+    assertTrue(repository.orElseThrow().isStagingToken());
+    assertEquals("7", repository.orElseThrow().stagingSession());
+  }
+
+  @Test
+  void deletedStagingKeyFromAStaleReplicaCacheCannotAuthenticateManagementEndpoints() {
+    FakeSecurityDao dao = stagingTokenDao();
+    dao.removeApiKey(9L); // cancel/rotation on replica A deleted the shared row
+    ApiKeyAuthCache cache = mock(ApiKeyAuthCache.class);
+    com.github.klboke.kkrepo.auth.PermissionSubject permissions =
+        new com.github.klboke.kkrepo.auth.PermissionSubject("Local", "alice", Set.of(), null);
+    // Replica B cached the resolved subject before the row was deleted; the entry predates the
+    // staging classification and therefore only carries the owner identity and the key id.
+    when(cache.find(anyString(), any())).thenReturn(
+        Optional.of(new AuthenticatedSubject("Local", "alice", "api-key", 9L, permissions)));
+    SecurityAuthenticationService service = new SecurityAuthenticationService(
+        dao, new ObjectMapper(), "X-Nexus-Plus-Token", null, null,
+        OutboundRequestPolicy.allowPrivateForTests(), transportFactory, cache, null, null);
+
+    Optional<AuthenticatedSubject> management = service.authenticate(request(
+        Map.of("Authorization", "Bearer StagingToken.secret"),
+        null,
+        "/internal/security/api-keys/current"));
+
+    // Losing the shared row must never widen a cached subject into the owner's ordinary rights.
+    assertFalse(management.isPresent());
+  }
+
+  @Test
+  void cachedStagingCredentialFailsClosedOnceItsSharedRowIsGone() {
+    FakeSecurityDao dao = stagingTokenDao();
+    dao.removeApiKey(9L);
+    ApiKeyAuthCache cache = mock(ApiKeyAuthCache.class);
+    com.github.klboke.kkrepo.auth.PermissionSubject permissions =
+        new com.github.klboke.kkrepo.auth.PermissionSubject("Local", "alice", Set.of(), null);
+    when(cache.find(anyString(), any())).thenReturn(Optional.of(new AuthenticatedSubject(
+        "Local", "alice", "api-key", 9L, permissions, Boolean.TRUE, "7")));
+    SecurityAuthenticationService service = new SecurityAuthenticationService(
+        dao, new ObjectMapper(), "X-Nexus-Plus-Token", null, null,
+        OutboundRequestPolicy.allowPrivateForTests(), transportFactory, cache, null, null);
+
+    Optional<AuthenticatedSubject> content = service.authenticate(request(
+        Map.of("Authorization", "Bearer StagingToken.secret"),
+        null,
+        "/repository/raw-hosted/docs/a.txt"));
+
+    // A staging subject hit in the cache is revalidated against the shared row before it acts,
+    // so revocation on another replica is effective on every replica, not only on the one that
+    // performed the eviction.
+    assertFalse(content.isPresent());
+    verify(cache).evict("StagingToken.secret");
   }
 
   @Test
@@ -1638,6 +1691,14 @@ class SecurityAuthenticationServiceTest {
     private void apiKey(ApiKeyRecord apiKey) {
       apiKeysByHash.put(apiKey.apiKeyHash(), apiKey);
       apiKeysByDomainAndHash.put(apiKey.domain() + "/" + apiKey.apiKeyHash(), apiKey);
+    }
+
+    /** Simulates a cancel/rotation on another replica deleting the shared row. */
+    private void removeApiKey(long id) {
+      apiKeysByHash.values().stream().filter(key -> key.id() == id).toList().forEach(key -> {
+        apiKeysByHash.remove(key.apiKeyHash());
+        apiKeysByDomainAndHash.remove(key.domain() + "/" + key.apiKeyHash());
+      });
     }
 
     private void anonymous(SecurityAnonymousConfigRecord config) {

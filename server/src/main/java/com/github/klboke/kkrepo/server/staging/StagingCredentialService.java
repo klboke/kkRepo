@@ -82,16 +82,28 @@ public class StagingCredentialService {
   /**
    * Binds the session carried by a staging credential to the request.
    *
-   * <p>This method never throws: a staging token whose scopes cannot be interpreted is bound to
-   * {@value #INVALID_SESSION}, which the staging service turns into a 404 instead of falling back to
-   * live content. Non-staging API keys are ignored.
+   * <p>The credential class travels with the subject, so a cache hit still binds the session after
+   * the shared API-key row disappeared (cancel/rotation on another replica). A subject written by
+   * an older replica has no classification and is resolved from the shared row; if that row is
+   * already gone the request is bound to {@value #INVALID_SESSION}, which the staging service turns
+   * into a 404 instead of falling back to live content. Non-staging credentials are ignored.
    */
   public void bind(HttpServletRequest request, AuthenticatedSubject subject) {
     if (request == null || subject == null || subject.apiKeyId() == null) {
       return;
     }
+    if (subject.hasStagingClassification()) {
+      if (subject.isStagingToken()) {
+        request.setAttribute(SESSION_ATTRIBUTE, sessionOrInvalid(subject.stagingSession()));
+      }
+      return;
+    }
     Optional<ApiKeyRecord> key = security.findApiKey(subject.apiKeyId());
-    if (key.isEmpty() || !StagingScopes.isStagingToken(key.get())) {
+    if (key.isEmpty()) {
+      request.setAttribute(SESSION_ATTRIBUTE, INVALID_SESSION);
+      return;
+    }
+    if (!StagingScopes.isStagingToken(key.get())) {
       return;
     }
     request.setAttribute(
@@ -99,6 +111,10 @@ public class StagingCredentialService {
         StagingScopes.sessionId(key.get())
             .map(String::valueOf)
             .orElse(INVALID_SESSION));
+  }
+
+  private static String sessionOrInvalid(String session) {
+    return session == null || session.isBlank() ? INVALID_SESSION : session;
   }
 
   /**
