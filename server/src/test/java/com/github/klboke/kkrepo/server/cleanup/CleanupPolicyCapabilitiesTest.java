@@ -12,13 +12,21 @@ class CleanupPolicyCapabilitiesTest {
     var capabilities = new CleanupPolicyCapabilities().all();
 
     assertEquals(RepositoryFormat.values().length, capabilities.size());
-    assertTrue(capabilities.stream().filter(item -> item.format() != RepositoryFormat.GITLFS).allMatch(item -> item.tryRunSupported()
-        && item.lastDownloadedSupported()
-        && item.executeSupported()));
+    assertTrue(capabilities.stream()
+        .filter(item -> item.format() != RepositoryFormat.GITLFS
+            && item.format() != RepositoryFormat.WINGET)
+        .allMatch(item -> item.tryRunSupported()
+            && item.lastDownloadedSupported()
+            && item.executeSupported()));
     var lfs = capabilities.stream().filter(item -> item.format() == RepositoryFormat.GITLFS).findFirst().orElseThrow();
     org.junit.jupiter.api.Assertions.assertFalse(lfs.tryRunSupported());
     org.junit.jupiter.api.Assertions.assertFalse(lfs.executeSupported());
     org.junit.jupiter.api.Assertions.assertFalse(lfs.lastDownloadedSupported());
+    var winget = capabilities.stream()
+        .filter(item -> item.format() == RepositoryFormat.WINGET).findFirst().orElseThrow();
+    org.junit.jupiter.api.Assertions.assertFalse(winget.tryRunSupported());
+    org.junit.jupiter.api.Assertions.assertFalse(winget.executeSupported());
+    org.junit.jupiter.api.Assertions.assertFalse(winget.lastDownloadedSupported());
   }
 
   @Test
