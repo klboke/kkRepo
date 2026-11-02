@@ -1,10 +1,12 @@
 package com.github.klboke.kkrepo.server.helm;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -15,6 +17,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.StagingItemRecord;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
+import com.github.klboke.kkrepo.server.staging.StagingBlobSource;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -57,6 +60,25 @@ class HelmStagingContentAdapterTest {
   }
 
   @Test
+  void promotionLinksTheStagedBlobWithoutReplayingItsBytes() {
+    StagingItemRecord item = itemWithChartMetadata();
+    AssetBlobRecord blob = blob();
+    StagingBlobSource unused =
+        () -> {
+          throw new AssertionError("promotion must not read the staged payload again");
+        };
+
+    assertEquals("published", adapter.promote(
+        runtime, item, blob, unused, "alice", "127.0.0.1").orElseThrow());
+
+    verify(helmHosted).linkExistingChart(
+        eq(runtime), eq(path), eq(blob), any(), eq("application/gzip"),
+        eq("alice"), eq("127.0.0.1"));
+    verify(helmHosted, never()).put(any(), any(), any(), any(), any(), any());
+    assertFalse(adapter.materializeBeforePromotion());
+  }
+
+  @Test
   void stageRetainsTheChartBytesAndMetadata() throws Exception {
     when(hosted.storeStagedBlobFile(
         eq(runtime), eq(path), any(), eq("application/gzip"), any(), any(), any()))
@@ -89,6 +111,15 @@ class HelmStagingContentAdapterTest {
         1L, 1L, 1L, RepositoryFormat.HELM, path, new byte[32], "ADD", "STAGED",
         1L, 1L, "application/gzip", 1L, "2".repeat(64), "3".repeat(32), "1".repeat(40),
         path, null, null, Map.of(), Instant.now(), Instant.now());
+  }
+
+  private StagingItemRecord itemWithChartMetadata() {
+    return new StagingItemRecord(
+        1L, 1L, 1L, RepositoryFormat.HELM, path, new byte[32], "ADD", "STAGED",
+        1L, 1L, "application/gzip", 1L, "2".repeat(64), "3".repeat(32), "1".repeat(40),
+        path, null, null,
+        Map.of("helmName", "demo", "helmVersion", "1.0.0", "helmApiVersion", "v2"),
+        Instant.now(), Instant.now());
   }
 
   private static AssetBlobRecord blob() {

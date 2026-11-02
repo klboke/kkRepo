@@ -31,6 +31,7 @@ import com.github.klboke.kkrepo.server.repositories.RepositoryService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.InputStream;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
@@ -59,10 +60,11 @@ import org.springframework.web.server.ResponseStatusException;
  * Multi-repository staging sessions.
  *
  * <p>Staged content never enters the live asset tables. Blobs are content-addressed and retained
- * through {@code blob_reference} with owner type {@value #BLOB_OWNER_TYPE}; promotion links those
- * blobs into the live repository in one database transaction. Session state, revisions, items and
- * promotion reports live only in the shared database, so every replica observes the same session
- * and promotion progress.
+ * through {@code blob_reference} with owner type {@value #BLOB_OWNER_TYPE}; promotion prepares the
+ * format-specific payloads without holding a lock, then links those blobs into the live repository
+ * in one short fenced database transaction. Session state, revisions, items and promotion reports
+ * live only in the shared database, so every replica observes the same session and promotion
+ * progress.
  *
  * <p>This first delivery supports {@link RepositoryFormat#RAW} hosted repositories. The session,
  * item, manifest and promotion model is format-neutral so later protocol modules can stage their
@@ -840,11 +842,21 @@ public class StagingService {
       long sessionId, PermissionSubject actor, String remoteAddr) {
     java.util.concurrent.atomic.AtomicReference<PromotionAttempt> attempt =
         new java.util.concurrent.atomic.AtomicReference<>();
+    Map<Long, Path> prepared = Map.of();
     try {
+      // Phase 1 - short fenced transaction: validate the frozen manifest and move the session to
+      // PROMOTING, so no new item can be staged while the payload is prepared.
+      PromotionAttempt started = transaction.execute(
+          status -> beginPromotion(sessionId, actor, remoteAddr));
+      attempt.set(started);
+      // Phase 2 - no session/repository lock: materialize the payloads and do the per-format work
+      // that needs object-store reads or payload parsing. Only the tiny hand-off below holds the
+      // target repository locks.
+      prepared = preparePromotionPayloads(started);
+      Map<Long, Path> payloads = prepared;
+      // Phase 3 - short fenced transaction: revalidate and link the catalogue rows atomically.
       return transaction.execute(status -> {
-        PromotionAttempt started = beginPromotion(sessionId, actor, remoteAddr);
-        attempt.set(started);
-        StagingReport report = applyPromotion(started, actor, remoteAddr);
+        StagingReport report = applyPromotion(started, payloads, actor, remoteAddr);
         if (credentials != null) {
           staging.findSessionById(sessionId).ifPresent(credentials::revoke);
         }
@@ -852,6 +864,41 @@ public class StagingService {
       });
     } catch (RuntimeException error) {
       recordPromotionFailure(attempt.get(), error, actor, remoteAddr);
+      throw error;
+    } finally {
+      prepared.values().forEach(com.github.klboke.kkrepo.server.blob.TempBlobFiles::deleteQuietly);
+    }
+  }
+
+  /**
+   * Materializes every staged payload that a format cannot publish directly from its blob record.
+   *
+   * <p>Reading the object store and parsing the payload here keeps those latencies out of the
+   * transaction that locks the session and every target repository. The prepared files are handed
+   * to the format adapters during the short apply phase and deleted afterwards.
+   */
+  private Map<Long, Path> preparePromotionPayloads(PromotionAttempt attempt) {
+    Map<Long, Path> prepared = new LinkedHashMap<>();
+    try {
+      for (StagingItemRecord item : attempt.items()) {
+        if (item.action().equals(StagingDao.ITEM_DELETE)) {
+          continue;
+        }
+        StagingContentAdapter adapter = adapterFor(item.format());
+        if (adapter != null && !adapter.materializeBeforePromotion()) {
+          continue;
+        }
+        AssetBlobRecord blob = assets.findBlobById(item.assetBlobId())
+            .orElseThrow(() -> new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "Staged blob is no longer available for " + item.logicalPath()));
+        requireBlobMatchesItem(blob, item);
+        prepared.put(item.id(), blobSource(blob).materialize(".staged"));
+      }
+      return prepared;
+    } catch (RuntimeException error) {
+      prepared.values().forEach(
+          com.github.klboke.kkrepo.server.blob.TempBlobFiles::deleteQuietly);
       throw error;
     }
   }
@@ -908,7 +955,10 @@ public class StagingService {
   }
 
   private StagingReport applyPromotion(
-      PromotionAttempt attempt, PermissionSubject actor, String remoteAddr) {
+      PromotionAttempt attempt,
+      Map<Long, Path> preparedPayloads,
+      PermissionSubject actor,
+      String remoteAddr) {
     StagingSessionRecord session = staging.lockSession(attempt.session().id())
         .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Staging session not found"));
     if (!session.state().equals(StagingDao.SESSION_PROMOTING)) {
@@ -967,7 +1017,7 @@ public class StagingService {
           item.repositoryId(), item.logicalPath());
       AssetBlobRecord previousBlob = previous.isEmpty() || previous.get().assetBlobId() == null
           ? null : assets.findBlobById(previous.get().assetBlobId()).orElse(null);
-      String result = applyItem(runtime, item, actor);
+      String result = applyItem(runtime, item, preparedPayloads.get(item.id()), actor);
       blobReferences.releaseOwner(BLOB_OWNER_TYPE, item.id());
       staging.updateItemStatus(item.id(), StagingDao.ITEM_PROMOTED);
       Map<String, Object> row = new LinkedHashMap<>();
@@ -1018,7 +1068,10 @@ public class StagingService {
   }
 
   private String applyItem(
-      RepositoryRuntime runtime, StagingItemRecord item, PermissionSubject actor) {
+      RepositoryRuntime runtime,
+      StagingItemRecord item,
+      Path preparedPayload,
+      PermissionSubject actor) {
     String createdBy = actorUserId(actor);
     StagingContentAdapter adapter = adapterFor(item.format());
     if (item.action().equals(StagingDao.ITEM_DELETE)) {
@@ -1033,7 +1086,7 @@ public class StagingService {
     requireBlobMatchesItem(blob, item);
     if (adapter != null) {
       Optional<String> promoted = adapter.promote(
-          runtime, item, blobSource(blob), actorUserId(actor), "staging");
+          runtime, item, blob, preparedSource(preparedPayload, blob), actorUserId(actor), "staging");
       if (promoted.isPresent()) {
         return promoted.get();
       }
@@ -2060,6 +2113,20 @@ public class StagingService {
         blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size());
     return () -> blobStorageRegistry.forBlobStoreId(blob.blobStoreId()).get(reference)
         .orElseThrow(() -> new MavenExceptions.MavenNotFoundException(blob.objectKey()));
+  }
+
+  /** Serves a payload materialized before the promotion transaction, or the staged blob. */
+  private StagingBlobSource preparedSource(Path prepared, AssetBlobRecord blob) {
+    if (prepared == null) {
+      return blobSource(blob);
+    }
+    return () -> {
+      try {
+        return java.nio.file.Files.newInputStream(prepared);
+      } catch (java.io.IOException error) {
+        throw new java.io.UncheckedIOException(error);
+      }
+    };
   }
 
   private void releaseItemBlob(StagingItemRecord item) {    if (item.id() != null && item.assetBlobId() != null) {

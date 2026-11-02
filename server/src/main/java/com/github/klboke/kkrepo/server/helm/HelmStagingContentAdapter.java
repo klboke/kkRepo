@@ -189,6 +189,54 @@ final class HelmStagingContentAdapter implements StagingContentAdapter {
   }
 
   @Override
+  public boolean materializeBeforePromotion() {
+    // The staged blob is already content-addressed in the same blob store: the promotion can link
+    // it directly instead of re-reading and re-hashing the chart under the repository locks.
+    return false;
+  }
+
+  @Override
+  public Optional<String> promote(
+      RepositoryRuntime runtime,
+      StagingItemRecord item,
+      AssetBlobRecord blob,
+      StagingBlobSource source,
+      String actor,
+      String ip) {
+    if (blob != null) {
+      HelmChartMetadata metadata = metadata(item);
+      if (metadata == null) {
+        // Without the parsed chart metadata the writer cannot build the component projection, so
+        // fall back to the streaming replay path.
+        return promote(runtime, item, source, actor, ip);
+      }
+      helmHosted.linkExistingChart(
+          runtime, item.logicalPath(), blob, metadata, item.contentType(), actor, ip);
+      return Optional.of("published");
+    }
+    return promote(runtime, item, source, actor, ip);
+  }
+
+  private HelmChartMetadata metadata(StagingItemRecord item) {
+    Map<String, Object> attributes = item.attributes() == null ? Map.of() : item.attributes();
+    Object name = attributes.get("helmName");
+    Object version = attributes.get("helmVersion");
+    if (name == null || version == null) {
+      return null;
+    }
+    return new HelmChartMetadata(
+        string(attributes.get("helmApiVersion")),
+        String.valueOf(name),
+        String.valueOf(version),
+        string(attributes.get("helmDescription")),
+        string(attributes.get("helmAppVersion")),
+        string(attributes.get("helmIcon")),
+        strings(attributes.get("helmSources")),
+        maintainers(attributes.get("helmMaintainers")),
+        Map.of());
+  }
+
+  @Override
   public Optional<String> promote(
       RepositoryRuntime runtime,
       StagingItemRecord item,

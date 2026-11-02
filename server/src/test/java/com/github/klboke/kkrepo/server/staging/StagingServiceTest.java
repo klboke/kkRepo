@@ -91,6 +91,7 @@ class StagingServiceTest {
     when(fixture.repositories.findById(1L)).thenReturn(Optional.of(fixture.repository));
     when(fixture.runtimes.resolve(fixture.repository)).thenReturn(Optional.of(fixture.runtime));
     when(fixture.assets.lockLiveBlobById(11L)).thenReturn(Optional.of(fixture.blob(11L, sha, 5L)));
+    when(fixture.assets.findBlobById(11L)).thenReturn(Optional.of(fixture.blob(11L, sha, 5L)));
     when(fixture.assets.findAssetByPath(1L, "docs/a.bin")).thenReturn(Optional.empty());
     when(fixture.rawHosted.linkInternalBlobWithComponentAtBrowsePathIfAbsent(
         eq(fixture.runtime), eq("docs/a.bin"), any(), any(), any(), any(), any(), any()))
@@ -105,6 +106,38 @@ class StagingServiceTest {
         eq(fixture.runtime), eq("docs/a.bin"), any(), any(), any(), any(), any(), any());
     verify(fixture.blobReferences).releaseOwner(StagingService.BLOB_OWNER_TYPE, item.id());
     verify(fixture.staging).updateItemStatus(item.id(), StagingDao.ITEM_PROMOTED);
+  }
+
+  @Test
+  void promotionMaterializesPayloadsBeforeLockingTargetRepositories() {
+    Fixture fixture = new Fixture();
+    String sha = "a".repeat(64);
+    StagingItemRecord item = item(StagingDao.ITEM_ADD, sha, 5L, 11L);
+    fixture.session.set(session(StagingDao.SESSION_PREFLIGHTED, 2));
+    StagingPromotionRecord promotion = new StagingPromotionRecord(
+        5L, 1L, StagingDao.PROMOTION_PREFLIGHT, null, manifest(List.of(item)),
+        Map.of("promotable", true), null, null, Instant.now());
+    when(fixture.staging.listItems(1L)).thenReturn(List.of(item));
+    when(fixture.staging.hasRepository(1L, 1L)).thenReturn(true);
+    when(fixture.staging.lockPromotion(5L)).thenReturn(Optional.of(promotion));
+    when(fixture.staging.findLatestPromotion(1L)).thenReturn(Optional.of(promotion));
+    when(fixture.staging.lockRepositories(any())).thenReturn(List.of(1L));
+    when(fixture.repositories.findById(1L)).thenReturn(Optional.of(fixture.repository));
+    when(fixture.runtimes.resolve(fixture.repository)).thenReturn(Optional.of(fixture.runtime));
+    when(fixture.assets.lockLiveBlobById(11L)).thenReturn(Optional.of(fixture.blob(11L, sha, 5L)));
+    when(fixture.assets.findBlobById(11L)).thenReturn(Optional.of(fixture.blob(11L, sha, 5L)));
+    when(fixture.assets.findAssetByPath(1L, "docs/a.bin")).thenReturn(Optional.empty());
+    when(fixture.rawHosted.linkInternalBlobWithComponentAtBrowsePathIfAbsent(
+        eq(fixture.runtime), eq("docs/a.bin"), any(), any(), any(), any(), any(), any()))
+        .thenReturn(true);
+
+    fixture.service.promote(1L, ALICE, "127.0.0.1");
+
+    // The object-store read happens while the session and repository rows are still unlocked; the
+    // locked transaction only links the catalogue rows from the prepared payload.
+    org.mockito.InOrder order = org.mockito.Mockito.inOrder(fixture.blobStorage, fixture.staging);
+    order.verify(fixture.blobStorage).get(any());
+    order.verify(fixture.staging).lockRepositories(any());
   }
 
   @Test
@@ -124,6 +157,7 @@ class StagingServiceTest {
     when(fixture.repositories.findById(1L)).thenReturn(Optional.of(fixture.repository));
     when(fixture.runtimes.resolve(fixture.repository)).thenReturn(Optional.of(fixture.runtime));
     when(fixture.assets.lockLiveBlobById(11L)).thenReturn(Optional.of(fixture.blob(11L, sha, 5L)));
+    when(fixture.assets.findBlobById(11L)).thenReturn(Optional.of(fixture.blob(11L, sha, 5L)));
     when(fixture.assets.findAssetByPath(1L, "docs/a.bin"))
         .thenReturn(Optional.empty(), Optional.of(liveAsset(20L)));
     when(fixture.assets.findBlobById(20L))
@@ -344,6 +378,8 @@ class StagingServiceTest {
     final RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
     final RawHostedService rawHosted = mock(RawHostedService.class);
     final BlobStorageRegistry blobStorageRegistry = mock(BlobStorageRegistry.class);
+    final com.github.klboke.kkrepo.core.BlobStorage blobStorage =
+        mock(com.github.klboke.kkrepo.core.BlobStorage.class);
     final SecurityAuditDao audit = mock(SecurityAuditDao.class);
     final SecurityManagementService security = mock(SecurityManagementService.class);
     final RepositoryService repositoryService = mock(RepositoryService.class);
@@ -385,6 +421,9 @@ class StagingServiceTest {
       when(runtime.writePolicy()).thenReturn("ALLOW");
       when(security.decide(any(), any(String.class)))
           .thenReturn(com.github.klboke.kkrepo.auth.AccessDecision.deny("not admin"));
+      when(blobStorageRegistry.forBlobStoreId(1L)).thenReturn(blobStorage);
+      when(blobStorage.get(any())).thenAnswer(invocation ->
+          Optional.of(new java.io.ByteArrayInputStream(new byte[] {1, 2, 3})));
       service = new StagingService(
           staging, repositories, repositoryService, assets, blobReferences, runtimes, rawHosted,
           blobStorageRegistry, audit, security, List.of(), transactionManager(), 100);
