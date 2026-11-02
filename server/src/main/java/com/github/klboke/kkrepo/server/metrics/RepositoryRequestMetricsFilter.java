@@ -318,8 +318,30 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
       case GITLFS -> path.equals("info/lfs/objects/batch") ? "gitlfs_batch"
           : path.endsWith("/verify") ? "gitlfs_verify"
           : "PUT".equals(normalizedMethod) ? "gitlfs_upload" : "gitlfs_download";
+      case WINGET -> wingetOperation(path, normalizedMethod);
       case RAW -> rawOperation(normalizedMethod);
     };
+  }
+
+  private static String wingetOperation(String path, String method) {
+    String normalized = path.startsWith("api/") ? path.substring(4) : path;
+    if ("information".equals(normalized)) {
+      return "winget_information";
+    }
+    if ("manifestSearch".equals(normalized)) {
+      return "winget_manifest_search";
+    }
+    if ("packageManifests".equals(normalized)) {
+      return "POST".equals(method) ? "winget_manifest_publish" : "winget_manifest_request";
+    }
+    if (normalized.startsWith("packageManifests/")) {
+      return switch (method) {
+        case "PUT" -> "winget_manifest_replace";
+        case "DELETE" -> "winget_manifest_delete";
+        default -> "winget_manifest_download";
+      };
+    }
+    return "winget_request";
   }
 
   private static String rOperation(String path, String method) {

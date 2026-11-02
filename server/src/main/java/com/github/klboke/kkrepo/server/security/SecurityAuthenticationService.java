@@ -319,7 +319,8 @@ public class SecurityAuthenticationService {
     return (authorization != null && !authorization.isBlank())
         || headerValue(request, tokenHeader) != null
         || headerValue(request, "X-Nexus-Plus-Api-Key") != null
-        || headerValue(request, "X-NuGet-ApiKey") != null;
+        || headerValue(request, "X-NuGet-ApiKey") != null
+        || headerValue(request, "Windows-Package-Manager") != null;
   }
 
   /** Authenticates the single decoded credential segment used by Nexus Terraform repository URLs. */
@@ -1293,6 +1294,10 @@ public class SecurityAuthenticationService {
     if (fromNuGetApiKey != null) {
       return domainScopedApiKey("NuGetApiKey", fromNuGetApiKey);
     }
+    String fromWinget = headerValue(request, "Windows-Package-Manager");
+    if (fromWinget != null) {
+      return stripBearer(fromWinget);
+    }
     String bearer = bearerToken(request);
     if (bearer != null) {
       return bearer;
@@ -1342,6 +1347,14 @@ public class SecurityAuthenticationService {
       return token.isBlank() ? null : token;
     }
     return null;
+  }
+
+  private static String stripBearer(String value) {
+    String trimmed = value == null ? "" : value.trim();
+    if (trimmed.regionMatches(true, 0, "Bearer ", 0, 7)) {
+      return trimmed.substring(7).trim();
+    }
+    return trimmed;
   }
 
   private static String ansibleGalaxyToken(HttpServletRequest request) {

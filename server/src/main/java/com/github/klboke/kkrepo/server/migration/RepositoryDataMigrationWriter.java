@@ -1199,6 +1199,7 @@ class RepositoryDataMigrationWriter {
           ? "r-source-package" : "r-metadata";
       case GITLFS -> "gitlfs";
       case OHPM -> throw new IllegalArgumentException("OHPM requires its independent import workflow");
+      case WINGET -> "winget-manifest";
       case HUGGINGFACE -> "huggingface-model-file";
       case RAW -> "asset";
     };
