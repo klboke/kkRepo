@@ -81,6 +81,9 @@ on the hosted repository.
 
 - WinGet stores manifests as metadata, not blobs. Cleanup policies, artifact scanning, and Browse
   asset views are intentionally not applicable to this format.
+- Proxy search returns the upstream first page. `ContinuationToken` values are not forwarded to the
+  upstream because the outbound fetcher does not expose arbitrary request headers; group search
+  returns one merged page. Hosted search implements continuation tokens.
 - A `404` from `packageManifests` means the identifier/version is not present. A `409` on publish
   means the exact version and channel already exists; publish a new version or use `PUT` to replace.
 - A `415` means the request `Content-Type` is not `application/json`.
