@@ -167,7 +167,7 @@ namespace has no create and no update:
 - `POST /v1/repositories/{format}/{type}` to create, `GET|PUT /v1/repositories/{format}/{type}/{repositoryName}`
   to read and update; the only update path is the format/type-specific one, never a generic `PUT`
 - `GET /v1/repositories/{repositoryName}/browse`, `POST|DELETE .../health-check`,
-  `POST .../invalidate-cache`, `POST .../rebuild-index`
+  `POST .../invalidate-cache`, `POST .../rebuild-index`, `GET|PUT .../evaluation-settings`
 
 At the baseline kkRepo exposes none of the 218 repository paths and manages the rest through
 `/internal/repositories` with a kkRepo-specific payload, so Nexus Infrastructure-as-Code scripts
@@ -184,8 +184,8 @@ Recommendation:
    pypi, go, helm, cargo, pub, composer, terraform, swift, docker, nuget, rubygems, yum, apt, alpine,
    r, conda, conan, ansiblegalaxy, gitlfs, raw, arch, openvsx). Do not introduce a generic
    `PUT /v1/repositories/{name}`: Nexus clients never call it.
-4. Implement browse/health-check/invalidate-cache/rebuild-index semantics or return a documented
-   404/405.
+4. Implement browse/health-check/invalidate-cache/rebuild-index/evaluation-settings semantics or
+   return a documented 404/405.
 
 ## Security
 
