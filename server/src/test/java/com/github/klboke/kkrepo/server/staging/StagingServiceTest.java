@@ -175,6 +175,121 @@ class StagingServiceTest {
   }
 
   @Test
+  void sessionViewCountsItemsAndLoadsRepositoriesInBatches() {
+    Fixture fixture = new Fixture();
+    when(fixture.staging.listRepositories(1L)).thenReturn(List.of(
+        new com.github.klboke.kkrepo.persistence.jdbc.api.model.StagingRepositoryRecord(
+            1L, 1L, RepositoryFormat.RAW, Instant.now()),
+        new com.github.klboke.kkrepo.persistence.jdbc.api.model.StagingRepositoryRecord(
+            1L, 2L, RepositoryFormat.RAW, Instant.now()),
+        new com.github.klboke.kkrepo.persistence.jdbc.api.model.StagingRepositoryRecord(
+            1L, 3L, RepositoryFormat.RAW, Instant.now())));
+    when(fixture.repositories.findByIds(any())).thenReturn(List.of(
+        repository(1L, "repo-a"), repository(2L, "repo-b"), repository(3L, "repo-c")));
+    when(fixture.staging.countItems(1L)).thenReturn(42L);
+
+    StagingService.StagingSessionView view = fixture.service.get(1L, ALICE);
+
+    assertEquals(42L, view.itemCount());
+    assertEquals(List.of("repo-a", "repo-b", "repo-c"),
+        view.repositories().stream().map(StagingService.StagingRepositoryView::name).toList());
+    // One batch lookup and one aggregate count instead of N repository reads and a full item list.
+    verify(fixture.repositories, never()).findById(anyLong());
+    verify(fixture.staging, never()).listItems(anyLong());
+  }
+
+  @Test
+  void uploadIsRejectedAtAdmissionWhenTheSessionItemBudgetIsExhausted() {
+    Fixture fixture = new Fixture();
+    when(fixture.staging.hasRepository(1L, 1L)).thenReturn(true);
+    when(fixture.staging.countItems(1L)).thenReturn(100L);
+    when(fixture.staging.findItem(eq(1L), eq(1L), any())).thenReturn(Optional.empty());
+
+    org.springframework.web.server.ResponseStatusException error =
+        org.junit.jupiter.api.Assertions.assertThrows(
+            org.springframework.web.server.ResponseStatusException.class,
+            () -> fixture.service.putRaw(
+                fixture.runtime, "1", "extra.bin",
+                new java.io.ByteArrayInputStream(new byte[] {1, 2, 3}),
+                "text/plain", ALICE, "127.0.0.1"));
+
+    assertEquals(org.springframework.http.HttpStatus.CONFLICT, error.getStatusCode());
+    assertTrue(String.valueOf(error.getReason()).contains("limit of 100 items"));
+    // The budget is enforced before the body is streamed and stored, not after materializing it.
+    verify(fixture.rawHosted, never()).storeStagedBlob(
+        any(), any(), any(), any(), any(), any(), any());
+    verify(fixture.staging, never()).tryInsertItem(any());
+  }
+
+  @Test
+  void uploadReplacingAnExistingItemIsAllowedWhenTheSessionItemBudgetIsExhausted() {
+    Fixture fixture = new Fixture();
+    StagingItemRecord existing = item(StagingDao.ITEM_ADD, "a".repeat(64), 3L, 9L);
+    when(fixture.staging.hasRepository(1L, 1L)).thenReturn(true);
+    when(fixture.staging.countItems(1L)).thenReturn(100L);
+    when(fixture.staging.findItem(eq(1L), eq(1L), any())).thenReturn(Optional.of(existing));
+    when(fixture.assets.findAssetByPath(eq(1L), any())).thenReturn(Optional.empty());
+    when(fixture.rawHosted.storeStagedBlob(
+        eq(fixture.runtime), any(), any(), any(), any(), any(), any()))
+        .thenReturn(fixture.blob(11L, "b".repeat(64), 3L));
+    when(fixture.staging.updateItem(any())).thenReturn(1);
+    when(fixture.blobReferences.retain(any(), anyLong(), anyLong())).thenReturn(true);
+
+    StagingService.StagingWriteResult result = fixture.service.putRaw(
+        fixture.runtime, "1", "docs/a.bin",
+        new java.io.ByteArrayInputStream(new byte[] {1, 2, 3}),
+        "text/plain", ALICE, "127.0.0.1");
+
+    // A replacement does not grow the session, so a full session must still accept it.
+    assertEquals(existing.id(), result.itemId());
+    verify(fixture.rawHosted).storeStagedBlob(
+        eq(fixture.runtime), any(), any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void sessionListViewUsesGroupedQueriesInsteadOfPerSessionLookups() {
+    Fixture fixture = new Fixture();
+    java.util.List<StagingSessionRecord> sessions = new java.util.ArrayList<>();
+    java.util.List<com.github.klboke.kkrepo.persistence.jdbc.api.model.StagingRepositoryRecord>
+        memberships = new java.util.ArrayList<>();
+    for (long id = 1; id <= 100; id++) {
+      sessions.add(new StagingSessionRecord(
+          id, "release-" + id, StagingDao.SESSION_OPEN, 0, "Local", "alice",
+          Instant.now(), Instant.now(), null, null, Instant.now().plus(1, ChronoUnit.DAYS),
+          null, Map.of()));
+      for (long repo = 1; repo <= 3; repo++) {
+        memberships.add(new com.github.klboke.kkrepo.persistence.jdbc.api.model
+            .StagingRepositoryRecord(id, repo, RepositoryFormat.RAW, Instant.now()));
+      }
+    }
+    when(fixture.staging.listSessions(any(), org.mockito.ArgumentMatchers.anyInt()))
+        .thenReturn(sessions);
+    when(fixture.staging.listRepositoriesBySessionIds(any())).thenReturn(memberships);
+    when(fixture.repositories.findByIds(any())).thenReturn(List.of(
+        repository(1L, "repo-a"), repository(2L, "repo-b"), repository(3L, "repo-c")));
+    java.util.Map<Long, Long> counts = new java.util.HashMap<>();
+    sessions.forEach(session -> counts.put(session.id(), session.id()));
+    when(fixture.staging.countItemsBySessionIds(any())).thenReturn(counts);
+
+    java.util.List<StagingService.StagingSessionView> views =
+        fixture.service.list(null, 100, ALICE);
+
+    assertEquals(100, views.size());
+    assertEquals(100L, views.get(99).itemCount());
+    assertEquals(List.of("repo-a", "repo-b", "repo-c"),
+        views.get(0).repositories().stream()
+            .map(StagingService.StagingRepositoryView::name).toList());
+    // Four queries for the whole page: sessions, memberships, repository names, item counts.
+    verify(fixture.staging, org.mockito.Mockito.times(1)).listRepositoriesBySessionIds(any());
+    verify(fixture.staging, org.mockito.Mockito.times(1)).countItemsBySessionIds(any());
+    verify(fixture.repositories, org.mockito.Mockito.times(1)).findByIds(any());
+    verify(fixture.staging, never()).listRepositories(anyLong());
+    verify(fixture.staging, never()).countItems(anyLong());
+    verify(fixture.staging, never()).listItems(anyLong());
+    verify(fixture.repositories, never()).findById(anyLong());
+  }
+
+  @Test
   void createHonoursAnApprovalRequirementSuppliedInAttributes() {
     Fixture fixture = new Fixture();
     when(fixture.staging.insertSession(any())).thenReturn(1L);
@@ -436,6 +551,12 @@ class StagingServiceTest {
           "d".repeat(40), sha, "c".repeat(32), size, "text/plain", "alice",
           "127.0.0.1", now, now, Map.of());
     }
+  }
+
+  private static RepositoryRecord repository(long id, String name) {
+    return new RepositoryRecord(
+        id, name, RepositoryFormat.RAW, RepositoryType.HOSTED, name, true,
+        1L, null, null, null, null, "ALLOW", true, Map.of());
   }
 
   private static PlatformTransactionManager transactionManager() {

@@ -432,9 +432,30 @@ public class StagingService {
   @Transactional(readOnly = true)
   public List<StagingSessionView> list(String state, int limit, PermissionSubject actor) {
     boolean admin = isAdmin(actor);
-    return staging.listSessions(state, limit).stream()
+    List<StagingSessionRecord> sessions = staging.listSessions(state, limit).stream()
         .filter(session -> admin || owns(session, actor))
-        .map(this::view)
+        .toList();
+    if (sessions.isEmpty()) {
+      return List.of();
+    }
+    // The admin page lists up to a hundred sessions. Resolving memberships, repository names and
+    // item counters per session turns that page into hundreds of queries, so all three lookups are
+    // grouped into one query each.
+    List<Long> sessionIds = sessions.stream().map(StagingSessionRecord::id).toList();
+    Map<Long, List<StagingRepositoryRecord>> memberships =
+        staging.listRepositoriesBySessionIds(sessionIds).stream()
+            .collect(java.util.stream.Collectors.groupingBy(
+                StagingRepositoryRecord::sessionId,
+                java.util.stream.Collectors.toList()));
+    Map<Long, String> repositoryNames = repositoryNames(
+        memberships.values().stream().flatMap(List::stream).toList());
+    Map<Long, Long> itemCounts = staging.countItemsBySessionIds(sessionIds);
+    return sessions.stream()
+        .map(session -> sessionView(
+            session,
+            memberships.getOrDefault(session.id(), List.of()),
+            repositoryNames,
+            itemCounts.getOrDefault(session.id(), 0L)))
         .toList();
   }
 
@@ -1328,6 +1349,7 @@ public class StagingService {
       throw new MavenExceptions.MethodNotAllowed(
           "Staging writes are not supported for " + runtime.format().id() + " repositories");
     }
+    requireItemBudgetAtAdmission(session, runtime, adapter, rawPath);
     StagingContentAdapter.StagedUpload upload = adapter == null
         ? stageRaw(runtime, rawPath, body, contentType, actorUserId(actor), remoteAddr)
         : adapter.stage(runtime, rawPath, body, contentType, actorUserId(actor), remoteAddr);
@@ -1345,6 +1367,7 @@ public class StagingService {
     StagingSessionRecord session = findSessionByKey(sessionKey, false);
     requireSessionWritable(session, runtime, actor);
     StagingContentAdapter adapter = adapterFor(runtime.format());
+    requireItemBudgetAtAdmission(session, runtime, adapter, rawPath);
     StagingContentAdapter.StagedUpload upload;
     if (adapter == null) {
       if (runtime.format() != RepositoryFormat.RAW) {
@@ -1423,6 +1446,38 @@ public class StagingService {
     } catch (java.io.IOException error) {
       throw new java.io.UncheckedIOException(error);
     }
+  }
+
+  /**
+   * Rejects an upload that would add a new item to a full session before its body is received.
+   *
+   * <p>The authoritative check stays inside the locked transaction; this one only avoids streaming
+   * and storing a payload that is going to be rejected. A path that cannot be normalized from the
+   * request (multipart formats) is left to the locked check.
+   */
+  private void requireItemBudgetAtAdmission(
+      StagingSessionRecord session,
+      RepositoryRuntime runtime,
+      StagingContentAdapter adapter,
+      String rawPath) {
+    if (rawPath == null || staging.countItems(session.id()) < maxItems) {
+      return;
+    }
+    Optional<String> path = adapter == null
+        ? Optional.of(RawHostedService.normalizeAssetPath(rawPath))
+        : adapter.normalizePath(rawPath);
+    if (path.isEmpty()) {
+      return;
+    }
+    if (staging.findItem(session.id(), runtime.id(), PersistenceHashes.pathHash(path.get())).isEmpty()) {
+      throw itemBudgetExceeded();
+    }
+  }
+
+  private ResponseStatusException itemBudgetExceeded() {
+    return new ResponseStatusException(
+        HttpStatus.CONFLICT,
+        "Staging session reached the configured limit of " + maxItems + " items");
   }
 
   private StagingContentAdapter.StagedUpload stageRaw(
@@ -1510,6 +1565,9 @@ public class StagingService {
     attributes.put("stagedBy", actorUserId(actor));
     Optional<StagingItemRecord> existing = staging.findItem(
         session.id(), runtime.id(), PersistenceHashes.pathHash(path));
+    if (existing.isEmpty() && staging.countItems(session.id()) >= maxItems) {
+      throw itemBudgetExceeded();
+    }
     String action = live.isPresent()
         ? StagingDao.ITEM_REPLACE
         : StagingDao.ITEM_ADD;
@@ -1911,13 +1969,40 @@ public class StagingService {
   // ---------------------------------------------------------------------------------------------
 
   private StagingSessionView view(StagingSessionRecord session) {
-    List<StagingRepositoryView> repositoryViews = staging.listRepositories(session.id()).stream()
+    List<StagingRepositoryRecord> memberships = staging.listRepositories(session.id());
+    return sessionView(
+        session,
+        memberships,
+        repositoryNames(memberships),
+        staging.countItems(session.id()));
+  }
+
+  private Map<Long, String> repositoryNames(List<StagingRepositoryRecord> memberships) {
+    if (memberships.isEmpty()) {
+      return Map.of();
+    }
+    return repositories.findByIds(memberships.stream()
+            .map(StagingRepositoryRecord::repositoryId)
+            .distinct()
+            .toList())
+        .stream()
+        .collect(java.util.stream.Collectors.toMap(
+            RepositoryRecord::id, RepositoryRecord::name, (left, right) -> left));
+  }
+
+  private static StagingSessionView sessionView(
+      StagingSessionRecord session,
+      List<StagingRepositoryRecord> memberships,
+      Map<Long, String> repositoryNames,
+      long itemCount) {
+    List<StagingRepositoryView> repositoryViews = memberships.stream()
         .map(repo -> new StagingRepositoryView(
             repo.repositoryId(),
-            repositories.findById(repo.repositoryId()).map(RepositoryRecord::name).orElse(null),
+            repositoryNames.get(repo.repositoryId()),
             repo.format() == null ? null : repo.format().id()))
         .toList();
-    long itemCount = staging.listItems(session.id()).size();
+    // Counters are aggregated in the database: listing every item just to call size() would
+    // materialize up to max-items rows per session for each admin list request.
     return new StagingSessionView(session, repositoryViews, itemCount);
   }
 

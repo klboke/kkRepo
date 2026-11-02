@@ -274,6 +274,24 @@ public class JdbcStagingDao implements StagingDao {
   }
 
   @Override
+  public List<StagingRepositoryRecord> listRepositoriesBySessionIds(Collection<Long> sessionIds) {
+    if (sessionIds == null || sessionIds.isEmpty()) {
+      return List.of();
+    }
+    List<Long> ids = sessionIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
+    if (ids.isEmpty()) {
+      return List.of();
+    }
+    String placeholders = String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
+    return jdbcTemplate.query("""
+        SELECT session_id, repository_id, format, created_at
+        FROM staging_session_repository
+        WHERE session_id IN (%s)
+        ORDER BY session_id, repository_id
+        """.formatted(placeholders), repositoryMapper, ids.toArray());
+  }
+
+  @Override
   public List<Long> lockRepositories(Collection<Long> repositoryIds) {
     if (repositoryIds == null || repositoryIds.isEmpty()) {
       return List.of();
@@ -345,6 +363,36 @@ public class JdbcStagingDao implements StagingDao {
         WHERE session_id = ?
         ORDER BY repository_id, logical_path
         """, itemMapper, sessionId);
+  }
+
+  @Override
+  public long countItems(long sessionId) {
+    Long count = jdbcTemplate.queryForObject(
+        "SELECT COUNT(*) FROM staging_item WHERE session_id = ?", Long.class, sessionId);
+    return count == null ? 0L : count;
+  }
+
+  @Override
+  public Map<Long, Long> countItemsBySessionIds(Collection<Long> sessionIds) {
+    if (sessionIds == null || sessionIds.isEmpty()) {
+      return Map.of();
+    }
+    List<Long> ids = sessionIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
+    if (ids.isEmpty()) {
+      return Map.of();
+    }
+    String placeholders = String.join(",", java.util.Collections.nCopies(ids.size(), "?"));
+    Map<Long, Long> counts = new java.util.HashMap<>();
+    jdbcTemplate.query(
+        "SELECT session_id, COUNT(*) FROM staging_item WHERE session_id IN ("
+            + placeholders + ") GROUP BY session_id",
+        rs -> {
+          counts.put(rs.getLong(1), rs.getLong(2));
+        },
+        ids.toArray());
+    // Callers index the map directly, so every requested session must be present.
+    ids.forEach(id -> counts.putIfAbsent(id, 0L));
+    return counts;
   }
 
   @Override
