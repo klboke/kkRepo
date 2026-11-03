@@ -247,6 +247,7 @@ public class HuggingFaceService {
             HuggingFaceFileKind.classify(requestPath.filePath()).name(),
             HuggingFaceRegistryDao.FILE_DISCOVERED, 0L, null, null, Instant.now())));
     if (HuggingFaceRegistryDao.FILE_FAILED.equals(file.state())
+        && !isDeterministicUpstreamFailure(file.failureCode())
         && file.nextAttemptAt() != null && file.nextAttemptAt().isAfter(Instant.now())) {
       throw new MavenExceptions.BadUpstreamException(
           "Hugging Face upstream fetch is temporarily backed off after "
@@ -677,6 +678,9 @@ public class HuggingFaceService {
             new ByteArrayInputStream(safe), safe.length, jsonContentType(contentType), null, null)
             .withStatus(status);
     copySafeUpstreamHeaders(response, upstream);
+    // huggingface_hub uses this header to cache a missing file against its immutable commit.
+    String commit = upstream.header(HuggingFaceHeaders.REPO_COMMIT);
+    if (commit != null) response.withHeader(HuggingFaceHeaders.REPO_COMMIT, commit);
     return response;
   }
 
@@ -919,8 +923,18 @@ public class HuggingFaceService {
 
   private void markFetchFailed(long fileId, long fencingToken, String failureCode) {
     Instant now = Instant.now();
+    // Keep fenced, database-owned failure state on every replica, but allow immediate probes
+    // for deterministic 4xx responses. These are not evidence of an unavailable upstream.
     registry.markFileFailed(
-        fileId, fencingToken, failureCode, now.plus(30, ChronoUnit.SECONDS), now);
+        fileId, fencingToken, failureCode,
+        isDeterministicUpstreamFailure(failureCode) ? null : now.plus(30, ChronoUnit.SECONDS), now);
+  }
+
+  private static boolean isDeterministicUpstreamFailure(String failureCode) {
+    // Also recognize persisted failures from older versions without a data migration.
+    // Request timeout and rate limiting are transient even though they are 4xx responses.
+    return failureCode != null && failureCode.matches("UPSTREAM_GET_4[0-9]{2}")
+        && !failureCode.equals("UPSTREAM_GET_408") && !failureCode.equals("UPSTREAM_GET_429");
   }
 
   private static void requireProxy(RepositoryRuntime runtime) {
