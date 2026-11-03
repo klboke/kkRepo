@@ -747,6 +747,27 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
   }
 
   @Test
+  void githubProxyFindsReleasesBeyondNonSemverTagPagesWhenConfigured() throws Exception {
+    Config config = configured();
+    assumeTrue(config.proxyEnabled(),
+        "Set SWIFT_COMPAT_PROXY_ENABLED=true to exercise the live GitHub-backed proxy");
+    ensureRepositories(config);
+    // Firebase mixes component tags with package releases. At the time of issue #481,
+    // page one had only nine SemVer tags and 13.1.1 appeared on page ten.
+    String coordinate = "firebase/firebase-ios-sdk";
+    Exchange reference = get(config.nexusProxy(), coordinate, JSON_ACCEPT);
+    assertEquals(200, reference.status(), "Nexus Firebase release list");
+    assertTrue(json(reference).path("releases").has("13.1.1"),
+        "Nexus must discover the release beyond the mixed/non-SemVer tag pages");
+    for (int read = 0; read < 2; read++) {
+      Exchange candidate = get(config.candidateProxy(), coordinate, JSON_ACCEPT);
+      assertEquals(200, candidate.status(), "kkRepo Firebase release list");
+      assertTrue(json(candidate).path("releases").has("13.1.1"),
+          "both fresh and persisted inventories must retain later-page releases");
+    }
+  }
+
+  @Test
   void configuredGitHubTagsNormalizeBothLowercaseAndUppercaseVWhenConfigured() throws Exception {
     Config config = configured();
     assumeTrue(config.proxyEnabled(),

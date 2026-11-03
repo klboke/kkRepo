@@ -140,18 +140,106 @@ class SwiftGitHubClientTest {
   }
 
   @Test
-  void reusesPersistedPageWhenGithubReturnsNotModified() {
-    SwiftRegistryDao.ProxyTag cached =
-        new SwiftRegistryDao.ProxyTag("1.2.3", "v1.2.3", "a".repeat(40));
+  void continuesPastFullRawPagesWithFewOrNoSemverTags() throws Exception {
+    SequencedFetcher fetcher = new SequencedFetcher(
+        tagPage(9, 100, "mixed"),
+        tagPage(0, 100, "non-semver"),
+        result(200, Map.of("ETag", "\"last\""), new ObjectMapper().writeValueAsBytes(
+            List.of(Map.of("name", "13.1.1", "commit", Map.of("sha", "b".repeat(40)))))));
+    SwiftGitHubClient client = new SwiftGitHubClient(
+        fetcher, new ObjectMapper(), mock(SwiftArchiveInspector.class));
+
+    SwiftGitHubClient.TagDiscovery discovery = client.discoverTags(
+        proxy("https://github.com/"),
+        SwiftGitHubClient.coordinates("firebase", "firebase-ios-sdk"), null);
+
+    assertEquals(10, discovery.tags().size());
+    assertTrue(discovery.tags().stream().anyMatch(tag -> tag.version().equals("13.1.1")));
+    assertEquals(3, fetcher.calls);
+    assertEquals(9, discovery.pages().get("1").size());
+    assertTrue(discovery.pages().get("2").isEmpty());
+    assertEquals(Set.of("1", "2", "3"), discovery.pages().keySet());
+    assertTrue(fetcher.requests.get(2).url().endsWith("per_page=100&page=3"));
+  }
+
+  @Test
+  void refreshesAmbiguousPersistedPagesWithoutConditionalRequests() throws Exception {
+    SwiftRegistryDao.ProxyTag old =
+        new SwiftRegistryDao.ProxyTag("1.0.0", "v1.0.0", "a".repeat(40));
+    SwiftRegistryDao.ProxyInventory inventory = new SwiftRegistryDao.ProxyInventory(
+        1L, "firebase", "firebase-ios-sdk", 7L, java.time.Instant.EPOCH,
+        Map.of("1", List.of(old), "2", List.of(), "3", List.of(old)),
+        Map.of("1", "mixed", "2", "non-semver", "3", "stale"));
+    SequencedFetcher fetcher = new SequencedFetcher(
+        tagPage(9, 100, "mixed"), tagPage(0, 100, "non-semver"), tagPage(10, 10, "last"));
+    SwiftGitHubClient client = new SwiftGitHubClient(
+        fetcher, new ObjectMapper(), mock(SwiftArchiveInspector.class));
+
+    SwiftGitHubClient.TagDiscovery discovery = client.discoverTags(
+        proxy("https://github.com/"),
+        SwiftGitHubClient.coordinates("firebase", "firebase-ios-sdk"), inventory);
+
+    assertEquals(10, discovery.tags().size());
+    assertEquals(3, fetcher.calls);
+    fetcher.requests.forEach(request -> assertNull(request.etag(),
+        "a filtered snapshot cannot establish the upstream page length"));
+    assertEquals(Map.of("1", "mixed", "2", "non-semver", "3", "last"),
+        discovery.pageEtags());
+  }
+
+  @Test
+  void stopsAtAShortRawPageEvenWhenEveryTagIsFiltered() throws Exception {
+    SequencedFetcher fetcher = new SequencedFetcher(tagPage(0, 99, "last"));
+    SwiftGitHubClient client = new SwiftGitHubClient(
+        fetcher, new ObjectMapper(), mock(SwiftArchiveInspector.class));
+
+    assertTrue(client.tags(proxy("https://github.com/"),
+        SwiftGitHubClient.coordinates("apple", "swift-log")).isEmpty());
+    assertEquals(1, fetcher.calls);
+  }
+
+  @Test
+  void boundsPaginationEvenWhenEveryTagIsFiltered() throws Exception {
+    List<HttpRemoteFetcher.Result> pages = new ArrayList<>();
+    for (int page = 0; page < 100; page++) pages.add(tagPage(0, 100, "full"));
+    SequencedFetcher fetcher = new SequencedFetcher(pages.toArray(HttpRemoteFetcher.Result[]::new));
+    SwiftGitHubClient client = new SwiftGitHubClient(
+        fetcher, new ObjectMapper(), mock(SwiftArchiveInspector.class));
+
+    SwiftExceptions.BadUpstream failure = assertThrows(SwiftExceptions.BadUpstream.class,
+        () -> client.tags(proxy("https://github.com/"),
+            SwiftGitHubClient.coordinates("apple", "swift-log")));
+    assertTrue(failure.getMessage().contains("pagination safety limit"));
+    assertEquals(100, fetcher.calls);
+  }
+
+  private static HttpRemoteFetcher.Result tagPage(int validCount, int rawCount, String etag)
+      throws Exception {
+    List<Map<String, Object>> rows = new ArrayList<>();
+    for (int index = 0; index < rawCount; index++) {
+      rows.add(Map.of("name", index < validCount ? "1.0." + index : "component-" + index,
+          "commit", Map.of("sha", "a".repeat(40))));
+    }
+    return result(200, Map.of("ETag", "\"" + etag + "\""),
+        new ObjectMapper().writeValueAsBytes(rows));
+  }
+
+  @Test
+  void reusesFullPersistedPageWhenGithubReturnsNotModifiedAndContinues() throws Exception {
+    List<SwiftRegistryDao.ProxyTag> cached = new ArrayList<>();
+    for (int index = 0; index < 100; index++) {
+      cached.add(new SwiftRegistryDao.ProxyTag("1.0." + index, "v1.0." + index, "a".repeat(40)));
+    }
     SwiftRegistryDao.ProxyInventory inventory = new SwiftRegistryDao.ProxyInventory(
         1L,
         "apple",
         "swift-log",
         7L,
         java.time.Instant.EPOCH,
-        Map.of("1", List.of(cached)),
+        Map.of("1", cached),
         Map.of("1", "page-one"));
-    SequencedFetcher fetcher = new SequencedFetcher(result(304, Map.of(), new byte[0]));
+    SequencedFetcher fetcher = new SequencedFetcher(
+        result(304, Map.of(), new byte[0]), tagPage(0, 100, "non-semver"), tagPage(0, 0, "last"));
     SwiftGitHubClient client = new SwiftGitHubClient(
         fetcher, new ObjectMapper(), mock(SwiftArchiveInspector.class));
 
@@ -160,12 +248,32 @@ class SwiftGitHubClientTest {
         SwiftGitHubClient.coordinates("apple", "swift-log"),
         inventory);
 
-    assertEquals(
-        List.of(new SwiftGitHubClient.Tag("1.2.3", "v1.2.3", "a".repeat(40))),
-        discovery.tags());
-    assertEquals(Map.of("1", List.of(cached)), discovery.pages());
-    assertEquals(Map.of("1", "page-one"), discovery.pageEtags());
+    assertEquals(100, discovery.tags().size());
+    assertEquals(Map.of("1", cached, "2", List.of(), "3", List.of()), discovery.pages());
+    assertEquals(Map.of("1", "page-one", "2", "non-semver", "3", "last"), discovery.pageEtags());
     assertEquals("page-one", fetcher.requests.getFirst().etag());
+    assertEquals(3, fetcher.calls);
+    assertNull(fetcher.requests.get(1).etag());
+    assertNull(fetcher.requests.get(2).etag());
+  }
+
+  @Test
+  void rejectsUnexpectedNotModifiedWithoutAnUnambiguousSnapshot() {
+    SwiftRegistryDao.ProxyInventory shortInventory = new SwiftRegistryDao.ProxyInventory(
+        1L, "apple", "swift-log", 7L, java.time.Instant.EPOCH,
+        Map.of("1", List.of()), Map.of("1", "old-page"));
+    for (SwiftRegistryDao.ProxyInventory inventory :
+        java.util.Arrays.asList(null, shortInventory)) {
+      SequencedFetcher fetcher = new SequencedFetcher(result(304, Map.of(), new byte[0]));
+      SwiftGitHubClient client = new SwiftGitHubClient(
+          fetcher, new ObjectMapper(), mock(SwiftArchiveInspector.class));
+      SwiftExceptions.BadUpstream failure = assertThrows(SwiftExceptions.BadUpstream.class,
+          () -> client.discoverTags(proxy("https://github.com/"),
+              SwiftGitHubClient.coordinates("apple", "swift-log"), inventory));
+      assertTrue(failure.getMessage().contains("without a complete persisted page snapshot"));
+      assertNull(fetcher.requests.getFirst().etag());
+      assertEquals(1, fetcher.calls);
+    }
   }
 
   @Test
