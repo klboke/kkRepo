@@ -81,6 +81,12 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
         || uri.startsWith("/internal/routing-rules/")) {
       return Optional.of("nexus:*");
     }
+    if (uri.equals("/api/v2") || uri.startsWith("/api/v2/")) {
+      // kkGuard compatibility surface: reads need lifecycle read, mutations lifecycle update.
+      return Optional.of(
+          "GET".equals(method) || "HEAD".equals(method)
+              ? "nexus:lifecycle:read" : "nexus:lifecycle:update");
+    }
     if (uri.startsWith("/service/rest/v1/security/")) {
       return serviceRestPermission(method, uri);
     }
