@@ -8,6 +8,7 @@ record ApiKeyTokenCandidate(String domain, String tokenMaterial) {
   private static final String NPM_TOKEN_DOMAIN = "NpmToken";
   private static final String CARGO_TOKEN_DOMAIN = "CargoToken";
   private static final String PUB_TOKEN_DOMAIN = "PubToken";
+  private static final String OPENVSX_TOKEN_DOMAIN = "OpenVsxToken";
   private static final String NUGET_API_KEY_DOMAIN = "NuGetApiKey";
   private static final String RUBYGEMS_API_KEY_DOMAIN = "RubyGemsApiKey";
 
@@ -21,6 +22,10 @@ record ApiKeyTokenCandidate(String domain, String tokenMaterial) {
 
   static List<ApiKeyTokenCandidate> fromPresentedPubToken(String token) {
     return fromPresentedToken(token, PUB_TOKEN_DOMAIN);
+  }
+
+  static List<ApiKeyTokenCandidate> fromPresentedOpenVsxToken(String token) {
+    return fromPresentedToken(token, OPENVSX_TOKEN_DOMAIN);
   }
 
   static List<ApiKeyTokenCandidate> fromPresentedRubygemsToken(String token) {

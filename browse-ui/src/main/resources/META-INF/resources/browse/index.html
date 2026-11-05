@@ -154,7 +154,7 @@
                 <h2 id="supported-formats-title">Supported repository formats</h2>
                 <p>Package ecosystems supported by this kkRepo release.</p>
               </div>
-              <span class="format-showcase-count">23 formats</span>
+              <span class="format-showcase-count">24 formats</span>
             </div>
             <ul class="format-grid">
               <li class="format-item" data-format="maven2">
@@ -318,6 +318,13 @@
                 </div>
                 <span class="format-modes">Proxy</span>
               </li>
+              <li class="format-item" data-format="openvsx">
+                <div class="format-brand">
+                  <span class="format-logo format-logo-openvsx" aria-hidden="true"></span>
+                  <strong>VS Code / Open VSX</strong>
+                </div>
+                <span class="format-modes">Hosted · Proxy · Group</span>
+              </li>
             </ul>
           </section>
         </section>
@@ -400,6 +407,7 @@
                 <option value="r">R / CRAN</option>
                 <option value="huggingface">Hugging Face Models</option>
                 <option value="gitlfs">Git LFS</option>
+                <option value="openvsx">VS Code / Open VSX</option>
                 <option value="raw">Raw</option>
                 </select>
                 <button
@@ -455,6 +463,7 @@
                     <button class="search-format-option" id="component-custom-format-option-r" type="button" role="option" aria-selected="false" data-custom-search-format="r"><span class="format-logo format-logo-r" aria-hidden="true"></span><span>R / CRAN</span></button>
                     <button class="search-format-option" id="component-custom-format-option-gitlfs" type="button" role="option" aria-selected="false" data-custom-search-format="gitlfs"><span class="format-logo format-logo-gitlfs" aria-hidden="true"></span><span>Git LFS</span></button>
                     <button class="search-format-option" id="component-custom-format-option-huggingface" type="button" role="option" aria-selected="false" data-custom-search-format="huggingface"><span class="format-logo format-logo-huggingface" aria-hidden="true"></span><span>Hugging Face Models</span></button>
+                    <button class="search-format-option" id="component-custom-format-option-openvsx" type="button" role="option" aria-selected="false" data-custom-search-format="openvsx"><span class="format-logo format-logo-openvsx" aria-hidden="true"></span><span>VS Code / Open VSX</span></button>
                     <button class="search-format-option" id="component-custom-format-option-raw" type="button" role="option" aria-selected="false" data-custom-search-format="raw"><span class="format-logo format-logo-raw" aria-hidden="true"></span><span>Raw</span></button>
                   </div>
                   <div class="search-format-empty" id="component-custom-format-empty" role="status" hidden>No matching formats</div>

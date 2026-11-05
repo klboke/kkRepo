@@ -10,6 +10,7 @@ import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.server.apt.AptService;
 import com.github.klboke.kkrepo.server.alpine.AlpineService;
+import com.github.klboke.kkrepo.server.openvsx.OpenVsxHostedService;
 import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyService;
 import com.github.klboke.kkrepo.server.cargo.CargoHostedService;
 import com.github.klboke.kkrepo.server.composer.ComposerHostedService;
@@ -146,6 +147,7 @@ public class ComponentUploadService {
                   "Repository namespace")),
           List.of(field("asset", "FILE", "Alpine .apk package", false, null))),
       singleAsset("r"),
+      singleAsset("openvsx"),
       singleAsset("nuget"),
       singleAsset("rubygems"),
       yumUpload(),
@@ -171,6 +173,8 @@ public class ComponentUploadService {
   private AptService aptService;
   private AlpineService alpineService;
   private RService rService;
+  private OpenVsxHostedService openVsxHosted;
+  private com.github.klboke.kkrepo.server.repositories.GroupWriteTargetService groupWriteTarget;
   private final MavenPathParser mavenPathParser = new MavenPathParser();
   private final TerraformPathParser terraformPathParser = new TerraformPathParser();
 
@@ -285,6 +289,17 @@ public class ComponentUploadService {
     this.rService = rService;
   }
 
+  @Autowired(required = false)
+  void setOpenVsxHostedService(OpenVsxHostedService openVsxHosted) {
+    this.openVsxHosted = openVsxHosted;
+  }
+
+  @Autowired(required = false)
+  void setGroupWriteTargetService(
+      com.github.klboke.kkrepo.server.repositories.GroupWriteTargetService groupWriteTarget) {
+    this.groupWriteTarget = groupWriteTarget;
+  }
+
   public UploadDefinition definition(String format) {
     String normalized = normalizeFormat(format);
     return DEFINITIONS.stream()
@@ -301,6 +316,9 @@ public class ComponentUploadService {
       String createdByIp) throws IOException {
     RepositoryRuntime runtime = registry.resolve(repository)
         .orElseThrow(() -> new MavenExceptions.MavenNotFoundException("Repository not found: " + repository));
+    if (runtime.isGroup() && groupWriteTarget != null) {
+      runtime = groupWriteTarget.requireWriteTarget(runtime);
+    }
     if (!runtime.online()) {
       throw new UploadValidationException("Repository is offline: " + repository);
     }
@@ -333,6 +351,7 @@ public class ComponentUploadService {
       case APT -> uploadApt(runtime, upload, createdBy, createdByIp);
       case ALPINE -> uploadAlpine(runtime, upload, createdBy, createdByIp);
       case R -> uploadR(runtime, upload, createdBy, createdByIp);
+      case OPENVSX -> uploadOpenVsx(runtime, upload, createdBy, createdByIp);
       case GITLFS -> throw new UploadValidationException("Git LFS uploads must use the Git LFS Batch/basic API");
       case HUGGINGFACE -> throw new UploadValidationException(
           "Hugging Face Models repositories are proxy-only");
@@ -550,6 +569,25 @@ public class ComponentUploadService {
     try (InputStream body = asset.file().getInputStream()) {
       return List.of(rService.publish(
           runtime, filename, body, createdBy, createdByIp).path());
+    }
+  }
+
+  private List<String> uploadOpenVsx(
+      RepositoryRuntime runtime,
+      NormalizedUpload upload,
+      String createdBy,
+      String createdByIp) throws IOException {
+    if (openVsxHosted == null) {
+      throw new UploadValidationException("Open VSX upload service is unavailable");
+    }
+    AssetUpload asset = singleAsset(upload, "Open VSX");
+    String filename = originalFilename(asset.file());
+    if (!filename.toLowerCase(Locale.ROOT).endsWith(".vsix")) {
+      throw new UploadValidationException("Open VSX upload requires a .vsix extension package");
+    }
+    try (InputStream body = asset.file().getInputStream()) {
+      return List.of(openVsxHosted.publish(
+          runtime, body, createdBy, createdByIp, "", runtime.name()).path());
     }
   }
 
@@ -935,6 +973,7 @@ public class ComponentUploadService {
       case APT -> "apt";
       case ALPINE -> "alpine";
       case R -> "r";
+      case OPENVSX -> "openvsx";
       case GITLFS -> "gitlfs";
       case HUGGINGFACE -> "huggingface";
       case RAW -> "raw";

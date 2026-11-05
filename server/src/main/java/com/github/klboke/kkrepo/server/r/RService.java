@@ -7,6 +7,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.RRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.protocol.r.RPackageMetadata;
+import com.github.klboke.kkrepo.protocol.r.RMediaTypes;
 import com.github.klboke.kkrepo.protocol.r.RPath;
 import com.github.klboke.kkrepo.protocol.r.RPathParser;
 import com.github.klboke.kkrepo.protocol.r.RVersions;
@@ -294,6 +295,33 @@ public class RService {
   boolean publishPendingIfAvailable(RepositoryRuntime runtime, String namespace) {
     requireR(runtime);
     return publishPending(runtime, requireNamespace(namespace), false);
+  }
+
+  /** Serves PACKAGES.gz from the live projection merged with staged package rows. */
+  MavenResponse stagedPackagesIndex(
+      RepositoryRuntime runtime,
+      RPath path,
+      List<RRegistryDao.PackageRecord> staged,
+      java.util.Set<String> deletedPaths,
+      boolean headOnly) {
+    requireR(runtime);
+    if (path == null || path.kind() != RPath.Kind.PACKAGES_GZIP) {
+      throw new MavenExceptions.MavenNotFoundException(path == null ? "" : path.normalized());
+    }
+    byte[] bytes = indexBuilder.render(visitor -> {
+      registry.visitPackages(
+          runtime.id(), SOURCE_NAMESPACE, COMPONENT, ARCHITECTURE, record -> {
+            if (deletedPaths == null || !deletedPaths.contains(record.path())) {
+              visitor.accept(record);
+            }
+          });
+      staged.forEach(visitor);
+    });
+    return headOnly
+        ? MavenResponse.noBody(200, bytes.length, RMediaTypes.PACKAGES_GZIP, null, null)
+        : MavenResponse.ok(
+            new java.io.ByteArrayInputStream(bytes), bytes.length,
+            RMediaTypes.PACKAGES_GZIP, null, null);
   }
 
   private MavenResponse getHosted(

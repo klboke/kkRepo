@@ -1192,6 +1192,8 @@ class RepositoryDataMigrationWriter {
           ? "r-source-package" : "r-metadata";
       case GITLFS -> "gitlfs";
       case HUGGINGFACE -> "huggingface-model-file";
+      case OPENVSX -> source.sourcePath().endsWith(".vsix") ? "openvsx-extension"
+          : "openvsx-metadata";
       case RAW -> "asset";
     };
   }

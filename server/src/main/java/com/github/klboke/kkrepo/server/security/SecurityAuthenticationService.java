@@ -237,6 +237,20 @@ public class SecurityAuthenticationService {
     return authenticate(request);
   }
 
+  /**
+   * Open VSX clients present the personal access token as a query parameter ({@code ?token=}) or
+   * as a Bearer credential, depending on the CLI version. Normal kkrepo credentials remain
+   * available for interactive/browser use.
+   */
+  @Transactional
+  public Optional<AuthenticatedSubject> authenticateOpenVsx(HttpServletRequest request) {
+    Optional<AuthenticatedSubject> apiKey = authenticateOpenVsxApiKey(request);
+    if (apiKey.isPresent()) {
+      return apiKey;
+    }
+    return authenticate(request);
+  }
+
   @Transactional
   public Optional<AuthenticatedSubject> authenticateRubygems(HttpServletRequest request) {
     Optional<AuthenticatedSubject> apiKey = authenticateRubygemsApiKey(request);
@@ -518,6 +532,26 @@ public class SecurityAuthenticationService {
         ? resolveApiKey(ApiKeyTokenCandidate.fromPresentedPubToken(token))
         : apiKeyAuthCache.find("pub:" + token,
             () -> resolveApiKey(ApiKeyTokenCandidate.fromPresentedPubToken(token)));
+  }
+
+  private Optional<AuthenticatedSubject> authenticateOpenVsxApiKey(HttpServletRequest request) {
+    String token = request.getParameter("token");
+    if (token == null || token.isBlank()) {
+      token = bearerToken(request);
+    }
+    if (token == null || token.isBlank()) {
+      String apiKey = request.getHeader("X-API-Key");
+      token = apiKey == null || apiKey.isBlank() ? null : apiKey;
+    }
+    if (token == null || token.isBlank() || token.length() > 4096
+        || token.indexOf('\r') >= 0 || token.indexOf('\n') >= 0) {
+      return Optional.empty();
+    }
+    String presented = token;
+    return apiKeyAuthCache == null
+        ? resolveApiKey(ApiKeyTokenCandidate.fromPresentedOpenVsxToken(presented))
+        : apiKeyAuthCache.find("openvsx:" + presented,
+            () -> resolveApiKey(ApiKeyTokenCandidate.fromPresentedOpenVsxToken(presented)));
   }
 
   private Optional<AuthenticatedSubject> authenticateRubygemsApiKey(HttpServletRequest request) {

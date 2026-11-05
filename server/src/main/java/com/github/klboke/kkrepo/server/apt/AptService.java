@@ -83,6 +83,57 @@ public class AptService {
         : getProxy(runtime, settings, path, headOnly);
   }
 
+  /** Serves Packages/Release/InRelease from live packages plus staged publications and deletions. */
+  MavenResponse stagedMetadata(
+      RepositoryRuntime runtime,
+      AptPath path,
+      List<AptRegistryDao.PackageRecord> staged,
+      java.util.Set<String> deletedPaths,
+      boolean headOnly) {
+    requireHosted(runtime);
+    AptRepositorySettings.Settings settings = repositorySettings.get(runtime);
+    String distribution = path.distribution() == null
+        ? settings.distribution() : path.distribution();
+    String component = path.component() == null ? settings.component() : path.component();
+    java.util.LinkedHashSet<String> architectures = new java.util.LinkedHashSet<>();
+    architectures.addAll(settings.architectures());
+    architectures.addAll(registry.listArchitectures(runtime.id(), distribution, component));
+    staged.forEach(record -> architectures.add(record.architecture()));
+    Map<String, List<AptRegistryDao.PackageRecord>> byArchitecture =
+        new java.util.LinkedHashMap<>();
+    for (String architecture : architectures) {
+      List<AptRegistryDao.PackageRecord> records = new java.util.ArrayList<>(
+          registry.listPackages(runtime.id(), distribution, component, architecture));
+      if (deletedPaths != null && !deletedPaths.isEmpty()) {
+        records.removeIf(record -> deletedPaths.contains(record.path()));
+      }
+      staged.stream()
+          .filter(record -> architecture.equals(record.architecture()))
+          .forEach(records::add);
+      byArchitecture.put(architecture, records);
+    }
+    Map<String, byte[]> files = metadataBuilder.render(
+        settings, distribution, component, List.copyOf(architectures),
+        signing.active(runtime), Instant.now(), byArchitecture);
+    String key = switch (path.kind()) {
+      case IN_RELEASE -> "dists/" + distribution + "/InRelease";
+      case RELEASE -> "dists/" + distribution + "/Release";
+      case RELEASE_SIGNATURE -> "dists/" + distribution + "/Release.gpg";
+      case PACKAGES -> "dists/" + distribution + "/" + component
+          + "/binary-" + path.architecture() + "/" + path.filename();
+      default -> null;
+    };
+    byte[] body = key == null ? null : files.get(key);
+    if (body == null) {
+      throw new MavenExceptions.MavenNotFoundException(path.normalized());
+    }
+    String contentType = AptMediaTypes.forPath(key);
+    return headOnly
+        ? MavenResponse.noBody(200, body.length, contentType, null, null)
+        : MavenResponse.ok(
+            new ByteArrayInputStream(body), body.length, contentType, null, null);
+  }
+
   public MavenResponse put(
       RepositoryRuntime runtime,
       String rawPath,

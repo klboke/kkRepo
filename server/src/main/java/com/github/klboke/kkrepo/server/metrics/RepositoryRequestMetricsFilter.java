@@ -313,11 +313,22 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
       case ALPINE -> alpineOperation(path, normalizedMethod);
       case R -> rOperation(path, normalizedMethod);
       case HUGGINGFACE -> huggingFaceOperation(path, normalizedMethod);
+      case OPENVSX -> openVsxOperation(path, normalizedMethod);
       case GITLFS -> path.equals("info/lfs/objects/batch") ? "gitlfs_batch"
           : path.endsWith("/verify") ? "gitlfs_verify"
           : "PUT".equals(normalizedMethod) ? "gitlfs_upload" : "gitlfs_download";
       case RAW -> rawOperation(normalizedMethod);
     };
+  }
+
+  private static String openVsxOperation(String path, String method) {
+    if ("POST".equals(method) && path.equals("api/-/publish")) return "openvsx_publish";
+    if (path.endsWith(".vsix") || path.contains("/file/")
+        || path.contains("/vspackage")) return "openvsx_package";
+    if (path.contains("/api/-/search") || path.contains("/api/-/query")
+        || path.contains("/vscode/gallery/extensionquery")) return "openvsx_search";
+    if (path.startsWith("api/") || path.startsWith("vscode/")) return "openvsx_metadata";
+    return "openvsx_request";
   }
 
   private static String rOperation(String path, String method) {
