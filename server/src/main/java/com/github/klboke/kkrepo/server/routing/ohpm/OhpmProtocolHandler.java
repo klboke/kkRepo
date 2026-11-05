@@ -10,6 +10,7 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmException;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmGroupMetadata;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmPath;
+import com.github.klboke.kkrepo.protocol.ohpm.OhpmLoginRequest;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmPathParser;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmUnpublishRequest;
 import com.github.klboke.kkrepo.server.config.RepositoryUrlPrefix;
@@ -18,6 +19,7 @@ import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.ohpm.OhpmAccess;
 import com.github.klboke.kkrepo.server.ohpm.OhpmGroupService;
 import com.github.klboke.kkrepo.server.ohpm.OhpmHostedService;
+import com.github.klboke.kkrepo.server.ohpm.OhpmLoginService;
 import com.github.klboke.kkrepo.server.ohpm.OhpmProxyService;
 import com.github.klboke.kkrepo.server.routing.RepositoryProtocolHandler;
 import com.github.klboke.kkrepo.server.routing.RepositoryProtocolRequest;
@@ -52,6 +54,12 @@ public class OhpmProtocolHandler implements RepositoryProtocolHandler {
   private final ObjectMapper json;
   private final ForwardedHeaderPolicy forwarded;
   private final OhpmPathParser paths = new OhpmPathParser();
+  private OhpmLoginService login;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void configureLogin(OhpmLoginService login) {
+    this.login = login;
+  }
 
   public OhpmProtocolHandler(OhpmHostedService hosted, OhpmProxyService proxy, OhpmGroupService group, OhpmAccess access,
       ObjectMapper json, ForwardedHeaderPolicy forwarded) {
@@ -76,8 +84,19 @@ public class OhpmProtocolHandler implements RepositoryProtocolHandler {
     OhpmPath path = request.getAttribute(OhpmAccess.PATH_ATTRIBUTE) instanceof OhpmPath parsed
         ? parsed : paths.parse(context.method().name(), context.path());
     try {
-      if (path.kind() == OhpmPath.Kind.UNKNOWN || path.kind() == OhpmPath.Kind.LOGIN) {
+      if (path.kind() == OhpmPath.Kind.UNKNOWN) {
         throw new OhpmException(404, "OHPM endpoint is not available");
+      }
+      if (path.kind() == OhpmPath.Kind.LOGIN) {
+        request.setAttribute(ManagementAuditFilter.OPERATION_DETAILS_ATTRIBUTE,
+            Map.of("format", "ohpm", "repository", context.runtime().name(), "operation", "login"));
+        if (login == null || !login.enabled()) throw new OhpmException(404, "OHPM Login is disabled");
+        if (!context.runtime().online()) throw new OhpmException(503, "Repository is offline");
+        if (!context.runtime().isHosted()) throw new OhpmException(405, "OHPM Login requires a hosted repository");
+        requireJson(request);
+        var result = login.login(OhpmLoginRequest.read(request.getInputStream()));
+        request.setAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE, result.subject());
+        return json(request, 200, Map.of("success", true, "token", result.token()));
       }
       if (!context.runtime().online()) throw new OhpmException(503, "Repository is offline");
       boolean head = context.method() == HttpMethod.HEAD;
@@ -146,16 +165,23 @@ public class OhpmProtocolHandler implements RepositoryProtocolHandler {
     } catch (ArtifactPolicyException error) {
       throw error;
     } catch (OhpmException error) {
-      return json(request, error.status(), error.response());
+      return json(request, error.status(), path.kind() == OhpmPath.Kind.LOGIN
+          ? Map.of("success", false, "error", error.getMessage()) : error.response());
     } catch (TransientDataAccessException error) {
       int status = path.kind() == OhpmPath.Kind.PUBLISH || path.kind() == OhpmPath.Kind.STREAM_PUBLISH ? 598 : 500;
       log.warn("OHPM transaction retries exhausted: repository={}", context.runtime().name(), error);
-      return json(request, status, new OhpmException(status, "OHPM transaction temporarily unavailable").response());
+      return json(request, status, path.kind() == OhpmPath.Kind.LOGIN
+          ? Map.of("success", false, "error", "OHPM login temporarily unavailable")
+          : new OhpmException(status, "OHPM transaction temporarily unavailable").response());
     } catch (IllegalArgumentException | JsonProcessingException | ServletException error) {
-      return json(request, 400, new OhpmException(400, "Invalid OHPM request").response());
+      return json(request, 400, path.kind() == OhpmPath.Kind.LOGIN
+          ? Map.of("success", false, "error", "Invalid OHPM login request")
+          : new OhpmException(400, "Invalid OHPM request").response());
     } catch (IOException | RuntimeException error) {
       log.warn("OHPM repository request failed: repository={}", context.runtime().name(), error);
-      return json(request, 500, new OhpmException(500, "OHPM repository operation failed").response());
+      return json(request, 500, path.kind() == OhpmPath.Kind.LOGIN
+          ? Map.of("success", false, "error", "OHPM login failed")
+          : new OhpmException(500, "OHPM repository operation failed").response());
     }
   }
 

@@ -104,6 +104,7 @@
             <button class="side-item" data-view="security-oidc" type="button"><span class="side-item-icon lucide-icon icon-log-in" aria-hidden="true"></span><span>OIDC</span></button>
             <button class="side-item" data-view="security-anonymous" type="button"><span class="side-item-icon lucide-icon icon-user-round-x" aria-hidden="true"></span><span>Anonymous</span></button>
             <button class="side-item" data-view="security-api-keys" type="button"><span class="side-item-icon lucide-icon icon-key-round" aria-hidden="true"></span><span>API Keys</span></button>
+            <button class="side-item" data-view="ohpm-login" type="button"><span class="side-item-icon lucide-icon icon-key-round" aria-hidden="true"></span><span>OHPM Signing Keys</span></button>
             <button class="side-item" data-view="security-scanning" type="button"><span class="side-item-icon lucide-icon icon-package-search" aria-hidden="true"></span><span>Artifact Scanning</span></button>
             <button class="side-item" data-view="security-audit-log" type="button"><span class="side-item-icon lucide-icon icon-scroll-text" aria-hidden="true"></span><span>Audit Log</span></button>
           </div>
@@ -1986,6 +1987,36 @@
           </form>
         </section>
 
+        <section class="view" id="ohpm-login-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-key-round" aria-hidden="true"></span></span>
+            <h1>OHPM Signing Keys</h1>
+            <span class="heading-copy">Bind RSA public keys to existing users for signed publication</span>
+          </div>
+          <p id="ohpm-login-configuration"></p>
+          <p>Signed login is disabled by default. Enable it in the server configuration on every replica. Key changes revoke that user's existing signed-login token.</p>
+          <form class="blobstore-form" id="ohpm-login-form">
+            <div class="form-grid">
+              <label><span>User source</span><input id="ohpm-login-source" value="Local" required maxlength="100"></label>
+              <label><span>User ID</span><input id="ohpm-login-user" required maxlength="255"></label>
+              <label class="full-width"><span>RSA public key (X.509 PEM, 2048–8192 bits)</span><textarea id="ohpm-login-key" required rows="8" maxlength="16384" spellcheck="false"></textarea></label>
+              <label><span>Enable this key</span><input id="ohpm-login-enabled" type="checkbox"></label>
+            </div>
+            <p>Saving another public key for the same user rotates the key and preserves the publish ID. Private keys stay on the publishing machine.</p>
+            <button class="create-button" type="submit">Save / rotate public key</button>
+          </form>
+          <p id="ohpm-login-status" role="status" aria-live="polite"></p>
+          <table class="nx-table compact">
+            <thead><tr><th>User</th><th>Publish ID</th><th>SHA-256 fingerprint</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody id="ohpm-login-rows"></tbody>
+          </table>
+          <p id="ohpm-login-empty" hidden>No signing keys on this page.</p>
+          <p id="ohpm-login-page"></p>
+          <button class="create-button secondary" id="ohpm-login-previous" type="button">Previous</button>
+          <button class="create-button secondary" id="ohpm-login-next" type="button">Next</button>
+          <button class="create-button secondary" id="ohpm-login-refresh" type="button">Refresh</button>
+        </section>
+
         <section class="view" id="ohpm-import-view">
           <div class="page-heading">
             <span class="heading-icon"><span class="lucide-icon icon-arrow-left-right" aria-hidden="true"></span></span>
@@ -2081,6 +2112,7 @@
     <script src="./assets/routing-rules.js?v=20261026-routing-rules-2"></script>
     <script src="./assets/content-selectors.js?v=20261013-delete-confirmation-1"></script>
     <script src="./assets/ohpm-import.js?v=20261106-ohpm-import"></script>
+    <script src="./assets/ohpm-login.js?v=20261106-ohpm-login"></script>
     <script src="./assets/admin.js?v=20261106-ohpm-import"></script>
   </body>
 </html>

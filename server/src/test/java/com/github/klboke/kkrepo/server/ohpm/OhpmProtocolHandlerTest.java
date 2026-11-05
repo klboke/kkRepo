@@ -30,6 +30,18 @@ class OhpmProtocolHandlerTest {
   private final RepositoryRuntime runtime = mock(RepositoryRuntime.class);
 
   @ParameterizedTest
+  @ValueSource(strings = {"login", "login_pss"})
+  void optionalLoginRoutesAreUnavailableByDefault(String path) {
+    when(runtime.name()).thenReturn("ohpm");
+    var request = new MockHttpServletRequest("POST", "/repository/ohpm/" + path);
+    var response = handler.handle(new RepositoryProtocolRequest(runtime, "ohpm", path,
+        HttpMethod.POST, request, null, null));
+    assertEquals(404, response.getStatusCode().value());
+    if (path.equals("login")) assertEquals(false, ((Map<?, ?>) response.getBody()).get("success"));
+    verifyNoInteractions(hosted, proxy, group);
+  }
+
+  @ParameterizedTest
   @ValueSource(booleans = {false, true})
   void metadataUsesOnlyTrustedExternalHeadersAndPreservesTheContextPath(boolean trusted) throws Exception {
     var request = new MockHttpServletRequest("GET", "/kk/repository/ohpm/@scope%2fpkg");

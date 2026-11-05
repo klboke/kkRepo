@@ -180,6 +180,7 @@ const viewHashRoutes = {
   "security-oidc": "#admin/security/oidc",
   "security-anonymous": "#admin/security/anonymous",
   "security-api-keys": "#admin/security/api-keys",
+  "ohpm-login": "#admin/security/ohpm-login",
   "security-scanning": SECURITY_SCAN_ROUTE_BASE,
   "security-audit-log": "#admin/security/audit-log",
   "ui-settings": "#admin/system/ui-settings",
@@ -210,6 +211,7 @@ const hashViewRoutes = {
   "#admin/security/anonymous": "security-anonymous",
   "#admin/security/api-keys": "security-api-keys",
   "#admin/security/apikeys": "security-api-keys",
+  "#admin/security/ohpm-login": "ohpm-login",
   "#admin/security/artifact-scanning": "security-scanning",
   "#admin/security/scanning": "security-scanning",
   "#admin/security/audit-log": "security-audit-log",
@@ -8291,6 +8293,7 @@ function switchView(view, options = {}) {
   if (view === "ui-settings") loadUiSettings();
   if (view === "repository-data-migration") loadRepositoryDataMigrationJobs();
   if (view === "ohpm-import") window.KkOhpmImport.load();
+  if (view === "ohpm-login") window.KkOhpmLogin.load();
   return true;
 }
 

@@ -26,7 +26,7 @@ multipart metadata 在 JSON 限制之外还受 8 MiB 原始字节上限约束。
 
 仅发布时数据库临时错误重试耗尽返回 `598`；非预期存储故障返回 `500`，输入错误返回 `400`，大小超限返回 `413`。实测 OHPM 6.0.1 普通上传不会自动重试 `598`；回滚后可显式重试，已经提交的版本仍禁止覆盖。客户端请求契约测试继续通过录制服务验证 stream `404` 回退。
 
-另已提供 [Proxy](ohpm-proxy.md)、[Group 仓库](ohpm-group.md) 和 [管理上传与删除](ohpm-management.md)。Login 和独立导入尚未提供。安全扫描目前将 OHPM 归为不适用；自动清理保持禁用，支持显式、协议感知的下架。协议写操作和管理上传已接入审计，请求指标包含 OHPM 操作。
+另已提供 [Proxy](ohpm-proxy.md)、[Group 仓库](ohpm-group.md)、[管理上传与删除](ohpm-management.md)、[独立导入](ohpm-import.md) 和 [可选签名 Login](ohpm-login.md)。Login 默认关闭。安全扫描目前将 OHPM 归为不适用；自动清理保持禁用，支持显式、协议感知的下架。协议写操作和管理上传已接入审计，请求指标包含 OHPM 操作。
 
 ## 一致性与存储
 
@@ -58,4 +58,4 @@ mvn -pl server -am -Dtest=OhpmHostedRuntimeTest \
 
 客户端不在 PATH 时加 `-Dkkrepo.ohpm.command=/absolute/path/to/ohpm`。显式启用客户端后，客户端缺失或版本不符会使测试失败。测试使用隔离的 registry、Token、客户端配置和缓存。
 
-HTTP 集成测试覆盖跨实例多版本并发、重复版本竞争、tag/下架竞争、下载与条件请求、整包下架后重建、HAR/HSP 类型切换，以及数据库回滚对新 blob 和复用 blob 的不同处理，包括第二个 HSP 附件写入后失败。真实客户端覆盖普通和流式 HAR/HSP 发布、HSP 双文件逐字节下载验证、HAR 安装、tag 操作及版本/整包下架；通过审计断言大 HAR/HSP 确实成功使用 stream 接口。解析器测试覆盖请求中断、暂存失败、归档边界与清理，并用动态生成的 64 MiB HAR 验证固定大小的读取缓冲区。历史客户端和 HSP 设备运行尚未验证。
+HTTP 集成测试覆盖跨实例多版本并发、重复版本竞争、tag/下架竞争、下载与条件请求、整包下架后重建、HAR/HSP 类型切换，以及数据库回滚对新 blob 和复用 blob 的不同处理，包括第二个 HSP 附件写入后失败。真实客户端覆盖普通和流式 HAR/HSP 发布、HSP 双文件逐字节下载验证、HAR 安装、tag 操作及版本/整包下架；通过审计断言大 HAR/HSP 确实成功使用 stream 接口。解析器测试覆盖请求中断、暂存失败、归档边界与清理，并用动态生成的 64 MiB HAR 验证固定大小的读取缓冲区。独立验收另已覆盖 OHPM 5.0.2，版本与命令见[验收说明](ohpm-acceptance.md)。HSP 设备运行尚未验证。

@@ -101,6 +101,8 @@ class OhpmHostedRuntimeTest {
     properties.put("kkrepo.maven.metadata-rebuild.enabled", "false");
     properties.put("kkrepo.storage.file.temp-cleanup-enabled", "false");
     properties.put("kkrepo.security.outbound.allowed-hosts", "127.0.0.1");
+    properties.put("kkrepo.ohpm.login.enabled", "true");
+    properties.put("kkrepo.security.default-authenticated-role-id", "");
     try (var first = start(properties); var second = start(properties); var client = HttpClient.newHttpClient()) {
       assertEquals(0, first.getBean(jakarta.servlet.MultipartConfigElement.class).getFileSizeThreshold());
       var security = first.getBean(SecurityManagementService.class);
@@ -198,6 +200,7 @@ class OhpmHostedRuntimeTest {
       assertStatus(client, "GET", hspMetadata.path("tarball").textValue(), token, null, 404);
       assertStatus(client, "GET", hspMetadata.path("resolved_hsp").textValue(), token, null, 404);
       verifyManagement(first, second, client, token);
+      OhpmLoginRuntimeChecks.verify(first, second, client, token, directory);
       verifyManagementPermissions(first, second, client);
       OhpmImportRuntimeChecks.verify(first, second, client, token, directory);
       var audit = first.getBean(SecurityAuditDao.class).search(SecurityAuditDao.AuditLogQuery.sanitize(null));
@@ -430,7 +433,7 @@ class OhpmHostedRuntimeTest {
     client(project, token, "unpublish", "@kkrepo/runtime-hsp", "--force", "--publish_registry", registry);
   }
 
-  private static Path archive(Path directory, String version, boolean large) throws Exception {
+  static Path archive(Path directory, String version, boolean large) throws Exception {
     Map<String, byte[]> files = new LinkedHashMap<>();
     files.put("package/oh-package.json5", JSON.writeValueAsBytes(Map.of(
         "name", "@kkrepo/runtime", "version", version, "main", "Index.ets",
@@ -609,7 +612,7 @@ class OhpmHostedRuntimeTest {
     return JSON.writeValueAsString(root);
   }
 
-  private static String publication(String version) throws Exception {
+  static String publication(String version) throws Exception {
     ObjectNode root = JSON.createObjectNode().put("name", PACKAGE).put("_id", PACKAGE);
     root.putObject("dist-tags").put("latest", version);
     root.putObject("versions").putObject(version).put("name", PACKAGE).put("version", version)

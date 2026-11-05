@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
 
 /** Guards the frozen V1-V29 chain and validates repeat startup after newer migrations. */
 class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
-  private static final int LATEST_MIGRATION = 61;
+  private static final int LATEST_MIGRATION = 62;
   private static final Map<String, String> V29_SHA256 = checksums();
 
   @Test
@@ -30,12 +30,32 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
       jdbc().execute(sql.substring(0, sql.indexOf(';')));
     }
     Flyway resumed = migration(null);
-    assertEquals(1, resumed.migrate().migrationsExecuted);
+    assertEquals(LATEST_MIGRATION - 60, resumed.migrate().migrationsExecuted);
     assertTrue(resumed.validateWithResult().validationSuccessful);
     assertEquals(0, resumed.migrate().migrationsExecuted);
     assertEquals(2, jdbc().queryForObject("""
         SELECT COUNT(*) FROM information_schema.tables
         WHERE table_schema = DATABASE() AND table_name IN ('ohpm_import_job', 'ohpm_import_item')
+        """, Integer.class));
+  }
+
+  @Test
+  void ohpmLoginMigrationResumesAfterItsFirstAutocommittedTable() throws Exception {
+    Flyway throughV61 = migration("61");
+    throughV61.clean();
+    assertEquals(61, throughV61.migrate().migrationsExecuted);
+    try (InputStream stream = getClass().getResourceAsStream("/db/migration/mysql/V62__ohpm_login.sql")) {
+      assertNotNull(stream);
+      String sql = new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+      jdbc().execute(sql.substring(0, sql.indexOf(';')));
+    }
+    Flyway resumed = migration(null);
+    assertEquals(LATEST_MIGRATION - 61, resumed.migrate().migrationsExecuted);
+    assertTrue(resumed.validateWithResult().validationSuccessful);
+    assertEquals(0, resumed.migrate().migrationsExecuted);
+    assertEquals(2, jdbc().queryForObject("""
+        SELECT COUNT(*) FROM information_schema.tables
+        WHERE table_schema = DATABASE() AND table_name IN ('ohpm_login_key', 'ohpm_login_nonce')
         """, Integer.class));
   }
 

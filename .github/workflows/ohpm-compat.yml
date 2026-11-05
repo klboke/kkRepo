@@ -1,0 +1,119 @@
+name: OHPM Compatibility
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "protocol-ohpm/**"
+      - "server/src/**/ohpm/**"
+      - "server/src/**/security/**"
+      - "persistence-*/**"
+      - "compat-test/src/test/java/**/Ohpm*"
+      - "scripts/ci/*ohpm*"
+      - ".github/workflows/ohpm-compat.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ohpm-compat-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  external-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        login: ["false", "true"]
+        database: [mysql, postgresql]
+        include:
+          - database: mysql
+            image: mysql:8.0
+            port: 3306
+            jdbc: jdbc:mysql://127.0.0.1:3306/kkrepo?useSSL=false&allowPublicKeyRetrieval=true&connectionTimeZone=UTC
+            health: mysqladmin ping -h 127.0.0.1 -ukkrepo -pkkrepo --silent
+          - database: postgresql
+            image: postgres:12
+            port: 5432
+            jdbc: jdbc:postgresql://127.0.0.1:5432/kkrepo
+            health: pg_isready -U kkrepo -d kkrepo
+    services:
+      database:
+        image: ${{ matrix.image }}
+        env:
+          MYSQL_ROOT_PASSWORD: kkrepo-root
+          MYSQL_DATABASE: kkrepo
+          MYSQL_USER: kkrepo
+          MYSQL_PASSWORD: kkrepo
+          POSTGRES_DB: kkrepo
+          POSTGRES_USER: kkrepo
+          POSTGRES_PASSWORD: kkrepo
+        ports:
+          - ${{ matrix.port }}:${{ matrix.port }}
+        options: >-
+          --health-cmd="${{ matrix.health }}"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    env:
+      KKREPO_COMPAT_BASE_URL: http://127.0.0.1:18090
+      KKREPO_COMPAT_USERNAME: admin
+      KKREPO_COMPAT_PASSWORD: "12345678"
+      OHPM_COMPAT_LOGIN_ENABLED: ${{ matrix.login }}
+      OHPM_EXPECTED_VERSION: "5.0.2"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+      - name: Install pinned official OHPM client
+        env:
+          OHPM_INSTALL_DIR: ${{ runner.temp }}/ohpm
+        run: |
+          bash scripts/ci/setup-ohpm-legacy.sh
+          echo "OHPM_COMMAND=$OHPM_INSTALL_DIR/oh-command-line-tools/ohpm/bin/ohpm" >> "$GITHUB_ENV"
+      - name: Build executable candidate
+        run: mvn -B -ntp -pl server -am -DskipTests package spring-boot:repackage
+      - name: Start disposable candidate
+        env:
+          SPRING_DATASOURCE_URL: ${{ matrix.jdbc }}
+          SPRING_DATASOURCE_USERNAME: kkrepo
+          SPRING_DATASOURCE_PASSWORD: kkrepo
+          KKREPO_DATABASE_TYPE: ${{ matrix.database }}
+          KKREPO_OHPM_LOGIN_ENABLED: ${{ matrix.login }}
+          KKREPO_OUTBOUND_ALLOWED_HOSTS: 127.0.0.1
+          KKREPO_LOGIN_RATE_LIMIT_PER_MINUTE: "200"
+          SPRING_PROFILES_ACTIVE: test
+        run: |
+          mkdir -p artifacts/ohpm
+          jar="$(find server/target -maxdepth 1 -name 'kkrepo-server-*.jar' -print -quit)"
+          test -n "$jar"
+          java -jar "$jar" --server.port=18090 --management.server.port=18091 \
+            --kkrepo.blob-gc.enabled=false --kkrepo.repository-index-rebuild.enabled=false \
+            > artifacts/ohpm/server.log 2>&1 &
+          echo "$!" > artifacts/ohpm/server.pid
+          export OHPM_COMPAT_BLOB_PATH="$RUNNER_TEMP/ohpm-blobs"
+          python3 scripts/ci/setup-ohpm-candidate.py
+      - name: Run protocol and real client acceptance
+        run: bash scripts/ci/run-ohpm-compat.sh client-e2e
+      - name: Preserve acceptance reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ohpm-${{ matrix.database }}-login-${{ matrix.login }}
+          path: |
+            compat-test/target/surefire-reports/*OhpmRepositoryBlackBoxCompatibilityTest*
+            artifacts/ohpm/server.log
+      - name: Stop candidate
+        if: always()
+        run: |
+          if [[ -f artifacts/ohpm/server.pid ]]; then
+            kill "$(cat artifacts/ohpm/server.pid)" || true
+          fi

@@ -1,6 +1,6 @@
 # OHPM 仓库实现计划
 
-状态：阶段 1–7 的实现和验收已完成，包括普通/流式 HAR/HSP、Proxy、Group、管理上传与浏览、独立导入、双数据库、双实例、真实 OHPM 6.0.1、全量 server 及默认兼容性回归。详见 [协议兼容性基线](ohpm-protocol-baseline.md)、[Hosted 实现说明](ohpm-hosted.md)、[Proxy 实现说明](ohpm-proxy.md)、[Group 实现说明](ohpm-group.md)、[管理集成说明](ohpm-management.md) 和 [独立导入说明](ohpm-import.md)。下一步为阶段 8 的可选 Login 与完整验收，尚未完成。
+状态：阶段 1–7 已提交。阶段 8 的可选 Login、独立黑盒、客户端 CI 入口及实际 S3 故障测试已完成实现与本地验收；上游 Actions 仍需要维护者批准，PR 保持 Draft，尚不宣称远端合并门槛通过。详见 [协议兼容性基线](ohpm-protocol-baseline.md)、[Hosted](ohpm-hosted.md)、[Proxy](ohpm-proxy.md)、[Group](ohpm-group.md)、[管理](ohpm-management.md)、[独立导入](ohpm-import.md)、[Login](ohpm-login.md) 和 [独立验收](ohpm-acceptance.md)。
 
 关联议题：[OHPM 推进情况与贡献意向 #492](https://github.com/klboke/kkRepo/issues/492)。
 设计依据：[OHPM / HarmonyOS 仓库开发设计说明](ohpm-repository-design.md)。
@@ -9,7 +9,7 @@
 
 完整交付 hosted、proxy、group、管理端、导入和真实客户端兼容性测试。默认使用现有 Access Token 能力；官方可选 Login 认证以可配置、默认关闭的能力交付。
 
-当前使用 `feat/ohpm-support` 分支，阶段 1 已提交为 `7f5f9b17`，阶段 2 已提交为 `8ec83517`，阶段 3 已提交为 `b26ac81f`，阶段 4 已提交为 `9172a5d2`，阶段 5 已提交为 `54f86a5c`，阶段 6 已提交为 `fbe60c6c`，并创建关联 #492 的 [Draft PR #493](https://github.com/klboke/kkRepo/pull/493)。后续按里程碑完成实现、验证、提交，并更新 PR 检查清单，完整验收后再转为 Ready。若维护者希望拆分 PR，可沿里程碑边界拆分；拆分开发不代表缩减原设计的最终范围。
+当前使用 `feat/ohpm-support` 分支，阶段 1 已提交为 `7f5f9b17`，阶段 2 已提交为 `8ec83517`，阶段 3 已提交为 `b26ac81f`，阶段 4 已提交为 `9172a5d2`，阶段 5 已提交为 `54f86a5c`，阶段 6 已提交为 `fbe60c6c`，阶段 7 已提交为 `84f95c8c`，并创建关联 #492 的 [Draft PR #493](https://github.com/klboke/kkRepo/pull/493)。后续按里程碑完成实现、验证、提交，并更新 PR 检查清单，完整验收后再转为 Ready。若维护者希望拆分 PR，可沿里程碑边界拆分；拆分开发不代表缩减原设计的最终范围。
 
 所有新增协议行为先核对华为官方协议及真实客户端行为。OHPM 不以 Nexus 为协议参考，不直接复制 npm 的响应码、路径解析或认证行为。
 
@@ -36,16 +36,59 @@
 | 4. Proxy | 已提交 | 上游代理、缓存、完整性校验及凭据保护 |
 | 5. Group | 已提交 | metadata 合并、确定性的版本及双文件来源 |
 | 6. 管理与浏览 | 已提交 | Admin/Browse、统一写入入口、权限及可观测性 |
-| 7. 独立导入 | 已验收 | dry-run、断点恢复、幂等导入及结果报告 |
-| 8. Login 与完整验收 | 待实施 | 可选签名认证、端到端矩阵及 PR 合并门槛 |
+| 7. 独立导入 | 已提交 | dry-run、断点恢复、幂等导入及结果报告 |
+| 8. Login 与完整验收 | 本地验收完成，远端 CI 待批准 | 可选签名认证、端到端矩阵及 PR 合并门槛 |
 
-### 当前优先事项：阶段 8 可选 Login 与完整验收
+### 阶段 8：可选 Login 与完整验收
 
 1. 核对官方 Login 和 OHPM 6.0.1 的签名原文、请求/响应及 `login_pss` 回退行为，固定兼容性测试。
 2. 实现默认关闭的配置入口、公钥与用户绑定、跨实例防重放及有期限 Token；复用现有身份、权限和 Token 能力。
 3. 覆盖过期、签名错误、重复 nonce、用户/密钥禁用及配置关闭，验证真实客户端签名认证后的发布闭环。
 4. 补齐独立服务端黑盒验收、客户端 E2E/CI 入口及必要的 AOT/runtime hints 验证。
 5. 运行最终完整回归，记录已验证版本、命令及未验证边界，更新 PR 验收清单后再判断 Ready 条件。
+
+#### 阶段 8 执行拆解
+
+已实现 Login 请求解析、V62 双库迁移、密钥与 nonce DAO、Token 策略、服务、管理 API/页面和中英文[签名登录说明](ohpm-login.md)，并提供独立黑盒、CI/E2E 入口和[验收说明](ohpm-acceptance.md)。编译、专项、最新客户端增量及最终完整本地回归均通过；远端 Actions 待维护者批准，不能用本地结果替代。
+
+| 顺序 | 实现内容 | 验收证据 |
+| --- | --- | --- |
+| 8.1 协议契约与编译 | 固定经典 Login 的 RSA-SHA256 签名原文、响应和客户端回退契约；运行协议专项测试及 server reactor 编译 | 请求字段、重复 JSON 字段、时间边界、签名篡改测试通过；模块依赖可编译 |
+| 8.2 持久化与事务 | 完成公钥绑定、唯一约束、nonce 生命周期和清理；同步迁移版本断言，补 MySQL V62 中途 DDL 恢复测试 | MySQL/PostgreSQL 契约通过；同 nonce 跨实例仅一次成功，事务回滚不遗留状态 |
+| 8.3 认证与权限 | 默认关闭；签发有期限且限 OHPM 协议使用的 Token；密钥轮换、禁用及用户状态即时生效；正常操作继续校验包权限 | 过期、错误签名、重放、配置关闭均拒绝；管理接口拒绝 Login Token；既有 GenericToken 行为不变 |
+| 8.4 真实客户端闭环 | 注册测试公钥，使用加密私钥运行 OHPM 6.0.1 签名发布与安装；验证并发不同 nonce 登录的 Token 复用 | `login_pss` 缺失时回退经典 Login 成功；双实例发布、读取及权限撤销通过，日志不含凭据 |
+| 8.5 管理与文档 | 补公钥配置、启用/禁用及删除界面；明确配置、期限、轮换和部署行为；更新中英文文档 | 管理界面测试、接口权限和审计验证通过；文档与实际配置一致 |
+| 8.6 独立验收入口 | 实现 `OhpmRepositoryBlackBoxCompatibilityTest`，接入客户端 E2E/CI，核对 AOT/runtime hints | 独立服务端黑盒实际运行；要求客户端的任务缺少客户端时明确失败；新增反射或序列化路径通过相应检查 |
+| 8.7 回归与交付 | 完整 server、兼容性、双库和受影响前端回归；汇总实际版本及未验证项；提交、推送并更新 Draft PR | PR 中附可复现命令与结果；全部合并门槛满足后才转 Ready |
+
+经典 Login 使用 `v1-<publishId>-<timestamp>-<nonce>` 作为签名原文；`login_pss` 保持未实现并返回 `404`，真实 OHPM 6.0.1 的回退测试已通过。公钥与防重放状态保存在共享数据库，Token 复用既有 `api_key` 存储并使用独立域；不能通过通用认证缓存绕过期限和密钥撤销。公钥轮换保留 publishId，同时撤销旧 Token。
+
+阶段 8 当前专项证据：105 项协议测试、7 项持久化测试、155 项 server 测试（含 OHPM、鉴权及 Jackson runtime hints）通过；Admin JavaScript 174 项及 Maven 中的 OHPM 页面测试通过；客户端及默认 Maven/npm 兼容性 28 项通过。V62 双库迁移和 MySQL 中途 DDL 恢复已单独验证。双实例检查覆盖 nonce 竞争及大小写归一、并发 Token 复用、期限、密钥轮换/启停、用户禁用、管理接口隔离、内容选择器与权限撤销。默认继承角色在路径权限用例中显式关闭，避免其额外授权掩盖选择器的实际效果。
+
+上述验证发现并修复了两个实现问题：签发 Token 必须使用与现有鉴权相同的 SHA-256；JDBC 读取无时区 API key 日期时间必须保持字段值，避免 MySQL 连接时区与 JVM 时区不同造成期限偏移。密钥变更按域与用户直接删除 Token，双库契约证明即使事务已有旧快照，也能撤销另一事务刚签发的 Token，而不影响 GenericToken。
+
+补充的 45 项运行时、Login 服务及鉴权测试通过，包含审计无 Token/签名泄漏和保留 Token 域的大小写隔离。`mvn -pl server -am ... package spring-boot:process-aot` 成功；生成的 reachability metadata 包含 `KeyCommand`、`EnabledCommand`、`KeyView`、`Configuration` 的构造器/访问器，以及 nonce 清理方法。这证明 AOT 处理及绑定信息生成成功，不等于已执行 native 可执行文件。
+
+最终可执行 jar 的独立黑盒通过五组验收，每组 8 项、无失败或跳过：OHPM 5.0.2 的 MySQL/PostgreSQL × Login 关闭/开启完整四组合，以及 OHPM 6.0.1 的 PostgreSQL/Login 开启。开启 Login 的客户端用例包含加密私钥签名发布及安装。CI 工作流已编写并通过语法检查，远端执行结果尚待确认。
+
+#### 阶段 8 收尾核对清单
+
+| 顺序 | 工作 | 完成条件 |
+| --- | --- | --- |
+| 1 | 修复 nonce 日期时间绑定：先运行已补充的跨时区契约复现，再统一按 UTC 读写无时区字段 | MySQL/PostgreSQL 在 UTC、Asia/Shanghai、America/Los_Angeles 切换下不会提前清理 nonce，过期后正常清理，重复请求仍被拒绝 |
+| 2 | 修复运行时测试的持久化分层违规，使用项目允许的 API 或持久化测试设施 | `PersistencePackageBoundaryTest` 通过；保留原有 Login 运行时验证，不放宽架构规则 |
+| 3 | 验证新抽取的签名夹具和黑盒真实客户端签名发布 | OHPM 5.0.2、6.0.1 均使用加密私钥完成签名发布与安装；原客户端契约继续通过；CI Login 开启分支覆盖此流程 |
+| 4 | 在实际 S3 兼容存储上补故障注入 | HAR/HSP 下载字节一致；第二附件写入失败时不发布不完整版本，重试成功；保存可复现步骤和报告 |
+| 5 | 顺序运行最终本地回归并核对 CI 定义 | server reactor、双库契约/迁移、OHPM 与默认兼容性、受影响前端测试通过；按修改范围复核 AOT，远端 CI 在推送后单独核对 |
+| 6 | 完成文档、需求逐项审计及阶段提交 | 文档和 PR 清单与实际证据一致；提交并推送阶段 8，确认远端提交和 CI；所有合并门槛满足后再转 Ready |
+
+清单第 1–5 项已通过本地验证。跨时区契约在修复前分别复现 MySQL/PostgreSQL 提前清理 nonce；DAO 改用 UTC `LocalDateTime` 读写后通过。运行时测试使用 `SecurityDao`，未放宽分层规则。最终 server reactor 中 server 共 4,174 项、零失败/错误，跳过一项显式启用的存储性能测试；双库迁移/契约随 reactor 通过。105 项 OHPM 协议、28 项客户端及默认 Maven/npm 兼容性、174 项 Admin JavaScript 测试通过。可执行 jar 与 AOT 处理成功。
+
+最终 jar 分别在 MySQL 和 PostgreSQL 上通过[实际 S3 故障验收](ohpm-s3-acceptance.md)：HAR 写入成功后四次 HSP PUT 均被阻断，发布 `500`、metadata/下载 `404`、回滚后 bucket 为空；恢复后重试成功，候选下载及直接 RustFS 下载的 HAR/HSP 字节一致。脚本保留可复现报告并记录残留 blobstore 清理边界。
+
+同一工作区的 Maven 构建依次执行，避免生成文件和测试报告相互覆盖。每项修复先跑对应专项，再集中执行最终完整回归。阶段 8 在本地验收后提交、推送及更新 PR 检查清单；远端 CI 未获批准或未通过时保持 Draft。
+
+最终验收区分历史客户端、实际 S3 兼容存储与生产云服务：OHPM 5.0.2 和 RustFS 故障注入已验证；AWS/OSS 云服务、S3 multipart 中断、最终 GC、native 可执行文件及 HSP 设备运行未验证。文件测试存储、AOT 处理和 HSP 文件校验不能代替这些场景；相关限制在 PR 和验收说明中明确记录。
 
 阶段 3 验收包含 49 项 server OHPM 测试；完整 server reactor 中 server 模块共 4,100 项测试、零失败/错误，跳过一项需显式启用的存储性能测试。双数据库运行时通过审计确认大 HAR/HSP 成功使用 stream 接口，另有 PAX/稀疏文件边界、64 MiB 固定缓冲区读取、暂存失败及双附件事务回滚测试。
 
@@ -199,14 +242,13 @@ mvn -pl compat-test -am -Dtest=OhpmClientContractTest \
   -Dkkrepo.ohpm.client=true -Dkkrepo.ohpm.expectedVersion=6.0.1 test
 ```
 
-Hosted 服务及黑盒测试类落地后，追加：
+Hosted 服务专项使用：
 
 ```bash
 mvn -pl server -am -Dtest='Ohpm*Test' -Dsurefire.failIfNoSpecifiedTests=false test
-mvn -pl compat-test -am -Dtest=OhpmRepositoryBlackBoxCompatibilityTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-`OhpmRepositoryBlackBoxCompatibilityTest` 尚待实现，live 测试的实例地址及配置需随 Hosted 测试入口落地。客户端请求录制测试不代替真实服务端验收。合并前运行仓库要求的 server 测试和默认兼容性回归；影响 JDBC 或 native 时追加对应检查。
+独立黑盒使用 `bash scripts/ci/run-ohpm-compat.sh blackbox`，含真实客户端使用 `bash scripts/ci/run-ohpm-compat.sh client-e2e`。先按[独立验收说明](ohpm-acceptance.md)准备可销毁的服务实例、配置地址及凭据，并固定客户端版本。脚本检查用例数量及跳过数，不能以未启用 live 测试的普通 Maven 成功代替验收。客户端请求录制测试不代替真实服务端验收。合并前运行仓库要求的 server 测试和默认兼容性回归；影响 JDBC 或 native 时追加对应检查。
 
 关键故障测试包括：鉴权失败无副作用、并发重复发布、tag/删除竞争、blob 成功但数据库失败、HAR/HSP 部分上传失败、缓存陈旧、上游文件校验失败、成员变化和导入中断恢复。
 
@@ -220,9 +262,9 @@ mvn -pl compat-test -am -Dtest=OhpmRepositoryBlackBoxCompatibilityTest -Dsurefir
 
 ## 尚待验证与环境准备
 
-1. 当前客户端执行基线为 OHPM 6.0.1；历史版本尚未实际执行，后续按可获取版本补充，不外推兼容性结论。
+1. 当前客户端执行基线为 OHPM 6.0.1，历史 OHPM 5.0.2 和最新签名发布增量均已通过独立黑盒验收，不外推到其他版本。
 2. 官方协议与实际客户端在认证、下架路径、HSP 和 `598` 上的差异已记录在协议兼容性基线中。新增接口须继续核对官方依据。
-3. package root 锁定和 blob 回滚补偿已通过双数据库服务测试；实际 OSS/S3 故障注入仍需另行验证，导入恢复状态在阶段 7 单独验证。
+3. package root 锁定和 blob 回滚补偿已通过双数据库服务测试，实际 RustFS S3 故障注入也在两种数据库的最终候选上通过；生产 AWS/OSS 服务验证仍独立记录，导入恢复状态在阶段 7 验证。
 4. Proxy 动态下载链接、Group 版本冲突及 HAR/HSP 来源一致性在阶段 4、5 固定规则并验证。
 5. 本机 JDK 25 已通过国内镜像准备，Maven 3.9 和 OHPM 6.0.1 已可运行，Docker 已启动。Hosted 测试自动创建两种数据库及共享文件测试存储的双实例，生产云存储验证单独记录。
 

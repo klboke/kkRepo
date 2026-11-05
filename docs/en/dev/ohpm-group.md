@@ -57,4 +57,4 @@ mvn -pl server -am -Dtest=OhpmProxyRuntimeTest \
   -Dkkrepo.ohpm.client=true -Dkkrepo.ohpm.expectedVersion=6.0.1 test
 ```
 
-These checks use generated protocol fixtures and file test storage. Historical clients, HSP device execution and live OSS/S3 fault injection remain unverified.
+These checks use generated protocol fixtures and file test storage. See [independent acceptance](ohpm-acceptance.md) for historical-client and S3-compatible storage coverage and its limits. HSP device execution remains unverified.

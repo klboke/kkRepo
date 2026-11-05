@@ -26,6 +26,7 @@
 | 流式上传 | 默认超过 5 MB 时 POST `stream/:package`；multipart 字段为 `metadata` 和 `pkg_stream`，不是 npm 附件 JSON。 |
 | 404 回退 | 6.0.1 对流式接口返回的 404 回退为普通 PUT，HAR/HSP 均已纳入客户端测试。 |
 | 598 重试 | 官方文档描述 5.0.1+ 自动重试，但本次实测 6.0.1 普通上传收到 598 后直接失败，并展示错误。测试固定这一观察及显式重试；不能把自动重试当成服务端正确性的前提。 |
+| 可选 Login | 6.0.1 先尝试 `login_pss`，遇到 `404` 后回退经典 `login`。后者以 RSA-SHA256 签名 UTF-8 的 `v1-<publishId>-<timestamp>-<nonce>`，返回的 Token 用于发布请求。详见[签名登录](ohpm-login.md)。 |
 
 新版本文档还描述精简 metadata、`login_pss`、Versions 和 CheckUpdate。这些不属于原设计列出的基础接口，不能仅凭已有协议模型宣称全部新版本 API 已支持；后续客户端矩阵扩展时应分别核对。
 
@@ -57,7 +58,7 @@
 
 ## 运行方式
 
-JDK 25、Maven 3.9+；真实客户端测试还要求已按华为工具要求安装 OHPM 和对应 Node.js。
+JDK 25、Maven 3.9+；真实客户端测试还要求已按华为工具要求安装 OHPM 和对应 Node.js。签名发布测试需要 Python 3，以驱动客户端的交互口令提示。
 
 协议单元测试：
 

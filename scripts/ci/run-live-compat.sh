@@ -94,6 +94,12 @@ case "$SUITE" in
     export PUB_COMPAT_ENABLED=true
     scripts/ci/run-client-e2e.sh
     ;;
+  ohpm)
+    bash scripts/ci/run-ohpm-compat.sh blackbox
+    ;;
+  ohpm-client-e2e)
+    bash scripts/ci/run-ohpm-compat.sh client-e2e
+    ;;
   swift)
     export SWIFT_COMPAT_ENABLED=true
     export SWIFT_COMPAT_PROXY_ENABLED="${SWIFT_COMPAT_PROXY_ENABLED:-true}"
@@ -137,7 +143,7 @@ case "$SUITE" in
     ;;
   *)
     echo "Unknown live compatibility suite: $SUITE" >&2
-    echo "Available suites: smoke, write-smoke, extended, nexus, client-e2e, swift, ansible, apt, conan, r, public-https, full" >&2
+    echo "Available suites: smoke, write-smoke, extended, nexus, client-e2e, ohpm, ohpm-client-e2e, swift, ansible, apt, conan, r, public-https, full" >&2
     exit 2
     ;;
 esac

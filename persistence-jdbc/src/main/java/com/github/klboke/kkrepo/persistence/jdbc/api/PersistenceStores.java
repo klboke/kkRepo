@@ -52,6 +52,8 @@ public interface PersistenceStores extends AutoCloseable {
 
   OhpmImportDao ohpmImports();
 
+  OhpmLoginDao ohpmLogin();
+
   ProxyStateDao proxyStates();
 
   RRegistryDao rRegistry();

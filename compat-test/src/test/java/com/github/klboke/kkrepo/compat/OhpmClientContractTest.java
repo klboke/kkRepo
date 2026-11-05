@@ -11,6 +11,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmPackageId;
+import com.github.klboke.kkrepo.protocol.ohpm.OhpmLoginRequest;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmPath;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmPathParser;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmPublishMetadata;
@@ -23,9 +24,14 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.security.KeyPairGenerator;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -52,6 +58,7 @@ class OhpmClientContractTest {
   private String registry;
   private int streamStatus = 200;
   private boolean retryNextPublish;
+  private String clientInput;
   private volatile ObjectNode metadata;
   private volatile OhpmFixture fixture;
 
@@ -83,6 +90,37 @@ class OhpmClientContractTest {
   @AfterEach
   void stopRecordingRegistry() {
     if (server != null) server.stop(0);
+  }
+
+  @Test
+  void signedPublicationFallsBackFromPssToClassicLoginAndUsesTheReturnedToken() throws Exception {
+    var generator = KeyPairGenerator.getInstance("RSA");
+    generator.initialize(2048);
+    var key = generator.generateKeyPair();
+    String passphrase = "ohpm-contract-passphrase";
+    Path privateKey = OhpmSigningFixture.writePrivateKey(temporary, key, passphrase);
+    Path configuration = temporary.resolve(".ohpmrc");
+    String configured = Files.readString(configuration).replaceAll("(?m)^//[^\\n]*:_auth=.*\\n", "");
+    Files.writeString(configuration, configured);
+    Files.writeString(configuration, """
+        publish_id=contract-publisher
+        key_path=%s
+        """.formatted(privateKey), StandardOpenOption.APPEND);
+    fixture = OhpmFixture.create(temporary, "@kkrepo/fixture", "1.2.3", false, false);
+    clientInput = passphrase + "\n";
+    run("publish", fixture.archive().toString(), "--publish_registry", registry);
+    var pss = requests.stream().filter(request -> request.path().endsWith("/login_pss")).findFirst().orElseThrow();
+    var login = requests.stream().filter(request -> parsed(request).kind() == OhpmPath.Kind.LOGIN)
+        .findFirst().orElseThrow();
+    assertTrue(requests.indexOf(pss) < requests.indexOf(login));
+    assertTrue(login.authorization() == null || login.authorization().isEmpty());
+    OhpmLoginRequest signed = OhpmLoginRequest.read(new ByteArrayInputStream(login.body()));
+    assertEquals("contract-publisher", signed.publishId());
+    assertTrue(signed.timely(Instant.now(), Duration.ofMinutes(5)));
+    assertTrue(signed.verify(key.getPublic()));
+    var publication = requests.stream().filter(request -> parsed(request).kind() == OhpmPath.Kind.PUBLISH)
+        .findFirst().orElseThrow();
+    assertEquals(TOKEN, publication.authorization());
   }
 
   @Test
@@ -198,6 +236,9 @@ class OhpmClientContractTest {
       int status = path.kind() == OhpmPath.Kind.STREAM_PUBLISH ? streamStatus : 200;
       byte[] response = "{\"code\":200,\"message\":\"success\"}".getBytes(StandardCharsets.UTF_8);
       if (path.kind() == OhpmPath.Kind.UNKNOWN) status = 404;
+      if (path.kind() == OhpmPath.Kind.LOGIN) {
+        response = MAPPER.writeValueAsBytes(Map.of("success", true, "token", TOKEN));
+      }
       if (path.kind() == OhpmPath.Kind.PUBLISH && retryNextPublish) {
         retryNextPublish = false;
         status = 598;
@@ -234,12 +275,20 @@ class OhpmClientContractTest {
 
   private String runExpecting(int exitCode, String... arguments) throws Exception {
     List<String> command = new ArrayList<>();
+    if (clientInput != null) {
+      command.add("python3");
+      command.add(Path.of("../scripts/ci/ohpm-signing-client.py").toAbsolutePath().normalize().toString());
+    }
     command.add(System.getProperty("kkrepo.ohpm.command", "ohpm"));
     command.addAll(List.of(arguments));
     Path output = temporary.resolve("client-" + invocations.incrementAndGet() + ".log");
     Process process = new ProcessBuilder(command).directory(temporary.toFile())
         .redirectErrorStream(true).redirectOutput(output.toFile()).start();
-    boolean completed = process.waitFor(45, TimeUnit.SECONDS);
+    if (clientInput != null) {
+      process.getOutputStream().write(clientInput.getBytes(StandardCharsets.UTF_8));
+      process.getOutputStream().close();
+    }
+    boolean completed = process.waitFor(60, TimeUnit.SECONDS);
     if (!completed) {
       process.destroyForcibly();
       process.waitFor(5, TimeUnit.SECONDS);

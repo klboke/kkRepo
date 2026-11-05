@@ -352,6 +352,8 @@ public abstract class PersistenceApiContract {
         "gitlfs_upload",
         "ohpm_import_job",
         "ohpm_import_item",
+        "ohpm_login_key",
+        "ohpm_login_nonce",
         "api_key",
         "ansible_collection_signature",
         "ansible_collection_version",

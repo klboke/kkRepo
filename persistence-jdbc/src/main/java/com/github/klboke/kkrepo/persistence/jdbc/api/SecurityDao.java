@@ -111,6 +111,8 @@ public interface SecurityDao {
 
   int deleteApiKey(long id);
 
+  int deleteApiKey(String domain, String ownerSource, String ownerUserId);
+
   int deleteApiKeysForOwner(String ownerSource, String ownerUserId);
 
   void markApiKeyUsed(long id, LocalDateTime usedAt);

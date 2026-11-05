@@ -87,6 +87,12 @@ public class SecurityAuthenticationService {
   private final BasicAuthCache basicAuthCache;
   private final SecurityCatalogCache securityCatalogCache;
   private final TransactionTemplate authenticationTransactions;
+  private OhpmLoginTokenPolicy ohpmLoginTokens;
+
+  @Autowired
+  void configureOhpmLoginTokens(OhpmLoginTokenPolicy policy) {
+    this.ohpmLoginTokens = policy;
+  }
 
   public SecurityAuthenticationService(
       SecurityDao securityDao,
@@ -193,7 +199,7 @@ public class SecurityAuthenticationService {
   public Optional<AuthenticatedSubject> authenticateOhpmFresh(HttpServletRequest request) {
     String token = request.getHeader("Authorization");
     if (token == null || token.isBlank()) return authenticateFresh(request);
-    return inAuthenticationTransaction(() -> resolveApiKey(ApiKeyTokenCandidate.fromPresentedToken(token)));
+    return inAuthenticationTransaction(() -> resolveApiKey(ApiKeyTokenCandidate.fromPresentedToken(token), true));
   }
 
   private Optional<AuthenticatedSubject> authenticatePresented(HttpServletRequest request, boolean fresh) {
@@ -541,11 +547,16 @@ public class SecurityAuthenticationService {
   }
 
   private Optional<AuthenticatedSubject> resolveApiKey(List<ApiKeyTokenCandidate> candidates) {
+    return resolveApiKey(candidates, false);
+  }
+
+  private Optional<AuthenticatedSubject> resolveApiKey(List<ApiKeyTokenCandidate> candidates, boolean ohpm) {
     Optional<ApiKeyRecord> match = findApiKey(candidates);
-    if (match.isEmpty() || !activeApiKey(match.get())) {
-      return Optional.empty();
-    }
+    if (match.isEmpty()) return Optional.empty();
     ApiKeyRecord apiKey = match.get();
+    if (OhpmLoginTokenPolicy.DOMAIN.equalsIgnoreCase(apiKey.domain())) {
+      if (!ohpm || ohpmLoginTokens == null || !ohpmLoginTokens.valid(apiKey)) return Optional.empty();
+    } else if (!activeApiKey(apiKey)) return Optional.empty();
     Optional<SecurityUserRecord> owner = securityDao.findUser(apiKey.ownerSource(), apiKey.ownerUserId())
         .filter(this::activeUser);
     if (owner.isEmpty()) {

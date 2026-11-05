@@ -57,4 +57,4 @@ mvn -pl server -am -Dtest=OhpmProxyRuntimeTest \
   -Dkkrepo.ohpm.client=true -Dkkrepo.ohpm.expectedVersion=6.0.1 test
 ```
 
-测试使用生成的协议夹具和文件测试存储。历史客户端、HSP 设备执行与实际 OSS/S3 故障注入尚未验证。
+测试使用生成的协议夹具和文件测试存储。历史客户端及 S3 兼容存储的覆盖与限制见[独立验收说明](ohpm-acceptance.md)。HSP 设备执行尚未验证。

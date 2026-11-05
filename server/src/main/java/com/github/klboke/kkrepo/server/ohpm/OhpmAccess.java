@@ -29,6 +29,12 @@ public class OhpmAccess {
   private final RepositoryDao repositories;
   private final ObjectMapper json;
   private final OhpmPathParser paths = new OhpmPathParser();
+  private OhpmLoginService login;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  void configureLogin(OhpmLoginService login) {
+    this.login = login;
+  }
 
   public OhpmAccess(SecurityAuthenticationService authentication, AccessDecisionService permissions,
       RepositoryDao repositories, ObjectMapper json) {
@@ -43,14 +49,23 @@ public class OhpmAccess {
     try {
       OhpmPath path = paths.parse(request.getMethod(), rawPath);
       request.setAttribute(PATH_ATTRIBUTE, path);
-      if (path.kind() == OhpmPath.Kind.UNKNOWN || path.kind() == OhpmPath.Kind.LOGIN) {
+      if (path.kind() == OhpmPath.Kind.UNKNOWN) {
         throw new OhpmException(404, "OHPM endpoint is not available");
+      }
+      if (path.kind() == OhpmPath.Kind.LOGIN && (login == null || !login.enabled())) {
+        throw new OhpmException(404, "OHPM Login is disabled");
       }
       repository = repositories.findById(repository.id())
           .filter(value -> value.format() == RepositoryFormat.OHPM)
           .orElseThrow(() -> new OhpmException(404, "Repository does not exist"));
       request.setAttribute(RepositorySecurityFilter.REPOSITORY_RECORD_ATTRIBUTE, repository);
       if (!repository.online()) throw new OhpmException(503, "Repository is offline");
+      if (path.kind() == OhpmPath.Kind.LOGIN) {
+        if (repository.type() != com.github.klboke.kkrepo.core.RepositoryType.HOSTED) {
+          throw new OhpmException(405, "OHPM Login requires a hosted repository");
+        }
+        return true;
+      }
       if (path.kind() == OhpmPath.Kind.PING) return true;
       PermissionAction action = switch (path.kind()) {
         case METADATA, DOWNLOAD -> PermissionAction.READ;
@@ -80,7 +95,12 @@ public class OhpmAccess {
       response.setStatus(error.status());
       response.setContentType("application/json");
       response.setHeader("Cache-Control", "no-store");
-      if (!"HEAD".equals(request.getMethod())) json.writeValue(response.getOutputStream(), error.response());
+      if (!"HEAD".equals(request.getMethod())) {
+        boolean signing = request.getAttribute(PATH_ATTRIBUTE) instanceof OhpmPath parsed
+            && parsed.kind() == OhpmPath.Kind.LOGIN;
+        json.writeValue(response.getOutputStream(),
+            signing ? java.util.Map.of("success", false, "error", error.getMessage()) : error.response());
+      }
       return false;
     }
   }
