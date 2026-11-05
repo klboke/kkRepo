@@ -12,8 +12,13 @@ import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CreateCommand;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.GroupSettings;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.HostedSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.ProxySettings;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.UpdateCommand;
 import com.github.klboke.kkrepo.server.repositories.RepositoryService;
+import com.github.klboke.kkrepo.server.repositories.RepositoryValidationException;
+import com.github.klboke.kkrepo.server.raw.RawHostedService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AdminBootstrapCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.ApiKeyCommand;
@@ -30,6 +35,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.LinkedHashMap;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -193,6 +199,7 @@ class OhpmProxyRuntimeTest {
         assertEquals(405, client.send(HttpRequest.newBuilder(URI.create(target)).header("Authorization", token)
             .method(method, HttpRequest.BodyPublishers.noBody()).build(), HttpResponse.BodyHandlers.discarding()).statusCode());
       }
+      verifyGroup(first, second, client, token, har);
       if (Boolean.getBoolean("kkrepo.ohpm.client")) install(firstUrl, token, PACKAGE + "@1.0.0", "controlled");
       if (Boolean.getBoolean("kkrepo.ohpm.publicProxy")) {
         first.getBean(RepositoryService.class).create(new CreateCommand(
@@ -208,6 +215,92 @@ class OhpmProxyRuntimeTest {
     } finally {
       upstream.stop(0);
     }
+  }
+
+  private void verifyGroup(ConfigurableApplicationContext first, ConfigurableApplicationContext second,
+      HttpClient client, String token, byte[] remoteHar) throws Exception {
+    var repositories = first.getBean(RepositoryService.class);
+    repositories.create(new CreateCommand("ohpm-local", "ohpm-hosted", true, "default", false,
+        new HostedSettings("ALLOW_ONCE", null, null), null, null, null, null, null));
+    byte[] localHar = har("local");
+    byte[] localHsp = new byte[] {4, 5, 6};
+    publish(client, url(first) + "/repository/ohpm-local/", token, PACKAGE, localHar, null);
+    publish(client, url(first) + "/repository/ohpm-local/", token, PACKAGE + "-hsp", localHar, localHsp);
+    repositories.create(new CreateCommand("ohpm-all", "ohpm-group", true, "default", false,
+        null, null, null, null, null, new GroupSettings(List.of("ohpm-local", "ohpm"))));
+    assertThrows(RepositoryValidationException.class, () -> repositories.create(new CreateCommand(
+        "ohpm-nested", "ohpm-group", true, "default", false,
+        null, null, null, null, null, new GroupSettings(List.of("ohpm-all")))));
+    repositories.create(new CreateCommand("raw-test", "raw-hosted", true, "default", false,
+        new HostedSettings("ALLOW", null, null), null, null, null, null, null));
+    assertThrows(RepositoryValidationException.class, () -> repositories.replaceMembers("ohpm-all", List.of("raw-test")));
+    String firstUrl = url(first) + "/repository/ohpm-all/";
+    String secondUrl = url(second) + "/repository/ohpm-all/";
+    assertEquals(401, response(client, secondUrl + PACKAGE, null).statusCode());
+    var metadata = response(client, secondUrl + PACKAGE, token);
+    assertEquals(200, metadata.statusCode(), new String(metadata.body(), StandardCharsets.UTF_8));
+    var dist = JSON.readTree(metadata.body()).path("versions").path("1.0.0").path("dist");
+    String oldHar = dist.path("tarball").asText();
+    assertTrue(oldHar.startsWith(secondUrl));
+    assertTrue(oldHar.contains("?kkrepo_source="));
+    assertArrayEquals(localHar, response(client, oldHar, token).body());
+    assertEquals(400, response(client, oldHar.substring(0, oldHar.indexOf('?')), token).statusCode());
+    assertEquals(400, response(client, oldHar + "&kkrepo_source=duplicate", token).statusCode());
+    assertEquals(304, client.send(HttpRequest.newBuilder(URI.create(secondUrl + PACKAGE))
+        .header("Authorization", token).header("If-None-Match", metadata.headers().firstValue("ETag").orElseThrow())
+        .GET().build(), HttpResponse.BodyHandlers.discarding()).statusCode());
+    assertEquals(200, client.send(HttpRequest.newBuilder(URI.create(oldHar)).header("Authorization", token)
+        .method("HEAD", HttpRequest.BodyPublishers.noBody()).build(), HttpResponse.BodyHandlers.discarding()).statusCode());
+    var hsp = JSON.readTree(response(client, firstUrl + PACKAGE + "-hsp", token).body())
+        .path("versions").path("1.0.0").path("dist");
+    assertArrayEquals(localHar, response(client, hsp.path("tarball").asText(), token).body());
+    repositories.replaceMembers("ohpm-all", List.of("ohpm", "ohpm-local"));
+    assertEquals(409, response(client, oldHar, token).statusCode());
+    assertEquals(200, client.send(HttpRequest.newBuilder(URI.create(secondUrl + PACKAGE))
+        .header("Authorization", token).header("If-Modified-Since", "Thu, 01 Jan 2037 00:00:00 GMT")
+        .GET().build(), HttpResponse.BodyHandlers.discarding()).statusCode());
+    assertEquals(409, response(client, hsp.path("resolved_hsp").asText(), token).statusCode());
+    var reordered = JSON.readTree(response(client, secondUrl + PACKAGE + "-hsp", token).body())
+        .path("versions").path("1.0.0").path("dist");
+    assertArrayEquals(remoteHar, response(client, reordered.path("tarball").asText(), token).body());
+    assertArrayEquals(HSP, response(client, reordered.path("resolved_hsp").asText(), token).body());
+    if (Boolean.getBoolean("kkrepo.ohpm.client")) install(secondUrl, token, PACKAGE + "@1.0.0", "group");
+    repositories.replaceMembers("ohpm-all", List.of("ohpm-local", "ohpm"));
+    var local = first.getBean(RepositoryRuntimeRegistry.class).resolve("ohpm-local").orElseThrow();
+    String missingPath = PACKAGE + "-hsp/-/" + PACKAGE + "-hsp-1.0.0.har";
+    first.getBean(RawHostedService.class).deleteInternal(local, missingPath);
+    var missing = JSON.readTree(response(client, secondUrl + PACKAGE + "-hsp", token).body())
+        .path("versions").path("1.0.0").path("dist").path("tarball").asText();
+    assertEquals(404, response(client, missing, token).statusCode(), "A missing winning file must not fall back");
+    repositories.update("ohpm-local", new UpdateCommand(false, null, null, null, null, null, null, null, null));
+    assertEquals(503, response(client, secondUrl + PACKAGE, token).statusCode());
+    repositories.update("ohpm-local", new UpdateCommand(true, null, null, null, null, null, null, null, null));
+    for (String method : List.of("PUT", "POST", "DELETE")) {
+      String target = method.equals("POST") ? firstUrl + "stream/" + PACKAGE : firstUrl + PACKAGE;
+      assertEquals(405, client.send(HttpRequest.newBuilder(URI.create(target)).header("Authorization", token)
+          .method(method, HttpRequest.BodyPublishers.noBody()).build(), HttpResponse.BodyHandlers.discarding()).statusCode());
+    }
+  }
+
+  private static void publish(HttpClient client, String registry, String token,
+      String name, byte[] har, byte[] hsp) throws Exception {
+    var root = JSON.createObjectNode().put("name", name).put("_id", name);
+    root.putObject("dist-tags").put("latest", "1.0.0");
+    var manifest = root.putObject("versions").putObject("1.0.0").put("name", name).put("version", "1.0.0")
+        .put("_ohpmVersion", "6.0.1").put("main", "Index.ets");
+    var dist = manifest.putObject("dist").put("integrity", OhpmIntegrity.compute(new ByteArrayInputStream(har)).value());
+    var attachments = root.putObject("_attachments");
+    attachments.putObject(name + "-1.0.0.har").put("length", har.length).put("data", Base64.getEncoder().encodeToString(har));
+    if (hsp != null) {
+      root.put("packageType", "InterfaceHar").put("hspType", "bundle_app");
+      manifest.put("types", "Index.d.ets");
+      dist.put("integrity_hsp", OhpmIntegrity.compute(new ByteArrayInputStream(hsp)).value());
+      attachments.putObject(name + "-1.0.0.hsp").put("length", hsp.length).put("data", Base64.getEncoder().encodeToString(hsp));
+    }
+    var response = client.send(HttpRequest.newBuilder(URI.create(registry + name)).header("Authorization", token)
+        .header("Content-Type", "application/json").PUT(HttpRequest.BodyPublishers.ofByteArray(JSON.writeValueAsBytes(root)))
+        .build(), HttpResponse.BodyHandlers.ofString());
+    assertEquals(200, response.statusCode(), response.body());
   }
 
   private void install(String registry, String token, String coordinate, String label) throws Exception {
@@ -247,11 +340,15 @@ class OhpmProxyRuntimeTest {
   }
 
   private static byte[] har() throws Exception {
+    return har("proxy");
+  }
+
+  private static byte[] har(String value) throws Exception {
     var bytes = new ByteArrayOutputStream();
     try (var tar = new TarArchiveOutputStream(new GzipCompressorOutputStream(bytes))) {
       for (var entry : Map.of(
           "package/oh-package.json5", "{\"name\":\"" + PACKAGE + "\",\"version\":\"1.0.0\",\"main\":\"Index.ets\"}",
-          "package/Index.ets", "export const fixture = 'proxy';").entrySet()) {
+          "package/Index.ets", "export const fixture = '" + value + "';").entrySet()) {
         byte[] content = entry.getValue().getBytes(StandardCharsets.UTF_8);
         var header = new TarArchiveEntry(entry.getKey());
         header.setSize(content.length);

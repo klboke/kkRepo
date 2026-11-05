@@ -263,12 +263,12 @@ public class OhpmProxyService {
     AssetBlobRecord blob = entry.blob();
     downloads.beforeReadFromRepository(entry.asset().id(), blob.id(), runtime.id());
     var reference = BlobReferenceCodec.reference(blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size());
-    return (head ? MavenResponse.noBody(200, blob.size(), "application/octet-stream",
+    return OhpmContentIntegrity.attach((head ? MavenResponse.noBody(200, blob.size(), "application/octet-stream",
         blob.sha256(), entry.asset().lastUpdatedAt())
         : MavenResponse.ok(() -> storages.forBlobStoreId(blob.blobStoreId()).get(reference)
             .orElseThrow(() -> error(502, "OHPM cached content is unavailable")),
             blob.size(), "application/octet-stream", blob.sha256(), entry.asset().lastUpdatedAt()))
-        .withHeader("Cache-Control", "private, no-cache");
+        .withHeader("Cache-Control", "private, no-cache"), blob.attributes().get("sha512"));
   }
 
   private boolean fresh(RepositoryRuntime runtime, AssetRecord asset, NexusCacheType type, int minutes) {

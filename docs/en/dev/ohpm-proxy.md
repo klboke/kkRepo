@@ -65,4 +65,4 @@ mvn -pl server -am -Dtest=OhpmProxyRuntimeTest \
 
 Add `-Dkkrepo.ohpm.publicProxy=true` to install `@ohos/axios@2.2.15` through the public upstream and assert that kkRepo persisted the downloaded HAR. This check requires public network access and a real client; it is not part of ordinary offline CI. Use `-Dkkrepo.ohpm.command=/absolute/path/to/ohpm` when the client is not on PATH.
 
-Historical clients, HSP execution on devices and cloud OSS/S3 fault injection remain outside the verified runtime coverage. Group repositories and independent import are later milestones.
+Historical clients, HSP execution on devices and cloud OSS/S3 fault injection remain outside the verified runtime coverage. [Group repositories](ohpm-group.md) are available; independent import is a later milestone.

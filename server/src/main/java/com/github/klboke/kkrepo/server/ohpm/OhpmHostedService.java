@@ -159,13 +159,15 @@ public class OhpmHostedService {
     var blob = assets.findBlobById(asset.assetBlobId()).orElseThrow(OhpmHostedService::missing);
     downloads.beforeReadFromRepository(asset.id(), blob.id(), runtime.id());
     if (head) {
-      return MavenResponse.noBody(200, blob.size(), "application/octet-stream", blob.sha256(), asset.lastUpdatedAt());
+      return OhpmContentIntegrity.attach(
+          MavenResponse.noBody(200, blob.size(), "application/octet-stream", blob.sha256(), asset.lastUpdatedAt()),
+          blob.attributes().get("sha512"));
     }
     var reference = BlobReferenceCodec.reference(blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size());
-    return MavenResponse.ok(() -> storages.forBlobStoreId(blob.blobStoreId()).get(reference)
+    return OhpmContentIntegrity.attach(MavenResponse.ok(() -> storages.forBlobStoreId(blob.blobStoreId()).get(reference)
         .orElseThrow(OhpmHostedService::missing),
         blob.size(), "application/octet-stream", blob.sha256(), asset.lastUpdatedAt())
-        .withHeader("Cache-Control", "private, no-cache");
+        .withHeader("Cache-Control", "private, no-cache"), blob.attributes().get("sha512"));
   }
 
   public void tag(RepositoryRuntime runtime, OhpmPackageId packageId, String tag, String version, boolean delete) {

@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmException;
+import com.github.klboke.kkrepo.protocol.ohpm.OhpmGroupMetadata;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmPath;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmPathParser;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmUnpublishRequest;
@@ -15,6 +16,7 @@ import com.github.klboke.kkrepo.server.config.RepositoryUrlPrefix;
 import com.github.klboke.kkrepo.server.http.ConditionalResponses;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.ohpm.OhpmAccess;
+import com.github.klboke.kkrepo.server.ohpm.OhpmGroupService;
 import com.github.klboke.kkrepo.server.ohpm.OhpmHostedService;
 import com.github.klboke.kkrepo.server.ohpm.OhpmProxyService;
 import com.github.klboke.kkrepo.server.routing.RepositoryProtocolHandler;
@@ -45,15 +47,17 @@ public class OhpmProtocolHandler implements RepositoryProtocolHandler {
   private static final Logger log = LoggerFactory.getLogger(OhpmProtocolHandler.class);
   private final OhpmHostedService hosted;
   private final OhpmProxyService proxy;
+  private final OhpmGroupService group;
   private final OhpmAccess access;
   private final ObjectMapper json;
   private final ForwardedHeaderPolicy forwarded;
   private final OhpmPathParser paths = new OhpmPathParser();
 
-  public OhpmProtocolHandler(OhpmHostedService hosted, OhpmProxyService proxy, OhpmAccess access,
+  public OhpmProtocolHandler(OhpmHostedService hosted, OhpmProxyService proxy, OhpmGroupService group, OhpmAccess access,
       ObjectMapper json, ForwardedHeaderPolicy forwarded) {
     this.hosted = hosted;
     this.proxy = proxy;
+    this.group = group;
     this.access = access;
     this.json = json;
     this.forwarded = forwarded;
@@ -62,7 +66,7 @@ public class OhpmProtocolHandler implements RepositoryProtocolHandler {
   @Override
   public Collection<RepositoryProtocolRoute> routes() {
     return List.of(HttpMethod.GET, HttpMethod.HEAD, HttpMethod.PUT, HttpMethod.POST, HttpMethod.DELETE)
-        .stream().flatMap(method -> List.of(RepositoryType.HOSTED, RepositoryType.PROXY).stream()
+        .stream().flatMap(method -> List.of(RepositoryType.HOSTED, RepositoryType.PROXY, RepositoryType.GROUP).stream()
             .map(type -> RepositoryProtocolRoute.anyPath(RepositoryFormat.OHPM, type, method, 0))).toList();
   }
 
@@ -77,20 +81,25 @@ public class OhpmProtocolHandler implements RepositoryProtocolHandler {
       }
       if (!context.runtime().online()) throw new OhpmException(503, "Repository is offline");
       boolean head = context.method() == HttpMethod.HEAD;
+      String base = forwarded.serverBaseUrl(request) + request.getContextPath()
+          + RepositoryUrlPrefix.path(request) + context.runtime().name();
       if (path.kind() == OhpmPath.Kind.METADATA) {
-        String base = forwarded.serverBaseUrl(request) + request.getContextPath()
-            + RepositoryUrlPrefix.path(request) + context.runtime().name();
-        return read(request, context.runtime().isProxy()
+        return read(request, context.runtime().isGroup()
+            ? group.metadata(context.runtime(), path.packageId(), base, head) : context.runtime().isProxy()
             ? proxy.metadata(context.runtime(), path.packageId(), base, head)
             : hosted.metadata(context.runtime(), path.packageId(), base, head), head);
       }
       if (path.kind() == OhpmPath.Kind.DOWNLOAD) {
-        return read(request, context.runtime().isProxy()
+        String[] sources = request.getParameterValues(OhpmGroupMetadata.SOURCE_PARAMETER);
+        if (sources != null && sources.length != 1) throw new OhpmException(400, "Ambiguous OHPM group source");
+        return read(request, context.runtime().isGroup()
+            ? group.download(context.runtime(), path.packageId(), path.assetPath(),
+                sources == null ? null : sources[0], base, head) : context.runtime().isProxy()
             ? proxy.download(context.runtime(), path.packageId(), path.assetPath(), head)
             : hosted.download(context.runtime(), path.assetPath(), head), head);
       }
-      if (context.runtime().isProxy() && path.kind() != OhpmPath.Kind.PING) {
-        throw new OhpmException(405, "OHPM proxy repositories are read-only");
+      if ((context.runtime().isProxy() || context.runtime().isGroup()) && path.kind() != OhpmPath.Kind.PING) {
+        throw new OhpmException(405, "OHPM proxy and group repositories are read-only");
       }
       if (path.kind() != OhpmPath.Kind.PING) {
         request.setAttribute(ManagementAuditFilter.OPERATION_DETAILS_ATTRIBUTE,

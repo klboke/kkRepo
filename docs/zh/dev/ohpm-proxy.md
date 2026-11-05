@@ -65,4 +65,4 @@ mvn -pl server -am -Dtest=OhpmProxyRuntimeTest \
 
 追加 `-Dkkrepo.ohpm.publicProxy=true` 可通过公共上游安装 `@ohos/axios@2.2.15`，并断言 kkRepo 已持久化下载的 HAR。该检查需要公网和真实客户端，不属于常规离线 CI。客户端不在 PATH 时设置 `-Dkkrepo.ohpm.command=/absolute/path/to/ohpm`。
 
-历史客户端、HSP 设备运行及实际 OSS/S3 故障注入尚未验证。Group 和独立导入属于后续阶段。
+历史客户端、HSP 设备运行及实际 OSS/S3 故障注入尚未验证。已提供 [Group 仓库](ohpm-group.md)，独立导入属于后续阶段。

@@ -23,9 +23,10 @@ import org.springframework.mock.web.MockHttpServletRequest;
 class OhpmProtocolHandlerTest {
   private final OhpmHostedService hosted = mock(OhpmHostedService.class);
   private final OhpmProxyService proxy = mock(OhpmProxyService.class);
+  private final OhpmGroupService group = mock(OhpmGroupService.class);
   private final OhpmAccess access = mock(OhpmAccess.class);
   private final ForwardedHeaderPolicy forwarded = mock(ForwardedHeaderPolicy.class);
-  private final OhpmProtocolHandler handler = new OhpmProtocolHandler(hosted, proxy, access, new ObjectMapper(), forwarded);
+  private final OhpmProtocolHandler handler = new OhpmProtocolHandler(hosted, proxy, group, access, new ObjectMapper(), forwarded);
   private final RepositoryRuntime runtime = mock(RepositoryRuntime.class);
 
   @ParameterizedTest
@@ -79,6 +80,15 @@ class OhpmProtocolHandlerTest {
     when(runtime.isProxy()).thenReturn(true);
     assertEquals(405, handler.handle(context).getStatusCode().value());
     verifyNoInteractions(hosted, proxy);
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void groupRejectsBothPublicationModes(boolean stream) {
+    var context = request(stream);
+    when(runtime.isGroup()).thenReturn(true);
+    assertEquals(405, handler.handle(context).getStatusCode().value());
+    verifyNoInteractions(hosted, proxy, group);
   }
 
   private RepositoryProtocolRequest request(boolean stream) {
