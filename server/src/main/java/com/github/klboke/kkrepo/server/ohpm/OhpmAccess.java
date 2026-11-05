@@ -43,8 +43,7 @@ public class OhpmAccess {
     try {
       OhpmPath path = paths.parse(request.getMethod(), rawPath);
       request.setAttribute(PATH_ATTRIBUTE, path);
-      if (path.kind() == OhpmPath.Kind.UNKNOWN || path.kind() == OhpmPath.Kind.STREAM_PUBLISH
-          || path.kind() == OhpmPath.Kind.LOGIN) {
+      if (path.kind() == OhpmPath.Kind.UNKNOWN || path.kind() == OhpmPath.Kind.LOGIN) {
         throw new OhpmException(404, "OHPM endpoint is not available");
       }
       repository = repositories.findById(repository.id())
@@ -55,7 +54,7 @@ public class OhpmAccess {
       if (path.kind() == OhpmPath.Kind.PING) return true;
       PermissionAction action = switch (path.kind()) {
         case METADATA, DOWNLOAD -> PermissionAction.READ;
-        case PUBLISH -> PermissionAction.ADD;
+        case PUBLISH, STREAM_PUBLISH -> PermissionAction.ADD;
         case UNPUBLISH -> PermissionAction.DELETE;
         case DIST_TAG -> PermissionAction.EDIT;
         default -> throw new OhpmException(404, "OHPM endpoint is not available");

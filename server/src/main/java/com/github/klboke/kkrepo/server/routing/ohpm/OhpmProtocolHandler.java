@@ -23,6 +23,7 @@ import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
 import com.github.klboke.kkrepo.server.security.ManagementAuditFilter;
 import com.github.klboke.kkrepo.server.securityscan.ArtifactPolicyException;
+import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.util.Collection;
@@ -30,6 +31,7 @@ import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
@@ -64,11 +66,12 @@ public class OhpmProtocolHandler implements RepositoryProtocolHandler {
   @Override
   public ResponseEntity<?> handle(RepositoryProtocolRequest context) {
     HttpServletRequest request = context.servletRequest();
+    OhpmPath path = request.getAttribute(OhpmAccess.PATH_ATTRIBUTE) instanceof OhpmPath parsed
+        ? parsed : paths.parse(context.method().name(), context.path());
     try {
-      OhpmPath path = request.getAttribute(OhpmAccess.PATH_ATTRIBUTE) instanceof OhpmPath parsed
-          ? parsed : paths.parse(context.method().name(), context.path());
-      if (path.kind() == OhpmPath.Kind.UNKNOWN || path.kind() == OhpmPath.Kind.STREAM_PUBLISH
-          || path.kind() == OhpmPath.Kind.LOGIN) throw new OhpmException(404, "OHPM endpoint is not available");
+      if (path.kind() == OhpmPath.Kind.UNKNOWN || path.kind() == OhpmPath.Kind.LOGIN) {
+        throw new OhpmException(404, "OHPM endpoint is not available");
+      }
       if (!context.runtime().online()) throw new OhpmException(503, "Repository is offline");
       boolean head = context.method() == HttpMethod.HEAD;
       if (path.kind() == OhpmPath.Kind.METADATA) {
@@ -87,13 +90,23 @@ public class OhpmProtocolHandler implements RepositoryProtocolHandler {
       }
       switch (path.kind()) {
         case PING -> { }
-        case PUBLISH -> {
-          requireJson(request);
+        case PUBLISH, STREAM_PUBLISH -> {
           Object subject = request.getAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE);
           if (!(subject instanceof AuthenticatedSubject actor)) throw new OhpmException(401, "Authentication required");
-          hosted.publish(context.runtime(), path.packageId(), request.getInputStream(),
-              actor.userId(), forwarded.clientAddress(request),
-              existing -> access.requirePublish(request, context.runtime().name(), path.packageId().id(), existing));
+          if (path.kind() == OhpmPath.Kind.STREAM_PUBLISH) {
+            if (request.getContentType() == null || !MediaType.MULTIPART_FORM_DATA
+                .isCompatibleWith(MediaType.parseMediaType(request.getContentType()))) {
+              throw new OhpmException(400, "Expected multipart/form-data");
+            }
+            hosted.publishStream(context.runtime(), path.packageId(), parts(request),
+                actor.userId(), forwarded.clientAddress(request),
+                existing -> access.requirePublish(request, context.runtime().name(), path.packageId().id(), existing));
+          } else {
+            requireJson(request);
+            hosted.publish(context.runtime(), path.packageId(), request.getInputStream(),
+                actor.userId(), forwarded.clientAddress(request),
+                existing -> access.requirePublish(request, context.runtime().name(), path.packageId().id(), existing));
+          }
         }
         case UNPUBLISH -> hosted.unpublish(context.runtime(), OhpmUnpublishRequest.parse(path, smallBody(request)));
         case DIST_TAG -> {
@@ -115,11 +128,24 @@ public class OhpmProtocolHandler implements RepositoryProtocolHandler {
       throw error;
     } catch (OhpmException error) {
       return json(request, error.status(), error.response());
-    } catch (IllegalArgumentException | JsonProcessingException error) {
+    } catch (TransientDataAccessException error) {
+      int status = path.kind() == OhpmPath.Kind.PUBLISH || path.kind() == OhpmPath.Kind.STREAM_PUBLISH ? 598 : 500;
+      log.warn("OHPM transaction retries exhausted: repository={}", context.runtime().name(), error);
+      return json(request, status, new OhpmException(status, "OHPM transaction temporarily unavailable").response());
+    } catch (IllegalArgumentException | JsonProcessingException | ServletException error) {
       return json(request, 400, new OhpmException(400, "Invalid OHPM request").response());
     } catch (IOException | RuntimeException error) {
       log.warn("OHPM repository request failed: repository={}", context.runtime().name(), error);
       return json(request, 500, new OhpmException(500, "OHPM repository operation failed").response());
+    }
+  }
+
+  private static Collection<jakarta.servlet.http.Part> parts(HttpServletRequest request)
+      throws IOException, ServletException {
+    try {
+      return request.getParts();
+    } catch (IllegalStateException error) {
+      throw new OhpmException(413, "OHPM multipart body exceeds the configured limit");
     }
   }
 

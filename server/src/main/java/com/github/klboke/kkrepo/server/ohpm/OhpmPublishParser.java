@@ -138,7 +138,20 @@ final class OhpmPublishParser {
     return new Attachment(file, length);
   }
 
-  private static Attachment verified(Attachment attachment, OhpmIntegrity integrity) throws IOException {
+  OhpmPublishMetadata metadata(OhpmPackageId packageId, InputStream body) throws IOException {
+    try (JsonParser parser = JSON.createParser(body)) {
+      require(parser.nextToken(), JsonToken.START_OBJECT, "Expected OHPM metadata");
+      JsonNode root = metadataValue(parser, new Budget());
+      if (parser.nextToken() != null || root.has("_attachments")) {
+        throw invalid("Stream metadata must not contain attachments or trailing content");
+      }
+      return OhpmPublishMetadata.parse(packageId, root);
+    } catch (JsonProcessingException | IllegalArgumentException error) {
+      throw invalid("Invalid OHPM stream metadata");
+    }
+  }
+
+  static Attachment verified(Attachment attachment, OhpmIntegrity integrity) throws IOException {
     if (attachment == null) throw invalid("Missing expected OHPM attachment");
     try (InputStream input = Files.newInputStream(attachment.file())) {
       if (!integrity.matches(input)) throw invalid("OHPM attachment integrity mismatch");

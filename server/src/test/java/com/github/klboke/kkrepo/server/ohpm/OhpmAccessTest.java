@@ -45,10 +45,10 @@ class OhpmAccessTest {
   }
 
   @Test
-  void pingIsPublicAndMissingStreamSupportsFallback() throws Exception {
+  void pingIsPublicAndUnknownStreamPathReturnsNotFound() throws Exception {
     assertTrue(access.authorize(request("GET"), new MockHttpServletResponse(), repository, "-/ping"));
     var response = new MockHttpServletResponse();
-    assertFalse(access.authorize(request("POST"), response, repository, "stream/@scope%2fpkg"));
+    assertFalse(access.authorize(request("POST"), response, repository, "stream/@scope%2fpkg/extra"));
     assertEquals(404, response.getStatus());
     assertEquals(404, new ObjectMapper().readTree(response.getContentAsByteArray()).path("code").asInt());
     verifyNoInteractions(authentication, permissions);
@@ -59,6 +59,7 @@ class OhpmAccessTest {
       "GET,@scope%2fpkg,@scope/pkg,READ",
       "GET,@scope%2fpkg/-/@scope/pkg-1.0.0.har,@scope/pkg/-/@scope/pkg-1.0.0.har,READ",
       "PUT,@scope%2fpkg,@scope/pkg,ADD",
+      "POST,stream/@scope%2fpkg,@scope/pkg,ADD",
       "DELETE,@scope%2fpkg@1.0.0,@scope/pkg,DELETE",
       "POST,-/package/%40scope%2Fpkg/dist-tags/beta,@scope/pkg,EDIT",
       "PUT,-/package/@scope/pkg/dist-tags/beta,@scope/pkg,EDIT",

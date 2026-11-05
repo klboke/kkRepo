@@ -41,6 +41,7 @@ public class OhpmHostedService {
   private final BlobStorageRegistry storages;
   private final ArtifactDownloadPolicy downloads;
   private final OhpmPublishParser parser;
+  private final OhpmStreamParser streamParser;
 
   public OhpmHostedService(AssetDao assets, RawHostedService content, TransientTransactionRetry transactions,
       ObjectMapper json, BlobStorageRegistry storages, ArtifactDownloadPolicy downloads,
@@ -52,49 +53,79 @@ public class OhpmHostedService {
     this.storages = storages;
     this.downloads = downloads;
     this.parser = new OhpmPublishParser(maxFileBytes, null);
+    this.streamParser = new OhpmStreamParser(maxFileBytes, null);
   }
 
   public void publish(RepositoryRuntime runtime, OhpmPackageId packageId, InputStream body,
       String actor, String remoteAddress, java.util.function.Consumer<Boolean> authorizePublication) throws IOException {
     requireHosted(runtime, true);
     try (var upload = parser.parse(packageId, body)) {
-      if (upload.metadata().isHsp()) throw new OhpmException(400, "HSP publishing is not available yet");
-      transactions.execute("Publish OHPM " + packageId.id(), () -> {
-        Instant now = Instant.now();
-        AssetRecord root = lock(runtime, packageId, true, now);
-        ObjectNode metadata = metadata(root, packageId);
-        ObjectNode versions = (ObjectNode) metadata.path("versions");
-        String version = upload.metadata().version();
-        if (versions.has(version)) throw new OhpmException(400, "OHPM version already exists");
-        authorizePublication.accept(!versions.isEmpty());
-        ObjectNode incoming = upload.metadata().metadata();
-        ObjectNode manifest = ((ObjectNode) incoming.path("versions").path(version)).deepCopy();
-        ObjectNode dist = (ObjectNode) manifest.path("dist");
-        dist.put("tarball", packageId.downloadPath(file(packageId, version, ".har")));
-        dist.remove("resolved_hsp");
-        ComponentRecord component = new ComponentRecord(
-            null, runtime.id(), RepositoryFormat.OHPM, packageId.scope(), packageId.name(), version,
-            "ohpm-package", PersistenceHashes.componentCoordinateHash(packageId.scope(), packageId.name(), version),
-            json.convertValue(manifest, MAP), now);
-        boolean created = content.putInternalWithComponentFileAtBrowsePathIfAbsent(
-            runtime, packageId.downloadPath(file(packageId, version, ".har")), upload.har().file(),
-            "application/octet-stream", Map.of(), actor, remoteAddress, component,
-            packageId.id() + "/" + version + "/" + packageId.name() + "-" + version + ".har");
-        if (!created) throw new OhpmException(400, "OHPM version content already exists");
-        incoming.fields().forEachRemaining(entry -> {
-          if (!List.of("versions", "dist-tags", "time", "_attachments", "_rev").contains(entry.getKey())) {
-            metadata.set(entry.getKey(), entry.getValue().deepCopy());
-          }
-        });
-        versions.set(version, manifest);
-        ((ObjectNode) metadata.path("dist-tags")).setAll((ObjectNode) incoming.path("dist-tags"));
-        ObjectNode time = (ObjectNode) metadata.path("time");
-        if (!time.has("created")) time.put("created", now.toString());
-        time.put(version, now.toString());
-        save(root, metadata, now);
-        return null;
-      });
+      publish(runtime, upload, actor, remoteAddress, authorizePublication);
     }
+  }
+
+  public void publishStream(RepositoryRuntime runtime, OhpmPackageId packageId,
+      java.util.Collection<jakarta.servlet.http.Part> parts, String actor, String remoteAddress,
+      java.util.function.Consumer<Boolean> authorizePublication) throws IOException {
+    requireHosted(runtime, true);
+    try (var upload = streamParser.parse(packageId, parts)) {
+      publish(runtime, upload, actor, remoteAddress, authorizePublication);
+    }
+  }
+
+  private void publish(RepositoryRuntime runtime, OhpmPublishParser.Upload upload,
+      String actor, String remoteAddress, java.util.function.Consumer<Boolean> authorizePublication) {
+    OhpmPackageId packageId = upload.metadata().packageId();
+    transactions.execute("Publish OHPM " + packageId.id(), () -> {
+      Instant now = Instant.now();
+      AssetRecord root = lock(runtime, packageId, true, now);
+      ObjectNode metadata = metadata(root, packageId);
+      ObjectNode versions = (ObjectNode) metadata.path("versions");
+      String version = upload.metadata().version();
+      if (versions.has(version)) throw new OhpmException(400, "OHPM version already exists");
+      authorizePublication.accept(!versions.isEmpty());
+      ObjectNode incoming = upload.metadata().metadata();
+      ObjectNode manifest = ((ObjectNode) incoming.path("versions").path(version)).deepCopy();
+      ObjectNode dist = (ObjectNode) manifest.path("dist");
+      dist.put("tarball", packageId.downloadPath(file(packageId, version, ".har")));
+      if (upload.metadata().isHsp()) {
+        dist.put("resolved_hsp", packageId.downloadPath(file(packageId, version, ".hsp")));
+        manifest.put("packageType", "InterfaceHar").put("hspType", "bundle_app");
+      } else {
+        dist.remove("resolved_hsp");
+      }
+      ComponentRecord component = new ComponentRecord(
+          null, runtime.id(), RepositoryFormat.OHPM, packageId.scope(), packageId.name(), version,
+          "ohpm-package", PersistenceHashes.componentCoordinateHash(packageId.scope(), packageId.name(), version),
+          json.convertValue(manifest, MAP), now);
+      storeFile(runtime, packageId, version, ".har", upload.har(), actor, remoteAddress, component);
+      if (upload.hsp() != null) {
+        storeFile(runtime, packageId, version, ".hsp", upload.hsp(), actor, remoteAddress, component);
+      }
+      metadata.remove(List.of("packageType", "hspType"));
+      incoming.fields().forEachRemaining(entry -> {
+        if (!List.of("versions", "dist-tags", "time", "_attachments", "_rev").contains(entry.getKey())) {
+          metadata.set(entry.getKey(), entry.getValue().deepCopy());
+        }
+      });
+      if (upload.metadata().isHsp()) metadata.put("packageType", "InterfaceHar").put("hspType", "bundle_app");
+      versions.set(version, manifest);
+      ((ObjectNode) metadata.path("dist-tags")).setAll((ObjectNode) incoming.path("dist-tags"));
+      ObjectNode time = (ObjectNode) metadata.path("time");
+      if (!time.has("created")) time.put("created", now.toString());
+      time.put(version, now.toString());
+      save(root, metadata, now);
+      return null;
+    });
+  }
+
+  private void storeFile(RepositoryRuntime runtime, OhpmPackageId packageId, String version, String extension,
+      OhpmPublishParser.Attachment attachment, String actor, String remoteAddress, ComponentRecord component) {
+    boolean created = content.putInternalWithComponentFileAtBrowsePathIfAbsent(
+        runtime, packageId.downloadPath(file(packageId, version, extension)), attachment.file(),
+        "application/octet-stream", Map.of(), actor, remoteAddress, component,
+        packageId.id() + "/" + version + "/" + packageId.name() + "-" + version + extension);
+    if (!created) throw new OhpmException(400, "OHPM version content already exists");
   }
 
   public MavenResponse metadata(RepositoryRuntime runtime, OhpmPackageId packageId,

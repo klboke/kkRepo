@@ -97,6 +97,7 @@ class OhpmHostedRuntimeTest {
     properties.put("kkrepo.maven.metadata-rebuild.enabled", "false");
     properties.put("kkrepo.storage.file.temp-cleanup-enabled", "false");
     try (var first = start(properties); var second = start(properties); var client = HttpClient.newHttpClient()) {
+      assertEquals(0, first.getBean(jakarta.servlet.MultipartConfigElement.class).getFileSizeThreshold());
       var security = first.getBean(SecurityManagementService.class);
       security.initializeAdmin(new AdminBootstrapCommand("12345678", "12345678", false));
       first.getBean(BlobStoresController.class).create(new BlobStoresController.BlobStoreRequest(
@@ -111,7 +112,7 @@ class OhpmHostedRuntimeTest {
       String firstUrl = url(first) + "/repository/ohpm/";
       String secondUrl = url(second) + "/repository/ohpm/";
       assertStatus(client, "GET", firstUrl + "-/ping", null, null, 200);
-      assertStatus(client, "POST", secondUrl + "stream/@scope%2fexample", null, null, 404);
+      assertStatus(client, "POST", secondUrl + "stream/@scope%2fexample", null, null, 401);
       assertStatus(client, "GET", secondUrl + "@scope%2fexample", null, null, 401);
       assertStatus(client, "PUT", firstUrl + "@scope%2fexample", "GenericToken.invalid", publication("1.0.0"), 401);
       var runtime = first.getBean(RepositoryRuntimeRegistry.class).resolve("ohpm").orElseThrow();
@@ -175,12 +176,37 @@ class OhpmHostedRuntimeTest {
 
       verifyRollback(first, false);
       verifyRollback(first, true);
+      verifyHspRollback(first);
+      assertStatus(client, "PUT", firstUrl + "@scope/example", token, hspPublication("6.0.0"), 200);
+      var hspMetadata = JSON.readTree(assertStatus(client, "GET", secondUrl + "@scope/example",
+          token, null, 200).body()).path("versions").path("6.0.0").path("dist");
+      assertDownload(client, hspMetadata.path("tarball").textValue(), token, CONTENT);
+      assertDownload(client, hspMetadata.path("resolved_hsp").textValue(), token, new byte[] {9, 8, 7, 6});
+      assertStatus(client, "PUT", secondUrl + "@scope/example", token, publication("7.0.0"), 200);
+      var mixedMetadata = JSON.readTree(assertStatus(client, "GET", firstUrl + "@scope/example",
+          token, null, 200).body());
+      assertFalse(mixedMetadata.has("packageType"));
+      assertFalse(mixedMetadata.has("hspType"));
+      assertEquals("bundle_app", mixedMetadata.path("versions").path("6.0.0").path("hspType").asText());
+      assertFalse(mixedMetadata.path("versions").path("7.0.0").path("dist").has("resolved_hsp"));
+      assertStatus(client, "DELETE", firstUrl + "@scope/example", token, "{\"version\":\"6.0.0\"}", 200);
+      assertStatus(client, "GET", hspMetadata.path("tarball").textValue(), token, null, 404);
+      assertStatus(client, "GET", hspMetadata.path("resolved_hsp").textValue(), token, null, 404);
       var audit = first.getBean(SecurityAuditDao.class).search(SecurityAuditDao.AuditLogQuery.sanitize(null));
       assertTrue(audit.items().stream().anyMatch(entry -> "SUCCESS".equals(entry.outcome())
           && "ohpm".equals(entry.details().get("format")) && "publish".equals(entry.details().get("operation"))));
       assertFalse(first.getBean(com.github.klboke.kkrepo.server.cleanup.CleanupPolicyCapabilities.class)
           .supportsExecute(com.github.klboke.kkrepo.core.RepositoryFormat.OHPM));
-      if (Boolean.getBoolean("kkrepo.ohpm.client")) verifyClient(firstUrl, token);
+      if (Boolean.getBoolean("kkrepo.ohpm.client")) {
+        verifyClient(firstUrl, token);
+        var streamPackages = first.getBean(SecurityAuditDao.class)
+            .search(SecurityAuditDao.AuditLogQuery.sanitize(null)).items().stream()
+            .filter(entry -> "SUCCESS".equals(entry.outcome())
+                && "stream_publish".equals(entry.details().get("operation")))
+            .map(entry -> entry.details().get("package")).collect(java.util.stream.Collectors.toSet());
+        assertTrue(streamPackages.containsAll(List.of("@kkrepo/runtime", "@kkrepo/runtime-hsp")),
+            "Large HAR and HSP must succeed through the actual stream endpoint");
+      }
     }
   }
 
@@ -217,6 +243,19 @@ class OhpmHostedRuntimeTest {
     client(project, token, "dist-tags", "remove", "@kkrepo/runtime", "test", "--publish_registry", registry);
     client(project, token, "unpublish", "@kkrepo/runtime@1.0.0", "--publish_registry", registry);
     client(project, token, "unpublish", "@kkrepo/runtime", "--force", "--publish_registry", registry);
+    try (var http = HttpClient.newHttpClient()) {
+      for (boolean largeHsp : new boolean[] {false, true}) {
+        String version = largeHsp ? "2.0.0" : "1.0.0";
+        HspFixture fixture = hspArchive(project, version, largeHsp);
+        client(project, token, "publish", fixture.archive().toString(), "--publish_registry", registry);
+        var metadata = JSON.readTree(assertStatus(http, "GET", registry + "@kkrepo%2fruntime-hsp",
+            token, null, 200).body()).path("versions").path(version);
+        assertEquals("bundle_app", metadata.path("hspType").textValue());
+        assertDownload(http, metadata.path("dist").path("tarball").textValue(), token, fixture.har());
+        assertDownload(http, metadata.path("dist").path("resolved_hsp").textValue(), token, fixture.hsp());
+      }
+    }
+    client(project, token, "unpublish", "@kkrepo/runtime-hsp", "--force", "--publish_registry", registry);
   }
 
   private static Path archive(Path directory, String version, boolean large) throws Exception {
@@ -232,7 +271,13 @@ class OhpmHostedRuntimeTest {
       files.put("package/resources/payload.bin", content);
     }
     Path file = directory.resolve(version + ".har");
-    try (var archive = new TarArchiveOutputStream(new GzipCompressorOutputStream(Files.newOutputStream(file)))) {
+    Files.write(file, tar(files));
+    return file;
+  }
+
+  private static byte[] tar(Map<String, byte[]> files) throws Exception {
+    var bytes = new java.io.ByteArrayOutputStream();
+    try (var archive = new TarArchiveOutputStream(new GzipCompressorOutputStream(bytes))) {
       for (var entry : files.entrySet()) {
         var header = new TarArchiveEntry(entry.getKey());
         header.setSize(entry.getValue().length);
@@ -242,7 +287,43 @@ class OhpmHostedRuntimeTest {
         archive.closeArchiveEntry();
       }
     }
-    return file;
+    return bytes.toByteArray();
+  }
+
+  private record HspFixture(Path archive, byte[] har, byte[] hsp) {}
+
+  private static HspFixture hspArchive(Path directory, String version, boolean large) throws Exception {
+    var manifest = JSON.createObjectNode().put("name", "@kkrepo/runtime-hsp").put("version", version)
+        .put("description", "Generated HSP protocol fixture").put("license", "Apache-2.0")
+        .put("packageType", "InterfaceHar").put("types", "Index.d.ets");
+    manifest.putObject("author").put("name", "kkRepo");
+    manifest.putObject("dependencies");
+    byte[] har = tar(Map.of("package/oh-package.json5", JSON.writeValueAsBytes(manifest),
+        "package/Index.d.ets", "export declare const value: number;".getBytes(StandardCharsets.UTF_8)));
+    var bytes = new java.io.ByteArrayOutputStream();
+    try (var zip = new java.util.zip.ZipOutputStream(bytes)) {
+      zip.putNextEntry(new java.util.zip.ZipEntry("module.json"));
+      zip.write("{\"module\":{\"name\":\"fixture\",\"type\":\"shared\"}}".getBytes(StandardCharsets.UTF_8));
+      zip.closeEntry();
+      if (large) {
+        byte[] payload = new byte[6 * 1024 * 1024];
+        new java.util.Random(493).nextBytes(payload);
+        zip.putNextEntry(new java.util.zip.ZipEntry("resources/payload.bin"));
+        zip.write(payload);
+        zip.closeEntry();
+      }
+    }
+    byte[] hsp = bytes.toByteArray();
+    Path archive = directory.resolve(version + ".tgz");
+    Files.write(archive, tar(Map.of("module.har", har, "module.hsp", hsp)));
+    return new HspFixture(archive, har, hsp);
+  }
+
+  private static void assertDownload(HttpClient client, String url, String token, byte[] expected) throws Exception {
+    assertNotNull(url);
+    var response = client.send(request("GET", url, token, null), HttpResponse.BodyHandlers.ofByteArray());
+    assertEquals(200, response.statusCode());
+    assertArrayEquals(expected, response.body());
   }
 
   private static String client(Path project, String token, String... arguments) throws Exception {
@@ -298,6 +379,62 @@ class OhpmHostedRuntimeTest {
     try (var metadata = service.metadata(runtime, OhpmPackageId.parse(PACKAGE), "http://localhost/repository/ohpm", false).body()) {
       assertFalse(JSON.readTree(metadata).path("versions").has("4.0.0"));
     }
+  }
+
+  private static void verifyHspRollback(ConfigurableApplicationContext context) throws Exception {
+    var runtime = context.getBean(RepositoryRuntimeRegistry.class).resolve("ohpm").orElseThrow();
+    var assets = context.getBean(AssetDao.class);
+    var delegate = context.getBean(RawHostedService.class);
+    var failing = mock(RawHostedService.class);
+    var hspBlobs = new java.util.ArrayList<AssetBlobRecord>();
+    var harBlob = new AtomicReference<AssetBlobRecord>();
+    doAnswer(call -> {
+      boolean created = delegate.putInternalWithComponentFileAtBrowsePathIfAbsent(
+          call.getArgument(0), call.getArgument(1), call.getArgument(2), call.getArgument(3),
+          call.getArgument(4), call.getArgument(5), call.getArgument(6), call.getArgument(7), call.getArgument(8));
+      assertTrue(created);
+      String path = call.getArgument(1);
+      var asset = assets.findAssetByPath(runtime.id(), path).orElseThrow();
+      var blob = assets.findBlobById(asset.assetBlobId()).orElseThrow();
+      if (path.endsWith(".hsp")) {
+        hspBlobs.add(blob);
+        throw new org.springframework.dao.CannotAcquireLockException("Injected failure after second attachment");
+      }
+      harBlob.set(blob);
+      return true;
+    }).when(failing).putInternalWithComponentFileAtBrowsePathIfAbsent(any(), anyString(), any(),
+        anyString(), anyMap(), anyString(), anyString(), any(), anyString());
+    var service = new OhpmHostedService(assets, failing, context.getBean(TransientTransactionRetry.class),
+        JSON, context.getBean(BlobStorageRegistry.class), context.getBean(ArtifactDownloadPolicy.class), 1024);
+    String body = hspPublication("6.0.0");
+    assertThrows(org.springframework.dao.CannotAcquireLockException.class, () -> service.publish(
+        runtime, OhpmPackageId.parse(PACKAGE), new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)),
+        "admin", "127.0.0.1", existing -> {}));
+    assertEquals(3, hspBlobs.size());
+    for (String extension : List.of(".har", ".hsp")) {
+      assertTrue(assets.findAssetByPath(runtime.id(), PACKAGE + "/-/" + PACKAGE + "-6.0.0" + extension).isEmpty());
+    }
+    BlobStorage storage = context.getBean(BlobStorageRegistry.class).forBlobStoreId(runtime.blobStoreId());
+    for (var blob : hspBlobs) {
+      assertFalse(storage.exists(BlobReferenceCodec.reference(blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size())));
+    }
+    var shared = harBlob.get();
+    assertTrue(storage.exists(BlobReferenceCodec.reference(shared.blobRef(), shared.objectKey(), shared.sha256(), shared.size())));
+    try (var metadata = service.metadata(runtime, OhpmPackageId.parse(PACKAGE), "http://localhost/repository/ohpm", false).body()) {
+      assertFalse(JSON.readTree(metadata).path("versions").has("6.0.0"));
+    }
+  }
+
+  private static String hspPublication(String version) throws Exception {
+    ObjectNode root = (ObjectNode) JSON.readTree(publication(version));
+    root.put("packageType", "InterfaceHar").put("hspType", "bundle_app");
+    root.withObject("/versions/" + version).put("types", "Index.d.ets");
+    byte[] hsp = new byte[] {9, 8, 7, 6};
+    root.withObject("/versions/" + version + "/dist")
+        .put("integrity_hsp", OhpmIntegrity.compute(new ByteArrayInputStream(hsp)).value());
+    root.withObject("/_attachments").putObject(PACKAGE + "-" + version + ".hsp")
+        .put("length", hsp.length).put("data", Base64.getEncoder().encodeToString(hsp));
+    return JSON.writeValueAsString(root);
   }
 
   private static String publication(String version) throws Exception {

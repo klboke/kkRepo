@@ -1,6 +1,6 @@
 # OHPM 仓库实现计划
 
-状态：阶段 1、2 的实现和验收已完成，包括双数据库、双实例、真实 OHPM 6.0.1、全量 server 及默认兼容性回归。详见 [协议兼容性基线](ohpm-protocol-baseline.md) 和 [Hosted 实现说明](ohpm-hosted.md)。下一步为阶段 3 的 HSP 与流式上传，阶段 3–8 尚未完成。
+状态：阶段 1–3 的实现和验收已完成，包括普通/流式 HAR/HSP、双数据库、双实例、真实 OHPM 6.0.1、全量 server 及默认兼容性回归。详见 [协议兼容性基线](ohpm-protocol-baseline.md) 和 [Hosted 实现说明](ohpm-hosted.md)。下一步为阶段 4 的 Proxy；阶段 4–8 尚未完成。
 
 关联议题：[OHPM 推进情况与贡献意向 #492](https://github.com/klboke/kkRepo/issues/492)。
 设计依据：[OHPM / HarmonyOS 仓库开发设计说明](ohpm-repository-design.md)。
@@ -9,7 +9,7 @@
 
 完整交付 hosted、proxy、group、管理端、导入和真实客户端兼容性测试。默认使用现有 Access Token 能力；官方可选 Login 认证以可配置、默认关闭的能力交付。
 
-当前使用 `feat/ohpm-support` 分支，阶段 1 已提交为 `7f5f9b17`，并创建关联 #492 的 [Draft PR #493](https://github.com/klboke/kkRepo/pull/493)。后续按里程碑完成实现、验证、提交，并更新 PR 检查清单，完整验收后再转为 Ready。若维护者希望拆分 PR，可沿里程碑边界拆分；拆分开发不代表缩减原设计的最终范围。
+当前使用 `feat/ohpm-support` 分支，阶段 1 已提交为 `7f5f9b17`，阶段 2 已提交为 `8ec83517`，并创建关联 #492 的 [Draft PR #493](https://github.com/klboke/kkRepo/pull/493)。后续按里程碑完成实现、验证、提交，并更新 PR 检查清单，完整验收后再转为 Ready。若维护者希望拆分 PR，可沿里程碑边界拆分；拆分开发不代表缩减原设计的最终范围。
 
 所有新增协议行为先核对华为官方协议及真实客户端行为。OHPM 不以 Nexus 为协议参考，不直接复制 npm 的响应码、路径解析或认证行为。
 
@@ -25,6 +25,29 @@
 - 普通功能 PR 不更新 `CHANGELOG.md`，按贡献规范在 PR 描述中说明变更。
 
 ## 实施里程碑
+
+执行顺序为 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8。每阶段完成相应测试、文档和独立提交后再进入下一阶段；不将未完成验收的工作标为已交付。
+
+| 阶段 | 当前状态 | 交付边界 |
+| --- | --- | --- |
+| 1. 协议基线 | 已提交 | 协议模块、请求契约、客户端基线 |
+| 2. Hosted HAR | 已提交 | 发布、安装、tag、下架及跨实例事务闭环 |
+| 3. HSP 与 stream | 已验收 | 双附件一致性、大包流式上传、失败清理与重试语义 |
+| 4. Proxy | 待实施 | 上游代理、缓存、完整性校验及凭据保护 |
+| 5. Group | 待实施 | metadata 合并、确定性的版本及双文件来源 |
+| 6. 管理与浏览 | 待实施 | Admin/Browse、统一写入入口、权限及可观测性 |
+| 7. 独立导入 | 待实施 | dry-run、断点恢复、幂等导入及结果报告 |
+| 8. Login 与完整验收 | 待实施 | 可选签名认证、端到端矩阵及 PR 合并门槛 |
+
+### 当前优先事项：阶段 4 Proxy
+
+1. 以官方 Fetch Metadata 协议及公共上游响应建立 metadata 模型，保存远端下载地址并生成本地规范路径。上游 scoped 包的文件名不一定再次包含 scope，不能从远端文件名推断包身份。
+2. 复用远端 HTTP 访问与重定向安全策略，支持 OHPM 原始 Authorization Token，并验证跨源跳转不携带凭据。
+3. 建立 metadata/content 的持久化缓存、validator、TTL、negative cache 和 auto-block 行为；缓存必须区分上游配置与完整性值，不能在配置变更后复用错误来源。
+4. 在发布有效缓存前校验 HAR/HSP；覆盖上游删除、故障、校验失败、重新验证和双实例访问，固定 stale 策略。
+5. 使用受控上游完成常规测试，并用真实客户端通过 proxy 安装公共上游包；验收后开放 recipe、更新文档、回归、提交和推送。
+
+阶段 3 验收包含 49 项 server OHPM 测试；完整 server reactor 中 server 模块共 4,100 项测试、零失败/错误，跳过一项需显式启用的存储性能测试。双数据库运行时通过审计确认大 HAR/HSP 成功使用 stream 接口，另有 PAX/稀疏文件边界、64 MiB 固定缓冲区读取、暂存失败及双附件事务回滚测试。
 
 ### 1. 协议基线、测试夹具与模块骨架
 
