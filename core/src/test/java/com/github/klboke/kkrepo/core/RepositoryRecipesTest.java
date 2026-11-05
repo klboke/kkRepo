@@ -59,7 +59,7 @@ class RepositoryRecipesTest {
     assertTrue(!recipes.containsKey("huggingface-hosted"));
     assertTrue(!recipes.containsKey("huggingface-group"));
     assertRecipe(recipes, "ohpm-hosted", RepositoryFormat.OHPM, RepositoryType.HOSTED);
-    assertTrue(!recipes.containsKey("ohpm-proxy"));
+    assertRecipe(recipes, "ohpm-proxy", RepositoryFormat.OHPM, RepositoryType.PROXY);
     assertTrue(!recipes.containsKey("ohpm-group"));
   }
 

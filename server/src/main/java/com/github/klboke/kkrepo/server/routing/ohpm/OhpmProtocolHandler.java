@@ -16,6 +16,7 @@ import com.github.klboke.kkrepo.server.http.ConditionalResponses;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.ohpm.OhpmAccess;
 import com.github.klboke.kkrepo.server.ohpm.OhpmHostedService;
+import com.github.klboke.kkrepo.server.ohpm.OhpmProxyService;
 import com.github.klboke.kkrepo.server.routing.RepositoryProtocolHandler;
 import com.github.klboke.kkrepo.server.routing.RepositoryProtocolRequest;
 import com.github.klboke.kkrepo.server.routing.RepositoryProtocolRoute;
@@ -43,14 +44,16 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 public class OhpmProtocolHandler implements RepositoryProtocolHandler {
   private static final Logger log = LoggerFactory.getLogger(OhpmProtocolHandler.class);
   private final OhpmHostedService hosted;
+  private final OhpmProxyService proxy;
   private final OhpmAccess access;
   private final ObjectMapper json;
   private final ForwardedHeaderPolicy forwarded;
   private final OhpmPathParser paths = new OhpmPathParser();
 
-  public OhpmProtocolHandler(OhpmHostedService hosted, OhpmAccess access,
+  public OhpmProtocolHandler(OhpmHostedService hosted, OhpmProxyService proxy, OhpmAccess access,
       ObjectMapper json, ForwardedHeaderPolicy forwarded) {
     this.hosted = hosted;
+    this.proxy = proxy;
     this.access = access;
     this.json = json;
     this.forwarded = forwarded;
@@ -59,8 +62,8 @@ public class OhpmProtocolHandler implements RepositoryProtocolHandler {
   @Override
   public Collection<RepositoryProtocolRoute> routes() {
     return List.of(HttpMethod.GET, HttpMethod.HEAD, HttpMethod.PUT, HttpMethod.POST, HttpMethod.DELETE)
-        .stream().map(method -> RepositoryProtocolRoute.anyPath(
-            RepositoryFormat.OHPM, RepositoryType.HOSTED, method, 0)).toList();
+        .stream().flatMap(method -> List.of(RepositoryType.HOSTED, RepositoryType.PROXY).stream()
+            .map(type -> RepositoryProtocolRoute.anyPath(RepositoryFormat.OHPM, type, method, 0))).toList();
   }
 
   @Override
@@ -77,10 +80,17 @@ public class OhpmProtocolHandler implements RepositoryProtocolHandler {
       if (path.kind() == OhpmPath.Kind.METADATA) {
         String base = forwarded.serverBaseUrl(request) + request.getContextPath()
             + RepositoryUrlPrefix.path(request) + context.runtime().name();
-        return read(request, hosted.metadata(context.runtime(), path.packageId(), base, head), head);
+        return read(request, context.runtime().isProxy()
+            ? proxy.metadata(context.runtime(), path.packageId(), base, head)
+            : hosted.metadata(context.runtime(), path.packageId(), base, head), head);
       }
       if (path.kind() == OhpmPath.Kind.DOWNLOAD) {
-        return read(request, hosted.download(context.runtime(), path.assetPath(), head), head);
+        return read(request, context.runtime().isProxy()
+            ? proxy.download(context.runtime(), path.packageId(), path.assetPath(), head)
+            : hosted.download(context.runtime(), path.assetPath(), head), head);
+      }
+      if (context.runtime().isProxy() && path.kind() != OhpmPath.Kind.PING) {
+        throw new OhpmException(405, "OHPM proxy repositories are read-only");
       }
       if (path.kind() != OhpmPath.Kind.PING) {
         request.setAttribute(ManagementAuditFilter.OPERATION_DETAILS_ATTRIBUTE,

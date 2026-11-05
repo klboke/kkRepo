@@ -20,6 +20,7 @@ public final class RepositoryRecipes {
       new RepositoryRecipe("npm-proxy", RepositoryFormat.NPM, RepositoryType.PROXY),
       new RepositoryRecipe("npm-group", RepositoryFormat.NPM, RepositoryType.GROUP),
       new RepositoryRecipe("ohpm-hosted", RepositoryFormat.OHPM, RepositoryType.HOSTED),
+      new RepositoryRecipe("ohpm-proxy", RepositoryFormat.OHPM, RepositoryType.PROXY),
       new RepositoryRecipe("pypi-hosted", RepositoryFormat.PYPI, RepositoryType.HOSTED),
       new RepositoryRecipe("pypi-proxy", RepositoryFormat.PYPI, RepositoryType.PROXY),
       new RepositoryRecipe("pypi-group", RepositoryFormat.PYPI, RepositoryType.GROUP),

@@ -785,7 +785,8 @@ public class HttpRemoteFetcher {
       }
       if (runtime.ntlmCredentials() != null) return null;
       if (runtime.proxyRemoteBearerToken() != null && !runtime.proxyRemoteBearerToken().isBlank()) {
-        return "Bearer " + runtime.proxyRemoteBearerToken().trim();
+        String prefix = runtime.format() == com.github.klboke.kkrepo.core.RepositoryFormat.OHPM ? "" : "Bearer ";
+        return prefix + runtime.proxyRemoteBearerToken().trim();
       }
       if (runtime.proxyRemoteUsername() == null || runtime.proxyRemoteUsername().isBlank()) {
         return null;
