@@ -65,6 +65,19 @@ class OhpmPublishMetadataTest {
   }
 
   @Test
+  void importAcceptsUntaggedHistoricalVersionsWithoutChangingPublishContract() throws Exception {
+    ObjectNode body = har();
+    body.putObject("dist-tags");
+    assertEquals("1.2.3", OhpmPublishMetadata.forImport(PACKAGE, body).version());
+    assertThrows(IllegalArgumentException.class, () -> OhpmPublishMetadata.parse(PACKAGE, body));
+    ((ObjectNode) body.path("dist-tags")).put("latest", "2.0.0");
+    assertThrows(IllegalArgumentException.class, () -> OhpmPublishMetadata.forImport(PACKAGE, body));
+    body.putObject("dist-tags");
+    ((ObjectNode) manifest(body).path("dist")).put("integrity", "invalid");
+    assertThrows(IllegalArgumentException.class, () -> OhpmPublishMetadata.forImport(PACKAGE, body));
+  }
+
+  @Test
   void rejectsIncompleteOrConflictingHspMetadata() throws Exception {
     for (String field : new String[] {"types", "packageType"}) {
       ObjectNode body = hsp();

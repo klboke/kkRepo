@@ -100,6 +100,7 @@ class OhpmHostedRuntimeTest {
     properties.put("kkrepo.repository-index-rebuild.enabled", "false");
     properties.put("kkrepo.maven.metadata-rebuild.enabled", "false");
     properties.put("kkrepo.storage.file.temp-cleanup-enabled", "false");
+    properties.put("kkrepo.security.outbound.allowed-hosts", "127.0.0.1");
     try (var first = start(properties); var second = start(properties); var client = HttpClient.newHttpClient()) {
       assertEquals(0, first.getBean(jakarta.servlet.MultipartConfigElement.class).getFileSizeThreshold());
       var security = first.getBean(SecurityManagementService.class);
@@ -198,6 +199,7 @@ class OhpmHostedRuntimeTest {
       assertStatus(client, "GET", hspMetadata.path("resolved_hsp").textValue(), token, null, 404);
       verifyManagement(first, second, client, token);
       verifyManagementPermissions(first, second, client);
+      OhpmImportRuntimeChecks.verify(first, second, client, token, directory);
       var audit = first.getBean(SecurityAuditDao.class).search(SecurityAuditDao.AuditLogQuery.sanitize(null));
       assertTrue(audit.items().stream().anyMatch(entry -> "SUCCESS".equals(entry.outcome())
           && "ohpm".equals(entry.details().get("format")) && "publish".equals(entry.details().get("operation"))));
@@ -496,7 +498,7 @@ class OhpmHostedRuntimeTest {
     assertArrayEquals(expected, response.body());
   }
 
-  private static String client(Path project, String token, String... arguments) throws Exception {
+  static String client(Path project, String token, String... arguments) throws Exception {
     var command = new java.util.ArrayList<String>();
     command.add(System.getProperty("kkrepo.ohpm.command", "ohpm"));
     command.addAll(List.of(arguments));

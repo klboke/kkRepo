@@ -121,6 +121,7 @@
           <div class="side-group-items" id="side-group-migration-items" data-side-group-items="migration">
             <button class="side-item" data-view="nexus-migration" type="button"><span class="side-item-icon lucide-icon icon-database-backup" aria-hidden="true"></span><span>Nexus Metadata</span></button>
             <button class="side-item" data-view="repository-data-migration" type="button"><span class="side-item-icon lucide-icon icon-arrow-left-right" aria-hidden="true"></span><span>Nexus Repository Data</span></button>
+            <button class="side-item" data-view="ohpm-import" type="button"><span class="side-item-icon lucide-icon icon-arrow-left-right" aria-hidden="true"></span><span>OHPM Import</span></button>
           </div>
         </nav>
       </aside>
@@ -1985,6 +1986,36 @@
           </form>
         </section>
 
+        <section class="view" id="ohpm-import-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-arrow-left-right" aria-hidden="true"></span></span>
+            <h1>OHPM Import</h1>
+            <span class="heading-copy">Plan, verify and resume package imports into an OHPM hosted repository</span>
+          </div>
+          <form class="blobstore-form" id="ohpm-import-form">
+            <div class="form-grid">
+              <label><span>Target hosted repository</span><select id="ohpm-import-target" required></select></label>
+              <label><span>Source</span><select id="ohpm-import-source"><option value="DIRECTORY">File directory</option><option value="REGISTRY">Existing registry</option></select></label>
+              <label><span>Registry source proxy configuration</span><select id="ohpm-import-proxy"></select></label>
+              <label><span>Package names, one per line (registry source)</span><textarea id="ohpm-import-packages" rows="3" spellcheck="false" placeholder="@scope/library"></textarea></label>
+              <label class="full-width"><span>Source directory (HAR/HSP pairs or HSP tgz bundles)</span><input id="ohpm-import-files" type="file" webkitdirectory multiple></label>
+              <label class="full-width"><span>Saved jobs</span><select id="ohpm-import-jobs"><option value="">Select a saved job</option></select></label>
+            </div>
+            <p>Dry run verifies archives and saves a plan without writing target packages. To resume a directory import, select the same directory again. An optional matching <code>.metadata.json</code> file preserves package metadata and tags; without it, versions are imported without tags.</p>
+            <p>Existing versions and conflicting tags are never overwritten. Users, tokens, permissions and storage settings require separate configuration. Registry imports use the selected proxy's remote credentials and download allowlist.</p>
+            <div class="form-actions">
+              <button class="create-button secondary" id="ohpm-import-plan" type="button">New dry run</button>
+              <button class="create-button secondary" id="ohpm-import-continue" type="button">Continue dry run</button>
+              <button class="create-button" id="ohpm-import-apply" type="button">Import / resume</button>
+              <button class="create-button secondary" id="ohpm-import-stop" type="button" disabled>Stop after current item</button>
+              <button class="create-button secondary" id="ohpm-import-refresh" type="button">Refresh jobs</button>
+              <button class="create-button secondary" id="ohpm-import-download" type="button">Download report</button>
+            </div>
+          </form>
+          <p id="ohpm-import-status" role="status" aria-live="polite"></p>
+          <div class="migration-result" id="ohpm-import-result" hidden></div>
+        </section>
+
         <section class="view" id="nexus-migration-view">
           <div class="page-heading">
             <span class="heading-icon"><span class="lucide-icon icon-database-backup" aria-hidden="true"></span></span>
@@ -2049,6 +2080,7 @@
     <script src="/browse/assets/global-component-search.js?v=20260817-global-search-2"></script>
     <script src="./assets/routing-rules.js?v=20261026-routing-rules-2"></script>
     <script src="./assets/content-selectors.js?v=20261013-delete-confirmation-1"></script>
-    <script src="./assets/admin.js?v=20261029-scanning-readers-1"></script>
+    <script src="./assets/ohpm-import.js?v=20261106-ohpm-import"></script>
+    <script src="./assets/admin.js?v=20261106-ohpm-import"></script>
   </body>
 </html>

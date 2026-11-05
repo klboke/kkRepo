@@ -350,6 +350,8 @@ public abstract class PersistenceApiContract {
     assertEquals(Set.of(
         "gitlfs_object",
         "gitlfs_upload",
+        "ohpm_import_job",
+        "ohpm_import_item",
         "api_key",
         "ansible_collection_signature",
         "ansible_collection_version",

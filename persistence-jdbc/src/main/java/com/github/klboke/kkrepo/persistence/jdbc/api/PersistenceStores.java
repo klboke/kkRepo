@@ -50,6 +50,8 @@ public interface PersistenceStores extends AutoCloseable {
 
   NpmReleaseIndexDao npmReleaseIndexes();
 
+  OhpmImportDao ohpmImports();
+
   ProxyStateDao proxyStates();
 
   RRegistryDao rRegistry();

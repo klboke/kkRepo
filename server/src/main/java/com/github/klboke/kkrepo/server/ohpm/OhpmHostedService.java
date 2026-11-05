@@ -11,6 +11,8 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmException;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmBrowsePath;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmPackageId;
+import com.github.klboke.kkrepo.protocol.ohpm.OhpmPublishMetadata;
+import com.github.klboke.kkrepo.protocol.ohpm.OhpmIntegrity;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmPathParser;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmUnpublishRequest;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmVersions;
@@ -114,40 +116,131 @@ public class OhpmHostedService {
       String version = upload.metadata().version();
       if (versions.has(version)) throw new OhpmException(400, "OHPM version already exists");
       authorizePublication.accept(!versions.isEmpty());
-      ObjectNode incoming = upload.metadata().metadata();
-      ObjectNode manifest = ((ObjectNode) incoming.path("versions").path(version)).deepCopy();
-      ObjectNode dist = (ObjectNode) manifest.path("dist");
-      dist.put("tarball", packageId.downloadPath(file(packageId, version, ".har")));
-      if (upload.metadata().isHsp()) {
-        dist.put("resolved_hsp", packageId.downloadPath(file(packageId, version, ".hsp")));
-        manifest.put("packageType", "InterfaceHar").put("hspType", "bundle_app");
-      } else {
-        dist.remove("resolved_hsp");
-      }
-      ComponentRecord component = new ComponentRecord(
-          null, runtime.id(), RepositoryFormat.OHPM, packageId.scope(), packageId.name(), version,
-          "ohpm-package", PersistenceHashes.componentCoordinateHash(packageId.scope(), packageId.name(), version),
-          json.convertValue(manifest, MAP), now);
-      storeFile(runtime, packageId, version, ".har", upload.har(), actor, remoteAddress, component);
-      if (upload.hsp() != null) {
-        storeFile(runtime, packageId, version, ".hsp", upload.hsp(), actor, remoteAddress, component);
-      }
-      metadata.remove(List.of("packageType", "hspType"));
-      incoming.fields().forEachRemaining(entry -> {
-        if (!List.of("versions", "dist-tags", "time", "_attachments", "_rev").contains(entry.getKey())) {
-          metadata.set(entry.getKey(), entry.getValue().deepCopy());
-        }
-      });
-      if (upload.metadata().isHsp()) metadata.put("packageType", "InterfaceHar").put("hspType", "bundle_app");
-      versions.set(version, manifest);
-      ((ObjectNode) metadata.path("dist-tags")).setAll((ObjectNode) incoming.path("dist-tags"));
-      ObjectNode time = (ObjectNode) metadata.path("time");
-      if (!time.has("created")) time.put("created", now.toString());
-      time.put(version, now.toString());
-      save(root, metadata, now);
+      storePublication(runtime, upload, actor, remoteAddress, root, metadata, now);
       return null;
     });
   }
+
+  private void storePublication(RepositoryRuntime runtime, OhpmPublishParser.Upload upload,
+      String actor, String remoteAddress, AssetRecord root, ObjectNode metadata, Instant now) {
+    OhpmPackageId packageId = upload.metadata().packageId();
+    String version = upload.metadata().version();
+    ObjectNode incoming = upload.metadata().metadata();
+    ObjectNode manifest = ((ObjectNode) incoming.path("versions").path(version)).deepCopy();
+    ObjectNode dist = (ObjectNode) manifest.path("dist");
+    dist.put("tarball", packageId.downloadPath(file(packageId, version, ".har")));
+    if (upload.metadata().isHsp()) {
+      dist.put("resolved_hsp", packageId.downloadPath(file(packageId, version, ".hsp")));
+      manifest.put("packageType", "InterfaceHar").put("hspType", "bundle_app");
+    } else {
+      dist.remove("resolved_hsp");
+    }
+    ComponentRecord component = new ComponentRecord(
+        null, runtime.id(), RepositoryFormat.OHPM, packageId.scope(), packageId.name(), version,
+        "ohpm-package", PersistenceHashes.componentCoordinateHash(packageId.scope(), packageId.name(), version),
+        json.convertValue(manifest, MAP), now);
+    storeFile(runtime, packageId, version, ".har", upload.har(), actor, remoteAddress, component);
+    if (upload.hsp() != null) {
+      storeFile(runtime, packageId, version, ".hsp", upload.hsp(), actor, remoteAddress, component);
+    }
+    metadata.remove(List.of("packageType", "hspType"));
+    incoming.fields().forEachRemaining(entry -> {
+      if (!List.of("versions", "dist-tags", "time", "_attachments", "_rev").contains(entry.getKey())) {
+        metadata.set(entry.getKey(), entry.getValue().deepCopy());
+      }
+    });
+    if (upload.metadata().isHsp()) metadata.put("packageType", "InterfaceHar").put("hspType", "bundle_app");
+    ((ObjectNode) metadata.path("versions")).set(version, manifest);
+    ((ObjectNode) metadata.path("dist-tags")).setAll((ObjectNode) incoming.path("dist-tags"));
+    ObjectNode time = (ObjectNode) metadata.path("time");
+    if (!time.has("created")) time.put("created", now.toString());
+    time.put(version, now.toString());
+    save(root, metadata, now);
+  }
+
+  ImportCheck inspectImport(RepositoryRuntime runtime, OhpmPublishMetadata incoming) throws IOException {
+    requireHosted(runtime, true);
+    ObjectNode metadata = assets.findAssetByPath(runtime.id(), incoming.packageId().id())
+        .map(root -> metadata(root, incoming.packageId())).orElseGet(() -> empty(incoming.packageId()));
+    return inspectImport(runtime, incoming, metadata);
+  }
+
+  ImportCheck importVersion(RepositoryRuntime runtime, OhpmPublishParser.Upload upload, String actor,
+      String remoteAddress, java.util.function.Consumer<Boolean> authorizePublication) throws IOException {
+    if (!org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()) {
+      throw new IllegalStateException("OHPM import must share the result transaction");
+    }
+    requireHosted(runtime, true);
+    Instant now = Instant.now();
+    var root = lock(runtime, upload.metadata().packageId(), true, now);
+    var metadata = metadata(root, upload.metadata().packageId());
+    authorizePublication.accept(!metadata.path("versions").isEmpty());
+    ImportCheck check = inspectImport(runtime, upload.metadata(), metadata);
+    if (check.conflict() != null) return check;
+    if (check.existing()) {
+      ObjectNode tags = (ObjectNode) metadata.path("dist-tags");
+      ObjectNode incomingTags = (ObjectNode) upload.metadata().metadata().path("dist-tags");
+      if (incomingTags.properties().stream().anyMatch(entry -> !entry.getValue().equals(tags.get(entry.getKey())))) {
+        tags.setAll(incomingTags);
+        save(root, metadata, now);
+      }
+    } else {
+      storePublication(runtime, upload, actor, remoteAddress, root, metadata, now);
+    }
+    return check;
+  }
+
+  private ImportCheck inspectImport(RepositoryRuntime runtime, OhpmPublishMetadata incoming,
+      ObjectNode metadata) throws IOException {
+    String version = incoming.version();
+    var tags = incoming.metadata().path("dist-tags").fields();
+    while (tags.hasNext()) {
+      var tag = tags.next();
+      if (metadata.path("dist-tags").has(tag.getKey())
+          && !tag.getValue().equals(metadata.path("dist-tags").path(tag.getKey()))) {
+        return new ImportCheck(false, "Target distribution tag conflicts: " + tag.getKey());
+      }
+    }
+    var existing = metadata.path("versions").path(version);
+    if (existing.isMissingNode()) return new ImportCheck(false, null);
+    var dist = existing.path("dist");
+    if (!incoming.harIntegrity().value().equals(dist.path("integrity").textValue())
+        || incoming.isHsp() != dist.has("integrity_hsp")
+        || incoming.isHsp() && !incoming.hspIntegrity().value().equals(dist.path("integrity_hsp").textValue())) {
+      return new ImportCheck(true, "Target version has different content");
+    }
+    ObjectNode actualManifest = ((ObjectNode) existing).deepCopy();
+    ObjectNode expectedManifest = ((ObjectNode) incoming.metadata().path("versions").path(version)).deepCopy();
+    var generatedFields = List.of("_id", "_nodeVersion", "_ohpmVersion", "dist");
+    actualManifest.remove(generatedFields);
+    expectedManifest.remove(generatedFields);
+    if (!json.readTree(json.writeValueAsBytes(actualManifest))
+        .equals(json.readTree(json.writeValueAsBytes(expectedManifest)))) {
+      return new ImportCheck(true, "Target version has different publication metadata");
+    }
+    try {
+      if (!importFileMatches(runtime, incoming.packageId(), version, ".har", incoming.harIntegrity())
+          || incoming.isHsp()
+              && !importFileMatches(runtime, incoming.packageId(), version, ".hsp", incoming.hspIntegrity())) {
+        return new ImportCheck(true, "Target version content is missing or corrupt");
+      }
+    } catch (OhpmException error) {
+      if (error.status() != 404) throw error;
+      return new ImportCheck(true, "Target version content is missing");
+    }
+    return new ImportCheck(true, null);
+  }
+
+  private boolean importFileMatches(RepositoryRuntime runtime, OhpmPackageId packageId, String version,
+      String extension, OhpmIntegrity expected) throws IOException {
+    MavenResponse response = download(runtime, packageId.downloadPath(file(packageId, version, extension)), false);
+    if (!OhpmContentIntegrity.matches(response, expected)) return false;
+    try (var input = response.body()) {
+      return OhpmIntegrity.compute(input).equals(expected);
+    }
+  }
+
+  record ImportCheck(boolean existing, String conflict) {}
 
   private void storeFile(RepositoryRuntime runtime, OhpmPackageId packageId, String version, String extension,
       OhpmPublishParser.Attachment attachment, String actor, String remoteAddress, ComponentRecord component) {

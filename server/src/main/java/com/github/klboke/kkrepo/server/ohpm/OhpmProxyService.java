@@ -309,7 +309,7 @@ public class OhpmProxyService {
         modified == null ? null : Instant.parse(modified.toString()));
   }
 
-  private static HttpRemoteFetcher.Request remote(RepositoryRuntime runtime, String url,
+  static HttpRemoteFetcher.Request remote(RepositoryRuntime runtime, String url,
       HttpRemoteFetcher.TimeoutProfile profile) {
     try {
       return HttpRemoteFetcher.Request.get(url).withTimeoutProfile(profile).withRepositoryRedirectBoundary(runtime);

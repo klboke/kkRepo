@@ -185,6 +185,7 @@ const viewHashRoutes = {
   "ui-settings": "#admin/system/ui-settings",
   "nexus-migration": "#admin/migration/nexus",
   "repository-data-migration": "#admin/migration/repository-data",
+  "ohpm-import": "#admin/migration/ohpm",
 };
 
 const hashViewRoutes = {
@@ -219,6 +220,7 @@ const hashViewRoutes = {
   "#admin/migration": "nexus-migration",
   "#admin/migration/nexus": "nexus-migration",
   "#admin/migration/repository-data": "repository-data-migration",
+  "#admin/migration/ohpm": "ohpm-import",
 };
 
 const memberTransfer = {
@@ -8288,6 +8290,7 @@ function switchView(view, options = {}) {
   if (view === "security-audit-log") loadAuditLogs(0);
   if (view === "ui-settings") loadUiSettings();
   if (view === "repository-data-migration") loadRepositoryDataMigrationJobs();
+  if (view === "ohpm-import") window.KkOhpmImport.load();
   return true;
 }
 

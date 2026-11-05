@@ -11,6 +11,14 @@ public record OhpmPublishMetadata(
     OhpmIntegrity hspIntegrity) {
 
   public static OhpmPublishMetadata parse(OhpmPackageId packageId, JsonNode body) {
+    return parse(packageId, body, true);
+  }
+
+  public static OhpmPublishMetadata forImport(OhpmPackageId packageId, JsonNode body) {
+    return parse(packageId, body, false);
+  }
+
+  private static OhpmPublishMetadata parse(OhpmPackageId packageId, JsonNode body, boolean requireTags) {
     if (!(body instanceof ObjectNode root)) {
       throw new IllegalArgumentException("OHPM publish metadata must be an object");
     }
@@ -27,7 +35,7 @@ public record OhpmPublishMetadata(
     requireText(manifest, "version", version);
     if (manifest.has("_id")) requireText(manifest, "_id", packageId.id() + "@" + version);
     JsonNode tags = root.path("dist-tags");
-    if (!tags.isObject() || tags.isEmpty()) {
+    if (!tags.isObject() || requireTags && tags.isEmpty()) {
       throw new IllegalArgumentException("OHPM publish requires dist-tags");
     }
     tags.fields().forEachRemaining(tag -> {

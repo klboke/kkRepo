@@ -16,8 +16,28 @@ import org.junit.jupiter.api.Test;
 
 /** Guards the frozen V1-V29 chain and validates repeat startup after newer migrations. */
 class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
-  private static final int LATEST_MIGRATION = 60;
+  private static final int LATEST_MIGRATION = 61;
   private static final Map<String, String> V29_SHA256 = checksums();
+
+  @Test
+  void ohpmImportMigrationResumesAfterItsFirstAutocommittedTable() throws Exception {
+    Flyway throughV60 = migration("60");
+    throughV60.clean();
+    assertEquals(60, throughV60.migrate().migrationsExecuted);
+    try (InputStream stream = getClass().getResourceAsStream("/db/migration/mysql/V61__ohpm_import.sql")) {
+      assertNotNull(stream);
+      String sql = new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+      jdbc().execute(sql.substring(0, sql.indexOf(';')));
+    }
+    Flyway resumed = migration(null);
+    assertEquals(1, resumed.migrate().migrationsExecuted);
+    assertTrue(resumed.validateWithResult().validationSuccessful);
+    assertEquals(0, resumed.migrate().migrationsExecuted);
+    assertEquals(2, jdbc().queryForObject("""
+        SELECT COUNT(*) FROM information_schema.tables
+        WHERE table_schema = DATABASE() AND table_name IN ('ohpm_import_job', 'ohpm_import_item')
+        """, Integer.class));
+  }
 
   @Test
   void lfsMigrationResumesAfterItsFirstAutocommittedTable() throws Exception {

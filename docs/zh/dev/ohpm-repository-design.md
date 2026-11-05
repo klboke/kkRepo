@@ -4,7 +4,7 @@
 
 ## 当前支持状态
 
-当前已实现 `ohpm-hosted` 的普通及流式 HAR/HSP 发布、读取、tag 和下架，`ohpm-proxy` 的 metadata 代理与校验下载，以及 `ohpm-group` 的有序合并和来源一致的下载。管理端支持 HAR/HSP/tgz 上传、浏览属性、搜索及协议感知的删除。使用方式与验证边界见 [OHPM Hosted HAR/HSP](ohpm-hosted.md)、[OHPM Proxy](ohpm-proxy.md)、[OHPM Group](ohpm-group.md) 和 [管理说明](ohpm-management.md)。
+当前已实现 `ohpm-hosted` 的普通及流式 HAR/HSP 发布、读取、tag 和下架，`ohpm-proxy` 的 metadata 代理与校验下载，以及 `ohpm-group` 的有序合并和来源一致的下载。管理端支持 HAR/HSP/tgz 上传、浏览属性、搜索、协议感知的删除，以及目录/已有仓库独立导入。使用方式与验证边界见 [OHPM Hosted HAR/HSP](ohpm-hosted.md)、[OHPM Proxy](ohpm-proxy.md)、[OHPM Group](ohpm-group.md)、[管理说明](ohpm-management.md) 和 [导入说明](ohpm-import.md)。
 
 协议模型与真实客户端请求测试已开始落地，验证基线和设计差异见 [OHPM 协议兼容性基线](ohpm-protocol-baseline.md)。协议模块存在不代表仓库服务已经可用。
 
