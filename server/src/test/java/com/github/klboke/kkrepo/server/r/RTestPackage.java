@@ -56,6 +56,26 @@ final class RTestPackage {
     return compressed.toByteArray();
   }
 
+  static byte[] binary(String name, String version, String extension) throws IOException {
+    List<Item> entries = List.of(Item.file(name + "/DESCRIPTION", description(name, version)),
+        Item.file(name + "/Meta/package.rds", "binary metadata"));
+    return extension.equals(".zip") ? zip(entries) : archive(entries);
+  }
+
+  static byte[] zip(List<Item> entries) throws IOException {
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    try (var zip = new org.apache.commons.compress.archivers.zip.ZipArchiveOutputStream(output)) {
+      for (Item item : entries) {
+        var entry = new org.apache.commons.compress.archivers.zip.ZipArchiveEntry(item.path());
+        entry.setUnixMode(item.link() == null ? 0100644 : 0120777);
+        zip.putArchiveEntry(entry);
+        zip.write(item.bytes());
+        zip.closeArchiveEntry();
+      }
+    }
+    return output.toByteArray();
+  }
+
   private static byte[] description(String name, String version) {
     return ("Package: " + name + "\n"
         + "Version: " + version + "\n"
@@ -64,6 +84,7 @@ final class RTestPackage {
         + "License: MIT\n"
         + "Author: kkRepo\n"
         + "Maintainer: kkRepo <noreply@example.invalid>\n"
+        + "Date/Publication: 2026-11-05 00:00:00\n"
         + "Imports: methods, utils (>= 4.0.0)\n"
         + "NeedsCompilation: no\n").getBytes(StandardCharsets.UTF_8);
   }

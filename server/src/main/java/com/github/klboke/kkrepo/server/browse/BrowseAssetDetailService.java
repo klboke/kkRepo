@@ -1021,7 +1021,7 @@ public class BrowseAssetDetailService {
           visibleRepository, normalized, sourceRepositoryName, "Hugging Face");
     }
     if (visibleRepository.format() == RepositoryFormat.R
-        && isRBrowseProjection(normalized)) {
+        && new RPathParser().parseBrowseProjection(normalized).hostedPackage()) {
       return projectedStoragePath(
           visibleRepository, normalized, sourceRepositoryName, "R");
     }
@@ -1088,27 +1088,6 @@ public class BrowseAssetDetailService {
       }
     }
     return new ResolvedStoragePath(normalized, sourceRepositoryName);
-  }
-
-  private static boolean isRBrowseProjection(String path) {
-    String[] segments = path.split("/", -1);
-    int coordinateOffset;
-    if (segments.length == 5
-        && "src".equals(segments[0])
-        && "contrib".equals(segments[1])) {
-      coordinateOffset = 2;
-    } else if (segments.length == 3) {
-      // Accept the pre-alignment projection long enough for existing nodes to remain operable.
-      coordinateOffset = 0;
-    } else {
-      return false;
-    }
-    try {
-      return segments[coordinateOffset + 2].equals(RPathParser.sourceFilename(
-          segments[coordinateOffset], segments[coordinateOffset + 1]));
-    } catch (IllegalArgumentException ignored) {
-      return false;
-    }
   }
 
   private ResolvedStoragePath projectedStoragePath(

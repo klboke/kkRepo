@@ -17,7 +17,7 @@ public final class RDcf {
   public static final int MAX_RECORDS = 2_000_000;
   public static final int MAX_FIELDS = 256;
   public static final int MAX_FIELD_BYTES = 1024 * 1024;
-  private static final Pattern FIELD = Pattern.compile("[A-Za-z][A-Za-z0-9._@-]{0,63}");
+  private static final Pattern FIELD = Pattern.compile("[A-Za-z][A-Za-z0-9._@/-]{0,63}");
 
   private RDcf() {
   }

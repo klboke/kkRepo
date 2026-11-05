@@ -135,7 +135,7 @@ class ComponentUploadServiceTest {
     UploadDefinition definition = service.definition("r");
     assertFalse(definition.multipleUpload());
     assertTrue(definition.componentFields().isEmpty());
-    assertEquals(List.of("asset"),
+    assertEquals(List.of("asset", "pathId"),
         definition.assetFields().stream().map(UploadFieldDefinition::name).toList());
 
     ComponentUploadService.UploadResult result = service.upload(
@@ -159,10 +159,27 @@ class ComponentUploadServiceTest {
             files("r.asset", "demo_1.0.0.tar.gz"), "alice", "ip")).getMessage());
 
     ComponentUploadService service = service(mock(RService.class));
-    assertEquals("R upload requires a source .tar.gz package", assertThrows(
+    assertEquals("R upload requires a canonical package filename and Package Path", assertThrows(
         UploadValidationException.class,
         () -> service.upload(runtime.name(), Map.of(),
             files("r.asset", "demo.zip"), "alice", "ip")).getMessage());
+  }
+
+  @Test
+  void uploadsRBinaryUsingNexusAssetPathField() throws Exception {
+    RService r = mock(RService.class);
+    ComponentUploadService service = service(r);
+    String namespace = "bin/windows/contrib/4.5";
+    String filename = "demo_1.0.0.zip";
+    when(r.publish(any(), eq(namespace), eq(filename), any(), any(), any()))
+        .thenReturn(new RService.PublishedPackage(namespace + "/" + filename,
+            "demo", "1.0.0", "a".repeat(32), "b".repeat(64), 5));
+    assertEquals(List.of(namespace + "/" + filename), service.upload(
+        "r-hosted", Map.of("r.asset.pathId", new String[] {namespace}),
+        files("r.asset", filename), "alice", "ip").paths());
+    assertThrows(UploadValidationException.class, () -> service.upload(
+        "r-hosted", Map.of("r.asset.pathId", new String[] {"src/contrib"}),
+        files("r.asset", filename), "alice", "ip"));
   }
 
   @Test

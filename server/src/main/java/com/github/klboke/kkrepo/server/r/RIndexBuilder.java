@@ -4,6 +4,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RRegistryDao;
 import com.github.klboke.kkrepo.protocol.r.RDcf;
 import com.github.klboke.kkrepo.protocol.r.RPackageIndex;
+import com.github.klboke.kkrepo.protocol.r.RPathParser;
 import com.github.klboke.kkrepo.protocol.r.RVersions;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.BufferedOutputStream;
@@ -44,8 +45,8 @@ final class RIndexBuilder {
 
   BuiltSnapshot build(RepositoryRuntime runtime, RRegistryDao.SuiteState state) {
     return build(runtime, state, visitor -> registry.visitPackages(
-        runtime.id(), state.distribution(), RService.COMPONENT,
-        RService.ARCHITECTURE, visitor));
+        runtime.id(), state.distribution(), RPathParser.packageType(state.distribution()),
+        RPathParser.packageType(state.distribution()), visitor));
   }
 
   BuiltSnapshot build(
@@ -54,7 +55,7 @@ final class RIndexBuilder {
       PackageSource source) {
     long revision = state.desiredRevision();
     Instant createdAt = state.desiredAt() == null ? Instant.now() : state.desiredAt();
-    String canonical = RService.SOURCE_NAMESPACE + "/PACKAGES.gz";
+    String canonical = state.distribution() + "/PACKAGES.gz";
     String namespaceHash = HexFormat.of().formatHex(
         PersistenceHashes.sha256(state.distribution()));
     String hidden = ".r/snapshots/" + namespaceHash + "/" + revision + "/PACKAGES.gz";

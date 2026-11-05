@@ -1,19 +1,18 @@
 # R / CRAN 仓库使用指南
 
-kkRepo 通过 `r-hosted`、`r-proxy` 和 `r-group` 支持 CRAN-style source package 仓库，客户端
-地址保持 `/repository/<name>/...` 布局。Hosted 与 group 在 `src/contrib` 下发布 source package，
-并提供生成的 `src/contrib/PACKAGES.gz`；proxy 还可以缓存上游暴露的其它安全路径。
+kkRepo 通过 `r-hosted`、`r-proxy` 和 `r-group` 支持 CRAN-style source/binary package 仓库，客户端
+地址保持 `/repository/<name>/...` 布局。Hosted 与 group 为各个 package 目录分别生成
+`PACKAGES.gz`；proxy 还可以缓存上游暴露的其它安全路径。
 
 ## 仓库类型
 
 | 用途 | Recipe | 行为 |
 | --- | --- | --- |
-| 私有 source package | `r-hosted` | 不可变 `.tar.gz` 上传和确定性生成的 `PACKAGES.gz` |
+| 私有 source/binary package | `r-hosted` | 不可变 `.tar.gz`、`.zip`、`.tgz` 上传和各 namespace 的 `PACKAGES.gz` |
 | 上游 CRAN mirror | `r-proxy` | `PACKAGES*`、source/binary package 和 Archive 路径的回源缓存 |
-| 统一 source 入口 | `r-group` | 有序 hosted/proxy 成员、合并 `PACKAGES.gz`、按 snapshot 绑定 `.tar.gz` |
+| 统一 package 入口 | `r-group` | 有序 hosted/proxy 成员、合并 `PACKAGES.gz`、按 snapshot 绑定 package |
 
-本版本的 hosted/group 明确限定为 source-only。Windows `.zip`、macOS `.tgz`、未压缩
-`PACKAGES` 和 `PACKAGES.rds` 只能直连 `r-proxy`。Group 发布索引后不会在下载时切到另一个
+未压缩 `PACKAGES` 和 `PACKAGES.rds` 只能直连 `r-proxy`。Group 发布索引后不会在下载时切到另一个
 成员；每个 package path 都绑定到该 snapshot 选中的成员 revision 和 checksum。
 
 ## 创建仓库
@@ -37,8 +36,8 @@ local({
 })
 ```
 
-首期 hosted/group 只提供 source package。在默认偏好 binary 的平台上验证时，应显式指定
-`type = "source"`：
+源码包使用 `type = "source"`。Windows/macOS 可使用 `type = "binary"`，客户端会按平台和
+R 版本选择目录，需要事先上传对应的二进制包：
 
 ```r
 available.packages(
@@ -80,6 +79,32 @@ gzip/tar 结构和有界 `DESCRIPTION` metadata 做校验；package name/version
 `PACKAGES.gz`，并原子切换 current snapshot。读请求只会看到旧的完整 snapshot 或新的完整
 snapshot，不会看到半份索引。
 
+## 发布二进制包
+
+| 包类型 | 目录示例 | 扩展名 |
+| --- | --- | --- |
+| Source | `src/contrib` | `.tar.gz` |
+| Windows | `bin/windows/contrib/4.5` | `.zip` |
+| macOS | `bin/macosx/big-sur-arm64/contrib/4.5` | `.tgz` |
+| R-universe Linux | `bin/linux/noble-x86_64/4.5/src/contrib` | `.tar.gz` |
+
+根据构建目标替换平台和 R 版本。文件名采用 `Package_Version`，可以直接 PUT 到完整路径，
+也可以使用 Nexus 兼容的 asset 字段：
+
+```bash
+curl -u alice:"$KKREPO_PASSWORD" \
+  -F 'r.asset.pathId=bin/windows/contrib/4.5' \
+  -F 'r.asset=@acmepkg_1.2.3.zip' \
+  'https://repo.example.com/service/rest/v1/components?repository=r-hosted'
+```
+
+省略 `r.asset.pathId` 时默认使用 `src/contrib`，兼容现有 source 上传。Browse 上传表单提供相同的
+Package Path。TAR/GZIP、ZIP 都进行有界结构和 DESCRIPTION 校验，不执行包内代码。
+各 namespace 独立维护数据库坐标、带 fencing 的发布、清理和 group binding，同名同版本包可在
+不同平台和 R 版本之间共存，多副本不会共用错误的索引或坐标。
+Linux 客户端按 [R-universe 约定](https://docs.r-universe.dev/install/binaries.html)，将仓库根地址
+设为 `https://repo.example.com/repository/r-group/bin/linux/noble-x86_64/4.5`，使用 `type="source"`。
+
 ## Proxy 与 group 行为
 
 R proxy 只回源经过规范化和策略校验的相对路径，并只使用仓库配置的上游凭据，绝不转发客户端
@@ -96,8 +121,8 @@ Cleanup Policy 可以绑定 R hosted 仓库。Retain-count 使用 R 的 numeric 
 `0.9 < 0.75`），不使用字典序或 SemVer。删除会先发布不再声明该 package 的 index，再退出 package
 投影；生成 metadata 和 group 不作为独立清理主体。
 
-只有通过校验的 source package archive 会进入制品扫描。`PACKAGES*`、生成 snapshot、opaque
-proxy binary 和任意 proxy 静态文件都排除。由于扫描器没有专用 CRAN advisory matcher，R 生态
+通过校验的 source/binary package archive 都会进入制品扫描。`PACKAGES*`、生成 snapshot、
+未识别的 proxy archive 和任意 proxy 静态文件都排除。由于扫描器没有专用 CRAN advisory matcher，R 生态
 漏洞覆盖会明确显示为 partial；SBOM、通用/native findings 仍遵循 Audit 或 Enforce 策略。
 
 ## 运维与迁移
@@ -112,7 +137,7 @@ binding、lease 和 cache 都在 kkRepo 重建；未知版本或 shape 会保留
 
 ## 当前边界
 
-- Hosted/group 仅支持 source `.tar.gz` package 和 `PACKAGES.gz`。
+- Hosted/group 支持上述 source/binary namespace 和 `PACKAGES.gz`，不生成 `PACKAGES.rds`。
 - 未实现自动生成 CRAN `Archive`，也不提供 `renv`/`remotes` 旧版本 alias。
 - kkRepo 不执行 `R CMD build`、`R CMD check`、安装 hook、native code 或 package test。
 - 不会从普通 CRAN-like path 推断 Bioconductor、R-universe 或 Posit Package Manager 的专用发布语义。

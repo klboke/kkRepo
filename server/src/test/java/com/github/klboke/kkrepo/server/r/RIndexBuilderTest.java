@@ -95,6 +95,18 @@ class RIndexBuilderTest {
   }
 
   @Test
+  void binaryIndexUsesItsOwnNamespaceAndCoordinateType() {
+    RRegistryDao registry = mock(RRegistryDao.class);
+    RIndexBuilder builder = new RIndexBuilder(registry, mock(RAssetSupport.class));
+    String namespace = "bin/windows/contrib/4.5";
+    var state = new RRegistryDao.SuiteState(
+        7L, namespace, 1L, Instant.EPOCH, 0L, 0, null, null, null, Instant.EPOCH);
+    var built = builder.build(runtime(), state);
+    assertEquals(java.util.Set.of(namespace + "/PACKAGES.gz"), built.manifest().keySet());
+    verify(registry).visitPackages(eq(7L), eq(namespace), eq("binary"), eq("binary"), any());
+  }
+
+  @Test
   void convertsStreamingWriteFailuresIntoSnapshotBuildFailures() {
     RIndexBuilder builder = new RIndexBuilder(
         mock(RRegistryDao.class), mock(RAssetSupport.class));

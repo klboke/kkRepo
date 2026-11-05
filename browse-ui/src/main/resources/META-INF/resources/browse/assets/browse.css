@@ -880,6 +880,14 @@ h1 {
   gap: 12px;
 }
 
+.upload-help {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .upload-file,
 .upload-path,
 .upload-form label:first-child,

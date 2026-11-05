@@ -6,6 +6,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.ComponentDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.protocol.r.RMediaTypes;
+import com.github.klboke.kkrepo.protocol.r.RPathParser;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
@@ -48,7 +49,7 @@ final class RAssetSupport {
       String ip,
       ComponentRecord component) {
     hosted.putInternalWithComponentFileAtBrowsePath(
-        runtime, path, file, RMediaTypes.SOURCE_PACKAGE, attributes,
+        runtime, path, file, RMediaTypes.forPath(new RPathParser().parse(path)), attributes,
         actor, ip, component, browsePath);
     return requireAsset(runtime, path);
   }

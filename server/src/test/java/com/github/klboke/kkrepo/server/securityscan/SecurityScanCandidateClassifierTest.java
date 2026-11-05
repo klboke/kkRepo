@@ -249,6 +249,19 @@ class SecurityScanCandidateClassifierTest {
         42L, null, Instant.EPOCH, attributes);
   }
 
+  @Test
+  void scansOnlyVerifiedBinaryPackages() {
+    AssetRecord original = asset(RepositoryFormat.R, "bin/windows/contrib/4.5/demo_1.0.0.zip", "r");
+    assertEquals(CandidateDisposition.NOT_APPLICABLE,
+        classifier.classify(original, blob(42), profile(1024)).disposition());
+    AssetRecord verified = new AssetRecord(original.id(), original.repositoryId(), original.componentId(),
+        original.assetBlobId(), original.format(), original.path(), original.pathHash(), original.name(),
+        original.kind(), original.contentType(), original.size(), null, Instant.EPOCH,
+        Map.of("rInputSchema", "r-binary-package-v1", "rPackage", "demo", "rVersion", "1.0.0"));
+    org.junit.jupiter.api.Assertions.assertNotEquals(CandidateDisposition.NOT_APPLICABLE,
+        classifier.classify(verified, blob(42), profile(1024)).disposition());
+  }
+
   private static AssetBlobRecord blob(long size) {
     return new AssetBlobRecord(
         1L, 1L, "blob://test/object", PersistenceHashes.blobRefHash("blob://test/object"),

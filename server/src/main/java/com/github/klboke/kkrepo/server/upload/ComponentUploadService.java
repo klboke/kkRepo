@@ -8,6 +8,7 @@ import com.github.klboke.kkrepo.protocol.conan.ConanPathParser;
 import com.github.klboke.kkrepo.protocol.conan.ConanReference;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
+import com.github.klboke.kkrepo.protocol.r.RPathParser;
 import com.github.klboke.kkrepo.server.apt.AptService;
 import com.github.klboke.kkrepo.server.alpine.AlpineService;
 import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyService;
@@ -145,7 +146,9 @@ public class ComponentUploadService {
               field("repositoryArchitecture", "STRING", "Repository architecture", false,
                   "Repository namespace")),
           List.of(field("asset", "FILE", "Alpine .apk package", false, null))),
-      singleAsset("r"),
+      new UploadDefinition("r", false, List.of(), List.of(
+          field("asset", "FILE", "R source or binary package", false, null),
+          field("pathId", "STRING", "Package Path (defaults to src/contrib)", true, null))),
       singleAsset("nuget"),
       singleAsset("rubygems"),
       yumUpload(),
@@ -544,10 +547,16 @@ public class ComponentUploadService {
     }
     AssetUpload asset = singleAsset(upload, "R");
     String filename = originalFilename(asset.file());
-    if (!filename.toLowerCase(Locale.ROOT).endsWith(".tar.gz")) {
-      throw new UploadValidationException("R upload requires a source .tar.gz package");
+    String namespace = blankToNull(asset.fields().get("pathId"));
+    String target = namespace == null ? RService.SOURCE_NAMESPACE : namespace;
+    var path = new RPathParser().parse(target + "/" + filename);
+    if (!path.hostedPackage() || !target.equals(path.namespace())) {
+      throw new UploadValidationException("R upload requires a canonical package filename and Package Path");
     }
     try (InputStream body = asset.file().getInputStream()) {
+      if (namespace != null) {
+        return List.of(rService.publish(runtime, namespace, filename, body, createdBy, createdByIp).path());
+      }
       return List.of(rService.publish(
           runtime, filename, body, createdBy, createdByIp).path());
     }

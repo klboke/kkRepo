@@ -13,6 +13,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.MetadataRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RRegistryDao;
+import com.github.klboke.kkrepo.protocol.r.RPathParser;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
@@ -634,13 +635,15 @@ public class BrowseContentDeleteController {
     Optional<RRegistryDao.PackageRecord> direct =
         rRegistry.findPackageByPath(repository.id(), publicPath);
     if (direct.isPresent()) return direct.orElseThrow().path();
-    String[] segments = publicPath.split("/", -1);
-    if (segments.length != 3) return publicPath;
+    var projected = new RPathParser().parseBrowseProjection(publicPath);
+    if (!projected.hostedPackage()) return publicPath;
+    String packageType = RPathParser.packageType(projected.namespace());
     return rRegistry.findPackage(
-            repository.id(), "src/contrib", "source", segments[0], segments[1], "source")
-        .filter(record -> segments[2].equals(record.filename()))
+            repository.id(), projected.namespace(), packageType,
+            projected.packageName(), projected.version(), packageType)
+        .filter(record -> projected.filename().equals(record.filename()))
         .map(RRegistryDao.PackageRecord::path)
-        .orElse(publicPath);
+        .orElse(projected.normalized());
   }
 
   private BrowseDeleteResult deleteResolvedAssets(

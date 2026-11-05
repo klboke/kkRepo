@@ -17,14 +17,17 @@ import java.util.HexFormat;
 import java.util.Set;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.zip.CRC32;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
+import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
+import org.apache.commons.compress.archivers.zip.ZipFile;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-/** Bounded, non-executing inspector for CRAN source package archives. */
+/** Bounded, non-executing inspector for CRAN package archives. */
 @Component
 final class RSourcePackageInspector {
   private static final int MAX_DESCRIPTION_BYTES = 1024 * 1024;
@@ -65,15 +68,17 @@ final class RSourcePackageInspector {
   }
 
   InspectedPackage inspect(InputStream body, String filename) {
-    if (filename == null || !filename.endsWith(".tar.gz")) {
-      throw bad("R source packages must use a safe .tar.gz filename");
+    if (filename == null || !(filename.endsWith(".tar.gz")
+        || filename.endsWith(".tgz") || filename.endsWith(".zip"))) {
+      throw bad("R packages must use a .tar.gz, .tgz or .zip filename");
     }
     boolean acquired = acquirePermit();
     Path file = null;
     try {
       file = Files.createTempFile("kkrepo-r-package-", ".tar.gz");
       BlobDigest blob = spool(body, file);
-      ArchiveProjection projection = inspectArchive(file, blob.size());
+      ArchiveProjection projection = filename.endsWith(".zip")
+          ? inspectZip(file, blob.size()) : inspectArchive(file, blob.size());
       RPackageMetadata metadata = RPackageMetadata.fromDescription(
           projection.description(), filename);
       if (!projection.topLevel().equals(metadata.packageName())) {
@@ -87,10 +92,78 @@ final class RSourcePackageInspector {
       throw error;
     } catch (IOException | IllegalArgumentException error) {
       delete(file);
-      throw bad("Unable to inspect R source package", error);
+      throw bad("Unable to inspect R package", error);
     } finally {
       if (acquired) permits.release();
     }
+  }
+
+  private ArchiveProjection inspectZip(Path file, long compressedBytes) throws IOException {
+    long deadline = System.nanoTime() + timeout.toNanos();
+    Set<String> names = new HashSet<>();
+    String topLevel = null;
+    byte[] description = null;
+    long expanded = 0;
+    int entries = 0;
+    try (ZipFile zip = ZipFile.builder().setPath(file).get()) {
+      var contents = zip.getEntries();
+      while (contents.hasMoreElements()) {
+        ZipArchiveEntry entry = contents.nextElement();
+        if (++entries > maxEntries) throw bad("R archive contains too many entries");
+        checkDeadline(deadline);
+        String name = safePath(entry.getName(), entry.isDirectory());
+        if (!names.add(name)) throw bad("R archive contains duplicate entries");
+        int separator = name.indexOf('/');
+        String entryTop = separator < 0 ? name : name.substring(0, separator);
+        if (topLevel == null) topLevel = entryTop;
+        if (!topLevel.equals(entryTop)) {
+          throw bad("R archive must contain exactly one top-level package directory");
+        }
+        int unixType = entry.getUnixMode() & 0170000;
+        if (!zip.canReadEntryData(entry) || entry.isUnixSymlink()
+            || (unixType != 0 && unixType != 0100000 && unixType != 0040000)) {
+          throw bad("R archive contains an unsafe entry type: " + name);
+        }
+        if (entry.getSize() < 0 || entry.getSize() > maxEntryBytes) {
+          throw bad("R archive entry exceeds safety limits: " + name);
+        }
+        if (entry.isDirectory()) continue;
+        ByteArrayOutputStream selected = name.equals(topLevel + "/DESCRIPTION")
+            ? new ByteArrayOutputStream() : null;
+        long entryBytes = 0;
+        CRC32 checksum = new CRC32();
+        try (InputStream input = zip.getInputStream(entry)) {
+          byte[] buffer = new byte[64 * 1024];
+          for (int read; (read = input.read(buffer)) >= 0;) {
+            if (read == 0) continue;
+            entryBytes = Math.addExact(entryBytes, read);
+            expanded = Math.addExact(expanded, read);
+            if (entryBytes > maxEntryBytes || expanded > maxExpandedBytes
+                || exceedsExpansionRatio(expanded, compressedBytes, maxExpansionRatio)) {
+              throw bad("R archive expansion exceeds safety limits");
+            }
+            checksum.update(buffer, 0, read);
+            if (selected != null) {
+              if (selected.size() + read > MAX_DESCRIPTION_BYTES) {
+                throw bad("R DESCRIPTION exceeds safety limits");
+              }
+              selected.write(buffer, 0, read);
+            }
+            checkDeadline(deadline);
+          }
+        }
+        if (entryBytes != entry.getSize() || checksum.getValue() != entry.getCrc()) {
+          throw bad("R archive contains a truncated or corrupt entry");
+        }
+        if (selected != null) description = selected.toByteArray();
+      }
+    } catch (ArithmeticException overflow) {
+      throw bad("R archive expanded size overflow", overflow);
+    }
+    if (topLevel == null || description == null || description.length == 0) {
+      throw bad("R archive requires a unique top-level DESCRIPTION");
+    }
+    return new ArchiveProjection(topLevel, description, entries, expanded);
   }
 
   private ArchiveProjection inspectArchive(Path file, long compressedBytes) throws IOException {
@@ -164,7 +237,7 @@ final class RSourcePackageInspector {
   }
 
   private BlobDigest spool(InputStream body, Path file) throws IOException {
-    if (body == null) throw bad("R source package body is required");
+    if (body == null) throw bad("R package body is required");
     MessageDigest md5 = digest("MD5");
     MessageDigest sha1 = digest("SHA-1");
     MessageDigest sha256 = digest("SHA-256");
@@ -175,16 +248,16 @@ final class RSourcePackageInspector {
       for (int read; (read = body.read(buffer)) >= 0;) {
         if (read == 0) continue;
         size = Math.addExact(size, read);
-        if (size > maxCompressedBytes) throw bad("R source package exceeds upload limit");
+        if (size > maxCompressedBytes) throw bad("R package exceeds upload limit");
         md5.update(buffer, 0, read);
         sha1.update(buffer, 0, read);
         sha256.update(buffer, 0, read);
         output.write(buffer, 0, read);
       }
     } catch (ArithmeticException overflow) {
-      throw bad("R source package size overflow", overflow);
+      throw bad("R package size overflow", overflow);
     }
-    if (size == 0) throw bad("R source package is empty");
+    if (size == 0) throw bad("R package is empty");
     return new BlobDigest(
         HexFormat.of().formatHex(md5.digest()),
         HexFormat.of().formatHex(sha1.digest()),
@@ -194,7 +267,7 @@ final class RSourcePackageInspector {
 
   private static String safePath(String raw, boolean directory) {
     if (raw == null || raw.isBlank() || raw.startsWith("/") || raw.indexOf('\\') >= 0
-        || raw.indexOf('\0') >= 0) {
+        || raw.indexOf(':') >= 0 || raw.chars().anyMatch(value -> value < 32 || value == 127)) {
       throw bad("R archive contains an unsafe path");
     }
     String name = raw.endsWith("/") ? raw.substring(0, raw.length() - 1) : raw;
