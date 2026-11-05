@@ -19,6 +19,7 @@
     <module>cache</module>
     <module>protocol-maven</module>
     <module>protocol-npm</module>
+    <module>protocol-ohpm</module>
     <module>protocol-pypi</module>
     <module>protocol-cargo</module>
     <module>protocol-pub</module>
@@ -198,6 +199,11 @@
       <dependency>
         <groupId>com.github.klboke</groupId>
         <artifactId>kkrepo-protocol-npm</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.github.klboke</groupId>
+        <artifactId>kkrepo-protocol-ohpm</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
