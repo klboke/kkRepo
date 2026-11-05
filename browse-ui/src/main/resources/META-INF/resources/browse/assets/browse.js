@@ -3319,10 +3319,18 @@ function rUsageDetail(entry, detail = null) {
   const repositoryUrl = repositoryBaseUrl().replace(/\/+$/, "");
   const packageName = metadata.package || entry.name || "<package>";
   const version = metadata.version || entry.version || "";
+  const namespace = metadata.namespace || "src/contrib";
+  const source = namespace === "src/contrib";
+  const packageType = namespace.startsWith("bin/windows/") ? "win.binary"
+    : namespace.startsWith("bin/macosx/") ? "mac.binary" : "source";
+  const location = source ? `repos = '${repositoryUrl}'`
+    : `contriburl = '${repositoryUrl}/${namespace}'`;
+  const extension = packageType === "win.binary" ? ".zip" : packageType === "mac.binary" ? ".tgz" : ".tar.gz";
+  const filename = metadata.filename || `${packageName}_${version || "1.0.0"}${extension}`;
   const summaryRows = [
     ["Repository", state.repo],
     ["Format", "r"],
-    ["Namespace", "src/contrib"],
+    ["Namespace", namespace],
     ["Package", packageName],
     ["Version", version || "-"],
   ];
@@ -3337,17 +3345,17 @@ function rUsageDetail(entry, detail = null) {
     ),
     usageSnippet(
       "Available packages",
-      `available.packages(repos = '${repositoryUrl}', type = 'source')`,
+      `available.packages(${location}, type = '${packageType}')`,
     ),
     usageSnippet(
       "Install",
-      `install.packages('${packageName}', repos = '${repositoryUrl}', type = 'source')`,
+      `install.packages('${packageName}', ${location}, type = '${packageType}')`,
     ),
   ];
   if (String(repo?.type || "").toLowerCase() === "hosted") {
     snippets.push(usageSnippet(
       "Publish",
-      `curl --fail --user '<username>:<token>' -F 'r.asset=@${packageName}_${version || "1.0.0"}.tar.gz' '${window.location.origin}/service/rest/v1/components?repository=${encodeURIComponent(state.repo)}'`,
+      `curl --fail --user '<username>:<token>' -F 'r.asset.pathId=${namespace}' -F 'r.asset=@${filename}' '${window.location.origin}/service/rest/v1/components?repository=${encodeURIComponent(state.repo)}'`,
       "The server validates DESCRIPTION and archive limits without executing package code",
     ));
   }
@@ -3820,13 +3828,19 @@ function renderUploadFields() {
   if (repo.format === "r") {
     fields.innerHTML = `
       <label class="upload-file">
-        <span>R source package</span>
-        <input id="upload-file" type="file" accept=".tar.gz,application/gzip,application/x-gzip" required>
+        <span>R package</span>
+        <input id="upload-file" type="file" accept=".tar.gz,.tgz,.zip,application/gzip,application/x-gzip,application/zip" required>
       </label>
-      <div class="muted-row full-width">Upload the canonical <code>Package_Version.tar.gz</code> produced by <code>R CMD build</code>. The server validates the archive and <code>DESCRIPTION</code> without executing package code, then atomically publishes <code>PACKAGES.gz</code>.</div>
+      <p class="upload-help">Upload a source <code>.tar.gz</code>, Windows <code>.zip</code>, macOS <code>.tgz</code>, or Linux <code>.tar.gz</code> package. Choose a directory matching the target platform and R version.</p>
       <label class="upload-path">
         <span>Package path</span>
-        <input id="upload-path" type="text" value="src/contrib/Package_Version.tar.gz" readonly>
+        <input id="upload-r-namespace" type="text" value="src/contrib" list="upload-r-namespaces" required>
+        <datalist id="upload-r-namespaces">
+          <option value="src/contrib">Source</option>
+          <option value="bin/windows/contrib/4.5">Windows / R 4.5</option>
+          <option value="bin/macosx/big-sur-arm64/contrib/4.5">macOS ARM64 / R 4.5</option>
+          <option value="bin/linux/noble-x86_64/4.5/src/contrib">Linux noble x86_64 / R 4.5</option>
+        </datalist>
       </label>
     `;
     return;
@@ -4386,9 +4400,11 @@ function buildUploadForm(repo, form) {
   }
   if (repo.format === "r") {
     const file = document.getElementById("upload-file")?.files?.[0];
-    if (!file || !file.name.toLowerCase().endsWith(".tar.gz")) {
-      throw new Error("A canonical R source .tar.gz package is required.");
+    const namespace = document.getElementById("upload-r-namespace")?.value?.trim();
+    if (!namespace || !file || !/\.(tar\.gz|tgz|zip)$/.test(file.name)) {
+      throw new Error("An R package (.tar.gz, .tgz or .zip) and Package Path are required.");
     }
+    form.append("r.asset.pathId", namespace);
     form.append("r.asset", file, file.name);
     return;
   }

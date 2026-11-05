@@ -16,6 +16,47 @@ class RSourcePackageInspectorTest {
   private final RSourcePackageInspector inspector = new RSourcePackageInspector();
 
   @Test
+  void inspectsBinaryArchivesWithoutChangingTheirBytes() throws Exception {
+    for (String extension : List.of(".zip", ".tgz", ".tar.gz")) {
+      byte[] bytes = RTestPackage.binary("demo", "1.0.0", extension);
+      java.nio.file.Path spool;
+      try (var inspected = inspector.inspect(new ByteArrayInputStream(bytes), "demo_1.0.0" + extension)) {
+        assertEquals("demo", inspected.metadata().packageName());
+        org.junit.jupiter.api.Assertions.assertArrayEquals(bytes, Files.readAllBytes(inspected.file()));
+        spool = inspected.file();
+      }
+      org.junit.jupiter.api.Assertions.assertFalse(Files.exists(spool));
+    }
+  }
+
+  @Test
+  void rejectsUnsafeZipEntriesAndBoundsExpansion() throws Exception {
+    for (List<RTestPackage.Item> entries : List.of(
+        List.of(RTestPackage.Item.file("demo/../outside", "x")),
+        List.of(RTestPackage.Item.file("demo/DESCRIPTION", "x"),
+            RTestPackage.Item.file("demo/DESCRIPTION", "x")),
+        List.of(RTestPackage.Item.link("demo/link", "../../outside")),
+        List.of(RTestPackage.Item.file("demo/file", "x"), RTestPackage.Item.file("other/file", "x")),
+        List.of(RTestPackage.Item.file("demo/file:stream", "x")))) {
+      byte[] bytes = RTestPackage.zip(entries);
+      assertThrows(MavenExceptions.BadRequestException.class, () -> inspector.inspect(
+          new ByteArrayInputStream(bytes), "demo_1.0.0.zip"));
+    }
+    byte[] valid = RTestPackage.binary("demo", "1.0.0", ".zip");
+    assertThrows(MavenExceptions.BadRequestException.class, () -> inspector.inspect(
+        new ByteArrayInputStream(valid), "other_1.0.0.zip"));
+    assertThrows(MavenExceptions.BadRequestException.class, () -> inspector.inspect(
+        new ByteArrayInputStream(java.util.Arrays.copyOf(valid, valid.length / 2)), "demo_1.0.0.zip"));
+    for (var limited : List.of(
+        new RSourcePackageInspector(10000, 8, 10000, 500, 100, 10, 1, 1000),
+        new RSourcePackageInspector(10000, 10000, 8, 500, 100, 10, 1, 1000),
+        new RSourcePackageInspector(10000, 10000, 10000, 500, 1, 10, 1, 1000))) {
+      assertThrows(MavenExceptions.BadRequestException.class, () -> limited.inspect(
+          new ByteArrayInputStream(valid), "demo_1.0.0.zip"));
+    }
+  }
+
+  @Test
   void validatesDescriptionIdentityAndPreservesOriginalArchive() throws Exception {
     byte[] bytes = RTestPackage.source("demo", "1.2-3");
 

@@ -33,8 +33,8 @@ public record RPackageMetadata(
           "R DESCRIPTION requires Authors@R or Author and Maintainer");
     }
     if (expectedFilename != null
-        && !RPathParser.sourceFilename(metadata.packageName(), metadata.version())
-            .equals(expectedFilename)) {
+        && !List.of(".tar.gz", ".tgz", ".zip").stream().anyMatch(extension ->
+            (metadata.packageName() + "_" + metadata.version() + extension).equals(expectedFilename))) {
       throw new IllegalArgumentException("R package filename does not match DESCRIPTION identity");
     }
     return metadata;

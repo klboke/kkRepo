@@ -8,6 +8,24 @@ function uploadSpec(format, multipleUpload, componentFields, assetFields) {
   return { format, multipleUpload, componentFields, assetFields };
 }
 
+test("R binary upload submits the selected namespace using the Nexus asset field", () => {
+  const file = new File(["fixture"], "demo_1.0.0.zip");
+  const namespace = { value: "bin/windows/contrib/4.5" };
+  const context = loadUploadHelpers({
+    getElementById(id) {
+      if (id === "upload-file") return { files: [file] };
+      if (id === "upload-r-namespace") return namespace;
+      return null;
+    },
+  });
+  const form = new FormData();
+  context.buildUploadForm({ format: "r" }, form);
+  assert.equal(form.get("r.asset.pathId"), "bin/windows/contrib/4.5");
+  assert.equal(form.get("r.asset").name, "demo_1.0.0.zip");
+  namespace.value = "";
+  assert.throws(() => context.buildUploadForm({ format: "r" }, new FormData()), /Package Path/);
+});
+
 function field(name, type, optional = false, description = "") {
   return { name, type, optional, description };
 }

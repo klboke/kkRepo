@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.security.scan.ScanEnums.CandidateDisposition;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.SubjectKind;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.TargetClassification;
 import com.github.klboke.kkrepo.protocol.huggingface.HuggingFaceFileKind;
+import com.github.klboke.kkrepo.protocol.r.RPathParser;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -171,11 +172,8 @@ public class SecurityScanCandidateClassifier {
           && !path.startsWith(".apt/") && !path.contains("/.apt/");
       case ALPINE -> hasAnySuffix(path, ".apk")
           && !path.startsWith(".alpine/") && !path.contains("/.alpine/");
-      case R -> hasAnySuffix(path, ".tar.gz")
-          && path.startsWith("src/contrib/")
-          && !path.endsWith("/PACKAGES.gz")
-          && !path.startsWith(".r/") && !path.contains("/.r/")
-          && "r-source-package-v1".equals(
+      case R -> new RPathParser().parse(path).hostedPackage()
+          && Set.of("r-source-package-v1", "r-binary-package-v1").contains(
               String.valueOf((assetAttributes == null ? Map.of() : assetAttributes)
                   .get("rInputSchema")));
       case HUGGINGFACE -> HuggingFaceFileKind.classify(path).modelBinary()
