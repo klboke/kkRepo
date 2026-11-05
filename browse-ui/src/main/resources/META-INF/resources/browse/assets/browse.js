@@ -726,6 +726,7 @@ function normalizeRepository(repo) {
     online: repo.online,
     url: repo.url,
     docker: repo.docker || null,
+    apt: repo.apt || null,
     hostedVersionPolicy: repo.hosted ? repo.hosted.versionPolicy : null,
     status: repo.online ? "Online" : "Offline",
   };
