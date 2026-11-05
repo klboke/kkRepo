@@ -24,6 +24,10 @@ import com.github.klboke.kkrepo.server.repositories.RepositoryService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AdminBootstrapCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.ApiKeyCommand;
+import com.github.klboke.kkrepo.server.security.SecurityPayloads.PrivilegeCommand;
+import com.github.klboke.kkrepo.server.security.SecurityPayloads.RepositoryTargetCommand;
+import com.github.klboke.kkrepo.server.security.SecurityPayloads.RoleCommand;
+import com.github.klboke.kkrepo.server.security.SecurityPayloads.UserCommand;
 import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
 import java.io.ByteArrayInputStream;
@@ -192,6 +196,8 @@ class OhpmHostedRuntimeTest {
       assertStatus(client, "DELETE", firstUrl + "@scope/example", token, "{\"version\":\"6.0.0\"}", 200);
       assertStatus(client, "GET", hspMetadata.path("tarball").textValue(), token, null, 404);
       assertStatus(client, "GET", hspMetadata.path("resolved_hsp").textValue(), token, null, 404);
+      verifyManagement(first, second, client, token);
+      verifyManagementPermissions(first, second, client);
       var audit = first.getBean(SecurityAuditDao.class).search(SecurityAuditDao.AuditLogQuery.sanitize(null));
       assertTrue(audit.items().stream().anyMatch(entry -> "SUCCESS".equals(entry.outcome())
           && "ohpm".equals(entry.details().get("format")) && "publish".equals(entry.details().get("operation"))));
@@ -208,6 +214,170 @@ class OhpmHostedRuntimeTest {
             "Large HAR and HSP must succeed through the actual stream endpoint");
       }
     }
+  }
+
+  private void verifyManagement(ConfigurableApplicationContext first, ConfigurableApplicationContext second,
+      HttpClient client, String token) throws Exception {
+    String managementToken = "Bearer " + token;
+    String firstBase = url(first);
+    String secondBase = url(second);
+    String registry = secondBase + "/repository/ohpm/";
+    String manifest = "{name:'@kkrepo/managed',version:'1.0.0',main:'Index.ets',dependencies:{},}";
+    byte[] har = tar(Map.of("package/oh-package.json5", manifest.getBytes(StandardCharsets.UTF_8),
+        "package/Index.ets", "export const value = 42;".getBytes(StandardCharsets.UTF_8)));
+    assertEquals(401, managementUpload(client, firstBase, null, har, null).statusCode());
+    var runtime = first.getBean(RepositoryRuntimeRegistry.class).resolve("ohpm").orElseThrow();
+    assertTrue(first.getBean(AssetDao.class).findAssetByPath(runtime.id(), "@kkrepo/managed").isEmpty());
+    var uploaded = managementUpload(client, firstBase, managementToken, har, null);
+    assertEquals(204, uploaded.statusCode(), uploaded.body());
+    assertEquals(400, managementUpload(client, secondBase, managementToken, har, null).statusCode());
+    var metadata = JSON.readTree(assertStatus(client, "GET", registry + "@kkrepo/managed", token, null, 200).body());
+    assertEquals("1.0.0", metadata.path("dist-tags").path("beta").asText());
+    assertDownload(client, metadata.path("versions").path("1.0.0").path("dist").path("tarball").asText(), token, har);
+    var listing = JSON.readTree(assertStatus(client, "GET",
+        secondBase + "/internal/browse/ohpm?path=@kkrepo/managed/1.0.0", managementToken, null, 200).body());
+    String path = listing.path("entries").get(0).path("downloadUrl").asText();
+    assertEquals("/repository/ohpm/@kkrepo/managed/-/@kkrepo/managed-1.0.0.har", path);
+    assertDownload(client, secondBase + path, token, har);
+    var detail = JSON.readTree(assertStatus(client, "GET",
+        secondBase + "/internal/browse/ohpm/attributes?path=@kkrepo/managed/1.0.0/managed-1.0.0.har",
+        managementToken, null, 200).body());
+    assertEquals("@kkrepo/managed", detail.path("ohpm").path("name").asText());
+    assertEquals("beta", detail.path("ohpm").path("dist-tags").get(0).asText());
+    assertEquals(128, detail.path("checksum").path("sha512").asText().length());
+    second.getBean(com.github.klboke.kkrepo.server.repositories.RepositoryCatalogCache.class).syncDatabaseToMemory();
+    var search = assertStatus(client, "GET", secondBase + "/internal/search/components?format=ohpm",
+        managementToken, null, 200);
+    assertTrue(search.body().contains("\"browsePath\":\"@kkrepo/managed/1.0.0\""), search.body());
+    assertStatus(client, "POST", firstBase + "/internal/repositories", managementToken,
+        JSON.writeValueAsString(new CreateCommand("ohpm-managed-group", "ohpm-group", true,
+        "default", false, null, null, null, null, null,
+        new com.github.klboke.kkrepo.server.repositories.RepositoryCommands.GroupSettings(List.of("ohpm")))), 201);
+    assertStatus(client, "PUT", firstBase + "/internal/repositories/ohpm-managed-group/members", managementToken,
+        "{\"memberNames\":[\"ohpm\"]}", 200);
+    var groupListing = JSON.readTree(assertStatus(client, "GET",
+        secondBase + "/internal/browse/ohpm-managed-group?path=@kkrepo/managed/1.0.0",
+        managementToken, null, 200).body());
+    String groupPath = groupListing.path("entries").get(0).path("downloadUrl").asText();
+    assertTrue(groupPath.contains("?kkrepo_source="), groupPath);
+    assertDownload(client, secondBase + groupPath, token, har);
+    if (Boolean.getBoolean("kkrepo.ohpm.client")) {
+      Path project = Files.createDirectory(directory.resolve("management-client"));
+      URI endpoint = URI.create(registry);
+      Files.writeString(project.resolve(".ohpmrc"), """
+          registry=%s
+          //%s%s:_auth=%s
+          cache=%s
+          http_proxy=
+          https_proxy=
+          no_proxy=127.0.0.1,localhost
+          """.formatted(registry, endpoint.getAuthority(), endpoint.getPath(), token, project.resolve("cache")));
+      Files.writeString(project.resolve("oh-package.json5"),
+          "{\"name\":\"consumer\",\"version\":\"1.0.0\",\"dependencies\":{\"@kkrepo/managed\":\"1.0.0\"}}");
+      client(project, token, "install", "--registry", registry);
+      assertTrue(Files.exists(project.resolve("oh_modules/@kkrepo/managed/Index.ets")));
+    }
+    String hspManifest = manifest.replace("1.0.0", "2.0.0")
+        .replace("main:'Index.ets'", "types:'Index.d.ets',packageType:'InterfaceHar'");
+    byte[] interfaceHar = tar(Map.of("package/oh-package.json5", hspManifest.getBytes(StandardCharsets.UTF_8)));
+    var hspUpload = managementUpload(client, firstBase, managementToken, interfaceHar, new byte[] {7, 8, 9});
+    assertEquals(204, hspUpload.statusCode(), hspUpload.body());
+    var removed = JSON.readTree(assertStatus(client, "DELETE",
+        secondBase + "/internal/browse/ohpm?path=@kkrepo/managed/2.0.0/managed-2.0.0.hsp",
+        managementToken, null, 200).body());
+    assertEquals(2, removed.path("deletedAssets").intValue());
+    var remaining = JSON.readTree(assertStatus(client, "GET",
+        firstBase + "/repository/ohpm/@kkrepo/managed", token, null, 200).body());
+    assertFalse(remaining.path("versions").has("2.0.0"));
+    assertFalse(remaining.path("dist-tags").has("beta"));
+    assertTrue(first.getBean(AssetDao.class)
+        .findAssetByPath(runtime.id(), "@kkrepo/managed/-/@kkrepo/managed-2.0.0.har").isEmpty());
+    byte[] bundleHar = tar(Map.of("package/oh-package.json5",
+        hspManifest.replace("2.0.0", "3.0.0").getBytes(StandardCharsets.UTF_8)));
+    byte[] bundleHsp = new byte[] {4, 5, 6};
+    byte[] bundle = tar(Map.of("interface.har", bundleHar, "example.hsp", bundleHsp));
+    var bundled = managementUpload(client, firstBase, managementToken, bundle, null, "fixture.tgz");
+    assertEquals(204, bundled.statusCode(), bundled.body());
+    var bundleDist = JSON.readTree(assertStatus(client, "GET", registry + "@kkrepo/managed", token, null, 200).body())
+        .path("versions").path("3.0.0").path("dist");
+    assertDownload(client, bundleDist.path("tarball").asText(), token, bundleHar);
+    assertDownload(client, bundleDist.path("resolved_hsp").asText(), token, bundleHsp);
+    assertStatus(client, "DELETE", firstBase + "/internal/browse/ohpm?path=@kkrepo", managementToken, null, 400);
+    assertStatus(client, "DELETE", firstBase + "/internal/browse/ohpm?path=@kkrepo/managed",
+        managementToken, null, 200);
+    assertStatus(client, "GET", registry + "@kkrepo/managed", token, null, 404);
+    assertTrue(first.getBean(SecurityAuditDao.class).search(SecurityAuditDao.AuditLogQuery.sanitize(null))
+        .items().stream().anyMatch(entry -> "SUCCESS".equals(entry.outcome())
+            && "management_publish".equals(entry.details().get("operation"))
+            && "@kkrepo/managed".equals(entry.details().get("package"))));
+  }
+
+  private static HttpResponse<String> managementUpload(HttpClient client, String base, String token,
+      byte[] har, byte[] hsp) throws Exception {
+    return managementUpload(client, base, token, har, hsp, "fixture.har");
+  }
+
+  private static HttpResponse<String> managementUpload(HttpClient client, String base, String token,
+      byte[] har, byte[] hsp, String filename) throws Exception {
+    String boundary = "kkrepo-ohpm-management-fixture";
+    var body = new java.io.ByteArrayOutputStream();
+    body.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"ohpm.tag\"\r\n\r\nbeta\r\n")
+        .getBytes(StandardCharsets.UTF_8));
+    multipartFile(body, boundary, "ohpm.asset", filename, har);
+    if (hsp != null) multipartFile(body, boundary, "ohpm.hsp", "fixture.hsp", hsp);
+    body.write(("--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+    var request = HttpRequest.newBuilder(URI.create(base + "/service/rest/v1/components?repository=ohpm"))
+        .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+        .POST(HttpRequest.BodyPublishers.ofByteArray(body.toByteArray()));
+    if (token != null) request.header("Authorization", token);
+    return client.send(request.build(), HttpResponse.BodyHandlers.ofString());
+  }
+
+  private void verifyManagementPermissions(ConfigurableApplicationContext first,
+      ConfigurableApplicationContext second, HttpClient client) throws Exception {
+    var security = first.getBean(SecurityManagementService.class);
+    security.createContentSelector(new RepositoryTargetCommand("ohpm-team", "OHPM team", "ohpm",
+        "format == 'ohpm' and (path == '@kkrepo/allowed' or path =^ '@kkrepo/allowed/')", List.of(),
+        Map.of("source", "nexus-content-selector", "type", "csel")));
+    security.savePrivilege(new PrivilegeCommand("ohpm-team-publish", "OHPM publish", "", "repository-content-selector",
+        false, Map.of("contentSelector", "ohpm-team", "format", "ohpm", "repository", "ohpm", "actions", "add,read")));
+    security.saveRole(new RoleCommand("ohpm-uploader", "Local", "OHPM uploader", "", false,
+        List.of("ohpm-team-publish"), List.of(), Map.of()));
+    security.saveUser(new UserCommand("Local", "ohpm-uploader", "OHPM", "Uploader", null, "ohpm-uploader-password",
+        null, "ACTIVE", null, List.of("ohpm-uploader"), Map.of()));
+    String token = security.createApiKey(new ApiKeyCommand("GenericToken", "Local", "ohpm-uploader",
+        "OHPM restricted upload", "ACTIVE", List.of(), null, null, null)).token();
+    String bearer = "Bearer " + token;
+    String manifest = "{name:'@kkrepo/allowed',version:'1.0.0',main:'Index.ets'}";
+    var denied = managementUpload(client, url(second), bearer,
+        OhpmArchiveUploadTest.har(manifest.replace("allowed", "denied")), null);
+    assertEquals(403, denied.statusCode(), denied.body());
+    var runtime = second.getBean(RepositoryRuntimeRegistry.class).resolve("ohpm").orElseThrow();
+    var assets = second.getBean(AssetDao.class);
+    assertTrue(assets.findAssetByPath(runtime.id(), "@kkrepo/denied").isEmpty());
+    var allowed = managementUpload(client, url(second), bearer, OhpmArchiveUploadTest.har(manifest), null);
+    assertEquals(204, allowed.statusCode(), allowed.body());
+    assertStatus(client, "GET", url(first) + "/repository/ohpm/@kkrepo%2fallowed", token, null, 200);
+    byte[] nextVersion = OhpmArchiveUploadTest.har(manifest.replace("1.0.0", "2.0.0"));
+    assertEquals(403, managementUpload(client, url(second), bearer, nextVersion, null).statusCode());
+    assertTrue(assets.findAssetByPath(runtime.id(), "@kkrepo/allowed/-/@kkrepo/allowed-2.0.0.har").isEmpty());
+    security.savePrivilege(new PrivilegeCommand("ohpm-team-publish", "OHPM publish", "", "repository-content-selector",
+        false, Map.of("contentSelector", "ohpm-team", "format", "ohpm", "repository", "ohpm", "actions", "add,edit,read")));
+    var edited = managementUpload(client, url(second), bearer, nextVersion, null);
+    assertEquals(204, edited.statusCode(), edited.body());
+    security.saveRole(new RoleCommand("ohpm-uploader", "Local", "OHPM uploader", "", false,
+        List.of(), List.of(), Map.of()));
+    assertEquals(403, managementUpload(client, url(second), bearer,
+        OhpmArchiveUploadTest.har(manifest.replace("1.0.0", "3.0.0")), null).statusCode());
+    assertTrue(assets.findAssetByPath(runtime.id(), "@kkrepo/allowed/-/@kkrepo/allowed-3.0.0.har").isEmpty());
+  }
+
+  private static void multipartFile(java.io.ByteArrayOutputStream body, String boundary, String name,
+      String filename, byte[] bytes) throws Exception {
+    body.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"" + name + "\"; filename=\""
+        + filename + "\"\r\nContent-Type: application/octet-stream\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+    body.write(bytes);
+    body.write("\r\n".getBytes(StandardCharsets.UTF_8));
   }
 
   private void verifyClient(String registry, String token) throws Exception {

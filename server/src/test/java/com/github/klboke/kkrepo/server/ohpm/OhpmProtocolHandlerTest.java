@@ -31,6 +31,31 @@ class OhpmProtocolHandlerTest {
 
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
+  void metadataUsesOnlyTrustedExternalHeadersAndPreservesTheContextPath(boolean trusted) throws Exception {
+    var request = new MockHttpServletRequest("GET", "/kk/repository/ohpm/@scope%2fpkg");
+    request.setContextPath("/kk");
+    request.setRemoteAddr("127.0.0.1");
+    request.setScheme("http");
+    request.setServerName("private");
+    request.setServerPort(8080);
+    request.addHeader("X-Forwarded-Proto", "https");
+    request.addHeader("X-Forwarded-Host", "repo.example.com");
+    when(runtime.online()).thenReturn(true);
+    when(runtime.name()).thenReturn("ohpm");
+    when(hosted.metadata(any(), any(), anyString(), eq(false))).thenReturn(
+        com.github.klboke.kkrepo.server.maven.MavenResponse.ok(
+            new java.io.ByteArrayInputStream(new byte[] {'{', '}'}), 2, "application/json", null, null));
+    var handler = new OhpmProtocolHandler(hosted, proxy, group, access, new ObjectMapper(),
+        new ForwardedHeaderPolicy(trusted ? "127.0.0.1" : ""));
+    var response = handler.handle(new RepositoryProtocolRequest(runtime, "ohpm", "@scope%2fpkg",
+        HttpMethod.GET, request, null, null));
+    assertEquals(200, response.getStatusCode().value());
+    verify(hosted).metadata(eq(runtime), any(), eq((trusted ? "https://repo.example.com" : "http://private:8080")
+        + "/kk/repository/ohpm"), eq(false));
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
   void onlyTemporaryPublicationFailuresReturn598AndAllowExplicitRetry(boolean stream) throws Exception {
     var request = request(stream);
     var failure = new CannotAcquireLockException("Temporary transaction failure");

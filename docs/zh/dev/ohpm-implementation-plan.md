@@ -1,6 +1,6 @@
 # OHPM 仓库实现计划
 
-状态：阶段 1–5 的实现和验收已完成，包括普通/流式 HAR/HSP、Proxy、Group、双数据库、双实例、真实 OHPM 6.0.1、全量 server 及默认兼容性回归。详见 [协议兼容性基线](ohpm-protocol-baseline.md)、[Hosted 实现说明](ohpm-hosted.md)、[Proxy 实现说明](ohpm-proxy.md) 和 [Group 实现说明](ohpm-group.md)。下一步为阶段 6 的管理与浏览；阶段 6–8 尚未完成。
+状态：阶段 1–6 的实现和验收已完成，包括普通/流式 HAR/HSP、Proxy、Group、管理上传与浏览、双数据库、双实例、真实 OHPM 6.0.1、全量 server 及默认兼容性回归。详见 [协议兼容性基线](ohpm-protocol-baseline.md)、[Hosted 实现说明](ohpm-hosted.md)、[Proxy 实现说明](ohpm-proxy.md)、[Group 实现说明](ohpm-group.md) 和 [管理集成说明](ohpm-management.md)。下一步为阶段 7 的独立导入；阶段 7–8 尚未完成。
 
 关联议题：[OHPM 推进情况与贡献意向 #492](https://github.com/klboke/kkRepo/issues/492)。
 设计依据：[OHPM / HarmonyOS 仓库开发设计说明](ohpm-repository-design.md)。
@@ -9,7 +9,7 @@
 
 完整交付 hosted、proxy、group、管理端、导入和真实客户端兼容性测试。默认使用现有 Access Token 能力；官方可选 Login 认证以可配置、默认关闭的能力交付。
 
-当前使用 `feat/ohpm-support` 分支，阶段 1 已提交为 `7f5f9b17`，阶段 2 已提交为 `8ec83517`，阶段 3 已提交为 `b26ac81f`，阶段 4 已提交为 `9172a5d2`，并创建关联 #492 的 [Draft PR #493](https://github.com/klboke/kkRepo/pull/493)。后续按里程碑完成实现、验证、提交，并更新 PR 检查清单，完整验收后再转为 Ready。若维护者希望拆分 PR，可沿里程碑边界拆分；拆分开发不代表缩减原设计的最终范围。
+当前使用 `feat/ohpm-support` 分支，阶段 1 已提交为 `7f5f9b17`，阶段 2 已提交为 `8ec83517`，阶段 3 已提交为 `b26ac81f`，阶段 4 已提交为 `9172a5d2`，阶段 5 已提交为 `54f86a5c`，并创建关联 #492 的 [Draft PR #493](https://github.com/klboke/kkRepo/pull/493)。后续按里程碑完成实现、验证、提交，并更新 PR 检查清单，完整验收后再转为 Ready。若维护者希望拆分 PR，可沿里程碑边界拆分；拆分开发不代表缩减原设计的最终范围。
 
 所有新增协议行为先核对华为官方协议及真实客户端行为。OHPM 不以 Nexus 为协议参考，不直接复制 npm 的响应码、路径解析或认证行为。
 
@@ -34,24 +34,26 @@
 | 2. Hosted HAR | 已提交 | 发布、安装、tag、下架及跨实例事务闭环 |
 | 3. HSP 与 stream | 已提交 | 双附件一致性、大包流式上传、失败清理与重试语义 |
 | 4. Proxy | 已提交 | 上游代理、缓存、完整性校验及凭据保护 |
-| 5. Group | 已验收 | metadata 合并、确定性的版本及双文件来源 |
-| 6. 管理与浏览 | 待实施 | Admin/Browse、统一写入入口、权限及可观测性 |
+| 5. Group | 已提交 | metadata 合并、确定性的版本及双文件来源 |
+| 6. 管理与浏览 | 已验收 | Admin/Browse、统一写入入口、权限及可观测性 |
 | 7. 独立导入 | 待实施 | dry-run、断点恢复、幂等导入及结果报告 |
 | 8. Login 与完整验收 | 待实施 | 可选签名认证、端到端矩阵及 PR 合并门槛 |
 
-### 当前优先事项：阶段 6 管理与浏览
+### 当前优先事项：阶段 7 独立导入
 
-1. 核对 Admin 创建/编辑三种仓库、远端凭据、重定向及 group 成员配置，补齐格式特有字段和验证。
-2. 为 UI/API 上传增加有界 HAR manifest 读取和 HSP 双附件输入，复用已验证的 hosted 发布事务；不另建写入路径。
-3. Browse/API 的包、版本和文件删除通过 OHPM 服务更新 metadata、tag 和引用，禁止绕过协议事务造成残缺 HSP。
-4. 核对搜索、浏览、内容选择器、路由规则、权限、审计和下载策略。补充管理操作与客户端跨实例互通测试。
-5. 明确清理、安全扫描的支持边界，同步中英文文档和兼容性矩阵，完成回归后提交阶段 6。
+1. 固定已有 ohpm-repo 和文件目录的输入契约；远端以明确包列表读取官方 metadata，不假设未公开的全库枚举接口。
+2. 设计持久化任务计划、逐版本结果及跨实例恢复边界；不复用 Nexus 专属内容模型，不依赖单节点暂存目录。
+3. 复用 hosted 发布事务，实现 dry-run、校验和验证、相同内容幂等跳过、冲突与缺失输入的 `MANUAL` 报告。
+4. 明确 tag 同步策略和源数据变化的拒绝规则，提供管理端批量执行、恢复及结果下载。
+5. 完成双数据库、双实例中断恢复和真实客户端下载验收，更新文档并提交阶段 7。
 
 阶段 3 验收包含 49 项 server OHPM 测试；完整 server reactor 中 server 模块共 4,100 项测试、零失败/错误，跳过一项需显式启用的存储性能测试。双数据库运行时通过审计确认大 HAR/HSP 成功使用 stream 接口，另有 PAX/稀疏文件边界、64 MiB 固定缓冲区读取、暂存失败及双附件事务回滚测试。
 
 阶段 4 增加 12 项 metadata 模型测试、17 项 Proxy 服务测试及双数据库/双实例 HTTP 验证。真实 OHPM 6.0.1 已通过 Proxy 安装受控包与公共 `@ohos/axios@2.2.15`，并断言公共包进入 kkRepo 缓存。全量 server reactor 通过，server 模块共 4,122 项测试、零失败/错误，跳过同一项可选性能测试。公共文件 GET 会跳转到 `contentcenter-drcn.dbankcdn.cn`，配置示例显式列出该下载域名。
 
 阶段 5 增加 6 项 Group metadata 测试和 16 项 Group 服务测试，并扩展双数据库/双实例测试，验证成员顺序、HAR/HSP 同源、旧链接拒绝、实际 blob 校验及 ETag 条件请求。真实 OHPM 6.0.1 可从 Group 安装，并保留下载 URL 的来源参数。全量 server reactor 通过，server 模块共 4,140 项测试、零失败/错误，跳过同一项可选性能测试；兼容性 reactor 的 90 项 OHPM 协议测试和 27 项客户端/Maven/npm 测试通过，Browse 布局测试通过。
+
+阶段 6 增加管理端 HAR/HSP 双文件与完整 tgz 上传、JSON5 和归档边界、包路径选择器与即时权限撤销、反向代理链接、Group 来源链接、浏览/搜索和整版本删除验证。双数据库、双实例管理上传后的真实 OHPM 6.0.1 安装通过。全量 server reactor 中 server 模块共 4,167 项测试、零失败/错误，跳过同一项可选性能测试；兼容性 reactor 的 100 项 OHPM 协议测试及 27 项客户端/Maven/npm 测试通过；Browse JavaScript 77 项测试通过。管理端生成的 `_ohpmVersion` 表示已验证的 metadata 兼容基线，不表示上传所用客户端版本。
 
 ### 1. 协议基线、测试夹具与模块骨架
 

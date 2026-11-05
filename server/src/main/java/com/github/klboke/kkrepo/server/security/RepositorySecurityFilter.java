@@ -160,6 +160,14 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       response.sendError(HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
       return;
     }
+    if (repository.get().format() == RepositoryFormat.OHPM && target.componentUploadRoute()) {
+      if (ohpmAccess == null) {
+        response.sendError(503, "OHPM authentication unavailable");
+      } else if (ohpmAccess.authorizeManagementUpload(request, response)) {
+        filterChain.doFilter(request, response);
+      }
+      return;
+    }
     if (repository.get().format() == RepositoryFormat.OHPM
         && !target.repositoryBrowseRoute() && !target.componentUploadRoute()) {
       if (ohpmAccess == null) {

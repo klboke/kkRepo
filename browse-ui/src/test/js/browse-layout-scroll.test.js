@@ -21,7 +21,7 @@ test("cache-busts the current Browse assets", () => {
   const html = readFileSync(resolve(browseRoot, "index.html"), "utf8");
 
   assert.match(html, /browse\.css\?v=20261013-delete-confirmation-1/);
-  assert.match(html, /browse\.js\?v=20261106-ohpm/);
+  assert.match(html, /browse\.js\?v=20261106-ohpm-management/);
   assert.match(html, /format-icons\.css\?v=20261106-ohpm/);
 });
 

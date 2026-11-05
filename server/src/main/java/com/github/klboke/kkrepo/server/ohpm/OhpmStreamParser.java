@@ -73,6 +73,13 @@ final class OhpmStreamParser {
 
   private OhpmPublishParser.Upload hsp(OhpmPublishMetadata metadata, InputStream input, List<Path> staged)
       throws IOException {
+    Attachments attachments = extractHsp(input, staged);
+    return new OhpmPublishParser.Upload(metadata,
+        OhpmPublishParser.verified(attachments.har(), metadata.harIntegrity()),
+        OhpmPublishParser.verified(attachments.hsp(), metadata.hspIntegrity()));
+  }
+
+  Attachments extractHsp(InputStream input, List<Path> staged) throws IOException {
     OhpmPublishParser.Attachment har = null;
     OhpmPublishParser.Attachment hsp = null;
     try (InputStream expanded = expanded(input);
@@ -135,9 +142,8 @@ final class OhpmStreamParser {
     } catch (IllegalArgumentException error) {
       throw invalid("Invalid HSP archive");
     }
-    return new OhpmPublishParser.Upload(metadata,
-        OhpmPublishParser.verified(har, metadata.harIntegrity()),
-        OhpmPublishParser.verified(hsp, metadata.hspIntegrity()));
+    if (har == null || hsp == null) throw invalid("HSP archive requires both HAR and HSP files");
+    return new Attachments(har, hsp);
   }
 
   private InputStream expanded(InputStream input) throws IOException {
@@ -217,7 +223,7 @@ final class OhpmStreamParser {
     return fields;
   }
 
-  private static void safePath(String name) {
+  static void safePath(String name) {
     if (name.startsWith("./")) name = name.substring(2);
     if (name.endsWith("/")) name = name.substring(0, name.length() - 1);
     if (name.isEmpty() || name.startsWith("/") || name.contains("\\") || name.contains(":")
@@ -227,7 +233,7 @@ final class OhpmStreamParser {
     }
   }
 
-  private static InputStream bounded(InputStream input, long limit) {
+  static InputStream bounded(InputStream input, long limit) {
     return new FilterInputStream(input) {
       private long remaining = limit;
 
@@ -262,4 +268,6 @@ final class OhpmStreamParser {
 
   private static OhpmException invalid(String message) { return new OhpmException(400, message); }
   private static OhpmException tooLarge() { return new OhpmException(413, "OHPM stream exceeds upload limits"); }
+
+  record Attachments(OhpmPublishParser.Attachment har, OhpmPublishParser.Attachment hsp) {}
 }

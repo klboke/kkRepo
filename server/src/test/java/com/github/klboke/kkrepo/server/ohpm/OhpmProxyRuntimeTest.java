@@ -280,6 +280,21 @@ class OhpmProxyRuntimeTest {
       assertEquals(405, client.send(HttpRequest.newBuilder(URI.create(target)).header("Authorization", token)
           .method(method, HttpRequest.BodyPublishers.noBody()).build(), HttpResponse.BodyHandlers.discarding()).statusCode());
     }
+    first.getBean(com.github.klboke.kkrepo.server.routingrules.RoutingRuleService.class).create(
+        new com.github.klboke.kkrepo.server.routingrules.RoutingRuleService.Configuration(
+            "ohpm-block", "Canonical OHPM path test", "BLOCK",
+            List.of("^/" + java.util.regex.Pattern.quote(PACKAGE) + "(?:/.*)?$")));
+    repositories.update("ohpm", JSON.readValue("{\"routingRule\":\"ohpm-block\"}", UpdateCommand.class));
+    first.getBean(com.github.klboke.kkrepo.server.routingrules.RepositoryRoutingPolicy.class).syncDatabaseToMemory();
+    second.getBean(com.github.klboke.kkrepo.server.routingrules.RepositoryRoutingPolicy.class).syncDatabaseToMemory();
+    assertEquals(403, response(client, url(second) + "/repository/ohpm/" + PACKAGE, token).statusCode());
+    assertEquals(403, response(client, url(second) + "/repository/ohpm/" + PACKAGE.replace("/", "%2f"), token).statusCode());
+    var routed = JSON.readTree(response(client, secondUrl + PACKAGE.replace("/", "%2f"), token).body())
+        .path("versions").path("1.0.0").path("dist").path("tarball").asText();
+    assertArrayEquals(localHar, response(client, routed, token).body());
+    repositories.update("ohpm", JSON.readValue("{\"routingRule\":\"\"}", UpdateCommand.class));
+    first.getBean(com.github.klboke.kkrepo.server.routingrules.RepositoryRoutingPolicy.class).syncDatabaseToMemory();
+    second.getBean(com.github.klboke.kkrepo.server.routingrules.RepositoryRoutingPolicy.class).syncDatabaseToMemory();
   }
 
   private static void publish(HttpClient client, String registry, String token,

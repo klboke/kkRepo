@@ -48,7 +48,9 @@ public class ManagementAuditFilter extends OncePerRequestFilter {
       HttpServletResponse response,
       FilterChain filterChain) throws ServletException, IOException {
     boolean managementMutation = auditedMutation(request);
-    if (!managementMutation && !possibleRepositoryPublish(request)) {
+    boolean componentUpload = "POST".equals(request.getMethod())
+        && "/service/rest/v1/components".equals(stripContextPath(request));
+    if (!managementMutation && !possibleRepositoryPublish(request) && !componentUpload) {
       filterChain.doFilter(request, response);
       return;
     }
@@ -61,7 +63,10 @@ public class ManagementAuditFilter extends OncePerRequestFilter {
       failure = e;
       throw e;
     } finally {
-      if (managementMutation || auditedRepositoryMutation(request)) {
+      if (managementMutation || auditedRepositoryMutation(request)
+          || componentUpload
+              && request.getAttribute(RepositorySecurityFilter.REPOSITORY_RECORD_ATTRIBUTE) instanceof RepositoryRecord repository
+              && repository.format() == RepositoryFormat.OHPM) {
         record(request, wrapped.status(), failure);
       }
     }

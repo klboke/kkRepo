@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmException;
+import com.github.klboke.kkrepo.protocol.ohpm.OhpmBrowsePath;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmPackageId;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmPathParser;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmUnpublishRequest;
@@ -42,6 +43,7 @@ public class OhpmHostedService {
   private final ArtifactDownloadPolicy downloads;
   private final OhpmPublishParser parser;
   private final OhpmStreamParser streamParser;
+  private final OhpmArchiveUpload archiveParser;
 
   public OhpmHostedService(AssetDao assets, RawHostedService content, TransientTransactionRetry transactions,
       ObjectMapper json, BlobStorageRegistry storages, ArtifactDownloadPolicy downloads,
@@ -54,6 +56,7 @@ public class OhpmHostedService {
     this.downloads = downloads;
     this.parser = new OhpmPublishParser(maxFileBytes, null);
     this.streamParser = new OhpmStreamParser(maxFileBytes, null);
+    this.archiveParser = new OhpmArchiveUpload(maxFileBytes, null);
   }
 
   public void publish(RepositoryRuntime runtime, OhpmPackageId packageId, InputStream body,
@@ -71,6 +74,33 @@ public class OhpmHostedService {
     try (var upload = streamParser.parse(packageId, parts)) {
       publish(runtime, upload, actor, remoteAddress, authorizePublication);
     }
+  }
+
+  public List<String> publishArchives(RepositoryRuntime runtime, InputStream har, InputStream hsp, String tag,
+      String actor, String remoteAddress,
+      java.util.function.BiConsumer<OhpmPackageId, Boolean> authorizePublication) throws IOException {
+    requireHosted(runtime, true);
+    try (var upload = archiveParser.parse(har, hsp, tag)) {
+      return publishArchive(runtime, upload, actor, remoteAddress, authorizePublication);
+    }
+  }
+
+  public List<String> publishArchiveBundle(RepositoryRuntime runtime, InputStream bundle, String tag,
+      String actor, String remoteAddress,
+      java.util.function.BiConsumer<OhpmPackageId, Boolean> authorizePublication) throws IOException {
+    requireHosted(runtime, true);
+    try (var upload = archiveParser.parseBundle(bundle, tag)) {
+      return publishArchive(runtime, upload, actor, remoteAddress, authorizePublication);
+    }
+  }
+
+  private List<String> publishArchive(RepositoryRuntime runtime, OhpmPublishParser.Upload upload,
+      String actor, String remoteAddress, java.util.function.BiConsumer<OhpmPackageId, Boolean> authorizePublication) {
+    OhpmPackageId packageId = upload.metadata().packageId();
+    publish(runtime, upload, actor, remoteAddress, existing -> authorizePublication.accept(packageId, existing));
+    String basename = packageId.id() + "-" + upload.metadata().version();
+    return upload.hsp() == null ? List.of(packageId.downloadPath(basename + ".har"))
+        : List.of(packageId.downloadPath(basename + ".har"), packageId.downloadPath(basename + ".hsp"));
   }
 
   private void publish(RepositoryRuntime runtime, OhpmPublishParser.Upload upload,
@@ -193,21 +223,34 @@ public class OhpmHostedService {
   }
 
   public void unpublish(RepositoryRuntime runtime, OhpmUnpublishRequest request) {
+    unpublish(runtime, request, null);
+  }
+
+  public int deleteBrowse(RepositoryRuntime runtime, OhpmBrowsePath path) {
+    return unpublish(runtime, new OhpmUnpublishRequest(path.packageId(), path.version()),
+        path.filename() == null ? null : path.storagePath());
+  }
+
+  private int unpublish(RepositoryRuntime runtime, OhpmUnpublishRequest request, String requiredFile) {
     requireHosted(runtime, true);
-    transactions.execute("Unpublish OHPM " + request.packageId().id(), () -> {
+    return transactions.execute("Unpublish OHPM " + request.packageId().id(), () -> {
       Instant now = Instant.now();
       AssetRecord root = lock(runtime, request.packageId(), false, now);
       ObjectNode metadata = metadata(root, request.packageId());
       requirePublished(metadata);
       ObjectNode versions = (ObjectNode) metadata.path("versions");
+      if (requiredFile != null && assets.findAssetByPath(runtime.id(), requiredFile).isEmpty()) throw missing();
       List<String> removed = new ArrayList<>();
       if (request.version() == null) versions.fieldNames().forEachRemaining(removed::add);
       else if (versions.has(request.version())) removed.add(request.version());
       else throw missing();
+      int deletedAssets = 0;
       for (String version : removed) {
-        content.deleteInternal(runtime, request.packageId().downloadPath(file(request.packageId(), version, ".har")));
+        if (content.deleteInternal(runtime,
+            request.packageId().downloadPath(file(request.packageId(), version, ".har"))).status() == 204) deletedAssets++;
         if (versions.path(version).path("dist").has("integrity_hsp")) {
-          content.deleteInternal(runtime, request.packageId().downloadPath(file(request.packageId(), version, ".hsp")));
+          if (content.deleteInternal(runtime,
+              request.packageId().downloadPath(file(request.packageId(), version, ".hsp"))).status() == 204) deletedAssets++;
         }
         versions.remove(version);
         ((ObjectNode) metadata.path("time")).remove(version);
@@ -220,7 +263,7 @@ public class OhpmHostedService {
       tags.remove(removedTags);
       if (versions.isEmpty()) metadata = empty(request.packageId());
       save(root, metadata, now);
-      return null;
+      return deletedAssets;
     });
   }
 

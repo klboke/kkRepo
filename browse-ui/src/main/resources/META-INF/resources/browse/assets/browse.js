@@ -581,6 +581,11 @@ function canDeleteBrowseComponentDirectory(entry) {
   if (!canDeleteBrowseContent() || !entry || entry.leaf || !entry.path) return false;
   const format = currentRepository()?.format;
   const parts = pathSegments(entry.path);
+  if (format === "ohpm") {
+    const packageParts = parts[0]?.startsWith("@") ? 2 : 1;
+    return parts.length === packageParts
+      || (parts.length === packageParts + 1 && VERSION_DIR_RE.test(parts.at(-1)));
+  }
   if (["pypi", "npm", "cargo", "go", "pub", "composer"].includes(format)) {
     return hasDirectoryUsage(entry);
   }
@@ -1874,6 +1879,7 @@ function renderAttributesSection(detail, opts = {}) {
     renderAttributeGroup("Content", detail.content),
     opts.hideDocker ? "" : renderAttributeGroup("Docker", detail.docker),
     renderAttributeGroup("Npm", detail.npm),
+    renderAttributeGroup("OHPM", detail.ohpm),
     renderAttributeGroup("Pub", detail.pub),
     renderAttributeGroup("Composer", detail.composer),
     renderAttributeGroup("Conda", detail.conda),
@@ -1961,6 +1967,8 @@ async function deleteBrowseEntry(entry, button) {
   const path = entry.path;
   const description = currentRepository()?.format === "gitlfs"
     ? "Deleting this LFS object may break checkouts of Git commits that reference it."
+    : currentRepository()?.format === "ohpm"
+      ? "This unpublishes the selected package or version, including its HAR, paired HSP and distribution tags. Existing installations may no longer be reproducible."
     : entry.leaf
       ? "The selected file will be removed. Depending on the package format, associated files may also be deleted. Builds and clients that depend on them may fail."
       : "The selected component and its associated files will be removed. Builds and clients that depend on them may fail.";
@@ -3572,6 +3580,27 @@ function renderUploadFields() {
     fields.innerHTML = '<div class="muted-row upload-empty">No supported hosted repository selected.</div>';
     return;
   }
+  if (repo.format === "ohpm") {
+    fields.innerHTML = `
+      <label class="upload-file">
+        <span>HAR archive or HSP bundle</span>
+        <input id="upload-file" type="file" accept=".har,.tgz,.tar.gz" required>
+      </label>
+      <label class="upload-file">
+        <span>Paired HSP (required for an interface HAR)</span>
+        <input id="upload-ohpm-hsp" type="file" accept=".hsp">
+      </label>
+      <label>
+        <span>Distribution tag</span>
+        <input id="upload-ohpm-tag" type="text" value="latest" required>
+      </label>
+      <p class="upload-help">Select a HAR with its paired HSP, or a complete HSP tgz bundle. Package name and version come from the HAR. Existing versions cannot be overwritten.</p>
+      <label class="upload-path">
+        <span>Selected archive</span>
+        <input id="upload-path" type="text" readonly>
+      </label>`;
+    return;
+  }
   if (repo.format === "maven2") {
     fields.innerHTML = `
       <label>
@@ -4228,6 +4257,18 @@ function clearUploadForm() {
 }
 
 function buildUploadForm(repo, form) {
+  if (repo.format === "ohpm") {
+    const har = document.getElementById("upload-file")?.files?.[0];
+    const hsp = document.getElementById("upload-ohpm-hsp")?.files?.[0];
+    const bundle = har && /\.(tgz|tar\.gz)$/.test(har.name);
+    if (!har || (!bundle && !har.name.endsWith(".har")) || (hsp && !hsp.name.endsWith(".hsp")) || (bundle && hsp)) {
+      throw new Error("Select a HAR archive with its paired HSP, or one complete HSP tgz bundle.");
+    }
+    form.append("ohpm.asset", har, har.name);
+    if (hsp) form.append("ohpm.hsp", hsp, hsp.name);
+    form.append("ohpm.tag", uploadFieldValue("upload-ohpm-tag") || "latest");
+    return;
+  }
   if (repo.format === "maven2") {
     const groupId = uploadFieldValue("upload-group-id");
     const artifactId = uploadFieldValue("upload-artifact-id");

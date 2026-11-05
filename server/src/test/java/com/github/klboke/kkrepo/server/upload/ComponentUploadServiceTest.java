@@ -31,6 +31,9 @@ import com.github.klboke.kkrepo.server.maven.MavenHostedService;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmHostedService;
+import com.github.klboke.kkrepo.server.ohpm.OhpmAccess;
+import com.github.klboke.kkrepo.server.ohpm.OhpmHostedService;
+import com.github.klboke.kkrepo.protocol.ohpm.OhpmPackageId;
 import com.github.klboke.kkrepo.server.pypi.PypiHostedService;
 import com.github.klboke.kkrepo.server.pub.PubHostedService;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
@@ -49,10 +52,49 @@ import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.web.multipart.MultipartFile;
 
 class ComponentUploadServiceTest {
+
+  @Test
+  void ohpmUploadsDelegateBothStreamsAndCheckTheParsedPackage() throws Exception {
+    RepositoryRuntime runtime = runtime("ohpm-hosted", RepositoryFormat.OHPM);
+    ComponentUploadService service = service(runtime, mock(CargoHostedService.class), mock(PubHostedService.class));
+    var hosted = mock(OhpmHostedService.class);
+    var access = mock(OhpmAccess.class);
+    service.setOhpmSupport(hosted, access);
+    var request = new MockHttpServletRequest();
+    when(hosted.publishArchives(any(), any(), any(), eq("beta"), eq("alice"), eq("ip"), any()))
+        .thenAnswer(call -> {
+          java.util.function.BiConsumer<OhpmPackageId, Boolean> authorize = call.getArgument(6);
+          authorize.accept(OhpmPackageId.parse("@scope/demo"), true);
+          assertEquals("har", new String(((InputStream) call.getArgument(1)).readAllBytes(), StandardCharsets.UTF_8));
+          assertEquals("hsp", new String(((InputStream) call.getArgument(2)).readAllBytes(), StandardCharsets.UTF_8));
+          return List.of("@scope/demo/-/@scope/demo-1.0.0.har", "@scope/demo/-/@scope/demo-1.0.0.hsp");
+        });
+    assertEquals(List.of("asset", "hsp"),
+        service.definition("ohpm").assetFields().stream().map(UploadFieldDefinition::name).toList());
+    var files = new LinkedMultiValueMap<String, MultipartFile>();
+    files.add("ohpm.asset", new MockMultipartFile("ohpm.asset", "demo.har", "application/octet-stream",
+        "har".getBytes(StandardCharsets.UTF_8)));
+    files.add("ohpm.hsp", new MockMultipartFile("ohpm.hsp", "demo.hsp", "application/octet-stream",
+        "hsp".getBytes(StandardCharsets.UTF_8)));
+    RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+    try {
+      assertEquals(2, service.upload(runtime.name(), Map.of("ohpm.tag", new String[] {"beta"}),
+          files, "alice", "ip").paths().size());
+      verify(access).requireManagementPublish(request, runtime.name(), "@scope/demo", true);
+      files.add("asset", files.getFirst("ohpm.asset"));
+      assertThrows(UploadValidationException.class,
+          () -> service.upload(runtime.name(), Map.of(), files, "alice", "ip"));
+    } finally {
+      RequestContextHolder.resetRequestAttributes();
+    }
+  }
 
   @Test
   void gitLfsCannotBypassTheVerifiedProtocolUsingGenericUploads() {

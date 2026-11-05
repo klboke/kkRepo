@@ -64,6 +64,7 @@
     <maven.artifact.version>3.10.0</maven.artifact.version>
     <aws.sdk.version>2.57.7</aws.sdk.version>
     <commons.compress.version>1.28.0</commons.compress.version>
+    <json5.java.version>3.0.0</json5.java.version>
     <xz.version>1.12</xz.version>
     <zstd.jni.version>1.5.7-25</zstd.jni.version>
     <commons.lang3.version>3.21.0</commons.lang3.version>
@@ -138,6 +139,11 @@
         <groupId>org.apache.commons</groupId>
         <artifactId>commons-compress</artifactId>
         <version>${commons.compress.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>de.marhali</groupId>
+        <artifactId>json5-java</artifactId>
+        <version>${json5.java.version}</version>
       </dependency>
       <dependency>
         <groupId>org.tukaani</groupId>

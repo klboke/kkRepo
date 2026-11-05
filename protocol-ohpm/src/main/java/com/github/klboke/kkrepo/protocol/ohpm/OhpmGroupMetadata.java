@@ -88,8 +88,14 @@ public final class OhpmGroupMetadata {
 
   private static String fingerprint(long groupId, long repositoryId, OhpmPackageId packageId, String version,
       OhpmPackageMetadata.Download har, OhpmPackageMetadata.Download hsp) {
+    return sourceFingerprint(groupId, repositoryId, packageId, version, har.integrity(),
+        hsp == null ? null : hsp.integrity());
+  }
+
+  public static String sourceFingerprint(long groupId, long repositoryId, OhpmPackageId packageId, String version,
+      OhpmIntegrity har, OhpmIntegrity hsp) {
     String identity = groupId + "\n" + repositoryId + "\n" + packageId.id() + "\n" + version + "\n"
-        + har.integrity().value() + "\n" + (hsp == null ? "" : hsp.integrity().value());
+        + har.value() + "\n" + (hsp == null ? "" : hsp.value());
     try {
       return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(identity.getBytes(StandardCharsets.UTF_8)));
     } catch (NoSuchAlgorithmException unavailable) {

@@ -59,6 +59,9 @@ public class OhpmAccess {
         case DIST_TAG -> PermissionAction.EDIT;
         default -> throw new OhpmException(404, "OHPM endpoint is not available");
       };
+      if (action == PermissionAction.READ) {
+        request.setAttribute(RepositorySecurityFilter.NORMALIZED_REPOSITORY_PATH_ATTRIBUTE, path.assetPath());
+      }
       boolean explicit = authentication.hasPresentedCredentials(request);
       if (action != PermissionAction.READ && !explicit) throw new OhpmException(401, "Authentication required");
       HttpServletRequest credentials = explicit ? new HttpServletRequestWrapper(request) {
@@ -87,6 +90,24 @@ public class OhpmAccess {
       @Override public HttpSession getSession(boolean create) { return null; }
       @Override public HttpSession getSession() { return null; }
     }).orElseThrow(() -> new OhpmException(401, "Authentication required"));
+    require(subject, repository, packageId, PermissionAction.ADD, 403);
+    if (existingPackage) require(subject, repository, packageId, PermissionAction.EDIT, 403);
+  }
+
+  public boolean authorizeManagementUpload(HttpServletRequest request, HttpServletResponse response) throws IOException {
+    var subject = authentication.authenticateFresh(request);
+    if (subject.isEmpty()) {
+      response.sendError(401, "Authentication required");
+      return false;
+    }
+    request.setAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE, subject.get());
+    return true;
+  }
+
+  public void requireManagementPublish(HttpServletRequest request, String repository, String packageId,
+      boolean existingPackage) {
+    AuthenticatedSubject subject = authentication.authenticateFresh(request)
+        .orElseThrow(() -> new OhpmException(401, "Authentication required"));
     require(subject, repository, packageId, PermissionAction.ADD, 403);
     if (existingPackage) require(subject, repository, packageId, PermissionAction.EDIT, 403);
   }

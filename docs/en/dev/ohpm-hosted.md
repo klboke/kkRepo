@@ -26,7 +26,7 @@ Multipart metadata is limited to 8 MiB before the JSON limits above apply. HSP a
 
 Only exhausted transient database retries during publication return `598`; unexpected storage failures return `500`, invalid input `400`, and size-limit violations `413`. The tested OHPM 6.0.1 normal uploader does not automatically retry `598`. An explicit retry can succeed after rollback; a version already committed remains non-overwritable. Client-contract tests retain stream `404` fallback coverage against a recording server.
 
-[Proxy](ohpm-proxy.md) and [group repositories](ohpm-group.md) are also available. Login, management file upload and independent import are not available yet. Security scanning currently classifies OHPM as not applicable. Automatic cleanup is disabled until it can maintain package metadata through the protocol service. Protocol mutations are audited and repository request metrics include OHPM operations.
+[Proxy](ohpm-proxy.md), [group repositories](ohpm-group.md) and [management uploads/deletion](ohpm-management.md) are also available. Login and independent import are not available yet. Security scanning currently classifies OHPM as not applicable. Automatic cleanup remains disabled; explicit protocol-aware deletion is supported. Protocol mutations and management uploads are audited, and repository request metrics include OHPM operations.
 
 ## Consistency and storage
 

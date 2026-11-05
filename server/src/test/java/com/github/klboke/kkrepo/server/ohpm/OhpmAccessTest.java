@@ -45,6 +45,29 @@ class OhpmAccessTest {
   }
 
   @Test
+  void managementUploadAuthenticatesFirstAndChecksTheParsedPackageInTheTransaction() throws Exception {
+    var request = request("POST");
+    var response = new MockHttpServletResponse();
+    assertFalse(access.authorizeManagementUpload(request, response));
+    assertEquals(401, response.getStatus());
+    when(authentication.authenticateFresh(request)).thenReturn(Optional.of(subject));
+    assertTrue(access.authorizeManagementUpload(request, new MockHttpServletResponse()));
+    assertEquals(subject, request.getAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE));
+    verifyNoInteractions(permissions);
+    var add = new RepositoryPermission("ohpm", RepositoryFormat.OHPM, "@scope/pkg", PermissionAction.ADD);
+    var edit = new RepositoryPermission("ohpm", RepositoryFormat.OHPM, "@scope/pkg", PermissionAction.EDIT);
+    when(permissions.decideAllFresh(any(), any())).thenReturn(Map.of(add, AccessDecision.allow()));
+    access.requireManagementPublish(request, "ohpm", "@scope/pkg", false);
+    assertEquals(403, assertThrows(OhpmException.class,
+        () -> access.requireManagementPublish(request, "ohpm", "@scope/pkg", true)).status());
+    when(permissions.decideAllFresh(any(), any())).thenReturn(Map.of(add, AccessDecision.allow(), edit, AccessDecision.allow()));
+    access.requireManagementPublish(request, "ohpm", "@scope/pkg", true);
+    when(authentication.authenticateFresh(request)).thenReturn(Optional.empty());
+    assertEquals(401, assertThrows(OhpmException.class,
+        () -> access.requireManagementPublish(request, "ohpm", "@scope/pkg", false)).status());
+  }
+
+  @Test
   void pingIsPublicAndUnknownStreamPathReturnsNotFound() throws Exception {
     assertTrue(access.authorize(request("GET"), new MockHttpServletResponse(), repository, "-/ping"));
     var response = new MockHttpServletResponse();
@@ -78,6 +101,10 @@ class OhpmAccessTest {
     };
     assertTrue(access.authorize(request, new MockHttpServletResponse(), repository, path));
     verify(permissions).decideAllFresh(subject.permissionSubject(), List.of(permission));
+    if (action == PermissionAction.READ) {
+      assertEquals(permissionPath, request.getAttribute(
+          com.github.klboke.kkrepo.server.security.RepositorySecurityFilter.NORMALIZED_REPOSITORY_PATH_ATTRIBUTE));
+    }
   }
 
   @Test
