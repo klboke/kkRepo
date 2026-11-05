@@ -14,6 +14,7 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.releaseage.ReleaseAgeDeniedException;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -39,6 +40,46 @@ class GoGroupServiceTest {
         runtime(1L, "group", RepositoryType.GROUP, List.of(miss, success)), path, true);
 
     assertSame(expected, response);
+  }
+
+  @Test
+  void quarantinedProxyMemberDoesNotHideAHostedMemberThatHoldsTheVersion() {
+    GoHostedService hosted = mock(GoHostedService.class);
+    GoProxyService proxy = mock(GoProxyService.class);
+    RepositoryRuntime quarantining = runtime(2L, "proxy", RepositoryType.PROXY, List.of());
+    RepositoryRuntime hostedMember = runtime(3L, "hosted", RepositoryType.HOSTED, List.of());
+    String path = "example.com/demo/@v/v1.0.0.zip";
+    MavenResponse expected = MavenResponse.noBody(200);
+    when(proxy.get(quarantining, path, true))
+        .thenThrow(new ReleaseAgeDeniedException("quarantined", null));
+    when(hosted.get(hostedMember, path, true)).thenReturn(expected);
+
+    MavenResponse response = service(hosted, proxy).get(
+        runtime(1L, "group", RepositoryType.GROUP, List.of(quarantining, hostedMember)),
+        path, true);
+
+    assertSame(expected, response);
+  }
+
+  @Test
+  void quarantineIsReportedInsteadOfNotFoundWhenNoMemberServesTheVersion() {
+    GoHostedService hosted = mock(GoHostedService.class);
+    GoProxyService proxy = mock(GoProxyService.class);
+    RepositoryRuntime quarantining = runtime(2L, "proxy", RepositoryType.PROXY, List.of());
+    RepositoryRuntime hostedMember = runtime(3L, "hosted", RepositoryType.HOSTED, List.of());
+    String path = "example.com/demo/@v/v1.0.0.zip";
+    ReleaseAgeDeniedException denied = new ReleaseAgeDeniedException("quarantined", null);
+    when(proxy.get(quarantining, path, false)).thenThrow(denied);
+    when(hosted.get(hostedMember, path, false))
+        .thenThrow(new MavenExceptions.MavenNotFoundException(path));
+
+    ReleaseAgeDeniedException thrown = assertThrows(
+        ReleaseAgeDeniedException.class,
+        () -> service(hosted, proxy).get(
+            runtime(1L, "group", RepositoryType.GROUP, List.of(quarantining, hostedMember)),
+            path, false));
+
+    assertSame(denied, thrown);
   }
 
   @Test

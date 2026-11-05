@@ -9,6 +9,9 @@ if (window.location.hash === "#browse" || window.location.hash.startsWith("#brow
   window.location.replace(`/browse/${window.location.hash}`);
 }
 
+// Proxy formats that support the minimum release age (quarantine) policy.
+const MINIMUM_RELEASE_AGE_FORMATS = new Set(["npm", "go", "maven2", "pypi"]);
+
 let repositories = [];
 let repositoryUsage;
 let repositoryLoadVersion = 0;
@@ -2733,7 +2736,7 @@ function refreshRepositoryRecipeControls() {
   const pypiIndexPathVisible = format === "pypi" && type === "PROXY";
   document.getElementById("repository-pypi-index-path-field").hidden =
     !pypiIndexPathVisible;
-  const minimumReleaseAgeVisible = format === "npm" && type === "PROXY";
+  const minimumReleaseAgeVisible = MINIMUM_RELEASE_AGE_FORMATS.has(format) && type === "PROXY";
   document.getElementById("repository-minimum-release-age-field").hidden =
     !minimumReleaseAgeVisible;
   document.getElementById("repository-minimum-release-age-note").hidden =
@@ -3147,7 +3150,7 @@ function repositoryFormPayload() {
       allowedRedirectHosts,
       contentMaxAgeMinutes: content === "" ? null : Number(content),
       metadataMaxAgeMinutes: metadata === "" ? null : Number(metadata),
-      minimumReleaseAgeMinutes: recipe.format === "npm"
+      minimumReleaseAgeMinutes: MINIMUM_RELEASE_AGE_FORMATS.has(recipe.format)
         ? (minimumReleaseAge === "" ? 0 : Number(minimumReleaseAge))
         : null,
       autoBlock: document.getElementById("repository-auto-block").checked,

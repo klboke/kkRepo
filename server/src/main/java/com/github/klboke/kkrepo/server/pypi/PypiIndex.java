@@ -1,5 +1,9 @@
 package com.github.klboke.kkrepo.server.pypi;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.IOException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -18,7 +22,40 @@ final class PypiIndex {
       "\\bdata-requires-python\\s*=\\s*(\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
       Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
 
+  private static final Pattern UPLOAD_TIME = Pattern.compile(
+      "\\bdata-upload-time\\s*=\\s*(\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
+      Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+  private static final ObjectMapper JSON = new ObjectMapper();
+
   private PypiIndex() {
+  }
+
+  /**
+   * Parses a PEP 691 JSON project page. Files without a parseable PEP 700 {@code upload-time} keep a
+   * null time so callers can treat them as unknown.
+   */
+  static List<PypiLink> parseJson(String json) throws IOException {
+    List<PypiLink> result = new ArrayList<>();
+    JsonNode files = JSON.readTree(json == null ? "" : json).path("files");
+    for (JsonNode file : files) {
+      String name = file.path("filename").asText("");
+      String url = file.path("url").asText("");
+      if (name.isEmpty() || url.isEmpty()) continue;
+      String sha256 = file.path("hashes").path("sha256").asText("");
+      String href = sha256.isEmpty() ? url : url + "#sha256=" + sha256;
+      String requires = file.path("requires-python").asText("");
+      result.add(new PypiLink(name, href, requires, parseInstant(file.path("upload-time").asText(null))));
+    }
+    return result;
+  }
+
+  private static Instant parseInstant(String value) {
+    if (value == null || value.isBlank()) return null;
+    try {
+      return Instant.parse(value.trim());
+    } catch (RuntimeException e) {
+      return null;
+    }
   }
 
   static List<PypiLink> parse(String html) {
@@ -30,7 +67,9 @@ final class PypiIndex {
       if (href == null) continue;
       String text = stripTags(matcher.group(2)).trim();
       String requires = attr(attrs, REQUIRES);
-      result.add(new PypiLink(unescape(text), unescape(href), unescape(requires)));
+      String uploaded = attr(attrs, UPLOAD_TIME);
+      result.add(new PypiLink(
+          unescape(text), unescape(href), unescape(requires), parseInstant(uploaded)));
     }
     return result;
   }
@@ -53,6 +92,15 @@ final class PypiIndex {
   }
 
   static String buildProject(String projectName, Collection<PypiLink> links) {
+    return buildProject(projectName, links, false);
+  }
+
+  /**
+   * {@code includeUploadTimes} adds a {@code data-upload-time} attribute so the cached copy keeps the
+   * publish time for later release-age filtering; it is stripped again before serving to clients.
+   */
+  static String buildProject(
+      String projectName, Collection<PypiLink> links, boolean includeUploadTimes) {
     StringBuilder out = new StringBuilder();
     out.append("<html lang=\"en\">\n");
     out.append("<head><title>Links for ").append(escapeText(projectName)).append("</title>\n");
@@ -65,6 +113,9 @@ final class PypiIndex {
           out.append("    <a href=\"").append(escapeAttr(link.href())).append("\" rel=\"internal\"");
           if (!link.requiresPython().isBlank()) {
             out.append(" data-requires-python=\"").append(escapeAttr(link.requiresPython())).append("\"");
+          }
+          if (includeUploadTimes && link.uploadTime() != null) {
+            out.append(" data-upload-time=\"").append(link.uploadTime()).append("\"");
           }
           out.append(">").append(escapeText(link.file())).append("</a><br/>\n");
         });
@@ -81,7 +132,7 @@ final class PypiIndex {
       if (idx >= 0) {
         href = href.substring(idx + "/simple/".length());
       }
-      result.add(new PypiLink(link.file(), href, link.requiresPython()));
+      result.add(new PypiLink(link.file(), href, link.requiresPython(), link.uploadTime()));
     }
     return result;
   }
@@ -96,7 +147,7 @@ final class PypiIndex {
       if (hashIdx >= 0) {
         href += link.href().substring(hashIdx);
       }
-      result.add(new PypiLink(link.file(), href, link.requiresPython()));
+      result.add(new PypiLink(link.file(), href, link.requiresPython(), link.uploadTime()));
     }
     return result;
   }

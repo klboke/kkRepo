@@ -2,6 +2,8 @@
 
 代理仓库的路径限制参见[路由规则](routing-rules.md)。
 
+代理仓库对新发布版本的隔离参见[最小发布时长](minimum-release-age.md)。
+
 本文说明 kkrepo 当前安全模型：认证、授权、密钥、审计日志和运维边界。
 
 内容表达式、管理页面、预览限制和权限叠加语义见[内容选择器](content-selectors.md)。

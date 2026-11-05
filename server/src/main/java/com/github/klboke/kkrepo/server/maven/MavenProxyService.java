@@ -1,11 +1,18 @@
 package com.github.klboke.kkrepo.server.maven;
 
+import com.github.klboke.kkrepo.cache.LocalCache;
+import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.protocol.maven.MavenContentType;
+import com.github.klboke.kkrepo.protocol.maven.metadata.MavenMetadataVersionFilter;
+import com.github.klboke.kkrepo.protocol.maven.metadata.MavenMetadataXml;
+import com.github.klboke.kkrepo.protocol.maven.path.Coordinates;
+import com.github.klboke.kkrepo.protocol.maven.path.HashType;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
@@ -15,9 +22,25 @@ import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheInfo;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
+import com.github.klboke.kkrepo.server.releaseage.MinimumReleaseAge;
 import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HexFormat;
+import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.LinkedHashMap;
 import java.util.HashMap;
 import java.util.Locale;
@@ -46,11 +69,28 @@ import org.springframework.stereotype.Service;
  *   <li>Circuit breaker open (blocked_until &gt; now) → never call upstream; serve stale or 502.</li>
  * </ul>
  * Backoff schedule for repeated failures: 30s → 5min → 30min cap.
+ *
+ * <p>Minimum release age (quarantine): when {@code proxy.minimumReleaseAgeMinutes > 0}, release
+ * versions (never SNAPSHOTs) whose upstream publish time is younger than the cooldown are removed
+ * from artifact-level {@code maven-metadata.xml} (and from its checksum files, which are derived
+ * from the filtered bytes) and rejected with 403 for every artifact file, checksum and signature.
+ * The publish time of a version is the upstream {@code Last-Modified} of its {@code .pom}, read with
+ * a HEAD request. Decisions are recomputed per request from the shared cached upstream metadata;
+ * the node-local {@code publishTimes} cache only avoids repeated HEADs, is rebuildable, and holds an
+ * immutable timestamp so replicas cannot disagree. A denial is never negative-cached.
  */
 @Service
 public class MavenProxyService {
   private static final long[] BACKOFF_SECONDS = {30, 60, 120, 300, 600, 1800};
+  private static final int MAX_METADATA_BYTES = 8 * 1024 * 1024;
+  private static final int PUBLISH_TIME_LOOKUP_PARALLELISM = 8;
 
+  private final Clock clock;
+  private final LocalCache<String, Instant> publishTimes = LocalCacheFactory.standard()
+      .<String, Instant>builder("maven-release-age-publish-times")
+      .maximumSize(100_000)
+      .expireAfterWrite(Duration.ofHours(6))
+      .build();
   private final AssetDao assetDao;
   private final BlobStorageRegistry blobStorageRegistry;
   private final MavenAssetWriter writer;
@@ -73,6 +113,22 @@ public class MavenProxyService {
       AssetMetadataCache assetMetadataCache,
       NexusLikeCacheController cacheController,
       ArtifactDownloadPolicy downloadPolicy) {
+    this(assetDao, blobStorageRegistry, writer, proxyStateDao, fetcher, negativeCache,
+        assetMetadataCache, cacheController, downloadPolicy, Clock.systemUTC());
+  }
+
+  MavenProxyService(
+      AssetDao assetDao,
+      BlobStorageRegistry blobStorageRegistry,
+      MavenAssetWriter writer,
+      ProxyStateDao proxyStateDao,
+      HttpRemoteFetcher fetcher,
+      ProxyNegativeCache negativeCache,
+      AssetMetadataCache assetMetadataCache,
+      NexusLikeCacheController cacheController,
+      ArtifactDownloadPolicy downloadPolicy,
+      Clock clock) {
+    this.clock = clock;
     this.assetDao = assetDao;
     this.blobStorageRegistry = blobStorageRegistry;
     this.writer = writer;
@@ -135,12 +191,23 @@ public class MavenProxyService {
     if (path.path().endsWith("/") || path.fileName().isEmpty()) {
       throw new MavenExceptions.MavenNotFoundException(path.path());
     }
+    if (runtime.minimumReleaseAgeEnabled()) {
+      MavenResponse quarantined = applyMinimumReleaseAge(runtime, path, headOnly);
+      if (quarantined != null) {
+        return quarantined;
+      }
+    }
+    return serve(runtime, path, headOnly);
+  }
+
+  /** Cached/conditional upstream fetch with no release-age policy applied. */
+  private MavenResponse serve(RepositoryRuntime runtime, MavenPath path, boolean headOnly) {
     Optional<CachedAssetMetadata> cached = assetMetadataCache.find(
         runtime.id(),
         path.path(),
         () -> AssetMetadataCache.Loaded.from(
             assetDao.findAssetByPath(runtime.id(), path.path()), assetDao));
-    Instant now = Instant.now();
+    Instant now = clock.instant();
     int ttl = ttlMinutes(runtime, path);
     boolean fresh = cached.isPresent() && isFresh(runtime, path, cached.get(), ttl, now);
     if (fresh) {
@@ -154,6 +221,239 @@ public class MavenProxyService {
       throw new MavenExceptions.BadUpstreamException("Upstream temporarily blocked: " + runtime.proxyRemoteUrl());
     }
     return fetchAndCache(runtime, path, cached, headOnly, now);
+  }
+
+  // ---- minimum release age -------------------------------------------------------------------
+
+  /**
+   * Returns the response for metadata that had to be rewritten, or {@code null} when the request
+   * should be served normally (after the age check passed or when the policy does not apply).
+   */
+  private MavenResponse applyMinimumReleaseAge(
+      RepositoryRuntime runtime, MavenPath path, boolean headOnly) {
+    if (parser.isRepositoryMetadata(path)) {
+      return filteredMetadata(runtime, path, headOnly);
+    }
+    Coordinates coordinates = path.main().coordinates();
+    if (coordinates == null || isSnapshot(coordinates)) {
+      return null;
+    }
+    // Decide before the cache lookup so content cached before the policy was enabled is gated too.
+    // An upstream that has neither the pom nor this file raises MavenNotFoundException from here, and
+    // that is deliberately NOT turned into "allowed": the request answers 404 without consulting the
+    // cache. Falling through would serve bytes cached before the policy was enabled, or a release the
+    // upstream has since withdrawn, which is exactly what the cooldown must not do. A 404 (unlike a
+    // 403) still lets clients and groups try their next repository.
+    Instant published = publishTime(
+        runtime, coordinates.groupId(), coordinates.artifactId(), coordinates.version(), path.main())
+        .orElse(null);
+    MinimumReleaseAge.require(
+        coordinates.groupId() + ":" + coordinates.artifactId() + ":" + coordinates.version(),
+        published, runtime.minimumReleaseAgeMinutesOrDefault(), clock.instant());
+    return null;
+  }
+
+  private MavenResponse filteredMetadata(
+      RepositoryRuntime runtime, MavenPath path, boolean headOnly) {
+    MavenPath metadataPath = path.main();
+    String[] artifact = artifactDirectory(metadataPath);
+    if (artifact == null) {
+      return null; // group-level or base-version (SNAPSHOT) metadata carries no release versions
+    }
+    byte[] upstream = readBounded(serve(runtime, metadataPath, false));
+    MavenMetadataVersionFilter.Result filtered;
+    try {
+      List<String> releases = MavenMetadataXml.read(upstream).versions.stream()
+          .filter(version -> version != null && !version.isBlank() && !version.endsWith("-SNAPSHOT"))
+          .toList();
+      java.util.Map<String, Instant> times = publishTimes(runtime, artifact[0], artifact[1], releases);
+      int minutes = runtime.minimumReleaseAgeMinutesOrDefault();
+      Instant now = clock.instant();
+      var result = MavenMetadataVersionFilter.retain(upstream, version ->
+          version.endsWith("-SNAPSHOT") || MinimumReleaseAge.eligible(times.get(version), minutes, now));
+      if (result.isEmpty()) {
+        return null;
+      }
+      filtered = result.get();
+    } catch (IOException e) {
+      throw new MavenExceptions.BadUpstreamException("Unreadable maven-metadata.xml: " + e.getMessage());
+    }
+    if (filtered.removed().isEmpty()) {
+      return null; // nothing hidden, keep the upstream bytes and checksums byte-for-byte
+    }
+    if (filtered.kept().isEmpty()) {
+      throw new MavenExceptions.MavenNotFoundException(path.path());
+    }
+    byte[] body = filtered.xml();
+    String contentType = MavenContentType.XML;
+    if (path.isHash()) {
+      body = checksum(body, path.hashType()).getBytes(StandardCharsets.UTF_8);
+      contentType = "text/plain";
+    }
+    String etag = checksum(body, HashType.SHA1);
+    if (headOnly) {
+      return MavenResponse.noBody(200, body.length, contentType, etag, clock.instant());
+    }
+    return MavenResponse.ok(
+        new ByteArrayInputStream(body), body.length, contentType, etag, clock.instant());
+  }
+
+  /** {groupId, artifactId} for an artifact-level metadata path, or null for any other level. */
+  private String[] artifactDirectory(MavenPath metadataPath) {
+    String path = metadataPath.path();
+    String[] segments = path.split("/");
+    if (segments.length < 3 || !"maven-metadata.xml".equals(segments[segments.length - 1])) {
+      return null;
+    }
+    // A base-version (SNAPSHOT) directory ends in -SNAPSHOT; everything else here is g/a/.
+    if (segments[segments.length - 2].endsWith("-SNAPSHOT")) {
+      return null;
+    }
+    String artifactId = segments[segments.length - 2];
+    String groupId = String.join(".", java.util.Arrays.copyOf(segments, segments.length - 2));
+    return new String[] {groupId, artifactId};
+  }
+
+  /**
+   * Publish time of a release version. The request path is authoritative for the coordinates, never
+   * the XML body. Unknown (HEAD failed, no Last-Modified) is reported as empty and treated as
+   * quarantined by the caller (fail closed). An upstream that answers 404 for both the pom and the
+   * requested file does not have the version at all, which is reported as not found instead.
+   */
+  private Optional<Instant> publishTime(
+      RepositoryRuntime runtime, String groupId, String artifactId, String version,
+      MavenPath requested) {
+    String key = publishKey(runtime, groupId, artifactId, version);
+    Instant known = publishTimes.getIfPresent(key);
+    if (known != null) {
+      return Optional.of(known);
+    }
+    Head head = headLastModified(runtime, pomPath(groupId, artifactId, version));
+    if (head.lastModified() == null && requested != null) {
+      // No pom (or no Last-Modified on it): fall back to the requested file itself.
+      Head file = headLastModified(runtime, requested.path());
+      head = file.lastModified() != null ? file : new Head(null, head.absent() && file.absent());
+    }
+    if (head.lastModified() != null) {
+      publishTimes.put(key, head.lastModified());
+      return Optional.of(head.lastModified());
+    }
+    if (head.absent()) {
+      throw new MavenExceptions.MavenNotFoundException(
+          groupId + ":" + artifactId + ":" + version + " does not exist upstream");
+    }
+    return Optional.empty();
+  }
+
+  /**
+   * Publish times for {@code versions} of one artifact, with bounded parallel HEADs for the ones not
+   * known yet. Versions whose time cannot be determined map to {@code null}.
+   */
+  private java.util.Map<String, Instant> publishTimes(
+      RepositoryRuntime runtime, String groupId, String artifactId, List<String> versions) {
+    java.util.Map<String, Instant> result = new java.util.LinkedHashMap<>();
+    List<String> unknown = new ArrayList<>();
+    for (String version : versions) {
+      Instant known = publishTimes.getIfPresent(publishKey(runtime, groupId, artifactId, version));
+      if (known != null) {
+        result.put(version, known);
+      } else {
+        unknown.add(version);
+      }
+    }
+    if (unknown.isEmpty()) {
+      return result;
+    }
+    Semaphore permits = new Semaphore(PUBLISH_TIME_LOOKUP_PARALLELISM);
+    try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+      java.util.Map<String, Future<Instant>> pending = new java.util.LinkedHashMap<>();
+      for (String version : unknown) {
+        pending.put(version, executor.submit(() -> {
+          permits.acquire();
+          try {
+            return publishTime(runtime, groupId, artifactId, version, null).orElse(null);
+          } catch (RuntimeException failed) {
+            return null;
+          } finally {
+            permits.release();
+          }
+        }));
+      }
+      for (var entry : pending.entrySet()) {
+        try {
+          result.put(entry.getKey(), entry.getValue().get());
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          throw new MavenExceptions.BadUpstreamException("Interrupted while checking release ages");
+        } catch (ExecutionException e) {
+          result.put(entry.getKey(), null);
+        }
+      }
+    }
+    return result;
+  }
+
+  /** {@code absent} is true only when the upstream answered 404/410, not for other failures. */
+  private record Head(Instant lastModified, boolean absent) {}
+
+  private Head headLastModified(RepositoryRuntime runtime, String path) {
+    HttpRemoteFetcher.Request request = new HttpRemoteFetcher.Request(
+        buildRemoteUrl(runtime.proxyRemoteUrl(), path), null, null, null, true)
+        .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.METADATA)
+        .withRepositoryForContent(runtime);
+    try {
+      return fetcher.fetchWithBodyRetry(request, path, result ->
+          result.status() >= 200 && result.status() < 300
+              ? new Head(result.lastModified(), false)
+              : new Head(null, result.status() == 404 || result.status() == 410));
+    } catch (IOException e) {
+      throw new MavenExceptions.BadUpstreamException(
+          "Unable to determine publish time of " + path + ": " + e.getMessage());
+    }
+  }
+
+  private static boolean isSnapshot(Coordinates coordinates) {
+    return coordinates.snapshot()
+        || (coordinates.version() != null && coordinates.version().endsWith("-SNAPSHOT"));
+  }
+
+  private static String pomPath(String groupId, String artifactId, String version) {
+    return groupId.replace('.', '/') + "/" + artifactId + "/" + version + "/"
+        + artifactId + "-" + version + ".pom";
+  }
+
+  /**
+   * Cache identity of a publish time. It includes the upstream the time was read from: a proxy's
+   * remote URL can be edited without any signal reaching this node-local cache, and a timestamp
+   * learned from the former upstream must never answer for the new one (a warm node would otherwise
+   * admit what a cold node rejects).
+   */
+  private static String publishKey(
+      RepositoryRuntime runtime, String groupId, String artifactId, String version) {
+    return runtime.id() + "|" + runtime.proxyRemoteUrl() + "|" + groupId + ":" + artifactId + ":" + version;
+  }
+
+  private static byte[] readBounded(MavenResponse response) {
+    try (InputStream body = response.body()) {
+      if (body == null) {
+        return new byte[0];
+      }
+      byte[] bytes = body.readNBytes(MAX_METADATA_BYTES + 1);
+      if (bytes.length > MAX_METADATA_BYTES) {
+        throw new MavenExceptions.BadUpstreamException("maven-metadata.xml exceeds the release-age limit");
+      }
+      return bytes;
+    } catch (IOException e) {
+      throw new MavenExceptions.BadUpstreamException("Failed reading metadata: " + e.getMessage());
+    }
+  }
+
+  private static String checksum(byte[] body, HashType type) {
+    try {
+      return HexFormat.of().formatHex(MessageDigest.getInstance(type.javaAlgorithm()).digest(body));
+    } catch (NoSuchAlgorithmException e) {
+      throw new IllegalStateException(e);
+    }
   }
 
   private MavenResponse fetchAndCache(RepositoryRuntime runtime, MavenPath path,
