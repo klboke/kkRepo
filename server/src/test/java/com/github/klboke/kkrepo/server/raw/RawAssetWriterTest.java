@@ -41,6 +41,10 @@ import java.util.OptionalLong;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 class RawAssetWriterTest {
   private static final String PATH = "docs/file.txt";
@@ -203,6 +207,61 @@ class RawAssetWriterTest {
         "text/plain", Map.of(), "alice", "127.0.0.1"));
 
     verify(fixture.storage).delete(uploaded);
+  }
+
+  @ParameterizedTest
+  @CsvSource({"true,false,true", "true,true,false", "false,false,false"})
+  void cleansFileUploadOnlyAfterOuterRollbackWhenUnreferenced(
+      boolean rollback, boolean referenced, boolean deleted, @TempDir Path tempDir) throws Exception {
+    Fixture fixture = fixture();
+    stubUploadedBlob(fixture);
+    when(fixture.assetDao.tryInsertAsset(any())).thenReturn(OptionalLong.of(11L));
+    Path file = Files.writeString(tempDir.resolve("package.har"), "body");
+    TransactionSynchronizationManager.setActualTransactionActive(true);
+    TransactionSynchronizationManager.initSynchronization();
+    try {
+      RawAssetWriter.Stored stored = fixture.writer.writeFileAtBrowsePathIfAbsent(
+          runtime(), fixture.storage, 1L, PATH, file, "application/octet-stream",
+          Map.of(), "alice", "127.0.0.1", null, PATH);
+      assertTrue(stored.created());
+      verify(fixture.storage, never()).delete(any());
+      when(fixture.assetDao.hasLiveBlobForObjectKeyHash(eq(1L), any())).thenReturn(referenced);
+      var callbacks = TransactionSynchronizationManager.getSynchronizations();
+      assertEquals(1, callbacks.size());
+      callbacks.forEach(callback -> callback.afterCompletion(rollback
+          ? TransactionSynchronization.STATUS_ROLLED_BACK : TransactionSynchronization.STATUS_COMMITTED));
+      if (deleted) {
+        verify(fixture.storage).delete(any(BlobReference.class));
+      } else {
+        verify(fixture.storage, never()).delete(any());
+      }
+      assertTrue(Files.exists(file));
+    } finally {
+      TransactionSynchronizationManager.clearSynchronization();
+      TransactionSynchronizationManager.setActualTransactionActive(false);
+    }
+  }
+
+  @Test
+  void doesNotDeleteReusedBlobOnOuterRollback(@TempDir Path tempDir) throws Exception {
+    Fixture fixture = fixture();
+    AssetBlobRecord shared = blob(5L, "shared");
+    when(fixture.assetDao.findReusableBlobBySha256(eq(1L), anyString(), eq(4L)))
+        .thenReturn(Optional.of(shared));
+    when(fixture.assetDao.tryInsertAsset(any())).thenReturn(OptionalLong.of(11L));
+    Path file = Files.writeString(tempDir.resolve("package.har"), "body");
+    TransactionSynchronizationManager.setActualTransactionActive(true);
+    TransactionSynchronizationManager.initSynchronization();
+    try {
+      fixture.writer.writeFileAtBrowsePathIfAbsent(
+          runtime(), fixture.storage, 1L, PATH, file, "application/octet-stream",
+          Map.of(), "alice", null, null, PATH);
+      assertTrue(TransactionSynchronizationManager.getSynchronizations().isEmpty());
+      verifyNoInteractions(fixture.storage);
+    } finally {
+      TransactionSynchronizationManager.clearSynchronization();
+      TransactionSynchronizationManager.setActualTransactionActive(false);
+    }
   }
 
   @Test

@@ -1182,6 +1182,66 @@ public abstract class PersistenceApiContract {
   }
 
   @Test
+  void assetPathLockFindsConcurrentInsertAfterAnEmptySnapshot() throws Exception {
+    long repository = createRepository("asset-lock-insert", RepositoryFormat.RAW);
+    String path = "@scope/package";
+    AssetRecord root = new AssetRecord(null, repository, null, null, RepositoryFormat.RAW,
+        path, PersistenceHashes.pathHash(path), "package", "metadata", "application/json",
+        null, null, Instant.now(), Map.of("revision", 1));
+    CountDownLatch snapshot = new CountDownLatch(1);
+    CountDownLatch inserted = new CountDownLatch(1);
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var reader = executor.submit(() -> inTransaction(() -> {
+        assertTrue(stores().assets().findAssetByPath(repository, path).isEmpty());
+        snapshot.countDown();
+        await(inserted);
+        assertTrue(stores().assets().tryInsertAsset(root).isEmpty());
+        AssetRecord current = stores().assets().findAssetByPathForUpdate(repository, path).orElseThrow();
+        assertEquals(1, ((Number) current.attributes().get("revision")).intValue());
+        return current.id();
+      }));
+      await(snapshot);
+      long winner = inTransaction(() -> stores().assets().insertAsset(root));
+      inserted.countDown();
+      assertEquals(winner, reader.get(10, java.util.concurrent.TimeUnit.SECONDS));
+    }
+  }
+
+  @Test
+  void assetPathLockSerializesMetadataMutationsAcrossTransactions() throws Exception {
+    long repository = createRepository("asset-lock-update", RepositoryFormat.RAW);
+    String path = "@scope/package";
+    long root = stores().assets().insertAsset(new AssetRecord(
+        null, repository, null, null, RepositoryFormat.RAW, path, PersistenceHashes.pathHash(path),
+        "package", "metadata", "application/json", null, null, Instant.now(), Map.of("revision", 0)));
+    CyclicBarrier snapshots = new CyclicBarrier(2);
+    Callable<Void> update = () -> inTransaction(() -> {
+      assertEquals(0, ((Number) stores().assets().findAssetByPath(repository, path)
+          .orElseThrow().attributes().get("revision")).intValue());
+      await(snapshots);
+      AssetRecord current = stores().assets().findAssetByPathForUpdate(repository, path).orElseThrow();
+      int next = ((Number) current.attributes().get("revision")).intValue() + 1;
+      stores().assets().touchAssetLastUpdatedAndAttributes(root, Instant.now(), Map.of("revision", next));
+      return null;
+    });
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var first = executor.submit(update);
+      var second = executor.submit(update);
+      first.get(10, java.util.concurrent.TimeUnit.SECONDS);
+      second.get(10, java.util.concurrent.TimeUnit.SECONDS);
+    }
+    assertEquals(2, ((Number) stores().assets().findAssetById(root).orElseThrow()
+        .attributes().get("revision")).intValue());
+    assertThrows(IllegalStateException.class, () -> inTransaction(() -> {
+      stores().assets().findAssetByPathForUpdate(repository, path).orElseThrow();
+      stores().assets().touchAssetLastUpdatedAndAttributes(root, Instant.now(), Map.of("revision", 3));
+      throw new IllegalStateException("rollback");
+    }));
+    assertEquals(2, ((Number) stores().assets().findAssetById(root).orElseThrow()
+        .attributes().get("revision")).intValue());
+  }
+
+  @Test
   void cleanupAssetBatchReadsAndLocksUseBoundedProductionQueries() {
     long repositoryId = createRepository("cleanup-asset-batches", RepositoryFormat.RAW);
     long blobStoreId = stores().repositories().findById(repositoryId).orElseThrow().blobStoreId();

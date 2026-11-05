@@ -190,6 +190,12 @@ public class SecurityAuthenticationService {
     return inAuthenticationTransaction(() -> authenticatePresented(request, true));
   }
 
+  public Optional<AuthenticatedSubject> authenticateOhpmFresh(HttpServletRequest request) {
+    String token = request.getHeader("Authorization");
+    if (token == null || token.isBlank()) return authenticateFresh(request);
+    return inAuthenticationTransaction(() -> resolveApiKey(ApiKeyTokenCandidate.fromPresentedToken(token)));
+  }
+
   private Optional<AuthenticatedSubject> authenticatePresented(HttpServletRequest request, boolean fresh) {
     Optional<AuthenticatedSubject> apiKey = authenticateApiKey(request, fresh);
     if (apiKey.isPresent()) {

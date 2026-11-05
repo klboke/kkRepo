@@ -44,6 +44,10 @@ public interface AssetDao {
 
   Optional<AssetRecord> findAssetByPath(long repositoryId, String path);
 
+  default Optional<AssetRecord> findAssetByPathForUpdate(long repositoryId, String path) {
+    throw new UnsupportedOperationException("Asset path locking is not implemented");
+  }
+
   Optional<AssetRecord> findAssetById(long assetId);
 
   /** Locks one live asset generation for cleanup revalidation. */

@@ -33,6 +33,8 @@ import java.util.OptionalLong;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Component
 class RawAssetWriter {
@@ -190,6 +192,7 @@ class RawAssetWriter {
       String expectedGitOid) {
     DigestedUpload upload = uploadWithDigests(
         runtime, storage, blobStoreId, path, body, extraBlobAttributes);
+    cleanupAfterRollback(storage, blobStoreId, upload);
     try {
       if (expectedSize != null && expectedSize.longValue() != upload.digests().size()) {
         throw new IllegalArgumentException(
@@ -355,6 +358,7 @@ class RawAssetWriter {
       boolean replaceExisting) {
     DigestedUpload upload = uploadFileWithDigests(
         runtime, storage, blobStoreId, path, file, extraBlobAttributes);
+    cleanupAfterRollback(storage, blobStoreId, upload);
     try {
       Stored stored = executePersist(
           "Persist raw asset " + runtime.name() + "/" + path,
@@ -410,6 +414,7 @@ class RawAssetWriter {
       String createdBy, String createdByIp, ComponentBinding componentBinding,
       boolean keepResponseFile, String browsePath, Map<String, ?> assetAttributes) {
     DigestedUpload upload = uploadWithDigests(runtime, storage, blobStoreId, path, body, extraBlobAttributes);
+    cleanupAfterRollback(storage, blobStoreId, upload);
     try {
       Stored stored = executePersist(
           "Persist raw asset " + runtime.name() + "/" + path,
@@ -800,6 +805,27 @@ class RawAssetWriter {
     } catch (IOException e) {
       throw new java.io.UncheckedIOException("Failed to digest raw file " + path, e);
     }
+  }
+
+  private void cleanupAfterRollback(BlobStorage storage, long blobStoreId, DigestedUpload upload) {
+    if (!upload.uploaded() || !TransactionSynchronizationManager.isActualTransactionActive()
+        || !TransactionSynchronizationManager.isSynchronizationActive()) {
+      return;
+    }
+    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+      @Override
+      public void afterCompletion(int status) {
+        if (status != STATUS_ROLLED_BACK) return;
+        if (transactionRetry == null) {
+          cleanupUploadedBlob(storage, blobStoreId, upload);
+        } else {
+          transactionRetry.execute("Clean up rolled back protocol upload", () -> {
+            cleanupUploadedBlob(storage, blobStoreId, upload);
+            return null;
+          });
+        }
+      }
+    });
   }
 
   private void cleanupUploadedBlob(BlobStorage storage, long blobStoreId, DigestedUpload upload) {

@@ -1,6 +1,6 @@
 # OHPM 协议兼容性基线
 
-本文记录 `protocol-ohpm` 的协议依据与客户端请求测试。当前尚未提供可创建的 OHPM 仓库，测试中的 HTTP 服务只负责录制请求和返回测试响应，不代表 kkrepo 服务端已经实现。
+本文记录 `protocol-ohpm` 的协议依据与客户端请求测试。这些测试中的 HTTP 服务只负责录制请求和返回测试响应。实际 `ohpm-hosted` HAR 服务及独立运行时验证见 [OHPM Hosted HAR](ohpm-hosted.md)，不要将请求录制测试作为服务端验证结果。
 
 ## 协议来源
 

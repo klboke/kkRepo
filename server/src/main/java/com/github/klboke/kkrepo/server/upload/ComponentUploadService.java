@@ -337,6 +337,7 @@ public class ComponentUploadService {
       case ALPINE -> uploadAlpine(runtime, upload, createdBy, createdByIp);
       case R -> uploadR(runtime, upload, createdBy, createdByIp);
       case GITLFS -> throw new UploadValidationException("Git LFS uploads must use the Git LFS Batch/basic API");
+      case OHPM -> throw new UploadValidationException("OHPM uploads currently require the OHPM publish API");
       case HUGGINGFACE -> throw new UploadValidationException(
           "Hugging Face Models repositories are proxy-only");
       case DOCKER -> throw new UploadValidationException("Docker hosted upload must use the Docker Registry V2 API");
@@ -926,6 +927,7 @@ public class ComponentUploadService {
     return switch (format) {
       case MAVEN2 -> "maven2";
       case NPM -> "npm";
+      case OHPM -> "ohpm";
       case PYPI -> "pypi";
       case HELM -> "helm";
       case GO -> "go";

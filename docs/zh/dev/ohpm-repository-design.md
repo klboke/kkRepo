@@ -4,7 +4,7 @@
 
 ## 当前支持状态
 
-ohpm 仓库能力处于路线图设计阶段，当前代码中尚未实现 `ohpm-hosted`、`ohpm-proxy` 或 `ohpm-group` recipe。
+当前已实现 `ohpm-hosted` 的普通 HAR 发布、读取、tag 和下架，使用方式与验证边界见 [OHPM Hosted HAR](ohpm-hosted.md)。HSP、流式上传、`ohpm-proxy` 和 `ohpm-group` 仍在后续阶段。
 
 协议模型与真实客户端请求测试已开始落地，验证基线和设计差异见 [OHPM 协议兼容性基线](ohpm-protocol-baseline.md)。协议模块存在不代表仓库服务已经可用。
 
@@ -42,7 +42,7 @@ ohpm 仓库能力处于路线图设计阶段，当前代码中尚未实现 `ohpm
 - 普通发布通过 JSON body 携带 metadata 和 `_attachments`；流式发布通过 multipart/form-data 携带 `pkg_stream` 和 `metadata`。两种入口必须写入同一套 MySQL/OSS-backed 元数据和 blob 真相。
 - HAR 包通常只有 `.har` 文件；应用内 HSP 包可能同时包含 `.har` 和 `.hsp` 两个客户端可下载文件，metadata 中用 `dist.integrity`、`dist.tarball`、`dist.integrity_hsp`、`dist.resolved_hsp` 表达。
 - ohpm 5.0.1 及以上优先调用流式上传；如果流式上传接口返回 `404`，客户端会回退到普通上传。因此 kkrepo 实现该接口前必须让缺失路径真实返回 `404`，实现后必须兼容 multipart 行为。
-- 官方响应码中 `598` 会触发 ohpm 5.0.1+ 重新上传。kkrepo 不应把所有服务端异常都映射为 `598`；只有明确可重试的上传中断或临时失败才使用它。
+- 官方文档将 `598` 描述为 ohpm 5.0.1+ 的重试信号，但实测 6.0.1 普通上传收到该状态后直接失败。服务端不能依赖自动重试，也不应把所有服务端异常都映射为 `598`；只有明确可重试的上传中断或临时失败才使用它。
 - `Login` 是官方可选 API。kkrepo 默认使用 Access Token，但完整设计需要保留 `POST /login` 的可配置实现入口；如果启用公私钥认证，必须把签名、nonce、timestamp、token 过期和审计纳入同一套认证设计。
 - metadata 和 dist-tag 是跨副本共享状态，必须以 MySQL 为真相；进程内缓存只能作为可重建 TTL 热缓存。
 

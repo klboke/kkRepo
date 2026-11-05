@@ -357,6 +357,14 @@ class SecurityAuthenticationServiceTest {
     assertTrue(ansible29.isPresent());
     assertEquals("ci-bot", ansible29.get().userId());
     assertEquals(20L, ansible29.get().apiKeyId());
+
+    Optional<AuthenticatedSubject> ohpm = service.authenticateOhpmFresh(request(Map.of(
+        "Authorization", "GenericToken.generic-secret")));
+    assertTrue(ohpm.isPresent());
+    assertEquals("ci-bot", ohpm.get().userId());
+    assertEquals(20L, ohpm.get().apiKeyId());
+    assertTrue(service.authenticateOhpmFresh(request(Map.of(
+        "Authorization", "GenericToken.invalid"))).isEmpty());
   }
 
   @Test

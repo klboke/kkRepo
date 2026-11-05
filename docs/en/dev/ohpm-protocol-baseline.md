@@ -1,6 +1,6 @@
 # OHPM protocol compatibility baseline
 
-`protocol-ohpm` contains protocol models and client request tests. There is no creatable OHPM repository yet. The recording HTTP server in the tests is not a kkrepo implementation.
+`protocol-ohpm` contains protocol models and client request tests. Their recording HTTP server is not a kkrepo implementation. The actual `ohpm-hosted` HAR service and its independent runtime checks are documented in [OHPM Hosted HAR](ohpm-hosted.md).
 
 ## Sources and verified client
 

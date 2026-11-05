@@ -70,6 +70,7 @@ const SEARCH_ROUTE_FORMAT = {
   rubygems: "rubygems",
   yum: "yum",
   npm: "npm",
+  ohpm: "ohpm",
   docker: "docker",
   raw: "raw",
 };
@@ -97,6 +98,7 @@ const FORMAT_ROUTE_SEGMENT = {
   rubygems: "rubygems",
   yum: "yum",
   npm: "npm",
+  ohpm: "ohpm",
   docker: "docker",
   raw: "raw",
 };
@@ -124,6 +126,7 @@ const SEARCH_FORMAT_LABEL = {
   rubygems: "RubyGems",
   yum: "Yum",
   npm: "npm",
+  ohpm: "OHPM / HarmonyOS",
   docker: "Docker / OCI",
   raw: "Raw",
 };
@@ -792,6 +795,7 @@ function repoIcon(type) {
 const FORMAT_ICON_NAMES = Object.freeze({
   maven2: "maven",
   npm: "npm",
+  ohpm: "ohpm",
   pypi: "pypi",
   cargo: "cargo",
   pub: "pub",

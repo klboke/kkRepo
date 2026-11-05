@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
 
 class BrowseRepositoryFormatIconsContractTest {
   private static final List<String> FORMATS = List.of(
-      "maven2", "npm", "pypi", "cargo", "pub", "composer", "terraform", "swift",
+      "maven2", "npm", "ohpm", "pypi", "cargo", "pub", "composer", "terraform", "swift",
       "ansiblegalaxy", "conda", "conan", "apt", "alpine", "gitlfs", "huggingface", "go",
       "helm", "docker", "nuget", "rubygems", "yum", "r", "raw");
   private static final List<String> SEARCH_FORMATS = List.of(

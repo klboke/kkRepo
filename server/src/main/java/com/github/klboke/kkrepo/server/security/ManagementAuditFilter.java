@@ -61,7 +61,7 @@ public class ManagementAuditFilter extends OncePerRequestFilter {
       failure = e;
       throw e;
     } finally {
-      if (managementMutation || swiftRepositoryPublish(request)) {
+      if (managementMutation || auditedRepositoryMutation(request)) {
         record(request, wrapped.status(), failure);
       }
     }
@@ -104,15 +104,16 @@ public class ManagementAuditFilter extends OncePerRequestFilter {
   }
 
   private static boolean possibleRepositoryPublish(HttpServletRequest request) {
-    return "PUT".equalsIgnoreCase(request.getMethod())
+    return Set.of("PUT", "POST", "DELETE").contains(request.getMethod())
         && stripContextPath(request).startsWith(RepositoryUrlPrefix.path(request));
   }
 
-  private static boolean swiftRepositoryPublish(HttpServletRequest request) {
+  private static boolean auditedRepositoryMutation(HttpServletRequest request) {
     Object value = request.getAttribute(RepositorySecurityFilter.REPOSITORY_RECORD_ATTRIBUTE);
     return possibleRepositoryPublish(request)
         && value instanceof RepositoryRecord repository
-        && repository.format() == RepositoryFormat.SWIFT;
+        && (repository.format() == RepositoryFormat.OHPM
+            || repository.format() == RepositoryFormat.SWIFT && "PUT".equalsIgnoreCase(request.getMethod()));
   }
 
   private static Map<String, Object> auditDetails(

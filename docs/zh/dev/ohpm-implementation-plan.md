@@ -1,6 +1,6 @@
 # OHPM 仓库实现计划
 
-状态：阶段 1 的协议模型和 OHPM 6.0.1 客户端请求测试已落地，详见 [协议兼容性基线](ohpm-protocol-baseline.md)。后续服务端阶段尚未完成。
+状态：阶段 1、2 的实现和验收已完成，包括双数据库、双实例、真实 OHPM 6.0.1、全量 server 及默认兼容性回归。详见 [协议兼容性基线](ohpm-protocol-baseline.md) 和 [Hosted 实现说明](ohpm-hosted.md)。下一步为阶段 3 的 HSP 与流式上传，阶段 3–8 尚未完成。
 
 关联议题：[OHPM 推进情况与贡献意向 #492](https://github.com/klboke/kkRepo/issues/492)。
 设计依据：[OHPM / HarmonyOS 仓库开发设计说明](ohpm-repository-design.md)。
@@ -9,7 +9,7 @@
 
 完整交付 hosted、proxy、group、管理端、导入和真实客户端兼容性测试。默认使用现有 Access Token 能力；官方可选 Login 认证以可配置、默认关闭的能力交付。
 
-建议使用 `feat/ohpm-support` 分支，在首个有测试的实现提交完成后创建关联 #492 的 Draft PR。按下面的里程碑组织提交和 PR 检查清单，完整验收后再转为 Ready。若维护者希望拆分 PR，可沿里程碑边界拆分；拆分开发不代表缩减原设计的最终范围。
+当前使用 `feat/ohpm-support` 分支，阶段 1 已提交为 `7f5f9b17`，并创建关联 #492 的 [Draft PR #493](https://github.com/klboke/kkRepo/pull/493)。后续按里程碑完成实现、验证、提交，并更新 PR 检查清单，完整验收后再转为 Ready。若维护者希望拆分 PR，可沿里程碑边界拆分；拆分开发不代表缩减原设计的最终范围。
 
 所有新增协议行为先核对华为官方协议及真实客户端行为。OHPM 不以 Nexus 为协议参考，不直接复制 npm 的响应码、路径解析或认证行为。
 
@@ -68,7 +68,7 @@
 - 实现 multipart 的 `pkg_stream`、`metadata`，与普通发布共享校验和持久化流程。
 - 根据第一阶段确认的格式处理 HSP 流式包；限制解包路径、条目及展开大小。
 - 大包使用临时文件并保证失败/取消时清理；分别校验 HAR/HSP。
-- 实现客户端 stream `404` 回退与明确临时失败时的 `598`；确认重试与版本不可覆盖的交互行为。
+- 验证客户端 stream `404` 回退与明确临时失败时的 `598`；确认重试与版本不可覆盖的交互行为。OHPM 6.0.1 普通上传实测收到 `598` 后直接失败，服务端正确性不能依赖客户端自动重试。
 
 验收：
 
@@ -157,24 +157,40 @@
 
 每阶段随实现提交相应单元测试、服务测试和兼容性测试。真实客户端测试从 hosted 闭环阶段开始运行，不集中留到最后。
 
-新增模块后，针对性测试采用：
+已落地的协议测试采用：
 
 ```bash
 mvn -pl protocol-ohpm -am test
+mvn -pl compat-test -am -Dtest=OhpmClientContractTest \
+  -Dsurefire.failIfNoSpecifiedTests=false \
+  -Dkkrepo.ohpm.client=true -Dkkrepo.ohpm.expectedVersion=6.0.1 test
+```
+
+Hosted 服务及黑盒测试类落地后，追加：
+
+```bash
 mvn -pl server -am -Dtest='Ohpm*Test' -Dsurefire.failIfNoSpecifiedTests=false test
 mvn -pl compat-test -am -Dtest=OhpmRepositoryBlackBoxCompatibilityTest -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 
-这些命令中的 OHPM 模块和测试类尚待实现，live 测试的实例地址及客户端配置也需在第一阶段确定。合并前运行仓库要求的 server 测试和默认兼容性回归；影响 JDBC 或 native 时追加对应检查。
+`OhpmRepositoryBlackBoxCompatibilityTest` 尚待实现，live 测试的实例地址及配置需随 Hosted 测试入口落地。客户端请求录制测试不代替真实服务端验收。合并前运行仓库要求的 server 测试和默认兼容性回归；影响 JDBC 或 native 时追加对应检查。
 
 关键故障测试包括：鉴权失败无副作用、并发重复发布、tag/删除竞争、blob 成功但数据库失败、HAR/HSP 部分上传失败、缓存陈旧、上游文件校验失败、成员变化和导入中断恢复。
 
-## 实施前待明确项
+## Hosted 阶段的执行顺序
 
-1. 可在本机和 CI 使用的 OHPM 客户端版本、安装方式，以及 HAR/HSP 测试夹具。
-2. 官方协议与设计草案在路径、认证、HSP 流式包、响应码及重试方面是否存在差异。
-3. 通用数据模型能否满足 package 锁定、tag 原子更新及导入恢复；完成验证后再决定是否新增表。
-4. Proxy 的动态下载链接与 group 冲突场景如何保持 metadata 和实际内容一致。
-5. Docker 当前未启动；服务集成测试开始前准备数据库、存储及两个服务实例。
+1. **先确定事务与存储边界。** 验证现有通用 DAO 能否支持 package root 行锁、首次发布竞争、版本唯一性与 tag 原子更新；分别覆盖 MySQL 和 PostgreSQL。核对通用 blob 写入流程在外层事务回滚时的补偿，避免上传成功但数据库失败后留下失控引用。只有现有接口不足时才扩展持久化接口或表。
+2. **接入格式、路由和鉴权。** 增加 OHPM format、hosted recipe、server 依赖和 handler；复用现有 Token，按协议操作映射权限。先验证公开 ping、私有读写拒绝及未实现 stream 的 `404`，确认拒绝请求没有写入副作用。
+3. **打通发布与读取。** 普通 HAR 请求先校验并暂存附件，再通过统一服务写入 component、asset、blob 引用和 package metadata；事务重试可重新打开暂存文件。实现 metadata、下载、条件请求和外部 URL 重写。
+4. **加入 tag 与下架。** 在同一 package 事务边界内维护版本和 tag，兼容当前 DELETE body 与旧版路径选择器，拒绝歧义删除；同步处理 browse 索引、blob 引用和审计。
+5. **完成实际服务验收后提交。** 真实 OHPM 6.0.1 对 kkrepo 执行发布、安装、tag 和下架；补并发、回滚、双实例共享数据库/存储测试，运行项目要求的回归，再提交阶段 2 并更新 Draft PR。
 
-第一阶段已建立协议模块编译、单元测试及 OHPM 6.0.1 客户端请求基线。下一阶段实现 hosted 服务后，开始验证真实 kkrepo 实例的持久化、鉴权和跨实例一致性；历史客户端版本的回归结果需单独记录。
+## 尚待验证与环境准备
+
+1. 当前客户端执行基线为 OHPM 6.0.1；历史版本尚未实际执行，后续按可获取版本补充，不外推兼容性结论。
+2. 官方协议与实际客户端在认证、下架路径、HSP 和 `598` 上的差异已记录在协议兼容性基线中。新增接口须继续核对官方依据。
+3. package root 锁定和 blob 回滚补偿已通过双数据库服务测试；实际 OSS/S3 故障注入仍需另行验证，导入恢复状态在阶段 7 单独验证。
+4. Proxy 动态下载链接、Group 版本冲突及 HAR/HSP 来源一致性在阶段 4、5 固定规则并验证。
+5. 本机 JDK 25 已通过国内镜像准备，Maven 3.9 和 OHPM 6.0.1 已可运行，Docker 已启动。Hosted 测试自动创建两种数据库及共享文件测试存储的双实例，生产云存储验证单独记录。
+
+第一阶段建立协议模块和客户端请求基线；第二阶段增加实际 kkrepo 服务、数据库事务和跨实例验证。历史客户端版本的回归结果需单独记录。
