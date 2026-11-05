@@ -4,6 +4,37 @@ All notable public changes to kkrepo are documented in this file.
 
 This project follows a pragmatic release process. Stable releases call out migration impact, compatibility changes, operational notes, and any known behavior changes in their release section.
 
+## 1.4.0 - 2026-11-05
+
+### Added
+
+- Nexus-compatible ALLOW/BLOCK routing rules with path previews, usage inspection, proxy bindings, and atomic configuration migration. Proxy GET/HEAD enforcement precedes cache and upstream access; groups retain ordered fallback to permitted members. Every replica loads policy at startup and refreshes immutable snapshots in the background. (#454)
+- Minimum release age for Go, Maven, and PyPI proxies extends the existing npm setting. Enabled policies filter indexes and gate direct downloads, including previously cached content, while hosted repositories remain unaffected. (#467)
+- Scoped artifact-scanning readers can enter Admin without global administration. Repository visibility and server-authorized capabilities control navigation and actions; independent waiver grants and built-in scanning privileges support minimal roles. (#466)
+- The scanning UI defaults to current findings and can include historical results. Filtering applies to related artifact and waiver views; existing API defaults remain unchanged. (#440)
+
+### Fixed
+
+- Preserve multiline Galaxy descriptions and Raw first-segment colon paths; apply configured repository URL prefixes to actual routes and generated URLs; derive client provenance consistently from explicitly trusted proxy hops. (#435)
+- Permit deletion of emptied migrated Docker and empty hosted Yum repositories. Docker catalog access honors repository read permission, and generated Docker origins retain externally visible HTTPS proxy information. (#437, #444, #446, #464)
+- Release database connections during Docker upload streaming, storage reads, digest verification, and final blob I/O. Short fenced publication transactions coordinate concurrent append, cancel, completion, and blob-reuse races across replicas. (#462)
+- Serve APT packages stored beneath `dists`, preserve APT settings in Browse directory details, and renew expiring hosted APT metadata without requiring package uploads or configuration edits. (#443, #469, #488)
+- Proxy Raw directory pages with Nexus-compatible behavior, retain missing-file responses across repeated Hugging Face probes, and paginate GitHub tags before Swift SemVer filtering. (#463, #486, #483)
+- Adding optional proxy backups no longer narrows an omitted hosted selection during Nexus migration; explicit hosted selections and explicit-only proxy backups remain supported. (#484)
+
+### Changed
+
+- Refresh Spring Boot, AWS SDK, OSS SDK, zstd-jni, GraalVM build tools, Surefire, and JaCoCo dependencies. (#447, #448, #449, #450, #451, #474, #475, #476, #477, #478)
+- Quickstart defaults, Dockerfile packaging, deployment documentation, Helm application version, runtime checks, and the optional scanner profile now use `1.4.0`.
+
+### Upgrade Notes
+
+- Upgrades from `1.3.4` apply Flyway V60 on MySQL and PostgreSQL. It seeds scanning privileges while preserving existing ID/name collisions and ordinary role assignments; it does not automatically grant scanning access to ordinary users. Back up the relational database and blob store together, allow migrations to complete, and upgrade all replicas before relying on the new scoped Admin entry point.
+- Routing-rule edits and bindings converge through background refresh (30 seconds by default). Startup fails if the initial policy cannot be loaded; subsequent refresh failures retain the last successful snapshot. Complete the rollout before relying on routing enforcement across every replica. No routing-rule schema migration is required.
+- Minimum release age is disabled by default (`0` minutes). Go uses commit time, not publication time; Maven relies on upstream POM `Last-Modified` and exempts SNAPSHOTs; PyPI requires JSON index upload timestamps and returns 502 for unsupported upstreams when enabled. Quarantined direct downloads return 403 for these three formats, while npm retains 404. Consult the minimum-release-age guide before enabling policies.
+- A configured custom repository URL prefix now moves actual routes, rather than only changing displayed URLs. Check reverse-proxy forwarding and client URLs when using a non-default prefix; reserved or ambiguous prefixes prevent startup. Configure trusted proxy hops explicitly for accurate client provenance. Historical uploader addresses are not rewritten.
+- Hosted APT expiration refresh uses the existing durable publication queue and signing configuration; allow background publication to finish before retrying an expired index. Existing migration jobs are not rewritten by the hosted-selection fix; create a new job with the intended selection when needed.
+
 ## 1.3.4 - 2026-10-23
 
 ### Security
