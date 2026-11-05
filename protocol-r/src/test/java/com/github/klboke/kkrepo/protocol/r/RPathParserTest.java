@@ -49,6 +49,24 @@ class RPathParserTest {
   }
 
   @Test
+  void resolvesBrowseCoordinatesWithoutAcceptingMismatchedIdentities() {
+    for (String namespace : java.util.List.of("src/contrib", "bin/windows/contrib/4.5",
+        "bin/macosx/big-sur-arm64/contrib/4.5", "bin/linux/noble-x86_64/4.5/src/contrib")) {
+      String filename = RPathParser.packageFilename(namespace, "demo", "1.0.0");
+      assertEquals(namespace + "/" + filename,
+          parser.parseBrowseProjection(namespace + "/demo/1.0.0/" + filename).normalized());
+    }
+    assertEquals("src/contrib/demo_1.0.0.tar.gz",
+        parser.parseBrowseProjection("demo/1.0.0/demo_1.0.0.tar.gz").normalized());
+    for (String invalid : java.util.List.of("", "demo", "../demo", "src/contrib/demo_1.0.0.tar.gz",
+        "bin/windows/contrib/4.5/other/1.0.0/demo_1.0.0.zip",
+        "bin/windows/contrib/4.5/demo/2.0.0/demo_1.0.0.zip",
+        "bin/windows/contrib/4.5/demo/1.0.0/demo_1.0.0.tgz")) {
+      assertEquals(RPath.Kind.UNKNOWN, parser.parseBrowseProjection(invalid).kind(), invalid);
+    }
+  }
+
+  @Test
   void rejectsAmbiguousAndEncodedPaths() {
     assertEquals(RPath.Kind.UNKNOWN, parser.parse("src/contrib/%2e%2e/secret").kind());
     assertEquals(RPath.Kind.UNKNOWN, parser.parse("src/contrib/a%2fb.tar.gz").kind());

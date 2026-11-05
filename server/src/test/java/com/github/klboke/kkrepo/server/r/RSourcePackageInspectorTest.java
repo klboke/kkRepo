@@ -57,6 +57,34 @@ class RSourcePackageInspectorTest {
   }
 
   @Test
+  void rejectsMissingOversizedAndCorruptZipDescriptions() throws Exception {
+    byte[] oversized = new byte[1024 * 1024 + 1];
+    new java.util.Random(490).nextBytes(oversized);
+    for (List<RTestPackage.Item> entries : List.of(
+        List.of(RTestPackage.Item.directory("demo/")),
+        List.of(RTestPackage.Item.file("demo/DESCRIPTION", "")),
+        List.of(RTestPackage.Item.file("demo/DESCRIPTION", oversized)))) {
+      var failure = assertThrows(MavenExceptions.BadRequestException.class,
+          () -> inspector.inspect(new ByteArrayInputStream(RTestPackage.zip(entries)), "demo_1.0.0.zip"));
+      assertTrue(failure.getMessage().contains("DESCRIPTION"));
+    }
+    byte[] corrupt = RTestPackage.binary("demo", "1.0.0", ".zip");
+    java.nio.ByteBuffer buffer = java.nio.ByteBuffer.wrap(corrupt).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+    boolean changed = false;
+    for (int offset = 0; offset <= corrupt.length - 20; offset++) {
+      if (buffer.getInt(offset) == 0x02014b50) {
+        buffer.putInt(offset + 16, buffer.getInt(offset + 16) ^ 1);
+        changed = true;
+        break;
+      }
+    }
+    assertTrue(changed);
+    var failure = assertThrows(MavenExceptions.BadRequestException.class,
+        () -> inspector.inspect(new ByteArrayInputStream(corrupt), "demo_1.0.0.zip"));
+    assertTrue(failure.getMessage().contains("corrupt entry"));
+  }
+
+  @Test
   void validatesDescriptionIdentityAndPreservesOriginalArchive() throws Exception {
     byte[] bytes = RTestPackage.source("demo", "1.2-3");
 

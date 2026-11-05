@@ -54,10 +54,6 @@ final class RComponentFactory {
         updatedAt == null ? Instant.now() : updatedAt);
   }
 
-  String browsePath(String packageName, String version, String filename) {
-    return browsePath(RService.SOURCE_NAMESPACE, packageName, version, filename);
-  }
-
   String browsePath(String namespace, String packageName, String version, String filename) {
     return namespace + "/" + packageName + "/" + version + "/" + filename;
   }

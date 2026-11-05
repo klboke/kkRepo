@@ -422,6 +422,24 @@ class RServiceTest {
   }
 
   @Test
+  void skipsProxyMembersWithoutTheRequestedBinaryNamespace() {
+    String namespace = "bin/windows/contrib/4.5";
+    RepositoryRuntime member = runtime(2L, RepositoryType.PROXY, "ALLOW", List.of());
+    RepositoryRuntime group = runtime(3L, RepositoryType.GROUP, "ALLOW", List.of(member));
+    String fingerprint = RService.fingerprint(new LinkedHashMap<>(Map.of(member.id(), 0L)));
+    when(proxy.prepareGroupMember(eq(member), eq(namespace), any(Instant.class)))
+        .thenThrow(new MavenExceptions.MavenNotFoundException(namespace + "/PACKAGES.gz"));
+    when(published.find(group.id(), namespace)).thenReturn(Optional.of(new RRegistryDao.Snapshot(
+        group.id(), namespace, 1L, 1,
+        Map.of(namespace + "/PACKAGES.gz", ".r/empty", "@members", fingerprint),
+        "a".repeat(64), Instant.EPOCH)));
+
+    assertEquals(200, service.get(group, namespace + "/PACKAGES.gz", false).status());
+    verify(assets).serve(group, ".r/empty", false);
+    verify(registry, never()).findSuite(member.id(), namespace);
+  }
+
+  @Test
   void validatesRuntimePathNamespaceAndReportsDurableStatus() {
     RepositoryRuntime wrongFormat = new RepositoryRuntime(
         9L, "maven", RepositoryFormat.MAVEN2, RepositoryType.HOSTED, "maven2-hosted",

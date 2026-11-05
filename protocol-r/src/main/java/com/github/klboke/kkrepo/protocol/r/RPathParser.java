@@ -80,6 +80,23 @@ public final class RPathParser {
     return path(RPath.Kind.STATIC, raw, normalized, namespace, filename, null, null);
   }
 
+  public RPath parseBrowseProjection(String rawPath) {
+    RPath browse = parse(rawPath);
+    if (browse.normalized() == null) return unknown(rawPath);
+    String[] segments = browse.normalized().split("/", -1);
+    if (segments.length < 3) return unknown(rawPath);
+    int coordinateOffset = segments.length - 3;
+    String namespace = coordinateOffset == 0 ? SOURCE_NAMESPACE
+        : String.join("/", java.util.Arrays.copyOf(segments, coordinateOffset));
+    RPath candidate = parse(namespace + "/" + segments[coordinateOffset + 2]);
+    if (!candidate.hostedPackage()
+        || !segments[coordinateOffset].equals(candidate.packageName())
+        || !segments[coordinateOffset + 1].equals(candidate.version())) {
+      return unknown(rawPath);
+    }
+    return candidate;
+  }
+
   public static boolean validPackageName(String value) {
     return value != null && value.length() <= 255 && PACKAGE_NAME.matcher(value).matches();
   }

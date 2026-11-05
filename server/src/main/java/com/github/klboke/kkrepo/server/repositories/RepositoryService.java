@@ -950,7 +950,10 @@ public class RepositoryService {
     if (rRegistry == null) return;
     java.time.Instant now = java.time.Instant.now();
     rRegistry.ensureSuite(repositoryId, "src/contrib", now);
-    rRegistry.markSuiteDirty(repositoryId, "src/contrib", now);
+    Set<String> namespaces = new LinkedHashSet<>();
+    namespaces.add("src/contrib");
+    rRegistry.listSuites(repositoryId).forEach(state -> namespaces.add(state.distribution()));
+    namespaces.forEach(namespace -> rRegistry.markSuiteDirty(repositoryId, namespace, now));
   }
 
   private void invalidateRGroupSnapshots(
