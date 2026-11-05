@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="Arch Linux">
+  <rect x="2" y="2" width="20" height="20" rx="4" fill="#1793d1"/>
+  <path d="M12 5.2 6.4 18.8h3.1l1.1-2.7h2.8l1.1 2.7h3.1L12 5.2zm0 4.6 1.2 3.1h-2.4L12 9.8z" fill="#fff"/>
+</svg>

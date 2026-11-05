@@ -86,6 +86,33 @@ class SecurityManagementFilterTest {
     assertEquals(0, chain.calls);
   }
 
+  @ParameterizedTest
+  @CsvSource({
+      "GET,/internal/staging/sessions,nexus:staging:read",
+      "GET,/internal/staging/metrics,nexus:staging:admin",
+      "POST,/internal/staging/sessions,nexus:staging:create",
+      "PATCH,/internal/staging/sessions/1,nexus:staging:create",
+      "POST,/internal/staging/sessions/1/preflight,nexus:staging:promote",
+      "POST,/internal/staging/sessions/1/promote,nexus:staging:promote",
+      "POST,/internal/staging/sessions/1/approve,nexus:staging:promote",
+      "DELETE,/internal/staging/sessions/1/repositories/2,nexus:staging:admin"
+  })
+  void stagingPathsRequireTheirMappedPermission(
+      String method, String path, String permission) throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingSecurityService security =
+        new RecordingSecurityService(AccessDecision.deny("not permitted"));
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter(authentication, security, true).doFilter(request(method, path), response.proxy(), chain);
+
+    assertEquals(permission, security.requestedPermission);
+    assertEquals(403, response.status);
+    assertEquals(0, chain.calls);
+  }
+
   @Test
   void managementFilterRunsAfterSpringSessionRepositoryFilter() {
     Order order = SecurityManagementFilter.class.getAnnotation(Order.class);

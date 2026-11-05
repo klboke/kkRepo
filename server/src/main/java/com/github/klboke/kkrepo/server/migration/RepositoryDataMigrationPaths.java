@@ -74,6 +74,11 @@ final class RepositoryDataMigrationPaths {
       return parsed.kind() == HuggingFacePath.Kind.RESOLVE
           && HuggingFacePathParser.isCommit(parsed.revision());
     }
+    if (format == RepositoryFormat.ARCH) {
+      // Protocol-aware content migration is not implemented yet. Importing raw blobs would create
+      // repositories that look populated but cannot serve their generated metadata correctly.
+      return false;
+    }
     return true;
   }
 

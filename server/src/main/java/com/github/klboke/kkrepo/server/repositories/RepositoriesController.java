@@ -10,6 +10,8 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
 import com.github.klboke.kkrepo.server.apt.AptService;
 import com.github.klboke.kkrepo.server.alpine.AlpineService;
+import com.github.klboke.kkrepo.server.arch.ArchService;
+import com.github.klboke.kkrepo.server.arch.ArchSigningService;
 import com.github.klboke.kkrepo.server.conan.ConanManifestPolicy;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
@@ -51,6 +53,7 @@ public class RepositoriesController {
   private final SecurityManagementService securityService;
   private AptService aptService;
   private AlpineService alpineService;
+  private ArchService archService;
   private RService rService;
   private ConanRegistryDao conanRegistry;
   private ConanManifestPolicy conanManifestPolicy;
@@ -90,6 +93,13 @@ public class RepositoriesController {
   void setAlpineManagement(
       AlpineService alpineService, RepositoryRuntimeRegistry runtimeRegistry) {
     this.alpineService = alpineService;
+    this.runtimeRegistry = runtimeRegistry;
+  }
+
+  @Autowired(required = false)
+  void setArchManagement(
+      ArchService archService, RepositoryRuntimeRegistry runtimeRegistry) {
+    this.archService = archService;
     this.runtimeRegistry = runtimeRegistry;
   }
 
@@ -325,6 +335,58 @@ public class RepositoriesController {
         row.revision(), row.keyFilename(), row.fingerprint(), row.signatureType(), row.createdAt());
   }
 
+  @GetMapping("/{name}/arch/status")
+  public ArchSigningService.KeyStatus archStatus(
+      @PathVariable("name") String name, HttpServletRequest request) {
+    AuthenticatedSubject subject = requireAuthenticated(request);
+    RepositoryView existing = requireArchRepository(name);
+    requireRepositoryAdmin(subject, existing.format(), existing.name(), "read");
+    return arch().keyStatus(archRuntime(name));
+  }
+
+  @PutMapping("/{name}/arch/signing-key")
+  public ArchSigningService.KeyStatus rotateArchSigningKey(
+      @PathVariable("name") String name,
+      @RequestBody ArchSigningKeyRequest body,
+      HttpServletRequest request) {
+    AuthenticatedSubject subject = requireAuthenticated(request);
+    RepositoryView existing = requireArchRepository(name);
+    requireRepositoryAdmin(subject, existing.format(), existing.name(), "edit");
+    if (body == null) {
+      throw new RepositoryValidationException("Arch signing key request is required");
+    }
+    boolean generate = Boolean.TRUE.equals(body.generate());
+    boolean importing = body.privateKey() != null && !body.privateKey().isBlank();
+    if (generate == importing) {
+      throw new RepositoryValidationException(
+          "Provide exactly one of generate=true or an Arch private key");
+    }
+    return generate
+        ? arch().rotateGeneratedKey(archRuntime(name))
+        : arch().rotateKey(archRuntime(name), body.privateKey(), body.passphrase());
+  }
+
+  @GetMapping("/{name}/arch/public-key")
+  public ResponseEntity<byte[]> archPublicKey(
+      @PathVariable("name") String name, HttpServletRequest request) {
+    AuthenticatedSubject subject = requireAuthenticated(request);
+    RepositoryView existing = requireArchRepository(name);
+    requireRepositoryAdmin(subject, existing.format(), existing.name(), "read");
+    var response = arch().publicKey(archRuntime(name), false);
+    try (var input = response.body()) {
+      ResponseEntity.BodyBuilder builder = ResponseEntity.status(response.status())
+          .contentLength(response.contentLength());
+      if (response.contentType() != null) {
+        builder.header("Content-Type", response.contentType());
+      }
+      byte[] bytes = input == null ? new byte[0] : input.readAllBytes();
+      return builder.body(bytes);
+    } catch (java.io.IOException error) {
+      throw new ResponseStatusException(
+          HttpStatus.INTERNAL_SERVER_ERROR, "Unable to read Arch public key", error);
+    }
+  }
+
   @GetMapping("/{name}/alpine/public-key")
   public ResponseEntity<byte[]> alpinePublicKey(
       @PathVariable("name") String name, HttpServletRequest request) {
@@ -391,6 +453,9 @@ public class RepositoriesController {
       String privateKey, String keyFilename, String signatureType, Boolean generate) {
   }
 
+  public record ArchSigningKeyRequest(String privateKey, String passphrase, Boolean generate) {
+  }
+
   private RepositoryView requireAptRepository(String name) {
     RepositoryView view = service.get(name);
     if (view.format() != RepositoryFormat.APT || view.type() == RepositoryType.GROUP) {
@@ -403,6 +468,18 @@ public class RepositoriesController {
     RepositoryView view = service.get(name);
     if (view.format() != RepositoryFormat.ALPINE) {
       throw new RepositoryValidationException("Repository is not an Alpine repository");
+    }
+    return view;
+  }
+
+  private RepositoryView requireArchRepository(String name) {
+    RepositoryView view = service.get(name);
+    if (view.format() != RepositoryFormat.ARCH) {
+      throw new RepositoryValidationException("Repository is not an Arch Linux repository");
+    }
+    if (view.type() == RepositoryType.PROXY) {
+      throw new RepositoryValidationException(
+          "Arch proxy repositories pass through upstream signatures; use a hosted or group repository");
     }
     return view;
   }
@@ -449,6 +526,23 @@ public class RepositoriesController {
   }
 
   private RepositoryRuntime aptRuntime(String name) {
+    if (runtimeRegistry == null) {
+      throw new ResponseStatusException(
+          HttpStatus.SERVICE_UNAVAILABLE, "Repository runtime registry is unavailable");
+    }
+    return runtimeRegistry.resolve(name)
+        .orElseThrow(() -> new RepositoryNotFoundException("Repository not found: " + name));
+  }
+
+  private ArchService arch() {
+    if (archService == null) {
+      throw new ResponseStatusException(
+          HttpStatus.SERVICE_UNAVAILABLE, "Arch Linux repository service is unavailable");
+    }
+    return archService;
+  }
+
+  private RepositoryRuntime archRuntime(String name) {
     if (runtimeRegistry == null) {
       throw new ResponseStatusException(
           HttpStatus.SERVICE_UNAVAILABLE, "Repository runtime registry is unavailable");

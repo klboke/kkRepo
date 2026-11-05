@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.persistence.jdbc.internal;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AlpineRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ArchSigningKeyDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ArtifactChangeDao;
@@ -39,6 +40,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.StagingDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.UiSettingsDao;
@@ -66,6 +68,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
     JsonColumns json = new JsonColumns(new ObjectMapper(), dialect);
     return new DefaultPersistenceStores(
         new JdbcAlpineRegistryDao(jdbc, json, dialect),
+        new JdbcArchSigningKeyDao(jdbc),
         new JdbcAptRegistryDao(jdbc, json, dialect),
         new JdbcAnsibleGalaxyRegistryDao(jdbc, json, dialect),
         new JdbcArtifactChangeDao(jdbc),
@@ -99,6 +102,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
         new JdbcSecurityAuditDao(jdbc, json),
         new JdbcSecurityDao(jdbc, json, dialect),
         new JdbcSecurityScanDao(jdbc, json, dialect),
+        new JdbcStagingDao(jdbc, json),
         new JdbcStorageStatisticsDao(jdbc),
         new JdbcSwiftRegistryDao(jdbc, json, dialect),
         new JdbcTerraformRegistryDao(jdbc),
@@ -107,6 +111,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
 
   private record DefaultPersistenceStores(
       AlpineRegistryDao alpineRegistry,
+      ArchSigningKeyDao archSigningKeys,
       AptRegistryDao aptRegistry,
       AnsibleGalaxyRegistryDao ansibleGalaxyRegistry,
       ArtifactChangeDao artifactChanges,
@@ -140,6 +145,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
       SecurityAuditDao securityAudit,
       SecurityDao security,
       SecurityScanDao securityScanning,
+      StagingDao staging,
       StorageStatisticsDao storageStatistics,
       SwiftRegistryDao swiftRegistry,
       TerraformRegistryDao terraformRegistry,

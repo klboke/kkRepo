@@ -180,6 +180,9 @@ public class SecurityScanCandidateClassifier {
                   .get("rInputSchema")));
       case HUGGINGFACE -> HuggingFaceFileKind.classify(path).modelBinary()
           || HuggingFaceFileKind.classify(path) == HuggingFaceFileKind.SHARD_INDEX;
+      case ARCH -> hasAnySuffix(path, ".pkg.tar.zst", ".pkg.tar.xz", ".pkg.tar.gz",
+          ".pkg.tar.bz2", ".pkg.tar.lz4", ".pkg.tar.lzo", ".pkg.tar.Z")
+          && !hasAnySuffix(path, ".sig") && !path.endsWith(".db") && !path.endsWith(".files");
       case NUGET -> hasAnySuffix(path, ".nupkg") && !hasAnySuffix(path, ".snupkg");
       case RUBYGEMS -> hasAnySuffix(path, ".gem") && !containsAny(kind, "index", "spec");
       case YUM -> hasAnySuffix(path, ".rpm") && !path.contains("/repodata/");

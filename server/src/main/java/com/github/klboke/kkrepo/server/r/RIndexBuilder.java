@@ -83,6 +83,19 @@ final class RIndexBuilder {
     }
   }
 
+  /** Renders the index without publishing a snapshot; used by the staging metadata view. */
+  byte[] render(PackageSource source) {
+    Path compressed = temporary();
+    try {
+      writeIndex(compressed, source);
+      return Files.readAllBytes(compressed);
+    } catch (IOException error) {
+      throw new IllegalStateException("Failed to build R PACKAGES.gz", error);
+    } finally {
+      delete(compressed);
+    }
+  }
+
   private static void writeIndex(Path output, PackageSource source) throws IOException {
     GzipParameters parameters = new GzipParameters();
     parameters.setModificationInstant(Instant.EPOCH);

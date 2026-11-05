@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Staging · kkrepo</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; background: #f6f7f9; color: #18212f; }
+    header { background: #12334d; color: #fff; padding: 14px 24px; display: flex; gap: 18px; align-items: baseline; }
+    header a { color: #b7d8ee; text-decoration: none; }
+    main { padding: 24px; max-width: 1400px; margin: 0 auto; }
+    h1, h2 { margin: 0 0 12px; }
+    section { background: #fff; border: 1px solid #dde3ea; border-radius: 8px; padding: 18px; margin-bottom: 18px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #e8edf2; vertical-align: top; }
+    th { color: #526173; font-weight: 600; }
+    button { border: 1px solid #b9c5d2; background: #fff; border-radius: 5px; padding: 4px 7px; cursor: pointer; margin: 1px; }
+    button.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+    button.danger { border-color: #c74747; color: #b42318; }
+    input[type=text] { border: 1px solid #b9c5d2; border-radius: 5px; padding: 6px; min-width: 220px; }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .muted { color: #667085; }
+    .pill { display: inline-block; padding: 1px 7px; border-radius: 999px; background: #eef2f6; font-size: 12px; }
+    pre { background: #0f1720; color: #d5e5f5; padding: 12px; border-radius: 6px; overflow: auto; max-height: 360px; }
+    .error { color: #b42318; }
+  </style>
+</head>
+<body>
+<header>
+  <strong>kkrepo</strong>
+  <a href="/admin/#admin/repository/repositories">Admin</a>
+  <a href="/browse/">Browse</a>
+  <a href="/admin/staging.html">Staging</a>
+</header>
+<main>
+  <h1>Multi-repository staging</h1>
+  <p class="muted">Create a session, stage content with <code>X-KkRepo-Staging</code>, then preflight and promote.</p>
+
+  <section>
+    <h2>Create session</h2>
+    <div class="row">
+      <input id="session-name" type="text" placeholder="release-2026-10">
+      <input id="session-repos" type="text" placeholder="raw-release,maven-release" size="40">
+      <label><input id="session-approval" type="checkbox"> approval required</label>
+      <button class="primary" id="create-session">Create</button>
+    </div>
+  </section>
+
+  <section>
+    <div class="row" style="justify-content: space-between;">
+      <h2>Sessions</h2>
+      <button id="refresh">Refresh</button>
+    </div>
+    <div id="error" class="error"></div>
+    <table>
+      <thead>
+      <tr><th>ID</th><th>Name</th><th>State</th><th>Owner</th><th>Items</th><th>Expires</th><th>Actions</th></tr>
+      </thead>
+      <tbody id="sessions"></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Details</h2>
+    <pre id="details">Select a session.</pre>
+  </section>
+
+  <section>
+    <h2>Metrics</h2>
+    <pre id="metrics">Loading…</pre>
+  </section>
+</main>
+<script>
+const base = '/internal/staging';
+const $ = (id) => document.getElementById(id);
+const esc = (value) => String(value ?? '').replace(/[&<>"]/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch]));
+
+async function call(method, path, body) {
+  const response = await fetch(base + path, {
+    method,
+    credentials: 'same-origin',
+    headers: body ? {'Content-Type': 'application/json'} : {},
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const text = await response.text();
+  if (!response.ok) throw new Error(response.status + ' ' + (text || response.statusText));
+  return text ? JSON.parse(text) : null;
+}
+
+function render(sessions) {
+  $('sessions').innerHTML = sessions.map((view) => {
+    const s = view.session;
+    const actions = [
+      ['preflight', 'Preflight'],
+      ['approve', 'Approve'],
+      ['promote', 'Promote', 'primary'],
+      ['compensate', 'Compensate'],
+      ['cancel', 'Cancel', 'danger'],
+      ['delete', 'Delete', 'danger'],
+    ].map(([action, label, cls]) =>
+      `<button class="${cls || ''}" data-action="${action}" data-id="${s.id}">${label}</button>`).join('');
+    return `<tr>
+      <td>${s.id}</td>
+      <td>${esc(s.name)}</td>
+      <td><span class="pill">${esc(s.state)}</span></td>
+      <td>${esc(s.ownerUserId)}</td>
+      <td>${view.itemCount}</td>
+      <td>${esc(s.expiresAt || '')}</td>
+      <td>${actions}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="7" class="muted">No sessions.</td></tr>';
+}
+
+async function refresh() {
+  $('error').textContent = '';
+  try {
+    const sessions = await call('GET', '/sessions?limit=100');
+    render(sessions);
+    $('metrics').textContent = JSON.stringify(await call('GET', '/metrics'), null, 2);
+  } catch (error) {
+    $('error').textContent = error.message;
+  }
+}
+
+async function showDetails(id) {
+  try {
+    const [session, items, groups, report] = await Promise.all([
+      call('GET', '/sessions/' + id),
+      call('GET', '/sessions/' + id + '/items'),
+      call('GET', '/sessions/' + id + '/groups').catch(() => []),
+      call('GET', '/sessions/' + id + '/report').catch(() => null),
+    ]);
+    $('details').textContent = JSON.stringify({session, items, groups, report}, null, 2);
+  } catch (error) {
+    $('details').textContent = error.message;
+  }
+}
+
+$('create-session').addEventListener('click', async () => {
+  try {
+    const repositories = $('session-repos').value.split(',').map((v) => v.trim()).filter(Boolean);
+    await call('POST', '/sessions', {
+      name: $('session-name').value.trim(),
+      repositories,
+      approvalRequired: $('session-approval').checked,
+    });
+    await refresh();
+  } catch (error) {
+    $('error').textContent = error.message;
+  }
+});
+
+$('refresh').addEventListener('click', refresh);
+$('sessions').addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-action]');
+  if (!button) return;
+  const id = button.dataset.id;
+  const action = button.dataset.action;
+  try {
+    if (action === 'delete') {
+      await call('DELETE', '/sessions/' + id);
+    } else {
+      await call('POST', '/sessions/' + id + '/' + action);
+    }
+    await refresh();
+    await showDetails(id);
+  } catch (error) {
+    $('error').textContent = error.message;
+  }
+});
+$('sessions').addEventListener('dblclick', (event) => {
+  const row = event.target.closest('tr');
+  if (row) {
+    const button = row.querySelector('button[data-id]');
+    if (button) showDetails(button.dataset.id);
+  }
+});
+refresh();
+</script>
+</body>
+</html>

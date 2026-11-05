@@ -66,6 +66,7 @@ const SEARCH_ROUTE_FORMAT = {
   r: "r",
   huggingface: "huggingface",
   gitlfs: "gitlfs",
+  arch: "arch",
   pypi: "pypi",
   rubygems: "rubygems",
   yum: "yum",
@@ -93,6 +94,7 @@ const FORMAT_ROUTE_SEGMENT = {
   r: "r",
   huggingface: "huggingface",
   gitlfs: "gitlfs",
+  arch: "arch",
   pypi: "pypi",
   rubygems: "rubygems",
   yum: "yum",
@@ -120,6 +122,7 @@ const SEARCH_FORMAT_LABEL = {
   r: "R / CRAN",
   huggingface: "Hugging Face Models",
   gitlfs: "Git LFS",
+  arch: "Arch Linux / Pacman",
   pypi: "PyPI",
   rubygems: "RubyGems",
   yum: "Yum",
@@ -234,6 +237,9 @@ function componentBrowsePath(component) {
   }
   if (format === "huggingface") {
     return [group, name, version].filter(Boolean).join("/");
+  }
+  if (format === "arch") {
+    return name;
   }
   return "";
 }
@@ -805,6 +811,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   r: "r",
   huggingface: "huggingface",
   gitlfs: "gitlfs",
+  arch: "arch",
   go: "go",
   helm: "helm",
   docker: "docker",

@@ -15,7 +15,7 @@ class BrowseRepositoryFormatIconsContractTest {
   private static final List<String> FORMATS = List.of(
       "maven2", "npm", "pypi", "cargo", "pub", "composer", "terraform", "swift",
       "ansiblegalaxy", "conda", "conan", "apt", "alpine", "gitlfs", "huggingface", "go",
-      "helm", "docker", "nuget", "rubygems", "yum", "r", "raw");
+      "helm", "docker", "nuget", "rubygems", "yum", "r", "arch", "raw");
   private static final List<String> SEARCH_FORMATS = List.of(
       "maven2", "npm", "pypi", "docker", "nuget", "go", "helm", "cargo");
 

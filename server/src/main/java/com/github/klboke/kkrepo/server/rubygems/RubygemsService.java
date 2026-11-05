@@ -123,6 +123,14 @@ public class RubygemsService {
     return push(runtime, body, contentType, createdBy, createdByIp);
   }
 
+  UploadPlan planPush(Path gem) throws IOException {
+    GemMetadata metadata = readGemMetadata(gem);
+    return new UploadPlan(gemPath(metadata), metadata.name(), metadata.version(), metadata);
+  }
+
+  record UploadPlan(String gemPath, String name, String version, GemMetadata metadata) {
+  }
+
   public MavenResponse push(
       RepositoryRuntime runtime,
       InputStream body,
@@ -214,6 +222,43 @@ public class RubygemsService {
     byte[] response = gzip(rubyMarshalSpecs(gems));
     writeGeneratedIfHosted(runtime, specsPath(mode), response, GEM_CONTENT_TYPE);
     return bytes(response, GEM_CONTENT_TYPE, headOnly);
+  }
+
+  /** Compact index served from live gems plus staged publications and deletions. */
+  MavenResponse stagedCompactVersions(
+      RepositoryRuntime runtime,
+      List<GemMetadata> staged,
+      Set<String> deletedPaths,
+      boolean headOnly) {
+    ensureHosted(runtime);
+    List<GemMetadata> all = new ArrayList<>(gems(runtime));
+    if (!deletedPaths.isEmpty()) {
+      all.removeIf(gem -> deletedPaths.contains(gemPath(gem)));
+    }
+    all.addAll(staged);
+    byte[] response = compactVersionsBody(byName(all)).getBytes(StandardCharsets.UTF_8);
+    return bytes(response, TEXT_CONTENT_TYPE, headOnly);
+  }
+
+  /** Per-gem info document served from live gems plus staged publications and deletions. */
+  MavenResponse stagedCompactInfo(
+      RepositoryRuntime runtime,
+      String name,
+      List<GemMetadata> staged,
+      Set<String> deletedPaths,
+      boolean headOnly) {
+    ensureHosted(runtime);
+    List<GemMetadata> all = new ArrayList<>(gemsByExactName(runtime, name));
+    if (!deletedPaths.isEmpty()) {
+      all.removeIf(gem -> deletedPaths.contains(gemPath(gem)));
+    }
+    staged.stream().filter(gem -> name.equals(gem.name())).forEach(all::add);
+    if (all.isEmpty()) {
+      throw new MavenExceptions.MavenNotFoundException("info/" + name);
+    }
+    byte[] response = compactInfoBody(sorted(deduplicate(all)))
+        .getBytes(StandardCharsets.UTF_8);
+    return bytes(response, TEXT_CONTENT_TYPE, headOnly);
   }
 
   private MavenResponse compactVersions(RepositoryRuntime runtime, boolean headOnly) {

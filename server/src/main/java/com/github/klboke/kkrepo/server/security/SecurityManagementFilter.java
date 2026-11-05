@@ -111,6 +111,10 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
     if (uri.startsWith("/internal/blob-stores")) {
       return internalBlobStorePermission(method, uri);
     }
+    if (uri.equals("/internal/staging") || uri.startsWith("/internal/staging/")
+        || uri.equals("/service/rest/v1/staging") || uri.startsWith("/service/rest/v1/staging/")) {
+      return stagingPermission(method, uri);
+    }
     if (uri.equals("/internal/ui-settings")) {
       return "GET".equals(method)
           ? Optional.empty()
@@ -197,6 +201,20 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
       return Optional.of("nexus:blobstores:update");
     }
     return Optional.of("nexus:blobstores:" + crudAction(method));
+  }
+
+  private Optional<String> stagingPermission(String method, String uri) {
+    if ("GET".equals(method) || "HEAD".equals(method)) {
+      return Optional.of(uri.endsWith("/metrics")
+          ? "nexus:staging:admin" : "nexus:staging:read");
+    }
+    if ("DELETE".equals(method)) {
+      return Optional.of("nexus:staging:admin");
+    }
+    if (uri.endsWith("/preflight") || uri.endsWith("/promote") || uri.endsWith("/approve")) {
+      return Optional.of("nexus:staging:promote");
+    }
+    return Optional.of("nexus:staging:create");
   }
 
   private Optional<String> internalSecurityPermission(String method, String uri) {

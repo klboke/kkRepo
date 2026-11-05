@@ -313,11 +313,24 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
       case ALPINE -> alpineOperation(path, normalizedMethod);
       case R -> rOperation(path, normalizedMethod);
       case HUGGINGFACE -> huggingFaceOperation(path, normalizedMethod);
+      case ARCH -> archOperation(path, normalizedMethod);
       case GITLFS -> path.equals("info/lfs/objects/batch") ? "gitlfs_batch"
           : path.endsWith("/verify") ? "gitlfs_verify"
           : "PUT".equals(normalizedMethod) ? "gitlfs_upload" : "gitlfs_download";
       case RAW -> rawOperation(normalizedMethod);
     };
+  }
+
+  private static String archOperation(String path, String method) {
+    if (path.endsWith(".db") || path.endsWith(".db.tar.gz") || path.endsWith(".db.tar.xz")
+        || path.endsWith(".db.tar.zst") || path.endsWith(".files")
+        || path.endsWith(".files.tar.gz")) return "arch_database";
+    if (path.endsWith(".sig")) return "arch_signature";
+    if (path.contains(".pkg.tar.")) {
+      return "PUT".equals(method) || "POST".equals(method)
+          ? "arch_package_publish" : "arch_package_download";
+    }
+    return "arch_request";
   }
 
   private static String rOperation(String path, String method) {
