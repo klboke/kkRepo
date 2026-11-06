@@ -368,6 +368,67 @@ public class AnsibleGalaxyService {
     return jsonResponse(body, 200, headOnly, detail.updatedAt());
   }
 
+  /** Version list served from live versions plus staged collection versions. */
+  MavenResponse stagedVersionList(
+      RepositoryRuntime runtime,
+      String namespace,
+      String name,
+      String baseUrl,
+      List<String> stagedVersions,
+      int limit,
+      int offset,
+      boolean headOnly) {
+    java.util.LinkedHashSet<String> merged = new java.util.LinkedHashSet<>();
+    try {
+      merged.addAll(sortedVersionNames(runtime, namespace, name));
+    } catch (AnsibleGalaxyExceptions.NotFound ignored) {
+      // A collection can appear entirely through staging.
+    }
+    merged.addAll(stagedVersions);
+    List<String> all = AnsibleGalaxyVersions.sortDescending(merged);
+    if (all.isEmpty()) {
+      throw new AnsibleGalaxyExceptions.NotFound("Collection not found");
+    }
+    int from = Math.min(offset, all.size());
+    int to = Math.min(all.size(), from + limit);
+    List<Map<String, Object>> data = all.subList(from, to).stream()
+        .map(version -> Map.<String, Object>of(
+            "version", version,
+            "href", versionUrl(baseUrl, namespace, name, version)))
+        .toList();
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("meta", Map.of("count", all.size()));
+    body.put("data", data);
+    body.put("links", Map.of("next", to < all.size()
+        ? clientPaginationPath(versionsUrl(baseUrl, namespace, name), limit, to)
+        : ""));
+    return jsonResponse(body, 200, headOnly, null);
+  }
+
+  /** Version detail for a staged collection, using metadata captured at staging time. */
+  MavenResponse stagedVersionDetail(
+      RepositoryRuntime runtime,
+      String namespace,
+      String name,
+      String version,
+      String baseUrl,
+      String filename,
+      String sha256,
+      long size,
+      Map<String, Object> metadata,
+      Map<String, Object> dependencies,
+      String requiresAnsible,
+      Instant publishedAt,
+      boolean headOnly) {
+    Instant created = publishedAt == null ? Instant.now() : publishedAt;
+    ResolvedVersionMetadata resolved = new ResolvedVersionMetadata(
+        null, runtime.id(), version, filename, sha256, size,
+        metadata == null ? Map.of() : metadata,
+        dependencies == null ? Map.of() : dependencies,
+        requiresAnsible, 0, created, created);
+    return jsonResponse(versionDetail(resolved, baseUrl, namespace, name), 200, headOnly, created);
+  }
+
   private MavenResponse versionListResponse(
       RepositoryRuntime runtime,
       String namespace,

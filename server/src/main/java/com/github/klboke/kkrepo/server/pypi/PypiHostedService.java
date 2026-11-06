@@ -13,6 +13,8 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
@@ -184,6 +186,25 @@ public class PypiHostedService {
     putIfPresent(fields, "summary", metadata.summary());
     putIfPresent(fields, "requires_python", metadata.requiresPython());
     return upload(runtime, fields, asset, null, createdBy, createdByIp);
+  }
+
+  /**
+   * Plans a staged upload from an already buffered package without writing live rows.
+   */
+  UploadPlan planUpload(Path file, String filename, String contentType) throws IOException {
+    PythonPackageMetadata metadata = inspectPackageMetadata(file, filename);
+    String normalizedName = PypiPaths.normalizeName(metadata.name());
+    String packagePath = PypiPaths.packagePath(normalizedName, metadata.version(), filename);
+    return new UploadPlan(
+        packagePath, metadata.name(), metadata.version(), contentType, filename);
+  }
+
+  record UploadPlan(
+      String packagePath,
+      String name,
+      String version,
+      String contentType,
+      String filename) {
   }
 
   public void rebuildRootIndex(
@@ -387,6 +408,62 @@ public class PypiHostedService {
           "Unable to determine PyPI package name/version from " + filename);
     }
     return metadata;
+  }
+
+  private PythonPackageMetadata inspectPackageMetadata(Path file, String filename)
+      throws IOException {
+    PythonPackageMetadata metadata = null;
+    if (filename.endsWith(".whl") || filename.endsWith(".zip")) {
+      metadata = inspectZipMetadata(file);
+    } else if (filename.endsWith(".tar.gz") || filename.endsWith(".tgz")) {
+      metadata = inspectTarGzMetadata(file);
+    }
+    PythonPackageMetadata fallback = metadataFromFilename(filename);
+    metadata = PythonPackageMetadata.merge(metadata, fallback);
+    if (metadata == null || metadata.name() == null || metadata.name().isBlank()
+        || metadata.version() == null || metadata.version().isBlank()) {
+      throw new PypiExceptions.BadRequestException(
+          "Unable to determine PyPI package name/version from " + filename);
+    }
+    return metadata;
+  }
+
+  private PythonPackageMetadata inspectZipMetadata(Path file) throws IOException {
+    try (InputStream raw = Files.newInputStream(file); ZipInputStream zip = new ZipInputStream(raw)) {
+      return inspectZipMetadata(zip);
+    }
+  }
+
+  private PythonPackageMetadata inspectTarGzMetadata(Path file) throws IOException {
+    try (InputStream raw = Files.newInputStream(file);
+        GzipCompressorInputStream gzip = new GzipCompressorInputStream(raw);
+        TarArchiveInputStream tar = new TarArchiveInputStream(gzip)) {
+      return inspectTarGzMetadata(tar);
+    }
+  }
+
+  private PythonPackageMetadata inspectZipMetadata(ZipInputStream zip) throws IOException {
+    ZipEntry entry;
+    while ((entry = zip.getNextEntry()) != null) {
+      if (entry.isDirectory()) continue;
+      String name = entry.getName();
+      if (name.endsWith(".dist-info/METADATA") || name.endsWith("PKG-INFO")) {
+        return metadataFromText(new String(zip.readAllBytes(), StandardCharsets.UTF_8));
+      }
+    }
+    return null;
+  }
+
+  private PythonPackageMetadata inspectTarGzMetadata(TarArchiveInputStream tar) throws IOException {
+    TarArchiveEntry entry;
+    while ((entry = tar.getNextTarEntry()) != null) {
+      if (!entry.isFile()) continue;
+      String name = entry.getName();
+      if (name.endsWith("PKG-INFO") || name.endsWith(".dist-info/METADATA")) {
+        return metadataFromText(new String(tar.readAllBytes(), StandardCharsets.UTF_8));
+      }
+    }
+    return null;
   }
 
   private PythonPackageMetadata inspectZipMetadata(MultipartFile asset) throws IOException {

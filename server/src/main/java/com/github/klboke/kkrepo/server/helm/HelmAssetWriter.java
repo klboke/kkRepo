@@ -412,6 +412,39 @@ class HelmAssetWriter {
       boolean uploaded) {
   }
 
+  /**
+   * Links an already stored content-addressed blob as a published package.
+   *
+   * <p>Staged promotion already holds the blob record (digests, size, object key). Replaying the
+   * chart bytes through {@link #write} would only repeat an object-store read and a full re-hash
+   * while the promotion transaction holds the target repository locks.
+   */
+  Stored linkExistingBlob(
+      RepositoryRuntime runtime,
+      long blobStoreId,
+      String path,
+      AssetBlobRecord blob,
+      HelmChartMetadata metadata,
+      String contentType,
+      String createdBy,
+      String createdByIp) {
+    if (blob == null || blob.id() == null || blob.blobStoreId() != blobStoreId) {
+      throw new IllegalArgumentException(
+          "An existing blob from the repository blob store is required");
+    }
+    Object sha512Value = blob.attributes() == null ? null : blob.attributes().get("sha512");
+    Digests digests = new Digests(
+        blob.md5(), blob.sha1(), blob.sha256(),
+        sha512Value == null ? null : String.valueOf(sha512Value), blob.size());
+    DigestedUpload upload = new DigestedUpload(
+        BlobReferenceCodec.reference(blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size()),
+        digests, null, false);
+    return executePersist(
+        "Link staged Helm asset " + runtime.name() + "/" + path,
+        () -> persist(runtime, blobStoreId, path, upload, contentType, HelmAssetKind.PACKAGE,
+            metadata, Map.of(), Map.of(), createdBy, createdByIp, null));
+  }
+
   private DigestedUpload uploadWithDigests(
       RepositoryRuntime runtime,
       BlobStorage storage,

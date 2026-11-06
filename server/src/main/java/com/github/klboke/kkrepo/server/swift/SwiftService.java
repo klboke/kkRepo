@@ -555,6 +555,32 @@ public class SwiftService {
     }
   }
 
+  /** Release list served from live releases plus staged publications. */
+  MavenResponse stagedReleaseList(
+      RepositoryRuntime runtime,
+      String scope,
+      String name,
+      String baseUrl,
+      List<String> stagedVersions,
+      boolean headOnly) {
+    LinkedHashSet<String> versions = new LinkedHashSet<>(readyVersions(
+        runtime.id(), SwiftScope.key(scope), SwiftPackageName.key(name)));
+    versions.addAll(stagedVersions);
+    if (versions.isEmpty()) {
+      throw new SwiftExceptions.NotFound("Swift package was not found");
+    }
+    SwiftReleaseList body = SwiftReleaseList.available(
+        versions, version -> releaseUrl(baseUrl, scope, name, version));
+    return json(jsonBytes(body), 200, headOnly, null)
+        .withHeader("Content-Version", SwiftMediaTypes.CONTENT_VERSION);
+  }
+
+  /** Serializes a release metadata document assembled from a staged release. */
+  MavenResponse stagedReleaseMetadata(SwiftReleaseMetadata body, boolean headOnly) {
+    return json(jsonBytes(body), 200, headOnly, null)
+        .withHeader("Content-Version", SwiftMediaTypes.CONTENT_VERSION);
+  }
+
   private MavenResponse releaseList(
       RepositoryRuntime runtime, SwiftPath request, String baseUrl, boolean headOnly) {
     RepositoryRuntime snapshot = currentGroupSnapshot(runtime);

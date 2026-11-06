@@ -131,6 +131,22 @@ public class JdbcRepositoryDao implements com.github.klboke.kkrepo.persistence.j
         .findFirst();
   }
 
+  @Override
+  public List<RepositoryRecord> findByIds(java.util.Collection<Long> ids) {
+    if (ids == null || ids.isEmpty()) {
+      return List.of();
+    }
+    List<Long> distinct = ids.stream().filter(java.util.Objects::nonNull).distinct().toList();
+    if (distinct.isEmpty()) {
+      return List.of();
+    }
+    String placeholders = String.join(",", java.util.Collections.nCopies(distinct.size(), "?"));
+    return jdbcTemplate.query(
+        "SELECT * FROM repository WHERE id IN (" + placeholders + ") ORDER BY name",
+        rowMapper,
+        distinct.toArray());
+  }
+
   public Optional<RepositoryRecord> findByName(String name) {
     return jdbcTemplate.query("SELECT * FROM repository WHERE name = ?", rowMapper, name)
         .stream()

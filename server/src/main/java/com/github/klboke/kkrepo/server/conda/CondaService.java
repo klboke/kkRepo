@@ -347,6 +347,30 @@ public class CondaService {
     }
   }
 
+  /** Serves repodata from live packages plus staged publications and deletions. */
+  MavenResponse stagedRepodata(
+      RepositoryRuntime runtime,
+      CondaPath path,
+      List<CondaRegistryDao.PackageRecord> staged,
+      Set<String> deletedFilenames,
+      boolean headOnly) {
+    requireHosted(runtime);
+    List<CondaRegistryDao.PackageRecord> records =
+        new ArrayList<>(registry.listPackages(runtime.id(), path.channel(), path.subdir()));
+    if (deletedFilenames != null && !deletedFilenames.isEmpty()) {
+      records.removeIf(record -> deletedFilenames.contains(record.filename()));
+    }
+    records.addAll(staged);
+    CondaMetadataCodec.Rendered rendered =
+        metadata.renderRepodata(path.subdir(), records, List.of(), path.encoding());
+    return headOnly
+        ? MavenResponse.noBody(
+            200, rendered.body().length, rendered.contentType(), rendered.etag(), null)
+        : MavenResponse.ok(
+            new ByteArrayInputStream(rendered.body()), rendered.body().length,
+            rendered.contentType(), rendered.etag(), null);
+  }
+
   private MavenResponse repodata(
       RepositoryRuntime runtime, CondaPath path, boolean headOnly) {
     if (runtime.isProxy()) {

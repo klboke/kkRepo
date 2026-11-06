@@ -102,6 +102,12 @@ public class DockerAuthService {
     }
     String token = randomToken();
     Instant expiresAt = Instant.now().plusSeconds(tokenTtlSeconds);
+    // Freeze the staging restriction in the bearer itself. The API key may be deleted by a
+    // cancel/rotation before this bearer expires; the bearer must keep targeting the session (or
+    // fail) instead of becoming a live credential of the owner.
+    String stagingSession = authenticated.isEmpty()
+        ? null
+        : authenticationService.stagingSessionOf(subject).orElse(null);
     tokenDao.insert(
         sha256(token),
         authenticated.isEmpty() ? ANONYMOUS_SUBJECT_SOURCE : subject.source(),
@@ -110,6 +116,7 @@ public class DockerAuthService {
         subject.apiKeyId(),
         TokenKind.USER,
         granted.stream().map(Scope::toMap).toList(),
+        stagingSession,
         expiresAt);
     return new TokenView(token, token, tokenTtlSeconds, issuedAt(expiresAt));
   }
@@ -342,8 +349,22 @@ public class DockerAuthService {
           null,
           permissionSubject));
     }
-    return authenticationService.authenticateStoredSubject(
+    Optional<AuthenticatedSubject> restored = authenticationService.authenticateStoredSubject(
         row.subjectSource(), row.subjectUserId(), row.subjectRealmId(), row.subjectApiKeyId());
+    if (restored.isEmpty()) {
+      return restored;
+    }
+    AuthenticatedSubject subject = restored.get();
+    if (row.stagingSession() != null) {
+      // The bearer was minted for a staging session: keep that restriction for the whole token
+      // lifetime, independently of the API key that may have been deleted in the meantime.
+      return Optional.of(subject.withStagingSession(row.stagingSession()));
+    }
+    // A bearer issued before the restriction was persisted can still be resolved from the shared
+    // API-key row while it exists; an ordinary (or unresolvable) key stays ordinary.
+    return Optional.of(authenticationService.stagingSessionOf(subject)
+        .map(subject::withStagingSession)
+        .orElseGet(subject::asOrdinaryApiKey));
   }
 
   public String challenge(String realm, String service) {
