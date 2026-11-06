@@ -7,6 +7,11 @@ on:
         description: Compatibility suite to run
         required: true
         type: string
+      client_protocol:
+        description: Run all client protocols or targeted OHPM acceptance
+        required: false
+        default: all
+        type: string
       runtime:
         description: Candidate runtime packaging
         required: false
@@ -44,6 +49,14 @@ on:
         type: string
   workflow_dispatch:
     inputs:
+      client_protocol:
+        description: Protocol selection for the client-e2e suite
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - ohpm
       suite:
         description: Compatibility suite to run
         required: true
@@ -115,7 +128,7 @@ jobs:
       runtime: ${{ inputs.runtime || 'jvm' }}
       source_sha: ${{ github.sha }}
       artifact_key: ${{ github.event.pull_request.head.sha || github.sha }}
-      include_server_artifact: ${{ inputs.suite == 'client-e2e' || inputs.suite == 'swift' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e')) }}
+      include_server_artifact: ${{ inputs.client_protocol != 'ohpm' && (inputs.suite == 'client-e2e' || inputs.suite == 'swift' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) }}
 
   prepare-swift-images:
     name: Prepare SDK and Swift client images
@@ -136,7 +149,7 @@ jobs:
       )
     uses: ./.github/workflows/prepare-client-e2e.yml
     with:
-      shards: ${{ (inputs.suite == 'swift' || github.event_name == 'schedule') && '["swift"]' || '["core","system","swift"]' }}
+      shards: ${{ inputs.client_protocol == 'ohpm' && '["core"]' || (inputs.suite == 'swift' || github.event_name == 'schedule') && '["swift"]' || '["core","system","swift"]' }}
 
   live-compat:
     name: ${{ (inputs.runtime == 'native' && 'Native Client E2E compatibility') || ((inputs.suite == 'client-e2e' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && 'Client E2E compatibility') || 'Live compatibility' }} (${{ matrix.database }}, ${{ matrix.shard }})
@@ -174,7 +187,7 @@ jobs:
       matrix:
         # Each shard has its own runner, databases and both candidate replicas.
         # HTTP-only suites retain the original two-database matrix.
-        shard: ${{ fromJSON((inputs.runtime == 'native' || inputs.suite == 'client-e2e' || (inputs.suite == '' && github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && '["core","system","swift"]' || '["all"]') }}
+        shard: ${{ fromJSON(inputs.client_protocol == 'ohpm' && '["core"]' || (inputs.runtime == 'native' || inputs.suite == 'client-e2e' || (inputs.suite == '' && github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-client-e2e'))) && '["core","system","swift"]' || '["all"]') }}
         database: [mysql, postgresql]
         include:
           - database: mysql
@@ -187,6 +200,7 @@ jobs:
             secondary-service: kkrepo-postgresql-secondary
     env:
       CLIENT_E2E_SHARD: ${{ matrix.shard }}
+      CLIENT_E2E_TESTS: ${{ inputs.client_protocol == 'ohpm' && 'ohpm' || 'all' }}
       COMPOSE_FILE: docker-compose.compat-postgres.yml
       COMPOSE_PROJECT_NAME: kkrepo-compat
       LIVE_COMPAT_SUITE: ${{ (inputs.runtime == 'native' && 'client-e2e') || inputs.suite || 'client-e2e' }}
@@ -243,8 +257,8 @@ jobs:
           shard: ${{ matrix.shard == 'all' && 'swift' || matrix.shard }}
           cache_epoch: ${{ inputs.client_toolchain_epoch || needs.prepare-swift-images.outputs.cache_epoch }}
 
-      - name: Cache Maven dependencies for Swift HTTP compatibility
-        if: env.LIVE_COMPAT_SUITE == 'client-e2e' && matrix.shard == 'swift'
+      - name: Cache Maven dependencies for HTTP client acceptance
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e' && (matrix.shard == 'swift' || matrix.shard == 'core')
         uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/client-m2
@@ -377,6 +391,23 @@ jobs:
             done
           done
 
+      - name: Configure OHPM Login variant using the same candidate image
+        if: env.LIVE_COMPAT_SUITE == 'client-e2e' && (matrix.shard == 'core' || matrix.shard == 'all')
+        env:
+          OHPM_SECONDARY_SERVICE: ${{ matrix.secondary-service }}
+          OHPM_PRIMARY_SERVICE: ${{ matrix.candidate-service }}
+        run: |
+          override="$RUNNER_TEMP/ohpm-login-compose.json"
+          python3 - "$OHPM_SECONDARY_SERVICE" "$override" <<'PY'
+          import json, pathlib, sys
+          pathlib.Path(sys.argv[2]).write_text(json.dumps({
+              "services": {sys.argv[1]: {"environment": {"KKREPO_OHPM_LOGIN_ENABLED": "true"}}}
+          }))
+          PY
+          docker compose -f "$COMPOSE_FILE" -f "$override" up -d --no-deps "$OHPM_SECONDARY_SERVICE"
+          echo "OHPM_LOGIN_BASE_URL=http://127.0.0.1:18094" >> "$GITHUB_ENV"
+          echo "OHPM_COMPAT_UPSTREAM_BASE_URL=http://$OHPM_PRIMARY_SERVICE:8080" >> "$GITHUB_ENV"
+
       - name: Run client E2E suite
         if: env.LIVE_COMPAT_SUITE == 'client-e2e'
         env:
@@ -440,6 +471,7 @@ jobs:
       always() &&
       !cancelled() &&
       inputs.runtime != 'native' &&
+      inputs.client_protocol != 'ohpm' &&
       (inputs.candidate_server_artifact != '' || needs.build-candidate.result == 'success') &&
       (
         inputs.suite == 'client-e2e' ||

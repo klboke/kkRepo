@@ -180,11 +180,13 @@ const viewHashRoutes = {
   "security-oidc": "#admin/security/oidc",
   "security-anonymous": "#admin/security/anonymous",
   "security-api-keys": "#admin/security/api-keys",
+  "ohpm-login": "#admin/security/ohpm-login",
   "security-scanning": SECURITY_SCAN_ROUTE_BASE,
   "security-audit-log": "#admin/security/audit-log",
   "ui-settings": "#admin/system/ui-settings",
   "nexus-migration": "#admin/migration/nexus",
   "repository-data-migration": "#admin/migration/repository-data",
+  "ohpm-import": "#admin/migration/ohpm",
 };
 
 const hashViewRoutes = {
@@ -209,6 +211,7 @@ const hashViewRoutes = {
   "#admin/security/anonymous": "security-anonymous",
   "#admin/security/api-keys": "security-api-keys",
   "#admin/security/apikeys": "security-api-keys",
+  "#admin/security/ohpm-login": "ohpm-login",
   "#admin/security/artifact-scanning": "security-scanning",
   "#admin/security/scanning": "security-scanning",
   "#admin/security/audit-log": "security-audit-log",
@@ -219,6 +222,7 @@ const hashViewRoutes = {
   "#admin/migration": "nexus-migration",
   "#admin/migration/nexus": "nexus-migration",
   "#admin/migration/repository-data": "repository-data-migration",
+  "#admin/migration/ohpm": "ohpm-import",
 };
 
 const memberTransfer = {
@@ -708,6 +712,7 @@ function setSideGroupOpen(button, open, persist = false) {
 }
 
 function sideGroupForView(view) {
+  if (view === "ohpm-login") view = "security-api-keys";
   const item = Array.from(document.querySelectorAll(".side-item[data-view]"))
     .find((candidate) => candidate.dataset.view === view);
   return item?.closest(".side-group-items")?.dataset.sideGroupItems || "";
@@ -8253,7 +8258,7 @@ function switchView(view, options = {}) {
     item.classList.toggle("is-active", item.id === `${view}-view`);
   });
   document.querySelectorAll(".side-item").forEach((item) => {
-    item.classList.toggle("is-active", item.dataset.view === view);
+    item.classList.toggle("is-active", item.dataset.view === (view === "ohpm-login" ? "security-api-keys" : view));
   });
   updateCurrentSideGroup(view);
   if (view === "blobstores") {
@@ -8288,6 +8293,8 @@ function switchView(view, options = {}) {
   if (view === "security-audit-log") loadAuditLogs(0);
   if (view === "ui-settings") loadUiSettings();
   if (view === "repository-data-migration") loadRepositoryDataMigrationJobs();
+  if (view === "ohpm-import") window.KkOhpmImport.load();
+  if (view === "ohpm-login") window.KkOhpmLogin.load();
   return true;
 }
 

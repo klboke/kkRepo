@@ -475,6 +475,12 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
     }
 
     @Override
+    public String extractTextAtKey(String column, String... parentPath) {
+      return "JSON_UNQUOTE(JSON_EXTRACT(" + column(column) + ", CONCAT('" + path(parentPath)
+          + ".', JSON_QUOTE(?))))";
+    }
+
+    @Override
     public String setBoolean(String column, boolean value, String... path) {
       return "JSON_SET(" + column(column) + ", '" + path(path) + "', " + value + ")";
     }

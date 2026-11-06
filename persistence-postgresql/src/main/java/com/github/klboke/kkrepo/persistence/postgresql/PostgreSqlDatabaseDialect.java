@@ -396,6 +396,11 @@ public final class PostgreSqlDatabaseDialect implements DatabaseDialect {
     }
 
     @Override
+    public String extractTextAtKey(String column, String... parentPath) {
+      return "(" + column(column) + " #> '" + path(parentPath) + "') ->> CAST(? AS text)";
+    }
+
+    @Override
     public String setBoolean(String column, boolean value, String... path) {
       return "jsonb_set(" + column(column) + ", '" + path(path) + "', '"
           + value + "'::jsonb, true)";

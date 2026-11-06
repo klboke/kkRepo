@@ -27,6 +27,15 @@ def verify(root):
                         raise ValueError(f"Duplicate coverage: {runtime}/{database}/{test}")
                     seen.add(test)
                     cleanup = json.loads((directory / f"cleanup-{test}.json").read_text())
+                    if test == "ohpm":
+                        variants = cleanup.get("loginVariants", {})
+                        for login in ("false", "true"):
+                            report = variants.get(login, {})
+                            if (report.get("automaticCleanupRejected") is not True
+                                    or report.get("protocolDeletionVerified") is not True):
+                                raise ValueError(f"Incomplete OHPM cleanup/Login={login}: {runtime}/{database}")
+                        rows.append(f"| {runtime} | {database} | {test} | {int(duration)} |")
+                        continue
                     if test == "gitlfs":
                         if cleanup.get("automaticCleanupRejected") is not True:
                             raise ValueError(f"LFS cleanup must be disabled: {runtime}/{database}")
@@ -43,7 +52,7 @@ def verify(root):
                 raise ValueError(f"Incomplete client coverage: {runtime}/{database}")
     return "\n".join([
         "### Real-client coverage", "",
-        f"Verified {len(rows)} protocol/runtime/database combinations including Cleanup Try Run/Execute, or explicit rejection for Git LFS.", "",
+        f"Verified {len(rows)} protocol/runtime/database combinations including Cleanup Try Run/Execute, explicit rejection for Git LFS, and rejection plus protocol deletion for OHPM with Login off/on.", "",
         "| Runtime | Database | Protocol | Seconds (including cleanup) |", "| --- | --- | --- | ---: |", *rows, "",
     ])
 

@@ -23,6 +23,12 @@
   --format-logo: url("/browse/assets/formats/npm.svg");
 }
 
+.format-logo-ohpm {
+  background: transparent url("/browse/assets/formats/ohpm.png") center / contain no-repeat;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
 .format-logo-pypi {
   --format-color: #3775a9;
   --format-logo: url("/browse/assets/formats/pypi.svg");

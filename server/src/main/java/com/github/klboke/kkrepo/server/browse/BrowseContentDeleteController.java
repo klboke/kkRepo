@@ -3,6 +3,9 @@ package com.github.klboke.kkrepo.server.browse;
 import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.protocol.ohpm.OhpmBrowsePath;
+import com.github.klboke.kkrepo.protocol.ohpm.OhpmException;
+import com.github.klboke.kkrepo.server.ohpm.OhpmHostedService;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AptRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AlpineRegistryDao;
@@ -110,6 +113,14 @@ public class BrowseContentDeleteController {
   private CondaService condaService;
   private HelmGroupIndexCache helmGroupIndexCache;
   private DockerBrowseDeleteService dockerDeleteService;
+  private OhpmHostedService ohpmHosted;
+
+  @Autowired
+  void setOhpmDeleteSupport(RepositoryRuntimeRegistry runtimeRegistry,
+      OhpmHostedService ohpmHosted) {
+    this.runtimeRegistry = runtimeRegistry;
+    this.ohpmHosted = ohpmHosted;
+  }
 
   public BrowseContentDeleteController(
       RepositoryDao repositoryDao,
@@ -394,6 +405,21 @@ public class BrowseContentDeleteController {
     }
     RepositoryRecord target = resolveTargetRepository(
         requested, storagePath, resolvedSourceRepository);
+    if (target.format() == RepositoryFormat.OHPM) {
+      if (target.type() != RepositoryType.HOSTED) {
+        throw new ResponseStatusException(HttpStatus.METHOD_NOT_ALLOWED,
+            "OHPM unpublish requires a hosted repository; use cache invalidation for proxy content");
+      }
+      var runtime = runtimeRegistry.resolveFreshById(target.id())
+          .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Repository not found"));
+      try {
+        int deleted = ohpmHosted.deleteBrowse(runtime, OhpmBrowsePath.parse(publicPath));
+        return new BrowseDeleteResult(requested.name(), target.name(), publicPath, deleted);
+      } catch (OhpmException error) {
+        throw new ResponseStatusException(org.springframework.http.HttpStatusCode.valueOf(error.status()),
+            error.getMessage());
+      }
+    }
     if (target.format() == RepositoryFormat.CONDA
         && target.type() == RepositoryType.HOSTED) {
       return deleteCondaPackage(requested, target, publicPath, condaCoordinate, actorId);
@@ -1016,6 +1042,13 @@ public class BrowseContentDeleteController {
   }
 
   private static String toStoragePath(RepositoryFormat format, String publicPath) {
+    if (format == RepositoryFormat.OHPM) {
+      try {
+        return OhpmBrowsePath.parse(publicPath).storagePath();
+      } catch (IllegalArgumentException invalid) {
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, invalid.getMessage());
+      }
+    }
     if (format == RepositoryFormat.ANSIBLEGALAXY) {
       AnsibleCoordinate coordinate = ansibleCoordinate(publicPath);
       return coordinate == null

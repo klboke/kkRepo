@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.protocol.conan.ConanReference;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.protocol.r.RPathParser;
+import com.github.klboke.kkrepo.protocol.ohpm.OhpmException;
 import com.github.klboke.kkrepo.server.apt.AptService;
 import com.github.klboke.kkrepo.server.alpine.AlpineService;
 import com.github.klboke.kkrepo.server.ansible.AnsibleGalaxyService;
@@ -24,6 +25,9 @@ import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmHostedService;
+import com.github.klboke.kkrepo.server.ohpm.OhpmAccess;
+import com.github.klboke.kkrepo.server.ohpm.OhpmHostedService;
+import com.github.klboke.kkrepo.server.security.ManagementAuditFilter;
 import com.github.klboke.kkrepo.server.pypi.PypiHostedService;
 import com.github.klboke.kkrepo.server.pub.PubHostedService;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
@@ -52,6 +56,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 
 @Service
 public class ComponentUploadService {
@@ -71,6 +77,11 @@ public class ComponentUploadService {
               field("extension", "STRING", "Extension", false, null),
               field("asset", "FILE", "Asset", false, null))),
       singleAsset("npm"),
+      new UploadDefinition("ohpm", false,
+          List.of(field("tag", "STRING", "Distribution tag (defaults to latest)", true, "Publication metadata")),
+          List.of(
+              field("asset", "FILE", "HAR archive or HSP tgz bundle", false, null),
+              field("hsp", "FILE", "HSP file paired with the interface HAR", true, null))),
       singleAsset("pypi"),
       singleAsset("helm"),
       singleAsset("go"),
@@ -174,6 +185,8 @@ public class ComponentUploadService {
   private AptService aptService;
   private AlpineService alpineService;
   private RService rService;
+  private OhpmHostedService ohpmHosted;
+  private OhpmAccess ohpmAccess;
   private final MavenPathParser mavenPathParser = new MavenPathParser();
   private final TerraformPathParser terraformPathParser = new TerraformPathParser();
 
@@ -288,6 +301,12 @@ public class ComponentUploadService {
     this.rService = rService;
   }
 
+  @Autowired
+  void setOhpmSupport(OhpmHostedService ohpmHosted, OhpmAccess ohpmAccess) {
+    this.ohpmHosted = ohpmHosted;
+    this.ohpmAccess = ohpmAccess;
+  }
+
   public UploadDefinition definition(String format) {
     String normalized = normalizeFormat(format);
     return DEFINITIONS.stream()
@@ -318,6 +337,24 @@ public class ComponentUploadService {
       throw new UploadValidationException("Terraform upload requires exactly one archive");
     }
     String format = formatLabel(runtime.format());
+    if (runtime.format() == RepositoryFormat.OHPM) {
+      Set<String> names = new LinkedHashSet<>();
+      for (var entry : rawFiles.entrySet()) {
+        String name = stripFormatPrefix(format, entry.getKey());
+        if (!List.of("asset", "hsp").contains(name) || entry.getValue().size() != 1 || !names.add(name)) {
+          throw new UploadValidationException("OHPM upload requires one HAR and an optional HSP file");
+        }
+      }
+      boolean hasTag = false;
+      for (var entry : rawFields.entrySet()) {
+        if ("tag".equals(stripFormatPrefix(format, entry.getKey()))) {
+          if (hasTag || entry.getValue().length != 1) {
+            throw new UploadValidationException("OHPM upload requires a single distribution tag");
+          }
+          hasTag = true;
+        }
+      }
+    }
     NormalizedUpload upload = normalize(format, rawFields, rawFiles);
     List<String> paths = switch (runtime.format()) {
       case MAVEN2 -> uploadMaven(runtime, upload, createdBy, createdByIp);
@@ -337,6 +374,7 @@ public class ComponentUploadService {
       case ALPINE -> uploadAlpine(runtime, upload, createdBy, createdByIp);
       case R -> uploadR(runtime, upload, createdBy, createdByIp);
       case GITLFS -> throw new UploadValidationException("Git LFS uploads must use the Git LFS Batch/basic API");
+      case OHPM -> uploadOhpm(runtime, upload, createdBy, createdByIp);
       case HUGGINGFACE -> throw new UploadValidationException(
           "Hugging Face Models repositories are proxy-only");
       case DOCKER -> throw new UploadValidationException("Docker hosted upload must use the Docker Registry V2 API");
@@ -368,6 +406,37 @@ public class ComponentUploadService {
     try (InputStream body = asset.file().getInputStream()) {
       return List.of(goHosted.publish(
           runtime, filename, body, createdBy, createdByIp).archivePath());
+    }
+  }
+
+  private List<String> uploadOhpm(RepositoryRuntime runtime, NormalizedUpload upload,
+      String actor, String remoteAddress) throws IOException {
+    if (ohpmHosted == null || ohpmAccess == null) throw new UploadValidationException("OHPM upload is unavailable");
+    if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes context)) {
+      throw new OhpmException(401, "Authentication required");
+    }
+    context.getRequest().setAttribute(ManagementAuditFilter.OPERATION_DETAILS_ATTRIBUTE,
+        Map.of("format", "ohpm", "operation", "management_publish", "repository", runtime.name()));
+    AssetUpload har = asset(upload, "asset", false);
+    AssetUpload hsp = asset(upload, "hsp", true);
+    String filename = originalFilename(har.file());
+    boolean bundle = filename.endsWith(".tgz") || filename.endsWith(".tar.gz");
+    if (bundle && hsp != null || !bundle && !filename.endsWith(".har")
+        || hsp != null && !originalFilename(hsp.file()).endsWith(".hsp")) {
+      throw new UploadValidationException("Upload a HAR and optional HSP, or one HSP tgz bundle");
+    }
+    java.util.function.BiConsumer<com.github.klboke.kkrepo.protocol.ohpm.OhpmPackageId, Boolean> authorize =
+        (packageId, existing) -> {
+          context.getRequest().setAttribute(ManagementAuditFilter.OPERATION_DETAILS_ATTRIBUTE,
+              Map.of("format", "ohpm", "operation", "management_publish", "repository", runtime.name(),
+                  "package", packageId.id()));
+          ohpmAccess.requireManagementPublish(context.getRequest(), runtime.name(), packageId.id(), existing);
+        };
+    try (InputStream harInput = har.file().getInputStream();
+         InputStream hspInput = hsp == null ? null : hsp.file().getInputStream()) {
+      return bundle ? ohpmHosted.publishArchiveBundle(runtime, harInput, upload.fields().get("tag"),
+          actor, remoteAddress, authorize) : ohpmHosted.publishArchives(runtime, harInput, hspInput,
+          upload.fields().get("tag"), actor, remoteAddress, authorize);
     }
   }
 
@@ -926,6 +995,7 @@ public class ComponentUploadService {
     return switch (format) {
       case MAVEN2 -> "maven2";
       case NPM -> "npm";
+      case OHPM -> "ohpm";
       case PYPI -> "pypi";
       case HELM -> "helm";
       case GO -> "go";
