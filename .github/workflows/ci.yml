@@ -88,6 +88,9 @@ jobs:
           java-version: "25"
           cache: maven
       - run: mvn -B -ntp -pl ${{ matrix.module }} -am -Dtest=${{ matrix.test }} -Dsurefire.failIfNoSpecifiedTests=false test
+      - name: Test Docker catalog pagination on PostgreSQL 16
+        if: matrix.database == 'postgresql'
+        run: mvn -B -ntp -pl persistence-postgresql -am -Dkkrepo.test.postgresql.image=postgres:16 -Dtest=DockerRegistryDaoPostgreSqlIntegrationTest#catalogSupportsCursorPagination -Dsurefire.failIfNoSpecifiedTests=false test
 
   server-smoke:
     name: server-smoke (${{ matrix.database }})
