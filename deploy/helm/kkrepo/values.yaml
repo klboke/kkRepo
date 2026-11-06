@@ -59,13 +59,20 @@ encryption:
   credentialSecretKey: credential-secret
   apiKeyPayloadSecretKey: api-key-payload-secret
 
-# Reference an existing Secret containing S3/OSS credentials and any extra app environment values.
+# Reference an existing Secret containing S3/OSS/Azure credentials and any extra app environment values.
+# Azure blob stores using managed or workload identity need no credential Secret at all; grant the
+# identity "Storage Blob Data Contributor" on the container instead. For AKS workload identity set
+# serviceAccount.annotations["azure.workload.identity/client-id"] and
+# podLabels["azure.workload.identity/use"] = "true"; the webhook then projects the AZURE_* variables
+# that the default and workload-identity credential modes read. See docs/en/azure-blob-storage.md.
 extraEnvFrom: []
 extraEnv: []
 extraVolumes: []
 extraVolumeMounts: []
 
 blobStorage:
+  # Object storage (S3/OSS/Azure) is configured per blob store in the admin console or the
+  # /internal/blob-stores API, not here. Only the optional file backend needs a volume.
   file:
     enabled: false
     # File storage is safe with replicas >1 only on a strong-consistency ReadWriteMany volume.

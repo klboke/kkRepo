@@ -390,6 +390,10 @@ HTTPS S3/MinIO 或上游仓库使用内部 CA 时，请参考[自定义 CA 证�
 
 如需使用 EC2 实例角色、EKS Pod Identity 或 IRSA，而不配置静态密钥，请参阅 [S3 凭据与 IAM 角色](s3-credentials.md)。该指南包含 IAM 权限、信任策略、ServiceAccount 配置，以及将已有 Blob Store 切换到 AWS 默认凭据链的方法。
 
+## Azure Blob Storage
+
+如需将 blob 存储在 Azure 存储账户中，请参阅 [Azure Blob Storage Blob Store](azure-blob-storage.md)。Azure Blob Storage 没有 S3 兼容端点，因此使用专用的 `azure` blob store 类型。该指南涵盖 managed identity 与 workload identity、所需的 Azure 角色，以及 block blob 上传语义。
+
 ## 生产部署架构
 
 生产部署建议使用多副本 kkrepo 服务、独立 MySQL 或 PostgreSQL 和 OSS/S3 blob store：

@@ -18,7 +18,9 @@ function form() {
   const context = {
     document: { getElementById: element, querySelectorAll: () => [] },
     updateRequiredMarker() {}, setFieldRequired: (input, required) => { input.required = required; },
-    showToast() {}, openFormModal() {}, isFileBlobStore: store => store.engine === 'file', lowerOrEmpty: value => (value || '').toLowerCase(),
+    showToast() {}, openFormModal() {}, isFileBlobStore: store => store.engine === 'file',
+    isAzureBlobStore: store => (store.engine || '').startsWith('azure'),
+    lowerOrEmpty: value => (value || '').toLowerCase(),
   };
   vm.createContext(context);
   vm.runInContext(`let blobStoreFormMode = 'create'; let editingBlobStoreId = null; let blobStores = [];\n`

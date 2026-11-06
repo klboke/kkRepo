@@ -16,6 +16,7 @@
     <module>core</module>
     <module>storage-s3</module>
     <module>storage-file</module>
+    <module>storage-azure</module>
     <module>cache</module>
     <module>protocol-maven</module>
     <module>protocol-npm</module>
@@ -62,6 +63,7 @@
     <re2j.version>1.8</re2j.version>
     <maven.artifact.version>3.10.0</maven.artifact.version>
     <aws.sdk.version>2.57.7</aws.sdk.version>
+    <azure.sdk.bom.version>1.3.9</azure.sdk.bom.version>
     <commons.compress.version>1.28.0</commons.compress.version>
     <xz.version>1.12</xz.version>
     <zstd.jni.version>1.5.7-25</zstd.jni.version>
@@ -171,6 +173,13 @@
         <scope>import</scope>
       </dependency>
       <dependency>
+        <groupId>com.azure</groupId>
+        <artifactId>azure-sdk-bom</artifactId>
+        <version>${azure.sdk.bom.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
         <groupId>com.github.klboke</groupId>
         <artifactId>kkrepo-core</artifactId>
         <version>${project.version}</version>
@@ -183,6 +192,11 @@
       <dependency>
         <groupId>com.github.klboke</groupId>
         <artifactId>kkrepo-storage-file</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.github.klboke</groupId>
+        <artifactId>kkrepo-storage-azure</artifactId>
         <version>${project.version}</version>
       </dependency>
       <dependency>
