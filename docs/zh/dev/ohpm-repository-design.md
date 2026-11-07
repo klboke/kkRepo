@@ -4,6 +4,8 @@
 
 ## 当前支持状态
 
+用户操作入口见[OHPM 仓库使用指南](../repository-guides/ohpm.md)。下文保留设计依据，具体客户端覆盖和未实现接口以协议基线与验收说明为准。
+
 当前已实现 `ohpm-hosted` 的普通及流式 HAR/HSP 发布、读取、tag 和下架，`ohpm-proxy` 的 metadata 代理与校验下载，以及 `ohpm-group` 的有序合并和来源一致的下载。管理端支持 HAR/HSP/tgz 上传、浏览属性、搜索、协议感知的删除，以及目录/已有仓库独立导入。使用方式与验证边界见 [OHPM Hosted HAR/HSP](ohpm-hosted.md)、[OHPM Proxy](ohpm-proxy.md)、[OHPM Group](ohpm-group.md)、[管理说明](ohpm-management.md) 和 [导入说明](ohpm-import.md)。
 
 默认使用现有 Access Token，另提供默认关闭的[可选签名 Login](ohpm-login.md)。验证基线和设计差异见 [OHPM 协议兼容性基线](ohpm-protocol-baseline.md)，独立服务端、真实客户端及存储验收的命令和边界见[验收说明](ohpm-acceptance.md)。

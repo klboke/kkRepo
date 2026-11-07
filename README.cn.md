@@ -9,11 +9,11 @@
 
 [English](README.md) | **中文**
 
-kkRepo 是一款社区驱动、完全开源的自托管制品仓库，旨在解决 Sonatype Nexus 社区版的各类限制与痛点，为社区提供开放、可靠且可持续演进的制品管理方案。目前已支持 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、APT/Debian、Conan 2、Alpine/APK、R/CRAN、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等制品格式。
+kkRepo 是一款社区驱动、完全开源的自托管制品仓库，旨在解决 Sonatype Nexus 社区版的各类限制与痛点，为社区提供开放、可靠且可持续演进的制品管理方案。目前已支持 Maven、npm、OHPM/HarmonyOS、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、APT/Debian、Conan 2、Alpine/APK、R/CRAN、Hugging Face Models、Git LFS、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等制品格式。
 
 ## 功能特性
 
-- 支持 20+ 种主流仓库格式，覆盖 hosted、proxy 和 group 仓库管理。
+- 支持 24 种仓库格式，各格式的 hosted、proxy 和 group 支持范围有所不同。
 - 支持 AOT 编译运行，约 1 秒启动就绪，内存占用低于 200 MB。
 - Proxy 仓库支持按仓库配置出站 HTTP 或 SOCKS5 网络代理，并支持可选的代理认证和 HTTPS 上游隧道。
 - 支持制品安全扫描，包括 CycloneDX SBOM 生成、已知漏洞匹配、策略与豁免管理，以及可选的下载阻断。
@@ -78,6 +78,7 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 | --- | --- | --- | --- | --- |
 | Maven | hosted / proxy / group | 支持 Maven deploy、PUT 上传和管理台上传 | 支持 | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 | npm | hosted / proxy / group | 支持 `npm publish`、dist-tag 和管理台上传 | 支持 | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
+| OHPM / HarmonyOS | hosted / proxy / group | `ohpm publish`、`ohpm install`、普通/流式 HAR/HSP、tag、下架及 UI/API 上传（[使用指南](docs/zh/repository-guides/ohpm.md)） | 支持包/版本 metadata、校验和、Browse/Search 和 Usage | 支持目录/已有仓库独立导入、dry-run、校验和及断点恢复；不属于 Nexus 迁移格式 |
 | PyPI | hosted / proxy / group | 支持 twine 上传和管理台上传 | 支持 simple index | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 | Go | hosted / proxy / group | 支持 Nexus 兼容的 `<version>.zip` PUT 与 UI/API 上传；Go 客户端可通过同一 group 解析私有 hosted 和公共 proxy module | 支持 | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 | Helm | hosted / proxy / group | 支持 chart push、PUT 上传、有序 group 解析和管理台上传 | 支持 index.yaml 聚合 | 默认迁移 hosted；proxy 可选；group definition 支持迁移 |
@@ -97,6 +98,7 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 | NuGet | hosted / proxy / group | 支持 package push 和管理台上传 | 支持 v3 service index / search | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 | RubyGems | hosted / proxy / group | 支持 gem push/yank 和管理台上传 | 支持 | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 | Yum | hosted / proxy / group | 支持 RPM 上传和管理台上传 | 支持 repodata | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
+| Git LFS | hosted | Git LFS 批量上传/下载、Basic 和 GenericToken（[使用指南](docs/zh/repository-guides/git-lfs.md)） | 支持 OID、大小、校验和、Browse/Search | 验证 OID/大小/校验和数据结构后，支持 Nexus 3.94.x hosted 内容逐对象导入与恢复 |
 | Raw | hosted / proxy / group | 支持 PUT 上传和管理台上传 | 支持 | 默认迁移 hosted；proxy 可作为可选仓库迁移 |
 
 ## 从 Sonatype Nexus Repository 迁移
@@ -116,7 +118,7 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 | 维度 | Sonatype Nexus Repository OSS / Community Edition | kkRepo                                                                                                        |
 | --- | --- |-------------------------------------------------------------------------------------------------------------------|
 | 产品定位 | 通用制品仓库管理平台，功能完整，覆盖大量官方格式和管理能力 | 提供面向迁移的客户端行为、权限模型和 `/repository/<repo>/...` URL 布局兼容，同时采用共享关系数据库、OSS/S3-first、适合多副本部署的架构 |
-| 支持格式 | 官方支持格式更多，具体能力随版本和发行形态变化 | 聚焦常用制品格式，当前支持 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、APT/Debian、Conan 2、Alpine/APK、R/CRAN、Docker/OCI、NuGet、RubyGems、Yum 和 Raw；每个格式以独立 protocol 模块实现，便于按优先级扩展和验证                       |
+| 支持格式 | 官方支持格式更多，具体能力随版本和发行形态变化 | 聚焦常用制品格式，当前支持 Maven、npm、OHPM/HarmonyOS、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、APT/Debian、Conan 2、Alpine/APK、R/CRAN、Hugging Face Models、Git LFS、Docker/OCI、NuGet、RubyGems、Yum 和 Raw；每个格式以独立 protocol 模块实现，便于按优先级扩展和验证                       |
 | 使用限制 | Community Edition 面向个人和小团队，官方限制为最多 40,000 components、100,000 requests/day；超过阈值后会暂停新增 component，直到用量回到限制以下 | 不内置 Community Edition 这类版本授权用量限制；容量边界由所选关系数据库、OSS/S3、运行副本数和部署规格决定，适合按实际业务规模扩容 |
 | 高可用部署 | 开源版适合单实例或基础 Kubernetes 部署；官方 HA deployment 属于 Pro 能力 | 从设计上默认支持多副本：session、认证 ticket、catalog 水位、锁、迁移进度和短生命周期协同状态都落 MySQL 或 PostgreSQL，进程内缓存只作为可重建热缓存 |
 | 稳定性和升级 | 版本边界复杂：3.70.x 是最后支持 OrientDB 的版本；3.71.0 起新安装默认 H2，但 H2 仍是内嵌数据库；Community Edition 到 3.77.0+ 才支持免费使用外部 PostgreSQL；3.88.0 起搜索才完全改为 SQL、替代 Elasticsearch。旧版 OrientDB/Elasticsearch/本地数据目录组合升级窗口重，文件损坏后恢复高度依赖备份、修复任务和人工介入 | 运行时支持 MySQL/PostgreSQL，不依赖 OrientDB 和内嵌 Elasticsearch；核心状态在共享关系数据库，blob 在 OSS/S3/File blob store，缓存和索引均可重建，更适合滚动升级、故障切换和数据恢复 |
@@ -141,7 +143,7 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
 
 ![前台仓库列表](docs/img/img_7.png)
 
-按格式搜索组件，支持 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、APT/Debian、Conan 2、Alpine/APK、R/CRAN、Hugging Face Models、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等仓库类型的制品检索。
+按格式搜索组件，支持 Maven、npm、OHPM/HarmonyOS、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、APT/Debian、Conan 2、Alpine/APK、R/CRAN、Hugging Face Models、Git LFS、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等仓库类型的制品检索。
 
 ![前台制品搜索](docs/img/img.png)
 
@@ -198,13 +200,13 @@ AI agent 和贡献者的开发说明见 [AGENTS.md](AGENTS.md)。
 12. ✅ Hugging Face Models - 已实现 Models-only proxy、commit-pinned metadata/file、服务端 LFS/Xet bridge、真实 Hub/Transformers/Diffusers 客户端、多副本 S3 协同、扫描、Cleanup 与 shape-gated Nexus 迁移（[使用指南](docs/zh/repository-guides/hugging-face-models.md)、[设计说明](docs/zh/dev/hugging-face-models-repository-design.md)、[性能基线](docs/zh/dev/hugging-face-models-performance-baseline.md)）。
 13. ✅ R / CRAN - 已实现 hosted/proxy/group、有界 source package 校验、确定性 `PACKAGES.gz`、延迟校验 proxy、snapshot-bound group、UI/API 上传、Browse/Search、Cleanup、partial-coverage 扫描、shape-gated Nexus 3.94 迁移、R 4.5/4.6 客户端 E2E、双数据库高效索引和可复现 Nexus 性能门禁（[使用指南](docs/zh/repository-guides/r-cran.md)、[设计说明](docs/zh/dev/r-cran-repository-design.md)、[性能基线](docs/zh/dev/r-cran-performance-baseline.md)）。
 14. ✅ Go - 已实现 hosted/proxy/group recipe、Nexus 兼容 module ZIP 发布、官方 path/version/archive 校验、有序 group 聚合、Cleanup、安全扫描、UI/API 上传、迁移、真实 Go 客户端 E2E、Nexus 3.94 黑盒对比和可复现性能基线（[使用指南](docs/zh/repository-guides/go.md)、[性能基线](docs/zh/dev/go-hosted-performance-baseline.md)）。
-15. ohpm / HarmonyOS - 已实现 hosted HAR/HSP 发布、流式上传、校验后入库的 proxy 缓存、有序 group、管理操作与可恢复的独立导入；可选 Login 正在推进（[Hosted 使用说明](docs/zh/dev/ohpm-hosted.md)、[Proxy 使用说明](docs/zh/dev/ohpm-proxy.md)、[Group 使用说明](docs/zh/dev/ohpm-group.md)、[管理说明](docs/zh/dev/ohpm-management.md)、[导入说明](docs/zh/dev/ohpm-import.md)）。
+15. ✅ OHPM / HarmonyOS - 已实现 hosted/proxy/group、普通与流式 HAR/HSP 发布、校验后缓存、UI/API 管理、可恢复独立导入及可选签名登录；真实客户端验收已接入既有 Full E2E 矩阵（[使用指南](docs/zh/repository-guides/ohpm.md)、[签名登录](docs/zh/dev/ohpm-login.md)、[测试覆盖与边界](docs/zh/dev/ohpm-acceptance.md)）。
 16. ✅ Helm group 仓库 - 已实现 hosted、proxy 与嵌套 group member 的配置顺序聚合、首成员优先、持久化 index 缓存、真实 Helm 客户端验证和 Nexus definition 迁移（[使用指南](docs/zh/repository-guides/helm.md)）。
 17. ✅ Git Large File Storage (LFS) - 已实现 hosted、Batch/basic/verify、完整性校验、OSS/S3 流式上传、多副本发布、权限及 Nexus 3.94 shape-gated 迁移；不提供 Git 服务、文件锁或自动 Cleanup（[使用指南](docs/zh/repository-guides/git-lfs.md)、[实现设计](docs/zh/dev/git-lfs-repository-design.md)）。
 18. Eclipse p2 - 规划 Nexus 兼容的 proxy 仓库，覆盖 Eclipse 与 Equinox update site。
 19. CocoaPods - 规划 Nexus 兼容的 proxy 仓库，用于代理 CocoaPods 依赖。
 
-用户和管理端 UI 已暴露的 token 类型包括协议专用 token（`NpmToken`、`CargoToken`、`PubToken`、`NuGetApiKey`、`RubyGemsApiKey`），以及面向 Terraform 服务 URL、Ansible Galaxy 客户端、CI、脚本和自定义 HTTP 客户端的 `GenericToken`；`GenericToken` 适用于能够发送已配置 API-key header 或 bearer token 的调用方。
+用户和管理端 UI 已暴露的 token 类型包括协议专用 token（`NpmToken`、`CargoToken`、`PubToken`、`NuGetApiKey`、`RubyGemsApiKey`），以及面向 Terraform 服务 URL、Ansible Galaxy 客户端、CI、脚本和自定义 HTTP 客户端的 `GenericToken`；`GenericToken` 适用于能够发送已配置 API-key header 或 bearer token 的调用方。 OHPM 客户端使用 `GenericToken` 作为原始 Authorization 值；RSA 签名登录是默认关闭的可选功能。
 
 ## 谁在使用 kkRepo？
 

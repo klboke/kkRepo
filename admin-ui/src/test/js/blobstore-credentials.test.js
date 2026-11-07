@@ -151,3 +151,18 @@ test('Escape dismisses credential help before closing the form and preserves uns
   assert.equal(secondEscape.propagationStopped, false);
   assert.equal(modal.hidden, true, 'Escape must still close the form once the tooltip is hidden');
 });
+
+
+test('native confirmation dialogs retain Escape and Tab above a form modal', () => {
+  const context = vm.createContext({
+    trapFocusInFormModal() { throw new Error('must not trap the native dialog focus'); },
+    activeFormModal() { throw new Error('must not dismiss the underlying form'); }
+  });
+  vm.runInContext(source.slice(source.indexOf('function handleFormModalKeydown(event)'),
+    source.indexOf('const blobStoreS3RequiredFields')), context);
+  for (const key of ['Escape', 'Tab']) {
+    const event = { key, target: { closest: selector => selector === 'dialog[open]' ? {} : null },
+      preventDefault() { throw new Error('must let the native dialog handle the key'); } };
+    assert.equal(context.handleFormModalKeydown(event), true);
+  }
+});

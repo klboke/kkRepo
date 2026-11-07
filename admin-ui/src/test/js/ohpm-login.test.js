@@ -22,25 +22,30 @@ test("private keys and incomplete owners are rejected before submission", () => 
   assert.throws(() => command("Local", "publisher", "x".repeat(16385), true), /public key/);
 });
 
-async function withPage(run, initial = []) {
+async function withPage(run, initial = [], configurationEnabled = true) {
   delete require.cache[require.resolve(modulePath)];
   const { load } = require(modulePath);
   const elements = new Map();
-  for (const name of ["view", "form", "source", "user", "key", "enabled", "configuration", "rows", "empty",
-    "page", "status", "refresh", "previous", "next", "mode", "save", "cancel", "enabled-field"]) {
+  for (const name of ["view", "form", "source", "user", "key", "configuration", "rows", "empty",
+    "create", "form-status", "page-label", "page-size", "notice", "availability", "timing", "table", "pagination", "form-title", "page", "status", "refresh", "previous", "next", "mode", "save", "cancel"]) {
     elements.set(name, {
-      value: "", checked: false, disabled: false, events: {},
+      value: "", checked: false, disabled: false, events: {}, dataset: {},
       addEventListener(event, handler) { this.events[event] = handler; },
-      focus() {},
-      querySelectorAll() { return [...elements.values()]; }
+      focus() { this.focused = true; },
+      querySelectorAll(selector) { return selector === "[data-requires-signed-login]" ? [] : [...elements.values()]; }
     });
   }
-  const originals = Object.fromEntries(["document", "fetch", "escapeHtml", "responseErrorMessage", "kkrepoConfirmDelete"]
+  const originals = Object.fromEntries(["document", "fetch", "escapeHtml", "responseErrorMessage", "kkrepoConfirmDelete", "openFormModal", "closeFormModal", "bindFormModalDismiss", "KkUserPicker"]
     .map((name) => [name, global[name]]));
   global.document = { getElementById: (id) => elements.get(id.replace("ohpm-login-", "")) };
   global.escapeHtml = (text) => String(text).replaceAll("<", "&lt;").replaceAll(">", "&gt;");
   global.responseErrorMessage = async () => "Administrator permission required";
-  const state = { records: structuredClone(initial), denied: false, confirm: true };
+  const state = { records: structuredClone(initial), denied: false, confirm: true, configurationEnabled };
+  elements.get("form").hidden = true;
+  global.openFormModal = () => { elements.get("form").hidden = false; };
+  global.closeFormModal = () => { elements.get("form").hidden = true; };
+  global.bindFormModalDismiss = (id, handler) => { state.dismiss = handler; };
+  global.KkUserPicker = { create: () => ({ open() {}, close() {}, sync() {}, validate: () => state.ownerValid !== false }) };
   const calls = [], confirmations = [];
   global.kkrepoConfirmDelete = async (options) => { confirmations.push(options); return state.confirm; };
   global.fetch = async (path, options) => {
@@ -60,7 +65,7 @@ async function withPage(run, initial = []) {
     }
     return { ok: true, status: 200, json: async () => path.includes("/keys?")
       ? state.records.slice(Number(path.split("offset=")[1]), Number(path.split("offset=")[1]) + 100)
-      : { enabled: false, tokenTtlSeconds: 300, timestampToleranceSeconds: 300 } };
+      : { enabled: state.configurationEnabled, tokenTtlSeconds: 300, timestampToleranceSeconds: 300 } };
   };
   try {
     await load();
@@ -82,24 +87,31 @@ const binding = { source: "Local", userId: "publisher", enabled: true,
 const { publicKey: replacement } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
 const replacementPem = replacement.export({ type: "spki", format: "pem" });
 
-test("management feedback distinguishes loading, saving, enabling, errors and deletion", async () => {
+test("registration enables new keys and management can disable and delete them", async () => {
   await withPage(async ({ elements, state, calls, click, submit }) => {
-    assert.match(elements.get("configuration").textContent, /disabled/);
-    assert.match(elements.get("configuration").textContent, /cannot authenticate/);
-    assert.equal(elements.get("status").textContent, "Signing keys loaded.");
+    assert.match(elements.get("configuration").textContent, /enabled/);
+    assert.match(elements.get("availability").textContent, /can authenticate/);
+    assert.equal(elements.get("status").textContent, "");
+    assert.equal(elements.get("pagination").hidden, true);
+    assert.equal(elements.get("table").hidden, true);
     assert.equal(elements.get("next").disabled, true);
+    elements.get("create").events.click();
     elements.get("source").value = "Local";
     elements.get("user").value = "<publisher>";
     elements.get("key").value = replacementPem;
     await submit();
     assert.equal(elements.get("status").textContent, "Public key saved.");
     assert.equal(elements.get("key").value, "");
+    assert.equal(elements.get("pagination").hidden, false);
+    assert.equal(elements.get("table").hidden, false);
     assert.match(elements.get("rows").innerHTML, /&lt;publisher&gt;/);
     assert.doesNotMatch(elements.get("rows").innerHTML, /BEGIN PUBLIC KEY/);
-    await click("toggle");
     assert.equal(state.records[0].enabled, true);
-    assert.match(elements.get("rows").innerHTML, /Login unavailable/);
-    assert.deepEqual(JSON.parse(calls.find((call) => call.path.endsWith("/enabled")).body), { enabled: true });
+    assert.equal(JSON.parse(calls.find((call) => call.method === "PUT" && call.path.endsWith("/keys")).body).enabled, true);
+    assert.match(elements.get("rows").innerHTML, /Key enabled/);
+    await click("toggle");
+    assert.equal(state.records[0].enabled, false);
+    assert.deepEqual(JSON.parse(calls.find((call) => call.path.endsWith("/enabled")).body), { enabled: false });
     state.denied = true;
     await click("delete");
     assert.match(elements.get("status").textContent, /Administrator permission required/);
@@ -110,6 +122,7 @@ test("management feedback distinguishes loading, saving, enabling, errors and de
     assert.equal(state.records.length, 0);
     assert.equal(elements.get("status").textContent, "Signing key deleted.");
     assert.equal(elements.get("empty").hidden, false);
+    assert.equal(elements.get("pagination").hidden, true);
     assert.ok(calls.some((call) => call.method === "DELETE" && call.path.endsWith("/keys/publisher-id")));
   });
 });
@@ -118,7 +131,7 @@ test("fresh form rotation preserves an enabled owner's state, including owners o
   const firstPage = Array.from({ length: 100 }, (_, index) => ({ ...binding, userId: `other-${index}`,
     publishId: `other-id-${index}` }));
   await withPage(async ({ elements, state, calls, confirmations, submit }) => {
-    assert.equal(elements.get("enabled").checked, false);
+    elements.get("create").events.click();
     elements.get("user").value = binding.userId;
     elements.get("key").value = replacementPem;
     await submit();
@@ -139,15 +152,13 @@ test("selected rotation locks the owner and does not send a stale enabled state"
     await click("rotate");
     assert.equal(elements.get("source").readOnly, true);
     assert.equal(elements.get("user").value, binding.userId);
-    assert.equal(elements.get("enabled-field").hidden, true);
-    assert.equal(elements.get("enabled").checked, true);
     state.records[0].enabled = false;
     elements.get("key").value = replacementPem;
     await submit();
     assert.equal(state.records[0].enabled, false);
     assert.equal("enabled" in JSON.parse(calls.find((call) => call.method === "PUT").body), false);
     assert.equal(elements.get("user").readOnly, false);
-    assert.equal(elements.get("cancel").hidden, true);
+    assert.equal(elements.get("form").hidden, true);
   }, [binding]);
 });
 
@@ -182,6 +193,134 @@ test("cancelling rotation keeps the PEM and never submits a mutation", async () 
     assert.equal(calls.filter((call) => call.method !== "GET").length, 0);
     elements.get("cancel").events.click();
     assert.equal(elements.get("key").value, "");
-    assert.equal(elements.get("enabled-field").hidden, false);
+    assert.equal(elements.get("pagination").hidden, false);
+    assert.equal(elements.get("table").hidden, false);
   }, [binding]);
+});
+
+
+test("deleting the last key on a later page returns to the first page", async () => {
+  const records = Array.from({ length: 11 }, (_, index) => ({ ...binding,
+    userId: `publisher-${index}`, publishId: `key-${index}` }));
+  await withPage(async ({ elements, click, state }) => {
+    await elements.get("next").events.click();
+    assert.equal(elements.get("page").textContent, "11–11");
+    await click("delete");
+    assert.equal(state.records.length, 10);
+    assert.equal(elements.get("page").textContent, "1–10");
+    assert.equal(elements.get("previous").disabled, true);
+    assert.equal(elements.get("empty").hidden, true);
+    assert.equal(elements.get("status").textContent, "Signing key deleted.");
+  }, records);
+});
+
+
+test("page size changes reset the page and exact full pages disable Next", async () => {
+  const records = Array.from({ length: 100 }, (_, index) => ({ ...binding, publishId: `key-${index}` }));
+  await withPage(async ({ elements }) => {
+    assert.equal(elements.get("page").textContent, "1–10");
+    assert.equal(elements.get("page-label").textContent, "Page 1");
+    await elements.get("next").events.click();
+    assert.equal(elements.get("page").textContent, "11–20");
+    assert.equal(elements.get("page-label").textContent, "Page 2");
+    elements.get("page-size").value = "25";
+    await elements.get("page-size").events.change();
+    assert.equal(elements.get("page").textContent, "1–25");
+    assert.equal(elements.get("previous").disabled, true);
+    for (let index = 0; index < 3; index++) await elements.get("next").events.click();
+    assert.equal(elements.get("page").textContent, "76–100");
+    assert.equal(elements.get("next").disabled, true);
+    elements.get("page-size").value = "100";
+    await elements.get("page-size").events.change();
+    assert.equal(elements.get("page").textContent, "1–100");
+    assert.equal(elements.get("next").disabled, true);
+  }, records);
+});
+
+test("100-row pages detect additional keys and failed navigation preserves the visible page", async () => {
+  const records = Array.from({ length: 101 }, (_, index) => ({ ...binding, publishId: `key-${index}` }));
+  await withPage(async ({ elements, state }) => {
+    elements.get("page-size").value = "100";
+    await elements.get("page-size").events.change();
+    assert.equal(elements.get("next").disabled, false);
+    state.denied = true;
+    await elements.get("next").events.click();
+    assert.equal(elements.get("page").textContent, "1–100");
+    state.denied = false;
+    await elements.get("next").events.click();
+    assert.equal(elements.get("page").textContent, "101–101");
+    assert.equal(elements.get("next").disabled, true);
+    await elements.get("previous").events.click();
+    assert.equal(elements.get("page").textContent, "1–100");
+  }, records);
+});
+
+test("the shared modal keeps failed submissions open and dismissal clears drafts", async () => {
+  await withPage(async ({ elements, state, calls, submit }) => {
+    assert.equal(elements.get("form").hidden, true);
+    elements.get("create").events.click();
+    assert.equal(elements.get("form").hidden, false);
+    elements.get("user").value = "publisher";
+    elements.get("key").value = replacementPem;
+    state.denied = true;
+    await submit();
+    assert.equal(elements.get("form").hidden, false);
+    assert.equal(elements.get("key").value, replacementPem);
+    assert.match(elements.get("form-status").textContent, /permission required/);
+    state.dismiss();
+    assert.equal(elements.get("create").focused, true);
+    assert.equal(elements.get("form").hidden, true);
+    assert.equal(elements.get("key").value, "");
+    assert.equal(calls.filter((call) => call.method !== "GET").length, 0);
+    state.denied = false;
+    elements.get("create").events.click();
+    elements.get("user").value = "publisher";
+    elements.get("key").value = replacementPem;
+    await submit();
+    assert.equal(elements.get("form").hidden, true);
+    assert.equal(elements.get("status").textContent, "Public key saved.");
+  });
+});
+
+
+test("disabled signed login blocks creation, rotation and enabling while allowing revocation", async () => {
+  await withPage(async ({ elements, state, calls, click, submit, load }) => {
+    assert.equal(elements.get("create").disabled, true);
+    assert.equal(elements.get("notice").hidden, false);
+    assert.equal(elements.get("save").disabled, true);
+    assert.match(elements.get("rows").innerHTML, /data-requires-signed-login disabled/);
+    elements.get("create").events.click();
+    assert.equal(elements.get("form").hidden, true);
+    await click("rotate");
+    assert.equal(elements.get("form").hidden, true);
+    await click("toggle");
+    await submit();
+    assert.equal(calls.filter((call) => call.method !== "GET").length, 0);
+    state.configurationEnabled = true;
+    await load();
+    assert.equal(elements.get("create").disabled, false);
+    assert.equal(elements.get("notice").hidden, true);
+    await click("toggle");
+    assert.equal(state.records[0].enabled, true);
+    state.configurationEnabled = false;
+    await load();
+    assert.equal(elements.get("create").disabled, true);
+    assert.equal(elements.get("notice").hidden, false);
+    await click("toggle");
+    assert.equal(state.records[0].enabled, false);
+    await click("delete");
+    assert.equal(state.records.length, 0);
+    assert.equal(elements.get("create").disabled, true);
+    assert.equal(elements.get("notice").hidden, false);
+  }, [{ ...binding, enabled: false }], false);
+});
+
+test("an unselected owner never submits a signing key", async () => {
+  await withPage(async ({ elements, state, calls, submit }) => {
+    elements.get("create").events.click();
+    state.ownerValid = false;
+    elements.get("key").value = replacementPem;
+    await submit();
+    assert.equal(calls.filter((call) => call.method === "PUT").length, 0);
+  });
 });

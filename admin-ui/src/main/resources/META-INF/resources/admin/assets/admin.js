@@ -356,6 +356,8 @@ function trapFocusInFormModal(event) {
 }
 
 function handleFormModalKeydown(event) {
+  // A native confirmation dialog owns keyboard input above the form modal.
+  if (event.target?.closest?.("dialog[open]")) return true;
   if (event.key === "Tab") {
     return trapFocusInFormModal(event);
   }
@@ -4610,37 +4612,44 @@ function renderSecurityApiKeys() {
       <td>${escapeHtml(key.ownerSource)}/${escapeHtml(key.ownerUserId)}</td>
       <td><span class="state-badge compact ${key.status === "ACTIVE" ? "ok" : "warn"}">${escapeHtml(key.status || "")}</span></td>
       <td><code>${escapeHtml(key.tokenPrefix || "")}</code></td>
-      <td>${escapeHtml((key.scopes || []).join(", "))}</td>
       <td class="actions-column"><button class="row-action delete-security-api-key-button" data-id="${key.id}" type="button">delete</button></td>
     </tr>
   `).join("");
   document.getElementById("security-api-key-table").innerHTML = rows
-    || '<tr><td colspan="6" class="placeholder">No API keys.</td></tr>';
+    || '<tr><td colspan="5" class="placeholder">No API keys.</td></tr>';
 }
 
+let apiKeyOwnerPicker;
+
 function showSecurityApiKeyForm() {
+  apiKeyOwnerPicker ||= window.KkUserPicker.create({
+    source: document.getElementById("security-api-key-owner-source"),
+    user: document.getElementById("security-api-key-owner-user-id"),
+    status: document.getElementById("security-api-key-owner-status")
+  });
   document.getElementById("security-api-key-domain").value = "NpmToken";
   document.getElementById("security-api-key-owner-source").value = "Local";
   document.getElementById("security-api-key-owner-user-id").value = "";
   document.getElementById("security-api-key-display-name").value = "";
-  document.getElementById("security-api-key-scopes").value = "";
   clearRequiredFieldErrors(securityApiKeyRequiredFields);
-  openFormModal("security-api-key-form", "security-api-key-owner-user-id");
+  apiKeyOwnerPicker.open();
+  openFormModal("security-api-key-form", "security-api-key-domain");
 }
 
 function hideSecurityApiKeyForm() {
+  apiKeyOwnerPicker?.close();
   closeFormModal("security-api-key-form");
   clearRequiredFieldErrors(securityApiKeyRequiredFields);
 }
 
 async function saveSecurityApiKey() {
+  if (!apiKeyOwnerPicker?.validate()) return;
   if (!validateRequiredFields(securityApiKeyRequiredFields)) return;
   const payload = {
     domain: document.getElementById("security-api-key-domain").value.trim() || "NpmToken",
     ownerSource: document.getElementById("security-api-key-owner-source").value.trim() || "Local",
     ownerUserId: document.getElementById("security-api-key-owner-user-id").value.trim(),
-    displayName: document.getElementById("security-api-key-display-name").value.trim() || null,
-    scopes: commaList(document.getElementById("security-api-key-scopes").value)
+    displayName: document.getElementById("security-api-key-display-name").value.trim() || null
   };
   try {
     const response = await fetch("/internal/security/api-keys", {

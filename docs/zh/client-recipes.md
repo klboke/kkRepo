@@ -100,6 +100,25 @@ scope 包配置：
 
 可以用 `npm whoami --registry=...` 验证凭据。
 
+## OHPM / HarmonyOS
+
+使用 hosted 发布私有包，使用 group 安装依赖。在 **Admin → Security → Keys & Tokens → API Tokens** 为已有用户创建 `GenericToken`，并给该用户分配所需仓库权限。此流程无需登记公钥。
+
+```ini
+# .ohpmrc：替换占位符，不要将真实 Token 提交到代码仓库。
+registry=https://repo.example.com/repository/ohpm-all/
+publish_registry=https://repo.example.com/repository/ohpm-hosted/
+//repo.example.com/repository/ohpm-all/:_auth=<GenericToken>
+//repo.example.com/repository/ohpm-hosted/:_auth=<GenericToken>
+```
+
+```bash
+ohpm publish ./example.har
+ohpm install @scope/example@1.0.0
+```
+
+OHPM 将 Token 作为原始 `Authorization` 值发送，不加 `Bearer ` 前缀。Proxy/group 只读。上游配置、HSP、权限、导入与可选签名登录见 [OHPM 仓库使用指南](repository-guides/ohpm.md)。
+
 ## PyPI
 
 `pip.conf`：

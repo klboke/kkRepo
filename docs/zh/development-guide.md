@@ -178,10 +178,13 @@ Pull Request 上的 `run-client-e2e` 用于验证默认 JVM 候选镜像。Sprin
 
 Swift 的生产加固证据拆分为独立 lane：定时 S3-compatible resilience job 使用双副本、PostgreSQL 和通过 AWS S3 adapter 访问的 RustFS，验证 lease takeover、429/5xx stale 行为、restart、大 package 和破坏式备份恢复；阿里云 OSS Native 仍是 adapter contract 覆盖，不声称真实 endpoint E2E。迁移 workflow 使用 Nexus 3.94 H2 源到 MySQL，以及 PostgreSQL 源到 MySQL/PostgreSQL 目标的 lane，并验证 source profile/proxy credential fail closed、restart/resume、checksum 和幂等性。
 
+OHPM 真实客户端测试已纳入既有 Full E2E `core` 分片，运行 JVM/Native × MySQL/PostgreSQL。未指定 `OHPM_COMMAND` 时安装固定的 OHPM 5.0.2，使用同一镜像的 Login 关闭/开启候选实例，验证 HAR/HSP 发布、hosted/proxy/group 安装及显式下架；不表示支持自动清理或漏洞扫描。参考基线是华为协议与真实 OHPM 客户端，而非 Nexus。环境准备、报告和定向执行见[OHPM 验收与 CI](dev/ohpm-acceptance.md)。
+
 ## 开发设计文档
 
 仓库格式和迁移工作的详细设计、实现计划集中放在 `docs/zh/dev/`：
 
+- [OHPM 仓库使用指南](repository-guides/ohpm.md)、[协议基线](dev/ohpm-protocol-baseline.md)、[签名登录](dev/ohpm-login.md)和[验收/CI](dev/ohpm-acceptance.md)
 - [Docker 仓库实现说明](dev/docker-repository-implementation-plan.md)
 - [Cargo / Rust 仓库开发设计说明](dev/cargo-rust-repository-design.md)
 - [Dart / Pub 仓库开发设计说明](dev/dart-pub-repository-design.md)

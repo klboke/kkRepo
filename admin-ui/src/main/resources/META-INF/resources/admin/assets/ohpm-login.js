@@ -2,8 +2,11 @@
   "use strict";
   const api = "/internal/ohpm/login";
   const el = (name) => document.getElementById(`ohpm-login-${name}`);
-  let initialized = false, busy = false, offset = 0, keys = [];
-  let selectedKey = null;
+  let initialized = false, busy = false, offset = 0, pageSize = 10, hasNext = false, keys = [];
+  let returnFocus = null;
+  let signedLoginEnabled = false;
+  const unavailable = "Enable signed login in the server configuration before creating, rotating or enabling keys.";
+  let selectedKey = null, ownerPicker;
 
   async function request(path, method = "GET", body) {
     const response = await fetch(path, {
@@ -26,22 +29,45 @@
     return { source, userId, publicKey, enabled };
   }
 
-  async function refresh() {
+  async function refresh(nextOffset = offset, nextPageSize = pageSize) {
+    signedLoginEnabled = false;
     const configuration = await request(api);
-    el("configuration").textContent = `Signed login is ${configuration.enabled ? "enabled" : "disabled"} on this server. `
-      + (configuration.enabled ? "" : "Preconfigured keys cannot authenticate until signed login is enabled. ")
-      + `Token lifetime: ${configuration.tokenTtlSeconds}s. Timestamp tolerance: ${configuration.timestampToleranceSeconds}s.`;
-    keys = await request(`${api}/keys?offset=${offset}`);
+    signedLoginEnabled = configuration.enabled === true;
+    el("notice").hidden = signedLoginEnabled;
+    el("notice").dataset.state = configuration.enabled ? "enabled" : "disabled";
+    el("configuration").textContent = configuration.enabled
+      ? "Signed login is enabled on this server." : "Signed login is disabled on this server.";
+    el("availability").textContent = configuration.enabled
+      ? "Enabled keys can authenticate signed publication."
+      : "Enable signed login in the server configuration on every replica to create, rotate or enable keys. Existing keys cannot authenticate while it is disabled.";
+    el("timing").textContent = `Token lifetime: ${configuration.tokenTtlSeconds}s. Timestamp tolerance: ${configuration.timestampToleranceSeconds}s.`;
+    let batch = await request(`${api}/keys?offset=${nextOffset}`);
+    if (batch.length === 0 && nextOffset > 0) {
+      nextOffset = 0;
+      batch = await request(`${api}/keys?offset=0`);
+    }
+    // The existing endpoint returns at most 100 keys. Only the 100-row view
+    // needs a second bounded read to distinguish a full final page.
+    const next = batch.length > nextPageSize || (nextPageSize === 100 && batch.length === 100
+      && (await request(`${api}/keys?offset=${nextOffset + 100}`)).length > 0);
+    offset = nextOffset;
+    pageSize = nextPageSize;
+    hasNext = next;
+    keys = batch.slice(0, pageSize);
+    const disabled = signedLoginEnabled ? "" : `disabled title="${unavailable}"`;
     el("rows").innerHTML = keys.map((key, index) => `<tr>
       <td>${escapeHtml(key.source)} / ${escapeHtml(key.userId)}</td>
       <td><code>${escapeHtml(key.publishId)}</code></td><td><code>${escapeHtml(key.fingerprint)}</code></td>
-      <td>${key.enabled ? (configuration.enabled ? "Key enabled" : "Key enabled · Login unavailable") : "Key disabled"}</td><td>
-      <button type="button" class="create-button secondary" data-key-action="rotate" data-index="${index}">Rotate</button>
-      <button type="button" class="create-button secondary" data-key-action="toggle" data-index="${index}">${key.enabled ? "Disable" : "Enable"}</button>
+      <td>${key.enabled ? (configuration.enabled ? "Key enabled" : "Key enabled · Login unavailable") : "Key disabled"}</td><td><div class="credentials-key-actions">
+      <button type="button" class="create-button secondary" data-key-action="rotate" data-index="${index}" data-requires-signed-login ${disabled}>Rotate</button>
+      <button type="button" class="create-button secondary" data-key-action="toggle" data-index="${index}" ${key.enabled ? "" : `data-requires-signed-login ${disabled}`}>${key.enabled ? "Disable" : "Enable"}</button>
       <button type="button" class="create-button secondary" data-key-action="delete" data-index="${index}">Delete</button>
-      </td></tr>`).join("");
+      </div></td></tr>`).join("");
     el("empty").hidden = keys.length !== 0;
-    el("page").textContent = `Keys ${keys.length ? offset + 1 : 0}–${offset + keys.length}`;
+    el("table").hidden = keys.length === 0;
+    el("pagination").hidden = offset === 0 && keys.length === 0;
+    el("page").textContent = `${keys.length ? offset + 1 : 0}–${offset + keys.length}`;
+    el("page-label").textContent = `Page ${Math.floor(offset / pageSize) + 1}`;
   }
 
   function editKey(key = null) {
@@ -50,13 +76,33 @@
     el("user").value = key ? key.userId : "";
     el("source").readOnly = el("user").readOnly = Boolean(key);
     el("key").value = "";
-    el("enabled").checked = key ? key.enabled : false;
-    el("enabled-field").hidden = Boolean(key);
-    el("cancel").hidden = !key;
-    el("save").textContent = key ? "Rotate public key" : "Save public key";
+    el("form-title").textContent = key ? "Rotate public key" : "Register public key";
+    el("save").textContent = key ? "Rotate public key" : "Register public key";
     el("mode").textContent = key
-      ? `Rotate ${key.source} / ${key.userId}. The publish ID and current enabled state are preserved.`
-      : "For an existing owner, saving rotates the key and preserves its current enabled state. Use the table actions to enable or disable a key.";
+      ? `Rotate ${key.source} / ${key.userId}. The publish ID and enabled state are preserved. Existing signed-login tokens will be revoked.`
+      : "Bind a public key to an existing user. To replace a registered key, use Rotate in the key list.";
+  }
+
+  function openKeyForm(key = null, trigger = el("create")) {
+    if (busy || !signedLoginEnabled) return;
+    returnFocus = trigger;
+    editKey(key);
+    el("form-status").textContent = "";
+    ownerPicker ||= root.KkUserPicker.create({ source: el("source"), user: el("user"), status: el("owner-status") });
+    ownerPicker.open(key);
+    openFormModal("ohpm-login-form", "ohpm-login-key");
+  }
+
+  function closeKeyForm(restoreFocus = true) {
+    ownerPicker?.close();
+    closeFormModal("ohpm-login-form");
+    editKey();
+    el("form-status").textContent = "";
+    if (restoreFocus) (returnFocus?.isConnected ? returnFocus : el("create")).focus();
+  }
+
+  function dismissKeyForm() {
+    if (!busy) closeKeyForm();
   }
 
   async function findOwner(source, userId) {
@@ -86,21 +132,36 @@
     });
   }
 
-  async function run(action, message = "Signing keys loaded.", pending = "Loading signing keys…") {
+  async function run(action, message = "", pending = "Loading signing keys…", status = el("status")) {
     if (busy) return;
     busy = true;
-    el("view").querySelectorAll("input, textarea, button").forEach((element) => { element.disabled = true; });
-    el("status").textContent = pending;
+    const formOperation = status === el("form-status");
+    el("view").querySelectorAll("input, textarea, select, button").forEach((element) => { element.disabled = true; });
+    status.dataset.state = "pending";
+    status.textContent = pending;
     try {
       const outcome = await action();
-      el("status").textContent = outcome || message;
+      if (status === el("form-status") && el("form").hidden) status = el("status");
+      status.dataset.state = "success";
+      status.textContent = outcome || message;
     } catch (error) {
-      el("status").textContent = error.message;
+      if (status === el("form-status") && el("form").hidden) status = el("status");
+      status.dataset.state = "error";
+      status.textContent = error.message;
     } finally {
       busy = false;
-      el("view").querySelectorAll("input, textarea, button").forEach((element) => { element.disabled = false; });
+      el("view").querySelectorAll("input, textarea, select, button").forEach((element) => { element.disabled = false; });
       el("previous").disabled = offset === 0;
-      el("next").disabled = keys.length < 100;
+      el("next").disabled = !hasNext;
+      el("page-size").value = String(pageSize);
+      el("create").disabled = el("save").disabled = !signedLoginEnabled;
+      el("create").title = signedLoginEnabled ? "" : unavailable;
+      el("view").querySelectorAll("[data-requires-signed-login]").forEach((button) => {
+        button.disabled = !signedLoginEnabled;
+        button.title = signedLoginEnabled ? "" : unavailable;
+      });
+      ownerPicker?.sync();
+      if (formOperation && el("form").hidden) (returnFocus?.isConnected ? returnFocus : el("create")).focus();
     }
   }
 
@@ -109,8 +170,9 @@
       initialized = true;
       el("form").addEventListener("submit", (event) => {
         event.preventDefault();
+        if (!signedLoginEnabled || !ownerPicker?.validate()) return;
         return run(async () => {
-          const body = command(el("source").value, el("user").value, el("key").value, el("enabled").checked);
+          const body = command(el("source").value, el("user").value, el("key").value, true);
           const existing = selectedKey || await findOwner(body.source, body.userId);
           if (existing && !await confirmKey(existing, "Rotate")) return "Rotation cancelled.";
           if (existing) {
@@ -119,26 +181,28 @@
           } else {
             await request(`${api}/keys`, "PUT", body);
           }
-          editKey();
-          offset = 0;
-          await refresh();
+          closeKeyForm(false);
+          await refresh(0);
           return existing ? "Public key rotated. Current enabled state preserved; previous signed-login tokens revoked."
             : "Public key saved.";
-        }, "Public key saved.", "Saving public key…");
+        }, "Public key saved.", "Saving public key…", el("form-status"));
       });
-      el("cancel").addEventListener("click", () => { editKey(); el("status").textContent = "Rotation cancelled."; });
-      el("refresh").addEventListener("click", () => run(refresh));
-      el("previous").addEventListener("click", () => run(async () => { offset = Math.max(0, offset - 100); await refresh(); }));
-      el("next").addEventListener("click", () => run(async () => { offset += 100; await refresh(); }));
+      bindFormModalDismiss("ohpm-login-form", dismissKeyForm);
+      el("create").addEventListener("click", () => openKeyForm());
+      el("cancel").addEventListener("click", dismissKeyForm);
+      el("refresh").addEventListener("click", () => run(() => refresh()));
+      el("previous").addEventListener("click", () => run(() => refresh(Math.max(0, offset - pageSize))));
+      el("next").addEventListener("click", () => run(() => refresh(offset + pageSize)));
+      el("page-size").addEventListener("change", () => run(() => refresh(0, Number(el("page-size").value))));
       el("rows").addEventListener("click", (event) => {
         const button = event.target.closest("button[data-key-action]");
         if (!button) return;
         const key = keys[Number(button.dataset.index)];
         if (!key || busy) return;
+        if (!signedLoginEnabled && (button.dataset.keyAction === "rotate"
+          || (button.dataset.keyAction === "toggle" && !key.enabled))) return;
         if (button.dataset.keyAction === "rotate") {
-          editKey(key);
-          el("key").focus();
-          el("status").textContent = "Enter the replacement public key.";
+          openKeyForm(key, button);
           return;
         }
         return run(async () => {

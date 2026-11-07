@@ -2,7 +2,7 @@
 
 ## kkrepo 是什么？
 
-kkrepo 是一个兼容 Nexus 的自托管制品仓库，面向 Maven、npm、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、APT/Debian、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等常见包格式。
+kkrepo 是一个兼容 Nexus 的自托管制品仓库，面向 Maven、npm、OHPM/HarmonyOS、PyPI、Go、Helm、Cargo/Rust、Dart/Pub、Composer/PHP、Terraform、Swift Package Registry、Ansible Galaxy、Conda、APT/Debian、Docker/OCI、NuGet、RubyGems、Yum 和 Raw 等常见包格式。
 
 它保持 Nexus 风格客户端 URL、协议行为、权限和迁移目标，同时使用 MySQL 存储元数据，用 OSS/S3 兼容存储保存 blob。
 
@@ -24,6 +24,7 @@ kkrepo 面向需要 Nexus 兼容客户端路径、常见仓库格式、MySQL 元
 
 - Maven
 - npm
+- OHPM / HarmonyOS
 - PyPI
 - Go
 - Helm
@@ -126,6 +127,12 @@ Hosted 仓库默认扫描。Proxy 仓库可以显式指定迁移，用于保留�
 当源 Nexus 暴露足够信息时，迁移会尽力保留兼容安全数据。部分 local 用户如果无法补偿密码 hash，可能需要重置密码。API key 或协议 token 可能因源数据可用性和安全策略需要重新签发。
 
 切换前务必执行 preflight，并审查迁移报告。
+
+## 是否支持 OHPM / HarmonyOS？
+
+支持。Hosted、proxy 和 group 提供 HAR/HSP 发布与安装、tag、下架、UI/API 上传及可恢复的独立导入。普通发布与安装可使用 GenericToken，无需公钥。可选 RSA 签名登录将公钥绑定到用户，仍使用该用户的仓库权限，默认关闭。
+
+OHPM 以华为协议和真实客户端作为参考，不使用 Nexus OHPM 参考实例。该格式不支持 Nexus 迁移、自动清理和 HAR/HSP 漏洞扫描。详见[OHPM 仓库使用指南](repository-guides/ohpm.md)与[验收覆盖](dev/ohpm-acceptance.md)。
 
 ## Docker / OCI 支持了吗？
 

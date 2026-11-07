@@ -17,9 +17,13 @@ kkrepo:
 
 `enabled` 默认 `false`。时间容差允许 1–600 秒，Token 期限允许 1–3600 秒，两者默认 300 秒；非法配置使启动失败。服务器时钟需要同步。
 
-管理员在 **Security → Keys & Tokens → OHPM signing keys (optional)**（`#admin/security/ohpm-login`）查看当前配置，并绑定已有用户的 source、user ID 和 X.509 PEM RSA 公钥。普通 OHPM 发布和安装仍默认使用 GenericToken。密钥长度为 2048–8192 位，每个用户只能绑定一个公钥。页面展示 publish ID、DER 编码公钥的 SHA-256 指纹及配置的启停状态；服务端签名登录关闭时，预配置的已启用密钥仍不能认证。不保存私钥。
+管理员在 **Admin → Security → Keys & Tokens → OHPM Public Keys**（`#admin/security/ohpm-login`）管理公钥。点击 **Register public key（登记公钥）** 打开弹窗，通过可搜索单选框选择已有用户的来源和 ID，粘贴 X.509 PEM 格式 RSA 公钥（2048–8192 位）。新登记公钥立即启用，每个用户只能绑定一个公钥。列表展示 publish ID、DER 编码公钥的 SHA-256 指纹及启停状态，并提供统一分页和每页条数选择。私钥保留在发布机器。
 
-选择 **Rotate** 替换已有公钥。轮换在数据库锁内保留 publish ID 和当前启停状态，包括打开表单后其它副本修改的状态。在新打开的表单中输入已有用户也会走轮换流程；复选框仅用于新绑定，启停需使用独立的 Enable/Disable 操作。轮换、禁用和删除前均需确认所属用户、指纹及现有签名登录 Token 失效的影响。删除后重新注册会生成新的 publish ID。
+服务端签名登录关闭时，UI 显示未启用说明，禁用登记、轮换和启用按钮，仍可查看、禁用和删除已有公钥。开启后隐藏该说明。公钥自身的启用状态不能覆盖服务端配置。
+
+公钥绑定用户而非仓库。认证后仍按该用户当前角色和权限判断仓库访问。如需将自动化限定到单个仓库，应使用仅具有所需权限的专用用户。该公钥不用于仓库或制品签名。普通发布与安装可使用 GenericToken，无需启用签名登录，参见[使用指南](../repository-guides/ohpm.md)。
+
+选择 **Rotate** 替换已有公钥。轮换弹窗锁定所属用户，提交 **Rotate public key（轮换公钥）** 后，在数据库锁内保留 publish ID 和当前启停状态，包括打开表单后其它副本修改的状态。登记已绑定公钥的用户同样需要确认轮换并保留原状态；自动启用仅适用于新绑定。Enable/Disable 作为独立列表操作保留。轮换、禁用和删除前均需确认所属用户、指纹及旧签名登录 Token 失效的影响。删除后重新登记会生成新的 publish ID。
 
 管理接口要求实时验证的 `nexus:*` 权限：
 
@@ -85,4 +89,4 @@ mvn -pl server -am -Dtest=OhpmHostedRuntimeTest \
   -Dkkrepo.ohpm.client=true -Dkkrepo.ohpm.expectedVersion=6.0.1 test
 ```
 
-需要 Docker、真实 OHPM 6.0.1、对应 Node.js 和 Python 3。OHPM 不在 PATH 时用 `-Dkkrepo.ohpm.command=/absolute/path/to/ohpm` 指定。签名用例覆盖客户端回退、真实发布后跨实例安装、nonce 竞争、期限、密钥禁用/轮换及用户禁用；独立黑盒、完整 CI 矩阵与最终 PR 验收状态以[实现计划](ohpm-implementation-plan.md)为准。
+需要 Docker、真实 OHPM 6.0.1、对应 Node.js 和 Python 3。OHPM 不在 PATH 时用 `-Dkkrepo.ohpm.command=/absolute/path/to/ohpm` 指定。签名用例覆盖客户端回退、真实发布后跨实例安装、nonce 竞争、期限、密钥禁用/轮换及用户禁用；独立黑盒及 Full E2E 覆盖见[验收说明](ohpm-acceptance.md)：既有 core 分片运行 JVM/Native × MySQL/PostgreSQL、OHPM 5.0.2 和 Login 关闭/开启两种状态，不为每种 Login 状态单独构建镜像。具体结果以每次运行报告为准。

@@ -39,7 +39,7 @@ This operation requires the existing administrative `nexus:*` grant. Repository 
 - Routing rules evaluate decoded canonical OHPM paths, including encoded scope separators, before proxy reads and group member selection.
 - Downloads use the shared download policy and usage tracking. OHPM remains `NOT_APPLICABLE` for security scanning; this does not claim a vulnerability scan of HAR/HSP contents.
 - Automatic cleanup and generic directory deletion remain disabled for OHPM. Explicit protocol-aware unpublish is supported.
-- [Independent resumable import](ohpm-import.md) supports directory and registry sources; OHPM is not a Nexus migration format. [Optional signed Login](ohpm-login.md) is disabled by default and has a separate public-key management page.
+- [Independent resumable import](ohpm-import.md) supports directory and registry sources; OHPM is not a Nexus migration format. [Optional signed Login](ohpm-login.md) is disabled by default and is managed under **Security → Keys & Tokens → OHPM Public Keys**; registration and rotation use dialogs.
 - External protocol links follow the shared trusted forwarded-header policy; Browse links are repository-relative.
 
 ## Verification

@@ -2,6 +2,8 @@
 
 `ohpm-hosted` 当前支持普通和流式 HAR/HSP 发布、metadata、下载、dist-tags 和下架。协议行为依据华为官方文档与 OHPM 6.0.1，参见 [协议基线](ohpm-protocol-baseline.md)。
 
+仓库创建、GenericToken 获取与可选公钥登录的完整步骤见[OHPM 仓库使用指南](../repository-guides/ohpm.md)。Token 认证不要求登记公钥。
+
 ## 使用
 
 通过仓库管理 API 创建 `recipe=ohpm-hosted` 的 hosted 仓库并分配 blob store。使用现有 Token 管理生成 GenericToken，按仓库权限授予 READ、ADD、EDIT、DELETE。首次发布要求 ADD；为已有包增加版本还要求 EDIT，保护共享 metadata 和 tag。Ping 公开；是否允许匿名读取由现有匿名用户权限决定。
