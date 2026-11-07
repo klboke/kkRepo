@@ -34,6 +34,7 @@
     "OHPM Signing Keys": "OHPM 签名密钥",
     "Optional": "可选",
     "Bind RSA public keys to existing users for signed publication": "绑定 RSA 公钥到现有用户，用于签名发布",
+    "API key permissions are determined by the owner's roles. To limit access, assign the owner only the required roles.": "API Key 权限由所属用户的角色决定。如需限制访问，请仅为该用户分配必要的角色。",
     "Search and select…": "搜索并选择…",
     "Loading users…": "正在加载用户…",
     "No existing users available.": "暂无可选择的现有用户。",
