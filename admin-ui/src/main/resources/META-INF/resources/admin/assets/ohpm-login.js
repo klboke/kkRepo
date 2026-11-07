@@ -78,8 +78,8 @@
     el("key").value = "";
     el("enabled").checked = key ? key.enabled : false;
     el("enabled-field").hidden = Boolean(key);
-    el("form-title").textContent = key ? "Rotate public key" : "Create signing key";
-    el("save").textContent = key ? "Rotate public key" : "Save public key";
+    el("form-title").textContent = key ? "Rotate public key" : "Register public key";
+    el("save").textContent = key ? "Rotate public key" : "Register public key";
     el("mode").textContent = key
       ? `Rotate ${key.source} / ${key.userId}. The publish ID and enabled state are preserved. Existing signed-login tokens will be revoked.`
       : "Bind a public key to an existing user. To replace a registered key, use Rotate in the key list.";

@@ -1492,7 +1492,7 @@
           </div>
           <nav class="credentials-tabs" aria-label="Keys and tokens sections">
             <a class="credentials-tab is-active" href="#admin/security/api-keys" aria-current="page">API Tokens</a>
-            <a class="credentials-tab" href="#admin/security/ohpm-login">OHPM Signing Keys</a>
+            <a class="credentials-tab" href="#admin/security/ohpm-login">OHPM Public Keys</a>
           </nav>
           <div class="action-bar">
             <button class="create-button" id="create-security-api-key-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create API key</button>
@@ -1999,7 +1999,7 @@
           </div>
           <nav class="credentials-tabs" aria-label="Keys and tokens sections">
             <a class="credentials-tab" href="#admin/security/api-keys">API Tokens</a>
-            <a class="credentials-tab is-active" href="#admin/security/ohpm-login" aria-current="page">OHPM Signing Keys</a>
+            <a class="credentials-tab is-active" href="#admin/security/ohpm-login" aria-current="page">OHPM Public Keys</a>
           </nav>
           <div class="credentials-notice" id="ohpm-login-notice" role="status" hidden>
             <strong id="ohpm-login-configuration"></strong>
@@ -2011,7 +2011,7 @@
             <div class="form-modal-panel form-modal-panel-narrow">
               <button class="form-modal-close" data-modal-dismiss="ohpm-login-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
           <form class="blobstore-form modal-form credentials-form" id="ohpm-login-form" hidden>
-            <div class="form-title" id="ohpm-login-form-title">Create signing key</div>
+            <div class="form-title" id="ohpm-login-form-title">Register public key</div>
             <p class="form-note credentials-form-note" id="ohpm-login-mode"></p>
             <div class="form-grid">
               <label><span>User source</span><input id="ohpm-login-source" aria-label="User source" required maxlength="100"></label>
@@ -2023,7 +2023,7 @@
               <label class="checkbox-field full-width" id="ohpm-login-enabled-field"><input id="ohpm-login-enabled" type="checkbox"><span>Enable newly registered key</span></label>
             </div>
             <div class="form-actions">
-              <button class="create-button" id="ohpm-login-save" type="submit" disabled>Save public key</button>
+              <button class="create-button" id="ohpm-login-save" type="submit" disabled>Register public key</button>
               <button class="create-button secondary" id="ohpm-login-cancel" type="button">Cancel</button>
             </div>
             <p class="form-note credentials-status" id="ohpm-login-form-status" role="status" aria-live="polite" aria-atomic="true"></p>
@@ -2031,7 +2031,7 @@
             </div>
           </div>
           <div class="action-bar credentials-list-toolbar">
-            <button class="create-button" id="ohpm-login-create" type="button" disabled aria-describedby="ohpm-login-availability"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create signing key</button>
+            <button class="create-button" id="ohpm-login-create" type="button" disabled aria-describedby="ohpm-login-availability"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Register public key</button>
             <button class="create-button secondary" id="ohpm-login-refresh" type="button"><span class="lucide-icon icon-refresh-cw" aria-hidden="true"></span> Refresh</button>
             <span class="form-note credentials-status" id="ohpm-login-status" role="status" aria-live="polite" aria-atomic="true"></span>
           </div>
@@ -2041,8 +2041,8 @@
               <tbody id="ohpm-login-rows"></tbody>
             </table>
             <div class="credentials-empty" id="ohpm-login-empty" hidden>
-              <strong>No signing keys registered.</strong>
-              <p class="form-note">Create a signing key only if you need OHPM signed login.</p>
+              <strong>No public keys registered.</strong>
+              <p class="form-note">Register a public key to use OHPM signed login.</p>
             </div>
           </div>
           <div class="pagination-bar" id="ohpm-login-pagination" hidden>

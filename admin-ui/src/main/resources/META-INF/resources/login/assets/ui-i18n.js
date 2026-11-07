@@ -20,7 +20,6 @@
   const originalTitle = document.title;
 
   const zh = {
-    "Create signing key": "创建签名密钥",
     "Enable signed login in the server configuration before creating, rotating or enabling keys.": "请先在服务器配置中启用签名登录，再创建、轮换或启用密钥。",
     "Enable signed login in the server configuration on every replica to create, rotate or enable keys. Existing keys cannot authenticate while it is disabled.": "请先在所有副本的服务器配置中启用签名登录，再创建、轮换或启用密钥。未启用时，现有密钥也无法用于认证。",
     "User": "用户",
@@ -31,7 +30,7 @@
     "Keys & Tokens": "密钥与令牌",
     "Keys and tokens sections": "密钥与令牌分类",
     "API Tokens": "API 令牌",
-    "OHPM Signing Keys": "OHPM 签名密钥",
+    "OHPM Public Keys": "OHPM 公钥",
     "Optional": "可选",
     "Bind RSA public keys to existing users for signed publication": "绑定 RSA 公钥到现有用户，用于签名发布",
     "Search and select…": "搜索并选择…",
@@ -47,7 +46,6 @@
     "Preconfigured keys cannot authenticate until signed login is enabled in the server configuration on every replica.": "预先登记的密钥暂时无法用于认证。请先在所有副本的服务器配置中启用签名登录。",
     "Register public key": "登记公钥",
     "Rotate public key": "轮换公钥",
-    "Save public key": "保存公钥",
     "Cancel rotation": "取消轮换",
     "Bind a public key to an existing user. To replace a registered key, use Rotate in the key list.": "将公钥绑定到现有用户。要替换已登记的密钥，请使用密钥列表中的“轮换”。",
     "RSA public key (X.509 PEM, 2048–8192 bits)": "RSA 公钥（X.509 PEM，2048–8192 位）",
@@ -56,8 +54,8 @@
     "Registered keys": "已登记的密钥",
     "Publish ID": "发布 ID",
     "SHA-256 fingerprint": "SHA-256 指纹",
-    "No signing keys registered.": "尚未登记签名密钥。",
-    "Create a signing key only if you need OHPM signed login.": "仅在需要 OHPM 签名登录时，才需创建签名密钥。",
+    "No public keys registered.": "尚未登记公钥。",
+    "Register a public key to use OHPM signed login.": "登记公钥以使用 OHPM 签名登录。",
     "Key enabled": "密钥已启用",
     "Key enabled · Login unavailable": "密钥已启用 · 签名登录不可用",
     "Key disabled": "密钥已禁用",
