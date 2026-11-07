@@ -1496,7 +1496,6 @@
           </nav>
           <div class="action-bar">
             <button class="create-button" id="create-security-api-key-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create API key</button>
-            <span class="form-note">Use GenericToken for ordinary OHPM publishing and installation.</span>
           </div>
           <div class="form-modal" id="security-api-key-form-modal" data-form-id="security-api-key-form" role="dialog" aria-modal="true" aria-labelledby="security-api-key-form-title" hidden>
             <div class="form-modal-backdrop" data-modal-dismiss="security-api-key-form"></div>
@@ -1507,7 +1506,7 @@
             <div class="form-grid">
               <label>
                 <span>Domain</span>
-                <select id="security-api-key-domain">
+                <select id="security-api-key-domain" aria-describedby="security-api-key-domain-help">
                   <option value="NpmToken">NpmToken</option>
                   <option value="NuGetApiKey">NuGetApiKey</option>
                   <option value="CargoToken">CargoToken</option>
@@ -1515,6 +1514,7 @@
                   <option value="RubyGemsApiKey">RubyGemsApiKey</option>
                   <option value="GenericToken">GenericToken</option>
                 </select>
+                <span class="form-note" id="security-api-key-domain-help">Use GenericToken for ordinary OHPM publishing and installation.</span>
               </label>
               <label><span>Owner source</span><input id="security-api-key-owner-source" type="text" value="Local"></label>
               <label><span>Owner user ID <span class="required-mark">*</span></span><input id="security-api-key-owner-user-id" type="text" required></label>
@@ -2006,7 +2006,6 @@
             <span id="ohpm-login-availability"></span>
             <span class="form-note" id="ohpm-login-timing"></span>
           </div>
-          <p class="credentials-intro">Use GenericToken for ordinary OHPM publishing and installation.</p>
           <div class="form-modal" id="ohpm-login-form-modal" data-form-id="ohpm-login-form" role="dialog" aria-modal="true" aria-labelledby="ohpm-login-form-title" hidden>
             <div class="form-modal-backdrop" data-modal-dismiss="ohpm-login-form"></div>
             <div class="form-modal-panel form-modal-panel-narrow">

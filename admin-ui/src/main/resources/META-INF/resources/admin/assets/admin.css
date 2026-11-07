@@ -4728,12 +4728,6 @@ code {
   color: var(--warning);
 }
 
-.credentials-intro {
-  margin: 0 24px 16px;
-  color: var(--muted);
-  font-size: 13px;
-}
-
 .credentials-form .form-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -4793,8 +4787,7 @@ code {
 
 @media (max-width: 900px) {
   .credentials-tabs,
-  .credentials-notice,
-  .credentials-intro {
+  .credentials-notice {
     margin-right: 16px;
     margin-left: 16px;
   }
