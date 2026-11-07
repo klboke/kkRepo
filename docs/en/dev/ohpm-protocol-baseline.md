@@ -26,7 +26,7 @@ The current documentation also describes compact metadata, `login_pss`, Versions
 
 `OhpmFixture` generates small and large HAR/HSP fixtures in the test directory. The HAR includes a manifest and entry point; the HSP is a minimal ZIP with `module.json`, bundled with its interface HAR in a tgz. They are protocol fixtures, not device runtime tests. Large fixtures contain deterministic 6 MiB payloads.
 
-`OhpmClientContractTest` exercises normal and stream publication, HAR/HSP checksums and bytes, 404 fallback, ping, tag mutations, both unpublish scopes, HAR installation, and a reported 598 followed by explicit retry. The legacy URL selector is covered by Java tests, not a claimed execution of a legacy client.
+`OhpmClientContractTest` exercises normal and stream publication, HAR/HSP checksums and bytes, 404 fallback, ping, tag mutations, both unpublish scopes, HAR installation, and a reported 598 followed by explicit retry. The legacy URL selector has Java protocol tests. Separate server acceptance also exercises OHPM 5.0.2; see [acceptance and CI](ohpm-acceptance.md) for its exact coverage rather than extrapolating the recording-server baseline to all clients.
 
 With JDK 25 and Maven 3.9+:
 
@@ -40,6 +40,6 @@ mvn -pl compat-test -am \
   test
 ```
 
-Install OHPM and its supported Node.js runtime using Huawei's tools. Signed publication tests also require Python 3 for the client's interactive passphrase prompt. Set `-Dkkrepo.ohpm.command=/absolute/path/to/ohpm` if it is not on PATH. Explicitly enabled client tests fail on a missing executable or a version mismatch. Default CI skips them unless enabled.
+Install OHPM and its supported Node.js runtime using Huawei's tools. Signed publication tests also require Python 3 for the client's interactive passphrase prompt. Set `-Dkkrepo.ohpm.command=/absolute/path/to/ohpm` if it is not on PATH. Explicitly enabled client tests fail on a missing executable or a version mismatch. Ordinary CI skips these opt-in recording-server tests unless enabled; Full E2E separately enables the server/client acceptance suite described in [acceptance and CI](ohpm-acceptance.md).
 
-Tests use local configuration, a temporary cache and loopback endpoints, without publishing to a public registry. This baseline does not establish kkrepo storage, authorization, concurrency, proxy/group, import or multi-replica correctness; those need server and black-box tests as implementation proceeds.
+Tests use local configuration, a temporary cache and loopback endpoints, without publishing to a public registry. This baseline does not establish kkrepo storage, authorization, concurrency, proxy/group, import or multi-replica correctness; those are covered separately by the server runtime tests and [independent acceptance](ohpm-acceptance.md).

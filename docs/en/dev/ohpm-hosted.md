@@ -4,7 +4,7 @@ The `ohpm-hosted` recipe supports normal and streaming HAR/HSP publication, meta
 
 ## Usage
 
-Create a hosted repository with `recipe=ohpm-hosted` and a blob store through the repository management API. Issue a GenericToken using the existing token management APIs and grant the required repository READ, ADD, EDIT and DELETE permissions. Initial publication requires ADD; adding a version to an existing package also requires EDIT to protect shared metadata and tags. Ping is public. Anonymous reads use the existing anonymous user's permissions.
+Create a hosted repository using **Admin → Repositories** or the repository management API with `recipe=ohpm-hosted` and a blob store. Under **Security → Keys & Tokens → API Tokens**, issue a GenericToken for an existing user and grant that user the required repository READ, ADD, EDIT and DELETE permissions. No public-key registration is required for Token authentication; see the [usage guide](../repository-guides/ohpm.md) for the full setup. Initial publication requires ADD; adding a version to an existing package also requires EDIT to protect shared metadata and tags. Ping is public. Anonymous reads use the existing anonymous user's permissions.
 
 ```bash
 ohpm config set registry https://repo.example.com/repository/ohpm-hosted/

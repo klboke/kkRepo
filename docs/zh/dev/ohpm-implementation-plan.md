@@ -1,6 +1,6 @@
 # OHPM 仓库实现计划
 
-状态：阶段 1–7 已提交。阶段 8 的可选 Login、独立黑盒、客户端 CI 入口及实际 S3 故障测试已完成实现与本地验收；上游 Actions 仍需要维护者批准，PR 保持 Draft，尚不宣称远端合并门槛通过。详见 [协议兼容性基线](ohpm-protocol-baseline.md)、[Hosted](ohpm-hosted.md)、[Proxy](ohpm-proxy.md)、[Group](ohpm-group.md)、[管理](ohpm-management.md)、[独立导入](ohpm-import.md)、[Login](ohpm-login.md) 和 [独立验收](ohpm-acceptance.md)。
+状态：OHPM 实现已通过 [PR #494](https://github.com/klboke/kkRepo/pull/494) 于 2026-11-07 合并，包含 hosted/proxy/group、管理、独立导入及可选签名 Login。Full E2E 已接入既有 core 分片；具体版本、运行报告与边界见[验收说明](ohpm-acceptance.md)。当前操作入口见[使用指南](../repository-guides/ohpm.md)和[公钥登录说明](ohpm-login.md)。下文保留阶段拆分与开发记录，不代表当前 PR 或 CI 状态。
 
 关联议题：[OHPM 推进情况与贡献意向 #492](https://github.com/klboke/kkRepo/issues/492)。
 设计依据：[OHPM / HarmonyOS 仓库开发设计说明](ohpm-repository-design.md)。
@@ -9,7 +9,7 @@
 
 完整交付 hosted、proxy、group、管理端、导入和真实客户端兼容性测试。默认使用现有 Access Token 能力；官方可选 Login 认证以可配置、默认关闭的能力交付。
 
-当前使用 `feat/ohpm-support` 分支，阶段 1 已提交为 `7f5f9b17`，阶段 2 已提交为 `8ec83517`，阶段 3 已提交为 `b26ac81f`，阶段 4 已提交为 `9172a5d2`，阶段 5 已提交为 `54f86a5c`，阶段 6 已提交为 `fbe60c6c`，阶段 7 已提交为 `84f95c8c`，并创建关联 #492 的 [Draft PR #493](https://github.com/klboke/kkRepo/pull/493)。后续按里程碑完成实现、验证、提交，并更新 PR 检查清单，完整验收后再转为 Ready。若维护者希望拆分 PR，可沿里程碑边界拆分；拆分开发不代表缩减原设计的最终范围。
+开发阶段使用 `feat/ohpm-support` 分支，阶段 1 已提交为 `7f5f9b17`，阶段 2 已提交为 `8ec83517`，阶段 3 已提交为 `b26ac81f`，阶段 4 已提交为 `9172a5d2`，阶段 5 已提交为 `54f86a5c`，阶段 6 已提交为 `fbe60c6c`，阶段 7 已提交为 `84f95c8c`，并创建关联 #492 的 [Draft PR #493](https://github.com/klboke/kkRepo/pull/493)。后续按里程碑完成实现、验证、提交，并更新 PR 检查清单，完整验收后再转为 Ready。若维护者希望拆分 PR，可沿里程碑边界拆分；拆分开发不代表缩减原设计的最终范围。
 
 所有新增协议行为先核对华为官方协议及真实客户端行为。OHPM 不以 Nexus 为协议参考，不直接复制 npm 的响应码、路径解析或认证行为。
 

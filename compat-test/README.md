@@ -111,6 +111,8 @@ Available suites:
   contracts. Composer is required when enabled; a missing Nexus Composer endpoint fails instead of skipping.
   The self-contained Conda fixtures run in this module, while the live Conda comparison is enabled
   explicitly as described below.
+- `ohpm`: standalone HTTP acceptance against a disposable kkRepo candidate; Huawei's protocol is the reference, not Nexus.
+- `ohpm-client-e2e`: the same acceptance with real OHPM publication and installation. Full E2E includes OHPM in the existing core shard on JVM/Native × MySQL/PostgreSQL, with Login disabled/enabled on the same candidate image. See [OHPM acceptance and CI](../docs/en/dev/ohpm-acceptance.md) for candidate preparation, the pinned 5.0.2 installer, required URLs, reports and cleanup limits.
 - `extended`: diagnostic smoke coverage plus currently separated PyPI, Helm, Pub, NuGet, RubyGems, and Yum checks.
 - `client-e2e`: starts from the disposable kkrepo service and uses real package clients to publish
   and then download/resolve through hosted and group/proxy repositories. It covers Maven, npm,

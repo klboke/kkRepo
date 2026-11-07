@@ -178,10 +178,13 @@ On pull requests, `run-client-e2e` validates the default JVM candidate. Use the 
 
 Swift production-hardening evidence is split into separate lanes: the scheduled S3-compatible resilience job uses two replicas, PostgreSQL, and RustFS through the AWS S3 adapter for lease takeover, 429/5xx stale behavior, restart, large-package, and destructive backup/restore checks; Alibaba OSS Native remains adapter-contract coverage rather than a live endpoint run. The migration workflow uses Nexus 3.94 H2 to MySQL and PostgreSQL source to MySQL/PostgreSQL target lanes, and verifies fail-closed source profiles and proxy credentials, restart/resume, checksums, and idempotency.
 
+OHPM real-client checks are part of the existing Full E2E `core` shard on JVM/Native × MySQL/PostgreSQL. The runner installs pinned OHPM 5.0.2 unless `OHPM_COMMAND` is supplied, and exercises both Login-disabled and Login-enabled candidates from the same image. It verifies HAR/HSP publication, hosted/proxy/group installation and explicit deletion; it does not claim automatic-cleanup or vulnerability-scanning support. Huawei's protocol and OHPM clients are the reference, rather than Nexus. See [OHPM acceptance and CI](dev/ohpm-acceptance.md) for setup, reports and targeted execution.
+
 ## Development Design Documents
 
 Detailed design and implementation plans for repository formats and migration work are kept under `docs/en/dev/` and `docs/zh/dev/`:
 
+- [OHPM Repository Guide](repository-guides/ohpm.md), [Protocol Baseline](dev/ohpm-protocol-baseline.md), [Signed Login](dev/ohpm-login.md), and [Acceptance/CI](dev/ohpm-acceptance.md)
 - [Docker Repository Implementation Notes](dev/docker-repository-implementation-plan.md)
 - [Cargo / Rust Repository Design Notes](dev/cargo-rust-repository-design.md)
 - [Dart / Pub Repository Design Notes](../zh/dev/dart-pub-repository-design.md) (Chinese)

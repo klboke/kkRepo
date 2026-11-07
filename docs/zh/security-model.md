@@ -127,6 +127,12 @@ X-Nexus-Plus-Token
 
 协议客户端应继续使用各自原生认证机制和匹配的 token domain。当前协议 token domain 包含 `NpmToken`、`CargoToken`、`PubToken`、`NuGetApiKey` 和 `RubyGemsApiKey`；对应客户端协议使用 token 或 API key 时按各自协议处理，其中 Cargo、Pub 和 RubyGems 客户端通过 `Authorization` header 发送 registry/API key token。Composer 私有仓库优先使用 `COMPOSER_AUTH`/`auth.json` 的 HTTP Basic；能够显式发送 bearer 或自定义 API-key header 的 Composer/CI 场景可以使用 `GenericToken`。Terraform CLI 可把 `GenericToken` 仅放在已配置的 `modules.v1`/`providers.v1` service URL 中；生成的 archive/checksum/signature URL 会保留 credential segment，但日志、指标和上传的 CI 诊断产物必须脱敏。Ansible Galaxy 客户端可通过当前 ansible-core 的 Bearer scheme 或 Ansible 2.9 的 Token scheme 发送 `GenericToken`；仅在 Ansible route 内，kkrepo 还接受 Nexus 兼容的 Base64 `username:password`。后者只是密码传输而不是加密，不应写日志，也不应优先于 scoped token。显式错误 Ansible credential 必须返回 `401`，不能降级为 anonymous。Conda 私有 channel 通常通过 `.netrc` 提供 HTTP Basic 凭据；能够显式发送 bearer 或自定义 API-key header 的调用方可以使用 `GenericToken`。不要在 `.condarc` 中嵌入可复用密钥。`GenericToken` 不作为所有包管理客户端 token 格式的通用替代。
 
+### OHPM Token 与公钥
+
+在 **Security → Keys & Tokens → API Tokens** 创建 GenericToken，即可用于普通 OHPM 发布与安装。OHPM 将其作为原始 `Authorization` 值发送，不加 Bearer 前缀。实际访问权限来自所属用户的角色和仓库权限；已存储的 API Key `scopes` 值目前不作为令牌级权限限制执行。
+
+**OHPM Public Keys** 为已有用户登记公钥，提供服务端默认关闭的可选签名登录。登记公钥不会授予仓库权限，也不对仓库元数据或包进行签名。UI 新登记公钥立即启用，轮换保留当前启停状态，私钥由发布者保管。CI 应使用仓库权限受限的专用账号。详见[OHPM 使用指南](repository-guides/ohpm.md)和[签名登录配置](dev/ohpm-login.md)。
+
 ## 加密密钥
 
 dev/test 以外的使用场景需要两个稳定部署密钥：

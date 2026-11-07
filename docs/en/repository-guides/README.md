@@ -15,6 +15,7 @@ the recipe combinations and protocol boundaries supported by each format.
 | --- | --- | --- | --- |
 | Maven | hosted / proxy / group | [Maven recipe](../client-recipes.md#maven) | [Maven Repository Guide](maven.md) |
 | npm | hosted / proxy / group | [npm recipe](../client-recipes.md#npm) | [npm Repository Guide](npm.md) |
+| OHPM / HarmonyOS | hosted / proxy / group | [OHPM recipe](../client-recipes.md#ohpm--harmonyos) | [OHPM Repository Guide](ohpm.md) |
 | PyPI | hosted / proxy / group | [PyPI recipe](../client-recipes.md#pypi) | [PyPI Repository Guide](pypi.md) |
 | Go | hosted / proxy / group | [Go recipe](../client-recipes.md#go) | [Go Repository Guide](go.md) |
 | Helm | hosted / proxy / group | [Helm recipe](../client-recipes.md#helm) | [Helm Repository Guide](helm.md) |
