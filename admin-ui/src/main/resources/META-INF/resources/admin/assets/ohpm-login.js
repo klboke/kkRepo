@@ -33,6 +33,7 @@
     signedLoginEnabled = false;
     const configuration = await request(api);
     signedLoginEnabled = configuration.enabled === true;
+    el("notice").hidden = signedLoginEnabled;
     el("notice").dataset.state = configuration.enabled ? "enabled" : "disabled";
     el("configuration").textContent = configuration.enabled
       ? "Signed login is enabled on this server." : "Signed login is disabled on this server.";

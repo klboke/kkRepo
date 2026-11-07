@@ -287,6 +287,7 @@ test("the shared modal keeps failed submissions open and dismissal clears drafts
 test("disabled signed login blocks creation, rotation and enabling while allowing revocation", async () => {
   await withPage(async ({ elements, state, calls, click, submit, load }) => {
     assert.equal(elements.get("create").disabled, true);
+    assert.equal(elements.get("notice").hidden, false);
     assert.equal(elements.get("save").disabled, true);
     assert.match(elements.get("rows").innerHTML, /data-requires-signed-login disabled/);
     elements.get("create").events.click();
@@ -299,15 +300,18 @@ test("disabled signed login blocks creation, rotation and enabling while allowin
     state.configurationEnabled = true;
     await load();
     assert.equal(elements.get("create").disabled, false);
+    assert.equal(elements.get("notice").hidden, true);
     await click("toggle");
     assert.equal(state.records[0].enabled, true);
     state.configurationEnabled = false;
     await load();
     assert.equal(elements.get("create").disabled, true);
+    assert.equal(elements.get("notice").hidden, false);
     await click("toggle");
     assert.equal(state.records[0].enabled, false);
     await click("delete");
     assert.equal(state.records.length, 0);
     assert.equal(elements.get("create").disabled, true);
+    assert.equal(elements.get("notice").hidden, false);
   }, [{ ...binding, enabled: false }], false);
 });
