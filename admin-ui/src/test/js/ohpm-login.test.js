@@ -26,8 +26,8 @@ async function withPage(run, initial = [], configurationEnabled = true) {
   delete require.cache[require.resolve(modulePath)];
   const { load } = require(modulePath);
   const elements = new Map();
-  for (const name of ["view", "form", "source", "user", "key", "enabled", "configuration", "rows", "empty",
-    "create", "form-status", "page-label", "page-size", "notice", "availability", "timing", "table", "pagination", "form-title", "page", "status", "refresh", "previous", "next", "mode", "save", "cancel", "enabled-field"]) {
+  for (const name of ["view", "form", "source", "user", "key", "configuration", "rows", "empty",
+    "create", "form-status", "page-label", "page-size", "notice", "availability", "timing", "table", "pagination", "form-title", "page", "status", "refresh", "previous", "next", "mode", "save", "cancel"]) {
     elements.set(name, {
       value: "", checked: false, disabled: false, events: {}, dataset: {},
       addEventListener(event, handler) { this.events[event] = handler; },
@@ -87,7 +87,7 @@ const binding = { source: "Local", userId: "publisher", enabled: true,
 const { publicKey: replacement } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
 const replacementPem = replacement.export({ type: "spki", format: "pem" });
 
-test("management feedback distinguishes loading, saving, enabling, errors and deletion", async () => {
+test("registration enables new keys and management can disable and delete them", async () => {
   await withPage(async ({ elements, state, calls, click, submit }) => {
     assert.match(elements.get("configuration").textContent, /enabled/);
     assert.match(elements.get("availability").textContent, /can authenticate/);
@@ -106,10 +106,12 @@ test("management feedback distinguishes loading, saving, enabling, errors and de
     assert.equal(elements.get("table").hidden, false);
     assert.match(elements.get("rows").innerHTML, /&lt;publisher&gt;/);
     assert.doesNotMatch(elements.get("rows").innerHTML, /BEGIN PUBLIC KEY/);
-    await click("toggle");
     assert.equal(state.records[0].enabled, true);
+    assert.equal(JSON.parse(calls.find((call) => call.method === "PUT" && call.path.endsWith("/keys")).body).enabled, true);
     assert.match(elements.get("rows").innerHTML, /Key enabled/);
-    assert.deepEqual(JSON.parse(calls.find((call) => call.path.endsWith("/enabled")).body), { enabled: true });
+    await click("toggle");
+    assert.equal(state.records[0].enabled, false);
+    assert.deepEqual(JSON.parse(calls.find((call) => call.path.endsWith("/enabled")).body), { enabled: false });
     state.denied = true;
     await click("delete");
     assert.match(elements.get("status").textContent, /Administrator permission required/);
@@ -130,7 +132,6 @@ test("fresh form rotation preserves an enabled owner's state, including owners o
     publishId: `other-id-${index}` }));
   await withPage(async ({ elements, state, calls, confirmations, submit }) => {
     elements.get("create").events.click();
-    assert.equal(elements.get("enabled").checked, false);
     elements.get("user").value = binding.userId;
     elements.get("key").value = replacementPem;
     await submit();
@@ -151,8 +152,6 @@ test("selected rotation locks the owner and does not send a stale enabled state"
     await click("rotate");
     assert.equal(elements.get("source").readOnly, true);
     assert.equal(elements.get("user").value, binding.userId);
-    assert.equal(elements.get("enabled-field").hidden, true);
-    assert.equal(elements.get("enabled").checked, true);
     state.records[0].enabled = false;
     elements.get("key").value = replacementPem;
     await submit();
@@ -196,7 +195,6 @@ test("cancelling rotation keeps the PEM and never submits a mutation", async () 
     assert.equal(elements.get("key").value, "");
     assert.equal(elements.get("pagination").hidden, false);
     assert.equal(elements.get("table").hidden, false);
-    assert.equal(elements.get("enabled-field").hidden, false);
   }, [binding]);
 });
 

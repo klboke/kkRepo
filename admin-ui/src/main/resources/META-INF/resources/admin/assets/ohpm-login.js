@@ -76,8 +76,6 @@
     el("user").value = key ? key.userId : "";
     el("source").readOnly = el("user").readOnly = Boolean(key);
     el("key").value = "";
-    el("enabled").checked = key ? key.enabled : false;
-    el("enabled-field").hidden = Boolean(key);
     el("form-title").textContent = key ? "Rotate public key" : "Register public key";
     el("save").textContent = key ? "Rotate public key" : "Register public key";
     el("mode").textContent = key
@@ -174,7 +172,7 @@
         event.preventDefault();
         if (!signedLoginEnabled || !ownerPicker?.validate()) return;
         return run(async () => {
-          const body = command(el("source").value, el("user").value, el("key").value, el("enabled").checked);
+          const body = command(el("source").value, el("user").value, el("key").value, true);
           const existing = selectedKey || await findOwner(body.source, body.userId);
           if (existing && !await confirmKey(existing, "Rotate")) return "Rotation cancelled.";
           if (existing) {

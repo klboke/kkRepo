@@ -50,7 +50,6 @@
     "Bind a public key to an existing user. To replace a registered key, use Rotate in the key list.": "将公钥绑定到现有用户。要替换已登记的密钥，请使用密钥列表中的“轮换”。",
     "RSA public key (X.509 PEM, 2048–8192 bits)": "RSA 公钥（X.509 PEM，2048–8192 位）",
     "Paste the public key only. Keep the private key on the publishing machine.": "仅粘贴公钥。私钥应保留在执行发布的机器上。",
-    "Enable newly registered key": "启用新登记的密钥",
     "Registered keys": "已登记的密钥",
     "Publish ID": "发布 ID",
     "SHA-256 fingerprint": "SHA-256 指纹",
