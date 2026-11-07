@@ -122,7 +122,11 @@
         row.setAttribute("aria-selected", String(option.value === selected));
         row.textContent = option.label;
         row.addEventListener("mousedown", (event) => event.preventDefault());
-        row.addEventListener("click", () => choose(index));
+        row.addEventListener("click", (event) => {
+          // Do not let the enclosing label forward a second click to the input.
+          event.preventDefault();
+          choose(index);
+        });
         list.append(row);
       }
       if (!options.length) {
@@ -158,7 +162,8 @@
         event.preventDefault();
         if (list.hidden) render();
         if (!options.length) return;
-        active = (active + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
+        active = active < 0 ? (event.key === "ArrowDown" ? 0 : options.length - 1)
+          : (active + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
         Array.from(list.children).forEach((row, index) => row.classList.toggle("is-active", index === active));
         input.setAttribute("aria-activedescendant", list.children[active].id);
         list.children[active].scrollIntoView({ block: "nearest" });

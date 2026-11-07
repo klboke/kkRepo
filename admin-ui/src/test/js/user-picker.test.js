@@ -115,3 +115,33 @@ test("lookup failures keep selection blocked and reopening retries", async () =>
     assert.equal(status.textContent, "");
   });
 });
+
+
+test("mouse selection suppresses label activation and closes the dropdown", async () => {
+  await withPicker(async ({ picker, user }) => {
+    await picker.open();
+    user.focus();
+    const event = { preventDefault() { this.prevented = true; } };
+    user.list.children[0].events.click(event);
+    assert.equal(event.prevented, true, "the label must not forward another click to the input");
+    assert.equal(user.value, "publisher");
+    assert.equal(user.list.hidden, true);
+    assert.equal(user.attrs["aria-expanded"], "false");
+    assert.equal(picker.validate(), true);
+  });
+});
+
+test("the first ArrowUp selects the last candidate and ArrowDown wraps to the first", async () => {
+  await withPicker(async ({ picker, source, user }) => {
+    await picker.open();
+    source.fire("input", "LDAP"); source.key("Enter");
+    user.focus();
+    user.key("ArrowUp");
+    assert.equal(user.attrs["aria-activedescendant"], "user-options-1");
+    user.key("ArrowDown");
+    assert.equal(user.attrs["aria-activedescendant"], "user-options-0");
+    user.key("ArrowUp"); user.key("Enter");
+    assert.equal(user.value, "other");
+    assert.equal(picker.validate(), true);
+  });
+});
