@@ -10,13 +10,21 @@ import com.github.klboke.kkrepo.persistence.mysql.support.MySqlIntegrationTestSu
 import java.io.InputStream;
 import java.security.MessageDigest;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
 
 /** Guards the frozen V1-V29 chain and validates repeat startup after newer migrations. */
 class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
-  private static final int LATEST_MIGRATION = 60;
+  /**
+   * Versions come from the classpath, not from a hand-maintained constant: every branch that adds a
+   * migration previously had to remember to bump a number here, and PR #472 proved how easily that
+   * is forgotten (CI went red with "expected 60 but was 65").
+   */
+  private static final List<Integer> MIGRATION_VERSIONS = classpathVersions("mysql");
+  private static final String LATEST_MIGRATION =
+      Integer.toString(MIGRATION_VERSIONS.get(MIGRATION_VERSIONS.size() - 1));
   private static final Map<String, String> V29_SHA256 = checksums();
 
   @Test
@@ -30,7 +38,7 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
       jdbc().execute(sql.substring(0, sql.indexOf(';')));
     }
     Flyway resumed = migration(null);
-    assertEquals(LATEST_MIGRATION - 58, resumed.migrate().migrationsExecuted);
+    assertEquals(migrationsAfter(58), resumed.migrate().migrationsExecuted);
     assertTrue(resumed.validateWithResult().validationSuccessful);
     assertEquals(0, resumed.migrate().migrationsExecuted);
     assertEquals(2, jdbc().queryForObject("""
@@ -57,9 +65,7 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
     assertTrue(flyway().validateWithResult().validationSuccessful);
     var result = flyway().migrate();
     assertEquals(0, result.migrationsExecuted);
-    assertEquals(
-        Integer.toString(LATEST_MIGRATION),
-        flyway().info().current().getVersion().getVersion());
+    assertEquals(LATEST_MIGRATION, flyway().info().current().getVersion().getVersion());
   }
 
   @Test
@@ -111,10 +117,8 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
 
     Flyway resumed = migration(null);
     resumed.repair();
-    assertEquals(LATEST_MIGRATION - 35, resumed.migrate().migrationsExecuted);
-    assertEquals(
-        Integer.toString(LATEST_MIGRATION),
-        resumed.info().current().getVersion().getVersion());
+    assertEquals(migrationsAfter(35), resumed.migrate().migrationsExecuted);
+    assertEquals(LATEST_MIGRATION, resumed.info().current().getVersion().getVersion());
     assertEquals(1, jdbc().queryForObject("""
         SELECT COUNT(*)
         FROM information_schema.table_constraints
@@ -148,10 +152,8 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
         """);
 
     Flyway resumed = migration(null);
-    assertEquals(LATEST_MIGRATION - 39, resumed.migrate().migrationsExecuted);
-    assertEquals(
-        Integer.toString(LATEST_MIGRATION),
-        resumed.info().current().getVersion().getVersion());
+    assertEquals(migrationsAfter(39), resumed.migrate().migrationsExecuted);
+    assertEquals(LATEST_MIGRATION, resumed.info().current().getVersion().getVersion());
     assertEquals(5, jdbc().queryForObject("""
         SELECT COUNT(*)
         FROM information_schema.columns
@@ -233,6 +235,35 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
         "SELECT deleted_at FROM asset_blob WHERE id = ?",
         java.sql.Timestamp.class,
         blobId));
+  }
+
+  /** Number of versioned migrations strictly newer than {@code version}. */
+  private static int migrationsAfter(int version) {
+    return (int) MIGRATION_VERSIONS.stream().filter(candidate -> candidate > version).count();
+  }
+
+  /** Versioned migrations present on the classpath, sorted ascending. */
+  private static List<Integer> classpathVersions(String dialect) {
+    try {
+      var resources = new org.springframework.core.io.support.PathMatchingResourcePatternResolver()
+          .getResources("classpath:db/migration/" + dialect + "/V*.sql");
+      List<Integer> versions = new java.util.ArrayList<>();
+      var pattern = java.util.regex.Pattern.compile("^V(\\d+)__.*\\.sql$");
+      for (var resource : resources) {
+        String name = resource.getFilename();
+        var matcher = pattern.matcher(name == null ? "" : name);
+        if (matcher.matches()) {
+          versions.add(Integer.parseInt(matcher.group(1)));
+        }
+      }
+      java.util.Collections.sort(versions);
+      if (versions.isEmpty()) {
+        throw new IllegalStateException("No versioned migrations found for " + dialect);
+      }
+      return List.copyOf(versions);
+    } catch (java.io.IOException e) {
+      throw new java.io.UncheckedIOException(e);
+    }
   }
 
   private static String hex(byte[] bytes) {

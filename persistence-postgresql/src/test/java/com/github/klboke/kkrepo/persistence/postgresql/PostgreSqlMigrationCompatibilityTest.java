@@ -12,7 +12,10 @@ import org.junit.jupiter.api.Test;
 
 /** Proves the PostgreSQL baseline validates and remains idempotent on repeated startup. */
 class PostgreSqlMigrationCompatibilityTest extends PostgreSqlIntegrationTestSupport {
-  private static final int LATEST_MIGRATION = 60;
+  /** Derived from the classpath so adding a migration never needs a constant bump (see PR #472). */
+  private static final java.util.List<Integer> MIGRATION_VERSIONS = classpathVersions();
+  private static final String LATEST_MIGRATION =
+      Integer.toString(MIGRATION_VERSIONS.get(MIGRATION_VERSIONS.size() - 1));
 
   @Test
   void completionIndexesCanResumeAnInterruptedConcurrentBuild() throws Exception {
@@ -63,9 +66,7 @@ class PostgreSqlMigrationCompatibilityTest extends PostgreSqlIntegrationTestSupp
     assertTrue(flyway().validateWithResult().validationSuccessful);
     var result = flyway().migrate();
     assertEquals(0, result.migrationsExecuted);
-    assertEquals(
-        Integer.toString(LATEST_MIGRATION),
-        flyway().info().current().getVersion().getVersion());
+    assertEquals(LATEST_MIGRATION, flyway().info().current().getVersion().getVersion());
   }
 
   @Test
@@ -146,5 +147,29 @@ class PostgreSqlMigrationCompatibilityTest extends PostgreSqlIntegrationTestSupp
         "SELECT deleted_at FROM asset_blob WHERE id = ?",
         java.time.OffsetDateTime.class,
         blobId));
+  }
+
+  /** Versioned PostgreSQL migrations present on the classpath, sorted ascending. */
+  private static java.util.List<Integer> classpathVersions() {
+    try {
+      var resources = new org.springframework.core.io.support.PathMatchingResourcePatternResolver()
+          .getResources("classpath:db/migration/postgresql/V*.sql");
+      var versions = new java.util.ArrayList<Integer>();
+      var pattern = java.util.regex.Pattern.compile("^V(\\d+)__.*\\.sql$");
+      for (var resource : resources) {
+        String name = resource.getFilename();
+        var matcher = pattern.matcher(name == null ? "" : name);
+        if (matcher.matches()) {
+          versions.add(Integer.parseInt(matcher.group(1)));
+        }
+      }
+      java.util.Collections.sort(versions);
+      if (versions.isEmpty()) {
+        throw new IllegalStateException("No versioned PostgreSQL migrations found");
+      }
+      return java.util.List.copyOf(versions);
+    } catch (java.io.IOException e) {
+      throw new java.io.UncheckedIOException(e);
+    }
   }
 }
