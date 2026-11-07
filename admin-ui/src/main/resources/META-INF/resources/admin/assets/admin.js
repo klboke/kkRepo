@@ -4620,22 +4620,32 @@ function renderSecurityApiKeys() {
     || '<tr><td colspan="6" class="placeholder">No API keys.</td></tr>';
 }
 
+let apiKeyOwnerPicker;
+
 function showSecurityApiKeyForm() {
+  apiKeyOwnerPicker ||= window.KkUserPicker.create({
+    source: document.getElementById("security-api-key-owner-source"),
+    user: document.getElementById("security-api-key-owner-user-id"),
+    status: document.getElementById("security-api-key-owner-status")
+  });
   document.getElementById("security-api-key-domain").value = "NpmToken";
   document.getElementById("security-api-key-owner-source").value = "Local";
   document.getElementById("security-api-key-owner-user-id").value = "";
   document.getElementById("security-api-key-display-name").value = "";
   document.getElementById("security-api-key-scopes").value = "";
   clearRequiredFieldErrors(securityApiKeyRequiredFields);
-  openFormModal("security-api-key-form", "security-api-key-owner-user-id");
+  apiKeyOwnerPicker.open();
+  openFormModal("security-api-key-form", "security-api-key-domain");
 }
 
 function hideSecurityApiKeyForm() {
+  apiKeyOwnerPicker?.close();
   closeFormModal("security-api-key-form");
   clearRequiredFieldErrors(securityApiKeyRequiredFields);
 }
 
 async function saveSecurityApiKey() {
+  if (!apiKeyOwnerPicker?.validate()) return;
   if (!validateRequiredFields(securityApiKeyRequiredFields)) return;
   const payload = {
     domain: document.getElementById("security-api-key-domain").value.trim() || "NpmToken",

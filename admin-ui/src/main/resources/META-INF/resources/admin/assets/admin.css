@@ -4806,3 +4806,32 @@ code {
   cursor: not-allowed;
   opacity: 0.65;
 }
+
+/* Searchable owner selectors share the Admin field and dropdown styling. */
+.user-picker { position: relative; min-width: 0; }
+.user-picker input { width: 100%; padding-right: 28px; }
+.user-picker::after {
+  content: ""; position: absolute; right: 12px; top: 14px; width: 6px; height: 6px;
+  border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted);
+  transform: rotate(45deg); pointer-events: none;
+}
+.credentials-form .form-grid label { align-content: start; }
+.user-picker-options {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 40;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow-pop);
+}
+.user-picker-option { padding: 8px; border-radius: 4px; cursor: pointer; overflow-wrap: anywhere; }
+.user-picker-option:hover, .user-picker-option.is-active { background: var(--surface-soft, #edf5f1); }
+.user-picker-option[aria-selected="true"] { color: var(--accent); font-weight: 600; }
+.user-picker-empty { padding: 8px; }
+#security-api-key-owner-status:empty, #ohpm-login-owner-status:empty { display: none; }

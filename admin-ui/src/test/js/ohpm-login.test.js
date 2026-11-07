@@ -35,7 +35,7 @@ async function withPage(run, initial = [], configurationEnabled = true) {
       querySelectorAll(selector) { return selector === "[data-requires-signed-login]" ? [] : [...elements.values()]; }
     });
   }
-  const originals = Object.fromEntries(["document", "fetch", "escapeHtml", "responseErrorMessage", "kkrepoConfirmDelete", "openFormModal", "closeFormModal", "bindFormModalDismiss"]
+  const originals = Object.fromEntries(["document", "fetch", "escapeHtml", "responseErrorMessage", "kkrepoConfirmDelete", "openFormModal", "closeFormModal", "bindFormModalDismiss", "KkUserPicker"]
     .map((name) => [name, global[name]]));
   global.document = { getElementById: (id) => elements.get(id.replace("ohpm-login-", "")) };
   global.escapeHtml = (text) => String(text).replaceAll("<", "&lt;").replaceAll(">", "&gt;");
@@ -45,6 +45,7 @@ async function withPage(run, initial = [], configurationEnabled = true) {
   global.openFormModal = () => { elements.get("form").hidden = false; };
   global.closeFormModal = () => { elements.get("form").hidden = true; };
   global.bindFormModalDismiss = (id, handler) => { state.dismiss = handler; };
+  global.KkUserPicker = { create: () => ({ open() {}, close() {}, sync() {}, validate: () => state.ownerValid !== false }) };
   const calls = [], confirmations = [];
   global.kkrepoConfirmDelete = async (options) => { confirmations.push(options); return state.confirm; };
   global.fetch = async (path, options) => {
@@ -314,4 +315,14 @@ test("disabled signed login blocks creation, rotation and enabling while allowin
     assert.equal(elements.get("create").disabled, true);
     assert.equal(elements.get("notice").hidden, false);
   }, [{ ...binding, enabled: false }], false);
+});
+
+test("an unselected owner never submits a signing key", async () => {
+  await withPage(async ({ elements, state, calls, submit }) => {
+    elements.get("create").events.click();
+    state.ownerValid = false;
+    elements.get("key").value = replacementPem;
+    await submit();
+    assert.equal(calls.filter((call) => call.method === "PUT").length, 0);
+  });
 });

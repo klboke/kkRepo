@@ -6,7 +6,7 @@
   let returnFocus = null;
   let signedLoginEnabled = false;
   const unavailable = "Enable signed login in the server configuration before creating, rotating or enabling keys.";
-  let selectedKey = null;
+  let selectedKey = null, ownerPicker;
 
   async function request(path, method = "GET", body) {
     const response = await fetch(path, {
@@ -90,10 +90,13 @@
     returnFocus = trigger;
     editKey(key);
     el("form-status").textContent = "";
-    openFormModal("ohpm-login-form", key ? "ohpm-login-key" : "ohpm-login-user");
+    ownerPicker ||= root.KkUserPicker.create({ source: el("source"), user: el("user"), status: el("owner-status") });
+    ownerPicker.open(key);
+    openFormModal("ohpm-login-form", "ohpm-login-key");
   }
 
   function closeKeyForm(restoreFocus = true) {
+    ownerPicker?.close();
     closeFormModal("ohpm-login-form");
     editKey();
     el("form-status").textContent = "";
@@ -159,6 +162,7 @@
         button.disabled = !signedLoginEnabled;
         button.title = signedLoginEnabled ? "" : unavailable;
       });
+      ownerPicker?.sync();
       if (formOperation && el("form").hidden) (returnFocus?.isConnected ? returnFocus : el("create")).focus();
     }
   }
@@ -168,7 +172,7 @@
       initialized = true;
       el("form").addEventListener("submit", (event) => {
         event.preventDefault();
-        if (!signedLoginEnabled) return;
+        if (!signedLoginEnabled || !ownerPicker?.validate()) return;
         return run(async () => {
           const body = command(el("source").value, el("user").value, el("key").value, el("enabled").checked);
           const existing = selectedKey || await findOwner(body.source, body.userId);

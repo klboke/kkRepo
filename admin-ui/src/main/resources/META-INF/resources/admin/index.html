@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-4">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20261009-gitlfs-2">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20260818-user-round-1">
-    <link rel="stylesheet" href="./assets/admin.css?v=20261107-keys-dialog">
+    <link rel="stylesheet" href="./assets/admin.css?v=20261107-user-picker">
     <link rel="stylesheet" href="/browse/assets/account-menu.css?v=20260824-ui-themes-3">
     <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=20260819-topbar-control-height-1">
     <link rel="stylesheet" href="/login/assets/delete-confirmation.css?v=20261013-delete-confirmation-1">
@@ -1501,7 +1501,7 @@
             <div class="form-modal-backdrop" data-modal-dismiss="security-api-key-form"></div>
             <div class="form-modal-panel form-modal-panel-narrow">
               <button class="form-modal-close" data-modal-dismiss="security-api-key-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
-          <form class="blobstore-form modal-form" id="security-api-key-form" hidden novalidate>
+          <form class="blobstore-form modal-form credentials-form" id="security-api-key-form" hidden novalidate>
             <div class="form-title" id="security-api-key-form-title">Create API key</div>
             <div class="form-grid">
               <label>
@@ -1516,11 +1516,12 @@
                 </select>
                 <span class="form-note" id="security-api-key-domain-help">Use GenericToken for ordinary OHPM publishing and installation.</span>
               </label>
-              <label><span>Owner source</span><input id="security-api-key-owner-source" type="text" value="Local"></label>
-              <label><span>Owner user ID <span class="required-mark">*</span></span><input id="security-api-key-owner-user-id" type="text" required></label>
               <label><span>Display name</span><input id="security-api-key-display-name" type="text"></label>
-              <label><span>Scopes</span><input id="security-api-key-scopes" type="text" placeholder="read, write"></label>
+              <label><span>Owner source</span><input id="security-api-key-owner-source" type="text" required aria-label="Owner source"></label>
+              <label><span>Owner user ID <span class="required-mark">*</span></span><input id="security-api-key-owner-user-id" type="text" required aria-label="Owner user ID"></label>
+              <label class="full-width"><span>Scopes</span><input id="security-api-key-scopes" type="text" placeholder="read, write"></label>
             </div>
+            <p class="form-note" id="security-api-key-owner-status" role="status" aria-live="polite"></p>
             <div class="form-actions">
               <button class="create-button" id="save-security-api-key-button" type="button">Create API key</button>
               <button class="create-button secondary" id="cancel-security-api-key-button" type="button">Cancel</button>
@@ -2014,8 +2015,9 @@
             <div class="form-title" id="ohpm-login-form-title">Create signing key</div>
             <p class="form-note credentials-form-note" id="ohpm-login-mode"></p>
             <div class="form-grid">
-              <label><span>User source</span><input id="ohpm-login-source" value="Local" required maxlength="100"></label>
-              <label><span>User ID</span><input id="ohpm-login-user" required maxlength="255"></label>
+              <label><span>User source</span><input id="ohpm-login-source" aria-label="User source" required maxlength="100"></label>
+              <label><span>User ID</span><input id="ohpm-login-user" aria-label="User ID" required maxlength="255"></label>
+              <p class="form-note full-width" id="ohpm-login-owner-status" role="status" aria-live="polite"></p>
               <label class="full-width"><span>RSA public key (X.509 PEM, 2048–8192 bits)</span><textarea id="ohpm-login-key" required rows="5" maxlength="16384" spellcheck="false" aria-describedby="ohpm-login-key-help"></textarea>
                 <span class="form-note" id="ohpm-login-key-help">Paste the public key only. Keep the private key on the publishing machine.</span>
               </label>
@@ -2140,7 +2142,7 @@
     <script src="/login/assets/csrf-fetch.js?v=20261006-shared-primitives-1"></script>
     <script src="/login/assets/account-menu.js?v=20261006-shared-primitives-1"></script>
     <script src="/login/assets/safe-return-to.js?v=20261023-safe-return-to-1"></script>
-    <script src="/login/assets/ui-i18n.js?v=20261107-keys-dialog"></script>
+    <script src="/login/assets/ui-i18n.js?v=20261107-user-picker"></script>
     <script src="/login/assets/delete-confirmation.js?v=20261107-key-confirmation"></script>
     <script src="/login/assets/product-update.js?v=20260819-version-update-1"></script>
     <script src="./assets/admin-filter.js?v=20260706-wildcard-filter-1"></script>
@@ -2148,7 +2150,8 @@
     <script src="./assets/routing-rules.js?v=20261026-routing-rules-2"></script>
     <script src="./assets/content-selectors.js?v=20261013-delete-confirmation-1"></script>
     <script src="./assets/ohpm-import.js?v=20261106-ohpm-import"></script>
-    <script src="./assets/ohpm-login.js?v=20261107-keys-dialog"></script>
-    <script src="./assets/admin.js?v=20261107-keys-dialog"></script>
+    <script src="./assets/user-picker.js?v=20261107-user-picker"></script>
+    <script src="./assets/ohpm-login.js?v=20261107-user-picker"></script>
+    <script src="./assets/admin.js?v=20261107-user-picker"></script>
   </body>
 </html>
