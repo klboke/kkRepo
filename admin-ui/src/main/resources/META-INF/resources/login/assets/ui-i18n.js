@@ -40,7 +40,7 @@
     "Select an existing user from the list.": "请从列表中选择现有用户。",
     "Select an option from the list.": "请从列表中选择一项。",
     "No matches. Refine your search.": "没有匹配项，请调整搜索条件。",
-    "Use GenericToken for ordinary OHPM publishing and installation.": "普通 OHPM 发布和安装可使用 GenericToken。",
+    "API key permissions are determined by the owner's roles. To limit access, assign the owner only the required roles.": "API Key 权限由所属用户的角色决定。如需限制访问，请仅为该用户分配必要的角色。",
     "Signed login is enabled on this server.": "此服务器已启用签名登录。",
     "Signed login is disabled on this server.": "此服务器尚未启用签名登录。",
     "Enabled keys can authenticate signed publication.": "已启用的密钥可用于签名发布认证。",

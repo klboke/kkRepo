@@ -1497,16 +1497,17 @@
           <div class="action-bar">
             <button class="create-button" id="create-security-api-key-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create API key</button>
           </div>
-          <div class="form-modal" id="security-api-key-form-modal" data-form-id="security-api-key-form" role="dialog" aria-modal="true" aria-labelledby="security-api-key-form-title" hidden>
+          <div class="form-modal" id="security-api-key-form-modal" data-form-id="security-api-key-form" role="dialog" aria-modal="true" aria-labelledby="security-api-key-form-title" aria-describedby="security-api-key-permission-help" hidden>
             <div class="form-modal-backdrop" data-modal-dismiss="security-api-key-form"></div>
             <div class="form-modal-panel form-modal-panel-narrow">
               <button class="form-modal-close" data-modal-dismiss="security-api-key-form" type="button" aria-label="Close dialog" title="Close dialog"><span class="lucide-icon icon-x" aria-hidden="true"></span></button>
           <form class="blobstore-form modal-form credentials-form" id="security-api-key-form" hidden novalidate>
             <div class="form-title" id="security-api-key-form-title">Create API key</div>
+            <p class="form-note credentials-form-note" id="security-api-key-permission-help">API key permissions are determined by the owner's roles. To limit access, assign the owner only the required roles.</p>
             <div class="form-grid">
               <label>
                 <span>Domain</span>
-                <select id="security-api-key-domain" aria-describedby="security-api-key-domain-help">
+                <select id="security-api-key-domain">
                   <option value="NpmToken">NpmToken</option>
                   <option value="NuGetApiKey">NuGetApiKey</option>
                   <option value="CargoToken">CargoToken</option>
@@ -1514,7 +1515,6 @@
                   <option value="RubyGemsApiKey">RubyGemsApiKey</option>
                   <option value="GenericToken">GenericToken</option>
                 </select>
-                <span class="form-note" id="security-api-key-domain-help">Use GenericToken for ordinary OHPM publishing and installation.</span>
               </label>
               <label><span>Display name</span><input id="security-api-key-display-name" type="text"></label>
               <label><span>Owner source</span><input id="security-api-key-owner-source" type="text" required aria-label="Owner source"></label>
