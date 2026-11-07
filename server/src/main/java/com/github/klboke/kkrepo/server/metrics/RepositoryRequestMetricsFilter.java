@@ -294,6 +294,8 @@ public class RepositoryRequestMetricsFilter extends OncePerRequestFilter {
     return switch (format) {
       case MAVEN2 -> mavenOperation(path, normalizedMethod);
       case NPM -> npmOperation(path, normalizedMethod);
+      case OHPM -> "ohpm_" + new com.github.klboke.kkrepo.protocol.ohpm.OhpmPathParser()
+          .parse(normalizedMethod, path).kind().name().toLowerCase(Locale.ROOT);
       case PYPI -> pypiOperation(path, normalizedMethod);
       case CARGO -> cargoOperation(path, normalizedMethod);
       case PUB -> pubOperation(path, normalizedMethod);

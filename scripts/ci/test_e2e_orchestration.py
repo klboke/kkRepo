@@ -1,6 +1,7 @@
 """Regression checks for coverage preservation, disk guards and image reuse."""
 
 import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import io
 import json
@@ -9,10 +10,11 @@ from pathlib import Path
 import subprocess
 import tarfile
 import tempfile
+import threading
 import unittest
 
 SCRIPTS = Path(__file__).resolve().parent
-EXPECTED = "raw maven npm pypi go helm cargo pub composer nuget rubygems yum apt alpine r conda conan gitlfs terraform swift ansible docker-oci".split()
+EXPECTED = "raw maven npm pypi go helm cargo pub composer nuget rubygems yum apt alpine r conda conan gitlfs terraform swift ansible docker-oci ohpm".split()
 
 
 def load(name):
@@ -85,7 +87,7 @@ run_registered_cleanup() { echo cleanup; }
         self.assertEqual(result.returncode, 0, result.stderr)
         lines = result.stdout.splitlines()
         self.assertEqual([x[5:] for x in lines if x.startswith("test:")], EXPECTED)
-        self.assertEqual([x[9:] for x in lines if x.startswith("register:")], [x for x in EXPECTED if x != "gitlfs"])
+        self.assertEqual([x[9:] for x in lines if x.startswith("register:")], [x for x in EXPECTED if x not in ("gitlfs", "ohpm")])
         self.assertEqual(lines.count("cleanup"), len(EXPECTED))
 
     def test_shards_execute_every_original_protocol_and_cleanup_once(self):
@@ -95,7 +97,7 @@ run_registered_cleanup() { echo cleanup; }
             self.assertEqual(result.returncode, 0, result.stderr)
             lines = result.stdout.splitlines()
             protocols = [x[5:] for x in lines if x.startswith("test:")]
-            self.assertEqual([x[9:] for x in lines if x.startswith("register:")], [x for x in protocols if x != "gitlfs"])
+            self.assertEqual([x[9:] for x in lines if x.startswith("register:")], [x for x in protocols if x not in ("gitlfs", "ohpm")])
             self.assertEqual(lines.count("cleanup"), len(protocols))
             collected.extend(protocols)
         self.assertCountEqual(collected, EXPECTED)
@@ -110,6 +112,63 @@ run_registered_cleanup() { echo cleanup; }
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("test:swift", result.stdout)
         self.assertNotIn("test:maven", result.stdout)
+
+    def ohpm_matrix(self, skipped):
+        class LoginHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(json.dumps({"enabled": self.path.startswith("/enabled/")}).encode())
+
+            def log_message(self, *_):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), LoginHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        project = self.root / "ohpm-project"
+        scripts = project / "scripts/ci"
+        scripts.mkdir(parents=True)
+        for name in ("ohpm-client-e2e.sh", "run-ohpm-compat.sh"):
+            (scripts / name).write_text((SCRIPTS / name).read_text())
+        self.stub("ohpm", "echo 5.0.2\n")
+        self.stub("mvn", '''python3 - <<'PY'
+import json, os, pathlib
+report = pathlib.Path("compat-test/target/surefire-reports")
+report.mkdir(parents=True, exist_ok=True)
+skipped = os.environ["OHPM_TEST_SKIPPED"] if os.environ["OHPM_COMPAT_LOGIN_ENABLED"] == "true" else "0"
+(report / "TEST-com.github.klboke.kkrepo.compat.OhpmRepositoryBlackBoxCompatibilityTest.xml").write_text(
+    f'<testsuite tests="9" failures="0" errors="0" skipped="{skipped}"/>')
+pathlib.Path(os.environ["OHPM_CLEANUP_REPORT"]).write_text(json.dumps({
+    "automaticCleanupRejected": True, "protocolDeletionVerified": True}))
+PY
+''')
+        base = f"http://127.0.0.1:{server.server_port}"
+        env = dict(self.env, KKREPO_COMPAT_BASE_URL=base + "/disabled",
+                   OHPM_LOGIN_BASE_URL=base + "/enabled", KKREPO_COMPAT_PASSWORD="test-fixture",
+                   OHPM_COMMAND="ohpm", OHPM_TEST_SKIPPED=str(skipped),
+                   CLIENT_E2E_ARTIFACT_DIR=str(self.root / "reports"))
+        result = subprocess.run(["bash", str(scripts / "ohpm-client-e2e.sh")],
+                                env=env, text=True, capture_output=True)
+        return result, self.root / "reports"
+
+    def test_ohpm_matrix_preserves_both_login_reports_and_cleanup_proof(self):
+        result, directory = self.ohpm_matrix(0)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = json.loads((directory / "cleanup-ohpm.json").read_text())
+        self.assertEqual(set(report["loginVariants"]), {"false", "true"})
+        for login in ("false", "true"):
+            self.assertTrue((directory / "ohpm" / f"login-{login}" / "acceptance.log").exists())
+            self.assertTrue(report["loginVariants"][login]["protocolDeletionVerified"])
+
+    def test_ohpm_matrix_rejects_skipped_login_variant_and_retains_diagnostics(self):
+        result, directory = self.ohpm_matrix(1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((directory / "cleanup-ohpm.json").exists())
+        self.assertIn("Every requested OHPM acceptance test", result.stdout)
+        self.assertTrue(list((directory / "ohpm/login-true").glob("TEST-*.xml")))
 
     def disk_stubs(self, before, after, fallback=None):
         self.env.update(DISK_BEFORE=str(before * 1024 * 1024), DISK_AFTER=str(after * 1024 * 1024),
@@ -248,11 +307,32 @@ fi
                     directory.mkdir(parents=True)
                     (directory / "protocol-durations.tsv").write_text("".join(f"{test}\t1\n" for test in tests))
                     for test in tests:
-                        (directory / f"cleanup-{test}.json").write_text(json.dumps({"automaticCleanupRejected": True} if test == "gitlfs" else {
+                        (directory / f"cleanup-{test}.json").write_text(json.dumps({"loginVariants": {
+                            login: {"automaticCleanupRejected": True, "protocolDeletionVerified": True}
+                            for login in ("false", "true")
+                        }} if test == "ohpm" else {"automaticCleanupRejected": True} if test == "gitlfs" else {
                             "tryRun": {"run": {"state": "SUCCEEDED", "matchedSubjects": 1}},
                             "executeRun": {"run": {"state": "SUCCEEDED", "deletedSubjects": 1, "failedSubjects": 0}},
                         }))
-        self.assertIn("Verified 88", verifier.verify(self.root))
+        self.assertIn("Verified 92", verifier.verify(self.root))
+        ohpm = self.root / "full-native-client-live-compat-postgresql-core-logs" / "client-e2e" / "cleanup-ohpm.json"
+        complete = ohpm.read_text()
+        for login in ("false", "true"):
+            for field in ("automaticCleanupRejected", "protocolDeletionVerified"):
+                report = json.loads(complete)
+                report["loginVariants"][login][field] = False
+                ohpm.write_text(json.dumps(report))
+                with self.assertRaises(ValueError):
+                    verifier.verify(self.root)
+            report = json.loads(complete)
+            del report["loginVariants"][login]
+            ohpm.write_text(json.dumps(report))
+            with self.assertRaises(ValueError):
+                verifier.verify(self.root)
+        ohpm.unlink()
+        with self.assertRaises(FileNotFoundError):
+            verifier.verify(self.root)
+        ohpm.write_text(complete)
         lfs = self.root / "full-native-client-live-compat-postgresql-system-logs" / "client-e2e" / "cleanup-gitlfs.json"
         lfs.write_text('{"automaticCleanupRejected": false}')
         with self.assertRaises(ValueError):

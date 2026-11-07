@@ -1,0 +1,163 @@
+(function (root) {
+  "use strict";
+  const api = "/internal/ohpm/login";
+  const el = (name) => document.getElementById(`ohpm-login-${name}`);
+  let initialized = false, busy = false, offset = 0, keys = [];
+  let selectedKey = null;
+
+  async function request(path, method = "GET", body) {
+    const response = await fetch(path, {
+      method, cache: "no-store",
+      headers: body ? { "Content-Type": "application/json" } : {},
+      body: body ? JSON.stringify(body) : undefined
+    });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    return response.status === 204 ? null : response.json();
+  }
+
+  function command(source, userId, publicKey, enabled) {
+    source = source.trim();
+    userId = userId.trim();
+    publicKey = publicKey.trim();
+    if (!source || !userId) throw new Error("Enter an existing user source and user ID.");
+    if (publicKey.length > 16384 || !/^-----BEGIN PUBLIC KEY-----\s+[A-Za-z0-9+/=\s]+\s+-----END PUBLIC KEY-----$/.test(publicKey)) {
+      throw new Error("Provide an X.509 PEM public key. Keep the private key on the publishing machine.");
+    }
+    return { source, userId, publicKey, enabled };
+  }
+
+  async function refresh() {
+    const configuration = await request(api);
+    el("configuration").textContent = `Signed login is ${configuration.enabled ? "enabled" : "disabled"} on this server. `
+      + (configuration.enabled ? "" : "Preconfigured keys cannot authenticate until signed login is enabled. ")
+      + `Token lifetime: ${configuration.tokenTtlSeconds}s. Timestamp tolerance: ${configuration.timestampToleranceSeconds}s.`;
+    keys = await request(`${api}/keys?offset=${offset}`);
+    el("rows").innerHTML = keys.map((key, index) => `<tr>
+      <td>${escapeHtml(key.source)} / ${escapeHtml(key.userId)}</td>
+      <td><code>${escapeHtml(key.publishId)}</code></td><td><code>${escapeHtml(key.fingerprint)}</code></td>
+      <td>${key.enabled ? (configuration.enabled ? "Key enabled" : "Key enabled · Login unavailable") : "Key disabled"}</td><td>
+      <button type="button" class="create-button secondary" data-key-action="rotate" data-index="${index}">Rotate</button>
+      <button type="button" class="create-button secondary" data-key-action="toggle" data-index="${index}">${key.enabled ? "Disable" : "Enable"}</button>
+      <button type="button" class="create-button secondary" data-key-action="delete" data-index="${index}">Delete</button>
+      </td></tr>`).join("");
+    el("empty").hidden = keys.length !== 0;
+    el("page").textContent = `Keys ${keys.length ? offset + 1 : 0}–${offset + keys.length}`;
+  }
+
+  function editKey(key = null) {
+    selectedKey = key;
+    el("source").value = key ? key.source : "Local";
+    el("user").value = key ? key.userId : "";
+    el("source").readOnly = el("user").readOnly = Boolean(key);
+    el("key").value = "";
+    el("enabled").checked = key ? key.enabled : false;
+    el("enabled-field").hidden = Boolean(key);
+    el("cancel").hidden = !key;
+    el("save").textContent = key ? "Rotate public key" : "Save public key";
+    el("mode").textContent = key
+      ? `Rotate ${key.source} / ${key.userId}. The publish ID and current enabled state are preserved.`
+      : "For an existing owner, saving rotates the key and preserves its current enabled state. Use the table actions to enable or disable a key.";
+  }
+
+  async function findOwner(source, userId) {
+    for (let pageOffset = 0; ; pageOffset += 100) {
+      const page = await request(`${api}/keys?offset=${pageOffset}`);
+      const key = page.find((entry) => entry.source === source && entry.userId === userId);
+      if (key || page.length < 100) return key;
+    }
+  }
+
+  function confirmKey(key, action) {
+    const deleting = action === "Delete";
+    return root.kkrepoConfirmDelete({
+      title: `${action} signing key?`,
+      confirmLabel: action,
+      description: `${action} the key for ${key.source} / ${key.userId}. Existing signed-login tokens will be revoked. `
+        + (deleting ? "Registering again creates a new publish ID." : action === "Disable"
+          ? "Signed login will be unavailable until this key is enabled again."
+          : "Publishers must use the replacement private key to sign in again. The current enabled state is preserved."),
+      warning: deleting ? "Deletion is permanent. This action cannot be undone."
+        : "Publishing jobs using the current signed-login token will need to authenticate again.",
+      details: [
+        { label: "Owner", value: `${key.source} / ${key.userId}` },
+        { label: "Publish ID", value: key.publishId },
+        { label: "SHA-256 fingerprint", value: key.fingerprint }
+      ]
+    });
+  }
+
+  async function run(action, message = "Signing keys loaded.", pending = "Loading signing keys…") {
+    if (busy) return;
+    busy = true;
+    el("view").querySelectorAll("input, textarea, button").forEach((element) => { element.disabled = true; });
+    el("status").textContent = pending;
+    try {
+      const outcome = await action();
+      el("status").textContent = outcome || message;
+    } catch (error) {
+      el("status").textContent = error.message;
+    } finally {
+      busy = false;
+      el("view").querySelectorAll("input, textarea, button").forEach((element) => { element.disabled = false; });
+      el("previous").disabled = offset === 0;
+      el("next").disabled = keys.length < 100;
+    }
+  }
+
+  async function load() {
+    if (!initialized) {
+      initialized = true;
+      el("form").addEventListener("submit", (event) => {
+        event.preventDefault();
+        return run(async () => {
+          const body = command(el("source").value, el("user").value, el("key").value, el("enabled").checked);
+          const existing = selectedKey || await findOwner(body.source, body.userId);
+          if (existing && !await confirmKey(existing, "Rotate")) return "Rotation cancelled.";
+          if (existing) {
+            await request(`${api}/keys/${encodeURIComponent(existing.publishId)}/public-key`, "PUT",
+              { publicKey: body.publicKey });
+          } else {
+            await request(`${api}/keys`, "PUT", body);
+          }
+          editKey();
+          offset = 0;
+          await refresh();
+          return existing ? "Public key rotated. Current enabled state preserved; previous signed-login tokens revoked."
+            : "Public key saved.";
+        }, "Public key saved.", "Saving public key…");
+      });
+      el("cancel").addEventListener("click", () => { editKey(); el("status").textContent = "Rotation cancelled."; });
+      el("refresh").addEventListener("click", () => run(refresh));
+      el("previous").addEventListener("click", () => run(async () => { offset = Math.max(0, offset - 100); await refresh(); }));
+      el("next").addEventListener("click", () => run(async () => { offset += 100; await refresh(); }));
+      el("rows").addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-key-action]");
+        if (!button) return;
+        const key = keys[Number(button.dataset.index)];
+        if (!key || busy) return;
+        if (button.dataset.keyAction === "rotate") {
+          editKey(key);
+          el("key").focus();
+          el("status").textContent = "Enter the replacement public key.";
+          return;
+        }
+        return run(async () => {
+          const path = `${api}/keys/${encodeURIComponent(key.publishId)}`;
+          const action = button.dataset.keyAction === "delete" ? "Delete" : key.enabled ? "Disable" : "Enable";
+          if (action !== "Enable" && !await confirmKey(key, action)) return `${action} cancelled.`;
+          if (button.dataset.keyAction === "delete") await request(path, "DELETE");
+          else await request(`${path}/enabled`, "PUT", { enabled: !key.enabled });
+          if (selectedKey?.publishId === key.publishId) editKey();
+          await refresh();
+          return `Signing key ${action === "Delete" ? "deleted" : action === "Disable" ? "disabled" : "enabled"}.`;
+        }, "Signing key updated.", "Updating signing key…");
+      });
+      editKey();
+    }
+    await run(refresh);
+  }
+
+  const exported = { load, command };
+  if (typeof module !== "undefined" && module.exports) module.exports = exported;
+  else root.KkOhpmLogin = exported;
+})(typeof window === "undefined" ? globalThis : window);

@@ -28,6 +28,18 @@ class ComponentUploadErrorAdviceTest {
 
   private final ComponentUploadErrorAdvice advice = new ComponentUploadErrorAdvice();
 
+  @ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(ints = {400, 403, 405, 413, 598})
+  void ohpmUploadPreservesProtocolStatusIncludingTransientFailure(int status) throws Exception {
+    ComponentUploadService service = mock(ComponentUploadService.class);
+    doThrow(new com.github.klboke.kkrepo.protocol.ohpm.OhpmException(status, "OHPM test rejection"))
+        .when(service).upload(anyString(), anyMap(), any(), anyString(), anyString());
+    MockMvc mvc = MockMvcBuilders.standaloneSetup(new ComponentUploadController(service))
+        .setControllerAdvice(advice).build();
+    mvc.perform(multipart("/service/rest/v1/components").param("repository", "ohpm"))
+        .andExpect(result -> assertEquals(status, result.getResponse().getStatus()));
+  }
+
   @Test
   void cargoUploadBadRequestUsesUploadErrorBody() {
     ResponseEntity<Map<String, String>> response =

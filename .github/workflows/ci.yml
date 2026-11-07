@@ -48,6 +48,9 @@ jobs:
       - name: Run non-live compatibility tests
         run: mvn -B -ntp -pl compat-test -am -Dtest=MavenMetadataMergeCompatibilityTest,MavenWritePolicyCompatibilityTest,NpmProtocolCompatibilityTest -Dsurefire.failIfNoSpecifiedTests=false verify
 
+      - name: Run OHPM protocol tests
+        run: mvn -B -ntp -pl protocol-ohpm -am verify
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
         with:

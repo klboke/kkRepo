@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-4">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20261009-gitlfs-2">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20260818-user-round-1">
-    <link rel="stylesheet" href="./assets/admin.css?v=20261026-routing-rules-2">
+    <link rel="stylesheet" href="./assets/admin.css?v=20261107-ohpm-credentials">
     <link rel="stylesheet" href="/browse/assets/account-menu.css?v=20260824-ui-themes-3">
     <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=20260819-topbar-control-height-1">
     <link rel="stylesheet" href="/login/assets/delete-confirmation.css?v=20261013-delete-confirmation-1">
@@ -103,7 +103,7 @@
             <button class="side-item" data-view="security-ldap" type="button"><span class="side-item-icon lucide-icon icon-network" aria-hidden="true"></span><span>LDAP</span></button>
             <button class="side-item" data-view="security-oidc" type="button"><span class="side-item-icon lucide-icon icon-log-in" aria-hidden="true"></span><span>OIDC</span></button>
             <button class="side-item" data-view="security-anonymous" type="button"><span class="side-item-icon lucide-icon icon-user-round-x" aria-hidden="true"></span><span>Anonymous</span></button>
-            <button class="side-item" data-view="security-api-keys" type="button"><span class="side-item-icon lucide-icon icon-key-round" aria-hidden="true"></span><span>API Keys</span></button>
+            <button class="side-item" data-view="security-api-keys" type="button"><span class="side-item-icon lucide-icon icon-key-round" aria-hidden="true"></span><span>Keys &amp; Tokens</span></button>
             <button class="side-item" data-view="security-scanning" type="button"><span class="side-item-icon lucide-icon icon-package-search" aria-hidden="true"></span><span>Artifact Scanning</span></button>
             <button class="side-item" data-view="security-audit-log" type="button"><span class="side-item-icon lucide-icon icon-scroll-text" aria-hidden="true"></span><span>Audit Log</span></button>
           </div>
@@ -121,6 +121,7 @@
           <div class="side-group-items" id="side-group-migration-items" data-side-group-items="migration">
             <button class="side-item" data-view="nexus-migration" type="button"><span class="side-item-icon lucide-icon icon-database-backup" aria-hidden="true"></span><span>Nexus Metadata</span></button>
             <button class="side-item" data-view="repository-data-migration" type="button"><span class="side-item-icon lucide-icon icon-arrow-left-right" aria-hidden="true"></span><span>Nexus Repository Data</span></button>
+            <button class="side-item" data-view="ohpm-import" type="button"><span class="side-item-icon lucide-icon icon-arrow-left-right" aria-hidden="true"></span><span>OHPM Import</span></button>
           </div>
         </nav>
       </aside>
@@ -1486,11 +1487,13 @@
         <section class="view" id="security-api-keys-view">
           <div class="page-heading">
             <span class="heading-icon"><span class="lucide-icon icon-key-round" aria-hidden="true"></span></span>
-            <h1>API Keys</h1>
+            <h1>Keys &amp; Tokens</h1>
             <span class="heading-copy">Manage API key ownership and domains</span>
           </div>
           <div class="action-bar">
             <button class="create-button" id="create-security-api-key-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create API key</button>
+            <a class="create-button secondary" href="#admin/security/ohpm-login">OHPM signing keys (optional)</a>
+            <span class="form-note">Use GenericToken for ordinary OHPM publishing and installation.</span>
           </div>
           <div class="form-modal" id="security-api-key-form-modal" data-form-id="security-api-key-form" role="dialog" aria-modal="true" aria-labelledby="security-api-key-form-title" hidden>
             <div class="form-modal-backdrop" data-modal-dismiss="security-api-key-form"></div>
@@ -1985,6 +1988,76 @@
           </form>
         </section>
 
+        <section class="view" id="ohpm-login-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-key-round" aria-hidden="true"></span></span>
+            <h1>Keys &amp; Tokens</h1>
+            <span class="heading-copy">Bind RSA public keys to existing users for signed publication</span>
+          </div>
+          <div class="action-bar">
+            <a class="create-button secondary" href="#admin/security/api-keys">API tokens</a>
+            <span>OHPM signing keys (optional)</span>
+          </div>
+          <form class="blobstore-form" id="ohpm-login-form">
+            <p class="form-note" id="ohpm-login-configuration"></p>
+            <p class="form-note">Use GenericToken for ordinary OHPM publishing and installation. Signed login is disabled by default. Enable it in the server configuration on every replica. Key changes revoke that user's existing signed-login token.</p>
+            <p class="form-note" id="ohpm-login-mode"></p>
+            <div class="form-grid">
+              <label><span>User source</span><input id="ohpm-login-source" value="Local" required maxlength="100"></label>
+              <label><span>User ID</span><input id="ohpm-login-user" required maxlength="255"></label>
+              <label class="full-width"><span>RSA public key (X.509 PEM, 2048–8192 bits)</span><textarea id="ohpm-login-key" required rows="8" maxlength="16384" spellcheck="false"></textarea></label>
+              <label class="checkbox-field" id="ohpm-login-enabled-field"><input id="ohpm-login-enabled" type="checkbox"><span>Enable newly registered key</span></label>
+            </div>
+            <p class="form-note">Private keys stay on the publishing machine. The checkbox applies only to new bindings; use Rotate on an existing key to replace its public key.</p>
+            <div class="form-actions">
+              <button class="create-button" id="ohpm-login-save" type="submit">Save public key</button>
+              <button class="create-button secondary" id="ohpm-login-cancel" type="button" hidden>Cancel rotation</button>
+            </div>
+            <p class="form-note" id="ohpm-login-status" role="status" aria-live="polite"></p>
+          </form>
+          <div class="nx-table-frame"><table class="nx-table compact">
+            <thead><tr><th>User</th><th>Publish ID</th><th>SHA-256 fingerprint</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody id="ohpm-login-rows"></tbody>
+          </table>
+          <p class="form-note" id="ohpm-login-empty" hidden>No signing keys on this page.</p></div>
+          <div class="pagination-bar">
+          <span class="pagination-summary" id="ohpm-login-page"></span>
+          <button class="create-button secondary" id="ohpm-login-previous" type="button">Previous</button>
+          <button class="create-button secondary" id="ohpm-login-next" type="button">Next</button>
+          <button class="create-button secondary" id="ohpm-login-refresh" type="button">Refresh</button>
+          </div>
+        </section>
+
+        <section class="view" id="ohpm-import-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-arrow-left-right" aria-hidden="true"></span></span>
+            <h1>OHPM Import</h1>
+            <span class="heading-copy">Plan, verify and resume package imports into an OHPM hosted repository</span>
+          </div>
+          <form class="blobstore-form" id="ohpm-import-form">
+            <div class="form-grid">
+              <label><span>Target hosted repository</span><select id="ohpm-import-target" required></select></label>
+              <label><span>Source</span><select id="ohpm-import-source"><option value="DIRECTORY">File directory</option><option value="REGISTRY">Existing registry</option></select></label>
+              <label><span>Registry source proxy configuration</span><select id="ohpm-import-proxy"></select></label>
+              <label><span>Package names, one per line (registry source)</span><textarea id="ohpm-import-packages" rows="3" spellcheck="false" placeholder="@scope/library"></textarea></label>
+              <label class="full-width"><span>Source directory (HAR/HSP pairs or HSP tgz bundles)</span><input id="ohpm-import-files" type="file" webkitdirectory multiple></label>
+              <label class="full-width"><span>Saved jobs</span><select id="ohpm-import-jobs"><option value="">Select a saved job</option></select></label>
+            </div>
+            <p>Dry run verifies archives and saves a plan without writing target packages. To resume a directory import, select the same directory again. An optional matching <code>.metadata.json</code> file preserves package metadata and tags; without it, versions are imported without tags.</p>
+            <p>Existing versions and conflicting tags are never overwritten. Users, tokens, permissions and storage settings require separate configuration. Registry imports use the selected proxy's remote credentials and download allowlist.</p>
+            <div class="form-actions">
+              <button class="create-button secondary" id="ohpm-import-plan" type="button">New dry run</button>
+              <button class="create-button secondary" id="ohpm-import-continue" type="button">Continue dry run</button>
+              <button class="create-button" id="ohpm-import-apply" type="button">Import / resume</button>
+              <button class="create-button secondary" id="ohpm-import-stop" type="button" disabled>Stop after current item</button>
+              <button class="create-button secondary" id="ohpm-import-refresh" type="button">Refresh jobs</button>
+              <button class="create-button secondary" id="ohpm-import-download" type="button">Download report</button>
+            </div>
+          </form>
+          <p id="ohpm-import-status" role="status" aria-live="polite"></p>
+          <div class="migration-result" id="ohpm-import-result" hidden></div>
+        </section>
+
         <section class="view" id="nexus-migration-view">
           <div class="page-heading">
             <span class="heading-icon"><span class="lucide-icon icon-database-backup" aria-hidden="true"></span></span>
@@ -2043,12 +2116,14 @@
     <script src="/login/assets/account-menu.js?v=20261006-shared-primitives-1"></script>
     <script src="/login/assets/safe-return-to.js?v=20261023-safe-return-to-1"></script>
     <script src="/login/assets/ui-i18n.js?v=20261027-raw-directory-1"></script>
-    <script src="/login/assets/delete-confirmation.js?v=20261013-delete-confirmation-1"></script>
+    <script src="/login/assets/delete-confirmation.js?v=20261107-key-confirmation"></script>
     <script src="/login/assets/product-update.js?v=20260819-version-update-1"></script>
     <script src="./assets/admin-filter.js?v=20260706-wildcard-filter-1"></script>
     <script src="/browse/assets/global-component-search.js?v=20260817-global-search-2"></script>
     <script src="./assets/routing-rules.js?v=20261026-routing-rules-2"></script>
     <script src="./assets/content-selectors.js?v=20261013-delete-confirmation-1"></script>
-    <script src="./assets/admin.js?v=20261029-scanning-readers-1"></script>
+    <script src="./assets/ohpm-import.js?v=20261106-ohpm-import"></script>
+    <script src="./assets/ohpm-login.js?v=20261107-ohpm-key-rotation"></script>
+    <script src="./assets/admin.js?v=20261107-credentials"></script>
   </body>
 </html>

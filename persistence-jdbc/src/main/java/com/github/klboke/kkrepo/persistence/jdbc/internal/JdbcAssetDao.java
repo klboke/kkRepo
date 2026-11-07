@@ -326,6 +326,14 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
     return findAssetByPathHash(repositoryId, HashColumns.pathHash(path));
   }
 
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public Optional<AssetRecord> findAssetByPathForUpdate(long repositoryId, String path) {
+    return jdbcTemplate.query("""
+        SELECT * FROM asset WHERE repository_id = ? AND path_hash = ? FOR UPDATE
+        """, assetRowMapper, repositoryId, HashColumns.pathHash(path)).stream().findFirst();
+  }
+
   public Optional<AssetRecord> findAssetById(long assetId) {
     return jdbcTemplate.query("SELECT * FROM asset WHERE id = ?", assetRowMapper, assetId)
         .stream()

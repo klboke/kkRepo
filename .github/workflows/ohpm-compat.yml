@@ -1,0 +1,24 @@
+name: OHPM Compatibility
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ohpm-compat-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  acceptance:
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [jvm, native]
+    uses: ./.github/workflows/live-compat.yml
+    with:
+      suite: client-e2e
+      client_protocol: ohpm
+      runtime: ${{ matrix.runtime }}
+      artifact_prefix: ohpm-${{ matrix.runtime }}

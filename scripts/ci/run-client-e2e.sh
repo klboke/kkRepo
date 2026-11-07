@@ -4094,6 +4094,12 @@ test_ansible() {
   fi
 }
 
+test_ohpm() {
+  KKREPO_COMPAT_BASE_URL="$KKREPO_URL" KKREPO_COMPAT_USERNAME="$KKREPO_USER" \
+    KKREPO_COMPAT_PASSWORD="$KKREPO_PASSWORD" CLIENT_E2E_ARTIFACT_DIR="$ARTIFACT_DIR" \
+    bash "$SCRIPT_DIR/ohpm-client-e2e.sh"
+}
+
 test_gitlfs() {
   KKREPO_COMPAT_BASE_URL="$KKREPO_URL" KKREPO_COMPAT_USERNAME="$KKREPO_USER" \
     KKREPO_COMPAT_PASSWORD="$KKREPO_PASSWORD" CLIENT_E2E_ARTIFACT_DIR="$ARTIFACT_DIR" \
@@ -4122,6 +4128,9 @@ run_selected_tests() {
     CLEANUP_FIXTURE_PATTERN=""
     CLEANUP_FIXTURE_LABEL=""
     case "$test" in
+      ohpm)
+        test_ohpm
+        ;;
       gitlfs)
         test_gitlfs
         ;;

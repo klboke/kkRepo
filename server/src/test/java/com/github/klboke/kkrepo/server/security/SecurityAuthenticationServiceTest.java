@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -12,6 +13,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.OhpmLoginDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ApiKeyRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityAnonymousConfigRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRealmRecord;
@@ -37,6 +39,7 @@ import java.security.interfaces.RSAPublicKey;
 import java.security.spec.ECGenParameterSpec;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
@@ -321,6 +324,55 @@ class SecurityAuthenticationServiceTest {
   }
 
   @Test
+  void signedLoginTokensAreFreshOhpmOnlyAndCannotPopulateGenericAuthenticationCache() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.user(user(1L, "Local", "publisher", NEXUS_SHIRO1_ADMIN123));
+    var keys = mock(OhpmLoginDao.class);
+    var binding = new OhpmLoginDao.Key("publisher-id", 1L, "Local", "publisher", "ACTIVE",
+        "public-key", "fingerprint", true, Instant.now());
+    when(keys.findKey("publisher-id")).thenReturn(Optional.of(binding));
+    var cache = new com.github.klboke.kkrepo.server.support.InMemorySharedCache();
+    var service = new SecurityAuthenticationService(dao, OBJECT_MAPPER,
+        "X-Nexus-Plus-Token", "nx-anonymous", cache, OutboundRequestPolicy.allowPrivateForTests(),
+        transportFactory, new ApiKeyAuthCache(cache, true, 60, 5),
+        new BasicAuthCache(cache, true, 60, 5), null);
+    service.configureOhpmLoginTokens(new OhpmLoginTokenPolicy(keys, true));
+    var token = new ApiKeyRecord(20L, OhpmLoginTokenPolicy.DOMAIN, "Local", "publisher", "Signed login", "ACTIVE",
+        SecurityHashing.sha256("login-material"), OhpmLoginTokenPolicy.DOMAIN,
+        Map.of("ohpmPublishId", "publisher-id", "ohpmFingerprint", "fingerprint"), "{}",
+        null, null, LocalDateTime.now(ZoneOffset.UTC).plusMinutes(5), null);
+    dao.apiKey(token);
+    var raw = request(Map.of("Authorization", "OhpmLogin.login-material"));
+    var bearer = request(Map.of("Authorization", "Bearer OhpmLogin.login-material"));
+    assertTrue(service.authenticateOhpmFresh(raw).isPresent());
+    assertTrue(service.authenticate(bearer).isEmpty());
+    assertTrue(service.authenticateFresh(bearer).isEmpty());
+    assertTrue(service.authenticate(request(Map.of("X-Nexus-Plus-Token", "OhpmLogin.login-material"))).isEmpty());
+    assertTrue(service.authenticate(request(Map.of("Authorization", "Bearer login-material"))).isEmpty());
+
+    when(keys.findKey("publisher-id")).thenReturn(Optional.of(new OhpmLoginDao.Key(
+        binding.publishId(), 1L, "Local", "publisher", "ACTIVE", "public-key", "fingerprint", false, Instant.now())));
+    assertTrue(service.authenticateOhpmFresh(raw).isEmpty());
+    when(keys.findKey("publisher-id")).thenReturn(Optional.of(binding));
+    assertTrue(service.authenticateOhpmFresh(raw).isPresent());
+    service.configureOhpmLoginTokens(new OhpmLoginTokenPolicy(keys, false));
+    assertTrue(service.authenticateOhpmFresh(raw).isEmpty());
+    service.configureOhpmLoginTokens(new OhpmLoginTokenPolicy(keys, true));
+    dao.apiKey(new ApiKeyRecord(token.id(), token.domain(), token.ownerSource(), token.ownerUserId(), token.displayName(),
+        token.status(), token.apiKeyHash(), token.tokenPrefix(), token.scopes(), token.encryptedPayload(),
+        token.createdAt(), token.updatedAt(), LocalDateTime.now(ZoneOffset.UTC).minusSeconds(1), token.lastUsedAt()));
+    assertTrue(service.authenticateOhpmFresh(raw).isEmpty());
+    assertTrue(service.authenticate(bearer).isEmpty());
+    for (String domain : List.of("ohpmlogin", "OHPmLogin")) {
+      dao.apiKey(new ApiKeyRecord(21L, domain, "Local", "publisher", "Signed login", "ACTIVE",
+          SecurityHashing.sha256(domain), domain, token.scopes(), "{}",
+          null, null, LocalDateTime.now(ZoneOffset.UTC).plusMinutes(5), null));
+      assertTrue(service.authenticateOhpmFresh(request(Map.of("Authorization", domain + "." + domain))).isEmpty());
+      assertTrue(service.authenticate(request(Map.of("Authorization", "Bearer " + domain + "." + domain))).isEmpty());
+    }
+  }
+
+  @Test
   void authenticatesGenericTokenWithDomainPrefixedBearerToken() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.user(user(1L, "Local", "ci-bot", NEXUS_SHIRO1_ADMIN123));
@@ -357,6 +409,14 @@ class SecurityAuthenticationServiceTest {
     assertTrue(ansible29.isPresent());
     assertEquals("ci-bot", ansible29.get().userId());
     assertEquals(20L, ansible29.get().apiKeyId());
+
+    Optional<AuthenticatedSubject> ohpm = service.authenticateOhpmFresh(request(Map.of(
+        "Authorization", "GenericToken.generic-secret")));
+    assertTrue(ohpm.isPresent());
+    assertEquals("ci-bot", ohpm.get().userId());
+    assertEquals(20L, ohpm.get().apiKeyId());
+    assertTrue(service.authenticateOhpmFresh(request(Map.of(
+        "Authorization", "GenericToken.invalid"))).isEmpty());
   }
 
   @Test

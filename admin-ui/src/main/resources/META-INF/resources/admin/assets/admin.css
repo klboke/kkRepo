@@ -960,6 +960,11 @@ body {
   height: 16px;
 }
 
+#ohpm-login-view .checkbox-field input {
+  width: 16px;
+  height: 16px;
+}
+
 .form-actions {
   display: flex;
   gap: 8px;

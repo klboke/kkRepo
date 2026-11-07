@@ -493,6 +493,25 @@ targets, restart/resume, exact-row-count idempotency, and masked/missing proxy-s
 behavior. An affected target proxy remains offline with no placeholder credential until an
 administrator supplies the secret explicitly.
 
+## OHPM External Acceptance
+
+OHPM uses Huawei's official protocol and real clients as the reference. It does not require Nexus.
+Build a disposable executable candidate with `mvn -pl server -am -DskipTests package spring-boot:repackage`,
+then set `KKREPO_COMPAT_BASE_URL`, `KKREPO_COMPAT_USERNAME`, `KKREPO_COMPAT_PASSWORD` and the expected
+`OHPM_COMPAT_LOGIN_ENABLED` state.
+
+```bash
+bash scripts/ci/run-ohpm-compat.sh blackbox
+OHPM_COMMAND=/absolute/path/to/ohpm OHPM_EXPECTED_VERSION=6.0.1 \
+  bash scripts/ci/run-ohpm-compat.sh client-e2e
+```
+
+The entry points require all seven HTTP cases or all eight cases including the client to run without skips.
+They cover hosted/proxy/group, HAR/HSP, normal/stream upload, management/import, Login and client operations.
+Tests retain populated proxy fixtures when the generic API refuses deletion; destroy the disposable database
+and blob store after the run. See [OHPM acceptance](../docs/en/dev/ohpm-acceptance.md) for bootstrap, upstream
+address configuration, the pinned OHPM 5.0.2 installer and the dual-database CI workflow.
+
 ## Live Console And Maven Read Checks
 
 Start kkrepo locally first:

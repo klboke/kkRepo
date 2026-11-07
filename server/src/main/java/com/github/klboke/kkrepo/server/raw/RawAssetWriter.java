@@ -33,6 +33,8 @@ import java.util.OptionalLong;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Component
 class RawAssetWriter {
@@ -190,6 +192,7 @@ class RawAssetWriter {
       String expectedGitOid) {
     DigestedUpload upload = uploadWithDigests(
         runtime, storage, blobStoreId, path, body, extraBlobAttributes);
+    cleanupAfterRollback(storage, blobStoreId, upload);
     try {
       if (expectedSize != null && expectedSize.longValue() != upload.digests().size()) {
         throw new IllegalArgumentException(
@@ -355,6 +358,7 @@ class RawAssetWriter {
       boolean replaceExisting) {
     DigestedUpload upload = uploadFileWithDigests(
         runtime, storage, blobStoreId, path, file, extraBlobAttributes);
+    cleanupAfterRollback(storage, blobStoreId, upload);
     try {
       Stored stored = executePersist(
           "Persist raw asset " + runtime.name() + "/" + path,
@@ -410,6 +414,7 @@ class RawAssetWriter {
       String createdBy, String createdByIp, ComponentBinding componentBinding,
       boolean keepResponseFile, String browsePath, Map<String, ?> assetAttributes) {
     DigestedUpload upload = uploadWithDigests(runtime, storage, blobStoreId, path, body, extraBlobAttributes);
+    cleanupAfterRollback(storage, blobStoreId, upload);
     try {
       Stored stored = executePersist(
           "Persist raw asset " + runtime.name() + "/" + path,
@@ -526,7 +531,9 @@ class RawAssetWriter {
         : assetDao.findBlobById(previousBlobId).orElse(null);
 
     Map<String, Object> blobAttrs = new LinkedHashMap<>();
-    blobAttrs.put("sha512", digests.sha512());
+    if (digests.sha512() != null && !digests.sha512().isBlank()) {
+      blobAttrs.put("sha512", digests.sha512());
+    }
     if (extraBlobAttributes != null) {
       extraBlobAttributes.forEach((key, value) -> {
         if (value != null) blobAttrs.put(key, value);
@@ -534,7 +541,6 @@ class RawAssetWriter {
     }
     AssetBlobRecord persistedBlob = reusableBlob(blobStoreId, digests.sha256(), digests.size(), extraBlobAttributes)
         .orElse(null);
-    long blobId;
     if (persistedBlob == null) {
       AssetBlobRecord blobRecord = new AssetBlobRecord(
           null,
@@ -554,18 +560,13 @@ class RawAssetWriter {
           now,
           blobAttrs);
       persistedBlob = assetDao.insertBlobOrFindExisting(blobRecord);
-      blobId = persistedBlob.id();
-      if (extraBlobAttributes != null && !extraBlobAttributes.isEmpty()
-          && !blobAttrs.equals(persistedBlob.attributes())) {
-        assetDao.updateBlobAttributes(blobId, blobAttrs);
-        persistedBlob = persistedBlob.withAttributes(blobAttrs);
-      }
-    } else {
-      blobId = persistedBlob.id();
-      if (extraBlobAttributes != null && !extraBlobAttributes.isEmpty()) {
-        assetDao.updateBlobAttributes(blobId, blobAttrs);
-        persistedBlob = persistedBlob.withAttributes(blobAttrs);
-      }
+    }
+    long blobId = persistedBlob.id();
+    Map<String, Object> mergedBlobAttributes = new LinkedHashMap<>(persistedBlob.attributes());
+    mergedBlobAttributes.putAll(blobAttrs);
+    if (!mergedBlobAttributes.equals(persistedBlob.attributes())) {
+      assetDao.updateBlobAttributes(blobId, mergedBlobAttributes);
+      persistedBlob = persistedBlob.withAttributes(mergedBlobAttributes);
     }
 
     Long componentId = componentId(runtime, path, now, componentBinding);
@@ -741,6 +742,51 @@ class RawAssetWriter {
       boolean uploaded) {
   }
 
+  RawHostedService.PreparedFile prepareFile(RepositoryRuntime runtime, BlobStorage storage,
+      long blobStoreId, String path, Path file) {
+    if (TransactionSynchronizationManager.isActualTransactionActive()) {
+      throw new IllegalStateException("Prepare protocol files before starting a metadata transaction");
+    }
+    DigestedUpload upload;
+    try {
+      var computed = BufferedUpload.inspect(file, BufferedUpload.Checksums.WITH_SHA512);
+      var digests = new Digests(computed.md5(), computed.sha1(), computed.sha256(),
+          computed.sha512(), computed.size());
+      upload = new DigestedUpload(storage.putFile(runtime.name(), path, file, computed.sha256()),
+          digests, null, true);
+    } catch (IOException error) {
+      throw new java.io.UncheckedIOException(error);
+    }
+    return new RawHostedService.PreparedFile() {
+      private boolean closed;
+
+      @Override
+      public boolean publish(RepositoryRuntime current, String assetPath, String actor, String remoteAddress,
+          ComponentRecord component, String browsePath, boolean replaceExisting) {
+        if (closed || !TransactionSynchronizationManager.isActualTransactionActive()) {
+          throw new IllegalStateException("Prepared publication requires an active metadata transaction");
+        }
+        if (current.id() != runtime.id() || current.blobStoreId() != blobStoreId) {
+          throw new IllegalStateException("Repository storage changed during upload");
+        }
+        return persist(current, storage, blobStoreId, assetPath, upload, "application/octet-stream",
+            Map.of(), actor, remoteAddress, ComponentBinding.explicit(component), Map.of(), null,
+            browsePath, replaceExisting).created();
+      }
+
+      @Override
+      public void close() {
+        if (!closed) {
+          if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            throw new IllegalStateException("Release prepared files after the metadata transaction");
+          }
+          closed = true;
+          cleanupUploadedBlob(storage, blobStoreId, upload);
+        }
+      }
+    };
+  }
+
   private DigestedUpload uploadWithDigests(
       RepositoryRuntime runtime,
       BlobStorage storage,
@@ -800,6 +846,27 @@ class RawAssetWriter {
     } catch (IOException e) {
       throw new java.io.UncheckedIOException("Failed to digest raw file " + path, e);
     }
+  }
+
+  private void cleanupAfterRollback(BlobStorage storage, long blobStoreId, DigestedUpload upload) {
+    if (!upload.uploaded() || !TransactionSynchronizationManager.isActualTransactionActive()
+        || !TransactionSynchronizationManager.isSynchronizationActive()) {
+      return;
+    }
+    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+      @Override
+      public void afterCompletion(int status) {
+        if (status != STATUS_ROLLED_BACK) return;
+        if (transactionRetry == null) {
+          cleanupUploadedBlob(storage, blobStoreId, upload);
+        } else {
+          transactionRetry.execute("Clean up rolled back protocol upload", () -> {
+            cleanupUploadedBlob(storage, blobStoreId, upload);
+            return null;
+          });
+        }
+      }
+    });
   }
 
   private void cleanupUploadedBlob(BlobStorage storage, long blobStoreId, DigestedUpload upload) {

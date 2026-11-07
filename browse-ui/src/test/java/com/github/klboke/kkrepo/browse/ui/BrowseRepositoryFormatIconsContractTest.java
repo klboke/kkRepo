@@ -13,7 +13,7 @@ import org.junit.jupiter.api.Test;
 
 class BrowseRepositoryFormatIconsContractTest {
   private static final List<String> FORMATS = List.of(
-      "maven2", "npm", "pypi", "cargo", "pub", "composer", "terraform", "swift",
+      "maven2", "npm", "ohpm", "pypi", "cargo", "pub", "composer", "terraform", "swift",
       "ansiblegalaxy", "conda", "conan", "apt", "alpine", "gitlfs", "huggingface", "go",
       "helm", "docker", "nuget", "rubygems", "yum", "r", "raw");
   private static final List<String> SEARCH_FORMATS = List.of(
@@ -44,8 +44,15 @@ class BrowseRepositoryFormatIconsContractTest {
       Matcher iconRule = Pattern.compile(
           "(?s)\\.format-logo-" + iconName(format) + "\\s*\\{([^}]+)\\}").matcher(stylesheet);
       assertTrue(iconRule.find(), format + " must have a shared icon rule");
-      assertTrue(iconRule.group(1).matches("(?s).*--format-color:\\s*#[0-9a-fA-F]{6};.*"),
-          format + " must have an opaque color so its mask is visible");
+      if ("ohpm".equals(format)) {
+        assertTrue(iconRule.group(1).contains("url(\"/browse/assets/formats/ohpm.png\")"));
+        assertTrue(iconRule.group(1).contains("center / contain no-repeat"));
+        assertTrue(iconRule.group(1).contains("-webkit-mask-image: none"));
+        assertTrue(iconRule.group(1).contains("mask-image: none"));
+      } else {
+        assertTrue(iconRule.group(1).matches("(?s).*--format-color:\\s*#[0-9a-fA-F]{6};.*"),
+            format + " must have an opaque color so its mask is visible");
+      }
     }
   }
 

@@ -17,7 +17,6 @@ import com.github.klboke.kkrepo.persistence.jdbc.spi.SecurityPersistenceDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.SecurityPersistenceDialect.PrivilegeInsert;
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -616,6 +615,11 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
     return jdbcTemplate.update("DELETE FROM api_key WHERE id = ?", id);
   }
 
+  public int deleteApiKey(String domain, String ownerSource, String ownerUserId) {
+    return jdbcTemplate.update("DELETE FROM api_key WHERE domain = ? AND owner_source = ? AND owner_user_id = ?",
+        domain, ownerSource, ownerUserId);
+  }
+
   public int deleteApiKeysForOwner(String ownerSource, String ownerUserId) {
     return jdbcTemplate.update("""
         DELETE FROM api_key
@@ -628,7 +632,6 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
   }
 
   private static LocalDateTime nullableDateTime(ResultSet rs, String column) throws SQLException {
-    Timestamp timestamp = rs.getTimestamp(column);
-    return timestamp == null ? null : timestamp.toLocalDateTime();
+    return rs.getObject(column, LocalDateTime.class);
   }
 }

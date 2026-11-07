@@ -226,6 +226,19 @@ public class RawHostedService {
         component, browsePath).created();
   }
 
+  public interface PreparedFile extends AutoCloseable {
+    boolean publish(RepositoryRuntime runtime, String path, String actor, String remoteAddress,
+        ComponentRecord component, String browsePath, boolean replaceExisting);
+
+    @Override
+    void close();
+  }
+
+  public PreparedFile prepareInternalFile(RepositoryRuntime runtime, String path, Path file) {
+    return writer.prepareFile(runtime, blobStorage(runtime), requireBlobStore(runtime),
+        normalizeAssetPath(path), file);
+  }
+
   public boolean linkInternalBlobWithComponentAtBrowsePathIfAbsent(
       RepositoryRuntime runtime,
       String rawPath,

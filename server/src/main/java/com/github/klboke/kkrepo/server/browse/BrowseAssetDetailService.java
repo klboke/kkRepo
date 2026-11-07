@@ -34,6 +34,8 @@ import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
 import com.github.klboke.kkrepo.protocol.conda.CondaPath;
 import com.github.klboke.kkrepo.protocol.npm.NpmMetadata;
 import com.github.klboke.kkrepo.protocol.npm.NpmPackageId;
+import com.github.klboke.kkrepo.protocol.ohpm.OhpmBrowsePath;
+import com.github.klboke.kkrepo.server.ohpm.OhpmBrowseService;
 import com.github.klboke.kkrepo.protocol.r.RPathParser;
 import com.github.klboke.kkrepo.protocol.swift.SwiftPath;
 import com.github.klboke.kkrepo.protocol.swift.SwiftPathParser;
@@ -84,6 +86,12 @@ public class BrowseAssetDetailService {
   private RRegistryDao rDao;
   private BrowseNodeDao browseNodeDao;
   private ConanRegistryDao conanDao;
+  private OhpmBrowseService ohpmBrowse;
+
+  @Autowired
+  void setOhpmBrowseService(OhpmBrowseService ohpmBrowse) {
+    this.ohpmBrowse = ohpmBrowse;
+  }
   private final BlobStorageRegistry blobStorageRegistry;
   private final ObjectMapper objectMapper;
 
@@ -275,7 +283,9 @@ public class BrowseAssetDetailService {
         asset.size(),
         asset.contentType(),
         asset.lastUpdatedAt(),
-        BrowseDownloadUrls.asset(visibleRepository, downloadPath),
+        source.format() == RepositoryFormat.OHPM
+            ? ohpmBrowse.downloadUrl(visibleRepository, source, publicPath)
+            : BrowseDownloadUrls.asset(visibleRepository, downloadPath),
         text(firstPresent(asset.attributes().get("createdBy"), blob.createdBy())),
         text(firstPresent(asset.attributes().get("createdByIp"), blob.createdByIp())),
         checksum,
@@ -291,6 +301,7 @@ public class BrowseAssetDetailService {
         huggingFace,
         swift,
         ansible,
+        source.format() == RepositoryFormat.OHPM ? ohpmBrowse.attributes(source, publicPath) : Map.of(),
         provenance);
   }
 
@@ -611,6 +622,7 @@ public class BrowseAssetDetailService {
           Map.of(),
           swiftReleaseAttributes(source, row),
           Map.of(),
+          Map.of(),
           Map.of("dynamic", true, "hashes_not_verified", false)));
     }
     return Optional.empty();
@@ -712,6 +724,7 @@ public class BrowseAssetDetailService {
           Map.of(),
           Map.of(),
           swiftManifestAttributes(source, row, manifestRow),
+          Map.of(),
           Map.of(),
           Map.of("dynamic", true, "hashes_not_verified", false)));
     }
@@ -859,6 +872,7 @@ public class BrowseAssetDetailService {
         Map.of(),
         Map.of(),
         Map.of(),
+        Map.of(),
         provenance);
   }
 
@@ -883,6 +897,7 @@ public class BrowseAssetDetailService {
         null,
         Map.of(),
         content,
+        Map.of(),
         Map.of(),
         Map.of(),
         Map.of(),
@@ -1049,6 +1064,15 @@ public class BrowseAssetDetailService {
           && AnsibleGalaxyPathParser.isArtifactFilename(segments[3])) {
         return new ResolvedStoragePath(
             AnsibleGalaxyPathParser.ARTIFACT_BASE + segments[3], sourceRepositoryName);
+      }
+    }
+    if (visibleRepository.format() == RepositoryFormat.OHPM) {
+      try {
+        var path = OhpmBrowsePath.parse(normalized);
+        if (path.filename() == null) throw new IllegalArgumentException("Select an OHPM archive");
+        return new ResolvedStoragePath(path.storagePath(), sourceRepositoryName);
+      } catch (IllegalArgumentException invalid) {
+        throw new ResponseStatusException(HttpStatus.BAD_REQUEST, invalid.getMessage());
       }
     }
     if (visibleRepository.format() == RepositoryFormat.CONDA) {
@@ -1670,5 +1694,6 @@ public class BrowseAssetDetailService {
       Map<String, Object> huggingface,
       Map<String, Object> swift,
       Map<String, Object> ansible,
+      Map<String, Object> ohpm,
       Map<String, Object> provenance) {}
 }

@@ -4,9 +4,9 @@
 import argparse
 
 # Preserve the ordering of the unsharded/local suite.
-ALL_TESTS = "raw maven npm pypi go helm cargo pub composer nuget rubygems yum apt alpine r conda conan gitlfs terraform swift ansible docker-oci".split()
+ALL_TESTS = "raw maven npm pypi go helm cargo pub composer nuget rubygems yum apt alpine r conda conan gitlfs terraform swift ansible docker-oci ohpm".split()
 SHARDS = {
-    "core": "raw maven npm pypi go helm cargo pub composer nuget rubygems docker-oci".split(),
+    "core": "raw maven npm pypi go helm cargo pub composer nuget rubygems docker-oci ohpm".split(),
     "system": "yum apt alpine r conda conan gitlfs terraform ansible".split(),
     "swift": ["swift"],
 }
