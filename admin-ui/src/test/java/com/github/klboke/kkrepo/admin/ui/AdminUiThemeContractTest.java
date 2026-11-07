@@ -22,7 +22,7 @@ class AdminUiThemeContractTest {
     assertTrue(index.contains(
         "/browse/assets/themes/default.css?v=20260826-nexus-a11y-1"));
     assertTrue(index.contains("/login/assets/ui-theme.js?v=20260826-nexus-a11y-1"));
-    assertTrue(index.contains("./assets/admin.css?v=20261107-ohpm-credentials"));
+    assertTrue(index.contains("./assets/admin.css?v=20261107-keys-layout"));
     assertFalse(index.contains("/browse/assets/tokens.css"));
   }
 
@@ -52,8 +52,8 @@ class AdminUiThemeContractTest {
     assertTrue(javascript.contains("settings.supportedDefaultThemes"));
     assertTrue(javascript.contains("if (theme === \"jfrog\") return \"JFrog\""));
     assertTrue(i18n.contains("正在预览所选主题。保存界面设置后，它才会成为默认主题。"));
-    assertTrue(index.contains("./assets/admin.css?v=20261107-ohpm-credentials"));
-    assertTrue(index.contains("/login/assets/ui-i18n.js?v=20261027-raw-directory-1"));
+    assertTrue(index.contains("./assets/admin.css?v=20261107-keys-layout"));
+    assertTrue(index.contains("/login/assets/ui-i18n.js?v=20261107-keys-layout"));
     assertTrue(index.contains("./assets/admin.js?v=20261107-credentials"));
     assertFalse(index.contains("id=\"ui-settings-status\""));
     assertFalse(javascript.contains("Default language: ${"));

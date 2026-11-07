@@ -27,9 +27,9 @@ async function withPage(run, initial = []) {
   const { load } = require(modulePath);
   const elements = new Map();
   for (const name of ["view", "form", "source", "user", "key", "enabled", "configuration", "rows", "empty",
-    "page", "status", "refresh", "previous", "next", "mode", "save", "cancel", "enabled-field"]) {
+    "notice", "availability", "timing", "table", "pagination", "form-title", "page", "status", "refresh", "previous", "next", "mode", "save", "cancel", "enabled-field"]) {
     elements.set(name, {
-      value: "", checked: false, disabled: false, events: {},
+      value: "", checked: false, disabled: false, events: {}, dataset: {},
       addEventListener(event, handler) { this.events[event] = handler; },
       focus() {},
       querySelectorAll() { return [...elements.values()]; }
@@ -85,8 +85,10 @@ const replacementPem = replacement.export({ type: "spki", format: "pem" });
 test("management feedback distinguishes loading, saving, enabling, errors and deletion", async () => {
   await withPage(async ({ elements, state, calls, click, submit }) => {
     assert.match(elements.get("configuration").textContent, /disabled/);
-    assert.match(elements.get("configuration").textContent, /cannot authenticate/);
-    assert.equal(elements.get("status").textContent, "Signing keys loaded.");
+    assert.match(elements.get("availability").textContent, /cannot authenticate/);
+    assert.equal(elements.get("status").textContent, "");
+    assert.equal(elements.get("pagination").hidden, true);
+    assert.equal(elements.get("table").hidden, true);
     assert.equal(elements.get("next").disabled, true);
     elements.get("source").value = "Local";
     elements.get("user").value = "<publisher>";
@@ -94,6 +96,8 @@ test("management feedback distinguishes loading, saving, enabling, errors and de
     await submit();
     assert.equal(elements.get("status").textContent, "Public key saved.");
     assert.equal(elements.get("key").value, "");
+    assert.equal(elements.get("pagination").hidden, false);
+    assert.equal(elements.get("table").hidden, false);
     assert.match(elements.get("rows").innerHTML, /&lt;publisher&gt;/);
     assert.doesNotMatch(elements.get("rows").innerHTML, /BEGIN PUBLIC KEY/);
     await click("toggle");
@@ -110,6 +114,7 @@ test("management feedback distinguishes loading, saving, enabling, errors and de
     assert.equal(state.records.length, 0);
     assert.equal(elements.get("status").textContent, "Signing key deleted.");
     assert.equal(elements.get("empty").hidden, false);
+    assert.equal(elements.get("pagination").hidden, true);
     assert.ok(calls.some((call) => call.method === "DELETE" && call.path.endsWith("/keys/publisher-id")));
   });
 });
@@ -182,6 +187,24 @@ test("cancelling rotation keeps the PEM and never submits a mutation", async () 
     assert.equal(calls.filter((call) => call.method !== "GET").length, 0);
     elements.get("cancel").events.click();
     assert.equal(elements.get("key").value, "");
+    assert.equal(elements.get("pagination").hidden, false);
+    assert.equal(elements.get("table").hidden, false);
     assert.equal(elements.get("enabled-field").hidden, false);
   }, [binding]);
+});
+
+
+test("deleting the last key on a later page returns to the first page", async () => {
+  const records = Array.from({ length: 101 }, (_, index) => ({ ...binding,
+    userId: `publisher-${index}`, publishId: `key-${index}` }));
+  await withPage(async ({ elements, click, state }) => {
+    await elements.get("next").events.click();
+    assert.equal(elements.get("page").textContent, "Keys 101–101");
+    await click("delete");
+    assert.equal(state.records.length, 100);
+    assert.equal(elements.get("page").textContent, "Keys 1–100");
+    assert.equal(elements.get("previous").disabled, true);
+    assert.equal(elements.get("empty").hidden, true);
+    assert.equal(elements.get("status").textContent, "Signing key deleted.");
+  }, records);
 });

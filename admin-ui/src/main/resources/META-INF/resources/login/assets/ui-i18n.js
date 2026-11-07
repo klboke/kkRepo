@@ -20,6 +20,58 @@
   const originalTitle = document.title;
 
   const zh = {
+    "User": "用户",
+    "Enable": "启用",
+    "Disable": "禁用",
+    "Previous": "上一页",
+    "Next": "下一页",
+    "Keys & Tokens": "密钥与令牌",
+    "Keys and tokens sections": "密钥与令牌分类",
+    "API Tokens": "API 令牌",
+    "OHPM Signing Keys": "OHPM 签名密钥",
+    "Optional": "可选",
+    "Bind RSA public keys to existing users for signed publication": "绑定 RSA 公钥到现有用户，用于签名发布",
+    "Use GenericToken for ordinary OHPM publishing and installation.": "普通 OHPM 发布和安装可使用 GenericToken。",
+    "Signed login is enabled on this server.": "此服务器已启用签名登录。",
+    "Signed login is disabled on this server.": "此服务器尚未启用签名登录。",
+    "Enabled keys can authenticate signed publication.": "已启用的密钥可用于签名发布认证。",
+    "Preconfigured keys cannot authenticate until signed login is enabled in the server configuration on every replica.": "预先登记的密钥暂时无法用于认证。请先在所有副本的服务器配置中启用签名登录。",
+    "Register public key": "登记公钥",
+    "Rotate public key": "轮换公钥",
+    "Save public key": "保存公钥",
+    "Cancel rotation": "取消轮换",
+    "Bind a public key to an existing user. To replace a registered key, use Rotate in the list below.": "将公钥绑定到现有用户。要替换已登记的密钥，请使用下方列表中的“轮换”。",
+    "RSA public key (X.509 PEM, 2048–8192 bits)": "RSA 公钥（X.509 PEM，2048–8192 位）",
+    "Paste the public key only. Keep the private key on the publishing machine.": "仅粘贴公钥。私钥应保留在执行发布的机器上。",
+    "Enable newly registered key": "启用新登记的密钥",
+    "Registered keys": "已登记的密钥",
+    "Publish ID": "发布 ID",
+    "SHA-256 fingerprint": "SHA-256 指纹",
+    "No signing keys registered.": "尚未登记签名密钥。",
+    "Register a public key above only if you need OHPM signed login.": "仅在需要 OHPM 签名登录时，才需在上方登记公钥。",
+    "Key enabled": "密钥已启用",
+    "Key enabled · Login unavailable": "密钥已启用 · 签名登录不可用",
+    "Key disabled": "密钥已禁用",
+    "Rotate": "轮换",
+    "Loading signing keys…": "正在加载签名密钥…",
+    "Saving public key…": "正在保存公钥…",
+    "Updating signing key…": "正在更新签名密钥…",
+    "Public key saved.": "公钥已保存。",
+    "Rotation cancelled.": "已取消轮换。",
+    "Enter the replacement public key.": "请输入替换公钥。",
+    "Public key rotated. Current enabled state preserved; previous signed-login tokens revoked.": "公钥已轮换，启用状态保持不变，原签名登录令牌已撤销。",
+    "Signing key deleted.": "签名密钥已删除。",
+    "Signing key disabled.": "签名密钥已禁用。",
+    "Signing key enabled.": "签名密钥已启用。",
+    "Delete cancelled.": "已取消删除。",
+    "Disable cancelled.": "已取消禁用。",
+    "Enter an existing user source and user ID.": "请输入现有用户的来源和用户 ID。",
+    "Provide an X.509 PEM public key. Keep the private key on the publishing machine.": "请提供 X.509 PEM 格式的公钥。私钥应保留在执行发布的机器上。",
+    "Rotate signing key?": "轮换签名密钥？",
+    "Disable signing key?": "禁用签名密钥？",
+    "Delete signing key?": "删除签名密钥？",
+    "Publishing jobs using the current signed-login token will need to authenticate again.": "使用当前签名登录令牌的发布任务需要重新认证。",
+
     "Routing rule migration blockers": "路由规则迁移阻塞项",
     "Routing rule bindings": "路由规则绑定",
     "Routing policy checksum": "路由策略校验值",
@@ -899,6 +951,12 @@
         return `${zh[prefix] || prefix}：${body.slice(prefix.length + 2)}`;
       }
     }
+    match = body.match(/^Token lifetime: (\d+)s\. Timestamp tolerance: (\d+)s\.$/);
+    if (match) return `令牌有效期：${match[1]} 秒。时间戳容差：${match[2]} 秒。`;
+    match = body.match(/^Keys (\d+)–(\d+)$/);
+    if (match) return `密钥 ${match[1]}–${match[2]}`;
+    match = body.match(/^Rotate (.+)\. The publish ID and enabled state are preserved\. Existing signed-login tokens will be revoked\.$/);
+    if (match) return `轮换 ${match[1]} 的公钥。发布 ID 和启用状态保持不变，原签名登录令牌将被撤销。`;
     match = body.match(/^All (.+) repositories$/);
     if (match) return `全部 ${match[1]} 仓库`;
     match = body.match(/^Delete content selector "(.+)"\?$/);

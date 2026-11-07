@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-4">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20261009-gitlfs-2">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20260818-user-round-1">
-    <link rel="stylesheet" href="./assets/admin.css?v=20261107-ohpm-credentials">
+    <link rel="stylesheet" href="./assets/admin.css?v=20261107-keys-layout">
     <link rel="stylesheet" href="/browse/assets/account-menu.css?v=20260824-ui-themes-3">
     <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=20260819-topbar-control-height-1">
     <link rel="stylesheet" href="/login/assets/delete-confirmation.css?v=20261013-delete-confirmation-1">
@@ -1490,9 +1490,12 @@
             <h1>Keys &amp; Tokens</h1>
             <span class="heading-copy">Manage API key ownership and domains</span>
           </div>
+          <nav class="credentials-tabs" aria-label="Keys and tokens sections">
+            <a class="credentials-tab is-active" href="#admin/security/api-keys" aria-current="page">API Tokens</a>
+            <a class="credentials-tab" href="#admin/security/ohpm-login">OHPM Signing Keys <span class="credentials-optional">Optional</span></a>
+          </nav>
           <div class="action-bar">
             <button class="create-button" id="create-security-api-key-button" type="button"><span class="lucide-icon icon-plus" aria-hidden="true"></span> Create API key</button>
-            <a class="create-button secondary" href="#admin/security/ohpm-login">OHPM signing keys (optional)</a>
             <span class="form-note">Use GenericToken for ordinary OHPM publishing and installation.</span>
           </div>
           <div class="form-modal" id="security-api-key-form-modal" data-form-id="security-api-key-form" role="dialog" aria-modal="true" aria-labelledby="security-api-key-form-title" hidden>
@@ -1994,37 +1997,51 @@
             <h1>Keys &amp; Tokens</h1>
             <span class="heading-copy">Bind RSA public keys to existing users for signed publication</span>
           </div>
-          <div class="action-bar">
-            <a class="create-button secondary" href="#admin/security/api-keys">API tokens</a>
-            <span>OHPM signing keys (optional)</span>
+          <nav class="credentials-tabs" aria-label="Keys and tokens sections">
+            <a class="credentials-tab" href="#admin/security/api-keys">API Tokens</a>
+            <a class="credentials-tab is-active" href="#admin/security/ohpm-login" aria-current="page">OHPM Signing Keys <span class="credentials-optional">Optional</span></a>
+          </nav>
+          <div class="credentials-notice" id="ohpm-login-notice" role="status">
+            <strong id="ohpm-login-configuration"></strong>
+            <span id="ohpm-login-availability"></span>
+            <span class="form-note" id="ohpm-login-timing"></span>
           </div>
-          <form class="blobstore-form" id="ohpm-login-form">
-            <p class="form-note" id="ohpm-login-configuration"></p>
-            <p class="form-note">Use GenericToken for ordinary OHPM publishing and installation. Signed login is disabled by default. Enable it in the server configuration on every replica. Key changes revoke that user's existing signed-login token.</p>
-            <p class="form-note" id="ohpm-login-mode"></p>
+          <p class="credentials-intro">Use GenericToken for ordinary OHPM publishing and installation.</p>
+          <form class="blobstore-form credentials-form" id="ohpm-login-form">
+            <div class="form-title" id="ohpm-login-form-title">Register public key</div>
+            <p class="form-note credentials-form-note" id="ohpm-login-mode"></p>
             <div class="form-grid">
               <label><span>User source</span><input id="ohpm-login-source" value="Local" required maxlength="100"></label>
               <label><span>User ID</span><input id="ohpm-login-user" required maxlength="255"></label>
-              <label class="full-width"><span>RSA public key (X.509 PEM, 2048–8192 bits)</span><textarea id="ohpm-login-key" required rows="8" maxlength="16384" spellcheck="false"></textarea></label>
-              <label class="checkbox-field" id="ohpm-login-enabled-field"><input id="ohpm-login-enabled" type="checkbox"><span>Enable newly registered key</span></label>
+              <label class="full-width"><span>RSA public key (X.509 PEM, 2048–8192 bits)</span><textarea id="ohpm-login-key" required rows="5" maxlength="16384" spellcheck="false" aria-describedby="ohpm-login-key-help"></textarea>
+                <span class="form-note" id="ohpm-login-key-help">Paste the public key only. Keep the private key on the publishing machine.</span>
+              </label>
+              <label class="checkbox-field full-width" id="ohpm-login-enabled-field"><input id="ohpm-login-enabled" type="checkbox"><span>Enable newly registered key</span></label>
             </div>
-            <p class="form-note">Private keys stay on the publishing machine. The checkbox applies only to new bindings; use Rotate on an existing key to replace its public key.</p>
             <div class="form-actions">
               <button class="create-button" id="ohpm-login-save" type="submit">Save public key</button>
               <button class="create-button secondary" id="ohpm-login-cancel" type="button" hidden>Cancel rotation</button>
             </div>
-            <p class="form-note" id="ohpm-login-status" role="status" aria-live="polite"></p>
           </form>
-          <div class="nx-table-frame"><table class="nx-table compact">
-            <thead><tr><th>User</th><th>Publish ID</th><th>SHA-256 fingerprint</th><th>Status</th><th>Actions</th></tr></thead>
-            <tbody id="ohpm-login-rows"></tbody>
-          </table>
-          <p class="form-note" id="ohpm-login-empty" hidden>No signing keys on this page.</p></div>
-          <div class="pagination-bar">
-          <span class="pagination-summary" id="ohpm-login-page"></span>
-          <button class="create-button secondary" id="ohpm-login-previous" type="button">Previous</button>
-          <button class="create-button secondary" id="ohpm-login-next" type="button">Next</button>
-          <button class="create-button secondary" id="ohpm-login-refresh" type="button">Refresh</button>
+          <div class="action-bar credentials-list-toolbar">
+            <h2>Registered keys</h2>
+            <button class="create-button secondary" id="ohpm-login-refresh" type="button"><span class="lucide-icon icon-refresh-cw" aria-hidden="true"></span> Refresh</button>
+            <span class="form-note credentials-status" id="ohpm-login-status" role="status" aria-live="polite" aria-atomic="true"></span>
+          </div>
+          <div class="nx-table-frame credentials-key-list">
+            <table class="nx-table compact" id="ohpm-login-table" hidden>
+              <thead><tr><th>User</th><th>Publish ID</th><th>SHA-256 fingerprint</th><th>Status</th><th>Actions</th></tr></thead>
+              <tbody id="ohpm-login-rows"></tbody>
+            </table>
+            <div class="credentials-empty" id="ohpm-login-empty" hidden>
+              <strong>No signing keys registered.</strong>
+              <p class="form-note">Register a public key above only if you need OHPM signed login.</p>
+            </div>
+          </div>
+          <div class="pagination-bar" id="ohpm-login-pagination" hidden>
+            <span class="pagination-summary" id="ohpm-login-page"></span>
+            <button class="create-button secondary" id="ohpm-login-previous" type="button">Previous</button>
+            <button class="create-button secondary" id="ohpm-login-next" type="button">Next</button>
           </div>
         </section>
 
@@ -2115,7 +2132,7 @@
     <script src="/login/assets/csrf-fetch.js?v=20261006-shared-primitives-1"></script>
     <script src="/login/assets/account-menu.js?v=20261006-shared-primitives-1"></script>
     <script src="/login/assets/safe-return-to.js?v=20261023-safe-return-to-1"></script>
-    <script src="/login/assets/ui-i18n.js?v=20261027-raw-directory-1"></script>
+    <script src="/login/assets/ui-i18n.js?v=20261107-keys-layout"></script>
     <script src="/login/assets/delete-confirmation.js?v=20261107-key-confirmation"></script>
     <script src="/login/assets/product-update.js?v=20260819-version-update-1"></script>
     <script src="./assets/admin-filter.js?v=20260706-wildcard-filter-1"></script>
@@ -2123,7 +2140,7 @@
     <script src="./assets/routing-rules.js?v=20261026-routing-rules-2"></script>
     <script src="./assets/content-selectors.js?v=20261013-delete-confirmation-1"></script>
     <script src="./assets/ohpm-import.js?v=20261106-ohpm-import"></script>
-    <script src="./assets/ohpm-login.js?v=20261107-ohpm-key-rotation"></script>
+    <script src="./assets/ohpm-login.js?v=20261107-keys-layout"></script>
     <script src="./assets/admin.js?v=20261107-credentials"></script>
   </body>
 </html>

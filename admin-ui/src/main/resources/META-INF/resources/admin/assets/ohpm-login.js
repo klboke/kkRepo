@@ -28,19 +28,29 @@
 
   async function refresh() {
     const configuration = await request(api);
-    el("configuration").textContent = `Signed login is ${configuration.enabled ? "enabled" : "disabled"} on this server. `
-      + (configuration.enabled ? "" : "Preconfigured keys cannot authenticate until signed login is enabled. ")
-      + `Token lifetime: ${configuration.tokenTtlSeconds}s. Timestamp tolerance: ${configuration.timestampToleranceSeconds}s.`;
+    el("notice").dataset.state = configuration.enabled ? "enabled" : "disabled";
+    el("configuration").textContent = configuration.enabled
+      ? "Signed login is enabled on this server." : "Signed login is disabled on this server.";
+    el("availability").textContent = configuration.enabled
+      ? "Enabled keys can authenticate signed publication."
+      : "Preconfigured keys cannot authenticate until signed login is enabled in the server configuration on every replica.";
+    el("timing").textContent = `Token lifetime: ${configuration.tokenTtlSeconds}s. Timestamp tolerance: ${configuration.timestampToleranceSeconds}s.`;
     keys = await request(`${api}/keys?offset=${offset}`);
+    if (keys.length === 0 && offset > 0) {
+      offset = 0;
+      keys = await request(`${api}/keys?offset=0`);
+    }
     el("rows").innerHTML = keys.map((key, index) => `<tr>
       <td>${escapeHtml(key.source)} / ${escapeHtml(key.userId)}</td>
       <td><code>${escapeHtml(key.publishId)}</code></td><td><code>${escapeHtml(key.fingerprint)}</code></td>
-      <td>${key.enabled ? (configuration.enabled ? "Key enabled" : "Key enabled · Login unavailable") : "Key disabled"}</td><td>
+      <td>${key.enabled ? (configuration.enabled ? "Key enabled" : "Key enabled · Login unavailable") : "Key disabled"}</td><td><div class="credentials-key-actions">
       <button type="button" class="create-button secondary" data-key-action="rotate" data-index="${index}">Rotate</button>
       <button type="button" class="create-button secondary" data-key-action="toggle" data-index="${index}">${key.enabled ? "Disable" : "Enable"}</button>
       <button type="button" class="create-button secondary" data-key-action="delete" data-index="${index}">Delete</button>
-      </td></tr>`).join("");
+      </div></td></tr>`).join("");
     el("empty").hidden = keys.length !== 0;
+    el("table").hidden = keys.length === 0;
+    el("pagination").hidden = offset === 0 && keys.length === 0;
     el("page").textContent = `Keys ${keys.length ? offset + 1 : 0}–${offset + keys.length}`;
   }
 
@@ -53,10 +63,11 @@
     el("enabled").checked = key ? key.enabled : false;
     el("enabled-field").hidden = Boolean(key);
     el("cancel").hidden = !key;
+    el("form-title").textContent = key ? "Rotate public key" : "Register public key";
     el("save").textContent = key ? "Rotate public key" : "Save public key";
     el("mode").textContent = key
-      ? `Rotate ${key.source} / ${key.userId}. The publish ID and current enabled state are preserved.`
-      : "For an existing owner, saving rotates the key and preserves its current enabled state. Use the table actions to enable or disable a key.";
+      ? `Rotate ${key.source} / ${key.userId}. The publish ID and enabled state are preserved. Existing signed-login tokens will be revoked.`
+      : "Bind a public key to an existing user. To replace a registered key, use Rotate in the list below.";
   }
 
   async function findOwner(source, userId) {
@@ -86,15 +97,18 @@
     });
   }
 
-  async function run(action, message = "Signing keys loaded.", pending = "Loading signing keys…") {
+  async function run(action, message = "", pending = "Loading signing keys…") {
     if (busy) return;
     busy = true;
     el("view").querySelectorAll("input, textarea, button").forEach((element) => { element.disabled = true; });
+    el("status").dataset.state = "pending";
     el("status").textContent = pending;
     try {
       const outcome = await action();
+      el("status").dataset.state = "success";
       el("status").textContent = outcome || message;
     } catch (error) {
+      el("status").dataset.state = "error";
       el("status").textContent = error.message;
     } finally {
       busy = false;
@@ -126,7 +140,7 @@
             : "Public key saved.";
         }, "Public key saved.", "Saving public key…");
       });
-      el("cancel").addEventListener("click", () => { editKey(); el("status").textContent = "Rotation cancelled."; });
+      el("cancel").addEventListener("click", () => { editKey(); el("status").dataset.state = "success"; el("status").textContent = "Rotation cancelled."; });
       el("refresh").addEventListener("click", () => run(refresh));
       el("previous").addEventListener("click", () => run(async () => { offset = Math.max(0, offset - 100); await refresh(); }));
       el("next").addEventListener("click", () => run(async () => { offset += 100; await refresh(); }));
@@ -138,6 +152,7 @@
         if (button.dataset.keyAction === "rotate") {
           editKey(key);
           el("key").focus();
+          el("status").dataset.state = "success";
           el("status").textContent = "Enter the replacement public key.";
           return;
         }
