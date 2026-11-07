@@ -1191,6 +1191,7 @@ class RepositoryDataMigrationWriter {
           && source.sourcePath().startsWith("src/contrib/")
           ? "r-source-package" : "r-metadata";
       case GITLFS -> "gitlfs";
+      case WINGET -> "winget-manifest";
       case HUGGINGFACE -> "huggingface-model-file";
       case RAW -> "asset";
     };

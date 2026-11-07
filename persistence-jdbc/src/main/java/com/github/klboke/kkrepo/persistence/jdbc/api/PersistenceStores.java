@@ -78,6 +78,8 @@ public interface PersistenceStores extends AutoCloseable {
 
   UiSettingsDao uiSettings();
 
+  WingetDao winget();
+
   @Override
   default void close() {
     // Implementations without owned resources need no cleanup.

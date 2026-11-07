@@ -182,7 +182,7 @@ public class SecurityScanCandidateClassifier {
       case RUBYGEMS -> hasAnySuffix(path, ".gem") && !containsAny(kind, "index", "spec");
       case YUM -> hasAnySuffix(path, ".rpm") && !path.contains("/repodata/");
       case RAW -> rawAllowed(path, profile);
-      case DOCKER, GITLFS -> false;
+      case DOCKER, GITLFS, WINGET -> false;
     };
     if (!scannable) {
       return notApplicable("PROTOCOL_METADATA_OR_UNSUPPORTED_TYPE");
