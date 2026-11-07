@@ -4712,12 +4712,6 @@ code {
   text-decoration: none;
 }
 
-.credentials-optional {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 400;
-}
-
 .credentials-notice {
   display: grid;
   gap: 4px;
