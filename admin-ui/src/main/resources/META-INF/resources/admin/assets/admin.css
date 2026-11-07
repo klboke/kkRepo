@@ -4734,10 +4734,6 @@ code {
   font-size: 13px;
 }
 
-.credentials-form {
-  max-width: 880px;
-}
-
 .credentials-form .form-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
@@ -4750,13 +4746,12 @@ code {
   flex-wrap: wrap;
 }
 
-.credentials-list-toolbar h2 {
-  margin: 0 auto 0 0;
-  font-size: 16px;
+.credentials-list-toolbar .credentials-status:not(:empty) {
+  flex: 1 0 100%;
 }
 
-.credentials-status:not(:empty) {
-  flex: 1 0 100%;
+.credentials-form .credentials-status:not(:empty) {
+  margin-top: 12px;
 }
 
 .credentials-status[data-state="error"] {
@@ -4808,4 +4803,13 @@ code {
     grid-template-columns: minmax(0, 1fr);
   }
 
+}
+
+#ohpm-login-view .create-button:disabled {
+  background: var(--canvas);
+  border-color: var(--line);
+  color: var(--muted);
+  box-shadow: none;
+  cursor: not-allowed;
+  opacity: 0.65;
 }

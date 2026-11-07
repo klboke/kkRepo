@@ -356,6 +356,8 @@ function trapFocusInFormModal(event) {
 }
 
 function handleFormModalKeydown(event) {
+  // A native confirmation dialog owns keyboard input above the form modal.
+  if (event.target?.closest?.("dialog[open]")) return true;
   if (event.key === "Tab") {
     return trapFocusInFormModal(event);
   }

@@ -20,6 +20,9 @@
   const originalTitle = document.title;
 
   const zh = {
+    "Create signing key": "创建签名密钥",
+    "Enable signed login in the server configuration before creating, rotating or enabling keys.": "请先在服务器配置中启用签名登录，再创建、轮换或启用密钥。",
+    "Enable signed login in the server configuration on every replica to create, rotate or enable keys. Existing keys cannot authenticate while it is disabled.": "请先在所有副本的服务器配置中启用签名登录，再创建、轮换或启用密钥。未启用时，现有密钥也无法用于认证。",
     "User": "用户",
     "Enable": "启用",
     "Disable": "禁用",
@@ -40,7 +43,7 @@
     "Rotate public key": "轮换公钥",
     "Save public key": "保存公钥",
     "Cancel rotation": "取消轮换",
-    "Bind a public key to an existing user. To replace a registered key, use Rotate in the list below.": "将公钥绑定到现有用户。要替换已登记的密钥，请使用下方列表中的“轮换”。",
+    "Bind a public key to an existing user. To replace a registered key, use Rotate in the key list.": "将公钥绑定到现有用户。要替换已登记的密钥，请使用密钥列表中的“轮换”。",
     "RSA public key (X.509 PEM, 2048–8192 bits)": "RSA 公钥（X.509 PEM，2048–8192 位）",
     "Paste the public key only. Keep the private key on the publishing machine.": "仅粘贴公钥。私钥应保留在执行发布的机器上。",
     "Enable newly registered key": "启用新登记的密钥",
@@ -48,7 +51,7 @@
     "Publish ID": "发布 ID",
     "SHA-256 fingerprint": "SHA-256 指纹",
     "No signing keys registered.": "尚未登记签名密钥。",
-    "Register a public key above only if you need OHPM signed login.": "仅在需要 OHPM 签名登录时，才需在上方登记公钥。",
+    "Create a signing key only if you need OHPM signed login.": "仅在需要 OHPM 签名登录时，才需创建签名密钥。",
     "Key enabled": "密钥已启用",
     "Key enabled · Login unavailable": "密钥已启用 · 签名登录不可用",
     "Key disabled": "密钥已禁用",
@@ -953,6 +956,8 @@
     }
     match = body.match(/^Token lifetime: (\d+)s\. Timestamp tolerance: (\d+)s\.$/);
     if (match) return `令牌有效期：${match[1]} 秒。时间戳容差：${match[2]} 秒。`;
+    match = body.match(/^Page (\d+)$/);
+    if (match) return `第 ${match[1]} 页`;
     match = body.match(/^Keys (\d+)–(\d+)$/);
     if (match) return `密钥 ${match[1]}–${match[2]}`;
     match = body.match(/^Rotate (.+)\. The publish ID and enabled state are preserved\. Existing signed-login tokens will be revoked\.$/);
