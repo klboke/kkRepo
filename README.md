@@ -72,6 +72,10 @@ If kkRepo is deployed behind Nginx or another HTTPS reverse proxy, follow the [N
 
 Local hot-reload development and testing are documented in the [Development Guide](docs/en/development-guide.md).
 
+## One-Click Deploy
+
+[![Deploy on RepoCloud](https://d16t0pc4846x52.cloudfront.net/deploylobe.svg)](https://repocloud.io/details/kkRepo/)
+
 ## Supported Capabilities
 
 | Format | Repository types | Client publish/upload | Browse and search | Nexus migration |
