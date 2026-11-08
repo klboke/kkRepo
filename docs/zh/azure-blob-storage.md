@@ -12,7 +12,7 @@ kkRepo 使用 Azure 原生 Blob Storage API 将制品 blob 存储在 Azure 存�
 | `prefix` | container 内的虚拟目录 |
 | `endpoint` | blob 服务 URL，例如 `https://myaccount.blob.core.windows.net` |
 
-`endpoint` 留空时根据 `accountName` 推导。主权云、专用终结点或 Azurite 需要显式设置。
+`endpoint` 留空时根据 `accountName` 推导；通过标准 `privatelink` DNS 区域访问专用终结点时应保持留空。只有无法从账号名推导 URL 时才需要显式设置：主权云（如 `https://myaccount.blob.core.chinacloudapi.cn`）、使用 Azure DNS 区域终结点的账号（`https://myaccount.z01.blob.storage.azure.net`）或 Azurite。基于 token 的凭据模式要求 `https` endpoint，因为 Azure SDK 拒绝通过明文 HTTP 发送 bearer token；Azurite 这类 `http` endpoint 只能配合 `account-key` 或 `sas` 使用。
 
 ## 凭据模式
 

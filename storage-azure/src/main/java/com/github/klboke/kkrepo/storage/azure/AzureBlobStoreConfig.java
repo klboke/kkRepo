@@ -8,8 +8,9 @@ import java.util.Objects;
  *
  * <p>Terminology maps onto the generic blob model as follows: the Azure <em>container</em> is the
  * {@code bucket}, and {@code prefix} is a virtual directory inside it. {@code endpoint} is the blob
- * service URL; when blank it is derived from {@code accountName} and {@code endpointSuffix} so
- * sovereign clouds and Azurite can both be addressed.
+ * service URL; when blank it is derived from {@code accountName} and the public-cloud suffix
+ * {@value #DEFAULT_ENDPOINT_SUFFIX}. Set it explicitly for sovereign clouds, Azure DNS zone
+ * endpoints, or Azurite, whose URLs cannot be derived from the account name.
  */
 public record AzureBlobStoreConfig(
     long id,
@@ -149,6 +150,13 @@ public record AzureBlobStoreConfig(
         if (!accountKey.isEmpty() || !sasToken.isEmpty()) {
           throw new IllegalArgumentException(
               "accountKey and sasToken must be empty when credentialType is " + credentialType.id());
+        }
+        // The SDK refuses to send a bearer token over plain HTTP and only logs it when the client
+        // is built, so reject the combination up front with an actionable message.
+        if (endpoint.regionMatches(true, 0, "http://", 0, 7)) {
+          throw new IllegalArgumentException(
+              "credentialType " + credentialType.id() + " requires an https endpoint; leave the "
+                  + "endpoint empty to use https://<accountName>.blob." + DEFAULT_ENDPOINT_SUFFIX);
         }
       }
     }

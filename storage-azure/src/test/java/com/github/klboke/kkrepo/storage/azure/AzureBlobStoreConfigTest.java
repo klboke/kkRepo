@@ -107,6 +107,32 @@ class AzureBlobStoreConfigTest {
   }
 
   @Test
+  void tokenCredentialsRejectAPlainHttpEndpoint() {
+    for (AzureCredentialType type : new AzureCredentialType[] {
+        AzureCredentialType.DEFAULT, AzureCredentialType.MANAGED_IDENTITY,
+        AzureCredentialType.WORKLOAD_IDENTITY}) {
+      IllegalArgumentException error = assertThrows(IllegalArgumentException.class, () -> config(b -> {
+        b.endpoint = "http://127.0.0.1:9000";
+        b.accountName = "kkrepo";
+        b.credentialType = type;
+      }).validate());
+      assertTrue(error.getMessage().contains("https"), error.getMessage());
+    }
+    // Shared-key access over HTTP stays valid, which is how Azurite is addressed.
+    config(b -> {
+      b.endpoint = "http://127.0.0.1:10000/devstoreaccount1";
+      b.accountName = "devstoreaccount1";
+      b.credentialType = AzureCredentialType.ACCOUNT_KEY;
+      b.accountKey = "c2VjcmV0";
+    }).validate();
+    config(b -> {
+      b.endpoint = "https://kkrepo.privatelink.blob.core.windows.net";
+      b.accountName = "kkrepo";
+      b.credentialType = AzureCredentialType.WORKLOAD_IDENTITY;
+    }).validate();
+  }
+
+  @Test
   void requiresAContainerAndSomeWayToAddressTheAccount() {
     assertThrows(IllegalArgumentException.class, () -> config(b -> {
       b.accountName = "kkrepo";

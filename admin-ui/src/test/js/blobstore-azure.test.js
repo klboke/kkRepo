@@ -133,6 +133,38 @@ test('workload identity sends the federated token inputs', () => {
   assert.equal(payload.tokenFilePath, '/var/run/secrets/token');
 });
 
+test('switching a new store to Azure drops the S3 placeholder endpoint and restores it for S3', () => {
+  const { context, element } = form();
+  assert.equal(element('blobstore-endpoint').value, 'http://127.0.0.1:9000');
+
+  element('blobstore-engine').value = 'azure';
+  context.refreshBlobStoreEngineControls();
+  // Token credentials over plain HTTP are refused by the Azure SDK.
+  assert.equal(element('blobstore-endpoint').value, '');
+  assert.equal(context.blobStoreFormPayload().endpoint, '');
+
+  element('blobstore-engine').value = 'aws-s3';
+  context.refreshBlobStoreEngineControls();
+  assert.equal(element('blobstore-endpoint').value, 'http://127.0.0.1:9000');
+});
+
+test('an explicit Azure endpoint is kept', () => {
+  const { context, element } = azureForm();
+  element('blobstore-endpoint').value = 'https://myaccount.privatelink.blob.core.windows.net';
+  context.refreshBlobStoreEngineControls();
+
+  assert.equal(context.blobStoreFormPayload().endpoint, 'https://myaccount.privatelink.blob.core.windows.net');
+});
+
+test('the client id hint matches the selected credential mode', () => {
+  const { context, element } = azureForm();
+  assert.match(element('blobstore-azure-client-id').placeholder, /AZURE_CLIENT_ID/);
+
+  element('blobstore-azure-credential-type').value = 'managed-identity';
+  context.refreshBlobStoreEngineControls();
+  assert.match(element('blobstore-azure-client-id').placeholder, /system-assigned/);
+});
+
 test('the default chain keeps the tenant but not a token file path it cannot use', () => {
   const { context, element } = azureForm();
   element('blobstore-azure-tenant-id').value = 'tenant';

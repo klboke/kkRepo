@@ -390,6 +390,8 @@ const blobStoreAzureFields = [
   { id: "blobstore-azure-account-key", label: "Account key" },
   { id: "blobstore-azure-sas-token", label: "SAS token" }
 ];
+// Pre-filled for new S3 stores only; it is never a valid Azure endpoint for token credentials.
+const blobStoreS3DefaultEndpoint = "http://127.0.0.1:9000";
 const blobStoreFormFields = [
   ...blobStoreS3RequiredFields,
   { id: "blobstore-path", label: "Path" },
@@ -1972,6 +1974,7 @@ function refreshBlobStoreEngineControls() {
   const credentialType = blobStoreAzureCredentialType();
   const pathStyle = document.getElementById("blobstore-path-style");
   const pathInput = document.getElementById("blobstore-path");
+  refreshBlobStoreEndpointDefault(azureMode);
   document.querySelectorAll(".s3-only").forEach((element) => {
     element.hidden = fileMode || azureMode;
   });
@@ -2024,6 +2027,9 @@ function refreshBlobStoreEngineControls() {
   document.getElementById("blobstore-azure-account-key").disabled = !azureMode || credentialType !== "account-key";
   document.getElementById("blobstore-azure-sas-token").disabled = !azureMode || credentialType !== "sas";
   setBlobStoreFieldLabel("blobstore-bucket-label", azureMode ? "Container" : "Bucket");
+  document.getElementById("blobstore-azure-client-id").placeholder = credentialType === "managed-identity"
+    ? "User-assigned identity; blank uses system-assigned"
+    : "Blank uses AZURE_CLIENT_ID from the service account";
   const requiredFields = new Set(activeBlobStoreRequiredFields().map((field) => field.id));
   blobStoreFormFields.forEach((field) => {
     setFieldRequired(document.getElementById(field.id), requiredFields.has(field.id));
@@ -2034,6 +2040,23 @@ function refreshBlobStoreEngineControls() {
   pathStyle.disabled = fileMode || azureMode;
   pathStyle.title = "";
   refreshBlobStoreRequiredMarkers();
+}
+
+/**
+ * Azure derives its endpoint from the account name, and the SDK refuses bearer tokens over plain
+ * HTTP, so the S3 placeholder endpoint is dropped in Azure mode and restored if the operator
+ * switches back to an S3 engine without typing another endpoint.
+ */
+function refreshBlobStoreEndpointDefault(azureMode) {
+  const endpoint = document.getElementById("blobstore-endpoint");
+  if (azureMode && endpoint.value.trim() === blobStoreS3DefaultEndpoint) {
+    endpoint.value = "";
+    endpoint.dataset.clearedS3Default = "true";
+  } else if (!azureMode && endpoint.dataset.clearedS3Default === "true") {
+    if (!endpoint.value.trim()) endpoint.value = blobStoreS3DefaultEndpoint;
+    endpoint.dataset.clearedS3Default = "false";
+  }
+  endpoint.placeholder = azureMode ? "Blank uses https://<account>.blob.core.windows.net" : "";
 }
 
 function setBlobStoreFieldLabel(id, label) {
@@ -2053,7 +2076,8 @@ function showCreateBlobStoreForm() {
   document.getElementById("blobstore-credential-source").value = "default";
   document.getElementById("blobstore-access-key").dataset.configured = "false";
   document.getElementById("blobstore-secret-key").dataset.configured = "false";
-  document.getElementById("blobstore-endpoint").value = "http://127.0.0.1:9000";
+  document.getElementById("blobstore-endpoint").value = blobStoreS3DefaultEndpoint;
+  document.getElementById("blobstore-endpoint").dataset.clearedS3Default = "false";
   document.getElementById("blobstore-region").value = "cn-hangzhou";
   document.getElementById("blobstore-bucket").value = "";
   document.getElementById("blobstore-prefix").value = "";

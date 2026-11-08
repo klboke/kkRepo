@@ -12,7 +12,7 @@ The recommended credential modes are **managed identity** and **workload identit
 | `prefix` | virtual directory inside the container |
 | `endpoint` | blob service URL, for example `https://myaccount.blob.core.windows.net` |
 
-Leave `endpoint` empty to derive it from `accountName`. Set it explicitly for sovereign clouds, private endpoints, or Azurite.
+Leave `endpoint` empty to derive it from `accountName`; this is the right choice for a private endpoint reached through the standard `privatelink` DNS zone. Set it explicitly only when the URL cannot be derived from the account name: sovereign clouds such as `https://myaccount.blob.core.chinacloudapi.cn`, accounts using Azure DNS zone endpoints (`https://myaccount.z01.blob.storage.azure.net`), or Azurite. The token-based credential modes require an `https` endpoint, because the Azure SDK refuses to send a bearer token over plain HTTP; an `http` endpoint such as Azurite works only with `account-key` or `sas`.
 
 ## Credential modes
 
