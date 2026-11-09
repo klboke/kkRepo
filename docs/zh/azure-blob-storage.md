@@ -18,13 +18,13 @@ kkRepo 使用 Azure 原生 Blob Storage API 将制品 blob 存储在 Azure 存�
 
 | `credentialType` | kkRepo 存储的密钥 | 适用场景 |
 | --- | --- | --- |
-| `default` | 无 | 默认值。依次解析 workload identity、managed identity、环境凭据 |
+| `default` | 无 | 默认值。即 `DefaultAzureCredential`：依次尝试环境变量中的服务主体、workload identity、managed identity，以及 Azure CLI 等开发者工具 |
 | `managed-identity` | 无 | VM、VM 规模集、App Service 和 AKS 节点身份 |
 | `workload-identity` | 无 | AKS 联合 workload identity |
 | `account-key` | 存储账户密钥 | 没有 Entra ID 的环境 |
 | `sas` | SAS token | 受限、有时效的委派访问 |
 
-`default` 适用于大多数部署：同一份配置在 AKS、VM 和开发机上都能工作。如果希望 kkRepo 快速失败而不是静默回退到链中的其它凭据，请显式选择 `managed-identity` 或 `workload-identity`。
+`default` 适用于大多数部署：同一份配置在 AKS、VM 和开发机上都能工作。由于环境变量凭据排在最前，只要 pod 中同时存在 `AZURE_CLIENT_ID` 与 `AZURE_CLIENT_SECRET` 或 `AZURE_CLIENT_CERTIFICATE_PATH`，即使平台身份可用，`default` 也会以该服务主体进行认证。如果希望 kkRepo 只使用指定身份并快速失败，而不是回退到链中的其它凭据，请显式选择 `managed-identity` 或 `workload-identity`。
 
 将 blob store 切换到基于 token 的模式时会清除已存储的 `accountKey` 和 `sasToken`，数据库中不会残留无用密钥；与基于 token 的模式一起提交的密钥会被忽略，不会存储。使用账户密钥或 SAS token 时，它们与 S3/OSS 密钥一样使用 `kkrepo.security.encryption.credential-secret` 加密存储。无法识别的 `credentialType` 会返回 `400 Bad Request`，不会回退到 `default`。
 
@@ -118,6 +118,8 @@ account-key 模式需要显式提供密钥：
 ## 节点默认值
 
 `kkrepo.storage.azure.*` 为 blob store 行中留空的值提供默认值。prefix 不会继承：blob store 的 prefix 为空即表示不使用前缀。
+
+创建请求未指定 `credentialType` 时，使用 `kkrepo.storage.azure.credential-type`，并将其保存到该 blob store。所选模式对应的 `accountKey` 或 `sasToken` 留空时不保存密钥，从而使用节点配置的 `account-key` 或 `sas-token`。节点密钥不会被复制到数据库中，基于 token 的模式也不会继承它。
 
 | 配置项 | 默认值 | 含义 |
 | --- | --- | --- |

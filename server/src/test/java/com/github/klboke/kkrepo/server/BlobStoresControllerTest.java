@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -23,6 +24,7 @@ import com.github.klboke.kkrepo.storage.azure.AzureBlobStoreConfig;
 import com.github.klboke.kkrepo.storage.azure.AzureBlobStoreProvider;
 import com.github.klboke.kkrepo.storage.azure.admin.AzureBlobStoreAdmin;
 import com.github.klboke.kkrepo.storage.azure.admin.AzureContainerSummary;
+import com.github.klboke.kkrepo.storage.azure.admin.AzureProbeResult;
 import com.github.klboke.kkrepo.storage.azure.config.AzureStorageProperties;
 import com.github.klboke.kkrepo.storage.file.FileBlobStorageFactory;
 import com.github.klboke.kkrepo.storage.file.FileBlobStorePathValidator;
@@ -363,15 +365,119 @@ class BlobStoresControllerTest {
     assertEquals(1, dao.list().size());
   }
 
+  @Test
+  void azureEditClearsAnExplicitlyEmptyEndpointAndPrefixButKeepsOmittedOnes() throws Exception {
+    InMemoryBlobStoreDao dao = new InMemoryBlobStoreDao();
+    var mvc = MockMvcBuilders.standaloneSetup(azureController(dao)).build();
+    mvc.perform(post("/internal/blob-stores").contentType(MediaType.APPLICATION_JSON)
+        .content(azureRequest("azure", ", \"endpoint\":\"https://myaccount.z01.blob.storage.azure.net\","
+            + " \"prefix\":\"old-prefix\"")))
+        .andExpect(status().isOk());
+    long id = dao.findByName("azure").orElseThrow().id();
+
+    // Omitted settings keep their stored values.
+    mvc.perform(put("/internal/blob-stores/" + id).contentType(MediaType.APPLICATION_JSON)
+        .content(azureRequest("azure", "")))
+        .andExpect(status().isOk());
+    BlobStoreRecord kept = dao.findById(id).orElseThrow();
+    assertEquals("https://myaccount.z01.blob.storage.azure.net", kept.endpoint());
+    assertEquals("old-prefix", kept.prefix());
+
+    // Explicit blanks clear them: the endpoint is derived from the account again.
+    mvc.perform(put("/internal/blob-stores/" + id).contentType(MediaType.APPLICATION_JSON)
+        .content(azureRequest("azure", ", \"endpoint\":\"\", \"prefix\":\"\"")))
+        .andExpect(status().isOk());
+    BlobStoreRecord cleared = dao.findById(id).orElseThrow();
+    assertTrue(cleared.endpoint() == null || cleared.endpoint().isEmpty(), cleared.endpoint());
+    assertEquals("", cleared.prefix());
+
+    // An edit that names neither type nor engine stays on the store's existing backend.
+    mvc.perform(put("/internal/blob-stores/" + id).contentType(MediaType.APPLICATION_JSON)
+        .content("{\"name\":\"azure\",\"prefix\":\"new-prefix\"}"))
+        .andExpect(status().isOk());
+    BlobStoreRecord retyped = dao.findById(id).orElseThrow();
+    assertEquals("azure", retyped.type());
+    assertEquals("new-prefix", retyped.prefix());
+    assertEquals("myaccount", retyped.attributes().get("accountName"));
+  }
+
+  @Test
+  void azureCreateInheritsTheNodeCredentialDefaults() throws Exception {
+    AzureStorageProperties defaults = new AzureStorageProperties();
+    defaults.setEndpoint("http://127.0.0.1:10000/devstoreaccount1");
+    defaults.setCredentialType("account-key");
+    defaults.setAccountKey("node-key");
+    InMemoryBlobStoreDao dao = new InMemoryBlobStoreDao();
+    var mvc = MockMvcBuilders.standaloneSetup(azureController(dao, defaults)).build();
+
+    // No credential settings at all: the node's account-key mode and key apply.
+    mvc.perform(post("/internal/blob-stores").contentType(MediaType.APPLICATION_JSON)
+        .content(azureRequest("inherits-all", "")))
+        .andExpect(status().isOk())
+        .andExpect(jsonField("credentialSource", "account-key"))
+        .andExpect(jsonField("accountKeyConfigured", true));
+    Map<String, Object> attributes = dao.findByName("inherits-all").orElseThrow().attributes();
+    assertEquals("account-key", attributes.get("credentialType"));
+    assertFalse(attributes.containsKey("accountKey"), "the node key must not be copied into the row");
+
+    // An explicit mode with the key omitted still uses the node key.
+    mvc.perform(post("/internal/blob-stores").contentType(MediaType.APPLICATION_JSON)
+        .content(azureRequest("inherits-key", ", \"credentialType\":\"account-key\"")))
+        .andExpect(status().isOk())
+        .andExpect(jsonField("accountKeyConfigured", true));
+
+    // A token mode never inherits the node key, and the node endpoint is plain HTTP, so it is refused.
+    mvc.perform(post("/internal/blob-stores").contentType(MediaType.APPLICATION_JSON)
+        .content(azureRequest("token", ", \"credentialType\":\"default\"")))
+        .andExpect(status().isBadRequest());
+  }
+
+  @Test
+  void azureCheckRunsTheAzureReadWriteProbe() throws Exception {
+    InMemoryBlobStoreDao dao = new InMemoryBlobStoreDao();
+    AzureBlobStoreAdmin admin = azureAdmin();
+    org.mockito.Mockito.when(admin.probeReadWrite(org.mockito.ArgumentMatchers.any())).thenAnswer(invocation -> {
+      AzureBlobStoreConfig config = invocation.getArgument(0);
+      return new AzureProbeResult(true, "dev/probe.txt", "Read/write probe succeeded",
+          new AzureContainerSummary(config.name(), "", config.accountName(), config.container(),
+              "Started", true, 1, 5, ""));
+    });
+    var mvc = MockMvcBuilders.standaloneSetup(azureController(dao, new AzureStorageProperties(), admin)).build();
+    mvc.perform(post("/internal/blob-stores").contentType(MediaType.APPLICATION_JSON)
+        .content(azureRequest("azure", "")))
+        .andExpect(status().isOk());
+    long id = dao.findByName("azure").orElseThrow().id();
+
+    mvc.perform(post("/internal/blob-stores/" + id + "/check"))
+        .andExpect(status().isOk())
+        .andExpect(jsonField("ok", true))
+        .andExpect(jsonField("objectKey", "dev/probe.txt"));
+    org.mockito.Mockito.verify(admin).probeReadWrite(org.mockito.ArgumentMatchers.any());
+  }
+
   private static BlobStoresController azureController(InMemoryBlobStoreDao dao) {
+    return azureController(dao, new AzureStorageProperties());
+  }
+
+  private static BlobStoresController azureController(
+      InMemoryBlobStoreDao dao, AzureStorageProperties defaults) {
+    return azureController(dao, defaults, azureAdmin());
+  }
+
+  private static BlobStoresController azureController(
+      InMemoryBlobStoreDao dao, AzureStorageProperties defaults, AzureBlobStoreAdmin admin) {
+    return new BlobStoresController(dao, null, null, null, null, new S3StorageProperties(),
+        admin, new AzureBlobStoreProvider(null, defaults), null, new MockEnvironment());
+  }
+
+  private static AzureBlobStoreAdmin azureAdmin() {
     AzureBlobStoreAdmin admin = mock(AzureBlobStoreAdmin.class);
     org.mockito.Mockito.when(admin.summary(org.mockito.ArgumentMatchers.any())).thenAnswer(invocation -> {
       AzureBlobStoreConfig config = invocation.getArgument(0);
       return new AzureContainerSummary(config.name(), "", config.accountName(), config.container(),
           "Started", true, 0, 0, "");
     });
-    return new BlobStoresController(dao, null, null, null, null, new S3StorageProperties(),
-        admin, new AzureBlobStoreProvider(null, new AzureStorageProperties()), null, new MockEnvironment());
+    return admin;
   }
 
   private static String azureRequest(String name, String settings) {

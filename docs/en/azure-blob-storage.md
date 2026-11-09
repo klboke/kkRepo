@@ -18,13 +18,13 @@ Leave `endpoint` empty to derive it from `accountName`; this is the right choice
 
 | `credentialType` | Secret stored by kkRepo | Use for |
 | --- | --- | --- |
-| `default` | none | Default. Resolves workload identity, then managed identity, then environment credentials |
+| `default` | none | Default. `DefaultAzureCredential`: environment service principal, then workload identity, then managed identity, then developer tools such as the Azure CLI |
 | `managed-identity` | none | VMs, VM scale sets, App Service, and AKS node identities |
 | `workload-identity` | none | AKS federated workload identity |
 | `account-key` | storage account key | Environments without Entra ID |
 | `sas` | SAS token | Delegated, time-limited access |
 
-`default` suits most deployments: the same configuration works on AKS, on VMs, and on a developer machine. Choose `managed-identity` or `workload-identity` explicitly when you want kkRepo to fail fast rather than silently fall back to another credential in the chain.
+`default` suits most deployments: the same configuration works on AKS, on VMs, and on a developer machine. Because the environment step comes first, `AZURE_CLIENT_ID` together with `AZURE_CLIENT_SECRET` or `AZURE_CLIENT_CERTIFICATE_PATH` in the pod makes `default` authenticate as that service principal even when a platform identity is also available. Choose `managed-identity` or `workload-identity` explicitly when you want kkRepo to use exactly that identity and fail fast rather than fall back to another credential in the chain.
 
 Switching a store to a token-based mode clears any stored `accountKey` and `sasToken`, so no unused secret is left behind in the database; a secret sent together with a token-based mode is ignored and not stored. When a store does use an account key or SAS token, it is encrypted at rest with `kkrepo.security.encryption.credential-secret`, like S3/OSS keys. An unrecognised `credentialType` is rejected with `400 Bad Request` rather than falling back to `default`.
 
@@ -118,6 +118,8 @@ For `PUT /internal/blob-stores/{id}`, omitted fields retain their stored values 
 ## Node defaults
 
 `kkrepo.storage.azure.*` supplies defaults for values a blob-store row leaves blank. The prefix is not inherited: a blank prefix on a store means no prefix.
+
+A create request without `credentialType` takes `kkrepo.storage.azure.credential-type`, which is then stored on the row. A request that leaves `accountKey` or `sasToken` blank for the matching mode stores no secret, so the node's `account-key` or `sas-token` applies. The node secret is never copied into the database, and token-based modes never inherit it.
 
 | Property | Default | Meaning |
 | --- | --- | --- |

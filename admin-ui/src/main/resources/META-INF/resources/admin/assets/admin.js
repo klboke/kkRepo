@@ -1963,6 +1963,19 @@ function setAccessFieldMode(required, placeholder = "") {
   refreshBlobStoreRequiredMarkers();
 }
 
+/** Selectors that decide which blob store fields apply; changing any of them re-renders the form. */
+const blobStoreFormModeControls = [
+  "blobstore-engine",
+  "blobstore-credential-source",
+  "blobstore-azure-credential-type",
+];
+
+function bindBlobStoreFormModeControls() {
+  blobStoreFormModeControls.forEach((id) => {
+    document.getElementById(id).addEventListener("change", refreshBlobStoreEngineControls);
+  });
+}
+
 function refreshBlobStoreEngineControls() {
   const engine = document.getElementById("blobstore-engine").value;
   const fileMode = engine === "file";
@@ -8570,8 +8583,7 @@ document.getElementById("create-blobstore-button").addEventListener("click", sho
 document.getElementById("cancel-blobstore-button").addEventListener("click", hideBlobStoreForm);
 document.getElementById("blobstore-form").addEventListener("submit", saveBlobStore);
 document.getElementById("save-blobstore-button").addEventListener("click", saveBlobStore);
-document.getElementById("blobstore-engine").addEventListener("change", refreshBlobStoreEngineControls);
-document.getElementById("blobstore-credential-source").addEventListener("change", refreshBlobStoreEngineControls);
+bindBlobStoreFormModeControls();
 blobStoreFormFields.forEach((field) => {
   document.getElementById(field.id).addEventListener("input", clearBlobStoreFieldError);
 });

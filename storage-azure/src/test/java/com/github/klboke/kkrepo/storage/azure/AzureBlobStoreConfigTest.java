@@ -39,6 +39,31 @@ class AzureBlobStoreConfigTest {
   }
 
   @Test
+  void anUnaddressableStoreHasNoServiceEndpoint() {
+    IllegalArgumentException error = assertThrows(IllegalArgumentException.class,
+        () -> config(b -> b.accountName = "").serviceEndpoint());
+
+    assertTrue(error.getMessage().contains("azure-store"), error.getMessage());
+  }
+
+  @Test
+  void accountNameInferenceIgnoresHostsThatDoNotEncodeAnAccount() {
+    assertEquals("", AzureBlobStoreConfig.accountNameFromEndpoint(null));
+    assertEquals("", AzureBlobStoreConfig.accountNameFromEndpoint("not-a-url"));
+    assertEquals("", AzureBlobStoreConfig.accountNameFromEndpoint("http://localhost:10000/devstoreaccount1"));
+    assertEquals("", AzureBlobStoreConfig.accountNameFromEndpoint("https://cdn.example.com"));
+    assertEquals("", AzureBlobStoreConfig.accountNameFromEndpoint("https://bad host.blob.core.windows.net"));
+    assertEquals("kkrepo",
+        AzureBlobStoreConfig.accountNameFromEndpoint("https://kkrepo.blob.core.chinacloudapi.cn"));
+  }
+
+  @Test
+  void normalizeTrimsAndLowerCases() {
+    assertEquals("azure", AzureBlobStoreConfig.normalize("  Azure "));
+    assertEquals("", AzureBlobStoreConfig.normalize(null));
+  }
+
+  @Test
   void appliesThePrefixToObjectKeys() {
     assertEquals("team/a/b", config(b -> b.prefix = "/team/").objectKey("a/b"));
     assertEquals("a/b", config(b -> b.prefix = "").objectKey("a/b"));

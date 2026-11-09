@@ -3,6 +3,9 @@ package com.github.klboke.kkrepo.storage.azure;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -19,14 +22,19 @@ import com.azure.storage.blob.BlobClient;
 import com.azure.storage.blob.BlobContainerClient;
 import com.azure.storage.blob.BlobServiceClient;
 import com.azure.storage.blob.models.BlobProperties;
+import com.azure.storage.blob.models.BlobStorageException;
+import com.azure.storage.blob.options.BlobInputStreamOptions;
 import com.azure.storage.blob.options.BlobUploadFromFileOptions;
 import com.azure.storage.blob.options.BlockBlobCommitBlockListOptions;
+import com.azure.storage.blob.specialized.BlobInputStream;
 import com.azure.storage.blob.specialized.BlockBlobClient;
 import com.github.klboke.kkrepo.core.BlobIntegrityException;
 import com.github.klboke.kkrepo.core.BlobObjectMetadata;
+import com.github.klboke.kkrepo.core.BlobRangeReader;
 import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.VerifiedBlobDigests;
 import java.io.ByteArrayInputStream;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -246,6 +254,120 @@ class AzureBlobStorageTest {
     storage.delete(new BlobReference("", "key", HELLO_SHA256, 5));
 
     verify(service).getBlobContainerClient(eq("artifacts"));
+  }
+
+  @Test
+  void exposesTheConfigurationItWasBuiltWith() {
+    AzureBlobStoreConfig config = config("team");
+
+    assertSame(config, new AzureBlobStorage(service, config).config());
+  }
+
+  @Test
+  void aFailedCleanupIsAttachedToTheUploadFailureRatherThanReplacingIt() {
+    BlobStorageException denied = storageError(403);
+    when(blob.deleteIfExists()).thenThrow(denied);
+    BlobReference target = new BlobReference("artifacts", "key", HELLO_SHA256, HELLO.length());
+
+    BlobIntegrityException failure = assertThrows(BlobIntegrityException.class,
+        () -> storage.uploadVerified(target, stream("world"), id -> { }));
+
+    assertEquals(List.of(denied), List.of(failure.getSuppressed()));
+  }
+
+  @Test
+  void missingBlobsReadAsAbsent() {
+    BlobStorageException missing = storageError(404);
+    when(blob.openInputStream(any(BlobInputStreamOptions.class))).thenThrow(missing);
+    when(blob.getProperties()).thenThrow(missing);
+    when(blob.deleteIfExists()).thenThrow(missing);
+    BlobReference reference = new BlobReference("artifacts", "key", HELLO_SHA256, 5);
+
+    assertTrue(storage.get(reference).isEmpty());
+    assertTrue(storage.getRange(reference, 0, 5).isEmpty());
+    assertTrue(storage.stat(reference).isEmpty());
+    assertFalse(storage.exists(reference));
+    storage.delete(reference);
+    storage.discardVerifiedUpload(reference, "attempt");
+  }
+
+  @Test
+  void serviceFailuresOtherThanNotFoundPropagate() {
+    BlobStorageException denied = storageError(403);
+    when(blob.openInputStream(any(BlobInputStreamOptions.class))).thenThrow(denied);
+    when(blob.getProperties()).thenThrow(denied);
+    when(blob.deleteIfExists()).thenThrow(denied);
+    BlobReference reference = new BlobReference("artifacts", "key", HELLO_SHA256, 5);
+
+    // A permission or throttling failure must not be mistaken for a missing blob.
+    assertSame(denied, assertThrows(BlobStorageException.class, () -> storage.get(reference)));
+    assertSame(denied, assertThrows(BlobStorageException.class, () -> storage.getRange(reference, 0, 5)));
+    assertSame(denied, assertThrows(BlobStorageException.class, () -> storage.stat(reference)));
+    assertSame(denied, assertThrows(BlobStorageException.class, () -> storage.delete(reference)));
+    assertSame(denied, assertThrows(BlobStorageException.class,
+        () -> storage.discardVerifiedUpload(reference, "attempt")));
+  }
+
+  @Test
+  void statToleratesBlobsWithoutMetadataOrTimestamp() {
+    BlobProperties properties = mock(BlobProperties.class);
+    when(properties.getBlobSize()).thenReturn(5L);
+    when(blob.getProperties()).thenReturn(properties);
+
+    BlobObjectMetadata stat =
+        storage.stat(new BlobReference("artifacts", "key", HELLO_SHA256, 0)).orElseThrow();
+
+    assertEquals(HELLO_SHA256, stat.reference().sha256());
+    assertNull(stat.lastModified());
+  }
+
+  @Test
+  void openedStreamsReopenTheBlobForARangeAndReportAVanishedBlob() throws Exception {
+    BlobInputStream whole = mock(BlobInputStream.class);
+    BlobInputStream ranged = mock(BlobInputStream.class);
+    when(blob.openInputStream(any(BlobInputStreamOptions.class)))
+        .thenReturn(whole, ranged)
+        .thenThrow(storageError(404));
+    BlobReference reference = new BlobReference("artifacts", "key", HELLO_SHA256, 5);
+
+    BlobRangeReader reader = (BlobRangeReader) storage.get(reference).orElseThrow();
+
+    assertNotNull(reader.openRange(1, 2));
+    ArgumentCaptor<BlobInputStreamOptions> options = ArgumentCaptor.forClass(BlobInputStreamOptions.class);
+    verify(blob, org.mockito.Mockito.times(2)).openInputStream(options.capture());
+    assertEquals(1L, options.getAllValues().get(1).getRange().getOffset());
+    assertEquals(Long.valueOf(2), options.getAllValues().get(1).getRange().getCount());
+    assertThrows(IllegalStateException.class, () -> reader.openRange(1, 2));
+  }
+
+  @Test
+  void aStreamThatFailsWhileSpoolingIsReportedAndNothingIsUploaded() {
+    java.io.InputStream broken = new java.io.InputStream() {
+      @Override
+      public int read() throws java.io.IOException {
+        throw new java.io.IOException("connection reset by client");
+      }
+    };
+
+    UncheckedIOException error = assertThrows(UncheckedIOException.class,
+        () -> storage.put("maven-releases", "a.jar", broken, 5, HELLO_SHA256));
+
+    assertEquals("connection reset by client", error.getCause().getMessage());
+    verify(blob, never()).uploadFromFileWithResponse(any(BlobUploadFromFileOptions.class), any(), any());
+  }
+
+  @Test
+  void putFileReportsAFileThatCannotBeSized() {
+    Path missing = Path.of("does-not-exist-" + System.nanoTime());
+
+    assertThrows(UncheckedIOException.class,
+        () -> storage.putFile("maven-releases", "a.jar", missing, HELLO_SHA256));
+  }
+
+  private static BlobStorageException storageError(int status) {
+    BlobStorageException error = mock(BlobStorageException.class);
+    when(error.getStatusCode()).thenReturn(status);
+    return error;
   }
 
   private static ByteArrayInputStream stream(String value) {

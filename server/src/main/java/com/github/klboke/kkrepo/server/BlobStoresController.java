@@ -223,7 +223,7 @@ public class BlobStoresController {
           null,
           required(azureContainer(request), "bucket"),
           valueOrDefault(request.prefix(), ""),
-          azureAttributes(request, null));
+          azureAttributes(request, null, nodeDefaultAzureCredentialType()));
     }
     String engine = normalizeS3Engine(valueOrDefault(request.engine(), s3Properties.getEngine()));
     String source = credentialSource(request.credentialSource(), engine);
@@ -270,11 +270,15 @@ public class BlobStoresController {
           existing.id(),
           existing.name(),
           BlobStoreTypes.AZURE,
-          valueOrDefault(request.endpoint(), existing.endpoint()),
+          // Omitted keeps the stored value; an explicit blank clears it so the endpoint is derived
+          // again and the prefix is removed.
+          request.endpoint() == null ? existing.endpoint() : valueOrDefault(request.endpoint(), null),
           null,
           required(valueOrDefault(azureContainer(request), existing.bucket()), "bucket"),
-          valueOrDefault(request.prefix(), existing.prefix() == null ? "" : existing.prefix()),
-          azureAttributes(request, existing));
+          request.prefix() == null
+              ? (existing.prefix() == null ? "" : existing.prefix())
+              : request.prefix().trim(),
+          azureAttributes(request, existing, nodeDefaultAzureCredentialType()));
     }
     String engine = normalizeS3Engine(valueOrDefault(
         request.engine(), stringAttr(existing.attributes(), "engine", s3Properties.getEngine())));
@@ -687,11 +691,18 @@ public class BlobStoresController {
     return valueOrDefault(request.container(), request.bucket());
   }
 
+  /** {@code kkrepo.storage.azure.credential-type}, used when neither request nor store names a mode. */
+  private AzureCredentialType nodeDefaultAzureCredentialType() {
+    return azureBlobStoreProvider == null
+        ? AzureCredentialType.DEFAULT
+        : azureBlobStoreProvider.defaultCredentialType();
+  }
+
   private static Map<String, Object> azureAttributes(
-      BlobStoreRequest request, BlobStoreRecord existing) {
+      BlobStoreRequest request, BlobStoreRecord existing, AzureCredentialType nodeDefault) {
     Map<String, Object> previous =
         existing == null || existing.attributes() == null ? Map.of() : existing.attributes();
-    AzureCredentialType credentialType = azureCredentialType(request, previous);
+    AzureCredentialType credentialType = azureCredentialType(request, previous, nodeDefault);
     Map<String, Object> attributes = new LinkedHashMap<>();
     attributes.put("engine", BlobStoreTypes.AZURE);
     attributes.put(AzureBlobStoreProvider.ATTR_CREDENTIAL_TYPE, credentialType.id());
@@ -709,24 +720,22 @@ public class BlobStoresController {
     attributes.put(AzureBlobStoreProvider.ATTR_AUTHORITY_HOST, azureValue(
         request.authorityHost(), previous, AzureBlobStoreProvider.ATTR_AUTHORITY_HOST,
         credentialType.usesTenant()));
-    attributes.put(AzureBlobStoreProvider.ATTR_ACCOUNT_KEY, azureSecret(
-        request.accountKey(), previous, AzureBlobStoreProvider.ATTR_ACCOUNT_KEY,
-        credentialType == AzureCredentialType.ACCOUNT_KEY));
-    attributes.put(AzureBlobStoreProvider.ATTR_SAS_TOKEN, azureSecret(
-        request.sasToken(), previous, AzureBlobStoreProvider.ATTR_SAS_TOKEN,
-        credentialType == AzureCredentialType.SAS));
+    putAzureSecret(attributes, AzureBlobStoreProvider.ATTR_ACCOUNT_KEY, request.accountKey(), previous,
+        credentialType == AzureCredentialType.ACCOUNT_KEY);
+    putAzureSecret(attributes, AzureBlobStoreProvider.ATTR_SAS_TOKEN, request.sasToken(), previous,
+        credentialType == AzureCredentialType.SAS);
     return attributes;
   }
 
   /**
    * An explicit mode is parsed strictly so a typo is rejected instead of silently selecting the
-   * default chain; an omitted mode keeps the stored one.
+   * default chain. An omitted mode keeps the stored one, and a new store takes the node default.
    */
   private static AzureCredentialType azureCredentialType(
-      BlobStoreRequest request, Map<String, Object> previous) {
+      BlobStoreRequest request, Map<String, Object> previous, AzureCredentialType nodeDefault) {
     if (request.credentialType() == null || request.credentialType().isBlank()) {
-      return AzureCredentialType.fromValue(stringAttr(
-          previous, AzureBlobStoreProvider.ATTR_CREDENTIAL_TYPE, AzureCredentialType.DEFAULT.id()));
+      String stored = stringAttr(previous, AzureBlobStoreProvider.ATTR_CREDENTIAL_TYPE, "");
+      return stored.isEmpty() ? nodeDefault : AzureCredentialType.fromValue(stored);
     }
     try {
       return AzureCredentialType.parse(request.credentialType());
@@ -749,15 +758,22 @@ public class BlobStoresController {
 
   /**
    * Secrets follow the S3 edit contract: a blank or omitted value keeps the stored secret, so the
-   * admin console can leave the field empty on edit. A secret is dropped as soon as the selected
-   * credential mode cannot use it, which is how switching to a platform identity clears it.
+   * admin console can leave the field empty on edit. Without a stored secret the attribute is left
+   * absent, so the provider applies the node default ({@code kkrepo.storage.azure.account-key} or
+   * {@code sas-token}). A mode that cannot use the secret stores an explicit blank instead, which
+   * clears it when switching to a platform identity and keeps a node default from leaking in.
    */
-  private static String azureSecret(
-      String requested, Map<String, Object> previous, String key, boolean used) {
+  private static void putAzureSecret(
+      Map<String, Object> attributes, String key, String requested, Map<String, Object> previous,
+      boolean used) {
     if (!used) {
-      return "";
+      attributes.put(key, "");
+      return;
     }
-    return valueOrDefault(requested, stringAttr(previous, key, ""));
+    String secret = valueOrDefault(requested, stringAttr(previous, key, ""));
+    if (!secret.isEmpty()) {
+      attributes.put(key, secret);
+    }
   }
 
   private static BlobStoreSummary toSummary(AzureContainerSummary summary) {

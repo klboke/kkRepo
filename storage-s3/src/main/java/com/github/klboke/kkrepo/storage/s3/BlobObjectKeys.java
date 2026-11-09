@@ -11,8 +11,4 @@ final class BlobObjectKeys {
   static String immutableObjectKey(String prefix, String repository, String sha256) {
     return com.github.klboke.kkrepo.core.BlobObjectKeys.immutableObjectKey(prefix, repository, sha256);
   }
-
-  static String trimSlashes(String value) {
-    return com.github.klboke.kkrepo.core.BlobObjectKeys.trimSlashes(value);
-  }
 }

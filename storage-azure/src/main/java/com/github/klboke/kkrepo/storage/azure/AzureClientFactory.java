@@ -156,8 +156,9 @@ public class AzureClientFactory {
     return switch (config.credentialType()) {
       case MANAGED_IDENTITY -> managedIdentity(config, httpClient);
       case WORKLOAD_IDENTITY -> workloadIdentity(config, httpClient);
-      // DefaultAzureCredential already probes workload identity, then managed identity, then the
-      // environment, so a single setting covers AKS, VMs and developer machines.
+      // DefaultAzureCredential tries an environment service principal first, then workload
+      // identity, then managed identity, then developer tools, so a single setting covers AKS,
+      // VMs and developer machines.
       default -> defaultCredential(config, httpClient);
     };
   }

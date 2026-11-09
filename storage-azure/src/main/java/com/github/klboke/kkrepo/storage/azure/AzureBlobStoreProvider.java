@@ -73,6 +73,11 @@ public class AzureBlobStoreProvider implements BlobStoreProvider {
     factory.invalidate(storeId);
   }
 
+  /** Credential mode for a store that names none: {@code kkrepo.storage.azure.credential-type}. */
+  public AzureCredentialType defaultCredentialType() {
+    return AzureCredentialType.fromValue(fallback.getCredentialType());
+  }
+
   public AzureBlobStoreConfig configFor(BlobStoreDescriptor descriptor) {
     String container = valueOrDefault(
         descriptor.bucket(), descriptor.stringAttr(ATTR_CONTAINER, fallback.getContainer()));

@@ -9,11 +9,20 @@ const source = readFileSync(join(__dirname, '../../main/resources/META-INF/resou
 function form() {
   const elements = new Map();
   function element(id) {
-    if (!elements.has(id)) elements.set(id, {
-      id, value: '', dataset: {}, checked: true, disabled: false, required: false, textContent: '',
-      classList: { remove() {}, toggle() {} },
-      setAttribute() {}, focus() {},
-    });
+    if (!elements.has(id)) {
+      const listeners = new Map();
+      elements.set(id, {
+        id, value: '', dataset: {}, checked: true, disabled: false, required: false, textContent: '',
+        classList: { remove() {}, toggle() {} },
+        setAttribute() {}, focus() {},
+        addEventListener(type, listener) {
+          listeners.set(type, [...(listeners.get(type) || []), listener]);
+        },
+        dispatchEvent(event) {
+          (listeners.get(event.type) || []).forEach(listener => listener(event));
+        },
+      });
+    }
     return elements.get(id);
   }
   const toasts = [];
@@ -178,6 +187,45 @@ test('the default chain keeps the tenant but not a token file path it cannot use
   assert.equal(element('blobstore-azure-tenant-id').disabled, false);
   assert.equal(payload.tenantId, 'tenant');
   assert.equal(payload.tokenFilePath, '');
+});
+
+test('choosing an Azure credential mode in the selector re-renders its fields', () => {
+  const { context, element } = azureForm();
+  // Each field group is a single element, so its visibility can be asserted.
+  context.document.querySelectorAll = selector => [element(`group ${selector}`)];
+  context.bindBlobStoreFormModeControls();
+  const selector = element('blobstore-azure-credential-type');
+  const choose = mode => {
+    selector.value = mode;
+    selector.dispatchEvent({ type: 'change', target: selector });
+  };
+
+  choose('account-key');
+  assert.equal(element('blobstore-azure-account-key').disabled, false);
+  assert.equal(element('group .azure-account-key-fields').hidden, false);
+  assert.equal(element('group .azure-sas-fields').hidden, true);
+
+  choose('sas');
+  assert.equal(element('blobstore-azure-sas-token').disabled, false);
+  assert.equal(element('blobstore-azure-account-key').disabled, true);
+  assert.equal(element('group .azure-sas-fields').hidden, false);
+
+  choose('workload-identity');
+  assert.equal(element('blobstore-azure-sas-token').disabled, true);
+  assert.equal(element('blobstore-azure-token-file').disabled, false);
+  assert.equal(element('group .azure-workload-fields').hidden, false);
+});
+
+test('the engine and S3 credential selectors stay bound to the same refresh', () => {
+  const { context, element } = form();
+  context.bindBlobStoreFormModeControls();
+  const engine = element('blobstore-engine');
+
+  engine.value = 'azure';
+  engine.dispatchEvent({ type: 'change', target: engine });
+
+  assert.equal(element('blobstore-account-name').disabled, false);
+  assert.equal(element('blobstore-bucket-label').textContent, 'Container');
 });
 
 test('account key mode requires the key and sends it', () => {

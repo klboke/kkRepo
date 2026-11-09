@@ -118,6 +118,17 @@ class BlobStorageRegistryProviderTest {
   }
 
   @Test
+  void s3ConfigurationIsUnavailableWithoutTheS3Provider() {
+    BlobStoreDao dao = mock(BlobStoreDao.class);
+    when(dao.findById(2L)).thenReturn(Optional.of(record(2, "azure-store", BlobStoreTypes.AZURE)));
+    BlobStorageRegistry registry = registry(dao, List.of(new RecordingProvider(BlobStoreTypes.AZURE)));
+
+    IllegalStateException error = assertThrows(IllegalStateException.class, () -> registry.configFor(2));
+
+    assertTrue(error.getMessage().contains("S3"), error.getMessage());
+  }
+
+  @Test
   void closingTheRegistryClosesEveryCachedWrapper() {
     RecordingProvider azure = new RecordingProvider(BlobStoreTypes.AZURE);
     BlobStorageRegistry registry = registry(mock(BlobStoreDao.class), List.of(azure));

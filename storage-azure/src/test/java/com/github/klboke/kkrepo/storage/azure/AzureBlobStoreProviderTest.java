@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.core.blobstore.BlobStoreTypes;
 import com.github.klboke.kkrepo.storage.azure.config.AzureStorageProperties;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -95,6 +96,34 @@ class AzureBlobStoreProviderTest {
         provider.signature(descriptor("azure", Map.of())));
     assertFalse(provider.signature(descriptor("azure", Map.of()))
         .equals(provider.signature(descriptor("azure", Map.of("credentialType", "managed-identity")))));
+  }
+
+  @Test
+  void createsStorageOverACachedClientAndReleasesItOnInvalidate() {
+    AzureClientFactory clients = new AzureClientFactory();
+    AzureBlobStoreProvider provider =
+        new AzureBlobStoreProvider(new AzureBlobStorageFactory(clients), new AzureStorageProperties());
+    BlobStoreDescriptor descriptor = descriptor("azure", Map.of(
+        "credentialType", "account-key", "accountKey", "a2tyZXBvLWFjY291bnQta2V5"));
+
+    assertTrue(provider.create(descriptor) instanceof AzureBlobStorage);
+    assertEquals(Set.of(1L), clients.cachedStoreIds());
+    assertEquals(Set.of(1L), provider.cachedStoreIdsMissingFrom(Set.of()));
+    assertTrue(provider.cachedStoreIdsMissingFrom(Set.of(1L)).isEmpty());
+
+    provider.invalidate(1);
+
+    assertTrue(clients.cachedStoreIds().isEmpty());
+  }
+
+  @Test
+  void theNodeDefaultCredentialTypeAppliesToNewStores() {
+    AzureStorageProperties defaults = new AzureStorageProperties();
+    defaults.setCredentialType("workload-identity");
+
+    assertEquals(AzureCredentialType.WORKLOAD_IDENTITY,
+        new AzureBlobStoreProvider(null, defaults).defaultCredentialType());
+    assertEquals(AzureCredentialType.DEFAULT, provider().defaultCredentialType());
   }
 
   private static AzureBlobStoreProvider provider() {

@@ -124,6 +124,16 @@ class AzureClientFactoryTest {
   }
 
   @Test
+  void shutdownReleasesEveryCachedClient() {
+    AzureClientFactory factory = new AzureClientFactory();
+    factory.client(accountKeyConfig("artifacts"));
+
+    factory.shutdown();
+
+    assertTrue(factory.cachedStoreIds().isEmpty());
+  }
+
+  @Test
   void withoutATrustBundleTheSdkDefaultHttpClientIsUsed() {
     AzureClientFactory factory = new AzureClientFactory();
 
@@ -153,6 +163,41 @@ class AzureClientFactoryTest {
     AzureClientFactory factory = new AzureClientFactory(OutboundTlsTrust.fromPemBundle(pemBundle()));
 
     assertNotNull(factory.client(accountKeyConfig("artifacts")));
+  }
+
+  @Test
+  void sasAndTokenCredentialsBuildServiceClients() {
+    AzureClientFactory factory = new AzureClientFactory();
+
+    // Building does not contact Azure; the credential is only used on the first request.
+    assertNotNull(factory.client(new AzureBlobStoreConfig(
+        8, "sas-store", "", "kkrepo", "artifacts", "", AzureCredentialType.SAS,
+        "", "sv=2024-01-01&sig=x", "", "", "", "", 3, 5000, 120000,
+        64L * 1024 * 1024, 16L * 1024 * 1024, 4)));
+    assertNotNull(factory.client(new AzureBlobStoreConfig(
+        9, "identity-store", "", "kkrepo", "artifacts", "", AzureCredentialType.MANAGED_IDENTITY,
+        "", "", "", "", "", "", 3, 5000, 120000,
+        64L * 1024 * 1024, 16L * 1024 * 1024, 4)));
+  }
+
+  @Test
+  void everyTokenModeHonoursExplicitIdentitySettingsAndTheTrustBundle() throws Exception {
+    AzureClientFactory factory = new AzureClientFactory(OutboundTlsTrust.fromPemBundle(pemBundle()));
+    AzureBlobStoreConfig workload = new AzureBlobStoreConfig(
+        7, "azure-store", "", "kkrepo", "artifacts", "", AzureCredentialType.WORKLOAD_IDENTITY,
+        "", "", "11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222",
+        "/var/run/secrets/azure/tokens/azure-identity-token", "https://login.microsoftonline.us/",
+        3, 5000, 120000, 64L * 1024 * 1024, 16L * 1024 * 1024, 4);
+    AzureBlobStoreConfig chain = new AzureBlobStoreConfig(
+        7, "azure-store", "", "kkrepo", "artifacts", "", AzureCredentialType.DEFAULT,
+        "", "", "11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222",
+        "", "https://login.microsoftonline.us/",
+        3, 5000, 120000, 64L * 1024 * 1024, 16L * 1024 * 1024, 4);
+
+    assertInstanceOf(WorkloadIdentityCredential.class,
+        factory.tokenCredential(workload, factory.trustedHttpClient(workload)));
+    assertInstanceOf(DefaultAzureCredential.class,
+        factory.tokenCredential(chain, factory.trustedHttpClient(chain)));
   }
 
   private String pemBundle() throws Exception {

@@ -89,6 +89,31 @@ class BlobStoreProvidersTest {
   }
 
   @Test
+  void descriptorAcceptsStringEncodedAttributesAndFallsBackOnGarbage() {
+    // Attributes written by older releases or edited by hand arrive as strings.
+    BlobStoreDescriptor descriptor = descriptor("s3", Map.of(
+        "pathStyleAccess", "true",
+        "maxConnections", 64,
+        "multipartThresholdBytes", " 1048576 ",
+        "connectionTimeoutMs", "five seconds",
+        "multipartPartSizeBytes", "lots"));
+
+    assertTrue(descriptor.boolAttr("pathStyleAccess", false));
+    assertEquals(64, descriptor.intAttr("maxConnections", 1));
+    assertEquals(1048576L, descriptor.longAttr("multipartThresholdBytes", 1));
+    assertEquals(5000, descriptor.intAttr("connectionTimeoutMs", 5000));
+    assertEquals(8L, descriptor.longAttr("multipartPartSizeBytes", 8));
+    assertEquals(7L, descriptor.longAttr("absent", 7));
+  }
+
+  @Test
+  void findReturnsNothingForANullRow() {
+    BlobStoreProviders providers = new BlobStoreProviders(List.of(new StubProvider(BlobStoreTypes.S3)));
+
+    assertTrue(providers.find(null).isEmpty());
+  }
+
+  @Test
   void presentAttributeDistinguishesAnExplicitBlankFromAnAbsentKey() {
     BlobStoreDescriptor explicit = descriptor("azure", Map.of("accountKey", ""));
     BlobStoreDescriptor absent = descriptor("azure", Map.of());
