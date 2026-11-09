@@ -390,6 +390,10 @@ For internal CA certificates on HTTPS S3/MinIO or upstream repositories, see [Cu
 
 For EC2 instance profiles, EKS Pod Identity, and IRSA without static access keys, see [S3 credentials and IAM roles](s3-credentials.md). The guide includes IAM permissions, trust policies, ServiceAccount configuration, and switching existing blob stores to the default AWS credentials chain.
 
+## Azure Blob Storage
+
+To store blobs in an Azure Storage account, see [Azure Blob Storage blob stores](azure-blob-storage.md). Azure Blob Storage has no S3-compatible endpoint, so it uses the dedicated `azure` blob-store type. The guide covers managed identity and workload identity, the required Azure role, and block-blob upload semantics.
+
 ## Production Deployment Architecture
 
 Production deployments should use multiple kkrepo replicas, an independent MySQL or PostgreSQL instance, and an OSS/S3 blob store:

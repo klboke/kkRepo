@@ -77,9 +77,16 @@ kkrepo 支持 MySQL 8 和 PostgreSQL 12+；已有安装默认仍为 MySQL。Post
 制品字节存储在 blob storage：
 
 - 生产环境建议使用 OSS/S3 兼容存储。
+- 在 Azure 上生产部署可使用 Azure Blob Storage。
 - File storage 用于本地试用、测试和经过谨慎管理的共享文件系统部署。
 
 MySQL 存储元数据和引用，不存储大制品字节。
+
+## kkrepo 可以把 blob 存到 Azure 存储账户吗？
+
+可以。创建 type 为 `azure` 的 blob store。Azure Blob Storage 没有 S3 兼容端点，因此 `aws-s3` 引擎不能指向 `*.blob.core.windows.net`；kkRepo 使用 Azure 原生 Blob API。
+
+默认支持 managed identity 和 workload identity：kkRepo 不在数据库中存储密钥，每个副本各自获取并刷新短生命周期 token。同时也支持账户密钥和 SAS token。参见 [Azure Blob Storage Blob Store](azure-blob-storage.md)。
 
 ## 生产环境可以使用 File blob storage 吗？
 

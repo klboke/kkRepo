@@ -977,10 +977,11 @@
                 <select id="blobstore-engine" name="engine">
                   <option value="aws-s3">AWS S3 SDK</option>
                   <option value="oss-native">OSS Native SDK</option>
+                  <option value="azure">Azure Blob Storage</option>
                   <option value="file">File</option>
                 </select>
               </label>
-              <label class="s3-only">
+              <label class="object-store-only">
                 <span>Endpoint <span class="required-mark">*</span></span>
                 <input id="blobstore-endpoint" name="endpoint" type="url" required>
               </label>
@@ -988,11 +989,15 @@
                 <span>Region <span class="required-mark">*</span></span>
                 <input id="blobstore-region" name="region" type="text" required>
               </label>
-              <label class="s3-only">
-                <span>Bucket <span class="required-mark">*</span></span>
+              <label class="azure-only" hidden>
+                <span>Account name <span class="required-mark">*</span></span>
+                <input id="blobstore-account-name" name="accountName" type="text" autocomplete="off">
+              </label>
+              <label class="object-store-only">
+                <span><span id="blobstore-bucket-label">Bucket</span> <span class="required-mark">*</span></span>
                 <input id="blobstore-bucket" name="bucket" type="text" required>
               </label>
-              <label class="s3-only">
+              <label class="object-store-only">
                 <span>Prefix</span>
                 <input id="blobstore-prefix" name="prefix" type="text" autocomplete="off">
               </label>
@@ -1018,6 +1023,40 @@
               <label class="s3-only static-credentials">
                 <span>Secret key <span class="required-mark">*</span></span>
                 <input id="blobstore-secret-key" name="secretKey" type="password" autocomplete="new-password">
+              </label>
+              <label class="azure-only" hidden>
+                <span class="field-label">Credentials
+                  <span id="blobstore-azure-credential-help" class="field-help" tabindex="0" role="note" aria-label="Managed identity and workload identity use platform tokens and store no secret. Selecting them clears any saved account key or SAS token." data-tooltip="Managed identity and workload identity use platform tokens and store no secret. Selecting them clears any saved account key or SAS token.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <select id="blobstore-azure-credential-type" name="credentialType">
+                  <option value="default">Default Azure credentials</option>
+                  <option value="managed-identity">Managed identity</option>
+                  <option value="workload-identity">Workload identity</option>
+                  <option value="account-key">Account key</option>
+                  <option value="sas">SAS token</option>
+                </select>
+              </label>
+              <label class="azure-only azure-identity-fields" hidden>
+                <span>Client ID</span>
+                <input id="blobstore-azure-client-id" name="clientId" type="text" autocomplete="off" placeholder="User-assigned identity; blank uses system-assigned">
+              </label>
+              <label class="azure-only azure-workload-fields" hidden>
+                <span>Tenant ID</span>
+                <input id="blobstore-azure-tenant-id" name="tenantId" type="text" autocomplete="off" placeholder="Blank inherits AZURE_TENANT_ID">
+              </label>
+              <label class="azure-only azure-token-file-fields" hidden>
+                <span>Token file path</span>
+                <input id="blobstore-azure-token-file" name="tokenFilePath" type="text" autocomplete="off" placeholder="Blank inherits AZURE_FEDERATED_TOKEN_FILE">
+              </label>
+              <label class="azure-only azure-account-key-fields" hidden>
+                <span>Account key <span class="required-mark">*</span></span>
+                <input id="blobstore-azure-account-key" name="accountKey" type="password" autocomplete="new-password">
+              </label>
+              <label class="azure-only azure-sas-fields" hidden>
+                <span>SAS token <span class="required-mark">*</span></span>
+                <input id="blobstore-azure-sas-token" name="sasToken" type="password" autocomplete="new-password">
               </label>
               <label class="checkbox-field s3-only">
                 <input id="blobstore-path-style" name="pathStyleAccess" type="checkbox" checked>

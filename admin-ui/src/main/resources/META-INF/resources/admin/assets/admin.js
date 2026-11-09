@@ -381,9 +381,27 @@ const blobStoreFileRequiredFields = [
   { id: "blobstore-name", label: "Name" },
   { id: "blobstore-path", label: "Path" }
 ];
+const blobStoreAzureRequiredFields = [
+  { id: "blobstore-name", label: "Name" },
+  { id: "blobstore-account-name", label: "Account name" },
+  { id: "blobstore-bucket", label: "Container" },
+  { id: "blobstore-azure-account-key", label: "Account key" },
+  { id: "blobstore-azure-sas-token", label: "SAS token" }
+];
+const blobStoreAzureFields = [
+  { id: "blobstore-account-name", label: "Account name" },
+  { id: "blobstore-azure-client-id", label: "Client ID" },
+  { id: "blobstore-azure-tenant-id", label: "Tenant ID" },
+  { id: "blobstore-azure-token-file", label: "Token file path" },
+  { id: "blobstore-azure-account-key", label: "Account key" },
+  { id: "blobstore-azure-sas-token", label: "SAS token" }
+];
+// Pre-filled for new S3 stores only; it is never a valid Azure endpoint for token credentials.
+const blobStoreS3DefaultEndpoint = "http://127.0.0.1:9000";
 const blobStoreFormFields = [
   ...blobStoreS3RequiredFields,
-  { id: "blobstore-path", label: "Path" }
+  { id: "blobstore-path", label: "Path" },
+  ...blobStoreAzureFields
 ];
 const repositoryRequiredFields = [
   {
@@ -582,11 +600,16 @@ function pathStyleBadge(enabled) {
 function engineLabel(engine) {
   if (engine === "file") return "File";
   if (engine === "oss-native") return "OSS Native SDK";
+  if (lowerOrEmpty(engine).startsWith("azure")) return "Azure Blob Storage";
   return "AWS S3 SDK";
 }
 
 function isFileBlobStore(store) {
   return lowerOrEmpty(store?.engine) === "file" || lowerOrEmpty(store?.type) === "file";
+}
+
+function isAzureBlobStore(store) {
+  return lowerOrEmpty(store?.type).startsWith("azure") || lowerOrEmpty(store?.engine).startsWith("azure");
 }
 
 function healthBadge(store) {
@@ -1529,8 +1552,11 @@ function renderBlobStores() {
   const rows = sortBlobStores(filtered);
   document.getElementById("blobstore-table").innerHTML = rows.map((store) => {
     const fileStore = isFileBlobStore(store);
+    const azureStore = isAzureBlobStore(store);
     const target = fileStore ? store.path : store.bucket;
-    const detail = fileStore ? store.resolvedPath : [store.endpoint, store.prefix].filter(Boolean).join(" / ");
+    // Azure derives its endpoint from the account when none is stored, so fall back to the account.
+    const origin = azureStore && !store.endpoint ? store.accountName : store.endpoint;
+    const detail = fileStore ? store.resolvedPath : [origin, store.prefix].filter(Boolean).join(" / ");
     return `
       <tr>
         <td class="icon-column">${blobStoreIcon(store.type)}</td>
@@ -1543,7 +1569,7 @@ function renderBlobStores() {
           <small class="usage-secondary">${renderInventoryMetric(blobStoreUsage, store.id, "pendingDeletionCount")} <span>blobs</span></small></td>
         <td class="usage-location">${renderCopyableLocation(target, "Copy storage location")}
           ${detail && detail !== target ? `<div class="usage-secondary">${renderCopyableLocation(detail, "Copy storage location")}</div>` : ""}
-          ${fileStore ? "" : pathStyleBadge(Boolean(store.pathStyleAccess))}</td>
+          ${fileStore || azureStore ? "" : pathStyleBadge(Boolean(store.pathStyleAccess))}</td>
         <td class="actions-column"><div class="cleanup-policy-actions">
           ${store.id == null ? '<span class="health-muted">-</span>' : `
             <button class="row-action edit-blobstore-button" data-id="${store.id}" type="button">Edit</button>
@@ -1776,6 +1802,7 @@ async function loadRepositories() {
 
 function blobStoreFormPayload() {
   const engine = document.getElementById("blobstore-engine").value;
+  if (engine === "azure") return azureBlobStoreFormPayload();
   return {
     name: document.getElementById("blobstore-name").value.trim(),
     type: engine === "file" ? "file" : "s3",
@@ -1792,19 +1819,79 @@ function blobStoreFormPayload() {
   };
 }
 
+function azureBlobStoreFormPayload() {
+  const credentialType = blobStoreAzureCredentialType();
+  // Secrets are sent only for the mode that uses them, so switching to a platform identity
+  // clears the stored value instead of leaving an unusable secret behind.
+  return {
+    name: document.getElementById("blobstore-name").value.trim(),
+    type: "azure",
+    engine: "azure",
+    endpoint: document.getElementById("blobstore-endpoint").value.trim(),
+    accountName: document.getElementById("blobstore-account-name").value.trim(),
+    bucket: document.getElementById("blobstore-bucket").value.trim(),
+    prefix: document.getElementById("blobstore-prefix").value.trim(),
+    credentialType,
+    accountKey: credentialType === "account-key" ? document.getElementById("blobstore-azure-account-key").value : "",
+    sasToken: credentialType === "sas" ? document.getElementById("blobstore-azure-sas-token").value : "",
+    clientId: azureIdentityFieldsVisible(credentialType)
+      ? document.getElementById("blobstore-azure-client-id").value.trim() : "",
+    tenantId: azureWorkloadFieldsVisible(credentialType)
+      ? document.getElementById("blobstore-azure-tenant-id").value.trim() : "",
+    tokenFilePath: azureTokenFileVisible(credentialType)
+      ? document.getElementById("blobstore-azure-token-file").value.trim() : ""
+  };
+}
+
+function blobStoreAzureCredentialType() {
+  return document.getElementById("blobstore-azure-credential-type").value || "default";
+}
+
+function azureIdentityFieldsVisible(credentialType) {
+  return credentialType === "default" || credentialType === "managed-identity"
+    || credentialType === "workload-identity";
+}
+
+function azureWorkloadFieldsVisible(credentialType) {
+  return credentialType === "default" || credentialType === "workload-identity";
+}
+
+/** DefaultAzureCredential reads the federated token file only from AZURE_FEDERATED_TOKEN_FILE. */
+function azureTokenFileVisible(credentialType) {
+  return credentialType === "workload-identity";
+}
+
 function blobStoreCredentialSource() {
   return document.getElementById("blobstore-engine").value === "aws-s3"
     ? document.getElementById("blobstore-credential-source").value : "static";
 }
 
 function activeBlobStoreRequiredFields() {
-  const fileMode = document.getElementById("blobstore-engine").value === "file";
+  const engine = document.getElementById("blobstore-engine").value;
+  if (engine === "azure") return activeAzureBlobStoreRequiredFields();
+  const fileMode = engine === "file";
   return (fileMode ? blobStoreFileRequiredFields : blobStoreS3RequiredFields)
     .filter((field) => !(
       (field.id === "blobstore-access-key" || field.id === "blobstore-secret-key")
       && (blobStoreCredentialSource() === "default"
         || (blobStoreFormMode === "edit" && document.getElementById(field.id).dataset.configured === "true"))
     ));
+}
+
+function activeAzureBlobStoreRequiredFields() {
+  const credentialType = blobStoreAzureCredentialType();
+  return blobStoreAzureRequiredFields.filter((field) => {
+    if (field.id === "blobstore-azure-account-key") return azureSecretRequired(credentialType, "account-key");
+    if (field.id === "blobstore-azure-sas-token") return azureSecretRequired(credentialType, "sas");
+    return true;
+  });
+}
+
+/** An already-stored secret may be kept by leaving the field blank while editing. */
+function azureSecretRequired(credentialType, usedBy) {
+  if (credentialType !== usedBy) return false;
+  const id = usedBy === "sas" ? "blobstore-azure-sas-token" : "blobstore-azure-account-key";
+  return !(blobStoreFormMode === "edit" && document.getElementById(id).dataset.configured === "true");
 }
 
 function refreshBlobStoreRequiredMarkers() {
@@ -1883,41 +1970,86 @@ function setAccessFieldMode(required, placeholder = "") {
   refreshBlobStoreRequiredMarkers();
 }
 
+/** Selectors that decide which blob store fields apply; changing any of them re-renders the form. */
+const blobStoreFormModeControls = [
+  "blobstore-engine",
+  "blobstore-credential-source",
+  "blobstore-azure-credential-type",
+];
+
+function bindBlobStoreFormModeControls() {
+  blobStoreFormModeControls.forEach((id) => {
+    document.getElementById(id).addEventListener("change", refreshBlobStoreEngineControls);
+  });
+}
+
 function refreshBlobStoreEngineControls() {
   const engine = document.getElementById("blobstore-engine").value;
   const fileMode = engine === "file";
+  const azureMode = engine === "azure";
   const source = document.getElementById("blobstore-credential-source");
   source.disabled = engine !== "aws-s3";
   if (engine === "oss-native") source.value = "static";
   const defaultCredentials = blobStoreCredentialSource() === "default";
+  const credentialType = blobStoreAzureCredentialType();
   const pathStyle = document.getElementById("blobstore-path-style");
   const pathInput = document.getElementById("blobstore-path");
+  refreshBlobStoreEndpointDefault(azureMode);
   document.querySelectorAll(".s3-only").forEach((element) => {
+    element.hidden = fileMode || azureMode;
+  });
+  document.querySelectorAll(".azure-only").forEach((element) => {
+    element.hidden = !azureMode;
+  });
+  document.querySelectorAll(".object-store-only").forEach((element) => {
     element.hidden = fileMode;
   });
   document.querySelectorAll(".file-only").forEach((element) => {
     element.hidden = !fileMode;
   });
-  [
-    "blobstore-endpoint",
-    "blobstore-region",
-    "blobstore-bucket",
-    "blobstore-prefix",
-    "blobstore-access-key",
-    "blobstore-secret-key",
-    "blobstore-path-style"
-  ].forEach((id) => {
+  document.querySelectorAll(".azure-identity-fields").forEach((element) => {
+    element.hidden = !azureMode || !azureIdentityFieldsVisible(credentialType);
+  });
+  document.querySelectorAll(".azure-workload-fields").forEach((element) => {
+    element.hidden = !azureMode || !azureWorkloadFieldsVisible(credentialType);
+  });
+  document.querySelectorAll(".azure-token-file-fields").forEach((element) => {
+    element.hidden = !azureMode || !azureTokenFileVisible(credentialType);
+  });
+  document.querySelectorAll(".azure-account-key-fields").forEach((element) => {
+    element.hidden = !azureMode || credentialType !== "account-key";
+  });
+  document.querySelectorAll(".azure-sas-fields").forEach((element) => {
+    element.hidden = !azureMode || credentialType !== "sas";
+  });
+  ["blobstore-endpoint", "blobstore-bucket", "blobstore-prefix"].forEach((id) => {
     document.getElementById(id).disabled = fileMode;
   });
+  ["blobstore-region", "blobstore-access-key", "blobstore-secret-key", "blobstore-path-style"].forEach((id) => {
+    document.getElementById(id).disabled = fileMode || azureMode;
+  });
   document.querySelectorAll(".static-credentials").forEach((element) => {
-    element.hidden = fileMode || defaultCredentials;
+    element.hidden = fileMode || azureMode || defaultCredentials;
   });
   ["blobstore-access-key", "blobstore-secret-key"].forEach((id) => {
     const input = document.getElementById(id);
-    input.disabled = fileMode || defaultCredentials;
+    input.disabled = fileMode || azureMode || defaultCredentials;
     input.classList.remove("is-invalid");
     input.setAttribute("aria-invalid", "false");
   });
+  document.getElementById("blobstore-account-name").disabled = !azureMode;
+  document.getElementById("blobstore-azure-credential-type").disabled = !azureMode;
+  document.getElementById("blobstore-azure-client-id").disabled = !azureMode || !azureIdentityFieldsVisible(credentialType);
+  document.getElementById("blobstore-azure-tenant-id").disabled =
+    !azureMode || !azureWorkloadFieldsVisible(credentialType);
+  document.getElementById("blobstore-azure-token-file").disabled =
+    !azureMode || !azureTokenFileVisible(credentialType);
+  document.getElementById("blobstore-azure-account-key").disabled = !azureMode || credentialType !== "account-key";
+  document.getElementById("blobstore-azure-sas-token").disabled = !azureMode || credentialType !== "sas";
+  setBlobStoreFieldLabel("blobstore-bucket-label", azureMode ? "Container" : "Bucket");
+  document.getElementById("blobstore-azure-client-id").placeholder = credentialType === "managed-identity"
+    ? "User-assigned identity; blank uses system-assigned"
+    : "Blank uses AZURE_CLIENT_ID from the service account";
   const requiredFields = new Set(activeBlobStoreRequiredFields().map((field) => field.id));
   blobStoreFormFields.forEach((field) => {
     setFieldRequired(document.getElementById(field.id), requiredFields.has(field.id));
@@ -1925,13 +2057,31 @@ function refreshBlobStoreEngineControls() {
   pathInput.disabled = !fileMode;
   pathInput.required = fileMode;
   pathInput.setAttribute("aria-required", String(fileMode));
-  pathStyle.disabled = fileMode;
-  if (fileMode) {
-    pathStyle.title = "";
-  } else {
-    pathStyle.title = "";
-  }
+  pathStyle.disabled = fileMode || azureMode;
+  pathStyle.title = "";
   refreshBlobStoreRequiredMarkers();
+}
+
+/**
+ * Azure derives its endpoint from the account name, and the SDK refuses bearer tokens over plain
+ * HTTP, so the S3 placeholder endpoint is dropped in Azure mode and restored if the operator
+ * switches back to an S3 engine without typing another endpoint.
+ */
+function refreshBlobStoreEndpointDefault(azureMode) {
+  const endpoint = document.getElementById("blobstore-endpoint");
+  if (azureMode && endpoint.value.trim() === blobStoreS3DefaultEndpoint) {
+    endpoint.value = "";
+    endpoint.dataset.clearedS3Default = "true";
+  } else if (!azureMode && endpoint.dataset.clearedS3Default === "true") {
+    if (!endpoint.value.trim()) endpoint.value = blobStoreS3DefaultEndpoint;
+    endpoint.dataset.clearedS3Default = "false";
+  }
+  endpoint.placeholder = azureMode ? "Blank uses https://<account>.blob.core.windows.net" : "";
+}
+
+function setBlobStoreFieldLabel(id, label) {
+  const element = document.getElementById(id);
+  if (element) element.textContent = label;
 }
 
 function showCreateBlobStoreForm() {
@@ -1946,7 +2096,8 @@ function showCreateBlobStoreForm() {
   document.getElementById("blobstore-credential-source").value = "default";
   document.getElementById("blobstore-access-key").dataset.configured = "false";
   document.getElementById("blobstore-secret-key").dataset.configured = "false";
-  document.getElementById("blobstore-endpoint").value = "http://127.0.0.1:9000";
+  document.getElementById("blobstore-endpoint").value = blobStoreS3DefaultEndpoint;
+  document.getElementById("blobstore-endpoint").dataset.clearedS3Default = "false";
   document.getElementById("blobstore-region").value = "cn-hangzhou";
   document.getElementById("blobstore-bucket").value = "";
   document.getElementById("blobstore-prefix").value = "";
@@ -1954,6 +2105,13 @@ function showCreateBlobStoreForm() {
   document.getElementById("blobstore-access-key").value = "";
   document.getElementById("blobstore-secret-key").value = "";
   document.getElementById("blobstore-path-style").checked = true;
+  document.getElementById("blobstore-account-name").value = "";
+  document.getElementById("blobstore-azure-credential-type").value = "default";
+  ["blobstore-azure-client-id", "blobstore-azure-tenant-id", "blobstore-azure-token-file",
+    "blobstore-azure-account-key", "blobstore-azure-sas-token"].forEach((id) => {
+    document.getElementById(id).value = "";
+    document.getElementById(id).dataset.configured = "false";
+  });
   refreshBlobStoreEngineControls();
   clearBlobStoreFormErrors();
   openFormModal("blobstore-form", "blobstore-name");
@@ -1984,14 +2142,37 @@ function showEditBlobStoreForm(id) {
   document.getElementById("blobstore-access-key").value = "";
   document.getElementById("blobstore-secret-key").value = "";
   document.getElementById("blobstore-path-style").checked = store.pathStyleAccess !== false;
+  document.getElementById("blobstore-account-name").value = store.accountName || "";
+  // Azure reports its credential mode through the shared credentialSource field.
+  document.getElementById("blobstore-azure-credential-type").value =
+    isAzureBlobStore(store) ? (store.credentialSource || "default") : "default";
+  document.getElementById("blobstore-azure-client-id").value = store.clientId || "";
+  document.getElementById("blobstore-azure-tenant-id").value = store.tenantId || "";
+  document.getElementById("blobstore-azure-token-file").value = store.tokenFilePath || "";
+  ["blobstore-azure-account-key", "blobstore-azure-sas-token"].forEach((id) => {
+    document.getElementById(id).value = "";
+  });
+  document.getElementById("blobstore-azure-account-key").dataset.configured = String(!!store.accountKeyConfigured);
+  document.getElementById("blobstore-azure-sas-token").dataset.configured = String(!!store.sasTokenConfigured);
+  document.getElementById("blobstore-azure-account-key").placeholder =
+    store.accountKeyConfigured ? "Leave blank to keep existing" : "";
+  document.getElementById("blobstore-azure-sas-token").placeholder =
+    store.sasTokenConfigured ? "Leave blank to keep existing" : "";
   refreshBlobStoreEngineControls();
   clearBlobStoreFormErrors();
-  openFormModal("blobstore-form", isFileBlobStore(store) ? "blobstore-path" : "blobstore-endpoint");
+  openFormModal("blobstore-form", blobStoreInitialFocusField(store));
+}
+
+function blobStoreInitialFocusField(store) {
+  if (isFileBlobStore(store)) return "blobstore-path";
+  if (isAzureBlobStore(store)) return "blobstore-account-name";
+  return "blobstore-endpoint";
 }
 
 function normalizeBlobStoreEngine(engine) {
   const normalized = lowerOrEmpty(engine);
   if (normalized === "file" || normalized === "oss-native") return normalized;
+  if (normalized.startsWith("azure")) return "azure";
   return "aws-s3";
 }
 
@@ -8418,8 +8599,7 @@ document.getElementById("create-blobstore-button").addEventListener("click", sho
 document.getElementById("cancel-blobstore-button").addEventListener("click", hideBlobStoreForm);
 document.getElementById("blobstore-form").addEventListener("submit", saveBlobStore);
 document.getElementById("save-blobstore-button").addEventListener("click", saveBlobStore);
-document.getElementById("blobstore-engine").addEventListener("change", refreshBlobStoreEngineControls);
-document.getElementById("blobstore-credential-source").addEventListener("change", refreshBlobStoreEngineControls);
+bindBlobStoreFormModeControls();
 blobStoreFormFields.forEach((field) => {
   document.getElementById(field.id).addEventListener("input", clearBlobStoreFieldError);
 });

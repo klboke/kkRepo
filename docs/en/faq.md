@@ -77,9 +77,16 @@ No. The default cache backend is process-local memory, and correctness is backed
 Artifact bytes are stored in blob storage:
 
 - OSS/S3-compatible storage for production.
+- Azure Blob Storage for production on Azure.
 - File storage for local trials, tests, and carefully managed shared-filesystem deployments.
 
 MySQL stores metadata and references, not large artifact bytes.
+
+## Can kkrepo store blobs in an Azure Storage account?
+
+Yes. Create a blob store with type `azure`. Azure Blob Storage has no S3-compatible endpoint, so the `aws-s3` engine cannot be pointed at `*.blob.core.windows.net`; kkRepo uses the native Azure Blob API instead.
+
+Managed identity and workload identity are supported and are the default: kkRepo stores no key in the database, and each replica obtains and refreshes its own short-lived token. Account keys and SAS tokens are also supported. See [Azure Blob Storage blob stores](azure-blob-storage.md).
 
 ## Can I use File blob storage in production?
 

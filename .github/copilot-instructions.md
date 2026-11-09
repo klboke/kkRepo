@@ -7,7 +7,8 @@ kkRepo is a Nexus-compatible, self-hosted artifact repository. Treat Nexus and t
 - Use Java 25.
 - Prefer the existing module boundaries and local helper APIs.
 - Keep server-side protocol logic out of controllers; controllers should delegate to protocol services/adapters.
-- Large blobs belong in OSS/S3-compatible storage. MySQL stores metadata, indexes, references, users, permissions, tokens, audit data, and migration state.
+- Large blobs belong in object storage: OSS/S3-compatible stores or Azure Blob Storage. MySQL stores metadata, indexes, references, users, permissions, tokens, audit data, and migration state.
+- Blob-store runtime access is pluggable: add a new backend by implementing `BlobStoreProvider` in a `storage-*` module, and never branch on store type in `BlobStorageRegistry` or other runtime code. The admin API in `BlobStoresController` still has per-backend request mapping, validation and health checks; extend those alongside the provider.
 - Any stateful feature must work in distributed multi-replica deployments. Do not rely on a single JVM as the source of truth for sessions, uploads, deletes, locks, background jobs, cache invalidation, metadata rebuilds, negative cache, or permission decisions.
 - In-process cache is allowed only as rebuildable hot cache with a clear TTL or invalidation path.
 - Migration is a product feature, not a one-off script. Prefer idempotent dry-run, resume, checksum validation, and reporting.
