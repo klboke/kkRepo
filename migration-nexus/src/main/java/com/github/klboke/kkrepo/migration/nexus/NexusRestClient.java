@@ -593,14 +593,10 @@ public class NexusRestClient {
           return emptyPage(['source repository bucket not found: ' + repositoryName])
         }
         def bucket = buckets[0]
-        def query
-        def rows
-        query = afterPath.isEmpty()
-            ? 'select from asset where bucket = ? order by name limit ' + pageSize
-            : 'select from asset where bucket = ? and name > ? order by name limit ' + pageSize
-        rows = afterPath.isEmpty()
-            ? db.query(queryClass.getConstructor(String.class).newInstance(query), bucket.getIdentity())
-            : db.query(queryClass.getConstructor(String.class).newInstance(query), bucket.getIdentity(), afterPath)
+        // Always bound name, even on the first page, so OrientDB walks asset_bucket_name_idx in
+        // byte order. Without it, the first page sorts the whole bucket and is not in index order.
+        def query = 'select from asset where bucket = ? and name > ? order by name limit ' + pageSize
+        def rows = db.query(queryClass.getConstructor(String.class).newInstance(query), bucket.getIdentity(), afterPath)
         rows = rows ?: []
         def assets = []
         rows.each { asset ->

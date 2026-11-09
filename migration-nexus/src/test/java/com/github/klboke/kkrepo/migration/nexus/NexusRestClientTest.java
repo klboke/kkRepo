@@ -338,6 +338,8 @@ class NexusRestClientTest {
     assertTrue(script.contains("path: path,"));
     assertTrue(script.contains("nextAfterPath: repositoryRelativePath(lastPath)"));
     assertTrue(script.contains("where bucket = ? and name > ? order by name limit"));
+    // An unbounded first page sorts the whole OrientDB bucket instead of using asset_bucket_name_idx.
+    assertFalse(script.contains("where bucket = ? order by name limit"));
     assertTrue(script.contains("def changedSinceOrient = { asset ->"));
     assertTrue(script.contains("def changedSinceDatastore = { row ->"));
     assertTrue(script.contains("asset.field('blob_updated')"));
