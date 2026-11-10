@@ -19,6 +19,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.github.klboke.kkrepo.cache.LocalCache;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
@@ -44,6 +45,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
 
 class PypiProxyServiceReleaseAgeTest {
   private static final Instant NOW = Instant.parse("2026-01-10T12:00:00Z");
@@ -116,6 +118,35 @@ class PypiProxyServiceReleaseAgeTest {
   }
 
   @Test
+  void evictedPublishTimeDoesNotDenyMatureFileOrRefetchTheIndex() throws Exception {
+    Fixture fixture = fixture();
+    fixture.discardPublishTimeCacheWrites();
+    fixture.cachedIndex(link("demo-1.1.0.whl", NOW.minus(Duration.ofHours(49))));
+    String path = "packages/demo/1.1.0/demo-1.1.0.whl";
+    fixture.cachedFile(path, "wheel");
+
+    assertEquals("wheel", body(fixture.service.getPackage(runtime(FORTY_EIGHT_HOURS), path, false)));
+    verify(fixture.fetcher, never()).fetchWithBodyRetry(any(), anyString(), any());
+  }
+
+  @Test
+  void evictedPublishTimeStillQuarantinesYoungFileUntilItsKnownEligibleInstant() throws Exception {
+    Fixture fixture = fixture();
+    fixture.discardPublishTimeCacheWrites();
+    Instant uploaded = NOW.minus(Duration.ofHours(1));
+    fixture.cachedIndex(link("demo-1.2.0.whl", uploaded));
+    String path = "packages/demo/1.2.0/demo-1.2.0.whl";
+
+    ReleaseAgeDeniedException denied = assertThrows(
+        ReleaseAgeDeniedException.class,
+        () -> fixture.service.getPackage(runtime(FORTY_EIGHT_HOURS), path, false));
+
+    assertEquals(uploaded.plus(Duration.ofHours(48)), denied.eligibleAt());
+    verify(fixture.cache, never()).find(eq(10L), eq(path), any());
+    verify(fixture.fetcher, never()).fetchWithBodyRetry(any(), anyString(), any());
+  }
+
+  @Test
   void publishTimeFromTheFormerIndexPathDoesNotAnswerForANewIndexPath() throws Exception {
     Fixture fixture = fixture();
     fixture.cachedIndex(link("demo-1.2.0.whl", NOW.minus(Duration.ofDays(10))));
@@ -153,6 +184,51 @@ class PypiProxyServiceReleaseAgeTest {
 
     assertEquals("wheel", body(service.getPackage(runtime(FORTY_EIGHT_HOURS), path, false)));
     verify(service, times(1)).loadProjectIndex(any(), eq("demo"), eq(true));
+  }
+
+  @Test
+  void unknownTimeBypassesFreshStoredIndexAndItsConditionalHeaders() throws Exception {
+    Fixture fixture = fixture();
+    CachedAssetMetadata cached = CachedAssetMetadata.of(
+        snapshot(INDEX, Instant.now(), Map.of("uploadTimes", "true")).toAssetRecord(),
+        blob(Map.of("remoteEtag", "old-index", "remoteLastModified", NOW.toString())));
+    when(fixture.cache.find(eq(10L), eq(INDEX), any())).thenReturn(Optional.of(cached));
+    when(fixture.reader.serveSnapshot(cached, false, INDEX))
+        .thenAnswer(invocation -> page(link("demo-1.1.0.whl", null)));
+    String path = "packages/demo/1.1.0/demo-1.1.0.whl";
+    fixture.cachedFile(path, "wheel");
+    when(fixture.registry.forBlobStoreId(7L))
+        .thenReturn(mock(com.github.klboke.kkrepo.core.BlobStorage.class));
+    doAnswer(invocation -> {
+      HttpRemoteFetcher.Request request = invocation.getArgument(0);
+      assertEquals("https://pypi.example.test/simple/demo/", request.url());
+      assertEquals("application/vnd.pypi.simple.v1+json", request.accept());
+      assertNull(request.etag());
+      assertNull(request.lastModified());
+      @SuppressWarnings("unchecked")
+      HttpRemoteFetcher.ResultHandler<PypiResponse> handler = invocation.getArgument(2);
+      return handler.handle(new HttpRemoteFetcher.Result(
+          200, Map.of("Content-Type", "application/vnd.pypi.simple.v1+json"),
+          new ByteArrayInputStream("""
+              {"meta":{"api-version":"1.1"},"name":"demo","files":[
+                {"filename":"demo-1.1.0.whl","url":"https://files.example/demo-1.1.0.whl",
+                 "hashes":{"sha256":"abc"},"upload-time":"2026-01-01T00:00:00Z"}]}
+              """.getBytes(StandardCharsets.UTF_8))));
+    }).when(fixture.fetcher).fetchWithBodyRetry(any(), anyString(), any());
+    doAnswer(invocation -> {
+      byte[] transformed = ((java.io.InputStream) invocation.getArgument(4)).readAllBytes();
+      PypiAssetWriter.Stored stored = mock(PypiAssetWriter.Stored.class);
+      when(stored.asset()).thenReturn(snapshot(INDEX, Instant.now(), Map.of()).toAssetRecord());
+      when(stored.blob()).thenReturn(blob());
+      when(stored.openBody()).thenReturn(new ByteArrayInputStream(transformed));
+      return stored;
+    }).when(fixture.writer).write(
+        any(), any(), anyLong(), eq(INDEX), any(), any(), any(), any(), any(), any(), any(), any(),
+        anyBoolean());
+
+    assertEquals("wheel", body(fixture.service.getPackage(runtime(FORTY_EIGHT_HOURS), path, false)));
+    verify(fixture.reader, times(1)).serveSnapshot(cached, false, INDEX);
+    verify(fixture.fetcher, times(1)).fetchWithBodyRetry(any(), eq(INDEX), any());
   }
 
   @Test
@@ -340,10 +416,14 @@ class PypiProxyServiceReleaseAgeTest {
   }
 
   private static AssetBlobRecord blob() {
+    return blob(Map.of());
+  }
+
+  private static AssetBlobRecord blob(Map<String, Object> attributes) {
     return new AssetBlobRecord(
         2L, 7L, "blob://bucket/object", null, "object", null,
         "sha1", "sha256", "md5", 5L, "text/html",
-        "proxy", "upstream", Instant.EPOCH, Instant.EPOCH, Map.of());
+        "proxy", "upstream", Instant.EPOCH, Instant.EPOCH, attributes);
   }
 
   private static Fixture fixture() {
@@ -369,6 +449,14 @@ class PypiProxyServiceReleaseAgeTest {
       service = new PypiProxyService(
           mock(AssetDao.class), registry, writer, reader, mock(ProxyStateDao.class), fetcher,
           negativeCache, cache, null, settings, Clock.fixed(now, ZoneOffset.UTC));
+    }
+
+    void discardPublishTimeCacheWrites() {
+      // Model eviction before the next read deterministically, without relying on cache size,
+      // scheduling or a particular eviction policy. The durable index still contains the time.
+      @SuppressWarnings("unchecked")
+      LocalCache<String, Instant> disposable = mock(LocalCache.class);
+      ReflectionTestUtils.setField(service, "publishTimes", disposable);
     }
 
     /** A package file already cached, so an allowed download is served from it. */
