@@ -175,8 +175,20 @@ public class PypiProxyService {
   private PypiResponse getIndexAsset(
       RepositoryRuntime runtime, String path, String projectName, String kind, boolean headOnly,
       boolean withUploadTimes) {
+    return getIndexAsset(runtime, path, projectName, kind, headOnly, withUploadTimes, false);
+  }
+
+  /**
+   * {@code forceRefresh} ignores the stored copy entirely (no fresh-serve, no conditional request)
+   * and reloads the page from the upstream.
+   */
+  private PypiResponse getIndexAsset(
+      RepositoryRuntime runtime, String path, String projectName, String kind, boolean headOnly,
+      boolean withUploadTimes, boolean forceRefresh) {
     ensureProxy(runtime);
-    Optional<CachedAssetMetadata> cached = lookupCached(runtime, path);
+    Optional<CachedAssetMetadata> cached = forceRefresh
+        ? Optional.empty()
+        : lookupCached(runtime, path);
     if (withUploadTimes && cached.isPresent()
         && !"true".equals(stringAttr(cached.get().attributes(), UPLOAD_TIMES_ATTRIBUTE))) {
       // Cached before the policy was enabled: it has no upload times, so refetch instead of
@@ -330,21 +342,49 @@ public class PypiProxyService {
     String key = publishKey(indexIdentity(runtime, normalized), rootFilename);
     Instant published = publishTimes.getIfPresent(key);
     if (published == null) {
-      List<PypiLink> links = indexLinksWithUploadTimes(runtime, normalized);
-      if (links.stream().noneMatch(link -> rootFilename.equals(link.file()))) {
-        throw new PypiExceptions.PypiNotFoundException(filename);
+      published = uploadTimeFromIndex(runtime, normalized, rootFilename, filename, false);
+      if (published == null) {
+        // The page lists the file but carries no upload time for it. The stored page can be stale or
+        // incomplete (cached before the policy was enabled, another node's state, an interrupted
+        // refresh), so reload it from the upstream once before failing closed.
+        published = uploadTimeFromIndex(runtime, normalized, rootFilename, filename, true);
+        if (published == null) {
+          log.warn(
+              "PyPI release age: {} lists {} for project {} without an upload time even after "
+                  + "reloading the index (pypi.indexPath={}); denying the download",
+              runtime.name(), rootFilename, normalized, repositorySettings.get(runtime).indexPath());
+        }
       }
-      published = publishTimes.getIfPresent(key);
     }
     MinimumReleaseAge.require(
         "PyPI file " + rootFilename, published, runtime.minimumReleaseAgeMinutesOrDefault(),
         clock.instant());
   }
 
+  /**
+   * Upload time of {@code rootFilename} straight from the project page's own entry (never read back
+   * from the node-local cache), or null when the page lists the file without a time.
+   *
+   * @throws PypiExceptions.PypiNotFoundException when the page does not list the file at all
+   */
+  private Instant uploadTimeFromIndex(
+      RepositoryRuntime runtime, String normalized, String rootFilename, String requestedFilename,
+      boolean forceRefresh) {
+    PypiLink match = indexLinksWithUploadTimes(runtime, normalized, forceRefresh).stream()
+        .filter(link -> rootFilename.equals(link.file()))
+        .findFirst()
+        .orElseThrow(() -> new PypiExceptions.PypiNotFoundException(requestedFilename));
+    return match.uploadTime();
+  }
+
   /** The cached project page (refetched if needed) with every file and its upload time. */
   private List<PypiLink> indexLinksWithUploadTimes(RepositoryRuntime runtime, String normalized) {
-    PypiResponse raw = getIndexAsset(
-        runtime, PypiPaths.indexPath(normalized), normalized, "index", false, true);
+    return indexLinksWithUploadTimes(runtime, normalized, false);
+  }
+
+  private List<PypiLink> indexLinksWithUploadTimes(
+      RepositoryRuntime runtime, String normalized, boolean forceRefresh) {
+    PypiResponse raw = loadProjectIndex(runtime, normalized, forceRefresh);
     String html;
     try (InputStream body = raw.body()) {
       html = new String(body == null ? new byte[0] : body.readAllBytes(), StandardCharsets.UTF_8);
@@ -359,6 +399,12 @@ public class PypiProxyService {
       }
     }
     return links;
+  }
+
+  /** The raw project page including upload times; a seam so tests can script what a load returns. */
+  PypiResponse loadProjectIndex(RepositoryRuntime runtime, String normalized, boolean forceRefresh) {
+    return getIndexAsset(
+        runtime, PypiPaths.indexPath(normalized), normalized, "index", false, true, forceRefresh);
   }
 
   /**

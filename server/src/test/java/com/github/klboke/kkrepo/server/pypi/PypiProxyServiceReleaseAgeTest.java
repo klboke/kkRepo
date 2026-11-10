@@ -11,8 +11,11 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -137,6 +140,70 @@ class PypiProxyServiceReleaseAgeTest {
   }
 
   @Test
+  void unknownTimeIsResolvedByReloadingTheIndexOnceBeforeFailingClosed() throws Exception {
+    Fixture fixture = fixture();
+    PypiProxyService service = spy(fixture.service);
+    String path = "packages/demo/1.1.0/demo-1.1.0.whl";
+    fixture.cachedFile(path, "wheel");
+    // The stored page lists the file without an upload time; the reloaded page has it.
+    doReturn(page(link("demo-1.1.0.whl", null)))
+        .when(service).loadProjectIndex(any(), eq("demo"), eq(false));
+    doReturn(page(link("demo-1.1.0.whl", NOW.minus(Duration.ofHours(49)))))
+        .when(service).loadProjectIndex(any(), eq("demo"), eq(true));
+
+    assertEquals("wheel", body(service.getPackage(runtime(FORTY_EIGHT_HOURS), path, false)));
+    verify(service, times(1)).loadProjectIndex(any(), eq("demo"), eq(true));
+  }
+
+  @Test
+  void reloadedIndexThatShowsAYoungFileStillQuarantinesIt() {
+    Fixture fixture = fixture();
+    PypiProxyService service = spy(fixture.service);
+    String path = "packages/demo/1.2.0/demo-1.2.0.whl";
+    doReturn(page(link("demo-1.2.0.whl", null)))
+        .when(service).loadProjectIndex(any(), eq("demo"), eq(false));
+    doReturn(page(link("demo-1.2.0.whl", NOW.minus(Duration.ofHours(1)))))
+        .when(service).loadProjectIndex(any(), eq("demo"), eq(true));
+
+    ReleaseAgeDeniedException denied = assertThrows(
+        ReleaseAgeDeniedException.class,
+        () -> service.getPackage(runtime(FORTY_EIGHT_HOURS), path, false));
+
+    assertEquals(NOW.minus(Duration.ofHours(1)).plus(Duration.ofHours(48)), denied.eligibleAt());
+  }
+
+  @Test
+  void stillUnknownAfterTheReloadFailsClosedAfterExactlyOneReload() {
+    Fixture fixture = fixture();
+    PypiProxyService service = spy(fixture.service);
+    String path = "packages/demo/1.1.0/demo-1.1.0.whl";
+    doReturn(page(link("demo-1.1.0.whl", null)))
+        .when(service).loadProjectIndex(any(), eq("demo"), eq(false));
+    doReturn(page(link("demo-1.1.0.whl", null)))
+        .when(service).loadProjectIndex(any(), eq("demo"), eq(true));
+
+    ReleaseAgeDeniedException denied = assertThrows(
+        ReleaseAgeDeniedException.class,
+        () -> service.getPackage(runtime(FORTY_EIGHT_HOURS), path, false));
+
+    assertNull(denied.eligibleAt());
+    verify(service, times(1)).loadProjectIndex(any(), eq("demo"), eq(true));
+  }
+
+  @Test
+  void knownTimeNeverTriggersAReload() throws Exception {
+    Fixture fixture = fixture();
+    PypiProxyService service = spy(fixture.service);
+    String path = "packages/demo/1.1.0/demo-1.1.0.whl";
+    fixture.cachedFile(path, "wheel");
+    doReturn(page(link("demo-1.1.0.whl", NOW.minus(Duration.ofHours(49)))))
+        .when(service).loadProjectIndex(any(), eq("demo"), eq(false));
+
+    assertEquals("wheel", body(service.getPackage(runtime(FORTY_EIGHT_HOURS), path, false)));
+    verify(service, never()).loadProjectIndex(any(), any(), eq(true));
+  }
+
+  @Test
   void packageMissingFromTheIndexIsNotFoundNotForbidden() {
     Fixture fixture = fixture();
     fixture.cachedIndex(link("demo-1.1.0.whl", NOW.minus(Duration.ofHours(49))));
@@ -145,19 +212,6 @@ class PypiProxyServiceReleaseAgeTest {
         PypiExceptions.PypiNotFoundException.class,
         () -> fixture.service.getPackage(
             runtime(FORTY_EIGHT_HOURS), "packages/demo/9.9.9/demo-9.9.9.whl", false));
-  }
-
-  @Test
-  void packageWithUnknownUploadTimeIsQuarantinedWithoutAnEligibleInstant() {
-    Fixture fixture = fixture();
-    fixture.cachedIndex(link("demo-1.1.0.whl", null));
-
-    ReleaseAgeDeniedException denied = assertThrows(
-        ReleaseAgeDeniedException.class,
-        () -> fixture.service.getPackage(
-            runtime(FORTY_EIGHT_HOURS), "packages/demo/1.1.0/demo-1.1.0.whl", false));
-
-    assertNull(denied.eligibleAt());
   }
 
   @Test
@@ -248,6 +302,13 @@ class PypiProxyServiceReleaseAgeTest {
         + ">" + file + "</a><br/>\n";
   }
 
+  private static PypiResponse page(String links) {
+    String html = "<html><body>\n" + links + "</body></html>\n";
+    return PypiResponse.ok(
+        new ByteArrayInputStream(html.getBytes(StandardCharsets.UTF_8)), html.length(),
+        "text/html", "etag", NOW);
+  }
+
   private static String body(PypiResponse response) throws IOException {
     return new String(response.body().readAllBytes(), StandardCharsets.UTF_8);
   }
@@ -308,6 +369,15 @@ class PypiProxyServiceReleaseAgeTest {
       service = new PypiProxyService(
           mock(AssetDao.class), registry, writer, reader, mock(ProxyStateDao.class), fetcher,
           negativeCache, cache, null, settings, Clock.fixed(now, ZoneOffset.UTC));
+    }
+
+    /** A package file already cached, so an allowed download is served from it. */
+    void cachedFile(String path, String content) {
+      CachedAssetMetadata cachedFile = snapshot(path, Instant.now(), Map.of());
+      when(cache.find(eq(10L), eq(path), any())).thenReturn(Optional.of(cachedFile));
+      when(reader.serveSnapshot(cachedFile, false, path)).thenReturn(PypiResponse.ok(
+          new ByteArrayInputStream(content.getBytes(StandardCharsets.UTF_8)), content.length(),
+          "application/zip", "etag", NOW));
     }
 
     /** Edits only the separately configurable pypi.indexPath of the repository. */
