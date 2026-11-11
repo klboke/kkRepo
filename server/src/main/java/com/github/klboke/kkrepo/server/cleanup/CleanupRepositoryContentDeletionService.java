@@ -31,6 +31,13 @@ public class CleanupRepositoryContentDeletionService
   private AlpineService alpineService;
   private RService rService;
   private RubygemsService rubygemsService;
+  private com.github.klboke.kkrepo.server.maven.MavenSnapshotDeletionService snapshotDeletion;
+
+  @Autowired
+  void setSnapshotDeletion(com.github.klboke.kkrepo.server.maven.MavenSnapshotDeletionService snapshotDeletion) {
+    this.snapshotDeletion = snapshotDeletion;
+  }
+
 
   public CleanupRepositoryContentDeletionService(
       BrowseContentDeleteController browseDeletion,
@@ -75,6 +82,9 @@ public class CleanupRepositoryContentDeletionService
     RepositoryRuntime runtime = runtimes.resolve(repository)
         .orElseThrow(() -> new CleanupValidationException(
             "cleanup repository runtime was not found: " + repository));
+    if (MavenSnapshotCleanupService.KIND.equals(subjectKind)) {
+      return snapshotDeletion.delete(repository, subjectId);
+    }
     if (runtime.format() == RepositoryFormat.NPM
         && runtime.type() == RepositoryType.HOSTED
         && "COMPONENT".equals(subjectKind)) {

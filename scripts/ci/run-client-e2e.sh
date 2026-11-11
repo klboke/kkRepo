@@ -753,6 +753,13 @@ EOF
   wait_for_body_contains maven-metadata "$version" \
     "$KKREPO_URL/repository/maven-public/com/github/klboke/kkrepo/e2e/$artifact/maven-metadata.xml" \
     "$ARTIFACT_DIR/maven-metadata.xml"
+  # Exercise snapshot build cleanup against the actual candidate (including Native),
+  # using the same disposable Nexus task comparison as the compatibility suite.
+  run_logged maven-snapshot-cleanup env MAVEN_SNAPSHOT_CLEANUP_COMPAT_ENABLED=true \
+    KKREPO_COMPAT_BASE_URL="$KKREPO_URL" KKREPO_COMPAT_USERNAME="$KKREPO_USER" \
+    KKREPO_COMPAT_PASSWORD="$KKREPO_PASSWORD" \
+    mvn -B -ntp -f "$PROJECT_ROOT/pom.xml" -pl compat-test -am \
+    -Dtest=MavenSnapshotCleanupCompatibilityTest -Dsurefire.failIfNoSpecifiedTests=false test
 }
 
 test_npm() {

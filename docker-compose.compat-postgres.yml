@@ -109,6 +109,8 @@ services:
       KKREPO_FILE_ENABLED: "true"
       KKREPO_FILE_BASE_DIR: /tmp/kkrepo-blobs
       KKREPO_OUTBOUND_ALLOW_PRIVATE_ADDRESSES: "true"
+      # Disposable snapshot-cleanup comparison uses freshly published fixtures.
+      KKREPO_MAVEN_SNAPSHOT_WRITE_GRACE: "PT0S"
       JAVA_OPTS: "-Xms512m -Xmx1536m"
     volumes:
       - kkrepo-mysql-blobs:/tmp/kkrepo-blobs
@@ -140,6 +142,8 @@ services:
       KKREPO_FILE_ENABLED: "true"
       KKREPO_FILE_BASE_DIR: /tmp/kkrepo-blobs
       KKREPO_OUTBOUND_ALLOW_PRIVATE_ADDRESSES: "true"
+      # Disposable snapshot-cleanup comparison uses freshly published fixtures.
+      KKREPO_MAVEN_SNAPSHOT_WRITE_GRACE: "PT0S"
       JAVA_OPTS: "-Xms512m -Xmx1536m"
     volumes:
       - kkrepo-mysql-blobs:/tmp/kkrepo-blobs
@@ -172,6 +176,8 @@ services:
       KKREPO_FILE_ENABLED: "true"
       KKREPO_FILE_BASE_DIR: /tmp/kkrepo-blobs
       KKREPO_OUTBOUND_ALLOW_PRIVATE_ADDRESSES: "true"
+      # Disposable snapshot-cleanup comparison uses freshly published fixtures.
+      KKREPO_MAVEN_SNAPSHOT_WRITE_GRACE: "PT0S"
       JAVA_OPTS: "-Xms512m -Xmx1536m"
     volumes:
       - kkrepo-postgresql-blobs:/tmp/kkrepo-blobs
@@ -206,6 +212,8 @@ services:
       KKREPO_FILE_ENABLED: "true"
       KKREPO_FILE_BASE_DIR: /tmp/kkrepo-blobs
       KKREPO_OUTBOUND_ALLOW_PRIVATE_ADDRESSES: "true"
+      # Disposable snapshot-cleanup comparison uses freshly published fixtures.
+      KKREPO_MAVEN_SNAPSHOT_WRITE_GRACE: "PT0S"
       JAVA_OPTS: "-Xms512m -Xmx1536m"
     volumes:
       - kkrepo-postgresql-blobs:/tmp/kkrepo-blobs

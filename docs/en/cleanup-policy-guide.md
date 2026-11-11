@@ -48,6 +48,37 @@ family. Hosted deletion publishes a new complete `PACKAGES.gz` that no longer ad
 package before retiring its package projection. Generated metadata and groups are never separate
 cleanup subjects.
 
+## Maven SNAPSHOT Build Cleanup
+
+Select **Maven > Cleanup target > Maven snapshot builds** to clean historical builds inside a
+base version such as `1.0-SNAPSHOT`. Existing policies keep their component/version semantics.
+This mode supports hosted repositories; releases, proxy/group repositories, non-timestamped
+SNAPSHOT files, and release-triggered cleanup are excluded.
+
+- One subject contains all artifacts, classifiers, signatures and checksums sharing a timestamp
+  and numeric build number. **Keep newest builds per SNAPSHOT** is required and must be at least 1;
+  it applies independently to each `(groupId, artifactId, baseVersion)`.
+- Age uses the newest actual publication/update time in the build, not its filename timestamp.
+  Download age uses the latest successful GET across that build, falling back to publication time
+  for never-downloaded builds. The normal download observation window and safety lag still apply.
+- Current metadata references, each classifier/extension's latest build and recently mutated builds
+  stay protected even outside the minimum count. Metadata is preserved, avoiding per-build object
+  storage rewrites. A malformed or unavailable metadata file prevents deletion for that family.
+- The default quiet period is one hour, configurable with `KKREPO_MAVEN_SNAPSHOT_WRITE_GRACE`
+  (ISO-8601 duration, default `PT1H`). Keep it longer than normal publication gaps.
+- Upgrade every replica before creating the first policy in this mode. Creating that policy activates a shared database cursor that backfills existing
+  assets in batches of 256, then reconciles build counts in resumable batches of 64 to account for
+  deletions by retiring replicas. `SNAPSHOT_INDEX_WARMING_UP` prevents deletion until both passes finish. New
+  server writes and migrations maintain the index in the same transaction as their assets.
+- Scan/delete counters count **builds**. Keyset cursors resume inside a large family. Each scan
+  reads at most 20,000 candidate assets and 64 metadata documents; a build with more than 4,096 files is held and reported as
+  `oversized_build`. Run details report aggregate reasons such as `newest`, `recent_write`,
+  `metadata_or_latest_classifier`, and `metadata_unavailable`.
+
+For example, retaining 5 builds under `55.0.0-SNAPSHOT` removes eligible older timestamped builds
+without deleting the entire base version. Preview the new mode with **Try Run** before enabling
+its schedule. Existing repository/component/asset protection rules also protect snapshot builds.
+
 ## How Rules Combine
 
 | Rule | Meaning |

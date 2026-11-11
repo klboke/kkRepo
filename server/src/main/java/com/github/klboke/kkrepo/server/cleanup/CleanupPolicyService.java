@@ -40,6 +40,7 @@ public class CleanupPolicyService {
   private final CleanupQuartzScheduleManager scheduleManager;
   private final CleanupUsageTrackingService usageTracking;
   private final Clock clock;
+  private com.github.klboke.kkrepo.server.maven.MavenSnapshotBackfillWorker snapshotBackfill;
 
   @Autowired
   public CleanupPolicyService(
@@ -47,7 +48,8 @@ public class CleanupPolicyService {
       RepositoryDao repositoryDao,
       CleanupPolicyCapabilities capabilities,
       CleanupQuartzScheduleManager scheduleManager,
-      CleanupUsageTrackingService usageTracking) {
+      CleanupUsageTrackingService usageTracking,
+      com.github.klboke.kkrepo.server.maven.MavenSnapshotBackfillWorker snapshotBackfill) {
     this(
         cleanupDao,
         repositoryDao,
@@ -55,6 +57,7 @@ public class CleanupPolicyService {
         scheduleManager,
         usageTracking,
         Clock.systemUTC());
+    this.snapshotBackfill = snapshotBackfill;
   }
 
   CleanupPolicyService(
@@ -142,6 +145,7 @@ public class CleanupPolicyService {
     }
     reconcileScheduleAfterCommit(policyId);
     reconcileUsageTrackingAfterCommit();
+    if (CleanupCriteria.snapshotMode(validated.criteria()) && snapshotBackfill != null) snapshotBackfill.activate();
     return get(policyId);
   }
 
@@ -204,6 +208,7 @@ public class CleanupPolicyService {
     }
     reconcileScheduleAfterCommit(policyId);
     reconcileUsageTrackingAfterCommit();
+    if (CleanupCriteria.snapshotMode(validated.criteria()) && snapshotBackfill != null) snapshotBackfill.activate();
     return get(policyId);
   }
 
@@ -341,6 +346,11 @@ public class CleanupPolicyService {
             "all target repositories must use format " + command.format());
       }
       CleanupTargetRepositories.requireSupported(repository.type());
+      if (CleanupCriteria.snapshotMode(criteria)
+          && (repository.format() != RepositoryFormat.MAVEN2
+              || repository.type() != com.github.klboke.kkrepo.core.RepositoryType.HOSTED)) {
+        throw new CleanupValidationException("snapshot build cleanup requires a Maven hosted repository");
+      }
     }
     ScheduleCommand schedule = validateSchedule(command.schedule());
     String notes = blankToNull(command.notes());

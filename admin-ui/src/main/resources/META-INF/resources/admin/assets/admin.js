@@ -7083,7 +7083,9 @@ function handleCleanupTabKeydown(event) {
 }
 
 function cleanupRuleBadges(criteria = {}) {
-  const rules = [];
+  const snapshot = criteria.mode === "MAVEN_SNAPSHOT_BUILDS";
+  criteria = snapshot ? (criteria.snapshot || {}) : criteria;
+  const rules = snapshot ? ["snapshot builds"] : [];
   if (criteria.pattern) rules.push(`${criteria.patternType === "REGEX" ? "regex" : "glob"}: ${criteria.pattern}`);
   if (criteria.publishedOlderThanDays != null) rules.push(`published > ${criteria.publishedOlderThanDays}d`);
   if (criteria.lastDownloadedOlderThanDays != null) rules.push(`downloaded > ${criteria.lastDownloadedOlderThanDays}d`);
@@ -7430,7 +7432,9 @@ function cleanupRepositoryCandidates() {
   const format = document.getElementById("cleanup-policy-format").value;
   return repositories
     .filter((repository) => lowerOrEmpty(repository.format) === lowerOrEmpty(format))
-    .filter((repository) => ["hosted", "proxy"].includes(lowerOrEmpty(repository.type)))
+    .filter((repository) => document.getElementById("cleanup-policy-mode")?.value === "MAVEN_SNAPSHOT_BUILDS"
+      ? lowerOrEmpty(repository.type) === "hosted"
+      : ["hosted", "proxy"].includes(lowerOrEmpty(repository.type)))
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
@@ -7610,11 +7614,19 @@ function bindCleanupRepositoryPicker() {
 function refreshCleanupCapabilityHelp() {
   const format = document.getElementById("cleanup-policy-format").value;
   const capability = cleanupCapability(format);
+  const mode = document.getElementById("cleanup-policy-mode");
+  if (format.toLowerCase() !== "maven2") mode.value = "COMPONENT";
+  document.getElementById("cleanup-policy-mode-field").hidden = format.toLowerCase() !== "maven2";
+  const snapshot = mode.value === "MAVEN_SNAPSHOT_BUILDS";
+  document.getElementById("cleanup-policy-snapshot-help").hidden = !snapshot;
+  document.getElementById("cleanup-policy-retain-label").textContent = snapshot ? "Keep newest builds per SNAPSHOT" : "Keep newest versions";
   const retainInput = document.getElementById("cleanup-policy-retain-count");
   retainInput.disabled = !capability?.retainCountSupported;
+  retainInput.min = snapshot ? "1" : "0";
+  retainInput.required = snapshot;
   if (retainInput.disabled) retainInput.value = "";
   setCleanupFieldHelp("cleanup-policy-retain-help", capability?.retainCountSupported
-    ? "Uses this format's protocol version comparator."
+    ? (snapshot ? "Retains at least this many timestamped builds within each base SNAPSHOT version." : "Uses this format's protocol version comparator.")
     : "Version retention is not enabled for this format yet; pattern and age rules remain available.");
   const downloadedInput = document.getElementById("cleanup-policy-downloaded-days");
   downloadedInput.disabled = !capability?.lastDownloadedSupported;
@@ -7622,7 +7634,7 @@ function refreshCleanupCapabilityHelp() {
     downloadedInput.value = "";
   }
   setCleanupFieldHelp("cleanup-policy-downloaded-help", capability?.lastDownloadedSupported
-    ? "Successful authorized GET requests persist a shared download watermark; HEAD requests do not count. Artifacts without a download timestamp are skipped."
+    ? (snapshot ? "Successful artifact GET requests count as downloads. Never-downloaded builds use their publication time. A full observation window is required after enabling usage tracking." : "Successful authorized GET requests persist a shared download watermark; HEAD requests do not count. Artifacts without a download timestamp are skipped.")
     : "Last-download retention is disabled until this format records a validated shared download watermark.");
   document.getElementById("cleanup-policy-execute-help").textContent = capability?.executeSupported
     ? editingCleanupPolicyId == null
@@ -7859,8 +7871,10 @@ function showEditCleanupPolicyForm(policyId) {
   editingCleanupPolicyId = Number(policyId);
   populateCleanupTimeZoneOptions();
   const policy = view.policy;
-  const criteria = policy.criteria || {};
+  const snapshot = policy.criteria?.mode === "MAVEN_SNAPSHOT_BUILDS";
+  const criteria = snapshot ? (policy.criteria.snapshot || {}) : (policy.criteria || {});
   populateCleanupFormatOptions(policy.format);
+  document.getElementById("cleanup-policy-mode").value = snapshot ? "MAVEN_SNAPSHOT_BUILDS" : "COMPONENT";
   document.getElementById("cleanup-policy-name").value = policy.name || "";
   document.getElementById("cleanup-policy-pattern-type").value = criteria.patternType || "GLOB";
   document.getElementById("cleanup-policy-pattern").value = criteria.pattern || "";
@@ -7919,7 +7933,8 @@ function cleanupPolicyPayload() {
     name: document.getElementById("cleanup-policy-name").value.trim(),
     format: document.getElementById("cleanup-policy-format").value,
     notes: document.getElementById("cleanup-policy-notes").value.trim() || null,
-    criteria,
+    criteria: document.getElementById("cleanup-policy-mode")?.value === "MAVEN_SNAPSHOT_BUILDS"
+      ? { mode: "MAVEN_SNAPSHOT_BUILDS", snapshot: criteria } : criteria,
     repositoryIds: cleanupSelectedRepositoryIds(),
     scanLimitPerRepository: current?.scanLimitPerRepository ?? null,
     deleteLimitPerRepository: current?.deleteLimitPerRepository ?? null,
@@ -8235,6 +8250,8 @@ async function loadCleanupRunDetails(runId) {
 }
 
 function cleanupRunRuleSnapshot(criteria = {}) {
+  const snapshot = criteria.mode === "MAVEN_SNAPSHOT_BUILDS";
+  criteria = snapshot ? (criteria.snapshot || {}) : criteria;
   const pattern = criteria.pattern
     ? `${criteria.patternType === "REGEX" ? "Regular expression" : "Wildcard"} · ${criteria.pattern}`
     : "All names and paths";
@@ -8243,7 +8260,7 @@ function cleanupRunRuleSnapshot(criteria = {}) {
       <div><dt>Name/path pattern</dt><dd>${escapeHtml(pattern)}</dd></div>
       <div><dt>Published age</dt><dd>${criteria.publishedOlderThanDays == null ? "Not configured" : `Older than ${escapeHtml(criteria.publishedOlderThanDays)} days`}</dd></div>
       <div><dt>Download activity</dt><dd>${criteria.lastDownloadedOlderThanDays == null ? "Not configured" : `Last downloaded more than ${escapeHtml(criteria.lastDownloadedOlderThanDays)} days ago`}</dd></div>
-      <div><dt>Version retention</dt><dd>${criteria.retainCount == null ? "Not configured" : `Keep newest ${escapeHtml(criteria.retainCount)} versions per family`}</dd></div>
+      <div><dt>Version retention</dt><dd>${criteria.retainCount == null ? "Not configured" : `Keep newest ${escapeHtml(criteria.retainCount)} ${snapshot ? "builds per SNAPSHOT" : "versions per family"}`}</dd></div>
     </dl>`;
 }
 
@@ -8723,7 +8740,12 @@ document.querySelectorAll("[data-cleanup-tab]").forEach((button) => {
   button.addEventListener("click", () => selectCleanupTab(button.dataset.cleanupTab));
   button.addEventListener("keydown", handleCleanupTabKeydown);
 });
+document.getElementById("cleanup-policy-mode").addEventListener("change", () => {
+  refreshCleanupCapabilityHelp();
+  refreshCleanupRepositoryOptions([]);
+});
 document.getElementById("cleanup-policy-format").addEventListener("change", () => {
+  refreshCleanupCapabilityHelp();
   refreshCleanupRepositoryOptions([]);
   refreshCleanupScheduleFields();
 });

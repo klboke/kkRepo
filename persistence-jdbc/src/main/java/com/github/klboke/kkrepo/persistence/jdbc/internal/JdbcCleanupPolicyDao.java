@@ -939,7 +939,8 @@ public class JdbcCleanupPolicyDao
       long fencingToken,
       String initialPhase,
       Instant now) {
-    if (!"COMPONENT".equals(initialPhase) && !"DOCKER".equals(initialPhase)) {
+    if (!"COMPONENT".equals(initialPhase) && !"DOCKER".equals(initialPhase)
+        && !"MAVEN_SNAPSHOT".equals(initialPhase)) {
       throw new IllegalArgumentException("unsupported cleanup cursor phase: " + initialPhase);
     }
     RunCursorSnapshot shard = jdbc.query("""
@@ -1010,9 +1011,10 @@ public class JdbcCleanupPolicyDao
         """, (rs, rowNum) -> mapScanCursor(rs), shard.policyId(), shard.repositoryId())
         .stream().findFirst().orElseThrow(() ->
             new IllegalStateException("cleanup scan cursor disappeared"));
-    boolean incompatible = "DOCKER".equals(initialPhase)
-        ? !"DOCKER".equals(cursor.phase())
-        : "DOCKER".equals(cursor.phase());
+    boolean incompatible = switch (initialPhase) {
+      case "DOCKER", "MAVEN_SNAPSHOT" -> !initialPhase.equals(cursor.phase());
+      default -> "DOCKER".equals(cursor.phase()) || "MAVEN_SNAPSHOT".equals(cursor.phase());
+    };
     if (incompatible) {
       jdbc.update("""
           UPDATE cleanup_policy_repository_cursor
