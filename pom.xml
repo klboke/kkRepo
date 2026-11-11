@@ -16,6 +16,7 @@
     <module>core</module>
     <module>plugin-api</module>
     <module>plugin-loader</module>
+    <module>script-host</module>
     <module>storage-s3</module>
     <module>storage-file</module>
     <module>storage-azure</module>
