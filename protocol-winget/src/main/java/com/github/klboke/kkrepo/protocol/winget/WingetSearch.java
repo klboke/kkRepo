@@ -19,17 +19,35 @@ public final class WingetSearch {
    * <p>Inclusions are OR-ed, Filters are AND-ed, and {@code Query} is matched against the same
    * fields the reference REST source indexes.
    */
+  public record Page(List<WingetPackage> packages, int consumedIdentifiers) {
+    public Page {
+      packages = packages == null ? List.of() : List.copyOf(packages);
+    }
+  }
+
   public static List<WingetPackage> search(
       List<WingetIndex> indexes, WingetSearchRequest request, int limit) {
+    return searchPage(indexes, request, limit).packages();
+  }
+
+  /**
+   * Returns matching packages and how many package identifiers were consumed before the page was
+   * full. Callers paginating over a SQL identifier batch must advance their cursor by {@code
+   * consumedIdentifiers}, not by the whole batch.
+   */
+  public static Page searchPage(
+      List<WingetIndex> indexes, WingetSearchRequest request, int limit) {
     if (indexes == null || indexes.isEmpty() || limit <= 0) {
-      return List.of();
+      return new Page(List.of(), 0);
     }
     Map<String, List<WingetIndex>> grouped = new LinkedHashMap<>();
     for (WingetIndex index : indexes) {
       grouped.computeIfAbsent(index.packageIdentifier(), ignored -> new ArrayList<>()).add(index);
     }
     List<WingetPackage> results = new ArrayList<>();
+    int consumed = 0;
     for (List<WingetIndex> versions : grouped.values()) {
+      consumed++;
       List<WingetIndex> matched = new ArrayList<>();
       for (WingetIndex version : versions) {
         if (matches(version, request)) {
@@ -56,7 +74,7 @@ public final class WingetSearch {
         break;
       }
     }
-    return results;
+    return new Page(results, consumed);
   }
 
   /** Collects the coarse SQL terms for a request's free-text query. */

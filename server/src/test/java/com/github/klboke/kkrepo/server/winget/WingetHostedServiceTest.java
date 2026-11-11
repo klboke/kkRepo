@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.winget;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -85,6 +86,45 @@ class WingetHostedServiceTest {
   }
 
   @Test
+  void enforcesWritePolicyBeforeMutatingManifests() {
+    RepositoryRuntime deny = runtime(RepositoryType.HOSTED, "DENY");
+    WingetManifest manifest = manifest("Contoso.Tool", "1.0.0");
+    assertEquals(403, assertThrows(WingetException.class,
+        () -> service.publish(deny, manifest)).status());
+    assertEquals(403, assertThrows(WingetException.class,
+        () -> service.replace(deny, manifest)).status());
+    assertEquals(403, assertThrows(WingetException.class,
+        () -> service.delete(deny, "Contoso.Tool", null, null)).status());
+
+    RepositoryRuntime once = runtime(RepositoryType.HOSTED, "ALLOW_ONCE");
+    service.publish(once, manifest);
+    assertEquals(403, assertThrows(WingetException.class,
+        () -> service.replace(once, manifest)).status());
+    assertEquals(1, service.delete(once, "Contoso.Tool", null, null));
+  }
+
+  @Test
+  void searchCursorAdvancesOnlyPastConsumedIdentifiers() throws Exception {
+    for (int i = 0; i < 25; i++) {
+      service.publish(runtime, manifest("Contoso.Tool" + i, "1.0.0"));
+    }
+    WingetSearchRequest request = WingetSearchRequest.parse(
+        mapper.readTree("{\"MaximumResults\":10}"));
+
+    WingetSearchPage first = service.search(runtime, request, 0, 10);
+    assertEquals(10, first.packages().size());
+    assertEquals(10, first.nextOffset());
+
+    WingetSearchPage second = service.search(runtime, request, first.nextOffset(), 10);
+    assertEquals(10, second.packages().size());
+    assertEquals(20, second.nextOffset());
+
+    WingetSearchPage third = service.search(runtime, request, second.nextOffset(), 10);
+    assertEquals(5, third.packages().size());
+    assertNull(third.nextOffset());
+  }
+
+  @Test
   void rejectsPublishOnNonHostedRepositories() {
     WingetService facade = new WingetService(service,
         new WingetProxyService(dao, service, null, mapper));
@@ -116,9 +156,13 @@ class WingetHostedServiceTest {
   }
 
   private static RepositoryRuntime runtime(RepositoryType type) {
+    return runtime(type, type == RepositoryType.HOSTED ? "ALLOW" : null);
+  }
+
+  private static RepositoryRuntime runtime(RepositoryType type, String writePolicy) {
     return new RepositoryRuntime(
         1L, "winget", RepositoryFormat.WINGET, type, "winget-" + type.name().toLowerCase(),
-        true, 1L, type == RepositoryType.HOSTED ? "ALLOW" : null,
+        true, 1L, writePolicy,
         null, null, true, null, 60, 30, true, null, List.of());
   }
 

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.persistence.jdbc.api.WingetDao;
+import com.github.klboke.kkrepo.protocol.maven.policy.WritePolicy;
 import com.github.klboke.kkrepo.protocol.winget.WingetException;
 import com.github.klboke.kkrepo.protocol.winget.WingetIndex;
 import com.github.klboke.kkrepo.protocol.winget.WingetManifest;
@@ -19,9 +20,11 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
@@ -43,6 +46,7 @@ public class WingetHostedService {
 
   @Transactional
   public WingetManifest publish(RepositoryRuntime runtime, WingetManifest manifest) {
+    enforceCreate(runtime);
     for (WingetVersion version : manifest.versions()) {
       if (dao.find(runtime.id(), manifest.packageIdentifier(), version.packageVersion(),
           version.channel()).isPresent()) {
@@ -59,6 +63,7 @@ public class WingetHostedService {
 
   @Transactional
   public WingetManifest replace(RepositoryRuntime runtime, WingetManifest manifest) {
+    enforceUpdate(runtime);
     dao.deletePackage(runtime.id(), manifest.packageIdentifier());
     for (WingetVersion version : manifest.versions()) {
       dao.insert(record(runtime.id(), version));
@@ -78,6 +83,7 @@ public class WingetHostedService {
   @Transactional
   public int delete(
       RepositoryRuntime runtime, String packageIdentifier, String packageVersion, String channel) {
+    enforceDelete(runtime);
     if (packageVersion == null || packageVersion.isBlank()) {
       return dao.deletePackage(runtime.id(), packageIdentifier);
     }
@@ -102,17 +108,32 @@ public class WingetHostedService {
         exhausted = true;
         break;
       }
-      List<WingetIndex> indexes = new ArrayList<>();
+      Map<String, List<WingetDao.ManifestRecord>> rowsByIdentifier = new HashMap<>();
       for (WingetDao.ManifestRecord row : dao.listSummaries(runtime.id(), identifiers)) {
-        indexes.add(index(row));
+        rowsByIdentifier.computeIfAbsent(row.packageIdentifier(), ignored -> new ArrayList<>())
+            .add(row);
       }
-      List<WingetPackage> page = WingetSearch.search(indexes, request, limit - results.size());
-      merge(results, page);
-      cursor += identifiers.size();
-      if (identifiers.size() < SQL_PAGE_SIZE) {
-        exhausted = true;
-        break;
+      List<WingetIndex> indexes = new ArrayList<>();
+      for (String identifier : identifiers) {
+        for (WingetDao.ManifestRecord row : rowsByIdentifier.getOrDefault(identifier, List.of())) {
+          indexes.add(index(row));
+        }
       }
+      WingetSearch.Page page = WingetSearch.searchPage(indexes, request, limit - results.size());
+      merge(results, page.packages());
+      if (results.size() < limit) {
+        cursor += identifiers.size();
+        if (identifiers.size() < SQL_PAGE_SIZE) {
+          exhausted = true;
+          break;
+        }
+        continue;
+      }
+      int lastIndex = page.packages().isEmpty()
+          ? -1
+          : identifiers.indexOf(page.packages().getLast().packageIdentifier());
+      cursor += lastIndex >= 0 ? lastIndex + 1 : page.consumedIdentifiers();
+      break;
     }
     Integer next = !exhausted && results.size() >= limit ? cursor : null;
     return new WingetSearchPage(results, next, null);
@@ -175,6 +196,24 @@ public class WingetHostedService {
           sha256, java.time.Instant.now());
     } catch (JsonProcessingException | NoSuchAlgorithmException invalid) {
       throw new IllegalStateException("Unable to serialize WinGet manifest", invalid);
+    }
+  }
+
+  private static void enforceCreate(RepositoryRuntime runtime) {
+    if (!WritePolicy.parse(runtime.writePolicy()).checkCreateAllowed()) {
+      throw WingetException.forbidden("Write policy forbids publishing WinGet manifests");
+    }
+  }
+
+  private static void enforceUpdate(RepositoryRuntime runtime) {
+    if (!WritePolicy.parse(runtime.writePolicy()).checkUpdateAllowed()) {
+      throw WingetException.forbidden("Write policy forbids replacing WinGet manifests");
+    }
+  }
+
+  private static void enforceDelete(RepositoryRuntime runtime) {
+    if (!WritePolicy.parse(runtime.writePolicy()).checkDeleteAllowed()) {
+      throw WingetException.forbidden("Write policy forbids deleting WinGet manifests");
     }
   }
 
