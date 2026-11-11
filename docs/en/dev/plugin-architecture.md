@@ -386,6 +386,19 @@ Example maintenance scripts: stale snapshot cleanup, orphan blob detection, empt
 cleanup, proxy cache expiry, retention by age/size/count, duplicate asset detection and metadata
 rebuild triggers.
 
+## PoC status (2026-11-11)
+
+The first slice is implemented on `feat/plugin-api`:
+
+- `plugin-api`: `KkRepoPlugin`, `PluginContext`, `PluginDescriptor`, `RemoteTransportProvider`,
+  `RemoteFetcher`, portable `RemoteRequest`/`RemoteResponse`.
+- `plugin-loader`: signed JAR verification against a PKCS12 truststore, single trusted signer,
+  certificate validity, child-first classloader, API version check and duplicate plugin id check.
+- Tests: signed JAR accepted; unsigned, wrong signer, tampered and incompatible API version
+  rejected.
+- Not yet wired into the Spring runtime. The next slice adds `RepositoryFormatProvider`/`FormatId`
+  and the `CleanupRule`/`MaintenanceTask` script contracts.
+
 ## Migration plan
 
 | Phase | Work | Exit criterion |
