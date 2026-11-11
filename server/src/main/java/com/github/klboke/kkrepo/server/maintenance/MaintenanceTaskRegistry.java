@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.maintenance;
 
 import com.github.klboke.kkrepo.plugin.api.MaintenanceTask;
+import com.github.klboke.kkrepo.server.scripts.ScriptRegistry;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -13,8 +14,10 @@ import org.springframework.stereotype.Component;
 public class MaintenanceTaskRegistry {
   private final Map<String, MaintenanceTask> tasks = new ConcurrentHashMap<>();
 
-  public MaintenanceTaskRegistry(ObjectProvider<MaintenanceTask> tasks) {
+  public MaintenanceTaskRegistry(
+      ObjectProvider<MaintenanceTask> tasks, ObjectProvider<ScriptRegistry> scripts) {
     this(tasks.orderedStream().toList());
+    scripts.ifAvailable(registry -> registry.maintenanceTasks().forEach(this::register));
   }
 
   MaintenanceTaskRegistry(List<MaintenanceTask> tasks) {

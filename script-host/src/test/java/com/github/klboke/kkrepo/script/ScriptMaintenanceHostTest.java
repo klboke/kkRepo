@@ -6,14 +6,22 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import com.github.klboke.kkrepo.plugin.api.CleanupCandidate;
 import com.github.klboke.kkrepo.plugin.api.CleanupRequest;
 import com.github.klboke.kkrepo.plugin.api.CleanupRule;
+import com.github.klboke.kkrepo.plugin.api.FormatId;
 import com.github.klboke.kkrepo.plugin.api.MaintenanceRequest;
 import com.github.klboke.kkrepo.plugin.api.MaintenanceResult;
 import com.github.klboke.kkrepo.plugin.api.MaintenanceTask;
 import com.github.klboke.kkrepo.plugin.api.PluginException;
+import com.github.klboke.kkrepo.plugin.api.RepositoryDescriptor;
+import com.github.klboke.kkrepo.plugin.api.RepositoryKind;
+import com.github.klboke.kkrepo.plugin.api.RepositoryProtocolHandler;
+import com.github.klboke.kkrepo.plugin.api.RepositoryProtocolRoute;
+import com.github.klboke.kkrepo.plugin.api.RepositoryRequest;
+import com.github.klboke.kkrepo.plugin.api.RepositoryResponse;
+import java.io.Reader;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.io.Reader;
 import java.util.List;
+import java.util.Map;
 import javax.script.AbstractScriptEngine;
 import javax.script.Bindings;
 import javax.script.Invocable;
@@ -59,6 +67,39 @@ class ScriptMaintenanceHostTest {
     assertEquals(1, result.proposed());
     assertEquals(1, result.deleted());
     assertEquals(List.of("ok"), result.messages());
+  }
+
+  @Test
+  void loadsRepositoryHandlerFromScriptEngine(@TempDir Path temp) throws Exception {
+    ScriptMaintenanceHost host = host();
+    Path script = temp.resolve("handler.fake");
+    Files.writeString(script, "// fake script");
+
+    RepositoryProtocolHandler handler = host.loadRepositoryProtocolHandler(
+        "handler-1",
+        script,
+        "fake",
+        List.of(RepositoryProtocolRoute.anyPath(
+            new FormatId("raw"), RepositoryKind.HOSTED, "GET", 10)));
+
+    assertEquals(1, handler.routes().size());
+    RepositoryResponse response = handler.handle(new RepositoryRequest(
+        new RepositoryDescriptor(
+            1, "repo", new FormatId("raw"), RepositoryKind.HOSTED, "raw",
+            true, 1L, null, null, null, null, Map.of()),
+        "repo", "asset", "GET", Map.of(), Map.of(), new byte[0], null, Map.of()));
+    assertEquals(200, response.status());
+    assertEquals("ok", new String(response.body(), java.nio.charset.StandardCharsets.UTF_8));
+  }
+
+  @Test
+  void rejectsRepositoryHandlerWithoutRoutes(@TempDir Path temp) throws Exception {
+    ScriptMaintenanceHost host = host();
+    Path script = temp.resolve("handler.fake");
+    Files.writeString(script, "// fake script");
+
+    assertThrows(PluginException.class,
+        () -> host.loadRepositoryProtocolHandler("handler-1", script, "fake", List.of()));
   }
 
   @Test
@@ -113,6 +154,9 @@ class ScriptMaintenanceHostTest {
             """;
         case "run" -> """
             {"proposed":1,"deleted":1,"messages":["ok"]}
+            """;
+        case "handle" -> """
+            {"status":200,"headers":{},"body":"b2s="}
             """;
         default -> throw new NoSuchMethodException(name);
       };

@@ -9,9 +9,14 @@ import com.github.klboke.kkrepo.plugin.api.MaintenanceRequest;
 import com.github.klboke.kkrepo.plugin.api.MaintenanceResult;
 import com.github.klboke.kkrepo.plugin.api.MaintenanceTask;
 import com.github.klboke.kkrepo.plugin.api.PluginException;
+import com.github.klboke.kkrepo.plugin.api.RepositoryProtocolHandler;
+import com.github.klboke.kkrepo.plugin.api.RepositoryProtocolRoute;
+import com.github.klboke.kkrepo.plugin.api.RepositoryRequest;
+import com.github.klboke.kkrepo.plugin.api.RepositoryResponse;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 import javax.script.Invocable;
@@ -74,6 +79,31 @@ public final class ScriptMaintenanceHost {
       public MaintenanceResult run(MaintenanceRequest request) {
         return invoke(engine, "run", request,
             new TypeReference<MaintenanceResult>() {}, "maintenance task " + taskId);
+      }
+    };
+  }
+
+  public RepositoryProtocolHandler loadRepositoryProtocolHandler(
+      String id,
+      Path script,
+      String language,
+      Collection<RepositoryProtocolRoute> routes) throws PluginException {
+    String handlerId = requireId(id);
+    if (routes == null || routes.isEmpty() || routes.stream().anyMatch(Objects::isNull)) {
+      throw new PluginException("Repository handler routes are required: " + handlerId);
+    }
+    List<RepositoryProtocolRoute> registered = List.copyOf(routes);
+    ScriptEngine engine = engine(script, language);
+    return new RepositoryProtocolHandler() {
+      @Override
+      public Collection<RepositoryProtocolRoute> routes() {
+        return registered;
+      }
+
+      @Override
+      public RepositoryResponse handle(RepositoryRequest request) {
+        return invoke(engine, "handle", request,
+            new TypeReference<RepositoryResponse>() {}, "repository handler " + handlerId);
       }
     };
   }

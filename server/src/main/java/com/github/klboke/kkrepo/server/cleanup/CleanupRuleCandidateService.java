@@ -6,6 +6,7 @@ import com.github.klboke.kkrepo.plugin.api.CleanupRequest;
 import com.github.klboke.kkrepo.plugin.api.CleanupRule;
 import com.github.klboke.kkrepo.server.cleanup.CleanupSubjectScanner.Candidate;
 import com.github.klboke.kkrepo.server.cleanup.CleanupSubjectScanner.Subject;
+import com.github.klboke.kkrepo.server.scripts.ScriptRegistry;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -29,8 +30,17 @@ public class CleanupRuleCandidateService {
   private final CleanupSubjectScanner scanner;
 
   public CleanupRuleCandidateService(
-      ObjectProvider<CleanupRule> rules, CleanupSubjectScanner scanner) {
-    this(rules.orderedStream().toList(), scanner);
+      ObjectProvider<CleanupRule> rules,
+      ObjectProvider<ScriptRegistry> scripts,
+      CleanupSubjectScanner scanner) {
+    this(combine(rules, scripts), scanner);
+  }
+
+  private static List<CleanupRule> combine(
+      ObjectProvider<CleanupRule> rules, ObjectProvider<ScriptRegistry> scripts) {
+    List<CleanupRule> combined = new ArrayList<>(rules.orderedStream().toList());
+    scripts.ifAvailable(registry -> combined.addAll(registry.cleanupRules()));
+    return combined;
   }
 
   CleanupRuleCandidateService(List<CleanupRule> rules, CleanupSubjectScanner scanner) {
