@@ -31,7 +31,8 @@ plugin loader so providers can be shipped as JARs or JSR-223 scripts.
 3. A network transport (HTTP client, proxy, mTLS, custom protocol) can be replaced the same way.
 4. A storage backend can be shipped as a plugin, using the existing `BlobStoreProvider` port.
 5. JSR-223 scripts can implement repository handlers or request/response filters.
-6. Existing built-in formats and storage backends keep working during the migration.
+6. Every plugin JAR is signed and verified before any class is loaded.
+7. Existing built-in formats and storage backends keep working during the migration.
 
 ## Non-goals
 
