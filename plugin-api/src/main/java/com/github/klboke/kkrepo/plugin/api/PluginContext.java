@@ -12,4 +12,12 @@ public interface PluginContext {
    * @throws IllegalArgumentException if the provider type is already registered
    */
   void registerRemoteTransport(RemoteTransportProvider provider);
+
+  /**
+   * Registers a repository format.
+   *
+   * @throws IllegalArgumentException if the format id is already registered or the descriptor does
+   *     not match the provider id
+   */
+  void registerRepositoryFormat(RepositoryFormatProvider provider);
 }

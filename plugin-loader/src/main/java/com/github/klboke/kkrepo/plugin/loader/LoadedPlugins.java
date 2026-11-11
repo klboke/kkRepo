@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.plugin.loader;
 
 import com.github.klboke.kkrepo.plugin.api.KkRepoPlugin;
 import com.github.klboke.kkrepo.plugin.api.RemoteTransportProvider;
+import com.github.klboke.kkrepo.plugin.api.RepositoryFormatProvider;
 import java.io.IOException;
 import java.util.List;
 
@@ -9,11 +10,13 @@ import java.util.List;
 public record LoadedPlugins(
     List<KkRepoPlugin> plugins,
     List<RemoteTransportProvider> remoteTransports,
+    List<RepositoryFormatProvider> repositoryFormats,
     List<PluginClassLoader> classLoaders) implements AutoCloseable {
 
   public LoadedPlugins {
     plugins = plugins == null ? List.of() : List.copyOf(plugins);
     remoteTransports = remoteTransports == null ? List.of() : List.copyOf(remoteTransports);
+    repositoryFormats = repositoryFormats == null ? List.of() : List.copyOf(repositoryFormats);
     classLoaders = classLoaders == null ? List.of() : List.copyOf(classLoaders);
   }
 

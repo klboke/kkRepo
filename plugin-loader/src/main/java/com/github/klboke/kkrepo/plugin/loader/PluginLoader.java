@@ -42,7 +42,7 @@ public final class PluginLoader {
 
   public LoadedPlugins load() throws PluginException {
     if (!Files.isDirectory(pluginsDirectory)) {
-      return new LoadedPlugins(List.of(), List.of(), List.of());
+      return new LoadedPlugins(List.of(), List.of(), List.of(), List.of());
     }
     List<Path> jars;
     try (Stream<Path> entries = Files.list(pluginsDirectory)) {
@@ -77,7 +77,8 @@ public final class PluginLoader {
         plugin.contribute(context);
         plugins.add(plugin);
       }
-      return new LoadedPlugins(plugins, context.remoteTransports(), classLoaders);
+      return new LoadedPlugins(
+          plugins, context.remoteTransports(), context.repositoryFormats(), classLoaders);
     } catch (PluginException | RuntimeException failure) {
       close(classLoaders);
       if (failure instanceof PluginException pluginFailure) {
