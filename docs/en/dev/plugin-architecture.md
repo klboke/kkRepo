@@ -30,7 +30,8 @@ plugin loader so providers can be shipped as JARs or JSR-223 scripts.
    changing the server source.
 3. A network transport (HTTP client, proxy, mTLS, custom protocol) can be replaced the same way.
 4. A storage backend can be shipped as a plugin, using the existing `BlobStoreProvider` port.
-5. JSR-223 scripts can implement repository handlers or request/response filters.
+5. JSR-223 scripts can implement repository handlers, request/response filters, cleanup rules and
+   scheduled maintenance tasks.
 6. Every plugin JAR is signed and verified before any class is loaded.
 7. Existing built-in formats and storage backends keep working during the migration.
 
@@ -303,6 +304,88 @@ Scripts are appropriate for repository handlers, policy decisions and request/re
 They are not appropriate for blob streaming, multipart uploads or high-throughput data paths;
 those stay in JAR adapters.
 
+## Scripts for maintenance and cleanup
+
+Scripts are also a first-class way to express scheduled maintenance and repository hygiene. The
+runtime exposes two contracts, in increasing order of privilege.
+
+### Cleanup rule: read-only candidate selection
+
+```java
+public interface CleanupRule {
+    String id();
+    List<CleanupCandidate> candidates(CleanupContext context);
+}
+```
+
+The script proposes candidates (repository, path, reason, age, size) and never deletes anything.
+The existing `CleanupExecutionService` keeps ownership of locking, policy checks, audit and
+deletion. This is the default and recommended mode: a bug in the script can propose bad
+candidates, but cannot destroy data.
+
+Descriptor:
+
+```json
+{
+  "id": "old-snapshots",
+  "capabilities": ["cleanup.candidates"],
+  "schedule": "0 0 3 * * ?"
+}
+```
+
+Portable script contract (JSON in / JSON out):
+
+```js
+function candidates(context) {
+  return context.repositories
+    .filter(repo => repo.format === "maven2")
+    .flatMap(repo => context.assets(repo, { pathPrefix: "snapshots/", olderThanDays: 30 }))
+    .map(asset => ({
+      repository: asset.repository,
+      path: asset.path,
+      reason: "stale snapshot"
+    }));
+}
+```
+
+### Maintenance task: scoped mutations
+
+```java
+public interface MaintenanceTask {
+    String id();
+    MaintenanceResult run(MaintenanceContext context);
+}
+```
+
+`MaintenanceContext` exposes only the capabilities declared by the descriptor:
+`repositories.read`, `metadata.read`, `metadata.write`, `blobs.read`, `blobs.delete`,
+`cleanup.candidates`, `audit.write`. It also exposes `dryRun`, `maxDeletions`, `maxBytes`,
+`deadline`, `logger` and `metrics`.
+
+Safety rules:
+
+- **dry-run by default**; a destructive run requires the `maintenance.execute` capability and an
+  explicit confirmation in the admin UI or CLI;
+- **bounded**: maximum deletions, maximum bytes, timeout and per-run quotas;
+- **audited**: every proposed or deleted subject is written to the audit log with script id,
+  version and run id;
+- **idempotent**: a run can be retried after a crash without deleting twice; use the metadata
+  store for checkpoints and cursors;
+- **policy-aware**: scripts cannot bypass `CleanupPolicyCapabilities`; if a format is not
+  cleanable, the runtime refuses the candidate;
+- **scoped**: no raw JDBC, no arbitrary filesystem or network access; only the facades granted by
+  the descriptor;
+- **untrusted**: run in a separate process (the `scanner-adapter` model) with a narrow HTTP/gRPC
+  contract, not in-process JSR-223.
+
+Scheduling uses the existing Quartz infrastructure. A descriptor may declare a cron expression,
+a fixed delay, or "manual only". The runtime registers one Quartz job per script and records the
+last run, duration, outcome and cursor in the metadata store.
+
+Example maintenance scripts: stale snapshot cleanup, orphan blob detection, empty repository
+cleanup, proxy cache expiry, retention by age/size/count, duplicate asset detection and metadata
+rebuild triggers.
+
 ## Migration plan
 
 | Phase | Work | Exit criterion |
@@ -312,6 +395,7 @@ those stay in JAR adapters.
 | 2 | Add `RemoteTransportProvider`; make `HttpRemoteFetcher` an adapter; migrate one proxy service | One service uses `RemoteFetcher`; existing tests pass |
 | 3 | Add `PluginLoader`; extract one simple format (RAW or WINGET) as a plugin JAR | Plugin loaded from `plugins/`; route served; ArchUnit updated |
 | 4 | Add `script-host`; sample repository handler; trust model and limits | Script serves a test route; sandbox tests pass |
+| 4b | Add `CleanupRule` and `MaintenanceTask` script contracts; Quartz scheduling; dry-run, quotas and audit | A script proposes and executes a bounded cleanup on a test repository |
 | 5 | Migrate remaining formats and storage modules; remove `server` compile deps; add `dist` | `server` has no adapter dependencies; Enforcer/ArchUnit green |
 | 6 | Persistence plugin SPI (`RepositoryMetadataStore`); optional plugin migrations | A plugin stores and queries its own documents without JDBC |
 
@@ -325,6 +409,8 @@ loader in one change.
 - Loader tests: duplicate id, API version mismatch, missing main class, duplicate route, isolated
   classloader, plugin unload.
 - Script tests: JSON contract, timeout, denied capability, hot reload, engine missing.
+- Maintenance tests: candidate selection, dry-run, maximum deletions/bytes, audit entries,
+  idempotent retry and policy refusal.
 - ArchUnit:
   - `plugin-api` has no Spring/servlet/JDBC dependencies;
   - `runtime` does not depend on adapter packages;
@@ -350,6 +436,9 @@ loader in one change.
    are JVM-only or whether the distribution builds a fixed plugin set.
 7. **API versioning**: semantic version for `plugin-api`; `apiVersion` in the descriptor; support
    N-1 during the migration window.
+8. **Destructive maintenance scripts**: a script granted `blobs.delete` can remove data. Keep
+   dry-run by default, bounded quotas, policy checks, audit and process isolation for untrusted
+   scripts.
 
 ## References
 
