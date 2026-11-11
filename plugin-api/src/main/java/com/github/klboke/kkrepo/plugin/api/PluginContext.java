@@ -20,4 +20,12 @@ public interface PluginContext {
    *     not match the provider id
    */
   void registerRepositoryFormat(RepositoryFormatProvider provider);
+
+  /**
+   * Registers a framework-agnostic repository protocol handler.
+   *
+   * @throws IllegalArgumentException if the handler is null, has no route, or registers a route
+   *     that cannot be mapped to a runtime repository format
+   */
+  void registerRepositoryProtocolHandler(RepositoryProtocolHandler handler);
 }

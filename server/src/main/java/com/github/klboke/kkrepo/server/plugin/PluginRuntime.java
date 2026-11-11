@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.plugin;
 
 import com.github.klboke.kkrepo.plugin.api.RemoteTransportProvider;
 import com.github.klboke.kkrepo.plugin.api.RepositoryFormatProvider;
+import com.github.klboke.kkrepo.plugin.api.RepositoryProtocolHandler;
 import com.github.klboke.kkrepo.plugin.loader.LoadedPlugins;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -19,6 +20,7 @@ public final class PluginRuntime implements AutoCloseable {
   private final LoadedPlugins loaded;
   private final Map<String, RemoteTransportProvider> remoteTransports;
   private final Map<String, RepositoryFormatProvider> repositoryFormats;
+  private final List<RepositoryProtocolHandler> repositoryProtocolHandlers;
 
   public PluginRuntime(LoadedPlugins loaded) {
     this.loaded = Objects.requireNonNull(loaded, "loaded");
@@ -38,6 +40,7 @@ public final class PluginRuntime implements AutoCloseable {
       }
     }
     this.repositoryFormats = Map.copyOf(formats);
+    this.repositoryProtocolHandlers = List.copyOf(loaded.repositoryProtocolHandlers());
   }
 
   public List<RemoteTransportProvider> remoteTransports() {
@@ -52,6 +55,10 @@ public final class PluginRuntime implements AutoCloseable {
 
   public List<RepositoryFormatProvider> repositoryFormats() {
     return List.copyOf(repositoryFormats.values());
+  }
+
+  public List<RepositoryProtocolHandler> repositoryProtocolHandlers() {
+    return repositoryProtocolHandlers;
   }
 
   public Optional<RepositoryFormatProvider> repositoryFormat(String id) {

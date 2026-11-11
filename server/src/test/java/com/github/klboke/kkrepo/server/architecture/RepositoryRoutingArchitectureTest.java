@@ -4,7 +4,7 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
 import com.github.klboke.kkrepo.server.RepositoryProtocolController;
-import com.github.klboke.kkrepo.server.routing.RepositoryProtocolHandler;
+import com.github.klboke.kkrepo.server.routing.LegacyRepositoryProtocolHandler;
 import com.tngtech.archunit.core.domain.JavaClasses;
 import com.tngtech.archunit.core.importer.ClassFileImporter;
 import com.tngtech.archunit.core.importer.ImportOption;
@@ -75,8 +75,25 @@ class RepositoryRoutingArchitectureTest {
   @Test
   void routeHandlersStayInsideTheRoutingLayer() {
     ArchRule rule = classes()
-        .that().implement(RepositoryProtocolHandler.class)
+        .that().implement(LegacyRepositoryProtocolHandler.class)
         .should().resideInAPackage("..server.routing..");
+
+    rule.check(ALL_PROJECT_CLASSES);
+  }
+
+  @Test
+  void pluginApiStaysFrameworkAgnostic() {
+    ArchRule rule = noClasses()
+        .that().resideInAPackage("com.github.klboke.kkrepo.plugin.api..")
+        .should().dependOnClassesThat().resideInAnyPackage(
+            "org.springframework..",
+            "jakarta.servlet..",
+            "javax.servlet..",
+            "java.sql..",
+            "jakarta.persistence..",
+            "org.quartz..",
+            "com.github.klboke.kkrepo.server..",
+            "com.github.klboke.kkrepo.plugin.loader..");
 
     rule.check(ALL_PROJECT_CLASSES);
   }

@@ -22,7 +22,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
 
 @Component
-public class GitLfsProtocolHandler implements RepositoryProtocolHandler {
+public class GitLfsProtocolHandler implements LegacyRepositoryProtocolHandler {
   private final GitLfsHostedService service;
   private final BlobStorageRegistry storages;
   private final ArtifactDownloadPolicy downloads;

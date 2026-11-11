@@ -43,11 +43,11 @@ public class RepositoryProtocolDispatcher {
   private final Map<RouteKey, List<RegisteredRoute>> routes;
 
   public RepositoryProtocolDispatcher(
-      RepositoryRuntimeRegistry runtimes, List<RepositoryProtocolHandler> handlers) {
+      RepositoryRuntimeRegistry runtimes, List<LegacyRepositoryProtocolHandler> handlers) {
     this.runtimes = Objects.requireNonNull(runtimes, "runtimes");
     Objects.requireNonNull(handlers, "handlers");
     Map<RouteKey, List<RegisteredRoute>> registered = new HashMap<>();
-    for (RepositoryProtocolHandler handler : handlers) {
+    for (LegacyRepositoryProtocolHandler handler : handlers) {
       if (handler == null) {
         throw new IllegalStateException("Repository protocol handler list contains null");
       }
@@ -143,7 +143,7 @@ public class RepositoryProtocolDispatcher {
   }
 
   private record RegisteredRoute(
-      RepositoryProtocolRoute route, RepositoryProtocolHandler handler) {}
+      RepositoryProtocolRoute route, LegacyRepositoryProtocolHandler handler) {}
 
   private record RouteKey(
       RepositoryFormat format, RepositoryType type, HttpMethod method) {
@@ -174,11 +174,16 @@ public class RepositoryProtocolDispatcher {
   private static final class CollectionValidator {
     private CollectionValidator() {}
 
-    static List<RepositoryProtocolRoute> requireRoutes(RepositoryProtocolHandler handler) {
+    static List<RepositoryProtocolRoute> requireRoutes(LegacyRepositoryProtocolHandler handler) {
       var routes = handler.routes();
-      if (routes == null || routes.isEmpty() || routes.stream().anyMatch(Objects::isNull)) {
+      if (routes == null || routes.stream().anyMatch(Objects::isNull)) {
         throw new IllegalStateException(
-            "Repository protocol handler must register at least one non-null route: "
+            "Repository protocol handler must register non-null routes: "
+                + handler.getClass().getName());
+      }
+      if (routes.isEmpty() && !handler.allowsEmptyRoutes()) {
+        throw new IllegalStateException(
+            "Repository protocol handler must register at least one route: "
                 + handler.getClass().getName());
       }
       return List.copyOf(routes);

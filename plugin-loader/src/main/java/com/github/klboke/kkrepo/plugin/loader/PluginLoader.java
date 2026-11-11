@@ -78,7 +78,11 @@ public final class PluginLoader {
         plugins.add(plugin);
       }
       return new LoadedPlugins(
-          plugins, context.remoteTransports(), context.repositoryFormats(), classLoaders);
+          plugins,
+          context.remoteTransports(),
+          context.repositoryFormats(),
+          context.repositoryProtocolHandlers(),
+          classLoaders);
     } catch (PluginException | RuntimeException failure) {
       close(classLoaders);
       if (failure instanceof PluginException pluginFailure) {

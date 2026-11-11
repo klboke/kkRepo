@@ -4,6 +4,9 @@ import com.github.klboke.kkrepo.plugin.api.PluginContext;
 import com.github.klboke.kkrepo.plugin.api.RemoteTransportProvider;
 import com.github.klboke.kkrepo.plugin.api.RepositoryFormatDescriptor;
 import com.github.klboke.kkrepo.plugin.api.RepositoryFormatProvider;
+import com.github.klboke.kkrepo.plugin.api.RepositoryProtocolHandler;
+import com.github.klboke.kkrepo.plugin.api.RepositoryProtocolRoute;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -13,6 +16,7 @@ import java.util.Map;
 final class DefaultPluginContext implements PluginContext {
   private final Map<String, RemoteTransportProvider> remoteTransports = new LinkedHashMap<>();
   private final Map<String, RepositoryFormatProvider> repositoryFormats = new LinkedHashMap<>();
+  private final List<RepositoryProtocolHandler> repositoryProtocolHandlers = new ArrayList<>();
 
   @Override
   public void registerRemoteTransport(RemoteTransportProvider provider) {
@@ -45,11 +49,31 @@ final class DefaultPluginContext implements PluginContext {
     }
   }
 
+  @Override
+  public void registerRepositoryProtocolHandler(RepositoryProtocolHandler handler) {
+    if (handler == null) {
+      throw new IllegalArgumentException("Repository protocol handler is required");
+    }
+    List<RepositoryProtocolRoute> routes = handler.routes() == null
+        ? List.of()
+        : List.copyOf(handler.routes());
+    if (routes.isEmpty() || routes.stream().anyMatch(java.util.Objects::isNull)) {
+      throw new IllegalArgumentException(
+          "Repository protocol handler must register at least one non-null route: "
+              + handler.getClass().getName());
+    }
+    repositoryProtocolHandlers.add(handler);
+  }
+
   List<RemoteTransportProvider> remoteTransports() {
     return List.copyOf(remoteTransports.values());
   }
 
   List<RepositoryFormatProvider> repositoryFormats() {
     return List.copyOf(repositoryFormats.values());
+  }
+
+  List<RepositoryProtocolHandler> repositoryProtocolHandlers() {
+    return List.copyOf(repositoryProtocolHandlers);
   }
 }

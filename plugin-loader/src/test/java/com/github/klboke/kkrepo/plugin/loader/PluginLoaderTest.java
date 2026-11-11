@@ -41,6 +41,7 @@ class PluginLoaderTest {
       assertEquals("test-signed", loaded.remoteTransports().getFirst().type());
       assertEquals(1, loaded.repositoryFormats().size());
       assertEquals("test-format", loaded.repositoryFormats().getFirst().id().value());
+      assertEquals(1, loaded.repositoryProtocolHandlers().size());
     }
   }
 

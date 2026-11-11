@@ -21,7 +21,7 @@ import com.github.klboke.kkrepo.server.ohpm.OhpmGroupService;
 import com.github.klboke.kkrepo.server.ohpm.OhpmHostedService;
 import com.github.klboke.kkrepo.server.ohpm.OhpmLoginService;
 import com.github.klboke.kkrepo.server.ohpm.OhpmProxyService;
-import com.github.klboke.kkrepo.server.routing.RepositoryProtocolHandler;
+import com.github.klboke.kkrepo.server.routing.LegacyRepositoryProtocolHandler;
 import com.github.klboke.kkrepo.server.routing.RepositoryProtocolRequest;
 import com.github.klboke.kkrepo.server.routing.RepositoryProtocolRoute;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
@@ -45,7 +45,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 @Component
-public class OhpmProtocolHandler implements RepositoryProtocolHandler {
+public class OhpmProtocolHandler implements LegacyRepositoryProtocolHandler {
   private static final Logger log = LoggerFactory.getLogger(OhpmProtocolHandler.class);
   private final OhpmHostedService hosted;
   private final OhpmProxyService proxy;
