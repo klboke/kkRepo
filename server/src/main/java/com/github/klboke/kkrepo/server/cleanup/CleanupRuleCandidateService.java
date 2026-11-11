@@ -16,6 +16,7 @@ import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 /**
@@ -29,6 +30,7 @@ public class CleanupRuleCandidateService {
   private final List<CleanupRule> rules;
   private final CleanupSubjectScanner scanner;
 
+  @Autowired
   public CleanupRuleCandidateService(
       ObjectProvider<CleanupRule> rules,
       ObjectProvider<ScriptRegistry> scripts,

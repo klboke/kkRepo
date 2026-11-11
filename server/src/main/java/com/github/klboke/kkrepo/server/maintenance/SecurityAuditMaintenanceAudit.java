@@ -9,6 +9,7 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /** Writes maintenance results to the existing security audit log when available. */
@@ -19,6 +20,7 @@ public class SecurityAuditMaintenanceAudit implements MaintenanceAudit {
   private final ObjectProvider<SecurityAuditDao> audits;
   private final Clock clock;
 
+  @Autowired
   public SecurityAuditMaintenanceAudit(ObjectProvider<SecurityAuditDao> audits) {
     this(audits, Clock.systemUTC());
   }

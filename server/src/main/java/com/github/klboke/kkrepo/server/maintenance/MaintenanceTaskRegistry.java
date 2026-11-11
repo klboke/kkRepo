@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /** Registry of maintenance tasks contributed by plugins, scripts or built-in beans. */
@@ -14,6 +15,7 @@ import org.springframework.stereotype.Component;
 public class MaintenanceTaskRegistry {
   private final Map<String, MaintenanceTask> tasks = new ConcurrentHashMap<>();
 
+  @Autowired
   public MaintenanceTaskRegistry(
       ObjectProvider<MaintenanceTask> tasks, ObjectProvider<ScriptRegistry> scripts) {
     this(tasks.orderedStream().toList());
