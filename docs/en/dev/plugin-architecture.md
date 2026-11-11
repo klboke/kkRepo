@@ -407,8 +407,15 @@ The first slice is implemented on `feat/plugin-api`:
   security audit.
 - Signed JAR verification now validates the full PKIX chain against the truststore and pins the
   leaf certificate.
-- Remaining: neutralize the repository handler API and move the dispatcher to `FormatId`; dynamic
-  plugin JAR loading is JVM-only (native hints keep the runtime buildable).
+- The neutral `RepositoryProtocolHandler` (`RepositoryRequest`/`RepositoryResponse`,
+  `RepositoryDescriptor`, `FormatId`) lives in `plugin-api`. `PluginProtocolDispatcher` adapts it to
+  the existing servlet routing pipeline, so repository resolution, routing policy, path
+  normalization and route precedence stay in the server. Built-in handlers use the renamed
+  `LegacyRepositoryProtocolHandler` during the migration.
+- ArchUnit enforces that `plugin-api` does not depend on Spring, Servlet, JDBC, JPA, Quartz, the
+  server or the loader.
+- Remaining: complete the built-in-handler migration to the neutral port; dynamic plugin JAR
+  loading is JVM-only (native hints keep the runtime buildable).
 
 ## Migration plan
 
