@@ -12,6 +12,9 @@ import java.util.OptionalLong;
 import java.util.Set;
 
 public interface AssetDao {
+  /** Coordinate protocol identities before reading the previous asset ID, inside the write transaction. */
+  default void prepareWrite(long repositoryId, com.github.klboke.kkrepo.core.RepositoryFormat format, String path) {}
+
   long insertBlob(AssetBlobRecord record);
 
   AssetBlobRecord insertBlobOrFindExisting(AssetBlobRecord record);

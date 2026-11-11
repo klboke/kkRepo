@@ -73,7 +73,10 @@ final class MavenSnapshotCleanupSmokeChecks {
     var otherRuntime = second.getBean(RepositoryRuntimeRegistry.class).resolve(repo.name()).orElseThrow();
     var otherMaven = second.getBean(MavenHostedService.class);
     assertEquals("demo-1.0-20260101.120000-2.jar", get(otherMaven, otherRuntime, root + "demo-1.0-20260101.120000-2.jar"));
-    verifySharedBlobUploadDoesNotDeadlock(first, second, runtime, otherRuntime, root);
+    // Cleanup wins the family lock, then an overwrite must read fresh state and recreate the
+    // artifact successfully, rather than updating a deleted ID or failing the browse FK.
+    verifyUploadAfterConcurrentCleanup(first, second, runtime, otherRuntime, root, 2,
+        "demo-1.0-20260101.120000-2.jar", "overwritten-history");
     var runs = second.getBean(CleanupRunService.class);
     var preview = run(runs, policy.id(), policy.revision(), "TRY_RUN", 100);
     assertEquals(2, preview.run().scannedSubjects());
@@ -84,59 +87,72 @@ final class MavenSnapshotCleanupSmokeChecks {
       assertTrue(List.of("SUCCEEDED", "SUCCEEDED_TRUNCATED").contains(execution.run().state()), execution.toString());
       deleted += execution.run().deletedSubjects();
     }
-    assertEquals(3, deleted, "Cursor must resume within the same base version across runs");
-    assertEquals(List.of(1, 5, 6), snapshots.page(repo.id(), 0, 100).stream().map(MavenSnapshotDao.Build::buildNumber).toList());
-    for (int build : List.of(2, 3, 4)) {
+    assertEquals(2, deleted, "Cursor must resume within the same base version across runs");
+    assertEquals(List.of(1, 2, 5, 6), snapshots.page(repo.id(), 0, 100).stream().map(MavenSnapshotDao.Build::buildNumber).sorted().toList());
+    for (int build : List.of(3, 4)) {
       for (String suffix : List.of(".jar", ".pom", ".jar.asc", ".jar.sha1")) {
         var path = otherMaven.parser().parsePath(root + "demo-1.0-20260101.120000-" + build + suffix);
         assertThrows(MavenNotFoundException.class, () -> otherMaven.get(otherRuntime, path, false));
       }
     }
+    assertEquals("overwritten-history", get(otherMaven, otherRuntime, root + "demo-1.0-20260101.120000-2.jar"));
     assertEquals(xml, get(otherMaven, otherRuntime, root + "maven-metadata.xml"));
     assertEquals("metadata-checksum", get(otherMaven, otherRuntime, root + "maven-metadata.xml.sha1"));
     assertEquals("old-sources", get(otherMaven, otherRuntime, root + "demo-1.0-20260101.120000-1-sources.jar"));
     assertEquals("demo-1.0-20260101.120000-6.jar", get(otherMaven, otherRuntime, root + "demo-1.0-20260101.120000-6.jar"));
+
+    // Checksums do not upsert/lock a component, so they need the same early family lock.
+    var checksumRepo = first.getBean(RepositoryService.class).create(new CreateCommand(
+        "snapshot-checksum-race", "maven2-hosted", true, "smoke-file", true,
+        new HostedSettings("ALLOW", "SNAPSHOT", "STRICT"), null, null, null, null, null));
+    var checksumRuntime = first.getBean(RepositoryRuntimeRegistry.class).resolve(checksumRepo.name()).orElseThrow();
+    var otherChecksumRuntime = second.getBean(RepositoryRuntimeRegistry.class).resolve(checksumRepo.name()).orElseThrow();
+    put(maven, checksumRuntime, root + "demo-1.0-20260101.120000-1.jar", "first");
+    put(maven, checksumRuntime, root + "demo-1.0-20260101.120000-1.jar.sha1", "old-checksum");
+    put(maven, checksumRuntime, root + "demo-1.0-20260101.120000-2.jar", "second");
+    verifyUploadAfterConcurrentCleanup(first, second, checksumRuntime, otherChecksumRuntime, root, 1,
+        "demo-1.0-20260101.120000-1.jar.sha1", "1111111111111111111111111111111111111111");
   }
 
-  private static void verifySharedBlobUploadDoesNotDeadlock(ConfigurableApplicationContext first,
-      ConfigurableApplicationContext second, RepositoryRuntime runtime, RepositoryRuntime otherRuntime, String root) throws Exception {
+  private static void verifyUploadAfterConcurrentCleanup(ConfigurableApplicationContext first,
+      ConfigurableApplicationContext second, RepositoryRuntime runtime, RepositoryRuntime otherRuntime,
+      String root, int buildNumber, String uploadName, String uploadContent) throws Exception {
     var writerAtFamily = new java.util.concurrent.CountDownLatch(1);
     var original = second.getBean(MavenSnapshotAssetObserver.class);
     var observer = org.mockito.Mockito.spy(original);
     org.mockito.Mockito.doAnswer(invocation -> {
-      com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord asset = invocation.getArgument(0);
-      if (asset.path().endsWith("-6.pom")) writerAtFamily.countDown();
+      if (invocation.<String>getArgument(2).endsWith("/" + uploadName)) writerAtFamily.countDown();
       return invocation.callRealMethod();
-    }).when(observer).beforeMutation(org.mockito.ArgumentMatchers.any());
+    }).when(observer).beforeWrite(org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyString());
     var factory = new org.springframework.beans.factory.support.DefaultListableBeanFactory();
     factory.registerSingleton("snapshotObserver", observer);
-    Object target = org.springframework.test.util.AopTestUtils.getTargetObject(second.getBean(AssetDao.class));
-    Object prior = org.springframework.test.util.ReflectionTestUtils.getField(target, "mutationObservers");
-    org.springframework.test.util.ReflectionTestUtils.setField(target, "mutationObservers", factory.getBeanProvider(AssetMutationObserver.class));
+    Object writer = org.springframework.test.util.AopTestUtils.getTargetObject(second.getBean(AssetDao.class));
+    Object prior = org.springframework.test.util.ReflectionTestUtils.getField(writer, "mutationObservers");
+    org.springframework.test.util.ReflectionTestUtils.setField(writer, "mutationObservers", factory.getBeanProvider(AssetMutationObserver.class));
     var snapshots = first.getBean(MavenSnapshotDao.class);
-    var build = snapshots.page(runtime.id(), 0, 100).stream().filter(b -> b.buildNumber() == 2).findFirst().orElseThrow();
+    var build = snapshots.page(runtime.id(), 0, 100).stream().filter(b -> b.buildNumber() == buildNumber).findFirst().orElseThrow();
     var family = snapshots.findFamily(build.familyId()).orElseThrow();
     var tx = new org.springframework.transaction.support.TransactionTemplate(first.getBean(org.springframework.transaction.PlatformTransactionManager.class));
     var upload = new java.util.concurrent.atomic.AtomicReference<java.util.concurrent.Future<?>>();
     try (var executor = java.util.concurrent.Executors.newSingleThreadExecutor()) {
-      assertThrows(IllegalStateException.class, () -> tx.executeWithoutResult(status -> {
+      tx.executeWithoutResult(status -> {
         snapshots.lockFamily(runtime.id(), family.path(), family.groupId(), family.artifactId(), family.baseVersion());
         upload.set(executor.submit(() -> {
-          try {
-            put(second.getBean(MavenHostedService.class), otherRuntime, root + "demo-1.0-20260101.120000-6.pom",
-                "<project><modelVersion>4.0.0</modelVersion><groupId>com.example</groupId><artifactId>demo</artifactId><version>1.0-SNAPSHOT</version></project>");
-          } catch (Exception e) { throw new IllegalStateException(e); }
+          try { put(second.getBean(MavenHostedService.class), otherRuntime, root + uploadName, uploadContent); }
+          catch (Exception e) { throw new IllegalStateException(e); }
         }));
         try { assertTrue(writerAtFamily.await(10, java.util.concurrent.TimeUnit.SECONDS)); }
         catch (InterruptedException e) { throw new IllegalStateException(e); }
-        // The writer owns the shared POM blob and component while waiting for this family.
-        // Cleanup must roll back promptly instead of waiting for the inverse lock order.
-        first.getBean(MavenSnapshotDeletionService.class).delete(runtime.name(), build.id());
-      }));
+        assertFalse(upload.get().isDone(), "Upload must wait before reading the historical asset ID");
+        assertEquals(build.assetCount(), first.getBean(MavenSnapshotDeletionService.class).delete(runtime.name(), build.id()));
+      });
       upload.get().get(10, java.util.concurrent.TimeUnit.SECONDS);
-      assertEquals(4, snapshots.findBuild(build.id()).orElseThrow().assetCount(), "Busy deletion must roll back the entire build");
+      assertTrue(snapshots.findBuild(build.id()).isEmpty());
+      var replacement = snapshots.page(runtime.id(), 0, 100).stream().filter(b -> b.buildNumber() == buildNumber).findFirst().orElseThrow();
+      assertEquals(1, replacement.assetCount(), "The later upload recreates only its newly published file");
+      assertEquals(uploadContent, get(second.getBean(MavenHostedService.class), otherRuntime, root + uploadName));
     } finally {
-      org.springframework.test.util.ReflectionTestUtils.setField(target, "mutationObservers", prior);
+      org.springframework.test.util.ReflectionTestUtils.setField(writer, "mutationObservers", prior);
     }
   }
 

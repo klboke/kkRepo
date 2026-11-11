@@ -41,8 +41,8 @@ class MavenSnapshotDeletionServiceTest {
     order.verify(snapshots).lockFamily(1, "com/example/demo/1-SNAPSHOT", "com.example", "demo", "1-SNAPSHOT");
     order.verify(assets).findAssetsByIdsForUpdate(List.of(1L, 2L));
     order.verify(snapshots).tryLockBlob(99);
-    order.verify(assets).hasComponentAssetsOutside(7L, List.of(1L, 2L));
     order.verify(snapshots).tryLockComponent(7);
+    order.verify(assets).hasComponentAssetsOutside(7L, List.of(1L, 2L));
     order.verify(browse).deleteByAssetId(1);
     order.verify(assets).deleteAssetById(1);
     order.verify(cache).evictAfterCommit(eq(1L), endsWith(".sha1"));
@@ -60,11 +60,16 @@ class MavenSnapshotDeletionServiceTest {
     assertThrows(IllegalStateException.class, () -> service.delete("snapshots", 1));
     verify(assets, never()).deleteAssetById(anyLong());
   }
-  @Test void doesNotLockOrPruneSharedBaseVersionComponent() {
+  @Test void locksButDoesNotPruneSharedBaseVersionComponent() {
     when(assets.hasComponentAssetsOutside(7L, List.of(1L, 2L))).thenReturn(true);
     assertEquals(2, service.delete("snapshots", 1));
-    verify(snapshots, never()).tryLockComponent(anyLong());
+    verify(snapshots).tryLockComponent(7);
     verifyNoInteractions(components);
+    when(snapshots.tryLockComponent(7)).thenReturn(false);
+    clearInvocations(assets, browse, cache);
+    assertThrows(IllegalStateException.class, () -> service.delete("snapshots", 1));
+    verify(assets, never()).deleteAssetById(anyLong());
+    verifyNoInteractions(browse, cache);
   }
   @Test void refusesWrongRepositoryOversizedBuildAndTreatsMissingBuildAsIdempotent() {
     when(runtime.id()).thenReturn(2L);

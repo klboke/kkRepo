@@ -36,6 +36,17 @@ public class MavenSnapshotAssetObserver implements AssetMutationObserver {
         path.artifactId(), path.baseVersion());
   }
 
+  /** Serialize before the writer reads an existing asset ID, including checksum-only writes. */
+  @Override
+  public void beforeWrite(long repositoryId, RepositoryFormat format, String assetPath) {
+    if (format != RepositoryFormat.MAVEN2) return;
+    FamilyPath path = familyPath(assetPath);
+    if (path != null && repositories.findById(repositoryId)
+        .filter(repository -> repository.type() == RepositoryType.HOSTED).isPresent()) {
+      snapshots.lockFamily(repositoryId, path.path(), path.groupId(), path.artifactId(), path.baseVersion());
+    }
+  }
+
   @Override
   public void stored(AssetRecord asset) { index(asset, false); }
 
@@ -57,14 +68,19 @@ public class MavenSnapshotAssetObserver implements AssetMutationObserver {
 
   private FamilyPath family(AssetRecord asset) {
     if (asset.format() != RepositoryFormat.MAVEN2 || asset.path() == null) return null;
-    String[] segments = asset.path().split("/");
+    FamilyPath path = familyPath(asset.path());
+    return path != null && repositories.findById(asset.repositoryId())
+        .filter(repository -> repository.type() == RepositoryType.HOSTED).isPresent() ? path : null;
+  }
+
+  private static FamilyPath familyPath(String assetPath) {
+    if (assetPath == null) return null;
+    String[] segments = assetPath.split("/");
     if (segments.length < 4 || !segments[segments.length - 2].endsWith("-SNAPSHOT")) return null;
-    if (repositories.findById(asset.repositoryId())
-        .filter(repository -> repository.type() == RepositoryType.HOSTED).isEmpty()) return null;
     String groupId = String.join(".", Arrays.copyOf(segments, segments.length - 3));
     String artifactId = segments[segments.length - 3];
     String baseVersion = segments[segments.length - 2];
-    return new FamilyPath(asset.path().substring(0, asset.path().lastIndexOf('/')),
+    return new FamilyPath(assetPath.substring(0, assetPath.lastIndexOf('/')),
         groupId, artifactId, baseVersion);
   }
 

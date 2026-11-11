@@ -633,6 +633,7 @@ class RepositoryDataMigrationWriter {
         ? migratedCargoMetadata(source, upload)
         : null;
 
+    assetDao.prepareWrite(repository.id(), repository.format(), source.sourcePath());
     Optional<AssetRecord> existing = assetDao.findAssetByPath(repository.id(), source.sourcePath());
     if (expectedPackument != null) {
       // Recheck the durable blob binding after the row lock. A competing replica may have

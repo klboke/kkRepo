@@ -63,6 +63,11 @@ public class JdbcMavenSnapshotDao implements MavenSnapshotDao {
       if (!backfill) jdbc.update("""
           UPDATE maven_snapshot_build SET revision = revision + 1, mutated_at = CURRENT_TIMESTAMP WHERE id = ?
           """, existing.getFirst());
+      else if (modifiedAt != null) jdbc.update("""
+          UPDATE maven_snapshot_build SET mutated_at = ? WHERE id = ? AND mutated_at < ?
+          """, Timestamp.from(modifiedAt), existing.getFirst(), Timestamp.from(modifiedAt));
+      // A retiring replica may have overwritten an already indexed asset during rollout.
+      // Backfill reconciles its later publication time without recounting the association.
       return;
     }
     List<Long> builds = jdbc.queryForList("""

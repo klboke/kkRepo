@@ -516,6 +516,9 @@ public class MavenAssetWriter {
     Digests digests = upload.digests();
     String blobRef = BlobReferenceCodec.format(ref);
 
+    // Blob streaming is complete. Coordinate inside the retried DB transaction before
+    // reading an existing asset ID that concurrent cleanup could otherwise remove.
+    assetDao.prepareWrite(runtime.id(), RepositoryFormat.MAVEN2, path.path());
     Optional<AssetRecord> existing = assetDao.findAssetByPath(runtime.id(), path.path());
     Long previousBlobId = existing.map(AssetRecord::assetBlobId).orElse(null);
     AssetBlobRecord previousBlob = previousBlobId == null

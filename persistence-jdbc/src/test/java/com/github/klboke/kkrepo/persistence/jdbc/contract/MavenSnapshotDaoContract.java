@@ -68,6 +68,16 @@ public final class MavenSnapshotDaoContract {
       dao.store(family, repo, assetIds.getFirst(), oldest.version(), 1000, 1, ":jar", true, old, true);
     });
     assertEquals(oldest, dao.findBuild(oldest.id()).orElseThrow(), "Backfill is idempotent");
+    Instant legacyOverwrite = old.plusSeconds(60);
+    tx.executeWithoutResult(s -> {
+      dao.lockFamily(repo, path, "com.example", "demo", "1.0-SNAPSHOT");
+      dao.store(family, repo, assetIds.getFirst(), oldest.version(), 1000, 1, ":jar", true, legacyOverwrite, true);
+      dao.store(family, repo, assetIds.get(1), oldest.version(), 1000, 1, ":jar", false, old, true);
+    });
+    var reconciled = dao.findBuild(oldest.id()).orElseThrow();
+    assertEquals(legacyOverwrite, reconciled.mutatedAt(), "Backfill includes writes by retiring replicas without moving time backwards");
+    assertEquals(oldest.revision(), reconciled.revision());
+    assertEquals(oldest.assetCount(), reconciled.assetCount());
     tx.executeWithoutResult(s -> {
       dao.lockFamily(repo, path, "com.example", "demo", "1.0-SNAPSHOT");
       dao.store(family, repo, assetIds.getFirst(), oldest.version(), 1000, 1, ":jar", true, old, false);

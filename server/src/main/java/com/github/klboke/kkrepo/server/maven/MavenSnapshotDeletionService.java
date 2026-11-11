@@ -45,11 +45,15 @@ public class MavenSnapshotDeletionService {
     for (long blobId : blobIds) {
       if (!snapshots.tryLockBlob(blobId)) throw new IllegalStateException("snapshot blob is busy; retry cleanup");
     }
-    List<Long> emptyComponents = rows.stream().map(AssetRecord::componentId).filter(Objects::nonNull)
-        .distinct().sorted().filter(id -> !assets.hasComponentAssetsOutside(id, ids)).toList();
-    for (long componentId : emptyComponents) {
+    List<Long> componentIds = rows.stream().map(AssetRecord::componentId).filter(Objects::nonNull)
+        .distinct().sorted().toList();
+    // Imported/native writers can share a base-version component with surviving builds.
+    // Check every component, even when it will not be pruned.
+    for (long componentId : componentIds) {
       if (!snapshots.tryLockComponent(componentId)) throw new IllegalStateException("snapshot component is busy; retry cleanup");
     }
+    List<Long> emptyComponents = componentIds.stream()
+        .filter(id -> !assets.hasComponentAssetsOutside(id, ids)).toList();
     for (AssetRecord row : rows) {
       browse.deleteByAssetId(row.id());
       assets.deleteAssetById(row.id());

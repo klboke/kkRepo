@@ -52,6 +52,13 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
     this.mutationObservers = observers;
   }
 
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void prepareWrite(long repositoryId, RepositoryFormat format, String path) {
+    if (mutationObservers != null) mutationObservers.orderedStream()
+        .forEach(observer -> observer.beforeWrite(repositoryId, format, path));
+  }
+
   private List<com.github.klboke.kkrepo.persistence.jdbc.api.AssetMutationObserver> beforeMutation(AssetRecord asset) {
     if (asset == null || mutationObservers == null) return List.of();
     var observers = mutationObservers.orderedStream().filter(observer -> observer.supports(asset)).toList();
