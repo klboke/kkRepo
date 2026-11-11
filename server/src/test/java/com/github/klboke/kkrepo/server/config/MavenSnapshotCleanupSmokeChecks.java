@@ -78,7 +78,7 @@ final class MavenSnapshotCleanupSmokeChecks {
     var preview = run(runs, policy.id(), policy.revision(), "TRY_RUN", 100);
     assertEquals(2, preview.run().scannedSubjects());
     assertEquals(1, preview.run().matchedSubjects(), preview.toString());
-    int deleted = 0;
+    long deleted = 0;
     for (int iteration = 0; iteration < 3; iteration++) {
       var execution = run(runs, policy.id(), policy.revision(), "EXECUTE", null);
       assertTrue(List.of("SUCCEEDED", "SUCCEEDED_TRUNCATED").contains(execution.run().state()), execution.toString());
