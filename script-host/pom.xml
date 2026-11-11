@@ -11,6 +11,9 @@
   </parent>
   <artifactId>kkrepo-script-host</artifactId>
   <name>kkrepo-script-host</name>
+  <properties>
+    <graaljs.version>25.5.5.0.3</graaljs.version>
+  </properties>
   <dependencies>
     <dependency>
       <groupId>com.github.klboke</groupId>
@@ -20,6 +23,17 @@
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
       <artifactId>jackson-databind</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.graalvm.js</groupId>
+      <artifactId>js-scriptengine</artifactId>
+      <version>${graaljs.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.graalvm.polyglot</groupId>
+      <artifactId>js-community</artifactId>
+      <version>${graaljs.version}</version>
+      <type>pom</type>
     </dependency>
     <dependency>
       <groupId>org.junit.jupiter</groupId>
