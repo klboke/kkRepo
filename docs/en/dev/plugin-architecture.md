@@ -264,27 +264,34 @@ Scripts are modules described by a `module.json` next to the script:
 {
   "id": "raw-policy",
   "language": "js",
-  "engine": "graaljs",
   "entrypoint": "handler.js",
-  "capabilities": ["repository.handler", "network.filter"],
-  "timeoutMs": 2000
+  "capabilities": ["repository.handler", "cleanup.rule", "maintenance.task"],
+  "routes": [
+    {"format": "raw", "type": "HOSTED", "method": "GET", "pathPattern": "**", "order": 100}
+  ]
 }
 ```
+
+The server scans `kkrepo.scripts.directory` (default `scripts`) when `kkrepo.scripts.enabled=true`.
+`language` defaults to `kkrepo.scripts.language` (`js`). Descriptor fields are strict: an unknown
+capability, a missing entrypoint, a path escape or a duplicate module id fails startup.
 
 Recommended contract: JSON in / JSON out, so it is portable across engines.
 
 ```js
-function handle(request) {
-  return {
+function candidates(requestJson) { return JSON.stringify([/* cleanup candidates */]); }
+function run(requestJson) { return JSON.stringify({proposed: 0, deleted: 0, messages: []}); }
+function handle(requestJson) {
+  return JSON.stringify({
     status: 200,
-    headers: { "Content-Type": "application/json" },
-    bodyBase64: "..."
-  };
+    headers: {"Content-Type": ["application/json"]},
+    body: "..." // base64-encoded byte[]
+  });
 }
 ```
 
-`ScriptHost` loads the engine with `ScriptEngineManager`, creates a restricted context and wraps
-the script in a `RepositoryProtocolHandler` or a `RemoteFilter`. `Invocable.getInterface` is a
+`ScriptMaintenanceHost` loads the engine with `ScriptEngineManager` and wraps the script in a
+`CleanupRule`, `MaintenanceTask` or `RepositoryProtocolHandler`. `Invocable.getInterface` is a
 secondary option for Groovy/JavaScript modules that prefer typed interfaces.
 
 Security and operations:
@@ -396,8 +403,11 @@ The first slice is implemented on `feat/plugin-api`:
 - `plugin-loader`: signed JAR verification against a PKCS12 truststore, single trusted signer,
   certificate validity, child-first classloader, API version check and duplicate plugin id check.
 - `PluginRuntime`: optional Spring wiring (`kkrepo.plugins.enabled`), disabled by default.
-- `script-host`: JSR-223 host for cleanup rules and maintenance tasks; GraalJS integration test
-  passes with a real JavaScript script.
+- `script-host`: JSR-223 host for cleanup rules, maintenance tasks and neutral repository handlers;
+  GraalJS integration tests pass with real JavaScript scripts.
+- `ScriptRegistry` loads `module.json` modules from `kkrepo.scripts.directory` when
+  `kkrepo.scripts.enabled=true` and contributes cleanup rules, maintenance tasks and repository
+  handlers to the existing services.
 - Tests: signed JAR accepted; unsigned, wrong signer, tampered and incompatible API version
   rejected; cleanup and maintenance contracts executed through GraalJS.
 - `CleanupRule` is wired into `CleanupRunService`: script candidates are resolved to standalone
