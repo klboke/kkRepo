@@ -874,6 +874,22 @@ public class CleanupSubjectScanner {
     return java.util.Optional.empty();
   }
 
+  /**
+   * Resolves one script-proposed path to a deletable standalone asset subject. Component-bound
+   * paths and paths outside the repository are ignored so a script cannot escalate to a whole
+   * component or another repository.
+   */
+  public java.util.Optional<Subject> resolvePath(RepositoryRecord repository, String path) {
+    if (path == null || path.isBlank()) {
+      return java.util.Optional.empty();
+    }
+    return assetDao.findAssetByPath(repository.id(), path)
+        .filter(asset -> asset.componentId() == null)
+        .flatMap(asset -> assetDao.findAssetWithBlobById(asset.id()))
+        .filter(row -> isStandaloneCleanupAsset(repository, row.asset()))
+        .map(row -> assetSubject(repository.format(), row));
+  }
+
   /** Locks shared npm metadata before cleanup acquires any version component locks. */
   public void lockPackageRoots(RepositoryRecord repository, List<String> paths) {
     if (repository.format() != RepositoryFormat.NPM) return;
