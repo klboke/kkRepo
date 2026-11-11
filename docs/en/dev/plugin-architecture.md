@@ -390,14 +390,18 @@ rebuild triggers.
 
 The first slice is implemented on `feat/plugin-api`:
 
-- `plugin-api`: `KkRepoPlugin`, `PluginContext`, `PluginDescriptor`, `RemoteTransportProvider`,
-  `RemoteFetcher`, portable `RemoteRequest`/`RemoteResponse`.
+- `plugin-api`: `KkRepoPlugin`, `PluginContext`, `PluginDescriptor`, `FormatId`,
+  `RepositoryFormatProvider`, `RemoteTransportProvider`, `RemoteFetcher`, portable
+  `RemoteRequest`/`RemoteResponse`, `CleanupRule` and `MaintenanceTask`.
 - `plugin-loader`: signed JAR verification against a PKCS12 truststore, single trusted signer,
   certificate validity, child-first classloader, API version check and duplicate plugin id check.
+- `PluginRuntime`: optional Spring wiring (`kkrepo.plugins.enabled`), disabled by default.
+- `script-host`: JSR-223 host for cleanup rules and maintenance tasks; GraalJS integration test
+  passes with a real JavaScript script.
 - Tests: signed JAR accepted; unsigned, wrong signer, tampered and incompatible API version
-  rejected.
-- Not yet wired into the Spring runtime. The next slice adds `RepositoryFormatProvider`/`FormatId`
-  and the `CleanupRule`/`MaintenanceTask` script contracts.
+  rejected; cleanup and maintenance contracts executed through GraalJS.
+- Remaining: wire `CleanupRule`/`MaintenanceTask` into `CleanupExecutionService`/Quartz; neutralize
+  the repository handler API and move the dispatcher to `FormatId`.
 
 ## Migration plan
 
