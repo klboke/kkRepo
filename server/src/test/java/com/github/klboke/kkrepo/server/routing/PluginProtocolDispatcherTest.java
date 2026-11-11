@@ -72,7 +72,7 @@ class PluginProtocolDispatcherTest {
 
     dispatcher.handle(request);
 
-    assertArrayEquals("payload".getBytes(StandardCharsets.UTF_8), handler.request.body());
+    assertArrayEquals(new byte[0], handler.request.body());
     assertEquals("chart", handler.request.multipart().name());
     assertEquals("chart.tgz", handler.request.multipart().filename());
     assertArrayEquals(new byte[] {1, 2, 3}, handler.request.multipart().content());

@@ -142,7 +142,7 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
         request.method().name(),
         headers,
         query,
-        body(servlet, request.method()),
+        request.multipartFile() == null ? body(servlet, request.method()) : new byte[0],
         multipart(request.multipartFile()),
         Map.of());
   }
