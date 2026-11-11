@@ -13,6 +13,8 @@ import org.springframework.transaction.PlatformTransactionManager;
 public class MavenSnapshotBackfillWorker {
   public static final String CURSOR = "maven_snapshot_backfill_v1";
   public static final String ACTIVATED = "maven_snapshot_activated_v1";
+  public static final String INDEXED = "maven_snapshot_indexed_v1";
+  public static final String RECONCILE = "maven_snapshot_reconcile_v1";
   public static final String READY = "maven_snapshot_ready_v1";
   private final MaintenanceCursorDao cursors;
   private final MavenSnapshotDao snapshots;
@@ -42,9 +44,20 @@ public class MavenSnapshotBackfillWorker {
     cursors.ensureCursor(CURSOR);
     cursors.ensureCursor(READY);
     if (cursors.lastSeenId(READY) == 1) return;
+    cursors.ensureCursor(INDEXED);
+    cursors.ensureCursor(RECONCILE);
     transactions.executeWithoutResult(status -> {
       var cursor = cursors.tryLockLastSeenId(CURSOR);
       if (cursor.isEmpty() || cursors.lastSeenId(READY) == 1) return;
+      if (cursors.lastSeenId(INDEXED) == 1) {
+        // A separate resumable pass repairs old-replica deletions, including empty builds
+        // that cannot be discovered by scanning surviving assets. Keep transactions small.
+        var builds = snapshots.reconciliationPage(cursors.lastSeenId(RECONCILE), 64);
+        builds.forEach(snapshots::reconcile);
+        if (!builds.isEmpty()) cursors.updateLastSeenId(RECONCILE, builds.getLast());
+        if (builds.size() < 64) cursors.updateLastSeenId(READY, 1);
+        return;
+      }
       var ids = snapshots.backfillPage(cursor.getAsLong(), 256);
       var rows = assets.findAssetsByIds(ids);
       for (long id : ids) {
@@ -55,7 +68,7 @@ public class MavenSnapshotBackfillWorker {
         assets.findAssetByIdForUpdate(id).ifPresent(asset -> observer.index(asset, true));
       }
       if (!ids.isEmpty()) cursors.updateLastSeenId(CURSOR, ids.getLast());
-      if (ids.size() < 256) cursors.updateLastSeenId(READY, 1);
+      if (ids.size() < 256) cursors.updateLastSeenId(INDEXED, 1);
     });
   }
 }

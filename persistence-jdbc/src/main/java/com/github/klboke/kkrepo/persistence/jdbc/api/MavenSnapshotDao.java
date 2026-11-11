@@ -17,6 +17,8 @@ public interface MavenSnapshotDao {
   List<Long> assetIds(long buildId, int limit);
   boolean hasLatestVariant(long buildId);
   List<Long> backfillPage(long afterAssetId, int limit);
+  List<Long> reconciliationPage(long afterBuildId, int limit);
+  void reconcile(long buildId);
   boolean tryLockBlob(long blobId);
   boolean tryLockComponent(long componentId);
 

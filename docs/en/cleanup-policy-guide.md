@@ -67,7 +67,8 @@ SNAPSHOT files, and release-triggered cleanup are excluded.
 - The default quiet period is one hour, configurable with `KKREPO_MAVEN_SNAPSHOT_WRITE_GRACE`
   (ISO-8601 duration, default `PT1H`). Keep it longer than normal publication gaps.
 - Upgrade every replica before creating the first policy in this mode. Creating that policy activates a shared database cursor that backfills existing
-  assets in batches of 256; `SNAPSHOT_INDEX_WARMING_UP` prevents deletion until it finishes. New
+  assets in batches of 256, then reconciles build counts in resumable batches of 64 to account for
+  deletions by retiring replicas. `SNAPSHOT_INDEX_WARMING_UP` prevents deletion until both passes finish. New
   server writes and migrations maintain the index in the same transaction as their assets.
 - Scan/delete counters count **builds**. Keyset cursors resume inside a large family. Each scan
   reads at most 20,000 candidate assets and 64 metadata documents; a build with more than 4,096 files is held and reported as

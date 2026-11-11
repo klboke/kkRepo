@@ -139,7 +139,56 @@ public final class MavenSnapshotDaoContract {
       }
     });
     assertTrue(dao.hasLatestVariant(retained));
+    verifyRetiringReplicaDeletion(dao, tx, stores, repo, old);
     verifyLargeFamily(jdbc, dao, tx, repo, dialect);
+  }
+
+  private static void verifyRetiringReplicaDeletion(MavenSnapshotDao dao, TransactionTemplate tx,
+      PersistenceStores stores, long repo, Instant old) {
+    String path = "com/example/retiring/1-SNAPSHOT";
+    long family = tx.execute(s -> dao.lockFamily(repo, path, "com.example", "retiring", "1-SNAPSHOT"));
+    List<Long> assets = new ArrayList<>();
+    for (int number = 1; number <= 4; number++) {
+      int buildNumber = number;
+      for (boolean primary : List.of(true, false)) {
+        String version = "1-20260101.120000-" + number;
+        String filename = "retiring-" + version + (primary ? ".jar" : ".jar.sha1");
+        String assetPath = path + "/" + filename;
+        assets.add(tx.execute(s -> {
+          dao.lockFamily(repo, path, "com.example", "retiring", "1-SNAPSHOT");
+          long id = stores.assets().insertAsset(new AssetRecord(null, repo, null, null, RepositoryFormat.MAVEN2,
+              assetPath, PersistenceHashes.pathHash(assetPath), filename, "artifact", "application/octet-stream", 5L, null, old, Map.of()));
+          dao.store(family, repo, id, version, 1000, buildNumber, ":jar", primary, old, true);
+          return id;
+        }));
+      }
+    }
+    var builds = dao.page(repo, 0, 100).stream().filter(b -> b.familyId() == family).toList();
+    // The retiring implementation deletes assets without observer callbacks. FK cascades
+    // remove links, but leave one empty build and one checksum-only build with stale counts.
+    tx.executeWithoutResult(s -> {
+      for (long id : List.of(assets.get(4), assets.get(6), assets.get(7))) stores.assets().deleteAssetById(id);
+    });
+    assertEquals(3, dao.retentionBoundary(family, 2).orElseThrow().buildNumber(), "Stale aggregates reproduce the lost retention slot");
+    assertTrue(dao.assetIds(builds.get(3).id(), 10).isEmpty());
+    assertEquals(List.of(builds.get(2).id(), builds.get(3).id()), dao.reconciliationPage(builds.get(1).id(), 2));
+    tx.executeWithoutResult(s -> {
+      builds.forEach(b -> dao.reconcile(b.id()));
+      assertEquals(1, dao.retentionBoundary(family, 2).orElseThrow().buildNumber());
+      s.setRollbackOnly();
+    });
+    assertTrue(dao.findBuild(builds.get(3).id()).isPresent(), "Reconciliation rolls back with its cursor transaction");
+    tx.executeWithoutResult(s -> builds.forEach(b -> dao.reconcile(b.id())));
+    assertTrue(dao.findBuild(builds.get(3).id()).isEmpty());
+    var partial = dao.findBuild(builds.get(2).id()).orElseThrow();
+    assertEquals(1, partial.assetCount());
+    assertEquals(0, partial.primaryCount());
+    assertEquals(builds.get(2).revision() + 1, partial.revision());
+    assertTrue(partial.mutatedAt().isAfter(old));
+    assertEquals(1, dao.retentionBoundary(family, 2).orElseThrow().buildNumber(), "Both surviving primary builds retain their slots");
+    assertEquals(builds.getFirst(), dao.findBuild(builds.getFirst().id()).orElseThrow(), "Unchanged builds preserve publication time and revision");
+    tx.executeWithoutResult(s -> builds.forEach(b -> dao.reconcile(b.id())));
+    assertEquals(partial, dao.findBuild(partial.id()).orElseThrow(), "Reconciliation is idempotent");
   }
 
   private static void verifyLargeFamily(JdbcTemplate jdbc, MavenSnapshotDao dao, TransactionTemplate tx,

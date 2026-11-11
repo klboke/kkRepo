@@ -55,15 +55,39 @@ class MavenSnapshotBackfillWorkerTest {
     verify(assets, never()).findAssetByIdForUpdate(2);
     verify(cursors, never()).updateLastSeenId(MavenSnapshotBackfillWorker.READY, 1);
   }
-  @Test void lastPageAtomicallyMarksReadyAndASecondReplicaDoesNoWork() {
+  @Test void lastAssetPageWaitsForReconciliationBeforeMarkingReady() {
     when(transactions.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
     when(cursors.tryLockLastSeenId(MavenSnapshotBackfillWorker.CURSOR)).thenReturn(OptionalLong.of(256));
     worker.runBatch();
+    verify(cursors).updateLastSeenId(MavenSnapshotBackfillWorker.INDEXED, 1);
+    verify(cursors, never()).updateLastSeenId(MavenSnapshotBackfillWorker.READY, 1);
+    when(cursors.lastSeenId(MavenSnapshotBackfillWorker.INDEXED)).thenReturn(1L);
+    when(snapshots.reconciliationPage(0, 64)).thenReturn(List.of(7L, 8L));
+    worker.runBatch();
+    var order = inOrder(snapshots, cursors);
+    order.verify(snapshots).reconcile(7);
+    order.verify(snapshots).reconcile(8);
+    order.verify(cursors).updateLastSeenId(MavenSnapshotBackfillWorker.RECONCILE, 8);
+    order.verify(cursors).updateLastSeenId(MavenSnapshotBackfillWorker.READY, 1);
     verify(cursors).updateLastSeenId(MavenSnapshotBackfillWorker.READY, 1);
     clearInvocations(snapshots, transactions);
     when(cursors.lastSeenId(MavenSnapshotBackfillWorker.READY)).thenReturn(1L);
     worker.runBatch();
     verifyNoInteractions(snapshots, transactions);
+  }
+  @Test void fullReconciliationPageResumesWithoutRescanningAssetsOrMarkingReady() {
+    when(transactions.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
+    when(cursors.tryLockLastSeenId(MavenSnapshotBackfillWorker.CURSOR)).thenReturn(OptionalLong.of(256));
+    when(cursors.lastSeenId(MavenSnapshotBackfillWorker.INDEXED)).thenReturn(1L);
+    when(cursors.lastSeenId(MavenSnapshotBackfillWorker.RECONCILE)).thenReturn(100L);
+    var ids = LongStream.rangeClosed(101, 164).boxed().toList();
+    when(snapshots.reconciliationPage(100, 64)).thenReturn(ids);
+    worker.runBatch();
+    verify(snapshots, times(64)).reconcile(anyLong());
+    verify(cursors).updateLastSeenId(MavenSnapshotBackfillWorker.RECONCILE, 164);
+    verify(cursors, never()).updateLastSeenId(MavenSnapshotBackfillWorker.READY, 1);
+    verify(snapshots, never()).backfillPage(anyLong(), anyInt());
+    verifyNoInteractions(assets, observer);
   }
   @Test void anotherReplicaOwningTheCursorPreventsDuplicateBackfill() {
     when(transactions.getTransaction(any())).thenReturn(new SimpleTransactionStatus());

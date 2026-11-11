@@ -51,10 +51,14 @@ final class MavenSnapshotCleanupSmokeChecks {
     var cursors = first.getBean(MaintenanceCursorDao.class);
     cursors.ensureCursor(MavenSnapshotBackfillWorker.CURSOR);
     cursors.ensureCursor(MavenSnapshotBackfillWorker.READY);
+    cursors.ensureCursor(MavenSnapshotBackfillWorker.INDEXED);
+    cursors.ensureCursor(MavenSnapshotBackfillWorker.RECONCILE);
     new org.springframework.transaction.support.TransactionTemplate(first.getBean(
         org.springframework.transaction.PlatformTransactionManager.class)).executeWithoutResult(status -> {
       cursors.updateLastSeenId(MavenSnapshotBackfillWorker.CURSOR, 0);
       cursors.updateLastSeenId(MavenSnapshotBackfillWorker.READY, 0);
+      cursors.updateLastSeenId(MavenSnapshotBackfillWorker.INDEXED, 0);
+      cursors.updateLastSeenId(MavenSnapshotBackfillWorker.RECONCILE, 0);
     });
     var repository = first.getBean(RepositoryDao.class).findById(repo.id()).orElseThrow();
     var rules = Map.<String, Object>of("mode", "MAVEN_SNAPSHOT_BUILDS", "snapshot",

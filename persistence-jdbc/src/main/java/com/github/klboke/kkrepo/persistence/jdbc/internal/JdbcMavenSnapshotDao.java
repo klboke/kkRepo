@@ -162,6 +162,37 @@ public class JdbcMavenSnapshotDao implements MavenSnapshotDao {
   }
 
   @Override
+  public List<Long> reconciliationPage(long afterBuildId, int limit) {
+    return jdbc.queryForList("SELECT id FROM maven_snapshot_build WHERE id > ? ORDER BY id LIMIT ?",
+        Long.class, afterBuildId, limit);
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void reconcile(long buildId) {
+    var build = findBuild(buildId).orElse(null);
+    if (build == null) return;
+    var family = findFamily(build.familyId()).orElse(null);
+    if (family == null) return;
+    lockFamily(family.repositoryId(), family.path(), family.groupId(), family.artifactId(), family.baseVersion());
+    // Retiring replicas delete associations through the asset FK without updating aggregates.
+    // Count only this build's indexed range while its live writers are excluded.
+    int[] counts = jdbc.queryForObject("""
+        SELECT COUNT(*), COALESCE(SUM(CASE WHEN primary_asset THEN 1 ELSE 0 END), 0)
+        FROM maven_snapshot_asset WHERE build_id = ?
+        """, (rs, n) -> new int[] {rs.getInt(1), rs.getInt(2)}, buildId);
+    if (counts[0] == 0) {
+      jdbc.update("DELETE FROM maven_snapshot_build WHERE id = ?", buildId);
+    } else {
+      jdbc.update("""
+          UPDATE maven_snapshot_build SET asset_count = ?, primary_count = ?,
+            revision = revision + 1, mutated_at = CURRENT_TIMESTAMP
+          WHERE id = ? AND (asset_count <> ? OR primary_count <> ?)
+          """, counts[0], counts[1], buildId, counts[0], counts[1]);
+    }
+  }
+
+  @Override
   @Transactional(propagation = Propagation.MANDATORY)
   public boolean tryLockBlob(long blobId) {
     return !jdbc.queryForList("SELECT id FROM asset_blob WHERE id = ? FOR UPDATE SKIP LOCKED",
