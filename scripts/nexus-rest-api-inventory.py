@@ -22,6 +22,7 @@ import argparse
 import collections
 import os
 import re
+import shlex
 import subprocess
 import sys
 import urllib.request
@@ -120,14 +121,22 @@ def area_of(path):
     return parts[1] if len(parts) > 1 else path
 
 
-def command_line(git_ref, output, client_url):
+def reference_description(client_url):
+    if client_url == DEFAULT_URL:
+        return f"`sonatype-nexus-community/nexus-repo-api-client-go` at `{CLIENT_REF}`"
+    return f"override `{client_url}` (not the pinned client)"
+
+
+def command_line(git_ref, output, client_url, source):
     parts = ["python3", "scripts/nexus-rest-api-inventory.py"]
     if git_ref:
         parts += ["--git-ref", git_ref]
+    elif os.path.abspath(source) != os.path.abspath(SOURCE):
+        parts += ["--source", shlex.quote(source)]
     if os.path.abspath(output) != os.path.abspath(OUTPUT):
-        parts += ["--output", output]
+        parts += ["--output", shlex.quote(output)]
     if client_url != DEFAULT_URL:
-        parts += ["--client-url", client_url]
+        parts += ["--client-url", shlex.quote(client_url)]
     return " ".join(parts)
 
 
@@ -156,14 +165,16 @@ def main(argv=None):
         resolved = git_sha(args.git_ref)
         baseline = (f"`{resolved}`" if resolved and resolved.lower() == args.git_ref.lower()
                     else f"`{args.git_ref}` at `{resolved}`")
+    elif os.path.abspath(args.source) != os.path.abspath(SOURCE):
+        baseline = f"working tree at `{args.source}` (not a pinned baseline)"
     else:
         baseline = f"working tree at `{git_sha('HEAD')}` (not a pinned baseline)"
 
     lines = [
         "# Nexus Repository REST API inventory",
         "",
-        f"Reference endpoint list: `sonatype-nexus-community/nexus-repo-api-client-go` at "
-        f"`{CLIENT_REF}` ({len(nexus)} `/v1` method/path pairs).",
+        f"Reference endpoint list: {reference_description(args.client_url)} "
+        f"({len(nexus)} `/v1` method/path pairs).",
         "",
         f"kkRepo baseline: {baseline} -- {len(matches)}/{len(nexus)} exact method/path matches.",
         "",
@@ -174,7 +185,7 @@ def main(argv=None):
         "",
         "Regenerate with:",
         "",
-        f"    {command_line(git_sha(args.git_ref) if args.git_ref else None, args.output, args.client_url)}",
+        f"    {command_line(git_sha(args.git_ref) if args.git_ref else None, args.output, args.client_url, args.source)}",
         "",
         "| Area | Method | Path | kkRepo |",
         "| --- | --- | --- | --- |",
