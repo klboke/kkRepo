@@ -393,7 +393,7 @@ Example maintenance scripts: stale snapshot cleanup, orphan blob detection, empt
 cleanup, proxy cache expiry, retention by age/size/count, duplicate asset detection and metadata
 rebuild triggers.
 
-## PoC status (2026-11-11)
+## PoC status (2026-11-12)
 
 The first slice is implemented on `feat/plugin-api`:
 
@@ -424,6 +424,9 @@ The first slice is implemented on `feat/plugin-api`:
   `LegacyRepositoryProtocolHandler` during the migration.
 - ArchUnit enforces that `plugin-api` does not depend on Spring, Servlet, JDBC, JPA, Quartz, the
   server or the loader.
+- Script repository handlers currently target the built-in `RepositoryFormat` values because the
+  repository record still uses that enum. Open `FormatId` routing requires the metadata/schema
+  migration described in phase 1.
 - Remaining: complete the built-in-handler migration to the neutral port; dynamic plugin JAR
   loading is JVM-only (native hints keep the runtime buildable).
 
