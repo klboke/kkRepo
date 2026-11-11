@@ -10,16 +10,15 @@ import com.github.klboke.kkrepo.server.repositories.RepositoryService;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.*;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
-import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import org.springframework.context.ConfigurableApplicationContext;
-import org.springframework.jdbc.core.JdbcTemplate;
 
 /** Real Spring transactions, live projection/backfill, queued worker and sibling-node cache checks. */
 final class MavenSnapshotCleanupSmokeChecks {
-  static void exercise(ConfigurableApplicationContext first, ConfigurableApplicationContext second) throws Exception {
+  static void exercise(ConfigurableApplicationContext first, ConfigurableApplicationContext second,
+      java.util.function.LongConsumer prepareLegacyInventory) throws Exception {
     var repo = first.getBean(RepositoryService.class).create(new CreateCommand(
         "snapshot-cleanup", "maven2-hosted", true, "smoke-file", true,
         new HostedSettings("ALLOW", "SNAPSHOT", "STRICT"), null, null, null, null, null));
@@ -47,11 +46,8 @@ final class MavenSnapshotCleanupSmokeChecks {
     var snapshots = second.getBean(MavenSnapshotDao.class);
     assertEquals(6, snapshots.page(repo.id(), 0, 100).size(), "Native writes must index atomically");
     assertEquals(25, snapshots.page(repo.id(), 0, 100).stream().mapToInt(MavenSnapshotDao.Build::assetCount).sum());
-    JdbcTemplate jdbc = first.getBean(JdbcTemplate.class);
-    var old = Timestamp.from(Instant.now().minusSeconds(86400 * 30L));
-    jdbc.update("UPDATE asset SET last_updated_at = ? WHERE repository_id = ?", old, repo.id());
-    // Recreate an upgrade from pre-index data. Each batch is safe to run on either replica.
-    jdbc.update("DELETE FROM maven_snapshot_family WHERE repository_id = ?", repo.id());
+    // The database bootstrap fixture recreates assets imported before the inventory existed.
+    prepareLegacyInventory.accept(repo.id());
     var cursors = first.getBean(MaintenanceCursorDao.class);
     cursors.ensureCursor(MavenSnapshotBackfillWorker.CURSOR);
     cursors.ensureCursor(MavenSnapshotBackfillWorker.READY);

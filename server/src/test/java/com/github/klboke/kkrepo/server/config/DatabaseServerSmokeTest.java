@@ -296,7 +296,12 @@ class DatabaseServerSmokeTest {
 
       exerciseSharedApplicationFlows(first, second);
       YumRepositoryDeletionSmokeChecks.exercise(first, second);
-      MavenSnapshotCleanupSmokeChecks.exercise(first, second);
+      MavenSnapshotCleanupSmokeChecks.exercise(first, second, repositoryId -> {
+        JdbcTemplate jdbc = first.getBean(JdbcTemplate.class);
+        jdbc.update("UPDATE asset SET last_updated_at = ? WHERE repository_id = ?",
+            java.sql.Timestamp.from(Instant.now().minusSeconds(86400 * 30L)), repositoryId);
+        jdbc.update("DELETE FROM maven_snapshot_family WHERE repository_id = ?", repositoryId);
+      });
       com.github.klboke.kkrepo.server.cache.CacheInvalidationSmokeChecks.verify(
           first.getBean(com.zaxxer.hikari.HikariDataSource.class), source -> {
             JdbcTemplate jdbc = new JdbcTemplate(source);
