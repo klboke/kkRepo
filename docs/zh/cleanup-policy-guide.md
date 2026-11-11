@@ -41,6 +41,31 @@ R 的一个清理 subject 是一个 source package version。**保留最新版�
 该 package 的完整 `PACKAGES.gz`，再退出 package 投影；生成 metadata 与 group 不作为独立清理
 subject。
 
+## Maven SNAPSHOT 构建清理
+
+选择 **Maven > Cleanup target > Maven snapshot builds**，即可清理 `1.0-SNAPSHOT` 等基础
+版本内的历史构建。已有策略保持原来的 component/版本语义。首版仅支持 hosted，不处理 release、
+proxy/group、非时间戳 SNAPSHOT 文件，也不提供“已有 release 则删除 SNAPSHOT”的规则。
+
+- 同一时间戳和数字 build number 下的主制品、classifier、签名及 checksum 整组处理。
+  **Keep newest builds per SNAPSHOT** 必填且至少为 1，按 `(groupId, artifactId, baseVersion)`
+  分别计算保留数量。
+- 发布年龄取该构建全部文件的最新实际发布/更新时间，不使用文件名时间戳。下载年龄取该构建的
+  最新成功 GET；从未下载的构建回退到发布时间。仍需完整经过下载观察窗口和 safety lag。
+- 当前 metadata 引用的构建、每种 classifier/extension 的最新构建、近期写入的构建继续保留，
+  因此最终数量可能超过最低保留数。清理不改写当前 metadata，避免每删除一个构建都重写对象存储。
+  metadata 格式异常或不可读取时，该基础版本暂不删除。
+- 写入静默期默认一小时，可通过 `KKREPO_MAVEN_SNAPSHOT_WRITE_GRACE` 设置 ISO-8601 duration
+  （默认 `PT1H`）；应大于正常发布过程中两次上传之间的间隔。
+- 创建首个新模式策略前须升级全部副本。首次创建策略后才启动历史资产回填，通过共享数据库游标每批处理 256 条；未完成时显示
+  `SNAPSHOT_INDEX_WARMING_UP` 并阻止删除。后续服务端上传和迁移在资产事务内同步维护索引。
+- 扫描/删除数量的单位为**构建**。游标可以在同一基础版本内部续跑，每轮最多读取 20,000 个候选
+  文件和 64 份 metadata；单个构建超过 4,096 个文件时保留，并报告 `oversized_build`。运行详情还会汇总 `newest`、
+  `recent_write`、`metadata_or_latest_classifier`、`metadata_unavailable` 等保留原因。
+
+例如，对 `55.0.0-SNAPSHOT` 保留 5 次构建时，只删除符合年龄条件的历史时间戳构建，基础版本继续
+可用。先用 **Try Run** 检查新模式，再启用定时执行；已有仓库/component/asset 保护规则同样生效。
+
 ## 规则组合语义
 
 | 规则 | 语义 |

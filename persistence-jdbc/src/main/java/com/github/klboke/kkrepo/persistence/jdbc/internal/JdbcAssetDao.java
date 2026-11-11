@@ -45,6 +45,25 @@ import org.springframework.transaction.annotation.Transactional;
 @Repository
 public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao {
   private final JdbcTemplate jdbcTemplate;
+  private org.springframework.beans.factory.ObjectProvider<com.github.klboke.kkrepo.persistence.jdbc.api.AssetMutationObserver> mutationObservers;
+
+  @Autowired
+  void setMutationObservers(org.springframework.beans.factory.ObjectProvider<com.github.klboke.kkrepo.persistence.jdbc.api.AssetMutationObserver> observers) {
+    this.mutationObservers = observers;
+  }
+
+  private List<com.github.klboke.kkrepo.persistence.jdbc.api.AssetMutationObserver> beforeMutation(AssetRecord asset) {
+    if (asset == null || mutationObservers == null) return List.of();
+    var observers = mutationObservers.orderedStream().filter(observer -> observer.supports(asset)).toList();
+    observers.forEach(observer -> observer.beforeMutation(asset));
+    return observers;
+  }
+
+  private void notifyStored(long assetId, List<com.github.klboke.kkrepo.persistence.jdbc.api.AssetMutationObserver> observers) {
+    if (!observers.isEmpty()) findAssetById(assetId).ifPresent(asset ->
+        observers.forEach(observer -> observer.stored(asset)));
+  }
+
   private final JsonColumns jsonColumns;
   private final ArtifactChangeDao artifactChanges;
   private final boolean artifactChangeEventsEnabled;
@@ -296,6 +315,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
 
   @Transactional
   public OptionalLong tryInsertAsset(AssetRecord record) {
+    var observers = beforeMutation(record);
     OptionalLong inserted = JdbcInserts.tryInsert(jdbcTemplate, """
         INSERT INTO asset
           (repository_id, component_id, asset_blob_id, format, path, path_hash,
@@ -312,6 +332,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
           ChangeKind.CONTENT_CREATED,
           null));
     }
+    if (inserted.isPresent()) notifyStored(inserted.getAsLong(), observers);
     return inserted;
   }
 
@@ -781,6 +802,20 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
 
   @Override
   @Transactional(propagation = Propagation.MANDATORY)
+  public Map<Long, AssetRecord> findAssetsByIdsForUpdate(Collection<Long> assetIds) {
+    List<Long> ids = distinctPositiveIds(assetIds).stream().sorted().toList();
+    Map<Long, AssetRecord> result = new LinkedHashMap<>();
+    for (int offset = 0; offset < ids.size(); offset += 256) {
+      List<Long> batch = ids.subList(offset, Math.min(offset + 256, ids.size()));
+      jdbcTemplate.query("SELECT * FROM asset WHERE id IN (" + placeholders(batch.size())
+          + ") ORDER BY id FOR UPDATE", assetRowMapper, batch.toArray())
+          .forEach(asset -> result.put(asset.id(), asset));
+    }
+    return Map.copyOf(result);
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
   public Optional<AssetRecord> findAssetByIdForUpdate(long assetId) {
     return jdbcTemplate.query("""
         SELECT * FROM asset WHERE id = ? FOR UPDATE
@@ -808,7 +843,10 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
             .toList();
   }
 
+  @Transactional
   public int deleteAssetById(long assetId) {
+    AssetRecord prior = mutationObservers == null ? null : findAssetById(assetId).orElse(null);
+    beforeMutation(prior).forEach(observer -> observer.deleted(prior));
     return jdbcTemplate.update("DELETE FROM asset WHERE id = ?", assetId);
   }
 
@@ -1016,6 +1054,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
   @Transactional
   public int updateAssetBlobBinding(long assetId, long assetBlobId, String contentType,
       long size, Instant lastUpdatedAt) {
+    var observers = beforeMutation(mutationObservers == null ? null : findAssetById(assetId).orElse(null));
     AssetContentBinding previous = artifactChangeEventsEnabled
         ? lockAssetContentBinding(assetId).orElse(null) : null;
     int updated = jdbcTemplate.update("""
@@ -1040,6 +1079,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
               ? ChangeKind.CONTENT_CREATED : ChangeKind.CONTENT_REPLACED,
           null));
     }
+    if (updated == 1) notifyStored(assetId, observers);
     return updated;
   }
 
@@ -1047,6 +1087,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
   public int updateAssetBlobBindingAndMetadata(long assetId, Long componentId, long assetBlobId,
       String kind, String contentType, long size, Instant lastUpdatedAt,
       java.util.Map<String, Object> attributes) {
+    var observers = beforeMutation(mutationObservers == null ? null : findAssetById(assetId).orElse(null));
     AssetContentBinding previous = artifactChangeEventsEnabled
         ? lockAssetContentBinding(assetId).orElse(null) : null;
     int updated = jdbcTemplate.update("""
@@ -1075,6 +1116,7 @@ public class JdbcAssetDao implements com.github.klboke.kkrepo.persistence.jdbc.a
               ? ChangeKind.CONTENT_CREATED : ChangeKind.CONTENT_REPLACED,
           null));
     }
+    if (updated == 1) notifyStored(assetId, observers);
     return updated;
   }
 

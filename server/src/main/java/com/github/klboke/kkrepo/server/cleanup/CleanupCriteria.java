@@ -35,8 +35,29 @@ final class CleanupCriteria {
     this.retainCount = retainCount;
   }
 
+  static final String SNAPSHOT_MODE = "MAVEN_SNAPSHOT_BUILDS";
+
+  static boolean snapshotMode(Map<String, Object> raw) {
+    return raw != null && SNAPSHOT_MODE.equals(raw.get("mode"));
+  }
+
+  @SuppressWarnings("unchecked")
+  static Map<String, Object> rules(Map<String, Object> raw) {
+    if (raw == null) return Map.of();
+    if (!snapshotMode(raw)) {
+      if (raw.containsKey("mode") && !"COMPONENT".equals(raw.get("mode"))) {
+        throw new CleanupValidationException("unsupported cleanup criteria mode");
+      }
+      return raw;
+    }
+    if (raw.size() != 2 || !(raw.get("snapshot") instanceof Map<?, ?>)) {
+      throw new CleanupValidationException("snapshot mode requires nested snapshot rules only");
+    }
+    return (Map<String, Object>) raw.get("snapshot");
+  }
+
   static CleanupCriteria parse(Map<String, Object> raw) {
-    Map<String, Object> value = raw == null ? Map.of() : raw;
+    Map<String, Object> value = rules(raw);
     String patternText = text(value, "pattern");
     String patternType = text(value, "patternType");
     patternType = patternType == null ? "GLOB" : patternType.trim().toUpperCase(Locale.ROOT);
@@ -53,6 +74,9 @@ final class CleanupCriteria {
     requireRange(publishedDays, 0, MAX_AGE_DAYS, "criteria.publishedOlderThanDays");
     requireRange(downloadedDays, 0, MAX_AGE_DAYS, "criteria.lastDownloadedOlderThanDays");
     requireRange(retainCount, 0, MAX_RETAIN_COUNT, "criteria.retainCount");
+    if (snapshotMode(raw) && (retainCount == null || retainCount < 1)) {
+      throw new CleanupValidationException("snapshot cleanup must retain at least one build");
+    }
     if (publishedDays == null && downloadedDays == null && retainCount == null) {
       throw new CleanupValidationException(
           "at least one deletion criterion is required; pattern only narrows the scope");
@@ -114,7 +138,7 @@ final class CleanupCriteria {
     }
     if (retainCount != null) {
       reason.put("retainCount", retainCount);
-      reason.put("versionRank", versionRank);
+      if (versionRank != null) reason.put("versionRank", versionRank);
     }
     return Map.copyOf(reason);
   }

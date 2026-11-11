@@ -296,6 +296,7 @@ class DatabaseServerSmokeTest {
 
       exerciseSharedApplicationFlows(first, second);
       YumRepositoryDeletionSmokeChecks.exercise(first, second);
+      MavenSnapshotCleanupSmokeChecks.exercise(first, second);
       com.github.klboke.kkrepo.server.cache.CacheInvalidationSmokeChecks.verify(
           first.getBean(com.zaxxer.hikari.HikariDataSource.class), source -> {
             JdbcTemplate jdbc = new JdbcTemplate(source);
@@ -604,6 +605,7 @@ class DatabaseServerSmokeTest {
     values.put("kkrepo.blob-gc.enabled", "false");
     values.put("kkrepo.repository-index-rebuild.enabled", "false");
     values.put("kkrepo.maven.metadata-rebuild.enabled", "false");
+    values.put("kkrepo.maven.snapshot-backfill.initial-delay-ms", "3600000");
     values.put("kkrepo.storage.file.temp-cleanup-enabled", "false");
     values.put("kkrepo.security.outbound.allow-private-addresses", "true");
     return values;

@@ -182,6 +182,14 @@ public interface AssetDao {
     return Map.copyOf(result);
   }
 
+  /** Locks a bounded collection in stable identity order for protocol cleanup. */
+  default Map<Long, AssetRecord> findAssetsByIdsForUpdate(Collection<Long> assetIds) {
+    Map<Long, AssetRecord> result = new java.util.LinkedHashMap<>();
+    assetIds.stream().distinct().sorted().forEach(id ->
+        findAssetByIdForUpdate(id).ifPresent(asset -> result.put(id, asset)));
+    return Map.copyOf(result);
+  }
+
   /** Loads exact repository paths in backend-sized batches, keyed by the canonical stored path. */
   default Map<String, AssetRecord> findAssetsByPaths(
       long repositoryId, Collection<String> paths) {

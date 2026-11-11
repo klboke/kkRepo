@@ -128,7 +128,13 @@ public class CleanupExecutionService {
         results.set(index, stale("usage revision changed"));
         continue;
       }
-      CleanupProtection protection = cleanupDao.findActiveProtection(
+      String snapshotChange = scanner.revalidateSnapshot(repository, run.criteriaSnapshot(), current, run.createdAt());
+      if (snapshotChange != null) {
+        results.set(index, stale(snapshotChange));
+        continue;
+      }
+      CleanupProtection protection = scanner.inheritedSnapshotProtection(repository.id(), current, now);
+      if (protection == null) protection = cleanupDao.findActiveProtection(
           repository.id(),
           current.kind(),
           current.key(),

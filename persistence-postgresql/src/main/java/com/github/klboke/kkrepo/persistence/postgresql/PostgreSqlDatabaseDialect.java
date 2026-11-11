@@ -285,6 +285,16 @@ public final class PostgreSqlDatabaseDialect implements DatabaseDialect {
     private static final Pattern COLUMN = Pattern.compile("[A-Za-z0-9_.]+");
 
     @Override
+    public void ensureMavenSnapshotFamily(JdbcOperations jdbc, long repositoryId, byte[] pathHash,
+        String path, String groupId, String artifactId, String baseVersion) {
+      jdbc.update("""
+          INSERT INTO maven_snapshot_family (repository_id, path_hash, path, group_id, artifact_id, base_version)
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT (repository_id, path_hash) DO NOTHING
+          """, repositoryId, pathHash, path, groupId, artifactId, baseVersion);
+    }
+
+    @Override
     public long bumpCacheVersion(JdbcOperations jdbc, String name) {
       Long version = jdbc.queryForObject("""
           INSERT INTO cache_version (name, version, updated_at)
