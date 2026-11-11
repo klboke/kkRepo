@@ -400,8 +400,15 @@ The first slice is implemented on `feat/plugin-api`:
   passes with a real JavaScript script.
 - Tests: signed JAR accepted; unsigned, wrong signer, tampered and incompatible API version
   rejected; cleanup and maintenance contracts executed through GraalJS.
-- Remaining: wire `CleanupRule`/`MaintenanceTask` into `CleanupExecutionService`/Quartz; neutralize
-  the repository handler API and move the dispatcher to `FormatId`.
+- `CleanupRule` is wired into `CleanupRunService`: script candidates are resolved to standalone
+  asset subjects and still pass through the existing locks, policy, protection, usage and deletion
+  checks.
+- `MaintenanceTask` has a Quartz job, registry and runner with dry-run default, deletion quota and
+  security audit.
+- Signed JAR verification now validates the full PKIX chain against the truststore and pins the
+  leaf certificate.
+- Remaining: neutralize the repository handler API and move the dispatcher to `FormatId`; dynamic
+  plugin JAR loading is JVM-only (native hints keep the runtime buildable).
 
 ## Migration plan
 
