@@ -5,11 +5,17 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.GeneralSecurityException;
 import java.security.KeyStore;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.security.cert.CertPath;
+import java.security.cert.CertPathValidator;
 import java.security.cert.Certificate;
 import java.security.cert.CertificateException;
+import java.security.cert.CertificateFactory;
+import java.security.cert.PKIXParameters;
+import java.security.cert.TrustAnchor;
 import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Enumeration;
@@ -25,17 +31,21 @@ import java.util.jar.JarFile;
  * Verifies that every code entry of a plugin JAR is signed by the same certificate trusted by the
  * configured PKCS12 truststore.
  *
- * <p>The verifier intentionally enforces a single signer for all entries. This prevents a JAR from
- * mixing a trusted plugin class with an untrusted helper class.
+ * <p>The verifier validates the full PKIX certificate path against the truststore and additionally
+ * pins the leaf certificate fingerprint. This prevents a JAR from mixing a trusted plugin class with
+ * an untrusted helper class.
  */
 public final class SignedJarVerifier {
   private static final String MANIFEST = "meta-inf/manifest.mf";
 
   private final Set<String> trustedFingerprints;
+  private final Set<TrustAnchor> trustAnchors;
 
   public SignedJarVerifier(Path truststore, char[] password) throws PluginException {
-    this.trustedFingerprints = loadTrustedFingerprints(truststore, password);
-    if (trustedFingerprints.isEmpty()) {
+    TrustedMaterial material = loadTrustedMaterial(truststore, password);
+    this.trustedFingerprints = material.fingerprints();
+    this.trustAnchors = material.anchors();
+    if (trustedFingerprints.isEmpty() || trustAnchors.isEmpty()) {
       throw new PluginException("Plugin truststore contains no certificate: " + truststore);
     }
   }
@@ -56,12 +66,14 @@ public final class SignedJarVerifier {
         if (certificates == null || certificates.length == 0) {
           throw new PluginException("Unsigned plugin entry: " + entry.getName() + " in " + jar);
         }
-        X509Certificate certificate = firstX509(certificates);
-        if (certificate == null) {
+        List<X509Certificate> chain = x509Chain(certificates);
+        if (chain.isEmpty()) {
           throw new PluginException("No X509 signer for entry: " + entry.getName() + " in " + jar);
         }
-        certificate.checkValidity();
-        String fingerprint = fingerprint(certificate);
+        X509Certificate leaf = chain.getFirst();
+        leaf.checkValidity();
+        validateChain(chain, jar);
+        String fingerprint = fingerprint(leaf);
         if (!trustedFingerprints.contains(fingerprint)) {
           throw new PluginException(
               "Untrusted plugin signer " + fingerprint + " for " + jar);
@@ -82,33 +94,50 @@ public final class SignedJarVerifier {
     }
   }
 
-  private static Set<String> loadTrustedFingerprints(Path truststore, char[] password)
+  private void validateChain(List<X509Certificate> chain, Path jar) throws PluginException {
+    try {
+      CertPath path = CertificateFactory.getInstance("X.509").generateCertPath(chain);
+      PKIXParameters parameters = new PKIXParameters(trustAnchors);
+      parameters.setRevocationEnabled(false);
+      CertPathValidator.getInstance("PKIX").validate(path, parameters);
+      for (X509Certificate certificate : chain) {
+        certificate.checkValidity();
+      }
+    } catch (GeneralSecurityException invalid) {
+      throw new PluginException("Plugin certificate chain is not trusted: " + jar, invalid);
+    }
+  }
+
+  private static TrustedMaterial loadTrustedMaterial(Path truststore, char[] password)
       throws PluginException {
     try (InputStream input = Files.newInputStream(truststore)) {
       KeyStore store = KeyStore.getInstance("PKCS12");
       store.load(input, password);
       Set<String> fingerprints = new LinkedHashSet<>();
+      Set<TrustAnchor> anchors = new LinkedHashSet<>();
       Enumeration<String> aliases = store.aliases();
       while (aliases.hasMoreElements()) {
         Certificate certificate = store.getCertificate(aliases.nextElement());
         if (certificate instanceof X509Certificate x509) {
           fingerprints.add(fingerprint(x509));
+          anchors.add(new TrustAnchor(x509, null));
         }
       }
-      return Set.copyOf(fingerprints);
+      return new TrustedMaterial(Set.copyOf(fingerprints), Set.copyOf(anchors));
     } catch (IOException | CertificateException | java.security.KeyStoreException
              | NoSuchAlgorithmException invalid) {
       throw new PluginException("Unable to load plugin truststore: " + truststore, invalid);
     }
   }
 
-  private static X509Certificate firstX509(Certificate[] certificates) {
+  private static List<X509Certificate> x509Chain(Certificate[] certificates) {
+    List<X509Certificate> chain = new ArrayList<>();
     for (Certificate certificate : certificates) {
       if (certificate instanceof X509Certificate x509) {
-        return x509;
+        chain.add(x509);
       }
     }
-    return null;
+    return List.copyOf(chain);
   }
 
   private static boolean isSignatureMetadata(String name) {
@@ -133,5 +162,8 @@ public final class SignedJarVerifier {
     } catch (CertificateException | NoSuchAlgorithmException invalid) {
       throw new IllegalStateException("Unable to compute certificate fingerprint", invalid);
     }
+  }
+
+  private record TrustedMaterial(Set<String> fingerprints, Set<TrustAnchor> anchors) {
   }
 }
