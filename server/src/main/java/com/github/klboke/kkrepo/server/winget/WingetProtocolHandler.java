@@ -118,11 +118,15 @@ public class WingetProtocolHandler implements RepositoryProtocolHandler {
     }
     root.putArray("UnsupportedPackageMatchFields");
     root.putArray("RequiredPackageMatchFields");
+    String continuation = page.upstreamContinuationToken() != null
+        ? page.upstreamContinuationToken()
+        : page.nextOffset() != null ? encodeOffset(page.nextOffset()) : null;
+    if (continuation != null) {
+      root.put("ContinuationToken", continuation);
+    }
     HttpHeaders headers = new HttpHeaders();
-    if (page.upstreamContinuationToken() != null) {
-      headers.set("ContinuationToken", page.upstreamContinuationToken());
-    } else if (page.nextOffset() != null) {
-      headers.set("ContinuationToken", encodeOffset(page.nextOffset()));
+    if (continuation != null) {
+      headers.set("ContinuationToken", continuation);
     }
     return respond(context, HttpStatus.OK, root, headers);
   }

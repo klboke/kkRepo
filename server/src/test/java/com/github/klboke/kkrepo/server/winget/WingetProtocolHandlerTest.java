@@ -62,6 +62,8 @@ class WingetProtocolHandlerTest {
     JsonNode body = mapper.valueToTree(response.getBody());
     assertEquals("Contoso.Tool", body.path("Data").get(0).path("PackageIdentifier").asText());
     assertNotNull(response.getHeaders().getFirst("ContinuationToken"));
+    assertEquals(response.getHeaders().getFirst("ContinuationToken"),
+        body.path("ContinuationToken").asText());
   }
 
   @Test

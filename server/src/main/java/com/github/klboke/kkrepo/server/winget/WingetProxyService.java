@@ -47,9 +47,13 @@ public class WingetProxyService {
           hosted.manifestFromRows(packageIdentifier, cached, packageVersion, channel),
           packageVersion, channel);
     }
+    boolean filtered = (packageVersion != null && !packageVersion.isBlank())
+        || (channel != null && !channel.isBlank());
     try {
       WingetManifest fetched = fetchManifest(runtime, packageIdentifier, packageVersion, channel);
-      hosted.cache(runtime, fetched);
+      if (!filtered) {
+        hosted.cache(runtime, fetched);
+      }
       return WingetManifests.filter(fetched, packageVersion, channel);
     } catch (IOException | RuntimeException failure) {
       if (!cached.isEmpty()) {

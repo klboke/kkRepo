@@ -35,6 +35,10 @@ public final class WingetException extends RuntimeException {
     return new WingetException(409, "Conflict", message);
   }
 
+  public static WingetException forbidden(String message) {
+    return new WingetException(403, "Forbidden", message);
+  }
+
   public static WingetException payloadTooLarge(String message) {
     return new WingetException(413, "PayloadTooLarge", message);
   }
