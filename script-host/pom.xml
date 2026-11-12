@@ -11,9 +11,6 @@
   </parent>
   <artifactId>kkrepo-script-host</artifactId>
   <name>kkrepo-script-host</name>
-  <properties>
-    <graaljs.version>25.5.5.0.3</graaljs.version>
-  </properties>
   <dependencies>
     <dependency>
       <groupId>com.github.klboke</groupId>

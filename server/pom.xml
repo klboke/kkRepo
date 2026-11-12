@@ -99,6 +99,16 @@
       <groupId>com.github.klboke</groupId>
       <artifactId>kkrepo-script-host</artifactId>
       <version>${project.version}</version>
+      <exclusions>
+        <exclusion>
+          <groupId>org.graalvm.js</groupId>
+          <artifactId>js-scriptengine</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>org.graalvm.polyglot</groupId>
+          <artifactId>js-community</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
     <dependency>
       <groupId>com.github.klboke</groupId>
@@ -361,6 +371,28 @@
     </plugins>
   </build>
   <profiles>
+    <profile>
+      <id>jvm-script-engine</id>
+      <activation>
+        <activeByDefault>true</activeByDefault>
+      </activation>
+      <dependencies>
+        <dependency>
+          <groupId>org.graalvm.js</groupId>
+          <artifactId>js-scriptengine</artifactId>
+          <version>${graaljs.version}</version>
+        </dependency>
+        <dependency>
+          <groupId>org.graalvm.polyglot</groupId>
+          <artifactId>js-community</artifactId>
+          <version>${graaljs.version}</version>
+          <type>pom</type>
+        </dependency>
+      </dependencies>
+    </profile>
+    <profile>
+      <id>native</id>
+    </profile>
     <profile>
       <id>native-ci-cache</id>
       <activation>
