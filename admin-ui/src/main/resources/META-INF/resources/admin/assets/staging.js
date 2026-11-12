@@ -10,6 +10,19 @@
   const API = "/internal/staging";
   const el = (id) => document.getElementById(id);
   const text = (value) => (value == null || value === "" ? "—" : String(value));
+  // Preflight rows expose `status` while promotion rows expose `result`. Rendering only `result`
+  // shows "Conflicts 0" for a preflight that actually reported CONFLICT rows.
+  const reportOutcome = (row) => {
+    if (!row) return text(undefined);
+    const value = row.result === undefined || row.result === null || row.result === ""
+      ? row.status
+      : row.result;
+    return text(value);
+  };
+  const reportConflicts = (rows) => (Array.isArray(rows) ? rows : []).filter((row) => {
+    const value = reportOutcome(row).toLowerCase();
+    return value.includes("conflict") || value === "failed";
+  });
   const esc = (value) => (typeof escapeHtml === "function"
     ? escapeHtml(value == null ? "" : String(value))
     : String(value == null ? "" : value));
@@ -228,16 +241,13 @@
       return;
     }
     const rows = Array.isArray(report.items) ? report.items : [];
-    const conflicts = rows.filter((row) => {
-      const result = String(row.result || "").toLowerCase();
-      return result.includes("conflict") || result === "failed";
-    });
+    const conflicts = reportConflicts(rows);
     const resultRows = rows.map((row) =>
       `<tr>
         <td>${esc(text(row.groupRepositoryId ? row.groupRepositoryId : row.repositoryId))}</td>
         <td class="staging-wrap"><code>${esc(text(row.path || "group membership"))}</code></td>
         <td>${badge(row.action)}</td>
-        <td>${badge(row.result)}</td>
+        <td>${badge(reportOutcome(row))}</td>
         <td class="staging-wrap">${esc(text(row.message))}</td>
       </tr>`
     ).join("");
@@ -437,5 +447,7 @@
   }
 
   root.KkStaging = {load};
-  if (typeof module !== "undefined") module.exports = {ACTIONS, approval, formatBytes};
+  if (typeof module !== "undefined") {
+    module.exports = {ACTIONS, approval, formatBytes, reportOutcome, reportConflicts};
+  }
 })(typeof window === "undefined" ? globalThis : window);

@@ -43,10 +43,16 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.annotation.AnnotationTransactionAttributeSource;
+import org.springframework.transaction.interceptor.TransactionInterceptor;
+import org.springframework.transaction.support.AbstractPlatformTransactionManager;
+import org.springframework.transaction.support.DefaultTransactionStatus;
 import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 class StagingServiceTest {
   private static final PermissionSubject ALICE =
@@ -106,6 +112,80 @@ class StagingServiceTest {
         eq(fixture.runtime), eq("docs/a.bin"), any(), any(), any(), any(), any(), any());
     verify(fixture.blobReferences).releaseOwner(StagingService.BLOB_OWNER_TYPE, item.id());
     verify(fixture.staging).updateItemStatus(item.id(), StagingDao.ITEM_PROMOTED);
+  }
+
+  @Test
+  void promotionPreparesPayloadsBeforeCommittingThePromotingState() {
+    Fixture fixture = new Fixture();
+    String sha = "a".repeat(64);
+    StagingItemRecord item = item(StagingDao.ITEM_ADD, sha, 5L, 11L);
+    fixture.session.set(session(StagingDao.SESSION_PREFLIGHTED, 2));
+    StagingPromotionRecord promotion = new StagingPromotionRecord(
+        5L, 1L, StagingDao.PROMOTION_PREFLIGHT, null, manifest(List.of(item)),
+        Map.of("promotable", true), null, null, Instant.now());
+    when(fixture.staging.listItems(1L)).thenReturn(List.of(item));
+    when(fixture.staging.hasRepository(1L, 1L)).thenReturn(true);
+    when(fixture.staging.lockPromotion(5L)).thenReturn(Optional.of(promotion));
+    when(fixture.staging.findLatestPromotion(1L)).thenReturn(Optional.of(promotion));
+    when(fixture.staging.lockRepositories(any())).thenReturn(List.of(1L));
+    when(fixture.repositories.findById(1L)).thenReturn(Optional.of(fixture.repository));
+    when(fixture.runtimes.resolve(fixture.repository)).thenReturn(Optional.of(fixture.runtime));
+    when(fixture.assets.lockLiveBlobById(11L)).thenReturn(Optional.of(fixture.blob(11L, sha, 5L)));
+    when(fixture.assets.findBlobById(11L)).thenReturn(Optional.of(fixture.blob(11L, sha, 5L)));
+    when(fixture.assets.findAssetByPath(1L, "docs/a.bin")).thenReturn(Optional.empty());
+    when(fixture.rawHosted.linkInternalBlobWithComponentAtBrowsePathIfAbsent(
+        eq(fixture.runtime), eq("docs/a.bin"), any(), any(), any(), any(), any(), any()))
+        .thenReturn(true);
+
+    org.mockito.InOrder order =
+        org.mockito.Mockito.inOrder(fixture.blobStorage, fixture.staging);
+    fixture.service.promote(1L, ALICE, "127.0.0.1");
+
+    // PROMOTING is only committed once the payload is on disk; a replica death during
+    // preparation therefore leaves a retryable PREFLIGHTED session instead of a stranded one.
+    order.verify(fixture.blobStorage).get(any());
+    order.verify(fixture.staging).transitionSession(
+        eq(1L), anyLong(), any(), eq(StagingDao.SESSION_PROMOTING), any(), any(), any());
+  }
+
+  @Test
+  void commitPreparesPayloadsWithoutAnAmbientTransaction() {
+    Fixture fixture = new Fixture();
+    String sha = "a".repeat(64);
+    StagingItemRecord item = item(StagingDao.ITEM_ADD, sha, 5L, 11L);
+    fixture.session.set(session(StagingDao.SESSION_PREFLIGHTED, 2));
+    StagingPromotionRecord promotion = new StagingPromotionRecord(
+        7L, 1L, StagingDao.PROMOTION_PREFLIGHT, null, manifest(List.of(item)),
+        Map.of("promotable", true), null, null, Instant.now());
+    when(fixture.staging.listItems(1L)).thenReturn(List.of(item));
+    when(fixture.staging.hasRepository(1L, 1L)).thenReturn(true);
+    when(fixture.staging.insertPromotion(any())).thenReturn(7L);
+    when(fixture.staging.lockPromotion(7L)).thenReturn(Optional.of(promotion));
+    when(fixture.staging.findLatestPromotion(1L)).thenReturn(Optional.of(promotion));
+    when(fixture.staging.lockRepositories(any())).thenReturn(List.of(1L));
+    when(fixture.repositories.findById(1L)).thenReturn(Optional.of(fixture.repository));
+    when(fixture.runtimes.resolve(fixture.repository)).thenReturn(Optional.of(fixture.runtime));
+    when(fixture.assets.lockLiveBlobById(11L)).thenReturn(Optional.of(fixture.blob(11L, sha, 5L)));
+    when(fixture.assets.findBlobById(11L)).thenReturn(Optional.of(fixture.blob(11L, sha, 5L)));
+    when(fixture.assets.findAssetByPath(1L, "docs/a.bin")).thenReturn(Optional.empty());
+    when(fixture.rawHosted.linkInternalBlobWithComponentAtBrowsePathIfAbsent(
+        eq(fixture.runtime), eq("docs/a.bin"), any(), any(), any(), any(), any(), any()))
+        .thenReturn(true);
+    java.util.concurrent.atomic.AtomicBoolean transactionWhilePreparing =
+        new java.util.concurrent.atomic.AtomicBoolean(true);
+    when(fixture.blobStorage.get(any())).thenAnswer(invocation -> {
+      transactionWhilePreparing.set(
+          TransactionSynchronizationManager.isActualTransactionActive());
+      return Optional.of(new java.io.ByteArrayInputStream(new byte[] {1, 2, 3}));
+    });
+
+    StagingService.StagingReport report = transactionalProxy(fixture.service, fixture.transactions)
+        .commit(1L, ALICE, "127.0.0.1");
+
+    assertTrue(report.promotable());
+    // The outer commit must not wrap preflight and promote in one transaction: the object-store
+    // read has to happen with no session or blob lock held.
+    assertFalse(transactionWhilePreparing.get());
   }
 
   @Test
@@ -529,6 +609,7 @@ class StagingServiceTest {
         1L, "raw", RepositoryFormat.RAW, RepositoryType.HOSTED, "raw-hosted", true,
         1L, null, null, null, null, "ALLOW", true, Map.of());
     final RepositoryRuntime runtime = mock(RepositoryRuntime.class);
+    final CountingTransactionManager transactions = new CountingTransactionManager();
     final StagingService service;
 
     Fixture() {
@@ -566,7 +647,7 @@ class StagingServiceTest {
           Optional.of(new java.io.ByteArrayInputStream(new byte[] {1, 2, 3})));
       service = new StagingService(
           staging, repositories, repositoryService, assets, blobReferences, runtimes, rawHosted,
-          blobStorageRegistry, audit, security, List.of(), transactionManager(), 100);
+          blobStorageRegistry, audit, security, List.of(), transactions, 100);
     }
 
     AssetBlobRecord blob(long id, String sha, long size) {
@@ -585,19 +666,39 @@ class StagingServiceTest {
   }
 
   private static PlatformTransactionManager transactionManager() {
-    return new PlatformTransactionManager() {
-      @Override
-      public TransactionStatus getTransaction(TransactionDefinition definition) {
-        return new SimpleTransactionStatus(true);
-      }
+    return new CountingTransactionManager();
+  }
 
-      @Override
-      public void commit(TransactionStatus status) {
-      }
+  /**
+   * Minimal platform transaction manager: real propagation and synchronization semantics without a
+   * database, so a test can observe whether a transaction is active at a given moment.
+   */
+  private static final class CountingTransactionManager extends AbstractPlatformTransactionManager {
+    @Override
+    protected Object doGetTransaction() {
+      return new Object();
+    }
 
-      @Override
-      public void rollback(TransactionStatus status) {
-      }
-    };
+    @Override
+    protected void doBegin(Object transaction, TransactionDefinition definition) {
+    }
+
+    @Override
+    protected void doCommit(DefaultTransactionStatus status) {
+    }
+
+    @Override
+    protected void doRollback(DefaultTransactionStatus status) {
+    }
+  }
+
+  /** Wraps the service in the Spring transaction interceptor, as the container would. */
+  private static StagingService transactionalProxy(
+      StagingService target, PlatformTransactionManager transactions) {
+    ProxyFactory factory = new ProxyFactory(target);
+    factory.setProxyTargetClass(true);
+    factory.addAdvice(new TransactionInterceptor(
+        transactions, new AnnotationTransactionAttributeSource()));
+    return (StagingService) factory.getProxy();
   }
 }

@@ -1,17 +1,28 @@
 package com.github.klboke.kkrepo.server.staging;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
+import com.github.klboke.kkrepo.server.cache.VersionWatermark;
 import com.github.klboke.kkrepo.server.support.InMemoryVersionWatermark;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
 class StagingMetadataSnapshotCacheTest {
   private final InMemoryVersionWatermark watermark = new InMemoryVersionWatermark();
@@ -76,6 +87,56 @@ class StagingMetadataSnapshotCacheTest {
     cache.find(key, () -> snapshot("second", loads));
 
     assertEquals(2, loads.get());
+  }
+
+  @Test
+  void doesNotPublishASnapshotRenderedBeforeANewerRevision() throws Exception {
+    AtomicInteger loads = new AtomicInteger();
+    CountDownLatch staleStarted = new CountDownLatch(1);
+    CountDownLatch newerPublished = new CountDownLatch(1);
+    ExecutorService pool = Executors.newSingleThreadExecutor();
+    try {
+      Future<Optional<StagingMetadataSnapshotCache.Snapshot>> stale = pool.submit(
+          () -> cache.find(key, () -> {
+            staleStarted.countDown();
+            try {
+              assertTrue(newerPublished.await(10, TimeUnit.SECONDS));
+            } catch (InterruptedException error) {
+              Thread.currentThread().interrupt();
+              throw new IllegalStateException(error);
+            }
+            return snapshot("stale", loads);
+          }));
+      assertTrue(staleStarted.await(10, TimeUnit.SECONDS));
+      watermark.bump(StagingMetadataSnapshotCache.versionName(7L));
+      Optional<StagingMetadataSnapshotCache.Snapshot> fresh =
+          cache.find(key, () -> snapshot("fresh", loads));
+      assertEquals("fresh", body(fresh.orElseThrow()));
+      newerPublished.countDown();
+      assertEquals("stale", body(stale.get(10, TimeUnit.SECONDS).orElseThrow()));
+
+      // The slow render must not have replaced the newer bytes in the cache.
+      AtomicBoolean reloaded = new AtomicBoolean();
+      Optional<StagingMetadataSnapshotCache.Snapshot> after = cache.find(key, () -> {
+        reloaded.set(true);
+        return snapshot("other", loads);
+      });
+      assertFalse(reloaded.get());
+      assertEquals("fresh", body(after.orElseThrow()));
+    } finally {
+      pool.shutdownNow();
+    }
+  }
+
+  @Test
+  void springCanConstructTheCacheWithBothProductionDependencies() {
+    try (AnnotationConfigApplicationContext context = new AnnotationConfigApplicationContext()) {
+      context.registerBean(VersionWatermark.class, () -> watermark);
+      context.registerBean(AssetMetadataCache.class, () -> assetMetadata);
+      context.register(StagingMetadataSnapshotCache.class);
+      context.refresh();
+      assertNotNull(context.getBean(StagingMetadataSnapshotCache.class));
+    }
   }
 
   private static Optional<StagingMetadataSnapshotCache.Snapshot> snapshot(

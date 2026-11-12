@@ -10,6 +10,7 @@ import java.util.Optional;
 import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -30,9 +31,12 @@ import org.springframework.stereotype.Component;
  *       snapshot.
  * </ul>
  *
- * <p>A failed revision read bypasses the cache instead of serving a snapshot that cannot be fenced.
- * The TTL only bounds local retention; correctness never depends on it, and dropping the cache just
- * rebuilds from MySQL and object storage.
+ * <p>The revision that fenced a render is stored in the same immutable entry as the rendered bytes,
+ * and it is revalidated on every hit and before every publication. A render that started before a
+ * newer item or live write therefore cannot overwrite newer bytes in the cache: it is returned to
+ * its own caller and left uncached. A failed revision read bypasses the cache instead of serving a
+ * snapshot that cannot be fenced. The TTL only bounds local retention; correctness never depends on
+ * it, and dropping the cache just rebuilds from MySQL and object storage.
  */
 @Component
 public final class StagingMetadataSnapshotCache {
@@ -41,9 +45,9 @@ public final class StagingMetadataSnapshotCache {
 
   private final VersionWatermark watermark;
   private final AssetMetadataCache assetMetadata;
-  private final LocalCache<Key, Snapshot> snapshots;
-  private final LocalCache<Key, Revision> revisions;
+  private final LocalCache<Key, Entry> snapshots;
 
+  @Autowired
   public StagingMetadataSnapshotCache(
       VersionWatermark watermark,
       AssetMetadataCache assetMetadata,
@@ -62,13 +66,8 @@ public final class StagingMetadataSnapshotCache {
     this.assetMetadata = assetMetadata;
     boolean active = enabled && watermark != null && assetMetadata != null && ttlSeconds > 0;
     this.snapshots = active
-        ? LocalCacheFactory.standard().<Key, Snapshot>builder("staging-metadata-snapshots")
+        ? LocalCacheFactory.standard().<Key, Entry>builder("staging-metadata-snapshots")
             .expireAfterWrite(Duration.ofSeconds(ttlSeconds))
-            .maximumSize(maximumSize)
-            .build()
-        : null;
-    this.revisions = active
-        ? LocalCacheFactory.standard().<Key, Revision>builder("staging-metadata-revisions")
             .maximumSize(maximumSize)
             .build()
         : null;
@@ -89,29 +88,48 @@ public final class StagingMetadataSnapshotCache {
     }
     Revision current;
     try {
-      current = new Revision(
-          watermark.current(versionName(key.sessionId())),
-          assetMetadata.currentRepositoryVersion(key.repositoryId()));
+      current = currentRevision(key);
     } catch (RuntimeException error) {
       // An unreadable revision cannot fence an old snapshot: rebuild and keep no local state.
       snapshots.invalidate(key);
-      revisions.invalidate(key);
       log.warn("Failed reading the staging metadata revision for session {} repository {}; "
           + "rebuilding without caching", key.sessionId(), key.repositoryId(), error);
       return loader.get();
     }
-    Revision observed = revisions.getIfPresent(key);
-    if (observed != null && !observed.equals(current)) {
-      snapshots.invalidate(key);
-    }
-    revisions.put(key, current);
-    Snapshot cached = snapshots.getIfPresent(key);
-    if (cached != null) {
-      return Optional.of(cached);
+    Entry cached = snapshots.getIfPresent(key);
+    if (cached != null && cached.revision().equals(current)) {
+      return Optional.of(cached.snapshot());
     }
     Optional<Snapshot> loaded = loader.get();
-    loaded.ifPresent(snapshot -> snapshots.put(key, snapshot));
+    if (loaded.isEmpty()) {
+      return loaded;
+    }
+    Revision afterLoad;
+    try {
+      afterLoad = currentRevision(key);
+    } catch (RuntimeException error) {
+      log.warn("Failed re-reading the staging metadata revision for session {} repository {}; "
+          + "serving the rebuilt snapshot without caching it",
+          key.sessionId(), key.repositoryId(), error);
+      return loaded;
+    }
+    if (!afterLoad.equals(current)) {
+      // A staged item or a live asset changed while this snapshot was being rendered. Publishing
+      // it would attach older bytes to the newer revision, so the render is only returned to the
+      // caller that asked for it.
+      log.debug("Discarding a staging metadata snapshot for session {} repository {} rendered at "
+          + "revision {} because revision {} was published meanwhile",
+          key.sessionId(), key.repositoryId(), current, afterLoad);
+      return loaded;
+    }
+    snapshots.put(key, new Entry(current, loaded.get()));
     return loaded;
+  }
+
+  private Revision currentRevision(Key key) {
+    return new Revision(
+        watermark.current(versionName(key.sessionId())),
+        assetMetadata.currentRepositoryVersion(key.repositoryId()));
   }
 
   /** Identifier of one rendered metadata scope inside a staging session. */
@@ -127,6 +145,10 @@ public final class StagingMetadataSnapshotCache {
     public Snapshot {
       files = Map.copyOf(files);
     }
+  }
+
+  /** Cached bytes together with the exact revision they were rendered for. */
+  private record Entry(Revision revision, Snapshot snapshot) {
   }
 
   private record Revision(long staged, long repository) {

@@ -52,6 +52,7 @@ import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
@@ -261,10 +262,18 @@ public class StagingService {
     return issued;
   }
 
-  @Transactional
+  /**
+   * Runs preflight and promotion back to back without an ambient transaction.
+   *
+   * <p>Both phases open their own short transactions. Wrapping them in one transaction - the
+   * default {@code REQUIRED} propagation of the {@link TransactionTemplate} would then join it -
+   * keeps preflight's session and blob locks for the whole payload preparation, which is exactly
+   * the latency the phased promotion is meant to remove.
+   */
+  @Transactional(propagation = Propagation.NOT_SUPPORTED)
   public StagingReport commit(
       long sessionId, PermissionSubject actor, String remoteAddr) {
-    preflight(sessionId, actor, remoteAddr);
+    transaction.executeWithoutResult(status -> preflight(sessionId, actor, remoteAddr));
     return promote(sessionId, actor, remoteAddr);
   }
 
@@ -873,18 +882,21 @@ public class StagingService {
         new java.util.concurrent.atomic.AtomicReference<>();
     Map<Long, Path> prepared = Map.of();
     try {
-      // Phase 1 - short fenced transaction: validate the frozen manifest and move the session to
-      // PROMOTING, so no new item can be staged while the payload is prepared.
-      PromotionAttempt started = transaction.execute(
-          status -> beginPromotion(sessionId, actor, remoteAddr));
-      attempt.set(started);
+      // Phase 1 - short transaction: describe the promotion and validate that it may run. Nothing
+      // is written, so a replica that dies after this point leaves a retryable PREFLIGHTED session.
+      PromotionAttempt planned = transaction.execute(
+          status -> planPromotion(sessionId, actor));
+      attempt.set(planned);
       // Phase 2 - no session/repository lock: materialize the payloads and do the per-format work
       // that needs object-store reads or payload parsing. Only the tiny hand-off below holds the
       // target repository locks.
-      prepared = preparePromotionPayloads(started);
+      prepared = preparePromotionPayloads(planned);
       Map<Long, Path> payloads = prepared;
-      // Phase 3 - short fenced transaction: revalidate and link the catalogue rows atomically.
+      // Phase 3 - one fenced transaction: move to PROMOTING and link the catalogue rows. PROMOTING
+      // is never committed on its own, so an interrupted apply rolls back to PREFLIGHTED instead of
+      // stranding the release in a state no operation accepts.
       return transaction.execute(status -> {
+        PromotionAttempt started = beginPromotion(sessionId, actor, remoteAddr);
         StagingReport report = applyPromotion(started, payloads, actor, remoteAddr);
         if (credentials != null) {
           staging.findSessionById(sessionId).ifPresent(credentials::revoke);
@@ -932,8 +944,15 @@ public class StagingService {
     }
   }
 
-  private PromotionAttempt beginPromotion(
-      long sessionId, PermissionSubject actor, String remoteAddr) {
+  /**
+   * Validates that the session may be promoted and captures the immutable promotion plan.
+   *
+   * <p>This phase writes nothing. It runs before the payloads are materialized, so the database is
+   * never left with a PROMOTING session whose payload was never prepared. {@link #beginPromotion}
+   * repeats the state and manifest checks inside the transaction that applies the promotion, so a
+   * concurrent change is still rejected.
+   */
+  private PromotionAttempt planPromotion(long sessionId, PermissionSubject actor) {
     StagingSessionRecord session = lockOwnedSession(sessionId, actor);
     requireNotExpired(session);
     requireApproved(session);
@@ -955,6 +974,16 @@ public class StagingService {
       throw new ResponseStatusException(
           HttpStatus.CONFLICT, "Staging manifest changed after preflight; run preflight again");
     }
+    return new PromotionAttempt(
+        session, items, groups, promotion.id(), manifest, promotion.report(), Instant.now());
+  }
+
+  private PromotionAttempt beginPromotion(
+      long sessionId, PermissionSubject actor, String remoteAddr) {
+    PromotionAttempt plan = planPromotion(sessionId, actor);
+    StagingSessionRecord session = plan.session();
+    List<StagingItemRecord> items = plan.items();
+    List<StagingGroupChangeRecord> groups = plan.groups();
     List<ItemValidation> validations = validate(session, items);
     List<ItemValidation> conflicts = new ArrayList<>(validations.stream()
         .filter(validation -> validation.status().equals(StagingDao.ITEM_CONFLICT))
@@ -972,15 +1001,18 @@ public class StagingService {
     Instant now = Instant.now();
     if (!staging.transitionSession(
         session.id(), session.revision(), Set.of(StagingDao.SESSION_PREFLIGHTED),
-        StagingDao.SESSION_PROMOTING, null, null, promotion.id())) {
+        StagingDao.SESSION_PROMOTING, null, null, plan.promotionId())) {
       throw new ResponseStatusException(
           HttpStatus.CONFLICT, "Staging session changed concurrently; retry");
     }
     staging.updatePromotion(
-        promotion.id(), StagingDao.PROMOTION_RUNNING, manifest, promotion.report(), now, null);
+        plan.promotionId(), StagingDao.PROMOTION_RUNNING, plan.manifestSha256(),
+        plan.preflightReport(), now, null);
     audit(actor, remoteAddr, "staging-promote-start", session,
-        "running", Map.of("promotionId", promotion.id(), "manifestSha256", manifest));
-    return new PromotionAttempt(session, items, groups, promotion.id(), manifest, now);
+        "running", Map.of("promotionId", plan.promotionId(),
+            "manifestSha256", plan.manifestSha256()));
+    return new PromotionAttempt(session, items, groups, plan.promotionId(),
+        plan.manifestSha256(), plan.preflightReport(), now);
   }
 
   private StagingReport applyPromotion(
@@ -2552,6 +2584,7 @@ public class StagingService {
       List<StagingGroupChangeRecord> groups,
       long promotionId,
       String manifestSha256,
+      Map<String, Object> preflightReport,
       Instant startedAt) {
   }
 }
