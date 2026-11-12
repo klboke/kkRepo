@@ -32,6 +32,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 /**
  * Adapts the framework-agnostic {@link RepositoryProtocolHandler} plugin SPI to the server routing
@@ -104,7 +105,8 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
           "No plugin repository protocol handler for " + request.runtime().format() + "/"
               + request.runtime().type() + " " + request.method() + " " + request.path());
     }
-    RepositoryResponse response = registration.handler().handle(toNeutralRequest(request));
+    RepositoryResponse response = registration.handler().handle(
+        toNeutralRequest(request, registration.handler().usesRawRequest()));
     if (response == null) {
       throw new IllegalStateException(
           "Plugin repository protocol handler returned no response: "
@@ -116,6 +118,10 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
         headers.put(name, new ArrayList<>(values));
       }
     });
+    if (response.isStreaming()) {
+      StreamingResponseBody stream = response.stream()::writeTo;
+      return ResponseEntity.status(response.status()).headers(headers).body(stream);
+    }
     return ResponseEntity.status(response.status()).headers(headers).body(response.body());
   }
 
@@ -130,7 +136,7 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
     return null;
   }
 
-  private RepositoryRequest toNeutralRequest(RepositoryProtocolRequest request)
+  private RepositoryRequest toNeutralRequest(RepositoryProtocolRequest request, boolean rawRequest)
       throws IOException {
     HttpServletRequest servlet = request.servletRequest();
     RepositoryDescriptor descriptor = descriptor(request.runtime());
@@ -155,8 +161,10 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
         request.method().name(),
         headers,
         query,
-        request.multipartFile() == null ? body(servlet, request.method()) : new byte[0],
-        multipart(request.multipartFile()),
+        !rawRequest && request.multipartFile() == null
+            ? body(servlet, request.method())
+            : new byte[0],
+        rawRequest ? null : multipart(request.multipartFile()),
         new HostContext(descriptor, hostServices, ClientAddress.from(servlet), servlet),
         Map.of());
   }

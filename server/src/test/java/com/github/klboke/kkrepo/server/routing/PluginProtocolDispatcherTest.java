@@ -18,6 +18,8 @@ import com.github.klboke.kkrepo.plugin.api.RepositoryResponse;
 import com.github.klboke.kkrepo.protocol.helm.HelmChartUploader;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
+import jakarta.servlet.http.HttpServletRequest;
+import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.List;
@@ -29,6 +31,7 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 class PluginProtocolDispatcherTest {
 
@@ -159,6 +162,72 @@ class PluginProtocolDispatcherTest {
 
     assertEquals(202, response.getStatusCode().value());
     assertEquals(1, uploads.get());
+  }
+
+  @Test
+  void leavesTheRequestBodyOnTheServletWhenTheHandlerUsesRawRequest() throws Exception {
+    RepositoryProtocolHandler handler = new RepositoryProtocolHandler() {
+      @Override
+      public Collection<RepositoryProtocolRoute> routes() {
+        return List.of(RepositoryProtocolRoute.anyPath(
+            new FormatId("raw"), RepositoryKind.HOSTED, "POST", 999));
+      }
+
+      @Override
+      public boolean usesRawRequest() {
+        return true;
+      }
+
+      @Override
+      public RepositoryResponse handle(RepositoryRequest request) throws java.io.IOException {
+        assertArrayEquals(new byte[0], request.body());
+        HttpServletRequest servlet = (HttpServletRequest) request.context().hostContext();
+        assertArrayEquals("large-body".getBytes(StandardCharsets.UTF_8),
+            servlet.getInputStream().readAllBytes());
+        return RepositoryResponse.noContent();
+      }
+    };
+    PluginProtocolDispatcher dispatcher = new PluginProtocolDispatcher(List.of(handler));
+    MockHttpServletRequest servlet =
+        new MockHttpServletRequest("POST", "/repository/repo/big/upload");
+    servlet.setContent("large-body".getBytes(StandardCharsets.UTF_8));
+    RepositoryProtocolRequest request = new RepositoryProtocolRequest(
+        runtime(), "repo", "big/upload", HttpMethod.POST, servlet, null, null);
+
+    ResponseEntity<?> response = dispatcher.handle(request);
+
+    assertEquals(204, response.getStatusCode().value());
+  }
+
+  @Test
+  void streamsANeutralStreamingResponse() throws Exception {
+    RepositoryProtocolHandler handler = new RepositoryProtocolHandler() {
+      @Override
+      public Collection<RepositoryProtocolRoute> routes() {
+        return List.of(RepositoryProtocolRoute.anyPath(
+            new FormatId("raw"), RepositoryKind.HOSTED, "GET", 999));
+      }
+
+      @Override
+      public RepositoryResponse handle(RepositoryRequest request) {
+        return RepositoryResponse.streaming(
+            206,
+            Map.of("X-Stream", List.of("yes")),
+            output -> output.write("chunk".getBytes(StandardCharsets.UTF_8)));
+      }
+    };
+    PluginProtocolDispatcher dispatcher = new PluginProtocolDispatcher(List.of(handler));
+    RepositoryProtocolRequest request = new RepositoryProtocolRequest(
+        runtime(), "repo", "large/file", HttpMethod.GET, new MockHttpServletRequest(), null, null);
+
+    ResponseEntity<?> response = dispatcher.handle(request);
+
+    assertEquals(206, response.getStatusCode().value());
+    assertEquals(List.of("yes"), response.getHeaders().get("X-Stream"));
+    StreamingResponseBody body = (StreamingResponseBody) response.getBody();
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    body.writeTo(output);
+    assertArrayEquals("chunk".getBytes(StandardCharsets.UTF_8), output.toByteArray());
   }
 
   private static RepositoryRuntime runtime() {
