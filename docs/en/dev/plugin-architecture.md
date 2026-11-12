@@ -429,6 +429,12 @@ The first slice is implemented on `feat/plugin-api`:
 - `plugin-helm` extracts the Helm chart upload route. It receives a narrow `RepositoryContext`
   with the host `HelmChartUploader` service; chart parsing, asset writes, index updates and audit
   stay inside the server transaction boundary.
+- `plugin-gitlfs` extracts the Git LFS batch, verify and object upload routes (POST/PUT). It uses a
+  narrow host `GitLfsWriteOperations` service; metadata, leases, policies, transactions and audit
+  stay in the server. Streaming downloads remain in the built-in handler until the neutral response
+  supports streaming.
+- `RepositoryContext` now exposes a portable `RepositoryPolicy` (write/version/layout) and a narrow
+  host-service lookup. The opaque host request is reserved for host adapters.
 - The `native` build profile keeps GraalJS/Truffle off the native classpath to keep the image
   buildable. JSR-223 scripts remain a JVM feature; run them out-of-process when native packaging is
   required. Spring AOT and GraalVM Native Image both pass on the final extraction HEAD.
@@ -461,9 +467,8 @@ The first slice is implemented on `feat/plugin-api`:
 - Script repository handlers currently target the built-in `RepositoryFormat` values because the
   repository record still uses that enum. Open `FormatId` routing requires the metadata/schema
   migration described in phase 1.
-- Remaining extraction: the other built-in repository protocol handlers (GitLFS, OHPM and the
-  catch-all built-in handler). Dynamic plugin JAR loading is JVM-only (native hints keep the
-  runtime buildable).
+- Remaining extraction: the OHPM handler and the catch-all built-in handler. Dynamic plugin JAR
+  loading is JVM-only (native hints keep the runtime buildable).
 
 ## Migration plan
 
