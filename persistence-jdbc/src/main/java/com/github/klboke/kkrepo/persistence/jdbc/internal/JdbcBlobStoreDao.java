@@ -18,9 +18,11 @@ import org.springframework.stereotype.Repository;
 public class JdbcBlobStoreDao implements com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao {
   /**
    * Attribute keys holding blob-store credentials. These are encrypted at rest and decrypted on
-   * read so they are never persisted as plaintext in the {@code attributes_json} column.
+   * read so they are never persisted as plaintext in the {@code attributes_json} column. Covers
+   * the S3/OSS key pair and the Azure account key and SAS token.
    */
-  private static final List<String> SENSITIVE_ATTRIBUTES = List.of("accessKey", "secretKey");
+  static final List<String> SENSITIVE_ATTRIBUTES =
+      List.of("accessKey", "secretKey", "accountKey", "sasToken");
 
   private final JdbcTemplate jdbcTemplate;
   private final JsonColumns jsonColumns;

@@ -75,7 +75,7 @@ final class RProxyProjectionService {
         log.warn("R proxy index projection failed repository={} path={}",
             runtime.name(), path.normalized(), error);
       }
-    } else if (path.kind() == RPath.Kind.SOURCE_PACKAGE) {
+    } else if (path.hostedPackage()) {
       verifyAndBindPackage(runtime, path);
     }
     return assets.serve(runtime, path.normalized(), headOnly).withHeader(
@@ -86,7 +86,11 @@ final class RProxyProjectionService {
   }
 
   long prepareGroupMember(RepositoryRuntime runtime, Instant now) {
-    RPath index = new RPathParser().parse(RService.SOURCE_NAMESPACE + "/PACKAGES.gz");
+    return prepareGroupMember(runtime, RService.SOURCE_NAMESPACE, now);
+  }
+
+  long prepareGroupMember(RepositoryRuntime runtime, String namespace, Instant now) {
+    RPath index = new RPathParser().parse(namespace + "/PACKAGES.gz");
     String remote = RemoteUrlBuilder.repositoryPathString(
         runtime.proxyRemoteUrl(), index.normalized());
     MavenResponse fetched = proxy.getMetadataFromUrlUnindexed(
@@ -96,9 +100,9 @@ final class RProxyProjectionService {
     // The direct proxy path remains best-effort for arbitrary static mirrors, while group
     // publication deliberately fails closed.
     projectIndex(runtime, index);
-    RRegistryDao.SuiteState state = registry.findSuite(runtime.id(), RService.SOURCE_NAMESPACE)
+    RRegistryDao.SuiteState state = registry.findSuite(runtime.id(), namespace)
         .orElseGet(() -> registry.ensureSuite(
-            runtime.id(), RService.SOURCE_NAMESPACE, now == null ? Instant.now() : now));
+            runtime.id(), namespace, now == null ? Instant.now() : now));
     return state.desiredRevision();
   }
 
@@ -133,6 +137,8 @@ final class RProxyProjectionService {
   }
 
   private void projectIndex(RepositoryRuntime runtime, RPath path) {
+    String namespace = path.namespace();
+    String packageType = RPathParser.packageType(namespace);
     MavenResponse cached = assets.serve(runtime, path.normalized(), false);
     MessageDigest digest = digest("SHA-256");
     byte[] expanded;
@@ -148,7 +154,7 @@ final class RProxyProjectionService {
           "Invalid upstream R PACKAGES.gz", error);
     }
     String releaseIdentity = HexFormat.of().formatHex(digest.digest());
-    if (registry.findProxyDistribution(runtime.id(), RService.SOURCE_NAMESPACE)
+    if (registry.findProxyDistribution(runtime.id(), namespace)
         .filter(RRegistryDao.ProxyDistribution::projectionVerified)
         .map(RRegistryDao.ProxyDistribution::releaseIdentity)
         .filter(releaseIdentity::equals)
@@ -167,13 +173,13 @@ final class RProxyProjectionService {
     Instant observedAt = Instant.now();
     for (RPackageMetadata metadata : packages) {
       String filename = metadata.fields().getOrDefault(
-          "File", RPathParser.sourceFilename(metadata.packageName(), metadata.version()));
+          "File", RPathParser.packageFilename(namespace, metadata.packageName(), metadata.version()));
       String relative = metadata.fields().get("Path");
       String packagePath = relative == null || relative.isBlank()
-          ? RService.SOURCE_NAMESPACE + "/" + filename
-          : RService.SOURCE_NAMESPACE + "/" + relative + "/" + filename;
+          ? namespace + "/" + filename
+          : namespace + "/" + relative + "/" + filename;
       RPath parsed = new RPathParser().parse(packagePath);
-      if (parsed.kind() != RPath.Kind.SOURCE_PACKAGE
+      if (!parsed.hostedPackage() || !namespace.equals(parsed.namespace())
           || !parsed.packageName().equals(metadata.packageName())
           || !parsed.version().equals(metadata.version())) {
         continue;
@@ -186,13 +192,13 @@ final class RProxyProjectionService {
       RRegistryDao.PackageRecord candidate = new RRegistryDao.PackageRecord(
           null,
           runtime.id(),
-          RService.SOURCE_NAMESPACE,
-          RService.COMPONENT,
-          RService.ARCHITECTURE,
+          namespace,
+          packageType,
+          packageType,
           metadata.packageName(),
           metadata.version(),
           RVersions.orderKey(metadata.version()),
-          RService.ARCHITECTURE,
+          packageType,
           filename,
           packagePath,
           objectFields(metadata.indexFields(md5, filename)),
@@ -211,14 +217,16 @@ final class RProxyProjectionService {
       current.add(coordinate(stored));
       manifest.put(stored.path(), new RRegistryDao.ProxyIndex(stored.sha256(), stored.size()));
     }
-    removeStale(runtime, current);
+    removeStale(runtime, namespace, current);
     registry.observeProxyDistribution(
-        runtime.id(), RService.SOURCE_NAMESPACE,
+        runtime.id(), namespace,
         releaseIdentity, Map.copyOf(manifest), true, observedAt);
   }
 
   private RRegistryDao.PackageRecord verifyAndBindPackage(
       RepositoryRuntime runtime, RPath path) {
+    String namespace = path.namespace();
+    String packageType = RPathParser.packageType(namespace);
     MavenResponse cached = assets.serve(runtime, path.normalized(), false);
     try (InputStream body = cached.body();
         RSourcePackageInspector.InspectedPackage inspected =
@@ -241,20 +249,20 @@ final class RProxyProjectionService {
           path.normalized(),
           component,
           components.browsePath(
-              inspected.metadata().packageName(), inspected.metadata().version(),
+              namespace, inspected.metadata().packageName(), inspected.metadata().version(),
               inspected.filename()),
-          packageAttributes(inspected, "proxy"));
+          packageAttributes(inspected, "proxy", namespace));
       Instant now = Instant.now();
       RRegistryDao.PackageRecord candidate = new RRegistryDao.PackageRecord(
           expected == null ? null : expected.id(),
           runtime.id(),
-          RService.SOURCE_NAMESPACE,
-          RService.COMPONENT,
-          RService.ARCHITECTURE,
+          namespace,
+          packageType,
+          packageType,
           inspected.metadata().packageName(),
           inspected.metadata().version(),
           RVersions.orderKey(inspected.metadata().version()),
-          RService.ARCHITECTURE,
+          packageType,
           inspected.filename(),
           path.normalized(),
           objectFields(inspected.metadata().indexFields(inspected.md5(), inspected.filename())),
@@ -321,12 +329,12 @@ final class RProxyProjectionService {
     return saved;
   }
 
-  private void removeStale(RepositoryRuntime runtime, Set<String> current) {
+  private void removeStale(RepositoryRuntime runtime, String namespace, Set<String> current) {
     String afterName = "";
     long afterId = 0;
     while (true) {
       List<RRegistryDao.PackageRecord> page = registry.listPackagePage(
-          runtime.id(), RService.SOURCE_NAMESPACE, afterName, afterId,
+          runtime.id(), namespace, afterName, afterId,
           RRegistryDao.PACKAGE_PAGE_SIZE);
       if (page.isEmpty()) return;
       RRegistryDao.PackageRecord cursor = page.getLast();
@@ -346,15 +354,20 @@ final class RProxyProjectionService {
 
   static Map<String, Object> packageAttributes(
       RSourcePackageInspector.InspectedPackage inspected, String source) {
+    return packageAttributes(inspected, source, RService.SOURCE_NAMESPACE);
+  }
+
+  static Map<String, Object> packageAttributes(
+      RSourcePackageInspector.InspectedPackage inspected, String source, String namespace) {
     LinkedHashMap<String, Object> values = new LinkedHashMap<>();
     values.put("rPackage", inspected.metadata().packageName());
     values.put("rVersion", inspected.metadata().version());
-    values.put("rNamespace", RService.SOURCE_NAMESPACE);
+    values.put("rNamespace", namespace);
     values.put("rMd5", inspected.md5());
     values.put("rSha256", inspected.sha256());
     values.put("rSize", inspected.size());
     values.put("rSource", source);
-    values.put("rInputSchema", "r-source-package-v1");
+    values.put("rInputSchema", "r-" + RPathParser.packageType(namespace) + "-package-v1");
     values.put("rDependencies", inspected.metadata().dependencies());
     String license = inspected.metadata().fields().get("License");
     if (license != null) values.put("rLicense", license);

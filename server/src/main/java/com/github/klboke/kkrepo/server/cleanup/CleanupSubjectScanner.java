@@ -45,6 +45,24 @@ public class CleanupSubjectScanner {
   private final CleanupRuntimeProperties runtimeProperties;
   private final CleanupUsageTrackingService usageTracking;
   private HuggingFaceRegistryDao huggingFaceRegistry;
+  private MavenSnapshotCleanupService snapshotCleanup;
+
+  @Autowired
+  void setSnapshotCleanup(MavenSnapshotCleanupService snapshotCleanup) {
+    this.snapshotCleanup = snapshotCleanup;
+  }
+
+  public String revalidateSnapshot(RepositoryRecord repository, Map<String, Object> criteria,
+      Subject subject, Instant cutoff) {
+    return MavenSnapshotCleanupService.KIND.equals(subject.kind())
+        ? snapshotCleanup.revalidate(repository, criteria, subject, cutoff) : null;
+  }
+
+  public CleanupProtection inheritedSnapshotProtection(long repositoryId, Subject subject, Instant now) {
+    return MavenSnapshotCleanupService.KIND.equals(subject.kind())
+        ? snapshotCleanup.protection(repositoryId, subject, now) : null;
+  }
+
 
   @Autowired
   public CleanupSubjectScanner(
@@ -99,6 +117,9 @@ public class CleanupSubjectScanner {
       throw new CleanupValidationException("Automatic cleanup is not supported for this format");
     }
     CleanupTargetRepositories.requireSupported(repository.type());
+    if (CleanupCriteria.snapshotMode(rawCriteria)) {
+      return snapshotCleanup.scan(repository, rawCriteria, Math.max(1, scanLimit), cutoff, requestedCursor);
+    }
     CleanupCriteria criteria = CleanupCriteria.parse(rawCriteria);
     int effectiveLimit = Math.max(1, scanLimit);
     String safetyStatus = usageSafetyStatus(repository.id(), criteria, cutoff);
@@ -795,6 +816,9 @@ public class CleanupSubjectScanner {
 
   public java.util.Optional<Subject> resolve(
       RepositoryRecord repository, String subjectKind, long identityId, String deletePath) {
+    if (MavenSnapshotCleanupService.KIND.equals(subjectKind)) {
+      return snapshotCleanup.resolve(repository, identityId, false);
+    }
     if ("COMPONENT".equals(subjectKind)) {
       return componentDao.findById(identityId)
           .filter(component -> component.repositoryId() == repository.id())
@@ -863,6 +887,9 @@ public class CleanupSubjectScanner {
 
   public java.util.Optional<Subject> resolveLocked(
       RepositoryRecord repository, String subjectKind, long identityId, String deletePath) {
+    if (MavenSnapshotCleanupService.KIND.equals(subjectKind)) {
+      return snapshotCleanup.resolve(repository, identityId, true);
+    }
     if ("COMPONENT".equals(subjectKind)) {
       return componentDao.findByIdForUpdate(identityId)
           .filter(component -> component.repositoryId() == repository.id())

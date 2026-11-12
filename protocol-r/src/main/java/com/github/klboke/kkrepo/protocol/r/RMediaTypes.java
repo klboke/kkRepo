@@ -15,6 +15,7 @@ public final class RMediaTypes {
       case PACKAGES -> PACKAGES;
       case PACKAGES_GZIP, SOURCE_PACKAGE, ARCHIVE_PACKAGE, OTHER_GZIP -> PACKAGES_GZIP;
       case PACKAGES_RDS, BINARY, STATIC -> PACKAGES_RDS;
+      case BINARY_PACKAGE -> path.filename().endsWith(".zip") ? "application/zip" : SOURCE_PACKAGE;
       case ROOT, UNKNOWN -> "application/octet-stream";
     };
   }

@@ -8,6 +8,7 @@ import com.github.klboke.kkrepo.server.npm.NpmExceptions;
 import com.github.klboke.kkrepo.server.pypi.PypiExceptions;
 import com.github.klboke.kkrepo.server.pub.PubExceptions;
 import com.github.klboke.kkrepo.server.swift.SwiftExceptions;
+import com.github.klboke.kkrepo.protocol.ohpm.OhpmException;
 import java.io.IOException;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
@@ -17,6 +18,11 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 @RestControllerAdvice(assignableTypes = ComponentUploadController.class)
 public class ComponentUploadErrorAdvice {
+  @ExceptionHandler(OhpmException.class)
+  public ResponseEntity<Map<String, Object>> ohpmFailure(OhpmException error) {
+    return ResponseEntity.status(error.status()).body(error.response());
+  }
+
   @ExceptionHandler({UploadValidationException.class, IllegalArgumentException.class})
   public ResponseEntity<Map<String, String>> badRequest(RuntimeException e) {
     return body(HttpStatus.BAD_REQUEST, e.getMessage());

@@ -18,7 +18,7 @@ export KKREPO_COMPAT_READ_REPOSITORY="${KKREPO_COMPAT_READ_REPOSITORY:-maven-pub
 
 NEXUS_COMPAT_TESTS="GitLfsRepositoryBlackBoxCompatibilityTest,MavenGroupFailureCompatibilityTest,KkRepoConsoleBlackBoxCompatibilityTest,MavenRepositoryBlackBoxCompatibilityTest#proxyReadRoundTripMatchesNexusWhenConfigured+hostedReleaseDeployRoundTripMatchesNexusWhenConfigured+hostedPlainPutDoesNotGenerateSidecarsOrMetadataLikeNexusWhenConfigured+hostedSnapshotDeployRoundTripMatchesNexusWhenConfigured,NpmRepositoryBlackBoxCompatibilityTest,PypiRepositoryBlackBoxCompatibilityTest,GoProxyBlackBoxCompatibilityTest#proxyModuleEndpointsMatchNexusWhenConfigured,HelmRepositoryBlackBoxCompatibilityTest#hostedRoundTripMatchesNexusWhenConfigured+groupIndexAggregationMatchesNexusAndResolvesChartsWhenConfigured,CargoRepositoryBlackBoxCompatibilityTest,PubRepositoryBlackBoxCompatibilityTest,ComposerRepositoryBlackBoxCompatibilityTest,NugetRubygemsYumRepositoryBlackBoxCompatibilityTest#nugetHostedServiceIndexAndProxyReadsMatchNexusWhenConfigured+nugetHostedMultipartPushMatchesNexusWhenWriteEnabled+rubygemsHostedPushAndGroupReadMatchNexusWhenConfigured+rubygemsColdProxyGroupIndexesMatchNexusWhenConfigured+rubygemsRepositoryRootPagesMatchNexusWhenConfigured+yumHostedRootAndMissingPackageResponsesMatchNexusWhenConfigured+yumHostedRpmPutMatchesNexusWhenWriteEnabled+yumHostedSubdirectoryRepodataMatchesNexusWhenWriteEnabled,NexusAssetManagementBlackBoxCompatibilityTest,RawRepositoryBlackBoxCompatibilityTest,TerraformRepositoryBlackBoxCompatibilityTest,SwiftRepositoryBlackBoxCompatibilityTest,AnsibleGalaxyRepositoryBlackBoxCompatibilityTest,AptRepositoryBlackBoxCompatibilityTest,AlpineRepositoryBlackBoxCompatibilityTest,RRepositoryBlackBoxCompatibilityTest,ConanRepositoryBlackBoxCompatibilityTest,ComponentUploadBlackBoxCompatibilityTest#uploadSpecsExposeNexusCompatibleSupportedFormatsWhenConfigured,SecurityAdminBlackBoxCompatibilityTest#privilegeFormRepositoryFieldsMatchNexusStoreContracts+repositoryReferenceStoreIncludesAllRepositorySelectors+roleAndPrivilegeReadContractsIncludeCoreBuiltIns+nonAdminRepositoryRoleCanBrowseButCannotUseSecurityAdministration+nonAdminContentSelectorRoleAllowsMatchingPathAndAccountsForDefaultReadGrant+contentSelectorPreviewValidatesCselBeforeSearching+contentSelectorManagementPreviewAndWriteIsolationMatchNexus"
 
-NEXUS_COMPAT_TESTS="RoutingRulesBlackBoxCompatibilityTest,BrowseDirectoryDeletionBlackBoxCompatibilityTest,BlobStoreDeletionReferenceTest,$NEXUS_COMPAT_TESTS"
+NEXUS_COMPAT_TESTS="MavenSnapshotCleanupCompatibilityTest,RoutingRulesBlackBoxCompatibilityTest,BrowseDirectoryDeletionBlackBoxCompatibilityTest,BlobStoreDeletionReferenceTest,$NEXUS_COMPAT_TESTS"
 
 COMMON_ARGS=(
   -B
@@ -64,6 +64,7 @@ case "$SUITE" in
     ;;
   nexus|nexus-compat)
     export COMPAT_WRITE_ENABLED="${COMPAT_WRITE_ENABLED:-true}"
+    export MAVEN_SNAPSHOT_CLEANUP_COMPAT_ENABLED=true
     export ROUTING_RULES_COMPAT_ENABLED=true
     export CARGO_COMPAT_ENABLED=true
     export PUB_COMPAT_ENABLED=true
@@ -93,6 +94,12 @@ case "$SUITE" in
   client-e2e)
     export PUB_COMPAT_ENABLED=true
     scripts/ci/run-client-e2e.sh
+    ;;
+  ohpm)
+    bash scripts/ci/run-ohpm-compat.sh blackbox
+    ;;
+  ohpm-client-e2e)
+    bash scripts/ci/run-ohpm-compat.sh client-e2e
     ;;
   swift)
     export SWIFT_COMPAT_ENABLED=true
@@ -137,7 +144,7 @@ case "$SUITE" in
     ;;
   *)
     echo "Unknown live compatibility suite: $SUITE" >&2
-    echo "Available suites: smoke, write-smoke, extended, nexus, client-e2e, swift, ansible, apt, conan, r, public-https, full" >&2
+    echo "Available suites: smoke, write-smoke, extended, nexus, client-e2e, ohpm, ohpm-client-e2e, swift, ansible, apt, conan, r, public-https, full" >&2
     exit 2
     ;;
 esac

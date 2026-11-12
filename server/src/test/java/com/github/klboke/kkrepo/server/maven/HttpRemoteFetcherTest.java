@@ -657,6 +657,26 @@ class HttpRemoteFetcherTest {
   }
 
   @Test
+  void ohpmUsesRawTokenAndKeepsItWithinTheConfiguredOrigin() {
+    var runtime = mock(RepositoryRuntime.class);
+    when(runtime.name()).thenReturn("ohpm-proxy");
+    when(runtime.format()).thenReturn(RepositoryFormat.OHPM);
+    when(runtime.proxyRemoteUrl()).thenReturn("https://registry.example/ohpm");
+    when(runtime.proxyRemoteBearerToken()).thenReturn("upstream-token");
+    when(runtime.strictRedirectHosts()).thenReturn(Set.of("cdn.example"));
+    when(runtime.allowsRedirectHost("cdn.example")).thenReturn(true);
+    URI origin = URI.create("https://registry.example/ohpm/@scope/pkg");
+    URI cdn = URI.create("https://cdn.example/pkg.har");
+    var request = HttpRemoteFetcher.Request.get(origin.toString()).withRepositoryRedirectBoundary(runtime);
+    assertEquals("upstream-token", request.authorizationHeader());
+    assertEquals("upstream-token", request.authorizationHeaderForRedirect(origin, origin.resolve("pkg.har")));
+    assertNull(request.authorizationHeaderForRedirect(origin, cdn));
+    var download = HttpRemoteFetcher.Request.get(cdn.toString()).withRepositoryRedirectBoundary(runtime);
+    assertNull(download.authorizationHeader());
+    assertEquals("upstream-token", download.authorizationHeaderForRedirect(cdn, origin));
+  }
+
+  @Test
   void requestWithRepositoryOnlyAddsAuthorizationForPinnedRemoteHost() {
     RepositoryRuntime runtime = runtime("robot", "secret", null);
 

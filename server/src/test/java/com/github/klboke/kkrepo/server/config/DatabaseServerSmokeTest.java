@@ -44,6 +44,7 @@ import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
@@ -296,6 +297,12 @@ class DatabaseServerSmokeTest {
 
       exerciseSharedApplicationFlows(first, second);
       YumRepositoryDeletionSmokeChecks.exercise(first, second);
+      MavenSnapshotCleanupSmokeChecks.exercise(first, second, repositoryId -> {
+        JdbcTemplate jdbc = first.getBean(JdbcTemplate.class);
+        jdbc.update("UPDATE asset SET last_updated_at = ? WHERE repository_id = ?",
+            java.sql.Timestamp.from(Instant.now().minusSeconds(86400 * 30L)), repositoryId);
+        jdbc.update("DELETE FROM maven_snapshot_family WHERE repository_id = ?", repositoryId);
+      });
       com.github.klboke.kkrepo.server.cache.CacheInvalidationSmokeChecks.verify(
           first.getBean(com.zaxxer.hikari.HikariDataSource.class), source -> {
             JdbcTemplate jdbc = new JdbcTemplate(source);
@@ -604,6 +611,7 @@ class DatabaseServerSmokeTest {
     values.put("kkrepo.blob-gc.enabled", "false");
     values.put("kkrepo.repository-index-rebuild.enabled", "false");
     values.put("kkrepo.maven.metadata-rebuild.enabled", "false");
+    values.put("kkrepo.maven.snapshot-backfill.initial-delay-ms", "3600000");
     values.put("kkrepo.storage.file.temp-cleanup-enabled", "false");
     values.put("kkrepo.security.outbound.allow-private-addresses", "true");
     return values;

@@ -40,7 +40,7 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
   | KKREPO_RUNTIME=native KKREPO_DATABASE_TYPE=postgresql bash
 ```
 
-`KKREPO_RUNTIME=jvm` 选择 `ghcr.io/klboke/kkrepo:1.3.4`，`KKREPO_RUNTIME=native` 选择 `ghcr.io/klboke/kkrepo:1.3.4-native`。两种镜像均发布 Linux `amd64` 和 `arm64` 架构。显式设置 `KKREPO_IMAGE_TAG` 时，会覆盖对应运行时的默认 tag。
+`KKREPO_RUNTIME=jvm` 选择 `ghcr.io/klboke/kkrepo:1.4.0`，`KKREPO_RUNTIME=native` 选择 `ghcr.io/klboke/kkrepo:1.4.0-native`。两种镜像均发布 Linux `amd64` 和 `arm64` 架构。显式设置 `KKREPO_IMAGE_TAG` 时，会覆盖对应运行时的默认 tag。
 
 该脚本会逐步打印日志并执行：
 
@@ -61,7 +61,7 @@ bash quickstart.sh
 
 默认会启动：
 
-- `ghcr.io/klboke/kkrepo:1.3.4` 中的 JVM 运行时
+- `ghcr.io/klboke/kkrepo:1.4.0` 中的 JVM 运行时
 - MySQL 8.0
 - 持续探测应用就绪状态的 `kkrepo-health` sidecar
 - 用于本地试用的持久化 MySQL volume 和 File blob storage volume
@@ -164,7 +164,7 @@ server/target/kkrepo-server-<version>.jar
 拉取最新公开发行镜像：
 
 ```bash
-docker pull ghcr.io/klboke/kkrepo:1.3.4
+docker pull ghcr.io/klboke/kkrepo:1.4.0
 ```
 
 也可以使用 `latest` 跟随最新公开发行版本：
@@ -176,7 +176,7 @@ docker pull ghcr.io/klboke/kkrepo:latest
 Native 镜像使用独立 tag：
 
 ```bash
-docker pull ghcr.io/klboke/kkrepo:1.3.4-native
+docker pull ghcr.io/klboke/kkrepo:1.4.0-native
 docker pull ghcr.io/klboke/kkrepo:native-latest
 ```
 
@@ -389,6 +389,10 @@ WantedBy=multi-user.target
 HTTPS S3/MinIO 或上游仓库使用内部 CA 时，请参考[自定义 CA 证书](outbound-tls.md)。JVM 和 Native 均可通过 `KKREPO_TLS_CA_CERTIFICATES` 指定 PEM 证书包。
 
 如需使用 EC2 实例角色、EKS Pod Identity 或 IRSA，而不配置静态密钥，请参阅 [S3 凭据与 IAM 角色](s3-credentials.md)。该指南包含 IAM 权限、信任策略、ServiceAccount 配置，以及将已有 Blob Store 切换到 AWS 默认凭据链的方法。
+
+## Azure Blob Storage
+
+如需将 blob 存储在 Azure 存储账户中，请参阅 [Azure Blob Storage Blob Store](azure-blob-storage.md)。Azure Blob Storage 没有 S3 兼容端点，因此使用专用的 `azure` blob store 类型。该指南涵盖 managed identity 与 workload identity、所需的 Azure 角色，以及 block blob 上传语义。
 
 ## 生产部署架构
 

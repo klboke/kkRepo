@@ -66,7 +66,7 @@ public final class MavenMetadataXml {
       el(w, "version", v);
     }
     w.writeEndElement();
-    el(w, "lastUpdated", METADATA_DOTLESS_TIMESTAMP.format(meta.lastUpdated()));
+    if (meta.lastUpdated() != null) el(w, "lastUpdated", METADATA_DOTLESS_TIMESTAMP.format(meta.lastUpdated()));
     w.writeEndElement();
   }
 
@@ -82,7 +82,7 @@ public final class MavenMetadataXml {
       el(w, "buildNumber", Integer.toString(snaps.buildNumber()));
       w.writeEndElement();
     }
-    el(w, "lastUpdated", METADATA_DOTLESS_TIMESTAMP.format(meta.lastUpdated()));
+    if (meta.lastUpdated() != null) el(w, "lastUpdated", METADATA_DOTLESS_TIMESTAMP.format(meta.lastUpdated()));
     if (!snaps.snapshots().isEmpty()) {
       w.writeStartElement("snapshotVersions");
       for (Snapshot s : snaps.snapshots()) {

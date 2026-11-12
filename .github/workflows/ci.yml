@@ -48,6 +48,9 @@ jobs:
       - name: Run non-live compatibility tests
         run: mvn -B -ntp -pl compat-test -am -Dtest=MavenMetadataMergeCompatibilityTest,MavenWritePolicyCompatibilityTest,NpmProtocolCompatibilityTest -Dsurefire.failIfNoSpecifiedTests=false verify
 
+      - name: Run OHPM protocol tests
+        run: mvn -B -ntp -pl protocol-ohpm -am verify
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
         with:
@@ -88,6 +91,9 @@ jobs:
           java-version: "25"
           cache: maven
       - run: mvn -B -ntp -pl ${{ matrix.module }} -am -Dtest=${{ matrix.test }} -Dsurefire.failIfNoSpecifiedTests=false test
+      - name: Test Docker catalog pagination on PostgreSQL 16
+        if: matrix.database == 'postgresql'
+        run: mvn -B -ntp -pl persistence-postgresql -am -Dkkrepo.test.postgresql.image=postgres:16 -Dtest=DockerRegistryDaoPostgreSqlIntegrationTest#catalogSupportsCursorPagination -Dsurefire.failIfNoSpecifiedTests=false test
 
   server-smoke:
     name: server-smoke (${{ matrix.database }})

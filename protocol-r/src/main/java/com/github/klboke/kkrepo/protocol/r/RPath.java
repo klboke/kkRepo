@@ -11,7 +11,11 @@ public record RPath(
     String version) {
 
   public boolean packageArchive() {
-    return kind == Kind.SOURCE_PACKAGE || kind == Kind.ARCHIVE_PACKAGE;
+    return hostedPackage() || kind == Kind.ARCHIVE_PACKAGE;
+  }
+
+  public boolean hostedPackage() {
+    return kind == Kind.SOURCE_PACKAGE || kind == Kind.BINARY_PACKAGE;
   }
 
   public boolean gzip() {
@@ -24,6 +28,7 @@ public record RPath(
     PACKAGES_GZIP,
     PACKAGES_RDS,
     SOURCE_PACKAGE,
+    BINARY_PACKAGE,
     ARCHIVE_PACKAGE,
     OTHER_GZIP,
     BINARY,

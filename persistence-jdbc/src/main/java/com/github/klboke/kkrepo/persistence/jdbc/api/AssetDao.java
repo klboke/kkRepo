@@ -12,6 +12,9 @@ import java.util.OptionalLong;
 import java.util.Set;
 
 public interface AssetDao {
+  /** Coordinate protocol identities before reading the previous asset ID, inside the write transaction. */
+  default void prepareWrite(long repositoryId, com.github.klboke.kkrepo.core.RepositoryFormat format, String path) {}
+
   long insertBlob(AssetBlobRecord record);
 
   AssetBlobRecord insertBlobOrFindExisting(AssetBlobRecord record);
@@ -43,6 +46,10 @@ public interface AssetDao {
   Optional<AssetRecord> findAssetByPathHash(long repositoryId, byte[] pathHash);
 
   Optional<AssetRecord> findAssetByPath(long repositoryId, String path);
+
+  default Optional<AssetRecord> findAssetByPathForUpdate(long repositoryId, String path) {
+    throw new UnsupportedOperationException("Asset path locking is not implemented");
+  }
 
   Optional<AssetRecord> findAssetById(long assetId);
 
@@ -175,6 +182,14 @@ public interface AssetDao {
         .filter(java.util.Objects::nonNull)
         .distinct()
         .forEach(assetId -> findAssetById(assetId).ifPresent(asset -> result.put(assetId, asset)));
+    return Map.copyOf(result);
+  }
+
+  /** Locks a bounded collection in stable identity order for protocol cleanup. */
+  default Map<Long, AssetRecord> findAssetsByIdsForUpdate(Collection<Long> assetIds) {
+    Map<Long, AssetRecord> result = new java.util.LinkedHashMap<>();
+    assetIds.stream().distinct().sorted().forEach(id ->
+        findAssetByIdForUpdate(id).ifPresent(asset -> result.put(id, asset)));
     return Map.copyOf(result);
   }
 

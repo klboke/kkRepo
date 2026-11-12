@@ -4,6 +4,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord;
 import com.github.klboke.kkrepo.protocol.r.RPackageMetadata;
+import com.github.klboke.kkrepo.protocol.r.RPathParser;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import java.time.Instant;
 import java.util.LinkedHashMap;
@@ -23,7 +24,9 @@ final class RComponentFactory {
       long size,
       Instant updatedAt) {
     LinkedHashMap<String, Object> attributes = new LinkedHashMap<>();
-    attributes.put("namespace", RService.SOURCE_NAMESPACE);
+    String namespace = new RPathParser().parse(assetPath).namespace();
+    String packageType = RPathParser.packageType(namespace);
+    attributes.put("namespace", namespace);
     attributes.put("filename", filename);
     attributes.put("assetPath", assetPath);
     attributes.put("md5", md5);
@@ -41,18 +44,18 @@ final class RComponentFactory {
         null,
         runtime.id(),
         RepositoryFormat.R,
-        RService.SOURCE_NAMESPACE,
+        namespace,
         metadata.packageName(),
         metadata.version(),
-        "r-source-package",
+        "r-" + packageType + "-package",
         PersistenceHashes.sha256(
-            "r", RService.SOURCE_NAMESPACE, metadata.packageName(), metadata.version()),
+            "r", namespace, metadata.packageName(), metadata.version()),
         Map.copyOf(attributes),
         updatedAt == null ? Instant.now() : updatedAt);
   }
 
-  String browsePath(String packageName, String version, String filename) {
-    return RService.SOURCE_NAMESPACE + "/" + packageName + "/" + version + "/" + filename;
+  String browsePath(String namespace, String packageName, String version, String filename) {
+    return namespace + "/" + packageName + "/" + version + "/" + filename;
   }
 
   private static void copy(

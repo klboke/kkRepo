@@ -277,6 +277,9 @@ class RepositoryDataMigrationWriter {
     }
     RepositoryRecord repository = repositoryDao.findById(targetRepositoryId)
         .orElseThrow(() -> new IllegalArgumentException("target repository not found: " + targetRepositoryId));
+    if (repository.format() == RepositoryFormat.OHPM) {
+      throw new IllegalArgumentException("OHPM requires its independent import workflow");
+    }
     if (repository.blobStoreId() == null) {
       throw new IllegalArgumentException("target repository has no blob store: " + repository.name());
     }
@@ -630,6 +633,7 @@ class RepositoryDataMigrationWriter {
         ? migratedCargoMetadata(source, upload)
         : null;
 
+    assetDao.prepareWrite(repository.id(), repository.format(), source.sourcePath());
     Optional<AssetRecord> existing = assetDao.findAssetByPath(repository.id(), source.sourcePath());
     if (expectedPackument != null) {
       // Recheck the durable blob binding after the row lock. A competing replica may have
@@ -1191,6 +1195,7 @@ class RepositoryDataMigrationWriter {
           && source.sourcePath().startsWith("src/contrib/")
           ? "r-source-package" : "r-metadata";
       case GITLFS -> "gitlfs";
+      case OHPM -> throw new IllegalArgumentException("OHPM requires its independent import workflow");
       case HUGGINGFACE -> "huggingface-model-file";
       case RAW -> "asset";
     };

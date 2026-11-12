@@ -9,6 +9,9 @@ if (window.location.hash === "#browse" || window.location.hash.startsWith("#brow
   window.location.replace(`/browse/${window.location.hash}`);
 }
 
+// Proxy formats that support the minimum release age (quarantine) policy.
+const MINIMUM_RELEASE_AGE_FORMATS = new Set(["npm", "go", "maven2", "pypi"]);
+
 let repositories = [];
 let repositoryUsage;
 let repositoryLoadVersion = 0;
@@ -178,11 +181,13 @@ const viewHashRoutes = {
   "security-oidc": "#admin/security/oidc",
   "security-anonymous": "#admin/security/anonymous",
   "security-api-keys": "#admin/security/api-keys",
+  "ohpm-login": "#admin/security/ohpm-login",
   "security-scanning": SECURITY_SCAN_ROUTE_BASE,
   "security-audit-log": "#admin/security/audit-log",
   "ui-settings": "#admin/system/ui-settings",
   "nexus-migration": "#admin/migration/nexus",
   "repository-data-migration": "#admin/migration/repository-data",
+  "ohpm-import": "#admin/migration/ohpm",
 };
 
 const hashViewRoutes = {
@@ -208,6 +213,7 @@ const hashViewRoutes = {
   "#admin/security/anonymous": "security-anonymous",
   "#admin/security/api-keys": "security-api-keys",
   "#admin/security/apikeys": "security-api-keys",
+  "#admin/security/ohpm-login": "ohpm-login",
   "#admin/security/artifact-scanning": "security-scanning",
   "#admin/security/scanning": "security-scanning",
   "#admin/security/audit-log": "security-audit-log",
@@ -218,6 +224,7 @@ const hashViewRoutes = {
   "#admin/migration": "nexus-migration",
   "#admin/migration/nexus": "nexus-migration",
   "#admin/migration/repository-data": "repository-data-migration",
+  "#admin/migration/ohpm": "ohpm-import",
 };
 
 const memberTransfer = {
@@ -351,6 +358,8 @@ function trapFocusInFormModal(event) {
 }
 
 function handleFormModalKeydown(event) {
+  // A native confirmation dialog owns keyboard input above the form modal.
+  if (event.target?.closest?.("dialog[open]")) return true;
   if (event.key === "Tab") {
     return trapFocusInFormModal(event);
   }
@@ -374,9 +383,27 @@ const blobStoreFileRequiredFields = [
   { id: "blobstore-name", label: "Name" },
   { id: "blobstore-path", label: "Path" }
 ];
+const blobStoreAzureRequiredFields = [
+  { id: "blobstore-name", label: "Name" },
+  { id: "blobstore-account-name", label: "Account name" },
+  { id: "blobstore-bucket", label: "Container" },
+  { id: "blobstore-azure-account-key", label: "Account key" },
+  { id: "blobstore-azure-sas-token", label: "SAS token" }
+];
+const blobStoreAzureFields = [
+  { id: "blobstore-account-name", label: "Account name" },
+  { id: "blobstore-azure-client-id", label: "Client ID" },
+  { id: "blobstore-azure-tenant-id", label: "Tenant ID" },
+  { id: "blobstore-azure-token-file", label: "Token file path" },
+  { id: "blobstore-azure-account-key", label: "Account key" },
+  { id: "blobstore-azure-sas-token", label: "SAS token" }
+];
+// Pre-filled for new S3 stores only; it is never a valid Azure endpoint for token credentials.
+const blobStoreS3DefaultEndpoint = "http://127.0.0.1:9000";
 const blobStoreFormFields = [
   ...blobStoreS3RequiredFields,
-  { id: "blobstore-path", label: "Path" }
+  { id: "blobstore-path", label: "Path" },
+  ...blobStoreAzureFields
 ];
 const repositoryRequiredFields = [
   {
@@ -575,11 +602,16 @@ function pathStyleBadge(enabled) {
 function engineLabel(engine) {
   if (engine === "file") return "File";
   if (engine === "oss-native") return "OSS Native SDK";
+  if (lowerOrEmpty(engine).startsWith("azure")) return "Azure Blob Storage";
   return "AWS S3 SDK";
 }
 
 function isFileBlobStore(store) {
   return lowerOrEmpty(store?.engine) === "file" || lowerOrEmpty(store?.type) === "file";
+}
+
+function isAzureBlobStore(store) {
+  return lowerOrEmpty(store?.type).startsWith("azure") || lowerOrEmpty(store?.engine).startsWith("azure");
 }
 
 function healthBadge(store) {
@@ -707,6 +739,7 @@ function setSideGroupOpen(button, open, persist = false) {
 }
 
 function sideGroupForView(view) {
+  if (view === "ohpm-login") view = "security-api-keys";
   const item = Array.from(document.querySelectorAll(".side-item[data-view]"))
     .find((candidate) => candidate.dataset.view === view);
   return item?.closest(".side-group-items")?.dataset.sideGroupItems || "";
@@ -1521,8 +1554,11 @@ function renderBlobStores() {
   const rows = sortBlobStores(filtered);
   document.getElementById("blobstore-table").innerHTML = rows.map((store) => {
     const fileStore = isFileBlobStore(store);
+    const azureStore = isAzureBlobStore(store);
     const target = fileStore ? store.path : store.bucket;
-    const detail = fileStore ? store.resolvedPath : [store.endpoint, store.prefix].filter(Boolean).join(" / ");
+    // Azure derives its endpoint from the account when none is stored, so fall back to the account.
+    const origin = azureStore && !store.endpoint ? store.accountName : store.endpoint;
+    const detail = fileStore ? store.resolvedPath : [origin, store.prefix].filter(Boolean).join(" / ");
     return `
       <tr>
         <td class="icon-column">${blobStoreIcon(store.type)}</td>
@@ -1535,7 +1571,7 @@ function renderBlobStores() {
           <small class="usage-secondary">${renderInventoryMetric(blobStoreUsage, store.id, "pendingDeletionCount")} <span>blobs</span></small></td>
         <td class="usage-location">${renderCopyableLocation(target, "Copy storage location")}
           ${detail && detail !== target ? `<div class="usage-secondary">${renderCopyableLocation(detail, "Copy storage location")}</div>` : ""}
-          ${fileStore ? "" : pathStyleBadge(Boolean(store.pathStyleAccess))}</td>
+          ${fileStore || azureStore ? "" : pathStyleBadge(Boolean(store.pathStyleAccess))}</td>
         <td class="actions-column"><div class="cleanup-policy-actions">
           ${store.id == null ? '<span class="health-muted">-</span>' : `
             <button class="row-action edit-blobstore-button" data-id="${store.id}" type="button">Edit</button>
@@ -1768,6 +1804,7 @@ async function loadRepositories() {
 
 function blobStoreFormPayload() {
   const engine = document.getElementById("blobstore-engine").value;
+  if (engine === "azure") return azureBlobStoreFormPayload();
   return {
     name: document.getElementById("blobstore-name").value.trim(),
     type: engine === "file" ? "file" : "s3",
@@ -1784,19 +1821,79 @@ function blobStoreFormPayload() {
   };
 }
 
+function azureBlobStoreFormPayload() {
+  const credentialType = blobStoreAzureCredentialType();
+  // Secrets are sent only for the mode that uses them, so switching to a platform identity
+  // clears the stored value instead of leaving an unusable secret behind.
+  return {
+    name: document.getElementById("blobstore-name").value.trim(),
+    type: "azure",
+    engine: "azure",
+    endpoint: document.getElementById("blobstore-endpoint").value.trim(),
+    accountName: document.getElementById("blobstore-account-name").value.trim(),
+    bucket: document.getElementById("blobstore-bucket").value.trim(),
+    prefix: document.getElementById("blobstore-prefix").value.trim(),
+    credentialType,
+    accountKey: credentialType === "account-key" ? document.getElementById("blobstore-azure-account-key").value : "",
+    sasToken: credentialType === "sas" ? document.getElementById("blobstore-azure-sas-token").value : "",
+    clientId: azureIdentityFieldsVisible(credentialType)
+      ? document.getElementById("blobstore-azure-client-id").value.trim() : "",
+    tenantId: azureWorkloadFieldsVisible(credentialType)
+      ? document.getElementById("blobstore-azure-tenant-id").value.trim() : "",
+    tokenFilePath: azureTokenFileVisible(credentialType)
+      ? document.getElementById("blobstore-azure-token-file").value.trim() : ""
+  };
+}
+
+function blobStoreAzureCredentialType() {
+  return document.getElementById("blobstore-azure-credential-type").value || "default";
+}
+
+function azureIdentityFieldsVisible(credentialType) {
+  return credentialType === "default" || credentialType === "managed-identity"
+    || credentialType === "workload-identity";
+}
+
+function azureWorkloadFieldsVisible(credentialType) {
+  return credentialType === "default" || credentialType === "workload-identity";
+}
+
+/** DefaultAzureCredential reads the federated token file only from AZURE_FEDERATED_TOKEN_FILE. */
+function azureTokenFileVisible(credentialType) {
+  return credentialType === "workload-identity";
+}
+
 function blobStoreCredentialSource() {
   return document.getElementById("blobstore-engine").value === "aws-s3"
     ? document.getElementById("blobstore-credential-source").value : "static";
 }
 
 function activeBlobStoreRequiredFields() {
-  const fileMode = document.getElementById("blobstore-engine").value === "file";
+  const engine = document.getElementById("blobstore-engine").value;
+  if (engine === "azure") return activeAzureBlobStoreRequiredFields();
+  const fileMode = engine === "file";
   return (fileMode ? blobStoreFileRequiredFields : blobStoreS3RequiredFields)
     .filter((field) => !(
       (field.id === "blobstore-access-key" || field.id === "blobstore-secret-key")
       && (blobStoreCredentialSource() === "default"
         || (blobStoreFormMode === "edit" && document.getElementById(field.id).dataset.configured === "true"))
     ));
+}
+
+function activeAzureBlobStoreRequiredFields() {
+  const credentialType = blobStoreAzureCredentialType();
+  return blobStoreAzureRequiredFields.filter((field) => {
+    if (field.id === "blobstore-azure-account-key") return azureSecretRequired(credentialType, "account-key");
+    if (field.id === "blobstore-azure-sas-token") return azureSecretRequired(credentialType, "sas");
+    return true;
+  });
+}
+
+/** An already-stored secret may be kept by leaving the field blank while editing. */
+function azureSecretRequired(credentialType, usedBy) {
+  if (credentialType !== usedBy) return false;
+  const id = usedBy === "sas" ? "blobstore-azure-sas-token" : "blobstore-azure-account-key";
+  return !(blobStoreFormMode === "edit" && document.getElementById(id).dataset.configured === "true");
 }
 
 function refreshBlobStoreRequiredMarkers() {
@@ -1875,41 +1972,86 @@ function setAccessFieldMode(required, placeholder = "") {
   refreshBlobStoreRequiredMarkers();
 }
 
+/** Selectors that decide which blob store fields apply; changing any of them re-renders the form. */
+const blobStoreFormModeControls = [
+  "blobstore-engine",
+  "blobstore-credential-source",
+  "blobstore-azure-credential-type",
+];
+
+function bindBlobStoreFormModeControls() {
+  blobStoreFormModeControls.forEach((id) => {
+    document.getElementById(id).addEventListener("change", refreshBlobStoreEngineControls);
+  });
+}
+
 function refreshBlobStoreEngineControls() {
   const engine = document.getElementById("blobstore-engine").value;
   const fileMode = engine === "file";
+  const azureMode = engine === "azure";
   const source = document.getElementById("blobstore-credential-source");
   source.disabled = engine !== "aws-s3";
   if (engine === "oss-native") source.value = "static";
   const defaultCredentials = blobStoreCredentialSource() === "default";
+  const credentialType = blobStoreAzureCredentialType();
   const pathStyle = document.getElementById("blobstore-path-style");
   const pathInput = document.getElementById("blobstore-path");
+  refreshBlobStoreEndpointDefault(azureMode);
   document.querySelectorAll(".s3-only").forEach((element) => {
+    element.hidden = fileMode || azureMode;
+  });
+  document.querySelectorAll(".azure-only").forEach((element) => {
+    element.hidden = !azureMode;
+  });
+  document.querySelectorAll(".object-store-only").forEach((element) => {
     element.hidden = fileMode;
   });
   document.querySelectorAll(".file-only").forEach((element) => {
     element.hidden = !fileMode;
   });
-  [
-    "blobstore-endpoint",
-    "blobstore-region",
-    "blobstore-bucket",
-    "blobstore-prefix",
-    "blobstore-access-key",
-    "blobstore-secret-key",
-    "blobstore-path-style"
-  ].forEach((id) => {
+  document.querySelectorAll(".azure-identity-fields").forEach((element) => {
+    element.hidden = !azureMode || !azureIdentityFieldsVisible(credentialType);
+  });
+  document.querySelectorAll(".azure-workload-fields").forEach((element) => {
+    element.hidden = !azureMode || !azureWorkloadFieldsVisible(credentialType);
+  });
+  document.querySelectorAll(".azure-token-file-fields").forEach((element) => {
+    element.hidden = !azureMode || !azureTokenFileVisible(credentialType);
+  });
+  document.querySelectorAll(".azure-account-key-fields").forEach((element) => {
+    element.hidden = !azureMode || credentialType !== "account-key";
+  });
+  document.querySelectorAll(".azure-sas-fields").forEach((element) => {
+    element.hidden = !azureMode || credentialType !== "sas";
+  });
+  ["blobstore-endpoint", "blobstore-bucket", "blobstore-prefix"].forEach((id) => {
     document.getElementById(id).disabled = fileMode;
   });
+  ["blobstore-region", "blobstore-access-key", "blobstore-secret-key", "blobstore-path-style"].forEach((id) => {
+    document.getElementById(id).disabled = fileMode || azureMode;
+  });
   document.querySelectorAll(".static-credentials").forEach((element) => {
-    element.hidden = fileMode || defaultCredentials;
+    element.hidden = fileMode || azureMode || defaultCredentials;
   });
   ["blobstore-access-key", "blobstore-secret-key"].forEach((id) => {
     const input = document.getElementById(id);
-    input.disabled = fileMode || defaultCredentials;
+    input.disabled = fileMode || azureMode || defaultCredentials;
     input.classList.remove("is-invalid");
     input.setAttribute("aria-invalid", "false");
   });
+  document.getElementById("blobstore-account-name").disabled = !azureMode;
+  document.getElementById("blobstore-azure-credential-type").disabled = !azureMode;
+  document.getElementById("blobstore-azure-client-id").disabled = !azureMode || !azureIdentityFieldsVisible(credentialType);
+  document.getElementById("blobstore-azure-tenant-id").disabled =
+    !azureMode || !azureWorkloadFieldsVisible(credentialType);
+  document.getElementById("blobstore-azure-token-file").disabled =
+    !azureMode || !azureTokenFileVisible(credentialType);
+  document.getElementById("blobstore-azure-account-key").disabled = !azureMode || credentialType !== "account-key";
+  document.getElementById("blobstore-azure-sas-token").disabled = !azureMode || credentialType !== "sas";
+  setBlobStoreFieldLabel("blobstore-bucket-label", azureMode ? "Container" : "Bucket");
+  document.getElementById("blobstore-azure-client-id").placeholder = credentialType === "managed-identity"
+    ? "User-assigned identity; blank uses system-assigned"
+    : "Blank uses AZURE_CLIENT_ID from the service account";
   const requiredFields = new Set(activeBlobStoreRequiredFields().map((field) => field.id));
   blobStoreFormFields.forEach((field) => {
     setFieldRequired(document.getElementById(field.id), requiredFields.has(field.id));
@@ -1917,13 +2059,31 @@ function refreshBlobStoreEngineControls() {
   pathInput.disabled = !fileMode;
   pathInput.required = fileMode;
   pathInput.setAttribute("aria-required", String(fileMode));
-  pathStyle.disabled = fileMode;
-  if (fileMode) {
-    pathStyle.title = "";
-  } else {
-    pathStyle.title = "";
-  }
+  pathStyle.disabled = fileMode || azureMode;
+  pathStyle.title = "";
   refreshBlobStoreRequiredMarkers();
+}
+
+/**
+ * Azure derives its endpoint from the account name, and the SDK refuses bearer tokens over plain
+ * HTTP, so the S3 placeholder endpoint is dropped in Azure mode and restored if the operator
+ * switches back to an S3 engine without typing another endpoint.
+ */
+function refreshBlobStoreEndpointDefault(azureMode) {
+  const endpoint = document.getElementById("blobstore-endpoint");
+  if (azureMode && endpoint.value.trim() === blobStoreS3DefaultEndpoint) {
+    endpoint.value = "";
+    endpoint.dataset.clearedS3Default = "true";
+  } else if (!azureMode && endpoint.dataset.clearedS3Default === "true") {
+    if (!endpoint.value.trim()) endpoint.value = blobStoreS3DefaultEndpoint;
+    endpoint.dataset.clearedS3Default = "false";
+  }
+  endpoint.placeholder = azureMode ? "Blank uses https://<account>.blob.core.windows.net" : "";
+}
+
+function setBlobStoreFieldLabel(id, label) {
+  const element = document.getElementById(id);
+  if (element) element.textContent = label;
 }
 
 function showCreateBlobStoreForm() {
@@ -1938,7 +2098,8 @@ function showCreateBlobStoreForm() {
   document.getElementById("blobstore-credential-source").value = "default";
   document.getElementById("blobstore-access-key").dataset.configured = "false";
   document.getElementById("blobstore-secret-key").dataset.configured = "false";
-  document.getElementById("blobstore-endpoint").value = "http://127.0.0.1:9000";
+  document.getElementById("blobstore-endpoint").value = blobStoreS3DefaultEndpoint;
+  document.getElementById("blobstore-endpoint").dataset.clearedS3Default = "false";
   document.getElementById("blobstore-region").value = "cn-hangzhou";
   document.getElementById("blobstore-bucket").value = "";
   document.getElementById("blobstore-prefix").value = "";
@@ -1946,6 +2107,13 @@ function showCreateBlobStoreForm() {
   document.getElementById("blobstore-access-key").value = "";
   document.getElementById("blobstore-secret-key").value = "";
   document.getElementById("blobstore-path-style").checked = true;
+  document.getElementById("blobstore-account-name").value = "";
+  document.getElementById("blobstore-azure-credential-type").value = "default";
+  ["blobstore-azure-client-id", "blobstore-azure-tenant-id", "blobstore-azure-token-file",
+    "blobstore-azure-account-key", "blobstore-azure-sas-token"].forEach((id) => {
+    document.getElementById(id).value = "";
+    document.getElementById(id).dataset.configured = "false";
+  });
   refreshBlobStoreEngineControls();
   clearBlobStoreFormErrors();
   openFormModal("blobstore-form", "blobstore-name");
@@ -1976,14 +2144,37 @@ function showEditBlobStoreForm(id) {
   document.getElementById("blobstore-access-key").value = "";
   document.getElementById("blobstore-secret-key").value = "";
   document.getElementById("blobstore-path-style").checked = store.pathStyleAccess !== false;
+  document.getElementById("blobstore-account-name").value = store.accountName || "";
+  // Azure reports its credential mode through the shared credentialSource field.
+  document.getElementById("blobstore-azure-credential-type").value =
+    isAzureBlobStore(store) ? (store.credentialSource || "default") : "default";
+  document.getElementById("blobstore-azure-client-id").value = store.clientId || "";
+  document.getElementById("blobstore-azure-tenant-id").value = store.tenantId || "";
+  document.getElementById("blobstore-azure-token-file").value = store.tokenFilePath || "";
+  ["blobstore-azure-account-key", "blobstore-azure-sas-token"].forEach((id) => {
+    document.getElementById(id).value = "";
+  });
+  document.getElementById("blobstore-azure-account-key").dataset.configured = String(!!store.accountKeyConfigured);
+  document.getElementById("blobstore-azure-sas-token").dataset.configured = String(!!store.sasTokenConfigured);
+  document.getElementById("blobstore-azure-account-key").placeholder =
+    store.accountKeyConfigured ? "Leave blank to keep existing" : "";
+  document.getElementById("blobstore-azure-sas-token").placeholder =
+    store.sasTokenConfigured ? "Leave blank to keep existing" : "";
   refreshBlobStoreEngineControls();
   clearBlobStoreFormErrors();
-  openFormModal("blobstore-form", isFileBlobStore(store) ? "blobstore-path" : "blobstore-endpoint");
+  openFormModal("blobstore-form", blobStoreInitialFocusField(store));
+}
+
+function blobStoreInitialFocusField(store) {
+  if (isFileBlobStore(store)) return "blobstore-path";
+  if (isAzureBlobStore(store)) return "blobstore-account-name";
+  return "blobstore-endpoint";
 }
 
 function normalizeBlobStoreEngine(engine) {
   const normalized = lowerOrEmpty(engine);
   if (normalized === "file" || normalized === "oss-native") return normalized;
+  if (normalized.startsWith("azure")) return "azure";
   return "aws-s3";
 }
 
@@ -2735,7 +2926,7 @@ function refreshRepositoryRecipeControls() {
   const pypiIndexPathVisible = format === "pypi" && type === "PROXY";
   document.getElementById("repository-pypi-index-path-field").hidden =
     !pypiIndexPathVisible;
-  const minimumReleaseAgeVisible = format === "npm" && type === "PROXY";
+  const minimumReleaseAgeVisible = MINIMUM_RELEASE_AGE_FORMATS.has(format) && type === "PROXY";
   document.getElementById("repository-minimum-release-age-field").hidden =
     !minimumReleaseAgeVisible;
   document.getElementById("repository-minimum-release-age-note").hidden =
@@ -3149,7 +3340,7 @@ function repositoryFormPayload() {
       allowedRedirectHosts,
       contentMaxAgeMinutes: content === "" ? null : Number(content),
       metadataMaxAgeMinutes: metadata === "" ? null : Number(metadata),
-      minimumReleaseAgeMinutes: recipe.format === "npm"
+      minimumReleaseAgeMinutes: MINIMUM_RELEASE_AGE_FORMATS.has(recipe.format)
         ? (minimumReleaseAge === "" ? 0 : Number(minimumReleaseAge))
         : null,
       autoBlock: document.getElementById("repository-auto-block").checked,
@@ -4608,37 +4799,44 @@ function renderSecurityApiKeys() {
       <td>${escapeHtml(key.ownerSource)}/${escapeHtml(key.ownerUserId)}</td>
       <td><span class="state-badge compact ${key.status === "ACTIVE" ? "ok" : "warn"}">${escapeHtml(key.status || "")}</span></td>
       <td><code>${escapeHtml(key.tokenPrefix || "")}</code></td>
-      <td>${escapeHtml((key.scopes || []).join(", "))}</td>
       <td class="actions-column"><button class="row-action delete-security-api-key-button" data-id="${key.id}" type="button">delete</button></td>
     </tr>
   `).join("");
   document.getElementById("security-api-key-table").innerHTML = rows
-    || '<tr><td colspan="6" class="placeholder">No API keys.</td></tr>';
+    || '<tr><td colspan="5" class="placeholder">No API keys.</td></tr>';
 }
 
+let apiKeyOwnerPicker;
+
 function showSecurityApiKeyForm() {
+  apiKeyOwnerPicker ||= window.KkUserPicker.create({
+    source: document.getElementById("security-api-key-owner-source"),
+    user: document.getElementById("security-api-key-owner-user-id"),
+    status: document.getElementById("security-api-key-owner-status")
+  });
   document.getElementById("security-api-key-domain").value = "NpmToken";
   document.getElementById("security-api-key-owner-source").value = "Local";
   document.getElementById("security-api-key-owner-user-id").value = "";
   document.getElementById("security-api-key-display-name").value = "";
-  document.getElementById("security-api-key-scopes").value = "";
   clearRequiredFieldErrors(securityApiKeyRequiredFields);
-  openFormModal("security-api-key-form", "security-api-key-owner-user-id");
+  apiKeyOwnerPicker.open();
+  openFormModal("security-api-key-form", "security-api-key-domain");
 }
 
 function hideSecurityApiKeyForm() {
+  apiKeyOwnerPicker?.close();
   closeFormModal("security-api-key-form");
   clearRequiredFieldErrors(securityApiKeyRequiredFields);
 }
 
 async function saveSecurityApiKey() {
+  if (!apiKeyOwnerPicker?.validate()) return;
   if (!validateRequiredFields(securityApiKeyRequiredFields)) return;
   const payload = {
     domain: document.getElementById("security-api-key-domain").value.trim() || "NpmToken",
     ownerSource: document.getElementById("security-api-key-owner-source").value.trim() || "Local",
     ownerUserId: document.getElementById("security-api-key-owner-user-id").value.trim(),
-    displayName: document.getElementById("security-api-key-display-name").value.trim() || null,
-    scopes: commaList(document.getElementById("security-api-key-scopes").value)
+    displayName: document.getElementById("security-api-key-display-name").value.trim() || null
   };
   try {
     const response = await fetch("/internal/security/api-keys", {
@@ -6891,7 +7089,9 @@ function handleCleanupTabKeydown(event) {
 }
 
 function cleanupRuleBadges(criteria = {}) {
-  const rules = [];
+  const snapshot = criteria.mode === "MAVEN_SNAPSHOT_BUILDS";
+  criteria = snapshot ? (criteria.snapshot || {}) : criteria;
+  const rules = snapshot ? ["snapshot builds"] : [];
   if (criteria.pattern) rules.push(`${criteria.patternType === "REGEX" ? "regex" : "glob"}: ${criteria.pattern}`);
   if (criteria.publishedOlderThanDays != null) rules.push(`published > ${criteria.publishedOlderThanDays}d`);
   if (criteria.lastDownloadedOlderThanDays != null) rules.push(`downloaded > ${criteria.lastDownloadedOlderThanDays}d`);
@@ -7238,7 +7438,9 @@ function cleanupRepositoryCandidates() {
   const format = document.getElementById("cleanup-policy-format").value;
   return repositories
     .filter((repository) => lowerOrEmpty(repository.format) === lowerOrEmpty(format))
-    .filter((repository) => ["hosted", "proxy"].includes(lowerOrEmpty(repository.type)))
+    .filter((repository) => document.getElementById("cleanup-policy-mode")?.value === "MAVEN_SNAPSHOT_BUILDS"
+      ? lowerOrEmpty(repository.type) === "hosted"
+      : ["hosted", "proxy"].includes(lowerOrEmpty(repository.type)))
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
@@ -7418,11 +7620,19 @@ function bindCleanupRepositoryPicker() {
 function refreshCleanupCapabilityHelp() {
   const format = document.getElementById("cleanup-policy-format").value;
   const capability = cleanupCapability(format);
+  const mode = document.getElementById("cleanup-policy-mode");
+  if (format.toLowerCase() !== "maven2") mode.value = "COMPONENT";
+  document.getElementById("cleanup-policy-mode-field").hidden = format.toLowerCase() !== "maven2";
+  const snapshot = mode.value === "MAVEN_SNAPSHOT_BUILDS";
+  document.getElementById("cleanup-policy-snapshot-help").hidden = !snapshot;
+  document.getElementById("cleanup-policy-retain-label").textContent = snapshot ? "Keep newest builds per SNAPSHOT" : "Keep newest versions";
   const retainInput = document.getElementById("cleanup-policy-retain-count");
   retainInput.disabled = !capability?.retainCountSupported;
+  retainInput.min = snapshot ? "1" : "0";
+  retainInput.required = snapshot;
   if (retainInput.disabled) retainInput.value = "";
   setCleanupFieldHelp("cleanup-policy-retain-help", capability?.retainCountSupported
-    ? "Uses this format's protocol version comparator."
+    ? (snapshot ? "Retains at least this many timestamped builds within each base SNAPSHOT version." : "Uses this format's protocol version comparator.")
     : "Version retention is not enabled for this format yet; pattern and age rules remain available.");
   const downloadedInput = document.getElementById("cleanup-policy-downloaded-days");
   downloadedInput.disabled = !capability?.lastDownloadedSupported;
@@ -7430,7 +7640,7 @@ function refreshCleanupCapabilityHelp() {
     downloadedInput.value = "";
   }
   setCleanupFieldHelp("cleanup-policy-downloaded-help", capability?.lastDownloadedSupported
-    ? "Successful authorized GET requests persist a shared download watermark; HEAD requests do not count. Artifacts without a download timestamp are skipped."
+    ? (snapshot ? "Successful artifact GET requests count as downloads. Never-downloaded builds use their publication time. A full observation window is required after enabling usage tracking." : "Successful authorized GET requests persist a shared download watermark; HEAD requests do not count. Artifacts without a download timestamp are skipped.")
     : "Last-download retention is disabled until this format records a validated shared download watermark.");
   document.getElementById("cleanup-policy-execute-help").textContent = capability?.executeSupported
     ? editingCleanupPolicyId == null
@@ -7667,8 +7877,10 @@ function showEditCleanupPolicyForm(policyId) {
   editingCleanupPolicyId = Number(policyId);
   populateCleanupTimeZoneOptions();
   const policy = view.policy;
-  const criteria = policy.criteria || {};
+  const snapshot = policy.criteria?.mode === "MAVEN_SNAPSHOT_BUILDS";
+  const criteria = snapshot ? (policy.criteria.snapshot || {}) : (policy.criteria || {});
   populateCleanupFormatOptions(policy.format);
+  document.getElementById("cleanup-policy-mode").value = snapshot ? "MAVEN_SNAPSHOT_BUILDS" : "COMPONENT";
   document.getElementById("cleanup-policy-name").value = policy.name || "";
   document.getElementById("cleanup-policy-pattern-type").value = criteria.patternType || "GLOB";
   document.getElementById("cleanup-policy-pattern").value = criteria.pattern || "";
@@ -7727,7 +7939,8 @@ function cleanupPolicyPayload() {
     name: document.getElementById("cleanup-policy-name").value.trim(),
     format: document.getElementById("cleanup-policy-format").value,
     notes: document.getElementById("cleanup-policy-notes").value.trim() || null,
-    criteria,
+    criteria: document.getElementById("cleanup-policy-mode")?.value === "MAVEN_SNAPSHOT_BUILDS"
+      ? { mode: "MAVEN_SNAPSHOT_BUILDS", snapshot: criteria } : criteria,
     repositoryIds: cleanupSelectedRepositoryIds(),
     scanLimitPerRepository: current?.scanLimitPerRepository ?? null,
     deleteLimitPerRepository: current?.deleteLimitPerRepository ?? null,
@@ -8043,6 +8256,8 @@ async function loadCleanupRunDetails(runId) {
 }
 
 function cleanupRunRuleSnapshot(criteria = {}) {
+  const snapshot = criteria.mode === "MAVEN_SNAPSHOT_BUILDS";
+  criteria = snapshot ? (criteria.snapshot || {}) : criteria;
   const pattern = criteria.pattern
     ? `${criteria.patternType === "REGEX" ? "Regular expression" : "Wildcard"} · ${criteria.pattern}`
     : "All names and paths";
@@ -8051,7 +8266,7 @@ function cleanupRunRuleSnapshot(criteria = {}) {
       <div><dt>Name/path pattern</dt><dd>${escapeHtml(pattern)}</dd></div>
       <div><dt>Published age</dt><dd>${criteria.publishedOlderThanDays == null ? "Not configured" : `Older than ${escapeHtml(criteria.publishedOlderThanDays)} days`}</dd></div>
       <div><dt>Download activity</dt><dd>${criteria.lastDownloadedOlderThanDays == null ? "Not configured" : `Last downloaded more than ${escapeHtml(criteria.lastDownloadedOlderThanDays)} days ago`}</dd></div>
-      <div><dt>Version retention</dt><dd>${criteria.retainCount == null ? "Not configured" : `Keep newest ${escapeHtml(criteria.retainCount)} versions per family`}</dd></div>
+      <div><dt>Version retention</dt><dd>${criteria.retainCount == null ? "Not configured" : `Keep newest ${escapeHtml(criteria.retainCount)} ${snapshot ? "builds per SNAPSHOT" : "versions per family"}`}</dd></div>
     </dl>`;
 }
 
@@ -8261,7 +8476,7 @@ function switchView(view, options = {}) {
     item.classList.toggle("is-active", item.id === `${view}-view`);
   });
   document.querySelectorAll(".side-item").forEach((item) => {
-    item.classList.toggle("is-active", item.dataset.view === view);
+    item.classList.toggle("is-active", item.dataset.view === (view === "ohpm-login" ? "security-api-keys" : view));
   });
   updateCurrentSideGroup(view);
   if (view === "blobstores") {
@@ -8297,6 +8512,8 @@ function switchView(view, options = {}) {
   if (view === "security-audit-log") loadAuditLogs(0);
   if (view === "ui-settings") loadUiSettings();
   if (view === "repository-data-migration") loadRepositoryDataMigrationJobs();
+  if (view === "ohpm-import") window.KkOhpmImport.load();
+  if (view === "ohpm-login") window.KkOhpmLogin.load();
   return true;
 }
 
@@ -8411,8 +8628,7 @@ document.getElementById("create-blobstore-button").addEventListener("click", sho
 document.getElementById("cancel-blobstore-button").addEventListener("click", hideBlobStoreForm);
 document.getElementById("blobstore-form").addEventListener("submit", saveBlobStore);
 document.getElementById("save-blobstore-button").addEventListener("click", saveBlobStore);
-document.getElementById("blobstore-engine").addEventListener("change", refreshBlobStoreEngineControls);
-document.getElementById("blobstore-credential-source").addEventListener("change", refreshBlobStoreEngineControls);
+bindBlobStoreFormModeControls();
 blobStoreFormFields.forEach((field) => {
   document.getElementById(field.id).addEventListener("input", clearBlobStoreFieldError);
 });
@@ -8536,7 +8752,12 @@ document.querySelectorAll("[data-cleanup-tab]").forEach((button) => {
   button.addEventListener("click", () => selectCleanupTab(button.dataset.cleanupTab));
   button.addEventListener("keydown", handleCleanupTabKeydown);
 });
+document.getElementById("cleanup-policy-mode").addEventListener("change", () => {
+  refreshCleanupCapabilityHelp();
+  refreshCleanupRepositoryOptions([]);
+});
 document.getElementById("cleanup-policy-format").addEventListener("change", () => {
+  refreshCleanupCapabilityHelp();
   refreshCleanupRepositoryOptions([]);
   refreshCleanupScheduleFields();
 });

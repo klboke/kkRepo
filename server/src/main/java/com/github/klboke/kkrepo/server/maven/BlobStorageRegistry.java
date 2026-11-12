@@ -3,18 +3,24 @@ package com.github.klboke.kkrepo.server.maven;
 import com.github.klboke.kkrepo.cache.LocalCache;
 import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import com.github.klboke.kkrepo.core.BlobStorage;
+import com.github.klboke.kkrepo.core.blobstore.BlobStoreDescriptor;
+import com.github.klboke.kkrepo.core.blobstore.BlobStoreProvider;
+import com.github.klboke.kkrepo.core.blobstore.BlobStoreProviders;
+import com.github.klboke.kkrepo.core.blobstore.BlobStoreTypes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.server.metrics.InstrumentedBlobStorage;
 import com.github.klboke.kkrepo.server.metrics.KkRepoMetrics;
-import com.github.klboke.kkrepo.storage.file.FileBlobStoreConfig;
 import com.github.klboke.kkrepo.storage.file.FileBlobStorageFactory;
+import com.github.klboke.kkrepo.storage.file.FileBlobStoreProvider;
 import com.github.klboke.kkrepo.storage.s3.S3BlobStorageFactory;
 import com.github.klboke.kkrepo.storage.s3.S3BlobStoreConfig;
+import com.github.klboke.kkrepo.storage.s3.S3BlobStoreProvider;
 import com.github.klboke.kkrepo.storage.s3.config.S3StorageProperties;
 import com.github.klboke.kkrepo.server.catalog.CatalogCacheBroadcaster;
 import jakarta.annotation.PreDestroy;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -38,6 +44,9 @@ import org.springframework.stereotype.Component;
  * Resolves the {@link BlobStorage} bound to a repository. Each replica owns wrappers cached by
  * store ID and configuration signature. Database catalog refreshes and broadcasts evict deleted
  * or changed entries while preserving unchanged wrappers and their in-flight multipart uploads.
+ *
+ * <p>Backends are pluggable: each row is matched to a {@link BlobStoreProvider} by
+ * {@code blob_store.type}, so adding a storage technology needs no change here.
  */
 @Component
 public class BlobStorageRegistry {
@@ -45,9 +54,7 @@ public class BlobStorageRegistry {
   private static final String CATALOG_NAME = "blob-store";
 
   private final BlobStoreDao blobStoreDao;
-  private final S3BlobStorageFactory s3Factory;
-  private final FileBlobStorageFactory fileFactory;
-  private final S3StorageProperties fallback;
+  private final BlobStoreProviders providers;
   private final KkRepoMetrics metrics;
   private final LocalCache<StorageCacheKey, BlobStorage> cache = LocalCacheFactory.standard()
       .<StorageCacheKey, BlobStorage>builder("blob-storages")
@@ -62,16 +69,12 @@ public class BlobStorageRegistry {
   @Autowired
   public BlobStorageRegistry(
       BlobStoreDao blobStoreDao,
-      S3BlobStorageFactory s3Factory,
-      FileBlobStorageFactory fileFactory,
-      S3StorageProperties fallback,
+      List<BlobStoreProvider> providers,
       @Value("${kkrepo.catalog-cache.enabled:true}") boolean catalogCacheEnabled,
       ObjectProvider<CatalogCacheBroadcaster> broadcasterProvider,
       KkRepoMetrics metrics) {
     this.blobStoreDao = blobStoreDao;
-    this.s3Factory = s3Factory;
-    this.fileFactory = fileFactory;
-    this.fallback = fallback;
+    this.providers = new BlobStoreProviders(providers);
     this.metrics = metrics;
     this.catalogCacheEnabled = catalogCacheEnabled;
     this.broadcaster = broadcasterProvider == null ? null : broadcasterProvider.getIfAvailable();
@@ -116,12 +119,24 @@ public class BlobStorageRegistry {
       CatalogCacheBroadcaster broadcaster,
       KkRepoMetrics metrics) {
     this.blobStoreDao = blobStoreDao;
-    this.s3Factory = s3Factory;
-    this.fileFactory = fileFactory;
-    this.fallback = fallback;
+    this.providers = new BlobStoreProviders(legacyProviders(s3Factory, fileFactory, fallback));
     this.metrics = metrics;
     this.catalogCacheEnabled = catalogCacheEnabled;
     this.broadcaster = broadcaster;
+  }
+
+  /**
+   * Adapts the pre-SPI factory constructors, which callers and tests still use directly. Both
+   * providers are always registered so a row still resolves to the backend its type names; a
+   * missing factory surfaces when storage is actually built rather than changing dispatch.
+   */
+  private static List<BlobStoreProvider> legacyProviders(
+      S3BlobStorageFactory s3Factory, FileBlobStorageFactory fileFactory, S3StorageProperties fallback) {
+    List<BlobStoreProvider> providers = new ArrayList<>(2);
+    providers.add(new S3BlobStoreProvider(
+        s3Factory, fallback == null ? new S3StorageProperties() : fallback));
+    providers.add(new FileBlobStoreProvider(fileFactory));
+    return providers;
   }
 
   @EventListener(ApplicationReadyEvent.class)
@@ -218,8 +233,8 @@ public class BlobStorageRegistry {
   /** Drop a cached blob-store record (e.g. after an admin edits the blob store). */
   public void invalidate(long blobStoreId) {
     invalidateStorageCache(blobStoreId);
-    if (s3Factory != null) {
-      s3Factory.invalidate(blobStoreId);
+    for (BlobStoreProvider provider : providers.all()) {
+      provider.invalidate(blobStoreId);
     }
     if (!catalogCacheEnabled) {
       return;
@@ -320,8 +335,11 @@ public class BlobStorageRegistry {
     for (StorageCacheKey key : cachedKeys) {
       if (!active.containsKey(key.storeId())) deletedIds.add(key.storeId());
     }
-    if (s3Factory != null) {
-      deletedIds.addAll(s3Factory.cachedStoreIdsMissingFrom(active.keySet()));
+    for (BlobStoreProvider provider : providers.all()) {
+      Set<Long> stale = provider.cachedStoreIdsMissingFrom(active.keySet());
+      if (stale != null) {
+        deletedIds.addAll(stale);
+      }
     }
     // A store may have been created after the list query. Confirm absence before closing
     // a client that another request could still be using.
@@ -336,7 +354,9 @@ public class BlobStorageRegistry {
       }
     }
     cache.cleanUp();
-    if (s3Factory != null) deletedIds.forEach(s3Factory::invalidate);
+    for (BlobStoreProvider provider : providers.all()) {
+      deletedIds.forEach(provider::invalidate);
+    }
   }
 
   private void upsertCatalogRecord(BlobStoreRecord record) {
@@ -362,18 +382,33 @@ public class BlobStorageRegistry {
   }
 
   private String storageSignature(BlobStoreRecord record) {
-    return isFileStore(record) ? toFileConfig(record).signature() : toConfig(record).signature();
+    BlobStoreDescriptor descriptor = toDescriptor(record);
+    return signature(providers.require(descriptor), descriptor);
   }
 
   public BlobStorage forRecord(BlobStoreRecord record) {
-    if (isFileStore(record)) {
-      FileBlobStoreConfig config = toFileConfig(record);
-      return cache.get(new StorageCacheKey(config.id(), config.signature()),
-          key -> instrument(fileFactory.forStore(config), record.name(), record.type(), "file"));
-    }
-    S3BlobStoreConfig config = toConfig(record);
-    return cache.get(new StorageCacheKey(config.id(), config.signature()),
-        key -> instrument(s3Factory.forStore(config), record.name(), record.type(), config.engine()));
+    BlobStoreDescriptor descriptor = toDescriptor(record);
+    BlobStoreProvider provider = providers.require(descriptor);
+    return cache.get(new StorageCacheKey(descriptor.id(), signature(provider, descriptor)),
+        key -> instrument(
+            provider.create(descriptor), record.name(), record.type(), provider.engine(descriptor)));
+  }
+
+  /** The provider type participates so that retyping a store rebuilds its wrapper. */
+  private static String signature(BlobStoreProvider provider, BlobStoreDescriptor descriptor) {
+    return provider.type() + "|" + provider.signature(descriptor);
+  }
+
+  private static BlobStoreDescriptor toDescriptor(BlobStoreRecord record) {
+    return new BlobStoreDescriptor(
+        record.id() == null ? 0 : record.id(),
+        record.name(),
+        record.type(),
+        record.endpoint(),
+        record.region(),
+        record.bucket(),
+        record.prefix(),
+        record.attributes());
   }
 
   private BlobStorage instrument(BlobStorage storage, String store, String type, String engine) {
@@ -405,80 +440,17 @@ public class BlobStorageRegistry {
     }
   }
 
+  /**
+   * The store's row interpreted as S3 configuration, with {@code kkrepo.storage.s3.*} defaults
+   * applied. Only meaningful for stores the S3 provider owns; throws if no S3 provider is
+   * registered.
+   */
   public S3BlobStoreConfig configFor(long blobStoreId) {
-    return toConfig(catalogRecord(blobStoreId));
-  }
-
-  private FileBlobStoreConfig toFileConfig(BlobStoreRecord record) {
-    Map<String, Object> attrs = record.attributes() == null ? Map.of() : record.attributes();
-    return fileFactory.configFor(
-        record.id() == null ? 0 : record.id(),
-        record.name(),
-        stringAttr(attrs, FileBlobStoreConfig.ATTR_PATH, ""));
-  }
-
-  private S3BlobStoreConfig toConfig(BlobStoreRecord record) {
-    Map<String, Object> attrs = record.attributes() == null ? Map.of() : record.attributes();
-    return new S3BlobStoreConfig(
-        record.id() == null ? 0 : record.id(),
-        record.name(),
-        stringAttr(attrs, "engine", fallback.getEngine()),
-        valueOrDefault(record.endpoint(), fallback.getEndpoint()),
-        valueOrDefault(record.region(), fallback.getRegion()),
-        valueOrDefault(record.bucket(), fallback.getBucket()),
-        record.prefix() == null ? "" : record.prefix(),
-        S3BlobStoreConfig.credentialAttribute(attrs, "accessKey", fallback.getAccessKey()),
-        S3BlobStoreConfig.credentialAttribute(attrs, "secretKey", fallback.getSecretKey()),
-        boolAttr(attrs, "pathStyleAccess", fallback.isPathStyleAccess()),
-        intAttr(attrs, "maxConnections", fallback.getMaxConnections()),
-        intAttr(attrs, "connectionTimeoutMs", fallback.getConnectionTimeoutMs()),
-        intAttr(attrs, "socketTimeoutMs", fallback.getSocketTimeoutMs()),
-        intAttr(attrs, "connectionAcquisitionTimeoutMs", fallback.getConnectionAcquisitionTimeoutMs()),
-        boolAttr(attrs, "tcpKeepAlive", fallback.isTcpKeepAlive()),
-        longAttr(attrs, "multipartThresholdBytes", fallback.getMultipartThresholdBytes()),
-        longAttr(attrs, "multipartPartSizeBytes", fallback.getMultipartPartSizeBytes()),
-        intAttr(attrs, "multipartConcurrency", fallback.getMultipartConcurrency()));
-  }
-
-  private static boolean isFileStore(BlobStoreRecord record) {
-    return FileBlobStoreConfig.isFileStore(record.type(), record.attributes());
-  }
-
-  private static String stringAttr(Map<String, Object> attrs, String key, String fallback) {
-    Object value = attrs.get(key);
-    return value == null || value.toString().isBlank() ? fallback : value.toString();
-  }
-
-  private static boolean boolAttr(Map<String, Object> attrs, String key, boolean fallback) {
-    Object value = attrs.get(key);
-    if (value == null) return fallback;
-    if (value instanceof Boolean b) return b;
-    return Boolean.parseBoolean(value.toString());
-  }
-
-  private static int intAttr(Map<String, Object> attrs, String key, int fallback) {
-    Object value = attrs.get(key);
-    if (value == null) return fallback;
-    if (value instanceof Number number) return number.intValue();
-    try {
-      return Integer.parseInt(value.toString());
-    } catch (NumberFormatException e) {
-      return fallback;
+    BlobStoreDescriptor descriptor = toDescriptor(catalogRecord(blobStoreId));
+    BlobStoreProvider provider = providers.byType(BlobStoreTypes.S3).orElse(null);
+    if (!(provider instanceof S3BlobStoreProvider s3Provider)) {
+      throw new IllegalStateException("No S3 blob store provider is registered");
     }
-  }
-
-  private static long longAttr(Map<String, Object> attrs, String key, long fallback) {
-    Object value = attrs.get(key);
-    if (value == null) return fallback;
-    if (value instanceof Number number) return number.longValue();
-    try {
-      return Long.parseLong(value.toString());
-    } catch (NumberFormatException e) {
-      return fallback;
-    }
-  }
-
-  private static String valueOrDefault(String value, String fallback) {
-    return value == null || value.isBlank() ? fallback : value;
+    return s3Provider.configFor(descriptor);
   }
 }

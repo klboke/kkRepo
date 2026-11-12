@@ -10,7 +10,8 @@ public final class HuggingFaceHeaders {
   public static final String LINKED_SIZE = "X-Linked-Size";
   public static final String XET_HASH = "X-Xet-Hash";
   private static final Set<String> PASSTHROUGH = Set.of(
-      "ratelimit", "ratelimit-policy", "retry-after", "x-request-id");
+      "ratelimit", "ratelimit-policy", "retry-after", "x-request-id",
+      "x-error-code", "x-error-message");
 
   private HuggingFaceHeaders() {
   }

@@ -34,6 +34,31 @@ class HuggingFaceRepositoryBlackBoxCompatibilityTest {
   private static final ObjectMapper JSON = new ObjectMapper();
 
   @Test
+  void repeatedOptionalFileProbesRemainNotFound() throws Exception {
+    assumeTrue(enabled(),
+        "Set HUGGINGFACE_COMPAT_ENABLED=true and both proxy URLs to run Hugging Face compatibility");
+    Fixture fixture = Fixture.fromEnvironment();
+    String path = fixture.modelId() + "/resolve/" + fixture.commit()
+        + "/kkrepo-missing-optional-" + java.util.UUID.randomUUID() + ".json";
+    // Probe HEAD first, as huggingface_hub does, then repeat GET within the fetch-backoff window.
+    for (boolean headOnly : new boolean[] {true, false, false, true}) {
+      Exchange reference = headOnly ? head(fixture.nexus(), path) : get(fixture.nexus(), path);
+      Exchange candidate = headOnly ? head(fixture.candidate(), path) : get(fixture.candidate(), path);
+      assertEquals(404, reference.status(), "Nexus missing file status");
+      assertEquals(reference.status(), candidate.status(), "repeated optional file status");
+      // Nexus 3.94 returns an HTML 404 without Hub error headers. Keep its status semantics,
+      // but require the official Hub client error contract from kkrepo.
+      assertEquals("EntryNotFound", candidate.header("x-error-code"));
+      assertFalse(candidate.header("x-error-message").isBlank());
+      assertEquals(fixture.commit(), candidate.header("x-repo-commit"));
+      if (!reference.header("x-error-code").isBlank()) {
+        assertEquals(reference.header("x-error-code"), candidate.header("x-error-code"));
+      }
+      if (headOnly) assertEquals(0, candidate.body().length, "HEAD body");
+    }
+  }
+
+  @Test
   void repositoryRootMatchesReferenceLandingPageSemantics() throws Exception {
     assumeTrue(enabled(),
         "Set HUGGINGFACE_COMPAT_ENABLED=true and both proxy URLs to run Hugging Face compatibility");

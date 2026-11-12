@@ -37,3 +37,8 @@ It is not an official Hugging Face trademark asset.
 
 The Git LFS compatibility mark is an original branch mark drawn for kkRepo. It is not an
 official Git or Git LFS trademark asset.
+
+The OHPM icon is the official registry favicon from https://ohpm.openharmony.cn/favicon.ico
+(retrieved 2026-11-06). The source is a 200 × 200 RGBA PNG despite its `.ico` URL.
+It is vendored unchanged as `ohpm.png`, with its original blue-to-green gradient and aspect ratio.
+OHPM / OpenHarmony marks belong to their respective owners.

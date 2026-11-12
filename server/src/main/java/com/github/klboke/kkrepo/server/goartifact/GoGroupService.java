@@ -7,6 +7,7 @@ import com.github.klboke.kkrepo.protocol.goartifact.GoVersions;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.releaseage.ReleaseAgeDeniedException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -173,6 +174,7 @@ public class GoGroupService {
 
   private MavenResponse first(RepositoryRuntime group, GoPath path, boolean headOnly) {
     MavenExceptions.BadUpstreamException lastUpstream = null;
+    ReleaseAgeDeniedException quarantined = null;
     for (RepositoryRuntime member : group.members()) {
       if (!eligible(member)) continue;
       try {
@@ -181,8 +183,13 @@ public class GoGroupService {
         // Continue in configured member order.
       } catch (MavenExceptions.BadUpstreamException error) {
         lastUpstream = error;
+      } catch (ReleaseAgeDeniedException denied) {
+        // A later member (for example a hosted repository) may legitimately hold this version, so
+        // keep probing. If nobody serves it, the quarantine is reported instead of a plain 404.
+        if (quarantined == null) quarantined = denied;
       }
     }
+    if (quarantined != null) throw quarantined;
     if (lastUpstream != null) throw lastUpstream;
     throw new MavenExceptions.MavenNotFoundException(path.path());
   }

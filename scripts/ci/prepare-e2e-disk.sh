@@ -21,6 +21,14 @@ sudo rm -rf /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/.ghcup /usr/local/li
 sudo apt-get clean
 df -h /
 if (( $(available_kib) < minimum_gib * 1024 * 1024 )); then
+  # Smaller hosted runners can still be below budget after the first pass.
+  # Client suites use the .NET SDK in client-e2e-image, not this host SDK.
+  # Keep Docker layers, cached image archives and the workspace intact.
+  echo "Reclaiming unused host .NET SDK to meet the ${minimum_gib} GiB disk budget"
+  sudo rm -rf /usr/share/dotnet
+  df -h /
+fi
+if (( $(available_kib) < minimum_gib * 1024 * 1024 )); then
   echo "Less than ${minimum_gib} GiB available after runner disk cleanup" >&2
   exit 1
 fi

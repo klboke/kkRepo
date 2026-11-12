@@ -27,6 +27,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RoutingRuleDao;
 import com.github.klboke.kkrepo.server.routingrules.RoutingRuleService;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RRegistryDao;
+import java.time.Instant;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
@@ -428,14 +429,23 @@ class RepositoryServiceTest {
         org.mockito.ArgumentMatchers.anyString(),
         org.mockito.ArgumentMatchers.any());
 
+    List<String> namespaces = List.of("src/contrib", "bin/windows/contrib/4.5",
+        "bin/macosx/big-sur-arm64/contrib/4.5",
+        "bin/linux/noble-x86_64/4.5/src/contrib");
+    when(registry.listSuites(100L)).thenReturn(namespaces.stream()
+        .map(namespace -> new RRegistryDao.SuiteState(
+            100L, namespace, 1L, Instant.EPOCH, 1L, 1, Instant.EPOCH, null, null, Instant.EPOCH))
+        .toList());
     RepositoryView updated = service.replaceMembers(
         "cran-root", List.of("cran-second", "cran-first"));
     assertEquals(List.of("cran-second", "cran-first"), updated.group().memberNames());
     assertEquals(List.of(72L, 71L), repositories.membersByGroupId.get(100L));
-    verify(registry).markSuiteDirty(
-        org.mockito.ArgumentMatchers.eq(100L),
-        org.mockito.ArgumentMatchers.eq("src/contrib"),
-        org.mockito.ArgumentMatchers.any());
+    for (String namespace : namespaces) {
+      verify(registry).markSuiteDirty(
+          org.mockito.ArgumentMatchers.eq(100L),
+          org.mockito.ArgumentMatchers.eq(namespace),
+          org.mockito.ArgumentMatchers.any());
+    }
   }
 
   @Test
@@ -447,11 +457,24 @@ class RepositoryServiceTest {
     repositories.replaceMembers(82L, List.of(81L));
     repositories.replaceMembers(83L, List.of(82L));
     RRegistryDao registry = mock(RRegistryDao.class);
+    String binaryNamespace = "bin/windows/contrib/4.5";
+    for (long repositoryId : List.of(81L, 82L, 83L)) {
+      when(registry.listSuites(repositoryId)).thenReturn(List.of(new RRegistryDao.SuiteState(
+          repositoryId, binaryNamespace, 1L, Instant.EPOCH, 1L, 1,
+          Instant.EPOCH, null, null, Instant.EPOCH)));
+    }
     RepositoryService service = service(repositories);
     service.setRRegistry(registry);
 
     service.update("cran-hosted",
         new UpdateCommand(false, null, null, null, null, null, null, null, null));
+
+    for (long repositoryId : List.of(81L, 82L, 83L)) {
+      verify(registry, org.mockito.Mockito.atLeastOnce()).markSuiteDirty(
+          org.mockito.ArgumentMatchers.eq(repositoryId),
+          org.mockito.ArgumentMatchers.eq(binaryNamespace),
+          org.mockito.ArgumentMatchers.any());
+    }
 
     verify(registry, org.mockito.Mockito.atLeastOnce()).markSuiteDirty(
         org.mockito.ArgumentMatchers.eq(81L),
@@ -1243,11 +1266,11 @@ class RepositoryServiceTest {
     RepositoryValidationException wrongFormat = assertThrows(
         RepositoryValidationException.class,
         () -> service.create(new CreateCommand(
-            "maven-proxy", "maven2-proxy", true, "default", true, null,
-            new ProxySettings("https://repo.maven.apache.org/maven2/", 1440, 1440, true, 60),
+            "nuget-feed", "nuget-proxy", true, "default", true, null,
+            new ProxySettings("https://api.nuget.org/v3/index.json", 1440, 1440, true, 60),
             null, null, null, null)));
     assertEquals(
-        "proxy.minimumReleaseAgeMinutes is only supported for npm proxy repositories",
+        "proxy.minimumReleaseAgeMinutes is only supported for npm, Go, Maven and PyPI proxy repositories",
         wrongFormat.getMessage());
   }
 

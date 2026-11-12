@@ -6,6 +6,7 @@ import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
 import com.github.klboke.kkrepo.server.cache.NexusCacheType;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.releaseage.ReleaseAgeDeniedException;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -178,11 +179,12 @@ public class PypiGroupService {
         try {
           return dispatchPackage(cachedMember, path, headOnly);
         } catch (PypiExceptions.PypiNotFoundException | PypiExceptions.BadUpstreamException
-            | PypiExceptions.MethodNotAllowed ignored) {
+            | PypiExceptions.MethodNotAllowed | ReleaseAgeDeniedException ignored) {
           groupMemberAssetCache.evict(group, path, cacheType);
         }
       }
     }
+    ReleaseAgeDeniedException quarantined = null;
     for (RepositoryRuntime member : group.members()) {
       try {
         PypiResponse response = dispatchPackage(member, path, headOnly);
@@ -196,8 +198,13 @@ public class PypiGroupService {
         // Nexus group repositories only return successful member responses; keep probing.
       } catch (PypiExceptions.MethodNotAllowed ignored) {
         // skip
+      } catch (ReleaseAgeDeniedException denied) {
+        // A later member (for example a hosted repository) may legitimately hold this file, so keep
+        // probing. If nobody serves it, the quarantine is reported instead of a plain 404.
+        if (quarantined == null) quarantined = denied;
       }
     }
+    if (quarantined != null) throw quarantined;
     throw new PypiExceptions.PypiNotFoundException(path);
   }
 

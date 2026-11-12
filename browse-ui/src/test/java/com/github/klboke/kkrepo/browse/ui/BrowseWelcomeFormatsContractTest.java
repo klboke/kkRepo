@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 
 class BrowseWelcomeFormatsContractTest {
   private static final List<String> FORMATS = List.of(
-      "maven2", "npm", "pypi", "cargo", "pub", "composer", "terraform", "swift",
+      "maven2", "npm", "ohpm", "pypi", "cargo", "pub", "composer", "terraform", "swift",
       "ansiblegalaxy", "conda", "conan", "apt", "alpine", "gitlfs", "huggingface", "go",
       "r", "helm", "docker", "nuget", "rubygems", "yum", "raw");
 
@@ -22,7 +22,7 @@ class BrowseWelcomeFormatsContractTest {
     String stylesheet = resource("/META-INF/resources/browse/assets/browse.css");
 
     assertTrue(index.contains("id=\"supported-formats-title\""));
-    assertTrue(index.contains("class=\"format-showcase-count\">23 formats"));
+    assertTrue(index.contains("class=\"format-showcase-count\">" + FORMATS.size() + " formats"));
     assertTrue(stylesheet.contains(".format-grid {"));
     assertTrue(stylesheet.contains("gap: 0;"));
     assertTrue(stylesheet.contains("overflow: hidden;"));
@@ -37,7 +37,8 @@ class BrowseWelcomeFormatsContractTest {
     for (String format : FORMATS) {
       assertTrue(index.contains("data-format=\"" + format + "\""), format);
       try (InputStream icon = getClass().getResourceAsStream(
-          "/META-INF/resources/browse/assets/formats/" + iconName(format) + ".svg")) {
+          "/META-INF/resources/browse/assets/formats/" + iconName(format)
+              + ("ohpm".equals(format) ? ".png" : ".svg"))) {
         assertNotNull(icon, format);
       }
     }

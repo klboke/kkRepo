@@ -81,6 +81,28 @@ class RProxyProjectionServiceTest {
   }
 
   @Test
+  void projectsBinaryIndexOnlyIntoItsPlatformNamespace() throws Exception {
+    RepositoryRuntime runtime = runtime();
+    String namespace = "bin/windows/contrib/4.5";
+    byte[] compressed = gzip("Package: demo\nVersion: 1.0.0\nMD5sum: " + "a".repeat(32) + "\n\n");
+    when(proxy.getMetadataFromUrlUnindexed(any(), anyString(), anyString(), anyBoolean()))
+        .thenReturn(MavenResponse.noBody(200));
+    when(assets.serve(runtime, namespace + "/PACKAGES.gz", false)).thenReturn(response(compressed));
+    when(registry.savePackage(any())).thenAnswer(invocation -> withId(invocation.getArgument(0), 10L));
+    when(registry.findSuite(runtime.id(), namespace)).thenReturn(Optional.of(
+        new RRegistryDao.SuiteState(runtime.id(), namespace, 9L, Instant.EPOCH,
+            8L, 1, Instant.EPOCH, null, null, Instant.EPOCH)));
+    assertEquals(9L, service.prepareGroupMember(runtime, namespace, Instant.EPOCH));
+    ArgumentCaptor<RRegistryDao.PackageRecord> saved = ArgumentCaptor.forClass(RRegistryDao.PackageRecord.class);
+    verify(registry).savePackage(saved.capture());
+    assertEquals(namespace, saved.getValue().distribution());
+    assertEquals("binary", saved.getValue().component());
+    assertEquals(namespace + "/demo_1.0.0.zip", saved.getValue().path());
+    verify(registry).listPackagePage(runtime.id(), namespace, "", 0L, RRegistryDao.PACKAGE_PAGE_SIZE);
+    verify(registry, never()).listPackagePage(runtime.id(), "src/contrib", "", 0L, RRegistryDao.PACKAGE_PAGE_SIZE);
+  }
+
+  @Test
   void projectsUpstreamIndexRetiresStaleRowsAndPersistsVerifiedManifest() throws Exception {
     RepositoryRuntime runtime = runtime();
     String md5 = "a".repeat(32);

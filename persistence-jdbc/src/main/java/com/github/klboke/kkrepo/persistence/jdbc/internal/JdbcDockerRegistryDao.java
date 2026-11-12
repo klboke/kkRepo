@@ -782,7 +782,7 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
     args.add(repositoryId);
     String after = "";
     if (last != null && !last.isBlank()) {
-      after = " AND image_name > ?";
+      after = " AND image_name > ?\n";
       args.add(last);
     }
     args.add(Math.max(1, limit));

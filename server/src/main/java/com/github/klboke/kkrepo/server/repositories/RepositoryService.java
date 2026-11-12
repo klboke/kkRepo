@@ -24,6 +24,7 @@ import com.github.klboke.kkrepo.server.docker.DockerConnectorRuntime;
 import com.github.klboke.kkrepo.server.docker.DockerMigrationMetadataCleanup;
 import com.github.klboke.kkrepo.server.helm.HelmGroupIndexCache;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmGroupPackumentCache;
 import com.github.klboke.kkrepo.server.pypi.PypiGroupSimpleIndexCache;
@@ -961,7 +962,10 @@ public class RepositoryService {
     if (rRegistry == null) return;
     java.time.Instant now = java.time.Instant.now();
     rRegistry.ensureSuite(repositoryId, "src/contrib", now);
-    rRegistry.markSuiteDirty(repositoryId, "src/contrib", now);
+    Set<String> namespaces = new LinkedHashSet<>();
+    namespaces.add("src/contrib");
+    rRegistry.listSuites(repositoryId).forEach(state -> namespaces.add(state.distribution()));
+    namespaces.forEach(namespace -> rRegistry.markSuiteDirty(repositoryId, namespace, now));
   }
 
   private void invalidateRGroupSnapshots(
@@ -1536,9 +1540,9 @@ public class RepositoryService {
     if (minimumReleaseAge < 0) {
       throw new RepositoryValidationException("proxy.minimumReleaseAgeMinutes must be at least 0");
     }
-    if (minimumReleaseAge > 0 && format != RepositoryFormat.NPM) {
+    if (minimumReleaseAge > 0 && !RepositoryRuntime.supportsMinimumReleaseAge(format)) {
       throw new RepositoryValidationException(
-          "proxy.minimumReleaseAgeMinutes is only supported for npm proxy repositories");
+          "proxy.minimumReleaseAgeMinutes is only supported for npm, Go, Maven and PyPI proxy repositories");
     }
     if (format == RepositoryFormat.SWIFT) {
       normalizeSwiftRemoteUrl(settings.remoteUrl());
