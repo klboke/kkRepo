@@ -593,6 +593,49 @@ class DockerAuthFilterTest {
     assertUnauthorizedJson(response);
   }
 
+  @Test
+  void aStagingBearerRestoredAfterRevocationBindsItsSessionOnAManifestPush() throws Exception {
+    RepositoryRuntime runtime = dockerProxy("docker-live-proxy");
+    when(registry.resolve("docker-live-proxy")).thenReturn(Optional.of(runtime));
+    AuthenticatedSubject stagingBearer = new AuthenticatedSubject(
+        "Local", "alice", "local", 9L, permissionSubject, Boolean.TRUE, "7");
+    when(authService.authenticateBearer(
+        eq("staging-bearer"),
+        eq(runtime.id()),
+        eq("docker-live-proxy"),
+        eq("library/alpine"),
+        eq("push"),
+        any()))
+        .thenReturn(Optional.of(
+            new DockerAuthService.BearerAuthentication(stagingBearer, false)));
+    when(accessDecisionService.decide(any(), any())).thenReturn(AccessDecision.allow());
+    com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao securityDao =
+        mock(com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao.class);
+    DockerAuthFilter filter = new DockerAuthFilter(
+        registry, authService, mock(SecurityAuthenticationService.class), accessDecisionService,
+        forwardedHeaderPolicy);
+    filter.setStagingCredentialService(new com.github.klboke.kkrepo.server.staging
+        .StagingCredentialService(
+            securityDao,
+            mock(com.github.klboke.kkrepo.server.security.SecurityManagementService.class)));
+    MockHttpServletRequest request = new MockHttpServletRequest(
+        "PUT", "/v2/docker-live-proxy/library/alpine/manifests/latest");
+    request.addHeader(HttpHeaders.AUTHORIZATION, "Bearer staging-bearer");
+    MockHttpServletResponse response = new MockHttpServletResponse();
+    MockFilterChain chain = new MockFilterChain();
+
+    filter.doFilter(request, response, chain);
+
+    // Even though the staging API key no longer exists, the bearer keeps the session binding, so
+    // the manifest PUT is routed to staging instead of the live repository.
+    assertEquals(
+        "7",
+        request.getAttribute(
+            com.github.klboke.kkrepo.server.staging.StagingCredentialService.SESSION_ATTRIBUTE));
+    org.mockito.Mockito.verifyNoInteractions(securityDao);
+    assertEquals(200, response.getStatus());
+  }
+
   private static void assertUnauthorizedJson(MockHttpServletResponse response) throws Exception {
     assertEquals(401, response.getStatus());
     assertEquals("application/json", response.getContentType());

@@ -185,6 +185,7 @@ public class ComponentUploadService {
   private AptService aptService;
   private AlpineService alpineService;
   private RService rService;
+  private com.github.klboke.kkrepo.server.repositories.GroupWriteTargetService groupWriteTarget;
   private OhpmHostedService ohpmHosted;
   private OhpmAccess ohpmAccess;
   private final MavenPathParser mavenPathParser = new MavenPathParser();
@@ -301,6 +302,12 @@ public class ComponentUploadService {
     this.rService = rService;
   }
 
+  @Autowired(required = false)
+  void setGroupWriteTargetService(
+      com.github.klboke.kkrepo.server.repositories.GroupWriteTargetService groupWriteTarget) {
+    this.groupWriteTarget = groupWriteTarget;
+  }
+
   @Autowired
   void setOhpmSupport(OhpmHostedService ohpmHosted, OhpmAccess ohpmAccess) {
     this.ohpmHosted = ohpmHosted;
@@ -323,6 +330,9 @@ public class ComponentUploadService {
       String createdByIp) throws IOException {
     RepositoryRuntime runtime = registry.resolve(repository)
         .orElseThrow(() -> new MavenExceptions.MavenNotFoundException("Repository not found: " + repository));
+    if (runtime.isGroup() && groupWriteTarget != null) {
+      runtime = groupWriteTarget.requireWriteTarget(runtime);
+    }
     if (!runtime.online()) {
       throw new UploadValidationException("Repository is offline: " + repository);
     }

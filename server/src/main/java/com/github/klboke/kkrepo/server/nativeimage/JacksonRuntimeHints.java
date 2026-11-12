@@ -36,7 +36,14 @@ public final class JacksonRuntimeHints implements RuntimeHintsRegistrar {
           "com.github.klboke.kkrepo.server.docker.DockerConnectorManager$Snapshot",
           "com.github.klboke.kkrepo.server.docker.DockerConnectorManager$ConnectorStatus",
           "com.github.klboke.kkrepo.server.docker.DockerConnectorManager$ConnectorTuning",
-          "com.github.klboke.kkrepo.server.docker.DockerTransferLimiter$Snapshot");
+          "com.github.klboke.kkrepo.server.docker.DockerTransferLimiter$Snapshot",
+          "com.github.klboke.kkrepo.server.staging.StagingService$CreateSessionRequest",
+          "com.github.klboke.kkrepo.server.staging.StagingService$UpdateSessionRequest",
+          "com.github.klboke.kkrepo.server.staging.StagingService$StagingSessionView",
+          "com.github.klboke.kkrepo.server.staging.StagingService$StagingRepositoryView",
+          "com.github.klboke.kkrepo.server.staging.StagingService$StagingItemView",
+          "com.github.klboke.kkrepo.server.staging.StagingService$StagingReport",
+          "com.github.klboke.kkrepo.persistence.jdbc.api.model.StagingSessionRecord");
 
   @Override
   public void registerHints(RuntimeHints hints, ClassLoader classLoader) {

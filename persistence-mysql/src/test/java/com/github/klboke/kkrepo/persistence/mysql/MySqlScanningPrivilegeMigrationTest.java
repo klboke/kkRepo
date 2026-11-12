@@ -62,7 +62,7 @@ class MySqlScanningPrivilegeMigrationTest extends MySqlIntegrationTestSupport {
         WHERE role_id <> 'nx-admin' ORDER BY role_id, privilege_id
         """);
     Flyway current = migration(null);
-    assertEquals(5, current.migrate().migrationsExecuted);
+    assertEquals(7, current.migrate().migrationsExecuted);
     assertEquals(definitions, jdbc().queryForList("""
         SELECT privilege_id, name, description, type, read_only, properties_json
         FROM security_privilege WHERE privilege_id <> 'nx-security-scanning-waivers-delete'

@@ -17,6 +17,8 @@ import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
+import com.github.klboke.kkrepo.server.staging.StagingSelector;
+import com.github.klboke.kkrepo.server.staging.StagingService;
 import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
@@ -24,6 +26,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -58,6 +61,12 @@ public class DockerRegistryController {
   private final AccessDecisionService accessDecisionService;
   private final ForwardedHeaderPolicy forwardedHeaderPolicy;
   private final DockerPathParser parser = new DockerPathParser();
+  private StagingService staging;
+
+  @Autowired(required = false)
+  public void setStagingService(StagingService staging) {
+    this.staging = staging;
+  }
 
   public DockerRegistryController(
       RepositoryRuntimeRegistry registry,
@@ -97,10 +106,15 @@ public class DockerRegistryController {
     }
     RepositoryRuntime runtime = runtime(target, request);
     return switch (target.path().kind()) {
-      case MANIFEST -> stream(dispatchManifest(runtime, target.path(), false, accept), request, false);
+      case MANIFEST -> {
+        ResponseEntity<?> staged = stagedManifest(request, runtime, target.path(), false);
+        yield staged != null
+            ? staged : stream(dispatchManifest(runtime, target.path(), false, accept), request, false);
+      }
       case BLOB -> stream(dispatchBlob(runtime, target.path(), false), request, true);
       case UPLOAD_SESSION -> uploadStatus(request, runtime, target, target.path());
-      case TAGS -> tagsJson(request, dispatchTags(runtime, target.path(), last, limit), limit);
+      case TAGS -> tagsJson(
+          request, dispatchTags(request, runtime, target.path(), last, limit), limit);
       case CATALOG -> catalogJson(request, dispatchCatalog(runtime, last, limit), limit);
       case REFERRERS -> referrersJson(dispatchReferrers(runtime, target.path(), artifactType), artifactType);
       default -> throw new DockerProtocolException(
@@ -122,7 +136,11 @@ public class DockerRegistryController {
     }
     RepositoryRuntime runtime = runtime(target, request);
     return switch (target.path().kind()) {
-      case MANIFEST -> stream(dispatchManifest(runtime, target.path(), true, accept), request, false);
+      case MANIFEST -> {
+        ResponseEntity<?> staged = stagedManifest(request, runtime, target.path(), true);
+        yield staged != null
+            ? staged : stream(dispatchManifest(runtime, target.path(), true, accept), request, false);
+      }
       case BLOB -> stream(dispatchBlob(runtime, target.path(), true), request, false);
       case UPLOAD_SESSION -> uploadStatus(request, runtime, target, target.path());
       default -> throw new DockerProtocolException(
@@ -184,6 +202,19 @@ public class DockerRegistryController {
     RepositoryRuntime runtime = runtime(target, request);
     DockerPath path = target.path();
     if (path.kind() == DockerPath.Kind.MANIFEST) {
+      String stagingSession = stagingSession(request);
+      if (stagingSession != null) {
+        if (staging == null) {
+          throw new DockerProtocolException(
+              DockerErrorCode.UNSUPPORTED, "Staging is unavailable", 503);
+        }
+        staging.putRequest(
+            runtime, stagingSession, manifestPath(path), request,
+            subject(request), ClientAddress.from(request));
+        return ResponseEntity.status(HttpStatus.CREATED).build();
+      }
+    }
+    if (path.kind() == DockerPath.Kind.MANIFEST) {
       DockerResponse response = hosted.putManifest(
           runtime, path.imageName(), path.reference(), request.getInputStream(), contentType, tags,
           userId(request), ClientAddress.from(request))
@@ -191,6 +222,11 @@ public class DockerRegistryController {
       return stream(response, request, false);
     }
     if (path.kind() == DockerPath.Kind.UPLOAD_SESSION) {
+      String stagingSession = stagingSession(request);
+      if (stagingSession != null && staging == null) {
+        throw new DockerProtocolException(
+            DockerErrorCode.UNSUPPORTED, "Staging is unavailable", 503);
+      }
       var result = hosted.completeUpload(
           runtime,
           path.uploadUuid(),
@@ -200,6 +236,11 @@ public class DockerRegistryController {
           parseUploadDigest(digest),
           userId(request),
           ClientAddress.from(request));
+      if (stagingSession != null && result.blobId() != null) {
+        staging.stageDockerBlob(
+            runtime, stagingSession, result.digest().value(), result.blobId(),
+            subject(request), ClientAddress.from(request));
+      }
       return ResponseEntity.status(HttpStatus.CREATED)
           .header(DockerConstants.API_VERSION_HEADER, DockerConstants.API_VERSION)
           .header(DockerConstants.CONTENT_DIGEST_HEADER, result.digest().value())
@@ -214,6 +255,20 @@ public class DockerRegistryController {
     DockerTarget target = target(request);
     RepositoryRuntime runtime = runtime(target, request);
     DockerPath path = target.path();
+    if (path.kind() == DockerPath.Kind.MANIFEST) {
+      String stagingSession = stagingSession(request);
+      if (stagingSession != null) {
+        if (staging == null) {
+          throw new DockerProtocolException(
+              DockerErrorCode.UNSUPPORTED, "Staging is unavailable", 503);
+        }
+        int deleted = staging.deleteRaw(
+            runtime, stagingSession, manifestPath(path), subject(request),
+            ClientAddress.from(request));
+        return ResponseEntity.status(
+            deleted == 0 ? HttpStatus.NOT_FOUND : HttpStatus.ACCEPTED).build();
+      }
+    }
     if (path.kind() == DockerPath.Kind.MANIFEST) {
       return stream(hosted.deleteManifest(runtime, path.imageName(), path.reference()), request, false);
     }
@@ -256,12 +311,31 @@ public class DockerRegistryController {
     };
   }
 
-  private DockerTagList dispatchTags(RepositoryRuntime runtime, DockerPath path, String last, int limit) {
-    return switch (runtime.type()) {
+  private DockerTagList dispatchTags(
+      HttpServletRequest request,
+      RepositoryRuntime runtime,
+      DockerPath path,
+      String last,
+      int limit) {
+    DockerTagList live = switch (runtime.type()) {
       case HOSTED -> hosted.tags(runtime, path.imageName(), last, limit);
       case PROXY -> proxy.tags(runtime, path.imageName(), last, limit);
       case GROUP -> group.tags(runtime, path.imageName(), last, limit);
     };
+    if (staging == null || !staged(request)) {
+      return live;
+    }
+    java.util.TreeSet<String> merged = new java.util.TreeSet<>(live.tags());
+    merged.addAll(staging.stagedDockerTags(
+        runtime, stagingSession(request), path.imageName(), subject(request)));
+    int bounded = Math.max(1, limit);
+    List<String> page = merged.stream()
+        .filter(tag -> last == null || last.isBlank() || tag.compareTo(last) > 0)
+        .limit(bounded + 1L)
+        .toList();
+    boolean hasNext = page.size() > bounded;
+    return new DockerTagList(
+        path.imageName(), page.stream().limit(bounded).toList(), hasNext);
   }
 
   private DockerCatalogList dispatchCatalog(RepositoryRuntime runtime, String last, int limit) {
@@ -422,6 +496,63 @@ public class DockerRegistryController {
       runtime = routingPolicy.prepareCanonical(runtime, path, request);
     }
     return runtime;
+  }
+
+  private ResponseEntity<?> stagedManifest(
+      HttpServletRequest request, RepositoryRuntime runtime, DockerPath path, boolean headOnly) {
+    if (staging == null || !staged(request)) {
+      return null;
+    }
+    java.util.Optional<StagingService.StagedContent> content = staging.findStagedContent(
+        runtime, stagingSession(request), manifestPath(path), subject(request));
+    if (content.isEmpty()) {
+      return null;
+    }
+    StagingService.StagedContent staged = content.get();
+    if (staged.item().action().equals(com.github.klboke.kkrepo.persistence.jdbc.api.StagingDao.ITEM_DELETE)) {
+      return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
+    }
+    byte[] body = staging.readStagedBody(staged.blob());
+    HttpHeaders headers = new HttpHeaders();
+    String contentType = staged.item().contentType() == null
+        ? "application/vnd.oci.image.manifest.v1+json" : staged.item().contentType();
+    headers.setContentType(MediaType.parseMediaType(contentType));
+    headers.set("Docker-Content-Digest", "sha256:" + staged.blob().sha256());
+    headers.setETag("\"sha256:" + staged.blob().sha256() + "\"");
+    headers.setContentLength(body.length);
+    return headOnly
+        ? ResponseEntity.status(HttpStatus.OK).headers(headers).build()
+        : ResponseEntity.status(HttpStatus.OK).headers(headers).body(body);
+  }
+
+  private static boolean staged(HttpServletRequest request) {
+    return stagingSession(request) != null;
+  }
+
+  /**
+   * Every selector (header, query parameter, credential binding) must route before the live
+   * writer. A contradictory selector is a protocol error, never a silent live publication.
+   */
+  private static String stagingSession(HttpServletRequest request) {
+    try {
+      return StagingSelector.resolve(request);
+    } catch (org.springframework.web.server.ResponseStatusException selectorError) {
+      throw new DockerProtocolException(
+          DockerErrorCode.UNSUPPORTED,
+          selectorError.getReason() == null ? "Invalid staging session" : selectorError.getReason(),
+          selectorError.getStatusCode().value());
+    }
+  }
+
+  private static String manifestPath(DockerPath path) {
+    return "manifest/" + path.imageName() + "/" + path.reference();
+  }
+
+  private static com.github.klboke.kkrepo.auth.PermissionSubject subject(
+      HttpServletRequest request) {
+    Object value = request.getAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE);
+    return value instanceof AuthenticatedSubject authenticated
+        ? authenticated.permissionSubject() : null;
   }
 
   private static String userId(HttpServletRequest request) {

@@ -34,7 +34,26 @@ public class JdbcDockerAuthTokenDao implements com.github.klboke.kkrepo.persiste
       TokenKind tokenKind,
       List<Map<String, Object>> scopes,
       Instant expiresAt) {
+    insert(tokenHash, source, userId, realmId, apiKeyId, tokenKind, scopes, null, expiresAt);
+  }
+
+  public void insert(
+      String tokenHash,
+      String source,
+      String userId,
+      String realmId,
+      Long apiKeyId,
+      TokenKind tokenKind,
+      List<Map<String, Object>> scopes,
+      String stagingSession,
+      Instant expiresAt) {
     TokenKind storedKind = tokenKind == null ? TokenKind.USER : tokenKind;
+    Map<String, Object> tokenData = new java.util.LinkedHashMap<>();
+    tokenData.put("tokenKind", storedKind.name());
+    tokenData.put("scopes", scopes == null ? List.of() : scopes);
+    if (stagingSession != null && !stagingSession.isBlank()) {
+      tokenData.put("stagingSession", stagingSession);
+    }
     jdbcTemplate.update("""
         INSERT INTO docker_auth_token
           (token_hash, subject_source, subject_user_id, subject_realm_id,
@@ -46,9 +65,7 @@ public class JdbcDockerAuthTokenDao implements com.github.klboke.kkrepo.persiste
         userId,
         realmId,
         apiKeyId,
-        jsonColumns.parameter(Map.of(
-            "tokenKind", storedKind.name(),
-            "scopes", scopes == null ? List.of() : scopes)),
+        jsonColumns.parameter(tokenData),
         Timestamp.from(expiresAt));
   }
 
@@ -70,7 +87,8 @@ public class JdbcDockerAuthTokenDao implements com.github.klboke.kkrepo.persiste
               rs.getObject("subject_api_key_id") == null ? null : rs.getLong("subject_api_key_id"),
               tokenKind(tokenData),
               tokenData,
-              rs.getTimestamp("expires_at").toInstant());
+              rs.getTimestamp("expires_at").toInstant(),
+              stagingSession(tokenData));
         },
         normalize(tokenHash),
         Timestamp.from(now)).stream().findFirst();
@@ -162,6 +180,11 @@ public class JdbcDockerAuthTokenDao implements com.github.klboke.kkrepo.persiste
     } catch (IllegalArgumentException ignored) {
       return TokenKind.USER;
     }
+  }
+
+  private static String stagingSession(Map<String, Object> tokenData) {
+    Object value = tokenData.get("stagingSession");
+    return value == null || value.toString().isBlank() ? null : value.toString();
   }
 
 }
