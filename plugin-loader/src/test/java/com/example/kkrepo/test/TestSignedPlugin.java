@@ -1,7 +1,13 @@
 package com.example.kkrepo.test;
 
+import com.github.klboke.kkrepo.plugin.api.CleanupCandidate;
+import com.github.klboke.kkrepo.plugin.api.CleanupRequest;
+import com.github.klboke.kkrepo.plugin.api.CleanupRule;
 import com.github.klboke.kkrepo.plugin.api.FormatId;
 import com.github.klboke.kkrepo.plugin.api.KkRepoPlugin;
+import com.github.klboke.kkrepo.plugin.api.MaintenanceRequest;
+import com.github.klboke.kkrepo.plugin.api.MaintenanceResult;
+import com.github.klboke.kkrepo.plugin.api.MaintenanceTask;
 import com.github.klboke.kkrepo.plugin.api.PluginApiVersion;
 import com.github.klboke.kkrepo.plugin.api.PluginContext;
 import com.github.klboke.kkrepo.plugin.api.PluginDescriptor;
@@ -42,6 +48,28 @@ public final class TestSignedPlugin
     context.registerRemoteTransport(this);
     context.registerRepositoryFormat(this);
     context.registerRepositoryProtocolHandler(this);
+    context.registerCleanupRule(new CleanupRule() {
+      @Override
+      public String id() {
+        return "test-cleanup";
+      }
+
+      @Override
+      public List<CleanupCandidate> candidates(CleanupRequest request) {
+        return List.of(new CleanupCandidate("repo", "stale/a", "test", 1));
+      }
+    });
+    context.registerMaintenanceTask(new MaintenanceTask() {
+      @Override
+      public String id() {
+        return "test-maintenance";
+      }
+
+      @Override
+      public MaintenanceResult run(MaintenanceRequest request) {
+        return new MaintenanceResult(1, 0, List.of("test"));
+      }
+    });
   }
 
   @Override

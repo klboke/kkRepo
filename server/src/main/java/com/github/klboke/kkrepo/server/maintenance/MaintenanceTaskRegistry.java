@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.maintenance;
 
 import com.github.klboke.kkrepo.plugin.api.MaintenanceTask;
+import com.github.klboke.kkrepo.server.plugin.PluginRuntime;
 import com.github.klboke.kkrepo.server.scripts.ScriptRegistry;
 import java.util.List;
 import java.util.Map;
@@ -17,8 +18,11 @@ public class MaintenanceTaskRegistry {
 
   @Autowired
   public MaintenanceTaskRegistry(
-      ObjectProvider<MaintenanceTask> tasks, ObjectProvider<ScriptRegistry> scripts) {
+      ObjectProvider<MaintenanceTask> tasks,
+      ObjectProvider<ScriptRegistry> scripts,
+      ObjectProvider<PluginRuntime> plugins) {
     this(tasks.orderedStream().toList());
+    plugins.ifAvailable(runtime -> runtime.maintenanceTasks().forEach(this::register));
     scripts.ifAvailable(registry -> registry.maintenanceTasks().forEach(this::register));
   }
 

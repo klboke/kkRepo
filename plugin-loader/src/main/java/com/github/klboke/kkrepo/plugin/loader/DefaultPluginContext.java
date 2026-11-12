@@ -1,5 +1,8 @@
 package com.github.klboke.kkrepo.plugin.loader;
 
+import com.github.klboke.kkrepo.core.blobstore.BlobStoreProvider;
+import com.github.klboke.kkrepo.plugin.api.CleanupRule;
+import com.github.klboke.kkrepo.plugin.api.MaintenanceTask;
 import com.github.klboke.kkrepo.plugin.api.PluginContext;
 import com.github.klboke.kkrepo.plugin.api.RemoteTransportProvider;
 import com.github.klboke.kkrepo.plugin.api.RepositoryFormatDescriptor;
@@ -17,6 +20,9 @@ final class DefaultPluginContext implements PluginContext {
   private final Map<String, RemoteTransportProvider> remoteTransports = new LinkedHashMap<>();
   private final Map<String, RepositoryFormatProvider> repositoryFormats = new LinkedHashMap<>();
   private final List<RepositoryProtocolHandler> repositoryProtocolHandlers = new ArrayList<>();
+  private final Map<String, BlobStoreProvider> blobStoreProviders = new LinkedHashMap<>();
+  private final Map<String, CleanupRule> cleanupRules = new LinkedHashMap<>();
+  private final Map<String, MaintenanceTask> maintenanceTasks = new LinkedHashMap<>();
 
   @Override
   public void registerRemoteTransport(RemoteTransportProvider provider) {
@@ -65,6 +71,39 @@ final class DefaultPluginContext implements PluginContext {
     repositoryProtocolHandlers.add(handler);
   }
 
+  @Override
+  public void registerBlobStoreProvider(BlobStoreProvider provider) {
+    if (provider == null || provider.type() == null || provider.type().isBlank()) {
+      throw new IllegalArgumentException("Blob store provider and type are required");
+    }
+    String key = provider.type().trim().toLowerCase(Locale.ROOT);
+    if (blobStoreProviders.putIfAbsent(key, provider) != null) {
+      throw new IllegalArgumentException("Duplicate blob store provider type: " + provider.type());
+    }
+  }
+
+  @Override
+  public void registerCleanupRule(CleanupRule rule) {
+    if (rule == null || rule.id() == null || rule.id().isBlank()) {
+      throw new IllegalArgumentException("Cleanup rule and id are required");
+    }
+    String key = rule.id().trim();
+    if (cleanupRules.putIfAbsent(key, rule) != null) {
+      throw new IllegalArgumentException("Duplicate cleanup rule id: " + key);
+    }
+  }
+
+  @Override
+  public void registerMaintenanceTask(MaintenanceTask task) {
+    if (task == null || task.id() == null || task.id().isBlank()) {
+      throw new IllegalArgumentException("Maintenance task and id are required");
+    }
+    String key = task.id().trim();
+    if (maintenanceTasks.putIfAbsent(key, task) != null) {
+      throw new IllegalArgumentException("Duplicate maintenance task id: " + key);
+    }
+  }
+
   List<RemoteTransportProvider> remoteTransports() {
     return List.copyOf(remoteTransports.values());
   }
@@ -75,5 +114,17 @@ final class DefaultPluginContext implements PluginContext {
 
   List<RepositoryProtocolHandler> repositoryProtocolHandlers() {
     return List.copyOf(repositoryProtocolHandlers);
+  }
+
+  List<BlobStoreProvider> blobStoreProviders() {
+    return List.copyOf(blobStoreProviders.values());
+  }
+
+  List<CleanupRule> cleanupRules() {
+    return List.copyOf(cleanupRules.values());
+  }
+
+  List<MaintenanceTask> maintenanceTasks() {
+    return List.copyOf(maintenanceTasks.values());
   }
 }
