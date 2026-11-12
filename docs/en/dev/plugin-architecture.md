@@ -401,7 +401,7 @@ rebuild triggers.
 | Repository transport | `RemoteTransportProvider` | Indexed by type in `PluginRuntime` |
 | Repository format metadata | `RepositoryFormatProvider` | Indexed by `FormatId` |
 | Repository HTTP handlers | `RepositoryProtocolHandler` | Adapted to the server routing pipeline |
-| Storage backend | `BlobStoreProvider` | Merged into `BlobStorageRegistry` |
+| Storage backend | `BlobStoreProvider` | Merged into `BlobStorageRegistry`; plugin providers win over a built-in provider of the same type |
 | Cleanup policy | `CleanupRule` | Merged into `CleanupRuleCandidateService`, runtime owns deletion |
 | Scheduled maintenance | `MaintenanceTask` | Registered in `MaintenanceTaskRegistry` and Quartz |
 
@@ -426,6 +426,9 @@ The first slice is implemented on `feat/plugin-api`:
   plugin-contributed ports with the built-in Spring beans. External signed JARs can therefore add a
   storage backend, a read-only cleanup rule or a scheduled maintenance task without changing the
   server.
+- `plugin-storage-file` is the first extracted built-in backend: a signed JAR registering the
+  `file` provider. Installing it selects the plugin copy over the built-in provider without changing
+  repository rows. S3 and Azure extraction follow the same pattern.
 - `script-host`: JSR-223 host for cleanup rules, maintenance tasks and neutral repository handlers;
   GraalJS integration tests pass with real JavaScript scripts.
 - `ScriptRegistry` loads `module.json` modules from `kkrepo.scripts.directory` when
@@ -450,8 +453,8 @@ The first slice is implemented on `feat/plugin-api`:
 - Script repository handlers currently target the built-in `RepositoryFormat` values because the
   repository record still uses that enum. Open `FormatId` routing requires the metadata/schema
   migration described in phase 1.
-- Remaining: complete the built-in-handler migration to the neutral port; dynamic plugin JAR
-  loading is JVM-only (native hints keep the runtime buildable).
+- Remaining extraction: S3 and Azure storage providers, then the built-in repository protocol
+  handlers. Dynamic plugin JAR loading is JVM-only (native hints keep the runtime buildable).
 
 ## Migration plan
 
