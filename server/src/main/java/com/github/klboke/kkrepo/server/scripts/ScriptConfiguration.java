@@ -1,9 +1,11 @@
 package com.github.klboke.kkrepo.server.scripts;
 
 import com.github.klboke.kkrepo.plugin.api.PluginException;
+import com.github.klboke.kkrepo.plugin.api.PluginHostService;
 import com.github.klboke.kkrepo.script.ScriptMaintenanceHost;
 import com.github.klboke.kkrepo.server.routing.PluginProtocolDispatcher;
 import java.nio.file.Path;
+import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -33,7 +35,8 @@ public class ScriptConfiguration {
   }
 
   @Bean
-  public PluginProtocolDispatcher scriptProtocolDispatcher(ScriptRegistry registry) {
-    return new PluginProtocolDispatcher(registry.protocolHandlers());
+  public PluginProtocolDispatcher scriptProtocolDispatcher(
+      ScriptRegistry registry, List<PluginHostService> hostServices) {
+    return new PluginProtocolDispatcher(registry.protocolHandlers(), hostServices);
   }
 }

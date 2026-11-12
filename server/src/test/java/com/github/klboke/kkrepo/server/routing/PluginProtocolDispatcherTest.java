@@ -15,6 +15,7 @@ import com.github.klboke.kkrepo.plugin.api.RepositoryProtocolHandler;
 import com.github.klboke.kkrepo.plugin.api.RepositoryProtocolRoute;
 import com.github.klboke.kkrepo.plugin.api.RepositoryRequest;
 import com.github.klboke.kkrepo.plugin.api.RepositoryResponse;
+import com.github.klboke.kkrepo.protocol.helm.HelmChartUploader;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import java.nio.charset.StandardCharsets;
@@ -22,6 +23,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
@@ -117,13 +119,59 @@ class PluginProtocolDispatcherTest {
     assertTrue(dispatcher.allowsEmptyRoutes());
   }
 
+  @Test
+  void exposesHostServicesInTheRepositoryContext() throws Exception {
+    AtomicInteger uploads = new AtomicInteger();
+    HelmChartUploader uploader = (repository, chart, user, ip) -> {
+      uploads.incrementAndGet();
+      return 202;
+    };
+    RepositoryProtocolHandler handler = new RepositoryProtocolHandler() {
+      @Override
+      public Collection<RepositoryProtocolRoute> routes() {
+        return List.of(RepositoryProtocolRoute.exactPath(
+            new FormatId("helm"), RepositoryKind.HOSTED, "POST", "api/charts", -100));
+      }
+
+      @Override
+      public RepositoryResponse handle(RepositoryRequest request) throws java.io.IOException {
+        HelmChartUploader service = request.context().service(HelmChartUploader.class)
+            .orElseThrow();
+        int status = service.upload(
+            request.repository(), request.multipart(), "anonymous", request.context().clientAddress());
+        return RepositoryResponse.status(status);
+      }
+    };
+    PluginProtocolDispatcher dispatcher =
+        new PluginProtocolDispatcher(List.of(handler), List.of(uploader));
+    MockHttpServletRequest servlet =
+        new MockHttpServletRequest("POST", "/repository/repo/api/charts");
+    RepositoryProtocolRequest request = new RepositoryProtocolRequest(
+        runtime(RepositoryFormat.HELM, RepositoryType.HOSTED),
+        "repo",
+        "api/charts",
+        HttpMethod.POST,
+        servlet,
+        null,
+        new MockMultipartFile("chart", "chart.tgz", "application/gzip", new byte[] {1}));
+
+    ResponseEntity<?> response = dispatcher.handle(request);
+
+    assertEquals(202, response.getStatusCode().value());
+    assertEquals(1, uploads.get());
+  }
+
   private static RepositoryRuntime runtime() {
+    return runtime(RepositoryFormat.RAW, RepositoryType.HOSTED);
+  }
+
+  private static RepositoryRuntime runtime(RepositoryFormat format, RepositoryType type) {
     return new RepositoryRuntime(
         1L,
         "repo",
-        RepositoryFormat.RAW,
-        RepositoryType.HOSTED,
-        "raw-hosted",
+        format,
+        type,
+        format.name().toLowerCase() + "-" + type.name().toLowerCase(),
         true,
         1L,
         null,

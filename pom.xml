@@ -23,6 +23,7 @@
     <module>plugin-storage-file</module>
     <module>plugin-storage-s3</module>
     <module>plugin-storage-azure</module>
+    <module>plugin-helm</module>
     <module>cache</module>
     <module>protocol-maven</module>
     <module>protocol-npm</module>

@@ -17,7 +17,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import javax.script.Invocable;
 import javax.script.ScriptEngine;
@@ -102,10 +104,25 @@ public final class ScriptMaintenanceHost {
 
       @Override
       public RepositoryResponse handle(RepositoryRequest request) {
-        return invoke(engine, "handle", request,
+        return invoke(engine, "handle", scriptPayload(request),
             new TypeReference<RepositoryResponse>() {}, "repository handler " + handlerId);
       }
     };
+  }
+
+  /** Scripts receive portable JSON; host services stay in-process and are never serialized. */
+  private static Map<String, Object> scriptPayload(RepositoryRequest request) {
+    Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("repository", request.repository());
+    payload.put("repositoryName", request.repositoryName());
+    payload.put("path", request.path());
+    payload.put("method", request.method());
+    payload.put("headers", request.headers());
+    payload.put("queryParameters", request.queryParameters());
+    payload.put("body", request.body());
+    payload.put("multipart", request.multipart());
+    payload.put("attributes", request.attributes());
+    return payload;
   }
 
   private ScriptEngine engine(Path script, String language) throws PluginException {

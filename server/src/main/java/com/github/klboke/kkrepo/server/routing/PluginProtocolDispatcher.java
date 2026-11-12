@@ -2,9 +2,12 @@ package com.github.klboke.kkrepo.server.routing;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.plugin.api.FormatId;
 import com.github.klboke.kkrepo.plugin.api.MultipartPart;
+import com.github.klboke.kkrepo.plugin.api.PluginHostService;
 import com.github.klboke.kkrepo.plugin.api.RepositoryDescriptor;
+import com.github.klboke.kkrepo.plugin.api.RepositoryContext;
 import com.github.klboke.kkrepo.plugin.api.RepositoryKind;
 import com.github.klboke.kkrepo.plugin.api.RepositoryProtocolHandler;
 import com.github.klboke.kkrepo.plugin.api.RepositoryRequest;
@@ -46,9 +49,16 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
 
   private final List<Registration> registrations;
   private final List<RepositoryProtocolRoute> routes;
+  private final List<PluginHostService> hostServices;
 
   public PluginProtocolDispatcher(List<RepositoryProtocolHandler> handlers) {
+    this(handlers, List.of());
+  }
+
+  public PluginProtocolDispatcher(
+      List<RepositoryProtocolHandler> handlers, List<PluginHostService> hostServices) {
     Objects.requireNonNull(handlers, "handlers");
+    this.hostServices = hostServices == null ? List.of() : List.copyOf(hostServices);
     List<Registration> collected = new ArrayList<>();
     List<RepositoryProtocolRoute> converted = new ArrayList<>();
     for (RepositoryProtocolHandler handler : handlers) {
@@ -118,9 +128,10 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
     return null;
   }
 
-  private static RepositoryRequest toNeutralRequest(RepositoryProtocolRequest request)
+  private RepositoryRequest toNeutralRequest(RepositoryProtocolRequest request)
       throws IOException {
     HttpServletRequest servlet = request.servletRequest();
+    RepositoryDescriptor descriptor = descriptor(request.runtime());
     Map<String, List<String>> headers = new LinkedHashMap<>();
     Enumeration<String> names = servlet.getHeaderNames();
     if (names != null) {
@@ -136,7 +147,7 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
       }
     });
     return new RepositoryRequest(
-        descriptor(request.runtime()),
+        descriptor,
         request.repositoryName(),
         request.path(),
         request.method().name(),
@@ -144,6 +155,7 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
         query,
         request.multipartFile() == null ? body(servlet, request.method()) : new byte[0],
         multipart(request.multipartFile()),
+        new HostContext(descriptor, hostServices, servlet.getRemoteAddr()),
         Map.of());
   }
 
@@ -202,5 +214,24 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
   private record Registration(
       com.github.klboke.kkrepo.plugin.api.RepositoryProtocolRoute route,
       RepositoryProtocolHandler handler) {
+  }
+
+  private record HostContext(
+      RepositoryDescriptor repository,
+      List<PluginHostService> services,
+      String clientAddress) implements RepositoryContext {
+
+    @Override
+    public java.util.Optional<BlobStorage> blobs() {
+      return java.util.Optional.empty();
+    }
+
+    @Override
+    public <T> java.util.Optional<T> service(Class<T> type) {
+      return services.stream()
+          .filter(type::isInstance)
+          .map(type::cast)
+          .findFirst();
+    }
   }
 }

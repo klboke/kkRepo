@@ -5,6 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 
 /** Framework-agnostic repository request passed to a plugin handler. */
 public record RepositoryRequest(
@@ -16,6 +17,7 @@ public record RepositoryRequest(
     Map<String, String> queryParameters,
     byte[] body,
     MultipartPart multipart,
+    RepositoryContext context,
     Map<String, Object> attributes) {
 
   public RepositoryRequest {
@@ -30,7 +32,35 @@ public record RepositoryRequest(
     headers = copyHeaders(headers);
     queryParameters = queryParameters == null ? Map.of() : Map.copyOf(queryParameters);
     body = body == null ? new byte[0] : body.clone();
+    context = context == null ? RepositoryContext.empty(repository) : context;
+    if (!Objects.equals(repository, context.repository())) {
+      throw new IllegalArgumentException("Repository context does not match the request repository");
+    }
     attributes = attributes == null ? Map.of() : Map.copyOf(attributes);
+  }
+
+  /** Compatibility constructor for callers that predate the host context. */
+  public RepositoryRequest(
+      RepositoryDescriptor repository,
+      String repositoryName,
+      String path,
+      String method,
+      Map<String, List<String>> headers,
+      Map<String, String> queryParameters,
+      byte[] body,
+      MultipartPart multipart,
+      Map<String, Object> attributes) {
+    this(
+        repository,
+        repositoryName,
+        path,
+        method,
+        headers,
+        queryParameters,
+        body,
+        multipart,
+        RepositoryContext.empty(repository),
+        attributes);
   }
 
   public String bodyText() {

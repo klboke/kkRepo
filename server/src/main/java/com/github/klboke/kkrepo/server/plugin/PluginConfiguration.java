@@ -1,9 +1,11 @@
 package com.github.klboke.kkrepo.server.plugin;
 
 import com.github.klboke.kkrepo.plugin.api.PluginException;
+import com.github.klboke.kkrepo.plugin.api.PluginHostService;
 import com.github.klboke.kkrepo.plugin.loader.PluginLoader;
 import com.github.klboke.kkrepo.server.routing.PluginProtocolDispatcher;
 import java.nio.file.Path;
+import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -36,7 +38,8 @@ public class PluginConfiguration {
 
   @Bean
   @ConditionalOnProperty(prefix = "kkrepo.plugins", name = "enabled", havingValue = "true")
-  public PluginProtocolDispatcher pluginProtocolDispatcher(PluginRuntime runtime) {
-    return new PluginProtocolDispatcher(runtime.repositoryProtocolHandlers());
+  public PluginProtocolDispatcher pluginProtocolDispatcher(
+      PluginRuntime runtime, List<PluginHostService> hostServices) {
+    return new PluginProtocolDispatcher(runtime.repositoryProtocolHandlers(), hostServices);
   }
 }
