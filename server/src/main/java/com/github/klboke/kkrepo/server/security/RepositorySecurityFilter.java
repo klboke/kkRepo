@@ -328,6 +328,20 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
 
   private List<PermissionAction> actionsForDecision(
       RepositoryRecord repository, RepositoryRequest target) {
+    String wingetPath = target.path() == null ? "" : target.path();
+    while (wingetPath.endsWith("/") && !wingetPath.isEmpty()) {
+      wingetPath = wingetPath.substring(0, wingetPath.length() - 1);
+    }
+    if (repository.format() == RepositoryFormat.WINGET
+        && "POST".equalsIgnoreCase(target.method())
+        && ("api/manifestSearch".equals(wingetPath)
+            || "manifestSearch".equals(wingetPath))) {
+      return List.of(PermissionAction.READ);
+    }
+    if (repository.format() == RepositoryFormat.WINGET
+        && "PUT".equalsIgnoreCase(target.method())) {
+      return List.of(PermissionAction.ADD, PermissionAction.EDIT);
+    }
     if ((repository.format() == RepositoryFormat.SWIFT
         || repository.format() == RepositoryFormat.ANSIBLEGALAXY
         || repository.format() == RepositoryFormat.APT
