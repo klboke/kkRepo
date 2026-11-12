@@ -25,6 +25,7 @@
     <module>plugin-storage-azure</module>
     <module>plugin-helm</module>
     <module>plugin-gitlfs</module>
+    <module>plugin-ohpm</module>
     <module>cache</module>
     <module>protocol-maven</module>
     <module>protocol-npm</module>
