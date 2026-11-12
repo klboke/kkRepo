@@ -429,6 +429,9 @@ The first slice is implemented on `feat/plugin-api`:
 - `plugin-helm` extracts the Helm chart upload route. It receives a narrow `RepositoryContext`
   with the host `HelmChartUploader` service; chart parsing, asset writes, index updates and audit
   stay inside the server transaction boundary.
+- The `native` build profile keeps GraalJS/Truffle off the native classpath to keep the image
+  buildable. JSR-223 scripts remain a JVM feature; run them out-of-process when native packaging is
+  required.
 - `plugin-storage-file`, `plugin-storage-s3` and `plugin-storage-azure` extract the three built-in
   storage backends into optional signed JARs. Installing one selects the plugin provider over the
   built-in provider of the same type without changing repository rows.
