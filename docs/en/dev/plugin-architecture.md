@@ -429,6 +429,9 @@ The first slice is implemented on `feat/plugin-api`:
 - `plugin-helm` extracts the Helm chart upload route. It receives a narrow `RepositoryContext`
   with the host `HelmChartUploader` service; chart parsing, asset writes, index updates and audit
   stay inside the server transaction boundary.
+- `plugin-ohpm` extracts the OHPM write routes (POST/PUT/DELETE). It delegates to a host
+  `OhpmWriteOperations` service; authentication, leases, policies, transactions and audit stay in
+  the server. Streaming GET/HEAD reads remain in the built-in handler.
 - `plugin-gitlfs` extracts the Git LFS batch, verify and object upload routes (POST/PUT). It uses a
   narrow host `GitLfsWriteOperations` service; metadata, leases, policies, transactions and audit
   stay in the server. Streaming downloads remain in the built-in handler until the neutral response
@@ -467,8 +470,8 @@ The first slice is implemented on `feat/plugin-api`:
 - Script repository handlers currently target the built-in `RepositoryFormat` values because the
   repository record still uses that enum. Open `FormatId` routing requires the metadata/schema
   migration described in phase 1.
-- Remaining extraction: the OHPM handler and the catch-all built-in handler. Dynamic plugin JAR
-  loading is JVM-only (native hints keep the runtime buildable).
+- Remaining extraction: the catch-all built-in handler. Dynamic plugin JAR loading is JVM-only
+  (native hints keep the runtime buildable).
 
 ## Migration plan
 
