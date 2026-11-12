@@ -517,7 +517,8 @@ public abstract class PersistenceApiContract {
         "terraform_publish_lease",
         "terraform_signing_key",
         "terraform_source_binding",
-        "ui_settings"), databaseTables());
+        "ui_settings",
+        "winget_manifest"), databaseTables());
   }
 
   @Test
