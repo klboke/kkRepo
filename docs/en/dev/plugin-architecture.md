@@ -213,11 +213,12 @@ public interface KkRepoPlugin {
 }
 
 public interface PluginContext {
-    void registerFormat(RepositoryFormatProvider provider);
-    void registerProtocolHandler(RepositoryProtocolHandler handler);
-    void registerBlobStoreProvider(BlobStoreProvider provider);
     void registerRemoteTransport(RemoteTransportProvider provider);
-    void registerMetadataStore(String namespace, RepositoryMetadataStore store);
+    void registerRepositoryFormat(RepositoryFormatProvider provider);
+    void registerRepositoryProtocolHandler(RepositoryProtocolHandler handler);
+    void registerBlobStoreProvider(BlobStoreProvider provider);
+    void registerCleanupRule(CleanupRule rule);
+    void registerMaintenanceTask(MaintenanceTask task);
 }
 ```
 
@@ -393,16 +394,38 @@ Example maintenance scripts: stale snapshot cleanup, orphan blob detection, empt
 cleanup, proxy cache expiry, retention by age/size/count, duplicate asset detection and metadata
 rebuild triggers.
 
+## Pluginized extension points
+
+| Extension point | Port | Runtime integration |
+| --- | --- | --- |
+| Repository transport | `RemoteTransportProvider` | Indexed by type in `PluginRuntime` |
+| Repository format metadata | `RepositoryFormatProvider` | Indexed by `FormatId` |
+| Repository HTTP handlers | `RepositoryProtocolHandler` | Adapted to the server routing pipeline |
+| Storage backend | `BlobStoreProvider` | Merged into `BlobStorageRegistry` |
+| Cleanup policy | `CleanupRule` | Merged into `CleanupRuleCandidateService`, runtime owns deletion |
+| Scheduled maintenance | `MaintenanceTask` | Registered in `MaintenanceTaskRegistry` and Quartz |
+
+The server's domain model, persistence, security, session handling and core format services remain
+in the server modules. They are not extension points and making them dynamic would weaken the
+transaction, locking and security boundaries.
+
 ## PoC status (2026-11-12)
 
 The first slice is implemented on `feat/plugin-api`:
 
 - `plugin-api`: `KkRepoPlugin`, `PluginContext`, `PluginDescriptor`, `FormatId`,
   `RepositoryFormatProvider`, `RemoteTransportProvider`, `RemoteFetcher`, portable
-  `RemoteRequest`/`RemoteResponse`, `CleanupRule` and `MaintenanceTask`.
+  `RemoteRequest`/`RemoteResponse`, neutral `RepositoryProtocolHandler`, `CleanupRule`,
+  `MaintenanceTask` and a `BlobStoreProvider` registration port.
 - `plugin-loader`: signed JAR verification against a PKCS12 truststore, single trusted signer,
   certificate validity, child-first classloader, API version check and duplicate plugin id check.
-- `PluginRuntime`: optional Spring wiring (`kkrepo.plugins.enabled`), disabled by default.
+- `PluginRuntime`: optional Spring wiring (`kkrepo.plugins.enabled`), disabled by default. It
+  indexes remote transports, formats, protocol handlers, storage providers, cleanup rules and
+  maintenance tasks.
+- `BlobStorageRegistry`, `CleanupRuleCandidateService` and `MaintenanceTaskRegistry` merge
+  plugin-contributed ports with the built-in Spring beans. External signed JARs can therefore add a
+  storage backend, a read-only cleanup rule or a scheduled maintenance task without changing the
+  server.
 - `script-host`: JSR-223 host for cleanup rules, maintenance tasks and neutral repository handlers;
   GraalJS integration tests pass with real JavaScript scripts.
 - `ScriptRegistry` loads `module.json` modules from `kkrepo.scripts.directory` when
