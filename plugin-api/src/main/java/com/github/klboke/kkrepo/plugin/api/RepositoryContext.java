@@ -24,6 +24,20 @@ public interface RepositoryContext {
     return "";
   }
 
+  /** Repository write/version/layout policies. */
+  default RepositoryPolicy policy() {
+    return new RepositoryPolicy("", "", "");
+  }
+
+  /**
+   * Opaque host request object. Only host services should read it; plugins must not cast or store
+   * it. It keeps servlet/session details out of the public request model while allowing a host
+   * service to reuse the existing transactional implementation.
+   */
+  default Object hostContext() {
+    return null;
+  }
+
   static RepositoryContext empty(RepositoryDescriptor repository) {
     return new RepositoryContext() {
       @Override

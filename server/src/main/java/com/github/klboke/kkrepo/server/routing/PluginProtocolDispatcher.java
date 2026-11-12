@@ -8,6 +8,7 @@ import com.github.klboke.kkrepo.plugin.api.MultipartPart;
 import com.github.klboke.kkrepo.plugin.api.PluginHostService;
 import com.github.klboke.kkrepo.plugin.api.RepositoryDescriptor;
 import com.github.klboke.kkrepo.plugin.api.RepositoryContext;
+import com.github.klboke.kkrepo.plugin.api.RepositoryPolicy;
 import com.github.klboke.kkrepo.plugin.api.RepositoryKind;
 import com.github.klboke.kkrepo.plugin.api.RepositoryProtocolHandler;
 import com.github.klboke.kkrepo.plugin.api.RepositoryRequest;
@@ -156,7 +157,7 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
         query,
         request.multipartFile() == null ? body(servlet, request.method()) : new byte[0],
         multipart(request.multipartFile()),
-        new HostContext(descriptor, hostServices, ClientAddress.from(servlet)),
+        new HostContext(descriptor, hostServices, ClientAddress.from(servlet), servlet),
         Map.of());
   }
 
@@ -220,7 +221,8 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
   private record HostContext(
       RepositoryDescriptor repository,
       List<PluginHostService> services,
-      String clientAddress) implements RepositoryContext {
+      String clientAddress,
+      HttpServletRequest servletRequest) implements RepositoryContext {
 
     @Override
     public java.util.Optional<BlobStorage> blobs() {
@@ -233,6 +235,17 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
           .filter(type::isInstance)
           .map(type::cast)
           .findFirst();
+    }
+
+    @Override
+    public RepositoryPolicy policy() {
+      return new RepositoryPolicy(
+          repository.writePolicy(), repository.versionPolicy(), repository.layoutPolicy());
+    }
+
+    @Override
+    public Object hostContext() {
+      return servletRequest;
     }
   }
 }
