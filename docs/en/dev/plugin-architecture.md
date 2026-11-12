@@ -416,7 +416,8 @@ The first slice is implemented on `feat/plugin-api`:
 - `plugin-api`: `KkRepoPlugin`, `PluginContext`, `PluginDescriptor`, `FormatId`,
   `RepositoryFormatProvider`, `RemoteTransportProvider`, `RemoteFetcher`, portable
   `RemoteRequest`/`RemoteResponse`, neutral `RepositoryProtocolHandler`, `RepositoryContext`,
-  `PluginHostService`, `CleanupRule`, `MaintenanceTask` and a `BlobStoreProvider` registration port.
+  `PluginHostService`, `StreamingBody`, `CleanupRule`, `MaintenanceTask` and a
+  `BlobStoreProvider` registration port.
 - `plugin-loader`: signed JAR verification against a PKCS12 truststore, single trusted signer,
   certificate validity, child-first classloader, API version check and duplicate plugin id check.
 - `PluginRuntime`: optional Spring wiring (`kkrepo.plugins.enabled`), disabled by default. It
@@ -434,8 +435,13 @@ The first slice is implemented on `feat/plugin-api`:
   the server. Streaming GET/HEAD reads remain in the built-in handler.
 - `plugin-gitlfs` extracts the Git LFS batch, verify and object upload routes (POST/PUT). It uses a
   narrow host `GitLfsWriteOperations` service; metadata, leases, policies, transactions and audit
-  stay in the server. Streaming downloads remain in the built-in handler until the neutral response
-  supports streaming.
+  stay in the server. Streaming downloads stay in the focused built-in handler.
+- `plugin-builtin` extracts the final catch-all route for every built-in format, repository kind and
+  method. It registers at order `999`, below focused handlers, and delegates through a
+  `BuiltinProtocolOperations` host service. The plugin declares `usesRawRequest()` so the dispatcher
+  does not buffer uploads or multipart bodies; `RepositoryResponse` now carries a `StreamingBody`,
+  keeping downloads streamed end to end. The existing built-in handler remains the host
+  implementation and the fallback when the plugin is not installed.
 - `RepositoryContext` now exposes a portable `RepositoryPolicy` (write/version/layout) and a narrow
   host-service lookup. The opaque host request is reserved for host adapters.
 - The `native` build profile keeps GraalJS/Truffle off the native classpath to keep the image
@@ -464,14 +470,18 @@ The first slice is implemented on `feat/plugin-api`:
   `RepositoryDescriptor`, `FormatId`) lives in `plugin-api`. `PluginProtocolDispatcher` adapts it to
   the existing servlet routing pipeline, so repository resolution, routing policy, path
   normalization and route precedence stay in the server. Built-in handlers use the renamed
-  `LegacyRepositoryProtocolHandler` during the migration.
+  `LegacyRepositoryProtocolHandler` during the migration. Handlers that declare
+  `usesRawRequest()` keep uploads on the original servlet stream, and `RepositoryResponse` can carry
+  a `StreamingBody` for downloads.
 - ArchUnit enforces that `plugin-api` does not depend on Spring, Servlet, JDBC, JPA, Quartz, the
   server or the loader.
 - Script repository handlers currently target the built-in `RepositoryFormat` values because the
   repository record still uses that enum. Open `FormatId` routing requires the metadata/schema
   migration described in phase 1.
-- Remaining extraction: the catch-all built-in handler. Dynamic plugin JAR loading is JVM-only
-  (native hints keep the runtime buildable).
+- All built-in repository routes are now plugin-owned: Helm, OHPM, GitLFS and the final catch-all.
+  The server still hosts the transactional format services behind narrow host ports; only routing
+  and request/response adaptation moved. Dynamic plugin JAR loading is JVM-only (native hints keep
+  the runtime buildable).
 
 ## Migration plan
 
