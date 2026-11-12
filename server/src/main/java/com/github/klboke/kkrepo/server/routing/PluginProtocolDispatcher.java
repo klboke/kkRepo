@@ -14,6 +14,7 @@ import com.github.klboke.kkrepo.plugin.api.RepositoryRequest;
 import com.github.klboke.kkrepo.plugin.api.RepositoryResponse;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.security.ClientAddress;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
@@ -155,7 +156,7 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
         query,
         request.multipartFile() == null ? body(servlet, request.method()) : new byte[0],
         multipart(request.multipartFile()),
-        new HostContext(descriptor, hostServices, servlet.getRemoteAddr()),
+        new HostContext(descriptor, hostServices, ClientAddress.from(servlet)),
         Map.of());
   }
 
