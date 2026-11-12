@@ -12,13 +12,18 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.plugin.api.CleanupCandidate;
 import com.github.klboke.kkrepo.plugin.api.CleanupRequest;
 import com.github.klboke.kkrepo.plugin.api.CleanupRule;
+import com.github.klboke.kkrepo.plugin.loader.LoadedPlugins;
 import com.github.klboke.kkrepo.server.cleanup.CleanupSubjectScanner.Candidate;
 import com.github.klboke.kkrepo.server.cleanup.CleanupSubjectScanner.Subject;
+import com.github.klboke.kkrepo.server.plugin.PluginRuntime;
+import com.github.klboke.kkrepo.server.scripts.ScriptRegistry;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 
 class CleanupRuleCandidateServiceTest {
 
@@ -39,8 +44,8 @@ class CleanupRuleCandidateServiceTest {
 
     assertEquals(1, candidates.size());
     assertEquals(subject, candidates.getFirst().subject());
-    assertEquals("script", candidates.getFirst().reason().get("source"));
-    assertEquals("rule-1", candidates.getFirst().reason().get("scriptId"));
+    assertEquals("rule", candidates.getFirst().reason().get("source"));
+    assertEquals("rule-1", candidates.getFirst().reason().get("ruleId"));
     assertEquals("stale", candidates.getFirst().reason().get("reason"));
   }
 
@@ -65,6 +70,33 @@ class CleanupRuleCandidateServiceTest {
 
     assertEquals(1, candidates.size());
     assertEquals("path/b", candidates.getFirst().subject().deletePath());
+  }
+
+  @Test
+  void includesRulesContributedByThePluginRuntime() {
+    CleanupSubjectScanner scanner = mock(CleanupSubjectScanner.class);
+    Subject subject = subject("asset-plugin", "plugin/path");
+    when(scanner.resolvePath(any(), eq("plugin/path"))).thenReturn(Optional.of(subject));
+    CleanupRule pluginRule = rule("plugin-rule", List.of(
+        new CleanupCandidate("repo", "plugin/path", "plugin", 1)));
+    LoadedPlugins loaded = new LoadedPlugins(
+        List.of(), List.of(), List.of(), List.of(),
+        List.of(), List.of(pluginRule), List.of(), List.of());
+    DefaultListableBeanFactory beans = new DefaultListableBeanFactory();
+    try (PluginRuntime runtime = new PluginRuntime(loaded)) {
+      beans.registerSingleton("pluginRuntime", runtime);
+      ObjectProvider<CleanupRule> rules = beans.getBeanProvider(CleanupRule.class);
+      ObjectProvider<ScriptRegistry> scripts = beans.getBeanProvider(ScriptRegistry.class);
+      ObjectProvider<PluginRuntime> plugins = beans.getBeanProvider(PluginRuntime.class);
+      CleanupRuleCandidateService service =
+          new CleanupRuleCandidateService(rules, scripts, plugins, scanner);
+
+      List<Candidate> candidates = service.candidates(repository(), 10, List.of());
+
+      assertEquals(1, candidates.size());
+      assertEquals(subject, candidates.getFirst().subject());
+      assertEquals("plugin-rule", candidates.getFirst().reason().get("ruleId"));
+    }
   }
 
   private static RepositoryRecord repository() {

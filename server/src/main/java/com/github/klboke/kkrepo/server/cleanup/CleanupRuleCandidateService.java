@@ -77,8 +77,8 @@ public class CleanupRuleCandidateService {
           scanner.resolvePath(repository, candidate.path()).ifPresent(subject -> {
             if (seen.add(key(subject))) {
               Map<String, Object> reason = new LinkedHashMap<>();
-              reason.put("source", "script");
-              reason.put("scriptId", rule.id());
+              reason.put("source", "rule");
+              reason.put("ruleId", rule.id());
               reason.put("reason", candidate.reason());
               result.add(new Candidate(subject, reason));
             }

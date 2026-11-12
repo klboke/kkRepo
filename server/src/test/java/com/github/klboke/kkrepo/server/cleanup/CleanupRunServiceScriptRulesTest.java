@@ -38,8 +38,8 @@ class CleanupRunServiceScriptRulesTest {
 
     assertEquals(1, candidates.size());
     assertEquals(subject, candidates.getFirst().subject());
-    assertEquals("script", candidates.getFirst().reason().get("source"));
-    assertEquals("rule-1", candidates.getFirst().reason().get("scriptId"));
+    assertEquals("rule", candidates.getFirst().reason().get("source"));
+    assertEquals("rule-1", candidates.getFirst().reason().get("ruleId"));
   }
 
   @Test
