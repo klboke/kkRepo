@@ -415,8 +415,8 @@ The first slice is implemented on `feat/plugin-api`:
 
 - `plugin-api`: `KkRepoPlugin`, `PluginContext`, `PluginDescriptor`, `FormatId`,
   `RepositoryFormatProvider`, `RemoteTransportProvider`, `RemoteFetcher`, portable
-  `RemoteRequest`/`RemoteResponse`, neutral `RepositoryProtocolHandler`, `CleanupRule`,
-  `MaintenanceTask` and a `BlobStoreProvider` registration port.
+  `RemoteRequest`/`RemoteResponse`, neutral `RepositoryProtocolHandler`, `RepositoryContext`,
+  `PluginHostService`, `CleanupRule`, `MaintenanceTask` and a `BlobStoreProvider` registration port.
 - `plugin-loader`: signed JAR verification against a PKCS12 truststore, single trusted signer,
   certificate validity, child-first classloader, API version check and duplicate plugin id check.
 - `PluginRuntime`: optional Spring wiring (`kkrepo.plugins.enabled`), disabled by default. It
@@ -426,6 +426,9 @@ The first slice is implemented on `feat/plugin-api`:
   plugin-contributed ports with the built-in Spring beans. External signed JARs can therefore add a
   storage backend, a read-only cleanup rule or a scheduled maintenance task without changing the
   server.
+- `plugin-helm` extracts the Helm chart upload route. It receives a narrow `RepositoryContext`
+  with the host `HelmChartUploader` service; chart parsing, asset writes, index updates and audit
+  stay inside the server transaction boundary.
 - `plugin-storage-file`, `plugin-storage-s3` and `plugin-storage-azure` extract the three built-in
   storage backends into optional signed JARs. Installing one selects the plugin provider over the
   built-in provider of the same type without changing repository rows.
@@ -453,8 +456,9 @@ The first slice is implemented on `feat/plugin-api`:
 - Script repository handlers currently target the built-in `RepositoryFormat` values because the
   repository record still uses that enum. Open `FormatId` routing requires the metadata/schema
   migration described in phase 1.
-- Remaining extraction: the built-in repository protocol handlers. Dynamic plugin JAR loading is
-  JVM-only (native hints keep the runtime buildable).
+- Remaining extraction: the other built-in repository protocol handlers (GitLFS, OHPM and the
+  catch-all built-in handler). Dynamic plugin JAR loading is JVM-only (native hints keep the
+  runtime buildable).
 
 ## Migration plan
 
