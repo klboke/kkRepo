@@ -20,6 +20,7 @@
     <module>storage-s3</module>
     <module>storage-file</module>
     <module>storage-azure</module>
+    <module>plugin-storage-file</module>
     <module>cache</module>
     <module>protocol-maven</module>
     <module>protocol-npm</module>

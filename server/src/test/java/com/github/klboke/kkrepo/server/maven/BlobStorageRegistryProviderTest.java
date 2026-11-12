@@ -171,6 +171,32 @@ class BlobStorageRegistryProviderTest {
     }
   }
 
+  @Test
+  void aPluginProviderOverridesTheBuiltInProviderOfTheSameType() {
+    RecordingProvider builtin = new RecordingProvider("file");
+    RecordingProvider pluginProvider = new RecordingProvider("file");
+    LoadedPlugins loaded = new LoadedPlugins(
+        List.of(), List.of(), List.of(), List.of(),
+        List.of(pluginProvider), List.of(), List.of(), List.of());
+    try (PluginRuntime pluginRuntime = new PluginRuntime(loaded)) {
+      DefaultListableBeanFactory beans = new DefaultListableBeanFactory();
+      beans.registerSingleton("pluginRuntime", pluginRuntime);
+      BlobStorageRegistry registry = new BlobStorageRegistry(
+          mock(BlobStoreDao.class),
+          List.of(builtin),
+          beans.getBeanProvider(PluginRuntime.class),
+          false,
+          null,
+          null);
+
+      registry.forRecord(record(3, "file-store", "file"));
+
+      assertEquals(1, pluginProvider.created.get());
+      assertEquals(0, builtin.created.get());
+      registry.shutdown();
+    }
+  }
+
   private static BlobStorageRegistry registry(BlobStoreDao dao, List<BlobStoreProvider> providers) {
     return new BlobStorageRegistry(dao, providers, false, null, null);
   }

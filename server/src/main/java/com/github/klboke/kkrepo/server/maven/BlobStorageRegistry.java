@@ -110,15 +110,18 @@ public class BlobStorageRegistry {
 
   private static List<BlobStoreProvider> mergeProviders(
       List<BlobStoreProvider> builtins, ObjectProvider<PluginRuntime> plugins) {
-    List<BlobStoreProvider> merged = new ArrayList<>(builtins == null ? List.of() : builtins);
-    if (plugins != null) {
-      plugins.ifAvailable(runtime -> merged.addAll(runtime.blobStoreProviders()));
-    }
+    List<BlobStoreProvider> merged = new ArrayList<>();
     Set<String> types = new HashSet<>();
-    for (BlobStoreProvider provider : merged) {
-      String type = BlobStoreDescriptor.normalize(provider.type());
-      if (!types.add(type)) {
-        throw new IllegalStateException("Duplicate blob store provider type: " + type);
+    if (plugins != null) {
+      plugins.ifAvailable(runtime -> runtime.blobStoreProviders().forEach(provider -> {
+        if (types.add(BlobStoreDescriptor.normalize(provider.type()))) {
+          merged.add(provider);
+        }
+      }));
+    }
+    for (BlobStoreProvider provider : builtins == null ? List.<BlobStoreProvider>of() : builtins) {
+      if (types.add(BlobStoreDescriptor.normalize(provider.type()))) {
+        merged.add(provider);
       }
     }
     return merged;
