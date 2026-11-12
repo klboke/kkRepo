@@ -431,10 +431,12 @@ The first slice is implemented on `feat/plugin-api`:
   stay inside the server transaction boundary.
 - The `native` build profile keeps GraalJS/Truffle off the native classpath to keep the image
   buildable. JSR-223 scripts remain a JVM feature; run them out-of-process when native packaging is
-  required.
+  required. Spring AOT and GraalVM Native Image both pass on the final extraction HEAD.
 - `plugin-storage-file`, `plugin-storage-s3` and `plugin-storage-azure` extract the three built-in
-  storage backends into optional signed JARs. Installing one selects the plugin provider over the
-  built-in provider of the same type without changing repository rows.
+  storage backends into optional signed JARs. The JARs shade the matching `storage-*` classes, so
+  they do not rely on the server's storage module classpath; `core` and `plugin-api` remain
+  parent-provided. Installing one selects the plugin provider over the built-in provider of the same
+  type without changing repository rows.
 - `script-host`: JSR-223 host for cleanup rules, maintenance tasks and neutral repository handlers;
   GraalJS integration tests pass with real JavaScript scripts.
 - `ScriptRegistry` loads `module.json` modules from `kkrepo.scripts.directory` when
