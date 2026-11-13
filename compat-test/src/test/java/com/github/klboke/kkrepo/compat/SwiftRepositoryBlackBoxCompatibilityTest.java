@@ -231,6 +231,52 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
   }
 
   @Test
+  void hostedVersionedManifestsMayDeclareOlderToolsVersionsWhenConfigured() throws Exception {
+    Config config = configured();
+    ensureRepositories(config);
+    String name = uniqueName("manifest-tools");
+    String root = name + "/";
+    Map<String, byte[]> manifests = new LinkedHashMap<>();
+    manifests.put("Package.swift", Fixture.manifest("Fixture", "4.2", "default")
+        .getBytes(StandardCharsets.UTF_8));
+    manifests.put("Package@swift-5.6.swift", Fixture.manifest("Fixture", "5.6", "swift-5.6")
+        .getBytes(StandardCharsets.UTF_8));
+    manifests.put("Package@swift-5.7.swift", Fixture.manifest("Fixture", "5.6", "swift-5.7")
+        .getBytes(StandardCharsets.UTF_8));
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    try (ZipOutputStream zip = new ZipOutputStream(output)) {
+      for (var entry : manifests.entrySet()) {
+        zip.putNextEntry(new ZipEntry(root + entry.getKey()));
+        zip.write(entry.getValue());
+        zip.closeEntry();
+      }
+      zip.putNextEntry(new ZipEntry(root + "Sources/Fixture/Fixture.swift"));
+      zip.write("public struct Fixture {}\n".getBytes(StandardCharsets.UTF_8));
+      zip.closeEntry();
+    }
+    Fixture fixture = Fixture.withArchive(name, "1.0.0", output.toByteArray(), null, "{}");
+    assertEquals(201, publish(config.nexusHosted(), fixture, false).status(),
+        "Nexus accepts filename versions independently of declared tools versions");
+    assertEquals(201, publish(config.candidateHosted(), fixture, false).status());
+    assertArrayEquals(fixture.archive(),
+        get(config.nexusHosted(), fixture.archivePath(), ZIP_ACCEPT).body());
+
+    List<Endpoint> endpoints = new ArrayList<>(List.of(
+        config.candidateHosted(), config.candidateGroup()));
+    if (!config.candidateSecondaryBase().isBlank()) {
+      endpoints.add(config.candidateSecondaryReplica(config.hosted()));
+    }
+    Map<String, String> digests = archiveEntryDigests(fixture.archive());
+    for (Endpoint endpoint : endpoints) {
+      assertOlderToolsVersionManifests(endpoint, fixture.coordinatePath(), digests);
+      Exchange metadata = get(endpoint, fixture.coordinatePath(), JSON_ACCEPT);
+      assertEquals(200, metadata.status());
+      assertEquals(sha256Hex(fixture.archive()), sourceChecksum(json(metadata)));
+      assertArrayEquals(fixture.archive(), get(endpoint, fixture.archivePath(), ZIP_ACCEPT).body());
+    }
+  }
+
+  @Test
   void signedHostedReleaseReturnsTheSameCmsSignatureInMetadataAndArchiveWhenConfigured()
       throws Exception {
     Config config = configured();
@@ -768,6 +814,31 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
   }
 
   @Test
+  void githubProxyAcceptsSwiftProtobufVersionedManifestToolsVersionsWhenConfigured() throws Exception {
+    Config config = configured();
+    assumeTrue(config.proxyEnabled(),
+        "Set SWIFT_COMPAT_PROXY_ENABLED=true to exercise the live GitHub-backed proxy");
+    ensureRepositories(config);
+    String release = "apple/swift-protobuf/1.20.1";
+    Exchange metadata = get(config.candidateProxy(), release, JSON_ACCEPT);
+    assertEquals(200, metadata.status(), "cold proxy materialization must accept the upstream archive");
+    Exchange archive = get(config.candidateProxy(), release + ".zip", ZIP_ACCEPT);
+    assertEquals(200, archive.status());
+    assertEquals(sha256Hex(archive.body()), sourceChecksum(json(metadata)));
+    Exchange reference = get(config.nexusProxy(), release + ".zip", ZIP_ACCEPT);
+    assertEquals(200, reference.status(), "Nexus accepts the official swift-protobuf release");
+    Map<String, String> digests = archiveEntryDigests(archive.body());
+    assertEquals(archiveEntryDigests(reference.body()), digests,
+        "proxy archives must preserve upstream file contents");
+    assertOlderToolsVersionManifests(config.candidateProxy(), release, digests);
+    if (!config.candidateSecondaryBase().isBlank()) {
+      Endpoint secondary = config.candidateSecondaryReplica(config.proxy());
+      assertOlderToolsVersionManifests(secondary, release, digests);
+      assertArrayEquals(archive.body(), get(secondary, release + ".zip", ZIP_ACCEPT).body());
+    }
+  }
+
+  @Test
   void configuredGitHubTagsNormalizeBothLowercaseAndUppercaseVWhenConfigured() throws Exception {
     Config config = configured();
     assumeTrue(config.proxyEnabled(),
@@ -814,6 +885,31 @@ class SwiftRepositoryBlackBoxCompatibilityTest {
     assertEquals(200, metadata.status(), "secondary replica metadata status");
     assertEquals(sha256Hex(fixture.archive()), sourceChecksum(json(metadata)));
     assertArrayEquals(fixture.archive(), archive.body(), "secondary replica archive bytes");
+  }
+
+  private static void assertOlderToolsVersionManifests(
+      Endpoint endpoint, String release, Map<String, String> archiveDigests) throws Exception {
+    Exchange defaultManifest = get(endpoint, release + "/Package.swift", SWIFT_ACCEPT);
+    assertEquals(200, defaultManifest.status());
+    assertEquals(archiveDigests.get("Package.swift"), sha256Hex(defaultManifest.body()));
+    for (String lookup : List.of("5.6", "5.7")) {
+      String filename = "Package@swift-" + lookup + ".swift";
+      Exchange manifest = get(endpoint, release + "/Package.swift?swift-version=" + lookup,
+          SWIFT_ACCEPT);
+      assertEquals(200, manifest.status(), "filename-derived manifest lookup " + lookup);
+      assertEquals(archiveDigests.get(filename), sha256Hex(manifest.body()));
+      assertTrue(manifest.header("content-disposition").contains(filename));
+      assertTrue(new String(manifest.body(), StandardCharsets.UTF_8)
+          .startsWith("// swift-tools-version:5.6"));
+      String link = defaultManifest.headers("link").stream()
+          .flatMap(header -> splitLinkValues(header).stream())
+          .filter(value -> value.contains("?swift-version=" + lookup + ">"))
+          .findFirst().orElseThrow();
+      assertTrue(link.contains(filename));
+      assertTrue(link.contains("swift-tools-version=\"5.6\"")
+          || link.contains("swift-tools-version=5.6"),
+          "alternate manifest must advertise its declared minimum tools version");
+    }
   }
 
   private static Config configured() throws Exception {

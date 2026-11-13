@@ -363,27 +363,9 @@ final class SwiftArchiveInspector {
       throw new SwiftExceptions.UnprocessableEntity(
           filename + " must declare // swift-tools-version on the first line");
     }
-    String declared = tools.group(1);
-    Matcher versioned = VERSIONED_MANIFEST.matcher(filename);
-    if (versioned.matches() && !compatibleToolsVersion(versioned.group(1), declared)) {
-      throw new SwiftExceptions.UnprocessableEntity(
-          filename + " does not match its declared Swift tools version " + declared);
-    }
-    return declared;
-  }
-
-  private static boolean compatibleToolsVersion(String filenameVersion, String declared) {
-    String[] expected = filenameVersion.split("\\.");
-    String[] actual = declared.split("\\.");
-    if (actual.length < expected.length) {
-      return false;
-    }
-    for (int i = 0; i < expected.length; i++) {
-      if (!expected[i].equals(actual[i])) {
-        return false;
-      }
-    }
-    return true;
+    // The filename selects a manifest for a Swift version; this declaration is its minimum
+    // tools requirement. SwiftPM permits them to differ (e.g. @swift-5.7 with tools 5.6).
+    return tools.group(1);
   }
 
   private static String leaf(String path) {

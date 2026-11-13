@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.swift;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -595,6 +596,33 @@ class SwiftGitHubClientTest {
   }
 
   @Test
+  void acceptsVersionedManifestWithAnOlderDeclaredToolsVersionFromGitHub() throws Exception {
+    byte[] archive = swiftArchive(Map.of(
+        "Package.swift", "4.2",
+        "Package@swift-5.6.swift", "5.6",
+        "Package@swift-5.7.swift", "5.6"));
+    SequencedFetcher fetcher = new SequencedFetcher(
+        result(200, Map.of("Content-Type", "application/zip"), archive));
+    SwiftGitHubClient client = new SwiftGitHubClient(
+        fetcher, new ObjectMapper(), new SwiftArchiveInspector(1024 * 1024, 1024 * 1024, 20));
+
+    SwiftArchiveInspector.InspectedArchive inspected = client.archive(
+        proxy("https://github.com/"),
+        SwiftGitHubClient.coordinates("apple", "swift-protobuf"), "a".repeat(40));
+    try {
+      assertEquals(1, fetcher.calls);
+      assertEquals(3, inspected.manifests().size());
+      var selected = inspected.manifests().stream()
+          .filter(manifest -> "5.7".equals(manifest.lookupToolsVersion())).findFirst().orElseThrow();
+      assertEquals("Package@swift-5.7.swift", selected.filename());
+      assertEquals("5.6", selected.declaredToolsVersion());
+      assertArrayEquals(archive, Files.readAllBytes(inspected.file()));
+    } finally {
+      Files.deleteIfExists(inspected.file());
+    }
+  }
+
+  @Test
   void retriesAnInterruptedArchiveBodyWithAFreshUpstreamRequest() throws Exception {
     byte[] archive = swiftArchive();
     SequencedFetcher fetcher = new SequencedFetcher(
@@ -633,14 +661,20 @@ class SwiftGitHubClientTest {
   }
 
   private static byte[] swiftArchive() throws IOException {
+    return swiftArchive(Map.of("Package.swift", "5.9"));
+  }
+
+  private static byte[] swiftArchive(Map<String, String> manifests) throws IOException {
     ByteArrayOutputStream output = new ByteArrayOutputStream();
     try (ZipOutputStream zip = new ZipOutputStream(output)) {
-      zip.putNextEntry(new ZipEntry("swift-syntax/Package.swift"));
-      zip.write(("// swift-tools-version: 5.9\n"
-          + "import PackageDescription\n"
-          + "let package = Package(name: \"swift-syntax\")\n")
-          .getBytes(StandardCharsets.UTF_8));
-      zip.closeEntry();
+      for (var manifest : manifests.entrySet()) {
+        zip.putNextEntry(new ZipEntry("swift-syntax/" + manifest.getKey()));
+        zip.write(("// swift-tools-version: " + manifest.getValue() + "\n"
+            + "import PackageDescription\n"
+            + "let package = Package(name: \"swift-syntax\")\n")
+            .getBytes(StandardCharsets.UTF_8));
+        zip.closeEntry();
+      }
     }
     return output.toByteArray();
   }
