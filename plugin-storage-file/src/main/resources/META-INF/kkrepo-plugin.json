@@ -1,0 +1,7 @@
+{
+  "id": "storage-file",
+  "version": "1.0.0",
+  "apiVersion": "1.0",
+  "mainClass": "com.github.klboke.kkrepo.plugin.storage.file.FileStoragePlugin",
+  "capabilities": ["storage.backend"]
+}

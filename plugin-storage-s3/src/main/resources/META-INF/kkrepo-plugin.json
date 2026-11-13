@@ -1,0 +1,7 @@
+{
+  "id": "storage-s3",
+  "version": "1.0.0",
+  "apiVersion": "1.0",
+  "mainClass": "com.github.klboke.kkrepo.plugin.storage.s3.S3StoragePlugin",
+  "capabilities": ["storage.backend"]
+}

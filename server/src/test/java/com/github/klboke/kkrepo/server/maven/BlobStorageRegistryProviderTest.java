@@ -16,6 +16,8 @@ import com.github.klboke.kkrepo.core.blobstore.BlobStoreProvider;
 import com.github.klboke.kkrepo.core.blobstore.BlobStoreTypes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
+import com.github.klboke.kkrepo.plugin.loader.LoadedPlugins;
+import com.github.klboke.kkrepo.server.plugin.PluginRuntime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -23,6 +25,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 
 /** Dispatch behaviour of the pluggable provider registry, independent of any concrete backend. */
 class BlobStorageRegistryProviderTest {
@@ -138,6 +142,59 @@ class BlobStorageRegistryProviderTest {
 
     // The cache removal listener may run asynchronously.
     verify(storage, timeout(5000)).close();
+  }
+
+  @Test
+  void resolvesAProviderContributedByAPluginJar() {
+    RecordingProvider pluginProvider = new RecordingProvider("plugin-store");
+    LoadedPlugins loaded = new LoadedPlugins(
+        List.of(),
+        List.of(),
+        List.of(),
+        List.of(),
+        List.of(pluginProvider),
+        List.of(),
+        List.of(),
+        List.of());
+    try (PluginRuntime pluginRuntime = new PluginRuntime(loaded)) {
+      DefaultListableBeanFactory beans = new DefaultListableBeanFactory();
+      beans.registerSingleton("pluginRuntime", pluginRuntime);
+      ObjectProvider<PluginRuntime> plugins = beans.getBeanProvider(PluginRuntime.class);
+      BlobStorageRegistry registry = new BlobStorageRegistry(
+          mock(BlobStoreDao.class), List.of(), plugins, false, null, null);
+
+      BlobStorage storage = registry.forRecord(record(9, "plugin-store", "plugin-store"));
+
+      assertSame(storage, registry.forRecord(record(9, "plugin-store", "plugin-store")));
+      assertEquals(1, pluginProvider.created.get());
+      registry.shutdown();
+    }
+  }
+
+  @Test
+  void aPluginProviderOverridesTheBuiltInProviderOfTheSameType() {
+    RecordingProvider builtin = new RecordingProvider("file");
+    RecordingProvider pluginProvider = new RecordingProvider("file");
+    LoadedPlugins loaded = new LoadedPlugins(
+        List.of(), List.of(), List.of(), List.of(),
+        List.of(pluginProvider), List.of(), List.of(), List.of());
+    try (PluginRuntime pluginRuntime = new PluginRuntime(loaded)) {
+      DefaultListableBeanFactory beans = new DefaultListableBeanFactory();
+      beans.registerSingleton("pluginRuntime", pluginRuntime);
+      BlobStorageRegistry registry = new BlobStorageRegistry(
+          mock(BlobStoreDao.class),
+          List.of(builtin),
+          beans.getBeanProvider(PluginRuntime.class),
+          false,
+          null,
+          null);
+
+      registry.forRecord(record(3, "file-store", "file"));
+
+      assertEquals(1, pluginProvider.created.get());
+      assertEquals(0, builtin.created.get());
+      registry.shutdown();
+    }
   }
 
   private static BlobStorageRegistry registry(BlobStoreDao dao, List<BlobStoreProvider> providers) {

@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.server.metrics.InstrumentedBlobStorage;
 import com.github.klboke.kkrepo.server.metrics.KkRepoMetrics;
+import com.github.klboke.kkrepo.server.plugin.PluginRuntime;
 import com.github.klboke.kkrepo.storage.file.FileBlobStorageFactory;
 import com.github.klboke.kkrepo.storage.file.FileBlobStoreProvider;
 import com.github.klboke.kkrepo.storage.s3.S3BlobStorageFactory;
@@ -70,14 +71,60 @@ public class BlobStorageRegistry {
   public BlobStorageRegistry(
       BlobStoreDao blobStoreDao,
       List<BlobStoreProvider> providers,
+      ObjectProvider<PluginRuntime> pluginRuntime,
       @Value("${kkrepo.catalog-cache.enabled:true}") boolean catalogCacheEnabled,
       ObjectProvider<CatalogCacheBroadcaster> broadcasterProvider,
       KkRepoMetrics metrics) {
+    this(
+        blobStoreDao,
+        providers,
+        mergeProviders(providers, pluginRuntime),
+        catalogCacheEnabled,
+        broadcasterProvider == null ? null : broadcasterProvider.getIfAvailable(),
+        metrics);
+  }
+
+  public BlobStorageRegistry(
+      BlobStoreDao blobStoreDao,
+      List<BlobStoreProvider> providers,
+      boolean catalogCacheEnabled,
+      CatalogCacheBroadcaster broadcaster,
+      KkRepoMetrics metrics) {
+    this(blobStoreDao, providers, mergeProviders(providers, null),
+        catalogCacheEnabled, broadcaster, metrics);
+  }
+
+  private BlobStorageRegistry(
+      BlobStoreDao blobStoreDao,
+      List<BlobStoreProvider> providers,
+      List<BlobStoreProvider> mergedProviders,
+      boolean catalogCacheEnabled,
+      CatalogCacheBroadcaster broadcaster,
+      KkRepoMetrics metrics) {
     this.blobStoreDao = blobStoreDao;
-    this.providers = new BlobStoreProviders(providers);
+    this.providers = new BlobStoreProviders(mergedProviders);
     this.metrics = metrics;
     this.catalogCacheEnabled = catalogCacheEnabled;
-    this.broadcaster = broadcasterProvider == null ? null : broadcasterProvider.getIfAvailable();
+    this.broadcaster = broadcaster;
+  }
+
+  private static List<BlobStoreProvider> mergeProviders(
+      List<BlobStoreProvider> builtins, ObjectProvider<PluginRuntime> plugins) {
+    List<BlobStoreProvider> merged = new ArrayList<>();
+    Set<String> types = new HashSet<>();
+    if (plugins != null) {
+      plugins.ifAvailable(runtime -> runtime.blobStoreProviders().forEach(provider -> {
+        if (types.add(BlobStoreDescriptor.normalize(provider.type()))) {
+          merged.add(provider);
+        }
+      }));
+    }
+    for (BlobStoreProvider provider : builtins == null ? List.<BlobStoreProvider>of() : builtins) {
+      if (types.add(BlobStoreDescriptor.normalize(provider.type()))) {
+        merged.add(provider);
+      }
+    }
+    return merged;
   }
 
   public BlobStorageRegistry(

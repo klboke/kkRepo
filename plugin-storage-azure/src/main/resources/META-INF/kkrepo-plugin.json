@@ -1,0 +1,7 @@
+{
+  "id": "storage-azure",
+  "version": "1.0.0",
+  "apiVersion": "1.0",
+  "mainClass": "com.github.klboke.kkrepo.plugin.storage.azure.AzureStoragePlugin",
+  "capabilities": ["storage.backend"]
+}

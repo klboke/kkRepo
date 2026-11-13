@@ -14,9 +14,19 @@
 
   <modules>
     <module>core</module>
+    <module>plugin-api</module>
+    <module>plugin-loader</module>
+    <module>script-host</module>
     <module>storage-s3</module>
     <module>storage-file</module>
     <module>storage-azure</module>
+    <module>plugin-storage-file</module>
+    <module>plugin-storage-s3</module>
+    <module>plugin-storage-azure</module>
+    <module>plugin-helm</module>
+    <module>plugin-gitlfs</module>
+    <module>plugin-ohpm</module>
+    <module>plugin-builtin</module>
     <module>cache</module>
     <module>protocol-maven</module>
     <module>protocol-npm</module>
@@ -56,6 +66,7 @@
   <properties>
     <revision>1.4.0</revision>
     <java.version>25</java.version>
+    <graaljs.version>25.5.5.0.3</graaljs.version>
     <spring.boot.version>4.1.2</spring.boot.version>
     <native-build-tools-plugin.version>1.1.18</native-build-tools-plugin.version>
     <apollo.client.version>2.5.0</apollo.client.version>
