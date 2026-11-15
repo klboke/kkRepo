@@ -294,6 +294,8 @@ class RawRepositoryBlackBoxCompatibilityTest {
         long deadline = System.nanoTime() + Duration.ofSeconds(15).toNanos();
         while (!send(config.nexusPlusInternal("/internal/browse/" + config.proxyRepository()).GET())
             .bodyAsString().contains(streaming + "-full.bin") && System.nanoTime() < deadline) Thread.sleep(50);
+        assertTrue(send(config.nexusPlusInternal("/internal/browse/" + config.proxyRepository()).GET())
+            .bodyAsString().contains(streaming + "-full.bin"), "complete cache entry must become visible");
         assertBodyMatches("cached full GET", get(config.nexusProxy(), streaming + "-full.bin"),
             get(config.nexusPlusProxy(), streaming + "-full.bin"), bytes);
         assertSameStatus("cached HEAD", head(config.nexusProxy(), streaming + "-full.bin"),

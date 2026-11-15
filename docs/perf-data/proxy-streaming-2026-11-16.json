@@ -1,0 +1,275 @@
+{
+  "run_id": "e86bae2a9f",
+  "recorded_at": "2026-11-15T17:01:59.454090+00:00",
+  "build_label": "1b3b96de7b0bd9bcc035adb43b81c68fa541fa93",
+  "client_platform": "macOS-14.7.8-x86_64-i386-64bit",
+  "client_python": "3.10.11",
+  "size_bytes": 67108864,
+  "upstream_mib_per_second": 4.0,
+  "repeats": 3,
+  "repositories": {
+    "off": "stream-e86bae2a9f-off",
+    "on": "stream-e86bae2a9f-on"
+  },
+  "results": [
+    {
+      "trial": 1,
+      "mode": "off",
+      "cold": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "a29128abc0849d1041c64c2b7524229f4a27ad5280d3ce8959aa5077275843fc",
+        "header_seconds": 16.434044934809208,
+        "first_body_byte_seconds": 16.434048855677247,
+        "total_seconds": 16.60806709714234,
+        "etag": "\"d0616b91f5102bb3794ac953b759d33cc35e0996\"",
+        "content_range": null
+      },
+      "warm": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "a29128abc0849d1041c64c2b7524229f4a27ad5280d3ce8959aa5077275843fc",
+        "header_seconds": 0.009409137070178986,
+        "first_body_byte_seconds": 0.00941314548254013,
+        "total_seconds": 0.16811353713274002,
+        "etag": "\"d0616b91f5102bb3794ac953b759d33cc35e0996\"",
+        "content_range": null
+      },
+      "cache_visible_after_client_seconds": 0.005329592153429985,
+      "upstream_requests": 1,
+      "warm_resume": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "a29128abc0849d1041c64c2b7524229f4a27ad5280d3ce8959aa5077275843fc",
+        "header_seconds": 0.007148336619138718,
+        "first_body_byte_seconds": 0.007152369245886803,
+        "total_seconds": 0.16278366558253765,
+        "etag": "\"d0616b91f5102bb3794ac953b759d33cc35e0996\"",
+        "content_range": null
+      }
+    },
+    {
+      "trial": 1,
+      "mode": "on",
+      "cold": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "a29128abc0849d1041c64c2b7524229f4a27ad5280d3ce8959aa5077275843fc",
+        "header_seconds": 0.024594876915216446,
+        "first_body_byte_seconds": 0.024598000571131706,
+        "total_seconds": 16.013412768021226,
+        "etag": "\"9b0c844681061d885af77d043224a23ba5149f5ef46ebd26c0dff459d80906e4\"",
+        "content_range": null
+      },
+      "warm": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "a29128abc0849d1041c64c2b7524229f4a27ad5280d3ce8959aa5077275843fc",
+        "header_seconds": 0.013457853347063065,
+        "first_body_byte_seconds": 0.013461330905556679,
+        "total_seconds": 0.19848168455064297,
+        "etag": "\"d0616b91f5102bb3794ac953b759d33cc35e0996\"",
+        "content_range": null
+      },
+      "cache_visible_after_client_seconds": 1.0515955239534378,
+      "upstream_requests": 1,
+      "warm_resume": {
+        "status": 206,
+        "bytes": 66060288,
+        "sha256": "7c0671441082eef60283d495b0dab76fe4f2ab7e433e79a8f375936427931cc6",
+        "header_seconds": 0.13205190375447273,
+        "first_body_byte_seconds": 0.13205739110708237,
+        "total_seconds": 0.3221657555550337,
+        "etag": "\"d0616b91f5102bb3794ac953b759d33cc35e0996\"",
+        "content_range": "bytes 1048576-67108863/67108864"
+      }
+    },
+    {
+      "trial": 2,
+      "mode": "on",
+      "cold": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "5136dacdc5c65a23a6470c7ae75ef4f46a7403c8508bcda1ed03a784f0415770",
+        "header_seconds": 0.028068773448467255,
+        "first_body_byte_seconds": 0.0280718132853508,
+        "total_seconds": 16.01469400525093,
+        "etag": "\"409f04295a9cc0557410889a9e801b18eba4a8239d7e371d3b61439a5031793b\"",
+        "content_range": null
+      },
+      "warm": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "5136dacdc5c65a23a6470c7ae75ef4f46a7403c8508bcda1ed03a784f0415770",
+        "header_seconds": 0.009368954226374626,
+        "first_body_byte_seconds": 0.009372349828481674,
+        "total_seconds": 0.16959849186241627,
+        "etag": "\"1ce338cc0d1f1ee246fb231cb39af8e297b409d1\"",
+        "content_range": null
+      },
+      "cache_visible_after_client_seconds": 0.9539818726480007,
+      "upstream_requests": 1,
+      "warm_resume": {
+        "status": 206,
+        "bytes": 66060288,
+        "sha256": "47b36b26a0d9a8bd4b89b371fcdda06b2cb19432e1210f67bfab8e1640ac0cfc",
+        "header_seconds": 0.07163835875689983,
+        "first_body_byte_seconds": 0.07164179533720016,
+        "total_seconds": 0.22713645175099373,
+        "etag": "\"1ce338cc0d1f1ee246fb231cb39af8e297b409d1\"",
+        "content_range": "bytes 1048576-67108863/67108864"
+      }
+    },
+    {
+      "trial": 2,
+      "mode": "off",
+      "cold": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "5136dacdc5c65a23a6470c7ae75ef4f46a7403c8508bcda1ed03a784f0415770",
+        "header_seconds": 16.290155936032534,
+        "first_body_byte_seconds": 16.29015949741006,
+        "total_seconds": 16.435096260160208,
+        "etag": "\"1ce338cc0d1f1ee246fb231cb39af8e297b409d1\"",
+        "content_range": null
+      },
+      "warm": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "5136dacdc5c65a23a6470c7ae75ef4f46a7403c8508bcda1ed03a784f0415770",
+        "header_seconds": 0.009313592687249184,
+        "first_body_byte_seconds": 0.009317291900515556,
+        "total_seconds": 0.18069175258278847,
+        "etag": "\"1ce338cc0d1f1ee246fb231cb39af8e297b409d1\"",
+        "content_range": null
+      },
+      "cache_visible_after_client_seconds": 0.003263412043452263,
+      "upstream_requests": 1,
+      "warm_resume": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "5136dacdc5c65a23a6470c7ae75ef4f46a7403c8508bcda1ed03a784f0415770",
+        "header_seconds": 0.006822356954216957,
+        "first_body_byte_seconds": 0.0068273115903139114,
+        "total_seconds": 0.16638080030679703,
+        "etag": "\"1ce338cc0d1f1ee246fb231cb39af8e297b409d1\"",
+        "content_range": null
+      }
+    },
+    {
+      "trial": 3,
+      "mode": "off",
+      "cold": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "d224379975cbf32205fad982e6df86d36a950ac49dc29c469c65e138c835ebe8",
+        "header_seconds": 16.307801596820354,
+        "first_body_byte_seconds": 16.307805579155684,
+        "total_seconds": 16.454286321997643,
+        "etag": "\"525d32e2826d84b588eb489d0dbc7dabe58fbeaa\"",
+        "content_range": null
+      },
+      "warm": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "d224379975cbf32205fad982e6df86d36a950ac49dc29c469c65e138c835ebe8",
+        "header_seconds": 0.009333144873380661,
+        "first_body_byte_seconds": 0.009336577728390694,
+        "total_seconds": 0.16547941975295544,
+        "etag": "\"525d32e2826d84b588eb489d0dbc7dabe58fbeaa\"",
+        "content_range": null
+      },
+      "cache_visible_after_client_seconds": 0.0036912504583597183,
+      "upstream_requests": 1,
+      "warm_resume": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "d224379975cbf32205fad982e6df86d36a950ac49dc29c469c65e138c835ebe8",
+        "header_seconds": 0.006538301706314087,
+        "first_body_byte_seconds": 0.006541833281517029,
+        "total_seconds": 0.16366753913462162,
+        "etag": "\"525d32e2826d84b588eb489d0dbc7dabe58fbeaa\"",
+        "content_range": null
+      }
+    },
+    {
+      "trial": 3,
+      "mode": "on",
+      "cold": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "d224379975cbf32205fad982e6df86d36a950ac49dc29c469c65e138c835ebe8",
+        "header_seconds": 0.028265487402677536,
+        "first_body_byte_seconds": 0.028269987553358078,
+        "total_seconds": 16.009451085701585,
+        "etag": "\"c1a9237ad787884765dd85e685974ce058c15339ce72cd65d9427114141e64c2\"",
+        "content_range": null
+      },
+      "warm": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "d224379975cbf32205fad982e6df86d36a950ac49dc29c469c65e138c835ebe8",
+        "header_seconds": 0.009366335347294807,
+        "first_body_byte_seconds": 0.009369753301143646,
+        "total_seconds": 0.1671602614223957,
+        "etag": "\"525d32e2826d84b588eb489d0dbc7dabe58fbeaa\"",
+        "content_range": null
+      },
+      "cache_visible_after_client_seconds": 0.8440022934228182,
+      "upstream_requests": 1,
+      "warm_resume": {
+        "status": 206,
+        "bytes": 66060288,
+        "sha256": "73f478ffef5ab595d854896d6d89f4d97bde78d04cd5b1e49be76b9eec277d61",
+        "header_seconds": 0.06959922797977924,
+        "first_body_byte_seconds": 0.06960275396704674,
+        "total_seconds": 0.2213006429374218,
+        "etag": "\"525d32e2826d84b588eb489d0dbc7dabe58fbeaa\"",
+        "content_range": "bytes 1048576-67108863/67108864"
+      }
+    }
+  ],
+  "median": {
+    "off": {
+      "cold": {
+        "first_body_byte_seconds": 16.307805579155684,
+        "total_seconds": 16.454286321997643
+      },
+      "warm": {
+        "first_body_byte_seconds": 0.009336577728390694,
+        "total_seconds": 0.16811353713274002
+      }
+    },
+    "on": {
+      "cold": {
+        "first_body_byte_seconds": 0.0280718132853508,
+        "total_seconds": 16.013412768021226
+      },
+      "warm": {
+        "first_body_byte_seconds": 0.009372349828481674,
+        "total_seconds": 0.16959849186241627
+      }
+    }
+  },
+  "server_environment": {
+    "version": "1.4.0 development",
+    "jar_sha256": "a8bc13070bbdc95fe5980ca7366b2c61b3972b2c25d77c16c18114b30f8467f3",
+    "java": "OpenJDK 25.0.3",
+    "heap": "-Xms512m -Xmx2g",
+    "database": "PostgreSQL 16",
+    "blob_storage": "MinIO RELEASE.2025-04-22T22-12-26Z",
+    "host_cpu": "Intel i9-9880H",
+    "host_memory_gib": 64,
+    "profile": "dev; application and JdbcTemplate debug logging disabled"
+  },
+  "coordination_check": {
+    "test": "two-process stale-writer publication",
+    "repository": "stream-fence-f0a8da32",
+    "replicas": 2,
+    "old_clients_completed": true,
+    "new_cache_preserved_on_both": true,
+    "visible_assets": 1,
+    "old_sha256": "bbb342a4268c093343eb1ca8b4cf6224fa96df846adcdb5ff4b590f678b51086",
+    "new_sha256": "0af05227d50666d75b335ff8dc834bb71390a336aa7de36fcf4e0416c6d05984"
+  }
+}
