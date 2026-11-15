@@ -7,8 +7,8 @@ eligible; the [Chinese report](../../zh/dev/proxy-streaming-performance.md) reco
 ## Environment and method
 
 - Date: 2026-11-16 (Asia/Shanghai).
-- Implementation: `1b3b96de7b0bd9bcc035adb43b81c68fa541fa93`, kkRepo 1.4.0 development JVM build.
-- Executable JAR SHA-256: `a8bc13070bbdc95fe5980ca7366b2c61b3972b2c25d77c16c18114b30f8467f3`.
+- Implementation: `f114fdb26cb215b7cae749806fb53f47d1a4e0ca`, kkRepo 1.4.0 development JVM build.
+- Executable JAR SHA-256: `9d4d527dd3e82dfc6d8abea34b5ee9b6ace9f176f7bcd34291f4a836e00d340b`.
 - macOS 14.7.8, Intel i9-9880H, 64 GiB RAM; OpenJDK 25.0.3; application `-Xms512m -Xmx2g`.
 - PostgreSQL 16 and MinIO `RELEASE.2025-04-22T22-12-26Z` in local OrbStack/Docker containers.
   The application used the `dev` profile with application/JDBC debug logging disabled.
@@ -26,11 +26,11 @@ individual timings, hashes, statuses, upstream request counts, cache lag, and wa
 
 | Metric | OFF | ON |
 | --- | ---: | ---: |
-| Cold first body byte | 16.3078 s | 0.0281 s |
-| Cold total download | 16.4543 s | 16.0134 s |
-| Warm first body byte | 9.34 ms | 9.37 ms |
-| Warm total download | 168.11 ms | 169.60 ms |
-| Cache visible after client completion | Already published | 0.9540 s |
+| Cold first body byte | 16.2989 s | 0.0303 s |
+| Cold total download | 16.4598 s | 16.0148 s |
+| Warm first body byte | 9.75 ms | 12.24 ms |
+| Warm total download | 174.08 ms | 169.74 ms |
+| Cache visible after client completion | Already published | 0.8841 s |
 
 The main improvement is removing the initial silent wait. Total download time still includes the
 upstream link's approximately 16-second transfer; it does not become hundreds of times faster.
@@ -54,7 +54,7 @@ python3 scripts/perf/compare-proxy-streaming.py \
   --blob-store-off streaming-bench-off --blob-store-on streaming-bench-on \
   --upstream-host 127.0.0.1 --upstream-port 38541 \
   --size-mib 64 --rate-mib 4 --repeats 3 \
-  --build-label 1b3b96de7b0bd9bcc035adb43b81c68fa541fa93 \
+  --build-label f114fdb26cb215b7cae749806fb53f47d1a4e0ca \
   --output /tmp/proxy-streaming.json
 ```
 
@@ -65,9 +65,12 @@ API when finished, or discard the entire isolated test environment.
 
 ## Correctness checks accompanying the measurements
 
-- 757 focused Java/reactor checks passed, including 15 progressive delivery tests, source/group scan
-  policy gating, protocol regressions, repository settings, APT/Conda, Docker, redirect boundaries,
-  and the UI test harness. The JavaScript fixture exercises all **23 proxy recipes**.
+- Focused Java/reactor checks passed for proxy/protocol behavior, source/group scan policy gating,
+  repository settings, APT/Conda, Docker, redirect boundaries and the UI harness. The final validator
+  build passed 28 progressive delivery and 50 Raw proxy tests, including conditional requests and
+  supported artifact admission. The JavaScript fixture exercises all **23 proxy recipes**.
+- Each measured cold, warm and resumed response had at most one ETag field; duplicate validator
+  fields are rejected by the benchmark runner.
 - Live Nexus 3.94 comparison passed for full GET, single/suffix Range, If-Range mismatch, 416,
   cache hit and HEAD. ON matches Nexus's Raw range behavior. OFF deliberately preserves kkRepo's
   pre-existing Raw full-200 response to Range requests. Test:

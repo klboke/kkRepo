@@ -7,8 +7,8 @@
 ## 环境与方法
 
 - 日期：2026-11-16，Asia/Shanghai。
-- 实现提交：`1b3b96de7b0bd9bcc035adb43b81c68fa541fa93`，kkRepo 1.4.0 开发版 JVM。
-- 可执行 JAR SHA-256：`a8bc13070bbdc95fe5980ca7366b2c61b3972b2c25d77c16c18114b30f8467f3`。
+- 实现提交：`f114fdb26cb215b7cae749806fb53f47d1a4e0ca`，kkRepo 1.4.0 开发版 JVM。
+- 可执行 JAR SHA-256：`9d4d527dd3e82dfc6d8abea34b5ee9b6ace9f176f7bcd34291f4a836e00d340b`。
 - macOS 14.7.8、Intel i9-9880H、64 GiB 内存；OpenJDK 25.0.3，`-Xms512m -Xmx2g`。
 - PostgreSQL 16 与 MinIO `RELEASE.2025-04-22T22-12-26Z` 运行在本机 OrbStack/Docker 容器。
   应用使用 dev profile，关闭应用与 JDBC 的 debug 日志。
@@ -25,11 +25,11 @@
 
 | 指标 | 关闭 | 开启 |
 | --- | ---: | ---: |
-| 首次下载首字节 | 16.3078 s | 0.0281 s |
-| 首次下载总耗时 | 16.4543 s | 16.0134 s |
-| 缓存命中首字节 | 9.34 ms | 9.37 ms |
-| 缓存命中总耗时 | 168.11 ms | 169.60 ms |
-| 客户端下载结束后缓存可见延迟 | 结束前已发布 | 0.9540 s |
+| 首次下载首字节 | 16.2989 s | 0.0303 s |
+| 首次下载总耗时 | 16.4598 s | 16.0148 s |
+| 缓存命中首字节 | 9.75 ms | 12.24 ms |
+| 缓存命中总耗时 | 174.08 ms | 169.74 ms |
+| 客户端下载结束后缓存可见延迟 | 结束前已发布 | 0.8841 s |
 
 主要收益是消除最初长时间没有下载进度的等待。完整下载仍需要约 16 秒上游传输时间，并不会提升
 数百倍。缓存命中耗时不能据此断言吞吐提升。开启后客户端完成与缓存发布分开，不能把客户端结束
@@ -49,7 +49,7 @@ python3 scripts/perf/compare-proxy-streaming.py \
   --blob-store-off streaming-bench-off --blob-store-on streaming-bench-on \
   --upstream-host 127.0.0.1 --upstream-port 38541 \
   --size-mib 64 --rate-mib 4 --repeats 3 \
-  --build-label 1b3b96de7b0bd9bcc035adb43b81c68fa541fa93 \
+  --build-label f114fdb26cb215b7cae749806fb53f47d1a4e0ca \
   --output /tmp/proxy-streaming.json
 ```
 
@@ -58,8 +58,10 @@ python3 scripts/perf/compare-proxy-streaming.py \
 
 ## 同时完成的正确性验证
 
-- 757 项 Java/reactor 回归检查通过，包括 15 项流式下载测试、安全扫描入口策略、协议回归、配置、
-  APT/Conda、Docker、重定向边界和 UI 测试入口。JavaScript 用例覆盖全部 **23 种 proxy 配方**。
+- Java/reactor 定向回归检查通过，覆盖代理和协议、安全扫描入口策略、配置、APT/Conda、Docker、
+  重定向边界和 UI。最终响应校验修复构建通过 28 项流式下载和 50 项 Raw proxy 测试，包括条件请求
+  和支持的制品路径判断。JavaScript 用例覆盖全部 **23 种 proxy 配方**。
+- 每次冷下载、缓存命中和续传响应最多包含一个 ETag 字段；性能脚本会拒绝重复的响应校验字段。
 - 与 Nexus 3.94 实例对照：完整 GET、单段/后缀 Range、If-Range 不匹配、416、缓存命中及 HEAD 通过。
   开启后 Raw Range 与 Nexus 对齐；关闭时保留 kkRepo 原有的完整 200 行为。对应测试：
   `RawRepositoryBlackBoxCompatibilityTest#streamingTogglePreservesFullAndRangeHttpSemanticsAgainstNexus`。
