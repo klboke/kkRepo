@@ -47,7 +47,7 @@ cleanup; staging files are not a resumable durable cache or a recovery journal.
 | Raw | File GETs; directory/index discovery remains buffered |
 | APT, Yum | `.deb`, `.rpm`; known APT size/SHA-256 is checked and package projection follows cache publication |
 | Maven | Artifact coordinates excluding POMs and checksum/signature sidecars |
-| npm, OHPM | Package tarballs on the ordinary artifact path |
+| npm | Package tarballs on the ordinary artifact path |
 | PyPI | Package files, excluding detached `.asc` signatures |
 | Go | Module ZIPs |
 | Helm | Chart packages; archive/chart metadata validation precedes the final block |
@@ -55,9 +55,8 @@ cleanup; staging files are not a resumable durable cache or a recovery journal.
 | Dart/Pub | Archives, with expected SHA-256 when supplied and package/version validation |
 | Docker/OCI | SHA-256 blobs; manifests and discovery remain buffered |
 | NuGet, RubyGems | `.nupkg`/`.snupkg`, `.gem` |
-| Ansible Galaxy | Ordinary `.zip`/`.tgz`/`.tar.gz` artifact paths |
 | Conda | `.conda`/`.tar.bz2`; known repodata size/digests are checked before completion |
-| Composer, Terraform, Swift, Conan, Alpine, R, Hugging Face | Setting is stored, but their coordinated generation, signature, revision, or projection workflows remain buffered in this version |
+| Composer, Terraform, Ansible Galaxy, OHPM, Swift, Conan, Alpine, R, Hugging Face | Setting is stored, but their coordinated generation, signature, revision, or projection workflows remain buffered in this version |
 
 Metadata rewriting/signing, internal prefetches, HEAD, refreshes of existing cache entries, responses
 without a positive Content-Length, encoded responses, and unsupported paths use the established
@@ -102,7 +101,7 @@ the initial no-progress wait; it cannot increase upstream link throughput.
 
 The Nexus suite enables and verifies the setting before its Maven JAR, npm tarball, PyPI package,
 Go ZIP, Helm chart, Cargo crate, Pub archive, NuGet, RubyGems, Yum RPM, APT package, Conda package,
-and Ansible Galaxy probes. Public HTTPS acceptance compares Docker layer bytes/digests with Nexus
+probes. Ansible Galaxy and OHPM checks exercise the safe buffered fallback with the setting on. Public HTTPS acceptance compares Docker layer bytes/digests with Nexus
 and exercises the real Go, Helm and Docker clients with streaming enabled. OHPM uses its dedicated
 protocol/client suite because Nexus has no OHPM recipe.
 

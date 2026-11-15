@@ -314,6 +314,7 @@ class ProgressiveProxyServiceTest {
     for (int i = 0; i < 3; i++) {
       var response = fetch(null, null, result -> { fail("304 must not publish a cache entry"); return null; });
       assertEquals("\"upstream-version\"", response.etag());
+      assertFalse(response.headers().containsKey("ETag"), "the typed validator emits the single ETag header");
       assertTrue(com.github.klboke.kkrepo.server.http.ConditionalResponses.shouldReturnNotModified(
           client, response.status(), response.etag(), response.lastModified()));
       response.closeBodyIfOpen();
@@ -357,6 +358,7 @@ class ProgressiveProxyServiceTest {
               InputStream.nullInputStream(), 0, null, null, null);
         });
     assertEquals("\"version\"", pypi.etag());
+    assertFalse(pypi.headers().containsKey("ETag"), "do not emit a duplicate raw ETag header");
     assertNotNull(pypi.lastModified());
     assertEquals("attachment", pypi.headers().get("Content-Disposition"));
     try (var body = pypi.body()) { assertArrayEquals(content, body.readAllBytes()); }
@@ -451,6 +453,20 @@ class ProgressiveProxyServiceTest {
           Map.of("Content-Length", "200", "Content-Range", value), InputStream.nullInputStream())));
     }
     assertFalse(ProgressiveProxyService.validContentRange("bytes=0-", upstream(content, content.length)));
+  }
+
+  @Test void warmRangesApplyToSelectedArtifactButNotInternalPrefetchesOrDisabledRepositories() {
+    var group = new MockHttpServletRequest("GET", "/repository/group/pkg.bin");
+    RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(group));
+    ProgressiveProxyService.enableRanges(runtime, "pkg.bin");
+    assertTrue(ProgressiveProxyService.rangeAllowed(group));
+    var metadata = new MockHttpServletRequest("GET", "/repository/group/index.json");
+    RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(metadata));
+    ProgressiveProxyService.enableRanges(runtime, "pkg.bin");
+    assertFalse(ProgressiveProxyService.rangeAllowed(metadata));
+    when(runtime.streamingEnabled()).thenReturn(false);
+    ProgressiveProxyService.enableRanges(runtime, "index.json");
+    assertFalse(ProgressiveProxyService.rangeAllowed(metadata));
   }
 
   private void awaitCleanup() throws Exception {

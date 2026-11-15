@@ -125,6 +125,7 @@ def main():
             count += len(chunk)
             digest.update(chunk)
         elapsed = time.perf_counter() - begun
+        assert len(response.headers.get_all('ETag', [])) <= 1, 'Response contains duplicate ETag fields'
         result = dict(status=response.status, bytes=count, sha256=digest.hexdigest(),
                       header_seconds=header_seconds, first_body_byte_seconds=first_seconds,
                       total_seconds=elapsed, etag=response.getheader('ETag'),

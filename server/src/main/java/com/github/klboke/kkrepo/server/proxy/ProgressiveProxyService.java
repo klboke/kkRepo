@@ -90,7 +90,9 @@ public class ProgressiveProxyService {
         transfer -> {
           MavenResponse response = MavenResponse.ok(transfer.body(), transfer.length(),
               transfer.contentType(), transfer.headers().get("ETag"), transfer.lastModified()).withStatus(transfer.status());
-          transfer.headers().forEach(response::withHeader);
+          transfer.headers().forEach((name, value) -> {
+            if (!"ETag".equalsIgnoreCase(name)) response.withHeader(name, value);
+          });
           response.withInternalAttribute(HOOKS, transfer.hooks());
           return response;
         }, response -> { if (response.hasBody()) response.body().close(); });
@@ -107,7 +109,9 @@ public class ProgressiveProxyService {
         transfer -> {
           PypiResponse response = PypiResponse.ok(transfer.body(), transfer.length(),
               transfer.contentType(), transfer.headers().get("ETag"), transfer.lastModified()).withStatus(transfer.status());
-          transfer.headers().forEach(response::withHeader);
+          transfer.headers().forEach((name, value) -> {
+            if (!"ETag".equalsIgnoreCase(name)) response.withHeader(name, value);
+          });
           return response;
         }, response -> { if (response.hasBody()) response.body().close(); });
   }

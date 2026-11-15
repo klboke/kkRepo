@@ -38,14 +38,13 @@
 | Raw | 文件 GET，目录与索引探测保持缓冲 |
 | APT / Yum | `.deb` / `.rpm`；已知 APT 长度与 SHA-256 在完成前校验，缓存完成后绑定包索引 |
 | Maven | 普通制品，排除 POM、摘要和签名旁文件 |
-| npm / OHPM | 普通制品路径上的包压缩文件 |
+| npm | 普通制品路径上的包压缩文件 |
 | PyPI / Go | PyPI 包文件（排除 `.asc`）、Go module ZIP |
 | Helm / Cargo / Pub | chart、crate、Pub archive；保留适用的结构、坐标和已知摘要校验 |
 | Docker/OCI | SHA-256 blob；manifest 和发现接口保持缓冲 |
 | NuGet / RubyGems | `.nupkg`、`.snupkg`、`.gem` |
-| Ansible Galaxy | 普通 `.zip`、`.tgz`、`.tar.gz` 制品路径 |
 | Conda | `.conda`、`.tar.bz2`，已知 repodata 长度与摘要在完成前校验 |
-| Composer / Terraform / Swift / Conan / Alpine / R / Hugging Face | 表单保存配置；涉及生成、签名、版本协调或投影的工作流在本版仍保持缓冲 |
+| Composer / Terraform / Ansible Galaxy / OHPM / Swift / Conan / Alpine / R / Hugging Face | 表单保存配置；涉及生成、签名、版本协调或投影的工作流在本版仍保持缓冲 |
 
 元数据改写和签名、内部预取、HEAD、已有缓存的刷新、未知/零长度或编码后的上游响应，以及不支持的
 路径都保留原流程。流式容量用尽时也退回原流程，开关不会绕过协议检查。
@@ -71,7 +70,8 @@
 ## 兼容性验证
 
 Nexus 对照测试会开启并读回配置，再验证 Maven JAR、npm、PyPI、Go ZIP、Helm chart、Cargo、Pub、
-NuGet、RubyGems、Yum RPM、APT、Conda 和 Ansible Galaxy 下载。公共 HTTPS 验证另外对比 Docker
+NuGet、RubyGems、Yum RPM、APT 和 Conda 下载。Ansible Galaxy、OHPM 验证开启配置后的缓冲回退。
+公共 HTTPS 验证另外对比 Docker
 layer 的完整内容及摘要，并运行真实 Go、Helm、Docker 客户端。Nexus 没有 OHPM recipe，OHPM 使用
 独立的协议和客户端测试。
 
