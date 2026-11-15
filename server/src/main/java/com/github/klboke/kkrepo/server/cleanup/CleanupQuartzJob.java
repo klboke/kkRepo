@@ -10,7 +10,6 @@ import org.quartz.Scheduler;
 import org.quartz.Trigger;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.quartz.QuartzJobBean;
 
 /** Executes one policy fire selected by the clustered Quartz JDBC JobStore. */
@@ -22,14 +21,18 @@ public class CleanupQuartzJob extends QuartzJobBean {
 
   private static final Logger log = LoggerFactory.getLogger(CleanupQuartzJob.class);
 
-  @Autowired
-  private CleanupPolicyDao cleanupDao;
+  private final CleanupPolicyDao cleanupDao;
+  private final CleanupRunService runs;
+  private final CleanupRuntimeProperties runtimeProperties;
 
-  @Autowired
-  private CleanupRunService runs;
-
-  @Autowired
-  private CleanupRuntimeProperties runtimeProperties;
+  public CleanupQuartzJob(
+      CleanupPolicyDao cleanupDao,
+      CleanupRunService runs,
+      CleanupRuntimeProperties runtimeProperties) {
+    this.cleanupDao = java.util.Objects.requireNonNull(cleanupDao);
+    this.runs = java.util.Objects.requireNonNull(runs);
+    this.runtimeProperties = java.util.Objects.requireNonNull(runtimeProperties);
+  }
 
   @Override
   protected void executeInternal(JobExecutionContext context) throws JobExecutionException {

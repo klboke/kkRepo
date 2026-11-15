@@ -22,7 +22,6 @@ import org.quartz.JobDataMap;
 import org.quartz.JobExecutionContext;
 import org.quartz.JobExecutionException;
 import org.quartz.Scheduler;
-import org.springframework.test.util.ReflectionTestUtils;
 
 class CleanupQuartzJobTest {
   private static final Instant FIRE_TIME = Instant.parse("2026-08-02T02:00:00Z");
@@ -161,11 +160,7 @@ class CleanupQuartzJobTest {
       CleanupPolicyDao cleanupDao,
       CleanupRunService runs,
       CleanupRuntimeProperties runtimeProperties) {
-    CleanupQuartzJob job = new CleanupQuartzJob();
-    ReflectionTestUtils.setField(job, "cleanupDao", cleanupDao);
-    ReflectionTestUtils.setField(job, "runs", runs);
-    ReflectionTestUtils.setField(job, "runtimeProperties", runtimeProperties);
-    return job;
+    return new CleanupQuartzJob(cleanupDao, runs, runtimeProperties);
   }
 
   private static JobExecutionContext context(long policyId, long revision) {

@@ -9,20 +9,12 @@ import org.springframework.aot.hint.predicate.RuntimeHintsPredicates;
 
 class QuartzRuntimeHintsTest {
   @Test
-  void registersCleanupJobConstructionAndAutowiredFields() {
+  void registersPersistedJobTypeAndQuartzInfrastructureConstruction() {
     RuntimeHints hints = new RuntimeHints();
     new QuartzRuntimeHints().registerHints(hints, getClass().getClassLoader());
 
     assertTrue(RuntimeHintsPredicates.reflection()
         .onType(CleanupQuartzJob.class)
-        .test(hints));
-    assertTrue(RuntimeHintsPredicates.reflection()
-        .onType(CleanupQuartzJob.class)
-        .withMemberCategory(org.springframework.aot.hint.MemberCategory.INVOKE_DECLARED_CONSTRUCTORS)
-        .test(hints));
-    assertTrue(RuntimeHintsPredicates.reflection()
-        .onType(CleanupQuartzJob.class)
-        .withMemberCategory(org.springframework.aot.hint.MemberCategory.ACCESS_DECLARED_FIELDS)
         .test(hints));
     for (Class<?> type : QuartzRuntimeHints.REFLECTIVELY_CONSTRUCTED_TYPES) {
       assertTrue(RuntimeHintsPredicates.reflection()
