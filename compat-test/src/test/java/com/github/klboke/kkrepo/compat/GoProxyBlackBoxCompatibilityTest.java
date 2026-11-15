@@ -44,7 +44,8 @@ class GoProxyBlackBoxCompatibilityTest {
 
     Endpoint reference = config.referenceEndpoint();
     Endpoint candidate = config.candidateEndpoint();
-    ProxyStreamingCompatibility.enable(candidate.request("", "GET"));
+    ProxyStreamingCompatibility.enable(config.nexusPlusAdminRequest(
+        candidate.request("", "GET").build().uri()));
     for (Probe probe : Probe.defaultProbes()) {
       Exchange referenceExchange = send(reference.request(probe.path(), probe.method()));
       Exchange candidateExchange = send(candidate.request(probe.path(), probe.method()));
