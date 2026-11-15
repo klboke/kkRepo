@@ -16,7 +16,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
 import org.junit.jupiter.api.Test;
+import org.quartz.Job;
 import org.quartz.JobBuilder;
+import org.quartz.JobExecutionContext;
 import org.quartz.TriggerBuilder;
 import org.springframework.context.support.StaticApplicationContext;
 import org.springframework.scheduling.quartz.SchedulerFactoryBean;
@@ -26,6 +28,7 @@ class CleanupQuartzConfigurationTest {
   void quartzCreatesInjectedJobsWithoutRuntimeAnnotationProcessing() throws Exception {
     CleanupPolicyDao dao = mock(CleanupPolicyDao.class);
     CleanupRunService runs = mock(CleanupRunService.class);
+    Runnable otherTask = mock(Runnable.class);
     Instant now = Instant.now();
     when(dao.findPolicy(7)).thenReturn(Optional.of(new CleanupPolicy(
         7L, "scheduled", RepositoryFormat.APT, null, Map.of("retainCount", 1),
@@ -37,6 +40,7 @@ class CleanupQuartzConfigurationTest {
     try (StaticApplicationContext context = new StaticApplicationContext()) {
       context.getBeanFactory().registerSingleton("cleanupDao", dao);
       context.getBeanFactory().registerSingleton("runs", runs);
+      context.getBeanFactory().registerSingleton("otherTask", otherTask);
       context.getBeanFactory().registerSingleton("properties", new CleanupRuntimeProperties());
       context.refresh();
       SchedulerFactoryBean factory = new SchedulerFactoryBean();
@@ -58,9 +62,27 @@ class CleanupQuartzConfigurationTest {
         var scheduled = factory.getScheduler().scheduleJob(job, trigger);
         factory.start();
         verify(runs, timeout(5000)).startScheduled(eq(7L), eq(scheduled.toInstant()));
+        // Other job types retain SpringBeanJobFactory's managed dependency creation.
+        factory.getScheduler().scheduleJob(
+            JobBuilder.newJob(OtherJob.class).withIdentity("other-job").build(),
+            TriggerBuilder.newTrigger().withIdentity("other-fire").startNow().build());
+        verify(otherTask, timeout(5000)).run();
       } finally {
         factory.destroy();
       }
+    }
+  }
+
+  public static class OtherJob implements Job {
+    private final Runnable task;
+
+    public OtherJob(Runnable task) {
+      this.task = task;
+    }
+
+    @Override
+    public void execute(JobExecutionContext context) {
+      task.run();
     }
   }
 }
