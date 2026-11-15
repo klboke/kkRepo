@@ -262,7 +262,7 @@ class AptRepositoryBlackBoxCompatibilityTest {
     } else {
       body.put("recipe", "apt-proxy");
       body.put("blobStoreName", blobStore);
-      body.put("proxy", Map.of("remoteUrl", remote, "autoBlock", false));
+      body.put("proxy", Map.of("remoteUrl", remote, "autoBlock", false, "streamingEnabled", true));
       body.put("apt", Map.of("distribution", "bookworm", "flat", false,
           "metadataMode", "PASSTHROUGH"));
     }

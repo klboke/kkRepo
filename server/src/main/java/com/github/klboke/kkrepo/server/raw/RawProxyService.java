@@ -473,7 +473,7 @@ public class RawProxyService {
       case CONDA -> lower.endsWith(".conda") || lower.endsWith(".tar.bz2");
       case NUGET -> lower.endsWith(".nupkg") || lower.endsWith(".snupkg");
       case RUBYGEMS -> lower.endsWith(".gem");
-      case COMPOSER, TERRAFORM, ANSIBLEGALAXY, OHPM ->
+      case ANSIBLEGALAXY, OHPM ->
           lower.endsWith(".zip") || lower.endsWith(".tgz") || lower.endsWith(".tar.gz");
 
       // These adapters own archive/signature/identity validation outside this raw call.

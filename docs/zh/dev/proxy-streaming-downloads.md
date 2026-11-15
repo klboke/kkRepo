@@ -27,7 +27,8 @@
 
 不新增下载状态表、持久化任务、共享分片或下载协调机制。各副本只持有可丢弃的临时文件和工作任务。
 发布缓存时使用现有仓库行锁、版本检查、asset 唯一约束与 writer 事务；仓库配置变化、下线、删除或
-其它请求已完成缓存时，旧填充不覆盖现有结果。网络传输不放在元数据事务中。多个副本可能重复回源，
+其它请求已完成缓存时，旧填充不覆盖现有结果。已有 asset 行（包括更换上游后不再兼容的旧缓存）
+在准入时直接走同步替换流程，避免反复下载却无法建立新缓存。网络传输不放在元数据事务中。多个副本可能重复回源，
 但只有完整缓存可以复用。进程崩溃后未完成填充不恢复；部署应使用临时磁盘并执行常规临时目录清理。
 
 ## 生效范围
@@ -42,9 +43,9 @@
 | Helm / Cargo / Pub | chart、crate、Pub archive；保留适用的结构、坐标和已知摘要校验 |
 | Docker/OCI | SHA-256 blob；manifest 和发现接口保持缓冲 |
 | NuGet / RubyGems | `.nupkg`、`.snupkg`、`.gem` |
-| Composer / Terraform / Ansible Galaxy | 普通 `.zip`、`.tgz`、`.tar.gz` 制品路径 |
+| Ansible Galaxy | 普通 `.zip`、`.tgz`、`.tar.gz` 制品路径 |
 | Conda | `.conda`、`.tar.bz2`，已知 repodata 长度与摘要在完成前校验 |
-| Swift / Conan / Alpine / R / Hugging Face | 表单保存配置；涉及生成、签名、版本协调或投影的工作流在本版仍保持缓冲 |
+| Composer / Terraform / Swift / Conan / Alpine / R / Hugging Face | 表单保存配置；涉及生成、签名、版本协调或投影的工作流在本版仍保持缓冲 |
 
 元数据改写和签名、内部预取、HEAD、已有缓存的刷新、未知/零长度或编码后的上游响应，以及不支持的
 路径都保留原流程。流式容量用尽时也退回原流程，开关不会绕过协议检查。
@@ -57,11 +58,23 @@
 ## 容量与运维
 
 - `KKREPO_PROXY_STREAMING_MAX_CONCURRENT` 默认 16，按进程计算，包含排队及正在保存缓存的任务。
-- `KKREPO_PROXY_STREAMING_MAX_STAGED_BYTES` 默认 20 GiB。按 Content-Length 的两倍预留，因为已有
-  writer 可能再次暂存文件。这是新增流式路径的额度，不是已有所有下载路径的全局磁盘上限。
+- `KKREPO_PROXY_STREAMING_MAX_STAGED_BYTES` 默认 20 GiB。普通 writer 按 Content-Length 的两倍预留；
+  Docker 按三倍预留，覆盖流式暂存、Docker 摘要暂存与对象存储流式上传的暂存文件。
+  这是新增流式路径的额度，不是已有所有下载路径的全局磁盘上限。
 - 缓存保存使用两个工作线程和有界队列；需要为临时文件及其它上传下载预留磁盘。
 - 关闭开关影响新请求。已经开始的客户端可继续完成，但仓库版本变化后，旧填充不能再发布缓存。
   缓存的原有有效期和重新验证规则不变。
 
 性能数据、环境、原始样本和复现方式见[性能报告](proxy-streaming-performance.md)。首个响应体字节、
 客户端总耗时、客户端完成后缓存可见时间分别测量；主要收益是更早看到下载进度，不会提高上游链路带宽。
+
+## 兼容性验证
+
+Nexus 对照测试会开启并读回配置，再验证 Maven JAR、npm、PyPI、Go ZIP、Helm chart、Cargo、Pub、
+NuGet、RubyGems、Yum RPM、APT、Conda 和 Ansible Galaxy 下载。公共 HTTPS 验证另外对比 Docker
+layer 的完整内容及摘要，并运行真实 Go、Helm、Docker 客户端。Nexus 没有 OHPM recipe，OHPM 使用
+独立的协议和客户端测试。
+
+JVM / Native 真实客户端矩阵使用默认关闭的 MySQL 仓库与开启流式的 PostgreSQL 仓库，也覆盖动态
+创建的 APT proxy。单元测试覆盖 HTML 拒绝、条件请求资源释放、旧缓存替换、磁盘准入、最后一块前
+完成协议校验，以及缓存发布后再更新投影。

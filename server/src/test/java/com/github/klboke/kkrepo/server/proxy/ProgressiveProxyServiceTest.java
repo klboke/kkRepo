@@ -273,6 +273,186 @@ class ProgressiveProxyServiceTest {
     }
   }
 
+  @Test void existingAssetUsesSynchronousReplacementInsteadOfAnUnpublishableFill() throws Exception {
+    when(assets.findAssetByPath(1L, "pkg.bin")).thenReturn(Optional.of(
+        mock(com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord.class)));
+    AtomicBoolean replaced = new AtomicBoolean();
+    var response = fetch(null, null, result -> {
+      assertArrayEquals(content, result.body().readAllBytes());
+      replaced.set(true);
+      return MavenResponse.noBody(200);
+    });
+    assertTrue(replaced.get(), "replacement must finish before returning to the caller");
+    assertFalse(response.hasBody());
+    verify(fetcher, never()).fetch(any());
+    assertNoStagedFiles();
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.EnumSource(value = RepositoryFormat.class, names = {"MAVEN2", "NPM"})
+  void htmlArtifactsKeepSynchronousRejectionAndGroupFallback(RepositoryFormat format) throws Exception {
+    when(runtime.format()).thenReturn(format);
+    var upstreamBody = spy(new ByteArrayInputStream(content));
+    when(fetcher.fetch(any())).thenReturn(new HttpRemoteFetcher.Result(200,
+        Map.of("Content-Length", "200000", "Content-Type", "text/html; charset=utf-8"), upstreamBody));
+    assertThrows(com.github.klboke.kkrepo.server.maven.MavenExceptions.MavenNotFoundException.class,
+        () -> fetch(null, null, result -> {
+          throw new com.github.klboke.kkrepo.server.maven.MavenExceptions.MavenNotFoundException("pkg.bin");
+        }));
+    verify(upstreamBody, atLeastOnce()).close();
+    verify(fetcher).fetchWithBodyRetry(any(), eq("pkg.bin"), any());
+    assertNoStagedFiles();
+  }
+
+  @Test void responseValidatorsSupportNotModifiedAndClosing304ReleasesCapacity() throws Exception {
+    when(runtime.format()).thenReturn(RepositoryFormat.GO);
+    var client = new MockHttpServletRequest("GET", "/repository/proxy/pkg.bin");
+    client.addHeader("If-None-Match", "\"upstream-version\"");
+    RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(client));
+    when(fetcher.fetch(any())).thenAnswer(call -> new HttpRemoteFetcher.Result(200,
+        Map.of("Content-Length", "200000", "ETag", "\"upstream-version\""), new ByteArrayInputStream(content)));
+    for (int i = 0; i < 3; i++) {
+      var response = fetch(null, null, result -> { fail("304 must not publish a cache entry"); return null; });
+      assertEquals("\"upstream-version\"", response.etag());
+      assertTrue(com.github.klboke.kkrepo.server.http.ConditionalResponses.shouldReturnNotModified(
+          client, response.status(), response.etag(), response.lastModified()));
+      response.closeBodyIfOpen();
+      assertNoStagedFiles();
+    }
+    verify(fetcher, never()).fetchWithBodyRetry(any(), anyString(), any());
+  }
+
+  @Test void diskBudgetIncludesDockerWriterAndStorageSpools() throws Exception {
+    service.stop();
+    service = new ProgressiveProxyService(repositories, assets, stores, policy, 4, 500_000);
+    when(runtime.format()).thenReturn(RepositoryFormat.DOCKER);
+    var buffered = ProgressiveProxyService.fetchDocker(service, fetcher::fetch, request, "pkg.bin",
+        runtime, true, "00".repeat(32), result -> {
+          assertArrayEquals(content, result.body().readAllBytes());
+          return com.github.klboke.kkrepo.server.docker.DockerResponse.noBody(200);
+        });
+    assertNull(buffered.body(), "600000 bytes of staging do not fit in 500000 bytes");
+    assertNoStagedFiles();
+    when(runtime.format()).thenReturn(RepositoryFormat.RAW);
+    var first = fetch(null, null, result -> MavenResponse.noBody(200));
+    var second = fetch(null, null, result -> MavenResponse.noBody(200));
+    assertFalse(second.hasBody(), "two 400000-byte reservations exceed the shared budget");
+    first.closeBodyIfOpen();
+    var replacement = fetch(null, null, result -> MavenResponse.noBody(200));
+    assertTrue(replacement.hasBody());
+    replacement.closeBodyIfOpen();
+    assertNoStagedFiles();
+  }
+
+  @Test void pypiAndDockerResponsesExposeValidatorsAndCompleteTheirCacheWrites() throws Exception {
+    when(fetcher.fetch(any())).thenAnswer(call -> new HttpRemoteFetcher.Result(200,
+        Map.of("Content-Length", "200000", "ETag", "\"version\"",
+            "Content-Disposition", "attachment", "Last-Modified", "Sun, 15 Nov 2026 12:00:00 GMT"),
+        new ByteArrayInputStream(content)));
+    CountDownLatch pypiCached = new CountDownLatch(1);
+    var pypi = ProgressiveProxyService.fetchPypi(service, fetcher, request, "pkg.bin", runtime,
+        true, null, null, result -> {
+          pypiCached.countDown();
+          return com.github.klboke.kkrepo.server.pypi.PypiResponse.ok(
+              InputStream.nullInputStream(), 0, null, null, null);
+        });
+    assertEquals("\"version\"", pypi.etag());
+    assertNotNull(pypi.lastModified());
+    assertEquals("attachment", pypi.headers().get("Content-Disposition"));
+    try (var body = pypi.body()) { assertArrayEquals(content, body.readAllBytes()); }
+    assertTrue(pypiCached.await(5, TimeUnit.SECONDS));
+    awaitCleanup();
+    when(runtime.format()).thenReturn(RepositoryFormat.DOCKER);
+    String sha = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(content));
+    CountDownLatch dockerCached = new CountDownLatch(1);
+    var docker = ProgressiveProxyService.fetchDocker(service, fetcher::fetch, request, "pkg.bin", runtime,
+        true, sha, result -> {
+          dockerCached.countDown();
+          return com.github.klboke.kkrepo.server.docker.DockerResponse.body(200,
+              InputStream::nullInputStream, 0, null, null);
+        });
+    assertEquals("sha256:" + sha, docker.headers().get("Docker-Content-Digest"));
+    try (var body = docker.body()) { assertArrayEquals(content, body.readAllBytes()); }
+    assertTrue(dockerCached.await(5, TimeUnit.SECONDS));
+    awaitCleanup();
+  }
+
+  @Test void invalidatedRepositoryAndUnsupportedResponsesStayBuffered() throws Exception {
+    var snapshot = repositories.findById(1L);
+    when(repositories.findById(1L)).thenReturn(Optional.empty());
+    assertFalse(fetch(null, null, result -> MavenResponse.noBody(200)).hasBody());
+    when(repositories.findById(1L)).thenReturn(snapshot);
+    for (var headers : java.util.List.of(Map.of("Content-Length", "-1"),
+        Map.of("Content-Length", "200000", "Content-Encoding", "gzip"))) {
+      when(fetcher.fetch(any())).thenReturn(new HttpRemoteFetcher.Result(200, headers, new ByteArrayInputStream(content)));
+      assertFalse(fetch(null, null, result -> MavenResponse.noBody(200)).hasBody());
+    }
+    var range = new MockHttpServletRequest("GET", "/repository/proxy/pkg.bin");
+    range.addHeader("Range", "bytes=0-1,4-5");
+    RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(range));
+    assertFalse(fetch(null, null, result -> MavenResponse.noBody(200)).hasBody());
+    assertNoStagedFiles();
+  }
+
+  @Test void rejectedPublicationAndSupersededFillReleaseAllStaging() throws Exception {
+    service.stop();
+    var rejected = fetch(null, null, result -> { fail("stopped publisher"); return null; });
+    try (var body = rejected.body()) { assertArrayEquals(content, body.readAllBytes()); }
+    assertNoStagedFiles();
+    service = new ProgressiveProxyService(repositories, assets, stores, policy, 2, 2_000_000);
+    var superseded = fetch(null, null, result -> { throw new ProxyCachePublication.Superseded(); });
+    try (var body = superseded.body()) { assertArrayEquals(content, body.readAllBytes()); }
+    awaitCleanup();
+  }
+
+  @Test void stagingCreationFailureClosesUpstreamAndReleasesAdmission() throws Exception {
+    var broken = directory.resolve("not-a-directory");
+    Files.writeString(broken, "file");
+    when(stores.forBlobStoreId(2L).stagingDirectory()).thenReturn(Optional.of(broken));
+    assertThrows(IOException.class, () -> fetch(null, null, result -> MavenResponse.noBody(200)));
+    Files.delete(broken);
+    when(stores.forBlobStoreId(2L).stagingDirectory()).thenReturn(Optional.of(directory));
+    var response = fetch(null, null, result -> MavenResponse.noBody(200));
+    response.closeBodyIfOpen();
+    assertNoStagedFiles();
+  }
+
+  @Test void oversizedBodyAndReadsAfterCloseFailWithoutPublishing() throws Exception {
+    when(fetcher.fetch(any())).thenReturn(upstream(content, content.length - 1));
+    var oversized = fetch(null, null, result -> { fail("oversized response"); return null; });
+    assertThrows(IOException.class, () -> oversized.body().readAllBytes());
+    assertThrows(IOException.class, () -> oversized.body().read());
+    assertEquals(0, oversized.body().read(new byte[0]));
+    assertNoStagedFiles();
+  }
+
+  @Test void publicationContextRequiresItsOwnTargetAndTransactionAndIsCleared() {
+    RequestContextHolder.resetRequestAttributes(); // Cache publication runs outside the client thread.
+    var snapshot = repositories.findById(1L).orElseThrow();
+    try (var publication = new ProxyCachePublication(repositories, assets, snapshot, Instant.EPOCH, "pkg.bin", "127.0.0.9")) {
+      assertEquals("127.0.0.9", ProxyRequestAudit.currentClientIp());
+      assertThrows(IllegalStateException.class, () -> ProxyCachePublication.check(runtime, "other.bin"));
+      assertThrows(IllegalStateException.class, () -> ProxyCachePublication.check(runtime, "pkg.bin"));
+      assertThrows(IllegalStateException.class, () -> new ProxyCachePublication(
+          repositories, assets, snapshot, Instant.EPOCH, "pkg.bin", null));
+    }
+    assertNull(ProxyCachePublication.clientIp());
+    assertDoesNotThrow(() -> ProxyCachePublication.check(runtime, "other.bin"));
+  }
+
+  @Test void contentRangesValidateSuffixBoundsAndNumericOverflow() {
+    for (String range : java.util.List.of("bytes=-100", "bytes=100-", "bytes=100-999")) {
+      assertTrue(ProgressiveProxyService.validContentRange(range, new HttpRemoteFetcher.Result(206,
+          Map.of("Content-Length", "100", "Content-Range", "bytes 100-199/200"), InputStream.nullInputStream())));
+    }
+    for (String value : java.util.List.of("bytes 0-200/200", "bytes 5-4/200", "bytes 0-2/*", "garbage",
+        "bytes 999999999999999999999-999999999999999999999/999999999999999999999")) {
+      assertFalse(ProgressiveProxyService.validContentRange("bytes=0-", new HttpRemoteFetcher.Result(206,
+          Map.of("Content-Length", "200", "Content-Range", value), InputStream.nullInputStream())));
+    }
+    assertFalse(ProgressiveProxyService.validContentRange("bytes=0-", upstream(content, content.length)));
+  }
+
   private void awaitCleanup() throws Exception {
     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
     while (System.nanoTime() < deadline) {

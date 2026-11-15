@@ -89,7 +89,7 @@ public class ProgressiveProxyService {
         request, path, runtime, expectedSha256, validator, buffered,
         transfer -> {
           MavenResponse response = MavenResponse.ok(transfer.body(), transfer.length(),
-              transfer.contentType(), null, transfer.lastModified()).withStatus(transfer.status());
+              transfer.contentType(), transfer.headers().get("ETag"), transfer.lastModified()).withStatus(transfer.status());
           transfer.headers().forEach(response::withHeader);
           response.withInternalAttribute(HOOKS, transfer.hooks());
           return response;
@@ -106,7 +106,7 @@ public class ProgressiveProxyService {
         request, path, runtime, expectedSha256, validator, buffered,
         transfer -> {
           PypiResponse response = PypiResponse.ok(transfer.body(), transfer.length(),
-              transfer.contentType(), null, transfer.lastModified()).withStatus(transfer.status());
+              transfer.contentType(), transfer.headers().get("ETag"), transfer.lastModified()).withStatus(transfer.status());
           transfer.headers().forEach(response::withHeader);
           return response;
         }, response -> { if (response.hasBody()) response.body().close(); });
@@ -165,7 +165,7 @@ public class ProgressiveProxyService {
         || !policy.allowsProgressiveRead(runtime.id())) {
       return fallback.fetch(request, buffered);
     }
-    String range = client == null ? null : client.getHeader("Range");
+    String range = client.getHeader("Range");
     if (range != null && !range.matches("bytes=(?:[0-9]+-[0-9]*|-[0-9]+)")) {
       return fallback.fetch(request, buffered);
     }
@@ -175,7 +175,9 @@ public class ProgressiveProxyService {
         || !(snapshot.attributes().get("proxy") instanceof Map<?, ?> proxy)
         || !Boolean.TRUE.equals(proxy.get("streamingEnabled"))
         || !Objects.equals(snapshot.proxyRemoteUrl(), runtime.proxyRemoteUrl())
-        || !Objects.equals(snapshot.blobStoreId(), runtime.blobStoreId())) {
+        || !Objects.equals(snapshot.blobStoreId(), runtime.blobStoreId())
+        // An incompatible/stale asset still needs the established synchronous replacement path.
+        || assets.findAssetByPath(runtime.id(), path).isPresent()) {
       return fallback.fetch(request, buffered);
     }
     String clientIp = ProxyRequestAudit.currentClientIp();
@@ -192,14 +194,11 @@ public class ProgressiveProxyService {
       boolean partial = result.status() == 206;
       // Unknown length, encoded bodies and unsupported responses retain the established path.
       if ((result.status() != 200 && !partial) || result.contentLength() <= 0
-          || (runtime.format() == com.github.klboke.kkrepo.core.RepositoryFormat.NPM
+          || ((runtime.format() == com.github.klboke.kkrepo.core.RepositoryFormat.NPM
+                  || runtime.format() == com.github.klboke.kkrepo.core.RepositoryFormat.MAVEN2)
               && result.contentType() != null && result.contentType().toLowerCase(java.util.Locale.ROOT).startsWith("text/html"))
           || (result.header("Content-Encoding") != null
               && !"identity".equalsIgnoreCase(result.header("Content-Encoding")))) {
-        if (range != null || partial) {
-          result.close();
-          return fallback.fetch(request, buffered);
-        }
         result.close();
         return fallback.fetch(request, buffered);
       }
@@ -207,12 +206,13 @@ public class ProgressiveProxyService {
         throw new IOException("Invalid upstream byte range response");
       }
       long reservation = partial ? 0 : result.contentLength();
-      // Existing writers may stage a second local copy before uploading. Reserve both copies.
-      if (reservation > maxStagedBytes / 2 || !slots.tryAcquire()) {
+      // Docker's writer spools the blob and its stream upload can spool it once more in storage.
+      int copies = runtime.format() == com.github.klboke.kkrepo.core.RepositoryFormat.DOCKER ? 3 : 2;
+      if (reservation > maxStagedBytes / copies || !slots.tryAcquire()) {
         result.close();
         return fallback.fetch(request, buffered);
       }
-      reservation *= 2;
+      reservation *= copies;
       if (stagedBytes.addAndGet(reservation) > maxStagedBytes) {
         stagedBytes.addAndGet(-reservation);
         slots.release();
@@ -270,7 +270,7 @@ public class ProgressiveProxyService {
           if (result.header(name) != null) headers.put(name, result.header(name));
         }
         headers.put("Accept-Ranges", "bytes");
-        if (client != null) client.setAttribute(RANGE_HANDLED, true);
+        client.setAttribute(RANGE_HANDLED, true);
         return responseFactory.apply(new Transfer(result.status(), body, result.contentLength(),
             result.contentType(), result.lastModified(), Map.copyOf(headers), hooks));
       } catch (IOException | RuntimeException error) {

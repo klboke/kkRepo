@@ -154,6 +154,7 @@ class PubRepositoryBlackBoxCompatibilityTest {
     assumeTrue(config.proxyPackageConfigured(),
         "Set PUB_COMPAT_PROXY_PACKAGE and PUB_COMPAT_PROXY_VERSION to compare a package available through proxy/group");
 
+    ProxyStreamingCompatibility.enable(config.candidateProxy().request(""));
     assertMetadataVersionAndArchive("proxy", config.referenceProxy(), config.candidateProxy(), config);
     assertMetadataVersionAndArchive("group", config.referenceGroup(), config.candidateGroup(), config);
     assertMissingPackageStatus("proxy", config.referenceProxy(), config.candidateProxy(), config);

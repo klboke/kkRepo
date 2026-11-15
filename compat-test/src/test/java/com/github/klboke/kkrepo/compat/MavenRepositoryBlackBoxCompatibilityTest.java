@@ -56,6 +56,7 @@ class MavenRepositoryBlackBoxCompatibilityTest {
 
     Endpoint nexus = config.nexusRead();
     Endpoint nexusPlus = config.nexusPlusRead();
+    ProxyStreamingCompatibility.enable(nexusPlus.request(""));
     String path = config.readPath();
 
     Exchange referenceGet = get(nexus, path);
@@ -68,6 +69,9 @@ class MavenRepositoryBlackBoxCompatibilityTest {
     assertSameExchange("proxy GET", referenceGet, candidateGet, true);
     assertSameExchange("proxy HEAD", referenceHead, candidateHead, false);
     assertSameExchange("proxy checksum", referenceSha1, candidateSha1, true);
+    // The default probe is a POM; include a cold artifact body on the progressive path.
+    String artifact = "junit/junit/4.13.2/junit-4.13.2.jar";
+    assertSameExchange("streaming proxy JAR", get(nexus, artifact), get(nexusPlus, artifact), true);
   }
 
   @Test

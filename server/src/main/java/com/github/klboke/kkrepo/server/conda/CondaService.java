@@ -1452,7 +1452,7 @@ public class CondaService {
         "Conda upstream checksum mismatch for " + path);
   }
 
-  private static void validateDownloadedPackage(
+  static void validateDownloadedPackage(
       java.nio.file.Path file, CondaRegistryDao.PackageRecord expected) throws java.io.IOException {
     var actual = com.github.klboke.kkrepo.server.blob.BufferedUpload.inspect(file,
         com.github.klboke.kkrepo.server.blob.BufferedUpload.Checksums.STANDARD);

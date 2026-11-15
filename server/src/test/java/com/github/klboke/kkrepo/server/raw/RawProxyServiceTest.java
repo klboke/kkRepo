@@ -48,6 +48,36 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 class RawProxyServiceTest {
   @ParameterizedTest
+  @org.junit.jupiter.params.provider.EnumSource(value = RepositoryFormat.class, names = {"COMPOSER", "TERRAFORM"})
+  void checksumDependentCallersKeepSynchronousPublicationWhenStreamingIsEnabled(RepositoryFormat format)
+      throws Exception {
+    Fixture fixture = fixture();
+    var repositories = mock(com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao.class);
+    var policy = mock(com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy.class);
+    var streaming = new com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService(
+        repositories, fixture.assetDao, fixture.registry, policy, 1, 1000);
+    org.springframework.test.util.ReflectionTestUtils.setField(fixture.service, "streaming", streaming);
+    var runtime = org.mockito.Mockito.spy(runtime(RepositoryType.PROXY, 60));
+    when(runtime.format()).thenReturn(format);
+    when(runtime.streamingEnabled()).thenReturn(true);
+    var client = new org.springframework.mock.web.MockHttpServletRequest("GET", "/repository/proxy/archive.zip");
+    org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+        new org.springframework.web.context.request.ServletRequestAttributes(client));
+    MavenResponse persisted = MavenResponse.noBody(200);
+    when(fixture.fetcher.fetchWithBodyRetry(any(), eq("archive.zip"), any())).thenReturn(persisted);
+    try {
+      assertSame(persisted, fixture.service.getAssetFromUrl(runtime, "archive.zip",
+          "https://upstream.example.test/archive.zip", false));
+      verify(fixture.fetcher).fetchWithBodyRetry(any(), eq("archive.zip"), any());
+      verify(fixture.fetcher, never()).fetch(any());
+      org.mockito.Mockito.verifyNoInteractions(repositories, policy);
+    } finally {
+      org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+      org.springframework.test.util.ReflectionTestUtils.invokeMethod(streaming, "stop");
+    }
+  }
+
+  @ParameterizedTest
   @ValueSource(strings = {"", "/", "docs/"})
   void directoryHeadFetchesTheDirectoryUrlAndStoresItWithoutAnIndexAlias(String rawPath) throws Exception {
     Fixture fixture = fixture();
