@@ -22,10 +22,8 @@ public final class QuartzRuntimeHints implements RuntimeHintsRegistrar {
 
   @Override
   public void registerHints(RuntimeHints hints, ClassLoader classLoader) {
-    hints.reflection().registerType(
-        CleanupQuartzJob.class,
-        MemberCategory.ACCESS_DECLARED_FIELDS,
-        MemberCategory.INVOKE_DECLARED_CONSTRUCTORS);
+    // The JDBC JobStore resolves this class by name; our JobFactory constructs it directly.
+    hints.reflection().registerType(CleanupQuartzJob.class);
     for (Class<?> type : REFLECTIVELY_CONSTRUCTED_TYPES) {
       hints.reflection().registerType(type, MemberCategory.INVOKE_DECLARED_CONSTRUCTORS);
     }

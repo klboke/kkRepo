@@ -132,6 +132,9 @@ jobs:
       - name: Verify scanner runtime toggle and JSON binding
         run: python3 scripts/ci/check-security-scanner.py --image kkrepo:compat
 
+      - name: Verify scheduled cleanup and optional APT checksums
+        run: python3 scripts/ci/check-cleanup.py --image kkrepo:compat
+
       - name: Package candidate image
         shell: bash
         env:
