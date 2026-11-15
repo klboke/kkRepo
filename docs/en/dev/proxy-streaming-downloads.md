@@ -17,6 +17,11 @@ unchanged. With it on, an eligible cold GET forwards upstream bytes as the clien
 a disposable local staging file and calculating SHA-256. This uses bounded buffers and lets a slow
 client slow upstream consumption. It does not retain the whole artifact in Java heap.
 
+An admitted progressive response has no MVC async **total-duration** deadline: the global ten-minute
+deadline would otherwise truncate a large download even while bytes keep arriving. Existing upstream
+I/O timeouts, disconnect cleanup and admission limits still apply. Buffered and unrelated requests
+retain their configured MVC deadline.
+
 The final block is held until the declared length, EOF, available expected checksum, and applicable
 archive/coordinate checks succeed. A bounded background worker then invokes the existing protocol
 writer to persist the Blob and transactionally publish its metadata. Client completion does **not**

@@ -33,8 +33,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
+import org.springframework.web.context.request.async.StandardServletAsyncWebRequest;
+import org.springframework.web.context.request.async.WebAsyncUtils;
 
 class ProgressiveProxyServiceTest {
   @TempDir Path directory;
@@ -77,6 +80,102 @@ class ProgressiveProxyServiceTest {
   }
 
   @AfterEach void cleanUp() { service.stop(); RequestContextHolder.resetRequestAttributes(); }
+
+  @Test void progressiveResponseDoesNotInheritTheMvcTotalDeadline() throws Exception {
+    var client = ((ServletRequestAttributes) RequestContextHolder.currentRequestAttributes()).getRequest();
+    ((MockHttpServletRequest) client).setAsyncSupported(true);
+    var async = new StandardServletAsyncWebRequest(client, new MockHttpServletResponse());
+    async.setTimeout(600_000L);
+    WebAsyncUtils.getAsyncManager(client).setAsyncWebRequest(async);
+    try (var body = fetch(null, null, result -> null).body()) {
+      async.startAsync();
+      assertEquals(0, client.getAsyncContext().getTimeout());
+    }
+    assertNoStagedFiles();
+  }
+
+  @Test void bufferedFallbackKeepsTheConfiguredMvcDeadline() throws Exception {
+    var client = ((ServletRequestAttributes) RequestContextHolder.currentRequestAttributes()).getRequest();
+    ((MockHttpServletRequest) client).setAsyncSupported(true);
+    var async = new StandardServletAsyncWebRequest(client, new MockHttpServletResponse());
+    async.setTimeout(600_000L);
+    WebAsyncUtils.getAsyncManager(client).setAsyncWebRequest(async);
+    when(runtime.streamingEnabled()).thenReturn(false);
+    fetch(null, null, result -> MavenResponse.noBody(200));
+    async.startAsync();
+    assertEquals(600_000, client.getAsyncContext().getTimeout());
+  }
+
+  @Test void slowProgressiveBodySurvivesARealTomcatAsyncDeadline(@TempDir Path tomcatDirectory)
+      throws Exception {
+    when(fetcher.fetch(any())).thenAnswer(call -> new HttpRemoteFetcher.Result(200,
+        Map.of("Content-Length", Integer.toString(content.length)),
+        new java.io.FilterInputStream(new ByteArrayInputStream(content)) {
+          private int reads;
+          @Override public int read(byte[] bytes, int offset, int length) throws IOException {
+            if (++reads == 2) {
+              try { Thread.sleep(2500); }
+              catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new IOException(e); }
+            }
+            return in.read(bytes, offset, length);
+          }
+        }));
+    CountDownLatch published = new CountDownLatch(1);
+    var context = new org.springframework.web.context.support.AnnotationConfigWebApplicationContext();
+    context.register(ShortAsyncDeadline.class);
+    context.addBeanFactoryPostProcessor(factory -> factory.registerSingleton("download",
+        new SlowDownloadController(() -> fetch(null, null, result -> {
+          assertArrayEquals(content, result.body().readAllBytes());
+          published.countDown();
+          return MavenResponse.noBody(200);
+        }))));
+    var factory = new org.springframework.boot.tomcat.servlet.TomcatServletWebServerFactory(0);
+    factory.setBaseDirectory(tomcatDirectory.toFile());
+    var server = factory.getWebServer(servletContext -> {
+      var registration = servletContext.addServlet("mvc", new org.springframework.web.servlet.DispatcherServlet(context));
+      registration.setAsyncSupported(true);
+      registration.setLoadOnStartup(1);
+      registration.addMapping("/");
+    });
+    server.start();
+    try (var client = java.net.http.HttpClient.newHttpClient()) {
+      var result = client.send(java.net.http.HttpRequest.newBuilder(java.net.URI.create(
+          "http://127.0.0.1:" + server.getPort() + "/repository/proxy/pkg.bin"))
+          .timeout(java.time.Duration.ofSeconds(10)).GET().build(),
+          java.net.http.HttpResponse.BodyHandlers.ofByteArray());
+      assertEquals(200, result.statusCode());
+      assertArrayEquals(content, result.body());
+      assertTrue(published.await(5, TimeUnit.SECONDS));
+      awaitCleanup();
+    } finally {
+      server.stop();
+      context.close();
+    }
+  }
+
+  // Explicit registration only: do not expose test MVC settings to application component scans.
+  @org.springframework.web.servlet.config.annotation.EnableWebMvc
+  static class ShortAsyncDeadline implements org.springframework.web.servlet.config.annotation.WebMvcConfigurer {
+    @Override public void configureAsyncSupport(org.springframework.web.servlet.config.annotation.AsyncSupportConfigurer configurer) {
+      configurer.setDefaultTimeout(100);
+    }
+  }
+
+  @FunctionalInterface interface Download { MavenResponse get() throws IOException; }
+
+  @org.springframework.web.bind.annotation.RestController
+  class SlowDownloadController {
+    private final Download download;
+    SlowDownloadController(Download download) { this.download = download; }
+
+    @org.springframework.web.bind.annotation.GetMapping("/repository/proxy/pkg.bin")
+    public org.springframework.http.ResponseEntity<org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody>
+        download(jakarta.servlet.http.HttpServletRequest request) throws IOException {
+      var response = download.get();
+      return org.springframework.http.ResponseEntity.ok().contentLength(response.contentLength())
+          .body(out -> com.github.klboke.kkrepo.server.blob.TempBlobFiles.copyResponse(response.body(), out, request));
+    }
+  }
 
   @Test void returnsBytesBeforeEofAndCompletesWithoutWaitingForCacheUpload() throws Exception {
     CountDownLatch publishing = new CountDownLatch(1), release = new CountDownLatch(1), done = new CountDownLatch(1);

@@ -36,6 +36,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
+import org.springframework.web.context.request.async.WebAsyncUtils;
 
 /**
  * Optional cold artifact delivery. A consumer drives upstream reads (bounded memory/backpressure).
@@ -275,8 +276,14 @@ public class ProgressiveProxyService {
         }
         headers.put("Accept-Ranges", "bytes");
         client.setAttribute(RANGE_HANDLED, true);
-        return responseFactory.apply(new Transfer(result.status(), body, result.contentLength(),
+        T response = responseFactory.apply(new Transfer(result.status(), body, result.contentLength(),
             result.contentType(), result.lastModified(), Map.copyOf(headers), hooks));
+        // MVC's async timeout is a total deadline, not an idle timeout. A healthy large
+        // upstream transfer can exceed it; retain upstream I/O timeouts and bounded staging.
+        // Override only this admitted progressive response, before MVC starts async delivery.
+        var async = WebAsyncUtils.getAsyncManager(client).getAsyncWebRequest();
+        if (async != null) async.setTimeout(0L);
+        return response;
       } catch (IOException | RuntimeException error) {
         if (transferred != null) {
           try { transferred.close(); } catch (IOException closeError) { error.addSuppressed(closeError); }
