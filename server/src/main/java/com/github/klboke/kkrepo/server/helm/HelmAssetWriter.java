@@ -218,6 +218,7 @@ class HelmAssetWriter {
       String createdBy,
       String createdByIp,
       Path responseFile) {
+    com.github.klboke.kkrepo.server.proxy.ProxyCachePublication.check(runtime, path);
     Instant now = Instant.now();
     String contentType = contentTypeHint == null || contentTypeHint.isBlank()
         ? kind.contentType()
@@ -369,6 +370,14 @@ class HelmAssetWriter {
         metadata.attributes(),
         now);
     return componentDao.upsertReturningId(rec);
+  }
+
+  void validateProgressiveChart(Path file) {
+    HelmChartMetadata metadata = metadataFromBufferedUpload(HelmAssetKind.PACKAGE, file);
+    if (metadata == null || !HelmIndex.isValidChartApiVersion(metadata.apiVersion())
+        || !HelmIndex.isValidChartVersion(metadata.version())) {
+      throw new IllegalArgumentException("Invalid Helm chart metadata");
+    }
   }
 
   private HelmChartMetadata metadataFromBufferedUpload(HelmAssetKind kind, Path tempFile) {

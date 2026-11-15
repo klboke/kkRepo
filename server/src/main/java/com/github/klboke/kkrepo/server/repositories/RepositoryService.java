@@ -1416,7 +1416,7 @@ public class RepositoryService {
         settings.outboundProxyPasswordConfigured(),
         settings.minimumReleaseAgeMinutes(),
         settings.allowedRedirectHosts(),
-        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost());
+        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost(), settings.streamingEnabled());
   }
 
   private static String defaultRemoteUrl(RepositoryFormat format) {
@@ -1455,7 +1455,7 @@ public class RepositoryService {
         settings.outboundProxyPasswordConfigured(),
         settings.minimumReleaseAgeMinutes(),
         settings.allowedRedirectHosts(),
-        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost());
+        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost(), settings.streamingEnabled());
   }
 
   private static ProxySettings withAllowedRedirectHosts(
@@ -1478,7 +1478,7 @@ public class RepositoryService {
         settings.outboundProxyPasswordConfigured(),
         settings.minimumReleaseAgeMinutes(),
         allowedRedirectHosts,
-        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost());
+        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost(), settings.streamingEnabled());
   }
 
   private void validateProxy(ProxySettings settings, RepositoryFormat format) {
@@ -1678,7 +1678,8 @@ public class RepositoryService {
             : incoming.allowedRedirectHosts(),
         incoming.remoteAuthenticationType() == null ? base.remoteAuthenticationType() : incoming.remoteAuthenticationType(),
         incoming.remoteNtlmDomain() == null ? base.remoteNtlmDomain() : blankToNull(incoming.remoteNtlmDomain()),
-        incoming.remoteNtlmHost() == null ? base.remoteNtlmHost() : blankToNull(incoming.remoteNtlmHost()));
+        incoming.remoteNtlmHost() == null ? base.remoteNtlmHost() : blankToNull(incoming.remoteNtlmHost()),
+        incoming.streamingEnabled() == null ? base.streamingEnabled() : incoming.streamingEnabled());
   }
 
   private static String mergedOutboundProxyPassword(ProxySettings base, ProxySettings incoming) {
@@ -1714,6 +1715,7 @@ public class RepositoryService {
   private static Map<String, Object> proxyAttributes(ProxySettings proxy) {
     Map<String, Object> map = new LinkedHashMap<>();
     map.put("remoteUrl", proxy.remoteUrl());
+    map.put("streamingEnabled", Boolean.TRUE.equals(proxy.streamingEnabled()));
     if (proxy.contentMaxAgeMinutes() != null) map.put("contentMaxAgeMinutes", proxy.contentMaxAgeMinutes());
     if (proxy.metadataMaxAgeMinutes() != null) map.put("metadataMaxAgeMinutes", proxy.metadataMaxAgeMinutes());
     if (proxy.minimumReleaseAgeMinutes() != null) {
@@ -2185,7 +2187,8 @@ public class RepositoryService {
         stringList(proxyMap.get("allowedRedirectHosts")),
         stringOrNull(proxyMap.get("remoteAuthenticationType")),
         stringOrNull(proxyMap.get("remoteNtlmDomain")),
-        stringOrNull(proxyMap.get("remoteNtlmHost")));
+        stringOrNull(proxyMap.get("remoteNtlmHost")),
+        boolValue(proxyMap.get("streamingEnabled")));
   }
 
   private static ProxySettings readProxyAttributesOrDefaults(RepositoryRecord record) {
@@ -2212,7 +2215,8 @@ public class RepositoryService {
         outboundPassword != null && !outboundPassword.isBlank(),
         effective.minimumReleaseAgeMinutes() == null ? 0 : effective.minimumReleaseAgeMinutes(),
         effective.allowedRedirectHosts() == null ? List.of() : effective.allowedRedirectHosts(),
-        effective.remoteAuthenticationType(), effective.remoteNtlmDomain(), effective.remoteNtlmHost());
+        effective.remoteAuthenticationType(), effective.remoteNtlmDomain(), effective.remoteNtlmHost(),
+        Boolean.TRUE.equals(effective.streamingEnabled()));
   }
 
   private static String stringOrNull(Object value) {

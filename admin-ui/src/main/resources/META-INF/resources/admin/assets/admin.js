@@ -3342,6 +3342,7 @@ function repositoryFormPayload() {
         ? (minimumReleaseAge === "" ? 0 : Number(minimumReleaseAge))
         : null,
       autoBlock: document.getElementById("repository-auto-block").checked,
+      streamingEnabled: document.getElementById("repository-streaming-enabled").checked,
       remoteAuthenticationType: textInputValue("repository-remote-authentication-type"),
       remoteNtlmDomain: textInputValue("repository-remote-ntlm-domain"),
       remoteNtlmHost: textInputValue("repository-remote-ntlm-host"),
@@ -3467,6 +3468,7 @@ function setRepositoryFormDefaults() {
   document.getElementById("repository-metadata-max-age").value = "1440";
   document.getElementById("repository-minimum-release-age").value = "0";
   document.getElementById("repository-auto-block").checked = true;
+  document.getElementById("repository-streaming-enabled").checked = false;
   document.getElementById("repository-raw-content-disposition").value = "ATTACHMENT";
   document.getElementById("repository-docker-connector-enabled").checked = false;
   document.getElementById("repository-docker-connector-port").value = "";
@@ -3597,6 +3599,7 @@ function showEditRepositoryForm(name) {
     document.getElementById("repository-minimum-release-age").value =
       repo.proxy.minimumReleaseAgeMinutes ?? "0";
     document.getElementById("repository-auto-block").checked = repo.proxy.autoBlock !== false;
+    document.getElementById("repository-streaming-enabled").checked = repo.proxy.streamingEnabled === true;
   }
   document.getElementById("repository-yum-depth").value = repo.yum?.repodataDepth ?? 0;
   setConanManifestSettings(repo.conan);

@@ -300,6 +300,7 @@ public class GoAssetWriter {
       String createdByIp,
       Instant now,
       boolean replaceExisting) {
+    com.github.klboke.kkrepo.server.proxy.ProxyCachePublication.check(runtime, path.path());
     BlobReference ref = upload.reference();
     Digests digests = upload.digests();
     String blobRef = BlobReferenceCodec.format(ref);

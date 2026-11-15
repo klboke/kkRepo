@@ -340,6 +340,10 @@
                 Maven SNAPSHOT versions are exempt. PyPI upstreams must publish PEP 700
                 upload times (for example pypi.org).
               </p>
+              <div class="checkbox-with-help">
+                <label class="checkbox-field"><input id="repository-streaming-enabled" type="checkbox"><span>Allow streaming downloads</span></label>
+                <span class="field-help" tabindex="0" role="note" aria-label="Send supported uncached artifacts while downloading, then cache the complete validated file. Requests requiring whole-file inspection or security scanning remain buffered. Partial downloads are not cached." data-tooltip="Send supported uncached artifacts while downloading, then cache the complete validated file. Requests requiring whole-file inspection or security scanning remain buffered. Partial downloads are not cached."><span class="lucide-icon icon-info" aria-hidden="true"></span></span>
+              </div>
               <label class="checkbox-field">
                 <input id="repository-auto-block" type="checkbox" checked>
                 <span>Auto-block remote</span>

@@ -293,7 +293,33 @@ public final class RepositoryCommands {
       List<String> allowedRedirectHosts,
       String remoteAuthenticationType,
       String remoteNtlmDomain,
+      String remoteNtlmHost,
+      Boolean streamingEnabled) {
+    /** Compatibility constructor for callers without progressive proxy delivery. */
+    public ProxySettings(
+      String remoteUrl,
+      Integer contentMaxAgeMinutes,
+      Integer metadataMaxAgeMinutes,
+      Boolean autoBlock,
+      String remoteUsername,
+      String remotePassword,
+      Boolean remotePasswordConfigured,
+      String remoteBearerToken,
+      Boolean remoteBearerTokenConfigured,
+      String outboundProxyType,
+      String outboundProxyHost,
+      Integer outboundProxyPort,
+      String outboundProxyUsername,
+      String outboundProxyPassword,
+      Boolean outboundProxyPasswordConfigured,
+      Integer minimumReleaseAgeMinutes,
+      List<String> allowedRedirectHosts,
+      String remoteAuthenticationType,
+      String remoteNtlmDomain,
       String remoteNtlmHost) {
+      this(remoteUrl, contentMaxAgeMinutes, metadataMaxAgeMinutes, autoBlock, remoteUsername, remotePassword, remotePasswordConfigured, remoteBearerToken, remoteBearerTokenConfigured, outboundProxyType, outboundProxyHost, outboundProxyPort, outboundProxyUsername, outboundProxyPassword, outboundProxyPasswordConfigured, minimumReleaseAgeMinutes, allowedRedirectHosts, remoteAuthenticationType, remoteNtlmDomain, remoteNtlmHost, null);
+    }
+
     /** Compatibility constructor for callers that predate upstream NTLM authentication. */
     public ProxySettings(
         String remoteUrl,

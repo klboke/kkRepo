@@ -63,6 +63,32 @@ import org.junit.jupiter.api.Test;
 
 class RepositoryServiceTest {
   @Test
+  void streamingSettingDefaultsOffAndSurvivesUpdatesAndReplicaReload() throws Exception {
+    var repositories = new StubRepositoryDao(repository(1L));
+    var service = service(repositories);
+    var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+    var settings = mapper.readValue("""
+        {"remoteUrl":"https://registry.npmjs.org", "streamingEnabled":true}
+        """, ProxySettings.class);
+    var created = service.create(new CreateCommand("streaming", "npm-proxy", true,
+        "default", true, null, settings, null, null, null, null));
+    assertTrue(created.proxy().streamingEnabled());
+    var registry = new RepositoryRuntimeRegistry(repositories, 0);
+    assertTrue(registry.resolve("streaming").orElseThrow().streamingEnabled());
+    var kept = service.update("streaming", new UpdateCommand(true, null, null, null,
+        new ProxySettings(null, null, null, null), null, null, null, null));
+    assertTrue(kept.proxy().streamingEnabled());
+    var disabled = service.update("streaming", new UpdateCommand(true, null, null, null,
+        mapper.readValue("{\"streamingEnabled\":false}", ProxySettings.class), null, null, null, null));
+    assertFalse(disabled.proxy().streamingEnabled());
+    assertFalse(new RepositoryRuntimeRegistry(repositories, 0).resolve("streaming").orElseThrow().streamingEnabled());
+    var legacy = service.create(new CreateCommand("legacy-streaming", "raw-proxy", true,
+        "default", true, null, new ProxySettings("https://example.org", null, null, null),
+        null, null, null, null));
+    assertFalse(legacy.proxy().streamingEnabled());
+  }
+
+  @Test
   void partialUpdatesPreserveTheBindingFromTheLockedRepositoryVersion() {
     for (boolean concurrentAssignment : List.of(true, false)) {
       RepositoryRecord base = mavenProxyWithOutboundProxy("old-pass");
