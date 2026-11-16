@@ -142,7 +142,7 @@ See [Nexus Migration Guide](nexus-migration-guide.md).
 
 - kkrepo is not a full reimplementation of Nexus internals. Karaf, OSGi, OrientDB, embedded Elasticsearch, and the Nexus task subsystem are not compatibility goals.
 - Docker / OCI uses Registry HTTP API V2 and OCI Distribution; Docker Registry V1 API and `docker search` are intentionally not part of the supported surface unless a future compatibility need requires a search-only shim.
-- Docker connector listener changes can be refreshed through the Docker operations endpoint. Advanced connector TLS/SNI management remains deployment-specific.
+- Docker supports independent HTTP/HTTPS connector ports with deployment-managed named TLS bundles. Each replica reconciles configuration automatically; runtime status is node-local. Certificate rotation requires rolling restart; per-host SNI selection and certificate upload are not supported.
 - Cargo / Rust supports Cargo sparse registries. Cargo git index protocol, crates.io-style GitHub owner invitations, and deleting published crate versions are not currently supported. Cargo migration requires datastore H2/PostgreSQL schema fingerprints; OrientDB Cargo content export is not enabled.
 - Dart / Pub supports Hosted Pub Repository V2 hosted/proxy/group workflows. Pub.dev social, publisher, score, download-count, and advisory APIs are not treated as protocol correctness dependencies.
 - Composer support targets Composer 2 metadata. Composer 1 `provider-includes`, Packagist security-advisories/metadata-changes, VCS source checkout, and a standard publish command are outside the current surface; hosted publication uses the Components API or UI archive upload.

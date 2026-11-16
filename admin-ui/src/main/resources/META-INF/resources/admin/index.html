@@ -410,6 +410,20 @@
                 <span>Connector port <span class="required-mark">*</span></span>
                 <input id="repository-docker-connector-port" type="number" min="1" max="65535" placeholder="5000">
               </label>
+              <label class="checkbox-field">
+                <input id="repository-docker-https-enabled" type="checkbox">
+                <span>Enable HTTPS connector</span>
+              </label>
+              <label>
+                <span>HTTPS connector port <span class="required-mark">*</span></span>
+                <input id="repository-docker-https-port" type="number" min="1" max="65535" placeholder="5443">
+              </label>
+              <label class="full-width">
+                <span>TLS configuration</span>
+                <input id="repository-docker-tls-bundle" list="docker-tls-bundles" placeholder="Default TLS configuration">
+                <datalist id="docker-tls-bundles"></datalist>
+              </label>
+              <p class="form-note full-width" id="docker-tls-help">Configure server certificates in deployment settings. HTTP and HTTPS use different ports.</p>
               <label class="full-width">
                 <span>Public URL</span>
                 <input id="repository-docker-connector-public-url" type="url" placeholder="https://registry.example.com">
