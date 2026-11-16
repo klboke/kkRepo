@@ -8737,6 +8737,8 @@ document.getElementById("repository-docker-https-enabled").addEventListener("cha
   refreshDockerConnectorControls();
   if (document.getElementById("repository-docker-https-enabled").checked) loadDockerTlsBundles();
 });
+document.getElementById("docker-tls-help").addEventListener("mouseenter", loadDockerTlsBundles);
+document.getElementById("docker-tls-help").addEventListener("focus", loadDockerTlsBundles);
 document.getElementById("repository-docker-tls-bundle").addEventListener("focus", loadDockerTlsBundles);
 document.getElementById("repository-docker-tls-bundle").addEventListener("change", loadDockerTlsBundles);
 document.getElementById("repository-apt-flat").addEventListener("change", refreshAptControls);
