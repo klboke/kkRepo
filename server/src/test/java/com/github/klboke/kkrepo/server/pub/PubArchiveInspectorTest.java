@@ -39,6 +39,11 @@ class PubArchiveInspectorTest {
         """));
 
     PubPackageMetadata metadata = PubArchiveInspector.inspect(archive);
+    PubAssetWriter.validateProgressiveArchive(archive, "example_package", "1.2.3");
+    assertThrows(PubExceptions.BadRequestException.class,
+        () -> PubAssetWriter.validateProgressiveArchive(archive, "different_package", "1.0.0"));
+    assertThrows(PubExceptions.BadRequestException.class,
+        () -> PubAssetWriter.validateProgressiveArchive(archive, "example_package", "2.0.0"));
 
     assertEquals("example_package", metadata.packageName());
     assertEquals("1.2.3", metadata.version());

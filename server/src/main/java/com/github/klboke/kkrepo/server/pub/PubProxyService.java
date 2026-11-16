@@ -33,6 +33,9 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class PubProxyService {
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService streaming;
+
   private static final long[] BACKOFF_SECONDS = {30, 60, 120, 300, 600, 1800};
   private static final Set<String> PUB_ARCHIVE_REDIRECT_HOSTS = Set.of(
       "storage.googleapis.com",
@@ -129,6 +132,7 @@ public class PubProxyService {
   MavenResponse download(RepositoryRuntime runtime, String packageName, String version, boolean headOnly) {
     ensureProxy(runtime);
     String path = PubPaths.archivePath(packageName, version);
+    com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.enableRanges(runtime, path);
     Instant now = Instant.now();
     Optional<CachedAssetMetadata> cached = lookupCached(runtime, path);
     if (cached.isPresent() && isFresh(cached.get(), runtime.contentMaxAgeMinutesOrDefault(), now)) {
@@ -157,7 +161,9 @@ public class PubProxyService {
             sameOrigin(runtime.proxyRemoteUrl(), archiveUrl),
             PUB_ARCHIVE_REDIRECT_HOSTS);
     try {
-      return fetcher.fetchWithBodyRetry(req, path, result -> {
+      return com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.fetchMaven(
+          streaming, fetcher, req, path, runtime, !headOnly && cached.isEmpty(),
+          expectedSha256, file -> PubAssetWriter.validateProgressiveArchive(file, packageName, version), result -> {
         int status = result.status();
         if (status >= 200 && status < 300) {
           PubAssetWriter.Stored stored = writer.writeArchive(

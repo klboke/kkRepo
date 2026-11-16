@@ -36,6 +36,9 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class CargoProxyService {
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService streaming;
+
   private static final long[] BACKOFF_SECONDS = {30, 60, 120, 300, 600, 1800};
   static final TypeReference<Map<String, Object>> JSON_MAP = new TypeReference<>() {
   };
@@ -113,6 +116,7 @@ public class CargoProxyService {
   MavenResponse download(RepositoryRuntime runtime, String crateName, String version, boolean headOnly) {
     ensureProxy(runtime);
     String path = CargoAssetWriter.cratePath(crateName, version);
+    com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.enableRanges(runtime, path);
     Optional<CachedAssetMetadata> cached = usableCached(runtime, path, lookupCached(runtime, path));
     Instant now = Instant.now();
     if (cached.isPresent() && isFresh(cached.get(), runtime.contentMaxAgeMinutesOrDefault(), now)) {
@@ -330,7 +334,9 @@ public class CargoProxyService {
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
         .withRepositoryForContent(runtime, upstreamAuthRequired);
     try {
-      return fetcher.fetchWithBodyRetry(req, path, result -> {
+      return com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.fetchMaven(
+          streaming, fetcher, req, path, runtime, !headOnly && cached.isEmpty(),
+          expectedChecksum(indexEntry, path), null, result -> {
         int status = result.status();
         if (status == 304 && cached.isPresent()) {
           touchVerified(runtime, path, cached.get(), now);
