@@ -1,5 +1,5 @@
 -- One shared port namespace for HTTP and HTTPS, including concurrent repository writes.
-CREATE TABLE docker_connector_binding (
+CREATE TABLE IF NOT EXISTS docker_connector_binding (
   port INT NOT NULL PRIMARY KEY,
   repository_id BIGINT UNSIGNED NOT NULL,
   scheme VARCHAR(5) NOT NULL,
@@ -10,4 +10,9 @@ CREATE TABLE docker_connector_binding (
 );
 
 INSERT INTO docker_connector_binding (port, repository_id, scheme)
-SELECT docker_connector_port, id, 'http' FROM repository WHERE docker_connector_port IS NOT NULL;
+SELECT r.docker_connector_port, r.id, 'http' FROM repository r
+WHERE r.docker_connector_port IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM docker_connector_binding b
+    WHERE b.port = r.docker_connector_port AND b.repository_id = r.id AND b.scheme = 'http'
+  );
