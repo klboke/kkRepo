@@ -47,7 +47,7 @@ public class CleanupPolicyCapabilities {
         .map(format -> new FormatCapability(
             format,
             supportsExecute(format),
-            versionComparators.containsKey(format),
+            supportsRetainCount(format),
             supportsLastDownloaded(format),
             supportsExecute(format)))
         .toList();
@@ -58,7 +58,7 @@ public class CleanupPolicyCapabilities {
   }
 
   public boolean supportsRetainCount(RepositoryFormat format) {
-    return versionComparators.containsKey(format);
+    return format == RepositoryFormat.DOCKER || versionComparators.containsKey(format);
   }
 
   public boolean supportsLastDownloaded(RepositoryFormat format) {

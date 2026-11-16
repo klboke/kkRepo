@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise Quartz and SHA256-only APT retention in the packaged JVM/Native image."""
+"""Exercise Quartz, APT and Docker retention in the packaged JVM/Native image."""
 import argparse
 import base64
 import hashlib
@@ -206,6 +206,8 @@ def main():
         assert "CleanupQuartzJob.executeInternal" not in run("docker", "logs", app)
         print("Packaged Quartz scheduled cleanup deleted two old APT versions with optional legacy hashes; "
               "each family retains its newest version and the policy stays ACTIVE", flush=True)
+        docker_probe = pathlib.Path(__file__).resolve().parents[2] / "compat-test/scripts/docker-retention.py"
+        assert runpy.run_path(str(docker_probe))["exercise"](base, PASSWORD) == 0
     except Exception:
         subprocess.run(["docker", "logs", app], check=False)
         raise

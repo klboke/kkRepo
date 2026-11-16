@@ -52,10 +52,37 @@ public class CleanupSubjectScanner {
     this.snapshotCleanup = snapshotCleanup;
   }
 
-  public String revalidateSnapshot(RepositoryRecord repository, Map<String, Object> criteria,
+  public String revalidateForDeletion(RepositoryRecord repository, Map<String, Object> criteria,
       Subject subject, Instant cutoff) {
+    if ("DOCKER_MANIFEST".equals(subject.kind())) {
+      var manifest = dockerRegistryDao.findManifestByDigest(
+          repository.id(), subject.familyKey(), subject.version()).orElse(null);
+      if (manifest == null) return "Docker manifest disappeared";
+      return dockerHoldReason(repository.id(), CleanupCriteria.parse(criteria), manifest,
+          !dockerRegistryDao.listTagsForManifest(manifest.id()).isEmpty(), new HashMap<>());
+    }
     return MavenSnapshotCleanupService.KIND.equals(subject.kind())
         ? snapshotCleanup.revalidate(repository, criteria, subject, cutoff) : null;
+  }
+
+  private String dockerHoldReason(long repositoryId, CleanupCriteria criteria,
+      com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord manifest,
+      boolean tagged,
+      Map<String, java.util.Optional<DockerRegistryDao.CleanupRetentionBoundary>> boundaries) {
+    if (dockerRegistryDao.hasLiveManifestReference(repositoryId, manifest.digest())) {
+      return "referenced by a live Docker manifest";
+    }
+    if (criteria.retainCount() == null) return null;
+    if (!tagged) {
+      return criteria.publishedOlderThanDays() == null && criteria.lastDownloadedOlderThanDays() == null
+          ? "untagged Docker manifests require an age rule" : null;
+    }
+    if (criteria.retainCount() == 0) return null;
+    // This bounded, per-scan map is not a cache: each final delete queries the database again.
+    var boundary = boundaries.computeIfAbsent(manifest.imageName(), image ->
+        dockerRegistryDao.findCleanupRetentionBoundary(repositoryId, image, criteria.retainCount()));
+    return boundary.isEmpty() || boundary.get().retains(manifest.id(), manifest.updatedAt())
+        ? "newest Docker manifests retained" : null;
   }
 
   public CleanupProtection inheritedSnapshotProtection(long repositoryId, Subject subject, Instant now) {
@@ -753,6 +780,7 @@ public class CleanupSubjectScanner {
     var manifests = dockerRegistryDao.findManifestsByAssetIds(assetIds);
     var tags = dockerRegistryDao.listTagsForManifests(
         manifests.values().stream().map(manifest -> manifest.id()).toList());
+    Map<String, java.util.Optional<DockerRegistryDao.CleanupRetentionBoundary>> boundaries = new HashMap<>();
     List<MatchedSubject> matchedSubjects = new ArrayList<>();
     for (DockerRegistryDao.CleanupManifestCandidate manifest : selected) {
       String displayName = manifest.imageName() + "@" + manifest.digest();
@@ -772,6 +800,8 @@ public class CleanupSubjectScanner {
       String key = "docker-manifest:" + displayName;
       AssetRecord asset = assets.get(manifest.assetId());
       var storedManifest = manifests.get(manifest.assetId());
+      if (storedManifest == null || dockerHoldReason(repository.id(), criteria, storedManifest,
+          !tags.getOrDefault(storedManifest.id(), List.of()).isEmpty(), boundaries) != null) continue;
       Subject subject = new Subject(
           manifest.assetId(),
           "DOCKER_MANIFEST",
@@ -874,8 +904,14 @@ public class CleanupSubjectScanner {
     return java.util.Optional.empty();
   }
 
-  /** Locks shared npm metadata before cleanup acquires any version component locks. */
+  /** Locks protocol roots before acquiring any component/manifest/asset locks. */
   public void lockPackageRoots(RepositoryRecord repository, List<String> paths) {
+    if (repository.format() == RepositoryFormat.DOCKER) {
+      // Publishers take FOR SHARE before their metadata writes. READ_COMMITTED execution then
+      // observes current tag counts and parent references without blocking concurrent readers.
+      dockerRegistryDao.lockRepositoryForCleanup(repository.id());
+      return;
+    }
     if (repository.format() != RepositoryFormat.NPM) return;
     List<String> roots = paths.stream().filter(java.util.Objects::nonNull)
         .filter(path -> path.indexOf("/-/") > 0)

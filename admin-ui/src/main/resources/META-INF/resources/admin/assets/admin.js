@@ -7621,15 +7621,18 @@ function refreshCleanupCapabilityHelp() {
   if (format.toLowerCase() !== "maven2") mode.value = "COMPONENT";
   document.getElementById("cleanup-policy-mode-field").hidden = format.toLowerCase() !== "maven2";
   const snapshot = mode.value === "MAVEN_SNAPSHOT_BUILDS";
+  const docker = format.toLowerCase() === "docker";
   document.getElementById("cleanup-policy-snapshot-help").hidden = !snapshot;
-  document.getElementById("cleanup-policy-retain-label").textContent = snapshot ? "Keep newest builds per SNAPSHOT" : "Keep newest versions";
+  document.getElementById("cleanup-policy-retain-label").textContent = snapshot ? "Keep newest builds per SNAPSHOT" : docker ? "Keep newest images per image name" : "Keep newest versions";
   const retainInput = document.getElementById("cleanup-policy-retain-count");
   retainInput.disabled = !capability?.retainCountSupported;
   retainInput.min = snapshot ? "1" : "0";
   retainInput.required = snapshot;
   if (retainInput.disabled) retainInput.value = "";
   setCleanupFieldHelp("cleanup-policy-retain-help", capability?.retainCountSupported
-    ? (snapshot ? "Retains at least this many timestamped builds within each base SNAPSHOT version." : "Uses this format's protocol version comparator.")
+    ? (snapshot ? "Retains at least this many timestamped builds within each base SNAPSHOT version." : docker
+      ? "Counts distinct tagged manifests by publication/update time per image name. Aliases count once. Untagged manifests require an age rule; referenced content remains protected."
+      : "Uses this format's protocol version comparator.")
     : "Version retention is not enabled for this format yet; pattern and age rules remain available.");
   const downloadedInput = document.getElementById("cleanup-policy-downloaded-days");
   downloadedInput.disabled = !capability?.lastDownloadedSupported;
