@@ -389,6 +389,9 @@ class RepositoryDataMigrationWriter {
       WriteResult result = transactionRetry.execute(
           "Persist migrated asset " + repository.name() + "/" + source.sourcePath(),
           () -> {
+            if (repository.format() == RepositoryFormat.DOCKER && dockerRegistryDao != null) {
+              dockerRegistryDao.lockRepositoryForMutation(repository.id());
+            }
             WriteResult persisted = persist(repository, source, upload, contentType, null, expectedPackument);
             indexMigratedDockerAsset(repository, source, upload, contentType, persisted);
             projectMigratedHuggingFace(
