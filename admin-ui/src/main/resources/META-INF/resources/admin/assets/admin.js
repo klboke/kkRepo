@@ -1417,6 +1417,15 @@ function repositoryDisplayUrl(repo) {
 
 async function loadDockerTlsBundles() {
   const help = document.getElementById("docker-tls-help");
+  const setup = help.dataset.setup || help.dataset.tooltip;
+  help.dataset.setup = setup;
+  const translate = value => window.kkrepoI18n?.text(value) ?? value;
+  const updateHelp = status => {
+    const message = [translate(status), translate(setup)].filter(Boolean).join(" ");
+    help.dataset.tooltip = message;
+    help.setAttribute("aria-label", message);
+    if (activeFieldHelpTrigger === help) showFieldHelpPopover(help);
+  };
   try {
     const response = await fetch("/internal/docker/tls-bundles", { headers: { Accept: "application/json" }, cache: "no-store" });
     if (!response.ok) throw new Error(await responseErrorMessage(response));
@@ -1426,11 +1435,13 @@ async function loadDockerTlsBundles() {
         `<option value="${escapeHtml(bundle.name)}">${escapeHtml((bundle.domains || []).join(", "))} · ${escapeHtml(bundle.expiresAt || "")}</option>`).join("");
     const selected = document.getElementById("repository-docker-tls-bundle").value.trim() || payload.defaultBundle;
     const bundle = (payload.bundles || []).find(item => item.name === selected);
-    help.textContent = bundle?.usable
+    updateHelp(bundle?.usable
       ? `${bundle.name} · ${(bundle.domains || []).join(", ")} · ${bundle.expiresAt} · SHA-256: ${bundle.fingerprint}`
-      : bundle?.error || "Configure a default inbound TLS bundle before enabling HTTPS";
+      : bundle?.error || (selected
+        ? `${translate("TLS configuration not found:")} ${selected}.`
+        : "No default TLS configuration is set. Select a configured name here or set the deployment default."));
   } catch (error) {
-    help.textContent = error.message;
+    updateHelp(error.message);
   }
 }
 

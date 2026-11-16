@@ -419,13 +419,24 @@
                 <input id="repository-docker-https-port" type="number" min="1" max="65535" placeholder="5443">
               </label>
               <label class="full-width">
-                <span>TLS configuration</span>
+                <span class="field-label"><span>TLS configuration</span>
+                  <span id="docker-tls-help" class="field-help" tabindex="0" role="note"
+                    aria-label="Configure the certificate chain and private key on every kkRepo node, then restart. For a PEM configuration named registry, set spring.ssl.bundle.pem.registry.keystore.certificate and spring.ssl.bundle.pem.registry.keystore.private-key to the certificate and key file paths, then enter registry here. Leave this field empty only when KKREPO_TLS_DEFAULT_BUNDLE (or server.ssl.bundle) names a configured bundle. Certificates are configured on the server, not uploaded in this form."
+                    data-tooltip="Configure the certificate chain and private key on every kkRepo node, then restart. For a PEM configuration named registry, set spring.ssl.bundle.pem.registry.keystore.certificate and spring.ssl.bundle.pem.registry.keystore.private-key to the certificate and key file paths, then enter registry here. Leave this field empty only when KKREPO_TLS_DEFAULT_BUNDLE (or server.ssl.bundle) names a configured bundle. Certificates are configured on the server, not uploaded in this form.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
                 <input id="repository-docker-tls-bundle" list="docker-tls-bundles" placeholder="Default TLS configuration">
                 <datalist id="docker-tls-bundles"></datalist>
               </label>
-              <p class="form-note full-width" id="docker-tls-help">Configure server certificates in deployment settings. HTTP and HTTPS use different ports.</p>
               <label class="full-width">
-                <span>Public URL</span>
+                <span class="field-label"><span>Public URL</span>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="Optional preferred external registry URL used in displayed URLs and copied Docker commands, including a reverse-proxy address. It does not enable TLS or limit the listening ports. HTTP and HTTPS can both be enabled on different ports. Leave empty to use HTTPS when enabled, otherwise HTTP."
+                    data-tooltip="Optional preferred external registry URL used in displayed URLs and copied Docker commands, including a reverse-proxy address. It does not enable TLS or limit the listening ports. HTTP and HTTPS can both be enabled on different ports. Leave empty to use HTTPS when enabled, otherwise HTTP.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
                 <input id="repository-docker-connector-public-url" type="url" placeholder="https://registry.example.com">
               </label>
             </fieldset>
