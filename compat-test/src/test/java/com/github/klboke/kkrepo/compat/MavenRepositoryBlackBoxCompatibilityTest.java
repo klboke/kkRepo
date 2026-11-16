@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.compat;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -150,6 +151,34 @@ class MavenRepositoryBlackBoxCompatibilityTest {
     Exchange candidateBrowseFileSlash = send(nexusPlus.browseRequest(readPath + "/").GET());
     assertEquals(referenceBrowseFileSlash.status(), candidateBrowseFileSlash.status(),
         "HTML browse slash file status");
+  }
+
+  @Test
+  void missingMetadataWithProblemDetailsAcceptMatchesNexusWhenConfigured() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeTrue(config.configured(),
+        "Set NEXUS_COMPAT_BASE_URL and KKREPO_COMPAT_BASE_URL to run black-box compatibility");
+
+    ArtifactFixture release = ArtifactFixture.create();
+    SnapshotFixture snapshot = SnapshotFixture.create();
+    for (Endpoint endpoint : List.of(config.nexusRelease(), config.nexusPlusRelease())) {
+      assertOrdinaryMetadataNotFound(endpoint, release.metadataPath());
+    }
+    for (Endpoint endpoint : List.of(config.nexusSnapshot(), config.nexusPlusSnapshot())) {
+      assertOrdinaryMetadataNotFound(endpoint, snapshot.artifactMetadataPath());
+      assertOrdinaryMetadataNotFound(endpoint, snapshot.snapshotMetadataPath());
+    }
+  }
+
+  private static void assertOrdinaryMetadataNotFound(Endpoint endpoint, String path) throws Exception {
+    // Maven 3.10 sends this Accept header and treats problem+json 404s as transfer failures.
+    HttpResponse<byte[]> response = HTTP.send(endpoint.request(path)
+            .header("Accept", "application/problem+json,*/*").GET().build(),
+        HttpResponse.BodyHandlers.ofByteArray());
+    assertEquals(404, response.statusCode(), endpoint.repository() + ": " + path);
+    String contentType = response.headers().firstValue("Content-Type").orElse("");
+    assertFalse(contentType.split(";", 2)[0].trim().equalsIgnoreCase("application/problem+json"),
+        "missing Maven metadata must remain an ordinary 404: " + endpoint.baseUrl());
   }
 
   @Test
