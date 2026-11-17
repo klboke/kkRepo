@@ -452,7 +452,13 @@ public final class RepositoryCommands {
   public record DockerSettings(
       Boolean connectorEnabled,
       Integer connectorPort,
-      String connectorPublicUrl) {
+      String connectorPublicUrl,
+      Boolean httpsConnectorEnabled,
+      Integer httpsConnectorPort,
+      String tlsBundle) {
+    public DockerSettings(Boolean connectorEnabled, Integer connectorPort, String connectorPublicUrl) {
+      this(connectorEnabled, connectorPort, connectorPublicUrl, null, null, null);
+    }
   }
 
   public record CargoSettings(

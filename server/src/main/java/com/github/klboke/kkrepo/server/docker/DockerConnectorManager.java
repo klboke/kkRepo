@@ -24,7 +24,13 @@ public class DockerConnectorManager {
   private final int maxConcurrentUploads;
   private final int maxConcurrentDownloads;
   private final AtomicLong refreshSequence = new AtomicLong();
+  // Desired configuration, replaced from the database on every reconciliation (not authoritative state).
   private volatile Snapshot snapshot;
+  private volatile Map<Integer, String> activeRepositories = Map.of();
+
+  void activeRepositories(Map<Integer, String> repositories) {
+    activeRepositories = Map.copyOf(repositories);
+  }
 
   public DockerConnectorManager(
       RepositoryDao repositoryDao,
@@ -67,7 +73,7 @@ public class DockerConnectorManager {
   }
 
   public String repositoryForPort(int port) {
-    return snapshot().repositoriesByPort().get(port);
+    return activeRepositories.get(port);
   }
 
   public Map<Integer, String> repositoriesByPort() {
@@ -88,24 +94,11 @@ public class DockerConnectorManager {
     List<ConnectorStatus> connectors = new ArrayList<>();
     for (RepositoryRecord record : repositoryDao.list()) {
       DockerSettings settings = dockerSettings(record);
-      if (settings == null || settings.connectorPort() == null) {
-        continue;
-      }
-      boolean repositoryEnabled = settings.connectorEnabled();
-      boolean configured = connectorEnabled && repositoryEnabled;
-      boolean conflict = configured && ports.containsKey(settings.connectorPort());
-      if (configured && !conflict) {
-        ports.put(settings.connectorPort(), record.name());
-      }
-      connectors.add(new ConnectorStatus(
-          record.id(),
-          record.name(),
-          record.type() == null ? null : record.type().name(),
-          settings.connectorEnabled(),
-          settings.connectorPort(),
-          settings.connectorPublicUrl(),
-          configured && !conflict,
-          connectorState(repositoryEnabled, conflict)));
+      if (settings == null) continue;
+      addConnector(record, settings.connectorEnabled(), settings.connectorPort(), "http", null,
+          settings.connectorPublicUrl(), ports, connectors);
+      addConnector(record, settings.httpsConnectorEnabled(), settings.httpsConnectorPort(), "https",
+          settings.tlsBundle(), settings.connectorPublicUrl(), ports, connectors);
     }
     connectors.sort(Comparator
         .comparing((ConnectorStatus item) -> item.port() == null ? Integer.MAX_VALUE : item.port())
@@ -117,6 +110,17 @@ public class DockerConnectorManager {
         tuning(),
         Instant.now(),
         refreshSequence.incrementAndGet());
+  }
+
+  private void addConnector(RepositoryRecord record, boolean enabled, Integer port, String scheme,
+      String bundle, String publicUrl, Map<Integer, String> ports, List<ConnectorStatus> connectors) {
+    if (port == null) return;
+    boolean configured = connectorEnabled && enabled;
+    boolean conflict = configured && ports.containsKey(port);
+    if (configured && !conflict) ports.put(port, record.name());
+    connectors.add(new ConnectorStatus(record.id(), record.name(),
+        record.type() == null ? null : record.type().name(), enabled, port, publicUrl,
+        false, connectorState(enabled, conflict), scheme, bundle, null));
   }
 
   static DockerSettings dockerSettings(RepositoryRecord record) {
@@ -133,7 +137,10 @@ public class DockerConnectorManager {
       enabled = port != null;
     }
     String publicUrl = string(docker.get("connectorPublicUrl"));
-    return new DockerSettings(Boolean.TRUE.equals(enabled), port, publicUrl);
+    Integer httpsPort = parsePort(docker.get("httpsConnectorPort"));
+    Boolean httpsEnabled = parseBoolean(docker.get("httpsConnectorEnabled"));
+    return new DockerSettings(Boolean.TRUE.equals(enabled), port, publicUrl,
+        httpsEnabled == null ? httpsPort != null : httpsEnabled, httpsPort, string(docker.get("tlsBundle")));
   }
 
   private static Integer parsePort(Object value) {
@@ -178,10 +185,11 @@ public class DockerConnectorManager {
     if (conflict) {
       return "duplicate-port";
     }
-    return "active";
+    return "pending";
   }
 
-  record DockerSettings(boolean connectorEnabled, Integer connectorPort, String connectorPublicUrl) {
+  record DockerSettings(boolean connectorEnabled, Integer connectorPort, String connectorPublicUrl,
+      boolean httpsConnectorEnabled, Integer httpsConnectorPort, String tlsBundle) {
   }
 
   public record Snapshot(
@@ -201,7 +209,14 @@ public class DockerConnectorManager {
       Integer port,
       String publicUrl,
       boolean active,
-      String state) {
+      String state,
+      String scheme,
+      String tlsBundle,
+      String certificateFingerprint) {
+    public ConnectorStatus(Long repositoryId, String repositoryName, String repositoryType,
+        boolean enabled, Integer port, String publicUrl, boolean active, String state) {
+      this(repositoryId, repositoryName, repositoryType, enabled, port, publicUrl, active, state, "http", null, null);
+    }
   }
 
   public record ConnectorTuning(

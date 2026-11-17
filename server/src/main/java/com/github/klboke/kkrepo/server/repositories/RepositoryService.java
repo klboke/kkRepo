@@ -981,57 +981,46 @@ public class RepositoryService {
   }
 
   private DockerSettings normalizeDocker(DockerSettings settings) {
-    if (settings == null) {
-      return new DockerSettings(false, null, null);
-    }
-    Integer port = settings.connectorPort();
-    Boolean enabled = settings.connectorEnabled();
-    if (enabled == null) {
-      enabled = port != null;
-    }
-    if (Boolean.FALSE.equals(enabled)) {
-      port = null;
-    }
-    return new DockerSettings(enabled, port, blankToNull(settings.connectorPublicUrl()));
+    if (settings == null) return new DockerSettings(false, null, null, false, null, null);
+    boolean http = settings.connectorEnabled() == null
+        ? settings.connectorPort() != null : settings.connectorEnabled();
+    boolean https = settings.httpsConnectorEnabled() == null
+        ? settings.httpsConnectorPort() != null : settings.httpsConnectorEnabled();
+    return new DockerSettings(http, http ? settings.connectorPort() : null,
+        blankToNull(settings.connectorPublicUrl()), https,
+        https ? settings.httpsConnectorPort() : null, blankToNull(settings.tlsBundle()));
   }
 
-  @SuppressWarnings("unchecked")
   private DockerSettings readDockerAttributes(RepositoryRecord record) {
-    Map<String, Object> attrs = record.attributes() == null ? Map.of() : record.attributes();
-    Object raw = attrs.get("docker");
-    if (!(raw instanceof Map<?, ?> map)) {
-      return new DockerSettings(false, null, null);
-    }
-    return new DockerSettings(
-        boolValue(map.get("connectorEnabled")),
-        intValue(map.get("connectorPort")),
-        blankToNull(map.get("connectorPublicUrl") == null ? null : map.get("connectorPublicUrl").toString()));
+    Object raw = record.attributes() == null ? null : record.attributes().get("docker");
+    if (!(raw instanceof Map<?, ?> map)) return normalizeDocker(null);
+    return normalizeDocker(new DockerSettings(
+        boolValue(map.get("connectorEnabled")), intValue(map.get("connectorPort")),
+        map.get("connectorPublicUrl") == null ? null : map.get("connectorPublicUrl").toString(),
+        boolValue(map.get("httpsConnectorEnabled")), intValue(map.get("httpsConnectorPort")),
+        map.get("tlsBundle") == null ? null : map.get("tlsBundle").toString()));
   }
 
   private DockerSettings mergeDocker(DockerSettings current, DockerSettings update) {
-    if (update == null) {
-      return normalizeDocker(current);
-    }
-    if (Boolean.FALSE.equals(update.connectorEnabled())) {
-      return normalizeDocker(new DockerSettings(false, null,
-          update.connectorPublicUrl() == null ? current.connectorPublicUrl() : update.connectorPublicUrl()));
-    }
+    if (update == null) return normalizeDocker(current);
     return normalizeDocker(new DockerSettings(
         update.connectorEnabled() == null ? current.connectorEnabled() : update.connectorEnabled(),
         update.connectorPort() == null ? current.connectorPort() : update.connectorPort(),
-        update.connectorPublicUrl() == null ? current.connectorPublicUrl() : update.connectorPublicUrl()));
+        update.connectorPublicUrl() == null ? current.connectorPublicUrl() : update.connectorPublicUrl(),
+        update.httpsConnectorEnabled() == null ? current.httpsConnectorEnabled() : update.httpsConnectorEnabled(),
+        update.httpsConnectorPort() == null ? current.httpsConnectorPort() : update.httpsConnectorPort(),
+        update.tlsBundle() == null ? current.tlsBundle() : update.tlsBundle()));
   }
 
   private Map<String, Object> dockerAttributes(DockerSettings settings) {
     DockerSettings normalized = normalizeDocker(settings);
     Map<String, Object> attrs = new LinkedHashMap<>();
     attrs.put("connectorEnabled", normalized.connectorEnabled());
-    if (normalized.connectorPort() != null) {
-      attrs.put("connectorPort", normalized.connectorPort());
-    }
-    if (normalized.connectorPublicUrl() != null) {
-      attrs.put("connectorPublicUrl", normalized.connectorPublicUrl());
-    }
+    attrs.put("httpsConnectorEnabled", normalized.httpsConnectorEnabled());
+    if (normalized.connectorPort() != null) attrs.put("connectorPort", normalized.connectorPort());
+    if (normalized.httpsConnectorPort() != null) attrs.put("httpsConnectorPort", normalized.httpsConnectorPort());
+    if (normalized.tlsBundle() != null) attrs.put("tlsBundle", normalized.tlsBundle());
+    if (normalized.connectorPublicUrl() != null) attrs.put("connectorPublicUrl", normalized.connectorPublicUrl());
     return attrs;
   }
 
@@ -1066,38 +1055,35 @@ public class RepositoryService {
   }
 
   private void validateDockerConnectorPort(Long existingRepositoryId, DockerSettings settings) {
-    if (settings == null) {
-      return;
-    }
+    if (settings == null) return;
     if (Boolean.TRUE.equals(settings.connectorEnabled()) && settings.connectorPort() == null) {
       throw new RepositoryValidationException("docker.connector.port is required when connector is enabled");
     }
-    if (settings.connectorPort() == null) {
-      return;
-    }
-    int port = settings.connectorPort();
-    if (port <= 0 || port > 65535) {
-      throw new RepositoryValidationException("docker.connector.port must be between 1 and 65535");
-    }
-    if (port == serverPort) {
-      throw new RepositoryValidationException(
-          "docker.connector.port " + port + " conflicts with server.port");
-    }
-    if (port == managementPort) {
-      throw new RepositoryValidationException(
-          "docker.connector.port " + port + " conflicts with management.server.port");
-    }
-    for (RepositoryRecord record : repositoryDao.list()) {
-      if (existingRepositoryId != null && Objects.equals(existingRepositoryId, record.id())) {
-        continue;
+    if (Boolean.TRUE.equals(settings.httpsConnectorEnabled())) {
+      if (settings.httpsConnectorPort() == null) {
+        throw new RepositoryValidationException("docker.httpsConnectorPort is required when HTTPS is enabled");
       }
-      if (record.format() != RepositoryFormat.DOCKER) {
-        continue;
+      if (dockerConnectorRuntime != null) dockerConnectorRuntime.validateTlsBundle(settings.tlsBundle());
+    }
+    if (settings.connectorPort() != null && settings.connectorPort().equals(settings.httpsConnectorPort())) {
+      throw new RepositoryValidationException("HTTP and HTTPS connectors must use different ports");
+    }
+    for (Integer port : java.util.stream.Stream.of(settings.connectorPort(), settings.httpsConnectorPort())
+        .filter(Objects::nonNull).toList()) {
+      if (port <= 0 || port > 65535) {
+        throw new RepositoryValidationException("docker.connector.port must be between 1 and 65535");
       }
-      DockerSettings other = readDockerAttributes(record);
-      if (Objects.equals(other.connectorPort(), port)) {
-        throw new RepositoryValidationException(
-            "docker.connector.port " + port + " is already used by repository " + record.name());
+      if (port == serverPort || port == managementPort) {
+        throw new RepositoryValidationException("docker.connector.port " + port + " conflicts with "
+            + (port == serverPort ? "server.port" : "management.server.port"));
+      }
+      for (RepositoryRecord record : repositoryDao.list()) {
+        if (Objects.equals(existingRepositoryId, record.id()) || record.format() != RepositoryFormat.DOCKER) continue;
+        DockerSettings other = readDockerAttributes(record);
+        if (Objects.equals(other.connectorPort(), port) || Objects.equals(other.httpsConnectorPort(), port)) {
+          throw new RepositoryValidationException(
+              "docker.connector.port " + port + " is already used by repository " + record.name());
+        }
       }
     }
   }

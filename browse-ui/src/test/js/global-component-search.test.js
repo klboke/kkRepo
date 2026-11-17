@@ -230,6 +230,11 @@ test("Docker usage snippets use image references for path and connector routing"
   vm.runInContext(source.slice(start, end), context);
   for (const [repo, base] of [
     [{name: "docker-hosted", docker: {}}, "repo.example:8080/docker-hosted"],
+    [{name: "docker-hosted", docker: {httpsConnectorEnabled: true, httpsConnectorPort: 5443}}, "repo.example:5443"],
+    [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPort: 5000, httpsConnectorEnabled: true, httpsConnectorPort: 5443}}, "repo.example:5443"],
+    [{name: "docker-hosted", docker: {httpsConnectorEnabled: true, httpsConnectorPort: 5443, connectorPublicUrl: "https://registry.example:8443/v2/"}}, "registry.example:8443"],
+    [{name: "docker-hosted", docker: {httpsConnectorEnabled: true, httpsConnectorPort: 5443, connectorPublicUrl: "https://"}}, "repo.example:5443"],
+    [{name: "docker-hosted", docker: {httpsConnectorEnabled: false, httpsConnectorPort: 5443, connectorPublicUrl: "https://registry.example"}}, "repo.example:8080/docker-hosted"],
     [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPort: 5000}}, "repo.example:5000"],
     [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPublicUrl: "https://registry.example/v2/"}}, "registry.example"],
     [{name: "docker-hosted", docker: {connectorEnabled: true, connectorPublicUrl: "registry.example:5000"}}, "registry.example:5000"],
@@ -279,4 +284,26 @@ test("an empty Docker selector page offers continuation and renders older permit
   assert.equal(calls[1][3], "next-page");
   assert.match(elements["component-table"].innerHTML, /public\/older/);
   assert.equal(elements["component-total"].textContent, "1");
+});
+
+
+test("Docker repository URLs select HTTPS independently of the console scheme", () => {
+  const source = readFileSync(resolve(__dirname, "../../main/resources/META-INF/resources/browse/assets/browse.js"), "utf8");
+  const start = source.indexOf("function dockerRepositoryBaseUrl(");
+  const end = source.indexOf("async function fetchRepositories(", start);
+  for (const protocol of ["http:", "https:"]) {
+    const context = vm.createContext({URL,
+      window: {location: {origin: `${protocol}//repo.example:8080`, protocol, hostname: "repo.example"}},
+    });
+    vm.runInContext(source.slice(start, end), context);
+    for (const [docker, expected] of [
+      [{httpsConnectorEnabled: true, httpsConnectorPort: 5443}, "https://repo.example:5443"],
+      [{connectorEnabled: true, connectorPort: 5000}, "http://repo.example:5000"],
+      [{connectorEnabled: true, connectorPort: 5000, httpsConnectorEnabled: true, httpsConnectorPort: 5443}, "https://repo.example:5443"],
+      [{httpsConnectorEnabled: true, httpsConnectorPort: 5443, connectorPublicUrl: "https://registry.example:8443/v2/"}, "https://registry.example:8443/v2"],
+      [{httpsConnectorEnabled: false, httpsConnectorPort: 5443, connectorPublicUrl: "https://registry.example"}, `${protocol}//repo.example:8080/v2/docker-hosted`],
+    ]) {
+      assert.equal(context.dockerRepositoryBaseUrl({name: "docker-hosted", docker}), expected);
+    }
+  }
 });
