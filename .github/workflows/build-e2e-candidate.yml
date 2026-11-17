@@ -82,6 +82,9 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
+      - name: Verify TLS fixture certificates with strict validation
+        run: python3 -m unittest discover -s scripts/ci -p test_check_custom_ca.py
+
       - name: Set up JDK 25
         uses: actions/setup-java@v6
         with:
