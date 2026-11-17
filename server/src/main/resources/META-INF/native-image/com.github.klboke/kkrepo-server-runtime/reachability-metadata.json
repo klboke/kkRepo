@@ -53,6 +53,15 @@
       },
       {
         "returnType": "size_t",
+        "parameterTypes": ["void*", "void*", "size_t", "int", "int"],
+        "options": {
+          "critical": {
+            "allowHeapAccess": true
+          }
+        }
+      },
+      {
+        "returnType": "size_t",
         "parameterTypes": [
           "void*",
           "void*",
@@ -118,6 +127,32 @@
       {
         "returnType": "void*",
         "parameterTypes": ["void*", "size_t", "int"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "size_t", "int", "int", "int"],
+        "options": {
+          "critical": {
+            "allowHeapAccess": true
+          }
+        }
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "size_t", "int", "int", "int"]
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "size_t", "int", "int"],
+        "options": {
+          "critical": {
+            "allowHeapAccess": true
+          }
+        }
+      },
+      {
+        "returnType": "void*",
+        "parameterTypes": ["void*", "size_t", "int", "int"]
       },
       {
         "returnType": "void*",
