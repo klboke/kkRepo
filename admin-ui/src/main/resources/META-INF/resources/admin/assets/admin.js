@@ -423,6 +423,12 @@ const repositoryRequiredFields = [
         && document.getElementById("repository-docker-connector-enabled").checked
   },
   {
+    id: "repository-docker-https-port",
+    label: "HTTPS connector port",
+    required: () => currentRecipe()?.format === "docker"
+        && document.getElementById("repository-docker-https-enabled").checked
+  },
+  {
     id: "repository-apt-distribution",
     label: "APT distribution",
     required: () => currentRecipe()?.format === "apt"
@@ -1397,13 +1403,46 @@ function renderRepositories() {
 }
 
 function repositoryDisplayUrl(repo) {
-  if (lowerOrEmpty(repo.format) === "docker" && repo.docker?.connectorEnabled && repo.docker?.connectorPort) {
-    return repo.docker.connectorPublicUrl || `${window.location.protocol}//${window.location.hostname}:${repo.docker.connectorPort}/v2/`;
+  if (lowerOrEmpty(repo.format) === "docker") {
+    const docker = repo.docker || {};
+    const https = docker.httpsConnectorEnabled && docker.httpsConnectorPort;
+    const http = docker.connectorEnabled && docker.connectorPort;
+    if (https || http) {
+      return docker.connectorPublicUrl || `${https ? "https:" : "http:"}//${window.location.hostname}:${https || http}/v2/`;
+    }
   }
-  if (lowerOrEmpty(repo.type) === "proxy" && repo.proxy?.remoteUrl) {
-    return repo.proxy.remoteUrl;
-  }
+  if (lowerOrEmpty(repo.type) === "proxy" && repo.proxy?.remoteUrl) return repo.proxy.remoteUrl;
   return repo.url || "";
+}
+
+async function loadDockerTlsBundles() {
+  const help = document.getElementById("docker-tls-help");
+  const setup = help.dataset.setup || help.dataset.tooltip;
+  help.dataset.setup = setup;
+  const translate = value => window.kkrepoI18n?.text(value) ?? value;
+  const updateHelp = status => {
+    const message = [translate(status), translate(setup)].filter(Boolean).join(" ");
+    help.dataset.tooltip = message;
+    help.setAttribute("aria-label", message);
+    if (activeFieldHelpTrigger === help) showFieldHelpPopover(help);
+  };
+  try {
+    const response = await fetch("/internal/docker/tls-bundles", { headers: { Accept: "application/json" }, cache: "no-store" });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    const payload = await response.json();
+    document.getElementById("docker-tls-bundles").innerHTML = (payload.bundles || [])
+      .filter(bundle => bundle.usable).map(bundle =>
+        `<option value="${escapeHtml(bundle.name)}">${escapeHtml((bundle.domains || []).join(", "))} · ${escapeHtml(bundle.expiresAt || "")}</option>`).join("");
+    const selected = document.getElementById("repository-docker-tls-bundle").value.trim() || payload.defaultBundle;
+    const bundle = (payload.bundles || []).find(item => item.name === selected);
+    updateHelp(bundle?.usable
+      ? `${bundle.name} · ${(bundle.domains || []).join(", ")} · ${bundle.expiresAt} · SHA-256: ${bundle.fingerprint}`
+      : bundle?.error || (selected
+        ? `${translate("TLS configuration not found:")} ${selected}.`
+        : "No default TLS configuration is set. Select a configured name here or set the deployment default."));
+  } catch (error) {
+    updateHelp(error.message);
+  }
 }
 
 async function loadDockerOperations() {
@@ -1437,6 +1476,7 @@ function renderDockerOperations(payload) {
     card("Enabled", connector.enabled ? "Yes" : "No"),
     card("Active ports", `${active} / ${connectors.length}`),
     card("Sequence", connector.sequence ?? "-"),
+    card("Node", connector.nodeId || "-"),
     card("Last refreshed", formatInstant(connector.refreshedAt) || "-"),
     card("Runtime errors", errors ? "Yes" : "No"),
   ].join("");
@@ -1450,10 +1490,10 @@ function renderDockerOperations(payload) {
     <tr>
       <td>${escapeHtml(item.repositoryName || "")}</td>
       <td>${escapeHtml(lowerOrEmpty(item.repositoryType))}</td>
-      <td><code>${escapeHtml(item.port ?? "")}</code></td>
+      <td><code>${escapeHtml(item.scheme || "http")} : ${escapeHtml(item.port ?? "")}</code></td>
       <td>${item.publicUrl ? `<code>${escapeHtml(item.publicUrl)}</code>` : '<span class="health-muted">-</span>'}</td>
       <td><span class="state-badge compact ${item.active ? "ok" : "warn"}">${escapeHtml(item.state || "")}</span></td>
-      <td>${item.active ? "Yes" : "No"}</td>
+      <td>${item.active ? "Yes" : "No"}${item.tlsBundle ? `<br><code title="${escapeHtml(item.certificateFingerprint || "")}">${escapeHtml(item.tlsBundle)}</code>` : ""}</td>
     </tr>
   `).join("") || '<tr><td colspan="6" class="placeholder">No Docker connector ports configured.</td></tr>';
   const status = document.getElementById("docker-operations-status");
@@ -3387,7 +3427,10 @@ function repositoryFormPayload() {
     payload.docker = {
       connectorEnabled: document.getElementById("repository-docker-connector-enabled").checked,
       connectorPort: connectorPort === "" ? null : Number(connectorPort),
-      connectorPublicUrl: textInputValue("repository-docker-connector-public-url")
+      connectorPublicUrl: textInputValue("repository-docker-connector-public-url"),
+      httpsConnectorEnabled: document.getElementById("repository-docker-https-enabled").checked,
+      httpsConnectorPort: document.getElementById("repository-docker-https-port").value === "" ? null : Number(document.getElementById("repository-docker-https-port").value),
+      tlsBundle: document.getElementById("repository-docker-tls-bundle").value.trim()
     };
   }
   if (recipe?.format === "cargo") {
@@ -3470,6 +3513,9 @@ function setRepositoryFormDefaults() {
   document.getElementById("repository-auto-block").checked = true;
   document.getElementById("repository-streaming-enabled").checked = false;
   document.getElementById("repository-raw-content-disposition").value = "ATTACHMENT";
+  document.getElementById("repository-docker-https-enabled").checked = false;
+  document.getElementById("repository-docker-https-port").value = "";
+  document.getElementById("repository-docker-tls-bundle").value = "";
   document.getElementById("repository-docker-connector-enabled").checked = false;
   document.getElementById("repository-docker-connector-port").value = "";
   document.getElementById("repository-docker-connector-public-url").value = "";
@@ -3512,7 +3558,12 @@ function refreshDockerConnectorControls() {
   const portInput = document.getElementById("repository-docker-connector-port");
   portInput.disabled = !enabled;
   setFieldRequired(portInput, currentRecipe()?.format === "docker" && enabled);
-  document.getElementById("repository-docker-connector-public-url").disabled = !enabled;
+  const httpsEnabled = document.getElementById("repository-docker-https-enabled").checked;
+  const httpsPort = document.getElementById("repository-docker-https-port");
+  httpsPort.disabled = !httpsEnabled;
+  setFieldRequired(httpsPort, currentRecipe()?.format === "docker" && httpsEnabled);
+  document.getElementById("repository-docker-tls-bundle").disabled = !httpsEnabled;
+  document.getElementById("repository-docker-connector-public-url").disabled = !enabled && !httpsEnabled;
   updateRequiredMarkers(repositoryRequiredFields);
 }
 
@@ -3609,6 +3660,9 @@ function showEditRepositoryForm(name) {
     memberTransfer.selected = [...repo.group.memberNames];
   }
   if (repo.docker) {
+    document.getElementById("repository-docker-https-enabled").checked = Boolean(repo.docker.httpsConnectorEnabled);
+    document.getElementById("repository-docker-https-port").value = repo.docker.httpsConnectorPort ?? "";
+    document.getElementById("repository-docker-tls-bundle").value = repo.docker.tlsBundle || "";
     document.getElementById("repository-docker-connector-enabled").checked = Boolean(repo.docker.connectorEnabled);
     document.getElementById("repository-docker-connector-port").value = repo.docker.connectorPort ?? "";
     document.getElementById("repository-docker-connector-public-url").value = repo.docker.connectorPublicUrl || "";
@@ -7621,15 +7675,18 @@ function refreshCleanupCapabilityHelp() {
   if (format.toLowerCase() !== "maven2") mode.value = "COMPONENT";
   document.getElementById("cleanup-policy-mode-field").hidden = format.toLowerCase() !== "maven2";
   const snapshot = mode.value === "MAVEN_SNAPSHOT_BUILDS";
+  const docker = format.toLowerCase() === "docker";
   document.getElementById("cleanup-policy-snapshot-help").hidden = !snapshot;
-  document.getElementById("cleanup-policy-retain-label").textContent = snapshot ? "Keep newest builds per SNAPSHOT" : "Keep newest versions";
+  document.getElementById("cleanup-policy-retain-label").textContent = snapshot ? "Keep newest builds per SNAPSHOT" : docker ? "Keep newest images per image name" : "Keep newest versions";
   const retainInput = document.getElementById("cleanup-policy-retain-count");
   retainInput.disabled = !capability?.retainCountSupported;
   retainInput.min = snapshot ? "1" : "0";
   retainInput.required = snapshot;
   if (retainInput.disabled) retainInput.value = "";
   setCleanupFieldHelp("cleanup-policy-retain-help", capability?.retainCountSupported
-    ? (snapshot ? "Retains at least this many timestamped builds within each base SNAPSHOT version." : "Uses this format's protocol version comparator.")
+    ? (snapshot ? "Retains at least this many timestamped builds within each base SNAPSHOT version." : docker
+      ? "Counts distinct tagged manifests by publication/update time per image name. Aliases count once. Untagged manifests require an age rule; referenced content remains protected."
+      : "Uses this format's protocol version comparator.")
     : "Version retention is not enabled for this format yet; pattern and age rules remain available.");
   const downloadedInput = document.getElementById("cleanup-policy-downloaded-days");
   downloadedInput.disabled = !capability?.lastDownloadedSupported;
@@ -8676,6 +8733,14 @@ bindRepositoryRecipeCombobox();
 document.getElementById("repository-recipe").addEventListener("change", refreshRepositoryRecipeControls);
 document.getElementById("repository-remote-authentication-type").addEventListener("change", refreshRepositoryRecipeControls);
 document.getElementById("repository-docker-connector-enabled").addEventListener("change", refreshDockerConnectorControls);
+document.getElementById("repository-docker-https-enabled").addEventListener("change", () => {
+  refreshDockerConnectorControls();
+  if (document.getElementById("repository-docker-https-enabled").checked) loadDockerTlsBundles();
+});
+document.getElementById("docker-tls-help").addEventListener("mouseenter", loadDockerTlsBundles);
+document.getElementById("docker-tls-help").addEventListener("focus", loadDockerTlsBundles);
+document.getElementById("repository-docker-tls-bundle").addEventListener("focus", loadDockerTlsBundles);
+document.getElementById("repository-docker-tls-bundle").addEventListener("change", loadDockerTlsBundles);
 document.getElementById("repository-apt-flat").addEventListener("change", refreshAptControls);
 for (const field of conanManifestFields) {
   const input = document.getElementById(field.id);

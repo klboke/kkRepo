@@ -140,7 +140,7 @@ kkrepo 把迁移作为产品能力，而不是一次性脚本：
 
 - kkrepo 不是 Nexus 内部机制的完整复刻。Karaf、OSGi、OrientDB、内嵌 Elasticsearch 和 Nexus task 子系统不是兼容目标。
 - Docker / OCI 使用 Registry HTTP API V2 和 OCI Distribution；Docker Registry V1 API 与 `docker search` 不属于当前支持面，除非后续出现明确兼容需求再评估 search-only shim。
-- Docker connector listener 变更可通过 Docker operations endpoint 刷新；高级 connector TLS/SNI 管理属于部署侧能力。
+- Docker 支持独立 HTTP/HTTPS 连接器端口，引用部署管理的命名 TLS 配置；各副本自动同步配置，运行状态按节点展示。证书轮换通过滚动重启生效，暂不支持按主机名选择 SNI 证书及证书上传。
 - Cargo / Rust 支持 Cargo sparse registry。Cargo git index 协议、crates.io 风格 GitHub owner 邀请、删除已发布 crate version 当前不支持。Cargo 迁移需要 datastore H2/PostgreSQL schema 指纹；OrientDB Cargo 内容导出不会启用。
 - Dart / Pub 支持 Hosted Pub Repository V2 hosted/proxy/group 工作流。pub.dev social、publisher、score、download-count 和 advisory API 不作为协议正确性依赖。
 - Composer 仅承诺 Composer 2 metadata；Composer 1 `provider-includes` 主线、Packagist security-advisories/metadata-changes、VCS source checkout 和标准 publish 命令不在当前支持面。Hosted 发布使用 Components API 或 UI archive 上传。

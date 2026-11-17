@@ -32,6 +32,65 @@ Repository-level connector ports can expose the standard shape:
 Choose one layout, configure TLS and reverse proxy forwarding for `/v2/`, and give users the exact
 host:port. Do not put `/repository/<repo>/` in Docker image references.
 
+## HTTPS Connectors
+
+Docker repositories can enable HTTP and HTTPS independently on different ports. In the
+repository form, enable **HTTPS connector**, enter its port, and select a named **TLS
+configuration** (leave blank for the deployment default). Certificate upload is not part of
+the repository form. Configure the server identity once on every replica:
+
+```properties
+spring.ssl.bundle.pem.registry.keystore.certificate=file:/run/secrets/registry-fullchain.pem
+spring.ssl.bundle.pem.registry.keystore.private-key=file:/run/secrets/registry-key.pem
+kkrepo.tls.default-bundle=registry
+```
+
+The certificate file must include the leaf certificate and intermediate chain. JKS/PKCS12
+bundles are also supported using Spring Boot `spring.ssl.bundle.jks.<name>.*` properties.
+If a keystore has multiple private keys, configure its `key.alias`. Main-server HTTPS can
+independently select the same identity with `server.ssl.bundle=registry`; it is not required
+for Docker HTTPS. `KKREPO_TLS_DEFAULT_BUNDLE` selects the Docker default, otherwise
+`server.ssl.bundle` is used. These inbound identities are separate from
+`KKREPO_TLS_CA_CERTIFICATES`, which only configures outbound CA trust.
+
+Example repository `docker` settings:
+
+```json
+{
+  "connectorEnabled": true,
+  "connectorPort": 5000,
+  "httpsConnectorEnabled": true,
+  "httpsConnectorPort": 5443,
+  "tlsBundle": "registry"
+}
+```
+
+Existing `connectorEnabled`/`connectorPort` fields still configure HTTP. Omitted fields in
+updates preserve existing settings. Set `httpsConnectorEnabled=false` to remove HTTPS;
+set `tlsBundle` to an empty string to return to the deployment default. HTTP and HTTPS
+share a database-enforced port namespace. Container port publishing, Services, firewalls
+and load balancers must expose the configured ports separately.
+
+During the first upgrade to this schema, pause repository configuration writes until all replicas run the new version; older binaries do not maintain the new cross-protocol port reservations.
+
+Each replica reads committed repository configuration every 5 seconds by default
+(`KKREPO_DOCKER_CONNECTOR_REFRESH_INTERVAL_MS`). Changes made through one replica therefore
+converge on the others without manual refresh. `/internal/docker/connectors` reports
+**the responding node**, its ID, actual listener states and certificate fingerprints;
+`sequence` is a node-local refresh count, not a cluster revision. Configuration being saved
+does not mean every replica has bound the port. A failed HTTPS listener never falls back to
+HTTP; other listeners remain available and failed bindings are retried. A protocol or bundle
+reference change replaces the old listener; failures leave that listener unavailable until
+configuration is corrected. Check each replica before directing traffic to newly added ports.
+
+`/internal/docker/tls-bundles` exposes certificate metadata to Docker administrators, never
+private keys or passwords. Deploy identical bundle names and identities on all replicas.
+Rotate certificate files/Secrets with a rolling restart; automatic bundle hot reload is not
+supported for these additional connectors. For reverse-proxy TLS termination, keep using an
+HTTP connector behind the proxy and configure trusted forwarding headers. `connectorPublicUrl`
+is an optional canonical external address (shared by both listeners); setting it to HTTPS
+does not enable TLS. See [reverse proxy configuration](../nginx-reverse-proxy.md).
+
 ## Login, Push, And Pull
 
 Shared-entrypoint examples:

@@ -924,6 +924,43 @@ class RepositoryServiceTest {
   }
 
   @Test
+  void httpsSettingsRoundTripAndLegacyUpdatesPreserveThem() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+    var created = service.create(new CreateCommand("docker-tls", "docker-hosted", true,
+        "default", true, new HostedSettings("ALLOW", null, null), null, null,
+        new DockerSettings(true, 15000, null, true, 15443, "registry"), null, null));
+    assertEquals(15443, created.docker().httpsConnectorPort());
+    assertEquals("registry", created.docker().tlsBundle());
+    // Exercise partial merge directly through an existing record, as older API clients do.
+    repositories = new StubRepositoryDao(new RepositoryRecord(20L, "docker-tls", RepositoryFormat.DOCKER,
+        RepositoryType.HOSTED, "docker-hosted", true, 1L, null, null, null, null, "ALLOW", true,
+        Map.of("docker", Map.of("connectorEnabled", true, "connectorPort", 15000,
+            "httpsConnectorEnabled", true, "httpsConnectorPort", 15443, "tlsBundle", "registry"))));
+    service = service(repositories);
+    var updated = service.update("docker-tls", new UpdateCommand(null, null, null, null, null, null,
+        new DockerSettings(false, null, null), null, null));
+    assertEquals(false, updated.docker().connectorEnabled());
+    assertEquals(true, updated.docker().httpsConnectorEnabled());
+    assertEquals(15443, updated.docker().httpsConnectorPort());
+    assertEquals("registry", updated.docker().tlsBundle());
+  }
+
+  @Test
+  void httpsRejectsMissingSameAndCrossProtocolPorts() {
+    RepositoryService service = service(new StubRepositoryDao(dockerRepository(20L, "docker-http", 15000)));
+    for (DockerSettings settings : List.of(
+        new DockerSettings(false, null, null, true, null, null),
+        new DockerSettings(true, 15443, null, true, 15443, null),
+        new DockerSettings(false, null, null, true, 15000, null),
+        new DockerSettings(false, null, null, true, 70000, null))) {
+      assertThrows(RepositoryValidationException.class, () -> service.create(new CreateCommand(
+          "docker-tls", "docker-hosted", true, "default", true,
+          new HostedSettings("ALLOW", null, null), null, null, settings, null, null)));
+    }
+  }
+
+  @Test
   void createRejectsDuplicateDockerConnectorPort() {
     StubRepositoryDao repositories = new StubRepositoryDao(dockerRepository(20L, "docker-hosted-a", 5000));
     RepositoryService service = service(repositories);
