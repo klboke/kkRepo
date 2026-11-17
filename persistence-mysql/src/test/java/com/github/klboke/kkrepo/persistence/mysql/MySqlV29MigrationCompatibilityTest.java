@@ -16,8 +16,37 @@ import org.junit.jupiter.api.Test;
 
 /** Guards the frozen V1-V29 chain and validates repeat startup after newer migrations. */
 class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
-  private static final int LATEST_MIGRATION = 65;
+  private static final int LATEST_MIGRATION = 66;
   private static final Map<String, String> V29_SHA256 = checksums();
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+  void dockerConnectorMigrationResumesAfterCommittedDdlAndBackfillsLegacyPorts(boolean afterBackfill) throws Exception {
+    Flyway throughV65 = migration("65");
+    throughV65.clean();
+    assertEquals(65, throughV65.migrate().migrationsExecuted);
+    jdbc().execute("""
+        INSERT INTO repository (name, format, type, recipe_name, attributes_json)
+        VALUES ('legacy-docker', 'docker', 'hosted', 'docker-hosted',
+          '{"docker":{"connectorEnabled":true,"connectorPort":5000}}'),
+          ('disabled-docker', 'docker', 'hosted', 'docker-hosted',
+          '{"docker":{"connectorEnabled":false,"connectorPort":5001}}')
+        """);
+    try (InputStream stream = getClass().getResourceAsStream("/db/migration/mysql/V66__docker_connector_bindings.sql")) {
+      assertNotNull(stream);
+      String sql = new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+      jdbc().execute(sql.substring(0, sql.indexOf(';')));
+      // Simulate an interruption after both autocommitted statements as well as after DDL alone.
+      if (afterBackfill) jdbc().execute(sql.substring(sql.indexOf(';') + 1));
+    }
+    Flyway resumed = migration(null);
+    assertEquals(1, resumed.migrate().migrationsExecuted);
+    assertEquals(0, resumed.migrate().migrationsExecuted);
+    assertTrue(resumed.validateWithResult().validationSuccessful);
+    assertEquals(1, jdbc().queryForObject("SELECT COUNT(*) FROM docker_connector_binding", Integer.class));
+    assertEquals(5000, jdbc().queryForObject("SELECT port FROM docker_connector_binding", Integer.class));
+    assertEquals("http", jdbc().queryForObject("SELECT scheme FROM docker_connector_binding", String.class));
+  }
 
   @Test
   void snapshotInventoryMigrationResumesAfterItsFirstAutocommittedTable() throws Exception {

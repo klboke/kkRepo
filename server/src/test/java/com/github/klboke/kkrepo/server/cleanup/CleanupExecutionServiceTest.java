@@ -126,7 +126,7 @@ class CleanupExecutionServiceTest {
   @Test
   void aSnapshotThatBecomesRetainedAfterScanningIsSkippedBeforeDeletion() {
     when(scanner.resolveLocked(repository(), "ASSET", 9, "file.zip")).thenReturn(Optional.of(expected));
-    when(scanner.revalidateSnapshot(repository(), run.criteriaSnapshot(), expected, run.createdAt()))
+    when(scanner.revalidateForDeletion(repository(), run.criteriaSnapshot(), expected, run.createdAt()))
         .thenReturn("newest build retained");
     var result = service.apply(claim, run, new Candidate(expected, Map.of()), "cleanup");
     assertEquals("SKIPPED_STALE", result.decision());

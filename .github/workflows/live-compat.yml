@@ -467,7 +467,8 @@ jobs:
   swift-xcode-e2e:
     name: Swift registry Xcode E2E (macOS)
     needs: build-candidate
-    runs-on: macos-15
+    # Keep Xcode 16.4 coverage available when hosted macOS arm64 capacity is exhausted.
+    runs-on: macos-15-intel
     timeout-minutes: 60
     if: >-
       always() &&

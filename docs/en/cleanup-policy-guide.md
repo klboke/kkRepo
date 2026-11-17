@@ -20,7 +20,8 @@ The Chinese version is available in the
 - Try Run, manual execution, and scheduled execution are available for all current formats. The
   **Keep newest versions** rule is available only where kkRepo has a validated protocol version
   comparator: Maven, Cargo/Rust, Dart/Pub, Terraform, Swift Package Registry, Ansible Galaxy,
-  Conda, APT/Debian, Alpine/APK, and R/CRAN.
+  Conda, APT/Debian, Alpine/APK, and R/CRAN. Docker instead supports retention by manifest
+  publication/update time, separately for each image name.
 - Actual execution is irreversible. kkRepo does not currently provide a cleanup-specific restore
   window, so keep a tested database and blob-store backup before enabling deletion in production.
 
@@ -47,6 +48,29 @@ numeric-version comparator, including the official `0.9 < 0.75` behavior, within
 family. Hosted deletion publishes a new complete `PACKAGES.gz` that no longer advertises the
 package before retiring its package projection. Generated metadata and groups are never separate
 cleanup subjects.
+
+## Docker Image Retention
+
+For Docker, **Keep newest images per image name** counts distinct tagged manifest
+digests separately for each image name within each repository. Ordering uses the
+manifest publication/update time, with its database ID breaking ties. Tag names
+are not interpreted as versions. Multiple tags pointing to the same digest count
+once; republishing a manifest refreshes its position. For proxy repositories,
+this is local cache publication time, not the upstream build time.
+
+`retainCount` protects a minimum number of images; it is not a hard maximum.
+Configured age rules must also match before deletion. The retained set uses the
+entire image inventory, independently of scan pagination and name/age filters.
+`0` disables the count floor. Untagged manifests do not count and require an
+explicit age rule to become eligible. Live parent manifests protect their
+dependencies, including multi-platform child manifests, even with a zero floor.
+Manual protections also remain effective. A later run can remove old untagged
+children once their parent has been removed. Blob space is reclaimed separately
+by garbage collection after all references have disappeared.
+
+Use **Try Run** before enabling a daily schedule. Execution rechecks the count
+floor and references under a database lock coordinated with manifest publication
+and deletion across replicas. Upgrade all replicas before enabling this policy.
 
 ## Maven SNAPSHOT Build Cleanup
 
@@ -86,7 +110,7 @@ its schedule. Existing repository/component/asset protection rules also protect 
 | **Name/path pattern** | Optional scope filter. **Wildcard** matches the whole name or displayed coordinate/path and supports `*` and `?`; **Regular expression** uses kkRepo's validated regular-expression matcher. A pattern does not make an artifact eligible by itself. |
 | **Published older than (days)** | Selects a subject only when its format-specific publication/update watermark is older than the configured age at the start of the run. |
 | **Last downloaded older than (days)** | Selects a subject only when it has a recorded download watermark older than the configured age. Artifacts without a download timestamp are skipped. |
-| **Keep newest versions** | Protects the newest `N` versions inside each package or module family using that format's protocol comparator. `0` protects no versions. The field is disabled for formats without a validated comparator. |
+| **Keep newest versions** | Protects the newest `N` versions inside each package or module family using its protocol comparator. Docker uses manifest publication/update time per image name. `0` disables the count floor; unsupported formats disable the field. |
 
 At least one deletion criterion is required: publication age, last-download age, or version
 retention. A name/path pattern only narrows that result. Every configured age rule must match, and
