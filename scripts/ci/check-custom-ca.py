@@ -37,6 +37,7 @@ def certificate(directory, name):
     commands = [
         ["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-sha256",
          "-subj", "/CN=" + name + " CA", "-addext", "basicConstraints=critical,CA:TRUE",
+         "-addext", "keyUsage=critical,keyCertSign,cRLSign",
          "-keyout", str(directory / (name + "-ca.key")), "-out", str(ca)],
         ["req", "-new", "-newkey", "rsa:2048", "-nodes", "-subj", "/CN=localhost",
          "-keyout", str(key), "-out", str(directory / (name + ".csr"))],
