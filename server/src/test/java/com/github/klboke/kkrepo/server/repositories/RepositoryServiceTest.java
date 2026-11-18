@@ -27,6 +27,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RoutingRuleDao;
 import com.github.klboke.kkrepo.server.routingrules.RoutingRuleService;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RRegistryDao;
+import java.time.Instant;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
@@ -61,6 +62,32 @@ import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class RepositoryServiceTest {
+  @Test
+  void streamingSettingDefaultsOffAndSurvivesUpdatesAndReplicaReload() throws Exception {
+    var repositories = new StubRepositoryDao(repository(1L));
+    var service = service(repositories);
+    var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+    var settings = mapper.readValue("""
+        {"remoteUrl":"https://registry.npmjs.org", "streamingEnabled":true}
+        """, ProxySettings.class);
+    var created = service.create(new CreateCommand("streaming", "npm-proxy", true,
+        "default", true, null, settings, null, null, null, null));
+    assertTrue(created.proxy().streamingEnabled());
+    var registry = new RepositoryRuntimeRegistry(repositories, 0);
+    assertTrue(registry.resolve("streaming").orElseThrow().streamingEnabled());
+    var kept = service.update("streaming", new UpdateCommand(true, null, null, null,
+        new ProxySettings(null, null, null, null), null, null, null, null));
+    assertTrue(kept.proxy().streamingEnabled());
+    var disabled = service.update("streaming", new UpdateCommand(true, null, null, null,
+        mapper.readValue("{\"streamingEnabled\":false}", ProxySettings.class), null, null, null, null));
+    assertFalse(disabled.proxy().streamingEnabled());
+    assertFalse(new RepositoryRuntimeRegistry(repositories, 0).resolve("streaming").orElseThrow().streamingEnabled());
+    var legacy = service.create(new CreateCommand("legacy-streaming", "raw-proxy", true,
+        "default", true, null, new ProxySettings("https://example.org", null, null, null),
+        null, null, null, null));
+    assertFalse(legacy.proxy().streamingEnabled());
+  }
+
   @Test
   void partialUpdatesPreserveTheBindingFromTheLockedRepositoryVersion() {
     for (boolean concurrentAssignment : List.of(true, false)) {
@@ -428,14 +455,23 @@ class RepositoryServiceTest {
         org.mockito.ArgumentMatchers.anyString(),
         org.mockito.ArgumentMatchers.any());
 
+    List<String> namespaces = List.of("src/contrib", "bin/windows/contrib/4.5",
+        "bin/macosx/big-sur-arm64/contrib/4.5",
+        "bin/linux/noble-x86_64/4.5/src/contrib");
+    when(registry.listSuites(100L)).thenReturn(namespaces.stream()
+        .map(namespace -> new RRegistryDao.SuiteState(
+            100L, namespace, 1L, Instant.EPOCH, 1L, 1, Instant.EPOCH, null, null, Instant.EPOCH))
+        .toList());
     RepositoryView updated = service.replaceMembers(
         "cran-root", List.of("cran-second", "cran-first"));
     assertEquals(List.of("cran-second", "cran-first"), updated.group().memberNames());
     assertEquals(List.of(72L, 71L), repositories.membersByGroupId.get(100L));
-    verify(registry).markSuiteDirty(
-        org.mockito.ArgumentMatchers.eq(100L),
-        org.mockito.ArgumentMatchers.eq("src/contrib"),
-        org.mockito.ArgumentMatchers.any());
+    for (String namespace : namespaces) {
+      verify(registry).markSuiteDirty(
+          org.mockito.ArgumentMatchers.eq(100L),
+          org.mockito.ArgumentMatchers.eq(namespace),
+          org.mockito.ArgumentMatchers.any());
+    }
   }
 
   @Test
@@ -447,11 +483,24 @@ class RepositoryServiceTest {
     repositories.replaceMembers(82L, List.of(81L));
     repositories.replaceMembers(83L, List.of(82L));
     RRegistryDao registry = mock(RRegistryDao.class);
+    String binaryNamespace = "bin/windows/contrib/4.5";
+    for (long repositoryId : List.of(81L, 82L, 83L)) {
+      when(registry.listSuites(repositoryId)).thenReturn(List.of(new RRegistryDao.SuiteState(
+          repositoryId, binaryNamespace, 1L, Instant.EPOCH, 1L, 1,
+          Instant.EPOCH, null, null, Instant.EPOCH)));
+    }
     RepositoryService service = service(repositories);
     service.setRRegistry(registry);
 
     service.update("cran-hosted",
         new UpdateCommand(false, null, null, null, null, null, null, null, null));
+
+    for (long repositoryId : List.of(81L, 82L, 83L)) {
+      verify(registry, org.mockito.Mockito.atLeastOnce()).markSuiteDirty(
+          org.mockito.ArgumentMatchers.eq(repositoryId),
+          org.mockito.ArgumentMatchers.eq(binaryNamespace),
+          org.mockito.ArgumentMatchers.any());
+    }
 
     verify(registry, org.mockito.Mockito.atLeastOnce()).markSuiteDirty(
         org.mockito.ArgumentMatchers.eq(81L),
@@ -875,6 +924,43 @@ class RepositoryServiceTest {
   }
 
   @Test
+  void httpsSettingsRoundTripAndLegacyUpdatesPreserveThem() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+    var created = service.create(new CreateCommand("docker-tls", "docker-hosted", true,
+        "default", true, new HostedSettings("ALLOW", null, null), null, null,
+        new DockerSettings(true, 15000, null, true, 15443, "registry"), null, null));
+    assertEquals(15443, created.docker().httpsConnectorPort());
+    assertEquals("registry", created.docker().tlsBundle());
+    // Exercise partial merge directly through an existing record, as older API clients do.
+    repositories = new StubRepositoryDao(new RepositoryRecord(20L, "docker-tls", RepositoryFormat.DOCKER,
+        RepositoryType.HOSTED, "docker-hosted", true, 1L, null, null, null, null, "ALLOW", true,
+        Map.of("docker", Map.of("connectorEnabled", true, "connectorPort", 15000,
+            "httpsConnectorEnabled", true, "httpsConnectorPort", 15443, "tlsBundle", "registry"))));
+    service = service(repositories);
+    var updated = service.update("docker-tls", new UpdateCommand(null, null, null, null, null, null,
+        new DockerSettings(false, null, null), null, null));
+    assertEquals(false, updated.docker().connectorEnabled());
+    assertEquals(true, updated.docker().httpsConnectorEnabled());
+    assertEquals(15443, updated.docker().httpsConnectorPort());
+    assertEquals("registry", updated.docker().tlsBundle());
+  }
+
+  @Test
+  void httpsRejectsMissingSameAndCrossProtocolPorts() {
+    RepositoryService service = service(new StubRepositoryDao(dockerRepository(20L, "docker-http", 15000)));
+    for (DockerSettings settings : List.of(
+        new DockerSettings(false, null, null, true, null, null),
+        new DockerSettings(true, 15443, null, true, 15443, null),
+        new DockerSettings(false, null, null, true, 15000, null),
+        new DockerSettings(false, null, null, true, 70000, null))) {
+      assertThrows(RepositoryValidationException.class, () -> service.create(new CreateCommand(
+          "docker-tls", "docker-hosted", true, "default", true,
+          new HostedSettings("ALLOW", null, null), null, null, settings, null, null)));
+    }
+  }
+
+  @Test
   void createRejectsDuplicateDockerConnectorPort() {
     StubRepositoryDao repositories = new StubRepositoryDao(dockerRepository(20L, "docker-hosted-a", 5000));
     RepositoryService service = service(repositories);
@@ -1243,11 +1329,11 @@ class RepositoryServiceTest {
     RepositoryValidationException wrongFormat = assertThrows(
         RepositoryValidationException.class,
         () -> service.create(new CreateCommand(
-            "maven-proxy", "maven2-proxy", true, "default", true, null,
-            new ProxySettings("https://repo.maven.apache.org/maven2/", 1440, 1440, true, 60),
+            "nuget-feed", "nuget-proxy", true, "default", true, null,
+            new ProxySettings("https://api.nuget.org/v3/index.json", 1440, 1440, true, 60),
             null, null, null, null)));
     assertEquals(
-        "proxy.minimumReleaseAgeMinutes is only supported for npm proxy repositories",
+        "proxy.minimumReleaseAgeMinutes is only supported for npm, Go, Maven and PyPI proxy repositories",
         wrongFormat.getMessage());
   }
 

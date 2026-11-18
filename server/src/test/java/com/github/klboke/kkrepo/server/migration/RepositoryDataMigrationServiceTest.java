@@ -2,25 +2,120 @@ package com.github.klboke.kkrepo.server.migration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockConstruction;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
-import com.github.klboke.kkrepo.migration.nexus.MigrationPlanBuilder;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.migration.nexus.MigrationPlanBuilder.MigrationScope;
+import com.github.klboke.kkrepo.migration.nexus.MigrationPlanBuilder;
 import com.github.klboke.kkrepo.migration.nexus.NexusMigrationPlan;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.NexusInventory;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.RepositoryDocument;
 import com.github.klboke.kkrepo.migration.nexus.NexusRestClient.SourceProbe;
-import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityExport;
+import com.github.klboke.kkrepo.migration.nexus.NexusRestClient;
 import com.github.klboke.kkrepo.migration.nexus.NexusSourceProfile;
+import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityExport;
+import com.github.klboke.kkrepo.persistence.jdbc.api.MigrationJobDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDataMigrationDao.MigrationJobProgress;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDataMigrationDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.MigrationJobRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.PlatformTransactionManager;
 
 class RepositoryDataMigrationServiceTest {
+
+  @ParameterizedTest
+  @MethodSource("migrationSelections")
+  void startPreservesHostedSelectionWhenAddingProxyBackups(
+      List<String> hosted, List<String> proxies, List<String> expected) throws Exception {
+    NexusInventory inventory = inventory(
+        repository("maven-releases", "maven2", "hosted"),
+        repository("maven-snapshots", "maven2", "hosted"),
+        repository("maven-central", "maven2", "proxy"),
+        repository("unselected-proxy", "maven2", "proxy"));
+    MigrationJobDao jobs = mock(MigrationJobDao.class);
+    RepositoryDataMigrationDao migration = mock(RepositoryDataMigrationDao.class);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    List<String> createdRepositories = new ArrayList<>();
+    List<String> createdModes = new ArrayList<>();
+    when(repositories.findByName(anyString())).thenAnswer(invocation -> {
+      String name = invocation.getArgument(0);
+      RepositoryType type = name.equals("maven-central") ? RepositoryType.PROXY : RepositoryType.HOSTED;
+      return Optional.of(new RepositoryRecord(
+          9L, name, RepositoryFormat.MAVEN2, type, "maven2-" + type.name().toLowerCase(java.util.Locale.ROOT),
+          true, 1L, null, null, null, null, null, true, Map.of()));
+    });
+    when(jobs.create(anyString(), anyString(), any())).thenReturn(7L);
+    when(jobs.findById(7L)).thenReturn(Optional.of(new MigrationJobRecord(
+        7L, "3.29.2-02", "http://nexus.test", "running", Map.of(), Map.of(), Instant.EPOCH, null)));
+    when(migration.listRepositories(7L)).thenReturn(List.of());
+    when(migration.jobProgress(7L)).thenReturn(new MigrationJobProgress(
+        expected.size(), 0, 0, 0, 0, 0, true, false));
+    when(migration.createRepositoryJob(eq(7L), anyString(), anyString(), anyLong(), any(), anyInt(), any()))
+        .thenAnswer(invocation -> {
+          createdRepositories.add(invocation.getArgument(1));
+          Map<String, Object> options = invocation.getArgument(6);
+          createdModes.add((String) options.get("migrationMode"));
+          return (long) createdRepositories.size();
+        });
+    RepositoryDataMigrationService service = new RepositoryDataMigrationService(
+        new ObjectMapper(), jobs, migration, repositories, mock(PlatformTransactionManager.class));
+    try (var clients = mockConstruction(NexusRestClient.class,
+        (client, context) -> when(client.readInventory()).thenReturn(inventory))) {
+      service.start(new RepositoryDataMigrationService.RepositoryDataMigrationRequest(
+          "http://nexus.test", "admin", "secret", "3.29.2-02", 100, 1, true, null, hosted, proxies));
+    }
+
+    assertEquals(expected, createdRepositories);
+    assertEquals(expected.stream().map(name -> name.equals("maven-central") ? "proxy-backup" : "hosted")
+        .toList(), createdModes);
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<Map<String, Object>> options = ArgumentCaptor.forClass(Map.class);
+    verify(jobs).create(eq("3.29.2-02"), eq("http://nexus.test"), options.capture());
+    assertEquals(expected, options.getValue().get("repositories"));
+    NexusMigrationPlan plan = (NexusMigrationPlan) options.getValue().get("migrationPlan");
+    assertEquals(expected.stream().sorted().toList(), plan.items().stream()
+        .filter(item -> expected.contains(item.name()))
+        .filter(item -> item.status() == NexusMigrationPlan.SupportStatus.FULL)
+        .map(item -> item.name()).sorted().toList());
+  }
+
+  private static Stream<Arguments> migrationSelections() {
+    List<String> allHosted = List.of("maven-releases", "maven-snapshots");
+    List<String> withProxy = List.of("maven-releases", "maven-snapshots", "maven-central");
+    return Stream.of(
+        Arguments.of(null, null, allHosted),
+        Arguments.of(List.of(), List.of(), allHosted),
+        Arguments.of(null, List.of("maven-central"), withProxy),
+        Arguments.of(List.of(), List.of("maven-central"), withProxy),
+        Arguments.of(List.of(" "), List.of(" maven-central ", "maven-central"), withProxy),
+        Arguments.of(List.of("maven-snapshots"), List.of(), List.of("maven-snapshots")),
+        Arguments.of(List.of("maven-snapshots"), List.of("maven-central"),
+            List.of("maven-snapshots", "maven-central")));
+  }
 
   @Test
   void requestedRepositoriesLimitHostedDataMigrationScope() throws Exception {

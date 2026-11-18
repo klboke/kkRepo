@@ -69,6 +69,31 @@ public interface StagingContentAdapter {
   }
 
   /**
+   * Promotion variant that also receives the staged blob record.
+   *
+   * <p>Formats whose writer can link an already content-addressed blob override this to avoid
+   * re-reading and re-hashing the payload inside the locked promotion transaction. The default
+   * keeps replaying through the streamed source.
+   */
+  default Optional<String> promote(
+      RepositoryRuntime runtime,
+      StagingItemRecord item,
+      AssetBlobRecord blob,
+      StagingBlobSource source,
+      String actor,
+      String ip) {
+    return promote(runtime, item, source, actor, ip);
+  }
+
+  /**
+   * Whether the promotion service must materialize the staged payload to a temporary file before
+   * taking the session and repository locks. Formats that link the existing blob return false.
+   */
+  default boolean materializeBeforePromotion() {
+    return true;
+  }
+
+  /**
    * Builds a generated metadata response for a staging view when no staged item exists for the
    * requested path. Formats that do not generate metadata return empty.
    */

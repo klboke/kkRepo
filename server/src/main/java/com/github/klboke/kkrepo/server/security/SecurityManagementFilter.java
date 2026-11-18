@@ -211,7 +211,11 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
     if ("DELETE".equals(method)) {
       return Optional.of("nexus:staging:admin");
     }
-    if (uri.endsWith("/preflight") || uri.endsWith("/promote") || uri.endsWith("/approve")) {
+    // commit runs preflight and promotion in one call, so it is a promotion operation.
+    if (uri.endsWith("/commit")
+        || uri.endsWith("/preflight")
+        || uri.endsWith("/promote")
+        || uri.endsWith("/approve")) {
       return Optional.of("nexus:staging:promote");
     }
     return Optional.of("nexus:staging:create");

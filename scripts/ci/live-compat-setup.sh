@@ -666,6 +666,16 @@ kkrepo_repo_exists() {
 kkrepo_create_repo() {
   local name="$1"
   local payload="$2"
+  if [[ "${KKREPO_COMPAT_PROXY_STREAMING_ENABLED:-false}" == true ]]; then
+    payload="$(python3 - "$payload" <<'PY'
+import json, sys
+repository = json.loads(sys.argv[1])
+if repository.get("recipe", "").endswith("-proxy"):
+    repository.setdefault("proxy", {})["streamingEnabled"] = True
+print(json.dumps(repository))
+PY
+)"
+  fi
   if kkrepo_repo_exists "$name"; then
     echo "[compat] kkrepo repository exists: $name"
     return 0

@@ -13,6 +13,7 @@
 | --- | --- | --- | --- |
 | Maven | hosted / proxy / group | [Maven 使用示例](../client-recipes.md#maven) | [Maven 仓库使用指南](maven.md) |
 | npm | hosted / proxy / group | [npm 使用示例](../client-recipes.md#npm) | [npm 仓库使用指南](npm.md) |
+| OHPM / HarmonyOS | hosted / proxy / group | [OHPM 使用示例](../client-recipes.md#ohpm--harmonyos) | [OHPM 仓库使用指南](ohpm.md) |
 | PyPI | hosted / proxy / group | [PyPI 使用示例](../client-recipes.md#pypi) | [PyPI 仓库使用指南](pypi.md) |
 | Go | hosted / proxy / group | [Go 使用示例](../client-recipes.md#go) | [Go 仓库使用指南](go.md) |
 | Helm | hosted / proxy / group | [Helm 使用示例](../client-recipes.md#helm) | [Helm 仓库使用指南](helm.md) |

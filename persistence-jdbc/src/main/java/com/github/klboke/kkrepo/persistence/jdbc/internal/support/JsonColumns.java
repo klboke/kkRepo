@@ -63,6 +63,10 @@ public class JsonColumns {
     return dialect.extractText(column, path);
   }
 
+  public String extractTextAtKey(String column, String... parentPath) {
+    return dialect.extractTextAtKey(column, parentPath);
+  }
+
   public String setBoolean(String column, boolean value, String... path) {
     return dialect.setBoolean(column, value, path);
   }

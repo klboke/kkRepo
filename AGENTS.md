@@ -11,7 +11,7 @@
 - 兼容 Nexus 的客户端协议行为和 `/repository/<repo>/...` URL 布局。
 - 使用 MySQL 存储元数据、用户数据、权限数据、token 数据、审计数据和迁移状态。
 - 使用 MySQL 承载跨副本 session、短生命周期协同状态和版本水位；使用进程内 TTL cache 作为可重建的节点本地热缓存。
-- 使用 OSS/S3 存储所有制品 blob。
+- 使用 OSS/S3 或 Azure Blob Storage 存储所有制品 blob。
 - 运行时不依赖 OrientDB、内嵌 Elasticsearch，也不要求本地持久化 blob 文件系统。
 - 用于迁移现有 Nexus 仓库、元数据、权限和 blob 的迁移工具。
 - 用户侧迁移尽可能接近无感。
@@ -45,6 +45,7 @@
 
 - `core`：repository、component、asset、blob、metadata、协议抽象和共享鉴权契约。
 - `storage-s3`：OSS/S3 blob 存储适配器。默认引擎是兼容 AWS S3 SDK 的访问方式；阿里云 OSS 部署使用 OSS Native SDK 引擎。
+- `storage-azure`：Azure Blob Storage 适配器。优先使用 managed identity 和 workload identity 等无密钥凭据；大文件上传使用 block blob 协议。
 - `storage-file`：本地/测试用 blob 存储适配器，只用于开发和测试替换，不作为必须的生产运行时依赖。
 - `cache`：进程内 TTL 缓存抽象和实现，用于可重建的节点本地热缓存、negative cache 和 per-pod 限流计数。
 - `protocol-maven`：Maven 仓库行为。
@@ -74,9 +75,10 @@
 
 ## 设计约束
 
-- 大 blob 只存储在 OSS/S3 中。MySQL 只存储元数据、状态、索引和引用。
+- 大 blob 只存储在对象存储中：OSS/S3 兼容存储或 Azure Blob Storage。MySQL 只存储元数据、状态、索引和引用。
 - 协议逻辑不要放在 controller 中。Controller 应委托给协议适配器。
-- 存储代码必须位于接口之后，以便 OSS、S3 和本地测试存储可以互换。
+- 存储代码必须位于接口之后，以便 OSS、S3、Azure 和本地测试存储可以互换。
+- Blob store 的运行时访问是可插拔的：新增后端时，在 `storage-*` 模块中实现 `BlobStoreProvider`，不要在 `BlobStorageRegistry` 或其它运行时代码中按 store 类型分支。`BlobStoresController` 中的管理 API 仍按后端分别处理请求映射、校验和健康检查；新增后端时需要同步扩展这些逻辑。
 - 对 path、package、version、asset、token 和 permission identity 使用 MySQL 事务和显式唯一约束。
 - 把迁移视为幂等的产品功能，而不是一次性脚本。
 - 每个迁移步骤都应支持 dry-run、resume、checksum 校验和报告。

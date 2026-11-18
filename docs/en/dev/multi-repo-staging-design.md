@@ -168,9 +168,21 @@ A session can issue a short-lived `StagingToken` API key that inherits the creat
 - `POST /internal/staging/sessions/{id}/credential` rotates it;
 - the token's scopes bind every repository request to the session, so clients do not need to send
   `X-KkRepo-Staging` explicitly;
+- the binding is applied at every authentication boundary (repository filter, Git LFS, Docker,
+  Pub), **including cache hits of the API-key auth cache**. An explicit selector that contradicts
+  the bound session is rejected with 403, so a staging token cannot be replayed against another
+  session of the same owner;
+- a staging token is a repository-content credential only: management endpoints (API keys, users,
+  roles, settings) reject it, so `Authorization: Bearer StagingToken.<secret>` can never mint an
+  ordinary API key. Docker's `/service/rest/v1/docker/token` is the only non-content endpoint that
+  accepts it, because it only mints registry tokens for repository actions;
+- when the token scope cannot be interpreted, the request is bound to an invalid session and fails
+  closed (404) instead of falling back to live content;
 - the token expires with the session and is revoked on close, cancel, rollback, or successful
   promotion;
-- revocation removes the API key from the shared `api_key` table, so every replica observes it;
+- revocation removes the API key from the shared `api_key` table, so every replica observes it.
+  The stored `stagingTokenId` is user-editable through `PATCH /sessions/{id}`, so revocation first
+  verifies that the key is a staging key owned by the same user and scoped to this session;
 - the token does not invent permissions: authorization still evaluates the owner's roles and the
   repository/action rules.
 
@@ -193,17 +205,32 @@ The durable staging model is exposed through Nexus-shaped resources:
 Staged asset download URLs carry `?stagingSession=<id>`, so clients that follow Nexus asset links
 stay in the staged view.
 
-`POST /sessions/{id}/commit` runs preflight and promotion in one call.
+`POST /sessions/{id}/commit` runs preflight and promotion in one call, so it requires
+`nexus:staging:promote` (not the create/upload permission).
 `POST /sessions/{id}/rollback` discards the diff and releases staged blobs.
 `close` remains the explicit freeze stage for clients that want to inspect the preflight report
 before committing.
+
+Session metadata updates (`PATCH /sessions/{id}`) only replace user metadata. Server-owned
+attributes — the session credential identity (`stagingTokenId`, `stagingTokenIssuedAt`) and the
+approval policy/proof (`approvalRequired`, `approvedBySource`, `approvedByUserId`, `approvedAt`) —
+always survive, including an empty replacement map, and a request that names one of them is
+rejected with 400 so a client can neither forge an approval nor drop a four-eyes requirement.
 
 ## Request routing
 
 A request participates in a session by one of:
 
-1. `X-KkRepo-Staging: <session>` header (CI/API clients), or
-2. a dedicated read prefix: `/repository/<repo>/-/staging/<session>/<path>` (human/browser use).
+1. `X-KkRepo-Staging: <session>` header (CI/API clients),
+2. a `stagingSession=<session>` query parameter, or
+3. the session bound to a `StagingToken` request credential.
+
+Every protocol handler resolves the selector through one shared resolver before it chooses the
+live publication path, so no selector can silently fall through to live content: a Git LFS object
+PUT, a Docker manifest PUT/DELETE, a Pub publish finalization and every raw/Maven content request
+honour the header, the query parameter and the credential binding identically. A header and query
+parameter that disagree are rejected with 400, and an explicit selector that contradicts the
+credential binding is rejected with 403.
 
 The security filter resolves the session once, validates state and permissions, and stores it in a
 request attribute. From that point on:
@@ -417,7 +444,7 @@ to upload staged content without being able to publish it.
 
 | Area | Location |
 | --- | --- |
-| Schema | `V61__multi_repo_staging.sql`, `V62__staging_group_change.sql` and `V63__arch_signing_key.sql` (MySQL and PostgreSQL) |
+| Schema | `V67__multi_repo_staging.sql`, `V68__staging_group_change.sql` and `V69__arch_signing_key.sql` (MySQL and PostgreSQL) |
 | Durable state | `StagingDao`, `JdbcStagingDao`, `staging_session`, `staging_session_repository`, `staging_item`, `staging_promotion` |
 | Lifecycle | `server/staging/StagingService.java` |
 | Internal API | `server/staging/StagingController.java` |

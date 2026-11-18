@@ -1,16 +1,18 @@
 package com.github.klboke.kkrepo.server.staging;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
-import com.github.klboke.kkrepo.persistence.jdbc.api.StagingDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ApiKeyRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.StagingSessionRecord;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
@@ -23,14 +25,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.server.ResponseStatusException;
 
 class StagingCredentialServiceTest {
   private final SecurityDao securityDao = mock(SecurityDao.class);
   private final SecurityManagementService security = mock(SecurityManagementService.class);
-  private final StagingDao stagingDao = mock(StagingDao.class);
   private final StagingCredentialService service =
-      new StagingCredentialService(securityDao, security, stagingDao);
+      new StagingCredentialService(securityDao, security);
 
   @Test
   void issuesAUserOwnedSessionScopedToken() {
@@ -50,16 +53,87 @@ class StagingCredentialServiceTest {
   }
 
   @Test
-  void resolvesAndBindsTheSessionForAStagingToken() {
-    PermissionSubject actor = new PermissionSubject("LOCAL", "alice", java.util.Set.of(), null);
+  void bindsTheLinkedSessionEvenWhenAnExplicitSelectorIsPresent() {
     when(securityDao.findApiKey(9L)).thenReturn(Optional.of(apiKey()));
-    when(stagingDao.findSessionById(7L)).thenReturn(Optional.of(session()));
-    MockHttpServletRequest request = new MockHttpServletRequest("PUT", "/repository/raw-hosted/a");
-    AuthenticatedSubject subject = new AuthenticatedSubject("LOCAL", "alice", "realm", 9L, actor);
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("PUT", "/repository/raw-hosted/a");
+    request.addHeader(StagingService.HEADER, "release-1");
+    request.addParameter(StagingSelector.QUERY_PARAMETER, "release-1");
 
-    assertTrue(service.resolve(request, subject).isPresent());
-    service.bind(request, subject);
+    service.bind(request, subject(9L));
+
+    // The credential wins: an explicit selector cannot re-point a staging token at another
+    // session, and StagingSelector rejects the mismatch before any publication.
     assertEquals("7", request.getAttribute(StagingCredentialService.SESSION_ATTRIBUTE));
+  }
+
+  @Test
+  void bindsAFailClosedMarkerWhenTheTokenHasNoValidSessionScope() {
+    ApiKeyRecord broken = new ApiKeyRecord(
+        9L, StagingCredentialService.DOMAIN, "LOCAL", "alice", "broken", "ACTIVE",
+        "hash", "StagingToke", Map.of("values", List.of("staging:name:release-1")),
+        "encrypted", LocalDateTime.now(), LocalDateTime.now(), null, null);
+    when(securityDao.findApiKey(9L)).thenReturn(Optional.of(broken));
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("PUT", "/repository/raw-hosted/a");
+
+    service.bind(request, subject(9L));
+
+    assertEquals(
+        StagingCredentialService.INVALID_SESSION,
+        request.getAttribute(StagingCredentialService.SESSION_ATTRIBUTE));
+  }
+
+  @Test
+  void ignoresOrdinaryApiKeys() {
+    ApiKeyRecord generic = new ApiKeyRecord(
+        9L, "GenericToken", "LOCAL", "alice", "generic", "ACTIVE",
+        "hash", "GenericT", Map.of("values", List.of("staging:session:7")),
+        "encrypted", LocalDateTime.now(), LocalDateTime.now(), null, null);
+    when(securityDao.findApiKey(9L)).thenReturn(Optional.of(generic));
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("PUT", "/repository/raw-hosted/a");
+
+    service.bind(request, subject(9L));
+
+    assertEquals(null, request.getAttribute(StagingCredentialService.SESSION_ATTRIBUTE));
+  }
+
+  @Test
+  void bindUsesTheClassificationCarriedByTheSubjectWithoutReadingTheKeyRow() {
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("PUT", "/repository/raw-hosted/a");
+
+    service.bind(request, classifiedSubject(Boolean.TRUE, "7"));
+
+    assertEquals("7", request.getAttribute(StagingCredentialService.SESSION_ATTRIBUTE));
+    verify(securityDao, never()).findApiKey(anyLong());
+  }
+
+  @Test
+  void bindFailsClosedWhenACachedSubjectReferencesADeletedKey() {
+    when(securityDao.findApiKey(9L)).thenReturn(Optional.empty());
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("PUT", "/repository/raw-hosted/a");
+
+    // A legacy cache entry (no classification) whose shared row was deleted by a cancel on
+    // another replica must never fall through to the live publication path.
+    service.bind(request, subject(9L));
+
+    assertEquals(
+        StagingCredentialService.INVALID_SESSION,
+        request.getAttribute(StagingCredentialService.SESSION_ATTRIBUTE));
+  }
+
+  @Test
+  void bindIgnoresAnOrdinaryClassifiedSubjectWithoutReadingTheKeyRow() {
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("PUT", "/repository/raw-hosted/a");
+
+    service.bind(request, classifiedSubject(Boolean.FALSE, null));
+
+    assertEquals(null, request.getAttribute(StagingCredentialService.SESSION_ATTRIBUTE));
+    verify(securityDao, never()).findApiKey(anyLong());
   }
 
   @Test
@@ -67,10 +141,93 @@ class StagingCredentialServiceTest {
     StagingSessionRecord session = new StagingSessionRecord(
         7L, "release-1", "OPEN", 2, "LOCAL", "alice", Instant.EPOCH, Instant.EPOCH,
         null, null, Instant.now().plusSeconds(3600), null, Map.of("stagingTokenId", 9));
+    when(securityDao.findApiKey(9L)).thenReturn(Optional.of(apiKey()));
 
     service.revoke(session);
 
     verify(security).deleteApiKey(9L);
+  }
+
+  @Test
+  void refusesToRevokeAKeySelectedThroughUserEditableAttributes() {
+    StagingSessionRecord session = new StagingSessionRecord(
+        7L, "release-1", "OPEN", 2, "LOCAL", "alice", Instant.EPOCH, Instant.EPOCH,
+        null, null, Instant.now().plusSeconds(3600), null, Map.of("stagingTokenId", 999));
+    // Key 999 exists and even belongs to another session of another owner: the PATCHable
+    // attribute must never turn into an arbitrary API-key revocation.
+    when(securityDao.findApiKey(999L)).thenReturn(Optional.of(new ApiKeyRecord(
+        999L, StagingCredentialService.DOMAIN, "LOCAL", "bob", "other session", "ACTIVE",
+        "hash", "StagingToke", Map.of("values", List.of("staging:session:8")),
+        "encrypted", LocalDateTime.now(), LocalDateTime.now(), null, null)));
+
+    service.revoke(session);
+
+    verify(security, never()).deleteApiKey(anyLong());
+  }
+
+  @Test
+  void refusesToRevokeAnOrdinaryApiKeyNamedByTheAttribute() {
+    StagingSessionRecord session = new StagingSessionRecord(
+        7L, "release-1", "OPEN", 2, "LOCAL", "alice", Instant.EPOCH, Instant.EPOCH,
+        null, null, Instant.now().plusSeconds(3600), null, Map.of("stagingTokenId", 9));
+    ApiKeyRecord generic = new ApiKeyRecord(
+        9L, "GenericToken", "LOCAL", "alice", "generic", "ACTIVE",
+        "hash", "GenericT", Map.of("values", List.of("staging:session:7")),
+        "encrypted", LocalDateTime.now(), LocalDateTime.now(), null, null);
+    when(securityDao.findApiKey(9L)).thenReturn(Optional.of(generic));
+
+    service.revoke(session);
+
+    verify(security, never()).deleteApiKey(anyLong());
+  }
+
+  @Test
+  void selectorRejectsCrossSessionSelection() {
+    when(securityDao.findApiKey(9L)).thenReturn(Optional.of(apiKey()));
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("PUT", "/repository/raw-hosted/a");
+    service.bind(request, subject(9L));
+    request.addHeader(StagingService.HEADER, "8");
+
+    ResponseStatusException error = assertThrows(
+        ResponseStatusException.class, () -> StagingSelector.resolve(request));
+
+    assertEquals(HttpStatus.FORBIDDEN, error.getStatusCode());
+  }
+
+  @Test
+  void selectorRejectsContradictoryHeaderAndQuery() {
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("PUT", "/repository/raw-hosted/a");
+    request.addHeader(StagingService.HEADER, "7");
+    request.addParameter(StagingSelector.QUERY_PARAMETER, "8");
+
+    ResponseStatusException error = assertThrows(
+        ResponseStatusException.class, () -> StagingSelector.resolve(request));
+
+    assertEquals(HttpStatus.BAD_REQUEST, error.getStatusCode());
+  }
+
+  @Test
+  void selectorUsesTheCredentialBindingWhenNoExplicitSelectorIsPresent() {
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("PUT", "/repository/raw-hosted/a");
+    request.setAttribute(StagingCredentialService.SESSION_ATTRIBUTE, "7");
+
+    assertEquals("7", StagingSelector.resolve(request));
+  }
+
+  private static AuthenticatedSubject subject(long apiKeyId) {
+    return new AuthenticatedSubject(
+        "LOCAL", "alice", "api-key", apiKeyId,
+        new PermissionSubject("LOCAL", "alice", java.util.Set.of(), null));
+  }
+
+  private static AuthenticatedSubject classifiedSubject(Boolean staging, String session) {
+    return new AuthenticatedSubject(
+        "LOCAL", "alice", "api-key", 9L,
+        new PermissionSubject("LOCAL", "alice", java.util.Set.of(), null),
+        staging, session);
   }
 
   private static ApiKeyRecord apiKey() {

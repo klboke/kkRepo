@@ -17,6 +17,7 @@ import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
+import com.github.klboke.kkrepo.server.staging.StagingSelector;
 import com.github.klboke.kkrepo.server.staging.StagingService;
 import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
 import jakarta.servlet.http.HttpServletRequest;
@@ -200,12 +201,18 @@ public class DockerRegistryController {
     DockerTarget target = target(request);
     RepositoryRuntime runtime = runtime(target, request);
     DockerPath path = target.path();
-    if (path.kind() == DockerPath.Kind.MANIFEST && staging != null
-        && staged(request)) {
-      staging.putRequest(
-          runtime, stagingSession(request), manifestPath(path), request,
-          subject(request), ClientAddress.from(request));
-      return ResponseEntity.status(HttpStatus.CREATED).build();
+    if (path.kind() == DockerPath.Kind.MANIFEST) {
+      String stagingSession = stagingSession(request);
+      if (stagingSession != null) {
+        if (staging == null) {
+          throw new DockerProtocolException(
+              DockerErrorCode.UNSUPPORTED, "Staging is unavailable", 503);
+        }
+        staging.putRequest(
+            runtime, stagingSession, manifestPath(path), request,
+            subject(request), ClientAddress.from(request));
+        return ResponseEntity.status(HttpStatus.CREATED).build();
+      }
     }
     if (path.kind() == DockerPath.Kind.MANIFEST) {
       DockerResponse response = hosted.putManifest(
@@ -215,6 +222,11 @@ public class DockerRegistryController {
       return stream(response, request, false);
     }
     if (path.kind() == DockerPath.Kind.UPLOAD_SESSION) {
+      String stagingSession = stagingSession(request);
+      if (stagingSession != null && staging == null) {
+        throw new DockerProtocolException(
+            DockerErrorCode.UNSUPPORTED, "Staging is unavailable", 503);
+      }
       var result = hosted.completeUpload(
           runtime,
           path.uploadUuid(),
@@ -224,9 +236,9 @@ public class DockerRegistryController {
           parseUploadDigest(digest),
           userId(request),
           ClientAddress.from(request));
-      if (staging != null && staged(request) && result.blobId() != null) {
+      if (stagingSession != null && result.blobId() != null) {
         staging.stageDockerBlob(
-            runtime, stagingSession(request), result.digest().value(), result.blobId(),
+            runtime, stagingSession, result.digest().value(), result.blobId(),
             subject(request), ClientAddress.from(request));
       }
       return ResponseEntity.status(HttpStatus.CREATED)
@@ -243,13 +255,19 @@ public class DockerRegistryController {
     DockerTarget target = target(request);
     RepositoryRuntime runtime = runtime(target, request);
     DockerPath path = target.path();
-    if (path.kind() == DockerPath.Kind.MANIFEST && staging != null
-        && staged(request)) {
-      int deleted = staging.deleteRaw(
-          runtime, stagingSession(request), manifestPath(path), subject(request),
-          ClientAddress.from(request));
-      return ResponseEntity.status(
-          deleted == 0 ? HttpStatus.NOT_FOUND : HttpStatus.ACCEPTED).build();
+    if (path.kind() == DockerPath.Kind.MANIFEST) {
+      String stagingSession = stagingSession(request);
+      if (stagingSession != null) {
+        if (staging == null) {
+          throw new DockerProtocolException(
+              DockerErrorCode.UNSUPPORTED, "Staging is unavailable", 503);
+        }
+        int deleted = staging.deleteRaw(
+            runtime, stagingSession, manifestPath(path), subject(request),
+            ClientAddress.from(request));
+        return ResponseEntity.status(
+            deleted == 0 ? HttpStatus.NOT_FOUND : HttpStatus.ACCEPTED).build();
+      }
     }
     if (path.kind() == DockerPath.Kind.MANIFEST) {
       return stream(hosted.deleteManifest(runtime, path.imageName(), path.reference()), request, false);
@@ -508,12 +526,22 @@ public class DockerRegistryController {
   }
 
   private static boolean staged(HttpServletRequest request) {
-    String value = request.getHeader(StagingService.HEADER);
-    return value != null && !value.isBlank();
+    return stagingSession(request) != null;
   }
 
+  /**
+   * Every selector (header, query parameter, credential binding) must route before the live
+   * writer. A contradictory selector is a protocol error, never a silent live publication.
+   */
   private static String stagingSession(HttpServletRequest request) {
-    return request.getHeader(StagingService.HEADER).trim();
+    try {
+      return StagingSelector.resolve(request);
+    } catch (org.springframework.web.server.ResponseStatusException selectorError) {
+      throw new DockerProtocolException(
+          DockerErrorCode.UNSUPPORTED,
+          selectorError.getReason() == null ? "Invalid staging session" : selectorError.getReason(),
+          selectorError.getStatusCode().value());
+    }
   }
 
   private static String manifestPath(DockerPath path) {

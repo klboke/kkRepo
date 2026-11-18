@@ -37,7 +37,7 @@ class DockerOperationsControllerTest {
     DockerConnectorRuntime connectorRuntime = mock(DockerConnectorRuntime.class);
     DockerTransferLimiter transferLimiter = new DockerTransferLimiter(2, 3);
     Instant refreshedAt = Instant.parse("2026-06-22T10:00:00Z");
-    when(connectorManager.snapshot()).thenReturn(new DockerConnectorManager.Snapshot(
+    when(connectorRuntime.snapshot()).thenReturn(new DockerConnectorManager.Snapshot(
         true,
         Map.of(5001, "docker-hosted"),
         List.of(new DockerConnectorManager.ConnectorStatus(
@@ -53,6 +53,7 @@ class DockerOperationsControllerTest {
         refreshedAt,
         7L));
     when(connectorRuntime.lastError()).thenReturn("");
+    when(connectorRuntime.nodeId()).thenReturn("node-a");
     DockerOperationsController controller = controller(
         connectorManager,
         connectorRuntime,
@@ -96,6 +97,23 @@ class DockerOperationsControllerTest {
     verify(proxyNegativeCache).invalidateRepository(1L);
   }
 
+  @Test
+  void tlsMetadataRequiresDockerAdminAndNeverContainsPrivateKeys() {
+    var bundles = mock(DockerTlsBundles.class);
+    when(bundles.defaultBundle()).thenReturn("registry");
+    when(bundles.statuses()).thenReturn(List.of(new DockerTlsBundles.BundleStatus(
+        "registry", true, "CN=registry", List.of("registry.example"), "2027-01-01T00:00:00Z", "abc", null)));
+    var controller = new DockerOperationsController(bundles, mock(DockerConnectorRuntime.class),
+        new DockerTransferLimiter(0, 0), repositoryDao(List.of()), mock(NexusLikeCacheController.class),
+        mock(AssetMetadataCache.class), mock(ProxyNegativeCache.class),
+        new StubAuthenticationService(Optional.empty()), new StubSecurityService(AccessDecision.allow()));
+    var response = controller.tlsBundles(requestWithSubject(adminSubject()));
+    assertEquals("registry", response.get("defaultBundle"));
+    assertEquals(bundles.statuses(), response.get("bundles"));
+    org.junit.jupiter.api.Assertions.assertThrows(org.springframework.web.server.ResponseStatusException.class,
+        () -> controller.tlsBundles(new MockHttpServletRequest()));
+  }
+
   private static DockerOperationsController controller(
       DockerConnectorManager connectorManager,
       DockerConnectorRuntime connectorRuntime,
@@ -105,7 +123,7 @@ class DockerOperationsControllerTest {
       AssetMetadataCache assetMetadataCache,
       ProxyNegativeCache proxyNegativeCache) {
     return new DockerOperationsController(
-        connectorManager,
+        mock(DockerTlsBundles.class),
         connectorRuntime,
         transferLimiter,
         repositoryDao,

@@ -61,6 +61,9 @@ class RepositoryRecipesTest {
     assertRecipe(recipes, "arch-hosted", RepositoryFormat.ARCH, RepositoryType.HOSTED);
     assertRecipe(recipes, "arch-proxy", RepositoryFormat.ARCH, RepositoryType.PROXY);
     assertRecipe(recipes, "arch-group", RepositoryFormat.ARCH, RepositoryType.GROUP);
+    assertRecipe(recipes, "ohpm-hosted", RepositoryFormat.OHPM, RepositoryType.HOSTED);
+    assertRecipe(recipes, "ohpm-proxy", RepositoryFormat.OHPM, RepositoryType.PROXY);
+    assertRecipe(recipes, "ohpm-group", RepositoryFormat.OHPM, RepositoryType.GROUP);
   }
 
   private static void assertRecipe(

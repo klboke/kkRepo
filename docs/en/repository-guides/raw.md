@@ -79,3 +79,7 @@ means the path already exists and replacement is not allowed.
 - [Raw client recipe](../client-recipes.md#raw)
 - [Compatibility matrix](../compatibility-matrix.md#repository-format-matrix)
 - [HTTP semantics](https://www.rfc-editor.org/rfc/rfc9110)
+
+## Streaming cold downloads
+
+All proxy forms include an opt-in streaming setting. See [behavior and scope](../dev/proxy-streaming-downloads.md) and [measured performance](../dev/proxy-streaming-performance.md).

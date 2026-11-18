@@ -12,7 +12,8 @@ import com.github.klboke.kkrepo.server.http.ConditionalResponses;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.routing.*;
 import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
-import com.github.klboke.kkrepo.server.staging.StagingService;
+import com.github.klboke.kkrepo.server.staging.StagingSelector;
+import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Collection;
@@ -20,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.*;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
@@ -67,9 +69,10 @@ public class GitLfsProtocolHandler implements RepositoryProtocolHandler {
         return json(200, service.verify(context.runtime(), oid, request));
       }
       if (context.method() == HttpMethod.PUT) {
-        String stagingSession = request.getHeader(StagingService.HEADER);
-        if (staging != null && stagingSession != null && !stagingSession.isBlank()) {
-          staging.put(context.runtime(), oid, stagingSession.trim(), request,
+        String stagingSession = stagingSession(request);
+        if (stagingSession != null) {
+          if (staging == null) throw new GitLfsException(503, "Staging is unavailable");
+          staging.put(context.runtime(), oid, stagingSession, request,
               GitLfsAccess.subject(request), com.github.klboke.kkrepo.server.security.ClientAddress.from(request));
         } else {
           service.put(context.runtime(), oid, request);
@@ -141,6 +144,18 @@ public class GitLfsProtocolHandler implements RepositoryProtocolHandler {
         return builder.body((StreamingResponseBody) output -> json.writeValue(output, body));
       }
       return builder.body(body);
+    }
+  }
+
+  /** Every selector (header, query, credential binding) must route before the live writer. */
+  private static String stagingSession(HttpServletRequest request) {
+    try {
+      return StagingSelector.resolve(request);
+    } catch (ResponseStatusException selectorError) {
+      throw new GitLfsException(
+          selectorError.getStatusCode().value(),
+          selectorError.getReason() == null
+              ? "Invalid staging session" : selectorError.getReason());
     }
   }
 

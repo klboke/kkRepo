@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
 import com.github.klboke.kkrepo.server.staging.PathReplayStagingAdapter;
 import com.github.klboke.kkrepo.server.staging.StagingBlobSource;
+import com.github.klboke.kkrepo.server.staging.StagingMetadataSnapshotCache;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -35,11 +36,22 @@ final class YumStagingContentAdapter extends PathReplayStagingAdapter {
 
   private final YumService yumHosted;
   private final StagingDao staging;
+  private final StagingMetadataSnapshotCache metadataSnapshots;
 
   YumStagingContentAdapter(RawHostedService hosted, YumService yumHosted, StagingDao staging) {
+    this(hosted, yumHosted, staging, null);
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired
+  YumStagingContentAdapter(
+      RawHostedService hosted,
+      YumService yumHosted,
+      StagingDao staging,
+      StagingMetadataSnapshotCache metadataSnapshots) {
     super(hosted);
     this.yumHosted = yumHosted;
     this.staging = staging;
+    this.metadataSnapshots = metadataSnapshots;
   }
 
   @Override
@@ -119,6 +131,31 @@ final class YumStagingContentAdapter extends PathReplayStagingAdapter {
     if (!relativePath.startsWith("repodata/")) {
       return Optional.empty();
     }
+    // Repodata is rendered once per session/repository/root revision. Serving a HEAD or the
+    // primary/filelists files afterwards reuses the snapshot instead of re-reading the catalogue
+    // and recompressing every file.
+    java.util.function.Supplier<Optional<StagingMetadataSnapshotCache.Snapshot>> loader =
+        () -> renderMetadata(runtime, sessionId, root);
+    Optional<StagingMetadataSnapshotCache.Snapshot> snapshot = metadataSnapshots == null
+        ? loader.get()
+        : metadataSnapshots.find(
+            new StagingMetadataSnapshotCache.Key(sessionId, runtime.id(), "yum:" + root),
+            loader);
+    if (snapshot.isEmpty()) {
+      return Optional.empty();
+    }
+    StagingMetadataSnapshotCache.File file = snapshot.get().files().get(relativePath);
+    return file == null
+        ? Optional.empty()
+        : Optional.of(bytes(file.body(), file.contentType(), headOnly));
+  }
+
+  /**
+   * Generates every repodata file of a root together so one snapshot covers repomd.xml and the
+   * three metadata payloads.
+   */
+  private Optional<StagingMetadataSnapshotCache.Snapshot> renderMetadata(
+      RepositoryRuntime runtime, long sessionId, String root) {
     List<YumService.RpmAsset> assets = new ArrayList<>();
     for (YumService.RpmAsset asset : yumHosted.liveAssets(runtime)) {
       if (root.equals(YumMetadataDepth.root(asset.path(), runtime.yumRepodataDepth()))) {
@@ -155,17 +192,15 @@ final class YumStagingContentAdapter extends PathReplayStagingAdapter {
         new YumService.RepomdEntry("primary", "repodata/" + primary.fileName(), primary),
         new YumService.RepomdEntry("filelists", "repodata/" + filelists.fileName(), filelists),
         new YumService.RepomdEntry("other", "repodata/" + other.fileName(), other));
-    if ("repodata/repomd.xml".equals(relativePath)) {
-      return Optional.of(bytes(
-          YumService.repomdXml(entries).getBytes(java.nio.charset.StandardCharsets.UTF_8),
-          XML_CONTENT_TYPE, headOnly));
-    }
+    Map<String, StagingMetadataSnapshotCache.File> files = new LinkedHashMap<>();
+    files.put("repodata/repomd.xml", new StagingMetadataSnapshotCache.File(
+        YumService.repomdXml(entries).getBytes(java.nio.charset.StandardCharsets.UTF_8),
+        XML_CONTENT_TYPE));
     for (YumService.RepomdEntry entry : entries) {
-      if (entry.href().equals(relativePath)) {
-        return Optional.of(bytes(entry.file().bytes(), GZIP_CONTENT_TYPE, headOnly));
-      }
+      files.put(entry.href(), new StagingMetadataSnapshotCache.File(
+          entry.file().bytes(), GZIP_CONTENT_TYPE));
     }
-    return Optional.empty();
+    return Optional.of(new StagingMetadataSnapshotCache.Snapshot(files));
   }
 
   @Override

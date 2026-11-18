@@ -802,6 +802,7 @@ class NpmRepositoryBlackBoxCompatibilityTest {
     assumeTrue(config.configured(),
         "Set NEXUS_COMPAT_BASE_URL and KKREPO_COMPAT_BASE_URL to run npm compatibility");
 
+    ProxyStreamingCompatibility.enable(config.nexusPlusProxy().request(""));
     assertReadRepositoryMatches(config.nexusProxy(), config.nexusPlusProxy(), config.readPackage());
   }
 

@@ -92,6 +92,20 @@ public interface StagingDao {
   List<StagingRepositoryRecord> listRepositories(long sessionId);
 
   /**
+   * Loads the repository memberships of several sessions in one query. Listing sessions must use
+   * this instead of calling {@link #listRepositories(long)} per session.
+   */
+  default List<StagingRepositoryRecord> listRepositoriesBySessionIds(Collection<Long> sessionIds) {
+    if (sessionIds == null || sessionIds.isEmpty()) {
+      return List.of();
+    }
+    return sessionIds.stream()
+        .distinct()
+        .flatMap(id -> listRepositories(id).stream())
+        .toList();
+  }
+
+  /**
    * Locks target repository rows in ascending id order, returning only ids that exist.
    *
    * <p>Promotions always acquire repository locks in this order, which keeps concurrent
@@ -106,6 +120,22 @@ public interface StagingDao {
   Optional<StagingItemRecord> lockItem(long itemId);
 
   List<StagingItemRecord> listItems(long sessionId);
+
+  /** Number of staged items in one session, without materializing the rows. */
+  long countItems(long sessionId);
+
+  /**
+   * Counts staged items per session in one grouped query. Sessions without items are absent from
+   * the result. Listing sessions must use this instead of {@link #countItems(long)} per session.
+   */
+  default Map<Long, Long> countItemsBySessionIds(Collection<Long> sessionIds) {
+    if (sessionIds == null || sessionIds.isEmpty()) {
+      return Map.of();
+    }
+    Map<Long, Long> counts = new java.util.LinkedHashMap<>();
+    sessionIds.stream().distinct().forEach(id -> counts.put(id, countItems(id)));
+    return counts;
+  }
 
   List<StagingItemRecord> listItems(long sessionId, String status);
 

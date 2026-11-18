@@ -7,6 +7,7 @@ import java.util.Locale;
 public enum RepositoryFormat {
   MAVEN2,
   NPM,
+  OHPM,
   PYPI,
   CARGO,
   PUB,
