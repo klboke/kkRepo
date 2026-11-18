@@ -47,7 +47,44 @@ public record RepositoryRuntime(
     NtlmCredentials ntlmCredentials,
     int yumRepodataDepth,
     Integer conanManifestMaxEntries,
+    Integer conanManifestMaxBytes,
+    boolean streamingEnabled) {
+  /** Compatibility constructor for callers without progressive proxy delivery. */
+  public RepositoryRuntime(
+    long id,
+    String name,
+    RepositoryFormat format,
+    RepositoryType type,
+    String recipeName,
+    boolean online,
+    Long blobStoreId,
+    String writePolicy,
+    String versionPolicy,
+    String layoutPolicy,
+    boolean strictContentTypeValidation,
+    String proxyRemoteUrl,
+    Integer contentMaxAgeMinutes,
+    Integer metadataMaxAgeMinutes,
+    Boolean autoBlock,
+    String proxyRemoteUsername,
+    String proxyRemotePassword,
+    String proxyRemoteBearerToken,
+    String rawContentDisposition,
+    Boolean dockerConnectorEnabled,
+    Integer dockerConnectorPort,
+    String dockerConnectorPublicUrl,
+    Boolean cargoRequireAuthentication,
+    List<RepositoryRuntime> members,
+    OutboundProxyConfig outboundProxy,
+    Integer minimumReleaseAgeMinutes,
+    Set<String> allowedRedirectHosts,
+    NtlmCredentials ntlmCredentials,
+    int yumRepodataDepth,
+    Integer conanManifestMaxEntries,
     Integer conanManifestMaxBytes) {
+    this(id, name, format, type, recipeName, online, blobStoreId, writePolicy, versionPolicy, layoutPolicy, strictContentTypeValidation, proxyRemoteUrl, contentMaxAgeMinutes, metadataMaxAgeMinutes, autoBlock, proxyRemoteUsername, proxyRemotePassword, proxyRemoteBearerToken, rawContentDisposition, dockerConnectorEnabled, dockerConnectorPort, dockerConnectorPublicUrl, cargoRequireAuthentication, members, outboundProxy, minimumReleaseAgeMinutes, allowedRedirectHosts, ntlmCredentials, yumRepodataDepth, conanManifestMaxEntries, conanManifestMaxBytes, false);
+  }
+
   /** Compatibility constructor for snapshots without Conan manifest overrides. */
   public RepositoryRuntime(
       long id,

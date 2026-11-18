@@ -541,6 +541,39 @@ class AptServiceTest {
     verify(resign.proxyProjection).refreshForResign(proxyRuntime, resignSettings, "stable");
   }
 
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+  void progressivePackagesValidateBeforeCompletionAndProjectOnlyAfterCaching(boolean resign,
+      @org.junit.jupiter.api.io.TempDir java.nio.file.Path directory) throws Exception {
+    var runtime = runtime(RepositoryType.PROXY, "ALLOW", 60);
+    Fixture fixture = new Fixture();
+    var settings = resign ? new AptRepositorySettings.Settings(
+        "stable", "main", List.of("amd64"), false, true, true, null, "kkRepo", "kkRepo")
+        : fixture.proxySettings;
+    when(fixture.repositorySettings.get(runtime)).thenReturn(settings);
+    String path = "pool/d/demo/demo_1.0_amd64.deb";
+    when(fixture.registry.findPackageByPath(runtime.id(), path)).thenReturn(Optional.of(
+        record(runtime, "stable", "main", "demo", "1.0", "amd64", path, "a".repeat(64), 10L, 20L)));
+    var published = new java.util.concurrent.atomic.AtomicBoolean();
+    try (var transfer = new com.github.klboke.kkrepo.server.proxy.ProgressiveResponseFixture(
+        directory, new byte[] {1, 2, 3}, () -> published.set(true))) {
+      org.mockito.Mockito.doAnswer(call -> {
+        assertFalse(published.get(), "validate before publishing the cache");
+        return null;
+      }).when(fixture.proxyProjection).validateDownloadedPackage(runtime, path, transfer.file());
+      when(fixture.proxy.getPinnedAssetFromUrlUnindexed(eq(runtime), eq(path), anyString(), eq(false)))
+          .thenReturn(transfer.response());
+      MavenResponse response = fixture.service.get(runtime, path, false);
+      verify(fixture.proxyProjection, never()).observePassthrough(any(), any(), any());
+      verify(fixture.proxyProjection, never()).verifyAndBindKnownPackage(any(), anyString());
+      assertEquals(3, response.body().readAllBytes().length);
+      assertTrue(published.get());
+      verify(fixture.proxyProjection).validateDownloadedPackage(runtime, path, transfer.file());
+      if (resign) verify(fixture.proxyProjection).verifyAndBindKnownPackage(runtime, path);
+      else verify(fixture.proxyProjection).observePassthrough(eq(runtime), eq(settings), any(AptPath.class));
+    }
+  }
+
   @Test
   void proxiesPackagesUnderDistsUsingTheDecodedCanonicalPath() {
     RepositoryRuntime runtime = runtime(RepositoryType.PROXY, "ALLOW", 60);

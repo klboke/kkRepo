@@ -1300,7 +1300,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
           .headers(notModifiedHeaders(resp))
           .body(null);
     }
-    if (partialFetchAllowed) {
+    if (partialFetchAllowed || com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.rangeAllowed(request)) {
       resp = partialFetch.apply(request, resp);
     }
     HttpHeaders headers = responseHeaders(resp, true);

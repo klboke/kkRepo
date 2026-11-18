@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.swift;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -12,6 +13,7 @@ import java.security.MessageDigest;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -51,6 +53,33 @@ class SwiftArchiveInspectorTest {
       assertEquals("Package@swift-5.9.swift", versionedEntry.filename());
       assertEquals("5.9", versionedEntry.lookupToolsVersion());
       assertEquals("5.9.1", versionedEntry.declaredToolsVersion());
+    } finally {
+      Files.deleteIfExists(inspected.file());
+    }
+  }
+
+  @Test
+  void keepsFilenameLookupVersionsSeparateFromDeclaredMinimumToolsVersions() throws Exception {
+    // apple/swift-protobuf 1.20.1 uses this manifest layout.
+    LinkedHashMap<String, byte[]> entries = new LinkedHashMap<>();
+    entries.put("fixture/Package.swift", manifest("4.2"));
+    entries.put("fixture/Package@swift-5.6.swift", manifest("5.6"));
+    entries.put("fixture/Package@swift-5.7.swift", manifest("5.6"));
+    SwiftArchiveInspector inspector = new SwiftArchiveInspector(1024 * 1024, 1024 * 1024, 20);
+
+    SwiftArchiveInspector.InspectedArchive inspected =
+        inspector.inspect(new ByteArrayInputStream(zip(entries)));
+    try {
+      assertEquals(3, inspected.manifests().size());
+      assertEquals(List.of("", "5.6", "5.7"),
+          inspected.manifests().stream().map(SwiftArchiveInspector.ManifestEntry::lookupToolsVersion)
+              .toList());
+      assertEquals(List.of("4.2", "5.6", "5.6"),
+          inspected.manifests().stream().map(SwiftArchiveInspector.ManifestEntry::declaredToolsVersion)
+              .toList());
+      for (SwiftArchiveInspector.ManifestEntry entry : inspected.manifests()) {
+        assertArrayEquals(entries.get("fixture/" + entry.filename()), entry.bytes());
+      }
     } finally {
       Files.deleteIfExists(inspected.file());
     }
@@ -152,7 +181,7 @@ class SwiftArchiveInspectorTest {
     assertThrows(SwiftExceptions.UnprocessableEntity.class,
         () -> inspector.inspect(new ByteArrayInputStream(zip(Map.of(
             "fixture/Package.swift", manifest("5.9"),
-            "fixture/Package@swift-6.0.swift", manifest("5.9"))))));
+            "fixture/Package@swift-6.0.swift", manifest("invalid"))))));
   }
 
   @Test

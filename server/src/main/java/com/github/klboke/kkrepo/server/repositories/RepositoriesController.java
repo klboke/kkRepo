@@ -370,6 +370,12 @@ public class RepositoriesController {
     return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("message", e.getMessage()));
   }
 
+  @ExceptionHandler(org.springframework.dao.DuplicateKeyException.class)
+  public ResponseEntity<Map<String, String>> handleConflict(org.springframework.dao.DuplicateKeyException e) {
+    return ResponseEntity.status(HttpStatus.CONFLICT)
+        .body(Map.of("message", "Repository name or Docker connector port is already in use"));
+  }
+
   @ExceptionHandler(RepositoryValidationException.class)
   public ResponseEntity<Map<String, String>> handleValidation(RepositoryValidationException e) {
     return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("message", e.getMessage()));

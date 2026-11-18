@@ -130,7 +130,7 @@ public class DockerBlobStore {
     Optional<AssetBlobRecord> reusable = assetDao.findReusableBlobBySha256(
         runtime.blobStoreId(), digest.hex(), size);
     if (reusable.isPresent()) {
-      return persistBlobRecordReuse(runtime, digest, reusable.get(), null, createdBy, createdByIp);
+      return executePersist(() -> persistBlobRecordReuse(runtime, digest, reusable.get(), null, createdBy, createdByIp));
     }
     BlobStorage storage = storage(runtime);
     BlobReference reference = storage.put(
@@ -309,6 +309,7 @@ public class DockerBlobStore {
       String imageName,
       String createdBy,
       String createdByIp) {
+    com.github.klboke.kkrepo.server.proxy.ProxyCachePublication.check(runtime, blobPath(digest));
     Instant now = Instant.now();
     String path = blobPath(digest);
     Optional<AssetRecord> existing = assetDao.findAssetByPath(runtime.id(), path);

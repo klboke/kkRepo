@@ -158,7 +158,9 @@ public class MavenErrorAdvice {
   }
 
   private ResponseEntity<Map<String, Object>> body(HttpStatus status, String message) {
-    return ResponseEntity.status(status).body(Map.of(
+    // This is ordinary JSON, not RFC 9457. Maven 3.10 advertises problem+json and
+    // otherwise misclassifies missing metadata as a fatal transfer failure.
+    return ResponseEntity.status(status).contentType(MediaType.APPLICATION_JSON).body(Map.of(
         "status", status.value(),
         "error", status.getReasonPhrase(),
         "message", message == null ? status.getReasonPhrase() : message));

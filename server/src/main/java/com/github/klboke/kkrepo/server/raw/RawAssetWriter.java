@@ -635,6 +635,7 @@ class RawAssetWriter {
       Path responseFile,
       String browsePath,
       boolean replaceExisting) {
+    com.github.klboke.kkrepo.server.proxy.ProxyCachePublication.check(runtime, path);
     Instant now = Instant.now();
     String contentType = contentTypeHint == null || contentTypeHint.isBlank()
         ? MediaType.APPLICATION_OCTET_STREAM_VALUE

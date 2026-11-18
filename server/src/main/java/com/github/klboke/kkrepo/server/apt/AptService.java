@@ -517,7 +517,11 @@ public class AptService {
     if (path.kind() == AptPath.Kind.BY_HASH || path.kind() == AptPath.Kind.PACKAGE) {
       response.withHeader("Cache-Control", "public, max-age=31536000, immutable");
     }
-    proxyProjection.observePassthrough(runtime, settings, path);
+    if (!com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.onCached(response,
+        file -> proxyProjection.validateDownloadedPackage(runtime, path.normalized(), file),
+        () -> proxyProjection.observePassthrough(runtime, settings, path))) {
+      proxyProjection.observePassthrough(runtime, settings, path);
+    }
     return response;
   }
 
@@ -538,7 +542,11 @@ public class AptService {
           runtime.proxyRemoteUrl(), upstreamPath);
       MavenResponse response = proxy.getPinnedAssetFromUrlUnindexed(
           runtime, path.normalized(), remote, headOnly);
-      proxyProjection.verifyAndBindKnownPackage(runtime, path.normalized());
+      if (!com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.onCached(response,
+          file -> proxyProjection.validateDownloadedPackage(runtime, path.normalized(), file),
+          () -> proxyProjection.verifyAndBindKnownPackage(runtime, path.normalized()))) {
+        proxyProjection.verifyAndBindKnownPackage(runtime, path.normalized());
+      }
       return response.withHeader("Cache-Control", "public, max-age=31536000, immutable");
     }
     String distribution = path.distribution() == null ? settings.distribution() : path.distribution();

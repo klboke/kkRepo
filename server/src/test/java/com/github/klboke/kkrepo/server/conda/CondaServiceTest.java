@@ -58,6 +58,26 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.PlatformTransactionManager;
 
 class CondaServiceTest {
+  @Test
+  void progressiveDownloadRequiresMatchingRepodataSizeAndDigest(
+      @org.junit.jupiter.api.io.TempDir Path directory) throws Exception {
+    byte[] bytes = "conda package".getBytes(StandardCharsets.UTF_8);
+    Path file = Files.write(directory.resolve("package.conda"), bytes);
+    var expected = mock(CondaRegistryDao.PackageRecord.class);
+    when(expected.size()).thenReturn((long) bytes.length);
+    when(expected.sha256()).thenReturn(HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)));
+    CondaService.validateDownloadedPackage(file, expected);
+    when(expected.sha256()).thenReturn("0".repeat(64));
+    assertThrows(java.io.IOException.class, () -> CondaService.validateDownloadedPackage(file, expected));
+    when(expected.sha256()).thenReturn(null);
+    when(expected.md5()).thenReturn(HexFormat.of().formatHex(MessageDigest.getInstance("MD5").digest(bytes)));
+    CondaService.validateDownloadedPackage(file, expected);
+    when(expected.md5()).thenReturn(null);
+    assertThrows(java.io.IOException.class, () -> CondaService.validateDownloadedPackage(file, expected));
+    when(expected.size()).thenReturn((long) bytes.length + 1);
+    assertThrows(java.io.IOException.class, () -> CondaService.validateDownloadedPackage(file, expected));
+  }
+
   private static final String MD5 = "0123456789abcdef0123456789abcdef";
   private static final String SHA_A = "a".repeat(64);
   private static final String SHA_B = "b".repeat(64);
@@ -302,6 +322,31 @@ class CondaServiceTest {
     verify(assets).delete(proxyRuntime, path);
     verify(proxy, never()).getMetadataFromUrlUnindexed(
         eq(proxyRuntime), anyString(), anyString(), anyBoolean());
+  }
+
+  @Test
+  void progressiveKnownPackageValidatesBeforeCacheLookup(
+      @org.junit.jupiter.api.io.TempDir Path directory) throws Exception {
+    service = serviceWithScheduler(mock(CondaProxyInventoryScheduler.class));
+    var runtime = runtime(2, "conda-proxy", RepositoryType.PROXY, "https://repo.example/channels/", List.of());
+    byte[] bytes = "valid".getBytes(StandardCharsets.UTF_8);
+    String digest = sha256(bytes);
+    String filename = "demo-1.0-0.conda", path = "main/linux-64/" + filename;
+    var record = proxyRecord(runtime.id(), filename, sha256(bytes), bytes.length, 3);
+    when(registry.findPackage(runtime.id(), "main", "linux-64", filename)).thenReturn(Optional.of(record));
+    when(registry.findChannelState(runtime.id(), "main", "linux-64")).thenReturn(Optional.of(
+        new CondaRegistryDao.ChannelState(runtime.id(), "main", "linux-64", "inventory",
+            "https://cdn.example/", 3, Instant.now(), Instant.now())));
+    try (var transfer = new com.github.klboke.kkrepo.server.proxy.ProgressiveResponseFixture(directory, bytes,
+        () -> when(assets.blob(runtime, path)).thenReturn(blob(bytes, digest)))) {
+      when(proxy.getPinnedAssetFromUrlWithComponentAtBrowsePath(
+          eq(runtime), eq(path), anyString(), any(), anyString(), eq(false))).thenReturn(transfer.response());
+      MavenResponse response = service.get(runtime, path, false);
+      verify(assets, never()).blob(runtime, path);
+      assertEquals("valid", new String(response.body().readAllBytes(), StandardCharsets.UTF_8));
+      verify(assets).blob(runtime, path);
+      verify(assets, never()).delete(runtime, path);
+    }
   }
 
   @Test

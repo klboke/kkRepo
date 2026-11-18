@@ -3232,6 +3232,7 @@ import json
 import sys
 
 repository, metadata_mode, remote_url = sys.argv[1:]
+import os
 print(json.dumps({
     "name": repository,
     "recipe": "apt-proxy",
@@ -3240,6 +3241,7 @@ print(json.dumps({
     "strictContentTypeValidation": True,
     "proxy": {
         "remoteUrl": remote_url,
+        "streamingEnabled": os.environ.get("KKREPO_COMPAT_PROXY_STREAMING_ENABLED") == "true",
         "contentMaxAgeMinutes": 1440,
         "metadataMaxAgeMinutes": 60,
         "negativeCacheEnabled": True,

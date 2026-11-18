@@ -955,6 +955,18 @@ body {
   padding-bottom: 6px;
 }
 
+.form-grid .checkbox-with-help {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 6px;
+}
+
+.form-grid .checkbox-with-help > .checkbox-field {
+  align-items: center;
+  padding-bottom: 0;
+}
+
 .checkbox-field input {
   width: 16px;
   height: 16px;

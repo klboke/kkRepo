@@ -1,0 +1,107 @@
+{
+  "run_id": "58755638fd",
+  "started_at": "2026-11-15T22:55:19.505838+00:00",
+  "build_label": "f114fdb26cb215b7cae749806fb53f47d1a4e0ca",
+  "client_platform": "macOS-14.7.8-x86_64-i386-64bit",
+  "client_python": "3.10.11",
+  "repeats": 3,
+  "artifact": {
+    "project": "torch",
+    "version": "2.5.1",
+    "filename": "torch-2.5.1-cp311-cp311-manylinux1_x86_64.whl",
+    "size_bytes": 906474467,
+    "sha256": "de5b7d6740c4b636ef4db92be922f0edc425b65ed78c5076c43c42d362a45457",
+    "url": "https://files.pythonhosted.org/packages/d1/35/e8b2daf02ce933e4518e6f5682c72fd0ed66c15910ea1fb4168f442b71c4/torch-2.5.1-cp311-cp311-manylinux1_x86_64.whl",
+    "metadata_url": "https://pypi.org/pypi/torch/2.5.1/json"
+  },
+  "method": {
+    "recipe": "pypi-proxy",
+    "remote_url": "https://pypi.org/",
+    "concurrency": 1,
+    "artificial_throttling": false,
+    "client_socket_timeout_seconds": 1800,
+    "index_prewarmed": true,
+    "unique_store_per_sample": true,
+    "cache_poll_interval_seconds": 0.1
+  },
+  "fixtures": [
+    {
+      "repository": "pypi-real-58755638fd-1-off",
+      "blob_store": "pypi-real-58755638fd-1-off",
+      "prefix": "off/pypi-real-58755638fd-1-off"
+    },
+    {
+      "repository": "pypi-real-58755638fd-1-on",
+      "blob_store": "pypi-real-58755638fd-1-on",
+      "prefix": "off/pypi-real-58755638fd-1-on"
+    }
+  ],
+  "results": [
+    {
+      "trial": 1,
+      "mode": "off",
+      "repository": "pypi-real-58755638fd-1-off",
+      "cold": {
+        "started_at": "2026-11-15T22:55:20.227529+00:00",
+        "status": 200,
+        "bytes": 906474467,
+        "sha256": "de5b7d6740c4b636ef4db92be922f0edc425b65ed78c5076c43c42d362a45457",
+        "header_seconds": 571.0967073123902,
+        "first_body_byte_seconds": 571.0967114102095,
+        "total_seconds": 573.086409682408,
+        "average_mib_per_second": 1.5084660935076468,
+        "etag": "\"2239612c87e7534b68525c5b89527a6015b510e4\""
+      },
+      "warm": {
+        "started_at": "2026-11-15T23:04:53.408995+00:00",
+        "status": 200,
+        "bytes": 906474467,
+        "sha256": "de5b7d6740c4b636ef4db92be922f0edc425b65ed78c5076c43c42d362a45457",
+        "header_seconds": 0.041538018733263016,
+        "first_body_byte_seconds": 0.041541388258337975,
+        "total_seconds": 2.1525045689195395,
+        "average_mib_per_second": 401.6165308721624,
+        "etag": "\"2239612c87e7534b68525c5b89527a6015b510e4\""
+      },
+      "cache_visible_after_client_seconds": 0.10537747666239738,
+      "cold_upstream_requests": 2.0,
+      "warm_upstream_requests": 0.0
+    }
+  ],
+  "failed_on_sample": {
+    "mode": "on",
+    "outcome": "server_mvc_async_total_timeout",
+    "server_timeout_seconds": 600,
+    "received_body_bytes": 741959347,
+    "expected_body_bytes": 906474467,
+    "partial_sha256": "ba8d9b978af7820c1c7833f704cc473e30efae15cbab862f08b014b5c3aec5cb",
+    "cache_published": false,
+    "server_log_at": "2026-11-16T07:14:57.065+08:00",
+    "build_label": "f114fdb26cb215b7cae749806fb53f47d1a4e0ca",
+    "last_client_progress_elapsed_seconds": 631.0352039728314,
+    "timing_limitations": "The original runner did not persist first-body/header timings after the length check failed."
+  },
+  "initial_off_probe": {
+    "mode": "off",
+    "outcome": "client_timeout_waiting_for_response_headers",
+    "client_socket_timeout_seconds": 600,
+    "first_body_byte_wait_lower_bound_seconds": 600,
+    "received_body_bytes": 0,
+    "completed_download": false,
+    "note": "Initial probe. Retry uses a 1800-second client socket timeout and a fresh repository/store; excluded from completed-download statistics.",
+    "cache_published_at": "2026-11-15T22:55:01.390Z",
+    "cache_size_bytes": 906474467,
+    "server_logged_client_abort": true,
+    "run_id": "8225acea7d",
+    "fixtures": [
+      {
+        "repository": "pypi-real-8225acea7d-1-off",
+        "blob_store": "pypi-real-8225acea7d-1-off",
+        "prefix": "off/pypi-real-8225acea7d-1-off"
+      }
+    ],
+    "started_at": "2026-11-15T22:44:07.835710+00:00",
+    "build_label": "f114fdb26cb215b7cae749806fb53f47d1a4e0ca"
+  },
+  "jar_sha256": "9d4d527dd3e82dfc6d8abea34b5ee9b6ace9f176f7bcd34291f4a836e00d340b"
+}

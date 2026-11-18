@@ -65,7 +65,7 @@ class OhpmRepositoryBlackBoxCompatibilityTest {
     String upstream = System.getenv().getOrDefault("OHPM_COMPAT_UPSTREAM_BASE_URL", base).replaceAll("/+$", "");
     proxy = repository("proxy-" + suffix, "ohpm-proxy", Map.of("proxy", Map.of(
         "remoteUrl", upstream + "/repository/" + hosted + "/", "remoteBearerToken", token,
-        "metadataMaxAgeMinutes", 60, "contentMaxAgeMinutes", 60, "autoBlock", false)));
+        "metadataMaxAgeMinutes", 60, "contentMaxAgeMinutes", 60, "autoBlock", false, "streamingEnabled", true)));
     group = repository("group-" + suffix, "ohpm-group", Map.of("group", Map.of("memberNames", List.of(hosted, proxy))));
   }
 

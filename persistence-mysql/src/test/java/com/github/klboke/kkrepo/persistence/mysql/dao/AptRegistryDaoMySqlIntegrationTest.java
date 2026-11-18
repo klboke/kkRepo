@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.persistence.mysql.dao;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -14,6 +15,46 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 class AptRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
+  @Test
+  void persistsProxyPackagesWithoutLegacyChecksums() {
+    long repositoryId = insertRepository("apt-sha256-only", "apt");
+    AptRegistryDao dao = stores().aptRegistry();
+    Instant now = Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
+    AptRegistryDao.PackageRecord legacy = inTransaction(() -> dao.savePackage(
+        packageRecord(repositoryId, "amd64", "0.9", AptRegistryDao.SOURCE_PROXY, now)));
+    // Recreate V64's constraints on populated data and apply the checked-in upgrade.
+    jdbc().execute("""
+        ALTER TABLE apt_package_record
+          MODIFY COLUMN md5 CHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+          MODIFY COLUMN sha1 CHAR(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+        """);
+    new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator(
+        new org.springframework.core.io.ClassPathResource(
+            "db/migration/mysql/V65__apt_optional_legacy_checksums.sql"))
+        .execute(jdbc().getDataSource());
+    assertEquals(legacy, dao.findPackageByPath(repositoryId, legacy.path()).orElseThrow());
+    AptRegistryDao.PackageRecord candidate = new AptRegistryDao.PackageRecord(
+        null, repositoryId, "stable", "main", "amd64", "sha256-only", "1.0", null,
+        "sha256-only_1.0_amd64.deb", "pool/s/sha256-only/sha256-only_1.0_amd64.deb",
+        Map.of("Package", "sha256-only", "Version", "1.0", "Architecture", "amd64"),
+        null, null, "c".repeat(64), 12, null, null, AptRegistryDao.SOURCE_PROXY,
+        0, now, now, now);
+    AptRegistryDao.PackageRecord saved = inTransaction(() -> dao.savePackage(candidate));
+    AptRegistryDao.PackageRecord loaded = dao.findPackageByPath(repositoryId, saved.path()).orElseThrow();
+    assertNull(loaded.md5());
+    assertNull(loaded.sha1());
+    assertEquals(candidate.sha256(), loaded.sha256());
+
+    // The update path must preserve the same absence instead of fabricating weak digests.
+    inTransaction(() -> dao.savePackage(loaded));
+    assertNull(dao.findPackageByPath(repositoryId, saved.path()).orElseThrow().md5());
+    assertEquals("NO", jdbc().queryForObject("""
+        SELECT is_nullable FROM information_schema.columns
+        WHERE table_name = 'apt_package_record' AND column_name = 'sha256'
+          AND table_schema = DATABASE()
+        """, String.class));
+  }
+
   @Test
   void pendingQueueStreamingCursorAndSnapshotRetentionAreBounded() {
     long repositoryId = insertRepository("apt-worker", "apt");

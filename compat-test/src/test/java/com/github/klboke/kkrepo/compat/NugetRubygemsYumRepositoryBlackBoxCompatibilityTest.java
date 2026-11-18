@@ -382,6 +382,33 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
   }
 
   @Test
+  void streamingYumProxyPreservesRpmBytesAndHeadersAgainstNexus() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeLiveEndpoints(config);
+    String fixture = config.yumFixtureUrl();
+    String remote = fixture.substring(0, fixture.lastIndexOf('/') + 1);
+    String path = fileName(fixture);
+    String repository = "yum-stream-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+    String reference = """
+        {"name":"%s","online":true,"storage":{"blobStoreName":"default","strictContentTypeValidation":true},
+         "proxy":{"remoteUrl":"%s","contentMaxAge":1440,"metadataMaxAge":1440},
+         "negativeCache":{"enabled":false,"timeToLive":1},"httpClient":{"blocked":false,"autoBlock":false}}
+        """.formatted(repository, remote);
+    saveNexusRepository(config, "/service/rest/v1/repositories/yum/proxy", repository, reference);
+    saveKkRepoProxy(config, repository, "yum-proxy", remote);
+    ProxyStreamingCompatibility.enable(config.nexusPlus.repository(repository, ""));
+    byte[] expected = download(fixture);
+    Exchange coldReference = get(config.nexus.repository(repository, path));
+    Exchange coldCandidate = get(config.nexusPlus.repository(repository, path));
+    assertBodyMatches("streaming Yum RPM", coldReference, coldCandidate, expected);
+    assertEquals(sha256(expected), sha256(coldCandidate.body()));
+    assertPackageHeadMatches("streaming Yum RPM HEAD",
+        head(config.nexus.repository(repository, path)), head(config.nexusPlus.repository(repository, path)));
+    assertBodyMatches("repeated Yum RPM", get(config.nexus.repository(repository, path)),
+        get(config.nexusPlus.repository(repository, path)), expected);
+  }
+
+  @Test
   void yumHostedSubdirectoryRepodataMatchesNexusWhenWriteEnabled() throws Exception {
     CompatConfig config = CompatConfig.load();
     assumeLiveEndpoints(config);
@@ -920,7 +947,7 @@ class NugetRubygemsYumRepositoryBlackBoxCompatibilityTest {
   private static void saveKkRepoProxy(
       CompatConfig config, String repository, String recipe, String remoteUrl) throws Exception {
     String body = """
-        {"name":"%s","recipe":"%s","online":true,"blobStoreName":"default","strictContentTypeValidation":true,"proxy":{"remoteUrl":"%s","contentMaxAgeMinutes":1440,"metadataMaxAgeMinutes":1440,"autoBlock":false}}
+        {"name":"%s","recipe":"%s","online":true,"blobStoreName":"default","strictContentTypeValidation":true,"proxy":{"streamingEnabled":true,"remoteUrl":"%s","contentMaxAgeMinutes":1440,"metadataMaxAgeMinutes":1440,"autoBlock":false}}
         """.formatted(repository, recipe, remoteUrl);
     saveKkRepoRepository(config, repository, body);
   }
