@@ -31,6 +31,7 @@ import com.github.klboke.kkrepo.server.repositories.RepositoryService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.InputStream;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
@@ -51,6 +52,7 @@ import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
@@ -59,10 +61,11 @@ import org.springframework.web.server.ResponseStatusException;
  * Multi-repository staging sessions.
  *
  * <p>Staged content never enters the live asset tables. Blobs are content-addressed and retained
- * through {@code blob_reference} with owner type {@value #BLOB_OWNER_TYPE}; promotion links those
- * blobs into the live repository in one database transaction. Session state, revisions, items and
- * promotion reports live only in the shared database, so every replica observes the same session
- * and promotion progress.
+ * through {@code blob_reference} with owner type {@value #BLOB_OWNER_TYPE}; promotion prepares the
+ * format-specific payloads without holding a lock, then links those blobs into the live repository
+ * in one short fenced database transaction. Session state, revisions, items and promotion reports
+ * live only in the shared database, so every replica observes the same session and promotion
+ * progress.
  *
  * <p>This first delivery supports {@link RepositoryFormat#RAW} hosted repositories. The session,
  * item, manifest and promotion model is format-neutral so later protocol modules can stage their
@@ -73,6 +76,10 @@ public class StagingService {
   public static final String HEADER = "X-KkRepo-Staging";
   public static final String TOKEN_HEADER = "X-KkRepo-Staging-Token";
   public static final String BLOB_OWNER_TYPE = "staging_item";
+  /** Temporary ownership held between storing an upload body and recording its staging item. */
+  public static final String UPLOAD_BLOB_OWNER_TYPE = "staging_upload";
+  private static final java.security.SecureRandom UPLOAD_OWNERS =
+      new java.security.SecureRandom();
   private static final Pattern SESSION_NAME =
       Pattern.compile("^[A-Za-z0-9][A-Za-z0-9_.-]{0,199}$");
   private static final Set<String> ACTIVE_FOR_READ = Set.of(
@@ -97,6 +104,7 @@ public class StagingService {
   private final Map<RepositoryFormat, StagingContentAdapter> contentAdapters;
   private final int maxItems;
   private StagingCredentialService credentials;
+  private com.github.klboke.kkrepo.server.cache.VersionWatermark watermark;
 
   public StagingService(
       StagingDao staging,
@@ -134,6 +142,11 @@ public class StagingService {
   @org.springframework.beans.factory.annotation.Autowired(required = false)
   void setStagingCredentialService(StagingCredentialService credentials) {
     this.credentials = credentials;
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  void setVersionWatermark(com.github.klboke.kkrepo.server.cache.VersionWatermark watermark) {
+    this.watermark = watermark;
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -179,14 +192,17 @@ public class StagingService {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Staging expiry must be in the future");
     }
     Map<String, Object> sessionAttributes = new LinkedHashMap<>();
-    if (request.attributes() != null) {
-      request.attributes().forEach((key, value) -> {
-        if (key != null && value != null && !isReservedAttribute(key)) {
-          sessionAttributes.put(key, value);
-        }
-      });
-    }
-    if (Boolean.TRUE.equals(request.approvalRequired())) {
+    Map<String, Object> requestedAttributes =
+        request.attributes() == null ? Map.of() : request.attributes();
+    requestedAttributes.forEach((key, value) -> {
+      if (key != null && value != null && !isReservedAttribute(key)) {
+        sessionAttributes.put(key, value);
+      }
+    });
+    // The approval policy may be requested through the top-level field or its historical
+    // attribute form; both mean "require a second pair of eyes", never "drop the requirement".
+    if (Boolean.TRUE.equals(request.approvalRequired())
+        || Boolean.TRUE.equals(requestedAttributes.get("approvalRequired"))) {
       sessionAttributes.put("approvalRequired", true);
     }
     long id = staging.insertSession(new StagingSessionRecord(
@@ -246,10 +262,18 @@ public class StagingService {
     return issued;
   }
 
-  @Transactional
+  /**
+   * Runs preflight and promotion back to back without an ambient transaction.
+   *
+   * <p>Both phases open their own short transactions. Wrapping them in one transaction - the
+   * default {@code REQUIRED} propagation of the {@link TransactionTemplate} would then join it -
+   * keeps preflight's session and blob locks for the whole payload preparation, which is exactly
+   * the latency the phased promotion is meant to remove.
+   */
+  @Transactional(propagation = Propagation.NOT_SUPPORTED)
   public StagingReport commit(
       long sessionId, PermissionSubject actor, String remoteAddr) {
-    preflight(sessionId, actor, remoteAddr);
+    transaction.executeWithoutResult(status -> preflight(sessionId, actor, remoteAddr));
     return promote(sessionId, actor, remoteAddr);
   }
 
@@ -304,13 +328,8 @@ public class StagingService {
     Instant expiresAt = request == null || request.expiresAt() == null
         ? session.expiresAt()
         : request.expiresAt();
-    Map<String, Object> attributes = request == null || request.attributes() == null
-        ? session.attributes()
-        : request.attributes();
-    if (attributes.keySet().stream().anyMatch(StagingService::isReservedAttribute)) {
-      throw new ResponseStatusException(
-          HttpStatus.BAD_REQUEST, "Approval attributes are managed by the approve endpoint");
-    }
+    Map<String, Object> attributes = mergedAttributes(
+        session, request == null ? null : request.attributes());
     if (expiresAt != null && !expiresAt.isAfter(Instant.now())) {
       throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Staging expiry must be in the future");
     }
@@ -428,9 +447,30 @@ public class StagingService {
   @Transactional(readOnly = true)
   public List<StagingSessionView> list(String state, int limit, PermissionSubject actor) {
     boolean admin = isAdmin(actor);
-    return staging.listSessions(state, limit).stream()
+    List<StagingSessionRecord> sessions = staging.listSessions(state, limit).stream()
         .filter(session -> admin || owns(session, actor))
-        .map(this::view)
+        .toList();
+    if (sessions.isEmpty()) {
+      return List.of();
+    }
+    // The admin page lists up to a hundred sessions. Resolving memberships, repository names and
+    // item counters per session turns that page into hundreds of queries, so all three lookups are
+    // grouped into one query each.
+    List<Long> sessionIds = sessions.stream().map(StagingSessionRecord::id).toList();
+    Map<Long, List<StagingRepositoryRecord>> memberships =
+        staging.listRepositoriesBySessionIds(sessionIds).stream()
+            .collect(java.util.stream.Collectors.groupingBy(
+                StagingRepositoryRecord::sessionId,
+                java.util.stream.Collectors.toList()));
+    Map<Long, String> repositoryNames = repositoryNames(
+        memberships.values().stream().flatMap(List::stream).toList());
+    Map<Long, Long> itemCounts = staging.countItemsBySessionIds(sessionIds);
+    return sessions.stream()
+        .map(session -> sessionView(
+            session,
+            memberships.getOrDefault(session.id(), List.of()),
+            repositoryNames,
+            itemCounts.getOrDefault(session.id(), 0L)))
         .toList();
   }
 
@@ -517,6 +557,7 @@ public class StagingService {
         inverseItem(newSessionId, original, row, actor);
       }
     }
+    markMetadataChanged(newSessionId);
     StagingSessionRecord created = staging.findSessionById(newSessionId).orElseThrow();
     audit(actor, remoteAddr, "staging-compensate", original,
         "created", Map.of("compensationSessionId", newSessionId));
@@ -691,6 +732,7 @@ public class StagingService {
             HttpStatus.NOT_FOUND, "Staged item not found"));
     releaseItemBlob(item);
     staging.deleteItem(item.id());
+    markMetadataChanged(session.id());
     audit(actor, remoteAddr, "staging-delete", session,
         "unstaged", Map.of(
             "repositoryId", item.repositoryId(),
@@ -838,11 +880,24 @@ public class StagingService {
       long sessionId, PermissionSubject actor, String remoteAddr) {
     java.util.concurrent.atomic.AtomicReference<PromotionAttempt> attempt =
         new java.util.concurrent.atomic.AtomicReference<>();
+    Map<Long, Path> prepared = Map.of();
     try {
+      // Phase 1 - short transaction: describe the promotion and validate that it may run. Nothing
+      // is written, so a replica that dies after this point leaves a retryable PREFLIGHTED session.
+      PromotionAttempt planned = transaction.execute(
+          status -> planPromotion(sessionId, actor));
+      attempt.set(planned);
+      // Phase 2 - no session/repository lock: materialize the payloads and do the per-format work
+      // that needs object-store reads or payload parsing. Only the tiny hand-off below holds the
+      // target repository locks.
+      prepared = preparePromotionPayloads(planned);
+      Map<Long, Path> payloads = prepared;
+      // Phase 3 - one fenced transaction: move to PROMOTING and link the catalogue rows. PROMOTING
+      // is never committed on its own, so an interrupted apply rolls back to PREFLIGHTED instead of
+      // stranding the release in a state no operation accepts.
       return transaction.execute(status -> {
         PromotionAttempt started = beginPromotion(sessionId, actor, remoteAddr);
-        attempt.set(started);
-        StagingReport report = applyPromotion(started, actor, remoteAddr);
+        StagingReport report = applyPromotion(started, payloads, actor, remoteAddr);
         if (credentials != null) {
           staging.findSessionById(sessionId).ifPresent(credentials::revoke);
         }
@@ -851,11 +906,53 @@ public class StagingService {
     } catch (RuntimeException error) {
       recordPromotionFailure(attempt.get(), error, actor, remoteAddr);
       throw error;
+    } finally {
+      prepared.values().forEach(com.github.klboke.kkrepo.server.blob.TempBlobFiles::deleteQuietly);
     }
   }
 
-  private PromotionAttempt beginPromotion(
-      long sessionId, PermissionSubject actor, String remoteAddr) {
+  /**
+   * Materializes every staged payload that a format cannot publish directly from its blob record.
+   *
+   * <p>Reading the object store and parsing the payload here keeps those latencies out of the
+   * transaction that locks the session and every target repository. The prepared files are handed
+   * to the format adapters during the short apply phase and deleted afterwards.
+   */
+  private Map<Long, Path> preparePromotionPayloads(PromotionAttempt attempt) {
+    Map<Long, Path> prepared = new LinkedHashMap<>();
+    try {
+      for (StagingItemRecord item : attempt.items()) {
+        if (item.action().equals(StagingDao.ITEM_DELETE)) {
+          continue;
+        }
+        StagingContentAdapter adapter = adapterFor(item.format());
+        if (adapter != null && !adapter.materializeBeforePromotion()) {
+          continue;
+        }
+        AssetBlobRecord blob = assets.findBlobById(item.assetBlobId())
+            .orElseThrow(() -> new ResponseStatusException(
+                HttpStatus.CONFLICT,
+                "Staged blob is no longer available for " + item.logicalPath()));
+        requireBlobMatchesItem(blob, item);
+        prepared.put(item.id(), blobSource(blob).materialize(".staged"));
+      }
+      return prepared;
+    } catch (RuntimeException error) {
+      prepared.values().forEach(
+          com.github.klboke.kkrepo.server.blob.TempBlobFiles::deleteQuietly);
+      throw error;
+    }
+  }
+
+  /**
+   * Validates that the session may be promoted and captures the immutable promotion plan.
+   *
+   * <p>This phase writes nothing. It runs before the payloads are materialized, so the database is
+   * never left with a PROMOTING session whose payload was never prepared. {@link #beginPromotion}
+   * repeats the state and manifest checks inside the transaction that applies the promotion, so a
+   * concurrent change is still rejected.
+   */
+  private PromotionAttempt planPromotion(long sessionId, PermissionSubject actor) {
     StagingSessionRecord session = lockOwnedSession(sessionId, actor);
     requireNotExpired(session);
     requireApproved(session);
@@ -877,6 +974,16 @@ public class StagingService {
       throw new ResponseStatusException(
           HttpStatus.CONFLICT, "Staging manifest changed after preflight; run preflight again");
     }
+    return new PromotionAttempt(
+        session, items, groups, promotion.id(), manifest, promotion.report(), Instant.now());
+  }
+
+  private PromotionAttempt beginPromotion(
+      long sessionId, PermissionSubject actor, String remoteAddr) {
+    PromotionAttempt plan = planPromotion(sessionId, actor);
+    StagingSessionRecord session = plan.session();
+    List<StagingItemRecord> items = plan.items();
+    List<StagingGroupChangeRecord> groups = plan.groups();
     List<ItemValidation> validations = validate(session, items);
     List<ItemValidation> conflicts = new ArrayList<>(validations.stream()
         .filter(validation -> validation.status().equals(StagingDao.ITEM_CONFLICT))
@@ -894,19 +1001,25 @@ public class StagingService {
     Instant now = Instant.now();
     if (!staging.transitionSession(
         session.id(), session.revision(), Set.of(StagingDao.SESSION_PREFLIGHTED),
-        StagingDao.SESSION_PROMOTING, null, null, promotion.id())) {
+        StagingDao.SESSION_PROMOTING, null, null, plan.promotionId())) {
       throw new ResponseStatusException(
           HttpStatus.CONFLICT, "Staging session changed concurrently; retry");
     }
     staging.updatePromotion(
-        promotion.id(), StagingDao.PROMOTION_RUNNING, manifest, promotion.report(), now, null);
+        plan.promotionId(), StagingDao.PROMOTION_RUNNING, plan.manifestSha256(),
+        plan.preflightReport(), now, null);
     audit(actor, remoteAddr, "staging-promote-start", session,
-        "running", Map.of("promotionId", promotion.id(), "manifestSha256", manifest));
-    return new PromotionAttempt(session, items, groups, promotion.id(), manifest, now);
+        "running", Map.of("promotionId", plan.promotionId(),
+            "manifestSha256", plan.manifestSha256()));
+    return new PromotionAttempt(session, items, groups, plan.promotionId(),
+        plan.manifestSha256(), plan.preflightReport(), now);
   }
 
   private StagingReport applyPromotion(
-      PromotionAttempt attempt, PermissionSubject actor, String remoteAddr) {
+      PromotionAttempt attempt,
+      Map<Long, Path> preparedPayloads,
+      PermissionSubject actor,
+      String remoteAddr) {
     StagingSessionRecord session = staging.lockSession(attempt.session().id())
         .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Staging session not found"));
     if (!session.state().equals(StagingDao.SESSION_PROMOTING)) {
@@ -965,7 +1078,7 @@ public class StagingService {
           item.repositoryId(), item.logicalPath());
       AssetBlobRecord previousBlob = previous.isEmpty() || previous.get().assetBlobId() == null
           ? null : assets.findBlobById(previous.get().assetBlobId()).orElse(null);
-      String result = applyItem(runtime, item, actor);
+      String result = applyItem(runtime, item, preparedPayloads.get(item.id()), actor);
       blobReferences.releaseOwner(BLOB_OWNER_TYPE, item.id());
       staging.updateItemStatus(item.id(), StagingDao.ITEM_PROMOTED);
       Map<String, Object> row = new LinkedHashMap<>();
@@ -1016,7 +1129,10 @@ public class StagingService {
   }
 
   private String applyItem(
-      RepositoryRuntime runtime, StagingItemRecord item, PermissionSubject actor) {
+      RepositoryRuntime runtime,
+      StagingItemRecord item,
+      Path preparedPayload,
+      PermissionSubject actor) {
     String createdBy = actorUserId(actor);
     StagingContentAdapter adapter = adapterFor(item.format());
     if (item.action().equals(StagingDao.ITEM_DELETE)) {
@@ -1031,7 +1147,7 @@ public class StagingService {
     requireBlobMatchesItem(blob, item);
     if (adapter != null) {
       Optional<String> promoted = adapter.promote(
-          runtime, item, blobSource(blob), actorUserId(actor), "staging");
+          runtime, item, blob, preparedSource(preparedPayload, blob), actorUserId(actor), "staging");
       if (promoted.isPresent()) {
         return promoted.get();
       }
@@ -1258,7 +1374,6 @@ public class StagingService {
   public record StagedContent(StagingItemRecord item, AssetBlobRecord blob) {
   }
 
-  @Transactional
   public StagingWriteResult putRaw(
       RepositoryRuntime runtime,
       String sessionKey,
@@ -1267,21 +1382,21 @@ public class StagingService {
       String contentType,
       PermissionSubject actor,
       String remoteAddr) {
-    StagingSessionRecord session = lockSessionByKey(sessionKey);
+    StagingSessionRecord session = findSessionByKey(sessionKey, false);
     requireSessionWritable(session, runtime, actor);
     StagingContentAdapter adapter = adapterFor(runtime.format());
     if (adapter == null && runtime.format() != RepositoryFormat.RAW) {
       throw new MavenExceptions.MethodNotAllowed(
           "Staging writes are not supported for " + runtime.format().id() + " repositories");
     }
+    requireItemBudgetAtAdmission(session, runtime, adapter, rawPath);
     StagingContentAdapter.StagedUpload upload = adapter == null
         ? stageRaw(runtime, rawPath, body, contentType, actorUserId(actor), remoteAddr)
         : adapter.stage(runtime, rawPath, body, contentType, actorUserId(actor), remoteAddr);
-    return persistStagedUpload(session, runtime, upload, actor, remoteAddr);
+    return persistUploadedContent(sessionKey, runtime, upload, actor, remoteAddr);
   }
 
   /** Request-aware staging entry point used for multipart publication endpoints. */
-  @Transactional
   public StagingWriteResult putRequest(
       RepositoryRuntime runtime,
       String sessionKey,
@@ -1289,9 +1404,10 @@ public class StagingService {
       HttpServletRequest request,
       PermissionSubject actor,
       String remoteAddr) throws java.io.IOException {
-    StagingSessionRecord session = lockSessionByKey(sessionKey);
+    StagingSessionRecord session = findSessionByKey(sessionKey, false);
     requireSessionWritable(session, runtime, actor);
     StagingContentAdapter adapter = adapterFor(runtime.format());
+    requireItemBudgetAtAdmission(session, runtime, adapter, rawPath);
     StagingContentAdapter.StagedUpload upload;
     if (adapter == null) {
       if (runtime.format() != RepositoryFormat.RAW) {
@@ -1308,7 +1424,53 @@ public class StagingService {
           .orElseGet(() -> stageAdapterStream(
               adapter, runtime, rawPath, request, actorUserId(actor), remoteAddr));
     }
-    return persistStagedUpload(session, runtime, upload, actor, remoteAddr);
+    return persistUploadedContent(sessionKey, runtime, upload, actor, remoteAddr);
+  }
+
+  /**
+   * Persists an upload whose body has already been received and stored outside any session
+   * transaction.
+   *
+   * <p>Holding the session row lock (and a pooled JDBC connection) while a slow client streams its
+   * body serializes every upload of the session and can exhaust the pool under object-store
+   * latency. The lock is therefore only taken for the row update. A temporary blob reference keeps
+   * the freshly stored blob alive between the two transactions and is handed over to the staging
+   * item inside the locked transaction: a failure leaves either a durable item reference or a blob
+   * that the normal garbage collector can reclaim.
+   */
+  private StagingWriteResult persistUploadedContent(
+      String sessionKey,
+      RepositoryRuntime runtime,
+      StagingContentAdapter.StagedUpload upload,
+      PermissionSubject actor,
+      String remoteAddr) {
+    long uploadOwner = nextUploadOwner();
+    if (upload.blob() == null || upload.blob().id() == null
+        || !blobReferences.retain(UPLOAD_BLOB_OWNER_TYPE, uploadOwner, upload.blob().id())) {
+      throw new ResponseStatusException(
+          HttpStatus.CONFLICT, "Staged blob is no longer available; retry the upload");
+    }
+    boolean handedOver = false;
+    try {
+      StagingWriteResult result = transaction.execute(status -> {
+        StagingSessionRecord locked = lockSessionByKey(sessionKey);
+        requireSessionWritable(locked, runtime, actor);
+        StagingWriteResult written = persistStagedUpload(locked, runtime, upload, actor, remoteAddr);
+        blobReferences.release(UPLOAD_BLOB_OWNER_TYPE, uploadOwner, upload.blob().id());
+        return written;
+      });
+      handedOver = true;
+      return result;
+    } finally {
+      if (!handedOver) {
+        blobReferences.release(UPLOAD_BLOB_OWNER_TYPE, uploadOwner, upload.blob().id());
+      }
+    }
+  }
+
+  private static long nextUploadOwner() {
+    // The owner id only has to be unique among concurrent uploads on all replicas.
+    return UPLOAD_OWNERS.nextLong() & Long.MAX_VALUE;
   }
 
   private StagingContentAdapter.StagedUpload stageAdapterStream(
@@ -1324,6 +1486,54 @@ public class StagingService {
     } catch (java.io.IOException error) {
       throw new java.io.UncheckedIOException(error);
     }
+  }
+
+  /**
+   * Rejects an upload that would add a new item to a full session before its body is received.
+   *
+   * <p>The authoritative check stays inside the locked transaction; this one only avoids streaming
+   * and storing a payload that is going to be rejected. A path that cannot be normalized from the
+   * request (multipart formats) is left to the locked check.
+   */
+  private void requireItemBudgetAtAdmission(
+      StagingSessionRecord session,
+      RepositoryRuntime runtime,
+      StagingContentAdapter adapter,
+      String rawPath) {
+    if (rawPath == null || staging.countItems(session.id()) < maxItems) {
+      return;
+    }
+    Optional<String> path = adapter == null
+        ? Optional.of(RawHostedService.normalizeAssetPath(rawPath))
+        : adapter.normalizePath(rawPath);
+    if (path.isEmpty()) {
+      return;
+    }
+    if (staging.findItem(session.id(), runtime.id(), PersistenceHashes.pathHash(path.get())).isEmpty()) {
+      throw itemBudgetExceeded();
+    }
+  }
+
+  private ResponseStatusException itemBudgetExceeded() {
+    return new ResponseStatusException(
+        HttpStatus.CONFLICT,
+        "Staging session reached the configured limit of " + maxItems + " items");
+  }
+
+  /**
+   * Advances the durable revision of the rendered staging metadata for this session.
+   *
+   * <p>Yum and APT serve generated metadata from a node-local snapshot; sibling replicas discard
+   * theirs after the watermark poll TTL. The bump joins the durable item mutation, so a rolled-back
+   * item write never invalidates a snapshot that is still correct.
+   */
+  private void markMetadataChanged(long sessionId) {
+    if (watermark == null) {
+      return;
+    }
+    String name = StagingMetadataSnapshotCache.versionName(sessionId);
+    com.github.klboke.kkrepo.server.cache.CacheInvalidation.watermarkBeforeCommit(
+        name, () -> watermark.bump(name));
   }
 
   private StagingContentAdapter.StagedUpload stageRaw(
@@ -1411,6 +1621,9 @@ public class StagingService {
     attributes.put("stagedBy", actorUserId(actor));
     Optional<StagingItemRecord> existing = staging.findItem(
         session.id(), runtime.id(), PersistenceHashes.pathHash(path));
+    if (existing.isEmpty() && staging.countItems(session.id()) >= maxItems) {
+      throw itemBudgetExceeded();
+    }
     String action = live.isPresent()
         ? StagingDao.ITEM_REPLACE
         : StagingDao.ITEM_ADD;
@@ -1460,6 +1673,7 @@ public class StagingService {
       throw new ResponseStatusException(
           HttpStatus.CONFLICT, "Staged blob is no longer available; retry the upload");
     }
+    markMetadataChanged(session.id());
     audit(actor, remoteAddr, "staging-write", session,
         "staged", Map.of(
             "repository", runtime.name(),
@@ -1498,6 +1712,7 @@ public class StagingService {
     if (live.isEmpty() && existing.isPresent()) {
       releaseItemBlob(existing.get());
       staging.deleteItem(existing.get().id());
+      markMetadataChanged(session.id());
       audit(actor, remoteAddr, "staging-delete", session,
           "unstaged", Map.of("repository", runtime.name(), "path", path));
       return 1;
@@ -1538,6 +1753,7 @@ public class StagingService {
       releaseItemBlob(existing.get());
       staging.updateItem(withId(candidate, itemId));
     }
+    markMetadataChanged(session.id());
     audit(actor, remoteAddr, "staging-delete", session,
         "staged-delete", Map.of("repository", runtime.name(), "path", path));
     return 1;
@@ -1812,13 +2028,40 @@ public class StagingService {
   // ---------------------------------------------------------------------------------------------
 
   private StagingSessionView view(StagingSessionRecord session) {
-    List<StagingRepositoryView> repositoryViews = staging.listRepositories(session.id()).stream()
+    List<StagingRepositoryRecord> memberships = staging.listRepositories(session.id());
+    return sessionView(
+        session,
+        memberships,
+        repositoryNames(memberships),
+        staging.countItems(session.id()));
+  }
+
+  private Map<Long, String> repositoryNames(List<StagingRepositoryRecord> memberships) {
+    if (memberships.isEmpty()) {
+      return Map.of();
+    }
+    return repositories.findByIds(memberships.stream()
+            .map(StagingRepositoryRecord::repositoryId)
+            .distinct()
+            .toList())
+        .stream()
+        .collect(java.util.stream.Collectors.toMap(
+            RepositoryRecord::id, RepositoryRecord::name, (left, right) -> left));
+  }
+
+  private static StagingSessionView sessionView(
+      StagingSessionRecord session,
+      List<StagingRepositoryRecord> memberships,
+      Map<Long, String> repositoryNames,
+      long itemCount) {
+    List<StagingRepositoryView> repositoryViews = memberships.stream()
         .map(repo -> new StagingRepositoryView(
             repo.repositoryId(),
-            repositories.findById(repo.repositoryId()).map(RepositoryRecord::name).orElse(null),
+            repositoryNames.get(repo.repositoryId()),
             repo.format() == null ? null : repo.format().id()))
         .toList();
-    long itemCount = staging.listItems(session.id()).size();
+    // Counters are aggregated in the database: listing every item just to call size() would
+    // materialize up to max-items rows per session for each admin list request.
     return new StagingSessionView(session, repositoryViews, itemCount);
   }
 
@@ -2016,6 +2259,20 @@ public class StagingService {
         .orElseThrow(() -> new MavenExceptions.MavenNotFoundException(blob.objectKey()));
   }
 
+  /** Serves a payload materialized before the promotion transaction, or the staged blob. */
+  private StagingBlobSource preparedSource(Path prepared, AssetBlobRecord blob) {
+    if (prepared == null) {
+      return blobSource(blob);
+    }
+    return () -> {
+      try {
+        return java.nio.file.Files.newInputStream(prepared);
+      } catch (java.io.IOException error) {
+        throw new java.io.UncheckedIOException(error);
+      }
+    };
+  }
+
   private void releaseItemBlob(StagingItemRecord item) {    if (item.id() != null && item.assetBlobId() != null) {
       blobReferences.releaseOwner(BLOB_OWNER_TYPE, item.id());
     }
@@ -2090,7 +2347,44 @@ public class StagingService {
   private static boolean isReservedAttribute(String key) {
     return "approvedBySource".equals(key)
         || "approvedByUserId".equals(key)
-        || "approvedAt".equals(key);
+        || "approvedAt".equals(key)
+        || "approvalRequired".equals(key)
+        || StagingCredentialService.TOKEN_ID_ATTRIBUTE.equals(key)
+        || StagingCredentialService.TOKEN_ISSUED_AT_ATTRIBUTE.equals(key);
+  }
+
+  /**
+   * Applies a metadata replacement while preserving every server-owned attribute.
+   *
+   * <p>{@code stagingTokenId} identifies the session credential and {@code approvalRequired} plus
+   * the approval proof drive the four-eyes gate. They must survive a {@code PATCH {}} and a partial
+   * metadata replacement, and a client may not forge or weaken them explicitly.
+   */
+  private static Map<String, Object> mergedAttributes(
+      StagingSessionRecord session, Map<String, Object> replacement) {
+    Map<String, Object> existing =
+        session.attributes() == null ? Map.of() : session.attributes();
+    if (replacement == null) {
+      return existing;
+    }
+    if (replacement.keySet().stream().anyMatch(
+        key -> key != null && isReservedAttribute(key))) {
+      throw new ResponseStatusException(
+          HttpStatus.BAD_REQUEST,
+          "Approval and credential attributes are managed by kkRepo");
+    }
+    Map<String, Object> merged = new LinkedHashMap<>();
+    existing.forEach((key, value) -> {
+      if (key != null && value != null && isReservedAttribute(key)) {
+        merged.put(key, value);
+      }
+    });
+    replacement.forEach((key, value) -> {
+      if (key != null && value != null && !isReservedAttribute(key)) {
+        merged.put(key, value);
+      }
+    });
+    return merged;
   }
 
   private static String sha256Hex(String value) {
@@ -2290,6 +2584,7 @@ public class StagingService {
       List<StagingGroupChangeRecord> groups,
       long promotionId,
       String manifestSha256,
+      Map<String, Object> preflightReport,
       Instant startedAt) {
   }
 }

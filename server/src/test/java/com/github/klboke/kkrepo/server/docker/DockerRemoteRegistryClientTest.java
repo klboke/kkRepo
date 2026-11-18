@@ -45,6 +45,51 @@ import org.junit.jupiter.api.Test;
 
 class DockerRemoteRegistryClientTest {
   @Test
+  void rangeAndIfRangeSurviveRegistryRedirectAndBearerAuthentication() throws Exception {
+    try (TestRegistry registry = TestRegistry.start()) {
+      List<String> ranges = new ArrayList<>();
+      List<String> validators = new ArrayList<>();
+      registry.server.createContext("/v2/library/test/blobs/sha256:abc", exchange -> {
+        ranges.add(exchange.getRequestHeaders().getFirst("Range"));
+        validators.add(exchange.getRequestHeaders().getFirst("If-Range"));
+        exchange.getResponseHeaders().set("Location", registry.baseUrl + "/layer");
+        exchange.sendResponseHeaders(307, -1);
+        exchange.close();
+      });
+      registry.server.createContext("/layer", exchange -> {
+        ranges.add(exchange.getRequestHeaders().getFirst("Range"));
+        validators.add(exchange.getRequestHeaders().getFirst("If-Range"));
+        if (!"Bearer scoped-token".equals(exchange.getRequestHeaders().getFirst("Authorization"))) {
+          exchange.getResponseHeaders().set("WWW-Authenticate", "Bearer realm=\"" + registry.baseUrl
+              + "/token\",service=\"registry\",scope=\"repository:library/test:pull\"");
+          exchange.sendResponseHeaders(401, -1);
+        } else {
+          exchange.getResponseHeaders().set("Content-Range", "bytes 2-4/5");
+          exchange.sendResponseHeaders(206, 3);
+          exchange.getResponseBody().write("yer".getBytes(StandardCharsets.UTF_8));
+        }
+        exchange.close();
+      });
+      registry.server.createContext("/token", exchange -> {
+        byte[] token = "{\"token\":\"scoped-token\",\"expires_in\":300}".getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("Content-Type", "application/json");
+        exchange.sendResponseHeaders(200, token.length);
+        exchange.getResponseBody().write(token);
+        exchange.close();
+      });
+      try (var result = client().get(runtime(registry.baseUrl, "robot", "secret"),
+          "library/test/blobs/sha256:abc", null, "application/octet-stream",
+          new HttpRemoteFetcher.ByteRange("bytes=2-", "\"layer-v1\""))) {
+        assertEquals(206, result.status());
+        assertEquals("bytes 2-4/5", result.header("Content-Range"));
+        assertEquals("yer", new String(result.body().readAllBytes(), StandardCharsets.UTF_8));
+      }
+      assertEquals(List.of("bytes=2-", "bytes=2-", "bytes=2-"), ranges);
+      assertEquals(List.of("\"layer-v1\"", "\"layer-v1\"", "\"layer-v1\""), validators);
+    }
+  }
+
+  @Test
   void publicHttpsRedirectStreamsUnlistedCdnWithoutRegistryCredentials() throws Exception {
     var policy = mock(OutboundRequestPolicy.class);
     when(policy.resolvePublicHttpsTarget(anyString(), anyString())).thenAnswer(invocation -> {

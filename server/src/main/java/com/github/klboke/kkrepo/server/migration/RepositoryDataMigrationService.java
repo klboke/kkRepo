@@ -555,8 +555,14 @@ class RepositoryDataMigrationService {
   private static List<String> requestedScope(
       List<String> repositories,
       List<String> backupProxyRepositories) {
+    List<String> requestedHosted = normalizeNames(repositories);
+    // An empty hosted selection means all hosted repositories, even when proxy backups are added.
+    // sourceRepositories still limits proxy jobs to the explicitly requested backup repositories.
+    if (requestedHosted.isEmpty()) {
+      return List.of();
+    }
     LinkedHashSet<String> scope = new LinkedHashSet<>();
-    scope.addAll(normalizeNames(repositories));
+    scope.addAll(requestedHosted);
     scope.addAll(normalizeNames(backupProxyRepositories));
     return List.copyOf(scope);
   }

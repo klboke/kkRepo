@@ -330,6 +330,7 @@ public class NpmAssetWriter {
       Path responseFile,
       boolean indexBrowseNode,
       NpmMinimumReleaseAge.ReleaseIndex releaseIndex) {
+    com.github.klboke.kkrepo.server.proxy.ProxyCachePublication.check(runtime, path);
     Instant now = Instant.now();
     BlobReference ref = upload.reference();
     Digests digests = upload.digests();

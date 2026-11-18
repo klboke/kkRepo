@@ -451,7 +451,8 @@ public class RepositoryRuntimeRegistry {
         record.format() == com.github.klboke.kkrepo.core.RepositoryFormat.YUM
             ? com.github.klboke.kkrepo.server.yum.YumMetadataDepth.read(record.attributes()) : 0,
         conan == null ? null : conan.manifestMaxEntries(),
-        conan == null ? null : conan.manifestMaxBytes());
+        conan == null ? null : conan.manifestMaxBytes(),
+        proxyRaw instanceof Map<?, ?> proxyMap && Boolean.TRUE.equals(asBool(proxyMap.get("streamingEnabled"))));
   }
 
   private static com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig readOutboundProxy(Map<?, ?> proxyMap) {

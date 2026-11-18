@@ -2,7 +2,6 @@ package com.github.klboke.kkrepo.server.staging;
 
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
-import com.github.klboke.kkrepo.persistence.jdbc.api.StagingDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ApiKeyRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.StagingSessionRecord;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
@@ -14,7 +13,10 @@ import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -25,25 +27,33 @@ import org.springframework.web.server.ResponseStatusException;
  * <p>The token is a normal API key owned by the session creator, so authorization still uses the
  * creator's roles. Its scopes bind every repository request to the staging session, while
  * expiry/revocation are enforced by the shared API-key table and session lifecycle.
+ *
+ * <p>The binding is enforced centrally: every authentication boundary calls {@link #bind}, which
+ * always records the session carried by the token scopes — even when the session is stale, belongs
+ * to another user, or the client also sent an explicit selector. {@link StagingSelector} rejects an
+ * explicit selector that contradicts that binding, and a malformed token scope is bound to {@value
+ * #INVALID_SESSION} so the request fails at the staging service instead of silently publishing to
+ * the live repository.
  */
 @Service
 public class StagingCredentialService {
+  private static final Logger log = LoggerFactory.getLogger(StagingCredentialService.class);
   public static final String DOMAIN = "StagingToken";
   public static final String SESSION_ATTRIBUTE =
       StagingCredentialService.class.getName() + ".session";
-  private static final String SCOPE_SESSION = "staging:session:";
+  /** Fail-closed marker bound when a staging credential carries no usable session scope. */
+  public static final String INVALID_SESSION = "invalid";
+  public static final String TOKEN_ID_ATTRIBUTE = "stagingTokenId";
+  public static final String TOKEN_ISSUED_AT_ATTRIBUTE = "stagingTokenIssuedAt";
 
   private final SecurityDao security;
   private final SecurityManagementService securityManagement;
-  private final StagingDao staging;
 
   public StagingCredentialService(
       SecurityDao security,
-      SecurityManagementService securityManagement,
-      StagingDao staging) {
+      SecurityManagementService securityManagement) {
     this.security = security;
     this.securityManagement = securityManagement;
-    this.staging = staging;
   }
 
   public IssuedCredential issue(StagingSessionRecord session, PermissionSubject actor) {
@@ -60,7 +70,7 @@ public class StagingCredentialService {
             "Staging session " + session.name(),
             "ACTIVE",
             List.of(
-                SCOPE_SESSION + session.id(),
+                StagingScopes.SESSION_PREFIX + session.id(),
                 "staging:name:" + session.name(),
                 "staging:owner:" + actor.source() + ":" + actor.userId()),
             expiry(session),
@@ -69,46 +79,67 @@ public class StagingCredentialService {
     return new IssuedCredential(created.token(), created.apiKey().id());
   }
 
-  public Optional<StagingSessionRecord> resolve(
-      HttpServletRequest request, AuthenticatedSubject subject) {
-    String explicit = request.getHeader(StagingService.HEADER);
-    if (explicit != null && !explicit.isBlank()) {
-      return Optional.empty();
+  /**
+   * Binds the session carried by a staging credential to the request.
+   *
+   * <p>The credential class travels with the subject, so a cache hit still binds the session after
+   * the shared API-key row disappeared (cancel/rotation on another replica). A subject written by
+   * an older replica has no classification and is resolved from the shared row; if that row is
+   * already gone the request is bound to {@value #INVALID_SESSION}, which the staging service turns
+   * into a 404 instead of falling back to live content. Non-staging credentials are ignored.
+   */
+  public void bind(HttpServletRequest request, AuthenticatedSubject subject) {
+    if (request == null || subject == null || subject.apiKeyId() == null) {
+      return;
     }
-    if (request.getParameter("stagingSession") != null
-        && !request.getParameter("stagingSession").isBlank()) {
-      return Optional.empty();
-    }
-    if (subject == null || subject.apiKeyId() == null) {
-      return Optional.empty();
+    if (subject.hasStagingClassification()) {
+      if (subject.isStagingToken()) {
+        request.setAttribute(SESSION_ATTRIBUTE, sessionOrInvalid(subject.stagingSession()));
+      }
+      return;
     }
     Optional<ApiKeyRecord> key = security.findApiKey(subject.apiKeyId());
-    if (key.isEmpty() || !DOMAIN.equals(key.get().domain())) {
-      return Optional.empty();
+    if (key.isEmpty()) {
+      request.setAttribute(SESSION_ATTRIBUTE, INVALID_SESSION);
+      return;
     }
-    Optional<Long> sessionId = sessionId(key.get());
-    if (sessionId.isEmpty()) return Optional.empty();
-    Optional<StagingSessionRecord> session = staging.findSessionById(sessionId.get());
-    if (session.isEmpty()) return Optional.empty();
-    StagingSessionRecord found = session.get();
-    if (!java.util.Objects.equals(found.ownerSource(), subject.source())
-        || !java.util.Objects.equals(found.ownerUserId(), subject.userId())) {
-      return Optional.empty();
+    if (!StagingScopes.isStagingToken(key.get())) {
+      return;
     }
-    return Optional.of(found);
+    request.setAttribute(
+        SESSION_ATTRIBUTE,
+        StagingScopes.sessionId(key.get())
+            .map(String::valueOf)
+            .orElse(INVALID_SESSION));
   }
 
-  public void bind(HttpServletRequest request, AuthenticatedSubject subject) {
-    resolve(request, subject).ifPresent(session ->
-        request.setAttribute(SESSION_ATTRIBUTE, String.valueOf(session.id())));
+  private static String sessionOrInvalid(String session) {
+    return session == null || session.isBlank() ? INVALID_SESSION : session;
   }
 
+  /**
+   * Revokes the API key recorded by the server when the session was created.
+   *
+   * <p>Session attributes are user-editable through {@code PATCH /sessions/{id}}, so the stored id
+   * is only trusted after the key is proven to be a staging key owned by this session's owner and
+   * scoped to this very session. Anything else is left untouched.
+   */
   public void revoke(StagingSessionRecord session) {
     Object value = session.attributes() == null
-        ? null : session.attributes().get("stagingTokenId");
-    if (!(value instanceof Number number)) return;
+        ? null : session.attributes().get(TOKEN_ID_ATTRIBUTE);
+    if (!(value instanceof Number number)) {
+      return;
+    }
     long id = number.longValue();
-    if (id <= 0) return;
+    if (id <= 0) {
+      return;
+    }
+    Optional<ApiKeyRecord> key = security.findApiKey(id);
+    if (key.isEmpty() || !ownedBy(key.get(), session) || !scopedTo(key.get(), session.id())) {
+      log.debug("Ignoring staging token {} for session {}: not a credential of this session",
+          id, session.id());
+      return;
+    }
     try {
       securityManagement.deleteApiKey(id);
     } catch (RuntimeException ignored) {
@@ -120,9 +151,19 @@ public class StagingCredentialService {
       StagingSessionRecord session, IssuedCredential credential) {
     Map<String, Object> attributes = new LinkedHashMap<>(
         session.attributes() == null ? Map.of() : session.attributes());
-    attributes.put("stagingTokenId", credential.apiKeyId());
-    attributes.put("stagingTokenIssuedAt", java.time.Instant.now().toString());
+    attributes.put(TOKEN_ID_ATTRIBUTE, credential.apiKeyId());
+    attributes.put(TOKEN_ISSUED_AT_ATTRIBUTE, java.time.Instant.now().toString());
     return attributes;
+  }
+
+  private static boolean ownedBy(ApiKeyRecord key, StagingSessionRecord session) {
+    return StagingScopes.isStagingToken(key)
+        && Objects.equals(key.ownerSource(), session.ownerSource())
+        && Objects.equals(key.ownerUserId(), session.ownerUserId());
+  }
+
+  private static boolean scopedTo(ApiKeyRecord key, long sessionId) {
+    return StagingScopes.sessionId(key).map(id -> id == sessionId).orElse(false);
   }
 
   private static LocalDateTime expiry(StagingSessionRecord session) {
@@ -132,23 +173,6 @@ public class StagingCredentialService {
     } catch (java.time.DateTimeException overflow) {
       return null;
     }
-  }
-
-  private static Optional<Long> sessionId(ApiKeyRecord key) {
-    Object scopes = key.scopes() == null ? null : key.scopes().get("values");
-    if (!(scopes instanceof Iterable<?> values)) return Optional.empty();
-    for (Object value : values) {
-      if (value == null) continue;
-      String text = value.toString();
-      if (!text.startsWith(SCOPE_SESSION)) continue;
-      try {
-        long id = Long.parseLong(text.substring(SCOPE_SESSION.length()));
-        if (id > 0) return Optional.of(id);
-      } catch (NumberFormatException ignored) {
-        return Optional.empty();
-      }
-    }
-    return Optional.empty();
   }
 
   public record IssuedCredential(String token, Long apiKeyId) {

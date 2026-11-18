@@ -3,8 +3,12 @@ package com.github.klboke.kkrepo.server.security;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -12,6 +16,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.OhpmLoginDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ApiKeyRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityAnonymousConfigRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRealmRecord;
@@ -37,6 +42,7 @@ import java.security.interfaces.RSAPublicKey;
 import java.security.spec.ECGenParameterSpec;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
@@ -321,6 +327,55 @@ class SecurityAuthenticationServiceTest {
   }
 
   @Test
+  void signedLoginTokensAreFreshOhpmOnlyAndCannotPopulateGenericAuthenticationCache() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.user(user(1L, "Local", "publisher", NEXUS_SHIRO1_ADMIN123));
+    var keys = mock(OhpmLoginDao.class);
+    var binding = new OhpmLoginDao.Key("publisher-id", 1L, "Local", "publisher", "ACTIVE",
+        "public-key", "fingerprint", true, Instant.now());
+    when(keys.findKey("publisher-id")).thenReturn(Optional.of(binding));
+    var cache = new com.github.klboke.kkrepo.server.support.InMemorySharedCache();
+    var service = new SecurityAuthenticationService(dao, OBJECT_MAPPER,
+        "X-Nexus-Plus-Token", "nx-anonymous", cache, OutboundRequestPolicy.allowPrivateForTests(),
+        transportFactory, new ApiKeyAuthCache(cache, true, 60, 5),
+        new BasicAuthCache(cache, true, 60, 5), null);
+    service.configureOhpmLoginTokens(new OhpmLoginTokenPolicy(keys, true));
+    var token = new ApiKeyRecord(20L, OhpmLoginTokenPolicy.DOMAIN, "Local", "publisher", "Signed login", "ACTIVE",
+        SecurityHashing.sha256("login-material"), OhpmLoginTokenPolicy.DOMAIN,
+        Map.of("ohpmPublishId", "publisher-id", "ohpmFingerprint", "fingerprint"), "{}",
+        null, null, LocalDateTime.now(ZoneOffset.UTC).plusMinutes(5), null);
+    dao.apiKey(token);
+    var raw = request(Map.of("Authorization", "OhpmLogin.login-material"));
+    var bearer = request(Map.of("Authorization", "Bearer OhpmLogin.login-material"));
+    assertTrue(service.authenticateOhpmFresh(raw).isPresent());
+    assertTrue(service.authenticate(bearer).isEmpty());
+    assertTrue(service.authenticateFresh(bearer).isEmpty());
+    assertTrue(service.authenticate(request(Map.of("X-Nexus-Plus-Token", "OhpmLogin.login-material"))).isEmpty());
+    assertTrue(service.authenticate(request(Map.of("Authorization", "Bearer login-material"))).isEmpty());
+
+    when(keys.findKey("publisher-id")).thenReturn(Optional.of(new OhpmLoginDao.Key(
+        binding.publishId(), 1L, "Local", "publisher", "ACTIVE", "public-key", "fingerprint", false, Instant.now())));
+    assertTrue(service.authenticateOhpmFresh(raw).isEmpty());
+    when(keys.findKey("publisher-id")).thenReturn(Optional.of(binding));
+    assertTrue(service.authenticateOhpmFresh(raw).isPresent());
+    service.configureOhpmLoginTokens(new OhpmLoginTokenPolicy(keys, false));
+    assertTrue(service.authenticateOhpmFresh(raw).isEmpty());
+    service.configureOhpmLoginTokens(new OhpmLoginTokenPolicy(keys, true));
+    dao.apiKey(new ApiKeyRecord(token.id(), token.domain(), token.ownerSource(), token.ownerUserId(), token.displayName(),
+        token.status(), token.apiKeyHash(), token.tokenPrefix(), token.scopes(), token.encryptedPayload(),
+        token.createdAt(), token.updatedAt(), LocalDateTime.now(ZoneOffset.UTC).minusSeconds(1), token.lastUsedAt()));
+    assertTrue(service.authenticateOhpmFresh(raw).isEmpty());
+    assertTrue(service.authenticate(bearer).isEmpty());
+    for (String domain : List.of("ohpmlogin", "OHPmLogin")) {
+      dao.apiKey(new ApiKeyRecord(21L, domain, "Local", "publisher", "Signed login", "ACTIVE",
+          SecurityHashing.sha256(domain), domain, token.scopes(), "{}",
+          null, null, LocalDateTime.now(ZoneOffset.UTC).plusMinutes(5), null));
+      assertTrue(service.authenticateOhpmFresh(request(Map.of("Authorization", domain + "." + domain))).isEmpty());
+      assertTrue(service.authenticate(request(Map.of("Authorization", "Bearer " + domain + "." + domain))).isEmpty());
+    }
+  }
+
+  @Test
   void authenticatesGenericTokenWithDomainPrefixedBearerToken() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.user(user(1L, "Local", "ci-bot", NEXUS_SHIRO1_ADMIN123));
@@ -357,6 +412,14 @@ class SecurityAuthenticationServiceTest {
     assertTrue(ansible29.isPresent());
     assertEquals("ci-bot", ansible29.get().userId());
     assertEquals(20L, ansible29.get().apiKeyId());
+
+    Optional<AuthenticatedSubject> ohpm = service.authenticateOhpmFresh(request(Map.of(
+        "Authorization", "GenericToken.generic-secret")));
+    assertTrue(ohpm.isPresent());
+    assertEquals("ci-bot", ohpm.get().userId());
+    assertEquals(20L, ohpm.get().apiKeyId());
+    assertTrue(service.authenticateOhpmFresh(request(Map.of(
+        "Authorization", "GenericToken.invalid"))).isEmpty());
   }
 
   @Test
@@ -612,6 +675,145 @@ class SecurityAuthenticationServiceTest {
     assertTrue(authenticated.isPresent());
     assertEquals("admin", authenticated.get().userId());
     assertEquals("local", authenticated.get().realmId());
+  }
+
+  @Test
+  void stagingTokenCannotAuthenticateManagementEndpoints() {
+    FakeSecurityDao dao = stagingTokenDao();
+    SecurityAuthenticationService service = service(dao);
+
+    Optional<AuthenticatedSubject> authenticated = service.authenticate(request(
+        Map.of("Authorization", "Bearer StagingToken.secret"),
+        null,
+        "/internal/security/api-keys/current"));
+
+    // A staging credential must never reach an endpoint that mints an ordinary API key.
+    assertFalse(authenticated.isPresent());
+  }
+
+  @Test
+  void stagingTokenFromTheAuthCacheStillCannotReachManagementEndpoints() {
+    FakeSecurityDao dao = stagingTokenDao();
+    ApiKeyAuthCache cache = mock(ApiKeyAuthCache.class);
+    com.github.klboke.kkrepo.auth.PermissionSubject permissions =
+        new com.github.klboke.kkrepo.auth.PermissionSubject("Local", "alice", Set.of(), null);
+    when(cache.find(anyString(), any())).thenReturn(
+        Optional.of(new AuthenticatedSubject("Local", "alice", "api-key", 9L, permissions)));
+    SecurityAuthenticationService service = new SecurityAuthenticationService(
+        dao,
+        new ObjectMapper(),
+        "X-Nexus-Plus-Token",
+        null,
+        null,
+        OutboundRequestPolicy.allowPrivateForTests(),
+        transportFactory,
+        cache,
+        null,
+        null);
+
+    Optional<AuthenticatedSubject> management = service.authenticate(request(
+        Map.of("Authorization", "Bearer StagingToken.secret"),
+        null,
+        "/internal/security/api-keys/current"));
+    Optional<AuthenticatedSubject> content = service.authenticate(request(
+        Map.of("Authorization", "Bearer StagingToken.secret"),
+        null,
+        "/repository/raw-hosted/docs/a.txt"));
+
+    // The cache stores the subject, not the API-key domain: the restriction must run after a hit.
+    assertFalse(management.isPresent());
+    assertEquals(9L, content.orElseThrow().apiKeyId());
+  }
+
+  @Test
+  void stagingTokenStillAuthenticatesRepositoryContent() {
+    FakeSecurityDao dao = stagingTokenDao();
+    SecurityAuthenticationService service = service(dao);
+
+    Optional<AuthenticatedSubject> repository = service.authenticate(request(
+        Map.of("Authorization", "Bearer StagingToken.secret"),
+        null,
+        "/repository/raw-hosted/docs/a.txt"));
+    Optional<AuthenticatedSubject> docker = service.authenticate(request(
+        Map.of("Authorization", "Bearer StagingToken.secret"),
+        null,
+        "/v2/docker-hosted/library/alpine/manifests/latest"));
+    Optional<AuthenticatedSubject> dockerToken = service.authenticate(request(
+        Map.of("Authorization", "Bearer StagingToken.secret"),
+        null,
+        "/service/rest/v1/docker/token"));
+
+    assertEquals(9L, repository.orElseThrow().apiKeyId());
+    assertEquals(9L, docker.orElseThrow().apiKeyId());
+    assertEquals(9L, dockerToken.orElseThrow().apiKeyId());
+    // The subject carries the session scope so a cache hit binds it even without the shared row.
+    assertTrue(repository.orElseThrow().isStagingToken());
+    assertEquals("7", repository.orElseThrow().stagingSession());
+  }
+
+  @Test
+  void deletedStagingKeyFromAStaleReplicaCacheCannotAuthenticateManagementEndpoints() {
+    FakeSecurityDao dao = stagingTokenDao();
+    dao.removeApiKey(9L); // cancel/rotation on replica A deleted the shared row
+    ApiKeyAuthCache cache = mock(ApiKeyAuthCache.class);
+    com.github.klboke.kkrepo.auth.PermissionSubject permissions =
+        new com.github.klboke.kkrepo.auth.PermissionSubject("Local", "alice", Set.of(), null);
+    // Replica B cached the resolved subject before the row was deleted; the entry predates the
+    // staging classification and therefore only carries the owner identity and the key id.
+    when(cache.find(anyString(), any())).thenReturn(
+        Optional.of(new AuthenticatedSubject("Local", "alice", "api-key", 9L, permissions)));
+    SecurityAuthenticationService service = new SecurityAuthenticationService(
+        dao, new ObjectMapper(), "X-Nexus-Plus-Token", null, null,
+        OutboundRequestPolicy.allowPrivateForTests(), transportFactory, cache, null, null);
+
+    Optional<AuthenticatedSubject> management = service.authenticate(request(
+        Map.of("Authorization", "Bearer StagingToken.secret"),
+        null,
+        "/internal/security/api-keys/current"));
+
+    // Losing the shared row must never widen a cached subject into the owner's ordinary rights.
+    assertFalse(management.isPresent());
+  }
+
+  @Test
+  void cachedStagingCredentialFailsClosedOnceItsSharedRowIsGone() {
+    FakeSecurityDao dao = stagingTokenDao();
+    dao.removeApiKey(9L);
+    ApiKeyAuthCache cache = mock(ApiKeyAuthCache.class);
+    com.github.klboke.kkrepo.auth.PermissionSubject permissions =
+        new com.github.klboke.kkrepo.auth.PermissionSubject("Local", "alice", Set.of(), null);
+    when(cache.find(anyString(), any())).thenReturn(Optional.of(new AuthenticatedSubject(
+        "Local", "alice", "api-key", 9L, permissions, Boolean.TRUE, "7")));
+    SecurityAuthenticationService service = new SecurityAuthenticationService(
+        dao, new ObjectMapper(), "X-Nexus-Plus-Token", null, null,
+        OutboundRequestPolicy.allowPrivateForTests(), transportFactory, cache, null, null);
+
+    Optional<AuthenticatedSubject> content = service.authenticate(request(
+        Map.of("Authorization", "Bearer StagingToken.secret"),
+        null,
+        "/repository/raw-hosted/docs/a.txt"));
+
+    // A staging subject hit in the cache is revalidated against the shared row before it acts,
+    // so revocation on another replica is effective on every replica, not only on the one that
+    // performed the eviction.
+    assertFalse(content.isPresent());
+    verify(cache).evict("StagingToken.secret");
+  }
+
+  @Test
+  void ordinaryApiKeysStillAuthenticateManagementEndpoints() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.realm(new SecurityRealmRecord(1L, "local", "LOCAL", "Local", true, 0, Map.of("source", "Local")));
+    dao.user(user(1L, "Local", "alice", null));
+    dao.apiKey(apiKey(9L, "GenericToken", "GenericToken.secret", "staging:session:7"));
+    SecurityAuthenticationService service = service(dao);
+
+    Optional<AuthenticatedSubject> authenticated = service.authenticate(request(
+        Map.of("Authorization", "Bearer GenericToken.secret"),
+        null,
+        "/internal/security/api-keys/current"));
+
+    assertEquals(9L, authenticated.orElseThrow().apiKeyId());
   }
 
   @Test
@@ -1201,6 +1403,32 @@ class SecurityAuthenticationServiceTest {
         null);
   }
 
+  private static FakeSecurityDao stagingTokenDao() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.realm(new SecurityRealmRecord(1L, "local", "LOCAL", "Local", true, 0, Map.of("source", "Local")));
+    dao.user(user(1L, "Local", "alice", null));
+    dao.apiKey(apiKey(9L, "StagingToken", "StagingToken.secret", "staging:session:7"));
+    return dao;
+  }
+
+  private static ApiKeyRecord apiKey(long id, String domain, String secret, String... scopes) {
+    return new ApiKeyRecord(
+        id,
+        domain,
+        "Local",
+        "alice",
+        "key " + id,
+        "ACTIVE",
+        SecurityHashing.sha256(secret),
+        secret.substring(0, 10),
+        Map.of("values", List.of(scopes)),
+        "{}",
+        LocalDateTime.now(),
+        LocalDateTime.now(),
+        LocalDateTime.now().plusDays(1),
+        null);
+  }
+
   private static SecurityUserRecord user(Long id, String source, String userId, String passwordHash) {
     return new SecurityUserRecord(
         id,
@@ -1524,6 +1752,14 @@ class SecurityAuthenticationServiceTest {
       apiKeysByDomainAndHash.put(apiKey.domain() + "/" + apiKey.apiKeyHash(), apiKey);
     }
 
+    /** Simulates a cancel/rotation on another replica deleting the shared row. */
+    private void removeApiKey(long id) {
+      apiKeysByHash.values().stream().filter(key -> key.id() == id).toList().forEach(key -> {
+        apiKeysByHash.remove(key.apiKeyHash());
+        apiKeysByDomainAndHash.remove(key.domain() + "/" + key.apiKeyHash());
+      });
+    }
+
     private void anonymous(SecurityAnonymousConfigRecord config) {
       anonymousConfig = config;
     }
@@ -1609,6 +1845,11 @@ class SecurityAuthenticationServiceTest {
     @Override
     public Optional<ApiKeyRecord> findApiKeyByHash(String apiKeyHash) {
       return Optional.ofNullable(apiKeysByHash.get(apiKeyHash));
+    }
+
+    @Override
+    public Optional<ApiKeyRecord> findApiKey(long id) {
+      return apiKeysByHash.values().stream().filter(key -> key.id() == id).findFirst();
     }
 
     @Override

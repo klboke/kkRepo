@@ -100,6 +100,25 @@ For scoped packages:
 
 Use `npm whoami --registry=...` to verify credentials.
 
+## OHPM / HarmonyOS
+
+Use a hosted repository for publishing and a group for dependency installation. In **Admin → Security → Keys & Tokens → API Tokens**, create a `GenericToken` for an existing user with the required repository permissions. Public-key registration is not required for this flow.
+
+```ini
+# .ohpmrc: replace placeholders; keep real tokens out of source control.
+registry=https://repo.example.com/repository/ohpm-all/
+publish_registry=https://repo.example.com/repository/ohpm-hosted/
+//repo.example.com/repository/ohpm-all/:_auth=<GenericToken>
+//repo.example.com/repository/ohpm-hosted/:_auth=<GenericToken>
+```
+
+```bash
+ohpm publish ./example.har
+ohpm install @scope/example@1.0.0
+```
+
+OHPM sends the token as raw `Authorization`, without a `Bearer ` prefix. Proxy/group repositories are read-only. See the [OHPM Repository Guide](repository-guides/ohpm.md) for upstream configuration, HSP, permissions, import and optional signed login.
+
 ## PyPI
 
 `pip.conf`:

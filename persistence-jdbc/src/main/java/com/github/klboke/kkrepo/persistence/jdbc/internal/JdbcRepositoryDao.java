@@ -22,6 +22,7 @@ import java.util.function.UnaryOperator;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 @Repository
 public class JdbcRepositoryDao implements com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao {
@@ -101,8 +102,9 @@ public class JdbcRepositoryDao implements com.github.klboke.kkrepo.persistence.j
     return copy;
   }
 
+  @Transactional
   public long insert(RepositoryRecord record) {
-    return JdbcInserts.insert(jdbcTemplate, """
+    long id = JdbcInserts.insert(jdbcTemplate, """
         INSERT INTO repository
           (name, format, type, recipe_name, online, blob_store_id, routing_rule_id,
            proxy_remote_url, version_policy, layout_policy, write_policy,
@@ -123,12 +125,30 @@ public class JdbcRepositoryDao implements com.github.klboke.kkrepo.persistence.j
       ps.setBoolean(12, record.strictContentTypeValidation());
       jsonColumns.bind(ps, 13, storageAttributes(record.attributes()));
     });
+    insertDockerBindings(id, record);
+    return id;
   }
 
   public Optional<RepositoryRecord> findById(long id) {
     return jdbcTemplate.query("SELECT * FROM repository WHERE id = ?", rowMapper, id)
         .stream()
         .findFirst();
+  }
+
+  @Override
+  public List<RepositoryRecord> findByIds(java.util.Collection<Long> ids) {
+    if (ids == null || ids.isEmpty()) {
+      return List.of();
+    }
+    List<Long> distinct = ids.stream().filter(java.util.Objects::nonNull).distinct().toList();
+    if (distinct.isEmpty()) {
+      return List.of();
+    }
+    String placeholders = String.join(",", java.util.Collections.nCopies(distinct.size(), "?"));
+    return jdbcTemplate.query(
+        "SELECT * FROM repository WHERE id IN (" + placeholders + ") ORDER BY name",
+        rowMapper,
+        distinct.toArray());
   }
 
   public Optional<RepositoryRecord> findByName(String name) {
@@ -155,6 +175,7 @@ public class JdbcRepositoryDao implements com.github.klboke.kkrepo.persistence.j
     return jdbcTemplate.query("SELECT * FROM repository ORDER BY name", rowMapper);
   }
 
+  @Transactional
   public void update(RepositoryRecord record) {
     jdbcTemplate.update("""
         UPDATE repository
@@ -173,8 +194,10 @@ public class JdbcRepositoryDao implements com.github.klboke.kkrepo.persistence.j
         record.strictContentTypeValidation(),
         jsonColumns.parameter(storageAttributes(record.attributes())),
         record.id());
+    replaceDockerBindings(record.id(), record);
   }
 
+  @Transactional
   public RepositoryRecord upsertByName(RepositoryRecord record) {
     Optional<RepositoryRecord> existing = findByName(record.name());
     if (existing.isPresent()) {
@@ -199,10 +222,29 @@ public class JdbcRepositoryDao implements com.github.klboke.kkrepo.persistence.j
           record.strictContentTypeValidation(),
           jsonColumns.parameter(storageAttributes(record.attributes())),
           record.name());
+      replaceDockerBindings(existing.get().id(), record);
       return findByName(record.name()).orElseThrow();
     }
     long id = insert(record);
     return findById(id).orElseThrow();
+  }
+
+  private void replaceDockerBindings(long repositoryId, RepositoryRecord record) {
+    jdbcTemplate.update("DELETE FROM docker_connector_binding WHERE repository_id = ?", repositoryId);
+    insertDockerBindings(repositoryId, record);
+  }
+
+  private void insertDockerBindings(long repositoryId, RepositoryRecord record) {
+    if (record.format() != RepositoryFormat.DOCKER || record.attributes() == null
+        || !(record.attributes().get("docker") instanceof Map<?, ?> settings)) return;
+    reserveDockerPort(repositoryId, "http", settings.get("connectorPort"), settings.get("connectorEnabled"));
+    reserveDockerPort(repositoryId, "https", settings.get("httpsConnectorPort"), settings.get("httpsConnectorEnabled"));
+  }
+
+  private void reserveDockerPort(long repositoryId, String scheme, Object port, Object enabled) {
+    if (port == null || (enabled != null && !Boolean.parseBoolean(enabled.toString()))) return;
+    jdbcTemplate.update("INSERT INTO docker_connector_binding (port, repository_id, scheme) VALUES (?, ?, ?)",
+        Integer.parseInt(port.toString()), repositoryId, scheme);
   }
 
   public int deleteById(long id) {

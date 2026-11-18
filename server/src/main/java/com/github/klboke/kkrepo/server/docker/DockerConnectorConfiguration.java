@@ -7,13 +7,10 @@ import jakarta.servlet.ServletRequest;
 import jakarta.servlet.ServletResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
-import java.util.Map;
 import org.apache.catalina.connector.Connector;
 import org.apache.coyote.AbstractProtocol;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
-import org.springframework.boot.tomcat.servlet.TomcatServletWebServerFactory;
-import org.springframework.boot.web.server.WebServerFactoryCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -23,24 +20,6 @@ public class DockerConnectorConfiguration {
 
   public static final String CONNECTOR_REPOSITORY_ATTRIBUTE =
       DockerConnectorConfiguration.class.getName() + ".REPOSITORY";
-
-  @Bean
-  WebServerFactoryCustomizer<TomcatServletWebServerFactory> dockerConnectorCustomizer(
-      DockerConnectorManager connectorManager) {
-    return factory -> {
-      DockerConnectorManager.Snapshot snapshot = connectorManager.refresh();
-      if (!snapshot.enabled()) {
-        return;
-      }
-      DockerConnectorManager.ConnectorTuning tuning = snapshot.tuning();
-      for (Map.Entry<Integer, String> entry : snapshot.repositoriesByPort().entrySet()) {
-        Connector connector = new Connector(TomcatServletWebServerFactory.DEFAULT_PROTOCOL);
-        connector.setPort(entry.getKey());
-        configureConnector(connector, tuning);
-        factory.addAdditionalConnectors(connector);
-      }
-    };
-  }
 
   static void configureConnector(
       Connector connector, DockerConnectorManager.ConnectorTuning tuning) {

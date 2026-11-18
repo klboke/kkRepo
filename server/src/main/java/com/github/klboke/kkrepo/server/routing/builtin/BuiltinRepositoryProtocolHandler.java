@@ -3,7 +3,7 @@ package com.github.klboke.kkrepo.server.routing.builtin;
 import com.github.klboke.kkrepo.server.config.RepositoryUrlPrefix;
 import com.github.klboke.kkrepo.server.security.ClientAddress;
 import com.github.klboke.kkrepo.server.staging.StagingHttpSupport;
-import com.github.klboke.kkrepo.server.staging.StagingService;
+import com.github.klboke.kkrepo.server.staging.StagingSelector;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
@@ -1300,7 +1300,7 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
           .headers(notModifiedHeaders(resp))
           .body(null);
     }
-    if (partialFetchAllowed) {
+    if (partialFetchAllowed || com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.rangeAllowed(request)) {
       resp = partialFetch.apply(request, resp);
     }
     HttpHeaders headers = responseHeaders(resp, true);
@@ -1470,10 +1470,15 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
           yield pubHosted.initPublish(runtime, baseUrl, requestUserId(request), requestApiKeyId(request), headOnly);
         }
         if (path.kind() == PubPath.Kind.PUBLISH_FINALIZE) {
-          String stagingHeader = request.getHeader(StagingService.HEADER);
-          if (pubStaging != null && stagingHeader != null && !stagingHeader.isBlank()) {
+          String stagingSession = StagingSelector.resolve(request);
+          if (stagingSession != null && pubStaging == null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+                "Staging is unavailable");
+          }
+          if (pubStaging != null && stagingSession != null) {
             yield pubStaging.finalizeStaged(
-                runtime, path.sessionId(), stagingHeader.trim(), requestUserId(request),
+                runtime, path.sessionId(), stagingSession, requestUserId(request),
                 requestApiKeyId(request), ClientAddress.from(request),
                 requestPermissionSubject(request), headOnly);
           }

@@ -277,6 +277,9 @@ class RepositoryDataMigrationWriter {
     }
     RepositoryRecord repository = repositoryDao.findById(targetRepositoryId)
         .orElseThrow(() -> new IllegalArgumentException("target repository not found: " + targetRepositoryId));
+    if (repository.format() == RepositoryFormat.OHPM) {
+      throw new IllegalArgumentException("OHPM requires its independent import workflow");
+    }
     if (repository.blobStoreId() == null) {
       throw new IllegalArgumentException("target repository has no blob store: " + repository.name());
     }
@@ -386,6 +389,9 @@ class RepositoryDataMigrationWriter {
       WriteResult result = transactionRetry.execute(
           "Persist migrated asset " + repository.name() + "/" + source.sourcePath(),
           () -> {
+            if (repository.format() == RepositoryFormat.DOCKER && dockerRegistryDao != null) {
+              dockerRegistryDao.lockRepositoryForMutation(repository.id());
+            }
             WriteResult persisted = persist(repository, source, upload, contentType, null, expectedPackument);
             indexMigratedDockerAsset(repository, source, upload, contentType, persisted);
             projectMigratedHuggingFace(
@@ -630,6 +636,7 @@ class RepositoryDataMigrationWriter {
         ? migratedCargoMetadata(source, upload)
         : null;
 
+    assetDao.prepareWrite(repository.id(), repository.format(), source.sourcePath());
     Optional<AssetRecord> existing = assetDao.findAssetByPath(repository.id(), source.sourcePath());
     if (expectedPackument != null) {
       // Recheck the durable blob binding after the row lock. A competing replica may have
@@ -1191,6 +1198,7 @@ class RepositoryDataMigrationWriter {
           && source.sourcePath().startsWith("src/contrib/")
           ? "r-source-package" : "r-metadata";
       case GITLFS -> "gitlfs";
+      case OHPM -> throw new IllegalArgumentException("OHPM requires its independent import workflow");
       case HUGGINGFACE -> "huggingface-model-file";
       case OPENVSX -> source.sourcePath().endsWith(".vsix") ? "openvsx-extension"
           : "openvsx-metadata";

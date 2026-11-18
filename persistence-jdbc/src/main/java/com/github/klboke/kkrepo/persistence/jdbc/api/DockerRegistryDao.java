@@ -11,6 +11,26 @@ import java.util.Optional;
 import java.util.OptionalLong;
 
 public interface DockerRegistryDao {
+  /** Shared repository lock, acquired before publishing/removing manifest, tag or asset metadata. */
+  void lockRepositoryForMutation(long repositoryId);
+
+  /** Exclusive counterpart used by short cleanup transactions before any manifest/asset locks. */
+  void lockRepositoryForCleanup(long repositoryId);
+
+  /** Nth newest distinct tagged manifest in the entire image, not just a cleanup scan page. */
+  Optional<CleanupRetentionBoundary> findCleanupRetentionBoundary(
+      long repositoryId, String imageName, int retainCount);
+
+  /** A live manifest in this repository still needs the digest (including multi-architecture children). */
+  boolean hasLiveManifestReference(long repositoryId, String digest);
+
+  record CleanupRetentionBoundary(long manifestId, Instant updatedAt) {
+    public boolean retains(long id, Instant updated) {
+      return updated == null || updatedAt == null || updated.isAfter(updatedAt)
+          || (updated.equals(updatedAt) && id >= manifestId);
+    }
+  }
+
   Optional<DockerManifestRecord> findManifestByDigest(
       long repositoryId, String imageName, String digest);
 

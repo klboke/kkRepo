@@ -108,6 +108,8 @@ services:
       KKREPO_FILE_ENABLED: "true"
       KKREPO_FILE_BASE_DIR: /tmp/kkrepo-blobs
       KKREPO_OUTBOUND_ALLOW_PRIVATE_ADDRESSES: "true"
+      # Disposable compatibility fixtures explicitly test age/count rules without a one-hour wait.
+      KKREPO_MAVEN_SNAPSHOT_WRITE_GRACE: "PT0S"
       JAVA_OPTS: "-Xms512m -Xmx1536m"
     ports:
       - "${KKREPO_COMPAT_PORT:-18090}:8080"
@@ -140,6 +142,8 @@ services:
       KKREPO_FILE_ENABLED: "true"
       KKREPO_FILE_BASE_DIR: /tmp/kkrepo-blobs
       KKREPO_OUTBOUND_ALLOW_PRIVATE_ADDRESSES: "true"
+      # Disposable compatibility fixtures explicitly test age/count rules without a one-hour wait.
+      KKREPO_MAVEN_SNAPSHOT_WRITE_GRACE: "PT0S"
       JAVA_OPTS: "-Xms512m -Xmx1536m"
     ports:
       - "${KKREPO_SECONDARY_COMPAT_PORT:-18092}:8080"
@@ -172,6 +176,8 @@ services:
       KKREPO_FILE_ENABLED: "true"
       KKREPO_FILE_BASE_DIR: /tmp/kkrepo-blobs
       KKREPO_OUTBOUND_ALLOW_PRIVATE_ADDRESSES: "true"
+      # Disposable compatibility fixtures explicitly test age/count rules without a one-hour wait.
+      KKREPO_MAVEN_SNAPSHOT_WRITE_GRACE: "PT0S"
       JAVA_OPTS: "-Xms512m -Xmx1536m"
     ports:
       - "${KKREPO_COMPAT_PORT:-18090}:8080"

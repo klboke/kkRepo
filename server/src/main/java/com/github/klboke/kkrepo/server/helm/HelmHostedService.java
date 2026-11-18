@@ -4,6 +4,7 @@ import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao.HelmIndexRow;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryIndexRebuildDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.protocol.helm.HelmAssetKind;
 import com.github.klboke.kkrepo.protocol.helm.HelmChartMetadata;
@@ -112,6 +113,41 @@ public class HelmHostedService {
     if (kind == HelmAssetKind.PACKAGE) {
       enqueueIndex(runtime);
     }
+    return MavenResponse.noBody(200);
+  }
+
+  /**
+   * Publishes an already staged blob as a Helm package without replaying its bytes.
+   *
+   * <p>Used by staging promotion: the blob is already content-addressed and its digests are known,
+   * so only the catalogue rows (asset, component, browse ancestors) need to be written while the
+   * repository locks are held.
+   */
+  public MavenResponse linkExistingChart(
+      RepositoryRuntime runtime,
+      String rawPath,
+      AssetBlobRecord blob,
+      HelmChartMetadata metadata,
+      String contentType,
+      String createdBy,
+      String createdByIp) {
+    ensureHosted(runtime);
+    String path = normalizePath(rawPath);
+    HelmAssetKind kind = knownKind(path);
+    if (kind != HelmAssetKind.PACKAGE) {
+      return MavenResponse.noBody(404);
+    }
+    enforceWritePolicy(runtime, path);
+    writer.linkExistingBlob(
+        runtime,
+        requireBlobStore(runtime),
+        path,
+        blob,
+        metadata,
+        contentType,
+        createdBy,
+        createdByIp);
+    enqueueIndex(runtime);
     return MavenResponse.noBody(200);
   }
 

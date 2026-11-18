@@ -45,6 +45,9 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class NpmProxyService {
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService streaming;
+
   private static final long[] BACKOFF_SECONDS = {30, 60, 120, 300, 600, 1800};
   private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {};
   private static final String FULL_METADATA_ATTRIBUTE = "npmFullMetadata";
@@ -300,6 +303,7 @@ public class NpmProxyService {
       enforceTarballReleaseAge(runtime, packageId, tarballName, clock.instant());
     }
     String path = packageId.tarballPath(tarballName);
+    com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.enableRanges(runtime, path);
     Optional<CachedAssetMetadata> cached = lookupCached(runtime, path);
     Instant now = clock.instant();
     if (cached.isPresent()
@@ -314,10 +318,8 @@ public class NpmProxyService {
       if (cached.isPresent()) return hosted.getTarball(runtime, packageId, tarballName, headOnly);
       throw new NpmExceptions.BadUpstreamException("Upstream temporarily blocked: " + runtime.proxyRemoteUrl());
     }
-    NpmAssetWriter.Stored stored = fetchAndCacheTarball(runtime, packageId, tarballName, rawPath, cached, headOnly, now);
-    if (stored != null) {
-      return tarballResponseFromStored(stored, headOnly);
-    }
+    MavenResponse response = fetchAndCacheTarball(runtime, packageId, tarballName, rawPath, cached, headOnly, now);
+    if (response != null) return response;
     return hosted.getTarball(runtime, packageId, tarballName, headOnly);
   }
 
@@ -933,7 +935,7 @@ public class NpmProxyService {
     return hosted.packageRoot(runtime, packageId);
   }
 
-  private NpmAssetWriter.Stored fetchAndCacheTarball(
+  private MavenResponse fetchAndCacheTarball(
       RepositoryRuntime runtime,
       NpmPackageId packageId,
       String tarballName,
@@ -960,7 +962,9 @@ public class NpmProxyService {
       throw new NpmExceptions.BadUpstreamException(denied.getMessage());
     }
     try {
-      return fetcher.fetchWithBodyRetry(req, download.assetPath(), result -> {
+      return com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.fetchMaven(
+          streaming, fetcher, req, download.assetPath(), runtime,
+          !headOnly && cached.isEmpty(), null, null, result -> {
         int status = result.status();
         if (status == 304 && !conditionalRequest) {
           throw new NpmExceptions.BadUpstreamException("Unsolicited tarball not-modified response");
@@ -979,7 +983,8 @@ public class NpmProxyService {
         }
         if (status >= 200 && status < 300) {
           negativeCache.invalidate(runtime, packageId.tarballPath(tarballName));
-          return persistTarball(runtime, packageId, tarballName, result, sourceHash, !headOnly, now);
+          return tarballResponseFromStored(
+              persistTarball(runtime, packageId, tarballName, result, sourceHash, !headOnly, now), headOnly);
         }
         if (status == 404 || status == 410) {
           proxyStateDao.recordSuccess(runtime.id(), now);

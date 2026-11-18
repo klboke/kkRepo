@@ -66,6 +66,7 @@ class CondaRepositoryBlackBoxCompatibilityTest {
   void hostedMetadataPackageHttpAndGroupPriorityMatchNexusWhenConfigured() throws Exception {
     Config config = configured();
     ensureRepositories(config);
+    ProxyStreamingCompatibility.enable(config.candidateAdmin("/repository/" + config.proxy() + "/"));
     String name = "compat_" + UUID.randomUUID().toString().replace("-", "").substring(0, 12);
     Fixture primary = Fixture.legacy(name, "1.0", "0", "linux-64", "first-member");
     Fixture secondary = Fixture.legacy(name, "1.0", "0", "linux-64", "second-member");

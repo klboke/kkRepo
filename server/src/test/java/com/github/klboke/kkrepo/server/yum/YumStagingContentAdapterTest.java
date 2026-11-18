@@ -88,6 +88,38 @@ class YumStagingContentAdapterTest {
   }
 
   @Test
+  void reusesOneRenderedSnapshotForRepomdFilesAndHeadRequests() throws Exception {
+    RpmMetadata metadata = RpmMetadata.fallback(
+        new YumService.RpmCoordinate("demo", "1.0", "1", "x86_64"), Instant.EPOCH);
+    Map<String, Object> attributes = new LinkedHashMap<>();
+    attributes.put(YumStagingContentAdapter.RPM_ATTRIBUTES, metadata.toAttributes());
+    when(yumHosted.liveAssets(any())).thenReturn(List.of());
+    when(staging.listItems(5L)).thenReturn(List.of(item(attributes)));
+    com.github.klboke.kkrepo.server.cache.AssetMetadataCache assetMetadata = mock(
+        com.github.klboke.kkrepo.server.cache.AssetMetadataCache.class);
+    YumStagingContentAdapter cached = new YumStagingContentAdapter(
+        hosted, yumHosted, staging,
+        new com.github.klboke.kkrepo.server.staging.StagingMetadataSnapshotCache(
+            new com.github.klboke.kkrepo.server.support.InMemoryVersionWatermark(),
+            assetMetadata, true, 60, 100));
+
+    MavenResponse repomd = cached.generatedMetadata(
+        runtime, 5L, "repodata/repomd.xml", false).orElseThrow();
+    String repomdXml = new String(repomd.body().readAllBytes(), StandardCharsets.UTF_8);
+    java.util.regex.Matcher matcher = java.util.regex.Pattern
+        .compile("href=\"(repodata/[^\"]+primary\\.xml\\.gz)\"")
+        .matcher(repomdXml);
+    assertTrue(matcher.find(), repomdXml);
+    MavenResponse head = cached.generatedMetadata(
+        runtime, 5L, matcher.group(1), true).orElseThrow();
+
+    assertTrue(head.body() == null || head.contentLength() == 0);
+    // One catalog read and one render for the whole root, reused by the HEAD and payload file.
+    verify(yumHosted, org.mockito.Mockito.times(1)).liveAssets(any());
+    verify(staging, org.mockito.Mockito.times(1)).listItems(5L);
+  }
+
+  @Test
   void leavesLiveRepodataAloneWhenNothingIsStaged() {
     when(yumHosted.liveAssets(any())).thenReturn(List.of());
     when(staging.listItems(5L)).thenReturn(List.of());

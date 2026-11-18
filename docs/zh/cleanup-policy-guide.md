@@ -17,7 +17,7 @@
 - 当前全部格式都支持 Try Run、手动执行和定时执行。只有已经验证协议版本比较器的 Maven、
   Cargo/Rust、Dart/Pub、Terraform、Swift Package Registry、Ansible Galaxy、Conda 和
   APT/Debian、Alpine/APK、R/CRAN 支持
-  **保留最新版本**规则。
+  **保留最新版本**规则。Docker 则按每个 image name 的 manifest 发布或更新时间提供数量保留。
 - 实际执行不可逆。kkRepo 当前没有 Cleanup 专属恢复窗口，因此生产环境启用删除前应准备并验证
   数据库与 blob store 备份。
 
@@ -41,6 +41,47 @@ R 的一个清理 subject 是一个 source package version。**保留最新版�
 该 package 的完整 `PACKAGES.gz`，再退出 package 投影；生成 metadata 与 group 不作为独立清理
 subject。
 
+## Docker 镜像保留
+
+Docker 的 **Keep newest images per image name** 按每个仓库中的 image name 分别计算，
+保留最近发布或更新的 `N` 个带 tag 的 manifest digest。同一 digest 的多个 tag 只占一个名额；
+重新推送 manifest 会刷新其排序。时间相同时按数据库 ID 排序，不解析 tag 的版本号。
+Proxy 仓库使用本地缓存的发布时间，不代表上游构建时间。
+
+`retainCount` 是最低保护数量，不是数量上限。配置的年龄条件也必须满足才会删除；
+保留集合基于整个 image 的记录计算，不受扫描分页或名称、年龄筛选影响。`0` 表示不设置数量保护。
+无 tag 的 manifest 不占名额，只有显式配置年龄条件时才可能删除。仍被存活父 manifest 引用的
+内容始终受到保护，包括多架构镜像的子 manifest；手动保护规则继续生效。旧父 manifest 删除后，
+后续运行可清理符合年龄条件的无 tag 子 manifest。Blob 空间由垃圾回收在所有引用释放后回收。
+
+建议先 **Try Run** 再启用每天执行的计划。执行时会在数据库锁内重新核对保留数量和引用，
+与各副本上的 manifest 发布、删除协调。启用新策略前应先完成所有副本的升级。
+
+## Maven SNAPSHOT 构建清理
+
+选择 **Maven > Cleanup target > Maven snapshot builds**，即可清理 `1.0-SNAPSHOT` 等基础
+版本内的历史构建。已有策略保持原来的 component/版本语义。首版仅支持 hosted，不处理 release、
+proxy/group、非时间戳 SNAPSHOT 文件，也不提供“已有 release 则删除 SNAPSHOT”的规则。
+
+- 同一时间戳和数字 build number 下的主制品、classifier、签名及 checksum 整组处理。
+  **Keep newest builds per SNAPSHOT** 必填且至少为 1，按 `(groupId, artifactId, baseVersion)`
+  分别计算保留数量。
+- 发布年龄取该构建全部文件的最新实际发布/更新时间，不使用文件名时间戳。下载年龄取该构建的
+  最新成功 GET；从未下载的构建回退到发布时间。仍需完整经过下载观察窗口和 safety lag。
+- 当前 metadata 引用的构建、每种 classifier/extension 的最新构建、近期写入的构建继续保留，
+  因此最终数量可能超过最低保留数。清理不改写当前 metadata，避免每删除一个构建都重写对象存储。
+  metadata 格式异常或不可读取时，该基础版本暂不删除。
+- 写入静默期默认一小时，可通过 `KKREPO_MAVEN_SNAPSHOT_WRITE_GRACE` 设置 ISO-8601 duration
+  （默认 `PT1H`）；应大于正常发布过程中两次上传之间的间隔。
+- 创建首个新模式策略前须升级全部副本。首次创建策略后才启动历史资产回填，通过共享数据库游标每批处理 256 条，再每批校正 64 个构建的计数，修复旧副本删除留下的记录；两个阶段未完成时显示
+  `SNAPSHOT_INDEX_WARMING_UP` 并阻止删除。后续服务端上传和迁移在资产事务内同步维护索引。
+- 扫描/删除数量的单位为**构建**。游标可以在同一基础版本内部续跑，每轮最多读取 20,000 个候选
+  文件和 64 份 metadata；单个构建超过 4,096 个文件时保留，并报告 `oversized_build`。运行详情还会汇总 `newest`、
+  `recent_write`、`metadata_or_latest_classifier`、`metadata_unavailable` 等保留原因。
+
+例如，对 `55.0.0-SNAPSHOT` 保留 5 次构建时，只删除符合年龄条件的历史时间戳构建，基础版本继续
+可用。先用 **Try Run** 检查新模式，再启用定时执行；已有仓库/component/asset 保护规则同样生效。
+
 ## 规则组合语义
 
 | 规则 | 语义 |
@@ -48,7 +89,7 @@ subject。
 | **名称/路径模式** | 可选的范围过滤条件。**通配符**对完整名称或页面显示的坐标/路径进行匹配，支持 `*` 和 `?`；**正则表达式**使用 kkRepo 已校验的正则匹配器。模式本身不能使制品具备删除资格。 |
 | **发布时间早于（天）** | 只有格式对应的发布/更新时间水位早于“本次运行开始时间减去配置天数”时才匹配。 |
 | **最后下载早于（天）** | 只有已记录下载水位，且水位早于配置时间的制品才匹配。没有下载时间的制品会被跳过。 |
-| **保留最新版本** | 使用对应格式的协议版本比较器，在每个包或模块 family 内保护最新 `N` 个版本。`0` 表示不保护任何版本；没有已验证比较器的格式会禁用此字段。 |
+| **保留最新版本** | 在每个包或模块 family 内，使用对应格式的协议版本比较器保护最新 `N` 个版本。Docker 按每个 image name 的 manifest 发布或更新时间排序。`0` 表示不设置数量保护；不支持此规则的格式会禁用该字段。 |
 
 策略至少需要一个删除条件：发布时间、最后下载时间或版本保留。名称/路径模式只缩小范围。所有已
 配置的时间条件必须同时满足；即使模式和时间都匹配，位于最新保留范围内的版本也不会被删除。

@@ -51,6 +51,23 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 class AptProxyProjectionServiceTest {
+  @Test
+  void progressivePackageMustMatchKnownSizeAndChecksumBeforeCompleting(
+      @org.junit.jupiter.api.io.TempDir java.nio.file.Path directory) throws Exception {
+    Fixture fixture = new Fixture();
+    byte[] bytes = "deb".getBytes(StandardCharsets.UTF_8);
+    String path = "pool/d/demo/demo_1.0-1_amd64.deb";
+    var file = java.nio.file.Files.write(directory.resolve("package.deb"), bytes);
+    fixture.service.validateDownloadedPackage(fixture.runtime, path, file);
+    var expected = record(fixture.runtime, "stable", "main", "demo", "1.0-1", "amd64", path, bytes, 41L, 51L);
+    when(fixture.registry.findPackageByPath(fixture.runtime.id(), path)).thenReturn(Optional.of(expected));
+    fixture.service.validateDownloadedPackage(fixture.runtime, path, file);
+    java.nio.file.Files.writeString(file, "bad");
+    assertThrows(java.io.IOException.class, () -> fixture.service.validateDownloadedPackage(fixture.runtime, path, file));
+    java.nio.file.Files.writeString(file, "truncated");
+    assertThrows(java.io.IOException.class, () -> fixture.service.validateDownloadedPackage(fixture.runtime, path, file));
+  }
+
   private static final String INDEX = """
       Package: demo
       Version: 1.0-1

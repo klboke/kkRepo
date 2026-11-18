@@ -1,18 +1,59 @@
 package com.github.klboke.kkrepo.server.maven;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.klboke.kkrepo.server.RepositoryProtocolController;
 import com.github.klboke.kkrepo.server.cargo.CargoExceptions;
 import com.github.klboke.kkrepo.protocol.pub.PubContentTypes;
 import com.github.klboke.kkrepo.server.npm.NpmExceptions;
 import com.github.klboke.kkrepo.server.pub.PubExceptions;
+import com.github.klboke.kkrepo.server.releaseage.ReleaseAgeDeniedException;
+import com.github.klboke.kkrepo.server.routing.RepositoryProtocolDispatcher;
+import java.time.Instant;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 class MavenErrorAdviceTest {
+
+  @ParameterizedTest
+  @ValueSource(strings = {"*/*", "application/problem+json,*/*", "application/problem+json"})
+  void missingMavenContentKeepsPlainJsonWhenClientAcceptsProblemDetails(String accept)
+      throws Exception {
+    var dispatcher = mock(RepositoryProtocolDispatcher.class);
+    var mvc = MockMvcBuilders.standaloneSetup(new RepositoryProtocolController(dispatcher))
+        .setControllerAdvice(new MavenErrorAdvice())
+        .build();
+    for (String path : java.util.List.of(
+        "com/acme/demo/maven-metadata.xml",
+        "com/acme/demo/1.0-SNAPSHOT/maven-metadata.xml",
+        "com/acme/demo/1.0/demo-1.0.jar")) {
+      doThrow(new MavenExceptions.MavenNotFoundException(path)).when(dispatcher)
+          .dispatchRead(eq("releases"), any(), eq(HttpMethod.GET));
+
+      var response = mvc.perform(get("/repository/releases/" + path)
+          .header(HttpHeaders.ACCEPT, accept)).andReturn().getResponse();
+      assertEquals(404, response.getStatus());
+      assertEquals(MediaType.APPLICATION_JSON_VALUE, response.getContentType());
+      var body = new ObjectMapper().readTree(response.getContentAsByteArray());
+      assertEquals(404, body.path("status").asInt());
+      assertEquals("Not Found", body.path("error").asText());
+      assertEquals(path, body.path("message").asText());
+    }
+  }
 
   @Test
   void npmMinimumReleaseAgeDenialIsNotFoundAndNotCacheable() {
@@ -25,6 +66,19 @@ class MavenErrorAdviceTest {
     assertEquals("no-store", response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL));
     assertEquals(false, response.getBody().get("success"));
     assertEquals("release is too new", response.getBody().get("error"));
+  }
+
+  @Test
+  void releaseAgeDenialIsForbiddenAndNotCacheable() {
+    MavenErrorAdvice advice = new MavenErrorAdvice();
+
+    ResponseEntity<Map<String, Object>> response = advice.releaseAgeDenied(
+        new ReleaseAgeDeniedException("Artifact is currently quarantined.", Instant.EPOCH));
+
+    assertEquals(HttpStatus.FORBIDDEN, response.getStatusCode());
+    assertEquals("no-store", response.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL));
+    assertEquals(false, response.getBody().get("success"));
+    assertEquals("Artifact is currently quarantined.", response.getBody().get("error"));
   }
 
   @Test

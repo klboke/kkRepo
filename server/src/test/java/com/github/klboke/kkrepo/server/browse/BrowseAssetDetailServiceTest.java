@@ -53,6 +53,8 @@ import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -102,14 +104,20 @@ class BrowseAssetDetailServiceTest {
     assertEquals("yes", detail.get("needscompilation"));
   }
 
-  @Test
-  void rGroupDetailResolvesNexusBrowseProjectionToCanonicalPackagePath() {
+  @ParameterizedTest
+  @CsvSource({
+      "src/contrib,.tar.gz",
+      "bin/windows/contrib/4.5,.zip",
+      "bin/macosx/big-sur-arm64/contrib/4.5,.tgz",
+      "bin/linux/noble-x86_64/4.5/src/contrib,.tar.gz"})
+  void rGroupDetailResolvesNexusBrowseProjectionToCanonicalPackagePath(
+      String namespace, String extension) {
     RepositoryRecord group = repository(
         84L, "cran-group", RepositoryFormat.R, RepositoryType.GROUP);
     RepositoryRecord hosted = repository(
         85L, "cran-hosted", RepositoryFormat.R, RepositoryType.HOSTED);
-    String browsePath = "src/contrib/demo/1.2.3/demo_1.2.3.tar.gz";
-    String storagePath = "src/contrib/demo_1.2.3.tar.gz";
+    String browsePath = namespace + "/demo/1.2.3/demo_1.2.3" + extension;
+    String storagePath = namespace + "/demo_1.2.3" + extension;
     AssetRecord archive = new AssetRecord(
         86L, hosted.id(), 87L, 88L, RepositoryFormat.R,
         storagePath, PersistenceHashes.pathHash(storagePath), archiveName(storagePath),
@@ -145,7 +153,10 @@ class BrowseAssetDetailServiceTest {
     assertEquals(browsePath, detail.path());
     assertEquals("/repository/cran-group/" + storagePath, detail.downloadUrl());
     assertEquals("demo", detail.r().get("package"));
+    assertEquals(namespace, detail.r().get("namespace"));
     assertEquals(List.of(key(hosted.id(), storagePath)), assets.pathLookups);
+    assertEquals("/repository/cran-hosted/" + storagePath,
+        service.detail(hosted, browsePath, null).downloadUrl());
   }
 
   @Test
@@ -1902,10 +1913,12 @@ class BrowseAssetDetailServiceTest {
 
   private static RRegistryDao.PackageRecord rPackage(
       long repositoryId, Long assetId, Long componentId, String path) {
+    String namespace = path.substring(0, path.lastIndexOf('/'));
+    String packageType = "src/contrib".equals(namespace) ? "source" : "binary";
     return new RRegistryDao.PackageRecord(
-        1L, repositoryId, "src/contrib", "source", "source", "demo", "1.2.3",
+        1L, repositoryId, namespace, packageType, packageType, "demo", "1.2.3",
         "r1|0000000001.0000000002.0000000003".getBytes(java.nio.charset.StandardCharsets.US_ASCII),
-        "source", archiveName(path), path,
+        packageType, archiveName(path), path,
         Map.of(
             "Package", "demo",
             "Version", "1.2.3",

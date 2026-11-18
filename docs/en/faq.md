@@ -2,7 +2,7 @@
 
 ## What is kkrepo?
 
-kkrepo is a Nexus-compatible, self-hosted artifact repository for common package formats such as Maven, npm, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift Package Registry, Ansible Galaxy, Conda, APT/Debian, Docker/OCI, NuGet, RubyGems, Yum, and Raw.
+kkrepo is a Nexus-compatible, self-hosted artifact repository for common package formats such as Maven, npm, OHPM/HarmonyOS, PyPI, Go, Helm, Cargo/Rust, Dart/Pub, Composer/PHP, Terraform, Swift Package Registry, Ansible Galaxy, Conda, APT/Debian, Docker/OCI, NuGet, RubyGems, Yum, and Raw.
 
 It keeps Nexus-like client URLs, protocol behavior, permissions, and migration goals while using MySQL for metadata and OSS/S3-compatible storage for blobs.
 
@@ -24,6 +24,7 @@ Current supported formats:
 
 - Maven
 - npm
+- OHPM / HarmonyOS
 - PyPI
 - Go
 - Helm
@@ -76,9 +77,16 @@ No. The default cache backend is process-local memory, and correctness is backed
 Artifact bytes are stored in blob storage:
 
 - OSS/S3-compatible storage for production.
+- Azure Blob Storage for production on Azure.
 - File storage for local trials, tests, and carefully managed shared-filesystem deployments.
 
 MySQL stores metadata and references, not large artifact bytes.
+
+## Can kkrepo store blobs in an Azure Storage account?
+
+Yes. Create a blob store with type `azure`. Azure Blob Storage has no S3-compatible endpoint, so the `aws-s3` engine cannot be pointed at `*.blob.core.windows.net`; kkRepo uses the native Azure Blob API instead.
+
+Managed identity and workload identity are supported and are the default: kkRepo stores no key in the database, and each replica obtains and refreshes its own short-lived token. Account keys and SAS tokens are also supported. See [Azure Blob Storage blob stores](azure-blob-storage.md).
 
 ## Can I use File blob storage in production?
 
@@ -126,6 +134,12 @@ Hosted repositories are scanned by default. Proxy repositories can be migrated e
 Migration tries to preserve compatible security data where the source Nexus exposes enough information. Some local users may need password reset if password hashes cannot be compensated. API keys or protocol tokens may need to be reissued depending on source data availability and security policy.
 
 Always run preflight and review migration reports before cutover.
+
+## Is OHPM / HarmonyOS supported?
+
+Yes. Hosted, proxy and group repositories support HAR/HSP publication and installation, tags, unpublish, UI/API upload and independent resumable import. GenericToken supports the normal publish/install workflow without public keys. Optional RSA signed login binds a public key to a user and retains that user's repository permissions; it is disabled by default.
+
+OHPM follows Huawei's protocol and real clients, not a Nexus OHPM reference. Nexus migration, automatic cleanup and HAR/HSP vulnerability scanning are not supported for this format. See the [OHPM Repository Guide](repository-guides/ohpm.md) and [acceptance coverage](dev/ohpm-acceptance.md).
 
 ## Is Docker / OCI supported?
 

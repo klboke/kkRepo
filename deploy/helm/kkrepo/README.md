@@ -18,6 +18,18 @@ helm upgrade --install kkrepo deploy/helm/kkrepo \
 
 For production, supply S3/OSS credentials through `extraEnvFrom`. File blob storage is disabled by default; with multiple replicas it requires a strong-consistency `ReadWriteMany` PVC.
 
+## Azure Blob Storage with workload identity
+
+Azure blob stores authenticate with a platform identity by default and need no credential Secret. On AKS, annotate the service account with the managed identity and label the pods so the workload identity webhook projects the `AZURE_*` variables:
+
+```bash
+helm upgrade --install kkrepo deploy/helm/kkrepo \
+  --set serviceAccount.annotations."azure\.workload\.identity/client-id"='<managed-identity-client-id>' \
+  --set podLabels."azure\.workload\.identity/use"='true'
+```
+
+Grant that identity `Storage Blob Data Contributor` on the container, then create the blob store with `credentialType: default` or `workload-identity`. See [Azure Blob Storage blob stores](../../docs/en/azure-blob-storage.md).
+
 ## AWS RDS / Aurora IAM authentication
 
 Set `database.auth: iam` to omit `SPRING_DATASOURCE_PASSWORD` and the database password

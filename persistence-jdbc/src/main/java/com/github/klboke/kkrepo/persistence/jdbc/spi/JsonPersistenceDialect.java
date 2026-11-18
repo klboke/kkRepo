@@ -11,6 +11,8 @@ public interface JsonPersistenceDialect {
 
   String extractText(String column, String... path);
 
+  String extractTextAtKey(String column, String... parentPath);
+
   String setBoolean(String column, boolean value, String... path);
 
   /** Returns an expression that stores one string bind parameter at the JSON path. */

@@ -4,7 +4,11 @@
 
 ## 当前支持状态
 
-ohpm 仓库能力处于路线图设计阶段，当前代码中尚未实现 `ohpm-hosted`、`ohpm-proxy` 或 `ohpm-group` recipe。
+用户操作入口见[OHPM 仓库使用指南](../repository-guides/ohpm.md)。下文保留设计依据，具体客户端覆盖和未实现接口以协议基线与验收说明为准。
+
+当前已实现 `ohpm-hosted` 的普通及流式 HAR/HSP 发布、读取、tag 和下架，`ohpm-proxy` 的 metadata 代理与校验下载，以及 `ohpm-group` 的有序合并和来源一致的下载。管理端支持 HAR/HSP/tgz 上传、浏览属性、搜索、协议感知的删除，以及目录/已有仓库独立导入。使用方式与验证边界见 [OHPM Hosted HAR/HSP](ohpm-hosted.md)、[OHPM Proxy](ohpm-proxy.md)、[OHPM Group](ohpm-group.md)、[管理说明](ohpm-management.md) 和 [导入说明](ohpm-import.md)。
+
+默认使用现有 Access Token，另提供默认关闭的[可选签名 Login](ohpm-login.md)。验证基线和设计差异见 [OHPM 协议兼容性基线](ohpm-protocol-baseline.md)，独立服务端、真实客户端及存储验收的命令和边界见[验收说明](ohpm-acceptance.md)。
 
 完整实现目标一次性覆盖 hosted、proxy、group、迁移/导入和管理端能力：
 
@@ -40,7 +44,7 @@ ohpm 仓库能力处于路线图设计阶段，当前代码中尚未实现 `ohpm
 - 普通发布通过 JSON body 携带 metadata 和 `_attachments`；流式发布通过 multipart/form-data 携带 `pkg_stream` 和 `metadata`。两种入口必须写入同一套 MySQL/OSS-backed 元数据和 blob 真相。
 - HAR 包通常只有 `.har` 文件；应用内 HSP 包可能同时包含 `.har` 和 `.hsp` 两个客户端可下载文件，metadata 中用 `dist.integrity`、`dist.tarball`、`dist.integrity_hsp`、`dist.resolved_hsp` 表达。
 - ohpm 5.0.1 及以上优先调用流式上传；如果流式上传接口返回 `404`，客户端会回退到普通上传。因此 kkrepo 实现该接口前必须让缺失路径真实返回 `404`，实现后必须兼容 multipart 行为。
-- 官方响应码中 `598` 会触发 ohpm 5.0.1+ 重新上传。kkrepo 不应把所有服务端异常都映射为 `598`；只有明确可重试的上传中断或临时失败才使用它。
+- 官方文档将 `598` 描述为 ohpm 5.0.1+ 的重试信号，但实测 6.0.1 普通上传收到该状态后直接失败。服务端不能依赖自动重试，也不应把所有服务端异常都映射为 `598`；只有明确可重试的上传中断或临时失败才使用它。
 - `Login` 是官方可选 API。kkrepo 默认使用 Access Token，但完整设计需要保留 `POST /login` 的可配置实现入口；如果启用公私钥认证，必须把签名、nonce、timestamp、token 过期和审计纳入同一套认证设计。
 - metadata 和 dist-tag 是跨副本共享状态，必须以 MySQL 为真相；进程内缓存只能作为可重建 TTL 热缓存。
 
@@ -90,7 +94,7 @@ ohpm 仓库能力处于路线图设计阶段，当前代码中尚未实现 `ohpm
 5. 认证和权限
    - 默认采用 Access Token，复用现有 API key / GenericToken 生成、hash、过期、禁用、审计和 cache invalidation 能力。
    - `POST /login` 按官方可选 API 保留可配置实现入口；启用时必须验证 publishId、timestamp、nonce、signature，并签发有过期时间的短期 token。
-   - Fetch Metadata、Ping 和下载走 repository `READ` 权限。
+   - Fetch Metadata 和下载走 repository `READ` 权限；Ping 按官方协议无需认证，不返回包信息。
    - Publish 走 repository `ADD` 权限；覆盖已存在 metadata 或 tag 时走 `EDIT` 权限。
    - Unpublish 走 repository `DELETE` 权限。
    - DistTags 新增、更新、删除都走 repository `EDIT` 权限。
@@ -127,7 +131,7 @@ ohpm 使用普通 `/repository/{repo}/...` 仓库入口，不需要 Docker 那�
 
 ```bash
 ohpm config set registry https://repo.example.com/repository/ohpm-hosted/
-ohpm config set //repo.example.com/repository/ohpm-hosted/:_authToken <token>
+ohpm config set //repo.example.com/repository/ohpm-hosted/:_auth <token>
 ```
 
 路由表：
@@ -166,7 +170,7 @@ metadata 示例中的下载地址应由 kkrepo 动态重写：
 - package id 统一保存为官方形态：`name` 或 `@group/name`。
 - scoped package 的 `%2f`、`%2F` 和路径 slash 形式应解析到同一个 package id。
 - tarball 文件名中允许出现官方示例里的 `@group/name-version.har` 形态；实现时需要把 `/-/` 后面的剩余路径作为 logical file path，而不是只取一个 path segment。
-- `DELETE /:package_name` 中的 `@version` 后缀表示删除指定版本；例如 `@scope%2fpkg@1.0.0`。解析时必须从最后一个 `@` 判断版本，不能把 scope 前缀误判为 version 分隔符。
+- 当前客户端通过 `DELETE /:package_name` 的 JSON 请求体 `{"version":"1.0.0"}` 下架指定版本，`{"version":""}` 表示整包下架。兼容旧文档中的 `@version` 后缀，例如 `@scope%2fpkg@1.0.0`；解析时从最后一个 `@` 判断，不能把 scope 前缀误判为 version 分隔符。两处版本冲突或请求体无效时拒绝请求，不能退化成整包删除。
 - 未知 API 必须返回 `404`，以保留 ohpm 对 stream 回退的官方兼容语义。
 
 ## 数据模型落地
@@ -195,7 +199,7 @@ Controller 不实现协议细节，只负责读取 HTTP 请求、提取仓库名
 2. 校验用户或 token 具备 repository `ADD` 权限。
 3. 解析 path package id，并校验 body 中 `_id`、`name` 与 path 一致。
 4. 解析 `versions`，要求本次发布只新增一个 version；如果官方客户端未来会一次提交多个 version，需要先用真实客户端确认再扩展。
-5. 校验 `dist-tags.latest` 指向存在的 version。
+5. 校验本次提交的 dist-tags 指向有效 version；客户端使用 `--tag beta` 发布时可只携带 `beta`，不能要求请求体一定包含 `latest`。
 6. 解析 `_attachments`：
    - HAR 包必须包含一个 `.har` 附件。
    - HSP 包可以包含 `.har` 和 `.hsp` 两个附件。
@@ -286,7 +290,7 @@ ohpm 客户端会把配置的 token 放到 `Authorization` header 中，kkrepo �
 
 | ohpm 操作 | kkrepo 权限 |
 | --- | --- |
-| `GET /-/ping` | `READ`，也可按仓库 anonymous read 配置放行 |
+| `GET /-/ping` | 无需认证；不返回包信息 |
 | `GET /:package` | `READ` |
 | `GET /:package/-/:file` | `READ` |
 | `PUT /:package` publish | `ADD` |

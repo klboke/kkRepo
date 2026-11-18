@@ -60,7 +60,7 @@ class RepositoryDaoTest {
 
     @Override
     public int update(String sql, Object... args) {
-      attributesJson = args[8].toString();
+      if (sql.contains("UPDATE repository")) attributesJson = args[8].toString();
       return 1;
     }
   }

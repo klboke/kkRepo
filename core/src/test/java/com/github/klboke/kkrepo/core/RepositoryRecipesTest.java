@@ -61,6 +61,9 @@ class RepositoryRecipesTest {
     assertRecipe(recipes, "openvsx-hosted", RepositoryFormat.OPENVSX, RepositoryType.HOSTED);
     assertRecipe(recipes, "openvsx-proxy", RepositoryFormat.OPENVSX, RepositoryType.PROXY);
     assertRecipe(recipes, "openvsx-group", RepositoryFormat.OPENVSX, RepositoryType.GROUP);
+    assertRecipe(recipes, "ohpm-hosted", RepositoryFormat.OHPM, RepositoryType.HOSTED);
+    assertRecipe(recipes, "ohpm-proxy", RepositoryFormat.OHPM, RepositoryType.PROXY);
+    assertRecipe(recipes, "ohpm-group", RepositoryFormat.OHPM, RepositoryType.GROUP);
   }
 
   private static void assertRecipe(

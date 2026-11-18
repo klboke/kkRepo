@@ -10,6 +10,7 @@ import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -41,9 +42,63 @@ import java.util.OptionalLong;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 class RawAssetWriterTest {
   private static final String PATH = "docs/file.txt";
+
+  @Test
+  void preparedUploadSeparatesStorageFromTransactionAndProtectsCommittedReferences(@TempDir Path directory)
+      throws Exception {
+    Fixture fixture = fixture();
+    stubUploadedBlob(fixture);
+    Path file = Files.writeString(directory.resolve("content.har"), "body");
+    when(fixture.storage.putFile(anyString(), anyString(), any(), anyString())).thenAnswer(call -> {
+      assertFalse(TransactionSynchronizationManager.isActualTransactionActive());
+      return new BlobReference("bucket", "prepared", call.getArgument(3), 4);
+    });
+    when(fixture.assetDao.tryInsertAsset(any())).thenReturn(OptionalLong.of(11L));
+    var prepared = fixture.writer.prepareFile(runtime(), fixture.storage, 1L, PATH, file);
+    verify(fixture.assetDao, never()).findReusableBlobBySha256(anyLong(), anyString(), anyLong());
+    assertThrows(IllegalStateException.class, () ->
+        prepared.publish(runtime(), PATH, "alice", "127.0.0.1", persistedComponent(22), PATH, false));
+    TransactionSynchronizationManager.setActualTransactionActive(true);
+    try {
+      assertThrows(IllegalStateException.class, () ->
+          fixture.writer.prepareFile(runtime(), fixture.storage, 1L, PATH, file));
+      assertThrows(IllegalStateException.class, prepared::close);
+      var changed = mock(RepositoryRuntime.class);
+      assertThrows(IllegalStateException.class, () ->
+          prepared.publish(changed, PATH, "alice", "127.0.0.1", persistedComponent(22), PATH, false));
+      assertTrue(prepared.publish(runtime(), PATH, "alice", "127.0.0.1", persistedComponent(22), PATH, false));
+    } finally {
+      TransactionSynchronizationManager.setActualTransactionActive(false);
+    }
+    when(fixture.assetDao.hasLiveBlobForObjectKeyHash(eq(1L), any())).thenReturn(true);
+    prepared.close();
+    prepared.close();
+    verify(fixture.storage, never()).delete(any());
+    assertThrows(IllegalStateException.class, () ->
+        prepared.publish(runtime(), PATH, "alice", "127.0.0.1", persistedComponent(22), PATH, false));
+  }
+
+  @Test
+  void abandonedPreparedUploadDeletesOnlyItsOwnObjectAndMissingInputNeverUploads(@TempDir Path directory)
+      throws Exception {
+    Fixture fixture = fixture();
+    stubUploadedBlob(fixture);
+    Path file = Files.writeString(directory.resolve("content.har"), "body");
+    try (var prepared = fixture.writer.prepareFile(runtime(), fixture.storage, 1L, PATH, file)) {
+      verify(fixture.storage, never()).delete(any());
+    }
+    verify(fixture.storage).delete(any());
+    assertThrows(java.io.UncheckedIOException.class, () ->
+        fixture.writer.prepareFile(runtime(), fixture.storage, 1L, PATH, directory.resolve("missing")));
+    verify(fixture.storage).putFile(anyString(), anyString(), any(), anyString());
+  }
 
   @Test
   void writesNewAssetWithDigestsAttributesAndResponseBody() throws Exception {
@@ -147,7 +202,7 @@ class RawAssetWriterTest {
   @Test
   void reusesLiveBlobAndRecoversDeletedBlobWithExtraAttributes() {
     Fixture reusable = fixture();
-    AssetBlobRecord live = blob(5L, "shared");
+    AssetBlobRecord live = blob(5L, "shared").withAttributes(Map.of("dockerDigest", "sha256:shared"));
     when(reusable.assetDao.findReusableBlobBySha256(eq(1L), anyString(), eq(4L)))
         .thenReturn(Optional.of(live));
     when(reusable.assetDao.findAssetByPath(1L, PATH)).thenReturn(Optional.empty());
@@ -160,6 +215,9 @@ class RawAssetWriterTest {
         "text/plain", Map.of(), "alice", "127.0.0.1");
 
     assertEquals(5L, reused.blob().id());
+    assertEquals(reused.digests().sha512(), reused.blob().attributes().get("sha512"));
+    assertEquals("sha256:shared", reused.blob().attributes().get("dockerDigest"));
+    verify(reusable.assetDao).updateBlobAttributes(5L, reused.blob().attributes());
     verify(reusable.storage, never()).putFile(anyString(), anyString(), any(), anyString());
 
     Fixture recovered = fixture();
@@ -179,9 +237,29 @@ class RawAssetWriterTest {
         "text/plain", Map.of("remoteEtag", "etag"), "proxy", "upstream");
 
     assertEquals("etag", restored.blob().attributes().get("remoteEtag"));
+    assertEquals("sha256:shared", restored.blob().attributes().get("dockerDigest"));
     assertNotNull(restored.blob().attributes().get("sha512"));
     verify(recovered.assetDao).updateBlobAttributes(eq(5L), any());
     verify(recovered.storage).delete(uploaded);
+  }
+
+  @Test
+  void mergesChecksumsIntoConcurrentInsertWinnerWithoutLosingAttributes() {
+    Fixture fixture = fixture();
+    stubUploadedBlob(fixture);
+    doReturn(blob(2L, "shared").withAttributes(Map.of("dockerDigest", "sha256:shared")))
+        .when(fixture.assetDao).insertBlobOrFindExisting(any());
+    when(fixture.componentDao.upsertReturningId(any())).thenReturn(22L);
+    when(fixture.assetDao.tryInsertAsset(any())).thenReturn(OptionalLong.of(11L));
+
+    RawAssetWriter.Stored stored = fixture.writer.write(
+        runtime(), fixture.storage, 1L, PATH,
+        new ByteArrayInputStream("body".getBytes(StandardCharsets.UTF_8)),
+        "text/plain", Map.of("remoteEtag", "etag"), "proxy", "upstream");
+
+    assertEquals(Map.of("dockerDigest", "sha256:shared", "remoteEtag", "etag",
+        "sha512", stored.digests().sha512()), stored.blob().attributes());
+    verify(fixture.assetDao).updateBlobAttributes(2L, stored.blob().attributes());
   }
 
   @Test
@@ -203,6 +281,61 @@ class RawAssetWriterTest {
         "text/plain", Map.of(), "alice", "127.0.0.1"));
 
     verify(fixture.storage).delete(uploaded);
+  }
+
+  @ParameterizedTest
+  @CsvSource({"true,false,true", "true,true,false", "false,false,false"})
+  void cleansFileUploadOnlyAfterOuterRollbackWhenUnreferenced(
+      boolean rollback, boolean referenced, boolean deleted, @TempDir Path tempDir) throws Exception {
+    Fixture fixture = fixture();
+    stubUploadedBlob(fixture);
+    when(fixture.assetDao.tryInsertAsset(any())).thenReturn(OptionalLong.of(11L));
+    Path file = Files.writeString(tempDir.resolve("package.har"), "body");
+    TransactionSynchronizationManager.setActualTransactionActive(true);
+    TransactionSynchronizationManager.initSynchronization();
+    try {
+      RawAssetWriter.Stored stored = fixture.writer.writeFileAtBrowsePathIfAbsent(
+          runtime(), fixture.storage, 1L, PATH, file, "application/octet-stream",
+          Map.of(), "alice", "127.0.0.1", null, PATH);
+      assertTrue(stored.created());
+      verify(fixture.storage, never()).delete(any());
+      when(fixture.assetDao.hasLiveBlobForObjectKeyHash(eq(1L), any())).thenReturn(referenced);
+      var callbacks = TransactionSynchronizationManager.getSynchronizations();
+      assertEquals(1, callbacks.size());
+      callbacks.forEach(callback -> callback.afterCompletion(rollback
+          ? TransactionSynchronization.STATUS_ROLLED_BACK : TransactionSynchronization.STATUS_COMMITTED));
+      if (deleted) {
+        verify(fixture.storage).delete(any(BlobReference.class));
+      } else {
+        verify(fixture.storage, never()).delete(any());
+      }
+      assertTrue(Files.exists(file));
+    } finally {
+      TransactionSynchronizationManager.clearSynchronization();
+      TransactionSynchronizationManager.setActualTransactionActive(false);
+    }
+  }
+
+  @Test
+  void doesNotDeleteReusedBlobOnOuterRollback(@TempDir Path tempDir) throws Exception {
+    Fixture fixture = fixture();
+    AssetBlobRecord shared = blob(5L, "shared");
+    when(fixture.assetDao.findReusableBlobBySha256(eq(1L), anyString(), eq(4L)))
+        .thenReturn(Optional.of(shared));
+    when(fixture.assetDao.tryInsertAsset(any())).thenReturn(OptionalLong.of(11L));
+    Path file = Files.writeString(tempDir.resolve("package.har"), "body");
+    TransactionSynchronizationManager.setActualTransactionActive(true);
+    TransactionSynchronizationManager.initSynchronization();
+    try {
+      fixture.writer.writeFileAtBrowsePathIfAbsent(
+          runtime(), fixture.storage, 1L, PATH, file, "application/octet-stream",
+          Map.of(), "alice", null, null, PATH);
+      assertTrue(TransactionSynchronizationManager.getSynchronizations().isEmpty());
+      verifyNoInteractions(fixture.storage);
+    } finally {
+      TransactionSynchronizationManager.clearSynchronization();
+      TransactionSynchronizationManager.setActualTransactionActive(false);
+    }
   }
 
   @Test

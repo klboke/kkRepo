@@ -21,10 +21,12 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 /**
- * HTTP boundary shared by every protocol handler for {@code X-KkRepo-Staging}.
+ * HTTP boundary shared by every protocol handler for staging selectors.
  *
  * <p>Handlers call this before their normal routing. Reads that have no staged item return empty so
- * the request falls back to live content; staged deletes return 404 instead of falling back.
+ * the request falls back to live content; staged deletes return 404 instead of falling back. The
+ * session comes from {@link StagingSelector} so header, query parameter and credential binding are
+ * honoured consistently, and a contradictory selector is rejected before any live effect.
  */
 @Component
 public class StagingHttpSupport {
@@ -44,18 +46,10 @@ public class StagingHttpSupport {
 
   public Optional<ResponseEntity<?>> dispatch(
       RepositoryRuntime runtime, String path, HttpServletRequest request) throws IOException {
-    String header = request.getHeader(StagingService.HEADER);
-    if (header == null || header.isBlank()) {
-      header = request.getParameter("stagingSession");
-    }
-    if (header == null || header.isBlank()) {
-      Object bound = request.getAttribute(StagingCredentialService.SESSION_ATTRIBUTE);
-      header = bound == null ? null : bound.toString();
-    }
-    if (header == null || header.isBlank()) {
+    String sessionKey = StagingSelector.resolve(request);
+    if (sessionKey == null) {
       return Optional.empty();
     }
-    String sessionKey = header.trim();
     return switch (request.getMethod().toUpperCase(java.util.Locale.ROOT)) {
       case "GET", "HEAD" -> stagedRead(runtime, sessionKey, path, request);
       case "PUT", "DELETE" -> Optional.of(stagedWrite(runtime, sessionKey, path, request));

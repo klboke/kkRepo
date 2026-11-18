@@ -88,8 +88,17 @@ class FixtureHandler(BaseHTTPRequestHandler):
         if path.startswith(prefix):
             tail = path[len(prefix):]
             revision, separator, filename = tail.partition("/")
-            if not separator or revision not in {"main", COMMIT} or filename not in FILES:
-                self._error(HTTPStatus.NOT_FOUND, "Entry not found", head)
+            if not separator or revision not in {"main", COMMIT}:
+                self._error(HTTPStatus.NOT_FOUND, "Revision not found", head,
+                            {"X-Error-Code": "RevisionNotFound"})
+                return
+            if filename not in FILES:
+                self.server.count("missing:" + filename)
+                self._error(HTTPStatus.NOT_FOUND, "Entry not found", head, {
+                    "X-Error-Code": "EntryNotFound",
+                    "X-Error-Message": "Entry not found",
+                    "X-Repo-Commit": COMMIT,
+                })
                 return
             self.server.count("resolve:" + filename)
             file = FILES[filename]
@@ -242,9 +251,12 @@ class FixtureHandler(BaseHTTPRequestHandler):
             merged.update(headers)
         self._send(HTTPStatus.OK, body, merged, head)
 
-    def _error(self, status: HTTPStatus, message: str, head: bool) -> None:
+    def _error(
+        self, status: HTTPStatus, message: str, head: bool,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         body = json.dumps({"error": message}, separators=(",", ":")).encode()
-        self._send(status, body, {"Content-Type": "application/json"}, head)
+        self._send(status, body, {"Content-Type": "application/json", **(headers or {})}, head)
 
     def _send(
         self, status: HTTPStatus, body: bytes, headers: dict[str, str], head: bool

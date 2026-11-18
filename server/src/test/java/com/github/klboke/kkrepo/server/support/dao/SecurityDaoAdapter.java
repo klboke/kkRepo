@@ -34,6 +34,11 @@ public class SecurityDaoAdapter implements SecurityDao {
   }
 
   @Override
+  public int deleteApiKey(String domain, String ownerSource, String ownerUserId) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
   public int deleteApiKeysForOwner(String arg0, String arg1) {
     throw new UnsupportedOperationException();
   }

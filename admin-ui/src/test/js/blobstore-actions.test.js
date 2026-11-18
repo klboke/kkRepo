@@ -167,7 +167,7 @@ test('each store row keeps Edit visible and moves secondary actions into overflo
     },
     closeBlobStoreActionMenu() {}, updateTableSortHeaders() {}, renderUsageSummary() {},
     filteredBlobStores: () => [{ id: 7, name: 'unused', type: 'file', engine: 'file', path: 'unused' }],
-    sortBlobStores: rows => rows, isFileBlobStore: () => true,
+    sortBlobStores: rows => rows, isFileBlobStore: () => true, isAzureBlobStore: () => false,
     blobStoreIcon: () => '', engineLabel: () => 'File', healthBadge: () => '',
     renderInventoryMetric: () => '0', renderCopyableLocation: () => '',
     escapeHtml: String, pathStyleBadge: () => '',

@@ -34,6 +34,23 @@ class DockerRegistryBlackBoxCompatibilityTest {
       .build();
 
   @Test
+  void httpsConnectorsPreserveTlsAndSecureAuthenticationRealms() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeTrue(config.enabled() && config.configured(), "Docker compatibility is not configured");
+    assumeTrue("https".equals(config.nexus().v2Base().getScheme())
+        && "https".equals(config.nexusPlus().v2Base().getScheme()), "Configure both HTTPS connector URLs");
+    for (Endpoint endpoint : List.of(config.nexus(), config.nexusPlus())) {
+      var response = HTTP.send(HttpRequest.newBuilder(endpoint.v2Base()).GET().build(),
+          HttpResponse.BodyHandlers.ofByteArray());
+      assertTrue(response.sslSession().isPresent());
+      assertTrue(response.statusCode() == 200 || response.statusCode() == 401);
+      assertEquals("registry/2.0", response.headers().firstValue(DockerConstants.API_VERSION_HEADER).orElseThrow());
+      String challenge = response.headers().firstValue("WWW-Authenticate").orElse("");
+      if (challenge.startsWith("Bearer ")) assertTrue(challenge.contains("realm=\"https://"), challenge);
+    }
+  }
+
+  @Test
   void chunkedUploadsPreserveOffsetsAndSupportCancellation() throws Exception {
     CompatConfig config = CompatConfig.load();
     assumeTrue(config.enabled() && config.configured() && config.writeEnabled(),
