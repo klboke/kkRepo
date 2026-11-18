@@ -110,7 +110,7 @@ public class WingetProtocolHandler implements RepositoryProtocolHandler {
     String token = header(context.servletRequest(), "ContinuationToken");
     int offset = continuationOffset(context, token);
     WingetSearchPage page = service.search(
-        context.runtime(), request, body, token, offset, request.maximumResults());
+        context.runtime(), request, body, offset, request.maximumResults());
     ObjectNode root = mapper.createObjectNode();
     ArrayNode data = root.putArray("Data");
     for (WingetPackage pkg : page.packages()) {
@@ -118,9 +118,7 @@ public class WingetProtocolHandler implements RepositoryProtocolHandler {
     }
     root.putArray("UnsupportedPackageMatchFields");
     root.putArray("RequiredPackageMatchFields");
-    String continuation = page.upstreamContinuationToken() != null
-        ? page.upstreamContinuationToken()
-        : page.nextOffset() != null ? encodeOffset(page.nextOffset()) : null;
+    String continuation = page.nextOffset() != null ? encodeOffset(page.nextOffset()) : null;
     if (continuation != null) {
       root.put("ContinuationToken", continuation);
     }

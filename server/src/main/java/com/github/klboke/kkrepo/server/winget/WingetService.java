@@ -53,11 +53,10 @@ public class WingetService {
   }
 
   public WingetSearchPage search(
-      RepositoryRuntime runtime, WingetSearchRequest request, byte[] rawBody,
-      String continuationToken, int offset, int limit) {
+      RepositoryRuntime runtime, WingetSearchRequest request, byte[] rawBody, int offset, int limit) {
     return switch (runtime.type()) {
       case HOSTED -> hosted.search(runtime, request, offset, limit);
-      case PROXY -> proxy.search(runtime, request, rawBody, continuationToken, offset, limit);
+      case PROXY -> proxy.search(runtime, request, rawBody, limit);
       case GROUP -> groupSearch(runtime, request, rawBody, limit);
     };
   }
@@ -89,7 +88,7 @@ public class WingetService {
     for (RepositoryRuntime member : group.members()) {
       WingetSearchPage page;
       try {
-        page = search(member, request, rawBody, null, 0, limit);
+        page = search(member, request, rawBody, 0, limit);
       } catch (RuntimeException failure) {
         log.debug("WinGet group member {} search failed: {}", member.name(), failure.getMessage());
         continue;
@@ -108,7 +107,7 @@ public class WingetService {
     if (results.size() > limit) {
       results = new ArrayList<>(results.subList(0, limit));
     }
-    return new WingetSearchPage(results, null, null);
+    return new WingetSearchPage(results, null);
   }
 
   private static WingetPackage mergePackage(WingetPackage first, WingetPackage second) {

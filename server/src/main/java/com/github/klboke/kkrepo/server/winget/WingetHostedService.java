@@ -136,13 +136,13 @@ public class WingetHostedService {
       break;
     }
     Integer next = !exhausted && results.size() >= limit ? cursor : null;
-    return new WingetSearchPage(results, next, null);
+    return new WingetSearchPage(results, next);
   }
 
   /** Search limited to what is already stored, used as a proxy fallback when upstream is down. */
   public WingetSearchPage searchCached(
-      RepositoryRuntime runtime, WingetSearchRequest request, int offset, int limit) {
-    return search(runtime, request, offset, limit);
+      RepositoryRuntime runtime, WingetSearchRequest request, int limit) {
+    return search(runtime, request, 0, limit);
   }
 
   public WingetManifest manifestFromRows(

@@ -68,9 +68,13 @@ public class WingetProxyService {
     }
   }
 
+  /**
+   * Returns a single page. The outbound fetcher cannot send the {@code ContinuationToken} request
+   * header, so relaying an upstream token (or a hosted offset from the cache fallback) would make
+   * the client request the same first page again with the same token.
+   */
   public WingetSearchPage search(
-      RepositoryRuntime runtime, WingetSearchRequest request, byte[] requestBody,
-      String continuationToken, int offset, int limit) {
+      RepositoryRuntime runtime, WingetSearchRequest request, byte[] requestBody, int limit) {
     String url = base(runtime) + "/" + WingetProtocol.MANIFEST_SEARCH_PATH;
     HttpRemoteFetcher.Request remote = new HttpRemoteFetcher.Request(
         url, null, null, null, HttpRemoteFetcher.TimeoutProfile.METADATA, false,
@@ -87,13 +91,12 @@ public class WingetProxyService {
       }
       byte[] body = WingetJson.readBody(result.body());
       JsonNode root = mapper.readTree(body);
-      return new WingetSearchPage(WingetJson.packages(root), null,
-          result.header("ContinuationToken"));
+      return new WingetSearchPage(WingetJson.packages(root), null);
     } catch (IOException | RuntimeException failure) {
       log.warn("WinGet proxy search failed; trying cached manifests: {}", failure.toString());
-      WingetSearchPage cached = hosted.searchCached(runtime, request, offset, limit);
+      WingetSearchPage cached = hosted.searchCached(runtime, request, limit);
       if (!cached.packages().isEmpty()) {
-        return cached;
+        return new WingetSearchPage(cached.packages(), null);
       }
       if (failure instanceof WingetException winget) throw winget;
       throw WingetException.upstream("WinGet upstream search is unavailable");

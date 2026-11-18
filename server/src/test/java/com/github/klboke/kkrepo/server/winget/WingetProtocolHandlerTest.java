@@ -51,8 +51,8 @@ class WingetProtocolHandlerTest {
     com.github.klboke.kkrepo.protocol.winget.WingetPackage pkg =
         new com.github.klboke.kkrepo.protocol.winget.WingetPackage(
             "Contoso.Tool", "Contoso Tool", "Contoso", List.of(summary));
-    when(service.search(any(), any(), any(), isNull(), eq(0), eq(20)))
-        .thenReturn(new WingetSearchPage(List.of(pkg), 40, null));
+    when(service.search(any(), any(), any(), eq(0), eq(20)))
+        .thenReturn(new WingetSearchPage(List.of(pkg), 40));
 
     var response = handler.handle(request("api/manifestSearch", HttpMethod.POST,
         "{\"Query\":{\"KeyWord\":\"contoso\",\"MatchType\":\"SubstringIgnoreCase\"}}",
