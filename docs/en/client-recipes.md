@@ -864,7 +864,7 @@ scripts/docker-compat/client-compat.sh
 
 Do not assume Docker pull/push works through `/repository/<repo>/...`.
 
-## Arch Linux / Pacman
+## Pacman / Arch Linux
 
 ```ini
 [kkrepo-demo]
@@ -888,7 +888,7 @@ curl -u alice:"$KKREPO_PASSWORD" \
 Without a configured signing key, use `SigLevel = Optional TrustAll` or omit
 `DatabaseRequired`.
 
-See the [Arch Linux / Pacman Repository Guide](repository-guides/arch-linux.md).
+See the [Pacman / Arch Linux Repository Guide](repository-guides/arch-linux.md).
 
 ## Troubleshooting Client Configuration
 

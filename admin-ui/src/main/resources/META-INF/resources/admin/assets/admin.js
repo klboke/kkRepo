@@ -583,7 +583,7 @@ const FORMAT_DISPLAY_NAMES = Object.freeze({
   r: "R / CRAN",
   huggingface: "Hugging Face Models",
   gitlfs: "Git LFS",
-  arch: "Arch Linux / Pacman",
+  arch: "Pacman / Arch Linux",
   raw: "Raw",
 });
 

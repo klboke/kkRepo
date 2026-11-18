@@ -1,4 +1,4 @@
-# Arch Linux / Pacman Repository Guide
+# Pacman / Arch Linux Repository Guide
 
 kkRepo implements the flat pacman repository layout: package files plus a generated package
 database and file-list database. Hosted, proxy, and group repositories are supported.

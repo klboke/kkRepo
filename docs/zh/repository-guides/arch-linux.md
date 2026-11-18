@@ -1,4 +1,4 @@
-# Arch Linux / Pacman 仓库指南
+# Pacman / Arch Linux 仓库指南
 
 kkRepo 实现 pacman 的扁平仓库布局：包文件、包数据库、文件列表数据库，支持 hosted、proxy、
 group 三种仓库类型。
