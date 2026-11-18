@@ -152,6 +152,8 @@ class AnsibleGalaxyRepositoryBlackBoxCompatibilityTest {
       throws Exception {
     Config config = configured();
     ensureRepositories(config);
+    ProxyStreamingCompatibility.enable(HttpRequest.newBuilder(URI.create(config.candidateRepository(config.proxy()) + "/"))
+        .header("Authorization", config.candidateAuth()));
     String path = "api/v3/collections/" + config.proxyNamespace() + "/"
         + config.proxyCollection() + "/versions/" + config.proxyVersion() + "/";
 

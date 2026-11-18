@@ -23,7 +23,7 @@ import org.springframework.web.server.ResponseStatusException;
 @RestController
 @RequestMapping("/internal/docker")
 public class DockerOperationsController {
-  private final DockerConnectorManager connectorManager;
+  private final DockerTlsBundles tlsBundles;
   private final DockerConnectorRuntime connectorRuntime;
   private final DockerTransferLimiter transferLimiter;
   private final RepositoryDao repositoryDao;
@@ -34,7 +34,7 @@ public class DockerOperationsController {
   private final SecurityManagementService securityService;
 
   public DockerOperationsController(
-      DockerConnectorManager connectorManager,
+      DockerTlsBundles tlsBundles,
       DockerConnectorRuntime connectorRuntime,
       DockerTransferLimiter transferLimiter,
       RepositoryDao repositoryDao,
@@ -43,7 +43,7 @@ public class DockerOperationsController {
       ProxyNegativeCache proxyNegativeCache,
       SecurityAuthenticationService authenticationService,
       SecurityManagementService securityService) {
-    this.connectorManager = connectorManager;
+    this.tlsBundles = tlsBundles;
     this.connectorRuntime = connectorRuntime;
     this.transferLimiter = transferLimiter;
     this.repositoryDao = repositoryDao;
@@ -54,11 +54,17 @@ public class DockerOperationsController {
     this.securityService = securityService;
   }
 
+  @GetMapping("/tls-bundles")
+  public Map<String, Object> tlsBundles(HttpServletRequest request) {
+    requireDockerAdmin(request, "read");
+    return Map.of("defaultBundle", tlsBundles.defaultBundle(), "bundles", tlsBundles.statuses());
+  }
+
   @GetMapping("/connectors")
   public Map<String, Object> connectors(HttpServletRequest request) {
     requireDockerAdmin(request, "read");
     return Map.of(
-        "connector", connectorStatus(connectorManager.snapshot()),
+        "connector", connectorStatus(connectorRuntime.snapshot()),
         "transfer", transferLimiter.snapshot());
   }
 
@@ -110,6 +116,7 @@ public class DockerOperationsController {
         "tuning", snapshot.tuning(),
         "refreshedAt", snapshot.refreshedAt(),
         "sequence", snapshot.sequence(),
+        "nodeId", connectorRuntime.nodeId(),
         "lastError", connectorRuntime.lastError() == null ? "" : connectorRuntime.lastError());
   }
 

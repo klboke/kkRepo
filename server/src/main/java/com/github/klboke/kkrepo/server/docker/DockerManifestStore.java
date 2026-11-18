@@ -168,7 +168,8 @@ public class DockerManifestStore {
           body.length,
           createdBy,
           createdByIp,
-          tagReferences));
+          tagReferences,
+          validateReferences));
     } catch (RuntimeException e) {
       BlobTransactionCleanup.deleteIfUnreferenced(
           assetDao, storage, runtime.blobStoreId(), blobReference, "Docker manifest persist failure");
@@ -305,6 +306,7 @@ public class DockerManifestStore {
 
   @Transactional
   public int deleteReference(RepositoryRuntime runtime, String imageName, String reference) {
+    dockerDao.lockRepositoryForMutation(runtime.id());
     if (DockerPathParser.isDigestReference(reference)) {
       DockerRegistryDao.DeletedManifest deleted = dockerDao.deleteManifest(runtime.id(), imageName, reference);
       return completeReferenceDeletion(runtime, deleted);
@@ -320,6 +322,7 @@ public class DockerManifestStore {
   /** Nexus Browse removes an individual asset reference, preserving tags that share its body. */
   @Transactional
   public int deleteBrowseReference(RepositoryRuntime runtime, String imageName, String reference) {
+    dockerDao.lockRepositoryForMutation(runtime.id());
     return completeReferenceDeletion(
         runtime, dockerDao.deleteBrowseReference(runtime.id(), imageName, reference));
   }
@@ -352,7 +355,13 @@ public class DockerManifestStore {
       long size,
       String createdBy,
       String createdByIp,
-      List<String> tags) {
+      List<String> tags,
+      boolean validateReferences) {
+    // Concurrent publishers share this lock; cleanup takes its exclusive counterpart only for
+    // the short final metadata transaction, never while receiving/uploading object bytes.
+    dockerDao.lockRepositoryForMutation(runtime.id());
+    // A cleanup could have finished while the manifest bytes were uploaded to storage.
+    if (validateReferences) validateReferences(runtime, imageName, metadata);
     Instant now = Instant.now();
     String blobRef = BlobReferenceCodec.format(blobReference);
     AssetBlobRecord blob = assetDao.insertBlobOrFindExisting(new AssetBlobRecord(

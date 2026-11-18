@@ -80,3 +80,17 @@ test('policy and run summaries display the nested snapshot rules', () => {
   assert.match(context.cleanupRunRuleSnapshot(criteria), /5/);
   assert.match(context.cleanupRunRuleSnapshot(criteria), /builds/);
 });
+
+test('Docker retention uses publication order per image and keeps the component payload', () => {
+  const { context, element } = harness();
+  const help = new Map();
+  context.setCleanupFieldHelp = (id, message) => help.set(id, message);
+  element('cleanup-policy-format').value = 'docker';
+  context.refreshCleanupCapabilityHelp();
+  assert.equal(element('cleanup-policy-retain-count').disabled, false);
+  assert.match(element('cleanup-policy-retain-label').textContent, /per image name/);
+  assert.match(help.get('cleanup-policy-retain-help'), /Aliases count once/);
+  assert.match(help.get('cleanup-policy-retain-help'), /publication\/update time/);
+  assert.equal(context.cleanupPolicyPayload().criteria.retainCount, 5);
+  assert.equal(context.cleanupPolicyPayload().criteria.mode, undefined);
+});

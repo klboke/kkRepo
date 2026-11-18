@@ -21,6 +21,7 @@ import java.util.Objects;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
 
 /** Performs the final native lock, fence, usage, protection and content checks with deletion. */
 @Service
@@ -53,7 +54,7 @@ public class CleanupExecutionService {
     this.clock = clock;
   }
 
-  @Transactional
+  @Transactional(isolation = Isolation.READ_COMMITTED)
   public ExecutionResult apply(
       ClaimedRunRepository claim,
       CleanupRun run,
@@ -63,7 +64,7 @@ public class CleanupExecutionService {
   }
 
   /** Revalidates and deletes one bounded protocol family in a single fenced transaction. */
-  @Transactional
+  @Transactional(isolation = Isolation.READ_COMMITTED)
   public List<ExecutionResult> applyBatch(
       ClaimedRunRepository claim,
       CleanupRun run,
@@ -128,7 +129,7 @@ public class CleanupExecutionService {
         results.set(index, stale("usage revision changed"));
         continue;
       }
-      String snapshotChange = scanner.revalidateSnapshot(repository, run.criteriaSnapshot(), current, run.createdAt());
+      String snapshotChange = scanner.revalidateForDeletion(repository, run.criteriaSnapshot(), current, run.createdAt());
       if (snapshotChange != null) {
         results.set(index, stale(snapshotChange));
         continue;

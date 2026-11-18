@@ -198,6 +198,7 @@ class CargoAssetWriter {
       String createdByIp,
       Path responseFile,
       boolean allowReplace) {
+    com.github.klboke.kkrepo.server.proxy.ProxyCachePublication.check(runtime, path);
     Instant now = Instant.now();
     String contentType = contentTypeHint == null || contentTypeHint.isBlank()
         ? contentTypeForPath(path)

@@ -698,11 +698,14 @@ function repositoryBaseUrl(repoName = state.repo) {
 function dockerRepositoryBaseUrl(repo = currentRepository()) {
   if (!repo) return "";
   const docker = repo.docker || {};
-  if (docker.connectorEnabled && docker.connectorPublicUrl) {
+  if ((docker.connectorEnabled || docker.httpsConnectorEnabled) && docker.connectorPublicUrl) {
     return docker.connectorPublicUrl.replace(/\/+$/, "");
   }
+  if (docker.httpsConnectorEnabled && docker.httpsConnectorPort) {
+    return `https://${window.location.hostname}:${docker.httpsConnectorPort}`;
+  }
   if (docker.connectorEnabled && docker.connectorPort) {
-    return `${window.location.protocol}//${window.location.hostname}:${docker.connectorPort}`;
+    return `http://${window.location.hostname}:${docker.connectorPort}`;
   }
   return new URL(`/v2/${encodeURIComponent(repo.name)}`, window.location.origin).href.replace(/\/+$/, "");
 }
@@ -2749,7 +2752,7 @@ function dockerTagFromDockerPath(path) {
 function dockerImageReferenceBase(repo = currentRepository()) {
   if (!repo) return "";
   const docker = repo.docker || {};
-  if (docker.connectorEnabled && docker.connectorPublicUrl) {
+  if ((docker.connectorEnabled || docker.httpsConnectorEnabled) && docker.connectorPublicUrl) {
     const value = docker.connectorPublicUrl.trim();
     try {
       const url = new URL(/^https?:\/\//i.test(value) ? value
@@ -2760,6 +2763,9 @@ function dockerImageReferenceBase(repo = currentRepository()) {
     } catch (_) {
       // Old saved configurations may contain an invalid public URL; retain usable routing below.
     }
+  }
+  if (docker.httpsConnectorEnabled && docker.httpsConnectorPort) {
+    return `${window.location.hostname}:${docker.httpsConnectorPort}`;
   }
   if (docker.connectorEnabled && docker.connectorPort) {
     return `${window.location.hostname}:${docker.connectorPort}`;

@@ -305,6 +305,7 @@ class PubAssetWriter {
       Path responseFile,
       boolean allowReplace,
       AssetBlobRecord reusableBlob) {
+    com.github.klboke.kkrepo.server.proxy.ProxyCachePublication.check(runtime, path);
     Instant now = Instant.now();
     String blobRef = BlobReferenceCodec.format(reference);
     Map<String, Object> blobAttrs = new LinkedHashMap<>();
@@ -568,6 +569,10 @@ class PubAssetWriter {
     attrs.put("archivePath", archivePath);
     attrs.put("publishedAt", publishedAt.toString());
     return attrs;
+  }
+
+  static void validateProgressiveArchive(Path file, String packageName, String version) {
+    validateExpectedCoordinate(PubArchiveInspector.inspect(file), packageName, version);
   }
 
   private static void validateExpectedCoordinate(

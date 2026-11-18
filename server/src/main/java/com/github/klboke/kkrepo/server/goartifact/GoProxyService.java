@@ -62,6 +62,9 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class GoProxyService {
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService streaming;
+
   private static final long[] BACKOFF_SECONDS = {30, 60, 120, 300, 600, 1800};
   private static final int MAX_METADATA_BYTES = 8 * 1024 * 1024;
   private static final int PUBLISH_TIME_LOOKUP_PARALLELISM = 8;
@@ -149,6 +152,7 @@ public class GoProxyService {
       throw new MavenExceptions.MethodNotAllowed("Go proxy requests require a go proxy repository");
     }
     GoPath path = parse(rawPath);
+    if (path.path().endsWith(".zip")) com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.enableRanges(runtime, path.path());
     if (!runtime.minimumReleaseAgeEnabled()) {
       return serve(runtime, path, headOnly);
     }
@@ -386,7 +390,10 @@ public class GoProxyService {
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
         .withRepositoryForContent(runtime);
     try {
-      return fetcher.fetchWithBodyRetry(req, path.path(), result -> {
+      return com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.fetchMaven(
+          streaming, fetcher, req, path.path(), runtime,
+          !headOnly && cached.isEmpty() && path.path().endsWith(".zip"),
+          null, null, result -> {
         int status = result.status();
         if (status == 304 && cached.isPresent()) {
           assetDao.touchAssetLastUpdated(cached.get().assetId(), now);

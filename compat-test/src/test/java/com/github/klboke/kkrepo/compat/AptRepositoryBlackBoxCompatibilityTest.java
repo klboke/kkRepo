@@ -154,7 +154,7 @@ class AptRepositoryBlackBoxCompatibilityTest {
   }
 
   @Test
-  void proxyPackagesUnderDistsMatchNexusWithEncodedTildesWhenConfigured() throws Exception {
+  void proxySha256OnlyIndexAndEncodedPackagePathsMatchNexusWhenConfigured() throws Exception {
     Config config = configured();
     String repository = "apt-proxy-path-" + UUID.randomUUID().toString().substring(0, 8);
     String host = CompatDefaults.setting("compat.apt.upstreamHost", "APT_COMPAT_UPSTREAM_HOST")
@@ -163,19 +163,39 @@ class AptRepositoryBlackBoxCompatibilityTest {
         new java.net.InetSocketAddress("0.0.0.0", 0), 0);
     String remote = "http://" + host + ":" + upstream.getAddress().getPort() + "/linux/debian/";
     Map<String, byte[]> packages = new LinkedHashMap<>();
+    StringBuilder packageIndex = new StringBuilder();
     for (int index = 0; index < 3; index++) {
       var fixture = AptCompatibilityFixtures.deb(
           "kkrepo-proxy-fixture", "1.0-" + index + "~debian.12~bookworm", "amd64", null, "proxy");
-      packages.put("dists/bookworm/pool/stable/amd64/" + fixture.filename(), fixture.bytes());
+      String path = "dists/bookworm/pool/stable/amd64/" + fixture.filename();
+      packages.put(path, fixture.bytes());
+      // Debian permits omitting MD5sum and SHA1 when a SHA2 digest is present.
+      packageIndex.append("Package: kkrepo-proxy-fixture\nVersion: 1.0-").append(index)
+          .append("~debian.12~bookworm\nArchitecture: amd64\n")
+          .append("Maintainer: Test <test@example.invalid>\nDescription: proxy fixture\n")
+          .append("Filename: ").append(path).append("\nSize: ").append(fixture.bytes().length)
+          .append("\nSHA256: ").append(fixture.sha256()).append("\n\n");
     }
+    byte[] indexBytes = packageIndex.toString().getBytes(StandardCharsets.UTF_8);
+    String indexDigest = java.util.HexFormat.of().formatHex(
+        java.security.MessageDigest.getInstance("SHA-256").digest(indexBytes));
+    byte[] releaseBytes = ("Suite: bookworm\nCodename: bookworm\nComponents: main\n"
+        + "Architectures: amd64\nDate: " + DateTimeFormatter.RFC_1123_DATE_TIME.format(
+            ZonedDateTime.now(java.time.ZoneOffset.UTC)) + "\nSHA256:\n "
+        + indexDigest + " " + indexBytes.length + " main/binary-amd64/Packages\n")
+        .getBytes(StandardCharsets.UTF_8);
+    Map<String, byte[]> resources = new LinkedHashMap<>(packages);
+    resources.put("dists/bookworm/Release", releaseBytes);
+    resources.put("dists/bookworm/main/binary-amd64/Packages", indexBytes);
     upstream.createContext("/linux/debian/", exchange -> {
       try (exchange) {
-        byte[] body = packages.get(exchange.getRequestURI().getPath()
+        byte[] body = resources.get(exchange.getRequestURI().getPath()
             .substring("/linux/debian/".length()));
         if (body == null) {
           exchange.sendResponseHeaders(404, -1);
         } else {
-          exchange.getResponseHeaders().set("Content-Type", "application/vnd.debian.binary-package");
+          exchange.getResponseHeaders().set("Content-Type", exchange.getRequestURI().getPath().endsWith(".deb")
+              ? "application/vnd.debian.binary-package" : "text/plain");
           exchange.getResponseHeaders().set("Content-Length", Integer.toString(body.length));
           if (exchange.getRequestMethod().equals("HEAD")) {
             exchange.sendResponseHeaders(200, -1);
@@ -191,6 +211,16 @@ class AptRepositoryBlackBoxCompatibilityTest {
       createProxy(config.nexusAdmin(), repository, remote, config.nexusBlobStore(), true);
       if (!config.referenceOnly()) {
         createProxy(config.candidateAdmin(), repository, remote, config.candidateBlobStore(), false);
+      }
+      for (String path : List.of("dists/bookworm/Release", "dists/bookworm/main/binary-amd64/Packages")) {
+        Exchange reference = send(config.nexus(repository).request(path).GET());
+        assertEquals(200, reference.status(), () -> "Nexus metadata: " + reference.text());
+        assertArrayEquals(resources.get(path), reference.body());
+        if (!config.referenceOnly()) {
+          Exchange candidate = send(config.candidate(repository).request(path).GET());
+          assertEquals(reference.status(), candidate.status());
+          assertArrayEquals(reference.body(), candidate.body());
+        }
       }
       int index = 0;
       for (var entry : packages.entrySet()) {
@@ -232,7 +262,7 @@ class AptRepositoryBlackBoxCompatibilityTest {
     } else {
       body.put("recipe", "apt-proxy");
       body.put("blobStoreName", blobStore);
-      body.put("proxy", Map.of("remoteUrl", remote, "autoBlock", false));
+      body.put("proxy", Map.of("remoteUrl", remote, "autoBlock", false, "streamingEnabled", true));
       body.put("apt", Map.of("distribution", "bookworm", "flat", false,
           "metadataMode", "PASSTHROUGH"));
     }

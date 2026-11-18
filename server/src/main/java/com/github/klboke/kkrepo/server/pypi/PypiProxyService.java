@@ -54,6 +54,9 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class PypiProxyService {
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService streaming;
+
   private static final Logger log = LoggerFactory.getLogger(PypiProxyService.class);
   private static final long[] BACKOFF_SECONDS = {30, 60, 120, 300, 600, 1800};
   private static final String SIMPLE_JSON = "application/vnd.pypi.simple.v1+json";
@@ -444,7 +447,9 @@ public class PypiProxyService {
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
         .withRepositoryForContent(runtime);
     try {
-      return fetcher.fetchWithBodyRetry(req, path, result -> {
+      return com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.fetchPypi(
+          streaming, fetcher, req, path, runtime,
+          !headOnly && cached.isEmpty() && !path.endsWith(".asc"), null, null, result -> {
         int status = result.status();
         if (status == 304 && cached.isPresent()) {
           NexusCacheType cacheType = cacheType(path);

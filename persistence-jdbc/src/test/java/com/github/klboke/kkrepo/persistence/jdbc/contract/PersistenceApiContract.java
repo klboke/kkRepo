@@ -87,6 +87,69 @@ import org.springframework.dao.DuplicateKeyException;
 /** Reusable black-box contract that every database backend must pass through the public API. */
 public abstract class PersistenceApiContract {
   @Test
+  void dockerConnectorsReservePortsAcrossProtocolsAndReleaseOnUpdateAndDelete() {
+    var repositories = stores().repositories();
+    long first = inTransaction(() -> repositories.insert(dockerConnectorRepository(
+        null, "tls-ports-a", Map.of("connectorPort", 15443, "httpsConnectorPort", 15444))));
+    assertThrows(DuplicateKeyException.class, () -> inTransaction(() -> repositories.insert(
+        dockerConnectorRepository(null, "tls-ports-b", Map.of("httpsConnectorPort", 15443)))));
+    assertTrue(repositories.findByName("tls-ports-b").isEmpty());
+    long second = inTransaction(() -> repositories.insert(dockerConnectorRepository(
+        null, "tls-ports-b", Map.of("connectorPort", 15445))));
+    assertThrows(DuplicateKeyException.class, () -> inTransaction(() -> {
+      repositories.update(dockerConnectorRepository(second, "tls-ports-b", Map.of("connectorPort", 15444)));
+      return null;
+    }));
+    assertEquals(15445, ((Map<?, ?>) repositories.findById(second).orElseThrow().attributes().get("docker")).get("connectorPort"));
+    inTransaction(() -> {
+      repositories.update(dockerConnectorRepository(first, "tls-ports-a", Map.of("connectorPort", 15443)));
+      repositories.update(dockerConnectorRepository(second, "tls-ports-b", Map.of("httpsConnectorPort", 15444)));
+      return null;
+    });
+    repositories.deleteById(first);
+    inTransaction(() -> {
+      repositories.update(dockerConnectorRepository(second, "tls-ports-b", Map.of("httpsConnectorPort", 15443)));
+      return null;
+    });
+    repositories.deleteById(second);
+  }
+
+  @Test
+  void concurrentHttpAndHttpsPortReservationsHaveOneWinner() throws Exception {
+    var barrier = new CyclicBarrier(2);
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      List<Callable<Boolean>> actions = List.of(
+          () -> reserveConcurrentDockerPort(barrier, "http"),
+          () -> reserveConcurrentDockerPort(barrier, "https"));
+      var results = executor.invokeAll(actions);
+      int winners = 0;
+      for (var result : results) if (result.get()) winners++;
+      assertEquals(1, winners);
+    } finally {
+      for (String scheme : List.of("http", "https")) {
+        stores().repositories().findByName("tls-race-" + scheme)
+            .ifPresent(record -> stores().repositories().deleteById(record.id()));
+      }
+    }
+  }
+
+  private boolean reserveConcurrentDockerPort(CyclicBarrier barrier, String scheme) throws Exception {
+    barrier.await(10, java.util.concurrent.TimeUnit.SECONDS);
+    try {
+      inTransaction(() -> stores().repositories().insert(dockerConnectorRepository(null, "tls-race-" + scheme,
+          Map.of(scheme.equals("http") ? "connectorPort" : "httpsConnectorPort", 15446))));
+      return true;
+    } catch (DuplicateKeyException expected) {
+      return false;
+    }
+  }
+
+  private static RepositoryRecord dockerConnectorRepository(Long id, String name, Map<String, Object> docker) {
+    return new RepositoryRecord(id, name, RepositoryFormat.DOCKER, RepositoryType.HOSTED,
+        "docker-hosted", true, null, null, null, null, null, "ALLOW", true, Map.of("docker", docker));
+  }
+
+  @Test
   void routingRulesPersistBindingsAndRenamesAcrossStoreInstances() {
     var rules = stores().routingRules();
     long id = rules.insert("routing-contract", "Namespace policy", "BLOCK", List.of("/private/.*", "/internal/.*"));
@@ -424,6 +487,7 @@ public abstract class PersistenceApiContract {
         "component_search",
         "content_selector",
         "docker_auth_token",
+        "docker_connector_binding",
         "docker_manifest",
         "docker_manifest_reference",
         "docker_scanner_token_resource",

@@ -65,6 +65,25 @@ class PublicHttpsContentRedirectCompatibilityTest {
     byte[] candidateManifest = get(candidate() + "/v2/" + repos.candidate + "/library/alpine/manifests/3.12.0", false, accept);
     byte[] referenceManifest = get(reference() + "/repository/" + repos.reference + "/v2/library/alpine/manifests/3.12.0", true, accept);
     assertEquals(JSON.readTree(referenceManifest), JSON.readTree(candidateManifest));
+    var manifests = JSON.readTree(referenceManifest).path("manifests");
+    String digest = java.util.stream.StreamSupport.stream(manifests.spliterator(), false)
+        .filter(value -> "amd64".equals(value.path("platform").path("architecture").asText())
+            && "linux".equals(value.path("platform").path("os").asText()))
+        .findFirst().orElseThrow().path("digest").asText();
+    String referenceRoot = reference() + "/repository/" + repos.reference + "/v2/library/alpine/";
+    String candidateRoot = candidate() + "/v2/" + repos.candidate + "/library/alpine/";
+    String manifestAccept = "application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json";
+    var manifest = JSON.readTree(get(referenceRoot + "manifests/" + digest, true, manifestAccept));
+    assertEquals(manifest, JSON.readTree(get(candidateRoot + "manifests/" + digest, false, manifestAccept)));
+    for (var layer : manifest.path("layers")) {
+      String layerDigest = layer.path("digest").asText();
+      byte[] expected = get(referenceRoot + "blobs/" + layerDigest, true, null);
+      byte[] downloaded = get(candidateRoot + "blobs/" + layerDigest, false, null);
+      assertArrayEquals(expected, downloaded, "streaming Docker layer matches Nexus");
+      assertEquals(layer.path("size").asLong(), downloaded.length);
+      assertEquals(layerDigest, "sha256:" + java.util.HexFormat.of().formatHex(
+          MessageDigest.getInstance("SHA-256").digest(downloaded)));
+    }
     String registry = URI.create(candidate()).getAuthority();
     var env = Map.of("DOCKER_CONFIG", temp.resolve("docker").toString());
     run(temp, env, candidatePassword(), "docker", "login", registry, "--username", candidateUser(), "--password-stdin");
@@ -78,7 +97,7 @@ class PublicHttpsContentRedirectCompatibilityTest {
     String name = "public-https-" + format + "-" + System.nanoTime();
     var candidate = new LinkedHashMap<String, Object>(Map.of("name", name, "recipe", format + "-proxy",
         "online", true, "blobStoreName", "default", "proxy", Map.of("remoteUrl", upstream,
-        "autoBlock", false, "allowedRedirectHosts", List.of("*"))));
+        "autoBlock", false, "allowedRedirectHosts", List.of("*"), "streamingEnabled", true)));
     if (format.equals("docker")) candidate.put("docker", Map.of("connectorEnabled", false));
     admin(candidate() + "/internal/repositories", false, candidate);
     var nexus = new LinkedHashMap<String, Object>(Map.of("name", name, "online", true,

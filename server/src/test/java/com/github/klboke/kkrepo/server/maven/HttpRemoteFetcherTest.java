@@ -155,13 +155,18 @@ class HttpRemoteFetcherTest {
     when(runtime.allowedRedirectHosts()).thenReturn(Set.of());
     when(runtime.contentRedirectPolicy()).thenReturn(
         com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS);
-    var request = HttpRemoteFetcher.Request.get("https://repo.example.com/file").withRepositoryForContent(runtime);
+    var request = HttpRemoteFetcher.Request.get("https://repo.example.com/file").withRepositoryForContent(runtime).withByteRange("bytes=100-", "\"v1\"");
     var fetcher = new HttpRemoteFetcher(policy, null, transport, "HTTP_1_1", 30, 60, 300, 0, 0);
     try (var result = fetcher.fetch(request)) {
       assertEquals("artifact", new String(result.body().readAllBytes(), StandardCharsets.UTF_8));
     }
     assertEquals("Bearer test-token", headers.getAllValues().get(0).get("Authorization"));
     assertNull(headers.getAllValues().get(1).get("Authorization"));
+    for (var sent : headers.getAllValues()) {
+      assertEquals("bytes=100-", sent.get("Range"));
+      assertEquals("\"v1\"", sent.get("If-Range"));
+      assertEquals("identity", sent.get("Accept-Encoding"));
+    }
     when(transport.execute(nullable(String.class), nullable(OutboundProxyConfig.class), eq("GET"),
         any(OutboundRequestPolicy.ResolvedHttpTarget.class), anyMap(), nullable(byte[].class), anyLong()))
         .thenAnswer(invocation -> response(307,

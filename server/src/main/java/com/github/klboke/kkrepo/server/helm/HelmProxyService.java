@@ -29,6 +29,9 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class HelmProxyService {
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService streaming;
+
   private static final long[] BACKOFF_SECONDS = {30, 60, 120, 300, 600, 1800};
   static final String INDEX_AUTHORITATIVE_ATTRIBUTE =
       HelmProxyService.class.getName() + ".indexAuthoritative";
@@ -121,6 +124,7 @@ public class HelmProxyService {
 
   private MavenResponse getPackage(
       RepositoryRuntime runtime, String path, HelmAssetKind kind, boolean headOnly) {
+    if (kind == HelmAssetKind.PACKAGE) com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.enableRanges(runtime, path);
     Optional<CachedAssetMetadata> cached = lookupCached(runtime, path);
     Instant now = Instant.now();
     if (cached.isPresent() && isFresh(cached.get(), runtime.contentMaxAgeMinutesOrDefault(), now)) {
@@ -322,7 +326,10 @@ public class HelmProxyService {
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
         .withRepositoryForContent(runtime);
     try {
-      return fetcher.fetchWithBodyRetry(req, path, result -> {
+      return com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.fetchMaven(
+          streaming, fetcher, req, path, runtime,
+          !headOnly && cached.isEmpty() && kind == HelmAssetKind.PACKAGE,
+          null, writer::validateProgressiveChart, result -> {
         int status = result.status();
         if (status == 304 && cached.isPresent()) {
           assetDao.touchAssetLastUpdated(cached.get().assetId(), now);
