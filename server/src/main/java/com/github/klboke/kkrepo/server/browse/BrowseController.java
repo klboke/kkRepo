@@ -15,6 +15,7 @@ import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyPathParser;
 import com.github.klboke.kkrepo.protocol.conan.ConanPaths;
 import com.github.klboke.kkrepo.protocol.conan.ConanReference;
 import com.github.klboke.kkrepo.server.conda.CondaBrowsePaths;
+import com.github.klboke.kkrepo.server.ohpm.OhpmBrowseService;
 import com.github.klboke.kkrepo.server.repositories.RepositoryNotFoundException;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
@@ -54,6 +55,12 @@ public class BrowseController {
   private final SecurityManagementService securityService;
   private AssetDao assetDao;
   private ConanRegistryDao conanDao;
+  private OhpmBrowseService ohpmBrowse;
+
+  @Autowired
+  void setOhpmBrowseService(OhpmBrowseService ohpmBrowse) {
+    this.ohpmBrowse = ohpmBrowse;
+  }
 
   @Autowired
   public BrowseController(
@@ -277,7 +284,9 @@ public class BrowseController {
         row.assetContentType(),
         row.assetSha1(),
         row.assetLastUpdatedAt(),
-        row.leaf() ? BrowseDownloadUrls.asset(visibleRepository, downloadPath(
+        row.leaf() && visibleRepository.format() == RepositoryFormat.OHPM
+            ? ohpmBrowse.downloadUrl(visibleRepository, sourceRepository, publicPath)
+            : row.leaf() ? BrowseDownloadUrls.asset(visibleRepository, downloadPath(
             visibleRepository.format(), sourceRepository, publicPath, row)) : null);
   }
 

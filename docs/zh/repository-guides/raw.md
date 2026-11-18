@@ -74,3 +74,7 @@ negative-cache TTL 和权限过滤。PUT 返回 `409` 或 write-policy 错误通
 - [Raw 客户端配置示例](../client-recipes.md#raw)
 - [兼容性矩阵](../compatibility-matrix.md#仓库格式矩阵)
 - [HTTP 语义](https://www.rfc-editor.org/rfc/rfc9110)
+
+## 首次下载流式交付
+
+所有 proxy 表单均提供可选流式开关。详见[行为与适用范围](../dev/proxy-streaming-downloads.md)和[实测性能](../dev/proxy-streaming-performance.md)。

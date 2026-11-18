@@ -84,6 +84,7 @@ public final class MavenPartialFetchSupport {
   };
 
   public MavenResponse apply(HttpServletRequest request, MavenResponse response) {
+    if (com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.rangeHandled(request)) return response;
     return apply(
         request.getMethod(),
         request.getHeader(HttpHeaders.RANGE),

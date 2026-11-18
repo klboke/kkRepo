@@ -112,6 +112,7 @@ class CargoRepositoryBlackBoxCompatibilityTest {
     ensureCandidateProxyRepository(config);
     assertRepositoryRemoteUrl("Nexus", config.referenceRepositoryConfig(), config.remoteUrl());
     assertRepositoryRemoteUrl("kkrepo", config.candidateRepositoryConfig(), config.remoteUrl());
+    ProxyStreamingCompatibility.enable(config.candidateEndpoint().request("", "GET"));
 
     Endpoint reference = config.referenceEndpoint();
     Endpoint candidate = config.candidateEndpoint();

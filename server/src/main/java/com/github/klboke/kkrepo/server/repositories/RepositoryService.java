@@ -24,6 +24,7 @@ import com.github.klboke.kkrepo.server.docker.DockerConnectorRuntime;
 import com.github.klboke.kkrepo.server.docker.DockerMigrationMetadataCleanup;
 import com.github.klboke.kkrepo.server.helm.HelmGroupIndexCache;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmGroupPackumentCache;
 import com.github.klboke.kkrepo.server.pypi.PypiGroupSimpleIndexCache;
@@ -949,7 +950,10 @@ public class RepositoryService {
     if (rRegistry == null) return;
     java.time.Instant now = java.time.Instant.now();
     rRegistry.ensureSuite(repositoryId, "src/contrib", now);
-    rRegistry.markSuiteDirty(repositoryId, "src/contrib", now);
+    Set<String> namespaces = new LinkedHashSet<>();
+    namespaces.add("src/contrib");
+    rRegistry.listSuites(repositoryId).forEach(state -> namespaces.add(state.distribution()));
+    namespaces.forEach(namespace -> rRegistry.markSuiteDirty(repositoryId, namespace, now));
   }
 
   private void invalidateRGroupSnapshots(
@@ -977,57 +981,46 @@ public class RepositoryService {
   }
 
   private DockerSettings normalizeDocker(DockerSettings settings) {
-    if (settings == null) {
-      return new DockerSettings(false, null, null);
-    }
-    Integer port = settings.connectorPort();
-    Boolean enabled = settings.connectorEnabled();
-    if (enabled == null) {
-      enabled = port != null;
-    }
-    if (Boolean.FALSE.equals(enabled)) {
-      port = null;
-    }
-    return new DockerSettings(enabled, port, blankToNull(settings.connectorPublicUrl()));
+    if (settings == null) return new DockerSettings(false, null, null, false, null, null);
+    boolean http = settings.connectorEnabled() == null
+        ? settings.connectorPort() != null : settings.connectorEnabled();
+    boolean https = settings.httpsConnectorEnabled() == null
+        ? settings.httpsConnectorPort() != null : settings.httpsConnectorEnabled();
+    return new DockerSettings(http, http ? settings.connectorPort() : null,
+        blankToNull(settings.connectorPublicUrl()), https,
+        https ? settings.httpsConnectorPort() : null, blankToNull(settings.tlsBundle()));
   }
 
-  @SuppressWarnings("unchecked")
   private DockerSettings readDockerAttributes(RepositoryRecord record) {
-    Map<String, Object> attrs = record.attributes() == null ? Map.of() : record.attributes();
-    Object raw = attrs.get("docker");
-    if (!(raw instanceof Map<?, ?> map)) {
-      return new DockerSettings(false, null, null);
-    }
-    return new DockerSettings(
-        boolValue(map.get("connectorEnabled")),
-        intValue(map.get("connectorPort")),
-        blankToNull(map.get("connectorPublicUrl") == null ? null : map.get("connectorPublicUrl").toString()));
+    Object raw = record.attributes() == null ? null : record.attributes().get("docker");
+    if (!(raw instanceof Map<?, ?> map)) return normalizeDocker(null);
+    return normalizeDocker(new DockerSettings(
+        boolValue(map.get("connectorEnabled")), intValue(map.get("connectorPort")),
+        map.get("connectorPublicUrl") == null ? null : map.get("connectorPublicUrl").toString(),
+        boolValue(map.get("httpsConnectorEnabled")), intValue(map.get("httpsConnectorPort")),
+        map.get("tlsBundle") == null ? null : map.get("tlsBundle").toString()));
   }
 
   private DockerSettings mergeDocker(DockerSettings current, DockerSettings update) {
-    if (update == null) {
-      return normalizeDocker(current);
-    }
-    if (Boolean.FALSE.equals(update.connectorEnabled())) {
-      return normalizeDocker(new DockerSettings(false, null,
-          update.connectorPublicUrl() == null ? current.connectorPublicUrl() : update.connectorPublicUrl()));
-    }
+    if (update == null) return normalizeDocker(current);
     return normalizeDocker(new DockerSettings(
         update.connectorEnabled() == null ? current.connectorEnabled() : update.connectorEnabled(),
         update.connectorPort() == null ? current.connectorPort() : update.connectorPort(),
-        update.connectorPublicUrl() == null ? current.connectorPublicUrl() : update.connectorPublicUrl()));
+        update.connectorPublicUrl() == null ? current.connectorPublicUrl() : update.connectorPublicUrl(),
+        update.httpsConnectorEnabled() == null ? current.httpsConnectorEnabled() : update.httpsConnectorEnabled(),
+        update.httpsConnectorPort() == null ? current.httpsConnectorPort() : update.httpsConnectorPort(),
+        update.tlsBundle() == null ? current.tlsBundle() : update.tlsBundle()));
   }
 
   private Map<String, Object> dockerAttributes(DockerSettings settings) {
     DockerSettings normalized = normalizeDocker(settings);
     Map<String, Object> attrs = new LinkedHashMap<>();
     attrs.put("connectorEnabled", normalized.connectorEnabled());
-    if (normalized.connectorPort() != null) {
-      attrs.put("connectorPort", normalized.connectorPort());
-    }
-    if (normalized.connectorPublicUrl() != null) {
-      attrs.put("connectorPublicUrl", normalized.connectorPublicUrl());
-    }
+    attrs.put("httpsConnectorEnabled", normalized.httpsConnectorEnabled());
+    if (normalized.connectorPort() != null) attrs.put("connectorPort", normalized.connectorPort());
+    if (normalized.httpsConnectorPort() != null) attrs.put("httpsConnectorPort", normalized.httpsConnectorPort());
+    if (normalized.tlsBundle() != null) attrs.put("tlsBundle", normalized.tlsBundle());
+    if (normalized.connectorPublicUrl() != null) attrs.put("connectorPublicUrl", normalized.connectorPublicUrl());
     return attrs;
   }
 
@@ -1062,38 +1055,35 @@ public class RepositoryService {
   }
 
   private void validateDockerConnectorPort(Long existingRepositoryId, DockerSettings settings) {
-    if (settings == null) {
-      return;
-    }
+    if (settings == null) return;
     if (Boolean.TRUE.equals(settings.connectorEnabled()) && settings.connectorPort() == null) {
       throw new RepositoryValidationException("docker.connector.port is required when connector is enabled");
     }
-    if (settings.connectorPort() == null) {
-      return;
-    }
-    int port = settings.connectorPort();
-    if (port <= 0 || port > 65535) {
-      throw new RepositoryValidationException("docker.connector.port must be between 1 and 65535");
-    }
-    if (port == serverPort) {
-      throw new RepositoryValidationException(
-          "docker.connector.port " + port + " conflicts with server.port");
-    }
-    if (port == managementPort) {
-      throw new RepositoryValidationException(
-          "docker.connector.port " + port + " conflicts with management.server.port");
-    }
-    for (RepositoryRecord record : repositoryDao.list()) {
-      if (existingRepositoryId != null && Objects.equals(existingRepositoryId, record.id())) {
-        continue;
+    if (Boolean.TRUE.equals(settings.httpsConnectorEnabled())) {
+      if (settings.httpsConnectorPort() == null) {
+        throw new RepositoryValidationException("docker.httpsConnectorPort is required when HTTPS is enabled");
       }
-      if (record.format() != RepositoryFormat.DOCKER) {
-        continue;
+      if (dockerConnectorRuntime != null) dockerConnectorRuntime.validateTlsBundle(settings.tlsBundle());
+    }
+    if (settings.connectorPort() != null && settings.connectorPort().equals(settings.httpsConnectorPort())) {
+      throw new RepositoryValidationException("HTTP and HTTPS connectors must use different ports");
+    }
+    for (Integer port : java.util.stream.Stream.of(settings.connectorPort(), settings.httpsConnectorPort())
+        .filter(Objects::nonNull).toList()) {
+      if (port <= 0 || port > 65535) {
+        throw new RepositoryValidationException("docker.connector.port must be between 1 and 65535");
       }
-      DockerSettings other = readDockerAttributes(record);
-      if (Objects.equals(other.connectorPort(), port)) {
-        throw new RepositoryValidationException(
-            "docker.connector.port " + port + " is already used by repository " + record.name());
+      if (port == serverPort || port == managementPort) {
+        throw new RepositoryValidationException("docker.connector.port " + port + " conflicts with "
+            + (port == serverPort ? "server.port" : "management.server.port"));
+      }
+      for (RepositoryRecord record : repositoryDao.list()) {
+        if (Objects.equals(existingRepositoryId, record.id()) || record.format() != RepositoryFormat.DOCKER) continue;
+        DockerSettings other = readDockerAttributes(record);
+        if (Objects.equals(other.connectorPort(), port) || Objects.equals(other.httpsConnectorPort(), port)) {
+          throw new RepositoryValidationException(
+              "docker.connector.port " + port + " is already used by repository " + record.name());
+        }
       }
     }
   }
@@ -1412,7 +1402,7 @@ public class RepositoryService {
         settings.outboundProxyPasswordConfigured(),
         settings.minimumReleaseAgeMinutes(),
         settings.allowedRedirectHosts(),
-        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost());
+        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost(), settings.streamingEnabled());
   }
 
   private static String defaultRemoteUrl(RepositoryFormat format) {
@@ -1451,7 +1441,7 @@ public class RepositoryService {
         settings.outboundProxyPasswordConfigured(),
         settings.minimumReleaseAgeMinutes(),
         settings.allowedRedirectHosts(),
-        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost());
+        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost(), settings.streamingEnabled());
   }
 
   private static ProxySettings withAllowedRedirectHosts(
@@ -1474,7 +1464,7 @@ public class RepositoryService {
         settings.outboundProxyPasswordConfigured(),
         settings.minimumReleaseAgeMinutes(),
         allowedRedirectHosts,
-        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost());
+        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost(), settings.streamingEnabled());
   }
 
   private void validateProxy(ProxySettings settings, RepositoryFormat format) {
@@ -1522,9 +1512,9 @@ public class RepositoryService {
     if (minimumReleaseAge < 0) {
       throw new RepositoryValidationException("proxy.minimumReleaseAgeMinutes must be at least 0");
     }
-    if (minimumReleaseAge > 0 && format != RepositoryFormat.NPM) {
+    if (minimumReleaseAge > 0 && !RepositoryRuntime.supportsMinimumReleaseAge(format)) {
       throw new RepositoryValidationException(
-          "proxy.minimumReleaseAgeMinutes is only supported for npm proxy repositories");
+          "proxy.minimumReleaseAgeMinutes is only supported for npm, Go, Maven and PyPI proxy repositories");
     }
     if (format == RepositoryFormat.SWIFT) {
       normalizeSwiftRemoteUrl(settings.remoteUrl());
@@ -1674,7 +1664,8 @@ public class RepositoryService {
             : incoming.allowedRedirectHosts(),
         incoming.remoteAuthenticationType() == null ? base.remoteAuthenticationType() : incoming.remoteAuthenticationType(),
         incoming.remoteNtlmDomain() == null ? base.remoteNtlmDomain() : blankToNull(incoming.remoteNtlmDomain()),
-        incoming.remoteNtlmHost() == null ? base.remoteNtlmHost() : blankToNull(incoming.remoteNtlmHost()));
+        incoming.remoteNtlmHost() == null ? base.remoteNtlmHost() : blankToNull(incoming.remoteNtlmHost()),
+        incoming.streamingEnabled() == null ? base.streamingEnabled() : incoming.streamingEnabled());
   }
 
   private static String mergedOutboundProxyPassword(ProxySettings base, ProxySettings incoming) {
@@ -1710,6 +1701,7 @@ public class RepositoryService {
   private static Map<String, Object> proxyAttributes(ProxySettings proxy) {
     Map<String, Object> map = new LinkedHashMap<>();
     map.put("remoteUrl", proxy.remoteUrl());
+    map.put("streamingEnabled", Boolean.TRUE.equals(proxy.streamingEnabled()));
     if (proxy.contentMaxAgeMinutes() != null) map.put("contentMaxAgeMinutes", proxy.contentMaxAgeMinutes());
     if (proxy.metadataMaxAgeMinutes() != null) map.put("metadataMaxAgeMinutes", proxy.metadataMaxAgeMinutes());
     if (proxy.minimumReleaseAgeMinutes() != null) {
@@ -2181,7 +2173,8 @@ public class RepositoryService {
         stringList(proxyMap.get("allowedRedirectHosts")),
         stringOrNull(proxyMap.get("remoteAuthenticationType")),
         stringOrNull(proxyMap.get("remoteNtlmDomain")),
-        stringOrNull(proxyMap.get("remoteNtlmHost")));
+        stringOrNull(proxyMap.get("remoteNtlmHost")),
+        boolValue(proxyMap.get("streamingEnabled")));
   }
 
   private static ProxySettings readProxyAttributesOrDefaults(RepositoryRecord record) {
@@ -2208,7 +2201,8 @@ public class RepositoryService {
         outboundPassword != null && !outboundPassword.isBlank(),
         effective.minimumReleaseAgeMinutes() == null ? 0 : effective.minimumReleaseAgeMinutes(),
         effective.allowedRedirectHosts() == null ? List.of() : effective.allowedRedirectHosts(),
-        effective.remoteAuthenticationType(), effective.remoteNtlmDomain(), effective.remoteNtlmHost());
+        effective.remoteAuthenticationType(), effective.remoteNtlmDomain(), effective.remoteNtlmHost(),
+        Boolean.TRUE.equals(effective.streamingEnabled()));
   }
 
   private static String stringOrNull(Object value) {

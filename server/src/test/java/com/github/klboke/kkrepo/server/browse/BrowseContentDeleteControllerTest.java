@@ -53,6 +53,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.InOrder;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -75,22 +77,30 @@ class BrowseContentDeleteControllerTest {
     verify(fixture.assetDao, never()).deleteAssetById(anyLong());
   }
 
-  @Test
-  void rHostedDeletionResolvesBrowseCoordinateAndDelegatesToProtocolService() {
+  @ParameterizedTest
+  @CsvSource({
+      "'',src/contrib,.tar.gz",
+      "src/contrib/,src/contrib,.tar.gz",
+      "bin/windows/contrib/4.5/,bin/windows/contrib/4.5,.zip",
+      "bin/macosx/contrib/4.5/,bin/macosx/contrib/4.5,.tgz",
+      "bin/linux/noble-x86_64/4.5/src/contrib/,bin/linux/noble-x86_64/4.5/src/contrib,.tar.gz"})
+  void rHostedDeletionResolvesBrowseCoordinateAndDelegatesToProtocolService(
+      String browsePrefix, String namespace, String extension) {
     Fixture fixture = fixture(true, AccessDecision.allow());
     RepositoryRecord repository =
         repository(1L, "r-hosted", RepositoryFormat.R, RepositoryType.HOSTED);
     RepositoryRuntime runtime = new RepositoryRuntime(
         1L, repository.name(), RepositoryFormat.R, RepositoryType.HOSTED, "r-hosted",
         true, 7L, "ALLOW", null, null, true, null, null, null, null, null, List.of());
-    String browsePath = "demo/1.0.0/demo_1.0.0.tar.gz";
-    String storagePath = "src/contrib/demo_1.0.0.tar.gz";
+    String browsePath = browsePrefix + "demo/1.0.0/demo_1.0.0" + extension;
+    String storagePath = namespace + "/demo_1.0.0" + extension;
+    String packageType = "src/contrib".equals(namespace) ? "source" : "binary";
     RRegistryDao.PackageRecord row = rPackage(repository.id(), storagePath);
     when(fixture.repositoryDao.findByName(repository.name())).thenReturn(Optional.of(repository));
     when(fixture.rRegistry.findPackageByPath(repository.id(), browsePath))
         .thenReturn(Optional.empty());
     when(fixture.rRegistry.findPackage(
-        repository.id(), "src/contrib", "source", "demo", "1.0.0", "source"))
+        repository.id(), namespace, packageType, "demo", "1.0.0", packageType))
         .thenReturn(Optional.of(row));
     when(fixture.runtimeRegistry.resolveById(repository.id())).thenReturn(Optional.of(runtime));
     when(fixture.rService.delete(
@@ -105,6 +115,12 @@ class BrowseContentDeleteControllerTest {
     verify(fixture.rService).delete(
         runtime, storagePath, "administrative delete by admin", false);
     verify(fixture.assetDao, never()).deleteAssetById(anyLong());
+
+    RepositoryRecord group = repository(2L, "r-group", RepositoryFormat.R, RepositoryType.GROUP);
+    when(fixture.repositoryDao.findByName(group.name())).thenReturn(Optional.of(group));
+    when(fixture.repositoryDao.listMembers(group.id())).thenReturn(List.of(repository));
+    assertEquals(repository.name(), fixture.controller.delete(
+        group.name(), browsePath, repository.name(), new MockHttpServletRequest()).sourceRepository());
   }
 
   @Test

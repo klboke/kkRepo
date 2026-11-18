@@ -753,6 +753,13 @@ EOF
   wait_for_body_contains maven-metadata "$version" \
     "$KKREPO_URL/repository/maven-public/com/github/klboke/kkrepo/e2e/$artifact/maven-metadata.xml" \
     "$ARTIFACT_DIR/maven-metadata.xml"
+  # Exercise snapshot build cleanup against the actual candidate (including Native),
+  # using the same disposable Nexus task comparison as the compatibility suite.
+  run_logged maven-snapshot-cleanup env MAVEN_SNAPSHOT_CLEANUP_COMPAT_ENABLED=true \
+    KKREPO_COMPAT_BASE_URL="$KKREPO_URL" KKREPO_COMPAT_USERNAME="$KKREPO_USER" \
+    KKREPO_COMPAT_PASSWORD="$KKREPO_PASSWORD" \
+    mvn -B -ntp -f "$PROJECT_ROOT/pom.xml" -pl compat-test -am \
+    -Dtest=MavenSnapshotCleanupCompatibilityTest -Dsurefire.failIfNoSpecifiedTests=false test
 }
 
 test_npm() {
@@ -3225,6 +3232,7 @@ import json
 import sys
 
 repository, metadata_mode, remote_url = sys.argv[1:]
+import os
 print(json.dumps({
     "name": repository,
     "recipe": "apt-proxy",
@@ -3233,6 +3241,7 @@ print(json.dumps({
     "strictContentTypeValidation": True,
     "proxy": {
         "remoteUrl": remote_url,
+        "streamingEnabled": os.environ.get("KKREPO_COMPAT_PROXY_STREAMING_ENABLED") == "true",
         "contentMaxAgeMinutes": 1440,
         "metadataMaxAgeMinutes": 60,
         "negativeCacheEnabled": True,
@@ -4094,6 +4103,12 @@ test_ansible() {
   fi
 }
 
+test_ohpm() {
+  KKREPO_COMPAT_BASE_URL="$KKREPO_URL" KKREPO_COMPAT_USERNAME="$KKREPO_USER" \
+    KKREPO_COMPAT_PASSWORD="$KKREPO_PASSWORD" CLIENT_E2E_ARTIFACT_DIR="$ARTIFACT_DIR" \
+    bash "$SCRIPT_DIR/ohpm-client-e2e.sh"
+}
+
 test_gitlfs() {
   KKREPO_COMPAT_BASE_URL="$KKREPO_URL" KKREPO_COMPAT_USERNAME="$KKREPO_USER" \
     KKREPO_COMPAT_PASSWORD="$KKREPO_PASSWORD" CLIENT_E2E_ARTIFACT_DIR="$ARTIFACT_DIR" \
@@ -4122,6 +4137,9 @@ run_selected_tests() {
     CLEANUP_FIXTURE_PATTERN=""
     CLEANUP_FIXTURE_LABEL=""
     case "$test" in
+      ohpm)
+        test_ohpm
+        ;;
       gitlfs)
         test_gitlfs
         ;;

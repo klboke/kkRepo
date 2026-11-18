@@ -1,5 +1,11 @@
 # R / CRAN 仓库开发设计说明
 
+> 二进制兼容性补齐：当前实现已将本文首期的 source-only 范围扩展到 Windows `.zip`、
+> macOS `.tgz` 和 R-universe Linux `.tar.gz`，以完整目录作为 namespace 隔离坐标、索引、
+> 分布式 lease 和 group binding。实际支持面及上传示例见 [使用指南](../repository-guides/r-cran.md)。
+> Nexus 3.94.0-12 实测支持 Windows/macOS binary 上传及索引，不能依据 Sonatype 文档的
+> “hosted 只支持 .gz”描述判断为 source-only。Datastore 迁移仍保持本文的 source 校验边界。
+
 本文记录 kkrepo R / CRAN-style package repository 的落地设计。目标不是把
 `src/contrib` 当作 Raw 文件目录，而是在 R 官方仓库布局、`install.packages()` /
 `available.packages()` 客户端行为、Sonatype Nexus Repository R format 与 kkrepo 当前的

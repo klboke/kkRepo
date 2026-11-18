@@ -1,6 +1,6 @@
 package com.github.klboke.kkrepo.server.docker;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -51,9 +51,26 @@ class DockerConnectorManagerTest {
     List<DockerConnectorManager.ConnectorStatus> connectors = manager.snapshot().connectors();
 
     assertEquals("repository-disabled", connectors.get(0).state());
-    assertEquals("active", connectors.get(1).state());
+    assertEquals("pending", connectors.get(1).state());
     assertEquals("duplicate-port", connectors.get(2).state());
     assertEquals(Map.of(5000, "docker-one"), manager.snapshot().repositoriesByPort());
+  }
+
+  @Test
+  void httpsIsAnIndependentDesiredListenerAndOnlyAppliedBindingsRouteTraffic() {
+    var existing = repository(1L, "docker-hosted", true, 5000);
+    var record = new RepositoryRecord(existing.id(), existing.name(), existing.format(), existing.type(),
+        existing.recipeName(), existing.online(), existing.blobStoreId(), null, null, null, null, "ALLOW", true,
+        Map.of("docker", Map.of("connectorPort", 5000, "httpsConnectorPort", 5443,
+            "tlsBundle", " registry ", "connectorPublicUrl", "https://registry.example")));
+    var manager = manager(true, List.of(record));
+    assertEquals(Map.of(5000, "docker-hosted", 5443, "docker-hosted"), manager.snapshot().repositoriesByPort());
+    assertEquals("https", manager.snapshot().connectors().get(1).scheme());
+    assertEquals("registry", manager.snapshot().connectors().get(1).tlsBundle());
+    assertNull(manager.repositoryForPort(5443));
+    manager.activeRepositories(Map.of(5443, "docker-hosted"));
+    assertEquals("docker-hosted", manager.repositoryForPort(5443));
+    assertFalse(manager.snapshot().connectors().get(1).active());
   }
 
   private static DockerConnectorManager manager(boolean globallyEnabled, List<RepositoryRecord> repositories) {

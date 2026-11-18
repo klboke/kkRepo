@@ -1113,6 +1113,9 @@ public class CondaService {
         components.browsePath(
             record.channel(), record.subdir(), record.name(), record.version(), record.filename()),
         headOnly);
+    if (com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.onCached(response,
+        file -> validateDownloadedPackage(file, record),
+        () -> verifyCachedPackage(runtime, path.canonicalPath(), record))) return response;
     try {
       verifyCachedPackage(runtime, path.canonicalPath(), record);
       return response;
@@ -1403,7 +1406,10 @@ public class CondaService {
           path.canonicalPath(),
           remoteUrl(runtime, path.canonicalPath()),
           headOnly);
-      scheduleProxyInventory(runtime, path.channel(), path.subdir());
+      if (!com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.onCached(response, null,
+          () -> scheduleProxyInventory(runtime, path.channel(), path.subdir()))) {
+        scheduleProxyInventory(runtime, path.channel(), path.subdir());
+      }
       return response;
     }
     CondaComponentFactory.ProjectedPackage value = projected.orElseThrow();
@@ -1444,6 +1450,16 @@ public class CondaService {
     assets.delete(runtime, path);
     throw new MavenExceptions.BadUpstreamException(
         "Conda upstream checksum mismatch for " + path);
+  }
+
+  static void validateDownloadedPackage(
+      java.nio.file.Path file, CondaRegistryDao.PackageRecord expected) throws java.io.IOException {
+    var actual = com.github.klboke.kkrepo.server.blob.BufferedUpload.inspect(file,
+        com.github.klboke.kkrepo.server.blob.BufferedUpload.Checksums.STANDARD);
+    boolean matches = actual.size() == expected.size()
+        && (expected.sha256() != null ? expected.sha256().equalsIgnoreCase(actual.sha256())
+            : expected.md5() != null && expected.md5().equalsIgnoreCase(actual.md5()));
+    if (!matches) throw new java.io.IOException("Conda package does not match repodata");
   }
 
   private static boolean validPackageBlob(

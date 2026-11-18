@@ -20,6 +20,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.RRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.conda.CondaPath;
+import com.github.klboke.kkrepo.protocol.ohpm.OhpmPackageId;
 import com.github.klboke.kkrepo.server.conda.CondaBrowsePaths;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCatalogCache;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
@@ -753,6 +754,10 @@ public class ComponentSearchController {
   }
 
   private static String browsePath(ComponentSearchRow row) {
+    if (row.format() == RepositoryFormat.OHPM) {
+      var packageId = new OhpmPackageId(row.namespace(), row.name());
+      return packageId.id() + "/" + row.version();
+    }
     if (row.storagePath() == null || row.storagePath().isBlank()) {
       return null;
     }

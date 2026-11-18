@@ -6,6 +6,7 @@ import com.github.klboke.kkrepo.server.cargo.CargoResponses;
 import com.github.klboke.kkrepo.server.composer.ComposerExceptions;
 import com.github.klboke.kkrepo.server.npm.NpmExceptions;
 import com.github.klboke.kkrepo.server.pub.PubExceptions;
+import com.github.klboke.kkrepo.server.releaseage.ReleaseAgeDeniedException;
 import com.github.klboke.kkrepo.server.pub.PubResponses;
 import com.github.klboke.kkrepo.protocol.pub.PubContentTypes;
 import java.util.Map;
@@ -83,6 +84,14 @@ public class MavenErrorAdvice {
             "error", e.getMessage() == null ? HttpStatus.NOT_FOUND.getReasonPhrase() : e.getMessage()));
   }
 
+  /** Go, Maven and PyPI proxies quarantine too-new artifacts with 403 (npm keeps its 404). */
+  @ExceptionHandler(ReleaseAgeDeniedException.class)
+  public ResponseEntity<Map<String, Object>> releaseAgeDenied(ReleaseAgeDeniedException e) {
+    return ResponseEntity.status(HttpStatus.FORBIDDEN)
+        .header(HttpHeaders.CACHE_CONTROL, "no-store")
+        .body(Map.of("success", false, "error", e.getMessage()));
+  }
+
   @ExceptionHandler(NpmExceptions.MethodNotAllowed.class)
   public ResponseEntity<Map<String, Object>> npmMethod(NpmExceptions.MethodNotAllowed e) {
     return npmBody(HttpStatus.METHOD_NOT_ALLOWED, e.getMessage());
@@ -149,7 +158,9 @@ public class MavenErrorAdvice {
   }
 
   private ResponseEntity<Map<String, Object>> body(HttpStatus status, String message) {
-    return ResponseEntity.status(status).body(Map.of(
+    // This is ordinary JSON, not RFC 9457. Maven 3.10 advertises problem+json and
+    // otherwise misclassifies missing metadata as a fatal transfer failure.
+    return ResponseEntity.status(status).contentType(MediaType.APPLICATION_JSON).body(Map.of(
         "status", status.value(),
         "error", status.getReasonPhrase(),
         "message", message == null ? status.getReasonPhrase() : message));

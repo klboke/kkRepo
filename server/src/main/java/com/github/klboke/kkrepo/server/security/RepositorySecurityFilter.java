@@ -76,6 +76,12 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
   private final NexusLegacyUiCompatibility legacyUi;
   private ConanAuthService conanAuth;
   private com.github.klboke.kkrepo.server.gitlfs.GitLfsAccess gitLfsAccess;
+  private com.github.klboke.kkrepo.server.ohpm.OhpmAccess ohpmAccess;
+
+  @Autowired
+  void setOhpmAccess(com.github.klboke.kkrepo.server.ohpm.OhpmAccess access) {
+    this.ohpmAccess = access;
+  }
 
   @Autowired
   void setGitLfsAccess(com.github.klboke.kkrepo.server.gitlfs.GitLfsAccess access) {
@@ -152,6 +158,23 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       }
     } catch (PypiExceptions.BadRequestException | IllegalArgumentException e) {
       response.sendError(HttpServletResponse.SC_BAD_REQUEST, e.getMessage());
+      return;
+    }
+    if (repository.get().format() == RepositoryFormat.OHPM && target.componentUploadRoute()) {
+      if (ohpmAccess == null) {
+        response.sendError(503, "OHPM authentication unavailable");
+      } else if (ohpmAccess.authorizeManagementUpload(request, response)) {
+        filterChain.doFilter(request, response);
+      }
+      return;
+    }
+    if (repository.get().format() == RepositoryFormat.OHPM
+        && !target.repositoryBrowseRoute() && !target.componentUploadRoute()) {
+      if (ohpmAccess == null) {
+        response.sendError(503, "OHPM authentication unavailable");
+      } else if (ohpmAccess.authorize(request, response, repository.get(), target.path())) {
+        filterChain.doFilter(request, response);
+      }
       return;
     }
     if (repository.get().format() == RepositoryFormat.GITLFS

@@ -148,6 +148,17 @@ final class AptProxyProjectionService {
     }
   }
 
+  void validateDownloadedPackage(RepositoryRuntime runtime, String path, java.nio.file.Path file)
+      throws java.io.IOException {
+    AptRegistryDao.PackageRecord expected = registry.findPackageByPath(runtime.id(), path).orElse(null);
+    if (expected == null) return;
+    var digests = com.github.klboke.kkrepo.server.blob.BufferedUpload.inspect(file,
+        com.github.klboke.kkrepo.server.blob.BufferedUpload.Checksums.STANDARD);
+    if (digests.size() != expected.size() || !digests.sha256().equalsIgnoreCase(expected.sha256())) {
+      throw new java.io.IOException("APT package does not match Packages metadata");
+    }
+  }
+
   AptRegistryDao.PackageRecord verifyAndBindKnownPackage(
       RepositoryRuntime runtime, String packagePath) {
     AptRegistryDao.PackageRecord expected = registry.findPackageByPath(runtime.id(), packagePath)

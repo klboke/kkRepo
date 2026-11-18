@@ -61,7 +61,8 @@ function start(hash, permissions = ["nexus:*"]) {
     window: { location, history: {
       pushState: (_state, _title, target) => navigate("push", target),
       replaceState: (_state, _title, target) => navigate("replace", target),
-    }, KkContentSelectors: { load: () => loads.push("content-selectors") } },
+    }, KkContentSelectors: { load: () => loads.push("content-selectors") },
+    KkOhpmImport: { load: () => loads.push("ohpm-import") } },
     document: {
       getElementById: (id) => elements.get(id),
       querySelectorAll: (selector) => selector === ".view" ? [...elements.values()]
@@ -112,6 +113,7 @@ for (const [hash, view] of [
   ["#admin/repository/content-selectors", "content-selectors"],
   ["#admin/security/artifact-scanning/tasks", "security-scanning"],
   ["#admin/repository/cleanup/runs", "cleanup-policies"],
+  ["#admin/migration/ohpm", "ohpm-import"],
 ]) {
   test(`opens ${hash} directly after discovery`, async () => {
     const app = start(hash);

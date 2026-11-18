@@ -12,6 +12,7 @@ public class DockerRangeSupport {
   private final SingleRangePartialFetchSupport<DockerResponse> ranges = new SingleRangePartialFetchSupport<>();
 
   public DockerResponse apply(HttpServletRequest request, DockerResponse response) {
+    if (com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.rangeHandled(request)) return response;
     return ranges.apply(
         request == null ? null : request.getMethod(),
         request == null ? null : request.getHeader("Range"),

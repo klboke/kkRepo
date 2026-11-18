@@ -41,7 +41,8 @@ final class SwiftGitHubClient {
       new TypeReference<>() {};
   /** Bounds one refresh to 10,000 upstream tags while still supporting large Swift repositories. */
   private static final int MAX_TAG_PAGES = 100;
-  private static final int MAX_TAGS = MAX_TAG_PAGES * 100;
+  private static final int TAG_PAGE_SIZE = 100;
+  private static final int MAX_TAGS = MAX_TAG_PAGES * TAG_PAGE_SIZE;
   private static final int MAX_GIT_PACKET_BYTES = 65_520;
   private static final long MAX_GIT_ADVERTISEMENT_BYTES = 16L * 1024L * 1024L;
   private static final String GIT_TAG_PREFIX = "refs/tags/";
@@ -120,7 +121,7 @@ final class SwiftGitHubClient {
     for (int page = 1; page <= MAX_TAG_PAGES; page++) {
       String pageKey = Integer.toString(page);
       String url = API + coordinates.owner() + "/" + coordinates.repository()
-          + "/tags?per_page=100&page=" + page;
+          + "/tags?per_page=" + TAG_PAGE_SIZE + "&page=" + page;
       TagPage tagPage = getTagPage(
           runtime,
           url,
@@ -140,7 +141,7 @@ final class SwiftGitHubClient {
             version,
             new Tag(version, tagName, commit.toLowerCase(Locale.ROOT)));
       }
-      if (tagPage.tags().size() < 100) {
+      if (tagPage.rawCount() < TAG_PAGE_SIZE) {
         exhausted = true;
         break;
       }
@@ -161,15 +162,20 @@ final class SwiftGitHubClient {
       List<SwiftRegistryDao.ProxyTag> previousTags,
       String previousEtag) {
     try {
+      // Persisted inventories contain only filtered tags, not the raw page length. A full
+      // snapshot proves that the upstream page was full; shorter snapshots are ambiguous
+      // (including old inventories truncated by filtering) and must be fetched unconditionally.
+      // This uses the shared database snapshot on every replica without a schema change.
+      boolean completeSnapshot = previousTags != null && previousTags.size() == TAG_PAGE_SIZE;
       HttpRemoteFetcher.Request request = credentialState.apply(
-          apiRequest(runtime, url, false, previousEtag));
+          apiRequest(runtime, url, false, completeSnapshot ? previousEtag : null));
       return fetchWithTransientStatusRetry(request, resource, result -> {
         if (result.status() == 304) {
-          if (previousTags == null) {
+          if (!completeSnapshot) {
             throw new SwiftExceptions.BadUpstream(
-                resource + " returned HTTP 304 without a persisted page snapshot");
+                resource + " returned HTTP 304 without a complete persisted page snapshot");
           }
-          return new TagPage(List.copyOf(previousTags), previousEtag);
+          return new TagPage(List.copyOf(previousTags), previousEtag, TAG_PAGE_SIZE);
         }
         if (result.status() == 404 || result.status() == 410) {
           throw new SwiftExceptions.NotFound(resource + " not found");
@@ -186,7 +192,7 @@ final class SwiftGitHubClient {
             .map(SwiftGitHubClient::proxyTag)
             .filter(Objects::nonNull)
             .toList();
-        return new TagPage(tags, result.etag());
+        return new TagPage(tags, result.etag(), rows.size());
       }, credentialState);
     } catch (IOException e) {
       throw new SwiftExceptions.BadUpstream("Unable to fetch " + resource, e);
@@ -791,7 +797,7 @@ final class SwiftGitHubClient {
     }
   }
 
-  private record TagPage(List<SwiftRegistryDao.ProxyTag> tags, String etag) {}
+  private record TagPage(List<SwiftRegistryDao.ProxyTag> tags, String etag, int rawCount) {}
 
   @FunctionalInterface
   interface RetrySleeper {

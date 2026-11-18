@@ -90,9 +90,86 @@ class RRepositoryBlackBoxCompatibilityTest {
 
   private static RPackageMetadata waitForIndex(Endpoint endpoint, String packageName)
       throws Exception {
+    return waitForIndex(endpoint, "src/contrib", packageName);
+  }
+
+  @Test
+  void binaryNamespacesMatchNexusWithoutCollidingWithSource() throws Exception {
+    Config config = configured();
+    String repository = "r-binary-" + UUID.randomUUID().toString().substring(0, 8);
+    String group = repository + "-group";
+    Map<String, RCompatibilityFixtures.SourcePackage> packages = new LinkedHashMap<>();
+    packages.put("src/contrib", RCompatibilityFixtures.sourcePackage("demo", "1.0.0", "source"));
+    packages.put("bin/windows/contrib/4.5",
+        RCompatibilityFixtures.binaryPackage("demo", "1.0.0", ".zip"));
+    packages.put("bin/macosx/big-sur-arm64/contrib/4.5",
+        RCompatibilityFixtures.binaryPackage("demo", "1.0.0", ".tgz"));
+    packages.put("bin/linux/noble-x86_64/4.5/src/contrib",
+        RCompatibilityFixtures.binaryPackage("demo", "1.0.0", ".tar.gz"));
+    try {
+      createNexusHosted(config, repository);
+      createCandidateHosted(config, repository);
+      for (var entry : packages.entrySet()) {
+        String namespace = entry.getKey();
+        var fixture = entry.getValue();
+        String path = namespace + "/" + fixture.filename();
+        for (Endpoint endpoint : List.of(config.nexus(repository), config.candidate(repository))) {
+          Exchange upload = put(endpoint, path, fixture.bytes());
+          assertEquals(200, upload.status(), () -> path + ": " + upload.text());
+          RPackageMetadata indexed = waitForIndex(endpoint, namespace, fixture.name());
+          assertEquals(fixture.version(), indexed.version());
+          assertArrayEquals(fixture.bytes(), get(endpoint, path).body());
+          Exchange head = send(endpoint.request(path).method("HEAD", HttpRequest.BodyPublishers.noBody()));
+          assertEquals(200, head.status());
+          assertEquals(Integer.toString(fixture.bytes().length), head.header("Content-Length"));
+        }
+      }
+      for (var entry : packages.entrySet()) {
+        var fixture = entry.getValue();
+        assertArrayEquals(fixture.bytes(), get(config.candidate(repository),
+            entry.getKey() + "/" + fixture.filename()).body());
+      }
+      createGroups(config, group, repository);
+      for (var entry : packages.entrySet()) {
+        var fixture = entry.getValue();
+        for (Endpoint endpoint : List.of(config.nexus(group), config.candidate(group))) {
+          assertEquals(fixture.version(), waitForIndex(endpoint, entry.getKey(), fixture.name()).version());
+          assertArrayEquals(fixture.bytes(), get(endpoint, entry.getKey() + "/" + fixture.filename()).body());
+        }
+      }
+    } finally {
+      deleteRepository(config.nexusAdmin(), group);
+      deleteRepository(config.candidateAdmin(), group);
+      packages.forEach((namespace, fixture) ->
+          deleteAsset(config.candidate(repository), namespace + "/" + fixture.filename()));
+      deleteRepository(config.nexusAdmin(), repository);
+      deleteRepository(config.candidateAdmin(), repository);
+    }
+  }
+
+  private static void createGroups(Config config, String group, String member) throws Exception {
+    var nexus = JSON.createObjectNode();
+    nexus.put("name", group).put("online", true);
+    nexus.putObject("storage").put("blobStoreName", config.nexusBlobStore()).put("strictContentTypeValidation", true);
+    nexus.putObject("group").putArray("memberNames").add(member);
+    assertEquals(201, send(config.nexusAdmin().request("/service/rest/v1/repositories/r/group")
+        .header("Content-Type", "application/json")
+        .POST(HttpRequest.BodyPublishers.ofString(JSON.writeValueAsString(nexus)))).status());
+    var candidate = JSON.createObjectNode();
+    candidate.put("name", group).put("recipe", "r-group").put("online", true)
+        .put("blobStoreName", config.candidateBlobStore());
+    candidate.putObject("group").putArray("memberNames").add(member);
+    Exchange response = send(config.candidateAdmin().request("/internal/repositories")
+        .header("Content-Type", "application/json")
+        .POST(HttpRequest.BodyPublishers.ofString(JSON.writeValueAsString(candidate))));
+    assertEquals(201, response.status(), response::text);
+  }
+
+  private static RPackageMetadata waitForIndex(
+      Endpoint endpoint, String namespace, String packageName) throws Exception {
     Exchange last = null;
     for (int attempt = 0; attempt < 120; attempt++) {
-      last = get(endpoint, "src/contrib/PACKAGES.gz");
+      last = get(endpoint, namespace + "/PACKAGES.gz");
       if (last.status() == 200) {
         try (GzipCompressorInputStream gzip = new GzipCompressorInputStream(
             new ByteArrayInputStream(last.body()))) {

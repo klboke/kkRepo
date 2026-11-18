@@ -40,6 +40,7 @@ class HelmRepositoryBlackBoxCompatibilityTest {
       ensureNexusRepositories(config);
       ensureKkRepoRepositories(config);
     }
+    ProxyStreamingCompatibility.enable(config.nexusPlusProxy().request(""));
 
     ChartFixture fixture = ChartFixture.create();
     try {
