@@ -5709,7 +5709,9 @@ public abstract class PersistenceApiContract {
         "actions", List.of("pull")));
     String userHash = "a".repeat(64);
     String scannerHash = "b".repeat(64);
-    String stagingHash = "f".repeat(64);
+    // Distinct from the hashes dockerAuthTokenCleanupIsBoundedAndPreservesUnexpiredTokens inserts into
+    // the same shared database (c, d, e and f).
+    String stagingHash = "57".repeat(32);
 
     inTransaction(() -> {
       tokens.insert(
