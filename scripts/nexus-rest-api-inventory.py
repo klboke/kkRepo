@@ -34,8 +34,11 @@ DEFAULT_URL = (
 )
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT = os.path.join(ROOT, "docs/en/dev/nexus-rest-api-inventory.md")
-SOURCE = os.environ.get("NEXUS_INVENTORY_SOURCE", os.path.join(ROOT, "server/src/main/java"))
 SOURCE_REL = "server/src/main/java"
+# This repository's own source tree. Anything else, including a NEXUS_INVENTORY_SOURCE override, is an
+# alternate tree that must be named in the baseline header and the regeneration command.
+DEFAULT_SOURCE = os.path.join(ROOT, SOURCE_REL)
+SOURCE = os.environ.get("NEXUS_INVENTORY_SOURCE", DEFAULT_SOURCE)
 
 
 def nexus_endpoints(url):
@@ -131,7 +134,7 @@ def command_line(git_ref, output, client_url, source):
     parts = ["python3", "scripts/nexus-rest-api-inventory.py"]
     if git_ref:
         parts += ["--git-ref", git_ref]
-    elif os.path.abspath(source) != os.path.abspath(SOURCE):
+    elif os.path.abspath(source) != os.path.abspath(DEFAULT_SOURCE):
         parts += ["--source", shlex.quote(source)]
     if os.path.abspath(output) != os.path.abspath(OUTPUT):
         parts += ["--output", shlex.quote(output)]
@@ -165,7 +168,7 @@ def main(argv=None):
         resolved = git_sha(args.git_ref)
         baseline = (f"`{resolved}`" if resolved and resolved.lower() == args.git_ref.lower()
                     else f"`{args.git_ref}` at `{resolved}`")
-    elif os.path.abspath(args.source) != os.path.abspath(SOURCE):
+    elif os.path.abspath(args.source) != os.path.abspath(DEFAULT_SOURCE):
         baseline = f"working tree at `{args.source}` (not a pinned baseline)"
     else:
         baseline = f"working tree at `{git_sha('HEAD')}` (not a pinned baseline)"
