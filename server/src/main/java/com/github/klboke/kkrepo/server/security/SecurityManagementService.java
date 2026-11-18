@@ -1032,6 +1032,16 @@ public class SecurityManagementService implements AccessDecisionService {
     return decide(subject, requestedPermission.trim(), null);
   }
 
+  public AccessDecision decideFresh(PermissionSubject subject, String requestedPermission) {
+    if (subject == null || requestedPermission == null || requestedPermission.isBlank()) {
+      return AccessDecision.deny("missing subject or permission");
+    }
+    AuthorizationSnapshot snapshot = loadAuthorizationSnapshot(subject);
+    return !snapshot.roleIds().isEmpty()
+        && permissionAllowed(snapshot.privileges(), requestedPermission.trim(), null, snapshot.repositoryTargets())
+            ? AccessDecision.allow() : AccessDecision.deny("missing permission " + requestedPermission);
+  }
+
   @Transactional(readOnly = true)
   public List<String> listEffectivePermissions(PermissionSubject subject) {
     if (subject == null) {

@@ -21,6 +21,7 @@ import java.util.Objects;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.annotation.Isolation;
 
 /** Performs the final native lock, fence, usage, protection and content checks with deletion. */
 @Service
@@ -53,7 +54,7 @@ public class CleanupExecutionService {
     this.clock = clock;
   }
 
-  @Transactional
+  @Transactional(isolation = Isolation.READ_COMMITTED)
   public ExecutionResult apply(
       ClaimedRunRepository claim,
       CleanupRun run,
@@ -63,7 +64,7 @@ public class CleanupExecutionService {
   }
 
   /** Revalidates and deletes one bounded protocol family in a single fenced transaction. */
-  @Transactional
+  @Transactional(isolation = Isolation.READ_COMMITTED)
   public List<ExecutionResult> applyBatch(
       ClaimedRunRepository claim,
       CleanupRun run,
@@ -98,7 +99,8 @@ public class CleanupExecutionService {
 
     RepositoryRecord repository = repositoryDao.findById(claim.repositoryId()).orElse(null);
     if (repository == null || !repository.online() || repository.format() != claim.format()
-        || repository.format() == com.github.klboke.kkrepo.core.RepositoryFormat.GITLFS) {
+        || repository.format() == com.github.klboke.kkrepo.core.RepositoryFormat.GITLFS
+        || repository.format() == com.github.klboke.kkrepo.core.RepositoryFormat.OHPM) {
       return persistRunItems(
           claim.id(), candidates,
           repeated(candidates.size(), stale("repository state changed")), now);
@@ -127,7 +129,13 @@ public class CleanupExecutionService {
         results.set(index, stale("usage revision changed"));
         continue;
       }
-      CleanupProtection protection = cleanupDao.findActiveProtection(
+      String snapshotChange = scanner.revalidateForDeletion(repository, run.criteriaSnapshot(), current, run.createdAt());
+      if (snapshotChange != null) {
+        results.set(index, stale(snapshotChange));
+        continue;
+      }
+      CleanupProtection protection = scanner.inheritedSnapshotProtection(repository.id(), current, now);
+      if (protection == null) protection = cleanupDao.findActiveProtection(
           repository.id(),
           current.kind(),
           current.key(),

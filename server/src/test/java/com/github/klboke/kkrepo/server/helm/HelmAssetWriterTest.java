@@ -43,6 +43,18 @@ import org.mockito.ArgumentCaptor;
 
 class HelmAssetWriterTest {
   @Test
+  void progressiveChartValidationRejectsInvalidArchivesBeforeCompletion(
+      @org.junit.jupiter.api.io.TempDir java.nio.file.Path directory) throws Exception {
+    Fixture fixture = fixture();
+    var file = java.nio.file.Files.write(directory.resolve("chart.tgz"), chartPackage("demo", "1.2.3"));
+    fixture.writer.validateProgressiveChart(file);
+    java.nio.file.Files.writeString(file, "not a chart");
+    assertThrows(IllegalArgumentException.class, () -> fixture.writer.validateProgressiveChart(file));
+    java.nio.file.Files.write(file, chartPackage("demo", "not-semver"));
+    assertThrows(IllegalArgumentException.class, () -> fixture.writer.validateProgressiveChart(file));
+  }
+
+  @Test
   void writesChartPackageWithParsedMetadataAndDigests() throws Exception {
     Fixture fixture = fixture();
     byte[] chart = chartPackage("demo", "1.2.3");

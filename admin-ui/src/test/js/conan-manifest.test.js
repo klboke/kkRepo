@@ -24,6 +24,9 @@ function form(defaults = { manifestMaxEntries: 50000, manifestMaxBytes: 16777216
     responseErrorMessage: async () => 'unavailable',
   };
   vm.createContext(context);
+  // admin.js declares this at top level; the fixtures only evaluate selected functions, so load the real one.
+  vm.runInContext(source.slice(source.indexOf('const MINIMUM_RELEASE_AGE_FORMATS'),
+    source.indexOf('\n', source.indexOf('const MINIMUM_RELEASE_AGE_FORMATS'))), context);
   vm.runInContext(source.slice(source.indexOf('let conanManifestDefaults'), source.indexOf('let blobStores')), context);
   for (const name of ['loadConanManifestDefaults', 'setConanManifestSettings', 'updateConanManifestSetting',
     'updateConanManifestHelp', 'repositoryFormPayload']) {

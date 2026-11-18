@@ -155,13 +155,18 @@ class HttpRemoteFetcherTest {
     when(runtime.allowedRedirectHosts()).thenReturn(Set.of());
     when(runtime.contentRedirectPolicy()).thenReturn(
         com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS);
-    var request = HttpRemoteFetcher.Request.get("https://repo.example.com/file").withRepositoryForContent(runtime);
+    var request = HttpRemoteFetcher.Request.get("https://repo.example.com/file").withRepositoryForContent(runtime).withByteRange("bytes=100-", "\"v1\"");
     var fetcher = new HttpRemoteFetcher(policy, null, transport, "HTTP_1_1", 30, 60, 300, 0, 0);
     try (var result = fetcher.fetch(request)) {
       assertEquals("artifact", new String(result.body().readAllBytes(), StandardCharsets.UTF_8));
     }
     assertEquals("Bearer test-token", headers.getAllValues().get(0).get("Authorization"));
     assertNull(headers.getAllValues().get(1).get("Authorization"));
+    for (var sent : headers.getAllValues()) {
+      assertEquals("bytes=100-", sent.get("Range"));
+      assertEquals("\"v1\"", sent.get("If-Range"));
+      assertEquals("identity", sent.get("Accept-Encoding"));
+    }
     when(transport.execute(nullable(String.class), nullable(OutboundProxyConfig.class), eq("GET"),
         any(OutboundRequestPolicy.ResolvedHttpTarget.class), anyMap(), nullable(byte[].class), anyLong()))
         .thenAnswer(invocation -> response(307,
@@ -654,6 +659,26 @@ class HttpRemoteFetcherTest {
         .withRepository(runtime);
 
     assertEquals("Bearer upstream-token", request.authorizationHeader());
+  }
+
+  @Test
+  void ohpmUsesRawTokenAndKeepsItWithinTheConfiguredOrigin() {
+    var runtime = mock(RepositoryRuntime.class);
+    when(runtime.name()).thenReturn("ohpm-proxy");
+    when(runtime.format()).thenReturn(RepositoryFormat.OHPM);
+    when(runtime.proxyRemoteUrl()).thenReturn("https://registry.example/ohpm");
+    when(runtime.proxyRemoteBearerToken()).thenReturn("upstream-token");
+    when(runtime.strictRedirectHosts()).thenReturn(Set.of("cdn.example"));
+    when(runtime.allowsRedirectHost("cdn.example")).thenReturn(true);
+    URI origin = URI.create("https://registry.example/ohpm/@scope/pkg");
+    URI cdn = URI.create("https://cdn.example/pkg.har");
+    var request = HttpRemoteFetcher.Request.get(origin.toString()).withRepositoryRedirectBoundary(runtime);
+    assertEquals("upstream-token", request.authorizationHeader());
+    assertEquals("upstream-token", request.authorizationHeaderForRedirect(origin, origin.resolve("pkg.har")));
+    assertNull(request.authorizationHeaderForRedirect(origin, cdn));
+    var download = HttpRemoteFetcher.Request.get(cdn.toString()).withRepositoryRedirectBoundary(runtime);
+    assertNull(download.authorizationHeader());
+    assertEquals("upstream-token", download.authorizationHeaderForRedirect(cdn, origin));
   }
 
   @Test

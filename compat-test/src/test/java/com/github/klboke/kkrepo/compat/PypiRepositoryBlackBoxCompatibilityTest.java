@@ -148,6 +148,7 @@ class PypiRepositoryBlackBoxCompatibilityTest {
       ensureNexusRepositories(config);
       ensureKkRepoRepositories(config);
     }
+    ProxyStreamingCompatibility.enable(config.nexusPlusProxy().request(""));
 
     WheelFixture fixture = WheelFixture.create();
     Exchange referenceUpload = upload(config.nexusHosted(), fixture);

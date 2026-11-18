@@ -33,8 +33,6 @@ import org.springframework.stereotype.Service;
 @Service
 public class RService {
   public static final String SOURCE_NAMESPACE = "src/contrib";
-  static final String COMPONENT = "source";
-  static final String ARCHITECTURE = "source";
   private static final int MAX_GROUP_DEPTH = 8;
   private static final int GROUP_BINDING_BATCH_SIZE = 512;
 
@@ -89,14 +87,14 @@ public class RService {
       String ip) {
     requireHosted(runtime);
     RPath path = requirePath(rawPath);
-    if (path.kind() != RPath.Kind.SOURCE_PACKAGE) {
+    if (!path.hostedPackage()) {
       throw new MavenExceptions.MethodNotAllowed(
-          "R hosted PUT only accepts src/contrib source package paths");
+          "R hosted PUT requires a canonical source or binary package path");
     }
     try (RSourcePackageInspector.InspectedPackage inspected =
         inspector.inspect(body, path.filename())) {
       PublishedPackage published = publishInspected(runtime, path, inspected, actor, ip);
-      publishPending(runtime, SOURCE_NAMESPACE, true);
+      publishPending(runtime, path.namespace(), true);
       return MavenResponse.noBody(200).withHeader("Location", published.path());
     }
   }
@@ -107,14 +105,20 @@ public class RService {
       InputStream body,
       String actor,
       String ip) {
+    return publish(runtime, SOURCE_NAMESPACE, filename, body, actor, ip);
+  }
+
+  public PublishedPackage publish(
+      RepositoryRuntime runtime, String namespace, String filename,
+      InputStream body, String actor, String ip) {
     requireHosted(runtime);
-    RPath path = requirePath(SOURCE_NAMESPACE + "/" + filename);
-    if (path.kind() != RPath.Kind.SOURCE_PACKAGE) {
-      throw new MavenExceptions.BadRequestException("Invalid R source package filename");
+    RPath path = requirePath(requireNamespace(namespace) + "/" + filename);
+    if (!path.hostedPackage() || !path.namespace().equals(namespace)) {
+      throw new MavenExceptions.BadRequestException("Invalid R package filename for namespace");
     }
     try (RSourcePackageInspector.InspectedPackage inspected = inspector.inspect(body, filename)) {
       PublishedPackage published = publishInspected(runtime, path, inspected, actor, ip);
-      publishPending(runtime, SOURCE_NAMESPACE, true);
+      publishPending(runtime, path.namespace(), true);
       return published;
     }
   }
@@ -143,12 +147,14 @@ public class RService {
       String actor,
       String ip) {
     RPackageMetadata metadata = inspected.metadata();
-    String leaseKey = coordinateLease(runtime, metadata.packageName(), metadata.version());
+    String namespace = path.namespace();
+    String packageType = RPathParser.packageType(namespace);
+    String leaseKey = coordinateLease(runtime, namespace, metadata.packageName(), metadata.version());
     try (FencedLeaseManager.Lease lease = leases.acquire(leaseKey)) {
       lease.assertHeld();
       Optional<RRegistryDao.PackageRecord> existing = registry.findPackage(
-          runtime.id(), SOURCE_NAMESPACE, COMPONENT, metadata.packageName(),
-          metadata.version(), ARCHITECTURE);
+          runtime.id(), namespace, packageType, metadata.packageName(),
+          metadata.version(), packageType);
       if (existing.isPresent()) {
         RRegistryDao.PackageRecord row = existing.orElseThrow();
         if (!row.sha256().equalsIgnoreCase(inspected.sha256())) {
@@ -174,9 +180,9 @@ public class RService {
           runtime,
           path.normalized(),
           components.browsePath(
-              metadata.packageName(), metadata.version(), inspected.filename()),
+              namespace, metadata.packageName(), metadata.version(), inspected.filename()),
           inspected.file(),
-          RProxyProjectionService.packageAttributes(inspected, "hosted"),
+          RProxyProjectionService.packageAttributes(inspected, "hosted", namespace),
           actor,
           ip,
           component);
@@ -185,13 +191,13 @@ public class RService {
           new RRegistryDao.PackageRecord(
               null,
               runtime.id(),
-              SOURCE_NAMESPACE,
-              COMPONENT,
-              ARCHITECTURE,
+              namespace,
+              packageType,
+              packageType,
               metadata.packageName(),
               metadata.version(),
               RVersions.orderKey(metadata.version()),
-              ARCHITECTURE,
+              packageType,
               inspected.filename(),
               path.normalized(),
               objectFields(metadata.indexFields(inspected.md5(), inspected.filename())),
@@ -218,8 +224,8 @@ public class RService {
       RepositoryRuntime runtime, String rawPath, String reason, boolean enforcePolicy) {
     requireHosted(runtime);
     RPath path = requirePath(rawPath);
-    if (path.kind() != RPath.Kind.SOURCE_PACKAGE) {
-      throw new MavenExceptions.MethodNotAllowed("Only R source packages can be deleted");
+    if (!path.hostedPackage()) {
+      throw new MavenExceptions.MethodNotAllowed("Only R package archives can be deleted");
     }
     if (enforcePolicy && !WritePolicy.parse(runtime.writePolicy()).checkDeleteAllowed()) {
       throw new MavenExceptions.WritePolicyDenied("Repository write policy forbids deletion");
@@ -228,14 +234,14 @@ public class RService {
         runtime.id(), path.normalized()).orElseThrow(
             () -> new MavenExceptions.MavenNotFoundException(path.normalized()));
     try (FencedLeaseManager.Lease lease = leases.acquire(
-        coordinateLease(runtime, existing.packageName(), existing.version()))) {
+        coordinateLease(runtime, existing.distribution(), existing.packageName(), existing.version()))) {
       lease.assertHeld();
       RRegistryDao.PackageRecord removed = registry.deletePackage(
-          runtime.id(), SOURCE_NAMESPACE, COMPONENT, existing.packageName(), existing.version(),
-          ARCHITECTURE, reason, Instant.now()).orElseThrow(
+          runtime.id(), existing.distribution(), existing.component(), existing.packageName(), existing.version(),
+          existing.architecture(), reason, Instant.now()).orElseThrow(
               () -> new MavenExceptions.MavenNotFoundException(path.normalized()));
       lease.assertHeld();
-      publishPending(runtime, SOURCE_NAMESPACE, true);
+      publishPending(runtime, existing.distribution(), true);
       assets.retirePackageProjection(removed.assetId());
       return MavenResponse.noBody(204);
     }
@@ -246,7 +252,7 @@ public class RService {
     requireHosted(runtime);
     if (componentIds == null || componentIds.isEmpty()) return List.of();
     ArrayList<Integer> counts = new ArrayList<>();
-    boolean changed = false;
+    Set<String> changed = new LinkedHashSet<>();
     for (Long componentId : componentIds) {
       int deleted = 0;
       if (componentId != null && componentId > 0) {
@@ -260,21 +266,26 @@ public class RService {
               row.version(), row.architecture(), reason, Instant.now());
           if (removed.isPresent()) {
             deleted++;
-            changed = true;
+            changed.add(row.distribution());
             assets.retirePackageProjection(row.assetId());
           }
         }
       }
       counts.add(deleted);
     }
-    if (changed) publishPending(runtime, SOURCE_NAMESPACE, true);
+    changed.forEach(namespace -> publishPending(runtime, namespace, true));
     return List.copyOf(counts);
   }
 
   public void rebuild(RepositoryRuntime runtime) {
     requireR(runtime);
-    registry.markSuiteDirty(runtime.id(), SOURCE_NAMESPACE, Instant.now());
-    publishPending(runtime, SOURCE_NAMESPACE, true);
+    Set<String> namespaces = new LinkedHashSet<>();
+    namespaces.add(SOURCE_NAMESPACE);
+    registry.listSuites(runtime.id()).forEach(suite -> namespaces.add(suite.distribution()));
+    for (String namespace : namespaces) {
+      registry.markSuiteDirty(runtime.id(), namespace, Instant.now());
+      publishPending(runtime, namespace, true);
+    }
   }
 
   public Status status(RepositoryRuntime runtime) {
@@ -298,14 +309,14 @@ public class RService {
 
   private MavenResponse getHosted(
       RepositoryRuntime runtime, RPath path, boolean headOnly) {
-    if (path.kind() == RPath.Kind.SOURCE_PACKAGE) {
+    if (path.hostedPackage()) {
       return assets.serve(runtime, path.normalized(), headOnly)
           .withHeader("Cache-Control", "public, max-age=31536000, immutable");
     }
     if (path.kind() != RPath.Kind.PACKAGES_GZIP) {
       throw new MavenExceptions.MavenNotFoundException(path.normalized());
     }
-    RRegistryDao.Snapshot snapshot = ensureSnapshot(runtime, SOURCE_NAMESPACE);
+    RRegistryDao.Snapshot snapshot = ensureSnapshot(runtime, path.namespace());
     String hidden = snapshot.manifest().get(path.normalized());
     if (hidden == null) throw new MavenExceptions.MavenNotFoundException(path.normalized());
     return assets.serve(runtime, hidden, headOnly)
@@ -314,9 +325,11 @@ public class RService {
 
   private MavenResponse getGroup(
       RepositoryRuntime runtime, RPath path, boolean headOnly) {
-    if (!path.gzip()) throw new MavenExceptions.MavenNotFoundException(path.normalized());
+    if (!path.hostedPackage() && path.kind() != RPath.Kind.PACKAGES_GZIP) {
+      throw new MavenExceptions.MavenNotFoundException(path.normalized());
+    }
     if (path.kind() == RPath.Kind.PACKAGES_GZIP) {
-      RRegistryDao.Snapshot snapshot = ensureGroupSnapshot(runtime, SOURCE_NAMESPACE);
+      RRegistryDao.Snapshot snapshot = ensureGroupSnapshot(runtime, path.namespace());
       String hidden = snapshot.manifest().get(path.normalized());
       if (hidden == null) throw new MavenExceptions.MavenNotFoundException(path.normalized());
       return assets.serve(runtime, hidden, headOnly)
@@ -325,15 +338,15 @@ public class RService {
     // Package bytes are pinned by the group binding created with the published index. Do not
     // contact an upstream proxy again here: the next PACKAGES.gz request refreshes the projection,
     // while this immutable download continues to resolve against one coherent snapshot.
-    RRegistryDao.Snapshot snapshot = publishedSnapshots.find(runtime.id(), SOURCE_NAMESPACE)
-        .orElseGet(() -> ensureGroupSnapshot(runtime, SOURCE_NAMESPACE));
+    RRegistryDao.Snapshot snapshot = publishedSnapshots.find(runtime.id(), path.namespace())
+        .orElseGet(() -> ensureGroupSnapshot(runtime, path.namespace()));
     RRegistryDao.GroupBinding binding = registry.findGroupBinding(
-        runtime.id(), SOURCE_NAMESPACE, snapshot.revision(), path.normalized()).orElse(null);
+        runtime.id(), path.namespace(), snapshot.revision(), path.normalized()).orElse(null);
     if (RepositoryRoutingPolicy.filtersGroup(runtime.id())
         && (binding == null || !runtime.containsMember(binding.memberRepositoryId()))) {
-      snapshot = ensureGroupSnapshot(runtime, SOURCE_NAMESPACE);
+      snapshot = ensureGroupSnapshot(runtime, path.namespace());
       binding = registry.findGroupBinding(
-          runtime.id(), SOURCE_NAMESPACE, snapshot.revision(), path.normalized()).orElse(null);
+          runtime.id(), path.namespace(), snapshot.revision(), path.normalized()).orElse(null);
     }
     if (binding == null || (RepositoryRoutingPolicy.filtersGroup(runtime.id())
         && !runtime.containsMember(binding.memberRepositoryId()))) {
@@ -480,9 +493,14 @@ public class RService {
           collectMembers(member, namespace, visiting, revisions, members, depth + 1);
           continue;
         }
-        long minimumRevision = member.isProxy()
-            ? proxyProjection.prepareGroupMember(member, Instant.now())
-            : 0;
+        long minimumRevision;
+        try {
+          minimumRevision = member.isProxy()
+              ? proxyProjection.prepareGroupMember(member, namespace, Instant.now()) : 0;
+        } catch (MavenExceptions.MavenNotFoundException missing) {
+          revisions.put(member.id(), 0L);
+          continue;
+        }
         long revision = ensureSnapshot(member, namespace, minimumRevision).revision();
         revisions.put(member.id(), revision);
         members.add(new ResolvedMember(member.id(), revision));
@@ -607,9 +625,9 @@ public class RService {
   }
 
   private static String requireNamespace(String namespace) {
-    if (!SOURCE_NAMESPACE.equals(namespace)) {
+    if (RPathParser.packageExtension(namespace) == null) {
       throw new MavenExceptions.BadRequestException(
-          "R namespace must be src/contrib");
+          "R namespace must be a canonical source or platform-specific binary directory");
     }
     return namespace;
   }
@@ -625,9 +643,9 @@ public class RService {
   }
 
   private static String coordinateLease(
-      RepositoryRuntime runtime, String packageName, String version) {
+      RepositoryRuntime runtime, String namespace, String packageName, String version) {
     return "r:coordinate:" + runtime.id() + ":" + HexFormat.of().formatHex(
-        PersistenceHashes.sha256(SOURCE_NAMESPACE, packageName, version, ARCHITECTURE));
+        PersistenceHashes.sha256(namespace, packageName, version, RPathParser.packageType(namespace)));
   }
 
   private static Map<String, Object> objectFields(Map<String, String> fields) {

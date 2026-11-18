@@ -87,6 +87,69 @@ import org.springframework.dao.DuplicateKeyException;
 /** Reusable black-box contract that every database backend must pass through the public API. */
 public abstract class PersistenceApiContract {
   @Test
+  void dockerConnectorsReservePortsAcrossProtocolsAndReleaseOnUpdateAndDelete() {
+    var repositories = stores().repositories();
+    long first = inTransaction(() -> repositories.insert(dockerConnectorRepository(
+        null, "tls-ports-a", Map.of("connectorPort", 15443, "httpsConnectorPort", 15444))));
+    assertThrows(DuplicateKeyException.class, () -> inTransaction(() -> repositories.insert(
+        dockerConnectorRepository(null, "tls-ports-b", Map.of("httpsConnectorPort", 15443)))));
+    assertTrue(repositories.findByName("tls-ports-b").isEmpty());
+    long second = inTransaction(() -> repositories.insert(dockerConnectorRepository(
+        null, "tls-ports-b", Map.of("connectorPort", 15445))));
+    assertThrows(DuplicateKeyException.class, () -> inTransaction(() -> {
+      repositories.update(dockerConnectorRepository(second, "tls-ports-b", Map.of("connectorPort", 15444)));
+      return null;
+    }));
+    assertEquals(15445, ((Map<?, ?>) repositories.findById(second).orElseThrow().attributes().get("docker")).get("connectorPort"));
+    inTransaction(() -> {
+      repositories.update(dockerConnectorRepository(first, "tls-ports-a", Map.of("connectorPort", 15443)));
+      repositories.update(dockerConnectorRepository(second, "tls-ports-b", Map.of("httpsConnectorPort", 15444)));
+      return null;
+    });
+    repositories.deleteById(first);
+    inTransaction(() -> {
+      repositories.update(dockerConnectorRepository(second, "tls-ports-b", Map.of("httpsConnectorPort", 15443)));
+      return null;
+    });
+    repositories.deleteById(second);
+  }
+
+  @Test
+  void concurrentHttpAndHttpsPortReservationsHaveOneWinner() throws Exception {
+    var barrier = new CyclicBarrier(2);
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      List<Callable<Boolean>> actions = List.of(
+          () -> reserveConcurrentDockerPort(barrier, "http"),
+          () -> reserveConcurrentDockerPort(barrier, "https"));
+      var results = executor.invokeAll(actions);
+      int winners = 0;
+      for (var result : results) if (result.get()) winners++;
+      assertEquals(1, winners);
+    } finally {
+      for (String scheme : List.of("http", "https")) {
+        stores().repositories().findByName("tls-race-" + scheme)
+            .ifPresent(record -> stores().repositories().deleteById(record.id()));
+      }
+    }
+  }
+
+  private boolean reserveConcurrentDockerPort(CyclicBarrier barrier, String scheme) throws Exception {
+    barrier.await(10, java.util.concurrent.TimeUnit.SECONDS);
+    try {
+      inTransaction(() -> stores().repositories().insert(dockerConnectorRepository(null, "tls-race-" + scheme,
+          Map.of(scheme.equals("http") ? "connectorPort" : "httpsConnectorPort", 15446))));
+      return true;
+    } catch (DuplicateKeyException expected) {
+      return false;
+    }
+  }
+
+  private static RepositoryRecord dockerConnectorRepository(Long id, String name, Map<String, Object> docker) {
+    return new RepositoryRecord(id, name, RepositoryFormat.DOCKER, RepositoryType.HOSTED,
+        "docker-hosted", true, null, null, null, null, null, "ALLOW", true, Map.of("docker", docker));
+  }
+
+  @Test
   void routingRulesPersistBindingsAndRenamesAcrossStoreInstances() {
     var rules = stores().routingRules();
     long id = rules.insert("routing-contract", "Namespace policy", "BLOCK", List.of("/private/.*", "/internal/.*"));
@@ -350,6 +413,14 @@ public abstract class PersistenceApiContract {
     assertEquals(Set.of(
         "gitlfs_object",
         "gitlfs_upload",
+        "ohpm_import_job",
+        "ohpm_import_item",
+        "ohpm_login_key",
+        "ohpm_login_nonce",
+        "ohpm_fetch_lease",
+        "maven_snapshot_family",
+        "maven_snapshot_build",
+        "maven_snapshot_asset",
         "api_key",
         "ansible_collection_signature",
         "ansible_collection_version",
@@ -416,6 +487,7 @@ public abstract class PersistenceApiContract {
         "component_search",
         "content_selector",
         "docker_auth_token",
+        "docker_connector_binding",
         "docker_manifest",
         "docker_manifest_reference",
         "docker_scanner_token_resource",
@@ -1186,6 +1258,66 @@ public abstract class PersistenceApiContract {
     assertEquals(2, cleanup.listRuns(policyId, 0, 100).size());
     assertEquals(0, inTransaction(() -> cleanup.deleteTerminalRunsBefore(
         base.plusSeconds(1_000), 10, 2)));
+  }
+
+  @Test
+  void assetPathLockFindsConcurrentInsertAfterAnEmptySnapshot() throws Exception {
+    long repository = createRepository("asset-lock-insert", RepositoryFormat.RAW);
+    String path = "@scope/package";
+    AssetRecord root = new AssetRecord(null, repository, null, null, RepositoryFormat.RAW,
+        path, PersistenceHashes.pathHash(path), "package", "metadata", "application/json",
+        null, null, Instant.now(), Map.of("revision", 1));
+    CountDownLatch snapshot = new CountDownLatch(1);
+    CountDownLatch inserted = new CountDownLatch(1);
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var reader = executor.submit(() -> inTransaction(() -> {
+        assertTrue(stores().assets().findAssetByPath(repository, path).isEmpty());
+        snapshot.countDown();
+        await(inserted);
+        assertTrue(stores().assets().tryInsertAsset(root).isEmpty());
+        AssetRecord current = stores().assets().findAssetByPathForUpdate(repository, path).orElseThrow();
+        assertEquals(1, ((Number) current.attributes().get("revision")).intValue());
+        return current.id();
+      }));
+      await(snapshot);
+      long winner = inTransaction(() -> stores().assets().insertAsset(root));
+      inserted.countDown();
+      assertEquals(winner, reader.get(10, java.util.concurrent.TimeUnit.SECONDS));
+    }
+  }
+
+  @Test
+  void assetPathLockSerializesMetadataMutationsAcrossTransactions() throws Exception {
+    long repository = createRepository("asset-lock-update", RepositoryFormat.RAW);
+    String path = "@scope/package";
+    long root = stores().assets().insertAsset(new AssetRecord(
+        null, repository, null, null, RepositoryFormat.RAW, path, PersistenceHashes.pathHash(path),
+        "package", "metadata", "application/json", null, null, Instant.now(), Map.of("revision", 0)));
+    CyclicBarrier snapshots = new CyclicBarrier(2);
+    Callable<Void> update = () -> inTransaction(() -> {
+      assertEquals(0, ((Number) stores().assets().findAssetByPath(repository, path)
+          .orElseThrow().attributes().get("revision")).intValue());
+      await(snapshots);
+      AssetRecord current = stores().assets().findAssetByPathForUpdate(repository, path).orElseThrow();
+      int next = ((Number) current.attributes().get("revision")).intValue() + 1;
+      stores().assets().touchAssetLastUpdatedAndAttributes(root, Instant.now(), Map.of("revision", next));
+      return null;
+    });
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var first = executor.submit(update);
+      var second = executor.submit(update);
+      first.get(10, java.util.concurrent.TimeUnit.SECONDS);
+      second.get(10, java.util.concurrent.TimeUnit.SECONDS);
+    }
+    assertEquals(2, ((Number) stores().assets().findAssetById(root).orElseThrow()
+        .attributes().get("revision")).intValue());
+    assertThrows(IllegalStateException.class, () -> inTransaction(() -> {
+      stores().assets().findAssetByPathForUpdate(repository, path).orElseThrow();
+      stores().assets().touchAssetLastUpdatedAndAttributes(root, Instant.now(), Map.of("revision", 3));
+      throw new IllegalStateException("rollback");
+    }));
+    assertEquals(2, ((Number) stores().assets().findAssetById(root).orElseThrow()
+        .attributes().get("revision")).intValue());
   }
 
   @Test

@@ -185,6 +185,25 @@ class ArtifactDownloadPolicyTest {
   }
 
   @Test
+  void progressiveDeliveryRequiresBothSourceAndEntryGroupToHaveScanningDisabled() {
+    properties.setEnabled(true);
+    MockHttpServletRequest request = new MockHttpServletRequest("GET", "/repository/group/a.jar");
+    request.setAttribute(RepositorySecurityFilter.ENTRY_REPOSITORY_ID_ATTRIBUTE, 2L);
+    RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
+    try {
+      when(scans.findDownloadPolicyContexts(1L, 2L)).thenReturn(List.of());
+      assertTrue(policy.allowsProgressiveRead(1L));
+      for (long repository : new long[] {1L, 2L}) {
+        when(scans.findDownloadPolicyContexts(1L, 2L)).thenReturn(List.of(
+            new DownloadPolicyContext(config(repository, EnforcementMode.ENFORCE, PolicyAction.BLOCK), profile())));
+        assertFalse(policy.allowsProgressiveRead(1L));
+      }
+    } finally {
+      RequestContextHolder.resetRequestAttributes();
+    }
+  }
+
+  @Test
   void commonEntryRepositoryAttributeAppliesGroupPolicyToMemberRead() {
     properties.setEnabled(true);
     ScanCandidate candidate =

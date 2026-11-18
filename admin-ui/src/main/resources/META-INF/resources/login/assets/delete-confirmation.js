@@ -4,7 +4,8 @@
 
   // Resolve only after an explicit confirmation. Navigation, Escape and duplicate
   // requests cancel; callers retain their existing authorization and DELETE logic.
-  window.kkrepoConfirmDelete = function ({ title, description, details = [], confirmationText, confirmLabel = "Delete" } = {}) {
+  window.kkrepoConfirmDelete = function ({ title, description, details = [], confirmationText, confirmLabel = "Delete",
+    warning = "Deletion is permanent. This action cannot be undone." } = {}) {
     if (active) return Promise.resolve(false);
     active = true;
     const trigger = document.activeElement;
@@ -31,7 +32,7 @@
       value.setAttribute("data-i18n-skip", "");
     }
     add("p", form, description || "The selected item will be deleted.").id = "delete-confirmation-description";
-    add("p", form, "Deletion is permanent. This action cannot be undone.", "kk-confirm-warning")
+    add("p", form, warning, "kk-confirm-warning")
       .id = "delete-confirmation-warning";
     let input;
     if (confirmationText != null) {

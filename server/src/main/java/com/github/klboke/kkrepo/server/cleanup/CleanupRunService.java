@@ -327,8 +327,8 @@ public class CleanupRunService {
           claim.id(),
           claim.leaseToken(),
           claim.fencingToken(),
-          repository.format() == com.github.klboke.kkrepo.core.RepositoryFormat.DOCKER
-              ? "DOCKER" : "COMPONENT",
+          CleanupCriteria.snapshotMode(run.criteriaSnapshot()) ? MavenSnapshotCleanupService.PHASE
+              : repository.format() == com.github.klboke.kkrepo.core.RepositoryFormat.DOCKER ? "DOCKER" : "COMPONENT",
           databaseNow());
       scan = scanner.scan(
           repository, run.criteriaSnapshot(), scanLimit, cutoff, scanCursor);

@@ -214,6 +214,16 @@ test("typed confirmation requires an exact name before submitting", async () => 
   assert.equal(h.navigation.size, 0);
 });
 
+test("credential confirmation can describe revocation without claiming permanent deletion", async () => {
+  const harness = confirmationContext();
+  const result = harness.confirm({ title: "Disable signing key?", confirmLabel: "Disable",
+    warning: "Signed-login tokens will be revoked." });
+  assert.equal(harness.elements.find(element => element.id === "delete-confirmation-warning").textContent,
+    "Signed-login tokens will be revoked.");
+  harness.get("form").fire("submit");
+  assert.equal(await result, true);
+});
+
 test("duplicate prompts cancel and names remain literal text", async () => {
   const h = confirmationContext();
   const name = '<img src=x onerror="alert(1)">';

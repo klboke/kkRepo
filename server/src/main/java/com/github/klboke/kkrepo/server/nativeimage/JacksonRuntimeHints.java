@@ -36,6 +36,7 @@ public final class JacksonRuntimeHints implements RuntimeHintsRegistrar {
           "com.github.klboke.kkrepo.server.docker.DockerConnectorManager$Snapshot",
           "com.github.klboke.kkrepo.server.docker.DockerConnectorManager$ConnectorStatus",
           "com.github.klboke.kkrepo.server.docker.DockerConnectorManager$ConnectorTuning",
+          "com.github.klboke.kkrepo.server.docker.DockerTlsBundles$BundleStatus",
           "com.github.klboke.kkrepo.server.docker.DockerTransferLimiter$Snapshot");
 
   @Override

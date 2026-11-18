@@ -11,7 +11,7 @@ or when explicitly enabled.
 
 ## Custom CA runtime checks
 
-`scripts/ci/check-custom-ca.py --jar server/target/kkrepo-server-1.3.4.jar` starts disposable
+`scripts/ci/check-custom-ca.py --jar server/target/kkrepo-server-1.4.0.jar` starts disposable
 PostgreSQL and HTTPS RustFS containers plus an HTTPS upstream signed by a second private CA.
 It verifies blob-store read/write/delete, hosted artifact upload/download, and an uncached proxy
 download with a combined PEM bundle, then restarts without the bundle and checks TLS rejection.
@@ -111,6 +111,8 @@ Available suites:
   contracts. Composer is required when enabled; a missing Nexus Composer endpoint fails instead of skipping.
   The self-contained Conda fixtures run in this module, while the live Conda comparison is enabled
   explicitly as described below.
+- `ohpm`: standalone HTTP acceptance against a disposable kkRepo candidate; Huawei's protocol is the reference, not Nexus.
+- `ohpm-client-e2e`: the same acceptance with real OHPM publication and installation. Full E2E includes OHPM in the existing core shard on JVM/Native × MySQL/PostgreSQL, with Login disabled/enabled on the same candidate image. See [OHPM acceptance and CI](../docs/en/dev/ohpm-acceptance.md) for candidate preparation, the pinned 5.0.2 installer, required URLs, reports and cleanup limits.
 - `extended`: diagnostic smoke coverage plus currently separated PyPI, Helm, Pub, NuGet, RubyGems, and Yum checks.
 - `client-e2e`: starts from the disposable kkrepo service and uses real package clients to publish
   and then download/resolve through hosted and group/proxy repositories. It covers Maven, npm,
@@ -492,6 +494,25 @@ verified. The live Nexus 3.94 matrix covers H2 to MySQL and PostgreSQL source to
 targets, restart/resume, exact-row-count idempotency, and masked/missing proxy-secret fail-closed
 behavior. An affected target proxy remains offline with no placeholder credential until an
 administrator supplies the secret explicitly.
+
+## OHPM External Acceptance
+
+OHPM uses Huawei's official protocol and real clients as the reference. It does not require Nexus.
+Build a disposable executable candidate with `mvn -pl server -am -DskipTests package spring-boot:repackage`,
+then set `KKREPO_COMPAT_BASE_URL`, `KKREPO_COMPAT_USERNAME`, `KKREPO_COMPAT_PASSWORD` and the expected
+`OHPM_COMPAT_LOGIN_ENABLED` state.
+
+```bash
+bash scripts/ci/run-ohpm-compat.sh blackbox
+OHPM_COMMAND=/absolute/path/to/ohpm OHPM_EXPECTED_VERSION=6.0.1 \
+  bash scripts/ci/run-ohpm-compat.sh client-e2e
+```
+
+The entry points require all seven HTTP cases or all eight cases including the client to run without skips.
+They cover hosted/proxy/group, HAR/HSP, normal/stream upload, management/import, Login and client operations.
+Tests retain populated proxy fixtures when the generic API refuses deletion; destroy the disposable database
+and blob store after the run. See [OHPM acceptance](../docs/en/dev/ohpm-acceptance.md) for bootstrap, upstream
+address configuration, the pinned OHPM 5.0.2 installer and the dual-database CI workflow.
 
 ## Live Console And Maven Read Checks
 

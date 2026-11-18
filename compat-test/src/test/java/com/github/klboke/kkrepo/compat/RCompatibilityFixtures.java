@@ -7,6 +7,8 @@ import java.time.Instant;
 import java.util.Date;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream;
@@ -66,6 +68,29 @@ final class RCompatibilityFixtures {
       tar.finish();
     }
     return compressed.toByteArray();
+  }
+
+  static SourcePackage binaryPackage(String name, String version, String extension) throws Exception {
+    String description = "Package: " + name + "\nVersion: " + version
+        + "\nTitle: Binary fixture\nDescription: Binary repository protocol fixture.\n"
+        + "License: MIT\nAuthor: kkRepo\nMaintainer: kkRepo <compat@kkrepo.invalid>\n"
+        + "Date/Publication: 2026-11-05 00:00:00\n"
+        + "Built: R 4.5.0; ; 2025-04-01 00:00:00 UTC; "
+        + (extension.equals(".zip") ? "windows" : "unix") + "\n";
+    byte[] bytes;
+    if (extension.equals(".zip")) {
+      ByteArrayOutputStream output = new ByteArrayOutputStream();
+      try (ZipOutputStream zip = new ZipOutputStream(output)) {
+        zip.putNextEntry(new ZipEntry(name + "/DESCRIPTION"));
+        zip.write(description.getBytes(StandardCharsets.UTF_8));
+        zip.closeEntry();
+      }
+      bytes = output.toByteArray();
+    } else {
+      bytes = tarGzip(List.of(Entry.file(name + "/DESCRIPTION", description)));
+    }
+    return new SourcePackage(name + "_" + version + extension, name, version, bytes,
+        digest("MD5", bytes), digest("SHA-256", bytes));
   }
 
   private static String digest(String algorithm, byte[] bytes) throws Exception {

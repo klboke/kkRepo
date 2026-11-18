@@ -515,6 +515,13 @@ public class ArtifactDownloadPolicy {
     return properties.isEnabled() && !internalScannerRequest();
   }
 
+  /** Cold bytes may be released only when neither the source nor entry group enables scanning. */
+  public boolean allowsProgressiveRead(long sourceRepositoryId) {
+    if (!shouldEvaluateCurrentRequest()) return true;
+    return scans.findDownloadPolicyContexts(sourceRepositoryId, requestEntryRepositoryId()).stream()
+        .noneMatch(context -> context.config() != null && context.config().enabled());
+  }
+
   /** Cheap guard for protocol paths that need a repository-wide reference lookup. */
   public boolean shouldInspectDownload(Long sourceRepositoryId) {
     return shouldEvaluateCurrentRequest()

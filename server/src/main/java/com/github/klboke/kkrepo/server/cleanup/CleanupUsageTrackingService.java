@@ -125,7 +125,7 @@ public class CleanupUsageTrackingService implements ApplicationRunner {
       List<CleanupPolicy> page = cleanupDao.listPolicies(afterId, 500);
       if (page.isEmpty()) break;
       List<Long> usagePolicyIds = page.stream()
-          .filter(policy -> policy.criteria().containsKey("lastDownloadedOlderThanDays"))
+          .filter(policy -> CleanupCriteria.rules(policy.criteria()).containsKey("lastDownloadedOlderThanDays"))
           .map(CleanupPolicy::id)
           .toList();
       cleanupDao.listTargets(usagePolicyIds).values().stream()

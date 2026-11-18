@@ -67,15 +67,20 @@ public class DockerRemoteRegistryClient {
 
   public HttpRemoteFetcher.Result get(
       RepositoryRuntime runtime, String remotePath, String query, String accept) throws IOException {
+    return get(runtime, remotePath, query, accept, null);
+  }
+
+  public HttpRemoteFetcher.Result get(RepositoryRuntime runtime, String remotePath,
+      String query, String accept, HttpRemoteFetcher.ByteRange range) throws IOException {
     String url = remoteUrl(runtime, remotePath, query);
-    RemoteFetch fetched = fetch(url, runtime, null, accept);
+    RemoteFetch fetched = fetch(url, runtime, null, accept, range);
     HttpRemoteFetcher.Result result = fetched.result();
     if (result.status() == 401 && fetched.credentialsAllowed()) {
       result = releaseChallenge(result);
       String challenge = result.header("WWW-Authenticate");
       RemoteToken token = token(runtime, challenge).orElse(null);
       if (token != null) {
-        fetched = fetch(fetched.effectiveUri().toString(), runtime, token.value(), accept);
+        fetched = fetch(fetched.effectiveUri().toString(), runtime, token.value(), accept, range);
         result = fetched.result();
         if (result.status() == 401 && token.cached() && fetched.credentialsAllowed()) {
           result = releaseChallenge(result);
@@ -83,7 +88,7 @@ public class DockerRemoteRegistryClient {
           challenge = result.header("WWW-Authenticate");
           token = fetchToken(runtime, BearerChallenge.parse(challenge).orElse(null), true).orElse(null);
           if (token != null) {
-            result = fetch(fetched.effectiveUri().toString(), runtime, token.value(), accept).result();
+            result = fetch(fetched.effectiveUri().toString(), runtime, token.value(), accept, range).result();
           }
         }
       }
@@ -106,8 +111,8 @@ public class DockerRemoteRegistryClient {
   }
 
   private RemoteFetch fetch(
-      String url, RepositoryRuntime runtime, String bearerToken, String accept) throws IOException {
-    return pinnedFetchWithHeaders(url, runtime, bearerToken, accept, 0, true);
+      String url, RepositoryRuntime runtime, String bearerToken, String accept, HttpRemoteFetcher.ByteRange range) throws IOException {
+    return pinnedFetchWithHeaders(url, runtime, bearerToken, accept, 0, true, range);
   }
 
   private Optional<RemoteToken> token(RepositoryRuntime runtime, String challenge) throws IOException {
@@ -152,7 +157,7 @@ public class DockerRemoteRegistryClient {
       String bearerToken,
       String accept,
       int redirects,
-      boolean sendCredentials) throws IOException {
+      boolean sendCredentials, HttpRemoteFetcher.ByteRange range) throws IOException {
     Timer.Sample sample = metrics == null ? null : metrics.startTimer();
     int status = 0;
     Throwable failure = null;
@@ -168,6 +173,11 @@ public class DockerRemoteRegistryClient {
       Map<String, String> headers = new LinkedHashMap<>();
       headers.put("User-Agent", "kkrepo/0.1");
       headers.put("Accept", accept == null || accept.isBlank() ? "*/*" : accept);
+      if (range != null) {
+        headers.put("Range", range.range());
+        if (range.ifRange() != null) headers.put("If-Range", range.ifRange());
+        headers.put("Accept-Encoding", "identity");
+      }
       if (sendCredentials && bearerToken != null && !bearerToken.isBlank()) {
         headers.put("Authorization", "Bearer " + bearerToken);
       } else if (sendCredentials) {
@@ -201,7 +211,7 @@ public class DockerRemoteRegistryClient {
             forwardCredentials ? bearerToken : null,
             accept,
             redirects + 1,
-            forwardCredentials);
+            forwardCredentials, range);
       }
       return new RemoteFetch(
           new HttpRemoteFetcher.Result(response.status(), response.headers(), releaseOnClose(response)),
