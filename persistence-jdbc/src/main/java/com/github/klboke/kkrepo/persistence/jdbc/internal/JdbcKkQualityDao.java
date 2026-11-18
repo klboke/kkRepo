@@ -366,12 +366,16 @@ public class JdbcKkQualityDao implements KkQualityDao {
   public boolean observeIssue(
       long issueId, long analysisId, String filePath, Integer line, Integer endLine,
       String severity, String issueType, String message, Instant now) {
+    // closed_at is assigned before status on purpose: MySQL evaluates single-table SET
+    // assignments left to right with already-updated values, so a CASE on status placed after
+    // the status assignment would see 'REOPENED' and keep the old closed_at. PostgreSQL reads the
+    // old row either way.
     return jdbc.update("""
         UPDATE kkq_issue
         SET analysis_id = ?, file_path = ?, line = ?, end_line = ?, severity = ?,
           issue_type = ?, message = ?, update_date = ?,
-          status = CASE WHEN status = 'CLOSED' THEN 'REOPENED' ELSE status END,
-          closed_at = CASE WHEN status = 'CLOSED' THEN NULL ELSE closed_at END
+          closed_at = CASE WHEN status = 'CLOSED' THEN NULL ELSE closed_at END,
+          status = CASE WHEN status = 'CLOSED' THEN 'REOPENED' ELSE status END
         WHERE id = ?
         """, analysisId, filePath, line, endLine, severity, issueType, message,
         Timestamp.from(now), issueId) > 0;
