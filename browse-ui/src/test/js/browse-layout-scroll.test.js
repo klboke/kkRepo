@@ -22,7 +22,7 @@ test("cache-busts the current Browse assets", () => {
 
   assert.match(html, /browse\.css\?v=20261118-format-names-1/);
   assert.match(html, /browse\.js\?v=20261106-ohpm-management/);
-  assert.match(html, /format-icons\.css\?v=20261106-ohpm/);
+  assert.match(html, /format-icons\.css\?v=20261118-format-icons-1/);
 });
 
 test("keeps the icon format picker below its trigger", () => {
