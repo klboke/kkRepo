@@ -110,19 +110,25 @@ public class BlobStorageRegistry {
 
   private static List<BlobStoreProvider> mergeProviders(
       List<BlobStoreProvider> builtins, ObjectProvider<PluginRuntime> plugins) {
+    // Built-in providers and plugin providers share one registry. A plugin may add a new blob store
+    // type but never replace a built-in one: a duplicate type fails startup instead of silently
+    // shadowing either implementation.
     List<BlobStoreProvider> merged = new ArrayList<>();
     Set<String> types = new HashSet<>();
-    if (plugins != null) {
-      plugins.ifAvailable(runtime -> runtime.blobStoreProviders().forEach(provider -> {
-        if (types.add(BlobStoreDescriptor.normalize(provider.type()))) {
-          merged.add(provider);
-        }
-      }));
-    }
     for (BlobStoreProvider provider : builtins == null ? List.<BlobStoreProvider>of() : builtins) {
       if (types.add(BlobStoreDescriptor.normalize(provider.type()))) {
         merged.add(provider);
       }
+    }
+    if (plugins != null) {
+      plugins.ifAvailable(runtime -> runtime.blobStoreProviders().forEach(provider -> {
+        String type = BlobStoreDescriptor.normalize(provider.type());
+        if (!types.add(type)) {
+          throw new IllegalStateException("Blob store type '" + type
+              + "' is already registered; a plugin cannot replace a built-in blob store provider");
+        }
+        merged.add(provider);
+      }));
     }
     return merged;
   }

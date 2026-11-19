@@ -170,7 +170,7 @@ class BlobStorageRegistryProviderTest {
   }
 
   @Test
-  void aPluginProviderOverridesTheBuiltInProviderOfTheSameType() {
+  void aPluginProviderCannotReplaceTheBuiltInProviderOfTheSameType() {
     RecordingProvider builtin = new RecordingProvider("file");
     RecordingProvider pluginProvider = new RecordingProvider("file");
     LoadedPlugins loaded = new LoadedPlugins(
@@ -179,19 +179,18 @@ class BlobStorageRegistryProviderTest {
     try (PluginRuntime pluginRuntime = new PluginRuntime(loaded)) {
       DefaultListableBeanFactory beans = new DefaultListableBeanFactory();
       beans.registerSingleton("pluginRuntime", pluginRuntime);
-      BlobStorageRegistry registry = new BlobStorageRegistry(
-          mock(BlobStoreDao.class),
-          List.of(builtin),
-          beans.getBeanProvider(PluginRuntime.class),
-          false,
-          null,
-          null);
+      IllegalStateException error = assertThrows(IllegalStateException.class,
+          () -> new BlobStorageRegistry(
+              mock(BlobStoreDao.class),
+              List.of(builtin),
+              beans.getBeanProvider(PluginRuntime.class),
+              false,
+              null,
+              null));
 
-      registry.forRecord(record(3, "file-store", "file"));
-
-      assertEquals(1, pluginProvider.created.get());
+      assertTrue(error.getMessage().contains("'file'"), error.getMessage());
+      assertEquals(0, pluginProvider.created.get());
       assertEquals(0, builtin.created.get());
-      registry.shutdown();
     }
   }
 
