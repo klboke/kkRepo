@@ -11,11 +11,11 @@ public interface RepositoryProtocolHandler {
   RepositoryResponse handle(RepositoryRequest request) throws IOException;
 
   /**
-   * When true, the host must not buffer the request body or multipart content. The handler is
-   * expected to use the opaque {@link RepositoryContext#hostContext()} through a host service.
-   * This keeps large uploads and downloads on their original servlet streams.
+   * When true, the host does not buffer the request body or multipart content: the handler reads
+   * the client stream through {@link RepositoryRequest#openBody()} and must bound what it keeps in
+   * memory. Large uploads then reach host services without an in-memory copy.
    */
-  default boolean usesRawRequest() {
+  default boolean streamsRequestBody() {
     return false;
   }
 }

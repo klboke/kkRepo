@@ -1,5 +1,7 @@
 package com.github.klboke.kkrepo.plugin.api;
 
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -7,7 +9,13 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
-/** Framework-agnostic repository request passed to a plugin handler. */
+/**
+ * Framework-agnostic repository request passed to a plugin handler.
+ *
+ * <p>The body is either buffered in {@link #body()} or, when the handler declares
+ * {@link RepositoryProtocolHandler#streamsRequestBody()}, exposed unbuffered as {@link #bodyStream()}.
+ * {@link #openBody()} reads whichever is present.
+ */
 public record RepositoryRequest(
     RepositoryDescriptor repository,
     String repositoryName,
@@ -18,7 +26,8 @@ public record RepositoryRequest(
     byte[] body,
     MultipartPart multipart,
     RepositoryContext context,
-    Map<String, Object> attributes) {
+    Map<String, Object> attributes,
+    InputStream bodyStream) {
 
   public RepositoryRequest {
     if (repository == null) {
@@ -37,6 +46,25 @@ public record RepositoryRequest(
       throw new IllegalArgumentException("Repository context does not match the request repository");
     }
     attributes = attributes == null ? Map.of() : Map.copyOf(attributes);
+    if (bodyStream != null && body.length > 0) {
+      throw new IllegalArgumentException("A streamed request cannot also carry a buffered body");
+    }
+  }
+
+  /** Request with a buffered body. */
+  public RepositoryRequest(
+      RepositoryDescriptor repository,
+      String repositoryName,
+      String path,
+      String method,
+      Map<String, List<String>> headers,
+      Map<String, String> queryParameters,
+      byte[] body,
+      MultipartPart multipart,
+      RepositoryContext context,
+      Map<String, Object> attributes) {
+    this(repository, repositoryName, path, method, headers, queryParameters, body, multipart, context,
+        attributes, null);
   }
 
   /** Compatibility constructor for callers that predate the host context. */
@@ -61,6 +89,30 @@ public record RepositoryRequest(
         multipart,
         RepositoryContext.empty(repository),
         attributes);
+  }
+
+  /** First value of a request header, matched case-insensitively; {@code null} when absent. */
+  public String header(String name) {
+    if (name == null) return null;
+    for (Map.Entry<String, List<String>> entry : headers.entrySet()) {
+      if (entry.getKey().equalsIgnoreCase(name) && !entry.getValue().isEmpty()) {
+        return entry.getValue().getFirst();
+      }
+    }
+    return null;
+  }
+
+  /** Whether the body is the unbuffered client stream rather than {@link #body()}. */
+  public boolean isBodyStreamed() {
+    return bodyStream != null;
+  }
+
+  /**
+   * The request body as a stream: the unbuffered client stream when the handler streams request
+   * bodies, otherwise the buffered bytes. A streamed body can be read only once.
+   */
+  public InputStream openBody() {
+    return bodyStream != null ? bodyStream : new ByteArrayInputStream(body);
   }
 
   public String bodyText() {

@@ -3,9 +3,14 @@ package com.github.klboke.kkrepo.plugin.api;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -65,6 +70,51 @@ class RepositoryProtocolContractTest {
     assertEquals(201, response.status());
     assertEquals(List.of("abc"), response.headers().get("ETag"));
     assertArrayEquals(new byte[] {1, 2}, response.body());
+  }
+
+  @Test
+  void headersAreLookedUpCaseInsensitively() {
+    RepositoryRequest request = new RepositoryRequest(descriptor(), "repo", "a", "GET",
+        Map.of("x-kkrepo-lfs-upload", List.of("id", "other"), "Empty", List.of()), Map.of(), null, null,
+        Map.of());
+
+    assertEquals("id", request.header("X-KkRepo-Lfs-Upload"));
+    assertNull(request.header("Empty"));
+    assertNull(request.header("Missing"));
+    assertNull(request.header(null));
+  }
+
+  @Test
+  void streamedRequestBodiesAreExposedUnbuffered() throws Exception {
+    InputStream stream = new ByteArrayInputStream(new byte[] {1, 2, 3});
+    RepositoryRequest streamed = new RepositoryRequest(descriptor(), "repo", "a", "PUT", Map.of(),
+        Map.of(), null, null, null, Map.of(), stream);
+    assertTrue(streamed.isBodyStreamed());
+    assertSame(stream, streamed.openBody());
+    assertArrayEquals(new byte[0], streamed.body());
+
+    RepositoryRequest buffered = new RepositoryRequest(descriptor(), "repo", "a", "PUT", Map.of(),
+        Map.of(), new byte[] {4}, null, Map.of());
+    assertFalse(buffered.isBodyStreamed());
+    assertArrayEquals(new byte[] {4}, buffered.openBody().readAllBytes());
+    assertThrows(IllegalArgumentException.class, () -> new RepositoryRequest(descriptor(), "repo", "a",
+        "PUT", Map.of(), Map.of(), new byte[] {4}, null, null, Map.of(), stream));
+  }
+
+  @Test
+  void streamingResponsesCarryNoInMemoryBody() throws Exception {
+    RepositoryResponse response = RepositoryResponse.streaming(206,
+        Map.of("Content-Range", List.of("bytes 0-1/2")), output -> output.write(new byte[] {7, 8}));
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    response.stream().writeTo(output);
+
+    assertTrue(response.isStreaming());
+    assertArrayEquals(new byte[] {7, 8}, output.toByteArray());
+    assertArrayEquals(new byte[0], response.body());
+    assertFalse(RepositoryResponse.ok(new byte[] {1}).isStreaming());
+    assertThrows(IllegalArgumentException.class,
+        () -> new RepositoryResponse(200, Map.of(), new byte[] {1}, out -> { }));
+    assertThrows(NullPointerException.class, () -> RepositoryResponse.streaming(200, Map.of(), null));
   }
 
   @Test

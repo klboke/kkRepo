@@ -2,13 +2,10 @@ package com.github.klboke.kkrepo.server.routing;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
-import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.plugin.api.FormatId;
 import com.github.klboke.kkrepo.plugin.api.MultipartPart;
 import com.github.klboke.kkrepo.plugin.api.PluginHostService;
 import com.github.klboke.kkrepo.plugin.api.RepositoryDescriptor;
-import com.github.klboke.kkrepo.plugin.api.RepositoryContext;
-import com.github.klboke.kkrepo.plugin.api.RepositoryPolicy;
 import com.github.klboke.kkrepo.plugin.api.RepositoryKind;
 import com.github.klboke.kkrepo.plugin.api.RepositoryProtocolHandler;
 import com.github.klboke.kkrepo.plugin.api.RepositoryRequest;
@@ -18,11 +15,14 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Enumeration;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,6 +31,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 /**
  * Adapts the framework-agnostic {@link RepositoryProtocolHandler} plugin SPI to the server routing
@@ -62,6 +63,7 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
     this.hostServices = hostServices == null ? List.of() : List.copyOf(hostServices);
     List<Registration> collected = new ArrayList<>();
     List<RepositoryProtocolRoute> converted = new ArrayList<>();
+    Map<String, RepositoryProtocolHandler> owners = new HashMap<>();
     for (RepositoryProtocolHandler handler : handlers) {
       if (handler == null) {
         throw new IllegalStateException("Plugin protocol handler list contains null");
@@ -75,6 +77,14 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
                 + handler.getClass().getName());
       }
       for (com.github.klboke.kkrepo.plugin.api.RepositoryProtocolRoute route : handlerRoutes) {
+        // One owner per route whatever the order: precedence never replaces an implementation.
+        String key = route.format() + "/" + route.type() + " " + route.method() + " "
+            + route.pathPattern();
+        RepositoryProtocolHandler owner = owners.putIfAbsent(key, handler);
+        if (owner != null) {
+          throw new IllegalStateException("Duplicate plugin repository protocol route " + key + ": "
+              + owner.getClass().getName() + " and " + handler.getClass().getName());
+        }
         collected.add(new Registration(route, handler));
         converted.add(toLegacyRoute(route, handler));
       }
@@ -104,7 +114,7 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
               + request.runtime().type() + " " + request.method() + " " + request.path());
     }
     RepositoryResponse response = registration.handler().handle(
-        toNeutralRequest(request, registration.handler().usesRawRequest()));
+        toNeutralRequest(request, registration.handler().streamsRequestBody()));
     if (response == null) {
       throw new IllegalStateException(
           "Plugin repository protocol handler returned no response: "
@@ -116,7 +126,31 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
         headers.put(name, new ArrayList<>(values));
       }
     });
-    return ResponseEntity.status(response.status()).headers(headers).body(response.body());
+    return ResponseEntity.status(response.status()).headers(headers)
+        .body(body(response, request.method()));
+  }
+
+  /**
+   * Adapts the neutral body to the controller contract: GET answers with a streaming body, HEAD and
+   * empty responses with none, other methods with the bytes.
+   */
+  private static Object body(RepositoryResponse response, HttpMethod method) {
+    if (HttpMethod.HEAD.equals(method)) {
+      return null;
+    }
+    if (response.isStreaming()) {
+      StreamingResponseBody stream = response.stream()::writeTo;
+      return stream;
+    }
+    byte[] bytes = response.body();
+    if (bytes.length == 0) {
+      return null;
+    }
+    if (HttpMethod.GET.equals(method)) {
+      StreamingResponseBody stream = output -> output.write(bytes);
+      return stream;
+    }
+    return bytes;
   }
 
   private Registration match(RepositoryRuntime runtime, HttpMethod method, String path) {
@@ -130,7 +164,7 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
     return null;
   }
 
-  private RepositoryRequest toNeutralRequest(RepositoryProtocolRequest request, boolean rawRequest)
+  private RepositoryRequest toNeutralRequest(RepositoryProtocolRequest request, boolean streamBody)
       throws IOException {
     HttpServletRequest servlet = request.servletRequest();
     RepositoryDescriptor descriptor = descriptor(request.runtime());
@@ -143,11 +177,16 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
       }
     }
     Map<String, String> query = new LinkedHashMap<>();
-    servlet.getParameterMap().forEach((name, values) -> {
-      if (name != null && values != null && values.length > 0) {
-        query.put(name, values[0]);
-      }
-    });
+    if (streamBody) {
+      // Servlet parameters would read a form body into memory; only the query string is exposed.
+      queryString(servlet.getQueryString()).forEach(query::putIfAbsent);
+    } else {
+      servlet.getParameterMap().forEach((name, values) -> {
+        if (name != null && values != null && values.length > 0) {
+          query.put(name, values[0]);
+        }
+      });
+    }
     return new RepositoryRequest(
         descriptor,
         request.repositoryName(),
@@ -155,12 +194,30 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
         request.method().name(),
         headers,
         query,
-        !rawRequest && request.multipartFile() == null
+        !streamBody && request.multipartFile() == null
             ? body(servlet, request.method())
             : new byte[0],
-        rawRequest ? null : multipart(request.multipartFile()),
-        new HostContext(descriptor, hostServices, servlet),
-        Map.of());
+        streamBody ? null : multipart(request.multipartFile()),
+        new PluginRepositoryContext(descriptor, hostServices, request.runtime(), servlet),
+        Map.of(),
+        streamBody ? servlet.getInputStream() : null);
+  }
+
+  private static Map<String, String> queryString(String query) {
+    Map<String, String> parameters = new LinkedHashMap<>();
+    if (query == null || query.isEmpty()) {
+      return parameters;
+    }
+    for (String pair : query.split("&")) {
+      if (pair.isEmpty()) {
+        continue;
+      }
+      int equals = pair.indexOf('=');
+      String name = URLDecoder.decode(equals < 0 ? pair : pair.substring(0, equals), StandardCharsets.UTF_8);
+      String value = equals < 0 ? "" : URLDecoder.decode(pair.substring(equals + 1), StandardCharsets.UTF_8);
+      parameters.putIfAbsent(name, value);
+    }
+    return parameters;
   }
 
   private static byte[] body(HttpServletRequest request, HttpMethod method) throws IOException {
@@ -218,35 +275,5 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
   private record Registration(
       com.github.klboke.kkrepo.plugin.api.RepositoryProtocolRoute route,
       RepositoryProtocolHandler handler) {
-  }
-
-  private record HostContext(
-      RepositoryDescriptor repository,
-      List<PluginHostService> services,
-      HttpServletRequest servletRequest) implements RepositoryContext {
-
-    @Override
-    public java.util.Optional<BlobStorage> blobs() {
-      return java.util.Optional.empty();
-    }
-
-    @Override
-    public <T> java.util.Optional<T> service(Class<T> type) {
-      return services.stream()
-          .filter(type::isInstance)
-          .map(type::cast)
-          .findFirst();
-    }
-
-    @Override
-    public RepositoryPolicy policy() {
-      return new RepositoryPolicy(
-          repository.writePolicy(), repository.versionPolicy(), repository.layoutPolicy());
-    }
-
-    @Override
-    public Object hostContext() {
-      return servletRequest;
-    }
   }
 }
