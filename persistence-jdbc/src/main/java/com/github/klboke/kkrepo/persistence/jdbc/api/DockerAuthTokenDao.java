@@ -16,6 +16,24 @@ public interface DockerAuthTokenDao {
       List<Map<String, Object>> scopes,
       Instant expiresAt);
 
+  /**
+   * Same as {@link #insert}, but records the staging session an issued bearer is restricted to.
+   *
+   * <p>The restriction travels with the bearer row instead of the API key: closing, cancelling or
+   * rotating the staging session deletes the API key, and a bearer minted before that deletion must
+   * keep publishing into the session (or fail) rather than falling back to live content.
+   */
+  void insert(
+      String tokenHash,
+      String source,
+      String userId,
+      String realmId,
+      Long apiKeyId,
+      TokenKind tokenKind,
+      List<Map<String, Object>> scopes,
+      String stagingSession,
+      Instant expiresAt);
+
   Optional<TokenRecord> findValid(String tokenHash, Instant now);
 
   /**
@@ -46,7 +64,21 @@ public interface DockerAuthTokenDao {
       Long subjectApiKeyId,
       TokenKind tokenKind,
       Map<String, Object> scopes,
-      Instant expiresAt) {
+      Instant expiresAt,
+      String stagingSession) {
+
+    public TokenRecord(
+        String tokenHash,
+        String subjectSource,
+        String subjectUserId,
+        String subjectRealmId,
+        Long subjectApiKeyId,
+        TokenKind tokenKind,
+        Map<String, Object> scopes,
+        Instant expiresAt) {
+      this(tokenHash, subjectSource, subjectUserId, subjectRealmId, subjectApiKeyId,
+          tokenKind, scopes, expiresAt, null);
+    }
   }
 
   enum TokenKind {
