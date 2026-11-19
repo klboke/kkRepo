@@ -30,6 +30,35 @@ class DockerRegistryDaoPostgreSqlIntegrationTest extends PostgreSqlIntegrationTe
   private static final String REFERENCE_DIGEST = "sha256:" + "b".repeat(64);
 
   @Test
+  void tagsSupportCursorPagination() {
+    long repositoryId = insertRepository("docker-tags", "docker");
+    AssetDao assetDao = new JdbcAssetDao(jdbc(), jsonColumns());
+    long assetId = assetDao.insertAsset(asset(repositoryId));
+    DockerRegistryDao dao = new JdbcDockerRegistryDao(jdbc(), jsonColumns());
+    inTransaction(() -> {
+      DockerManifestRecord manifest = dao.upsertManifest(manifest(repositoryId, assetId, 0));
+      for (String tag : List.of("v3", "v1", "v2")) {
+        dao.upsertTag(tag(repositoryId, manifest, tag));
+      }
+      DockerManifestRecord otherImage = dao.upsertManifest(
+          manifest(repositoryId, assetId, 0, "acme/other"));
+      dao.upsertTag(tag(repositoryId, otherImage, "v2.5"));
+
+      long otherRepositoryId = insertRepository("docker-tags-other", "docker");
+      long otherAssetId = assetDao.insertAsset(asset(otherRepositoryId));
+      DockerManifestRecord otherRepository = dao.upsertManifest(
+          manifest(otherRepositoryId, otherAssetId, 0));
+      dao.upsertTag(tag(otherRepositoryId, otherRepository, "v2.6"));
+    });
+
+    assertEquals(List.of("v1", "v2"), dao.listTags(repositoryId, IMAGE_NAME, null, 2));
+    assertEquals(List.of("v1", "v2"), dao.listTags(repositoryId, IMAGE_NAME, "", 2));
+    assertEquals(List.of("v3"), dao.listTags(repositoryId, IMAGE_NAME, "v2", 2));
+    assertEquals(List.of(), dao.listTags(repositoryId, IMAGE_NAME, "v3", 2));
+    assertEquals(List.of("v2", "v3"), dao.listTags(repositoryId, IMAGE_NAME, "v1.5", 2));
+  }
+
+  @Test
   void catalogSupportsCursorPagination() {
     long repositoryId = insertRepository("docker-catalog", "docker");
     long assetId = new JdbcAssetDao(jdbc(), jsonColumns()).insertAsset(asset(repositoryId));
@@ -195,13 +224,17 @@ class DockerRegistryDaoPostgreSqlIntegrationTest extends PostgreSqlIntegrationTe
   }
 
   private static DockerTagRecord tag(long repositoryId, DockerManifestRecord manifest) {
+    return tag(repositoryId, manifest, "latest");
+  }
+
+  private static DockerTagRecord tag(long repositoryId, DockerManifestRecord manifest, String tag) {
     return new DockerTagRecord(
         null,
         repositoryId,
-        IMAGE_NAME,
-        JdbcDockerRegistryDao.hash(IMAGE_NAME),
-        "latest",
-        JdbcDockerRegistryDao.hash("latest"),
+        manifest.imageName(),
+        JdbcDockerRegistryDao.hash(manifest.imageName()),
+        tag,
+        JdbcDockerRegistryDao.hash(tag),
         manifest.id(),
         MANIFEST_DIGEST,
         "concurrency-test",

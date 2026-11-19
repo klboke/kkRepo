@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.browse.ui;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -42,6 +43,24 @@ class BrowseWelcomeFormatsContractTest {
         assertNotNull(icon, format);
       }
     }
+  }
+
+  @Test
+  void welcomeFormatsAreSortedAndSplitToolFromEcosystem() throws IOException {
+    String index = resource("/META-INF/resources/browse/index.html");
+    java.util.regex.Matcher names = java.util.regex.Pattern.compile(
+        "<span class=\"format-name\"><strong>([^<]+)</strong>(?:<small>([^<]+)</small>)?</span>")
+        .matcher(index);
+    List<String> displayed = new java.util.ArrayList<>();
+    while (names.find()) {
+      assertTrue(!names.group(1).contains("/"), "tool and ecosystem must be split: " + names.group(1));
+      displayed.add(names.group(2) == null ? names.group(1) : names.group(1) + " / " + names.group(2));
+    }
+    assertEquals(FORMATS.size(), displayed.size());
+    List<String> sorted = new java.util.ArrayList<>(displayed);
+    sorted.sort(String.CASE_INSENSITIVE_ORDER);
+    assertEquals(sorted, displayed, "welcome formats must stay in alphabetical order");
+    assertTrue(displayed.contains("APK / Alpine"));
   }
 
   private static String iconName(String format) {
