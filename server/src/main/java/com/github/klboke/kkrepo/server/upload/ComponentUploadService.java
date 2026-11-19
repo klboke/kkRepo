@@ -375,6 +375,8 @@ public class ComponentUploadService {
       case R -> uploadR(runtime, upload, createdBy, createdByIp);
       case GITLFS -> throw new UploadValidationException("Git LFS uploads must use the Git LFS Batch/basic API");
       case OHPM -> uploadOhpm(runtime, upload, createdBy, createdByIp);
+      case WINGET -> throw new UploadValidationException(
+          "Winget manifests must be published through the WinGet REST API (/api/packageManifests)");
       case HUGGINGFACE -> throw new UploadValidationException(
           "Hugging Face Models repositories are proxy-only");
       case DOCKER -> throw new UploadValidationException("Docker hosted upload must use the Docker Registry V2 API");
@@ -1015,6 +1017,7 @@ public class ComponentUploadService {
       case ALPINE -> "alpine";
       case R -> "r";
       case GITLFS -> "gitlfs";
+      case WINGET -> "winget";
       case HUGGINGFACE -> "huggingface";
       case RAW -> "raw";
     };

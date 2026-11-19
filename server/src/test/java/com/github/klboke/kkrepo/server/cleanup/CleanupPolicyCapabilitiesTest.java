@@ -12,11 +12,15 @@ class CleanupPolicyCapabilitiesTest {
     var capabilities = new CleanupPolicyCapabilities().all();
 
     assertEquals(RepositoryFormat.values().length, capabilities.size());
-    var unsupported = java.util.Set.of(RepositoryFormat.GITLFS, RepositoryFormat.OHPM);
-    assertTrue(capabilities.stream().filter(item -> !unsupported.contains(item.format())).allMatch(item -> item.tryRunSupported()
-        && item.lastDownloadedSupported()
-        && item.executeSupported()));
-    for (var capability : capabilities.stream().filter(item -> unsupported.contains(item.format())).toList()) {
+    var unsupported = java.util.Set.of(
+        RepositoryFormat.GITLFS, RepositoryFormat.OHPM, RepositoryFormat.WINGET);
+    assertTrue(capabilities.stream()
+        .filter(item -> !unsupported.contains(item.format()))
+        .allMatch(item -> item.tryRunSupported()
+            && item.lastDownloadedSupported()
+            && item.executeSupported()));
+    for (var capability : capabilities.stream()
+        .filter(item -> unsupported.contains(item.format())).toList()) {
       org.junit.jupiter.api.Assertions.assertFalse(capability.tryRunSupported());
       org.junit.jupiter.api.Assertions.assertFalse(capability.executeSupported());
       org.junit.jupiter.api.Assertions.assertFalse(capability.lastDownloadedSupported());
