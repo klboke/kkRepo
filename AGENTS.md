@@ -62,6 +62,10 @@
 - `protocol-nuget`：NuGet 仓库行为。
 - `protocol-rubygems`：RubyGems 仓库行为。
 - `protocol-yum`：Yum 仓库行为。
+- `protocol-gitlfs`：Git LFS Batch/verify 解析和宿主操作端口 `GitLfsHostOperations`（不依赖 servlet/Spring）。
+- `plugin-api`：框架无关的插件 SPI：协议处理器、仓库格式、宿主服务端口，以及流式请求体/响应体。
+- `plugin-loader`：通过 `ServiceLoader` 发现 classpath 内置插件，并在 `kkrepo.plugins.enabled=true` 时加载签名的外部插件 JAR；重复的插件 id、格式或路由（不论 order）都会使启动失败，插件不能替换内置实现。
+- `plugin-gitlfs`：内置 Git LFS 协议插件，负责全部 Git LFS HTTP 行为；租约、配额、事务、审计、下载策略和 blob 引用由 server 的 `ServerGitLfsHostOperations` 提供，认证授权仍在仓库安全过滤器中。
 - `security-scan`：安全扫描领域模型、指纹、状态机、扫描器契约和下载策略判定。
 - `scanner-adapter`：隔离运行 Syft/Grype 的无状态扫描适配器；不得挂载 Docker socket，也不持有任务真相。
 - `persistence-jdbc`：通用制品变更 outbox、通用 Blob 引用、共享 DAO 契约与双数据库 JDBC 实现；asset 写入路径不得依赖安全扫描表。

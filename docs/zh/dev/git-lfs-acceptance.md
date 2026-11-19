@@ -64,11 +64,15 @@ python3 scripts/ci/git-lfs-migration-e2e.py
 脚本创建独立命名的测试仓库。客户端脚本清理自己的临时 Git checkout；服务端测试数据保留用于诊断。
 迁移脚本要求源开启 Script API，并为候选配置可用的 `default` blob store。
 
+Git LFS 的 HTTP 协议（路由、Batch/verify JSON、错误信封、条件与 Range 下载）由内置插件 `plugin-gitlfs`
+实现，经 `ServiceLoader` 注册；租约、配额、校验写入、事务、审计、下载策略和 blob 引用留在宿主的
+`GitLfsHostOperations` 实现中，认证与授权仍由仓库安全过滤器完成。
+
 Java 回归可运行：
 
 ```sh
-mvn -pl server,persistence-mysql,persistence-postgresql -am \
-  -Dtest=GitLfsDaoMySqlIntegrationTest,GitLfsDaoPostgreSqlIntegrationTest,GitLfsRuntimeIntegrationTest,GitLfsUploadCleanupWorkerTest,GitLfsAccessTest,GitLfsHostedServiceTest,GitLfsProtocolHandlerTest,NexusAssetManagementServiceTest,NexusSourceProfileTest,GitLfsProtocolTest,VerifiedBlobReaderTest,S3BlobStorageTest,OssNativeBlobStorageTest,FileBlobStorageTest,SecurityAuthenticationServiceTest,CleanupPolicyCapabilitiesTest \
+mvn -pl server,plugin-gitlfs,persistence-mysql,persistence-postgresql -am \
+  -Dtest=GitLfsDaoMySqlIntegrationTest,GitLfsDaoPostgreSqlIntegrationTest,GitLfsRuntimeIntegrationTest,GitLfsUploadCleanupWorkerTest,GitLfsAccessTest,GitLfsHostedServiceTest,GitLfsPluginRoutingTest,GitLfsProtocolPluginTest,GitLfsHttpTest,NexusAssetManagementServiceTest,NexusSourceProfileTest,GitLfsProtocolTest,VerifiedBlobReaderTest,S3BlobStorageTest,OssNativeBlobStorageTest,FileBlobStorageTest,SecurityAuthenticationServiceTest,CleanupPolicyCapabilitiesTest \
   -Dsurefire.failIfNoSpecifiedTests=false test
 ```
 

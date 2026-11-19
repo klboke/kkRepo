@@ -64,6 +64,7 @@ public class RepositoryProtocolDispatcher {
     registered.forEach((key, value) -> {
       List<RegisteredRoute> ordered = value.stream().sorted(ROUTE_ORDER).toList();
       requireUnambiguousRegistrations(key, ordered);
+      rejectPluginReplacements(key, ordered);
       indexed.put(key, ordered);
     });
     this.routes = Map.copyOf(indexed);
@@ -165,6 +166,27 @@ public class RepositoryProtocolDispatcher {
                 + key.type() + " " + key.method() + " " + current.route().pathPattern()
                 + ": " + previous.handler().getClass().getName() + " and "
                 + current.handler().getClass().getName());
+      }
+    }
+  }
+
+  /**
+   * Plugins add routes; they never replace a built-in one, whatever their order. Only the
+   * compatibility catch-all may be overlapped.
+   */
+  private static void rejectPluginReplacements(RouteKey key, List<RegisteredRoute> registrations) {
+    for (RegisteredRoute plugin : registrations) {
+      if (!(plugin.handler() instanceof PluginProtocolDispatcher)) continue;
+      for (RegisteredRoute builtin : registrations) {
+        if (builtin.handler() instanceof PluginProtocolDispatcher
+            || builtin.handler().compatibilityFallback()
+            || !builtin.route().pathPattern().equals(plugin.route().pathPattern())) {
+          continue;
+        }
+        throw new IllegalStateException(
+            "Plugin repository protocol route " + key.format() + "/" + key.type() + " "
+                + key.method() + " " + plugin.route().pathPattern()
+                + " would replace the built-in handler " + builtin.handler().getClass().getName());
       }
     }
   }

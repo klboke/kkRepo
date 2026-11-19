@@ -3,5 +3,5 @@
   "version": "1.0.0",
   "apiVersion": "1.0",
   "mainClass": "com.github.klboke.kkrepo.plugin.gitlfs.GitLfsProtocolPlugin",
-  "capabilities": ["repository.handler"]
+  "capabilities": ["repository.format", "repository.handler"]
 }

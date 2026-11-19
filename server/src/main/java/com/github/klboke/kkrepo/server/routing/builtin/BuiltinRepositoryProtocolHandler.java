@@ -378,6 +378,11 @@ public class BuiltinRepositoryProtocolHandler implements LegacyRepositoryProtoco
   }
 
   @Override
+  public boolean compatibilityFallback() {
+    return true;
+  }
+
+  @Override
   public ResponseEntity<?> handle(RepositoryProtocolRequest request)
       throws IOException, ServletException {
     return switch (request.method().name()) {

@@ -60,11 +60,6 @@ public final class PluginRepositoryContext implements RepositoryContext {
         repository.writePolicy(), repository.versionPolicy(), repository.layoutPolicy());
   }
 
-  @Override
-  public Object hostContext() {
-    return servletRequest;
-  }
-
   /** Repository runtime snapshot the request was routed on. */
   public RepositoryRuntime runtime() {
     return runtime;

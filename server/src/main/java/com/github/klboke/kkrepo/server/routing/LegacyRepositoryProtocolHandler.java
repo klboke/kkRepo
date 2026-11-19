@@ -22,6 +22,14 @@ public interface LegacyRepositoryProtocolHandler {
     return false;
   }
 
+  /**
+   * Whether this handler is the compatibility catch-all that serves paths no focused handler owns.
+   * Plugin routes may overlap it; they may not overlap any other built-in route.
+   */
+  default boolean compatibilityFallback() {
+    return false;
+  }
+
   ResponseEntity<?> handle(RepositoryProtocolRequest request)
       throws IOException, ServletException;
 }

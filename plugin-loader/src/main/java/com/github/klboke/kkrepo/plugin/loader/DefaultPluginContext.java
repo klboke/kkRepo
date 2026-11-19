@@ -18,6 +18,7 @@ final class DefaultPluginContext implements PluginContext {
   private final Map<String, RemoteTransportProvider> remoteTransports = new LinkedHashMap<>();
   private final Map<String, RepositoryFormatProvider> repositoryFormats = new LinkedHashMap<>();
   private final List<RepositoryProtocolHandler> repositoryProtocolHandlers = new ArrayList<>();
+  private final Map<RouteKey, RepositoryProtocolHandler> routeOwners = new LinkedHashMap<>();
   private final Map<String, BlobStoreProvider> blobStoreProviders = new LinkedHashMap<>();
 
   @Override
@@ -64,6 +65,20 @@ final class DefaultPluginContext implements PluginContext {
           "Repository protocol handler must register at least one non-null route: "
               + handler.getClass().getName());
     }
+    // A route is owned by exactly one handler whatever its order: precedence must never let one
+    // plugin silently replace another (or a built-in) implementation of the same route.
+    Map<RouteKey, RepositoryProtocolHandler> claimed = new LinkedHashMap<>();
+    for (RepositoryProtocolRoute route : routes) {
+      RouteKey key = new RouteKey(route.format().value(), route.type().name(), route.method(),
+          route.pathPattern());
+      RepositoryProtocolHandler owner = routeOwners.get(key);
+      if (owner != null || claimed.putIfAbsent(key, handler) != null) {
+        throw new IllegalArgumentException("Duplicate repository protocol route " + key.describe()
+            + ": " + (owner == null ? handler : owner).getClass().getName() + " and "
+            + handler.getClass().getName());
+      }
+    }
+    routeOwners.putAll(claimed);
     repositoryProtocolHandlers.add(handler);
   }
 
@@ -75,6 +90,12 @@ final class DefaultPluginContext implements PluginContext {
     String key = provider.type().trim().toLowerCase(Locale.ROOT);
     if (blobStoreProviders.putIfAbsent(key, provider) != null) {
       throw new IllegalArgumentException("Duplicate blob store provider type: " + provider.type());
+    }
+  }
+
+  private record RouteKey(String format, String type, String method, String pathPattern) {
+    String describe() {
+      return format + "/" + type + " " + method + " " + pathPattern;
     }
   }
 

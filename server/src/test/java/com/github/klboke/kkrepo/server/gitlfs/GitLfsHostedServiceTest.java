@@ -12,7 +12,6 @@ import com.github.klboke.kkrepo.server.security.*;
 import java.time.Instant;
 import java.util.*;
 import org.junit.jupiter.api.Test;
-import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 
@@ -21,18 +20,23 @@ class GitLfsHostedServiceTest {
   private final GitLfsDao uploads = mock(GitLfsDao.class);
   private final BlobStorageRegistry stores = mock(BlobStorageRegistry.class);
   private final GitLfsAccess access = mock(GitLfsAccess.class);
-  private final ForwardedHeaderPolicy forwarded = mock(ForwardedHeaderPolicy.class);
   private final PlatformTransactionManager transactions = mock(PlatformTransactionManager.class);
   private final GitLfsHostedService service = new GitLfsHostedService(assets, mock(ComponentDao.class),
-      mock(BrowseNodeDao.class), uploads, stores, access, forwarded, transactions, 1);
+      mock(BrowseNodeDao.class), uploads, stores, access, transactions, 1);
+  private static final String BASE = "https://public.example/repository/lfs/";
   static RepositoryRuntime repository() {
     return new RepositoryRuntime(1, "lfs", RepositoryFormat.GITLFS, RepositoryType.HOSTED,
         "gitlfs-hosted", true, 1L, "ALLOW", null, null, false, null, null, null, null, null, List.of());
   }
-  private MockHttpServletRequest request() {
-    var request = new MockHttpServletRequest();
-    request.setAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE, GitLfsAccessTest.subject());
-    return request;
+  private static GitLfsCaller caller() {
+    return caller(false);
+  }
+  private static GitLfsCaller caller(boolean anonymous) {
+    return new GitLfsCaller(GitLfsAccessTest.subject(), anonymous, "203.0.113.7",
+        () -> Optional.of(GitLfsAccessTest.subject()));
+  }
+  private static java.io.InputStream body(byte[] bytes) {
+    return new java.io.ByteArrayInputStream(bytes);
   }
   @org.junit.jupiter.api.AfterEach void stopHeartbeat() { service.close(); }
   @Test void repeatedBatchObjectsShareOneActionAndRejectConflictingSizes() {
@@ -41,27 +45,33 @@ class GitLfsHostedServiceTest {
     when(assets.findAssetsByPaths(anyLong(), any())).thenReturn(Map.of());
     var ready = upload(UUID.randomUUID().toString(), oid, 3, "READY");
     when(uploads.create(eq(1L), eq(oid), eq(3L), anyString(), eq(1L))).thenReturn(ready);
-    var objects = (List<Map<String, Object>>) service.batch(repository(), new GitLfsProtocol.Batch("upload", List.of(
+    var objects = service.batch(repository(), new GitLfsProtocol.Batch("upload", List.of(
         new GitLfsProtocol.ObjectRequest(oid, 3, null), new GitLfsProtocol.ObjectRequest(oid, 3, null),
-        new GitLfsProtocol.ObjectRequest(oid, 4, null))), request()).get("objects");
+        new GitLfsProtocol.ObjectRequest(oid, 4, null))), caller(), BASE).objects();
+    assertEquals(GitLfsBatchResult.ObjectResult.upload(oid, 3, ready.id(), 900), objects.get(0));
     assertEquals(objects.get(0), objects.get(1));
-    assertEquals(422, ((Map<?, ?>) objects.get(2).get("error")).get("code"));
+    assertEquals(422, objects.get(2).errorCode());
+    assertEquals("Conflicting object sizes", objects.get(2).errorMessage());
     verify(uploads, times(1)).create(anyLong(), anyString(), anyLong(), anyString(), anyLong());
 
     when(assets.findAssetsByPaths(anyLong(), any())).thenReturn(Map.of(oid, asset(oid, 3)));
     // Grant READ independently, then verify the stored-size boundary without issuing a download action.
     when(access.allowedObjects(any(), eq("lfs"), any(), eq(PermissionAction.READ))).thenReturn(Set.of(oid));
-    var mismatch = (List<Map<String, Object>>) service.batch(repository(), new GitLfsProtocol.Batch("download",
-        List.of(new GitLfsProtocol.ObjectRequest(oid, 4, null))), request()).get("objects");
-    assertEquals(422, ((Map<?, ?>) mismatch.getFirst().get("error")).get("code"));
-    assertFalse(mismatch.getFirst().containsKey("actions"));
+    var mismatch = service.batch(repository(), new GitLfsProtocol.Batch("download",
+        List.of(new GitLfsProtocol.ObjectRequest(oid, 4, null))), caller(), BASE).objects();
+    assertEquals(GitLfsBatchResult.ObjectResult.error(oid, 4, 422, "Object size does not match stored content"),
+        mismatch.getFirst());
+    var present = service.batch(repository(), new GitLfsProtocol.Batch("upload",
+        List.of(new GitLfsProtocol.ObjectRequest(oid, 3, null))), caller(), BASE).objects();
+    assertEquals(GitLfsBatchResult.ObjectResult.present(oid, 3), present.getFirst());
+    verify(uploads, times(1)).create(anyLong(), anyString(), anyLong(), anyString(), anyLong());
   }
   @Test void anonymousBatchWithNoReadableObjectsChallengesForCredentials() {
-    var request = request(); request.setAttribute(GitLfsAccess.ANONYMOUS_ATTRIBUTE, true);
     when(access.allowedObjects(any(), anyString(), any(), any())).thenReturn(Set.of());
     when(assets.findAssetsByPaths(anyLong(), any())).thenReturn(Map.of());
     var error = assertThrows(GitLfsException.class, () -> service.batch(repository(),
-        new GitLfsProtocol.Batch("download", List.of(new GitLfsProtocol.ObjectRequest("a".repeat(64), 1, null))), request));
+        new GitLfsProtocol.Batch("download", List.of(new GitLfsProtocol.ObjectRequest("a".repeat(64), 1, null))),
+        caller(true), BASE));
     assertEquals(401, error.status());
     verifyNoInteractions(uploads);
   }
@@ -74,7 +84,7 @@ class GitLfsHostedServiceTest {
     when(uploads.create(anyLong(), anyString(), anyLong(), anyString(), anyLong()))
         .thenThrow(new GitLfsRepositoryStateException(reason));
     var error = assertThrows(GitLfsException.class, () -> service.batch(repository(),
-        new GitLfsProtocol.Batch("upload", List.of(new GitLfsProtocol.ObjectRequest(oid, 3, null))), request()));
+        new GitLfsProtocol.Batch("upload", List.of(new GitLfsProtocol.ObjectRequest(oid, 3, null))), caller(), BASE));
     assertEquals(switch (reason) {
       case MISSING -> 404;
       case OFFLINE -> 503;
@@ -92,10 +102,13 @@ class GitLfsHostedServiceTest {
     BlobStorage storage = mock(BlobStorage.class);
     when(stores.forBlobStoreId(1)).thenReturn(storage);
     when(storage.prepareVerifiedUpload("lfs", oid, body.length)).thenReturn(new BlobReference("b", "unused", oid, body.length));
-    var request = request(); request.addHeader("X-KkRepo-Lfs-Upload", id); request.setContent(body);
-    service.put(repository(), oid, request);
-    request.setContent(new byte[] {1, 2, 3});
-    assertEquals(422, assertThrows(GitLfsException.class, () -> service.put(repository(), oid, request)).status());
+    service.put(repository(), oid, id, body.length, body(body), caller());
+    assertEquals(422, assertThrows(GitLfsException.class,
+        () -> service.put(repository(), oid, id, 3, body(new byte[] {1, 2, 3}), caller())).status());
+    assertEquals(422, assertThrows(GitLfsException.class,
+        () -> service.put(repository(), oid, id, 4, body(body), caller())).status());
+    assertEquals(422, assertThrows(GitLfsException.class,
+        () -> service.put(repository(), oid, null, 3, body(body), caller())).status());
     verify(storage, never()).uploadVerified(any(), any(), any());
     verify(uploads, never()).claim(anyString(), anyString(), anyString(), anyString());
     verify(assets, never()).insertAsset(any());
@@ -113,16 +126,14 @@ class GitLfsHostedServiceTest {
     String allowed = "a".repeat(64), denied = "b".repeat(64);
     when(assets.findAssetsByPaths(anyLong(), any())).thenReturn(Map.of());
     when(access.allowedObjects(any(), eq("lfs"), any(), eq(PermissionAction.READ))).thenReturn(Set.of(allowed));
-    when(forwarded.serverBaseUrl(any())).thenReturn("https://public.example");
     var batch = new GitLfsProtocol.Batch("download", List.of(
         new GitLfsProtocol.ObjectRequest(allowed, 1, null), new GitLfsProtocol.ObjectRequest(denied, 1, null)));
-    var request = request(); request.addHeader("Authorization", "SECRET");
-    Map<String, Object> response = service.batch(repository(), batch, request);
-    assertFalse(response.toString().contains("SECRET"));
-    var objects = (List<Map<String, Object>>) response.get("objects");
-    assertEquals(404, ((Map<?, ?>) objects.get(0).get("error")).get("code"));
-    assertEquals(403, ((Map<?, ?>) objects.get(1).get("error")).get("code"));
-    assertFalse(objects.get(1).containsKey("actions"));
+    var response = service.batch(repository(), batch, caller(), BASE);
+    assertEquals(BASE, response.objectBaseUrl());
+    var objects = response.objects();
+    assertEquals(404, objects.get(0).errorCode());
+    assertEquals(403, objects.get(1).errorCode());
+    assertEquals(GitLfsBatchResult.Outcome.ERROR, objects.get(1).outcome());
     verify(access).allowedObjects(any(), eq("lfs"), eq(List.of(allowed, denied)), eq(PermissionAction.READ));
     service.close();
   }
@@ -161,8 +172,8 @@ class GitLfsHostedServiceTest {
     when(transactions.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
     if (revoked) doNothing().doThrow(new GitLfsException(403, "Revoked")).when(access)
         .requireUpload(any(), anyString(), anyString(), anyString());
-    var request = request(); request.setContent(new byte[] {1, 2, 3}); request.addHeader("X-KkRepo-Lfs-Upload", id);
-    var error = assertThrows(GitLfsException.class, () -> service.put(repository(), oid, request));
+    var error = assertThrows(GitLfsException.class,
+        () -> service.put(repository(), oid, id, 3, body(new byte[] {1, 2, 3}), caller()));
     assertEquals(revoked ? 403 : 409, error.status());
     verify(uploads).abandon(id, 2);
     verify(assets, never()).insertAsset(any());

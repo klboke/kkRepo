@@ -7,7 +7,9 @@ import java.util.Optional;
  * Narrow access to the host repository context. It never exposes Spring, servlet or JDBC types.
  *
  * <p>Transactional operations stay behind host services; a plugin handler gets only the services it
- * declared through {@link #service(Class)}.
+ * declared through {@link #service(Class)}. Host services receive the context back as the opaque
+ * identity of the current request, so request-scoped details (caller identity, client address,
+ * public base URL) never cross the plugin boundary.
  */
 public interface RepositoryContext {
 
@@ -22,15 +24,6 @@ public interface RepositoryContext {
   /** Repository write/version/layout policies. */
   default RepositoryPolicy policy() {
     return new RepositoryPolicy("", "", "");
-  }
-
-  /**
-   * Opaque host request object. Only host services should read it; plugins must not cast or store
-   * it. It keeps servlet/session details out of the public request model while allowing a host
-   * service to reuse the existing transactional implementation.
-   */
-  default Object hostContext() {
-    return null;
   }
 
   static RepositoryContext empty(RepositoryDescriptor repository) {

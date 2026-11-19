@@ -11,8 +11,10 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.ServiceLoader;
 import java.util.stream.Stream;
@@ -20,11 +22,13 @@ import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
 /**
- * Discovers, verifies and loads signed plugin JARs from a directory.
+ * Discovers built-in plugins on the host classpath and loads signed plugin JARs from a directory.
  *
- * <p>Verification happens before any plugin class is loaded. A plugin with an unsigned entry, an
- * untrusted signer, a mixed signer, an invalid signature or an incompatible API version aborts the
- * whole load.
+ * <p>Built-in plugins ship with the host and are discovered through {@link ServiceLoader}; they are
+ * registered first. External JARs are verified before any of their classes is loaded. A plugin with
+ * an unsigned entry, an untrusted signer, a mixed signer, an invalid signature or an incompatible
+ * API version aborts the whole load. Built-in and external plugins share one registration context:
+ * a duplicate plugin id, format or route fails the load instead of replacing an implementation.
  */
 public final class PluginLoader {
   public static final String DESCRIPTOR_PATH = "META-INF/kkrepo-plugin.json";
@@ -40,42 +44,33 @@ public final class PluginLoader {
     this.mapper = new ObjectMapper();
   }
 
-  public LoadedPlugins load() throws PluginException {
-    if (!Files.isDirectory(pluginsDirectory)) {
-      return new LoadedPlugins(List.of(), List.of(), List.of(), List.of());
-    }
-    List<Path> jars;
-    try (Stream<Path> entries = Files.list(pluginsDirectory)) {
-      jars = entries
-          .filter(Files::isRegularFile)
-          .filter(path -> path.getFileName().toString().endsWith(".jar"))
-          .sorted()
-          .toList();
-    } catch (IOException invalid) {
-      throw new PluginException("Unable to list plugin directory: " + pluginsDirectory, invalid);
-    }
+  /** Loads only the built-in plugins visible to {@code classLoader}. */
+  public static LoadedPlugins loadBuiltins(ClassLoader classLoader) throws PluginException {
+    return load(classLoader, null);
+  }
 
+  /** Loads only the signed external plugins. */
+  public LoadedPlugins load() throws PluginException {
+    return load(null, this);
+  }
+
+  /** Loads the built-in plugins visible to {@code builtinClassLoader}, then the signed plugins. */
+  public LoadedPlugins load(ClassLoader builtinClassLoader) throws PluginException {
+    return load(Objects.requireNonNull(builtinClassLoader, "builtinClassLoader"), this);
+  }
+
+  private static LoadedPlugins load(ClassLoader builtinClassLoader, PluginLoader external)
+      throws PluginException {
     List<PluginClassLoader> classLoaders = new ArrayList<>();
     DefaultPluginContext context = new DefaultPluginContext();
     List<KkRepoPlugin> plugins = new ArrayList<>();
     Set<String> pluginIds = new HashSet<>();
     try {
-      for (Path jar : jars) {
-        verifier.verify(jar);
-        PluginDescriptor descriptor = readDescriptor(jar);
-        if (!PluginApiVersion.CURRENT.equals(descriptor.apiVersion())) {
-          throw new PluginException("Plugin " + descriptor.id() + " requires API "
-              + descriptor.apiVersion() + ", runtime provides " + PluginApiVersion.CURRENT);
-        }
-        if (!pluginIds.add(descriptor.id())) {
-          throw new PluginException("Duplicate plugin id: " + descriptor.id());
-        }
-        PluginClassLoader classLoader = new PluginClassLoader(
-            jar, KkRepoPlugin.class.getClassLoader());
-        classLoaders.add(classLoader);
-        KkRepoPlugin plugin = instantiate(descriptor, classLoader);
-        plugin.contribute(context);
-        plugins.add(plugin);
+      if (builtinClassLoader != null) {
+        loadBuiltins(builtinClassLoader, context, plugins, pluginIds);
+      }
+      if (external != null) {
+        external.loadExternal(context, plugins, pluginIds, classLoaders);
       }
       return new LoadedPlugins(
           plugins,
@@ -89,7 +84,90 @@ public final class PluginLoader {
       if (failure instanceof PluginException pluginFailure) {
         throw pluginFailure;
       }
-      throw new PluginException("Unable to load plugins from " + pluginsDirectory, failure);
+      throw new PluginException("Unable to load plugins: " + failure.getMessage(), failure);
+    }
+  }
+
+  private static void loadBuiltins(
+      ClassLoader classLoader,
+      DefaultPluginContext context,
+      List<KkRepoPlugin> plugins,
+      Set<String> pluginIds) throws PluginException {
+    List<ServiceLoader.Provider<KkRepoPlugin>> providers = ServiceLoader
+        .load(KkRepoPlugin.class, classLoader)
+        .stream()
+        .sorted(Comparator.comparing(provider -> provider.type().getName()))
+        .toList();
+    for (ServiceLoader.Provider<KkRepoPlugin> provider : providers) {
+      KkRepoPlugin plugin = provider.get();
+      PluginDescriptor descriptor = plugin.descriptor();
+      if (descriptor == null) {
+        throw new PluginException("Built-in plugin has no descriptor: " + provider.type().getName());
+      }
+      if (!provider.type().getName().equals(descriptor.mainClass())) {
+        throw new PluginException("Built-in plugin " + descriptor.id() + " declares main class "
+            + descriptor.mainClass() + " but is provided by " + provider.type().getName());
+      }
+      register(descriptor, plugin, context, plugins, pluginIds);
+    }
+  }
+
+  private void loadExternal(
+      DefaultPluginContext context,
+      List<KkRepoPlugin> plugins,
+      Set<String> pluginIds,
+      List<PluginClassLoader> classLoaders) throws PluginException {
+    if (!Files.isDirectory(pluginsDirectory)) {
+      return;
+    }
+    List<Path> jars;
+    try (Stream<Path> entries = Files.list(pluginsDirectory)) {
+      jars = entries
+          .filter(Files::isRegularFile)
+          .filter(path -> path.getFileName().toString().endsWith(".jar"))
+          .sorted()
+          .toList();
+    } catch (IOException invalid) {
+      throw new PluginException("Unable to list plugin directory: " + pluginsDirectory, invalid);
+    }
+
+    for (Path jar : jars) {
+      verifier.verify(jar);
+      PluginDescriptor descriptor = readDescriptor(jar);
+      PluginClassLoader classLoader = new PluginClassLoader(
+          jar, KkRepoPlugin.class.getClassLoader());
+      classLoaders.add(classLoader);
+      requireCompatible(descriptor);
+      if (pluginIds.contains(descriptor.id())) {
+        throw new PluginException("Duplicate plugin id: " + descriptor.id());
+      }
+      register(descriptor, instantiate(descriptor, classLoader), context, plugins, pluginIds);
+    }
+  }
+
+  private static void register(
+      PluginDescriptor descriptor,
+      KkRepoPlugin plugin,
+      DefaultPluginContext context,
+      List<KkRepoPlugin> plugins,
+      Set<String> pluginIds) throws PluginException {
+    requireCompatible(descriptor);
+    if (!pluginIds.add(descriptor.id())) {
+      throw new PluginException("Duplicate plugin id: " + descriptor.id());
+    }
+    try {
+      plugin.contribute(context);
+    } catch (IllegalArgumentException rejected) {
+      throw new PluginException(
+          "Plugin " + descriptor.id() + " registration rejected: " + rejected.getMessage(), rejected);
+    }
+    plugins.add(plugin);
+  }
+
+  private static void requireCompatible(PluginDescriptor descriptor) throws PluginException {
+    if (!PluginApiVersion.CURRENT.equals(descriptor.apiVersion())) {
+      throw new PluginException("Plugin " + descriptor.id() + " requires API "
+          + descriptor.apiVersion() + ", runtime provides " + PluginApiVersion.CURRENT);
     }
   }
 
@@ -115,11 +193,16 @@ public final class PluginLoader {
 
   private static KkRepoPlugin instantiate(
       PluginDescriptor descriptor, PluginClassLoader classLoader) throws PluginException {
-    ServiceLoader<KkRepoPlugin> serviceLoader =
-        ServiceLoader.load(KkRepoPlugin.class, classLoader);
-    for (KkRepoPlugin plugin : serviceLoader) {
-      if (plugin.getClass().getName().equals(descriptor.mainClass())) {
-        return plugin;
+    // The JAR sees the host's built-in providers through its parent; only the declared main class
+    // is instantiated, and it must come from the JAR itself so a JAR cannot re-register a built-in.
+    for (ServiceLoader.Provider<KkRepoPlugin> provider
+        : ServiceLoader.load(KkRepoPlugin.class, classLoader).stream().toList()) {
+      if (provider.type().getName().equals(descriptor.mainClass())) {
+        if (provider.type().getClassLoader() != classLoader) {
+          throw new PluginException("Plugin main class " + descriptor.mainClass()
+              + " is not defined by the plugin JAR");
+        }
+        return provider.get();
       }
     }
     throw new PluginException("Plugin main class not found in META-INF/services: "
