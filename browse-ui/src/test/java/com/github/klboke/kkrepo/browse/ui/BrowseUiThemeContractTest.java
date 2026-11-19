@@ -26,6 +26,7 @@ class BrowseUiThemeContractTest {
     assertTrue(index.contains(
         "/browse/assets/themes/default.css?v=20260826-nexus-a11y-1"));
     assertTrue(index.contains("/login/assets/ui-theme.js?v=20260826-nexus-a11y-1"));
+    assertTrue(index.contains("/login/assets/ui-i18n.js?v=20261119-languages-2"));
     assertTrue(index.contains("/browse/assets/browse.css?v=20261118-format-names-1"));
     assertFalse(index.contains("/browse/assets/tokens.css"));
   }

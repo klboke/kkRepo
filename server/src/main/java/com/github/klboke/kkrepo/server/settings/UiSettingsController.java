@@ -16,10 +16,10 @@ import org.springframework.web.server.ResponseStatusException;
 @RestController
 @RequestMapping("/internal/ui-settings")
 public class UiSettingsController {
-  private static final List<String> SUPPORTED_DEFAULT_LANGUAGES = List.of(
-      UiSettingsDao.LANGUAGE_BROWSER,
-      UiSettingsDao.LANGUAGE_ZH_CN,
-      UiSettingsDao.LANGUAGE_EN);
+  private static final List<String> SUPPORTED_DEFAULT_LANGUAGES = java.util.stream.Stream.concat(
+      java.util.stream.Stream.of(UiSettingsDao.LANGUAGE_BROWSER, UiSettingsDao.LANGUAGE_ZH_CN),
+      UiSettingsDao.LANGUAGES.stream().filter(language -> !UiSettingsDao.LANGUAGE_ZH_CN.equals(language)))
+      .toList();
   private static final List<String> SUPPORTED_DEFAULT_THEMES = List.of(
       UiSettingsDao.THEME_DEFAULT,
       UiSettingsDao.THEME_INDIGO,

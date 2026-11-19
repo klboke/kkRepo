@@ -1,6 +1,12 @@
 (function () {
   const STORAGE_KEY = "kkrepo.uiSettings";
-  const SUPPORTED_DEFAULT_LANGUAGES = new Set(["browser", "zh-CN", "en"]);
+  // UI languages in display order; keep in sync with UiSettingsDao.LANGUAGES and the
+  // ck_ui_settings_default_language constraint. Every language but English and Chinese is
+  // loaded on demand from login/assets/i18n/<language>.js.
+  const LANGUAGES = ["en", "zh-CN", "fr", "de", "es", "it", "pt-BR", "nl", "pl", "ru", "uk", "ja", "ko", "tr"];
+  const SUPPORTED_DEFAULT_LANGUAGES = new Set(["browser", ...LANGUAGES]);
+  const DICTIONARY_BASE = "/login/assets/i18n/";
+  const DICTIONARY_VERSION = "20261118-languages-1";
   const DEFAULT_LANGUAGE = "en";
   const DEFAULT_THEME = "default";
   const THEME_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -771,7 +777,42 @@
     "FAILURE": "FAILURE",
     "File": "文件",
     "AWS S3 SDK": "AWS S3 SDK",
-    "OSS Native SDK": "OSS Native SDK"
+    "OSS Native SDK": "OSS Native SDK",
+    // Templates of the dynamic patterns below ({1}, {2}… are captured groups).
+    "Token lifetime: {1}s. Timestamp tolerance: {2}s.": "令牌有效期：{1} 秒。时间戳容差：{2} 秒。",
+    "Page {1}": "第 {1} 页",
+    "Keys {1}–{2}": "密钥 {1}–{2}",
+    "Rotate {1}. The publish ID and enabled state are preserved. Existing signed-login tokens will be revoked.": "轮换 {1} 的公钥。发布 ID 和启用状态保持不变，原签名登录令牌将被撤销。",
+    "All {1} repositories": "全部 {1} 仓库",
+    "Delete content selector \"{1}\"?": "删除内容选择器“{1}”？",
+    "Page {1} / {2}": "第 {1} 页 / 共 {2} 页",
+    "{1}-{2} of {3}": "{1}-{2} / 共 {3}",
+    "{1} sort ascending": "{1}排序：升序",
+    "{1} sort descending": "{1}排序：降序",
+    "{1} sort none": "{1}排序：无排序",
+    "Copy {1}": "复制 {1}",
+    "Open {1} in Browse": "在浏览中打开 {1}",
+    "Delete repository \"{1}\"?": "删除仓库“{1}”？",
+    "Delete role \"{1}\"?": "删除角色“{1}”？",
+    "Delete privilege \"{1}\"?": "删除权限“{1}”？",
+    "Delete user \"{1}\"?": "删除用户“{1}”？",
+    "Delete {1}?": "删除 {1}？",
+    "Edit repository: {1}": "编辑仓库：{1}",
+    "Edit blob store: {1}": "编辑 Blob 存储：{1}",
+    "More actions for {1}": "更多操作：{1}",
+    "Delete blob store \"{1}\"? This removes the configuration only. Storage files and buckets are not deleted.": "删除 Blob 存储“{1}”？只会删除配置，存储文件和存储桶不会删除。",
+    "Deleting blob store {1}...": "正在删除 Blob 存储 {1}...",
+    "Blob store {1} deleted.": "Blob 存储 {1} 已删除。",
+    "Edit user: {1}": "编辑用户：{1}",
+    "Edit role: {1}": "编辑角色：{1}",
+    "Edit privilege: {1}": "编辑权限：{1}",
+    "API key created: {1}": "API Key 已创建：{1}",
+    "Docker cache cleared for {1}": "已清理 {1} 的 Docker 缓存",
+    "Current language: {1}": "当前语言：{1}",
+    "New version {1} available. View release.": "有新版本 {1} 可更新，查看发布页面。",
+    "Updated: {1}": "更新于：{1}",
+    "Delete failed: {1}": "删除失败：{1}",
+    "{label}: {detail}": "{label}：{detail}"
   };
 
   const prefixTranslations = [
@@ -815,6 +856,91 @@
     "Last runtime error"
   ];
 
+  // Dynamic strings, evaluated in order. Each language translates the "key" template; groups listed
+  // in "translate" are themselves translated before insertion.
+  const PATTERNS = [
+    { re: /^Token lifetime: (\d+)s\. Timestamp tolerance: (\d+)s\.$/, key: "Token lifetime: {1}s. Timestamp tolerance: {2}s." },
+    { re: /^Page (\d+)$/, key: "Page {1}" },
+    { re: /^Keys (\d+)–(\d+)$/, key: "Keys {1}–{2}" },
+    { re: /^Rotate (.+)\. The publish ID and enabled state are preserved\. Existing signed-login tokens will be revoked\.$/, key: "Rotate {1}. The publish ID and enabled state are preserved. Existing signed-login tokens will be revoked." },
+    { re: /^All (.+) repositories$/, key: "All {1} repositories" },
+    { re: /^Delete content selector "(.+)"\?$/, key: "Delete content selector \"{1}\"?" },
+    { re: /^Page (\d+) \/ (\d+)$/, key: "Page {1} / {2}" },
+    { re: /^(\d+)-(\d+) of (\d+)$/, key: "{1}-{2} of {3}" },
+    { re: /^(.+) sort ascending$/, key: "{1} sort ascending", translate: [1] },
+    { re: /^(.+) sort descending$/, key: "{1} sort descending", translate: [1] },
+    { re: /^(.+) sort none$/, key: "{1} sort none", translate: [1] },
+    { re: /^Copy (.+)$/, key: "Copy {1}" },
+    { re: /^Open (.+) in Browse$/, key: "Open {1} in Browse" },
+    { re: /^Delete repository "(.+)"\?$/, key: "Delete repository \"{1}\"?" },
+    { re: /^Delete role "(.+)"\?$/, key: "Delete role \"{1}\"?" },
+    { re: /^Delete privilege "(.+)"\?$/, key: "Delete privilege \"{1}\"?" },
+    { re: /^Delete user "(.+)"\?$/, key: "Delete user \"{1}\"?" },
+    { re: /^Delete (.+)\?$/, key: "Delete {1}?" },
+    { re: /^Edit repository: (.+)$/, key: "Edit repository: {1}" },
+    { re: /^Edit blob store: (.+)$/, key: "Edit blob store: {1}" },
+    { re: /^More actions for (.+)$/, key: "More actions for {1}" },
+    { re: /^Delete blob store "(.+)"\? This removes the configuration only\. Storage files and buckets are not deleted\.$/, key: "Delete blob store \"{1}\"? This removes the configuration only. Storage files and buckets are not deleted." },
+    { re: /^Deleting blob store (.+)\.\.\.$/, key: "Deleting blob store {1}..." },
+    { re: /^Blob store (.+) deleted\.$/, key: "Blob store {1} deleted." },
+    { re: /^Edit user: (.+)$/, key: "Edit user: {1}" },
+    { re: /^Edit role: (.+)$/, key: "Edit role: {1}" },
+    { re: /^Edit privilege: (.+)$/, key: "Edit privilege: {1}" },
+    { re: /^API key created: (.+)$/, key: "API key created: {1}" },
+    { re: /^Docker cache cleared for (.+)$/, key: "Docker cache cleared for {1}" },
+    { re: /^Current language: (.+)$/, key: "Current language: {1}", translate: [1] },
+    { re: /^New version (v[^ ]+) available\. View release\.$/, key: "New version {1} available. View release." }
+  ];
+
+  const dictionaries = { "zh-CN": zh };
+  const dictionaryLoads = {};
+
+  function registerDictionary(language, dictionary) {
+    if (!LANGUAGES.includes(language) || language === "en") return;
+    if (!dictionary || typeof dictionary !== "object") return;
+    dictionaries[language] = dictionary;
+  }
+
+  function ensureDictionary(language) {
+    if (language === "en" || dictionaries[language]) return Promise.resolve();
+    if (!dictionaryLoads[language]) {
+      dictionaryLoads[language] = new Promise((resolve) => {
+        const script = document.createElement("script");
+        script.src = `${DICTIONARY_BASE}${encodeURIComponent(language)}.js?v=${DICTIONARY_VERSION}`;
+        script.async = true;
+        script.onload = () => resolve();
+        script.onerror = () => {
+          delete dictionaryLoads[language];
+          resolve();
+        };
+        (document.head || document.documentElement).appendChild(script);
+      });
+    }
+    return dictionaryLoads[language];
+  }
+
+  // Loads the active dictionary when needed, re-applies the page and, if it had to be fetched,
+  // notifies "kkrepo:i18n-change" listeners again: text they composed from the first notification
+  // (tooltips, dynamic labels) was built while translations still fell back to English.
+  function refreshLanguage() {
+    const language = currentLanguage;
+    const needsLoad = language !== "en" && !dictionaries[language];
+    return ensureDictionary(language).then(() => {
+      if (language !== currentLanguage || language === "en") return;
+      apply();
+      if (needsLoad && dictionaries[language]) dispatchChange();
+    });
+  }
+
+  function translating() {
+    return currentLanguage !== "en" && Boolean(dictionaries[currentLanguage]);
+  }
+
+  function fill(template, values) {
+    return template.replace(/\{(\w+)\}/g, (placeholder, name) =>
+      Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : placeholder);
+  }
+
   function readCachedSettings() {
     try {
       const cached = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
@@ -832,7 +958,7 @@
       defaultLanguage,
       supportedDefaultLanguages: Array.isArray(value?.supportedDefaultLanguages)
         ? value.supportedDefaultLanguages
-        : ["browser", "zh-CN", "en"],
+        : ["browser", ...LANGUAGES],
       defaultTheme,
       supportedDefaultThemes,
       updatedAt: value?.updatedAt || null
@@ -843,7 +969,10 @@
     if (value === "zh" || value === "zh-cn" || value === "zh_CN" || value === "zh-CN") return "zh-CN";
     if (value === "en" || value === "en-US") return "en";
     if (value === "browser") return "browser";
-    return SUPPORTED_DEFAULT_LANGUAGES.has(value) ? value : DEFAULT_LANGUAGE;
+    if (SUPPORTED_DEFAULT_LANGUAGES.has(value)) return value;
+    const candidate = String(value || "").trim().replace("_", "-").toLowerCase();
+    if (candidate === "pt") return "pt-BR";
+    return LANGUAGES.find((language) => language.toLowerCase() === candidate) || DEFAULT_LANGUAGE;
   }
 
   function normalizeSupportedDefaultThemes(value) {
@@ -864,11 +993,19 @@
 
   function resolveLanguage(defaultLanguage) {
     const mode = normalizeDefaultLanguage(defaultLanguage);
-    if (mode === "zh-CN" || mode === "en") return mode;
+    if (mode !== "browser") return mode;
     const languages = navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language];
-    return languages.some((language) => String(language || "").toLowerCase().startsWith("zh"))
-      ? "zh-CN"
-      : "en";
+    for (const preferred of languages) {
+      const tag = String(preferred || "").toLowerCase();
+      const exact = LANGUAGES.find((language) => language.toLowerCase() === tag);
+      if (exact) return exact;
+      const primary = tag.split("-")[0];
+      if (primary === "zh") return "zh-CN";
+      if (primary === "pt") return "pt-BR";
+      const match = LANGUAGES.find((language) => language.toLowerCase() === primary);
+      if (match) return match;
+    }
+    return "en";
   }
 
   function updateSettings(nextSettings, options = {}) {
@@ -878,7 +1015,10 @@
     const nextLanguage = resolveLanguage(settings.defaultLanguage);
     const changed = nextLanguage !== currentLanguage || options.force;
     currentLanguage = nextLanguage;
-    if (changed) apply();
+    if (changed) {
+      apply();
+      refreshLanguage();
+    }
     dispatchChange();
     return settings;
   }
@@ -946,16 +1086,19 @@
   }
 
   function translate(value) {
-    if (currentLanguage !== "zh-CN") return String(value ?? "");
+    if (!translating()) return String(value ?? "");
     return translateBody(normalizeBody(value));
   }
 
   function translateBody(body) {
-    if (!body) return body;
-    if (body.startsWith("Updated: ")) return `更新于：${body.slice(9)}`;
-    if (zh[body]) return zh[body];
-    if (body.startsWith("Delete failed: Blob store ")) {
-      return `删除失败：${translateBody(body.slice("Delete failed: ".length))}`;
+    const dictionary = dictionaries[currentLanguage];
+    if (!body || !dictionary) return body;
+    if (body.startsWith("Updated: ") && dictionary["Updated: {1}"]) {
+      return fill(dictionary["Updated: {1}"], { 1: body.slice(9) });
+    }
+    if (dictionary[body]) return dictionary[body];
+    if (body.startsWith("Delete failed: Blob store ") && dictionary["Delete failed: {1}"]) {
+      return fill(dictionary["Delete failed: {1}"], { 1: translateBody(body.slice("Delete failed: ".length)) });
     }
     let match = body.match(/^([^A-Za-z0-9\u4e00-\u9fff]+)\s+(.+)$/);
     if (match) {
@@ -963,72 +1106,25 @@
       if (translated !== match[2]) return `${match[1]} ${translated}`;
     }
     for (const prefix of prefixTranslations) {
-      if (body === prefix) return zh[prefix] || prefix;
+      if (body === prefix) return dictionary[prefix] || prefix;
       if (body.startsWith(`${prefix}: `)) {
-        return `${zh[prefix] || prefix}：${body.slice(prefix.length + 2)}`;
+        return fill(dictionary["{label}: {detail}"] || "{label}: {detail}", {
+          label: dictionary[prefix] || prefix,
+          detail: body.slice(prefix.length + 2)
+        });
       }
     }
-    match = body.match(/^Token lifetime: (\d+)s\. Timestamp tolerance: (\d+)s\.$/);
-    if (match) return `令牌有效期：${match[1]} 秒。时间戳容差：${match[2]} 秒。`;
-    match = body.match(/^Page (\d+)$/);
-    if (match) return `第 ${match[1]} 页`;
-    match = body.match(/^Keys (\d+)–(\d+)$/);
-    if (match) return `密钥 ${match[1]}–${match[2]}`;
-    match = body.match(/^Rotate (.+)\. The publish ID and enabled state are preserved\. Existing signed-login tokens will be revoked\.$/);
-    if (match) return `轮换 ${match[1]} 的公钥。发布 ID 和启用状态保持不变，原签名登录令牌将被撤销。`;
-    match = body.match(/^All (.+) repositories$/);
-    if (match) return `全部 ${match[1]} 仓库`;
-    match = body.match(/^Delete content selector "(.+)"\?$/);
-    if (match) return `删除内容选择器“${match[1]}”？`;
-    match = body.match(/^Page (\d+) \/ (\d+)$/);
-    if (match) return `第 ${match[1]} 页 / 共 ${match[2]} 页`;
-    match = body.match(/^(\d+)-(\d+) of (\d+)$/);
-    if (match) return `${match[1]}-${match[2]} / 共 ${match[3]}`;
-    match = body.match(/^(.+) sort (ascending|descending|none)$/);
-    if (match) {
-      const order = { ascending: "升序", descending: "降序", none: "无排序" }[match[2]] || match[2];
-      return `${translateBody(match[1])}排序：${order}`;
+    for (const pattern of PATTERNS) {
+      match = body.match(pattern.re);
+      if (!match) continue;
+      const template = dictionary[pattern.key];
+      if (!template) return body;
+      const values = {};
+      match.slice(1).forEach((value, index) => {
+        values[index + 1] = pattern.translate?.includes(index + 1) ? translateBody(value) : value;
+      });
+      return fill(template, values);
     }
-    match = body.match(/^Copy (.+)$/);
-    if (match) return `复制 ${match[1]}`;
-    match = body.match(/^Open (.+) in Browse$/);
-    if (match) return `在浏览中打开 ${match[1]}`;
-    match = body.match(/^Delete repository "(.+)"\?$/);
-    if (match) return `删除仓库“${match[1]}”？`;
-    match = body.match(/^Delete role "(.+)"\?$/);
-    if (match) return `删除角色“${match[1]}”？`;
-    match = body.match(/^Delete privilege "(.+)"\?$/);
-    if (match) return `删除权限“${match[1]}”？`;
-    match = body.match(/^Delete user "(.+)"\?$/);
-    if (match) return `删除用户“${match[1]}”？`;
-    match = body.match(/^Delete (.+)\?$/);
-    if (match) return `删除 ${match[1]}？`;
-    match = body.match(/^Edit repository: (.+)$/);
-    if (match) return `编辑仓库：${match[1]}`;
-    match = body.match(/^Edit blob store: (.+)$/);
-    if (match) return `编辑 Blob 存储：${match[1]}`;
-    match = body.match(/^More actions for (.+)$/);
-    if (match) return `更多操作：${match[1]}`;
-    match = body.match(/^Delete blob store "(.+)"\? This removes the configuration only\. Storage files and buckets are not deleted\.$/);
-    if (match) return `删除 Blob 存储“${match[1]}”？只会删除配置，存储文件和存储桶不会删除。`;
-    match = body.match(/^Deleting blob store (.+)\.\.\.$/);
-    if (match) return `正在删除 Blob 存储 ${match[1]}...`;
-    match = body.match(/^Blob store (.+) deleted\.$/);
-    if (match) return `Blob 存储 ${match[1]} 已删除。`;
-    match = body.match(/^Edit user: (.+)$/);
-    if (match) return `编辑用户：${match[1]}`;
-    match = body.match(/^Edit role: (.+)$/);
-    if (match) return `编辑角色：${match[1]}`;
-    match = body.match(/^Edit privilege: (.+)$/);
-    if (match) return `编辑权限：${match[1]}`;
-    match = body.match(/^API key created: (.+)$/);
-    if (match) return `API Key 已创建：${match[1]}`;
-    match = body.match(/^Docker cache cleared for (.+)$/);
-    if (match) return `已清理 ${match[1]} 的 Docker 缓存`;
-    match = body.match(/^Current language: (.+)$/);
-    if (match) return `当前语言：${translateBody(match[1])}`;
-    match = body.match(/^New version (v[^ ]+) available\. View release\.$/);
-    if (match) return `有新版本 ${match[1]} 可更新，查看发布页面。`;
     return body;
   }
 
@@ -1050,8 +1146,8 @@
     if (!root) return;
     applying = true;
     try {
-      document.documentElement.lang = currentLanguage === "zh-CN" ? "zh-CN" : "en";
-      document.title = currentLanguage === "zh-CN"
+      document.documentElement.lang = translating() ? currentLanguage : "en";
+      document.title = translating()
         ? translateBody(normalizeBody(originalTitle))
         : originalTitle;
       applyNode(root);
@@ -1081,7 +1177,7 @@
   function applyTextNode(node) {
     const original = textOriginals.get(node) || node.nodeValue;
     if (!textOriginals.has(node)) textOriginals.set(node, original);
-    const nextValue = currentLanguage === "zh-CN" ? translateWithWhitespace(original) : original;
+    const nextValue = translating() ? translateWithWhitespace(original) : original;
     if (node.nodeValue !== nextValue) {
       node.nodeValue = nextValue;
     }
@@ -1097,7 +1193,7 @@
       }
       if (!(name in originals)) originals[name] = element.getAttribute(name);
       const original = originals[name];
-      const nextValue = currentLanguage === "zh-CN" ? translateWithWhitespace(original) : original;
+      const nextValue = translating() ? translateWithWhitespace(original) : original;
       if (element.getAttribute(name) !== nextValue) {
         element.setAttribute(name, nextValue);
       }
@@ -1107,7 +1203,7 @@
   function isExpectedTranslatedText(node) {
     if (!textOriginals.has(node)) return false;
     const original = textOriginals.get(node);
-    const expected = currentLanguage === "zh-CN" ? translateWithWhitespace(original) : original;
+    const expected = translating() ? translateWithWhitespace(original) : original;
     return node.nodeValue === expected;
   }
 
@@ -1115,7 +1211,7 @@
     const originals = attributeOriginals.get(element);
     if (!originals || !(name in originals)) return false;
     const original = originals[name];
-    const expected = currentLanguage === "zh-CN" ? translateWithWhitespace(original) : original;
+    const expected = translating() ? translateWithWhitespace(original) : original;
     return element.getAttribute(name) === expected;
   }
 
@@ -1184,13 +1280,15 @@
   function onReady() {
     apply();
     observe();
-    readyResolve(settings);
+    refreshLanguage().then(() => readyResolve(settings));
     loadSettings();
   }
 
   window.kkrepoI18n = {
     apply,
     currentLanguage: () => currentLanguage,
+    languages: () => LANGUAGES.slice(),
+    registerDictionary,
     defaultLanguage: () => settings.defaultLanguage,
     defaultTheme: () => settings.defaultTheme,
     loadSettings,

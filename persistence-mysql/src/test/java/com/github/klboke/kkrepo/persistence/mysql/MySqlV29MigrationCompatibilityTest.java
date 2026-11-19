@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
 
 /** Guards the frozen V1-V29 chain and validates repeat startup after newer migrations. */
 class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
-  private static final int LATEST_MIGRATION = 66;
+  private static final int LATEST_MIGRATION = 67;
   private static final Map<String, String> V29_SHA256 = checksums();
 
   @org.junit.jupiter.params.ParameterizedTest
@@ -40,7 +40,7 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
       if (afterBackfill) jdbc().execute(sql.substring(sql.indexOf(';') + 1));
     }
     Flyway resumed = migration(null);
-    assertEquals(1, resumed.migrate().migrationsExecuted);
+    assertEquals(LATEST_MIGRATION - 65, resumed.migrate().migrationsExecuted);
     assertEquals(0, resumed.migrate().migrationsExecuted);
     assertTrue(resumed.validateWithResult().validationSuccessful);
     assertEquals(1, jdbc().queryForObject("SELECT COUNT(*) FROM docker_connector_binding", Integer.class));
