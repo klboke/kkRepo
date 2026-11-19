@@ -594,7 +594,8 @@ class DockerRegistryBlackBoxCompatibilityTest {
   private static void pushBlob(
       Endpoint endpoint, String imagePath, String digest, byte[] body, boolean authenticated) throws Exception {
     Exchange start = post(endpoint, endpoint.v2(imagePath + "/blobs/uploads/"), authenticated);
-    assertTrue(isUploadAccepted(start.status()), "blob upload should start");
+    assertTrue(isUploadAccepted(start.status()),
+        endpoint.name() + " blob upload should start: HTTP " + start.status());
     String location = start.header("Location").orElseThrow();
     URI patchUri = endpoint.resolve(location);
     String completeLocation = location;
