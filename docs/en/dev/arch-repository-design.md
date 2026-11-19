@@ -129,7 +129,7 @@ For package/signature files: try members in order and return the first successfu
 - `protocol-arch` module (path/identity/version/desc).
 - `server.arch` (`ArchService`, `ArchAssetSupport`, `ArchPackageInspector`, `ArchDatabase`).
 - `server.routing.arch.ArchProtocolHandler`.
-- `arch_signing_key` table and `ArchSigningKeyDao` (MySQL/PostgreSQL migrations V60).
+- `arch_signing_key` table and `ArchSigningKeyDao` (MySQL/PostgreSQL migrations V70).
 - `server.arch.ArchSigningService` and admin endpoints for import/generate/status/public key.
 - Security filter: PUT ADD/EDIT and delete support.
 - Upload definition and Components API upload.
