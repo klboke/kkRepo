@@ -218,6 +218,44 @@ class PluginProtocolDispatcherTest {
     assertArrayEquals("posted".getBytes(StandardCharsets.UTF_8), (byte[]) post.getBody());
   }
 
+  @Test
+  void rejectsTwoPluginsClaimingTheSameRouteWhateverTheirOrder() {
+    RepositoryProtocolHandler first = new NeutralHandler(RepositoryProtocolRoute.anyPath(
+        new FormatId("gitlfs"), RepositoryKind.HOSTED, "GET", 0));
+    RepositoryProtocolHandler second = new NeutralHandler(RepositoryProtocolRoute.anyPath(
+        new FormatId("gitlfs"), RepositoryKind.HOSTED, "GET", -100)) { };
+
+    IllegalStateException error = assertThrows(IllegalStateException.class,
+        () -> new PluginProtocolDispatcher(List.of(first, second)));
+
+    assertTrue(error.getMessage().contains("Duplicate plugin repository protocol route"));
+  }
+
+  @Test
+  void pluginRoutesCannotReplaceAFocusedBuiltInRoute() {
+    RepositoryProtocolHandler plugin = new NeutralHandler(RepositoryProtocolRoute.exactPath(
+        new FormatId("helm"), RepositoryKind.HOSTED, "POST", "api/charts", -100));
+    LegacyRepositoryProtocolHandler builtin = new LegacyRepositoryProtocolHandler() {
+      @Override
+      public Collection<com.github.klboke.kkrepo.server.routing.RepositoryProtocolRoute> routes() {
+        return List.of(com.github.klboke.kkrepo.server.routing.RepositoryProtocolRoute.exactPath(
+            RepositoryFormat.HELM, RepositoryType.HOSTED, HttpMethod.POST, "api/charts", 0));
+      }
+
+      @Override
+      public ResponseEntity<?> handle(RepositoryProtocolRequest request) {
+        return ResponseEntity.ok().build();
+      }
+    };
+    RepositoryRuntimeRegistry runtimes = mock(RepositoryRuntimeRegistry.class);
+
+    IllegalStateException error = assertThrows(IllegalStateException.class,
+        () -> new RepositoryProtocolDispatcher(runtimes,
+            List.of(builtin, new PluginProtocolDispatcher(List.of(plugin)))));
+
+    assertTrue(error.getMessage().contains("would replace the built-in handler"));
+  }
+
   private static RepositoryProtocolRequest request(HttpMethod method) {
     return new RepositoryProtocolRequest(runtime(), "repo", "a", method,
         new MockHttpServletRequest(method.name(), "/repository/repo/a"), null, null);

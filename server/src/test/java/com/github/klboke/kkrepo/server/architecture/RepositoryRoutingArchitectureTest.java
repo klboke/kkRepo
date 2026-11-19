@@ -97,4 +97,22 @@ class RepositoryRoutingArchitectureTest {
 
     rule.check(ALL_PROJECT_CLASSES);
   }
+
+  @Test
+  void gitLfsProtocolPluginStaysFrameworkAgnostic() {
+    ArchRule rule = noClasses()
+        .that().resideInAnyPackage(
+            "com.github.klboke.kkrepo.plugin.gitlfs..",
+            "com.github.klboke.kkrepo.protocol.gitlfs..")
+        .should().dependOnClassesThat().resideInAnyPackage(
+            "org.springframework..",
+            "jakarta.servlet..",
+            "javax.servlet..",
+            "java.sql..",
+            "com.github.klboke.kkrepo.server..",
+            "com.github.klboke.kkrepo.persistence..",
+            "com.github.klboke.kkrepo.plugin.loader..");
+
+    rule.check(ALL_PROJECT_CLASSES);
+  }
 }

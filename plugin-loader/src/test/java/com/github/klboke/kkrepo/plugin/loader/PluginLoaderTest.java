@@ -2,15 +2,20 @@ package com.github.klboke.kkrepo.plugin.loader;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.example.kkrepo.builtin.TestBuiltinPlugin;
+import com.example.kkrepo.builtin.TestShadowPlugin;
 import com.example.kkrepo.test.TestSignedPlugin;
 import com.github.klboke.kkrepo.plugin.api.KkRepoPlugin;
 import com.github.klboke.kkrepo.plugin.api.PluginException;
 import java.io.InputStream;
+import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Enumeration;
+import java.util.List;
 import java.util.Locale;
 import java.util.jar.Attributes;
 import java.util.jar.JarEntry;
@@ -91,6 +96,68 @@ class PluginLoaderTest {
     PluginLoader loader = new PluginLoader(
         fixture.plugins(), fixture.truststore(), PASSWORD.toCharArray());
     assertThrows(PluginException.class, loader::load);
+  }
+
+  @Test
+  void discoversBuiltInPluginsThroughTheServiceLoader(@TempDir Path temp) throws Exception {
+    try (URLClassLoader builtins = builtins(temp, TestBuiltinPlugin.class);
+        LoadedPlugins loaded = PluginLoader.loadBuiltins(builtins)) {
+      assertEquals(List.of("test-builtin"),
+          loaded.plugins().stream().map(plugin -> plugin.descriptor().id()).toList());
+      assertEquals("test-builtin", loaded.repositoryFormats().getFirst().id().value());
+      assertEquals(1, loaded.repositoryProtocolHandlers().size());
+      assertTrue(loaded.classLoaders().isEmpty());
+    }
+  }
+
+  @Test
+  void rejectsABuiltInRouteClaimedTwiceWhateverTheOrder(@TempDir Path temp) throws Exception {
+    try (URLClassLoader builtins = builtins(temp, TestBuiltinPlugin.class, TestShadowPlugin.class)) {
+      PluginException error = assertThrows(PluginException.class, () -> PluginLoader.loadBuiltins(builtins));
+      assertTrue(error.getMessage().contains("Duplicate repository protocol route test-builtin/HOSTED GET **"),
+          error.getMessage());
+    }
+  }
+
+  @Test
+  void loadsBuiltInsFirstThenSignedPluginsInOneRegistry(@TempDir Path temp) throws Exception {
+    Fixture fixture = fixture(temp);
+    createJar(fixture.plugins().resolve("test-plugin.jar"), "1.0", true, fixture.keystore());
+    PluginLoader loader = new PluginLoader(
+        fixture.plugins(), fixture.truststore(), PASSWORD.toCharArray());
+
+    try (URLClassLoader builtins = builtins(temp, TestBuiltinPlugin.class);
+        LoadedPlugins loaded = loader.load(builtins)) {
+      assertEquals(List.of("test-builtin", "test-signed"),
+          loaded.plugins().stream().map(plugin -> plugin.descriptor().id()).toList());
+      assertEquals(2, loaded.repositoryFormats().size());
+      assertEquals(1, loaded.classLoaders().size());
+    }
+  }
+
+  @Test
+  void aSignedPluginCannotReplaceARouteOwnedByABuiltIn(@TempDir Path temp) throws Exception {
+    Fixture fixture = fixture(temp);
+    createJar(fixture.plugins().resolve("test-plugin.jar"), "1.0", true, fixture.keystore());
+    PluginLoader loader = new PluginLoader(
+        fixture.plugins(), fixture.truststore(), PASSWORD.toCharArray());
+
+    try (URLClassLoader builtins = builtins(temp, TestShadowPlugin.class)) {
+      PluginException error = assertThrows(PluginException.class, () -> loader.load(builtins));
+      assertTrue(error.getMessage().contains("test-signed")
+          && error.getMessage().contains("Duplicate repository protocol route test-format/HOSTED GET **"),
+          error.getMessage());
+    }
+  }
+
+  /** Class loader exposing {@code plugins} as classpath built-ins through a service descriptor. */
+  private static URLClassLoader builtins(Path temp, Class<?>... plugins) throws Exception {
+    Path root = Files.createDirectories(temp.resolve("builtins"));
+    Path services = Files.createDirectories(root.resolve("META-INF/services"));
+    Files.writeString(services.resolve(KkRepoPlugin.class.getName()),
+        String.join("\n", java.util.Arrays.stream(plugins).map(Class::getName).toList()) + "\n");
+    return new URLClassLoader(new java.net.URL[] {root.toUri().toURL()},
+        PluginLoaderTest.class.getClassLoader());
   }
 
   private static Fixture fixture(Path temp) throws Exception {
