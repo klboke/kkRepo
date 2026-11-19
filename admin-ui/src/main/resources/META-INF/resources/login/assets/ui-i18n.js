@@ -919,10 +919,16 @@
     return dictionaryLoads[language];
   }
 
+  // Loads the active dictionary when needed, re-applies the page and, if it had to be fetched,
+  // notifies "kkrepo:i18n-change" listeners again: text they composed from the first notification
+  // (tooltips, dynamic labels) was built while translations still fell back to English.
   function refreshLanguage() {
     const language = currentLanguage;
+    const needsLoad = language !== "en" && !dictionaries[language];
     return ensureDictionary(language).then(() => {
-      if (language === currentLanguage && language !== "en") apply();
+      if (language !== currentLanguage || language === "en") return;
+      apply();
+      if (needsLoad && dictionaries[language]) dispatchChange();
     });
   }
 

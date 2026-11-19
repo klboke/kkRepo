@@ -30,8 +30,9 @@ function load({ defaultLanguage = 'browser', browserLanguages = ['en-US'] } = {}
     }
   };
   context.window = context;
-  context.window.addEventListener = () => {};
-  context.window.dispatchEvent = () => true;
+  const listeners = {};
+  context.window.addEventListener = (type, listener) => { (listeners[type] ||= []).push(listener); };
+  context.window.dispatchEvent = (event) => { (listeners[event.type] || []).forEach((listener) => listener(event)); return true; };
   context.window.alert = () => {};
   context.window.confirm = () => true;
   vm.createContext(context);
@@ -94,4 +95,20 @@ test('every language file covers every reference key with the same placeholders'
     }
     assert.ok(i18n.languages().includes(language));
   }
+});
+
+test('listeners are notified again once a delayed dictionary is ready', async () => {
+  const { i18n, appended, context } = load({ defaultLanguage: 'en' });
+  // Let start-up work settle first (the settings fetch fails here and notifies on its own).
+  await new Promise((resolve) => setImmediate(resolve));
+  const composed = [];
+  context.window.addEventListener('kkrepo:i18n-change', () => composed.push(i18n.text('Default language')));
+  i18n.setDefaultLanguage('fr');
+  assert.equal(composed.at(-1), 'Default language', 'first notification while the dictionary is still loading');
+  const script = appended.find((node) => String(node.src || '').startsWith('/login/assets/i18n/fr.js?v='));
+  assert.ok(script, 'the French dictionary script is requested');
+  vm.runInContext(readFileSync(join(dictionaryDir, 'fr.js'), 'utf8'), context);
+  script.onload();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(composed.at(-1), 'Langue par défaut', 'notified again with the dictionary ready');
 });
