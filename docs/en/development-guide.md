@@ -186,6 +186,7 @@ Detailed design and implementation plans for repository formats and migration wo
 
 - [OHPM Repository Guide](repository-guides/ohpm.md), [Protocol Baseline](dev/ohpm-protocol-baseline.md), [Signed Login](dev/ohpm-login.md), and [Acceptance/CI](dev/ohpm-acceptance.md)
 - [Docker Repository Implementation Notes](dev/docker-repository-implementation-plan.md)
+- [UI Translations](dev/ui-translations.md)
 - [Cargo / Rust Repository Design Notes](dev/cargo-rust-repository-design.md)
 - [Dart / Pub Repository Design Notes](../zh/dev/dart-pub-repository-design.md) (Chinese)
 - [Composer / PHP Repository Design Notes](../zh/dev/composer-php-repository-design.md) (Chinese)
