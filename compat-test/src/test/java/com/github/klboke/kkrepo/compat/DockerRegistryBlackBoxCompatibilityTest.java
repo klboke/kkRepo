@@ -34,6 +34,50 @@ class DockerRegistryBlackBoxCompatibilityTest {
       .build();
 
   @Test
+  void hostedTagPaginationMatchesNexus() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    assumeTrue(config.enabled() && config.configured() && config.writeEnabled(),
+        "Configure writable Nexus and kkrepo Docker endpoints to compare tag pagination");
+    String image = config.uploadImage() + "/tag-pages-" + System.nanoTime();
+    String imagePath = config.repositoryPath(image);
+    byte[] layer = image.getBytes(StandardCharsets.UTF_8);
+    String layerDigest = "sha256:" + sha256(layer);
+    byte[] manifest = singleLayerManifest(layerDigest, layer.length).getBytes(StandardCharsets.UTF_8);
+    for (Endpoint endpoint : List.of(config.nexus(), config.nexusPlus())) {
+      pushBlob(endpoint, imagePath, "sha256:" + sha256(new byte[0]), new byte[0], true);
+      pushBlob(endpoint, imagePath, layerDigest, layer, true);
+      for (String tag : List.of("v3", "v1", "v2")) {
+        assertEquals(201, put(endpoint, endpoint.v2(imagePath + "/manifests/" + tag),
+            DockerConstants.MEDIA_TYPE_OCI_MANIFEST, manifest, true).status());
+      }
+
+      URI firstUri = endpoint.v2(imagePath + "/tags/list?n=2");
+      Exchange first = get(endpoint, firstUri, "application/json", true);
+      assertEquals(200, first.status(), endpoint.name() + " first tag page");
+      assertEquals(image, JSON.readTree(first.body()).path("name").asText());
+      assertEquals(JSON.valueToTree(List.of("v1", "v2")), JSON.readTree(first.body()).path("tags"));
+      String link = first.header("Link").orElseThrow();
+      assertTrue(link.contains("rel=\"next\""), link);
+      URI nextUri = firstUri.resolve(link.substring(link.indexOf('<') + 1, link.indexOf('>')));
+      Exchange next = get(endpoint, nextUri, "application/json", true);
+      assertEquals(200, next.status(), endpoint.name() + " next tag page");
+      assertEquals(image, JSON.readTree(next.body()).path("name").asText());
+      assertEquals(JSON.valueToTree(List.of("v3")), JSON.readTree(next.body()).path("tags"));
+      assertTrue(next.header("Link").isEmpty(), endpoint.name() + " last tag page");
+
+      // Nexus 3.94 restarts at the first page when explicitly queried past the final tag.
+      // Clients stop at the missing Link above; kkRepo also supports an empty exhausted page.
+      if (endpoint == config.nexusPlus()) {
+        Exchange exhausted = get(endpoint, endpoint.v2(imagePath + "/tags/list?n=2&last=v3"),
+            "application/json", true);
+        assertEquals(200, exhausted.status(), endpoint.name() + " exhausted tag page");
+        assertEquals(JSON.valueToTree(List.of()), JSON.readTree(exhausted.body()).path("tags"));
+        assertTrue(exhausted.header("Link").isEmpty());
+      }
+    }
+  }
+
+  @Test
   void httpsConnectorsPreserveTlsAndSecureAuthenticationRealms() throws Exception {
     CompatConfig config = CompatConfig.load();
     assumeTrue(config.enabled() && config.configured(), "Docker compatibility is not configured");
