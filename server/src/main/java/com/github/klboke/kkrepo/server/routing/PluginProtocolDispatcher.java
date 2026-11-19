@@ -15,7 +15,6 @@ import com.github.klboke.kkrepo.plugin.api.RepositoryRequest;
 import com.github.klboke.kkrepo.plugin.api.RepositoryResponse;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
-import com.github.klboke.kkrepo.server.security.ClientAddress;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
@@ -32,7 +31,6 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.multipart.MultipartFile;
-import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 /**
  * Adapts the framework-agnostic {@link RepositoryProtocolHandler} plugin SPI to the server routing
@@ -118,10 +116,6 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
         headers.put(name, new ArrayList<>(values));
       }
     });
-    if (response.isStreaming()) {
-      StreamingResponseBody stream = response.stream()::writeTo;
-      return ResponseEntity.status(response.status()).headers(headers).body(stream);
-    }
     return ResponseEntity.status(response.status()).headers(headers).body(response.body());
   }
 
@@ -165,7 +159,7 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
             ? body(servlet, request.method())
             : new byte[0],
         rawRequest ? null : multipart(request.multipartFile()),
-        new HostContext(descriptor, hostServices, ClientAddress.from(servlet), servlet),
+        new HostContext(descriptor, hostServices, servlet),
         Map.of());
   }
 
@@ -229,7 +223,6 @@ public final class PluginProtocolDispatcher implements LegacyRepositoryProtocolH
   private record HostContext(
       RepositoryDescriptor repository,
       List<PluginHostService> services,
-      String clientAddress,
       HttpServletRequest servletRequest) implements RepositoryContext {
 
     @Override

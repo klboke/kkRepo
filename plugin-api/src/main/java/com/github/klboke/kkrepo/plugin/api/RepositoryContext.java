@@ -19,11 +19,6 @@ public interface RepositoryContext {
   /** Host service such as a format-specific uploader; empty when the host did not register it. */
   <T> Optional<T> service(Class<T> type);
 
-  /** Client address resolved by the host, or an empty string when unavailable. */
-  default String clientAddress() {
-    return "";
-  }
-
   /** Repository write/version/layout policies. */
   default RepositoryPolicy policy() {
     return new RepositoryPolicy("", "", "");
