@@ -22,7 +22,8 @@ class UiSettingsControllerTest {
     assertEquals("zh-CN", view.defaultLanguage());
     assertEquals("default", view.defaultTheme());
     assertEquals(Instant.EPOCH, view.updatedAt());
-    assertEquals(java.util.List.of("browser", "zh-CN", "en"), view.supportedDefaultLanguages());
+    assertEquals(java.util.List.of("browser", "zh-CN", "en", "fr", "de", "es", "it", "pt-BR", "nl", "pl", "ru",
+        "uk", "ja", "ko", "tr"), view.supportedDefaultLanguages());
     assertEquals(
         java.util.List.of("default", "indigo", "ocean", "sunset", "jfrog", "nexus"),
         view.supportedDefaultThemes());
@@ -90,7 +91,7 @@ class UiSettingsControllerTest {
 
     assertThrows(
         ResponseStatusException.class,
-        () -> controller.update(new UiSettingsController.UiSettingsCommand("fr", "default")));
+        () -> controller.update(new UiSettingsController.UiSettingsCommand("xx", "default")));
   }
 
   @Test

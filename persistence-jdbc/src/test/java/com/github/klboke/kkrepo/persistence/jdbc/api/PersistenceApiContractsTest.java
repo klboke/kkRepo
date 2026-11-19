@@ -83,9 +83,20 @@ class PersistenceApiContractsTest {
   void rejectsUnsupportedUiLanguagesAtThePublicBoundary() {
     IllegalArgumentException thrown = assertThrows(
         IllegalArgumentException.class,
-        () -> UiSettingsDao.normalizeDefaultLanguage("fr"));
+        () -> UiSettingsDao.normalizeDefaultLanguage("xx"));
 
-    assertEquals("Unsupported UI default language: fr", thrown.getMessage());
+    assertEquals("Unsupported UI default language: xx", thrown.getMessage());
+  }
+
+  @Test
+  void normalizesEveryUiLanguageAndItsVariants() {
+    for (String language : UiSettingsDao.LANGUAGES) {
+      assertEquals(language, UiSettingsDao.normalizeDefaultLanguage(language));
+      assertEquals(language, UiSettingsDao.normalizeDefaultLanguage(language.toLowerCase()));
+      assertEquals(language, UiSettingsDao.normalizeDefaultLanguage(language.replace('-', '_')));
+    }
+    assertEquals("pt-BR", UiSettingsDao.normalizeDefaultLanguage("pt"));
+    assertEquals("fr", UiSettingsDao.normalizeDefaultLanguage(" FR "));
   }
 
   @Test

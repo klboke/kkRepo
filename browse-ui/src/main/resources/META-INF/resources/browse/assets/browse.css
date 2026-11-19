@@ -2228,6 +2228,21 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+/* "Tool / Ecosystem" formats: the tool on the first line, the ecosystem smaller below. */
+.format-name {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.format-name small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
 .format-modes {
   font-size: 11px;
   font-weight: var(--fw-semibold);
