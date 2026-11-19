@@ -40,31 +40,9 @@ public class CleanupRunService {
   private final CleanupExecutionService execution;
   private final CleanupRuntimeProperties properties;
   private final CleanupMetrics metrics;
-  private final CleanupRuleCandidateService scriptRules;
   private final Clock clock;
 
   @Autowired
-  public CleanupRunService(
-      CleanupPolicyDao cleanupDao,
-      RepositoryDao repositoryDao,
-      CleanupPolicyCapabilities capabilities,
-      CleanupSubjectScanner scanner,
-      CleanupExecutionService execution,
-      CleanupRuntimeProperties properties,
-      CleanupMetrics metrics,
-      CleanupRuleCandidateService scriptRules) {
-    this(
-        cleanupDao,
-        repositoryDao,
-        capabilities,
-        scanner,
-        execution,
-        properties,
-        metrics,
-        scriptRules,
-        Clock.systemUTC());
-  }
-
   public CleanupRunService(
       CleanupPolicyDao cleanupDao,
       RepositoryDao repositoryDao,
@@ -81,7 +59,6 @@ public class CleanupRunService {
         execution,
         properties,
         metrics,
-        null,
         Clock.systemUTC());
   }
 
@@ -94,28 +71,6 @@ public class CleanupRunService {
       CleanupRuntimeProperties properties,
       CleanupMetrics metrics,
       Clock clock) {
-    this(
-        cleanupDao,
-        repositoryDao,
-        capabilities,
-        scanner,
-        execution,
-        properties,
-        metrics,
-        null,
-        clock);
-  }
-
-  private CleanupRunService(
-      CleanupPolicyDao cleanupDao,
-      RepositoryDao repositoryDao,
-      CleanupPolicyCapabilities capabilities,
-      CleanupSubjectScanner scanner,
-      CleanupExecutionService execution,
-      CleanupRuntimeProperties properties,
-      CleanupMetrics metrics,
-      CleanupRuleCandidateService scriptRules,
-      Clock clock) {
     this.cleanupDao = cleanupDao;
     this.repositoryDao = repositoryDao;
     this.capabilities = capabilities;
@@ -123,7 +78,6 @@ public class CleanupRunService {
     this.execution = execution;
     this.properties = properties;
     this.metrics = metrics;
-    this.scriptRules = scriptRules;
     this.clock = clock;
   }
 
@@ -392,13 +346,13 @@ public class CleanupRunService {
     long pulseIntervalNanos = durationNanos(minimum(
         properties.getWorker().getHeartbeatInterval(), MAX_INLINE_PULSE_INTERVAL));
     long nextPulseNanos = System.nanoTime() + pulseIntervalNanos;
-    List<Candidate> candidates = candidatesFor(repository, scanLimit, scan);
+    List<Candidate> candidates = scan.candidates();
     for (int index = 0; index < candidates.size(); ) {
       if (itemBatch.size() >= RUN_ITEM_BATCH_SIZE || System.nanoTime() >= nextPulseNanos) {
         boolean cancelled = pulse(claim, run.id());
         flushRunItems(itemBatch);
         if (cancelled) {
-          return cancelledTotals(scan, candidates.size(), wouldDelete, deleted, failed, scanCursor);
+          return cancelledTotals(scan, wouldDelete, deleted, failed, scanCursor);
         }
         nextPulseNanos = System.nanoTime() + pulseIntervalNanos;
       }
@@ -500,7 +454,7 @@ public class CleanupRunService {
     boolean cancelled = pulse(claim, run.id());
     flushRunItems(itemBatch);
     if (cancelled) {
-      return cancelledTotals(scan, candidates.size(), wouldDelete, deleted, failed, scanCursor);
+      return cancelledTotals(scan, wouldDelete, deleted, failed, scanCursor);
     }
     String state = failed > 0
         ? "PARTIAL"
@@ -517,7 +471,7 @@ public class CleanupRunService {
     return new RepositoryTotals(
         state,
         scan.scannedSubjects(),
-        candidates.size(),
+        scan.candidates().size(),
         wouldDelete,
         deleted,
         failed,
@@ -526,16 +480,6 @@ public class CleanupRunService {
         scanCursor,
         scan.nextCursor(),
         "EXECUTE".equals(run.mode()) && !deleteLimitReached);
-  }
-
-  List<Candidate> candidatesFor(
-      RepositoryRecord repository, int scanLimit, ScanResult scan) {
-    List<Candidate> candidates = new ArrayList<>(scan.candidates());
-    if (scriptRules != null && candidates.size() < scanLimit) {
-      candidates.addAll(scriptRules.candidates(
-          repository, scanLimit - candidates.size(), candidates));
-    }
-    return candidates;
   }
 
   private void heartbeat(ClaimedRunRepository claim) {
@@ -560,7 +504,6 @@ public class CleanupRunService {
 
   private static RepositoryTotals cancelledTotals(
       ScanResult scan,
-      int matched,
       long wouldDelete,
       long deleted,
       long failed,
@@ -568,7 +511,7 @@ public class CleanupRunService {
     return new RepositoryTotals(
         "CANCELLED",
         scan.scannedSubjects(),
-        matched,
+        scan.candidates().size(),
         wouldDelete,
         deleted,
         failed,

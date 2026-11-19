@@ -36,13 +36,4 @@ public interface PluginContext {
    * providers.
    */
   void registerBlobStoreProvider(BlobStoreProvider provider);
-
-  /**
-   * Registers a read-only cleanup rule. The runtime owns candidate resolution, policy, locks and
-   * deletion.
-   */
-  void registerCleanupRule(CleanupRule rule);
-
-  /** Registers a scheduled maintenance task. The runtime owns dry-run, quotas and audit. */
-  void registerMaintenanceTask(MaintenanceTask task);
 }

@@ -1,9 +1,7 @@
 package com.github.klboke.kkrepo.plugin.loader;
 
 import com.github.klboke.kkrepo.core.blobstore.BlobStoreProvider;
-import com.github.klboke.kkrepo.plugin.api.CleanupRule;
 import com.github.klboke.kkrepo.plugin.api.KkRepoPlugin;
-import com.github.klboke.kkrepo.plugin.api.MaintenanceTask;
 import com.github.klboke.kkrepo.plugin.api.RemoteTransportProvider;
 import com.github.klboke.kkrepo.plugin.api.RepositoryFormatProvider;
 import com.github.klboke.kkrepo.plugin.api.RepositoryProtocolHandler;
@@ -17,8 +15,6 @@ public record LoadedPlugins(
     List<RepositoryFormatProvider> repositoryFormats,
     List<RepositoryProtocolHandler> repositoryProtocolHandlers,
     List<BlobStoreProvider> blobStoreProviders,
-    List<CleanupRule> cleanupRules,
-    List<MaintenanceTask> maintenanceTasks,
     List<PluginClassLoader> classLoaders) implements AutoCloseable {
 
   public LoadedPlugins {
@@ -29,12 +25,10 @@ public record LoadedPlugins(
         ? List.of()
         : List.copyOf(repositoryProtocolHandlers);
     blobStoreProviders = blobStoreProviders == null ? List.of() : List.copyOf(blobStoreProviders);
-    cleanupRules = cleanupRules == null ? List.of() : List.copyOf(cleanupRules);
-    maintenanceTasks = maintenanceTasks == null ? List.of() : List.copyOf(maintenanceTasks);
     classLoaders = classLoaders == null ? List.of() : List.copyOf(classLoaders);
   }
 
-  /** Compatibility constructor for callers that predate storage and maintenance ports. */
+  /** Compatibility constructor for callers that predate storage ports. */
   public LoadedPlugins(
       List<KkRepoPlugin> plugins,
       List<RemoteTransportProvider> remoteTransports,
@@ -46,8 +40,6 @@ public record LoadedPlugins(
         remoteTransports,
         repositoryFormats,
         repositoryProtocolHandlers,
-        List.of(),
-        List.of(),
         List.of(),
         classLoaders);
   }

@@ -83,8 +83,6 @@ public final class PluginLoader {
           context.repositoryFormats(),
           context.repositoryProtocolHandlers(),
           context.blobStoreProviders(),
-          context.cleanupRules(),
-          context.maintenanceTasks(),
           classLoaders);
     } catch (PluginException | RuntimeException failure) {
       close(classLoaders);

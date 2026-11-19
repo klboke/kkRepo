@@ -153,8 +153,6 @@ class BlobStorageRegistryProviderTest {
         List.of(),
         List.of(),
         List.of(pluginProvider),
-        List.of(),
-        List.of(),
         List.of());
     try (PluginRuntime pluginRuntime = new PluginRuntime(loaded)) {
       DefaultListableBeanFactory beans = new DefaultListableBeanFactory();
@@ -177,7 +175,7 @@ class BlobStorageRegistryProviderTest {
     RecordingProvider pluginProvider = new RecordingProvider("file");
     LoadedPlugins loaded = new LoadedPlugins(
         List.of(), List.of(), List.of(), List.of(),
-        List.of(pluginProvider), List.of(), List.of(), List.of());
+        List.of(pluginProvider), List.of());
     try (PluginRuntime pluginRuntime = new PluginRuntime(loaded)) {
       DefaultListableBeanFactory beans = new DefaultListableBeanFactory();
       beans.registerSingleton("pluginRuntime", pluginRuntime);

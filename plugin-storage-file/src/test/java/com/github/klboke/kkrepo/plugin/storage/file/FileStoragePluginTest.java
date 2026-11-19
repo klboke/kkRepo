@@ -6,9 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.core.blobstore.BlobStoreDescriptor;
 import com.github.klboke.kkrepo.core.blobstore.BlobStoreProvider;
-import com.github.klboke.kkrepo.plugin.api.CleanupRule;
 import com.github.klboke.kkrepo.plugin.api.KkRepoPlugin;
-import com.github.klboke.kkrepo.plugin.api.MaintenanceTask;
 import com.github.klboke.kkrepo.plugin.api.PluginContext;
 import com.github.klboke.kkrepo.plugin.api.RemoteTransportProvider;
 import com.github.klboke.kkrepo.plugin.api.RepositoryFormatProvider;
@@ -53,16 +51,6 @@ class FileStoragePluginTest {
     @Override
     public void registerBlobStoreProvider(BlobStoreProvider provider) {
       this.provider = provider;
-    }
-
-    @Override
-    public void registerCleanupRule(CleanupRule rule) {
-      throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public void registerMaintenanceTask(MaintenanceTask task) {
-      throw new UnsupportedOperationException();
     }
   }
 }

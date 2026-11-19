@@ -1,8 +1,6 @@
 package com.github.klboke.kkrepo.server.plugin;
 
 import com.github.klboke.kkrepo.core.blobstore.BlobStoreProvider;
-import com.github.klboke.kkrepo.plugin.api.CleanupRule;
-import com.github.klboke.kkrepo.plugin.api.MaintenanceTask;
 import com.github.klboke.kkrepo.plugin.api.RemoteTransportProvider;
 import com.github.klboke.kkrepo.plugin.api.RepositoryFormatProvider;
 import com.github.klboke.kkrepo.plugin.api.RepositoryProtocolHandler;
@@ -25,8 +23,6 @@ public final class PluginRuntime implements AutoCloseable {
   private final Map<String, RepositoryFormatProvider> repositoryFormats;
   private final List<RepositoryProtocolHandler> repositoryProtocolHandlers;
   private final Map<String, BlobStoreProvider> blobStoreProviders;
-  private final List<CleanupRule> cleanupRules;
-  private final List<MaintenanceTask> maintenanceTasks;
 
   public PluginRuntime(LoadedPlugins loaded) {
     this.loaded = Objects.requireNonNull(loaded, "loaded");
@@ -54,22 +50,6 @@ public final class PluginRuntime implements AutoCloseable {
       }
     }
     this.blobStoreProviders = Map.copyOf(stores);
-    Map<String, CleanupRule> rules = new LinkedHashMap<>();
-    for (CleanupRule rule : loaded.cleanupRules()) {
-      String key = normalize(rule.id(), "cleanup rule id");
-      if (rules.putIfAbsent(key, rule) != null) {
-        throw new IllegalStateException("Duplicate cleanup rule id: " + key);
-      }
-    }
-    this.cleanupRules = List.copyOf(rules.values());
-    Map<String, MaintenanceTask> tasks = new LinkedHashMap<>();
-    for (MaintenanceTask task : loaded.maintenanceTasks()) {
-      String key = normalize(task.id(), "maintenance task id");
-      if (tasks.putIfAbsent(key, task) != null) {
-        throw new IllegalStateException("Duplicate maintenance task id: " + key);
-      }
-    }
-    this.maintenanceTasks = List.copyOf(tasks.values());
     this.repositoryProtocolHandlers = List.copyOf(loaded.repositoryProtocolHandlers());
   }
 
@@ -99,14 +79,6 @@ public final class PluginRuntime implements AutoCloseable {
     return type == null || type.isBlank()
         ? Optional.empty()
         : Optional.ofNullable(blobStoreProviders.get(type.trim().toLowerCase(Locale.ROOT)));
-  }
-
-  public List<CleanupRule> cleanupRules() {
-    return cleanupRules;
-  }
-
-  public List<MaintenanceTask> maintenanceTasks() {
-    return maintenanceTasks;
   }
 
   public Optional<RepositoryFormatProvider> repositoryFormat(String id) {

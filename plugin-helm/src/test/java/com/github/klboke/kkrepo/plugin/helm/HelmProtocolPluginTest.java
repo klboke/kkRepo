@@ -4,9 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 
 import com.github.klboke.kkrepo.core.BlobStorage;
-import com.github.klboke.kkrepo.plugin.api.CleanupRule;
 import com.github.klboke.kkrepo.plugin.api.FormatId;
-import com.github.klboke.kkrepo.plugin.api.MaintenanceTask;
 import com.github.klboke.kkrepo.plugin.api.MultipartPart;
 import com.github.klboke.kkrepo.plugin.api.PluginContext;
 import com.github.klboke.kkrepo.plugin.api.RemoteTransportProvider;
@@ -112,16 +110,6 @@ class HelmProtocolPluginTest {
 
     @Override
     public void registerBlobStoreProvider(com.github.klboke.kkrepo.core.blobstore.BlobStoreProvider provider) {
-      throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public void registerCleanupRule(CleanupRule rule) {
-      throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public void registerMaintenanceTask(MaintenanceTask task) {
       throw new UnsupportedOperationException();
     }
   }

@@ -42,8 +42,6 @@ class PluginLoaderTest {
       assertEquals(1, loaded.repositoryFormats().size());
       assertEquals("test-format", loaded.repositoryFormats().getFirst().id().value());
       assertEquals(1, loaded.repositoryProtocolHandlers().size());
-      assertEquals(1, loaded.cleanupRules().size());
-      assertEquals(1, loaded.maintenanceTasks().size());
     }
   }
 
@@ -142,13 +140,7 @@ class PluginLoaderTest {
     Manifest manifest = new Manifest();
     manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
     try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(jar), manifest)) {
-      Path classes = pluginClasses();
-      try (var files = Files.walk(classes.resolve("com/example/kkrepo/test"))) {
-        for (Path file : files.filter(path -> path.toString().endsWith(".class")).toList()) {
-          add(output, classes.relativize(file).toString().replace('\\', '/'),
-              Files.readAllBytes(file));
-        }
-      }
+      add(output, CLASS_ENTRY, classBytes());
       add(output, SERVICE_ENTRY,
           (TestSignedPlugin.class.getName() + "\n").getBytes(StandardCharsets.UTF_8));
       add(output, PluginLoader.DESCRIPTOR_PATH, descriptor(apiVersion));
@@ -170,10 +162,6 @@ class PluginLoaderTest {
          "capabilities":["remote.transport"]}
         """.formatted(apiVersion, TestSignedPlugin.class.getName())
         .getBytes(StandardCharsets.UTF_8);
-  }
-
-  private static Path pluginClasses() throws Exception {
-    return Path.of(TestSignedPlugin.class.getProtectionDomain().getCodeSource().getLocation().toURI());
   }
 
   private static byte[] classBytes() throws Exception {
