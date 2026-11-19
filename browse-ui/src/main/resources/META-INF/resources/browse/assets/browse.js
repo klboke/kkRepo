@@ -118,7 +118,7 @@ const SEARCH_FORMAT_LABEL = {
   conda: "Conda",
   conan: "Conan 2",
   apt: "APT / Debian",
-  alpine: "Alpine / APK",
+  alpine: "APK / Alpine",
   r: "R / CRAN",
   huggingface: "Hugging Face Models",
   gitlfs: "Git LFS",
