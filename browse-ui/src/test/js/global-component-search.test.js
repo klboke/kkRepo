@@ -152,7 +152,7 @@ test("uses the selected repository format in the search page title", () => {
   assert.equal(helpers.searchFormatLabel("maven2"), "Maven");
   assert.equal(helpers.searchFormatLabel("docker"), "Docker / OCI");
   assert.equal(helpers.searchFormatLabel("ansiblegalaxy"), "Ansible Galaxy");
-  assert.equal(helpers.searchFormatLabel("alpine"), "Alpine / APK");
+  assert.equal(helpers.searchFormatLabel("alpine"), "APK / Alpine");
   assert.equal(helpers.searchPageTitle("all"), "Search all components");
   assert.equal(helpers.searchPageTitle("custom"), "Custom search");
   assert.equal(helpers.searchPageTitle("docker"), "Search Docker / OCI");

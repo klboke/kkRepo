@@ -29,7 +29,7 @@ official Conan trademark asset.
 The APT / Debian compatibility mark is an original package mark drawn for kkRepo. It is not an
 official Debian trademark asset.
 
-The Alpine / APK mountain-and-package compatibility mark is an original mark drawn for kkRepo. It
+The APK / Alpine mountain-and-package compatibility mark is an original mark drawn for kkRepo. It
 is not an official Alpine Linux trademark asset.
 
 The Hugging Face Models smile-and-embrace compatibility mark is an original mark drawn for kkRepo.
