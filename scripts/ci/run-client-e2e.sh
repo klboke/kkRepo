@@ -1931,6 +1931,7 @@ LDIF
     --registry "http://$KKREPO_DOCKER_HOSTED_REGISTRY" --image kkrepo-client-e2e/docker-oci-ldap \
     --header "X-Nexus-Plus-Token: $api_key" --expect allowed
 
+  docker_ldap_user_token_flow
   docker exec -i "$DOCKER_LDAP_CONTAINER" ldapmodify -x -H ldap://localhost \
     -D cn=admin,dc=example,dc=com -w "$ldap_admin_password" >"$ARTIFACT_DIR/docker-ldap-revoke.log" 2>&1 <<LDIF
 dn: cn=$group,ou=groups,dc=example,dc=com
@@ -1970,6 +1971,62 @@ LDIF
   fi
   docker image rm "$ref" "$ref-revoked" >/dev/null 2>&1 || true
   cleanup_docker_ldap_e2e
+}
+
+# CLI user token (userCode:passCode as Basic credentials) for the same external user: full Docker
+# login/push/pull, no UI session, and revocation also stops the Docker bearer tokens issued from it.
+# Uses the locals of test_docker_ldap_mapped_roles.
+docker_ldap_user_token_flow() {
+  local token_json token_id token user_code pass_code token_ref status
+  local token_config="$WORK_DIR/docker-user-token-config"
+  local token_env
+  mkdir -p "$token_config"
+  token_env="DOCKER_CONFIG='$token_config' DOCKER_HOST='$(docker context inspect --format '{{.Endpoints.docker.Host}}')'"
+  token_ref="$KKREPO_DOCKER_HOSTED_REGISTRY/kkrepo-client-e2e/docker-oci-ldap:token-$STAMP"
+  token_json="$(curl -m 20 -fsS -u "$user:$password" -H "Content-Type: application/json" \
+    --data '{"domain":"UserToken","displayName":"client E2E docker CLI"}' \
+    "$KKREPO_URL/internal/security/api-keys/current")"
+  token_id="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["apiKey"]["id"])' "$token_json")"
+  token="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["token"])' "$token_json")"
+  user_code="${token%%:*}"
+  pass_code="${token#*:}"
+  add_redaction_value "$token"
+  add_redaction_value "$pass_code"
+
+  run_logged docker-user-token-login bash -lc "printf '%s\n' \"\$1\" | $token_env docker login '$KKREPO_DOCKER_HOSTED_REGISTRY' --username '$user_code' --password-stdin" _ "$pass_code"
+  run_logged docker-user-token-push bash -lc "docker tag alpine:3.20 '$token_ref' && $token_env docker push '$token_ref'"
+  run_logged docker-user-token-remove-local docker image rm "$token_ref"
+  run_logged docker-user-token-pull bash -lc "$token_env docker pull '$token_ref'"
+
+  status="$(curl -m 20 -sS -o /dev/null -w '%{http_code}' -u "$user_code:$pass_code" \
+    "$KKREPO_URL/internal/security/basic/login")"
+  if [[ "$status" != "401" ]]; then
+    log "user token opened a UI session: HTTP $status"
+    return 1
+  fi
+  # Anonymous access may answer the session probe; it must just not be the token owner.
+  if curl -m 20 -sS -H "X-Nexus-Plus-Token: $token" "$KKREPO_URL/internal/security/session" \
+    | python3 -c 'import json,sys
+try:
+    sys.exit(0 if json.load(sys.stdin).get("userId") == sys.argv[1] else 1)
+except ValueError:
+    sys.exit(1)' "$user"; then
+    log "user token was accepted as an API key header"
+    return 1
+  fi
+
+  curl -m 20 -fsS -o /dev/null -u "$user:$password" -X DELETE \
+    "$KKREPO_URL/internal/security/api-keys/current/$token_id"
+  # Checked at the token endpoint: containerd 2.x hangs instead of failing when its re-auth for
+  # the manifest PUT gets 401, so a docker push with revoked credentials never returns.
+  local token_status
+  token_status="$(curl -m 20 -sS -o /dev/null -w '%{http_code}' -u "$user_code:$pass_code" \
+    "http://$KKREPO_DOCKER_HOSTED_REGISTRY/service/rest/v1/docker/token?service=$KKREPO_DOCKER_HOSTED_REGISTRY&scope=repository:kkrepo-client-e2e/docker-oci-ldap:pull,push")"
+  if [[ "$token_status" != 401 ]]; then
+    log "docker token endpoint returned $token_status for a deleted user token"
+    return 1
+  fi
+  docker image rm "$token_ref" >/dev/null 2>&1 || true
 }
 
 test_terraform() {

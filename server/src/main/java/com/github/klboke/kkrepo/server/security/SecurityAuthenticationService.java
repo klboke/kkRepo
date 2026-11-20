@@ -218,9 +218,33 @@ public class SecurityAuthenticationService {
     if (basicAuthSuppressed(request) && !isBasicLoginRequest(request)) {
       return Optional.empty();
     }
-    return basicCredentials(request).flatMap(credentials ->
-        fresh ? authenticateBasicUncached(credentials.username(), credentials.password())
-            : authenticateBasic(credentials.username(), credentials.password()));
+    return basicCredentials(request).flatMap(credentials -> {
+      // A valid CLI user token is resolved before any realm, so it never reaches an LDAP bind.
+      // Like Nexus user tokens, it serves clients but never opens a UI session.
+      if (!isBasicLoginRequest(request)) {
+        Optional<AuthenticatedSubject> token =
+            authenticateUserToken(credentials.username(), credentials.password(), fresh);
+        if (token.isPresent()) {
+          return token;
+        }
+      }
+      return fresh ? authenticateBasicUncached(credentials.username(), credentials.password())
+          : authenticateBasic(credentials.username(), credentials.password());
+    });
+  }
+
+  private Optional<AuthenticatedSubject> authenticateUserToken(
+      String userCode, String passCode, boolean fresh) {
+    if (!UserTokens.matches(userCode, passCode)) {
+      return Optional.empty();
+    }
+    String material = userCode + ":" + passCode;
+    Supplier<Optional<AuthenticatedSubject>> loader = () -> securityDao
+        .findApiKeyByDomainAndHash(UserTokens.DOMAIN, SecurityHashing.sha256(material))
+        .flatMap(token -> apiKeySubject(token, false, "user-token"));
+    return fresh || apiKeyAuthCache == null
+        ? loader.get()
+        : apiKeyAuthCache.find("user-token:" + material, loader);
   }
 
   private <T> T inAuthenticationTransaction(Supplier<T> callback) {
@@ -389,6 +413,13 @@ public class SecurityAuthenticationService {
     if (source == null || source.isBlank() || userId == null || userId.isBlank()) {
       return Optional.empty();
     }
+    // A token issued from an API key or user token stops working once that key is revoked or expires.
+    if (apiKeyId != null && securityDao.findApiKey(apiKeyId)
+        .filter(apiKey -> source.equals(apiKey.ownerSource()) && userId.equals(apiKey.ownerUserId()))
+        .filter(this::activeApiKey)
+        .isEmpty()) {
+      return Optional.empty();
+    }
     return securityDao.findUser(source, userId)
         .filter(this::activeUser)
         .map(user -> toSubject(user, realmId, storedExternalRoles(user), apiKeyId));
@@ -474,6 +505,10 @@ public class SecurityAuthenticationService {
   }
 
   public void storeSessionSubject(HttpServletRequest request, AuthenticatedSubject subject) {
+    // Sessions do not keep apiKeyId, so a key-backed session would outlive the key's revocation.
+    if (subject.apiKeyId() != null) {
+      throw new IllegalArgumentException("API keys and user tokens cannot open a session");
+    }
     HttpSession session = request.getSession(true);
     session.removeAttribute(BASIC_AUTH_SUPPRESSED_ATTRIBUTE);
     session.setAttribute(FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME, principalName(subject));
@@ -551,9 +586,13 @@ public class SecurityAuthenticationService {
   }
 
   private Optional<AuthenticatedSubject> resolveApiKey(List<ApiKeyTokenCandidate> candidates, boolean ohpm) {
-    Optional<ApiKeyRecord> match = findApiKey(candidates);
-    if (match.isEmpty()) return Optional.empty();
-    ApiKeyRecord apiKey = match.get();
+    return findApiKey(candidates)
+        // User tokens are Basic credentials only, never bearer or header API keys.
+        .filter(apiKey -> !UserTokens.DOMAIN.equalsIgnoreCase(apiKey.domain()))
+        .flatMap(apiKey -> apiKeySubject(apiKey, ohpm, "api-key"));
+  }
+
+  private Optional<AuthenticatedSubject> apiKeySubject(ApiKeyRecord apiKey, boolean ohpm, String realmId) {
     if (OhpmLoginTokenPolicy.DOMAIN.equalsIgnoreCase(apiKey.domain())) {
       if (!ohpm || ohpmLoginTokens == null || !ohpmLoginTokens.valid(apiKey)) return Optional.empty();
     } else if (!activeApiKey(apiKey)) return Optional.empty();
@@ -564,7 +603,7 @@ public class SecurityAuthenticationService {
       return Optional.empty();
     }
     securityDao.markApiKeyUsed(apiKey.id(), LocalDateTime.now());
-    return Optional.of(toSubject(owner.get(), "api-key", storedExternalRoles(owner.get()), apiKey.id()));
+    return Optional.of(toSubject(owner.get(), realmId, storedExternalRoles(owner.get()), apiKey.id()));
   }
 
   /**

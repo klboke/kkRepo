@@ -1448,6 +1448,25 @@ class NexusSecurityRestControllerTest {
   }
 
   @Test
+  void raptureSessionCreateNeverOpensASessionForAnApiKeyOrUserToken() {
+    AuthenticatedSubject admin = subject("admin");
+    AuthenticatedSubject userToken = new AuthenticatedSubject(
+        "Local", "admin", "user-token", 30L, new PermissionSubject("Local", "admin", Set.of(), null));
+    StubAuthenticationService authentication = new StubAuthenticationService(
+        Optional.of(userToken),
+        Map.of(credentialsKey("admin", "old-password"), admin));
+    NexusRaptureSessionController controller = new NexusRaptureSessionController(authentication);
+
+    ResponseStatusException error = assertThrows(ResponseStatusException.class, () ->
+        controller.create(null, null, request(null)));
+    assertEquals(403, error.getStatusCode().value());
+    assertEquals(null, authentication.storedSession);
+
+    controller.create(base64("admin"), base64("old-password"), request(null));
+    assertEquals(admin, authentication.storedSession);
+  }
+
+  @Test
   void raptureSessionCreateRejectsInvalidFormParams() {
     StubAuthenticationService authentication = new StubAuthenticationService(
         Optional.empty(),

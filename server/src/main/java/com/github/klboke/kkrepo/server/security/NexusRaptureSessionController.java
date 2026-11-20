@@ -38,7 +38,9 @@ public class NexusRaptureSessionController {
       @RequestParam(required = false) String username,
       @RequestParam(required = false) String password,
       HttpServletRequest request) {
+    // API keys and user tokens are client credentials; only a password login opens a UI session.
     AuthenticatedSubject subject = currentSubject(request)
+        .filter(current -> current.apiKeyId() == null)
         .or(() -> authenticateParameters(username, password))
         .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN, "Authentication failed"));
     authenticationService.storeSessionSubject(request, subject);
