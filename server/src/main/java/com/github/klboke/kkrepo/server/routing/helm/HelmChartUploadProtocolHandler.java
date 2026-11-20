@@ -7,7 +7,7 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.server.helm.HelmHostedService;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
-import com.github.klboke.kkrepo.server.routing.RepositoryProtocolHandler;
+import com.github.klboke.kkrepo.server.routing.LegacyRepositoryProtocolHandler;
 import com.github.klboke.kkrepo.server.routing.RepositoryProtocolRequest;
 import com.github.klboke.kkrepo.server.routing.RepositoryProtocolRoute;
 import java.io.IOException;
@@ -19,7 +19,7 @@ import org.springframework.stereotype.Component;
 
 /** Exact multipart upload route, kept separate from the catch-all built-in protocol handler. */
 @Component
-public class HelmChartUploadProtocolHandler implements RepositoryProtocolHandler {
+public class HelmChartUploadProtocolHandler implements LegacyRepositoryProtocolHandler {
   private static final List<RepositoryProtocolRoute> ROUTES = List.of(
       RepositoryProtocolRoute.exactPath(
           RepositoryFormat.HELM,

@@ -11,12 +11,18 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.protocol.gitlfs.GitLfsException;
 import com.github.klboke.kkrepo.protocol.gitlfs.GitLfsProtocol;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
+import com.github.klboke.kkrepo.server.security.ClientAddress;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
+import jakarta.servlet.ReadListener;
+import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletRequestWrapper;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
+import java.io.BufferedReader;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -35,6 +41,8 @@ import org.springframework.stereotype.Component;
 public class GitLfsAccess {
   public static final String ANONYMOUS_ATTRIBUTE = GitLfsAccess.class.getName() + ".anonymous";
   public static final String BATCH_ATTRIBUTE = GitLfsAccess.class.getName() + ".batch";
+  /** Raw Batch body consumed for authorization, replayed to the protocol handler. */
+  public static final String BATCH_BODY_ATTRIBUTE = GitLfsAccess.class.getName() + ".batchBody";
   private final RepositoryDao repositories;
   private final SecurityAuthenticationService authentication;
   private final AccessDecisionService permissions;
@@ -62,8 +70,10 @@ public class GitLfsAccess {
       GitLfsProtocol.Batch batch = null;
       if (batchRoute) {
         requireJson(request.getContentType());
-        batch = GitLfsProtocol.parseBatch(request.getInputStream(), maxObjectBytes);
+        byte[] body = request.getInputStream().readNBytes(GitLfsProtocol.MAX_BODY_BYTES + 1);
+        batch = GitLfsProtocol.parseBatch(new ByteArrayInputStream(body), maxObjectBytes);
         request.setAttribute(BATCH_ATTRIBUTE, batch);
+        request.setAttribute(BATCH_BODY_ATTRIBUTE, body);
       }
       boolean read = batch == null
           ? "GET".equals(request.getMethod()) || "HEAD".equals(request.getMethod())
@@ -127,12 +137,35 @@ public class GitLfsAccess {
         .collect(Collectors.toUnmodifiableSet());
   }
 
-  public void requireUpload(HttpServletRequest request, String repository, String oid, String owner) {
-    AuthenticatedSubject fresh = authenticate(request)
+  /**
+   * The request to pass down the filter chain after {@link #authorize}: a Batch body consumed for
+   * authorization is replayed, bounded, so the protocol handler parses the same bytes.
+   */
+  public static HttpServletRequest authorizedRequest(HttpServletRequest request) {
+    if (!(request.getAttribute(BATCH_BODY_ATTRIBUTE) instanceof byte[] body)) return request;
+    return new HttpServletRequestWrapper(request) {
+      @Override public ServletInputStream getInputStream() { return new ReplayedBody(body); }
+      @Override public BufferedReader getReader() {
+        return new BufferedReader(new InputStreamReader(new ByteArrayInputStream(body), StandardCharsets.UTF_8));
+      }
+      @Override public int getContentLength() { return body.length; }
+      @Override public long getContentLengthLong() { return body.length; }
+    };
+  }
+
+  public void requireUpload(GitLfsCaller caller, String repository, String oid, String owner) {
+    AuthenticatedSubject fresh = caller.reauthenticate().get()
         .orElseThrow(() -> new GitLfsException(401, "Authentication required"));
     if (!subjectKey(fresh).equals(owner) || !allowed(fresh, repository, oid, PermissionAction.ADD)) {
       throw new GitLfsException(403, "Upload permission denied");
     }
+  }
+
+  /** Identity of the client of an authorized Git LFS request. */
+  public GitLfsCaller caller(HttpServletRequest request) {
+    return new GitLfsCaller(subject(request),
+        Boolean.TRUE.equals(request.getAttribute(ANONYMOUS_ATTRIBUTE)),
+        ClientAddress.from(request), () -> authenticate(request));
   }
 
   public static AuthenticatedSubject subject(HttpServletRequest request) {
@@ -157,5 +190,18 @@ public class GitLfsAccess {
           .isCompatibleWith(MediaType.parseMediaType(GitLfsProtocol.MEDIA_TYPE))) return;
     } catch (IllegalArgumentException ignored) { }
     throw new GitLfsException(415, "Expected " + GitLfsProtocol.MEDIA_TYPE);
+  }
+
+  private static final class ReplayedBody extends ServletInputStream {
+    private final ByteArrayInputStream input;
+
+    ReplayedBody(byte[] body) { this.input = new ByteArrayInputStream(body); }
+    @Override public int read() { return input.read(); }
+    @Override public int read(byte[] bytes, int offset, int length) { return input.read(bytes, offset, length); }
+    @Override public boolean isFinished() { return input.available() == 0; }
+    @Override public boolean isReady() { return true; }
+    @Override public void setReadListener(ReadListener listener) {
+      throw new UnsupportedOperationException("Replayed Git LFS Batch bodies are read synchronously");
+    }
   }
 }

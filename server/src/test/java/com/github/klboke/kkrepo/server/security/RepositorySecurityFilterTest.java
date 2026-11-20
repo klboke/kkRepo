@@ -30,7 +30,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.pypi.PypiHostedService;
 import com.github.klboke.kkrepo.server.pypi.PypiResponse;
 import com.github.klboke.kkrepo.server.routing.RepositoryProtocolDispatcher;
-import com.github.klboke.kkrepo.server.routing.RepositoryProtocolHandler;
+import com.github.klboke.kkrepo.server.routing.LegacyRepositoryProtocolHandler;
 import com.github.klboke.kkrepo.server.routing.RepositoryProtocolRequest;
 import com.github.klboke.kkrepo.server.routing.RepositoryProtocolRoute;
 import com.github.klboke.kkrepo.server.support.dao.AssetDaoAdapter;
@@ -692,7 +692,7 @@ class RepositorySecurityFilterTest {
           RepositorySecurityFilter filter = filter(
               new StubAuthenticationService(Optional.of(subject("alice"))), decisions, repositories, false);
           var handler = mock(
-              RepositoryProtocolHandler.class);
+              LegacyRepositoryProtocolHandler.class);
           when(handler.routes()).thenReturn(List.of(
               RepositoryProtocolRoute.anyPath(
                   RepositoryFormat.GO, type, HttpMethod.valueOf(method), 0)));
