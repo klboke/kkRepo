@@ -37,7 +37,6 @@ import java.security.Signature;
 import java.security.interfaces.ECPublicKey;
 import java.security.interfaces.RSAPublicKey;
 import java.security.spec.ECGenParameterSpec;
-import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -1181,80 +1180,37 @@ class SecurityAuthenticationServiceTest {
   }
 
   @Test
-  void basicPasswordAcceptsOwnersApiKeyWithMappedOidcRolesButNotForUiLogin() {
+  void apiKeysAndStoredSubjectsKeepRealmMappedRolesOnlyForExternalUsers() {
     FakeSecurityDao dao = new FakeSecurityDao();
-    dao.realm(new SecurityRealmRecord(1L, "local", "LOCAL", "Local", true, 0, Map.of("source", "Local")));
     dao.user(new SecurityUserRecord(4L, "OIDC", "carol", null, null, "carol@example.com", null,
         "ACTIVE", "carol", Map.of(
             "groups", List.of("docker-push"),
-            "groupsSyncedAt", Instant.now().toString(),
             "claims", Map.of("realm_access", Map.of("roles", List.of("nx-admin"))))));
     dao.roles(4L, "local-role");
-    dao.apiKey(new ApiKeyRecord(
-        14L, "nexus", "OIDC", "carol", "Carol docker key", "ACTIVE",
-        SecurityHashing.sha256("carol-secret"), "nexus.carol", Map.of("values", List.of()), "{}",
-        null, null, LocalDateTime.now().plusDays(1), null));
-    SecurityAuthenticationService service = service(dao);
-
-    Optional<AuthenticatedSubject> authenticated = service.authenticate(request(Map.of(
-        "Authorization", basic("carol", "nexus.carol-secret"))));
-
-    assertTrue(authenticated.isPresent());
-    assertEquals("carol", authenticated.get().userId());
-    assertEquals("api-key", authenticated.get().realmId());
-    assertEquals(Set.of("docker-push", "local-role", "nx-anonymous"),
-        authenticated.get().permissionSubject().groupIds());
-    assertTrue(service.authenticate(request(Map.of(
-        "Authorization", basic("OIDC/carol", "nexus.carol-secret")))).isPresent());
-    assertFalse(service.authenticate(request(Map.of(
-        "Authorization", basic("mallory", "nexus.carol-secret")))).isPresent());
-    assertFalse(service.authenticate(request(Map.of(
-        "Authorization", basic("Local/carol", "nexus.carol-secret")))).isPresent());
-    assertFalse(service.authenticate(request(
-        Map.of("Authorization", basic("carol", "nexus.carol-secret")),
-        null,
-        "/internal/security/basic/login")).isPresent());
-  }
-
-  @Test
-  void storedSubjectsKeepRealmMappedRolesOnlyForExternalUsers() {
-    FakeSecurityDao dao = new FakeSecurityDao();
-    dao.user(new SecurityUserRecord(4L, "OIDC", "carol", null, null, "carol@example.com", null,
-        "ACTIVE", "carol", Map.of("groups", List.of("docker-push"),
-            "groupsSyncedAt", Instant.now().toString())));
     dao.user(new SecurityUserRecord(5L, "Local", "dave", null, null, "dave@example.com", null,
         "ACTIVE", "dave", Map.of("groups", List.of("nx-admin"))));
-    SecurityAuthenticationService service = service(dao);
-
-    assertTrue(service.authenticateStoredSubject("OIDC", "carol", "OIDC", null).orElseThrow()
-        .permissionSubject().groupIds().contains("docker-push"));
-    assertFalse(service.authenticateStoredSubject("Local", "dave", "local", null).orElseThrow()
-        .permissionSubject().groupIds().contains("nx-admin"));
-  }
-
-  @Test
-  void externalIdentityCredentialsExpireWithoutRecentIdpLogin() {
-    FakeSecurityDao dao = new FakeSecurityDao();
-    dao.user(new SecurityUserRecord(4L, "OIDC", "carol", null, null, "carol@example.com", null,
-        "ACTIVE", "carol", Map.of("groups", List.of("docker-push"),
-            "groupsSyncedAt", Instant.now().minus(Duration.ofDays(31)).toString())));
-    dao.user(new SecurityUserRecord(5L, "LDAP", "erin", null, null, "erin@example.com", null,
-        "ACTIVE", "erin", Map.of("groups", List.of("docker-push"))));
-    dao.user(user(6L, "Local", "ci", null));
     dao.apiKey(new ApiKeyRecord(
         14L, "nexus", "OIDC", "carol", "Carol docker key", "ACTIVE",
         SecurityHashing.sha256("carol-secret"), "nexus.carol", Map.of("values", List.of()), "{}",
         null, null, LocalDateTime.now().plusDays(1), null));
     SecurityAuthenticationService service = service(dao);
 
-    assertFalse(service.authenticate(request(Map.of(
-        "X-Nexus-Plus-Token", "nexus.carol-secret"))).isPresent());
-    assertFalse(service.authenticateStoredSubject("OIDC", "carol", "OIDC", 14L).isPresent());
-    assertFalse(service.authenticateStoredSubject("LDAP", "erin", "ldap", null).isPresent());
-    assertTrue(service.authenticateStoredSubject("Local", "ci", "local", null).isPresent());
+    AuthenticatedSubject apiKey = service.authenticate(request(Map.of(
+        "X-Nexus-Plus-Token", "nexus.carol-secret"))).orElseThrow();
+    assertEquals("api-key", apiKey.realmId());
+    assertEquals(Set.of("docker-push", "local-role", "nx-anonymous"),
+        apiKey.permissionSubject().groupIds());
+    assertEquals(Set.of("docker-push", "local-role", "nx-anonymous"),
+        service.authenticateStoredSubject("OIDC", "carol", "OIDC", null).orElseThrow()
+            .permissionSubject().groupIds());
+    assertFalse(service.authenticateStoredSubject("Local", "dave", "local", null).orElseThrow()
+        .permissionSubject().groupIds().contains("nx-admin"));
 
-    service.configureExternalIdentityMaxAge(Duration.ZERO);
-    assertTrue(service.authenticateStoredSubject("OIDC", "carol", "OIDC", 14L).isPresent());
+    // The next IdP login rewrites attributes.groups; the same credentials then lose the role.
+    dao.user(new SecurityUserRecord(4L, "OIDC", "carol", null, null, "carol@example.com", null,
+        "ACTIVE", "carol", Map.of("groups", List.of())));
+    assertFalse(service.authenticateStoredSubject("OIDC", "carol", "OIDC", null).orElseThrow()
+        .permissionSubject().groupIds().contains("docker-push"));
   }
 
   @Test

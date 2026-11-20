@@ -35,6 +35,8 @@ Supported authentication sources include:
 
 Authentication order and exact behavior depend on the request type. Protocol clients commonly use Basic auth, API keys, or protocol-native token flows. Browser users use sessions after login.
 
+API keys and Docker/Conan bearer tokens of LDAP and OIDC users carry the roles the realm mapped at the user's last login, so they grant the same repository access as that user's browser session. A group removed in the directory or IdP stops granting access after the user's next login through that realm. Password logins are served from the Basic credential cache for up to `kkrepo.cache.basic-auth.ttl-seconds`, so LDAP picks up the change on the first login after that.
+
 ## Shared Database State
 
 Security state is stored in the selected MySQL or PostgreSQL database:

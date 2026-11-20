@@ -35,6 +35,8 @@ kkrepo 安全模型目标：
 
 认证顺序和具体行为取决于请求类型。协议客户端通常使用 Basic auth、API key 或协议原生 token flow。浏览器用户登录后使用 session。
 
+LDAP 和 OIDC 用户的 API key 以及 Docker/Conan bearer token 会带上该 realm 在用户最近一次登录时映射的角色，因此与该用户浏览器 session 的仓库权限一致。在目录或 IdP 中移除的组，会在用户下一次通过该 realm 登录后失效。密码登录会在 `kkrepo.cache.basic-auth.ttl-seconds` 内使用 Basic 凭据缓存，因此 LDAP 在缓存过期后的首次登录时同步变更。
+
 ## 共享数据库状态
 
 安全状态存储在所选 MySQL 或 PostgreSQL 数据库：
