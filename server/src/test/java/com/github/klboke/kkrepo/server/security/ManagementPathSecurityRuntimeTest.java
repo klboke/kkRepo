@@ -4,9 +4,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
 import com.github.klboke.kkrepo.server.KkRepoApplication;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AdminBootstrapCommand;
+import com.github.klboke.kkrepo.server.security.SecurityPayloads.RoleCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.UserCommand;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -18,6 +20,7 @@ import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -122,6 +125,30 @@ class ManagementPathSecurityRuntimeTest {
     assertEquals(403, send("PUT", path, null, "ChangedPassword123!", "text/plain").statusCode());
     assertEquals(403, send("PUT", path, "reader", "ChangedPassword123!", "text/plain").statusCode());
     assertEquals(200, send("GET", "/service/rest/v1/security/users", "password-target", "", null).statusCode());
+  }
+
+  @Test
+  void realmListReturnsPublicMetadataToSettingsReadersAndAdministrators() throws Exception {
+    security.saveRole(new RoleCommand("realm-reader", "Local", "Realm reader", null, false,
+        List.of("nx-settings-read"), List.of(), Map.of()));
+    security.saveUser(new UserCommand("Local", "settings-reader", "Settings", "Reader", "settings@example.com",
+        PASSWORD, null, "active", null, List.of("realm-reader"), Map.of()));
+    var mapper = new ObjectMapper();
+    String marker = UUID.randomUUID().toString();
+    var configured = send("PUT", "/internal/security/ldap", "admin",
+        mapper.writeValueAsString(Map.of("enabled", false, "authPassword", marker)), "application/json");
+    assertEquals(200, configured.statusCode());
+    assertEquals("********", mapper.readTree(configured.body()).path("authPassword").asText());
+    assertEquals(403, send("GET", "/internal/security/ldap", "settings-reader", "", null).statusCode());
+
+    for (String user : List.of("settings-reader", "admin")) {
+      var realms = send("GET", "/internal/security/realms", user, "", null);
+      assertEquals(200, realms.statusCode());
+      assertFalse(realms.body().contains(marker));
+      var ldap = mapper.readTree(realms.body()).valueStream()
+          .filter(realm -> realm.path("realmId").asText().equals("ldap")).findFirst().orElseThrow();
+      assertEquals(mapper.valueToTree(Map.of("source", "LDAP", "nexusRealm", "LdapRealm")), ldap.path("attributes"));
+    }
   }
 
   @Test

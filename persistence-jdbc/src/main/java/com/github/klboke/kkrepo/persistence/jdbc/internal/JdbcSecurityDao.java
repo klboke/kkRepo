@@ -387,6 +387,13 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
         .findFirst();
   }
 
+  @Override
+  public Optional<SecurityRealmRecord> findRealmForUpdate(String realmId) {
+    return jdbcTemplate.query(
+        "SELECT * FROM security_realm WHERE realm_id = ? FOR UPDATE", realmRowMapper, realmId)
+        .stream().findFirst();
+  }
+
   public void upsertRealm(SecurityRealmRecord record) {
     Object attributes = jsonColumns.parameter(encryptRealmAttributes(record.attributes()));
     JdbcUpserts.updateThenInsert(

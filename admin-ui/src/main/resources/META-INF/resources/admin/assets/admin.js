@@ -4545,8 +4545,7 @@ async function saveSecurityRealms() {
       type: realm?.type,
       name: realm?.name,
       enabled: row.dataset.realmId === "local" || row.querySelector(".security-realm-enabled").checked,
-      priority: Number(row.querySelector(".security-realm-priority").value || 0),
-      attributes: realm?.attributes || {}
+      priority: Number(row.querySelector(".security-realm-priority").value || 0)
     };
   });
   try {

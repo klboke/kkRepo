@@ -41,6 +41,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.PubUploadSessionRecor
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryDataMigrationAssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityPrivilegeRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRealmRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRoleRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
@@ -75,6 +76,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutionException;
@@ -219,6 +221,29 @@ public abstract class PersistenceApiContract {
       repositories.deleteById(repository);
       rules.delete(rule);
     }
+  }
+
+  @Test
+  void realmUpdateReadsCredentialsRotatedAfterItsTransactionSnapshot() {
+    var security = stores().security();
+    String realm = "ldap-rotation-contract";
+    security.upsertRealm(new SecurityRealmRecord(null, realm, "LDAP", "LDAP", true, 10,
+        Map.of("bindPassword", "original")));
+    inTransaction(() -> {
+      var snapshot = security.findRealm(realm).orElseThrow();
+      assertEquals("original", snapshot.attributes().get("bindPassword"));
+      CompletableFuture.runAsync(() -> security.upsertRealm(
+          new SecurityRealmRecord(snapshot.id(), realm, "LDAP", "LDAP", true, 10, Map.of("bindPassword", "rotated"))))
+          .orTimeout(10, java.util.concurrent.TimeUnit.SECONDS).join();
+
+      var current = security.findRealmForUpdate(realm).orElseThrow();
+      security.upsertRealm(new SecurityRealmRecord(current.id(), realm, "LDAP", "LDAP", true, 20,
+          current.attributes()));
+      return null;
+    });
+    var updated = security.findRealm(realm).orElseThrow();
+    assertEquals("rotated", updated.attributes().get("bindPassword"));
+    assertEquals(20, updated.priority());
   }
 
   @Test
