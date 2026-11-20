@@ -42,3 +42,6 @@ The OHPM icon is the official registry favicon from https://ohpm.openharmony.cn/
 (retrieved 2026-11-06). The source is a 200 × 200 RGBA PNG despite its `.ico` URL.
 It is vendored unchanged as `ohpm.png`, with its original blue-to-green gradient and aspect ratio.
 OHPM / OpenHarmony marks belong to their respective owners.
+
+The VS Code / Open VSX code-brackets compatibility mark is an original mark drawn for kkRepo. It
+is not an official Visual Studio Code, Eclipse or Open VSX trademark asset.
