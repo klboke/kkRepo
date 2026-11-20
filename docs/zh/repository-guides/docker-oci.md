@@ -93,6 +93,8 @@ docker push nexus.example.com/docker-hosted/team/alpine:3.20
 docker pull nexus.example.com/docker-group/team/alpine:3.20
 ```
 
+没有本地或 LDAP 密码的用户（例如仅使用 OIDC 登录的用户）可以把自己的 API key 作为密码：`docker login -u <user-id> nexus.example.com`，然后输入完整 API key。用户名必须是 key 的所有者（也可以写成 `<source>/<user-id>`）。所有发送 HTTP Basic 凭据的客户端都适用。API key 继承 OIDC/LDAP realm 在该用户最近一次登录时映射的角色，且不能用于打开 Admin UI session。由于 kkRepo 无法感知 IdP 中账号被禁用，OIDC/LDAP 用户超过 `kkrepo.security.external-identity.max-age`（默认 `30d`，`0` 表示关闭）未通过 IdP 登录时，其 API key 会失效，重新登录即可恢复。升级后，每个 OIDC/LDAP 用户需先登录一次，其 API key 才能使用。本地服务账号不受影响，更适合用于 CI。
+
 只向 hosted push；即使调用者已认证，proxy 和 group 仍是读取入口。
 
 

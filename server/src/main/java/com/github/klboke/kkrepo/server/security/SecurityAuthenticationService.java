@@ -25,6 +25,7 @@ import java.security.spec.ECParameterSpec;
 import java.security.spec.ECPoint;
 import java.security.spec.ECPublicKeySpec;
 import java.security.spec.RSAPublicKeySpec;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -64,6 +65,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 public class SecurityAuthenticationService {
   private static final Logger log = LoggerFactory.getLogger(SecurityAuthenticationService.class);
   private static final String DEFAULT_SOURCE = "Local";
+  private static final String GROUPS_SYNCED_AT = "groupsSyncedAt";
   private static final String DEFAULT_ANONYMOUS_USER_ID = "anonymous";
   private static final String DEFAULT_ANONYMOUS_REALM_NAME = "NexusAuthorizingRealm";
   private static final String DEFAULT_AUTHENTICATED_ROLE_ID = "nx-anonymous";
@@ -88,10 +90,20 @@ public class SecurityAuthenticationService {
   private final SecurityCatalogCache securityCatalogCache;
   private final TransactionTemplate authenticationTransactions;
   private OhpmLoginTokenPolicy ohpmLoginTokens;
+  private Duration externalIdentityMaxAge = Duration.ofDays(30);
 
   @Autowired
   void configureOhpmLoginTokens(OhpmLoginTokenPolicy policy) {
     this.ohpmLoginTokens = policy;
+  }
+
+  @Autowired
+  void configureExternalIdentityMaxAge(
+      @Value("${kkrepo.security.external-identity.max-age:30d}") Duration maxAge) {
+    // An empty KKREPO_EXTERNAL_IDENTITY_MAX_AGE converts to null; keep the default instead of failing open.
+    if (maxAge != null) {
+      this.externalIdentityMaxAge = maxAge;
+    }
   }
 
   public SecurityAuthenticationService(
@@ -218,9 +230,31 @@ public class SecurityAuthenticationService {
     if (basicAuthSuppressed(request) && !isBasicLoginRequest(request)) {
       return Optional.empty();
     }
-    return basicCredentials(request).flatMap(credentials ->
-        fresh ? authenticateBasicUncached(credentials.username(), credentials.password())
-            : authenticateBasic(credentials.username(), credentials.password()));
+    return basicCredentials(request).flatMap(credentials -> {
+      Optional<AuthenticatedSubject> basic = fresh
+          ? authenticateBasicUncached(credentials.username(), credentials.password())
+          : authenticateBasic(credentials.username(), credentials.password());
+      // Like Nexus user tokens, API keys work as Basic passwords for clients but never open a UI session.
+      return basic.isPresent() || isBasicLoginRequest(request)
+          ? basic
+          : authenticateBasicApiKey(credentials.username(), credentials.password(), fresh);
+    });
+  }
+
+  /**
+   * Lets clients that only speak HTTP Basic (docker login, Maven, pip, ...) present an API key as
+   * the password, so OIDC-only users need no local password. The username must name the key owner.
+   */
+  private Optional<AuthenticatedSubject> authenticateBasicApiKey(
+      String username, String password, boolean fresh) {
+    LoginName login = LoginName.parse(username);
+    Supplier<Optional<AuthenticatedSubject>> loader = () ->
+        resolveApiKey(ApiKeyTokenCandidate.fromPresentedToken(password))
+            .filter(subject -> login.userId().equals(subject.userId())
+                && (login.source() == null || login.source().equals(subject.source())));
+    return fresh || apiKeyAuthCache == null
+        ? loader.get()
+        : apiKeyAuthCache.find("basic:" + username + ":" + password, loader);
   }
 
   private <T> T inAuthenticationTransaction(Supplier<T> callback) {
@@ -391,7 +425,8 @@ public class SecurityAuthenticationService {
     }
     return securityDao.findUser(source, userId)
         .filter(this::activeUser)
-        .map(user -> toSubject(user, realmId, null, apiKeyId));
+        .filter(this::externalIdentityFresh)
+        .map(user -> toSubject(user, realmId, storedExternalRoles(user), apiKeyId));
   }
 
   public Optional<AuthenticatedSubject> authenticateAnonymous() {
@@ -563,8 +598,49 @@ public class SecurityAuthenticationService {
       securityDao.deleteApiKeysForOwner(apiKey.ownerSource(), apiKey.ownerUserId());
       return Optional.empty();
     }
+    if (!externalIdentityFresh(owner.get())) {
+      return Optional.empty();
+    }
     securityDao.markApiKeyUsed(apiKey.id(), LocalDateTime.now());
-    return Optional.of(toSubject(owner.get(), "api-key", null, apiKey.id()));
+    return Optional.of(toSubject(owner.get(), "api-key", storedExternalRoles(owner.get()), apiKey.id()));
+  }
+
+  /**
+   * Roles an OIDC/LDAP realm mapped for this user at their last login (persisted as attributes.groups
+   * on every replica), so API keys and stored bearer tokens keep the grants a browser session has.
+   * Raw IdP claims are deliberately ignored: only realm-mapped role IDs may grant access.
+   */
+  /**
+   * kkRepo cannot see an OIDC/LDAP account being disabled or losing groups. Credentials that
+   * bypass the IdP (API keys, stored bearer tokens) therefore stop working once the last IdP
+   * login is older than the max age; a missing stamp (no login since upgrade) fails closed.
+   */
+  private boolean externalIdentityFresh(SecurityUserRecord user) {
+    if (DEFAULT_SOURCE.equals(user.source())
+        || externalIdentityMaxAge.isZero() || externalIdentityMaxAge.isNegative()) {
+      return true;
+    }
+    Object syncedAt = user.attributes() == null ? null : user.attributes().get(GROUPS_SYNCED_AT);
+    try {
+      return syncedAt != null
+          && Instant.parse(String.valueOf(syncedAt)).plus(externalIdentityMaxAge).isAfter(Instant.now());
+    } catch (java.time.format.DateTimeParseException e) {
+      return false;
+    }
+  }
+
+  private static Set<String> storedExternalRoles(SecurityUserRecord user) {
+    if (DEFAULT_SOURCE.equals(user.source()) || user.attributes() == null
+        || !(user.attributes().get("groups") instanceof Collection<?> groups)) {
+      return null;
+    }
+    Set<String> roles = new LinkedHashSet<>();
+    for (Object group : groups) {
+      if (group != null && !String.valueOf(group).isBlank()) {
+        roles.add(String.valueOf(group).trim());
+      }
+    }
+    return roles;
   }
 
   private Optional<ApiKeyRecord> findApiKey(List<ApiKeyTokenCandidate> candidates) {
@@ -672,7 +748,7 @@ public class SecurityAuthenticationService {
         profile.lastName(),
         profile.email(),
         profile.externalId(),
-        Map.of("claims", profile.claims(), "groups", profile.roles()));
+        Map.of("claims", profile.claims(), "groups", profile.roles(), GROUPS_SYNCED_AT, Instant.now().toString()));
     return toSubject(user, realm.realmId(), profile.roles(), null);
   }
 
@@ -748,7 +824,7 @@ public class SecurityAuthenticationService {
           profile.lastName(),
           profile.email(),
           profile.externalId(),
-          Map.of("dn", profile.dn(), "groups", externalRoles));
+          Map.of("dn", profile.dn(), "groups", externalRoles, GROUPS_SYNCED_AT, Instant.now().toString()));
       return Optional.of(toSubject(user, realm.realmId(), externalRoles, null));
     } catch (AuthenticationException e) {
       return Optional.empty();

@@ -105,6 +105,8 @@ docker pull nexus.example.com/docker-group/team/alpine:3.20
 
 Push only to hosted. Proxy and group are read endpoints even when the caller is authenticated.
 
+Users without a local or LDAP password, such as OIDC-only users, can log in with one of their API keys as the password: `docker login -u <user-id> nexus.example.com`, then enter the full API key. The username must be the key owner (`<source>/<user-id>` also works). The same works for any client that sends HTTP Basic credentials. API keys keep the roles the OIDC/LDAP realm mapped at the user's last login, and they cannot open an Admin UI session. Because kkRepo cannot see an account being disabled in the IdP, API keys of OIDC/LDAP users stop working when the user has not logged in through the IdP for `kkrepo.security.external-identity.max-age` (default `30d`, `0` disables); logging in again restores them. After upgrading, each OIDC/LDAP user must log in once before their API keys work. Local service accounts are not affected and are the better choice for CI.
+
 
 Image references copied from Browse contain only the registry host, optional port, repository
 routing path, image, and tag or digest. Do not include `http://`, `https://`, or the Registry API
