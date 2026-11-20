@@ -4,8 +4,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
+import com.github.klboke.kkrepo.server.BlobStoresController;
+import com.github.klboke.kkrepo.server.BlobStoresController.BlobStoreRequest;
 import com.github.klboke.kkrepo.server.KkRepoApplication;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CreateCommand;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.HostedSettings;
+import com.github.klboke.kkrepo.server.repositories.RepositoryService;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AdminBootstrapCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.UserCommand;
 import java.net.URI;
@@ -79,6 +85,29 @@ class ManagementPathSecurityRuntimeTest {
       context.close();
     }
     DATABASE.stop();
+  }
+
+  @Test
+  void componentUploadPersistsContentOnlyForAnAuthorizedWriter() throws Exception {
+    context.getBean(BlobStoresController.class).create(new BlobStoreRequest(
+        "upload-files", "file", "file", null, null, null, null, storage.resolve("uploads").toString(),
+        null, null, null));
+    var repository = context.getBean(RepositoryService.class).create(new CreateCommand(
+        "upload-permissions", "raw-hosted", true, "upload-files", true,
+        new HostedSettings("ALLOW_ONCE", null, null), null, null, null, null, null));
+    var assets = context.getBean(AssetDao.class);
+    String path = "/service/rest/v1/components?repository=" + repository.name();
+    String type = "multipart/form-data; boundary=upload-check";
+    String body = "--upload-check\r\n"
+        + "Content-Disposition: form-data; name=\"raw.asset1\"; filename=\"sample.txt\"\r\n"
+        + "Content-Type: text/plain\r\n\r\nsample content\r\n--upload-check--\r\n";
+
+    assertEquals(401, send("POST", path, null, body, type).statusCode());
+    assertEquals(403, send("POST", path, "reader", body, type).statusCode());
+    assertTrue(assets.findAssetByPath(repository.id(), "sample.txt").isEmpty());
+    assertEquals(204, send("POST", path, "admin", body, type).statusCode());
+    assertEquals("sample content", send("GET", "/repository/" + repository.name() + "/sample.txt",
+        "admin", "", null).body());
   }
 
   @ParameterizedTest
