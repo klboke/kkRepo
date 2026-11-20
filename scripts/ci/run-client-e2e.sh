@@ -1963,7 +1963,8 @@ LDIF
   fi
 
   run_logged docker-ldap-push-after-revoke-tag docker tag alpine:3.20 "$ref-revoked"
-  if run_logged docker-ldap-push-after-revoke bash -lc "$docker_env docker push '$ref-revoked'"; then
+  # The probe above proved the denial; containerd 2.x may hang instead of failing on it, hence timeout.
+  if run_logged docker-ldap-push-after-revoke bash -lc "$docker_env timeout 120 docker push '$ref-revoked'"; then
     log "push succeeded after the LDAP group was removed"
     return 1
   fi
