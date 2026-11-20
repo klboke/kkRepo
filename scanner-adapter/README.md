@@ -11,6 +11,13 @@ Security boundaries:
 - artifact requests are streamed to a per-request directory, SHA-256 and size are checked before
   scanning, and archive paths, special files, expansion, entry count, size, and nesting are
   bounded;
+- TAR symlinks/hardlinks and CPIO symlinks are accepted only when their relative targets stay
+  inside the archive root. Symlink targets resolve from the entry's parent; TAR hardlink targets
+  resolve from the archive root. The guard never follows or materializes links, and links do not
+  consume nested-archive depth even when their names end in `.tar.gz`. CPIO target bodies are
+  capped at 16 KiB, decoded as UTF-8, and counted against the shared expansion budget. Absolute
+  and escaping targets, ZIP symlinks, devices, FIFOs, and sockets remain rejected outside the
+  existing OCI layer policy;
 - binaries are invoked directly without a shell, with a minimal environment, bounded output,
   timeout, forced process termination, and cleanup;
 - OCI targets use an exact manifest digest and the request-scoped registry token only;
@@ -44,3 +51,9 @@ Use `docker-compose.quickstart-postgresql.yml` in the same way for PostgreSQL.
 
 For end-to-end deployment, repository activation, policy, waiver, monitoring, and troubleshooting
 instructions, see the [Artifact Scanning Guide](../docs/en/artifact-scanning-guide.md).
+
+The pinned Syft 1.49.0 [file-source reader](https://github.com/anchore/syft/blob/v1.49.0/syft/source/filesource/file_source.go)
+copies archive entry bodies into regular files; it does not create filesystem links or dereference
+TAR link targets. Its RPM/DEB catalogers read package metadata without installing packages.
+Preserve this boundary when updating the scanner binaries. Archive link validation is request-local
+and requires no shared state, cache, or cross-replica coordination.

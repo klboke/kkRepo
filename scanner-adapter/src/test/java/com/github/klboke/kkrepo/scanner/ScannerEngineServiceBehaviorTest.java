@@ -29,12 +29,16 @@ import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 
 class ScannerEngineServiceBehaviorTest {
@@ -83,6 +87,42 @@ class ScannerEngineServiceBehaviorTest {
     assertFalse(command.getValue().stream()
         .anyMatch(value -> value.startsWith("cyclonedx-json=")));
     assertEquals("sbom.cdx.json", scannerOutput.getValue().getFileName().toString());
+  }
+
+  @ParameterizedTest
+  @EnumSource(value = ScannerArtifactType.class, names = {"TAR_GZ", "DEB", "RPM"})
+  void catalogsPackagesWithLinksThroughTheRealArchiveGuard(ScannerArtifactType type)
+      throws Exception {
+    byte[] input = switch (type) {
+      case TAR_GZ -> ArchiveLinkFixtures.galaxy();
+      case DEB -> ArchiveLinkFixtures.deb();
+      case RPM -> ArchiveLinkFixtures.rpm();
+      default -> throw new IllegalArgumentException("Unexpected fixture type");
+    };
+    String checksum = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(input));
+    Fixture fixture = new Fixture(temporaryDirectory, new ArchiveGuard());
+    when(fixture.scannerInput.copy(any(), any(), anyString(), anyLong(), any(), any()))
+        .thenAnswer(invocation -> new ScannerInput().copy(
+            invocation.getArgument(0), invocation.getArgument(1), invocation.getArgument(2),
+            invocation.getArgument(3), invocation.getArgument(4), invocation.getArgument(5)));
+
+    CatalogResponse response = fixture.engine.catalog(
+        new ByteArrayInputStream(input), checksum, input.length, type, limits());
+
+    assertEquals(ScanCompleteness.COMPLETE, response.completeness());
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<String>> command = ArgumentCaptor.forClass(List.class);
+    verify(fixture.processes).run(command.capture(), any(), any(), any(), any());
+    assertEquals("scan", command.getValue().get(1));
+    assertTrue(command.getValue().get(2).endsWith(type.safeFilename()));
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<Map<String, Object>> summary = ArgumentCaptor.forClass(Map.class);
+    verify(fixture.documents).catalog(
+        any(), eq(checksum), eq("1.2"), anyString(), summary.capture());
+    assertTrue(((Number) summary.getValue().get("archiveEntries")).intValue() > 0);
+    try (var files = Files.list(temporaryDirectory)) {
+      assertFalse(files.anyMatch(path -> path.getFileName().toString().startsWith("catalog-")));
+    }
   }
 
   @Test
@@ -468,7 +508,7 @@ class ScannerEngineServiceBehaviorTest {
     final ScannerAdapterProperties properties = new ScannerAdapterProperties();
     final BoundedProcessRunner processes = mock(BoundedProcessRunner.class);
     final ScannerInput scannerInput = mock(ScannerInput.class);
-    final ArchiveGuard archiveGuard = mock(ArchiveGuard.class);
+    final ArchiveGuard archiveGuard;
     final CondaPackageCataloger condaPackages = mock(CondaPackageCataloger.class);
     final AlpinePackageCataloger alpinePackages = mock(AlpinePackageCataloger.class);
     final ConanMultipartInput conanMultipart = mock(ConanMultipartInput.class);
@@ -481,6 +521,11 @@ class ScannerEngineServiceBehaviorTest {
     byte[] syftOutput = "{\"bomFormat\":\"CycloneDX\"}".getBytes();
 
     Fixture(Path workDirectory) {
+      this(workDirectory, mock(ArchiveGuard.class));
+    }
+
+    Fixture(Path workDirectory, ArchiveGuard archiveGuard) {
+      this.archiveGuard = archiveGuard;
       properties.setWorkDirectory(workDirectory);
       properties.setVulnerabilityDatabaseDirectory(workDirectory.resolve("database"));
       properties.setMaxInputBytes(4096);
