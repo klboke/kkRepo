@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.scanner;
 
+import com.github.klboke.kkrepo.security.scan.ScannerContract;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.ResourceLimits;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
@@ -163,7 +164,7 @@ public class ScannerCapacityLimiter {
   private ScannerRequestException busy() {
     rejected.increment();
     return new ScannerRequestException(
-        "SCANNER_CAPACITY_EXHAUSTED",
+        ScannerContract.CAPACITY_EXHAUSTED,
         "Scanner execution capacity is temporarily exhausted",
         429,
         true);

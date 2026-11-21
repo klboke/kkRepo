@@ -22,6 +22,7 @@ class MySqlPersistenceApiContractTest extends PersistenceApiContract {
       "securityScanningIsIdempotentFencedAndProtectsImmutableDocuments",
       "securityScanningKeepsNewestScannerSnapshotWhenRematchesCompleteOutOfOrder",
       "securityScanningReconcilesWritesThatMissedAnAlreadyAdvancedEventCursor",
+      "securityScanningDefersCapacityWithoutSpendingAttempts",
       "securityScanningRecoversFinalAttemptsAndCleansUnreferencedHistory");
 
   private final Backend backend = new Backend();

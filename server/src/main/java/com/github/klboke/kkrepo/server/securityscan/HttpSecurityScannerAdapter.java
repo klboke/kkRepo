@@ -477,14 +477,17 @@ public class HttpSecurityScannerAdapter implements Adapter {
     requireRunId(runId);
     FailoverDeadline deadline = new FailoverDeadline(timeoutSeconds);
     int preferred = routeIndex(runId, baseUris.size());
-    ScannerAdapterException primaryFailure = null;
+    ScannerAdapterException reportedFailure = null;
     for (int offset = 0; offset < baseUris.size(); offset++) {
       URI baseUri = baseUris.get((preferred + offset) % baseUris.size());
       AttemptBudget budget;
       try {
         budget = deadline.nextAttempt();
       } catch (ScannerAdapterException timeout) {
-        if (primaryFailure != null) timeout.addSuppressed(primaryFailure);
+        // A deadline reached before contacting another endpoint cannot turn a confirmed
+        // admission rejection into an execution failure.
+        if (reportedFailure instanceof ScannerCapacityException capacity) throw capacity;
+        if (reportedFailure != null) timeout.addSuppressed(reportedFailure);
         throw timeout;
       }
       try {
@@ -493,18 +496,27 @@ public class HttpSecurityScannerAdapter implements Adapter {
         if (!failure.retryable() || "SCANNER_INTERRUPTED".equals(failure.code())) {
           throw failure;
         }
-        cancelAfterAmbiguousFailure(baseUri, runId, failure, deadline);
-        if (primaryFailure == null) {
-          primaryFailure = failure;
+        if (!(failure instanceof ScannerCapacityException)) {
+          cancelAfterAmbiguousFailure(baseUri, runId, failure, deadline);
+        }
+        if (reportedFailure == null) {
+          reportedFailure = failure;
+        } else if (reportedFailure instanceof ScannerCapacityException previousCapacity
+            && (!(failure instanceof ScannerCapacityException capacity)
+                || capacity.retryAfterSeconds() > previousCapacity.retryAfterSeconds())) {
+          // Preserve an ordinary failure if any replica may have admitted the scan.
+          // If all rejected admission, honor the longest advertised delay.
+          failure.addSuppressed(reportedFailure);
+          reportedFailure = failure;
         } else {
-          primaryFailure.addSuppressed(failure);
+          reportedFailure.addSuppressed(failure);
         }
       }
     }
-    throw primaryFailure == null
+    throw reportedFailure == null
         ? new ScannerAdapterException(
             "SCANNER_UNAVAILABLE", "No security scanner adapter endpoint is available", true)
-        : primaryFailure;
+        : reportedFailure;
   }
 
   /**
@@ -630,6 +642,10 @@ public class HttpSecurityScannerAdapter implements Adapter {
                   && ERROR_CODE.matcher(payload.code()).matches()
               ? payload.code()
               : "SCANNER_HTTP_" + status;
+          if (status == 429 && ScannerContract.CAPACITY_EXHAUSTED.equals(code)) {
+            throw new ScannerCapacityException(capacityRetryAfterSeconds(
+                response.headers().firstValue("Retry-After").orElse("")));
+          }
           boolean retryable = status == 429 || status == 502 || status == 503 || status == 504
               || (payload != null && payload.retryable());
           throw new ScannerAdapterException(
@@ -655,6 +671,19 @@ public class HttpSecurityScannerAdapter implements Adapter {
       throw new ScannerAdapterException(
           "SCANNER_IO", "Scanner adapter is unavailable", true, e);
     }
+  }
+
+  private static int capacityRetryAfterSeconds(String header) {
+    // The scanner contract emits delay-seconds. Bound the hint to the adapter's supported range.
+    try {
+      long seconds = Long.parseLong(header.trim());
+      if (seconds >= 0) {
+        return Math.clamp(seconds, 1, ScannerContract.MAX_CAPACITY_RETRY_SECONDS);
+      }
+    } catch (NumberFormatException ignored) {
+      // Older adapters or intermediaries can omit or alter the header.
+    }
+    return ScannerContract.DEFAULT_CAPACITY_RETRY_SECONDS;
   }
 
   private byte[] readErrorBody(InputStream body) throws IOException {

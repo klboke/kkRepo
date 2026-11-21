@@ -4311,6 +4311,64 @@ public abstract class PersistenceApiContract {
   }
 
   @Test
+  void securityScanningDefersCapacityWithoutSpendingAttempts() {
+    SecurityScanDao scans = stores().securityScanning();
+    long repositoryId = createRepository("scan-capacity", RepositoryFormat.MAVEN2);
+    Instant now = Instant.parse("2026-07-24T12:00:00Z");
+    var profile = scans.createProfile(new SecurityScanDao.ScanProfile(
+        null, "capacity-profile", true, "syft", "grype", List.of("vuln"), Map.of(),
+        1048576, 1000, 10485760, 1048576, 2, 60, OciPlatformPolicy.REQUIRED_SET,
+        List.of(), "8".repeat(64), 1, now, now));
+    long taskId = scans.createTask(new SecurityScanDao.TaskDraft(
+        repositoryId, null, SubjectKind.ASSET_BLOB, "sha256:" + "9".repeat(64), 1,
+        profile.id(), profile.revision(), null, ScanStage.CATALOG_AND_MATCH,
+        RequestReason.MANUAL, 0, 2, "contract", null, null, now));
+
+    var first = inTransaction(() -> scans.claimTasks("replica-a", now, now.plusSeconds(30), 1))
+        .getFirst();
+    assertEquals(taskId, first.id());
+    assertTrue(scans.retryTask(
+        taskId, first.leaseToken(), now.plusSeconds(5), "SCANNER_IO", "unavailable", now));
+    assertEquals(1, scans.findTask(taskId).orElseThrow().attempts());
+
+    String capacity = "SCANNER_CAPACITY_EXHAUSTED";
+    String previousLease = first.leaseToken();
+    for (int rejection = 0; rejection < 6; rejection++) {
+      Instant claimedAt = now.plusSeconds(5 + rejection * 17L);
+      Instant retryAt = claimedAt.plusSeconds(17);
+      var claimed = inTransaction(
+          () -> scans.claimTasks("replica-b", claimedAt, claimedAt.plusSeconds(30), 1)).getFirst();
+      assertEquals(taskId, claimed.id());
+      assertEquals(2, claimed.attempts());
+      assertNotEquals(previousLease, claimed.leaseToken());
+      assertFalse(scans.deferTaskForCapacity(
+          taskId, previousLease, retryAt, capacity, "busy", claimedAt));
+      assertTrue(scans.deferTaskForCapacity(
+          taskId, claimed.leaseToken(), retryAt, capacity, "busy", claimedAt));
+      assertFalse(scans.deferTaskForCapacity(
+          taskId, claimed.leaseToken(), retryAt, capacity, "busy", claimedAt));
+
+      var waiting = scans.findTask(taskId).orElseThrow();
+      assertEquals(TaskStatus.RETRY_WAIT, waiting.status());
+      assertEquals(1, waiting.attempts());
+      assertEquals(retryAt, waiting.nextAttemptAt());
+      assertEquals(capacity, waiting.lastErrorCode());
+      assertNull(waiting.leaseToken());
+      assertTrue(inTransaction(() -> scans.claimTasks(
+          "replica-a", retryAt.minusSeconds(1), retryAt.plusSeconds(30), 1)).isEmpty());
+      previousLease = claimed.leaseToken();
+    }
+
+    Instant resumedAt = now.plusSeconds(5 + 6 * 17L);
+    var resumed = inTransaction(
+        () -> scans.claimTasks("replica-a", resumedAt, resumedAt.plusSeconds(30), 1)).getFirst();
+    assertEquals(taskId, resumed.id());
+    assertEquals(2, resumed.attempts());
+    assertTrue(scans.completeTask(taskId, resumed.leaseToken(), resumedAt));
+    assertEquals(TaskStatus.SUCCEEDED, scans.findTask(taskId).orElseThrow().status());
+  }
+
+  @Test
   void securityScanningRecoversFinalAttemptsAndCleansUnreferencedHistory() {
     SecurityScanDao scans = stores().securityScanning();
     long repositoryId =
