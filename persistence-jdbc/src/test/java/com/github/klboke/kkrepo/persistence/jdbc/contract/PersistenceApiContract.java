@@ -467,6 +467,7 @@ public abstract class PersistenceApiContract {
         "ohpm_login_key",
         "ohpm_login_nonce",
         "ohpm_fetch_lease",
+        "maven_proxy_publication_time",
         "maven_snapshot_family",
         "maven_snapshot_build",
         "maven_snapshot_asset",
