@@ -818,18 +818,24 @@ class NexusApiMigrationServiceTest {
   }
 
   @Test
-  void migratesMavenManualBlockSeparatelyFromAutomaticBlocking() {
+  void migratesManualBlockSeparatelyFromAutomaticBlocking() {
     var repositories = new FakeRepositoryDao();
     var service = service(new FakeBlobStoreDao(), repositories);
     var inventory = new NexusInventory(List.of(Map.of("name", "default")),
-        List.of(repository("maven-proxy", "maven2", "proxy", Map.of(
-            "storage", storage("default"), "proxy", Map.of("remoteUrl", "https://repo.maven.apache.org/maven2/"),
-            "httpClient", Map.of("blocked", true, "autoBlock", false)))),
+        List.of(
+            repository("maven-proxy", "maven2", "proxy", Map.of(
+                "storage", storage("default"), "proxy", Map.of("remoteUrl", "https://repo.maven.apache.org/maven2/"),
+                "httpClient", Map.of("blocked", true, "autoBlock", false))),
+            repository("npm-proxy", "npm", "proxy", Map.of(
+                "storage", storage("default"), "proxy", Map.of("remoteUrl", "https://registry.npmjs.org/"),
+                "httpClient", Map.of("blocked", true, "autoBlock", false)))),
         NexusSecurityExport.empty(), List.of());
-    assertEquals(1, service.migrateConfig(inventory, request("https://old-nexus.example")).repositories());
-    var proxy = (Map<?, ?>) repositories.required("maven-proxy").attributes().get("proxy");
-    assertEquals(true, proxy.get("blockOutboundConnections"));
-    assertEquals(false, proxy.get("autoBlock"));
+    assertEquals(2, service.migrateConfig(inventory, request("https://old-nexus.example")).repositories());
+    for (String name : List.of("maven-proxy", "npm-proxy")) {
+      var proxy = (Map<?, ?>) repositories.required(name).attributes().get("proxy");
+      assertEquals(true, proxy.get("blockOutboundConnections"));
+      assertEquals(false, proxy.get("autoBlock"));
+    }
   }
 
   @Test

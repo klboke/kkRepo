@@ -9,6 +9,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.metrics.KkRepoMetrics;
 import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
 import com.github.klboke.kkrepo.server.security.SecurityValidationException;
 import io.micrometer.core.instrument.Timer;
@@ -36,7 +37,7 @@ public class DockerRemoteRegistryClient {
   private static final int MAX_REDIRECTS = 5;
   private static final int MAX_CHALLENGE_BODY_BYTES = 64 * 1024;
 
-  private final HttpRemoteFetcher fetcher;
+  private final RepositoryOutboundBlock outboundBlock;
   private final OutboundRequestPolicy outboundPolicy;
   private final ProxiedHttpClientFactory transportFactory;
   private final SharedCache tokenCache;
@@ -46,14 +47,14 @@ public class DockerRemoteRegistryClient {
 
   @Autowired
   public DockerRemoteRegistryClient(
-      HttpRemoteFetcher fetcher,
+      RepositoryOutboundBlock outboundBlock,
       OutboundRequestPolicy outboundPolicy,
       SharedCache tokenCache,
       @Value("${kkrepo.docker.proxy.remote-token-cache.enabled:true}") boolean tokenCacheEnabled,
       @Value("${kkrepo.docker.proxy.remote-token-cache.ttl-seconds:300}") long tokenCacheTtlSeconds,
       KkRepoMetrics metrics,
       ProxiedHttpClientFactory transportFactory) {
-    this.fetcher = fetcher;
+    this.outboundBlock = outboundBlock;
     this.outboundPolicy = outboundPolicy;
     this.tokenCache = tokenCache;
     this.tokenCacheEnabled = tokenCacheEnabled;
@@ -159,6 +160,7 @@ public class DockerRemoteRegistryClient {
       String accept,
       int redirects,
       boolean sendCredentials, HttpRemoteFetcher.ByteRange range) throws IOException {
+    if (outboundBlock != null) outboundBlock.check(runtime.name());
     Timer.Sample sample = metrics == null ? null : metrics.startTimer();
     int status = 0;
     Throwable failure = null;
@@ -238,6 +240,7 @@ public class DockerRemoteRegistryClient {
       BearerChallenge bearer,
       boolean cacheable,
       String url) throws IOException {
+    if (outboundBlock != null) outboundBlock.check(runtime.name());
     Timer.Sample sample = metrics == null ? null : metrics.startTimer();
     int status = 0;
     Throwable failure = null;

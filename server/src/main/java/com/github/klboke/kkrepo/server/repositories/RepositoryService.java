@@ -1550,9 +1550,6 @@ public class RepositoryService {
       throw new RepositoryValidationException("proxy.remoteUrl is required");
     }
     boolean blockOutbound = Boolean.TRUE.equals(settings.blockOutboundConnections());
-    if (blockOutbound && format != RepositoryFormat.MAVEN2) {
-      throw new RepositoryValidationException("Blocking outbound connections is supported for Maven proxy repositories");
-    }
     if (settings.remotePassword() != null && !settings.remotePassword().isBlank()
         && (settings.remoteUsername() == null || settings.remoteUsername().isBlank())) {
       throw new RepositoryValidationException("proxy.remoteUsername is required when proxy.remotePassword is set");
@@ -2314,8 +2311,7 @@ public class RepositoryService {
         effective.allowedRedirectHosts() == null ? List.of() : effective.allowedRedirectHosts(),
         effective.remoteAuthenticationType(), effective.remoteNtlmDomain(), effective.remoteNtlmHost(),
         Boolean.TRUE.equals(effective.streamingEnabled()), effectiveMode(effective),
-        record.format() == RepositoryFormat.MAVEN2
-            ? Boolean.TRUE.equals(effective.blockOutboundConnections()) : null);
+        Boolean.TRUE.equals(effective.blockOutboundConnections()));
   }
 
   private static String stringOrNull(Object value) {

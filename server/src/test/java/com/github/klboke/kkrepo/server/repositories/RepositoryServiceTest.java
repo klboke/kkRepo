@@ -1487,7 +1487,7 @@ class RepositoryServiceTest {
   }
 
   @Test
-  void mavenManualBlockPersistsThroughPartialAndOutboundProxyEdits() throws Exception {
+  void manualBlockPersistsThroughPartialAndOutboundProxyEdits() throws Exception {
     var repositories = new StubRepositoryDao(repository(1L));
     var service = service(repositories);
     var json = new com.fasterxml.jackson.databind.ObjectMapper();
@@ -1513,14 +1513,14 @@ class RepositoryServiceTest {
   }
 
   @Test
-  void unsupportedProxyFormatsCannotEnableManualBlock() throws Exception {
+  void npmProxyCanBeCreatedWithManualBlock() throws Exception {
     var service = service(new StubRepositoryDao(repository(1L)));
     var block = new com.fasterxml.jackson.databind.ObjectMapper().readValue("""
         {"remoteUrl":"https://registry.npmjs.org","blockOutboundConnections":true}
         """, ProxySettings.class);
-    assertThrows(RepositoryValidationException.class,
-        () -> service.create(new CreateCommand("unsupported-block", "npm-proxy", true,
-            "default", true, null, block, null, null, null, null)));
+    var created = service.create(new CreateCommand("blocked-npm", "npm-proxy", true,
+        "default", true, null, block, null, null, null, null));
+    assertEquals(true, created.proxy().blockOutboundConnections());
   }
 
   @Test

@@ -311,6 +311,68 @@ class RawRepositoryBlackBoxCompatibilityTest {
     }
   }
 
+  @Test
+  void manuallyBlockedRawProxyServesCachedFilesWithoutContactingUpstream() throws Exception {
+    CompatConfig configured = CompatConfig.load();
+    assumeTrue(configured.configured() && Boolean.parseBoolean(
+        setting("compat.write.enabled", "COMPAT_WRITE_ENABLED").orElse("false")));
+    String host = setting("compat.raw.upstreamHost", "RAW_COMPAT_UPSTREAM_HOST")
+        .orElse("host.docker.internal");
+    var upstream = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("0.0.0.0", 0), 0);
+    byte[] bytes = "raw proxy manual block fixture\n".getBytes(StandardCharsets.UTF_8);
+    AtomicInteger requests = new AtomicInteger();
+    upstream.createContext("/", exchange -> {
+      try (exchange) {
+        requests.incrementAndGet();
+        exchange.getResponseHeaders().set("Content-Type", "text/plain");
+        exchange.sendResponseHeaders(200, bytes.length);
+        exchange.getResponseBody().write(bytes);
+      }
+    });
+    upstream.start();
+    String prefix = "raw-block-" + UUID.randomUUID().toString().substring(0, 8);
+    CompatConfig config = new CompatConfig(configured.nexus(), configured.nexusPlus(), true,
+        prefix + "-hosted", prefix + "-proxy", prefix + "-group",
+        "http://" + host + ":" + upstream.getAddress().getPort(), "cached.txt");
+    try (var access = allowDirectoryFixtureHost(config.nexus(), host)) {
+      ensureNexusRepositories(config);
+      ensureKkRepoRepositories(config);
+      for (Endpoint endpoint : List.of(config.nexusProxy(), config.nexusPlusProxy())) {
+        assertArrayEquals(bytes, get(endpoint, config.proxyProbePath()).body());
+      }
+      for (boolean blocked : List.of(true, false)) {
+        assert2xx("set blocked on Nexus raw proxy", send(config.nexusAdmin(
+            "/service/rest/v1/repositories/raw/proxy/" + config.proxyRepository())
+            .header("Content-Type", "application/json")
+            .PUT(HttpRequest.BodyPublishers.ofString("""
+                {"name":"%s","online":true,"storage":{"blobStoreName":"default","strictContentTypeValidation":true},
+                "proxy":{"remoteUrl":"%s","contentMaxAge":0,"metadataMaxAge":0},"negativeCache":{"enabled":true,"timeToLive":1440},
+                "httpClient":{"blocked":%s,"autoBlock":true},"raw":{"contentDisposition":"ATTACHMENT"}}
+                """.formatted(config.proxyRepository(), config.remoteUrl(), blocked)))));
+        assert2xx("set blocked on kkRepo raw proxy", send(config.nexusPlusInternal(
+            "/internal/repositories/" + config.proxyRepository())
+            .header("Content-Type", "application/json")
+            .PUT(HttpRequest.BodyPublishers.ofString("""
+                {"proxy":{"blockOutboundConnections":%s,"contentMaxAgeMinutes":0,"metadataMaxAgeMinutes":0}}
+                """.formatted(blocked)))));
+        int before = requests.get();
+        for (Endpoint endpoint : List.of(config.nexusProxy(), config.nexusPlusProxy())) {
+          assertArrayEquals(bytes, get(endpoint, config.proxyProbePath()).body());
+          Exchange miss = get(endpoint, "uncached.txt");
+          assertEquals(blocked ? 404 : 200, miss.status(), endpoint.name());
+        }
+        if (blocked) assertEquals(before, requests.get());
+        else assertTrue(requests.get() > before);
+      }
+    } finally {
+      upstream.stop(0);
+      for (String repo : List.of(config.groupRepository(), config.proxyRepository(), config.hostedRepository())) {
+        send(config.nexusAdmin("/service/rest/v1/repositories/" + repo).DELETE());
+        send(config.nexusPlusInternal("/internal/repositories/" + repo).DELETE());
+      }
+    }
+  }
+
   private static AutoCloseable allowDirectoryFixtureHost(Endpoint nexus, String host) throws Exception {
     String path = "/service/rest/v1/security/ssrf-protection";
     Exchange response = send(nexus.raw(path).GET());

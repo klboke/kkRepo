@@ -40,6 +40,10 @@ public final class SwiftExceptions {
     public NotFound(String detail) { super(404, "Not Found", detail); }
   }
 
+  static final class OutboundBlocked extends NotFound {
+    OutboundBlocked() { super("Swift release was not found in cache"); }
+  }
+
   public static final class Tombstoned extends NotFound {
     public Tombstoned(String detail) { super(detail); }
   }

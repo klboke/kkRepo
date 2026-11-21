@@ -175,8 +175,13 @@ public class DockerHostedService {
 
   public Map<String, Object> referrers(RepositoryRuntime runtime, DockerDigest digest, String artifactType) {
     ensureType(runtime, RepositoryType.HOSTED);
-    List<Map<String, Object>> manifests = manifestStore.referrers(runtime, digest.value(), artifactType).stream()
-        .map(row -> {
+    var rows = manifestStore.referrers(runtime, digest.value(), artifactType);
+    recordReferrers(runtime, "local", rows.size());
+    return referrerIndex(rows);
+  }
+
+  static Map<String, Object> referrerIndex(List<DockerManifestRecord> rows) {
+    List<Map<String, Object>> manifests = rows.stream().map(row -> {
           Map<String, Object> descriptor = new LinkedHashMap<>();
           descriptor.put("mediaType", row.mediaType());
           descriptor.put("digest", row.digest());
@@ -191,7 +196,6 @@ public class DockerHostedService {
           return descriptor;
         })
         .toList();
-    recordReferrers(runtime, "local", manifests.size());
     return Map.of(
         "schemaVersion", 2,
         "mediaType", DockerConstants.MEDIA_TYPE_OCI_INDEX,

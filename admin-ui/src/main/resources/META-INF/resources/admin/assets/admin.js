@@ -2943,7 +2943,7 @@ function refreshRepositoryRecipeControls() {
   if (format === "gitlfs") strict.checked = false;
   document.getElementById("repository-hosted-fields").hidden = type !== "HOSTED";
   document.getElementById("repository-proxy-fields").hidden = type !== "PROXY";
-  document.getElementById("repository-block-outbound-field").hidden = type !== "PROXY" || format !== "maven2";
+  document.getElementById("repository-block-outbound-field").hidden = type !== "PROXY";
   const ntlmAvailable = type === "PROXY" && format === "nuget";
   document.getElementById("repository-remote-authentication-field").hidden = !ntlmAvailable;
   if (!ntlmAvailable) document.getElementById("repository-remote-authentication-type").value = "auto";
@@ -3384,9 +3384,7 @@ function repositoryFormPayload() {
         ? (minimumReleaseAge === "" ? 0 : Number(minimumReleaseAge))
         : null,
       autoBlock: document.getElementById("repository-auto-block").checked,
-      ...(recipe.format === "maven2" && {
-        blockOutboundConnections: document.getElementById("repository-block-outbound").checked
-      }),
+      blockOutboundConnections: document.getElementById("repository-block-outbound").checked,
       streamingEnabled: document.getElementById("repository-streaming-enabled").checked,
       remoteAuthenticationType: textInputValue("repository-remote-authentication-type"),
       remoteNtlmDomain: textInputValue("repository-remote-ntlm-domain"),

@@ -19,6 +19,7 @@ import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -199,6 +200,9 @@ public class PubProxyService {
         recordFailure(runtime, status, now);
         throw new PubExceptions.BadUpstreamException("Pub upstream archive returned " + status);
       });
+    } catch (Blocked blocked) {
+      return reader.serveSnapshot(cached.orElseThrow(() -> new PubExceptions.PubNotFoundException(path)),
+          headOnly, path);
     } catch (IOException e) {
       if (cached.isPresent()) {
         return reader.serveSnapshot(cached.get(), headOnly, path);
@@ -293,6 +297,10 @@ public class PubProxyService {
         recordFailure(runtime, status, now);
         throw new PubExceptions.BadUpstreamException("Pub upstream metadata returned " + status);
       });
+    } catch (Blocked blocked) {
+      var snapshot = cached.orElseThrow(() -> new PubExceptions.PubNotFoundException(packageName));
+      return new CachedMetadata(parseJson(reader.readText(snapshot, path)), snapshot.blob().sha1(),
+          snapshot.lastUpdatedAt());
     } catch (IOException e) {
       if (cached.isPresent()) {
         return new CachedMetadata(parseJson(reader.readText(cached.get(), path)), cached.get().blob().sha1(),

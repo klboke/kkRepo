@@ -36,6 +36,7 @@ import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
 import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
@@ -464,8 +465,8 @@ class MavenProxyServiceTest {
         null,
         new AssetMetadataCache(new InMemorySharedCache(), false, 0, 0));
     var repositories = mock(RepositoryDao.class);
-    when(repositories.findById(runtime().id())).thenReturn(Optional.of(proxyRecord(blocked)));
-    service.setRepositoryDao(repositories);
+    when(repositories.findByName(runtime().name())).thenReturn(Optional.of(proxyRecord(blocked)));
+    fetcher.setOutboundBlock(new RepositoryOutboundBlock(repositories));
 
     MavenResponse response = service.get(runtime(), path, false);
 
@@ -488,15 +489,15 @@ class MavenProxyServiceTest {
         new AssetMetadataCache(new InMemorySharedCache(), false, 0, 0));
     var repositories = mock(RepositoryDao.class);
     var runtime = runtime();
-    when(repositories.findById(runtime.id())).thenReturn(Optional.of(proxyRecord(true)));
-    service.setRepositoryDao(repositories);
+    when(repositories.findByName(runtime.name())).thenReturn(Optional.of(proxyRecord(true)));
+    fetcher.setOutboundBlock(new RepositoryOutboundBlock(repositories));
     var missing = path("com/acme/example/1.0/example-1.0.pom");
     assertThrows(MavenExceptions.MavenNotFoundException.class, () -> service.get(runtime, missing, false));
     assertThrows(MavenExceptions.MavenNotFoundException.class, () -> service.get(runtime, missing, true));
     assertEquals(0, fetcher.calls);
     assertEquals(0, state.failureCount);
 
-    when(repositories.findById(runtime.id())).thenReturn(Optional.of(proxyRecord(false)));
+    when(repositories.findByName(runtime.name())).thenReturn(Optional.of(proxyRecord(false)));
     assertEquals(200, service.get(runtime, missing, true).status());
     assertEquals(1, fetcher.calls);
   }
@@ -680,6 +681,7 @@ class MavenProxyServiceTest {
 
     @Override
     public HttpRemoteFetcher.Result fetch(HttpRemoteFetcher.Request req) throws IOException {
+      checkOutbound(req);
       calls++;
       request = req;
       return result;

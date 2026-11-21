@@ -1,12 +1,12 @@
 package com.github.klboke.kkrepo.server.maven;
 
-import com.github.klboke.kkrepo.cache.LocalCache;
-import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.MavenPublicationTimesDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.MavenPublicationTimesDao.PublicationTime;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
-import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.protocol.maven.MavenContentType;
@@ -23,6 +23,7 @@ import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheInfo;
 import com.github.klboke.kkrepo.server.blob.BlobReferenceCodec;
 import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.releaseage.MinimumReleaseAge;
 import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.ByteArrayInputStream;
@@ -34,7 +35,6 @@ import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
@@ -76,32 +76,20 @@ import org.springframework.stereotype.Service;
  * from artifact-level {@code maven-metadata.xml} (and from its checksum files, which are derived
  * from the filtered bytes) and rejected with 403 for every artifact file, checksum and signature.
  * The publish time of a version is the upstream {@code Last-Modified} of its {@code .pom}, read with
- * a HEAD request. Decisions are recomputed per request from the shared cached upstream metadata;
- * the node-local {@code publishTimes} cache only avoids repeated HEADs, is rebuildable, and holds an
- * immutable timestamp so replicas cannot disagree. A denial is never negative-cached.
+ * a HEAD request. Verified times in the shared database keep release-age decisions consistent
+ * across replicas when the upstream is blocked. A denial is never negative-cached.
  */
 @Service
 public class MavenProxyService {
   @org.springframework.beans.factory.annotation.Autowired
   private com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService streaming;
 
-  private RepositoryDao repositories;
-
-  @Autowired
-  void setRepositoryDao(RepositoryDao repositories) {
-    this.repositories = repositories;
-  }
-
   private static final long[] BACKOFF_SECONDS = {30, 60, 120, 300, 600, 1800};
   private static final int MAX_METADATA_BYTES = 8 * 1024 * 1024;
   private static final int PUBLISH_TIME_LOOKUP_PARALLELISM = 8;
+  private static final Duration PUBLICATION_RECHECK_INTERVAL = Duration.ofHours(6);
 
   private final Clock clock;
-  private final LocalCache<String, Instant> publishTimes = LocalCacheFactory.standard()
-      .<String, Instant>builder("maven-release-age-publish-times")
-      .maximumSize(100_000)
-      .expireAfterWrite(Duration.ofHours(6))
-      .build();
   private final AssetDao assetDao;
   private final BlobStorageRegistry blobStorageRegistry;
   private final MavenAssetWriter writer;
@@ -112,6 +100,13 @@ public class MavenProxyService {
   private final NexusLikeCacheController cacheController;
   private final ArtifactDownloadPolicy downloadPolicy;
   private final MavenPathParser parser = new MavenPathParser();
+
+  private MavenPublicationTimesDao publicationTimes;
+
+  @Autowired
+  void setPublicationTimes(MavenPublicationTimesDao publicationTimes) {
+    this.publicationTimes = publicationTimes;
+  }
 
   @Autowired
   public MavenProxyService(
@@ -224,10 +219,6 @@ public class MavenProxyService {
     if (fresh) {
       return serveCached(cached.get(), headOnly, path);
     }
-    if (outboundBlocked(runtime)) {
-      if (cached.isPresent()) return serveCached(cached.get(), headOnly, path);
-      throw new MavenExceptions.MavenNotFoundException(path.path());
-    }
     if (negativeCache != null && negativeCache.isNotFoundCached(runtime, path)) {
       throw new MavenExceptions.MavenNotFoundException(path.path());
     }
@@ -236,15 +227,6 @@ public class MavenProxyService {
       throw new MavenExceptions.BadUpstreamException("Upstream temporarily blocked: " + runtime.proxyRemoteUrl());
     }
     return fetchAndCache(runtime, path, cached, headOnly, now);
-  }
-
-  private boolean outboundBlocked(RepositoryRuntime runtime) {
-    // Check the database before egress, including from a group with a cached member snapshot.
-    // An operator's block takes effect without waiting for other replicas' runtime caches to expire.
-    return repositories != null && repositories.findById(runtime.id())
-        .map(record -> record.attributes() != null && record.attributes().get("proxy") instanceof Map<?, ?> proxy
-            && Boolean.TRUE.equals(proxy.get("blockOutboundConnections")))
-        .orElse(true);
   }
 
   // ---- minimum release age -------------------------------------------------------------------
@@ -347,19 +329,28 @@ public class MavenProxyService {
   private Optional<Instant> publishTime(
       RepositoryRuntime runtime, String groupId, String artifactId, String version,
       MavenPath requested) {
-    String key = publishKey(runtime, groupId, artifactId, version);
-    Instant known = publishTimes.getIfPresent(key);
-    if (known != null) {
-      return Optional.of(known);
+    byte[] key = PersistenceHashes.sha256(runtime.proxyRemoteUrl(), groupId, artifactId, version);
+    Optional<PublicationTime> known = publicationTimes == null
+        ? Optional.empty() : publicationTimes.find(runtime.id(), key);
+    Instant now = clock.instant();
+    if (known.isPresent() && now.isBefore(known.get().verifiedAt().plus(PUBLICATION_RECHECK_INTERVAL))) {
+      return known.map(PublicationTime::publishedAt);
     }
-    Head head = headLastModified(runtime, pomPath(groupId, artifactId, version));
-    if (head.lastModified() == null && requested != null) {
-      // No pom (or no Last-Modified on it): fall back to the requested file itself.
-      Head file = headLastModified(runtime, requested.path());
-      head = file.lastModified() != null ? file : new Head(null, head.absent() && file.absent());
+    Head head;
+    try {
+      head = headLastModified(runtime, pomPath(groupId, artifactId, version));
+      if (head.lastModified() == null && requested != null) {
+        // No pom (or no Last-Modified on it): fall back to the requested file itself.
+        Head file = headLastModified(runtime, requested.path());
+        head = file.lastModified() != null ? file : new Head(null, head.absent() && file.absent());
+      }
+    } catch (Blocked blocked) {
+      return known.map(PublicationTime::publishedAt);
     }
     if (head.lastModified() != null) {
-      publishTimes.put(key, head.lastModified());
+      if (publicationTimes != null) {
+        publicationTimes.record(runtime.id(), key, new PublicationTime(head.lastModified(), now));
+      }
       return Optional.of(head.lastModified());
     }
     if (head.absent()) {
@@ -376,22 +367,10 @@ public class MavenProxyService {
   private java.util.Map<String, Instant> publishTimes(
       RepositoryRuntime runtime, String groupId, String artifactId, List<String> versions) {
     java.util.Map<String, Instant> result = new java.util.LinkedHashMap<>();
-    List<String> unknown = new ArrayList<>();
-    for (String version : versions) {
-      Instant known = publishTimes.getIfPresent(publishKey(runtime, groupId, artifactId, version));
-      if (known != null) {
-        result.put(version, known);
-      } else {
-        unknown.add(version);
-      }
-    }
-    if (unknown.isEmpty()) {
-      return result;
-    }
     Semaphore permits = new Semaphore(PUBLISH_TIME_LOOKUP_PARALLELISM);
     try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
       java.util.Map<String, Future<Instant>> pending = new java.util.LinkedHashMap<>();
-      for (String version : unknown) {
+      for (String version : versions) {
         pending.put(version, executor.submit(() -> {
           permits.acquire();
           try {
@@ -420,10 +399,7 @@ public class MavenProxyService {
   /** {@code absent} is true only when the upstream answered 404/410, not for other failures. */
   private record Head(Instant lastModified, boolean absent) {}
 
-  private Head headLastModified(RepositoryRuntime runtime, String path) {
-    if (outboundBlocked(runtime)) {
-      return new Head(null, false);
-    }
+  private Head headLastModified(RepositoryRuntime runtime, String path) throws Blocked {
     HttpRemoteFetcher.Request request = new HttpRemoteFetcher.Request(
         buildRemoteUrl(runtime.proxyRemoteUrl(), path), null, null, null, true)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.METADATA)
@@ -433,6 +409,8 @@ public class MavenProxyService {
           result.status() >= 200 && result.status() < 300
               ? new Head(result.lastModified(), false)
               : new Head(null, result.status() == 404 || result.status() == 410));
+    } catch (Blocked blocked) {
+      throw blocked;
     } catch (IOException e) {
       throw new MavenExceptions.BadUpstreamException(
           "Unable to determine publish time of " + path + ": " + e.getMessage());
@@ -447,17 +425,6 @@ public class MavenProxyService {
   private static String pomPath(String groupId, String artifactId, String version) {
     return groupId.replace('.', '/') + "/" + artifactId + "/" + version + "/"
         + artifactId + "-" + version + ".pom";
-  }
-
-  /**
-   * Cache identity of a publish time. It includes the upstream the time was read from: a proxy's
-   * remote URL can be edited without any signal reaching this node-local cache, and a timestamp
-   * learned from the former upstream must never answer for the new one (a warm node would otherwise
-   * admit what a cold node rejects).
-   */
-  private static String publishKey(
-      RepositoryRuntime runtime, String groupId, String artifactId, String version) {
-    return runtime.id() + "|" + runtime.proxyRemoteUrl() + "|" + groupId + ":" + artifactId + ":" + version;
   }
 
   private static byte[] readBounded(MavenResponse response) {
@@ -542,6 +509,9 @@ public class MavenProxyService {
         return handleUpstreamFailure(runtime, path, cached, headOnly,
             "Upstream returned " + status, now);
       });
+    } catch (Blocked blocked) {
+      if (cached.isPresent()) return serveCached(cached.get(), headOnly, path);
+      throw new MavenExceptions.MavenNotFoundException(path.path());
     } catch (IOException e) {
       return handleUpstreamFailure(runtime, path, cached, headOnly,
           "Upstream IO error: " + e.getMessage(), now);

@@ -17,6 +17,7 @@ import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
 import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.releaseage.MinimumReleaseAge;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -277,6 +278,9 @@ public class PypiProxyService {
         return handleUpstreamFailure(runtime, path, cachedIndex, headOnly,
             "Upstream returned " + status, now);
       });
+    } catch (Blocked blocked) {
+      return reader.serveSnapshot(cachedIndex.orElseThrow(() -> new PypiExceptions.PypiNotFoundException(path)),
+          headOnly, path);
     } catch (IOException e) {
       return handleUpstreamFailure(runtime, path, cachedIndex, headOnly,
           "Upstream IO error: " + e.getMessage(), now);
@@ -502,6 +506,9 @@ public class PypiProxyService {
         return handleUpstreamFailure(runtime, path, cached, headOnly,
             "Upstream returned " + status, now);
       });
+    } catch (Blocked blocked) {
+      return reader.serveSnapshot(cached.orElseThrow(() -> new PypiExceptions.PypiNotFoundException(path)),
+          headOnly, path);
     } catch (IOException e) {
       return handleUpstreamFailure(runtime, path, cached, headOnly,
           "Upstream IO error: " + e.getMessage(), now);
@@ -581,6 +588,8 @@ public class PypiProxyService {
         }
         return links;
       });
+    } catch (Blocked blocked) {
+      throw new PypiExceptions.PypiNotFoundException(projectName);
     } catch (IOException e) {
       throw new PypiExceptions.BadUpstreamException("Upstream IO error: " + e.getMessage(), e);
     }

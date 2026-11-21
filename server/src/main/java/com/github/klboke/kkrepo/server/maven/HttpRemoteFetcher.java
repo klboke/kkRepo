@@ -17,6 +17,7 @@ import java.util.Set;
 import com.github.klboke.kkrepo.server.proxy.NtlmCredentials;
 import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
 import com.github.klboke.kkrepo.server.security.RedirectHosts;
 import com.github.klboke.kkrepo.server.security.SecurityValidationException;
@@ -53,6 +54,12 @@ public class HttpRemoteFetcher {
   private final Duration contentTimeout;
   private final Duration headTimeout;
   private final int bodyReadRetryAttempts;
+  private RepositoryOutboundBlock outboundBlock;
+
+  @Autowired
+  void setOutboundBlock(RepositoryOutboundBlock outboundBlock) {
+    this.outboundBlock = outboundBlock;
+  }
 
   public HttpRemoteFetcher(OutboundRequestPolicy outboundPolicy) {
     this(outboundPolicy, null);
@@ -114,6 +121,8 @@ public class HttpRemoteFetcher {
           null,
           sample);
       return result;
+    } catch (RepositoryOutboundBlock.Blocked blocked) {
+      throw blocked;
     } catch (IOException | RuntimeException e) {
       metrics.recordProxyRemote(
           req.repository(),
@@ -152,15 +161,20 @@ public class HttpRemoteFetcher {
   }
 
   private Result fetchInternal(Request req, int redirects) throws IOException {
+    checkOutbound(req);
     if (proxyFactory == null) {
       throw new IllegalStateException("Outbound HTTP client factory is required");
     }
     try {
-      return fetchInternal(req, redirects, resolveTarget(req, "remote fetch", redirects));
+      return fetchInternal(req, redirects, resolveTarget(req, redirects == 0 ? "remote fetch" : "remote redirect", redirects));
     } catch (SecurityValidationException e) {
       // Tag only transport validation failures, never a caller's response/scan policy failure.
       throw new RemoteRequestRejectedException(e);
     }
+  }
+
+  void checkOutbound(Request req) throws RepositoryOutboundBlock.Blocked {
+    if (outboundBlock != null) outboundBlock.check(req.repository());
   }
 
   private OutboundRequestPolicy.ResolvedHttpTarget resolveTarget(
@@ -251,10 +265,7 @@ public class HttpRemoteFetcher {
             preserveBody ? req.requestContentType() : null,
             req.ntlmCredentialsForRedirect(uri, redirected),
             req.repositoryOrigin(), req.redirectPolicy(), req.byteRange());
-        Result redirectedResult = fetchInternal(
-            redirectedRequest,
-            redirects + 1,
-            resolveTarget(redirectedRequest, "remote redirect", redirects + 1));
+        Result redirectedResult = fetchInternal(redirectedRequest, redirects + 1);
         return redirectedResult.withInheritedHeaders(redirectHeaders);
       }
       return new Result(response.status(), response.headers(), releaseOnClose(response));

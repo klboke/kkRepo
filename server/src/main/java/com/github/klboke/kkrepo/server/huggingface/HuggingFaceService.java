@@ -22,6 +22,7 @@ import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.raw.RawProtocolCache;
 import java.io.ByteArrayInputStream;
 import java.io.FilterInputStream;
@@ -211,6 +212,12 @@ public class HuggingFaceService {
       projectMetadata(runtime, path, transformed.sourceJson(), rawAsset.assetId(), result, now);
       return metadataResponse(
           cache.serve(runtime, derivedPath, headOnly, "inline"), stored, path, result);
+    } catch (Blocked blocked) {
+      ApiCacheEntry entry = existing.filter(value ->
+          value.transformVersion() == HuggingFaceJsonTransformer.SCHEMA_VERSION
+              && cache.find(runtime, derivedPath).isPresent())
+          .orElseThrow(() -> new MavenExceptions.MavenNotFoundException(path.rawPath()));
+      return metadataResponse(cache.serve(runtime, derivedPath, headOnly, "inline"), entry, path, null);
     } catch (IOException error) {
       throw new MavenExceptions.BadUpstreamException(
           "Hugging Face metadata fetch failed: " + safeMessage(error));
@@ -408,6 +415,8 @@ public class HuggingFaceService {
         stored.discardBody();
         throw error;
       }
+    } catch (Blocked blocked) {
+      throw new MavenExceptions.MavenNotFoundException(requested.rawPath());
     } catch (IOException error) {
       throw new MavenExceptions.BadUpstreamException(
           "Hugging Face model file fetch failed: " + safeMessage(error));
