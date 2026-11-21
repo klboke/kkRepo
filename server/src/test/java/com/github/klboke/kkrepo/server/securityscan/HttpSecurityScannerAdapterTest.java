@@ -882,6 +882,108 @@ class HttpSecurityScannerAdapterTest {
   }
 
   @Test
+  void keepsGeneric429AndOtherStatusesOnTheRegularFailurePath() throws Exception {
+    ObjectMapper mapper = new ObjectMapper();
+    start(exchange -> {
+      exchange.getResponseHeaders().set("Retry-After", "17");
+      int status = "/v1/capabilities".equals(exchange.getRequestURI().getPath()) ? 429 : 503;
+      byte[] body = (status == 429 ? "{}" : """
+          {"code":"SCANNER_CAPACITY_EXHAUSTED","retryable":true}
+          """).getBytes(StandardCharsets.UTF_8);
+      respond(exchange, status, body);
+    });
+    var adapter = adapter(mapper, 4096);
+    var generic429 = assertThrows(ScannerAdapterException.class, adapter::capabilities);
+    assertEquals(ScannerAdapterException.class, generic429.getClass());
+    assertEquals("SCANNER_HTTP_429", generic429.code());
+    var capacity503 = assertThrows(ScannerAdapterException.class, adapter::readiness);
+    assertEquals(ScannerAdapterException.class, capacity503.getClass());
+    assertEquals(ScannerContract.CAPACITY_EXHAUSTED, capacity503.code());
+  }
+
+  @ParameterizedTest
+  @CsvSource({"17, 17", ", 5", "invalid, 5", "-1, 5", "0, 1", "9999999999, 3600"})
+  void carriesTheCapacityRetryDelayThroughHttp(String retryAfter, int expectedSeconds)
+      throws Exception {
+    start(exchange -> {
+      if (retryAfter != null) exchange.getResponseHeaders().set("Retry-After", retryAfter);
+      respond(exchange, 429, """
+          {"code":"SCANNER_CAPACITY_EXHAUSTED","retryable":true}
+          """.getBytes(StandardCharsets.UTF_8));
+    });
+
+    var failure = assertThrows(ScannerCapacityException.class,
+        () -> adapter(new ObjectMapper(), 4096).catalog(
+            new CatalogRequest("v1", "run", "key", subject(null), "config", limits()),
+            () -> new ByteArrayInputStream(new byte[0])));
+
+    assertEquals(expectedSeconds, failure.retryAfterSeconds());
+    assertTrue(failure.retryable());
+  }
+
+  @ParameterizedTest
+  @CsvSource({"429, 200", "429, 429", "429, 503", "503, 429"})
+  void accountsForCapacityAndOrdinaryFailuresAcrossReplicas(
+      int primaryStatus, int fallbackStatus) throws Exception {
+    ObjectMapper mapper = new ObjectMapper();
+    AtomicInteger primaryCancels = new AtomicInteger();
+    AtomicInteger fallbackCancels = new AtomicInteger();
+    start(exchange -> respondToScannerCall(
+        exchange, primaryStatus, "17", primaryCancels, mapper));
+    HttpServer fallback = standaloneServer(exchange -> respondToScannerCall(
+        exchange, fallbackStatus, "23", fallbackCancels, mapper));
+    try {
+      SecurityScanningProperties properties = new SecurityScanningProperties();
+      properties.getAdapter().setBaseUrls(List.of(
+          "http://127.0.0.1:" + server.getAddress().getPort(),
+          "http://127.0.0.1:" + fallback.getAddress().getPort()));
+      properties.getAdapter().setServiceCredential("secret");
+      HttpSecurityScannerAdapter adapter = new HttpSecurityScannerAdapter(mapper, properties);
+      String runId = java.util.stream.IntStream.range(0, 100)
+          .mapToObj(value -> "capacity-failover-" + value)
+          .filter(value -> HttpSecurityScannerAdapter.routeIndex(value, 2) == 0)
+          .findFirst().orElseThrow();
+      CatalogRequest request =
+          new CatalogRequest("v1", runId, "key", subject(null), "config", limits());
+      ScannerContract.InputStreamSource input = () -> new ByteArrayInputStream(new byte[0]);
+
+      if (fallbackStatus == 200) {
+        assertEquals("CycloneDX", adapter.catalog(request, input).specName());
+      } else if (primaryStatus == 429 && fallbackStatus == 429) {
+        assertEquals(23, assertThrows(ScannerCapacityException.class,
+            () -> adapter.catalog(request, input)).retryAfterSeconds());
+      } else {
+        var failure = assertThrows(ScannerAdapterException.class,
+            () -> adapter.catalog(request, input));
+        assertEquals("SCANNER_HTTP_503", failure.code());
+      }
+      assertEquals(primaryStatus == 503 ? 1 : 0, primaryCancels.get());
+      assertEquals(fallbackStatus == 503 ? 1 : 0, fallbackCancels.get());
+    } finally {
+      fallback.stop(0);
+    }
+  }
+
+  private static void respondToScannerCall(
+      HttpExchange exchange, int status, String retryAfter, AtomicInteger cancels,
+      ObjectMapper mapper) throws IOException {
+    exchange.getRequestBody().readAllBytes();
+    if (exchange.getRequestURI().getPath().endsWith("/cancel")) {
+      cancels.incrementAndGet();
+      respond(exchange, 200, mapper.writeValueAsBytes(new CancellationResponse("run", false)));
+    } else if (status == 200) {
+      respond(exchange, 200, mapper.writeValueAsBytes(catalog()));
+    } else if (status == 429) {
+      exchange.getResponseHeaders().set("Retry-After", retryAfter);
+      respond(exchange, 429, """
+          {"code":"SCANNER_CAPACITY_EXHAUSTED","retryable":true}
+          """.getBytes(StandardCharsets.UTF_8));
+    } else {
+      respond(exchange, status, "{}".getBytes(StandardCharsets.UTF_8));
+    }
+  }
+
+  @Test
   void classifiesHttpJsonTransportAndBoundedResponseFailures() throws Exception {
     ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
     start(exchange -> respond(exchange, 503, new byte[8192]));

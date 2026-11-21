@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.scanner;
 
+import com.github.klboke.kkrepo.security.scan.ScannerContract;
 import java.nio.file.Path;
 import java.time.Duration;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -26,7 +27,7 @@ public class ScannerAdapterProperties {
   private int maxConcurrentScans = 2;
   private int maxQueuedScans = 4;
   private Duration admissionTimeout = Duration.ofSeconds(1);
-  private int retryAfterSeconds = 5;
+  private int retryAfterSeconds = ScannerContract.DEFAULT_CAPACITY_RETRY_SECONDS;
   private Duration databaseUpdateLockTimeout = Duration.ofMinutes(10);
 
   public String getServiceCredential() {
@@ -194,7 +195,8 @@ public class ScannerAdapterProperties {
   }
 
   public void setRetryAfterSeconds(int retryAfterSeconds) {
-    this.retryAfterSeconds = Math.max(1, Math.min(3600, retryAfterSeconds));
+    this.retryAfterSeconds = Math.clamp(
+        retryAfterSeconds, 1, ScannerContract.MAX_CAPACITY_RETRY_SECONDS);
   }
 
   public Duration getDatabaseUpdateLockTimeout() {

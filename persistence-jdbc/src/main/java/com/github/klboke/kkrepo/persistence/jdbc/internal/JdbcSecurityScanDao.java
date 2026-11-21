@@ -1688,19 +1688,46 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       String errorCode,
       String errorSummary,
       Instant updatedAt) {
+    return rescheduleTask(
+        taskId, leaseToken, nextAttemptAt, errorCode, errorSummary, updatedAt, 0);
+  }
+
+  @Override
+  public boolean deferTaskForCapacity(
+      long taskId,
+      String leaseToken,
+      Instant nextAttemptAt,
+      String errorCode,
+      String errorSummary,
+      Instant updatedAt) {
+    return rescheduleTask(
+        taskId, leaseToken, nextAttemptAt, errorCode, errorSummary, updatedAt, 1);
+  }
+
+  private boolean rescheduleTask(
+      long taskId,
+      String leaseToken,
+      Instant nextAttemptAt,
+      String errorCode,
+      String errorSummary,
+      Instant updatedAt,
+      int attemptsToRestore) {
     return jdbc.update("""
         UPDATE security_scan_task
-        SET status = 'RETRY_WAIT', next_attempt_at = ?, claimed_by = NULL, lease_token = NULL,
+        SET status = 'RETRY_WAIT', attempts = attempts - ?, next_attempt_at = ?,
+            claimed_by = NULL, lease_token = NULL,
             lease_until = NULL, last_heartbeat_at = NULL, last_error_code = ?,
             last_error_summary = ?, updated_at = ?
-        WHERE id = ? AND status = 'RUNNING' AND lease_token = ?
+        WHERE id = ? AND status = 'RUNNING' AND lease_token = ? AND attempts >= ?
         """,
+        attemptsToRestore,
         nullableTimestamp(nextAttemptAt),
         errorCode,
         truncate(errorSummary, 2048),
         nullableTimestamp(updatedAt),
         taskId,
-        leaseToken) == 1;
+        leaseToken,
+        attemptsToRestore) == 1;
   }
 
   @Override

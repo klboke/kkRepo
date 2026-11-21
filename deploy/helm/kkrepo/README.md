@@ -120,6 +120,13 @@ is also an explicit opt-in to bounded indexed reconciliation of current artifact
 repository's durable historical backfill and actual scan tasks begin only after its UI activation.
 Plan database and scanner capacity before enabling it on a large existing installation.
 
+By default, two kkRepo replicas each claim one task per batch and share two scanner execution
+slots. When scaling, size `replicaCount × securityScanning.worker.batchSize` against
+`securityScanning.replicaCount × securityScanning.limits.maxConcurrentScans`, accounting for
+the scratch-space limit as well. The adapter waits up to five seconds for queued admission.
+After a capacity rejection, kkRepo reschedules the task using the adapter's `Retry-After` delay
+with jitter and preserves the scan's retry budget.
+
 See the [Artifact Scanning Guide](../../../docs/en/artifact-scanning-guide.md) for repository
 activation, policy, waiver, monitoring, and troubleshooting instructions.
 
@@ -136,13 +143,13 @@ while scan-serving Pods mount the generations read-only.
 
 The scanner workload is a StatefulSet so every replica has a stable network identity. kkRepo uses
 the run hash to select a preferred ordinal, then fails retryable catalog, match, and OCI requests
-over to the remaining ordinals. Before fallback, kkRepo makes a best-effort targeted cancellation
-on the failed ordinal; administrative and worker cancellation is broadcast across all configured
-ordinals in parallel under one five-second overall deadline because a timed-out primary request
-can still be winding down. Durable task ownership and result finalization remain in the shared
-kkRepo database, not in the StatefulSet. Capability and readiness observations also fail over
-across ordinals under one 15-second end-to-end deadline, so a rollout or ordinal failure does not
-hide healthy replicas or multiply outage delays by the replica count. For multiple adapter
+over to the remaining ordinals. Before fallback after an ambiguous failure, kkRepo attempts to
+cancel any work that may still be running on the failed ordinal. Administrative and worker
+cancellation is broadcast across all configured ordinals in parallel under one five-second
+overall deadline because a timed-out primary request can still be winding down. The shared
+kkRepo database owns task leases and result finalization. Capability and readiness observations
+also fail over across ordinals under one 15-second end-to-end deadline, keeping healthy replicas
+usable during a rollout or ordinal failure and bounding outage delays. For multiple adapter
 replicas, provide
 `securityScanning.scannerDatabase.persistence.existingClaim` backed by `ReadWriteMany`.
 The backing filesystem must provide atomic rename visibility for the generation pointer.
