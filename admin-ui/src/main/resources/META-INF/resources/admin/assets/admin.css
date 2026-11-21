@@ -947,7 +947,8 @@ body {
   cursor: not-allowed;
 }
 
-.form-grid .checkbox-field {
+.form-grid .checkbox-field,
+.form-grid .checkbox-with-help {
   display: flex;
   align-items: center;
   align-self: end;
@@ -961,13 +962,6 @@ body {
   height: 16px;
   margin: 0;
   padding: 0;
-}
-
-.form-grid .checkbox-with-help {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding-bottom: 6px;
 }
 
 .form-actions {
