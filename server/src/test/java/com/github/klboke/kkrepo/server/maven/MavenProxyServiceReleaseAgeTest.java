@@ -90,6 +90,26 @@ class MavenProxyServiceReleaseAgeTest {
   }
 
   @Test
+  void recordsPublicationTimeAndReusesItWhileFresh() throws Exception {
+    var fixture = fixture();
+    var runtime = runtime(FORTY_EIGHT_HOURS);
+    String artifact = "com/acme/demo/1.0/demo-1.0.pom";
+    fixture.cached(artifact, "<project/>");
+    Instant published = NOW.minus(Duration.ofDays(3));
+    fixture.pom("1.0", published);
+    var times = mock(MavenPublicationTimesDao.class);
+    fixture.service.setPublicationTimes(times);
+    var key = PersistenceHashes.sha256(runtime.proxyRemoteUrl(), "com.acme", "demo", "1.0");
+    var proof = new PublicationTime(published, NOW);
+    when(times.find(runtime.id(), key)).thenReturn(Optional.empty(), Optional.of(proof));
+
+    assertEquals(200, fixture.service.get(runtime, path(artifact), true).status());
+    verify(times).record(runtime.id(), key, proof);
+    assertEquals(200, fixture.service.get(runtime, path(artifact), true).status());
+    verify(fixture.fetcher).fetchWithBodyRetry(any(), eq(artifact), any());
+  }
+
+  @Test
   void blockedProxyUsesPreviouslyVerifiedTimesFromSharedStorage() throws Exception {
     var fixture = fixture();
     fixture.cached(METADATA_PATH, METADATA);

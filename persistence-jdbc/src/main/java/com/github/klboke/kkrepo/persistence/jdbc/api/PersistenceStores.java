@@ -42,6 +42,8 @@ public interface PersistenceStores extends AutoCloseable {
 
   MaintenanceCursorDao maintenanceCursors();
 
+  MavenPublicationTimesDao mavenPublicationTimes();
+
   MetadataRebuildDao metadataRebuild();
 
   MigrationCheckpointDao migrationCheckpoints();

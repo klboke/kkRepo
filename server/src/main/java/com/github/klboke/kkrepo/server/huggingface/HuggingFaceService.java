@@ -300,6 +300,8 @@ public class HuggingFaceService {
       MavenResponse populated = populateFile(
           runtime, requestPath, binding, revision, file, fileKey, canonicalPath, lease, headOnly);
       return populated;
+    } catch (Blocked blocked) {
+      throw new MavenExceptions.MavenNotFoundException(requestPath.rawPath());
     } catch (RuntimeException error) {
       registry.markFileFailed(
           file.id(), acquired.orElseThrow().fencingToken(), failureCode(error),
@@ -317,7 +319,7 @@ public class HuggingFaceService {
       FileKey fileKey,
       String canonicalPath,
       HuggingFaceLeaseManager.Lease lease,
-      boolean headOnly) {
+      boolean headOnly) throws Blocked {
     String remotePath = requested.repoId() + "/resolve/" + encodeRevision(binding.commit())
         + "/" + encodeFilePath(requested.filePath());
     String remoteUrl = remoteUrl(runtime, remotePath, "");
@@ -416,7 +418,7 @@ public class HuggingFaceService {
         throw error;
       }
     } catch (Blocked blocked) {
-      throw new MavenExceptions.MavenNotFoundException(requested.rawPath());
+      throw blocked;
     } catch (IOException error) {
       throw new MavenExceptions.BadUpstreamException(
           "Hugging Face model file fetch failed: " + safeMessage(error));

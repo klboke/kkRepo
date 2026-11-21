@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.github.klboke.kkrepo.persistence.jdbc.api.MavenPublicationTimesDao.PublicationTime;
 import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao.BlobStoreUsage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao.RepositoryUsage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
@@ -88,6 +89,29 @@ import org.springframework.dao.DuplicateKeyException;
 
 /** Reusable black-box contract that every database backend must pass through the public API. */
 public abstract class PersistenceApiContract {
+  @Test
+  void mavenPublicationTimesAreScopedToTheirSourceAndRemovedWithTheRepository() {
+    var repository = stores().repositories();
+    long id = repository.insert(new RepositoryRecord(null, "verified-maven", RepositoryFormat.MAVEN2,
+        RepositoryType.PROXY, "maven2-proxy", true, null, null, "https://first.example/",
+        null, null, null, true, Map.of()));
+    var times = stores().mavenPublicationTimes();
+    var hash = PersistenceHashes.sha256("https://first.example/", "org.example", "artifact", "1.0");
+    var other = PersistenceHashes.sha256("https://second.example/", "org.example", "artifact", "1.0");
+    Instant published = Instant.parse("2026-11-18T12:00:00Z");
+    Instant verified = published.plusSeconds(3600);
+    var first = new PublicationTime(published, verified);
+    assertTrue(times.find(id, hash).isEmpty());
+    times.record(id, hash, first);
+    assertEquals(Optional.of(first), times.find(id, hash));
+    assertTrue(times.find(id, other).isEmpty());
+    var refreshed = new PublicationTime(published, verified.plusSeconds(60));
+    times.record(id, hash, refreshed);
+    assertEquals(Optional.of(refreshed), times.find(id, hash));
+    assertEquals(1, repository.deleteById(id));
+    assertTrue(times.find(id, hash).isEmpty());
+  }
+
   @Test
   void dockerConnectorsReservePortsAcrossProtocolsAndReleaseOnUpdateAndDelete() {
     var repositories = stores().repositories();

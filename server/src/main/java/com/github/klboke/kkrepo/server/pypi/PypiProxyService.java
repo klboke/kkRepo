@@ -160,6 +160,9 @@ public class PypiProxyService {
     String url;
     try {
       url = resolvePackageUrl(runtime, projectName, filename);
+    } catch (Blocked blocked) {
+      return reader.serveSnapshot(cached.orElseThrow(() -> new PypiExceptions.PypiNotFoundException(path)),
+          headOnly, path);
     } catch (PypiExceptions.PypiNotFoundException e) {
       proxyStateDao.recordSuccess(runtime.id(), now);
       if (cached.isPresent()) return reader.serveSnapshot(cached.get(), headOnly, path);
@@ -545,7 +548,7 @@ public class PypiProxyService {
     }
   }
 
-  private String resolvePackageUrl(RepositoryRuntime runtime, String projectName, String filename) {
+  private String resolvePackageUrl(RepositoryRuntime runtime, String projectName, String filename) throws Blocked {
     if (projectName == null || projectName.isBlank()) {
       throw new PypiExceptions.PypiNotFoundException(filename);
     }
@@ -567,7 +570,7 @@ public class PypiProxyService {
   }
 
   private List<PypiLink> fetchRemoteProjectLinks(
-      RepositoryRuntime runtime, String projectName, String upstreamIndexPath) {
+      RepositoryRuntime runtime, String projectName, String upstreamIndexPath) throws Blocked {
     String path = PypiPaths.indexPath(projectName);
     HttpRemoteFetcher.Request req = HttpRemoteFetcher.Request.get(
         buildRemoteUrl(runtime.proxyRemoteUrl(), upstreamIndexPath))
@@ -589,7 +592,7 @@ public class PypiProxyService {
         return links;
       });
     } catch (Blocked blocked) {
-      throw new PypiExceptions.PypiNotFoundException(projectName);
+      throw blocked;
     } catch (IOException e) {
       throw new PypiExceptions.BadUpstreamException("Upstream IO error: " + e.getMessage(), e);
     }

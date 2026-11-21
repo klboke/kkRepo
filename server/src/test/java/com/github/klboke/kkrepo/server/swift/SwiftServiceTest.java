@@ -38,6 +38,7 @@ import com.github.klboke.kkrepo.protocol.swift.SwiftMediaTypes;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import jakarta.servlet.http.Part;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -56,6 +57,27 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.mock.web.MockPart;
 
 class SwiftServiceTest {
+
+  @Test
+  void manualBlockKeepsSwiftInventoryAndDoesNotCacheLocalArchiveMiss() throws Exception {
+    var fixture = fixture();
+    var proxy = proxy(4L, "swift-proxy");
+    String sha = "a".repeat(40);
+    var known = new SwiftRegistryDao.ProxySource(proxy.id(), "acme", "demo", "1.2.3", "https://github.com/acme/demo",
+        "v1.2.3", sha, "github-zipball-v1", null, "DISCOVERED", null, null, 3L, 1L, Instant.EPOCH);
+    var blocked = new SwiftExceptions.OutboundBlocked();
+    when(fixture.registry.listProxySources(proxy.id(), "acme", "demo")).thenReturn(List.of(known));
+    when(fixture.github.discoverTags(eq(proxy), any(), any())).thenThrow(blocked);
+    assertTrue(responseBody(fixture.service.get(proxy, "acme/demo", null,
+        "https://repo.example/repository/swift-proxy/", SwiftMediaTypes.VENDOR_JSON, false)).contains("1.2.3"));
+    when(fixture.registry.findProxySource(proxy.id(), "acme", "demo", "1.2.3")).thenReturn(Optional.of(known));
+    when(fixture.leases.acquireForCoalescedRead(anyString())).thenReturn(mock(SwiftPublishLeaseManager.Lease.class));
+    when(fixture.github.archive(eq(proxy), any(), eq(sha))).thenThrow(blocked);
+    assertThrows(SwiftExceptions.OutboundBlocked.class,
+        () -> fixture.service.get(proxy, "acme/demo/1.2.3", null,
+            "https://repo.example/repository/swift-proxy/", SwiftMediaTypes.VENDOR_JSON, false));
+    verify(fixture.registry, never()).putNegativeCache(any());
+  }
 
   @Test
   void groupSkipsPinnedReleaseWhenRoutingPolicyDeniesItsProxy() throws Exception {
