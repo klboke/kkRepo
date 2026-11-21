@@ -2061,8 +2061,14 @@
           <div class="proxy-settings-layout">
             <form class="blobstore-form" id="system-proxy-form">
               <div class="form-title">System proxy defaults</div>
-              <label class="checkbox-field"><input id="system-proxy-enabled" type="checkbox"><span>Enable system proxy</span></label>
-              <p class="form-note">Applies to repositories that use system settings.</p>
+              <div class="field-label">
+                <label class="checkbox-field"><input id="system-proxy-enabled" type="checkbox"><span>Enable system proxy</span></label>
+                <span class="field-help" tabindex="0" role="note"
+                  aria-label="Applies to repositories that use system settings."
+                  data-tooltip="Applies to repositories that use system settings.">
+                  <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                </span>
+              </div>
               <fieldset id="system-proxy-fields" class="form-grid">
                 <legend class="sr-only">System proxy settings</legend>
                 <label><span>Proxy type</span><select id="system-proxy-type"><option value="HTTP">HTTP</option><option value="SOCKS">SOCKS5</option></select></label>
@@ -2073,12 +2079,18 @@
                 <label id="system-proxy-password-field"><span>Proxy password</span><input id="system-proxy-password" type="password" autocomplete="new-password"></label>
                 <label id="system-proxy-clear-field" class="checkbox-field"><input id="system-proxy-password-clear" type="checkbox"><span>Clear saved proxy password</span></label>
                 <div class="full-width">
-                  <label for="system-proxy-bypass">Bypass hosts</label>
+                  <div class="field-label">
+                    <label for="system-proxy-bypass">Bypass hosts</label>
+                    <span class="field-help" tabindex="0" role="note"
+                      aria-label="Matching hosts connect directly. Use *.example.com for subdomains."
+                      data-tooltip="Matching hosts connect directly. Use *.example.com for subdomains.">
+                      <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                    </span>
+                  </div>
                   <div class="proxy-settings-actions">
                     <input id="system-proxy-bypass" type="text" placeholder="*.example.com" autocomplete="off">
                     <button class="create-button secondary" id="system-proxy-add-host" type="button">Add</button>
                   </div>
-                  <p class="form-note">Matching hosts connect directly. Use *.example.com for subdomains.</p>
                   <div class="proxy-settings-actions" id="system-proxy-bypass-hosts"></div>
                 </div>
               </fieldset>
