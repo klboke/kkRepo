@@ -258,14 +258,15 @@
             <fieldset class="form-grid" id="repository-proxy-fields" hidden>
               <legend>Proxy settings</legend>
               <label class="full-width"><span>Routing Rule</span><select id="repository-routing-rule"><option value="">None</option></select><span id="repository-routing-rule-status" role="status"></span></label>
-              <p class="form-note full-width" id="repository-swift-proxy-note" hidden>
-                Swift proxy follows the Nexus-compatible GitHub source mode. The remote is fixed to
-                https://github.com/; use the username/token fields for private GitHub repositories.
-                Production SwiftPM clients should always connect to kkrepo over HTTPS.
-              </p>
               <label>
-                <span>Remote URL <span class="required-mark">*</span></span>
-                <input id="repository-remote-url" type="url" placeholder="https://repo.maven.apache.org/maven2/">
+                <span class="field-label"><span id="repository-remote-url-label">Remote URL <span class="required-mark">*</span></span>
+                  <span id="repository-swift-proxy-help" class="field-help" tabindex="0" role="note" hidden
+                    aria-label="Swift proxy follows the Nexus-compatible GitHub source mode. The remote is fixed to https://github.com/; use the username/token fields for private GitHub repositories. Production SwiftPM clients should always connect to kkrepo over HTTPS."
+                    data-tooltip="Swift proxy follows the Nexus-compatible GitHub source mode. The remote is fixed to https://github.com/; use the username/token fields for private GitHub repositories. Production SwiftPM clients should always connect to kkrepo over HTTPS.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <input id="repository-remote-url" type="url" aria-labelledby="repository-remote-url-label" placeholder="https://repo.maven.apache.org/maven2/">
               </label>
               <label id="repository-pypi-index-path-field" hidden>
                 <span class="field-label">Remote Index Path
@@ -325,21 +326,15 @@
                 <input id="repository-metadata-max-age" type="number" min="-1" value="1440">
               </label>
               <label id="repository-minimum-release-age-field" hidden>
-                <span>Minimum release age (min)</span>
-                <input id="repository-minimum-release-age" type="number" min="0" value="0">
+                <span class="field-label"><span id="repository-minimum-release-age-label">Minimum release age (min)</span>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="Use 0 to disable. Until a release reaches this age, it is hidden from metadata and downloads return 403 (404 for npm). For example, 2880 means 48 hours. This is independent of cache age. Missing or invalid release times are blocked. Go uses commit time, which is a weaker signal than publication time. Maven SNAPSHOTs are exempt. PyPI upstreams must provide PEP 700 upload times. Applies to npm, Go, Maven and PyPI proxies."
+                    data-tooltip="Use 0 to disable. Until a release reaches this age, it is hidden from metadata and downloads return 403 (404 for npm). For example, 2880 means 48 hours. This is independent of cache age. Missing or invalid release times are blocked. Go uses commit time, which is a weaker signal than publication time. Maven SNAPSHOTs are exempt. PyPI upstreams must provide PEP 700 upload times. Applies to npm, Go, Maven and PyPI proxies.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <input id="repository-minimum-release-age" type="number" min="0" value="0" aria-labelledby="repository-minimum-release-age-label">
               </label>
-              <p class="form-note full-width" id="repository-minimum-release-age-note" hidden>
-                npm, Go, Maven and PyPI proxies only. A version is hidden from package metadata and
-                its artifacts are blocked (403 for Go, Maven and PyPI; 404 for npm) until this many
-                minutes have passed since publication, for example 2880 for 48 hours.
-                Use 0 to disable this policy and preserve existing behavior.
-                This is independent of content and metadata cache max age.
-                Versions with a missing or invalid publish time are blocked while enabled.
-                Go measures the commit time of a version, not when it was published, so it is a
-                weaker guard than the other formats.
-                Maven SNAPSHOT versions are exempt. PyPI upstreams must publish PEP 700
-                upload times (for example pypi.org).
-              </p>
               <div class="checkbox-with-help">
                 <label class="checkbox-field"><input id="repository-streaming-enabled" type="checkbox"><span>Allow streaming downloads</span></label>
                 <span class="field-help" tabindex="0" role="note" aria-label="Send supported uncached artifacts while downloading, then cache the complete validated file. Requests requiring whole-file inspection or security scanning remain buffered. Partial downloads are not cached." data-tooltip="Send supported uncached artifacts while downloading, then cache the complete validated file. Requests requiring whole-file inspection or security scanning remain buffered. Partial downloads are not cached."><span class="lucide-icon icon-info" aria-hidden="true"></span></span>
@@ -359,14 +354,15 @@
             </fieldset>
             <fieldset class="form-grid" id="repository-outbound-proxy-fields" hidden>
               <legend>Outbound network proxy</legend>
-              <p class="form-note full-width">
-                Route upstream fetches for this proxy repository through an HTTP or SOCKS proxy
-                (e.g. a corporate Clash on the LAN). Useful when the remote registry (hub.docker.com,
-                pypi.org, ...) is unreachable from the server.
-              </p>
               <label>
-                <span>Proxy type</span>
-                <select id="repository-outbound-proxy-type">
+                <span class="field-label"><span id="repository-outbound-proxy-type-label">Proxy type</span>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="Route upstream fetches for this proxy repository through an HTTP or SOCKS proxy (e.g. a corporate Clash on the LAN). Useful when the remote registry (hub.docker.com, pypi.org, ...) is unreachable from the server."
+                    data-tooltip="Route upstream fetches for this proxy repository through an HTTP or SOCKS proxy (e.g. a corporate Clash on the LAN). Useful when the remote registry (hub.docker.com, pypi.org, ...) is unreachable from the server.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <select id="repository-outbound-proxy-type" aria-labelledby="repository-outbound-proxy-type-label">
                   <option value="">Direct (no proxy)</option>
                   <option value="HTTP">HTTP</option>
                   <option value="SOCKS">SOCKS</option>
@@ -396,12 +392,13 @@
               </label>
             </fieldset>
             <fieldset class="form-grid" id="repository-docker-fields" hidden>
-              <legend>Docker connector</legend>
-              <p class="form-note full-width">
-                Optional compatibility entrypoint for repository-specific Docker traffic. Leave it disabled to use
-                path-based Docker routing on the main service port; enable it only when clients need a dedicated
-                /v2/ port or isolated upload/download traffic.
-              </p>
+              <legend><span class="field-label"><span>Docker connector</span>
+                <span class="field-help" tabindex="0" role="note"
+                  aria-label="Optional compatibility entrypoint for repository-specific Docker traffic. Leave it disabled to use path-based Docker routing on the main service port; enable it only when clients need a dedicated /v2/ port or isolated upload/download traffic."
+                  data-tooltip="Optional compatibility entrypoint for repository-specific Docker traffic. Leave it disabled to use path-based Docker routing on the main service port; enable it only when clients need a dedicated /v2/ port or isolated upload/download traffic.">
+                  <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                </span>
+              </span></legend>
               <label class="checkbox-field">
                 <input id="repository-docker-connector-enabled" type="checkbox">
                 <span>Enable HTTP connector</span>
@@ -442,14 +439,17 @@
             </fieldset>
             <fieldset class="form-grid" id="repository-cargo-fields" hidden>
               <legend>Cargo settings</legend>
-              <p class="form-note full-width">
-                Controls the Cargo registry `auth-required` client hint. Repository access is still decided by
-                anonymous settings and security privileges.
-              </p>
-              <label class="checkbox-field">
-                <input id="repository-cargo-require-authentication" type="checkbox">
-                <span>Authentication requirements</span>
-              </label>
+              <div class="checkbox-with-help">
+                <label class="checkbox-field">
+                  <input id="repository-cargo-require-authentication" type="checkbox">
+                  <span>Authentication requirements</span>
+                </label>
+                <span class="field-help" tabindex="0" role="note"
+                  aria-label="Controls the Cargo registry `auth-required` client hint. Repository access is still decided by anonymous settings and security privileges."
+                  data-tooltip="Controls the Cargo registry `auth-required` client hint. Repository access is still decided by anonymous settings and security privileges.">
+                  <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                </span>
+              </div>
             </fieldset>
             <fieldset class="form-grid" id="repository-conan-limits" hidden>
               <legend>Conan 2 settings</legend>
@@ -501,8 +501,14 @@
                 <input id="repository-apt-architectures" type="text" value="amd64" placeholder="amd64, arm64">
               </label>
               <label>
-                <span>Metadata mode</span>
-                <select id="repository-apt-metadata-mode">
+                <span class="field-label"><span id="repository-apt-metadata-mode-label">Metadata mode</span>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="Hosted repositories always publish atomically signed Release/InRelease metadata. Proxy passthrough preserves upstream bytes; re-signing publishes only packages that have been completely cached and checksum-verified."
+                    data-tooltip="Hosted repositories always publish atomically signed Release/InRelease metadata. Proxy passthrough preserves upstream bytes; re-signing publishes only packages that have been completely cached and checksum-verified.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <select id="repository-apt-metadata-mode" aria-labelledby="repository-apt-metadata-mode-label">
                   <option value="PASSTHROUGH">Passthrough upstream signatures</option>
                   <option value="RESIGN">Verify cache and sign locally</option>
                 </select>
@@ -527,11 +533,6 @@
                 <input id="repository-apt-enforce-distribution" type="checkbox">
                 <span>Enforce configured distribution</span>
               </label>
-              <p class="form-note full-width" id="repository-apt-mode-note">
-                Hosted repositories always publish atomically signed Release/InRelease metadata.
-                Proxy passthrough preserves upstream bytes; re-signing publishes only packages that
-                have been completely cached and checksum-verified.
-              </p>
               <div class="full-width" id="repository-apt-operations" hidden>
                 <div class="muted-row" id="repository-apt-status">APT status not loaded.</div>
                 <div class="form-actions">
@@ -567,8 +568,14 @@
                 <input id="repository-alpine-architectures" type="text" value="x86_64, aarch64" placeholder="x86_64, aarch64">
               </label>
               <label>
-                <span>Metadata mode</span>
-                <select id="repository-alpine-metadata-mode">
+                <span class="field-label"><span id="repository-alpine-metadata-mode-label">Metadata mode</span>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="Serves APK v2 APKINDEX.tar.gz. Hosted and group repositories publish fenced, atomic signed snapshots. Proxy passthrough preserves upstream bytes. Re-signing requires an upstream public key in Upstream trust entry."
+                    data-tooltip="Serves APK v2 APKINDEX.tar.gz. Hosted and group repositories publish fenced, atomic signed snapshots. Proxy passthrough preserves upstream bytes. Re-signing requires an upstream public key in Upstream trust entry.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <select id="repository-alpine-metadata-mode" aria-labelledby="repository-alpine-metadata-mode-label">
                   <option value="PASSTHROUGH">Passthrough upstream signature</option>
                   <option value="RESIGN">Verify and sign locally</option>
                 </select>
@@ -601,11 +608,6 @@
                 <span>Upstream trust entry</span>
                 <textarea id="repository-alpine-upstream-public-key" rows="5" autocomplete="off" placeholder="filename=upstream.rsa.pub&#10;-----BEGIN PUBLIC KEY-----"></textarea>
               </label>
-              <p class="form-note full-width">
-                This generation serves APK v2 <code>APKINDEX.tar.gz</code>. Hosted and group
-                repositories publish fenced, atomic signed snapshots. Proxy passthrough preserves
-                upstream bytes; re-signing requires the upstream public key above.
-              </p>
               <div class="full-width" id="repository-alpine-operations" hidden>
                 <div class="muted-row" id="repository-alpine-status">Alpine status not loaded.</div>
                 <div class="form-actions">
@@ -2232,6 +2234,6 @@
     <script src="./assets/ohpm-import.js?v=20261106-ohpm-import"></script>
     <script src="./assets/user-picker.js?v=20261107-user-picker"></script>
     <script src="./assets/ohpm-login.js?v=20261107-user-picker"></script>
-    <script src="./assets/admin.js?v=20261121-realm-settings"></script>
+    <script src="./assets/admin.js?v=20261121-repository-help"></script>
   </body>
 </html>
