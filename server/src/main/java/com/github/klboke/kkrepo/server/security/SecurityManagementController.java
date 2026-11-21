@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.security;
 
+import com.github.klboke.kkrepo.server.security.SecurityPayloads.ExternalRoleMapping;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.ApiKeyCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.ApiKeyView;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AdminBootstrapCommand;
@@ -135,7 +136,14 @@ public class SecurityManagementController {
         command.readOnly(),
         command.privileges(),
         command.roles(),
-        command.attributes()));
+        command.attributes(),
+        command.externalMappings()));
+  }
+
+  @PutMapping("/roles/{roleId}/external-mappings")
+  public RoleView updateExternalRoleMappings(
+      @PathVariable("roleId") String roleId, @RequestBody List<ExternalRoleMapping> mappings) {
+    return securityService.saveExternalRoleMappings(roleId, mappings);
   }
 
   @DeleteMapping("/roles/{roleId}")

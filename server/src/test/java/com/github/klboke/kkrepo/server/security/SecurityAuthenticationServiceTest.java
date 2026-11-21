@@ -809,6 +809,27 @@ class SecurityAuthenticationServiceTest {
       assertEquals("Alice", stored.firstName());
       assertEquals("OIDC", stored.lastName());
       assertEquals("subject-123", stored.externalId());
+
+      // Existing browser sessions carry verified claim names and resolve the shared policy anew.
+      Map<String, Object> session = new LinkedHashMap<>();
+      service.storeSessionSubject(request(Map.of(), session), authenticated.orElseThrow());
+      dao.roles(stored.id(), "local-role");
+      SecurityRealmRecord oidc = dao.findRealm("oidc").orElseThrow();
+      Map<String, Object> strict = new LinkedHashMap<>(oidc.attributes());
+      strict.put(ExternalRoleMappings.LEGACY_MATCHING, false);
+      strict.put(ExternalRoleMappings.MAPPINGS, Map.of("mapped-reader", List.of("nx-oidc-team")));
+      dao.realms.set(0, new SecurityRealmRecord(1L, "oidc", "OIDC", "OIDC", true, 0, strict));
+
+      var mapped = service.authenticate(request(Map.of(), session)).orElseThrow();
+      assertEquals(Set.of("mapped-reader", "local-role", "nx-anonymous"), mapped.permissionSubject().groupIds());
+      assertEquals(Set.of("mapped-reader", "local-role", "nx-anonymous"),
+          service.authenticateOidcToken(token).orElseThrow().permissionSubject().groupIds());
+
+      Map<String, Object> revoked = new LinkedHashMap<>(strict);
+      revoked.remove(ExternalRoleMappings.MAPPINGS);
+      dao.realms.set(0, new SecurityRealmRecord(1L, "oidc", "OIDC", "OIDC", true, 0, revoked));
+      assertEquals(Set.of("local-role", "nx-anonymous"),
+          service.authenticate(request(Map.of(), session)).orElseThrow().permissionSubject().groupIds());
     } finally {
       jwks.stop(0);
     }
@@ -1116,6 +1137,7 @@ class SecurityAuthenticationServiceTest {
   void authenticatesBrowserSessionSubjectBeforeBasicCredentials() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.realm(new SecurityRealmRecord(1L, "local", "LOCAL", "Local", true, 0, Map.of("source", "Local")));
+    dao.realm(new SecurityRealmRecord(2L, "oidc", "OIDC", "OIDC", true, 20, Map.of("source", "Local")));
     dao.user(user(1L, "Local", "alice", NEXUS_SHIRO1_ADMIN123));
     dao.user(user(2L, "Local", "bob", NEXUS_SHIRO1_ADMIN123));
     dao.roles(1L, "session-role");
@@ -1591,6 +1613,11 @@ class SecurityAuthenticationServiceTest {
     @Override
     public List<SecurityRealmRecord> listRealms() {
       return realms;
+    }
+
+    @Override
+    public Optional<SecurityRealmRecord> findRealm(String realmId) {
+      return realms.stream().filter(realm -> realm.realmId().equals(realmId)).findFirst();
     }
 
     @Override

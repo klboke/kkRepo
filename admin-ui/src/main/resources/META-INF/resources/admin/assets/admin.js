@@ -77,6 +77,7 @@ let securityUsers = [];
 let securityRoles = [];
 let securityPrivileges = [];
 let securityRealms = [];
+let securityUserRoleFilter = "";
 let securityLdap = null;
 let securityOidc = null;
 const SECURITY_PROVIDER_SECRET_MASK = "********";
@@ -1009,7 +1010,7 @@ function securityLdapFormValue({ attributes = securityProviderAttributes.ldap, m
     groupMemberAttribute: textInputValue("security-ldap-group-member-attribute"),
     groupMemberFormat: textInputValue("security-ldap-group-member-format"),
     groupObjectClass: textInputValue("security-ldap-group-object-class"),
-    attributes
+    attributes: { ...attributes, legacyRoleMatching: document.getElementById("security-ldap-legacy-role-matching").checked }
   };
 }
 
@@ -1036,7 +1037,7 @@ function securityOidcFormValue({ attributes = securityProviderAttributes.oidc, m
     rolesClaim: textInputValue("security-oidc-roles-claim"),
     clockSkewSeconds: numberInputValue("security-oidc-clock-skew") ?? 60,
     jwksCacheSeconds: numberInputValue("security-oidc-jwks-cache") ?? 300,
-    attributes
+    attributes: { ...attributes, legacyRoleMatching: document.getElementById("security-oidc-legacy-role-matching").checked }
   };
 }
 
@@ -1077,6 +1078,8 @@ function applySecurityLdapJsonValue(value) {
     ? editableSecurityProviderAttributes(value.attributes, ["name"])
     : {};
   securityProviderAttributes.ldap = attributes;
+  setCheckboxValue("security-ldap-legacy-role-matching",
+    securityProviderJsonBoolean(attributes.legacyRoleMatching, Boolean(value.url || value.host)));
   clearRequiredFieldErrors(ldapRequiredFields);
   refreshSecurityLdapRequiredMarkers();
 }
@@ -1105,6 +1108,8 @@ function applySecurityOidcJsonValue(value) {
     ? editableSecurityProviderAttributes(value.attributes)
     : {};
   securityProviderAttributes.oidc = attributes;
+  setCheckboxValue("security-oidc-legacy-role-matching",
+    securityProviderJsonBoolean(attributes.legacyRoleMatching, Boolean(value.issuer || value.issuerUri || value.jwksUri)));
   clearRequiredFieldErrors(oidcRequiredFields);
   refreshSecurityOidcRequiredMarkers();
 }
@@ -4182,20 +4187,33 @@ async function loadSecurityUsers() {
   refreshSecurityTransfers(["userRoles"]);
 }
 
+function securityRoleBadges(roles, source = "", linkToRole = false) {
+  const classes = `state-badge compact${source ? " external-role-badge" : ""}`;
+  return (roles || []).map((role) => {
+    const label = escapeHtml(role) + (source ? " · " + escapeHtml(source) : "");
+    return linkToRole
+      ? `<button type="button" class="${classes} security-role-link" data-role-id="${escapeHtml(role)}">${label}</button>`
+      : `<span class="${classes}">${label}</span>`;
+  }).join("");
+}
+
 function renderSecurityUsers() {
   renderSecurityUserSourceFilter();
   const filter = filterValue("security-user-filter");
   const sourceFilter = document.getElementById("security-user-source-filter")?.value || "";
   const rows = securityUsers.filter((user) =>
     (!sourceFilter || user.source === sourceFilter)
-    && listContainsFilter([displaySource(user.source), user.source, user.userId, user.status, user.email, ...(user.roles || [])], filter))
+    && (securityUserRoleFilter
+      ? [...(user.roles || []), ...(user.externalRoles || [])].includes(securityUserRoleFilter)
+      : listContainsFilter([displaySource(user.source), user.source, user.userId, user.status, user.email,
+        ...(user.roles || []), ...(user.externalRoles || [])], filter)))
     .map((user) => `
       <tr>
         <td>${escapeHtml(displaySource(user.source))}</td>
         <td>${escapeHtml(user.userId)}</td>
         <td><span class="state-badge compact ${user.status?.trim().toUpperCase() === "ACTIVE" ? "ok" : "warn"}">${escapeHtml(user.status || "")}</span></td>
         <td>${escapeHtml(user.email || "")}</td>
-        <td>${escapeHtml((user.roles || []).join(", "))}</td>
+        <td><div class="security-role-badges">${securityRoleBadges(user.roles, "", true)}${securityRoleBadges(user.externalRoles, displaySource(user.source), true)}</div></td>
         <td class="actions-column">
           <button class="row-action edit-security-user-button" data-source="${escapeHtml(user.source)}" data-id="${escapeHtml(user.userId)}" type="button">edit</button>
           <button class="row-action delete-security-user-button" data-source="${escapeHtml(user.source)}" data-id="${escapeHtml(user.userId)}" type="button">delete</button>
@@ -4220,6 +4238,10 @@ function showSecurityUserForm(user = null) {
   document.getElementById("security-user-status").value = user?.status || "ACTIVE";
   document.getElementById("security-user-password").value = "";
   setSecurityTransferSelection("userRoles", user?.roles || []);
+  document.getElementById("security-user-external-section").hidden = !user?.external;
+  document.getElementById("security-user-external-roles").innerHTML =
+    securityRoleBadges(user?.externalRoles, displaySource(user?.source))
+    || '<span class="field-note">No external roles assigned.</span>';
   clearRequiredFieldErrors(securityUserRequiredFields);
   openFormModal("security-user-form", user ? "security-user-first-name" : "security-user-id");
 }
@@ -4291,12 +4313,15 @@ async function loadSecurityRoles() {
 function renderSecurityRoles() {
   const filter = filterValue("security-role-filter");
   const rows = securityRoles.filter((role) =>
-    listContainsFilter([role.roleId, role.name, role.description], filter))
+    listContainsFilter([role.roleId, role.name, role.description,
+      ...(role.externalMappings || []).flatMap(({ externalName, realmId }) => [externalName, realmId])], filter))
     .map((role) => `
       <tr>
         <td>${escapeHtml(role.roleId)}${role.readOnly ? ' <span class="state-badge compact">read-only</span>' : ""}</td>
         <td>${escapeHtml(role.name || "")}</td>
         <td>${escapeHtml(role.description || "")}</td>
+        <td><div class="security-role-badges">${(role.externalMappings || []).map(({ externalName, realmId }) =>
+          securityRoleBadges([externalName], realmId.toUpperCase())).join("")}</div></td>
         <td class="actions-column">
           ${role.readOnly ? `
             <button class="row-action view-security-role-button" data-id="${escapeHtml(role.roleId)}" type="button">view</button>
@@ -4308,7 +4333,7 @@ function renderSecurityRoles() {
       </tr>
     `).join("");
   document.getElementById("security-role-table").innerHTML = rows
-    || '<tr><td colspan="4" class="placeholder">No roles.</td></tr>';
+    || '<tr><td colspan="5" class="placeholder">No roles.</td></tr>';
 }
 
 function showSecurityRoleForm(role = null, options = {}) {
@@ -4329,6 +4354,11 @@ function showSecurityRoleForm(role = null, options = {}) {
   setSecurityTransferSelection("rolePrivileges", role?.privileges || []);
   setSecurityTransferSelection("roleRoles", role?.roles || []);
   setSecurityRoleFormReadOnly(viewOnly);
+  document.getElementById("security-role-mappings").replaceChildren();
+  for (const mapping of role?.externalMappings || []) addSecurityRoleMapping(mapping, viewOnly);
+  document.getElementById("add-security-role-mapping").hidden = viewOnly;
+  document.getElementById("edit-security-role-mappings").hidden = !viewOnly;
+  document.getElementById("view-security-role-users").hidden = !role;
   clearRequiredFieldErrors(securityRoleRequiredFields);
   openFormModal("security-role-form", viewOnly ? "cancel-security-role-button" : role ? "security-role-name" : "security-role-id");
 }
@@ -4350,6 +4380,7 @@ function setSecurityRoleFormReadOnly(readOnly) {
   document.getElementById("security-role-description").disabled = readOnly;
   document.getElementById("security-role-id").disabled = readOnly || securityRoleMode !== "create";
   saveButton.hidden = readOnly;
+  saveButton.textContent = "Save role";
   cancelButton.textContent = readOnly ? "Close" : "Cancel";
   ["role-privilege", "role-contained"].forEach((prefix) => {
     document.getElementById(`${prefix}-transfer`)?.classList.toggle("is-readonly", readOnly);
@@ -4359,25 +4390,79 @@ function setSecurityRoleFormReadOnly(readOnly) {
   refreshSecurityTransfers(["rolePrivileges", "roleRoles"]);
 }
 
+function addSecurityRoleMapping(mapping = {}, readOnly = false) {
+  const row = document.createElement("div");
+  row.className = "security-role-mapping";
+  row.innerHTML = `
+    <label><span>Identity provider</span><select required>
+      <option value="">Select a provider</option>
+      <option value="oidc">OIDC</option>
+      <option value="ldap">LDAP</option>
+    </select></label>
+    <label><span>External role or group</span><input type="text" maxlength="255" required></label>
+    <button type="button" class="row-action">Remove mapping</button>`;
+  const provider = row.querySelector("select");
+  const name = row.querySelector("input");
+  const remove = row.querySelector("button");
+  provider.value = mapping.realmId || "";
+  name.value = mapping.externalName || "";
+  provider.disabled = readOnly;
+  name.disabled = readOnly;
+  remove.hidden = readOnly;
+  remove.addEventListener("click", () => {
+    row.remove();
+    document.getElementById("add-security-role-mapping").focus();
+  });
+  document.getElementById("security-role-mappings").append(row);
+  if (!mapping.realmId) provider.focus();
+}
+
+function editSecurityRoleMappings() {
+  securityRoleMode = "mappings";
+  const container = document.getElementById("security-role-mappings");
+  container.querySelectorAll("input, select").forEach((field) => { field.disabled = false; });
+  container.querySelectorAll("button").forEach((button) => { button.hidden = false; });
+  document.getElementById("save-security-role-button").hidden = false;
+  document.getElementById("save-security-role-button").textContent = "Save mappings";
+  document.getElementById("cancel-security-role-button").textContent = "Cancel";
+  document.getElementById("edit-security-role-mappings").hidden = true;
+  const add = document.getElementById("add-security-role-mapping");
+  add.hidden = false;
+  add.focus();
+}
+
 async function saveSecurityRole() {
   if (securityRoleMode === "view") return;
-  if (!validateRequiredFields(securityRoleRequiredFields)) return;
+  if (securityRoleMode !== "mappings" && !validateRequiredFields(securityRoleRequiredFields)) return;
+  const mappings = [];
+  for (const row of document.querySelectorAll("#security-role-mappings .security-role-mapping")) {
+    const provider = row.querySelector("select");
+    const name = row.querySelector("input");
+    if (!provider.value || !name.value.trim()) {
+      (provider.value ? name : provider).focus();
+      showToast("Choose a provider and enter an external role or group for each mapping.", "error");
+      return;
+    }
+    mappings.push({ realmId: provider.value, externalName: name.value.trim() });
+  }
   const payload = {
     roleId: document.getElementById("security-role-id").value.trim(),
     name: document.getElementById("security-role-name").value.trim() || null,
     description: document.getElementById("security-role-description").value.trim() || null,
     readOnly: isBuiltInReadOnlyRoleId(document.getElementById("security-role-id").value),
     privileges: commaList(document.getElementById("security-role-privileges").value),
-    roles: commaList(document.getElementById("security-role-roles").value)
+    roles: commaList(document.getElementById("security-role-roles").value),
+    externalMappings: mappings
   };
-  const path = securityRoleMode === "edit"
-    ? `/internal/security/roles/${encodeURIComponent(payload.roleId)}`
-    : "/internal/security/roles";
+  const create = securityRoleMode === "create";
+  const mappingsOnly = securityRoleMode === "mappings";
+  const rolePath = `/internal/security/roles/${encodeURIComponent(payload.roleId)}`;
+  const path = create ? "/internal/security/roles" : mappingsOnly ? `${rolePath}/external-mappings` : rolePath;
   try {
     const response = await fetch(path, {
-      method: securityRoleMode === "edit" ? "PUT" : "POST",
+      method: create ? "POST" : "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(mappingsOnly ? mappings : payload)
     });
     if (!response.ok) throw new Error(await responseErrorMessage(response));
     hideSecurityRoleForm();
@@ -4611,6 +4696,8 @@ function renderSecurityLdap() {
   setInputValue("security-ldap-group-object-class", settings.groupObjectClass, "groupOfNames");
   securityProviderAttributes.ldap = editableSecurityProviderAttributes(settings.attributes, ["name"]);
   refreshSecurityLdapRequiredMarkers();
+  setCheckboxValue("security-ldap-legacy-role-matching",
+    securityProviderJsonBoolean(settings.attributes?.legacyRoleMatching, Boolean(settings.url || settings.host)));
   syncSecurityProviderJsonFromForm("ldap", { force: true });
 }
 
@@ -4716,6 +4803,8 @@ function renderSecurityOidc() {
   document.getElementById("security-oidc-jwks-cache").value = Number(settings.jwksCacheSeconds ?? 300);
   securityProviderAttributes.oidc = editableSecurityProviderAttributes(settings.attributes);
   refreshSecurityOidcRequiredMarkers();
+  setCheckboxValue("security-oidc-legacy-role-matching",
+    securityProviderJsonBoolean(settings.attributes?.legacyRoleMatching, Boolean(settings.issuer || settings.issuerUri || settings.jwksUri)));
   syncSecurityProviderJsonFromForm("oidc", { force: true });
 }
 
@@ -8525,7 +8614,13 @@ function switchView(view, options = {}) {
   if (view === "routing-rules") window.KkRoutingRules.load();
   if (view === "docker-registry") loadDockerOperations();
   if (view === "security-users") loadSecurityUsers();
-  if (view === "security-roles") loadSecurityRoles();
+  if (view === "security-roles") {
+    loadSecurityRoles().then(() => {
+      if (!options.roleId || !document.getElementById("security-roles-view").classList.contains("is-active")) return;
+      const role = securityRoles.find((item) => item.roleId === options.roleId);
+      if (role) showSecurityRoleForm(role, { viewOnly: true });
+    });
+  }
   if (view === "security-privileges") loadSecurityPrivileges();
   if (view === "security-realms") loadSecurityRealms();
   if (view === "security-ldap") loadSecurityLdap();
@@ -8982,7 +9077,10 @@ document.getElementById("security-scan-waiver-table").addEventListener("click", 
   if (deleteButton) deleteSecurityScanWaiver(deleteButton.dataset.id);
 });
 
-document.getElementById("security-user-filter").addEventListener("input", renderSecurityUsers);
+document.getElementById("security-user-filter").addEventListener("input", () => {
+  securityUserRoleFilter = "";
+  renderSecurityUsers();
+});
 document.getElementById("security-user-source-filter").addEventListener("change", renderSecurityUsers);
 document.getElementById("create-security-user-button").addEventListener("click", () => showSecurityUserForm());
 document.getElementById("cancel-security-user-button").addEventListener("click", hideSecurityUserForm);
@@ -8993,6 +9091,11 @@ document.getElementById("security-user-form").addEventListener("submit", (event)
 });
 bindRequiredFieldErrors(securityUserRequiredFields);
 document.getElementById("security-user-table").addEventListener("click", (event) => {
+  const roleLink = event.target.closest(".security-role-link");
+  if (roleLink) {
+    switchView("security-roles", { roleId: roleLink.dataset.roleId });
+    return;
+  }
   const editButton = event.target.closest(".edit-security-user-button");
   if (editButton) {
     const user = securityUsers.find((item) => item.source === editButton.dataset.source && item.userId === editButton.dataset.id);
@@ -9007,6 +9110,15 @@ document.getElementById("security-role-filter").addEventListener("input", render
 document.getElementById("create-security-role-button").addEventListener("click", () => showSecurityRoleForm());
 document.getElementById("cancel-security-role-button").addEventListener("click", hideSecurityRoleForm);
 document.getElementById("save-security-role-button").addEventListener("click", saveSecurityRole);
+document.getElementById("add-security-role-mapping").addEventListener("click", () => addSecurityRoleMapping());
+document.getElementById("edit-security-role-mappings").addEventListener("click", editSecurityRoleMappings);
+document.getElementById("view-security-role-users").addEventListener("click", () => {
+  securityUserRoleFilter = document.getElementById("security-role-id").value;
+  document.getElementById("security-user-filter").value = securityUserRoleFilter;
+  document.getElementById("security-user-source-filter").value = "";
+  hideSecurityRoleForm();
+  switchView("security-users");
+});
 document.getElementById("security-role-id").addEventListener("input", () => refreshSecurityTransfer("roleRoles"));
 document.getElementById("security-role-form").addEventListener("submit", (event) => {
   event.preventDefault();

@@ -21,6 +21,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AdminBootstrapCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AnonymousSettingsCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.ApiKeyCommand;
+import com.github.klboke.kkrepo.server.security.SecurityPayloads.ExternalRoleMapping;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.LdapSettingsCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.PrivilegeCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.RoleCommand;
@@ -34,6 +35,41 @@ import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class SecurityManagementServiceValidationTest {
+
+  @Test
+  void storesProviderScopedMappingsAndPreservesLastSignInOnUserEdit() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.upsertRealm(new SecurityRealmRecord(1L, "oidc", "OIDC", "OIDC", true, 20,
+        Map.of("legacyRoleMatching", false)));
+    dao.upsertRealm(new SecurityRealmRecord(2L, "ldap", "LDAP", "LDAP", true, 10,
+        Map.of("legacyRoleMatching", false)));
+    SecurityManagementService service = new SecurityManagementService(dao);
+    var mapping = new ExternalRoleMapping("oidc", "engineering");
+    var created = service.saveRole(new RoleCommand("reader", null, "Reader", null, false,
+        List.of(), List.of(), Map.of(), List.of(mapping)));
+    assertEquals(List.of(mapping), created.externalMappings());
+
+    var groups = Map.<String, Object>of("groups", List.of("engineering", "reader"));
+    var oidc = service.saveUser(new UserCommand("OIDC", "alice", null, null, null, null, null,
+        "ACTIVE", "subject-1", List.of(), Map.of("groups", groups.get("groups"),
+            "externalRoleRealm", "oidc")));
+    var ldap = service.saveUser(new UserCommand("LDAP", "alice", null, null, null, null, null,
+        "ACTIVE", "subject-2", List.of(), Map.of("groups", groups.get("groups"),
+            "externalRoleRealm", "ldap")));
+    assertEquals(List.of("reader"), oidc.externalRoles());
+    assertEquals(List.of(), ldap.externalRoles());
+
+    var edited = service.saveUser(new UserCommand("OIDC", "alice", "Alice", null, null, null,
+        null, "ACTIVE", null, List.of(), null));
+    assertEquals("subject-1", edited.externalId());
+    assertEquals(List.of(), edited.roles());
+    assertEquals(List.of("reader"), edited.externalRoles());
+
+    service.deleteRole("reader");
+    service.saveRole(new RoleCommand("reader", null, "Reader", null, false,
+        List.of(), List.of(), Map.of()));
+    assertEquals(List.of(), service.findUser("OIDC", "alice").orElseThrow().externalRoles());
+  }
 
   @Test
   void saveUserRejectsMissingRoleReference() {
@@ -1036,6 +1072,11 @@ class SecurityManagementServiceValidationTest {
       }
 
       @Override
+      public Optional<SecurityRealmRecord> findRealmForUpdate(String realmId) {
+        return findRealm(realmId);
+      }
+
+      @Override
       public void upsertRealm(SecurityRealmRecord record) {
         SecurityRealmRecord stored = new SecurityRealmRecord(
             record.id() == null ? (long) realms.size() + 1 : record.id(),
@@ -1053,9 +1094,14 @@ class SecurityManagementServiceValidationTest {
         // not needed for service-level assertions
       }
 
-      @Override
-      public Optional<SecurityRoleRecord> findRole(String roleId) {
+    @Override
+    public Optional<SecurityRoleRecord> findRole(String roleId) {
       return Optional.ofNullable(roles.get(roleId));
+    }
+
+    @Override
+    public List<SecurityRoleRecord> listRoles() {
+      return List.copyOf(roles.values());
     }
 
     @Override
