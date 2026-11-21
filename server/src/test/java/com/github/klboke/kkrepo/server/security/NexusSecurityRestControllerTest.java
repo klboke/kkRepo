@@ -2107,6 +2107,7 @@ class NexusSecurityRestControllerTest {
     assertEquals("(&(objectClass=inetOrgPerson)(uid={0}))", ldapAttributes.get("userSearchFilter"));
     assertEquals("(&(objectClass=groupOfNames)(member={1}))", ldapAttributes.get("groupSearchFilter"));
     assertEquals(30000, ldapAttributes.get("timeoutMs"));
+    assertEquals(false, ldapAttributes.get(ExternalRoleMappings.LEGACY_MATCHING));
 
     var duplicate = mapper.valueToTree(controller.invoke(create, request(null))).path("result");
     assertFalse(duplicate.path("success").asBoolean());
@@ -2165,7 +2166,17 @@ class NexusSecurityRestControllerTest {
     assertEquals(true, updateResult.get("success"));
     assertEquals("corp-updated", updated.get("name"));
     assertEquals("ldaps://ldap2.example.com:636/dc=example,dc=com", updated.get("url"));
-    assertEquals(45000, dao.findRealm("ldap").orElseThrow().attributes().get("timeoutMs"));
+    var configured = dao.findRealm("ldap").orElseThrow();
+    assertEquals(45000, configured.attributes().get("timeoutMs"));
+    assertEquals(false, configured.attributes().get(ExternalRoleMappings.LEGACY_MATCHING));
+
+    var legacyAttributes = new LinkedHashMap<>(configured.attributes());
+    legacyAttributes.remove(ExternalRoleMappings.LEGACY_MATCHING);
+    dao.realm(new SecurityRealmRecord(configured.id(), configured.realmId(), configured.type(),
+        configured.name(), configured.enabled(), configured.priority(), legacyAttributes));
+    var upgraded = mapper.valueToTree(controller.invoke(update, request(null))).path("result");
+    assertTrue(upgraded.path("success").asBoolean());
+    assertEquals(true, dao.findRealm("ldap").orElseThrow().attributes().get(ExternalRoleMappings.LEGACY_MATCHING));
 
     var changeOrder = mapper.createObjectNode()
         .put("type", "rpc")
@@ -2211,6 +2222,10 @@ class NexusSecurityRestControllerTest {
     var staleOrder = mapper.valueToTree(controller.invoke(changeOrder, request(null))).path("result");
     assertTrue(staleOrder.path("success").asBoolean());
     assertEquals(cleared, dao.findRealm("ldap").orElseThrow());
+
+    var recreated = mapper.valueToTree(controller.invoke(create, request(null))).path("result");
+    assertTrue(recreated.path("success").asBoolean());
+    assertEquals(false, dao.findRealm("ldap").orElseThrow().attributes().get(ExternalRoleMappings.LEGACY_MATCHING));
   }
 
   @Test
