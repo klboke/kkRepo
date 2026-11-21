@@ -947,34 +947,33 @@ body {
   cursor: not-allowed;
 }
 
-.form-grid .checkbox-field {
-  grid-auto-flow: column;
-  justify-content: start;
-  align-items: end;
-  gap: 8px;
-  padding-bottom: 6px;
-}
-
+.form-grid .checkbox-field,
 .form-grid .checkbox-with-help {
   display: flex;
   align-items: center;
+  align-self: end;
   gap: 8px;
-  padding-bottom: 6px;
+  min-height: 36px;
 }
 
 .form-grid .checkbox-with-help > .checkbox-field {
-  align-items: center;
-  padding-bottom: 0;
+  align-self: center;
 }
 
-.checkbox-field input {
-  width: 16px;
-  height: 16px;
+#repository-proxy-fields > :is(.checkbox-field, .checkbox-with-help) {
+  align-self: stretch;
 }
 
-#ohpm-login-view .checkbox-field input {
+#repository-proxy-fields > .checkbox-with-help {
+  grid-column-start: 1;
+}
+
+.checkbox-field > input[type="checkbox"] {
+  flex: 0 0 auto;
   width: 16px;
   height: 16px;
+  margin: 0;
+  padding: 0;
 }
 
 .form-actions {
@@ -4630,14 +4629,17 @@ code {
   }
 }
 
-#content-selectors-view .action-bar {
+.action-bar-with-note {
   flex-wrap: wrap;
 }
-#content-selectors-view .action-bar > .create-button,
-#content-selectors-view .action-bar > .filter-box {
+.action-bar-with-note > .create-button {
   flex-shrink: 0;
 }
-#content-selectors-view .selector-access-note {
+.action-bar-with-note > .filter-box {
+  flex-shrink: 0;
+  max-width: 100%;
+}
+.action-bar-with-note > .action-bar-note {
   flex: 1 1 320px;
   min-width: 0;
 }

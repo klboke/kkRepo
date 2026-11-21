@@ -2958,7 +2958,7 @@ function refreshRepositoryRecipeControls() {
     format !== "conan" || repositoryFormMode !== "edit";
   document.getElementById("repository-apt-fields").hidden = format !== "apt";
   document.getElementById("repository-alpine-fields").hidden = format !== "alpine";
-  document.getElementById("repository-swift-proxy-note").hidden =
+  document.getElementById("repository-swift-proxy-help").hidden =
     !(format === "swift" && type === "PROXY");
   document.getElementById("repository-yum-depth-field").hidden = format !== "yum" || type !== "HOSTED";
   const pypiIndexPathVisible = format === "pypi" && type === "PROXY";
@@ -2966,8 +2966,6 @@ function refreshRepositoryRecipeControls() {
     !pypiIndexPathVisible;
   const minimumReleaseAgeVisible = MINIMUM_RELEASE_AGE_FORMATS.has(format) && type === "PROXY";
   document.getElementById("repository-minimum-release-age-field").hidden =
-    !minimumReleaseAgeVisible;
-  document.getElementById("repository-minimum-release-age-note").hidden =
     !minimumReleaseAgeVisible;
   refreshDockerConnectorControls();
   refreshAptControls();
