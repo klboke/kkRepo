@@ -2172,7 +2172,7 @@ class NexusSecurityRestControllerTest {
 
     var legacyAttributes = new LinkedHashMap<>(configured.attributes());
     legacyAttributes.remove(ExternalRoleMappings.LEGACY_MATCHING);
-    dao.realm(new SecurityRealmRecord(configured.id(), configured.realmId(), configured.type(),
+    dao.upsertRealm(new SecurityRealmRecord(configured.id(), configured.realmId(), configured.type(),
         configured.name(), configured.enabled(), configured.priority(), legacyAttributes));
     var upgraded = mapper.valueToTree(controller.invoke(update, request(null))).path("result");
     assertTrue(upgraded.path("success").asBoolean());
