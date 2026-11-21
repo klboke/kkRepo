@@ -87,6 +87,7 @@ Admin UI and Browse UI are served by the Spring Boot service as static assets:
 | `protocol-docker` | Docker Registry V2 / OCI path, digest, manifest, media type, and error helpers |
 | `protocol-nuget` | NuGet path helpers |
 | `protocol-rubygems` | RubyGems metadata helpers |
+| `protocol-arch` | pacman paths, package filename identity, `desc` records, and version ordering |
 | `protocol-yum` | Yum/RPM metadata helpers |
 | `persistence-jdbc` | Shared JDBC DAOs and database-dialect contracts |
 | `persistence-mysql` | MySQL dialect, driver, migrations, and contract suite |

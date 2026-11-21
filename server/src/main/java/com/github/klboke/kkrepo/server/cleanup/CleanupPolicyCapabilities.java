@@ -4,6 +4,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.protocol.ansible.AnsibleGalaxyVersions;
 import com.github.klboke.kkrepo.protocol.apt.DebianVersions;
 import com.github.klboke.kkrepo.protocol.alpine.AlpineVersions;
+import com.github.klboke.kkrepo.protocol.arch.ArchVersions;
 import com.github.klboke.kkrepo.protocol.cargo.CargoVersions;
 import com.github.klboke.kkrepo.protocol.conda.CondaVersions;
 import com.github.klboke.kkrepo.protocol.conan.ConanVersions;
@@ -39,6 +40,7 @@ public class CleanupPolicyCapabilities {
     comparators.put(RepositoryFormat.APT, DebianVersions::compare);
     comparators.put(RepositoryFormat.ALPINE, AlpineVersions.COMPARATOR);
     comparators.put(RepositoryFormat.R, RVersions.COMPARATOR);
+    comparators.put(RepositoryFormat.ARCH, ArchVersions.COMPARATOR);
     this.versionComparators = Map.copyOf(comparators);
   }
 

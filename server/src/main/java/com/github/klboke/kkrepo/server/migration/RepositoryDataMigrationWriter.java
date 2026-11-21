@@ -1200,6 +1200,8 @@ class RepositoryDataMigrationWriter {
       case GITLFS -> "gitlfs";
       case OHPM -> throw new IllegalArgumentException("OHPM requires its independent import workflow");
       case HUGGINGFACE -> "huggingface-model-file";
+      case ARCH -> source.sourcePath().contains(".pkg.tar.")
+          ? "arch-package" : "arch-database";
       case RAW -> "asset";
     };
   }

@@ -96,6 +96,16 @@ public class NugetService {
     };
   }
 
+  UploadPlan planPackage(Path nupkg) throws IOException {
+    NugetPackageMetadata metadata = readPackageMetadata(nupkg);
+    return new UploadPlan(
+        NugetPaths.flatContainerPackage(metadata.id(), metadata.version()),
+        metadata.id(), metadata.version());
+  }
+
+  record UploadPlan(String packagePath, String id, String version) {
+  }
+
   public MavenResponse putPackage(
       RepositoryRuntime runtime,
       String rawPath,
@@ -282,6 +292,25 @@ public class NugetService {
     return json(Map.of("versions", versions), headOnly);
   }
 
+  /** Flat-container version index with staged versions merged into the live set. */
+  MavenResponse stagedVersionIndex(
+      RepositoryRuntime runtime, String packageId, List<String> stagedVersions, boolean headOnly) {
+    TreeSet<String> versions = new TreeSet<>(NugetService::compareVersions);
+    try {
+      versions.addAll(versions(runtime, packageId));
+    } catch (MavenExceptions.MavenNotFoundException ignored) {
+      // A new package id can appear entirely through staging.
+    }
+    versions.addAll(stagedVersions);
+    return json(Map.of("versions", List.copyOf(versions)), headOnly);
+  }
+
+  private static boolean semVer2Only(String version) {
+    int prerelease = version.indexOf('-');
+    return version.contains("+")
+        || (prerelease >= 0 && version.substring(prerelease + 1).contains("."));
+  }
+
   private MavenResponse registrationIndex(
       RepositoryRuntime runtime,
       String packageId,
@@ -289,6 +318,30 @@ public class NugetService {
       String repositoryBaseUrl,
       HttpServletRequest request,
       boolean headOnly) {
+    return registrationIndex(
+        runtime, packageId, rawPath, repositoryBaseUrl, request, headOnly, List.of());
+  }
+
+  /** Registration index with staged versions merged into the live entry set. */
+  MavenResponse stagedRegistrationIndex(
+      RepositoryRuntime runtime,
+      String packageId,
+      String rawPath,
+      String repositoryBaseUrl,
+      List<String> stagedVersions,
+      boolean headOnly) {
+    return registrationIndex(
+        runtime, packageId, rawPath, repositoryBaseUrl, null, headOnly, stagedVersions);
+  }
+
+  private MavenResponse registrationIndex(
+      RepositoryRuntime runtime,
+      String packageId,
+      String rawPath,
+      String repositoryBaseUrl,
+      HttpServletRequest request,
+      boolean headOnly,
+      List<String> stagedVersions) {
     String registrationPrefix = NugetUpstreamResources.registrationPrefix(rawPath);
     String indexPath = registrationPrefix + NugetPaths.normalizePackageId(packageId) + "/index.json";
     if (runtime.type() == RepositoryType.PROXY) {
@@ -299,6 +352,20 @@ public class NugetService {
     Map<String, JsonNode> byVersion = new TreeMap<>(NugetVersions::compare);
     collectRegistrationItems(runtime, packageId, indexPath, base, runtime.id(), byVersion,
         new NugetUpstreamResources.RegistrationBudget());
+    String normalizedId = NugetPaths.normalizePackageId(packageId);
+    for (String version : stagedVersions) {
+      if (byVersion.containsKey(version)) continue;
+      String leafUrl = base + registrationPrefix + normalizedId + "/" + version + ".json";
+      JsonNode item = objectMapper.valueToTree(Map.of(
+          "@id", leafUrl,
+          "catalogEntry", Map.of(
+              "@id", leafUrl, "id", packageId, "version", version, "listed", true),
+          "packageContent", base + NugetPaths.flatContainerPackage(packageId, version)));
+      if (registrationPrefix.equals("v3/registration5-semver1/") && semVer2Only(version)) {
+        continue;
+      }
+      byVersion.put(version, item);
+    }
     List<JsonNode> items = List.copyOf(byVersion.values());
     Map<String, Object> body = new LinkedHashMap<>();
     body.put("@id", base + indexPath);

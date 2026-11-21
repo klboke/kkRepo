@@ -1799,6 +1799,40 @@ class RepositorySecurityFilterTest {
     assertEquals(expected, decisions.permission.action());
   }
 
+  @Test
+  void archPutUsesDecodedPathForTheAddEditDecision() throws Exception {
+    String decoded = "demo-1.0-1-x86_64.pkg.tar.zst";
+    String encoded = "demo%2D1.0-1-x86_64.pkg.tar.zst";
+    assertArchPutAction(decoded, Set.of(decoded), PermissionAction.EDIT);
+    assertArchPutAction(encoded, Set.of(decoded), PermissionAction.EDIT);
+    assertArchPutAction(encoded, Set.of(), PermissionAction.ADD);
+  }
+
+  private static void assertArchPutAction(
+      String path, Set<String> existingPaths, PermissionAction expected) throws Exception {
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("alice")));
+    RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
+    RepositorySecurityFilter filter = new RepositorySecurityFilter(
+        authentication,
+        decisions,
+        new FakeRepositoryDao(repository(
+            "arch-hosted", RepositoryFormat.ARCH, RepositoryType.HOSTED)),
+        new FakeAssetDao(existingPaths),
+        terraformRegistry(Set.of()),
+        new ForwardedHeaderPolicy(""),
+        new NexusLegacyUiCompatibility(false));
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("PUT", "/repository/arch-hosted/" + path),
+        new MockHttpServletResponse(),
+        chain);
+
+    assertEquals(1, chain.calls);
+    assertEquals(expected, decisions.permission.action());
+  }
+
   private static TerraformRegistryDao terraformRegistry(Set<String> publishedPlatforms) {
     return (TerraformRegistryDao) Proxy.newProxyInstance(
         RepositorySecurityFilterTest.class.getClassLoader(),

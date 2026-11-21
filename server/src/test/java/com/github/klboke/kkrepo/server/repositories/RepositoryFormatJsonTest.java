@@ -20,6 +20,7 @@ class RepositoryFormatJsonTest {
     assertEquals("\"yum\"", mapper.writeValueAsString(RepositoryFormat.YUM));
     assertEquals("\"pub\"", mapper.writeValueAsString(RepositoryFormat.PUB));
     assertEquals("\"composer\"", mapper.writeValueAsString(RepositoryFormat.COMPOSER));
+    assertEquals("\"arch\"", mapper.writeValueAsString(RepositoryFormat.ARCH));
     assertEquals(RepositoryFormat.MAVEN2, mapper.readValue("\"maven2\"", RepositoryFormat.class));
     assertEquals(RepositoryFormat.NPM, mapper.readValue("\"npm\"", RepositoryFormat.class));
     assertEquals(RepositoryFormat.NUGET, mapper.readValue("\"nuget\"", RepositoryFormat.class));
@@ -27,6 +28,7 @@ class RepositoryFormatJsonTest {
     assertEquals(RepositoryFormat.YUM, mapper.readValue("\"yum\"", RepositoryFormat.class));
     assertEquals(RepositoryFormat.PUB, mapper.readValue("\"pub\"", RepositoryFormat.class));
     assertEquals(RepositoryFormat.COMPOSER, mapper.readValue("\"composer\"", RepositoryFormat.class));
+    assertEquals(RepositoryFormat.ARCH, mapper.readValue("\"arch\"", RepositoryFormat.class));
   }
 
   @Test

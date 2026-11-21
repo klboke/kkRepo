@@ -25,7 +25,8 @@ function form(repo) {
   for (const name of ['refreshDockerConnectorControls', 'refreshAptControls', 'refreshAlpineControls',
     'refreshRepositoryBlobStoreLock', 'refreshRepositoryRemoteDefaults', 'updateRequiredMarkers',
     'syncRepositoryRecipeCombobox', 'refreshRepositoryBlobStoreOptions', 'clearRequiredFieldErrors',
-    'openFormModal', 'setConanManifestSettings', 'loadConanStatus', 'loadAptStatus', 'loadAlpineStatus']) context[name] = () => {};
+    'openFormModal', 'setConanManifestSettings', 'loadConanStatus', 'loadAptStatus', 'loadAlpineStatus',
+    'loadArchStatus']) context[name] = () => {};
   vm.createContext(context);
   // admin.js declares this at top level; the fixtures only evaluate selected functions, so load the real one.
   vm.runInContext(source.slice(source.indexOf('const MINIMUM_RELEASE_AGE_FORMATS'),
