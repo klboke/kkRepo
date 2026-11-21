@@ -4210,7 +4210,7 @@ function renderSecurityUsers() {
       <tr>
         <td>${escapeHtml(displaySource(user.source))}</td>
         <td>${escapeHtml(user.userId)}</td>
-        <td><span class="state-badge compact ${user.status === "ACTIVE" ? "ok" : "warn"}">${escapeHtml(user.status || "")}</span></td>
+        <td><span class="state-badge compact ${user.status?.trim().toUpperCase() === "ACTIVE" ? "ok" : "warn"}">${escapeHtml(user.status || "")}</span></td>
         <td>${escapeHtml(user.email || "")}</td>
         <td>${escapeHtml((user.roles || []).join(", "))}</td>
         <td class="actions-column">
