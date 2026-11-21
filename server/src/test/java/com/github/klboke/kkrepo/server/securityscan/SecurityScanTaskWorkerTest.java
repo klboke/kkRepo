@@ -154,6 +154,25 @@ class SecurityScanTaskWorkerTest {
   }
 
   @Test
+  void recordsLeaseLossWhenDeferringARejectedScan() {
+    Fixture fixture = new Fixture();
+    try {
+      var capacity = new ScannerCapacityException(17);
+      when(fixture.executor.execute(fixture.task)).thenThrow(capacity);
+      doThrow(new SecurityScanFinalizer.LostSecurityScanLeaseException(5L))
+          .when(fixture.finalizer).deferForCapacity(eq(fixture.task), eq(capacity), any());
+
+      fixture.worker.runOnce();
+
+      verify(fixture.metrics).recordTask(eq("MAVEN2"), any(), any(), eq("lease_lost"), any());
+      verify(fixture.finalizer, never()).failCurrentTask(any(), any(), any(), anyBoolean(), any());
+      verify(fixture.adapter, never()).cancel(anyString());
+    } finally {
+      fixture.worker.shutdown();
+    }
+  }
+
+  @Test
   void interruptedAdapterFailureRequeuesDurableWorkAndCancelsRemoteWithoutAnInterrupt() {
     Fixture fixture = new Fixture();
     AtomicBoolean cancellationSawInterrupt = new AtomicBoolean(true);

@@ -2,10 +2,13 @@ package com.github.klboke.kkrepo.server.securityscan;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mockConstruction;
+import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.security.scan.ScanEnums.SubjectKind;
@@ -49,6 +52,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class HttpSecurityScannerAdapterTest {
   private HttpServer server;
@@ -959,6 +963,56 @@ class HttpSecurityScannerAdapterTest {
       }
       assertEquals(primaryStatus == 503 ? 1 : 0, primaryCancels.get());
       assertEquals(fallbackStatus == 503 ? 1 : 0, fallbackCancels.get());
+    } finally {
+      fallback.stop(0);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {429, 503})
+  void keepsThePrimaryOutcomeWhenTheDeadlinePreventsFailover(int primaryStatus) throws Exception {
+    ObjectMapper mapper = new ObjectMapper();
+    AtomicInteger primaryCancels = new AtomicInteger();
+    start(exchange -> respondToScannerCall(exchange, primaryStatus, "17", primaryCancels, mapper));
+    AtomicInteger fallbackRequests = new AtomicInteger();
+    HttpServer fallback = standaloneServer(exchange -> {
+      fallbackRequests.incrementAndGet();
+      respond(exchange, 200, mapper.writeValueAsBytes(catalog()));
+    });
+    var timeout = new ScannerAdapterException("SCANNER_TIMEOUT", "Failover budget expired", true);
+    var budget = new HttpSecurityScannerAdapter.AttemptBudget(Duration.ofSeconds(35), 30);
+    try (var ignored = mockConstruction(HttpSecurityScannerAdapter.FailoverDeadline.class,
+        (deadline, context) -> {
+          when(deadline.nextAttempt()).thenReturn(budget).thenThrow(timeout);
+          when(deadline.remainingCancellationTimeout()).thenReturn(null);
+        })) {
+      SecurityScanningProperties properties = new SecurityScanningProperties();
+      properties.getAdapter().setBaseUrls(List.of(
+          "http://127.0.0.1:" + server.getAddress().getPort(),
+          "http://127.0.0.1:" + fallback.getAddress().getPort()));
+      properties.getAdapter().setServiceCredential("secret");
+      var adapter = new HttpSecurityScannerAdapter(mapper, properties);
+      String runId = java.util.stream.IntStream.range(0, 100)
+          .mapToObj(value -> "deadline-failover-" + value)
+          .filter(value -> HttpSecurityScannerAdapter.routeIndex(value, 2) == 0)
+          .findFirst().orElseThrow();
+      CatalogRequest request =
+          new CatalogRequest("v1", runId, "key", subject(null), "config", limits());
+
+      var failure = assertThrows(ScannerAdapterException.class,
+          () -> adapter.catalog(request, () -> new ByteArrayInputStream(new byte[0])));
+
+      if (primaryStatus == 429) {
+        assertEquals(17, assertInstanceOf(ScannerCapacityException.class, failure)
+            .retryAfterSeconds());
+      } else {
+        assertEquals(timeout, failure);
+        assertEquals(1, failure.getSuppressed().length);
+        assertEquals("SCANNER_HTTP_503",
+            ((ScannerAdapterException) failure.getSuppressed()[0]).code());
+      }
+      assertEquals(0, primaryCancels.get());
+      assertEquals(0, fallbackRequests.get());
     } finally {
       fallback.stop(0);
     }
