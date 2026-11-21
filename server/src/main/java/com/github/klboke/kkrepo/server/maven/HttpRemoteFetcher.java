@@ -156,10 +156,21 @@ public class HttpRemoteFetcher {
       throw new IllegalStateException("Outbound HTTP client factory is required");
     }
     try {
-      return fetchInternal(req, redirects, req.resolvedTarget(outboundPolicy, "remote fetch"));
+      return fetchInternal(req, redirects, resolveTarget(req, "remote fetch", redirects));
     } catch (SecurityValidationException e) {
       // Tag only transport validation failures, never a caller's response/scan policy failure.
       throw new RemoteRequestRejectedException(e);
+    }
+  }
+
+  private OutboundRequestPolicy.ResolvedHttpTarget resolveTarget(
+      Request req, String purpose, int redirects) {
+    try {
+      return req.resolvedTarget(outboundPolicy, purpose);
+    } catch (OutboundRequestPolicy.AddressRejectedException e) {
+      log.warn("Proxy upstream address rejected: repository={} method={} redirectHop={} host={} address={} reason={}",
+          req.repository(), req.method(), redirects, remoteHost(req.url()), e.address(), e.reason());
+      throw e;
     }
   }
 
@@ -243,7 +254,7 @@ public class HttpRemoteFetcher {
         Result redirectedResult = fetchInternal(
             redirectedRequest,
             redirects + 1,
-            redirectedRequest.resolvedTarget(outboundPolicy, "remote redirect"));
+            resolveTarget(redirectedRequest, "remote redirect", redirects + 1));
         return redirectedResult.withInheritedHeaders(redirectHeaders);
       }
       return new Result(response.status(), response.headers(), releaseOnClose(response));
