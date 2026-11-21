@@ -188,6 +188,15 @@ public interface SecurityScanDao {
       String errorSummary,
       Instant updatedAt);
 
+  /** Releases a capacity-rejected claim and restores the attempt reserved by that lease. */
+  boolean deferTaskForCapacity(
+      long taskId,
+      String leaseToken,
+      Instant nextAttemptAt,
+      String errorCode,
+      String errorSummary,
+      Instant updatedAt);
+
   boolean failTask(
       long taskId,
       String leaseToken,
