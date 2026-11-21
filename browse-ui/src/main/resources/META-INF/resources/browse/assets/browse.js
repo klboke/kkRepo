@@ -559,12 +559,6 @@ function can(permission) {
   return currentPermissions.some((granted) => permissionMatches(granted, permission));
 }
 
-function hasAdminEntryPermission() {
-  return can("nexus:*") || can("nexus:security-scanning:read")
-    || ["read", "create", "update", "delete"]
-    .some((action) => can(`nexus:selectors:${action}`));
-}
-
 function canDeleteBrowseContent() {
   return Boolean(currentSession && can("nexus:*"));
 }
@@ -635,9 +629,11 @@ function uploadEmptyStateMessage() {
 
 function adminEntryUrl() {
   if (can("nexus:*")) return "/admin/";
-  return can("nexus:security-scanning:read")
-    ? "/admin/#admin/security/artifact-scanning"
-    : "/admin/#admin/repository/content-selectors";
+  if (can("nexus:security-scanning:read")) return "/admin/#admin/security/artifact-scanning";
+  if (["read", "create", "update", "delete"].some(action => can(`nexus:selectors:${action}`))) {
+    return "/admin/#admin/repository/content-selectors";
+  }
+  return can("nexus:settings:read") ? "/admin/#admin/system/proxy-settings" : null;
 }
 
 function updateTopbarAuth() {
@@ -652,8 +648,9 @@ function updateTopbarAuth() {
 
   const signedIn = Boolean(currentSession && currentSession.userId);
   if (adminLink) {
-    adminLink.hidden = !signedIn || !hasAdminEntryPermission();
-    adminLink.href = adminEntryUrl();
+    const entryUrl = adminEntryUrl();
+    adminLink.hidden = !signedIn || !entryUrl;
+    adminLink.href = entryUrl || "/admin/";
   }
   loginButton.hidden = signedIn;
   userMenu.hidden = !signedIn;

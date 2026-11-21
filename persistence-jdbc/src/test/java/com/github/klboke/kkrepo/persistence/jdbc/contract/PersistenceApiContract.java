@@ -434,6 +434,30 @@ public abstract class PersistenceApiContract {
   }
 
   @Test
+  void changingProxyRouteClearsBackoffWithoutRecordingSyntheticSuccess() {
+    var states = stores().proxyStates();
+    long changed = createRepository("proxy-route-change", RepositoryFormat.MAVEN2, RepositoryType.PROXY);
+    long unchanged = createRepository("proxy-route-unchanged", RepositoryFormat.MAVEN2, RepositoryType.PROXY);
+    var lastSuccess = Instant.parse("2026-01-12T00:00:00Z");
+    var now = lastSuccess.plusSeconds(30);
+    states.recordSuccess(changed, lastSuccess);
+    states.recordFailure(changed, 60, "upstream unavailable", now);
+    states.recordFailure(unchanged, 60, "other upstream unavailable", now);
+    assertTrue(states.isBlocked(changed, now));
+
+    states.clearBackoff(changed);
+    states.clearBackoff(changed);
+
+    var state = states.loadState(changed).orElseThrow();
+    assertEquals(lastSuccess, state.lastSuccessAt());
+    assertEquals(0, state.failCount());
+    assertNull(state.lastFailureAt());
+    assertNull(state.lastError());
+    assertFalse(states.isBlocked(changed, now));
+    assertTrue(states.isBlocked(unchanged, now));
+  }
+
+  @Test
   void baselineContainsTheCompleteSharedLogicalSchema() {
     assertEquals(Set.of(
         "gitlfs_object",
@@ -606,7 +630,8 @@ public abstract class PersistenceApiContract {
         "terraform_publish_lease",
         "terraform_signing_key",
         "terraform_source_binding",
-        "ui_settings"), databaseTables());
+        "ui_settings",
+        "outbound_proxy_settings"), databaseTables());
   }
 
   @Test

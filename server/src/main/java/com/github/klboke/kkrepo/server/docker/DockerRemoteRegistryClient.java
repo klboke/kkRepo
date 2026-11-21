@@ -7,6 +7,7 @@ import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.metrics.KkRepoMetrics;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
 import com.github.klboke.kkrepo.server.security.SecurityValidationException;
@@ -166,9 +167,10 @@ public class DockerRemoteRegistryClient {
     try {
       boolean publicHttps = runtime != null && runtime.contentRedirectPolicy()
           == com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS;
+      OutboundProxyConfig proxy = OutboundProxyConfig.forTarget(runtime.outboundProxy(), url);
       OutboundRequestPolicy.ResolvedHttpTarget target = publicHttps
           ? outboundPolicy.resolvePublicHttpsTarget(url, "docker remote fetch")
-          : outboundPolicy.resolveHttpTarget(url, "docker remote fetch", proxyResolvesDns(runtime));
+          : outboundPolicy.resolveHttpTarget(url, "docker remote fetch", proxy != null);
       URI uri = target.uri();
       Map<String, String> headers = new LinkedHashMap<>();
       headers.put("User-Agent", "kkrepo/0.1");
@@ -185,7 +187,7 @@ public class DockerRemoteRegistryClient {
       }
       response = transportFactory.execute(
           runtime.name(),
-          runtime.outboundProxy(),
+          proxy,
           "GET",
           target,
           headers,
@@ -241,15 +243,15 @@ public class DockerRemoteRegistryClient {
     Throwable failure = null;
     ProxiedHttpClientFactory.ProxiedResponse response = null;
     try {
+      OutboundProxyConfig proxy = OutboundProxyConfig.forTarget(runtime.outboundProxy(), url);
       OutboundRequestPolicy.ResolvedHttpTarget target =
-          outboundPolicy.resolveHttpTarget(
-              url, "docker token fetch", proxyResolvesDns(runtime));
+          outboundPolicy.resolveHttpTarget(url, "docker token fetch", proxy != null);
       Map<String, String> headers = new LinkedHashMap<>();
       headers.put("User-Agent", "kkrepo/0.1");
       basicAuthorization(runtime).ifPresent(value -> headers.put("Authorization", value));
       response = transportFactory.execute(
           runtime.name(),
-          runtime.outboundProxy(),
+          proxy,
           "GET",
           target,
           headers,
@@ -423,11 +425,7 @@ public class DockerRemoteRegistryClient {
     return runtime == null ? 0 : runtime.id();
   }
 
-  private static boolean proxyResolvesDns(RepositoryRuntime runtime) {
-    return runtime != null
-        && runtime.outboundProxy() != null
-        && runtime.outboundProxy().enabled();
-  }
+
 
   private static String credentialFingerprint(RepositoryRuntime runtime) {
     return sha256(basicAuthorization(runtime).orElse("anonymous"));

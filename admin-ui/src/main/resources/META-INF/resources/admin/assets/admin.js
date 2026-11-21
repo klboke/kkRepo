@@ -184,6 +184,7 @@ const viewHashRoutes = {
   "security-scanning": SECURITY_SCAN_ROUTE_BASE,
   "security-audit-log": "#admin/security/audit-log",
   "ui-settings": "#admin/system/ui-settings",
+  "proxy-settings": "#admin/system/proxy-settings",
   "nexus-migration": "#admin/migration/nexus",
   "repository-data-migration": "#admin/migration/repository-data",
   "ohpm-import": "#admin/migration/ohpm",
@@ -218,6 +219,7 @@ const hashViewRoutes = {
   "#admin/security/audit": "security-audit-log",
   "#admin/system": "ui-settings",
   "#admin/system/ui-settings": "ui-settings",
+  "#admin/system/proxy-settings": "proxy-settings",
   "#admin/system/ui": "ui-settings",
   "#admin/migration": "nexus-migration",
   "#admin/migration/nexus": "nexus-migration",
@@ -2948,6 +2950,7 @@ function refreshRepositoryRecipeControls() {
   document.getElementById("repository-remote-ntlm-domain-field").hidden = !ntlmSelected;
   document.getElementById("repository-remote-ntlm-host-field").hidden = !ntlmSelected;
   document.getElementById("repository-outbound-proxy-fields").hidden = type !== "PROXY";
+  window.KkProxySettings?.refreshRepositoryForm();
   document.getElementById("repository-group-fields").hidden = type !== "GROUP";
   document.getElementById("repository-raw-fields").hidden = format !== "raw";
   document.getElementById("repository-docker-fields").hidden = format !== "docker";
@@ -3389,16 +3392,7 @@ function repositoryFormPayload() {
       remotePasswordConfigured: document.getElementById("repository-remote-password-clear").checked ? false : null,
       remoteBearerToken: textInputValue("repository-remote-bearer-token"),
       remoteBearerTokenConfigured: document.getElementById("repository-remote-bearer-token-clear").checked ? false : null,
-      outboundProxyType: document.getElementById("repository-outbound-proxy-type").value,
-      outboundProxyHost: textInputValue("repository-outbound-proxy-host"),
-      outboundProxyPort: (function () {
-        const port = document.getElementById("repository-outbound-proxy-port").value;
-        return port === "" ? null : Number(port);
-      })(),
-      outboundProxyUsername: textInputValue("repository-outbound-proxy-username"),
-      outboundProxyPassword: textInputValue("repository-outbound-proxy-password"),
-      outboundProxyPasswordConfigured:
-        document.getElementById("repository-outbound-proxy-password-clear").checked ? false : null
+      ...window.KkProxySettings.repositoryPayload()
     };
     if (recipe.format === "pypi") {
       payload.pypi = {
@@ -3498,13 +3492,7 @@ function setRepositoryFormDefaults() {
   document.getElementById("repository-remote-bearer-token").value = "";
   document.getElementById("repository-remote-bearer-token").placeholder = "";
   document.getElementById("repository-remote-bearer-token-clear").checked = false;
-  document.getElementById("repository-outbound-proxy-type").value = "";
-  document.getElementById("repository-outbound-proxy-host").value = "";
-  document.getElementById("repository-outbound-proxy-port").value = "";
-  document.getElementById("repository-outbound-proxy-username").value = "";
-  document.getElementById("repository-outbound-proxy-password").value = "";
-  document.getElementById("repository-outbound-proxy-password").placeholder = "";
-  document.getElementById("repository-outbound-proxy-password-clear").checked = false;
+  window.KkProxySettings.resetRepositoryForm();
   document.getElementById("repository-content-max-age").value = "1440";
   document.getElementById("repository-metadata-max-age").value = "1440";
   document.getElementById("repository-minimum-release-age").value = "0";
@@ -3633,16 +3621,7 @@ function showEditRepositoryForm(name) {
     document.getElementById("repository-remote-bearer-token-clear").checked = false;
     // Normalize legacy/alias values stored before the backend canonicalized the type,
     // so the select (HTTP/SOCKS only) still shows the effective choice.
-    const outboundProxyType = (repo.proxy.outboundProxyType || "").toUpperCase();
-    document.getElementById("repository-outbound-proxy-type").value =
-      outboundProxyType === "SOCKS5" ? "SOCKS" : outboundProxyType;
-    document.getElementById("repository-outbound-proxy-host").value = repo.proxy.outboundProxyHost || "";
-    document.getElementById("repository-outbound-proxy-port").value = repo.proxy.outboundProxyPort ?? "";
-    document.getElementById("repository-outbound-proxy-username").value = repo.proxy.outboundProxyUsername || "";
-    document.getElementById("repository-outbound-proxy-password").value = "";
-    document.getElementById("repository-outbound-proxy-password").placeholder =
-      repo.proxy.outboundProxyPasswordConfigured ? "Saved proxy password unchanged" : "";
-    document.getElementById("repository-outbound-proxy-password-clear").checked = false;
+    window.KkProxySettings.resetRepositoryForm(repo.proxy);
     document.getElementById("repository-content-max-age").value = repo.proxy.contentMaxAgeMinutes ?? "1440";
     document.getElementById("repository-metadata-max-age").value = repo.proxy.metadataMaxAgeMinutes ?? "1440";
     document.getElementById("repository-minimum-release-age").value =
@@ -8500,6 +8479,7 @@ function canAdmin(permission) {
 
 function canAccessAdminView(view) {
   if (canAdmin("nexus:*")) return view !== "loading";
+  if (view === "proxy-settings") return canAdmin("nexus:settings:read");
   if (view === "security-scanning") return canAdmin("nexus:security-scanning:read");
   return view === "content-selectors" && ["read", "create", "update", "delete"]
     .some((action) => canAdmin(`nexus:selectors:${action}`));
@@ -8556,6 +8536,7 @@ function switchView(view, options = {}) {
   }
   if (view === "security-audit-log") loadAuditLogs(0);
   if (view === "ui-settings") loadUiSettings();
+  if (view === "proxy-settings") window.KkProxySettings.load();
   if (view === "repository-data-migration") loadRepositoryDataMigrationJobs();
   if (view === "ohpm-import") window.KkOhpmImport.load();
   if (view === "ohpm-login") window.KkOhpmLogin.load();
@@ -8719,6 +8700,11 @@ document.getElementById("blobstore-action-menu").addEventListener("focusout", ()
 document.addEventListener("scroll", () => positionBlobStoreActionMenu(), true);
 window.addEventListener("resize", positionBlobStoreActionMenu);
 
+window.KkProxySettings.bind();
+document.getElementById("repository-outbound-proxy-mode").addEventListener("change",
+    window.KkProxySettings.refreshRepositoryForm);
+document.getElementById("repository-allowed-redirect-hosts").addEventListener("input",
+    window.KkProxySettings.refreshRepositoryForm);
 document.getElementById("create-repository-button").addEventListener("click", showCreateRepositoryForm);
 document.getElementById("cancel-repository-button").addEventListener("click", hideRepositoryForm);
 document.getElementById("save-repository-button").addEventListener("click", saveRepository);
@@ -9159,7 +9145,7 @@ async function bootstrap() {
   if (!canAdmin("nexus:*")) {
     initialDataLoaded = true;
     if (!applyHashRoute()) {
-      const fallback = ["security-scanning", "content-selectors"].find(canAccessAdminView);
+      const fallback = ["security-scanning", "content-selectors", "proxy-settings"].find(canAccessAdminView);
       if (fallback) switchView(fallback, { replaceHash: true });
       else document.getElementById("loading-view").textContent = "No administration views are available.";
     }

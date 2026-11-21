@@ -13,6 +13,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.HuggingFaceRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
@@ -30,6 +31,9 @@ import com.github.klboke.kkrepo.server.npm.NpmGroupPackumentCache;
 import com.github.klboke.kkrepo.server.pypi.PypiGroupSimpleIndexCache;
 import com.github.klboke.kkrepo.server.pypi.PypiRemoteIndexPath;
 import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.Mode;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxySettings;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.OutboundProxyCommand;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.cache.GroupMemberAssetCache;
 import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
@@ -72,6 +76,8 @@ import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -557,6 +563,9 @@ public class RepositoryService {
       markRSuiteDirty(existing.id());
     }
     evictStaleOutboundProxyClient(existing.name(), existing.attributes(), attributes);
+    if (proxyState != null && outboundProxyChanged(existing.attributes(), attributes)) {
+      proxyState.clearBackoff(existing.id());
+    }
 
     if (recipe.type() == RepositoryType.GROUP && command.group() != null) {
       List<Long> memberIds = resolveMemberIds(name, recipe.format(), command.group());
@@ -687,6 +696,64 @@ public class RepositoryService {
     return get(name);
   }
 
+  private OutboundProxySettings outboundProxySettings;
+  private ProxyStateDao proxyState;
+
+  @Autowired
+  void setOutboundProxySettings(OutboundProxySettings settings, ProxyStateDao proxyState) {
+    this.outboundProxySettings = settings;
+    this.proxyState = proxyState;
+  }
+
+  @Transactional
+  public void updateOutboundProxy(String name, OutboundProxyCommand command) {
+    if (command == null || command.mode() == null) {
+      throw new RepositoryValidationException("Select an outbound proxy mode");
+    }
+    RepositoryRecord repository = repositoryDao.lockByName(name)
+        .orElseThrow(() -> new RepositoryNotFoundException(name));
+    if (repository.type() != RepositoryType.PROXY) {
+      throw new RepositoryValidationException("Outbound proxy settings require a proxy repository");
+    }
+    ProxySettings current = readProxyAttributes(repository);
+    if (command.expectedMode() != null && command.expectedMode() != effectiveMode(current)) {
+      throw new ResponseStatusException(HttpStatus.CONFLICT, "Repository proxy mode changed: " + name);
+    }
+
+    ProxySettings input = new ProxySettings(null, null, null, null, null, null, null, null, null,
+        command.type(), command.host(), command.port(), command.username(), command.password(),
+        command.clearPassword() ? false : null, null, null, null, null, null, null, command.mode());
+    ProxySettings merged = requireProxy(
+        mergeProxy(current, repository.proxyRemoteUrl(), input), repository.format());
+    Map<String, Object> attributes = new LinkedHashMap<>(repository.attributes() == null ? Map.of() : repository.attributes());
+    Map<String, Object> proxy = new LinkedHashMap<>();
+    if (attributes.get("proxy") instanceof Map<?, ?> stored) {
+      stored.forEach((key, value) -> proxy.put(key.toString(), value));
+    }
+    proxy.keySet().removeIf(key -> key.startsWith("outboundProxy"));
+    proxyAttributes(merged).forEach((key, value) -> {
+      if (key.startsWith("outboundProxy")) proxy.put(key, value);
+    });
+    attributes.put("proxy", proxy);
+    repositoryDao.update(new RepositoryRecord(
+        repository.id(), repository.name(), repository.format(), repository.type(), repository.recipeName(),
+        repository.online(), repository.blobStoreId(), repository.routingRuleId(), repository.proxyRemoteUrl(),
+        repository.versionPolicy(), repository.layoutPolicy(), repository.writePolicy(),
+        repository.strictContentTypeValidation(), attributes));
+    evictStaleOutboundProxyClient(name, repository.attributes(), attributes);
+    if (proxyState != null) proxyState.clearBackoff(repository.id());
+    invalidateRuntimeCache(repository.id(), name);
+    refreshRepositoryCatalogAfterCommit();
+  }
+
+  @Transactional
+  public void inheritOutboundProxy(Map<String, Mode> repositories) {
+    for (var entry : new java.util.TreeMap<>(repositories).entrySet()) {
+      updateOutboundProxy(entry.getKey(), new OutboundProxyCommand(
+          Mode.INHERIT, null, null, null, null, null, false, entry.getValue()));
+    }
+  }
+
   public List<RepositoryRecipe> recipes() {
     return RepositoryRecipes.list();
   }
@@ -737,6 +804,14 @@ public class RepositoryService {
     proxiedHttpClientFactory.invalidateNtlm(repositoryName);
     proxiedHttpClientFactory.invalidate(
         repositoryName, OutboundProxyConfig.fromAttributes(proxyChildMap(attributes)));
+  }
+
+  private static boolean outboundProxyChanged(Map<String, Object> before, Map<String, Object> after) {
+    Map<?, ?> oldSettings = proxyChildMap(before);
+    Map<?, ?> newSettings = proxyChildMap(after);
+    return OutboundProxyConfig.mode(oldSettings) != OutboundProxyConfig.mode(newSettings)
+        || !java.util.Objects.equals(OutboundProxyConfig.fromAttributes(oldSettings),
+            OutboundProxyConfig.fromAttributes(newSettings));
   }
 
   private static Map<?, ?> proxyChildMap(Map<String, Object> attributes) {
@@ -1402,7 +1477,8 @@ public class RepositoryService {
         settings.outboundProxyPasswordConfigured(),
         settings.minimumReleaseAgeMinutes(),
         settings.allowedRedirectHosts(),
-        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost(), settings.streamingEnabled());
+        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost(),
+        settings.streamingEnabled(), settings.outboundProxyMode());
   }
 
   private static String defaultRemoteUrl(RepositoryFormat format) {
@@ -1441,7 +1517,8 @@ public class RepositoryService {
         settings.outboundProxyPasswordConfigured(),
         settings.minimumReleaseAgeMinutes(),
         settings.allowedRedirectHosts(),
-        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost(), settings.streamingEnabled());
+        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost(),
+        settings.streamingEnabled(), settings.outboundProxyMode());
   }
 
   private static ProxySettings withAllowedRedirectHosts(
@@ -1464,7 +1541,8 @@ public class RepositoryService {
         settings.outboundProxyPasswordConfigured(),
         settings.minimumReleaseAgeMinutes(),
         allowedRedirectHosts,
-        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost(), settings.streamingEnabled());
+        settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost(),
+        settings.streamingEnabled(), settings.outboundProxyMode());
   }
 
   private void validateProxy(ProxySettings settings, RepositoryFormat format) {
@@ -1491,10 +1569,19 @@ public class RepositoryService {
         throw new RepositoryValidationException("Clear proxy.remoteBearerToken before selecting NTLM authentication");
       }
     }
-    OutboundProxyConfig outboundProxy = validateOutboundProxy(settings);
+    OutboundProxyConfig storedProxy = validateOutboundProxy(settings);
+    Mode mode = effectiveMode(settings);
+    if (mode == Mode.OVERRIDE && storedProxy == null) {
+      throw new RepositoryValidationException("Configure a repository proxy host and port before using it");
+    }
+    OutboundProxyConfig outboundProxy = switch (mode) {
+      case DIRECT -> null;
+      case INHERIT -> outboundProxySettings.runtimeProxy();
+      case OVERRIDE -> storedProxy;
+    };
     try {
-      outboundPolicy.validateHttpUri(
-          settings.remoteUrl(), "proxy.remoteUrl", outboundProxy != null && outboundProxy.enabled());
+      outboundPolicy.validateHttpUri(settings.remoteUrl(), "proxy.remoteUrl",
+          OutboundProxyConfig.forTarget(outboundProxy, settings.remoteUrl()) != null);
     } catch (SecurityValidationException e) {
       throw new RepositoryValidationException(e.getMessage());
     }
@@ -1502,7 +1589,7 @@ public class RepositoryService {
       if (!"https".equalsIgnoreCase(java.net.URI.create(settings.remoteUrl()).getScheme())) {
         throw new RepositoryValidationException("Standalone * requires an HTTPS upstream");
       }
-      if (outboundProxy != null && outboundProxy.enabled()) {
+      if (mode != Mode.DIRECT) {
         throw new RepositoryValidationException("Standalone * requires direct outbound transport");
       }
     }
@@ -1541,6 +1628,14 @@ public class RepositoryService {
   private static RepositoryValidationException invalidRedirectHost() {
     return new RepositoryValidationException(
         "proxy.allowedRedirectHosts entries must be standalone *, exact host names or *.example.com patterns without a scheme, port, or path");
+  }
+
+  private static Mode effectiveMode(ProxySettings settings) {
+    if (settings == null) return Mode.DIRECT;
+    if (settings.outboundProxyMode() != null) return settings.outboundProxyMode();
+    return settings.outboundProxyHost() != null && !settings.outboundProxyHost().isBlank()
+        && settings.outboundProxyPort() != null && settings.outboundProxyPort() > 0
+        && settings.outboundProxyPort() <= 65535 ? Mode.OVERRIDE : Mode.DIRECT;
   }
 
   private OutboundProxyConfig validateOutboundProxy(ProxySettings settings) {
@@ -1609,18 +1704,17 @@ public class RepositoryService {
         ? new ProxySettings(existingRemoteUrl, null, null, null)
         : existing;
 
-    // The outbound proxy is one logical block governed by outboundProxyType:
-    //  - null/absent type  => caller did not touch the block => preserve the saved values;
-    //  - blank type ("")   => "Direct (no proxy)" selected    => clear the whole block, including
-    //                        host/port/username/password, so upstream fetches stop being proxied;
-    //  - non-blank type    => caller is setting/changing the proxy => take the incoming values and
-    //                        let validateOutboundProxy reject invalid types / missing host+port.
+    // Mode-only changes preserve the dormant override. Legacy callers can still clear or
+    // replace the whole block through outboundProxyType without sending a mode.
+    Mode mode = incoming.outboundProxyMode() != null ? incoming.outboundProxyMode()
+        : incoming.outboundProxyType() == null ? base.outboundProxyMode() : null;
     String mergedOutboundProxyType;
     String mergedOutboundProxyHost;
     Integer mergedOutboundProxyPort;
     String mergedOutboundProxyUsername;
     String mergedOutboundProxyPassword;
-    if (incoming.outboundProxyType() == null) {
+    if (incoming.outboundProxyType() == null
+        || (incoming.outboundProxyMode() != null && mode != Mode.OVERRIDE)) {
       mergedOutboundProxyType = base.outboundProxyType();
       mergedOutboundProxyHost = base.outboundProxyHost();
       mergedOutboundProxyPort = base.outboundProxyPort();
@@ -1665,7 +1759,7 @@ public class RepositoryService {
         incoming.remoteAuthenticationType() == null ? base.remoteAuthenticationType() : incoming.remoteAuthenticationType(),
         incoming.remoteNtlmDomain() == null ? base.remoteNtlmDomain() : blankToNull(incoming.remoteNtlmDomain()),
         incoming.remoteNtlmHost() == null ? base.remoteNtlmHost() : blankToNull(incoming.remoteNtlmHost()),
-        incoming.streamingEnabled() == null ? base.streamingEnabled() : incoming.streamingEnabled());
+        incoming.streamingEnabled() == null ? base.streamingEnabled() : incoming.streamingEnabled(), mode);
   }
 
   private static String mergedOutboundProxyPassword(ProxySettings base, ProxySettings incoming) {
@@ -1722,6 +1816,9 @@ public class RepositoryService {
     }
     if (proxy.remoteBearerToken() != null && !proxy.remoteBearerToken().isBlank()) {
       map.put("remoteBearerToken", proxy.remoteBearerToken());
+    }
+    if (proxy.outboundProxyMode() != null) {
+      map.put("outboundProxyMode", proxy.outboundProxyMode().name());
     }
     if (proxy.outboundProxyType() != null && !proxy.outboundProxyType().isBlank()) {
       map.put("outboundProxyType", proxy.outboundProxyType());
@@ -2174,7 +2271,9 @@ public class RepositoryService {
         stringOrNull(proxyMap.get("remoteAuthenticationType")),
         stringOrNull(proxyMap.get("remoteNtlmDomain")),
         stringOrNull(proxyMap.get("remoteNtlmHost")),
-        boolValue(proxyMap.get("streamingEnabled")));
+        boolValue(proxyMap.get("streamingEnabled")),
+        proxyMap.get("outboundProxyMode") == null ? null
+            : Mode.valueOf(proxyMap.get("outboundProxyMode").toString()));
   }
 
   private static ProxySettings readProxyAttributesOrDefaults(RepositoryRecord record) {
@@ -2202,7 +2301,7 @@ public class RepositoryService {
         effective.minimumReleaseAgeMinutes() == null ? 0 : effective.minimumReleaseAgeMinutes(),
         effective.allowedRedirectHosts() == null ? List.of() : effective.allowedRedirectHosts(),
         effective.remoteAuthenticationType(), effective.remoteNtlmDomain(), effective.remoteNtlmHost(),
-        Boolean.TRUE.equals(effective.streamingEnabled()));
+        Boolean.TRUE.equals(effective.streamingEnabled()), effectiveMode(effective));
   }
 
   private static String stringOrNull(Object value) {

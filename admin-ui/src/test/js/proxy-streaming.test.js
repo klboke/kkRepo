@@ -4,12 +4,13 @@ const { join } = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 const source = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/assets/admin.js'), 'utf8');
+const proxySettings = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/assets/proxy-settings.js'), 'utf8');
 
 function form(repo) {
   const elements = new Map();
   const element = id => {
     if (!elements.has(id)) elements.set(id, {
-      value: '', checked: false, hidden: false, closest: () => ({}),
+      value: '', options: ['DIRECT', 'INHERIT', 'OVERRIDE'].map(value => ({ value })), checked: false, hidden: false, closest: () => ({}),
     });
     return elements.get(id);
   };
@@ -27,6 +28,7 @@ function form(repo) {
     'syncRepositoryRecipeCombobox', 'refreshRepositoryBlobStoreOptions', 'clearRequiredFieldErrors',
     'openFormModal', 'setConanManifestSettings', 'loadConanStatus', 'loadAptStatus', 'loadAlpineStatus']) context[name] = () => {};
   vm.createContext(context);
+  vm.runInContext(proxySettings, context);
   // admin.js declares this at top level; the fixtures only evaluate selected functions, so load the real one.
   vm.runInContext(source.slice(source.indexOf('const MINIMUM_RELEASE_AGE_FORMATS'),
     source.indexOf('\n', source.indexOf('const MINIMUM_RELEASE_AGE_FORMATS'))), context);
@@ -59,6 +61,18 @@ test('every proxy form defaults streaming off, round trips it, and can disable i
   }
 });
 
+test('repository edit round-trips legacy proxy types through the shared editor', () => {
+  for (const [stored, expected] of [['socks5', 'SOCKS'], ['socks', 'SOCKS'], [' http ', 'HTTP']]) {
+    const { context } = form({ name: 'feed', recipe: 'maven2-proxy', format: 'maven2', type: 'PROXY',
+      online: true, proxy: {
+        remoteUrl: 'https://example.org', outboundProxyType: stored,
+        outboundProxyHost: 'proxy.example.org', outboundProxyPort: 3128
+      } });
+    context.showEditRepositoryForm('feed');
+    assert.equal(context.repositoryFormPayload().proxy.outboundProxyType, expected);
+  }
+});
+
 test('streaming explanation uses the shared accessible information popover', () => {
   const html = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/index.html'), 'utf8');
   const start = html.indexOf('id="repository-streaming-enabled"');
@@ -69,4 +83,21 @@ test('streaming explanation uses the shared accessible information popover', () 
   assert.ok(tooltip.length > 20);
   assert.equal(accessible, tooltip);
   assert.doesNotMatch(snippet, /<p/);
+});
+
+test('only the repository override mode enables and sends custom proxy settings', () => {
+  const { context, element } = form({ name: 'feed', recipe: 'maven2-proxy', format: 'maven2',
+    type: 'PROXY', online: true, proxy: { remoteUrl: 'https://example.org',
+      outboundProxyType: 'HTTP', outboundProxyHost: 'egress.example.org', outboundProxyPort: 3128 } });
+  assert.equal(context.repositoryFormPayload().proxy.outboundProxyMode, 'DIRECT');
+  context.showEditRepositoryForm('feed');
+  assert.equal(context.repositoryFormPayload().proxy.outboundProxyMode, 'OVERRIDE');
+  assert.equal(context.repositoryFormPayload().proxy.outboundProxyHost, 'egress.example.org');
+  element('repository-outbound-proxy-mode').value = 'INHERIT';
+  context.window.KkProxySettings.refreshRepositoryForm();
+  const inherited = context.repositoryFormPayload().proxy;
+  assert.equal(inherited.outboundProxyMode, 'INHERIT');
+  assert.equal(inherited.outboundProxyHost, undefined);
+  assert.equal(element('repository-outbound-proxy-host').disabled, true);
+  assert.equal(element('repository-outbound-proxy-host').value, 'egress.example.org');
 });
