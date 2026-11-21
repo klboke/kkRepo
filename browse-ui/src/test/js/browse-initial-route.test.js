@@ -192,6 +192,46 @@ for (const staleOutcome of ["success", "failure"]) {
   });
 }
 
+test("a duplicate My Token request clears the secret and points to Reset", async () => {
+  const message = "An API key already exists for this token type. Use Reset to replace it.";
+  const fields = {
+    "my-token-domain": { value: "GenericToken" },
+    "my-token-display-name": { value: "second" },
+    "my-token-secret": { hidden: false },
+    "my-token-value": { value: "previously-displayed" },
+  };
+  const statuses = [];
+  const busyStates = [];
+  let refreshed = false;
+  const context = vm.createContext({
+    currentSession: { userId: "owner" },
+    currentApiKeysLoaded: true,
+    latestGeneratedApiToken: fields["my-token-value"].value,
+    document: { getElementById: (name) => fields[name] },
+    markMyTokenDisplayNameValidity: () => {},
+    setMyTokenBusy: (busy) => busyStates.push(busy),
+    setMyTokenStatus: (text, type) => statuses.push([text, type]),
+    revealGeneratedToken: () => assert.fail("A conflict must not display a token"),
+    fetch: async () => ({ status: 409, ok: false, json: async () => ({ message }) }),
+    loadCurrentApiKeys: async () => {
+      assert.equal(context.currentApiKeysLoaded, false);
+      refreshed = true;
+    },
+  });
+  vm.runInContext([
+    "createCurrentApiKey", "clearMyTokenSecret", "responseMessage",
+  ].map(extractFunction).join("\n"), context);
+
+  await context.createCurrentApiKey({ preventDefault() {} });
+
+  assert.equal(context.latestGeneratedApiToken, "");
+  assert.equal(fields["my-token-secret"].hidden, true);
+  assert.equal(fields["my-token-value"].value, "");
+  assert.equal(refreshed, true);
+  assert.deepEqual(statuses.at(-1), [message, "error"]);
+  assert.deepEqual(busyStates, [true, false]);
+});
+
 test("bootstrap completion during login refresh cannot apply the anonymous fallback", async () => {
   const app = start("#browse/my-token");
   const loginContext = deferred();

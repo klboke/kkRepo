@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
@@ -51,6 +53,10 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.server.ResponseStatusException;
 
 class NexusSecurityRestControllerTest {
@@ -914,6 +920,47 @@ class NexusSecurityRestControllerTest {
     assertEquals(created.apiKey().id(), reset.apiKey().id());
     assertNotEquals(created.token(), reset.token());
     assertEquals(reset.token(), afterResetCreate.token());
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "/internal/security/api-keys/current", "/service/rest/v1/security/api-keys/current"
+  })
+  void duplicateSelfServiceCreationReturnsConflictWithoutASecret(String path) throws Exception {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    var service = new SecurityManagementService(dao);
+    var mvc = MockMvcBuilders.standaloneSetup(
+            new SecurityManagementController(service), controller(dao))
+        .setControllerAdvice(new SecurityErrorAdvice())
+        .build();
+    var alice = subject("alice");
+    var json = new ObjectMapper();
+
+    var created = mvc.perform(post(path)
+            .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE, alice)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("""
+                {"domain":"GenericToken","displayName":"first"}
+                """))
+        .andExpect(status().isOk())
+        .andReturn().getResponse();
+    assertFalse(json.readTree(created.getContentAsByteArray()).path("token").asText().isBlank());
+    var original = dao.findApiKey("GenericToken", "Local", "alice").orElseThrow();
+
+    var conflict = mvc.perform(post(path)
+            .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE, alice)
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("""
+                {"domain":"GenericToken","displayName":"second"}
+                """))
+        .andExpect(status().isConflict())
+        .andReturn().getResponse();
+    var body = json.readTree(conflict.getContentAsByteArray());
+    assertEquals("An API key already exists for this token type. Use Reset to replace it.",
+        body.path("message").asText());
+    assertFalse(body.has("apiKey"));
+    assertFalse(body.has("token"));
+    assertEquals(original, dao.findApiKey("GenericToken", "Local", "alice").orElseThrow());
   }
 
   @Test
@@ -2948,6 +2995,15 @@ class NexusSecurityRestControllerTest {
           .filter(apiKey -> ownerSource.equals(apiKey.ownerSource()))
           .filter(apiKey -> ownerUserId.equals(apiKey.ownerUserId()))
           .findFirst();
+    }
+
+    @Override
+    public boolean insertApiKeyIfAbsent(ApiKeyRecord record) {
+      if (findApiKey(record.domain(), record.ownerSource(), record.ownerUserId()).isPresent()) {
+        return false;
+      }
+      upsertApiKey(record);
+      return true;
     }
 
     @Override

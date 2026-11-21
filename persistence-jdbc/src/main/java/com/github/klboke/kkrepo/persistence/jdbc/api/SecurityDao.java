@@ -109,6 +109,9 @@ public interface SecurityDao {
 
   Optional<ApiKeyRecord> findApiKeyByDomainAndHash(String domain, String apiKeyHash);
 
+  /** Atomically inserts a key. A conflicting key is left intact. */
+  boolean insertApiKeyIfAbsent(ApiKeyRecord record);
+
   void upsertApiKey(ApiKeyRecord record);
 
   int deleteApiKey(long id);

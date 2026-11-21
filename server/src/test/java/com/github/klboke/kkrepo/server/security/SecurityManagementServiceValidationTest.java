@@ -632,7 +632,7 @@ class SecurityManagementServiceValidationTest {
   }
 
   @Test
-  void createApiKeyForOwnerReusesRecoverableExistingToken() {
+  void packageClientLoginReusesRecoverableExistingToken() {
     FakeSecurityDao dao = new FakeSecurityDao();
     SecurityManagementService service = new SecurityManagementService(dao);
 
@@ -640,7 +640,7 @@ class SecurityManagementServiceValidationTest {
         "Local",
         "alice",
         new ApiKeyCommand("NpmToken", null, null, "npm login", null, List.of(), null, null, null));
-    var second = service.createApiKeyForOwner(
+    var second = service.getOrCreateApiKeyForLogin(
         "Local",
         "alice",
         new ApiKeyCommand("NpmToken", null, null, "npm login", null, List.of(), null, null, null));
@@ -664,7 +664,7 @@ class SecurityManagementServiceValidationTest {
         "alice",
         new ApiKeyCommand("NpmToken", null, null, "npm login", null, List.of(), null, null, null));
     var reset = service.resetApiKeyForOwner(first.apiKey().id(), "Local", "alice");
-    var afterResetCreate = service.createApiKeyForOwner(
+    var afterResetCreate = service.getOrCreateApiKeyForLogin(
         "Local",
         "alice",
         new ApiKeyCommand("NpmToken", null, null, "npm login", null, List.of(), null, null, null));
@@ -673,6 +673,25 @@ class SecurityManagementServiceValidationTest {
     assertEquals(first.apiKey().id(), reset.apiKey().id());
     assertEquals(reset.token(), afterResetCreate.token());
     assertEquals(1, service.listApiKeysForOwner("Local", "alice").size());
+  }
+
+  @Test
+  void ownerApiKeyCreationRejectsAnExistingKeyWithAnUnreadablePayload() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    SecurityManagementService service = new SecurityManagementService(dao);
+    var original = new ApiKeyRecord(
+        10L, "GenericToken", "Local", "alice", "original", "ACTIVE",
+        "existing-hash", "existing", Map.of("values", List.of("read")),
+        "unreadable", null, null, null, null);
+    dao.apiKey(original);
+
+    assertThrows(ApiKeyAlreadyExistsException.class, () -> service.createApiKeyForOwner(
+        "Local", "alice",
+        new ApiKeyCommand(
+            "GenericToken", null, null, "replacement", null, List.of("publish"),
+            null, null, null)));
+
+    assertEquals(original, dao.findApiKey("GenericToken", "Local", "alice").orElseThrow());
   }
 
   @Test
@@ -1213,6 +1232,15 @@ class SecurityManagementServiceValidationTest {
           .filter(apiKey -> apiKey.ownerSource().equals(ownerSource))
           .filter(apiKey -> apiKey.ownerUserId().equals(ownerUserId))
           .findFirst();
+    }
+
+    @Override
+    public boolean insertApiKeyIfAbsent(ApiKeyRecord record) {
+      if (findApiKey(record.domain(), record.ownerSource(), record.ownerUserId()).isPresent()) {
+        return false;
+      }
+      upsertApiKey(record);
+      return true;
     }
 
     @Override

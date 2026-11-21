@@ -1213,6 +1213,12 @@ async function createCurrentApiKey(event) {
       expireCurrentSession();
       return;
     }
+    if (res.status === 409) {
+      clearMyTokenSecret();
+      currentApiKeysLoaded = false;
+      await loadCurrentApiKeys();
+      if (!currentSession) return;
+    }
     if (!res.ok) throw new Error(await responseMessage(res, `Failed to generate API key: ${res.status}`));
     const payload = await res.json();
     revealGeneratedToken(payload.token || "");
