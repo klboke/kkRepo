@@ -54,6 +54,7 @@ R_E2E_CONTAINERS=()
 R_E2E_ORIGINAL_PROXY_REMOTE=""
 R_E2E_PROXY_PACKAGE=""
 R_E2E_PROXY_MESSAGE=""
+DOCKER_LDAP_CONTAINER=""
 
 if [[ ! "$SWIFT_LOGIN_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
   printf '[client-e2e] SWIFT_E2E_LOGIN_TIMEOUT_SECONDS must be a positive integer\n' >&2
@@ -115,7 +116,18 @@ cleanup_r_e2e_containers() {
   done
 }
 
+cleanup_docker_ldap_e2e() {
+  if [[ -z "$DOCKER_LDAP_CONTAINER" ]]; then
+    return
+  fi
+  curl -m 20 -sS -o /dev/null -u "$KKREPO_AUTH" -X PUT -H "Content-Type: application/json" \
+    --data '{"enabled":false}' "$KKREPO_URL/internal/security/ldap" >/dev/null 2>&1 || true
+  docker rm -f "$DOCKER_LDAP_CONTAINER" >/dev/null 2>&1 || true
+  DOCKER_LDAP_CONTAINER=""
+}
+
 cleanup_client_e2e_containers() {
+  cleanup_docker_ldap_e2e
   cleanup_apt_e2e_containers
   cleanup_alpine_e2e_containers
   cleanup_r_e2e_containers
@@ -1835,6 +1847,129 @@ test_docker_oci() {
   else
     log "oras not found; Docker image client flow completed, ORAS artifact flow skipped"
   fi
+  test_docker_ldap_mapped_roles
+}
+
+# An LDAP user gets push access only through a realm-mapped group role. API keys and the
+# Docker bearer tokens restored on every registry request must carry that role, and lose it
+# once the next IdP login synchronizes the removal from the group.
+test_docker_ldap_mapped_roles() {
+  local ldap_image="${DOCKER_LDAP_E2E_IMAGE:-osixia/openldap:1.5.0}"
+  local ldap_port="${DOCKER_LDAP_E2E_PORT:-18389}"
+  local ldap_host="${DOCKER_LDAP_E2E_HOST:-host.docker.internal}"
+  local ldap_admin_password="ldap-admin-$STAMP"
+  local user="kk-e2e-ldap"
+  local password="ldap-user-$STAMP"
+  local group="kk-e2e-docker-$STAMP"
+  local ref="$KKREPO_DOCKER_HOSTED_REGISTRY/kkrepo-client-e2e/docker-oci-ldap:$STAMP"
+  local docker_config="$WORK_DIR/docker-ldap-config"
+  local api_key status docker_env
+  # A separate client config keeps the admin login; keep the active engine of the current context.
+  docker_env="DOCKER_CONFIG='$docker_config' DOCKER_HOST='$(docker context inspect --format '{{.Endpoints.docker.Host}}')'"
+  add_redaction_value "$ldap_admin_password"
+  add_redaction_value "$password"
+  mkdir -p "$docker_config"
+
+  DOCKER_LDAP_CONTAINER="kkrepo-client-e2e-ldap-$STAMP"
+  run_logged docker-ldap-start docker run --detach --name "$DOCKER_LDAP_CONTAINER" \
+    -p "$ldap_port:389" -e LDAP_DOMAIN=example.com \
+    -e LDAP_ADMIN_PASSWORD="$ldap_admin_password" "$ldap_image"
+  for ((i = 1; i <= 60; i++)); do
+    if docker exec "$DOCKER_LDAP_CONTAINER" ldapsearch -x -H ldap://localhost \
+      -D cn=admin,dc=example,dc=com -w "$ldap_admin_password" -b dc=example,dc=com -s base \
+      >/dev/null 2>&1; then
+      break
+    fi
+    if (( i == 60 )); then
+      log "timed out waiting for the LDAP fixture"
+      return 1
+    fi
+    sleep 1
+  done
+  docker exec -i "$DOCKER_LDAP_CONTAINER" ldapadd -x -H ldap://localhost \
+    -D cn=admin,dc=example,dc=com -w "$ldap_admin_password" >"$ARTIFACT_DIR/docker-ldap-seed.log" 2>&1 <<LDIF
+dn: ou=people,dc=example,dc=com
+objectClass: organizationalUnit
+ou: people
+
+dn: ou=groups,dc=example,dc=com
+objectClass: organizationalUnit
+ou: groups
+
+dn: uid=$user,ou=people,dc=example,dc=com
+objectClass: inetOrgPerson
+uid: $user
+cn: Client E2E LDAP
+sn: E2E
+mail: $user@example.com
+userPassword: $password
+
+dn: cn=$group,ou=groups,dc=example,dc=com
+objectClass: groupOfNames
+cn: $group
+member: uid=$user,ou=people,dc=example,dc=com
+LDIF
+
+  curl -m 20 -fsS -o /dev/null -u "$KKREPO_AUTH" -X PUT -H "Content-Type: application/json" \
+    --data "{\"enabled\":true,\"priority\":5,\"source\":\"LDAP\",\"name\":\"LDAP\",\"protocol\":\"ldap\",\"host\":\"$ldap_host\",\"port\":$ldap_port,\"searchBase\":\"dc=example,dc=com\",\"authScheme\":\"simple\",\"authUsername\":\"cn=admin,dc=example,dc=com\",\"authPassword\":\"$ldap_admin_password\",\"userBaseDn\":\"ou=people\",\"userSubtree\":true,\"userObjectClass\":\"inetOrgPerson\",\"userIdAttribute\":\"uid\",\"userRealNameAttribute\":\"cn\",\"userEmailAddressAttribute\":\"mail\",\"ldapGroupsAsRoles\":true,\"groupType\":\"static\",\"groupBaseDn\":\"ou=groups\",\"groupSubtree\":true,\"groupIdAttribute\":\"cn\",\"groupMemberAttribute\":\"member\",\"groupMemberFormat\":\"\${dn}\",\"groupObjectClass\":\"groupOfNames\"}" \
+    "$KKREPO_URL/internal/security/ldap"
+  curl -m 20 -fsS -o /dev/null -u "$KKREPO_AUTH" -H "Content-Type: application/json" \
+    --data "{\"id\":\"$group\",\"name\":\"$group\",\"description\":\"client E2E LDAP group\",\"privileges\":[\"nx-repository-view-docker-docker-hosted-*\"],\"roles\":[]}" \
+    "$KKREPO_URL/service/rest/v1/security/roles"
+
+  # The LDAP login persists the mapped group; no role is assigned to the user in kkRepo itself.
+  api_key="$(curl -m 20 -fsS -u "$user:$password" -H "Content-Type: application/json" \
+    --data '{"displayName":"client E2E LDAP docker"}' \
+    "$KKREPO_URL/internal/security/api-keys/current" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')"
+  add_redaction_value "$api_key"
+
+  run_logged docker-ldap-login bash -lc "printf '%s\n' \"\$1\" | $docker_env docker login '$KKREPO_DOCKER_HOSTED_REGISTRY' --username '$user' --password-stdin" _ "$password"
+  run_logged docker-ldap-push bash -lc "docker tag alpine:3.20 '$ref' && $docker_env docker push '$ref'"
+  run_logged docker-ldap-api-key-push-scope \
+    python3 compat-test/scripts/docker-registry-scope-probe.py \
+    --registry "http://$KKREPO_DOCKER_HOSTED_REGISTRY" --image kkrepo-client-e2e/docker-oci-ldap \
+    --header "X-Nexus-Plus-Token: $api_key" --expect allowed
+
+  docker exec -i "$DOCKER_LDAP_CONTAINER" ldapmodify -x -H ldap://localhost \
+    -D cn=admin,dc=example,dc=com -w "$ldap_admin_password" >"$ARTIFACT_DIR/docker-ldap-revoke.log" 2>&1 <<LDIF
+dn: cn=$group,ou=groups,dc=example,dc=com
+changetype: modify
+replace: member
+member: cn=admin,dc=example,dc=com
+LDIF
+  # Password logins are served from the Basic credential cache (kkrepo.cache.basic-auth.ttl-seconds,
+  # 120 s by default). The first login after it expires rebinds to LDAP and stores the new groups.
+  local sync_timeout="${DOCKER_LDAP_E2E_SYNC_TIMEOUT_SECONDS:-180}" synced=false
+  for ((i = 0; i <= sync_timeout; i += 10)); do
+    status="$(curl -m 20 -sS -o /dev/null -w '%{http_code}' -u "$user:$password" \
+      "$KKREPO_URL/internal/security/basic/login")"
+    if [[ "$status" != 2?? && "$status" != 3?? ]]; then
+      log "LDAP re-login returned HTTP $status"
+      return 1
+    fi
+    if python3 compat-test/scripts/docker-registry-scope-probe.py \
+      --registry "http://$KKREPO_DOCKER_HOSTED_REGISTRY" --image kkrepo-client-e2e/docker-oci-ldap \
+      --header "X-Nexus-Plus-Token: $api_key" --expect denied >/dev/null 2>&1; then
+      synced=true
+      log "LDAP group removal synchronized after ${i}s"
+      break
+    fi
+    sleep 10
+  done
+  if [[ "$synced" != true ]]; then
+    log "LDAP group removal was not synchronized within ${sync_timeout}s"
+    return 1
+  fi
+
+  run_logged docker-ldap-push-after-revoke-tag docker tag alpine:3.20 "$ref-revoked"
+  # The probe above proved the denial; containerd 2.x may hang instead of failing on it, hence timeout.
+  if run_logged docker-ldap-push-after-revoke bash -lc "$docker_env timeout 120 docker push '$ref-revoked'"; then
+    log "push succeeded after the LDAP group was removed"
+    return 1
+  fi
+  docker image rm "$ref" "$ref-revoked" >/dev/null 2>&1 || true
+  cleanup_docker_ldap_e2e
 }
 
 test_terraform() {

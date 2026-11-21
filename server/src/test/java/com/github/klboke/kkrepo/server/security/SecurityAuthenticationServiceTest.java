@@ -1180,6 +1180,40 @@ class SecurityAuthenticationServiceTest {
   }
 
   @Test
+  void apiKeysAndStoredSubjectsKeepRealmMappedRolesOnlyForExternalUsers() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.user(new SecurityUserRecord(4L, "OIDC", "carol", null, null, "carol@example.com", null,
+        "ACTIVE", "carol", Map.of(
+            "groups", List.of("docker-push"),
+            "claims", Map.of("realm_access", Map.of("roles", List.of("nx-admin"))))));
+    dao.roles(4L, "local-role");
+    dao.user(new SecurityUserRecord(5L, "Local", "dave", null, null, "dave@example.com", null,
+        "ACTIVE", "dave", Map.of("groups", List.of("nx-admin"))));
+    dao.apiKey(new ApiKeyRecord(
+        14L, "nexus", "OIDC", "carol", "Carol docker key", "ACTIVE",
+        SecurityHashing.sha256("carol-secret"), "nexus.carol", Map.of("values", List.of()), "{}",
+        null, null, LocalDateTime.now().plusDays(1), null));
+    SecurityAuthenticationService service = service(dao);
+
+    AuthenticatedSubject apiKey = service.authenticate(request(Map.of(
+        "X-Nexus-Plus-Token", "nexus.carol-secret"))).orElseThrow();
+    assertEquals("api-key", apiKey.realmId());
+    assertEquals(Set.of("docker-push", "local-role", "nx-anonymous"),
+        apiKey.permissionSubject().groupIds());
+    assertEquals(Set.of("docker-push", "local-role", "nx-anonymous"),
+        service.authenticateStoredSubject("OIDC", "carol", "OIDC", null).orElseThrow()
+            .permissionSubject().groupIds());
+    assertFalse(service.authenticateStoredSubject("Local", "dave", "local", null).orElseThrow()
+        .permissionSubject().groupIds().contains("nx-admin"));
+
+    // The next IdP login rewrites attributes.groups; the same credentials then lose the role.
+    dao.user(new SecurityUserRecord(4L, "OIDC", "carol", null, null, "carol@example.com", null,
+        "ACTIVE", "carol", Map.of("groups", List.of())));
+    assertFalse(service.authenticateStoredSubject("OIDC", "carol", "OIDC", null).orElseThrow()
+        .permissionSubject().groupIds().contains("docker-push"));
+  }
+
+  @Test
   void explicitBasicLoginStillAcceptsCachedBasicCredentialsAfterLogout() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.realm(new SecurityRealmRecord(1L, "local", "LOCAL", "Local", true, 0, Map.of("source", "Local")));

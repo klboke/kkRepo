@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server;
 import com.github.klboke.kkrepo.cache.CaffeineRuntimeHints;
 import com.github.klboke.kkrepo.server.nativeimage.ApolloRuntimeHints;
 import com.github.klboke.kkrepo.server.nativeimage.JacksonRuntimeHints;
+import com.github.klboke.kkrepo.server.nativeimage.LdapRuntimeHints;
 import com.github.klboke.kkrepo.server.nativeimage.QuartzRuntimeHints;
 import com.github.klboke.kkrepo.server.nativeimage.SecuritySessionRuntimeHints;
 import java.util.Map;
@@ -22,6 +23,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
     ApolloRuntimeHints.class,
     CaffeineRuntimeHints.class,
     JacksonRuntimeHints.class,
+    LdapRuntimeHints.class,
     QuartzRuntimeHints.class,
     SecuritySessionRuntimeHints.class
 })

@@ -391,7 +391,7 @@ public class SecurityAuthenticationService {
     }
     return securityDao.findUser(source, userId)
         .filter(this::activeUser)
-        .map(user -> toSubject(user, realmId, null, apiKeyId));
+        .map(user -> toSubject(user, realmId, storedExternalRoles(user), apiKeyId));
   }
 
   public Optional<AuthenticatedSubject> authenticateAnonymous() {
@@ -564,7 +564,26 @@ public class SecurityAuthenticationService {
       return Optional.empty();
     }
     securityDao.markApiKeyUsed(apiKey.id(), LocalDateTime.now());
-    return Optional.of(toSubject(owner.get(), "api-key", null, apiKey.id()));
+    return Optional.of(toSubject(owner.get(), "api-key", storedExternalRoles(owner.get()), apiKey.id()));
+  }
+
+  /**
+   * Roles an OIDC/LDAP realm mapped for this user at their last login (persisted as attributes.groups
+   * on every replica), so API keys and stored bearer tokens keep the grants a browser session has.
+   * Raw IdP claims are deliberately ignored: only realm-mapped role IDs may grant access.
+   */
+  private static Set<String> storedExternalRoles(SecurityUserRecord user) {
+    if (DEFAULT_SOURCE.equals(user.source()) || user.attributes() == null
+        || !(user.attributes().get("groups") instanceof Collection<?> groups)) {
+      return null;
+    }
+    Set<String> roles = new LinkedHashSet<>();
+    for (Object group : groups) {
+      if (group != null && !String.valueOf(group).isBlank()) {
+        roles.add(String.valueOf(group).trim());
+      }
+    }
+    return roles;
   }
 
   private Optional<ApiKeyRecord> findApiKey(List<ApiKeyTokenCandidate> candidates) {
