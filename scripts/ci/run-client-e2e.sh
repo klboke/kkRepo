@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+source "$SCRIPT_DIR/fixture-api-keys.sh"
 
 KKREPO_URL="${KKREPO_COMPAT_BASE_URL:-http://127.0.0.1:${KKREPO_COMPAT_PORT:-18090}}"
 SWIFT_KKREPO_URL="${SWIFT_KKREPO_BASE_URL:-$KKREPO_URL}"
@@ -115,13 +116,14 @@ cleanup_r_e2e_containers() {
   done
 }
 
-cleanup_client_e2e_containers() {
+cleanup_client_e2e() {
   cleanup_apt_e2e_containers
   cleanup_alpine_e2e_containers
   cleanup_r_e2e_containers
+  cleanup_fixture_api_keys || true
 }
 
-trap cleanup_client_e2e_containers EXIT
+trap cleanup_client_e2e EXIT
 
 need() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -461,17 +463,6 @@ wait_for_docker_registry() {
   return 1
 }
 
-create_api_key() {
-  local domain="$1"
-  local display_name="$2"
-  curl -m 20 -fsS \
-    -u "$KKREPO_AUTH" \
-    -H "Content-Type: application/json" \
-    --data "{\"domain\":\"$domain\",\"displayName\":\"$display_name\"}" \
-    "$KKREPO_URL/internal/security/api-keys/current" \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])'
-}
-
 set_anonymous_access() {
   local enabled="$1"
   curl -m 20 -fsS \
@@ -774,7 +765,7 @@ test_npm() {
   local package="@kkrepo-client-e2e/npm-$STAMP"
   local npm_registry_host token
   npm_registry_host="$(printf '%s' "$KKREPO_URL" | sed 's#^http[s]*://##')"
-  token="$(create_api_key NpmToken "client e2e npm $STAMP")"
+  fixture_api_key token NpmToken "client e2e npm $STAMP"
   add_redaction_value "$token"
   mkdir -p "$dir" "$install_dir" "$pnpm_login_dir"
   : >"$pnpm_user_config"
@@ -969,7 +960,7 @@ test_cargo() {
   local cargo_home="$WORK_DIR/cargo-home"
   local cargo_target="$WORK_DIR/cargo-target"
   local token
-  token="$(create_api_key CargoToken "client e2e cargo $STAMP")"
+  fixture_api_key token CargoToken "client e2e cargo $STAMP"
   add_redaction_value "$token"
   mkdir -p "$crate_dir/src" "$crate_dir/.cargo" "$cargo_home" "$cargo_target"
   cat >"$crate_dir/Cargo.toml" <<EOF
@@ -1040,7 +1031,7 @@ test_pub() {
   local hosted_url="$KKREPO_URL/repository/pub-hosted"
   local group_url="$KKREPO_URL/repository/pub-group"
   local token
-  token="$(create_api_key PubToken "client e2e pub $STAMP")"
+  fixture_api_key token PubToken "client e2e pub $STAMP"
   add_redaction_value "$token"
   mkdir -p "$package_dir/lib" "$consumer_dir/bin" "$pub_cache" "$pub_home/.config"
 
@@ -1352,7 +1343,7 @@ test_nuget() {
   local packages_dir="$WORK_DIR/nuget-packages"
   local package="KkRepo.ClientE2E.NuGet.$STAMP"
   local token
-  token="$(create_api_key NuGetApiKey "client e2e nuget $STAMP")"
+  fixture_api_key token NuGetApiKey "client e2e nuget $STAMP"
   add_redaction_value "$token"
   mkdir -p "$dir" "$restore_dir" "$packages_dir"
   write_nuget_config "$dir/NuGet.Config" "kkrepoHosted" "$KKREPO_URL/repository/nuget-hosted/index.json"
@@ -1400,7 +1391,7 @@ test_rubygems() {
   local gem_user_home="$WORK_DIR/rubygems-home"
   local gem_credentials="$gem_user_home/.gem/credentials"
   local token
-  token="$(create_api_key RubyGemsApiKey "client e2e rubygems $STAMP")"
+  fixture_api_key token RubyGemsApiKey "client e2e rubygems $STAMP"
   add_redaction_value "$token"
   mkdir -p "$dir/lib" "$gem_home" "$gem_user_home/.gem"
   printf -- '---\n:kkrepo: %s\n' "$token" >"$gem_credentials"
@@ -2069,7 +2060,7 @@ swift_registry_token_login() {
   local step="swift-$label-registry-token-login"
   local status=0
   local token
-  token="$(create_api_key GenericToken "Swift client E2E $label $STAMP")"
+  fixture_api_key token GenericToken "Swift client E2E $label $STAMP"
   add_redaction_value "$token"
   prepare_swift_netrc "$home"
   run_logged_in "$step" "$directory" \
@@ -2694,7 +2685,7 @@ for field in ("download_url", "shasums_url", "shasums_signature_url"):
 PY
   )
 
-  token="$(create_api_key GenericToken "client e2e terraform $STAMP")"
+  fixture_api_key token GenericToken "client e2e terraform $STAMP"
   add_redaction_value "$token"
   config="$dir/terraform.rc"
   cat >"$config" <<EOF
@@ -2904,7 +2895,7 @@ PY
     return 1
   fi
 
-  generic_token="$(create_api_key GenericToken "client e2e ansible $label $STAMP")"
+  fixture_api_key generic_token GenericToken "client e2e ansible $label $STAMP"
   add_redaction_value "$generic_token"
   requirements="$dir/requirements.yml"
   cat >"$requirements" <<EOF
@@ -4244,6 +4235,7 @@ run_selected_tests() {
         exit 2
         ;;
     esac
+    cleanup_fixture_api_keys
     run_registered_cleanup
     # Includes Cleanup Try Run/Execute: these are coverage, not housekeeping.
     printf '%s\t%s\n' "$test" "$((SECONDS - test_started))" >> "$ARTIFACT_DIR/protocol-durations.tsv"

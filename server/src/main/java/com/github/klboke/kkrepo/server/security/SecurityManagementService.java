@@ -822,10 +822,14 @@ public class SecurityManagementService implements AccessDecisionService {
 
   @Transactional
   public CreatedApiKeyView createApiKey(ApiKeyCommand command) {
-    return createApiKey(command, true);
+    return writeApiKey(command, ApiKeyWrite.REUSE_EXISTING);
   }
 
-  private CreatedApiKeyView createApiKey(ApiKeyCommand command, boolean reuseExisting) {
+  private enum ApiKeyWrite {
+    CREATE_ONLY, REUSE_EXISTING, ROTATE
+  }
+
+  private CreatedApiKeyView writeApiKey(ApiKeyCommand command, ApiKeyWrite mode) {
     if (command == null) {
       command = new ApiKeyCommand(null, null, null, null, null, null, null, null, null);
     }
@@ -837,7 +841,7 @@ public class SecurityManagementService implements AccessDecisionService {
     String tokenPrefix = null;
     String encryptedPayload = blankToNull(command.encryptedPayload());
     if (hash == null) {
-      if (reuseExisting) {
+      if (mode == ApiKeyWrite.REUSE_EXISTING) {
         Optional<CreatedApiKeyView> existing = existingApiKeyToken(domain, ownerSource, ownerUserId);
         if (existing.isPresent()) {
           return existing.get();
@@ -864,7 +868,13 @@ public class SecurityManagementService implements AccessDecisionService {
         null,
         command.expiresAt(),
         null);
-    securityDao.upsertApiKey(record);
+    if (mode == ApiKeyWrite.CREATE_ONLY) {
+      if (!securityDao.insertApiKeyIfAbsent(record)) {
+        throw new ApiKeyAlreadyExistsException();
+      }
+    } else {
+      securityDao.upsertApiKey(record);
+    }
     evictAuthCachesAfterCommit();
     ApiKeyView view = securityDao.findApiKey(domain, ownerSource, ownerUserId)
         .map(this::toApiKeyView)
@@ -887,10 +897,23 @@ public class SecurityManagementService implements AccessDecisionService {
       String ownerSource,
       String ownerUserId,
       ApiKeyCommand command) {
+    return writeApiKey(ownedApiKeyCommand(ownerSource, ownerUserId, command), ApiKeyWrite.CREATE_ONLY);
+  }
+
+  /** Reuses the format token after the package client's credential login. */
+  @Transactional
+  public CreatedApiKeyView getOrCreateApiKeyForLogin(
+      String ownerSource, String ownerUserId, ApiKeyCommand command) {
+    return writeApiKey(
+        ownedApiKeyCommand(ownerSource, ownerUserId, command), ApiKeyWrite.REUSE_EXISTING);
+  }
+
+  private static ApiKeyCommand ownedApiKeyCommand(
+      String ownerSource, String ownerUserId, ApiKeyCommand command) {
     if (command == null) {
       command = new ApiKeyCommand(null, null, null, null, null, null, null, null, null);
     }
-    return createApiKey(new ApiKeyCommand(
+    return new ApiKeyCommand(
         command.domain(),
         normalizeSource(ownerSource),
         requireText(ownerUserId, "ownerUserId"),
@@ -899,7 +922,7 @@ public class SecurityManagementService implements AccessDecisionService {
         command.scopes(),
         command.expiresAt(),
         null,
-        null));
+        null);
   }
 
   @Transactional
@@ -917,7 +940,7 @@ public class SecurityManagementService implements AccessDecisionService {
   }
 
   private CreatedApiKeyView resetApiKey(ApiKeyView existing) {
-    return createApiKey(new ApiKeyCommand(
+    return writeApiKey(new ApiKeyCommand(
         existing.domain(),
         existing.ownerSource(),
         existing.ownerUserId(),
@@ -927,7 +950,7 @@ public class SecurityManagementService implements AccessDecisionService {
         existing.expiresAt(),
         null,
         null),
-        false);
+        ApiKeyWrite.ROTATE);
   }
 
   @Transactional

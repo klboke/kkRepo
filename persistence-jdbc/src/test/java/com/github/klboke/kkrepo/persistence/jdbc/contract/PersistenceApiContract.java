@@ -33,6 +33,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.ApiKeyRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
@@ -76,6 +77,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -110,6 +112,39 @@ public abstract class PersistenceApiContract {
     assertEquals(Optional.of(refreshed), times.find(id, hash));
     assertEquals(1, repository.deleteById(id));
     assertTrue(times.find(id, hash).isEmpty());
+  }
+
+  @Test
+  void concurrentApiKeyInsertsLeaveTheWinnerIntact() throws Exception {
+    var security = stores().security();
+    String owner = "api-key-race-" + UUID.randomUUID();
+    var candidates = List.of("first", "second").stream()
+        .map(name -> new ApiKeyRecord(
+            null, "GenericToken", "Local", owner, name, "ACTIVE", owner + "/" + name,
+            null, Map.of("values", List.of("read")), name, null, null, null, null))
+        .toList();
+    var barrier = new CyclicBarrier(2);
+    var contenders = candidates.stream().<Callable<Boolean>>map(candidate -> () -> {
+      barrier.await(10, java.util.concurrent.TimeUnit.SECONDS);
+      return inTransaction(() -> {
+        boolean inserted = security.insertApiKeyIfAbsent(candidate);
+        assertTrue(security.findApiKey("GenericToken", "Local", owner).isPresent());
+        return inserted;
+      });
+    }).toList();
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var results = executor.invokeAll(contenders);
+      boolean firstWon = results.get(0).get();
+      assertNotEquals(firstWon, results.get(1).get());
+      var keys = security.listApiKeysForOwner("Local", owner);
+      assertEquals(1, keys.size());
+      var winner = candidates.get(firstWon ? 0 : 1);
+      assertEquals(winner.displayName(), keys.getFirst().displayName());
+      assertEquals(winner.apiKeyHash(), keys.getFirst().apiKeyHash());
+      assertEquals(winner.encryptedPayload(), keys.getFirst().encryptedPayload());
+    } finally {
+      security.deleteApiKeysForOwner("Local", owner);
+    }
   }
 
   @Test
