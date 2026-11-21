@@ -53,6 +53,7 @@ class OrchestrationTest(unittest.TestCase):
             prelude += f'{function}() {{ echo "test:{name}"; SWIFT_CLEANUP_FIXTURE_AVAILABLE=true; }}\n'
         prelude += '''log() { :; }
 register_cleanup_fixture() { echo "register:$4"; }
+cleanup_fixture_api_keys() { echo cleanup-api-keys; }
 run_registered_cleanup() { echo cleanup; }
 '''
         self.stub("dart", ":\n")
@@ -88,7 +89,77 @@ run_registered_cleanup() { echo cleanup; }
         lines = result.stdout.splitlines()
         self.assertEqual([x[5:] for x in lines if x.startswith("test:")], EXPECTED)
         self.assertEqual([x[9:] for x in lines if x.startswith("register:")], [x for x in EXPECTED if x not in ("gitlfs", "ohpm")])
+        self.assertEqual(lines.count("cleanup-api-keys"), len(EXPECTED))
         self.assertEqual(lines.count("cleanup"), len(EXPECTED))
+
+    def test_fixture_keys_reuse_owned_tokens_and_release_them_between_protocols(self):
+        existing = {"NpmToken": 99}
+        requests = []
+        path = "/internal/security/api-keys/current"
+
+        class KeyHandler(BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                pass
+
+            def do_POST(self):
+                if self.path != path:
+                    self.send_error(404)
+                    return
+                payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                domain = payload["domain"]
+                requests.append(("create", domain))
+                if domain in existing:
+                    self.send_error(409)
+                    return
+                key_id = len(requests)
+                existing[domain] = key_id
+                body = json.dumps({"apiKey": {"id": key_id}, "token": f"fixture-{key_id}"}).encode()
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_DELETE(self):
+                key_id = int(self.path.removeprefix(path + "/"))
+                requests.append(("delete", key_id))
+                domain = next(domain for domain, value in existing.items() if value == key_id)
+                del existing[domain]
+                self.send_response(200)
+                self.end_headers()
+
+        with ThreadingHTTPServer(("127.0.0.1", 0), KeyHandler) as server:
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                result = subprocess.run(["bash"], input="""
+set -euo pipefail
+source "$SCRIPT_DIR/fixture-api-keys.sh"
+use_key() {
+  local token
+  fixture_api_key token GenericToken "$1"
+  [[ "$token" == "$2" ]]
+}
+use_key "Swift version one" fixture-1
+use_key "Swift version two" fixture-1
+fixture_api_key pub_token PubToken 'Pub "fixture"'
+[[ "$pub_token" == fixture-2 ]]
+if fixture_api_key existing_token NpmToken "other fixture"; then
+  exit 2
+fi
+cleanup_fixture_api_keys
+use_key "Ansible fixture" fixture-6
+cleanup_fixture_api_keys
+""", env=dict(self.env, KKREPO_URL=f"http://127.0.0.1:{server.server_port}",
+              KKREPO_AUTH="fixture:fixture"), text=True, capture_output=True, timeout=20)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            finally:
+                server.shutdown()
+                thread.join()
+
+        self.assertEqual(requests, [
+            ("create", "GenericToken"), ("create", "PubToken"), ("create", "NpmToken"),
+            ("delete", 1), ("delete", 2), ("create", "GenericToken"), ("delete", 6),
+        ])
+        self.assertEqual(existing, {"NpmToken": 99})
 
     def test_shards_execute_every_original_protocol_and_cleanup_once(self):
         collected = []

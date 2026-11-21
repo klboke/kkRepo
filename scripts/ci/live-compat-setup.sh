@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+source "$SCRIPT_DIR/fixture-api-keys.sh"
 COMPOSE_FILE="${COMPOSE_FILE:-$PROJECT_ROOT/docker-compose.compat.yml}"
 if [[ -z "${COMPOSE_PROJECT_NAME:-}" ]]; then
   case "$(basename "$COMPOSE_FILE")" in
@@ -62,17 +63,6 @@ refresh_kkrepo_auth_if_needed() {
   fi
   echo "[compat] kkrepo admin password did not authenticate with the configured or source Nexus password" >&2
   return 1
-}
-
-create_kkrepo_api_key() {
-  local domain="$1"
-  local display_name="$2"
-  curl -m 20 -fsS \
-    -u "$KKREPO_AUTH" \
-    -H "Content-Type: application/json" \
-    --data "{\"domain\":\"$domain\",\"displayName\":\"$display_name\"}" \
-    "$KKREPO_URL/internal/security/api-keys/current" \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])'
 }
 
 basic_auth_header() {
@@ -1319,9 +1309,13 @@ seed_pub_hosted_fixture() {
   nexus_auth_header="$(basic_auth_header "$NEXUS_AUTH")"
   publish_pub_fixture "Nexus" "$NEXUS_URL/repository/pub-hosted" "$nexus_auth_header" \
     "$archive" "$package_name" "$package_version"
-  kkrepo_token="$(create_kkrepo_api_key PubToken "live compat hosted pub fixture")"
-  publish_pub_fixture "kkrepo" "$KKREPO_URL/repository/pub-hosted" "Bearer $kkrepo_token" \
-    "$archive" "$package_name" "$package_version"
+  (
+    trap 'cleanup_fixture_api_keys || true' EXIT
+    fixture_api_key kkrepo_token PubToken "live compat hosted pub fixture"
+    publish_pub_fixture "kkrepo" "$KKREPO_URL/repository/pub-hosted" "Bearer $kkrepo_token" \
+      "$archive" "$package_name" "$package_version"
+    cleanup_fixture_api_keys
+  )
   if [[ -n "${GITHUB_ENV:-}" ]]; then
     {
       echo "PUB_COMPAT_HOSTED_PACKAGE=$package_name"
