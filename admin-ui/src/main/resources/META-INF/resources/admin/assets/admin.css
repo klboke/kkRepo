@@ -947,12 +947,16 @@ body {
   cursor: not-allowed;
 }
 
-.form-grid .checkbox-field,
+.checkbox-field,
 .form-grid .checkbox-with-help {
   display: flex;
   align-items: center;
-  align-self: end;
   gap: 8px;
+}
+
+.form-grid .checkbox-field,
+.form-grid .checkbox-with-help {
+  align-self: end;
   min-height: 36px;
 }
 
@@ -4812,7 +4816,7 @@ code {
 
 }
 
-#ohpm-login-view .create-button:disabled {
+:is(#ohpm-login-view, #proxy-batch-dialog) .create-button:disabled {
   background: var(--canvas);
   border-color: var(--line);
   color: var(--muted);
@@ -4919,7 +4923,25 @@ code {
 }
 .proxy-dialog-body .nx-table { min-width: 515px; }
 .proxy-dialog-body .nx-table-frame { max-height: 52dvh; overflow: auto; margin: 10px 0 0; }
+#proxy-batch-dialog .nx-table { min-width: 0; }
+#proxy-batch-dialog :is(th, td) {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  padding-block: 8px;
+}
+.proxy-batch-selection {
+  margin-inline-start: auto;
+  font-variant-numeric: tabular-nums;
+}
 .outbound-proxy-mode select { max-width: min(100%, 275px); }
 @media (max-width: 960px) {
   .proxy-settings-layout { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 560px) {
+  #proxy-batch-dialog .proxy-dialog-body { padding-inline: 12px; }
+  #proxy-batch-dialog .nx-table { table-layout: fixed; }
+  #proxy-batch-dialog :is(th, td) { padding-inline: 5px; }
+  #proxy-batch-dialog td { font-size: 13px; }
+  #proxy-batch-dialog th:first-child { width: 39%; }
+  #proxy-batch-dialog th:nth-child(2) { width: 29%; }
 }

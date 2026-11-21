@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-4">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20261118-format-icons-1">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20260818-user-round-1">
-    <link rel="stylesheet" href="./assets/admin.css?v=20261121-proxy-settings">
+    <link rel="stylesheet" href="./assets/admin.css?v=20261121-proxy-batch-layout">
     <link rel="stylesheet" href="/browse/assets/account-menu.css?v=20260824-ui-themes-3">
     <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=20260819-topbar-control-height-1">
     <link rel="stylesheet" href="/login/assets/delete-confirmation.css?v=20261013-delete-confirmation-1">
@@ -2346,7 +2346,9 @@
       <div class="proxy-dialog-body">
         <div class="proxy-settings-toolbar">
           <button class="create-button secondary" id="proxy-batch-select-direct" type="button">Select eligible direct repositories</button>
-          <span id="proxy-batch-count" role="status"></span>
+          <span class="form-note proxy-batch-selection" role="status" aria-atomic="true">
+            <span>Selected</span> <span id="proxy-batch-count"></span>
+          </span>
         </div>
         <div class="nx-table-frame"><table class="nx-table">
           <thead><tr><th>Repository</th><th>Current route</th><th>After switching</th></tr></thead>
@@ -2389,7 +2391,7 @@
     <script src="./assets/ohpm-import.js?v=20261106-ohpm-import"></script>
     <script src="./assets/user-picker.js?v=20261107-user-picker"></script>
     <script src="./assets/ohpm-login.js?v=20261107-user-picker"></script>
-    <script src="./assets/proxy-settings.js?v=20261121-proxy-settings"></script>
+    <script src="./assets/proxy-settings.js?v=20261121-proxy-batch-layout"></script>
     <script src="./assets/admin.js?v=20261121-proxy-settings"></script>
   </body>
 </html>

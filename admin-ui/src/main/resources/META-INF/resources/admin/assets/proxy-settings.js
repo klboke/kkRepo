@@ -341,7 +341,9 @@
         });
         const label = document.createElement("label");
         label.className = "checkbox-field";
-        label.append(input, document.createTextNode(repo.name));
+        const name = document.createElement("span");
+        name.textContent = repo.name;
+        label.append(input, name);
         nameCell.append(label);
       }
       cell(row, route(repo));
