@@ -2406,6 +2406,29 @@ class RepositoryServiceTest {
   }
 
   @Test
+  void scopedUpdatePreservesDormantCredentialsAndAllOtherRepositorySettings() {
+    RepositoryRecord original = mavenProxyWithOutboundProxy("saved-secret");
+    var repositories = new StubRepositoryDao(original);
+    var service = service(repositories);
+    assertEquals(OutboundProxyConfig.Mode.OVERRIDE, service.get(original.name()).proxy().outboundProxyMode());
+    service.updateOutboundProxy(original.name(), new RepositoryCommands.OutboundProxyCommand(
+        OutboundProxyConfig.Mode.DIRECT, null, null, null, null, null, false, OutboundProxyConfig.Mode.OVERRIDE));
+    RepositoryRecord updated = repositories.findByName(original.name()).orElseThrow();
+    var expected = new java.util.LinkedHashMap<>(original.attributes());
+    var storedProxy = new java.util.LinkedHashMap<>((Map<?, ?>) expected.get("proxy"));
+    @SuppressWarnings("unchecked")
+    var newProxy = (Map<String, Object>) (Map<?, ?>) storedProxy;
+    newProxy.put("outboundProxyMode", "DIRECT");
+    expected.put("proxy", newProxy);
+    assertEquals(expected, updated.attributes());
+    assertEquals(original.proxyRemoteUrl(), updated.proxyRemoteUrl());
+    assertEquals(original.online(), updated.online());
+    assertEquals(OutboundProxyConfig.Mode.DIRECT, service.get(original.name()).proxy().outboundProxyMode());
+    assertTrue(service.get(original.name()).proxy().outboundProxyPasswordConfigured());
+    assertNull(service.get(original.name()).proxy().outboundProxyPassword());
+  }
+
+  @Test
   void updateEvictsCachedProxyClientWhenOutboundCredentialsRotate() throws Exception {
     StubRepositoryDao repositories = new StubRepositoryDao(mavenProxyWithOutboundProxy("old-pass"));
     try (ProxiedHttpClientFactory factory = new ProxiedHttpClientFactory(60000, 10000)) {

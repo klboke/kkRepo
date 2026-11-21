@@ -1,5 +1,7 @@
 package com.github.klboke.kkrepo.server.repositories;
 
+import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.Mode;
+
 import java.util.List;
 
 /**
@@ -273,6 +275,10 @@ public final class RepositoryCommands {
       String layoutPolicy) {
   }
 
+  public record OutboundProxyCommand(
+      Mode mode, String type, String host, Integer port, String username, String password,
+      boolean clearPassword, Mode expectedMode) {}
+
   public record ProxySettings(
       String remoteUrl,
       Integer contentMaxAgeMinutes,
@@ -294,7 +300,33 @@ public final class RepositoryCommands {
       String remoteAuthenticationType,
       String remoteNtlmDomain,
       String remoteNtlmHost,
+      Boolean streamingEnabled,
+      Mode outboundProxyMode) {
+    public ProxySettings(
+      String remoteUrl,
+      Integer contentMaxAgeMinutes,
+      Integer metadataMaxAgeMinutes,
+      Boolean autoBlock,
+      String remoteUsername,
+      String remotePassword,
+      Boolean remotePasswordConfigured,
+      String remoteBearerToken,
+      Boolean remoteBearerTokenConfigured,
+      String outboundProxyType,
+      String outboundProxyHost,
+      Integer outboundProxyPort,
+      String outboundProxyUsername,
+      String outboundProxyPassword,
+      Boolean outboundProxyPasswordConfigured,
+      Integer minimumReleaseAgeMinutes,
+      List<String> allowedRedirectHosts,
+      String remoteAuthenticationType,
+      String remoteNtlmDomain,
+      String remoteNtlmHost,
       Boolean streamingEnabled) {
+      this(remoteUrl, contentMaxAgeMinutes, metadataMaxAgeMinutes, autoBlock, remoteUsername, remotePassword, remotePasswordConfigured, remoteBearerToken, remoteBearerTokenConfigured, outboundProxyType, outboundProxyHost, outboundProxyPort, outboundProxyUsername, outboundProxyPassword, outboundProxyPasswordConfigured, minimumReleaseAgeMinutes, allowedRedirectHosts, remoteAuthenticationType, remoteNtlmDomain, remoteNtlmHost, streamingEnabled, null);
+    }
+
     /** Compatibility constructor for callers without progressive proxy delivery. */
     public ProxySettings(
       String remoteUrl,

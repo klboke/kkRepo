@@ -1,6 +1,8 @@
 package com.github.klboke.kkrepo.server.maven;
 
 import com.github.klboke.kkrepo.server.routingrules.RepositoryRoutingPolicy;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxySettings;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.cache.LocalCache;
@@ -58,6 +60,13 @@ public class RepositoryRuntimeRegistry {
   @Autowired
   void setRoutingPolicy(RepositoryRoutingPolicy policy) {
     this.routingPolicy = policy;
+  }
+
+  private OutboundProxySettings outboundProxySettings;
+
+  @Autowired
+  void setOutboundProxySettings(OutboundProxySettings settings) {
+    this.outboundProxySettings = settings;
   }
 
   private Optional<RepositoryRuntime> project(Optional<RepositoryRuntime> runtime) {
@@ -159,7 +168,7 @@ public class RepositoryRuntimeRegistry {
     // Multiple concurrent misses on the same name are acceptable; the cache only holds a
     // recoverable runtime snapshot.
     Optional<RepositoryRuntime> resolved = resolveFresh(name);
-    if (resolved.isEmpty() || !containsProxySecret(resolved.get())) {
+    if (resolved.isEmpty() || !requiresFreshProxyRuntime(resolved.get())) {
       writeCached(name, resolved);
     }
     return resolved;
@@ -169,7 +178,7 @@ public class RepositoryRuntimeRegistry {
   protected Optional<RepositoryRuntime> resolveFresh(String name) {
     return repositoryDao.findByName(name).map(record -> {
       RepositoryRuntime runtime = toRuntime(record, new HashSet<>());
-      if (!ttl.isZero() && !containsProxySecret(runtime)) {
+      if (!ttl.isZero() && !requiresFreshProxyRuntime(runtime) && !containsProxySecret(record)) {
         cacheRecord(record);
       }
       return runtime;
@@ -199,7 +208,7 @@ public class RepositoryRuntimeRegistry {
       }
     }
     RepositoryRuntime runtime = toRuntime(record, new HashSet<>());
-    if (!ttl.isZero() && !containsProxySecret(runtime)) {
+    if (!ttl.isZero() && !requiresFreshProxyRuntime(runtime) && !containsProxySecret(record)) {
       cacheRecord(record);
       writeCached(record.name(), Optional.of(runtime));
     }
@@ -372,7 +381,11 @@ public class RepositoryRuntimeRegistry {
         proxyRemoteBearerToken = bearerToken.toString();
       }
       allowedRedirectHosts = asStringSet(proxyMap.get("allowedRedirectHosts"));
-      outboundProxy = readOutboundProxy(proxyMap);
+      outboundProxy = switch (OutboundProxyConfig.mode(proxyMap)) {
+        case DIRECT -> null;
+        case INHERIT -> outboundProxySettings.runtimeProxy();
+        case OVERRIDE -> OutboundProxyConfig.fromAttributes(proxyMap);
+      };
     }
     String rawContentDisposition = null;
     if (rawRaw instanceof Map<?, ?> rawMap) {
@@ -455,10 +468,6 @@ public class RepositoryRuntimeRegistry {
         proxyRaw instanceof Map<?, ?> proxyMap && Boolean.TRUE.equals(asBool(proxyMap.get("streamingEnabled"))));
   }
 
-  private static com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig readOutboundProxy(Map<?, ?> proxyMap) {
-    return com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.fromAttributes(proxyMap);
-  }
-
   private static Integer asInt(Object value) {
     if (value == null) return null;
     if (value instanceof Number n) return n.intValue();
@@ -484,20 +493,22 @@ public class RepositoryRuntimeRegistry {
     return Set.copyOf(result);
   }
 
-  private static boolean containsProxySecret(RepositoryRuntime runtime) {
+  private static boolean requiresFreshProxyRuntime(RepositoryRuntime runtime) {
     if (runtime.proxyRemotePassword() != null && !runtime.proxyRemotePassword().isBlank()) {
       return true;
     }
     if (runtime.proxyRemoteBearerToken() != null && !runtime.proxyRemoteBearerToken().isBlank()) {
       return true;
     }
+    // A system snapshot is loaded from the database for each inherited runtime, including
+    // when it is disabled. A cached group must not retain old routes for its members.
     if (runtime.outboundProxy() != null
-        && runtime.outboundProxy().password() != null
-        && !runtime.outboundProxy().password().isBlank()) {
+        && (runtime.outboundProxy().systemRevision() != null
+            || nonBlank(runtime.outboundProxy().password()))) {
       return true;
     }
     for (RepositoryRuntime member : runtime.members()) {
-      if (containsProxySecret(member)) {
+      if (requiresFreshProxyRuntime(member)) {
         return true;
       }
     }

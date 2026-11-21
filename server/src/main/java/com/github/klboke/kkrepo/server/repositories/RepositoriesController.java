@@ -13,6 +13,10 @@ import com.github.klboke.kkrepo.server.alpine.AlpineService;
 import com.github.klboke.kkrepo.server.conan.ConanManifestPolicy;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.Mode;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxyProbe;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxySettings;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.OutboundProxyCommand;
 import com.github.klboke.kkrepo.server.r.RService;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
@@ -210,6 +214,52 @@ public class RepositoriesController {
     RepositoryView existing = service.get(name);
     requireRepositoryAdmin(subject, existing.format(), existing.name(), "edit");
     return service.replaceMembers(name, body.memberNames());
+  }
+
+  private OutboundProxyProbe outboundProxyProbe;
+
+  @Autowired
+  void setOutboundProxyProbe(OutboundProxyProbe probe) {
+    this.outboundProxyProbe = probe;
+  }
+
+  @PutMapping("/{name}/outbound-proxy")
+  public ResponseEntity<Void> updateOutboundProxy(
+      @PathVariable("name") String name, @RequestBody OutboundProxyCommand command,
+      HttpServletRequest request) {
+    AuthenticatedSubject subject = requireAuthenticated(request);
+    RepositoryView repository = service.get(name);
+    requireRepositoryAdmin(subject, repository.format(), name, "edit");
+    service.updateOutboundProxy(name, command);
+    return ResponseEntity.noContent().build();
+  }
+
+  @PutMapping("/outbound-proxy/batch")
+  public ResponseEntity<Void> inheritOutboundProxy(
+      @RequestBody Map<String, Mode> modes, HttpServletRequest request) {
+    AuthenticatedSubject subject = requireAuthenticated(request);
+    if (modes.isEmpty() || modes.size() > 500 || modes.containsValue(null)) {
+      throw new RepositoryValidationException("Select up to 500 repositories with their current proxy modes");
+    }
+    for (String name : modes.keySet()) {
+      RepositoryView repository = service.get(name);
+      requireRepositoryAdmin(subject, repository.format(), name, "edit");
+    }
+    service.inheritOutboundProxy(modes);
+    return ResponseEntity.noContent().build();
+  }
+
+  @PostMapping("/{name}/outbound-proxy/test")
+  public OutboundProxyProbe.Result testOutboundProxy(
+      @PathVariable("name") String name, @RequestBody OutboundProxySettings.Command command,
+      HttpServletRequest request) {
+    AuthenticatedSubject subject = requireAuthenticated(request);
+    RepositoryView repository = service.get(name);
+    requireRepositoryAdmin(subject, repository.format(), name, "read");
+    if (repository.proxy() == null || repository.proxy().allowedRedirectHosts().contains("*")) {
+      throw new RepositoryValidationException("Select a proxy repository that can use the system proxy");
+    }
+    return outboundProxyProbe.test(repository.proxy().remoteUrl(), command);
   }
 
   @GetMapping("/{name}/apt/status")

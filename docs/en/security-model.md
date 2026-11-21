@@ -223,8 +223,17 @@ KKREPO_OUTBOUND_ALLOWED_HOSTS=
 
 Only allow internal upstream hosts when required. This helps reduce SSRF-style risk from misconfigured proxy repositories.
 
+**Admin → System → Proxy Settings** configures an optional shared HTTP or SOCKS5 proxy
+for upstream requests from proxy repositories. A repository may use system settings, use its own
+proxy, or connect directly. Without a saved mode, an existing repository keeps its current route:
+a configured repository proxy is used and an unconfigured repository connects directly.
+The repository usage panel shows which repositories inherit the system proxy. Review the route
+preview before switching repositories in bulk. A bypass entry matches an exact hostname or
+subdomains such as `*.example.com`; it applies only to repositories using system settings and is
+checked at each redirect. Switching modes preserves the repository's saved proxy credentials.
+
 Direct outbound requests are resolved locally and pinned to policy-approved IP addresses. When a
-repository has an explicit HTTP or SOCKS5 outbound proxy, the upstream hostname is instead sent to
+repository uses an HTTP or SOCKS5 outbound proxy, the upstream hostname is instead sent to
 that proxy for resolution so proxy DNS rules and hostname-based routing remain effective. Treat the
 configured proxy as a trusted egress boundary: by default kkrepo still rejects explicit private IP
 targets and local-only names, but it cannot inspect the IP address returned by DNS inside the proxy.

@@ -194,13 +194,14 @@ public class HttpRemoteFetcher {
               : req.requestContentType());
     }
     Duration timeout = requestTimeout(req);
+    OutboundProxyConfig proxy = OutboundProxyConfig.forTarget(req.outboundProxy(), req.url());
     ProxiedHttpClientFactory.ProxiedResponse response = null;
     try {
       if (req.ntlmCredentials() == null) {
-        response = proxyFactory.execute(req.repository(), req.outboundProxy(), req.method(),
+        response = proxyFactory.execute(req.repository(), proxy, req.method(),
             target, headers, req.requestBody(), timeout.toMillis());
       } else {
-        response = proxyFactory.execute(req.repository(), req.outboundProxy(), req.method(),
+        response = proxyFactory.execute(req.repository(), proxy, req.method(),
             target, headers, req.requestBody(), timeout.toMillis(), req.ntlmCredentials());
       }
       String location = redirectLocation(response);
@@ -678,7 +679,7 @@ public class HttpRemoteFetcher {
 
     OutboundRequestPolicy.ResolvedHttpTarget resolvedTarget(
         OutboundRequestPolicy policy, String purpose) {
-      boolean proxyResolvesDns = outboundProxy != null && outboundProxy.enabled();
+      boolean proxyResolvesDns = OutboundProxyConfig.forTarget(outboundProxy, url) != null;
       OutboundRequestPolicy.ResolvedHttpTarget target =
           redirectPolicy == com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS
               ? policy.resolvePublicHttpsTarget(url, purpose)

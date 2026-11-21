@@ -22,6 +22,29 @@ import org.junit.jupiter.api.Test;
 class HttpRemoteFetcherProxyTest {
 
   @Test
+  void systemProxyChecksBypassHostsForEachRedirect() throws Exception {
+    try (var origin = FakeHttpProxyServer.start(request ->
+            FakeHttpProxyServer.FakeResponse.bytes(200, Map.of(), "direct".getBytes(StandardCharsets.UTF_8)));
+        var proxy = FakeHttpProxyServer.start(request ->
+            FakeHttpProxyServer.FakeResponse.status(302,
+                Map.of("Location", "http://127.0.0.1:" + origin.port() + "/lib.pom")));
+        var factory = new ProxiedHttpClientFactory(60000, 10000)) {
+      var config = new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "127.0.0.1", proxy.port(),
+          null, null, Set.of("127.0.0.1"), 1L);
+      var request = new HttpRemoteFetcher.Request(
+          "http://packages.invalid/lib.pom", null, null, null, HttpRemoteFetcher.TimeoutProfile.DEFAULT,
+          false, "maven-proxy", "maven2", null, null, Set.of(), config);
+      try (var result = proxiedFetcher(factory).fetch(request)) {
+        assertEquals(200, result.status());
+        assertEquals("direct", new String(result.body().readAllBytes(), StandardCharsets.UTF_8));
+      }
+      assertEquals(1, proxy.requests().size());
+      assertEquals(1, origin.requests().size());
+      assertNull(origin.requests().get(0).header("Proxy-Authorization"));
+    }
+  }
+
+  @Test
   void proxiedFetchSendsConditionalAndAuthorizationHeadersThroughProxy() throws Exception {
     try (FakeHttpProxyServer proxy = FakeHttpProxyServer.start(request ->
             FakeHttpProxyServer.FakeResponse.bytes(200,
