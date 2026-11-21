@@ -956,6 +956,18 @@ body {
   min-height: 36px;
 }
 
+.form-grid .checkbox-with-help > .checkbox-field {
+  align-self: center;
+}
+
+#repository-proxy-fields > :is(.checkbox-field, .checkbox-with-help) {
+  align-self: stretch;
+}
+
+#repository-proxy-fields > .checkbox-with-help {
+  grid-column-start: 1;
+}
+
 .checkbox-field > input[type="checkbox"] {
   flex: 0 0 auto;
   width: 16px;
