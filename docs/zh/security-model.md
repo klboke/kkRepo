@@ -37,6 +37,8 @@ kkrepo 安全模型目标：
 
 LDAP 和 OIDC 用户的 API key 以及 Docker/Conan bearer token 会带上该 realm 在用户最近一次登录时映射的角色，因此与该用户浏览器 session 的仓库权限一致。在目录或 IdP 中移除的组，会在用户下一次通过该 realm 登录后失效。密码登录会在 `kkrepo.cache.basic-auth.ttl-seconds` 内使用 Basic 凭据缓存，因此 LDAP 在缓存过期后的首次登录时同步变更。
 
+kkRepo 无法感知目录或 IdP 中账号被禁用。这类用户不会再登录，因此其 API key、user token 以及 Docker/Conan bearer token 会保留最近一次登录时的角色。离职处理时，请同时在 kkRepo 中禁用或删除该用户：这会使其所有 key、user token 和已签发的 bearer token 失效。也可以只删除其 API key 和 user token。
+
 ## 共享数据库状态
 
 安全状态存储在所选 MySQL 或 PostgreSQL 数据库：
