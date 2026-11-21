@@ -215,11 +215,12 @@ public class SecurityAuthenticationService {
     if (session.isPresent()) {
       return session;
     }
-    if (basicAuthSuppressed(request) && !isBasicLoginRequest(request)) {
+    boolean explicitLogin = isBasicLoginRequest(request);
+    if (basicAuthSuppressed(request) && !explicitLogin) {
       return Optional.empty();
     }
     return basicCredentials(request).flatMap(credentials ->
-        fresh ? authenticateBasicUncached(credentials.username(), credentials.password())
+        fresh || explicitLogin ? authenticateBasicUncached(credentials.username(), credentials.password())
             : authenticateBasic(credentials.username(), credentials.password()));
   }
 
@@ -380,7 +381,8 @@ public class SecurityAuthenticationService {
     if (username == null || username.isBlank() || password == null) {
       return Optional.empty();
     }
-    return authenticateBasic(username, password);
+    // Interactive sign-ins must capture current LDAP group membership, even with a warm Basic auth cache.
+    return authenticateBasicUncached(username, password);
   }
 
   @Transactional(readOnly = true)

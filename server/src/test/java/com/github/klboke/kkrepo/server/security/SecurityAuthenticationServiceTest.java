@@ -255,6 +255,15 @@ class SecurityAuthenticationServiceTest {
       assertEquals(Set.of("mapped-reader", "nx-anonymous"),
           sibling.authenticate(legacyCredentials).orElseThrow().permissionSubject().groupIds());
 
+      ldap.delete("cn=nx-ldap-team,ou=groups,dc=example,dc=com");
+      assertEquals(Set.of("nx-anonymous"), service.authenticateCredentials("alice", "ldap-secret")
+          .orElseThrow().permissionSubject().groupIds());
+      var explicitBasicLogin = request(Map.of("Authorization", basic("alice", "ldap-secret")),
+          Map.of(), "/internal/security/basic/login");
+      assertEquals(Set.of("nx-anonymous"),
+          sibling.authenticate(explicitBasicLogin).orElseThrow().permissionSubject().groupIds());
+      assertEquals(Set.of(), dao.findUser("LDAP", "alice").orElseThrow().attributes().get("groups"));
+
       ldap.shutDown(true);
       var credentials = request(Map.of("Authorization", basic("alice", "ldap-secret")));
       assertEquals(Set.of("mapped-reader", "nx-anonymous"),
