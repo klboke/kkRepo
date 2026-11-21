@@ -1268,6 +1268,75 @@ class SecurityAuthenticationServiceTest {
   }
 
   @Test
+  void cachedUserTokenStaysBasicOnlyAndCannotAnswerOtherCredentialTypes() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.user(new SecurityUserRecord(4L, "OIDC", "carol", null, null, "carol@example.com", null,
+        "ACTIVE", "carol", Map.of("groups", List.of("docker-push"))));
+    String token = UserTokens.generate();
+    String userCode = UserTokens.userCode(token);
+    String passCode = token.substring(userCode.length() + 1);
+    dao.apiKey(new ApiKeyRecord(30L, UserTokens.DOMAIN, "OIDC", "carol", "CLI", "ACTIVE",
+        SecurityHashing.sha256(token), userCode, Map.of("values", List.of()), "{}",
+        null, null, null, null));
+    var cache = new com.github.klboke.kkrepo.server.support.InMemorySharedCache();
+    SecurityAuthenticationService service = new SecurityAuthenticationService(dao, OBJECT_MAPPER,
+        "X-Nexus-Plus-Token", "nx-anonymous", cache, OutboundRequestPolicy.allowPrivateForTests(),
+        transportFactory, new ApiKeyAuthCache(cache, true, 60, 5),
+        new BasicAuthCache(cache, true, 60, 5), null);
+
+    // Warm the production cache through the Basic path first.
+    assertEquals(30L, service.authenticate(request(Map.of(
+        "Authorization", basic(userCode, passCode)))).orElseThrow().apiKeyId());
+
+    // Header and bearer values spelling the Basic path's cache input must not hit its entry.
+    for (String presented : List.of("user-token:" + token, token, UserTokens.DOMAIN + "." + token)) {
+      assertFalse(service.authenticate(request(Map.of("X-Nexus-Plus-Token", presented))).isPresent(),
+          presented);
+      assertFalse(service.authenticate(request(Map.of("Authorization", "Bearer " + presented)))
+          .isPresent(), presented);
+    }
+    assertFalse(service.authenticate(request(
+        Map.of("Authorization", basic(userCode, passCode)), null,
+        "/internal/security/basic/login")).isPresent());
+    // And the Basic path still answers from the cache afterwards.
+    assertEquals(30L, service.authenticate(request(Map.of(
+        "Authorization", basic(userCode, passCode)))).orElseThrow().apiKeyId());
+  }
+
+  @Test
+  void basicUserTokenIsReplayableForTerraformDownloadsAsItself() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.user(new SecurityUserRecord(4L, "OIDC", "carol", null, null, "carol@example.com", null,
+        "ACTIVE", "carol", Map.of("groups", List.of("terraform-read"))));
+    String token = UserTokens.generate();
+    String userCode = UserTokens.userCode(token);
+    String passCode = token.substring(userCode.length() + 1);
+    dao.apiKey(new ApiKeyRecord(30L, UserTokens.DOMAIN, "OIDC", "carol", "CLI", "ACTIVE",
+        SecurityHashing.sha256(token), userCode, Map.of("values", List.of()), "{}",
+        null, null, null, null));
+    SecurityAuthenticationService service = service(dao);
+    String basic = basic(userCode, passCode);
+    AuthenticatedSubject subject = service.authenticate(request(Map.of("Authorization", basic)))
+        .orElseThrow();
+
+    String replayable = service.replayableTerraformUrlToken(
+        request(Map.of("Authorization", basic)), subject).orElseThrow();
+    assertEquals(basic.substring(6), replayable);
+    AuthenticatedSubject replayed = service.authenticateTerraformUrlToken(replayable).orElseThrow();
+    assertEquals("carol", replayed.userId());
+    assertEquals(30L, replayed.apiKeyId());
+    assertTrue(replayed.permissionSubject().groupIds().contains("terraform-read"));
+
+    // The Basic pair must be the very credential the request was authenticated with.
+    AuthenticatedSubject otherKey = new AuthenticatedSubject(
+        "OIDC", "carol", "api-key", 31L, subject.permissionSubject());
+    assertTrue(service.replayableTerraformUrlToken(
+        request(Map.of("Authorization", basic)), otherKey).isEmpty());
+    dao.deleteApiKeysForOwner("OIDC", "carol");
+    assertTrue(service.authenticateTerraformUrlToken(replayable).isEmpty());
+  }
+
+  @Test
   void keyBackedSubjectsCannotBeStoredAsASession() {
     SecurityAuthenticationService service = service(new FakeSecurityDao());
     Map<String, Object> sessionAttributes = new LinkedHashMap<>();

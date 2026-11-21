@@ -2015,6 +2015,38 @@ except ValueError:
     return 1
   fi
 
+  # Reset keeps the token id but rotates the secret: a bearer issued from the old pair must stop working.
+  local registry_url="http://$KKREPO_DOCKER_HOSTED_REGISTRY" bearer
+  local token_url="$registry_url/service/rest/v1/docker/token?service=$KKREPO_DOCKER_HOSTED_REGISTRY&scope=repository:kkrepo-client-e2e/docker-oci-ldap:pull"
+  local tags_url="$registry_url/v2/kkrepo-client-e2e/docker-oci-ldap/tags/list"
+  bearer="$(curl -m 20 -fsS -u "$user_code:$pass_code" "$token_url" \
+    | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("token") or d["access_token"])')"
+  add_redaction_value "$bearer"
+  status="$(curl -m 20 -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $bearer" "$tags_url")"
+  if [[ "$status" != 200 ]]; then
+    log "bearer issued from the user token did not work before reset: HTTP $status"
+    return 1
+  fi
+  token_json="$(curl -m 20 -fsS -u "$user:$password" -X POST \
+    "$KKREPO_URL/internal/security/api-keys/current/$token_id/reset")"
+  token="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["token"])' "$token_json")"
+  [[ "$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["apiKey"]["id"])' "$token_json")" == "$token_id" ]] \
+    || { log "user token reset changed the token id"; return 1; }
+  user_code="${token%%:*}"
+  pass_code="${token#*:}"
+  add_redaction_value "$token"
+  add_redaction_value "$pass_code"
+  status="$(curl -m 20 -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $bearer" "$tags_url")"
+  if [[ "$status" != 401 ]]; then
+    log "bearer issued before the user token reset still works: HTTP $status"
+    return 1
+  fi
+  status="$(curl -m 20 -sS -o /dev/null -w '%{http_code}' -u "$user_code:$pass_code" "$token_url")"
+  if [[ "$status" != 200 ]]; then
+    log "reset user token was not accepted by the docker token endpoint: HTTP $status"
+    return 1
+  fi
+
   curl -m 20 -fsS -o /dev/null -u "$user:$password" -X DELETE \
     "$KKREPO_URL/internal/security/api-keys/current/$token_id"
   # Checked at the token endpoint: containerd 2.x hangs instead of failing when its re-auth for
@@ -2885,6 +2917,27 @@ for field in ("download_url", "shasums_url", "shasums_signature_url"):
     print(document[field])
 PY
   )
+
+  # A CLI user token is Basic-only; its download URLs replay the pair like a password.
+  local user_token user_token_encoded
+  user_token="$(create_api_key UserToken "client e2e terraform $STAMP")"
+  add_redaction_value "$user_token"
+  user_token_encoded="$(python3 -c 'import base64, sys, urllib.parse; print(urllib.parse.quote(base64.b64encode(sys.argv[1].encode()).decode(), safe=""))' "$user_token")"
+  add_redaction_value "$user_token_encoded"
+  module_headers="$dir/user-token-module.headers"
+  run_logged terraform-user-token-module-metadata curl -m 20 --fail-with-body -sS -u "$user_token" \
+    -D "$module_headers" -o /dev/null \
+    "$KKREPO_URL/repository/terraform-hosted/v1/modules/kkrepo/client-e2e/aws/$fixture_version/download"
+  module_download_url="$(awk 'BEGIN { IGNORECASE=1 } /^X-Terraform-Get:/ { sub(/^[^:]+:[[:space:]]*/, ""); sub(/\r$/, ""); print; exit }' "$module_headers")"
+  [[ "$module_download_url" == *"/$user_token_encoded/"* ]]
+  run_logged terraform-user-token-module-followup curl -m 20 --fail-with-body -sS \
+    -o "$dir/user-token-module.zip" "$module_download_url"
+  cmp "$module_zip" "$dir/user-token-module.zip"
+  run_logged_output terraform-user-token-provider-metadata "$dir/user-token-provider.json" \
+    curl -m 20 --fail-with-body -sS -u "$user_token" \
+    "$KKREPO_URL/repository/terraform-hosted/v1/providers/kkrepo/fixture/$fixture_version/download/$fixture_os/$fixture_arch"
+  run_logged terraform-user-token-provider-followup curl -m 20 --fail-with-body -sS -o /dev/null \
+    "$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["download_url"])' "$dir/user-token-provider.json")"
 
   token="$(create_api_key GenericToken "client e2e terraform $STAMP")"
   add_redaction_value "$token"

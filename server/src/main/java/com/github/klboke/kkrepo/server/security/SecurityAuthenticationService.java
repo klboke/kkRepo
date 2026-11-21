@@ -358,7 +358,7 @@ public class SecurityAuthenticationService {
     try {
       String decoded = new String(java.util.Base64.getDecoder().decode(token), StandardCharsets.UTF_8);
       int colon = decoded.indexOf(':');
-      if (colon > 0) return authenticateBasic(decoded.substring(0, colon), decoded.substring(colon + 1));
+      if (colon > 0) return basicOrUserToken(decoded.substring(0, colon), decoded.substring(colon + 1));
     } catch (IllegalArgumentException ignored) {
       // GenericToken/API-key URL tokens are not necessarily base64 Basic credentials.
     }
@@ -374,21 +374,30 @@ public class SecurityAuthenticationService {
   public Optional<String> replayableTerraformUrlToken(
       HttpServletRequest request, AuthenticatedSubject authenticated) {
     if (request == null || authenticated == null) return Optional.empty();
-    if (authenticated.apiKeyId() != null) {
-      return boundedTerraformToken(apiKeyToken(request));
+    String apiKeyToken = authenticated.apiKeyId() == null ? null : apiKeyToken(request);
+    if (apiKeyToken != null) {
+      return boundedTerraformToken(apiKeyToken);
     }
     String authorization = request.getHeader("Authorization");
     if (authorization == null || !authorization.regionMatches(true, 0, "Basic ", 0, 6)) {
       return Optional.empty();
     }
+    // A Basic user token replays like a password; apiKeyId must match so only that credential qualifies.
     Optional<AuthenticatedSubject> basic = basicCredentials(request).flatMap(credentials ->
-        authenticateBasic(credentials.username(), credentials.password()));
+        basicOrUserToken(credentials.username(), credentials.password()));
     if (basic.isEmpty()
         || !java.util.Objects.equals(basic.get().source(), authenticated.source())
-        || !java.util.Objects.equals(basic.get().userId(), authenticated.userId())) {
+        || !java.util.Objects.equals(basic.get().userId(), authenticated.userId())
+        || !java.util.Objects.equals(basic.get().apiKeyId(), authenticated.apiKeyId())) {
       return Optional.empty();
     }
     return boundedTerraformToken(authorization.substring(6).trim());
+  }
+
+  /** Basic credentials as the Basic header path resolves them: user token first, then realms. */
+  private Optional<AuthenticatedSubject> basicOrUserToken(String username, String password) {
+    Optional<AuthenticatedSubject> token = authenticateUserToken(username, password, false);
+    return token.isPresent() ? token : authenticateBasic(username, password);
   }
 
   private static Optional<String> boundedTerraformToken(String token) {
@@ -540,7 +549,9 @@ public class SecurityAuthenticationService {
     if (fresh || apiKeyAuthCache == null) {
       return resolveApiKey(ApiKeyTokenCandidate.fromPresentedToken(token));
     }
-    return apiKeyAuthCache.find(token, () -> resolveApiKey(ApiKeyTokenCandidate.fromPresentedToken(token)));
+    // Every scheme uses its own key prefix: a cache hit must never let one credential type stand in for another.
+    return apiKeyAuthCache.find("header:" + token,
+        () -> resolveApiKey(ApiKeyTokenCandidate.fromPresentedToken(token)));
   }
 
   private Optional<AuthenticatedSubject> authenticateCargoApiKey(HttpServletRequest request) {

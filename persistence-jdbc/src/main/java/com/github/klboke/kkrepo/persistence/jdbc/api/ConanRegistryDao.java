@@ -150,6 +150,9 @@ public interface ConanRegistryDao {
 
   int deleteExpiredAuthTokens(Instant now, int limit);
 
+  /** Deletes every auth token issued from this API key or user token. */
+  int deleteAuthTokensByApiKeyId(long apiKeyId);
+
   int deleteRepositoryState(long repositoryId);
 
   RepositoryStatus status(long repositoryId);
