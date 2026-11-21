@@ -24,6 +24,7 @@
   const repositoryMode = (proxy = {}) => proxy.outboundProxyMode
     || (proxy.outboundProxyHost && proxy.outboundProxyPort ? "OVERRIDE" : "DIRECT");
   const requiresDirect = (proxy) => proxy.allowedRedirectHosts?.includes("*") === true;
+  const canTestConnection = (repo) => !requiresDirect(repo.proxy) && !repo.proxy.blockOutboundConnections;
   const repositoryUrl = (repo) => repo.proxy.remoteUrl;
   const canEdit = (repo) => canAdmin("nexus:*") ||
     canAdmin(`nexus:repository-admin:${String(repo.format).toLowerCase()}:${repo.name}:edit`);
@@ -174,7 +175,7 @@
     el("system-proxy-username").disabled = !auth;
     el("system-proxy-username").required = auth;
     el("system-proxy-save").disabled = !editable;
-    el("system-proxy-test").disabled = !editable || !repositories.some(repo => !requiresDirect(repo.proxy));
+    el("system-proxy-test").disabled = !editable || !repositories.some(canTestConnection);
   }
 
   function renderSettings() {
@@ -393,7 +394,7 @@
     el("proxy-test-result").textContent = "";
     const select = el("proxy-test-repository");
     select.replaceChildren();
-    for (const repo of repositories.filter(repo => !requiresDirect(repo.proxy))) {
+    for (const repo of repositories.filter(canTestConnection)) {
       select.add(new Option(repo.name, repo.name));
     }
     el("proxy-test-dialog").showModal();

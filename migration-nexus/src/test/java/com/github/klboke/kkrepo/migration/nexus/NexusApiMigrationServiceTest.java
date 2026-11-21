@@ -818,6 +818,21 @@ class NexusApiMigrationServiceTest {
   }
 
   @Test
+  void migratesMavenManualBlockSeparatelyFromAutomaticBlocking() {
+    var repositories = new FakeRepositoryDao();
+    var service = service(new FakeBlobStoreDao(), repositories);
+    var inventory = new NexusInventory(List.of(Map.of("name", "default")),
+        List.of(repository("maven-proxy", "maven2", "proxy", Map.of(
+            "storage", storage("default"), "proxy", Map.of("remoteUrl", "https://repo.maven.apache.org/maven2/"),
+            "httpClient", Map.of("blocked", true, "autoBlock", false)))),
+        NexusSecurityExport.empty(), List.of());
+    assertEquals(1, service.migrateConfig(inventory, request("https://old-nexus.example")).repositories());
+    var proxy = (Map<?, ?>) repositories.required("maven-proxy").attributes().get("proxy");
+    assertEquals(true, proxy.get("blockOutboundConnections"));
+    assertEquals(false, proxy.get("autoBlock"));
+  }
+
+  @Test
   void migratesRDefinitionsWithProxyCachePolicyAndOrderedMembers() {
     FakeBlobStoreDao blobStores = new FakeBlobStoreDao();
     FakeRepositoryDao repositories = new FakeRepositoryDao();

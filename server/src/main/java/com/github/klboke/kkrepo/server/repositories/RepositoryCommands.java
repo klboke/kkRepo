@@ -301,7 +301,39 @@ public final class RepositoryCommands {
       String remoteNtlmDomain,
       String remoteNtlmHost,
       Boolean streamingEnabled,
+      Mode outboundProxyMode,
+      Boolean blockOutboundConnections) {
+    public ProxySettings(
+      String remoteUrl,
+      Integer contentMaxAgeMinutes,
+      Integer metadataMaxAgeMinutes,
+      Boolean autoBlock,
+      String remoteUsername,
+      String remotePassword,
+      Boolean remotePasswordConfigured,
+      String remoteBearerToken,
+      Boolean remoteBearerTokenConfigured,
+      String outboundProxyType,
+      String outboundProxyHost,
+      Integer outboundProxyPort,
+      String outboundProxyUsername,
+      String outboundProxyPassword,
+      Boolean outboundProxyPasswordConfigured,
+      Integer minimumReleaseAgeMinutes,
+      List<String> allowedRedirectHosts,
+      String remoteAuthenticationType,
+      String remoteNtlmDomain,
+      String remoteNtlmHost,
+      Boolean streamingEnabled,
       Mode outboundProxyMode) {
+      this(remoteUrl, contentMaxAgeMinutes, metadataMaxAgeMinutes, autoBlock, remoteUsername,
+          remotePassword, remotePasswordConfigured, remoteBearerToken, remoteBearerTokenConfigured,
+          outboundProxyType, outboundProxyHost, outboundProxyPort, outboundProxyUsername,
+          outboundProxyPassword, outboundProxyPasswordConfigured, minimumReleaseAgeMinutes,
+          allowedRedirectHosts, remoteAuthenticationType, remoteNtlmDomain, remoteNtlmHost,
+          streamingEnabled, outboundProxyMode, null);
+    }
+
     public ProxySettings(
       String remoteUrl,
       Integer contentMaxAgeMinutes,

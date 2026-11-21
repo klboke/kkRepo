@@ -344,6 +344,8 @@ window.kkrepoI18n?.registerDictionary("ko", {
     "Metadata max age (min)": "메타데이터 최대 캐시 기간(분)",
     "How long cached metadata (such as package indexes and version lists) stays fresh before checking upstream on request. 1440 minutes = 24 hours. Where supported, 0 makes the cache immediately stale and -1 skips age-based checks.": "캐시된 메타데이터(패키지 인덱스, 버전 목록 등)를 최신 상태로 간주하는 기간입니다. 만료되면 다음 요청에서 업스트림을 확인합니다. 1440분 = 24시간. 지원되는 형식에서는 0이면 캐시가 즉시 만료되고, -1이면 경과 시간에 따른 확인을 건너뜁니다.",
     "Auto-block remote": "원격 자동 차단",
+    "Block outbound connections": "아웃바운드 연결 차단",
+    "Stop contacting the remote repository and serve only eligible cached content.": "원격 저장소에 요청을 보내지 않고 정책이 허용하는 캐시 콘텐츠만 제공합니다.",
     "Clear saved password": "저장된 비밀번호 지우기",
     "Outbound network proxy": "아웃바운드 네트워크 프록시",
     "Route upstream fetches for this proxy repository through an HTTP or SOCKS proxy (e.g. a corporate Clash on the LAN). Useful when the remote registry (hub.docker.com, pypi.org, ...) is unreachable from the server.": "이 proxy 리포지토리의 업스트림 가져오기를 HTTP 또는 SOCKS 프록시(예: LAN의 사내 Clash)를 통해 라우팅합니다. 서버에서 원격 레지스트리(hub.docker.com, pypi.org 등)에 접근할 수 없을 때 유용합니다.",

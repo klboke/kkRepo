@@ -1487,6 +1487,43 @@ class RepositoryServiceTest {
   }
 
   @Test
+  void mavenManualBlockPersistsThroughPartialAndOutboundProxyEdits() throws Exception {
+    var repositories = new StubRepositoryDao(repository(1L));
+    var service = service(repositories);
+    var json = new com.fasterxml.jackson.databind.ObjectMapper();
+    var created = service.create(new CreateCommand("blocked-proxy", "maven2-proxy", true,
+        "default", true, null, new ProxySettings("https://repo.maven.apache.org/maven2/", 0, 0, false),
+        null, null, null, null));
+    assertEquals(false, created.proxy().blockOutboundConnections());
+
+    var block = json.readValue("{\"blockOutboundConnections\":true}", ProxySettings.class);
+    var blocked = service.update("blocked-proxy", new UpdateCommand(null, null, null, null,
+        block, null, null, null, null));
+    assertEquals(true, blocked.proxy().blockOutboundConnections());
+    assertEquals(false, blocked.proxy().autoBlock());
+    assertEquals(true, ((Map<?, ?>) repositories.updated.attributes().get("proxy"))
+        .get("blockOutboundConnections"));
+    service.updateOutboundProxy("blocked-proxy", new OutboundProxyCommand(
+        Mode.DIRECT, null, null, null, null, null, false, Mode.DIRECT));
+    assertEquals(true, service.get("blocked-proxy").proxy().blockOutboundConnections());
+
+    var unblock = json.readValue("{\"blockOutboundConnections\":false}", ProxySettings.class);
+    assertEquals(false, service.update("blocked-proxy", new UpdateCommand(null, null, null, null,
+        unblock, null, null, null, null)).proxy().blockOutboundConnections());
+  }
+
+  @Test
+  void unsupportedProxyFormatsCannotEnableManualBlock() throws Exception {
+    var service = service(new StubRepositoryDao(repository(1L)));
+    var block = new com.fasterxml.jackson.databind.ObjectMapper().readValue("""
+        {"remoteUrl":"https://registry.npmjs.org","blockOutboundConnections":true}
+        """, ProxySettings.class);
+    assertThrows(RepositoryValidationException.class,
+        () -> service.create(new CreateCommand("unsupported-block", "npm-proxy", true,
+            "default", true, null, block, null, null, null, null)));
+  }
+
+  @Test
   void scopedProxyUpdatesPreserveUpstreamAndDormantRepositorySettings() throws Exception {
     var repositories = new StubRepositoryDao(repository(1L));
     var service = service(repositories);

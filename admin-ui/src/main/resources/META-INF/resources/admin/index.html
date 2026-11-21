@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-4">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20261118-format-icons-1">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20261121-route-1">
-    <link rel="stylesheet" href="./assets/admin.css?v=20261121-checkbox-layout">
+    <link rel="stylesheet" href="./assets/admin.css?v=20261121-block-outbound">
     <link rel="stylesheet" href="/browse/assets/account-menu.css?v=20260824-ui-themes-3">
     <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=20260819-topbar-control-height-1">
     <link rel="stylesheet" href="/login/assets/delete-confirmation.css?v=20261013-delete-confirmation-1">
@@ -348,7 +348,7 @@
                 </span>
                 <input id="repository-minimum-release-age" type="number" min="0" value="0" aria-labelledby="repository-minimum-release-age-label">
               </label>
-              <div class="checkbox-with-help">
+              <div class="checkbox-with-help" id="repository-streaming-field">
                 <label class="checkbox-field"><input id="repository-streaming-enabled" type="checkbox"><span>Allow streaming downloads</span></label>
                 <span class="field-help" tabindex="0" role="note" aria-label="Send supported uncached artifacts while downloading, then cache the complete validated file. Requests requiring whole-file inspection or security scanning remain buffered. Partial downloads are not cached." data-tooltip="Send supported uncached artifacts while downloading, then cache the complete validated file. Requests requiring whole-file inspection or security scanning remain buffered. Partial downloads are not cached."><span class="lucide-icon icon-info" aria-hidden="true"></span></span>
               </div>
@@ -356,6 +356,14 @@
                 <input id="repository-auto-block" type="checkbox" checked>
                 <span>Auto-block remote</span>
               </label>
+              <div class="checkbox-with-help" id="repository-block-outbound-field" hidden>
+                <label class="checkbox-field"><input id="repository-block-outbound" type="checkbox"><span>Block outbound connections</span></label>
+                <span class="field-help" tabindex="0" role="note"
+                  aria-label="Stop contacting the remote repository and serve only eligible cached content."
+                  data-tooltip="Stop contacting the remote repository and serve only eligible cached content.">
+                  <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                </span>
+              </div>
               <label class="checkbox-field">
                 <input id="repository-remote-password-clear" type="checkbox">
                 <span>Clear saved password</span>
@@ -2393,7 +2401,7 @@
     <script src="/login/assets/csrf-fetch.js?v=20261006-shared-primitives-1"></script>
     <script src="/login/assets/account-menu.js?v=20261006-shared-primitives-1"></script>
     <script src="/login/assets/safe-return-to.js?v=20261023-safe-return-to-1"></script>
-    <script src="/login/assets/ui-i18n.js?v=20261121-proxy-settings"></script>
+    <script src="/login/assets/ui-i18n.js?v=20261121-block-outbound"></script>
     <script src="/login/assets/delete-confirmation.js?v=20261107-key-confirmation"></script>
     <script src="/login/assets/product-update.js?v=20260819-version-update-1"></script>
     <script src="./assets/admin-filter.js?v=20260706-wildcard-filter-1"></script>
@@ -2403,7 +2411,7 @@
     <script src="./assets/ohpm-import.js?v=20261106-ohpm-import"></script>
     <script src="./assets/user-picker.js?v=20261107-user-picker"></script>
     <script src="./assets/ohpm-login.js?v=20261107-user-picker"></script>
-    <script src="./assets/proxy-settings.js?v=20261121-proxy-legacy-type"></script>
-    <script src="./assets/admin.js?v=20261121-proxy-settings"></script>
+    <script src="./assets/proxy-settings.js?v=20261121-block-outbound"></script>
+    <script src="./assets/admin.js?v=20261121-block-outbound"></script>
   </body>
 </html>

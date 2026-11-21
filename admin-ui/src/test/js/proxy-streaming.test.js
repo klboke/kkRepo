@@ -61,6 +61,22 @@ test('every proxy form defaults streaming off, round trips it, and can disable i
   }
 });
 
+test('manual outbound blocking defaults off and is editable only for Maven proxies', () => {
+  const { context, element } = form({ name: 'central', recipe: 'maven2-proxy', format: 'maven2', type: 'PROXY',
+    online: true, proxy: { remoteUrl: 'https://repo.maven.apache.org/maven2/', blockOutboundConnections: true } });
+  element('repository-recipe').value = 'maven2-proxy';
+  assert.equal(context.repositoryFormPayload().proxy.blockOutboundConnections, false);
+  context.showEditRepositoryForm('central');
+  assert.equal(element('repository-block-outbound-field').hidden, false);
+  assert.equal(context.repositoryFormPayload().proxy.blockOutboundConnections, true);
+  element('repository-block-outbound').checked = false;
+  assert.equal(context.repositoryFormPayload().proxy.blockOutboundConnections, false);
+  element('repository-recipe').value = 'npm-proxy';
+  context.refreshRepositoryRecipeControls();
+  assert.equal(element('repository-block-outbound-field').hidden, true);
+  assert.equal(Object.hasOwn(context.repositoryFormPayload().proxy, 'blockOutboundConnections'), false);
+});
+
 test('repository edit round-trips legacy proxy types through the shared editor', () => {
   for (const [stored, expected] of [['socks5', 'SOCKS'], ['socks', 'SOCKS'], [' http ', 'HTTP']]) {
     const { context } = form({ name: 'feed', recipe: 'maven2-proxy', format: 'maven2', type: 'PROXY',

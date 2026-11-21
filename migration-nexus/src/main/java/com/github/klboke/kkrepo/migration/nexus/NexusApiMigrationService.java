@@ -1162,6 +1162,9 @@ public class NexusApiMigrationService {
     putIfNotNull(attributes, "metadataMaxAgeMinutes", intValue(nested(value(document, "proxy"), "metadataMaxAge")));
     Object httpClient = value(document, "httpClient");
     putIfNotNull(attributes, "autoBlock", boolOrNull(nested(httpClient, "autoBlock")));
+    if (recipe.format() == RepositoryFormat.MAVEN2) {
+      putIfNotNull(attributes, "blockOutboundConnections", boolOrNull(nested(httpClient, "blocked")));
+    }
     putProxyAuthentication(attributes, nested(httpClient, "authentication"));
     Object authentication = nested(httpClient, "authentication");
     if ("nuget".equalsIgnoreCase(repositoryFormat(document))

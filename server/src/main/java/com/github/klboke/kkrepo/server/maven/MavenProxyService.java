@@ -6,6 +6,7 @@ import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.protocol.maven.MavenContentType;
@@ -83,6 +84,13 @@ import org.springframework.stereotype.Service;
 public class MavenProxyService {
   @org.springframework.beans.factory.annotation.Autowired
   private com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService streaming;
+
+  private RepositoryDao repositories;
+
+  @Autowired
+  void setRepositoryDao(RepositoryDao repositories) {
+    this.repositories = repositories;
+  }
 
   private static final long[] BACKOFF_SECONDS = {30, 60, 120, 300, 600, 1800};
   private static final int MAX_METADATA_BYTES = 8 * 1024 * 1024;
@@ -216,6 +224,10 @@ public class MavenProxyService {
     if (fresh) {
       return serveCached(cached.get(), headOnly, path);
     }
+    if (outboundBlocked(runtime)) {
+      if (cached.isPresent()) return serveCached(cached.get(), headOnly, path);
+      throw new MavenExceptions.MavenNotFoundException(path.path());
+    }
     if (negativeCache != null && negativeCache.isNotFoundCached(runtime, path)) {
       throw new MavenExceptions.MavenNotFoundException(path.path());
     }
@@ -224,6 +236,15 @@ public class MavenProxyService {
       throw new MavenExceptions.BadUpstreamException("Upstream temporarily blocked: " + runtime.proxyRemoteUrl());
     }
     return fetchAndCache(runtime, path, cached, headOnly, now);
+  }
+
+  private boolean outboundBlocked(RepositoryRuntime runtime) {
+    // Check the database before egress, including from a group with a cached member snapshot.
+    // An operator's block takes effect without waiting for other replicas' runtime caches to expire.
+    return repositories != null && repositories.findById(runtime.id())
+        .map(record -> record.attributes() != null && record.attributes().get("proxy") instanceof Map<?, ?> proxy
+            && Boolean.TRUE.equals(proxy.get("blockOutboundConnections")))
+        .orElse(true);
   }
 
   // ---- minimum release age -------------------------------------------------------------------
@@ -400,6 +421,9 @@ public class MavenProxyService {
   private record Head(Instant lastModified, boolean absent) {}
 
   private Head headLastModified(RepositoryRuntime runtime, String path) {
+    if (outboundBlocked(runtime)) {
+      return new Head(null, false);
+    }
     HttpRemoteFetcher.Request request = new HttpRemoteFetcher.Request(
         buildRemoteUrl(runtime.proxyRemoteUrl(), path), null, null, null, true)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.METADATA)

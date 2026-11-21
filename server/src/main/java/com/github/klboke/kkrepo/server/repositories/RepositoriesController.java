@@ -260,6 +260,9 @@ public class RepositoriesController {
     if (repository.proxy() == null || repository.proxy().allowedRedirectHosts().contains("*")) {
       throw new RepositoryValidationException("Select a proxy repository that can use the system proxy");
     }
+    if (Boolean.TRUE.equals(repository.proxy().blockOutboundConnections())) {
+      throw new RepositoryValidationException("Outbound connections are blocked for this repository");
+    }
     return outboundProxyProbe.test(repository.proxy().remoteUrl(), command);
   }
 

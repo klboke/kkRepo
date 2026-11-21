@@ -344,6 +344,8 @@ window.kkrepoI18n?.registerDictionary("fr", {
     "Metadata max age (min)": "Âge max. des métadonnées (min)",
     "How long cached metadata (such as package indexes and version lists) stays fresh before checking upstream on request. 1440 minutes = 24 hours. Where supported, 0 makes the cache immediately stale and -1 skips age-based checks.": "Durée pendant laquelle les métadonnées en cache (comme les index de paquets et les listes de versions) restent à jour avant une vérification auprès du dépôt distant lors d’une requête. 1440 minutes = 24 heures. Si le format le permet, 0 fait expirer le cache immédiatement et -1 ignore les vérifications liées à son ancienneté.",
     "Auto-block remote": "Blocage automatique du distant",
+    "Block outbound connections": "Bloquer les connexions sortantes",
+    "Stop contacting the remote repository and serve only eligible cached content.": "Arrête les requêtes vers le dépôt distant et sert uniquement le contenu autorisé en cache.",
     "Clear saved password": "Effacer le mot de passe enregistré",
     "Outbound network proxy": "Proxy réseau sortant",
     "Route upstream fetches for this proxy repository through an HTTP or SOCKS proxy (e.g. a corporate Clash on the LAN). Useful when the remote registry (hub.docker.com, pypi.org, ...) is unreachable from the server.": "Faire passer les récupérations amont de ce dépôt proxy par un proxy HTTP ou SOCKS (par exemple un Clash d'entreprise sur le réseau local). Utile lorsque le registre distant (hub.docker.com, pypi.org, ...) est inaccessible depuis le serveur.",

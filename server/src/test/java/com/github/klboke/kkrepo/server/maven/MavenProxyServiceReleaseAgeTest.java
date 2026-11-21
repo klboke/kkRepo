@@ -19,8 +19,10 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
@@ -82,6 +84,24 @@ class MavenProxyServiceReleaseAgeTest {
     assertTrue(!xml.contains("<version>1.2</version>"), xml);
     assertTrue(xml.contains("<release>1.1</release>"), xml);
     assertTrue(xml.contains("<latest>2.0-SNAPSHOT</latest>"), xml);
+  }
+
+  @Test
+  void blockedProxyHidesUnverifiedReleaseTimesWithoutRequestingUpstream() throws Exception {
+    var fixture = fixture();
+    fixture.cached(METADATA_PATH, METADATA);
+    var runtime = runtime(FORTY_EIGHT_HOURS);
+    var repositories = mock(RepositoryDao.class);
+    when(repositories.findById(runtime.id())).thenReturn(Optional.of(new RepositoryRecord(
+        runtime.id(), runtime.name(), RepositoryFormat.MAVEN2, RepositoryType.PROXY,
+        "maven2-proxy", true, runtime.blobStoreId(), null, runtime.proxyRemoteUrl(), null, null, null, true,
+        Map.of("proxy", Map.of("blockOutboundConnections", true)))));
+    fixture.service.setRepositoryDao(repositories);
+
+    String xml = body(fixture.service.get(runtime, path(METADATA_PATH), false));
+    assertTrue(xml.contains("<version>2.0-SNAPSHOT</version>"), xml);
+    assertTrue(!xml.contains("<version>1.0</version>"), xml);
+    verify(fixture.fetcher, never()).fetchWithBodyRetry(any(), any(), any());
   }
 
   @Test
