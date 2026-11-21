@@ -972,7 +972,8 @@ body {
   align-self: stretch;
 }
 
-#repository-proxy-fields > .checkbox-with-help {
+#repository-streaming-field,
+#repository-block-outbound-field:not([hidden]) + .checkbox-field {
   grid-column-start: 1;
 }
 

@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -29,6 +30,7 @@ import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -43,6 +45,22 @@ import org.junit.jupiter.api.Test;
 class GoProxyServiceTest {
   private static final String PATH = "example.com/acme/demo/@v/v1.2.3.mod";
   private static final String ZIP_PATH = "example.com/acme/demo/@v/v1.2.3.zip";
+
+  @Test
+  void manualBlockServesStaleAndDoesNotRecordAMissOrOutage() throws Exception {
+    var fixture = fixture();
+    var runtime = runtime(1, 7L);
+    when(fixture.fetcher.fetchWithBodyRetry(any(), eq(PATH), any())).thenThrow(new Blocked());
+    when(fixture.registry.forBlobStoreId(7L)).thenReturn(fixture.storage);
+    var stale = snapshot(PATH, Instant.EPOCH, Map.of());
+    when(fixture.cache.find(eq(runtime.id()), eq(PATH), any()))
+        .thenReturn(Optional.of(stale), Optional.empty());
+
+    assertEquals(200, fixture.service.get(runtime, PATH, true).status());
+    assertThrows(MavenExceptions.MavenNotFoundException.class, () -> fixture.service.get(runtime, PATH, true));
+    verify(fixture.proxyStateDao, never()).recordFailure(eq(runtime.id()), anyLong(), anyString(), any());
+    verify(fixture.negativeCache, never()).rememberNotFound(runtime, PATH);
+  }
 
   @Test
   void servesFreshCachedBodyAndMissingPhysicalBlob() throws Exception {

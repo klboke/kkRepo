@@ -344,6 +344,8 @@ window.kkrepoI18n?.registerDictionary("ja", {
     "Metadata max age (min)": "メタデータの最大キャッシュ期間（分）",
     "How long cached metadata (such as package indexes and version lists) stays fresh before checking upstream on request. 1440 minutes = 24 hours. Where supported, 0 makes the cache immediately stale and -1 skips age-based checks.": "キャッシュされたメタデータ（パッケージインデックスやバージョン一覧など）を最新とみなす期間です。期限が切れると、次のリクエストで上流を確認します。1440 分 = 24 時間。対応する形式では、0 でキャッシュが即座に期限切れになり、-1 で経過時間に基づく確認を省略します。",
     "Auto-block remote": "リモートを自動ブロック",
+    "Block outbound connections": "外部への接続をブロック",
+    "Stop contacting the remote repository and serve only eligible cached content.": "リモートリポジトリへのアクセスを停止し、配信が許可されたキャッシュ済みコンテンツのみを提供します。",
     "Clear saved password": "保存済みのパスワードをクリア",
     "Outbound network proxy": "送信ネットワークプロキシ",
     "Route upstream fetches for this proxy repository through an HTTP or SOCKS proxy (e.g. a corporate Clash on the LAN). Useful when the remote registry (hub.docker.com, pypi.org, ...) is unreachable from the server.": "この proxy リポジトリのアップストリームからの取得を、HTTP または SOCKS プロキシ（LAN 上の社内 Clash など）経由でルーティングします。リモートレジストリ（hub.docker.com、pypi.org など）にサーバーから到達できない場合に便利です。",

@@ -27,13 +27,16 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
 import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
@@ -56,6 +59,8 @@ import java.util.Queue;
 import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
@@ -434,8 +439,9 @@ class MavenProxyServiceTest {
     assertEquals(1, proxyState.successCount);
   }
 
-  @Test
-  void staleCachedAssetIsReturnedWhenRemoteReturnsNotFound() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void staleCachedAssetIsReturnedWhenRemoteReturnsNotFoundOrIsBlocked(boolean blocked) throws Exception {
     MavenPath path = path("com/acme/legacy/1.0.0/legacy-1.0.0.jar");
     byte[] cachedBytes = "cached-artifact".getBytes(StandardCharsets.UTF_8);
     Instant old = Instant.parse("2020-01-01T00:00:00Z");
@@ -458,6 +464,9 @@ class MavenProxyServiceTest {
         fetcher,
         null,
         new AssetMetadataCache(new InMemorySharedCache(), false, 0, 0));
+    var repositories = mock(RepositoryDao.class);
+    when(repositories.findByName(runtime().name())).thenReturn(Optional.of(proxyRecord(blocked)));
+    fetcher.setOutboundBlock(new RepositoryOutboundBlock(repositories));
 
     MavenResponse response = service.get(runtime(), path, false);
 
@@ -465,10 +474,39 @@ class MavenProxyServiceTest {
     try (InputStream body = response.body()) {
       assertArrayEquals(cachedBytes, body.readAllBytes());
     }
-    assertEquals(1, fetcher.calls);
-    assertEquals(1, proxyState.successCount);
+    assertEquals(blocked ? 0 : 1, fetcher.calls);
+    assertEquals(blocked ? 0 : 1, proxyState.successCount);
     assertEquals(0, proxyState.failureCount);
     assertEquals(1, storage.getCalls);
+  }
+
+  @Test
+  void blockedMissDoesNotFetchOrPoisonTheCacheWhenUnblocked() {
+    var fetcher = new CapturingFetcher(new HttpRemoteFetcher.Result(200, Map.of(), InputStream.nullInputStream()));
+    var state = new RecordingProxyStateDao();
+    var service = new MavenProxyService(new EmptyAssetDao(), null, new FailingWriter(), state, fetcher,
+        new ProxyNegativeCache(new InMemorySharedCache(), true, 1440),
+        new AssetMetadataCache(new InMemorySharedCache(), false, 0, 0));
+    var repositories = mock(RepositoryDao.class);
+    var runtime = runtime();
+    when(repositories.findByName(runtime.name())).thenReturn(Optional.of(proxyRecord(true)));
+    fetcher.setOutboundBlock(new RepositoryOutboundBlock(repositories));
+    var missing = path("com/acme/example/1.0/example-1.0.pom");
+    assertThrows(MavenExceptions.MavenNotFoundException.class, () -> service.get(runtime, missing, false));
+    assertThrows(MavenExceptions.MavenNotFoundException.class, () -> service.get(runtime, missing, true));
+    assertEquals(0, fetcher.calls);
+    assertEquals(0, state.failureCount);
+
+    when(repositories.findByName(runtime.name())).thenReturn(Optional.of(proxyRecord(false)));
+    assertEquals(200, service.get(runtime, missing, true).status());
+    assertEquals(1, fetcher.calls);
+  }
+
+  private static RepositoryRecord proxyRecord(boolean blocked) {
+    var runtime = runtime();
+    return new RepositoryRecord(runtime.id(), runtime.name(), RepositoryFormat.MAVEN2, RepositoryType.PROXY,
+        "maven2-proxy", true, runtime.blobStoreId(), null, REMOTE, null, null, null, true,
+        Map.of("proxy", Map.of("blockOutboundConnections", blocked)));
   }
 
   private static MavenProxyService service(CapturingFetcher fetcher, RecordingProxyStateDao proxyState) {
@@ -643,6 +681,7 @@ class MavenProxyServiceTest {
 
     @Override
     public HttpRemoteFetcher.Result fetch(HttpRemoteFetcher.Request req) throws IOException {
+      checkOutbound(req);
       calls++;
       request = req;
       return result;

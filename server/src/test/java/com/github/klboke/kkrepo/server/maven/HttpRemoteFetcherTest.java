@@ -37,6 +37,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
 import com.github.klboke.kkrepo.server.security.SecurityValidationException;
 import org.junit.jupiter.api.Test;
@@ -45,6 +46,21 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class HttpRemoteFetcherTest {
+
+  @Test
+  void blockedRequestStopsBeforeDnsAndDoesNotCountAsAnUpstreamFailure() throws Exception {
+    var guard = mock(com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.class);
+    var policy = mock(OutboundRequestPolicy.class);
+    var transport = mock(ProxiedHttpClientFactory.class);
+    var metrics = mock(com.github.klboke.kkrepo.server.metrics.KkRepoMetrics.class);
+    var fetcher = new HttpRemoteFetcher(policy, metrics, transport, "HTTP_1_1", 30, 60, 300, 5, 0);
+    fetcher.setOutboundBlock(guard);
+    org.mockito.Mockito.doThrow(new Blocked()).when(guard).check("proxy");
+    assertThrows(Blocked.class, () -> fetcher.fetch(publicHttpsRequest(null, null, false)));
+    org.mockito.Mockito.verifyNoInteractions(policy, transport);
+    verify(metrics, org.mockito.Mockito.never()).recordProxyRemote(
+        any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyInt(), any(), any());
+  }
 
   @Test
   void publicHttpsCanonicalRequestRejectsBodiesAndEnabledOutboundProxies() {

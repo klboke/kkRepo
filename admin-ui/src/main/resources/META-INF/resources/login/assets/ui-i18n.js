@@ -6,7 +6,7 @@
   const LANGUAGES = ["en", "zh-CN", "fr", "de", "es", "it", "pt-BR", "nl", "pl", "ru", "uk", "ja", "ko", "tr"];
   const SUPPORTED_DEFAULT_LANGUAGES = new Set(["browser", ...LANGUAGES]);
   const DICTIONARY_BASE = "/login/assets/i18n/";
-  const DICTIONARY_VERSION = "20261121-proxy-settings";
+  const DICTIONARY_VERSION = "20261121-block-outbound";
   const DEFAULT_LANGUAGE = "en";
   const DEFAULT_THEME = "default";
   const THEME_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -372,6 +372,8 @@
     "Metadata max age (min)": "元数据最大缓存时间（分钟）",
     "How long cached metadata (such as package indexes and version lists) stays fresh before checking upstream on request. 1440 minutes = 24 hours. Where supported, 0 makes the cache immediately stale and -1 skips age-based checks.": "缓存的元数据（如包索引和版本列表）可视为最新的时长。到期后，下次请求时检查上游。1440 分钟 = 24 小时。在支持的仓库格式中，0 表示缓存立即过期，-1 表示跳过基于缓存时长的检查。",
     "Auto-block remote": "自动阻断远端",
+    "Block outbound connections": "阻断回源",
+    "Stop contacting the remote repository and serve only eligible cached content.": "停止向远端仓库发起请求，仅提供符合策略的本地缓存。",
     "Clear saved password": "清除已保存密码",
     "Outbound network proxy": "出站网络代理",
     "Proxy Settings": "代理设置",

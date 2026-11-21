@@ -335,9 +335,13 @@ class RepositoriesControllerSecurityTest {
     var reached = new OutboundProxyProbe.Result("UPSTREAM_REACHED", 200, true);
     when(probe.test("https://upstream.example.org", command)).thenReturn(reached);
     assertThrows(RepositoryValidationException.class, () -> controller.testOutboundProxy("upstream", command, request));
+    when(proxy.blockOutboundConnections()).thenReturn(true);
+    assertThrows(RepositoryValidationException.class, () -> controller.testOutboundProxy("upstream", command, request));
+    when(proxy.blockOutboundConnections()).thenReturn(false);
     assertEquals(reached, controller.testOutboundProxy("upstream", command, request));
     verify(probe).test("https://upstream.example.org", command);
     assertEquals(List.of("nexus:repository-admin:maven2:upstream:read",
+        "nexus:repository-admin:maven2:upstream:read",
         "nexus:repository-admin:maven2:upstream:read", "nexus:repository-admin:maven2:upstream:read"),
         security.permissions);
   }

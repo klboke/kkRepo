@@ -22,6 +22,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.DockerUploadDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.HuggingFaceRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.GitLfsDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MaintenanceCursorDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.MavenPublicationTimesDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MetadataRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MigrationCheckpointDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MigrationJobDao;
@@ -89,6 +90,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
         new JdbcHuggingFaceRegistryDao(jdbc, dialect),
         new JdbcGitLfsDao(jdbc),
         new JdbcMaintenanceCursorDao(jdbc),
+        new JdbcMavenPublicationTimesDao(jdbc),
         new JdbcMetadataRebuildDao(jdbc, dialect),
         new JdbcMigrationCheckpointDao(jdbc),
         new JdbcMigrationJobDao(jdbc, json),
@@ -134,6 +136,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
       HuggingFaceRegistryDao huggingFaceRegistry,
       GitLfsDao gitLfs,
       MaintenanceCursorDao maintenanceCursors,
+      MavenPublicationTimesDao mavenPublicationTimes,
       MetadataRebuildDao metadataRebuild,
       MigrationCheckpointDao migrationCheckpoints,
       MigrationJobDao migrationJobs,

@@ -344,6 +344,8 @@ window.kkrepoI18n?.registerDictionary("uk", {
     "Metadata max age (min)": "Макс. термін зберігання метаданих (хв)",
     "How long cached metadata (such as package indexes and version lists) stays fresh before checking upstream on request. 1440 minutes = 24 hours. Where supported, 0 makes the cache immediately stale and -1 skips age-based checks.": "Як довго метадані в кеші (наприклад, індекси пакетів і списки версій) вважаються актуальними до перевірки вихідного репозиторію під час запиту. 1440 хвилин = 24 години. Якщо формат підтримує ці значення, 0 одразу позначає кеш застарілим, а -1 вимикає перевірки за часом зберігання.",
     "Auto-block remote": "Автоматично блокувати віддалений сервер",
+    "Block outbound connections": "Блокувати вихідні з’єднання",
+    "Stop contacting the remote repository and serve only eligible cached content.": "Припиняє запити до віддаленого репозиторію та надає лише дозволений вміст із кешу.",
     "Clear saved password": "Очистити збережений пароль",
     "Outbound network proxy": "Вихідний проксі-сервер",
     "Route upstream fetches for this proxy repository through an HTTP or SOCKS proxy (e.g. a corporate Clash on the LAN). Useful when the remote registry (hub.docker.com, pypi.org, ...) is unreachable from the server.": "Спрямовувати запити до віддаленого джерела для цього репозиторію proxy через проксі-сервер HTTP або SOCKS (наприклад, корпоративний Clash у локальній мережі). Корисно, якщо віддалений реєстр (hub.docker.com, pypi.org, ...) недоступний із сервера.",

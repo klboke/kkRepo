@@ -33,6 +33,7 @@ import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.raw.RawProxyService;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -66,6 +67,29 @@ class TerraformServiceTest {
   private HttpRemoteFetcher fetcher;
   private TerraformMetadataCache metadataCache;
   private TerraformService service;
+
+  @Test
+  void manualBlockUsesStaleModuleRouteAndReturnsNotFoundOnMiss() throws Exception {
+    var runtime = runtime(85, "terraform-proxy", RepositoryType.PROXY,
+        "https://registry.example/root", List.of());
+    var download = paths.parse("v1/modules/acme/network/aws/1.2.3/download");
+    String localArchive = "v1/modules/acme/network/aws/1.2.3/network.zip";
+    String cachePath = ".terraform/module-downloads/"
+        + digest(download.rawPath().getBytes(StandardCharsets.UTF_8)) + ".json";
+    when(assets.find(runtime, cachePath)).thenReturn(
+        Optional.of(asset(85, runtime, 86L, cachePath, Instant.EPOCH)), Optional.empty());
+    when(assets.bytes(runtime, cachePath)).thenReturn(
+        mapper.writeValueAsBytes(Map.of("localPath", localArchive)));
+    when(proxy.getMetadataFromUrlUnindexed(eq(runtime), anyString(), anyString(), anyBoolean()))
+        .thenAnswer(ignored -> response(mapper.writeValueAsBytes(Map.of("modules.v1", "/api/modules/")),
+            "application/json"));
+    when(fetcher.fetchWithBodyRetry(any(), eq(download.rawPath()), any())).thenThrow(new Blocked());
+
+    MavenResponse response = service.get(runtime, download, BASE, false);
+    assertEquals(204, response.status());
+    assertEquals(BASE + "/" + localArchive, response.headers().get("X-Terraform-Get"));
+    assertThrows(MavenExceptions.MavenNotFoundException.class, () -> service.get(runtime, download, BASE, false));
+  }
 
   @BeforeEach
   void setUp() {

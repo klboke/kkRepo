@@ -2943,6 +2943,7 @@ function refreshRepositoryRecipeControls() {
   if (format === "gitlfs") strict.checked = false;
   document.getElementById("repository-hosted-fields").hidden = type !== "HOSTED";
   document.getElementById("repository-proxy-fields").hidden = type !== "PROXY";
+  document.getElementById("repository-block-outbound-field").hidden = type !== "PROXY";
   const ntlmAvailable = type === "PROXY" && format === "nuget";
   document.getElementById("repository-remote-authentication-field").hidden = !ntlmAvailable;
   if (!ntlmAvailable) document.getElementById("repository-remote-authentication-type").value = "auto";
@@ -3383,6 +3384,7 @@ function repositoryFormPayload() {
         ? (minimumReleaseAge === "" ? 0 : Number(minimumReleaseAge))
         : null,
       autoBlock: document.getElementById("repository-auto-block").checked,
+      blockOutboundConnections: document.getElementById("repository-block-outbound").checked,
       streamingEnabled: document.getElementById("repository-streaming-enabled").checked,
       remoteAuthenticationType: textInputValue("repository-remote-authentication-type"),
       remoteNtlmDomain: textInputValue("repository-remote-ntlm-domain"),
@@ -3497,6 +3499,7 @@ function setRepositoryFormDefaults() {
   document.getElementById("repository-metadata-max-age").value = "1440";
   document.getElementById("repository-minimum-release-age").value = "0";
   document.getElementById("repository-auto-block").checked = true;
+  document.getElementById("repository-block-outbound").checked = false;
   document.getElementById("repository-streaming-enabled").checked = false;
   document.getElementById("repository-raw-content-disposition").value = "ATTACHMENT";
   document.getElementById("repository-docker-https-enabled").checked = false;
@@ -3627,6 +3630,7 @@ function showEditRepositoryForm(name) {
     document.getElementById("repository-minimum-release-age").value =
       repo.proxy.minimumReleaseAgeMinutes ?? "0";
     document.getElementById("repository-auto-block").checked = repo.proxy.autoBlock !== false;
+    document.getElementById("repository-block-outbound").checked = repo.proxy.blockOutboundConnections === true;
     document.getElementById("repository-streaming-enabled").checked = repo.proxy.streamingEnabled === true;
   }
   document.getElementById("repository-yum-depth").value = repo.yum?.repodataDepth ?? 0;

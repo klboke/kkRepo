@@ -1478,7 +1478,7 @@ public class RepositoryService {
         settings.minimumReleaseAgeMinutes(),
         settings.allowedRedirectHosts(),
         settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost(),
-        settings.streamingEnabled(), settings.outboundProxyMode());
+        settings.streamingEnabled(), settings.outboundProxyMode(), settings.blockOutboundConnections());
   }
 
   private static String defaultRemoteUrl(RepositoryFormat format) {
@@ -1518,7 +1518,7 @@ public class RepositoryService {
         settings.minimumReleaseAgeMinutes(),
         settings.allowedRedirectHosts(),
         settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost(),
-        settings.streamingEnabled(), settings.outboundProxyMode());
+        settings.streamingEnabled(), settings.outboundProxyMode(), settings.blockOutboundConnections());
   }
 
   private static ProxySettings withAllowedRedirectHosts(
@@ -1542,13 +1542,14 @@ public class RepositoryService {
         settings.minimumReleaseAgeMinutes(),
         allowedRedirectHosts,
         settings.remoteAuthenticationType(), settings.remoteNtlmDomain(), settings.remoteNtlmHost(),
-        settings.streamingEnabled(), settings.outboundProxyMode());
+        settings.streamingEnabled(), settings.outboundProxyMode(), settings.blockOutboundConnections());
   }
 
   private void validateProxy(ProxySettings settings, RepositoryFormat format) {
     if (settings.remoteUrl() == null || settings.remoteUrl().isBlank()) {
       throw new RepositoryValidationException("proxy.remoteUrl is required");
     }
+    boolean blockOutbound = Boolean.TRUE.equals(settings.blockOutboundConnections());
     if (settings.remotePassword() != null && !settings.remotePassword().isBlank()
         && (settings.remoteUsername() == null || settings.remoteUsername().isBlank())) {
       throw new RepositoryValidationException("proxy.remoteUsername is required when proxy.remotePassword is set");
@@ -1580,8 +1581,10 @@ public class RepositoryService {
       case OVERRIDE -> storedProxy;
     };
     try {
+      // A blocked upstream may already be unavailable. Validate the URI here and resolve its
+      // addresses when unblocking or before a later outbound request.
       outboundPolicy.validateHttpUri(settings.remoteUrl(), "proxy.remoteUrl",
-          OutboundProxyConfig.forTarget(outboundProxy, settings.remoteUrl()) != null);
+          blockOutbound || OutboundProxyConfig.forTarget(outboundProxy, settings.remoteUrl()) != null);
     } catch (SecurityValidationException e) {
       throw new RepositoryValidationException(e.getMessage());
     }
@@ -1759,7 +1762,9 @@ public class RepositoryService {
         incoming.remoteAuthenticationType() == null ? base.remoteAuthenticationType() : incoming.remoteAuthenticationType(),
         incoming.remoteNtlmDomain() == null ? base.remoteNtlmDomain() : blankToNull(incoming.remoteNtlmDomain()),
         incoming.remoteNtlmHost() == null ? base.remoteNtlmHost() : blankToNull(incoming.remoteNtlmHost()),
-        incoming.streamingEnabled() == null ? base.streamingEnabled() : incoming.streamingEnabled(), mode);
+        incoming.streamingEnabled() == null ? base.streamingEnabled() : incoming.streamingEnabled(), mode,
+        incoming.blockOutboundConnections() == null
+            ? base.blockOutboundConnections() : incoming.blockOutboundConnections());
   }
 
   private static String mergedOutboundProxyPassword(ProxySettings base, ProxySettings incoming) {
@@ -1808,6 +1813,9 @@ public class RepositoryService {
     if (proxy.remoteNtlmDomain() != null) map.put("remoteNtlmDomain", proxy.remoteNtlmDomain());
     if (proxy.remoteNtlmHost() != null) map.put("remoteNtlmHost", proxy.remoteNtlmHost());
     if (proxy.autoBlock() != null) map.put("autoBlock", proxy.autoBlock());
+    if (proxy.blockOutboundConnections() != null) {
+      map.put("blockOutboundConnections", proxy.blockOutboundConnections());
+    }
     if (proxy.remoteUsername() != null && !proxy.remoteUsername().isBlank()) {
       map.put("remoteUsername", proxy.remoteUsername());
     }
@@ -2273,7 +2281,8 @@ public class RepositoryService {
         stringOrNull(proxyMap.get("remoteNtlmHost")),
         boolValue(proxyMap.get("streamingEnabled")),
         proxyMap.get("outboundProxyMode") == null ? null
-            : Mode.valueOf(proxyMap.get("outboundProxyMode").toString()));
+            : Mode.valueOf(proxyMap.get("outboundProxyMode").toString()),
+        boolValue(proxyMap.get("blockOutboundConnections")));
   }
 
   private static ProxySettings readProxyAttributesOrDefaults(RepositoryRecord record) {
@@ -2301,7 +2310,8 @@ public class RepositoryService {
         effective.minimumReleaseAgeMinutes() == null ? 0 : effective.minimumReleaseAgeMinutes(),
         effective.allowedRedirectHosts() == null ? List.of() : effective.allowedRedirectHosts(),
         effective.remoteAuthenticationType(), effective.remoteNtlmDomain(), effective.remoteNtlmHost(),
-        Boolean.TRUE.equals(effective.streamingEnabled()), effectiveMode(effective));
+        Boolean.TRUE.equals(effective.streamingEnabled()), effectiveMode(effective),
+        Boolean.TRUE.equals(effective.blockOutboundConnections()));
   }
 
   private static String stringOrNull(Object value) {

@@ -344,6 +344,8 @@ window.kkrepoI18n?.registerDictionary("tr", {
     "Metadata max age (min)": "Meta veri en uzun önbellek süresi (dk)",
     "How long cached metadata (such as package indexes and version lists) stays fresh before checking upstream on request. 1440 minutes = 24 hours. Where supported, 0 makes the cache immediately stale and -1 skips age-based checks.": "Paket dizinleri ve sürüm listeleri gibi önbelleğe alınan meta verilerin, istek geldiğinde kaynak depo denetlenmeden önce ne kadar süre güncel sayılacağı. 1440 dakika = 24 saat. Biçim destekliyorsa 0 önbelleği hemen geçersiz kılar, -1 ise geçen süreye göre yapılan denetimleri atlar.",
     "Auto-block remote": "Uzak sunucuyu otomatik engelle",
+    "Block outbound connections": "Giden bağlantıları engelle",
+    "Stop contacting the remote repository and serve only eligible cached content.": "Uzak depoya istek göndermeyi durdurur ve yalnızca izin verilen önbellek içeriğini sunar.",
     "Clear saved password": "Kaydedilen parolayı temizle",
     "Outbound network proxy": "Giden ağ proxy'si",
     "Route upstream fetches for this proxy repository through an HTTP or SOCKS proxy (e.g. a corporate Clash on the LAN). Useful when the remote registry (hub.docker.com, pypi.org, ...) is unreachable from the server.": "Bu proxy deposunun yukarı akış isteklerini bir HTTP veya SOCKS proxy'si (ör. LAN'daki kurumsal bir Clash) üzerinden yönlendirin. Uzak kayıt defterine (hub.docker.com, pypi.org, ...) sunucudan erişilemediğinde kullanışlıdır.",

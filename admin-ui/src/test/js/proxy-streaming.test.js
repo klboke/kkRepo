@@ -20,7 +20,10 @@ function form(repo) {
     repositories: repo ? [repo] : [],
     repositoryFormMode: 'create', repositoryRequiredFields: [], conanManifestDefaults: null,
     memberTransfer: { selected: [], highlight: { available: new Set(), selected: new Set() } },
-    currentRecipe: () => ({ type: 'PROXY', format: element('repository-recipe').value.split('-')[0] }),
+    currentRecipe: () => {
+      const [format, type] = element('repository-recipe').value.split('-');
+      return { type: type?.toUpperCase(), format };
+    },
     textInputValue: id => element(id).value.trim(),
   };
   for (const name of ['refreshDockerConnectorControls', 'refreshAptControls', 'refreshAlpineControls',
@@ -58,6 +61,27 @@ test('every proxy form defaults streaming off, round trips it, and can disable i
     assert.equal(context.repositoryFormPayload().proxy.streamingEnabled, false, recipe);
     context.setRepositoryFormDefaults();
     assert.equal(element('repository-streaming-enabled').checked, false, recipe);
+  }
+});
+
+test('manual outbound blocking is editable on every proxy recipe and defaults off', () => {
+  const recipes = readFileSync(join(__dirname, '../../../../core/src/main/java/com/github/klboke/kkrepo/core/RepositoryRecipes.java'), 'utf8');
+  const names = [...recipes.matchAll(/new RepositoryRecipe\("([^"]+-proxy)"/g)].map(match => match[1]);
+  assert.ok(names.length >= 20);
+  for (const recipe of names) {
+    const { context, element } = form({ name: 'feed', recipe, format: recipe.split('-')[0], type: 'PROXY',
+      online: true, proxy: { remoteUrl: 'https://example.org', blockOutboundConnections: true } });
+    element('repository-recipe').value = recipe;
+    assert.equal(context.repositoryFormPayload().proxy.blockOutboundConnections, false, recipe);
+    context.showEditRepositoryForm('feed');
+    assert.equal(element('repository-block-outbound-field').hidden, false, recipe);
+    assert.equal(context.repositoryFormPayload().proxy.blockOutboundConnections, true, recipe);
+    element('repository-block-outbound').checked = false;
+    assert.equal(context.repositoryFormPayload().proxy.blockOutboundConnections, false, recipe);
+    element('repository-recipe').value = 'maven2-hosted';
+    context.refreshRepositoryRecipeControls();
+    assert.equal(element('repository-block-outbound-field').hidden, true, recipe);
+    assert.equal(context.repositoryFormPayload().proxy, undefined, recipe);
   }
 });
 
