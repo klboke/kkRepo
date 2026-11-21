@@ -30,7 +30,8 @@
 
   function resetProxy(group, proxy = {}) {
     field(group, "mode").value = repositoryMode(proxy);
-    field(group, "type").value = proxy.outboundProxyType || "";
+    const type = (proxy.outboundProxyType || "").trim().toUpperCase();
+    field(group, "type").value = type === "SOCKS5" ? "SOCKS" : type;
     field(group, "host").value = proxy.outboundProxyHost || "";
     field(group, "port").value = proxy.outboundProxyPort ?? "";
     field(group, "username").value = proxy.outboundProxyUsername || "";
@@ -112,7 +113,14 @@
   }
 
   function normalize(host) {
-    return host.toLowerCase().replace(/\.$/, "");
+    const value = host.toLowerCase().replace(/\.$/, "");
+    if (!value.includes(":")) return value;
+    try {
+      const literal = value.startsWith("[") ? value : `[${value}]`;
+      return new URL(`http://${literal}`).hostname;
+    } catch {
+      return value;
+    }
   }
 
   function route(repo, mode = repositoryMode(repo.proxy)) {
@@ -124,7 +132,7 @@
     if (!settings.enabled) return `${t("Direct connection")} · ${t("System proxy disabled")}`;
     const host = normalize(new URL(repositoryUrl(repo)).hostname);
     if (settings.bypassHosts.some(pattern => pattern.startsWith("*.")
-        ? host.endsWith(pattern.slice(1)) : host === pattern)) {
+        ? host.endsWith(pattern.slice(1)) : host === normalize(pattern))) {
       return `${t("Direct connection")} · ${t("Bypass host")}`;
     }
     return `${settings.type} · ${settings.host}:${settings.port}`;

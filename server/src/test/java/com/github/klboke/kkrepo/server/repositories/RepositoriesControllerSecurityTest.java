@@ -2,6 +2,10 @@ package com.github.klboke.kkrepo.server.repositories;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao.RepositoryUsage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao;
@@ -15,7 +19,12 @@ import com.github.klboke.kkrepo.core.RepositoryRecipe;
 import com.github.klboke.kkrepo.core.RepositoryRecipes;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.Mode;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxyProbe;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxySettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CreateCommand;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.OutboundProxyCommand;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.ProxySettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.UpdateCommand;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
@@ -270,6 +279,67 @@ class RepositoriesControllerSecurityTest {
     assertEquals(HttpStatus.FORBIDDEN, thrown.getStatusCode());
     assertEquals("nexus:repository-admin:maven2:maven-public:delete", security.permissions.get(0));
     assertEquals(null, repositories.deletedName);
+  }
+
+  @Test
+  void scopedAndBatchProxyChangesRequireEditOnEveryRepository() {
+    var repositories = mock(RepositoryService.class);
+    when(repositories.get("editable")).thenReturn(repo("editable", RepositoryFormat.MAVEN2));
+    when(repositories.get("blocked")).thenReturn(repo("blocked", RepositoryFormat.MAVEN2));
+    var security = new RecordingSecurityService(permission ->
+        permission.equals("nexus:repository-admin:maven2:editable:edit")
+            ? AccessDecision.allow() : AccessDecision.deny("missing permission"));
+    var controller = new RepositoriesController(repositories, new StubAuthenticationService(subject("editor")), security);
+    var request = request("PUT", "/internal/repositories/outbound-proxy/batch");
+    var command = new OutboundProxyCommand(Mode.DIRECT, null, null, null, null, null, false, Mode.OVERRIDE);
+
+    assertEquals(HttpStatus.NO_CONTENT, controller.updateOutboundProxy("editable", command, request).getStatusCode());
+    verify(repositories).updateOutboundProxy("editable", command);
+    assertEquals(HttpStatus.FORBIDDEN, assertThrows(ResponseStatusException.class,
+        () -> controller.updateOutboundProxy("blocked", command, request)).getStatusCode());
+    verify(repositories, never()).updateOutboundProxy("blocked", command);
+
+    var denied = Map.of("editable", Mode.DIRECT, "blocked", Mode.OVERRIDE);
+    assertEquals(HttpStatus.FORBIDDEN, assertThrows(ResponseStatusException.class,
+        () -> controller.inheritOutboundProxy(denied, request)).getStatusCode());
+    verify(repositories, never()).inheritOutboundProxy(denied);
+    var allowed = Map.of("editable", Mode.DIRECT);
+    assertEquals(HttpStatus.NO_CONTENT, controller.inheritOutboundProxy(allowed, request).getStatusCode());
+    verify(repositories).inheritOutboundProxy(allowed);
+    assertThrows(RepositoryValidationException.class, () -> controller.inheritOutboundProxy(Map.of(), request));
+    assertThrows(RepositoryValidationException.class,
+        () -> controller.inheritOutboundProxy(java.util.Collections.singletonMap("editable", null), request));
+  }
+
+  @Test
+  void proxyProbeUsesOnlyConfiguredEligibleUpstreamAndRequiresRepositoryRead() {
+    var repositories = mock(RepositoryService.class);
+    var probe = mock(OutboundProxyProbe.class);
+    var repository = mock(RepositoryView.class);
+    when(repository.format()).thenReturn(RepositoryFormat.MAVEN2);
+    when(repositories.get("upstream")).thenReturn(repository);
+    var security = new RecordingSecurityService(permission ->
+        permission.equals("nexus:repository-admin:maven2:upstream:read")
+            ? AccessDecision.allow() : AccessDecision.deny("missing permission"));
+    var controller = new RepositoriesController(repositories, new StubAuthenticationService(subject("operator")), security);
+    controller.setOutboundProxyProbe(probe);
+    var request = request("POST", "/internal/repositories/upstream/outbound-proxy/test");
+    var command = new OutboundProxySettings.Command(1L, true, "HTTP", "proxy.example.org", 3128,
+        null, null, false, List.of());
+    assertThrows(RepositoryValidationException.class, () -> controller.testOutboundProxy("upstream", command, request));
+
+    var proxy = mock(ProxySettings.class);
+    when(repository.proxy()).thenReturn(proxy);
+    when(proxy.allowedRedirectHosts()).thenReturn(List.of("*"), List.of());
+    when(proxy.remoteUrl()).thenReturn("https://upstream.example.org");
+    var reached = new OutboundProxyProbe.Result("UPSTREAM_REACHED", 200, true);
+    when(probe.test("https://upstream.example.org", command)).thenReturn(reached);
+    assertThrows(RepositoryValidationException.class, () -> controller.testOutboundProxy("upstream", command, request));
+    assertEquals(reached, controller.testOutboundProxy("upstream", command, request));
+    verify(probe).test("https://upstream.example.org", command);
+    assertEquals(List.of("nexus:repository-admin:maven2:upstream:read",
+        "nexus:repository-admin:maven2:upstream:read", "nexus:repository-admin:maven2:upstream:read"),
+        security.permissions);
   }
 
   @Test

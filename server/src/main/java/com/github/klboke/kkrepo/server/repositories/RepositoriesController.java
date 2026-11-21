@@ -30,6 +30,7 @@ import com.github.klboke.kkrepo.server.statistics.StorageUsageResponse.Repositor
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.io.IOException;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -238,7 +239,7 @@ public class RepositoriesController {
   public ResponseEntity<Void> inheritOutboundProxy(
       @RequestBody Map<String, Mode> modes, HttpServletRequest request) {
     AuthenticatedSubject subject = requireAuthenticated(request);
-    if (modes.isEmpty() || modes.size() > 500 || modes.containsValue(null)) {
+    if (modes.isEmpty() || modes.size() > 500 || modes.values().stream().anyMatch(Objects::isNull)) {
       throw new RepositoryValidationException("Select up to 500 repositories with their current proxy modes");
     }
     for (String name : modes.keySet()) {

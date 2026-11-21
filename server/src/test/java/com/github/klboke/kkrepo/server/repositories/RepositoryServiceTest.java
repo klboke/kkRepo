@@ -23,6 +23,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RoutingRuleDao;
 import com.github.klboke.kkrepo.server.routingrules.RoutingRuleService;
@@ -36,6 +37,8 @@ import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.helm.HelmGroupIndexCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.Mode;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxySettings;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CargoSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.AlpineSettings;
@@ -44,6 +47,7 @@ import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CreateCom
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.DockerSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.HostedSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.GroupSettings;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.OutboundProxyCommand;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.ProxySettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.PypiSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.YumSettings;
@@ -60,6 +64,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 class RepositoryServiceTest {
   @Test
@@ -1478,6 +1484,52 @@ class RepositoryServiceTest {
     assertEquals(7890, proxy.get("outboundProxyPort"));
     assertEquals("clash-user", proxy.get("outboundProxyUsername"));
     assertEquals("clash-pass", proxy.get("outboundProxyPassword"));
+  }
+
+  @Test
+  void scopedProxyUpdatesPreserveUpstreamAndDormantRepositorySettings() throws Exception {
+    var repositories = new StubRepositoryDao(repository(1L));
+    var service = service(repositories);
+    var settings = mock(OutboundProxySettings.class);
+    var backoff = mock(ProxyStateDao.class);
+    when(settings.runtimeProxy()).thenReturn(new OutboundProxyConfig(
+        OutboundProxyConfig.Type.HTTP, "shared-proxy.example", 3128, null, null));
+    service.setOutboundProxySettings(settings, backoff);
+    var config = new com.fasterxml.jackson.databind.ObjectMapper().readValue("""
+        {"remoteUrl":"https://repo.maven.apache.org/maven2/","metadataMaxAgeMinutes":61,
+         "outboundProxyType":"SOCKS","outboundProxyHost":"repository-proxy.example","outboundProxyPort":1080,
+         "outboundProxyUsername":"proxy-user","outboundProxyPassword":"secret"}
+        """, ProxySettings.class);
+    var created = service.create(new CreateCommand("maven-proxy", "maven2-proxy", true,
+        "default", true, null, config, null, null, null, null));
+    assertEquals(Mode.OVERRIDE, created.proxy().outboundProxyMode());
+
+    service.inheritOutboundProxy(Map.of("maven-proxy", Mode.OVERRIDE));
+
+    var inherited = service.get("maven-proxy").proxy();
+    assertEquals(Mode.INHERIT, inherited.outboundProxyMode());
+    assertEquals(config.remoteUrl(), inherited.remoteUrl());
+    assertEquals(61, inherited.metadataMaxAgeMinutes());
+    assertEquals("SOCKS", inherited.outboundProxyType());
+    assertEquals("repository-proxy.example", inherited.outboundProxyHost());
+    assertTrue(inherited.outboundProxyPasswordConfigured());
+    verify(backoff).clearBackoff(created.id());
+
+    var stale = assertThrows(ResponseStatusException.class,
+        () -> service.inheritOutboundProxy(Map.of("maven-proxy", Mode.OVERRIDE)));
+    assertEquals(HttpStatus.CONFLICT, stale.getStatusCode());
+    service.updateOutboundProxy("maven-proxy", new OutboundProxyCommand(
+        Mode.OVERRIDE, null, null, null, null, null, false, Mode.INHERIT));
+    assertEquals(Mode.OVERRIDE, service.get("maven-proxy").proxy().outboundProxyMode());
+  }
+
+  @Test
+  void scopedProxyUpdateRejectsMissingModesAndNonProxyRepositories() {
+    var service = service(new StubRepositoryDao(repository(1L)));
+    var direct = new OutboundProxyCommand(Mode.DIRECT, null, null, null, null, null, false, null);
+    assertThrows(RepositoryValidationException.class, () -> service.updateOutboundProxy("maven-releases", null));
+    assertThrows(RepositoryNotFoundException.class, () -> service.updateOutboundProxy("missing", direct));
+    assertThrows(RepositoryValidationException.class, () -> service.updateOutboundProxy("maven-releases", direct));
   }
 
   @Test

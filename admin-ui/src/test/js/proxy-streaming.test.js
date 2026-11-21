@@ -61,6 +61,18 @@ test('every proxy form defaults streaming off, round trips it, and can disable i
   }
 });
 
+test('repository edit round-trips legacy proxy types through the shared editor', () => {
+  for (const [stored, expected] of [['socks5', 'SOCKS'], ['socks', 'SOCKS'], [' http ', 'HTTP']]) {
+    const { context } = form({ name: 'feed', recipe: 'maven2-proxy', format: 'maven2', type: 'PROXY',
+      online: true, proxy: {
+        remoteUrl: 'https://example.org', outboundProxyType: stored,
+        outboundProxyHost: 'proxy.example.org', outboundProxyPort: 3128
+      } });
+    context.showEditRepositoryForm('feed');
+    assert.equal(context.repositoryFormPayload().proxy.outboundProxyType, expected);
+  }
+});
+
 test('streaming explanation uses the shared accessible information popover', () => {
   const html = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/index.html'), 'utf8');
   const start = html.indexOf('id="repository-streaming-enabled"');

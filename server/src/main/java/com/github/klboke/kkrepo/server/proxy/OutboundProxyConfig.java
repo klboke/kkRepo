@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.proxy;
 
+import java.net.InetAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -84,12 +85,21 @@ public record OutboundProxyConfig(Type type, String host, int port, String usern
     if (host == null) return config;
     String normalized = normalizeHost(host);
     boolean bypass = config.bypassHosts().stream().anyMatch(pattern -> pattern.startsWith("*.")
-        ? normalized.endsWith(pattern.substring(1)) : normalized.equals(pattern));
+        ? normalized.endsWith(pattern.substring(1)) : normalized.equals(normalizeHost(pattern)));
     return bypass ? null : config;
   }
 
   static String normalizeHost(String host) {
     String normalized = host.toLowerCase(Locale.ROOT);
+    if (normalized.indexOf(':') >= 0) {
+      try {
+        InetAddress address = InetAddress.ofLiteral(normalized);
+        return address.getAddress().length == 16 ? address.getHostAddress() : normalized;
+      } catch (IllegalArgumentException e) {
+        // Preserve invalid literals so validation can reject them.
+        return normalized;
+      }
+    }
     return normalized.endsWith(".") ? normalized.substring(0, normalized.length() - 1) : normalized;
   }
 
