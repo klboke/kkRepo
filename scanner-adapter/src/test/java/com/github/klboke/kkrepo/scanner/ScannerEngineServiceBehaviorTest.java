@@ -281,15 +281,14 @@ class ScannerEngineServiceBehaviorTest {
   @Test
   void matchesCycloneDxAndRejectsOversizedOrMissingLimits() throws Exception {
     Fixture fixture = new Fixture(temporaryDirectory);
-    when(fixture.scannerInput.copy(any(), any(), eq(SHA256), eq(null), any(), any()))
-        .thenAnswer(invocation -> {
-          Path path = invocation.getArgument(1);
-          Files.write(path, "{}".getBytes());
-          return new ScannerInput.Verified(path, SHA256, 2);
-        });
+    when(fixture.scannerInput.copySbom(any(), any(), anyString(), any(), anyLong(), any()))
+        .thenAnswer(invocation -> new ScannerInput().copySbom(
+            invocation.getArgument(0), invocation.getArgument(1), invocation.getArgument(2),
+            invocation.getArgument(3), invocation.getArgument(4), invocation.getArgument(5)));
 
+    byte[] sbom = "{}".getBytes();
     MatchResponse response = fixture.engine.match(
-        new ByteArrayInputStream("{}".getBytes()), SHA256, limits());
+        new ByteArrayInputStream(sbom), ScannerDocumentMapper.sha256(sbom), limits());
 
     assertEquals("db-1", response.vulnerabilityDatabaseRevision());
     ArgumentCaptor<Duration> readinessTimeouts = ArgumentCaptor.forClass(Duration.class);
@@ -301,14 +300,12 @@ class ScannerEngineServiceBehaviorTest {
         "RESOURCE_LIMITS_REQUIRED",
         () -> fixture.engine.match(new ByteArrayInputStream(new byte[0]), SHA256, null));
 
-    Fixture oversized = new Fixture(temporaryDirectory.resolve("large"));
-    when(oversized.scannerInput.copy(any(), any(), eq(SHA256), eq(null), any(), any()))
-        .thenAnswer(invocation -> new ScannerInput.Verified(
-            invocation.getArgument(1), SHA256, 2048));
+    byte[] oversizedSbom = new byte[2048];
     assertCode(
         "SBOM_TOO_LARGE",
-        () -> oversized.engine.match(
-            new ByteArrayInputStream(new byte[0]), SHA256, limits()));
+        () -> fixture.engine.match(
+            new ByteArrayInputStream(oversizedSbom), ScannerDocumentMapper.sha256(oversizedSbom),
+            limits()));
   }
 
   @Test

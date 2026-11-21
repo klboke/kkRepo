@@ -344,12 +344,8 @@ public class ScannerEngineService {
     try {
       deadline.check();
       Path sbom = workspace.resolve("sbom.cdx.json");
-      ScannerInput.Verified verified = scannerInput.copy(
-          input, sbom, expectedSha256, null, effectiveLimits, deadline);
-      if (verified.size() > properties.getMaxOutputBytes()) {
-        throw new ScannerRequestException(
-            "SBOM_TOO_LARGE", "CycloneDX input exceeded the output limit", 413, false);
-      }
+      scannerInput.copySbom(
+          input, sbom, expectedSha256, effectiveLimits, properties.getMaxOutputBytes(), deadline);
       deadline.check();
       return matchFile(sbom, workspace, deadline);
     } finally {
