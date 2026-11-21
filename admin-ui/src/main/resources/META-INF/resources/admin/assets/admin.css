@@ -877,10 +877,14 @@ body {
   gap: 12px;
 }
 
-.form-grid label,
+.form-grid label:not(.checkbox-field),
 .form-grid .form-field {
   display: grid;
   gap: 5px;
+}
+
+.form-grid label,
+.form-grid .form-field {
   min-width: 0;
   color: #4b5563;
   font-size: 13px;
