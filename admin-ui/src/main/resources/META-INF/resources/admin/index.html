@@ -318,12 +318,24 @@
                 <input id="repository-remote-bearer-token" type="password" autocomplete="new-password">
               </label>
               <label>
-                <span>Content max age (min)</span>
-                <input id="repository-content-max-age" type="number" min="-1" value="1440">
+                <span class="field-label"><span id="repository-content-max-age-label">Content max age (min)</span>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="How long cached artifact files (such as JARs and tarballs) stay fresh before checking upstream on request. 1440 minutes = 24 hours. Where supported, 0 makes the cache immediately stale and -1 skips age-based checks."
+                    data-tooltip="How long cached artifact files (such as JARs and tarballs) stay fresh before checking upstream on request. 1440 minutes = 24 hours. Where supported, 0 makes the cache immediately stale and -1 skips age-based checks.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <input id="repository-content-max-age" type="number" min="-1" value="1440" aria-labelledby="repository-content-max-age-label">
               </label>
               <label>
-                <span>Metadata max age (min)</span>
-                <input id="repository-metadata-max-age" type="number" min="-1" value="1440">
+                <span class="field-label"><span id="repository-metadata-max-age-label">Metadata max age (min)</span>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="How long cached metadata (such as package indexes and version lists) stays fresh before checking upstream on request. 1440 minutes = 24 hours. Where supported, 0 makes the cache immediately stale and -1 skips age-based checks."
+                    data-tooltip="How long cached metadata (such as package indexes and version lists) stays fresh before checking upstream on request. 1440 minutes = 24 hours. Where supported, 0 makes the cache immediately stale and -1 skips age-based checks.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <input id="repository-metadata-max-age" type="number" min="-1" value="1440" aria-labelledby="repository-metadata-max-age-label">
               </label>
               <label id="repository-minimum-release-age-field" hidden>
                 <span class="field-label"><span id="repository-minimum-release-age-label">Minimum release age (min)</span>
@@ -2224,7 +2236,7 @@
     <script src="/login/assets/csrf-fetch.js?v=20261006-shared-primitives-1"></script>
     <script src="/login/assets/account-menu.js?v=20261006-shared-primitives-1"></script>
     <script src="/login/assets/safe-return-to.js?v=20261023-safe-return-to-1"></script>
-    <script src="/login/assets/ui-i18n.js?v=20261119-languages-2"></script>
+    <script src="/login/assets/ui-i18n.js?v=20261121-cache-age-help"></script>
     <script src="/login/assets/delete-confirmation.js?v=20261107-key-confirmation"></script>
     <script src="/login/assets/product-update.js?v=20260819-version-update-1"></script>
     <script src="./assets/admin-filter.js?v=20260706-wildcard-filter-1"></script>

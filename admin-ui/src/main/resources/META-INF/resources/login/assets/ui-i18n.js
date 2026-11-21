@@ -6,7 +6,7 @@
   const LANGUAGES = ["en", "zh-CN", "fr", "de", "es", "it", "pt-BR", "nl", "pl", "ru", "uk", "ja", "ko", "tr"];
   const SUPPORTED_DEFAULT_LANGUAGES = new Set(["browser", ...LANGUAGES]);
   const DICTIONARY_BASE = "/login/assets/i18n/";
-  const DICTIONARY_VERSION = "20261118-languages-1";
+  const DICTIONARY_VERSION = "20261121-cache-age-help";
   const DEFAULT_LANGUAGE = "en";
   const DEFAULT_THEME = "default";
   const THEME_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -368,7 +368,9 @@
     "Remote username": "远端用户名",
     "Remote password": "远端密码",
     "Content max age (min)": "内容最大缓存时间（分钟）",
+    "How long cached artifact files (such as JARs and tarballs) stay fresh before checking upstream on request. 1440 minutes = 24 hours. Where supported, 0 makes the cache immediately stale and -1 skips age-based checks.": "缓存的制品文件（如 JAR 和 tarball）可视为最新的时长。到期后，下次请求时检查上游。1440 分钟 = 24 小时。在支持的仓库格式中，0 表示缓存立即过期，-1 表示跳过基于缓存时长的检查。",
     "Metadata max age (min)": "元数据最大缓存时间（分钟）",
+    "How long cached metadata (such as package indexes and version lists) stays fresh before checking upstream on request. 1440 minutes = 24 hours. Where supported, 0 makes the cache immediately stale and -1 skips age-based checks.": "缓存的元数据（如包索引和版本列表）可视为最新的时长。到期后，下次请求时检查上游。1440 分钟 = 24 小时。在支持的仓库格式中，0 表示缓存立即过期，-1 表示跳过基于缓存时长的检查。",
     "Auto-block remote": "自动阻断远端",
     "Clear saved password": "清除已保存密码",
     "Outbound network proxy": "出站网络代理",
