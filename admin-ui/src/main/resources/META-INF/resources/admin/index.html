@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-4">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20261118-format-icons-1">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20261121-route-1">
-    <link rel="stylesheet" href="./assets/admin.css?v=20261121-block-outbound">
+    <link rel="stylesheet" href="./assets/admin.css?v=20261121-external-role-mappings">
     <link rel="stylesheet" href="/browse/assets/account-menu.css?v=20260824-ui-themes-3">
     <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=20260819-topbar-control-height-1">
     <link rel="stylesheet" href="/login/assets/delete-confirmation.css?v=20261013-delete-confirmation-1">
@@ -1213,9 +1213,14 @@
               <label><span>Email</span><input id="security-user-email" type="email"></label>
               <label><span>Status</span><select id="security-user-status"><option value="ACTIVE">ACTIVE</option><option value="DISABLED">DISABLED</option></select></label>
               <label><span>Password</span><input id="security-user-password" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing"></label>
+              <section id="security-user-external-section" class="full-width role-transfer-section" hidden>
+                <div class="role-transfer-title">External roles <span class="state-badge compact">read-only</span></div>
+                <div id="security-user-external-roles" class="security-role-badges"></div>
+                <p class="field-note">Roles assigned by the identity provider at the user's last sign-in.</p>
+              </section>
               <input id="security-user-roles" type="hidden">
               <div class="full-width role-transfer-section">
-                <div class="role-transfer-title">Roles</div>
+                <div class="role-transfer-title">Local roles</div>
                 <div class="member-transfer role-transfer" id="user-role-transfer">
                   <div class="member-pane" data-side="available">
                     <div class="member-pane-head">
@@ -1324,10 +1329,22 @@
                   </div>
                 </div>
               </div>
+              <section class="full-width role-transfer-section" aria-labelledby="security-role-mappings-title">
+                <div class="role-transfer-title field-label">
+                  <span id="security-role-mappings-title">External mappings (LDAP/OIDC)</span>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="About external role mappings"
+                    data-tooltip="Map an exact external role or group name to this role. For browser sessions, LDAP and OIDC group membership changes apply after the user signs in again. Changes to kkRepo mappings apply on the next request."><span class="lucide-icon icon-info" aria-hidden="true"></span></span>
+                </div>
+                <div id="security-role-mappings" class="security-role-mappings"></div>
+                <div><button class="create-button secondary" id="add-security-role-mapping" type="button">Add mapping</button></div>
+              </section>
               <label class="checkbox-field" id="security-role-readonly-field" hidden><input id="security-role-readonly" type="checkbox" disabled><span>Read only</span></label>
             </div>
             <div class="form-actions">
               <button class="create-button" id="save-security-role-button" type="button">Save role</button>
+              <button class="create-button secondary" id="edit-security-role-mappings" type="button" hidden>Edit mappings</button>
+              <button class="create-button secondary" id="view-security-role-users" type="button" hidden>View users with this role</button>
               <button class="create-button secondary" id="cancel-security-role-button" type="button">Cancel</button>
             </div>
           </form>
@@ -1335,7 +1352,7 @@
           </div>
           <div class="nx-table-frame">
             <table class="nx-table">
-              <thead><tr><th>Role ID</th><th>Name</th><th>Description</th><th class="actions-column">Actions</th></tr></thead>
+              <thead><tr><th>Role ID</th><th>Name</th><th>Description</th><th>External mappings (LDAP/OIDC)</th><th class="actions-column">Actions</th></tr></thead>
               <tbody id="security-role-table"></tbody>
             </table>
           </div>
@@ -1415,6 +1432,10 @@
                       <span>Enabled</span>
                     </label>
                     <label><span>Priority</span><input id="security-ldap-priority" type="number" value="10"></label>
+                  <label class="checkbox-field security-provider-toggle-field">
+                    <input id="security-ldap-legacy-role-matching" type="checkbox">
+                    <span>Allow same-name roles without an explicit mapping</span>
+                  </label>
                     <div class="security-provider-source" aria-label="Source LDAP, system managed">
                       <span>Source</span>
                       <div class="security-provider-source-value"><strong>LDAP</strong><small>System managed</small></div>
@@ -1518,6 +1539,10 @@
                     <span>Enabled</span>
                   </label>
                   <label><span>Priority</span><input id="security-oidc-priority" type="number" value="20"></label>
+                  <label class="checkbox-field security-provider-toggle-field">
+                    <input id="security-oidc-legacy-role-matching" type="checkbox">
+                    <span>Allow same-name roles without an explicit mapping</span>
+                  </label>
                   <div class="security-provider-source" aria-label="Source OIDC, system managed">
                     <span>Source</span>
                     <div class="security-provider-source-value"><strong>OIDC</strong><small>System managed</small></div>
@@ -2412,6 +2437,6 @@
     <script src="./assets/user-picker.js?v=20261107-user-picker"></script>
     <script src="./assets/ohpm-login.js?v=20261107-user-picker"></script>
     <script src="./assets/proxy-settings.js?v=20261121-block-outbound"></script>
-    <script src="./assets/admin.js?v=20261121-block-outbound"></script>
+    <script src="./assets/admin.js?v=20261121-external-role-mappings"></script>
   </body>
 </html>

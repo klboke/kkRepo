@@ -181,6 +181,34 @@ class ManagementPathSecurityRuntimeTest {
   }
 
   @Test
+  void roleMappingUpdatesRequireRolePermissionAndPersistByProvider() throws Exception {
+    String id = "external-mapping-reader";
+    security.saveRole(new RoleCommand(id, "Local", "Mapped reader", null, false,
+        List.of("nx-users-read"), List.of(), Map.of()));
+    String rolePath = "/internal/security/roles/" + id;
+    String role = """
+        {"roleId":"ignored","name":"Mapped reader","privileges":["nx-users-read"],"roles":[],
+         "externalMappings":[{"realmId":"oidc","externalName":"engineering"}]}
+        """;
+    assertEquals(200, send("PUT", rolePath, "admin", role, "application/json").statusCode());
+    assertTrue(security.findRole("ignored").isEmpty());
+    var initial = security.findRole(id).orElseThrow();
+    assertEquals("oidc", initial.externalMappings().getFirst().realmId());
+
+    String ldap = """
+        [{"realmId":"ldap","externalName":"engineering"}]
+        """;
+    assertEquals(403, send("PUT", rolePath + "/external-mappings", "reader", ldap, "application/json").statusCode());
+    assertEquals(initial.externalMappings(), security.findRole(id).orElseThrow().externalMappings());
+    assertEquals(200, send("PUT", rolePath + "/external-mappings", "admin", ldap, "application/json").statusCode());
+    var updated = security.findRole(id).orElseThrow();
+    assertEquals(1, updated.externalMappings().size());
+    assertEquals("ldap", updated.externalMappings().getFirst().realmId());
+    assertEquals("engineering", updated.externalMappings().getFirst().externalName());
+    assertEquals(initial.privileges(), updated.privileges());
+  }
+
+  @Test
   void authorizedEncodedMutationIsAuditedWithOriginalPath() throws Exception {
     String path = "/service/rest/v1/%73ecurity;x/users";
     assertEquals(200, send("POST", path, "admin", userJson("audited-user"), "application/json").statusCode());

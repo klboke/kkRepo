@@ -555,6 +555,8 @@ public class NexusExtDirectController {
       if (!ldapConfigured(attributes)) {
         throw new SecurityValidationException("LDAP server not saved");
       }
+      attributes.put(ExternalRoleMappings.LEGACY_MATCHING,
+          requireExisting ? attributes.getOrDefault(ExternalRoleMappings.LEGACY_MATCHING, true) : false);
       String name = defaultString(asString(attributes.get("name")), existing.name());
       return new SecurityRealmRecord(existing.id(), LDAP_REALM_ID, "LDAP", name, existing.enabled(),
           existing.priority(), attributes);

@@ -1032,6 +1032,58 @@ body {
   font-weight: 700;
 }
 
+.security-role-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.security-role-badges .external-role-badge {
+  background: var(--info-bg);
+  color: var(--info);
+}
+
+.security-role-link {
+  border: 0;
+  cursor: pointer;
+}
+
+.security-role-link:hover {
+  text-decoration: underline;
+}
+
+.security-role-mappings {
+  display: grid;
+  gap: 8px;
+}
+
+.security-role-mapping {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) minmax(0, 2fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.security-role-mapping input,
+.security-role-mapping select {
+  width: 100%;
+  min-width: 0;
+}
+
+.security-role-mapping .row-action {
+  margin-block-end: 5px;
+}
+
+@media (max-width: 520px) {
+  .security-role-mapping {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .security-role-mapping .row-action {
+    justify-self: start;
+  }
+}
+
 .member-transfer {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
