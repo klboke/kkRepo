@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-4">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20261118-format-icons-1">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20260818-user-round-1">
-    <link rel="stylesheet" href="./assets/admin.css?v=20261107-user-picker">
+    <link rel="stylesheet" href="./assets/admin.css?v=20261121-ui-alignment">
     <link rel="stylesheet" href="/browse/assets/account-menu.css?v=20260824-ui-themes-3">
     <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=20260819-topbar-control-height-1">
     <link rel="stylesheet" href="/login/assets/delete-confirmation.css?v=20261013-delete-confirmation-1">
@@ -699,12 +699,12 @@
 
         <section class="view fixed-table-view" id="routing-rules-view">
           <div class="page-heading"><span class="heading-icon"><span class="lucide-icon icon-list-filter" aria-hidden="true"></span></span><h1>Routing Rules</h1><span class="heading-copy">Control which paths proxy repositories can serve</span></div>
-          <div class="action-bar">
+          <div class="action-bar action-bar-with-note">
             <button class="create-button" id="routing-rule-create" type="button">Create rule</button>
             <button class="create-button secondary" id="routing-rule-refresh" type="button">Refresh</button>
             <label class="filter-box"><input id="routing-rule-filter" type="search" placeholder="Filter routing rules" aria-label="Filter routing rules"></label>
+            <p class="form-note action-bar-note">Assign a rule in a proxy repository’s settings. Rules also apply to cached content and requests through groups.</p>
           </div>
-          <p class="form-note">Assign a rule in a proxy repository’s settings. Rules also apply to cached content and requests through groups.</p>
           <p id="routing-rule-status" role="status" aria-live="polite"></p>
           <div class="nx-table-frame fixed-table-frame"><table class="nx-table"><thead><tr><th>Name</th><th>Mode</th><th>Matchers</th><th>Description</th><th class="actions-column">Actions</th></tr></thead><tbody id="routing-rule-table"></tbody></table></div>
           <div class="form-modal" id="routing-rule-form-modal" data-form-id="routing-rule-form" role="dialog" aria-modal="true" aria-labelledby="routing-rule-form-title" hidden>
@@ -737,11 +737,11 @@
             <span class="heading-icon"><span class="lucide-icon icon-list-filter" aria-hidden="true"></span></span>
             <h1>Content Selectors</h1><span class="heading-copy">Grant access to selected repository content</span>
           </div>
-          <div class="action-bar">
+          <div class="action-bar action-bar-with-note">
             <button class="create-button" id="selector-create" type="button" disabled>Create selector</button>
             <button class="create-button secondary" id="selector-refresh" type="button">Refresh</button>
             <label class="filter-box"><input id="selector-filter" type="search" placeholder="Filter selectors" aria-label="Filter selectors"></label>
-            <p class="form-note selector-access-note">Selector privileges add access. Broader repository grants, including inherited roles, still apply.</p>
+            <p class="form-note action-bar-note">Selector privileges add access. Broader repository grants, including inherited roles, still apply.</p>
           </div>
           <p id="selector-status" role="status" aria-live="polite"></p>
           <div class="nx-table-frame fixed-table-frame">

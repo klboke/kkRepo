@@ -948,11 +948,19 @@ body {
 }
 
 .form-grid .checkbox-field {
-  grid-auto-flow: column;
-  justify-content: start;
-  align-items: end;
+  display: flex;
+  align-items: center;
+  align-self: end;
   gap: 8px;
-  padding-bottom: 6px;
+  min-height: 36px;
+}
+
+.checkbox-field > input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0;
 }
 
 .form-grid .checkbox-with-help {
@@ -960,21 +968,6 @@ body {
   align-items: center;
   gap: 8px;
   padding-bottom: 6px;
-}
-
-.form-grid .checkbox-with-help > .checkbox-field {
-  align-items: center;
-  padding-bottom: 0;
-}
-
-.checkbox-field input {
-  width: 16px;
-  height: 16px;
-}
-
-#ohpm-login-view .checkbox-field input {
-  width: 16px;
-  height: 16px;
 }
 
 .form-actions {
@@ -4630,14 +4623,17 @@ code {
   }
 }
 
-#content-selectors-view .action-bar {
+.action-bar-with-note {
   flex-wrap: wrap;
 }
-#content-selectors-view .action-bar > .create-button,
-#content-selectors-view .action-bar > .filter-box {
+.action-bar-with-note > .create-button {
   flex-shrink: 0;
 }
-#content-selectors-view .selector-access-note {
+.action-bar-with-note > .filter-box {
+  flex-shrink: 0;
+  max-width: 100%;
+}
+.action-bar-with-note > .action-bar-note {
   flex: 1 1 320px;
   min-width: 0;
 }
