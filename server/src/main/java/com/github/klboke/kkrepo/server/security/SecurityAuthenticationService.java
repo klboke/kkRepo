@@ -704,7 +704,9 @@ public class SecurityAuthenticationService {
     return basicAuthCache.find(username, password, () -> authenticateBasicUncached(username, password))
         .flatMap(subject -> {
           if (subject.externalRoleNames() == null) {
-            return Optional.of(subject);
+            // A cached LDAP subject from before role mapping support has no verified group names.
+            return "ldap".equals(subject.realmId()) ? authenticateBasicUncached(username, password)
+                : Optional.of(subject);
           }
           return externalRealm(subject.realmId(), subject.source()).flatMap(realm ->
               securityDao.findUser(subject.source(), subject.userId()).filter(this::activeUser)
