@@ -51,11 +51,19 @@ class MavenGroupFailureCompatibilityTest {
         .orElse("false")), "Set COMPAT_WRITE_ENABLED=true on disposable compatibility instances");
     String host = CompatDefaults.setting("compat.mavenGroup.upstreamHost", "MAVEN_GROUP_COMPAT_UPSTREAM_HOST")
         .orElse("host.docker.internal");
+    final String metadata = BASE + "maven-metadata.xml";
+    final String missing = BASE + "2.0/fallback-2.0.pom";
+    byte[] secondPom = bytes(new String(POM, StandardCharsets.UTF_8)
+        .replace("<version>1.0</version>", "<version>2.0</version>"));
     AtomicInteger requests = new AtomicInteger();
     HttpServer upstream = HttpServer.create(new InetSocketAddress("0.0.0.0", 0), 0);
     upstream.createContext("/", exchange -> {
       requests.incrementAndGet();
-      byte[] body = exchange.getRequestURI().getPath().endsWith("maven-metadata.xml") ? METADATA : POM;
+      byte[] body = switch (exchange.getRequestURI().getPath()) {
+        case "/" + metadata -> METADATA;
+        case "/" + missing -> secondPom;
+        default -> POM;
+      };
       exchange.getResponseHeaders().set("Content-Type", "application/xml");
       exchange.getResponseHeaders().set("Content-Length", Integer.toString(body.length));
       boolean head = "HEAD".equals(exchange.getRequestMethod());
@@ -78,8 +86,6 @@ class MavenGroupFailureCompatibilityTest {
         endpoint.create(name, "proxy", remote, List.of());
         created.add(name);
         try {
-          String metadata = BASE + "maven-metadata.xml";
-          String missing = BASE + "2.0/fallback-2.0.pom";
           assertArrayEquals(POM, endpoint.content(name, POM_PATH, "GET", null).body());
           assertArrayEquals(METADATA, endpoint.content(name, metadata, "GET", null).body());
           endpoint.blockOutbound(name, remote, true);
@@ -93,13 +99,13 @@ class MavenGroupFailureCompatibilityTest {
           created.add(hosted);
           endpoint.create(group, "group", remote, List.of(name, hosted));
           created.add(group);
-          byte[] hostedPom = bytes(new String(POM, StandardCharsets.UTF_8)
-              .replace("<version>1.0</version>", "<version>2.0</version>"));
-          assertEquals(201, endpoint.content(hosted, missing, "PUT", hostedPom).statusCode());
-          assertArrayEquals(hostedPom, endpoint.content(group, missing, "GET", null).body());
+          assertEquals(201, endpoint.content(hosted, missing, "PUT", secondPom).statusCode());
+          assertArrayEquals(secondPom, endpoint.content(group, missing, "GET", null).body());
           assertEquals(before, requests.get(), "A manually blocked proxy cannot contact upstream");
           endpoint.blockOutbound(name, remote, false);
-          assertEquals(200, endpoint.content(name, missing, "GET", null).statusCode());
+          var unblocked = endpoint.content(name, missing, "GET", null);
+          assertEquals(200, unblocked.statusCode());
+          assertArrayEquals(secondPom, unblocked.body());
           assertTrue(requests.get() > before, "Unblocking allows the same cache miss to reach upstream");
         } finally {
           for (String repository : created.reversed()) endpoint.delete(repository);
