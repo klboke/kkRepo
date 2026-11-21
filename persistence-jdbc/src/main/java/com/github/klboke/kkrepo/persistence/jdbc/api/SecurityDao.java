@@ -72,6 +72,8 @@ public interface SecurityDao {
 
   Optional<SecurityRealmRecord> findRealm(String realmId);
 
+  Optional<SecurityRealmRecord> findRealmForUpdate(String realmId);
+
   void upsertRealm(SecurityRealmRecord record);
 
   void updateRealmConfig(List<String> activeRealmIds);

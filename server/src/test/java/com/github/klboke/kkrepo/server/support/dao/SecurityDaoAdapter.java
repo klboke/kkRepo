@@ -259,6 +259,11 @@ public class SecurityDaoAdapter implements SecurityDao {
   }
 
   @Override
+  public Optional<SecurityRealmRecord> findRealmForUpdate(String realmId) {
+    return findRealm(realmId);
+  }
+
+  @Override
   public void upsertRealm(SecurityRealmRecord arg0) {
     throw new UnsupportedOperationException();
   }

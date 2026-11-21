@@ -54,6 +54,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.UnaryOperator;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -399,6 +400,26 @@ public class SecurityManagementService implements AccessDecisionService {
   }
 
   @Transactional(readOnly = true)
+  Optional<SecurityRealmRecord> ldapRealmRecord() {
+    return securityDao.findRealm(LDAP_REALM_ID);
+  }
+
+  @Transactional
+  SecurityRealmRecord updateLdapRealm(UnaryOperator<SecurityRealmRecord> change) {
+    var existing = securityDao.findRealmForUpdate(LDAP_REALM_ID).orElseGet(this::defaultLdapRealm);
+    var updated = change.apply(existing);
+    if (!updated.equals(existing)) {
+      saveProviderRealm(updated);
+    }
+    return updated;
+  }
+
+  private SecurityRealmRecord defaultLdapRealm() {
+    return new SecurityRealmRecord(null, LDAP_REALM_ID, "LDAP", "LDAP", false, 10,
+        Map.of("source", "LDAP", "nexusRealm", LDAP_REALM));
+  }
+
+  @Transactional(readOnly = true)
   public List<String> listActiveRealmIds() {
     return securityDao.listRealms().stream()
         .filter(SecurityRealmRecord::enabled)
@@ -469,7 +490,7 @@ public class SecurityManagementService implements AccessDecisionService {
           existing.name(),
           enabled,
           requestedPriority == null ? existing.priority() : requestedPriority,
-          existing.attributes()));
+          null));
     }
     return saveRealms(commands);
   }
@@ -496,7 +517,11 @@ public class SecurityManagementService implements AccessDecisionService {
       if (!SUPPORTED_REALMS.contains(realmId)) {
         throw new SecurityValidationException("Unsupported realm: " + realmId);
       }
-      SecurityRealmRecord existing = securityDao.findRealm(realmId).orElse(null);
+      SecurityRealmRecord existing = securityDao.findRealmForUpdate(realmId).orElse(null);
+      Map<String, Object> attributes = existing == null || existing.attributes() == null
+          ? new LinkedHashMap<>() : new LinkedHashMap<>(existing.attributes());
+      // Older clients echo the displayed attributes when toggling or reordering realms.
+      attributes.putAll(realmListAttributes(command.attributes()));
       SecurityRealmRecord record = new SecurityRealmRecord(
           existing == null ? null : existing.id(),
           realmId,
@@ -506,17 +531,26 @@ public class SecurityManagementService implements AccessDecisionService {
               ? existing != null && existing.enabled()
               : command.enabled()),
           command.priority() == null ? defaultPriority : command.priority(),
-          command.attributes() == null && existing != null ? existing.attributes() : copyMap(command.attributes()));
+          attributes);
       securityDao.upsertRealm(record);
       defaultPriority += 10;
     }
+    updateActiveRealmConfig();
+    return listRealms();
+  }
+
+  private void saveProviderRealm(SecurityRealmRecord record) {
+    securityDao.upsertRealm(record);
+    updateActiveRealmConfig();
+  }
+
+  private void updateActiveRealmConfig() {
     List<String> active = securityDao.listRealms().stream()
         .filter(SecurityRealmRecord::enabled)
         .sorted((left, right) -> Integer.compare(left.priority(), right.priority()))
         .map(SecurityRealmRecord::realmId)
         .toList();
     securityDao.updateRealmConfig(active);
-    return listRealms();
   }
 
   @Transactional(readOnly = true)
@@ -535,15 +569,7 @@ public class SecurityManagementService implements AccessDecisionService {
 
     @Transactional(readOnly = true)
     public LdapSettingsView ldapSettings() {
-      SecurityRealmRecord record = securityDao.findRealm(LDAP_REALM_ID)
-          .orElseGet(() -> new SecurityRealmRecord(
-              null,
-              LDAP_REALM_ID,
-              "LDAP",
-              "LDAP",
-              false,
-              10,
-              Map.of("source", "LDAP", "nexusRealm", LDAP_REALM)));
+      SecurityRealmRecord record = ldapRealmRecord().orElseGet(this::defaultLdapRealm);
       return toLdapSettingsView(record);
     }
 
@@ -552,28 +578,21 @@ public class SecurityManagementService implements AccessDecisionService {
       if (command == null) {
         command = emptyLdapSettingsCommand();
       }
-      SecurityRealmRecord existing = securityDao.findRealm(LDAP_REALM_ID).orElse(null);
-      Map<String, Object> attributes = ldapAttributes(
-          command,
-          existing == null ? Map.of() : existing.attributes());
+      SecurityRealmRecord existing = securityDao.findRealmForUpdate(LDAP_REALM_ID).orElseGet(this::defaultLdapRealm);
+      Map<String, Object> attributes = ldapAttributes(command, existing.attributes());
       String name = firstNonBlank(
           command.name(),
           asString(attributes.get("name")),
-          existing == null ? null : existing.name(),
+          existing.name(),
           "LDAP");
-      boolean enabled = command.enabled() == null ? existing != null && existing.enabled() : command.enabled();
+      boolean enabled = command.enabled() == null ? existing.enabled() : command.enabled();
       if (enabled && blankToNull(asString(attributes.get("url"))) == null) {
         throw new SecurityValidationException("LDAP URL is required when LDAP realm is enabled");
       }
-      int priority = command.priority() == null ? existing == null ? 10 : existing.priority() : command.priority();
-      saveRealms(List.of(new RealmCommand(
-          LDAP_REALM_ID,
-          "LDAP",
-          name,
-          enabled,
-          priority,
-          attributes)));
-      return ldapSettings();
+      int priority = command.priority() == null ? existing.priority() : command.priority();
+      var updated = new SecurityRealmRecord(existing.id(), LDAP_REALM_ID, "LDAP", name, enabled, priority, attributes);
+      saveProviderRealm(updated);
+      return toLdapSettingsView(updated);
     }
 
     @Transactional
@@ -583,7 +602,7 @@ public class SecurityManagementService implements AccessDecisionService {
           null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
           null, null, null);
     }
-    SecurityRealmRecord existing = securityDao.findRealm("oidc").orElse(null);
+    SecurityRealmRecord existing = securityDao.findRealmForUpdate("oidc").orElse(null);
     Map<String, Object> attributes = new LinkedHashMap<>();
     if (existing != null && existing.attributes() != null) {
       attributes.putAll(existing.attributes());
@@ -660,14 +679,10 @@ public class SecurityManagementService implements AccessDecisionService {
       throw new SecurityValidationException("jwksUri is required when OIDC realm is enabled");
     }
     int priority = command.priority() == null ? existing == null ? 20 : existing.priority() : command.priority();
-    saveRealms(List.of(new RealmCommand(
-        "oidc",
-        "OIDC",
-        "OIDC",
-        enabled,
-        priority,
-        attributes)));
-    return oidcSettings();
+    var updated = new SecurityRealmRecord(existing == null ? null : existing.id(), "oidc", "OIDC", "OIDC",
+        enabled, priority, attributes);
+    saveProviderRealm(updated);
+    return toOidcSettingsView(updated);
   }
 
   @Transactional(readOnly = true)
@@ -1283,7 +1298,19 @@ public class SecurityManagementService implements AccessDecisionService {
         record.name(),
         record.enabled(),
         record.priority(),
-        record.attributes());
+        realmListAttributes(record.attributes()));
+  }
+
+  private static Map<String, Object> realmListAttributes(Map<String, Object> attributes) {
+    Map<String, Object> visible = new LinkedHashMap<>();
+    if (attributes != null) {
+      for (String key : List.of("source", "nexusRealm")) {
+        if (attributes.get(key) instanceof String value) {
+          visible.put(key, value);
+        }
+      }
+    }
+    return visible;
   }
 
     private OidcSettingsView toOidcSettingsView(SecurityRealmRecord record) {

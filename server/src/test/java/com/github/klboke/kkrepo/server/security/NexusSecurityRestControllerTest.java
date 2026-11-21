@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.security;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -771,6 +772,38 @@ class NexusSecurityRestControllerTest {
     assertEquals("Local", record.userSource());
     assertEquals("ldap-anonymous", record.userId());
     assertEquals("LdapRealm", record.realmName());
+  }
+
+  @Test
+  void realmListReadsAndUpdatesExposeOnlyPublicAttributesAndPreserveProviderConfiguration() throws Exception {
+    var dao = new FakeSecurityDao();
+    var service = new SecurityManagementService(dao);
+    var controller = new SecurityManagementController(service);
+    var json = new ObjectMapper();
+    var marker = java.util.UUID.randomUUID().toString();
+    controller.updateLdapSettings(json.convertValue(Map.of("authPassword", marker),
+        SecurityPayloads.LdapSettingsCommand.class));
+    var oidcAttributes = Map.<String, Object>of(
+        "source", "OIDC", "nexusRealm", "OidcRealm", "clientSecret", marker,
+        "client_secret", marker, "futureOption", Map.of("nested", marker));
+    dao.realm(new SecurityRealmRecord(2L, "oidc", "OIDC", "OIDC", false, 20, oidcAttributes));
+    var ldapAttributes = dao.findRealm("ldap").orElseThrow().attributes();
+    assertEquals(marker, ldapAttributes.get("bindPassword"));
+
+    var list = controller.realms();
+    assertFalse(json.writeValueAsString(list).contains(marker));
+    assertEquals("********", controller.ldapSettings().authPassword());
+    assertEquals(Map.of("source", "OIDC", "nexusRealm", "OidcRealm"),
+        list.stream().filter(r -> r.realmId().equals("oidc")).findFirst().orElseThrow().attributes());
+
+    // The old UI echoes the visible map; the current UI omits it when updating the priority.
+    var updated = controller.updateRealms(List.of(
+        new RealmCommand("oidc", null, null, false, 3, Map.of("source", "OIDC", "clientSecret", "stale")),
+        new RealmCommand("ldap", null, null, false, 4, null)));
+    assertFalse(json.writeValueAsString(updated).contains(marker));
+    assertEquals(oidcAttributes, dao.findRealm("oidc").orElseThrow().attributes());
+    assertEquals(ldapAttributes, dao.findRealm("ldap").orElseThrow().attributes());
+    assertEquals(4, dao.findRealm("ldap").orElseThrow().priority());
   }
 
   @Test
@@ -2028,6 +2061,11 @@ class NexusSecurityRestControllerTest {
     assertEquals("(&(objectClass=groupOfNames)(member={1}))", ldapAttributes.get("groupSearchFilter"));
     assertEquals(30000, ldapAttributes.get("timeoutMs"));
 
+    var duplicate = mapper.valueToTree(controller.invoke(create, request(null))).path("result");
+    assertFalse(duplicate.path("success").asBoolean());
+    assertEquals("LDAP server already exists", duplicate.path("message").asText());
+    assertEquals(ldapAttributes, dao.findRealm("ldap").orElseThrow().attributes());
+
     var read = mapper.createObjectNode()
         .put("type", "rpc")
         .put("tid", 31)
@@ -2040,6 +2078,7 @@ class NexusSecurityRestControllerTest {
     assertEquals(true, readResult.get("success"));
     assertEquals(1, servers.size());
     assertEquals("ldap.example.com", ((Map<?, ?>) servers.get(0)).get("host"));
+    assertNull(((Map<?, ?>) servers.get(0)).get("authPassword"));
 
     var templates = mapper.createObjectNode()
         .put("type", "rpc")
@@ -2067,6 +2106,7 @@ class NexusSecurityRestControllerTest {
         .put("searchBase", "dc=example,dc=com")
         .put("authScheme", "simple")
         .put("authUsername", "cn=manager,dc=example,dc=com")
+        .put("authPassword", "********")
         .put("connectionTimeout", 45)
         .put("userBaseDn", "ou=People")
         .put("userObjectClass", "person")
@@ -2089,6 +2129,7 @@ class NexusSecurityRestControllerTest {
     var orderResponse = mapper.convertValue(controller.invoke(changeOrder, request(null)), Map.class);
     assertEquals(true, ((Map<?, ?>) orderResponse.get("result")).get("success"));
     assertEquals(1, dao.findRealm("ldap").orElseThrow().attributes().get("order"));
+    assertEquals("secret", dao.findRealm("ldap").orElseThrow().attributes().get("bindPassword"));
 
     var verify = mapper.createObjectNode()
         .put("type", "rpc")
@@ -2115,6 +2156,14 @@ class NexusSecurityRestControllerTest {
     var afterRemove = mapper.convertValue(controller.invoke(read, request(null)), Map.class);
     var afterRemoveResult = (Map<?, ?>) afterRemove.get("result");
     assertEquals(List.of(), afterRemoveResult.get("data"));
+
+    var cleared = dao.findRealm("ldap").orElseThrow();
+    var repeatedRemove = mapper.valueToTree(controller.invoke(remove, request(null))).path("result");
+    assertFalse(repeatedRemove.path("success").asBoolean());
+    assertEquals("LDAP server not found: ldap", repeatedRemove.path("message").asText());
+    var staleOrder = mapper.valueToTree(controller.invoke(changeOrder, request(null))).path("result");
+    assertTrue(staleOrder.path("success").asBoolean());
+    assertEquals(cleared, dao.findRealm("ldap").orElseThrow());
   }
 
   @Test
