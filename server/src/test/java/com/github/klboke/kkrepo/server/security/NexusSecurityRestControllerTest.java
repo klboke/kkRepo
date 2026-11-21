@@ -2061,6 +2061,11 @@ class NexusSecurityRestControllerTest {
     assertEquals("(&(objectClass=groupOfNames)(member={1}))", ldapAttributes.get("groupSearchFilter"));
     assertEquals(30000, ldapAttributes.get("timeoutMs"));
 
+    var duplicate = mapper.valueToTree(controller.invoke(create, request(null))).path("result");
+    assertFalse(duplicate.path("success").asBoolean());
+    assertEquals("LDAP server already exists", duplicate.path("message").asText());
+    assertEquals(ldapAttributes, dao.findRealm("ldap").orElseThrow().attributes());
+
     var read = mapper.createObjectNode()
         .put("type", "rpc")
         .put("tid", 31)
@@ -2151,6 +2156,14 @@ class NexusSecurityRestControllerTest {
     var afterRemove = mapper.convertValue(controller.invoke(read, request(null)), Map.class);
     var afterRemoveResult = (Map<?, ?>) afterRemove.get("result");
     assertEquals(List.of(), afterRemoveResult.get("data"));
+
+    var cleared = dao.findRealm("ldap").orElseThrow();
+    var repeatedRemove = mapper.valueToTree(controller.invoke(remove, request(null))).path("result");
+    assertFalse(repeatedRemove.path("success").asBoolean());
+    assertEquals("LDAP server not found: ldap", repeatedRemove.path("message").asText());
+    var staleOrder = mapper.valueToTree(controller.invoke(changeOrder, request(null))).path("result");
+    assertTrue(staleOrder.path("success").asBoolean());
+    assertEquals(cleared, dao.findRealm("ldap").orElseThrow());
   }
 
   @Test
