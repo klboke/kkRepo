@@ -145,6 +145,11 @@ public class JdbcDockerAuthTokenDao implements com.github.klboke.kkrepo.persiste
         tokenHashes.toArray());
   }
 
+  @Override
+  public int deleteByApiKeyId(long apiKeyId) {
+    return jdbcTemplate.update("DELETE FROM docker_auth_token WHERE subject_api_key_id = ?", apiKeyId);
+  }
+
   private static String normalize(String tokenHash) {
     if (tokenHash == null || tokenHash.length() != 64) {
       throw new IllegalArgumentException("tokenHash must be SHA-256 hex");

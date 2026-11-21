@@ -28,6 +28,13 @@ class ConanAuthServiceTest {
       mock(SecurityAuthenticationService.class);
 
   @Test
+  void resetOfTheIssuingKeyRevokesItsTokens() {
+    new ConanAuthService(registry, authentication, 10_000)
+        .revokeTokensOf(new com.github.klboke.kkrepo.server.security.ApiKeyRotatedEvent(30L));
+    verify(registry).deleteAuthTokensByApiKeyId(30L);
+  }
+
+  @Test
   void issuesOnlyDurableHashedRepositoryScopedTokens() {
     ConanAuthService service = new ConanAuthService(registry, authentication, 10_000);
     AuthenticatedSubject subject = new AuthenticatedSubject(

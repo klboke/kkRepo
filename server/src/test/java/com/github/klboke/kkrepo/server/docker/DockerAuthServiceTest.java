@@ -40,6 +40,15 @@ import org.springframework.mock.web.MockHttpServletRequest;
 
 class DockerAuthServiceTest {
   @Test
+  void resetOfTheIssuingKeyRevokesItsBearerTokens() {
+    DockerAuthTokenDao tokenDao = mock(DockerAuthTokenDao.class);
+    new DockerAuthService(tokenDao, mock(DockerRegistryDao.class),
+        mock(SecurityAuthenticationService.class), mock(AccessDecisionService.class), 900)
+        .revokeTokensOf(new com.github.klboke.kkrepo.server.security.ApiKeyRotatedEvent(30L));
+    verify(tokenDao).deleteByApiKeyId(30L);
+  }
+
+  @Test
   void pushScopeCanBeGrantedFromEditPermissionForManifestAndTagUpdates() {
     DockerAuthTokenDao tokenDao = mock(DockerAuthTokenDao.class);
     SecurityAuthenticationService authentication = mock(SecurityAuthenticationService.class);

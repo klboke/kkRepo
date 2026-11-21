@@ -530,6 +530,7 @@
                   <option value="PubToken">PubToken</option>
                   <option value="RubyGemsApiKey">RubyGemsApiKey</option>
                   <option value="GenericToken">GenericToken</option>
+                  <option value="UserToken">UserToken (docker login and other Basic clients)</option>
                 </select>
               </label>
               <label>
@@ -545,6 +546,7 @@
                 <div>
                   <div class="token-panel-title">Generated token</div>
                   <div class="token-note">Shown once after generate or reset.</div>
+                  <div class="token-note" id="my-token-usage" hidden>User token: send the part before ":" as the username and the part after it as the password.</div>
                 </div>
                 <button class="secondary-button" id="my-token-copy" type="button">Copy</button>
               </div>

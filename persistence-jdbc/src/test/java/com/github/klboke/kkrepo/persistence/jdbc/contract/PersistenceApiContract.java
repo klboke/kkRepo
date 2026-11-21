@@ -5768,6 +5768,23 @@ public abstract class PersistenceApiContract {
   }
 
   @Test
+  void dockerAuthTokensIssuedFromOneApiKeyCanBeRevokedTogether() {
+    DockerAuthTokenDao tokens = stores().dockerAuthTokens();
+    Instant expiresAt = Instant.parse("2036-07-13T11:00:00Z");
+    String rotated = "f".repeat(64);
+    String other = "9".repeat(64);
+    inTransaction(() -> {
+      tokens.insert(rotated, "OIDC", "carol", "user-token", 41L, TokenKind.USER, List.of(), expiresAt);
+      tokens.insert(other, "OIDC", "carol", "api-key", 42L, TokenKind.USER, List.of(), expiresAt);
+      return null;
+    });
+
+    assertEquals(1, inTransaction(() -> tokens.deleteByApiKeyId(41L)));
+    assertTrue(inTransaction(() -> tokens.findValid(rotated, Instant.now())).isEmpty());
+    assertTrue(inTransaction(() -> tokens.findValid(other, Instant.now())).isPresent());
+  }
+
+  @Test
   void dockerAuthTokenCleanupIsBoundedAndPreservesUnexpiredTokens() {
     DockerAuthTokenDao tokens = stores().dockerAuthTokens();
     Instant cleanupAt = Instant.parse("2026-07-13T11:00:00Z");

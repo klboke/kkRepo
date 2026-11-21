@@ -992,6 +992,11 @@ public class JdbcConanRegistryDao implements ConanRegistryDao {
   }
 
   @Override
+  public int deleteAuthTokensByApiKeyId(long apiKeyId) {
+    return jdbc.update("DELETE FROM conan_auth_token WHERE api_key_id = ?", apiKeyId);
+  }
+
+  @Override
   @Transactional
   public int deleteRepositoryState(long repositoryId) {
     deleteGroupBindings(repositoryId);

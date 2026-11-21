@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.security;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -1180,6 +1181,174 @@ class SecurityAuthenticationServiceTest {
   }
 
   @Test
+  void apiKeysAndStoredSubjectsKeepRealmMappedRolesOnlyForExternalUsers() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.user(new SecurityUserRecord(4L, "OIDC", "carol", null, null, "carol@example.com", null,
+        "ACTIVE", "carol", Map.of(
+            "groups", List.of("docker-push"),
+            "claims", Map.of("realm_access", Map.of("roles", List.of("nx-admin"))))));
+    dao.roles(4L, "local-role");
+    dao.user(new SecurityUserRecord(5L, "Local", "dave", null, null, "dave@example.com", null,
+        "ACTIVE", "dave", Map.of("groups", List.of("nx-admin"))));
+    dao.apiKey(new ApiKeyRecord(
+        14L, "nexus", "OIDC", "carol", "Carol docker key", "ACTIVE",
+        SecurityHashing.sha256("carol-secret"), "nexus.carol", Map.of("values", List.of()), "{}",
+        null, null, LocalDateTime.now().plusDays(1), null));
+    SecurityAuthenticationService service = service(dao);
+
+    AuthenticatedSubject apiKey = service.authenticate(request(Map.of(
+        "X-Nexus-Plus-Token", "nexus.carol-secret"))).orElseThrow();
+    assertEquals("api-key", apiKey.realmId());
+    assertEquals(Set.of("docker-push", "local-role", "nx-anonymous"),
+        apiKey.permissionSubject().groupIds());
+    assertEquals(Set.of("docker-push", "local-role", "nx-anonymous"),
+        service.authenticateStoredSubject("OIDC", "carol", "OIDC", null).orElseThrow()
+            .permissionSubject().groupIds());
+    assertFalse(service.authenticateStoredSubject("Local", "dave", "local", null).orElseThrow()
+        .permissionSubject().groupIds().contains("nx-admin"));
+
+    // The next IdP login rewrites attributes.groups; the same credentials then lose the role.
+    dao.user(new SecurityUserRecord(4L, "OIDC", "carol", null, null, "carol@example.com", null,
+        "ACTIVE", "carol", Map.of("groups", List.of())));
+    assertFalse(service.authenticateStoredSubject("OIDC", "carol", "OIDC", null).orElseThrow()
+        .permissionSubject().groupIds().contains("docker-push"));
+  }
+
+  @Test
+  void userTokenIsBasicOnlyResolvedBeforeLdapBindAndNeverOpensUiSession() throws Exception {
+    java.util.concurrent.atomic.AtomicInteger binds = new java.util.concurrent.atomic.AtomicInteger();
+    InMemoryDirectoryServer ldap = ldapServer(binds);
+    ldap.startListening();
+    try {
+      FakeSecurityDao dao = new FakeSecurityDao();
+      dao.realm(new SecurityRealmRecord(1L, "ldap", "LDAP", "Corporate LDAP", true, 0, Map.of(
+          "source", "LDAP",
+          "url", "ldap://127.0.0.1:" + ldap.getListenPort(),
+          "managerDn", "cn=Manager,dc=example,dc=com",
+          "managerPassword", "manager-secret",
+          "userSearchBase", "ou=people,dc=example,dc=com",
+          "userSearchFilter", "(uid={0})",
+          "groupSearchBase", "ou=groups,dc=example,dc=com",
+          "groupSearchFilter", "(member={1})",
+          "groupNameAttribute", "cn")));
+      dao.user(new SecurityUserRecord(4L, "OIDC", "carol", null, null, "carol@example.com", null,
+          "ACTIVE", "carol", Map.of("groups", List.of("docker-push"))));
+      String token = UserTokens.generate();
+      String userCode = UserTokens.userCode(token);
+      String passCode = token.substring(userCode.length() + 1);
+      dao.apiKey(new ApiKeyRecord(30L, UserTokens.DOMAIN, "OIDC", "carol", "CLI", "ACTIVE",
+          SecurityHashing.sha256(token), userCode, Map.of("values", List.of()), "{}",
+          null, null, null, null));
+      SecurityAuthenticationService service = service(dao);
+
+      AuthenticatedSubject subject = service.authenticate(request(Map.of(
+          "Authorization", basic(userCode, passCode)))).orElseThrow();
+      assertEquals("carol", subject.userId());
+      assertEquals("user-token", subject.realmId());
+      assertEquals(30L, subject.apiKeyId());
+      assertTrue(subject.permissionSubject().groupIds().contains("docker-push"));
+      assertEquals(0, binds.get());
+
+      assertFalse(service.authenticate(request(
+          Map.of("Authorization", basic(userCode, passCode)), null,
+          "/internal/security/basic/login")).isPresent());
+      assertFalse(service.authenticateCredentials(userCode, passCode).isPresent());
+      assertFalse(service.authenticate(request(Map.of(
+          "Authorization", "Bearer " + UserTokens.DOMAIN + "." + token))).isPresent());
+      assertFalse(service.authenticate(request(Map.of("X-Nexus-Plus-Token", token))).isPresent());
+      assertFalse(service.authenticate(request(Map.of(
+          "Authorization", basic(userCode, "A".repeat(43))))).isPresent());
+
+      assertTrue(service.authenticateStoredSubject("OIDC", "carol", "user-token", 30L).isPresent());
+      dao.deleteApiKeysForOwner("OIDC", "carol");
+      assertFalse(service.authenticateStoredSubject("OIDC", "carol", "user-token", 30L).isPresent());
+    } finally {
+      ldap.shutDown(true);
+    }
+  }
+
+  @Test
+  void cachedUserTokenStaysBasicOnlyAndCannotAnswerOtherCredentialTypes() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.user(new SecurityUserRecord(4L, "OIDC", "carol", null, null, "carol@example.com", null,
+        "ACTIVE", "carol", Map.of("groups", List.of("docker-push"))));
+    String token = UserTokens.generate();
+    String userCode = UserTokens.userCode(token);
+    String passCode = token.substring(userCode.length() + 1);
+    dao.apiKey(new ApiKeyRecord(30L, UserTokens.DOMAIN, "OIDC", "carol", "CLI", "ACTIVE",
+        SecurityHashing.sha256(token), userCode, Map.of("values", List.of()), "{}",
+        null, null, null, null));
+    var cache = new com.github.klboke.kkrepo.server.support.InMemorySharedCache();
+    SecurityAuthenticationService service = new SecurityAuthenticationService(dao, OBJECT_MAPPER,
+        "X-Nexus-Plus-Token", "nx-anonymous", cache, OutboundRequestPolicy.allowPrivateForTests(),
+        transportFactory, new ApiKeyAuthCache(cache, true, 60, 5),
+        new BasicAuthCache(cache, true, 60, 5), null);
+
+    // Warm the production cache through the Basic path first.
+    assertEquals(30L, service.authenticate(request(Map.of(
+        "Authorization", basic(userCode, passCode)))).orElseThrow().apiKeyId());
+
+    // Header and bearer values spelling the Basic path's cache input must not hit its entry.
+    for (String presented : List.of("user-token:" + token, token, UserTokens.DOMAIN + "." + token)) {
+      assertFalse(service.authenticate(request(Map.of("X-Nexus-Plus-Token", presented))).isPresent(),
+          presented);
+      assertFalse(service.authenticate(request(Map.of("Authorization", "Bearer " + presented)))
+          .isPresent(), presented);
+    }
+    assertFalse(service.authenticate(request(
+        Map.of("Authorization", basic(userCode, passCode)), null,
+        "/internal/security/basic/login")).isPresent());
+    // And the Basic path still answers from the cache afterwards.
+    assertEquals(30L, service.authenticate(request(Map.of(
+        "Authorization", basic(userCode, passCode)))).orElseThrow().apiKeyId());
+  }
+
+  @Test
+  void basicUserTokenIsReplayableForTerraformDownloadsAsItself() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.user(new SecurityUserRecord(4L, "OIDC", "carol", null, null, "carol@example.com", null,
+        "ACTIVE", "carol", Map.of("groups", List.of("terraform-read"))));
+    String token = UserTokens.generate();
+    String userCode = UserTokens.userCode(token);
+    String passCode = token.substring(userCode.length() + 1);
+    dao.apiKey(new ApiKeyRecord(30L, UserTokens.DOMAIN, "OIDC", "carol", "CLI", "ACTIVE",
+        SecurityHashing.sha256(token), userCode, Map.of("values", List.of()), "{}",
+        null, null, null, null));
+    SecurityAuthenticationService service = service(dao);
+    String basic = basic(userCode, passCode);
+    AuthenticatedSubject subject = service.authenticate(request(Map.of("Authorization", basic)))
+        .orElseThrow();
+
+    String replayable = service.replayableTerraformUrlToken(
+        request(Map.of("Authorization", basic)), subject).orElseThrow();
+    assertEquals(basic.substring(6), replayable);
+    AuthenticatedSubject replayed = service.authenticateTerraformUrlToken(replayable).orElseThrow();
+    assertEquals("carol", replayed.userId());
+    assertEquals(30L, replayed.apiKeyId());
+    assertTrue(replayed.permissionSubject().groupIds().contains("terraform-read"));
+
+    // The Basic pair must be the very credential the request was authenticated with.
+    AuthenticatedSubject otherKey = new AuthenticatedSubject(
+        "OIDC", "carol", "api-key", 31L, subject.permissionSubject());
+    assertTrue(service.replayableTerraformUrlToken(
+        request(Map.of("Authorization", basic)), otherKey).isEmpty());
+    dao.deleteApiKeysForOwner("OIDC", "carol");
+    assertTrue(service.authenticateTerraformUrlToken(replayable).isEmpty());
+  }
+
+  @Test
+  void keyBackedSubjectsCannotBeStoredAsASession() {
+    SecurityAuthenticationService service = service(new FakeSecurityDao());
+    Map<String, Object> sessionAttributes = new LinkedHashMap<>();
+    AuthenticatedSubject userToken = new AuthenticatedSubject("Local", "admin", "user-token", 30L,
+        new com.github.klboke.kkrepo.auth.PermissionSubject("Local", "admin", Set.of("nx-admin"), null));
+
+    assertThrows(IllegalArgumentException.class, () ->
+        service.storeSessionSubject(request(Map.of(), sessionAttributes), userToken));
+    assertFalse(sessionAttributes.containsKey(AuthenticatedSubject.SESSION_ATTRIBUTE));
+  }
+
+  @Test
   void explicitBasicLoginStillAcceptsCachedBasicCredentialsAfterLogout() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.realm(new SecurityRealmRecord(1L, "local", "LOCAL", "Local", true, 0, Map.of("source", "Local")));
@@ -1290,8 +1459,21 @@ class SecurityAuthenticationServiceTest {
   }
 
   private static InMemoryDirectoryServer ldapServer() throws Exception {
+    return ldapServer(new java.util.concurrent.atomic.AtomicInteger());
+  }
+
+  private static InMemoryDirectoryServer ldapServer(
+      java.util.concurrent.atomic.AtomicInteger binds) throws Exception {
     InMemoryDirectoryServerConfig config = new InMemoryDirectoryServerConfig("dc=example,dc=com");
     config.addAdditionalBindCredentials("cn=Manager,dc=example,dc=com", "manager-secret");
+    config.addInMemoryOperationInterceptor(
+        new com.unboundid.ldap.listener.interceptor.InMemoryOperationInterceptor() {
+          @Override
+          public void processSimpleBindRequest(
+              com.unboundid.ldap.listener.interceptor.InMemoryInterceptedSimpleBindRequest request) {
+            binds.incrementAndGet();
+          }
+        });
     config.setListenerConfigs(InMemoryListenerConfig.createLDAPConfig(
         "ldap",
         InetAddress.getByName("127.0.0.1"),
@@ -1674,6 +1856,11 @@ class SecurityAuthenticationServiceTest {
     @Override
     public Optional<ApiKeyRecord> findApiKeyByDomainAndHash(String domain, String apiKeyHash) {
       return Optional.ofNullable(apiKeysByDomainAndHash.get(domain + "/" + apiKeyHash));
+    }
+
+    @Override
+    public Optional<ApiKeyRecord> findApiKey(long id) {
+      return apiKeysByHash.values().stream().filter(apiKey -> apiKey.id() == id).findFirst();
     }
 
     @Override
