@@ -88,9 +88,12 @@ tables.
 
 The default Helm scanner resources request `500m CPU / 1 GiB`, limit `2 CPU / 4 GiB`, provide a
 `9 GiB` ephemeral-storage limit, and use a `10 GiB` vulnerability-database PVC. Helm and Compose
-provide an `8 GiB` scratch volume with a `7 GiB` shared admission budget. The scanner estimates
-each request from its staged input, retained nested archives, and bounded process output. Requests
-that cannot fit the configured budget fail with `413`; concurrent requests wait briefly and then
+provide an `8 GiB` scratch volume with a `7 GiB` shared admission budget. For direct artifact
+cataloging, the scanner enforces the declared size while writing the input and reserves space
+for that input, retained nested archives, and bounded process output. APK, Conda, and Conan
+prepare separate scan targets and use profile-based reservations, as do OCI scans that fetch
+layers from the registry. Match reservations cover the bounded SBOM input and process output.
+Requests that cannot fit the configured budget fail with `413`. Concurrent requests wait briefly and
 return retryable `429` instead of overcommitting the volume. Size the admission budget below the
 physical scratch volume, then tune both from the largest artifacts and observed scan duration.
 

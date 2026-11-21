@@ -3,9 +3,11 @@ package com.github.klboke.kkrepo.scanner;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -21,6 +23,9 @@ import java.io.ByteArrayInputStream;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -28,11 +33,13 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.springframework.http.HttpStatus;
 
 class ScannerControllerTest {
+  private static final long MIB = 1024L * 1024;
   private ScannerEngineService engine;
   private ScannerAdapterProperties properties;
   private ScannerController controller;
   private HttpServletRequest request;
   private ScannerExecutionRegistry executions;
+  private SimpleMeterRegistry metrics;
 
   @BeforeEach
   void setUp() throws Exception {
@@ -40,10 +47,11 @@ class ScannerControllerTest {
     properties = new ScannerAdapterProperties();
     properties.setServiceCredential("secret");
     executions = new ScannerExecutionRegistry();
+    metrics = new SimpleMeterRegistry();
     controller = new ScannerController(
         engine,
         properties,
-        new ScannerCapacityLimiter(properties, new SimpleMeterRegistry()),
+        new ScannerCapacityLimiter(properties, metrics),
         executions);
     request = mock(HttpServletRequest.class);
     when(request.getInputStream()).thenReturn(new TestServletInputStream("body".getBytes()));
@@ -98,6 +106,91 @@ class ScannerControllerTest {
     when(engine.scanOci(ociRequest)).thenReturn(ociResponse);
     assertEquals(ociResponse, controller.oci(ociRequest));
     assertFalse(controller.cancel("idle-run", "v1").cancelled());
+  }
+
+  @Test
+  void admitsTwoSmallCatalogRequestsWithTheDefaultProfileAndScratchBudget() throws Exception {
+    useDefaultProfileLimits();
+    long artifactBytes = 7237;
+    CountDownLatch firstEntered = new CountDownLatch(1);
+    CountDownLatch releaseFirst = new CountDownLatch(1);
+    CatalogResponse result = catalog();
+    String firstSha = "a".repeat(64);
+    String secondSha = "b".repeat(64);
+    when(engine.catalog(any(), eq(firstSha), eq(artifactBytes), eq(ScannerArtifactType.JAR), any()))
+        .thenAnswer(invocation -> {
+          firstEntered.countDown();
+          assertTrue(releaseFirst.await(5, TimeUnit.SECONDS));
+          return result;
+        });
+    when(engine.catalog(any(), eq(secondSha), eq(artifactBytes), eq(ScannerArtifactType.JAR), any()))
+        .thenAnswer(invocation -> {
+          assertEquals(2.0, metrics.get("kkrepo_scanner_active").gauge().value());
+          assertEquals(6242.0 * MIB, scratchReservedBytes());
+          return result;
+        });
+    try (var executor = Executors.newSingleThreadExecutor()) {
+      var first = executor.submit(() -> controller.catalog(
+          request, "v1", "first", firstSha, artifactBytes, "jar"));
+      try {
+        assertTrue(firstEntered.await(5, TimeUnit.SECONDS));
+        assertEquals(result, controller.catalog(
+            request, "v1", "second", secondSha, artifactBytes, "jar"));
+      } finally {
+        releaseFirst.countDown();
+      }
+      assertEquals(result, first.get(5, TimeUnit.SECONDS));
+    }
+    assertEquals(0.0, scratchReservedBytes());
+  }
+
+  @Test
+  void reservesProfileSpaceForPreparedCatalogsAndSbomSpaceForMatch() throws Exception {
+    useDefaultProfileLimits();
+    var catalog = catalog();
+    when(engine.catalog(any(), any(), eq(7237L), eq(ScannerArtifactType.APK), any()))
+        .thenAnswer(invocation -> {
+          assertEquals(4145.0 * MIB, scratchReservedBytes());
+          return catalog;
+        });
+    assertEquals(catalog, controller.catalog(
+        request, "v1", "apk", "a".repeat(64), 7237, "apk"));
+
+    when(engine.catalogConan(any(), any(), any(), eq(7237L), any(), eq(MIB), any()))
+        .thenAnswer(invocation -> {
+          assertEquals(4145.0 * MIB, scratchReservedBytes());
+          return catalog;
+        });
+    when(request.getContentType()).thenReturn("multipart/form-data; boundary=conan-boundary");
+    assertEquals(catalog, controller.catalogConan(
+        request, "v1", "conan", "a".repeat(64), 7237, "b".repeat(64), MIB));
+
+    var match = match();
+    when(engine.match(any(), any(), any())).thenAnswer(invocation -> {
+      assertEquals(65.0 * MIB, scratchReservedBytes());
+      return match;
+    });
+    assertEquals(match, controller.match(request, "v1", "match", "b".repeat(64)));
+    assertEquals(0.0, scratchReservedBytes());
+  }
+
+  @Test
+  void rejectsInvalidCatalogDeclarationsBeforeReadingTheBody() throws Exception {
+    useDefaultProfileLimits();
+    assertEquals(413, assertCode("INPUT_SIZE_INVALID", () -> controller.catalog(
+        request, "v1", "catalog", "a".repeat(64), 1024 * MIB + 1, "jar")).status());
+    verify(request, never()).getInputStream();
+  }
+
+  private void useDefaultProfileLimits() {
+    when(request.getHeader("X-KKRepo-Max-Input-Bytes")).thenReturn(Long.toString(1024 * MIB));
+    when(request.getHeader("X-KKRepo-Max-Single-File-Bytes")).thenReturn(Long.toString(1024 * MIB));
+    when(request.getHeader("X-KKRepo-Max-Uncompressed-Bytes")).thenReturn(Long.toString(10240 * MIB));
+    when(request.getHeader("X-KKRepo-Max-Nested-Depth")).thenReturn("3");
+  }
+
+  private double scratchReservedBytes() {
+    return metrics.get("kkrepo_scanner_scratch_reserved_bytes").gauge().value();
   }
 
   @Test
