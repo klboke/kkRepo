@@ -11,14 +11,14 @@
   const mount = "/srv/kkrepo-blobs";
   const targets = {
     "internal-uri": {
-      label: "Internal URI",
-      help: `kkRepo returns ${internal}/<store-id>/<object-key> in the offload response header. `
-        + `${internal}/ is a reserved URI prefix. An internal proxy route maps the URI to the Blob Store's read-only mount.`
+      example: `${internal}/<store-id>/<object-key>`,
+      help: `The URI in the response header starts with the reserved ${internal}/ prefix, followed by the Blob Store ID and the file's relative path. `
+        + "An internal proxy route maps the URI to the Blob Store's read-only mount."
     },
     "absolute-path": {
-      label: "Proxy-side absolute path",
-      help: `kkRepo returns ${mount}/<store-id>/<object-key> in the offload response header. `
-        + "The path points to the read-only mount on the proxy host or container."
+      example: `${mount}/<store-id>/<object-key>`,
+      help: "The response header gives the file's absolute path on the proxy host or container. "
+        + "Its Blob Store ID selects the read-only mount, and the object key is the file's relative path within that mount."
     }
   };
   const methodLogos = {
@@ -223,10 +223,9 @@
     el("request").textContent = `${requestHeader}: ${wire.marker}`;
     el("response").readOnly = !custom;
     if (el("response").readOnly) el("response").value = wire.responseHeader;
-    el("target-label").hidden = custom;
     el("target").hidden = !custom;
-    el("target-format-label").htmlFor = custom ? "offload-target" : "offload-target-label";
-    el("target-label").value = t(target.label);
+    el("target-format-label").htmlFor = custom ? "offload-target" : "offload-target-example";
+    el("target-path").textContent = target.example;
     const help = t(target.help);
     el("target-help").dataset.tooltip = help;
     el("target-help").setAttribute("aria-label", help);

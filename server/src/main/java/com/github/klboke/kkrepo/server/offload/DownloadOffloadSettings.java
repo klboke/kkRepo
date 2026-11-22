@@ -71,7 +71,7 @@ public class DownloadOffloadSettings {
       throw invalid("Enter a valid dedicated response header name.");
     }
     if (!INTERNAL_URI.equals(command.customTarget()) && !ABSOLUTE_PATH.equals(command.customTarget())) {
-      throw invalid("Select a target format.");
+      throw invalid("Select a file location format.");
     }
     var available = availableStores();
     List<Long> selected = command.storeIds() == null ? List.of() : command.storeIds();

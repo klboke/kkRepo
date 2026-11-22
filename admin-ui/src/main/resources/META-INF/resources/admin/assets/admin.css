@@ -5040,6 +5040,7 @@ code {
   background: var(--surface-muted);
   overflow-wrap: anywhere;
 }
+.offload-target-example { margin-top: 0; min-height: 36px; font-weight: var(--fw-medium); }
 .offload-store-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .offload-stores { margin: 8px 0 0; overflow-x: auto; }
 .offload-stores .nx-table :is(th, td) { white-space: normal; overflow-wrap: anywhere; }
