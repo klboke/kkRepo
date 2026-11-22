@@ -1,4 +1,4 @@
-CREATE TABLE download_offload_settings (
+CREATE TABLE IF NOT EXISTS download_offload_settings (
   id SMALLINT PRIMARY KEY,
   revision BIGINT NOT NULL,
   enabled BOOLEAN NOT NULL,
@@ -9,4 +9,5 @@ CREATE TABLE download_offload_settings (
 );
 
 INSERT INTO download_offload_settings (id, revision, enabled, method, custom_header, custom_target, blob_store_ids)
-VALUES (1, 0, FALSE, 'nginx', 'X-KkRepo-File', 'internal-uri', '');
+VALUES (1, 0, FALSE, 'nginx', 'X-KkRepo-File', 'internal-uri', '')
+ON DUPLICATE KEY UPDATE id = id;
