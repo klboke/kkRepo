@@ -75,7 +75,7 @@
     return { method, responseHeader: method.responseHeader, target: method.target, marker: method.id };
   }
 
-  function makeBadge(text, state = "") {
+  function makeBadge(text, state) {
     const badge = document.createElement("span");
     badge.className = `state-badge compact ${state}`;
     badge.textContent = t(text);
@@ -130,7 +130,7 @@
       cell.textContent = t("No File Blob Stores available.");
     }
     reset();
-    el("saved-state").replaceChildren(makeBadge(saved.enabled ? "Enabled" : "Disabled", saved.enabled ? "ok" : ""));
+    el("saved-state").replaceChildren(makeBadge(saved.enabled ? "Enabled" : "Disabled", saved.enabled ? "ok" : "warn"));
     el("trusted").textContent = saved.trustedProxies || t("None configured");
     el("example").disabled = false;
     el("verify").disabled = !saved.enabled || !saved.stores.some(store => saved.storeIds.includes(store.id));
