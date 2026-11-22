@@ -9,7 +9,18 @@
   const proofHeader = "X-KkRepo-File-Served";
   const internal = "/_kkrepo_file_offload";
   const mount = "/srv/kkrepo-blobs";
-  const targets = { "internal-uri": "Internal URI", "absolute-path": "Proxy-side absolute path" };
+  const targets = {
+    "internal-uri": {
+      label: "Internal URI",
+      help: `kkRepo returns ${internal}/<store-id>/<object-key> in the offload response header. `
+        + `${internal}/ is a reserved URI prefix. An internal proxy route maps the URI to the Blob Store's read-only mount.`
+    },
+    "absolute-path": {
+      label: "Proxy-side absolute path",
+      help: `kkRepo returns ${mount}/<store-id>/<object-key> in the offload response header. `
+        + "The path points to the read-only mount on the proxy host or container."
+    }
+  };
   const methodLogos = {
     nginx: "nginx.png",
     openresty: "openresty.webp",
@@ -202,17 +213,23 @@
     if (!saved) return;
     const current = draft();
     const wire = contract(current);
+    const custom = current.method === "custom";
+    const target = targets[wire.target];
     const editable = !saving && canEdit();
     el("enabled").disabled = !editable;
     el("fields").disabled = !editable || !current.enabled;
     if (el("fields").disabled) closeMethodPicker();
     renderSelectedMethod(current.method);
     el("request").textContent = `${requestHeader}: ${wire.marker}`;
-    el("response").readOnly = current.method !== "custom";
+    el("response").readOnly = !custom;
     if (el("response").readOnly) el("response").value = wire.responseHeader;
-    el("target-fixed").hidden = current.method === "custom";
-    el("target-custom").hidden = current.method !== "custom";
-    el("target-label").value = t(targets[wire.target]);
+    el("target-label").hidden = custom;
+    el("target").hidden = !custom;
+    el("target-format-label").htmlFor = custom ? "offload-target" : "offload-target-label";
+    el("target-label").value = t(target.label);
+    const help = t(target.help);
+    el("target-help").dataset.tooltip = help;
+    el("target-help").setAttribute("aria-label", help);
     for (const checkbox of el("store-rows").querySelectorAll("input")) {
       checkbox.disabled = !editable || !current.enabled;
     }

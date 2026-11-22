@@ -2195,10 +2195,21 @@
                   <code id="offload-request" class="offload-request" aria-labelledby="offload-request-label"></code>
                 </div>
                 <label><span>kkRepo response header</span><input id="offload-response" maxlength="128" spellcheck="false" readonly></label>
-                <label id="offload-target-fixed"><span>Target format</span><input id="offload-target-label" readonly></label>
-                <label id="offload-target-custom" hidden><span>Target format</span>
-                  <select id="offload-target"><option value="internal-uri">Internal URI</option><option value="absolute-path">Proxy-side absolute path</option></select>
-                </label>
+                <div class="form-field">
+                  <div class="field-label">
+                    <label id="offload-target-format-label" for="offload-target-label">Target format</label>
+                    <span class="field-help" id="offload-target-help" tabindex="0" role="note"
+                      aria-label="Controls the file location in the offload response header."
+                      data-tooltip="Controls the file location in the offload response header.">
+                      <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                    </span>
+                  </div>
+                  <input id="offload-target-label" readonly>
+                  <select id="offload-target" hidden>
+                    <option value="internal-uri">Internal URI</option>
+                    <option value="absolute-path">Proxy-side absolute path</option>
+                  </select>
+                </div>
               </fieldset>
               <div class="offload-store-heading">
                 <div class="field-label">
@@ -2568,7 +2579,7 @@
     <script src="./assets/user-picker.js?v=20261107-user-picker"></script>
     <script src="./assets/ohpm-login.js?v=20261107-user-picker"></script>
     <script src="./assets/proxy-settings.js?v=20261121-block-outbound"></script>
-    <script src="./assets/download-offload.js?v=20261122-offload-method-picker"></script>
+    <script src="./assets/download-offload.js?v=20261122-offload-target-help"></script>
     <script src="./assets/admin.js?v=20261122-download-offload"></script>
   </body>
 </html>
