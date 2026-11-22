@@ -31,7 +31,6 @@
     custom: "Configure these headers in your trusted proxy and restrict access to the selected read-only file mounts."
   };
   let saved;
-  let checks = new Map();
   let loadRevision = 0;
   let saving = false;
   let probe;
@@ -83,18 +82,6 @@
     return badge;
   }
 
-  function renderDelivery() {
-    const total = saved.storeIds.length;
-    const verified = saved.storeIds.filter(id => checks.get(id) === true).length;
-    const warning = saved.storeIds.some(id => checks.get(id) === false);
-    const status = !saved.enabled || (!warning && !verified)
-      ? makeBadge("Not verified")
-      : warning ? makeBadge("Action required", "checking")
-      : verified === total ? makeBadge("Verified", "ok")
-      : makeBadge(`${verified} / ${total} ${t("verified")}`, "ok");
-    el("delivery-state").replaceChildren(status);
-  }
-
   function renderDraft() {
     if (!saved) return;
     const current = draft();
@@ -124,7 +111,6 @@
   }
 
   function applySettings(value) {
-    if (saved?.revision !== value.revision) checks = new Map();
     saved = value;
     el("method").replaceChildren(...saved.methods.map(method => option(method.id, t(method.label))));
     el("store-rows").replaceChildren();
@@ -148,7 +134,6 @@
     el("trusted").textContent = saved.trustedProxies || t("None configured");
     el("example").disabled = false;
     el("verify").disabled = !saved.enabled || !saved.stores.some(store => saved.storeIds.includes(store.id));
-    renderDelivery();
   }
 
   function reset() {
@@ -295,17 +280,14 @@
       }
       if (received !== length) throw new Error(t("The proxy returned an incomplete download."));
       if (saved.revision !== revision || probe !== operation) return;
-      checks.set(id, true);
       result.textContent = `${t("Proxy delivery verified")}. ${length.toLocaleString()} ${t("bytes received")}.`;
     } catch (error) {
       if (operation.signal.aborted || saved.revision !== revision || probe !== operation) return;
-      checks.set(id, false);
       result.textContent = error.message;
     } finally {
       if (probe === operation) {
         probe = null;
         el("probe-run").disabled = false;
-        if (saved.revision === revision) renderDelivery();
       }
     }
   }
