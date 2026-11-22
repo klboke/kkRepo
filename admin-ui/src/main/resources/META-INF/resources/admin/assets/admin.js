@@ -3360,8 +3360,9 @@ async function loadArchStatus(name = editingRepositoryName) {
     const response = await fetch(
       `/internal/repositories/${encodeURIComponent(name)}/arch/status`);
     if (!response.ok) throw new Error(await responseErrorMessage(response));
-    const status = await response.json();
-    output.textContent = status
+    const text = await response.text();
+    const status = text ? JSON.parse(text) : null;
+    output.textContent = status && status.configured
       ? `Signing key ${status.fingerprint} (key ${status.keyId}, revision ${status.revision}).`
       : "No active signing key. Databases are served unsigned until a key is imported or generated.";
   } catch (error) {

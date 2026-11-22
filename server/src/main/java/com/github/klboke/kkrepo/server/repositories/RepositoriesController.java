@@ -26,6 +26,7 @@ import com.github.klboke.kkrepo.server.statistics.StorageStatisticsService.Usage
 import com.github.klboke.kkrepo.server.statistics.StorageUsageResponse;
 import com.github.klboke.kkrepo.server.statistics.StorageUsageResponse.RepositoryUsage;
 import jakarta.servlet.http.HttpServletRequest;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -336,12 +337,24 @@ public class RepositoriesController {
   }
 
   @GetMapping("/{name}/arch/status")
-  public ArchSigningService.KeyStatus archStatus(
+  public Map<String, Object> archStatus(
       @PathVariable("name") String name, HttpServletRequest request) {
     AuthenticatedSubject subject = requireAuthenticated(request);
     RepositoryView existing = requireArchRepository(name);
     requireRepositoryAdmin(subject, existing.format(), existing.name(), "read");
-    return arch().keyStatus(archRuntime(name));
+    ArchSigningService.KeyStatus status = arch().keyStatus(archRuntime(name));
+    // Always return an explicit JSON object: serializing the null status produced an empty 200
+    // body that broke clients parsing JSON for normal unsigned repositories.
+    if (status == null) {
+      return Map.of("configured", false);
+    }
+    Map<String, Object> body = new LinkedHashMap<>();
+    body.put("configured", true);
+    body.put("revision", status.revision());
+    body.put("keyId", status.keyId());
+    body.put("fingerprint", status.fingerprint());
+    body.put("createdAt", status.createdAt() == null ? null : status.createdAt().toString());
+    return body;
   }
 
   @PutMapping("/{name}/arch/signing-key")

@@ -8,6 +8,7 @@ import com.github.klboke.kkrepo.protocol.arch.ArchDesc;
 import com.github.klboke.kkrepo.protocol.arch.ArchMediaTypes;
 import com.github.klboke.kkrepo.protocol.arch.ArchPackageFilename;
 import com.github.klboke.kkrepo.protocol.arch.ArchPath;
+import com.github.klboke.kkrepo.protocol.arch.ArchVersions;
 import com.github.klboke.kkrepo.protocol.maven.policy.WritePolicy;
 import com.github.klboke.kkrepo.server.blob.BufferedUpload;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
@@ -122,7 +123,13 @@ public class ArchService {
       if (bytes.length >= 1024 * 1024) {
         throw new MavenExceptions.BadRequestException("Package signature is too large");
       }
-      assets.storeSignature(runtime, fileName, bytes, actor, ip);
+      // ALLOW_ONCE is enforced atomically at the final binding: the early check above cannot see
+      // a publication that happens while this upload is still being received.
+      if (!assets.storeSignature(runtime, fileName, bytes, actor, ip,
+          policy == WritePolicy.ALLOW_ONCE)) {
+        throw new MavenExceptions.WritePolicyDenied(
+            "Repository write policy forbids overwriting " + fileName);
+      }
       return new Published(fileName);
     } catch (IOException error) {
       throw new MavenExceptions.BadRequestException("Unable to read package signature", error);
@@ -153,8 +160,15 @@ public class ArchService {
           BufferedUpload.copy(body, temp, BufferedUpload.Checksums.WITH_SHA512);
       ArchPackageInspector.Inspected inspected =
           inspector.inspect(temp, fileName, digests.size(), digests.md5(), digests.sha256());
-      assets.store(runtime, inspected, temp, fileName, digests.md5(), digests.sha1(),
-          digests.sha256(), digests.size(), actor, ip);
+      // ALLOW_ONCE is enforced atomically at the final asset binding: the existence check before
+      // reading the upload cannot see a publication that lands while this body is in flight.
+      boolean created = assets.store(runtime, inspected, temp, fileName, digests.md5(),
+          digests.sha1(), digests.sha256(), digests.size(), actor, ip,
+          policy == WritePolicy.ALLOW_ONCE);
+      if (!created) {
+        throw new MavenExceptions.WritePolicyDenied(
+            "Repository write policy forbids overwriting " + fileName);
+      }
       // A package replacement invalidates any signature uploaded for the previous bytes.
       if (replacing) {
         assets.delete(runtime, fileName + ".sig");
@@ -259,8 +273,27 @@ public class ArchService {
       merged.removeIf(component -> deletedFilenames.contains(
           String.valueOf(component.attributes().get("archFileName"))));
     }
+    // A staged EDIT shadows the live projection it replaces: drop every live descriptor whose
+    // coordinates or file name the staged bytes replace, so the preview holds one authoritative
+    // descriptor per path instead of appending the staged entry after the stale live one.
+    java.util.Set<String> stagedKeys = new java.util.HashSet<>();
+    java.util.Set<String> stagedFileNames = new java.util.HashSet<>();
+    for (com.github.klboke.kkrepo.persistence.jdbc.api.model.ComponentRecord stagedComponent
+        : staged) {
+      stagedKeys.add(stagedComponent.name() + "|" + String.valueOf(
+          stagedComponent.attributes().get("archArchitecture")));
+      Object stagedFileName = stagedComponent.attributes().get("archFileName");
+      if (stagedFileName != null) {
+        stagedFileNames.add(String.valueOf(stagedFileName));
+      }
+    }
+    merged.removeIf(component -> stagedKeys.contains(component.name() + "|"
+        + String.valueOf(component.attributes().get("archArchitecture")))
+        || stagedFileNames.contains(String.valueOf(component.attributes().get("archFileName"))));
     merged.addAll(staged);
-    boolean files = path.kind() == ArchPath.Kind.FILES || path.kind() == ArchPath.Kind.FILES_TAR;
+    // Signature paths (.files.sig, .files.tar.gz.sig) sign the files database: derive the
+    // database type from the file name exactly like the live generatedSignature path.
+    boolean files = path.fileName().contains(".files");
     byte[] bytes = database.build(merged, files);
     return path.databaseSignature()
         ? signatureResponse(runtime, bytes, headOnly)
@@ -322,16 +355,26 @@ public class ArchService {
         } catch (MavenExceptions.MavenNotFoundException | MavenExceptions.BadUpstreamException e) {
           continue;
         }
+        Map<String, ArchDesc> memberLatest = new LinkedHashMap<>();
         for (ArchDesc desc : descs) {
           if (desc.name() == null || desc.version() == null) continue;
-          merged.putIfAbsent(desc.name() + "|" + (desc.architecture() == null ? ""
-              : desc.architecture()), desc);
+          // Resolve versions within each member with pacman-compatible ordering first: a member
+          // holding several versions of one package must advertise its current release before the
+          // first-member precedence below applies between members.
+          memberLatest.merge(descKey(desc), desc,
+              (left, right) -> ArchVersions.COMPARATOR.compare(right.version(), left.version()) > 0
+                  ? right : left);
         }
+        memberLatest.forEach(merged::putIfAbsent);
       }
     } finally {
       resolving.remove(group.id());
     }
     return database.buildDescs(new ArrayList<>(merged.values()), files);
+  }
+
+  private static String descKey(ArchDesc desc) {
+    return desc.name() + "|" + (desc.architecture() == null ? "" : desc.architecture());
   }
 
   private List<ArchDesc> memberDescriptions(

@@ -32,7 +32,8 @@ final class ArchAssetSupport {
     this.hosted = hosted;
   }
 
-  ComponentRecord store(
+  /** Publishes the package; returns whether this call created the asset binding. */
+  boolean store(
       RepositoryRuntime runtime,
       ArchPackageInspector.Inspected inspected,
       Path file,
@@ -42,12 +43,18 @@ final class ArchAssetSupport {
       String sha256,
       long size,
       String actor,
-      String ip) {
+      String ip,
+      boolean insertIfAbsent) {
     ComponentRecord component = component(runtime, inspected, md5, sha1, sha256);
+    if (insertIfAbsent) {
+      return hosted.putInternalWithComponentFileAtBrowsePathIfAbsent(
+          runtime, path, file, ArchMediaTypes.forPackage(path), component.attributes(), actor, ip,
+          component, path);
+    }
     hosted.putInternalWithComponentFileAtBrowsePath(
         runtime, path, file, ArchMediaTypes.forPackage(path), component.attributes(), actor, ip,
         component, path);
-    return component;
+    return true;
   }
 
   ComponentRecord component(
@@ -92,15 +99,23 @@ final class ArchAssetSupport {
     return hosted.getInternal(runtime, path, headOnly);
   }
 
-  void storeSignature(
+  /** Publishes the detached signature; returns whether this call created the asset binding. */
+  boolean storeSignature(
       RepositoryRuntime runtime,
       String path,
       byte[] signature,
       String actor,
-      String ip) {
+      String ip,
+      boolean insertIfAbsent) {
+    if (insertIfAbsent) {
+      return hosted.putInternalUnindexedIfAbsent(
+          runtime, path, new java.io.ByteArrayInputStream(signature),
+          ArchMediaTypes.SIGNATURE, Map.of("archSignature", true), actor, ip);
+    }
     hosted.putInternalUnindexed(
         runtime, path, new java.io.ByteArrayInputStream(signature),
         ArchMediaTypes.SIGNATURE, Map.of("archSignature", true), actor, ip);
+    return true;
   }
 
   Optional<AssetRecord> find(RepositoryRuntime runtime, String path) {

@@ -250,6 +250,40 @@ class RawAssetWriter {
         extraBlobAttributes, createdBy, createdByIp, ComponentBinding.none(), keepResponseFile);
   }
 
+  /**
+   * Stores an unindexed protocol asset and reports whether this call created the path binding:
+   * ALLOW_ONCE-style callers enforce their immutability policy atomically at this final binding
+   * instead of pre-checking existence before reading the upload.
+   */
+  boolean writeUnindexedIfAbsent(
+      RepositoryRuntime runtime,
+      BlobStorage storage,
+      long blobStoreId,
+      String path,
+      InputStream body,
+      String contentTypeHint,
+      Map<String, ?> extraBlobAttributes,
+      String createdBy,
+      String createdByIp) {
+    DigestedUpload upload = uploadWithDigests(
+        runtime, storage, blobStoreId, path, body, extraBlobAttributes);
+    cleanupAfterRollback(storage, blobStoreId, upload);
+    try {
+      Stored stored = executePersist(
+          "Persist raw asset " + runtime.name() + "/" + path,
+          () -> persist(runtime, storage, blobStoreId, path, upload, contentTypeHint,
+              extraBlobAttributes, createdBy, createdByIp, ComponentBinding.none(),
+              Map.of(), null, null, false));
+      cleanupUnusedUploadedBlob(storage, blobStoreId, upload, stored.blob());
+      TempBlobFiles.deleteQuietly(upload.tempFile());
+      return stored.created();
+    } catch (RuntimeException e) {
+      cleanupUploadedBlob(storage, blobStoreId, upload);
+      TempBlobFiles.deleteQuietly(upload.tempFile());
+      throw e;
+    }
+  }
+
   Stored write(
       RepositoryRuntime runtime, BlobStorage storage, long blobStoreId, String path,
       InputStream body, String contentTypeHint, Map<String, ?> extraBlobAttributes,

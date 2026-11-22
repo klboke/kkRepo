@@ -117,6 +117,25 @@ public class RawHostedService {
     return MavenResponse.created();
   }
 
+  /**
+   * Stores an unindexed protocol asset and returns whether this call created the path binding.
+   * If another replica already owns or concurrently wins the path, its asset/blob binding is
+   * returned unchanged by the writer and this method reports {@code false}.
+   */
+  public boolean putInternalUnindexedIfAbsent(
+      RepositoryRuntime runtime,
+      String rawPath,
+      InputStream body,
+      String contentType,
+      Map<String, ?> blobAttributes,
+      String createdBy,
+      String createdByIp) {
+    String path = normalizeAssetPath(rawPath);
+    return writer.writeUnindexedIfAbsent(
+        runtime, blobStorage(runtime), requireBlobStore(runtime), path, body, contentType,
+        blobAttributes == null ? Map.of() : blobAttributes, createdBy, createdByIp);
+  }
+
   /** Stores protocol staging/cache state without making it visible in Browse or Search. */
   public MavenResponse putInternalHidden(
       RepositoryRuntime runtime,
