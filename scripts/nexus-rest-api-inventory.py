@@ -41,10 +41,15 @@ DEFAULT_SOURCE = os.path.join(ROOT, SOURCE_REL)
 SOURCE = os.environ.get("NEXUS_INVENTORY_SOURCE", DEFAULT_SOURCE)
 
 
+def parse_reference_endpoints(body):
+    """Extract the pinned client's `/v1` method/path pairs from its README table."""
+    found = re.findall(r"\| \*\*(Get|Post|Put|Delete|Patch)\*\* (/v1/[^ |]+)", body)
+    return sorted({(method.upper(), path) for method, path in found})
+
+
 def nexus_endpoints(url):
     body = urllib.request.urlopen(url, timeout=60).read().decode("utf-8", "replace")
-    found = re.findall(r"\| \*\*(Get|Post|Put|Delete)\*\* (/v1/[^ |]+)", body)
-    return sorted({(method.upper(), path) for method, path in found})
+    return parse_reference_endpoints(body)
 
 
 def annotations_to_endpoints(texts):
@@ -124,6 +129,35 @@ def area_of(path):
     return parts[1] if len(parts) > 1 else path
 
 
+SELF_TEST_FIXTURE = """
+| **Get** /v1/status | supported |
+| **Post** /v1/evaluation/repositories | supported |
+| **Put** /v1/evaluation/settings | supported |
+| **Patch** /v1/evaluation/repositories | supported |
+| **Patch** /v1/evaluation/settings | supported |
+| **Patch** /v1/evaluation/settings-with-repos | supported |
+| **Delete** /v1/unknown | absent |
+"""
+
+
+def self_test():
+    """Parser regression: PATCH rows are extracted alongside GET/POST/PUT/DELETE."""
+    endpoints = set(parse_reference_endpoints(SELF_TEST_FIXTURE))
+    expected = {
+        ("GET", "/v1/status"),
+        ("POST", "/v1/evaluation/repositories"),
+        ("PUT", "/v1/evaluation/settings"),
+        ("PATCH", "/v1/evaluation/repositories"),
+        ("PATCH", "/v1/evaluation/settings"),
+        ("PATCH", "/v1/evaluation/settings-with-repos"),
+        ("DELETE", "/v1/unknown"),
+    }
+    missing = sorted(expected - endpoints)
+    assert not missing, "parser dropped: %r" % (missing,)
+    print("self-test ok: %d fixture pairs, PATCH included" % len(endpoints))
+    return 0
+
+
 def reference_description(client_url):
     if client_url == DEFAULT_URL:
         return f"`sonatype-nexus-community/nexus-repo-api-client-go` at `{CLIENT_REF}`"
@@ -151,7 +185,11 @@ def main(argv=None):
     parser.add_argument("--client-url", default=os.environ.get("NEXUS_API_CLIENT_URL", DEFAULT_URL),
                         help="reference endpoint list (default: pinned client %s)" % CLIENT_REF)
     parser.add_argument("--diff-ref", help="also list matches present here but absent at this ref")
+    parser.add_argument("--self-test", action="store_true",
+                        help="run the reference-parser regression and exit")
     args = parser.parse_args(argv)
+    if args.self_test:
+        return self_test()
 
     nexus = [(method, path) for method, path in nexus_endpoints(args.client_url)
              if path.startswith("/v1/")]

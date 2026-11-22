@@ -18,7 +18,8 @@ running Nexus. It is not a compatibility claim.
 | kkRepo reviewed head (before this correction) | `docs/nexus-rest-api-review` | `f1c801ba087296248309812737021875d24baaf7` |
 | kkRepo staging branch, reference only | PR #455 `feat/multi-repo-staging` head | `ef7132e4874d10a731ce36e8fbbc35760ca447b4` |
 
-The endpoint list contains 459 `/v1` method/path pairs.
+The endpoint list contains 462 `/v1` method/path pairs, including the three `PATCH /v1/evaluation*`
+routes of the pinned client README.
 
 ## What the inventory establishes
 
@@ -47,9 +48,9 @@ heads are reported separately, always with their SHA.
 
 | Baseline | kkRepo SHA | method/path present |
 | --- | --- | ---: |
-| `upstream/main` (baseline) | `6b72b3f1` | 44/459 |
-| `docs/nexus-rest-api-review` (PR head) | `f1c801ba` | 44/459, identical matched set to main |
-| `feat/multi-repo-staging` (PR #455, not merged) | `ef7132e` | 52/459 |
+| `upstream/main` (baseline) | `6b72b3f1` | 44/462 |
+| `docs/nexus-rest-api-review` (PR head) | `f1c801ba` | 44/462, identical matched set to main |
+| `feat/multi-repo-staging` (PR #455, not merged) | `ef7132e` | 52/462 |
 
 Regenerate the inventory from a git ref without checking it out:
 
@@ -71,7 +72,7 @@ python3 scripts/nexus-rest-api-inventory.py \
 ```
 
 which reports the eight routes listed under [kkRepo PR #455 contribution](#kkrepo-pr-455-contribution).
-If #455 merges, main becomes 52/459 and the baseline table above must be regenerated at the new main
+If #455 merges, main becomes 52/462 and the baseline table above must be regenerated at the new main
 so the counts and the inventory stay in sync.
 
 Generator limits, so a `no` is not over-read:
@@ -86,7 +87,7 @@ Generator limits, so a `no` is not over-read:
 
 ## Headline (baseline `main`)
 
-- 44 of the 459 Nexus `/v1` method/path pairs are present at `6b72b3f1`.
+- 44 of the 462 Nexus `/v1` method/path pairs are present at `6b72b3f1`.
 - Those 44 break down as security 34, routing rules 5, assets 2, components 1, search 1 and formats
   1. No other area has a single exact match.
 - Security, routing rules and a few read endpoints are the only substantial Nexus-shaped surfaces.
@@ -100,7 +101,7 @@ Generator limits, so a `no` is not over-read:
   `GET /v1/formats/upload-specs` are backed by an executed comparison against Nexus, through the
   opt-in compat tests. Everything else is method/path presence.
 
-## Area matrix (baseline `main`, 44/459)
+## Area matrix (baseline `main`, 44/462)
 
 | Area | Nexus paths | present | Assessment |
 | --- | ---: | ---: | --- |
@@ -125,7 +126,7 @@ Generator limits, so a `no` is not over-read:
 | http | 3 | 0 | not implemented |
 | lifecycle | 3 | 0 | not implemented |
 | status | 3 | 0 | #455 adds all three |
-| evaluation | 2 | 0 | not implemented |
+| evaluation | 8 | 0 | not implemented; includes the three `PATCH /v1/evaluation*` routes |
 | formats | 2 | 1 | `GET /v1/formats/upload-specs` |
 | malicious-risk | 2 | 0 | not implemented |
 | recovery-mode | 2 | 0 | not implemented |
@@ -141,7 +142,7 @@ Generator limits, so a `no` is not over-read:
 
 ## kkRepo PR #455 contribution
 
-#455 is not merged at the baseline. Merging it adds eight exact matches, 52/459 in total:
+#455 is not merged at the baseline. Merging it adds eight exact matches, 52/462 in total:
 
 | Method | Path |
 | --- | --- |

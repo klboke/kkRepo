@@ -1,8 +1,8 @@
 # Nexus Repository REST API inventory
 
-Reference endpoint list: `sonatype-nexus-community/nexus-repo-api-client-go` at `17645c8ed520893e2515e8bd76202b537b1acc24` (459 `/v1` method/path pairs).
+Reference endpoint list: `sonatype-nexus-community/nexus-repo-api-client-go` at `17645c8ed520893e2515e8bd76202b537b1acc24` (462 `/v1` method/path pairs).
 
-kkRepo baseline: `6b72b3f12936404f26dc065965ba073d9938e1ba` -- 44/459 exact method/path matches.
+kkRepo baseline: `6b72b3f12936404f26dc065965ba073d9938e1ba` -- 44/462 exact method/path matches.
 
 `yes` means an exact method/path match exists under `/service/rest/v1`, derived from Spring `@RestController` annotations; `no` means the Nexus-shaped path is absent (functional equivalents may exist under `/internal`). A `yes` is not evidence of wire or behavioral compatibility: schemas, status codes, headers and paging still need a `compat-test` case.
 
@@ -62,7 +62,10 @@ Regenerate with:
 | email | GET | `/v1/email` | no |
 | email | PUT | `/v1/email` | no |
 | email | POST | `/v1/email/verify` | no |
+| evaluation | PATCH | `/v1/evaluation/repositories` | no |
 | evaluation | GET | `/v1/evaluation/settings` | no |
+| evaluation | PATCH | `/v1/evaluation/settings` | no |
+| evaluation | PATCH | `/v1/evaluation/settings-with-repos` | no |
 | evaluation | PUT | `/v1/evaluation/settings-with-repos` | no |
 | formats | GET | `/v1/formats/upload-specs` | yes |
 | formats | GET | `/v1/formats/{format}/upload-specs` | no |
