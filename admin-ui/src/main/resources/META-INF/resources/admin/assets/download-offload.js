@@ -221,14 +221,11 @@
     if (el("fields").disabled) closeMethodPicker();
     renderSelectedMethod(current.method);
     el("request").textContent = `${requestHeader}: ${wire.marker}`;
-    el("response").readOnly = !custom;
-    if (el("response").readOnly) el("response").value = wire.responseHeader;
-    el("target").hidden = !custom;
-    el("target-format-label").htmlFor = custom ? "offload-target" : "offload-target-example";
-    el("target-path").textContent = target.example;
+    el("custom-response-fields").hidden = !custom;
+    el("response-line").textContent = `${wire.responseHeader || "<response-header>"}: ${target.example}`;
     const help = t(target.help);
-    el("target-help").dataset.tooltip = help;
-    el("target-help").setAttribute("aria-label", help);
+    el("response-help").dataset.tooltip = help;
+    el("response-help").setAttribute("aria-label", help);
     for (const checkbox of el("store-rows").querySelectorAll("input")) {
       checkbox.disabled = !editable || !current.enabled;
     }

@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-4">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20261118-format-icons-1">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20261121-route-1">
-    <link rel="stylesheet" href="./assets/admin.css?v=20261122-offload-file-location">
+    <link rel="stylesheet" href="./assets/admin.css?v=20261122-offload-response-header">
     <link rel="stylesheet" href="/browse/assets/account-menu.css?v=20260824-ui-themes-3">
     <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=20260819-topbar-control-height-1">
     <link rel="stylesheet" href="/login/assets/delete-confirmation.css?v=20261013-delete-confirmation-1">
@@ -2194,22 +2194,27 @@
                   </div>
                   <code id="offload-request" class="offload-request" aria-labelledby="offload-request-label"></code>
                 </div>
-                <label><span>kkRepo response header</span><input id="offload-response" maxlength="128" spellcheck="false" readonly></label>
-                <div class="form-field">
+                <div class="full-width">
                   <div class="field-label">
-                    <label id="offload-target-format-label" for="offload-target-example">File location format</label>
-                    <span class="field-help" id="offload-target-help" tabindex="0" role="note"
+                    <label for="offload-response-preview">kkRepo response header</label>
+                    <span class="field-help" id="offload-response-help" tabindex="0" role="note"
                       aria-label="Controls the file location in the offload response header."
                       data-tooltip="Controls the file location in the offload response header.">
                       <span class="lucide-icon icon-info" aria-hidden="true"></span>
                     </span>
                   </div>
-                  <select id="offload-target" aria-describedby="offload-target-example" hidden>
-                    <option value="internal-uri">Internal URI</option>
-                    <option value="absolute-path">Proxy-side absolute path</option>
-                  </select>
-                  <output class="offload-request offload-target-example" id="offload-target-example">
-                    <code id="offload-target-path"></code>
+                  <div class="form-grid offload-custom-response-fields" id="offload-custom-response-fields" hidden>
+                    <label><span>Response header name</span><input id="offload-response" maxlength="128" spellcheck="false"></label>
+                    <label>
+                      <span>File location format</span>
+                      <select id="offload-target" aria-describedby="offload-response-preview">
+                        <option value="internal-uri">Internal URI</option>
+                        <option value="absolute-path">Proxy-side absolute path</option>
+                      </select>
+                    </label>
+                  </div>
+                  <output class="offload-request" id="offload-response-preview">
+                    <code id="offload-response-line"></code>
                   </output>
                 </div>
               </fieldset>
@@ -2581,7 +2586,7 @@
     <script src="./assets/user-picker.js?v=20261107-user-picker"></script>
     <script src="./assets/ohpm-login.js?v=20261107-user-picker"></script>
     <script src="./assets/proxy-settings.js?v=20261121-block-outbound"></script>
-    <script src="./assets/download-offload.js?v=20261122-offload-file-location"></script>
+    <script src="./assets/download-offload.js?v=20261122-offload-response-header"></script>
     <script src="./assets/admin.js?v=20261122-download-offload"></script>
   </body>
 </html>
