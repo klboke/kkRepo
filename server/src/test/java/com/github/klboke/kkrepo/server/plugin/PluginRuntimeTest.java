@@ -66,6 +66,43 @@ class PluginRuntimeTest {
     }
   }
 
+  @Test
+  void rejectsDuplicateRepositoryFormatIds() {
+    LoadedPlugins loaded = new LoadedPlugins(
+        List.of(), List.of(), List.of(format("duplicate"), format("DUPLICATE")), List.of());
+
+    assertThrows(IllegalStateException.class, () -> new PluginRuntime(loaded));
+  }
+
+  @Test
+  void rejectsDuplicateBlobStoreProviderTypes() {
+    BlobStoreProvider first = mock(BlobStoreProvider.class);
+    BlobStoreProvider second = mock(BlobStoreProvider.class);
+    when(first.type()).thenReturn("duplicate");
+    when(second.type()).thenReturn("DUPLICATE");
+    LoadedPlugins loaded = new LoadedPlugins(
+        List.of(), List.of(), List.of(), List.of(), List.of(first, second), List.of());
+
+    assertThrows(IllegalStateException.class, () -> new PluginRuntime(loaded));
+  }
+
+  @Test
+  void blankLookupsReturnEmptyAndMissingTypesAreRejected() {
+    LoadedPlugins loaded = new LoadedPlugins(
+        List.of(), List.of(), List.of(format("demo")), List.of());
+    try (PluginRuntime runtime = new PluginRuntime(loaded)) {
+      assertTrue(runtime.repositoryFormat(null).isEmpty());
+      assertTrue(runtime.repositoryFormat(" ").isEmpty());
+      assertTrue(runtime.remoteTransport("missing").isEmpty());
+      assertTrue(runtime.blobStoreProvider("missing").isEmpty());
+    }
+    BlobStoreProvider blank = mock(BlobStoreProvider.class);
+    when(blank.type()).thenReturn(" ");
+    LoadedPlugins invalidStore = new LoadedPlugins(
+        List.of(), List.of(), List.of(), List.of(), List.of(blank), List.of());
+    assertThrows(IllegalStateException.class, () -> new PluginRuntime(invalidStore));
+  }
+
   private static RemoteTransportProvider transport(String type) {
     return new RemoteTransportProvider() {
       @Override

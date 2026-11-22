@@ -59,7 +59,7 @@ final class DefaultPluginContext implements PluginContext {
     }
     List<RepositoryProtocolRoute> routes = handler.routes() == null
         ? List.of()
-        : List.copyOf(handler.routes());
+        : new ArrayList<>(handler.routes());
     if (routes.isEmpty() || routes.stream().anyMatch(java.util.Objects::isNull)) {
       throw new IllegalArgumentException(
           "Repository protocol handler must register at least one non-null route: "
