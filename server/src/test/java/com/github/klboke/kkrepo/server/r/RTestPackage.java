@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.r;
 
+import com.github.klboke.kkrepo.server.support.TarTestEntries;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -7,6 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
+import org.apache.commons.compress.archivers.tar.TarConstants;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream;
 
 final class RTestPackage {
@@ -32,10 +34,8 @@ final class RTestPackage {
         TarArchiveOutputStream tar = new TarArchiveOutputStream(gzip)) {
       tar.setLongFileMode(TarArchiveOutputStream.LONGFILE_ERROR);
       for (Item item : entries) {
-        TarArchiveEntry entry = item.link() == null
-            ? new TarArchiveEntry(item.path())
-            : new TarArchiveEntry(
-                item.path(), org.apache.commons.compress.archivers.tar.TarConstants.LF_SYMLINK);
+        TarArchiveEntry entry = TarTestEntries.entry(
+            item.path(), item.link() == null ? TarConstants.LF_NORMAL : TarConstants.LF_SYMLINK);
         if (item.link() != null) {
           entry.setLinkName(item.link());
           entry.setSize(0);

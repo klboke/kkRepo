@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmException;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmIntegrity;
 import com.github.klboke.kkrepo.protocol.ohpm.OhpmPackageId;
+import com.github.klboke.kkrepo.server.support.TarTestEntries;
 import jakarta.servlet.http.Part;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -282,7 +283,7 @@ class OhpmStreamParserTest {
     try (var archive = new TarArchiveOutputStream(new GzipCompressorOutputStream(bytes))) {
       archive.setLongFileMode(TarArchiveOutputStream.LONGFILE_POSIX);
       for (var value : entries) {
-        var entry = new TarArchiveEntry(value.name(), (byte) value.type(), true);
+        var entry = TarTestEntries.entry(value.name(), (byte) value.type());
         entry.setSize(value.bytes().length);
         if (value.type() == '1' || value.type() == '2') entry.setLinkName("outside");
         archive.putArchiveEntry(entry);
