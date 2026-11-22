@@ -374,6 +374,7 @@ public interface ConanRegistryDao {
       String subjectUserId,
       String realmId,
       Long apiKeyId,
+      String apiKeyGeneration,
       Instant expiresAt,
       Instant lastUsedAt,
       Instant createdAt) {

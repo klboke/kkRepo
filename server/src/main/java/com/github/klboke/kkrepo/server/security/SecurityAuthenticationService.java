@@ -418,22 +418,34 @@ public class SecurityAuthenticationService {
     return authenticateBasicUncached(username, password);
   }
 
+  /**
+   * Restores the subject of a stored bearer. A bearer issued from an API key or user token stops
+   * working once that key is revoked, expires or is reset: the shared database must still hold the
+   * secret generation the bearer was issued from, whatever a replica's node-local cache returned.
+   */
   @Transactional(readOnly = true)
   public Optional<AuthenticatedSubject> authenticateStoredSubject(
-      String source, String userId, String realmId, Long apiKeyId) {
+      String source, String userId, String realmId, Long apiKeyId, String apiKeyGeneration) {
     if (source == null || source.isBlank() || userId == null || userId.isBlank()) {
       return Optional.empty();
     }
-    // A token issued from an API key or user token stops working once that key is revoked or expires.
-    if (apiKeyId != null && securityDao.findApiKey(apiKeyId)
+    // Legacy rows without a generation are rejected; they expire within the bearer TTL anyway.
+    if (apiKeyId != null && (apiKeyGeneration == null || securityDao.findApiKey(apiKeyId)
         .filter(apiKey -> source.equals(apiKey.ownerSource()) && userId.equals(apiKey.ownerUserId()))
         .filter(this::activeApiKey)
-        .isEmpty()) {
+        .filter(apiKey -> apiKeyGeneration.equals(apiKeyGeneration(apiKey)))
+        .isEmpty())) {
       return Optional.empty();
     }
     return securityDao.findUser(source, userId)
         .filter(this::activeUser)
-        .map(user -> toSubject(user, realmId, storedExternalRoles(user), apiKeyId));
+        .map(user -> toSubject(user, realmId, storedExternalRoles(user), apiKeyId)
+            .withApiKeyGeneration(apiKeyId == null ? null : apiKeyGeneration));
+  }
+
+  /** Changes exactly when the key's secret is reset; the stored hash itself never leaves this class. */
+  private static String apiKeyGeneration(ApiKeyRecord apiKey) {
+    return apiKey.apiKeyHash() == null ? null : SecurityHashing.sha256("generation:" + apiKey.apiKeyHash());
   }
 
   public Optional<AuthenticatedSubject> authenticateAnonymous() {
@@ -616,7 +628,8 @@ public class SecurityAuthenticationService {
       return Optional.empty();
     }
     securityDao.markApiKeyUsed(apiKey.id(), LocalDateTime.now());
-    return Optional.of(toSubject(owner.get(), realmId, storedExternalRoles(owner.get()), apiKey.id()));
+    return Optional.of(toSubject(owner.get(), realmId, storedExternalRoles(owner.get()), apiKey.id())
+        .withApiKeyGeneration(apiKeyGeneration(apiKey)));
   }
 
   /**

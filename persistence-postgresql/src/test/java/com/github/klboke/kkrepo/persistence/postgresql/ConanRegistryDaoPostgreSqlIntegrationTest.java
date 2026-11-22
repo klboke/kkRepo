@@ -87,12 +87,14 @@ class ConanRegistryDaoPostgreSqlIntegrationTest extends PostgreSqlIntegrationTes
         claimed.id(), claimed.owner(), claimed.fencingToken()));
 
     dao.insertAuthToken(new ConanRegistryDao.AuthToken(
-        "d".repeat(64), repositoryId, "LOCAL", "user", null, null,
+        "d".repeat(64), repositoryId, "LOCAL", "user", null, null, null,
         NOW.plusSeconds(1), null, NOW));
     assertTrue(dao.findValidAuthToken("d".repeat(64), repositoryId, NOW).isPresent());
     dao.insertAuthToken(new ConanRegistryDao.AuthToken(
-        "e".repeat(64), repositoryId, "LOCAL", "user", "user-token", 77L,
+        "e".repeat(64), repositoryId, "LOCAL", "user", "user-token", 77L, "7".repeat(64),
         NOW.plusSeconds(60), null, NOW));
+    assertEquals("7".repeat(64), dao.findValidAuthToken("e".repeat(64), repositoryId, NOW)
+        .orElseThrow().apiKeyGeneration());
     assertEquals(1, inTransaction(() -> dao.deleteAuthTokensByApiKeyId(77L)));
     assertTrue(dao.findValidAuthToken("e".repeat(64), repositoryId, NOW).isEmpty());
     assertEquals(1, inTransaction(() -> dao.deleteExpiredAuthTokens(

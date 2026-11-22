@@ -77,7 +77,7 @@ class ConanAuthServiceTest {
   void restoresStoredSubjectAndTouchesOnlyValidBearerTokens() {
     ConanAuthService service = new ConanAuthService(registry, authentication, 60);
     AuthenticatedSubject subject = new AuthenticatedSubject(
-        "LOCAL", "alice", "realm", 7L, null);
+        "LOCAL", "alice", "realm", 7L, null, null, "gen-1");
     String token = service.issue(42L, subject);
     ArgumentCaptor<ConanRegistryDao.AuthToken> inserted =
         ArgumentCaptor.forClass(ConanRegistryDao.AuthToken.class);
@@ -85,7 +85,7 @@ class ConanAuthServiceTest {
     ConanRegistryDao.AuthToken row = inserted.getValue();
     when(registry.findValidAuthToken(anyString(), eq(42L), any(Instant.class)))
         .thenReturn(Optional.of(row));
-    when(authentication.authenticateStoredSubject("LOCAL", "alice", "realm", 7L))
+    when(authentication.authenticateStoredSubject("LOCAL", "alice", "realm", 7L, "gen-1"))
         .thenReturn(Optional.of(subject));
     MockHttpServletRequest request = new MockHttpServletRequest();
     request.addHeader("Authorization", "bEaReR   " + token + "  ");
@@ -115,9 +115,9 @@ class ConanAuthServiceTest {
     validShape.addHeader("Authorization", "Bearer kkrepo_conan_missing");
     when(registry.findValidAuthToken(anyString(), eq(1L), any(Instant.class)))
         .thenReturn(Optional.of(new ConanRegistryDao.AuthToken(
-            "a".repeat(64), 1L, "LOCAL", "gone", null, null,
+            "a".repeat(64), 1L, "LOCAL", "gone", null, null, null,
             Instant.now().plusSeconds(60), null, Instant.now())));
-    when(authentication.authenticateStoredSubject("LOCAL", "gone", null, null))
+    when(authentication.authenticateStoredSubject("LOCAL", "gone", null, null, null))
         .thenReturn(Optional.empty());
 
     assertFalse(service.authenticate(validShape, 1L).isPresent());

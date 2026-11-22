@@ -79,6 +79,7 @@ class DockerAuthServiceTest {
         eq("alice"),
         eq("local"),
         eq(null),
+        eq(null),
         eq(TokenKind.USER),
         scopes.capture(),
         any(Instant.class));
@@ -111,6 +112,7 @@ class DockerAuthServiceTest {
         eq("Local"),
         eq("alice"),
         eq("local"),
+        eq(null),
         eq(null),
         eq(TokenKind.USER),
         scopes.capture(),
@@ -150,7 +152,7 @@ class DockerAuthServiceTest {
     service.grant(new MockHttpServletRequest("GET", "/service/rest/v1/docker/token"),
         "registry", List.of("registry:catalog:*"));
 
-    verify(tokenDao).insert(any(), eq(DockerAuthService.ANONYMOUS_SUBJECT_SOURCE), eq("anonymous"), eq("local"), eq(null), eq(TokenKind.USER),
+    verify(tokenDao).insert(any(), eq(DockerAuthService.ANONYMOUS_SUBJECT_SOURCE), eq("anonymous"), eq("local"), eq(null), eq(null), eq(TokenKind.USER),
         eq(List.of(Map.of("repository", "", "imageName", "", "actions", List.of("catalog")))), any());
     org.mockito.Mockito.verifyNoInteractions(access);
   }
@@ -162,7 +164,7 @@ class DockerAuthServiceTest {
     var subject = new AuthenticatedSubject("Local", "anonymous", "local", null,
         new PermissionSubject("Local", "anonymous", Set.of("single-repo-reader"), null));
     when(tokenDao.findValid(anyString(), any())).thenReturn(Optional.of(new DockerAuthTokenDao.TokenRecord(
-        "hash", DockerAuthService.ANONYMOUS_SUBJECT_SOURCE, "anonymous", "local", null, TokenKind.USER,
+        "hash", DockerAuthService.ANONYMOUS_SUBJECT_SOURCE, "anonymous", "local", null, null, TokenKind.USER,
         Map.of("scopes", List.of()), Instant.now().plusSeconds(60))));
     DockerAuthService service = new DockerAuthService(tokenDao, mock(DockerRegistryDao.class),
         authentication, mock(AccessDecisionService.class), 900);
@@ -177,7 +179,7 @@ class DockerAuthServiceTest {
     when(authentication.authenticateAnonymousFresh()).thenReturn(Optional.of(new AuthenticatedSubject(
         "Local", "anonymous", "other-realm", null, subject.permissionSubject())));
     assertTrue(service.authenticateBearer("anonymous-token").isEmpty());
-    verify(authentication, org.mockito.Mockito.never()).authenticateStoredSubject(any(), any(), any(), any());
+    verify(authentication, org.mockito.Mockito.never()).authenticateStoredSubject(any(), any(), any(), any(), any());
   }
 
   @Test
@@ -206,6 +208,7 @@ class DockerAuthServiceTest {
         eq("Local"),
         eq("alice"),
         eq("local"),
+        eq(null),
         eq(null),
         eq(TokenKind.USER),
         scopes.capture(),
@@ -261,6 +264,7 @@ class DockerAuthServiceTest {
         eq("scanner"),
         eq(null),
         eq(null),
+        eq(null),
         eq(TokenKind.SECURITY_SCANNER),
         scopes.capture(),
         expiry.capture());
@@ -286,6 +290,7 @@ class DockerAuthServiceTest {
         hash.getValue(),
         DockerAuthService.SCANNER_SUBJECT_SOURCE,
         "scanner",
+        null,
         null,
         null,
         TokenKind.SECURITY_SCANNER,
@@ -390,6 +395,7 @@ class DockerAuthServiceTest {
         "alice",
         "realm-1",
         null,
+        null,
         TokenKind.USER,
         Map.of("scopes", List.of(Map.of(
             "repository", "docker-hosted",
@@ -399,7 +405,7 @@ class DockerAuthServiceTest {
     when(tokenDao.findValid(any(String.class), any(Instant.class)))
         .thenReturn(Optional.of(stored));
     when(authentication.authenticateStoredSubject(
-        DockerAuthService.SCANNER_SUBJECT_SOURCE, "alice", "realm-1", null))
+        DockerAuthService.SCANNER_SUBJECT_SOURCE, "alice", "realm-1", null, null))
         .thenReturn(Optional.of(ordinary));
 
     DockerAuthService.BearerAuthentication restored =

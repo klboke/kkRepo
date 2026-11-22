@@ -1306,7 +1306,7 @@ class SecurityAuthenticationServiceTest {
   }
 
   private static Set<String> storedRoles(SecurityAuthenticationService service, String source, String userId) {
-    return service.authenticateStoredSubject(source, userId, source, null).orElseThrow()
+    return service.authenticateStoredSubject(source, userId, source, null, null).orElseThrow()
         .permissionSubject().groupIds();
   }
 
@@ -1356,9 +1356,16 @@ class SecurityAuthenticationServiceTest {
       assertFalse(service.authenticate(request(Map.of(
           "Authorization", basic(userCode, "A".repeat(43))))).isPresent());
 
-      assertTrue(service.authenticateStoredSubject("OIDC", "carol", "user-token", 30L).isPresent());
+      String generation = subject.apiKeyGeneration();
+      assertEquals(SecurityHashing.sha256("generation:" + SecurityHashing.sha256(token)), generation);
+      assertFalse(subject.toString().contains(SecurityHashing.sha256(token)));
+      assertEquals(generation, service.authenticateStoredSubject("OIDC", "carol", "user-token", 30L, generation)
+          .orElseThrow().apiKeyGeneration());
+      // A bearer row from before the generation column, or from another secret, is not restored.
+      assertFalse(service.authenticateStoredSubject("OIDC", "carol", "user-token", 30L, null).isPresent());
+      assertFalse(service.authenticateStoredSubject("OIDC", "carol", "user-token", 30L, "stale").isPresent());
       dao.deleteApiKeysForOwner("OIDC", "carol");
-      assertFalse(service.authenticateStoredSubject("OIDC", "carol", "user-token", 30L).isPresent());
+      assertFalse(service.authenticateStoredSubject("OIDC", "carol", "user-token", 30L, generation).isPresent());
     } finally {
       ldap.shutDown(true);
     }

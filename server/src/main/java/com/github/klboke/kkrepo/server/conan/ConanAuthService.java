@@ -27,7 +27,7 @@ public class ConanAuthService {
   private final SecureRandom random = new SecureRandom();
   private final Duration ttl;
 
-  ConanAuthService(
+  public ConanAuthService(
       ConanRegistryDao registry,
       SecurityAuthenticationService authentication,
       @Value("${kkrepo.conan.auth-token-ttl-minutes:60}") long ttlMinutes) {
@@ -46,7 +46,7 @@ public class ConanAuthService {
     Instant now = Instant.now();
     registry.insertAuthToken(new ConanRegistryDao.AuthToken(
         hash(token), repositoryId, subject.source(), subject.userId(), subject.realmId(),
-        subject.apiKeyId(), now.plus(ttl), null, now));
+        subject.apiKeyId(), subject.apiKeyGeneration(), now.plus(ttl), null, now));
     return token;
   }
 
@@ -66,7 +66,8 @@ public class ConanAuthService {
     Instant now = Instant.now();
     return registry.findValidAuthToken(hash(token.orElseThrow()), repositoryId, now)
         .flatMap(row -> authentication.authenticateStoredSubject(
-                row.subjectSource(), row.subjectUserId(), row.realmId(), row.apiKeyId())
+                row.subjectSource(), row.subjectUserId(), row.realmId(), row.apiKeyId(),
+                row.apiKeyGeneration())
             .map(subject -> {
               registry.touchAuthToken(row.tokenHash(), now);
               return subject;

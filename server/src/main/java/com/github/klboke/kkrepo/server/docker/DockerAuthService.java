@@ -110,6 +110,7 @@ public class DockerAuthService {
         subject.userId(),
         subject.realmId(),
         subject.apiKeyId(),
+        subject.apiKeyGeneration(),
         TokenKind.USER,
         granted.stream().map(Scope::toMap).toList(),
         expiresAt);
@@ -164,6 +165,7 @@ public class DockerAuthService {
         tokenHash,
         SCANNER_SUBJECT_SOURCE,
         "scanner",
+        null,
         null,
         null,
         TokenKind.SECURITY_SCANNER,
@@ -351,7 +353,8 @@ public class DockerAuthService {
           permissionSubject));
     }
     return authenticationService.authenticateStoredSubject(
-        row.subjectSource(), row.subjectUserId(), row.subjectRealmId(), row.subjectApiKeyId());
+        row.subjectSource(), row.subjectUserId(), row.subjectRealmId(), row.subjectApiKeyId(),
+        row.subjectApiKeyGeneration());
   }
 
   public String challenge(String realm, String service) {
