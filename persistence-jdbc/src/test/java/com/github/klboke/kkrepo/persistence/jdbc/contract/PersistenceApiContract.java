@@ -691,7 +691,8 @@ public abstract class PersistenceApiContract {
         "terraform_signing_key",
         "terraform_source_binding",
         "ui_settings",
-        "outbound_proxy_settings"), databaseTables());
+        "outbound_proxy_settings",
+        "download_offload_settings"), databaseTables());
   }
 
   @Test
