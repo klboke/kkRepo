@@ -5,13 +5,16 @@ set -euo pipefail
 export KKREPO_COMPAT_BASE_URL="${KKREPO_COMPAT_BASE_URL:-http://127.0.0.1:18090}"
 export KKREPO_COMPAT_USERNAME="${KKREPO_COMPAT_USERNAME:-admin}"
 export KKREPO_COMPAT_PASSWORD="${KKREPO_COMPAT_PASSWORD:-12345678}"
+KKREPO_URL="$KKREPO_COMPAT_BASE_URL"
+KKREPO_AUTH="$KKREPO_COMPAT_USERNAME:$KKREPO_COMPAT_PASSWORD"
+source "$(dirname "${BASH_SOURCE[0]}")/fixture-api-keys.sh"
 export GIT_TERMINAL_PROMPT=0
 export GIT_LFS_E2E_REPOSITORY="gitlfs-client-$(date +%s)-$$"
 artifact_dir="${CLIENT_E2E_ARTIFACT_DIR:-artifacts/client-e2e}"
 mkdir -p "$artifact_dir"
 artifact_dir="$(cd "$artifact_dir" && pwd)"
 work="$(mktemp -d "${TMPDIR:-/tmp}/kkrepo-gitlfs-client.XXXXXX")"
-trap 'rm -rf "$work"' EXIT
+trap 'cleanup_fixture_api_keys || true; rm -rf "$work"' EXIT
 
 git lfs version | tee "$artifact_dir/git-lfs-version.txt"
 git --version >> "$artifact_dir/git-lfs-version.txt"
@@ -74,18 +77,7 @@ cmp history.bin "$work/first.bin"
 git lfs fsck
 
 # Exercise the native client with a URL-scoped GenericToken and an empty LFS cache.
-read -r lfs_token_id lfs_token <<< "$(python3 - <<'PY'
-import base64,json,os,urllib.request
-base=os.environ['KKREPO_COMPAT_BASE_URL'].rstrip('/')
-auth=base64.b64encode((os.environ['KKREPO_COMPAT_USERNAME']+':'+os.environ['KKREPO_COMPAT_PASSWORD']).encode()).decode()
-request=urllib.request.Request(base+'/internal/security/api-keys/current',
-    json.dumps({'domain':'GenericToken','displayName':'Native LFS E2E'}).encode(),
-    {'Authorization':'Basic '+auth,'Content-Type':'application/json'},method='POST')
-with urllib.request.urlopen(request) as response:
-    created=json.load(response)
-    print(created['apiKey']['id'],created['token'])
-PY
-)"
+fixture_api_key lfs_token GenericToken "Native LFS E2E"
 export GIT_CONFIG_COUNT=3
 export GIT_CONFIG_KEY_2="http.$KKREPO_COMPAT_BASE_URL/repository/$GIT_LFS_E2E_REPOSITORY/.extraHeader"
 export GIT_CONFIG_VALUE_2="Authorization: Bearer $lfs_token"
@@ -98,14 +90,7 @@ git lfs push origin HEAD
 git -c "lfs.storage=$work/token-lfs" lfs fetch --all
 export GIT_CONFIG_COUNT=2
 unset GIT_CONFIG_KEY_2 GIT_CONFIG_VALUE_2 lfs_token
-LFS_TOKEN_ID="$lfs_token_id" python3 - <<'PY'
-import base64,os,urllib.request
-base=os.environ['KKREPO_COMPAT_BASE_URL'].rstrip('/')
-auth=base64.b64encode((os.environ['KKREPO_COMPAT_USERNAME']+':'+os.environ['KKREPO_COMPAT_PASSWORD']).encode()).decode()
-request=urllib.request.Request(base+'/internal/security/api-keys/current/'+os.environ['LFS_TOKEN_ID'],
-    headers={'Authorization':'Basic '+auth},method='DELETE')
-with urllib.request.urlopen(request) as response: assert response.status==200
-PY
+cleanup_fixture_api_keys
 
 python3 - "$artifact_dir/cleanup-gitlfs.json" <<'PY'
 import base64,json,os,sys,urllib.request,urllib.error

@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
@@ -27,6 +28,7 @@ import com.github.klboke.kkrepo.protocol.docker.DockerProtocolException;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
@@ -38,6 +40,39 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 
 class DockerProxyServiceTest {
+  @Test
+  void manualBlockUsesLocalRegistryDataAndPreservesDockerNotFoundErrors() throws Exception {
+    var manifests = mock(DockerManifestStore.class);
+    var blobs = mock(DockerBlobStore.class);
+    var remote = mock(DockerRemoteRegistryClient.class);
+    var service = new DockerProxyService(blobs, manifests, remote);
+    var runtime = proxyRuntime(1);
+    String image = "library/alpine";
+    var digest = DockerDigest.parse("sha256:" + "a".repeat(64));
+    var stored = storedManifest(runtime, image, digest.value(), Instant.EPOCH);
+    var cached = DockerResponse.noBody(200);
+    when(manifests.getManifest(runtime, image, "latest")).thenReturn(stored)
+        .thenThrow(new DockerProtocolException(DockerErrorCode.MANIFEST_UNKNOWN, "latest"));
+    when(manifests.serveManifest(stored, true)).thenReturn(cached);
+    when(blobs.getBlob(runtime, digest, true))
+        .thenThrow(new DockerProtocolException(DockerErrorCode.BLOB_UNKNOWN, digest.value()));
+    when(remote.get(eq(runtime), anyString(), anyString())).thenThrow(new Blocked());
+    when(remote.get(eq(runtime), anyString(), anyString(), anyString())).thenThrow(new Blocked());
+
+    assertEquals(cached, service.getManifest(runtime, image, "latest", true));
+    assertEquals(DockerErrorCode.MANIFEST_UNKNOWN, assertThrows(DockerProtocolException.class,
+        () -> service.getManifest(runtime, image, "latest", true)).code());
+    assertEquals(DockerErrorCode.BLOB_UNKNOWN, assertThrows(DockerProtocolException.class,
+        () -> service.getBlob(runtime, image, digest, true)).code());
+
+    when(manifests.listTags(runtime, image, null, 10))
+        .thenReturn(new DockerTagList(image, List.of("latest"), false));
+    assertEquals(List.of("latest"), service.tags(runtime, image, null, 10).tags());
+    when(manifests.referrers(runtime, digest.value(), null)).thenReturn(List.of(stored.manifest()));
+    List<?> descriptors = (List<?>) service.referrers(runtime, image, digest, null).get("manifests");
+    assertEquals(digest.value(), ((Map<?, ?>) descriptors.getFirst()).get("digest"));
+  }
+
   @Test
   void freshTagManifestIsServedFromCache() throws Exception {
     DockerManifestStore manifestStore = mock(DockerManifestStore.class);

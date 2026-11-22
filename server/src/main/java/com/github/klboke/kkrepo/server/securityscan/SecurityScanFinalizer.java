@@ -136,6 +136,17 @@ public class SecurityScanFinalizer {
   }
 
   @Transactional
+  public void deferForCapacity(
+      ScanTask task, ScannerCapacityException failure, Instant nextAttemptAt) {
+    if (!scans.deferTaskForCapacity(
+        task.id(), task.leaseToken(), nextAttemptAt, failure.code(), failure.getMessage(),
+        Instant.now())) {
+      throw new LostSecurityScanLeaseException(task.id());
+    }
+    documents.releaseOwner(task.id());
+  }
+
+  @Transactional
   public void failCurrentTask(
       ScanTask task, String errorCode, String errorSummary, boolean retryable, Instant nextAttemptAt) {
     if (retryable && task.attempts() < task.maxAttempts()) {

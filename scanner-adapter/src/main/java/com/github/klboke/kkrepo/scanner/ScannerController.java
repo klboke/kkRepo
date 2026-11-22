@@ -69,15 +69,18 @@ public class ScannerController {
       throws IOException {
     requireApiVersion(apiVersion);
     ResourceLimits resourceLimits = limits(request);
+    ScannerArtifactType type = ScannerArtifactType.fromWireValue(artifactType);
     return executions.execute(
         runId,
-        () -> capacity.execute(
+        () -> capacity.executeCatalog(
             resourceLimits,
+            expectedSize,
+            type,
             () -> engine.catalog(
                 request.getInputStream(),
                 expectedSha256,
                 expectedSize,
-                ScannerArtifactType.fromWireValue(artifactType),
+                type,
                 resourceLimits)));
   }
 
@@ -118,7 +121,7 @@ public class ScannerController {
     ResourceLimits resourceLimits = limits(request);
     return executions.execute(
         runId,
-        () -> capacity.execute(
+        () -> capacity.executeMatch(
             resourceLimits,
             () -> engine.match(request.getInputStream(), expectedSha256, resourceLimits)));
   }

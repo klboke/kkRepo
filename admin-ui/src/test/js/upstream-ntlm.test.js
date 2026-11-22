@@ -4,12 +4,13 @@ const { join } = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
 const source = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/assets/admin.js'), 'utf8');
+const proxySettings = readFileSync(join(__dirname, '../../main/resources/META-INF/resources/admin/assets/proxy-settings.js'), 'utf8');
 
 function form(repo) {
   const elements = new Map();
   const element = id => {
     if (!elements.has(id)) elements.set(id, {
-      value: '', checked: false, hidden: false, closest: () => ({}),
+      value: '', options: ['DIRECT', 'INHERIT', 'OVERRIDE'].map(value => ({ value })), checked: false, hidden: false, closest: () => ({}),
     });
     return elements.get(id);
   };
@@ -27,6 +28,7 @@ function form(repo) {
     'syncRepositoryRecipeCombobox', 'refreshRepositoryBlobStoreOptions', 'clearRequiredFieldErrors',
     'openFormModal', 'setConanManifestSettings']) context[name] = () => {};
   vm.createContext(context);
+  vm.runInContext(proxySettings, context);
   // admin.js declares this at top level; the fixtures only evaluate selected functions, so load the real one.
   vm.runInContext(source.slice(source.indexOf('const MINIMUM_RELEASE_AGE_FORMATS'),
     source.indexOf('\n', source.indexOf('const MINIMUM_RELEASE_AGE_FORMATS'))), context);

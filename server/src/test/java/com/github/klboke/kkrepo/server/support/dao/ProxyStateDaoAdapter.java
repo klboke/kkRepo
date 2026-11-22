@@ -35,4 +35,7 @@ public class ProxyStateDaoAdapter implements ProxyStateDao {
   public void recordSuccess(long arg0, Instant arg1) {
     throw new UnsupportedOperationException();
   }
+  @Override
+  public void clearBackoff(long repositoryId) {}
+
 }

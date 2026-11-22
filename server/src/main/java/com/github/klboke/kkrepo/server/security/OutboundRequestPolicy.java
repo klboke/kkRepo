@@ -133,7 +133,8 @@ public class OutboundRequestPolicy {
         .resolveHttpTarget(uri, purpose, false);
     for (InetAddress address : target.addresses()) {
       if (nonPublicAddress(address)) {
-        throw new SecurityValidationException(purpose + " URL resolves to a non-public address");
+        throw new AddressRejectedException(
+            purpose + " URL resolves to a non-public address", address, "NON_PUBLIC_ADDRESS");
       }
     }
     return new ResolvedHttpTarget(target.uri(), target.addresses(), false, true);
@@ -187,8 +188,7 @@ public class OutboundRequestPolicy {
     if (addressChecksRequired) {
       for (InetAddress address : addresses) {
         if (blockedAddress(address)) {
-          throw new SecurityValidationException(
-              purpose + " URL resolves to a private or local address: " + host + " -> " + address.getHostAddress());
+          throw privateOrLocalAddress(purpose, host, address);
         }
       }
     }
@@ -202,12 +202,37 @@ public class OutboundRequestPolicy {
     }
     InetAddress literal = literalAddress(normalized);
     if (literal != null && blockedAddress(literal)) {
-      throw new SecurityValidationException(
-          purpose + " URL resolves to a private or local address: " + host + " -> "
-              + literal.getHostAddress());
+      throw privateOrLocalAddress(purpose, host, literal);
     }
     if (isLocalOnlyHost(normalized)) {
       throw new SecurityValidationException(purpose + " URL uses a local-only host: " + host);
+    }
+  }
+
+  private static AddressRejectedException privateOrLocalAddress(
+      String purpose, String host, InetAddress address) {
+    return new AddressRejectedException(
+        purpose + " URL resolves to a private or local address: " + host + " -> " + address.getHostAddress(),
+        address, "PRIVATE_OR_LOCAL_ADDRESS");
+  }
+
+  /** The blocked address and reason are intended for server-side diagnostics. */
+  public static final class AddressRejectedException extends SecurityValidationException {
+    private final String address;
+    private final String reason;
+
+    private AddressRejectedException(String message, InetAddress address, String reason) {
+      super(message);
+      this.address = address.getHostAddress();
+      this.reason = reason;
+    }
+
+    public String address() {
+      return address;
+    }
+
+    public String reason() {
+      return reason;
     }
   }
 

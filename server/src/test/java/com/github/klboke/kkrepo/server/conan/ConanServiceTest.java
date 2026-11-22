@@ -38,6 +38,7 @@ import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -68,6 +69,18 @@ class ConanServiceTest {
   private static final String PREV = PACKAGE + "/revisions/prev";
   private static final AuthenticatedSubject ALICE =
       new AuthenticatedSubject("LOCAL", "alice", "realm", null, null);
+
+  @Test
+  void blockedRemoteFileUsesConanNotFoundWithoutPublishing() throws Exception {
+    var fixture = new Fixture();
+    var proxy = runtime(2L, RepositoryType.PROXY, List.of());
+    String path = RREV + "/files/missing";
+    when(fixture.registry.findFile(anyString(), anyLong(), anyString())).thenReturn(Optional.empty());
+    when(fixture.remote.fetchFile(proxy, path)).thenThrow(new Blocked());
+
+    assertThrows(ConanExceptions.NotFound.class, () -> fixture.service.get(proxy, path, null, false, null));
+    verify(fixture.registry, never()).bindDiscoveredFile(anyString(), anyLong(), any(), anyLong());
+  }
 
   @Test
   void implementsPingAuthenticationAndStrictRouteBoundaries() throws Exception {

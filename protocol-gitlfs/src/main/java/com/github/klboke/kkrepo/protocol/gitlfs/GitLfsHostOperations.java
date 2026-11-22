@@ -4,6 +4,8 @@ import com.github.klboke.kkrepo.plugin.api.PluginHostService;
 import com.github.klboke.kkrepo.plugin.api.RepositoryContext;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Host operations behind the Git LFS protocol plugin.
@@ -61,4 +63,14 @@ public interface GitLfsHostOperations extends PluginHostService {
    */
   InputStream open(RepositoryContext repository, GitLfsStoredObject object, GitLfsByteRange range)
       throws IOException;
+
+  /**
+   * Offers an authorized full-object download to a trusted gateway. Returns true when the host
+   * handed the response off; the plugin must then return headers only (no streaming body).
+   * Implementations may mutate {@code headers} to remove Content-Length and add the offload header.
+   */
+  default boolean offload(RepositoryContext repository, int status,
+      Map<String, List<String>> headers, InputStream body) {
+    return false;
+  }
 }

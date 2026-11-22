@@ -907,9 +907,12 @@ h1 {
   gap: 8px !important;
 }
 
-.upload-check input {
+.upload-check > input[type="checkbox"] {
+  flex: 0 0 auto;
   width: 16px;
   height: 16px;
+  margin: 0;
+  padding: 0;
 }
 
 .upload-file input {
@@ -1564,6 +1567,7 @@ h1 {
 .detail-right {
   flex: 1 1 0;
   min-width: 0;
+  container: browse-detail / inline-size;
   padding: 16px 18px 32px 18px;
   background: #ffffff;
   overflow-x: hidden;
@@ -1667,15 +1671,24 @@ h1 {
 
 .kv {
   display: grid;
-  grid-template-columns: 130px 1fr;
+  grid-template-columns: minmax(0, min(42%, 13rem)) minmax(0, 1fr);
+  column-gap: 12px;
   padding: 3px 0;
 }
 
+.kv-key,
+.kv-val { overflow-wrap: anywhere; }
 .kv-key { color: var(--muted); }
-.kv-val { word-break: break-all; }
 .kv-val code {
   font-family: "Menlo", "Consolas", monospace;
   font-size: 13px;
+}
+
+@container browse-detail (width < 320px) {
+  .kv {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 2px;
+  }
 }
 
 .platform-list {
@@ -2225,6 +2238,21 @@ h2 {
   min-width: 0;
   color: var(--ink-1);
   font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+/* "Tool / Ecosystem" formats: the tool on the first line, the ecosystem smaller below. */
+.format-name {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.format-name small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.25;
   overflow-wrap: anywhere;
 }
 

@@ -249,6 +249,11 @@ public class SecurityDaoAdapter implements SecurityDao {
   }
 
   @Override
+  public boolean insertApiKeyIfAbsent(ApiKeyRecord record) {
+    throw new UnsupportedOperationException();
+  }
+
+  @Override
   public void upsertApiKey(ApiKeyRecord arg0) {
     throw new UnsupportedOperationException();
   }
@@ -256,6 +261,11 @@ public class SecurityDaoAdapter implements SecurityDao {
   @Override
   public void upsertPrivilege(SecurityPrivilegeRecord arg0) {
     throw new UnsupportedOperationException();
+  }
+
+  @Override
+  public Optional<SecurityRealmRecord> findRealmForUpdate(String realmId) {
+    return findRealm(realmId);
   }
 
   @Override

@@ -43,6 +43,22 @@ class AdminUiControllerTest {
   }
 
   @Test
+  void settingsReaderCanEnterAdministrationWithoutUnrelatedPermissions() {
+    var security = org.mockito.Mockito.mock(SecurityManagementService.class);
+    var subject = subject("settings-reader");
+    org.mockito.Mockito.when(security.decide(org.mockito.ArgumentMatchers.eq(subject.permissionSubject()),
+        org.mockito.ArgumentMatchers.anyString())).thenReturn(AccessDecision.deny("missing"));
+    org.mockito.Mockito.when(security.decide(subject.permissionSubject(), "nexus:settings:read"))
+        .thenReturn(AccessDecision.allow());
+    var controller = new AdminUiController(
+        new StubAuthenticationService(Optional.of(subject)), security, new ForwardedHeaderPolicy(""));
+    var request = request();
+    var response = assertInstanceOf(ResponseEntity.class, controller.admin(request));
+    assertEquals(HttpStatus.OK, response.getStatusCode());
+    assertSame(subject, request.getAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE));
+  }
+
+  @Test
   void selectorManagerCanEnterAdministrationWithoutGlobalAdministratorGrant() {
     var security = org.mockito.Mockito.mock(SecurityManagementService.class);
     var subject = subject("selector-manager");

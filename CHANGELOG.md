@@ -4,6 +4,32 @@ All notable public changes to kkrepo are documented in this file.
 
 This project follows a pragmatic release process. Stable releases call out migration impact, compatibility changes, operational notes, and any known behavior changes in their release section.
 
+## 1.5.0 - 2026-11-21
+
+### Security
+
+- Realm listings now return only public provider metadata. Settings readers can inspect the realm order while LDAP bind passwords and OIDC client secrets stay private. Saving the order preserves concurrently rotated credentials. (GHSA-54fv-m22h-7x2j)
+- REST and legacy UI component uploads now verify the authenticated user's write permission on the destination repository before storing an artifact. (GHSA-jjmj-qj4j-27fw)
+
+### Added
+
+- Add OHPM hosted, proxy, and group repositories with signed login, and support R binary packages in hosted and group repositories. (#491, #494, #497)
+- Add Azure Blob Storage as a blob store, including managed identity and workload identity authentication. (#498)
+- Configure HTTPS for Docker connectors with shared TLS bundles, and retain recent Docker images in cleanup policies. (#525, #526)
+- Stream uncached proxy downloads when enabled, and clean timestamped Maven snapshot builds with bounded inventory scans. (#507, #515)
+- Add twelve interface languages and update the repository format list on the Browse welcome page. (#532, #533)
+
+### Fixed
+
+- Preserve missing metadata semantics for Maven 3.10, accept Swift manifests with older tools requirements, and preserve PyPI release-age checks across cache eviction. (#502, #503, #511, #529)
+- Restore cleanup scheduling in Native deployments and correct APT version retention. Fix Docker catalog and tag pagination for PostgreSQL. (#496, #514, #536)
+- Allow bounded archive-local links during TAR and CPIO scanning. (#548)
+
+### Upgrade Notes
+
+- Upgrade every replica to 1.5.0. Back up the database and blob stores before the upgrade. Flyway applies migrations V61 through V67 to MySQL and PostgreSQL.
+- If a settings-read account could have viewed configured provider credentials, rotate the affected LDAP bind password or OIDC client secret. Review unexpected hosted uploads and package metadata changes during the affected period.
+
 ## 1.4.0 - 2026-11-05
 
 ### Added

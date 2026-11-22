@@ -223,6 +223,9 @@ public final class GitLfsProtocolPlugin
     } else {
       content = host.open(request.context(), object, null);
     }
+    if (host.offload(request.context(), status, headers, content)) {
+      return new RepositoryResponse(status, headers, null);
+    }
     return RepositoryResponse.streaming(status, headers, output -> {
       try (content) {
         content.transferTo(output);

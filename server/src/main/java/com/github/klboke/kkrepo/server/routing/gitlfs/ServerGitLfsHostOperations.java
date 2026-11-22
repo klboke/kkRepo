@@ -13,12 +13,17 @@ import com.github.klboke.kkrepo.server.config.RepositoryUrlPrefix;
 import com.github.klboke.kkrepo.server.gitlfs.GitLfsAccess;
 import com.github.klboke.kkrepo.server.gitlfs.GitLfsHostedService;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
+import com.github.klboke.kkrepo.server.offload.DownloadOffload;
 import com.github.klboke.kkrepo.server.routing.PluginRepositoryContext;
 import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
 import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 
 /**
@@ -35,6 +40,7 @@ public class ServerGitLfsHostOperations implements GitLfsHostOperations {
   private final BlobStorageRegistry storages;
   private final ArtifactDownloadPolicy downloads;
   private final ForwardedHeaderPolicy forwarded;
+  private DownloadOffload downloadOffload;
 
   public ServerGitLfsHostOperations(GitLfsHostedService service, GitLfsAccess access,
       BlobStorageRegistry storages, ArtifactDownloadPolicy downloads, ForwardedHeaderPolicy forwarded) {
@@ -43,6 +49,11 @@ public class ServerGitLfsHostOperations implements GitLfsHostOperations {
     this.storages = storages;
     this.downloads = downloads;
     this.forwarded = forwarded;
+  }
+
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  public void setDownloadOffload(DownloadOffload downloadOffload) {
+    this.downloadOffload = downloadOffload;
   }
 
   @Override
@@ -101,5 +112,22 @@ public class ServerGitLfsHostOperations implements GitLfsHostOperations {
     var reference = BlobReferenceCodec.reference(blob.blobRef(), blob.objectKey(), blob.sha256(), blob.size());
     return (range == null ? storage.get(reference) : storage.getRange(reference, range.start(), range.length()))
         .orElseThrow(() -> new GitLfsException(404, "Object content is unavailable"));
+  }
+
+  @Override
+  public boolean offload(RepositoryContext repository, int status,
+      Map<String, List<String>> headers, InputStream body) {
+    if (downloadOffload == null) return false;
+    HttpServletRequest request = PluginRepositoryContext.of(repository).servletRequest();
+    HttpHeaders springHeaders = new HttpHeaders();
+    headers.forEach((name, values) -> {
+      if (name != null && values != null) springHeaders.put(name, new ArrayList<>(values));
+    });
+    boolean handed = downloadOffload.tryHandoff(request, status, springHeaders, body);
+    if (handed) {
+      headers.clear();
+      springHeaders.forEach((name, values) -> headers.put(name, new ArrayList<>(values)));
+    }
+    return handed;
   }
 }

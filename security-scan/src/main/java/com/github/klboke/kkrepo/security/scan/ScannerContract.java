@@ -12,6 +12,11 @@ import java.util.Map;
 /** Engine-neutral, versioned contract implemented by an HTTP scanner client. */
 public final class ScannerContract {
   public static final String API_VERSION = "v1";
+  /** HTTP 429 returned when the adapter rejects a scan before execution. */
+  public static final String CAPACITY_EXHAUSTED = "SCANNER_CAPACITY_EXHAUSTED";
+  /** Default and upper bound for the adapter's Retry-After delay in seconds. */
+  public static final int DEFAULT_CAPACITY_RETRY_SECONDS = 5;
+  public static final int MAX_CAPACITY_RETRY_SECONDS = 3_600;
   /** Maximum component projection carried beside the immutable CycloneDX document. */
   public static final int MAX_COMPONENT_PROJECTION_COUNT = 4_096;
   /** Maximum finding projection carried beside the immutable vulnerability report. */

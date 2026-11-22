@@ -62,7 +62,7 @@ public class NpmTokenService {
     }
 
     AuthenticatedSubject subject = authenticated.get();
-    CreatedApiKeyView created = securityService.createApiKeyForOwner(
+    CreatedApiKeyView created = securityService.getOrCreateApiKeyForLogin(
         subject.source(),
         subject.userId(),
         new ApiKeyCommand(
