@@ -126,7 +126,7 @@ Generator limits, so a `no` is not over-read:
 | http | 3 | 0 | not implemented |
 | lifecycle | 3 | 0 | not implemented |
 | status | 3 | 0 | #455 adds all three |
-| evaluation | 8 | 0 | not implemented; includes the three `PATCH /v1/evaluation*` routes |
+| evaluation | 5 | 0 | not implemented; includes the three `PATCH /v1/evaluation*` routes |
 | formats | 2 | 1 | `GET /v1/formats/upload-specs` |
 | malicious-risk | 2 | 0 | not implemented |
 | recovery-mode | 2 | 0 | not implemented |
