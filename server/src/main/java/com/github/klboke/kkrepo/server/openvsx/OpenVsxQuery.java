@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /** Query parameters accepted by the Open VSX registry and VS Code gallery search routes. */
@@ -16,10 +18,16 @@ public record OpenVsxQuery(
     String sortBy,
     String sortOrder,
     boolean includeAllVersions,
-    String namespaceName,
-    String extensionName,
+    List<String> namespaceNames,
+    List<String> extensionNames,
     String extensionVersion,
-    String extensionId) {
+    List<String> extensionIds) {
+
+  public OpenVsxQuery {
+    namespaceNames = namespaceNames == null ? List.of() : List.copyOf(namespaceNames);
+    extensionNames = extensionNames == null ? List.of() : List.copyOf(extensionNames);
+    extensionIds = extensionIds == null ? List.of() : List.copyOf(extensionIds);
+  }
 
   public static OpenVsxQuery from(HttpServletRequest request) {
     return new OpenVsxQuery(
@@ -31,16 +39,21 @@ public record OpenVsxQuery(
         request.getParameter("sortBy"),
         request.getParameter("sortOrder"),
         booleanParam(request, "includeAllVersions"),
-        request.getParameter("namespaceName"),
-        request.getParameter("extensionName"),
+        scalar(request.getParameter("namespaceName")),
+        scalar(request.getParameter("extensionName")),
         request.getParameter("extensionVersion"),
-        request.getParameter("extensionId"));
+        scalar(request.getParameter("extensionId")));
   }
 
   /**
    * Applies the filter criteria carried in a VS Code gallery {@code extensionquery} POST body.
    * The gallery sends search terms, publisher, extension id/name and paging in the JSON body
    * rather than in the URL, so ignoring it makes read-only discovery return the wrong page.
+   *
+   * <p>Filter types follow the official default Gallery contract: 4 = ExtensionId, 5 = Category
+   * and 7 = ExtensionName. Batched client queries carry several name/ID criteria, so same-typed
+   * values accumulate instead of overwriting the previous one; within one field they OR, across
+   * fields they AND.
    */
   public OpenVsxQuery withVscodeBody(byte[] body, ObjectMapper objectMapper) {
     if (body == null || body.length == 0) return this;
@@ -50,19 +63,18 @@ public record OpenVsxQuery(
       JsonNode criteria = filter.path("criteria");
       String parsedQuery = query;
       String parsedCategory = category;
-      String parsedNamespace = namespaceName;
-      String parsedExtension = extensionName;
-      String parsedVersion = extensionVersion;
-      String parsedExtensionId = extensionId;
+      List<String> parsedNamespaces = new ArrayList<>(namespaceNames);
+      List<String> parsedNames = new ArrayList<>(extensionNames);
+      List<String> parsedIds = new ArrayList<>(extensionIds);
       if (criteria.isArray()) {
         for (JsonNode criterion : criteria) {
           String value = text(criterion.path("value"));
           if (value == null) continue;
           switch (criterion.path("filterType").asInt(-1)) {
-            case 4 -> parsedExtension = value;
-            case 5 -> parsedExtensionId = value;
-            case 6 -> parsedNamespace = value;
-            case 7 -> parsedVersion = value;
+            case 4 -> addUnique(parsedIds, value);
+            case 5 -> parsedCategory = value;
+            case 6 -> addUnique(parsedNamespaces, value);
+            case 7 -> addUnique(parsedNames, value);
             case 10 -> parsedQuery = value;
             case 11 -> parsedCategory = value;
             default -> {
@@ -83,10 +95,16 @@ public record OpenVsxQuery(
         }
       }
       return new OpenVsxQuery(parsedQuery, parsedCategory, targetPlatform, parsedSize,
-          parsedOffset, sortBy, sortOrder, includeAllVersions, parsedNamespace, parsedExtension,
-          parsedVersion, parsedExtensionId);
+          parsedOffset, sortBy, sortOrder, includeAllVersions, parsedNamespaces, parsedNames,
+          extensionVersion, parsedIds);
     } catch (IOException | RuntimeException invalid) {
       throw new IllegalArgumentException("Invalid VS Code gallery query", invalid);
+    }
+  }
+
+  private static void addUnique(List<String> values, String value) {
+    if (!values.stream().anyMatch(value::equalsIgnoreCase)) {
+      values.add(value);
     }
   }
 
@@ -97,16 +115,16 @@ public record OpenVsxQuery(
   }
 
   boolean matches(String namespace, String name, String version) {
-    if (extensionId != null && !extensionId.isBlank()
-        && !extensionId.equalsIgnoreCase(namespace + "." + name)) {
+    if (!extensionIds.isEmpty()
+        && extensionIds.stream().noneMatch(id -> id.equalsIgnoreCase(namespace + "." + name))) {
       return false;
     }
-    if (namespaceName != null && !namespaceName.isBlank()
-        && !namespaceName.equalsIgnoreCase(namespace)) {
+    if (!namespaceNames.isEmpty()
+        && namespaceNames.stream().noneMatch(candidate -> candidate.equalsIgnoreCase(namespace))) {
       return false;
     }
-    if (extensionName != null && !extensionName.isBlank()
-        && !extensionName.equalsIgnoreCase(name)) {
+    if (!extensionNames.isEmpty()
+        && extensionNames.stream().noneMatch(candidate -> candidate.equalsIgnoreCase(name))) {
       return false;
     }
     return extensionVersion == null || extensionVersion.isBlank()
@@ -115,6 +133,10 @@ public record OpenVsxQuery(
 
   boolean hasTextQuery() {
     return query != null && !query.isBlank();
+  }
+
+  private static List<String> scalar(String value) {
+    return value == null || value.isBlank() ? List.of() : List.of(value);
   }
 
   private static int intParam(

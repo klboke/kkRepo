@@ -234,6 +234,12 @@ final class OpenVsxMetadata {
                   + "/vspackage")));
       Map<String, Object> extension = new LinkedHashMap<>();
       extension.put("publisherName", view.namespace());
+      // The VS Code client dereferences rawGalleryExtension.publisher.publisherName and treats
+      // `publisher.publisherName + "." + extensionName` as the stable extension ID used by
+      // subsequent ExtensionId queries.
+      extension.put("publisher", Map.of(
+          "publisherName", view.namespace(),
+          "displayName", view.namespace()));
       extension.put("extensionName", view.name());
       extension.put("displayName", view.displayName() == null ? view.name() : view.displayName());
       extension.put("shortDescription", view.description());
@@ -332,14 +338,16 @@ final class OpenVsxMetadata {
         + "/" + view.version() + "/file/";
     Map<String, String> files = new LinkedHashMap<>();
     files.put("download", root + view.fileName());
-    files.put("manifest", root + "extension.vsixmanifest");
+    // Open VSX `files.manifest` is the JSON package manifest, not the XML vsixmanifest, and the
+    // remaining resource URLs must name the exact ZIP members, which live under `extension/`.
+    files.put("manifest", root + "package.json");
     Object icon = view.packageJson().get("icon");
     if (icon != null && !icon.toString().isBlank()) {
-      files.put("icon", root + icon);
+      files.put("icon", root + "extension/" + icon);
     }
-    files.put("readme", root + "README.md");
-    files.put("license", root + "LICENSE");
-    files.put("changelog", root + "CHANGELOG.md");
+    files.put("readme", root + "extension/README.md");
+    files.put("license", root + "extension/LICENSE");
+    files.put("changelog", root + "extension/CHANGELOG.md");
     return files;
   }
 

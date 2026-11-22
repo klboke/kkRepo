@@ -1831,6 +1831,71 @@ class RepositorySecurityFilterTest {
     assertEquals(expected, decisions.permission.action());
   }
 
+  private static RepositoryRecord openVsxRepository(long id, String name, RepositoryType type) {
+    return new RepositoryRecord(
+        id, name, RepositoryFormat.OPENVSX, type,
+        "openvsx-" + type.name().toLowerCase(), true, 1L,
+        null, null, null, null, null, true, Map.of());
+  }
+
+  @Test
+  void openVsxGroupPublishRequiresAuthenticationBeforeTheMemberIsUsed() throws Exception {
+    RepositoryRecord group = openVsxRepository(10L, "openvsx-group", RepositoryType.GROUP);
+    RepositoryRecord member = openVsxRepository(11L, "openvsx-hosted", RepositoryType.HOSTED);
+    var dao = new FakeGroupRepositoryDao(group, member);
+    StubAuthenticationService authentication = new StubAuthenticationService(Optional.empty());
+    RepositorySecurityFilter filter = filter(
+        authentication,
+        new RecordingDecisionService(AccessDecision.allow()),
+        dao,
+        false);
+    filter.setGroupWriteTargetService(
+        new com.github.klboke.kkrepo.server.repositories.GroupWriteTargetService(dao));
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("POST", "/repository/openvsx-group/api/-/publish"),
+        response.proxy(),
+        chain);
+
+    // The publish route through a group is a supported write, so the invalid-route bypass must
+    // not skip authentication: an unauthenticated publish is challenged, never forwarded.
+    assertEquals(1, authentication.openVsxCalls);
+    assertEquals(0, chain.calls);
+    assertEquals(HttpServletResponse.SC_UNAUTHORIZED, response.status);
+    assertEquals(
+        "Bearer realm=\"openvsx\", message=\"Authentication required\"",
+        response.headers.get("WWW-Authenticate"));
+  }
+
+  @Test
+  void openVsxGroupPublishEvaluatesAddPermissionAgainstTheSelectedMember() throws Exception {
+    RepositoryRecord group = openVsxRepository(10L, "openvsx-group", RepositoryType.GROUP);
+    RepositoryRecord member = openVsxRepository(11L, "openvsx-hosted", RepositoryType.HOSTED);
+    var dao = new FakeGroupRepositoryDao(group, member);
+    StubAuthenticationService authentication =
+        new StubAuthenticationService(Optional.of(subject("alice")));
+    authentication.openVsxAuthenticated = Optional.of(subject("alice"));
+    RecordingDecisionService decisions =
+        new RecordingDecisionService(AccessDecision.deny("lacking add"));
+    RepositorySecurityFilter filter = filter(authentication, decisions, dao, false);
+    filter.setGroupWriteTargetService(
+        new com.github.klboke.kkrepo.server.repositories.GroupWriteTargetService(dao));
+    ResponseState response = new ResponseState();
+    ChainState chain = new ChainState();
+
+    filter.doFilter(
+        request("POST", "/repository/openvsx-group/api/-/publish"),
+        response.proxy(),
+        chain);
+
+    // A subject without ADD permission on the selected member is rejected before publication.
+    assertEquals(0, chain.calls);
+    assertEquals(HttpServletResponse.SC_FORBIDDEN, response.status);
+    assertEquals(PermissionAction.ADD, decisions.permission.action());
+  }
+
   private static TerraformRegistryDao terraformRegistry(Set<String> publishedPlatforms) {
     return (TerraformRegistryDao) Proxy.newProxyInstance(
         RepositorySecurityFilterTest.class.getClassLoader(),
@@ -2106,6 +2171,8 @@ class RepositorySecurityFilterTest {
     private int rubygemsCalls;
     private Optional<AuthenticatedSubject> pubAuthenticated = Optional.empty();
     private int pubCalls;
+    private Optional<AuthenticatedSubject> openVsxAuthenticated = Optional.empty();
+    private int openVsxCalls;
     private Optional<AuthenticatedSubject> terraformAuthenticated = Optional.empty();
     private String terraformToken;
     private String terraformReplayToken;
@@ -2141,6 +2208,13 @@ class RepositorySecurityFilterTest {
     public Optional<AuthenticatedSubject> authenticatePub(HttpServletRequest request) {
       pubCalls++;
       return pubAuthenticated;
+    }
+
+    @Override
+    public Optional<AuthenticatedSubject> authenticateOpenVsx(HttpServletRequest request) {
+      openVsxCalls++;
+      // Mirror the real service: Open VSX credentials first, then normal kkrepo credentials.
+      return openVsxAuthenticated.isPresent() ? openVsxAuthenticated : authenticate(request);
     }
 
     @Override
@@ -2192,6 +2266,37 @@ class RepositorySecurityFilterTest {
     @Override
     public Optional<RepositoryRecord> findByName(String name) {
       return repository.name().equals(name) ? Optional.of(repository) : Optional.empty();
+    }
+  }
+
+  /** Group plus hosted member pair, so the write-target permission selection can be exercised. */
+  private static final class FakeGroupRepositoryDao extends RepositoryDaoAdapter {
+    private final RepositoryRecord group;
+    private final RepositoryRecord member;
+
+    private FakeGroupRepositoryDao(RepositoryRecord group, RepositoryRecord member) {
+      super(null, null);
+      this.group = group;
+      this.member = member;
+    }
+
+    @Override
+    public Optional<RepositoryRecord> findById(long id) {
+      if (group.id() == id) return Optional.of(group);
+      if (member.id() == id) return Optional.of(member);
+      return Optional.empty();
+    }
+
+    @Override
+    public Optional<RepositoryRecord> findByName(String name) {
+      if (group.name().equals(name)) return Optional.of(group);
+      if (member.name().equals(name)) return Optional.of(member);
+      return Optional.empty();
+    }
+
+    @Override
+    public java.util.List<RepositoryRecord> listMembers(long repositoryId) {
+      return repositoryId == group.id() ? java.util.List.of(member) : java.util.List.of();
     }
   }
 

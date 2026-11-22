@@ -53,6 +53,7 @@ public class OpenVsxProtocolHandler implements RepositoryProtocolHandler {
   private final ForwardedHeaderPolicy forwardedHeaderPolicy;
   private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
   private static final int MAX_GALLERY_BODY_BYTES = 1024 * 1024;
+  private static final int MAX_RESPONSE_BODY_BYTES = 32 * 1024 * 1024;
   private StagingHttpSupport stagingHttp;
   private com.github.klboke.kkrepo.server.repositories.GroupWriteTargetService groupWriteTarget;
 
@@ -89,8 +90,18 @@ public class OpenVsxProtocolHandler implements RepositoryProtocolHandler {
   public ResponseEntity<?> handle(RepositoryProtocolRequest context) throws IOException {
     HttpServletRequest request = context.servletRequest();
     com.github.klboke.kkrepo.server.maven.RepositoryRuntime runtime = context.runtime();
-    if (context.method() != HttpMethod.GET && context.method() != HttpMethod.HEAD
-        && runtime.isGroup() && groupWriteTarget != null) {
+    // Only actual publication/deletion operations resolve the group's hosted write target;
+    // read-only gallery POSTs stay on the group read path so every member is queried.
+    boolean publishPost = false;
+    if (context.method() == HttpMethod.POST) {
+      try {
+        publishPost = parser.parse(context.path()).kind() == OpenVsxPath.Kind.PUBLISH;
+      } catch (IllegalArgumentException unclassified) {
+        publishPost = false; // not a publish route; the regular parse reports the bad path
+      }
+    }
+    boolean writeOperation = context.method() == HttpMethod.DELETE || publishPost;
+    if (writeOperation && runtime.isGroup() && groupWriteTarget != null) {
       runtime = groupWriteTarget.requireWriteTarget(runtime);
     }
     if (stagingHttp != null) {
@@ -100,8 +111,10 @@ public class OpenVsxProtocolHandler implements RepositoryProtocolHandler {
         return staged.get();
       }
     }
-    String baseUrl = serverBaseUrl(request) + request.getContextPath()
-        + RepositoryUrlPrefix.path(request);
+    // `RepositoryUrlPrefix.path(request)` already ends in `/`; strip it so the metadata builders'
+    // own `"/" + repository` concatenation does not generate `//` links.
+    String baseUrl = (serverBaseUrl(request) + request.getContextPath()
+        + RepositoryUrlPrefix.path(request)).replaceAll("/+$", "");
     String repository = runtime.name();
     OpenVsxQuery query = OpenVsxQuery.from(request);
     try {
@@ -202,6 +215,19 @@ public class OpenVsxProtocolHandler implements RepositoryProtocolHandler {
     if (request.getMethod().equalsIgnoreCase("HEAD") || !response.hasBody()) {
       response.closeBodyIfOpen();
       return ResponseEntity.status(response.status()).headers(headers).build();
+    }
+    // The shared POST entry point declares ResponseEntity<?>, which Spring MVC's streaming
+    // return-value handler does not process: a StreamingResponseBody lambda would be serialized
+    // as `{}` and the response body truncated. POST bodies (gallery queries and publication
+    // reports) are small generated JSON, so buffer them fully.
+    if (request.getMethod().equalsIgnoreCase("POST")) {
+      byte[] bytes;
+      try (InputStream body = response.body()) {
+        bytes = body.readNBytes(MAX_RESPONSE_BODY_BYTES);
+      } catch (IOException error) {
+        throw new IllegalStateException("Failed to buffer the Open VSX response body", error);
+      }
+      return ResponseEntity.status(response.status()).headers(headers).body(bytes);
     }
     InputStream body = response.body();
     long contentLength = response.contentLength();

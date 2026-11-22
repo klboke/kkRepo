@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.routing.openvsx;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
@@ -132,9 +133,38 @@ class OpenVsxProtocolHandlerTest {
             com.github.klboke.kkrepo.server.openvsx.OpenVsxQuery.class);
     verify(hosted).get(eq(runtime), any(), query.capture(), any(), eq("demo"), eq(false));
     assertEquals("python", query.getValue().query());
-    assertEquals("acme", query.getValue().namespaceName());
+    assertTrue(query.getValue().namespaceNames().contains("acme"));
     assertEquals(7, query.getValue().size());
     assertEquals(14, query.getValue().offset());
+  }
+
+  @Test
+  void galleryFilterIdsMatchTheOfficialContractAndAccumulate() throws Exception {
+    RepositoryRuntime runtime = runtime(RepositoryType.HOSTED);
+    byte[] responseBody = "{}".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    when(hosted.get(eq(runtime), any(), any(), any(), eq("demo"), eq(false)))
+        .thenReturn(MavenResponse.ok(new ByteArrayInputStream(responseBody), responseBody.length,
+            "application/json", "etag", null));
+    byte[] body = """
+        {"filters":[{"criteria":[
+          {"filterType":4,"value":"acme.demo"},
+          {"filterType":4,"value":"other.tool"},
+          {"filterType":7,"value":"demo"},
+          {"filterType":5,"value":"testing"}
+        ]}]}
+        """.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+
+    handler.handle(request(runtime, "POST", "vscode/gallery/extensionquery", body));
+
+    org.mockito.ArgumentCaptor<com.github.klboke.kkrepo.server.openvsx.OpenVsxQuery> query =
+        org.mockito.ArgumentCaptor.forClass(
+            com.github.klboke.kkrepo.server.openvsx.OpenVsxQuery.class);
+    verify(hosted).get(eq(runtime), any(), query.capture(), any(), eq("demo"), eq(false));
+    // 4 = ExtensionId, 7 = ExtensionName and 5 = Category in the official default Gallery
+    // contract; batched queries keep every name/ID criterion instead of overwriting it.
+    assertEquals(List.of("acme.demo", "other.tool"), query.getValue().extensionIds());
+    assertEquals(List.of("demo"), query.getValue().extensionNames());
+    assertEquals("testing", query.getValue().category());
   }
 
   @Test

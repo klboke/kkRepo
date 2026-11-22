@@ -228,8 +228,7 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       filterChain.doFilter(request, response);
       return;
     }
-    if (isInvalidPubPublishRoute(repository.get(), target)
-        || isInvalidOpenVsxPublishRoute(repository.get(), target)) {
+    if (isInvalidPubPublishRoute(repository.get(), target)) {
       filterChain.doFilter(request, response);
       return;
     }
@@ -278,7 +277,8 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
 
     RepositoryRecord permissionRepository = repository.get();
     if (groupWriteTarget != null && isWriteMethod(request.getMethod())
-        && permissionRepository.type() == RepositoryType.GROUP) {
+        && permissionRepository.type() == RepositoryType.GROUP
+        && !isOpenVsxReadOnlyPost(permissionRepository, target)) {
       permissionRepository = groupWriteTarget.writeTargetRecord(permissionRepository)
           .orElse(permissionRepository);
     }
@@ -599,11 +599,14 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
         && ("vscode/gallery/extensionquery".equals(path) || "vscode/item".equals(path));
   }
 
-  private static boolean isInvalidOpenVsxPublishRoute(
+  /**
+   * Read-only gallery POSTs stay group reads: only publication and deletion operations resolve the
+   * group's hosted write target, so their permissions are not evaluated against the member.
+   */
+  private static boolean isOpenVsxReadOnlyPost(
       RepositoryRecord repository, RepositoryRequest target) {
     return repository.format() == RepositoryFormat.OPENVSX
-        && repository.type() != RepositoryType.HOSTED
-        && isOpenVsxPublishRoute(target.method(), target.path());
+        && isOpenVsxReadOnlyPostRoute(target.method(), target.path());
   }
 
   private static boolean isInvalidPubPublishRoute(RepositoryRecord repository, RepositoryRequest target) {
