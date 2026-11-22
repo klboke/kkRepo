@@ -5,8 +5,15 @@ import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityRecordMapp
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRealmRecord;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 public class NexusSecurityMigrationService {
+  // Mirrors the server's API key domain identity rule (UserTokens.canonicalApiKeyDomain).
+  private static final Pattern API_KEY_DOMAIN = Pattern.compile("[A-Za-z0-9._-]{1,100}");
+  private static final String USER_TOKEN_DOMAIN = "UserToken";
+  // Nexus Pro (3.71+) keeps its user tokens in the API key store under this domain.
+  private static final String NEXUS_USER_TOKEN_DOMAIN = "User-Token-Realm";
+
   private final NexusSecurityRecordMapper mapper;
   private final NexusSecurityMigrationWriter writer;
 
@@ -72,7 +79,10 @@ public class NexusSecurityMigrationService {
       writer.upsertAnonymousConfig(mapper.mapAnonymousConfig(source.anonymousConfig()));
     }
 
-    source.apiKeys().stream()
+    List<NexusSecurityRecordMapper.NexusApiKey> apiKeys = source.apiKeys().stream()
+        .filter(NexusSecurityMigrationService::importableApiKey)
+        .toList();
+    apiKeys.stream()
         .map(mapper::mapApiKey)
         .forEach(writer::upsertApiKey);
 
@@ -83,7 +93,22 @@ public class NexusSecurityMigrationService {
         source.users().size(),
         source.userRoleMappings().size(),
         realms.size(),
-        source.apiKeys().size(),
+        apiKeys.size(),
         source.anonymousConfig() == null ? 0 : 1);
+  }
+
+  /**
+   * kkRepo user tokens are issued only to their owner, so a migration source (which an administrator
+   * chooses) must not set one. Other spellings are skipped too: on MySQL the collation could make the
+   * upsert overwrite the owner's stored user token. Nexus API key domains are plain ASCII names.
+   * Nexus Pro user tokens are not imported either: their format differs, and owners generate new
+   * kkRepo user tokens.
+   * Preflight plans apply the same rule, so they list only the keys a run will write.
+   */
+  public static boolean importableApiKey(NexusSecurityRecordMapper.NexusApiKey apiKey) {
+    String domain = apiKey.domain() == null ? "" : apiKey.domain().trim();
+    return API_KEY_DOMAIN.matcher(domain).matches()
+        && !USER_TOKEN_DOMAIN.equalsIgnoreCase(domain)
+        && !NEXUS_USER_TOKEN_DOMAIN.equalsIgnoreCase(domain);
   }
 }

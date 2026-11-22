@@ -174,6 +174,8 @@ Before migrating from Nexus to kkrepo, the source Nexus must allow temporary Gro
 
 The kkrepo migration flow temporarily creates scripts on the source Nexus to compensate for data that regular Nexus REST APIs cannot directly read, such as local user password hashes, API key compatibility information, and hosted repository asset pagination discovery. After script execution completes, kkrepo attempts to delete the temporary scripts.
 
+Format API keys (npm, NuGet, RubyGems, Cargo, Pub and similar) are migrated. Nexus Repository Pro user tokens (API key domain `User-Token-Realm`) are not: kkrepo user tokens use a different format and are issued only by their owner, so after cutover each user generates a new one in Browse under **My Token**.
+
 ### Applicability
 
 - Nexus Repository 3.21.2 and later: Groovy scripting is disabled by default and must be explicitly enabled.

@@ -379,7 +379,7 @@ public class NexusApiMigrationService {
         batch.users().size(),
         batch.userRoleMappings().size(),
         batch.realmOrder().size(),
-        batch.apiKeys().size(),
+        (int) batch.apiKeys().stream().filter(NexusSecurityMigrationService::importableApiKey).count(),
         source.repositoryTargets().size(),
         batch.anonymousConfig() == null
             ? null
@@ -412,6 +412,7 @@ public class NexusApiMigrationService {
                 mapping.roles()))
             .toList(),
         batch.apiKeys().stream()
+            .filter(NexusSecurityMigrationService::importableApiKey)
             .map(apiKey -> new SecurityApiKeyPlan(
                 apiKey.domain(),
                 apiKey.ownerSource(),

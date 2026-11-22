@@ -167,6 +167,8 @@ PyPI 包迁移会登记项目和根 Simple 索引的重建任务；待队列处�
 
 kkrepo 迁移流程会在源 Nexus 端临时创建脚本，用于补偿 Nexus 普通 REST API 无法直接读取的数据，例如本地用户 password hash、API key 兼容信息，以及 hosted 仓库资产分页发现。脚本执行完成后，kkrepo 会尝试删除临时脚本。
 
+格式类 API key（npm、NuGet、RubyGems、Cargo、Pub 等）会被迁移。Nexus Repository Pro 的 user token（API key 域 `User-Token-Realm`）不会迁移：kkrepo user token 格式不同，且只能由所有者生成，因此切换后每个用户需要在 Browse 的 **My Token** 中重新生成。
+
 ### 适用范围
 
 - Nexus Repository 3.21.2 及以上：Groovy scripting 默认关闭，需要显式开启。

@@ -301,11 +301,23 @@ class NexusApiMigrationServiceTest {
                 "userId", "alice",
                 "source", "default",
                 "roles", List.of("nx-developer"))),
-            List.of(Map.of(
-                "domain", "NpmToken",
-                "ownerSource", "default",
-                "ownerUserId", "alice",
-                "api_key", "raw-token-value")),
+            List.of(
+                Map.of(
+                    "domain", "NpmToken",
+                    "ownerSource", "default",
+                    "ownerUserId", "alice",
+                    "api_key", "raw-token-value"),
+                // User tokens (kkRepo's, and Nexus Pro's) are never planned for import.
+                Map.of(
+                    "domain", "UserToken",
+                    "ownerSource", "default",
+                    "ownerUserId", "alice",
+                    "api_key", "ABCDEFGHJK:" + "a".repeat(43)),
+                Map.of(
+                    "domain", "User-Token-Realm",
+                    "ownerSource", "default",
+                    "ownerUserId", "alice",
+                    "api_key", "nameCodepassCode")),
             List.of(Map.of(
                 "name", "public-maven",
                 "type", "csel",
@@ -343,6 +355,8 @@ class NexusApiMigrationServiceTest {
     assertEquals("nx-developer", preflight.security().roleDetails().get(0).id());
     assertEquals(1, preflight.security().privileges());
     assertEquals("alice", preflight.security().userRoleMappingDetails().get(0).userId());
+    assertEquals(1, preflight.security().apiKeys());
+    assertEquals(1, preflight.security().apiKeyDetails().size());
     assertEquals("NpmToken", preflight.security().apiKeyDetails().get(0).domain());
     assertTrue(preflight.security().apiKeyDetails().get(0).rawKeyPresent());
     assertEquals("public-maven", preflight.security().contentSelectorDetails().get(0).name());
