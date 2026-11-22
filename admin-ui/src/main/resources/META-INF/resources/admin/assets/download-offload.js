@@ -424,7 +424,7 @@
       }
       if (response.headers.get(proofHeader) !== `${nonce}:${id}`) {
         await response.body?.cancel();
-        report(t("Offload was not confirmed for this Blob Store. Check the proxy and artifact path."), "warn");
+        report(t("Offload was not confirmed for this Blob Store. Check the proxy and artifact path."), "bad");
         return;
       }
       const reader = response.body.getReader();
