@@ -59,6 +59,23 @@ class PostgreSqlMigrationCompatibilityTest extends PostgreSqlIntegrationTestSupp
   }
 
   @Test
+  void bearerGenerationMigrationRerunsOverAPartiallyAppliedSchema() {
+    jdbc().execute("ALTER TABLE conan_auth_token DROP COLUMN api_key_generation");
+    jdbc().execute((org.springframework.jdbc.core.ConnectionCallback<Void>) connection -> {
+      org.springframework.jdbc.datasource.init.ScriptUtils.executeSqlScript(connection,
+          new org.springframework.core.io.support.EncodedResource(new org.springframework.core.io.ClassPathResource(
+              "db/migration/postgresql/V71__bearer_api_key_generation.sql"), StandardCharsets.UTF_8));
+      return null;
+    });
+    assertEquals(2, jdbc().queryForObject("""
+        SELECT COUNT(*) FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND ((table_name = 'docker_auth_token' AND column_name = 'subject_api_key_generation')
+            OR (table_name = 'conan_auth_token' AND column_name = 'api_key_generation'))
+        """, Integer.class));
+  }
+
+  @Test
   void baselineValidatesAndSecondMigrateHasNoPendingWork() {
     assertTrue(flyway().validateWithResult().validationSuccessful);
     var result = flyway().migrate();
