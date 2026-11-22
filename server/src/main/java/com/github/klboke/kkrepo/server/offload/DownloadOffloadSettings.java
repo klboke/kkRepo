@@ -64,7 +64,7 @@ public class DownloadOffloadSettings {
       throw invalid("Specify the settings revision and whether offload is enabled.");
     }
     if (DownloadOffloadMethod.byId(command.method()) == null) {
-      throw invalid("Select an offload method.");
+      throw invalid("Select a proxy preset.");
     }
     String customHeader = command.customHeader() == null ? "" : command.customHeader().trim();
     if (!DownloadOffloadMethod.validCustomHeader(customHeader)) {
