@@ -914,11 +914,10 @@ public class SecurityManagementService implements AccessDecisionService {
     }
     String ownerSource = normalizeSource(command.ownerSource());
     String ownerUserId = requireText(command.ownerUserId(), "ownerUserId");
-    // The database may resolve another spelling of the domain (MySQL compares it case- and
-    // accent-insensitively), so authorize and write against the stored row's domain.
+    // An existing row keeps the domain it was stored with, so authorize against that row.
     String requested = canonicalDomain(command.domain());
     String domain = securityDao.findApiKey(requested, ownerSource, ownerUserId)
-        .map(stored -> canonicalDomain(stored.domain()))
+        .map(stored -> UserTokens.isUserTokenDomain(stored.domain()) ? UserTokens.DOMAIN : stored.domain())
         .orElse(requested);
     requireInteractiveForUserToken(false, domain);
     String generatedToken = null;
@@ -1056,8 +1055,12 @@ public class SecurityManagementService implements AccessDecisionService {
   }
 
   private static String canonicalDomain(String domain) {
-    String value = defaultString(domain, "nexus");
-    return UserTokens.DOMAIN.equalsIgnoreCase(value) ? UserTokens.DOMAIN : value;
+    String canonical = UserTokens.canonicalApiKeyDomain(defaultString(domain, "nexus"));
+    if (canonical == null) {
+      throw new SecurityValidationException(
+          "API key domain must be 1-100 ASCII letters, digits, '.', '_' or '-'");
+    }
+    return canonical;
   }
 
   /**
@@ -1065,7 +1068,7 @@ public class SecurityManagementService implements AccessDecisionService {
    * endpoint (self-service or administrative) refuses key-authenticated user token management.
    */
   private static void requireInteractiveForUserToken(boolean viaKey, String canonicalDomain) {
-    if ((viaKey || currentRequestUsesKey()) && UserTokens.DOMAIN.equals(canonicalDomain)) {
+    if ((viaKey || currentRequestUsesKey()) && UserTokens.isUserTokenDomain(canonicalDomain)) {
       throw new ResponseStatusException(HttpStatus.FORBIDDEN, "User tokens are managed from a signed-in session");
     }
   }

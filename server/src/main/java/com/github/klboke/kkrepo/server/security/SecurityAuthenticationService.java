@@ -242,6 +242,8 @@ public class SecurityAuthenticationService {
     String material = userCode + ":" + passCode;
     Supplier<Optional<AuthenticatedSubject>> loader = () -> securityDao
         .findApiKeyByDomainAndHash(UserTokens.DOMAIN, SecurityHashing.sha256(material))
+        // The database may match other spellings (MySQL utf8mb4_unicode_ci); only the canonical one counts.
+        .filter(token -> UserTokens.DOMAIN.equals(token.domain()))
         .flatMap(token -> apiKeySubject(token, false, "user-token"));
     return fresh || apiKeyAuthCache == null
         ? loader.get()
@@ -613,7 +615,7 @@ public class SecurityAuthenticationService {
   private Optional<AuthenticatedSubject> resolveApiKey(List<ApiKeyTokenCandidate> candidates, boolean ohpm) {
     return findApiKey(candidates)
         // User tokens are Basic credentials only, never bearer or header API keys.
-        .filter(apiKey -> !UserTokens.DOMAIN.equalsIgnoreCase(apiKey.domain()))
+        .filter(apiKey -> !UserTokens.isUserTokenDomain(apiKey.domain()))
         .flatMap(apiKey -> apiKeySubject(apiKey, ohpm, "api-key"));
   }
 
@@ -637,7 +639,7 @@ public class SecurityAuthenticationService {
    * shared by every replica), resolved through that provider's current role mappings and same-name
    * setting, so API keys and stored bearer tokens follow mapping changes like a browser session.
    * Raw IdP claims are deliberately ignored. Users who last signed in before the provider was recorded
-   * are resolved through the provider of their source.
+   * are resolved through the only enabled provider of their source, if exactly one exists.
    */
   private Set<String> storedExternalRoles(SecurityUserRecord user) {
     if (DEFAULT_SOURCE.equals(user.source()) || user.attributes() == null
@@ -645,12 +647,17 @@ public class SecurityAuthenticationService {
       return null;
     }
     Set<String> names = new LinkedHashSet<>(ExternalRoleMappings.names(groups));
-    Optional<SecurityRealmRecord> realm =
-        user.attributes().get(ExternalRoleMappings.USER_REALM) instanceof String realmId
-            ? externalRealm(realmId, user.source())
-            : ExternalRoleMappings.REALMS.stream()
-                .flatMap(realmId -> externalRealm(realmId, user.source()).stream())
-                .findFirst();
+    Optional<SecurityRealmRecord> realm;
+    if (user.attributes().get(ExternalRoleMappings.USER_REALM) instanceof String realmId) {
+      realm = externalRealm(realmId, user.source());
+    } else {
+      // LDAP and OIDC may share a source: only an unambiguous provider may judge these names.
+      // Otherwise no external roles apply until the next sign-in records the provider.
+      List<SecurityRealmRecord> candidates = ExternalRoleMappings.REALMS.stream()
+          .flatMap(realmId -> externalRealm(realmId, user.source()).stream())
+          .toList();
+      realm = candidates.size() == 1 ? Optional.of(candidates.get(0)) : Optional.empty();
+    }
     return realm.map(provider -> ExternalRoleMappings.resolve(provider, names)).orElse(Set.of());
   }
 

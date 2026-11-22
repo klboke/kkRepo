@@ -1293,6 +1293,17 @@ class SecurityAuthenticationServiceTest {
         "ACTIVE", "carol", Map.of("groups", List.of("engineering", "nx-admin"))));
     assertEquals(Set.of("docker-pusher", "local-role", "nx-anonymous"), storedRoles(service, "OIDC", "carol"));
 
+    // If LDAP shares that source, the provider is ambiguous: no external roles until the next sign-in.
+    dao.realm(new SecurityRealmRecord(1L, "ldap", "LDAP", "LDAP", true, 10, Map.of(
+        "source", "OIDC",
+        ExternalRoleMappings.LEGACY_MATCHING, true,
+        ExternalRoleMappings.MAPPINGS, Map.of("ldap-admins", List.of("nx-admin")))));
+    assertEquals(Set.of("local-role", "nx-anonymous"), storedRoles(service, "OIDC", "carol"));
+    // A recorded provider is never ambiguous.
+    dao.user(new SecurityUserRecord(4L, "OIDC", "carol", null, null, "carol@example.com", null,
+        "ACTIVE", "carol", Map.of("groups", List.of("engineering", "nx-admin"), ExternalRoleMappings.USER_REALM, "oidc")));
+    assertEquals(Set.of("docker-pusher", "local-role", "nx-anonymous"), storedRoles(service, "OIDC", "carol"));
+
     // The next IdP sign-in rewrites attributes.groups; the same credentials then lose the role.
     dao.user(new SecurityUserRecord(4L, "OIDC", "carol", null, null, "carol@example.com", null,
         "ACTIVE", "carol", Map.of("groups", List.of("nx-admin"), ExternalRoleMappings.USER_REALM, "oidc")));

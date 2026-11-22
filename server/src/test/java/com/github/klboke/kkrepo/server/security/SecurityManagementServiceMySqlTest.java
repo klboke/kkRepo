@@ -2,12 +2,17 @@ package com.github.klboke.kkrepo.server.security;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.ApiKeyRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
 import com.github.klboke.kkrepo.server.KkRepoApplication;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.ApiKeyCommand;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -21,7 +26,10 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.server.ResponseStatusException;
 import org.testcontainers.mysql.MySQLContainer;
 
-/** The user token guard must hold under MySQL's case- and accent-insensitive domain comparison. */
+/**
+ * API key domains follow one identity rule in storage, management and authentication, although
+ * MySQL compares the domain column case- and accent-insensitively.
+ */
 class SecurityManagementServiceMySqlTest {
   @TempDir Path directory;
 
@@ -52,32 +60,71 @@ class SecurityManagementServiceMySqlTest {
       try (var context = new SpringApplicationBuilder(KkRepoApplication.class).profiles("test")
           .run(properties.entrySet().stream()
               .map(entry -> "--" + entry.getKey() + "=" + entry.getValue()).toArray(String[]::new))) {
-        verify(context.getBean(SecurityManagementService.class), context.getBean(SecurityDao.class));
+        verify(context.getBean(SecurityManagementService.class), context.getBean(SecurityDao.class),
+            context.getBean(SecurityAuthenticationService.class));
       }
     }
   }
 
-  private static void verify(SecurityManagementService service, SecurityDao dao) {
+  private static void verify(
+      SecurityManagementService service, SecurityDao dao, SecurityAuthenticationService authentication) {
+    for (String user : List.of("carol", "dave", "erin")) {
+      dao.insertUser(new SecurityUserRecord(null, "OIDC", user, null, null, user + "@example.com", null,
+          "ACTIVE", user, Map.of()));
+    }
+    String chosenPair = "ABCDEFGHJK:" + "a".repeat(43);
+    String chosenHash = SecurityHashing.sha256(chosenPair);
+
+    // Empty slot: a spelling the database would match as "UserToken" is refused before anything is
+    // stored, for key-authenticated and signed-in callers alike, so no hidden user token can exist.
+    for (String variant : List.of("UsérToken", "ＵｓｅｒＴｏｋｅｎ")) {
+      for (String importedHash : new String[] {null, chosenHash}) {
+        ApiKeyCommand command = new ApiKeyCommand(
+            variant, "OIDC", "dave", null, null, List.of(), null, null, importedHash);
+        assertThrows(SecurityValidationException.class,
+            () -> asKeyAuthenticatedAdmin(() -> service.createApiKey(command)), variant);
+        assertThrows(SecurityValidationException.class, () -> service.createApiKey(command), variant);
+      }
+    }
+    assertTrue(dao.listApiKeysForOwner("OIDC", "dave").isEmpty());
+    assertTrue(authentication.authenticate(basic(chosenPair)).isEmpty());
+
+    // Existing user token: the same spellings cannot reveal or replace it either.
     var token = service.createApiKeyForOwner("OIDC", "carol",
         new ApiKeyCommand(UserTokens.DOMAIN, null, null, "docker", null, List.of(), null, null, null));
     String hash = dao.findApiKey(UserTokens.DOMAIN, "OIDC", "carol").orElseThrow().apiKeyHash();
-
     for (String variant : List.of("UsérToken", "ＵｓｅｒＴｏｋｅｎ")) {
-      // The database resolves the variant to the stored user token row.
+      // The database itself resolves the variant to the stored user token row.
       assertEquals(UserTokens.DOMAIN, dao.findApiKey(variant, "OIDC", "carol").orElseThrow().domain(), variant);
-      for (String importedHash : new String[] {null, SecurityHashing.sha256("ABCDEFGHJK:" + "a".repeat(43))}) {
+      for (String importedHash : new String[] {null, chosenHash}) {
         ApiKeyCommand command = new ApiKeyCommand(
             variant, "OIDC", "carol", null, null, List.of(), null, null, importedHash);
-        var error = assertThrows(ResponseStatusException.class,
+        assertThrows(SecurityValidationException.class,
             () -> asKeyAuthenticatedAdmin(() -> service.createApiKey(command)), variant);
-        assertEquals(403, error.getStatusCode().value(), variant);
       }
     }
+    // An ASCII case variant is the same identity: refused to a key, the same token in a session.
+    var error = assertThrows(ResponseStatusException.class, () -> asKeyAuthenticatedAdmin(() ->
+        service.createApiKey(new ApiKeyCommand("usertoken", "OIDC", "carol", null, null, List.of(), null, null, null))));
+    assertEquals(403, error.getStatusCode().value());
     assertEquals(hash, dao.findApiKey(UserTokens.DOMAIN, "OIDC", "carol").orElseThrow().apiKeyHash());
-
-    // In a signed-in session the variant resolves to the same token, presented as the Basic pair.
     assertEquals(token.token(), service.createApiKey(
-        new ApiKeyCommand("UsérToken", "OIDC", "carol", null, null, List.of(), null, null, null)).token());
+        new ApiKeyCommand("usertoken", "OIDC", "carol", null, null, List.of(), null, null, null)).token());
+    assertEquals("carol", authentication.authenticate(basic(token.token())).orElseThrow().userId());
+
+    // A row written under another spelling before this rule (directly in the database) is never
+    // accepted as a user token, although the database matches its domain.
+    dao.upsertApiKey(new ApiKeyRecord(null, "UsérToken", "OIDC", "erin", "legacy", "ACTIVE", chosenHash,
+        "ABCDEFGHJK", Map.of("values", List.of()), "", null, null, null, null));
+    assertEquals("UsérToken", dao.findApiKey(UserTokens.DOMAIN, "OIDC", "erin").orElseThrow().domain());
+    assertTrue(authentication.authenticate(basic(chosenPair)).isEmpty());
+  }
+
+  private static MockHttpServletRequest basic(String pair) {
+    var request = new MockHttpServletRequest("GET", "/repository/docker-hosted/v2/");
+    request.addHeader("Authorization",
+        "Basic " + Base64.getEncoder().encodeToString(pair.getBytes(StandardCharsets.UTF_8)));
+    return request;
   }
 
   private static void asKeyAuthenticatedAdmin(Runnable action) {

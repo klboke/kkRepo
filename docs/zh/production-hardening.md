@@ -243,6 +243,8 @@ KKREPO_CATALOG_CACHE_BROADCAST_BACKEND=mysql
 3. 滚动升级剩余副本。
 4. 保留上一版本 artifact/image 以便回滚。
 
+CLI user token：请在所有副本都升级到支持它的版本之后，再开始签发（Browse > **My Token**，`UserToken` 域）。旧版本副本不会把 user token 限制为只能用于 HTTP Basic，也不会检查使重置在所有副本上撤销 Docker 和 Conan bearer token 的 key generation。回滚时同理：请在回滚前或回滚后立即删除已有的 user token。
+
 如果已经执行数据库 migration，回滚可能需要恢复数据库，而不仅仅是重新部署旧镜像。数据库专有恢复命令见[数据库后端](database-backends.md)。
 
 ## 安全披露和公开日志

@@ -102,7 +102,7 @@ docker login nexus.example.com -u <user code>
 # Password: <passcode>
 ```
 
-所有发送 HTTP Basic 凭据的客户端都可以使用这对凭据。user token 拥有所有者的角色，包括所有者最近一次登录时 LDAP 或 OIDC realm 映射的角色。它不能打开 UI session，也不能作为 bearer 或 API key header 使用。每个用户只有一个 token，可在 **My Token** 中重置或删除；管理员可以在 API key 列表中删除。重置或删除后，由旧 token 签发的 Docker bearer token 立即失效。
+所有发送 HTTP Basic 凭据的客户端都可以使用这对凭据。user token 拥有所有者的角色，包括当前 LDAP 或 OIDC 角色映射为所有者最近一次登录时验证的组授予的角色。它不能打开 UI session，也不能作为 bearer 或 API key header 使用。每个用户只有一个 token，可在 **My Token** 中重置或删除；管理员可以在 API key 列表中删除。重置或删除后，由旧 token 签发的 Docker bearer token 在所有副本上立即失效。多副本部署时，请在所有副本升级完成后再签发 user token，参见[升级和回滚](../production-hardening.md#升级和回滚)。
 
 
 Browse 中复制的镜像引用只包含 registry 主机、可选端口、仓库路由路径、镜像名以及 tag 或 digest。

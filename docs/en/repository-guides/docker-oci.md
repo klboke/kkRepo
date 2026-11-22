@@ -112,7 +112,7 @@ docker login nexus.example.com -u <user code>
 # Password: <passcode>
 ```
 
-Any client that sends HTTP Basic credentials can use the same pair. A user token grants the owner's roles, including roles mapped by the owner's LDAP or OIDC realm at the last login. It cannot open a UI session and is not accepted as a bearer or API-key header. Each user has one token. Reset or delete it under **My Token**; administrators can delete it from the API key list. After a reset or delete, Docker bearer tokens issued from the old token stop working.
+Any client that sends HTTP Basic credentials can use the same pair. A user token grants the owner's roles, including the roles the current LDAP or OIDC role mappings give the groups verified at the owner's last sign-in. It cannot open a UI session and is not accepted as a bearer or API-key header. Each user has one token. Reset or delete it under **My Token**; administrators can delete it from the API key list. After a reset or delete, Docker bearer tokens issued from the old token stop working on every replica. In a multi-replica deployment, issue user tokens only after every replica is upgraded; see [Upgrade And Rollback](../production-hardening.md#upgrade-and-rollback).
 
 
 Image references copied from Browse contain only the registry host, optional port, repository

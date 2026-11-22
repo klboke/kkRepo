@@ -828,6 +828,25 @@ class SecurityManagementServiceValidationTest {
   }
 
   @Test
+  void apiKeyDomainsFollowOneAsciiIdentityRule() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    SecurityManagementService service = new SecurityManagementService(dao);
+    // Spellings a database collation could fold into another domain never reach storage.
+    for (String domain : List.of("UsérToken", "\uFF35serToken", "User\u00ADToken", "Npm Token", "x".repeat(101))) {
+      assertThrows(SecurityValidationException.class, () -> service.createApiKey(
+          new ApiKeyCommand(domain, "OIDC", "carol", null, null, List.of(), null, null, null)), domain);
+      assertThrows(SecurityValidationException.class, () -> service.createApiKeyForOwner("OIDC", "carol",
+          new ApiKeyCommand(domain, null, null, null, null, List.of(), null, null, null)), domain);
+    }
+    assertTrue(dao.findApiKey(UserTokens.DOMAIN, "OIDC", "carol").isEmpty());
+    // ASCII case variants of the reserved domain are stored canonically; other names keep their spelling.
+    assertEquals(UserTokens.DOMAIN, service.createApiKeyForOwner("OIDC", "carol",
+        new ApiKeyCommand("USERTOKEN", null, null, null, null, List.of(), null, null, null)).apiKey().domain());
+    assertEquals("Npm.Token_v-2", service.createApiKeyForOwner("OIDC", "carol",
+        new ApiKeyCommand("Npm.Token_v-2", null, null, null, null, List.of(), null, null, null)).apiKey().domain());
+  }
+
+  @Test
   void resetKeepsTheIdAndAnnouncesTheRotationSoIssuedBearersAreRevoked() {
     FakeSecurityDao dao = new FakeSecurityDao();
     SecurityManagementService service = new SecurityManagementService(dao);
