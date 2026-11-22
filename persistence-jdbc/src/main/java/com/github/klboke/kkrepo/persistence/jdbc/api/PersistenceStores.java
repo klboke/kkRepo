@@ -88,6 +88,8 @@ public interface PersistenceStores extends AutoCloseable {
 
   OutboundProxySettingsDao outboundProxySettings();
 
+  DownloadOffloadSettingsDao downloadOffloadSettings();
+
   @Override
   default void close() {
     // Implementations without owned resources need no cleanup.

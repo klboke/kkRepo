@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-4">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20261118-format-icons-1">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20261121-route-1">
-    <link rel="stylesheet" href="./assets/admin.css?v=20261121-external-role-mappings">
+    <link rel="stylesheet" href="./assets/admin.css?v=20261122-download-offload">
     <link rel="stylesheet" href="/browse/assets/account-menu.css?v=20260824-ui-themes-3">
     <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=20260819-topbar-control-height-1">
     <link rel="stylesheet" href="/login/assets/delete-confirmation.css?v=20261013-delete-confirmation-1">
@@ -113,6 +113,7 @@
           </button>
           <div class="side-group-items" id="side-group-system-items" data-side-group-items="system">
             <button class="side-item" data-view="proxy-settings" type="button"><span class="side-item-icon lucide-icon icon-route" aria-hidden="true"></span><span>Proxy Settings</span></button>
+            <button class="side-item" data-view="download-offload" type="button"><span class="side-item-icon lucide-icon icon-download" aria-hidden="true"></span><span>Download Offload</span></button>
             <button class="side-item" data-view="ui-settings" type="button"><span class="side-item-icon lucide-icon icon-sliders-horizontal" aria-hidden="true"></span><span>UI Settings</span></button>
           </div>
           <button class="side-group is-open" data-side-group="migration" type="button" aria-expanded="true" aria-controls="side-group-migration-items">
@@ -2148,6 +2149,82 @@
           </div>
         </section>
 
+        <section class="view" id="download-offload-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-download" aria-hidden="true"></span></span>
+            <h1>Download Offload</h1>
+            <span class="heading-copy">Let a trusted proxy send files after kkRepo authorizes the download.</span>
+          </div>
+          <div class="proxy-settings-layout">
+            <form class="blobstore-form" id="offload-settings-form">
+              <div class="form-title">Settings</div>
+              <div class="field-label">
+                <label class="checkbox-field"><input type="checkbox" id="offload-enabled" disabled><span>Enable download offload</span></label>
+                <span class="field-help" tabindex="0" role="note"
+                  aria-label="A trusted proxy can send eligible downloads from the selected File Blob Stores."
+                  data-tooltip="A trusted proxy can send eligible downloads from the selected File Blob Stores.">
+                  <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                </span>
+              </div>
+              <fieldset class="form-grid offload-settings-fields" id="offload-fields" disabled>
+                <legend class="sr-only">Download offload settings</legend>
+                <label class="full-width"><span>Offload method</span><select id="offload-method"></select></label>
+                <div class="full-width">
+                  <div class="field-label">
+                    <label id="offload-request-label">Proxy request header</label>
+                    <span class="field-help" tabindex="0" role="note"
+                      aria-label="The trusted proxy sets this header when forwarding requests to kkRepo."
+                      data-tooltip="The trusted proxy sets this header when forwarding requests to kkRepo.">
+                      <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                    </span>
+                  </div>
+                  <code id="offload-request" class="offload-request" aria-labelledby="offload-request-label"></code>
+                </div>
+                <label><span>kkRepo response header</span><input id="offload-response" maxlength="128" spellcheck="false" readonly></label>
+                <label id="offload-target-fixed"><span>Target format</span><input id="offload-target-label" readonly></label>
+                <label id="offload-target-custom" hidden><span>Target format</span>
+                  <select id="offload-target"><option value="internal-uri">Internal URI</option><option value="absolute-path">Proxy-side absolute path</option></select>
+                </label>
+              </fieldset>
+              <div class="offload-store-heading">
+                <div class="field-label">
+                  <strong id="offload-store-title">File Blob Stores</strong>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="Downloads use the File Blob Store that holds the requested file, including in group repositories."
+                    data-tooltip="Downloads use the File Blob Store that holds the requested file, including in group repositories.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </div>
+                <span class="form-note" id="offload-store-count"></span>
+              </div>
+              <div class="nx-table-frame offload-stores">
+                <table class="nx-table" aria-labelledby="offload-store-title">
+                  <thead><tr><th scope="col"><input id="offload-select-all" type="checkbox" aria-label="Select all File Blob Stores" disabled></th>
+                    <th scope="col">Blob store</th><th scope="col">Repositories</th></tr></thead>
+                  <tbody id="offload-store-rows"></tbody>
+                </table>
+              </div>
+              <p class="form-note" id="offload-status" role="status"></p>
+              <div class="form-actions">
+                <button class="create-button" id="offload-save" type="submit" disabled>Save settings</button>
+                <button class="create-button secondary" id="offload-discard" type="button" disabled>Discard changes</button>
+              </div>
+            </form>
+            <aside class="blobstore-form">
+              <div class="form-title">Deployment</div>
+              <dl class="proxy-settings-counts offload-deployment-status">
+                <div><dt>Saved configuration</dt><dd id="offload-saved-state"></dd></div>
+                <div><dt>Trusted proxies</dt><dd id="offload-trusted"></dd></div>
+                <div><dt>File delivery</dt><dd id="offload-delivery-state"></dd></div>
+              </dl>
+              <div class="form-actions">
+                <button class="create-button secondary" id="offload-example" type="button" disabled>View deployment example</button>
+                <button class="create-button secondary" id="offload-verify" type="button" disabled>Verify offload</button>
+              </div>
+            </aside>
+          </div>
+        </section>
+
         <section class="view" id="ui-settings-view">
           <div class="page-heading">
             <span class="heading-icon"><span class="lucide-icon icon-sliders-horizontal" aria-hidden="true"></span></span>
@@ -2423,6 +2500,37 @@
       </form>
     </dialog>
 
+    <dialog class="proxy-settings-dialog" id="offload-example-dialog" aria-labelledby="offload-example-title">
+      <div class="proxy-dialog-header"><h2 id="offload-example-title">Deployment example</h2></div>
+      <div class="proxy-dialog-body">
+        <p class="form-note" id="offload-example-note"></p>
+        <label for="offload-example-code">Proxy configuration</label>
+        <textarea class="offload-example-code" id="offload-example-code" rows="14" readonly spellcheck="false"></textarea>
+        <a id="offload-proxy-docs" target="_blank" rel="noreferrer noopener">View proxy documentation</a>
+      </div>
+      <div class="proxy-dialog-footer">
+        <button class="create-button secondary" id="offload-copy-example" type="button">Copy example</button>
+        <form method="dialog"><button class="create-button" type="submit">Done</button></form>
+      </div>
+    </dialog>
+    <dialog class="proxy-settings-dialog" id="offload-verify-dialog" aria-labelledby="offload-verify-title">
+      <form id="offload-probe-form">
+        <div class="proxy-dialog-header"><h2 id="offload-verify-title">Verify offload</h2></div>
+        <div class="proxy-dialog-body">
+          <p class="form-note">Open this page through the trusted proxy. Use the path of a file you can download from the selected Blob Store.</p>
+          <div class="form-grid">
+            <label class="full-width"><span>File Blob Store</span><select id="offload-probe-store" required></select></label>
+            <label class="full-width"><span>Artifact path</span><input id="offload-probe-path" placeholder="/repository/my-repository/path/to/file" required></label>
+          </div>
+          <p class="form-note" id="offload-probe-result" role="status"></p>
+        </div>
+        <div class="proxy-dialog-footer">
+          <button class="create-button secondary" id="offload-probe-close" type="button">Close</button>
+          <button class="create-button" id="offload-probe-run" type="submit">Run verification</button>
+        </div>
+      </form>
+    </dialog>
+
     <script src="/login/assets/csrf-fetch.js?v=20261006-shared-primitives-1"></script>
     <script src="/login/assets/account-menu.js?v=20261006-shared-primitives-1"></script>
     <script src="/login/assets/safe-return-to.js?v=20261023-safe-return-to-1"></script>
@@ -2437,6 +2545,7 @@
     <script src="./assets/user-picker.js?v=20261107-user-picker"></script>
     <script src="./assets/ohpm-login.js?v=20261107-user-picker"></script>
     <script src="./assets/proxy-settings.js?v=20261121-block-outbound"></script>
-    <script src="./assets/admin.js?v=20261121-external-role-mappings"></script>
+    <script src="./assets/download-offload.js?v=20261122-download-offload"></script>
+    <script src="./assets/admin.js?v=20261122-download-offload"></script>
   </body>
 </html>

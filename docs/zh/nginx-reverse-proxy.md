@@ -134,3 +134,14 @@ curl -sS -D - -o /dev/null https://nexus.example.com/v2/
 - `KKREPO_TRUSTED_PROXIES` 是否匹配 kkRepo 看到的代理来源地址。
 - 公网请求是否转发到了应用端口，而不是管理端口。
 - Nginx 是否保留了原始 repository path。
+
+## 下载卸载
+
+在 **管理 → System → Download Offload** 选择代理方式及要启用的 File Blob Store。仓库组按实际命中的制品所在存储判断。kkRepo 完成鉴权、扫描策略检查并定位已存储的文件后，由可信代理传输符合条件的完整下载。
+
+1. 在每个 kkRepo 副本上设置 `KKREPO_DOWNLOAD_OFFLOAD_TRUSTED_PROXIES`。填入可以读取挂载文件的直连代理 IP 或 CIDR，以逗号分隔。卸载入口需要可区分的可信网络身份。
+2. 在参与卸载的每个代理副本上只读挂载相应存储目录。按页面的部署示例配置存储 ID 和目录的映射，确保代理与 kkRepo 读取同一份数据。
+3. 在仓库转发区块添加示例中的 `proxy_set_header X-KkRepo-File-Offload nginx;`，同一出口身份的其他入口清除该头。文件映射使用 `internal`，私有下载禁用共享缓存，并在内部区块应用部署现有的安全响应头。
+4. 保存设置后，通过代理打开管理页，点击 **验证卸载** 并输入一个体积较小的制品路径。验证会检查代理交接标记以及文件是否完整接收。示例会透传验证请求所需的 `X-KkRepo-File-Served`。
+
+副本共享持久化配置，读取到新的版本后刷新配置。Range、条件请求、S3/OSS、Azure、尚未落盘的回源数据，以及入口未匹配的请求，均使用原下载链路。交接后文件读取失败由代理返回，实际传输结果和字节数可查代理访问日志。

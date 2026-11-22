@@ -111,7 +111,7 @@ public class SecurityManagementFilter extends OncePerRequestFilter {
     if (uri.startsWith("/internal/blob-stores")) {
       return internalBlobStorePermission(method, uri);
     }
-    if (uri.equals("/internal/proxy-settings")) {
+    if (uri.equals("/internal/proxy-settings") || uri.equals("/internal/download-offload")) {
       return Optional.of(("GET".equals(method) || "HEAD".equals(method)) ? "nexus:settings:read" : "nexus:settings:update");
     }
     if (uri.startsWith("/internal/repositories/") && uri.endsWith("/outbound-proxy/test")) {

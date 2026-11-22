@@ -134,3 +134,14 @@ If it starts with `http://`, contains `:8080`, or uses an internal host name, ch
 - `KKREPO_TRUSTED_PROXIES` matches the proxy address seen by kkRepo.
 - The public request is routed to the application port, not the management port.
 - Nginx preserves the original repository path.
+
+## Download offload
+
+In **Admin → System → Download Offload**, choose the proxy method and the File Blob Stores to enable. Eligible full downloads use the store holding the resolved blob, including when a group repository serves a member's file. kkRepo authenticates the request, authorizes the file, applies scan policy, and identifies the stored blob before generating a proxy instruction.
+
+1. Set `KKREPO_DOWNLOAD_OFFLOAD_TRUSTED_PROXIES` to the comma-separated immediate peer IP addresses or CIDRs of the gateways that have access to the files. Set it on each kkRepo replica. Use a dedicated peer identity or network boundary for capable gateways.
+2. Mount each selected store's existing directory read-only on every participating gateway. Use the deployment example from the UI to map its store ID. Each mapping must refer to the same files kkRepo uses.
+3. Add the generated `proxy_set_header X-KkRepo-File-Offload nginx;` to the kkRepo repository location, and clear the header at other entrances sharing the same peer identity. The generated file location is `internal`. Keep shared caching disabled for private downloads and apply your existing security response headers to the internal location.
+4. Save the settings. Open the admin page through the gateway, choose **Verify offload**, and enter a small test artifact's repository path. The verifier checks the proxy handoff proof and the complete response size. The example preserves `X-KkRepo-File-Served` for that verification request.
+
+The saved settings are shared across replicas. Changes reach other replicas as their configuration version checks refresh. Requests with Range or conditional headers use the ordinary download path, as do S3/OSS and Azure blobs, in-flight upstream streams, and requests without a matching trusted gateway. Once handed off, file access failures are reported by the gateway. Use its access logs for transfer outcomes and bytes sent.

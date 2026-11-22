@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.routing.ohpm;
 
+import com.github.klboke.kkrepo.server.offload.DownloadOffload;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
@@ -46,6 +47,13 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 
 @Component
 public class OhpmProtocolHandler implements RepositoryProtocolHandler {
+  private DownloadOffload downloadOffload;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  public void setDownloadOffload(DownloadOffload downloadOffload) {
+    this.downloadOffload = downloadOffload;
+  }
+
   private static final Logger log = LoggerFactory.getLogger(OhpmProtocolHandler.class);
   private final OhpmHostedService hosted;
   private final OhpmProxyService proxy;
@@ -220,7 +228,7 @@ public class OhpmProtocolHandler implements RepositoryProtocolHandler {
     return response.body(body);
   }
 
-  private static ResponseEntity<?> read(HttpServletRequest request, MavenResponse response, boolean head) {
+  private ResponseEntity<?> read(HttpServletRequest request, MavenResponse response, boolean head) {
     HttpHeaders headers = new HttpHeaders();
     headers.setContentType(MediaType.parseMediaType(response.contentType()));
     response.headers().forEach(headers::set);
@@ -232,6 +240,10 @@ public class OhpmProtocolHandler implements RepositoryProtocolHandler {
     headers.setContentLength(response.contentLength());
     if (head) return ResponseEntity.status(response.status()).headers(headers).build();
     MavenResponse materialized = response.materializeBody();
+    if (downloadOffload != null
+        && downloadOffload.tryHandoff(request, response.status(), headers, materialized.body())) {
+      return ResponseEntity.status(response.status()).headers(headers).build();
+    }
     return ResponseEntity.status(response.status()).headers(headers).body((StreamingResponseBody) output -> {
       try (var body = materialized.body()) {
         body.transferTo(output);

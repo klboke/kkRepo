@@ -5002,3 +5002,31 @@ code {
   #proxy-batch-dialog th:first-child { width: 39%; }
   #proxy-batch-dialog th:nth-child(2) { width: 29%; }
 }
+
+/* Download offload */
+.offload-settings-fields {
+  border: 0;
+  min-inline-size: 0;
+  padding: 0;
+  margin: 14px 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.offload-request {
+  display: block;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--surface-muted);
+  overflow-wrap: anywhere;
+}
+.offload-store-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.offload-stores { margin: 8px 0 0; overflow-x: auto; }
+.offload-stores .nx-table :is(th, td) { white-space: normal; overflow-wrap: anywhere; }
+.offload-stores .nx-table :is(th, td):first-child { width: 1%; }
+.offload-stores .nx-table input[type="checkbox"] { width: 16px; height: 16px; margin: 0; }
+.offload-deployment-status dd { text-align: right; overflow-wrap: anywhere; }
+.offload-example-code { display: block; width: 100%; margin: 6px 0 10px; resize: vertical; }
+@media (max-width: 560px) {
+  .offload-settings-fields { grid-template-columns: minmax(0, 1fr); }
+}

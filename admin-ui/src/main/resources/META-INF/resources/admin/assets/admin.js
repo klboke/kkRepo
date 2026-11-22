@@ -186,6 +186,7 @@ const viewHashRoutes = {
   "security-audit-log": "#admin/security/audit-log",
   "ui-settings": "#admin/system/ui-settings",
   "proxy-settings": "#admin/system/proxy-settings",
+  "download-offload": "#admin/system/download-offload",
   "nexus-migration": "#admin/migration/nexus",
   "repository-data-migration": "#admin/migration/repository-data",
   "ohpm-import": "#admin/migration/ohpm",
@@ -221,6 +222,7 @@ const hashViewRoutes = {
   "#admin/system": "ui-settings",
   "#admin/system/ui-settings": "ui-settings",
   "#admin/system/proxy-settings": "proxy-settings",
+  "#admin/system/download-offload": "download-offload",
   "#admin/system/ui": "ui-settings",
   "#admin/migration": "nexus-migration",
   "#admin/migration/nexus": "nexus-migration",
@@ -8572,7 +8574,7 @@ function canAdmin(permission) {
 
 function canAccessAdminView(view) {
   if (canAdmin("nexus:*")) return view !== "loading";
-  if (view === "proxy-settings") return canAdmin("nexus:settings:read");
+  if (view === "proxy-settings" || view === "download-offload") return canAdmin("nexus:settings:read");
   if (view === "security-scanning") return canAdmin("nexus:security-scanning:read");
   return view === "content-selectors" && ["read", "create", "update", "delete"]
     .some((action) => canAdmin(`nexus:selectors:${action}`));
@@ -8636,6 +8638,7 @@ function switchView(view, options = {}) {
   if (view === "security-audit-log") loadAuditLogs(0);
   if (view === "ui-settings") loadUiSettings();
   if (view === "proxy-settings") window.KkProxySettings.load();
+  if (view === "download-offload") window.KkDownloadOffload.load();
   if (view === "repository-data-migration") loadRepositoryDataMigrationJobs();
   if (view === "ohpm-import") window.KkOhpmImport.load();
   if (view === "ohpm-login") window.KkOhpmLogin.load();
