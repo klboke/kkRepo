@@ -2213,7 +2213,17 @@
               <div class="form-title">Deployment</div>
               <dl class="proxy-settings-counts offload-deployment-status">
                 <div><dt>Saved configuration</dt><dd id="offload-saved-state"></dd></div>
-                <div><dt>Trusted proxies</dt><dd id="offload-trusted"></dd></div>
+                <div>
+                  <dt class="field-label">
+                    <span>Trusted proxies</span>
+                    <span class="field-help" tabindex="0" role="note"
+                      aria-label="Set KKREPO_DOWNLOAD_OFFLOAD_TRUSTED_PROXIES on each kkRepo replica. Use a comma-separated list of direct proxy IP addresses or CIDR ranges as seen by kkRepo. Restart kkRepo to apply changes."
+                      data-tooltip="Set KKREPO_DOWNLOAD_OFFLOAD_TRUSTED_PROXIES on each kkRepo replica. Use a comma-separated list of direct proxy IP addresses or CIDR ranges as seen by kkRepo. Restart kkRepo to apply changes.">
+                      <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                    </span>
+                  </dt>
+                  <dd id="offload-trusted"></dd>
+                </div>
               </dl>
               <div class="form-actions">
                 <button class="create-button secondary" id="offload-example" type="button" disabled>View deployment example</button>
