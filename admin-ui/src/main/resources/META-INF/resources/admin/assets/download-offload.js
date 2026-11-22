@@ -361,10 +361,21 @@
     el("example-dialog").showModal();
   }
 
+  function setProbeResult(message, tone = "") {
+    const result = el("probe-result");
+    result.classList.remove("ok", "warn", "bad");
+    if (tone) result.classList.add(tone);
+    result.textContent = message;
+  }
+
+  function probeHttpTone(status) {
+    return status >= 400 && status < 500 ? "warn" : "bad";
+  }
+
   function showVerification() {
     const stores = saved.stores.filter(store => saved.storeIds.includes(store.id));
     el("probe-store").replaceChildren(...stores.map(store => option(store.id, store.name)));
-    el("probe-result").textContent = "";
+    setProbeResult("");
     el("verify-dialog").showModal();
   }
 
@@ -372,7 +383,6 @@
     event.preventDefault();
     const id = Number(el("probe-store").value);
     const path = el("probe-path").value.trim();
-    const result = el("probe-result");
     let ownOrigin;
     try {
       ownOrigin = new URL(path, root.location.origin);
@@ -380,7 +390,7 @@
       // Only a valid same-origin path can be probed.
     }
     if (!path.startsWith("/") || ownOrigin?.origin !== root.location.origin || ownOrigin.hash) {
-      result.textContent = t("Enter an artifact path on this server.");
+      setProbeResult(t("Enter an artifact path on this server."), "warn");
       return;
     }
     const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)),
@@ -388,19 +398,34 @@
     const operation = new AbortController();
     probe = operation;
     const revision = saved.revision;
+    const report = (message, tone) => {
+      if (probe === operation && saved.revision === revision && !operation.signal.aborted) {
+        setProbeResult(message, tone);
+      }
+    };
     const options = { redirect: "error", cache: "no-store", signal: operation.signal };
     el("probe-run").disabled = true;
-    result.textContent = t("Verifying download…");
+    setProbeResult(t("Verifying download…"));
     try {
       const head = await fetch(ownOrigin, { ...options, method: "HEAD" });
-      if (head.status !== 200) throw new Error(`${t("Artifact is unavailable")}. HTTP ${head.status}`);
+      if (head.status !== 200) {
+        report(`${t("Artifact is unavailable")}. HTTP ${head.status}`, probeHttpTone(head.status));
+        return;
+      }
       const length = Number(head.headers.get("Content-Length"));
-      if (!Number.isSafeInteger(length) || length <= 0) throw new Error(t("Use a non-empty artifact with a known size."));
+      if (!Number.isSafeInteger(length) || length <= 0) {
+        report(t("Use a non-empty artifact with a known size."), "warn");
+        return;
+      }
       const response = await fetch(ownOrigin, { ...options, headers: { [probeHeader]: nonce } });
-      if (response.status !== 200) throw new Error(`${t("Download failed")}. HTTP ${response.status}`);
+      if (response.status !== 200) {
+        report(`${t("Download failed")}. HTTP ${response.status}`, probeHttpTone(response.status));
+        return;
+      }
       if (response.headers.get(proofHeader) !== `${nonce}:${id}`) {
         await response.body?.cancel();
-        throw new Error(t("Offload was not confirmed for this Blob Store. Check the proxy and artifact path."));
+        report(t("Offload was not confirmed for this Blob Store. Check the proxy and artifact path."), "warn");
+        return;
       }
       const reader = response.body.getReader();
       let received = 0;
@@ -410,11 +435,9 @@
         received += next.value.byteLength;
       }
       if (received !== length) throw new Error(t("The proxy returned an incomplete download."));
-      if (saved.revision !== revision || probe !== operation) return;
-      result.textContent = `${t("Proxy delivery verified")}. ${length.toLocaleString()} ${t("bytes received")}.`;
+      report(`${t("Proxy delivery verified")}. ${length.toLocaleString()} ${t("bytes received")}.`, "ok");
     } catch (error) {
-      if (operation.signal.aborted || saved.revision !== revision || probe !== operation) return;
-      result.textContent = error.message;
+      report(error.message, "bad");
     } finally {
       if (probe === operation) {
         probe = null;

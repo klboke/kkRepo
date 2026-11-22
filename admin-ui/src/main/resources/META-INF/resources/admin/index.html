@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-4">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20261118-format-icons-1">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20261121-route-1">
-    <link rel="stylesheet" href="./assets/admin.css?v=20261122-offload-response-header">
+    <link rel="stylesheet" href="./assets/admin.css?v=20261122-offload-verification-status">
     <link rel="stylesheet" href="/browse/assets/account-menu.css?v=20260824-ui-themes-3">
     <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=20260819-topbar-control-height-1">
     <link rel="stylesheet" href="/login/assets/delete-confirmation.css?v=20261013-delete-confirmation-1">
@@ -2556,14 +2556,16 @@
     </dialog>
     <dialog class="proxy-settings-dialog" id="offload-verify-dialog" aria-labelledby="offload-verify-title">
       <form id="offload-probe-form">
-        <div class="proxy-dialog-header"><h2 id="offload-verify-title">Verify offload</h2></div>
+        <div class="proxy-dialog-header offload-verify-header">
+          <h2 id="offload-verify-title">Verify offload</h2>
+          <p class="state-badge offload-verify-result" id="offload-probe-result" role="status" aria-atomic="true"></p>
+        </div>
         <div class="proxy-dialog-body">
           <p class="form-note">Open this page through the trusted proxy. Use the path of a file you can download from the selected Blob Store.</p>
           <div class="form-grid">
             <label class="full-width"><span>File Blob Store</span><select id="offload-probe-store" required></select></label>
             <label class="full-width"><span>Artifact path</span><input id="offload-probe-path" placeholder="/repository/my-repository/path/to/file" required></label>
           </div>
-          <p class="form-note" id="offload-probe-result" role="status"></p>
         </div>
         <div class="proxy-dialog-footer">
           <button class="create-button secondary" id="offload-probe-close" type="button">Close</button>
@@ -2586,7 +2588,7 @@
     <script src="./assets/user-picker.js?v=20261107-user-picker"></script>
     <script src="./assets/ohpm-login.js?v=20261107-user-picker"></script>
     <script src="./assets/proxy-settings.js?v=20261121-block-outbound"></script>
-    <script src="./assets/download-offload.js?v=20261122-offload-response-header"></script>
+    <script src="./assets/download-offload.js?v=20261122-offload-verification-status"></script>
     <script src="./assets/admin.js?v=20261122-download-offload"></script>
   </body>
 </html>

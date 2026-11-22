@@ -5048,7 +5048,23 @@ code {
 .offload-stores .nx-table input[type="checkbox"] { width: 16px; height: 16px; margin: 0; }
 .offload-deployment-status dd { text-align: right; overflow-wrap: anywhere; }
 .offload-example-code { display: block; width: 100%; margin: 6px 0 10px; resize: vertical; }
+.offload-verify-header {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 16px;
+}
+.offload-verify-result {
+  display: block;
+  height: auto;
+  min-width: 0;
+  padding: 6px 10px;
+  overflow-wrap: anywhere;
+}
+.offload-verify-result:empty { padding: 0; }
 @media (max-width: 560px) {
   .offload-settings-fields,
   .offload-custom-response-fields { grid-template-columns: minmax(0, 1fr); }
+  .offload-verify-header { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .offload-verify-result:not(:empty) { margin-top: 8px; }
 }
