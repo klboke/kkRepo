@@ -92,6 +92,39 @@ class RawRepositoryBlackBoxCompatibilityTest {
   }
 
   @Test
+  void offloadedRawDownloadMatchesNexusWhenConfigured() throws Exception {
+    CompatConfig config = CompatConfig.load();
+    var store = setting("compat.raw.offload.storeId", "COMPAT_RAW_OFFLOAD_STORE_ID");
+    assumeTrue(config.configured() && store.isPresent(),
+        "Configure matching Raw hosted repositories and the selected kkRepo File Blob Store ID");
+
+    Fixture fixture = Fixture.create();
+    String nonce = UUID.randomUUID().toString().replace("-", "");
+    try {
+      assert2xx("Nexus raw fixture", put(config.nexusHosted(), fixture.path(), fixture.body(), "text/plain"));
+      assert2xx("kkRepo raw fixture", put(config.nexusPlusHosted(), fixture.path(), fixture.body(), "text/plain"));
+
+      Exchange standard = get(config.nexusHosted(), fixture.path());
+      var offloaded = HTTP.send(config.nexusPlusHosted().request(fixture.path())
+          .header("X-KkRepo-Offload-Probe", nonce).GET().build(), HttpResponse.BodyHandlers.ofByteArray());
+      assertEquals(standard.status(), offloaded.statusCode());
+      assertArrayEquals(standard.body(), offloaded.body());
+      assertArrayEquals(fixture.body(), offloaded.body());
+      assertEquals(standard.contentLength(), offloaded.headers().firstValue("content-length"));
+      assertEquals(standard.contentDisposition().isPresent(),
+          offloaded.headers().firstValue("content-disposition").isPresent());
+      assertEquals(nonce + ":" + store.orElseThrow(),
+          offloaded.headers().firstValue("X-KkRepo-File-Served").orElseThrow());
+      assertTrue(offloaded.headers().firstValue("X-Accel-Redirect").isEmpty());
+      assertSameStatus("offload hosted HEAD",
+          head(config.nexusHosted(), fixture.path()), head(config.nexusPlusHosted(), fixture.path()));
+    } finally {
+      delete(config.nexusHosted(), fixture.path());
+      delete(config.nexusPlusHosted(), fixture.path());
+    }
+  }
+
+  @Test
   void proxySupportsFreeBsdAbiPathsWhenConfigured() throws Exception {
     CompatConfig config = CompatConfig.load();
     assumeTrue(config.configured() && config.proxyProbePath().startsWith("FreeBSD:"),

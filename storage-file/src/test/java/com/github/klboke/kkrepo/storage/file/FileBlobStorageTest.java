@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.github.klboke.kkrepo.core.BlobFileRegion;
+import com.github.klboke.kkrepo.core.BlobOffloadSource;
 import com.github.klboke.kkrepo.core.BlobRangeReader;
 import com.github.klboke.kkrepo.core.BlobReference;
 import com.github.klboke.kkrepo.storage.file.admin.FileBlobStoreAdmin;
@@ -73,6 +74,27 @@ class FileBlobStorageTest {
     storage.delete(reference);
 
     assertFalse(storage.exists(reference));
+  }
+
+  @Test
+  void offloadRequiresAFullFileWithinTheStoreAndMatchingSize() throws Exception {
+    var storage = new FileBlobStorage(new FileBlobStoreConfig(8, "disk", "default", tempDir));
+    byte[] bytes = {1, 2, 3};
+    var reference = storage.put("releases", "fixture.bin", new ByteArrayInputStream(bytes), bytes.length, "abc");
+    try (var full = storage.get(reference).orElseThrow();
+         var range = storage.getRange(reference, 0, bytes.length).orElseThrow()) {
+      var source = (BlobOffloadSource) full;
+      assertEquals(new BlobOffloadSource.Target(8, reference.objectKey()),
+          source.offloadTarget(bytes.length).orElseThrow());
+      assertTrue(source.offloadTarget(2).isEmpty());
+      assertTrue(((BlobOffloadSource) range).offloadTarget(bytes.length).isEmpty());
+      Path file = ((BlobFileRegion) full).path();
+      Path other = Files.write(tempDir.resolve("different-file"), bytes);
+      Files.delete(file);
+      assertTrue(source.offloadTarget(bytes.length).isEmpty());
+      Files.createSymbolicLink(file, other);
+      assertTrue(source.offloadTarget(bytes.length).isEmpty());
+    }
   }
 
   @Test

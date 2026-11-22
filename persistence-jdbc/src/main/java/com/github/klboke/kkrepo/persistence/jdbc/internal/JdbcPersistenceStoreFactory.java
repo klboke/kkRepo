@@ -32,6 +32,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.OhpmLoginDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.OhpmRepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceStoreFactory;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceStores;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DownloadOffloadSettingsDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.OutboundProxySettingsDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
@@ -112,7 +113,8 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
         new JdbcSwiftRegistryDao(jdbc, json, dialect),
         new JdbcTerraformRegistryDao(jdbc),
         new JdbcUiSettingsDao(jdbc),
-        new JdbcOutboundProxySettingsDao(jdbc));
+        new JdbcOutboundProxySettingsDao(jdbc),
+        new JdbcDownloadOffloadSettingsDao(jdbc));
   }
 
   private record DefaultPersistenceStores(
@@ -158,6 +160,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
       SwiftRegistryDao swiftRegistry,
       TerraformRegistryDao terraformRegistry,
       UiSettingsDao uiSettings,
-      OutboundProxySettingsDao outboundProxySettings) implements PersistenceStores {
+      OutboundProxySettingsDao outboundProxySettings,
+      DownloadOffloadSettingsDao downloadOffloadSettings) implements PersistenceStores {
   }
 }
