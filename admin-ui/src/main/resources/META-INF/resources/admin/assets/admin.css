@@ -1889,6 +1889,7 @@ textarea:focus-visible {
 .nx-content {
   background: #ffffff;
   min-height: 0;
+  --settings-heading-gap: 16px;
 }
 
 .page-heading {
@@ -1906,7 +1907,7 @@ textarea:focus-visible {
 }
 
 .system-settings-view > .page-heading {
-  margin-block-end: 16px;
+  margin-block-end: var(--settings-heading-gap);
 }
 
 .heading-icon {
@@ -3451,7 +3452,7 @@ code {
   grid-template-columns: minmax(0, 13fr) minmax(300px, 7fr);
   align-items: start;
   gap: 16px;
-  margin: 16px 24px 24px;
+  margin: var(--settings-heading-gap) 24px 24px;
 }
 
 .security-provider-form {
@@ -3706,9 +3707,13 @@ code {
 }
 
 @media (max-width: 720px) {
+  .nx-content {
+    --settings-heading-gap: 12px;
+  }
+
   .security-provider-workspace {
     width: calc(100% - 24px);
-    margin: 12px 12px 18px;
+    margin: var(--settings-heading-gap) 12px 18px;
   }
 
   .security-provider-section-grid,
