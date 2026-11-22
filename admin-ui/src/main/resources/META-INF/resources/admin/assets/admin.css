@@ -1905,6 +1905,10 @@ textarea:focus-visible {
   background: #ffffff;
 }
 
+.system-settings-view > .page-heading {
+  margin-block-end: 16px;
+}
+
 .heading-icon {
   display: inline-grid;
   width: 36px;
