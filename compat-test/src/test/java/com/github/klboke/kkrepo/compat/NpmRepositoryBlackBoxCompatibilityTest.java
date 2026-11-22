@@ -549,8 +549,19 @@ class NpmRepositoryBlackBoxCompatibilityTest {
             assertEquals(200, fresh.status());
             assertEquals(fresh.status(), cached.status());
             assertEquals(fresh.contentType(), cached.contentType());
-            assertArrayEquals(fresh.body(), cached.body(), "cached group metadata changed for " + accept);
-            String groupPath = tarballPath(group, MAPPER.readValue(cached.body(), MAP_TYPE), fixture.version());
+            Map<String, Object> cachedRoot = MAPPER.readValue(cached.body(), MAP_TYPE);
+            if (nexus) {
+              Map<String, Object> freshRoot = MAPPER.readValue(fresh.body(), MAP_TYPE);
+              if ("application/json".equals(accept)) {
+                // Nexus 3.94 emits the hosted _id on the first full group read only.
+                freshRoot.remove("_id");
+                cachedRoot.remove("_id");
+              }
+              assertEquals(freshRoot, cachedRoot, "Nexus cached group metadata changed for " + accept);
+            } else {
+              assertArrayEquals(fresh.body(), cached.body(), "kkRepo cached group metadata changed for " + accept);
+            }
+            String groupPath = tarballPath(group, cachedRoot, fixture.version());
             assertEquals(path, groupPath, "cached group metadata must retain the attachment path");
             Exchange groupDownload = get(group, groupPath);
             assertEquals(200, groupDownload.status());
