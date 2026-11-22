@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.offload;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -10,6 +11,7 @@ import static org.mockito.Mockito.when;
 import com.github.klboke.kkrepo.core.BlobOffloadSource;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
@@ -112,6 +114,42 @@ class DownloadOffloadTest {
     assertEquals(NONCE + ":12", result.getHeader("X-KkRepo-File-Served"));
   }
 
+  @Test
+  void protectsProxyInstructionsWrittenWithIntegerHeaderMethods() throws Exception {
+    var filter = new DownloadOffloadResponseFilter(settings);
+    var request = request("custom; header=X-Gateway-File", true);
+    var response = new MockHttpServletResponse();
+
+    filter.doFilter(request, response, (req, res) -> {
+      var wire = (jakarta.servlet.http.HttpServletResponse) res;
+      wire.setIntHeader("X-Accel-Redirect", 1);
+      wire.addIntHeader("X-KkRepo-File-Served", 2);
+      wire.setIntHeader("X-Ordinary", 3);
+      wire.addIntHeader("X-Ordinary", 4);
+    });
+
+    assertNull(response.getHeader("X-Accel-Redirect"));
+    assertNull(response.getHeader("X-KkRepo-File-Served"));
+    assertEquals(java.util.List.of("3", "4"), response.getHeaders("X-Ordinary"));
+  }
+
+  @Test
+  void doesNotIssueAHandoffWhenTheOriginalBodyCannotBeClosed() {
+    var request = request("nginx", true);
+    select("nginx", Set.of(12L), true);
+    var headers = headers();
+    var badStream = new FileInput(12, KEY) {
+      @Override
+      public void close() throws IOException {
+        throw new IOException("test close failure");
+      }
+    };
+
+    assertThrows(UncheckedIOException.class, () -> offload.tryHandoff(request, 200, headers, badStream));
+    assertNull(headers.getFirst("X-Accel-Redirect"));
+    assertEquals(3, headers.getContentLength());
+  }
+
   private static HttpHeaders headers() {
     var headers = new HttpHeaders();
     headers.setETag("\"file-etag\"");
@@ -139,7 +177,7 @@ class DownloadOffloadTest {
     assertEquals(3, headers.getContentLength());
   }
 
-  private static final class FileInput extends ByteArrayInputStream implements BlobOffloadSource {
+  private static class FileInput extends ByteArrayInputStream implements BlobOffloadSource {
     private final Target target;
     private boolean closed;
 

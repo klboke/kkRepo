@@ -91,6 +91,7 @@ class FileBlobStorageTest {
       Path file = ((BlobFileRegion) full).path();
       Path other = Files.write(tempDir.resolve("different-file"), bytes);
       Files.delete(file);
+      assertTrue(source.offloadTarget(bytes.length).isEmpty());
       Files.createSymbolicLink(file, other);
       assertTrue(source.offloadTarget(bytes.length).isEmpty());
     }

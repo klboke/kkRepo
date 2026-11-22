@@ -2,11 +2,13 @@ package com.github.klboke.kkrepo.server.offload;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
@@ -18,6 +20,7 @@ import com.github.klboke.kkrepo.server.cache.VersionWatermark;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DataAccessResourceFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.server.ResponseStatusException;
@@ -69,6 +72,39 @@ class DownloadOffloadSettingsTest {
     assertFalse(settings.trusted(request));
     request.setRemoteAddr("10.20.0.10");
     assertTrue(settings.trusted(request));
+  }
+
+  @Test
+  void rejectsMalformedSettingsBeforeWritingOrBumpingTheVersion() {
+    var invalidCommands = List.of(
+        new DownloadOffloadSettings.Command(null, true, "nginx", "X-KkRepo-File", "internal-uri", List.of(12L)),
+        new DownloadOffloadSettings.Command(0L, true, "unknown", "X-KkRepo-File", "internal-uri", List.of(12L)),
+        new DownloadOffloadSettings.Command(0L, true, "custom", null, "internal-uri", List.of(12L)),
+        new DownloadOffloadSettings.Command(0L, true, "custom", "X-KkRepo-File", "relative", List.of(12L)),
+        new DownloadOffloadSettings.Command(0L, true, "nginx", "X-KkRepo-File", "internal-uri",
+            java.util.Collections.singletonList(null)));
+    for (var command : invalidCommands) {
+      var badRequest = assertThrows(ResponseStatusException.class, () -> settings.save(command));
+      assertEquals(HttpStatus.BAD_REQUEST, badRequest.getStatusCode());
+    }
+    verifyNoInteractions(dao, versions);
+  }
+
+  @Test
+  void temporarilyDeclinesHandoffWhenTheSettingsStoreIsUnavailable() {
+    when(versions.current(DownloadOffloadSettings.VERSION)).thenReturn(1L);
+    when(dao.read()).thenThrow(new DataAccessResourceFailureException("test database unavailable"))
+        .thenReturn(new Settings(1, true, "nginx", "X-KkRepo-File", "internal-uri", List.of(12L)));
+
+    assertNull(settings.runtime());
+    assertTrue(settings.runtime().enabled());
+  }
+
+  @Test
+  void rejectsMissingAndInvalidCustomHeaderNames() {
+    assertFalse(DownloadOffloadMethod.validCustomHeader(null));
+    assertFalse(DownloadOffloadMethod.validCustomHeader("Bad Header"));
+    assertTrue(DownloadOffloadMethod.validCustomHeader("X-KkRepo-File"));
   }
 
   private static DownloadOffloadSettings.Command command(long id, String header) {
