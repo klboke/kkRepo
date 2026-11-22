@@ -8,9 +8,9 @@
     <link id="kkrepo-theme-stylesheet" rel="stylesheet" href="/browse/assets/themes/default.css?v=20260826-nexus-a11y-1">
     <script src="/login/assets/ui-theme.js?v=20260826-nexus-a11y-1"></script>
   <link rel="stylesheet" href="/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-4">
-    <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20261009-gitlfs-2">
-    <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20260818-user-round-1">
-    <link rel="stylesheet" href="./assets/admin.css?v=20261107-user-picker">
+    <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20261118-format-icons-1">
+    <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20261121-route-1">
+    <link rel="stylesheet" href="./assets/admin.css?v=20261122-offload-verification-status">
     <link rel="stylesheet" href="/browse/assets/account-menu.css?v=20260824-ui-themes-3">
     <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=20260819-topbar-control-height-1">
     <link rel="stylesheet" href="/login/assets/delete-confirmation.css?v=20261013-delete-confirmation-1">
@@ -112,6 +112,8 @@
             <span class="side-group-label">System</span>
           </button>
           <div class="side-group-items" id="side-group-system-items" data-side-group-items="system">
+            <button class="side-item" data-view="proxy-settings" type="button"><span class="side-item-icon lucide-icon icon-route" aria-hidden="true"></span><span>Proxy Settings</span></button>
+            <button class="side-item" data-view="download-offload" type="button"><span class="side-item-icon lucide-icon icon-download" aria-hidden="true"></span><span>Download Offload</span></button>
             <button class="side-item" data-view="ui-settings" type="button"><span class="side-item-icon lucide-icon icon-sliders-horizontal" aria-hidden="true"></span><span>UI Settings</span></button>
           </div>
           <button class="side-group is-open" data-side-group="migration" type="button" aria-expanded="true" aria-controls="side-group-migration-items">
@@ -258,14 +260,15 @@
             <fieldset class="form-grid" id="repository-proxy-fields" hidden>
               <legend>Proxy settings</legend>
               <label class="full-width"><span>Routing Rule</span><select id="repository-routing-rule"><option value="">None</option></select><span id="repository-routing-rule-status" role="status"></span></label>
-              <p class="form-note full-width" id="repository-swift-proxy-note" hidden>
-                Swift proxy follows the Nexus-compatible GitHub source mode. The remote is fixed to
-                https://github.com/; use the username/token fields for private GitHub repositories.
-                Production SwiftPM clients should always connect to kkrepo over HTTPS.
-              </p>
               <label>
-                <span>Remote URL <span class="required-mark">*</span></span>
-                <input id="repository-remote-url" type="url" placeholder="https://repo.maven.apache.org/maven2/">
+                <span class="field-label"><span id="repository-remote-url-label">Remote URL <span class="required-mark">*</span></span>
+                  <span id="repository-swift-proxy-help" class="field-help" tabindex="0" role="note" hidden
+                    aria-label="Swift proxy follows the Nexus-compatible GitHub source mode. The remote is fixed to https://github.com/; use the username/token fields for private GitHub repositories. Production SwiftPM clients should always connect to kkrepo over HTTPS."
+                    data-tooltip="Swift proxy follows the Nexus-compatible GitHub source mode. The remote is fixed to https://github.com/; use the username/token fields for private GitHub repositories. Production SwiftPM clients should always connect to kkrepo over HTTPS.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <input id="repository-remote-url" type="url" aria-labelledby="repository-remote-url-label" placeholder="https://repo.maven.apache.org/maven2/">
               </label>
               <label id="repository-pypi-index-path-field" hidden>
                 <span class="field-label">Remote Index Path
@@ -317,33 +320,51 @@
                 <input id="repository-remote-bearer-token" type="password" autocomplete="new-password">
               </label>
               <label>
-                <span>Content max age (min)</span>
-                <input id="repository-content-max-age" type="number" min="-1" value="1440">
+                <span class="field-label"><span id="repository-content-max-age-label">Content max age (min)</span>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="How long cached artifact files (such as JARs and tarballs) stay fresh before checking upstream on request. 1440 minutes = 24 hours. Where supported, 0 makes the cache immediately stale and -1 skips age-based checks."
+                    data-tooltip="How long cached artifact files (such as JARs and tarballs) stay fresh before checking upstream on request. 1440 minutes = 24 hours. Where supported, 0 makes the cache immediately stale and -1 skips age-based checks.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <input id="repository-content-max-age" type="number" min="-1" value="1440" aria-labelledby="repository-content-max-age-label">
               </label>
               <label>
-                <span>Metadata max age (min)</span>
-                <input id="repository-metadata-max-age" type="number" min="-1" value="1440">
+                <span class="field-label"><span id="repository-metadata-max-age-label">Metadata max age (min)</span>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="How long cached metadata (such as package indexes and version lists) stays fresh before checking upstream on request. 1440 minutes = 24 hours. Where supported, 0 makes the cache immediately stale and -1 skips age-based checks."
+                    data-tooltip="How long cached metadata (such as package indexes and version lists) stays fresh before checking upstream on request. 1440 minutes = 24 hours. Where supported, 0 makes the cache immediately stale and -1 skips age-based checks.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <input id="repository-metadata-max-age" type="number" min="-1" value="1440" aria-labelledby="repository-metadata-max-age-label">
               </label>
               <label id="repository-minimum-release-age-field" hidden>
-                <span>Minimum release age (min)</span>
-                <input id="repository-minimum-release-age" type="number" min="0" value="0">
+                <span class="field-label"><span id="repository-minimum-release-age-label">Minimum release age (min)</span>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="Use 0 to disable. Until a release reaches this age, it is hidden from metadata and downloads return 403 (404 for npm). For example, 2880 means 48 hours. This is independent of cache age. Missing or invalid release times are blocked. Go uses commit time, which is a weaker signal than publication time. Maven SNAPSHOTs are exempt. PyPI upstreams must provide PEP 700 upload times. Applies to npm, Go, Maven and PyPI proxies."
+                    data-tooltip="Use 0 to disable. Until a release reaches this age, it is hidden from metadata and downloads return 403 (404 for npm). For example, 2880 means 48 hours. This is independent of cache age. Missing or invalid release times are blocked. Go uses commit time, which is a weaker signal than publication time. Maven SNAPSHOTs are exempt. PyPI upstreams must provide PEP 700 upload times. Applies to npm, Go, Maven and PyPI proxies.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <input id="repository-minimum-release-age" type="number" min="0" value="0" aria-labelledby="repository-minimum-release-age-label">
               </label>
-              <p class="form-note full-width" id="repository-minimum-release-age-note" hidden>
-                npm, Go, Maven and PyPI proxies only. A version is hidden from package metadata and
-                its artifacts are blocked (403 for Go, Maven and PyPI; 404 for npm) until this many
-                minutes have passed since publication, for example 2880 for 48 hours.
-                Use 0 to disable this policy and preserve existing behavior.
-                This is independent of content and metadata cache max age.
-                Versions with a missing or invalid publish time are blocked while enabled.
-                Go measures the commit time of a version, not when it was published, so it is a
-                weaker guard than the other formats.
-                Maven SNAPSHOT versions are exempt. PyPI upstreams must publish PEP 700
-                upload times (for example pypi.org).
-              </p>
+              <div class="checkbox-with-help" id="repository-streaming-field">
+                <label class="checkbox-field"><input id="repository-streaming-enabled" type="checkbox"><span>Allow streaming downloads</span></label>
+                <span class="field-help" tabindex="0" role="note" aria-label="Send supported uncached artifacts while downloading, then cache the complete validated file. Requests requiring whole-file inspection or security scanning remain buffered. Partial downloads are not cached." data-tooltip="Send supported uncached artifacts while downloading, then cache the complete validated file. Requests requiring whole-file inspection or security scanning remain buffered. Partial downloads are not cached."><span class="lucide-icon icon-info" aria-hidden="true"></span></span>
+              </div>
               <label class="checkbox-field">
                 <input id="repository-auto-block" type="checkbox" checked>
                 <span>Auto-block remote</span>
               </label>
+              <div class="checkbox-with-help" id="repository-block-outbound-field" hidden>
+                <label class="checkbox-field"><input id="repository-block-outbound" type="checkbox"><span>Block outbound connections</span></label>
+                <span class="field-help" tabindex="0" role="note"
+                  aria-label="Stop contacting the remote repository and serve only eligible cached content."
+                  data-tooltip="Stop contacting the remote repository and serve only eligible cached content.">
+                  <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                </span>
+              </div>
               <label class="checkbox-field">
                 <input id="repository-remote-password-clear" type="checkbox">
                 <span>Clear saved password</span>
@@ -355,15 +376,23 @@
             </fieldset>
             <fieldset class="form-grid" id="repository-outbound-proxy-fields" hidden>
               <legend>Outbound network proxy</legend>
-              <p class="form-note full-width">
-                Route upstream fetches for this proxy repository through an HTTP or SOCKS proxy
-                (e.g. a corporate Clash on the LAN). Useful when the remote registry (hub.docker.com,
-                pypi.org, ...) is unreachable from the server.
-              </p>
+              <label class="full-width outbound-proxy-mode"><span>Proxy mode</span>
+                <select id="repository-outbound-proxy-mode">
+                  <option value="DIRECT">Direct connection</option>
+                  <option value="INHERIT">Use system settings</option>
+                  <option value="OVERRIDE">Use repository settings</option>
+                </select>
+              </label>
               <label>
-                <span>Proxy type</span>
-                <select id="repository-outbound-proxy-type">
-                  <option value="">Direct (no proxy)</option>
+                <span class="field-label"><span id="repository-outbound-proxy-type-label">Proxy type</span>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="Route upstream fetches for this proxy repository through an HTTP or SOCKS proxy (e.g. a corporate Clash on the LAN). Useful when the remote registry (hub.docker.com, pypi.org, ...) is unreachable from the server."
+                    data-tooltip="Route upstream fetches for this proxy repository through an HTTP or SOCKS proxy (e.g. a corporate Clash on the LAN). Useful when the remote registry (hub.docker.com, pypi.org, ...) is unreachable from the server.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <select id="repository-outbound-proxy-type" aria-labelledby="repository-outbound-proxy-type-label">
+                  <option value="" disabled>Not configured</option>
                   <option value="HTTP">HTTP</option>
                   <option value="SOCKS">SOCKS</option>
                 </select>
@@ -392,12 +421,13 @@
               </label>
             </fieldset>
             <fieldset class="form-grid" id="repository-docker-fields" hidden>
-              <legend>Docker connector</legend>
-              <p class="form-note full-width">
-                Optional compatibility entrypoint for repository-specific Docker traffic. Leave it disabled to use
-                path-based Docker routing on the main service port; enable it only when clients need a dedicated
-                /v2/ port or isolated upload/download traffic.
-              </p>
+              <legend><span class="field-label"><span>Docker connector</span>
+                <span class="field-help" tabindex="0" role="note"
+                  aria-label="Optional compatibility entrypoint for repository-specific Docker traffic. Leave it disabled to use path-based Docker routing on the main service port; enable it only when clients need a dedicated /v2/ port or isolated upload/download traffic."
+                  data-tooltip="Optional compatibility entrypoint for repository-specific Docker traffic. Leave it disabled to use path-based Docker routing on the main service port; enable it only when clients need a dedicated /v2/ port or isolated upload/download traffic.">
+                  <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                </span>
+              </span></legend>
               <label class="checkbox-field">
                 <input id="repository-docker-connector-enabled" type="checkbox">
                 <span>Enable HTTP connector</span>
@@ -406,21 +436,49 @@
                 <span>Connector port <span class="required-mark">*</span></span>
                 <input id="repository-docker-connector-port" type="number" min="1" max="65535" placeholder="5000">
               </label>
+              <label class="checkbox-field">
+                <input id="repository-docker-https-enabled" type="checkbox">
+                <span>Enable HTTPS connector</span>
+              </label>
+              <label>
+                <span>HTTPS connector port <span class="required-mark">*</span></span>
+                <input id="repository-docker-https-port" type="number" min="1" max="65535" placeholder="5443">
+              </label>
               <label class="full-width">
-                <span>Public URL</span>
+                <span class="field-label"><span>TLS configuration</span>
+                  <span id="docker-tls-help" class="field-help" tabindex="0" role="note"
+                    aria-label="Configure the certificate chain and private key on every kkRepo node, then restart. For a PEM configuration named registry, set spring.ssl.bundle.pem.registry.keystore.certificate and spring.ssl.bundle.pem.registry.keystore.private-key to the certificate and key file paths, then enter registry here. Leave this field empty only when KKREPO_TLS_DEFAULT_BUNDLE (or server.ssl.bundle) names a configured bundle. Certificates are configured on the server, not uploaded in this form."
+                    data-tooltip="Configure the certificate chain and private key on every kkRepo node, then restart. For a PEM configuration named registry, set spring.ssl.bundle.pem.registry.keystore.certificate and spring.ssl.bundle.pem.registry.keystore.private-key to the certificate and key file paths, then enter registry here. Leave this field empty only when KKREPO_TLS_DEFAULT_BUNDLE (or server.ssl.bundle) names a configured bundle. Certificates are configured on the server, not uploaded in this form.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <input id="repository-docker-tls-bundle" list="docker-tls-bundles" placeholder="Default TLS configuration">
+                <datalist id="docker-tls-bundles"></datalist>
+              </label>
+              <label class="full-width">
+                <span class="field-label"><span>Public URL</span>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="Optional shared external registry URL for both connectors, including a reverse-proxy address. Used in displayed URLs, copied Docker commands, and upload Location responses. It must be reachable by clients using either connector. HTTP and HTTPS can both listen on different ports. When empty, responses follow the request address; displayed URLs prefer HTTPS when enabled."
+                    data-tooltip="Optional shared external registry URL for both connectors, including a reverse-proxy address. Used in displayed URLs, copied Docker commands, and upload Location responses. It must be reachable by clients using either connector. HTTP and HTTPS can both listen on different ports. When empty, responses follow the request address; displayed URLs prefer HTTPS when enabled.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
                 <input id="repository-docker-connector-public-url" type="url" placeholder="https://registry.example.com">
               </label>
             </fieldset>
             <fieldset class="form-grid" id="repository-cargo-fields" hidden>
               <legend>Cargo settings</legend>
-              <p class="form-note full-width">
-                Controls the Cargo registry `auth-required` client hint. Repository access is still decided by
-                anonymous settings and security privileges.
-              </p>
-              <label class="checkbox-field">
-                <input id="repository-cargo-require-authentication" type="checkbox">
-                <span>Authentication requirements</span>
-              </label>
+              <div class="checkbox-with-help">
+                <label class="checkbox-field">
+                  <input id="repository-cargo-require-authentication" type="checkbox">
+                  <span>Authentication requirements</span>
+                </label>
+                <span class="field-help" tabindex="0" role="note"
+                  aria-label="Controls the Cargo registry `auth-required` client hint. Repository access is still decided by anonymous settings and security privileges."
+                  data-tooltip="Controls the Cargo registry `auth-required` client hint. Repository access is still decided by anonymous settings and security privileges.">
+                  <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                </span>
+              </div>
             </fieldset>
             <fieldset class="form-grid" id="repository-conan-limits" hidden>
               <legend>Conan 2 settings</legend>
@@ -472,8 +530,14 @@
                 <input id="repository-apt-architectures" type="text" value="amd64" placeholder="amd64, arm64">
               </label>
               <label>
-                <span>Metadata mode</span>
-                <select id="repository-apt-metadata-mode">
+                <span class="field-label"><span id="repository-apt-metadata-mode-label">Metadata mode</span>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="Hosted repositories always publish atomically signed Release/InRelease metadata. Proxy passthrough preserves upstream bytes; re-signing publishes only packages that have been completely cached and checksum-verified."
+                    data-tooltip="Hosted repositories always publish atomically signed Release/InRelease metadata. Proxy passthrough preserves upstream bytes; re-signing publishes only packages that have been completely cached and checksum-verified.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <select id="repository-apt-metadata-mode" aria-labelledby="repository-apt-metadata-mode-label">
                   <option value="PASSTHROUGH">Passthrough upstream signatures</option>
                   <option value="RESIGN">Verify cache and sign locally</option>
                 </select>
@@ -498,11 +562,6 @@
                 <input id="repository-apt-enforce-distribution" type="checkbox">
                 <span>Enforce configured distribution</span>
               </label>
-              <p class="form-note full-width" id="repository-apt-mode-note">
-                Hosted repositories always publish atomically signed Release/InRelease metadata.
-                Proxy passthrough preserves upstream bytes; re-signing publishes only packages that
-                have been completely cached and checksum-verified.
-              </p>
               <div class="full-width" id="repository-apt-operations" hidden>
                 <div class="muted-row" id="repository-apt-status">APT status not loaded.</div>
                 <div class="form-actions">
@@ -524,7 +583,7 @@
               </div>
             </fieldset>
             <fieldset class="form-grid" id="repository-alpine-fields" hidden>
-              <legend>Alpine / APK v2 settings</legend>
+              <legend>APK / Alpine settings (APK v2)</legend>
               <label>
                 <span>Distributions <span class="required-mark">*</span></span>
                 <input id="repository-alpine-distributions" type="text" value="v3.23" placeholder="v3.23, edge">
@@ -538,8 +597,14 @@
                 <input id="repository-alpine-architectures" type="text" value="x86_64, aarch64" placeholder="x86_64, aarch64">
               </label>
               <label>
-                <span>Metadata mode</span>
-                <select id="repository-alpine-metadata-mode">
+                <span class="field-label"><span id="repository-alpine-metadata-mode-label">Metadata mode</span>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="Serves APK v2 APKINDEX.tar.gz. Hosted and group repositories publish fenced, atomic signed snapshots. Proxy passthrough preserves upstream bytes. Re-signing requires an upstream public key in Upstream trust entry."
+                    data-tooltip="Serves APK v2 APKINDEX.tar.gz. Hosted and group repositories publish fenced, atomic signed snapshots. Proxy passthrough preserves upstream bytes. Re-signing requires an upstream public key in Upstream trust entry.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </span>
+                <select id="repository-alpine-metadata-mode" aria-labelledby="repository-alpine-metadata-mode-label">
                   <option value="PASSTHROUGH">Passthrough upstream signature</option>
                   <option value="RESIGN">Verify and sign locally</option>
                 </select>
@@ -572,11 +637,6 @@
                 <span>Upstream trust entry</span>
                 <textarea id="repository-alpine-upstream-public-key" rows="5" autocomplete="off" placeholder="filename=upstream.rsa.pub&#10;-----BEGIN PUBLIC KEY-----"></textarea>
               </label>
-              <p class="form-note full-width">
-                This generation serves APK v2 <code>APKINDEX.tar.gz</code>. Hosted and group
-                repositories publish fenced, atomic signed snapshots. Proxy passthrough preserves
-                upstream bytes; re-signing requires the upstream public key above.
-              </p>
               <div class="full-width" id="repository-alpine-operations" hidden>
                 <div class="muted-row" id="repository-alpine-status">Alpine status not loaded.</div>
                 <div class="form-actions">
@@ -670,12 +730,12 @@
 
         <section class="view fixed-table-view" id="routing-rules-view">
           <div class="page-heading"><span class="heading-icon"><span class="lucide-icon icon-list-filter" aria-hidden="true"></span></span><h1>Routing Rules</h1><span class="heading-copy">Control which paths proxy repositories can serve</span></div>
-          <div class="action-bar">
+          <div class="action-bar action-bar-with-note">
             <button class="create-button" id="routing-rule-create" type="button">Create rule</button>
             <button class="create-button secondary" id="routing-rule-refresh" type="button">Refresh</button>
             <label class="filter-box"><input id="routing-rule-filter" type="search" placeholder="Filter routing rules" aria-label="Filter routing rules"></label>
+            <p class="form-note action-bar-note">Assign a rule in a proxy repository’s settings. Rules also apply to cached content and requests through groups.</p>
           </div>
-          <p class="form-note">Assign a rule in a proxy repository’s settings. Rules also apply to cached content and requests through groups.</p>
           <p id="routing-rule-status" role="status" aria-live="polite"></p>
           <div class="nx-table-frame fixed-table-frame"><table class="nx-table"><thead><tr><th>Name</th><th>Mode</th><th>Matchers</th><th>Description</th><th class="actions-column">Actions</th></tr></thead><tbody id="routing-rule-table"></tbody></table></div>
           <div class="form-modal" id="routing-rule-form-modal" data-form-id="routing-rule-form" role="dialog" aria-modal="true" aria-labelledby="routing-rule-form-title" hidden>
@@ -708,11 +768,11 @@
             <span class="heading-icon"><span class="lucide-icon icon-list-filter" aria-hidden="true"></span></span>
             <h1>Content Selectors</h1><span class="heading-copy">Grant access to selected repository content</span>
           </div>
-          <div class="action-bar">
+          <div class="action-bar action-bar-with-note">
             <button class="create-button" id="selector-create" type="button" disabled>Create selector</button>
             <button class="create-button secondary" id="selector-refresh" type="button">Refresh</button>
             <label class="filter-box"><input id="selector-filter" type="search" placeholder="Filter selectors" aria-label="Filter selectors"></label>
-            <p class="form-note selector-access-note">Selector privileges add access. Broader repository grants, including inherited roles, still apply.</p>
+            <p class="form-note action-bar-note">Selector privileges add access. Broader repository grants, including inherited roles, still apply.</p>
           </div>
           <p id="selector-status" role="status" aria-live="polite"></p>
           <div class="nx-table-frame fixed-table-frame">
@@ -1154,9 +1214,14 @@
               <label><span>Email</span><input id="security-user-email" type="email"></label>
               <label><span>Status</span><select id="security-user-status"><option value="ACTIVE">ACTIVE</option><option value="DISABLED">DISABLED</option></select></label>
               <label><span>Password</span><input id="security-user-password" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing"></label>
+              <section id="security-user-external-section" class="full-width role-transfer-section" hidden>
+                <div class="role-transfer-title">External roles <span class="state-badge compact">read-only</span></div>
+                <div id="security-user-external-roles" class="security-role-badges"></div>
+                <p class="field-note">Roles assigned by the identity provider at the user's last sign-in.</p>
+              </section>
               <input id="security-user-roles" type="hidden">
               <div class="full-width role-transfer-section">
-                <div class="role-transfer-title">Roles</div>
+                <div class="role-transfer-title">Local roles</div>
                 <div class="member-transfer role-transfer" id="user-role-transfer">
                   <div class="member-pane" data-side="available">
                     <div class="member-pane-head">
@@ -1265,10 +1330,22 @@
                   </div>
                 </div>
               </div>
+              <section class="full-width role-transfer-section" aria-labelledby="security-role-mappings-title">
+                <div class="role-transfer-title field-label">
+                  <span id="security-role-mappings-title">External mappings (LDAP/OIDC)</span>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="About external role mappings"
+                    data-tooltip="Map an exact external role or group name to this role. For browser sessions, LDAP and OIDC group membership changes apply after the user signs in again. Changes to kkRepo mappings apply on the next request."><span class="lucide-icon icon-info" aria-hidden="true"></span></span>
+                </div>
+                <div id="security-role-mappings" class="security-role-mappings"></div>
+                <div><button class="create-button secondary" id="add-security-role-mapping" type="button">Add mapping</button></div>
+              </section>
               <label class="checkbox-field" id="security-role-readonly-field" hidden><input id="security-role-readonly" type="checkbox" disabled><span>Read only</span></label>
             </div>
             <div class="form-actions">
               <button class="create-button" id="save-security-role-button" type="button">Save role</button>
+              <button class="create-button secondary" id="edit-security-role-mappings" type="button" hidden>Edit mappings</button>
+              <button class="create-button secondary" id="view-security-role-users" type="button" hidden>View users with this role</button>
               <button class="create-button secondary" id="cancel-security-role-button" type="button">Cancel</button>
             </div>
           </form>
@@ -1276,7 +1353,7 @@
           </div>
           <div class="nx-table-frame">
             <table class="nx-table">
-              <thead><tr><th>Role ID</th><th>Name</th><th>Description</th><th class="actions-column">Actions</th></tr></thead>
+              <thead><tr><th>Role ID</th><th>Name</th><th>Description</th><th>External mappings (LDAP/OIDC)</th><th class="actions-column">Actions</th></tr></thead>
               <tbody id="security-role-table"></tbody>
             </table>
           </div>
@@ -1356,6 +1433,10 @@
                       <span>Enabled</span>
                     </label>
                     <label><span>Priority</span><input id="security-ldap-priority" type="number" value="10"></label>
+                  <label class="checkbox-field security-provider-toggle-field">
+                    <input id="security-ldap-legacy-role-matching" type="checkbox">
+                    <span>Allow same-name roles without an explicit mapping</span>
+                  </label>
                     <div class="security-provider-source" aria-label="Source LDAP, system managed">
                       <span>Source</span>
                       <div class="security-provider-source-value"><strong>LDAP</strong><small>System managed</small></div>
@@ -1459,6 +1540,10 @@
                     <span>Enabled</span>
                   </label>
                   <label><span>Priority</span><input id="security-oidc-priority" type="number" value="20"></label>
+                  <label class="checkbox-field security-provider-toggle-field">
+                    <input id="security-oidc-legacy-role-matching" type="checkbox">
+                    <span>Allow same-name roles without an explicit mapping</span>
+                  </label>
                   <div class="security-provider-source" aria-label="Source OIDC, system managed">
                     <span>Source</span>
                     <div class="security-provider-source-value"><strong>OIDC</strong><small>System managed</small></div>
@@ -2001,7 +2086,187 @@
           </form>
         </section>
 
-        <section class="view" id="ui-settings-view">
+        <section class="view system-settings-view" id="proxy-settings-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-route" aria-hidden="true"></span></span>
+            <h1>Proxy Settings</h1>
+            <span class="heading-copy">Configure the network proxy used to reach repository upstreams.</span>
+          </div>
+          <div class="proxy-settings-layout">
+            <form class="blobstore-form" id="system-proxy-form">
+              <div class="form-title">System proxy defaults</div>
+              <div class="field-label">
+                <label class="checkbox-field"><input id="system-proxy-enabled" type="checkbox"><span>Enable system proxy</span></label>
+                <span class="field-help" tabindex="0" role="note"
+                  aria-label="Applies to repositories that use system settings."
+                  data-tooltip="Applies to repositories that use system settings.">
+                  <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                </span>
+              </div>
+              <fieldset id="system-proxy-fields" class="form-grid">
+                <legend class="sr-only">System proxy settings</legend>
+                <label><span>Proxy type</span><select id="system-proxy-type"><option value="HTTP">HTTP</option><option value="SOCKS">SOCKS5</option></select></label>
+                <label><span>Proxy host</span><input id="system-proxy-host" required placeholder="proxy.example.com" autocomplete="off"></label>
+                <label><span>Proxy port</span><input id="system-proxy-port" type="number" min="1" max="65535" required></label>
+                <label class="checkbox-field full-width"><input id="system-proxy-auth" type="checkbox"><span>Proxy requires authentication</span></label>
+                <label id="system-proxy-user-field"><span>Proxy username</span><input id="system-proxy-username" autocomplete="off"></label>
+                <label id="system-proxy-password-field"><span>Proxy password</span><input id="system-proxy-password" type="password" autocomplete="new-password"></label>
+                <label id="system-proxy-clear-field" class="checkbox-field"><input id="system-proxy-password-clear" type="checkbox"><span>Clear saved proxy password</span></label>
+                <div class="full-width">
+                  <div class="field-label">
+                    <label for="system-proxy-bypass">Bypass hosts</label>
+                    <span class="field-help" tabindex="0" role="note"
+                      aria-label="Matching hosts connect directly. Use *.example.com for subdomains."
+                      data-tooltip="Matching hosts connect directly. Use *.example.com for subdomains.">
+                      <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                    </span>
+                  </div>
+                  <div class="proxy-settings-actions">
+                    <input id="system-proxy-bypass" type="text" placeholder="*.example.com" autocomplete="off">
+                    <button class="create-button secondary" id="system-proxy-add-host" type="button">Add</button>
+                  </div>
+                  <div class="proxy-settings-actions" id="system-proxy-bypass-hosts"></div>
+                </div>
+              </fieldset>
+              <p class="form-note" id="system-proxy-status" role="status"></p>
+              <div class="form-actions">
+                <button type="submit" class="create-button" id="system-proxy-save">Save settings</button>
+                <button type="button" class="create-button secondary" id="system-proxy-test">Test connection</button>
+              </div>
+            </form>
+            <aside class="blobstore-form">
+              <div class="form-title">Repository usage</div>
+              <dl class="proxy-settings-counts">
+                <div><dt><span class="state-badge compact ok">Use system settings</span></dt><dd id="system-proxy-count-inherit">–</dd></div>
+                <div><dt><span class="state-badge compact checking">Use repository settings</span></dt><dd id="system-proxy-count-override">–</dd></div>
+                <div><dt><span class="state-badge compact">Direct connection</span></dt><dd id="system-proxy-count-direct">–</dd></div>
+              </dl>
+              <div class="form-actions">
+                <button type="button" class="create-button secondary" id="system-proxy-list">View repository proxies</button>
+                <button type="button" class="create-button secondary" id="system-proxy-batch">Switch in bulk</button>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section class="view system-settings-view" id="download-offload-view">
+          <div class="page-heading">
+            <span class="heading-icon"><span class="lucide-icon icon-download" aria-hidden="true"></span></span>
+            <h1>Download Offload</h1>
+            <span class="heading-copy">Let a trusted proxy send files after kkRepo authorizes the download.</span>
+          </div>
+          <div class="proxy-settings-layout">
+            <form class="blobstore-form" id="offload-settings-form">
+              <div class="form-title" id="offload-settings-title">Settings</div>
+              <div class="field-label">
+                <label class="checkbox-field"><input type="checkbox" id="offload-enabled" disabled><span>Enable download offload</span></label>
+                <span class="field-help" tabindex="0" role="note"
+                  aria-label="A trusted proxy can send eligible downloads from the selected File Blob Stores."
+                  data-tooltip="A trusted proxy can send eligible downloads from the selected File Blob Stores.">
+                  <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                </span>
+              </div>
+              <fieldset class="form-grid offload-settings-fields" id="offload-fields" aria-labelledby="offload-settings-title" disabled>
+                <div class="form-field full-width">
+                  <span id="offload-method-label">Proxy preset</span>
+                  <div class="recipe-combobox offload-method-picker" id="offload-method-picker">
+                    <select id="offload-method" hidden aria-hidden="true" tabindex="-1"></select>
+                    <button class="recipe-combobox-trigger" id="offload-method-trigger" type="button" role="combobox"
+                      aria-haspopup="listbox" aria-expanded="false" aria-controls="offload-method-options"
+                      aria-labelledby="offload-method-label offload-method-value">
+                      <span class="recipe-combobox-value" id="offload-method-value"></span>
+                      <span class="recipe-combobox-caret lucide-icon icon-chevron-down" aria-hidden="true"></span>
+                    </button>
+                    <div class="recipe-combobox-popover" id="offload-method-popover" hidden>
+                      <div class="recipe-combobox-options" id="offload-method-options" role="listbox"
+                        aria-labelledby="offload-method-label"></div>
+                    </div>
+                  </div>
+                </div>
+                <div class="full-width">
+                  <div class="field-label">
+                    <label id="offload-request-label">Proxy request header</label>
+                    <span class="field-help" tabindex="0" role="note"
+                      aria-label="The trusted proxy sets this header when forwarding requests to kkRepo."
+                      data-tooltip="The trusted proxy sets this header when forwarding requests to kkRepo.">
+                      <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                    </span>
+                  </div>
+                  <code id="offload-request" class="offload-request" aria-labelledby="offload-request-label"></code>
+                </div>
+                <div class="full-width">
+                  <div class="field-label">
+                    <label for="offload-response-preview">kkRepo response header</label>
+                    <span class="field-help" id="offload-response-help" tabindex="0" role="note"
+                      aria-label="Controls the file location in the offload response header."
+                      data-tooltip="Controls the file location in the offload response header.">
+                      <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                    </span>
+                  </div>
+                  <div class="form-grid offload-custom-response-fields" id="offload-custom-response-fields" hidden>
+                    <label><span>Response header name</span><input id="offload-response" maxlength="128" spellcheck="false"></label>
+                    <label>
+                      <span>File location format</span>
+                      <select id="offload-target" aria-describedby="offload-response-preview">
+                        <option value="internal-uri">Internal URI</option>
+                        <option value="absolute-path">Proxy-side absolute path</option>
+                      </select>
+                    </label>
+                  </div>
+                  <output class="offload-request" id="offload-response-preview">
+                    <code id="offload-response-line"></code>
+                  </output>
+                </div>
+              </fieldset>
+              <div class="offload-store-heading">
+                <div class="field-label">
+                  <strong id="offload-store-title">File Blob Stores</strong>
+                  <span class="field-help" tabindex="0" role="note"
+                    aria-label="Downloads use the File Blob Store that holds the requested file, including in group repositories."
+                    data-tooltip="Downloads use the File Blob Store that holds the requested file, including in group repositories.">
+                    <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                  </span>
+                </div>
+                <span class="form-note" id="offload-store-count"></span>
+              </div>
+              <div class="nx-table-frame offload-stores">
+                <table class="nx-table" aria-labelledby="offload-store-title">
+                  <thead><tr><th scope="col"><input id="offload-select-all" type="checkbox" aria-label="Select all File Blob Stores" disabled></th>
+                    <th scope="col">Blob store</th><th scope="col">Repositories</th></tr></thead>
+                  <tbody id="offload-store-rows"></tbody>
+                </table>
+              </div>
+              <p class="form-note" id="offload-status" role="status"></p>
+              <div class="form-actions">
+                <button class="create-button" id="offload-save" type="submit" disabled>Save settings</button>
+                <button class="create-button secondary" id="offload-discard" type="button" disabled>Discard changes</button>
+              </div>
+            </form>
+            <aside class="blobstore-form">
+              <div class="form-title">Deployment</div>
+              <dl class="proxy-settings-counts offload-deployment-status">
+                <div><dt>Saved configuration</dt><dd id="offload-saved-state"></dd></div>
+                <div>
+                  <dt class="field-label">
+                    <span>Trusted proxies</span>
+                    <span class="field-help" tabindex="0" role="note"
+                      aria-label="Configure kkrepo.download-offload.trusted-proxies (environment variable KKREPO_DOWNLOAD_OFFLOAD_TRUSTED_PROXIES) on each kkRepo replica. Use a comma-separated list of direct proxy IP addresses or CIDR ranges as seen by kkRepo. Restart kkRepo to apply changes."
+                      data-tooltip="Configure kkrepo.download-offload.trusted-proxies (environment variable KKREPO_DOWNLOAD_OFFLOAD_TRUSTED_PROXIES) on each kkRepo replica. Use a comma-separated list of direct proxy IP addresses or CIDR ranges as seen by kkRepo. Restart kkRepo to apply changes.">
+                      <span class="lucide-icon icon-info" aria-hidden="true"></span>
+                    </span>
+                  </dt>
+                  <dd id="offload-trusted"></dd>
+                </div>
+              </dl>
+              <div class="form-actions">
+                <button class="create-button secondary" id="offload-example" type="button" disabled>View deployment example</button>
+                <button class="create-button secondary" id="offload-verify" type="button" disabled>Verify offload</button>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section class="view system-settings-view" id="ui-settings-view">
           <div class="page-heading">
             <span class="heading-icon"><span class="lucide-icon icon-sliders-horizontal" aria-hidden="true"></span></span>
             <h1>UI Settings</h1>
@@ -2015,6 +2280,18 @@
                   <option value="browser">Follow browser</option>
                   <option value="zh-CN">Chinese</option>
                   <option value="en" selected>English</option>
+                  <option value="fr" lang="fr" data-i18n-skip>Français</option>
+                  <option value="de" lang="de" data-i18n-skip>Deutsch</option>
+                  <option value="es" lang="es" data-i18n-skip>Español</option>
+                  <option value="it" lang="it" data-i18n-skip>Italiano</option>
+                  <option value="pt-BR" lang="pt-BR" data-i18n-skip>Português (Brasil)</option>
+                  <option value="nl" lang="nl" data-i18n-skip>Nederlands</option>
+                  <option value="pl" lang="pl" data-i18n-skip>Polski</option>
+                  <option value="ru" lang="ru" data-i18n-skip>Русский</option>
+                  <option value="uk" lang="uk" data-i18n-skip>Українська</option>
+                  <option value="ja" lang="ja" data-i18n-skip>日本語</option>
+                  <option value="ko" lang="ko" data-i18n-skip>한국어</option>
+                  <option value="tr" lang="tr" data-i18n-skip>Türkçe</option>
                 </select>
               </label>
               <label>
@@ -2178,10 +2455,129 @@
       </main>
     </div>
 
+    <dialog class="proxy-settings-dialog wide" id="proxy-repository-list" aria-labelledby="proxy-repository-list-title">
+      <div class="proxy-dialog-header"><h2 id="proxy-repository-list-title">Repository proxies</h2></div>
+      <div class="proxy-dialog-body">
+        <div class="proxy-settings-toolbar">
+          <select id="proxy-repository-mode-filter" aria-label="Filter by proxy mode">
+            <option value="">All proxy modes</option>
+            <option value="INHERIT">Use system settings</option>
+            <option value="OVERRIDE">Use repository settings</option>
+            <option value="DIRECT">Direct connection</option>
+          </select>
+        </div>
+        <div class="nx-table-frame"><table class="nx-table">
+          <thead><tr><th>Repository</th><th>Proxy mode</th><th>Upstream route</th><th>Actions</th></tr></thead>
+          <tbody id="proxy-repository-list-body"></tbody>
+        </table></div>
+      </div>
+      <div class="proxy-dialog-footer"><button type="button" class="create-button secondary" data-proxy-close>Done</button></div>
+    </dialog>
+
+    <dialog class="proxy-settings-dialog" id="proxy-repository-edit" aria-labelledby="proxy-repository-edit-title">
+      <form id="proxy-repository-edit-form">
+        <div class="proxy-dialog-header">
+          <h2 id="proxy-repository-edit-title">Edit proxy</h2><code id="proxy-repository-edit-name"></code>
+        </div>
+        <div class="proxy-dialog-body">
+          <div class="form-grid">
+            <label class="full-width"><span>Proxy mode</span>
+              <select id="scoped-proxy-mode">
+                <option value="DIRECT">Direct connection</option>
+                <option value="INHERIT">Use system settings</option>
+                <option value="OVERRIDE">Use repository settings</option>
+              </select>
+            </label>
+            <label><span>Proxy type</span><select id="scoped-proxy-type"><option value="" disabled>Not configured</option><option value="HTTP">HTTP</option><option value="SOCKS">SOCKS5</option></select></label>
+            <label><span>Proxy host</span><input id="scoped-proxy-host" autocomplete="off"></label>
+            <label><span>Proxy port</span><input id="scoped-proxy-port" type="number" min="1" max="65535"></label>
+            <label><span>Proxy username</span><input id="scoped-proxy-username" autocomplete="off"></label>
+            <label><span>Proxy password</span><input id="scoped-proxy-password" type="password" autocomplete="new-password"></label>
+            <label class="checkbox-field"><input id="scoped-proxy-password-clear" type="checkbox"><span>Clear saved proxy password</span></label>
+          </div>
+          <p class="form-note" id="proxy-repository-edit-status" role="status"></p>
+        </div>
+        <div class="proxy-dialog-footer">
+          <button type="button" class="create-button secondary" data-proxy-close>Cancel</button>
+          <button type="submit" class="create-button" id="proxy-repository-save">Save proxy</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="proxy-settings-dialog wide" id="proxy-batch-dialog" aria-labelledby="proxy-batch-title">
+      <div class="proxy-dialog-header"><h2 id="proxy-batch-title">Switch repositories to system settings</h2></div>
+      <div class="proxy-dialog-body">
+        <div class="proxy-settings-toolbar">
+          <button class="create-button secondary" id="proxy-batch-select-direct" type="button">Select eligible direct repositories</button>
+          <span class="form-note proxy-batch-selection" role="status" aria-atomic="true">
+            <span>Selected</span> <span id="proxy-batch-count"></span>
+          </span>
+        </div>
+        <div class="nx-table-frame"><table class="nx-table">
+          <thead><tr><th>Repository</th><th>Current route</th><th>After switching</th></tr></thead>
+          <tbody id="proxy-batch-body"></tbody>
+        </table></div>
+        <p class="form-note" id="proxy-batch-status" role="status"></p>
+      </div>
+      <div class="proxy-dialog-footer">
+        <button type="button" class="create-button secondary" data-proxy-close>Cancel</button>
+        <button class="create-button secondary" id="proxy-batch-back" type="button" hidden>Back</button>
+        <button class="create-button" id="proxy-batch-next" type="button">Preview changes</button>
+      </div>
+    </dialog>
+
+    <dialog class="proxy-settings-dialog" id="proxy-test-dialog" aria-labelledby="proxy-test-title">
+      <form id="proxy-test-form">
+        <div class="proxy-dialog-header"><h2 id="proxy-test-title">Test connection</h2></div>
+        <div class="proxy-dialog-body">
+          <label><span>Test upstream</span><select id="proxy-test-repository" required></select></label>
+          <p class="form-note">Tests the current form settings against the selected upstream.</p>
+          <p class="form-note" id="proxy-test-result" role="status"></p>
+        </div>
+        <div class="proxy-dialog-footer">
+          <button type="button" class="create-button secondary" data-proxy-close>Done</button>
+          <button type="submit" class="create-button" id="proxy-test-run">Start test</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="proxy-settings-dialog" id="offload-example-dialog" aria-labelledby="offload-example-title">
+      <div class="proxy-dialog-header"><h2 id="offload-example-title">Deployment example</h2></div>
+      <div class="proxy-dialog-body">
+        <p class="form-note" id="offload-example-note"></p>
+        <label for="offload-example-code">Proxy configuration</label>
+        <textarea class="offload-example-code" id="offload-example-code" rows="14" readonly spellcheck="false"></textarea>
+        <a id="offload-proxy-docs" target="_blank" rel="noreferrer noopener">View proxy documentation</a>
+      </div>
+      <div class="proxy-dialog-footer">
+        <button class="create-button secondary" id="offload-copy-example" type="button">Copy example</button>
+        <form method="dialog"><button class="create-button" type="submit">Done</button></form>
+      </div>
+    </dialog>
+    <dialog class="proxy-settings-dialog" id="offload-verify-dialog" aria-labelledby="offload-verify-title">
+      <form id="offload-probe-form">
+        <div class="proxy-dialog-header offload-verify-header">
+          <h2 id="offload-verify-title">Verify offload</h2>
+          <p class="state-badge offload-verify-result" id="offload-probe-result" role="status" aria-atomic="true"></p>
+        </div>
+        <div class="proxy-dialog-body">
+          <p class="form-note">Open this page through the trusted proxy. Use the path of a file you can download from the selected Blob Store.</p>
+          <div class="form-grid">
+            <label class="full-width"><span>File Blob Store</span><select id="offload-probe-store" required></select></label>
+            <label class="full-width"><span>Artifact path</span><input id="offload-probe-path" placeholder="/repository/my-repository/path/to/file" required></label>
+          </div>
+        </div>
+        <div class="proxy-dialog-footer">
+          <button class="create-button secondary" id="offload-probe-close" type="button">Close</button>
+          <button class="create-button" id="offload-probe-run" type="submit">Run verification</button>
+        </div>
+      </form>
+    </dialog>
+
     <script src="/login/assets/csrf-fetch.js?v=20261006-shared-primitives-1"></script>
     <script src="/login/assets/account-menu.js?v=20261006-shared-primitives-1"></script>
     <script src="/login/assets/safe-return-to.js?v=20261023-safe-return-to-1"></script>
-    <script src="/login/assets/ui-i18n.js?v=20261107-user-picker"></script>
+    <script src="/login/assets/ui-i18n.js?v=20261121-block-outbound"></script>
     <script src="/login/assets/delete-confirmation.js?v=20261107-key-confirmation"></script>
     <script src="/login/assets/product-update.js?v=20260819-version-update-1"></script>
     <script src="./assets/admin-filter.js?v=20260706-wildcard-filter-1"></script>
@@ -2191,6 +2587,8 @@
     <script src="./assets/ohpm-import.js?v=20261106-ohpm-import"></script>
     <script src="./assets/user-picker.js?v=20261107-user-picker"></script>
     <script src="./assets/ohpm-login.js?v=20261107-user-picker"></script>
-    <script src="./assets/admin.js?v=20261107-user-picker"></script>
+    <script src="./assets/proxy-settings.js?v=20261121-block-outbound"></script>
+    <script src="./assets/download-offload.js?v=20261122-offload-verification-failure"></script>
+    <script src="./assets/admin.js?v=20261122-download-offload"></script>
   </body>
 </html>

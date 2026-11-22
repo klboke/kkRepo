@@ -8,6 +8,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.klboke.kkrepo.auth.PermissionSubject;
+import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.ClientAddressFilter;
 import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
 import java.util.List;
@@ -18,11 +20,14 @@ import org.springframework.mock.web.MockMultipartHttpServletRequest;
 class ComponentLegacyUiUploadControllerTest {
   @Test
   void legacyUploadUsesTheVerifiedClientAndPreservesItsIframeResponse() throws Exception {
+    var subject = new AuthenticatedSubject("Local", "publisher", "local", null,
+        new PermissionSubject("Local", "publisher", java.util.Set.of(), null));
     var service = mock(ComponentUploadService.class);
-    when(service.upload(eq("raw"), any(), any(), eq("anonymous"), eq("203.0.113.45")))
+    when(service.upload(eq("raw"), any(), any(), eq(subject), eq("203.0.113.45")))
         .thenReturn(new ComponentUploadService.UploadResult(List.of("demo.txt")));
     var controller = new ComponentLegacyUiUploadController(service, new ObjectMapper());
     var request = new MockMultipartHttpServletRequest();
+    request.setAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE, subject);
     request.setRemoteAddr("127.0.0.1");
     request.addHeader("X-Forwarded-For", "198.51.100.1, 203.0.113.45");
     new ClientAddressFilter(new ForwardedHeaderPolicy("127.0.0.1"))
@@ -31,6 +36,6 @@ class ComponentLegacyUiUploadControllerTest {
           assertTrue(response.getBody().contains("<textarea>"));
           assertTrue(response.getBody().contains("\"success\":true"), response.getBody());
         });
-    verify(service).upload(eq("raw"), any(), any(), eq("anonymous"), eq("203.0.113.45"));
+    verify(service).upload(eq("raw"), any(), any(), eq(subject), eq("203.0.113.45"));
   }
 }

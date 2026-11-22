@@ -18,7 +18,7 @@ public final class ProxyRequestAudit {
    */
   public static String currentClientIp() {
     if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attrs)) {
-      return null;
+      return ProxyCachePublication.clientIp();
     }
     String remoteAddress = ClientAddress.from(attrs.getRequest());
     return remoteAddress == null || remoteAddress.isBlank() ? null : remoteAddress.trim();

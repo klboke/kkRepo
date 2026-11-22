@@ -111,6 +111,29 @@ class SecurityScanFinalizerTest {
   }
 
   @Test
+  void defersAtTheAttemptLimitAndReleasesDocumentsOnlyForTheOwnedLease() {
+    var scans = mock(SecurityScanDao.class);
+    var documents = mock(SecurityScanDocumentPersistence.class);
+    var finalizer = new SecurityScanFinalizer(
+        scans, mock(RepositoryDao.class), mock(SecurityScanAuditService.class), documents);
+    ScanTask task = task(5, 5);
+    var failure = new ScannerCapacityException(17);
+    Instant nextAttemptAt = Instant.now().plusSeconds(17);
+    when(scans.deferTaskForCapacity(
+        eq(5L), eq("lease"), eq(nextAttemptAt),
+        eq(failure.code()), eq(failure.getMessage()), any(Instant.class)))
+        .thenReturn(true, false);
+
+    finalizer.deferForCapacity(task, failure, nextAttemptAt);
+    assertThrows(SecurityScanFinalizer.LostSecurityScanLeaseException.class,
+        () -> finalizer.deferForCapacity(task, failure, nextAttemptAt));
+
+    verify(documents).releaseOwner(5L);
+    verify(scans, never()).upsertAssetStateIfCurrent(any());
+    verify(scans, never()).upsertAssetPolicyStateIfCurrent(any());
+  }
+
+  @Test
   void terminalFailurePublishesBlockingAssetStateAndAuditTransition() {
     SecurityScanDao scans = mock(SecurityScanDao.class);
     stubWaiverRevision(scans);

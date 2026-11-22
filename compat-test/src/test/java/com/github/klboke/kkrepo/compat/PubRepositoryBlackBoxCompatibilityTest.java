@@ -27,6 +27,7 @@ import java.util.UUID;
 import java.util.zip.GZIPOutputStream;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 class PubRepositoryBlackBoxCompatibilityTest {
@@ -38,6 +39,16 @@ class PubRepositoryBlackBoxCompatibilityTest {
   private static final TypeReference<Map<String, Object>> JSON_MAP = new TypeReference<>() {
   };
   private static final String PUB_CONTENT_TYPE = "application/vnd.pub.v2+json";
+  private Endpoint issuedTokenService;
+  private Long issuedTokenId;
+
+  @AfterEach
+  void deleteIssuedPubToken() throws Exception {
+    if (issuedTokenId == null) return;
+    Exchange response = send(issuedTokenService.request(
+        "internal/security/api-keys/current/" + issuedTokenId).DELETE());
+    assertEquals(200, response.status(), "kkrepo Pub fixture token deletion status");
+  }
 
   @Test
   void hostedMetadataAndArchiveMatchNexusWhenConfigured() throws Exception {
@@ -154,6 +165,7 @@ class PubRepositoryBlackBoxCompatibilityTest {
     assumeTrue(config.proxyPackageConfigured(),
         "Set PUB_COMPAT_PROXY_PACKAGE and PUB_COMPAT_PROXY_VERSION to compare a package available through proxy/group");
 
+    ProxyStreamingCompatibility.enable(config.candidateProxy().request(""));
     assertMetadataVersionAndArchive("proxy", config.referenceProxy(), config.candidateProxy(), config);
     assertMetadataVersionAndArchive("group", config.referenceGroup(), config.candidateGroup(), config);
     assertMissingPackageStatus("proxy", config.referenceProxy(), config.candidateProxy(), config);
@@ -336,7 +348,7 @@ class PubRepositoryBlackBoxCompatibilityTest {
     return JSON.readValue(exchange.body(), JSON_MAP);
   }
 
-  private static String createCandidatePubToken(PubCompatConfig config) throws Exception {
+  private String createCandidatePubToken(PubCompatConfig config) throws Exception {
     byte[] payload = JSON.writeValueAsBytes(Map.of(
         "domain", "PubToken",
         "displayName", "Pub compatibility " + UUID.randomUUID()));
@@ -344,9 +356,14 @@ class PubRepositoryBlackBoxCompatibilityTest {
         .header("Content-Type", "application/json")
         .POST(HttpRequest.BodyPublishers.ofByteArray(payload)));
     assertEquals(200, response.status(), "kkrepo Pub token creation status");
-    Object token = json(response).get("token");
-    assertFalse(String.valueOf(token).isBlank(), "kkrepo Pub token should be returned");
-    return String.valueOf(token);
+    Map<String, Object> body = json(response);
+    long id = ((Number) stringObjectMap(body.get("apiKey")).get("id")).longValue();
+    assertTrue(id > 0, "kkrepo Pub API key id should be returned");
+    issuedTokenService = config.candidateService();
+    issuedTokenId = id;
+    String token = (String) body.get("token");
+    assertTrue(token != null && !token.isBlank(), "kkrepo Pub token should be returned");
+    return token;
   }
 
   private static HttpRequest.Builder multipartPost(

@@ -16,11 +16,14 @@ import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.server.metrics.KkRepoMetrics;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
 import com.github.klboke.kkrepo.server.security.SecurityValidationException;
 import com.github.klboke.kkrepo.server.support.FakeHttpProxyServer;
@@ -38,12 +41,101 @@ import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 class DockerRemoteRegistryClientTest {
+  @Test
+  void manualBlockPreventsRegistryAndTokenRequestsUsingTheSameRuntime() throws Exception {
+    try (TestRegistry registry = TestRegistry.start()) {
+      var runtime = runtime(registry.baseUrl, null, null);
+      var repositories = mock(RepositoryDao.class);
+      var record = mock(RepositoryRecord.class);
+      when(repositories.findByName(runtime.name())).thenReturn(Optional.of(record));
+      when(record.type()).thenReturn(RepositoryType.PROXY);
+      var blocked = new java.util.concurrent.atomic.AtomicBoolean(true);
+      when(record.attributes()).thenAnswer(ignored ->
+          Map.of("proxy", Map.of("blockOutboundConnections", blocked.get())));
+      var client = new DockerRemoteRegistryClient(new RepositoryOutboundBlock(repositories),
+          OutboundRequestPolicy.allowPrivateForTests(), null, false, 0, null, directFactory);
+      AtomicInteger registryRequests = new AtomicInteger();
+      AtomicInteger tokenRequests = new AtomicInteger();
+      registry.server.createContext("/v2/", exchange -> {
+        registryRequests.incrementAndGet();
+        blocked.set(true); // Save the switch between the registry challenge and token request.
+        try (exchange) {
+          exchange.getResponseHeaders().set("WWW-Authenticate",
+              "Bearer realm=\"" + registry.baseUrl + "/token\",service=\"fixture\"");
+          exchange.sendResponseHeaders(401, -1);
+        }
+      });
+      registry.server.createContext("/token", exchange -> {
+        tokenRequests.incrementAndGet();
+        try (exchange) {
+          exchange.sendResponseHeaders(500, -1);
+        }
+      });
+
+      assertThrows(RepositoryOutboundBlock.Blocked.class,
+          () -> client.get(runtime, "library/test/manifests/latest", "application/json"));
+      assertEquals(0, registryRequests.get());
+
+      blocked.set(false);
+      assertThrows(RepositoryOutboundBlock.Blocked.class,
+          () -> client.get(runtime, "library/test/manifests/latest", "application/json"));
+      assertEquals(1, registryRequests.get());
+      assertEquals(0, tokenRequests.get());
+    }
+  }
+
+  @Test
+  void rangeAndIfRangeSurviveRegistryRedirectAndBearerAuthentication() throws Exception {
+    try (TestRegistry registry = TestRegistry.start()) {
+      List<String> ranges = new ArrayList<>();
+      List<String> validators = new ArrayList<>();
+      registry.server.createContext("/v2/library/test/blobs/sha256:abc", exchange -> {
+        ranges.add(exchange.getRequestHeaders().getFirst("Range"));
+        validators.add(exchange.getRequestHeaders().getFirst("If-Range"));
+        exchange.getResponseHeaders().set("Location", registry.baseUrl + "/layer");
+        exchange.sendResponseHeaders(307, -1);
+        exchange.close();
+      });
+      registry.server.createContext("/layer", exchange -> {
+        ranges.add(exchange.getRequestHeaders().getFirst("Range"));
+        validators.add(exchange.getRequestHeaders().getFirst("If-Range"));
+        if (!"Bearer scoped-token".equals(exchange.getRequestHeaders().getFirst("Authorization"))) {
+          exchange.getResponseHeaders().set("WWW-Authenticate", "Bearer realm=\"" + registry.baseUrl
+              + "/token\",service=\"registry\",scope=\"repository:library/test:pull\"");
+          exchange.sendResponseHeaders(401, -1);
+        } else {
+          exchange.getResponseHeaders().set("Content-Range", "bytes 2-4/5");
+          exchange.sendResponseHeaders(206, 3);
+          exchange.getResponseBody().write("yer".getBytes(StandardCharsets.UTF_8));
+        }
+        exchange.close();
+      });
+      registry.server.createContext("/token", exchange -> {
+        byte[] token = "{\"token\":\"scoped-token\",\"expires_in\":300}".getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("Content-Type", "application/json");
+        exchange.sendResponseHeaders(200, token.length);
+        exchange.getResponseBody().write(token);
+        exchange.close();
+      });
+      try (var result = client().get(runtime(registry.baseUrl, "robot", "secret"),
+          "library/test/blobs/sha256:abc", null, "application/octet-stream",
+          new HttpRemoteFetcher.ByteRange("bytes=2-", "\"layer-v1\""))) {
+        assertEquals(206, result.status());
+        assertEquals("bytes 2-4/5", result.header("Content-Range"));
+        assertEquals("yer", new String(result.body().readAllBytes(), StandardCharsets.UTF_8));
+      }
+      assertEquals(List.of("bytes=2-", "bytes=2-", "bytes=2-"), ranges);
+      assertEquals(List.of("\"layer-v1\"", "\"layer-v1\"", "\"layer-v1\""), validators);
+    }
+  }
+
   @Test
   void publicHttpsRedirectStreamsUnlistedCdnWithoutRegistryCredentials() throws Exception {
     var policy = mock(OutboundRequestPolicy.class);

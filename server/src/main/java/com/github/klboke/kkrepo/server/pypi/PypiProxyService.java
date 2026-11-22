@@ -17,6 +17,7 @@ import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
 import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.releaseage.MinimumReleaseAge;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -54,6 +55,9 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class PypiProxyService {
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService streaming;
+
   private static final Logger log = LoggerFactory.getLogger(PypiProxyService.class);
   private static final long[] BACKOFF_SECONDS = {30, 60, 120, 300, 600, 1800};
   private static final String SIMPLE_JSON = "application/vnd.pypi.simple.v1+json";
@@ -156,6 +160,9 @@ public class PypiProxyService {
     String url;
     try {
       url = resolvePackageUrl(runtime, projectName, filename);
+    } catch (Blocked blocked) {
+      return reader.serveSnapshot(cached.orElseThrow(() -> new PypiExceptions.PypiNotFoundException(path)),
+          headOnly, path);
     } catch (PypiExceptions.PypiNotFoundException e) {
       proxyStateDao.recordSuccess(runtime.id(), now);
       if (cached.isPresent()) return reader.serveSnapshot(cached.get(), headOnly, path);
@@ -274,6 +281,9 @@ public class PypiProxyService {
         return handleUpstreamFailure(runtime, path, cachedIndex, headOnly,
             "Upstream returned " + status, now);
       });
+    } catch (Blocked blocked) {
+      return reader.serveSnapshot(cachedIndex.orElseThrow(() -> new PypiExceptions.PypiNotFoundException(path)),
+          headOnly, path);
     } catch (IOException e) {
       return handleUpstreamFailure(runtime, path, cachedIndex, headOnly,
           "Upstream IO error: " + e.getMessage(), now);
@@ -444,7 +454,9 @@ public class PypiProxyService {
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
         .withRepositoryForContent(runtime);
     try {
-      return fetcher.fetchWithBodyRetry(req, path, result -> {
+      return com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.fetchPypi(
+          streaming, fetcher, req, path, runtime,
+          !headOnly && cached.isEmpty() && !path.endsWith(".asc"), null, null, result -> {
         int status = result.status();
         if (status == 304 && cached.isPresent()) {
           NexusCacheType cacheType = cacheType(path);
@@ -497,6 +509,9 @@ public class PypiProxyService {
         return handleUpstreamFailure(runtime, path, cached, headOnly,
             "Upstream returned " + status, now);
       });
+    } catch (Blocked blocked) {
+      return reader.serveSnapshot(cached.orElseThrow(() -> new PypiExceptions.PypiNotFoundException(path)),
+          headOnly, path);
     } catch (IOException e) {
       return handleUpstreamFailure(runtime, path, cached, headOnly,
           "Upstream IO error: " + e.getMessage(), now);
@@ -533,7 +548,7 @@ public class PypiProxyService {
     }
   }
 
-  private String resolvePackageUrl(RepositoryRuntime runtime, String projectName, String filename) {
+  private String resolvePackageUrl(RepositoryRuntime runtime, String projectName, String filename) throws Blocked {
     if (projectName == null || projectName.isBlank()) {
       throw new PypiExceptions.PypiNotFoundException(filename);
     }
@@ -555,7 +570,7 @@ public class PypiProxyService {
   }
 
   private List<PypiLink> fetchRemoteProjectLinks(
-      RepositoryRuntime runtime, String projectName, String upstreamIndexPath) {
+      RepositoryRuntime runtime, String projectName, String upstreamIndexPath) throws Blocked {
     String path = PypiPaths.indexPath(projectName);
     HttpRemoteFetcher.Request req = HttpRemoteFetcher.Request.get(
         buildRemoteUrl(runtime.proxyRemoteUrl(), upstreamIndexPath))
@@ -576,6 +591,8 @@ public class PypiProxyService {
         }
         return links;
       });
+    } catch (Blocked blocked) {
+      throw blocked;
     } catch (IOException e) {
       throw new PypiExceptions.BadUpstreamException("Upstream IO error: " + e.getMessage(), e);
     }

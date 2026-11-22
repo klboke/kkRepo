@@ -13,6 +13,10 @@ import com.github.klboke.kkrepo.server.alpine.AlpineService;
 import com.github.klboke.kkrepo.server.conan.ConanManifestPolicy;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.Mode;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxyProbe;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxySettings;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.OutboundProxyCommand;
 import com.github.klboke.kkrepo.server.r.RService;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
@@ -26,6 +30,7 @@ import com.github.klboke.kkrepo.server.statistics.StorageUsageResponse.Repositor
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.io.IOException;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -212,6 +217,55 @@ public class RepositoriesController {
     return service.replaceMembers(name, body.memberNames());
   }
 
+  private OutboundProxyProbe outboundProxyProbe;
+
+  @Autowired
+  void setOutboundProxyProbe(OutboundProxyProbe probe) {
+    this.outboundProxyProbe = probe;
+  }
+
+  @PutMapping("/{name}/outbound-proxy")
+  public ResponseEntity<Void> updateOutboundProxy(
+      @PathVariable("name") String name, @RequestBody OutboundProxyCommand command,
+      HttpServletRequest request) {
+    AuthenticatedSubject subject = requireAuthenticated(request);
+    RepositoryView repository = service.get(name);
+    requireRepositoryAdmin(subject, repository.format(), name, "edit");
+    service.updateOutboundProxy(name, command);
+    return ResponseEntity.noContent().build();
+  }
+
+  @PutMapping("/outbound-proxy/batch")
+  public ResponseEntity<Void> inheritOutboundProxy(
+      @RequestBody Map<String, Mode> modes, HttpServletRequest request) {
+    AuthenticatedSubject subject = requireAuthenticated(request);
+    if (modes.isEmpty() || modes.size() > 500 || modes.values().stream().anyMatch(Objects::isNull)) {
+      throw new RepositoryValidationException("Select up to 500 repositories with their current proxy modes");
+    }
+    for (String name : modes.keySet()) {
+      RepositoryView repository = service.get(name);
+      requireRepositoryAdmin(subject, repository.format(), name, "edit");
+    }
+    service.inheritOutboundProxy(modes);
+    return ResponseEntity.noContent().build();
+  }
+
+  @PostMapping("/{name}/outbound-proxy/test")
+  public OutboundProxyProbe.Result testOutboundProxy(
+      @PathVariable("name") String name, @RequestBody OutboundProxySettings.Command command,
+      HttpServletRequest request) {
+    AuthenticatedSubject subject = requireAuthenticated(request);
+    RepositoryView repository = service.get(name);
+    requireRepositoryAdmin(subject, repository.format(), name, "read");
+    if (repository.proxy() == null || repository.proxy().allowedRedirectHosts().contains("*")) {
+      throw new RepositoryValidationException("Select a proxy repository that can use the system proxy");
+    }
+    if (Boolean.TRUE.equals(repository.proxy().blockOutboundConnections())) {
+      throw new RepositoryValidationException("Outbound connections are blocked for this repository");
+    }
+    return outboundProxyProbe.test(repository.proxy().remoteUrl(), command);
+  }
+
   @GetMapping("/{name}/apt/status")
   public AptService.Status aptStatus(
       @PathVariable("name") String name, HttpServletRequest request) {
@@ -368,6 +422,12 @@ public class RepositoriesController {
   @ExceptionHandler(RepositoryNotFoundException.class)
   public ResponseEntity<Map<String, String>> handleNotFound(RepositoryNotFoundException e) {
     return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of("message", e.getMessage()));
+  }
+
+  @ExceptionHandler(org.springframework.dao.DuplicateKeyException.class)
+  public ResponseEntity<Map<String, String>> handleConflict(org.springframework.dao.DuplicateKeyException e) {
+    return ResponseEntity.status(HttpStatus.CONFLICT)
+        .body(Map.of("message", "Repository name or Docker connector port is already in use"));
   }
 
   @ExceptionHandler(RepositoryValidationException.class)

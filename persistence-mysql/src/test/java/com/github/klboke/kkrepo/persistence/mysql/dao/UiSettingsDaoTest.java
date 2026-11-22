@@ -21,6 +21,6 @@ class UiSettingsDaoTest {
 
   @Test
   void rejectsUnsupportedDefaultLanguage() {
-    assertThrows(IllegalArgumentException.class, () -> JdbcUiSettingsDao.normalizeDefaultLanguage("fr"));
+    assertThrows(IllegalArgumentException.class, () -> JdbcUiSettingsDao.normalizeDefaultLanguage("xx"));
   }
 }

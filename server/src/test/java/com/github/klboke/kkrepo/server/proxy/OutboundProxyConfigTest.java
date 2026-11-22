@@ -4,8 +4,10 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class OutboundProxyConfigTest {
@@ -81,5 +83,15 @@ class OutboundProxyConfigTest {
     OutboundProxyConfig upper = new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "Clash.Example.COM", 7890, null, null);
     OutboundProxyConfig lower = new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP, "clash.example.com", 7890, null, null);
     assertEquals(upper.cacheKey(), lower.cacheKey());
+  }
+
+  @Test
+  void ipv6BypassMatchesUriBracketsAndEquivalentLiteralSpellings() {
+    OutboundProxyConfig proxy = new OutboundProxyConfig(OutboundProxyConfig.Type.HTTP,
+        "proxy.example.org", 3128, null, null, Set.of("2001:db8::1", "[2001:DB8:0:0::2]"), 1L);
+
+    assertNull(OutboundProxyConfig.forTarget(proxy, "https://[2001:db8::1]/repository"));
+    assertNull(OutboundProxyConfig.forTarget(proxy, "https://[2001:db8::2]/repository"));
+    assertSame(proxy, OutboundProxyConfig.forTarget(proxy, "https://[2001:db8::3]/repository"));
   }
 }

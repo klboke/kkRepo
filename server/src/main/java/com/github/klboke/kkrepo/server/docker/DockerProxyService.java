@@ -11,6 +11,7 @@ import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import java.io.IOException;
 import java.io.InputStream;
@@ -28,6 +29,9 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class DockerProxyService {
+  @Autowired
+  private com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService streaming;
+
   private final DockerBlobStore blobStore;
   private final DockerManifestStore manifestStore;
   private final DockerRemoteRegistryClient remoteClient;
@@ -139,6 +143,9 @@ public class DockerProxyService {
       return response
           .withContentType(stored.manifest().mediaType())
           .withHeader(DockerConstants.CONTENT_DIGEST_HEADER, stored.manifest().digest());
+    } catch (Blocked blocked) {
+      if (cached != null) return serveStored(cached, headOnly, acceptHeaders);
+      throw new DockerProtocolException(DockerErrorCode.MANIFEST_UNKNOWN, reference);
     } catch (IOException e) {
       if (cached != null) {
         recordCache(runtime, "manifest", "remote_error_fallback");
@@ -162,13 +169,28 @@ public class DockerProxyService {
       recordCache(runtime, "blob", "miss");
     }
     String remoteImage = remoteImageName(runtime, imageName);
-    DigestedFile remoteBlob = null;
     String remotePath = remoteImage + "/blobs/" + digest.value();
     if (isNotFoundCached(runtime, remotePath)) {
       recordCache(runtime, "negative", "hit");
       throw new DockerProtocolException(DockerErrorCode.BLOB_UNKNOWN, digest.value());
     }
-    try (HttpRemoteFetcher.Result result = remoteClient.get(runtime, remotePath, "application/octet-stream")) {
+    try {
+      return com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.fetchDocker(
+          streaming, request -> {
+            HttpRemoteFetcher.Result fetched = request.byteRange() == null
+                ? remoteClient.get(runtime, remotePath, "application/octet-stream")
+                : remoteClient.get(runtime, remotePath, null, "application/octet-stream", request.byteRange());
+            try {
+              if (streaming != null && runtime.streamingEnabled()
+                  && fetched.status() >= 200 && fetched.status() < 300) {
+                manifestStore.beforeBlobRead(runtime, imageName, digest);
+              }
+              return fetched;
+            } catch (RuntimeException error) { fetched.close(); throw error; }
+          }, HttpRemoteFetcher.Request.get(runtime.proxyRemoteUrl()), blobStore.blobPath(digest),
+          runtime, !headOnly && digest.isSha256(), digest.hex(), result -> {
+      DigestedFile remoteBlob = null;
+      try {
       if (result.status() == 404) {
         rememberNotFound(runtime, remotePath);
         recordCache(runtime, "negative", "store_blob");
@@ -216,12 +238,14 @@ public class DockerProxyService {
           .withContentType(blobContentType(stored.blob().contentType()))
           .withHeader(DockerConstants.CONTENT_DIGEST_HEADER, digest.value())
           .withHeader("Accept-Ranges", "bytes");
-    } catch (IOException e) {
-      throw new DockerProtocolException(DockerErrorCode.BLOB_UNKNOWN, "remote blob fetch failed: " + e.getMessage(), 502);
-    } finally {
-      if (remoteBlob != null) {
-        TempBlobFiles.deleteQuietly(remoteBlob.path());
+      } finally {
+        if (remoteBlob != null) TempBlobFiles.deleteQuietly(remoteBlob.path());
       }
+      });
+    } catch (Blocked blocked) {
+      throw new DockerProtocolException(DockerErrorCode.BLOB_UNKNOWN, digest.value());
+    } catch (IOException e) {
+      throw new DockerProtocolException(DockerErrorCode.BLOB_UNKNOWN, "remote blob fetch failed", 502);
     }
   }
 
@@ -257,6 +281,8 @@ public class DockerProxyService {
       Object rawName = body.get("name");
       recordCache(runtime, "tags", "remote");
       return new DockerTagList(rawName == null ? imageName : rawName.toString(), tags, hasNext);
+    } catch (Blocked blocked) {
+      return manifestStore.listTags(runtime, imageName, last, limit);
     } catch (IOException e) {
       throw new DockerProtocolException(DockerErrorCode.NAME_UNKNOWN, "remote tag fetch failed: " + e.getMessage(), 502);
     }
@@ -315,6 +341,10 @@ public class DockerProxyService {
       Map<String, Object> body = new com.fasterxml.jackson.databind.ObjectMapper().readValue(result.body(), Map.class);
       recordReferrers(runtime, "remote", countManifests(body));
       return body;
+    } catch (Blocked blocked) {
+      var rows = manifestStore.referrers(runtime, digest.value(), artifactType);
+      recordReferrers(runtime, "local", rows.size());
+      return DockerHostedService.referrerIndex(rows);
     } catch (IOException e) {
       throw new DockerProtocolException(
           DockerErrorCode.NAME_UNKNOWN, "remote referrers fetch failed: " + e.getMessage(), 502);

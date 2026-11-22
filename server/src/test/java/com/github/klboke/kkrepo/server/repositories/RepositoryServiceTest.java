@@ -23,6 +23,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.AnsibleGalaxyRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CondaRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RoutingRuleDao;
 import com.github.klboke.kkrepo.server.routingrules.RoutingRuleService;
@@ -36,6 +37,8 @@ import com.github.klboke.kkrepo.server.cache.NexusLikeCacheController;
 import com.github.klboke.kkrepo.server.helm.HelmGroupIndexCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.Mode;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxySettings;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CargoSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.AlpineSettings;
@@ -44,6 +47,7 @@ import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CreateCom
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.DockerSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.HostedSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.GroupSettings;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.OutboundProxyCommand;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.ProxySettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.PypiSettings;
 import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.YumSettings;
@@ -60,8 +64,36 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 class RepositoryServiceTest {
+  @Test
+  void streamingSettingDefaultsOffAndSurvivesUpdatesAndReplicaReload() throws Exception {
+    var repositories = new StubRepositoryDao(repository(1L));
+    var service = service(repositories);
+    var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+    var settings = mapper.readValue("""
+        {"remoteUrl":"https://registry.npmjs.org", "streamingEnabled":true}
+        """, ProxySettings.class);
+    var created = service.create(new CreateCommand("streaming", "npm-proxy", true,
+        "default", true, null, settings, null, null, null, null));
+    assertTrue(created.proxy().streamingEnabled());
+    var registry = new RepositoryRuntimeRegistry(repositories, 0);
+    assertTrue(registry.resolve("streaming").orElseThrow().streamingEnabled());
+    var kept = service.update("streaming", new UpdateCommand(true, null, null, null,
+        new ProxySettings(null, null, null, null), null, null, null, null));
+    assertTrue(kept.proxy().streamingEnabled());
+    var disabled = service.update("streaming", new UpdateCommand(true, null, null, null,
+        mapper.readValue("{\"streamingEnabled\":false}", ProxySettings.class), null, null, null, null));
+    assertFalse(disabled.proxy().streamingEnabled());
+    assertFalse(new RepositoryRuntimeRegistry(repositories, 0).resolve("streaming").orElseThrow().streamingEnabled());
+    var legacy = service.create(new CreateCommand("legacy-streaming", "raw-proxy", true,
+        "default", true, null, new ProxySettings("https://example.org", null, null, null),
+        null, null, null, null));
+    assertFalse(legacy.proxy().streamingEnabled());
+  }
+
   @Test
   void partialUpdatesPreserveTheBindingFromTheLockedRepositoryVersion() {
     for (boolean concurrentAssignment : List.of(true, false)) {
@@ -898,6 +930,43 @@ class RepositoryServiceTest {
   }
 
   @Test
+  void httpsSettingsRoundTripAndLegacyUpdatesPreserveThem() {
+    StubRepositoryDao repositories = new StubRepositoryDao(repository(1L));
+    RepositoryService service = service(repositories);
+    var created = service.create(new CreateCommand("docker-tls", "docker-hosted", true,
+        "default", true, new HostedSettings("ALLOW", null, null), null, null,
+        new DockerSettings(true, 15000, null, true, 15443, "registry"), null, null));
+    assertEquals(15443, created.docker().httpsConnectorPort());
+    assertEquals("registry", created.docker().tlsBundle());
+    // Exercise partial merge directly through an existing record, as older API clients do.
+    repositories = new StubRepositoryDao(new RepositoryRecord(20L, "docker-tls", RepositoryFormat.DOCKER,
+        RepositoryType.HOSTED, "docker-hosted", true, 1L, null, null, null, null, "ALLOW", true,
+        Map.of("docker", Map.of("connectorEnabled", true, "connectorPort", 15000,
+            "httpsConnectorEnabled", true, "httpsConnectorPort", 15443, "tlsBundle", "registry"))));
+    service = service(repositories);
+    var updated = service.update("docker-tls", new UpdateCommand(null, null, null, null, null, null,
+        new DockerSettings(false, null, null), null, null));
+    assertEquals(false, updated.docker().connectorEnabled());
+    assertEquals(true, updated.docker().httpsConnectorEnabled());
+    assertEquals(15443, updated.docker().httpsConnectorPort());
+    assertEquals("registry", updated.docker().tlsBundle());
+  }
+
+  @Test
+  void httpsRejectsMissingSameAndCrossProtocolPorts() {
+    RepositoryService service = service(new StubRepositoryDao(dockerRepository(20L, "docker-http", 15000)));
+    for (DockerSettings settings : List.of(
+        new DockerSettings(false, null, null, true, null, null),
+        new DockerSettings(true, 15443, null, true, 15443, null),
+        new DockerSettings(false, null, null, true, 15000, null),
+        new DockerSettings(false, null, null, true, 70000, null))) {
+      assertThrows(RepositoryValidationException.class, () -> service.create(new CreateCommand(
+          "docker-tls", "docker-hosted", true, "default", true,
+          new HostedSettings("ALLOW", null, null), null, null, settings, null, null)));
+    }
+  }
+
+  @Test
   void createRejectsDuplicateDockerConnectorPort() {
     StubRepositoryDao repositories = new StubRepositoryDao(dockerRepository(20L, "docker-hosted-a", 5000));
     RepositoryService service = service(repositories);
@@ -1415,6 +1484,89 @@ class RepositoryServiceTest {
     assertEquals(7890, proxy.get("outboundProxyPort"));
     assertEquals("clash-user", proxy.get("outboundProxyUsername"));
     assertEquals("clash-pass", proxy.get("outboundProxyPassword"));
+  }
+
+  @Test
+  void manualBlockPersistsThroughPartialAndOutboundProxyEdits() throws Exception {
+    var repositories = new StubRepositoryDao(repository(1L));
+    var service = service(repositories);
+    var json = new com.fasterxml.jackson.databind.ObjectMapper();
+    var created = service.create(new CreateCommand("blocked-proxy", "maven2-proxy", true,
+        "default", true, null, new ProxySettings("https://repo.maven.apache.org/maven2/", 0, 0, false),
+        null, null, null, null));
+    assertEquals(false, created.proxy().blockOutboundConnections());
+
+    var block = json.readValue("{\"blockOutboundConnections\":true}", ProxySettings.class);
+    var blocked = service.update("blocked-proxy", new UpdateCommand(null, null, null, null,
+        block, null, null, null, null));
+    assertEquals(true, blocked.proxy().blockOutboundConnections());
+    assertEquals(false, blocked.proxy().autoBlock());
+    assertEquals(true, ((Map<?, ?>) repositories.updated.attributes().get("proxy"))
+        .get("blockOutboundConnections"));
+    service.updateOutboundProxy("blocked-proxy", new OutboundProxyCommand(
+        Mode.DIRECT, null, null, null, null, null, false, Mode.DIRECT));
+    assertEquals(true, service.get("blocked-proxy").proxy().blockOutboundConnections());
+
+    var unblock = json.readValue("{\"blockOutboundConnections\":false}", ProxySettings.class);
+    assertEquals(false, service.update("blocked-proxy", new UpdateCommand(null, null, null, null,
+        unblock, null, null, null, null)).proxy().blockOutboundConnections());
+  }
+
+  @Test
+  void npmProxyCanBeCreatedWithManualBlock() throws Exception {
+    var service = service(new StubRepositoryDao(repository(1L)));
+    var block = new com.fasterxml.jackson.databind.ObjectMapper().readValue("""
+        {"remoteUrl":"https://registry.npmjs.org","blockOutboundConnections":true}
+        """, ProxySettings.class);
+    var created = service.create(new CreateCommand("blocked-npm", "npm-proxy", true,
+        "default", true, null, block, null, null, null, null));
+    assertEquals(true, created.proxy().blockOutboundConnections());
+  }
+
+  @Test
+  void scopedProxyUpdatesPreserveUpstreamAndDormantRepositorySettings() throws Exception {
+    var repositories = new StubRepositoryDao(repository(1L));
+    var service = service(repositories);
+    var settings = mock(OutboundProxySettings.class);
+    var backoff = mock(ProxyStateDao.class);
+    when(settings.runtimeProxy()).thenReturn(new OutboundProxyConfig(
+        OutboundProxyConfig.Type.HTTP, "shared-proxy.example", 3128, null, null));
+    service.setOutboundProxySettings(settings, backoff);
+    var config = new com.fasterxml.jackson.databind.ObjectMapper().readValue("""
+        {"remoteUrl":"https://repo.maven.apache.org/maven2/","metadataMaxAgeMinutes":61,
+         "outboundProxyType":"SOCKS","outboundProxyHost":"repository-proxy.example","outboundProxyPort":1080,
+         "outboundProxyUsername":"proxy-user","outboundProxyPassword":"secret"}
+        """, ProxySettings.class);
+    var created = service.create(new CreateCommand("maven-proxy", "maven2-proxy", true,
+        "default", true, null, config, null, null, null, null));
+    assertEquals(Mode.OVERRIDE, created.proxy().outboundProxyMode());
+
+    service.inheritOutboundProxy(Map.of("maven-proxy", Mode.OVERRIDE));
+
+    var inherited = service.get("maven-proxy").proxy();
+    assertEquals(Mode.INHERIT, inherited.outboundProxyMode());
+    assertEquals(config.remoteUrl(), inherited.remoteUrl());
+    assertEquals(61, inherited.metadataMaxAgeMinutes());
+    assertEquals("SOCKS", inherited.outboundProxyType());
+    assertEquals("repository-proxy.example", inherited.outboundProxyHost());
+    assertTrue(inherited.outboundProxyPasswordConfigured());
+    verify(backoff).clearBackoff(created.id());
+
+    var stale = assertThrows(ResponseStatusException.class,
+        () -> service.inheritOutboundProxy(Map.of("maven-proxy", Mode.OVERRIDE)));
+    assertEquals(HttpStatus.CONFLICT, stale.getStatusCode());
+    service.updateOutboundProxy("maven-proxy", new OutboundProxyCommand(
+        Mode.OVERRIDE, null, null, null, null, null, false, Mode.INHERIT));
+    assertEquals(Mode.OVERRIDE, service.get("maven-proxy").proxy().outboundProxyMode());
+  }
+
+  @Test
+  void scopedProxyUpdateRejectsMissingModesAndNonProxyRepositories() {
+    var service = service(new StubRepositoryDao(repository(1L)));
+    var direct = new OutboundProxyCommand(Mode.DIRECT, null, null, null, null, null, false, null);
+    assertThrows(RepositoryValidationException.class, () -> service.updateOutboundProxy("maven-releases", null));
+    assertThrows(RepositoryNotFoundException.class, () -> service.updateOutboundProxy("missing", direct));
+    assertThrows(RepositoryValidationException.class, () -> service.updateOutboundProxy("maven-releases", direct));
   }
 
   @Test
@@ -2340,6 +2492,29 @@ class RepositoryServiceTest {
         () -> service.replaceMembers("pub-root", List.of("pub-nested")));
 
     assertTrue(thrown.getMessage().contains("cyclic-groups=[pub-nested]"));
+  }
+
+  @Test
+  void scopedUpdatePreservesDormantCredentialsAndAllOtherRepositorySettings() {
+    RepositoryRecord original = mavenProxyWithOutboundProxy("saved-secret");
+    var repositories = new StubRepositoryDao(original);
+    var service = service(repositories);
+    assertEquals(OutboundProxyConfig.Mode.OVERRIDE, service.get(original.name()).proxy().outboundProxyMode());
+    service.updateOutboundProxy(original.name(), new RepositoryCommands.OutboundProxyCommand(
+        OutboundProxyConfig.Mode.DIRECT, null, null, null, null, null, false, OutboundProxyConfig.Mode.OVERRIDE));
+    RepositoryRecord updated = repositories.findByName(original.name()).orElseThrow();
+    var expected = new java.util.LinkedHashMap<>(original.attributes());
+    var storedProxy = new java.util.LinkedHashMap<>((Map<?, ?>) expected.get("proxy"));
+    @SuppressWarnings("unchecked")
+    var newProxy = (Map<String, Object>) (Map<?, ?>) storedProxy;
+    newProxy.put("outboundProxyMode", "DIRECT");
+    expected.put("proxy", newProxy);
+    assertEquals(expected, updated.attributes());
+    assertEquals(original.proxyRemoteUrl(), updated.proxyRemoteUrl());
+    assertEquals(original.online(), updated.online());
+    assertEquals(OutboundProxyConfig.Mode.DIRECT, service.get(original.name()).proxy().outboundProxyMode());
+    assertTrue(service.get(original.name()).proxy().outboundProxyPasswordConfigured());
+    assertNull(service.get(original.name()).proxy().outboundProxyPassword());
   }
 
   @Test

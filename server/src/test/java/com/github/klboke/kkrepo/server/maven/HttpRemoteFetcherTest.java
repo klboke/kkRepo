@@ -37,6 +37,7 @@ import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
 import com.github.klboke.kkrepo.server.security.SecurityValidationException;
 import org.junit.jupiter.api.Test;
@@ -45,6 +46,21 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class HttpRemoteFetcherTest {
+
+  @Test
+  void blockedRequestStopsBeforeDnsAndDoesNotCountAsAnUpstreamFailure() throws Exception {
+    var guard = mock(com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.class);
+    var policy = mock(OutboundRequestPolicy.class);
+    var transport = mock(ProxiedHttpClientFactory.class);
+    var metrics = mock(com.github.klboke.kkrepo.server.metrics.KkRepoMetrics.class);
+    var fetcher = new HttpRemoteFetcher(policy, metrics, transport, "HTTP_1_1", 30, 60, 300, 5, 0);
+    fetcher.setOutboundBlock(guard);
+    org.mockito.Mockito.doThrow(new Blocked()).when(guard).check("proxy");
+    assertThrows(Blocked.class, () -> fetcher.fetch(publicHttpsRequest(null, null, false)));
+    org.mockito.Mockito.verifyNoInteractions(policy, transport);
+    verify(metrics, org.mockito.Mockito.never()).recordProxyRemote(
+        any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyInt(), any(), any());
+  }
 
   @Test
   void publicHttpsCanonicalRequestRejectsBodiesAndEnabledOutboundProxies() {
@@ -155,13 +171,18 @@ class HttpRemoteFetcherTest {
     when(runtime.allowedRedirectHosts()).thenReturn(Set.of());
     when(runtime.contentRedirectPolicy()).thenReturn(
         com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS);
-    var request = HttpRemoteFetcher.Request.get("https://repo.example.com/file").withRepositoryForContent(runtime);
+    var request = HttpRemoteFetcher.Request.get("https://repo.example.com/file").withRepositoryForContent(runtime).withByteRange("bytes=100-", "\"v1\"");
     var fetcher = new HttpRemoteFetcher(policy, null, transport, "HTTP_1_1", 30, 60, 300, 0, 0);
     try (var result = fetcher.fetch(request)) {
       assertEquals("artifact", new String(result.body().readAllBytes(), StandardCharsets.UTF_8));
     }
     assertEquals("Bearer test-token", headers.getAllValues().get(0).get("Authorization"));
     assertNull(headers.getAllValues().get(1).get("Authorization"));
+    for (var sent : headers.getAllValues()) {
+      assertEquals("bytes=100-", sent.get("Range"));
+      assertEquals("\"v1\"", sent.get("If-Range"));
+      assertEquals("identity", sent.get("Accept-Encoding"));
+    }
     when(transport.execute(nullable(String.class), nullable(OutboundProxyConfig.class), eq("GET"),
         any(OutboundRequestPolicy.ResolvedHttpTarget.class), anyMap(), nullable(byte[].class), anyLong()))
         .thenAnswer(invocation -> response(307,

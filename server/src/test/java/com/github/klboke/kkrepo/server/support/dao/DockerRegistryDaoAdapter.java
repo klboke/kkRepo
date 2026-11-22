@@ -19,6 +19,21 @@ import java.util.OptionalLong;
 
 /** Test-only base class for focused DockerRegistryDao fakes. */
 public class DockerRegistryDaoAdapter implements DockerRegistryDao {
+  @Override
+  public void lockRepositoryForMutation(long repositoryId) { }
+
+  @Override
+  public void lockRepositoryForCleanup(long repositoryId) { }
+
+  @Override
+  public Optional<CleanupRetentionBoundary> findCleanupRetentionBoundary(
+      long repositoryId, String imageName, int retainCount) {
+    return Optional.empty();
+  }
+
+  @Override
+  public boolean hasLiveManifestReference(long repositoryId, String digest) { return false; }
+
   public DockerRegistryDaoAdapter() {
   }
 

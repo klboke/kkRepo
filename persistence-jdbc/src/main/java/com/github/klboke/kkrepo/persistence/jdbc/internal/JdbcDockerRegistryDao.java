@@ -47,6 +47,50 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
   private final RowMapper<DockerTagRecord> tagMapper;
   private final RowMapper<DockerManifestReferenceRecord> referenceMapper;
 
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void lockRepositoryForMutation(long repositoryId) {
+    lockRepository(repositoryId, "FOR SHARE");
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public void lockRepositoryForCleanup(long repositoryId) {
+    lockRepository(repositoryId, "FOR UPDATE");
+  }
+
+  private void lockRepository(long repositoryId, String mode) {
+    if (jdbcTemplate.queryForList("SELECT id FROM repository WHERE id = ? " + mode,
+        Long.class, repositoryId).isEmpty()) {
+      throw new IllegalStateException("Docker repository no longer exists: " + repositoryId);
+    }
+  }
+
+  @Override
+  public Optional<CleanupRetentionBoundary> findCleanupRetentionBoundary(
+      long repositoryId, String imageName, int retainCount) {
+    if (retainCount <= 0) return Optional.empty();
+    return jdbcTemplate.query("""
+        SELECT m.id, m.updated_at FROM docker_manifest m
+        WHERE m.repository_id = ? AND m.image_name_hash = ? AND m.deleted_at IS NULL
+          AND EXISTS (SELECT 1 FROM docker_tag t WHERE t.manifest_id = m.id)
+        ORDER BY m.updated_at DESC, m.id DESC
+        LIMIT 1 OFFSET ?
+        """, (rs, row) -> new CleanupRetentionBoundary(rs.getLong("id"),
+            nullableInstant(rs, "updated_at")), repositoryId, hash(imageName), retainCount - 1)
+        .stream().findFirst();
+  }
+
+  @Override
+  public boolean hasLiveManifestReference(long repositoryId, String digest) {
+    return !jdbcTemplate.queryForList("""
+        SELECT r.manifest_id FROM docker_manifest_reference r
+        JOIN docker_manifest parent ON parent.id = r.manifest_id
+        WHERE r.repository_id = ? AND r.digest_hash = ? AND parent.deleted_at IS NULL
+        LIMIT 1
+        """, Long.class, repositoryId, hash(digest)).isEmpty();
+  }
+
   public JdbcDockerRegistryDao(JdbcTemplate jdbcTemplate, JsonColumns jsonColumns) {
     this.jdbcTemplate = jdbcTemplate;
     this.jsonColumns = jsonColumns;
@@ -182,7 +226,7 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
         UPDATE docker_manifest
         SET media_type = ?, artifact_type = ?, subject_digest = ?, subject_digest_hash = ?,
             asset_id = ?, size = ?, pushed_by = ?, pushed_by_ip = ?, deleted_at = NULL,
-            attributes_json = ?
+            attributes_json = ?, updated_at = CURRENT_TIMESTAMP(3)
         WHERE repository_id = ?
           AND image_name_hash = ?
           AND digest_hash = ?
@@ -323,7 +367,7 @@ public class JdbcDockerRegistryDao implements com.github.klboke.kkrepo.persisten
     args.add(hash(imageName));
     String after = "";
     if (last != null && !last.isBlank()) {
-      after = " AND tag > ?";
+      after = " AND tag > ?\n";
       args.add(last);
     }
     args.add(Math.max(1, limit));

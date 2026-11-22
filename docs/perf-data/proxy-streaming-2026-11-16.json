@@ -1,0 +1,275 @@
+{
+  "run_id": "f286d05e51",
+  "recorded_at": "2026-11-15T21:43:24.980254+00:00",
+  "build_label": "f114fdb26cb215b7cae749806fb53f47d1a4e0ca",
+  "client_platform": "macOS-14.7.8-x86_64-i386-64bit",
+  "client_python": "3.10.11",
+  "size_bytes": 67108864,
+  "upstream_mib_per_second": 4.0,
+  "repeats": 3,
+  "repositories": {
+    "off": "stream-f286d05e51-off",
+    "on": "stream-f286d05e51-on"
+  },
+  "results": [
+    {
+      "trial": 1,
+      "mode": "off",
+      "cold": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "b63c2423fc9c52e0c11af594dabeda2b2fda5584d08dcb99fca0be58ad037b77",
+        "header_seconds": 16.486023776233196,
+        "first_body_byte_seconds": 16.486028077080846,
+        "total_seconds": 16.66021964326501,
+        "etag": "\"0448cc578310082d4b74962cdbc4ce383dbcce04\"",
+        "content_range": null
+      },
+      "warm": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "b63c2423fc9c52e0c11af594dabeda2b2fda5584d08dcb99fca0be58ad037b77",
+        "header_seconds": 0.044710664078593254,
+        "first_body_byte_seconds": 0.04471538029611111,
+        "total_seconds": 0.21030229702591896,
+        "etag": "\"0448cc578310082d4b74962cdbc4ce383dbcce04\"",
+        "content_range": null
+      },
+      "cache_visible_after_client_seconds": 0.01357429288327694,
+      "upstream_requests": 1,
+      "warm_resume": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "b63c2423fc9c52e0c11af594dabeda2b2fda5584d08dcb99fca0be58ad037b77",
+        "header_seconds": 0.00930323638021946,
+        "first_body_byte_seconds": 0.009307416155934334,
+        "total_seconds": 0.16907737590372562,
+        "etag": "\"0448cc578310082d4b74962cdbc4ce383dbcce04\"",
+        "content_range": null
+      }
+    },
+    {
+      "trial": 1,
+      "mode": "on",
+      "cold": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "b63c2423fc9c52e0c11af594dabeda2b2fda5584d08dcb99fca0be58ad037b77",
+        "header_seconds": 0.03204193897545338,
+        "first_body_byte_seconds": 0.032045768573880196,
+        "total_seconds": 16.01942933164537,
+        "etag": "\"2e924570da046eacc68f103f7eead100af78ea95e2a174f88a07c87b9d057bc5\"",
+        "content_range": null
+      },
+      "warm": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "b63c2423fc9c52e0c11af594dabeda2b2fda5584d08dcb99fca0be58ad037b77",
+        "header_seconds": 0.017076117917895317,
+        "first_body_byte_seconds": 0.01708449423313141,
+        "total_seconds": 0.27730050310492516,
+        "etag": "\"0448cc578310082d4b74962cdbc4ce383dbcce04\"",
+        "content_range": null
+      },
+      "cache_visible_after_client_seconds": 0.9282451085746288,
+      "upstream_requests": 1,
+      "warm_resume": {
+        "status": 206,
+        "bytes": 66060288,
+        "sha256": "feb264a7676914bc7dc80b9dea7b17d2478ab1c718153a57e61d3638cfa9ed46",
+        "header_seconds": 0.10816474445164204,
+        "first_body_byte_seconds": 0.10817299969494343,
+        "total_seconds": 0.2999258041381836,
+        "etag": "\"0448cc578310082d4b74962cdbc4ce383dbcce04\"",
+        "content_range": "bytes 1048576-67108863/67108864"
+      }
+    },
+    {
+      "trial": 2,
+      "mode": "on",
+      "cold": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "45e5501a5082ec2b6c17d3b9ea37d324e8e2fbe827136f883fe44005e4f6a07d",
+        "header_seconds": 0.02561364695429802,
+        "first_body_byte_seconds": 0.02562098018825054,
+        "total_seconds": 16.01481951586902,
+        "etag": "\"def15c30afd3c71db540f97dc6dea6365219458e78881e93080cae24765af5c2\"",
+        "content_range": null
+      },
+      "warm": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "45e5501a5082ec2b6c17d3b9ea37d324e8e2fbe827136f883fe44005e4f6a07d",
+        "header_seconds": 0.01223132573068142,
+        "first_body_byte_seconds": 0.012236382812261581,
+        "total_seconds": 0.16974108293652534,
+        "etag": "\"d9746d2b1aeda91fa58ca9fe7aa12439ce4e4a4f\"",
+        "content_range": null
+      },
+      "cache_visible_after_client_seconds": 0.8841194901615381,
+      "upstream_requests": 1,
+      "warm_resume": {
+        "status": 206,
+        "bytes": 66060288,
+        "sha256": "40fbf1424a8e8b15cbec11b214e075126c75ca067d3faba37584685b6e311907",
+        "header_seconds": 0.06315367296338081,
+        "first_body_byte_seconds": 0.06315818428993225,
+        "total_seconds": 0.2202970515936613,
+        "etag": "\"d9746d2b1aeda91fa58ca9fe7aa12439ce4e4a4f\"",
+        "content_range": "bytes 1048576-67108863/67108864"
+      }
+    },
+    {
+      "trial": 2,
+      "mode": "off",
+      "cold": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "45e5501a5082ec2b6c17d3b9ea37d324e8e2fbe827136f883fe44005e4f6a07d",
+        "header_seconds": 16.2988734357059,
+        "first_body_byte_seconds": 16.298877827823162,
+        "total_seconds": 16.459814243018627,
+        "etag": "\"d9746d2b1aeda91fa58ca9fe7aa12439ce4e4a4f\"",
+        "content_range": null
+      },
+      "warm": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "45e5501a5082ec2b6c17d3b9ea37d324e8e2fbe827136f883fe44005e4f6a07d",
+        "header_seconds": 0.008440705016255379,
+        "first_body_byte_seconds": 0.008445002138614655,
+        "total_seconds": 0.16160757839679718,
+        "etag": "\"d9746d2b1aeda91fa58ca9fe7aa12439ce4e4a4f\"",
+        "content_range": null
+      },
+      "cache_visible_after_client_seconds": 0.006113406270742416,
+      "upstream_requests": 1,
+      "warm_resume": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "45e5501a5082ec2b6c17d3b9ea37d324e8e2fbe827136f883fe44005e4f6a07d",
+        "header_seconds": 0.007209327071905136,
+        "first_body_byte_seconds": 0.007213287055492401,
+        "total_seconds": 0.1624803151935339,
+        "etag": "\"d9746d2b1aeda91fa58ca9fe7aa12439ce4e4a4f\"",
+        "content_range": null
+      }
+    },
+    {
+      "trial": 3,
+      "mode": "off",
+      "cold": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "7efe265a8ebc719d6598a31ddc80fcbfacf7e5e375a56461b19e7dc6497c1d12",
+        "header_seconds": 16.257246509194374,
+        "first_body_byte_seconds": 16.257250364869833,
+        "total_seconds": 16.404963605105877,
+        "etag": "\"3442f356045612e437c536694257e761362a55a5\"",
+        "content_range": null
+      },
+      "warm": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "7efe265a8ebc719d6598a31ddc80fcbfacf7e5e375a56461b19e7dc6497c1d12",
+        "header_seconds": 0.009742552414536476,
+        "first_body_byte_seconds": 0.009747426956892014,
+        "total_seconds": 0.17407797276973724,
+        "etag": "\"3442f356045612e437c536694257e761362a55a5\"",
+        "content_range": null
+      },
+      "cache_visible_after_client_seconds": 0.00368446484208107,
+      "upstream_requests": 1,
+      "warm_resume": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "7efe265a8ebc719d6598a31ddc80fcbfacf7e5e375a56461b19e7dc6497c1d12",
+        "header_seconds": 0.0075666047632694244,
+        "first_body_byte_seconds": 0.007570961490273476,
+        "total_seconds": 0.16839134134352207,
+        "etag": "\"3442f356045612e437c536694257e761362a55a5\"",
+        "content_range": null
+      }
+    },
+    {
+      "trial": 3,
+      "mode": "on",
+      "cold": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "7efe265a8ebc719d6598a31ddc80fcbfacf7e5e375a56461b19e7dc6497c1d12",
+        "header_seconds": 0.030327342450618744,
+        "first_body_byte_seconds": 0.030329814180731773,
+        "total_seconds": 16.01298827305436,
+        "etag": "\"2a18f8dde026f9a064764a5d96f63ec34f2378b91fe18c7def6147b083dfd1a2\"",
+        "content_range": null
+      },
+      "warm": {
+        "status": 200,
+        "bytes": 67108864,
+        "sha256": "7efe265a8ebc719d6598a31ddc80fcbfacf7e5e375a56461b19e7dc6497c1d12",
+        "header_seconds": 0.008572997525334358,
+        "first_body_byte_seconds": 0.008576566353440285,
+        "total_seconds": 0.16460303589701653,
+        "etag": "\"3442f356045612e437c536694257e761362a55a5\"",
+        "content_range": null
+      },
+      "cache_visible_after_client_seconds": 0.8826771080493927,
+      "upstream_requests": 1,
+      "warm_resume": {
+        "status": 206,
+        "bytes": 66060288,
+        "sha256": "f4311ed9cbc6722ed32a53a2ed8e0c22cec7a8bc70e00150a24aec814f308657",
+        "header_seconds": 0.06430222652852535,
+        "first_body_byte_seconds": 0.06430600956082344,
+        "total_seconds": 0.2125914879143238,
+        "etag": "\"3442f356045612e437c536694257e761362a55a5\"",
+        "content_range": "bytes 1048576-67108863/67108864"
+      }
+    }
+  ],
+  "median": {
+    "off": {
+      "cold": {
+        "first_body_byte_seconds": 16.298877827823162,
+        "total_seconds": 16.459814243018627
+      },
+      "warm": {
+        "first_body_byte_seconds": 0.009747426956892014,
+        "total_seconds": 0.17407797276973724
+      }
+    },
+    "on": {
+      "cold": {
+        "first_body_byte_seconds": 0.030329814180731773,
+        "total_seconds": 16.01481951586902
+      },
+      "warm": {
+        "first_body_byte_seconds": 0.012236382812261581,
+        "total_seconds": 0.16974108293652534
+      }
+    }
+  },
+  "server_environment": {
+    "version": "1.4.0 development",
+    "jar_sha256": "9d4d527dd3e82dfc6d8abea34b5ee9b6ace9f176f7bcd34291f4a836e00d340b",
+    "java": "OpenJDK 25.0.3",
+    "heap": "-Xms512m -Xmx2g",
+    "database": "PostgreSQL 16",
+    "blob_storage": "MinIO RELEASE.2025-04-22T22-12-26Z",
+    "host_cpu": "Intel i9-9880H",
+    "host_memory_gib": 64,
+    "profile": "dev; application and JdbcTemplate debug logging disabled"
+  },
+  "coordination_check": {
+    "test": "two-process stale-writer publication",
+    "repository": "stream-fence-cf17aaaa",
+    "replicas": 2,
+    "old_clients_completed": true,
+    "new_cache_preserved_on_both": true,
+    "visible_assets": 1,
+    "old_sha256": "bbb342a4268c093343eb1ca8b4cf6224fa96df846adcdb5ff4b590f678b51086",
+    "new_sha256": "0af05227d50666d75b335ff8dc834bb71390a336aa7de36fcf4e0416c6d05984"
+  }
+}

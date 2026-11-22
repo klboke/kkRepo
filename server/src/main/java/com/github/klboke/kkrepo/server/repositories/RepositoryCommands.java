@@ -1,5 +1,7 @@
 package com.github.klboke.kkrepo.server.repositories;
 
+import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.Mode;
+
 import java.util.List;
 
 /**
@@ -273,6 +275,10 @@ public final class RepositoryCommands {
       String layoutPolicy) {
   }
 
+  public record OutboundProxyCommand(
+      Mode mode, String type, String host, Integer port, String username, String password,
+      boolean clearPassword, Mode expectedMode) {}
+
   public record ProxySettings(
       String remoteUrl,
       Integer contentMaxAgeMinutes,
@@ -293,7 +299,91 @@ public final class RepositoryCommands {
       List<String> allowedRedirectHosts,
       String remoteAuthenticationType,
       String remoteNtlmDomain,
+      String remoteNtlmHost,
+      Boolean streamingEnabled,
+      Mode outboundProxyMode,
+      Boolean blockOutboundConnections) {
+    public ProxySettings(
+      String remoteUrl,
+      Integer contentMaxAgeMinutes,
+      Integer metadataMaxAgeMinutes,
+      Boolean autoBlock,
+      String remoteUsername,
+      String remotePassword,
+      Boolean remotePasswordConfigured,
+      String remoteBearerToken,
+      Boolean remoteBearerTokenConfigured,
+      String outboundProxyType,
+      String outboundProxyHost,
+      Integer outboundProxyPort,
+      String outboundProxyUsername,
+      String outboundProxyPassword,
+      Boolean outboundProxyPasswordConfigured,
+      Integer minimumReleaseAgeMinutes,
+      List<String> allowedRedirectHosts,
+      String remoteAuthenticationType,
+      String remoteNtlmDomain,
+      String remoteNtlmHost,
+      Boolean streamingEnabled,
+      Mode outboundProxyMode) {
+      this(remoteUrl, contentMaxAgeMinutes, metadataMaxAgeMinutes, autoBlock, remoteUsername,
+          remotePassword, remotePasswordConfigured, remoteBearerToken, remoteBearerTokenConfigured,
+          outboundProxyType, outboundProxyHost, outboundProxyPort, outboundProxyUsername,
+          outboundProxyPassword, outboundProxyPasswordConfigured, minimumReleaseAgeMinutes,
+          allowedRedirectHosts, remoteAuthenticationType, remoteNtlmDomain, remoteNtlmHost,
+          streamingEnabled, outboundProxyMode, null);
+    }
+
+    public ProxySettings(
+      String remoteUrl,
+      Integer contentMaxAgeMinutes,
+      Integer metadataMaxAgeMinutes,
+      Boolean autoBlock,
+      String remoteUsername,
+      String remotePassword,
+      Boolean remotePasswordConfigured,
+      String remoteBearerToken,
+      Boolean remoteBearerTokenConfigured,
+      String outboundProxyType,
+      String outboundProxyHost,
+      Integer outboundProxyPort,
+      String outboundProxyUsername,
+      String outboundProxyPassword,
+      Boolean outboundProxyPasswordConfigured,
+      Integer minimumReleaseAgeMinutes,
+      List<String> allowedRedirectHosts,
+      String remoteAuthenticationType,
+      String remoteNtlmDomain,
+      String remoteNtlmHost,
+      Boolean streamingEnabled) {
+      this(remoteUrl, contentMaxAgeMinutes, metadataMaxAgeMinutes, autoBlock, remoteUsername, remotePassword, remotePasswordConfigured, remoteBearerToken, remoteBearerTokenConfigured, outboundProxyType, outboundProxyHost, outboundProxyPort, outboundProxyUsername, outboundProxyPassword, outboundProxyPasswordConfigured, minimumReleaseAgeMinutes, allowedRedirectHosts, remoteAuthenticationType, remoteNtlmDomain, remoteNtlmHost, streamingEnabled, null);
+    }
+
+    /** Compatibility constructor for callers without progressive proxy delivery. */
+    public ProxySettings(
+      String remoteUrl,
+      Integer contentMaxAgeMinutes,
+      Integer metadataMaxAgeMinutes,
+      Boolean autoBlock,
+      String remoteUsername,
+      String remotePassword,
+      Boolean remotePasswordConfigured,
+      String remoteBearerToken,
+      Boolean remoteBearerTokenConfigured,
+      String outboundProxyType,
+      String outboundProxyHost,
+      Integer outboundProxyPort,
+      String outboundProxyUsername,
+      String outboundProxyPassword,
+      Boolean outboundProxyPasswordConfigured,
+      Integer minimumReleaseAgeMinutes,
+      List<String> allowedRedirectHosts,
+      String remoteAuthenticationType,
+      String remoteNtlmDomain,
       String remoteNtlmHost) {
+      this(remoteUrl, contentMaxAgeMinutes, metadataMaxAgeMinutes, autoBlock, remoteUsername, remotePassword, remotePasswordConfigured, remoteBearerToken, remoteBearerTokenConfigured, outboundProxyType, outboundProxyHost, outboundProxyPort, outboundProxyUsername, outboundProxyPassword, outboundProxyPasswordConfigured, minimumReleaseAgeMinutes, allowedRedirectHosts, remoteAuthenticationType, remoteNtlmDomain, remoteNtlmHost, null);
+    }
+
     /** Compatibility constructor for callers that predate upstream NTLM authentication. */
     public ProxySettings(
         String remoteUrl,
@@ -426,7 +516,13 @@ public final class RepositoryCommands {
   public record DockerSettings(
       Boolean connectorEnabled,
       Integer connectorPort,
-      String connectorPublicUrl) {
+      String connectorPublicUrl,
+      Boolean httpsConnectorEnabled,
+      Integer httpsConnectorPort,
+      String tlsBundle) {
+    public DockerSettings(Boolean connectorEnabled, Integer connectorPort, String connectorPublicUrl) {
+      this(connectorEnabled, connectorPort, connectorPublicUrl, null, null, null);
+    }
   }
 
   public record CargoSettings(

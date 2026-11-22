@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.routing.gitlfs;
 
+import com.github.klboke.kkrepo.server.offload.DownloadOffload;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.protocol.gitlfs.GitLfsException;
@@ -23,6 +24,13 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class GitLfsProtocolHandler implements RepositoryProtocolHandler {
+  private DownloadOffload downloadOffload;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  public void setDownloadOffload(DownloadOffload downloadOffload) {
+    this.downloadOffload = downloadOffload;
+  }
+
   private final GitLfsHostedService service;
   private final BlobStorageRegistry storages;
   private final ArtifactDownloadPolicy downloads;
@@ -104,6 +112,9 @@ public class GitLfsProtocolHandler implements RepositoryProtocolHandler {
         status = 206;
       } else {
         body = storage.get(reference).orElseThrow(() -> new GitLfsException(404, "Object content is unavailable"));
+      }
+      if (downloadOffload != null && downloadOffload.tryHandoff(request, status, headers, body)) {
+        return ResponseEntity.status(status).headers(headers).build();
       }
       StreamingResponseBody streaming = output -> {
         try (body) { body.transferTo(output); }

@@ -83,6 +83,7 @@ public final class PypiPartialFetchSupport {
   };
 
   public PypiResponse apply(HttpServletRequest request, PypiResponse response) {
+    if (com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.rangeHandled(request)) return response;
     return apply(
         request.getMethod(),
         request.getHeader(HttpHeaders.RANGE),

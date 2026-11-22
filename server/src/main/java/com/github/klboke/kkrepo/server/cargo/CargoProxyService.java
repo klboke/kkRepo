@@ -21,6 +21,7 @@ import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
 import java.io.IOException;
 import java.net.URLEncoder;
@@ -36,6 +37,9 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class CargoProxyService {
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService streaming;
+
   private static final long[] BACKOFF_SECONDS = {30, 60, 120, 300, 600, 1800};
   static final TypeReference<Map<String, Object>> JSON_MAP = new TypeReference<>() {
   };
@@ -113,6 +117,7 @@ public class CargoProxyService {
   MavenResponse download(RepositoryRuntime runtime, String crateName, String version, boolean headOnly) {
     ensureProxy(runtime);
     String path = CargoAssetWriter.cratePath(crateName, version);
+    com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.enableRanges(runtime, path);
     Optional<CachedAssetMetadata> cached = usableCached(runtime, path, lookupCached(runtime, path));
     Instant now = Instant.now();
     if (cached.isPresent() && isFresh(cached.get(), runtime.contentMaxAgeMinutesOrDefault(), now)) {
@@ -182,6 +187,8 @@ public class CargoProxyService {
     CargoRemoteConfig config;
     try {
       config = remoteConfig(runtime, now);
+    } catch (CargoExceptions.CargoNotFoundException e) {
+      return localSearch(runtime, query, headOnly);
     } catch (CargoExceptions.BadUpstreamException e) {
       return searchFallback(runtime, query, headOnly, e.getMessage(), now);
     }
@@ -207,6 +214,8 @@ public class CargoProxyService {
         }
         return searchFallback(runtime, query, headOnly, "Upstream search returned " + status, now);
       });
+    } catch (Blocked blocked) {
+      return localSearch(runtime, query, headOnly);
     } catch (IOException e) {
       return searchFallback(runtime, query, headOnly, "Upstream search IO error: " + e.getMessage(), now);
     }
@@ -271,6 +280,9 @@ public class CargoProxyService {
         return handleUpstreamFailure(runtime, path, cached, headOnly,
             "Upstream returned " + status, now);
       });
+    } catch (Blocked blocked) {
+      return reader.serveSnapshot(cached.orElseThrow(() -> new CargoExceptions.CargoIndexNotFoundException(crateName)),
+          headOnly, path);
     } catch (IOException e) {
       return handleUpstreamFailure(runtime, path, cached, headOnly,
           "Upstream IO error: " + e.getMessage(), now);
@@ -330,7 +342,9 @@ public class CargoProxyService {
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
         .withRepositoryForContent(runtime, upstreamAuthRequired);
     try {
-      return fetcher.fetchWithBodyRetry(req, path, result -> {
+      return com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.fetchMaven(
+          streaming, fetcher, req, path, runtime, !headOnly && cached.isEmpty(),
+          expectedChecksum(indexEntry, path), null, result -> {
         int status = result.status();
         if (status == 304 && cached.isPresent()) {
           touchVerified(runtime, path, cached.get(), now);
@@ -367,6 +381,9 @@ public class CargoProxyService {
         return handleUpstreamFailure(runtime, path, cached, headOnly,
             "Upstream returned " + status, now);
       });
+    } catch (Blocked blocked) {
+      return reader.serveSnapshot(cached.orElseThrow(() -> new CargoExceptions.CargoNotFoundException(path)),
+          headOnly, path);
     } catch (IOException e) {
       return handleUpstreamFailure(runtime, path, cached, headOnly,
           "Upstream IO error: " + e.getMessage(), now);
@@ -422,6 +439,9 @@ public class CargoProxyService {
         }
         throw new CargoExceptions.BadUpstreamException("Upstream config.json returned " + status);
       });
+    } catch (Blocked blocked) {
+      var snapshot = cached.orElseThrow(() -> new CargoExceptions.CargoNotFoundException(path));
+      return parseRemoteConfig(reader.readText(snapshot, path));
     } catch (IOException e) {
       if (cached.isPresent()) {
         return parseRemoteConfig(reader.readText(cached.get(), path));

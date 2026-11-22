@@ -7,7 +7,9 @@ import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.metrics.KkRepoMetrics;
+import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
 import com.github.klboke.kkrepo.server.security.SecurityValidationException;
 import io.micrometer.core.instrument.Timer;
@@ -35,7 +37,7 @@ public class DockerRemoteRegistryClient {
   private static final int MAX_REDIRECTS = 5;
   private static final int MAX_CHALLENGE_BODY_BYTES = 64 * 1024;
 
-  private final HttpRemoteFetcher fetcher;
+  private final RepositoryOutboundBlock outboundBlock;
   private final OutboundRequestPolicy outboundPolicy;
   private final ProxiedHttpClientFactory transportFactory;
   private final SharedCache tokenCache;
@@ -45,14 +47,14 @@ public class DockerRemoteRegistryClient {
 
   @Autowired
   public DockerRemoteRegistryClient(
-      HttpRemoteFetcher fetcher,
+      RepositoryOutboundBlock outboundBlock,
       OutboundRequestPolicy outboundPolicy,
       SharedCache tokenCache,
       @Value("${kkrepo.docker.proxy.remote-token-cache.enabled:true}") boolean tokenCacheEnabled,
       @Value("${kkrepo.docker.proxy.remote-token-cache.ttl-seconds:300}") long tokenCacheTtlSeconds,
       KkRepoMetrics metrics,
       ProxiedHttpClientFactory transportFactory) {
-    this.fetcher = fetcher;
+    this.outboundBlock = outboundBlock;
     this.outboundPolicy = outboundPolicy;
     this.tokenCache = tokenCache;
     this.tokenCacheEnabled = tokenCacheEnabled;
@@ -67,15 +69,20 @@ public class DockerRemoteRegistryClient {
 
   public HttpRemoteFetcher.Result get(
       RepositoryRuntime runtime, String remotePath, String query, String accept) throws IOException {
+    return get(runtime, remotePath, query, accept, null);
+  }
+
+  public HttpRemoteFetcher.Result get(RepositoryRuntime runtime, String remotePath,
+      String query, String accept, HttpRemoteFetcher.ByteRange range) throws IOException {
     String url = remoteUrl(runtime, remotePath, query);
-    RemoteFetch fetched = fetch(url, runtime, null, accept);
+    RemoteFetch fetched = fetch(url, runtime, null, accept, range);
     HttpRemoteFetcher.Result result = fetched.result();
     if (result.status() == 401 && fetched.credentialsAllowed()) {
       result = releaseChallenge(result);
       String challenge = result.header("WWW-Authenticate");
       RemoteToken token = token(runtime, challenge).orElse(null);
       if (token != null) {
-        fetched = fetch(fetched.effectiveUri().toString(), runtime, token.value(), accept);
+        fetched = fetch(fetched.effectiveUri().toString(), runtime, token.value(), accept, range);
         result = fetched.result();
         if (result.status() == 401 && token.cached() && fetched.credentialsAllowed()) {
           result = releaseChallenge(result);
@@ -83,7 +90,7 @@ public class DockerRemoteRegistryClient {
           challenge = result.header("WWW-Authenticate");
           token = fetchToken(runtime, BearerChallenge.parse(challenge).orElse(null), true).orElse(null);
           if (token != null) {
-            result = fetch(fetched.effectiveUri().toString(), runtime, token.value(), accept).result();
+            result = fetch(fetched.effectiveUri().toString(), runtime, token.value(), accept, range).result();
           }
         }
       }
@@ -106,8 +113,8 @@ public class DockerRemoteRegistryClient {
   }
 
   private RemoteFetch fetch(
-      String url, RepositoryRuntime runtime, String bearerToken, String accept) throws IOException {
-    return pinnedFetchWithHeaders(url, runtime, bearerToken, accept, 0, true);
+      String url, RepositoryRuntime runtime, String bearerToken, String accept, HttpRemoteFetcher.ByteRange range) throws IOException {
+    return pinnedFetchWithHeaders(url, runtime, bearerToken, accept, 0, true, range);
   }
 
   private Optional<RemoteToken> token(RepositoryRuntime runtime, String challenge) throws IOException {
@@ -152,7 +159,8 @@ public class DockerRemoteRegistryClient {
       String bearerToken,
       String accept,
       int redirects,
-      boolean sendCredentials) throws IOException {
+      boolean sendCredentials, HttpRemoteFetcher.ByteRange range) throws IOException {
+    if (outboundBlock != null) outboundBlock.check(runtime.name());
     Timer.Sample sample = metrics == null ? null : metrics.startTimer();
     int status = 0;
     Throwable failure = null;
@@ -161,13 +169,19 @@ public class DockerRemoteRegistryClient {
     try {
       boolean publicHttps = runtime != null && runtime.contentRedirectPolicy()
           == com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS;
+      OutboundProxyConfig proxy = OutboundProxyConfig.forTarget(runtime.outboundProxy(), url);
       OutboundRequestPolicy.ResolvedHttpTarget target = publicHttps
           ? outboundPolicy.resolvePublicHttpsTarget(url, "docker remote fetch")
-          : outboundPolicy.resolveHttpTarget(url, "docker remote fetch", proxyResolvesDns(runtime));
+          : outboundPolicy.resolveHttpTarget(url, "docker remote fetch", proxy != null);
       URI uri = target.uri();
       Map<String, String> headers = new LinkedHashMap<>();
       headers.put("User-Agent", "kkrepo/0.1");
       headers.put("Accept", accept == null || accept.isBlank() ? "*/*" : accept);
+      if (range != null) {
+        headers.put("Range", range.range());
+        if (range.ifRange() != null) headers.put("If-Range", range.ifRange());
+        headers.put("Accept-Encoding", "identity");
+      }
       if (sendCredentials && bearerToken != null && !bearerToken.isBlank()) {
         headers.put("Authorization", "Bearer " + bearerToken);
       } else if (sendCredentials) {
@@ -175,7 +189,7 @@ public class DockerRemoteRegistryClient {
       }
       response = transportFactory.execute(
           runtime.name(),
-          runtime.outboundProxy(),
+          proxy,
           "GET",
           target,
           headers,
@@ -201,7 +215,7 @@ public class DockerRemoteRegistryClient {
             forwardCredentials ? bearerToken : null,
             accept,
             redirects + 1,
-            forwardCredentials);
+            forwardCredentials, range);
       }
       return new RemoteFetch(
           new HttpRemoteFetcher.Result(response.status(), response.headers(), releaseOnClose(response)),
@@ -226,20 +240,21 @@ public class DockerRemoteRegistryClient {
       BearerChallenge bearer,
       boolean cacheable,
       String url) throws IOException {
+    if (outboundBlock != null) outboundBlock.check(runtime.name());
     Timer.Sample sample = metrics == null ? null : metrics.startTimer();
     int status = 0;
     Throwable failure = null;
     ProxiedHttpClientFactory.ProxiedResponse response = null;
     try {
+      OutboundProxyConfig proxy = OutboundProxyConfig.forTarget(runtime.outboundProxy(), url);
       OutboundRequestPolicy.ResolvedHttpTarget target =
-          outboundPolicy.resolveHttpTarget(
-              url, "docker token fetch", proxyResolvesDns(runtime));
+          outboundPolicy.resolveHttpTarget(url, "docker token fetch", proxy != null);
       Map<String, String> headers = new LinkedHashMap<>();
       headers.put("User-Agent", "kkrepo/0.1");
       basicAuthorization(runtime).ifPresent(value -> headers.put("Authorization", value));
       response = transportFactory.execute(
           runtime.name(),
-          runtime.outboundProxy(),
+          proxy,
           "GET",
           target,
           headers,
@@ -413,11 +428,7 @@ public class DockerRemoteRegistryClient {
     return runtime == null ? 0 : runtime.id();
   }
 
-  private static boolean proxyResolvesDns(RepositoryRuntime runtime) {
-    return runtime != null
-        && runtime.outboundProxy() != null
-        && runtime.outboundProxy().enabled();
-  }
+
 
   private static String credentialFingerprint(RepositoryRuntime runtime) {
     return sha256(basicAuthorization(runtime).orElse("anonymous"));

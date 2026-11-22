@@ -508,6 +508,7 @@ public class MavenAssetWriter {
       String createdByIp,
       Map<String, String> extraBlobAttributes,
       Path responseFile) {
+    com.github.klboke.kkrepo.server.proxy.ProxyCachePublication.check(runtime, path.path());
     Instant now = Instant.now();
     String contentType = contentTypeHint != null
         ? contentTypeHint

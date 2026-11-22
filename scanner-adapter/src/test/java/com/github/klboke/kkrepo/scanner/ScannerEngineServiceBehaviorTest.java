@@ -29,12 +29,16 @@ import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 
 class ScannerEngineServiceBehaviorTest {
@@ -83,6 +87,42 @@ class ScannerEngineServiceBehaviorTest {
     assertFalse(command.getValue().stream()
         .anyMatch(value -> value.startsWith("cyclonedx-json=")));
     assertEquals("sbom.cdx.json", scannerOutput.getValue().getFileName().toString());
+  }
+
+  @ParameterizedTest
+  @EnumSource(value = ScannerArtifactType.class, names = {"TAR_GZ", "DEB", "RPM"})
+  void catalogsPackagesWithLinksThroughTheRealArchiveGuard(ScannerArtifactType type)
+      throws Exception {
+    byte[] input = switch (type) {
+      case TAR_GZ -> ArchiveLinkFixtures.galaxy();
+      case DEB -> ArchiveLinkFixtures.deb();
+      case RPM -> ArchiveLinkFixtures.rpm();
+      default -> throw new IllegalArgumentException("Unexpected fixture type");
+    };
+    String checksum = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(input));
+    Fixture fixture = new Fixture(temporaryDirectory, new ArchiveGuard());
+    when(fixture.scannerInput.copy(any(), any(), anyString(), anyLong(), any(), any()))
+        .thenAnswer(invocation -> new ScannerInput().copy(
+            invocation.getArgument(0), invocation.getArgument(1), invocation.getArgument(2),
+            invocation.getArgument(3), invocation.getArgument(4), invocation.getArgument(5)));
+
+    CatalogResponse response = fixture.engine.catalog(
+        new ByteArrayInputStream(input), checksum, input.length, type, limits());
+
+    assertEquals(ScanCompleteness.COMPLETE, response.completeness());
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<List<String>> command = ArgumentCaptor.forClass(List.class);
+    verify(fixture.processes).run(command.capture(), any(), any(), any(), any());
+    assertEquals("scan", command.getValue().get(1));
+    assertTrue(command.getValue().get(2).endsWith(type.safeFilename()));
+    @SuppressWarnings("unchecked")
+    ArgumentCaptor<Map<String, Object>> summary = ArgumentCaptor.forClass(Map.class);
+    verify(fixture.documents).catalog(
+        any(), eq(checksum), eq("1.2"), anyString(), summary.capture());
+    assertTrue(((Number) summary.getValue().get("archiveEntries")).intValue() > 0);
+    try (var files = Files.list(temporaryDirectory)) {
+      assertFalse(files.anyMatch(path -> path.getFileName().toString().startsWith("catalog-")));
+    }
   }
 
   @Test
@@ -241,15 +281,14 @@ class ScannerEngineServiceBehaviorTest {
   @Test
   void matchesCycloneDxAndRejectsOversizedOrMissingLimits() throws Exception {
     Fixture fixture = new Fixture(temporaryDirectory);
-    when(fixture.scannerInput.copy(any(), any(), eq(SHA256), eq(null), any(), any()))
-        .thenAnswer(invocation -> {
-          Path path = invocation.getArgument(1);
-          Files.write(path, "{}".getBytes());
-          return new ScannerInput.Verified(path, SHA256, 2);
-        });
+    when(fixture.scannerInput.copySbom(any(), any(), anyString(), any(), anyLong(), any()))
+        .thenAnswer(invocation -> new ScannerInput().copySbom(
+            invocation.getArgument(0), invocation.getArgument(1), invocation.getArgument(2),
+            invocation.getArgument(3), invocation.getArgument(4), invocation.getArgument(5)));
 
+    byte[] sbom = "{}".getBytes();
     MatchResponse response = fixture.engine.match(
-        new ByteArrayInputStream("{}".getBytes()), SHA256, limits());
+        new ByteArrayInputStream(sbom), ScannerDocumentMapper.sha256(sbom), limits());
 
     assertEquals("db-1", response.vulnerabilityDatabaseRevision());
     ArgumentCaptor<Duration> readinessTimeouts = ArgumentCaptor.forClass(Duration.class);
@@ -261,14 +300,12 @@ class ScannerEngineServiceBehaviorTest {
         "RESOURCE_LIMITS_REQUIRED",
         () -> fixture.engine.match(new ByteArrayInputStream(new byte[0]), SHA256, null));
 
-    Fixture oversized = new Fixture(temporaryDirectory.resolve("large"));
-    when(oversized.scannerInput.copy(any(), any(), eq(SHA256), eq(null), any(), any()))
-        .thenAnswer(invocation -> new ScannerInput.Verified(
-            invocation.getArgument(1), SHA256, 2048));
+    byte[] oversizedSbom = new byte[2048];
     assertCode(
         "SBOM_TOO_LARGE",
-        () -> oversized.engine.match(
-            new ByteArrayInputStream(new byte[0]), SHA256, limits()));
+        () -> fixture.engine.match(
+            new ByteArrayInputStream(oversizedSbom), ScannerDocumentMapper.sha256(oversizedSbom),
+            limits()));
   }
 
   @Test
@@ -468,7 +505,7 @@ class ScannerEngineServiceBehaviorTest {
     final ScannerAdapterProperties properties = new ScannerAdapterProperties();
     final BoundedProcessRunner processes = mock(BoundedProcessRunner.class);
     final ScannerInput scannerInput = mock(ScannerInput.class);
-    final ArchiveGuard archiveGuard = mock(ArchiveGuard.class);
+    final ArchiveGuard archiveGuard;
     final CondaPackageCataloger condaPackages = mock(CondaPackageCataloger.class);
     final AlpinePackageCataloger alpinePackages = mock(AlpinePackageCataloger.class);
     final ConanMultipartInput conanMultipart = mock(ConanMultipartInput.class);
@@ -481,6 +518,11 @@ class ScannerEngineServiceBehaviorTest {
     byte[] syftOutput = "{\"bomFormat\":\"CycloneDX\"}".getBytes();
 
     Fixture(Path workDirectory) {
+      this(workDirectory, mock(ArchiveGuard.class));
+    }
+
+    Fixture(Path workDirectory, ArchiveGuard archiveGuard) {
+      this.archiveGuard = archiveGuard;
       properties.setWorkDirectory(workDirectory);
       properties.setVulnerabilityDatabaseDirectory(workDirectory.resolve("database"));
       properties.setMaxInputBytes(4096);

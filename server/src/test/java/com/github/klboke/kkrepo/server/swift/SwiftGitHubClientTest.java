@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.swift;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -9,6 +10,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
@@ -16,6 +19,7 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.EOFException;
@@ -37,6 +41,48 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 class SwiftGitHubClientTest {
+
+  @Test
+  void manualBlockSkipsAllGitHubFallbacksForTagsAndArchives() throws Exception {
+    var fetcher = mock(HttpRemoteFetcher.class);
+    var client = new SwiftGitHubClient(fetcher, new ObjectMapper(), mock(SwiftArchiveInspector.class));
+    var runtime = proxy("https://github.com/");
+    var coordinates = SwiftGitHubClient.coordinates("apple", "swift-log");
+    when(fetcher.fetchWithBodyRetry(any(), anyString(), any())).thenThrow(new Blocked());
+    assertThrows(SwiftExceptions.OutboundBlocked.class, () -> client.discoverTags(runtime, coordinates, null));
+    assertThrows(SwiftExceptions.OutboundBlocked.class, () -> client.archive(runtime, coordinates, "a".repeat(40)));
+    verify(fetcher, org.mockito.Mockito.times(2)).fetchWithBodyRetry(any(), anyString(), any());
+  }
+
+  @Test
+  void blockEnabledBetweenGitHubAttemptsWinsOverThePreviousUpstreamFailure() throws Exception {
+    var runtime = proxy("https://github.com/");
+    var coordinates = SwiftGitHubClient.coordinates("apple", "swift-log");
+    var fetcher = mock(HttpRemoteFetcher.class);
+    var client = new SwiftGitHubClient(fetcher, new ObjectMapper(), mock(SwiftArchiveInspector.class));
+    when(fetcher.fetchWithBodyRetry(any(), anyString(), any()))
+        .thenThrow(new IOException("upstream connection closed"), new Blocked(),
+            new IOException("upstream connection closed"), new Blocked());
+
+    assertThrows(SwiftExceptions.OutboundBlocked.class, () -> client.discoverTags(runtime, coordinates, null));
+    assertThrows(SwiftExceptions.OutboundBlocked.class, () -> client.archive(runtime, coordinates, "a".repeat(40)));
+  }
+
+  @Test
+  void blockEnabledBeforeGitHubAnonymousRetryPreservesTheLocalMiss() throws Exception {
+    var runtime = proxy("https://github.com/", "upstream-token");
+    var coordinates = SwiftGitHubClient.coordinates("apple", "swift-log");
+    var fetcher = mock(HttpRemoteFetcher.class);
+    var client = new SwiftGitHubClient(fetcher, new ObjectMapper(), mock(SwiftArchiveInspector.class), delay -> {});
+    when(fetcher.fetchWithBodyRetry(any(), anyString(), any())).thenAnswer(invocation -> {
+      HttpRemoteFetcher.Request request = invocation.getArgument(0);
+      if (request.authorizationHeader() == null) throw new Blocked();
+      HttpRemoteFetcher.ResultHandler<?> handler = invocation.getArgument(2);
+      return handler.handle(result(503, Map.of(), new byte[0]));
+    });
+
+    assertThrows(SwiftExceptions.OutboundBlocked.class, () -> client.discoverTags(runtime, coordinates, null));
+  }
 
   @Test
   void normalizesSupportedGitHubRepositoryUrlForms() {
@@ -595,6 +641,33 @@ class SwiftGitHubClientTest {
   }
 
   @Test
+  void acceptsVersionedManifestWithAnOlderDeclaredToolsVersionFromGitHub() throws Exception {
+    byte[] archive = swiftArchive(Map.of(
+        "Package.swift", "4.2",
+        "Package@swift-5.6.swift", "5.6",
+        "Package@swift-5.7.swift", "5.6"));
+    SequencedFetcher fetcher = new SequencedFetcher(
+        result(200, Map.of("Content-Type", "application/zip"), archive));
+    SwiftGitHubClient client = new SwiftGitHubClient(
+        fetcher, new ObjectMapper(), new SwiftArchiveInspector(1024 * 1024, 1024 * 1024, 20));
+
+    SwiftArchiveInspector.InspectedArchive inspected = client.archive(
+        proxy("https://github.com/"),
+        SwiftGitHubClient.coordinates("apple", "swift-protobuf"), "a".repeat(40));
+    try {
+      assertEquals(1, fetcher.calls);
+      assertEquals(3, inspected.manifests().size());
+      var selected = inspected.manifests().stream()
+          .filter(manifest -> "5.7".equals(manifest.lookupToolsVersion())).findFirst().orElseThrow();
+      assertEquals("Package@swift-5.7.swift", selected.filename());
+      assertEquals("5.6", selected.declaredToolsVersion());
+      assertArrayEquals(archive, Files.readAllBytes(inspected.file()));
+    } finally {
+      Files.deleteIfExists(inspected.file());
+    }
+  }
+
+  @Test
   void retriesAnInterruptedArchiveBodyWithAFreshUpstreamRequest() throws Exception {
     byte[] archive = swiftArchive();
     SequencedFetcher fetcher = new SequencedFetcher(
@@ -633,14 +706,20 @@ class SwiftGitHubClientTest {
   }
 
   private static byte[] swiftArchive() throws IOException {
+    return swiftArchive(Map.of("Package.swift", "5.9"));
+  }
+
+  private static byte[] swiftArchive(Map<String, String> manifests) throws IOException {
     ByteArrayOutputStream output = new ByteArrayOutputStream();
     try (ZipOutputStream zip = new ZipOutputStream(output)) {
-      zip.putNextEntry(new ZipEntry("swift-syntax/Package.swift"));
-      zip.write(("// swift-tools-version: 5.9\n"
-          + "import PackageDescription\n"
-          + "let package = Package(name: \"swift-syntax\")\n")
-          .getBytes(StandardCharsets.UTF_8));
-      zip.closeEntry();
+      for (var manifest : manifests.entrySet()) {
+        zip.putNextEntry(new ZipEntry("swift-syntax/" + manifest.getKey()));
+        zip.write(("// swift-tools-version: " + manifest.getValue() + "\n"
+            + "import PackageDescription\n"
+            + "let package = Package(name: \"swift-syntax\")\n")
+            .getBytes(StandardCharsets.UTF_8));
+        zip.closeEntry();
+      }
     }
     return output.toByteArray();
   }

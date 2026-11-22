@@ -78,9 +78,11 @@ Artifact Scanning 使用 Syft 生成 CycloneDX SBOM，并使用 Grype 匹配已�
 默认 Helm 资源为 scanner adapter 请求 `500m CPU / 1 GiB`，限制
 `2 CPU / 4 GiB`，并提供 `9 GiB` ephemeral-storage 上限和 `10 GiB` 漏洞数据库 PVC。
 Helm 与 Compose 默认提供 `8 GiB` scratch volume，并设置 `7 GiB` 的进程级共享准入
-预算。scanner adapter 会按照暂存输入、递归检查时保留的嵌套归档和受限进程输出估算
-每个请求的空间；单个请求无法放入预算时返回 `413`，并发竞争则短暂等待后返回可重试
-的 `429`，避免磁盘被过量承诺。准入预算应小于实际 scratch volume，再根据最大制品
+预算。直接扫描制品时，按声明大小预留输入空间，写入时执行该上限，同时保留嵌套归档
+和进程输出预算。APK、Conda 和 Conan 会额外准备扫描目录，因此与拉取镜像层的 OCI
+扫描一样按 profile 预留。Match 按受限的 SBOM 输入和进程输出预留空间。
+单个请求无法放入预算时返回 `413`，并发竞争则短暂等待后返回可重试的 `429`，
+避免磁盘被过量承诺。准入预算应小于实际 scratch volume，再根据最大制品
 和扫描耗时压测结果同步调整两者。
 
 ## Docker Compose 部署

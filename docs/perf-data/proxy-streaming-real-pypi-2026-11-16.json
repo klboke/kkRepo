@@ -1,0 +1,202 @@
+{
+  "run_id": "c915994fa8",
+  "started_at": "2026-11-15T23:22:10.342903+00:00",
+  "build_label": "767c924bda69082ccfb4dd9cb1fb3d3c04b2bb19",
+  "client_platform": "macOS-14.7.8-x86_64-i386-64bit",
+  "client_python": "3.10.11",
+  "repeats": 1,
+  "artifact": {
+    "project": "torch",
+    "version": "2.5.1",
+    "filename": "torch-2.5.1-cp311-cp311-manylinux1_x86_64.whl",
+    "size_bytes": 906474467,
+    "sha256": "de5b7d6740c4b636ef4db92be922f0edc425b65ed78c5076c43c42d362a45457",
+    "url": "https://files.pythonhosted.org/packages/d1/35/e8b2daf02ce933e4518e6f5682c72fd0ed66c15910ea1fb4168f442b71c4/torch-2.5.1-cp311-cp311-manylinux1_x86_64.whl",
+    "metadata_url": "https://pypi.org/pypi/torch/2.5.1/json"
+  },
+  "method": {
+    "recipe": "pypi-proxy",
+    "remote_url": "https://pypi.org/",
+    "concurrency": 1,
+    "artificial_throttling": false,
+    "client_socket_timeout_seconds": 1800,
+    "index_prewarmed": true,
+    "unique_store_per_sample": true,
+    "cache_poll_interval_seconds": 0.1
+  },
+  "fixtures": [
+    {
+      "repository": "pypi-real-c915994fa8-1-off",
+      "blob_store": "pypi-real-c915994fa8-1-off",
+      "prefix": "off/pypi-real-c915994fa8-1-off"
+    },
+    {
+      "repository": "pypi-real-c915994fa8-1-on",
+      "blob_store": "pypi-real-c915994fa8-1-on",
+      "prefix": "off/pypi-real-c915994fa8-1-on"
+    }
+  ],
+  "results": [
+    {
+      "trial": 1,
+      "mode": "off",
+      "repository": "pypi-real-c915994fa8-1-off",
+      "cold": {
+        "started_at": "2026-11-15T23:22:10.904256+00:00",
+        "status": 200,
+        "bytes": 906474467,
+        "sha256": "de5b7d6740c4b636ef4db92be922f0edc425b65ed78c5076c43c42d362a45457",
+        "header_seconds": 629.6805668473244,
+        "first_body_byte_seconds": 629.6805703043938,
+        "total_seconds": 631.6305582579225,
+        "average_mib_per_second": 1.3686504022861716,
+        "etag": "\"2239612c87e7534b68525c5b89527a6015b510e4\""
+      },
+      "warm": {
+        "started_at": "2026-11-15T23:32:42.650468+00:00",
+        "status": 200,
+        "bytes": 906474467,
+        "sha256": "de5b7d6740c4b636ef4db92be922f0edc425b65ed78c5076c43c42d362a45457",
+        "header_seconds": 0.010672552511096,
+        "first_body_byte_seconds": 0.010676519945263863,
+        "total_seconds": 2.1459372006356716,
+        "average_mib_per_second": 402.8456272624694,
+        "etag": "\"2239612c87e7534b68525c5b89527a6015b510e4\""
+      },
+      "cache_visible_after_client_seconds": 0.12451555579900742,
+      "cold_upstream_requests": 2.0,
+      "warm_upstream_requests": 0.0
+    },
+    {
+      "trial": 1,
+      "mode": "on",
+      "repository": "pypi-real-c915994fa8-1-on",
+      "cold": {
+        "started_at": "2026-11-15T23:32:45.437308+00:00",
+        "status": 200,
+        "bytes": 906474467,
+        "sha256": "de5b7d6740c4b636ef4db92be922f0edc425b65ed78c5076c43c42d362a45457",
+        "header_seconds": 0.41778177581727505,
+        "first_body_byte_seconds": 0.41778540797531605,
+        "total_seconds": 883.2068710271269,
+        "average_mib_per_second": 0.9787983382087989,
+        "etag": "\"f64fe838eaa70e5e8fac4d6d929065d4-10\""
+      },
+      "warm": {
+        "started_at": "2026-11-15T23:47:42.790660+00:00",
+        "status": 200,
+        "bytes": 906474467,
+        "sha256": "de5b7d6740c4b636ef4db92be922f0edc425b65ed78c5076c43c42d362a45457",
+        "header_seconds": 0.012597505003213882,
+        "first_body_byte_seconds": 0.012603448703885078,
+        "total_seconds": 2.1453916374593973,
+        "average_mib_per_second": 402.94806904331733,
+        "etag": "\"2239612c87e7534b68525c5b89527a6015b510e4\""
+      },
+      "cache_visible_after_client_seconds": 14.242696940898895,
+      "cold_upstream_requests": 2.0,
+      "warm_upstream_requests": 0.0
+    }
+  ],
+  "completed_at": "2026-11-15T23:47:44.938482+00:00",
+  "median": {
+    "off": {
+      "cold": {
+        "first_body_byte_seconds": 629.6805703043938,
+        "total_seconds": 631.6305582579225,
+        "average_mib_per_second": 1.3686504022861716
+      },
+      "warm": {
+        "first_body_byte_seconds": 0.010676519945263863,
+        "total_seconds": 2.1459372006356716,
+        "average_mib_per_second": 402.8456272624694
+      }
+    },
+    "on": {
+      "cold": {
+        "first_body_byte_seconds": 0.41778540797531605,
+        "total_seconds": 883.2068710271269,
+        "average_mib_per_second": 0.9787983382087989
+      },
+      "warm": {
+        "first_body_byte_seconds": 0.012603448703885078,
+        "total_seconds": 2.1453916374593973,
+        "average_mib_per_second": 402.94806904331733
+      }
+    }
+  },
+  "median_cache_visible_after_client_seconds": {
+    "off": 0.12451555579900742,
+    "on": 14.242696940898895
+  },
+  "completed_pairs": 1,
+  "measurement_note": "One complete verified OFF/ON pair after fixing the MVC total-duration timeout. These are single samples, not controlled bandwidth measurements.",
+  "server_environment": {
+    "version": "1.4.0 development",
+    "jar_sha256": "80ea33b9ed62cfabdfcca90742dc2a34a62d36556f36d5a93238c6aec7fc187e",
+    "java": "OpenJDK 25.0.3",
+    "heap": "-Xms512m -Xmx2g",
+    "database": "PostgreSQL 16",
+    "blob_storage": "MinIO RELEASE.2025-04-22T22-12-26Z",
+    "host_cpu": "Intel i9-9880H",
+    "host_memory_gib": 64,
+    "profile": "dev; application and JdbcTemplate debug logging disabled",
+    "implementation_commit": "767c924bda69082ccfb4dd9cb1fb3d3c04b2bb19",
+    "global_mvc_async_timeout": "10m (unchanged)",
+    "progressive_async_total_timeout": "disabled per admitted progressive request"
+  },
+  "upstream_head_observation": {
+    "last-modified": "Tue, 29 Oct 2024 17:39:31 GMT",
+    "etag": "\"f64fe838eaa70e5e8fac4d6d929065d4-10\"",
+    "content-type": "application/octet-stream",
+    "accept-ranges": "bytes",
+    "date": "Sun, 15 Nov 2026 22:52:00 GMT",
+    "x-served-by": "cache-iad-kcgs7270037-IAD, cache-sin-wsap440069-SIN",
+    "x-cache": "HIT, HIT",
+    "content-length": "906474467"
+  },
+  "jar_sha256": "80ea33b9ed62cfabdfcca90742dc2a34a62d36556f36d5a93238c6aec7fc187e",
+  "premeasurement_runner_smoke": {
+    "project": "sampleproject",
+    "version": "4.0.0",
+    "size_bytes": 4661,
+    "verified_full_responses": 4,
+    "warm_upstream_requests": 0
+  },
+  "excluded_initial_probe": {
+    "mode": "off",
+    "outcome": "client_timeout_waiting_for_response_headers",
+    "client_socket_timeout_seconds": 600,
+    "first_body_byte_wait_lower_bound_seconds": 600,
+    "received_body_bytes": 0,
+    "completed_download": false,
+    "note": "Initial probe. Retry uses a 1800-second client socket timeout and a fresh repository/store; excluded from completed-download statistics.",
+    "cache_published_at": "2026-11-15T22:55:01.390Z",
+    "cache_size_bytes": 906474467,
+    "server_logged_client_abort": true,
+    "run_id": "8225acea7d",
+    "fixtures": [
+      {
+        "repository": "pypi-real-8225acea7d-1-off",
+        "blob_store": "pypi-real-8225acea7d-1-off",
+        "prefix": "off/pypi-real-8225acea7d-1-off"
+      }
+    ],
+    "started_at": "2026-11-15T22:44:07.835710+00:00",
+    "build_label": "f114fdb26cb215b7cae749806fb53f47d1a4e0ca"
+  },
+  "pre_fix_streaming_failure": {
+    "mode": "on",
+    "outcome": "server_mvc_async_total_timeout",
+    "server_timeout_seconds": 600,
+    "received_body_bytes": 741959347,
+    "expected_body_bytes": 906474467,
+    "partial_sha256": "ba8d9b978af7820c1c7833f704cc473e30efae15cbab862f08b014b5c3aec5cb",
+    "cache_published": false,
+    "server_log_at": "2026-11-16T07:14:57.065+08:00",
+    "build_label": "f114fdb26cb215b7cae749806fb53f47d1a4e0ca",
+    "last_client_progress_elapsed_seconds": 631.0352039728314,
+    "timing_limitations": "The original runner did not persist first-body/header timings after the length check failed."
+  },
+  "benchmark_runner_sha256": "a64fc24eeaa4565a38aa0d6806bd2c272851a5659bf7d418a6409a089f7b20e2"
+}

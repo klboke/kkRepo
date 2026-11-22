@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.pub;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -21,12 +22,15 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.protocol.pub.PubContentTypes;
+import com.github.klboke.kkrepo.protocol.pub.PubPaths;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
+import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
 import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -34,12 +38,47 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
 
 class PubProxyServiceTest {
   private static final ObjectMapper MAPPER = new ObjectMapper();
   private static final TypeReference<Map<String, Object>> JSON_MAP = new TypeReference<>() {
   };
+
+  @Test
+  void manualBlockKeepsCachedPubMetadataAndArchivesAvailable() throws Exception {
+    var cache = mock(AssetMetadataCache.class);
+    var fetcher = mock(HttpRemoteFetcher.class);
+    var reader = mock(PubAssetReader.class);
+    var state = mock(ProxyStateDao.class);
+    var assets = mock(AssetDao.class);
+    var registry = mock(BlobStorageRegistry.class);
+    var writer = mock(PubAssetWriter.class);
+    var negative = mock(ProxyNegativeCache.class);
+    var runtime = runtime();
+    String name = "example_package";
+    String path = PubPaths.archivePath(name, "1.0.0");
+    String metadataPath = PubPaths.metadataPath(name);
+    var stored = storedArchive();
+    var stale = CachedAssetMetadata.of(stored.asset(), stored.blob());
+    when(cache.find(eq(runtime.id()), eq(metadataPath), any())).thenReturn(Optional.of(stale), Optional.empty());
+    when(fetcher.fetchWithBodyRetry(any(), anyString(), any())).thenThrow(new Blocked());
+    when(reader.readText(stale, metadataPath)).thenReturn("{\"name\":\"example_package\"}");
+    var proxy = new PubProxyService(assets, registry, writer, reader, state, fetcher, negative, cache, MAPPER);
+    assertEquals(name, proxy.cachedOrFetchedMetadata(runtime, name, Instant.now()).body().get("name"));
+    assertThrows(PubExceptions.PubNotFoundException.class,
+        () -> proxy.cachedOrFetchedMetadata(runtime, name, Instant.now()));
+
+    var archiveProxy = new TestPubProxyService(Map.of("versions", List.of(Map.of(
+        "version", "1.0.0", "archive_url", "https://pub.dev/" + path))),
+        assets, registry, writer, reader, state, fetcher, negative, cache);
+    when(cache.find(eq(runtime.id()), eq(path), any())).thenReturn(Optional.of(stale), Optional.empty());
+    when(reader.serveSnapshot(stale, true, path)).thenReturn(MavenResponse.noBody(200));
+    assertEquals(200, archiveProxy.download(runtime, name, "1.0.0", true).status());
+    assertThrows(PubExceptions.PubNotFoundException.class,
+        () -> archiveProxy.download(runtime, name, "1.0.0", true));
+  }
 
   @Test
   void metadataResponseRewritesUpstreamArchiveUrlsToProxyRepositoryUrls() throws Exception {

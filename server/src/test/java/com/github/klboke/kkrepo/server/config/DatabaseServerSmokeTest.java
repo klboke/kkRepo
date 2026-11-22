@@ -407,6 +407,7 @@ class DatabaseServerSmokeTest {
       assertEquals("dual-database-smoke",
           new String(body.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
     }
+    DownloadOffloadSmokeChecks.exercise(first, second);
 
     // Artifact timestamps use the app clock; cleanup cutoffs use the database clock. Make the
     // fixture unambiguously old instead of relying on sub-second host/container clock agreement.
@@ -596,6 +597,7 @@ class DatabaseServerSmokeTest {
     values.put("spring.datasource.hikari.maximum-pool-size", "4");
     values.put("spring.datasource.hikari.minimum-idle", "0");
     values.put("kkrepo.database.type", type.id());
+    values.put("kkrepo.download-offload.trusted-proxies", "127.0.0.1/32");
     values.put("kkrepo.storage.file.base-dir", Files.createTempDirectory("kkrepo-smoke-").toString());
     values.put("kkrepo.security.encryption.credential-secret",
         "smoke-credential-secret-0123456789abcdef");

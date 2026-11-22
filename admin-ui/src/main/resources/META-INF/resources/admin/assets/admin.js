@@ -77,6 +77,7 @@ let securityUsers = [];
 let securityRoles = [];
 let securityPrivileges = [];
 let securityRealms = [];
+let securityUserRoleFilter = "";
 let securityLdap = null;
 let securityOidc = null;
 const SECURITY_PROVIDER_SECRET_MASK = "********";
@@ -184,6 +185,8 @@ const viewHashRoutes = {
   "security-scanning": SECURITY_SCAN_ROUTE_BASE,
   "security-audit-log": "#admin/security/audit-log",
   "ui-settings": "#admin/system/ui-settings",
+  "proxy-settings": "#admin/system/proxy-settings",
+  "download-offload": "#admin/system/download-offload",
   "nexus-migration": "#admin/migration/nexus",
   "repository-data-migration": "#admin/migration/repository-data",
   "ohpm-import": "#admin/migration/ohpm",
@@ -218,6 +221,8 @@ const hashViewRoutes = {
   "#admin/security/audit": "security-audit-log",
   "#admin/system": "ui-settings",
   "#admin/system/ui-settings": "ui-settings",
+  "#admin/system/proxy-settings": "proxy-settings",
+  "#admin/system/download-offload": "download-offload",
   "#admin/system/ui": "ui-settings",
   "#admin/migration": "nexus-migration",
   "#admin/migration/nexus": "nexus-migration",
@@ -423,6 +428,12 @@ const repositoryRequiredFields = [
         && document.getElementById("repository-docker-connector-enabled").checked
   },
   {
+    id: "repository-docker-https-port",
+    label: "HTTPS connector port",
+    required: () => currentRecipe()?.format === "docker"
+        && document.getElementById("repository-docker-https-enabled").checked
+  },
+  {
     id: "repository-apt-distribution",
     label: "APT distribution",
     required: () => currentRecipe()?.format === "apt"
@@ -570,7 +581,7 @@ const FORMAT_DISPLAY_NAMES = Object.freeze({
   conda: "Conda",
   conan: "Conan 2",
   apt: "APT / Debian",
-  alpine: "Alpine / APK",
+  alpine: "APK / Alpine",
   r: "R / CRAN",
   huggingface: "Hugging Face Models",
   gitlfs: "Git LFS",
@@ -1001,7 +1012,7 @@ function securityLdapFormValue({ attributes = securityProviderAttributes.ldap, m
     groupMemberAttribute: textInputValue("security-ldap-group-member-attribute"),
     groupMemberFormat: textInputValue("security-ldap-group-member-format"),
     groupObjectClass: textInputValue("security-ldap-group-object-class"),
-    attributes
+    attributes: { ...attributes, legacyRoleMatching: document.getElementById("security-ldap-legacy-role-matching").checked }
   };
 }
 
@@ -1028,7 +1039,7 @@ function securityOidcFormValue({ attributes = securityProviderAttributes.oidc, m
     rolesClaim: textInputValue("security-oidc-roles-claim"),
     clockSkewSeconds: numberInputValue("security-oidc-clock-skew") ?? 60,
     jwksCacheSeconds: numberInputValue("security-oidc-jwks-cache") ?? 300,
-    attributes
+    attributes: { ...attributes, legacyRoleMatching: document.getElementById("security-oidc-legacy-role-matching").checked }
   };
 }
 
@@ -1069,6 +1080,8 @@ function applySecurityLdapJsonValue(value) {
     ? editableSecurityProviderAttributes(value.attributes, ["name"])
     : {};
   securityProviderAttributes.ldap = attributes;
+  setCheckboxValue("security-ldap-legacy-role-matching",
+    securityProviderJsonBoolean(attributes.legacyRoleMatching, Boolean(value.url || value.host)));
   clearRequiredFieldErrors(ldapRequiredFields);
   refreshSecurityLdapRequiredMarkers();
 }
@@ -1097,6 +1110,8 @@ function applySecurityOidcJsonValue(value) {
     ? editableSecurityProviderAttributes(value.attributes)
     : {};
   securityProviderAttributes.oidc = attributes;
+  setCheckboxValue("security-oidc-legacy-role-matching",
+    securityProviderJsonBoolean(attributes.legacyRoleMatching, Boolean(value.issuer || value.issuerUri || value.jwksUri)));
   clearRequiredFieldErrors(oidcRequiredFields);
   refreshSecurityOidcRequiredMarkers();
 }
@@ -1397,13 +1412,46 @@ function renderRepositories() {
 }
 
 function repositoryDisplayUrl(repo) {
-  if (lowerOrEmpty(repo.format) === "docker" && repo.docker?.connectorEnabled && repo.docker?.connectorPort) {
-    return repo.docker.connectorPublicUrl || `${window.location.protocol}//${window.location.hostname}:${repo.docker.connectorPort}/v2/`;
+  if (lowerOrEmpty(repo.format) === "docker") {
+    const docker = repo.docker || {};
+    const https = docker.httpsConnectorEnabled && docker.httpsConnectorPort;
+    const http = docker.connectorEnabled && docker.connectorPort;
+    if (https || http) {
+      return docker.connectorPublicUrl || `${https ? "https:" : "http:"}//${window.location.hostname}:${https || http}/v2/`;
+    }
   }
-  if (lowerOrEmpty(repo.type) === "proxy" && repo.proxy?.remoteUrl) {
-    return repo.proxy.remoteUrl;
-  }
+  if (lowerOrEmpty(repo.type) === "proxy" && repo.proxy?.remoteUrl) return repo.proxy.remoteUrl;
   return repo.url || "";
+}
+
+async function loadDockerTlsBundles() {
+  const help = document.getElementById("docker-tls-help");
+  const setup = help.dataset.setup || help.dataset.tooltip;
+  help.dataset.setup = setup;
+  const translate = value => window.kkrepoI18n?.text(value) ?? value;
+  const updateHelp = status => {
+    const message = [translate(status), translate(setup)].filter(Boolean).join(" ");
+    help.dataset.tooltip = message;
+    help.setAttribute("aria-label", message);
+    if (activeFieldHelpTrigger === help) showFieldHelpPopover(help);
+  };
+  try {
+    const response = await fetch("/internal/docker/tls-bundles", { headers: { Accept: "application/json" }, cache: "no-store" });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    const payload = await response.json();
+    document.getElementById("docker-tls-bundles").innerHTML = (payload.bundles || [])
+      .filter(bundle => bundle.usable).map(bundle =>
+        `<option value="${escapeHtml(bundle.name)}">${escapeHtml((bundle.domains || []).join(", "))} · ${escapeHtml(bundle.expiresAt || "")}</option>`).join("");
+    const selected = document.getElementById("repository-docker-tls-bundle").value.trim() || payload.defaultBundle;
+    const bundle = (payload.bundles || []).find(item => item.name === selected);
+    updateHelp(bundle?.usable
+      ? `${bundle.name} · ${(bundle.domains || []).join(", ")} · ${bundle.expiresAt} · SHA-256: ${bundle.fingerprint}`
+      : bundle?.error || (selected
+        ? `${translate("TLS configuration not found:")} ${selected}.`
+        : "No default TLS configuration is set. Select a configured name here or set the deployment default."));
+  } catch (error) {
+    updateHelp(error.message);
+  }
 }
 
 async function loadDockerOperations() {
@@ -1437,6 +1485,7 @@ function renderDockerOperations(payload) {
     card("Enabled", connector.enabled ? "Yes" : "No"),
     card("Active ports", `${active} / ${connectors.length}`),
     card("Sequence", connector.sequence ?? "-"),
+    card("Node", connector.nodeId || "-"),
     card("Last refreshed", formatInstant(connector.refreshedAt) || "-"),
     card("Runtime errors", errors ? "Yes" : "No"),
   ].join("");
@@ -1450,10 +1499,10 @@ function renderDockerOperations(payload) {
     <tr>
       <td>${escapeHtml(item.repositoryName || "")}</td>
       <td>${escapeHtml(lowerOrEmpty(item.repositoryType))}</td>
-      <td><code>${escapeHtml(item.port ?? "")}</code></td>
+      <td><code>${escapeHtml(item.scheme || "http")} : ${escapeHtml(item.port ?? "")}</code></td>
       <td>${item.publicUrl ? `<code>${escapeHtml(item.publicUrl)}</code>` : '<span class="health-muted">-</span>'}</td>
       <td><span class="state-badge compact ${item.active ? "ok" : "warn"}">${escapeHtml(item.state || "")}</span></td>
-      <td>${item.active ? "Yes" : "No"}</td>
+      <td>${item.active ? "Yes" : "No"}${item.tlsBundle ? `<br><code title="${escapeHtml(item.certificateFingerprint || "")}">${escapeHtml(item.tlsBundle)}</code>` : ""}</td>
     </tr>
   `).join("") || '<tr><td colspan="6" class="placeholder">No Docker connector ports configured.</td></tr>';
   const status = document.getElementById("docker-operations-status");
@@ -2901,6 +2950,7 @@ function refreshRepositoryRecipeControls() {
   if (format === "gitlfs") strict.checked = false;
   document.getElementById("repository-hosted-fields").hidden = type !== "HOSTED";
   document.getElementById("repository-proxy-fields").hidden = type !== "PROXY";
+  document.getElementById("repository-block-outbound-field").hidden = type !== "PROXY";
   const ntlmAvailable = type === "PROXY" && format === "nuget";
   document.getElementById("repository-remote-authentication-field").hidden = !ntlmAvailable;
   if (!ntlmAvailable) document.getElementById("repository-remote-authentication-type").value = "auto";
@@ -2908,6 +2958,7 @@ function refreshRepositoryRecipeControls() {
   document.getElementById("repository-remote-ntlm-domain-field").hidden = !ntlmSelected;
   document.getElementById("repository-remote-ntlm-host-field").hidden = !ntlmSelected;
   document.getElementById("repository-outbound-proxy-fields").hidden = type !== "PROXY";
+  window.KkProxySettings?.refreshRepositoryForm();
   document.getElementById("repository-group-fields").hidden = type !== "GROUP";
   document.getElementById("repository-raw-fields").hidden = format !== "raw";
   document.getElementById("repository-docker-fields").hidden = format !== "docker";
@@ -2918,7 +2969,7 @@ function refreshRepositoryRecipeControls() {
     format !== "conan" || repositoryFormMode !== "edit";
   document.getElementById("repository-apt-fields").hidden = format !== "apt";
   document.getElementById("repository-alpine-fields").hidden = format !== "alpine";
-  document.getElementById("repository-swift-proxy-note").hidden =
+  document.getElementById("repository-swift-proxy-help").hidden =
     !(format === "swift" && type === "PROXY");
   document.getElementById("repository-yum-depth-field").hidden = format !== "yum" || type !== "HOSTED";
   const pypiIndexPathVisible = format === "pypi" && type === "PROXY";
@@ -2926,8 +2977,6 @@ function refreshRepositoryRecipeControls() {
     !pypiIndexPathVisible;
   const minimumReleaseAgeVisible = MINIMUM_RELEASE_AGE_FORMATS.has(format) && type === "PROXY";
   document.getElementById("repository-minimum-release-age-field").hidden =
-    !minimumReleaseAgeVisible;
-  document.getElementById("repository-minimum-release-age-note").hidden =
     !minimumReleaseAgeVisible;
   refreshDockerConnectorControls();
   refreshAptControls();
@@ -3342,6 +3391,8 @@ function repositoryFormPayload() {
         ? (minimumReleaseAge === "" ? 0 : Number(minimumReleaseAge))
         : null,
       autoBlock: document.getElementById("repository-auto-block").checked,
+      blockOutboundConnections: document.getElementById("repository-block-outbound").checked,
+      streamingEnabled: document.getElementById("repository-streaming-enabled").checked,
       remoteAuthenticationType: textInputValue("repository-remote-authentication-type"),
       remoteNtlmDomain: textInputValue("repository-remote-ntlm-domain"),
       remoteNtlmHost: textInputValue("repository-remote-ntlm-host"),
@@ -3350,16 +3401,7 @@ function repositoryFormPayload() {
       remotePasswordConfigured: document.getElementById("repository-remote-password-clear").checked ? false : null,
       remoteBearerToken: textInputValue("repository-remote-bearer-token"),
       remoteBearerTokenConfigured: document.getElementById("repository-remote-bearer-token-clear").checked ? false : null,
-      outboundProxyType: document.getElementById("repository-outbound-proxy-type").value,
-      outboundProxyHost: textInputValue("repository-outbound-proxy-host"),
-      outboundProxyPort: (function () {
-        const port = document.getElementById("repository-outbound-proxy-port").value;
-        return port === "" ? null : Number(port);
-      })(),
-      outboundProxyUsername: textInputValue("repository-outbound-proxy-username"),
-      outboundProxyPassword: textInputValue("repository-outbound-proxy-password"),
-      outboundProxyPasswordConfigured:
-        document.getElementById("repository-outbound-proxy-password-clear").checked ? false : null
+      ...window.KkProxySettings.repositoryPayload()
     };
     if (recipe.format === "pypi") {
       payload.pypi = {
@@ -3386,7 +3428,10 @@ function repositoryFormPayload() {
     payload.docker = {
       connectorEnabled: document.getElementById("repository-docker-connector-enabled").checked,
       connectorPort: connectorPort === "" ? null : Number(connectorPort),
-      connectorPublicUrl: textInputValue("repository-docker-connector-public-url")
+      connectorPublicUrl: textInputValue("repository-docker-connector-public-url"),
+      httpsConnectorEnabled: document.getElementById("repository-docker-https-enabled").checked,
+      httpsConnectorPort: document.getElementById("repository-docker-https-port").value === "" ? null : Number(document.getElementById("repository-docker-https-port").value),
+      tlsBundle: document.getElementById("repository-docker-tls-bundle").value.trim()
     };
   }
   if (recipe?.format === "cargo") {
@@ -3456,18 +3501,17 @@ function setRepositoryFormDefaults() {
   document.getElementById("repository-remote-bearer-token").value = "";
   document.getElementById("repository-remote-bearer-token").placeholder = "";
   document.getElementById("repository-remote-bearer-token-clear").checked = false;
-  document.getElementById("repository-outbound-proxy-type").value = "";
-  document.getElementById("repository-outbound-proxy-host").value = "";
-  document.getElementById("repository-outbound-proxy-port").value = "";
-  document.getElementById("repository-outbound-proxy-username").value = "";
-  document.getElementById("repository-outbound-proxy-password").value = "";
-  document.getElementById("repository-outbound-proxy-password").placeholder = "";
-  document.getElementById("repository-outbound-proxy-password-clear").checked = false;
+  window.KkProxySettings.resetRepositoryForm();
   document.getElementById("repository-content-max-age").value = "1440";
   document.getElementById("repository-metadata-max-age").value = "1440";
   document.getElementById("repository-minimum-release-age").value = "0";
   document.getElementById("repository-auto-block").checked = true;
+  document.getElementById("repository-block-outbound").checked = false;
+  document.getElementById("repository-streaming-enabled").checked = false;
   document.getElementById("repository-raw-content-disposition").value = "ATTACHMENT";
+  document.getElementById("repository-docker-https-enabled").checked = false;
+  document.getElementById("repository-docker-https-port").value = "";
+  document.getElementById("repository-docker-tls-bundle").value = "";
   document.getElementById("repository-docker-connector-enabled").checked = false;
   document.getElementById("repository-docker-connector-port").value = "";
   document.getElementById("repository-docker-connector-public-url").value = "";
@@ -3510,7 +3554,12 @@ function refreshDockerConnectorControls() {
   const portInput = document.getElementById("repository-docker-connector-port");
   portInput.disabled = !enabled;
   setFieldRequired(portInput, currentRecipe()?.format === "docker" && enabled);
-  document.getElementById("repository-docker-connector-public-url").disabled = !enabled;
+  const httpsEnabled = document.getElementById("repository-docker-https-enabled").checked;
+  const httpsPort = document.getElementById("repository-docker-https-port");
+  httpsPort.disabled = !httpsEnabled;
+  setFieldRequired(httpsPort, currentRecipe()?.format === "docker" && httpsEnabled);
+  document.getElementById("repository-docker-tls-bundle").disabled = !httpsEnabled;
+  document.getElementById("repository-docker-connector-public-url").disabled = !enabled && !httpsEnabled;
   updateRequiredMarkers(repositoryRequiredFields);
 }
 
@@ -3582,21 +3631,14 @@ function showEditRepositoryForm(name) {
     document.getElementById("repository-remote-bearer-token-clear").checked = false;
     // Normalize legacy/alias values stored before the backend canonicalized the type,
     // so the select (HTTP/SOCKS only) still shows the effective choice.
-    const outboundProxyType = (repo.proxy.outboundProxyType || "").toUpperCase();
-    document.getElementById("repository-outbound-proxy-type").value =
-      outboundProxyType === "SOCKS5" ? "SOCKS" : outboundProxyType;
-    document.getElementById("repository-outbound-proxy-host").value = repo.proxy.outboundProxyHost || "";
-    document.getElementById("repository-outbound-proxy-port").value = repo.proxy.outboundProxyPort ?? "";
-    document.getElementById("repository-outbound-proxy-username").value = repo.proxy.outboundProxyUsername || "";
-    document.getElementById("repository-outbound-proxy-password").value = "";
-    document.getElementById("repository-outbound-proxy-password").placeholder =
-      repo.proxy.outboundProxyPasswordConfigured ? "Saved proxy password unchanged" : "";
-    document.getElementById("repository-outbound-proxy-password-clear").checked = false;
+    window.KkProxySettings.resetRepositoryForm(repo.proxy);
     document.getElementById("repository-content-max-age").value = repo.proxy.contentMaxAgeMinutes ?? "1440";
     document.getElementById("repository-metadata-max-age").value = repo.proxy.metadataMaxAgeMinutes ?? "1440";
     document.getElementById("repository-minimum-release-age").value =
       repo.proxy.minimumReleaseAgeMinutes ?? "0";
     document.getElementById("repository-auto-block").checked = repo.proxy.autoBlock !== false;
+    document.getElementById("repository-block-outbound").checked = repo.proxy.blockOutboundConnections === true;
+    document.getElementById("repository-streaming-enabled").checked = repo.proxy.streamingEnabled === true;
   }
   document.getElementById("repository-yum-depth").value = repo.yum?.repodataDepth ?? 0;
   setConanManifestSettings(repo.conan);
@@ -3606,6 +3648,9 @@ function showEditRepositoryForm(name) {
     memberTransfer.selected = [...repo.group.memberNames];
   }
   if (repo.docker) {
+    document.getElementById("repository-docker-https-enabled").checked = Boolean(repo.docker.httpsConnectorEnabled);
+    document.getElementById("repository-docker-https-port").value = repo.docker.httpsConnectorPort ?? "";
+    document.getElementById("repository-docker-tls-bundle").value = repo.docker.tlsBundle || "";
     document.getElementById("repository-docker-connector-enabled").checked = Boolean(repo.docker.connectorEnabled);
     document.getElementById("repository-docker-connector-port").value = repo.docker.connectorPort ?? "";
     document.getElementById("repository-docker-connector-public-url").value = repo.docker.connectorPublicUrl || "";
@@ -4144,20 +4189,33 @@ async function loadSecurityUsers() {
   refreshSecurityTransfers(["userRoles"]);
 }
 
+function securityRoleBadges(roles, source = "", linkToRole = false) {
+  const classes = `state-badge compact${source ? " external-role-badge" : ""}`;
+  return (roles || []).map((role) => {
+    const label = escapeHtml(role) + (source ? " · " + escapeHtml(source) : "");
+    return linkToRole
+      ? `<button type="button" class="${classes} security-role-link" data-role-id="${escapeHtml(role)}">${label}</button>`
+      : `<span class="${classes}">${label}</span>`;
+  }).join("");
+}
+
 function renderSecurityUsers() {
   renderSecurityUserSourceFilter();
   const filter = filterValue("security-user-filter");
   const sourceFilter = document.getElementById("security-user-source-filter")?.value || "";
   const rows = securityUsers.filter((user) =>
     (!sourceFilter || user.source === sourceFilter)
-    && listContainsFilter([displaySource(user.source), user.source, user.userId, user.status, user.email, ...(user.roles || [])], filter))
+    && (securityUserRoleFilter
+      ? [...(user.roles || []), ...(user.externalRoles || [])].includes(securityUserRoleFilter)
+      : listContainsFilter([displaySource(user.source), user.source, user.userId, user.status, user.email,
+        ...(user.roles || []), ...(user.externalRoles || [])], filter)))
     .map((user) => `
       <tr>
         <td>${escapeHtml(displaySource(user.source))}</td>
         <td>${escapeHtml(user.userId)}</td>
-        <td><span class="state-badge compact ${user.status === "ACTIVE" ? "ok" : "warn"}">${escapeHtml(user.status || "")}</span></td>
+        <td><span class="state-badge compact ${user.status?.trim().toUpperCase() === "ACTIVE" ? "ok" : "warn"}">${escapeHtml(user.status || "")}</span></td>
         <td>${escapeHtml(user.email || "")}</td>
-        <td>${escapeHtml((user.roles || []).join(", "))}</td>
+        <td><div class="security-role-badges">${securityRoleBadges(user.roles, "", true)}${securityRoleBadges(user.externalRoles, displaySource(user.source), true)}</div></td>
         <td class="actions-column">
           <button class="row-action edit-security-user-button" data-source="${escapeHtml(user.source)}" data-id="${escapeHtml(user.userId)}" type="button">edit</button>
           <button class="row-action delete-security-user-button" data-source="${escapeHtml(user.source)}" data-id="${escapeHtml(user.userId)}" type="button">delete</button>
@@ -4182,6 +4240,10 @@ function showSecurityUserForm(user = null) {
   document.getElementById("security-user-status").value = user?.status || "ACTIVE";
   document.getElementById("security-user-password").value = "";
   setSecurityTransferSelection("userRoles", user?.roles || []);
+  document.getElementById("security-user-external-section").hidden = !user?.external;
+  document.getElementById("security-user-external-roles").innerHTML =
+    securityRoleBadges(user?.externalRoles, displaySource(user?.source))
+    || '<span class="field-note">No external roles assigned.</span>';
   clearRequiredFieldErrors(securityUserRequiredFields);
   openFormModal("security-user-form", user ? "security-user-first-name" : "security-user-id");
 }
@@ -4253,12 +4315,15 @@ async function loadSecurityRoles() {
 function renderSecurityRoles() {
   const filter = filterValue("security-role-filter");
   const rows = securityRoles.filter((role) =>
-    listContainsFilter([role.roleId, role.name, role.description], filter))
+    listContainsFilter([role.roleId, role.name, role.description,
+      ...(role.externalMappings || []).flatMap(({ externalName, realmId }) => [externalName, realmId])], filter))
     .map((role) => `
       <tr>
         <td>${escapeHtml(role.roleId)}${role.readOnly ? ' <span class="state-badge compact">read-only</span>' : ""}</td>
         <td>${escapeHtml(role.name || "")}</td>
         <td>${escapeHtml(role.description || "")}</td>
+        <td><div class="security-role-badges">${(role.externalMappings || []).map(({ externalName, realmId }) =>
+          securityRoleBadges([externalName], realmId.toUpperCase())).join("")}</div></td>
         <td class="actions-column">
           ${role.readOnly ? `
             <button class="row-action view-security-role-button" data-id="${escapeHtml(role.roleId)}" type="button">view</button>
@@ -4270,7 +4335,7 @@ function renderSecurityRoles() {
       </tr>
     `).join("");
   document.getElementById("security-role-table").innerHTML = rows
-    || '<tr><td colspan="4" class="placeholder">No roles.</td></tr>';
+    || '<tr><td colspan="5" class="placeholder">No roles.</td></tr>';
 }
 
 function showSecurityRoleForm(role = null, options = {}) {
@@ -4291,6 +4356,11 @@ function showSecurityRoleForm(role = null, options = {}) {
   setSecurityTransferSelection("rolePrivileges", role?.privileges || []);
   setSecurityTransferSelection("roleRoles", role?.roles || []);
   setSecurityRoleFormReadOnly(viewOnly);
+  document.getElementById("security-role-mappings").replaceChildren();
+  for (const mapping of role?.externalMappings || []) addSecurityRoleMapping(mapping, viewOnly);
+  document.getElementById("add-security-role-mapping").hidden = viewOnly;
+  document.getElementById("edit-security-role-mappings").hidden = !viewOnly;
+  document.getElementById("view-security-role-users").hidden = !role;
   clearRequiredFieldErrors(securityRoleRequiredFields);
   openFormModal("security-role-form", viewOnly ? "cancel-security-role-button" : role ? "security-role-name" : "security-role-id");
 }
@@ -4312,6 +4382,7 @@ function setSecurityRoleFormReadOnly(readOnly) {
   document.getElementById("security-role-description").disabled = readOnly;
   document.getElementById("security-role-id").disabled = readOnly || securityRoleMode !== "create";
   saveButton.hidden = readOnly;
+  saveButton.textContent = "Save role";
   cancelButton.textContent = readOnly ? "Close" : "Cancel";
   ["role-privilege", "role-contained"].forEach((prefix) => {
     document.getElementById(`${prefix}-transfer`)?.classList.toggle("is-readonly", readOnly);
@@ -4321,25 +4392,79 @@ function setSecurityRoleFormReadOnly(readOnly) {
   refreshSecurityTransfers(["rolePrivileges", "roleRoles"]);
 }
 
+function addSecurityRoleMapping(mapping = {}, readOnly = false) {
+  const row = document.createElement("div");
+  row.className = "security-role-mapping";
+  row.innerHTML = `
+    <label><span>Identity provider</span><select required>
+      <option value="">Select a provider</option>
+      <option value="oidc">OIDC</option>
+      <option value="ldap">LDAP</option>
+    </select></label>
+    <label><span>External role or group</span><input type="text" maxlength="255" required></label>
+    <button type="button" class="row-action">Remove mapping</button>`;
+  const provider = row.querySelector("select");
+  const name = row.querySelector("input");
+  const remove = row.querySelector("button");
+  provider.value = mapping.realmId || "";
+  name.value = mapping.externalName || "";
+  provider.disabled = readOnly;
+  name.disabled = readOnly;
+  remove.hidden = readOnly;
+  remove.addEventListener("click", () => {
+    row.remove();
+    document.getElementById("add-security-role-mapping").focus();
+  });
+  document.getElementById("security-role-mappings").append(row);
+  if (!mapping.realmId) provider.focus();
+}
+
+function editSecurityRoleMappings() {
+  securityRoleMode = "mappings";
+  const container = document.getElementById("security-role-mappings");
+  container.querySelectorAll("input, select").forEach((field) => { field.disabled = false; });
+  container.querySelectorAll("button").forEach((button) => { button.hidden = false; });
+  document.getElementById("save-security-role-button").hidden = false;
+  document.getElementById("save-security-role-button").textContent = "Save mappings";
+  document.getElementById("cancel-security-role-button").textContent = "Cancel";
+  document.getElementById("edit-security-role-mappings").hidden = true;
+  const add = document.getElementById("add-security-role-mapping");
+  add.hidden = false;
+  add.focus();
+}
+
 async function saveSecurityRole() {
   if (securityRoleMode === "view") return;
-  if (!validateRequiredFields(securityRoleRequiredFields)) return;
+  if (securityRoleMode !== "mappings" && !validateRequiredFields(securityRoleRequiredFields)) return;
+  const mappings = [];
+  for (const row of document.querySelectorAll("#security-role-mappings .security-role-mapping")) {
+    const provider = row.querySelector("select");
+    const name = row.querySelector("input");
+    if (!provider.value || !name.value.trim()) {
+      (provider.value ? name : provider).focus();
+      showToast("Choose a provider and enter an external role or group for each mapping.", "error");
+      return;
+    }
+    mappings.push({ realmId: provider.value, externalName: name.value.trim() });
+  }
   const payload = {
     roleId: document.getElementById("security-role-id").value.trim(),
     name: document.getElementById("security-role-name").value.trim() || null,
     description: document.getElementById("security-role-description").value.trim() || null,
     readOnly: isBuiltInReadOnlyRoleId(document.getElementById("security-role-id").value),
     privileges: commaList(document.getElementById("security-role-privileges").value),
-    roles: commaList(document.getElementById("security-role-roles").value)
+    roles: commaList(document.getElementById("security-role-roles").value),
+    externalMappings: mappings
   };
-  const path = securityRoleMode === "edit"
-    ? `/internal/security/roles/${encodeURIComponent(payload.roleId)}`
-    : "/internal/security/roles";
+  const create = securityRoleMode === "create";
+  const mappingsOnly = securityRoleMode === "mappings";
+  const rolePath = `/internal/security/roles/${encodeURIComponent(payload.roleId)}`;
+  const path = create ? "/internal/security/roles" : mappingsOnly ? `${rolePath}/external-mappings` : rolePath;
   try {
     const response = await fetch(path, {
-      method: securityRoleMode === "edit" ? "PUT" : "POST",
+      method: create ? "POST" : "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(mappingsOnly ? mappings : payload)
     });
     if (!response.ok) throw new Error(await responseErrorMessage(response));
     hideSecurityRoleForm();
@@ -4488,8 +4613,7 @@ async function saveSecurityRealms() {
       type: realm?.type,
       name: realm?.name,
       enabled: row.dataset.realmId === "local" || row.querySelector(".security-realm-enabled").checked,
-      priority: Number(row.querySelector(".security-realm-priority").value || 0),
-      attributes: realm?.attributes || {}
+      priority: Number(row.querySelector(".security-realm-priority").value || 0)
     };
   });
   try {
@@ -4574,6 +4698,8 @@ function renderSecurityLdap() {
   setInputValue("security-ldap-group-object-class", settings.groupObjectClass, "groupOfNames");
   securityProviderAttributes.ldap = editableSecurityProviderAttributes(settings.attributes, ["name"]);
   refreshSecurityLdapRequiredMarkers();
+  setCheckboxValue("security-ldap-legacy-role-matching",
+    securityProviderJsonBoolean(settings.attributes?.legacyRoleMatching, Boolean(settings.url || settings.host)));
   syncSecurityProviderJsonFromForm("ldap", { force: true });
 }
 
@@ -4679,6 +4805,8 @@ function renderSecurityOidc() {
   document.getElementById("security-oidc-jwks-cache").value = Number(settings.jwksCacheSeconds ?? 300);
   securityProviderAttributes.oidc = editableSecurityProviderAttributes(settings.attributes);
   refreshSecurityOidcRequiredMarkers();
+  setCheckboxValue("security-oidc-legacy-role-matching",
+    securityProviderJsonBoolean(settings.attributes?.legacyRoleMatching, Boolean(settings.issuer || settings.issuerUri || settings.jwksUri)));
   syncSecurityProviderJsonFromForm("oidc", { force: true });
 }
 
@@ -7618,15 +7746,18 @@ function refreshCleanupCapabilityHelp() {
   if (format.toLowerCase() !== "maven2") mode.value = "COMPONENT";
   document.getElementById("cleanup-policy-mode-field").hidden = format.toLowerCase() !== "maven2";
   const snapshot = mode.value === "MAVEN_SNAPSHOT_BUILDS";
+  const docker = format.toLowerCase() === "docker";
   document.getElementById("cleanup-policy-snapshot-help").hidden = !snapshot;
-  document.getElementById("cleanup-policy-retain-label").textContent = snapshot ? "Keep newest builds per SNAPSHOT" : "Keep newest versions";
+  document.getElementById("cleanup-policy-retain-label").textContent = snapshot ? "Keep newest builds per SNAPSHOT" : docker ? "Keep newest images per image name" : "Keep newest versions";
   const retainInput = document.getElementById("cleanup-policy-retain-count");
   retainInput.disabled = !capability?.retainCountSupported;
   retainInput.min = snapshot ? "1" : "0";
   retainInput.required = snapshot;
   if (retainInput.disabled) retainInput.value = "";
   setCleanupFieldHelp("cleanup-policy-retain-help", capability?.retainCountSupported
-    ? (snapshot ? "Retains at least this many timestamped builds within each base SNAPSHOT version." : "Uses this format's protocol version comparator.")
+    ? (snapshot ? "Retains at least this many timestamped builds within each base SNAPSHOT version." : docker
+      ? "Counts distinct tagged manifests by publication/update time per image name. Aliases count once. Untagged manifests require an age rule; referenced content remains protected."
+      : "Uses this format's protocol version comparator.")
     : "Version retention is not enabled for this format yet; pattern and age rules remain available.");
   const downloadedInput = document.getElementById("cleanup-policy-downloaded-days");
   downloadedInput.disabled = !capability?.lastDownloadedSupported;
@@ -8443,6 +8574,7 @@ function canAdmin(permission) {
 
 function canAccessAdminView(view) {
   if (canAdmin("nexus:*")) return view !== "loading";
+  if (view === "proxy-settings" || view === "download-offload") return canAdmin("nexus:settings:read");
   if (view === "security-scanning") return canAdmin("nexus:security-scanning:read");
   return view === "content-selectors" && ["read", "create", "update", "delete"]
     .some((action) => canAdmin(`nexus:selectors:${action}`));
@@ -8484,7 +8616,13 @@ function switchView(view, options = {}) {
   if (view === "routing-rules") window.KkRoutingRules.load();
   if (view === "docker-registry") loadDockerOperations();
   if (view === "security-users") loadSecurityUsers();
-  if (view === "security-roles") loadSecurityRoles();
+  if (view === "security-roles") {
+    loadSecurityRoles().then(() => {
+      if (!options.roleId || !document.getElementById("security-roles-view").classList.contains("is-active")) return;
+      const role = securityRoles.find((item) => item.roleId === options.roleId);
+      if (role) showSecurityRoleForm(role, { viewOnly: true });
+    });
+  }
   if (view === "security-privileges") loadSecurityPrivileges();
   if (view === "security-realms") loadSecurityRealms();
   if (view === "security-ldap") loadSecurityLdap();
@@ -8499,6 +8637,8 @@ function switchView(view, options = {}) {
   }
   if (view === "security-audit-log") loadAuditLogs(0);
   if (view === "ui-settings") loadUiSettings();
+  if (view === "proxy-settings") window.KkProxySettings.load();
+  if (view === "download-offload") window.KkDownloadOffload.load();
   if (view === "repository-data-migration") loadRepositoryDataMigrationJobs();
   if (view === "ohpm-import") window.KkOhpmImport.load();
   if (view === "ohpm-login") window.KkOhpmLogin.load();
@@ -8662,6 +8802,11 @@ document.getElementById("blobstore-action-menu").addEventListener("focusout", ()
 document.addEventListener("scroll", () => positionBlobStoreActionMenu(), true);
 window.addEventListener("resize", positionBlobStoreActionMenu);
 
+window.KkProxySettings.bind();
+document.getElementById("repository-outbound-proxy-mode").addEventListener("change",
+    window.KkProxySettings.refreshRepositoryForm);
+document.getElementById("repository-allowed-redirect-hosts").addEventListener("input",
+    window.KkProxySettings.refreshRepositoryForm);
 document.getElementById("create-repository-button").addEventListener("click", showCreateRepositoryForm);
 document.getElementById("cancel-repository-button").addEventListener("click", hideRepositoryForm);
 document.getElementById("save-repository-button").addEventListener("click", saveRepository);
@@ -8673,6 +8818,14 @@ bindRepositoryRecipeCombobox();
 document.getElementById("repository-recipe").addEventListener("change", refreshRepositoryRecipeControls);
 document.getElementById("repository-remote-authentication-type").addEventListener("change", refreshRepositoryRecipeControls);
 document.getElementById("repository-docker-connector-enabled").addEventListener("change", refreshDockerConnectorControls);
+document.getElementById("repository-docker-https-enabled").addEventListener("change", () => {
+  refreshDockerConnectorControls();
+  if (document.getElementById("repository-docker-https-enabled").checked) loadDockerTlsBundles();
+});
+document.getElementById("docker-tls-help").addEventListener("mouseenter", loadDockerTlsBundles);
+document.getElementById("docker-tls-help").addEventListener("focus", loadDockerTlsBundles);
+document.getElementById("repository-docker-tls-bundle").addEventListener("focus", loadDockerTlsBundles);
+document.getElementById("repository-docker-tls-bundle").addEventListener("change", loadDockerTlsBundles);
 document.getElementById("repository-apt-flat").addEventListener("change", refreshAptControls);
 for (const field of conanManifestFields) {
   const input = document.getElementById(field.id);
@@ -8927,7 +9080,10 @@ document.getElementById("security-scan-waiver-table").addEventListener("click", 
   if (deleteButton) deleteSecurityScanWaiver(deleteButton.dataset.id);
 });
 
-document.getElementById("security-user-filter").addEventListener("input", renderSecurityUsers);
+document.getElementById("security-user-filter").addEventListener("input", () => {
+  securityUserRoleFilter = "";
+  renderSecurityUsers();
+});
 document.getElementById("security-user-source-filter").addEventListener("change", renderSecurityUsers);
 document.getElementById("create-security-user-button").addEventListener("click", () => showSecurityUserForm());
 document.getElementById("cancel-security-user-button").addEventListener("click", hideSecurityUserForm);
@@ -8938,6 +9094,11 @@ document.getElementById("security-user-form").addEventListener("submit", (event)
 });
 bindRequiredFieldErrors(securityUserRequiredFields);
 document.getElementById("security-user-table").addEventListener("click", (event) => {
+  const roleLink = event.target.closest(".security-role-link");
+  if (roleLink) {
+    switchView("security-roles", { roleId: roleLink.dataset.roleId });
+    return;
+  }
   const editButton = event.target.closest(".edit-security-user-button");
   if (editButton) {
     const user = securityUsers.find((item) => item.source === editButton.dataset.source && item.userId === editButton.dataset.id);
@@ -8952,6 +9113,15 @@ document.getElementById("security-role-filter").addEventListener("input", render
 document.getElementById("create-security-role-button").addEventListener("click", () => showSecurityRoleForm());
 document.getElementById("cancel-security-role-button").addEventListener("click", hideSecurityRoleForm);
 document.getElementById("save-security-role-button").addEventListener("click", saveSecurityRole);
+document.getElementById("add-security-role-mapping").addEventListener("click", () => addSecurityRoleMapping());
+document.getElementById("edit-security-role-mappings").addEventListener("click", editSecurityRoleMappings);
+document.getElementById("view-security-role-users").addEventListener("click", () => {
+  securityUserRoleFilter = document.getElementById("security-role-id").value;
+  document.getElementById("security-user-filter").value = securityUserRoleFilter;
+  document.getElementById("security-user-source-filter").value = "";
+  hideSecurityRoleForm();
+  switchView("security-users");
+});
 document.getElementById("security-role-id").addEventListener("input", () => refreshSecurityTransfer("roleRoles"));
 document.getElementById("security-role-form").addEventListener("submit", (event) => {
   event.preventDefault();
@@ -9094,7 +9264,7 @@ async function bootstrap() {
   if (!canAdmin("nexus:*")) {
     initialDataLoaded = true;
     if (!applyHashRoute()) {
-      const fallback = ["security-scanning", "content-selectors"].find(canAccessAdminView);
+      const fallback = ["security-scanning", "content-selectors", "proxy-settings"].find(canAccessAdminView);
       if (fallback) switchView(fallback, { replaceHash: true });
       else document.getElementById("loading-view").textContent = "No administration views are available.";
     }

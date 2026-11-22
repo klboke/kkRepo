@@ -10,15 +10,15 @@ import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
-class UserPickerJavascriptTest {
+class UiI18nLanguagesJavascriptTest {
   @Test
-  void userPickerJavascriptContract() throws Exception {
+  void uiLanguagesJavascriptContract() throws Exception {
     assumeTrue(nodeIsAvailable(), "Node.js is required for admin-ui JavaScript tests");
 
     Process process = new ProcessBuilder(
         "node",
         "--test",
-        Path.of("src/test/js/user-picker.test.js").toString())
+        Path.of("src/test/js/ui-i18n-languages.test.js").toString())
         .redirectErrorStream(true)
         .start();
 

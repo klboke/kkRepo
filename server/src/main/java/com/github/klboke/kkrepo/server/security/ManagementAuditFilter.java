@@ -49,7 +49,7 @@ public class ManagementAuditFilter extends OncePerRequestFilter {
       FilterChain filterChain) throws ServletException, IOException {
     boolean managementMutation = auditedMutation(request);
     boolean componentUpload = "POST".equals(request.getMethod())
-        && "/service/rest/v1/components".equals(stripContextPath(request));
+        && "/service/rest/v1/components".equals(SecurityRequestPath.matchingPath(request));
     if (!managementMutation && !possibleRepositoryPublish(request) && !componentUpload) {
       filterChain.doFilter(request, response);
       return;

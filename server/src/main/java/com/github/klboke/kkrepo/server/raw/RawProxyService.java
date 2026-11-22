@@ -15,6 +15,7 @@ import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import java.io.IOException;
 import java.io.InputStream;
@@ -29,6 +30,9 @@ import org.springframework.stereotype.Service;
 
 @Service
 public class RawProxyService {
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService streaming;
+
   private static final long[] BACKOFF_SECONDS = {30, 60, 120, 300, 600, 1800};
   static final String REMOTE_SOURCE_FINGERPRINT = "remoteSourceFingerprint";
 
@@ -100,6 +104,9 @@ public class RawProxyService {
 
   public MavenResponse getAsset(RepositoryRuntime runtime, String path, String remotePath, boolean headOnly) {
     String remoteUrl = buildRemoteUrl(runtime.proxyRemoteUrl(), remotePath);
+    if (progressiveArtifact(runtime, path)) {
+      com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.enableRanges(runtime, path);
+    }
     String sourceFingerprint = remoteSourceFingerprint(runtime, remoteUrl);
     Optional<CachedAssetMetadata> cached = sourceCompatible(
         lookupCached(runtime, path), sourceFingerprint, runtime, remoteUrl);
@@ -269,6 +276,9 @@ public class RawProxyService {
       ComponentBinding componentBinding,
       String browsePath,
       boolean headOnly) {
+    if (timeoutProfile == HttpRemoteFetcher.TimeoutProfile.CONTENT && progressiveArtifact(runtime, path)) {
+      com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.enableRanges(runtime, path);
+    }
     String sourceFingerprint = remoteSourceFingerprint(runtime, remoteUrl);
     Optional<CachedAssetMetadata> cached = sourceCompatible(
         lookupCached(runtime, path), sourceFingerprint, runtime, remoteUrl)
@@ -386,7 +396,11 @@ public class RawProxyService {
       ComponentBinding componentBinding,
       String browsePath) {
     try {
-      return fetcher.fetchWithBodyRetry(req, path, result -> {
+      MavenResponse response = com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.fetchMaven(
+          streaming, fetcher, req, path, runtime,
+          !headOnly && cached.isEmpty() && componentBinding.validation() == null
+              && req.timeoutProfile() == HttpRemoteFetcher.TimeoutProfile.CONTENT
+              && progressiveArtifact(runtime, path), null, null, result -> {
         int status = result.status();
         if (status == 304 && cached.isPresent()
             && (runtime.format() != RepositoryFormat.NUGET || canRevalidate(runtime, cached, sourceFingerprint))) {
@@ -439,12 +453,33 @@ public class RawProxyService {
         return handleUpstreamFailure(runtime, path, cached, headOnly,
             "Upstream returned " + status, now);
       });
+      if (streaming != null && runtime.streamingEnabled()) {
+        response.withHeader("Content-Disposition", runtime.rawContentDispositionOrDefault().toLowerCase(Locale.ROOT));
+      }
+      return response;
+    } catch (Blocked blocked) {
+      return reader.serveSnapshot(cached.orElseThrow(() -> new MavenExceptions.MavenNotFoundException(path)),
+          headOnly, path, runtime.rawContentDispositionOrDefault());
     } catch (IOException e) {
       // Transport exception messages can contain signed upstream URLs. Keep their
       // diagnostic category, but never return the message to repository readers.
       return handleUpstreamFailure(runtime, path, cached, headOnly,
           "Upstream IO error: " + e.getClass().getSimpleName(), now);
     }
+  }
+
+  private static boolean progressiveArtifact(RepositoryRuntime runtime, String path) {
+    String lower = path.toLowerCase(Locale.ROOT);
+    return switch (runtime.format()) {
+      case RAW -> !lower.endsWith("/.") && !lower.equals(".");
+      case APT -> lower.endsWith(".deb");
+      case YUM -> lower.endsWith(".rpm");
+      case CONDA -> lower.endsWith(".conda") || lower.endsWith(".tar.bz2");
+      case NUGET -> lower.endsWith(".nupkg") || lower.endsWith(".snupkg");
+      case RUBYGEMS -> lower.endsWith(".gem");
+      // These adapters own archive/signature/identity validation outside this raw call.
+      default -> false;
+    };
   }
 
   private RawAssetWriter.Stored persist(

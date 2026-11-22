@@ -119,4 +119,13 @@ public class JdbcProxyStateDao implements com.github.klboke.kkrepo.persistence.j
     return new ProxyRemoteState(repositoryId, blockUntil, failCount, existing.flatMap(s -> Optional.ofNullable(s.lastSuccessAt())).orElse(null), now, truncated);
   }
 
+  @Override
+  public void clearBackoff(long repositoryId) {
+    jdbcTemplate.update("""
+        UPDATE proxy_remote_state
+        SET blocked_until = NULL, fail_count = 0, last_failure_at = NULL, last_error = NULL
+        WHERE repository_id = ? AND (blocked_until IS NOT NULL OR fail_count <> 0)
+        """, repositoryId);
+  }
+
 }

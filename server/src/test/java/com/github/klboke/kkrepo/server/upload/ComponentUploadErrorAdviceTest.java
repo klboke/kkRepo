@@ -33,7 +33,7 @@ class ComponentUploadErrorAdviceTest {
   void ohpmUploadPreservesProtocolStatusIncludingTransientFailure(int status) throws Exception {
     ComponentUploadService service = mock(ComponentUploadService.class);
     doThrow(new com.github.klboke.kkrepo.protocol.ohpm.OhpmException(status, "OHPM test rejection"))
-        .when(service).upload(anyString(), anyMap(), any(), anyString(), anyString());
+        .when(service).upload(anyString(), anyMap(), any(), any(), anyString());
     MockMvc mvc = MockMvcBuilders.standaloneSetup(new ComponentUploadController(service))
         .setControllerAdvice(advice).build();
     mvc.perform(multipart("/service/rest/v1/components").param("repository", "ohpm"))
@@ -81,7 +81,7 @@ class ComponentUploadErrorAdviceTest {
     ComponentUploadService uploadService = mock(ComponentUploadService.class);
     doThrow(new SwiftExceptions.UnprocessableEntity("Invalid Swift source archive"))
         .when(uploadService)
-        .upload(anyString(), anyMap(), any(), anyString(), anyString());
+        .upload(anyString(), anyMap(), any(), any(), anyString());
     MockMvc mvc = MockMvcBuilders
         .standaloneSetup(new ComponentUploadController(uploadService))
         .setControllerAdvice(advice)
@@ -105,7 +105,7 @@ class ComponentUploadErrorAdviceTest {
     ComponentUploadService uploadService = mock(ComponentUploadService.class);
     doThrow(failure)
         .when(uploadService)
-        .upload(anyString(), anyMap(), any(), anyString(), anyString());
+        .upload(anyString(), anyMap(), any(), any(), anyString());
     MockMvc mvc = MockMvcBuilders
         .standaloneSetup(new ComponentUploadController(uploadService))
         .setControllerAdvice(advice)

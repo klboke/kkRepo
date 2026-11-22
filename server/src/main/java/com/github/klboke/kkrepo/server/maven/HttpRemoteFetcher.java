@@ -17,6 +17,7 @@ import java.util.Set;
 import com.github.klboke.kkrepo.server.proxy.NtlmCredentials;
 import com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock;
 import com.github.klboke.kkrepo.server.security.OutboundRequestPolicy;
 import com.github.klboke.kkrepo.server.security.RedirectHosts;
 import com.github.klboke.kkrepo.server.security.SecurityValidationException;
@@ -53,6 +54,12 @@ public class HttpRemoteFetcher {
   private final Duration contentTimeout;
   private final Duration headTimeout;
   private final int bodyReadRetryAttempts;
+  private RepositoryOutboundBlock outboundBlock;
+
+  @Autowired
+  void setOutboundBlock(RepositoryOutboundBlock outboundBlock) {
+    this.outboundBlock = outboundBlock;
+  }
 
   public HttpRemoteFetcher(OutboundRequestPolicy outboundPolicy) {
     this(outboundPolicy, null);
@@ -114,6 +121,8 @@ public class HttpRemoteFetcher {
           null,
           sample);
       return result;
+    } catch (RepositoryOutboundBlock.Blocked blocked) {
+      throw blocked;
     } catch (IOException | RuntimeException e) {
       metrics.recordProxyRemote(
           req.repository(),
@@ -152,14 +161,30 @@ public class HttpRemoteFetcher {
   }
 
   private Result fetchInternal(Request req, int redirects) throws IOException {
+    checkOutbound(req);
     if (proxyFactory == null) {
       throw new IllegalStateException("Outbound HTTP client factory is required");
     }
     try {
-      return fetchInternal(req, redirects, req.resolvedTarget(outboundPolicy, "remote fetch"));
+      return fetchInternal(req, redirects, resolveTarget(req, redirects == 0 ? "remote fetch" : "remote redirect", redirects));
     } catch (SecurityValidationException e) {
       // Tag only transport validation failures, never a caller's response/scan policy failure.
       throw new RemoteRequestRejectedException(e);
+    }
+  }
+
+  void checkOutbound(Request req) throws RepositoryOutboundBlock.Blocked {
+    if (outboundBlock != null) outboundBlock.check(req.repository());
+  }
+
+  private OutboundRequestPolicy.ResolvedHttpTarget resolveTarget(
+      Request req, String purpose, int redirects) {
+    try {
+      return req.resolvedTarget(outboundPolicy, purpose);
+    } catch (OutboundRequestPolicy.AddressRejectedException e) {
+      log.warn("Proxy upstream address rejected: repository={} method={} redirectHop={} host={} address={} reason={}",
+          req.repository(), req.method(), redirects, remoteHost(req.url()), e.address(), e.reason());
+      throw e;
     }
   }
 
@@ -172,6 +197,11 @@ public class HttpRemoteFetcher {
     Map<String, String> headers = new LinkedHashMap<>();
     headers.put("Accept", req.accept() == null || req.accept().isBlank() ? "*/*" : req.accept());
     headers.put("User-Agent", "kkrepo/0.1");
+    if (req.byteRange() != null) {
+      headers.put("Range", req.byteRange().range());
+      if (req.byteRange().ifRange() != null) headers.put("If-Range", req.byteRange().ifRange());
+      headers.put("Accept-Encoding", "identity");
+    }
     if (req.etag() != null && !req.etag().isBlank()) {
       headers.put("If-None-Match", "\"" + req.etag() + "\"");
     }
@@ -189,13 +219,14 @@ public class HttpRemoteFetcher {
               : req.requestContentType());
     }
     Duration timeout = requestTimeout(req);
+    OutboundProxyConfig proxy = OutboundProxyConfig.forTarget(req.outboundProxy(), req.url());
     ProxiedHttpClientFactory.ProxiedResponse response = null;
     try {
       if (req.ntlmCredentials() == null) {
-        response = proxyFactory.execute(req.repository(), req.outboundProxy(), req.method(),
+        response = proxyFactory.execute(req.repository(), proxy, req.method(),
             target, headers, req.requestBody(), timeout.toMillis());
       } else {
-        response = proxyFactory.execute(req.repository(), req.outboundProxy(), req.method(),
+        response = proxyFactory.execute(req.repository(), proxy, req.method(),
             target, headers, req.requestBody(), timeout.toMillis(), req.ntlmCredentials());
       }
       String location = redirectLocation(response);
@@ -233,11 +264,8 @@ public class HttpRemoteFetcher {
             preserveBody ? req.requestBody() : null,
             preserveBody ? req.requestContentType() : null,
             req.ntlmCredentialsForRedirect(uri, redirected),
-            req.repositoryOrigin(), req.redirectPolicy());
-        Result redirectedResult = fetchInternal(
-            redirectedRequest,
-            redirects + 1,
-            redirectedRequest.resolvedTarget(outboundPolicy, "remote redirect"));
+            req.repositoryOrigin(), req.redirectPolicy(), req.byteRange());
+        Result redirectedResult = fetchInternal(redirectedRequest, redirects + 1);
         return redirectedResult.withInheritedHeaders(redirectHeaders);
       }
       return new Result(response.status(), response.headers(), releaseOnClose(response));
@@ -347,6 +375,8 @@ public class HttpRemoteFetcher {
     CONTENT
   }
 
+  public record ByteRange(String range, String ifRange) {}
+
   public record Request(
       String url,
       String etag,
@@ -365,7 +395,30 @@ public class HttpRemoteFetcher {
       String requestContentType,
       NtlmCredentials ntlmCredentials,
       RepositoryOrigin repositoryOrigin,
+      com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy redirectPolicy,
+      ByteRange byteRange) {
+    public Request(
+      String url,
+      String etag,
+      Instant lastModified,
+      Duration timeout,
+      TimeoutProfile timeoutProfile,
+      boolean headOnly,
+      String repository,
+      String format,
+      String trustedHost,
+      String authorizationHeader,
+      Set<String> allowedUnsignedRedirectHosts,
+      OutboundProxyConfig outboundProxy,
+      String accept,
+      byte[] requestBody,
+      String requestContentType,
+      NtlmCredentials ntlmCredentials,
+      RepositoryOrigin repositoryOrigin,
       com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy redirectPolicy) {
+      this(url, etag, lastModified, timeout, timeoutProfile, headOnly, repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts, outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin, redirectPolicy, null);
+    }
+
     /** Existing callers retain the strict redirect default. */
     public Request(
         String url, String etag, Instant lastModified, Duration timeout, TimeoutProfile timeoutProfile,
@@ -508,7 +561,7 @@ public class HttpRemoteFetcher {
     public Request withRedirectBoundary() {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
           repository, format, URI.create(url).getHost(), authorizationHeader, allowedUnsignedRedirectHosts,
-          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin, redirectPolicy);
+          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin, redirectPolicy, byteRange);
     }
 
     /** Authorizes a metadata-selected URL while retaining credentials only for the configured origin. */
@@ -524,25 +577,32 @@ public class HttpRemoteFetcher {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
           configured.repository(), configured.format(), target.getHost(), configured.authorizationHeader(),
           configured.allowedUnsignedRedirectHosts(), configured.outboundProxy(), accept, requestBody,
-          requestContentType, configured.ntlmCredentials(), origin, configured.redirectPolicy());
+          requestContentType, configured.ntlmCredentials(), origin, configured.redirectPolicy(), byteRange);
+    }
+
+    public Request withByteRange(String range, String ifRange) {
+      return new Request(url, null, null, timeout, timeoutProfile, headOnly,
+          repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts,
+          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin,
+          redirectPolicy, new ByteRange(range, ifRange));
     }
 
     public Request withConditional(String etag, Instant lastModified) {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
           repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts,
-          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin, redirectPolicy);
+          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin, redirectPolicy, byteRange);
     }
 
     public Request withTimeoutProfile(TimeoutProfile timeoutProfile) {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
           repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts,
-          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin, redirectPolicy);
+          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin, redirectPolicy, byteRange);
     }
 
     public Request withAccept(String accept) {
       return new Request(url, etag, lastModified, timeout, timeoutProfile, headOnly,
           repository, format, trustedHost, authorizationHeader, allowedUnsignedRedirectHosts,
-          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin, redirectPolicy);
+          outboundProxy, accept, requestBody, requestContentType, ntlmCredentials, repositoryOrigin, redirectPolicy, byteRange);
     }
 
     /** Creates a read-only POST request, used by Hub paths-info. */
@@ -599,7 +659,7 @@ public class HttpRemoteFetcher {
           requestBody,
           requestContentType,
           includeAuthorization && trusted != null ? runtime.ntlmCredentials() : null, null,
-          content && runtime != null && requestBody == null ? runtime.contentRedirectPolicy() : null);
+          content && runtime != null && requestBody == null ? runtime.contentRedirectPolicy() : null, byteRange);
     }
 
     public Request withRepositoryAllowingUnsignedRedirects(
@@ -632,7 +692,7 @@ public class HttpRemoteFetcher {
           requestBody,
           requestContentType,
           includeAuthorization && trusted != null ? runtime.ntlmCredentials() : null, null,
-          runtime != null && requestBody == null ? runtime.contentRedirectPolicy() : null);
+          runtime != null && requestBody == null ? runtime.contentRedirectPolicy() : null, byteRange);
     }
 
     public String method() {
@@ -641,7 +701,7 @@ public class HttpRemoteFetcher {
 
     OutboundRequestPolicy.ResolvedHttpTarget resolvedTarget(
         OutboundRequestPolicy policy, String purpose) {
-      boolean proxyResolvesDns = outboundProxy != null && outboundProxy.enabled();
+      boolean proxyResolvesDns = OutboundProxyConfig.forTarget(outboundProxy, url) != null;
       OutboundRequestPolicy.ResolvedHttpTarget target =
           redirectPolicy == com.github.klboke.kkrepo.server.security.ProxyRedirectPolicy.PUBLIC_HTTPS
               ? policy.resolvePublicHttpsTarget(url, purpose)
@@ -797,7 +857,29 @@ public class HttpRemoteFetcher {
     }
   }
 
-  public record Result(int status, Map<String, String> headers, InputStream body) implements AutoCloseable {
+  public static final class Result implements AutoCloseable {
+    private final int status;
+    private final Map<String, String> headers;
+    private final InputStream body;
+    private boolean detached;
+
+    public Result(int status, Map<String, String> headers, InputStream body) {
+      this.status = status;
+      this.headers = headers;
+      this.body = body;
+    }
+
+    public int status() { return status; }
+    public Map<String, String> headers() { return headers; }
+    public InputStream body() { return body; }
+
+    /** Transfers ownership to a response stream; closing this result no longer closes that body. */
+    public InputStream detachBody() {
+      if (detached) throw new IllegalStateException("Upstream body already transferred");
+      detached = true;
+      return body;
+    }
+
     public String header(String name) {
       for (Map.Entry<String, String> e : headers.entrySet()) {
         if (e.getKey().equalsIgnoreCase(name)) return e.getValue();
@@ -859,7 +941,7 @@ public class HttpRemoteFetcher {
 
     @Override
     public void close() {
-      if (body != null) {
+      if (body != null && !detached) {
         try { body.close(); } catch (IOException ignored) {}
       }
     }

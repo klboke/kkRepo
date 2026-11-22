@@ -23,6 +23,7 @@ import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.releaseage.MinimumReleaseAge;
 import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import java.io.ByteArrayInputStream;
@@ -62,6 +63,9 @@ import org.springframework.stereotype.Service;
  */
 @Service
 public class GoProxyService {
+  @org.springframework.beans.factory.annotation.Autowired
+  private com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService streaming;
+
   private static final long[] BACKOFF_SECONDS = {30, 60, 120, 300, 600, 1800};
   private static final int MAX_METADATA_BYTES = 8 * 1024 * 1024;
   private static final int PUBLISH_TIME_LOOKUP_PARALLELISM = 8;
@@ -149,6 +153,7 @@ public class GoProxyService {
       throw new MavenExceptions.MethodNotAllowed("Go proxy requests require a go proxy repository");
     }
     GoPath path = parse(rawPath);
+    if (path.path().endsWith(".zip")) com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.enableRanges(runtime, path.path());
     if (!runtime.minimumReleaseAgeEnabled()) {
       return serve(runtime, path, headOnly);
     }
@@ -386,7 +391,10 @@ public class GoProxyService {
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.CONTENT)
         .withRepositoryForContent(runtime);
     try {
-      return fetcher.fetchWithBodyRetry(req, path.path(), result -> {
+      return com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService.fetchMaven(
+          streaming, fetcher, req, path.path(), runtime,
+          !headOnly && cached.isEmpty() && path.path().endsWith(".zip"),
+          null, null, result -> {
         int status = result.status();
         if (status == 304 && cached.isPresent()) {
           assetDao.touchAssetLastUpdated(cached.get().assetId(), now);
@@ -410,6 +418,9 @@ public class GoProxyService {
         return handleUpstreamFailure(runtime, path, cached, headOnly,
             "Upstream returned " + status, now);
       });
+    } catch (Blocked blocked) {
+      if (cached.isPresent()) return serveCached(cached.get(), headOnly, path);
+      throw new MavenExceptions.MavenNotFoundException(path.path());
     } catch (IOException e) {
       return handleUpstreamFailure(runtime, path, cached, headOnly,
           "Upstream IO error: " + e.getMessage(), now);

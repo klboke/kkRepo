@@ -33,6 +33,7 @@ import com.github.klboke.kkrepo.server.maven.MavenErrorAdvice;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.io.IOException;
@@ -47,6 +48,86 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class RawProxyServiceTest {
+  @Test
+  void manualBlockReturnsStaleContentAndDoesNotNegativeCacheAMiss() throws Exception {
+    var fixture = fixture();
+    var runtime = runtime(RepositoryType.PROXY, 1);
+    var stale = snapshot(Instant.EPOCH);
+    when(fixture.cache.find(eq(runtime.id()), eq("file.txt"), any()))
+        .thenReturn(Optional.of(stale), Optional.empty());
+    when(fixture.fetcher.fetchWithBodyRetry(any(), eq("file.txt"), any())).thenThrow(new Blocked());
+    var cached = MavenResponse.noBody(200);
+    when(fixture.reader.serveSnapshot(stale, true, "file.txt", "ATTACHMENT")).thenReturn(cached);
+
+    assertSame(cached, fixture.service.getAsset(runtime, "file.txt", true));
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> fixture.service.getAsset(runtime, "file.txt", true));
+    verify(fixture.negativeCache, never()).rememberNotFound(runtime, "file.txt");
+  }
+
+  @ParameterizedTest
+  @org.junit.jupiter.params.provider.CsvSource({
+      "APT,pool/demo.deb,true", "APT,dists/stable/Release,false",
+      "YUM,Packages/demo.rpm,true", "YUM,repodata/repomd.xml,false",
+      "CONDA,noarch/demo.conda,true", "CONDA,noarch/demo.tar.bz2,true",
+      "NUGET,package/demo.nupkg,true", "NUGET,package/demo.snupkg,true",
+      "RUBYGEMS,gems/demo.gem,true", "RUBYGEMS,specs.4.8.gz,false",
+      "ANSIBLEGALAXY,download/demo.tar.gz,false", "OHPM,package/demo.tgz,false"})
+  void onlyArtifactRoutesReachProgressivePolicyAdmission(RepositoryFormat format, String path, boolean eligible)
+      throws Exception {
+    Fixture fixture = fixture();
+    var repositories = mock(com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao.class);
+    var policy = mock(com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy.class);
+    var streaming = new com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService(
+        repositories, fixture.assetDao, fixture.registry, policy, 1, 1000);
+    org.springframework.test.util.ReflectionTestUtils.setField(fixture.service, "streaming", streaming);
+    var runtime = org.mockito.Mockito.spy(runtime(RepositoryType.PROXY, 60));
+    when(runtime.format()).thenReturn(format);
+    when(runtime.streamingEnabled()).thenReturn(true);
+    var client = new org.springframework.mock.web.MockHttpServletRequest("GET", "/repository/proxy/" + path);
+    org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+        new org.springframework.web.context.request.ServletRequestAttributes(client));
+    when(fixture.fetcher.fetchWithBodyRetry(any(), eq(path), any())).thenReturn(MavenResponse.noBody(200));
+    try {
+      fixture.service.getAssetFromUrl(runtime, path, "https://upstream.example.test/" + path, false);
+      verify(policy, times(eligible ? 1 : 0)).allowsProgressiveRead(runtime.id());
+      verify(fixture.fetcher, never()).fetch(any()); // The policy denies progressive delivery in this fixture.
+    } finally {
+      org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+      org.springframework.test.util.ReflectionTestUtils.invokeMethod(streaming, "stop");
+    }
+  }
+
+  @ParameterizedTest
+  @org.junit.jupiter.params.provider.EnumSource(value = RepositoryFormat.class, names = {"COMPOSER", "TERRAFORM"})
+  void checksumDependentCallersKeepSynchronousPublicationWhenStreamingIsEnabled(RepositoryFormat format)
+      throws Exception {
+    Fixture fixture = fixture();
+    var repositories = mock(com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao.class);
+    var policy = mock(com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy.class);
+    var streaming = new com.github.klboke.kkrepo.server.proxy.ProgressiveProxyService(
+        repositories, fixture.assetDao, fixture.registry, policy, 1, 1000);
+    org.springframework.test.util.ReflectionTestUtils.setField(fixture.service, "streaming", streaming);
+    var runtime = org.mockito.Mockito.spy(runtime(RepositoryType.PROXY, 60));
+    when(runtime.format()).thenReturn(format);
+    when(runtime.streamingEnabled()).thenReturn(true);
+    var client = new org.springframework.mock.web.MockHttpServletRequest("GET", "/repository/proxy/archive.zip");
+    org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+        new org.springframework.web.context.request.ServletRequestAttributes(client));
+    MavenResponse persisted = MavenResponse.noBody(200);
+    when(fixture.fetcher.fetchWithBodyRetry(any(), eq("archive.zip"), any())).thenReturn(persisted);
+    try {
+      assertSame(persisted, fixture.service.getAssetFromUrl(runtime, "archive.zip",
+          "https://upstream.example.test/archive.zip", false));
+      verify(fixture.fetcher).fetchWithBodyRetry(any(), eq("archive.zip"), any());
+      verify(fixture.fetcher, never()).fetch(any());
+      org.mockito.Mockito.verifyNoInteractions(repositories, policy);
+    } finally {
+      org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+      org.springframework.test.util.ReflectionTestUtils.invokeMethod(streaming, "stop");
+    }
+  }
+
   @ParameterizedTest
   @ValueSource(strings = {"", "/", "docs/"})
   void directoryHeadFetchesTheDirectoryUrlAndStoresItWithoutAnIndexAlias(String rawPath) throws Exception {

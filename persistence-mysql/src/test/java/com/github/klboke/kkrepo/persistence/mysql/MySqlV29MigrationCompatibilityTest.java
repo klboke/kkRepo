@@ -16,8 +16,37 @@ import org.junit.jupiter.api.Test;
 
 /** Guards the frozen V1-V29 chain and validates repeat startup after newer migrations. */
 class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
-  private static final int LATEST_MIGRATION = 64;
+  private static final int LATEST_MIGRATION = 70;
   private static final Map<String, String> V29_SHA256 = checksums();
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+  void dockerConnectorMigrationResumesAfterCommittedDdlAndBackfillsLegacyPorts(boolean afterBackfill) throws Exception {
+    Flyway throughV65 = migration("65");
+    throughV65.clean();
+    assertEquals(65, throughV65.migrate().migrationsExecuted);
+    jdbc().execute("""
+        INSERT INTO repository (name, format, type, recipe_name, attributes_json)
+        VALUES ('legacy-docker', 'docker', 'hosted', 'docker-hosted',
+          '{"docker":{"connectorEnabled":true,"connectorPort":5000}}'),
+          ('disabled-docker', 'docker', 'hosted', 'docker-hosted',
+          '{"docker":{"connectorEnabled":false,"connectorPort":5001}}')
+        """);
+    try (InputStream stream = getClass().getResourceAsStream("/db/migration/mysql/V66__docker_connector_bindings.sql")) {
+      assertNotNull(stream);
+      String sql = new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+      jdbc().execute(sql.substring(0, sql.indexOf(';')));
+      // Simulate an interruption after both autocommitted statements as well as after DDL alone.
+      if (afterBackfill) jdbc().execute(sql.substring(sql.indexOf(';') + 1));
+    }
+    Flyway resumed = migration(null);
+    assertEquals(LATEST_MIGRATION - 65, resumed.migrate().migrationsExecuted);
+    assertEquals(0, resumed.migrate().migrationsExecuted);
+    assertTrue(resumed.validateWithResult().validationSuccessful);
+    assertEquals(1, jdbc().queryForObject("SELECT COUNT(*) FROM docker_connector_binding", Integer.class));
+    assertEquals(5000, jdbc().queryForObject("SELECT port FROM docker_connector_binding", Integer.class));
+    assertEquals("http", jdbc().queryForObject("SELECT scheme FROM docker_connector_binding", String.class));
+  }
 
   @Test
   void snapshotInventoryMigrationResumesAfterItsFirstAutocommittedTable() throws Exception {
@@ -30,7 +59,7 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
       jdbc().execute(sql.substring(0, sql.indexOf(';')));
     }
     Flyway resumed = migration(null);
-    assertEquals(1, resumed.migrate().migrationsExecuted);
+    assertEquals(LATEST_MIGRATION - 63, resumed.migrate().migrationsExecuted);
     assertTrue(resumed.validateWithResult().validationSuccessful);
     assertEquals(0, resumed.migrate().migrationsExecuted);
     assertEquals(3, jdbc().queryForObject("""
@@ -97,6 +126,31 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
         SELECT COUNT(*) FROM information_schema.tables
         WHERE table_schema = DATABASE() AND table_name IN ('gitlfs_object', 'gitlfs_upload')
         """, Integer.class));
+  }
+
+  @Test
+  void downloadOffloadMigrationResumesAfterCreatingTheSettingsTable() throws Exception {
+    Flyway throughV69 = migration("69");
+    throughV69.clean();
+    assertEquals(69, throughV69.migrate().migrationsExecuted);
+    try (InputStream stream = getClass().getResourceAsStream(
+        "/db/migration/mysql/V70__download_offload_settings.sql")) {
+      assertNotNull(stream);
+      String sql = new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+      jdbc().execute(sql.substring(0, sql.indexOf(';')));
+
+      Flyway resumed = migration(null);
+      assertEquals(1, resumed.migrate().migrationsExecuted);
+      assertEquals(0, resumed.migrate().migrationsExecuted);
+      assertTrue(resumed.validateWithResult().validationSuccessful);
+      assertEquals(0L, jdbc().queryForObject(
+          "SELECT revision FROM download_offload_settings WHERE id = 1", Long.class));
+
+      jdbc().update("UPDATE download_offload_settings SET revision = 7 WHERE id = 1");
+      jdbc().execute(sql.substring(sql.indexOf(';') + 1));
+      assertEquals(7L, jdbc().queryForObject(
+          "SELECT revision FROM download_offload_settings WHERE id = 1", Long.class));
+    }
   }
 
   @Test

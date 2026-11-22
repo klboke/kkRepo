@@ -200,6 +200,8 @@ jobs:
             secondary-service: kkrepo-postgresql-secondary
     env:
       CLIENT_E2E_SHARD: ${{ matrix.shard }}
+      # Exercise both delivery modes with real clients on JVM and Native candidates.
+      KKREPO_COMPAT_PROXY_STREAMING_ENABLED: ${{ matrix.database == 'postgresql' && 'true' || 'false' }}
       CLIENT_E2E_TESTS: ${{ inputs.client_protocol == 'ohpm' && 'ohpm' || 'all' }}
       COMPOSE_FILE: docker-compose.compat-postgres.yml
       COMPOSE_PROJECT_NAME: kkrepo-compat
@@ -465,7 +467,8 @@ jobs:
   swift-xcode-e2e:
     name: Swift registry Xcode E2E (macOS)
     needs: build-candidate
-    runs-on: macos-15
+    # Keep Xcode 16.4 coverage available when hosted macOS arm64 capacity is exhausted.
+    runs-on: macos-15-intel
     timeout-minutes: 60
     if: >-
       always() &&
@@ -778,6 +781,7 @@ jobs:
       COMPOSE_FILE: docker-compose.compat-postgres.yml
       COMPOSE_PROJECT_NAME: kkrepo-nexus-compat
       LIVE_COMPAT_SUITE: nexus
+      KKREPO_COMPAT_PROXY_STREAMING_ENABLED: "true"
       NEXUS_COMPAT_IMAGE: sonatype/nexus3:3.94.0
       NEXUS_COMPAT_PORT: "38090"
       KKREPO_COMPAT_PORT: "18092"

@@ -18,6 +18,7 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.raw.RawProxyService;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -33,6 +34,17 @@ class ConanRemoteClientTest {
   private final RawProxyService proxy = mock(RawProxyService.class);
   private final HttpRemoteFetcher fetcher = mock(HttpRemoteFetcher.class);
   private final ConanRemoteClient client = new ConanRemoteClient(proxy, fetcher);
+
+  @Test
+  void blockedTokenExchangeDoesNotPreventUsingCachedDiscovery() throws Exception {
+    when(fetcher.fetch(any())).thenThrow(new Blocked());
+    when(proxy.getMetadataFromUrlHidden(any(), anyString(), anyString(), anyBoolean()))
+        .thenReturn(MavenResponse.ok(new ByteArrayInputStream("{}".getBytes(StandardCharsets.UTF_8)),
+            2, "application/json", null, Instant.EPOCH));
+    assertEquals(2, client.discovery(
+        runtime("robot", "secret", null), "v2/conans/search", null).bytes().length);
+    verify(proxy).getMetadataFromUrlHidden(any(), anyString(), anyString(), anyBoolean());
+  }
 
   @Test
   void returnsBoundedDiscoveryMetadataWithoutCredentials() {

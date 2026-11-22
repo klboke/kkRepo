@@ -1,11 +1,19 @@
 package com.github.klboke.kkrepo.persistence.jdbc.api;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.UiSettingsRecord;
+import java.util.List;
 
 public interface UiSettingsDao {
   String LANGUAGE_BROWSER = "browser";
   String LANGUAGE_ZH_CN = "zh-CN";
   String LANGUAGE_EN = "en";
+  /**
+   * UI languages, in display order. Keep in sync with the ck_ui_settings_default_language
+   * constraint and with LANGUAGES in login/assets/ui-i18n.js.
+   */
+  List<String> LANGUAGES = List.of(
+      LANGUAGE_EN, LANGUAGE_ZH_CN, "fr", "de", "es", "it", "pt-BR", "nl", "pl", "ru", "uk", "ja",
+      "ko", "tr");
   String DEFAULT_LANGUAGE = LANGUAGE_EN;
   String THEME_DEFAULT = "default";
   String THEME_INDIGO = "indigo";
@@ -30,6 +38,15 @@ public interface UiSettingsDao {
     }
     if ("en".equalsIgnoreCase(normalized) || "en-US".equalsIgnoreCase(normalized)) {
       return LANGUAGE_EN;
+    }
+    String candidate = normalized.replace('_', '-');
+    for (String language : LANGUAGES) {
+      if (language.equalsIgnoreCase(candidate)) {
+        return language;
+      }
+    }
+    if ("pt".equalsIgnoreCase(candidate)) {
+      return "pt-BR";
     }
     throw new IllegalArgumentException("Unsupported UI default language: " + defaultLanguage);
   }
