@@ -2157,7 +2157,7 @@
           </div>
           <div class="proxy-settings-layout">
             <form class="blobstore-form" id="offload-settings-form">
-              <div class="form-title">Settings</div>
+              <div class="form-title" id="offload-settings-title">Settings</div>
               <div class="field-label">
                 <label class="checkbox-field"><input type="checkbox" id="offload-enabled" disabled><span>Enable download offload</span></label>
                 <span class="field-help" tabindex="0" role="note"
@@ -2166,8 +2166,7 @@
                   <span class="lucide-icon icon-info" aria-hidden="true"></span>
                 </span>
               </div>
-              <fieldset class="form-grid offload-settings-fields" id="offload-fields" disabled>
-                <legend class="sr-only">Download offload settings</legend>
+              <fieldset class="form-grid offload-settings-fields" id="offload-fields" aria-labelledby="offload-settings-title" disabled>
                 <label class="full-width"><span>Offload method</span><select id="offload-method"></select></label>
                 <div class="full-width">
                   <div class="field-label">
