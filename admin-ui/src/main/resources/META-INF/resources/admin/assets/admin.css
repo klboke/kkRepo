@@ -5020,6 +5020,17 @@ code {
   margin: 14px 0;
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
+.offload-method-picker .recipe-combobox-options { max-height: min(400px, 48dvh); }
+.offload-method-picker .recipe-selection { flex: 1; }
+.offload-method-picker .recipe-option-copy strong { color: inherit; }
+.offload-method-logo {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  object-fit: contain;
+}
+.offload-method-check { flex: 0 0 16px; color: var(--success); }
+.offload-method-picker [aria-selected="false"] .offload-method-check { visibility: hidden; }
 .offload-request {
   display: block;
   margin-top: 6px;

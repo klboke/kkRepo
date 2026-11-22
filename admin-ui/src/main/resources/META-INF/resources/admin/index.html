@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/browse/assets/ui-scrollbars.css?v=20260826-shared-scrollbars-4">
     <link rel="stylesheet" href="/browse/assets/format-icons.css?v=20261118-format-icons-1">
     <link rel="stylesheet" href="/browse/assets/lucide-icons.css?v=20261121-route-1">
-    <link rel="stylesheet" href="./assets/admin.css?v=20261122-settings-responsive-spacing">
+    <link rel="stylesheet" href="./assets/admin.css?v=20261122-offload-method-picker">
     <link rel="stylesheet" href="/browse/assets/account-menu.css?v=20260824-ui-themes-3">
     <link rel="stylesheet" href="/browse/assets/global-component-search.css?v=20260819-topbar-control-height-1">
     <link rel="stylesheet" href="/login/assets/delete-confirmation.css?v=20261013-delete-confirmation-1">
@@ -2167,7 +2167,22 @@
                 </span>
               </div>
               <fieldset class="form-grid offload-settings-fields" id="offload-fields" aria-labelledby="offload-settings-title" disabled>
-                <label class="full-width"><span>Offload method</span><select id="offload-method"></select></label>
+                <div class="form-field full-width">
+                  <span id="offload-method-label">Offload method</span>
+                  <div class="recipe-combobox offload-method-picker" id="offload-method-picker">
+                    <select id="offload-method" hidden aria-hidden="true" tabindex="-1"></select>
+                    <button class="recipe-combobox-trigger" id="offload-method-trigger" type="button" role="combobox"
+                      aria-haspopup="listbox" aria-expanded="false" aria-controls="offload-method-options"
+                      aria-labelledby="offload-method-label offload-method-value">
+                      <span class="recipe-combobox-value" id="offload-method-value"></span>
+                      <span class="recipe-combobox-caret lucide-icon icon-chevron-down" aria-hidden="true"></span>
+                    </button>
+                    <div class="recipe-combobox-popover" id="offload-method-popover" hidden>
+                      <div class="recipe-combobox-options" id="offload-method-options" role="listbox"
+                        aria-labelledby="offload-method-label"></div>
+                    </div>
+                  </div>
+                </div>
                 <div class="full-width">
                   <div class="field-label">
                     <label id="offload-request-label">Proxy request header</label>
@@ -2553,7 +2568,7 @@
     <script src="./assets/user-picker.js?v=20261107-user-picker"></script>
     <script src="./assets/ohpm-login.js?v=20261107-user-picker"></script>
     <script src="./assets/proxy-settings.js?v=20261121-block-outbound"></script>
-    <script src="./assets/download-offload.js?v=20261122-offload-saved-status"></script>
+    <script src="./assets/download-offload.js?v=20261122-offload-method-picker"></script>
     <script src="./assets/admin.js?v=20261122-download-offload"></script>
   </body>
 </html>

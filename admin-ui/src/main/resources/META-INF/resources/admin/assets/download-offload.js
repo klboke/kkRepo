@@ -10,6 +10,17 @@
   const internal = "/_kkrepo_file_offload";
   const mount = "/srv/kkrepo-blobs";
   const targets = { "internal-uri": "Internal URI", "absolute-path": "Proxy-side absolute path" };
+  const methodLogos = {
+    nginx: "nginx.png",
+    openresty: "openresty.webp",
+    tengine: "tengine.png",
+    angie: "angie.jpg",
+    npm: "nginx-proxy-manager.png",
+    ngf: "nginx-gateway-fabric.png",
+    caddy: "caddy.png",
+    apache: "apache-http-server.png",
+    lighttpd: "lighttpd.png"
+  };
   const nginxDocs = "https://nginx.org/en/docs/http/ngx_http_core_module.html#internal";
   const proxyDocs = {
     nginx: nginxDocs,
@@ -47,6 +58,111 @@
 
   function option(value, label) {
     return new Option(label, value);
+  }
+
+  function renderMethodOptions(methods) {
+    closeMethodPicker();
+    el("method-value").removeAttribute("data-method");
+    el("method").replaceChildren(...methods.map(method => option(method.id, t(method.label))));
+    el("method-options").replaceChildren(...methods.map(method => {
+      const row = document.createElement("div");
+      row.id = `offload-method-option-${method.id}`;
+      row.className = "recipe-combobox-option";
+      row.dataset.method = method.id;
+      row.setAttribute("role", "option");
+
+      const label = document.createElement("span");
+      label.className = "recipe-selection";
+      const source = methodLogos[method.id];
+      const logo = document.createElement(source ? "img" : "span");
+      logo.className = "offload-method-logo";
+      if (source) {
+        logo.alt = "";
+        logo.src = `./assets/offload-logos/${source}`;
+      } else {
+        logo.classList.add("lucide-icon", "icon-sliders-horizontal");
+        logo.setAttribute("aria-hidden", "true");
+      }
+      const copy = document.createElement("span");
+      copy.className = "recipe-option-copy";
+      const name = document.createElement("strong");
+      name.textContent = t(method.label);
+      copy.append(name);
+      label.append(logo, copy);
+
+      const check = document.createElement("span");
+      check.className = "offload-method-check lucide-icon icon-check";
+      check.setAttribute("aria-hidden", "true");
+      row.append(label, check);
+      return row;
+    }));
+  }
+
+  function renderSelectedMethod(id) {
+    const value = el("method-value");
+    if (value.dataset.method === id) return;
+    for (const row of el("method-options").children) {
+      const selected = row.dataset.method === id;
+      row.setAttribute("aria-selected", String(selected));
+      if (selected) value.replaceChildren(row.firstElementChild.cloneNode(true));
+    }
+    value.dataset.method = id;
+  }
+
+  function activateMethodOption(row) {
+    el("method-options").querySelector(".is-active")?.classList.remove("is-active");
+    row.classList.add("is-active");
+    el("method-trigger").setAttribute("aria-activedescendant", row.id);
+    row.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+
+  function openMethodPicker() {
+    const selected = el("method-options").querySelector('[aria-selected="true"]');
+    if (!selected || el("method-trigger").matches(":disabled")) return;
+    el("method-popover").hidden = false;
+    el("method-trigger").setAttribute("aria-expanded", "true");
+    activateMethodOption(selected);
+  }
+
+  function closeMethodPicker() {
+    el("method-popover").hidden = true;
+    el("method-trigger").setAttribute("aria-expanded", "false");
+    el("method-trigger").removeAttribute("aria-activedescendant");
+  }
+
+  function selectMethod(row) {
+    if (!row || el("method-trigger").matches(":disabled")) return;
+    closeMethodPicker();
+    el("method-trigger").focus();
+    const method = el("method");
+    if (method.value === row.dataset.method) return;
+    method.value = row.dataset.method;
+    method.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  function handleMethodKey(event) {
+    const open = !el("method-popover").hidden;
+    if (event.key === "Tab") {
+      closeMethodPicker();
+      return;
+    }
+    if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+      event.preventDefault();
+      if (!open) openMethodPicker();
+      if (el("method-popover").hidden) return;
+      const rows = Array.from(el("method-options").children);
+      const active = rows.findIndex(row => row.classList.contains("is-active"));
+      if (event.key === "Home") activateMethodOption(rows[0]);
+      else if (event.key === "End") activateMethodOption(rows.at(-1));
+      else if (open) {
+        const step = event.key === "ArrowDown" ? 1 : -1;
+        activateMethodOption(rows[Math.max(0, Math.min(active + step, rows.length - 1))]);
+      }
+    } else if (open && ["Enter", " ", "Escape"].includes(event.key)) {
+      event.preventDefault();
+      if (event.key === "Escape") closeMethodPicker();
+      else selectMethod(el("method-options").querySelector(".is-active"));
+    }
   }
 
   function selectedStores() {
@@ -89,6 +205,8 @@
     const editable = !saving && canEdit();
     el("enabled").disabled = !editable;
     el("fields").disabled = !editable || !current.enabled;
+    if (el("fields").disabled) closeMethodPicker();
+    renderSelectedMethod(current.method);
     el("request").textContent = `${requestHeader}: ${wire.marker}`;
     el("response").readOnly = current.method !== "custom";
     if (el("response").readOnly) el("response").value = wire.responseHeader;
@@ -112,7 +230,7 @@
 
   function applySettings(value) {
     saved = value;
-    el("method").replaceChildren(...saved.methods.map(method => option(method.id, t(method.label))));
+    renderMethodOptions(saved.methods);
     el("store-rows").replaceChildren();
     for (const store of saved.stores) {
       const row = el("store-rows").insertRow();
@@ -291,6 +409,16 @@
       }
     }
   }
+
+  el("method-trigger").addEventListener("click", () => {
+    if (el("method-popover").hidden) openMethodPicker();
+    else closeMethodPicker();
+  });
+  el("method-trigger").addEventListener("keydown", handleMethodKey);
+  el("method-options").addEventListener("click", event => selectMethod(event.target.closest('[role="option"]')));
+  document.addEventListener("pointerdown", event => {
+    if (!el("method-picker").contains(event.target) && !el("method-popover").hidden) closeMethodPicker();
+  });
 
   el("settings-form").addEventListener("input", event => {
     if (!saved) return;
