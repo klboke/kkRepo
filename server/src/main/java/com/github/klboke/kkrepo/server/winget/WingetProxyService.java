@@ -83,6 +83,7 @@ public class WingetProxyService {
       RepositoryRuntime runtime, WingetSearchRequest request, byte[] requestBody, int limit) {
     String url = base(runtime) + "/" + WingetProtocol.MANIFEST_SEARCH_PATH;
     List<WingetPackage> packages = new ArrayList<>();
+    java.util.Set<String> identifiers = new java.util.LinkedHashSet<>();
     String upstreamToken = null;
     int pages = 0;
     try {
@@ -108,7 +109,13 @@ public class WingetProxyService {
           }
           byte[] body = WingetJson.readBody(result.body());
           JsonNode root = mapper.readTree(body);
-          packages.addAll(WingetJson.packages(root));
+          // Unstable upstream pagination can repeat a package across pages; the client contract
+          // expects distinct identifiers.
+          for (WingetPackage pkg : WingetJson.packages(root)) {
+            if (identifiers.add(pkg.packageIdentifier().toLowerCase(java.util.Locale.ROOT))) {
+              packages.add(pkg);
+            }
+          }
           String next = root.path("ContinuationToken").asText(null);
           upstreamToken = next == null || next.isBlank() || next.equals(upstreamToken)
               ? null : next;
@@ -122,6 +129,12 @@ public class WingetProxyService {
           ? packages.subList(0, limit) : packages, null);
     } catch (IOException | RuntimeException failure) {
       log.warn("WinGet proxy search failed; trying cached manifests: {}", failure.toString());
+      // Pages fetched before the failure are fresh results: serve them rather than falling back
+      // to the stale cache. The cache only covers a failure before the first page.
+      if (pages > 0 && !packages.isEmpty()) {
+        return new WingetSearchPage(packages.size() > limit
+            ? packages.subList(0, limit) : packages, null);
+      }
       WingetSearchPage cached = hosted.searchCached(runtime, request, limit);
       if (!cached.packages().isEmpty()) {
         return new WingetSearchPage(cached.packages(), null);

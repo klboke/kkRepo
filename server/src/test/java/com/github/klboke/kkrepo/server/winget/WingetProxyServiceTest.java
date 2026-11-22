@@ -112,6 +112,45 @@ class WingetProxyServiceTest {
   }
 
   @Test
+  void searchDedupsRepeatedPackagesAndKeepsFreshPagesOnALateUpstreamFailure() throws Exception {
+    String pageOne = """
+        {"Data":[{"PackageIdentifier":"Contoso.Tool","PackageName":"Contoso Tool",
+          "Publisher":"Contoso","Versions":[{"PackageVersion":"1.0.0"}]}],
+         "ContinuationToken":"upstream-page-2"}
+        """;
+    String pageTwo = """
+        {"Data":[{"PackageIdentifier":"Contoso.Tool","PackageName":"Contoso Tool",
+          "Publisher":"Contoso","Versions":[{"PackageVersion":"1.0.0"}]},
+         {"PackageIdentifier":"Fabrikam.Tool","PackageName":"Fabrikam Tool",
+          "Publisher":"Fabrikam","Versions":[{"PackageVersion":"2.0.0"}]}],
+         "ContinuationToken":"upstream-page-3"}
+        """;
+    when(fetcher.fetch(any())).thenAnswer(invocation -> {
+      HttpRemoteFetcher.Request outbound = invocation.getArgument(0, HttpRemoteFetcher.Request.class);
+      String token = outbound.extraHeaders().get("ContinuationToken");
+      if (token == null) {
+        return new HttpRemoteFetcher.Result(200, Map.of(),
+            new ByteArrayInputStream(pageOne.getBytes(StandardCharsets.UTF_8)));
+      }
+      if (token.equals("upstream-page-2")) {
+        return new HttpRemoteFetcher.Result(200, Map.of(),
+            new ByteArrayInputStream(pageTwo.getBytes(StandardCharsets.UTF_8)));
+      }
+      throw new IOException("upstream down on page three");
+    });
+    // A cached package must not leak into the result: pages fetched before the failure are fresh.
+    hosted.cache(runtime, manifest("Cached.Tool", "9.9.9"));
+
+    WingetSearchPage page = proxy.search(runtime, searchAll(10), new byte[0], 10);
+
+    // The page-two repeat of Contoso.Tool is dropped, and the fresh Fabrikam.Tool survives the
+    // page-three failure instead of being replaced by the stale cache.
+    assertEquals(List.of("Contoso.Tool", "Fabrikam.Tool"),
+        page.packages().stream().map(pkg -> pkg.packageIdentifier()).toList());
+    assertNull(page.nextOffset());
+  }
+
+  @Test
   void cachedSearchFallbackDoesNotAdvertiseANextPage() throws Exception {
     for (int i = 0; i < 25; i++) {
       hosted.cache(runtime, manifest("Contoso.Tool" + i, "1.0.0"));
