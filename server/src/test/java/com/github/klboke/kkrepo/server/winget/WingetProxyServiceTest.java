@@ -57,22 +57,58 @@ class WingetProxyServiceTest {
   }
 
   @Test
-  void searchReturnsOneUpstreamPageWithoutContinuationToken() throws Exception {
-    String body = """
+  void searchConsumesUpstreamPagesUntilTheClientLimitIsMet() throws Exception {
+    String pageOne = """
         {"Data":[{"PackageIdentifier":"Contoso.Tool","PackageName":"Contoso Tool",
           "Publisher":"Contoso","Versions":[{"PackageVersion":"1.0.0"}]}],
          "ContinuationToken":"upstream-page-2"}
         """;
-    when(fetcher.fetch(any())).thenReturn(new HttpRemoteFetcher.Result(
-        200, Map.of("ContinuationToken", "upstream-page-2"),
-        new ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8))));
+    String pageTwo = """
+        {"Data":[{"PackageIdentifier":"Fabrikam.Tool","PackageName":"Fabrikam Tool",
+          "Publisher":"Fabrikam","Versions":[{"PackageVersion":"2.0.0"}]}]}
+        """;
+    List<HttpRemoteFetcher.Request> sent = new ArrayList<>();
+    when(fetcher.fetch(any())).thenAnswer(invocation -> {
+      HttpRemoteFetcher.Request outbound = invocation.getArgument(0, HttpRemoteFetcher.Request.class);
+      sent.add(outbound);
+      boolean secondPage = outbound.extraHeaders()
+          .entrySet().stream().anyMatch(header -> header.getKey().equalsIgnoreCase("ContinuationToken")
+              && header.getValue().equals("upstream-page-2"));
+      return new HttpRemoteFetcher.Result(200, Map.of(),
+          new ByteArrayInputStream((secondPage ? pageTwo : pageOne)
+              .getBytes(StandardCharsets.UTF_8)));
+    });
+
+    WingetSearchPage page = proxy.search(runtime, searchAll(10), new byte[0], 10);
+
+    // The package on the second upstream page is returned instead of being truncated.
+    assertEquals(2, page.packages().size());
+    assertEquals("Fabrikam.Tool", page.packages().get(1).packageIdentifier());
+    assertNull(page.nextOffset());
+    assertEquals(2, sent.size());
+    // The opaque upstream token is forwarded as the ContinuationToken request header.
+    assertEquals("upstream-page-2", sent.get(1).extraHeaders().get("ContinuationToken"));
+  }
+
+  @Test
+  void searchStopsWhenTheUpstreamRunsOutOfPages() throws Exception {
+    String singlePage = """
+        {"Data":[{"PackageIdentifier":"Contoso.Tool","PackageName":"Contoso Tool",
+          "Publisher":"Contoso","Versions":[{"PackageVersion":"1.0.0"}]}]}
+        """;
+    List<HttpRemoteFetcher.Request> sent = new ArrayList<>();
+    when(fetcher.fetch(any())).thenAnswer(invocation -> {
+      sent.add(invocation.getArgument(0, HttpRemoteFetcher.Request.class));
+      return new HttpRemoteFetcher.Result(200, Map.of(),
+          new ByteArrayInputStream(singlePage.getBytes(StandardCharsets.UTF_8)));
+    });
 
     WingetSearchPage page = proxy.search(runtime, searchAll(10), new byte[0], 10);
 
     assertEquals(1, page.packages().size());
-    // The token cannot be forwarded upstream, so relaying it would make the client request the
-    // same first page again with the same token.
     assertNull(page.nextOffset());
+    // One upstream page: the response carries no ContinuationToken, so no second fetch.
+    assertEquals(1, sent.size());
   }
 
   @Test
@@ -94,7 +130,7 @@ class WingetProxyServiceTest {
     when(fetcher.fetch(any())).thenAnswer(invocation -> {
       String url = invocation.getArgument(0, HttpRemoteFetcher.Request.class).url();
       upstreamUrls.add(url);
-      String filter = queryParameter(url, "PackageVersion");
+      String filter = queryParameter(url, "Version");
       String[] served = filter == null ? versions
           : Arrays.stream(versions).filter(filter::equals).toArray(String[]::new);
       String body = "{\"Data\":" + manifestJson(identifier, served) + "}";

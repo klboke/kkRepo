@@ -85,7 +85,8 @@ class WingetProtocolHandlerTest {
         .thenReturn(manifest());
     MockHttpServletRequest servlet = new MockHttpServletRequest(HttpMethod.GET.name(),
         "/api/packageManifests/Contoso.Tool");
-    servlet.addParameter("PackageVersion", "1.2.3");
+    // The WinGet client sends the version filter as `Version` (REST 1.10 contract).
+    servlet.addParameter("Version", "1.2.3");
 
     var response = handler.handle(new RepositoryProtocolRequest(
         runtime(), "winget", "api/packageManifests/Contoso.Tool", HttpMethod.GET, servlet, null, null));

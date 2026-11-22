@@ -142,8 +142,10 @@ public class WingetProtocolHandler implements RepositoryProtocolHandler {
       RepositoryProtocolRequest context, String packageIdentifier) {
     HttpMethod method = context.method();
     if (method == HttpMethod.GET || method == HttpMethod.HEAD) {
+      // The WinGet REST contract sends the version filter as `Version`
+      // (GET /packageManifests/{id}?Version=1.0.0).
       WingetManifest manifest = service.manifest(context.runtime(), packageIdentifier,
-          query(context.servletRequest(), "PackageVersion"),
+          query(context.servletRequest(), "Version"),
           query(context.servletRequest(), "Channel"));
       return respond(context, HttpStatus.OK, wrapper(manifestJson(manifest)), new HttpHeaders());
     }
