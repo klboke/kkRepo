@@ -65,6 +65,18 @@ class PluginLoaderTest {
     PluginLoader loader = new PluginLoader(
         fixture.plugins(), fixture.truststore(), PASSWORD.toCharArray());
     assertThrows(PluginException.class, loader::load);
+    assertThrows(PluginException.class,
+        () -> new SignedJarVerifier(fixture.truststore(), PASSWORD.toCharArray()).verify(jar));
+  }
+
+  @Test
+  void rejectsSignedJarWithoutCodeEntries(@TempDir Path temp) throws Exception {
+    Fixture fixture = fixture(temp);
+    Path jar = temp.resolve("empty.jar");
+    createJar(jar, true, fixture.keystore(), Map.of());
+
+    assertThrows(PluginException.class,
+        () -> new SignedJarVerifier(fixture.truststore(), PASSWORD.toCharArray()).verify(jar));
   }
 
   @Test
@@ -78,6 +90,8 @@ class PluginLoaderTest {
     PluginLoader loader = new PluginLoader(
         fixture.plugins(), fixture.truststore(), PASSWORD.toCharArray());
     assertThrows(PluginException.class, loader::load);
+    assertThrows(PluginException.class,
+        () -> new SignedJarVerifier(fixture.truststore(), PASSWORD.toCharArray()).verify(jar));
   }
 
   @Test
@@ -91,6 +105,8 @@ class PluginLoaderTest {
     PluginLoader loader = new PluginLoader(
         fixture.plugins(), fixture.truststore(), PASSWORD.toCharArray());
     assertThrows(PluginException.class, loader::load);
+    assertThrows(PluginException.class,
+        () -> new SignedJarVerifier(fixture.truststore(), PASSWORD.toCharArray()).verify(tampered));
   }
 
   @Test
