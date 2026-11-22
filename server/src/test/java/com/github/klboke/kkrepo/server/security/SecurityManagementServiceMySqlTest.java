@@ -103,13 +103,15 @@ class SecurityManagementServiceMySqlTest {
             () -> asKeyAuthenticatedAdmin(() -> service.createApiKey(command)), variant);
       }
     }
-    // An ASCII case variant is the same identity: refused to a key, the same token in a session.
-    var error = assertThrows(ResponseStatusException.class, () -> asKeyAuthenticatedAdmin(() ->
-        service.createApiKey(new ApiKeyCommand("usertoken", "OIDC", "carol", null, null, List.of(), null, null, null))));
+    // An ASCII case variant is the same identity, and administrators never obtain another user's token.
+    ApiKeyCommand caseVariant =
+        new ApiKeyCommand("usertoken", "OIDC", "carol", null, null, List.of(), null, null, null);
+    var error = assertThrows(ResponseStatusException.class,
+        () -> asKeyAuthenticatedAdmin(() -> service.createApiKey(caseVariant)));
     assertEquals(403, error.getStatusCode().value());
+    assertEquals(403, assertThrows(ResponseStatusException.class, () -> service.createApiKey(caseVariant))
+        .getStatusCode().value());
     assertEquals(hash, dao.findApiKey(UserTokens.DOMAIN, "OIDC", "carol").orElseThrow().apiKeyHash());
-    assertEquals(token.token(), service.createApiKey(
-        new ApiKeyCommand("usertoken", "OIDC", "carol", null, null, List.of(), null, null, null)).token());
     assertEquals("carol", authentication.authenticate(basic(token.token())).orElseThrow().userId());
 
     // A row written under another spelling before this rule (directly in the database) is never

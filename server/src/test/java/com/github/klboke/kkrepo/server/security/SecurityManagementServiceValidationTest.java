@@ -22,6 +22,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AdminBootstrapCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AnonymousSettingsCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.ApiKeyCommand;
+import com.github.klboke.kkrepo.server.security.SecurityPayloads.ApiKeyView;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.ExternalRoleMapping;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.LdapSettingsCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.PrivilegeCommand;
@@ -820,11 +821,52 @@ class SecurityManagementServiceValidationTest {
         dao.findApiKey(UserTokens.DOMAIN, "OIDC", "carol").orElseThrow().apiKeyHash());
     assertTrue(dao.findApiKey(UserTokens.DOMAIN, "Local", "mallory").isEmpty());
 
-    // The same admin in a signed-in session may.
+  }
+
+  @Test
+  void administratorsCanViewAndRevokeButNeverObtainOrSetAnotherUsersToken() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    SecurityManagementService service = new SecurityManagementService(dao);
+    var token = service.createApiKeyForOwner("OIDC", "carol",
+        new ApiKeyCommand(UserTokens.DOMAIN, null, null, "docker", null, List.of(), null, null, null));
+    String chosenPair = "ABCDEFGHJK:" + "a".repeat(43);
+
+    // A signed-in administrator: no reveal of carol's token, no issue for mallory, no import, no reset.
     withCaller(null, () -> {
-      assertEquals(token.token(), service.createApiKey(adminCreate).token());
-      assertNotEquals(token.token(), service.resetApiKey(token.apiKey().id()).token());
+      for (ApiKeyCommand command : List.of(
+          new ApiKeyCommand(" usertoken", "OIDC", "carol", null, null, List.of(), null, null, null),
+          new ApiKeyCommand(UserTokens.DOMAIN, "Local", "mallory", null, null, List.of(), null, null, null),
+          new ApiKeyCommand(UserTokens.DOMAIN, "OIDC", "carol", null, null, List.of(), null, null,
+              SecurityHashing.sha256(chosenPair)),
+          new ApiKeyCommand(UserTokens.DOMAIN, "Local", "mallory", null, null, List.of(), null, null,
+              SecurityHashing.sha256(chosenPair)))) {
+        var error = assertThrows(org.springframework.web.server.ResponseStatusException.class,
+            () -> service.createApiKey(command), command.ownerUserId());
+        assertEquals(403, error.getStatusCode().value());
+      }
+      var reset = assertThrows(org.springframework.web.server.ResponseStatusException.class,
+          () -> service.resetApiKey(token.apiKey().id()));
+      assertEquals(403, reset.getStatusCode().value());
+
+      // Metadata stays visible: the user code identifies the token, the secret is never part of it.
+      ApiKeyView listed = service.findApiKey(token.apiKey().id()).orElseThrow();
+      assertEquals(UserTokens.DOMAIN, listed.domain());
+      assertEquals(UserTokens.userCode(token.token()), listed.tokenPrefix());
+      // Ordinary keys keep the existing administrative behaviour.
+      var nexus = service.createApiKey(
+          new ApiKeyCommand("nexus", "OIDC", "carol", null, null, List.of(), null, null, null));
+      assertNotEquals(nexus.token(), service.resetApiKey(nexus.apiKey().id()).token());
     });
+    assertEquals(SecurityHashing.sha256(token.token()),
+        dao.findApiKey(UserTokens.DOMAIN, "OIDC", "carol").orElseThrow().apiKeyHash());
+    assertTrue(dao.findApiKey(UserTokens.DOMAIN, "Local", "mallory").isEmpty());
+
+    // The administrator revokes it; the owner generates a replacement from their own session.
+    withCaller(null, () -> service.deleteApiKey(token.apiKey().id()));
+    assertTrue(dao.findApiKey(UserTokens.DOMAIN, "OIDC", "carol").isEmpty());
+    var replacement = service.createApiKeyForOwner("OIDC", "carol",
+        new ApiKeyCommand(UserTokens.DOMAIN, null, null, "docker", null, List.of(), null, null, null));
+    assertNotEquals(token.token(), replacement.token());
   }
 
   @Test

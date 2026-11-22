@@ -1002,6 +1002,33 @@ class NexusSecurityRestControllerTest {
   }
 
   @Test
+  void administrativeApiKeyEndpointsNeverObtainOrSetAnotherUsersUserToken() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    var service = new SecurityManagementService(dao);
+    var internal = new SecurityManagementController(service);
+    var nexus = new NexusSecurityRestController(service);
+    var token = new SecurityManagementController(service).createCurrentApiKey(request(subject("alice")),
+        new SecurityPayloads.ApiKeyCommand(UserTokens.DOMAIN, null, null, "cli", null, List.of(), null, null, null));
+    String hash = dao.findApiKey(UserTokens.DOMAIN, "Local", "alice").orElseThrow().apiKeyHash();
+    String chosenHash = SecurityHashing.sha256("ABCDEFGHJK:" + "a".repeat(43));
+
+    for (String owner : List.of("alice", "bob")) {
+      for (String importedHash : new String[] {null, chosenHash}) {
+        assertEquals(403, assertThrows(ResponseStatusException.class, () -> internal.createApiKey(
+            new SecurityPayloads.ApiKeyCommand(UserTokens.DOMAIN, "Local", owner, null, null, List.of(), null, null,
+                importedHash))).getStatusCode().value(), owner);
+        assertEquals(403, assertThrows(ResponseStatusException.class, () -> nexus.createApiKey(
+            new NexusSecurityPayloads.NexusApiKeyCommand(UserTokens.DOMAIN, "Local", owner, null, null, Set.of(), null,
+                null, importedHash))).getStatusCode().value(), owner);
+      }
+    }
+    assertEquals(403, assertThrows(ResponseStatusException.class,
+        () -> nexus.resetApiKey(token.apiKey().id())).getStatusCode().value());
+    assertEquals(hash, dao.findApiKey(UserTokens.DOMAIN, "Local", "alice").orElseThrow().apiKeyHash());
+    assertTrue(dao.findApiKey(UserTokens.DOMAIN, "Local", "bob").isEmpty());
+  }
+
+  @Test
   void internalUiUsersDefaultToLocalSourceAndExposeCoreUiShape() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.realm(new SecurityRealmRecord(1L, "local", "LOCAL", "Local", true, 0, Map.of("source", "Local")));
