@@ -282,6 +282,12 @@ class ConanRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
         clock.plusSeconds(60), clock, clock));
     assertEquals("realm", dao.findValidAuthToken(
         "a".repeat(64), repositoryId, clock).orElseThrow().realmId());
+    dao.insertAuthToken(new ConanRegistryDao.AuthToken(
+        "b".repeat(64), repositoryId, "LOCAL", "user", "user-token", 77L,
+        clock.plusSeconds(60), clock, clock));
+    assertEquals(1, inTransaction(() -> dao.deleteAuthTokensByApiKeyId(77L)));
+    assertTrue(dao.findValidAuthToken("b".repeat(64), repositoryId, clock).isEmpty());
+    assertTrue(dao.findValidAuthToken("a".repeat(64), repositoryId, clock).isPresent());
 
     inTransaction(() -> dao.commitRevision(recipeCommit(
         coordinate(repositoryId, "cleanup-state"), RREV_ONE, clock,

@@ -38,6 +38,9 @@ public interface DockerAuthTokenDao {
    */
   int deleteExpired(Instant now, int maxItems);
 
+  /** Deletes every token issued from this API key or user token; returns the number deleted. */
+  int deleteByApiKeyId(long apiKeyId);
+
   record TokenRecord(
       String tokenHash,
       String subjectSource,

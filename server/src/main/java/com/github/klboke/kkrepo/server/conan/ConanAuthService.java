@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.server.conan;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.ConanRegistryDao;
+import com.github.klboke.kkrepo.server.security.ApiKeyRotatedEvent;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityAuthenticationService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -14,6 +15,7 @@ import java.util.Base64;
 import java.util.HexFormat;
 import java.util.Optional;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 /** Repository-scoped Conan bearer exchange backed by durable, hashed tokens. */
@@ -46,6 +48,12 @@ public class ConanAuthService {
         hash(token), repositoryId, subject.source(), subject.userId(), subject.realmId(),
         subject.apiKeyId(), now.plus(ttl), null, now));
     return token;
+  }
+
+  /** Auth tokens issued from a key that was reset must not outlive the old secret. */
+  @EventListener
+  public void revokeTokensOf(ApiKeyRotatedEvent event) {
+    registry.deleteAuthTokensByApiKeyId(event.apiKeyId());
   }
 
   public boolean hasConanBearer(HttpServletRequest request) {

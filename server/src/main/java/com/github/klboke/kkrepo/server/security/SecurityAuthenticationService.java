@@ -219,9 +219,33 @@ public class SecurityAuthenticationService {
     if (basicAuthSuppressed(request) && !explicitLogin) {
       return Optional.empty();
     }
-    return basicCredentials(request).flatMap(credentials ->
-        fresh || explicitLogin ? authenticateBasicUncached(credentials.username(), credentials.password())
-            : authenticateBasic(credentials.username(), credentials.password()));
+    return basicCredentials(request).flatMap(credentials -> {
+      // A valid CLI user token is resolved before any realm, so it never reaches an LDAP bind.
+      // Like Nexus user tokens, it serves clients but never opens a UI session.
+      if (!explicitLogin) {
+        Optional<AuthenticatedSubject> token =
+            authenticateUserToken(credentials.username(), credentials.password(), fresh);
+        if (token.isPresent()) {
+          return token;
+        }
+      }
+      return fresh || explicitLogin ? authenticateBasicUncached(credentials.username(), credentials.password())
+          : authenticateBasic(credentials.username(), credentials.password());
+    });
+  }
+
+  private Optional<AuthenticatedSubject> authenticateUserToken(
+      String userCode, String passCode, boolean fresh) {
+    if (!UserTokens.matches(userCode, passCode)) {
+      return Optional.empty();
+    }
+    String material = userCode + ":" + passCode;
+    Supplier<Optional<AuthenticatedSubject>> loader = () -> securityDao
+        .findApiKeyByDomainAndHash(UserTokens.DOMAIN, SecurityHashing.sha256(material))
+        .flatMap(token -> apiKeySubject(token, false, "user-token"));
+    return fresh || apiKeyAuthCache == null
+        ? loader.get()
+        : apiKeyAuthCache.find("user-token:" + material, loader);
   }
 
   private <T> T inAuthenticationTransaction(Supplier<T> callback) {
@@ -335,7 +359,7 @@ public class SecurityAuthenticationService {
     try {
       String decoded = new String(java.util.Base64.getDecoder().decode(token), StandardCharsets.UTF_8);
       int colon = decoded.indexOf(':');
-      if (colon > 0) return authenticateBasic(decoded.substring(0, colon), decoded.substring(colon + 1));
+      if (colon > 0) return basicOrUserToken(decoded.substring(0, colon), decoded.substring(colon + 1));
     } catch (IllegalArgumentException ignored) {
       // GenericToken/API-key URL tokens are not necessarily base64 Basic credentials.
     }
@@ -351,21 +375,30 @@ public class SecurityAuthenticationService {
   public Optional<String> replayableTerraformUrlToken(
       HttpServletRequest request, AuthenticatedSubject authenticated) {
     if (request == null || authenticated == null) return Optional.empty();
-    if (authenticated.apiKeyId() != null) {
-      return boundedTerraformToken(apiKeyToken(request));
+    String apiKeyToken = authenticated.apiKeyId() == null ? null : apiKeyToken(request);
+    if (apiKeyToken != null) {
+      return boundedTerraformToken(apiKeyToken);
     }
     String authorization = request.getHeader("Authorization");
     if (authorization == null || !authorization.regionMatches(true, 0, "Basic ", 0, 6)) {
       return Optional.empty();
     }
+    // A Basic user token replays like a password; apiKeyId must match so only that credential qualifies.
     Optional<AuthenticatedSubject> basic = basicCredentials(request).flatMap(credentials ->
-        authenticateBasic(credentials.username(), credentials.password()));
+        basicOrUserToken(credentials.username(), credentials.password()));
     if (basic.isEmpty()
         || !java.util.Objects.equals(basic.get().source(), authenticated.source())
-        || !java.util.Objects.equals(basic.get().userId(), authenticated.userId())) {
+        || !java.util.Objects.equals(basic.get().userId(), authenticated.userId())
+        || !java.util.Objects.equals(basic.get().apiKeyId(), authenticated.apiKeyId())) {
       return Optional.empty();
     }
     return boundedTerraformToken(authorization.substring(6).trim());
+  }
+
+  /** Basic credentials as the Basic header path resolves them: user token first, then realms. */
+  private Optional<AuthenticatedSubject> basicOrUserToken(String username, String password) {
+    Optional<AuthenticatedSubject> token = authenticateUserToken(username, password, false);
+    return token.isPresent() ? token : authenticateBasic(username, password);
   }
 
   private static Optional<String> boundedTerraformToken(String token) {
@@ -391,9 +424,16 @@ public class SecurityAuthenticationService {
     if (source == null || source.isBlank() || userId == null || userId.isBlank()) {
       return Optional.empty();
     }
+    // A token issued from an API key or user token stops working once that key is revoked or expires.
+    if (apiKeyId != null && securityDao.findApiKey(apiKeyId)
+        .filter(apiKey -> source.equals(apiKey.ownerSource()) && userId.equals(apiKey.ownerUserId()))
+        .filter(this::activeApiKey)
+        .isEmpty()) {
+      return Optional.empty();
+    }
     return securityDao.findUser(source, userId)
         .filter(this::activeUser)
-        .map(user -> toSubject(user, realmId, null, apiKeyId));
+        .map(user -> toSubject(user, realmId, storedExternalRoles(user), apiKeyId));
   }
 
   public Optional<AuthenticatedSubject> authenticateAnonymous() {
@@ -476,6 +516,10 @@ public class SecurityAuthenticationService {
   }
 
   public void storeSessionSubject(HttpServletRequest request, AuthenticatedSubject subject) {
+    // Sessions do not keep apiKeyId, so a key-backed session would outlive the key's revocation.
+    if (subject.apiKeyId() != null) {
+      throw new IllegalArgumentException("API keys and user tokens cannot open a session");
+    }
     HttpSession session = request.getSession(true);
     session.removeAttribute(BASIC_AUTH_SUPPRESSED_ATTRIBUTE);
     session.setAttribute(FindByIndexNameSessionRepository.PRINCIPAL_NAME_INDEX_NAME, principalName(subject));
@@ -507,7 +551,9 @@ public class SecurityAuthenticationService {
     if (fresh || apiKeyAuthCache == null) {
       return resolveApiKey(ApiKeyTokenCandidate.fromPresentedToken(token));
     }
-    return apiKeyAuthCache.find(token, () -> resolveApiKey(ApiKeyTokenCandidate.fromPresentedToken(token)));
+    // Every scheme uses its own key prefix: a cache hit must never let one credential type stand in for another.
+    return apiKeyAuthCache.find("header:" + token,
+        () -> resolveApiKey(ApiKeyTokenCandidate.fromPresentedToken(token)));
   }
 
   private Optional<AuthenticatedSubject> authenticateCargoApiKey(HttpServletRequest request) {
@@ -553,9 +599,13 @@ public class SecurityAuthenticationService {
   }
 
   private Optional<AuthenticatedSubject> resolveApiKey(List<ApiKeyTokenCandidate> candidates, boolean ohpm) {
-    Optional<ApiKeyRecord> match = findApiKey(candidates);
-    if (match.isEmpty()) return Optional.empty();
-    ApiKeyRecord apiKey = match.get();
+    return findApiKey(candidates)
+        // User tokens are Basic credentials only, never bearer or header API keys.
+        .filter(apiKey -> !UserTokens.DOMAIN.equalsIgnoreCase(apiKey.domain()))
+        .flatMap(apiKey -> apiKeySubject(apiKey, ohpm, "api-key"));
+  }
+
+  private Optional<AuthenticatedSubject> apiKeySubject(ApiKeyRecord apiKey, boolean ohpm, String realmId) {
     if (OhpmLoginTokenPolicy.DOMAIN.equalsIgnoreCase(apiKey.domain())) {
       if (!ohpm || ohpmLoginTokens == null || !ohpmLoginTokens.valid(apiKey)) return Optional.empty();
     } else if (!activeApiKey(apiKey)) return Optional.empty();
@@ -566,7 +616,29 @@ public class SecurityAuthenticationService {
       return Optional.empty();
     }
     securityDao.markApiKeyUsed(apiKey.id(), LocalDateTime.now());
-    return Optional.of(toSubject(owner.get(), "api-key", null, apiKey.id()));
+    return Optional.of(toSubject(owner.get(), realmId, storedExternalRoles(owner.get()), apiKey.id()));
+  }
+
+  /**
+   * The external group names the OIDC/LDAP realm verified at the user's last sign-in (attributes.groups,
+   * shared by every replica), resolved through that provider's current role mappings and same-name
+   * setting, so API keys and stored bearer tokens follow mapping changes like a browser session.
+   * Raw IdP claims are deliberately ignored. Users who last signed in before the provider was recorded
+   * are resolved through the provider of their source.
+   */
+  private Set<String> storedExternalRoles(SecurityUserRecord user) {
+    if (DEFAULT_SOURCE.equals(user.source()) || user.attributes() == null
+        || !(user.attributes().get("groups") instanceof Collection<?> groups)) {
+      return null;
+    }
+    Set<String> names = new LinkedHashSet<>(ExternalRoleMappings.names(groups));
+    Optional<SecurityRealmRecord> realm =
+        user.attributes().get(ExternalRoleMappings.USER_REALM) instanceof String realmId
+            ? externalRealm(realmId, user.source())
+            : ExternalRoleMappings.REALMS.stream()
+                .flatMap(realmId -> externalRealm(realmId, user.source()).stream())
+                .findFirst();
+    return realm.map(provider -> ExternalRoleMappings.resolve(provider, names)).orElse(Set.of());
   }
 
   private Optional<ApiKeyRecord> findApiKey(List<ApiKeyTokenCandidate> candidates) {

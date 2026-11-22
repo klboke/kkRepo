@@ -58,12 +58,17 @@ import java.util.Set;
 import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.web.context.request.RequestAttributes;
+import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.web.server.ResponseStatusException;
 
 @Service
 public class SecurityManagementService implements AccessDecisionService {
@@ -85,6 +90,7 @@ public class SecurityManagementService implements AccessDecisionService {
   private final SecurityDao securityDao;
   private final SecurityAuthorizationCache authorizationCache;
   private final ApiKeyAuthCache apiKeyAuthCache;
+  private ApplicationEventPublisher events;
   private final BasicAuthCache basicAuthCache;
   private final SecurityCatalogCache securityCatalogCache;
   private final TransactionTemplate readTransactions;
@@ -137,6 +143,11 @@ public class SecurityManagementService implements AccessDecisionService {
     this.securityCatalogCache = securityCatalogCache;
     this.readTransactions = transactionManager == null
         ? null : readOnlyTransactionTemplate(transactionManager);
+  }
+
+  @Autowired
+  void configureEvents(ApplicationEventPublisher events) {
+    this.events = events;
   }
 
   @Transactional(readOnly = true)
@@ -901,9 +912,15 @@ public class SecurityManagementService implements AccessDecisionService {
     if (command == null) {
       command = new ApiKeyCommand(null, null, null, null, null, null, null, null, null);
     }
-    String domain = defaultString(command.domain(), "nexus");
     String ownerSource = normalizeSource(command.ownerSource());
     String ownerUserId = requireText(command.ownerUserId(), "ownerUserId");
+    // The database may resolve another spelling of the domain (MySQL compares it case- and
+    // accent-insensitively), so authorize and write against the stored row's domain.
+    String requested = canonicalDomain(command.domain());
+    String domain = securityDao.findApiKey(requested, ownerSource, ownerUserId)
+        .map(stored -> canonicalDomain(stored.domain()))
+        .orElse(requested);
+    requireInteractiveForUserToken(false, domain);
     String generatedToken = null;
     String hash = blankToNull(command.apiKeyHash());
     String tokenPrefix = null;
@@ -915,10 +932,14 @@ public class SecurityManagementService implements AccessDecisionService {
           return existing.get();
         }
       }
-      String rawToken = randomToken();
-      generatedToken = domain + "." + rawToken;
+      boolean userToken = UserTokens.DOMAIN.equals(domain);
+      String rawToken = userToken ? UserTokens.generate() : randomToken();
+      generatedToken = presentedToken(domain, rawToken);
       hash = SecurityHashing.sha256(rawToken);
-      tokenPrefix = generatedToken.substring(0, Math.min(12, generatedToken.length()));
+      // The user code is the public half of a user token; it identifies the token in listings.
+      tokenPrefix = userToken
+          ? UserTokens.userCode(rawToken)
+          : generatedToken.substring(0, Math.min(12, generatedToken.length()));
       encryptedPayload = ApiKeyTokenPayloads.encryptRawToken(rawToken);
     }
     ApiKeyRecord record = new ApiKeyRecord(
@@ -957,7 +978,12 @@ public class SecurityManagementService implements AccessDecisionService {
     return securityDao.findApiKey(domain, ownerSource, ownerUserId)
         .flatMap(record -> ApiKeyTokenPayloads.decryptRawToken(record.encryptedPayload())
             .filter(rawToken -> SecurityHashing.sha256(rawToken).equals(record.apiKeyHash()))
-            .map(rawToken -> new CreatedApiKeyView(toApiKeyView(record), domain + "." + rawToken)));
+            .map(rawToken -> new CreatedApiKeyView(toApiKeyView(record), presentedToken(domain, rawToken))));
+  }
+
+  /** API keys carry their domain prefix; a user token is the Basic {@code userCode:passCode} pair. */
+  private static String presentedToken(String domain, String rawToken) {
+    return UserTokens.DOMAIN.equals(domain) ? rawToken : domain + "." + rawToken;
   }
 
   @Transactional
@@ -965,7 +991,22 @@ public class SecurityManagementService implements AccessDecisionService {
       String ownerSource,
       String ownerUserId,
       ApiKeyCommand command) {
-    return writeApiKey(ownedApiKeyCommand(ownerSource, ownerUserId, command), ApiKeyWrite.CREATE_ONLY);
+    return createApiKeyForOwner(ownerSource, ownerUserId, command, false);
+  }
+
+  /**
+   * {@code viaKey}: the caller authenticated with an API key or user token. Such a caller must not
+   * create, reveal or rotate a user token, so a leaked key cannot be turned into one.
+   */
+  @Transactional
+  public CreatedApiKeyView createApiKeyForOwner(
+      String ownerSource,
+      String ownerUserId,
+      ApiKeyCommand command,
+      boolean viaKey) {
+    ApiKeyCommand owned = ownedApiKeyCommand(ownerSource, ownerUserId, command);
+    requireInteractiveForUserToken(viaKey, canonicalDomain(owned.domain()));
+    return writeApiKey(owned, ApiKeyWrite.CREATE_ONLY);
   }
 
   /** Reuses the format token after the package client's credential login. */
@@ -1002,13 +1043,44 @@ public class SecurityManagementService implements AccessDecisionService {
 
   @Transactional
   public CreatedApiKeyView resetApiKeyForOwner(long id, String ownerSource, String ownerUserId) {
+    return resetApiKeyForOwner(id, ownerSource, ownerUserId, false);
+  }
+
+  @Transactional
+  public CreatedApiKeyView resetApiKeyForOwner(
+      long id, String ownerSource, String ownerUserId, boolean viaKey) {
     ApiKeyView existing = findApiKeyForOwner(id, ownerSource, ownerUserId)
         .orElseThrow(() -> new SecurityValidationException("API key not found: " + id));
+    requireInteractiveForUserToken(viaKey, existing.domain());
     return resetApiKey(existing);
   }
 
+  private static String canonicalDomain(String domain) {
+    String value = defaultString(domain, "nexus");
+    return UserTokens.DOMAIN.equalsIgnoreCase(value) ? UserTokens.DOMAIN : value;
+  }
+
+  /**
+   * Also checked in the shared create/reset paths against the current request's subject, so every
+   * endpoint (self-service or administrative) refuses key-authenticated user token management.
+   */
+  private static void requireInteractiveForUserToken(boolean viaKey, String canonicalDomain) {
+    if ((viaKey || currentRequestUsesKey()) && UserTokens.DOMAIN.equals(canonicalDomain)) {
+      throw new ResponseStatusException(HttpStatus.FORBIDDEN, "User tokens are managed from a signed-in session");
+    }
+  }
+
+  private static boolean currentRequestUsesKey() {
+    RequestAttributes attributes = RequestContextHolder.getRequestAttributes();
+    return attributes != null
+        && attributes.getAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE, RequestAttributes.SCOPE_REQUEST)
+            instanceof AuthenticatedSubject subject
+        && subject.apiKeyId() != null;
+  }
+
   private CreatedApiKeyView resetApiKey(ApiKeyView existing) {
-    return writeApiKey(new ApiKeyCommand(
+    requireInteractiveForUserToken(false, existing.domain());
+    CreatedApiKeyView reset = writeApiKey(new ApiKeyCommand(
         existing.domain(),
         existing.ownerSource(),
         existing.ownerUserId(),
@@ -1019,6 +1091,12 @@ public class SecurityManagementService implements AccessDecisionService {
         null,
         null),
         ApiKeyWrite.ROTATE);
+    // The key keeps its id, so bearer tokens issued from the previous credential are revoked
+    // explicitly (in this transaction) by their stores.
+    if (events != null) {
+      events.publishEvent(new ApiKeyRotatedEvent(existing.id()));
+    }
+    return reset;
   }
 
   @Transactional

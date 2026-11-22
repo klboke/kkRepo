@@ -745,6 +745,119 @@ class SecurityManagementServiceValidationTest {
   }
 
   @Test
+  void userTokenIsAUserCodeAndPasscodePairHashedAsAWhole() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    SecurityManagementService service = new SecurityManagementService(dao);
+
+    var created = service.createApiKeyForOwner("OIDC", "carol",
+        new ApiKeyCommand("usertoken", null, null, "docker", null, List.of(), null, null, null));
+    var reset = service.resetApiKeyForOwner(created.apiKey().id(), "OIDC", "carol");
+
+    String token = created.token();
+    String userCode = token.substring(0, token.indexOf(':'));
+    assertEquals(UserTokens.DOMAIN, created.apiKey().domain());
+    assertEquals(true, UserTokens.matches(userCode, token.substring(userCode.length() + 1)));
+    assertEquals(userCode, created.apiKey().tokenPrefix());
+    ApiKeyRecord stored = dao.findApiKey(UserTokens.DOMAIN, "OIDC", "carol").orElseThrow();
+    assertEquals(SecurityHashing.sha256(reset.token()), stored.apiKeyHash());
+    assertNotEquals(token, reset.token());
+    // One user token per user: self-service creation does not reveal it again (#559).
+    assertThrows(ApiKeyAlreadyExistsException.class, () -> service.createApiKeyForOwner("OIDC", "carol",
+        new ApiKeyCommand(UserTokens.DOMAIN, null, null, "docker", null, List.of(), null, null, null)));
+  }
+
+  @Test
+  void keyAuthenticatedCallersCannotCreateRevealOrRotateUserTokensInAnySpelling() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    SecurityManagementService service = new SecurityManagementService(dao);
+    var token = service.createApiKeyForOwner("OIDC", "carol",
+        new ApiKeyCommand(UserTokens.DOMAIN, null, null, "docker", null, List.of(), null, null, null));
+
+    for (String domain : List.of("UserToken", "usertoken", "UserToken ", " USERTOKEN\t")) {
+      var error = assertThrows(org.springframework.web.server.ResponseStatusException.class, () ->
+          service.createApiKeyForOwner("OIDC", "carol",
+              new ApiKeyCommand(domain, null, null, null, null, List.of(), null, null, null), true));
+      assertEquals(403, error.getStatusCode().value(), domain);
+    }
+    var reset = assertThrows(org.springframework.web.server.ResponseStatusException.class, () ->
+        service.resetApiKeyForOwner(token.apiKey().id(), "OIDC", "carol", true));
+    assertEquals(403, reset.getStatusCode().value());
+    assertEquals(SecurityHashing.sha256(token.token()),
+        dao.findApiKey(UserTokens.DOMAIN, "OIDC", "carol").orElseThrow().apiKeyHash());
+
+    // Ordinary API keys stay manageable with a key.
+    var nexus = service.createApiKeyForOwner("OIDC", "carol",
+        new ApiKeyCommand("nexus", null, null, null, null, List.of(), null, null, null), true);
+    assertNotEquals(nexus.token(),
+        service.resetApiKeyForOwner(nexus.apiKey().id(), "OIDC", "carol", true).token());
+  }
+
+  @Test
+  void administrativePathsAlsoRefuseUserTokenManagementToKeyAuthenticatedCallers() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    SecurityManagementService service = new SecurityManagementService(dao);
+    var token = service.createApiKeyForOwner("OIDC", "carol",
+        new ApiKeyCommand(UserTokens.DOMAIN, null, null, "docker", null, List.of(), null, null, null));
+    ApiKeyCommand adminCreate =
+        new ApiKeyCommand(" usertoken", "OIDC", "carol", null, null, List.of(), null, null, null);
+    ApiKeyCommand adminImport = new ApiKeyCommand(UserTokens.DOMAIN, "Local", "mallory", null, null,
+        List.of(), null, null, SecurityHashing.sha256("ABCDEFGHJK:" + "a".repeat(43)));
+
+    // An admin authenticated with an API key: neither reveal nor reset nor import a user token.
+    withCaller(17L, () -> {
+      for (ApiKeyCommand command : List.of(adminCreate, adminImport)) {
+        var error = assertThrows(org.springframework.web.server.ResponseStatusException.class,
+            () -> service.createApiKey(command));
+        assertEquals(403, error.getStatusCode().value());
+      }
+      var reset = assertThrows(org.springframework.web.server.ResponseStatusException.class,
+          () -> service.resetApiKey(token.apiKey().id()));
+      assertEquals(403, reset.getStatusCode().value());
+      assertTrue(service.createApiKey(
+          new ApiKeyCommand("nexus", "OIDC", "carol", null, null, List.of(), null, null, null)).token() != null);
+    });
+    assertEquals(SecurityHashing.sha256(token.token()),
+        dao.findApiKey(UserTokens.DOMAIN, "OIDC", "carol").orElseThrow().apiKeyHash());
+    assertTrue(dao.findApiKey(UserTokens.DOMAIN, "Local", "mallory").isEmpty());
+
+    // The same admin in a signed-in session may.
+    withCaller(null, () -> {
+      assertEquals(token.token(), service.createApiKey(adminCreate).token());
+      assertNotEquals(token.token(), service.resetApiKey(token.apiKey().id()).token());
+    });
+  }
+
+  @Test
+  void resetKeepsTheIdAndAnnouncesTheRotationSoIssuedBearersAreRevoked() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    SecurityManagementService service = new SecurityManagementService(dao);
+    List<Object> events = new java.util.ArrayList<>();
+    service.configureEvents(events::add);
+    var token = service.createApiKeyForOwner("OIDC", "carol",
+        new ApiKeyCommand(UserTokens.DOMAIN, null, null, "docker", null, List.of(), null, null, null));
+    assertTrue(events.isEmpty());
+
+    var reset = service.resetApiKeyForOwner(token.apiKey().id(), "OIDC", "carol");
+
+    assertEquals(token.apiKey().id(), reset.apiKey().id());
+    assertEquals(List.of(new ApiKeyRotatedEvent(token.apiKey().id())), events);
+  }
+
+  private static void withCaller(Long apiKeyId, Runnable action) {
+    var request = new org.springframework.mock.web.MockHttpServletRequest();
+    request.setAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE, new AuthenticatedSubject(
+        "Local", "admin", apiKeyId == null ? "local" : "api-key", apiKeyId,
+        new PermissionSubject("Local", "admin", Set.of("nx-admin"), null)));
+    org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+        new org.springframework.web.context.request.ServletRequestAttributes(request));
+    try {
+      action.run();
+    } finally {
+      org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+    }
+  }
+
+  @Test
   void resetApiKeyForOwnerRotatesRecoverableExistingToken() {
     FakeSecurityDao dao = new FakeSecurityDao();
     SecurityManagementService service = new SecurityManagementService(dao);

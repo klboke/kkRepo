@@ -101,6 +101,22 @@ class SecurityDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
     assertTrue(dao.listApiKeys().isEmpty());
   }
 
+  @Test
+  void apiKeyDomainLookupFollowsTheCaseAndAccentInsensitiveCollation() {
+    // Services must authorize against the stored domain: other spellings resolve the same row here.
+    SecurityDao dao = new JdbcSecurityDao(jdbc(), jsonColumns(), dialect());
+    ApiKeyRecord npm = apiKey("user-token-hash", "ACTIVE", null);
+    dao.upsertApiKey(new ApiKeyRecord(null, "UserToken", npm.ownerSource(), "carol",
+        npm.displayName(), npm.status(), npm.apiKeyHash(), npm.tokenPrefix(), npm.scopes(),
+        npm.encryptedPayload(), null, null, null, null));
+
+    for (String variant : List.of("usertoken", "UsérToken", "\uFF35\uFF53\uFF45\uFF52\uFF34\uFF4F\uFF4B\uFF45\uFF4E")) {
+      assertEquals("UserToken", dao.findApiKey(variant, "Local", "carol").orElseThrow().domain(), variant);
+    }
+    // The class shares one database; other tests count every API key.
+    dao.deleteApiKeysForOwner("Local", "carol");
+  }
+
   private static SecurityUserRecord user(String userId) {
     return new SecurityUserRecord(
         null,
