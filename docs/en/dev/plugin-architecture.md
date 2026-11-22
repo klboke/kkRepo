@@ -1,6 +1,6 @@
 # Plugin architecture and dependency inversion
 
-- Status: proposed, narrowed after review (2026-11-19)
+- Status: proposed, narrowed after review (2026-11-22)
 - Date: 2026-11-11
 - Scope (v1): repository formats, storage, remote transport
 - Implementation: #508
@@ -78,8 +78,10 @@ public interface PluginContext {
   same registry.
 - Startup validation, all-or-nothing: duplicate plugin ids, format ids, transport types, blob store
   types and protocol routes fail startup, whatever the registration order, and so does an API
-  version mismatch. A plugin can add a blob store type but cannot replace a built-in one. Checking
-  required host services at registration is still to do.
+  version mismatch. A plugin can add a blob store type but cannot replace a built-in one. A plugin
+  whose required host services are not all available at registration also fails startup, so a
+  missing dependency is never discovered by the first request; tracking the remaining checks is
+  implementation work, not an open contract question.
 - No Recipe/Facet framework in v1; Nexus's composition approach is borrowed only for the
   format/handler split.
 
@@ -110,9 +112,13 @@ No generic JSON database or query DSL in v1: plugins do not receive `Persistence
 ### 3. Context scopes and resource ownership
 
 - `RepositoryContext` carries repository configuration and shared services: the trimmed
-  `RepositoryDescriptor`, the portable `RepositoryPolicy`, optional `BlobStorage` and host-service
-  lookup. Request identity (caller, client address, public base URL) is resolved by the host from
-  the context and never crosses the plugin boundary.
+  `RepositoryDescriptor`, the portable `RepositoryPolicy` and host-service lookup. It does not
+  expose `BlobStorage`: format plugins perform artifact operations through the host services, and
+  direct blob access is reserved for host adapters behind the storage ports — an architectural
+  ownership rule, not a sandbox claim for trusted JARs. The host keeps transactions, blob
+  references, repository policies and reclamation on every artifact path, so there is no second
+  route around those responsibilities. Request identity (caller, client address, public base URL)
+  is resolved by the host from the context and never crosses the plugin boundary.
 - Handlers are stateless and thread-safe; one instance serves concurrent requests.
 - Stream ownership: a handler that declares `streamsRequestBody()` receives the unbuffered client
   stream and must consume or close it; otherwise the runtime buffers the body. A `StreamingBody`
