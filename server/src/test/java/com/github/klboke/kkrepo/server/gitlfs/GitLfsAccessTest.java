@@ -51,6 +51,13 @@ class GitLfsAccessTest {
     // The consumed Batch body is replayed, unchanged, to the protocol handler.
     assertArrayEquals(download.getContentAsByteArray(),
         GitLfsAccess.authorizedRequest(download).getInputStream().readAllBytes());
+    var replay = GitLfsAccess.authorizedRequest(download);
+    assertEquals(download.getContentAsByteArray().length, replay.getContentLength());
+    assertEquals(download.getContentAsByteArray().length, replay.getContentLengthLong());
+    assertEquals(new String(download.getContentAsByteArray(), StandardCharsets.UTF_8),
+        replay.getReader().readLine());
+    assertThrows(UnsupportedOperationException.class,
+        () -> replay.getInputStream().setReadListener(null));
     var caller = access.caller(download);
     assertTrue(caller.anonymous());
     assertEquals(download.getRemoteAddr(), caller.clientAddress());

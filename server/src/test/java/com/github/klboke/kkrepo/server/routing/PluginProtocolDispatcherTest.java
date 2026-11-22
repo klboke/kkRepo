@@ -159,7 +159,7 @@ class PluginProtocolDispatcherTest {
     MockHttpServletRequest servlet =
         new MockHttpServletRequest("PUT", "/repository/repo/big/upload");
     servlet.setContent("large-body".getBytes(StandardCharsets.UTF_8));
-    servlet.setQueryString("q=a+b&flag&q=ignored");
+    servlet.setQueryString("q=a+b&&flag&q=ignored");
     RepositoryProtocolHandler handler = new NeutralHandler(RepositoryProtocolRoute.anyPath(
         new FormatId("raw"), RepositoryKind.HOSTED, "PUT", 999)) {
       @Override
@@ -254,6 +254,59 @@ class PluginProtocolDispatcherTest {
             List.of(builtin, new PluginProtocolDispatcher(List.of(plugin)))));
 
     assertTrue(error.getMessage().contains("would replace the built-in handler"));
+  }
+
+  @Test
+  void rejectsInvalidHandlerCollectionsAndAcceptsNullHostServices() {
+    RepositoryProtocolRoute route = RepositoryProtocolRoute.anyPath(
+        new FormatId("raw"), RepositoryKind.HOSTED, "GET", 0);
+    RepositoryProtocolHandler nullRoutes = new NeutralHandler(route) {
+      @Override
+      public Collection<RepositoryProtocolRoute> routes() {
+        return null;
+      }
+    };
+    RepositoryProtocolHandler emptyRoutes = new NeutralHandler(route) {
+      @Override
+      public Collection<RepositoryProtocolRoute> routes() {
+        return List.of();
+      }
+    };
+    RepositoryProtocolHandler nullRoute = new NeutralHandler(route) {
+      @Override
+      public Collection<RepositoryProtocolRoute> routes() {
+        return java.util.Collections.singletonList(null);
+      }
+    };
+
+    assertThrows(IllegalStateException.class,
+        () -> new PluginProtocolDispatcher(java.util.Arrays.asList((RepositoryProtocolHandler) null)));
+    assertThrows(IllegalStateException.class, () -> new PluginProtocolDispatcher(List.of(nullRoutes)));
+    assertThrows(IllegalStateException.class, () -> new PluginProtocolDispatcher(List.of(emptyRoutes)));
+    assertThrows(IllegalStateException.class, () -> new PluginProtocolDispatcher(List.of(nullRoute)));
+    assertTrue(new PluginProtocolDispatcher(List.of(new RecordingHandler()), null).routes().size() == 2);
+  }
+
+  @Test
+  void rejectsUnmatchedRequestsAndNullResponses() {
+    RepositoryProtocolHandler handler = new NeutralHandler(RepositoryProtocolRoute.anyPath(
+        new FormatId("raw"), RepositoryKind.HOSTED, "GET", 0));
+    PluginProtocolDispatcher dispatcher = new PluginProtocolDispatcher(List.of(handler));
+
+    assertThrows(com.github.klboke.kkrepo.server.maven.MavenExceptions.MethodNotAllowed.class,
+        () -> dispatcher.handle(new RepositoryProtocolRequest(
+            runtime(), "repo", "a", HttpMethod.POST,
+            new MockHttpServletRequest("POST", "/repository/repo/a"), null, null)));
+
+    RepositoryProtocolHandler nullResponse = new NeutralHandler(RepositoryProtocolRoute.anyPath(
+        new FormatId("raw"), RepositoryKind.HOSTED, "GET", 0)) {
+      @Override
+      public RepositoryResponse handle(RepositoryRequest request) {
+        return null;
+      }
+    };
+    assertThrows(IllegalStateException.class,
+        () -> new PluginProtocolDispatcher(List.of(nullResponse)).handle(request(HttpMethod.GET)));
   }
 
   private static RepositoryProtocolRequest request(HttpMethod method) {

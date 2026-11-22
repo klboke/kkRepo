@@ -6,7 +6,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.example.kkrepo.builtin.TestBuiltinPlugin;
 import com.example.kkrepo.builtin.TestShadowPlugin;
+import com.example.kkrepo.test.TestDuplicateBuiltinPlugin;
+import com.example.kkrepo.test.TestMismatchedBuiltinPlugin;
+import com.example.kkrepo.test.TestNullDescriptorPlugin;
+import com.example.kkrepo.test.TestRejectingPlugin;
 import com.example.kkrepo.test.TestSignedPlugin;
+import com.example.kkrepo.test.TestThrowingPlugin;
 import com.github.klboke.kkrepo.plugin.api.KkRepoPlugin;
 import com.github.klboke.kkrepo.plugin.api.PluginException;
 import java.io.InputStream;
@@ -17,6 +22,7 @@ import java.nio.file.Path;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.jar.Attributes;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
@@ -150,6 +156,118 @@ class PluginLoaderTest {
     }
   }
 
+  @Test
+  void loadsNothingFromAMissingPluginDirectory(@TempDir Path temp) throws Exception {
+    Fixture fixture = fixture(temp);
+    PluginLoader loader = new PluginLoader(
+        temp.resolve("missing"), fixture.truststore(), PASSWORD.toCharArray());
+
+    try (LoadedPlugins loaded = loader.load()) {
+      assertTrue(loaded.plugins().isEmpty());
+    }
+  }
+
+  @Test
+  void rejectsJarWithoutDescriptor(@TempDir Path temp) throws Exception {
+    Fixture fixture = fixture(temp);
+    Path jar = fixture.plugins().resolve("missing-descriptor.jar");
+    createJar(jar, true, fixture.keystore(), Map.of(
+        CLASS_ENTRY, classBytes(TestSignedPlugin.class),
+        SERVICE_ENTRY, service(TestSignedPlugin.class)));
+
+    assertThrows(PluginException.class, loader(fixture)::load);
+  }
+
+  @Test
+  void rejectsInvalidAndEmptyDescriptors(@TempDir Path temp) throws Exception {
+    Fixture fixture = fixture(temp);
+    Path invalid = fixture.plugins().resolve("invalid.json.jar");
+    createJar(invalid, true, fixture.keystore(), Map.of(
+        CLASS_ENTRY, classBytes(TestSignedPlugin.class),
+        SERVICE_ENTRY, service(TestSignedPlugin.class),
+        PluginLoader.DESCRIPTOR_PATH, "{".getBytes(StandardCharsets.UTF_8)));
+    Path empty = fixture.plugins().resolve("empty.json.jar");
+    createJar(empty, true, fixture.keystore(), Map.of(
+        CLASS_ENTRY, classBytes(TestSignedPlugin.class),
+        SERVICE_ENTRY, service(TestSignedPlugin.class),
+        PluginLoader.DESCRIPTOR_PATH, "null".getBytes(StandardCharsets.UTF_8)));
+
+    assertThrows(PluginException.class, loader(fixture)::load);
+  }
+
+  @Test
+  void rejectsMissingAndParentProvidedMainClasses(@TempDir Path temp) throws Exception {
+    Fixture fixture = fixture(temp);
+    PluginLoader loader = loader(fixture);
+    createJar(fixture.plugins().resolve("a-missing-main.jar"), true, fixture.keystore(),
+        pluginEntries(TestSignedPlugin.class,
+            descriptor("1.0", "com.example.MissingPlugin")));
+    assertThrows(PluginException.class, loader::load);
+
+    Files.delete(fixture.plugins().resolve("a-missing-main.jar"));
+    createJar(fixture.plugins().resolve("parent-main.jar"), true, fixture.keystore(), Map.of(
+        SERVICE_ENTRY, service(TestBuiltinPlugin.class),
+        PluginLoader.DESCRIPTOR_PATH, descriptor("1.0", TestBuiltinPlugin.class.getName())));
+    assertThrows(PluginException.class, loader::load);
+  }
+
+  @Test
+  void rejectsDuplicateExternalPluginIds(@TempDir Path temp) throws Exception {
+    Fixture fixture = fixture(temp);
+    for (String name : List.of("a.jar", "b.jar")) {
+      createJar(fixture.plugins().resolve(name), true, fixture.keystore(),
+          pluginEntries(TestSignedPlugin.class,
+              descriptor("1.0", TestSignedPlugin.class.getName())));
+    }
+
+    assertThrows(PluginException.class, loader(fixture)::load);
+  }
+
+  @Test
+  void wrapsRuntimeContributionFailuresAndRegistrationRejections(@TempDir Path temp) throws Exception {
+    Fixture fixture = fixture(temp);
+    PluginLoader loader = loader(fixture);
+    createJar(fixture.plugins().resolve("throwing.jar"), true, fixture.keystore(),
+        pluginEntries(TestThrowingPlugin.class,
+            descriptor("1.0", TestThrowingPlugin.class.getName())));
+    PluginException runtime = assertThrows(PluginException.class, loader::load);
+    assertTrue(runtime.getMessage().contains("Unable to load plugins"), runtime.getMessage());
+
+    Files.delete(fixture.plugins().resolve("throwing.jar"));
+    createJar(fixture.plugins().resolve("rejecting.jar"), true, fixture.keystore(),
+        pluginEntries(TestRejectingPlugin.class,
+            descriptor("1.0", TestRejectingPlugin.class.getName())));
+    PluginException rejected = assertThrows(PluginException.class, loader::load);
+    assertTrue(rejected.getMessage().contains("registration rejected"), rejected.getMessage());
+  }
+
+  @Test
+  void rejectsBuiltInsWithNoDescriptorMismatchedMainClassOrDuplicateId(@TempDir Path temp) throws Exception {
+    try (URLClassLoader builtins = builtins(temp, TestNullDescriptorPlugin.class)) {
+      assertThrows(PluginException.class, () -> PluginLoader.loadBuiltins(builtins));
+    }
+    try (URLClassLoader builtins = builtins(temp, TestMismatchedBuiltinPlugin.class)) {
+      assertThrows(PluginException.class, () -> PluginLoader.loadBuiltins(builtins));
+    }
+    try (URLClassLoader builtins =
+             builtins(temp, TestBuiltinPlugin.class, TestDuplicateBuiltinPlugin.class)) {
+      assertThrows(PluginException.class, () -> PluginLoader.loadBuiltins(builtins));
+    }
+  }
+
+  @Test
+  void rejectsTruststoreWithoutCertificates(@TempDir Path temp) throws Exception {
+    Path empty = temp.resolve("empty.p12");
+    java.security.KeyStore store = java.security.KeyStore.getInstance("PKCS12");
+    store.load(null, PASSWORD.toCharArray());
+    try (java.io.OutputStream output = Files.newOutputStream(empty)) {
+      store.store(output, PASSWORD.toCharArray());
+    }
+
+    assertThrows(PluginException.class,
+        () -> new SignedJarVerifier(empty, PASSWORD.toCharArray()));
+  }
+
   /** Class loader exposing {@code plugins} as classpath built-ins through a service descriptor. */
   private static URLClassLoader builtins(Path temp, Class<?>... plugins) throws Exception {
     Path root = Files.createDirectories(temp.resolve("builtins"));
@@ -202,15 +320,23 @@ class PluginLoaderTest {
         "-noprompt");
   }
 
+  private static PluginLoader loader(Fixture fixture) throws Exception {
+    return new PluginLoader(fixture.plugins(), fixture.truststore(), PASSWORD.toCharArray());
+  }
+
   private static void createJar(
       Path jar, String apiVersion, boolean signed, Path keystore) throws Exception {
+    createJar(jar, signed, keystore, pluginEntries(TestSignedPlugin.class, descriptor(apiVersion)));
+  }
+
+  private static void createJar(
+      Path jar, boolean signed, Path keystore, Map<String, byte[]> entries) throws Exception {
     Manifest manifest = new Manifest();
     manifest.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
     try (JarOutputStream output = new JarOutputStream(Files.newOutputStream(jar), manifest)) {
-      add(output, CLASS_ENTRY, classBytes());
-      add(output, SERVICE_ENTRY,
-          (TestSignedPlugin.class.getName() + "\n").getBytes(StandardCharsets.UTF_8));
-      add(output, PluginLoader.DESCRIPTOR_PATH, descriptor(apiVersion));
+      for (Map.Entry<String, byte[]> entry : entries.entrySet()) {
+        add(output, entry.getKey(), entry.getValue());
+      }
     }
     if (signed) {
       run(tool("jarsigner"),
@@ -223,19 +349,35 @@ class PluginLoaderTest {
     }
   }
 
+  private static Map<String, byte[]> pluginEntries(Class<?> type, byte[] descriptor)
+      throws Exception {
+    return Map.of(
+        type.getName().replace('.', '/') + ".class", classBytes(type),
+        SERVICE_ENTRY, service(type),
+        PluginLoader.DESCRIPTOR_PATH, descriptor);
+  }
+
+  private static byte[] service(Class<?> type) {
+    return (type.getName() + "\n").getBytes(StandardCharsets.UTF_8);
+  }
+
   private static byte[] descriptor(String apiVersion) {
+    return descriptor(apiVersion, TestSignedPlugin.class.getName());
+  }
+
+  private static byte[] descriptor(String apiVersion, String mainClass) {
     return """
         {"id":"test-signed","version":"1.0.0","apiVersion":"%s","mainClass":"%s",
          "capabilities":["remote.transport"]}
-        """.formatted(apiVersion, TestSignedPlugin.class.getName())
+        """.formatted(apiVersion, mainClass)
         .getBytes(StandardCharsets.UTF_8);
   }
 
-  private static byte[] classBytes() throws Exception {
-    try (InputStream input =
-             TestSignedPlugin.class.getClassLoader().getResourceAsStream(CLASS_ENTRY)) {
+  private static byte[] classBytes(Class<?> type) throws Exception {
+    String entry = type.getName().replace('.', '/') + ".class";
+    try (InputStream input = type.getClassLoader().getResourceAsStream(entry)) {
       if (input == null) {
-        throw new IllegalStateException("Missing test class resource: " + CLASS_ENTRY);
+        throw new IllegalStateException("Missing test class resource: " + entry);
       }
       return input.readAllBytes();
     }
