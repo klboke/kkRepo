@@ -59,6 +59,7 @@ class NexusRestClientTest {
     assertEquals(1, inventory.securityExport().apiKeys().size());
     assertEquals("NpmToken", inventory.securityExport().apiKeys().get(0).get("domain"));
     assertEquals("alice-token", inventory.securityExport().apiKeys().get(0).get("api_key"));
+    assertEquals(Map.of("count", 3, "users", List.of("carol", "dave")), inventory.securityExport().legacyUserTokens());
     assertEquals(1, inventory.securityExport().roles().size());
     assertEquals("nx-admin", inventory.securityExport().roles().get(0).get("id"));
     assertEquals(List.of(), inventory.securityExport().realmOrder());
@@ -158,6 +159,10 @@ class NexusRestClientTest {
     assertTrue(script.contains("metadataEngine.startsWith('DATASTORE')"));
     assertTrue(script.contains("container.lookup('org.sonatype.nexus.security.authc.apikey.ApiKeyLowLevelService')"));
     assertTrue(script.contains("'PubToken'"));
+    // Nexus Pro user tokens are exported with their owner's realm, to be reported (never imported).
+    assertTrue(script.contains("'User-Token-Realm'"));
+    assertTrue(script.contains("realmNames: realmNames"));
+    assertTrue(script.contains("equalsIgnoreCase('user_token')"));
     assertTrue(script.contains("select distinct domain from api_key_v2 order by domain"));
     assertTrue(script.contains("loadClass('org.sonatype.nexus.orient.DatabaseInstance')"));
     assertTrue(script.contains("loadClass('org.sonatype.nexus.orient.DatabaseInstanceNames')"));
@@ -527,7 +532,8 @@ class NexusRestClientTest {
                 "primary_principal", "alice",
                 "principals", Map.of(
                     "primaryPrincipal", "alice",
-                    "realmNames", List.of("NexusAuthenticatingRealm"))))));
+                    "realmNames", List.of("NexusAuthenticatingRealm")))),
+            "legacyUserTokens", Map.of("count", 3, "users", List.of("carol", "dave"))));
         return json(200, Map.of("name", "password-export", "result", result));
       }
       if ("DELETE".equals(method) && path.startsWith("/service/rest/v1/script/")) {

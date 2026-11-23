@@ -193,6 +193,159 @@ class NexusApiMigrationServiceTest {
   }
 
   @Test
+  void keepsReportingNexusProUserTokensAsMissingSecurityObjects() {
+    List<String> writtenApiKeys = new ArrayList<>();
+    // Users, roles and format keys exist in the target; the Pro user tokens were never written.
+    var securityDao = (com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao) java.lang.reflect.Proxy.newProxyInstance(
+        com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao.class.getClassLoader(),
+        new Class<?>[] {com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao.class},
+        (proxy, method, args) -> {
+          if (!method.getName().startsWith("find")) {
+            return null;
+          }
+          boolean proToken = "findApiKey".equals(method.getName()) && args != null && args.length == 3
+              && String.valueOf(args[0]).equalsIgnoreCase("User-Token-Realm");
+          return proToken ? Optional.empty() : Optional.of(new Object());
+        });
+    NexusApiMigrationService service = new NexusApiMigrationService(
+        new ObjectMapper(), new FakeBlobStoreDao().asDao(), new FakeRepositoryDao().asDao(),
+        securityDao, new FakeMigrationJobDao(), recordingSecurityWriter(writtenApiKeys));
+    NexusInventory inventory = proUserTokenInventory(List.of(
+        apiKey("NpmToken", "alice", "NexusAuthenticatingRealm", "npm-secret"),
+        apiKey("User-Token-Realm", "alice", "NexusAuthenticatingRealm", "AliceName1:" + "p".repeat(44))));
+
+    NexusApiMigrationService.NexusMigrationResult result =
+        service.migrate(inventory, request("https://old-nexus.example"));
+
+    NexusApiMigrationService.ValidationCheck objects = result.validation().checks().stream()
+        .filter(check -> "security".equals(check.scope()) && "objects".equals(check.name()))
+        .findFirst().orElseThrow();
+    assertEquals("FAIL", objects.status());
+    assertTrue(objects.details().contains("api-key:User-Token-Realm/Local/alice"), String.valueOf(objects.details()));
+    assertEquals("FAIL", userTokenCheck(result).orElseThrow().status());
+  }
+
+  @Test
+  void reportsNexusProUserTokensAsNotMigratedAndMarksTheMigrationIncomplete() throws Exception {
+    String alicePair = "AliceName1:" + "p".repeat(44);
+    String bobPair = "BobNameCd2:" + "q".repeat(44);
+    List<String> writtenApiKeys = new ArrayList<>();
+    FakeMigrationJobDao migrationJobs = new FakeMigrationJobDao();
+    NexusApiMigrationService service = new NexusApiMigrationService(
+        new ObjectMapper(), new FakeBlobStoreDao().asDao(), new FakeRepositoryDao().asDao(),
+        // Every lookup succeeds, as if an older importer had stored the Pro tokens as ordinary API keys.
+        presentSecurityDao(), migrationJobs, recordingSecurityWriter(writtenApiKeys));
+    NexusInventory inventory = proUserTokenInventory(List.of(
+        apiKey("NpmToken", "alice", "NexusAuthenticatingRealm", "npm-secret"),
+        apiKey("NuGetApiKey", "bob", "LdapRealm", "nuget-secret"),
+        apiKey("User-Token-Realm", "alice", "NexusAuthenticatingRealm", alicePair),
+        apiKey("user-token-realm", "bob", "LdapRealm", bobPair)));
+
+    NexusMigrationPreflight preflight = service.preflight(inventory, request("https://old-nexus.example").targetBlobStore());
+    NexusApiMigrationService.NexusMigrationResult result =
+        service.migrate(inventory, request("https://old-nexus.example"));
+
+    assertEquals(List.of("NpmToken/Local/alice", "NuGetApiKey/LDAP/bob"), writtenApiKeys);
+    assertEquals(2, preflight.security().apiKeys());
+    assertEquals(2, preflight.security().userTokens().tokens());
+    assertEquals(List.of("LDAP/bob", "Local/alice"), preflight.security().userTokens().owners());
+    assertTrue(preflight.security().userTokens().message().contains("not migrated by this version"));
+    assertTrue(preflight.warnings().stream().anyMatch(warning -> warning.contains("user tokens")));
+    assertEquals("finished_with_validation_failures", result.status());
+    assertEquals("finished_with_validation_failures", migrationJobs.status);
+    assertTrue(result.validation().failed());
+    NexusApiMigrationService.ValidationCheck check = userTokenCheck(result).orElseThrow();
+    assertEquals("FAIL", check.status());
+    assertEquals(List.of("userTokens=2", "user-token:LDAP/bob", "user-token:Local/alice"), check.details());
+    // Only the user token check fails: the stored format keys validate as before.
+    assertEquals(List.of("security/user tokens"), result.validation().checks().stream()
+        .filter(candidate -> "FAIL".equals(candidate.status()))
+        .map(candidate -> candidate.scope() + "/" + candidate.name())
+        .toList());
+
+    // The report shape, not time formatting, is under test: no java.time module on this classpath.
+    ObjectMapper json = com.fasterxml.jackson.databind.json.JsonMapper.builder()
+        .disable(com.fasterxml.jackson.databind.MapperFeature.REQUIRE_HANDLERS_FOR_JAVA8_TIMES)
+        .build();
+    for (String report : List.of(
+        json.writeValueAsString(preflight),
+        json.writeValueAsString(result),
+        json.writeValueAsString(result.toSummary()),
+        json.writeValueAsString(migrationJobs.summary),
+        String.valueOf(preflight),
+        String.valueOf(result))) {
+      for (String secret : List.of(alicePair, bobPair, "AliceName1", "BobNameCd2", "p".repeat(44), "q".repeat(44))) {
+        assertFalse(report.contains(secret), "report leaks " + secret);
+      }
+    }
+  }
+
+  @Test
+  void sourceWithoutNexusProUserTokensHasNoUserTokenCheck() {
+    List<String> writtenApiKeys = new ArrayList<>();
+    NexusApiMigrationService service = new NexusApiMigrationService(
+        new ObjectMapper(), new FakeBlobStoreDao().asDao(), new FakeRepositoryDao().asDao(),
+        presentSecurityDao(), new FakeMigrationJobDao(), recordingSecurityWriter(writtenApiKeys));
+    NexusInventory inventory = proUserTokenInventory(List.of(
+        apiKey("NpmToken", "alice", "NexusAuthenticatingRealm", "npm-secret"),
+        apiKey("NuGetApiKey", "bob", "LdapRealm", "nuget-secret")));
+
+    NexusApiMigrationService.NexusMigrationResult result =
+        service.migrate(inventory, request("https://old-nexus.example"));
+
+    assertEquals(List.of("NpmToken/Local/alice", "NuGetApiKey/LDAP/bob"), writtenApiKeys);
+    assertEquals(0, result.preflight().security().userTokens().tokens());
+    assertNull(result.preflight().security().userTokens().message());
+    assertTrue(userTokenCheck(result).isEmpty());
+    assertFalse(result.validation().failed());
+    assertEquals("finished", result.status());
+  }
+
+  private static Optional<NexusApiMigrationService.ValidationCheck> userTokenCheck(
+      NexusApiMigrationService.NexusMigrationResult result) {
+    return result.validation().checks().stream()
+        .filter(check -> "security".equals(check.scope()) && "user tokens".equals(check.name()))
+        .findFirst();
+  }
+
+  private static NexusInventory proUserTokenInventory(List<Map<String, Object>> apiKeys) {
+    return new NexusInventory(
+        List.of(Map.of("name", "default")),
+        List.of(),
+        new NexusSecurityExport(List.of(), List.of(), List.of(), List.of(), apiKeys, List.of(), List.of(),
+            List.of(), Map.of()),
+        List.of());
+  }
+
+  private static Map<String, Object> apiKey(String domain, String userId, String realm, String rawKey) {
+    return Map.of(
+        "domain", domain,
+        "api_key", rawKey,
+        "primary_principal", userId,
+        "principals", Map.of("primaryPrincipal", userId, "realmNames", List.of(realm)));
+  }
+
+  private static com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao presentSecurityDao() {
+    return (com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao) Proxy.newProxyInstance(
+        com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao.class.getClassLoader(),
+        new Class<?>[] {com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao.class},
+        (proxy, method, args) -> method.getName().startsWith("find") ? Optional.of(new Object()) : null);
+  }
+
+  private static NexusSecurityMigrationWriter recordingSecurityWriter(List<String> apiKeys) {
+    return (NexusSecurityMigrationWriter) Proxy.newProxyInstance(
+        NexusSecurityMigrationWriter.class.getClassLoader(),
+        new Class<?>[] {NexusSecurityMigrationWriter.class},
+        (proxy, method, args) -> {
+          if ("upsertApiKey".equals(method.getName())) {
+            var record = (com.github.klboke.kkrepo.persistence.jdbc.api.model.ApiKeyRecord) args[0];
+            apiKeys.add(record.domain() + "/" + record.ownerSource() + "/" + record.ownerUserId());
+          }
+          return null;
+        });
+  }
+
+  @Test
   void preservesNugetNtlmAuthenticationDuringMigration() {
     FakeBlobStoreDao blobStores = new FakeBlobStoreDao();
     FakeRepositoryDao repositories = new FakeRepositoryDao();
@@ -359,6 +512,9 @@ class NexusApiMigrationServiceTest {
     assertEquals(1, preflight.security().apiKeyDetails().size());
     assertEquals("NpmToken", preflight.security().apiKeyDetails().get(0).domain());
     assertTrue(preflight.security().apiKeyDetails().get(0).rawKeyPresent());
+    // The Nexus Pro token is reported, not planned; kkRepo's own UserToken domain is just skipped.
+    assertEquals(1, preflight.security().userTokens().tokens());
+    assertEquals(List.of("Local/alice"), preflight.security().userTokens().owners());
     assertEquals("public-maven", preflight.security().contentSelectorDetails().get(0).name());
     assertEquals(List.of("NexusAuthenticatingRealm"), preflight.security().realmOrder());
     assertTrue(preflight.security().anonymous().enabled());

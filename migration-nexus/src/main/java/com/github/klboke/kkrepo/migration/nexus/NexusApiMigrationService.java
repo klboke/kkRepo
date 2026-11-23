@@ -25,6 +25,7 @@ import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityRecordMapp
 import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityRecordMapper.NexusUser;
 import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityRecordMapper.NexusUserRoleMapping;
 import com.github.klboke.kkrepo.migration.nexus.security.NexusSecurityMigrationWriter;
+import com.github.klboke.kkrepo.migration.nexus.security.NexusUserTokenReport;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BlobStoreDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MigrationJobDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
@@ -293,6 +294,9 @@ public class NexusApiMigrationService {
     if (!missingPasswordUsers.isEmpty()) {
       warnings.add("Local users without password hash compensation will need password reset.");
     }
+    if (security.userTokens().found()) {
+      warnings.add(security.userTokens().message() + " See security.userTokens for the affected users.");
+    }
     repositoryManualActionRisks(inventory).forEach((repository, risk) -> {
       if ("unsupported_swift_remote".equals(risk)) {
         warnings.add("Swift proxy repository " + repository
@@ -428,7 +432,8 @@ public class NexusApiMigrationService {
                 selector.format(),
                 selector.expression()))
             .toList(),
-        batch.realmOrder());
+        batch.realmOrder(),
+        NexusUserTokenReport.of(source));
   }
 
   private static String firstString(Map<String, Object> source, String... keys) {
@@ -769,6 +774,16 @@ public class NexusApiMigrationService {
     checks.add(validateAptSigningKeys(inventory));
     checks.add(validateAlpineSigningKeys(inventory));
     checks.add(validateApiKeyExport(inventory));
+    NexusUserTokenReport userTokens = preflight.security().userTokens();
+    if (userTokens.found()) {
+      // Not even a stored copy from an older importer counts: it does not make the Basic credential work.
+      checks.add(new ValidationCheck(
+          "security",
+          "user tokens",
+          ValidationStatus.FAIL.name(),
+          userTokens.message(),
+          userTokens.details()));
+    }
     checks.add(validatePlanHashes(preflight));
     return new NexusMigrationValidation(checks.stream()
         .anyMatch(check -> ValidationStatus.FAIL.name().equals(check.status())),
@@ -884,6 +899,8 @@ public class NexusApiMigrationService {
         missing.add("privilege:" + privilege.id());
       }
     });
+    // Every source key counts, so keys that were deliberately not migrated (e.g. Nexus Pro user tokens)
+    // stay visible as missing in addition to the dedicated user token check.
     for (NexusApiKey apiKey : batch.apiKeys()) {
       if (securityDao.findApiKey(apiKey.domain(), apiKey.ownerSource(), apiKey.ownerUserId()).isEmpty()) {
         missing.add("api-key:" + apiKey.domain() + "/" + apiKey.ownerSource() + "/" + apiKey.ownerUserId());
@@ -1893,7 +1910,8 @@ public class NexusApiMigrationService {
       List<SecurityUserRoleMappingPlan> userRoleMappingDetails,
       List<SecurityApiKeyPlan> apiKeyDetails,
       List<SecurityContentSelectorPlan> contentSelectorDetails,
-      List<String> realmOrder) {
+      List<String> realmOrder,
+      NexusUserTokenReport userTokens) {
 
     public NexusSecurityPreflight {
       userDetails = userDetails == null ? List.of() : List.copyOf(userDetails);
@@ -1902,6 +1920,7 @@ public class NexusApiMigrationService {
       apiKeyDetails = apiKeyDetails == null ? List.of() : List.copyOf(apiKeyDetails);
       contentSelectorDetails = contentSelectorDetails == null ? List.of() : List.copyOf(contentSelectorDetails);
       realmOrder = realmOrder == null ? List.of() : List.copyOf(realmOrder);
+      userTokens = userTokens == null ? NexusUserTokenReport.of(null) : userTokens;
     }
 
     static NexusSecurityPreflight empty() {
@@ -1920,7 +1939,8 @@ public class NexusApiMigrationService {
           List.of(),
           List.of(),
           List.of(),
-          List.of());
+          List.of(),
+          null);
     }
   }
 

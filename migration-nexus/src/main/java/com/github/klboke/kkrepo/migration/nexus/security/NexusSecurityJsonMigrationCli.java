@@ -69,8 +69,12 @@ public class NexusSecurityJsonMigrationCli {
               stores.migrationCheckpoints(),
               objectMapper)
               .write(jobId, export);
-          Map<String, Object> summary = summary(jobId, result, checkpoints, "finished");
-          jobDao.markFinished(jobId, "finished", summary);
+          NexusUserTokenReport userTokens = NexusUserTokenReport.of(export);
+          // Unmigrated Nexus Pro user tokens leave the migration incomplete.
+          String status = userTokens.found() ? "finished_with_validation_failures" : "finished";
+          Map<String, Object> summary = summary(jobId, result, checkpoints, status);
+          summary.put("userTokens", userTokens);
+          jobDao.markFinished(jobId, status, summary);
           out.println(toJson(objectMapper, summary));
           return 0;
         } catch (Exception e) {
