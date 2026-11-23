@@ -1200,6 +1200,8 @@ class RepositoryDataMigrationWriter {
       case GITLFS -> "gitlfs";
       case OHPM -> throw new IllegalArgumentException("OHPM requires its independent import workflow");
       case HUGGINGFACE -> "huggingface-model-file";
+      case OPENVSX -> source.sourcePath().endsWith(".vsix") ? "openvsx-extension"
+          : "openvsx-metadata";
       case RAW -> "asset";
     };
   }

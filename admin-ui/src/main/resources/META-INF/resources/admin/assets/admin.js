@@ -173,6 +173,7 @@ const viewHashRoutes = {
   "routing-rules": "#admin/repository/routingrules",
   blobstores: "#admin/repository/blobstores",
   "docker-registry": "#admin/repository/docker",
+  staging: "#admin/repository/staging",
   "security-users": "#admin/security/users",
   "security-roles": "#admin/security/roles",
   "security-privileges": "#admin/security/privileges",
@@ -204,6 +205,7 @@ const hashViewRoutes = {
   "#admin/repository/blob-stores": "blobstores",
   "#admin/repository/docker": "docker-registry",
   "#admin/repository/docker-registry": "docker-registry",
+  "#admin/repository/staging": "staging",
   "#admin/security": "security-users",
   "#admin/security/users": "security-users",
   "#admin/security/roles": "security-roles",
@@ -559,6 +561,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   r: "r",
   huggingface: "huggingface",
   gitlfs: "gitlfs",
+  openvsx: "openvsx",
   raw: "raw",
 });
 
@@ -585,6 +588,7 @@ const FORMAT_DISPLAY_NAMES = Object.freeze({
   r: "R / CRAN",
   huggingface: "Hugging Face Models",
   gitlfs: "Git LFS",
+  openvsx: "VS Code / Open VSX",
   raw: "Raw",
 });
 
@@ -2746,7 +2750,7 @@ function memberCandidates() {
   if (!format) return [];
   const allowNestedGroups = format === "pub" || format === "composer"
     || format === "terraform" || format === "swift" || format === "ansiblegalaxy"
-    || format === "conda";
+    || format === "conda" || format === "openvsx";
   return repositories.filter((repo) => {
     if (repo.format !== format) return false;
     if (repositoryFormMode === "edit" && repo.name === editingRepositoryName) return false;
@@ -3017,7 +3021,8 @@ function refreshRepositoryRemoteDefaults(recipe) {
     apt: "https://deb.debian.org/debian/",
     alpine: "https://dl-cdn.alpinelinux.org/alpine/",
     r: "https://cloud.r-project.org/",
-    huggingface: "https://huggingface.co/"
+    huggingface: "https://huggingface.co/",
+    openvsx: "https://open-vsx.org/"
   };
   if (recipe.format === "swift") {
     remote.value = defaults.swift;
@@ -3410,7 +3415,8 @@ function repositoryFormPayload() {
     }
   } else if (type === "GROUP") {
     payload.group = {
-      memberNames: [...memberTransfer.selected]
+      memberNames: [...memberTransfer.selected],
+      writeRepository: document.getElementById("repository-group-write-target").value.trim() || null
     };
   }
   if (recipe?.format === "conan" && type !== "GROUP") {
@@ -3490,6 +3496,7 @@ function setRepositoryFormDefaults() {
   document.getElementById("repository-remote-url").value = "";
   document.getElementById("repository-yum-depth").value = "0";
   document.getElementById("repository-pypi-index-path").value = "/simple";
+  document.getElementById("repository-group-write-target").value = "";
   document.getElementById("repository-allowed-redirect-hosts").value = "";
   document.getElementById("repository-remote-authentication-type").value = "auto";
   document.getElementById("repository-remote-ntlm-domain").value = "";
@@ -3647,6 +3654,8 @@ function showEditRepositoryForm(name) {
   if (repo.type === "GROUP" && repo.group && Array.isArray(repo.group.memberNames)) {
     memberTransfer.selected = [...repo.group.memberNames];
   }
+  document.getElementById("repository-group-write-target").value =
+    repo.group?.writeRepository || "";
   if (repo.docker) {
     document.getElementById("repository-docker-https-enabled").checked = Boolean(repo.docker.httpsConnectorEnabled);
     document.getElementById("repository-docker-https-port").value = repo.docker.httpsConnectorPort ?? "";
@@ -8574,6 +8583,11 @@ function canAdmin(permission) {
 
 function canAccessAdminView(view) {
   if (canAdmin("nexus:*")) return view !== "loading";
+  // Staging sessions are owner-scoped, but the admin console only exposes the view to accounts
+  // holding a staging permission; the server still enforces ownership per session.
+  if (view === "staging") {
+    return ["admin", "read", "create"].some((action) => canAdmin(`nexus:staging:${action}`));
+  }
   if (view === "proxy-settings" || view === "download-offload") return canAdmin("nexus:settings:read");
   if (view === "security-scanning") return canAdmin("nexus:security-scanning:read");
   return view === "content-selectors" && ["read", "create", "update", "delete"]
@@ -8615,6 +8629,7 @@ function switchView(view, options = {}) {
   if (view === "content-selectors") window.KkContentSelectors.load();
   if (view === "routing-rules") window.KkRoutingRules.load();
   if (view === "docker-registry") loadDockerOperations();
+  if (view === "staging") window.KkStaging.load();
   if (view === "security-users") loadSecurityUsers();
   if (view === "security-roles") {
     loadSecurityRoles().then(() => {

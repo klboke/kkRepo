@@ -22,7 +22,7 @@ test("cache-busts the current Browse assets", () => {
 
   assert.match(html, /browse\.css\?v=20261121-ui-alignment/);
   assert.match(html, /browse\.js\?v=20261106-ohpm-management/);
-  assert.match(html, /format-icons\.css\?v=20261118-format-icons-1/);
+  assert.match(html, /format-icons\.css\?v=20261119-openvsx-1/);
 });
 
 test("keeps the icon format picker below its trigger", () => {
@@ -32,7 +32,7 @@ test("keeps the icon format picker below its trigger", () => {
   const popoverRule = css.match(/\.search-format-popover\s*\{([^}]*)\}/)?.[1] || "";
   const filterRule = css.match(/\.search-form \.search-format-filter\s*\{([^}]*)\}/)?.[1] || "";
 
-  assert.equal((html.match(/class="search-format-option"/g) || []).length, 23);
+  assert.equal((html.match(/class="search-format-option"/g) || []).length, 24);
   assert.match(html, /aria-haspopup="listbox"/);
   assert.match(html, /placeholder="Filter formats"/);
   assert.ok(

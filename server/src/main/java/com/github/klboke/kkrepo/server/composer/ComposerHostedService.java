@@ -168,6 +168,19 @@ public class ComposerHostedService {
         Map.of("packages", Map.of(name, versions)), lastModified, runtime.name()));
   }
 
+  /** Metadata entries of the live package versions, used by the staging view. */
+  List<Map<String, Object>> versionEntries(
+      RepositoryRuntime runtime, String packageName, boolean dev, String baseUrl) {
+    ensureHosted(runtime);
+    String name = ComposerPackageName.require(packageName);
+    return componentDao.listByName(runtime.id(), name).stream()
+        .filter(record -> record.format() == RepositoryFormat.COMPOSER)
+        .filter(record -> dev == isDev(record.version()))
+        .sorted(Comparator.comparing(ComponentRecord::version).reversed())
+        .map(record -> rewriteHostedDist(metadata(record), baseUrl))
+        .toList();
+  }
+
   List<String> packageNames(RepositoryRuntime runtime) {
     ensureHosted(runtime);
     return componentDao.listByRepositoryId(runtime.id()).stream()

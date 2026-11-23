@@ -20,7 +20,7 @@ public class ComponentUploadAccess {
 
   static PermissionAction action(RepositoryFormat format) {
     return switch (format) {
-      case SWIFT, ANSIBLEGALAXY, APT, ALPINE, R -> PermissionAction.ADD;
+      case SWIFT, ANSIBLEGALAXY, APT, ALPINE, R, OPENVSX -> PermissionAction.ADD;
       default -> PermissionAction.EDIT;
     };
   }
