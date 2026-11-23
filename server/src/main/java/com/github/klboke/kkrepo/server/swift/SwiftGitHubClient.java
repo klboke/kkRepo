@@ -6,6 +6,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.protocol.swift.SwiftVersions;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
 import java.io.IOException;
 import java.io.InputStream;
@@ -98,6 +99,8 @@ final class SwiftGitHubClient {
           coordinates.identity());
       try {
         return new TagDiscovery(tagsFromGitAdvertisement(runtime, coordinates), Map.of(), Map.of());
+      } catch (Blocked blocked) {
+        throw new SwiftExceptions.OutboundBlocked();
       } catch (SwiftExceptions.SwiftException | IOException fallbackFailure) {
         apiFailure.addSuppressed(fallbackFailure);
         throw apiFailure;
@@ -241,6 +244,8 @@ final class SwiftGitHubClient {
         commitSha);
     try {
       return archiveFromWeb(runtime, coordinates, commitSha);
+    } catch (Blocked blocked) {
+      throw new SwiftExceptions.OutboundBlocked();
     } catch (SwiftExceptions.SwiftException | IOException fallbackFailure) {
       apiFailure.addSuppressed(fallbackFailure);
       throw apiFailure;
@@ -349,6 +354,8 @@ final class SwiftGitHubClient {
           credentialState.useAnonymous();
         }
         return result;
+      } catch (SwiftExceptions.OutboundBlocked blocked) {
+        throw blocked;
       } catch (ExhaustedTransientGitHubStatus
           | SwiftExceptions.NotFound
           | SwiftExceptions.UpstreamRateLimited
@@ -376,6 +383,8 @@ final class SwiftGitHubClient {
           }
           return handler.handle(result);
         });
+      } catch (Blocked blocked) {
+        throw new SwiftExceptions.OutboundBlocked();
       } catch (TransientGitHubStatus transientStatus) {
         if (transientStatus.retryAfter().filter(
             delay -> delay.compareTo(MAX_RETRY_AFTER_DELAY) > 0).isPresent()) {

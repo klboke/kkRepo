@@ -33,6 +33,7 @@ import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -45,6 +46,41 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 
 class PypiProxyServiceTest {
+  @Test
+  void manualBlockServesStaleProjectAndPackageWithoutChangingRemoteState() throws Exception {
+    var fixture = fixture();
+    var runtime = runtime(1, 7L);
+    String project = "simple/demo/";
+    String packagePath = "packages/demo/1.0.0/demo-1.0.0.whl";
+    var staleIndex = snapshot(project, Instant.EPOCH, Map.of());
+    var stalePackage = snapshot(packagePath, Instant.EPOCH, Map.of());
+    when(fixture.cache.find(eq(runtime.id()), eq(project), any()))
+        .thenReturn(Optional.of(staleIndex), Optional.empty());
+    when(fixture.cache.find(eq(runtime.id()), eq(packagePath), any()))
+        .thenReturn(Optional.of(stalePackage), Optional.of(stalePackage), Optional.empty());
+    when(fixture.reader.serveSnapshot(staleIndex, true, project)).thenReturn(PypiResponse.noBody(200));
+    when(fixture.reader.serveSnapshot(stalePackage, true, packagePath)).thenReturn(PypiResponse.noBody(200));
+    when(fixture.fetcher.fetchWithBodyRetry(any(), anyString(), any())).thenThrow(new Blocked());
+
+    assertEquals(200, fixture.service.getIndex(runtime, "demo", true).status());
+    assertThrows(PypiExceptions.PypiNotFoundException.class,
+        () -> fixture.service.getIndex(runtime, "demo", true));
+    assertEquals(200, fixture.service.getPackage(runtime, packagePath, true).status());
+
+    doAnswer(invocation -> {
+      HttpRemoteFetcher.ResultHandler<?> handler = invocation.getArgument(2);
+      return handler.handle(new HttpRemoteFetcher.Result(200, Map.of(),
+          new ByteArrayInputStream("""
+              <a href="../../files/demo-1.0.0.whl">demo-1.0.0.whl</a>
+              """.getBytes(StandardCharsets.UTF_8))));
+    }).when(fixture.fetcher).fetchWithBodyRetry(any(), eq(project), any());
+    assertEquals(200, fixture.service.getPackage(runtime, packagePath, true).status());
+    assertThrows(PypiExceptions.PypiNotFoundException.class,
+        () -> fixture.service.getPackage(runtime, packagePath, true));
+    verify(fixture.proxyStateDao, never()).recordSuccess(eq(runtime.id()), any());
+    verify(fixture.proxyStateDao, never()).recordFailure(eq(runtime.id()), anyLong(), anyString(), any());
+  }
+
   @Test
   void servesFreshCacheAndBlockedStaleFallback() throws Exception {
     Fixture fixture = fixture();

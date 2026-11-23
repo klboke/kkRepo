@@ -220,11 +220,12 @@ public class SecurityAuthenticationService {
     if (session.isPresent()) {
       return session;
     }
-    if (basicAuthSuppressed(request) && !isBasicLoginRequest(request)) {
+    boolean explicitLogin = isBasicLoginRequest(request);
+    if (basicAuthSuppressed(request) && !explicitLogin) {
       return Optional.empty();
     }
     return basicCredentials(request).flatMap(credentials ->
-        fresh ? authenticateBasicUncached(credentials.username(), credentials.password())
+        fresh || explicitLogin ? authenticateBasicUncached(credentials.username(), credentials.password())
             : authenticateBasic(credentials.username(), credentials.password()));
   }
 
@@ -385,7 +386,8 @@ public class SecurityAuthenticationService {
     if (username == null || username.isBlank() || password == null) {
       return Optional.empty();
     }
-    return authenticateBasic(username, password);
+    // Interactive sign-ins must capture current LDAP group membership, even with a warm Basic auth cache.
+    return authenticateBasicUncached(username, password);
   }
 
   @Transactional(readOnly = true)
@@ -716,6 +718,17 @@ public class SecurityAuthenticationService {
       session.removeAttribute(AuthenticatedSubject.SESSION_ATTRIBUTE);
       return Optional.empty();
     }
+    if (subject.realmId() != null && ExternalRoleMappings.REALMS.contains(subject.realmId())) {
+      // Session names are the verified claims. Resolve permissions against the current provider config.
+      return externalRealm(subject.realmId(), subject.source()).map(realm -> {
+        Set<String> names = subject.externalRoleIds() == null ? Set.of() : subject.externalRoleIds();
+        if (subject.rawExternalRoleNames()) {
+          return toExternalSubject(user.get(), realm, names);
+        }
+        Set<String> legacyRoles = ExternalRoleMappings.legacyMatching(realm) ? names : Set.of();
+        return toSubject(user.get(), realm.realmId(), legacyRoles, null);
+      });
+    }
     Set<String> roleIds = new LinkedHashSet<>();
     if (subject.externalRoleIds() != null) {
       roleIds.addAll(subject.externalRoleIds());
@@ -746,6 +759,10 @@ public class SecurityAuthenticationService {
   }
 
   private SessionSubject newSessionSubject(AuthenticatedSubject subject) {
+    if (subject.externalRoleNames() != null) {
+      return new SessionSubject(subject.source(), subject.userId(), subject.realmId(),
+          new LinkedHashSet<>(subject.externalRoleNames()), true);
+    }
     Set<String> externalRoleIds = new LinkedHashSet<>();
     if (subject.permissionSubject() != null && subject.permissionSubject().groupIds() != null) {
       externalRoleIds.addAll(subject.permissionSubject().groupIds());
@@ -756,7 +773,7 @@ public class SecurityAuthenticationService {
     if (defaultAuthenticatedRoleId != null) {
       externalRoleIds.remove(defaultAuthenticatedRoleId);
     }
-    return new SessionSubject(subject.source(), subject.userId(), subject.realmId(), externalRoleIds);
+    return new SessionSubject(subject.source(), subject.userId(), subject.realmId(), externalRoleIds, false);
   }
 
   private String principalName(AuthenticatedSubject subject) {
@@ -767,13 +784,18 @@ public class SecurityAuthenticationService {
       String source,
       String userId,
       String realmId,
-      Set<String> externalRoleIds) implements Serializable {
+      Set<String> externalRoleIds,
+      boolean rawExternalRoleNames) implements Serializable {
+    SessionSubject(String source, String userId, String realmId, Set<String> externalRoleIds) {
+      this(source, userId, realmId, externalRoleIds, false);
+    }
+
     static SessionSubject from(AuthenticatedSubject subject) {
       Set<String> externalRoleIds = Set.of();
       if (subject.permissionSubject() != null && subject.permissionSubject().groupIds() != null) {
         externalRoleIds = new LinkedHashSet<>(subject.permissionSubject().groupIds());
       }
-      return new SessionSubject(subject.source(), subject.userId(), subject.realmId(), externalRoleIds);
+      return new SessionSubject(subject.source(), subject.userId(), subject.realmId(), externalRoleIds, false);
     }
   }
 
@@ -786,15 +808,26 @@ public class SecurityAuthenticationService {
         profile.lastName(),
         profile.email(),
         profile.externalId(),
-        Map.of("claims", profile.claims(), "groups", profile.roles()));
-    return toSubject(user, realm.realmId(), profile.roles(), null);
+        Map.of("claims", profile.claims(), "groups", profile.roles(),
+            ExternalRoleMappings.USER_REALM, realm.realmId()));
+    return toExternalSubject(user, realm, profile.roles());
   }
 
   private Optional<AuthenticatedSubject> authenticateBasic(String username, String password) {
     if (basicAuthCache == null) {
       return authenticateBasicUncached(username, password);
     }
-    return basicAuthCache.find(username, password, () -> authenticateBasicUncached(username, password));
+    return basicAuthCache.find(username, password, () -> authenticateBasicUncached(username, password))
+        .flatMap(subject -> {
+          if (subject.externalRoleNames() == null) {
+            // A cached LDAP subject from before role mapping support has no verified group names.
+            return "ldap".equals(subject.realmId()) ? authenticateBasicUncached(username, password)
+                : Optional.of(subject);
+          }
+          return externalRealm(subject.realmId(), subject.source()).flatMap(realm ->
+              securityDao.findUser(subject.source(), subject.userId()).filter(this::activeUser)
+                  .map(user -> toExternalSubject(user, realm, subject.externalRoleNames())));
+        });
   }
 
   private Optional<AuthenticatedSubject> authenticateBasicUncached(String username, String password) {
@@ -862,8 +895,9 @@ public class SecurityAuthenticationService {
           profile.lastName(),
           profile.email(),
           profile.externalId(),
-          Map.of("dn", profile.dn(), "groups", externalRoles));
-      return Optional.of(toSubject(user, realm.realmId(), externalRoles, null));
+          Map.of("dn", profile.dn(), "groups", externalRoles,
+              ExternalRoleMappings.USER_REALM, realm.realmId()));
+      return Optional.of(toExternalSubject(user, realm, externalRoles));
     } catch (AuthenticationException e) {
       return Optional.empty();
     } catch (NamingException e) {
@@ -1287,6 +1321,7 @@ public class SecurityAuthenticationService {
         // A subject without an API key is provably not a staging credential; one that carries an
         // id must be classified from the shared row (or from the restored bearer record).
         apiKeyId == null ? Boolean.FALSE : null,
+        null,
         null);
   }
 
@@ -1329,6 +1364,17 @@ public class SecurityAuthenticationService {
     }
     securityDao.updateUser(record);
     return securityDao.findUser(source, userId).orElseThrow();
+  }
+
+  private Optional<SecurityRealmRecord> externalRealm(String realmId, String source) {
+    return securityDao.findRealm(realmId)
+        .filter(realm -> realm.enabled() && sourceForRealm(realm).equals(source));
+  }
+
+  private AuthenticatedSubject toExternalSubject(SecurityUserRecord user,
+      SecurityRealmRecord realm, Set<String> names) {
+    return toSubject(user, realm.realmId(), ExternalRoleMappings.resolve(realm, names), null)
+        .withExternalRoleNames(Set.copyOf(names));
   }
 
   private List<SecurityRealmRecord> activeRealms() {

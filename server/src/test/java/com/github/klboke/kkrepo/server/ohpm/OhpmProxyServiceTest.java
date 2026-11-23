@@ -2,7 +2,10 @@ package com.github.klboke.kkrepo.server.ohpm;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -23,6 +26,7 @@ import com.github.klboke.kkrepo.server.maven.BlobStorageRegistry;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
 import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
 import com.github.klboke.kkrepo.server.transaction.TransientTransactionRetry;
@@ -75,6 +79,27 @@ class OhpmProxyServiceTest {
   private final InMemorySharedCache shared = new InMemorySharedCache(JSON, 100, null);
   private String token = "0";
   private OhpmProxyService service;
+
+  @Test
+  void manualBlockReturnsNotFoundForUncachedContentAndKeepsVerifiedCaches() throws Exception {
+    when(fetcher.fetch(any())).thenThrow(new Blocked());
+    assertEquals(404, assertThrows(OhpmException.class, this::readMetadata).status());
+
+    doReturn(result(200, metadata(HAR), "meta")).when(fetcher).fetch(any());
+    readMetadata();
+    doThrow(new Blocked()).when(fetcher).fetch(any());
+    assertEquals(404, assertThrows(OhpmException.class,
+        () -> service.download(runtime, PACKAGE, PATH, false)).status());
+
+    doReturn(result(200, HAR, "file")).when(fetcher).fetch(any());
+    assertArrayEquals(HAR, read(service.download(runtime, PACKAGE, PATH, false)));
+    when(runtime.metadataMaxAgeMinutesOrDefault()).thenReturn(0);
+    when(runtime.contentMaxAgeMinutesOrDefault()).thenReturn(0);
+    doThrow(new Blocked()).when(fetcher).fetch(any());
+
+    assertArrayEquals(HAR, read(service.download(runtime, PACKAGE, PATH, false)));
+    verify(state, never()).recordFailure(anyLong(), anyLong(), anyString(), any());
+  }
 
   @BeforeEach
   void setup() throws Exception {

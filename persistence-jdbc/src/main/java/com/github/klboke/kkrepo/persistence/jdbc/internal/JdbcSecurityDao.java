@@ -23,12 +23,20 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.UnaryOperator;
+import org.springframework.jdbc.core.ArgumentPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
 @Repository
 public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao {
+  private static final String INSERT_API_KEY = """
+      INSERT INTO api_key
+        (domain, owner_source, owner_user_id, display_name, status, api_key_hash,
+         token_prefix, scopes_json, encrypted_payload, expires_at, last_used_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      """;
+
   /**
    * Authentication-realm attribute keys holding reusable third-party credentials (OIDC client
    * secret, LDAP bind/manager/system passwords). These are encrypted at rest and decrypted on read
@@ -387,6 +395,13 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
         .findFirst();
   }
 
+  @Override
+  public Optional<SecurityRealmRecord> findRealmForUpdate(String realmId) {
+    return jdbcTemplate.query(
+        "SELECT * FROM security_realm WHERE realm_id = ? FOR UPDATE", realmRowMapper, realmId)
+        .stream().findFirst();
+  }
+
   public void upsertRealm(SecurityRealmRecord record) {
     Object attributes = jsonColumns.parameter(encryptRealmAttributes(record.attributes()));
     JdbcUpserts.updateThenInsert(
@@ -584,6 +599,12 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
         .findFirst();
   }
 
+  @Override
+  public boolean insertApiKeyIfAbsent(ApiKeyRecord record) {
+    return JdbcInserts.tryUpdate(jdbcTemplate, INSERT_API_KEY, new ArgumentPreparedStatementSetter(
+        apiKeyInsertArguments(record, jsonColumns.parameter(record.scopes()))));
+  }
+
   public void upsertApiKey(ApiKeyRecord record) {
     Object scopes = jsonColumns.parameter(record.scopes());
     Object[] updateArguments = {
@@ -600,15 +621,14 @@ public class JdbcSecurityDao implements com.github.klboke.kkrepo.persistence.jdb
         WHERE domain = ? AND owner_source = ? AND owner_user_id = ?
         """,
         updateArguments,
-        """
-        INSERT INTO api_key
-          (domain, owner_source, owner_user_id, display_name, status, api_key_hash,
-           token_prefix, scopes_json, encrypted_payload, expires_at, last_used_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        new Object[]{record.domain(), record.ownerSource(), record.ownerUserId(),
-            record.displayName(), record.status(), record.apiKeyHash(), record.tokenPrefix(), scopes,
-            record.encryptedPayload(), record.expiresAt(), record.lastUsedAt()});
+        INSERT_API_KEY,
+        apiKeyInsertArguments(record, scopes));
+  }
+
+  private static Object[] apiKeyInsertArguments(ApiKeyRecord record, Object scopes) {
+    return new Object[]{record.domain(), record.ownerSource(), record.ownerUserId(),
+        record.displayName(), record.status(), record.apiKeyHash(), record.tokenPrefix(), scopes,
+        record.encryptedPayload(), record.expiresAt(), record.lastUsedAt()};
   }
 
   public int deleteApiKey(long id) {

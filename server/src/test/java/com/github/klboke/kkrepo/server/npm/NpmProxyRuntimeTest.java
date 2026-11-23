@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -35,6 +36,7 @@ import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.io.IOException;
@@ -47,12 +49,50 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 
 class NpmProxyRuntimeTest {
   private static final NpmPackageId PACKAGE = NpmPackageId.parse("demo");
   private static final String TARBALL = "demo-1.0.0.tgz";
   private static final String TARBALL_PATH = "demo/-/" + TARBALL;
+
+  @Test
+  void manualBlockServesPackageAndTarballFromLocalStorageWithoutFailureAccounting() throws Exception {
+    var fixture = fixture();
+    var runtime = runtime(1, 7L);
+    var packageRoot = snapshot("demo", Instant.EPOCH, "package-root", Map.of());
+    var tarball = snapshot(TARBALL_PATH, Instant.EPOCH, "tarball", Map.of());
+    when(fixture.cache.find(eq(runtime.id()), eq("demo"), any())).thenReturn(Optional.of(packageRoot));
+    when(fixture.cache.find(eq(runtime.id()), eq(TARBALL_PATH), any())).thenReturn(Optional.of(tarball));
+    var cached = MavenResponse.noBody(200);
+    when(fixture.hosted.getPackage(runtime, PACKAGE, "base", true, NpmPackumentVariant.FULL)).thenReturn(cached);
+    when(fixture.hosted.getTarball(runtime, PACKAGE, TARBALL, true)).thenReturn(cached);
+    when(fixture.fetcher.fetchWithBodyRetry(any(), anyString(), any())).thenThrow(new Blocked());
+
+    assertEquals(0, fixture.service.search(runtime, "demo", 10).get("total"));
+    assertSame(cached, fixture.service.getPackage(runtime, PACKAGE, "base", true));
+    assertSame(cached, fixture.service.getTarball(runtime, PACKAGE, TARBALL, true));
+    verify(fixture.proxyStateDao, never()).recordFailure(eq(runtime.id()), anyLong(), anyString(), any());
+  }
+
+  @Test
+  void manualBlockPreservesReleaseAgeFilteringWithoutCachingAMiss() throws Exception {
+    var fixture = fixture();
+    var runtime = runtime(1, 7L, 60);
+    var packageRoot = snapshot("demo", Instant.EPOCH, "package-root", Map.of());
+    when(fixture.cache.find(eq(runtime.id()), eq("demo"), any()))
+        .thenReturn(Optional.of(packageRoot), Optional.empty());
+    when(fixture.hosted.packageRoot(packageRoot)).thenReturn(
+        Optional.of(packument("1.0.0", "2026-07-19T11:00:00Z")));
+    when(fixture.fetcher.fetchWithBodyRetry(any(), anyString(), any())).thenThrow(new Blocked());
+
+    assertEquals(200, fixture.service.getPackage(runtime, PACKAGE, "base", true).status());
+    assertThrows(NpmExceptions.NpmNotFoundException.class,
+        () -> fixture.service.getPackage(runtime, PACKAGE, "base", true));
+    verify(fixture.negativeCache, never()).rememberNotFound(runtime, "demo");
+  }
 
   @Test
   void servesFreshPackageAndTarballFromHostedCache() throws Exception {
@@ -361,8 +401,10 @@ class NpmProxyRuntimeTest {
     verify(fixture.fetcher, never()).fetchWithBodyRetry(any(), anyString(), any());
   }
 
-  @Test
-  void maturityBoundaryForcesRevalidationAndFailureDoesNotExposeVersion() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void maturityBoundaryForcesRevalidationAndUnavailableUpstreamKeepsVersionHidden(boolean manuallyBlocked)
+      throws Exception {
     Instant now = Instant.parse("2026-07-19T12:01:00Z");
     Instant lastVerified = Instant.parse("2026-07-19T11:59:00Z");
     Fixture fixture = fixture(Clock.fixed(now, ZoneOffset.UTC));
@@ -372,8 +414,12 @@ class NpmProxyRuntimeTest {
     Map<String, Object> raw = packument("1.0.0", "2026-07-19T11:00:00Z");
     when(fixture.cache.find(eq(10L), eq("demo"), any())).thenReturn(Optional.of(packageSnapshot));
     when(fixture.hosted.packageRoot(packageSnapshot)).thenReturn(Optional.of(raw));
-    respond(fixture.fetcher, new HttpRemoteFetcher.Result(
-        503, Map.of(), new ByteArrayInputStream(new byte[0])));
+    if (manuallyBlocked) {
+      when(fixture.fetcher.fetchWithBodyRetry(any(), eq("demo"), any())).thenThrow(new Blocked());
+    } else {
+      respond(fixture.fetcher, new HttpRemoteFetcher.Result(
+          503, Map.of(), new ByteArrayInputStream(new byte[0])));
+    }
 
     MavenResponse response = fixture.service.getPackage(runtime, PACKAGE, "base", false);
     Map<?, ?> body = new ObjectMapper().readValue(response.body(), Map.class);
@@ -381,7 +427,8 @@ class NpmProxyRuntimeTest {
     assertTrue(((Map<?, ?>) body.get("versions")).isEmpty(),
         "a failed maturity-boundary revalidation must keep the release hidden");
     verify(fixture.fetcher).fetchWithBodyRetry(any(), eq("demo"), any());
-    verify(fixture.proxyStateDao).recordFailure(eq(10L), eq(30L), anyString(), eq(now));
+    verify(fixture.proxyStateDao, org.mockito.Mockito.times(manuallyBlocked ? 0 : 1))
+        .recordFailure(eq(10L), eq(30L), anyString(), eq(now));
   }
 
   @Test

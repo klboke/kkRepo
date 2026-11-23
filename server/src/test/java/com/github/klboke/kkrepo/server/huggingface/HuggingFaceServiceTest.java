@@ -34,6 +34,7 @@ import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.raw.RawProtocolCache;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -54,6 +55,32 @@ import org.mockito.ArgumentCaptor;
 
 class HuggingFaceServiceTest {
   private static final String COMMIT = "0123456789abcdef0123456789abcdef01234567";
+
+  @Test
+  void manualBlockServesStaleMetadataAndDoesNotBackOffMissingFiles() throws Exception {
+    var fixture = fixture();
+    String path = "api/models/org/model";
+    String base = "https://repo.example/repository/hf";
+    var entry = apiEntry(Instant.EPOCH);
+    when(fixture.registry.findApiCache(anyLong(), anyString(), anyString(), anyString()))
+        .thenReturn(Optional.of(entry), Optional.empty());
+    when(fixture.cache.find(any(), anyString())).thenReturn(Optional.of(mock(CachedAssetMetadata.class)));
+    when(fixture.cache.serve(any(), anyString(), eq(true), eq("inline")))
+        .thenReturn(MavenResponse.noBody(200, 2L, "application/json", "stored", null));
+    when(fixture.fetcher.fetch(any())).thenThrow(new Blocked());
+
+    assertEquals(200, fixture.service.get(fixture.runtime, path, "", base, true).status());
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> fixture.service.get(fixture.runtime, path, "", base, true));
+
+    var cold = fixture();
+    var discovered = file("model.bin", null, null, null, HuggingFaceRegistryDao.FILE_DISCOVERED, 0L);
+    stubOwnedCold(cold, "model.bin", discovered);
+    when(cold.fetcher.fetch(any())).thenThrow(new Blocked());
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> cold.service.get(cold.runtime, canonical("model.bin"), "", base, false));
+    verify(cold.registry, never()).markFileFailed(anyLong(), anyLong(), anyString(), any(), any());
+  }
 
   @Test
   void metadataKeepsRawProvenanceButRemovesClientVisibleXetHints() throws Exception {

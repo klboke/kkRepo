@@ -542,10 +542,27 @@ class NpmRepositoryBlackBoxCompatibilityTest {
             catalog + (nexus ? "/npm/group" : ""), "POST", MAPPER.writeValueAsBytes(groupPayload)));
         Endpoint group = endpoint.withRepository(groupName);
         try {
-          for (int read = 0; read < 2; read++) {
-            Map<String, Object> groupRoot = getJson(group, fixture.packageName().replace("/", "%2f"));
-            String groupPath = tarballPath(group, groupRoot, fixture.version());
-            assertEquals(path, groupPath, "fresh and cached group metadata must retain the attachment path");
+          String packagePath = fixture.packageName().replace("/", "%2f");
+          for (String accept : List.of("application/json", "application/vnd.npm.install-v1+json")) {
+            Exchange fresh = send(group.request(packagePath).header("Accept", accept).GET());
+            Exchange cached = send(group.request(packagePath).header("Accept", accept).GET());
+            assertEquals(200, fresh.status());
+            assertEquals(fresh.status(), cached.status());
+            assertEquals(fresh.contentType(), cached.contentType());
+            Map<String, Object> cachedRoot = MAPPER.readValue(cached.body(), MAP_TYPE);
+            if (nexus) {
+              Map<String, Object> freshRoot = MAPPER.readValue(fresh.body(), MAP_TYPE);
+              if ("application/json".equals(accept)) {
+                // Nexus 3.94 emits the hosted _id on the first full group read only.
+                freshRoot.remove("_id");
+                cachedRoot.remove("_id");
+              }
+              assertEquals(freshRoot, cachedRoot, "Nexus cached group metadata changed for " + accept);
+            } else {
+              assertArrayEquals(fresh.body(), cached.body(), "kkRepo cached group metadata changed for " + accept);
+            }
+            String groupPath = tarballPath(group, cachedRoot, fixture.version());
+            assertEquals(path, groupPath, "cached group metadata must retain the attachment path");
             Exchange groupDownload = get(group, groupPath);
             assertEquals(200, groupDownload.status());
             assertArrayEquals(fixture.tarball(), groupDownload.body());

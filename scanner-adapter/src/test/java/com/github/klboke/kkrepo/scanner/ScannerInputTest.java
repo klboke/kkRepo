@@ -31,6 +31,11 @@ class ScannerInputTest {
     assertEquals(sha256, verified.sha256());
     assertEquals(value.length, verified.size());
     assertEquals("verified scanner input", Files.readString(target));
+
+    ScannerInput.Verified sbom = new ScannerInput().copySbom(
+        new ByteArrayInputStream(value), temporaryDirectory.resolve("sbom.json"), sha256,
+        limits(value.length), 1024, deadline());
+    assertEquals(value.length, sbom.size());
   }
 
   @Test
@@ -65,6 +70,11 @@ class ScannerInputTest {
             new ByteArrayInputStream(body), temporaryDirectory.resolve("size"),
             sha, 3L, limits(1024), deadline()));
     assertCode(
+        "INPUT_SIZE_MISMATCH",
+        () -> input.copy(
+            new ByteArrayInputStream(body), temporaryDirectory.resolve("short"),
+            sha, 5L, limits(1024), deadline()));
+    assertCode(
         "INPUT_IO",
         () -> input.copy(
             new ByteArrayInputStream(body),
@@ -73,6 +83,28 @@ class ScannerInputTest {
             4L,
             limits(1024),
             deadline()));
+  }
+
+  @Test
+  void stopsBeforeWritingPastTheCatalogReservationOrSbomLimit() throws Exception {
+    ScannerInput input = new ScannerInput();
+    byte[] value = new byte[64 * 1024 + 2];
+    String sha = ScannerDocumentMapper.sha256(value);
+    long reserved = value.length - 1L;
+    Path catalogTarget = temporaryDirectory.resolve("bounded-catalog");
+    Path sbomTarget = temporaryDirectory.resolve("bounded-sbom");
+
+    assertCode("INPUT_SIZE_MISMATCH", () -> input.copy(
+        new ByteArrayInputStream(value), catalogTarget, sha, reserved, limits(value.length),
+        deadline()));
+    assertCode("SBOM_TOO_LARGE", () -> input.copySbom(
+        new ByteArrayInputStream(value), sbomTarget, sha, limits(value.length), reserved,
+        deadline()));
+    assertEquals(64 * 1024, Files.size(catalogTarget));
+    assertEquals(64 * 1024, Files.size(sbomTarget));
+    assertCode("INPUT_TOO_LARGE", () -> input.copySbom(
+        new ByteArrayInputStream(value), sbomTarget, sha, limits(reserved), value.length,
+        deadline()));
   }
 
   @Test

@@ -39,7 +39,7 @@ public class UploadLimitsFilter extends OncePerRequestFilter {
       HttpServletRequest request,
       HttpServletResponse response,
       FilterChain filterChain) throws ServletException, IOException {
-    if (maxRequestBytes > 0 && uploadPath(request) && request.getContentLengthLong() > maxRequestBytes) {
+    if (maxRequestBytes > 0 && request.getContentLengthLong() > maxRequestBytes && uploadPath(request)) {
       if (swiftRepositoryPath(request)) {
         swiftTooLarge(response);
         return;
@@ -51,7 +51,7 @@ public class UploadLimitsFilter extends OncePerRequestFilter {
   }
 
   private boolean swiftRepositoryPath(HttpServletRequest request) {
-    String uri = stripContextPath(request);
+    String uri = SecurityRequestPath.rawPath(request);
     if (!uri.startsWith(RepositoryUrlPrefix.path(request))) {
       return false;
     }
@@ -79,18 +79,10 @@ public class UploadLimitsFilter extends OncePerRequestFilter {
     if (!WRITE_METHODS.contains(method)) {
       return false;
     }
-    String uri = stripContextPath(request);
-    return uri.startsWith(RepositoryUrlPrefix.path(request))
-        || uri.equals("/service/rest/v1/components")
-        || legacyUi.internalUiUploadPath(uri);
-  }
-
-  private static String stripContextPath(HttpServletRequest request) {
-    String uri = request.getRequestURI();
-    String contextPath = request.getContextPath();
-    if (contextPath != null && !contextPath.isBlank() && uri.startsWith(contextPath)) {
-      return uri.substring(contextPath.length());
+    if (SecurityRequestPath.rawPath(request).startsWith(RepositoryUrlPrefix.path(request))) {
+      return true;
     }
-    return uri;
+    String path = SecurityRequestPath.matchingPath(request);
+    return path.equals("/service/rest/v1/components") || legacyUi.internalUiUploadPath(path);
   }
 }

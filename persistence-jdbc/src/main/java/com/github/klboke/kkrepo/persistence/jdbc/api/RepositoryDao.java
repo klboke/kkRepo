@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.persistence.jdbc.api;
 
+import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import java.time.Instant;
 import java.util.List;
@@ -35,6 +36,11 @@ public interface RepositoryDao {
   Optional<Instant> findUpdatedAt(long id);
 
   List<RepositoryRecord> list();
+
+  List<DockerConnectorRepository> listDockerConnectorRepositories();
+
+  record DockerConnectorRepository(long id, String name, RepositoryType type, Map<String, Object> settings) {
+  }
 
   void update(RepositoryRecord record);
 

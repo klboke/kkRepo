@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.pypi;
 
+import com.github.klboke.kkrepo.server.offload.DownloadOffload;
 import com.github.klboke.kkrepo.server.routingrules.RepositoryRoutingPolicy;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.server.blob.TempBlobFiles;
@@ -23,6 +24,13 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
 @RestController
 @RequestMapping("${kkrepo.compatibility.repository-url-prefix:/repository}/{name}")
 public class PypiRepositoryController {
+  private DownloadOffload downloadOffload;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  public void setDownloadOffload(DownloadOffload downloadOffload) {
+    this.downloadOffload = downloadOffload;
+  }
+
   private RepositoryRoutingPolicy routingPolicy;
 
   @org.springframework.beans.factory.annotation.Autowired
@@ -136,7 +144,8 @@ public class PypiRepositoryController {
     }
     HttpHeaders headers = headers(resp, true);
     InputStream responseBody = resp.body();
-    if (TempBlobFiles.tryUseTomcatSendfile(request, responseBody)) {
+    if ((downloadOffload != null && downloadOffload.tryHandoff(request, resp.status(), headers, responseBody))
+        || TempBlobFiles.tryUseTomcatSendfile(request, responseBody)) {
       return ResponseEntity.status(resp.status()).headers(headers).body(null);
     }
     long contentLength = resp.contentLength();

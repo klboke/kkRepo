@@ -1328,7 +1328,12 @@ task 却被标记 COMPLETE 的状态。
   Helm ephemeral-storage limit 为 `9 GiB`；预算必须始终小于实际 volume，二者调整时
   必须同步压测。
 - 禁止执行归档中的二进制、脚本和 package lifecycle hook。
-- 禁止设备文件、FIFO、socket、hard link 和逃逸工作区的 symlink。
+- 禁止设备文件、FIFO、socket 和逃逸归档根目录的链接。TAR symlink/hard link 与 CPIO
+  symlink 可使用归档内的相对目标；symlink 相对条目父目录解析，TAR hard link 相对
+  归档根目录解析。拒绝绝对目标、混合分隔符和 Unicode 路径绕过。只校验链接元数据，
+  不创建、不跟随链接，也不把带归档后缀的链接作为嵌套归档递归处理。CPIO 目标体
+  限制为 16 KiB、严格 UTF-8，并计入同一解压字节预算。ZIP symlink 保持拒绝；OCI
+  继续使用已有镜像文件系统元数据规则。Conda index 的读取独立于链接许可。
 - 规范化每个归档路径并拒绝绝对路径、`..` 和 Unicode/分隔符绕过。
 - 限制压缩层级、归档条目数、单文件大小、解压总量和压缩膨胀率。
 - `.rpm` 先有界解析 lead、signature/main header 和对齐，再识别其压缩方式并把内部
@@ -1904,7 +1909,8 @@ CI 不能依赖实时漏洞源返回固定 finding；fixture 必须可复现。
 ### 恶意输入
 
 - `../`、绝对路径、混合分隔符和 Unicode 路径逃逸。
-- symlink/hard link/device/FIFO/socket。
+- 合法 TAR/CPIO 链接与恶意 symlink/hard link 目标、device/FIFO/socket；归档后缀链接、
+  链接循环、CPIO 目标过大/无效编码以及链接条目数和字节预算。
 - zip/tar bomb、超多条目、深层嵌套、超大单文件。
 - RPM header/payload 截断、异常长度、CPIO 路径逃逸、特殊文件和嵌套 RPM。
 - checksum/size 不匹配。

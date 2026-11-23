@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.docker;
 
+import com.github.klboke.kkrepo.server.offload.DownloadOffload;
 import com.github.klboke.kkrepo.server.routingrules.RepositoryRoutingPolicy;
 import com.github.klboke.kkrepo.server.security.ClientAddress;
 
@@ -46,6 +47,13 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/v2")
 public class DockerRegistryController {
+  private DownloadOffload downloadOffload;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  public void setDownloadOffload(DownloadOffload downloadOffload) {
+    this.downloadOffload = downloadOffload;
+  }
+
   private RepositoryRoutingPolicy routingPolicy;
 
   @org.springframework.beans.factory.annotation.Autowired
@@ -377,8 +385,11 @@ public class DockerRegistryController {
     if (!response.hasBody()) {
       return ResponseEntity.status(response.status()).headers(headers).body(null);
     }
-    return ResponseEntity.status(response.status()).headers(headers)
-        .body(new InputStreamResource(response.body()));
+    var body = response.body();
+    if (ranges && downloadOffload != null && downloadOffload.tryHandoff(request, response.status(), headers, body)) {
+      return ResponseEntity.status(response.status()).headers(headers).body(null);
+    }
+    return ResponseEntity.status(response.status()).headers(headers).body(new InputStreamResource(body));
   }
 
   private ResponseEntity<Map<String, Object>> json(Map<String, Object> body, String linkHeader) {

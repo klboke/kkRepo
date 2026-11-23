@@ -1,6 +1,7 @@
 package com.github.klboke.kkrepo.storage.file;
 
 import com.github.klboke.kkrepo.core.BlobObjectMetadata;
+import com.github.klboke.kkrepo.core.BlobOffloadSource;
 import com.github.klboke.kkrepo.core.BlobFileRegion;
 import com.github.klboke.kkrepo.core.BlobRangeReader;
 import com.github.klboke.kkrepo.core.BlobReference;
@@ -129,7 +130,8 @@ public final class FileBlobStorage implements BlobStorage {
     if (!Files.isRegularFile(path)) {
       return Optional.empty();
     }
-    return Optional.of(new FileRegionInputStream(path, 0, reference.size()));
+    var target = new BlobOffloadSource.Target(config.id(), reference.objectKey());
+    return Optional.of(new FileRegionInputStream(path, 0, reference.size(), root, target));
   }
 
   @Override
@@ -352,16 +354,40 @@ public final class FileBlobStorage implements BlobStorage {
     return read;
   }
 
-  private static final class FileRegionInputStream extends InputStream implements BlobRangeReader, BlobFileRegion {
+  private static final class FileRegionInputStream extends InputStream implements BlobRangeReader, BlobFileRegion, BlobOffloadSource {
     private final Path path;
     private final long position;
     private final long count;
+    private final Path root;
+    private final Target offloadTarget;
     private InputStream delegate;
 
     private FileRegionInputStream(Path path, long position, long count) {
+      this(path, position, count, null, null);
+    }
+
+    private FileRegionInputStream(Path path, long position, long count, Path root, Target offloadTarget) {
       this.path = path;
       this.position = Math.max(0, position);
       this.count = Math.max(0, count);
+      this.root = root;
+      this.offloadTarget = offloadTarget;
+    }
+
+    @Override
+    public Optional<Target> offloadTarget(long responseLength) {
+      if (offloadTarget == null || offloadTarget.storeId() <= 0 || responseLength != count) {
+        return Optional.empty();
+      }
+      try {
+        Path expected = root.toRealPath().resolve(offloadTarget.objectKey());
+        if (path.toRealPath().equals(expected) && Files.size(path) == count) {
+          return Optional.of(offloadTarget);
+        }
+      } catch (IOException ignored) {
+        // The regular response path owns missing/unreadable-file handling.
+      }
+      return Optional.empty();
     }
 
     @Override

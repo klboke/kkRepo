@@ -15,6 +15,7 @@ import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -272,6 +273,10 @@ public class HelmProxyService {
     } catch (IllegalArgumentException e) {
       return handleIndexUpstreamFailure(runtime, cached, headOnly,
           "Invalid upstream Helm index: " + e.getMessage(), now);
+    } catch (Blocked blocked) {
+      String path = HelmHostedService.INDEX_PATH;
+      return staleIndexResponse(reader.serveSnapshot(
+          cached.orElseThrow(() -> new MavenExceptions.MavenNotFoundException(path)), headOnly, path));
     } catch (IOException e) {
       return handleIndexUpstreamFailure(runtime, cached, headOnly,
           "Upstream IO error: " + e.getMessage(), now);
@@ -388,6 +393,9 @@ public class HelmProxyService {
     } catch (IllegalArgumentException e) {
       return handleUpstreamFailure(runtime, path, cached, headOnly,
           "Invalid upstream Helm chart: " + e.getMessage(), now);
+    } catch (Blocked blocked) {
+      return reader.serveSnapshot(cached.orElseThrow(() -> new MavenExceptions.MavenNotFoundException(path)),
+          headOnly, path);
     } catch (IOException e) {
       return handleUpstreamFailure(runtime, path, cached, headOnly,
           "Upstream IO error: " + e.getMessage(), now);

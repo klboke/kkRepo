@@ -457,7 +457,7 @@ class DockerAuthServiceTest {
     PermissionSubject permissions =
         new PermissionSubject("Local", "alice", Set.of("docker-edit"), null);
     AuthenticatedSubject staging = new AuthenticatedSubject(
-        "Local", "alice", "local", 9L, permissions, Boolean.TRUE, "7");
+        "Local", "alice", "local", 9L, permissions, Boolean.TRUE, "7", null);
     MockHttpServletRequest request =
         new MockHttpServletRequest("GET", "/service/rest/v1/docker/token");
     when(authentication.authenticate(request)).thenReturn(Optional.of(staging));

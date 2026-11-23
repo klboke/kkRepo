@@ -27,6 +27,8 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.npm.NpmHostedService;
 import com.github.klboke.kkrepo.server.ohpm.OhpmAccess;
 import com.github.klboke.kkrepo.server.ohpm.OhpmHostedService;
+import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
+import com.github.klboke.kkrepo.server.security.ComponentUploadAccess;
 import com.github.klboke.kkrepo.server.security.ManagementAuditFilter;
 import com.github.klboke.kkrepo.server.pypi.PypiHostedService;
 import com.github.klboke.kkrepo.server.pub.PubHostedService;
@@ -165,6 +167,7 @@ public class ComponentUploadService {
       yumUpload(),
       rawUpload());
 
+  private final ComponentUploadAccess uploadAccess;
   private final RepositoryRuntimeRegistry registry;
   private final AssetDao assetDao;
   private final MavenHostedService mavenHosted;
@@ -193,6 +196,7 @@ public class ComponentUploadService {
 
   @Autowired
   public ComponentUploadService(
+      ComponentUploadAccess uploadAccess,
       RepositoryRuntimeRegistry registry,
       AssetDao assetDao,
       MavenHostedService mavenHosted,
@@ -206,6 +210,7 @@ public class ComponentUploadService {
       YumService yumService,
       TerraformService terraformService,
       SwiftService swiftService) {
+    this.uploadAccess = uploadAccess;
     this.registry = registry;
     this.assetDao = assetDao;
     this.mavenHosted = mavenHosted;
@@ -222,6 +227,7 @@ public class ComponentUploadService {
   }
 
   public ComponentUploadService(
+      ComponentUploadAccess uploadAccess,
       RepositoryRuntimeRegistry registry,
       AssetDao assetDao,
       MavenHostedService mavenHosted,
@@ -234,21 +240,23 @@ public class ComponentUploadService {
       RawHostedService rawHosted,
       YumService yumService,
       TerraformService terraformService) {
-    this(registry, assetDao, mavenHosted, npmHosted, pypiHosted, helmHosted, cargoHosted,
+    this(uploadAccess, registry, assetDao, mavenHosted, npmHosted, pypiHosted, helmHosted, cargoHosted,
         pubHosted, composerHosted, rawHosted, yumService, terraformService, null);
   }
 
   public ComponentUploadService(
+      ComponentUploadAccess uploadAccess,
       RepositoryRuntimeRegistry registry, AssetDao assetDao, MavenHostedService mavenHosted,
       NpmHostedService npmHosted, PypiHostedService pypiHosted, HelmHostedService helmHosted,
       CargoHostedService cargoHosted, PubHostedService pubHosted, ComposerHostedService composerHosted,
       RawHostedService rawHosted, YumService yumService) {
-    this(registry, assetDao, mavenHosted, npmHosted, pypiHosted, helmHosted, cargoHosted,
+    this(uploadAccess, registry, assetDao, mavenHosted, npmHosted, pypiHosted, helmHosted, cargoHosted,
         pubHosted, composerHosted, rawHosted, yumService, null, null);
   }
 
   /** Backward-compatible constructor used by existing focused upload tests. */
   public ComponentUploadService(
+      ComponentUploadAccess uploadAccess,
       RepositoryRuntimeRegistry registry,
       AssetDao assetDao,
       MavenHostedService mavenHosted,
@@ -259,7 +267,7 @@ public class ComponentUploadService {
       PubHostedService pubHosted,
       RawHostedService rawHosted,
       YumService yumService) {
-    this(registry, assetDao, mavenHosted, npmHosted, pypiHosted, helmHosted, cargoHosted,
+    this(uploadAccess, registry, assetDao, mavenHosted, npmHosted, pypiHosted, helmHosted, cargoHosted,
         pubHosted, null, rawHosted, yumService, null, null);
   }
 
@@ -326,13 +334,15 @@ public class ComponentUploadService {
       String repository,
       Map<String, String[]> rawFields,
       MultiValueMap<String, MultipartFile> rawFiles,
-      String createdBy,
+      AuthenticatedSubject subject,
       String createdByIp) throws IOException {
     RepositoryRuntime runtime = registry.resolve(repository)
         .orElseThrow(() -> new MavenExceptions.MavenNotFoundException("Repository not found: " + repository));
     if (runtime.isGroup() && groupWriteTarget != null) {
       runtime = groupWriteTarget.requireWriteTarget(runtime);
     }
+    uploadAccess.require(subject, runtime);
+    String createdBy = subject.userId();
     if (!runtime.online()) {
       throw new UploadValidationException("Repository is offline: " + repository);
     }

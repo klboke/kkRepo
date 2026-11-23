@@ -4,6 +4,60 @@ All notable public changes to kkrepo are documented in this file.
 
 This project follows a pragmatic release process. Stable releases call out migration impact, compatibility changes, operational notes, and any known behavior changes in their release section.
 
+## 1.5.1 - 2026-11-23
+
+### Added
+
+- Configure a system outbound proxy in Admin. Proxy repositories can opt in, use repository settings, or connect directly. (#554)
+- Manually block outbound access for individual proxy repositories while continuing to serve eligible cached artifacts. Persist verified Maven publication times so cached releases can still pass the minimum-release-age policy after restart. (#556)
+- Map exact LDAP or OIDC group and role names to kkRepo roles. Admin Users displays external assignments from the last sign-in. (#560)
+- Offload authorized downloads from selected File Blob Stores to a trusted reverse proxy. Admin can configure presets and verify delivery. (#561)
+
+### Fixed
+
+- Repair startup after a 1.4.0 upgrade when repository proxy credentials were encrypted with the legacy fallback key. Startup re-encrypts affected credentials with the configured key and rolls back the entire credential update if a value cannot be read. Docker connector startup reads connector settings without loading proxy credentials. (#569)
+- Align checkboxes and routing-rule help in Admin, improve long attribute values in Browse, distinguish active and disabled users, and keep File Blob Store names readable in Download Offload settings. (#551, #553, #567)
+- Include rejected proxy upstream addresses and redirect hops in logs. (#555)
+- Defer scans when scanner capacity is exhausted and reserve scratch space for the active scan stage. (#557, #558)
+- Reject duplicate self-service API key generation. (#559)
+
+### Performance
+
+- Stream cached full npm group packuments. (#562)
+
+### Upgrade Notes
+
+- Back up the database and blob stores, and keep the original `kkrepo.security.encryption.credential-secret`. When upgrading from 1.4.0, stop all old replicas before starting 1.5.1. To return to 1.4.0, restore the pre-upgrade database backup and original configuration.
+- MySQL and PostgreSQL apply Flyway V68 through V71 when upgrading from 1.5.0. A direct upgrade from 1.4.0 applies V61 through V71.
+- Existing LDAP and OIDC providers keep same-name role matching until administrators disable the compatibility option. New providers require explicit mappings.
+- Download Offload is opt-in. Configure the trusted proxy addresses and the reverse proxy before enabling it for a File Blob Store.
+
+## 1.5.0 - 2026-11-21
+
+### Security
+
+- Realm listings now return only public provider metadata. Settings readers can inspect the realm order while LDAP bind passwords and OIDC client secrets stay private. Saving the order preserves concurrently rotated credentials. (GHSA-54fv-m22h-7x2j)
+- REST and legacy UI component uploads now verify the authenticated user's write permission on the destination repository before storing an artifact. (GHSA-jjmj-qj4j-27fw)
+
+### Added
+
+- Add OHPM hosted, proxy, and group repositories with signed login, and support R binary packages in hosted and group repositories. (#491, #494, #497)
+- Add Azure Blob Storage as a blob store, including managed identity and workload identity authentication. (#498)
+- Configure HTTPS for Docker connectors with shared TLS bundles, and retain recent Docker images in cleanup policies. (#525, #526)
+- Stream uncached proxy downloads when enabled, and clean timestamped Maven snapshot builds with bounded inventory scans. (#507, #515)
+- Add twelve interface languages and update the repository format list on the Browse welcome page. (#532, #533)
+
+### Fixed
+
+- Preserve missing metadata semantics for Maven 3.10, accept Swift manifests with older tools requirements, and preserve PyPI release-age checks across cache eviction. (#502, #503, #511, #529)
+- Restore cleanup scheduling in Native deployments and correct APT version retention. Fix Docker catalog and tag pagination for PostgreSQL. (#496, #514, #536)
+- Allow bounded archive-local links during TAR and CPIO scanning. (#548)
+
+### Upgrade Notes
+
+- Upgrade every replica to 1.5.0. Back up the database and blob stores before the upgrade. Flyway applies migrations V61 through V67 to MySQL and PostgreSQL.
+- If a settings-read account could have viewed configured provider credentials, rotate the affected LDAP bind password or OIDC client secret. Review unexpected hosted uploads and package metadata changes during the affected period.
+
 ## 1.4.0 - 2026-11-05
 
 ### Added

@@ -15,6 +15,7 @@ import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.raw.RawProxyService;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -715,6 +716,9 @@ public class TerraformService {
         return moduleDownloadResponse(cachedRoute.orElseThrow().localPath(), urls);
       }
       throw e;
+    } catch (Blocked blocked) {
+      var route = cachedRoute.orElseThrow(() -> new MavenExceptions.MavenNotFoundException(path.rawPath()));
+      return moduleDownloadResponse(route.localPath(), urls);
     } catch (IOException e) {
       if (cachedRoute.isPresent()) {
         return moduleDownloadResponse(cachedRoute.orElseThrow().localPath(), urls);

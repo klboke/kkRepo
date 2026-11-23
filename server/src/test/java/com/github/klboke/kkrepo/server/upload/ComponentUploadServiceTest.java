@@ -11,9 +11,17 @@ import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.inOrder;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.klboke.kkrepo.auth.AccessDecision;
+import com.github.klboke.kkrepo.auth.PermissionAction;
+import com.github.klboke.kkrepo.auth.PermissionSubject;
+import com.github.klboke.kkrepo.auth.RepositoryPermission;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
@@ -39,6 +47,8 @@ import com.github.klboke.kkrepo.server.pub.PubHostedService;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
 import com.github.klboke.kkrepo.server.r.RService;
 import com.github.klboke.kkrepo.server.swift.SwiftService;
+import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
+import com.github.klboke.kkrepo.server.security.ComponentUploadAccess;
 import com.github.klboke.kkrepo.server.swift.SwiftPublishLimits;
 import com.github.klboke.kkrepo.server.terraform.TerraformService;
 import com.github.klboke.kkrepo.server.yum.YumService;
@@ -49,8 +59,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.InOrder;
+import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.web.context.request.RequestContextHolder;
@@ -59,6 +73,36 @@ import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.web.multipart.MultipartFile;
 
 class ComponentUploadServiceTest {
+  private static final AuthenticatedSubject PUBLISHER = new AuthenticatedSubject(
+      "Local", "alice", "local", null, new PermissionSubject("Local", "alice", Set.of(), null));
+  private static final ComponentUploadAccess ALLOW_UPLOAD = new ComponentUploadAccess(
+      (subject, permission) -> AccessDecision.allow());
+
+  @ParameterizedTest
+  @ValueSource(strings = {"/service/rest/v1/components", "/service/rest/internal/ui/upload/private"})
+  void uploadEnforcesPermissionsOnTheResolvedRepositoryBeforeProcessingFiles(String path) throws Exception {
+    var runtime = runtime("private", RepositoryFormat.RAW);
+    var registry = mock(RepositoryRuntimeRegistry.class);
+    when(registry.resolve(runtime.name())).thenReturn(Optional.of(runtime));
+    var assetDao = mock(AssetDao.class);
+    var raw = mock(RawHostedService.class);
+    var access = new ComponentUploadAccess((subject, permission) -> {
+      assertEquals(PUBLISHER.permissionSubject(), subject);
+      assertEquals(new RepositoryPermission("private", RepositoryFormat.RAW, "", PermissionAction.EDIT), permission);
+      return AccessDecision.deny("missing edit");
+    });
+    var service = new ComponentUploadService(access, registry, assetDao, null, null, null, null,
+        null, null, raw, null);
+    var mvc = MockMvcBuilders.standaloneSetup(
+        new ComponentUploadController(service), new ComponentLegacyUiUploadController(service, new ObjectMapper()))
+        .setControllerAdvice(new ComponentUploadErrorAdvice()).build();
+    mvc.perform(multipart(path).param("repository", runtime.name()))
+        .andExpect(status().isUnauthorized());
+    mvc.perform(multipart(path).param("repository", runtime.name())
+            .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE, PUBLISHER))
+        .andExpect(status().isForbidden());
+    verifyNoInteractions(assetDao, raw);
+  }
 
   @Test
   void ohpmUploadsDelegateBothStreamsAndCheckTheParsedPackage() throws Exception {
@@ -86,11 +130,11 @@ class ComponentUploadServiceTest {
     RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request));
     try {
       assertEquals(2, service.upload(runtime.name(), Map.of("ohpm.tag", new String[] {"beta"}),
-          files, "alice", "ip").paths().size());
+          files, PUBLISHER, "ip").paths().size());
       verify(access).requireManagementPublish(request, runtime.name(), "@scope/demo", true);
       files.add("asset", files.getFirst("ohpm.asset"));
       assertThrows(UploadValidationException.class,
-          () -> service.upload(runtime.name(), Map.of(), files, "alice", "ip"));
+          () -> service.upload(runtime.name(), Map.of(), files, PUBLISHER, "ip"));
     } finally {
       RequestContextHolder.resetRequestAttributes();
     }
@@ -102,7 +146,7 @@ class ComponentUploadServiceTest {
     ComponentUploadService service = service(runtime, mock(CargoHostedService.class), mock(PubHostedService.class));
     assertThrows(UploadValidationException.class, () -> service.definition("gitlfs"));
     assertThrows(UploadValidationException.class, () -> service.upload(runtime.name(), Map.of(),
-        files("gitlfs.asset", "large.bin"), "alice", "127.0.0.1"));
+        files("gitlfs.asset", "large.bin"), PUBLISHER, "127.0.0.1"));
   }
 
   @Test
@@ -130,7 +174,7 @@ class ComponentUploadServiceTest {
             "alpine.channel", new String[] {" main "},
             "alpine.repositoryArchitecture", new String[] {" x86_64 "}),
         files("alpine.asset", "demo-1-r0.apk"),
-        "alice", "127.0.0.1");
+        PUBLISHER, "127.0.0.1");
 
     assertEquals(List.of(path), result.paths());
     verify(alpine).publish(
@@ -150,16 +194,16 @@ class ComponentUploadServiceTest {
     assertEquals("Alpine upload service is unavailable", assertThrows(
         UploadValidationException.class,
         () -> unavailable.upload(runtime.name(), fields,
-            files("alpine.asset", "demo.apk"), "alice", "ip")).getMessage());
+            files("alpine.asset", "demo.apk"), PUBLISHER, "ip")).getMessage());
 
     ComponentUploadService service = service(mock(AlpineService.class));
     assertEquals("Alpine upload requires an .apk package", assertThrows(
         UploadValidationException.class,
         () -> service.upload(runtime.name(), fields,
-            files("alpine.asset", "demo.tar.gz"), "alice", "ip")).getMessage());
+            files("alpine.asset", "demo.tar.gz"), PUBLISHER, "ip")).getMessage());
     assertTrue(assertThrows(UploadValidationException.class,
         () -> service.upload(runtime.name(), Map.of(),
-            files("alpine.asset", "demo.apk"), "alice", "ip"))
+            files("alpine.asset", "demo.apk"), PUBLISHER, "ip"))
         .getMessage().contains("distribution"));
   }
 
@@ -182,7 +226,7 @@ class ComponentUploadServiceTest {
 
     ComponentUploadService.UploadResult result = service.upload(
         "r-hosted", Map.of(), files("r.asset", "demo_1.0.0.tar.gz"),
-        "alice", "127.0.0.1");
+        PUBLISHER, "127.0.0.1");
 
     assertEquals(List.of("src/contrib/demo_1.0.0.tar.gz"), result.paths());
     verify(r).publish(
@@ -198,13 +242,13 @@ class ComponentUploadServiceTest {
     assertEquals("R upload service is unavailable", assertThrows(
         UploadValidationException.class,
         () -> unavailable.upload(runtime.name(), Map.of(),
-            files("r.asset", "demo_1.0.0.tar.gz"), "alice", "ip")).getMessage());
+            files("r.asset", "demo_1.0.0.tar.gz"), PUBLISHER, "ip")).getMessage());
 
     ComponentUploadService service = service(mock(RService.class));
     assertEquals("R upload requires a canonical package filename and Package Path", assertThrows(
         UploadValidationException.class,
         () -> service.upload(runtime.name(), Map.of(),
-            files("r.asset", "demo.zip"), "alice", "ip")).getMessage());
+            files("r.asset", "demo.zip"), PUBLISHER, "ip")).getMessage());
   }
 
   @Test
@@ -218,10 +262,10 @@ class ComponentUploadServiceTest {
             "demo", "1.0.0", "a".repeat(32), "b".repeat(64), 5));
     assertEquals(List.of(namespace + "/" + filename), service.upload(
         "r-hosted", Map.of("r.asset.pathId", new String[] {namespace}),
-        files("r.asset", filename), "alice", "ip").paths());
+        files("r.asset", filename), PUBLISHER, "ip").paths());
     assertThrows(UploadValidationException.class, () -> service.upload(
         "r-hosted", Map.of("r.asset.pathId", new String[] {"src/contrib"}),
-        files("r.asset", filename), "alice", "ip"));
+        files("r.asset", filename), PUBLISHER, "ip"));
   }
 
   @Test
@@ -243,7 +287,7 @@ class ComponentUploadServiceTest {
 
     ComponentUploadService.UploadResult result = service.upload(
         "apt-hosted", Map.of(), files("apt.asset", "demo_1.0_amd64.deb"),
-        "alice", "127.0.0.1");
+        PUBLISHER, "127.0.0.1");
 
     assertEquals(List.of(path), result.paths());
     verify(apt).publish(
@@ -280,6 +324,7 @@ class ComponentUploadServiceTest {
     AssetDao assets = mock(AssetDao.class);
     RawHostedService rawHosted = mock(RawHostedService.class);
     ComponentUploadService service = new ComponentUploadService(
+        ALLOW_UPLOAD,
         registry,
         assets,
         mock(MavenHostedService.class),
@@ -302,7 +347,7 @@ class ComponentUploadServiceTest {
             "raw.directory", new String[] {" /team/releases/ "},
             "raw.asset1.filename", new String[] {"one.zip"}),
         uploads,
-        "alice",
+        PUBLISHER,
         "127.0.0.1");
 
     assertEquals(
@@ -325,6 +370,7 @@ class ComponentUploadServiceTest {
       when(registry.resolve(runtime.name())).thenReturn(Optional.of(runtime));
       RawHostedService rawHosted = mock(RawHostedService.class);
       ComponentUploadService service = new ComponentUploadService(
+          ALLOW_UPLOAD,
           registry,
           mock(AssetDao.class),
           mock(MavenHostedService.class),
@@ -338,7 +384,7 @@ class ComponentUploadServiceTest {
 
       ComponentUploadService.UploadResult result = service.upload(
           runtime.name(), Map.of(), files(formatName + ".asset", "one.zip"),
-          "alice", "127.0.0.1");
+          PUBLISHER, "127.0.0.1");
 
       assertEquals(List.of("one.zip"), result.paths());
       verify(rawHosted).put(
@@ -355,7 +401,7 @@ class ComponentUploadServiceTest {
 
       UploadValidationException error = assertThrows(
           UploadValidationException.class,
-          () -> service.upload(runtime.name(), Map.of(), uploads, "alice", "127.0.0.1"));
+          () -> service.upload(runtime.name(), Map.of(), uploads, PUBLISHER, "127.0.0.1"));
 
       String label = format == RepositoryFormat.NUGET ? "NuGet" : "RubyGems";
       assertEquals(label + " upload requires exactly one asset", error.getMessage());
@@ -391,7 +437,7 @@ class ComponentUploadServiceTest {
             "conda.channel", new String[] {" team/release "},
             "conda.subdir", new String[] {" linux-64 "}),
         files("conda.asset", "demo-1.0-0.conda"),
-        "alice", "127.0.0.1");
+        PUBLISHER, "127.0.0.1");
     assertEquals(List.of("team/release/linux-64/demo-1.0-0.conda"), nested.paths());
     verify(conda).put(
         any(RepositoryRuntime.class), eq("team/release/linux-64/demo-1.0-0.conda"),
@@ -401,7 +447,7 @@ class ComponentUploadServiceTest {
         "conda-hosted",
         Map.of("conda.subdir", new String[] {"noarch"}),
         files("conda.asset", "root-1.0-0.tar.bz2"),
-        "alice", "127.0.0.1");
+        PUBLISHER, "127.0.0.1");
     assertEquals(List.of("noarch/root-1.0-0.tar.bz2"), root.paths());
   }
 
@@ -414,7 +460,7 @@ class ComponentUploadServiceTest {
         UploadValidationException.class,
         () -> unavailable.upload(runtime.name(),
             Map.of("conda.subdir", new String[] {"noarch"}),
-            files("conda.asset", "demo-1.0-0.conda"), "alice", "127.0.0.1"));
+            files("conda.asset", "demo-1.0-0.conda"), PUBLISHER, "127.0.0.1"));
     assertEquals("Conda upload service is unavailable", missingService.getMessage());
 
     CondaService conda = mock(CondaService.class);
@@ -427,10 +473,10 @@ class ComponentUploadServiceTest {
         UploadValidationException.class,
         () -> service.upload(runtime.name(),
             Map.of("conda.subdir", new String[] {"noarch"}), multiple,
-            "alice", "127.0.0.1")).getMessage());
+            PUBLISHER, "127.0.0.1")).getMessage());
     assertTrue(assertThrows(UploadValidationException.class,
         () -> service.upload(runtime.name(), Map.of(),
-            files("conda.asset", "demo-1.0-0.conda"), "alice", "127.0.0.1"))
+            files("conda.asset", "demo-1.0-0.conda"), PUBLISHER, "127.0.0.1"))
         .getMessage().contains("subdir"));
 
     LinkedMultiValueMap<String, MultipartFile> unnamed = new LinkedMultiValueMap<>();
@@ -440,7 +486,7 @@ class ComponentUploadServiceTest {
         UploadValidationException.class,
         () -> service.upload(runtime.name(),
             Map.of("conda.subdir", new String[] {"noarch"}), unnamed,
-            "alice", "127.0.0.1")).getMessage());
+            PUBLISHER, "127.0.0.1")).getMessage());
     verify(conda, never()).put(any(), any(), any(), any(), any(), any());
   }
 
@@ -472,7 +518,7 @@ class ComponentUploadServiceTest {
             "conan.asset1.filename", new String[] {"conanmanifest.txt"},
             "conan.asset2.filename", new String[] {"conanfile.py"}),
         uploads,
-        "alice",
+        PUBLISHER,
         "127.0.0.1");
 
     assertEquals(List.of("conanfile.py", "conanmanifest.txt"), result.paths());
@@ -506,7 +552,7 @@ class ComponentUploadServiceTest {
             "conan.package-id", new String[] {"pkg"},
             "conan.prev", new String[] {"prev"}),
         uploads,
-        "alice",
+        PUBLISHER,
         "ip");
 
     verify(conan).putInternal(
@@ -529,7 +575,7 @@ class ComponentUploadServiceTest {
         UploadValidationException.class,
         () -> unavailable.upload(
             runtime.name(), coordinates, files("conan.asset", "conanmanifest.txt"),
-            "alice", "ip")).getMessage());
+            PUBLISHER, "ip")).getMessage());
 
     ConanService conan = mock(ConanService.class);
     ComponentUploadService service = service(conan);
@@ -542,13 +588,13 @@ class ComponentUploadServiceTest {
                 "conan.version", new String[] {"1.0"},
                 "conan.rrev", new String[] {"rrev"},
                 "conan.package-id", new String[] {"pkg"}),
-            files("conan.asset", "conanmanifest.txt"), "alice", "ip"))
+            files("conan.asset", "conanmanifest.txt"), PUBLISHER, "ip"))
         .getMessage().contains("package-id and prev"));
     assertTrue(assertThrows(
         UploadValidationException.class,
         () -> service.upload(
             runtime.name(), coordinates,
-            files("conan.asset", "not-the-manifest.txt"), "alice", "ip"))
+            files("conan.asset", "not-the-manifest.txt"), PUBLISHER, "ip"))
         .getMessage().contains("exactly one conanmanifest.txt"));
     Map<String, String[]> invalidPathFields = new java.util.LinkedHashMap<>(coordinates);
     invalidPathFields.put("conan.asset.filename", new String[] {"../escape"});
@@ -557,7 +603,7 @@ class ComponentUploadServiceTest {
         () -> service.upload(
             runtime.name(),
             invalidPathFields,
-            files("conan.asset", "conanmanifest.txt"), "alice", "ip"))
+            files("conan.asset", "conanmanifest.txt"), PUBLISHER, "ip"))
         .getMessage().contains("Invalid Conan revision file path"));
     verify(conan, never()).putInternal(
         any(), any(), any(), anyLong(), any(), any(), any(), any());
@@ -572,7 +618,7 @@ class ComponentUploadServiceTest {
         "ansible-hosted",
         Map.of(),
         files("ansiblegalaxy.asset", "acme-tools-1.2.3.tar.gz"),
-        "alice",
+        PUBLISHER,
         "127.0.0.1");
 
     String path = AnsibleGalaxyPathParser.ARTIFACT_BASE + "acme-tools-1.2.3.tar.gz";
@@ -593,7 +639,7 @@ class ComponentUploadServiceTest {
         () -> unavailable.upload(
             runtime.name(), Map.of(),
             files("ansiblegalaxy.asset", "acme-tools-1.2.3.tar.gz"),
-            "alice", "127.0.0.1"));
+            PUBLISHER, "127.0.0.1"));
     assertEquals("Ansible upload service is unavailable", missingService.getMessage());
 
     AnsibleGalaxyService ansibleService = mock(AnsibleGalaxyService.class);
@@ -602,7 +648,7 @@ class ComponentUploadServiceTest {
         UploadValidationException.class,
         () -> service.upload(
             runtime.name(), Map.of(), files("ansiblegalaxy.asset", "collection.tar.gz"),
-            "alice", "127.0.0.1"));
+            PUBLISHER, "127.0.0.1"));
     assertTrue(invalidName.getMessage().contains("canonical namespace-name-version.tar.gz"));
     verify(ansibleService, never()).putArtifact(any(), any(), any(), any(), any());
   }
@@ -659,7 +705,7 @@ class ComponentUploadServiceTest {
             "swift.metadata", new String[] {"{\"repositoryURLs\":[\"https://github.com/acme/library\"]}"},
             "swift.signature-format", new String[] {"cms-1.0.0"}),
         uploads,
-        "alice",
+        PUBLISHER,
         "127.0.0.1");
 
     assertEquals(List.of("acme/library/1.2.3"), result.paths());
@@ -699,7 +745,7 @@ class ComponentUploadServiceTest {
                 "swift.name", new String[] {"library"},
                 "swift.version", new String[] {"1.2.3"}),
             uploads,
-            "alice",
+            PUBLISHER,
             "127.0.0.1"));
 
     assertTrue(failure.getMessage().contains("4 KiB"));
@@ -723,7 +769,7 @@ class ComponentUploadServiceTest {
                 "swift.version", new String[] {"1.2.3"},
                 "swift.metadata", new String[] {metadata}),
             files("swift.source-archive", "acme-library-1.2.3.zip"),
-            "alice",
+            PUBLISHER,
             "127.0.0.1"));
 
     assertTrue(failure.getMessage().contains("1 MiB"));
@@ -746,7 +792,7 @@ class ComponentUploadServiceTest {
             "composer.name", new String[] {"company/example"},
             "composer.version", new String[] {"1.2.3"}),
         files("composer.asset", "example.zip"),
-        "alice",
+        PUBLISHER,
         "127.0.0.1");
 
     assertEquals(List.of("company/example/1.0.0/company-example-1.0.0.zip"), result.paths());
@@ -769,7 +815,7 @@ class ComponentUploadServiceTest {
         "go-hosted",
         Map.of(),
         files("go.asset", "C:\\fakepath\\v1.2.3.zip"),
-        "alice",
+        PUBLISHER,
         "127.0.0.1");
 
     assertEquals(List.of("example.com/acme/demo/@v/v1.2.3.zip"), result.paths());
@@ -789,7 +835,7 @@ class ComponentUploadServiceTest {
         "cargo-hosted",
         Map.of(),
         files("cargo.asset", "demo-0.1.0.crate"),
-        "alice",
+        PUBLISHER,
         "127.0.0.1");
 
     assertEquals(List.of("crates/demo/0.1.0/demo-0.1.0.crate"), result.paths());
@@ -804,7 +850,7 @@ class ComponentUploadServiceTest {
 
     UploadValidationException thrown = assertThrows(
         UploadValidationException.class,
-        () -> service.upload("cargo-hosted", Map.of(), files("cargo.asset", "demo.txt"), "alice", "127.0.0.1"));
+        () -> service.upload("cargo-hosted", Map.of(), files("cargo.asset", "demo.txt"), PUBLISHER, "127.0.0.1"));
 
     assertEquals("Cargo upload requires a .crate asset", thrown.getMessage());
     verify(cargoHosted, never()).uploadCrate(any(), any(), any(), any());
@@ -822,7 +868,7 @@ class ComponentUploadServiceTest {
         "pub-hosted",
         Map.of(),
         files("pub.asset", "demo-1.0.0.tar.gz"),
-        "alice",
+        PUBLISHER,
         "127.0.0.1");
 
     assertEquals(List.of("packages/demo/versions/1.0.0.tar.gz"), result.paths());
@@ -837,7 +883,7 @@ class ComponentUploadServiceTest {
 
     UploadValidationException thrown = assertThrows(
         UploadValidationException.class,
-        () -> service.upload("pub-hosted", Map.of(), files("pub.asset", "demo.zip"), "alice", "127.0.0.1"));
+        () -> service.upload("pub-hosted", Map.of(), files("pub.asset", "demo.zip"), PUBLISHER, "127.0.0.1"));
 
     assertEquals("Pub upload requires a .tar.gz archive", thrown.getMessage());
     verify(pubHosted, never()).uploadArchive(any(), any(), any(), any(), any());
@@ -863,7 +909,7 @@ class ComponentUploadServiceTest {
                 "terraform.os", new String[] {"linux"},
                 "terraform.arch", new String[] {"amd64"}),
             uploads,
-            "alice",
+            PUBLISHER,
             "127.0.0.1"));
 
     assertEquals("Terraform upload requires exactly one archive", thrown.getMessage());
@@ -893,7 +939,7 @@ class ComponentUploadServiceTest {
             "terraform.arch", new String[] {"amd64"},
             "terraform.protocols", new String[] {"6.0"}),
         uploads,
-        "alice",
+        PUBLISHER,
         "127.0.0.1");
 
     assertEquals(
@@ -918,6 +964,7 @@ class ComponentUploadServiceTest {
     RepositoryRuntimeRegistry registry = mock(RepositoryRuntimeRegistry.class);
     when(registry.resolve(runtime.name())).thenReturn(Optional.of(runtime));
     ComponentUploadService service = new ComponentUploadService(
+        ALLOW_UPLOAD,
         registry,
         mock(AssetDao.class),
         mock(MavenHostedService.class),
@@ -941,6 +988,7 @@ class ComponentUploadServiceTest {
     RepositoryRuntimeRegistry registry = mock(RepositoryRuntimeRegistry.class);
     when(registry.resolve(runtime.name())).thenReturn(Optional.of(runtime));
     return new ComponentUploadService(
+        ALLOW_UPLOAD,
         registry,
         mock(AssetDao.class),
         mock(MavenHostedService.class),
@@ -959,6 +1007,7 @@ class ComponentUploadServiceTest {
     RepositoryRuntimeRegistry registry = mock(RepositoryRuntimeRegistry.class);
     when(registry.resolve(runtime.name())).thenReturn(Optional.of(runtime));
     return new ComponentUploadService(
+        ALLOW_UPLOAD,
         registry,
         mock(AssetDao.class),
         mock(MavenHostedService.class),
@@ -978,6 +1027,7 @@ class ComponentUploadServiceTest {
     RepositoryRuntimeRegistry registry = mock(RepositoryRuntimeRegistry.class);
     when(registry.resolve(runtime.name())).thenReturn(Optional.of(runtime));
     return new ComponentUploadService(
+        ALLOW_UPLOAD,
         registry,
         mock(AssetDao.class),
         mock(MavenHostedService.class),
@@ -1048,6 +1098,7 @@ class ComponentUploadServiceTest {
     RepositoryRuntimeRegistry registry = mock(RepositoryRuntimeRegistry.class);
     when(registry.resolve(runtime.name())).thenReturn(Optional.of(runtime));
     return new ComponentUploadService(
+        ALLOW_UPLOAD,
         registry,
         mock(AssetDao.class),
         mock(MavenHostedService.class),

@@ -105,19 +105,23 @@ for (const [permissions, expected] of [
   [[], false], [['nexus:security-scanning:read'], true], [['nexus:security-scanning:read,update'], true],
   [['nexus:selectors:read'], true], [['nexus:*'], true], [['nexus:security-scanning:*'], true],
   [['nexus:security-scanning:update'], false], [['nexus:security-scanning-waivers:create'], false],
+  [['nexus:settings:read'], true], [['nexus:settings:read,update'], true], [['nexus:settings:update'], false],
+  [['nexus:settings:read', 'nexus:selectors:read'], true],
 ]) {
   test(`Browse Admin entry agrees with Admin routing for ${permissions}`, () => {
     const { context } = setup(permissions);
     const browseContext = vm.createContext({ currentPermissions: permissions });
-    for (const name of ['permissionPartMatches', 'permissionMatches', 'can', 'hasAdminEntryPermission', 'adminEntryUrl'])
+    for (const name of ['permissionPartMatches', 'permissionMatches', 'can', 'adminEntryUrl'])
       vm.runInContext(extract(name, browse), browseContext);
-    assert.equal(browseContext.hasAdminEntryPermission(), expected);
+    assert.equal(Boolean(browseContext.adminEntryUrl()), expected);
     if (permissions.includes('nexus:*')) assert.equal(browseContext.adminEntryUrl(), '/admin/');
     else if (context.canAccessAdminView('security-scanning'))
       assert.equal(browseContext.adminEntryUrl(), '/admin/#admin/security/artifact-scanning');
-    else if (expected) assert.equal(browseContext.adminEntryUrl(), '/admin/#admin/repository/content-selectors');
+    else if (context.canAccessAdminView('content-selectors'))
+      assert.equal(browseContext.adminEntryUrl(), '/admin/#admin/repository/content-selectors');
+    else if (expected) assert.equal(browseContext.adminEntryUrl(), '/admin/#admin/system/proxy-settings');
     assert.equal(context.canAccessAdminView('security-scanning')
-      || context.canAccessAdminView('content-selectors'), expected);
+      || context.canAccessAdminView('content-selectors') || context.canAccessAdminView('proxy-settings'), expected);
   });
 }
 

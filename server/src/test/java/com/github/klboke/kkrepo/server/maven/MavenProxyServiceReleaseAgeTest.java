@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -18,6 +19,9 @@ import com.github.klboke.kkrepo.core.BlobStorage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.MavenPublicationTimesDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.MavenPublicationTimesDao.PublicationTime;
+import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceHashes;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
@@ -25,6 +29,7 @@ import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPathParser;
 import com.github.klboke.kkrepo.server.cache.AssetMetadataCache;
 import com.github.klboke.kkrepo.server.cache.CachedAssetMetadata;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.releaseage.ReleaseAgeDeniedException;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -82,6 +87,47 @@ class MavenProxyServiceReleaseAgeTest {
     assertTrue(!xml.contains("<version>1.2</version>"), xml);
     assertTrue(xml.contains("<release>1.1</release>"), xml);
     assertTrue(xml.contains("<latest>2.0-SNAPSHOT</latest>"), xml);
+  }
+
+  @Test
+  void recordsPublicationTimeAndReusesItWhileFresh() throws Exception {
+    var fixture = fixture();
+    var runtime = runtime(FORTY_EIGHT_HOURS);
+    String artifact = "com/acme/demo/1.0/demo-1.0.pom";
+    fixture.cached(artifact, "<project/>");
+    Instant published = NOW.minus(Duration.ofDays(3));
+    fixture.pom("1.0", published);
+    var times = mock(MavenPublicationTimesDao.class);
+    fixture.service.setPublicationTimes(times);
+    var key = PersistenceHashes.sha256(runtime.proxyRemoteUrl(), "com.acme", "demo", "1.0");
+    var proof = new PublicationTime(published, NOW);
+    when(times.find(runtime.id(), key)).thenReturn(Optional.empty(), Optional.of(proof));
+
+    assertEquals(200, fixture.service.get(runtime, path(artifact), true).status());
+    verify(times).record(runtime.id(), key, proof);
+    assertEquals(200, fixture.service.get(runtime, path(artifact), true).status());
+    verify(fixture.fetcher).fetchWithBodyRetry(any(), eq(artifact), any());
+  }
+
+  @Test
+  void blockedProxyUsesPreviouslyVerifiedTimesFromSharedStorage() throws Exception {
+    var fixture = fixture();
+    fixture.cached(METADATA_PATH, METADATA);
+    var runtime = runtime(FORTY_EIGHT_HOURS);
+    var times = mock(MavenPublicationTimesDao.class);
+    fixture.service.setPublicationTimes(times);
+    var key = PersistenceHashes.sha256(runtime.proxyRemoteUrl(), "com.acme", "demo", "1.0");
+    Instant published = NOW.minus(Duration.ofDays(3));
+    when(times.find(runtime.id(), key))
+        .thenReturn(Optional.of(new PublicationTime(published, NOW.minus(Duration.ofHours(7)))));
+    doThrow(new Blocked()).when(fixture.fetcher).fetchWithBodyRetry(any(), any(), any());
+
+    String xml = body(fixture.service.get(runtime, path(METADATA_PATH), false));
+    assertTrue(xml.contains("<version>2.0-SNAPSHOT</version>"), xml);
+    assertTrue(xml.contains("<version>1.0</version>"), xml);
+    assertTrue(!xml.contains("<version>1.1</version>"), xml);
+    assertTrue(!xml.contains("<version>1.2</version>"), xml);
+    verify(times, never()).record(eq(runtime.id()), any(), any());
   }
 
   @Test

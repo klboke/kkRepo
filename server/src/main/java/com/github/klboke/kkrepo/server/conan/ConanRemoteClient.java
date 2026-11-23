@@ -7,6 +7,7 @@ import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.raw.RawProxyService;
 import java.io.IOException;
 import java.io.InputStream;
@@ -88,6 +89,7 @@ final class ConanRemoteClient {
     String key = tokenKey(runtime);
     if (force) exchangedTokens.invalidate(key);
     String token = exchangedTokens.get(key, ignored -> exchange(runtime));
+    if (token == null) return runtime;
     return new RepositoryRuntime(
         runtime.id(), runtime.name(), runtime.format(), runtime.type(), runtime.recipeName(),
         runtime.online(), runtime.blobStoreId(), runtime.writePolicy(), runtime.versionPolicy(),
@@ -119,6 +121,9 @@ final class ConanRemoteClient {
         throw new ConanExceptions.BadUpstream("Invalid Conan upstream bearer token");
       }
       return token;
+    } catch (Blocked blocked) {
+      // Keep discovery usable from the shared Raw cache without an upstream token.
+      return null;
     } catch (IOException e) {
       throw new ConanExceptions.BadUpstream("Unable to authenticate to Conan upstream", e);
     }

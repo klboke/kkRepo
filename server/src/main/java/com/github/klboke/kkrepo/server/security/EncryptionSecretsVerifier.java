@@ -2,8 +2,6 @@ package com.github.klboke.kkrepo.server.security;
 
 import com.github.klboke.kkrepo.core.security.EncryptionSecrets;
 import java.util.Arrays;
-import org.springframework.boot.ApplicationArguments;
-import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
@@ -15,15 +13,14 @@ import org.springframework.stereotype.Component;
  * production never silently encrypts with a well-known key.
  */
 @Component
-public class EncryptionSecretsVerifier implements ApplicationRunner {
+public class EncryptionSecretsVerifier {
   private final Environment environment;
 
   public EncryptionSecretsVerifier(Environment environment) {
     this.environment = environment;
   }
 
-  @Override
-  public void run(ApplicationArguments args) {
+  void verify() {
     if (developmentProfileActive()) {
       return;
     }
