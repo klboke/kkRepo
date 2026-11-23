@@ -173,6 +173,7 @@ const viewHashRoutes = {
   "routing-rules": "#admin/repository/routingrules",
   blobstores: "#admin/repository/blobstores",
   "docker-registry": "#admin/repository/docker",
+  staging: "#admin/repository/staging",
   "security-users": "#admin/security/users",
   "security-roles": "#admin/security/roles",
   "security-privileges": "#admin/security/privileges",
@@ -204,6 +205,7 @@ const hashViewRoutes = {
   "#admin/repository/blob-stores": "blobstores",
   "#admin/repository/docker": "docker-registry",
   "#admin/repository/docker-registry": "docker-registry",
+  "#admin/repository/staging": "staging",
   "#admin/security": "security-users",
   "#admin/security/users": "security-users",
   "#admin/security/roles": "security-roles",
@@ -559,6 +561,7 @@ const FORMAT_ICON_NAMES = Object.freeze({
   r: "r",
   huggingface: "huggingface",
   gitlfs: "gitlfs",
+  arch: "arch",
   raw: "raw",
 });
 
@@ -585,6 +588,7 @@ const FORMAT_DISPLAY_NAMES = Object.freeze({
   r: "R / CRAN",
   huggingface: "Hugging Face Models",
   gitlfs: "Git LFS",
+  arch: "Pacman / Arch Linux",
   raw: "Raw",
 });
 
@@ -2969,6 +2973,8 @@ function refreshRepositoryRecipeControls() {
     format !== "conan" || repositoryFormMode !== "edit";
   document.getElementById("repository-apt-fields").hidden = format !== "apt";
   document.getElementById("repository-alpine-fields").hidden = format !== "alpine";
+  document.getElementById("repository-arch-fields").hidden = format !== "arch";
+  document.getElementById("repository-swift-proxy-note").hidden =
   document.getElementById("repository-swift-proxy-help").hidden =
     !(format === "swift" && type === "PROXY");
   document.getElementById("repository-yum-depth-field").hidden = format !== "yum" || type !== "HOSTED";
@@ -3017,7 +3023,8 @@ function refreshRepositoryRemoteDefaults(recipe) {
     apt: "https://deb.debian.org/debian/",
     alpine: "https://dl-cdn.alpinelinux.org/alpine/",
     r: "https://cloud.r-project.org/",
-    huggingface: "https://huggingface.co/"
+    huggingface: "https://huggingface.co/",
+    arch: "https://geo.mirror.pkgbuild.com/"
   };
   if (recipe.format === "swift") {
     remote.value = defaults.swift;
@@ -3355,6 +3362,73 @@ async function downloadAlpinePublicKey() {
   }
 }
 
+async function loadArchStatus(name = editingRepositoryName) {
+  if (!name) return;
+  const output = document.getElementById("repository-arch-status");
+  output.textContent = "Loading Arch Linux signing status…";
+  try {
+    const response = await fetch(
+      `/internal/repositories/${encodeURIComponent(name)}/arch/status`);
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    const text = await response.text();
+    const status = text ? JSON.parse(text) : null;
+    output.textContent = status && status.configured
+      ? `Signing key ${status.fingerprint} (key ${status.keyId}, revision ${status.revision}).`
+      : "No active signing key. Databases are served unsigned until a key is imported or generated.";
+  } catch (error) {
+    output.textContent = `Unable to load Arch Linux signing status: ${error.message}`;
+  }
+}
+
+async function rotateArchSigningKey(generate = false) {
+  if (!editingRepositoryName) return;
+  const privateKey = document.getElementById("repository-arch-private-key").value.trim();
+  if (!generate && !privateKey) {
+    showToast("Paste an ASCII-armored OpenPGP private key first.", "error");
+    return;
+  }
+  if (generate && !window.confirm(
+      "Generate a new Arch Linux signing key and sign repository databases with it?")) return;
+  showToast(generate ? "Generating Arch Linux signing key…" : "Importing Arch Linux signing key…");
+  try {
+    const response = await fetch(
+      `/internal/repositories/${encodeURIComponent(editingRepositoryName)}/arch/signing-key`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          generate,
+          privateKey: generate ? null : privateKey,
+          passphrase: document.getElementById("repository-arch-key-passphrase").value
+        })
+      });
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    document.getElementById("repository-arch-private-key").value = "";
+    document.getElementById("repository-arch-key-passphrase").value = "";
+    showToast("Arch Linux signing key rotated.", "success");
+    await loadArchStatus();
+  } catch (error) {
+    showToast(error.message || "Arch Linux signing key rotation failed.", "error");
+  }
+}
+
+async function downloadArchPublicKey() {
+  if (!editingRepositoryName) return;
+  try {
+    const response = await fetch(
+      `/internal/repositories/${encodeURIComponent(editingRepositoryName)}/arch/public-key`);
+    if (!response.ok) throw new Error(await responseErrorMessage(response));
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${editingRepositoryName}-arch.asc`;
+    link.click();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    showToast(error.message || "Arch Linux public key download failed.", "error");
+  }
+}
+
 function repositoryFormPayload() {
   const recipe = currentRecipe();
   const type = recipe ? recipe.type : null;
@@ -3410,7 +3484,8 @@ function repositoryFormPayload() {
     }
   } else if (type === "GROUP") {
     payload.group = {
-      memberNames: [...memberTransfer.selected]
+      memberNames: [...memberTransfer.selected],
+      writeRepository: document.getElementById("repository-group-write-target").value.trim() || null
     };
   }
   if (recipe?.format === "conan" && type !== "GROUP") {
@@ -3490,6 +3565,7 @@ function setRepositoryFormDefaults() {
   document.getElementById("repository-remote-url").value = "";
   document.getElementById("repository-yum-depth").value = "0";
   document.getElementById("repository-pypi-index-path").value = "/simple";
+  document.getElementById("repository-group-write-target").value = "";
   document.getElementById("repository-allowed-redirect-hosts").value = "";
   document.getElementById("repository-remote-authentication-type").value = "auto";
   document.getElementById("repository-remote-ntlm-domain").value = "";
@@ -3647,6 +3723,8 @@ function showEditRepositoryForm(name) {
   if (repo.type === "GROUP" && repo.group && Array.isArray(repo.group.memberNames)) {
     memberTransfer.selected = [...repo.group.memberNames];
   }
+  document.getElementById("repository-group-write-target").value =
+    repo.group?.writeRepository || "";
   if (repo.docker) {
     document.getElementById("repository-docker-https-enabled").checked = Boolean(repo.docker.httpsConnectorEnabled);
     document.getElementById("repository-docker-https-port").value = repo.docker.httpsConnectorPort ?? "";
@@ -3702,6 +3780,7 @@ function showEditRepositoryForm(name) {
   if (repo.format === "conan") loadConanStatus(repo.name);
   if (repo.format === "apt") loadAptStatus(repo.name);
   if (repo.format === "alpine") loadAlpineStatus(repo.name);
+  if (repo.format === "arch") loadArchStatus(repo.name);
   clearRequiredFieldErrors(repositoryRequiredFields);
   openFormModal("repository-form", "repository-online");
 }
@@ -8574,6 +8653,11 @@ function canAdmin(permission) {
 
 function canAccessAdminView(view) {
   if (canAdmin("nexus:*")) return view !== "loading";
+  // Staging sessions are owner-scoped, but the admin console only exposes the view to accounts
+  // holding a staging permission; the server still enforces ownership per session.
+  if (view === "staging") {
+    return ["admin", "read", "create"].some((action) => canAdmin(`nexus:staging:${action}`));
+  }
   if (view === "proxy-settings" || view === "download-offload") return canAdmin("nexus:settings:read");
   if (view === "security-scanning") return canAdmin("nexus:security-scanning:read");
   return view === "content-selectors" && ["read", "create", "update", "delete"]
@@ -8615,6 +8699,7 @@ function switchView(view, options = {}) {
   if (view === "content-selectors") window.KkContentSelectors.load();
   if (view === "routing-rules") window.KkRoutingRules.load();
   if (view === "docker-registry") loadDockerOperations();
+  if (view === "staging") window.KkStaging.load();
   if (view === "security-users") loadSecurityUsers();
   if (view === "security-roles") {
     loadSecurityRoles().then(() => {
@@ -8847,6 +8932,10 @@ document.getElementById("repository-alpine-metadata-mode").addEventListener("cha
 document.getElementById("repository-alpine-refresh-status").addEventListener("click", () => loadAlpineStatus());
 document.getElementById("repository-alpine-rebuild").addEventListener("click", rebuildAlpineMetadata);
 document.getElementById("repository-alpine-rotate-key").addEventListener("click", () => rotateAlpineSigningKey(false));
+document.getElementById("repository-arch-refresh-status").addEventListener("click", () => loadArchStatus());
+document.getElementById("repository-arch-download-key").addEventListener("click", downloadArchPublicKey);
+document.getElementById("repository-arch-rotate-key").addEventListener("click", () => rotateArchSigningKey(false));
+document.getElementById("repository-arch-generate-key").addEventListener("click", () => rotateArchSigningKey(true));
 document.getElementById("repository-alpine-generate-key").addEventListener("click", () => rotateAlpineSigningKey(true));
 document.getElementById("repository-alpine-download-key").addEventListener("click", downloadAlpinePublicKey);
 bindRequiredFieldErrors(repositoryRequiredFields);

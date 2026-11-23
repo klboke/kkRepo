@@ -117,6 +117,25 @@ public class RawHostedService {
     return MavenResponse.created();
   }
 
+  /**
+   * Stores an unindexed protocol asset and returns whether this call created the path binding.
+   * If another replica already owns or concurrently wins the path, its asset/blob binding is
+   * returned unchanged by the writer and this method reports {@code false}.
+   */
+  public boolean putInternalUnindexedIfAbsent(
+      RepositoryRuntime runtime,
+      String rawPath,
+      InputStream body,
+      String contentType,
+      Map<String, ?> blobAttributes,
+      String createdBy,
+      String createdByIp) {
+    String path = normalizeAssetPath(rawPath);
+    return writer.writeUnindexedIfAbsent(
+        runtime, blobStorage(runtime), requireBlobStore(runtime), path, body, contentType,
+        blobAttributes == null ? Map.of() : blobAttributes, createdBy, createdByIp);
+  }
+
   /** Stores protocol staging/cache state without making it visible in Browse or Search. */
   public MavenResponse putInternalHidden(
       RepositoryRuntime runtime,
@@ -130,6 +149,61 @@ public class RawHostedService {
     writer.writeHidden(
         runtime, blobStorage(runtime), requireBlobStore(runtime), path, body, contentType,
         blobAttributes == null ? Map.of() : blobAttributes, createdBy, createdByIp, false);
+    return MavenResponse.created();
+  }
+
+  /**
+   * Stores bytes for a staging session without creating live repository rows.
+   *
+   * <p>The returned blob is not owned by any asset yet; callers must retain it through
+   * {@code BlobReferenceDao} in the same transaction.
+   */
+  public com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord storeStagedBlob(
+      RepositoryRuntime runtime,
+      String rawPath,
+      InputStream body,
+      String contentType,
+      Map<String, ?> blobAttributes,
+      String createdBy,
+      String createdByIp) {
+    ensureHosted(runtime);
+    String path = normalizeAssetPath(rawPath);
+    return writer.storeStagedBlob(
+        runtime, blobStorage(runtime), requireBlobStore(runtime), path, body, contentType,
+        blobAttributes == null ? Map.of() : blobAttributes, createdBy, createdByIp);
+  }
+
+  /** Stores staged bytes from a temporary file inspected by a format adapter. */
+  public com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord storeStagedBlobFile(
+      RepositoryRuntime runtime,
+      String rawPath,
+      Path file,
+      String contentType,
+      Map<String, ?> blobAttributes,
+      String createdBy,
+      String createdByIp) {
+    ensureHosted(runtime);
+    String path = normalizeAssetPath(rawPath);
+    return writer.storeStagedBlobFile(
+        runtime, blobStorage(runtime), requireBlobStore(runtime), path, file, contentType,
+        blobAttributes == null ? Map.of() : blobAttributes, createdBy, createdByIp);
+  }
+
+  /**
+   * Links a staged blob into a live hosted repository as an unindexed asset without a component or
+   * Browse node. Format adapters use this for signatures and other protocol-owned side files.
+   */
+  public MavenResponse linkInternalBlobUnindexed(
+      RepositoryRuntime runtime,
+      String rawPath,
+      com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord blob,
+      String contentType,
+      String createdBy,
+      String createdByIp) {
+    String path = normalizeAssetPath(rawPath);
+    writer.linkExistingBlobUnindexed(
+        runtime, blobStorage(runtime), requireBlobStore(runtime), path, blob, contentType,
+        createdBy, createdByIp);
     return MavenResponse.created();
   }
 
@@ -369,7 +443,7 @@ public class RawHostedService {
         : new String[] {directory + "/index.html", directory + "/index.htm"};
   }
 
-  static String normalizeAssetPath(String rawPath) {
+  public static String normalizeAssetPath(String rawPath) {
     String path = normalizeDirectoryPath(rawPath);
     if (path.isEmpty()) {
       throw new MavenExceptions.MavenNotFoundException("Missing raw path");

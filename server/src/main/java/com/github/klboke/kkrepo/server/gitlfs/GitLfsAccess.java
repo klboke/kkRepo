@@ -40,6 +40,13 @@ public class GitLfsAccess {
   private final AccessDecisionService permissions;
   private final ObjectMapper json;
   private final long maxObjectBytes;
+  private com.github.klboke.kkrepo.server.staging.StagingCredentialService stagingCredentials;
+
+  @org.springframework.beans.factory.annotation.Autowired(required = false)
+  void setStagingCredentialService(
+      com.github.klboke.kkrepo.server.staging.StagingCredentialService stagingCredentials) {
+    this.stagingCredentials = stagingCredentials;
+  }
 
   public GitLfsAccess(SecurityAuthenticationService authentication, AccessDecisionService permissions,
       RepositoryDao repositories, ObjectMapper json, @Value("${kkrepo.gitlfs.max-object-bytes:34359738368}") long maxObjectBytes) {
@@ -78,6 +85,10 @@ public class GitLfsAccess {
       }
       if (subject.isEmpty()) throw new GitLfsException(401, "Authentication required");
       request.setAttribute(AuthenticatedSubject.REQUEST_ATTRIBUTE, subject.get());
+      if (stagingCredentials != null) {
+        // A staging token selects its session without any explicit header; bind it before routing.
+        stagingCredentials.bind(request, subject.get());
+      }
       // The catalog is a local hot cache. Actions must observe current repository state on any pod.
       repository = repositories.findById(repository.id())
           .orElseThrow(() -> new GitLfsException(404, "Repository does not exist"));

@@ -4,6 +4,8 @@ package com.github.klboke.kkrepo.persistence.jdbc.api;
 public interface PersistenceStores extends AutoCloseable {
   AlpineRegistryDao alpineRegistry();
 
+  ArchSigningKeyDao archSigningKeys();
+
   AptRegistryDao aptRegistry();
 
   AnsibleGalaxyRegistryDao ansibleGalaxyRegistry();
@@ -77,6 +79,8 @@ public interface PersistenceStores extends AutoCloseable {
   SecurityDao security();
 
   SecurityScanDao securityScanning();
+
+  StagingDao staging();
 
   StorageStatisticsDao storageStatistics();
 

@@ -165,6 +165,14 @@ public class CargoHostedService {
     return CargoResponses.text(body.toString(), null, latestUpdatedAt(components), headOnly);
   }
 
+  /** Index entries of the live crate versions, used by the staging view to merge pending releases. */
+  List<Map<String, Object>> indexEntries(RepositoryRuntime runtime, String crateName) {
+    String normalizedName = CargoCrateName.parse(crateName).lowerDashUnderscoreKey();
+    return componentDao.listByName(runtime.id(), normalizedName).stream()
+        .map(this::indexEntry)
+        .toList();
+  }
+
   MavenResponse search(RepositoryRuntime runtime, CargoSearchQuery query, boolean headOnly) {
     List<ComponentRecord> components = componentDao.searchComponentsByRepositoryIds(
         List.of(runtime.id()),

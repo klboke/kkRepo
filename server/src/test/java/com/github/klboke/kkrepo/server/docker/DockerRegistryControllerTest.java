@@ -32,6 +32,7 @@ import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.ForwardedHeaderPolicy;
+import com.github.klboke.kkrepo.server.staging.StagingService;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -559,6 +560,71 @@ class DockerRegistryControllerTest {
 
     assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
     verify(hosted).deleteBlob(runtime, digest);
+  }
+
+  @Test
+  void manifestPutWithAQuerySelectorStagesInsteadOfPublishingLive() throws Exception {
+    RepositoryRuntime runtime = hosted("docker-hosted", null);
+    DockerHostedService hosted = mock(DockerHostedService.class);
+    StagingService staging = mock(StagingService.class);
+    DockerRegistryController controller = controller(runtime, hosted);
+    controller.setStagingService(staging);
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("PUT", "/v2/docker-hosted/library/alpine/manifests/latest");
+    request.setParameter("stagingSession", "7");
+    request.setContent("{}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+    ResponseEntity<?> response = controller.put(
+        request, null, null, "application/vnd.oci.image.manifest.v1+json", null);
+
+    assertEquals(HttpStatus.CREATED, response.getStatusCode());
+    verify(staging).putRequest(
+        eq(runtime), eq("7"), eq("manifest/library/alpine/latest"), any(), any(), any());
+    verify(hosted, never()).putManifest(
+        any(), any(), any(), any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void manifestPutWithABoundStagingCredentialStagesWithoutAnyHeader() throws Exception {
+    RepositoryRuntime runtime = hosted("docker-hosted", null);
+    DockerHostedService hosted = mock(DockerHostedService.class);
+    StagingService staging = mock(StagingService.class);
+    DockerRegistryController controller = controller(runtime, hosted);
+    controller.setStagingService(staging);
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("PUT", "/v2/docker-hosted/library/alpine/manifests/latest");
+    request.setAttribute(
+        com.github.klboke.kkrepo.server.staging.StagingCredentialService.SESSION_ATTRIBUTE, "7");
+    request.setContent("{}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+    ResponseEntity<?> response = controller.put(
+        request, null, null, "application/vnd.oci.image.manifest.v1+json", null);
+
+    assertEquals(HttpStatus.CREATED, response.getStatusCode());
+    verify(staging).putRequest(
+        eq(runtime), eq("7"), eq("manifest/library/alpine/latest"), any(), any(), any());
+    verify(hosted, never()).putManifest(
+        any(), any(), any(), any(), any(), any(), any(), any());
+  }
+
+  @Test
+  void conflictingDockerSelectorsAreRejectedBeforeAnyLiveWrite() throws Exception {
+    RepositoryRuntime runtime = hosted("docker-hosted", null);
+    DockerHostedService hosted = mock(DockerHostedService.class);
+    DockerRegistryController controller = controller(runtime, hosted);
+    controller.setStagingService(mock(StagingService.class));
+    MockHttpServletRequest request =
+        new MockHttpServletRequest("PUT", "/v2/docker-hosted/library/alpine/manifests/latest");
+    request.addHeader("X-KkRepo-Staging", "7");
+    request.setParameter("stagingSession", "8");
+    request.setContent("{}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+    DockerProtocolException error = assertThrows(DockerProtocolException.class, () ->
+        controller.put(request, null, null, "application/vnd.oci.image.manifest.v1+json", null));
+
+    assertEquals(400, error.status());
+    verify(hosted, never()).putManifest(
+        any(), any(), any(), any(), any(), any(), any(), any());
   }
 
   private static DockerRegistryController controller(RepositoryRuntime runtime, DockerHostedService hosted) {
