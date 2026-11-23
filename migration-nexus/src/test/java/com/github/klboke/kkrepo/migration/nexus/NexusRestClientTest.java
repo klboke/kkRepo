@@ -161,6 +161,9 @@ class NexusRestClientTest {
     assertTrue(script.contains("'PubToken'"));
     // Nexus Pro user tokens are exported with their owner's realm, to be reported (never imported).
     assertTrue(script.contains("'User-Token-Realm'"));
+    // ...and without their secret: both exporters drop the raw value for that domain.
+    assertTrue(script.contains("'User-Token-Realm'.equalsIgnoreCase(String.valueOf(domain))"));
+    assertTrue(script.contains("'User-Token-Realm'.equalsIgnoreCase(String.valueOf(document.field('domain')))"));
     assertTrue(script.contains("realmNames: realmNames"));
     assertTrue(script.contains("equalsIgnoreCase('user_token')"));
     assertTrue(script.contains("select distinct domain from api_key_v2 order by domain"));

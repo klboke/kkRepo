@@ -122,7 +122,7 @@ public class NexusRestClient {
           }
         }
         try {
-          // User-Token-Realm: Nexus Pro user tokens, exported only to be reported as not migrated.
+          // User-Token-Realm: Nexus Pro user tokens, exported without their secret, only to be reported.
           ['NpmToken', 'NuGetApiKey', 'RubyGemsApiKey', 'CargoToken', 'PubToken', 'User-Token-Realm'].each { domain ->
             try {
               if (apiKeyService.count(domain) > 0) {
@@ -174,7 +174,8 @@ public class NexusRestClient {
             }
             apiKeys << [
               domain: domain,
-              api_key: apiKey.apiKey == null ? null : new String(apiKey.apiKey),
+              api_key: apiKey.apiKey == null || 'User-Token-Realm'.equalsIgnoreCase(String.valueOf(domain))
+                  ? null : new String(apiKey.apiKey),
               primary_principal: apiKey.primaryPrincipal,
               principals: [
                 primaryPrincipal: apiKey.primaryPrincipal,
@@ -216,7 +217,8 @@ public class NexusRestClient {
             def principals = principalDetails(document.field('principals'))
             apiKeys << [
               domain: document.field('domain'),
-              api_key: document.field('api_key'),
+              api_key: 'User-Token-Realm'.equalsIgnoreCase(String.valueOf(document.field('domain')))
+                  ? null : document.field('api_key'),
               primary_principal: document.field('primary_principal'),
               principals: principals,
               sourceStore: 'OrientDB'

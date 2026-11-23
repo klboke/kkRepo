@@ -193,6 +193,26 @@ class NexusApiMigrationServiceTest {
   }
 
   @Test
+  void reportsNexusProUserTokensExportedWithoutTheirSecret() {
+    List<String> writtenApiKeys = new ArrayList<>();
+    NexusApiMigrationService service = new NexusApiMigrationService(
+        new ObjectMapper(), new FakeBlobStoreDao().asDao(), new FakeRepositoryDao().asDao(),
+        presentSecurityDao(), new FakeMigrationJobDao(), recordingSecurityWriter(writtenApiKeys));
+    // The source script no longer sends the raw value for this domain.
+    NexusInventory inventory = proUserTokenInventory(List.of(
+        apiKey("User-Token-Realm", "carol", "LdapRealm", null)));
+
+    NexusMigrationPreflight preflight = service.preflight(inventory, request("https://old-nexus.example").targetBlobStore());
+    NexusApiMigrationService.NexusMigrationResult result =
+        service.migrate(inventory, request("https://old-nexus.example"));
+
+    assertEquals(List.of(), writtenApiKeys);
+    assertEquals(1, preflight.security().userTokens().tokens());
+    assertEquals(List.of("LDAP/carol"), preflight.security().userTokens().owners());
+    assertEquals("FAIL", userTokenCheck(result).orElseThrow().status());
+  }
+
+  @Test
   void keepsReportingNexusProUserTokensAsMissingSecurityObjects() {
     List<String> writtenApiKeys = new ArrayList<>();
     // Users, roles and format keys exist in the target; the Pro user tokens were never written.
@@ -318,11 +338,12 @@ class NexusApiMigrationServiceTest {
   }
 
   private static Map<String, Object> apiKey(String domain, String userId, String realm, String rawKey) {
-    return Map.of(
-        "domain", domain,
-        "api_key", rawKey,
-        "primary_principal", userId,
-        "principals", Map.of("primaryPrincipal", userId, "realmNames", List.of(realm)));
+    Map<String, Object> key = new java.util.LinkedHashMap<>();
+    key.put("domain", domain);
+    key.put("api_key", rawKey);
+    key.put("primary_principal", userId);
+    key.put("principals", Map.of("primaryPrincipal", userId, "realmNames", List.of(realm)));
+    return key;
   }
 
   private static com.github.klboke.kkrepo.persistence.jdbc.api.SecurityDao presentSecurityDao() {
