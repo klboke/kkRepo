@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.github.klboke.kkrepo.auth.AccessDecision;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRealmRecord;
 import com.github.klboke.kkrepo.server.repositories.RepositoryService;
 import com.github.klboke.kkrepo.server.repositories.RepositoryView;
 import com.github.klboke.kkrepo.server.security.NexusSecurityPayloads.NexusAnonymousSettings;
@@ -27,7 +28,6 @@ import com.github.klboke.kkrepo.server.security.SecurityPayloads.AnonymousSettin
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AnonymousSettingsView;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.PrivilegeCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.PrivilegeView;
-import com.github.klboke.kkrepo.server.security.SecurityPayloads.RealmCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.RealmView;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.RepositoryTargetCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.RepositoryTargetView;
@@ -540,79 +540,67 @@ public class NexusExtDirectController {
   }
 
   private List<NexusLdapServer> readLdapServers() {
-    return securityService.listRealms().stream()
-        .filter(realm -> LDAP_REALM_ID.equals(realm.realmId()))
+    return securityService.ldapRealmRecord().stream()
         .filter(realm -> ldapConfigured(realm.attributes()))
         .map(this::toLdapServer)
         .toList();
   }
 
   private NexusLdapServer saveLdapServer(JsonNode payload, boolean requireExisting) {
-    RealmView existing = ldapRealm().orElse(null);
-    if (requireExisting && (existing == null || !ldapConfigured(existing.attributes()))) {
-      throw new SecurityValidationException("LDAP server not found");
-    }
-    if (!requireExisting && existing != null && ldapConfigured(existing.attributes())) {
-      throw new SecurityValidationException("LDAP server already exists");
-    }
-    Map<String, Object> attributes = ldapAttributes(payload, existing == null ? Map.of() : existing.attributes());
-    String name = defaultString(asString(attributes.get("name")), existing == null ? "LDAP" : existing.name());
-    securityService.saveRealms(List.of(new RealmCommand(
-        LDAP_REALM_ID,
-        "LDAP",
-        name,
-        existing != null && existing.enabled(),
-        existing == null ? 10 : existing.priority(),
-        attributes)));
-    return ldapRealm()
-        .filter(realm -> ldapConfigured(realm.attributes()))
-        .map(this::toLdapServer)
-        .orElseThrow(() -> new SecurityValidationException("LDAP server not saved"));
+    var saved = securityService.updateLdapRealm(existing -> {
+      if (requireExisting != ldapConfigured(existing.attributes())) {
+        throw new SecurityValidationException(requireExisting ? "LDAP server not found" : "LDAP server already exists");
+      }
+      var attributes = ldapAttributes(payload, existing.attributes());
+      if (!ldapConfigured(attributes)) {
+        throw new SecurityValidationException("LDAP server not saved");
+      }
+      attributes.put(ExternalRoleMappings.LEGACY_MATCHING,
+          requireExisting ? attributes.getOrDefault(ExternalRoleMappings.LEGACY_MATCHING, true) : false);
+      String name = defaultString(asString(attributes.get("name")), existing.name());
+      return new SecurityRealmRecord(existing.id(), LDAP_REALM_ID, "LDAP", name, existing.enabled(),
+          existing.priority(), attributes);
+    });
+    return toLdapServer(saved);
   }
 
   private void removeLdapServer(String id) {
-    RealmView existing = ldapRealm()
-        .filter(realm -> ldapConfigured(realm.attributes()))
-        .orElseThrow(() -> new SecurityValidationException("LDAP server not found: " + id));
-    NexusLdapServer server = toLdapServer(existing);
-    String requested = blankToNull(id);
-    if (requested != null && !requested.equals(server.id()) && !requested.equals(server.name())) {
-      throw new SecurityValidationException("LDAP server not found: " + id);
-    }
-    securityService.saveRealms(List.of(new RealmCommand(
-        LDAP_REALM_ID,
-        "LDAP",
-        "LDAP",
-        false,
-        existing.priority(),
-        Map.of("source", "LDAP", "nexusRealm", LDAP_NEXUS_REALM))));
+    securityService.updateLdapRealm(existing -> {
+      if (!ldapConfigured(existing.attributes())) {
+        throw new SecurityValidationException("LDAP server not found: " + id);
+      }
+      NexusLdapServer server = toLdapServer(existing);
+      String requested = blankToNull(id);
+      if (requested != null && !requested.equals(server.id()) && !requested.equals(server.name())) {
+        throw new SecurityValidationException("LDAP server not found: " + id);
+      }
+      return new SecurityRealmRecord(existing.id(), LDAP_REALM_ID, "LDAP", "LDAP", false, existing.priority(),
+          Map.of("source", "LDAP", "nexusRealm", LDAP_NEXUS_REALM));
+    });
   }
 
   private void changeLdapOrder(JsonNode orderNode) {
-    RealmView existing = ldapRealm()
-        .filter(realm -> ldapConfigured(realm.attributes()))
-        .orElse(null);
-    if (existing == null || orderNode == null || !orderNode.isArray()) {
+    if (orderNode == null || !orderNode.isArray()) {
       return;
     }
-    NexusLdapServer server = toLdapServer(existing);
-    int order = 1;
-    for (int i = 0; i < orderNode.size(); i++) {
-      String value = orderNode.get(i).asText();
-      if (server.id().equals(value) || server.name().equals(value)) {
-        order = i + 1;
-        break;
+    securityService.updateLdapRealm(existing -> {
+      if (!ldapConfigured(existing.attributes())) {
+        return existing;
       }
-    }
-    Map<String, Object> attributes = new LinkedHashMap<>(existing.attributes());
-    attributes.put("order", order);
-    securityService.saveRealms(List.of(new RealmCommand(
-        LDAP_REALM_ID,
-        "LDAP",
-        existing.name(),
-        existing.enabled(),
-        existing.priority(),
-        attributes)));
+      NexusLdapServer server = toLdapServer(existing);
+      int order = 1;
+      for (int i = 0; i < orderNode.size(); i++) {
+        String value = orderNode.get(i).asText();
+        if (server.id().equals(value) || server.name().equals(value)) {
+          order = i + 1;
+          break;
+        }
+      }
+      var attributes = new LinkedHashMap<>(existing.attributes());
+      attributes.put("order", order);
+      return new SecurityRealmRecord(existing.id(), LDAP_REALM_ID, "LDAP", existing.name(), existing.enabled(),
+          existing.priority(), attributes);
+    });
   }
 
   private Object verifyLdapConnection(JsonNode payload) {
@@ -636,12 +624,6 @@ public class NexusExtDirectController {
     return null;
   }
 
-  private Optional<RealmView> ldapRealm() {
-    return securityService.listRealms().stream()
-        .filter(realm -> LDAP_REALM_ID.equals(realm.realmId()))
-        .findFirst();
-  }
-
   private boolean ldapConfigured(Map<String, Object> attributes) {
     if (attributes == null) {
       return false;
@@ -655,7 +637,7 @@ public class NexusExtDirectController {
         || blankToNull(asString(attributes.get("ldapServerName"))) != null;
   }
 
-  private NexusLdapServer toLdapServer(RealmView realm) {
+  private NexusLdapServer toLdapServer(SecurityRealmRecord realm) {
     Map<String, Object> attributes = realm.attributes() == null ? Map.of() : realm.attributes();
     Map<String, Object> urlParts = ldapUrlParts(asString(attributes.get("url")));
     String id = defaultString(asString(firstPresent(attributes, "id", "ldapServerId")), LDAP_REALM_ID);

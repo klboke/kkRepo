@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -43,6 +44,77 @@ class MavenGroupFailureCompatibilityTest {
       <versioning><latest>1.0</latest><release>1.0</release><versions><version>1.0</version></versions>
       <lastUpdated>20260101000000</lastUpdated></versioning></metadata>
       """);
+
+  @Test
+  void manuallyBlockedProxyServesCachedContentAndStopsUpstreamRequestsLikeNexus() throws Exception {
+    assumeTrue(Boolean.parseBoolean(CompatDefaults.setting("compat.write.enabled", "COMPAT_WRITE_ENABLED")
+        .orElse("false")), "Set COMPAT_WRITE_ENABLED=true on disposable compatibility instances");
+    String host = CompatDefaults.setting("compat.mavenGroup.upstreamHost", "MAVEN_GROUP_COMPAT_UPSTREAM_HOST")
+        .orElse("host.docker.internal");
+    final String metadata = BASE + "maven-metadata.xml";
+    final String missing = BASE + "2.0/fallback-2.0.pom";
+    byte[] secondPom = bytes(new String(POM, StandardCharsets.UTF_8)
+        .replace("<version>1.0</version>", "<version>2.0</version>"));
+    AtomicInteger requests = new AtomicInteger();
+    HttpServer upstream = HttpServer.create(new InetSocketAddress("0.0.0.0", 0), 0);
+    upstream.createContext("/", exchange -> {
+      requests.incrementAndGet();
+      byte[] body = switch (exchange.getRequestURI().getPath()) {
+        case "/" + metadata -> METADATA;
+        case "/" + missing -> secondPom;
+        default -> POM;
+      };
+      exchange.getResponseHeaders().set("Content-Type", "application/xml");
+      exchange.getResponseHeaders().set("Content-Length", Integer.toString(body.length));
+      boolean head = "HEAD".equals(exchange.getRequestMethod());
+      exchange.sendResponseHeaders(200, head ? -1 : body.length);
+      if (!head) exchange.getResponseBody().write(body);
+      exchange.close();
+    });
+    upstream.start();
+    Endpoint nexus = new Endpoint(CompatDefaults.nexusBaseUrl().orElseThrow(),
+        CompatDefaults.nexusUsername().orElseThrow(), CompatDefaults.nexusPassword().orElseThrow(), true);
+    Endpoint kkrepo = new Endpoint(CompatDefaults.nexusPlusBaseUrl().orElseThrow(),
+        CompatDefaults.nexusPlusUsername().orElseThrow(), CompatDefaults.nexusPlusPassword().orElseThrow(), false);
+    String remote = "http://" + host + ":" + upstream.getAddress().getPort() + "/";
+    try (var fixtureAccess = nexus.allowFixtureHost(host)) {
+      for (Endpoint endpoint : List.of(nexus, kkrepo)) {
+        String name = "compat-block-" + UUID.randomUUID().toString().substring(0, 8);
+        String hosted = name + "-hosted";
+        String group = name + "-group";
+        List<String> created = new ArrayList<>();
+        endpoint.create(name, "proxy", remote, List.of());
+        created.add(name);
+        try {
+          assertArrayEquals(POM, endpoint.content(name, POM_PATH, "GET", null).body());
+          assertArrayEquals(METADATA, endpoint.content(name, metadata, "GET", null).body());
+          endpoint.blockOutbound(name, remote, true);
+          int before = requests.get();
+          assertArrayEquals(POM, endpoint.content(name, POM_PATH, "GET", null).body());
+          assertArrayEquals(METADATA, endpoint.content(name, metadata, "GET", null).body());
+          assertEquals(200, endpoint.content(name, POM_PATH, "HEAD", null).statusCode());
+          assertEquals(404, endpoint.content(name, missing, "GET", null).statusCode());
+          assertEquals(404, endpoint.content(name, missing, "HEAD", null).statusCode());
+          endpoint.create(hosted, "hosted", remote, List.of());
+          created.add(hosted);
+          endpoint.create(group, "group", remote, List.of(name, hosted));
+          created.add(group);
+          assertEquals(201, endpoint.content(hosted, missing, "PUT", secondPom).statusCode());
+          assertArrayEquals(secondPom, endpoint.content(group, missing, "GET", null).body());
+          assertEquals(before, requests.get(), "A manually blocked proxy cannot contact upstream");
+          endpoint.blockOutbound(name, remote, false);
+          var unblocked = endpoint.content(name, missing, "GET", null);
+          assertEquals(200, unblocked.statusCode());
+          assertArrayEquals(secondPom, unblocked.body());
+          assertTrue(requests.get() > before, "Unblocking allows the same cache miss to reach upstream");
+        } finally {
+          for (String repository : created.reversed()) endpoint.delete(repository);
+        }
+      }
+    } finally {
+      upstream.stop(0);
+    }
+  }
 
   @ParameterizedTest
   @ValueSource(ints = {303, 404, 400, 500})
@@ -326,6 +398,23 @@ class MavenGroupFailureCompatibilityTest {
 
     HttpResponse<byte[]> content(String repo, String path, String method, byte[] body) throws Exception {
       return send("/repository/" + repo + "/" + path, method, body);
+    }
+
+    void blockOutbound(String name, String remote, boolean blocked) throws Exception {
+      Map<String, Object> payload = nexus
+          ? Map.of("name", name, "online", true,
+              "storage", Map.of("blobStoreName", "default", "strictContentTypeValidation", true),
+              "maven", Map.of("versionPolicy", "RELEASE", "layoutPolicy", "PERMISSIVE"),
+              "proxy", Map.of("remoteUrl", remote, "contentMaxAge", 0, "metadataMaxAge", 0),
+              "negativeCache", Map.of("enabled", false, "timeToLive", 1),
+              "httpClient", Map.of("blocked", blocked, "autoBlock", false))
+          : Map.of("proxy", Map.of("blockOutboundConnections", blocked,
+              "contentMaxAgeMinutes", 0, "metadataMaxAgeMinutes", 0));
+      var response = send(catalog() + (nexus ? "/maven/proxy/" : "/") + name, "PUT",
+          JSON.writeValueAsBytes(payload));
+      assertTrue(response.statusCode() >= 200 && response.statusCode() < 300,
+          () -> "set blocked=" + blocked + " status=" + response.statusCode()
+              + " " + new String(response.body(), StandardCharsets.UTF_8));
     }
 
     HttpResponse<byte[]> send(String path, String method, byte[] body) throws Exception {

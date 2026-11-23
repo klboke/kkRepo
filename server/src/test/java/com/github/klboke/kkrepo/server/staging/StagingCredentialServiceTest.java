@@ -227,7 +227,7 @@ class StagingCredentialServiceTest {
     return new AuthenticatedSubject(
         "LOCAL", "alice", "api-key", 9L,
         new PermissionSubject("LOCAL", "alice", java.util.Set.of(), null),
-        staging, session);
+        staging, session, null);
   }
 
   private static ApiKeyRecord apiKey() {

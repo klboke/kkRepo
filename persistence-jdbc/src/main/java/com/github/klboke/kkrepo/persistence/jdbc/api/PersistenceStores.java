@@ -44,6 +44,8 @@ public interface PersistenceStores extends AutoCloseable {
 
   MaintenanceCursorDao maintenanceCursors();
 
+  MavenPublicationTimesDao mavenPublicationTimes();
+
   MetadataRebuildDao metadataRebuild();
 
   MigrationCheckpointDao migrationCheckpoints();
@@ -87,6 +89,10 @@ public interface PersistenceStores extends AutoCloseable {
   TerraformRegistryDao terraformRegistry();
 
   UiSettingsDao uiSettings();
+
+  OutboundProxySettingsDao outboundProxySettings();
+
+  DownloadOffloadSettingsDao downloadOffloadSettings();
 
   @Override
   default void close() {

@@ -9,6 +9,9 @@ import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.SeekableByteChannel;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -50,6 +53,7 @@ public class ArchiveGuard {
           .collect(Collectors.toUnmodifiableSet());
   private static final long MAX_EXPANSION_RATIO = 1000;
   private static final long MIN_RATIO_BUDGET_BYTES = 1024L * 1024;
+  private static final int MAX_LINK_TARGET_BYTES = 16 * 1024;
   private static final byte[] RPM_LEAD_MAGIC =
       new byte[] {(byte) 0xed, (byte) 0xab, (byte) 0xee, (byte) 0xdb};
   private static final byte[] RPM_HEADER_MAGIC =
@@ -101,7 +105,7 @@ public class ArchiveGuard {
     try {
       deadline.check();
       Budget budget = new Budget(limits, Files.size(input), deadline);
-      inspectPath(input, "", 0, budget, workspace, false, true);
+      inspectPath(input, "", 0, budget, workspace, false, false);
       deadline.check();
       return new Inspection(budget.entries, budget.expandedBytes, budget.nestedArchives, null);
     } catch (IOException e) {
@@ -151,16 +155,16 @@ public class ArchiveGuard {
       Budget budget,
       Path workspace,
       boolean allowImageFilesystemMetadata,
-      boolean allowSafeArchiveLinks) {
+      boolean captureCondaIndex) {
     try {
       if (inspectAsRpm(
           input, depth, budget, workspace, allowImageFilesystemMetadata,
-          allowSafeArchiveLinks)) return;
+          captureCondaIndex)) return;
       if (inspectAsArchive(
           input, depth, budget, workspace, allowImageFilesystemMetadata,
-          allowSafeArchiveLinks)) return;
+          captureCondaIndex)) return;
       inspectAsCompressed(input, hint, depth, budget, workspace,
-          allowImageFilesystemMetadata, allowSafeArchiveLinks);
+          allowImageFilesystemMetadata, captureCondaIndex);
     } catch (ScannerRequestException e) {
       throw e;
     } catch (IOException e) {
@@ -179,7 +183,7 @@ public class ArchiveGuard {
       Budget budget,
       Path workspace,
       boolean allowImageFilesystemMetadata,
-      boolean allowSafeArchiveLinks)
+      boolean captureCondaIndex)
       throws IOException, ArchiveException, CompressorException {
     if (!startsWith(input, RPM_LEAD_MAGIC)) {
       return false;
@@ -213,7 +217,7 @@ public class ArchiveGuard {
               ArchiveStreamFactory.DEFAULT.createArchiveInputStream(archiveType, expanded)) {
             inspectEntries(
                 archive, depth, budget, workspace, allowImageFilesystemMetadata,
-                allowSafeArchiveLinks);
+                captureCondaIndex);
           }
         }
       }
@@ -305,7 +309,7 @@ public class ArchiveGuard {
       Budget budget,
       Path workspace,
       boolean allowImageFilesystemMetadata,
-      boolean allowSafeArchiveLinks)
+      boolean captureCondaIndex)
       throws IOException, ArchiveException {
     budget.check();
     try (BufferedInputStream raw = new BufferedInputStream(Files.newInputStream(input))) {
@@ -320,7 +324,7 @@ public class ArchiveGuard {
           ArchiveStreamFactory.DEFAULT.createArchiveInputStream(type, raw)) {
         inspectEntries(
             archive, depth, budget, workspace, allowImageFilesystemMetadata,
-            allowSafeArchiveLinks);
+            captureCondaIndex);
       }
       return true;
     }
@@ -333,7 +337,7 @@ public class ArchiveGuard {
       Budget budget,
       Path workspace,
       boolean allowImageFilesystemMetadata,
-      boolean allowSafeArchiveLinks)
+      boolean captureCondaIndex)
       throws IOException, CompressorException, ArchiveException {
     budget.check();
     try (BufferedInputStream raw = new BufferedInputStream(Files.newInputStream(input))) {
@@ -354,7 +358,7 @@ public class ArchiveGuard {
               ArchiveStreamFactory.DEFAULT.createArchiveInputStream(type, expanded)) {
             inspectEntries(
                 archive, depth, budget, workspace, allowImageFilesystemMetadata,
-                allowSafeArchiveLinks);
+                captureCondaIndex);
           }
         } catch (ArchiveException singleCompressedFile) {
           drain(expanded, budget, budget.limits.maxSingleFileBytes());
@@ -369,7 +373,7 @@ public class ArchiveGuard {
       Budget budget,
       Path workspace,
       boolean allowImageFilesystemMetadata,
-      boolean allowSafeArchiveLinks)
+      boolean captureCondaIndex)
       throws IOException {
     while (true) {
       budget.check();
@@ -378,7 +382,7 @@ public class ArchiveGuard {
       if (entry == null) break;
       budget.addEntry();
       validatePath(entry.getName());
-      if (!allowImageFilesystemMetadata) validateType(entry, allowSafeArchiveLinks);
+      if (!allowImageFilesystemMetadata) validateType(entry);
       long declaredSize = entry.getSize();
       if (declaredSize > budget.limits.maxSingleFileBytes()) {
         throw rejected("ARCHIVE_ENTRY_TOO_LARGE", "Archive entry exceeds the single-file limit");
@@ -394,7 +398,19 @@ public class ArchiveGuard {
         throw rejected("ARCHIVE_ENTRY_UNREADABLE", "Archive contains an unsupported entry");
       }
 
-      if (allowSafeArchiveLinks && "info/index.json".equals(entry.getName())) {
+      // A link is metadata, even when its name has an archive suffix. Never follow it or
+      // recursively inspect its target. Syft's pinned archive reader does not materialize links.
+      if (entry instanceof CpioArchiveEntry cpio && cpio.isSymbolicLink()
+          && !allowImageFilesystemMetadata) {
+        validateLinkTarget(entry.getName(), readLinkTarget(archive, cpio, budget), true);
+        continue;
+      }
+      if (isLink(entry)) {
+        drain(archive, budget, budget.limits.maxSingleFileBytes());
+        continue;
+      }
+
+      if (captureCondaIndex && "info/index.json".equals(entry.getName())) {
         if (budget.condaIndex != null) {
           throw rejected(
               "CONDA_INDEX_DUPLICATE", "Conda package contains duplicate info/index.json");
@@ -416,7 +432,7 @@ public class ArchiveGuard {
               budget,
               workspace,
               allowImageFilesystemMetadata,
-              allowSafeArchiveLinks);
+              captureCondaIndex);
         } finally {
           Files.deleteIfExists(nested);
         }
@@ -454,7 +470,7 @@ public class ArchiveGuard {
     }
   }
 
-  private static void validateType(ArchiveEntry entry, boolean allowSafeArchiveLinks) {
+  private static void validateType(ArchiveEntry entry) {
     if (entry instanceof ZipArchiveEntry zip && zip.isUnixSymlink()) {
       throw rejected("ARCHIVE_LINK_REJECTED", "Archive links are not permitted");
     }
@@ -464,17 +480,43 @@ public class ArchiveGuard {
             "ARCHIVE_SPECIAL_FILE_REJECTED", "Archive special files are not permitted");
       }
       if (tar.isSymbolicLink() || tar.isLink()) {
-        if (!allowSafeArchiveLinks) {
-          throw rejected(
-              "ARCHIVE_SPECIAL_FILE_REJECTED", "Archive special files are not permitted");
-        }
         validateLinkTarget(tar.getName(), tar.getLinkName(), tar.isSymbolicLink());
       }
     }
     if (entry instanceof CpioArchiveEntry cpio
         && !cpio.isRegularFile()
-        && !cpio.isDirectory()) {
+        && !cpio.isDirectory()
+        && !cpio.isSymbolicLink()) {
       throw rejected("ARCHIVE_SPECIAL_FILE_REJECTED", "Archive special files are not permitted");
+    }
+  }
+
+  private static boolean isLink(ArchiveEntry entry) {
+    return (entry instanceof TarArchiveEntry tar && (tar.isSymbolicLink() || tar.isLink()))
+        || (entry instanceof CpioArchiveEntry cpio && cpio.isSymbolicLink())
+        || (entry instanceof ZipArchiveEntry zip && zip.isUnixSymlink());
+  }
+
+  private static String readLinkTarget(InputStream input, CpioArchiveEntry entry, Budget budget)
+      throws IOException {
+    // CPIO stores the target in the entry body. Bound allocation independently of the caller's
+    // potentially multi-gigabyte single-file budget, and count these bytes in the shared budget.
+    int maximum = (int) Math.min(MAX_LINK_TARGET_BYTES, budget.limits.maxSingleFileBytes());
+    if (entry.getSize() > maximum) {
+      throw rejected("ARCHIVE_LINK_TOO_LARGE", "Archive link target exceeds the limit");
+    }
+    budget.check();
+    // CpioArchiveInputStream bounds reads to this size and throws IOException on truncation.
+    byte[] bytes = input.readNBytes((int) entry.getSize());
+    budget.addBytes(bytes.length);
+    try {
+      return StandardCharsets.UTF_8.newDecoder()
+          .onMalformedInput(CodingErrorAction.REPORT)
+          .onUnmappableCharacter(CodingErrorAction.REPORT)
+          .decode(ByteBuffer.wrap(bytes))
+          .toString();
+    } catch (CharacterCodingException invalid) {
+      throw rejected("ARCHIVE_LINK_ESCAPE", "Archive link target is not valid UTF-8");
     }
   }
 

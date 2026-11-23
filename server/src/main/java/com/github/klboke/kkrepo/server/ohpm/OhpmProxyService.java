@@ -25,6 +25,7 @@ import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
 import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.raw.RawHostedService;
 import com.github.klboke.kkrepo.server.security.SecurityValidationException;
 import com.github.klboke.kkrepo.server.securityscan.ArtifactDownloadPolicy;
@@ -218,6 +219,8 @@ public class OhpmProxyService {
       throw error(502, "OHPM upstream download failed");
     } catch (SecurityValidationException denied) {
       throw error(502, "OHPM upstream URL is not allowed");
+    } catch (Blocked blocked) {
+      return serve(runtime, cached.orElseThrow(() -> error(404, "OHPM file does not exist")), head);
     } catch (IOException | UpstreamBodyReadException unavailable) {
       failure(runtime, 0);
       if (cached.isPresent()) return serve(runtime, cached.get(), head);
@@ -283,6 +286,8 @@ public class OhpmProxyService {
       return stored;
     } catch (SecurityValidationException denied) {
       throw error(502, "OHPM upstream URL is not allowed");
+    } catch (Blocked blocked) {
+      return cached.orElseThrow(() -> error(404, "OHPM package does not exist"));
     } catch (IOException | UpstreamBodyReadException unavailable) {
       failure(runtime, 0);
       return cached.orElseThrow(() -> error(502, "OHPM upstream metadata unavailable"));

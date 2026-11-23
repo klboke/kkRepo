@@ -4,9 +4,17 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
+import com.github.klboke.kkrepo.server.BlobStoresController;
+import com.github.klboke.kkrepo.server.BlobStoresController.BlobStoreRequest;
 import com.github.klboke.kkrepo.server.KkRepoApplication;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.CreateCommand;
+import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.HostedSettings;
+import com.github.klboke.kkrepo.server.repositories.RepositoryService;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AdminBootstrapCommand;
+import com.github.klboke.kkrepo.server.security.SecurityPayloads.RoleCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.UserCommand;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -18,6 +26,7 @@ import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -81,6 +90,29 @@ class ManagementPathSecurityRuntimeTest {
     DATABASE.stop();
   }
 
+  @Test
+  void componentUploadPersistsContentOnlyForAnAuthorizedWriter() throws Exception {
+    context.getBean(BlobStoresController.class).create(new BlobStoreRequest(
+        "upload-files", "file", "file", null, null, null, null, storage.resolve("uploads").toString(),
+        null, null, null));
+    var repository = context.getBean(RepositoryService.class).create(new CreateCommand(
+        "upload-permissions", "raw-hosted", true, "upload-files", true,
+        new HostedSettings("ALLOW_ONCE", null, null), null, null, null, null, null));
+    var assets = context.getBean(AssetDao.class);
+    String path = "/service/rest/v1/components?repository=" + repository.name();
+    String type = "multipart/form-data; boundary=upload-check";
+    String body = "--upload-check\r\n"
+        + "Content-Disposition: form-data; name=\"raw.asset1\"; filename=\"sample.txt\"\r\n"
+        + "Content-Type: text/plain\r\n\r\nsample content\r\n--upload-check--\r\n";
+
+    assertEquals(401, send("POST", path, null, body, type).statusCode());
+    assertEquals(403, send("POST", path, "reader", body, type).statusCode());
+    assertTrue(assets.findAssetByPath(repository.id(), "sample.txt").isEmpty());
+    assertEquals(204, send("POST", path, "admin", body, type).statusCode());
+    assertEquals("sample content", send("GET", "/repository/" + repository.name() + "/sample.txt",
+        "admin", "", null).body());
+  }
+
   @ParameterizedTest
   @ValueSource(strings = {
       "/service/rest/v1/security/users",
@@ -122,6 +154,58 @@ class ManagementPathSecurityRuntimeTest {
     assertEquals(403, send("PUT", path, null, "ChangedPassword123!", "text/plain").statusCode());
     assertEquals(403, send("PUT", path, "reader", "ChangedPassword123!", "text/plain").statusCode());
     assertEquals(200, send("GET", "/service/rest/v1/security/users", "password-target", "", null).statusCode());
+  }
+
+  @Test
+  void realmListReturnsPublicMetadataToSettingsReadersAndAdministrators() throws Exception {
+    security.saveRole(new RoleCommand("realm-reader", "Local", "Realm reader", null, false,
+        List.of("nx-settings-read"), List.of(), Map.of()));
+    security.saveUser(new UserCommand("Local", "settings-reader", "Settings", "Reader", "settings@example.com",
+        PASSWORD, null, "active", null, List.of("realm-reader"), Map.of()));
+    var mapper = new ObjectMapper();
+    String marker = UUID.randomUUID().toString();
+    var configured = send("PUT", "/internal/security/ldap", "admin",
+        mapper.writeValueAsString(Map.of("enabled", false, "authPassword", marker)), "application/json");
+    assertEquals(200, configured.statusCode());
+    assertEquals("********", mapper.readTree(configured.body()).path("authPassword").asText());
+    assertEquals(403, send("GET", "/internal/security/ldap", "settings-reader", "", null).statusCode());
+
+    for (String user : List.of("settings-reader", "admin")) {
+      var realms = send("GET", "/internal/security/realms", user, "", null);
+      assertEquals(200, realms.statusCode());
+      assertFalse(realms.body().contains(marker));
+      var ldap = mapper.readTree(realms.body()).valueStream()
+          .filter(realm -> realm.path("realmId").asText().equals("ldap")).findFirst().orElseThrow();
+      assertEquals(mapper.valueToTree(Map.of("source", "LDAP", "nexusRealm", "LdapRealm")), ldap.path("attributes"));
+    }
+  }
+
+  @Test
+  void roleMappingUpdatesRequireRolePermissionAndPersistByProvider() throws Exception {
+    String id = "external-mapping-reader";
+    security.saveRole(new RoleCommand(id, "Local", "Mapped reader", null, false,
+        List.of("nx-users-read"), List.of(), Map.of()));
+    String rolePath = "/internal/security/roles/" + id;
+    String role = """
+        {"roleId":"ignored","name":"Mapped reader","privileges":["nx-users-read"],"roles":[],
+         "externalMappings":[{"realmId":"oidc","externalName":"engineering"}]}
+        """;
+    assertEquals(200, send("PUT", rolePath, "admin", role, "application/json").statusCode());
+    assertTrue(security.findRole("ignored").isEmpty());
+    var initial = security.findRole(id).orElseThrow();
+    assertEquals("oidc", initial.externalMappings().getFirst().realmId());
+
+    String ldap = """
+        [{"realmId":"ldap","externalName":"engineering"}]
+        """;
+    assertEquals(403, send("PUT", rolePath + "/external-mappings", "reader", ldap, "application/json").statusCode());
+    assertEquals(initial.externalMappings(), security.findRole(id).orElseThrow().externalMappings());
+    assertEquals(200, send("PUT", rolePath + "/external-mappings", "admin", ldap, "application/json").statusCode());
+    var updated = security.findRole(id).orElseThrow();
+    assertEquals(1, updated.externalMappings().size());
+    assertEquals("ldap", updated.externalMappings().getFirst().realmId());
+    assertEquals("engineering", updated.externalMappings().getFirst().externalName());
+    assertEquals(initial.privileges(), updated.privileges());
   }
 
   @Test

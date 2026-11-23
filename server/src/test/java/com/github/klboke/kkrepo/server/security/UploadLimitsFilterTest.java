@@ -15,10 +15,28 @@ import jakarta.servlet.FilterChain;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 
 class UploadLimitsFilterTest {
+
+  @ParameterizedTest
+  @ValueSource(strings = {"/service/rest/v1/components", "/service/rest/internal/ui/upload/npm-hosted"})
+  void componentUploadLimitStopsTheRequestBeforeStorage(String path) throws Exception {
+    UploadLimitsFilter filter = new UploadLimitsFilter(
+        8L, new NexusLegacyUiCompatibility(true), mock(RepositoryDao.class));
+    MockHttpServletRequest request = new MockHttpServletRequest("POST", path);
+    request.setContent(new byte[9]);
+    MockHttpServletResponse response = new MockHttpServletResponse();
+    FilterChain chain = mock(FilterChain.class);
+
+    filter.doFilter(request, response, chain);
+
+    assertEquals(413, response.getStatus());
+    verify(chain, never()).doFilter(request, response);
+  }
 
   @Test
   void oversizedSwiftUploadUsesProblemDetailsWithoutReadingBody() throws Exception {

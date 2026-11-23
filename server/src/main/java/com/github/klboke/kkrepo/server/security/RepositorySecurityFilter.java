@@ -356,14 +356,8 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
 
   private List<PermissionAction> actionsForDecision(
       RepositoryRecord repository, RepositoryRequest target) {
-    if ((repository.format() == RepositoryFormat.SWIFT
-        || repository.format() == RepositoryFormat.ANSIBLEGALAXY
-        || repository.format() == RepositoryFormat.APT
-        || repository.format() == RepositoryFormat.ALPINE
-        || repository.format() == RepositoryFormat.R
-        || repository.format() == RepositoryFormat.ARCH)
-        && target.componentUploadRoute()) {
-      return List.of(PermissionAction.ADD);
+    if (target.componentUploadRoute()) {
+      return List.of(ComponentUploadAccess.action(repository.format()));
     }
     if (repository.format() == RepositoryFormat.ANSIBLEGALAXY
         && isAnsibleImportTaskRoute(target.method(), target.path())) {
@@ -430,14 +424,15 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
 
   private Optional<RepositoryRequest> resolve(HttpServletRequest request) {
     String method = request.getMethod();
-    String uri = stripContextPath(request);
+    String uri = SecurityRequestPath.rawPath(request);
     if (uri.startsWith(RepositoryUrlPrefix.path(request))) {
       return repositoryRoute(method, uri, RepositoryUrlPrefix.path(request));
     }
     if (uri.startsWith("/service/rest/repository/browse/")) {
       return browseRoute(method, uri);
     }
-    if ("POST".equalsIgnoreCase(method) && uri.equals("/service/rest/v1/components")) {
+    String managementPath = SecurityRequestPath.matchingPath(request);
+    if ("POST".equalsIgnoreCase(method) && managementPath.equals("/service/rest/v1/components")) {
       String repository = request.getParameter("repository");
       if (repository == null || repository.isBlank()) {
         return Optional.empty();
@@ -445,10 +440,10 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
       return Optional.of(new RepositoryRequest(
           repository.trim(), "", method, List.of(PermissionAction.EDIT), false, true));
     }
-    Optional<String> legacyUploadRepository = legacyUi.internalUiUploadRepository(uri);
+    Optional<String> legacyUploadRepository = legacyUi.internalUiUploadRepository(managementPath);
     if (legacyUploadRepository.isPresent()) {
       return Optional.of(new RepositoryRequest(
-          decode(legacyUploadRepository.get()),
+          legacyUploadRepository.get(),
           "",
           method,
           List.of(PermissionAction.EDIT),
@@ -643,15 +638,6 @@ public class RepositorySecurityFilter extends OncePerRequestFilter {
     return "-/npm/v1/security/audits".equals(path)
         || "-/npm/v1/security/audits/quick".equals(path)
         || "-/npm/v1/security/advisories/bulk".equals(path);
-  }
-
-  private String stripContextPath(HttpServletRequest request) {
-    String uri = request.getRequestURI();
-    String contextPath = request.getContextPath();
-    if (contextPath != null && !contextPath.isBlank() && uri.startsWith(contextPath)) {
-      return uri.substring(contextPath.length());
-    }
-    return uri;
   }
 
   private void challenge(

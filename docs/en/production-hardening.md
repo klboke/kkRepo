@@ -235,6 +235,8 @@ Before upgrading:
 - For Terraform, upload a hosted module/provider and run Terraform 0.13 plus the current stable `terraform init` through a group; verify the proxied provider, SHA256SUMS, detached signature, lock file, and URL-token redaction in diagnostics.
 - For Ansible, build and publish a collection with Ansible 2.9 and current ansible-core, then install its dependency through a group; verify duplicate-version rejection, proxy install, artifact SHA-256, import-task recovery, and reads through another replica.
 
+When upgrading from 1.4.0, stop all 1.4.0 replicas before starting the new version. Startup re-encrypts affected repository proxy credentials with the currently configured `kkrepo.security.encryption.credential-secret`. Older replicas can still use the old key for those same records.
+
 Recommended rollout:
 
 1. Deploy one new replica.

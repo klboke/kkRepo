@@ -26,6 +26,7 @@ import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
@@ -50,6 +51,42 @@ class AnsibleGalaxyServiceTest {
   private AnsibleCollectionArchiveInspector inspector;
   private HttpRemoteFetcher fetcher;
   private AnsibleGalaxyService service;
+
+  @Test
+  void manualBlockReadsStaleInventoryAndMetadataWithoutPersistingAnUpstreamMiss() throws Exception {
+    var runtime = runtime(31L, "ansible-proxy", RepositoryType.PROXY, "https://galaxy.example/", List.of());
+    var metadata = Map.<String, Object>of("version", "1.2.3");
+    var stale = proxyState(runtime.id(), "acme", "tools", "1.2.3", SHA_A, metadata, Instant.EPOCH);
+    when(registry.findProxyState(runtime.id(), "acme", "tools", "1.2.3")).thenReturn(Optional.of(stale));
+    when(registry.tryAcquireLease(any(), any(), any())).thenReturn(Optional.of(
+        new AnsibleGalaxyRegistryDao.Lease("fixture", "owner", 1L, Instant.now().plusSeconds(60), Instant.now())));
+    when(fetcher.fetch(any())).thenThrow(new Blocked());
+    assertEquals(metadata, service.fetchProxyDocument(runtime, "acme", "tools", "1.2.3", "v3/acme/tools"));
+    assertThrows(AnsibleGalaxyExceptions.NotFound.class,
+        () -> service.fetchProxyDocument(runtime, "acme", "tools", "2.0.0", "v3/acme/tools"));
+    var inventory = new AnsibleGalaxyRegistryDao.ProxyInventory(
+        runtime.id(), "acme", "tools", Instant.EPOCH, Instant.EPOCH, 1L, 1, Instant.EPOCH);
+    when(registry.findProxyInventory(runtime.id(), "acme", "tools")).thenReturn(Optional.of(inventory));
+    when(registry.listProxyInventoryVersionNames(runtime.id(), "acme", "tools")).thenReturn(List.of("1.2.3"));
+    var pinned = spy(service);
+    doReturn("https://galaxy.example/api/v3/versions").when(pinned).proxyV3Url(eq(runtime), anyString());
+    assertEquals(List.of("1.2.3"), pinned.fetchProxyVersionNames(runtime, "acme", "tools"));
+    verify(registry, never()).replaceProxyInventory(any(), any());
+  }
+
+  @Test
+  void blockedCollectionDownloadReturnsNotFoundWithoutStagingAnArtifact() throws Exception {
+    var runtime = runtime(31L, "ansible-proxy", RepositoryType.PROXY, "https://galaxy.example/", List.of());
+    var state = mock(AnsibleGalaxyRegistryDao.ProxyVersionState.class);
+    when(state.upstreamDownloadUrl()).thenReturn("https://galaxy.example/example.tar.gz");
+    when(state.artifactSha256()).thenReturn(SHA_A);
+    when(registry.tryAcquireLease(any(), any(), any())).thenReturn(Optional.of(
+        new AnsibleGalaxyRegistryDao.Lease("fixture", "owner", 1L, Instant.now().plusSeconds(60), Instant.now())));
+    when(fetcher.fetch(any())).thenThrow(new Blocked());
+
+    assertThrows(AnsibleGalaxyExceptions.NotFound.class, () -> service.materializeProxy(runtime, state));
+    verify(inspector, never()).inspect(any());
+  }
 
   @BeforeEach
   void setUp() {

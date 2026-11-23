@@ -24,6 +24,7 @@ import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.maven.UpstreamBodyReadException;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -217,6 +218,8 @@ public class NpmProxyService {
         handleFailure(runtime, Optional.empty(), "Upstream search returned " + status, now);
         return Map.of("objects", List.of(), "total", 0, "time", "0ms");
       });
+    } catch (Blocked blocked) {
+      return Map.of("objects", List.of(), "total", 0, "time", "0ms");
     } catch (IOException e) {
       handleFailure(runtime, Optional.empty(), "Upstream search IO error: " + e.getMessage(), now);
       return Map.of("objects", List.of(), "total", 0, "time", "0ms");
@@ -437,6 +440,11 @@ public class NpmProxyService {
         }
         throw new NpmExceptions.BadUpstreamException("Upstream returned " + status);
       });
+    } catch (Blocked blocked) {
+      if (cached.isEmpty()) throw new NpmExceptions.NpmNotFoundException(packageId.id());
+      return alreadyLoadedPolicy == null
+          ? cachedPolicy(cached.get(), minimumAge, priorEvaluationTime)
+          : alreadyLoadedPolicy;
     } catch (IOException e) {
       handleFailure(runtime, cached, "Upstream IO error: " + e.getMessage(), now);
       if (cached.isPresent()) {
@@ -822,6 +830,8 @@ public class NpmProxyService {
         handleFailure(runtime, cached, "Upstream returned " + status, now);
         return new PackageFetch(null, false);
       });
+    } catch (Blocked blocked) {
+      return new PackageFetch(null, false);
     } catch (IOException e) {
       handleFailure(runtime, cached, "Upstream IO error: " + e.getMessage(), now);
       return new PackageFetch(null, false);
@@ -998,6 +1008,8 @@ public class NpmProxyService {
         handleFailure(runtime, cached, "Upstream returned " + status, now);
         return null;
       });
+    } catch (Blocked blocked) {
+      return null;
     } catch (IOException e) {
       handleFailure(runtime, cached, "Upstream IO error: " + e.getMessage(), now);
       return null;

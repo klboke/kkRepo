@@ -135,7 +135,8 @@ class NpmTokenServiceTest {
     }
 
     @Override
-    public CreatedApiKeyView createApiKeyForOwner(String ownerSource, String ownerUserId, ApiKeyCommand command) {
+    public CreatedApiKeyView getOrCreateApiKeyForLogin(
+        String ownerSource, String ownerUserId, ApiKeyCommand command) {
       createdDomain = command.domain();
       createdOwnerSource = ownerSource;
       createdOwnerUserId = ownerUserId;

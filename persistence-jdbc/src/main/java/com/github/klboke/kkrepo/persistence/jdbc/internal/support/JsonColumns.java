@@ -59,6 +59,14 @@ public class JsonColumns {
     dialect.bind(statement, index, value);
   }
 
+  public String extractJson(String column, String... path) {
+    return dialect.extractJson(column, path);
+  }
+
+  public Map<String, Object> readObject(String value) {
+    return value != null && value.stripLeading().startsWith("{") ? read(value) : Map.of();
+  }
+
   public String extractText(String column, String... path) {
     return dialect.extractText(column, path);
   }

@@ -1,12 +1,16 @@
 package com.github.klboke.kkrepo.server.npm;
 
 import com.fasterxml.jackson.core.JsonGenerator;
+import com.fasterxml.jackson.core.JsonParseException;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
 import com.fasterxml.jackson.core.util.ByteArrayBuilder;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.protocol.npm.NpmMetadata;
 import com.github.klboke.kkrepo.protocol.npm.NpmMinimumReleaseAge;
 import com.github.klboke.kkrepo.protocol.npm.NpmPackageId;
 import java.io.IOException;
+import java.io.InputStream;
 import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -15,6 +19,153 @@ import java.util.Map;
 /** Writes a filtered npm packument without allocating a second full object tree. */
 final class NpmPackumentResponseWriter {
   private NpmPackumentResponseWriter() {
+  }
+
+  /** Renders a fresh group cache projection without materializing its JSON as maps and lists. */
+  static byte[] writeCached(
+      ObjectMapper mapper,
+      InputStream input,
+      NpmPackumentVariant variant,
+      NpmPackageId packageId,
+      String repositoryBaseUrl) throws IOException {
+    try (JsonParser parser = mapper.getFactory().createParser(input);
+         ByteArrayBuilder output = new ByteArrayBuilder();
+         JsonGenerator generator = mapper.getFactory().createGenerator(output)) {
+      if (parser.nextToken() != JsonToken.START_OBJECT) {
+        throw new JsonParseException(parser, "Expected a cached npm packument object");
+      }
+      generator.writeStartObject();
+      boolean hasVersions = false;
+      boolean hasDistTags = false;
+      for (String field; (field = parser.nextFieldName()) != null; ) {
+        parser.nextToken();
+        if (variant.abbreviated() && !NpmMetadata.isAbbreviatedRootField(field)) {
+          parser.skipChildren();
+          continue;
+        }
+        generator.writeFieldName(field);
+        switch (field) {
+          case NpmMetadata.VERSIONS -> {
+            hasVersions = true;
+            copyCachedVersions(mapper, parser, generator, variant, packageId, repositoryBaseUrl);
+          }
+          case NpmMetadata.DIST_TAGS -> {
+            hasDistTags = true;
+            if (parser.isExpectedStartObjectToken()) {
+              generator.copyCurrentStructure(parser);
+            } else {
+              parser.skipChildren();
+              writeEmptyObject(generator);
+            }
+          }
+          default -> generator.copyCurrentStructure(parser);
+        }
+      }
+      if (!hasVersions) {
+        generator.writeFieldName(NpmMetadata.VERSIONS);
+        writeEmptyObject(generator);
+      }
+      if (!hasDistTags) {
+        generator.writeFieldName(NpmMetadata.DIST_TAGS);
+        writeEmptyObject(generator);
+      }
+      generator.writeEndObject();
+      generator.flush();
+      return output.toByteArray();
+    }
+  }
+
+  private static void copyCachedVersions(
+      ObjectMapper mapper,
+      JsonParser parser,
+      JsonGenerator generator,
+      NpmPackumentVariant variant,
+      NpmPackageId packageId,
+      String repositoryBaseUrl) throws IOException {
+    generator.writeStartObject();
+    if (parser.isExpectedStartObjectToken()) {
+      for (String version; (version = parser.nextFieldName()) != null; ) {
+        generator.writeFieldName(version);
+        if (parser.nextToken() == JsonToken.START_OBJECT) {
+          copyCachedVersion(mapper, parser, generator, variant, packageId, repositoryBaseUrl);
+        } else {
+          generator.copyCurrentStructure(parser);
+        }
+      }
+    } else {
+      parser.skipChildren();
+    }
+    generator.writeEndObject();
+  }
+
+  private static void copyCachedVersion(
+      ObjectMapper mapper,
+      JsonParser parser,
+      JsonGenerator generator,
+      NpmPackumentVariant variant,
+      NpmPackageId packageId,
+      String repositoryBaseUrl) throws IOException {
+    generator.writeStartObject();
+    boolean hasInstallScriptField = false;
+    boolean hasInstallScript = false;
+    for (String field; (field = parser.nextFieldName()) != null; ) {
+      parser.nextToken();
+      if (variant.abbreviated() && !NpmMetadata.isAbbreviatedVersionField(field)) {
+        if ("scripts".equals(field) && parser.isExpectedStartObjectToken() && !hasInstallScriptField) {
+          hasInstallScript = NpmMetadata.hasInstallScript(mapper.readValue(parser, Object.class));
+        } else {
+          parser.skipChildren();
+        }
+        continue;
+      }
+      hasInstallScriptField |= "hasInstallScript".equals(field);
+      generator.writeFieldName(field);
+      if (NpmMetadata.DIST.equals(field) && parser.isExpectedStartObjectToken()) {
+        copyCachedDist(mapper, parser, generator, packageId, repositoryBaseUrl);
+      } else {
+        generator.copyCurrentStructure(parser);
+      }
+    }
+    if (variant.abbreviated() && !hasInstallScriptField && hasInstallScript) {
+      generator.writeBooleanField("hasInstallScript", true);
+    }
+    generator.writeEndObject();
+  }
+
+  private static void copyCachedDist(
+      ObjectMapper mapper,
+      JsonParser parser,
+      JsonGenerator generator,
+      NpmPackageId packageId,
+      String repositoryBaseUrl) throws IOException {
+    generator.writeStartObject();
+    for (String field; (field = parser.nextFieldName()) != null; ) {
+      generator.writeFieldName(field);
+      JsonToken value = parser.nextToken();
+      if (!NpmMetadata.TARBALL.equals(field) || value == JsonToken.VALUE_NULL) {
+        generator.copyCurrentStructure(parser);
+        continue;
+      }
+      if (value == JsonToken.VALUE_STRING) {
+        String original = parser.getText();
+        String rewritten = rewrittenTarballUrl(original, packageId, repositoryBaseUrl);
+        generator.writeString(rewritten == null ? original : rewritten);
+      } else {
+        Object original = mapper.readValue(parser, Object.class);
+        String rewritten = rewrittenTarballUrl(original, packageId, repositoryBaseUrl);
+        if (rewritten == null) {
+          mapper.writeValue(generator, original);
+        } else {
+          generator.writeString(rewritten);
+        }
+      }
+    }
+    generator.writeEndObject();
+  }
+
+  private static void writeEmptyObject(JsonGenerator generator) throws IOException {
+    generator.writeStartObject();
+    generator.writeEndObject();
   }
 
   static byte[] write(

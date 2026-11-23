@@ -48,6 +48,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
@@ -1455,8 +1457,11 @@ class RepositorySecurityFilterTest {
     assertEquals(path, decisions.permission.pathPattern());
   }
 
-  @Test
-  void restComponentUploadRequiresRepositoryEditPermission() throws Exception {
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "/service/rest/v1/components", "/service;view=full/rest/v1/components"
+  })
+  void restComponentUploadRequiresRepositoryEditPermission(String path) throws Exception {
     StubAuthenticationService authentication = new StubAuthenticationService(Optional.of(subject("alice")));
     RecordingDecisionService decisions = new RecordingDecisionService(AccessDecision.allow());
     RepositorySecurityFilter filter = filter(
@@ -1469,7 +1474,7 @@ class RepositorySecurityFilterTest {
     ChainState chain = new ChainState();
 
     filter.doFilter(
-        request("POST", "/service/rest/v1/components", Map.of("repository", "maven-releases")),
+        request("POST", path, Map.of("repository", "maven-releases")),
         response.proxy(),
         chain);
 

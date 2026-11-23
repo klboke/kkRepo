@@ -1,10 +1,13 @@
 package com.github.klboke.kkrepo.server.proxy;
 
+import java.net.InetAddress;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Per-repository outbound network proxy configuration for proxy-type repositories.
@@ -19,7 +22,18 @@ import java.util.Map;
  * keyed by {@link #cacheKey()}, and {@code RepositoryRuntime} snapshots carrying a proxy password
  * are excluded from the shared runtime cache (see {@code RepositoryRuntimeRegistry}).
  */
-public record OutboundProxyConfig(Type type, String host, int port, String username, String password) {
+public record OutboundProxyConfig(Type type, String host, int port, String username, String password,
+                                  Set<String> bypassHosts, Long systemRevision) {
+
+  public enum Mode {
+    DIRECT,
+    INHERIT,
+    OVERRIDE
+  }
+
+  public OutboundProxyConfig(Type type, String host, int port, String username, String password) {
+    this(type, host, port, username, password, Set.of(), null);
+  }
 
   public enum Type {
     HTTP,
@@ -28,6 +42,7 @@ public record OutboundProxyConfig(Type type, String host, int port, String usern
 
   public OutboundProxyConfig {
     type = type == null ? Type.HTTP : type;
+    bypassHosts = bypassHosts == null ? Set.of() : Set.copyOf(bypassHosts);
     host = host == null ? "" : host.trim();
     username = (username == null || username.isBlank()) ? null : username.trim();
     password = (password == null || password.isBlank()) ? null : password;
@@ -53,7 +68,46 @@ public record OutboundProxyConfig(Type type, String host, int port, String usern
         + ":" + host.toLowerCase(Locale.ROOT)
         + ":" + port
         + ":" + (username == null ? "" : username)
-        + ":" + (password == null ? "-" : sha256Hex(password));
+        + ":" + (password == null ? "-" : sha256Hex(password))
+        + (systemRevision == null ? "" : ":system:" + systemRevision);
+  }
+
+  public static OutboundProxyConfig forTarget(OutboundProxyConfig config, String target) {
+    if (config == null || !config.enabled()) return null;
+    if (config.bypassHosts().isEmpty()) return config;
+    String host;
+    try {
+      host = URI.create(target).getHost();
+    } catch (IllegalArgumentException e) {
+      // Invalid targets are rejected by the outbound request policy.
+      return config;
+    }
+    if (host == null) return config;
+    String normalized = normalizeHost(host);
+    boolean bypass = config.bypassHosts().stream().anyMatch(pattern -> pattern.startsWith("*.")
+        ? normalized.endsWith(pattern.substring(1)) : normalized.equals(normalizeHost(pattern)));
+    return bypass ? null : config;
+  }
+
+  static String normalizeHost(String host) {
+    String normalized = host.toLowerCase(Locale.ROOT);
+    if (normalized.indexOf(':') >= 0) {
+      try {
+        InetAddress address = InetAddress.ofLiteral(normalized);
+        return address.getAddress().length == 16 ? address.getHostAddress() : normalized;
+      } catch (IllegalArgumentException e) {
+        // Preserve invalid literals so validation can reject them.
+        return normalized;
+      }
+    }
+    return normalized.endsWith(".") ? normalized.substring(0, normalized.length() - 1) : normalized;
+  }
+
+  public static Mode mode(Map<?, ?> attributes) {
+    Object explicit = attributes == null ? null : attributes.get("outboundProxyMode");
+    if (explicit != null) return Mode.valueOf(explicit.toString());
+    OutboundProxyConfig legacy = fromAttributes(attributes);
+    return legacy != null && legacy.enabled() ? Mode.OVERRIDE : Mode.DIRECT;
   }
 
   private static String sha256Hex(String value) {
