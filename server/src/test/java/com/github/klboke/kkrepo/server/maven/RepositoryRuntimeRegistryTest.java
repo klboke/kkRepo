@@ -23,6 +23,33 @@ import org.junit.jupiter.api.Test;
 
 class RepositoryRuntimeRegistryTest {
   @Test
+  void twoReplicasLoadCurrentSystemConfigurationThroughCachedRepositoryLookups() {
+    var dao = new FakeRepositoryDao();
+    var mapper = new ObjectMapper();
+    var shared = new InMemorySharedCache(mapper, 1000, null);
+    var first = new RepositoryRuntimeRegistry(dao, shared, mapper, (CatalogCacheBroadcaster) null, 300);
+    var second = new RepositoryRuntimeRegistry(dao, shared, mapper, (CatalogCacheBroadcaster) null, 300);
+    var settings = org.mockito.Mockito.mock(com.github.klboke.kkrepo.server.proxy.OutboundProxySettings.class);
+    first.setOutboundProxySettings(settings);
+    second.setOutboundProxySettings(settings);
+    var record = new RepositoryRecord(42L, "system-proxy", RepositoryFormat.MAVEN2, RepositoryType.PROXY,
+        "maven2-proxy", true, 1L, null, "http://packages.example.org", null, null, null, true,
+        Map.of("proxy", Map.of("outboundProxyMode", "INHERIT")));
+    dao.add(record, List.of());
+    var type = com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig.Type.HTTP;
+    var disabled = new com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig(type, "", 0, null, null,
+        java.util.Set.of(), 0L);
+    var enabled = new com.github.klboke.kkrepo.server.proxy.OutboundProxyConfig(type, "proxy.example.org", 3128,
+        "service", "secret", java.util.Set.of(), 1L);
+    org.mockito.Mockito.when(settings.runtimeProxy()).thenReturn(disabled);
+    assertEquals(disabled, first.resolve("system-proxy").orElseThrow().outboundProxy());
+    assertEquals(disabled, second.resolve("system-proxy").orElseThrow().outboundProxy());
+    org.mockito.Mockito.when(settings.runtimeProxy()).thenReturn(enabled);
+    assertEquals(enabled, first.resolve("system-proxy").orElseThrow().outboundProxy());
+    assertEquals(enabled, second.resolve("system-proxy").orElseThrow().outboundProxy());
+  }
+
+  @Test
   void conanOverridesUseCachedSnapshotsAndRefreshOnBothReplicas() throws Exception {
     FakeRepositoryDao dao = new FakeRepositoryDao();
     var broadcaster = new InMemoryBroadcaster();

@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.routing.builtin;
 
+import com.github.klboke.kkrepo.server.offload.DownloadOffload;
 import com.github.klboke.kkrepo.server.config.RepositoryUrlPrefix;
 import com.github.klboke.kkrepo.server.security.ClientAddress;
 
@@ -122,6 +123,13 @@ import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBo
  */
 @Component
 public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandler {
+  private DownloadOffload downloadOffload;
+
+  @org.springframework.beans.factory.annotation.Autowired
+  public void setDownloadOffload(DownloadOffload downloadOffload) {
+    this.downloadOffload = downloadOffload;
+  }
+
   private static final List<RepositoryProtocolRoute> ROUTES =
       Arrays.stream(RepositoryFormat.values())
           .flatMap(format -> Arrays.stream(RepositoryType.values())
@@ -1273,7 +1281,8 @@ public class BuiltinRepositoryProtocolHandler implements RepositoryProtocolHandl
     }
     HttpHeaders headers = responseHeaders(resp, true);
     InputStream responseBody = resp.body();
-    if (TempBlobFiles.tryUseTomcatSendfile(request, responseBody)) {
+    if ((downloadOffload != null && downloadOffload.tryHandoff(request, resp.status(), headers, responseBody))
+        || TempBlobFiles.tryUseTomcatSendfile(request, responseBody)) {
       return ResponseEntity.status(resp.status()).headers(headers).body(null);
     }
     long contentLength = resp.contentLength();

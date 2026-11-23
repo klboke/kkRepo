@@ -33,6 +33,7 @@ import com.github.klboke.kkrepo.server.maven.MavenErrorAdvice;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.io.IOException;
@@ -47,6 +48,23 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class RawProxyServiceTest {
+  @Test
+  void manualBlockReturnsStaleContentAndDoesNotNegativeCacheAMiss() throws Exception {
+    var fixture = fixture();
+    var runtime = runtime(RepositoryType.PROXY, 1);
+    var stale = snapshot(Instant.EPOCH);
+    when(fixture.cache.find(eq(runtime.id()), eq("file.txt"), any()))
+        .thenReturn(Optional.of(stale), Optional.empty());
+    when(fixture.fetcher.fetchWithBodyRetry(any(), eq("file.txt"), any())).thenThrow(new Blocked());
+    var cached = MavenResponse.noBody(200);
+    when(fixture.reader.serveSnapshot(stale, true, "file.txt", "ATTACHMENT")).thenReturn(cached);
+
+    assertSame(cached, fixture.service.getAsset(runtime, "file.txt", true));
+    assertThrows(MavenExceptions.MavenNotFoundException.class,
+        () -> fixture.service.getAsset(runtime, "file.txt", true));
+    verify(fixture.negativeCache, never()).rememberNotFound(runtime, "file.txt");
+  }
+
   @ParameterizedTest
   @org.junit.jupiter.params.provider.CsvSource({
       "APT,pool/demo.deb,true", "APT,dists/stable/Release,false",

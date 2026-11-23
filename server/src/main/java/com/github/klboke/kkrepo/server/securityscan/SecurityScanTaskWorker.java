@@ -160,6 +160,15 @@ public class SecurityScanTaskWorker {
     } catch (LostSecurityScanLeaseException e) {
       outcome = "lease_lost";
       log.debug("Security scan task {} was taken over by another worker", task.id());
+    } catch (ScannerCapacityException e) {
+      // The adapter confirmed rejection, even if shutdown interrupted the worker afterward.
+      boolean restoreInterrupt = stopHeartbeatAndClearInterrupt(finished, heartbeat, heartbeatGate);
+      outcome = "defer_error";
+      try {
+        outcome = deferForCapacity(task, e);
+      } finally {
+        if (restoreInterrupt) Thread.currentThread().interrupt();
+      }
     } catch (ScannerAdapterException e) {
       if (Thread.currentThread().isInterrupted()) {
         outcome = retryInterruptedTask(task, finished, heartbeat, heartbeatGate);
@@ -299,6 +308,18 @@ public class SecurityScanTaskWorker {
           Instant.now().plusSeconds(backoffSeconds(task.attempts())));
     } catch (LostSecurityScanLeaseException e) {
       log.debug("Did not update failed scan task after lease loss: {}", task.id());
+    }
+  }
+
+  private String deferForCapacity(ScanTask task, ScannerCapacityException failure) {
+    Instant nextAttemptAt = Instant.now().plusSeconds(failure.retryAfterSeconds())
+        .plusMillis(ThreadLocalRandom.current().nextLong(1, 1_001));
+    try {
+      finalizer.deferForCapacity(task, failure, nextAttemptAt);
+      return "deferred";
+    } catch (LostSecurityScanLeaseException e) {
+      log.debug("Did not defer scan task after lease loss: {}", task.id());
+      return "lease_lost";
     }
   }
 

@@ -972,6 +972,8 @@ public class SwiftService {
         rememberNotFound(runtime.id(), cacheKey);
       }
       return versions;
+    } catch (SwiftExceptions.OutboundBlocked blocked) {
+      return stale;
     } catch (SwiftExceptions.NotFound e) {
       rememberNotFound(runtime.id(), cacheKey);
       if (!stale.isEmpty()) {
@@ -1235,6 +1237,8 @@ public class SwiftService {
       } catch (SwiftExceptions.UpstreamRateLimited e) {
         rememberRateLimit(runtime.id(), archiveCacheKey, e.retryAfter());
         throw e;
+      } catch (SwiftExceptions.OutboundBlocked blocked) {
+        throw blocked;
       } catch (SwiftExceptions.NotFound e) {
         rememberNotFound(runtime.id(), archiveCacheKey);
         throw e;
@@ -1410,6 +1414,8 @@ public class SwiftService {
     } catch (SwiftExceptions.UpstreamRateLimited e) {
       rememberRateLimit(runtime.id(), cacheKey, e.retryAfter());
       throw e;
+    } catch (SwiftExceptions.OutboundBlocked blocked) {
+      throw blocked;
     } catch (SwiftExceptions.NotFound e) {
       rememberNotFound(runtime.id(), cacheKey);
       throw e;

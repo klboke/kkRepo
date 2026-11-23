@@ -18,7 +18,7 @@ class AdminAlpineRepositoryContractTest {
     assertTrue(index.contains("APK v2"));
     assertTrue(index.contains("id=\"repository-alpine-upstream-public-key\""));
     assertTrue(index.contains("id=\"repository-alpine-private-key\""));
-    assertTrue(javascript.contains("alpine: \"Alpine / APK\""));
+    assertTrue(javascript.contains("alpine: \"APK / Alpine\""));
     assertTrue(javascript.contains("/alpine/status"));
     assertTrue(javascript.contains("/alpine/rebuild"));
     assertTrue(javascript.contains("/alpine/signing-key"));

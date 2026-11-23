@@ -15,9 +15,10 @@ class AdminSwiftRepositoryContractTest {
     String index = resource("/META-INF/resources/admin/index.html");
     String javascript = resource("/META-INF/resources/admin/assets/admin.js");
 
-    assertTrue(index.contains("id=\"repository-swift-proxy-note\""));
+    assertTrue(index.contains("id=\"repository-swift-proxy-help\""));
     assertTrue(index.contains("https://github.com/"));
     assertTrue(index.contains("SwiftPM clients should always connect to kkrepo over HTTPS"));
+    assertTrue(javascript.contains("getElementById(\"repository-swift-proxy-help\").hidden"));
     assertTrue(javascript.contains("format === \"swift\" && type === \"PROXY\""));
     assertTrue(javascript.contains("recipe?.type === \"PROXY\" && recipe?.format === \"swift\""));
     assertTrue(javascript.contains("swift: \"https://github.com/\""));

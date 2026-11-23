@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
+import com.github.klboke.kkrepo.core.security.SecretCipher;
 import com.zaxxer.hikari.HikariDataSource;
 import java.util.Map;
 import javax.sql.DataSource;
@@ -30,6 +31,7 @@ class DatabaseAuthenticationPostProcessorTest {
             "spring.datasource.password", "ignored-password",
             "spring.datasource.hikari.maximum-pool-size", "7")));
         context.register(DataSourceAutoConfiguration.class, DatabaseBackendConfiguration.class);
+        context.registerBean(SecretCipher.class, () -> new SecretCipher("test-credential-secret"));
         context.refresh();
         HikariDataSource pool = context.getBean(HikariDataSource.class);
         assertInstanceOf(RdsIamCredentialsProvider.class, pool.getCredentialsProvider());
@@ -49,6 +51,7 @@ class DatabaseAuthenticationPostProcessorTest {
           "spring.datasource.url", "jdbc:mysql://localhost/test",
           "spring.datasource.username", "static_user", "spring.datasource.password", "static-password")));
       context.register(DataSourceAutoConfiguration.class, DatabaseBackendConfiguration.class);
+      context.registerBean(SecretCipher.class, () -> new SecretCipher("test-credential-secret"));
       context.refresh();
       var pool = context.getBean(HikariDataSource.class);
       assertEquals("static-password", pool.getPassword());

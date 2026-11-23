@@ -199,7 +199,7 @@ class ArchiveGuardTest {
   }
 
   @Test
-  void rejectsArchiveLinksAndInvalidNames() throws IOException {
+  void rejectsEscapingArchiveLinksAndInvalidNames() throws IOException {
     Path tar = temporary.resolve("links.tar");
     try (TarArchiveOutputStream output =
         new TarArchiveOutputStream(Files.newOutputStream(tar))) {
@@ -212,7 +212,7 @@ class ArchiveGuardTest {
             () -> guard.inspect(tar, limits(10, 1024), temporary, deadline()))
         .isInstanceOf(ScannerRequestException.class)
         .extracting(failure -> ((ScannerRequestException) failure).code())
-        .isEqualTo("ARCHIVE_SPECIAL_FILE_REJECTED");
+        .isEqualTo("ARCHIVE_LINK_ESCAPE");
 
     for (String name : new String[] {
         "", "\0bad", "..", "safe/../escape", "safe\uff0f..\uff0fescape"
@@ -243,10 +243,8 @@ class ArchiveGuardTest {
         guard.inspectConda(safe, limits(10, 1024), temporary, deadline());
 
     assertThat(inspection.entries()).isEqualTo(3);
-    assertThatThrownBy(() -> guard.inspect(safe, limits(10, 1024), temporary, deadline()))
-        .isInstanceOf(ScannerRequestException.class)
-        .extracting(failure -> ((ScannerRequestException) failure).code())
-        .isEqualTo("ARCHIVE_SPECIAL_FILE_REJECTED");
+    assertThat(guard.inspect(safe, limits(10, 1024), temporary, deadline()).entries())
+        .isEqualTo(3);
 
     Path escaping = temporary.resolve("conda-escaping-link.tar");
     try (TarArchiveOutputStream output =

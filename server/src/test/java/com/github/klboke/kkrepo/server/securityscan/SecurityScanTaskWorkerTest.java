@@ -3,6 +3,7 @@ package com.github.klboke.kkrepo.server.securityscan;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
@@ -32,6 +33,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
 
 class SecurityScanTaskWorkerTest {
   @Test
@@ -118,6 +122,53 @@ class SecurityScanTaskWorkerTest {
           any());
     } finally {
       unexpected.worker.shutdown();
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void defersCapacityRejectionAtTheAttemptLimitUsingTheAdapterDelay(boolean interrupted) {
+    Fixture fixture = new Fixture();
+    try {
+      var capacity = new ScannerCapacityException(60);
+      when(fixture.task.attempts()).thenReturn(5);
+      when(fixture.executor.execute(fixture.task)).thenAnswer(invocation -> {
+        if (interrupted) Thread.currentThread().interrupt();
+        throw capacity;
+      });
+      Instant before = Instant.now();
+
+      fixture.worker.runOnce();
+
+      var nextAttempt = ArgumentCaptor.forClass(Instant.class);
+      verify(fixture.finalizer).deferForCapacity(
+          eq(fixture.task), eq(capacity), nextAttempt.capture());
+      assertTrue(nextAttempt.getValue().isAfter(before.plusSeconds(60)));
+      assertFalse(nextAttempt.getValue().isAfter(Instant.now().plusSeconds(61)));
+      verify(fixture.finalizer, never()).failCurrentTask(any(), any(), any(), anyBoolean(), any());
+      verify(fixture.adapter, never()).cancel(anyString());
+      verify(fixture.metrics).recordTask(eq("MAVEN2"), any(), any(), eq("deferred"), any());
+    } finally {
+      fixture.worker.shutdown();
+    }
+  }
+
+  @Test
+  void recordsLeaseLossWhenDeferringARejectedScan() {
+    Fixture fixture = new Fixture();
+    try {
+      var capacity = new ScannerCapacityException(17);
+      when(fixture.executor.execute(fixture.task)).thenThrow(capacity);
+      doThrow(new SecurityScanFinalizer.LostSecurityScanLeaseException(5L))
+          .when(fixture.finalizer).deferForCapacity(eq(fixture.task), eq(capacity), any());
+
+      fixture.worker.runOnce();
+
+      verify(fixture.metrics).recordTask(eq("MAVEN2"), any(), any(), eq("lease_lost"), any());
+      verify(fixture.finalizer, never()).failCurrentTask(any(), any(), any(), anyBoolean(), any());
+      verify(fixture.adapter, never()).cancel(anyString());
+    } finally {
+      fixture.worker.shutdown();
     }
   }
 

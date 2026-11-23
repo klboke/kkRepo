@@ -219,7 +219,11 @@ class SecurityAuthenticationServiceTest {
       dao.realm(new SecurityRealmRecord(2L, "local", "LOCAL", "Local", true, 10, Map.of("source", "Local")));
       dao.user(user(1L, "Local", "alice", NEXUS_SHIRO1_ADMIN123));
       dao.roles(1L, "local-role");
-      SecurityAuthenticationService service = service(dao);
+      var shared = new com.github.klboke.kkrepo.server.support.InMemorySharedCache();
+      var ldapCache = new BasicAuthCache(shared, true, 60, 5);
+      var service = new SecurityAuthenticationService(dao, OBJECT_MAPPER,
+          "X-Nexus-Plus-Token", "nx-anonymous", shared, OutboundRequestPolicy.allowPrivateForTests(),
+          transportFactory, null, ldapCache, null);
 
       Optional<AuthenticatedSubject> ldapSubject = service.authenticate(request(Map.of(
           "Authorization", basic("alice", "ldap-secret"))));
@@ -235,6 +239,41 @@ class SecurityAuthenticationServiceTest {
       assertTrue(localFallback.isPresent());
       assertEquals("Local", localFallback.get().source());
       assertTrue(localFallback.get().permissionSubject().groupIds().contains("local-role"));
+
+      SecurityRealmRecord realm = dao.findRealm("ldap").orElseThrow();
+      Map<String, Object> strict = new LinkedHashMap<>(realm.attributes());
+      strict.put(ExternalRoleMappings.LEGACY_MATCHING, false);
+      strict.put(ExternalRoleMappings.MAPPINGS, Map.of("mapped-reader", List.of("nx-ldap-team")));
+      dao.realms.set(0, new SecurityRealmRecord(1L, "ldap", "LDAP", "Corporate LDAP", true, 0, strict));
+      var legacySubject = new AuthenticatedSubject("LDAP", "alice", "ldap", null,
+          ldapSubject.orElseThrow().permissionSubject());
+      ldapCache.find("LDAP/alice", "ldap-secret", () -> Optional.of(legacySubject));
+      var sibling = new SecurityAuthenticationService(dao, OBJECT_MAPPER,
+          "X-Nexus-Plus-Token", "nx-anonymous", shared, OutboundRequestPolicy.allowPrivateForTests(),
+          transportFactory, null, new BasicAuthCache(shared, true, 60, 5), null);
+      var legacyCredentials = request(Map.of("Authorization", basic("LDAP/alice", "ldap-secret")));
+      assertEquals(Set.of("mapped-reader", "nx-anonymous"),
+          sibling.authenticate(legacyCredentials).orElseThrow().permissionSubject().groupIds());
+
+      ldap.delete("cn=nx-ldap-team,ou=groups,dc=example,dc=com");
+      assertEquals(Set.of("nx-anonymous"), service.authenticateCredentials("alice", "ldap-secret")
+          .orElseThrow().permissionSubject().groupIds());
+      var explicitBasicLogin = request(Map.of("Authorization", basic("alice", "ldap-secret")),
+          Map.of(), "/internal/security/basic/login");
+      assertEquals(Set.of("nx-anonymous"),
+          sibling.authenticate(explicitBasicLogin).orElseThrow().permissionSubject().groupIds());
+      assertEquals(Set.of(), dao.findUser("LDAP", "alice").orElseThrow().attributes().get("groups"));
+
+      ldap.shutDown(true);
+      var credentials = request(Map.of("Authorization", basic("alice", "ldap-secret")));
+      assertEquals(Set.of("mapped-reader", "nx-anonymous"),
+          sibling.authenticate(credentials).orElseThrow().permissionSubject().groupIds());
+
+      Map<String, Object> revoked = new LinkedHashMap<>(strict);
+      revoked.remove(ExternalRoleMappings.MAPPINGS);
+      dao.realms.set(0, new SecurityRealmRecord(1L, "ldap", "LDAP", "Corporate LDAP", true, 0, revoked));
+      assertEquals(Set.of("nx-anonymous"),
+          sibling.authenticate(credentials).orElseThrow().permissionSubject().groupIds());
     } finally {
       ldap.shutDown(true);
     }
@@ -809,6 +848,33 @@ class SecurityAuthenticationServiceTest {
       assertEquals("Alice", stored.firstName());
       assertEquals("OIDC", stored.lastName());
       assertEquals("subject-123", stored.externalId());
+
+      // Existing browser sessions carry verified claim names and resolve the shared policy anew.
+      Map<String, Object> session = new LinkedHashMap<>();
+      service.storeSessionSubject(request(Map.of(), session), authenticated.orElseThrow());
+      dao.roles(stored.id(), "local-role");
+      SecurityRealmRecord oidc = dao.findRealm("oidc").orElseThrow();
+      Map<String, Object> strict = new LinkedHashMap<>(oidc.attributes());
+      strict.put(ExternalRoleMappings.LEGACY_MATCHING, false);
+      strict.put(ExternalRoleMappings.MAPPINGS, Map.of("mapped-reader", List.of("nx-oidc-team")));
+      dao.realms.set(0, new SecurityRealmRecord(1L, "oidc", "OIDC", "OIDC", true, 0, strict));
+
+      var mapped = service.authenticate(request(Map.of(), session)).orElseThrow();
+      assertEquals(Set.of("mapped-reader", "local-role", "nx-anonymous"), mapped.permissionSubject().groupIds());
+      assertEquals(Set.of("mapped-reader", "local-role", "nx-anonymous"),
+          service.authenticateOidcToken(token).orElseThrow().permissionSubject().groupIds());
+
+      var legacySubject = new AuthenticatedSubject("OIDC", "alice", "oidc", null,
+          new com.github.klboke.kkrepo.auth.PermissionSubject("OIDC", "alice", Set.of("nx-admin"), null));
+      var legacySession = request(Map.of(), Map.of(AuthenticatedSubject.SESSION_ATTRIBUTE, legacySubject));
+      assertEquals(Set.of("local-role", "nx-anonymous"),
+          service.authenticate(legacySession).orElseThrow().permissionSubject().groupIds());
+
+      Map<String, Object> revoked = new LinkedHashMap<>(strict);
+      revoked.remove(ExternalRoleMappings.MAPPINGS);
+      dao.realms.set(0, new SecurityRealmRecord(1L, "oidc", "OIDC", "OIDC", true, 0, revoked));
+      assertEquals(Set.of("local-role", "nx-anonymous"),
+          service.authenticate(request(Map.of(), session)).orElseThrow().permissionSubject().groupIds());
     } finally {
       jwks.stop(0);
     }
@@ -1116,6 +1182,7 @@ class SecurityAuthenticationServiceTest {
   void authenticatesBrowserSessionSubjectBeforeBasicCredentials() {
     FakeSecurityDao dao = new FakeSecurityDao();
     dao.realm(new SecurityRealmRecord(1L, "local", "LOCAL", "Local", true, 0, Map.of("source", "Local")));
+    dao.realm(new SecurityRealmRecord(2L, "oidc", "OIDC", "OIDC", true, 20, Map.of("source", "Local")));
     dao.user(user(1L, "Local", "alice", NEXUS_SHIRO1_ADMIN123));
     dao.user(user(2L, "Local", "bob", NEXUS_SHIRO1_ADMIN123));
     dao.roles(1L, "session-role");
@@ -1591,6 +1658,11 @@ class SecurityAuthenticationServiceTest {
     @Override
     public List<SecurityRealmRecord> listRealms() {
       return realms;
+    }
+
+    @Override
+    public Optional<SecurityRealmRecord> findRealm(String realmId) {
+      return realms.stream().filter(realm -> realm.realmId().equals(realmId)).findFirst();
     }
 
     @Override

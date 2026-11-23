@@ -54,7 +54,17 @@ public final class SecurityPayloads {
       String externalId,
       boolean external,
       List<String> roles,
-      Map<String, Object> attributes) {
+      Map<String, Object> attributes,
+      List<String> externalRoles) {
+    public UserView(Long id, String source, String userId, String firstName, String lastName,
+        String email, String status, String externalId, boolean external, List<String> roles,
+        Map<String, Object> attributes) {
+      this(id, source, userId, firstName, lastName, email, status, externalId, external, roles,
+          attributes, null);
+    }
+  }
+
+  public record ExternalRoleMapping(String realmId, String externalName) {
   }
 
   public record RoleCommand(
@@ -65,7 +75,12 @@ public final class SecurityPayloads {
       Boolean readOnly,
       List<String> privileges,
       List<String> roles,
-      Map<String, Object> attributes) {
+      Map<String, Object> attributes,
+      List<ExternalRoleMapping> externalMappings) {
+    public RoleCommand(String roleId, String source, String name, String description, Boolean readOnly,
+        List<String> privileges, List<String> roles, Map<String, Object> attributes) {
+      this(roleId, source, name, description, readOnly, privileges, roles, attributes, null);
+    }
   }
 
   public record RoleView(
@@ -76,7 +91,12 @@ public final class SecurityPayloads {
       boolean readOnly,
       List<String> privileges,
       List<String> roles,
-      Map<String, Object> attributes) {
+      Map<String, Object> attributes,
+      List<ExternalRoleMapping> externalMappings) {
+    public RoleView(String roleId, String source, String name, String description, boolean readOnly,
+        List<String> privileges, List<String> roles, Map<String, Object> attributes) {
+      this(roleId, source, name, description, readOnly, privileges, roles, attributes, List.of());
+    }
   }
 
   public record PrivilegeCommand(

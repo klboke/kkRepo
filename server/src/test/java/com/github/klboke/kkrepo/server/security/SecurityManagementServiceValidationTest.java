@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.auth.PermissionAction;
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import com.github.klboke.kkrepo.auth.RepositoryPermission;
@@ -21,6 +22,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AdminBootstrapCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AnonymousSettingsCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.ApiKeyCommand;
+import com.github.klboke.kkrepo.server.security.SecurityPayloads.ExternalRoleMapping;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.LdapSettingsCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.PrivilegeCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.RoleCommand;
@@ -34,6 +36,94 @@ import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 class SecurityManagementServiceValidationTest {
+
+  @Test
+  void storesProviderScopedMappingsAndPreservesLastSignInOnUserEdit() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.upsertRealm(new SecurityRealmRecord(1L, "oidc", "OIDC", "OIDC", true, 20,
+        Map.of("legacyRoleMatching", false)));
+    dao.upsertRealm(new SecurityRealmRecord(2L, "ldap", "LDAP", "LDAP", true, 10,
+        Map.of("legacyRoleMatching", false)));
+    SecurityManagementService service = new SecurityManagementService(dao);
+    var mapping = new ExternalRoleMapping("oidc", "engineering");
+    var created = service.saveRole(new RoleCommand("reader", null, "Reader", null, false,
+        List.of(), List.of(), Map.of(), List.of(mapping)));
+    assertEquals(List.of(mapping), created.externalMappings());
+
+    var groups = Map.<String, Object>of("groups", List.of("engineering", "reader"));
+    var oidc = service.saveUser(new UserCommand("OIDC", "alice", null, null, null, null, null,
+        "ACTIVE", "subject-1", List.of(), Map.of("groups", groups.get("groups"),
+            "externalRoleRealm", "oidc")));
+    var ldap = service.saveUser(new UserCommand("LDAP", "alice", null, null, null, null, null,
+        "ACTIVE", "subject-2", List.of(), Map.of("groups", groups.get("groups"),
+            "externalRoleRealm", "ldap")));
+    assertEquals(List.of("reader"), oidc.externalRoles());
+    assertEquals(List.of(), ldap.externalRoles());
+
+    var edited = service.saveUser(new UserCommand("OIDC", "alice", "Alice", null, null, null,
+        null, "ACTIVE", null, List.of(), null));
+    assertEquals("subject-1", edited.externalId());
+    assertEquals(List.of(), edited.roles());
+    assertEquals(List.of("reader"), edited.externalRoles());
+
+    service.deleteRole("reader");
+    service.saveRole(new RoleCommand("reader", null, "Reader", null, false,
+        List.of(), List.of(), Map.of()));
+    assertEquals(List.of(), service.findUser("OIDC", "alice").orElseThrow().externalRoles());
+  }
+
+  @Test
+  void validatesExternalMappingsAndKeepsBuiltInRoleDefinitionReadOnly() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    seedAdminRole(dao);
+    dao.upsertRealm(new SecurityRealmRecord(1L, "oidc", "OIDC", "OIDC", true, 20, Map.of()));
+    SecurityManagementService service = new SecurityManagementService(dao);
+    var mapping = new ExternalRoleMapping("oidc", "operations");
+    assertThrows(SecurityValidationException.class, () -> service.saveExternalRoleMappings("missing", List.of(mapping)));
+    assertThrows(SecurityValidationException.class, () -> service.saveExternalRoleMappings("nx-admin", null));
+    assertThrows(SecurityValidationException.class, () -> service.saveExternalRoleMappings("nx-admin",
+        List.of(new ExternalRoleMapping("local", "operations"))));
+    assertThrows(SecurityValidationException.class,
+        () -> service.saveExternalRoleMappings("nx-admin", List.of(mapping, mapping)));
+    assertThrows(SecurityValidationException.class, () -> service.saveExternalRoleMappings("nx-admin",
+        List.of(new ExternalRoleMapping("oidc", "x".repeat(256)))));
+
+    var saved = service.saveExternalRoleMappings("nx-admin", List.of(mapping));
+    assertEquals(true, saved.readOnly());
+    assertEquals(List.of("nx-all"), saved.privileges());
+    assertEquals(List.of(mapping), saved.externalMappings());
+  }
+
+  @Test
+  void providerSettingsPreserveMappingsAndValidateLegacyMatchingFlag() throws Exception {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    dao.upsertRealm(new SecurityRealmRecord(1L, "ldap", "LDAP", "LDAP", true, 10, Map.of(
+        "url", "ldaps://ldap.example.com",
+        ExternalRoleMappings.MAPPINGS, Map.of("reader", List.of("engineering")))));
+    dao.role(role("reader", false));
+    SecurityManagementService service = new SecurityManagementService(dao);
+    ObjectMapper mapper = new ObjectMapper();
+
+    var invalid = mapper.readValue("""
+        {"attributes":{"legacyRoleMatching":"false"}}
+        """, LdapSettingsCommand.class);
+    assertThrows(SecurityValidationException.class, () -> service.saveLdapSettings(invalid));
+    var valid = mapper.readValue("""
+        {"enabled":false,"attributes":{"legacyRoleMatching":false,"externalRoleMappings":{"nx-admin":["engineering"]}}}
+        """, LdapSettingsCommand.class);
+    assertEquals(false, service.saveLdapSettings(valid).attributes().get("legacyRoleMatching"));
+
+    var external = new UserCommand("LDAP", "alice", null, null, null, null, null, "ACTIVE",
+        "uid=alice", List.of(), Map.of("groups", " engineering ", "externalRoleRealm", "ldap"));
+    assertEquals(List.of(), service.saveUser(external).externalRoles());
+    assertEquals(List.of(new ExternalRoleMapping("ldap", "engineering")),
+        service.findRole("reader").orElseThrow().externalMappings());
+    var enabled = mapper.readValue("""
+        {"enabled":true}
+        """, LdapSettingsCommand.class);
+    assertEquals(false, service.saveLdapSettings(enabled).attributes().get("legacyRoleMatching"));
+    assertEquals(List.of("reader"), service.findUser("LDAP", "alice").orElseThrow().externalRoles());
+  }
 
   @Test
   void saveUserRejectsMissingRoleReference() {
@@ -632,7 +722,7 @@ class SecurityManagementServiceValidationTest {
   }
 
   @Test
-  void createApiKeyForOwnerReusesRecoverableExistingToken() {
+  void packageClientLoginReusesRecoverableExistingToken() {
     FakeSecurityDao dao = new FakeSecurityDao();
     SecurityManagementService service = new SecurityManagementService(dao);
 
@@ -640,7 +730,7 @@ class SecurityManagementServiceValidationTest {
         "Local",
         "alice",
         new ApiKeyCommand("NpmToken", null, null, "npm login", null, List.of(), null, null, null));
-    var second = service.createApiKeyForOwner(
+    var second = service.getOrCreateApiKeyForLogin(
         "Local",
         "alice",
         new ApiKeyCommand("NpmToken", null, null, "npm login", null, List.of(), null, null, null));
@@ -664,7 +754,7 @@ class SecurityManagementServiceValidationTest {
         "alice",
         new ApiKeyCommand("NpmToken", null, null, "npm login", null, List.of(), null, null, null));
     var reset = service.resetApiKeyForOwner(first.apiKey().id(), "Local", "alice");
-    var afterResetCreate = service.createApiKeyForOwner(
+    var afterResetCreate = service.getOrCreateApiKeyForLogin(
         "Local",
         "alice",
         new ApiKeyCommand("NpmToken", null, null, "npm login", null, List.of(), null, null, null));
@@ -673,6 +763,25 @@ class SecurityManagementServiceValidationTest {
     assertEquals(first.apiKey().id(), reset.apiKey().id());
     assertEquals(reset.token(), afterResetCreate.token());
     assertEquals(1, service.listApiKeysForOwner("Local", "alice").size());
+  }
+
+  @Test
+  void ownerApiKeyCreationRejectsAnExistingKeyWithAnUnreadablePayload() {
+    FakeSecurityDao dao = new FakeSecurityDao();
+    SecurityManagementService service = new SecurityManagementService(dao);
+    var original = new ApiKeyRecord(
+        10L, "GenericToken", "Local", "alice", "original", "ACTIVE",
+        "existing-hash", "existing", Map.of("values", List.of("read")),
+        "unreadable", null, null, null, null);
+    dao.apiKey(original);
+
+    assertThrows(ApiKeyAlreadyExistsException.class, () -> service.createApiKeyForOwner(
+        "Local", "alice",
+        new ApiKeyCommand(
+            "GenericToken", null, null, "replacement", null, List.of("publish"),
+            null, null, null)));
+
+    assertEquals(original, dao.findApiKey("GenericToken", "Local", "alice").orElseThrow());
   }
 
   @Test
@@ -1017,6 +1126,11 @@ class SecurityManagementServiceValidationTest {
       }
 
       @Override
+      public Optional<SecurityRealmRecord> findRealmForUpdate(String realmId) {
+        return findRealm(realmId);
+      }
+
+      @Override
       public void upsertRealm(SecurityRealmRecord record) {
         SecurityRealmRecord stored = new SecurityRealmRecord(
             record.id() == null ? (long) realms.size() + 1 : record.id(),
@@ -1034,9 +1148,14 @@ class SecurityManagementServiceValidationTest {
         // not needed for service-level assertions
       }
 
-      @Override
-      public Optional<SecurityRoleRecord> findRole(String roleId) {
+    @Override
+    public Optional<SecurityRoleRecord> findRole(String roleId) {
       return Optional.ofNullable(roles.get(roleId));
+    }
+
+    @Override
+    public List<SecurityRoleRecord> listRoles() {
+      return List.copyOf(roles.values());
     }
 
     @Override
@@ -1213,6 +1332,15 @@ class SecurityManagementServiceValidationTest {
           .filter(apiKey -> apiKey.ownerSource().equals(ownerSource))
           .filter(apiKey -> apiKey.ownerUserId().equals(ownerUserId))
           .findFirst();
+    }
+
+    @Override
+    public boolean insertApiKeyIfAbsent(ApiKeyRecord record) {
+      if (findApiKey(record.domain(), record.ownerSource(), record.ownerUserId()).isPresent()) {
+        return false;
+      }
+      upsertApiKey(record);
+      return true;
     }
 
     @Override

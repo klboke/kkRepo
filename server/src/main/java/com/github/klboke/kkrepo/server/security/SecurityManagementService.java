@@ -17,6 +17,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRoleRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
 import com.github.klboke.kkrepo.server.security.SecurityAuthorizationCache.AuthorizationSnapshot;
 import com.github.klboke.kkrepo.server.security.SecurityCatalogCache.SecurityCatalog;
+import com.github.klboke.kkrepo.server.security.SecurityPayloads.ExternalRoleMapping;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.ApiKeyCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.ApiKeyView;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AdminBootstrapCommand;
@@ -54,6 +55,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.UnaryOperator;
+import java.util.stream.Collectors;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -151,10 +154,12 @@ public class SecurityManagementService implements AccessDecisionService {
   public List<UserView> listUsers(String source, String userId) {
     String sourceFilter = blankToNull(source) == null ? null : normalizeSource(source);
     String userFilter = blankToNull(userId);
+    List<SecurityRealmRecord> realms = securityDao.listRealms();
+    Set<String> definedRoles = definedRoleIds();
     return securityDao.listUsers().stream()
         .filter(record -> sourceFilter == null || record.source().equals(sourceFilter))
         .filter(record -> userFilter == null || record.userId().contains(userFilter))
-        .map(this::toUserView)
+        .map(record -> toUserView(record, realms, definedRoles))
         .toList();
   }
 
@@ -236,7 +241,8 @@ public class SecurityManagementService implements AccessDecisionService {
         .map(existing -> new SecurityUserRecord(
             existing.id(), source, userId, record.firstName(), record.lastName(), record.email(),
             passwordHash == null ? existing.passwordHash() : passwordHash,
-            record.status(), record.externalId(), record.attributes()))
+            record.status(), firstNonBlank(record.externalId(), existing.externalId()),
+            updatedUserAttributes(existing, attributes)))
         .orElse(record);
     if (stored.id() == null) {
       long id = securityDao.insertUser(stored);
@@ -301,7 +307,10 @@ public class SecurityManagementService implements AccessDecisionService {
 
   @Transactional(readOnly = true)
   public List<RoleView> listRoles() {
-    return securityDao.listRoles().stream().map(this::toRoleView).toList();
+    var mappings = ExternalRoleMappings.list(securityDao.listRealms());
+    return securityDao.listRoles().stream()
+        .map(role -> toRoleView(role, mappings.getOrDefault(role.roleId(), List.of())))
+        .toList();
   }
 
   @Transactional(readOnly = true)
@@ -312,6 +321,8 @@ public class SecurityManagementService implements AccessDecisionService {
   @Transactional
   public RoleView saveRole(RoleCommand command) {
     String roleId = requireText(command.roleId(), "roleId");
+    // Lock providers before mutating the role when saving its definition and mappings together.
+    var realms = command.externalMappings() == null ? List.<SecurityRealmRecord>of() : lockExternalRoleRealms();
     SecurityRoleRecord existing = securityDao.findRole(roleId).orElse(null);
     if (existing != null && existing.readOnly()) {
       throw new SecurityValidationException("Role is read-only: " + roleId);
@@ -329,17 +340,72 @@ public class SecurityManagementService implements AccessDecisionService {
     securityDao.upsertRole(record);
     securityDao.replaceRolePrivileges(roleId, privilegeIds);
     securityDao.replaceRoleInheritance(roleId, childRoleIds);
+    if (command.externalMappings() != null) {
+      replaceExternalRoleMappings(roleId, command.externalMappings(), realms);
+    }
     invalidateAuthorizationCacheAfterCommit();
     return toRoleView(securityDao.findRole(roleId).orElseThrow());
   }
 
   @Transactional
+  public RoleView saveExternalRoleMappings(String roleId, List<ExternalRoleMapping> mappings) {
+    var realms = lockExternalRoleRealms();
+    SecurityRoleRecord role = securityDao.findRole(requireText(roleId, "roleId"))
+        .orElseThrow(() -> new SecurityValidationException("Role not found: " + roleId));
+    if (mappings == null) {
+      throw new SecurityValidationException("externalMappings must be an array");
+    }
+    replaceExternalRoleMappings(roleId, mappings, realms);
+    invalidateAuthorizationCacheAfterCommit();
+    return toRoleView(role);
+  }
+
+  private List<SecurityRealmRecord> lockExternalRoleRealms() {
+    return ExternalRoleMappings.REALMS.stream()
+        .flatMap(realmId -> securityDao.findRealmForUpdate(realmId).stream())
+        .toList();
+  }
+
+  private void replaceExternalRoleMappings(String roleId, List<ExternalRoleMapping> entries,
+      List<SecurityRealmRecord> realms) {
+    Map<String, Set<String>> byRealm = new LinkedHashMap<>();
+    Set<String> available = realms.stream().map(SecurityRealmRecord::realmId).collect(Collectors.toSet());
+    for (ExternalRoleMapping entry : entries) {
+      if (entry == null || entry.realmId() == null || !available.contains(entry.realmId())) {
+        throw new SecurityValidationException("Choose an LDAP or OIDC realm for each mapping");
+      }
+      String name = requireText(entry.externalName(), "externalName");
+      if (name.length() > 255 || !byRealm.computeIfAbsent(entry.realmId(), ignored -> new LinkedHashSet<>()).add(name)) {
+        throw new SecurityValidationException("External role names must be unique per provider and at most 255 characters");
+      }
+    }
+    for (SecurityRealmRecord realm : realms) {
+      var mappings = ExternalRoleMappings.byRole(realm);
+      List<String> newNames = List.copyOf(byRealm.getOrDefault(realm.realmId(), Set.of()));
+      if (newNames.equals(mappings.getOrDefault(roleId, List.of()))) {
+        continue;
+      }
+      if (newNames.isEmpty()) {
+        mappings.remove(roleId);
+      } else {
+        mappings.put(roleId, newNames);
+      }
+      var attributes = new LinkedHashMap<>(ExternalRoleMappings.attributes(realm));
+      attributes.put(ExternalRoleMappings.MAPPINGS, mappings);
+      securityDao.upsertRealm(new SecurityRealmRecord(realm.id(), realm.realmId(), realm.type(),
+          realm.name(), realm.enabled(), realm.priority(), attributes));
+    }
+  }
+
+  @Transactional
   public void deleteRole(String roleId) {
+    var realms = lockExternalRoleRealms();
     SecurityRoleRecord existing = securityDao.findRole(requireText(roleId, "roleId"))
         .orElseThrow(() -> new SecurityValidationException("Role not found: " + roleId));
     if (existing.readOnly()) {
       throw new SecurityValidationException("Role is read-only: " + roleId);
     }
+    replaceExternalRoleMappings(roleId, List.of(), realms);
     securityDao.removeRoleReferences(roleId);
     int removed = securityDao.deleteRole(roleId);
     if (removed == 0) {
@@ -396,6 +462,26 @@ public class SecurityManagementService implements AccessDecisionService {
   @Transactional(readOnly = true)
   public List<RealmView> listRealms() {
     return securityDao.listRealms().stream().map(this::toRealmView).toList();
+  }
+
+  @Transactional(readOnly = true)
+  Optional<SecurityRealmRecord> ldapRealmRecord() {
+    return securityDao.findRealm(LDAP_REALM_ID);
+  }
+
+  @Transactional
+  SecurityRealmRecord updateLdapRealm(UnaryOperator<SecurityRealmRecord> change) {
+    var existing = securityDao.findRealmForUpdate(LDAP_REALM_ID).orElseGet(this::defaultLdapRealm);
+    var updated = change.apply(existing);
+    if (!updated.equals(existing)) {
+      saveProviderRealm(updated);
+    }
+    return updated;
+  }
+
+  private SecurityRealmRecord defaultLdapRealm() {
+    return new SecurityRealmRecord(null, LDAP_REALM_ID, "LDAP", "LDAP", false, 10,
+        Map.of("source", "LDAP", "nexusRealm", LDAP_REALM));
   }
 
   @Transactional(readOnly = true)
@@ -469,7 +555,7 @@ public class SecurityManagementService implements AccessDecisionService {
           existing.name(),
           enabled,
           requestedPriority == null ? existing.priority() : requestedPriority,
-          existing.attributes()));
+          null));
     }
     return saveRealms(commands);
   }
@@ -496,7 +582,11 @@ public class SecurityManagementService implements AccessDecisionService {
       if (!SUPPORTED_REALMS.contains(realmId)) {
         throw new SecurityValidationException("Unsupported realm: " + realmId);
       }
-      SecurityRealmRecord existing = securityDao.findRealm(realmId).orElse(null);
+      SecurityRealmRecord existing = securityDao.findRealmForUpdate(realmId).orElse(null);
+      Map<String, Object> attributes = existing == null || existing.attributes() == null
+          ? new LinkedHashMap<>() : new LinkedHashMap<>(existing.attributes());
+      // Older clients echo the displayed attributes when toggling or reordering realms.
+      attributes.putAll(realmListAttributes(command.attributes()));
       SecurityRealmRecord record = new SecurityRealmRecord(
           existing == null ? null : existing.id(),
           realmId,
@@ -506,17 +596,27 @@ public class SecurityManagementService implements AccessDecisionService {
               ? existing != null && existing.enabled()
               : command.enabled()),
           command.priority() == null ? defaultPriority : command.priority(),
-          command.attributes() == null && existing != null ? existing.attributes() : copyMap(command.attributes()));
+          attributes);
       securityDao.upsertRealm(record);
       defaultPriority += 10;
     }
+    updateActiveRealmConfig();
+    return listRealms();
+  }
+
+  private void saveProviderRealm(SecurityRealmRecord record) {
+    securityDao.upsertRealm(record);
+    updateActiveRealmConfig();
+    invalidateAuthorizationCacheAfterCommit();
+  }
+
+  private void updateActiveRealmConfig() {
     List<String> active = securityDao.listRealms().stream()
         .filter(SecurityRealmRecord::enabled)
         .sorted((left, right) -> Integer.compare(left.priority(), right.priority()))
         .map(SecurityRealmRecord::realmId)
         .toList();
     securityDao.updateRealmConfig(active);
-    return listRealms();
   }
 
   @Transactional(readOnly = true)
@@ -535,15 +635,7 @@ public class SecurityManagementService implements AccessDecisionService {
 
     @Transactional(readOnly = true)
     public LdapSettingsView ldapSettings() {
-      SecurityRealmRecord record = securityDao.findRealm(LDAP_REALM_ID)
-          .orElseGet(() -> new SecurityRealmRecord(
-              null,
-              LDAP_REALM_ID,
-              "LDAP",
-              "LDAP",
-              false,
-              10,
-              Map.of("source", "LDAP", "nexusRealm", LDAP_REALM)));
+      SecurityRealmRecord record = ldapRealmRecord().orElseGet(this::defaultLdapRealm);
       return toLdapSettingsView(record);
     }
 
@@ -552,28 +644,21 @@ public class SecurityManagementService implements AccessDecisionService {
       if (command == null) {
         command = emptyLdapSettingsCommand();
       }
-      SecurityRealmRecord existing = securityDao.findRealm(LDAP_REALM_ID).orElse(null);
-      Map<String, Object> attributes = ldapAttributes(
-          command,
-          existing == null ? Map.of() : existing.attributes());
+      SecurityRealmRecord existing = securityDao.findRealmForUpdate(LDAP_REALM_ID).orElseGet(this::defaultLdapRealm);
+      Map<String, Object> attributes = ldapAttributes(command, existing.attributes());
       String name = firstNonBlank(
           command.name(),
           asString(attributes.get("name")),
-          existing == null ? null : existing.name(),
+          existing.name(),
           "LDAP");
-      boolean enabled = command.enabled() == null ? existing != null && existing.enabled() : command.enabled();
+      boolean enabled = command.enabled() == null ? existing.enabled() : command.enabled();
       if (enabled && blankToNull(asString(attributes.get("url"))) == null) {
         throw new SecurityValidationException("LDAP URL is required when LDAP realm is enabled");
       }
-      int priority = command.priority() == null ? existing == null ? 10 : existing.priority() : command.priority();
-      saveRealms(List.of(new RealmCommand(
-          LDAP_REALM_ID,
-          "LDAP",
-          name,
-          enabled,
-          priority,
-          attributes)));
-      return ldapSettings();
+      int priority = command.priority() == null ? existing.priority() : command.priority();
+      var updated = new SecurityRealmRecord(existing.id(), LDAP_REALM_ID, "LDAP", name, enabled, priority, attributes);
+      saveProviderRealm(updated);
+      return toLdapSettingsView(updated);
     }
 
     @Transactional
@@ -583,7 +668,7 @@ public class SecurityManagementService implements AccessDecisionService {
           null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
           null, null, null);
     }
-    SecurityRealmRecord existing = securityDao.findRealm("oidc").orElse(null);
+    SecurityRealmRecord existing = securityDao.findRealmForUpdate("oidc").orElse(null);
     Map<String, Object> attributes = new LinkedHashMap<>();
     if (existing != null && existing.attributes() != null) {
       attributes.putAll(existing.attributes());
@@ -591,6 +676,8 @@ public class SecurityManagementService implements AccessDecisionService {
     if (command.attributes() != null) {
       attributes.putAll(command.attributes());
     }
+    Map<String, Object> previous = existing == null ? Map.of() : ExternalRoleMappings.attributes(existing);
+    preserveRoleMappingSettings(attributes, previous, firstPresent(previous, "issuer", "issuerUri", "jwksUri", "jwks_url", "jwkSetUri") != null);
 
     attributes.put("source", normalizeSource(defaultString(
         command.source(),
@@ -660,14 +747,10 @@ public class SecurityManagementService implements AccessDecisionService {
       throw new SecurityValidationException("jwksUri is required when OIDC realm is enabled");
     }
     int priority = command.priority() == null ? existing == null ? 20 : existing.priority() : command.priority();
-    saveRealms(List.of(new RealmCommand(
-        "oidc",
-        "OIDC",
-        "OIDC",
-        enabled,
-        priority,
-        attributes)));
-    return oidcSettings();
+    var updated = new SecurityRealmRecord(existing == null ? null : existing.id(), "oidc", "OIDC", "OIDC",
+        enabled, priority, attributes);
+    saveProviderRealm(updated);
+    return toOidcSettingsView(updated);
   }
 
   @Transactional(readOnly = true)
@@ -807,10 +890,14 @@ public class SecurityManagementService implements AccessDecisionService {
 
   @Transactional
   public CreatedApiKeyView createApiKey(ApiKeyCommand command) {
-    return createApiKey(command, true);
+    return writeApiKey(command, ApiKeyWrite.REUSE_EXISTING);
   }
 
-  private CreatedApiKeyView createApiKey(ApiKeyCommand command, boolean reuseExisting) {
+  private enum ApiKeyWrite {
+    CREATE_ONLY, REUSE_EXISTING, ROTATE
+  }
+
+  private CreatedApiKeyView writeApiKey(ApiKeyCommand command, ApiKeyWrite mode) {
     if (command == null) {
       command = new ApiKeyCommand(null, null, null, null, null, null, null, null, null);
     }
@@ -822,7 +909,7 @@ public class SecurityManagementService implements AccessDecisionService {
     String tokenPrefix = null;
     String encryptedPayload = blankToNull(command.encryptedPayload());
     if (hash == null) {
-      if (reuseExisting) {
+      if (mode == ApiKeyWrite.REUSE_EXISTING) {
         Optional<CreatedApiKeyView> existing = existingApiKeyToken(domain, ownerSource, ownerUserId);
         if (existing.isPresent()) {
           return existing.get();
@@ -849,7 +936,13 @@ public class SecurityManagementService implements AccessDecisionService {
         null,
         command.expiresAt(),
         null);
-    securityDao.upsertApiKey(record);
+    if (mode == ApiKeyWrite.CREATE_ONLY) {
+      if (!securityDao.insertApiKeyIfAbsent(record)) {
+        throw new ApiKeyAlreadyExistsException();
+      }
+    } else {
+      securityDao.upsertApiKey(record);
+    }
     evictAuthCachesAfterCommit();
     ApiKeyView view = securityDao.findApiKey(domain, ownerSource, ownerUserId)
         .map(this::toApiKeyView)
@@ -872,10 +965,23 @@ public class SecurityManagementService implements AccessDecisionService {
       String ownerSource,
       String ownerUserId,
       ApiKeyCommand command) {
+    return writeApiKey(ownedApiKeyCommand(ownerSource, ownerUserId, command), ApiKeyWrite.CREATE_ONLY);
+  }
+
+  /** Reuses the format token after the package client's credential login. */
+  @Transactional
+  public CreatedApiKeyView getOrCreateApiKeyForLogin(
+      String ownerSource, String ownerUserId, ApiKeyCommand command) {
+    return writeApiKey(
+        ownedApiKeyCommand(ownerSource, ownerUserId, command), ApiKeyWrite.REUSE_EXISTING);
+  }
+
+  private static ApiKeyCommand ownedApiKeyCommand(
+      String ownerSource, String ownerUserId, ApiKeyCommand command) {
     if (command == null) {
       command = new ApiKeyCommand(null, null, null, null, null, null, null, null, null);
     }
-    return createApiKey(new ApiKeyCommand(
+    return new ApiKeyCommand(
         command.domain(),
         normalizeSource(ownerSource),
         requireText(ownerUserId, "ownerUserId"),
@@ -884,7 +990,7 @@ public class SecurityManagementService implements AccessDecisionService {
         command.scopes(),
         command.expiresAt(),
         null,
-        null));
+        null);
   }
 
   @Transactional
@@ -902,7 +1008,7 @@ public class SecurityManagementService implements AccessDecisionService {
   }
 
   private CreatedApiKeyView resetApiKey(ApiKeyView existing) {
-    return createApiKey(new ApiKeyCommand(
+    return writeApiKey(new ApiKeyCommand(
         existing.domain(),
         existing.ownerSource(),
         existing.ownerUserId(),
@@ -912,7 +1018,7 @@ public class SecurityManagementService implements AccessDecisionService {
         existing.expiresAt(),
         null,
         null),
-        false);
+        ApiKeyWrite.ROTATE);
   }
 
   @Transactional
@@ -1197,7 +1303,65 @@ public class SecurityManagementService implements AccessDecisionService {
     return transactions;
   }
 
+  private static Map<String, Object> updatedUserAttributes(SecurityUserRecord existing,
+      Map<String, Object> submitted) {
+    if (DEFAULT_SOURCE.equals(existing.source()) || existing.attributes() == null) {
+      return submitted;
+    }
+    Map<String, Object> result = new LinkedHashMap<>(existing.attributes());
+    result.putAll(submitted);
+    for (String key : List.of("groups", "claims", "dn", ExternalRoleMappings.USER_REALM)) {
+      if (existing.attributes().containsKey(key)) {
+        result.put(key, existing.attributes().get(key));
+      } else {
+        result.remove(key);
+      }
+    }
+    return result;
+  }
+
+  private static void preserveRoleMappingSettings(Map<String, Object> attributes,
+      Map<String, Object> previous, boolean configured) {
+    attributes.remove(ExternalRoleMappings.MAPPINGS);
+    if (previous.containsKey(ExternalRoleMappings.MAPPINGS)) {
+      attributes.put(ExternalRoleMappings.MAPPINGS, previous.get(ExternalRoleMappings.MAPPINGS));
+    }
+    attributes.putIfAbsent(ExternalRoleMappings.LEGACY_MATCHING, configured);
+    if (!(attributes.get(ExternalRoleMappings.LEGACY_MATCHING) instanceof Boolean)) {
+      throw new SecurityValidationException("legacyRoleMatching must be a boolean");
+    }
+  }
+
+  private Set<String> definedRoleIds() {
+    return securityDao.listRoles().stream().map(SecurityRoleRecord::roleId).collect(Collectors.toSet());
+  }
+
   private UserView toUserView(SecurityUserRecord record) {
+    return DEFAULT_SOURCE.equals(record.source()) ? toUserView(record, List.of(), Set.of())
+        : toUserView(record, securityDao.listRealms(), definedRoleIds());
+  }
+
+  private List<String> visibleExternalRoles(SecurityUserRecord record,
+      List<SecurityRealmRecord> realms, Set<String> definedRoles) {
+    if (DEFAULT_SOURCE.equals(record.source()) || record.attributes() == null) {
+      return List.of();
+    }
+    Object realmId = record.attributes().get(ExternalRoleMappings.USER_REALM);
+    var candidateRealms = realms.stream().filter(realm -> ExternalRoleMappings.REALMS.contains(realm.realmId()))
+        .filter(realm -> normalizeSource(defaultString(asString(ExternalRoleMappings.attributes(realm).get("source")),
+            realm.type())).equals(record.source()))
+        .filter(realm -> realmId == null ? ExternalRoleMappings.legacyMatching(realm) : realm.realmId().equals(realmId))
+        .toList();
+    if (candidateRealms.size() != 1) {
+      return List.of();
+    }
+    return ExternalRoleMappings.resolve(candidateRealms.getFirst(),
+            ExternalRoleMappings.names(record.attributes().get("groups"))).stream()
+        .filter(definedRoles::contains).sorted().toList();
+  }
+
+  private UserView toUserView(SecurityUserRecord record, List<SecurityRealmRecord> realms,
+      Set<String> definedRoles) {
     return new UserView(
         record.id(),
         record.source(),
@@ -1209,7 +1373,8 @@ public class SecurityManagementService implements AccessDecisionService {
         record.externalId(),
         !DEFAULT_SOURCE.equals(record.source()),
         securityDao.listUserRoleIds(record.id()),
-        record.attributes());
+        record.attributes(),
+        visibleExternalRoles(record, realms, definedRoles));
   }
 
   private boolean adminBootstrapRequired() {
@@ -1253,6 +1418,11 @@ public class SecurityManagementService implements AccessDecisionService {
   }
 
   private RoleView toRoleView(SecurityRoleRecord record) {
+    return toRoleView(record, ExternalRoleMappings.list(securityDao.listRealms())
+        .getOrDefault(record.roleId(), List.of()));
+  }
+
+  private RoleView toRoleView(SecurityRoleRecord record, List<ExternalRoleMapping> mappings) {
     return new RoleView(
         record.roleId(),
         record.source(),
@@ -1261,7 +1431,8 @@ public class SecurityManagementService implements AccessDecisionService {
         record.readOnly(),
         securityDao.listRolePrivilegeIds(record.roleId()),
         securityDao.listRoleChildIds(record.roleId()),
-        record.attributes());
+        record.attributes(),
+        mappings);
   }
 
   private PrivilegeView toPrivilegeView(SecurityPrivilegeRecord record) {
@@ -1283,7 +1454,19 @@ public class SecurityManagementService implements AccessDecisionService {
         record.name(),
         record.enabled(),
         record.priority(),
-        record.attributes());
+        realmListAttributes(record.attributes()));
+  }
+
+  private static Map<String, Object> realmListAttributes(Map<String, Object> attributes) {
+    Map<String, Object> visible = new LinkedHashMap<>();
+    if (attributes != null) {
+      for (String key : List.of("source", "nexusRealm")) {
+        if (attributes.get(key) instanceof String value) {
+          visible.put(key, value);
+        }
+      }
+    }
+    return visible;
   }
 
     private OidcSettingsView toOidcSettingsView(SecurityRealmRecord record) {
@@ -1293,6 +1476,7 @@ public class SecurityManagementService implements AccessDecisionService {
           : PASSWORD_PLACEHOLDER;
       attributes.remove("clientSecret");
       attributes.remove("client_secret");
+      attributes.remove(ExternalRoleMappings.MAPPINGS);
       return new OidcSettingsView(
           record.realmId(),
         record.type(),
@@ -1323,6 +1507,7 @@ public class SecurityManagementService implements AccessDecisionService {
 
     private LdapSettingsView toLdapSettingsView(SecurityRealmRecord record) {
       Map<String, Object> attributes = copyMap(record.attributes());
+      attributes.remove(ExternalRoleMappings.MAPPINGS);
       Map<String, Object> urlParts = ldapUrlParts(asString(attributes.get("url")));
       String protocol = firstNonBlank(asString(attributes.get("protocol")), asString(urlParts.get("protocol")), "ldap");
       Integer port = asInteger(firstPresent(attributes, "port"));
@@ -1909,6 +2094,9 @@ public class SecurityManagementService implements AccessDecisionService {
       }
       attributes.put("source", normalizeSource(defaultString(command.source(), "LDAP")));
       attributes.put("nexusRealm", LDAP_REALM);
+      Map<String, Object> previous = existing == null ? Map.of() : existing;
+      preserveRoleMappingSettings(attributes, previous,
+          firstPresent(previous, "url", "providerUrl", "host", "ldapConfigured") != null);
       attributes.put("ldapConfigured", true);
       putObject(attributes, "name", blankToNull(command.name()));
       putObject(attributes, "protocol", blankToNull(command.protocol()));

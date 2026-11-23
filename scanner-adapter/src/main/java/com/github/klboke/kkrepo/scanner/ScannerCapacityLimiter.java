@@ -1,5 +1,7 @@
 package com.github.klboke.kkrepo.scanner;
 
+import com.github.klboke.kkrepo.security.scan.ScannerArtifactType;
+import com.github.klboke.kkrepo.security.scan.ScannerContract;
 import com.github.klboke.kkrepo.security.scan.ScannerContract.ResourceLimits;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
@@ -72,7 +74,25 @@ public class ScannerCapacityLimiter {
   }
 
   public <T> T execute(ResourceLimits limits, CheckedSupplier<T> action) throws IOException {
-    return execute(scratchPermits(limits), action);
+    return execute(archiveScratchPermits(limits, inputLimit(limits)), action);
+  }
+
+  public <T> T executeCatalog(
+      ResourceLimits limits, long expectedSize, ScannerArtifactType artifactType,
+      CheckedSupplier<T> action) throws IOException {
+    long maximum = inputLimit(limits);
+    ScannerInput.requireValidExpectedSize(expectedSize, maximum);
+    // APK and Conda prepare separate on-disk scan targets beyond the staged archive.
+    long inputBytes = switch (artifactType) {
+      case APK, CONDA -> maximum;
+      default -> expectedSize;
+    };
+    return execute(archiveScratchPermits(limits, inputBytes), action);
+  }
+
+  public <T> T executeMatch(ResourceLimits limits, CheckedSupplier<T> action) throws IOException {
+    long sbomBytes = Math.min(inputLimit(limits), properties.getMaxOutputBytes());
+    return execute(scratchPermits(sbomBytes, 0), action);
   }
 
   private <T> T execute(int scratchPermits, CheckedSupplier<T> action) throws IOException {
@@ -130,22 +150,29 @@ public class ScannerCapacityLimiter {
     }
   }
 
-  private int scratchPermits(ResourceLimits requested) {
+  private long inputLimit(ResourceLimits requested) {
     if (requested == null) {
       throw new ScannerRequestException(
           "RESOURCE_LIMITS_REQUIRED", "Scanner resource limits are required", 400, false);
     }
-    long input = Math.min(requested.maxInputBytes(), properties.getMaxInputBytes());
+    return Math.min(requested.maxInputBytes(), properties.getMaxInputBytes());
+  }
+
+  private int archiveScratchPermits(ResourceLimits requested, long inputBytes) {
     long single = Math.min(requested.maxSingleFileBytes(), properties.getMaxInputBytes());
     long expanded = Math.min(
         requested.maxUncompressedBytes(),
         saturatedMultiply(properties.getMaxInputBytes(), 4));
     int depth = Math.min(requested.maxNestedDepth(), 10);
     long retainedNested = Math.min(expanded, saturatedMultiply(single, depth));
+    return scratchPermits(inputBytes, retainedNested);
+  }
+
+  private int scratchPermits(long inputBytes, long retainedNested) {
     long processOutput = saturatedAdd(
         saturatedMultiply(properties.getMaxOutputBytes(), 3),
         properties.getMaxStderrBytes());
-    long estimated = saturatedAdd(saturatedAdd(input, retainedNested), processOutput);
+    long estimated = saturatedAdd(saturatedAdd(inputBytes, retainedNested), processOutput);
     long permits = ceilDiv(estimated, SCRATCH_PERMIT_BYTES);
     if (estimated > properties.getMaxScratchBytes()
         || permits > scratchLimitPermits
@@ -163,7 +190,7 @@ public class ScannerCapacityLimiter {
   private ScannerRequestException busy() {
     rejected.increment();
     return new ScannerRequestException(
-        "SCANNER_CAPACITY_EXHAUSTED",
+        ScannerContract.CAPACITY_EXHAUSTED,
         "Scanner execution capacity is temporarily exhausted",
         429,
         true);

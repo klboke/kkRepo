@@ -90,7 +90,9 @@ public class ProxyNegativeCache {
   }
 
   private static String key(RepositoryRuntime runtime, String path) {
-    return runtime.id() + ":" + path;
+    var proxy = runtime.outboundProxy();
+    return runtime.id() + ":" + (proxy == null || proxy.systemRevision() == null
+        ? "" : "system:" + proxy.systemRevision() + ":") + path;
   }
 
   private void record(RepositoryRuntime runtime, String result) {

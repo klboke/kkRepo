@@ -15,6 +15,7 @@ import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
 import java.io.IOException;
 import java.io.InputStream;
@@ -456,6 +457,9 @@ public class RawProxyService {
         response.withHeader("Content-Disposition", runtime.rawContentDispositionOrDefault().toLowerCase(Locale.ROOT));
       }
       return response;
+    } catch (Blocked blocked) {
+      return reader.serveSnapshot(cached.orElseThrow(() -> new MavenExceptions.MavenNotFoundException(path)),
+          headOnly, path, runtime.rawContentDispositionOrDefault());
     } catch (IOException e) {
       // Transport exception messages can contain signed upstream URLs. Keep their
       // diagnostic category, but never return the message to repository readers.

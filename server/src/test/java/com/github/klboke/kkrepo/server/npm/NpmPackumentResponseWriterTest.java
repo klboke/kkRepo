@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.server.npm;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -9,14 +10,17 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.core.JsonFactory;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.protocol.npm.NpmMetadata;
 import com.github.klboke.kkrepo.protocol.npm.NpmMinimumReleaseAge;
 import com.github.klboke.kkrepo.protocol.npm.NpmPackageId;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -107,6 +111,45 @@ class NpmPackumentResponseWriterTest {
         "https://registry.npmjs.org/demo/-/demo-blank-base.tgz",
         tarball(writtenVersions.get("blank-base")));
     assertEquals(false, ((Map<?, ?>) writtenVersions.get("flagged")).get("hasInstallScript"));
+  }
+
+  @Test
+  void cachedProjectionMatchesMapWriterForBothRepresentations() throws Exception {
+    Map<String, Object> root = packument();
+    Map<String, Object> versions = NpmMetadata.versions(root);
+    versions.put("legacy", List.of("not an object"));
+    versions.put("null", versionWithTarball(null));
+    versions.put("object", versionWithTarball(Map.of("path", "/nested.tgz")));
+    versions.put("empty", versionWithTarball(""));
+    versions.put("flagged", Map.of("scripts", Map.of("install", "run"), "hasInstallScript", false));
+    versions.put("unknown", Map.of("dist", "legacy", "scripts", "legacy"));
+    root.put("custom", List.of(List.of(Long.MAX_VALUE, 1.25, -0.0), Map.of("text", "🚀")));
+    byte[] cached = mapper.writeValueAsBytes(root);
+    for (NpmPackumentVariant variant : NpmPackumentVariant.values()) {
+      assertCachedProjection(cached, variant, BASE + "/context/-/external/");
+      assertCachedProjection(cached, variant, null);
+    }
+  }
+
+  @Test
+  void cachedProjectionNormalizesMissingOrInvalidRootFields() throws Exception {
+    for (Map<String, Object> root : List.of(
+        Map.<String, Object>of("name", "demo"),
+        Map.<String, Object>of("versions", List.of(), "dist-tags", false, "name", "demo"))) {
+      byte[] cached = mapper.writeValueAsBytes(root);
+      for (NpmPackumentVariant variant : NpmPackumentVariant.values()) {
+        assertCachedProjection(cached, variant, BASE);
+      }
+    }
+  }
+
+  private void assertCachedProjection(byte[] cached, NpmPackumentVariant variant, String base)
+      throws IOException {
+    Map<String, Object> root = mapper.readValue(cached, new TypeReference<>() {});
+    byte[] existing = NpmPackumentResponseWriter.write(mapper, root, null, null, variant, PACKAGE, base);
+    byte[] streamed = NpmPackumentResponseWriter.writeCached(
+        mapper, new ByteArrayInputStream(cached), variant, PACKAGE, base);
+    assertArrayEquals(existing, streamed);
   }
 
   @Test

@@ -21,6 +21,7 @@ import com.github.klboke.kkrepo.protocol.maven.policy.WritePolicy;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntimeRegistry;
 import java.io.ByteArrayInputStream;
 import java.io.FilterInputStream;
@@ -762,6 +763,8 @@ public class AnsibleGalaxyService {
         } finally {
           AnsibleCollectionArchiveInspector.delete(inspected.file());
         }
+      } catch (Blocked blocked) {
+        throw new AnsibleGalaxyExceptions.NotFound("Collection artifact was not found in cache");
       } catch (IOException e) {
         throw new AnsibleGalaxyExceptions.BadUpstream(
             "Failed downloading upstream Ansible collection", e);
@@ -889,6 +892,10 @@ public class AnsibleGalaxyService {
             instantText(result.lastModified()), cacheUntil, checkedAt, null, null, document,
             revision, checkedAt));
         return document;
+      } catch (Blocked blocked) {
+        return existing.filter(state -> !state.upstreamIdentity().isEmpty())
+            .map(AnsibleGalaxyRegistryDao.ProxyVersionState::upstreamIdentity)
+            .orElseThrow(() -> new AnsibleGalaxyExceptions.NotFound("Collection metadata was not found in cache"));
       } catch (IOException e) {
         if (existing.isPresent() && !existing.get().upstreamIdentity().isEmpty()) {
           return existing.get().upstreamIdentity();
@@ -960,6 +967,8 @@ public class AnsibleGalaxyService {
             versions);
       }
       return versions;
+    } catch (Blocked blocked) {
+      return stale;
     } catch (AnsibleGalaxyExceptions.NotFound notFound) {
       Instant checkedAt = Instant.now();
       if (existing.isPresent() && stale.isEmpty() && existing.get().versionCount() == 0) {
@@ -983,7 +992,7 @@ public class AnsibleGalaxyService {
   }
 
   private List<String> fetchUpstreamVersionNames(
-      RepositoryRuntime runtime, String namespace, String name) {
+      RepositoryRuntime runtime, String namespace, String name) throws Blocked {
     LinkedHashSet<String> versions = new LinkedHashSet<>();
     Set<String> visitedPages = new HashSet<>();
     String next = proxyV3Url(runtime, upstreamVersionsPath(namespace, name) + "?limit=1000");
@@ -1012,7 +1021,7 @@ public class AnsibleGalaxyService {
   }
 
   private Map<String, Object> fetchProxyVersionPage(
-      RepositoryRuntime runtime, String url) {
+      RepositoryRuntime runtime, String url) throws Blocked {
     HttpRemoteFetcher.Request request = HttpRemoteFetcher.Request.get(url)
         .withTimeoutProfile(HttpRemoteFetcher.TimeoutProfile.METADATA)
         .withAccept("application/json")
@@ -1026,6 +1035,8 @@ public class AnsibleGalaxyService {
             "Upstream Galaxy version list returned HTTP " + result.status());
       }
       return readProjectedJsonBounded(result.body(), VERSIONS_SENTINEL);
+    } catch (Blocked blocked) {
+      throw blocked;
     } catch (IOException error) {
       throw new AnsibleGalaxyExceptions.BadUpstream(
           "Failed fetching upstream Galaxy version list", error);

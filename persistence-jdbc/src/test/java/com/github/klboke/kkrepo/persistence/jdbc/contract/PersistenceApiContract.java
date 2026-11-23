@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.github.klboke.kkrepo.persistence.jdbc.api.MavenPublicationTimesDao.PublicationTime;
 import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao.BlobStoreUsage;
 import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao.RepositoryUsage;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
@@ -32,6 +33,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.TerraformRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.ApiKeyRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetBlobRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.AssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.BlobStoreRecord;
@@ -41,6 +43,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.model.PubUploadSessionRecor
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryDataMigrationAssetRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityPrivilegeRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRealmRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRoleRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityUserRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.docker.DockerManifestRecord;
@@ -74,7 +77,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutionException;
@@ -86,6 +91,62 @@ import org.springframework.dao.DuplicateKeyException;
 
 /** Reusable black-box contract that every database backend must pass through the public API. */
 public abstract class PersistenceApiContract {
+  @Test
+  void mavenPublicationTimesAreScopedToTheirSourceAndRemovedWithTheRepository() {
+    var repository = stores().repositories();
+    long id = repository.insert(new RepositoryRecord(null, "verified-maven", RepositoryFormat.MAVEN2,
+        RepositoryType.PROXY, "maven2-proxy", true, null, null, "https://first.example/",
+        null, null, null, true, Map.of()));
+    var times = stores().mavenPublicationTimes();
+    var hash = PersistenceHashes.sha256("https://first.example/", "org.example", "artifact", "1.0");
+    var other = PersistenceHashes.sha256("https://second.example/", "org.example", "artifact", "1.0");
+    Instant published = Instant.parse("2026-11-18T12:00:00Z");
+    Instant verified = published.plusSeconds(3600);
+    var first = new PublicationTime(published, verified);
+    assertTrue(times.find(id, hash).isEmpty());
+    times.record(id, hash, first);
+    assertEquals(Optional.of(first), times.find(id, hash));
+    assertTrue(times.find(id, other).isEmpty());
+    var refreshed = new PublicationTime(published, verified.plusSeconds(60));
+    times.record(id, hash, refreshed);
+    assertEquals(Optional.of(refreshed), times.find(id, hash));
+    assertEquals(1, repository.deleteById(id));
+    assertTrue(times.find(id, hash).isEmpty());
+  }
+
+  @Test
+  void concurrentApiKeyInsertsLeaveTheWinnerIntact() throws Exception {
+    var security = stores().security();
+    String owner = "api-key-race-" + UUID.randomUUID();
+    var candidates = List.of("first", "second").stream()
+        .map(name -> new ApiKeyRecord(
+            null, "GenericToken", "Local", owner, name, "ACTIVE", owner + "/" + name,
+            null, Map.of("values", List.of("read")), name, null, null, null, null))
+        .toList();
+    var barrier = new CyclicBarrier(2);
+    var contenders = candidates.stream().<Callable<Boolean>>map(candidate -> () -> {
+      barrier.await(10, java.util.concurrent.TimeUnit.SECONDS);
+      return inTransaction(() -> {
+        boolean inserted = security.insertApiKeyIfAbsent(candidate);
+        assertTrue(security.findApiKey("GenericToken", "Local", owner).isPresent());
+        return inserted;
+      });
+    }).toList();
+    try (var executor = Executors.newFixedThreadPool(2)) {
+      var results = executor.invokeAll(contenders);
+      boolean firstWon = results.get(0).get();
+      assertNotEquals(firstWon, results.get(1).get());
+      var keys = security.listApiKeysForOwner("Local", owner);
+      assertEquals(1, keys.size());
+      var winner = candidates.get(firstWon ? 0 : 1);
+      assertEquals(winner.displayName(), keys.getFirst().displayName());
+      assertEquals(winner.apiKeyHash(), keys.getFirst().apiKeyHash());
+      assertEquals(winner.encryptedPayload(), keys.getFirst().encryptedPayload());
+    } finally {
+      security.deleteApiKeysForOwner("Local", owner);
+    }
+  }
+
   @Test
   void dockerConnectorsReservePortsAcrossProtocolsAndReleaseOnUpdateAndDelete() {
     var repositories = stores().repositories();
@@ -219,6 +280,29 @@ public abstract class PersistenceApiContract {
       repositories.deleteById(repository);
       rules.delete(rule);
     }
+  }
+
+  @Test
+  void realmUpdateReadsCredentialsRotatedAfterItsTransactionSnapshot() {
+    var security = stores().security();
+    String realm = "ldap-rotation-contract";
+    security.upsertRealm(new SecurityRealmRecord(null, realm, "LDAP", "LDAP", true, 10,
+        Map.of("bindPassword", "original")));
+    inTransaction(() -> {
+      var snapshot = security.findRealm(realm).orElseThrow();
+      assertEquals("original", snapshot.attributes().get("bindPassword"));
+      CompletableFuture.runAsync(() -> security.upsertRealm(
+          new SecurityRealmRecord(snapshot.id(), realm, "LDAP", "LDAP", true, 10, Map.of("bindPassword", "rotated"))))
+          .orTimeout(10, java.util.concurrent.TimeUnit.SECONDS).join();
+
+      var current = security.findRealmForUpdate(realm).orElseThrow();
+      security.upsertRealm(new SecurityRealmRecord(current.id(), realm, "LDAP", "LDAP", true, 20,
+          current.attributes()));
+      return null;
+    });
+    var updated = security.findRealm(realm).orElseThrow();
+    assertEquals("rotated", updated.attributes().get("bindPassword"));
+    assertEquals(20, updated.priority());
   }
 
   @Test
@@ -409,6 +493,30 @@ public abstract class PersistenceApiContract {
   }
 
   @Test
+  void changingProxyRouteClearsBackoffWithoutRecordingSyntheticSuccess() {
+    var states = stores().proxyStates();
+    long changed = createRepository("proxy-route-change", RepositoryFormat.MAVEN2, RepositoryType.PROXY);
+    long unchanged = createRepository("proxy-route-unchanged", RepositoryFormat.MAVEN2, RepositoryType.PROXY);
+    var lastSuccess = Instant.parse("2026-01-12T00:00:00Z");
+    var now = lastSuccess.plusSeconds(30);
+    states.recordSuccess(changed, lastSuccess);
+    states.recordFailure(changed, 60, "upstream unavailable", now);
+    states.recordFailure(unchanged, 60, "other upstream unavailable", now);
+    assertTrue(states.isBlocked(changed, now));
+
+    states.clearBackoff(changed);
+    states.clearBackoff(changed);
+
+    var state = states.loadState(changed).orElseThrow();
+    assertEquals(lastSuccess, state.lastSuccessAt());
+    assertEquals(0, state.failCount());
+    assertNull(state.lastFailureAt());
+    assertNull(state.lastError());
+    assertFalse(states.isBlocked(changed, now));
+    assertTrue(states.isBlocked(unchanged, now));
+  }
+
+  @Test
   void baselineContainsTheCompleteSharedLogicalSchema() {
     assertEquals(Set.of(
         "gitlfs_object",
@@ -418,6 +526,7 @@ public abstract class PersistenceApiContract {
         "ohpm_login_key",
         "ohpm_login_nonce",
         "ohpm_fetch_lease",
+        "maven_proxy_publication_time",
         "maven_snapshot_family",
         "maven_snapshot_build",
         "maven_snapshot_asset",
@@ -582,6 +691,8 @@ public abstract class PersistenceApiContract {
         "terraform_signing_key",
         "terraform_source_binding",
         "ui_settings",
+        "outbound_proxy_settings",
+        "download_offload_settings",
         "winget_manifest"), databaseTables());
   }
 
@@ -4234,6 +4345,64 @@ public abstract class PersistenceApiContract {
         new SecurityScanDao.CompletionOrder(false, tasks.get(2), now.plusSeconds(30)))
         .stream().map(SecurityScanDao.ScanTask::id).toList());
     verifySecurityScanCompletionPlans(repositoryId, tasks.get(0), runs.get(0));
+  }
+
+  @Test
+  void securityScanningDefersCapacityWithoutSpendingAttempts() {
+    SecurityScanDao scans = stores().securityScanning();
+    long repositoryId = createRepository("scan-capacity", RepositoryFormat.MAVEN2);
+    Instant now = Instant.parse("2026-07-24T12:00:00Z");
+    var profile = scans.createProfile(new SecurityScanDao.ScanProfile(
+        null, "capacity-profile", true, "syft", "grype", List.of("vuln"), Map.of(),
+        1048576, 1000, 10485760, 1048576, 2, 60, OciPlatformPolicy.REQUIRED_SET,
+        List.of(), "8".repeat(64), 1, now, now));
+    long taskId = scans.createTask(new SecurityScanDao.TaskDraft(
+        repositoryId, null, SubjectKind.ASSET_BLOB, "sha256:" + "9".repeat(64), 1,
+        profile.id(), profile.revision(), null, ScanStage.CATALOG_AND_MATCH,
+        RequestReason.MANUAL, 0, 2, "contract", null, null, now));
+
+    var first = inTransaction(() -> scans.claimTasks("replica-a", now, now.plusSeconds(30), 1))
+        .getFirst();
+    assertEquals(taskId, first.id());
+    assertTrue(scans.retryTask(
+        taskId, first.leaseToken(), now.plusSeconds(5), "SCANNER_IO", "unavailable", now));
+    assertEquals(1, scans.findTask(taskId).orElseThrow().attempts());
+
+    String capacity = "SCANNER_CAPACITY_EXHAUSTED";
+    String previousLease = first.leaseToken();
+    for (int rejection = 0; rejection < 6; rejection++) {
+      Instant claimedAt = now.plusSeconds(5 + rejection * 17L);
+      Instant retryAt = claimedAt.plusSeconds(17);
+      var claimed = inTransaction(
+          () -> scans.claimTasks("replica-b", claimedAt, claimedAt.plusSeconds(30), 1)).getFirst();
+      assertEquals(taskId, claimed.id());
+      assertEquals(2, claimed.attempts());
+      assertNotEquals(previousLease, claimed.leaseToken());
+      assertFalse(scans.deferTaskForCapacity(
+          taskId, previousLease, retryAt, capacity, "busy", claimedAt));
+      assertTrue(scans.deferTaskForCapacity(
+          taskId, claimed.leaseToken(), retryAt, capacity, "busy", claimedAt));
+      assertFalse(scans.deferTaskForCapacity(
+          taskId, claimed.leaseToken(), retryAt, capacity, "busy", claimedAt));
+
+      var waiting = scans.findTask(taskId).orElseThrow();
+      assertEquals(TaskStatus.RETRY_WAIT, waiting.status());
+      assertEquals(1, waiting.attempts());
+      assertEquals(retryAt, waiting.nextAttemptAt());
+      assertEquals(capacity, waiting.lastErrorCode());
+      assertNull(waiting.leaseToken());
+      assertTrue(inTransaction(() -> scans.claimTasks(
+          "replica-a", retryAt.minusSeconds(1), retryAt.plusSeconds(30), 1)).isEmpty());
+      previousLease = claimed.leaseToken();
+    }
+
+    Instant resumedAt = now.plusSeconds(5 + 6 * 17L);
+    var resumed = inTransaction(
+        () -> scans.claimTasks("replica-a", resumedAt, resumedAt.plusSeconds(30), 1)).getFirst();
+    assertEquals(taskId, resumed.id());
+    assertEquals(2, resumed.attempts());
+    assertTrue(scans.completeTask(taskId, resumed.leaseToken(), resumedAt));
+    assertEquals(TaskStatus.SUCCEEDED, scans.findTask(taskId).orElseThrow().status());
   }
 
   @Test

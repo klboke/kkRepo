@@ -22,6 +22,7 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.DockerUploadDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.HuggingFaceRegistryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.GitLfsDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MaintenanceCursorDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.MavenPublicationTimesDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MetadataRebuildDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MigrationCheckpointDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MigrationJobDao;
@@ -31,6 +32,8 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.OhpmLoginDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.OhpmRepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceStoreFactory;
 import com.github.klboke.kkrepo.persistence.jdbc.api.PersistenceStores;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DownloadOffloadSettingsDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.OutboundProxySettingsDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.StorageStatisticsDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ProxyStateDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RRegistryDao;
@@ -89,6 +92,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
         new JdbcHuggingFaceRegistryDao(jdbc, dialect),
         new JdbcGitLfsDao(jdbc),
         new JdbcMaintenanceCursorDao(jdbc),
+        new JdbcMavenPublicationTimesDao(jdbc),
         new JdbcMetadataRebuildDao(jdbc, dialect),
         new JdbcMigrationCheckpointDao(jdbc),
         new JdbcMigrationJobDao(jdbc, json),
@@ -110,7 +114,9 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
         new JdbcSwiftRegistryDao(jdbc, json, dialect),
         new JdbcTerraformRegistryDao(jdbc),
         new JdbcUiSettingsDao(jdbc),
-        new JdbcWingetDao(jdbc));
+        new JdbcWingetDao(jdbc),
+        new JdbcOutboundProxySettingsDao(jdbc),
+        new JdbcDownloadOffloadSettingsDao(jdbc));
   }
 
   private record DefaultPersistenceStores(
@@ -134,6 +140,7 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
       HuggingFaceRegistryDao huggingFaceRegistry,
       GitLfsDao gitLfs,
       MaintenanceCursorDao maintenanceCursors,
+      MavenPublicationTimesDao mavenPublicationTimes,
       MetadataRebuildDao metadataRebuild,
       MigrationCheckpointDao migrationCheckpoints,
       MigrationJobDao migrationJobs,
@@ -155,6 +162,8 @@ public final class JdbcPersistenceStoreFactory implements PersistenceStoreFactor
       SwiftRegistryDao swiftRegistry,
       TerraformRegistryDao terraformRegistry,
       UiSettingsDao uiSettings,
-      WingetDao winget) implements PersistenceStores {
+      WingetDao winget,
+      OutboundProxySettingsDao outboundProxySettings,
+      DownloadOffloadSettingsDao downloadOffloadSettings) implements PersistenceStores {
   }
 }

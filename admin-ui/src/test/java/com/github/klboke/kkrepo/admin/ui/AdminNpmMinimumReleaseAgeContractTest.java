@@ -16,9 +16,9 @@ class AdminNpmMinimumReleaseAgeContractTest {
     String javascript = resource("/META-INF/resources/admin/assets/admin.js");
 
     assertTrue(index.contains("id=\"repository-minimum-release-age\""));
-    assertTrue(index.contains("Use 0 to disable this policy"));
-    assertTrue(index.contains("independent of content and metadata cache"));
-    assertTrue(index.contains("missing or invalid publish time are blocked"));
+    assertTrue(index.contains("data-tooltip=\"Use 0 to disable."));
+    assertTrue(index.contains("This is independent of cache age."));
+    assertTrue(index.contains("Missing or invalid release times are blocked."));
     assertTrue(javascript.contains(
         "new Set([\"npm\", \"go\", \"maven2\", \"pypi\"])"));
     assertTrue(javascript.contains("MINIMUM_RELEASE_AGE_FORMATS.has(format) && type === \"PROXY\""));

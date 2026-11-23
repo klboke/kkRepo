@@ -10,6 +10,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
@@ -17,6 +19,7 @@ import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SwiftRegistryDao;
 import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.EOFException;
@@ -38,6 +41,48 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 class SwiftGitHubClientTest {
+
+  @Test
+  void manualBlockSkipsAllGitHubFallbacksForTagsAndArchives() throws Exception {
+    var fetcher = mock(HttpRemoteFetcher.class);
+    var client = new SwiftGitHubClient(fetcher, new ObjectMapper(), mock(SwiftArchiveInspector.class));
+    var runtime = proxy("https://github.com/");
+    var coordinates = SwiftGitHubClient.coordinates("apple", "swift-log");
+    when(fetcher.fetchWithBodyRetry(any(), anyString(), any())).thenThrow(new Blocked());
+    assertThrows(SwiftExceptions.OutboundBlocked.class, () -> client.discoverTags(runtime, coordinates, null));
+    assertThrows(SwiftExceptions.OutboundBlocked.class, () -> client.archive(runtime, coordinates, "a".repeat(40)));
+    verify(fetcher, org.mockito.Mockito.times(2)).fetchWithBodyRetry(any(), anyString(), any());
+  }
+
+  @Test
+  void blockEnabledBetweenGitHubAttemptsWinsOverThePreviousUpstreamFailure() throws Exception {
+    var runtime = proxy("https://github.com/");
+    var coordinates = SwiftGitHubClient.coordinates("apple", "swift-log");
+    var fetcher = mock(HttpRemoteFetcher.class);
+    var client = new SwiftGitHubClient(fetcher, new ObjectMapper(), mock(SwiftArchiveInspector.class));
+    when(fetcher.fetchWithBodyRetry(any(), anyString(), any()))
+        .thenThrow(new IOException("upstream connection closed"), new Blocked(),
+            new IOException("upstream connection closed"), new Blocked());
+
+    assertThrows(SwiftExceptions.OutboundBlocked.class, () -> client.discoverTags(runtime, coordinates, null));
+    assertThrows(SwiftExceptions.OutboundBlocked.class, () -> client.archive(runtime, coordinates, "a".repeat(40)));
+  }
+
+  @Test
+  void blockEnabledBeforeGitHubAnonymousRetryPreservesTheLocalMiss() throws Exception {
+    var runtime = proxy("https://github.com/", "upstream-token");
+    var coordinates = SwiftGitHubClient.coordinates("apple", "swift-log");
+    var fetcher = mock(HttpRemoteFetcher.class);
+    var client = new SwiftGitHubClient(fetcher, new ObjectMapper(), mock(SwiftArchiveInspector.class), delay -> {});
+    when(fetcher.fetchWithBodyRetry(any(), anyString(), any())).thenAnswer(invocation -> {
+      HttpRemoteFetcher.Request request = invocation.getArgument(0);
+      if (request.authorizationHeader() == null) throw new Blocked();
+      HttpRemoteFetcher.ResultHandler<?> handler = invocation.getArgument(2);
+      return handler.handle(result(503, Map.of(), new byte[0]));
+    });
+
+    assertThrows(SwiftExceptions.OutboundBlocked.class, () -> client.discoverTags(runtime, coordinates, null));
+  }
 
   @Test
   void normalizesSupportedGitHubRepositoryUrlForms() {

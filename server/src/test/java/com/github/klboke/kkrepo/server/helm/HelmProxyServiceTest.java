@@ -31,6 +31,7 @@ import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -44,6 +45,27 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class HelmProxyServiceTest {
+  @Test
+  void manualBlockServesStaleIndexAndCachedChartWithoutRecordingFailure() throws Exception {
+    var fixture = fixture();
+    var runtime = runtime(RepositoryType.PROXY, 1);
+    when(fixture.fetcher.fetchWithBodyRetry(any(), anyString(), any())).thenThrow(new Blocked());
+    for (String path : List.of("index.yaml", "demo.tgz")) {
+      if (path.endsWith(".tgz")) {
+        when(fixture.cache.find(eq(runtime.id()), eq("index.yaml"), any()))
+            .thenReturn(Optional.of(snapshot("index.yaml", Instant.now(), Map.of())));
+      }
+      var stale = snapshot(path, Instant.EPOCH, Map.of());
+      when(fixture.cache.find(eq(runtime.id()), eq(path), any()))
+          .thenReturn(Optional.of(stale), Optional.empty());
+      when(fixture.reader.serveSnapshot(stale, true, path)).thenReturn(MavenResponse.noBody(200));
+      assertEquals(200, fixture.service.get(runtime, path, true).status());
+      assertThrows(MavenExceptions.MavenNotFoundException.class, () -> fixture.service.get(runtime, path, true));
+      verify(fixture.negativeCache, never()).rememberNotFound(runtime, path);
+    }
+    verify(fixture.proxyStateDao, never()).recordFailure(eq(runtime.id()), anyLong(), anyString(), any());
+  }
+
   @Test
   void servesFreshIndexAndPackageFromCache() {
     Fixture fixture = fixture();
