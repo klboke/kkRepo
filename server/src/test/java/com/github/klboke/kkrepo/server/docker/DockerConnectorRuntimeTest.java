@@ -3,10 +3,9 @@ package com.github.klboke.kkrepo.server.docker;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
-import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
 import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
-import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao.DockerConnectorRepository;
 import com.github.klboke.kkrepo.server.repositories.RepositoryValidationException;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
@@ -180,11 +179,28 @@ class DockerConnectorRuntimeTest {
     try (fixture) {
       var applied = fixture.runtime.snapshot();
       RepositoryDao dao = (RepositoryDao) ReflectionTestUtils.getField(fixture.manager, "repositoryDao");
-      when(dao.list()).thenThrow(new IllegalStateException("database unavailable"));
+      when(dao.listDockerConnectorRepositories()).thenThrow(new IllegalStateException("database unavailable"));
       assertSame(applied, fixture.runtime.sync());
       assertTrue(fixture.runtime.lastError().contains("Cannot read"));
       assertNotNull(fixture.runtime.nodeId());
     }
+  }
+
+  @Test
+  void firstConfigurationReadFailureDoesNotRetryInTheErrorPath() {
+    RepositoryDao dao = mock(RepositoryDao.class);
+    when(dao.listDockerConnectorRepositories()).thenThrow(new IllegalStateException("database unavailable"));
+    var runtime = new DockerConnectorRuntime(new DockerConnectorManager(dao, true, 50, 10, 2000, 0, 0));
+
+    assertTrue(runtime.sync().connectors().isEmpty());
+    assertTrue(runtime.snapshot().repositoriesByPort().isEmpty());
+    assertTrue(runtime.lastError().contains("Cannot read"));
+    verify(dao).listDockerConnectorRepositories();
+
+    doReturn(List.of(repository(Map.of("connectorPort", 5100)))).when(dao).listDockerConnectorRepositories();
+    assertSame(runtime.sync(), runtime.snapshot());
+    assertEquals(1, runtime.snapshot().connectors().size());
+    assertNull(runtime.lastError());
   }
 
   @Test
@@ -238,7 +254,7 @@ class DockerConnectorRuntimeTest {
   private Fixture fixture(Map<String, Object> settings, DockerTlsBundles identities) {
     var records = new AtomicReference<>(List.of(repository(settings)));
     RepositoryDao dao = mock(RepositoryDao.class);
-    when(dao.list()).thenAnswer(invocation -> records.get());
+    when(dao.listDockerConnectorRepositories()).thenAnswer(invocation -> records.get());
     var manager = new DockerConnectorManager(dao, true, 50, 10, 2000, 0, 0);
     var runtime = new DockerConnectorRuntime(manager, identities);
     var factory = new TomcatServletWebServerFactory(0);
@@ -282,12 +298,11 @@ class DockerConnectorRuntimeTest {
     try (ServerSocket socket = new ServerSocket(0)) { return socket.getLocalPort(); }
   }
 
-  private static RepositoryRecord repository(Map<String, Object> docker) {
-    return new RepositoryRecord(1L, "registry", RepositoryFormat.DOCKER, RepositoryType.HOSTED,
-        "docker-hosted", true, null, null, null, null, null, "ALLOW", true, Map.of("docker", docker));
+  private static DockerConnectorRepository repository(Map<String, Object> settings) {
+    return new DockerConnectorRepository(1L, "registry", RepositoryType.HOSTED, settings);
   }
 
-  private record Fixture(AtomicReference<List<RepositoryRecord>> records, DockerConnectorManager manager,
+  private record Fixture(AtomicReference<List<DockerConnectorRepository>> records, DockerConnectorManager manager,
       DockerConnectorRuntime runtime, TomcatWebServer server) implements AutoCloseable {
     @Override public void close() { server.stop(); server.destroy(); }
   }

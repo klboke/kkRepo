@@ -1,5 +1,7 @@
 package com.github.klboke.kkrepo.server.config;
 
+import com.github.klboke.kkrepo.core.security.SecretCipher;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.JdbcRepositoryCredentialUpgrade;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialects;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseType;
@@ -47,10 +49,12 @@ public class DatabaseBackendConfiguration {
   @Bean
   FlywayMigrationStrategy validatingFlywayMigrationStrategy(
       DataSource dataSource,
-      DatabaseDialect dialect) {
+      DatabaseDialect dialect,
+      SecretCipher credentialCipher) {
     return flyway -> {
       validateDatabaseProduct(dataSource, dialect.type());
       flyway.migrate();
+      new JdbcRepositoryCredentialUpgrade(flyway.getConfiguration().getDataSource(), dialect, credentialCipher).run();
     };
   }
 
