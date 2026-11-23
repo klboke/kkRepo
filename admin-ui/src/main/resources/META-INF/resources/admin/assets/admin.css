@@ -5043,8 +5043,10 @@ code {
 .offload-custom-response-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 6px; }
 .offload-store-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .offload-stores { margin: 8px 0 0; overflow-x: auto; }
+.offload-stores .nx-table { min-width: 0; table-layout: fixed; }
 .offload-stores .nx-table :is(th, td) { white-space: normal; overflow-wrap: anywhere; }
-.offload-stores .nx-table :is(th, td):first-child { width: 1%; }
+.offload-stores .nx-table th:first-child { width: 40px; }
+.offload-stores .nx-table th:nth-child(2) { width: clamp(7.5rem, 20vw, 11rem); }
 .offload-stores .nx-table input[type="checkbox"] { width: 16px; height: 16px; margin: 0; }
 .offload-deployment-status dd { text-align: right; overflow-wrap: anywhere; }
 .offload-example-code { display: block; width: 100%; margin: 6px 0 10px; resize: vertical; }
