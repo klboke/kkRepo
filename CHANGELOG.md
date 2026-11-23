@@ -4,6 +4,19 @@ All notable public changes to kkrepo are documented in this file.
 
 This project follows a pragmatic release process. Stable releases call out migration impact, compatibility changes, operational notes, and any known behavior changes in their release section.
 
+## 1.5.1 - 2026-11-23
+
+### Fixed
+
+- Fix startup after upgrading from 1.4.0 when the earlier release encrypted stored repository proxy credentials with its development fallback key. Startup re-encrypts affected upstream passwords, bearer tokens, and outbound proxy passwords with the configured credential secret. If a credential cannot be read, the credential update rolls back in full. (#568, #569)
+- Load only Docker connector settings when starting and refreshing repository connectors. A failed refresh preserves the last applied configuration. (#569)
+
+### Upgrade Notes
+
+- Keep `kkrepo.security.encryption.credential-secret` and back up the relational database and blob stores. When upgrading from 1.4.0, stop the old replicas before starting 1.5.1. Credentials already encrypted with the configured key are preserved.
+- Upgrading from 1.5.0 keeps MySQL and PostgreSQL at Flyway V67. A direct upgrade from 1.4.0 applies migrations V61 through V67.
+- To roll back to 1.4.0, restore the pre-upgrade database backup and original configuration. Restoring the backup returns the database to the time the backup was taken.
+
 ## 1.5.0 - 2026-11-21
 
 ### Security

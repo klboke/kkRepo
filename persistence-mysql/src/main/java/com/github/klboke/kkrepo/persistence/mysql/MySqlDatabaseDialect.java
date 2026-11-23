@@ -480,8 +480,13 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
     }
 
     @Override
+    public String extractJson(String column, String... path) {
+      return "JSON_EXTRACT(" + column(column) + ", '" + path(path) + "')";
+    }
+
+    @Override
     public String extractText(String column, String... path) {
-      return "JSON_UNQUOTE(JSON_EXTRACT(" + column(column) + ", '" + path(path) + "'))";
+      return "JSON_UNQUOTE(" + extractJson(column, path) + ")";
     }
 
     @Override

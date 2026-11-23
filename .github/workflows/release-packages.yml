@@ -24,12 +24,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: Require merged main
+      - name: Require the versioned maintenance branch
         env:
           RELEASE_VERSION: ${{ inputs.version }}
         run: |
-          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
-            echo "Release packages must be built from the merged main branch, got $GITHUB_REF" >&2
+          if [[ "$GITHUB_REF" != "refs/heads/release/$RELEASE_VERSION" ]]; then
+            echo "Release packages must be built from release/$RELEASE_VERSION, got $GITHUB_REF" >&2
             exit 1
           fi
           if [[ ! "$RELEASE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -321,21 +321,17 @@ jobs:
         run: |
           docker buildx imagetools create \
             --tag "${IMAGE}:${RELEASE_VERSION}-native" \
-            --tag "${IMAGE}:native-latest" \
             "${IMAGE}:${RELEASE_VERSION}-native-amd64" \
             "${IMAGE}:${RELEASE_VERSION}-native-arm64"
 
-          for tag in "${RELEASE_VERSION}-native" native-latest; do
-            manifest="$(docker buildx imagetools inspect "${IMAGE}:${tag}")"
-            grep -Eq 'Platform:[[:space:]]+linux/amd64' <<<"$manifest"
-            grep -Eq 'Platform:[[:space:]]+linux/arm64' <<<"$manifest"
-            printf '%s\n' "$manifest"
-          done
+          manifest="$(docker buildx imagetools inspect "${IMAGE}:${RELEASE_VERSION}-native")"
+          grep -Eq 'Platform:[[:space:]]+linux/amd64' <<<"$manifest"
+          grep -Eq 'Platform:[[:space:]]+linux/arm64' <<<"$manifest"
+          printf '%s\n' "$manifest"
 
           {
             echo "### Native container image"
             echo
             echo "- \`${IMAGE}:${RELEASE_VERSION}-native\`"
-            echo "- \`${IMAGE}:native-latest\`"
             echo "- Platforms: \`linux/amd64\`, \`linux/arm64\`"
           } >> "$GITHUB_STEP_SUMMARY"

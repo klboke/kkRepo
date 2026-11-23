@@ -40,7 +40,7 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
   | KKREPO_RUNTIME=native KKREPO_DATABASE_TYPE=postgresql bash
 ```
 
-`KKREPO_RUNTIME=jvm` selects `ghcr.io/klboke/kkrepo:1.5.0`, while `KKREPO_RUNTIME=native` selects `ghcr.io/klboke/kkrepo:1.5.0-native`. Both are published for Linux `amd64` and `arm64`. An explicit `KKREPO_IMAGE_TAG` overrides the runtime's default tag.
+`KKREPO_RUNTIME=jvm` selects `ghcr.io/klboke/kkrepo:1.5.1`, while `KKREPO_RUNTIME=native` selects `ghcr.io/klboke/kkrepo:1.5.1-native`. Both are published for Linux `amd64` and `arm64`. An explicit `KKREPO_IMAGE_TAG` overrides the runtime's default tag.
 
 The script prints each step and:
 
@@ -61,7 +61,7 @@ bash quickstart.sh
 
 By default, it starts:
 
-- The JVM runtime from `ghcr.io/klboke/kkrepo:1.5.0`
+- The JVM runtime from `ghcr.io/klboke/kkrepo:1.5.1`
 - MySQL 8.0
 - A `kkrepo-health` sidecar that continuously probes application readiness
 - Persistent MySQL and File blob storage volumes for local trials
@@ -164,7 +164,7 @@ Note: a normal `server` module jar does not contain a Spring Boot executable ent
 Pull the latest public release image:
 
 ```bash
-docker pull ghcr.io/klboke/kkrepo:1.5.0
+docker pull ghcr.io/klboke/kkrepo:1.5.1
 ```
 
 You can also use `latest` to follow the latest public release:
@@ -176,7 +176,7 @@ docker pull ghcr.io/klboke/kkrepo:latest
 The Native image is published separately:
 
 ```bash
-docker pull ghcr.io/klboke/kkrepo:1.5.0-native
+docker pull ghcr.io/klboke/kkrepo:1.5.1-native
 docker pull ghcr.io/klboke/kkrepo:native-latest
 ```
 
@@ -274,7 +274,7 @@ server/target/kkrepo-<release-version>-native-linux-<architecture>.tar.gz
 server/target/kkrepo-<release-version>-native-linux-<architecture>.zip
 ```
 
-When manually dispatched, the GitHub `Release Packages` workflow accepts only a version already merged into `main` and builds the public release matrix: one platform-independent JVM archive pair, Native Linux `amd64` and `arm64` archive pairs, and a combined SHA-256 manifest. The same architecture-native builds first push `<version>-native-amd64` and `<version>-native-arm64`, then combine them into the public versioned `<version>-native` and rolling `native-latest` multi-architecture manifests. Creating the GitHub Release and uploading the archive assets remain a separate, explicit release step.
+When manually dispatched, the GitHub `Release Packages` workflow accepts only the matching `release/<version>` maintenance branch and builds the public release matrix: one platform-independent JVM archive pair, Native Linux `amd64` and `arm64` archive pairs, and a combined SHA-256 manifest. The same architecture-native builds first push `<version>-native-amd64` and `<version>-native-arm64`, then combine them into the public versioned `<version>-native` multi-architecture manifest. Creating the GitHub Release and uploading the archive assets remain a separate, explicit release step.
 
 The default remains JVM packaging. A JVM archive contains `lib/kkrepo.jar`; a Native archive contains the executable `lib/kkrepo`. The shared `bin/start.sh` selects the packaged runtime automatically, so the service commands and external configuration layout remain the same. Native archives do not require a Java runtime on the target host, but they must run on the matching operating system and CPU architecture.
 

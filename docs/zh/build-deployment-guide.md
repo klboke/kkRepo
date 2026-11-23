@@ -40,7 +40,7 @@ curl -fsSL https://raw.githubusercontent.com/klboke/kkrepo/main/scripts/quicksta
   | KKREPO_RUNTIME=native KKREPO_DATABASE_TYPE=postgresql bash
 ```
 
-`KKREPO_RUNTIME=jvm` 选择 `ghcr.io/klboke/kkrepo:1.5.0`，`KKREPO_RUNTIME=native` 选择 `ghcr.io/klboke/kkrepo:1.5.0-native`。两种镜像均发布 Linux `amd64` 和 `arm64` 架构。显式设置 `KKREPO_IMAGE_TAG` 时，会覆盖对应运行时的默认 tag。
+`KKREPO_RUNTIME=jvm` 选择 `ghcr.io/klboke/kkrepo:1.5.1`，`KKREPO_RUNTIME=native` 选择 `ghcr.io/klboke/kkrepo:1.5.1-native`。两种镜像均发布 Linux `amd64` 和 `arm64` 架构。显式设置 `KKREPO_IMAGE_TAG` 时，会覆盖对应运行时的默认 tag。
 
 该脚本会逐步打印日志并执行：
 
@@ -61,7 +61,7 @@ bash quickstart.sh
 
 默认会启动：
 
-- `ghcr.io/klboke/kkrepo:1.5.0` 中的 JVM 运行时
+- `ghcr.io/klboke/kkrepo:1.5.1` 中的 JVM 运行时
 - MySQL 8.0
 - 持续探测应用就绪状态的 `kkrepo-health` sidecar
 - 用于本地试用的持久化 MySQL volume 和 File blob storage volume
@@ -164,7 +164,7 @@ server/target/kkrepo-server-<version>.jar
 拉取最新公开发行镜像：
 
 ```bash
-docker pull ghcr.io/klboke/kkrepo:1.5.0
+docker pull ghcr.io/klboke/kkrepo:1.5.1
 ```
 
 也可以使用 `latest` 跟随最新公开发行版本：
@@ -176,7 +176,7 @@ docker pull ghcr.io/klboke/kkrepo:latest
 Native 镜像使用独立 tag：
 
 ```bash
-docker pull ghcr.io/klboke/kkrepo:1.5.0-native
+docker pull ghcr.io/klboke/kkrepo:1.5.1-native
 docker pull ghcr.io/klboke/kkrepo:native-latest
 ```
 
@@ -274,7 +274,7 @@ server/target/kkrepo-<release-version>-native-linux-<architecture>.tar.gz
 server/target/kkrepo-<release-version>-native-linux-<architecture>.zip
 ```
 
-手动触发 GitHub 的 `Release Packages` 工作流后，它只接受已经合并到 `main` 的版本，并构建公开发行矩阵：一组平台无关的 JVM 压缩包、Native Linux `amd64` 和 `arm64` 压缩包，以及一份合并的 SHA-256 清单。同一批对应架构的 Native 构建会先推送 `<version>-native-amd64` 和 `<version>-native-arm64` 镜像，再合成为公开使用的版本化 `<version>-native` 和滚动更新的 `native-latest` 多架构 manifest。创建 GitHub Release 和上传压缩包资产仍是后续独立、显式的发行步骤。
+手动触发 GitHub 的 `Release Packages` 工作流后，它只接受与版本号一致的 `release/<version>` 维护分支，并构建公开发行矩阵：一组平台无关的 JVM 压缩包、Native Linux `amd64` 和 `arm64` 压缩包，以及一份合并的 SHA-256 清单。同一批对应架构的 Native 构建会先推送 `<version>-native-amd64` 和 `<version>-native-arm64` 镜像，再合成为公开使用的版本化 `<version>-native` 多架构 manifest。创建 GitHub Release 和上传压缩包资产仍是后续独立、显式的发行步骤。
 
 默认仍是 JVM 打包。JVM 压缩包包含 `lib/kkrepo.jar`，Native 压缩包包含可执行文件 `lib/kkrepo`。共用的 `bin/start.sh` 会自动选择包内运行时，因此服务命令和外部配置目录保持一致。Native 压缩包的目标机器不需要 Java，但操作系统和 CPU 架构必须与包名一致。
 

@@ -7,16 +7,22 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.klboke.kkrepo.core.RepositoryFormat;
 import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.core.security.SecretCipher;
 import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CacheVersionDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.CleanupPolicyDao.CleanupRun;
 import com.github.klboke.kkrepo.persistence.jdbc.api.MetadataRebuildDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityAuditDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.internal.JdbcBrowseNodeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.internal.support.JsonColumns;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialect;
+import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseDialects;
 import com.github.klboke.kkrepo.persistence.jdbc.spi.DatabaseType;
 import com.github.klboke.kkrepo.protocol.maven.path.MavenPath;
 import com.github.klboke.kkrepo.server.BlobStoresController.BlobStoreRequest;
@@ -40,7 +46,13 @@ import com.github.klboke.kkrepo.server.repositories.RepositoryCommands.ProxySett
 import com.github.klboke.kkrepo.server.repositories.RepositoryService;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AdminBootstrapCommand;
+import com.sun.net.httpserver.HttpServer;
 import java.io.ByteArrayInputStream;
+import java.net.InetSocketAddress;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.time.Duration;
@@ -48,6 +60,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -64,6 +77,7 @@ import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.session.FindByIndexNameSessionRepository;
 import org.springframework.session.Session;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -285,8 +299,97 @@ class DatabaseServerSmokeTest {
       String username,
       String password) throws Exception {
     Map<String, Object> properties = properties(type, url, username, password);
+    HttpServer upstream = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    upstream.createContext("/artifact.txt", exchange -> {
+      try (exchange) {
+        if (!"Bearer legacy-fixture-bearer".equals(exchange.getRequestHeaders().getFirst("Authorization"))) {
+          exchange.sendResponseHeaders(401, -1);
+          return;
+        }
+        byte[] body = "authenticated legacy proxy artifact".getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("Content-Type", "text/plain");
+        exchange.sendResponseHeaders(200, body.length);
+        exchange.getResponseBody().write(body);
+      }
+    });
+    upstream.start();
+    try {
+      smokeWithCredentialUpgrade(type, new DriverManagerDataSource(url, username, password), properties,
+          "http://127.0.0.1:" + upstream.getAddress().getPort() + "/");
+    } finally {
+      upstream.stop(0);
+    }
+  }
+
+  private static void smokeWithCredentialUpgrade(DatabaseType type, DriverManagerDataSource source,
+      Map<String, Object> properties, String remoteUrl) throws Exception {
+    var dialect = DatabaseDialects.load(type);
+    var baseline = Flyway.configure().dataSource(source).locations("classpath:db/migration/" + type.id()).target("60");
+    new DatabaseBackendConfiguration().databaseFlywayCustomizer(dialect).customize(baseline);
+    baseline.load().migrate();
+    var jdbc = new JdbcTemplate(source);
+    var json = new JsonColumns(new ObjectMapper(), dialect);
+    var configured = new SecretCipher(properties.get("kkrepo.security.encryption.credential-secret").toString());
+    var legacy = new SecretCipher("kkrepo-development-credential-secret");
+    var legacyToken = legacy.encrypt("legacy-fixture-bearer");
+    var currentToken = configured.encrypt("current-fixture-bearer");
+    var legacyPassword = legacy.encrypt("legacy-upstream-password");
+    var legacyProxyPassword = legacy.encrypt("legacy-egress-password");
+    var unknown = new SecretCipher("unrelated-test-key").encrypt("unreadable-password");
+    jdbc.update("INSERT INTO blob_store (name, type, attributes_json) VALUES ('credential-fixture', 'file', ?)",
+        json.parameter(Map.of("path", "credential-fixture")));
+    Long store = jdbc.queryForObject("SELECT id FROM blob_store WHERE name = 'credential-fixture'", Long.class);
+    insertCredentialProxy(jdbc, json, "credential-fixture-legacy", store, remoteUrl, true,
+        Map.of("remoteBearerToken", legacyToken));
+    insertCredentialProxy(jdbc, json, "credential-fixture-mixed", store, remoteUrl, false,
+        Map.of("remoteBearerToken", currentToken, "remotePassword", legacyPassword,
+            "outboundProxyPassword", legacyProxyPassword));
+    insertCredentialProxy(jdbc, json, "credential-fixture-unknown", store, remoteUrl, false,
+        Map.of("remotePassword", unknown));
+    jdbc.update("""
+        INSERT INTO repository (name, format, type, recipe_name, online, blob_store_id, attributes_json)
+        VALUES ('credential-fixture-docker', 'docker', 'hosted', 'docker-hosted', false, ?, ?)
+        """, store, json.parameter(Map.of("docker", Map.of("connectorPort", 5100, "connectorEnabled", false))));
+    var failure = assertThrows(RuntimeException.class, () -> {
+      try (var ignored = start(properties)) {
+        // Opening the context must fail while database initialization validates the encrypted rows.
+      }
+    });
+    Throwable cause = failure;
+    while (cause.getCause() != null) {
+      cause = cause.getCause();
+    }
+    assertTrue(cause.getMessage().contains("remotePassword for repository credential-fixture-unknown"));
+    assertFalse(cause.getMessage().contains(unknown));
+    assertEquals(legacyToken, proxyFields(jdbc, json, "credential-fixture-legacy").get("remoteBearerToken"));
+    assertEquals(legacyPassword, proxyFields(jdbc, json, "credential-fixture-mixed").get("remotePassword"));
+    assertEquals(unknown, proxyFields(jdbc, json, "credential-fixture-unknown").get("remotePassword"));
+    jdbc.update("DELETE FROM repository WHERE name = 'credential-fixture-unknown'");
+
+    smokeAfterUpgrade(type, properties, jdbc, json, configured, currentToken);
+  }
+
+  private static void smokeAfterUpgrade(DatabaseType type, Map<String, Object> properties, JdbcTemplate upgradeJdbc,
+      JsonColumns json, SecretCipher configured, String currentToken) throws Exception {
+    Map<?, ?> migrated;
     try (ConfigurableApplicationContext first = start(properties);
          ConfigurableApplicationContext second = start(properties)) {
+      migrated = proxyFields(upgradeJdbc, json, "credential-fixture-mixed");
+      assertEquals(currentToken, migrated.get("remoteBearerToken"));
+      assertEquals("legacy-upstream-password", configured.decrypt(migrated.get("remotePassword").toString()));
+      assertEquals("legacy-egress-password", configured.decrypt(migrated.get("outboundProxyPassword").toString()));
+
+      var repositoryDao = first.getBean(RepositoryDao.class);
+      var docker = repositoryDao.listDockerConnectorRepositories().stream()
+          .filter(record -> record.name().equals("credential-fixture-docker")).findFirst().orElseThrow();
+      assertEquals(5100, docker.settings().get("connectorPort"));
+      var legacy = repositoryDao.findByName("credential-fixture-legacy").orElseThrow();
+      repositoryDao.insert(new RepositoryRecord(null, "credential-fixture-new", RepositoryFormat.RAW,
+          RepositoryType.PROXY, "raw-proxy", false, legacy.blobStoreId(), null, legacy.proxyRemoteUrl(),
+          null, null, null, true, Map.of("proxy", Map.of("remotePassword", "new-upstream-password"))));
+      String newCiphertext = proxyFields(upgradeJdbc, json, "credential-fixture-new").get("remotePassword").toString();
+      assertTrue(SecretCipher.isEncrypted(newCiphertext));
+      assertEquals("new-upstream-password", configured.decrypt(newCiphertext));
       assertEquals(type, first.getBean(DatabaseDialect.class).type());
       assertEquals(type, second.getBean(DatabaseDialect.class).type());
       assertEquals(0, first.getBean(Flyway.class).info().pending().length);
@@ -296,6 +399,7 @@ class DatabaseServerSmokeTest {
       assertEquals("UP", second.getBean(HealthEndpoint.class).health().getStatus().getCode());
 
       exerciseSharedApplicationFlows(first, second);
+      verifyUpgradedProxyDownload(second);
       YumRepositoryDeletionSmokeChecks.exercise(first, second);
       MavenSnapshotCleanupSmokeChecks.exercise(first, second, repositoryId -> {
         JdbcTemplate jdbc = first.getBean(JdbcTemplate.class);
@@ -348,6 +452,34 @@ class DatabaseServerSmokeTest {
     custom.put("kkrepo.security.forwarded-headers.trusted-proxies", "127.0.0.1");
     try (ConfigurableApplicationContext application = start(custom)) {
       RecentIssueSmokeChecks.exercise(application);
+    }
+    assertEquals(migrated, proxyFields(upgradeJdbc, json, "credential-fixture-mixed"));
+  }
+
+  private static void insertCredentialProxy(JdbcTemplate jdbc, JsonColumns json, String name, long store,
+      String remoteUrl, boolean online, Map<String, Object> credentials) {
+    jdbc.update("""
+        INSERT INTO repository (name, format, type, recipe_name, online, blob_store_id, proxy_remote_url, attributes_json)
+        VALUES (?, 'raw', 'proxy', 'raw-proxy', ?, ?, ?, ?)
+        """, name, online, store, remoteUrl, json.parameter(Map.of("proxy", credentials)));
+  }
+
+  private static Map<?, ?> proxyFields(JdbcTemplate jdbc, JsonColumns json, String repository) {
+    String raw = jdbc.queryForObject("SELECT attributes_json FROM repository WHERE name = ?", String.class, repository);
+    return (Map<?, ?>) json.read(raw).get("proxy");
+  }
+
+  private static void verifyUpgradedProxyDownload(ConfigurableApplicationContext context) throws Exception {
+    int port = ((WebServerApplicationContext) context).getWebServer().getPort();
+    String authorization = "Basic " + Base64.getEncoder().encodeToString(
+        "admin:SmokeAdmin1234!".getBytes(StandardCharsets.UTF_8));
+    try (var client = HttpClient.newHttpClient()) {
+      var request = HttpRequest.newBuilder(
+          URI.create("http://127.0.0.1:" + port + "/repository/credential-fixture-legacy/artifact.txt"))
+          .header("Authorization", authorization).timeout(Duration.ofSeconds(15)).build();
+      var response = client.send(request, HttpResponse.BodyHandlers.ofString());
+      assertEquals(200, response.statusCode(), response.body());
+      assertEquals("authenticated legacy proxy artifact", response.body());
     }
   }
 
