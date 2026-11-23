@@ -234,6 +234,8 @@ KKREPO_CATALOG_CACHE_BROADCAST_BACKEND=mysql
 - 对 Terraform 上传 hosted module/provider，并使用 Terraform 0.13 与当前稳定版从 group 执行 `terraform init`；验证 proxy Provider、SHA256SUMS、detached signature、lock file，以及诊断信息中的 URL token 脱敏。
 - 对 Ansible 使用 2.9 和当前 ansible-core 构建/发布 collection，再通过 group 安装其依赖；验证重复版本拒绝、proxy install、artifact SHA-256、import task 恢复和另一副本读取。
 
+从 1.4.0 升级时，请先停止所有 1.4.0 副本，再启动新版本。新版本会在启动时使用当前配置的 `kkrepo.security.encryption.credential-secret` 重新加密受影响的仓库代理凭据。旧副本仍可能使用旧密钥读写同一批凭据。
+
 推荐发布流程：
 
 1. 先部署一个新副本。

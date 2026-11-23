@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.function.UnaryOperator;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
@@ -26,17 +27,23 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Repository
 public class JdbcRepositoryDao implements com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao {
-  private static final List<String> SENSITIVE_PROXY_ATTRIBUTES =
+  static final List<String> SENSITIVE_PROXY_ATTRIBUTES =
       List.of("remotePassword", "remoteBearerToken", "outboundProxyPassword");
 
   private final JdbcTemplate jdbcTemplate;
   private final JsonColumns jsonColumns;
   private final RowMapper<RepositoryRecord> rowMapper;
-  private volatile SecretCipher secretCipher;
+  private final SecretCipher secretCipher;
 
   public JdbcRepositoryDao(JdbcTemplate jdbcTemplate, JsonColumns jsonColumns) {
+    this(jdbcTemplate, jsonColumns, new SecretCipher(EncryptionSecrets.credentialSecret()));
+  }
+
+  @Autowired
+  JdbcRepositoryDao(JdbcTemplate jdbcTemplate, JsonColumns jsonColumns, SecretCipher secretCipher) {
     this.jdbcTemplate = jdbcTemplate;
     this.jsonColumns = jsonColumns;
+    this.secretCipher = secretCipher;
     this.rowMapper = (rs, rowNum) -> new RepositoryRecord(
         rs.getLong("id"),
         rs.getString("name"),
@@ -59,21 +66,12 @@ public class JdbcRepositoryDao implements com.github.klboke.kkrepo.persistence.j
    * the DAO boundary so direct row reads never expose plaintext in {@code attributes_json}; reads
    * decrypt for runtime use and admin views can choose whether to mask them.
    */
-  private SecretCipher cipher() {
-    SecretCipher local = secretCipher;
-    if (local == null) {
-      local = new SecretCipher(EncryptionSecrets.credentialSecret());
-      secretCipher = local;
-    }
-    return local;
-  }
-
   private Map<String, Object> storageAttributes(Map<String, Object> attributes) {
-    return transformProxySensitive(attributes, cipher()::encrypt);
+    return transformProxySensitive(attributes, secretCipher::encrypt);
   }
 
   private Map<String, Object> decryptAttributes(Map<String, Object> attributes) {
-    return transformProxySensitive(attributes, cipher()::decrypt);
+    return transformProxySensitive(attributes, secretCipher::decrypt);
   }
 
   @SuppressWarnings("unchecked")
@@ -157,6 +155,17 @@ public class JdbcRepositoryDao implements com.github.klboke.kkrepo.persistence.j
 
   public List<RepositoryRecord> list() {
     return jdbcTemplate.query("SELECT * FROM repository ORDER BY name", rowMapper);
+  }
+
+  @Override
+  public List<DockerConnectorRepository> listDockerConnectorRepositories() {
+    return jdbcTemplate.query("""
+        SELECT id, name, type, %s AS docker_settings
+        FROM repository WHERE format = 'docker' ORDER BY name
+        """.formatted(jsonColumns.extractJson("attributes_json", "docker")),
+        (rs, row) -> new DockerConnectorRepository(rs.getLong("id"), rs.getString("name"),
+            EnumColumns.read(RepositoryType.class, rs.getString("type")),
+            jsonColumns.readObject(rs.getString("docker_settings"))));
   }
 
   @Transactional

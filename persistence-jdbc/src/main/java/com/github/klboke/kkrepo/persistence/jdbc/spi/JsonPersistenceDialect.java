@@ -9,6 +9,8 @@ public interface JsonPersistenceDialect {
 
   void bind(PreparedStatement statement, int index, String json) throws SQLException;
 
+  String extractJson(String column, String... path);
+
   String extractText(String column, String... path);
 
   String extractTextAtKey(String column, String... parentPath);
