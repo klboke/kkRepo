@@ -16,6 +16,7 @@ import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RemoteUrlBuilder;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.raw.RawProxyService;
 import java.io.IOException;
 import java.net.URI;
@@ -224,6 +225,8 @@ public class ComposerProxyService {
         }
         return upstreamFailure(runtime, cachePath, cached, "Upstream returned " + result.status(), now);
       });
+    } catch (Blocked blocked) {
+      return cached.map(asset -> parseCached(runtime, cachePath, asset));
     } catch (IOException e) {
       return upstreamFailure(runtime, cachePath, cached, "Upstream IO error: " + e.getMessage(), now);
     }

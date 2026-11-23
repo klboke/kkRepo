@@ -1,9 +1,8 @@
 package com.github.klboke.kkrepo.server.upload;
 
-import com.github.klboke.kkrepo.server.security.ClientAddress;
-
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.github.klboke.kkrepo.server.security.ClientAddress;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.Map;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -14,6 +13,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartHttpServletRequest;
+import org.springframework.web.server.ResponseStatusException;
 
 /**
  * Legacy Nexus internal UI upload endpoint.
@@ -44,9 +44,11 @@ public class ComponentLegacyUiUploadController {
           repository,
           multipartRequest.getParameterMap(),
           multipartRequest.getMultiFileMap(),
-          ComponentUploadController.createdBy(request),
+          ComponentUploadController.subject(request),
           ClientAddress.from(request));
       return htmlTextarea(Map.of("success", true, "data", result.searchTerm()));
+    } catch (ResponseStatusException e) {
+      throw e;
     } catch (Exception e) {
       return htmlTextarea(Map.of("success", false, "message", message(e)));
     }

@@ -135,7 +135,8 @@ securityScanning:
       accessModes: ["ReadWriteOnce"]
       size: 10Gi
   worker:
-    batchSize: 4
+    # Size total worker concurrency against the scanner replicas and their scan slots.
+    batchSize: 1
     leaseSeconds: 300
     heartbeatSeconds: 60
     maxAttempts: 5
@@ -169,7 +170,7 @@ securityScanning:
     scratchVolumeSize: 8Gi
     maxConcurrentScans: 2
     maxQueuedScans: 4
-    admissionTimeout: 1s
+    admissionTimeout: 5s
     retryAfterSeconds: 5
   podSecurityContext:
     runAsNonRoot: true

@@ -12,6 +12,8 @@ public interface ProxyStateDao {
 
   ProxyRemoteState recordFailure(long repositoryId, long blockSeconds, String error, Instant now);
 
+  void clearBackoff(long repositoryId);
+
   record ProxyRemoteState(
       long repositoryId,
       Instant blockedUntil,

@@ -1213,6 +1213,26 @@ public class StagingService {
           return;
         }
         String message = error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage();
+        // Only the attempt that still owns the in-flight promotion may write the failure report.
+        // A losing concurrent request (the session was promoted, cancelled or failed by another
+        // request while this one was preparing its payloads) must never overwrite the winning
+        // report: the compensation path requires the SUCCEEDED report of the promotion that
+        // actually published the release. The locked session row serializes this check against
+        // the winner's transaction, which also holds it while it writes its report.
+        boolean inFlightSession = session.state().equals(StagingDao.SESSION_PROMOTING)
+            || session.state().equals(StagingDao.SESSION_PREFLIGHTED);
+        boolean samePromotion = session.promotionId() != null
+            && session.promotionId() == attempt.promotionId();
+        boolean promotionInFlight = staging.lockPromotion(attempt.promotionId())
+            .map(promotion -> promotion.state().equals(StagingDao.PROMOTION_RUNNING)
+                || promotion.state().equals(StagingDao.PROMOTION_PREFLIGHT))
+            .orElse(false);
+        if (!inFlightSession || !samePromotion || !promotionInFlight) {
+          // The losing request records its own outcome without touching the winning report.
+          audit(actor, remoteAddr, "staging-promote", session, "superseded",
+              Map.of("promotionId", attempt.promotionId(), "error", message));
+          return;
+        }
         Map<String, Object> report = reportBody(
             session.id(), false, attempt.manifestSha256(), List.of(), message);
         staging.updatePromotion(

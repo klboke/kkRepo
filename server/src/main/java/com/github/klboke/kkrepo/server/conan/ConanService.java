@@ -21,6 +21,7 @@ import com.github.klboke.kkrepo.server.maven.MavenExceptions;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.proxy.ProxyRequestAudit;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import java.io.ByteArrayInputStream;
 import java.io.FilterInputStream;
@@ -750,6 +751,8 @@ public class ConanService {
         if (upstreamSha1 != null && !upstreamSha1.isBlank()) {
           verifySha1(upstreamSha1, staged.blob().sha1());
         }
+      } catch (Blocked blocked) {
+        throw new ConanExceptions.NotFound(path.filePath());
       } catch (IOException e) {
         throw new ConanExceptions.BadUpstream("Unable to fetch Conan upstream file", e);
       }

@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
 
 /** Guards the frozen V1-V29 chain and validates repeat startup after newer migrations. */
 class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
-  private static final int LATEST_MIGRATION = 69;
+  private static final int LATEST_MIGRATION = 73;
   private static final Map<String, String> V29_SHA256 = checksums();
 
   @org.junit.jupiter.params.ParameterizedTest
@@ -126,6 +126,31 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
         SELECT COUNT(*) FROM information_schema.tables
         WHERE table_schema = DATABASE() AND table_name IN ('gitlfs_object', 'gitlfs_upload')
         """, Integer.class));
+  }
+
+  @Test
+  void downloadOffloadMigrationResumesAfterCreatingTheSettingsTable() throws Exception {
+    Flyway throughV69 = migration("69");
+    throughV69.clean();
+    assertEquals(69, throughV69.migrate().migrationsExecuted);
+    try (InputStream stream = getClass().getResourceAsStream(
+        "/db/migration/mysql/V70__download_offload_settings.sql")) {
+      assertNotNull(stream);
+      String sql = new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+      jdbc().execute(sql.substring(0, sql.indexOf(';')));
+
+      Flyway resumed = migration(null);
+      assertEquals(LATEST_MIGRATION - 69, resumed.migrate().migrationsExecuted);
+      assertEquals(0, resumed.migrate().migrationsExecuted);
+      assertTrue(resumed.validateWithResult().validationSuccessful);
+      assertEquals(0L, jdbc().queryForObject(
+          "SELECT revision FROM download_offload_settings WHERE id = 1", Long.class));
+
+      jdbc().update("UPDATE download_offload_settings SET revision = 7 WHERE id = 1");
+      jdbc().execute(sql.substring(sql.indexOf(';') + 1));
+      assertEquals(7L, jdbc().queryForObject(
+          "SELECT revision FROM download_offload_settings WHERE id = 1", Long.class));
+    }
   }
 
   @Test

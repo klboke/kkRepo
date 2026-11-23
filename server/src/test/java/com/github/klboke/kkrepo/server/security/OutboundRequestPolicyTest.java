@@ -2,10 +2,26 @@ package com.github.klboke.kkrepo.server.security;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
+import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
 import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory;
+import com.github.klboke.kkrepo.server.proxy.ProxiedHttpClientFactory.ProxiedResponse;
 import com.sun.net.httpserver.HttpServer;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
@@ -13,9 +29,13 @@ import java.net.URI;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.slf4j.LoggerFactory;
 
 class OutboundRequestPolicyTest {
 
@@ -49,6 +69,60 @@ class OutboundRequestPolicyTest {
         () -> policy.resolvePublicHttpsTarget("https://cdn.example/blob", "content"));
   }
 
+  @ParameterizedTest
+  @ValueSource(ints = {0, 2})
+  void logsOnlyTheRejectedHopAndAddressWithoutSignedUrl(int rejectedHop) throws Exception {
+    String upstream = "https://services.gradle.org";
+    String blockedHost = rejectedHop == 0 ? "services.gradle.org" : "release-assets.githubusercontent.com";
+    InetAddress publicAddress = InetAddress.ofLiteral("104.16.73.101");
+    InetAddress blockedAddress = InetAddress.ofLiteral("::ffff");
+    var policy = new OutboundRequestPolicy(false, "", host -> host.equals(blockedHost)
+        ? new InetAddress[] {publicAddress, blockedAddress} : new InetAddress[] {publicAddress});
+    var clients = mock(ProxiedHttpClientFactory.class);
+    var firstRedirect = redirect("https://github.com/gradle/gradle-distributions/releases/download/gradle.zip");
+    var secondRedirect = redirect("https://release-assets.githubusercontent.com/file?sig=secret");
+    when(clients.execute(eq("services-gradle-org"), isNull(), eq("GET"), any(), anyMap(), isNull(), anyLong()))
+        .thenReturn(firstRedirect, secondRedirect);
+    var runtime = mock(RepositoryRuntime.class);
+    when(runtime.name()).thenReturn("services-gradle-org");
+    when(runtime.proxyRemoteUrl()).thenReturn(upstream);
+    when(runtime.allowedRedirectHosts()).thenReturn(Set.of("*"));
+    when(runtime.contentRedirectPolicy()).thenReturn(ProxyRedirectPolicy.PUBLIC_HTTPS);
+    var request = HttpRemoteFetcher.Request.get(upstream + "/distributions/gradle.zip")
+        .withRepositoryForContent(runtime, false);
+    var fetcher = new HttpRemoteFetcher(policy, null, clients, "HTTP_1_1", 30, 60, 120, 5, 1);
+    var logger = (Logger) LoggerFactory.getLogger(HttpRemoteFetcher.class);
+    var appender = new ListAppender<ILoggingEvent>();
+    appender.start();
+    logger.addAppender(appender);
+    try {
+      var exception = assertThrows(HttpRemoteFetcher.RemoteRequestRejectedException.class, () -> fetcher.fetch(request));
+      var response = new SecurityErrorAdvice().validation(exception);
+      String purpose = rejectedHop == 0 ? "remote fetch" : "remote redirect";
+      assertEquals(400, response.getStatusCode().value());
+      assertEquals(Map.of("message", purpose + " URL resolves to a non-public address"), response.getBody());
+      assertEquals(1, appender.list.size());
+      var event = appender.list.getFirst();
+      assertEquals("Proxy upstream address rejected: repository=services-gradle-org method=GET redirectHop="
+          + rejectedHop + " host=" + blockedHost + " address=" + blockedAddress.getHostAddress()
+          + " reason=NON_PUBLIC_ADDRESS", event.getFormattedMessage());
+      assertNull(event.getThrowableProxy());
+      verify(clients, times(rejectedHop)).execute(
+          eq("services-gradle-org"), isNull(), eq("GET"), any(), anyMap(), isNull(), anyLong());
+    } finally {
+      logger.detachAppender(appender);
+      appender.stop();
+    }
+  }
+
+  private static ProxiedResponse redirect(String location) {
+    var response = mock(ProxiedResponse.class);
+    when(response.status()).thenReturn(302);
+    when(response.header("Location")).thenReturn(location);
+    when(response.headers()).thenReturn(Map.of("Location", location));
+    return response;
+  }
+
   @Test
   void publicHttpsRejectsMissingAndMalformedUrlsBeforeResolvingDns() {
     AtomicInteger lookups = new AtomicInteger();
@@ -71,8 +145,10 @@ class OutboundRequestPolicyTest {
   void rejectsLoopbackByDefault() {
     OutboundRequestPolicy policy = new OutboundRequestPolicy(false, "");
 
-    assertThrows(SecurityValidationException.class,
+    var error = assertThrows(OutboundRequestPolicy.AddressRejectedException.class,
         () -> policy.validateHttpUri("http://127.0.0.1:8081/repository/maven-public/", "proxy.remoteUrl"));
+    assertEquals("127.0.0.1", error.address());
+    assertEquals("PRIVATE_OR_LOCAL_ADDRESS", error.reason());
   }
 
   @Test

@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.security;
 
 import com.github.klboke.kkrepo.auth.PermissionSubject;
 import java.io.Serializable;
+import java.util.Set;
 
 /**
  * Authenticated identity attached to one request.
@@ -22,18 +23,21 @@ public record AuthenticatedSubject(
     Long apiKeyId,
     PermissionSubject permissionSubject,
     Boolean stagingToken,
-    String stagingSession) implements Serializable {
+    String stagingSession,
+    Set<String> externalRoleNames) implements Serializable {
+
+  public AuthenticatedSubject(String source, String userId, String realmId, Long apiKeyId,
+      PermissionSubject permissionSubject) {
+    this(source, userId, realmId, apiKeyId, permissionSubject, null, null, null);
+  }
+
+  AuthenticatedSubject withExternalRoleNames(Set<String> names) {
+    return new AuthenticatedSubject(source, userId, realmId, apiKeyId, permissionSubject,
+        stagingToken, stagingSession, names);
+  }
+
   public static final String REQUEST_ATTRIBUTE = AuthenticatedSubject.class.getName();
   public static final String SESSION_ATTRIBUTE = AuthenticatedSubject.class.getName() + ".SESSION";
-
-  public AuthenticatedSubject(
-      String source,
-      String userId,
-      String realmId,
-      Long apiKeyId,
-      PermissionSubject permissionSubject) {
-    this(source, userId, realmId, apiKeyId, permissionSubject, null, null);
-  }
 
   /** True only when this subject is proven to come from a staging session credential. */
   public boolean isStagingToken() {
@@ -48,12 +52,14 @@ public record AuthenticatedSubject(
   /** Returns a copy bound to {@code session}, keeping an existing staging classification. */
   public AuthenticatedSubject withStagingSession(String session) {
     return new AuthenticatedSubject(
-        source, userId, realmId, apiKeyId, permissionSubject, Boolean.TRUE, session);
+        source, userId, realmId, apiKeyId, permissionSubject, Boolean.TRUE, session,
+        externalRoleNames);
   }
 
   /** Returns a copy proven to be an ordinary (non-staging) API key. */
   public AuthenticatedSubject asOrdinaryApiKey() {
     return new AuthenticatedSubject(
-        source, userId, realmId, apiKeyId, permissionSubject, Boolean.FALSE, null);
+        source, userId, realmId, apiKeyId, permissionSubject, Boolean.FALSE, null,
+        externalRoleNames);
   }
 }

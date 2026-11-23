@@ -32,6 +32,7 @@ import com.github.klboke.kkrepo.server.maven.HttpRemoteFetcher;
 import com.github.klboke.kkrepo.server.maven.MavenResponse;
 import com.github.klboke.kkrepo.server.maven.ProxyNegativeCache;
 import com.github.klboke.kkrepo.server.maven.RepositoryRuntime;
+import com.github.klboke.kkrepo.server.proxy.RepositoryOutboundBlock.Blocked;
 import com.github.klboke.kkrepo.server.support.InMemorySharedCache;
 import java.io.IOException;
 import java.io.InputStream;
@@ -52,6 +53,44 @@ class CargoProxyServiceTest {
   private static final String REMOTE = "https://index.crates.io/";
   private static final TypeReference<Map<String, Object>> JSON_MAP = new TypeReference<>() {
   };
+
+  @Test
+  void manualBlockUsesLocalSearchAndSparseCacheAndLeavesCrateMissesRetryable() throws Exception {
+    var cache = mock(AssetMetadataCache.class);
+    var fetcher = mock(HttpRemoteFetcher.class);
+    var reader = mock(CargoAssetReader.class);
+    var state = mock(ProxyStateDao.class);
+    var service = new CargoProxyService(mock(AssetDao.class), mock(ComponentDao.class),
+        mock(BlobStorageRegistry.class), mock(CargoAssetWriter.class), reader, state, fetcher,
+        mock(ProxyNegativeCache.class), cache, new ObjectMapper());
+    var runtime = runtime();
+    var query = new CargoSearchQuery("itoa", 10, 1);
+    String indexPath = "it/oa/itoa";
+    String configPath = "config.json";
+    when(fetcher.fetchWithBodyRetry(any(), anyString(), any())).thenThrow(new Blocked());
+    assertEquals(200, service.search(runtime, query, true).status());
+    assertThrows(CargoExceptions.CargoIndexNotFoundException.class,
+        () -> service.index(runtime, "itoa", true));
+
+    var config = CachedAssetMetadata.of(asset(configPath, 20L, Instant.EPOCH), blob(20L));
+    var index = CachedAssetMetadata.of(asset(indexPath, 21L), blob(21L));
+    when(cache.find(eq(runtime.id()), eq(configPath), any())).thenReturn(Optional.of(config));
+    when(cache.find(eq(runtime.id()), eq(indexPath), any())).thenReturn(Optional.of(index));
+    when(reader.exists(any())).thenReturn(true);
+    when(reader.readText(config, configPath))
+        .thenReturn("{\"dl\":\"https://index.crates.io/crates\",\"api\":\"https://crates.io\"}");
+    String sparseIndex = """
+        {"name":"itoa","vers":"1.0.15","cksum":"abc123","yanked":false}
+        """;
+    when(reader.readText(index, indexPath)).thenReturn(sparseIndex);
+    byte[] indexBytes = sparseIndex.getBytes(StandardCharsets.UTF_8);
+    when(reader.serveSnapshot(index, false, indexPath)).thenReturn(MavenResponse.ok(
+        new ByteArrayInputStream(indexBytes), indexBytes.length, "text/plain", null, null));
+    assertEquals(200, service.search(runtime, query, true).status());
+    assertThrows(CargoExceptions.CargoNotFoundException.class,
+        () -> service.download(runtime, "itoa", "1.0.15", true));
+    verify(state, never()).recordFailure(anyLong(), anyLong(), anyString(), any());
+  }
 
   @Test
   void sparseUnavailableStatusIsStoredInNegativeCache() {
@@ -407,6 +446,10 @@ class CargoProxyServiceTest {
   }
 
   private static AssetRecord asset(String path, long blobId) {
+    return asset(path, blobId, Instant.now());
+  }
+
+  private static AssetRecord asset(String path, long blobId, Instant updatedAt) {
     return new AssetRecord(
         100L + blobId,
         50L,
@@ -420,7 +463,7 @@ class CargoProxyServiceTest {
         "application/x-tar",
         10L,
         null,
-        Instant.now(),
+        updatedAt,
         Map.of());
   }
 

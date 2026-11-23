@@ -46,6 +46,7 @@ public class AdminUiController {
     }
     boolean allowed = securityService.decide(subject.permissionSubject(), "nexus:*").allowed()
         || securityService.decide(subject.permissionSubject(), "nexus:security-scanning:read").allowed()
+        || securityService.decide(subject.permissionSubject(), "nexus:settings:read").allowed()
         || java.util.List.of("read", "create", "update", "delete").stream().anyMatch(action ->
             securityService.decide(subject.permissionSubject(), "nexus:selectors:" + action).allowed());
     if (!allowed) {

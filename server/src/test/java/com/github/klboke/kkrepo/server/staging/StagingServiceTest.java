@@ -255,6 +255,64 @@ class StagingServiceTest {
   }
 
   @Test
+  void aLosingPromoteRequestDoesNotOverwriteTheWinningReport() throws Exception {
+    Fixture fixture = new Fixture();
+    String sha = "a".repeat(64);
+    StagingItemRecord item = item(StagingDao.ITEM_ADD, sha, 5L, 11L);
+    Instant now = Instant.now();
+    fixture.session.set(new StagingSessionRecord(
+        1L, "release", StagingDao.SESSION_PREFLIGHTED, 3L, "Local", "alice", now, now,
+        now, null, now.plus(1, ChronoUnit.DAYS), 5L, Map.of()));
+    StagingPromotionRecord planned = new StagingPromotionRecord(
+        5L, 1L, StagingDao.PROMOTION_PREFLIGHT, null, manifest(List.of(item)),
+        Map.of("promotable", true), null, null, Instant.now());
+    when(fixture.staging.listItems(1L)).thenReturn(List.of(item));
+    when(fixture.staging.hasRepository(1L, 1L)).thenReturn(true);
+    when(fixture.staging.lockPromotion(5L)).thenReturn(Optional.of(planned));
+    when(fixture.staging.findLatestPromotion(1L)).thenReturn(Optional.of(planned));
+    when(fixture.assets.findBlobById(11L)).thenReturn(Optional.of(fixture.blob(11L, sha, 5L)));
+    java.util.concurrent.CountDownLatch prepStarted = new java.util.concurrent.CountDownLatch(1);
+    java.util.concurrent.CountDownLatch releasePrep = new java.util.concurrent.CountDownLatch(1);
+    when(fixture.blobStorage.get(any())).thenAnswer(invocation -> {
+      prepStarted.countDown();
+      assertTrue(releasePrep.await(10, java.util.concurrent.TimeUnit.SECONDS));
+      return Optional.of(new java.io.ByteArrayInputStream(new byte[] {1, 2, 3}));
+    });
+    java.util.concurrent.ExecutorService pool =
+        java.util.concurrent.Executors.newSingleThreadExecutor();
+    try {
+      java.util.concurrent.Future<?> loser = pool.submit(
+          () -> fixture.service.promote(1L, ALICE, "127.0.0.1"));
+      assertTrue(prepStarted.await(10, java.util.concurrent.TimeUnit.SECONDS));
+
+      // Request B wins while A is still preparing its payloads: the session is promoted and the
+      // winning report is SUCCEEDED.
+      fixture.session.set(new StagingSessionRecord(
+          1L, "release", StagingDao.SESSION_PROMOTED, 5L, "Local", "alice", now, now,
+          now, now, now.plus(1, ChronoUnit.DAYS), 5L, Map.of()));
+      StagingPromotionRecord won = new StagingPromotionRecord(
+          5L, 1L, StagingDao.PROMOTION_SUCCEEDED, null, manifest(List.of(item)),
+          Map.of("promotable", true), now, now, Instant.now());
+      when(fixture.staging.lockPromotion(5L)).thenReturn(Optional.of(won));
+      when(fixture.staging.findPromotion(5L)).thenReturn(Optional.of(won));
+
+      releasePrep.countDown();
+      org.junit.jupiter.api.Assertions.assertThrows(
+          java.util.concurrent.ExecutionException.class,
+          () -> loser.get(10, java.util.concurrent.TimeUnit.SECONDS));
+
+      // The 409 must not replace the winner's SUCCEEDED report with FAILED, and the promoted
+      // session must stay promoted so the compensation path keeps its successful report.
+      verify(fixture.staging, never()).updatePromotion(
+          eq(5L), eq(StagingDao.PROMOTION_FAILED), any(), any(), any(), any());
+      assertEquals(StagingDao.SESSION_PROMOTED, fixture.session.get().state());
+    } finally {
+      releasePrep.countDown();
+      pool.shutdownNow();
+    }
+  }
+
+  @Test
   void sessionViewCountsItemsAndLoadsRepositoriesInBatches() {
     Fixture fixture = new Fixture();
     when(fixture.staging.listRepositories(1L)).thenReturn(List.of(

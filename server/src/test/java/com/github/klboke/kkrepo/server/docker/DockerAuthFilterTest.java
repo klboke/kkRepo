@@ -598,7 +598,7 @@ class DockerAuthFilterTest {
     RepositoryRuntime runtime = dockerProxy("docker-live-proxy");
     when(registry.resolve("docker-live-proxy")).thenReturn(Optional.of(runtime));
     AuthenticatedSubject stagingBearer = new AuthenticatedSubject(
-        "Local", "alice", "local", 9L, permissionSubject, Boolean.TRUE, "7");
+        "Local", "alice", "local", 9L, permissionSubject, Boolean.TRUE, "7", null);
     when(authService.authenticateBearer(
         eq("staging-bearer"),
         eq(runtime.id()),

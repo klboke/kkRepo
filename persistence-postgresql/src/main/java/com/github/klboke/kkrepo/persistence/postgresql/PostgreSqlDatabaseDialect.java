@@ -401,6 +401,11 @@ public final class PostgreSqlDatabaseDialect implements DatabaseDialect {
     }
 
     @Override
+    public String extractJson(String column, String... path) {
+      return column(column) + " #> '" + path(path) + "'";
+    }
+
+    @Override
     public String extractText(String column, String... path) {
       return column(column) + " #>> '" + path(path) + "'";
     }
