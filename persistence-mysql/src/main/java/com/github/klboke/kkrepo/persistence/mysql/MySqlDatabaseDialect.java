@@ -61,6 +61,12 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
   }
 
   @Override
+  public String caseSensitiveText(String expression) {
+    // Text columns use utf8mb4_unicode_ci; an explicit binary collation decides the comparison.
+    return "(" + expression + " COLLATE utf8mb4_bin)";
+  }
+
+  @Override
   public String tableReferenceWithPreferredIndex(String tableName, String indexName) {
     return tableName + " FORCE INDEX (" + indexName + ")";
   }

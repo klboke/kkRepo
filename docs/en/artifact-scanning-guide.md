@@ -620,7 +620,8 @@ suits code you cannot upgrade, such as a library shaded inside a third-party jar
    same library is still reported. Findings without a package URL stay waivable one by one.
 3. Select the expiry (90 days by default) and enter the Reason.
 4. Review the existing waivers that will be replaced: every waiver in that scope, active or
-   expired, tied to this package URL by its package selector or by its finding.
+   expired, tied to this package URL by its package selector or by its finding. Waivers in
+   repositories you cannot browse are not listed and stay in place.
 5. **Waive package**. When waivers would be replaced, a confirmation asks whether to delete them
    all. **Yes, replace** deletes them and creates the package waiver in one transaction; **No**
    cancels and changes nothing.

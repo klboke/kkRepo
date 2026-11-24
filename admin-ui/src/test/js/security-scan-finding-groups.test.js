@@ -222,9 +222,9 @@ function packageWaiverSetup({answer = true, replaced = [], postStatus = 200} = {
       return {ok: postStatus === 200, status: postStatus, json: async () => ({created: [{id: 70}], replaced})};
     }};
   vm.createContext(c);
-  vm.runInContext('let securityScanPackageWaiverContext = null; const securityScanPackageWaiverRequiredFields = [];'
+  vm.runInContext('const securityScanPackageWaiverRequiredFields = [];'
     + source.slice(source.indexOf('// ---- Package waivers'), source.indexOf('async function securityScanTaskAction(')), c);
-  return {c, calls, element};
+  return {c, calls, element, run: (code) => vm.runInContext(code, c)};
 }
 
 const submit = (c) => c.createSecurityScanPackageWaiver({preventDefault() {}});
@@ -286,5 +286,63 @@ test('with nothing to replace there is no confirmation, and a concurrent change 
     'a 409 reloads the waivers to replace for the same scope');
   assert.equal(calls.fetches.at(-1).url.searchParams.get('allRepositories'), 'true');
   assert.equal(calls.closed, 0, 'the form stays open for another confirmation');
+  assert.equal(calls.toasts.at(-1)[1], 'error');
+});
+
+test('a scope that is still loading or failed to load cannot be submitted', async () => {
+  const {c, calls, element, run} = packageWaiverSetup();
+  await c.showSecurityScanPackageWaiverForm('p');
+  await c.changeSecurityScanPackageWaiverScope('all');
+  element('security-scan-package-waiver-reason').value = 'shaded';
+  const posts = () => calls.fetches.filter((entry) => entry.init.method === 'POST').length;
+
+  // The operator narrows All repositories to one repository; its preview is delayed.
+  const realFetch = c.fetch;
+  const pending = [];
+  c.fetch = (url, init = {}) => init.method === 'POST'
+    ? realFetch(url, init)
+    : new Promise((resolve) => pending.push({url, resolve}));
+  element('security-scan-package-waiver-scope').value = 'repository:11';
+  const slow = c.changeSecurityScanPackageWaiverScope('repository:11');
+  assert.equal(element('security-scan-save-package-waiver-button').disabled, true);
+  assert.equal(run('securityScanPackageWaiverContext'), null);
+  await submit(c);
+  assert.equal(posts(), 0, 'the previous all-repositories preview must not be submitted');
+  assert.match(calls.toasts.at(-1)[0], /still loading/);
+
+  // A newer selection supersedes the slow one; the slow response is discarded when it arrives.
+  element('security-scan-package-waiver-scope').value = 'all';
+  const latest = c.changeSecurityScanPackageWaiverScope('all');
+  pending[1].resolve(await realFetch(pending[1].url));
+  assert.equal(await latest, true);
+  pending[0].resolve(await realFetch(pending[0].url));
+  assert.equal(await slow, false);
+  assert.equal(run('securityScanPackageWaiverContext.repositoryId'), null);
+  assert.equal(element('security-scan-package-waiver-scope').value, 'all');
+  assert.equal(element('security-scan-save-package-waiver-button').disabled, false);
+
+  // A failed load keeps submission blocked.
+  c.fetch = async (url, init = {}) => init.method === 'POST' ? realFetch(url, init) : {ok: false};
+  element('security-scan-package-waiver-scope').value = 'repository:11';
+  assert.equal(await c.changeSecurityScanPackageWaiverScope('repository:11'), false);
+  assert.equal(element('security-scan-save-package-waiver-button').disabled, true);
+  await submit(c);
+  assert.equal(posts(), 0);
+
+  // Closing the dialog discards anything still in flight.
+  c.fetch = (url) => new Promise((resolve) => pending.push({url, resolve}));
+  const abandoned = c.changeSecurityScanPackageWaiverScope('all');
+  c.hideSecurityScanPackageWaiverForm();
+  pending.at(-1).resolve(await realFetch(pending.at(-1).url));
+  assert.equal(await abandoned, false);
+  assert.equal(run('securityScanPackageWaiverContext'), null);
+});
+
+test('the dialog does not open when the first preview cannot be loaded', async () => {
+  const {c, calls, run} = packageWaiverSetup();
+  c.fetch = async () => ({ok: false});
+  await c.showSecurityScanPackageWaiverForm('p');
+  assert.equal(calls.opened, 0);
+  assert.equal(run('securityScanPackageWaiverPackage'), null);
   assert.equal(calls.toasts.at(-1)[1], 'error');
 });

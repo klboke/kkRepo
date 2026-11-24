@@ -132,7 +132,6 @@ let editingSecurityScanPolicyId = null;
 let editingSecurityScanPolicyEnabled = true;
 let editingSecurityScanPolicyPlatforms = ["linux/amd64"];
 let securityScanWaiverContext = null;
-let securityScanPackageWaiverContext = null;
 let securityScanFindingArtifactDetail = null;
 const AUDIT_LOG_DEFAULT_PAGE_SIZE = 15;
 let auditLogPage = { total: 0, page: 0, size: AUDIT_LOG_DEFAULT_PAGE_SIZE, items: [] };
@@ -7415,6 +7414,17 @@ async function createSecurityScanWaiver(event) {
 // A package waiver selects the exact package URL of one package version within one repository
 // or every repository, and replaces the narrower waivers for that package in the same scope.
 
+// The package of the open dialog, and the server preview for the scope selected in it. The
+// preview is null while a scope loads or after it failed, which blocks submission: a waiver is
+// only ever created for a scope whose preview the operator has seen.
+let securityScanPackageWaiverPackage = null;
+let securityScanPackageWaiverContext = null;
+let securityScanPackageWaiverRequest = 0;
+
+function securityScanPackageWaiverScopeValue(context) {
+  return context.repositoryId == null ? "all" : `repository:${context.repositoryId}`;
+}
+
 function securityScanPackageLabel(context) {
   return [context.packageName, context.installedVersion].filter(Boolean).join(" @ ");
 }
@@ -7459,7 +7469,7 @@ function renderSecurityScanPackageWaiverContext(context) {
       `<option value="repository:${escapeHtml(repository.id)}">${escapeHtml(repository.name)}</option>`),
     ...(context.canWaiveGlobally ? ['<option value="all">All repositories</option>'] : [])
   ].join("");
-  scope.value = context.repositoryId == null ? "all" : `repository:${context.repositoryId}`;
+  scope.value = securityScanPackageWaiverScopeValue(context);
   document.getElementById("security-scan-package-waiver-urls").innerHTML =
     context.packageUrls.map((url) => `<code>${escapeHtml(url)}</code>`).join("")
       || '<span class="form-note">No package URL in this scope</span>';
@@ -7477,38 +7487,62 @@ async function showSecurityScanPackageWaiverForm(key) {
       || !securityScanCanMutate("nexus:security-scanning-waivers:create")) return;
   document.getElementById("security-scan-package-waiver-form").reset();
   clearRequiredFieldErrors(securityScanPackageWaiverRequiredFields);
-  securityScanPackageWaiverContext = null;
-  try {
-    renderSecurityScanPackageWaiverContext(await fetchSecurityScanPackageWaiverContext(
-      node.group.packageName, node.group.installedVersion));
-    document.getElementById("security-scan-package-waiver-duration").value = "7776000";
-    openFormModal("security-scan-package-waiver-form", "security-scan-package-waiver-reason");
-  } catch (error) {
-    showToast(`Unable to waive package: ${error.message}`, "error");
+  securityScanPackageWaiverPackage = {
+    packageName: node.group.packageName,
+    installedVersion: node.group.installedVersion
+  };
+  if (!await changeSecurityScanPackageWaiverScope("")) {
+    if (securityScanPackageWaiverContext == null) securityScanPackageWaiverPackage = null;
+    return;
   }
+  document.getElementById("security-scan-package-waiver-duration").value = "7776000";
+  openFormModal("security-scan-package-waiver-form", "security-scan-package-waiver-reason");
 }
 
+/**
+ * Loads the preview for a scope ("" lets the server pick the default). Returns whether this
+ * request is the latest one and succeeded; a superseded response is discarded.
+ */
 async function changeSecurityScanPackageWaiverScope(scope) {
-  const context = securityScanPackageWaiverContext;
-  if (!context) return;
+  const target = securityScanPackageWaiverPackage;
+  if (!target) return false;
+  const request = ++securityScanPackageWaiverRequest;
+  securityScanPackageWaiverContext = null;
+  document.getElementById("security-scan-save-package-waiver-button").disabled = true;
   try {
-    renderSecurityScanPackageWaiverContext(await fetchSecurityScanPackageWaiverContext(
-      context.packageName, context.installedVersion, scope));
+    const context = await fetchSecurityScanPackageWaiverContext(
+      target.packageName, target.installedVersion, scope);
+    if (request !== securityScanPackageWaiverRequest) return false;
+    renderSecurityScanPackageWaiverContext(context);
+    return true;
   } catch (error) {
-    showToast(`Unable to load this scope: ${error.message}`, "error");
+    if (request === securityScanPackageWaiverRequest) {
+      document.getElementById("security-scan-package-waiver-replaced").innerHTML =
+        '<p class="form-note">This scope could not be loaded. Select another scope, or close and reopen this dialog to retry.</p>';
+      showToast(`Unable to load this scope: ${error.message}`, "error");
+    }
+    return false;
   }
 }
 
 function hideSecurityScanPackageWaiverForm() {
   clearRequiredFieldErrors(securityScanPackageWaiverRequiredFields);
+  securityScanPackageWaiverPackage = null;
   securityScanPackageWaiverContext = null;
+  ++securityScanPackageWaiverRequest;
   closeFormModal("security-scan-package-waiver-form");
 }
 
 async function createSecurityScanPackageWaiver(event) {
   event.preventDefault();
+  if (!securityScanCanMutate("nexus:security-scanning-waivers:create")) return;
   const context = securityScanPackageWaiverContext;
-  if (!context || !securityScanCanMutate("nexus:security-scanning-waivers:create")) return;
+  if (!context
+      || document.getElementById("security-scan-package-waiver-scope").value
+        !== securityScanPackageWaiverScopeValue(context)) {
+    showToast("The selected scope is still loading. Try again when it has loaded.", "error");
+    return;
+  }
   if (!validateRequiredFields(
       securityScanPackageWaiverRequiredFields,
       { prefix: "Waiver fields missing" })) return;
@@ -7560,8 +7594,7 @@ async function createSecurityScanPackageWaiver(event) {
     });
     if (response.status === 409) {
       const message = await responseErrorMessage(response);
-      await changeSecurityScanPackageWaiverScope(
-        context.repositoryId == null ? "all" : `repository:${context.repositoryId}`);
+      await changeSecurityScanPackageWaiverScope(securityScanPackageWaiverScopeValue(context));
       showToast(`${message} The list of waivers to replace was refreshed.`, "error");
       return;
     }

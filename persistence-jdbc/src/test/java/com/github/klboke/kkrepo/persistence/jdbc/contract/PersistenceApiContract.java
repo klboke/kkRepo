@@ -4400,6 +4400,11 @@ public abstract class PersistenceApiContract {
         "pkg:maven/snakeyaml@1.30",
         "approver", now.minusSeconds(1)});
     waiverOf.apply(new Object[] {"GLOBAL", null, null, null, null, "snakeyaml", null, null});
+    // Package selectors match exactly, as in policy evaluation: a selector that differs only in
+    // case must not hide zlib on a backend whose columns use a case-insensitive collation.
+    waiverOf.apply(new Object[] {"GLOBAL", null, null, null, null, "ZLIB", "approver", null});
+    waiverOf.apply(new Object[] {"GLOBAL", null, null, null, null, "PKG:MAVEN/ZLIB@NULL",
+        "approver", null});
     var partial = scans.listFindingGroups(
         query.apply(now, none), SecurityScanDao.FindingGroupBy.PACKAGE, null, 10);
     assertEquals(List.of("log4j-core", "snakeyaml", "zlib"),
@@ -4451,6 +4456,11 @@ public abstract class PersistenceApiContract {
     assertTrue(scans.listPackageWaivers(
         "log4j-core", "2.14.1", List.of("pkg:maven/log4j-core@2.14.1"), hiddenId, 10).isEmpty());
     assertTrue(scans.listPackageWaivers("log4j-core", "2.14.1", List.of(), null, 10).isEmpty());
+    assertTrue(scans.listPackageWaivers(
+        "snakeyaml", "1.30", List.of("PKG:MAVEN/SNAKEYAML@1.30"), null, 10).isEmpty(),
+        "a package URL that differs only in case selects other waivers");
+    assertTrue(scans.listPackageWaivers(
+        "log4j-core", "2.14.1", List.of("pkg:maven/LOG4J-CORE@2.14.1"), hostedId, 10).isEmpty());
     assertEquals(2, inTransaction(() -> scans.lockPackageFindings("snakeyaml", "1.30")));
     assertEquals(1, inTransaction(() -> scans.lockPackageFindings("zlib", "")),
         "an empty installed version selects findings without one");

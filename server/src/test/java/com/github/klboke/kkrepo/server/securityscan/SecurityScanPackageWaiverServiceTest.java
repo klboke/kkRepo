@@ -54,6 +54,7 @@ class SecurityScanPackageWaiverServiceTest {
   private AuthenticatedSubject actor;
   private final Set<String> granted = new HashSet<>();
   private final Set<String> administered = new HashSet<>();
+  private final Set<String> hidden = new HashSet<>();
 
   @BeforeEach
   void setUp() {
@@ -83,7 +84,8 @@ class SecurityScanPackageWaiverServiceTest {
     when(security.decide(eq(permissions), any(RepositoryPermission.class))).thenAnswer(invocation -> {
       RepositoryPermission permission = invocation.getArgument(1);
       boolean allowed = permission.action() == PermissionAction.BROWSE
-          || administered.contains(permission.repository());
+          ? !hidden.contains(permission.repository())
+          : administered.contains(permission.repository());
       return allowed ? AccessDecision.allow() : AccessDecision.deny("missing");
     });
     List<RepositoryRecord> rows = List.of(repository(11L, "releases"), repository(12L, "snapshots"));
@@ -308,6 +310,35 @@ class SecurityScanPackageWaiverServiceTest {
     assertEquals(HttpStatus.CONFLICT, concurrent.getStatusCode(),
         "a waiver deleted by another replica rolls the replacement back");
     verify(scans, never()).createWaiver(any());
+  }
+
+  @Test
+  void waiversOfRepositoriesTheActorCannotBrowseAreNeitherDisclosedNorReplaced() {
+    // Scan administration allows the all-repositories scope but grants no browse access.
+    granted.add("nexus:security-scanning:update");
+    hidden.add("snapshots");
+    ScanWaiver browsable = waiver(7L, "REPOSITORY", 11L, null, PURL, null);
+    ScanWaiver concealed = waiver(8L, "REPOSITORY", 12L, null, PURL, null);
+    ScanWaiver global = waiver(9L, "GLOBAL", null, null, PURL, null);
+    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), null, 1000))
+        .thenReturn(List.of(browsable, concealed, global));
+    when(scans.deleteWaiver(anyLong())).thenReturn(true);
+    when(scans.createWaiver(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+    var context = service.packageWaiverContext(actor, "snakeyaml", "1.30", null, true);
+    assertEquals(List.of(7L, 9L), context.replacedWaivers().stream()
+        .map(SecurityScanManagementService.WaiverView::id).toList());
+
+    var probing = assertThrows(ResponseStatusException.class, () -> service.createPackageWaiver(
+        actor, command(null, List.of(7L, 8L, 9L))));
+    assertEquals(HttpStatus.CONFLICT, probing.getStatusCode(),
+        "naming a concealed waiver does not make it replaceable");
+
+    var result = service.createPackageWaiver(actor, command(null, List.of(7L, 9L)));
+    assertEquals(List.of(7L, 9L), result.replaced().stream().map(ScanWaiver::id).toList());
+    verify(scans).deleteWaiver(7L);
+    verify(scans).deleteWaiver(9L);
+    verify(scans, never()).deleteWaiver(8L);
   }
 
   @Test

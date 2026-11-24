@@ -1585,6 +1585,7 @@ public class SecurityScanManagementService {
    * Describes a package waiver for one scope before it is created: the repositories the actor
    * may scope it to, the exact package URLs it will select, and the existing waivers it would
    * replace. Without an explicit scope, the first administered repository is chosen.
+   * Only waivers of repositories the actor may browse are listed.
    */
   public PackageWaiverContext packageWaiverContext(
       AuthenticatedSubject actor,
@@ -1627,8 +1628,8 @@ public class SecurityScanManagementService {
     List<String> packageUrls = packageUrls(scopes, scopeRepositoryId);
     List<ScanWaiver> replaced = packageUrls.isEmpty()
         ? List.of()
-        : scans.listPackageWaivers(
-            name, version, packageUrls, scopeRepositoryId, MAX_REPLACED_PACKAGE_WAIVERS + 1);
+        : replaceablePackageWaivers(
+            actor, repositoryRows, name, version, packageUrls, scopeRepositoryId);
     WaiverViews views = new WaiverViews(actor, repositoryRows);
     Instant now = Instant.now();
     return new PackageWaiverContext(
@@ -1668,8 +1669,9 @@ public class SecurityScanManagementService {
       requireRepositoryAdmin(actor, command.repositoryId());
     }
     scans.lockPackageFindings(name, version);
+    List<RepositoryRecord> repositoryRows = repositories.list();
     List<String> packageUrls = packageUrls(
-        packageScopes(actor, repositories.list(), name, version, command.repositoryId()),
+        packageScopes(actor, repositoryRows, name, version, command.repositoryId()),
         command.repositoryId());
     if (packageUrls.isEmpty()) {
       throw conflict("This package has no findings with a package URL in the selected scope");
@@ -1679,11 +1681,8 @@ public class SecurityScanManagementService {
     }
     packageUrls.forEach(url -> requireWaiverFieldLength(
         url, "Package selector", SecurityScanDao.MAX_WAIVER_PACKAGE_SELECTOR_LENGTH));
-    List<ScanWaiver> replaced = scans.listPackageWaivers(
-        name, version, packageUrls, command.repositoryId(), MAX_REPLACED_PACKAGE_WAIVERS + 1);
-    if (replaced.size() > MAX_REPLACED_PACKAGE_WAIVERS) {
-      throw badRequest("Too many existing waivers to replace at once; narrow the scope first");
-    }
+    List<ScanWaiver> replaced = replaceablePackageWaivers(
+        actor, repositoryRows, name, version, packageUrls, command.repositoryId());
     Set<Long> confirmed = command.replaceWaiverIds() == null
         ? Set.of()
         : Set.copyOf(command.replaceWaiverIds());
@@ -1732,6 +1731,37 @@ public class SecurityScanManagementService {
       created.add(waiver);
     }
     return new PackageWaiverResult(created, replaced);
+  }
+
+  /**
+   * Waivers that a package waiver replaces: those tied to the package URLs within the scope, in
+   * repositories the actor may browse, plus repository-less ones. Like the waiver list, waivers
+   * of repositories hidden from the actor are neither disclosed nor replaced; scan
+   * administration does not grant repository browse access.
+   */
+  private List<ScanWaiver> replaceablePackageWaivers(
+      AuthenticatedSubject actor,
+      List<RepositoryRecord> repositoryRows,
+      String packageName,
+      String installedVersion,
+      List<String> packageUrls,
+      Long repositoryId) {
+    List<ScanWaiver> waivers = scans.listPackageWaivers(
+        packageName, installedVersion, packageUrls, repositoryId,
+        MAX_REPLACED_PACKAGE_WAIVERS + 1);
+    if (waivers.size() > MAX_REPLACED_PACKAGE_WAIVERS) {
+      throw badRequest("Too many existing waivers to replace at once; narrow the scope first");
+    }
+    Set<Long> visible = repositoryRows.stream()
+        .filter(repository -> canBrowse(actor, repository))
+        .map(RepositoryRecord::id)
+        .collect(java.util.stream.Collectors.toSet());
+    return waivers.stream()
+        .filter(waiver -> {
+          Long effectiveRepositoryId = effectiveWaiverRepositoryId(waiver);
+          return effectiveRepositoryId == null || visible.contains(effectiveRepositoryId);
+        })
+        .toList();
   }
 
   private static String requirePackageName(String packageName) {

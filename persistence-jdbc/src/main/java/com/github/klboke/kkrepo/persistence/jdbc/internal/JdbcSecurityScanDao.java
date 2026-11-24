@@ -3110,8 +3110,11 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     StringBuilder sql = new StringBuilder(repositoryScope.repositoryScopeCte());
     List<Object> args = new ArrayList<>();
     args.add(repositoryScope.parameter(ids));
-    sql.append("""
-        SELECT DISTINCT s.repository_id, f.package_url
+    // Package URLs are waiver selectors, so URLs that differ only in case stay distinct.
+    sql.append("SELECT DISTINCT s.repository_id, ")
+        .append(databaseDialect.caseSensitiveText("f.package_url"))
+        .append("""
+         AS package_url
         FROM security_scan_finding f
         JOIN security_scan_run_subject s
           ON s.scan_run_id = f.scan_run_id
@@ -3122,7 +3125,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     sql.append(" WHERE 1 = 1");
     appendFindingAssociationFilters(sql, args, query);
     appendFindingRowFilters(sql, args, query);
-    sql.append(" ORDER BY s.repository_id, f.package_url LIMIT ?");
+    sql.append(" ORDER BY 1, 2 LIMIT ?");
     args.add(safeLimit(maxItems));
     return jdbc.query(sql.toString(), (rs, rowNum) -> new FindingPackageScope(
         rs.getLong("repository_id"), rs.getString("package_url")), args.toArray());
@@ -3152,12 +3155,13 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     List<String> urls = distinctStrings(packageUrls, false);
     if (urls.isEmpty()) return List.of();
     List<Object> args = new ArrayList<>();
+    // Selectors match like SecurityScanWaiverMatcher: exactly, including case.
     StringBuilder sql = new StringBuilder("""
         SELECT w.*
         FROM security_scan_waiver w
         WHERE (
-          w.package_selector IN (
-        """);
+          %s IN (
+        """.formatted(databaseDialect.caseSensitiveText("w.package_selector")));
     appendIn(sql, args, urls);
     sql.append("""
           )
@@ -3166,8 +3170,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
             FROM security_scan_finding f
             WHERE f.package_name = ?
               AND COALESCE(f.installed_version, '') = ?
-              AND f.package_url IN (
-        """);
+              AND %s IN (
+        """.formatted(databaseDialect.caseSensitiveText("f.package_url")));
     args.add(packageName);
     args.add(installedVersion == null ? "" : installedVersion);
     appendIn(sql, args, urls);
@@ -3222,7 +3226,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     appendEquals(sql, args, ARTIFACT_VERSION_SQL, query.artifactVersion());
     if (query.unwaivedAt() != null) {
       // Mirrors SecurityScanWaiverMatcher: approved, unexpired, subject-scoped, and matching the
-      // finding ID or every non-blank advisory/alias and package selector.
+      // finding ID or every non-blank advisory/alias (ignoring case) and package selector
+      // (exactly, including case).
       sql.append("""
            AND NOT EXISTS (
              SELECT 1
@@ -3240,18 +3245,20 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
                    AND (
                      NULLIF(w.advisory_selector, '') IS NULL
                      OR LOWER(w.advisory_selector) = LOWER(f.advisory_id)
-                     OR %s
+                     OR %1$s
                    )
                    AND (
                      NULLIF(w.package_selector, '') IS NULL
-                     OR w.package_selector = f.package_url
-                     OR w.package_selector = f.package_name
+                     OR %2$s = f.package_url
+                     OR %2$s = f.package_name
                    )
                  )
                )
            )
-          """.formatted(databaseDialect.json()
-              .textArrayContainsIgnoreCase("f.aliases_json", "w.advisory_selector")));
+          """.formatted(
+              databaseDialect.json()
+                  .textArrayContainsIgnoreCase("f.aliases_json", "w.advisory_selector"),
+              databaseDialect.caseSensitiveText("w.package_selector")));
       args.add(nullableTimestamp(query.unwaivedAt()));
     }
   }

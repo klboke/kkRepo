@@ -544,7 +544,7 @@ Waivers 页签用于查看 Active/Expired、scope、仓库、制品、exception�
    没有 package URL 的 finding 仍需逐条豁免。
 3. 选择到期时间（默认 90 天）并填写 Reason。
 4. 查看将被替换的已有豁免：该范围内通过 package selector 或 finding 关联到此 package URL
-   的全部豁免，无论有效还是已过期。
+   的全部豁免，无论有效还是已过期。你无权浏览的仓库中的豁免不会列出，也不会被替换。
 5. 点击 **Waive package**。存在会被替换的豁免时，会弹出确认框询问是否全部删除：**Yes, replace**
    在同一事务中删除这些豁免并创建 package 豁免；**No** 取消操作，不做任何修改。
 
