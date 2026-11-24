@@ -6622,15 +6622,40 @@ async function filterCurrentSecurityScanFindings(currentOnly) {
   await filterSecurityScanFindings({ currentOnly });
 }
 
+const SECURITY_SCAN_FINDING_SWITCHES = Object.freeze({
+  currentOnly: "security-scan-current-findings",
+  hideWaived: "security-scan-hide-waived",
+  groupByPackage: "security-scan-group-package",
+  groupByArtifact: "security-scan-group-artifact"
+});
+
 /**
  * Applies findings view options and reloads from the first page. Changing the grouping shape
  * forgets expanded groups; filters keep them so the same groups reopen after the reload.
+ * Grouping aggregates every matching finding, so it is limited to current findings: turning
+ * grouping on turns current findings on, and including historical findings turns grouping off.
  */
 async function filterSecurityScanFindings(changes) {
   const page = securityScanPages.findings;
+  const next = { ...changes };
+  let notice = "";
+  if (next.currentOnly === false && (page.groupByPackage || page.groupByArtifact)) {
+    next.groupByPackage = false;
+    next.groupByArtifact = false;
+    notice = "Grouping was turned off: it shows current findings only.";
+  } else if ((next.groupByPackage || next.groupByArtifact) && !page.currentOnly) {
+    next.currentOnly = true;
+    notice = "Grouping shows current findings only.";
+  }
   const shapeChanged = ["groupByPackage", "groupByArtifact"]
-    .some((name) => name in changes && Boolean(changes[name]) !== Boolean(page[name]));
-  Object.assign(page, changes);
+    .some((name) => name in next && Boolean(next[name]) !== Boolean(page[name]));
+  Object.assign(page, next);
+  if (notice) {
+    Object.entries(SECURITY_SCAN_FINDING_SWITCHES).forEach(([name, id]) => {
+      document.getElementById(id).checked = Boolean(page[name]);
+    });
+    showToast(notice, "ok");
+  }
   if (shapeChanged) securityScanFindingTreeExpanded.clear();
   hideSecurityScanFindingDetail();
   resetSecurityScanPage("findings");
@@ -7487,12 +7512,14 @@ async function showSecurityScanPackageWaiverForm(key) {
       || !securityScanCanMutate("nexus:security-scanning-waivers:create")) return;
   document.getElementById("security-scan-package-waiver-form").reset();
   clearRequiredFieldErrors(securityScanPackageWaiverRequiredFields);
-  securityScanPackageWaiverPackage = {
+  const target = {
     packageName: node.group.packageName,
     installedVersion: node.group.installedVersion
   };
+  securityScanPackageWaiverPackage = target;
   if (!await changeSecurityScanPackageWaiverScope("")) {
-    if (securityScanPackageWaiverContext == null) securityScanPackageWaiverPackage = null;
+    // A request superseded by a newer one must leave that newer request's target alone.
+    if (securityScanPackageWaiverPackage === target) securityScanPackageWaiverPackage = null;
     return;
   }
   document.getElementById("security-scan-package-waiver-duration").value = "7776000";
@@ -7584,7 +7611,8 @@ async function createSecurityScanPackageWaiver(event) {
     expiresAt: neverExpires
       ? null
       : new Date(Date.now() + durationSeconds * 1000).toISOString(),
-    replaceWaiverIds: replaced.map((waiver) => waiver.id)
+    replaceWaiverIds: replaced.map((waiver) => waiver.id),
+    packageUrls: context.packageUrls
   };
   try {
     const response = await fetch("/internal/security/scanning/waivers/package", {

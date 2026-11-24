@@ -50,6 +50,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -65,6 +66,7 @@ import java.util.function.Function;
 import org.springframework.http.HttpStatus;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
@@ -563,6 +565,9 @@ public class SecurityScanManagementService {
       boolean currentOnly,
       FindingFilter filter) {
     if (groupBy == null) throw badRequest("groupBy is required");
+    // Groups aggregate every matching association before the first page can be returned, so
+    // they are limited to current findings, whose number is bounded by the stored artifacts.
+    if (!currentOnly) throw badRequest("Findings can only be grouped with currentOnly=true");
     List<Long> visibleRepositoryIds = repositories.list().stream()
         .filter(repository -> canBrowse(actor, repository))
         .map(RepositoryRecord::id)
@@ -575,7 +580,7 @@ public class SecurityScanManagementService {
     FindingFilter effective = filter == null ? FindingFilter.NONE : filter;
     List<FindingGroup> groups = scans.listFindingGroups(
         effective.query(visibleRepositoryIds, repositoryId, null, severity,
-            normalizedQuery(query), currentOnly, Instant.now()),
+            normalizedQuery(query), true, Instant.now()),
         groupBy,
         after,
         safeLimit + 1);
@@ -1646,11 +1651,13 @@ public class SecurityScanManagementService {
 
   /**
    * Replaces every waiver tied to a package version within one scope by one waiver per exact
-   * package URL. The confirmed {@code replaceWaiverIds} must equal the waivers found inside the
-   * transaction, so a concurrent change on any replica fails with 409 instead of deleting
-   * waivers the caller never saw.
+   * package URL. The confirmed {@code replaceWaiverIds}, and {@code packageUrls} when given,
+   * must equal what is found inside the transaction, so a concurrent change on any replica
+   * fails with 409 instead of deleting waivers or waiving package URLs the caller never saw.
+   * The package version lock serializes package waivers for the same package; READ COMMITTED
+   * lets the reads after the lock see what the previous holder committed.
    */
-  @Transactional
+  @Transactional(isolation = Isolation.READ_COMMITTED)
   public PackageWaiverResult createPackageWaiver(
       AuthenticatedSubject actor, PackageWaiverCommand command) {
     requireWaiverPermission(actor, "create");
@@ -1668,13 +1675,17 @@ public class SecurityScanManagementService {
     } else {
       requireRepositoryAdmin(actor, command.repositoryId());
     }
-    scans.lockPackageFindings(name, version);
+    scans.lockPackageVersion(name, version);
     List<RepositoryRecord> repositoryRows = repositories.list();
     List<String> packageUrls = packageUrls(
         packageScopes(actor, repositoryRows, name, version, command.repositoryId()),
         command.repositoryId());
     if (packageUrls.isEmpty()) {
       throw conflict("This package has no findings with a package URL in the selected scope");
+    }
+    if (command.packageUrls() != null
+        && !new HashSet<>(command.packageUrls()).equals(new HashSet<>(packageUrls))) {
+      throw conflict("Package URLs of this package changed. Review them and confirm again.");
     }
     if (packageUrls.size() > MAX_PACKAGE_WAIVER_URLS) {
       throw badRequest("This package version has too many package URLs to waive at once");
@@ -1683,9 +1694,9 @@ public class SecurityScanManagementService {
         url, "Package selector", SecurityScanDao.MAX_WAIVER_PACKAGE_SELECTOR_LENGTH));
     List<ScanWaiver> replaced = replaceablePackageWaivers(
         actor, repositoryRows, name, version, packageUrls, command.repositoryId());
-    Set<Long> confirmed = command.replaceWaiverIds() == null
-        ? Set.of()
-        : Set.copyOf(command.replaceWaiverIds());
+    Set<Long> confirmed = new HashSet<>(
+        command.replaceWaiverIds() == null ? List.of() : command.replaceWaiverIds());
+    if (confirmed.contains(null)) throw badRequest("Waiver IDs to replace must not be null");
     Set<Long> found = replaced.stream()
         .map(ScanWaiver::id)
         .collect(java.util.stream.Collectors.toSet());
@@ -1701,12 +1712,14 @@ public class SecurityScanManagementService {
         requireRepositoryAdmin(actor, effectiveRepositoryId);
       }
     }
+    // Like single waiver operations, every waiver row is taken before the shared waiver
+    // revision row, so a concurrent single delete cannot deadlock with this replacement.
     for (ScanWaiver waiver : replaced) {
       if (!scans.deleteWaiver(waiver.id())) {
         throw conflict("Waivers for this package changed. Review them and confirm again.");
       }
-      scans.invalidatePolicyStatesForWaiver(waiver);
     }
+    replaced.forEach(scans::invalidatePolicyStatesForWaiver);
     String scopeType = command.repositoryId() == null ? "GLOBAL" : "REPOSITORY";
     List<ScanWaiver> created = new ArrayList<>(packageUrls.size());
     for (String packageUrl : packageUrls) {
@@ -1727,9 +1740,9 @@ public class SecurityScanManagementService {
           command.expiresAt(),
           now,
           now));
-      scans.invalidatePolicyStatesForWaiver(waiver);
       created.add(waiver);
     }
+    created.forEach(scans::invalidatePolicyStatesForWaiver);
     return new PackageWaiverResult(created, replaced);
   }
 
@@ -1769,7 +1782,12 @@ public class SecurityScanManagementService {
     return packageName;
   }
 
-  /** Package scopes over visible repositories, or over one repository context. */
+  private static final int PACKAGE_SCOPE_PAGE_SIZE = 1000;
+
+  /**
+   * Every package scope over visible repositories, or over one repository context. The
+   * repository choices and package URLs derive from this set, so it is read to the end.
+   */
   private List<FindingPackageScope> packageScopes(
       AuthenticatedSubject actor,
       List<RepositoryRecord> repositoryRows,
@@ -1782,9 +1800,18 @@ public class SecurityScanManagementService {
             .filter(repository -> canBrowse(actor, repository))
             .map(RepositoryRecord::id)
             .toList();
-    return scans.listFindingPackageScopes(new FindingQuery(
+    FindingQuery query = new FindingQuery(
         scope, null, null, null, null, false, null, packageName, installedVersion,
-        null, null, null, null), 1000);
+        null, null, null, null);
+    List<FindingPackageScope> scopes = new ArrayList<>();
+    FindingPackageScope after = null;
+    while (true) {
+      List<FindingPackageScope> page =
+          scans.listFindingPackageScopes(query, after, PACKAGE_SCOPE_PAGE_SIZE);
+      scopes.addAll(page);
+      if (page.size() < PACKAGE_SCOPE_PAGE_SIZE) return scopes;
+      after = page.getLast();
+    }
   }
 
   private static List<String> packageUrls(List<FindingPackageScope> scopes, Long repositoryId) {
@@ -2401,7 +2428,8 @@ public class SecurityScanManagementService {
   /**
    * Creates a package waiver: one waiver per exact package URL of {@code packageName} at
    * {@code installedVersion}, scoped to {@code repositoryId}, or to every repository when null.
-   * {@code replaceWaiverIds} are the existing waivers the caller confirmed for deletion.
+   * {@code replaceWaiverIds} are the existing waivers the caller confirmed for deletion, and
+   * {@code packageUrls} the package URLs the caller confirmed for waiving; null skips that check.
    */
   public record PackageWaiverCommand(
       String packageName,
@@ -2409,7 +2437,8 @@ public class SecurityScanManagementService {
       Long repositoryId,
       String reason,
       Instant expiresAt,
-      List<Long> replaceWaiverIds) {}
+      List<Long> replaceWaiverIds,
+      List<String> packageUrls) {}
 
   public record PackageWaiverRepository(long id, String name) {}
 

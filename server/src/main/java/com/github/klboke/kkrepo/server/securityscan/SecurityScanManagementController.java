@@ -153,7 +153,7 @@ public class SecurityScanManagementController {
       @RequestParam(name = "q", required = false) String query,
       @RequestParam(name = "cursor", required = false) String cursor,
       @RequestParam(name = "limit", defaultValue = "25") int limit,
-      @RequestParam(name = "currentOnly", defaultValue = "false") boolean currentOnly,
+      @RequestParam(name = "currentOnly", defaultValue = "true") boolean currentOnly,
       @RequestParam(name = "hideWaived", defaultValue = "false") boolean hideWaived,
       @RequestParam(name = "packageName", required = false) String packageName,
       @RequestParam(name = "installedVersion", required = false) String installedVersion,

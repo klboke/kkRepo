@@ -3103,16 +3103,19 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   @Override
-  public List<FindingPackageScope> listFindingPackageScopes(FindingQuery query, int maxItems) {
+  public List<FindingPackageScope> listFindingPackageScopes(
+      FindingQuery query, FindingPackageScope after, int maxItems) {
     List<Long> ids = repositoryScope.distinctLongs(query.repositoryIds());
     if (ids.isEmpty()) return List.of();
     boolean artifactJoin = hasArtifactFilter(query);
     StringBuilder sql = new StringBuilder(repositoryScope.repositoryScopeCte());
     List<Object> args = new ArrayList<>();
     args.add(repositoryScope.parameter(ids));
-    // Package URLs are waiver selectors, so URLs that differ only in case stay distinct.
+    // Package URLs are waiver selectors, so URLs that differ only in case stay distinct. A
+    // missing URL normalizes to the empty string so both backends order and page it alike.
+    String packageUrl = databaseDialect.caseSensitiveText("COALESCE(f.package_url, '')");
     sql.append("SELECT DISTINCT s.repository_id, ")
-        .append(databaseDialect.caseSensitiveText("f.package_url"))
+        .append(packageUrl)
         .append("""
          AS package_url
         FROM security_scan_finding f
@@ -3125,6 +3128,14 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     sql.append(" WHERE 1 = 1");
     appendFindingAssociationFilters(sql, args, query);
     appendFindingRowFilters(sql, args, query);
+    if (after != null) {
+      sql.append(" AND (s.repository_id > ? OR (s.repository_id = ? AND ")
+          .append(packageUrl)
+          .append(" > ?))");
+      args.add(after.repositoryId());
+      args.add(after.repositoryId());
+      args.add(after.packageUrl() == null ? "" : after.packageUrl());
+    }
     sql.append(" ORDER BY 1, 2 LIMIT ?");
     args.add(safeLimit(maxItems));
     return jdbc.query(sql.toString(), (rs, rowNum) -> new FindingPackageScope(
@@ -3133,16 +3144,26 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
 
   @Override
   @Transactional(propagation = Propagation.MANDATORY)
-  public int lockPackageFindings(String packageName, String installedVersion) {
-    // Ordered locking keeps concurrent package waivers for the same package deadlock-free.
-    return jdbc.queryForList("""
-        SELECT id
-        FROM security_scan_finding
-        WHERE package_name = ?
-          AND COALESCE(installed_version, '') = ?
-        ORDER BY id
-        FOR UPDATE
-        """, Long.class, packageName, installedVersion == null ? "" : installedVersion).size();
+  public boolean lockPackageVersion(String packageName, String installedVersion) {
+    String version = installedVersion == null ? "" : installedVersion;
+    // Finding IDs only grow, so concurrent callers agree on the oldest finding unless retention
+    // removes it between the lookup and the lock; then the lookup is repeated.
+    List<Long> locked = List.of();
+    Long oldest;
+    int attempts = 0;
+    do {
+      oldest = jdbc.queryForObject("""
+          SELECT MIN(id)
+          FROM security_scan_finding
+          WHERE package_name = ?
+            AND COALESCE(installed_version, '') = ?
+          """, Long.class, packageName, version);
+      if (oldest != null) {
+        locked = jdbc.queryForList(
+            "SELECT id FROM security_scan_finding WHERE id = ? FOR UPDATE", Long.class, oldest);
+      }
+    } while (oldest != null && locked.isEmpty() && ++attempts < 3);
+    return !locked.isEmpty();
   }
 
   @Override
@@ -3225,9 +3246,10 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     appendEquals(sql, args, ARTIFACT_NAME_SQL, query.artifactName());
     appendEquals(sql, args, ARTIFACT_VERSION_SQL, query.artifactVersion());
     if (query.unwaivedAt() != null) {
-      // Mirrors SecurityScanWaiverMatcher: approved, unexpired, subject-scoped, and matching the
-      // finding ID or every non-blank advisory/alias (ignoring case) and package selector
-      // (exactly, including case).
+      // Mirrors policy evaluation (SecurityScanWaiverMatcher and the finalizer): approved,
+      // unexpired, subject-scoped, bound to no policy or to the policy revision the subject's
+      // repository is configured with, and matching the finding ID or every non-blank
+      // advisory/alias (ignoring case) and package selector (exactly, including case).
       sql.append("""
            AND NOT EXISTS (
              SELECT 1
@@ -3237,6 +3259,18 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
                AND (w.expires_at IS NULL OR w.expires_at > ?)
                AND (w.repository_id IS NULL OR w.repository_id = s.repository_id)
                AND (w.asset_id IS NULL OR w.asset_id = s.asset_id)
+               AND (w.policy_id IS NULL OR w.policy_id = (
+                 SELECT waiver_policy.id
+                 FROM repository_security_scan_config waiver_config
+                 JOIN security_scan_policy waiver_policy
+                   ON waiver_policy.id = waiver_config.policy_id
+                 WHERE waiver_config.repository_id = s.repository_id))
+               AND (w.policy_revision IS NULL OR w.policy_revision = (
+                 SELECT waiver_policy.revision
+                 FROM repository_security_scan_config waiver_config
+                 JOIN security_scan_policy waiver_policy
+                   ON waiver_policy.id = waiver_config.policy_id
+                 WHERE waiver_config.repository_id = s.repository_id))
                AND (
                  w.finding_id = f.id
                  OR (

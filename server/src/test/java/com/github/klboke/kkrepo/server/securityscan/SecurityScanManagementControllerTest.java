@@ -100,7 +100,7 @@ class SecurityScanManagementControllerTest {
     verify(service).findingPage(actor, null, null, null, null, 0L, 25, true, filter);
 
     when(service.findingGroupPage(actor, FindingGroupBy.ARTIFACT_VERSION, 9L, Severity.HIGH,
-        "app", "g1.cursor", 50, false, filter))
+        "app", "g1.cursor", 50, true, filter))
         .thenReturn(new CursorPage<>(List.of(), null, "g1.next"));
     var result = mvc.perform(withTreeFilters(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
             .get("/internal/security/scanning/findings/groups")
@@ -146,7 +146,8 @@ class SecurityScanManagementControllerTest {
 
     var expiresAt = java.time.Instant.parse("2027-01-01T00:00:00Z");
     var command = new PackageWaiverCommand(
-        "snakeyaml", "1.30", 11L, "shaded", expiresAt, List.of(7L, 9L));
+        "snakeyaml", "1.30", 11L, "shaded", expiresAt, List.of(7L, 9L),
+        List.of("pkg:maven/org.yaml/snakeyaml@1.30"));
     when(mutations.createPackageWaiver(any(), org.mockito.ArgumentMatchers.eq(actor),
         org.mockito.ArgumentMatchers.eq(command)))
         .thenReturn(new PackageWaiverResult(List.of(), List.of()));
@@ -155,7 +156,8 @@ class SecurityScanManagementControllerTest {
             .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
             .content("""
                 {"packageName":"snakeyaml","installedVersion":"1.30","repositoryId":11,
-                 "reason":"shaded","expiresAt":"2027-01-01T00:00:00Z","replaceWaiverIds":[7,9]}
+                 "reason":"shaded","expiresAt":"2027-01-01T00:00:00Z","replaceWaiverIds":[7,9],
+                 "packageUrls":["pkg:maven/org.yaml/snakeyaml@1.30"]}
                 """)
             .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE, actor))
         .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());

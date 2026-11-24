@@ -4415,6 +4415,38 @@ public abstract class PersistenceApiContract {
     assertEquals(List.of(yaml1), ids(scans.listFindings(query.apply(
         now, new String[] {null, null, null, "maven2", "org.acme", "app", "1.0"}), 0, 10)));
 
+    // A policy-bound waiver hides a finding only while the repository is configured with that
+    // policy revision, as in policy evaluation; otherwise the finding still blocks downloads.
+    java.util.function.Function<String, SecurityScanDao.ScanPolicy> policyOf = name ->
+        scans.createPolicy(new SecurityScanDao.ScanPolicy(
+            null, name, true, Severity.CRITICAL, false, false, false, null, List.of(), 1,
+            "contract", now, now));
+    var boundPolicy = policyOf.apply("finding-groups-bound");
+    var otherPolicy = policyOf.apply("finding-groups-other");
+    java.util.function.Consumer<Long> configurePolicy = policyId ->
+        scans.upsertRepositoryConfig(new SecurityScanDao.RepositoryScanConfig(
+            hostedId, true, profile.id(), true, true, EnforcementMode.AUDIT,
+            PolicyAction.ALLOW, PolicyAction.ALLOW, PolicyAction.ALLOW, null, policyId, 1,
+            now, now));
+    java.util.function.Consumer<Long> policyWaiverOf = revision -> scans.createWaiver(
+        new SecurityScanDao.ScanWaiver(null, "GLOBAL", null, null, null, null, "zlib", Map.of(),
+            "contract", boundPolicy.id(), revision, "contract", "approver", null, now, now));
+    java.util.function.Supplier<Boolean> zlibHidden = () -> !ids(scans.listFindings(
+        query.apply(now, none), 0, 10)).contains(zlib);
+    policyWaiverOf.accept(boundPolicy.revision() + 1);
+    assertFalse(zlibHidden.get(), "a repository without a policy honors no policy-bound waiver");
+    configurePolicy.accept(boundPolicy.id());
+    assertFalse(zlibHidden.get(), "a waiver bound to another revision of the policy is ignored");
+    policyWaiverOf.accept(boundPolicy.revision());
+    assertTrue(zlibHidden.get(), "a waiver bound to the configured policy revision applies");
+    assertEquals(List.of("log4j-core", "snakeyaml"), scans.listFindingGroups(
+            query.apply(now, none), SecurityScanDao.FindingGroupBy.PACKAGE, null, 10)
+        .stream().map(SecurityScanDao.FindingGroup::packageName).toList());
+    configurePolicy.accept(otherPolicy.id());
+    assertFalse(zlibHidden.get(), "after the repository switches policies the waiver lapses");
+    configurePolicy.accept(null);
+    assertFalse(zlibHidden.get(), "removing the policy leaves policy-bound waivers inactive");
+
     // A finding-scoped repository waiver covers the remaining association.
     long log4jFindingWaiver = waiverOf.apply(new Object[] {"FINDING", hostedId, null, log4j,
         "CVE-GROUP-1", "log4j-core",
@@ -4440,11 +4472,11 @@ public abstract class PersistenceApiContract {
     // Package waivers: scopes and the existing waivers a package-URL waiver would replace.
     assertEquals(List.of(new SecurityScanDao.FindingPackageScope(hostedId, "pkg:maven/snakeyaml@1.30")),
         scans.listFindingPackageScopes(query.apply(null,
-            new String[] {null, "snakeyaml", "1.30", null, null, null, null}), 10),
+            new String[] {null, "snakeyaml", "1.30", null, null, null, null}), null, 10),
         "both snakeyaml runs share one repository and package URL");
     assertTrue(scans.listFindingPackageScopes(new SecurityScanDao.FindingQuery(
             List.of(hiddenId), null, null, null, null, false, null, "snakeyaml", "1.30",
-            null, null, null, null), 10).isEmpty());
+            null, null, null, null), null, 10).isEmpty());
     assertEquals(List.of(expiredPackageWaiver), scans.listPackageWaivers(
             "snakeyaml", "1.30", List.of("pkg:maven/snakeyaml@1.30"), null, 10)
         .stream().map(SecurityScanDao.ScanWaiver::id).toList(),
@@ -4461,9 +4493,38 @@ public abstract class PersistenceApiContract {
         "a package URL that differs only in case selects other waivers");
     assertTrue(scans.listPackageWaivers(
         "log4j-core", "2.14.1", List.of("pkg:maven/LOG4J-CORE@2.14.1"), hostedId, 10).isEmpty());
-    assertEquals(2, inTransaction(() -> scans.lockPackageFindings("snakeyaml", "1.30")));
-    assertEquals(1, inTransaction(() -> scans.lockPackageFindings("zlib", "")),
+    assertTrue(inTransaction(() -> scans.lockPackageVersion("snakeyaml", "1.30")));
+    assertTrue(inTransaction(() -> scans.lockPackageVersion("zlib", "")),
         "an empty installed version selects findings without one");
+    assertTrue(inTransaction(() -> scans.lockPackageVersion("zlib", null)));
+    assertFalse(inTransaction(() -> scans.lockPackageVersion("snakeyaml", "9.99")),
+        "a package version without findings has nothing to lock");
+
+    // Scopes page by repository and package URL; a finding without a URL sorts first as "".
+    scans.insertFindings(runs.get(0), List.of(new SecurityScanDao.ScanFinding(
+        null, runs.get(0), "CVE-GROUP-4|snakeyaml", null, "CVE-GROUP-4", List.of(), "fixture",
+        null, "snakeyaml", "1.30", List.of(), Severity.LOW, "fixture", null, null,
+        "CVE-GROUP-4", null, null, List.of(), "active", now)));
+    findingOf.apply(new Object[] {2, "CVE-GROUP-2", Severity.HIGH, "snakeyaml", "1.30", null});
+    var everyScope = new SecurityScanDao.FindingQuery(
+        List.of(hostedId, hiddenId), null, null, null, null, false, null, "snakeyaml", "1.30",
+        null, null, null, null);
+    List<SecurityScanDao.FindingPackageScope> expectedScopes = List.of(
+        new SecurityScanDao.FindingPackageScope(hostedId, ""),
+        new SecurityScanDao.FindingPackageScope(hostedId, "pkg:maven/snakeyaml@1.30"),
+        new SecurityScanDao.FindingPackageScope(hiddenId, "pkg:maven/snakeyaml@1.30"));
+    List<SecurityScanDao.FindingPackageScope> pagedScopes = new ArrayList<>();
+    SecurityScanDao.FindingPackageScope afterScope = null;
+    while (true) {
+      var page = scans.listFindingPackageScopes(everyScope, afterScope, 1);
+      if (page.isEmpty()) break;
+      pagedScopes.addAll(page);
+      afterScope = page.getLast();
+    }
+    assertEquals(expectedScopes, pagedScopes);
+    assertEquals(expectedScopes.subList(1, 3), scans.listFindingPackageScopes(
+        everyScope, new SecurityScanDao.FindingPackageScope(hostedId, null), 10),
+        "a cursor without a package URL continues after the empty URL");
   }
 
   private static List<Long> ids(List<SecurityScanDao.ScanFinding> findings) {

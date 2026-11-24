@@ -58,6 +58,43 @@ test('hide waived and grouping switch the top-level request without losing other
   assert.equal(requests.at(-1).searchParams.get('cursor'), null, 'changing grouping restarts paging');
 });
 
+test('grouping is limited to current findings', async () => {
+  const {c, requests, run} = setup((url) => url.pathname.endsWith('/groups')
+    ? {items: [group({packageName: 'demo', installedVersion: '1.0'})], nextCursor: null}
+    : {items: [{id: 9}], nextAfter: null});
+  const switches = {};
+  const toasts = [];
+  c.document.getElementById = (id) => (switches[id] ||= {checked: null});
+  c.showToast = (message) => toasts.push(message);
+
+  await c.filterSecurityScanFindings({currentOnly: false});
+  assert.equal(requests.at(-1).searchParams.get('currentOnly'), 'false');
+  assert.equal(toasts.length, 0, 'without grouping, historical findings need no adjustment');
+
+  // Turning grouping on while historical findings are included turns current findings on.
+  await c.filterSecurityScanFindings({groupByPackage: true});
+  assert.equal(requests.at(-1).pathname, '/internal/security/scanning/findings/groups');
+  assert.equal(requests.at(-1).searchParams.get('currentOnly'), 'true');
+  assert.equal(switches['security-scan-current-findings'].checked, true);
+  assert.equal(switches['security-scan-group-package'].checked, true);
+  assert.match(toasts.at(-1), /current findings only/);
+  await c.toggleSecurityScanFindingNode(run('securityScanState.findingGroups[0].key'));
+  assert.equal(requests.at(-1).searchParams.get('currentOnly'), 'true');
+
+  // Including historical findings turns every grouping off and returns to the flat list.
+  await c.filterSecurityScanFindings({groupByArtifact: true});
+  await c.filterSecurityScanFindings({currentOnly: false});
+  assert.equal(requests.at(-1).pathname, '/internal/security/scanning/findings');
+  assert.equal(requests.at(-1).searchParams.get('currentOnly'), 'false');
+  assert.equal(requests.at(-1).searchParams.get('groupBy'), null);
+  assert.equal(run('securityScanPages.findings.groupByPackage || securityScanPages.findings.groupByArtifact'), false);
+  assert.equal(switches['security-scan-group-package'].checked, false);
+  assert.equal(switches['security-scan-group-artifact'].checked, false);
+  assert.equal(switches['security-scan-current-findings'].checked, false);
+  assert.equal(run('securityScanFindingTreeExpanded.size'), 0);
+  assert.equal(toasts.length, 2);
+});
+
 test('artifacts expand to versions, or to packages when both groupings are on, then to findings', async () => {
   const artifact = {artifactFormat: 'maven2', artifactNamespace: 'org.acme', artifactName: 'app'};
   const {c, requests, run} = setup((url) => {
@@ -135,7 +172,7 @@ test('a group response that arrives after the list reloaded is ignored', async (
   await c.filterSecurityScanFindings({groupByPackage: true});
   c.fetchJson = () => new Promise((resolve) => pending.push(resolve));
   const expanding = c.toggleSecurityScanFindingNode(run('securityScanState.findingGroups[0].key'));
-  const reloading = c.filterSecurityScanFindings({currentOnly: false});
+  const reloading = c.filterSecurityScanFindings({hideWaived: true});
   pending[1]({items: [group({packageName: 'other', installedVersion: '2.0'})], nextCursor: null});
   await reloading;
   pending[0]({items: [{id: 99}], nextAfter: null});
@@ -264,6 +301,8 @@ test('answering Yes posts the confirmed waivers with the package scope', async (
   assert.equal(body.repositoryId, 11);
   assert.equal(body.reason, 'shaded');
   assert.deepEqual(body.replaceWaiverIds, [7, 9]);
+  assert.deepEqual(body.packageUrls, ['pkg:maven/org.yaml/snakeyaml@1.30'],
+    'the previewed package URLs are confirmed too');
   const days = (Date.parse(body.expiresAt) - Date.now()) / 86400000;
   assert.ok(days > 89.9 && days <= 90, 'package waivers default to 90 days');
   assert.equal(calls.reloaded, 1);
@@ -336,6 +375,27 @@ test('a scope that is still loading or failed to load cannot be submitted', asyn
   pending.at(-1).resolve(await realFetch(pending.at(-1).url));
   assert.equal(await abandoned, false);
   assert.equal(run('securityScanPackageWaiverContext'), null);
+});
+
+test('a superseded first preview leaves the newer dialog able to change scope', async () => {
+  const {c, calls, run} = packageWaiverSetup();
+  const realFetch = c.fetch;
+  const pending = [];
+  c.fetch = (url) => new Promise((resolve) => pending.push({url, resolve}));
+  // A double click starts two previews; the older response arrives first and is discarded.
+  const older = c.showSecurityScanPackageWaiverForm('p');
+  const newer = c.showSecurityScanPackageWaiverForm('p');
+  pending[0].resolve(await realFetch(pending[0].url));
+  await older;
+  assert.equal(calls.opened, 0);
+  assert.notEqual(run('securityScanPackageWaiverPackage'), null,
+    'the newer request still owns the dialog target');
+  pending[1].resolve(await realFetch(pending[1].url));
+  await newer;
+  assert.equal(calls.opened, 1);
+  c.fetch = realFetch;
+  assert.equal(await c.changeSecurityScanPackageWaiverScope('all'), true);
+  assert.equal(run('securityScanPackageWaiverContext.repositoryId'), null);
 });
 
 test('the dialog does not open when the first preview cannot be loaded', async () => {

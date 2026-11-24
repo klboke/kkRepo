@@ -523,13 +523,18 @@ finding, not only the rows on the current page:
 
 - **Hide waived** hides a finding once active, approved waivers cover all of its visible
   repository artifacts. Partially waived findings stay visible; expired waivers do not hide
-  anything.
+  anything, and neither does a waiver bound to a policy revision other than the one the
+  repository currently uses.
 - **Group by package** groups findings by vulnerable package and installed version.
 - **Group by artifact** groups findings by repository artifact: component coordinates (for
   example `groupId:artifactId`), else the Docker image name, else the asset path. Expanding an
   artifact lists its versions (the manifest digest for Docker images). With **Group by package**
   also on, an artifact expands to package and installed-version groups across all of its versions
   instead.
+
+Grouping covers current findings only. Turning a grouping on also turns **Current findings** on,
+and turning **Current findings** off returns to the ungrouped list, where historical findings
+remain available.
 
 Groups list the worst severity first and show counts per severity, plus the number of findings,
 advisories, and artifacts. Expand a group to load its findings in pages; expanded groups stay open

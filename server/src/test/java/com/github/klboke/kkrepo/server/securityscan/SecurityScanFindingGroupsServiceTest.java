@@ -119,24 +119,30 @@ class SecurityScanFindingGroupsServiceTest {
   @Test
   void groupsKeepWaivedAssociationsUnlessHiddenAndRejectForeignCursorsOrRepositories() {
     when(scans.listFindingGroups(any(), any(), any(), anyInt())).thenReturn(List.of());
-    service.findingGroupPage(actor, FindingGroupBy.ARTIFACT, 11L, null, null, null, 10, false,
+    service.findingGroupPage(actor, FindingGroupBy.ARTIFACT, 11L, null, null, null, 10, true,
         FindingFilter.NONE);
     verify(scans).listFindingGroups(argThat(query -> query.unwaivedAt() == null
+        && query.currentOnly()
         && Long.valueOf(11L).equals(query.repositoryId())), eq(FindingGroupBy.ARTIFACT),
         isNull(), eq(11));
+
+    var historical = assertThrows(ResponseStatusException.class, () -> service.findingGroupPage(
+        actor, FindingGroupBy.ARTIFACT, 11L, null, null, null, 10, false, FindingFilter.NONE));
+    assertEquals(HttpStatus.BAD_REQUEST, historical.getStatusCode(),
+        "grouping is limited to current findings");
 
     String packageCursor = FindingGroupPagination.encode(FindingGroupBy.PACKAGE,
         new FindingGroupCursor(4, List.of("demo", "1.0")));
     var invalidCursor = assertThrows(ResponseStatusException.class, () -> service.findingGroupPage(
-        actor, FindingGroupBy.ARTIFACT, null, null, null, packageCursor, 10, false, null));
+        actor, FindingGroupBy.ARTIFACT, null, null, null, packageCursor, 10, true, null));
     assertEquals(HttpStatus.BAD_REQUEST, invalidCursor.getStatusCode());
 
     var hidden = assertThrows(ResponseStatusException.class, () -> service.findingGroupPage(
-        actor, FindingGroupBy.ARTIFACT, 12L, null, null, null, 10, false, null));
+        actor, FindingGroupBy.ARTIFACT, 12L, null, null, null, 10, true, null));
     assertEquals(HttpStatus.NOT_FOUND, hidden.getStatusCode());
 
     var missing = assertThrows(ResponseStatusException.class, () -> service.findingGroupPage(
-        actor, null, null, null, null, null, 10, false, null));
+        actor, null, null, null, null, null, 10, true, null));
     assertEquals(HttpStatus.BAD_REQUEST, missing.getStatusCode());
   }
 
@@ -174,7 +180,7 @@ class SecurityScanFindingGroupsServiceTest {
 
     for (FindingGroupBy groupBy : List.of(FindingGroupBy.ARTIFACT, FindingGroupBy.ARTIFACT_VERSION)) {
       var page = service.findingGroupPage(
-          actor, groupBy, null, null, null, null, 1, false, FindingFilter.NONE);
+          actor, groupBy, null, null, null, null, 1, true, FindingFilter.NONE);
       FindingGroupCursor cursor = FindingGroupPagination.decode(groupBy, page.nextCursor());
       assertEquals(groupBy == FindingGroupBy.ARTIFACT
               ? List.of("maven2", "org.acme", "app")

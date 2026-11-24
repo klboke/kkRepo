@@ -404,16 +404,19 @@ public interface SecurityScanDao {
 
   /**
    * Lists the distinct repository contexts and package URLs of the qualifying associations of
-   * {@code query}. A null package URL means the scanner reported the package without one.
+   * {@code query}, ordered by repository and package URL and starting after {@code after} when
+   * it is not null. An empty package URL means the scanner reported the package without one.
    */
-  List<FindingPackageScope> listFindingPackageScopes(FindingQuery query, int maxItems);
+  List<FindingPackageScope> listFindingPackageScopes(
+      FindingQuery query, FindingPackageScope after, int maxItems);
 
   /**
-   * Locks every finding of one package version. Package waiver replacement takes these locks so
-   * concurrent package waivers, and finding waivers that lock their finding, serialize across
-   * replicas. Callers must already be in a transaction.
+   * Locks one package version by locking its oldest finding, and reports whether it has any
+   * finding. Package waivers for the same package version take this lock, so they serialize
+   * across replicas while holding a single row lock however many findings the package has.
+   * Callers must already be in a READ COMMITTED transaction.
    */
-  int lockPackageFindings(String packageName, String installedVersion);
+  boolean lockPackageVersion(String packageName, String installedVersion);
 
   /**
    * Lists waivers, active or expired, tied to one of {@code packageUrls} through their package
@@ -997,7 +1000,7 @@ public interface SecurityScanDao {
     }
   }
 
-  /** One repository context in which a package URL was reported; the URL may be null. */
+  /** One repository context in which a package URL was reported; the URL may be empty. */
   record FindingPackageScope(long repositoryId, String packageUrl) {}
 
   /** Keyset position after a group: its highest severity rank and its normalized key. */

@@ -203,7 +203,7 @@ class SecurityScanMutationServiceTest {
         "pkg:maven/a/b@1?type=jar", Map.of(), "new", null, null, "u", "u", null, now, now);
     SecurityScanManagementService.PackageWaiverCommand command =
         new SecurityScanManagementService.PackageWaiverCommand(
-            "b", "1", 11L, "new", expiresAt, java.util.List.of(7L, 8L));
+            "b", "1", 11L, "new", expiresAt, java.util.List.of(7L, 8L), null);
     when(management.createPackageWaiver(actor, command)).thenReturn(
         new SecurityScanManagementService.PackageWaiverResult(
             java.util.List.of(created, createdForever),

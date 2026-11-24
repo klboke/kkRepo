@@ -463,12 +463,15 @@ Asset 列同时展示仓库浏览路径和内部 asset ID。点击路径可在 R
 工具栏选项可与搜索和 **Current findings** 组合使用，作用于全部可见 finding，而不仅是当前页：
 
 - **Hide waived**：当有效且已审批的豁免覆盖 finding 的全部可见仓库制品时隐藏该 finding。
-  部分豁免的 finding 仍会显示；已过期的豁免不会隐藏任何内容。
+  部分豁免的 finding 仍会显示；已过期的豁免不会隐藏任何内容，绑定到仓库当前未使用的策略修订的豁免也不会。
 - **Group by package**：按存在漏洞的 package 和 installed version 分组。
 - **Group by artifact**：按仓库制品分组，制品标识优先使用组件坐标（例如
   `groupId:artifactId`），其次是 Docker 镜像名，最后是 asset 路径。展开制品后按制品版本分组
   （Docker 镜像使用 manifest digest）；同时开启 **Group by package** 时，制品展开后改为按
   package 和 installed version 分组，并合并该制品的所有版本。
+
+分组只覆盖当前 finding。开启任一分组会同时开启 **Current findings**；关闭 **Current findings**
+会回到未分组列表，历史 finding 仍可在该列表中查看。
 
 分组按最高 severity 降序排列，并展示各 severity 数量以及 finding、advisory、制品数量。展开分组会
 分页加载其中的 finding；搜索、切换过滤条件或创建豁免后，已展开的分组会保持展开。开启
