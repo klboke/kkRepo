@@ -238,11 +238,20 @@ public class NexusRestClient {
         if (datastore != null) {
           def connection = datastore.openConnection()
           try {
+            // Only the Nexus schema (PostgreSQL currentSchema, H2 PUBLIC): another application's user_token
+            // table in the same database is not a Nexus token store.
+            def schema = null
+            try {
+              schema = connection.schema
+            } catch (ignored) {
+              // A driver without getSchema (pre-JDBC 4.1): fall back to the unscoped lookup.
+            }
             def table = null
-            def tables = connection.metaData.getTables(null, null, '%', null)
+            def tables = connection.metaData.getTables(null, schema, '%', null)
             try {
               while (tables.next()) {
-                if (tables.getString('TABLE_NAME').equalsIgnoreCase('user_token')) {
+                if (tables.getString('TABLE_NAME').equalsIgnoreCase('user_token')
+                    && (schema == null || schema == tables.getString('TABLE_SCHEM'))) {
                   table = tables.getString('TABLE_NAME')
                 }
               }
@@ -250,9 +259,11 @@ public class NexusRestClient {
               tables.close()
             }
             if (table != null) {
+              def quote = { name -> '"' + name.replace('"', '""') + '"' }
+              def qualifiedTable = (schema == null ? '' : quote(schema) + '.') + quote(table)
               try {
                 def userColumn = null
-                def columns = connection.metaData.getColumns(null, null, table, '%')
+                def columns = connection.metaData.getColumns(null, schema, table, '%')
                 try {
                   while (columns.next()) {
                     def column = columns.getString('COLUMN_NAME')
@@ -265,7 +276,7 @@ public class NexusRestClient {
                   columns.close()
                 }
                 def rs = connection.createStatement()
-                    .executeQuery('select ' + (userColumn == null ? '1' : userColumn) + ' from ' + table)
+                    .executeQuery('select ' + (userColumn == null ? '1' : quote(userColumn)) + ' from ' + qualifiedTable)
                 try {
                   def count = 0
                   def owners = []

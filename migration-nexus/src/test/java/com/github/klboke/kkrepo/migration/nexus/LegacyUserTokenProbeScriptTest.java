@@ -31,6 +31,36 @@ public class LegacyUserTokenProbeScriptTest {
   }
 
   @Test
+  void tableOfAnotherSchemaIsNotTheNexusTable() throws Exception {
+    String url = database("otherSchema",
+        "create table api_key_v2(domain varchar(64))",
+        "create schema otherapp",
+        "create table otherapp.user_token(user_name varchar(64), token varchar(128))",
+        "insert into otherapp.user_token values ('alice', '" + SECRET + "')");
+    List<String> warnings = new ArrayList<>();
+
+    assertNull(probe(url, "sa", "", warnings));
+    assertEquals(List.of(), warnings);
+  }
+
+  @Test
+  void onlyTheConnectionSchemaTableIsRead() throws Exception {
+    // Like Nexus on PostgreSQL with currentSchema=nexus, next to another application's user_token table.
+    String url = database("nexusSchema",
+        "create schema nexus",
+        "create table nexus.user_token(user_name varchar(64), token varchar(128))",
+        "insert into nexus.user_token values ('bob', '" + SECRET + "')",
+        "create schema otherapp",
+        "create table otherapp.user_token(user_name varchar(64), token varchar(128))",
+        "insert into otherapp.user_token values ('alice', '" + SECRET + "')",
+        "insert into otherapp.user_token values ('carol', '" + SECRET + "')");
+    List<String> warnings = new ArrayList<>();
+
+    assertEquals(Map.of("count", 1, "users", List.of("bob")), probe(url + ";SCHEMA=NEXUS", "sa", "", warnings));
+    assertEquals(List.of(), warnings);
+  }
+
+  @Test
   void readableTableExportsCountAndOwnersOnly() throws Exception {
     String url = database("readable",
         "create table user_token(user_name varchar(64), token varchar(128))",
