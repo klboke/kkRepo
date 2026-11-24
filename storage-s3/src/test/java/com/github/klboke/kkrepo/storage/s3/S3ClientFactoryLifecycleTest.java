@@ -16,7 +16,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
@@ -88,7 +87,7 @@ class S3ClientFactoryLifecycleTest {
   void aHandleRebuildsTheClientAfterInvalidationInsteadOfServingAClosedOne() {
     S3ClientFactory factory = factory(Duration.ZERO);
     try {
-      Supplier<S3Client> handle = factory.handle(config(1, "bucket-a"));
+      ClientHandle<S3Client> handle = factory.handle(config(1, "bucket-a"));
       S3Client first = handle.get();
       assertSame(first, handle.get());
 
@@ -98,6 +97,27 @@ class S3ClientFactoryLifecycleTest {
       S3Client second = handle.get();
       assertNotSame(first, second);
       assertSame(second, handle.get());
+    } finally {
+      factory.shutdown();
+    }
+  }
+
+  @Test
+  void aLeaseKeepsAnInvalidatedClientOpenUntilItIsReleased() {
+    S3ClientFactory factory = factory(Duration.ZERO);
+    try {
+      ClientHandle<S3Client> handle = factory.handle(config(1, "bucket-a"));
+      ClientHandle.Lease<S3Client> lease = handle.lease();
+      S3Client leased = lease.client();
+
+      factory.invalidate(1);
+
+      // A response stream that is still being read must not lose its client.
+      verify(leased, after(300).never()).close();
+      assertNotSame(leased, handle.get());
+
+      lease.close();
+      verify(leased, timeout(2_000)).close();
     } finally {
       factory.shutdown();
     }

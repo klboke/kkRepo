@@ -1,17 +1,11 @@
 package com.github.klboke.kkrepo.storage.s3;
 
-import com.github.klboke.kkrepo.cache.LocalCache;
-import com.github.klboke.kkrepo.cache.LocalCacheFactory;
 import com.github.klboke.kkrepo.core.http.OutboundTlsTrust;
 import jakarta.annotation.PreDestroy;
 import java.net.URI;
 import java.time.Duration;
-import java.util.HashSet;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
-import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,19 +19,8 @@ import software.amazon.awssdk.services.s3.S3Configuration;
 
 /**
  * Builds and caches the AWS SDK S3 clients (one connection pool each), node-local and rebuildable.
- *
- * <p>Lifetime rules, because a closed client can never be reopened:
- * <ul>
- *   <li>Clients are keyed by store ID <em>and</em> configuration signature. Two callers that disagree
- *       about a store's signature (for example an admin probe and the runtime path) each get their own
- *       client; neither closes the other's.
- *   <li>A client is never closed while it can still be handed out. It leaves the cache only when it
- *       goes idle, or when its store is invalidated, and is then closed after {@link #CLOSE_GRACE} so
- *       requests that already hold it can finish.
- *   <li>Callers that live longer than a request (blob storage wrappers) hold a {@link #handle handle},
- *       which resolves the current client on every use, so an invalidated client is rebuilt by the next
- *       call instead of being used after it was closed.
- * </ul>
+ * The lifetime rules (clients keyed by store ID and signature, deferred close, leases for response
+ * streams, handles that resolve the live client) live in {@link ClientCache}.
  */
 @Component
 public class S3ClientFactory {
@@ -45,13 +28,14 @@ public class S3ClientFactory {
 
   /** How long a client removed from the cache stays open for operations that already started. */
   static final Duration CLOSE_GRACE = Duration.ofMinutes(5);
-  /** A client nobody asked for in this long is closed; every storage operation counts as a use. */
-  static final Duration IDLE_EXPIRY = Duration.ofHours(1);
+  /**
+   * A client nobody asked for in this long is retired; every storage operation counts as a use. Streams
+   * that are still being read hold a lease, so this never cuts one off.
+   */
+  static final Duration IDLE_EXPIRY = Duration.ofHours(6);
 
   private final OutboundTlsTrust tlsTrust;
-  private final Function<S3BlobStoreConfig, S3Client> clientBuilder;
-  private final Duration closeGrace;
-  private final LocalCache<ClientKey, CachedClient> cache;
+  private final ClientCache<S3Client> clients;
 
   public S3ClientFactory() {
     this(OutboundTlsTrust.defaults());
@@ -62,99 +46,41 @@ public class S3ClientFactory {
     this(tlsTrust, null, CLOSE_GRACE);
   }
 
-  /** Test seam: a custom client builder and close grace (zero closes synchronously). */
+  /** Test seam: a custom client builder and close grace (zero closes unleased clients synchronously). */
   S3ClientFactory(
       OutboundTlsTrust tlsTrust, Function<S3BlobStoreConfig, S3Client> clientBuilder, Duration closeGrace) {
     this.tlsTrust = tlsTrust;
-    this.clientBuilder = clientBuilder;
-    this.closeGrace = closeGrace;
-    this.cache = LocalCacheFactory.standard()
-        .<ClientKey, CachedClient>builder("s3-clients")
-        .expireAfterAccess(IDLE_EXPIRY)
-        .removalListener((key, cached, cause) -> closeLater(cached == null ? null : cached.client()))
-        .build();
+    this.clients = new ClientCache<>(
+        "s3-clients", "S3", log,
+        clientBuilder == null ? this::build : clientBuilder,
+        S3ClientFactory::closeQuietly, IDLE_EXPIRY, closeGrace);
   }
 
   /** The client for this exact configuration, built on first use. */
   public S3Client client(S3BlobStoreConfig config) {
-    return client(new ClientKey(config.id(), config.signature()), config);
+    return clients.client(config);
   }
 
   /**
    * A reference that always resolves the live client for this configuration. Hold this, not the
    * client itself, in anything that outlives a single request.
    */
-  public Supplier<S3Client> handle(S3BlobStoreConfig config) {
-    ClientKey key = new ClientKey(config.id(), config.signature());
-    return () -> client(key, config);
-  }
-
-  private S3Client client(ClientKey key, S3BlobStoreConfig config) {
-    CachedClient cached = cache.getIfPresent(key);
-    if (cached != null) {
-      return cached.client();
-    }
-    return cache.get(key, ignored -> createCached(config)).client();
-  }
-
-  private CachedClient createCached(S3BlobStoreConfig config) {
-    for (CachedClient other : cache.asMap().values()) {
-      if (other.config().id() == config.id()) {
-        // Two callers disagree about this store's configuration. Each now owns its own client, so
-        // neither closes the other's, but the disagreement itself is worth knowing about.
-        log.warn("S3 blob store {} (id={}) is now used with a second configuration; callers disagree about: {}",
-            config.name(), config.id(), other.config().differingFields(config));
-        break;
-      }
-    }
-    return new CachedClient(config, create(config));
+  public ClientHandle<S3Client> handle(S3BlobStoreConfig config) {
+    return clients.handle(config);
   }
 
   /** Drops every client of this store (deleted or reconfigured); the next use builds a fresh one. */
   public void invalidate(long id) {
-    int removed = 0;
-    for (ClientKey key : Set.copyOf(cache.asMap().keySet())) {
-      if (key.storeId() == id) {
-        cache.invalidate(key);
-        removed++;
-      }
-    }
-    if (removed > 0) {
-      log.info("Invalidated {} S3 client(s) of blob store id={}; they close after {}", removed, id, closeGrace);
-    }
+    clients.invalidate(id);
   }
 
   Set<Long> cachedStoreIds() {
-    Set<Long> ids = new HashSet<>();
-    for (ClientKey key : cache.asMap().keySet()) {
-      ids.add(key.storeId());
-    }
-    return Set.copyOf(ids);
+    return clients.cachedStoreIds();
   }
 
   @PreDestroy
   void shutdown() {
-    Set<S3Client> open = new HashSet<>();
-    cache.asMap().values().forEach(cached -> open.add(cached.client()));
-    cache.invalidateAll();
-    open.forEach(S3ClientFactory::closeQuietly);
-  }
-
-  private S3Client create(S3BlobStoreConfig config) {
-    return clientBuilder == null ? build(config) : clientBuilder.apply(config);
-  }
-
-  private void closeLater(S3Client client) {
-    if (client == null) {
-      return;
-    }
-    if (closeGrace.isZero()) {
-      closeQuietly(client);
-      return;
-    }
-    CompletableFuture.runAsync(
-        () -> closeQuietly(client),
-        CompletableFuture.delayedExecutor(closeGrace.toMillis(), TimeUnit.MILLISECONDS));
+    clients.shutdown();
   }
 
   private S3Client build(S3BlobStoreConfig config) {
@@ -194,11 +120,5 @@ public class S3ClientFactory {
       client.close();
     } catch (RuntimeException ignored) {
     }
-  }
-
-  private record ClientKey(long storeId, String signature) {
-  }
-
-  private record CachedClient(S3BlobStoreConfig config, S3Client client) {
   }
 }

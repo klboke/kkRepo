@@ -43,19 +43,24 @@ import software.amazon.awssdk.services.s3.model.UploadPartRequest;
  * config + S3 client is reused across calls without leaking through Spring as a singleton.
  */
 public final class S3BlobStorage implements BlobStorage {
-  private final Supplier<S3Client> clients;
+  private final ClientHandle<S3Client> clients;
   private final S3BlobStoreConfig config;
   private final ExecutorService multipartExecutor;
 
   public S3BlobStorage(S3Client s3Client, S3BlobStoreConfig config) {
-    this(() -> s3Client, config);
+    this(ClientHandle.of(() -> s3Client), config);
+  }
+
+  public S3BlobStorage(Supplier<S3Client> clients, S3BlobStoreConfig config) {
+    this(ClientHandle.of(clients), config);
   }
 
   /**
    * Resolves the client on every operation, so a client that was closed and replaced (store
-   * reconfigured or invalidated) is never used after it was closed.
+   * reconfigured or invalidated) is never used after it was closed. Response streams hold a lease
+   * until they are closed, so their client is not closed under them either.
    */
-  public S3BlobStorage(Supplier<S3Client> clients, S3BlobStoreConfig config) {
+  public S3BlobStorage(ClientHandle<S3Client> clients, S3BlobStoreConfig config) {
     this.clients = clients;
     this.config = config;
     this.multipartExecutor = ObjectStorageMultipartSupport.executor(
@@ -68,6 +73,29 @@ public final class S3BlobStorage implements BlobStorage {
 
   private S3Client client() {
     return clients.get();
+  }
+
+  /** Opens an object stream; the client stays open until the returned stream is closed. */
+  private Optional<InputStream> open(BlobReference reference, GetObjectRequest request) {
+    ClientHandle.Lease<S3Client> lease = clients.lease();
+    boolean streaming = false;
+    try {
+      ResponseInputStream<GetObjectResponse> response = lease.client().getObject(request);
+      InputStream stream = new RangeReadableS3InputStream(response, reference, lease);
+      streaming = true;
+      return Optional.of(stream);
+    } catch (NoSuchKeyException e) {
+      return Optional.empty();
+    } catch (S3Exception e) {
+      if (e.statusCode() == 404) {
+        return Optional.empty();
+      }
+      throw e;
+    } finally {
+      if (!streaming) {
+        lease.close();
+      }
+    }
   }
 
   @Override
@@ -314,20 +342,10 @@ public final class S3BlobStorage implements BlobStorage {
 
   @Override
   public Optional<InputStream> get(BlobReference reference) {
-    try {
-      ResponseInputStream<GetObjectResponse> response = client().getObject(GetObjectRequest.builder()
-          .bucket(reference.bucket())
-          .key(reference.objectKey())
-          .build());
-      return Optional.of(new RangeReadableS3InputStream(response, reference));
-    } catch (NoSuchKeyException e) {
-      return Optional.empty();
-    } catch (S3Exception e) {
-      if (e.statusCode() == 404) {
-        return Optional.empty();
-      }
-      throw e;
-    }
+    return open(reference, GetObjectRequest.builder()
+        .bucket(reference.bucket())
+        .key(reference.objectKey())
+        .build());
   }
 
   @Override
@@ -338,21 +356,11 @@ public final class S3BlobStorage implements BlobStorage {
     if (length == 0) {
       return Optional.of(InputStream.nullInputStream());
     }
-    try {
-      ResponseInputStream<GetObjectResponse> response = client().getObject(GetObjectRequest.builder()
-          .bucket(reference.bucket())
-          .key(reference.objectKey())
-          .range(ObjectStorageMultipartSupport.byteRange(start, length))
-          .build());
-      return Optional.of(new RangeReadableS3InputStream(response, reference));
-    } catch (NoSuchKeyException e) {
-      return Optional.empty();
-    } catch (S3Exception e) {
-      if (e.statusCode() == 404) {
-        return Optional.empty();
-      }
-      throw e;
-    }
+    return open(reference, GetObjectRequest.builder()
+        .bucket(reference.bucket())
+        .key(reference.objectKey())
+        .range(ObjectStorageMultipartSupport.byteRange(start, length))
+        .build());
   }
 
   @Override
@@ -407,10 +415,22 @@ public final class S3BlobStorage implements BlobStorage {
 
   private final class RangeReadableS3InputStream extends FilterInputStream implements BlobRangeReader {
     private final BlobReference reference;
+    private final ClientHandle.Lease<S3Client> lease;
 
-    private RangeReadableS3InputStream(InputStream delegate, BlobReference reference) {
+    private RangeReadableS3InputStream(
+        InputStream delegate, BlobReference reference, ClientHandle.Lease<S3Client> lease) {
       super(delegate);
       this.reference = reference;
+      this.lease = lease;
+    }
+
+    @Override
+    public void close() throws java.io.IOException {
+      try {
+        super.close();
+      } finally {
+        lease.close();
+      }
     }
 
     @Override

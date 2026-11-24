@@ -49,19 +49,24 @@ import java.util.function.Supplier;
  * re-read).
  */
 public final class OssNativeBlobStorage implements BlobStorage {
-  private final Supplier<OSSClient> clients;
+  private final ClientHandle<OSSClient> clients;
   private final S3BlobStoreConfig config;
   private final ExecutorService multipartExecutor;
 
   public OssNativeBlobStorage(OSSClient client, S3BlobStoreConfig config) {
-    this(() -> client, config);
+    this(ClientHandle.of(() -> client), config);
+  }
+
+  public OssNativeBlobStorage(Supplier<OSSClient> clients, S3BlobStoreConfig config) {
+    this(ClientHandle.of(clients), config);
   }
 
   /**
    * Resolves the client on every operation, so a client that was closed and replaced (store
-   * reconfigured or invalidated) is never used after it was closed.
+   * reconfigured or invalidated) is never used after it was closed. Response streams hold a lease
+   * until they are closed, so their client is not closed under them either.
    */
-  public OssNativeBlobStorage(Supplier<OSSClient> clients, S3BlobStoreConfig config) {
+  public OssNativeBlobStorage(ClientHandle<OSSClient> clients, S3BlobStoreConfig config) {
     this.clients = clients;
     this.config = config;
     this.multipartExecutor = ObjectStorageMultipartSupport.executor(
@@ -70,6 +75,27 @@ public final class OssNativeBlobStorage implements BlobStorage {
 
   private OSSClient client() {
     return clients.get();
+  }
+
+  /** Opens an object stream; the client stays open until the returned stream is closed. */
+  private Optional<InputStream> open(BlobReference reference, GetObjectRequest request) {
+    ClientHandle.Lease<OSSClient> lease = clients.lease();
+    boolean streaming = false;
+    try {
+      GetObjectResult result = lease.client().getObject(request);
+      InputStream stream = new RangeReadableOssInputStream(result, reference, lease);
+      streaming = true;
+      return Optional.of(stream);
+    } catch (RuntimeException e) {
+      if (isNotFound(e)) {
+        return Optional.empty();
+      }
+      throw e;
+    } finally {
+      if (!streaming) {
+        lease.close();
+      }
+    }
   }
 
   @Override
@@ -273,18 +299,10 @@ public final class OssNativeBlobStorage implements BlobStorage {
 
   @Override
   public Optional<InputStream> get(BlobReference reference) {
-    try {
-      GetObjectResult result = client().getObject(GetObjectRequest.newBuilder()
-          .bucket(reference.bucket())
-          .key(reference.objectKey())
-          .build());
-      return Optional.of(closeResultWithBody(result, reference));
-    } catch (RuntimeException e) {
-      if (isNotFound(e)) {
-        return Optional.empty();
-      }
-      throw e;
-    }
+    return open(reference, GetObjectRequest.newBuilder()
+        .bucket(reference.bucket())
+        .key(reference.objectKey())
+        .build());
   }
 
   @Override
@@ -295,19 +313,11 @@ public final class OssNativeBlobStorage implements BlobStorage {
     if (length == 0) {
       return Optional.of(InputStream.nullInputStream());
     }
-    try {
-      GetObjectResult result = client().getObject(GetObjectRequest.newBuilder()
-          .bucket(reference.bucket())
-          .key(reference.objectKey())
-          .range(ObjectStorageMultipartSupport.byteRange(start, length))
-          .build());
-      return Optional.of(closeResultWithBody(result, reference));
-    } catch (RuntimeException e) {
-      if (isNotFound(e)) {
-        return Optional.empty();
-      }
-      throw e;
-    }
+    return open(reference, GetObjectRequest.newBuilder()
+        .bucket(reference.bucket())
+        .key(reference.objectKey())
+        .range(ObjectStorageMultipartSupport.byteRange(start, length))
+        .build());
   }
 
   @Override
@@ -342,10 +352,6 @@ public final class OssNativeBlobStorage implements BlobStorage {
         .bucket(reference.bucket())
         .key(reference.objectKey())
         .build());
-  }
-
-  private InputStream closeResultWithBody(GetObjectResult result, BlobReference reference) {
-    return new RangeReadableOssInputStream(result, reference);
   }
 
   private static Map<String, String> metadata(String repository, String logicalPath, String sha256) {
@@ -408,11 +414,14 @@ public final class OssNativeBlobStorage implements BlobStorage {
   private final class RangeReadableOssInputStream extends FilterInputStream implements BlobRangeReader {
     private final GetObjectResult result;
     private final BlobReference reference;
+    private final ClientHandle.Lease<OSSClient> lease;
 
-    private RangeReadableOssInputStream(GetObjectResult result, BlobReference reference) {
+    private RangeReadableOssInputStream(
+        GetObjectResult result, BlobReference reference, ClientHandle.Lease<OSSClient> lease) {
       super(result.body());
       this.result = result;
       this.reference = reference;
+      this.lease = lease;
     }
 
     @Override
@@ -426,6 +435,8 @@ public final class OssNativeBlobStorage implements BlobStorage {
           throw e;
         } catch (Exception e) {
           throw new IOException("Failed to close OSS get result", e);
+        } finally {
+          lease.close();
         }
       }
     }

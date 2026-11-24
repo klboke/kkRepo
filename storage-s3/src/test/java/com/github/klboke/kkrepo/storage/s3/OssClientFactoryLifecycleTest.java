@@ -11,7 +11,6 @@ import com.aliyun.sdk.service.oss2.OSSClient;
 import com.github.klboke.kkrepo.core.http.OutboundTlsTrust;
 import java.time.Duration;
 import java.util.Map;
-import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
 
 /** Same client lifetime rules as {@link S3ClientFactory}, for the native OSS client. */
@@ -43,7 +42,7 @@ class OssClientFactoryLifecycleTest {
   void aHandleRebuildsTheClientAfterInvalidationInsteadOfServingAClosedOne() throws Exception {
     OssClientFactory factory = factory(Duration.ZERO);
     try {
-      Supplier<OSSClient> handle = factory.handle(config(1, "bucket-a"));
+      ClientHandle<OSSClient> handle = factory.handle(config(1, "bucket-a"));
       OSSClient first = handle.get();
 
       factory.invalidate(1);
