@@ -165,6 +165,27 @@ class SecurityScanFindingGroupsServiceTest {
   }
 
   @Test
+  void artifactGroupCursorsCarryTheWholeArtifactKey() {
+    FindingGroup app = new FindingGroup(null, null, "maven2", "org.acme", "app", "1.0",
+        Severity.HIGH, 1, 1, 1, 0, 1, 0, 0, 0);
+    FindingGroup tool = new FindingGroup(null, null, "maven2", "", "raw/tool.bin", "",
+        Severity.LOW, 1, 1, 1, 0, 0, 0, 1, 0);
+    when(scans.listFindingGroups(any(), any(), isNull(), eq(2))).thenReturn(List.of(app, tool));
+
+    for (FindingGroupBy groupBy : List.of(FindingGroupBy.ARTIFACT, FindingGroupBy.ARTIFACT_VERSION)) {
+      var page = service.findingGroupPage(
+          actor, groupBy, null, null, null, null, 1, false, FindingFilter.NONE);
+      FindingGroupCursor cursor = FindingGroupPagination.decode(groupBy, page.nextCursor());
+      assertEquals(groupBy == FindingGroupBy.ARTIFACT
+              ? List.of("maven2", "org.acme", "app")
+              : List.of("maven2", "org.acme", "app", "1.0"),
+          cursor.key());
+      assertEquals(Severity.HIGH.rank(), cursor.severityRank());
+      assertEquals("maven2", page.items().getFirst().artifactFormat());
+    }
+  }
+
+  @Test
   void cursorsRoundTripArbitraryKeyTextAndRejectTampering() {
     var cursor = new FindingGroupCursor(5, List.of("MAVEN2", "", "dir.with|pipes/and.dots", "v1"));
     String encoded = FindingGroupPagination.encode(FindingGroupBy.ARTIFACT_VERSION, cursor);

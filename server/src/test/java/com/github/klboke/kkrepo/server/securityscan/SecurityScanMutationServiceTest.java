@@ -184,6 +184,53 @@ class SecurityScanMutationServiceTest {
   }
 
   @Test
+  void auditsEveryReplacedAndCreatedPackageWaiverAndNothingWhenRejected() {
+    SecurityScanManagementService management = mock(SecurityScanManagementService.class);
+    SecurityScanAuditService audit = mock(SecurityScanAuditService.class);
+    SecurityScanMutationService mutations =
+        new SecurityScanMutationService(management, audit, mock(Adapter.class));
+    HttpServletRequest request = mock(HttpServletRequest.class);
+    AuthenticatedSubject actor = mock(AuthenticatedSubject.class);
+    java.time.Instant now = java.time.Instant.parse("2026-11-24T00:00:00Z");
+    java.time.Instant expiresAt = now.plusSeconds(86_400);
+    ScanWaiver replacedFinding = new ScanWaiver(7L, "FINDING", 11L, 23L, 41L, "CVE-1",
+        "pkg:maven/a/b@1", Map.of(), "old", null, null, "u", "u", null, now, now);
+    ScanWaiver replacedGlobal = new ScanWaiver(8L, "GLOBAL", null, null, null, null,
+        "pkg:maven/a/b@1", Map.of(), "old", null, null, "u", "u", now, now, now);
+    ScanWaiver created = new ScanWaiver(70L, "REPOSITORY", 11L, null, null, null,
+        "pkg:maven/a/b@1", Map.of(), "new", null, null, "u", "u", expiresAt, now, now);
+    ScanWaiver createdForever = new ScanWaiver(71L, "REPOSITORY", 11L, null, null, null,
+        "pkg:maven/a/b@1?type=jar", Map.of(), "new", null, null, "u", "u", null, now, now);
+    SecurityScanManagementService.PackageWaiverCommand command =
+        new SecurityScanManagementService.PackageWaiverCommand(
+            "b", "1", 11L, "new", expiresAt, java.util.List.of(7L, 8L));
+    when(management.createPackageWaiver(actor, command)).thenReturn(
+        new SecurityScanManagementService.PackageWaiverResult(
+            java.util.List.of(created, createdForever),
+            java.util.List.of(replacedFinding, replacedGlobal)));
+
+    assertEquals(2, mutations.createPackageWaiver(request, actor, command).created().size());
+
+    verify(audit).record(request, actor, "WAIVER_DELETE", 11L,
+        Map.of("waiverId", 7L, "replacedBy", "PACKAGE_WAIVER"));
+    verify(audit).record(request, actor, "WAIVER_DELETE", null,
+        Map.of("waiverId", 8L, "replacedBy", "PACKAGE_WAIVER"));
+    verify(audit).record(request, actor, "WAIVER_CREATE", 11L, Map.of(
+        "waiverId", 70L, "scopeType", "REPOSITORY", "packageSelector", "pkg:maven/a/b@1",
+        "replacedWaivers", 2, "expiresAt", expiresAt.toString()));
+    verify(audit).record(request, actor, "WAIVER_CREATE", 11L, Map.of(
+        "waiverId", 71L, "scopeType", "REPOSITORY", "packageSelector", "pkg:maven/a/b@1?type=jar",
+        "replacedWaivers", 2, "expiresAt", "none"));
+
+    org.mockito.Mockito.clearInvocations(audit);
+    when(management.createPackageWaiver(actor, command))
+        .thenThrow(new IllegalStateException("changed"));
+    org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException.class,
+        () -> mutations.createPackageWaiver(request, actor, command));
+    verifyNoInteractions(audit);
+  }
+
+  @Test
   void broadcastsRunningWorkCancellationOnlyAfterTheDurableCommit() {
     SecurityScanManagementService management = mock(SecurityScanManagementService.class);
     SecurityScanAuditService audit = mock(SecurityScanAuditService.class);

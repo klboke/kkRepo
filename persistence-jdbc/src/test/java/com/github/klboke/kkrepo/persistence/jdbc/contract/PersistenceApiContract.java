@@ -4361,6 +4361,10 @@ public abstract class PersistenceApiContract {
         "an empty installed version selects findings without one");
     assertEquals(List.of(yaml1, yaml2), ids(scans.listFindings(
         query.apply(null, new String[] {"snake", null, null, null, null, null, null}), 0, 10)));
+    assertEquals(List.of(yaml2), ids(scans.listFindings(new SecurityScanDao.FindingQuery(
+            visible, hostedId, runs.get(1), Severity.HIGH, String.valueOf(yaml2), false, null,
+            null, null, null, null, null, null), 0, 10)),
+        "repository, run, severity, and numeric ID search narrow scoped finding queries");
 
     List<String> paged = new ArrayList<>();
     SecurityScanDao.FindingGroupCursor cursor = null;
@@ -4372,6 +4376,10 @@ public abstract class PersistenceApiContract {
       cursor = page.getFirst().cursor(SecurityScanDao.FindingGroupBy.PACKAGE);
     }
     assertEquals(List.of("log4j-core", "snakeyaml", "zlib"), paged);
+    assertThrows(IllegalArgumentException.class, () -> scans.listFindingGroups(
+        query.apply(null, none), SecurityScanDao.FindingGroupBy.ARTIFACT,
+        new SecurityScanDao.FindingGroupCursor(5, List.of("log4j-core", "2.14.1")), 10),
+        "a cursor from another grouping is rejected before querying");
     assertTrue(scans.listFindingGroups(new SecurityScanDao.FindingQuery(
             visible, null, null, null, null, true, null, null, null, null, null, null, null),
         SecurityScanDao.FindingGroupBy.PACKAGE, null, 10).isEmpty(),

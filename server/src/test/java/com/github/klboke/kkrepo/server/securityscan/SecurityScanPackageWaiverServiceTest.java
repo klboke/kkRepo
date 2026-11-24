@@ -212,6 +212,118 @@ class SecurityScanPackageWaiverServiceTest {
     verify(scans, never()).createWaiver(any());
   }
 
+  @Test
+  void contextHonoursAnExplicitScopeAndFallsBackToAllRepositoriesForSecurityAdministrators() {
+    assertEquals(11L, service.packageWaiverContext(actor, "snakeyaml", "1.30", 11L, false)
+        .repositoryId());
+
+    administered.clear();
+    var denied = assertThrows(ResponseStatusException.class,
+        () -> service.packageWaiverContext(actor, "snakeyaml", "1.30", null, false));
+    assertEquals(HttpStatus.FORBIDDEN, denied.getStatusCode());
+
+    granted.add("nexus:security-scanning:update");
+    var global = service.packageWaiverContext(actor, "snakeyaml", null, null, false);
+    assertNull(global.repositoryId(), "without an administered repository, admins get all");
+    assertEquals("", global.installedVersion());
+    assertTrue(global.repositories().isEmpty());
+
+    when(scans.listFindingPackageScopes(any(FindingQuery.class), anyInt()))
+        .thenReturn(List.of(new FindingPackageScope(11L, null)));
+    org.mockito.Mockito.clearInvocations(scans);
+    var noUrl = service.packageWaiverContext(actor, "snakeyaml", "1.30", null, true);
+    assertTrue(noUrl.packageUrls().isEmpty());
+    assertTrue(noUrl.missingPackageUrl());
+    assertTrue(noUrl.replacedWaivers().isEmpty());
+    verify(scans, never()).listPackageWaivers(any(), any(), any(), any(), anyInt());
+
+    for (String blank : new String[] {null, " "}) {
+      var error = assertThrows(ResponseStatusException.class,
+          () -> service.packageWaiverContext(actor, blank, "1.30", null, false));
+      assertEquals(HttpStatus.BAD_REQUEST, error.getStatusCode());
+    }
+  }
+
+  @Test
+  void securityAdministratorsReplaceGlobalAndRepositoryWaiversWithOneGlobalPackageWaiver() {
+    granted.add("nexus:security-scanning:update");
+    ScanWaiver repositoryWaiver = waiver(7L, "REPOSITORY", 11L, null, PURL, null);
+    ScanWaiver globalWaiver = waiver(8L, "GLOBAL", null, null, PURL, null);
+    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), null, 1000))
+        .thenReturn(List.of(repositoryWaiver, globalWaiver));
+    when(scans.deleteWaiver(anyLong())).thenReturn(true);
+    when(scans.createWaiver(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+    var result = service.createPackageWaiver(actor, new PackageWaiverCommand(
+        "snakeyaml", "1.30", null, "shaded", null, List.of(8L, 7L)));
+
+    assertEquals(2, result.replaced().size());
+    ScanWaiver created = result.created().getFirst();
+    assertEquals("GLOBAL", created.scopeType());
+    assertNull(created.repositoryId());
+    assertNull(created.expiresAt(), "a package waiver may be created without expiry");
+    verify(scans).deleteWaiver(7L);
+    verify(scans).deleteWaiver(8L);
+    verify(scans).listFindingPackageScopes(argThat(query ->
+        query.repositoryIds().equals(List.of(11L, 12L))), eq(1000));
+  }
+
+  @Test
+  void rejectsInvalidCommandsOversizedScopesAndConcurrentDeletes() {
+    for (PackageWaiverCommand invalid : List.of(
+        new PackageWaiverCommand("snakeyaml", "1.30", 11L, " ", null, List.of()),
+        new PackageWaiverCommand(" ", "1.30", 11L, "reason", null, List.of()))) {
+      var error = assertThrows(ResponseStatusException.class,
+          () -> service.createPackageWaiver(actor, invalid));
+      assertEquals(HttpStatus.BAD_REQUEST, error.getStatusCode());
+    }
+    var missing = assertThrows(ResponseStatusException.class,
+        () -> service.createPackageWaiver(actor, null));
+    assertEquals(HttpStatus.BAD_REQUEST, missing.getStatusCode());
+
+    when(scans.listFindingPackageScopes(any(FindingQuery.class), anyInt())).thenReturn(
+        java.util.stream.IntStream.range(0, 21)
+            .mapToObj(index -> new FindingPackageScope(11L, PURL + "?variant=" + index))
+            .toList());
+    var tooManyUrls = assertThrows(ResponseStatusException.class,
+        () -> service.createPackageWaiver(actor, command(11L, List.of())));
+    assertEquals(HttpStatus.BAD_REQUEST, tooManyUrls.getStatusCode());
+
+    when(scans.listFindingPackageScopes(any(FindingQuery.class), anyInt()))
+        .thenReturn(List.of(new FindingPackageScope(11L, PURL)));
+    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 1000)).thenReturn(
+        java.util.stream.LongStream.rangeClosed(1, 1000)
+            .mapToObj(id -> waiver(id, "FINDING", 11L, id, PURL, null))
+            .toList());
+    var tooManyWaivers = assertThrows(ResponseStatusException.class,
+        () -> service.createPackageWaiver(actor, command(11L, List.of())));
+    assertEquals(HttpStatus.BAD_REQUEST, tooManyWaivers.getStatusCode());
+    verify(scans, never()).deleteWaiver(anyLong());
+
+    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 1000))
+        .thenReturn(List.of(waiver(7L, "FINDING", 11L, 41L, PURL, null)));
+    when(scans.deleteWaiver(7L)).thenReturn(false);
+    var concurrent = assertThrows(ResponseStatusException.class,
+        () -> service.createPackageWaiver(actor, command(11L, List.of(7L))));
+    assertEquals(HttpStatus.CONFLICT, concurrent.getStatusCode(),
+        "a waiver deleted by another replica rolls the replacement back");
+    verify(scans, never()).createWaiver(any());
+  }
+
+  @Test
+  void anOmittedConfirmationMeansNothingMayBeReplaced() {
+    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 1000))
+        .thenReturn(List.of());
+    when(scans.createWaiver(any())).thenAnswer(invocation -> invocation.getArgument(0));
+    assertEquals(1, service.createPackageWaiver(actor, command(11L, null)).created().size());
+
+    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 1000))
+        .thenReturn(List.of(waiver(7L, "FINDING", 11L, 41L, PURL, null)));
+    var unconfirmed = assertThrows(ResponseStatusException.class,
+        () -> service.createPackageWaiver(actor, command(11L, null)));
+    assertEquals(HttpStatus.CONFLICT, unconfirmed.getStatusCode());
+  }
+
   private static PackageWaiverCommand command(Long repositoryId, List<Long> replaceWaiverIds) {
     return new PackageWaiverCommand("snakeyaml", "1.30", repositoryId, "reason",
         Instant.now().plusSeconds(3600), replaceWaiverIds);
