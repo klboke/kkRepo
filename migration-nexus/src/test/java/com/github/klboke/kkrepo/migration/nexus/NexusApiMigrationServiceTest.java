@@ -329,13 +329,14 @@ class NexusApiMigrationServiceTest {
     assertTrue(userTokenCheck(absent).isEmpty());
     assertEquals("finished", absent.status());
 
-    // Readable table: one token owned by alice.
+    // Readable table: one token, its owner name matches no source user (it may be ciphertext), so it is not shown.
     NexusApiMigrationService.NexusMigrationResult readable =
         migrateLegacyExport("{\"legacyUserTokens\": {\"count\": 1, \"users\": [\"alice\"]}}");
     assertEquals(1, readable.preflight().security().userTokens().legacyTableTokens());
-    assertEquals(List.of("alice"), readable.preflight().security().userTokens().legacyTableOwners());
+    assertEquals(List.of(), readable.preflight().security().userTokens().legacyTableOwners());
+    assertTrue(readable.preflight().security().userTokens().legacyTableOwnersUnverified());
     assertFalse(readable.preflight().security().userTokens().legacyTableUnreadable());
-    assertEquals(List.of("userTokens=0", "legacyUserTokens=1", "legacy-user-token:alice"),
+    assertEquals(List.of("userTokens=0", "legacyUserTokens=1", "legacy user_token owners unverified"),
         userTokenCheck(readable).orElseThrow().details());
     assertEquals("finished_with_validation_failures", readable.status());
 

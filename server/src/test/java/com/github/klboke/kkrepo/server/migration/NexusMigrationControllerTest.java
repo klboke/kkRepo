@@ -292,13 +292,15 @@ class NexusMigrationControllerTest {
     ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
     String alicePair = "AliceName1:" + "p".repeat(44);
     String bobPair = "BobNameCd2:" + "q".repeat(44);
+    String legacyCiphertext = "{b7wqvCyGAOYGfIXc0dmM3zNRpFR6Lq3eDOn9X1zB2Mw=}";
     String securityExport = mapper.writeValueAsString(Map.of(
         "users", List.of(),
         "apiKeys", List.of(
             sourceApiKey("NpmToken", "alice", "NexusAuthenticatingRealm", "npm-secret"),
             sourceApiKey("User-Token-Realm", "alice", "NexusAuthenticatingRealm", alicePair),
             sourceApiKey("User-Token-Realm", "bob", "LdapRealm", bobPair)),
-        "legacyUserTokens", Map.of("count", 1, "users", List.of("carol")),
+        // alice owns source API keys; the ciphertext is how an encrypted user_name column reads over JDBC.
+        "legacyUserTokens", Map.of("count", 3, "users", List.of("alice", legacyCiphertext)),
         "warnings", List.of()));
     HttpServer nexus = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
     nexus.createContext("/", exchange -> {
@@ -343,13 +345,14 @@ class NexusMigrationControllerTest {
       NexusUserTokenReport userTokens = preflight.security().userTokens();
       assertEquals(2, userTokens.tokens());
       assertEquals(List.of("LDAP/bob", "Local/alice"), userTokens.owners());
-      assertEquals(1, userTokens.legacyTableTokens());
-      assertEquals(List.of("carol"), userTokens.legacyTableOwners());
+      assertEquals(3, userTokens.legacyTableTokens());
+      assertEquals(List.of("alice"), userTokens.legacyTableOwners());
+      assertTrue(userTokens.legacyTableOwnersUnverified());
       assertEquals(1, preflight.security().apiKeys());
       assertEquals("NpmToken", preflight.security().apiKeyDetails().getFirst().domain());
       String json = mapper.writeValueAsString(preflight);
       assertTrue(json.contains("\"owners\":[\"LDAP/bob\",\"Local/alice\"]"), json);
-      for (String secret : List.of(alicePair, bobPair, "AliceName1", "BobNameCd2")) {
+      for (String secret : List.of(alicePair, bobPair, "AliceName1", "BobNameCd2", legacyCiphertext)) {
         assertFalse(json.contains(secret), secret);
       }
     } finally {

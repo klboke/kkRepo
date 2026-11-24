@@ -37,6 +37,16 @@ test('preflight shows legacy user_token table owners when only those exist', () 
   assert.match(html, /<td>carol<\/td>/);
 });
 
+test('preflight marks legacy user_token owners it could not verify', () => {
+  const html = render({ userTokens: { tokens: 0, owners: [], legacyTableTokens: 4, legacyTableOwners: ['carol'],
+    legacyTableOwnersUnverified: true, message } });
+  assert.match(html, /<td>4<\/td>/);
+  assert.match(html, /<td>carol, unverified owners not shown<\/td>/);
+  const onlyUnverified = render({ userTokens: { tokens: 0, owners: [], legacyTableTokens: 2, legacyTableOwners: [],
+    legacyTableOwnersUnverified: true, message } });
+  assert.match(onlyUnverified, /<td>unverified owners not shown<\/td>/);
+});
+
 test('preflight flags an unreadable legacy user_token table as an unknown count', () => {
   const html = render({ userTokens: {
     tokens: 0, owners: [], legacyTableTokens: 0, legacyTableOwners: [], legacyTableUnreadable: true, message } });

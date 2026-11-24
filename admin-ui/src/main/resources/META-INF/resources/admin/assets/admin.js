@@ -5242,7 +5242,8 @@ function renderMigrationUserTokens(report) {
     { label: "Owners", value: (value) => migrationValues(value.owners).join(", ") || "-" },
     { label: "Legacy table tokens", value: (value) => value.legacyTableUnreadable
       ? "unreadable (count unknown)" : value.legacyTableTokens ?? 0 },
-    { label: "Legacy table owners", value: (value) => migrationValues(value.legacyTableOwners).join(", ") || "-" },
+    { label: "Legacy table owners", value: (value) => [...migrationValues(value.legacyTableOwners),
+      ...(value.legacyTableOwnersUnverified ? ["unverified owners not shown"] : [])].join(", ") || "-" },
     { label: "Message", value: (value) => value.message || "" }
   ], [report]));
 }
