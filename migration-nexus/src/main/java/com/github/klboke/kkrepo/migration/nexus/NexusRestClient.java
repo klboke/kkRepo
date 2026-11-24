@@ -229,7 +229,8 @@ public class NexusRestClient {
         }
       }
       // Pre-3.71 Nexus Pro user tokens live in their own table: count rows and read owner names only, never
-      // the token columns. Best effort; null when the table is absent or unreadable.
+      // the token columns. null when no such table is found (CE); a found table that cannot be read is exported
+      // as unreadable, so the source token count is reported as unknown instead of zero.
       def legacyUserTokens = null
       try {
         def selected = container.lookup('org.sonatype.nexus.datastore.api.DataStoreManager').get('nexus')
@@ -249,33 +250,39 @@ public class NexusRestClient {
               tables.close()
             }
             if (table != null) {
-              def userColumn = null
-              def columns = connection.metaData.getColumns(null, null, table, '%')
               try {
-                while (columns.next()) {
-                  def column = columns.getString('COLUMN_NAME')
-                  if (userColumn == null
-                      && ['user_name', 'username', 'primary_principal'].contains(column.toLowerCase())) {
-                    userColumn = column
+                def userColumn = null
+                def columns = connection.metaData.getColumns(null, null, table, '%')
+                try {
+                  while (columns.next()) {
+                    def column = columns.getString('COLUMN_NAME')
+                    if (userColumn == null
+                        && ['user_name', 'username', 'primary_principal'].contains(column.toLowerCase())) {
+                      userColumn = column
+                    }
                   }
+                } finally {
+                  columns.close()
                 }
-              } finally {
-                columns.close()
-              }
-              def rs = connection.createStatement()
-                  .executeQuery('select ' + (userColumn == null ? '1' : userColumn) + ' from ' + table)
-              try {
-                def count = 0
-                def owners = []
-                while (rs.next()) {
-                  count++
-                  if (userColumn != null) {
-                    owners << rs.getString(1)
+                def rs = connection.createStatement()
+                    .executeQuery('select ' + (userColumn == null ? '1' : userColumn) + ' from ' + table)
+                try {
+                  def count = 0
+                  def owners = []
+                  while (rs.next()) {
+                    count++
+                    if (userColumn != null) {
+                      owners << rs.getString(1)
+                    }
                   }
+                  legacyUserTokens = [count: count, users: owners.unique()]
+                } finally {
+                  rs.close()
                 }
-                legacyUserTokens = [count: count, users: owners.unique()]
-              } finally {
-                rs.close()
+              } catch (e) {
+                legacyUserTokens = [status: 'unreadable', table: table]
+                warnings << ('Source Nexus legacy user token table ' + table
+                    + ' could not be read, so its token count is unknown: ' + errorText(e))
               }
             }
           } finally {
@@ -283,7 +290,7 @@ public class NexusRestClient {
           }
         }
       } catch (ignored) {
-        legacyUserTokens = null
+        // No datastore or no table metadata (CE, OrientDB): no legacy table found; keep any result already read.
       }
       def exportResult = { ->
         JsonOutput.toJson([users: users, apiKeys: apiKeys, legacyUserTokens: legacyUserTokens, warnings: warnings])

@@ -321,6 +321,50 @@ class NexusApiMigrationServiceTest {
     assertEquals("finished", result.status());
   }
 
+  @Test
+  void distinguishesAnAbsentReadableAndUnreadableLegacyUserTokenTable() throws Exception {
+    // Absent table (Community Edition): nothing to report, the migration finishes as before.
+    NexusApiMigrationService.NexusMigrationResult absent = migrateLegacyExport("{}");
+    assertFalse(absent.preflight().security().userTokens().found());
+    assertTrue(userTokenCheck(absent).isEmpty());
+    assertEquals("finished", absent.status());
+
+    // Readable table: one token owned by alice.
+    NexusApiMigrationService.NexusMigrationResult readable =
+        migrateLegacyExport("{\"legacyUserTokens\": {\"count\": 1, \"users\": [\"alice\"]}}");
+    assertEquals(1, readable.preflight().security().userTokens().legacyTableTokens());
+    assertEquals(List.of("alice"), readable.preflight().security().userTokens().legacyTableOwners());
+    assertFalse(readable.preflight().security().userTokens().legacyTableUnreadable());
+    assertEquals(List.of("userTokens=0", "legacyUserTokens=1", "legacy-user-token:alice"),
+        userTokenCheck(readable).orElseThrow().details());
+    assertEquals("finished_with_validation_failures", readable.status());
+
+    // Table found but its SELECT was denied: the token count is unknown, so the migration is not complete.
+    NexusApiMigrationService.NexusMigrationResult unreadable = migrateLegacyExport(
+        "{\"legacyUserTokens\": {\"status\": \"unreadable\", \"table\": \"USER_TOKEN\"}}");
+    var report = unreadable.preflight().security().userTokens();
+    assertTrue(report.legacyTableUnreadable());
+    assertEquals(0, report.legacyTableTokens());
+    assertTrue(new ObjectMapper().writeValueAsString(report).contains("\"legacyTableUnreadable\":true"));
+    assertTrue(unreadable.preflight().warnings().stream()
+        .anyMatch(warning -> warning.contains("user_token table could not be read")), unreadable.preflight().warnings().toString());
+    NexusApiMigrationService.ValidationCheck check = userTokenCheck(unreadable).orElseThrow();
+    assertEquals("FAIL", check.status());
+    assertTrue(check.details().contains("legacy user_token table unreadable: token count unknown"), check.details().toString());
+    assertTrue(unreadable.validation().failed());
+    assertEquals("finished_with_validation_failures", unreadable.status());
+  }
+
+  private static NexusApiMigrationService.NexusMigrationResult migrateLegacyExport(String exportJson) throws Exception {
+    NexusSecurityExport export = new ObjectMapper().readValue(exportJson, NexusSecurityExport.class);
+    NexusApiMigrationService service = new NexusApiMigrationService(
+        new ObjectMapper(), new FakeBlobStoreDao().asDao(), new FakeRepositoryDao().asDao(),
+        presentSecurityDao(), new FakeMigrationJobDao(), recordingSecurityWriter(new ArrayList<>()));
+    return service.migrate(
+        new NexusInventory(List.of(Map.of("name", "default")), List.of(), export, List.of()),
+        request("https://old-nexus.example"));
+  }
+
   private static Optional<NexusApiMigrationService.ValidationCheck> userTokenCheck(
       NexusApiMigrationService.NexusMigrationResult result) {
     return result.validation().checks().stream()

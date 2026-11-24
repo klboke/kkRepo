@@ -166,6 +166,7 @@ class NexusRestClientTest {
     assertTrue(script.contains("'User-Token-Realm'.equalsIgnoreCase(String.valueOf(document.field('domain')))"));
     assertTrue(script.contains("realmNames: realmNames"));
     assertTrue(script.contains("equalsIgnoreCase('user_token')"));
+    assertTrue(script.contains("legacyUserTokens = [status: 'unreadable', table: table]"));
     assertTrue(script.contains("select distinct domain from api_key_v2 order by domain"));
     assertTrue(script.contains("loadClass('org.sonatype.nexus.orient.DatabaseInstance')"));
     assertTrue(script.contains("loadClass('org.sonatype.nexus.orient.DatabaseInstanceNames')"));

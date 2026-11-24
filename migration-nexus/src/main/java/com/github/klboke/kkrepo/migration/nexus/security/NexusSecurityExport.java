@@ -17,7 +17,8 @@ public record NexusSecurityExport(
     List<Map<String, Object>> repositoryTargets,
     List<String> realmOrder,
     Map<String, Object> anonymous,
-    // Pre-3.71 Nexus Pro user token table: row count and owner user names only, never secrets; empty when absent.
+    // Pre-3.71 Nexus Pro user token table: row count and owner user names only, never secrets; empty when absent,
+    // {status: unreadable, table} when the source found the table but could not read it.
     Map<String, Object> legacyUserTokens) {
 
   @JsonCreator

@@ -14,12 +14,14 @@ import java.util.TreeSet;
  * @param owners distinct owners of those records
  * @param legacyTableTokens rows of the pre-3.71 {@code user_token} table, when the source script could see it
  * @param legacyTableOwners distinct owner user names of those rows (their realm is unknown)
+ * @param legacyTableUnreadable the source script found that table but could not read it: its token count is unknown
  */
 public record NexusUserTokenReport(
     int tokens,
     List<String> owners,
     int legacyTableTokens,
     List<String> legacyTableOwners,
+    boolean legacyTableUnreadable,
     String message) {
 
   // Nexus Pro (3.71+) keeps its user tokens in the API key store under this domain.
@@ -27,6 +29,9 @@ public record NexusUserTokenReport(
   static final String MESSAGE = "Nexus Repository Pro user tokens (User Token Realm) are not migrated by this "
       + "version, so the migration is incomplete; affected users generate a new kkRepo user token under My Token "
       + "after cutover.";
+  static final String UNREADABLE = "legacy user_token table unreadable: token count unknown";
+  static final String UNREADABLE_MESSAGE = "The source Nexus legacy (pre-3.71) Pro user_token table could not be "
+      + "read, so the source user token count is unknown and the migration is incomplete (unverified).";
 
   public NexusUserTokenReport {
     owners = owners == null ? List.of() : List.copyOf(owners);
@@ -53,13 +58,16 @@ public record NexusUserTokenReport(
     }
     int legacyCount = legacy.get("count") instanceof Number count ? count.intValue() : 0;
     legacyCount = Math.max(legacyCount, legacyOwners.size());
-    boolean found = !records.isEmpty() || legacyCount > 0;
+    boolean unreadable = "unreadable".equals(legacy.get("status"));
+    String message = unreadable
+        ? (records.isEmpty() ? UNREADABLE_MESSAGE : UNREADABLE_MESSAGE + " " + MESSAGE)
+        : !records.isEmpty() || legacyCount > 0 ? MESSAGE : null;
     return new NexusUserTokenReport(records.size(), List.copyOf(owners), legacyCount, List.copyOf(legacyOwners),
-        found ? MESSAGE : null);
+        unreadable, message);
   }
 
   public boolean found() {
-    return tokens > 0 || legacyTableTokens > 0;
+    return tokens > 0 || legacyTableTokens > 0 || legacyTableUnreadable;
   }
 
   /** Validation details: counts and owners, no secrets. */
@@ -70,6 +78,9 @@ public record NexusUserTokenReport(
     if (legacyTableTokens > 0) {
       details.add("legacyUserTokens=" + legacyTableTokens);
       legacyTableOwners.forEach(owner -> details.add("legacy-user-token:" + owner));
+    }
+    if (legacyTableUnreadable) {
+      details.add(UNREADABLE);
     }
     return details;
   }
