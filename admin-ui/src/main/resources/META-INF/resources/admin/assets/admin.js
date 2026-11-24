@@ -5235,6 +5235,18 @@ function renderMigrationHash(value) {
   return `<code class="migration-hash-cell" title="${escapeHtml(hash)}">${escapeHtml(shortText(hash, 18))}</code>`;
 }
 
+function renderMigrationUserTokens(report) {
+  if (!report || !(report.tokens > 0 || report.legacyTableTokens > 0 || report.legacyTableUnreadable)) return "";
+  return renderMigrationSection("Nexus Pro user tokens (not migrated)", renderCompactTable([
+    { label: "Tokens", value: (value) => value.tokens ?? 0 },
+    { label: "Owners", value: (value) => migrationValues(value.owners).join(", ") || "-" },
+    { label: "Legacy table tokens", value: (value) => value.legacyTableUnreadable
+      ? "unreadable (count unknown)" : value.legacyTableTokens ?? 0 },
+    { label: "Legacy table owners", value: (value) => migrationValues(value.legacyTableOwners).join(", ") || "-" },
+    { label: "Message", value: (value) => value.message || "" }
+  ], [report]));
+}
+
 function renderMigrationResult(payload, title) {
   const result = document.getElementById("migration-result");
   const preflight = payload.preflight || payload;
@@ -5348,6 +5360,7 @@ function renderMigrationResult(payload, title) {
       { label: "Status", value: (apiKey) => apiKey.status || "" },
       { label: "Raw key", value: (apiKey) => apiKey.rawKeyPresent ? "present" : "missing" }
     ], security.apiKeyDetails || []))}
+    ${renderMigrationUserTokens(security.userTokens)}
     ${renderMigrationSection("Content selectors", renderCompactTable([
       { label: "Name", value: (selector) => selector.name || "" },
       { label: "Type", value: (selector) => selector.type || "" },
