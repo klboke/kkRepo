@@ -2896,54 +2896,386 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       sql.append(" AND f.severity = ?");
       args.add(severity.name());
     }
-    String pattern = searchPattern(query);
-    if (pattern != null) {
-      sql.append("""
-           AND (
-             LOWER(f.advisory_id) LIKE ? ESCAPE '!'
-             OR LOWER(COALESCE(f.package_url, '')) LIKE ? ESCAPE '!'
-             OR LOWER(f.package_name) LIKE ? ESCAPE '!'
-             OR LOWER(COALESCE(f.installed_version, '')) LIKE ? ESCAPE '!'
-             OR LOWER(f.severity) LIKE ? ESCAPE '!'
-             OR LOWER(COALESCE(f.data_source, '')) LIKE ? ESCAPE '!'
-             OR LOWER(COALESCE(f.title, '')) LIKE ? ESCAPE '!'
-             OR LOWER(COALESCE(f.source_status, '')) LIKE ? ESCAPE '!'
-          """);
-      addRepeated(args, pattern, 8);
-      sql.append("""
-             OR EXISTS (
-               SELECT 1
-               FROM security_scan_run_subject search_subject
-               JOIN repository search_repository
-                 ON search_repository.id = search_subject.repository_id
-          """);
-      if (repositoryIds != null) {
-        sql.append("""
-               JOIN visible_repository search_visible
-                 ON search_visible.repository_id = search_subject.repository_id
-          """);
-      }
-      sql.append("""
-               WHERE search_subject.scan_run_id = f.scan_run_id
-                 AND LOWER(search_repository.name) LIKE ? ESCAPE '!'
-          """);
-      args.add(pattern);
-      if (repositoryId != null) {
-        sql.append(" AND search_subject.repository_id = ?");
-        args.add(repositoryId);
-      }
-      sql.append(")");
-      Long numeric = numericSearch(query);
-      if (numeric != null) {
-        sql.append(" OR f.id = ? OR f.scan_run_id = ?");
-        args.add(numeric);
-        args.add(numeric);
-      }
-      sql.append(")");
-    }
+    appendFindingSearch(sql, args, query, repositoryIds != null, repositoryId);
     sql.append(" ORDER BY f.id LIMIT ?");
     args.add(safeLimit(maxItems));
     return jdbc.query(sql.toString(), findingMapper, args.toArray());
+  }
+
+  /**
+   * Appends the management search predicate for finding alias {@code f}. Repository-name matches
+   * stay inside the visible scope and, when {@code repositoryId} is set, inside that context.
+   */
+  private void appendFindingSearch(
+      StringBuilder sql, List<Object> args, String query, boolean visibleScope, Long repositoryId) {
+    String pattern = searchPattern(query);
+    if (pattern == null) return;
+    sql.append("""
+         AND (
+           LOWER(f.advisory_id) LIKE ? ESCAPE '!'
+           OR LOWER(COALESCE(f.package_url, '')) LIKE ? ESCAPE '!'
+           OR LOWER(f.package_name) LIKE ? ESCAPE '!'
+           OR LOWER(COALESCE(f.installed_version, '')) LIKE ? ESCAPE '!'
+           OR LOWER(f.severity) LIKE ? ESCAPE '!'
+           OR LOWER(COALESCE(f.data_source, '')) LIKE ? ESCAPE '!'
+           OR LOWER(COALESCE(f.title, '')) LIKE ? ESCAPE '!'
+           OR LOWER(COALESCE(f.source_status, '')) LIKE ? ESCAPE '!'
+        """);
+    addRepeated(args, pattern, 8);
+    sql.append("""
+           OR EXISTS (
+             SELECT 1
+             FROM security_scan_run_subject search_subject
+             JOIN repository search_repository
+               ON search_repository.id = search_subject.repository_id
+        """);
+    if (visibleScope) {
+      sql.append("""
+             JOIN visible_repository search_visible
+               ON search_visible.repository_id = search_subject.repository_id
+        """);
+    }
+    sql.append("""
+             WHERE search_subject.scan_run_id = f.scan_run_id
+               AND LOWER(search_repository.name) LIKE ? ESCAPE '!'
+        """);
+    args.add(pattern);
+    if (repositoryId != null) {
+      sql.append(" AND search_subject.repository_id = ?");
+      args.add(repositoryId);
+    }
+    sql.append(")");
+    Long numeric = numericSearch(query);
+    if (numeric != null) {
+      sql.append(" OR f.id = ? OR f.scan_run_id = ?");
+      args.add(numeric);
+      args.add(numeric);
+    }
+    sql.append(")");
+  }
+
+  // Artifact identity of run subject "s": component coordinates, then the live Docker manifest's
+  // image name and digest, then the asset path. Missing parts normalize to the empty string.
+  private static final String FINDING_ARTIFACT_JOINS = """
+       JOIN asset artifact_asset
+         ON artifact_asset.id = s.asset_id
+       LEFT JOIN component artifact_component
+         ON artifact_component.id = artifact_asset.component_id
+       LEFT JOIN docker_manifest artifact_manifest
+         ON artifact_manifest.asset_id = artifact_asset.id
+        AND artifact_manifest.deleted_at IS NULL
+      """;
+  private static final String ARTIFACT_FORMAT_SQL = "artifact_asset.format";
+  private static final String ARTIFACT_NAMESPACE_SQL = "CASE WHEN artifact_component.id IS NULL"
+      + " THEN '' ELSE COALESCE(artifact_component.namespace, '') END";
+  private static final String ARTIFACT_NAME_SQL = "COALESCE(artifact_component.name,"
+      + " artifact_manifest.image_name, artifact_asset.path)";
+  private static final String ARTIFACT_VERSION_SQL =
+      "COALESCE(artifact_component.version, artifact_manifest.digest, '')";
+  private static final String SEVERITY_RANK_SQL = java.util.Arrays.stream(Severity.values())
+      .filter(value -> value.rank() > 0)
+      .map(value -> " WHEN '" + value.name() + "' THEN " + value.rank())
+      .collect(java.util.stream.Collectors.joining("", "CASE f.severity", " ELSE 0 END"));
+
+  @Override
+  public List<ScanFinding> listFindings(FindingQuery query, long afterId, int maxItems) {
+    List<Long> ids = repositoryScope.distinctLongs(query.repositoryIds());
+    if (ids.isEmpty()) return List.of();
+    boolean artifactJoin = hasArtifactFilter(query);
+    StringBuilder sql = new StringBuilder(repositoryScope.repositoryScopeCte());
+    List<Object> args = new ArrayList<>();
+    args.add(repositoryScope.parameter(ids));
+    sql.append("""
+        SELECT f.*
+        FROM security_scan_finding f
+        WHERE f.id > ?
+          AND EXISTS (
+            SELECT 1
+            FROM security_scan_run_subject s
+            JOIN visible_repository visible
+              ON visible.repository_id = s.repository_id
+        """);
+    args.add(Math.max(0, afterId));
+    if (artifactJoin) sql.append(FINDING_ARTIFACT_JOINS);
+    sql.append(" WHERE s.scan_run_id = f.scan_run_id");
+    appendFindingAssociationFilters(sql, args, query);
+    sql.append(")");
+    appendFindingRowFilters(sql, args, query);
+    sql.append(" ORDER BY f.id LIMIT ?");
+    args.add(safeLimit(maxItems));
+    return jdbc.query(sql.toString(), findingMapper, args.toArray());
+  }
+
+  @Override
+  public List<FindingGroup> listFindingGroups(
+      FindingQuery query, FindingGroupBy groupBy, FindingGroupCursor after, int maxItems) {
+    List<Long> ids = repositoryScope.distinctLongs(query.repositoryIds());
+    if (ids.isEmpty()) return List.of();
+    List<String> keys = switch (groupBy) {
+      case PACKAGE -> List.of("package_name", "installed_version");
+      case ARTIFACT -> List.of("artifact_format", "artifact_namespace", "artifact_name");
+      case ARTIFACT_VERSION ->
+          List.of("artifact_format", "artifact_namespace", "artifact_name", "artifact_version");
+    };
+    if (after != null && after.key().size() != keys.size()) {
+      throw new IllegalArgumentException("Finding group cursor does not match " + groupBy);
+    }
+    boolean artifactJoin = groupBy != FindingGroupBy.PACKAGE || hasArtifactFilter(query);
+    String keyList = String.join(", ", keys);
+    StringBuilder sql = new StringBuilder(repositoryScope.repositoryScopeCte());
+    List<Object> args = new ArrayList<>();
+    args.add(repositoryScope.parameter(ids));
+    sql.append("SELECT * FROM (SELECT ").append(keyList).append("""
+        ,
+          MAX(severity_rank) AS max_severity_rank,
+          COUNT(DISTINCT finding_id) AS finding_count,
+          COUNT(DISTINCT advisory_id) AS advisory_count,
+          COUNT(DISTINCT asset_id) AS artifact_count,
+          COUNT(DISTINCT CASE WHEN severity = 'CRITICAL' THEN finding_id END) AS critical_count,
+          COUNT(DISTINCT CASE WHEN severity = 'HIGH' THEN finding_id END) AS high_count,
+          COUNT(DISTINCT CASE WHEN severity = 'MEDIUM' THEN finding_id END) AS medium_count,
+          COUNT(DISTINCT CASE WHEN severity = 'LOW' THEN finding_id END) AS low_count,
+          COUNT(DISTINCT CASE WHEN severity NOT IN ('CRITICAL', 'HIGH', 'MEDIUM', 'LOW')
+            THEN finding_id END) AS other_count
+        FROM (
+          SELECT
+            f.id AS finding_id,
+            f.advisory_id AS advisory_id,
+            f.severity AS severity,
+            s.asset_id AS asset_id,
+        """);
+    sql.append(SEVERITY_RANK_SQL).append(" AS severity_rank");
+    if (groupBy == FindingGroupBy.PACKAGE) {
+      sql.append(", f.package_name AS package_name")
+          .append(", COALESCE(f.installed_version, '') AS installed_version");
+    } else {
+      sql.append(", ").append(ARTIFACT_FORMAT_SQL).append(" AS artifact_format")
+          .append(", ").append(ARTIFACT_NAMESPACE_SQL).append(" AS artifact_namespace")
+          .append(", ").append(ARTIFACT_NAME_SQL).append(" AS artifact_name")
+          .append(", ").append(ARTIFACT_VERSION_SQL).append(" AS artifact_version");
+    }
+    sql.append("""
+
+          FROM security_scan_finding f
+          JOIN security_scan_run_subject s
+            ON s.scan_run_id = f.scan_run_id
+          JOIN visible_repository visible
+            ON visible.repository_id = s.repository_id
+        """);
+    if (artifactJoin) sql.append(FINDING_ARTIFACT_JOINS);
+    sql.append(" WHERE 1 = 1");
+    appendFindingAssociationFilters(sql, args, query);
+    appendFindingRowFilters(sql, args, query);
+    sql.append(") finding_association GROUP BY ").append(keyList).append(") finding_group");
+    if (after != null) {
+      sql.append(" WHERE (max_severity_rank < ? OR (max_severity_rank = ? AND ");
+      args.add(after.severityRank());
+      args.add(after.severityRank());
+      appendKeyAfter(sql, args, keys, after.key(), 0);
+      sql.append("))");
+    }
+    sql.append(" ORDER BY max_severity_rank DESC, ").append(keyList).append(" LIMIT ?");
+    args.add(safeLimit(maxItems));
+    return jdbc.query(sql.toString(), (rs, rowNum) -> {
+      int rank = rs.getInt("max_severity_rank");
+      Severity maxSeverity = java.util.Arrays.stream(Severity.values())
+          .filter(value -> value.rank() == rank)
+          .findFirst()
+          .orElse(Severity.UNKNOWN);
+      boolean packageGroup = groupBy == FindingGroupBy.PACKAGE;
+      return new FindingGroup(
+          packageGroup ? rs.getString("package_name") : null,
+          packageGroup ? rs.getString("installed_version") : null,
+          packageGroup ? null : rs.getString("artifact_format"),
+          packageGroup ? null : rs.getString("artifact_namespace"),
+          packageGroup ? null : rs.getString("artifact_name"),
+          groupBy == FindingGroupBy.ARTIFACT_VERSION ? rs.getString("artifact_version") : null,
+          maxSeverity,
+          rs.getLong("finding_count"),
+          rs.getLong("advisory_count"),
+          rs.getLong("artifact_count"),
+          rs.getLong("critical_count"),
+          rs.getLong("high_count"),
+          rs.getLong("medium_count"),
+          rs.getLong("low_count"),
+          rs.getLong("other_count"));
+    }, args.toArray());
+  }
+
+  @Override
+  public List<FindingPackageScope> listFindingPackageScopes(FindingQuery query, int maxItems) {
+    List<Long> ids = repositoryScope.distinctLongs(query.repositoryIds());
+    if (ids.isEmpty()) return List.of();
+    boolean artifactJoin = hasArtifactFilter(query);
+    StringBuilder sql = new StringBuilder(repositoryScope.repositoryScopeCte());
+    List<Object> args = new ArrayList<>();
+    args.add(repositoryScope.parameter(ids));
+    sql.append("""
+        SELECT DISTINCT s.repository_id, f.package_url
+        FROM security_scan_finding f
+        JOIN security_scan_run_subject s
+          ON s.scan_run_id = f.scan_run_id
+        JOIN visible_repository visible
+          ON visible.repository_id = s.repository_id
+        """);
+    if (artifactJoin) sql.append(FINDING_ARTIFACT_JOINS);
+    sql.append(" WHERE 1 = 1");
+    appendFindingAssociationFilters(sql, args, query);
+    appendFindingRowFilters(sql, args, query);
+    sql.append(" ORDER BY s.repository_id, f.package_url LIMIT ?");
+    args.add(safeLimit(maxItems));
+    return jdbc.query(sql.toString(), (rs, rowNum) -> new FindingPackageScope(
+        rs.getLong("repository_id"), rs.getString("package_url")), args.toArray());
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public int lockPackageFindings(String packageName, String installedVersion) {
+    // Ordered locking keeps concurrent package waivers for the same package deadlock-free.
+    return jdbc.queryForList("""
+        SELECT id
+        FROM security_scan_finding
+        WHERE package_name = ?
+          AND COALESCE(installed_version, '') = ?
+        ORDER BY id
+        FOR UPDATE
+        """, Long.class, packageName, installedVersion == null ? "" : installedVersion).size();
+  }
+
+  @Override
+  public List<ScanWaiver> listPackageWaivers(
+      String packageName,
+      String installedVersion,
+      List<String> packageUrls,
+      Long repositoryId,
+      int maxItems) {
+    List<String> urls = distinctStrings(packageUrls, false);
+    if (urls.isEmpty()) return List.of();
+    List<Object> args = new ArrayList<>();
+    StringBuilder sql = new StringBuilder("""
+        SELECT w.*
+        FROM security_scan_waiver w
+        WHERE (
+          w.package_selector IN (
+        """);
+    appendIn(sql, args, urls);
+    sql.append("""
+          )
+          OR w.finding_id IN (
+            SELECT f.id
+            FROM security_scan_finding f
+            WHERE f.package_name = ?
+              AND COALESCE(f.installed_version, '') = ?
+              AND f.package_url IN (
+        """);
+    args.add(packageName);
+    args.add(installedVersion == null ? "" : installedVersion);
+    appendIn(sql, args, urls);
+    sql.append("))) ");
+    if (repositoryId != null) {
+      sql.append(" AND w.repository_id = ?");
+      args.add(repositoryId);
+    }
+    sql.append(" ORDER BY w.id LIMIT ?");
+    args.add(safeLimit(maxItems));
+    return jdbc.query(sql.toString(), waiverMapper, args.toArray());
+  }
+
+  /** Appends a strict lexicographic "key after cursor" predicate over the group key columns. */
+  private static void appendKeyAfter(
+      StringBuilder sql, List<Object> args, List<String> columns, List<String> values, int index) {
+    String column = columns.get(index);
+    sql.append("(").append(column).append(" > ?");
+    args.add(values.get(index));
+    if (index + 1 < columns.size()) {
+      sql.append(" OR (").append(column).append(" = ? AND ");
+      args.add(values.get(index));
+      appendKeyAfter(sql, args, columns, values, index + 1);
+      sql.append(")");
+    }
+    sql.append(")");
+  }
+
+  private static boolean hasArtifactFilter(FindingQuery query) {
+    return query.artifactFormat() != null
+        || query.artifactNamespace() != null
+        || query.artifactName() != null
+        || query.artifactVersion() != null;
+  }
+
+  /**
+   * Filters for run subject {@code s} of finding {@code f}: repository context, current content,
+   * artifact identity (requires {@link #FINDING_ARTIFACT_JOINS}), and active waiver coverage.
+   */
+  private void appendFindingAssociationFilters(
+      StringBuilder sql, List<Object> args, FindingQuery query) {
+    if (query.repositoryId() != null) {
+      sql.append(" AND s.repository_id = ?");
+      args.add(query.repositoryId());
+    }
+    if (query.currentOnly()) {
+      sql.append(" AND ").append(repositoryScope.currentFindingSubjectPredicate("s"));
+    }
+    appendEquals(sql, args, ARTIFACT_FORMAT_SQL, query.artifactFormat());
+    appendEquals(sql, args, ARTIFACT_NAMESPACE_SQL, query.artifactNamespace());
+    appendEquals(sql, args, ARTIFACT_NAME_SQL, query.artifactName());
+    appendEquals(sql, args, ARTIFACT_VERSION_SQL, query.artifactVersion());
+    if (query.unwaivedAt() != null) {
+      // Mirrors SecurityScanWaiverMatcher: approved, unexpired, subject-scoped, and matching the
+      // finding ID or every non-blank advisory/alias and package selector.
+      sql.append("""
+           AND NOT EXISTS (
+             SELECT 1
+             FROM security_scan_waiver w
+             WHERE w.approved_by IS NOT NULL
+               AND w.approved_by <> ''
+               AND (w.expires_at IS NULL OR w.expires_at > ?)
+               AND (w.repository_id IS NULL OR w.repository_id = s.repository_id)
+               AND (w.asset_id IS NULL OR w.asset_id = s.asset_id)
+               AND (
+                 w.finding_id = f.id
+                 OR (
+                   (NULLIF(w.advisory_selector, '') IS NOT NULL
+                     OR NULLIF(w.package_selector, '') IS NOT NULL)
+                   AND (
+                     NULLIF(w.advisory_selector, '') IS NULL
+                     OR LOWER(w.advisory_selector) = LOWER(f.advisory_id)
+                     OR %s
+                   )
+                   AND (
+                     NULLIF(w.package_selector, '') IS NULL
+                     OR w.package_selector = f.package_url
+                     OR w.package_selector = f.package_name
+                   )
+                 )
+               )
+           )
+          """.formatted(databaseDialect.json()
+              .textArrayContainsIgnoreCase("f.aliases_json", "w.advisory_selector")));
+      args.add(nullableTimestamp(query.unwaivedAt()));
+    }
+  }
+
+  /** Filters on finding row {@code f}: scan run, severity, package key, and search text. */
+  private void appendFindingRowFilters(StringBuilder sql, List<Object> args, FindingQuery query) {
+    if (query.scanRunId() != null) {
+      sql.append(" AND f.scan_run_id = ?");
+      args.add(query.scanRunId());
+    }
+    if (query.severity() != null) {
+      sql.append(" AND f.severity = ?");
+      args.add(query.severity().name());
+    }
+    appendEquals(sql, args, "f.package_name", query.packageName());
+    appendEquals(sql, args, "COALESCE(f.installed_version, '')", query.installedVersion());
+    appendFindingSearch(sql, args, query.query(), true, query.repositoryId());
+  }
+
+  private static void appendEquals(
+      StringBuilder sql, List<Object> args, String expression, String value) {
+    if (value == null) return;
+    sql.append(" AND ").append(expression).append(" = ?");
+    args.add(value);
   }
 
   @Override

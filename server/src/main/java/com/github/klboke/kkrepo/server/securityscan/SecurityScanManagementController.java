@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.server.securityscan;
 
 import com.github.klboke.kkrepo.persistence.jdbc.api.InvalidScanCompletionCursorException;
 import com.github.klboke.kkrepo.persistence.jdbc.api.ScanPolicyReferenceConflictException;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.FindingGroupBy;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.RepositoryScanConfig;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanPolicy;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanWaiver;
@@ -12,10 +13,15 @@ import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementServic
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.ConfigCommand;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.CursorPage;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.FindingArtifactPage;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.FindingFilter;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.FindingGroupView;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.FindingView;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.FindingWaiverContext;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.FindingWaiverDetail;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.Overview;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.PackageWaiverCommand;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.PackageWaiverContext;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.PackageWaiverResult;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.PolicyCommand;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.PolicyView;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.RepositoryView;
@@ -125,9 +131,41 @@ public class SecurityScanManagementController {
       @RequestParam(name = "after", defaultValue = "0") long after,
       @RequestParam(name = "limit", defaultValue = "25") int limit,
       @RequestParam(name = "currentOnly", defaultValue = "false") boolean currentOnly,
+      @RequestParam(name = "hideWaived", defaultValue = "false") boolean hideWaived,
+      @RequestParam(name = "packageName", required = false) String packageName,
+      @RequestParam(name = "installedVersion", required = false) String installedVersion,
+      @RequestParam(name = "artifactFormat", required = false) String artifactFormat,
+      @RequestParam(name = "artifactNamespace", required = false) String artifactNamespace,
+      @RequestParam(name = "artifactName", required = false) String artifactName,
+      @RequestParam(name = "artifactVersion", required = false) String artifactVersion,
       HttpServletRequest request) {
     return service.findingPage(
-        actor(request), repositoryId, runId, severity, query, after, limit, currentOnly);
+        actor(request), repositoryId, runId, severity, query, after, limit, currentOnly,
+        new FindingFilter(hideWaived, packageName, installedVersion, artifactFormat,
+            artifactNamespace, artifactName, artifactVersion));
+  }
+
+  @GetMapping("/findings/groups")
+  public CursorPage<FindingGroupView> findingGroups(
+      @RequestParam(name = "groupBy") FindingGroupBy groupBy,
+      @RequestParam(name = "repositoryId", required = false) Long repositoryId,
+      @RequestParam(name = "severity", required = false) Severity severity,
+      @RequestParam(name = "q", required = false) String query,
+      @RequestParam(name = "cursor", required = false) String cursor,
+      @RequestParam(name = "limit", defaultValue = "25") int limit,
+      @RequestParam(name = "currentOnly", defaultValue = "false") boolean currentOnly,
+      @RequestParam(name = "hideWaived", defaultValue = "false") boolean hideWaived,
+      @RequestParam(name = "packageName", required = false) String packageName,
+      @RequestParam(name = "installedVersion", required = false) String installedVersion,
+      @RequestParam(name = "artifactFormat", required = false) String artifactFormat,
+      @RequestParam(name = "artifactNamespace", required = false) String artifactNamespace,
+      @RequestParam(name = "artifactName", required = false) String artifactName,
+      @RequestParam(name = "artifactVersion", required = false) String artifactVersion,
+      HttpServletRequest request) {
+    return service.findingGroupPage(
+        actor(request), groupBy, repositoryId, severity, query, cursor, limit, currentOnly,
+        new FindingFilter(hideWaived, packageName, installedVersion, artifactFormat,
+            artifactNamespace, artifactName, artifactVersion));
   }
 
   @GetMapping("/findings/{findingId}/artifacts")
@@ -260,6 +298,24 @@ public class SecurityScanManagementController {
       @RequestBody WaiverCommand command, HttpServletRequest request) {
     AuthenticatedSubject actor = actor(request);
     return mutations.createWaiver(request, actor, command);
+  }
+
+  @GetMapping("/waivers/package-context")
+  public PackageWaiverContext packageWaiverContext(
+      @RequestParam(name = "packageName") String packageName,
+      @RequestParam(name = "installedVersion", required = false) String installedVersion,
+      @RequestParam(name = "repositoryId", required = false) Long repositoryId,
+      @RequestParam(name = "allRepositories", defaultValue = "false") boolean allRepositories,
+      HttpServletRequest request) {
+    return service.packageWaiverContext(
+        actor(request), packageName, installedVersion, repositoryId, allRepositories);
+  }
+
+  @PostMapping("/waivers/package")
+  public PackageWaiverResult createPackageWaiver(
+      @RequestBody PackageWaiverCommand command, HttpServletRequest request) {
+    AuthenticatedSubject actor = actor(request);
+    return mutations.createPackageWaiver(request, actor, command);
   }
 
   @DeleteMapping("/waivers/{waiverId}")

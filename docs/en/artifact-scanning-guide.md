@@ -518,6 +518,28 @@ status.
 - When every target is covered, the button becomes disabled **waived**. Partial coverage shows
   **waive remaining**.
 
+The toolbar options combine with search and **Current findings**, and apply to every visible
+finding, not only the rows on the current page:
+
+- **Hide waived** hides a finding once active, approved waivers cover all of its visible
+  repository artifacts. Partially waived findings stay visible; expired waivers do not hide
+  anything.
+- **Group by package** groups findings by vulnerable package and installed version.
+- **Group by artifact** groups findings by repository artifact: component coordinates (for
+  example `groupId:artifactId`), else the Docker image name, else the asset path. Expanding an
+  artifact lists its versions (the manifest digest for Docker images). With **Group by package**
+  also on, an artifact expands to package and installed-version groups across all of its versions
+  instead.
+
+Groups list the worst severity first and show counts per severity, plus the number of findings,
+advisories, and artifacts. Expand a group to load its findings in pages; expanded groups stay open
+after you search, toggle a filter, or create a waiver. With **Hide waived** on, an artifact group
+omits only the artifacts that are waived, so a finding can still appear under another artifact.
+
+![Findings grouped by artifact, then artifact version, with waived findings hidden](../img/artifact-scanning/findings-grouped-by-artifact.png)
+
+![Findings grouped by package and installed version, with one package expanded](../img/artifact-scanning/findings-grouped-by-package.png)
+
 A finding is a match from the scanner database used by that run. Interpret `0 findings` as “no
 known vulnerabilities matched” only when the run is complete, the database is current, and the
 target is applicable.
@@ -585,6 +607,32 @@ not depend on a disabled browser button.
 API clients must pair every artifact-scoped waiver with an explicit repository context. A group
 context requires administration of that group and the artifact must come from one of its current
 source repositories; repository-less artifact waivers are rejected.
+
+#### Package waivers
+
+With **Group by package** on, **waive package** on a package row waives every advisory of that
+exact package version, for every artifact in the chosen scope, including future builds. This
+suits code you cannot upgrade, such as a library shaded inside a third-party jar.
+
+1. Choose the scope: a repository you administer that contains the package, or **All
+   repositories** (requires `nexus:security-scanning:update`).
+2. Check the package URL. The waiver selects this exact package URL, so another version of the
+   same library is still reported. Findings without a package URL stay waivable one by one.
+3. Select the expiry (90 days by default) and enter the Reason.
+4. Review the existing waivers that will be replaced: every waiver in that scope, active or
+   expired, tied to this package URL by its package selector or by its finding.
+5. **Waive package**. When waivers would be replaced, a confirmation asks whether to delete them
+   all. **Yes, replace** deletes them and creates the package waiver in one transaction; **No**
+   cancels and changes nothing.
+
+![Package waiver dialog with the waivers it replaces](../img/artifact-scanning/package-waiver-dialog.png)
+
+![Confirmation before individual waivers are replaced](../img/artifact-scanning/package-waiver-confirm.png)
+
+Replacing waivers also requires `nexus:security-scanning-waivers:delete` and administration of
+each replaced waiver's repository. If another administrator changes this package's waivers while
+the dialog is open, the request is rejected, the list refreshes, and you confirm again. Every
+replaced and created waiver is audited like a single waiver change.
 
 ## Common Configuration
 

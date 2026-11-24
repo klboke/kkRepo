@@ -516,6 +516,14 @@ public final class MySqlDatabaseDialect implements DatabaseDialect {
           """.formatted(alias, alias);
     }
 
+    @Override
+    public String textArrayContainsIgnoreCase(String arrayColumn, String valueExpression) {
+      // Lowercasing serialized JSON keeps it valid: escapes use lowercase letters or hex digits.
+      // JSON_CONTAINS compares strings exactly, avoiding column collation mismatches.
+      return "JSON_CONTAINS(CAST(LOWER(CAST(%s AS CHAR)) AS JSON), JSON_QUOTE(LOWER(%s)))"
+          .formatted(arrayColumn, valueExpression);
+    }
+
     private static String column(String value) {
       if (value == null || !IDENTIFIER.matcher(value).matches()) {
         throw new IllegalArgumentException("Unsafe JSON column: " + value);

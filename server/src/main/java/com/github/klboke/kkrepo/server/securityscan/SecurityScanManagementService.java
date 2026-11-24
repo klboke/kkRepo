@@ -11,6 +11,11 @@ import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.AssetSecurityState;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.CompletionOrder;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.FindingGroup;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.FindingGroupBy;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.FindingGroupCursor;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.FindingPackageScope;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.FindingQuery;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.RepositoryScanConfig;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanCandidate;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanFinding;
@@ -398,6 +403,25 @@ public class SecurityScanManagementService {
       long afterId,
       int requestedLimit,
       boolean currentOnly) {
+    return findingPage(actor, repositoryId, runId, severity, query, afterId, requestedLimit,
+        currentOnly, FindingFilter.NONE);
+  }
+
+  /**
+   * Lists finding rows. Non-empty {@code filter}s narrow the rows to findings that keep a
+   * matching, and optionally unwaived, visible artifact association; the per-row waiver and
+   * artifact summaries still describe every visible association of the finding.
+   */
+  public CursorPage<FindingView> findingPage(
+      AuthenticatedSubject actor,
+      Long repositoryId,
+      Long runId,
+      Severity severity,
+      String query,
+      long afterId,
+      int requestedLimit,
+      boolean currentOnly,
+      FindingFilter filter) {
     if (runId != null) requireVisibleRun(actor, runId);
     List<RepositoryRecord> repositoryRows = repositories.list();
     Map<Long, RepositoryRecord> repositoriesById = new LinkedHashMap<>();
@@ -411,7 +435,16 @@ public class SecurityScanManagementService {
     String normalizedQuery = normalizedQuery(query);
     int safeLimit = limit(requestedLimit);
     List<ScanFinding> candidates;
-    if (repositoryId == null) {
+    if (filter != null && !filter.isEmpty()) {
+      if (repositoryId != null && !visibleRepositoryNames.containsKey(repositoryId)) {
+        throw notFound("Repository not found");
+      }
+      candidates = scans.listFindings(
+          filter.query(visibleRepositoryNames.keySet().stream().toList(), repositoryId, runId,
+              severity, normalizedQuery, currentOnly, Instant.now()),
+          afterId,
+          safeLimit + 1);
+    } else if (repositoryId == null) {
       candidates = currentOnly ? scans.listFindingsByRepositories(
           visibleRepositoryNames.keySet().stream().toList(),
           runId, severity, normalizedQuery, afterId, safeLimit + 1, true)
@@ -513,6 +546,47 @@ public class SecurityScanManagementService {
         })
         .toList();
     return new CursorPage<>(views, rawPage.nextAfter());
+  }
+
+  /**
+   * Pages finding groups over the caller's visible repositories, worst severity first. Counts
+   * cover all matching findings, not only one page of finding rows.
+   */
+  public CursorPage<FindingGroupView> findingGroupPage(
+      AuthenticatedSubject actor,
+      FindingGroupBy groupBy,
+      Long repositoryId,
+      Severity severity,
+      String query,
+      String cursor,
+      int requestedLimit,
+      boolean currentOnly,
+      FindingFilter filter) {
+    if (groupBy == null) throw badRequest("groupBy is required");
+    List<Long> visibleRepositoryIds = repositories.list().stream()
+        .filter(repository -> canBrowse(actor, repository))
+        .map(RepositoryRecord::id)
+        .toList();
+    if (repositoryId != null && !visibleRepositoryIds.contains(repositoryId)) {
+      throw notFound("Repository not found");
+    }
+    FindingGroupCursor after = FindingGroupPagination.decode(groupBy, cursor);
+    int safeLimit = limit(requestedLimit);
+    FindingFilter effective = filter == null ? FindingFilter.NONE : filter;
+    List<FindingGroup> groups = scans.listFindingGroups(
+        effective.query(visibleRepositoryIds, repositoryId, null, severity,
+            normalizedQuery(query), currentOnly, Instant.now()),
+        groupBy,
+        after,
+        safeLimit + 1);
+    List<FindingGroupView> items = groups.stream()
+        .limit(safeLimit)
+        .map(FindingGroupView::from)
+        .toList();
+    String nextCursor = groups.size() > safeLimit
+        ? FindingGroupPagination.encode(groupBy, groups.get(safeLimit - 1).cursor(groupBy))
+        : null;
+    return new CursorPage<>(items, null, nextCursor);
   }
 
   public FindingArtifactPage findingArtifacts(
@@ -1502,6 +1576,197 @@ public class SecurityScanManagementService {
     return waiver;
   }
 
+  // One waiver is created per distinct package URL; a package version rarely has more than one.
+  private static final int MAX_PACKAGE_WAIVER_URLS = 20;
+  // Bounded by the DAO page size, so the confirmed set is always complete.
+  private static final int MAX_REPLACED_PACKAGE_WAIVERS = 999;
+
+  /**
+   * Describes a package waiver for one scope before it is created: the repositories the actor
+   * may scope it to, the exact package URLs it will select, and the existing waivers it would
+   * replace. Without an explicit scope, the first administered repository is chosen.
+   */
+  public PackageWaiverContext packageWaiverContext(
+      AuthenticatedSubject actor,
+      String packageName,
+      String installedVersion,
+      Long repositoryId,
+      boolean allRepositories) {
+    requireWaiverPermission(actor, "create");
+    String name = requirePackageName(packageName);
+    String version = installedVersion == null ? "" : installedVersion;
+    List<RepositoryRecord> repositoryRows = repositories.list();
+    List<FindingPackageScope> scopes = packageScopes(actor, repositoryRows, name, version, null);
+    Set<Long> packageRepositoryIds = scopes.stream()
+        .map(FindingPackageScope::repositoryId)
+        .collect(java.util.stream.Collectors.toSet());
+    List<PackageWaiverRepository> administered = repositoryRows.stream()
+        .filter(repository -> packageRepositoryIds.contains(repository.id()))
+        .filter(repository -> canAdministerRepository(actor, repository))
+        .sorted(Comparator.comparing(RepositoryRecord::name))
+        .map(repository -> new PackageWaiverRepository(repository.id(), repository.name()))
+        .toList();
+    boolean canWaiveGlobally = hasScanPermission(actor, "update");
+    Long scopeRepositoryId;
+    if (allRepositories) {
+      requireGlobalWrite(actor);
+      scopeRepositoryId = null;
+    } else if (repositoryId != null) {
+      if (administered.stream().noneMatch(repository -> repository.id() == repositoryId)) {
+        throw notFound("Package has no findings in an administered repository with this ID");
+      }
+      scopeRepositoryId = repositoryId;
+    } else if (!administered.isEmpty()) {
+      scopeRepositoryId = administered.getFirst().id();
+    } else if (canWaiveGlobally) {
+      scopeRepositoryId = null;
+    } else {
+      throw new ResponseStatusException(
+          HttpStatus.FORBIDDEN, "No repository you administer contains this package");
+    }
+    List<String> packageUrls = packageUrls(scopes, scopeRepositoryId);
+    List<ScanWaiver> replaced = packageUrls.isEmpty()
+        ? List.of()
+        : scans.listPackageWaivers(
+            name, version, packageUrls, scopeRepositoryId, MAX_REPLACED_PACKAGE_WAIVERS + 1);
+    WaiverViews views = new WaiverViews(actor, repositoryRows);
+    Instant now = Instant.now();
+    return new PackageWaiverContext(
+        name,
+        version,
+        administered,
+        canWaiveGlobally,
+        scopeRepositoryId,
+        packageUrls,
+        scopes.stream().anyMatch(scope -> blank(scope.packageUrl())
+            && (scopeRepositoryId == null || scope.repositoryId() == scopeRepositoryId)),
+        replaced.stream().map(waiver -> views.view(waiver, now)).toList());
+  }
+
+  /**
+   * Replaces every waiver tied to a package version within one scope by one waiver per exact
+   * package URL. The confirmed {@code replaceWaiverIds} must equal the waivers found inside the
+   * transaction, so a concurrent change on any replica fails with 409 instead of deleting
+   * waivers the caller never saw.
+   */
+  @Transactional
+  public PackageWaiverResult createPackageWaiver(
+      AuthenticatedSubject actor, PackageWaiverCommand command) {
+    requireWaiverPermission(actor, "create");
+    if (command == null || blank(command.reason())) throw badRequest("Waiver reason is required");
+    String name = requirePackageName(command.packageName());
+    String version = command.installedVersion() == null ? "" : command.installedVersion();
+    String reason = command.reason().trim();
+    requireWaiverFieldLength(reason, "Waiver reason", SecurityScanDao.MAX_WAIVER_REASON_LENGTH);
+    Instant now = Instant.now();
+    if (command.expiresAt() != null && !command.expiresAt().isAfter(now)) {
+      throw badRequest("Waiver expiration must be in the future");
+    }
+    if (command.repositoryId() == null) {
+      requireGlobalWrite(actor);
+    } else {
+      requireRepositoryAdmin(actor, command.repositoryId());
+    }
+    scans.lockPackageFindings(name, version);
+    List<String> packageUrls = packageUrls(
+        packageScopes(actor, repositories.list(), name, version, command.repositoryId()),
+        command.repositoryId());
+    if (packageUrls.isEmpty()) {
+      throw conflict("This package has no findings with a package URL in the selected scope");
+    }
+    if (packageUrls.size() > MAX_PACKAGE_WAIVER_URLS) {
+      throw badRequest("This package version has too many package URLs to waive at once");
+    }
+    packageUrls.forEach(url -> requireWaiverFieldLength(
+        url, "Package selector", SecurityScanDao.MAX_WAIVER_PACKAGE_SELECTOR_LENGTH));
+    List<ScanWaiver> replaced = scans.listPackageWaivers(
+        name, version, packageUrls, command.repositoryId(), MAX_REPLACED_PACKAGE_WAIVERS + 1);
+    if (replaced.size() > MAX_REPLACED_PACKAGE_WAIVERS) {
+      throw badRequest("Too many existing waivers to replace at once; narrow the scope first");
+    }
+    Set<Long> confirmed = command.replaceWaiverIds() == null
+        ? Set.of()
+        : Set.copyOf(command.replaceWaiverIds());
+    Set<Long> found = replaced.stream()
+        .map(ScanWaiver::id)
+        .collect(java.util.stream.Collectors.toSet());
+    if (!confirmed.equals(found)) {
+      throw conflict("Waivers for this package changed. Review them and confirm again.");
+    }
+    if (!replaced.isEmpty()) requireWaiverPermission(actor, "delete");
+    for (ScanWaiver waiver : replaced) {
+      Long effectiveRepositoryId = effectiveWaiverRepositoryId(waiver);
+      if (effectiveRepositoryId == null) {
+        requireGlobalWrite(actor);
+      } else {
+        requireRepositoryAdmin(actor, effectiveRepositoryId);
+      }
+    }
+    for (ScanWaiver waiver : replaced) {
+      if (!scans.deleteWaiver(waiver.id())) {
+        throw conflict("Waivers for this package changed. Review them and confirm again.");
+      }
+      scans.invalidatePolicyStatesForWaiver(waiver);
+    }
+    String scopeType = command.repositoryId() == null ? "GLOBAL" : "REPOSITORY";
+    List<ScanWaiver> created = new ArrayList<>(packageUrls.size());
+    for (String packageUrl : packageUrls) {
+      ScanWaiver waiver = scans.createWaiver(new ScanWaiver(
+          null,
+          scopeType,
+          command.repositoryId(),
+          null,
+          null,
+          null,
+          packageUrl,
+          Map.of(),
+          reason,
+          null,
+          null,
+          actor.userId(),
+          actor.userId(),
+          command.expiresAt(),
+          now,
+          now));
+      scans.invalidatePolicyStatesForWaiver(waiver);
+      created.add(waiver);
+    }
+    return new PackageWaiverResult(created, replaced);
+  }
+
+  private static String requirePackageName(String packageName) {
+    if (blank(packageName)) throw badRequest("Package name is required");
+    return packageName;
+  }
+
+  /** Package scopes over visible repositories, or over one repository context. */
+  private List<FindingPackageScope> packageScopes(
+      AuthenticatedSubject actor,
+      List<RepositoryRecord> repositoryRows,
+      String packageName,
+      String installedVersion,
+      Long repositoryId) {
+    List<Long> scope = repositoryId != null
+        ? List.of(repositoryId)
+        : repositoryRows.stream()
+            .filter(repository -> canBrowse(actor, repository))
+            .map(RepositoryRecord::id)
+            .toList();
+    return scans.listFindingPackageScopes(new FindingQuery(
+        scope, null, null, null, null, false, null, packageName, installedVersion,
+        null, null, null, null), 1000);
+  }
+
+  private static List<String> packageUrls(List<FindingPackageScope> scopes, Long repositoryId) {
+    return scopes.stream()
+        .filter(scope -> repositoryId == null || scope.repositoryId() == repositoryId)
+        .map(FindingPackageScope::packageUrl)
+        .filter(url -> !blank(url))
+        .distinct()
+        .sorted()
+        .toList();
+  }
+
   public SbomDownload sbom(AuthenticatedSubject actor, long sbomId) {
     Sbom sbom = scans.findSbom(sbomId).orElseThrow(() -> notFound("SBOM not found"));
     requireAnyVisibleRepository(actor, scans.listRepositoryIdsForSbom(sbomId));
@@ -1917,6 +2182,72 @@ public class SecurityScanManagementService {
     }
   }
 
+  /**
+   * Optional findings-view filters. Null strings do not restrict results; an empty string
+   * selects a missing key part, such as a package without an installed version.
+   */
+  public record FindingFilter(
+      boolean hideWaived,
+      String packageName,
+      String installedVersion,
+      String artifactFormat,
+      String artifactNamespace,
+      String artifactName,
+      String artifactVersion) {
+    public static final FindingFilter NONE =
+        new FindingFilter(false, null, null, null, null, null, null);
+
+    boolean isEmpty() {
+      return !hideWaived && packageName == null && installedVersion == null
+          && artifactFormat == null && artifactNamespace == null && artifactName == null
+          && artifactVersion == null;
+    }
+
+    FindingQuery query(
+        List<Long> visibleRepositoryIds,
+        Long repositoryId,
+        Long runId,
+        Severity severity,
+        String normalizedQuery,
+        boolean currentOnly,
+        Instant now) {
+      return new FindingQuery(
+          visibleRepositoryIds, repositoryId, runId, severity, normalizedQuery, currentOnly,
+          hideWaived ? now : null, packageName, installedVersion, artifactFormat,
+          artifactNamespace, artifactName, artifactVersion);
+    }
+  }
+
+  /**
+   * One findings group. Package groups set the package fields; artifact groups set the artifact
+   * fields, plus {@code artifactVersion} when grouped by version. Counts cover all matches.
+   */
+  public record FindingGroupView(
+      String packageName,
+      String installedVersion,
+      String artifactFormat,
+      String artifactNamespace,
+      String artifactName,
+      String artifactVersion,
+      String maxSeverity,
+      long findingCount,
+      long advisoryCount,
+      long artifactCount,
+      long criticalCount,
+      long highCount,
+      long mediumCount,
+      long lowCount,
+      long otherCount) {
+    static FindingGroupView from(FindingGroup group) {
+      return new FindingGroupView(
+          group.packageName(), group.installedVersion(), group.artifactFormat(),
+          group.artifactNamespace(), group.artifactName(), group.artifactVersion(),
+          group.maxSeverity().name(), group.findingCount(), group.advisoryCount(),
+          group.artifactCount(), group.criticalCount(), group.highCount(), group.mediumCount(),
+          group.lowCount(), group.otherCount());
+    }
+  }
+
   public record FindingArtifactView(
       long repositoryId,
       String repository,
@@ -2034,6 +2365,49 @@ public class SecurityScanManagementService {
       Instant expiresAt) {
     public WaiverCommand {
       selector = selector == null ? Map.of() : Map.copyOf(selector);
+    }
+  }
+
+  /**
+   * Creates a package waiver: one waiver per exact package URL of {@code packageName} at
+   * {@code installedVersion}, scoped to {@code repositoryId}, or to every repository when null.
+   * {@code replaceWaiverIds} are the existing waivers the caller confirmed for deletion.
+   */
+  public record PackageWaiverCommand(
+      String packageName,
+      String installedVersion,
+      Long repositoryId,
+      String reason,
+      Instant expiresAt,
+      List<Long> replaceWaiverIds) {}
+
+  public record PackageWaiverRepository(long id, String name) {}
+
+  /**
+   * Package waiver preview for one scope ({@code repositoryId}, or every repository when null).
+   * {@code missingPackageUrl} reports findings without a package URL, which a package waiver
+   * cannot select and which therefore stay waivable one by one.
+   */
+  public record PackageWaiverContext(
+      String packageName,
+      String installedVersion,
+      List<PackageWaiverRepository> repositories,
+      boolean canWaiveGlobally,
+      Long repositoryId,
+      List<String> packageUrls,
+      boolean missingPackageUrl,
+      List<WaiverView> replacedWaivers) {
+    public PackageWaiverContext {
+      repositories = repositories == null ? List.of() : List.copyOf(repositories);
+      packageUrls = packageUrls == null ? List.of() : List.copyOf(packageUrls);
+      replacedWaivers = replacedWaivers == null ? List.of() : List.copyOf(replacedWaivers);
+    }
+  }
+
+  public record PackageWaiverResult(List<ScanWaiver> created, List<ScanWaiver> replaced) {
+    public PackageWaiverResult {
+      created = created == null ? List.of() : List.copyOf(created);
+      replaced = replaced == null ? List.of() : List.copyOf(replaced);
     }
   }
 

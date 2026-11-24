@@ -1,0 +1,232 @@
+package com.github.klboke.kkrepo.server.securityscan;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import com.github.klboke.kkrepo.auth.AccessDecision;
+import com.github.klboke.kkrepo.auth.PermissionAction;
+import com.github.klboke.kkrepo.auth.PermissionSubject;
+import com.github.klboke.kkrepo.auth.RepositoryPermission;
+import com.github.klboke.kkrepo.core.RepositoryFormat;
+import com.github.klboke.kkrepo.core.RepositoryType;
+import com.github.klboke.kkrepo.persistence.jdbc.api.AssetDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.BrowseNodeDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.DockerRegistryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.RepositoryDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.FindingPackageScope;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.FindingQuery;
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanWaiver;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.RepositoryRecord;
+import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
+import com.github.klboke.kkrepo.server.security.SecurityManagementService;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.PackageWaiverCommand;
+import java.time.Instant;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
+
+class SecurityScanPackageWaiverServiceTest {
+  private static final String PURL = "pkg:maven/org.yaml/snakeyaml@1.30";
+
+  private SecurityScanDao scans;
+  private SecurityManagementService security;
+  private SecurityScanManagementService service;
+  private AuthenticatedSubject actor;
+  private final Set<String> granted = new HashSet<>();
+  private final Set<String> administered = new HashSet<>();
+
+  @BeforeEach
+  void setUp() {
+    scans = mock(SecurityScanDao.class);
+    RepositoryDao repositories = mock(RepositoryDao.class);
+    security = mock(SecurityManagementService.class);
+    service = new SecurityScanManagementService(
+        scans,
+        repositories,
+        mock(AssetDao.class),
+        mock(BrowseNodeDao.class),
+        mock(DockerRegistryDao.class),
+        security,
+        mock(SecurityScanDocumentStore.class),
+        mock(SecurityScanDocumentPersistence.class),
+        mock(SecurityScanningProperties.class),
+        mock(SecurityScanRepositoryScope.class));
+    PermissionSubject permissions =
+        new PermissionSubject("test", "operator", Set.of("operator"), null);
+    actor = new AuthenticatedSubject("test", "operator", "local", null, permissions);
+    granted.addAll(Set.of(
+        "nexus:security-scanning-waivers:create", "nexus:security-scanning-waivers:delete"));
+    administered.add("releases");
+    when(security.decide(eq(permissions), any(String.class))).thenAnswer(invocation ->
+        granted.contains(invocation.<String>getArgument(1))
+            ? AccessDecision.allow() : AccessDecision.deny("missing"));
+    when(security.decide(eq(permissions), any(RepositoryPermission.class))).thenAnswer(invocation -> {
+      RepositoryPermission permission = invocation.getArgument(1);
+      boolean allowed = permission.action() == PermissionAction.BROWSE
+          || administered.contains(permission.repository());
+      return allowed ? AccessDecision.allow() : AccessDecision.deny("missing");
+    });
+    List<RepositoryRecord> rows = List.of(repository(11L, "releases"), repository(12L, "snapshots"));
+    when(repositories.list()).thenReturn(rows);
+    rows.forEach(row -> when(repositories.findById(row.id())).thenReturn(Optional.of(row)));
+    when(scans.listFindingPackageScopes(any(FindingQuery.class), anyInt())).thenReturn(List.of(
+        new FindingPackageScope(11L, PURL),
+        new FindingPackageScope(12L, PURL),
+        new FindingPackageScope(12L, null)));
+  }
+
+  @Test
+  void contextDefaultsToAnAdministeredRepositoryAndListsTheWaiversItWouldReplace() {
+    ScanWaiver finding = waiver(7L, "FINDING", 11L, 41L, PURL, Instant.now().plusSeconds(60));
+    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 1000))
+        .thenReturn(List.of(finding));
+
+    var context = service.packageWaiverContext(actor, "snakeyaml", "1.30", null, false);
+
+    assertEquals(List.of(11L), context.repositories().stream()
+        .map(SecurityScanManagementService.PackageWaiverRepository::id).toList(),
+        "only administered repositories that contain the package are offered");
+    assertEquals(11L, context.repositoryId());
+    assertFalse(context.canWaiveGlobally());
+    assertEquals(List.of(PURL), context.packageUrls());
+    assertFalse(context.missingPackageUrl(), "the URL-less finding is in another repository");
+    assertEquals(List.of(7L), context.replacedWaivers().stream()
+        .map(SecurityScanManagementService.WaiverView::id).toList());
+    verify(scans).listFindingPackageScopes(argThat(query ->
+        "snakeyaml".equals(query.packageName()) && "1.30".equals(query.installedVersion())
+            && !query.currentOnly() && query.repositoryIds().equals(List.of(11L, 12L))), eq(1000));
+
+    var global = assertThrows(ResponseStatusException.class,
+        () -> service.packageWaiverContext(actor, "snakeyaml", "1.30", null, true));
+    assertEquals(HttpStatus.FORBIDDEN, global.getStatusCode());
+    var foreign = assertThrows(ResponseStatusException.class,
+        () -> service.packageWaiverContext(actor, "snakeyaml", "1.30", 12L, false));
+    assertEquals(HttpStatus.NOT_FOUND, foreign.getStatusCode());
+
+    granted.add("nexus:security-scanning:update");
+    var all = service.packageWaiverContext(actor, "snakeyaml", "1.30", null, true);
+    assertNull(all.repositoryId());
+    assertTrue(all.canWaiveGlobally());
+    assertTrue(all.missingPackageUrl());
+  }
+
+  @Test
+  void replacesExactlyTheConfirmedWaiversAndCreatesOnePackageWaiverPerUrl() {
+    Instant expiresAt = Instant.now().plusSeconds(86_400);
+    ScanWaiver finding = waiver(7L, "FINDING", 11L, 41L, PURL, null);
+    ScanWaiver asset = waiver(9L, "ASSET", 11L, null, PURL, Instant.now().minusSeconds(5));
+    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 1000))
+        .thenReturn(List.of(finding, asset));
+    when(scans.deleteWaiver(anyLong())).thenReturn(true);
+    when(scans.createWaiver(any())).thenAnswer(invocation -> {
+      ScanWaiver draft = invocation.getArgument(0);
+      return waiver(70L, draft.scopeType(), draft.repositoryId(), null,
+          draft.packageSelector(), draft.expiresAt());
+    });
+
+    var result = service.createPackageWaiver(actor, new PackageWaiverCommand(
+        "snakeyaml", "1.30", 11L, " shaded ", expiresAt, List.of(9L, 7L)));
+
+    assertEquals(List.of(7L, 9L), result.replaced().stream().map(ScanWaiver::id).toList());
+    assertEquals(1, result.created().size());
+    var order = inOrder(scans);
+    order.verify(scans).lockPackageFindings("snakeyaml", "1.30");
+    order.verify(scans).deleteWaiver(7L);
+    order.verify(scans).deleteWaiver(9L);
+    order.verify(scans).createWaiver(argThat(draft -> "REPOSITORY".equals(draft.scopeType())
+        && Long.valueOf(11L).equals(draft.repositoryId())
+        && draft.assetId() == null && draft.findingId() == null
+        && draft.advisorySelector() == null
+        && PURL.equals(draft.packageSelector())
+        && "shaded".equals(draft.reason())
+        && "operator".equals(draft.createdBy())
+        && "operator".equals(draft.approvedBy())
+        && expiresAt.equals(draft.expiresAt())));
+    verify(scans).invalidatePolicyStatesForWaiver(finding);
+    verify(scans).invalidatePolicyStatesForWaiver(asset);
+    verify(scans).listFindingPackageScopes(argThat(query ->
+        query.repositoryIds().equals(List.of(11L))), eq(1000));
+  }
+
+  @Test
+  void rejectsAnUnconfirmedChangeAndMissingPrivilegesWithoutChangingWaivers() {
+    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 1000))
+        .thenReturn(List.of(waiver(7L, "FINDING", 11L, 41L, PURL, null)));
+
+    var changed = assertThrows(ResponseStatusException.class, () -> service.createPackageWaiver(
+        actor, command(11L, List.of())));
+    assertEquals(HttpStatus.CONFLICT, changed.getStatusCode());
+
+    granted.remove("nexus:security-scanning-waivers:delete");
+    var noDelete = assertThrows(ResponseStatusException.class, () -> service.createPackageWaiver(
+        actor, command(11L, List.of(7L))));
+    assertEquals(HttpStatus.FORBIDDEN, noDelete.getStatusCode());
+
+    var global = assertThrows(ResponseStatusException.class, () -> service.createPackageWaiver(
+        actor, command(null, List.of())));
+    assertEquals(HttpStatus.FORBIDDEN, global.getStatusCode(), "global waivers need security admin");
+
+    var notAdministered = assertThrows(ResponseStatusException.class,
+        () -> service.createPackageWaiver(actor, command(12L, List.of())));
+    assertEquals(HttpStatus.FORBIDDEN, notAdministered.getStatusCode());
+
+    var past = assertThrows(ResponseStatusException.class, () -> service.createPackageWaiver(
+        actor, new PackageWaiverCommand(
+            "snakeyaml", "1.30", 11L, "reason", Instant.now().minusSeconds(1), List.of())));
+    assertEquals(HttpStatus.BAD_REQUEST, past.getStatusCode());
+
+    verify(scans, never()).deleteWaiver(anyLong());
+    verify(scans, never()).createWaiver(any());
+  }
+
+  @Test
+  void aScopeWithoutPackageUrlsCannotBeWaivedAsAPackage() {
+    when(scans.listFindingPackageScopes(any(FindingQuery.class), anyInt()))
+        .thenReturn(List.of(new FindingPackageScope(11L, null)));
+
+    var error = assertThrows(ResponseStatusException.class,
+        () -> service.createPackageWaiver(actor, command(11L, List.of())));
+
+    assertEquals(HttpStatus.CONFLICT, error.getStatusCode());
+    verify(scans, never()).listPackageWaivers(any(), any(), any(), any(), anyInt());
+    verify(scans, never()).createWaiver(any());
+  }
+
+  private static PackageWaiverCommand command(Long repositoryId, List<Long> replaceWaiverIds) {
+    return new PackageWaiverCommand("snakeyaml", "1.30", repositoryId, "reason",
+        Instant.now().plusSeconds(3600), replaceWaiverIds);
+  }
+
+  private static ScanWaiver waiver(
+      long id, String scopeType, Long repositoryId, Long findingId, String packageSelector,
+      Instant expiresAt) {
+    Instant now = Instant.now();
+    return new ScanWaiver(id, scopeType, repositoryId, null, findingId, null, packageSelector,
+        Map.of(), "reason", null, null, "test", "test", expiresAt, now, now);
+  }
+
+  private static RepositoryRecord repository(long id, String name) {
+    return new RepositoryRecord(id, name, RepositoryFormat.MAVEN2, RepositoryType.HOSTED,
+        "maven2-hosted", true, 1L, null, null, null, null, null, true, Map.of());
+  }
+}

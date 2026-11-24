@@ -436,6 +436,17 @@ public final class PostgreSqlDatabaseDialect implements DatabaseDialect {
           """.formatted(alias);
     }
 
+    @Override
+    public String textArrayContainsIgnoreCase(String arrayColumn, String valueExpression) {
+      return """
+          EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements_text(CAST(%s AS jsonb)) AS array_element(element_text)
+            WHERE LOWER(array_element.element_text) = LOWER(%s)
+          )
+          """.formatted(arrayColumn, valueExpression);
+    }
+
     private static String column(String value) {
       if (value == null || !IDENTIFIER.matcher(value).matches()) {
         throw new IllegalArgumentException("Unsafe JSON column: " + value);

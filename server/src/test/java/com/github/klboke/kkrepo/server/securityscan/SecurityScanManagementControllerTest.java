@@ -2,10 +2,12 @@ package com.github.klboke.kkrepo.server.securityscan;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.FindingGroupBy;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.RepositoryScanConfig;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanPolicy;
 import com.github.klboke.kkrepo.persistence.jdbc.api.SecurityScanDao.ScanWaiver;
@@ -16,6 +18,10 @@ import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.ConfigCommand;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.CursorPage;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.FindingArtifactPage;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.FindingFilter;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.PackageWaiverCommand;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.PackageWaiverContext;
+import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.PackageWaiverResult;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.PolicyCommand;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.SbomDownload;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.WaiverCommand;
@@ -41,7 +47,8 @@ class SecurityScanManagementControllerTest {
           .param("q", "app").param("after", "11").param("limit", "12")
           .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE, actor);
       if (!value.isEmpty()) request.param("currentOnly", value);
-      when(service.findingPage(actor, 9L, 10L, Severity.HIGH, "app", 11L, 12, currentOnly))
+      when(service.findingPage(actor, 9L, 10L, Severity.HIGH, "app", 11L, 12, currentOnly,
+          FindingFilter.NONE))
           .thenReturn(new CursorPage<>(List.of(), null));
       var result = mvc.perform(request)
           .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
@@ -49,7 +56,7 @@ class SecurityScanManagementControllerTest {
       assertEquals(true, new com.fasterxml.jackson.databind.ObjectMapper()
           .readTree(result.getResponse().getContentAsString()).path("items").isArray());
       verify(service, org.mockito.Mockito.atLeastOnce())
-          .findingPage(actor, 9L, 10L, Severity.HIGH, "app", 11L, 12, currentOnly);
+          .findingPage(actor, 9L, 10L, Severity.HIGH, "app", 11L, 12, currentOnly, FindingFilter.NONE);
       var artifacts = org.springframework.test.web.servlet.request.MockMvcRequestBuilders
           .get("/internal/security/scanning/findings/41/artifacts")
           .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE, actor);
@@ -74,6 +81,99 @@ class SecurityScanManagementControllerTest {
             .get("/internal/security/scanning/findings").param("currentOnly", "invalid")
             .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE, actor))
         .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest());
+  }
+
+  @Test
+  void findingGroupAndTreeFiltersBindEveryParameter() throws Exception {
+    var service = mock(SecurityScanManagementService.class);
+    var actor = mock(AuthenticatedSubject.class);
+    var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(
+        new SecurityScanManagementController(service, mock(SecurityScanMutationService.class))).build();
+    // An empty installed version is a real key part (a package without a version), not "unset".
+    var filter = new FindingFilter(true, "log4j-core", "", "MAVEN2", "org.acme", "app", "1.0");
+    when(service.findingPage(actor, null, null, null, null, 0L, 25, true, filter))
+        .thenReturn(new CursorPage<>(List.of(), null));
+    mvc.perform(withTreeFilters(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+            .get("/internal/security/scanning/findings").param("currentOnly", "true")
+            .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE, actor)))
+        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+    verify(service).findingPage(actor, null, null, null, null, 0L, 25, true, filter);
+
+    when(service.findingGroupPage(actor, FindingGroupBy.ARTIFACT_VERSION, 9L, Severity.HIGH,
+        "app", "g1.cursor", 50, false, filter))
+        .thenReturn(new CursorPage<>(List.of(), null, "g1.next"));
+    var result = mvc.perform(withTreeFilters(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+            .get("/internal/security/scanning/findings/groups")
+            .param("groupBy", "ARTIFACT_VERSION").param("repositoryId", "9")
+            .param("severity", "HIGH").param("q", "app").param("cursor", "g1.cursor")
+            .param("limit", "50")
+            .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE, actor)))
+        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+        .andReturn();
+    assertEquals("g1.next", new com.fasterxml.jackson.databind.ObjectMapper()
+        .readTree(result.getResponse().getContentAsString()).path("nextCursor").asText());
+
+    for (String groupBy : List.of("", "SEVERITY")) {
+      var invalid = org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+          .get("/internal/security/scanning/findings/groups")
+          .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE, actor);
+      if (!groupBy.isEmpty()) invalid.param("groupBy", groupBy);
+      mvc.perform(invalid)
+          .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest());
+    }
+  }
+
+  @Test
+  void packageWaiverEndpointsBindScopeAndConfirmedReplacements() throws Exception {
+    var service = mock(SecurityScanManagementService.class);
+    var mutations = mock(SecurityScanMutationService.class);
+    var actor = mock(AuthenticatedSubject.class);
+    var mvc = org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup(
+        new SecurityScanManagementController(service, mutations)).build();
+    when(service.packageWaiverContext(actor, "snakeyaml", "", null, true))
+        .thenReturn(new PackageWaiverContext(
+            "snakeyaml", "", List.of(), true, null, List.of("pkg:maven/org.yaml/snakeyaml"),
+            false, List.of()));
+    var context = mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+            .get("/internal/security/scanning/waivers/package-context")
+            .param("packageName", "snakeyaml").param("installedVersion", "")
+            .param("allRepositories", "true")
+            .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE, actor))
+        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk())
+        .andReturn();
+    assertEquals(true, new com.fasterxml.jackson.databind.ObjectMapper()
+        .readTree(context.getResponse().getContentAsString()).path("canWaiveGlobally").asBoolean());
+
+    var expiresAt = java.time.Instant.parse("2027-01-01T00:00:00Z");
+    var command = new PackageWaiverCommand(
+        "snakeyaml", "1.30", 11L, "shaded", expiresAt, List.of(7L, 9L));
+    when(mutations.createPackageWaiver(any(), org.mockito.ArgumentMatchers.eq(actor),
+        org.mockito.ArgumentMatchers.eq(command)))
+        .thenReturn(new PackageWaiverResult(List.of(), List.of()));
+    mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+            .post("/internal/security/scanning/waivers/package")
+            .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+            .content("""
+                {"packageName":"snakeyaml","installedVersion":"1.30","repositoryId":11,
+                 "reason":"shaded","expiresAt":"2027-01-01T00:00:00Z","replaceWaiverIds":[7,9]}
+                """)
+            .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE, actor))
+        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isOk());
+    verify(mutations).createPackageWaiver(any(), org.mockito.ArgumentMatchers.eq(actor),
+        org.mockito.ArgumentMatchers.eq(command));
+
+    mvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+            .get("/internal/security/scanning/waivers/package-context")
+            .requestAttr(AuthenticatedSubject.REQUEST_ATTRIBUTE, actor))
+        .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.status().isBadRequest());
+  }
+
+  private static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder withTreeFilters(
+      org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder request) {
+    return request.param("hideWaived", "true")
+        .param("packageName", "log4j-core").param("installedVersion", "")
+        .param("artifactFormat", "MAVEN2").param("artifactNamespace", "org.acme")
+        .param("artifactName", "app").param("artifactVersion", "1.0");
   }
 
   @Test
@@ -194,7 +294,8 @@ class SecurityScanManagementControllerTest {
         .thenReturn(new CursorPage<>(List.of(), null));
     when(service.runPage(actor, 6L, "run", 7L, 8, null, null, null))
         .thenReturn(new CursorPage<>(List.of(), null));
-    when(service.findingPage(actor, 9L, 10L, Severity.HIGH, "finding", 11L, 12, false))
+    when(service.findingPage(actor, 9L, 10L, Severity.HIGH, "finding", 11L, 12, false,
+        FindingFilter.NONE))
         .thenReturn(new CursorPage<>(List.of(), null));
     when(service.findingArtifacts(actor, 24L, 25L, 26L, 27, false))
         .thenReturn(new FindingArtifactPage(List.of(), null, null));
@@ -241,7 +342,8 @@ class SecurityScanManagementControllerTest {
     assertEquals(List.of(), controller.runs(6L, "run", 7L, 8, null, null, null, request).items());
     assertEquals(
         List.of(),
-        controller.findings(9L, 10L, Severity.HIGH, "finding", 11L, 12, false, request).items());
+        controller.findings(9L, 10L, Severity.HIGH, "finding", 11L, 12, false, false,
+            null, null, null, null, null, null, request).items());
     assertEquals(
         List.of(), controller.findingArtifacts(24L, 25L, 26L, 27, false, request).items());
     controller.findingWaiverContext(24L, false, request);

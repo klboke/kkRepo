@@ -4235,6 +4235,223 @@ public abstract class PersistenceApiContract {
     assertEquals(3, scans.listFindingsByRepositories(visible, null, null, null, 0, 10).size());
   }
 
+  @Test
+  void securityScanningGroupsFindingsByPackageAndArtifactAndHidesWaivedAssociations() {
+    SecurityScanDao scans = stores().securityScanning();
+    long hostedId = createRepository("finding-groups-hosted", RepositoryFormat.MAVEN2);
+    long hiddenId = createRepository("finding-groups-hidden", RepositoryFormat.MAVEN2);
+    long blobStoreId = stores().repositories().findById(hostedId).orElseThrow().blobStoreId();
+    Instant now = Instant.parse("2026-11-20T12:00:00Z");
+    java.util.function.BiFunction<Long, String, Long> componentOf = (repository, version) ->
+        stores().components().insert(component(
+            repository, RepositoryFormat.MAVEN2, "org.acme", "app", version, Map.of(), now));
+    java.util.function.Function<Object[], Long> assetOf = spec -> {
+      String path = (String) spec[2];
+      long blobId = stores().assets().insertBlob(blob(blobStoreId, path, "groups-" + path));
+      return stores().assets().insertAsset(new AssetRecord(
+          null, (Long) spec[0], (Long) spec[1], blobId, RepositoryFormat.MAVEN2, path,
+          PersistenceHashes.pathHash(path), path.substring(path.lastIndexOf('/') + 1),
+          "ARTIFACT", "application/java-archive", 42L, null, now, Map.of()));
+    };
+    long app1 = assetOf.apply(new Object[] {hostedId, componentOf.apply(hostedId, "1.0"),
+        "org/acme/app/1.0/app-1.0.jar"});
+    long app2 = assetOf.apply(new Object[] {hostedId, componentOf.apply(hostedId, "2.0"),
+        "org/acme/app/2.0/app-2.0.jar"});
+    long tool = assetOf.apply(new Object[] {hostedId, null, "raw/tool.bin"});
+    long hiddenApp = assetOf.apply(new Object[] {hiddenId, componentOf.apply(hiddenId, "1.0"),
+        "org/acme/app/1.0/hidden-app-1.0.jar"});
+    var profile = scans.createProfile(new SecurityScanDao.ScanProfile(
+        null, "finding-groups", true, "syft", "grype", List.of("vuln"), Map.of(),
+        1048576, 1000, 10485760, 1048576, 2, 60, OciPlatformPolicy.REQUIRED_SET,
+        List.of(), "5a1a".repeat(16), 1, now, now));
+    var snapshot = scans.insertSnapshotOrFindExisting(new SecurityScanDao.ScannerSnapshot(
+        null, "contract-adapter", "v1", "grype", "1", "groups-db",
+        now, "5a1b".repeat(16), "5a1c".repeat(16), now, true, Map.of()));
+    long documentId = stores().assets().insertBlob(blob(blobStoreId, "groups/sbom", "groups-sbom"));
+    var sbom = scans.insertSbomOrFindExisting(new SecurityScanDao.Sbom(
+        null, SubjectKind.ASSET_BLOB, "sha256:" + "5a1d".repeat(16), null,
+        "syft", "1", "5a1e".repeat(16), "5a1f".repeat(16), documentId,
+        "5a10".repeat(16), "CycloneDX", "1.6", 1, 0, true, now));
+    List<Long> runs = new ArrayList<>();
+    for (int i = 0; i < 3; i++) {
+      long task = scans.createTask(new SecurityScanDao.TaskDraft(
+          hostedId, null, SubjectKind.ASSET_BLOB, "groups-subject-" + i, 1,
+          profile.id(), 1, snapshot.id(), ScanStage.CATALOG_AND_MATCH, RequestReason.MANUAL,
+          0, 5, "contract", null, null, now));
+      String fingerprint = String.format("%064x", 5100 + i);
+      runs.add(scans.insertRunOrFindExisting(new SecurityScanDao.ScanRun(
+          null, task, sbom.id(), snapshot.id(), fingerprint, fingerprint,
+          ScanState.COMPLETE, ScanCompleteness.COMPLETE, documentId, fingerprint,
+          1, 1, 0, 1, 0, 0, 0, Severity.HIGH, now, now, now)).id());
+    }
+    // Run 0 scanned identical content at app 1.0 and the component-less tool; run 1 is app 2.0.
+    scans.associateRun(runs.get(0), hostedId, app1, profile.id(), 1, now);
+    scans.associateRun(runs.get(0), hostedId, tool, profile.id(), 1, now);
+    scans.associateRun(runs.get(1), hostedId, app2, profile.id(), 1, now);
+    scans.associateRun(runs.get(2), hiddenId, hiddenApp, profile.id(), 1, now);
+    java.util.function.Function<Object[], Long> findingOf = spec -> {
+      long run = runs.get((Integer) spec[0]);
+      String advisory = (String) spec[1];
+      String packageName = (String) spec[3];
+      String version = (String) spec[4];
+      scans.insertFindings(run, List.of(new SecurityScanDao.ScanFinding(
+          null, run, advisory + "|" + packageName, null, advisory,
+          spec[5] == null ? List.of() : List.of((String) spec[5]), "fixture",
+          "pkg:maven/" + packageName + "@" + version, packageName, version, List.of(),
+          (Severity) spec[2], "fixture", null, null, advisory, null, null, List.of(),
+          "active", now)));
+      return scans.listFindings(null, run, null, 0, 10).stream()
+          .filter(finding -> finding.advisoryId().equals(advisory))
+          .findFirst().orElseThrow().id();
+    };
+    long log4j = findingOf.apply(new Object[] {0, "CVE-GROUP-1", Severity.CRITICAL,
+        "log4j-core", "2.14.1", "GHSA-Group-Alias"});
+    long yaml1 = findingOf.apply(new Object[] {0, "CVE-GROUP-2", Severity.HIGH,
+        "snakeyaml", "1.30", null});
+    long yaml2 = findingOf.apply(new Object[] {1, "CVE-GROUP-2", Severity.HIGH,
+        "snakeyaml", "1.30", null});
+    long zlib = findingOf.apply(new Object[] {1, "CVE-GROUP-3", Severity.LOW,
+        "zlib", null, null});
+    findingOf.apply(new Object[] {2, "CVE-GROUP-9", Severity.CRITICAL,
+        "hidden-only", "1.0", null});
+    List<Long> visible = List.of(hostedId);
+    java.util.function.BiFunction<Instant, String[], SecurityScanDao.FindingQuery> query =
+        (unwaivedAt, filters) -> new SecurityScanDao.FindingQuery(
+            visible, null, null, null, filters[0], false, unwaivedAt, filters[1], filters[2],
+            filters[3], filters[4], filters[5], filters[6]);
+    String[] none = new String[7];
+    String[] acmeApp = {null, null, null, "maven2", "org.acme", "app", null};
+
+    var packages = scans.listFindingGroups(
+        query.apply(null, none), SecurityScanDao.FindingGroupBy.PACKAGE, null, 10);
+    assertEquals(List.of("log4j-core|2.14.1", "snakeyaml|1.30", "zlib|"),
+        packages.stream().map(group -> group.packageName() + "|" + group.installedVersion())
+            .toList(), "worst severity first; hidden repositories never contribute");
+    assertEquals(List.of(Severity.CRITICAL, Severity.HIGH, Severity.LOW),
+        packages.stream().map(SecurityScanDao.FindingGroup::maxSeverity).toList());
+    var yaml = packages.get(1);
+    assertEquals(List.of(2L, 1L, 3L, 2L), List.of(
+        yaml.findingCount(), yaml.advisoryCount(), yaml.artifactCount(), yaml.highCount()));
+    assertNull(yaml.artifactName());
+
+    var artifacts = scans.listFindingGroups(
+        query.apply(null, none), SecurityScanDao.FindingGroupBy.ARTIFACT, null, 10);
+    assertEquals(List.of("maven2||raw/tool.bin", "maven2|org.acme|app"),
+        artifacts.stream().map(group -> group.artifactFormat() + "|"
+            + group.artifactNamespace() + "|" + group.artifactName()).toList(),
+        "component coordinates, else the asset path; ties order by key");
+    assertEquals(List.of(4L, 2L), List.of(
+        artifacts.get(1).findingCount(), artifacts.get(1).artifactCount()));
+    assertNull(artifacts.get(1).artifactVersion());
+
+    var versions = scans.listFindingGroups(
+        query.apply(null, acmeApp), SecurityScanDao.FindingGroupBy.ARTIFACT_VERSION, null, 10);
+    assertEquals(List.of("1.0", "2.0"),
+        versions.stream().map(SecurityScanDao.FindingGroup::artifactVersion).toList());
+    assertEquals(List.of(Severity.CRITICAL, Severity.HIGH),
+        versions.stream().map(SecurityScanDao.FindingGroup::maxSeverity).toList());
+    assertEquals(List.of(log4j, yaml1), ids(scans.listFindings(
+        query.apply(null, new String[] {null, null, null, "maven2", "org.acme", "app", "1.0"}),
+        0, 10)));
+    assertEquals(List.of("log4j-core", "snakeyaml", "zlib"), scans.listFindingGroups(
+            query.apply(null, acmeApp), SecurityScanDao.FindingGroupBy.PACKAGE, null, 10)
+        .stream().map(SecurityScanDao.FindingGroup::packageName).toList());
+    assertEquals(List.of(zlib), ids(scans.listFindings(
+        query.apply(null, new String[] {null, "zlib", "", null, null, null, null}), 0, 10)),
+        "an empty installed version selects findings without one");
+    assertEquals(List.of(yaml1, yaml2), ids(scans.listFindings(
+        query.apply(null, new String[] {"snake", null, null, null, null, null, null}), 0, 10)));
+
+    List<String> paged = new ArrayList<>();
+    SecurityScanDao.FindingGroupCursor cursor = null;
+    while (true) {
+      var page = scans.listFindingGroups(
+          query.apply(null, none), SecurityScanDao.FindingGroupBy.PACKAGE, cursor, 1);
+      if (page.isEmpty()) break;
+      paged.add(page.getFirst().packageName());
+      cursor = page.getFirst().cursor(SecurityScanDao.FindingGroupBy.PACKAGE);
+    }
+    assertEquals(List.of("log4j-core", "snakeyaml", "zlib"), paged);
+    assertTrue(scans.listFindingGroups(new SecurityScanDao.FindingQuery(
+            visible, null, null, null, null, true, null, null, null, null, null, null, null),
+        SecurityScanDao.FindingGroupBy.PACKAGE, null, 10).isEmpty(),
+        "no published current state means no current associations");
+    assertTrue(scans.listFindingGroups(new SecurityScanDao.FindingQuery(
+            List.of(), null, null, null, null, false, null, null, null, null, null, null, null),
+        SecurityScanDao.FindingGroupBy.PACKAGE, null, 10).isEmpty());
+
+    java.util.function.Function<Object[], Long> waiverOf = spec -> scans.createWaiver(
+        new SecurityScanDao.ScanWaiver(null, (String) spec[0], (Long) spec[1], (Long) spec[2],
+            (Long) spec[3], (String) spec[4], (String) spec[5], Map.of(), "contract", null, null,
+            "contract", (String) spec[6], (Instant) spec[7], now, now)).id();
+    // An alias selector waives only the app 1.0 association, ignoring case.
+    waiverOf.apply(new Object[] {"ASSET", hostedId, app1, null, "ghsa-group-ALIAS", null,
+        "approver", null});
+    // Neither an expired nor an unapproved waiver hides anything.
+    long expiredPackageWaiver = waiverOf.apply(new Object[] {"GLOBAL", null, null, null, null,
+        "pkg:maven/snakeyaml@1.30",
+        "approver", now.minusSeconds(1)});
+    waiverOf.apply(new Object[] {"GLOBAL", null, null, null, null, "snakeyaml", null, null});
+    var partial = scans.listFindingGroups(
+        query.apply(now, none), SecurityScanDao.FindingGroupBy.PACKAGE, null, 10);
+    assertEquals(List.of("log4j-core", "snakeyaml", "zlib"),
+        partial.stream().map(SecurityScanDao.FindingGroup::packageName).toList());
+    assertEquals(1L, partial.getFirst().artifactCount(), "the tool association is still exposed");
+    assertEquals(List.of(log4j, yaml1, yaml2, zlib), ids(scans.listFindings(
+        query.apply(now, none), 0, 10)));
+    assertEquals(List.of(yaml1), ids(scans.listFindings(query.apply(
+        now, new String[] {null, null, null, "maven2", "org.acme", "app", "1.0"}), 0, 10)));
+
+    // A finding-scoped repository waiver covers the remaining association.
+    long log4jFindingWaiver = waiverOf.apply(new Object[] {"FINDING", hostedId, null, log4j,
+        "CVE-GROUP-1", "log4j-core",
+        "approver", now.plusSeconds(60)});
+    // An active advisory plus package selector waives every snakeyaml association.
+    waiverOf.apply(new Object[] {"GLOBAL", null, null, null, "cve-group-2", "snakeyaml",
+        "approver", null});
+    assertEquals(List.of("zlib"), scans.listFindingGroups(
+            query.apply(now, none), SecurityScanDao.FindingGroupBy.PACKAGE, null, 10)
+        .stream().map(SecurityScanDao.FindingGroup::packageName).toList());
+    assertEquals(List.of(zlib), ids(scans.listFindings(query.apply(now, none), 0, 10)));
+    assertEquals(List.of("maven2|org.acme|app|2.0"), scans.listFindingGroups(
+            query.apply(now, none), SecurityScanDao.FindingGroupBy.ARTIFACT_VERSION, null, 10)
+        .stream().map(group -> group.artifactFormat() + "|" + group.artifactNamespace() + "|"
+            + group.artifactName() + "|" + group.artifactVersion()).toList());
+    assertEquals(List.of(log4j, yaml1, yaml2, zlib),
+        ids(scans.listFindings(query.apply(null, none), 0, 10)),
+        "waived findings remain listed unless they are hidden");
+    assertEquals(List.of(log4j, zlib), ids(scans.listFindings(
+        query.apply(now.plusSeconds(120), none), 0, 10)),
+        "after the finding waiver expires, its tool association is exposed again");
+
+    // Package waivers: scopes and the existing waivers a package-URL waiver would replace.
+    assertEquals(List.of(new SecurityScanDao.FindingPackageScope(hostedId, "pkg:maven/snakeyaml@1.30")),
+        scans.listFindingPackageScopes(query.apply(null,
+            new String[] {null, "snakeyaml", "1.30", null, null, null, null}), 10),
+        "both snakeyaml runs share one repository and package URL");
+    assertTrue(scans.listFindingPackageScopes(new SecurityScanDao.FindingQuery(
+            List.of(hiddenId), null, null, null, null, false, null, "snakeyaml", "1.30",
+            null, null, null, null), 10).isEmpty());
+    assertEquals(List.of(expiredPackageWaiver), scans.listPackageWaivers(
+            "snakeyaml", "1.30", List.of("pkg:maven/snakeyaml@1.30"), null, 10)
+        .stream().map(SecurityScanDao.ScanWaiver::id).toList(),
+        "a package-URL selector is replaced even when expired; name-only selectors are not");
+    assertEquals(List.of(log4jFindingWaiver), scans.listPackageWaivers(
+            "log4j-core", "2.14.1", List.of("pkg:maven/log4j-core@2.14.1"), hostedId, 10)
+        .stream().map(SecurityScanDao.ScanWaiver::id).toList(),
+        "a finding waiver is tied to the package through its finding");
+    assertTrue(scans.listPackageWaivers(
+        "log4j-core", "2.14.1", List.of("pkg:maven/log4j-core@2.14.1"), hiddenId, 10).isEmpty());
+    assertTrue(scans.listPackageWaivers("log4j-core", "2.14.1", List.of(), null, 10).isEmpty());
+    assertEquals(2, inTransaction(() -> scans.lockPackageFindings("snakeyaml", "1.30")));
+    assertEquals(1, inTransaction(() -> scans.lockPackageFindings("zlib", "")),
+        "an empty installed version selects findings without one");
+  }
+
+  private static List<Long> ids(List<SecurityScanDao.ScanFinding> findings) {
+    return findings.stream().map(SecurityScanDao.ScanFinding::id).toList();
+  }
+
   private void publishCurrentFindingState(
       SecurityScanDao scans, long assetId, long profileId, long runId, ScanState state, Instant now) {
     scans.upsertAssetStateIfCurrent(new SecurityScanDao.AssetSecurityState(
