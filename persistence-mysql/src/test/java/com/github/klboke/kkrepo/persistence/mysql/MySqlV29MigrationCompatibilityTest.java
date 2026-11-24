@@ -16,7 +16,7 @@ import org.junit.jupiter.api.Test;
 
 /** Guards the frozen V1-V29 chain and validates repeat startup after newer migrations. */
 class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
-  private static final int LATEST_MIGRATION = 71;
+  private static final int LATEST_MIGRATION = 72;
   private static final Map<String, String> V29_SHA256 = checksums();
 
   @org.junit.jupiter.params.ParameterizedTest
@@ -156,9 +156,9 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
   @org.junit.jupiter.params.ParameterizedTest
   @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
   void bearerGenerationMigrationResumesAfterEitherCommittedColumn(boolean bothColumns) {
-    Flyway throughV70 = migration("70");
-    throughV70.clean();
-    assertEquals(70, throughV70.migrate().migrationsExecuted);
+    Flyway throughV71 = migration("71");
+    throughV71.clean();
+    assertEquals(71, throughV71.migrate().migrationsExecuted);
     jdbc().execute("ALTER TABLE docker_auth_token ADD COLUMN subject_api_key_generation VARCHAR(64) NULL");
     if (bothColumns) {
       jdbc().execute("ALTER TABLE conan_auth_token ADD COLUMN api_key_generation VARCHAR(64) NULL");

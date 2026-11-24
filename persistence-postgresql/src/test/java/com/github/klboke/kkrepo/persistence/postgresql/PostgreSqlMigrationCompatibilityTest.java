@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 
 /** Proves the PostgreSQL baseline validates and remains idempotent on repeated startup. */
 class PostgreSqlMigrationCompatibilityTest extends PostgreSqlIntegrationTestSupport {
-  private static final int LATEST_MIGRATION = 71;
+  private static final int LATEST_MIGRATION = 72;
 
   @Test
   void completionIndexesCanResumeAnInterruptedConcurrentBuild() throws Exception {
@@ -64,7 +64,7 @@ class PostgreSqlMigrationCompatibilityTest extends PostgreSqlIntegrationTestSupp
     jdbc().execute((org.springframework.jdbc.core.ConnectionCallback<Void>) connection -> {
       org.springframework.jdbc.datasource.init.ScriptUtils.executeSqlScript(connection,
           new org.springframework.core.io.support.EncodedResource(new org.springframework.core.io.ClassPathResource(
-              "db/migration/postgresql/V71__bearer_api_key_generation.sql"), StandardCharsets.UTF_8));
+              "db/migration/postgresql/V72__bearer_api_key_generation.sql"), StandardCharsets.UTF_8));
       return null;
     });
     assertEquals(2, jdbc().queryForObject("""
