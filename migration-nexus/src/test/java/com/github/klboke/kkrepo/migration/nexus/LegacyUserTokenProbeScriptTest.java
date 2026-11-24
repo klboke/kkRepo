@@ -44,6 +44,20 @@ public class LegacyUserTokenProbeScriptTest {
   }
 
   @Test
+  void ownerColumnComesOnlyFromTheUserTokenTable() throws Exception {
+    // getColumns takes 'USER_TOKEN' as a pattern ('_' matches any character), so USER1TOKEN matches it too.
+    String url = database("lookalike",
+        "create table user_token(token varchar(128))",
+        "insert into user_token values ('" + SECRET + "')",
+        "create table user1token(user_name varchar(64))",
+        "insert into user1token values ('mallory')");
+    List<String> warnings = new ArrayList<>();
+
+    assertEquals(Map.of("count", 1, "users", List.of()), probe(url, "sa", "", warnings));
+    assertEquals(List.of(), warnings);
+  }
+
+  @Test
   void onlyTheConnectionSchemaTableIsRead() throws Exception {
     // Like Nexus on PostgreSQL with currentSchema=nexus, next to another application's user_token table.
     String url = database("nexusSchema",

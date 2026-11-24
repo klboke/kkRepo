@@ -267,7 +267,9 @@ public class NexusRestClient {
                 try {
                   while (columns.next()) {
                     def column = columns.getString('COLUMN_NAME')
-                    if (userColumn == null
+                    // Metadata patterns treat '_' as a wildcard: keep only this exact schema and table.
+                    if (userColumn == null && table == columns.getString('TABLE_NAME')
+                        && (schema == null || schema == columns.getString('TABLE_SCHEM'))
                         && ['user_name', 'username', 'primary_principal'].contains(column.toLowerCase())) {
                       userColumn = column
                     }
