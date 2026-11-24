@@ -80,6 +80,51 @@ class S3ClientFactoryTest {
   }
 
   @Test
+  void aLookupWithAnotherSignatureNeverClosesTheClientALiveWrapperHolds() {
+    S3ClientFactory factory = new S3ClientFactory();
+    try {
+      var runtime = config(endpoint, 1, Map.of("accessKey", "RUNTIME", "secretKey", "runtime-secret"));
+      var admin = config(endpoint, 1, Map.of("accessKey", "ADMIN", "secretKey", "admin-secret"));
+      var wrapper = factory.handle(runtime);
+      S3Client held = wrapper.get();
+      roundTrip(held);
+
+      // Same store, another signature (an admin probe, a differently trimmed config, ...). The single
+      // per-store slot used to close `held` here, and every later use of it failed with
+      // "IllegalStateException: Connection pool shut down" until the process was restarted.
+      S3Client adminClient = factory.client(admin);
+      assertNotSame(held, adminClient);
+
+      roundTrip(held);
+      assertSame(held, wrapper.get());
+      roundTrip(adminClient);
+    } finally {
+      factory.shutdown();
+    }
+  }
+
+  @Test
+  void invalidatingAStoreRebuildsItsClientForHandlesAndLetsInFlightRequestsFinish() {
+    S3ClientFactory factory = new S3ClientFactory();
+    try {
+      var config = config(endpoint, 1, Map.of("accessKey", "K", "secretKey", "s"));
+      var wrapper = factory.handle(config);
+      S3Client before = wrapper.get();
+      roundTrip(before);
+
+      factory.invalidate(1);
+
+      S3Client after = wrapper.get();
+      assertNotSame(before, after);
+      roundTrip(after);
+      // The removed client stays open for the grace period so a request that already holds it can end.
+      roundTrip(before);
+    } finally {
+      factory.shutdown();
+    }
+  }
+
+  @Test
   void defaultChainUsesEnvironmentSessionCredentialsForS3ReadWrite() throws Exception {
     probe(Map.of("AWS_ACCESS_KEY_ID", "ENVKEY", "AWS_SECRET_ACCESS_KEY", "env-secret",
         "AWS_SESSION_TOKEN", "env-token"));

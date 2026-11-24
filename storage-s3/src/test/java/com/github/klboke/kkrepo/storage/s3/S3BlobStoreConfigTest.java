@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
@@ -99,5 +100,19 @@ class S3BlobStoreConfigTest {
             "accessKey", "access",
             "secretKey", secret,
             "multipartConcurrency", concurrency));
+  }
+
+  @Test
+  void differingFieldsNamesWhatDisagreesAndNeverRevealsCredentials() {
+    S3BlobStoreConfig base = S3BlobStoreConfig.of(
+        1, "store", "https://s3.test", "us-east-1", "bucket", "prefix",
+        Map.of("accessKey", "AKIA-secret-one", "secretKey", "shh-one"));
+    S3BlobStoreConfig other = S3BlobStoreConfig.of(
+        1, "store", "https://s3.test", "us-east-1", "bucket-b", "prefix",
+        Map.of("accessKey", "AKIA-secret-two", "secretKey", "shh-two", "maxConnections", 3));
+
+    assertEquals(List.of(), base.differingFields(base));
+    assertEquals(List.of("bucket", "credentials", "maxConnections"), base.differingFields(other));
+    assertFalse(base.differingFields(other).toString().contains("secret"));
   }
 }

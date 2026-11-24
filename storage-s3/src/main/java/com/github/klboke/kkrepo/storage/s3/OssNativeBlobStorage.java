@@ -37,6 +37,7 @@ import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
+import java.util.function.Supplier;
 
 /**
  * Blob storage backed by the native Aliyun OSS SDK v2. One instance per blob-store record (built by
@@ -48,15 +49,27 @@ import java.util.concurrent.Future;
  * re-read).
  */
 public final class OssNativeBlobStorage implements BlobStorage {
-  private final OSSClient client;
+  private final Supplier<OSSClient> clients;
   private final S3BlobStoreConfig config;
   private final ExecutorService multipartExecutor;
 
   public OssNativeBlobStorage(OSSClient client, S3BlobStoreConfig config) {
-    this.client = client;
+    this(() -> client, config);
+  }
+
+  /**
+   * Resolves the client on every operation, so a client that was closed and replaced (store
+   * reconfigured or invalidated) is never used after it was closed.
+   */
+  public OssNativeBlobStorage(Supplier<OSSClient> clients, S3BlobStoreConfig config) {
+    this.clients = clients;
     this.config = config;
     this.multipartExecutor = ObjectStorageMultipartSupport.executor(
         config.name(), ObjectStorageMultipartSupport.storeParallelism(config));
+  }
+
+  private OSSClient client() {
+    return clients.get();
   }
 
   @Override
@@ -71,11 +84,11 @@ public final class OssNativeBlobStorage implements BlobStorage {
     var reader = new com.github.klboke.kkrepo.core.VerifiedBlobReader(target, content);
     if (target.size() == 0) {
       var digests = reader.finish();
-      client.putObject(PutObjectRequest.newBuilder().bucket(target.bucket()).key(target.objectKey())
+      client().putObject(PutObjectRequest.newBuilder().bucket(target.bucket()).key(target.objectKey())
           .metadata(Map.of("sha256", target.sha256())).body(BinaryData.fromBytes(new byte[0])).build());
       return digests;
     }
-    String uploadId = client.initiateMultipartUpload(InitiateMultipartUploadRequest.newBuilder()
+    String uploadId = client().initiateMultipartUpload(InitiateMultipartUploadRequest.newBuilder()
         .bucket(target.bucket()).key(target.objectKey()).metadata(Map.of("sha256", target.sha256()))
         .build()).initiateMultipartUpload().uploadId();
     try {
@@ -84,13 +97,13 @@ public final class OssNativeBlobStorage implements BlobStorage {
       byte[] part;
       while ((part = reader.nextPart()).length > 0) {
         long number = parts.size() + 1L;
-        var uploaded = client.uploadPart(UploadPartRequest.newBuilder().bucket(target.bucket())
+        var uploaded = client().uploadPart(UploadPartRequest.newBuilder().bucket(target.bucket())
             .key(target.objectKey()).uploadId(uploadId).partNumber(number).contentLength((long) part.length)
             .body(BinaryData.fromBytes(part)).build());
         parts.add(Part.newBuilder().partNumber(number).eTag(uploaded.eTag()).build());
       }
       var digests = reader.finish();
-      client.completeMultipartUpload(CompleteMultipartUploadRequest.newBuilder().bucket(target.bucket())
+      client().completeMultipartUpload(CompleteMultipartUploadRequest.newBuilder().bucket(target.bucket())
           .key(target.objectKey()).uploadId(uploadId)
           .completeMultipartUpload(CompleteMultipartUpload.newBuilder().parts(parts).build()).build());
       return digests;
@@ -106,7 +119,7 @@ public final class OssNativeBlobStorage implements BlobStorage {
     if (multipartId != null) {
       abortVerifiedMultipart(target, multipartId);
     } else {
-      var uploads = client.listMultipartUploads(com.aliyun.sdk.service.oss2.models.ListMultipartUploadsRequest.newBuilder()
+      var uploads = client().listMultipartUploads(com.aliyun.sdk.service.oss2.models.ListMultipartUploadsRequest.newBuilder()
           .bucket(target.bucket()).prefix(target.objectKey()).maxUploads(10L).build());
       if (uploads.uploads() != null) {
         for (var upload : uploads.uploads()) {
@@ -119,7 +132,7 @@ public final class OssNativeBlobStorage implements BlobStorage {
 
   private void abortVerifiedMultipart(BlobReference target, String uploadId) {
     try {
-      client.abortMultipartUpload(AbortMultipartUploadRequest.newBuilder().bucket(target.bucket())
+      client().abortMultipartUpload(AbortMultipartUploadRequest.newBuilder().bucket(target.bucket())
           .key(target.objectKey()).uploadId(uploadId).build());
     } catch (ServiceException error) {
       if (error.statusCode() != 404) throw error;
@@ -129,7 +142,7 @@ public final class OssNativeBlobStorage implements BlobStorage {
   @Override
   public BlobReference put(String repository, String logicalPath, InputStream content, long size, String sha256) {
     String objectKey = BlobObjectKeys.immutableObjectKey(config.prefix(), repository, sha256);
-    client.putObject(PutObjectRequest.newBuilder()
+    client().putObject(PutObjectRequest.newBuilder()
         .bucket(config.bucket())
         .key(objectKey)
         .metadata(metadata(repository, logicalPath, sha256))
@@ -145,7 +158,7 @@ public final class OssNativeBlobStorage implements BlobStorage {
       String objectKey = BlobObjectKeys.immutableObjectKey(config.prefix(), repository, sha256);
       if (size <= 0 || config.multipartThresholdBytes() <= 0 || size < config.multipartThresholdBytes()) {
         try (InputStream in = Files.newInputStream(file)) {
-          client.putObject(PutObjectRequest.newBuilder()
+          client().putObject(PutObjectRequest.newBuilder()
               .bucket(config.bucket())
               .key(objectKey)
               .metadata(metadata(repository, logicalPath, sha256))
@@ -164,7 +177,7 @@ public final class OssNativeBlobStorage implements BlobStorage {
   private void multipartPutFile(
       String repository, String logicalPath, Path file, long size, String sha256, String objectKey)
       throws IOException {
-    String uploadId = client.initiateMultipartUpload(InitiateMultipartUploadRequest.newBuilder()
+    String uploadId = client().initiateMultipartUpload(InitiateMultipartUploadRequest.newBuilder()
         .bucket(config.bucket())
         .key(objectKey)
         .build()).initiateMultipartUpload().uploadId();
@@ -186,7 +199,7 @@ public final class OssNativeBlobStorage implements BlobStorage {
         parts.add(future.get());
       }
       parts.sort(Comparator.comparing(Part::partNumber));
-      client.completeMultipartUpload(CompleteMultipartUploadRequest.newBuilder()
+      client().completeMultipartUpload(CompleteMultipartUploadRequest.newBuilder()
           .bucket(config.bucket())
           .key(objectKey)
           .uploadId(uploadId)
@@ -223,7 +236,7 @@ public final class OssNativeBlobStorage implements BlobStorage {
       long offset,
       long length) throws IOException {
     try (InputStream in = ObjectStorageMultipartSupport.openFileSlice(file, offset, length)) {
-      UploadPartResult up = client.uploadPart(UploadPartRequest.newBuilder()
+      UploadPartResult up = client().uploadPart(UploadPartRequest.newBuilder()
           .bucket(config.bucket())
           .key(objectKey)
           .uploadId(uploadId)
@@ -237,7 +250,7 @@ public final class OssNativeBlobStorage implements BlobStorage {
 
   private void abortMultipartUpload(String objectKey, String uploadId) {
     try {
-      client.abortMultipartUpload(AbortMultipartUploadRequest.newBuilder()
+      client().abortMultipartUpload(AbortMultipartUploadRequest.newBuilder()
           .bucket(config.bucket())
           .key(objectKey)
           .uploadId(uploadId)
@@ -261,7 +274,7 @@ public final class OssNativeBlobStorage implements BlobStorage {
   @Override
   public Optional<InputStream> get(BlobReference reference) {
     try {
-      GetObjectResult result = client.getObject(GetObjectRequest.newBuilder()
+      GetObjectResult result = client().getObject(GetObjectRequest.newBuilder()
           .bucket(reference.bucket())
           .key(reference.objectKey())
           .build());
@@ -283,7 +296,7 @@ public final class OssNativeBlobStorage implements BlobStorage {
       return Optional.of(InputStream.nullInputStream());
     }
     try {
-      GetObjectResult result = client.getObject(GetObjectRequest.newBuilder()
+      GetObjectResult result = client().getObject(GetObjectRequest.newBuilder()
           .bucket(reference.bucket())
           .key(reference.objectKey())
           .range(ObjectStorageMultipartSupport.byteRange(start, length))
@@ -305,7 +318,7 @@ public final class OssNativeBlobStorage implements BlobStorage {
   @Override
   public Optional<BlobObjectMetadata> stat(BlobReference reference) {
     try {
-      HeadObjectResult head = client.headObject(HeadObjectRequest.newBuilder()
+      HeadObjectResult head = client().headObject(HeadObjectRequest.newBuilder()
           .bucket(reference.bucket())
           .key(reference.objectKey())
           .build());
@@ -325,7 +338,7 @@ public final class OssNativeBlobStorage implements BlobStorage {
 
   @Override
   public void delete(BlobReference reference) {
-    client.deleteObject(DeleteObjectRequest.newBuilder()
+    client().deleteObject(DeleteObjectRequest.newBuilder()
         .bucket(reference.bucket())
         .key(reference.objectKey())
         .build());
