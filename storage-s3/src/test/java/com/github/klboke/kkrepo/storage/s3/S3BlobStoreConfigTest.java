@@ -115,4 +115,32 @@ class S3BlobStoreConfigTest {
     assertEquals(List.of("bucket", "credentials", "maxConnections"), base.differingFields(other));
     assertFalse(base.differingFields(other).toString().contains("secret"));
   }
+
+  @Test
+  void differingFieldsReportsEverySetting() {
+    S3BlobStoreConfig base = S3BlobStoreConfig.of(
+        1, "store", "https://s3.test", "us-east-1", "bucket", "prefix",
+        Map.ofEntries(
+            Map.entry("engine", "aws-s3"), Map.entry("accessKey", "a1"), Map.entry("secretKey", "s1"),
+            Map.entry("pathStyleAccess", false), Map.entry("maxConnections", 10),
+            Map.entry("connectionTimeoutMs", 1000), Map.entry("socketTimeoutMs", 1000),
+            Map.entry("connectionAcquisitionTimeoutMs", 1000), Map.entry("tcpKeepAlive", false),
+            Map.entry("multipartThresholdBytes", 10), Map.entry("multipartPartSizeBytes", 6L * 1024 * 1024),
+            Map.entry("multipartConcurrency", 1)));
+    S3BlobStoreConfig other = S3BlobStoreConfig.of(
+        1, "store", "https://other.test", "eu-west-1", "bucket-b", "prefix-b",
+        Map.ofEntries(
+            Map.entry("engine", "oss-native"), Map.entry("accessKey", "a2"), Map.entry("secretKey", "s2"),
+            Map.entry("pathStyleAccess", true), Map.entry("maxConnections", 20),
+            Map.entry("connectionTimeoutMs", 2000), Map.entry("socketTimeoutMs", 2000),
+            Map.entry("connectionAcquisitionTimeoutMs", 2000), Map.entry("tcpKeepAlive", true),
+            Map.entry("multipartThresholdBytes", 20), Map.entry("multipartPartSizeBytes", 7L * 1024 * 1024),
+            Map.entry("multipartConcurrency", 2)));
+
+    assertEquals(
+        List.of("engine", "endpoint", "region", "bucket", "prefix", "credentials", "pathStyleAccess",
+            "maxConnections", "connectionTimeoutMs", "socketTimeoutMs", "connectionAcquisitionTimeoutMs",
+            "tcpKeepAlive", "multipartThresholdBytes", "multipartPartSizeBytes", "multipartConcurrency"),
+        base.differingFields(other));
+  }
 }

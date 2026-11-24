@@ -19,7 +19,6 @@ import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
-import java.util.function.Supplier;
 import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.http.ContentStreamProvider;
@@ -49,10 +48,6 @@ public final class S3BlobStorage implements BlobStorage {
 
   public S3BlobStorage(S3Client s3Client, S3BlobStoreConfig config) {
     this(ClientHandle.of(() -> s3Client), config);
-  }
-
-  public S3BlobStorage(Supplier<S3Client> clients, S3BlobStoreConfig config) {
-    this(ClientHandle.of(clients), config);
   }
 
   /**

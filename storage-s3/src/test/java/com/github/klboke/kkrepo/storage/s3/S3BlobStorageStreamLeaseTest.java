@@ -21,6 +21,7 @@ import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
+import software.amazon.awssdk.services.s3.model.S3Exception;
 
 /** A response stream keeps its client open (a lease) until it is closed, on every path. */
 class S3BlobStorageStreamLeaseTest {
@@ -64,6 +65,19 @@ class S3BlobStorageStreamLeaseTest {
 
     when(client.getObject(any(GetObjectRequest.class))).thenThrow(new IllegalStateException("boom"));
     assertThrows(IllegalStateException.class, () -> storage.get(reference));
+    assertEquals(0, openLeases.get());
+  }
+
+  @Test
+  void aNotFoundStatusIsAnEmptyResultAndAnyOtherStatusIsRethrownAndBothReleaseTheLease() {
+    when(client.getObject(any(GetObjectRequest.class)))
+        .thenThrow(S3Exception.builder().statusCode(404).build());
+    assertTrue(storage.get(reference).isEmpty());
+    assertEquals(0, openLeases.get());
+
+    when(client.getObject(any(GetObjectRequest.class)))
+        .thenThrow(S3Exception.builder().statusCode(500).build());
+    assertThrows(S3Exception.class, () -> storage.get(reference));
     assertEquals(0, openLeases.get());
   }
 

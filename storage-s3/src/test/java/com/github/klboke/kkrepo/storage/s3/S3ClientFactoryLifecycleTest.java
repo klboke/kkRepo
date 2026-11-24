@@ -140,7 +140,7 @@ class S3ClientFactoryLifecycleTest {
     S3Client first = mock(S3Client.class);
     S3Client second = mock(S3Client.class);
     AtomicReference<S3Client> current = new AtomicReference<>(first);
-    S3BlobStorage storage = new S3BlobStorage(current::get, config(1, "bucket-a"));
+    S3BlobStorage storage = new S3BlobStorage(ClientHandle.of(current::get), config(1, "bucket-a"));
     var reference = new BlobReference("bucket-a", "object", "sha", 1);
 
     storage.delete(reference);

@@ -37,7 +37,6 @@ import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
-import java.util.function.Supplier;
 
 /**
  * Blob storage backed by the native Aliyun OSS SDK v2. One instance per blob-store record (built by
@@ -55,10 +54,6 @@ public final class OssNativeBlobStorage implements BlobStorage {
 
   public OssNativeBlobStorage(OSSClient client, S3BlobStoreConfig config) {
     this(ClientHandle.of(() -> client), config);
-  }
-
-  public OssNativeBlobStorage(Supplier<OSSClient> clients, S3BlobStoreConfig config) {
-    this(ClientHandle.of(clients), config);
   }
 
   /**

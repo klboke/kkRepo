@@ -102,6 +102,21 @@ class ClientCacheTest {
     assertEquals(0, cache.cachedStoreIds().size());
   }
 
+  @Test
+  void aCloserThatFailsNeverBreaksEvictionOrShutdown() {
+    ClientCache<Client> cache = new ClientCache<>(
+        "client-cache-failing-closer", "Test", LOG, config -> new Client(),
+        client -> { throw new IllegalStateException("close failed"); },
+        Duration.ofHours(1), Duration.ZERO);
+    cache.handle(config(1)).get();
+
+    cache.invalidate(1);
+    cache.handle(config(2)).get();
+    cache.shutdown();
+
+    assertEquals(0, cache.cachedStoreIds().size());
+  }
+
   private static void awaitClosed(Client client) throws InterruptedException {
     long deadline = System.nanoTime() + Duration.ofSeconds(3).toNanos();
     while (!client.closed.get() && System.nanoTime() < deadline) {
