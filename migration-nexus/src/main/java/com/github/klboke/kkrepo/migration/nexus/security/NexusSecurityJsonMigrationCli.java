@@ -15,6 +15,8 @@ import java.util.function.Function;
 
 public class NexusSecurityJsonMigrationCli {
   private static final String DEFAULT_NEXUS_VERSION = "3.29.2-02";
+  // Exit codes: 0 complete, 1 failed, 2 invalid arguments, 3 incomplete (JSON report still printed).
+  static final int EXIT_INCOMPLETE = 3;
   private final Function<DatabaseConnectionSettings, PersistenceStores> storesConnector;
 
   public NexusSecurityJsonMigrationCli() {
@@ -76,7 +78,8 @@ public class NexusSecurityJsonMigrationCli {
           summary.put("userTokens", userTokens);
           jobDao.markFinished(jobId, status, summary);
           out.println(toJson(objectMapper, summary));
-          return 0;
+          // Lets automation stop before cutover; the report above stays available.
+          return "finished".equals(status) ? 0 : EXIT_INCOMPLETE;
         } catch (Exception e) {
           Map<String, Object> summary = new LinkedHashMap<>();
           summary.put("jobId", jobId);
@@ -134,6 +137,14 @@ public class NexusSecurityJsonMigrationCli {
             --password kkrepo \\
             [--source-nexus-version 3.29.2-02] \\
             [--source-data-path /path/to/nexus-data]
+
+        Prints the migration summary as JSON on stdout.
+        Exit codes:
+          0  migration finished
+          1  migration failed
+          2  invalid arguments
+          3  migration incomplete (finished_with_validation_failures, e.g. Nexus Pro user tokens not migrated
+             or a legacy user_token table that could not be read); the JSON summary is still printed
         """);
   }
 

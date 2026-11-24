@@ -56,6 +56,7 @@ class NexusSecurityJsonMigrationCliTest {
 
     assertEquals(0, exitCode);
     assertTrue(outBytes.toString().contains("--export /path/to/security-export.json"));
+    assertTrue(outBytes.toString().contains("3  migration incomplete"));
     assertEquals("", errBytes.toString());
   }
 
@@ -115,7 +116,9 @@ class NexusSecurityJsonMigrationCliTest {
     int exitCode = new NexusSecurityJsonMigrationCli(settings -> fixture.stores())
         .run(arguments(export), new PrintStream(outBytes), new PrintStream(new ByteArrayOutputStream()));
 
-    assertEquals(0, exitCode);
+    // Incomplete: nonzero so automation stops before cutover, with the JSON report still printed.
+    assertEquals(NexusSecurityJsonMigrationCli.EXIT_INCOMPLETE, exitCode);
+    assertTrue(outBytes.toString().contains("\"status\":\"finished_with_validation_failures\""), outBytes.toString());
     assertEquals(java.util.List.of("NpmToken"), fixture.apiKeyDomains);
     assertEquals("finished_with_validation_failures", fixture.finishedStatus);
     NexusUserTokenReport userTokens = (NexusUserTokenReport) fixture.finishedSummary.get("userTokens");
