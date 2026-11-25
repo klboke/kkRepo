@@ -4196,6 +4196,19 @@ public abstract class PersistenceApiContract {
     assertEquals(1, scans.listFindings(hiddenId, runs.get(0), null, null, 0, 10, true).size());
     assertEquals(1, scans.listFindings(groupId, null, null, "current-group", 0, 10, true).size());
     assertEquals(1, scans.summary(List.of(groupId)).highFindings());
+    // Filtered and grouped current findings follow live group membership: a repository
+    // removed from the group no longer contributes to it.
+    var groupCurrent = new SecurityScanDao.FindingQuery(
+        List.of(groupId), null, null, null, null, true, null, null, null, null, null, null, null);
+    assertEquals(1, scans.listFindings(groupCurrent, 0, 10).size());
+    assertEquals(1, scans.listFindingGroups(
+        groupCurrent, SecurityScanDao.FindingGroupBy.PACKAGE, null, 10).size());
+    stores().repositories().clearMembers(groupId);
+    assertTrue(scans.listFindings(groupCurrent, 0, 10).isEmpty());
+    assertTrue(scans.listFindingGroups(
+        groupCurrent, SecurityScanDao.FindingGroupBy.PACKAGE, null, 10).isEmpty());
+    stores().repositories().addMember(groupId, repositoryId, 0);
+    assertEquals(1, scans.listFindings(groupCurrent, 0, 10).size());
     assertTrue(scans.listFindingsByRepositories(List.of(), null, null, null, 0, 10, true).isEmpty());
     assertTrue(scans.listFindings(repositoryId, null, Severity.CRITICAL, null, 0, 10, true).isEmpty());
     assertTrue(scans.listFindings(repositoryId, null, null, "no-match", 0, 10, true).isEmpty());
@@ -4528,6 +4541,37 @@ public abstract class PersistenceApiContract {
     assertEquals(expectedScopes.subList(1, 3), scans.listFindingPackageScopes(
         everyScope, new SecurityScanDao.FindingPackageScope(hostedId, null), 10),
         "a cursor without a package URL continues after the empty URL");
+
+    // A group reaches the artifacts of its current, possibly nested, members only. The run
+    // subjects of a repository removed from the group stay stored but leave its groups.
+    long innerGroupId = createRepository(
+        "finding-groups-inner", RepositoryFormat.MAVEN2, RepositoryType.GROUP);
+    long outerGroupId = createRepository(
+        "finding-groups-outer", RepositoryFormat.MAVEN2, RepositoryType.GROUP);
+    stores().repositories().addMember(innerGroupId, hiddenId, 0);
+    stores().repositories().addMember(outerGroupId, innerGroupId, 0);
+    scans.associateRun(runs.get(2), outerGroupId, hiddenApp, profile.id(), 1, now);
+    java.util.function.Function<String[], SecurityScanDao.FindingQuery> throughGroup = filters ->
+        new SecurityScanDao.FindingQuery(
+            List.of(outerGroupId), null, null, null, null, false, null, null, null,
+            filters[3], filters[4], filters[5], filters[6]);
+    java.util.function.Function<SecurityScanDao.FindingGroupBy, List<SecurityScanDao.FindingGroup>>
+        groupsThroughGroup = groupBy ->
+            scans.listFindingGroups(throughGroup.apply(none), groupBy, null, 10);
+    assertEquals(List.of("app"),
+        groupsThroughGroup.apply(SecurityScanDao.FindingGroupBy.ARTIFACT).stream()
+            .map(SecurityScanDao.FindingGroup::artifactName).toList(),
+        "a nested member is reachable through the outer group");
+    assertFalse(groupsThroughGroup.apply(SecurityScanDao.FindingGroupBy.PACKAGE).isEmpty());
+    assertFalse(scans.listFindings(throughGroup.apply(acmeApp), 0, 10).isEmpty());
+    stores().repositories().clearMembers(innerGroupId);
+    assertTrue(groupsThroughGroup.apply(SecurityScanDao.FindingGroupBy.ARTIFACT).isEmpty(),
+        "artifacts of a removed member are not named through the group");
+    assertTrue(groupsThroughGroup.apply(SecurityScanDao.FindingGroupBy.PACKAGE).isEmpty());
+    assertTrue(scans.listFindings(throughGroup.apply(acmeApp), 0, 10).isEmpty(),
+        "an artifact filter does not confirm an artifact of a removed member");
+    assertFalse(scans.listFindings(throughGroup.apply(none), 0, 10).isEmpty(),
+        "historical findings of the group stay listed without artifact identity");
   }
 
   private static List<Long> ids(List<SecurityScanDao.ScanFinding> findings) {

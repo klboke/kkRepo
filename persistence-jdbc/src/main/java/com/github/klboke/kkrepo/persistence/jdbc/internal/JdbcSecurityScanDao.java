@@ -2965,6 +2965,20 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
          ON artifact_manifest.asset_id = artifact_asset.id
         AND artifact_manifest.deleted_at IS NULL
       """;
+  // Run subject "s" is still reachable through its context repository: its asset lives in that
+  // repository or in a current, possibly nested, member of that group. The subjects of a
+  // repository removed from a group stay stored, so queries that read current findings or
+  // artifact identities apply this. Requires currentRunSubjectScopeCte().
+  private static final String FINDING_SUBJECT_REACHABLE_SQL = """
+       AND EXISTS (
+         SELECT 1
+         FROM asset reachable_asset
+         JOIN visible_context_source reachable_scope
+           ON reachable_scope.source_repository_id = reachable_asset.repository_id
+         WHERE reachable_asset.id = s.asset_id
+           AND reachable_scope.context_repository_id = s.repository_id
+       )
+      """;
   private static final String ARTIFACT_FORMAT_SQL = "artifact_asset.format";
   private static final String ARTIFACT_NAMESPACE_SQL = "CASE WHEN artifact_component.id IS NULL"
       + " THEN '' ELSE COALESCE(artifact_component.namespace, '') END";
@@ -2982,7 +2996,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     List<Long> ids = repositoryScope.distinctLongs(query.repositoryIds());
     if (ids.isEmpty()) return List.of();
     boolean artifactJoin = hasArtifactFilter(query);
-    StringBuilder sql = new StringBuilder(repositoryScope.repositoryScopeCte());
+    StringBuilder sql = new StringBuilder(currentRunSubjectScopeCte());
     List<Object> args = new ArrayList<>();
     args.add(repositoryScope.parameter(ids));
     sql.append("""
@@ -2998,7 +3012,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     args.add(Math.max(0, afterId));
     if (artifactJoin) sql.append(FINDING_ARTIFACT_JOINS);
     sql.append(" WHERE s.scan_run_id = f.scan_run_id");
-    appendFindingAssociationFilters(sql, args, query);
+    appendFindingAssociationFilters(sql, args, query, false);
     sql.append(")");
     appendFindingRowFilters(sql, args, query);
     sql.append(" ORDER BY f.id LIMIT ?");
@@ -3022,7 +3036,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     }
     boolean artifactJoin = groupBy != FindingGroupBy.PACKAGE || hasArtifactFilter(query);
     String keyList = String.join(", ", keys);
-    StringBuilder sql = new StringBuilder(repositoryScope.repositoryScopeCte());
+    StringBuilder sql = new StringBuilder(currentRunSubjectScopeCte());
     List<Object> args = new ArrayList<>();
     args.add(repositoryScope.parameter(ids));
     sql.append("SELECT * FROM (SELECT ").append(keyList).append("""
@@ -3064,7 +3078,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         """);
     if (artifactJoin) sql.append(FINDING_ARTIFACT_JOINS);
     sql.append(" WHERE 1 = 1");
-    appendFindingAssociationFilters(sql, args, query);
+    // Groups count and name artifacts, so they never include unreachable subjects.
+    appendFindingAssociationFilters(sql, args, query, true);
     appendFindingRowFilters(sql, args, query);
     sql.append(") finding_association GROUP BY ").append(keyList).append(") finding_group");
     if (after != null) {
@@ -3108,7 +3123,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     List<Long> ids = repositoryScope.distinctLongs(query.repositoryIds());
     if (ids.isEmpty()) return List.of();
     boolean artifactJoin = hasArtifactFilter(query);
-    StringBuilder sql = new StringBuilder(repositoryScope.repositoryScopeCte());
+    StringBuilder sql = new StringBuilder(currentRunSubjectScopeCte());
     List<Object> args = new ArrayList<>();
     args.add(repositoryScope.parameter(ids));
     // Package URLs are waiver selectors, so URLs that differ only in case stay distinct. A
@@ -3126,7 +3141,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         """);
     if (artifactJoin) sql.append(FINDING_ARTIFACT_JOINS);
     sql.append(" WHERE 1 = 1");
-    appendFindingAssociationFilters(sql, args, query);
+    appendFindingAssociationFilters(sql, args, query, false);
     appendFindingRowFilters(sql, args, query);
     if (after != null) {
       sql.append(" AND (s.repository_id > ? OR (s.repository_id = ? AND ")
@@ -3233,12 +3248,17 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   /**
    * Filters for run subject {@code s} of finding {@code f}: repository context, current content,
    * artifact identity (requires {@link #FINDING_ARTIFACT_JOINS}), and active waiver coverage.
+   * Current findings and artifact filters, and every query with {@code reachableOnly}, keep
+   * only subjects still reachable through their context repository.
    */
   private void appendFindingAssociationFilters(
-      StringBuilder sql, List<Object> args, FindingQuery query) {
+      StringBuilder sql, List<Object> args, FindingQuery query, boolean reachableOnly) {
     if (query.repositoryId() != null) {
       sql.append(" AND s.repository_id = ?");
       args.add(query.repositoryId());
+    }
+    if (reachableOnly || query.currentOnly() || hasArtifactFilter(query)) {
+      sql.append(FINDING_SUBJECT_REACHABLE_SQL);
     }
     if (query.currentOnly()) {
       sql.append(" AND ").append(repositoryScope.currentFindingSubjectPredicate("s"));
