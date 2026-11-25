@@ -3060,8 +3060,12 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
         """);
     sql.append(SEVERITY_RANK_SQL).append(" AS severity_rank");
     if (groupBy == FindingGroupBy.PACKAGE) {
-      sql.append(", f.package_name AS package_name")
-          .append(", COALESCE(f.installed_version, '') AS installed_version");
+      // Package names and versions are case-sensitive identities (a Go module path, a Maven
+      // coordinate), so the group keys, their order and the cursor compare them exactly.
+      sql.append(", ").append(databaseDialect.caseSensitiveText("f.package_name"))
+          .append(" AS package_name, ")
+          .append(databaseDialect.caseSensitiveText("COALESCE(f.installed_version, '')"))
+          .append(" AS installed_version");
     } else {
       sql.append(", ").append(ARTIFACT_FORMAT_SQL).append(" AS artifact_format")
           .append(", ").append(ARTIFACT_NAMESPACE_SQL).append(" AS artifact_namespace")
@@ -3329,9 +3333,20 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       sql.append(" AND f.severity = ?");
       args.add(query.severity().name());
     }
-    appendEquals(sql, args, "f.package_name", query.packageName());
-    appendEquals(sql, args, "COALESCE(f.installed_version, '')", query.installedVersion());
+    appendExactEquals(sql, args, "f.package_name", query.packageName());
+    appendExactEquals(sql, args, "COALESCE(f.installed_version, '')", query.installedVersion());
     appendFindingSearch(sql, args, query.query(), true, query.repositoryId());
+  }
+
+  /**
+   * Compares exactly, including case. The plain comparison stays so the column index is used;
+   * backends whose collation ignores case re-check its matches with a case-sensitive one.
+   */
+  private void appendExactEquals(
+      StringBuilder sql, List<Object> args, String expression, String value) {
+    appendEquals(sql, args, expression, value);
+    String exact = databaseDialect.caseSensitiveText(expression);
+    if (!exact.equals(expression)) appendEquals(sql, args, exact, value);
   }
 
   private static void appendEquals(

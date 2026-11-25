@@ -4572,6 +4572,47 @@ public abstract class PersistenceApiContract {
         "an artifact filter does not confirm an artifact of a removed member");
     assertFalse(scans.listFindings(throughGroup.apply(none), 0, 10).isEmpty(),
         "historical findings of the group stay listed without artifact identity");
+
+    // Packages whose names or versions differ only in case are different packages on both
+    // backends: separate groups, separate filters, and separate package URLs to waive.
+    long upperModule = findingOf.apply(new Object[] {1, "CVE-GROUP-5", Severity.MEDIUM,
+        "example.com/Foo", "v1.0.0-RC", null});
+    long lowerModule = findingOf.apply(new Object[] {1, "CVE-GROUP-6", Severity.MEDIUM,
+        "example.com/foo", "v1.0.0-RC", null});
+    long lowerVersion = findingOf.apply(new Object[] {1, "CVE-GROUP-7", Severity.MEDIUM,
+        "example.com/foo", "v1.0.0-rc", null});
+    List<String> moduleGroups = new ArrayList<>();
+    SecurityScanDao.FindingGroupCursor moduleCursor = null;
+    while (true) {
+      var page = scans.listFindingGroups(query.apply(null, none),
+          SecurityScanDao.FindingGroupBy.PACKAGE, moduleCursor, 1);
+      if (page.isEmpty()) break;
+      var group = page.getFirst();
+      if (group.packageName().equalsIgnoreCase("example.com/foo")) {
+        assertEquals(1L, group.findingCount());
+        moduleGroups.add(group.packageName() + "@" + group.installedVersion());
+      }
+      moduleCursor = new SecurityScanDao.FindingGroupCursor(
+          group.maxSeverity().rank(), List.of(group.packageName(), group.installedVersion()));
+    }
+    assertEquals(Set.of("example.com/Foo@v1.0.0-RC", "example.com/foo@v1.0.0-RC",
+        "example.com/foo@v1.0.0-rc"), Set.copyOf(moduleGroups));
+    assertEquals(3, moduleGroups.size(), "the cursor steps over each group exactly once");
+    java.util.function.BiFunction<String, String, SecurityScanDao.FindingQuery> moduleQuery =
+        (name, version) -> query.apply(null,
+            new String[] {null, name, version, null, null, null, null});
+    assertEquals(List.of(upperModule), ids(scans.listFindings(
+        moduleQuery.apply("example.com/Foo", "v1.0.0-RC"), 0, 10)));
+    assertEquals(List.of(lowerModule), ids(scans.listFindings(
+        moduleQuery.apply("example.com/foo", "v1.0.0-RC"), 0, 10)));
+    assertEquals(List.of(lowerVersion), ids(scans.listFindings(
+        moduleQuery.apply("example.com/foo", "v1.0.0-rc"), 0, 10)));
+    assertEquals(
+        List.of(new SecurityScanDao.FindingPackageScope(
+            hostedId, "pkg:maven/example.com/Foo@v1.0.0-RC")),
+        scans.listFindingPackageScopes(
+            moduleQuery.apply("example.com/Foo", "v1.0.0-RC"), null, 10),
+        "a package waiver collects the package URLs of the selected package only");
   }
 
   private static List<Long> ids(List<SecurityScanDao.ScanFinding> findings) {
