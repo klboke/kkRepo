@@ -270,18 +270,26 @@ class ConanRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
 
     assertThrows(IllegalArgumentException.class, () -> dao.insertAuthToken(
         new ConanRegistryDao.AuthToken(
-            "ABC", repositoryId, "LOCAL", "user", null, null,
+            "ABC", repositoryId, "LOCAL", "user", null, null, null,
             clock.plusSeconds(60), null, clock)));
     assertThrows(IllegalArgumentException.class, () -> dao.insertAuthToken(
         new ConanRegistryDao.AuthToken(
-            "a".repeat(64), repositoryId, " ", "user", null, null,
+            "a".repeat(64), repositoryId, " ", "user", null, null, null,
             clock.plusSeconds(60), null, clock)));
     assertEquals(0, inTransaction(() -> dao.deleteExpiredAuthTokens(clock, 10)));
     dao.insertAuthToken(new ConanRegistryDao.AuthToken(
-        "a".repeat(64), repositoryId, "LOCAL", "user", "realm", 12L,
+        "a".repeat(64), repositoryId, "LOCAL", "user", "realm", 12L, null,
         clock.plusSeconds(60), clock, clock));
     assertEquals("realm", dao.findValidAuthToken(
         "a".repeat(64), repositoryId, clock).orElseThrow().realmId());
+    dao.insertAuthToken(new ConanRegistryDao.AuthToken(
+        "b".repeat(64), repositoryId, "LOCAL", "user", "user-token", 77L, "7".repeat(64),
+        clock.plusSeconds(60), clock, clock));
+    assertEquals("7".repeat(64), dao.findValidAuthToken("b".repeat(64), repositoryId, clock)
+        .orElseThrow().apiKeyGeneration());
+    assertEquals(1, inTransaction(() -> dao.deleteAuthTokensByApiKeyId(77L)));
+    assertTrue(dao.findValidAuthToken("b".repeat(64), repositoryId, clock).isEmpty());
+    assertTrue(dao.findValidAuthToken("a".repeat(64), repositoryId, clock).isPresent());
 
     inTransaction(() -> dao.commitRevision(recipeCommit(
         coordinate(repositoryId, "cleanup-state"), RREV_ONE, clock,
@@ -497,7 +505,7 @@ class ConanRegistryDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
         claimed.id(), claimed.owner(), claimed.fencingToken()));
 
     dao.insertAuthToken(new ConanRegistryDao.AuthToken(
-        "d".repeat(64), repositoryId, "LOCAL", "user", null, null,
+        "d".repeat(64), repositoryId, "LOCAL", "user", null, null, null,
         NOW.plusSeconds(60), null, NOW));
     assertTrue(dao.findValidAuthToken("d".repeat(64), repositoryId, NOW).isPresent());
     assertEquals(1, dao.touchAuthToken("d".repeat(64), NOW.plusSeconds(1)));

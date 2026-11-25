@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 
 /** Proves the PostgreSQL baseline validates and remains idempotent on repeated startup. */
 class PostgreSqlMigrationCompatibilityTest extends PostgreSqlIntegrationTestSupport {
-  private static final int LATEST_MIGRATION = 71;
+  private static final int LATEST_MIGRATION = 72;
 
   @Test
   void completionIndexesCanResumeAnInterruptedConcurrentBuild() throws Exception {
@@ -55,6 +55,23 @@ class PostgreSqlMigrationCompatibilityTest extends PostgreSqlIntegrationTestSupp
         SELECT COUNT(*) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
         WHERE c.relname IN ('idx_repository_scan_policy_ref', 'idx_asset_scan_policy_ref',
           'idx_asset_context_policy_ref', 'idx_scan_waiver_policy_ref') AND i.indisvalid
+        """, Integer.class));
+  }
+
+  @Test
+  void bearerGenerationMigrationRerunsOverAPartiallyAppliedSchema() {
+    jdbc().execute("ALTER TABLE conan_auth_token DROP COLUMN api_key_generation");
+    jdbc().execute((org.springframework.jdbc.core.ConnectionCallback<Void>) connection -> {
+      org.springframework.jdbc.datasource.init.ScriptUtils.executeSqlScript(connection,
+          new org.springframework.core.io.support.EncodedResource(new org.springframework.core.io.ClassPathResource(
+              "db/migration/postgresql/V72__bearer_api_key_generation.sql"), StandardCharsets.UTF_8));
+      return null;
+    });
+    assertEquals(2, jdbc().queryForObject("""
+        SELECT COUNT(*) FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND ((table_name = 'docker_auth_token' AND column_name = 'subject_api_key_generation')
+            OR (table_name = 'conan_auth_token' AND column_name = 'api_key_generation'))
         """, Integer.class));
   }
 

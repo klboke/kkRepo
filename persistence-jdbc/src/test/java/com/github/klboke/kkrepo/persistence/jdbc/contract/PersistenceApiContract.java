@@ -5875,6 +5875,7 @@ public abstract class PersistenceApiContract {
           "alice",
           "realm-1",
           null,
+          null,
           TokenKind.USER,
           scopes,
           expiresAt);
@@ -5882,6 +5883,7 @@ public abstract class PersistenceApiContract {
           scannerHash,
           "security-scanner",
           "scanner",
+          null,
           null,
           null,
           TokenKind.SECURITY_SCANNER,
@@ -5901,6 +5903,7 @@ public abstract class PersistenceApiContract {
         inTransaction(() -> tokens.findValid(scannerHash, Instant.now()).orElseThrow());
     assertEquals(TokenKind.USER, user.tokenKind());
     assertEquals(TokenKind.SECURITY_SCANNER, scanner.tokenKind());
+    assertNull(user.subjectApiKeyGeneration());
     assertEquals(scopes, user.scopes().get("scopes"));
     assertEquals(scopes, scanner.scopes().get("scopes"));
     assertTrue(inTransaction(() -> tokens.scannerResourceAllowed(
@@ -5909,6 +5912,30 @@ public abstract class PersistenceApiContract {
         scannerHash, ScannerResourceKind.BLOB, "sha256:" + "d".repeat(64))));
     assertFalse(inTransaction(() -> tokens.scannerResourceAllowed(
         scannerHash, ScannerResourceKind.BLOB, "sha256:" + "e".repeat(64))));
+  }
+
+  @Test
+  void dockerAuthTokensIssuedFromOneApiKeyCanBeRevokedTogether() {
+    DockerAuthTokenDao tokens = stores().dockerAuthTokens();
+    Instant expiresAt = Instant.parse("2036-07-13T11:00:00Z");
+    String rotated = "f".repeat(64);
+    String other = "9".repeat(64);
+    inTransaction(() -> {
+      tokens.insert(rotated, "OIDC", "carol", "user-token", 41L, "1".repeat(64), TokenKind.USER,
+          List.of(), expiresAt);
+      tokens.insert(other, "OIDC", "carol", "api-key", 42L, "2".repeat(64), TokenKind.USER,
+          List.of(), expiresAt);
+      return null;
+    });
+    // The key's secret generation is stored with the bearer so a reset on any replica invalidates it.
+    DockerAuthTokenDao.TokenRecord stored =
+        inTransaction(() -> tokens.findValid(other, Instant.now()).orElseThrow());
+    assertEquals(42L, stored.subjectApiKeyId());
+    assertEquals("2".repeat(64), stored.subjectApiKeyGeneration());
+
+    assertEquals(1, inTransaction(() -> tokens.deleteByApiKeyId(41L)));
+    assertTrue(inTransaction(() -> tokens.findValid(rotated, Instant.now())).isEmpty());
+    assertTrue(inTransaction(() -> tokens.findValid(other, Instant.now())).isPresent());
   }
 
   @Test
@@ -5923,6 +5950,7 @@ public abstract class PersistenceApiContract {
             "scanner",
             null,
             null,
+            null,
             TokenKind.SECURITY_SCANNER,
             List.of(),
             cleanupAt.minusSeconds(1));
@@ -5931,6 +5959,7 @@ public abstract class PersistenceApiContract {
           "f".repeat(64),
           "security-scanner",
           "scanner",
+          null,
           null,
           null,
           TokenKind.SECURITY_SCANNER,

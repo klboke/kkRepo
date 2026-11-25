@@ -1097,6 +1097,8 @@ function revealGeneratedToken(token) {
   latestGeneratedApiToken = token || "";
   const panel = document.getElementById("my-token-secret");
   document.getElementById("my-token-value").value = latestGeneratedApiToken;
+  document.getElementById("my-token-usage").hidden =
+    !/^[A-Za-z0-9]{10}:[A-Za-z0-9_-]{43}$/.test(latestGeneratedApiToken);
   panel.hidden = !latestGeneratedApiToken;
 }
 

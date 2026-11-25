@@ -122,7 +122,8 @@ public class NexusRestClient {
           }
         }
         try {
-          ['NpmToken', 'NuGetApiKey', 'RubyGemsApiKey', 'CargoToken', 'PubToken'].each { domain ->
+          // User-Token-Realm: Nexus Pro user tokens, exported without their secret, only to be reported.
+          ['NpmToken', 'NuGetApiKey', 'RubyGemsApiKey', 'CargoToken', 'PubToken', 'User-Token-Realm'].each { domain ->
             try {
               if (apiKeyService.count(domain) > 0) {
                 addDomain(domain)
@@ -164,12 +165,21 @@ public class NexusRestClient {
         def apiKeyService = container.lookup('org.sonatype.nexus.security.authc.apikey.ApiKeyLowLevelService')
         apiKeyDomains(apiKeyService).each { domain ->
           apiKeyService.browse(domain).each { apiKey ->
+            // The owner's realm, so an LDAP owner is not reported as a local user.
+            def realmNames = []
+            try {
+              realmNames = apiKey.principals == null ? [] : apiKey.principals.realmNames.collect { String.valueOf(it) }
+            } catch (ignored) {
+              realmNames = []
+            }
             apiKeys << [
               domain: domain,
-              api_key: apiKey.apiKey == null ? null : new String(apiKey.apiKey),
+              api_key: apiKey.apiKey == null || 'User-Token-Realm'.equalsIgnoreCase(String.valueOf(domain))
+                  ? null : new String(apiKey.apiKey),
               primary_principal: apiKey.primaryPrincipal,
               principals: [
-                primaryPrincipal: apiKey.primaryPrincipal
+                primaryPrincipal: apiKey.primaryPrincipal,
+                realmNames: realmNames
               ],
               created: apiKey.created == null ? null : String.valueOf(apiKey.created),
               sourceStore: 'ApiKeyLowLevelService'
@@ -207,7 +217,8 @@ public class NexusRestClient {
             def principals = principalDetails(document.field('principals'))
             apiKeys << [
               domain: document.field('domain'),
-              api_key: document.field('api_key'),
+              api_key: 'User-Token-Realm'.equalsIgnoreCase(String.valueOf(document.field('domain')))
+                  ? null : document.field('api_key'),
               primary_principal: document.field('primary_principal'),
               principals: principals,
               sourceStore: 'OrientDB'
@@ -216,6 +227,86 @@ public class NexusRestClient {
         } finally {
           db.close()
         }
+      }
+      // Pre-3.71 Nexus Pro user tokens live in their own table: count rows and read owner names only, never
+      // the token columns. null when no such table is found (CE); a found table that cannot be read is exported
+      // as unreadable, so the source token count is reported as unknown instead of zero.
+      def legacyUserTokens = null
+      try {
+        def selected = container.lookup('org.sonatype.nexus.datastore.api.DataStoreManager').get('nexus')
+        def datastore = selected == null ? null : selected.orElse(null)
+        if (datastore != null) {
+          def connection = datastore.openConnection()
+          try {
+            // Only the Nexus schema (PostgreSQL currentSchema, H2 PUBLIC): another application's user_token
+            // table in the same database is not a Nexus token store.
+            def schema = null
+            try {
+              schema = connection.schema
+            } catch (ignored) {
+              // A driver without getSchema (pre-JDBC 4.1): fall back to the unscoped lookup.
+            }
+            def table = null
+            def tables = connection.metaData.getTables(null, schema, '%', null)
+            try {
+              while (tables.next()) {
+                if (tables.getString('TABLE_NAME').equalsIgnoreCase('user_token')
+                    && (schema == null || schema == tables.getString('TABLE_SCHEM'))) {
+                  table = tables.getString('TABLE_NAME')
+                }
+              }
+            } finally {
+              tables.close()
+            }
+            if (table != null) {
+              def quote = { name -> '"' + name.replace('"', '""') + '"' }
+              def qualifiedTable = (schema == null ? '' : quote(schema) + '.') + quote(table)
+              try {
+                def userColumn = null
+                def columns = connection.metaData.getColumns(null, schema, table, '%')
+                try {
+                  while (columns.next()) {
+                    def column = columns.getString('COLUMN_NAME')
+                    // Metadata patterns treat '_' as a wildcard: keep only this exact schema and table.
+                    if (userColumn == null && table == columns.getString('TABLE_NAME')
+                        && (schema == null || schema == columns.getString('TABLE_SCHEM'))
+                        && ['user_name', 'username', 'primary_principal'].contains(column.toLowerCase())) {
+                      userColumn = column
+                    }
+                  }
+                } finally {
+                  columns.close()
+                }
+                def rs = connection.createStatement()
+                    .executeQuery('select ' + (userColumn == null ? '1' : quote(userColumn)) + ' from ' + qualifiedTable)
+                try {
+                  def count = 0
+                  def owners = []
+                  while (rs.next()) {
+                    count++
+                    if (userColumn != null) {
+                      owners << rs.getString(1)
+                    }
+                  }
+                  legacyUserTokens = [count: count, users: owners.unique()]
+                } finally {
+                  rs.close()
+                }
+              } catch (e) {
+                legacyUserTokens = [status: 'unreadable', table: table]
+                warnings << ('Source Nexus legacy user token table ' + table
+                    + ' could not be read, so its token count is unknown: ' + errorText(e))
+              }
+            }
+          } finally {
+            connection.close()
+          }
+        }
+      } catch (ignored) {
+        // No datastore or no table metadata (CE, OrientDB): no legacy table found; keep any result already read.
+      }
+      def exportResult = { ->
+        JsonOutput.toJson([users: users, apiKeys: apiKeys, legacyUserTokens: legacyUserTokens, warnings: warnings])
       }
       def apiKeyServiceError = null
       if (metadataEngine == 'ORIENTDB') {
@@ -226,7 +317,7 @@ public class NexusRestClient {
               + errorText(e))
           apiKeys = []
         }
-        return JsonOutput.toJson([users: users, apiKeys: apiKeys, warnings: warnings])
+        return exportResult()
       }
       if (metadataEngine.startsWith('DATASTORE')) {
         try {
@@ -236,11 +327,11 @@ public class NexusRestClient {
               + errorText(e))
           apiKeys = []
         }
-        return JsonOutput.toJson([users: users, apiKeys: apiKeys, warnings: warnings])
+        return exportResult()
       }
       try {
         exportApiKeysFromService()
-        return JsonOutput.toJson([users: users, apiKeys: apiKeys, warnings: warnings])
+        return exportResult()
       } catch (ignored) {
         apiKeyServiceError = ignored
         apiKeys = []
@@ -255,7 +346,7 @@ public class NexusRestClient {
             + errorText(e) + serviceMessage)
         apiKeys = []
       }
-      return JsonOutput.toJson([users: users, apiKeys: apiKeys, warnings: warnings])
+      return exportResult()
       """;
   private static final String LOCAL_REPOSITORY_DATA_EXPORT_SCRIPT = """
       import groovy.json.JsonOutput
@@ -2000,7 +2091,8 @@ public class NexusRestClient {
         getList("/service/rest/v1/security/content-selectors"),
         List.of(),
         List.of(),
-        getMap("/service/rest/v1/security/anonymous")),
+        getMap("/service/rest/v1/security/anonymous"),
+        securityScriptProbe.legacyUserTokens()),
         securityScriptProbe.warnings());
   }
 
@@ -2065,6 +2157,7 @@ public class NexusRestClient {
     return new SecurityScriptProbe(
         Map.copyOf(hashes),
         objectMaps(document.get("apiKeys")),
+        document.get("legacyUserTokens") instanceof Map<?, ?> legacy ? objectMap(legacy) : Map.of(),
         stringList(document.get("warnings")));
   }
 
@@ -2710,6 +2803,7 @@ public class NexusRestClient {
   private record SecurityScriptProbe(
       Map<String, String> passwordHashes,
       List<Map<String, Object>> apiKeys,
+      Map<String, Object> legacyUserTokens,
       List<String> warnings) {
 
     private SecurityScriptProbe {
@@ -2719,7 +2813,7 @@ public class NexusRestClient {
     }
 
     private static SecurityScriptProbe warning(String warning) {
-      return new SecurityScriptProbe(Map.of(), List.of(), List.of(warning));
+      return new SecurityScriptProbe(Map.of(), List.of(), Map.of(), List.of(warning));
     }
   }
 
