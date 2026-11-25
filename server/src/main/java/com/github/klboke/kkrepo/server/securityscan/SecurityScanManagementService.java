@@ -1583,8 +1583,9 @@ public class SecurityScanManagementService {
 
   // One waiver is created per distinct package URL; a package version rarely has more than one.
   private static final int MAX_PACKAGE_WAIVER_URLS = 20;
-  // Bounded by the DAO page size, so the confirmed set is always complete.
+  // Bounds the waivers one package waiver deletes and the confirmed set the caller sends.
   private static final int MAX_REPLACED_PACKAGE_WAIVERS = 999;
+  private static final int PACKAGE_WAIVER_PAGE_SIZE = 1000;
 
   /**
    * Describes a package waiver for one scope before it is created: the repositories the actor
@@ -1750,7 +1751,8 @@ public class SecurityScanManagementService {
    * Waivers that a package waiver replaces: those tied to the package URLs within the scope, in
    * repositories the actor may browse, plus repository-less ones. Like the waiver list, waivers
    * of repositories hidden from the actor are neither disclosed nor replaced; scan
-   * administration does not grant repository browse access.
+   * administration does not grant repository browse access. Every page is read and the limit
+   * counts only replaceable waivers, so waivers that stay untouched never block the caller.
    */
   private List<ScanWaiver> replaceablePackageWaivers(
       AuthenticatedSubject actor,
@@ -1759,22 +1761,27 @@ public class SecurityScanManagementService {
       String installedVersion,
       List<String> packageUrls,
       Long repositoryId) {
-    List<ScanWaiver> waivers = scans.listPackageWaivers(
-        packageName, installedVersion, packageUrls, repositoryId,
-        MAX_REPLACED_PACKAGE_WAIVERS + 1);
-    if (waivers.size() > MAX_REPLACED_PACKAGE_WAIVERS) {
-      throw badRequest("Too many existing waivers to replace at once; narrow the scope first");
-    }
     Set<Long> visible = repositoryRows.stream()
         .filter(repository -> canBrowse(actor, repository))
         .map(RepositoryRecord::id)
         .collect(java.util.stream.Collectors.toSet());
-    return waivers.stream()
-        .filter(waiver -> {
-          Long effectiveRepositoryId = effectiveWaiverRepositoryId(waiver);
-          return effectiveRepositoryId == null || visible.contains(effectiveRepositoryId);
-        })
-        .toList();
+    List<ScanWaiver> replaceable = new ArrayList<>();
+    long afterId = 0;
+    while (true) {
+      List<ScanWaiver> page = scans.listPackageWaivers(
+          packageName, installedVersion, packageUrls, repositoryId, afterId,
+          PACKAGE_WAIVER_PAGE_SIZE);
+      for (ScanWaiver waiver : page) {
+        Long effectiveRepositoryId = effectiveWaiverRepositoryId(waiver);
+        if (effectiveRepositoryId != null && !visible.contains(effectiveRepositoryId)) continue;
+        if (replaceable.size() == MAX_REPLACED_PACKAGE_WAIVERS) {
+          throw badRequest("Too many existing waivers to replace at once; narrow the scope first");
+        }
+        replaceable.add(waiver);
+      }
+      if (page.size() < PACKAGE_WAIVER_PAGE_SIZE) return replaceable;
+      afterId = page.getLast().id();
+    }
   }
 
   private static String requirePackageName(String packageName) {

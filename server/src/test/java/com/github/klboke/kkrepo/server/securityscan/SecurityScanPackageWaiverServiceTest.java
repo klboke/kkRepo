@@ -101,7 +101,7 @@ class SecurityScanPackageWaiverServiceTest {
   @Test
   void contextDefaultsToAnAdministeredRepositoryAndListsTheWaiversItWouldReplace() {
     ScanWaiver finding = waiver(7L, "FINDING", 11L, 41L, PURL, Instant.now().plusSeconds(60));
-    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 1000))
+    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 0L, 1000))
         .thenReturn(List.of(finding));
 
     var context = service.packageWaiverContext(actor, "snakeyaml", "1.30", null, false);
@@ -139,7 +139,7 @@ class SecurityScanPackageWaiverServiceTest {
     Instant expiresAt = Instant.now().plusSeconds(86_400);
     ScanWaiver finding = waiver(7L, "FINDING", 11L, 41L, PURL, null);
     ScanWaiver asset = waiver(9L, "ASSET", 11L, null, PURL, Instant.now().minusSeconds(5));
-    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 1000))
+    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 0L, 1000))
         .thenReturn(List.of(finding, asset));
     when(scans.deleteWaiver(anyLong())).thenReturn(true);
     when(scans.createWaiver(any())).thenAnswer(invocation -> {
@@ -177,7 +177,7 @@ class SecurityScanPackageWaiverServiceTest {
 
   @Test
   void rejectsAnUnconfirmedChangeAndMissingPrivilegesWithoutChangingWaivers() {
-    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 1000))
+    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 0L, 1000))
         .thenReturn(List.of(waiver(7L, "FINDING", 11L, 41L, PURL, null)));
 
     var changed = assertThrows(ResponseStatusException.class, () -> service.createPackageWaiver(
@@ -216,7 +216,8 @@ class SecurityScanPackageWaiverServiceTest {
         () -> service.createPackageWaiver(actor, command(11L, List.of())));
 
     assertEquals(HttpStatus.CONFLICT, error.getStatusCode());
-    verify(scans, never()).listPackageWaivers(any(), any(), any(), any(), anyInt());
+    verify(scans, never()).listPackageWaivers(
+        any(), any(), any(), any(), anyLong(), anyInt());
     verify(scans, never()).createWaiver(any());
   }
 
@@ -243,7 +244,8 @@ class SecurityScanPackageWaiverServiceTest {
     assertTrue(noUrl.packageUrls().isEmpty());
     assertTrue(noUrl.missingPackageUrl());
     assertTrue(noUrl.replacedWaivers().isEmpty());
-    verify(scans, never()).listPackageWaivers(any(), any(), any(), any(), anyInt());
+    verify(scans, never()).listPackageWaivers(
+        any(), any(), any(), any(), anyLong(), anyInt());
 
     for (String blank : new String[] {null, " "}) {
       var error = assertThrows(ResponseStatusException.class,
@@ -257,7 +259,7 @@ class SecurityScanPackageWaiverServiceTest {
     granted.add("nexus:security-scanning:update");
     ScanWaiver repositoryWaiver = waiver(7L, "REPOSITORY", 11L, null, PURL, null);
     ScanWaiver globalWaiver = waiver(8L, "GLOBAL", null, null, PURL, null);
-    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), null, 1000))
+    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), null, 0L, 1000))
         .thenReturn(List.of(repositoryWaiver, globalWaiver));
     when(scans.deleteWaiver(anyLong())).thenReturn(true);
     when(scans.createWaiver(any())).thenAnswer(invocation -> invocation.getArgument(0));
@@ -350,7 +352,7 @@ class SecurityScanPackageWaiverServiceTest {
 
     when(scans.listFindingPackageScopes(any(FindingQuery.class), any(), anyInt()))
         .thenReturn(List.of(new FindingPackageScope(11L, PURL)));
-    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 1000)).thenReturn(
+    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 0L, 1000)).thenReturn(
         java.util.stream.LongStream.rangeClosed(1, 1000)
             .mapToObj(id -> waiver(id, "FINDING", 11L, id, PURL, null))
             .toList());
@@ -359,7 +361,7 @@ class SecurityScanPackageWaiverServiceTest {
     assertEquals(HttpStatus.BAD_REQUEST, tooManyWaivers.getStatusCode());
     verify(scans, never()).deleteWaiver(anyLong());
 
-    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 1000))
+    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 0L, 1000))
         .thenReturn(List.of(waiver(7L, "FINDING", 11L, 41L, PURL, null)));
     when(scans.deleteWaiver(7L)).thenReturn(false);
     var concurrent = assertThrows(ResponseStatusException.class,
@@ -377,7 +379,7 @@ class SecurityScanPackageWaiverServiceTest {
     ScanWaiver browsable = waiver(7L, "REPOSITORY", 11L, null, PURL, null);
     ScanWaiver concealed = waiver(8L, "REPOSITORY", 12L, null, PURL, null);
     ScanWaiver global = waiver(9L, "GLOBAL", null, null, PURL, null);
-    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), null, 1000))
+    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), null, 0L, 1000))
         .thenReturn(List.of(browsable, concealed, global));
     when(scans.deleteWaiver(anyLong())).thenReturn(true);
     when(scans.createWaiver(any())).thenAnswer(invocation -> invocation.getArgument(0));
@@ -399,13 +401,38 @@ class SecurityScanPackageWaiverServiceTest {
   }
 
   @Test
+  void waiversTheActorCannotBrowseDoNotCountTowardsTheReplacementLimit() {
+    granted.add("nexus:security-scanning:update");
+    hidden.add("snapshots");
+    // A full first page of waivers in a repository the actor cannot browse, then one it can.
+    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), null, 0L, 1000)).thenReturn(
+        java.util.stream.LongStream.rangeClosed(1, 1000)
+            .mapToObj(id -> waiver(id, "REPOSITORY", 12L, null, PURL, null))
+            .toList());
+    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), null, 1000L, 1000))
+        .thenReturn(List.of(waiver(1001L, "GLOBAL", null, null, PURL, null)));
+    when(scans.deleteWaiver(anyLong())).thenReturn(true);
+    when(scans.createWaiver(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+    var context = service.packageWaiverContext(actor, "snakeyaml", "1.30", null, true);
+    assertEquals(List.of(1001L), context.replacedWaivers().stream()
+        .map(SecurityScanManagementService.WaiverView::id).toList(),
+        "waivers beyond the first page are still found");
+
+    var result = service.createPackageWaiver(actor, command(null, List.of(1001L)));
+    assertEquals(List.of(1001L), result.replaced().stream().map(ScanWaiver::id).toList());
+    verify(scans).deleteWaiver(1001L);
+    verify(scans, never()).deleteWaiver(1L);
+  }
+
+  @Test
   void anOmittedConfirmationMeansNothingMayBeReplaced() {
-    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 1000))
+    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 0L, 1000))
         .thenReturn(List.of());
     when(scans.createWaiver(any())).thenAnswer(invocation -> invocation.getArgument(0));
     assertEquals(1, service.createPackageWaiver(actor, command(11L, null)).created().size());
 
-    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 1000))
+    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 0L, 1000))
         .thenReturn(List.of(waiver(7L, "FINDING", 11L, 41L, PURL, null)));
     var unconfirmed = assertThrows(ResponseStatusException.class,
         () -> service.createPackageWaiver(actor, command(11L, null)));

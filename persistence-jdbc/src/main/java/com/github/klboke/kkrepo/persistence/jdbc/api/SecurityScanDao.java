@@ -421,13 +421,15 @@ public interface SecurityScanDao {
   /**
    * Lists waivers, active or expired, tied to one of {@code packageUrls} through their package
    * selector or through a finding of that package version. A non-null {@code repositoryId}
-   * keeps only waivers scoped to that repository context.
+   * keeps only waivers scoped to that repository context. Waivers are ordered by ID and start
+   * after {@code afterId}, so callers can read every page.
    */
   List<ScanWaiver> listPackageWaivers(
       String packageName,
       String installedVersion,
       List<String> packageUrls,
       Long repositoryId,
+      long afterId,
       int maxItems);
 
   Optional<AssetSecurityState> findAssetState(long assetId, long profileId);

@@ -4478,21 +4478,24 @@ public abstract class PersistenceApiContract {
             List.of(hiddenId), null, null, null, null, false, null, "snakeyaml", "1.30",
             null, null, null, null), null, 10).isEmpty());
     assertEquals(List.of(expiredPackageWaiver), scans.listPackageWaivers(
-            "snakeyaml", "1.30", List.of("pkg:maven/snakeyaml@1.30"), null, 10)
+            "snakeyaml", "1.30", List.of("pkg:maven/snakeyaml@1.30"), null, 0L, 10)
         .stream().map(SecurityScanDao.ScanWaiver::id).toList(),
         "a package-URL selector is replaced even when expired; name-only selectors are not");
     assertEquals(List.of(log4jFindingWaiver), scans.listPackageWaivers(
-            "log4j-core", "2.14.1", List.of("pkg:maven/log4j-core@2.14.1"), hostedId, 10)
+            "log4j-core", "2.14.1", List.of("pkg:maven/log4j-core@2.14.1"), hostedId, 0L, 10)
         .stream().map(SecurityScanDao.ScanWaiver::id).toList(),
         "a finding waiver is tied to the package through its finding");
     assertTrue(scans.listPackageWaivers(
-        "log4j-core", "2.14.1", List.of("pkg:maven/log4j-core@2.14.1"), hiddenId, 10).isEmpty());
-    assertTrue(scans.listPackageWaivers("log4j-core", "2.14.1", List.of(), null, 10).isEmpty());
+        "log4j-core", "2.14.1", List.of("pkg:maven/log4j-core@2.14.1"), hiddenId, 0L, 10).isEmpty());
+    assertTrue(scans.listPackageWaivers("log4j-core", "2.14.1", List.of(), null, 0L, 10).isEmpty());
     assertTrue(scans.listPackageWaivers(
-        "snakeyaml", "1.30", List.of("PKG:MAVEN/SNAKEYAML@1.30"), null, 10).isEmpty(),
+        "snakeyaml", "1.30", List.of("PKG:MAVEN/SNAKEYAML@1.30"), null, 0L, 10).isEmpty(),
         "a package URL that differs only in case selects other waivers");
     assertTrue(scans.listPackageWaivers(
-        "log4j-core", "2.14.1", List.of("pkg:maven/LOG4J-CORE@2.14.1"), hostedId, 10).isEmpty());
+        "log4j-core", "2.14.1", List.of("pkg:maven/LOG4J-CORE@2.14.1"), hostedId, 0L, 10).isEmpty());
+    assertTrue(scans.listPackageWaivers(
+        "snakeyaml", "1.30", List.of("pkg:maven/snakeyaml@1.30"), null, expiredPackageWaiver, 10)
+        .isEmpty(), "package waivers page by ID");
     assertTrue(inTransaction(() -> scans.lockPackageVersion("snakeyaml", "1.30")));
     assertTrue(inTransaction(() -> scans.lockPackageVersion("zlib", "")),
         "an empty installed version selects findings without one");

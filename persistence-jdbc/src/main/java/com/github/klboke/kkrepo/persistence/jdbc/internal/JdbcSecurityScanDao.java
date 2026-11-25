@@ -3172,6 +3172,7 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       String installedVersion,
       List<String> packageUrls,
       Long repositoryId,
+      long afterId,
       int maxItems) {
     List<String> urls = distinctStrings(packageUrls, false);
     if (urls.isEmpty()) return List.of();
@@ -3196,7 +3197,8 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
     args.add(packageName);
     args.add(installedVersion == null ? "" : installedVersion);
     appendIn(sql, args, urls);
-    sql.append("))) ");
+    sql.append("))) AND w.id > ?");
+    args.add(afterId);
     if (repositoryId != null) {
       sql.append(" AND w.repository_id = ?");
       args.add(repositoryId);
