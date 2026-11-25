@@ -1,5 +1,6 @@
 package com.github.klboke.kkrepo.storage.s3;
 
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
@@ -16,6 +17,17 @@ public interface ClientHandle<C> {
    * a lease on it is open.
    */
   Lease<C> lease();
+
+  /**
+   * Runs one SDK call on the current client and keeps that client open until the call returns, so a
+   * request that is still waiting on I/O (an upload, a delete) is not cut short when its client is
+   * retired meanwhile.
+   */
+  default <T> T call(Function<? super C, T> operation) {
+    try (Lease<C> lease = lease()) {
+      return operation.apply(lease.client());
+    }
+  }
 
   /** A handle over a fixed supplier; leases are plain references with nothing to release. */
   static <C> ClientHandle<C> of(Supplier<C> supplier) {

@@ -11,6 +11,8 @@ import static org.mockito.Mockito.when;
 
 import com.aliyun.sdk.service.oss2.OSSClient;
 import com.aliyun.sdk.service.oss2.exceptions.ServiceException;
+import com.aliyun.sdk.service.oss2.models.DeleteObjectRequest;
+import com.aliyun.sdk.service.oss2.models.DeleteObjectResult;
 import com.aliyun.sdk.service.oss2.models.GetObjectRequest;
 import com.aliyun.sdk.service.oss2.models.GetObjectResult;
 import com.github.klboke.kkrepo.core.BlobReference;
@@ -66,6 +68,24 @@ class OssNativeBlobStorageStreamLeaseTest {
 
     when(client.getObject(any(GetObjectRequest.class))).thenThrow(new IllegalStateException("boom"));
     assertThrows(IllegalStateException.class, () -> storage.get(reference));
+    assertEquals(0, openLeases.get());
+  }
+
+  @Test
+  void aDeleteHoldsItsClientForTheWholeSdkCallAndReleasesItEvenOnFailure() {
+    AtomicInteger leasesDuringCall = new AtomicInteger();
+    when(client.deleteObject(any(DeleteObjectRequest.class))).thenAnswer(call -> {
+      leasesDuringCall.addAndGet(openLeases.get());
+      return mock(DeleteObjectResult.class);
+    });
+
+    storage.delete(reference);
+
+    assertEquals(1, leasesDuringCall.get());
+    assertEquals(0, openLeases.get());
+
+    when(client.deleteObject(any(DeleteObjectRequest.class))).thenThrow(new IllegalStateException("boom"));
+    assertThrows(IllegalStateException.class, () -> storage.delete(reference));
     assertEquals(0, openLeases.get());
   }
 

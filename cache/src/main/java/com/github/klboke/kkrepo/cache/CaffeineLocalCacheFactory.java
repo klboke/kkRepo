@@ -2,6 +2,7 @@ package com.github.klboke.kkrepo.cache;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.Scheduler;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentMap;
@@ -55,6 +56,12 @@ final class CaffeineLocalCacheFactory implements LocalCacheFactory {
     @Override
     public LocalCacheBuilder<K, V> expireAfterWrite(Duration duration) {
       delegate.expireAfterWrite(requirePositive(duration, "expireAfterWrite"));
+      return this;
+    }
+
+    @Override
+    public LocalCacheBuilder<K, V> scheduledExpiration() {
+      delegate.scheduler(Scheduler.systemScheduler());
       return this;
     }
 

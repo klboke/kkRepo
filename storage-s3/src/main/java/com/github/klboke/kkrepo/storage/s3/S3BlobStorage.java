@@ -66,10 +66,6 @@ public final class S3BlobStorage implements BlobStorage {
     return config;
   }
 
-  private S3Client client() {
-    return clients.get();
-  }
-
   /** Opens an object stream; the client stays open until the returned stream is closed. */
   private Optional<InputStream> open(BlobReference reference, GetObjectRequest request) {
     ClientHandle.Lease<S3Client> lease = clients.lease();
@@ -105,32 +101,33 @@ public final class S3BlobStorage implements BlobStorage {
     var reader = new com.github.klboke.kkrepo.core.VerifiedBlobReader(target, content);
     if (target.size() == 0) {
       var digests = reader.finish();
-      client().putObject(PutObjectRequest.builder().bucket(target.bucket()).key(target.objectKey())
+      clients.call(c -> c.putObject(PutObjectRequest.builder().bucket(target.bucket()).key(target.objectKey())
           .contentType("application/octet-stream").metadata(Map.of("sha256", target.sha256())).build(),
-          RequestBody.empty());
+          RequestBody.empty()));
       return digests;
     }
-    String uploadId = client().createMultipartUpload(
+    String uploadId = clients.call(c -> c.createMultipartUpload(
         software.amazon.awssdk.services.s3.model.CreateMultipartUploadRequest.builder()
             .bucket(target.bucket()).key(target.objectKey()).contentType("application/octet-stream")
-            .metadata(Map.of("sha256", target.sha256())).build()).uploadId();
+            .metadata(Map.of("sha256", target.sha256())).build())).uploadId();
     try {
       multipartStarted.accept(uploadId);
       var parts = new java.util.ArrayList<software.amazon.awssdk.services.s3.model.CompletedPart>();
-      byte[] part;
-      while ((part = reader.nextPart()).length > 0) {
+      byte[] next;
+      while ((next = reader.nextPart()).length > 0) {
+        byte[] part = next;
         int number = parts.size() + 1;
-        var uploaded = client().uploadPart(software.amazon.awssdk.services.s3.model.UploadPartRequest.builder()
+        var uploaded = clients.call(c -> c.uploadPart(software.amazon.awssdk.services.s3.model.UploadPartRequest.builder()
             .bucket(target.bucket()).key(target.objectKey()).uploadId(uploadId).partNumber(number)
-            .contentLength((long) part.length).build(), RequestBody.fromBytes(part));
+            .contentLength((long) part.length).build(), RequestBody.fromBytes(part)));
         parts.add(software.amazon.awssdk.services.s3.model.CompletedPart.builder()
             .partNumber(number).eTag(uploaded.eTag()).build());
       }
       var digests = reader.finish();
-      client().completeMultipartUpload(software.amazon.awssdk.services.s3.model.CompleteMultipartUploadRequest.builder()
+      clients.call(c -> c.completeMultipartUpload(software.amazon.awssdk.services.s3.model.CompleteMultipartUploadRequest.builder()
           .bucket(target.bucket()).key(target.objectKey()).uploadId(uploadId)
           .multipartUpload(software.amazon.awssdk.services.s3.model.CompletedMultipartUpload.builder().parts(parts).build())
-          .build());
+          .build()));
       return digests;
     } catch (RuntimeException failure) {
       try { abortVerifiedMultipart(target, uploadId); }
@@ -145,8 +142,8 @@ public final class S3BlobStorage implements BlobStorage {
       abortVerifiedMultipart(target, multipartId);
     } else {
       // Recover the crash window between provider initiation and persisting its handle.
-      var uploads = client().listMultipartUploads(software.amazon.awssdk.services.s3.model.ListMultipartUploadsRequest.builder()
-          .bucket(target.bucket()).prefix(target.objectKey()).maxUploads(10).build());
+      var uploads = clients.call(c -> c.listMultipartUploads(software.amazon.awssdk.services.s3.model.ListMultipartUploadsRequest.builder()
+          .bucket(target.bucket()).prefix(target.objectKey()).maxUploads(10).build()));
       for (var upload : uploads.uploads()) {
         if (target.objectKey().equals(upload.key())) abortVerifiedMultipart(target, upload.uploadId());
       }
@@ -156,8 +153,8 @@ public final class S3BlobStorage implements BlobStorage {
 
   private void abortVerifiedMultipart(BlobReference target, String uploadId) {
     try {
-      client().abortMultipartUpload(software.amazon.awssdk.services.s3.model.AbortMultipartUploadRequest.builder()
-          .bucket(target.bucket()).key(target.objectKey()).uploadId(uploadId).build());
+      clients.call(c -> c.abortMultipartUpload(software.amazon.awssdk.services.s3.model.AbortMultipartUploadRequest.builder()
+          .bucket(target.bucket()).key(target.objectKey()).uploadId(uploadId).build()));
     } catch (software.amazon.awssdk.services.s3.model.S3Exception error) {
       if (error.statusCode() != 404) throw error;
     }
@@ -176,7 +173,7 @@ public final class S3BlobStorage implements BlobStorage {
             "sha256", safeMetadata(sha256)))
         .build();
     if (content.markSupported()) {
-      client().putObject(request, RequestBody.fromInputStream(content, size));
+      clients.call(c -> c.putObject(request, RequestBody.fromInputStream(content, size)));
     } else {
       // With chunked encoding disabled (for OSS compatibility) the SDK signs the payload and reads
       // the body twice; a one-shot stream (e.g. a proxy network stream) can't mark/reset. Spool to
@@ -185,7 +182,8 @@ public final class S3BlobStorage implements BlobStorage {
       try {
         spooled = Files.createTempFile("nexus-s3-put-", ".tmp");
         Files.copy(content, spooled, StandardCopyOption.REPLACE_EXISTING);
-        client().putObject(request, RequestBody.fromFile(spooled));
+        Path body = spooled;
+        clients.call(c -> c.putObject(request, RequestBody.fromFile(body)));
       } catch (IOException e) {
         throw new UncheckedIOException("Failed to spool blob for S3 upload: " + objectKey, e);
       } finally {
@@ -218,7 +216,7 @@ public final class S3BlobStorage implements BlobStorage {
                 "logical-path", safeMetadata(logicalPath),
                 "sha256", safeMetadata(sha256)))
             .build();
-        client().putObject(request, RequestBody.fromFile(file));
+        clients.call(c -> c.putObject(request, RequestBody.fromFile(file)));
         return new BlobReference(config.bucket(), objectKey, sha256, size);
       }
       multipartPutFile(repository, logicalPath, file, size, sha256, objectKey);
@@ -235,14 +233,14 @@ public final class S3BlobStorage implements BlobStorage {
       long size,
       String sha256,
       String objectKey) {
-    var create = client().createMultipartUpload(CreateMultipartUploadRequest.builder()
+    var create = clients.call(c -> c.createMultipartUpload(CreateMultipartUploadRequest.builder()
         .bucket(config.bucket())
         .key(objectKey)
         .metadata(Map.of(
             "repository", safeMetadata(repository),
             "logical-path", safeMetadata(logicalPath),
             "sha256", safeMetadata(sha256)))
-        .build());
+        .build()));
     String uploadId = create.uploadId();
     List<CompletedPart> parts = new ArrayList<>();
     List<Future<CompletedPart>> futures = new ArrayList<>();
@@ -262,12 +260,12 @@ public final class S3BlobStorage implements BlobStorage {
         parts.add(future.get());
       }
       parts.sort(Comparator.comparingInt(CompletedPart::partNumber));
-      client().completeMultipartUpload(CompleteMultipartUploadRequest.builder()
+      clients.call(c -> c.completeMultipartUpload(CompleteMultipartUploadRequest.builder()
           .bucket(config.bucket())
           .key(objectKey)
           .uploadId(uploadId)
           .multipartUpload(CompletedMultipartUpload.builder().parts(parts).build())
-          .build());
+          .build()));
     } catch (InterruptedException e) {
       cancel(futures);
       abortMultipartUpload(objectKey, uploadId);
@@ -298,14 +296,14 @@ public final class S3BlobStorage implements BlobStorage {
     // Re-readable provider: with chunked encoding disabled the SDK signs each part and may read it
     // more than once, so each read opens an independent channel already positioned at the part.
     ContentStreamProvider provider = () -> ObjectStorageMultipartSupport.openFileSlice(file, offset, length);
-    var response = client().uploadPart(UploadPartRequest.builder()
+    var response = clients.call(c -> c.uploadPart(UploadPartRequest.builder()
             .bucket(config.bucket())
             .key(objectKey)
             .uploadId(uploadId)
             .partNumber(partNumber)
             .contentLength(length)
             .build(),
-        RequestBody.fromContentProvider(provider, length, "application/octet-stream"));
+        RequestBody.fromContentProvider(provider, length, "application/octet-stream")));
     return CompletedPart.builder()
         .partNumber(partNumber)
         .eTag(response.eTag())
@@ -314,11 +312,11 @@ public final class S3BlobStorage implements BlobStorage {
 
   private void abortMultipartUpload(String objectKey, String uploadId) {
     try {
-      client().abortMultipartUpload(AbortMultipartUploadRequest.builder()
+      clients.call(c -> c.abortMultipartUpload(AbortMultipartUploadRequest.builder()
           .bucket(config.bucket())
           .key(objectKey)
           .uploadId(uploadId)
-          .build());
+          .build()));
     } catch (RuntimeException ignored) {
       // surface the original failure
     }
@@ -366,10 +364,10 @@ public final class S3BlobStorage implements BlobStorage {
   @Override
   public Optional<BlobObjectMetadata> stat(BlobReference reference) {
     try {
-      var response = client().headObject(HeadObjectRequest.builder()
+      var response = clients.call(c -> c.headObject(HeadObjectRequest.builder()
           .bucket(reference.bucket())
           .key(reference.objectKey())
-          .build());
+          .build()));
       BlobReference resolved = new BlobReference(
           reference.bucket(),
           reference.objectKey(),
@@ -392,10 +390,10 @@ public final class S3BlobStorage implements BlobStorage {
 
   @Override
   public void delete(BlobReference reference) {
-    client().deleteObject(DeleteObjectRequest.builder()
+    clients.call(c -> c.deleteObject(DeleteObjectRequest.builder()
         .bucket(reference.bucket())
         .key(reference.objectKey())
-        .build());
+        .build()));
   }
 
   private static String safeMetadata(String value) {

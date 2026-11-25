@@ -6,6 +6,7 @@ import java.time.Duration;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -38,6 +39,8 @@ final class ClientCache<C> {
   private final Duration closeGrace;
   private final Duration leaseRecheck;
   private final LocalCache<Key, Entry<C>> cache;
+  /** Entries that left the cache and are not closed yet, so shutdown can still reach them. */
+  private final Set<Entry<C>> retired = ConcurrentHashMap.newKeySet();
 
   /** {@code closeGrace} zero closes unleased clients right away (tests). */
   ClientCache(
@@ -57,6 +60,7 @@ final class ClientCache<C> {
     this.cache = LocalCacheFactory.standard()
         .<Key, Entry<C>>builder(name)
         .expireAfterAccess(idleExpiry)
+        .scheduledExpiration()
         .removalListener((key, entry, cause) -> retire(entry))
         .build();
   }
@@ -141,26 +145,38 @@ final class ClientCache<C> {
     return Set.copyOf(ids);
   }
 
-  /** Closes every client immediately, leased or not: the process is going away. */
+  /** Closes every client immediately, leased or not, retired or not: the process is going away. */
   void shutdown() {
-    Set<C> open = new HashSet<>();
-    cache.asMap().values().forEach(entry -> open.add(entry.client));
+    Set<Entry<C>> open = new HashSet<>(cache.asMap().values());
     cache.invalidateAll();
-    open.forEach(this::closeQuietly);
+    open.addAll(retired);
+    open.forEach(this::close);
   }
 
   private void retire(Entry<C> entry) {
-    if (entry != null) {
+    if (entry != null && !entry.closed.get()) {
+      retired.add(entry);
       later(closeGrace, () -> closeWhenUnleased(entry));
     }
   }
 
   private void closeWhenUnleased(Entry<C> entry) {
+    if (entry.closed.get()) {
+      return;
+    }
     if (entry.leases.get() > 0) {
       later(leaseRecheck, () -> closeWhenUnleased(entry));
       return;
     }
-    closeQuietly(entry.client);
+    close(entry);
+  }
+
+  /** The only place a client is closed, so scheduled retirement and shutdown never close it twice. */
+  private void close(Entry<C> entry) {
+    if (entry.closed.compareAndSet(false, true)) {
+      retired.remove(entry);
+      closeQuietly(entry.client);
+    }
   }
 
   private void later(Duration delay, Runnable task) {
@@ -187,6 +203,7 @@ final class ClientCache<C> {
     private final S3BlobStoreConfig config;
     private final C client;
     private final AtomicInteger leases = new AtomicInteger();
+    private final AtomicBoolean closed = new AtomicBoolean();
 
     private Entry(S3BlobStoreConfig config, C client) {
       this.config = config;

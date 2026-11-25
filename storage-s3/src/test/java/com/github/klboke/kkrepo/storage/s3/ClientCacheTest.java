@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,11 +19,17 @@ class ClientCacheTest {
 
   private static final class Client {
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicInteger closes = new AtomicInteger();
+
+    private void close() {
+      closed.set(true);
+      closes.incrementAndGet();
+    }
   }
 
   private static ClientCache<Client> cache(Duration idleExpiry, Duration closeGrace) {
     return new ClientCache<>(
-        "client-cache-test", "Test", LOG, config -> new Client(), client -> client.closed.set(true),
+        "client-cache-test", "Test", LOG, config -> new Client(), Client::close,
         idleExpiry, closeGrace);
   }
 
@@ -100,6 +107,43 @@ class ClientCacheTest {
 
     assertTrue(client.closed.get());
     assertEquals(0, cache.cachedStoreIds().size());
+  }
+
+  @Test
+  void shutdownReachesAnInvalidatedClientThatStillHoldsALease() {
+    ClientCache<Client> cache = cache(Duration.ofHours(1), Duration.ZERO);
+    ClientHandle.Lease<Client> lease = cache.handle(config(1)).lease();
+    Client client = lease.client();
+    cache.invalidate(1);
+    assertFalse(client.closed.get(), "the open lease keeps it alive after invalidation");
+
+    cache.shutdown();
+
+    assertEquals(1, client.closes.get());
+    lease.close();
+  }
+
+  @Test
+  void aClientRetiredByShutdownIsNotClosedAgainByItsScheduledRetirement() throws Exception {
+    ClientCache<Client> cache = cache(Duration.ofHours(1), Duration.ofMillis(100));
+    Client client = cache.handle(config(1)).get();
+
+    cache.shutdown();
+    Thread.sleep(500);
+
+    assertEquals(1, client.closes.get());
+  }
+
+  @Test
+  void anIdleClientIsClosedEvenWhenNothingTouchesTheCacheAgain() throws Exception {
+    ClientCache<Client> cache = cache(Duration.ofMillis(100), Duration.ZERO);
+    try {
+      Client client = cache.handle(config(1)).get();
+
+      awaitClosed(client);
+    } finally {
+      cache.shutdown();
+    }
   }
 
   @Test

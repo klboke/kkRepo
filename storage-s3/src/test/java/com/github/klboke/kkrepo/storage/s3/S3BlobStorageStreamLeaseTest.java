@@ -12,13 +12,19 @@ import com.github.klboke.kkrepo.core.BlobReference;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import software.amazon.awssdk.core.ResponseInputStream;
 import software.amazon.awssdk.http.AbortableInputStream;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.core.sync.RequestBody;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.PutObjectResponse;
 import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.NoSuchKeyException;
 import software.amazon.awssdk.services.s3.model.S3Exception;
@@ -78,6 +84,39 @@ class S3BlobStorageStreamLeaseTest {
     when(client.getObject(any(GetObjectRequest.class)))
         .thenThrow(S3Exception.builder().statusCode(500).build());
     assertThrows(S3Exception.class, () -> storage.get(reference));
+    assertEquals(0, openLeases.get());
+  }
+
+  @Test
+  void anUploadAndADeleteHoldTheirClientForTheWholeSdkCall() throws Exception {
+    AtomicInteger leasesDuringCalls = new AtomicInteger();
+    when(client.putObject(any(PutObjectRequest.class), any(RequestBody.class))).thenAnswer(call -> {
+      leasesDuringCalls.addAndGet(openLeases.get());
+      return PutObjectResponse.builder().build();
+    });
+    when(client.deleteObject(any(DeleteObjectRequest.class))).thenAnswer(call -> {
+      leasesDuringCalls.addAndGet(openLeases.get());
+      return null;
+    });
+    Path file = Files.createTempFile("lease-test", ".bin");
+    try {
+      Files.writeString(file, "abc");
+      storage.putFile("repo", "path", file, "sha");
+    } finally {
+      Files.deleteIfExists(file);
+    }
+    storage.delete(reference);
+
+    assertEquals(2, leasesDuringCalls.get(), "each call must run while holding exactly one lease");
+    assertEquals(0, openLeases.get(), "and release it when the call returns");
+  }
+
+  @Test
+  void aFailingCallStillReleasesItsLease() {
+    when(client.deleteObject(any(DeleteObjectRequest.class))).thenThrow(new IllegalStateException("boom"));
+
+    assertThrows(IllegalStateException.class, () -> storage.delete(reference));
+
     assertEquals(0, openLeases.get());
   }
 

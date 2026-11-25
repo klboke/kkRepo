@@ -3,11 +3,13 @@ package com.github.klboke.kkrepo.storage.s3;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.github.klboke.kkrepo.core.http.OutboundTlsTrust;
 import java.time.Duration;
@@ -15,10 +17,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.PutObjectResponse;
 import com.github.klboke.kkrepo.core.BlobReference;
 
 /** Client lifetime rules of {@link S3ClientFactory}, observed through mock clients. */
@@ -149,6 +156,47 @@ class S3ClientFactoryLifecycleTest {
 
     verify(first).deleteObject(org.mockito.ArgumentMatchers.any(DeleteObjectRequest.class));
     verify(second).deleteObject(org.mockito.ArgumentMatchers.any(DeleteObjectRequest.class));
+  }
+
+  @Test
+  void anUploadStillRunningWhenItsClientIsEvictedKeepsTheClientOpenUntilItFinishes() throws Exception {
+    S3ClientFactory factory = factory(Duration.ZERO);
+    CountDownLatch inFlight = new CountDownLatch(1);
+    CountDownLatch finish = new CountDownLatch(1);
+    try {
+      S3BlobStoreConfig config = config(1, "bucket-a");
+      S3Client client = factory.client(config);
+      when(client.putObject(any(PutObjectRequest.class), any(RequestBody.class))).thenAnswer(call -> {
+        inFlight.countDown();
+        finish.await(5, TimeUnit.SECONDS);
+        return PutObjectResponse.builder().build();
+      });
+      S3BlobStorage storage = new S3BlobStorage(factory.handle(config), config);
+      java.nio.file.Path file = java.nio.file.Files.createTempFile("evicted-upload", ".bin");
+      Thread upload = new Thread(() -> {
+        try {
+          java.nio.file.Files.writeString(file, "abc");
+          storage.putFile("repo", "path", file, "sha");
+        } catch (java.io.IOException e) {
+          throw new java.io.UncheckedIOException(e);
+        }
+      });
+      upload.start();
+      assertEquals(true, inFlight.await(5, TimeUnit.SECONDS));
+
+      factory.invalidate(1);
+
+      // The PUT is still waiting on I/O: its client must not be closed under it.
+      verify(client, after(300).never()).close();
+
+      finish.countDown();
+      upload.join(5_000);
+      verify(client, timeout(2_000)).close();
+      java.nio.file.Files.deleteIfExists(file);
+    } finally {
+      finish.countDown();
+      factory.shutdown();
+    }
   }
 
   private static S3BlobStoreConfig config(long id, String bucket) {
