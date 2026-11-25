@@ -1674,6 +1674,9 @@ public class SecurityScanManagementService {
     if (command.repositoryId() == null) {
       requireGlobalWrite(actor);
     } else {
+      // The package URLs of the scope are resolved and returned, so, like the preview, an
+      // explicit scope needs browse access; repository administration does not grant it.
+      requireVisibleRepository(actor, command.repositoryId());
       requireRepositoryAdmin(actor, command.repositoryId());
     }
     scans.lockPackageVersion(name, version);

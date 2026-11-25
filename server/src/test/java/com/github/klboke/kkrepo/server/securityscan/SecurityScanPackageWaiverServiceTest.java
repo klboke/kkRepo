@@ -401,6 +401,30 @@ class SecurityScanPackageWaiverServiceTest {
   }
 
   @Test
+  void anAdministeredRepositoryTheActorCannotBrowseIsNotAScope() {
+    // Repository administration is a separate permission and grants no browse access.
+    hidden.add("releases");
+
+    var error = assertThrows(ResponseStatusException.class, () -> service.createPackageWaiver(
+        actor, new PackageWaiverCommand("snakeyaml", "1.30", 11L, "reason", null, null, null)));
+
+    assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode(),
+        "a hidden repository is reported like a missing one");
+    verify(scans, never()).lockPackageVersion(any(), any());
+    verify(scans, never()).listFindingPackageScopes(any(), any(), anyInt());
+    verify(scans, never()).createWaiver(any());
+
+    // The preview only reads repositories the actor may browse, so it offers no such scope.
+    when(scans.listFindingPackageScopes(
+        argThat(query -> query != null && query.repositoryIds().equals(List.of(12L))),
+        any(), anyInt()))
+        .thenReturn(List.of(new FindingPackageScope(12L, PURL)));
+    var preview = assertThrows(ResponseStatusException.class,
+        () -> service.packageWaiverContext(actor, "snakeyaml", "1.30", 11L, false));
+    assertEquals(HttpStatus.NOT_FOUND, preview.getStatusCode(), "as in the preview");
+  }
+
+  @Test
   void waiversTheActorCannotBrowseDoNotCountTowardsTheReplacementLimit() {
     granted.add("nexus:security-scanning:update");
     hidden.add("snapshots");
