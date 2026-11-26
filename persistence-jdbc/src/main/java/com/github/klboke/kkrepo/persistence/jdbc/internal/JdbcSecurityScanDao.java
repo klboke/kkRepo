@@ -3059,18 +3059,22 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
             s.asset_id AS asset_id,
         """);
     sql.append(SEVERITY_RANK_SQL).append(" AS severity_rank");
+    // Package names and versions, component coordinates and asset paths are case-sensitive
+    // identities (a Go module path, a Maven coordinate), so the group keys, their order and the
+    // cursor compare them exactly.
     if (groupBy == FindingGroupBy.PACKAGE) {
-      // Package names and versions are case-sensitive identities (a Go module path, a Maven
-      // coordinate), so the group keys, their order and the cursor compare them exactly.
       sql.append(", ").append(databaseDialect.caseSensitiveText("f.package_name"))
           .append(" AS package_name, ")
           .append(databaseDialect.caseSensitiveText("COALESCE(f.installed_version, '')"))
           .append(" AS installed_version");
     } else {
       sql.append(", ").append(ARTIFACT_FORMAT_SQL).append(" AS artifact_format")
-          .append(", ").append(ARTIFACT_NAMESPACE_SQL).append(" AS artifact_namespace")
-          .append(", ").append(ARTIFACT_NAME_SQL).append(" AS artifact_name")
-          .append(", ").append(ARTIFACT_VERSION_SQL).append(" AS artifact_version");
+          .append(", ").append(databaseDialect.caseSensitiveText(ARTIFACT_NAMESPACE_SQL))
+          .append(" AS artifact_namespace")
+          .append(", ").append(databaseDialect.caseSensitiveText(ARTIFACT_NAME_SQL))
+          .append(" AS artifact_name")
+          .append(", ").append(databaseDialect.caseSensitiveText(ARTIFACT_VERSION_SQL))
+          .append(" AS artifact_version");
     }
     sql.append("""
 
@@ -3268,9 +3272,14 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
       sql.append(" AND ").append(repositoryScope.currentFindingSubjectPredicate("s"));
     }
     appendEquals(sql, args, ARTIFACT_FORMAT_SQL, query.artifactFormat());
-    appendEquals(sql, args, ARTIFACT_NAMESPACE_SQL, query.artifactNamespace());
-    appendEquals(sql, args, ARTIFACT_NAME_SQL, query.artifactName());
-    appendEquals(sql, args, ARTIFACT_VERSION_SQL, query.artifactVersion());
+    // Coordinates compare exactly, like the group keys they come from. They are expressions
+    // over joined rows, so no index is given up by comparing them case-sensitively.
+    appendEquals(sql, args, databaseDialect.caseSensitiveText(ARTIFACT_NAMESPACE_SQL),
+        query.artifactNamespace());
+    appendEquals(sql, args, databaseDialect.caseSensitiveText(ARTIFACT_NAME_SQL),
+        query.artifactName());
+    appendEquals(sql, args, databaseDialect.caseSensitiveText(ARTIFACT_VERSION_SQL),
+        query.artifactVersion());
     if (query.unwaivedAt() != null) {
       // Mirrors policy evaluation (SecurityScanWaiverMatcher and the finalizer): approved,
       // unexpired, subject-scoped, bound to no policy or to the policy revision the subject's

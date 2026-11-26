@@ -4613,6 +4613,54 @@ public abstract class PersistenceApiContract {
         scans.listFindingPackageScopes(
             moduleQuery.apply("example.com/Foo", "v1.0.0-RC"), null, 10),
         "a package waiver collects the package URLs of the selected package only");
+
+    // Artifacts whose coordinates differ only in case are different artifacts too. Run 2 is
+    // associated with three of them and run 1 with the fourth, next to app 1.0 and 2.0 above.
+    java.util.function.BiConsumer<Integer, String[]> scannedAs = (run, coordinates) -> {
+      long componentId = stores().components().insert(component(hostedId, RepositoryFormat.MAVEN2,
+          coordinates[0], coordinates[1], coordinates[2], Map.of(), now));
+      scans.associateRun(runs.get(run), hostedId, assetOf.apply(new Object[] {
+          hostedId, componentId, "case/" + coordinates[3]}), profile.id(), 1, now);
+    };
+    scannedAs.accept(2, new String[] {"org.acme", "App", "1.0", "name/App-1.0.jar"});
+    scannedAs.accept(2, new String[] {"Org.Acme", "app", "1.0", "namespace/app-1.0.jar"});
+    scannedAs.accept(2, new String[] {"org.acme", "app", "3.0-RC", "version-upper/app.jar"});
+    scannedAs.accept(1, new String[] {"org.acme", "app", "3.0-rc", "version-lower/app.jar"});
+    List<Long> runOne = ids(scans.listFindings(null, runs.get(1), null, 0, 10));
+    List<Long> runTwo = ids(scans.listFindings(null, runs.get(2), null, 0, 10));
+    List<String> appArtifacts = new ArrayList<>();
+    SecurityScanDao.FindingGroupCursor artifactCursor = null;
+    while (true) {
+      var page = scans.listFindingGroups(query.apply(null, none),
+          SecurityScanDao.FindingGroupBy.ARTIFACT, artifactCursor, 1);
+      if (page.isEmpty()) break;
+      var group = page.getFirst();
+      if (group.artifactName().equalsIgnoreCase("app")) {
+        appArtifacts.add(group.artifactNamespace() + ":" + group.artifactName());
+      }
+      artifactCursor = group.cursor(SecurityScanDao.FindingGroupBy.ARTIFACT);
+    }
+    assertEquals(Set.of("org.acme:app", "org.acme:App", "Org.Acme:app"),
+        Set.copyOf(appArtifacts));
+    assertEquals(3, appArtifacts.size(), "the cursor steps over each artifact exactly once");
+    java.util.function.Function<String[], List<String>> versionsOf = coordinates ->
+        scans.listFindingGroups(query.apply(null, new String[] {
+            null, null, null, "maven2", coordinates[0], coordinates[1], null}),
+            SecurityScanDao.FindingGroupBy.ARTIFACT_VERSION, null, 10).stream()
+            .map(SecurityScanDao.FindingGroup::artifactVersion).toList();
+    assertEquals(Set.of("1.0", "2.0", "3.0-RC", "3.0-rc"),
+        Set.copyOf(versionsOf.apply(new String[] {"org.acme", "app"})));
+    assertEquals(4, versionsOf.apply(new String[] {"org.acme", "app"}).size());
+    assertEquals(List.of("1.0"), versionsOf.apply(new String[] {"org.acme", "App"}));
+    assertEquals(List.of("1.0"), versionsOf.apply(new String[] {"Org.Acme", "app"}));
+    java.util.function.Function<String[], List<Long>> findingsOf = coordinates ->
+        ids(scans.listFindings(query.apply(null, new String[] {
+            null, null, null, "maven2", coordinates[0], coordinates[1], coordinates[2]}), 0, 20));
+    assertEquals(runTwo, findingsOf.apply(new String[] {"org.acme", "App", "1.0"}),
+        "expanding an artifact lists the findings of that artifact only");
+    assertEquals(runTwo, findingsOf.apply(new String[] {"Org.Acme", "app", "1.0"}));
+    assertEquals(runTwo, findingsOf.apply(new String[] {"org.acme", "app", "3.0-RC"}));
+    assertEquals(runOne, findingsOf.apply(new String[] {"org.acme", "app", "3.0-rc"}));
   }
 
   private static List<Long> ids(List<SecurityScanDao.ScanFinding> findings) {
