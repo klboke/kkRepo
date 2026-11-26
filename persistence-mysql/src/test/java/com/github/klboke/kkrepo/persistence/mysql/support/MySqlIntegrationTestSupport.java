@@ -17,6 +17,7 @@ import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.mysql.MySQLContainer;
 
@@ -113,6 +114,14 @@ public abstract class MySqlIntegrationTestSupport {
 
   protected <T> T inTransaction(Supplier<T> action) {
     return transactionTemplate.execute(status -> action.get());
+  }
+
+  /** The isolation the server runs with; the driver default differs between backends. */
+  protected <T> T inReadCommittedTransaction(Supplier<T> action) {
+    TransactionTemplate template =
+        new TransactionTemplate(transactionTemplate.getTransactionManager());
+    template.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+    return template.execute(status -> action.get());
   }
 
   protected void inTransaction(Runnable action) {

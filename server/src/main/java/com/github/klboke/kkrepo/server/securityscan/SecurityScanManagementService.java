@@ -1655,8 +1655,10 @@ public class SecurityScanManagementService {
    * package URL. The confirmed {@code replaceWaiverIds}, and {@code packageUrls} when given,
    * must equal what is found inside the transaction, so a concurrent change on any replica
    * fails with 409 instead of deleting waivers or waiving package URLs the caller never saw.
-   * The package version lock serializes package waivers for the same package; READ COMMITTED
-   * lets the reads after the lock see what the previous holder committed.
+   * Requests that pass those checks at the same time are told apart at the end: invalidating
+   * policy states takes the shared waiver revision row until commit, so waiver writers on every
+   * replica pass that point one at a time, and under READ COMMITTED the final check sees what
+   * the previous one committed. The first one commits; the others fail with 409.
    */
   @Transactional(isolation = Isolation.READ_COMMITTED)
   public PackageWaiverResult createPackageWaiver(
@@ -1679,7 +1681,6 @@ public class SecurityScanManagementService {
       requireVisibleRepository(actor, command.repositoryId());
       requireRepositoryAdmin(actor, command.repositoryId());
     }
-    scans.lockPackageVersion(name, version);
     List<RepositoryRecord> repositoryRows = repositories.list();
     List<String> packageUrls = packageUrls(
         packageScopes(actor, repositoryRows, name, version, command.repositoryId()),
@@ -1701,10 +1702,7 @@ public class SecurityScanManagementService {
     Set<Long> confirmed = new HashSet<>(
         command.replaceWaiverIds() == null ? List.of() : command.replaceWaiverIds());
     if (confirmed.contains(null)) throw badRequest("Waiver IDs to replace must not be null");
-    Set<Long> found = replaced.stream()
-        .map(ScanWaiver::id)
-        .collect(java.util.stream.Collectors.toSet());
-    if (!confirmed.equals(found)) {
+    if (!confirmed.equals(waiverIds(replaced))) {
       throw conflict("Waivers for this package changed. Review them and confirm again.");
     }
     if (!replaced.isEmpty()) requireWaiverPermission(actor, "delete");
@@ -1747,7 +1745,19 @@ public class SecurityScanManagementService {
       created.add(waiver);
     }
     created.forEach(scans::invalidatePolicyStatesForWaiver);
+    // The waiver revision row is now held until commit. A request that passed the checks above
+    // at the same time has either committed, so its waivers are visible here, or is waiting
+    // for this row and will see these.
+    List<ScanWaiver> present = replaceablePackageWaivers(
+        actor, repositoryRows, name, version, packageUrls, command.repositoryId());
+    if (!waiverIds(present).equals(waiverIds(created))) {
+      throw conflict("Waivers for this package changed. Review them and confirm again.");
+    }
     return new PackageWaiverResult(created, replaced);
+  }
+
+  private static Set<Long> waiverIds(List<ScanWaiver> waivers) {
+    return waivers.stream().map(ScanWaiver::id).collect(java.util.stream.Collectors.toSet());
   }
 
   /**

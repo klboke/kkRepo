@@ -3166,30 +3166,6 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   @Override
-  @Transactional(propagation = Propagation.MANDATORY)
-  public boolean lockPackageVersion(String packageName, String installedVersion) {
-    String version = installedVersion == null ? "" : installedVersion;
-    // Finding IDs only grow, so concurrent callers agree on the oldest finding unless retention
-    // removes it between the lookup and the lock; then the lookup is repeated.
-    List<Long> locked = List.of();
-    Long oldest;
-    int attempts = 0;
-    do {
-      oldest = jdbc.queryForObject("""
-          SELECT MIN(id)
-          FROM security_scan_finding
-          WHERE package_name = ?
-            AND COALESCE(installed_version, '') = ?
-          """, Long.class, packageName, version);
-      if (oldest != null) {
-        locked = jdbc.queryForList(
-            "SELECT id FROM security_scan_finding WHERE id = ? FOR UPDATE", Long.class, oldest);
-      }
-    } while (oldest != null && locked.isEmpty() && ++attempts < 3);
-    return !locked.isEmpty();
-  }
-
-  @Override
   public List<ScanWaiver> listPackageWaivers(
       String packageName,
       String installedVersion,
@@ -4188,6 +4164,14 @@ public class JdbcSecurityScanDao implements SecurityScanDao {
   }
 
   private void ensureWaiverRevisionRow() {
+    // The row exists after its first use and is inserted only while missing: on MySQL a
+    // rejected duplicate insert leaves a shared lock on the row, and writers that all hold one
+    // deadlock as soon as they update it.
+    if (!jdbc.queryForList(
+        "SELECT 1 FROM security_scan_waiver_revision WHERE singleton_id = 1", Integer.class)
+        .isEmpty()) {
+      return;
+    }
     JdbcInserts.tryUpdate(jdbc, """
         INSERT INTO security_scan_waiver_revision
           (singleton_id, current_revision, global_invalidation_revision, updated_at)

@@ -50,6 +50,11 @@ class PostgreSqlPersistenceApiContractTest extends PersistenceApiContract {
   }
 
   @Override
+  protected <T> T inReadCommittedTransaction(Supplier<T> action) {
+    return backend.readCommittedTransaction(action);
+  }
+
+  @Override
   protected Set<String> databaseTables() {
     return backend.databaseTablesForContract();
   }
@@ -89,6 +94,10 @@ class PostgreSqlPersistenceApiContractTest extends PersistenceApiContract {
 
     private <T> T transaction(Supplier<T> action) {
       return inTransaction(action);
+    }
+
+    private <T> T readCommittedTransaction(Supplier<T> action) {
+      return inReadCommittedTransaction(action);
     }
 
     private Set<String> databaseTablesForContract() {

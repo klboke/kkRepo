@@ -411,14 +411,6 @@ public interface SecurityScanDao {
       FindingQuery query, FindingPackageScope after, int maxItems);
 
   /**
-   * Locks one package version by locking its oldest finding, and reports whether it has any
-   * finding. Package waivers for the same package version take this lock, so they serialize
-   * across replicas while holding a single row lock however many findings the package has.
-   * Callers must already be in a READ COMMITTED transaction.
-   */
-  boolean lockPackageVersion(String packageName, String installedVersion);
-
-  /**
    * Lists waivers, active or expired, tied to one of {@code packageUrls} through their package
    * selector or through a finding of that package version. A non-null {@code repositoryId}
    * keeps only waivers scoped to that repository context. Waivers are ordered by ID and start

@@ -406,6 +406,8 @@ public abstract class PersistenceApiContract {
 
   protected abstract <T> T inTransaction(Supplier<T> action);
 
+  protected abstract <T> T inReadCommittedTransaction(Supplier<T> action);
+
   protected abstract Set<String> databaseTables();
 
   protected abstract void verifySecurityScanCompletionPlans(
@@ -4509,12 +4511,6 @@ public abstract class PersistenceApiContract {
     assertTrue(scans.listPackageWaivers(
         "snakeyaml", "1.30", List.of("pkg:maven/snakeyaml@1.30"), null, expiredPackageWaiver, 10)
         .isEmpty(), "package waivers page by ID");
-    assertTrue(inTransaction(() -> scans.lockPackageVersion("snakeyaml", "1.30")));
-    assertTrue(inTransaction(() -> scans.lockPackageVersion("zlib", "")),
-        "an empty installed version selects findings without one");
-    assertTrue(inTransaction(() -> scans.lockPackageVersion("zlib", null)));
-    assertFalse(inTransaction(() -> scans.lockPackageVersion("snakeyaml", "9.99")),
-        "a package version without findings has nothing to lock");
 
     // Scopes page by repository and package URL; a finding without a URL sorts first as "".
     scans.insertFindings(runs.get(0), List.of(new SecurityScanDao.ScanFinding(
@@ -4661,6 +4657,63 @@ public abstract class PersistenceApiContract {
     assertEquals(runTwo, findingsOf.apply(new String[] {"Org.Acme", "app", "1.0"}));
     assertEquals(runTwo, findingsOf.apply(new String[] {"org.acme", "app", "3.0-RC"}));
     assertEquals(runOne, findingsOf.apply(new String[] {"org.acme", "app", "3.0-rc"}));
+  }
+
+  @Test
+  void securityScanningWaiverInvalidationSerializesWaiverWriters() throws Exception {
+    // A package waiver relies on this: once a writer has invalidated policy states, the next
+    // writers wait for its commit and then, under READ COMMITTED, read the waivers it committed.
+    // Writers that waited together must not deadlock on the waiver revision row either.
+    SecurityScanDao scans = stores().securityScanning();
+    long repositoryId = createRepository("waiver-writers", RepositoryFormat.MAVEN2);
+    // The migration seeds the waiver revision row; contracts that truncate the schema remove it.
+    scans.waiverRevision();
+    Instant now = Instant.parse("2026-11-26T12:00:00Z");
+    String packageUrl = "pkg:maven/waiver-writers@1.0";
+    Supplier<SecurityScanDao.ScanWaiver> writeWaiver = () -> {
+      var waiver = scans.createWaiver(new SecurityScanDao.ScanWaiver(
+          null, "REPOSITORY", repositoryId, null, null, null, packageUrl, Map.of(), "contract",
+          null, null, "contract", "approver", null, now, now));
+      scans.invalidatePolicyStatesForWaiver(waiver);
+      return waiver;
+    };
+    CountDownLatch firstInvalidated = new CountDownLatch(1);
+    CountDownLatch commitFirst = new CountDownLatch(1);
+
+    try (var executor = Executors.newFixedThreadPool(3)) {
+      var first = executor.submit(() -> inTransaction(() -> {
+        long id = writeWaiver.get().id();
+        firstInvalidated.countDown();
+        await(commitFirst);
+        return id;
+      }));
+      assertTrue(firstInvalidated.await(30, java.util.concurrent.TimeUnit.SECONDS));
+
+      Callable<List<Long>> waitingWriter = () -> inReadCommittedTransaction(() -> {
+        writeWaiver.get();
+        return scans.listPackageWaivers(
+            "waiver-writers", "1.0", List.of(packageUrl), repositoryId, 0L, 10).stream()
+            .map(SecurityScanDao.ScanWaiver::id).toList();
+      });
+      var second = executor.submit(waitingWriter);
+      var third = executor.submit(waitingWriter);
+
+      assertThrows(
+          java.util.concurrent.TimeoutException.class,
+          () -> second.get(500, java.util.concurrent.TimeUnit.MILLISECONDS),
+          "a writer waits while the first holds the waiver revision row");
+      assertFalse(third.isDone());
+      commitFirst.countDown();
+      long firstId = first.get(30, java.util.concurrent.TimeUnit.SECONDS);
+      List<Long> seenBySecond = second.get(30, java.util.concurrent.TimeUnit.SECONDS);
+      List<Long> seenByThird = third.get(30, java.util.concurrent.TimeUnit.SECONDS);
+      assertTrue(seenBySecond.contains(firstId) && seenByThird.contains(firstId),
+          "after waiting, a writer sees the waiver the first one committed");
+      assertEquals(5, seenBySecond.size() + seenByThird.size(),
+          "the two waiting writers also pass one at a time: the later one sees all three");
+    } finally {
+      commitFirst.countDown();
+    }
   }
 
   private static List<Long> ids(List<SecurityScanDao.ScanFinding> findings) {

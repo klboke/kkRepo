@@ -36,6 +36,8 @@ import com.github.klboke.kkrepo.server.security.AuthenticatedSubject;
 import com.github.klboke.kkrepo.server.security.SecurityManagementService;
 import com.github.klboke.kkrepo.server.securityscan.SecurityScanManagementService.PackageWaiverCommand;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -56,6 +58,9 @@ class SecurityScanPackageWaiverServiceTest {
   private final Set<String> granted = new HashSet<>();
   private final Set<String> administered = new HashSet<>();
   private final Set<String> hidden = new HashSet<>();
+  /** The waiver table: package waiver lookups read it, and creates and deletes change it. */
+  private final List<ScanWaiver> stored = new ArrayList<>();
+  private long nextWaiverId = 10_000;
 
   @BeforeEach
   void setUp() {
@@ -96,13 +101,33 @@ class SecurityScanPackageWaiverServiceTest {
         new FindingPackageScope(11L, PURL),
         new FindingPackageScope(12L, PURL),
         new FindingPackageScope(12L, null)));
+    when(scans.listPackageWaivers(
+        eq("snakeyaml"), eq("1.30"), any(), any(), anyLong(), anyInt()))
+        .thenAnswer(invocation -> {
+          Long repositoryId = invocation.getArgument(3);
+          long afterId = invocation.getArgument(4);
+          int limit = invocation.getArgument(5);
+          return stored.stream()
+              .filter(waiver -> waiver.id() > afterId)
+              .filter(waiver -> repositoryId == null || repositoryId.equals(waiver.repositoryId()))
+              .sorted(Comparator.comparing(ScanWaiver::id))
+              .limit(limit)
+              .toList();
+        });
+    when(scans.deleteWaiver(anyLong())).thenAnswer(invocation ->
+        stored.removeIf(waiver -> waiver.id().equals(invocation.<Long>getArgument(0))));
+    when(scans.createWaiver(any())).thenAnswer(invocation -> {
+      ScanWaiver draft = invocation.getArgument(0);
+      ScanWaiver created = waiver(nextWaiverId++, draft.scopeType(), draft.repositoryId(), null,
+          draft.packageSelector(), draft.expiresAt());
+      stored.add(created);
+      return created;
+    });
   }
 
   @Test
   void contextDefaultsToAnAdministeredRepositoryAndListsTheWaiversItWouldReplace() {
-    ScanWaiver finding = waiver(7L, "FINDING", 11L, 41L, PURL, Instant.now().plusSeconds(60));
-    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 0L, 1000))
-        .thenReturn(List.of(finding));
+    stored.add(waiver(7L, "FINDING", 11L, 41L, PURL, Instant.now().plusSeconds(60)));
 
     var context = service.packageWaiverContext(actor, "snakeyaml", "1.30", null, false);
 
@@ -139,14 +164,7 @@ class SecurityScanPackageWaiverServiceTest {
     Instant expiresAt = Instant.now().plusSeconds(86_400);
     ScanWaiver finding = waiver(7L, "FINDING", 11L, 41L, PURL, null);
     ScanWaiver asset = waiver(9L, "ASSET", 11L, null, PURL, Instant.now().minusSeconds(5));
-    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 0L, 1000))
-        .thenReturn(List.of(finding, asset));
-    when(scans.deleteWaiver(anyLong())).thenReturn(true);
-    when(scans.createWaiver(any())).thenAnswer(invocation -> {
-      ScanWaiver draft = invocation.getArgument(0);
-      return waiver(70L, draft.scopeType(), draft.repositoryId(), null,
-          draft.packageSelector(), draft.expiresAt());
-    });
+    stored.addAll(List.of(finding, asset));
 
     var result = service.createPackageWaiver(actor, new PackageWaiverCommand(
         "snakeyaml", "1.30", 11L, " shaded ", expiresAt, List.of(9L, 7L), List.of(PURL)));
@@ -154,7 +172,6 @@ class SecurityScanPackageWaiverServiceTest {
     assertEquals(List.of(7L, 9L), result.replaced().stream().map(ScanWaiver::id).toList());
     assertEquals(1, result.created().size());
     var order = inOrder(scans);
-    order.verify(scans).lockPackageVersion("snakeyaml", "1.30");
     order.verify(scans).deleteWaiver(7L);
     order.verify(scans).deleteWaiver(9L);
     // Every waiver row is deleted before the shared waiver revision row is touched.
@@ -169,6 +186,10 @@ class SecurityScanPackageWaiverServiceTest {
         && "operator".equals(draft.createdBy())
         && "operator".equals(draft.approvedBy())
         && expiresAt.equals(draft.expiresAt())));
+    // The final check reads the waivers again once the new waiver has taken the revision row.
+    order.verify(scans).invalidatePolicyStatesForWaiver(result.created().getFirst());
+    order.verify(scans).listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 0L, 1000);
+    assertEquals(result.created(), stored);
     verify(scans).invalidatePolicyStatesForWaiver(finding);
     verify(scans).invalidatePolicyStatesForWaiver(asset);
     verify(scans).listFindingPackageScopes(argThat(query ->
@@ -177,8 +198,7 @@ class SecurityScanPackageWaiverServiceTest {
 
   @Test
   void rejectsAnUnconfirmedChangeAndMissingPrivilegesWithoutChangingWaivers() {
-    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 0L, 1000))
-        .thenReturn(List.of(waiver(7L, "FINDING", 11L, 41L, PURL, null)));
+    stored.add(waiver(7L, "FINDING", 11L, 41L, PURL, null));
 
     var changed = assertThrows(ResponseStatusException.class, () -> service.createPackageWaiver(
         actor, command(11L, List.of())));
@@ -259,10 +279,7 @@ class SecurityScanPackageWaiverServiceTest {
     granted.add("nexus:security-scanning:update");
     ScanWaiver repositoryWaiver = waiver(7L, "REPOSITORY", 11L, null, PURL, null);
     ScanWaiver globalWaiver = waiver(8L, "GLOBAL", null, null, PURL, null);
-    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), null, 0L, 1000))
-        .thenReturn(List.of(repositoryWaiver, globalWaiver));
-    when(scans.deleteWaiver(anyLong())).thenReturn(true);
-    when(scans.createWaiver(any())).thenAnswer(invocation -> invocation.getArgument(0));
+    stored.addAll(List.of(repositoryWaiver, globalWaiver));
 
     var result = service.createPackageWaiver(actor, new PackageWaiverCommand(
         "snakeyaml", "1.30", null, "shaded", null, List.of(8L, 7L), null));
@@ -280,7 +297,6 @@ class SecurityScanPackageWaiverServiceTest {
 
   @Test
   void packageUrlsTheCallerDidNotConfirmAreNotWaived() {
-    when(scans.createWaiver(any())).thenAnswer(invocation -> invocation.getArgument(0));
     // The preview showed one package URL; a scan has since reported a second one.
     String added = "pkg:npm/snakeyaml@1.30";
     when(scans.listFindingPackageScopes(any(FindingQuery.class), any(), anyInt()))
@@ -352,17 +368,15 @@ class SecurityScanPackageWaiverServiceTest {
 
     when(scans.listFindingPackageScopes(any(FindingQuery.class), any(), anyInt()))
         .thenReturn(List.of(new FindingPackageScope(11L, PURL)));
-    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 0L, 1000)).thenReturn(
-        java.util.stream.LongStream.rangeClosed(1, 1000)
-            .mapToObj(id -> waiver(id, "FINDING", 11L, id, PURL, null))
-            .toList());
+    java.util.stream.LongStream.rangeClosed(1, 1000)
+        .forEach(id -> stored.add(waiver(id, "FINDING", 11L, id, PURL, null)));
     var tooManyWaivers = assertThrows(ResponseStatusException.class,
         () -> service.createPackageWaiver(actor, command(11L, List.of())));
     assertEquals(HttpStatus.BAD_REQUEST, tooManyWaivers.getStatusCode());
     verify(scans, never()).deleteWaiver(anyLong());
 
-    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 0L, 1000))
-        .thenReturn(List.of(waiver(7L, "FINDING", 11L, 41L, PURL, null)));
+    stored.clear();
+    stored.add(waiver(7L, "FINDING", 11L, 41L, PURL, null));
     when(scans.deleteWaiver(7L)).thenReturn(false);
     var concurrent = assertThrows(ResponseStatusException.class,
         () -> service.createPackageWaiver(actor, command(11L, List.of(7L))));
@@ -379,10 +393,7 @@ class SecurityScanPackageWaiverServiceTest {
     ScanWaiver browsable = waiver(7L, "REPOSITORY", 11L, null, PURL, null);
     ScanWaiver concealed = waiver(8L, "REPOSITORY", 12L, null, PURL, null);
     ScanWaiver global = waiver(9L, "GLOBAL", null, null, PURL, null);
-    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), null, 0L, 1000))
-        .thenReturn(List.of(browsable, concealed, global));
-    when(scans.deleteWaiver(anyLong())).thenReturn(true);
-    when(scans.createWaiver(any())).thenAnswer(invocation -> invocation.getArgument(0));
+    stored.addAll(List.of(browsable, concealed, global));
 
     var context = service.packageWaiverContext(actor, "snakeyaml", "1.30", null, true);
     assertEquals(List.of(7L, 9L), context.replacedWaivers().stream()
@@ -398,6 +409,8 @@ class SecurityScanPackageWaiverServiceTest {
     verify(scans).deleteWaiver(7L);
     verify(scans).deleteWaiver(9L);
     verify(scans, never()).deleteWaiver(8L);
+    assertTrue(stored.contains(concealed),
+        "the concealed waiver stays, and does not count as a concurrent change");
   }
 
   @Test
@@ -410,7 +423,6 @@ class SecurityScanPackageWaiverServiceTest {
 
     assertEquals(HttpStatus.NOT_FOUND, error.getStatusCode(),
         "a hidden repository is reported like a missing one");
-    verify(scans, never()).lockPackageVersion(any(), any());
     verify(scans, never()).listFindingPackageScopes(any(), any(), anyInt());
     verify(scans, never()).createWaiver(any());
 
@@ -429,14 +441,9 @@ class SecurityScanPackageWaiverServiceTest {
     granted.add("nexus:security-scanning:update");
     hidden.add("snapshots");
     // A full first page of waivers in a repository the actor cannot browse, then one it can.
-    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), null, 0L, 1000)).thenReturn(
-        java.util.stream.LongStream.rangeClosed(1, 1000)
-            .mapToObj(id -> waiver(id, "REPOSITORY", 12L, null, PURL, null))
-            .toList());
-    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), null, 1000L, 1000))
-        .thenReturn(List.of(waiver(1001L, "GLOBAL", null, null, PURL, null)));
-    when(scans.deleteWaiver(anyLong())).thenReturn(true);
-    when(scans.createWaiver(any())).thenAnswer(invocation -> invocation.getArgument(0));
+    java.util.stream.LongStream.rangeClosed(1, 1000)
+        .forEach(id -> stored.add(waiver(id, "REPOSITORY", 12L, null, PURL, null)));
+    stored.add(waiver(1001L, "GLOBAL", null, null, PURL, null));
 
     var context = service.packageWaiverContext(actor, "snakeyaml", "1.30", null, true);
     assertEquals(List.of(1001L), context.replacedWaivers().stream()
@@ -451,16 +458,30 @@ class SecurityScanPackageWaiverServiceTest {
 
   @Test
   void anOmittedConfirmationMeansNothingMayBeReplaced() {
-    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 0L, 1000))
-        .thenReturn(List.of());
-    when(scans.createWaiver(any())).thenAnswer(invocation -> invocation.getArgument(0));
     assertEquals(1, service.createPackageWaiver(actor, command(11L, null)).created().size());
 
-    when(scans.listPackageWaivers("snakeyaml", "1.30", List.of(PURL), 11L, 0L, 1000))
-        .thenReturn(List.of(waiver(7L, "FINDING", 11L, 41L, PURL, null)));
+    stored.add(waiver(7L, "FINDING", 11L, 41L, PURL, null));
     var unconfirmed = assertThrows(ResponseStatusException.class,
         () -> service.createPackageWaiver(actor, command(11L, null)));
     assertEquals(HttpStatus.CONFLICT, unconfirmed.getStatusCode());
+  }
+
+  @Test
+  void aWaiverCommittedByAConcurrentRequestRollsThePackageWaiverBack() {
+    // Another replica passed the same checks and committed its waiver first; this request
+    // sees it once its own invalidation has waited for the shared waiver revision row.
+    ScanWaiver concurrent = waiver(500L, "REPOSITORY", 11L, null, PURL, null);
+    when(scans.invalidatePolicyStatesForWaiver(any())).thenAnswer(invocation -> {
+      if (!stored.contains(concurrent)) stored.add(concurrent);
+      return 0;
+    });
+
+    var error = assertThrows(ResponseStatusException.class,
+        () -> service.createPackageWaiver(actor, command(11L, List.of())));
+
+    assertEquals(HttpStatus.CONFLICT, error.getStatusCode(),
+        "the second of two simultaneous package waivers is rejected instead of duplicating");
+    verify(scans).createWaiver(any());
   }
 
   private static PackageWaiverCommand command(Long repositoryId, List<Long> replaceWaiverIds) {
