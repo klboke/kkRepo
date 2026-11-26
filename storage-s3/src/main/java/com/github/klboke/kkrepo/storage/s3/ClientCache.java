@@ -39,8 +39,14 @@ final class ClientCache<C> {
   private final Duration closeGrace;
   private final Duration leaseRecheck;
   private final LocalCache<Key, Entry<C>> cache;
-  /** Entries that left the cache and are not closed yet, so shutdown can still reach them. */
-  private final Set<Entry<C>> retired = ConcurrentHashMap.newKeySet();
+  /**
+   * Every client from its creation until it is closed, independent of cache membership. Caffeine
+   * removes an entry at once but reports the removal asynchronously, so the cache and the removal
+   * callback alone can miss a client that is in between.
+   */
+  private final Set<Entry<C>> live = ConcurrentHashMap.newKeySet();
+  private final Consumer<Runnable> removalDelivery;
+  private volatile boolean shutDown;
 
   /** {@code closeGrace} zero closes unleased clients right away (tests). */
   ClientCache(
@@ -51,6 +57,20 @@ final class ClientCache<C> {
       Consumer<C> closer,
       Duration idleExpiry,
       Duration closeGrace) {
+    this(name, label, log, builder, closer, idleExpiry, closeGrace, Runnable::run);
+  }
+
+  /** {@code removalDelivery} runs each removal callback; tests hold it back to force the race. */
+  ClientCache(
+      String name,
+      String label,
+      Logger log,
+      Function<S3BlobStoreConfig, C> builder,
+      Consumer<C> closer,
+      Duration idleExpiry,
+      Duration closeGrace,
+      Consumer<Runnable> removalDelivery) {
+    this.removalDelivery = removalDelivery;
     this.log = log;
     this.label = label;
     this.builder = builder;
@@ -61,7 +81,7 @@ final class ClientCache<C> {
         .<Key, Entry<C>>builder(name)
         .expireAfterAccess(idleExpiry)
         .scheduledExpiration()
-        .removalListener((key, entry, cause) -> retire(entry))
+        .removalListener((key, entry, cause) -> removalDelivery.accept(() -> retire(entry)))
         .build();
   }
 
@@ -119,7 +139,13 @@ final class ClientCache<C> {
         break;
       }
     }
-    return new Entry<>(config, builder.apply(config));
+    Entry<C> entry = new Entry<>(config, builder.apply(config));
+    live.add(entry);
+    if (shutDown) {
+      // Created while the process is shutting down: nothing will close it later.
+      close(entry);
+    }
+    return entry;
   }
 
   /** Drops every client of this store (deleted or reconfigured); the next use builds a fresh one. */
@@ -145,17 +171,17 @@ final class ClientCache<C> {
     return Set.copyOf(ids);
   }
 
-  /** Closes every client immediately, leased or not, retired or not: the process is going away. */
+  /** Closes every client immediately, leased or not, in the cache or not: the process is going away. */
   void shutdown() {
-    Set<Entry<C>> open = new HashSet<>(cache.asMap().values());
+    shutDown = true;
     cache.invalidateAll();
-    open.addAll(retired);
-    open.forEach(this::close);
+    for (Entry<C> entry : Set.copyOf(live)) {
+      close(entry);
+    }
   }
 
   private void retire(Entry<C> entry) {
     if (entry != null && !entry.closed.get()) {
-      retired.add(entry);
       later(closeGrace, () -> closeWhenUnleased(entry));
     }
   }
@@ -174,7 +200,7 @@ final class ClientCache<C> {
   /** The only place a client is closed, so scheduled retirement and shutdown never close it twice. */
   private void close(Entry<C> entry) {
     if (entry.closed.compareAndSet(false, true)) {
-      retired.remove(entry);
+      live.remove(entry);
       closeQuietly(entry.client);
     }
   }

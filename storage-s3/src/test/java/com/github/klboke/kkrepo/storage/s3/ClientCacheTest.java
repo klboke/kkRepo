@@ -124,6 +124,44 @@ class ClientCacheTest {
   }
 
   @Test
+  void shutdownClosesAnInvalidatedLeasedClientEvenWhileItsRemovalCallbackIsStillPending()
+      throws Exception {
+    java.util.List<Runnable> pending = new java.util.concurrent.CopyOnWriteArrayList<>();
+    ClientCache<Client> cache = new ClientCache<>(
+        "client-cache-held-callback", "Test", LOG, config -> new Client(), Client::close,
+        Duration.ofHours(1), Duration.ZERO, pending::add);
+    ClientHandle.Lease<Client> lease = cache.handle(config(1)).lease();
+    Client client = lease.client();
+
+    cache.invalidate(1);
+    // Caffeine reports the removal asynchronously; wait for it to reach the held-back delivery.
+    long deadline = System.nanoTime() + Duration.ofSeconds(3).toNanos();
+    while (pending.isEmpty() && System.nanoTime() < deadline) {
+      Thread.sleep(10);
+    }
+    assertEquals(1, pending.size(), "the removal callback is held back");
+    assertFalse(client.closed.get(), "an ordinary invalidation still lets the active lease finish");
+
+    cache.shutdown();
+    assertEquals(1, client.closes.get());
+
+    // Releasing the callback and the lease afterwards must not close it a second time.
+    pending.forEach(Runnable::run);
+    lease.close();
+    assertEquals(1, client.closes.get());
+  }
+
+  @Test
+  void aClientCreatedAfterShutdownIsClosedRatherThanLeaked() {
+    ClientCache<Client> cache = cache(Duration.ofHours(1), Duration.ofHours(1));
+    cache.shutdown();
+
+    Client client = cache.handle(config(1)).get();
+
+    assertEquals(1, client.closes.get());
+  }
+
+  @Test
   void aClientRetiredByShutdownIsNotClosedAgainByItsScheduledRetirement() throws Exception {
     ClientCache<Client> cache = cache(Duration.ofHours(1), Duration.ofMillis(100));
     Client client = cache.handle(config(1)).get();
