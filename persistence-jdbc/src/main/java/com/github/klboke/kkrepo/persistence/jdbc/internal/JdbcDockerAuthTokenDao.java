@@ -31,6 +31,7 @@ public class JdbcDockerAuthTokenDao implements com.github.klboke.kkrepo.persiste
       String userId,
       String realmId,
       Long apiKeyId,
+      String apiKeyGeneration,
       TokenKind tokenKind,
       List<Map<String, Object>> scopes,
       Instant expiresAt) {
@@ -38,14 +39,15 @@ public class JdbcDockerAuthTokenDao implements com.github.klboke.kkrepo.persiste
     jdbcTemplate.update("""
         INSERT INTO docker_auth_token
           (token_hash, subject_source, subject_user_id, subject_realm_id,
-           subject_api_key_id, scopes_json, expires_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+           subject_api_key_id, subject_api_key_generation, scopes_json, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         normalize(tokenHash),
         source,
         userId,
         realmId,
         apiKeyId,
+        apiKeyGeneration,
         jsonColumns.parameter(Map.of(
             "tokenKind", storedKind.name(),
             "scopes", scopes == null ? List.of() : scopes)),
@@ -68,6 +70,7 @@ public class JdbcDockerAuthTokenDao implements com.github.klboke.kkrepo.persiste
               rs.getString("subject_user_id"),
               rs.getString("subject_realm_id"),
               rs.getObject("subject_api_key_id") == null ? null : rs.getLong("subject_api_key_id"),
+              rs.getString("subject_api_key_generation"),
               tokenKind(tokenData),
               tokenData,
               rs.getTimestamp("expires_at").toInstant());
@@ -143,6 +146,11 @@ public class JdbcDockerAuthTokenDao implements com.github.klboke.kkrepo.persiste
     return jdbcTemplate.update(
         "DELETE FROM docker_auth_token WHERE token_hash IN (" + placeholders + ")",
         tokenHashes.toArray());
+  }
+
+  @Override
+  public int deleteByApiKeyId(long apiKeyId) {
+    return jdbcTemplate.update("DELETE FROM docker_auth_token WHERE subject_api_key_id = ?", apiKeyId);
   }
 
   private static String normalize(String tokenHash) {

@@ -320,6 +320,11 @@ public class NexusSecurityRecordMapper {
       String rawApiKey,
       String displayName,
       String status) {
+
+    @Override
+    public String toString() {
+      return "NexusApiKey[domain=" + domain + ", owner=" + ownerSource + "/" + ownerUserId + ", rawApiKey=<redacted>]";
+    }
   }
 
   public record NexusAnonymousConfig(

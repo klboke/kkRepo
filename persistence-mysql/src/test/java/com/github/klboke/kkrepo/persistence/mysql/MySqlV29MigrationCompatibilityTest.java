@@ -153,6 +153,29 @@ class MySqlV29MigrationCompatibilityTest extends MySqlIntegrationTestSupport {
     }
   }
 
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+  void bearerGenerationMigrationResumesAfterEitherCommittedColumn(boolean bothColumns) {
+    Flyway throughV71 = migration("71");
+    throughV71.clean();
+    assertEquals(71, throughV71.migrate().migrationsExecuted);
+    jdbc().execute("ALTER TABLE docker_auth_token ADD COLUMN subject_api_key_generation VARCHAR(64) NULL");
+    if (bothColumns) {
+      jdbc().execute("ALTER TABLE conan_auth_token ADD COLUMN api_key_generation VARCHAR(64) NULL");
+    }
+
+    Flyway resumed = migration(null);
+    assertEquals(1, resumed.migrate().migrationsExecuted);
+    assertEquals(0, resumed.migrate().migrationsExecuted);
+    assertTrue(resumed.validateWithResult().validationSuccessful);
+    assertEquals(2, jdbc().queryForObject("""
+        SELECT COUNT(*) FROM information_schema.columns
+        WHERE table_schema = DATABASE()
+          AND ((table_name = 'docker_auth_token' AND column_name = 'subject_api_key_generation')
+            OR (table_name = 'conan_auth_token' AND column_name = 'api_key_generation'))
+        """, Integer.class));
+  }
+
   @Test
   void relocatedV1ThroughV29RemainByteForByteFrozen() throws Exception {
     assertEquals(29, V29_SHA256.size());

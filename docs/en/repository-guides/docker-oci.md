@@ -105,6 +105,15 @@ docker pull nexus.example.com/docker-group/team/alpine:3.20
 
 Push only to hosted. Proxy and group are read endpoints even when the caller is authenticated.
 
+For CLI and CI logins, especially for users without a local or LDAP password (OIDC single sign-on), generate a user token in Browse under **My Token** with the `UserToken` domain. Like a Nexus user token, it is a user code and passcode pair shown as `<user code>:<passcode>`. Enter the user code as the username and the passcode as the password:
+
+```bash
+docker login nexus.example.com -u <user code>
+# Password: <passcode>
+```
+
+Any client that sends HTTP Basic credentials can use the same pair. A user token grants the owner's roles, including the roles the current LDAP or OIDC role mappings give the groups verified at the owner's last sign-in. It cannot open a UI session and is not accepted as a bearer or API-key header. Each user has one token, and only its owner can generate or reset it, under **My Token** in a signed-in session. Administrators see its metadata (user code, dates) in the API key list and can delete it, after which the owner generates a new one; they cannot create, import or reset another user's token. After a reset or delete, Docker bearer tokens issued from the old token stop working on every replica. In a multi-replica deployment, issue user tokens only after every replica is upgraded; see [Upgrade And Rollback](../production-hardening.md#upgrade-and-rollback).
+
 
 Image references copied from Browse contain only the registry host, optional port, repository
 routing path, image, and tag or digest. Do not include `http://`, `https://`, or the Registry API
