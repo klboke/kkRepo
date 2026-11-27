@@ -544,6 +544,7 @@ window.kkrepoI18n?.registerDictionary("ru", {
     "Unauthenticated requests use this account’s repository read permissions.": "Для запросов без аутентификации используются права этой учётной записи на чтение репозиториев.",
     "Turning off anonymous reads keeps the account settings below.": "При отключении анонимного чтения настройки учётной записи сохраняются.",
     "Anonymous identity": "Учётная запись для анонимного доступа",
+    "Identifies anonymous requests. Permissions come from the local account.": "Идентифицирует анонимные запросы. Права доступа определяет локальная учётная запись.",
     "Use an active local account.": "Используйте активную локальную учётную запись.",
     "Retry": "Повторить",
     "Local Authenticating Realm": "Область локальной аутентификации",

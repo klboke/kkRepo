@@ -544,6 +544,7 @@ window.kkrepoI18n?.registerDictionary("nl", {
     "Unauthenticated requests use this account’s repository read permissions.": "Niet-geverifieerde verzoeken gebruiken de leesrechten van dit account voor repository’s.",
     "Turning off anonymous reads keeps the account settings below.": "Bij het uitschakelen van anoniem lezen blijven de accountinstellingen hieronder behouden.",
     "Anonymous identity": "Anonieme identiteit",
+    "Identifies anonymous requests. Permissions come from the local account.": "Identificeert anonieme verzoeken. De rechten komen van het lokale account.",
     "Use an active local account.": "Gebruik een actief lokaal account.",
     "Retry": "Opnieuw proberen",
     "Local Authenticating Realm": "Lokale authenticatierealm",

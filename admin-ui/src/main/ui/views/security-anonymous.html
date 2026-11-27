@@ -25,14 +25,15 @@
                 <div class="form-grid anonymous-identity-fields">
                   <div class="form-field">
                     <label for="security-anonymous-user-id">User ID</label>
-                    <input id="security-anonymous-user-id" type="text" list="security-anonymous-known-users" autocomplete="off" required aria-describedby="security-anonymous-user-help">
-                    <datalist id="security-anonymous-known-users"></datalist>
+                    <input id="security-anonymous-user-id" type="text" autocomplete="off" required aria-describedby="security-anonymous-user-help">
                     <small id="security-anonymous-user-help" class="anonymous-help">Use an active local account.</small>
                   </div>
-                  <div class="form-field">
-                    <label for="security-anonymous-realm-name">Realm name</label>
-                    <select id="security-anonymous-realm-name" required aria-describedby="security-anonymous-realm-id"></select>
-                    <code id="security-anonymous-realm-id" data-i18n-skip></code>
+                  <div class="anonymous-realm-info">
+                    <dl>
+                      <dt>Realm name</dt>
+                      <dd><code id="security-anonymous-realm-id" data-i18n-skip></code></dd>
+                    </dl>
+                    <small class="anonymous-help">Identifies anonymous requests. Permissions come from the local account.</small>
                   </div>
                 </div>
               </section>

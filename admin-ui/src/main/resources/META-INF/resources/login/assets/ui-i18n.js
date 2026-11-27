@@ -622,6 +622,7 @@
     "Unauthenticated requests use this account’s repository read permissions.": "未登录请求使用此账号的仓库读取权限。",
     "Turning off anonymous reads keeps the account settings below.": "关闭匿名读取后，下方的账号配置会保留。",
     "Anonymous identity": "匿名身份",
+    "Identifies anonymous requests. Permissions come from the local account.": "用于标识匿名请求。访问权限来自本地账号。",
     "Use an active local account.": "使用已启用的本地账号。",
     "Retry": "重试",
     "Local Authenticating Realm": "本地认证 Realm",

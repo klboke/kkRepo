@@ -54,24 +54,22 @@ async function verifyPageAlignment(view, fullWidthBlocks, leftAlignedControls) {
 
 async function verifyAnonymousEditor(page) {
   const endpoint = "**/internal/security/anonymous";
-  const realmsEndpoint = "**/service/rest/v1/security/realms/available";
-  const realms = [{ id: "NexusAuthorizingRealm", name: "Local Authorizing Realm" }, { id: "LdapRealm", name: "LDAP Realm" }];
-  let settings = { enabled: true, userSource: "Local", userId: "guest-reader", realmName: "local" };
+  const accountEndpoint = "**/internal/security/anonymous/account";
+  let settings = { enabled: true, userSource: "Local", userId: "guest-reader", realmName: "ImportedRealm" };
   let settingsUnavailable = true;
-  let realmsUnavailable = false;
   const writes = [];
   let finishSave;
   const saveGate = new Promise(resolve => { finishSave = resolve; });
-  await page.route(realmsEndpoint, route => route.fulfill(realmsUnavailable ? { status: 503, body: "Unavailable" } : { json: realms }));
-  await page.route(endpoint, async route => {
-    if (route.request().method() === "GET") {
-      return route.fulfill(settingsUnavailable ? { status: 503, body: "Unavailable" } : { json: settings });
-    }
+  await page.route(endpoint, route => {
+    assert.equal(route.request().method(), "GET");
+    return route.fulfill(settingsUnavailable ? { status: 503, body: "Unavailable" } : { json: settings });
+  });
+  await page.route(accountEndpoint, async route => {
     assert.equal(route.request().method(), "PUT");
     writes.push(route.request().postDataJSON());
     if (writes.length === 1) return route.fulfill({ status: 503, body: "Unavailable" });
     await saveGate;
-    settings = writes.at(-1);
+    settings = { ...settings, ...writes.at(-1) };
     return route.fulfill({ json: settings });
   });
   try {
@@ -79,7 +77,7 @@ async function verifyAnonymousEditor(page) {
     const view = page.locator("#security-anonymous-view");
     const toggle = view.getByRole("switch", { name: "Allow anonymous repository reads" });
     const user = view.getByLabel("User ID", { exact: true });
-    const realm = view.getByLabel("Realm name", { exact: true });
+    const realm = view.locator("#security-anonymous-realm-id");
     const retry = view.getByRole("button", { name: "Retry" });
     const discard = view.getByRole("button", { name: "Discard changes" });
     const save = view.getByRole("button", { name: "Save changes" });
@@ -89,16 +87,13 @@ async function verifyAnonymousEditor(page) {
     await view.locator("form").evaluate(form => form.requestSubmit());
     assert.equal(writes.length, 0);
     settingsUnavailable = false;
-    realmsUnavailable = true;
-    await retry.click();
-    await expect(view.getByText("Failed to load realms", { exact: true })).toBeVisible();
-    await expect(save).toBeHidden();
-    realmsUnavailable = false;
     await retry.click();
     await expect(toggle).toBeFocused();
     await expect(toggle).toBeChecked();
     await expect(user).toHaveValue("guest-reader");
-    await expect(realm).toHaveValue("local");
+    await expect(realm).toHaveText("ImportedRealm");
+    await expect(view.getByRole("combobox")).toHaveCount(0);
+    await expect(view.getByRole("textbox")).toHaveCount(1);
     await expect(save).toBeDisabled();
     await toggle.press("Space");
     await expect(status).toHaveText("Save to apply changes.");
@@ -114,10 +109,10 @@ async function verifyAnonymousEditor(page) {
     await toggle.press("Space");
     await save.click();
     await expect(status).toHaveText("Save failed");
-    assert.deepEqual(writes[0], { ...settings, enabled: false });
+    assert.deepEqual(writes[0], { enabled: false, userId: "guest-reader" });
     await expect(toggle).not.toBeChecked();
-    await realm.selectOption("LdapRealm");
-    await expect(view.locator("#security-anonymous-realm-id")).toHaveText("LdapRealm");
+    // A compatibility client can update the realm while this editor is open.
+    settings.realmName = "LdapRealm";
     await user.fill("guest-preview");
     await save.click();
     await expect(toggle).toBeDisabled();
@@ -127,15 +122,17 @@ async function verifyAnonymousEditor(page) {
     finishSave();
     await expect(status).toHaveText("Anonymous access saved.");
     await expect(save).toBeDisabled();
+    assert.deepEqual(writes[1], { enabled: false, userId: "guest-preview" });
+    await expect(realm).toHaveText("LdapRealm");
     assert.deepEqual(settings, { enabled: false, userSource: "Local", userId: "guest-preview", realmName: "LdapRealm" });
     await page.reload();
     await expect(toggle).not.toBeChecked();
     await expect(user).toHaveValue("guest-preview");
-    await expect(realm).toHaveValue("LdapRealm");
+    await expect(realm).toHaveText("LdapRealm");
   } finally {
     finishSave();
     await page.unroute(endpoint);
-    await page.unroute(realmsEndpoint);
+    await page.unroute(accountEndpoint);
   }
 }
 

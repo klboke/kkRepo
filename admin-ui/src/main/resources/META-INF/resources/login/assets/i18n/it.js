@@ -544,6 +544,7 @@ window.kkrepoI18n?.registerDictionary("it", {
     "Unauthenticated requests use this account’s repository read permissions.": "Le richieste non autenticate usano i permessi di lettura dei repository di questo account.",
     "Turning off anonymous reads keeps the account settings below.": "Disattivando la lettura anonima si conservano le impostazioni dell’account.",
     "Anonymous identity": "Identità anonima",
+    "Identifies anonymous requests. Permissions come from the local account.": "Identifica le richieste anonime. Le autorizzazioni derivano dall’account locale.",
     "Use an active local account.": "Usa un account locale attivo.",
     "Retry": "Riprova",
     "Local Authenticating Realm": "Realm di autenticazione locale",

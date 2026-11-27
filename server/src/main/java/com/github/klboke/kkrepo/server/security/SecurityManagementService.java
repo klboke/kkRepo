@@ -22,6 +22,7 @@ import com.github.klboke.kkrepo.server.security.SecurityPayloads.ApiKeyCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.ApiKeyView;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AdminBootstrapCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AdminBootstrapStatus;
+import com.github.klboke.kkrepo.server.security.SecurityPayloads.AnonymousAccountCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AnonymousSettingsCommand;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.AnonymousSettingsView;
 import com.github.klboke.kkrepo.server.security.SecurityPayloads.CreatedApiKeyView;
@@ -784,6 +785,18 @@ public class SecurityManagementService implements AccessDecisionService {
             DEFAULT_SOURCE,
             DEFAULT_ANONYMOUS_USER_ID,
             DEFAULT_ANONYMOUS_REALM_NAME));
+  }
+
+  @Transactional
+  public AnonymousSettingsView saveAnonymousAccount(AnonymousAccountCommand command) {
+    if (command == null || command.enabled() == null) {
+      throw new SecurityValidationException("enabled is required");
+    }
+    String userId = requireText(command.userId(), "userId");
+    securityDao.upsertAnonymousAccount(new SecurityAnonymousConfigRecord(
+        command.enabled(), DEFAULT_SOURCE, userId, DEFAULT_ANONYMOUS_REALM_NAME));
+    invalidateAuthorizationCacheAfterCommit();
+    return toAnonymousSettingsView(securityDao.findAnonymousConfig().orElseThrow());
   }
 
   @Transactional

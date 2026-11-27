@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.github.klboke.kkrepo.persistence.jdbc.api.*;
 import com.github.klboke.kkrepo.core.security.SecretCipher;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.ApiKeyRecord;
+import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityAnonymousConfigRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityPrivilegeRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRealmRecord;
 import com.github.klboke.kkrepo.persistence.jdbc.api.model.SecurityRoleRecord;
@@ -21,6 +22,26 @@ import org.junit.jupiter.api.Test;
 import org.springframework.dao.DuplicateKeyException;
 
 class SecurityDaoMySqlIntegrationTest extends MySqlIntegrationTestSupport {
+  @Test
+  void anonymousAccountEditsPreserveImportedRealmAndSource() {
+    SecurityDao dao = new JdbcSecurityDao(jdbc(), jsonColumns(), dialect());
+    inTransaction(() -> {
+      var previous = dao.findAnonymousConfig();
+      jdbc().update("DELETE FROM security_anonymous_config WHERE id = 1");
+      var defaults = new SecurityAnonymousConfigRecord(true, "Local", "guest", "NexusAuthorizingRealm");
+      dao.upsertAnonymousAccount(defaults);
+      assertEquals(defaults, dao.findAnonymousConfig().orElseThrow());
+
+      dao.upsertAnonymousConfig(new SecurityAnonymousConfigRecord(true, "LDAP", "guest", "ImportedRealm"));
+      dao.upsertAnonymousAccount(new SecurityAnonymousConfigRecord(false, "Local", "reader", "NexusAuthorizingRealm"));
+      assertEquals(new SecurityAnonymousConfigRecord(false, "LDAP", "reader", "ImportedRealm"),
+          dao.findAnonymousConfig().orElseThrow());
+
+      jdbc().update("DELETE FROM security_anonymous_config WHERE id = 1");
+      previous.ifPresent(dao::upsertAnonymousConfig);
+    });
+  }
+
   @Test
   void userRoleAndPrivilegeRelationshipsRespectUniqueKeysAndForeignKeys() {
     SecurityDao dao = new JdbcSecurityDao(jdbc(), jsonColumns(), dialect());

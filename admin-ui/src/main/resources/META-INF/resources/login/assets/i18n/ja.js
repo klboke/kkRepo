@@ -544,6 +544,7 @@ window.kkrepoI18n?.registerDictionary("ja", {
     "Unauthenticated requests use this account’s repository read permissions.": "未認証のリクエストには、このアカウントのリポジトリ読み取り権限が適用されます。",
     "Turning off anonymous reads keeps the account settings below.": "匿名読み取りをオフにしても、以下のアカウント設定は保持されます。",
     "Anonymous identity": "匿名アクセス用アカウント",
+    "Identifies anonymous requests. Permissions come from the local account.": "匿名リクエストを識別します。アクセス権限はローカルアカウントから取得します。",
     "Use an active local account.": "有効なローカルアカウントを使用してください。",
     "Retry": "再試行",
     "Local Authenticating Realm": "ローカル認証 Realm",

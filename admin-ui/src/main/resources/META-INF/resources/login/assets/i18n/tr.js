@@ -544,6 +544,7 @@ window.kkrepoI18n?.registerDictionary("tr", {
     "Unauthenticated requests use this account’s repository read permissions.": "Kimliği doğrulanmamış istekler bu hesabın depo okuma izinlerini kullanır.",
     "Turning off anonymous reads keeps the account settings below.": "Anonim okumayı kapattığınızda aşağıdaki hesap ayarları korunur.",
     "Anonymous identity": "Anonim kimlik",
+    "Identifies anonymous requests. Permissions come from the local account.": "Anonim istekleri tanımlar. İzinler yerel hesaptan alınır.",
     "Use an active local account.": "Etkin bir yerel hesap kullanın.",
     "Retry": "Yeniden dene",
     "Local Authenticating Realm": "Yerel kimlik doğrulama alanı",

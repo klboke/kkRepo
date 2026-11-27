@@ -544,6 +544,7 @@ window.kkrepoI18n?.registerDictionary("ko", {
     "Unauthenticated requests use this account’s repository read permissions.": "인증되지 않은 요청에는 이 계정의 저장소 읽기 권한이 적용됩니다.",
     "Turning off anonymous reads keeps the account settings below.": "익명 읽기를 꺼도 아래의 계정 설정은 유지됩니다.",
     "Anonymous identity": "익명 사용자 계정",
+    "Identifies anonymous requests. Permissions come from the local account.": "익명 요청을 식별합니다. 권한은 로컬 계정에서 가져옵니다.",
     "Use an active local account.": "활성 로컬 계정을 사용하세요.",
     "Retry": "다시 시도",
     "Local Authenticating Realm": "로컬 인증 Realm",

@@ -1170,6 +1170,8 @@ class SecurityAuthenticationServiceTest {
         "LdapRealm"));
     dao.user(user(3L, "Local", "anonymous", null));
     dao.roles(3L, "nx-anonymous");
+    dao.user(user(4L, "LDAP", "anonymous", null));
+    dao.roles(4L, "directory-reader");
     SecurityAuthenticationService service = service(dao);
 
     Optional<AuthenticatedSubject> authenticated = service.authenticateAnonymous();
@@ -1177,6 +1179,9 @@ class SecurityAuthenticationServiceTest {
     assertTrue(authenticated.isPresent());
     assertEquals("Local", authenticated.get().source());
     assertEquals("anonymous", authenticated.get().userId());
+    assertEquals("LdapRealm", authenticated.get().realmId());
+    assertTrue(authenticated.get().permissionSubject().groupIds().contains("nx-anonymous"));
+    assertFalse(authenticated.get().permissionSubject().groupIds().contains("directory-reader"));
   }
 
   @Test

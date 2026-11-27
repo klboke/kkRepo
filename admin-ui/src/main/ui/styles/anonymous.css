@@ -13,9 +13,13 @@ p.anonymous-help { margin: 3px 0 0; }
 .anonymous-identity-heading dd { margin: 0; color: var(--ink-2); }
 .anonymous-identity-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 12px; }
 .anonymous-identity-fields .form-field { min-width: 0; }
-.anonymous-identity-fields :is(input,select) { width: 100%; min-width: 0; font-weight: normal; }
+.anonymous-identity-fields input { width: 100%; min-width: 0; font-weight: normal; }
 .anonymous-identity-fields :is(small,code) { font-weight: normal; overflow-wrap: anywhere; }
-#security-anonymous-realm-id { justify-self: start; }
+.anonymous-realm-info { display: grid; align-content: start; gap: 5px; min-width: 0; }
+.anonymous-realm-info dl, .anonymous-realm-info dd { margin: 0; }
+.anonymous-realm-info dt { font-size: var(--fs-sm); font-weight: var(--fw-semibold); }
+.anonymous-realm-info dd { display: flex; align-items: center; min-height: var(--console-control); }
+#security-anonymous-realm-id { color: var(--ink-2); }
 @media (max-width: 650px) {
   .anonymous-identity-fields { grid-template-columns: minmax(0, 1fr); }
   .anonymous-panel { padding: 12px 14px; }

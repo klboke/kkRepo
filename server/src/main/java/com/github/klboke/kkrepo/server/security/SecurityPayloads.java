@@ -299,6 +299,9 @@ public final class SecurityPayloads {
       String realmName) {
   }
 
+  public record AnonymousAccountCommand(Boolean enabled, String userId) {
+  }
+
   public record AnonymousSettingsView(
       boolean enabled,
       String userSource,
