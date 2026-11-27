@@ -1654,6 +1654,22 @@
           </form>
             </div>
           </div>
+          <div class="form-modal" id="security-api-key-result-modal" data-form-id="security-api-key-result" role="dialog" aria-modal="true" aria-labelledby="security-api-key-result-title" hidden>
+            <div class="form-modal-backdrop" data-modal-dismiss="security-api-key-result"></div>
+            <div class="form-modal-panel form-modal-panel-narrow">
+              <div class="blobstore-form modal-form" id="security-api-key-result" hidden>
+                <label class="form-title" id="security-api-key-result-title" for="security-api-key-value">Generated token</label>
+                <div class="form-grid">
+                  <input class="full-width" id="security-api-key-value" type="text" readonly autocomplete="off" spellcheck="false" aria-describedby="security-api-key-result-note">
+                </div>
+                <p class="form-note" id="security-api-key-result-note">Shown once after generate or reset.</p>
+                <div class="form-actions">
+                  <button class="create-button" id="copy-security-api-key" type="button">Copy</button>
+                  <button class="create-button secondary" data-modal-dismiss="security-api-key-result" type="button">Close</button>
+                </div>
+              </div>
+            </div>
+          </div>
           <div class="nx-table-frame">
             <table class="nx-table">
               <thead><tr><th>Domain</th><th>Owner</th><th>Status</th><th>Prefix</th><th class="actions-column">Actions</th></tr></thead>
@@ -2589,6 +2605,6 @@
     <script src="./assets/ohpm-login.js?v=20261107-user-picker"></script>
     <script src="./assets/proxy-settings.js?v=20261121-block-outbound"></script>
     <script src="./assets/download-offload.js?v=20261122-offload-verification-failure"></script>
-    <script src="./assets/admin.js?v=20261124-user-token-owners"></script>
+    <script src="./assets/admin.js?v=20261127-api-key-result"></script>
   </body>
 </html>

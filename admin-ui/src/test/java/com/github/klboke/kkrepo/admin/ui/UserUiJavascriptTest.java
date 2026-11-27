@@ -19,7 +19,8 @@ class UserUiJavascriptTest {
         "node",
         "--test",
         Path.of("src/test/js/user-picker.test.js").toString(),
-        Path.of("src/test/js/security-users.test.js").toString())
+        Path.of("src/test/js/security-users.test.js").toString(),
+        Path.of("src/test/js/security-api-key-result.test.js").toString())
         .redirectErrorStream(true)
         .start();
 
