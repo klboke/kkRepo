@@ -25,4 +25,11 @@ public interface JsonPersistenceDialect {
    * Implementations must validate {@code columnAlias} before interpolating it into SQL.
    */
   String selectLongsFromArray(String columnAlias);
+
+  /**
+   * Returns a boolean expression that is true when the JSON string array {@code arrayColumn}
+   * contains an element equal to {@code valueExpression}, ignoring case. Both arguments are
+   * trusted SQL expressions written by the caller, never request input.
+   */
+  String textArrayContainsIgnoreCase(String arrayColumn, String valueExpression);
 }
